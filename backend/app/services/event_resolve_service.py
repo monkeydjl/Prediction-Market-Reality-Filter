@@ -19,6 +19,7 @@ instead of agent_memory / analysis_audit.
 Event vocabulary only - no trading terms.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -108,19 +109,42 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
     a summary; never raises (network / match failures degrade to fewer
     resolutions).
     """
-    from app.services.polymarket_history_service import fetch_resolved_markets
+    from app.services.polymarket_history_service import (
+        fetch_resolved_markets as fetch_polymarket_resolved,
+    )
+    from app.services.manifold_event_source import (
+        fetch_resolved_markets as fetch_manifold_resolved,
+    )
+    from app.services.kalshi_event_source import (
+        fetch_resolved_markets as fetch_kalshi_resolved,
+    )
 
-    try:
-        resolved_markets = await fetch_resolved_markets(limit=resolved_limit)
-    except Exception as exc:
-        logger.warning("auto_resolve: fetch_resolved_markets failed: %s", exc)
-        return {"status": "fetch_failed", "resolved_count": 0, "checked_count": 0,
-                "unresolved_events": 0, "matches": []}
+    # Pull resolved markets from every prediction-market source concurrently and
+    # isolate a failing source, so the same real event can be auto-resolved by
+    # whichever platform it came from (Polymarket-only missed Manifold/Kalshi
+    # events entirely).
+    sources = (
+        ("Polymarket", fetch_polymarket_resolved),
+        ("Manifold", fetch_manifold_resolved),
+        ("Kalshi", fetch_kalshi_resolved),
+    )
+    fetched = await asyncio.gather(
+        *(fetch(limit=resolved_limit) for _, fetch in sources),
+        return_exceptions=True,
+    )
+    resolved_markets: list[dict[str, Any]] = []
+    by_source: dict[str, int] = {}
+    for (name, _), result in zip(sources, fetched):
+        if isinstance(result, Exception):
+            logger.warning("auto_resolve: %s resolved fetch failed: %s", name, result)
+            continue
+        by_source[name] = len(result)
+        resolved_markets.extend(result)
 
     if not resolved_markets:
         return {"status": "no_resolved_markets", "resolved_count": 0,
                 "checked_count": 0, "unresolved_events": _count_unresolved(),
-                "matches": []}
+                "matches": [], "by_source": by_source}
 
     index = build_index(resolved_markets)
     resolved_count = 0
@@ -155,7 +179,7 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
                 event_id=event_id,
                 actual_outcome=actual_outcome,
                 confidence=1.0,
-                source="auto_polymarket",
+                source="auto_market",
                 notes=f"matched: {matched_question[:100]}",
                 snapshots=histories.get(event_id, []),
             )
@@ -183,6 +207,7 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
         "checked_count": len(resolved_markets),
         "unresolved_events": unresolved_events,
         "matches": match_log,
+        "by_source": by_source,
     }
 
 

@@ -146,3 +146,49 @@ def _baseline_pct(market: dict[str, Any]) -> float:
     if bid > 0 or ask > 0:
         return (bid + ask) / 2 * 100
     return 50.0
+
+
+async def fetch_resolved_markets(limit: int = 200) -> list[dict[str, Any]]:
+    """Fetch settled Kalshi events for event auto-resolution.
+
+    Returns [{question, actual_outcome}] from single-leg settled events: the
+    market result yes->100, no->0; anything else is skipped. Empty list when not
+    configured or unreachable (graceful), so a down source never breaks
+    auto-resolve.
+    """
+    try:
+        raw = await _fetch_raw_resolved(limit)
+    except Exception as exc:
+        logger.warning("Kalshi resolved fetch failed: %s", exc)
+        return []
+    resolved: list[dict[str, Any]] = []
+    for event in raw:
+        if not isinstance(event, dict):
+            continue
+        question = str(event.get("title", "") or "").strip()
+        markets = event.get("markets")
+        if not question or not isinstance(markets, list) or len(markets) != 1:
+            continue
+        result = str((markets[0] or {}).get("result", "") or "").lower()
+        if result == "yes":
+            resolved.append({"question": question, "actual_outcome": 100.0})
+        elif result == "no":
+            resolved.append({"question": question, "actual_outcome": 0.0})
+    return resolved
+
+
+async def _fetch_raw_resolved(limit: int) -> list[dict[str, Any]]:
+    url = settings.KALSHI_API_URL
+    if not url:
+        return []
+    params = {
+        "status": "settled",
+        "with_nested_markets": "true",
+        "limit": str(min(max(limit, 1), 200)),
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+    events = data.get("events") if isinstance(data, dict) else None
+    return events if isinstance(events, list) else []

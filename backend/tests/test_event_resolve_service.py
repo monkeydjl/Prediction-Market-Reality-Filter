@@ -18,6 +18,8 @@ from app.memory import event_store as store
 from app.services import event_audit_service as audit
 from app.services import event_resolve_service as ers
 from app.services import polymarket_history_service as phs
+from app.services import manifold_event_source as mfs
+from app.services import kalshi_event_source as kes
 
 # Reuse the canonical record builder.
 from tests.test_event_store import _make_record
@@ -75,6 +77,17 @@ class ResolveWithCalibrationTests(unittest.TestCase):
 class AutoResolveEventsTests(unittest.TestCase):
     """auto_resolve_events: fetch resolved markets, match, resolve each."""
 
+    def setUp(self):
+        # Multi-source auto-resolve also pulls Manifold + Kalshi; default both to
+        # empty so these Polymarket-focused tests stay network-free. Individual
+        # tests re-patch as needed.
+        for module in (mfs, kes):
+            patcher = patch.object(
+                module, "fetch_resolved_markets", new=AsyncMock(return_value=[])
+            )
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_no_resolved_markets_returns_no_data(self):
         with patch.object(phs, "fetch_resolved_markets",
                           new=AsyncMock(return_value=[])):
@@ -103,7 +116,7 @@ class AutoResolveEventsTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["resolved_count"], 1)
         self.assertEqual(result["matches"][0]["actual_outcome"], 100.0)
-        self.assertEqual(after["record"]["outcome"]["source"], "auto_polymarket")
+        self.assertEqual(after["record"]["outcome"]["source"], "auto_market")
         self.assertIsNotNone(after["record"]["calibration"])
 
     def test_skips_already_resolved_events(self):
@@ -130,10 +143,13 @@ class AutoResolveEventsTests(unittest.TestCase):
         self.assertEqual(result["resolved_count"], 0)
 
     def test_fetch_failure_degrades_gracefully(self):
+        # A failing source is isolated; with the other two empty (setUp), the
+        # merged pool is empty and auto-resolve reports no resolved markets
+        # instead of crashing.
         with patch.object(phs, "fetch_resolved_markets",
                           new=AsyncMock(side_effect=RuntimeError("network down"))):
             result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
-        self.assertEqual(result["status"], "fetch_failed")
+        self.assertEqual(result["status"], "no_resolved_markets")
         self.assertEqual(result["resolved_count"], 0)
 
     def test_scans_beyond_top_200_low_value_event_is_resolved(self):
@@ -190,6 +206,35 @@ class AutoResolveEventsTests(unittest.TestCase):
                 after = store.get_event("evtBlank")
         self.assertEqual(result["resolved_count"], 0)
         self.assertIsNone(after["record"].get("outcome"))
+
+    def test_merges_sources_and_reports_by_source(self):
+        """Resolved markets merge across platforms; a failing source is isolated;
+        an event is resolved by whichever source carries its market."""
+        record = _make_record("evtMulti", value_score=30)
+        record["event_title"] = "Will it rain in Seattle tomorrow?"
+        with tempfile.TemporaryDirectory() as tmp:
+            store_path = str(Path(tmp) / "event_store.json")
+            audit_path = str(Path(tmp) / "event_audit.jsonl")
+            with patch.object(store, "_store_path", return_value=store_path), \
+                    patch.object(audit, "_audit_path", return_value=audit_path), \
+                    patch.object(phs, "fetch_resolved_markets",
+                                 new=AsyncMock(return_value=[
+                                     {"question": "unrelated poly", "actual_outcome": 100.0}])), \
+                    patch.object(mfs, "fetch_resolved_markets",
+                                 new=AsyncMock(side_effect=RuntimeError("down"))), \
+                    patch.object(kes, "fetch_resolved_markets",
+                                 new=AsyncMock(return_value=[
+                                     {"question": "Will it rain in Seattle tomorrow?",
+                                      "actual_outcome": 0.0}])):
+                store.save_event(record)
+                result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
+                after = store.get_event("evtMulti")
+        self.assertEqual(result["status"], "ok")
+        # Manifold raised -> excluded from by_source; the other two are counted.
+        self.assertEqual(result["by_source"], {"Polymarket": 1, "Kalshi": 1})
+        self.assertEqual(result["resolved_count"], 1)
+        self.assertEqual(after["record"]["outcome"]["actual_outcome"], 0.0)
+        self.assertEqual(after["record"]["outcome"]["source"], "auto_market")
 
 
 if __name__ == "__main__":

@@ -95,6 +95,27 @@ class KalshiEventSourceTests(unittest.TestCase):
             events = asyncio.run(source.fetch_candidate_events(limit=5))
         self.assertEqual(events, [])
 
+    def test_fetch_resolved_markets_maps_results(self):
+        raw = [
+            {"title": "Q yes", "markets": [{"result": "yes"}]},
+            {"title": "Q no", "markets": [{"result": "no"}]},
+            {"title": "Q multi", "markets": [{"result": "yes"}, {"result": "no"}]},
+            {"title": "Q none", "markets": [{"result": ""}]},
+            {"title": "", "markets": [{"result": "yes"}]},
+        ]
+        with patch.object(source, "_fetch_raw_resolved",
+                          new=AsyncMock(return_value=raw)):
+            out = asyncio.run(source.fetch_resolved_markets(limit=10))
+        self.assertEqual(out, [
+            {"question": "Q yes", "actual_outcome": 100.0},
+            {"question": "Q no", "actual_outcome": 0.0},
+        ])
+
+    def test_fetch_resolved_error_degrades_to_empty(self):
+        with patch.object(source, "_fetch_raw_resolved",
+                          new=AsyncMock(side_effect=RuntimeError("boom"))):
+            self.assertEqual(asyncio.run(source.fetch_resolved_markets()), [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -87,6 +87,29 @@ class ManifoldEventSourceTests(unittest.TestCase):
             events = asyncio.run(source.fetch_candidate_events(limit=5))
         self.assertEqual(events, [])
 
+    def test_fetch_resolved_markets_maps_outcomes(self):
+        raw = [
+            {"question": "Q yes", "isResolved": True, "resolution": "YES"},
+            {"question": "Q no", "isResolved": True, "resolution": "NO"},
+            {"question": "Q mkt", "isResolved": True, "resolution": "MKT",
+             "resolutionProbability": 0.7},
+            {"question": "Q cancel", "isResolved": True, "resolution": "CANCEL"},
+            {"question": "Q open", "isResolved": False, "resolution": ""},
+        ]
+        with patch.object(source, "_fetch_raw_resolved",
+                          new=AsyncMock(return_value=raw)):
+            out = asyncio.run(source.fetch_resolved_markets(limit=10))
+        self.assertEqual(out, [
+            {"question": "Q yes", "actual_outcome": 100.0},
+            {"question": "Q no", "actual_outcome": 0.0},
+            {"question": "Q mkt", "actual_outcome": 70.0},
+        ])
+
+    def test_fetch_resolved_error_degrades_to_empty(self):
+        with patch.object(source, "_fetch_raw_resolved",
+                          new=AsyncMock(side_effect=RuntimeError("boom"))):
+            self.assertEqual(asyncio.run(source.fetch_resolved_markets()), [])
+
 
 if __name__ == "__main__":
     unittest.main()

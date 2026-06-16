@@ -115,3 +115,63 @@ def _to_candidate_event(market: dict[str, Any]) -> dict[str, Any]:
             "url": str(market.get("url", "") or ""),
         },
     }
+
+
+async def fetch_resolved_markets(limit: int = 200) -> list[dict[str, Any]]:
+    """Fetch settled Manifold markets for event auto-resolution.
+
+    Returns [{question, actual_outcome}] (0-100): YES->100, NO->0, MKT (a
+    probabilistic resolution) -> resolutionProbability*100. CANCEL / unresolved
+    are skipped. Empty list when not configured or unreachable (graceful), so a
+    down source never breaks auto-resolve.
+    """
+    try:
+        raw = await _fetch_raw_resolved(limit)
+    except Exception as exc:
+        logger.warning("Manifold resolved fetch failed: %s", exc)
+        return []
+    resolved: list[dict[str, Any]] = []
+    for market in raw:
+        if not isinstance(market, dict):
+            continue
+        question = str(market.get("question", "") or "").strip()
+        if not question:
+            continue
+        outcome = _resolved_outcome(market)
+        if outcome is not None:
+            resolved.append({"question": question, "actual_outcome": outcome})
+    return resolved
+
+
+async def _fetch_raw_resolved(limit: int) -> list[dict[str, Any]]:
+    url = settings.MANIFOLD_API_URL
+    if not url:
+        return []
+    params = {
+        "term": "",
+        "filter": "resolved",
+        "contractType": "BINARY",
+        "limit": str(min(max(limit, 1), 1000)),
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+    return data if isinstance(data, list) else []
+
+
+def _resolved_outcome(market: dict[str, Any]) -> float | None:
+    """Map a resolved Manifold market to a 0-100 outcome, or None to skip."""
+    if not market.get("isResolved"):
+        return None
+    resolution = str(market.get("resolution", "") or "").upper()
+    if resolution == "YES":
+        return 100.0
+    if resolution == "NO":
+        return 0.0
+    if resolution == "MKT":
+        prob = market.get("resolutionProbability")
+        if prob is None:
+            return None
+        return max(0.0, min(100.0, safe_float(prob, 0.0) * 100))
+    return None  # CANCEL / unknown

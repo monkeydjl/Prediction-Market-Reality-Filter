@@ -1,0 +1,21 @@
+# Normalize line endings so Git stops warning about LF/CRLF churn on Windows.
+# Text files are stored with LF in the repo; Git checks them out natively.
+* text=auto
+
+# Keep these LF even on Windows checkouts (shells / configs that dislike CRLF).
+*.sh   text eol=lf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Treat common binaries as binary so Git never touches their bytes.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.woff  binary
+*.woff2 binary
+*.ttf  binary
+*.otf  binary
+*.eot  binary
+*.pdf  binary

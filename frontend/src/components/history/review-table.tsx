@@ -24,7 +24,7 @@ export function toReview(record: EventRecord): ResolvedReview | null {
   const actual = Number(outcome.actual_outcome);
   return {
     id: record.event_id,
-    title: record.event_title,
+    title: record.event_title_zh || record.event_title,
     predicted,
     actual,
     brier: cal?.brier_score ?? null,

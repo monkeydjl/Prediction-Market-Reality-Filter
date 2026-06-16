@@ -27,7 +27,8 @@ class EconomicDataServiceTests(unittest.TestCase):
             articles = asyncio.run(economic.fetch_economic_data(limit=5))
         self.assertEqual(len(articles), 2)
         self.assertEqual(
-            set(articles[0].keys()), {"title", "description", "source", "published"}
+            set(articles[0].keys()),
+            {"title", "description", "source", "published", "url"},
         )
         self.assertEqual(articles[0]["title"], "CPI up 0.2% in May")
         self.assertEqual(articles[0]["description"], "Consumer Price Index summary")

@@ -4,6 +4,7 @@ from app.memory.event_store import (
     get_event,
     list_events,
     list_resolved_events,
+    set_tracking,
 )
 from app.models.event import EventAnalysisRequest
 from app.services.calibration_service_event import summarize
@@ -90,6 +91,33 @@ async def get_event_intelligence(event_id: str):
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Event '{event_id}' not found")
     return entry
+
+
+@router.patch("/{event_id}/tracking")
+async def update_event_tracking(
+    event_id: str,
+    status: str | None = Body(default=None, embed=True),
+    priority: str | None = Body(default=None, embed=True),
+):
+    """Update the human tracking decision (status / priority) for an event.
+
+    status must be one of tracking/watching/archived; priority one of
+    high/medium/low. At least one must be provided. 404 if event is unknown.
+    """
+    valid_status = {"tracking", "watching", "archived"}
+    valid_priority = {"high", "medium", "low"}
+    if status is not None and status not in valid_status:
+        raise HTTPException(status_code=422, detail=f"Invalid status '{status}'")
+    if priority is not None and priority not in valid_priority:
+        raise HTTPException(status_code=422, detail=f"Invalid priority '{priority}'")
+    if status is None and priority is None:
+        raise HTTPException(
+            status_code=422, detail="Provide at least one of status or priority"
+        )
+    updated = set_tracking(event_id, status=status, priority=priority)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Event '{event_id}' not found")
+    return updated
 
 
 @router.get("/{event_id}/history")

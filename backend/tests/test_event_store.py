@@ -117,6 +117,40 @@ class EventStoreTests(unittest.TestCase):
         self.assertEqual(updated["record"]["outcome"]["source"], "manual")
         self.assertEqual(after["record"]["outcome"]["status"], "resolved")
 
+    def test_set_tracking_updates_and_preserves_first_seen(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                first = store.save_event(_make_record("evtT", value_score=30))
+                updated = store.set_tracking("evtT", status="tracking", priority="high")
+                after = store.get_event("evtT")
+        self.assertIsNotNone(updated)
+        self.assertEqual(updated["first_seen"], first["first_seen"])
+        self.assertEqual(after["record"]["tracking"]["status"], "tracking")
+        self.assertEqual(after["record"]["tracking"]["priority"], "high")
+
+    def test_set_tracking_returns_none_for_unknown_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                self.assertIsNone(store.set_tracking("nope", status="tracking"))
+
+    def test_save_events_preserves_user_tracking_across_rescan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                store.save_event(_make_record("evtK", value_score=30))
+                store.set_tracking("evtK", status="archived", priority="low")
+                # A re-scan re-saves the record with default tracking ...
+                rescan = _make_record("evtK", value_score=40)
+                rescan["tracking"] = {"status": "watching", "priority": "medium"}
+                store.save_event(rescan)
+                after = store.get_event("evtK")
+        # ... but the user's earlier decision survives the upsert.
+        self.assertEqual(after["record"]["tracking"]["status"], "archived")
+        self.assertEqual(after["record"]["tracking"]["priority"], "low")
+        self.assertEqual(after["record"]["value_score"], 40)
+
     def test_resolve_event_returns_none_for_unknown_id(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = str(Path(tmp) / "event_store.json")
@@ -295,6 +329,27 @@ class EventReadRouteTests(unittest.TestCase):
         self.assertEqual(found.json()["event_id"], "evtRoute")
         self.assertEqual(found.json()["record"]["value_score"], 42)
         self.assertEqual(missing.status_code, 404)
+
+    def test_tracking_route_updates_and_validates(self):
+        app = FastAPI()
+        app.include_router(events_routes.router, prefix="/events")
+        client = TestClient(app)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                store.save_event(_make_record("evtTrk", value_score=42))
+                ok = client.patch(
+                    "/events/evtTrk/tracking",
+                    json={"status": "tracking", "priority": "high"},
+                )
+                bad = client.patch("/events/evtTrk/tracking", json={"status": "bogus"})
+                missing = client.patch("/events/none/tracking", json={"status": "tracking"})
+                entry = client.get("/events/evtTrk")
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.json()["record"]["tracking"]["status"], "tracking")
+        self.assertEqual(bad.status_code, 422)
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(entry.json()["record"]["tracking"]["priority"], "high")
 
     def test_list_events_route(self):
         app = FastAPI()

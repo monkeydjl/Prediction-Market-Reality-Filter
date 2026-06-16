@@ -132,12 +132,12 @@ class ProbabilityMathTests(unittest.TestCase):
             ),
             {
                 "ai_probability": 51.79,
+                "title_zh": "",
                 "narrative_type": "evidence_fallback",
-                "narrative_summary": "Deterministic fallback based on structured news evidence.",
+                "narrative_summary": "基于结构化新闻证据的确定性回退分析。",
                 "reasoning": (
-                    "LLM unavailable or invalid; probability estimated from evidence "
-                    "direction, strength, resolution relevance, freshness, conflict, news "
-                    "quality, priced-in risk, and resolution ambiguity."
+                    "LLM 不可用或返回无效；概率根据证据方向、强度、结算相关性、新鲜度、"
+                    "冲突度、新闻质量、已定价风险与结算歧义度综合估算得出。"
                 ),
                 "has_strong_evidence": False,
                 "reasoning_consistency": 0.3,
@@ -162,6 +162,7 @@ class ProbabilityMathTests(unittest.TestCase):
             ),
             {
                 "ai_probability": 80.0,
+                "title_zh": "",
                 "narrative_type": "Factual",
                 "narrative_summary": "A summary.",
                 "reasoning": "Some reasoning.",
@@ -327,11 +328,11 @@ class AnalyzeMarketContractTests(unittest.TestCase):
                 "overreaction_score": 0.49,
                 "confidence_score": 0.562,
                 "narrative_type": "evidence_fallback",
-                "narrative_summary": "Deterministic fallback based on structured news evidence.",
+                "title_zh": "",
+                "narrative_summary": "基于结构化新闻证据的确定性回退分析。",
                 "reasoning": (
-                    "LLM unavailable or invalid; probability estimated from evidence "
-                    "direction, strength, resolution relevance, freshness, conflict, news "
-                    "quality, priced-in risk, and resolution ambiguity."
+                    "LLM 不可用或返回无效；概率根据证据方向、强度、结算相关性、新鲜度、"
+                    "冲突度、新闻质量、已定价风险与结算歧义度综合估算得出。"
                 ),
                 "risk_flags": [],
                 "signal": "WATCHLIST",

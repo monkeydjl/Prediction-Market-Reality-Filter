@@ -54,10 +54,18 @@ async def collect_shared_articles() -> list[dict[str, Any]]:
             "description": item.summary,
             "source": item.source,
             "published": item.published,
+            "url": getattr(item, "link", "") or "",
+            "kind": "news",
         }
         for item in rss_news
     ]
-    return rss_articles + official_news + sec_filings + economic_data
+    # Official / regulatory / economic feeds are evidence of record; tag them
+    # "official" so the UI can separate official information from public news.
+    official_articles = [
+        {**article, "kind": "official"}
+        for article in official_news + sec_filings + economic_data
+    ]
+    return rss_articles + official_articles
 
 
 async def collect_articles(
@@ -79,4 +87,5 @@ async def collect_articles(
     except Exception as exc:
         logger.warning("Source collection failed [gnews]: %s", exc)
         google_news = []
+    google_news = [{**article, "kind": "news"} for article in google_news]
     return shared_articles + google_news

@@ -4,12 +4,27 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import type { EventView } from "@/lib/adapt";
-import { categoryLabel, fmtPct } from "@/lib/format";
-import { DeltaPill, PriorityBadge, SupportMeter } from "@/components/indicators";
+import { categoryLabel, fmtPct, STATUS_LABELS } from "@/lib/format";
+import {
+  DeltaPill,
+  PriorityBadge,
+  SupportMeter,
+  TrackingStatusBadge,
+} from "@/components/indicators";
 import { Sparkline } from "@/components/sparkline";
 import { cn } from "@/lib/utils";
 
 type SortKey = "delta" | "probability" | "support" | "value";
+type StatusFilter = "active" | "tracking" | "watching" | "archived" | "all";
+
+// "active" hides archived events by default; the rest map straight to a status.
+const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
+  { value: "active", label: "进行中" },
+  { value: "tracking", label: STATUS_LABELS.tracking },
+  { value: "watching", label: STATUS_LABELS.watching },
+  { value: "archived", label: STATUS_LABELS.archived },
+  { value: "all", label: "全部状态" },
+];
 
 const selectCls =
   "h-8 rounded-md border border-border bg-secondary px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -22,6 +37,7 @@ export function EventTable({
   sparklines?: Record<string, number[]>;
 }) {
   const [category, setCategory] = useState("all");
+  const [status, setStatus] = useState<StatusFilter>("active");
   const [sort, setSort] = useState<SortKey>("delta");
 
   const categories = useMemo(
@@ -31,6 +47,8 @@ export function EventTable({
 
   const rows = useMemo(() => {
     let r = events;
+    if (status === "active") r = r.filter((e) => e.trackingStatus !== "archived");
+    else if (status !== "all") r = r.filter((e) => e.trackingStatus === status);
     if (category !== "all") r = r.filter((e) => e.category === category);
     return [...r].sort((a, b) => {
       switch (sort) {
@@ -44,7 +62,7 @@ export function EventTable({
           return b.valueScore - a.valueScore;
       }
     });
-  }, [events, category, sort]);
+  }, [events, category, status, sort]);
 
   return (
     <section className="flex flex-col gap-3">
@@ -66,6 +84,18 @@ export function EventTable({
             {categories.map((c) => (
               <option key={c} value={c}>
                 {categoryLabel(c)}
+              </option>
+            ))}
+          </select>
+          <select
+            className={selectCls}
+            value={status}
+            onChange={(e) => setStatus(e.target.value as StatusFilter)}
+            aria-label="按跟踪状态筛选"
+          >
+            {STATUS_FILTERS.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
               </option>
             ))}
           </select>
@@ -110,6 +140,7 @@ export function EventTable({
                       <span className="rounded bg-secondary px-1.5 py-0.5 font-mono">
                         {categoryLabel(e.category)}
                       </span>
+                      <TrackingStatusBadge status={e.trackingStatus} />
                     </span>
                     <span className="truncate text-sm font-medium">{e.title}</span>
                   </div>

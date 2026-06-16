@@ -55,9 +55,10 @@ RISK_KEYWORDS = {
 
 DEFAULT_ANALYSIS: dict[str, Any] = {
     "ai_probability": None,
+    "title_zh": "",
     "narrative_type": "unknown",
-    "narrative_summary": "AI analysis unavailable.",
-    "reasoning": "Fallback analysis used because AI output was unavailable or invalid.",
+    "narrative_summary": "AI 分析暂不可用。",
+    "reasoning": "因 AI 输出不可用或无效，已使用回退分析。",
     "has_strong_evidence": False,
     "reasoning_consistency": 0.3,
     "resolution_criteria": "",
@@ -118,6 +119,11 @@ def _build_system_prompt() -> str:
 Return only valid JSON. Do not include markdown.
 Use calibrated, conservative probability estimates.
 The market probability is the anchor. Deviate only for clear, high-quality evidence.
+
+All natural-language string values in the JSON (title_zh, narrative_summary,
+reasoning, resolution_criteria, time_horizon) MUST be written in Simplified
+Chinese (简体中文). Keep the JSON keys and enum values (e.g. narrative_type)
+in English. Keep proper nouns / entity names in their common form.
 """.strip()
 
 
@@ -143,6 +149,7 @@ Structured news evidence and filtered news context:
 Return exactly this JSON shape:
 {{
   "ai_probability": 0.0,
+  "title_zh": "...",
   "narrative_type": "factual|speculative|meme|satire|conspiracy|clickbait|unknown",
   "narrative_summary": "...",
   "reasoning": "...",
@@ -163,6 +170,8 @@ Probability guidance:
 - Your estimate will be anchored to historical base rates after parsing.
 
 Structured event fields (always fill these from the question + evidence):
+- title_zh: a concise Simplified-Chinese title for the event - translate /
+  rewrite the Market question into natural Chinese (keep it faithful).
 - resolution_criteria: the specific, checkable condition that determines YES
   vs NO (e.g. "Bitcoin closes at or above $100,000 on any day in 2026").
 - time_horizon: the deadline or time window (e.g. "by end of 2026", "Q3 2026").
@@ -185,7 +194,7 @@ def _normalize_ai_analysis(
         raw_probability = market_probability
 
     result["ai_probability"] = _clamp(raw_probability, 0, 100)
-    for key in ("narrative_type", "narrative_summary", "reasoning"):
+    for key in ("title_zh", "narrative_type", "narrative_summary", "reasoning"):
         value = data.get(key)
         if isinstance(value, str) and value.strip():
             result[key] = value.strip()[:1200]
@@ -259,11 +268,10 @@ def build_deterministic_fallback_analysis(
         **DEFAULT_ANALYSIS,
         "ai_probability": round(_clamp(probability, 0, 100), 2),
         "narrative_type": "evidence_fallback",
-        "narrative_summary": "Deterministic fallback based on structured news evidence.",
+        "narrative_summary": "基于结构化新闻证据的确定性回退分析。",
         "reasoning": (
-            "LLM unavailable or invalid; probability estimated from evidence direction, "
-            "strength, resolution relevance, freshness, conflict, news quality, priced-in "
-            "risk, and resolution ambiguity."
+            "LLM 不可用或返回无效；概率根据证据方向、强度、结算相关性、新鲜度、"
+            "冲突度、新闻质量、已定价风险与结算歧义度综合估算得出。"
         ),
         "has_strong_evidence": evidence_multiplier >= 0.35,
         "reasoning_consistency": min(0.75, max(0.3, evidence_multiplier)),

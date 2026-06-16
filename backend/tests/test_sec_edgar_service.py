@@ -25,7 +25,8 @@ class SecEdgarServiceTests(unittest.TestCase):
             articles = asyncio.run(sec.fetch_sec_filings(limit=5))
         self.assertEqual(len(articles), 2)
         self.assertEqual(
-            set(articles[0].keys()), {"title", "description", "source", "published"}
+            set(articles[0].keys()),
+            {"title", "description", "source", "published", "url"},
         )
         self.assertEqual(articles[0]["title"], "8-K - EXAMPLE CORP (0001) (Filer)")
         self.assertEqual(articles[0]["description"], "Item 2.02 Results")

@@ -1,20 +1,26 @@
-import { TrendingDown, TrendingUp, Crosshair, Gauge } from "lucide-react";
+import { TrendingDown, TrendingUp, Crosshair, Gauge, Pin, Archive } from "lucide-react";
 
 export interface DashboardSummary {
   total: number;
   rising: number;
   falling: number;
   avgValue: number;
+  tracking: number;
+  archived: number;
 }
 
-export function summarize(events: { delta: number; valueScore: number }[]): DashboardSummary {
+export function summarize(
+  events: { delta: number; valueScore: number; trackingStatus: string }[],
+): DashboardSummary {
   const rising = events.filter((e) => e.delta > 0.5).length;
   const falling = events.filter((e) => e.delta < -0.5).length;
+  const tracking = events.filter((e) => e.trackingStatus === "tracking").length;
+  const archived = events.filter((e) => e.trackingStatus === "archived").length;
   const avgValue =
     events.length === 0
       ? 0
       : events.reduce((a, e) => a + e.valueScore, 0) / events.length;
-  return { total: events.length, rising, falling, avgValue };
+  return { total: events.length, rising, falling, avgValue, tracking, archived };
 }
 
 function Stat({
@@ -52,7 +58,7 @@ function Stat({
 
 export function SummaryBar({ summary }: { summary: DashboardSummary }) {
   return (
-    <div className="grid grid-cols-2 divide-border rounded-lg border border-border bg-card md:grid-cols-4 md:divide-x">
+    <div className="grid grid-cols-2 divide-border rounded-lg border border-border bg-card md:grid-cols-3 lg:grid-cols-6 lg:divide-x">
       <Stat
         label="在库事件"
         value={String(summary.total)}
@@ -79,6 +85,19 @@ export function SummaryBar({ summary }: { summary: DashboardSummary }) {
         value={summary.avgValue.toFixed(1)}
         hint="value_score 越高越值得关注"
         icon={<Gauge className="size-3.5" aria-hidden="true" />}
+      />
+      <Stat
+        label="持续跟踪"
+        value={String(summary.tracking)}
+        hint="已标记为持续人工跟踪"
+        icon={<Pin className="size-3.5" aria-hidden="true" />}
+        tone="signal"
+      />
+      <Stat
+        label="已归档"
+        value={String(summary.archived)}
+        hint="已结束跟踪、归档留存"
+        icon={<Archive className="size-3.5" aria-hidden="true" />}
       />
     </div>
   );

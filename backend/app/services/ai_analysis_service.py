@@ -169,6 +169,7 @@ async def analyze_market(
         "overreaction_score": abs(divergence),
         "confidence_score": confidence_score,
         "narrative_type": narrative_type,
+        "title_zh": normalized["title_zh"],
         "narrative_summary": normalized["narrative_summary"],
         "reasoning": normalized["reasoning"],
         "risk_flags": risk_flags,

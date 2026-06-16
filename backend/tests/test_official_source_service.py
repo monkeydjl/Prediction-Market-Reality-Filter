@@ -22,7 +22,8 @@ class OfficialSourceServiceTests(unittest.TestCase):
             articles = asyncio.run(official.fetch_official_news(limit=5))
         self.assertEqual(len(articles), 2)
         self.assertEqual(
-            set(articles[0].keys()), {"title", "description", "source", "published"}
+            set(articles[0].keys()),
+            {"title", "description", "source", "published", "url"},
         )
         self.assertEqual(articles[0]["title"], "Fed holds rates")
         self.assertEqual(articles[0]["description"], "summary text")

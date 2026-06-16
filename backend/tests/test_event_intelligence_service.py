@@ -2,6 +2,7 @@ import unittest
 
 from app.services.event_intelligence_service import (
     build_event_record,
+    build_evidence_items,
     calculate_impact_score,
     calculate_trust_score,
     impact_drivers,
@@ -39,6 +40,44 @@ class EventIntelligenceServiceTests(unittest.TestCase):
             "trade",
             record["intelligence_report"]["recommended_action"].lower(),
         )
+
+    def test_build_event_record_adds_default_tracking_and_title_zh(self):
+        record = build_event_record({
+            "market_question": "Will the bill pass?",
+            "market_probability": 50,
+            "ai_probability": 56,
+            "title_zh": "法案会通过吗？",
+        })
+        self.assertEqual(record["event_title_zh"], "法案会通过吗？")
+        self.assertEqual(record["tracking"]["status"], "watching")
+        self.assertIn(record["tracking"]["priority"], {"high", "medium", "low"})
+        # The Chinese title (when present) drives the headline.
+        self.assertIn("法案会通过吗？", record["intelligence_report"]["headline"])
+
+    def test_build_evidence_items_groups_and_preserves_url(self):
+        items = build_evidence_items([
+            {
+                "kind": "official", "source": "Federal Reserve",
+                "title": "Fed holds rates", "description": "rate hold",
+                "url": "https://fed.gov/x", "published": "Mon, 01 Jun 2026 00:00:00 GMT",
+                "quality_score": 0.8, "relevance_score": 0.6,
+            },
+            {
+                "kind": "news", "source": "Reuters", "title": "Reuters report",
+                "description": "context", "url": "https://r.com/y",
+                "quality_score": 0.7, "relevance_score": 0.5,
+            },
+            {"title": "   "},  # blank title is dropped
+        ])
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["kind"], "official")
+        self.assertEqual(items[0]["url"], "https://fed.gov/x")
+        self.assertEqual(items[0]["quality"], 0.8)
+        self.assertEqual({i["kind"] for i in items}, {"official", "news"})
+
+    def test_build_evidence_items_handles_empty(self):
+        self.assertEqual(build_evidence_items(None), [])
+        self.assertEqual(build_evidence_items([]), [])
 
     def test_scores_are_bounded_when_analysis_is_sparse(self):
         analysis = {"market_question": "Sparse event"}

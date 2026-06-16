@@ -118,6 +118,40 @@ class EventSemantics(BaseModel):
     entities: list[str] = []          # key subjects, raw cleaned form
 
 
+class EvidenceItem(BaseModel):
+    """One piece of source evidence collected for an event (a news article or
+    official/regulatory release that passed the news filter).
+
+    The backend scores evidence direction only in aggregate (see
+    EvidenceProfile), so an item carries quality / relevance rather than a
+    per-item supports/contradicts stance. ``kind`` groups items in the UI:
+    "official" (gov / regulator / economic feeds) vs "news" (general press).
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    kind: str = "news"          # official | news
+    source: str = ""
+    title: str = ""
+    summary: str = ""
+    url: str = ""
+    published: str = ""
+    quality: float = 0.0
+    relevance: float = 0.0
+
+
+class Tracking(BaseModel):
+    """Human tracking decision for an event. Defaults are seeded at analysis
+    time; a user's explicit choice is preserved across re-scans by the store.
+
+    status: tracking (持续跟踪) | watching (观察中) | archived (已归档).
+    priority: high | medium | low.
+    """
+
+    status: str = "watching"
+    priority: str = "medium"
+
+
 class EventRecord(BaseModel):
     """Native typed shape of the event intelligence record produced by
     ``event_intelligence_service.build_event_record()``.
@@ -131,6 +165,7 @@ class EventRecord(BaseModel):
 
     event_id: str
     event_title: str
+    event_title_zh: str = ""
     event_summary: str
     probability: Probability
     credibility: Credibility
@@ -140,6 +175,8 @@ class EventRecord(BaseModel):
     source: EventSource
     value_score: int
     intelligence_report: IntelligenceReport
+    evidence_items: list[EvidenceItem] = []
+    tracking: Tracking | None = None
     legacy_analysis: dict[str, Any] = {}
     outcome: Outcome | None = None
     calibration: Calibration | None = None

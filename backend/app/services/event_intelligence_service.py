@@ -50,6 +50,7 @@ def build_event_record(
     return {
         "event_id": _event_id(question),
         "event_title": question,
+        "event_title_zh": str(analysis.get("title_zh") or "").strip()[:300],
         "event_summary": _summary(analysis),
         "probability": {
             "baseline": round(baseline, 2),
@@ -85,8 +86,14 @@ def build_event_record(
         },
         "source": source_info,
         "value_score": calculate_value_score(impact_score, trust_score),
+        "tracking": _default_tracking(impact_score),
         "intelligence_report": {
-            "headline": build_headline(question, change, trust_score, impact_score),
+            "headline": build_headline(
+                str(analysis.get("title_zh") or "").strip() or question,
+                change,
+                trust_score,
+                impact_score,
+            ),
             "why_it_matters": build_why_it_matters(analysis, change),
             "probability_assessment": build_probability_assessment(
                 baseline,
@@ -166,6 +173,7 @@ async def analyze_event_question(
             liquidity=liquidity,
         )
         record["news_filter"] = filtered_news["summary"]
+        record["evidence_items"] = build_evidence_items(filtered_news.get("articles"))
 
     _persist_events([record])
     return record
@@ -288,6 +296,7 @@ async def discover_events(
                     liquidity=candidate.get("liquidity"),
                 )
                 record["news_filter"] = filtered_news["summary"]
+                record["evidence_items"] = build_evidence_items(filtered_news.get("articles"))
                 if use_cache:
                     set_cached_event(question, record)
                 return record, True
@@ -348,6 +357,47 @@ async def _build_filtered_news(
         market_question=event_question,
         articles=articles,
     )
+
+
+def _priority_from_score(score: int) -> str:
+    return {"HIGH": "high", "MEDIUM": "medium", "LOW": "low"}.get(
+        score_level(score), "medium"
+    )
+
+
+def _default_tracking(impact_score: int) -> dict[str, str]:
+    """Default human-tracking decision for a freshly analyzed event.
+
+    status starts at "watching"; priority seeds from impact level. A user's
+    explicit choice is preserved across re-scans by event_store.save_events.
+    """
+    return {"status": "watching", "priority": _priority_from_score(impact_score)}
+
+
+def build_evidence_items(articles: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Per-item evidence rows for the detail UI, from the filtered news articles.
+
+    Each article already carries kind (official/news), source, url, recency and
+    quality/relevance scores from the news filter. The backend computes evidence
+    direction only in aggregate (there is no per-item stance), so each item
+    exposes quality / relevance rather than a fabricated supports/contradicts.
+    """
+    items: list[dict[str, Any]] = []
+    for article in articles or []:
+        title = str(article.get("title") or "").strip()
+        if not title:
+            continue
+        items.append({
+            "kind": article.get("kind") or "news",
+            "source": str(article.get("source") or "").strip(),
+            "title": title[:300],
+            "summary": str(article.get("description") or "").strip()[:500],
+            "url": str(article.get("url") or "").strip(),
+            "published": str(article.get("published") or "").strip(),
+            "quality": round(_clamp01(article.get("quality_score")), 3),
+            "relevance": round(_clamp01(article.get("relevance_score")), 3),
+        })
+    return items
 
 
 def calculate_trust_score(analysis: dict[str, Any]) -> int:
@@ -421,16 +471,20 @@ def impact_drivers(analysis: dict[str, Any]) -> list[str]:
     return drivers or ["monitor_for_confirmation"]
 
 
+_DIRECTION_ZH = {"rising": "上行", "falling": "下行", "stable": "持平"}
+_LEVEL_ZH = {"HIGH": "高", "MEDIUM": "中", "LOW": "低"}
+
+
 def build_headline(
     question: str,
     change: float,
     trust_score: int,
     impact_score: int,
 ) -> str:
-    direction = probability_direction(change)
+    direction = _DIRECTION_ZH.get(probability_direction(change), "持平")
     return (
-        f"{direction.title()} probability signal for '{question[:90]}' "
-        f"(trust {trust_score}/100, impact {impact_score}/100)"
+        f"{direction}概率信号：「{question[:90]}」"
+        f"（可信度 {trust_score}/100，影响 {impact_score}/100）"
     )
 
 
@@ -439,8 +493,8 @@ def build_why_it_matters(analysis: dict[str, Any], change: float) -> str:
     if narrative:
         return narrative[:500]
     return (
-        "This event is relevant because the available evidence suggests a "
-        f"{abs(change):.1f} point probability move from the current baseline."
+        "该事件值得关注：现有证据显示其发生概率相对当前基准"
+        f"移动了约 {abs(change):.1f} 个百分点。"
     )
 
 
@@ -450,24 +504,24 @@ def build_probability_assessment(
     trust_score: int,
 ) -> str:
     return (
-        f"Baseline probability {baseline:.1f}% moved to {estimated:.1f}% "
-        f"with {score_level(trust_score).lower()} credibility."
+        f"基准概率 {baseline:.1f}% 变化至 {estimated:.1f}%，"
+        f"可信度{_LEVEL_ZH.get(score_level(trust_score), '中')}。"
     )
 
 
 def recommended_action(trust_score: int, impact_score: int, change: float) -> str:
     if trust_score >= 70 and impact_score >= 60:
-        return "Escalate for human review and monitor follow-up evidence."
+        return "建议人工复核，并持续关注后续证据。"
     if trust_score >= 45 and abs(change) >= 5:
-        return "Track as an active intelligence item; wait for confirmation."
-    return "Keep in watch mode; evidence is not strong enough for escalation."
+        return "作为活跃情报项跟踪，等待进一步确认。"
+    return "保持观察；当前证据强度不足以升级处理。"
 
 
 def _summary(analysis: dict[str, Any]) -> str:
     return str(
         analysis.get("narrative_summary")
         or analysis.get("reasoning")
-        or "No summary available."
+        or "暂无摘要。"
     )[:500]
 
 

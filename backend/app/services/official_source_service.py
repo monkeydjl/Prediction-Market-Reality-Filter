@@ -30,6 +30,7 @@ def _fetch_sync(url: str, source_name: str, limit: int) -> list[dict]:
             "description": entry.get("summary", "") or entry.get("description", ""),
             "source": source_name,
             "published": entry.get("published", "") or entry.get("updated", ""),
+            "url": entry.get("link", ""),
         })
     return articles
 

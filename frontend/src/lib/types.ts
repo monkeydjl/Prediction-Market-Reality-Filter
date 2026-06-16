@@ -69,14 +69,36 @@ export interface CrossValidation {
   divergence?: number;
 }
 
+// One collected piece of source evidence (news article / official release).
+// kind groups it in the detail UI: "official" vs "news".
+export interface EvidenceItem {
+  kind?: string;
+  source?: string;
+  title?: string;
+  summary?: string;
+  url?: string;
+  published?: string;
+  quality?: number;
+  relevance?: number;
+}
+
+// Human tracking decision for an event.
+export interface Tracking {
+  status?: string; // tracking | watching | archived
+  priority?: string; // high | medium | low
+}
+
 export interface EventRecord {
   event_id: string;
   event_title: string;
+  event_title_zh?: string;
   event_summary?: string;
   probability?: Probability;
   credibility?: Credibility;
   impact?: Impact;
   evidence?: { direction?: string };
+  evidence_items?: EvidenceItem[];
+  tracking?: Tracking | null;
   source?: EventSource;
   value_score?: number;
   intelligence_report?: IntelligenceReport;

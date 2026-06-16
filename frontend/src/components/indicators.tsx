@@ -1,6 +1,6 @@
 import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { fmtSignedPct, PRIORITY_LABELS } from "@/lib/format";
+import { fmtSignedPct, PRIORITY_LABELS, STATUS_LABELS } from "@/lib/format";
 
 // Signed probability delta as a colored pill. Always icon + text + color,
 // never color alone (accessibility).
@@ -50,6 +50,33 @@ export function PriorityBadge({ priority }: { priority: string }) {
         aria-hidden="true"
       />
       {PRIORITY_LABELS[priority] ?? priority}
+    </span>
+  );
+}
+
+// Human tracking status as a badge. "watching" is the default/neutral state, so
+// it renders nothing — only user-classified events (tracking / archived) get a
+// badge, keeping the dashboard list uncluttered.
+export function TrackingStatusBadge({ status }: { status: string }) {
+  if (status !== "tracking" && status !== "archived") return null;
+  const active = status === "tracking";
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-medium",
+        active
+          ? "border-primary/40 bg-primary/10 text-primary"
+          : "border-border bg-transparent text-muted-foreground",
+      )}
+    >
+      <span
+        className={cn(
+          "size-1.5 rounded-full",
+          active ? "bg-primary" : "bg-muted-foreground/50",
+        )}
+        aria-hidden="true"
+      />
+      {STATUS_LABELS[status] ?? status}
     </span>
   );
 }

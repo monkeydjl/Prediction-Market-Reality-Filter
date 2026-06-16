@@ -23,6 +23,7 @@ export interface EventView {
   direction: string;
   evidenceSupport: number; // 0-1
   priority: "high" | "medium" | "low";
+  trackingStatus: "tracking" | "watching" | "archived";
   trend: Trend;
   valueScore: number;
 }
@@ -36,12 +37,25 @@ export function trendOf(delta: number): Trend {
   return delta > 0.5 ? "up" : delta < -0.5 ? "down" : "flat";
 }
 
-// impact.level (HIGH/MEDIUM/LOW) -> human tracking priority.
+// Human tracking priority. A user's explicit choice (record.tracking.priority,
+// set in the detail page) wins; otherwise fall back to impact.level.
 function priorityOf(record: EventRecord): "high" | "medium" | "low" {
+  const user = record.tracking?.priority;
+  if (user === "high" || user === "medium" || user === "low") return user;
   const lvl = String(record.impact?.level ?? "").toUpperCase();
   if (lvl === "HIGH") return "high";
   if (lvl === "LOW") return "low";
   return "medium";
+}
+
+// Human tracking status (tracking | watching | archived). Defaults to
+// "watching" when the user has not made an explicit decision (tracking=None).
+function trackingStatusOf(
+  record: EventRecord,
+): "tracking" | "watching" | "archived" {
+  const s = record.tracking?.status;
+  if (s === "tracking" || s === "archived") return s;
+  return "watching";
 }
 
 // Category lives in legacy_analysis.base_rate_category on real records; fall
@@ -68,6 +82,7 @@ export function adaptRecord(record: EventRecord): EventView {
     direction: String(p.direction ?? "flat"),
     evidenceSupport: num(record.credibility?.confidence),
     priority: priorityOf(record),
+    trackingStatus: trackingStatusOf(record),
     trend: trendOf(delta),
     valueScore: num(record.value_score),
   };
@@ -93,6 +108,7 @@ export function adaptMover(m: Mover): EventView {
     direction: String(t.direction ?? "flat"),
     evidenceSupport: 0,
     priority: "medium",
+    trackingStatus: "watching",
     trend: trendOf(delta),
     valueScore: 0,
   };

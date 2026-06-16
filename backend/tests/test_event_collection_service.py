@@ -31,16 +31,16 @@ class EventCollectionServiceTests(unittest.TestCase):
                    AsyncMock(return_value=econ)):
             articles = asyncio.run(collection.collect_shared_articles())
         self.assertEqual(len(articles), 4)
-        # RSS NewsModel normalized to the common dict shape.
+        # RSS NewsModel normalized to the common dict shape (tagged news + url).
         self.assertEqual(
             articles[0],
             {"title": "RSS title", "description": "RSS body",
-             "source": "Reuters", "published": "2026-06-12"},
+             "source": "Reuters", "published": "2026-06-12", "url": "", "kind": "news"},
         )
-        # Official, SEC, and economic dicts passed through.
-        self.assertIn(official[0], articles)
-        self.assertIn(sec[0], articles)
-        self.assertIn(econ[0], articles)
+        # Official, SEC, and economic dicts passed through, tagged "official".
+        self.assertIn({**official[0], "kind": "official"}, articles)
+        self.assertIn({**sec[0], "kind": "official"}, articles)
+        self.assertIn({**econ[0], "kind": "official"}, articles)
 
     def test_collect_articles_appends_gnews_and_reuses_shared(self):
         shared = [{"title": "shared", "description": "d",
@@ -55,8 +55,8 @@ class EventCollectionServiceTests(unittest.TestCase):
             articles = asyncio.run(
                 collection.collect_articles("will X happen?", shared_articles=shared)
             )
-        # Shared reused as-is; gnews appended unchanged.
-        self.assertEqual(articles, shared + gnews)
+        # Shared reused as-is; gnews appended, tagged "news".
+        self.assertEqual(articles, shared + [{**gnews[0], "kind": "news"}])
         # Shared sources were not re-fetched because shared_articles was provided.
         rss_mock.assert_not_called()
 
@@ -73,7 +73,7 @@ class EventCollectionServiceTests(unittest.TestCase):
                    AsyncMock(return_value=[])):
             articles = asyncio.run(collection.collect_shared_articles())
         # The failing RSS source contributes nothing; the others still collected.
-        self.assertEqual(articles, official)
+        self.assertEqual(articles, [{**official[0], "kind": "official"}])
 
     def test_collect_articles_isolates_failing_gnews(self):
         shared = [{"title": "shared", "description": "d",

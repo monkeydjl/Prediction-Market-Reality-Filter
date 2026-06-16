@@ -43,6 +43,12 @@ export const eventsApi = {
   detail: (id: string) =>
     api<TrackedEntry>(`/events/${encodeURIComponent(id)}`),
 
+  setTracking: (id: string, body: { status?: string; priority?: string }) =>
+    api<TrackedEntry>(`/events/${encodeURIComponent(id)}/tracking`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+
   history: (id: string) =>
     api<{ history: HistorySnapshot[]; trend?: Trend; count?: number }>(
       `/events/${encodeURIComponent(id)}/history`

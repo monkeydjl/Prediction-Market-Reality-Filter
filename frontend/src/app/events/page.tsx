@@ -7,6 +7,8 @@ import { ArrowLeft } from "lucide-react";
 import { AppNav } from "@/components/app-nav";
 import { SignalSummary } from "@/components/detail/signal-summary";
 import { SignalPanel } from "@/components/detail/signal-panel";
+import { EvidenceList } from "@/components/detail/evidence-list";
+import { TrackingDecision } from "@/components/detail/tracking-decision";
 import { ProbabilityChart, buildSeries } from "@/components/detail/probability-chart";
 import { DeltaPill, SupportMeter } from "@/components/indicators";
 import { eventsApi } from "@/lib/api";
@@ -99,7 +101,9 @@ function DetailInner() {
             {categoryLabel(view.category)}
           </span>
         </div>
-        <h1 className="text-balance text-xl font-semibold md:text-2xl">{view.title}</h1>
+        <h1 className="text-balance text-xl font-semibold md:text-2xl">
+          {record.event_title_zh || view.title}
+        </h1>
         {view.description && (
           <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">{view.description}</p>
         )}
@@ -137,12 +141,29 @@ function DetailInner() {
           </div>
           <ProbabilityChart data={buildSeries(history)} baseline={view.baselineProbability} />
         </div>
-        <SignalSummary
-          event={view}
-          crossValidation={record.cross_validation}
-          recommendedAction={record.intelligence_report?.recommended_action}
-        />
+        <div className="flex flex-col gap-4">
+          <SignalSummary
+            event={view}
+            crossValidation={record.cross_validation}
+            recommendedAction={record.intelligence_report?.recommended_action}
+          />
+          <TrackingDecision
+            id={record.event_id}
+            status={record.tracking?.status}
+            priority={record.tracking?.priority}
+          />
+        </div>
       </div>
+
+      <section className="flex flex-col gap-3">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-sm font-semibold">证据来源</h2>
+          <span className="text-xs text-muted-foreground">
+            官方信息 · 公开新闻 · 预测市场
+          </span>
+        </div>
+        <EvidenceList record={record} />
+      </section>
 
       <section className="flex flex-col gap-3">
         <h2 className="text-sm font-semibold">证据与交叉验证</h2>

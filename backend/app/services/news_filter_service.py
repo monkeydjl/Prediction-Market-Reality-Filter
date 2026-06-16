@@ -125,11 +125,18 @@ def normalize_article(article: dict[str, Any]) -> dict[str, Any]:
     if not source:
         source = infer_source(title)
 
+    url = str(article.get("url") or article.get("link") or "").strip()
+    kind = str(article.get("kind") or "").strip().lower()
+    if kind not in {"news", "official", "market"}:
+        kind = "news"
+
     return {
         "title": title,
         "description": description,
         "source": source,
         "published": published,
+        "url": url,
+        "kind": kind,
         "source_quality": score_source_quality(source, title),
         "age_score": score_age(published),
     }

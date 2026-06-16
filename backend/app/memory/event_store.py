@@ -47,9 +47,14 @@ def save_events(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         store = _load_unlocked(path)
         now = _now()
         for record in records:
-            EventRecord.model_validate(record)
             event_id = record["event_id"]
             existing = store.get(event_id) or {}
+            # Tracking is a user-owned decision; a re-scan must not reset it to
+            # the default. Preserve any existing tracking over the incoming one.
+            existing_tracking = (existing.get("record") or {}).get("tracking")
+            if existing_tracking is not None:
+                record["tracking"] = existing_tracking
+            EventRecord.model_validate(record)
             entry = {
                 "event_id": event_id,
                 "first_seen": existing.get("first_seen", now),
@@ -96,6 +101,44 @@ def resolve_event(
         if calibration is not None:
             record["calibration"] = calibration
         EventRecord.model_validate(record)  # gate: bad outcome/calibration raises here
+        now = _now()
+        updated = {
+            "event_id": event_id,
+            "first_seen": entry.get("first_seen", now),
+            "last_updated": now,
+            "record": record,
+        }
+        store[event_id] = updated
+        write_json_atomic(path, store, indent=2)
+        return updated
+
+
+def set_tracking(
+    event_id: str,
+    status: str | None = None,
+    priority: str | None = None,
+) -> dict[str, Any] | None:
+    """Update the human tracking decision (status / priority) on a stored event.
+
+    Merges the provided fields into record["tracking"], re-validates the full
+    record against EventRecord, and saves. Returns the updated entry, or None
+    when event_id is unknown (callers raise 404). first_seen is preserved;
+    last_updated is refreshed.
+    """
+    path = _store_path()
+    with locked_file(path):
+        store = _load_unlocked(path)
+        entry = store.get(event_id)
+        if entry is None:
+            return None
+        record = entry.get("record") or {}
+        tracking = dict(record.get("tracking") or {})
+        if status is not None:
+            tracking["status"] = status
+        if priority is not None:
+            tracking["priority"] = priority
+        record["tracking"] = tracking
+        EventRecord.model_validate(record)  # gate: bad tracking raises here
         now = _now()
         updated = {
             "event_id": event_id,

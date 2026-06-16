@@ -1,6 +1,6 @@
 import unittest
 
-from app.services.news_filter_service import filter_news_for_market
+from app.services.news_filter_service import filter_news_for_market, score_article
 
 
 class NewsFilterServiceContractTests(unittest.TestCase):
@@ -74,6 +74,42 @@ class NewsFilterServiceContractTests(unittest.TestCase):
         self.assertEqual(result["summary"]["selected_count"], 0)
         self.assertEqual(result["evidence_profile"]["evidence_direction"], "neutral")
         self.assertEqual(result["evidence_profile"]["evidence_strength"], 0.0)
+
+
+def _blend_article(title, description, semantic=None):
+    article = {
+        "title": title,
+        "description": description,
+        "source_quality": 0.5,
+        "age_score": 0.5,
+    }
+    if semantic is not None:
+        article["semantic_relevance"] = semantic
+    return article
+
+
+class RelevanceBlendTests(unittest.TestCase):
+    """score_article blends semantic_relevance (when present) with keyword
+    relevance via max-merge; keyword-only when it is absent (unchanged)."""
+
+    QUESTION = "Will the Federal Reserve cut interest rates?"
+
+    def test_semantic_rescues_low_keyword_score(self):
+        # No shared vocabulary -> keyword relevance ~0; semantic 0.9 wins.
+        article = _blend_article(
+            "Bananas ripen faster in tropical summers",
+            "Logistics of fruit shipping",
+            semantic=0.9,
+        )
+        score_article(self.QUESTION, article)
+        self.assertEqual(article["relevance_score"], 0.9)
+
+    def test_keyword_only_when_semantic_absent(self):
+        article = _blend_article(
+            "Federal Reserve signals an interest rate decision", "rates"
+        )
+        score_article(self.QUESTION, article)
+        self.assertGreater(article["relevance_score"], 0.0)
 
 
 if __name__ == "__main__":

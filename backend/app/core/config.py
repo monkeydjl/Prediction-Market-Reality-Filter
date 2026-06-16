@@ -104,6 +104,16 @@ class Settings:
     OPEN_WEB_EXTRACTION_MODEL: str = os.getenv("OPEN_WEB_EXTRACTION_MODEL", "")
     OPEN_WEB_SOURCE_NAME: str = os.getenv("OPEN_WEB_SOURCE_NAME", "Open Web")
 
+    # Semantic news relevance via embeddings. Opt-in: disabled unless
+    # EMBEDDING_MODEL is set. The default chat provider (DeepSeek) has NO
+    # embeddings endpoint, so point EMBEDDING_BASE_URL / EMBEDDING_API_KEY at a
+    # provider that does (DashScope, OpenAI, ...). When base_url is empty the
+    # OpenAI default endpoint is used; when api_key is empty OPENAI_API_KEY is
+    # reused. When disabled, news relevance uses the keyword signal only.
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "")
+    EMBEDDING_BASE_URL: str = os.getenv("EMBEDDING_BASE_URL", "")
+    EMBEDDING_API_KEY: str = os.getenv("EMBEDDING_API_KEY", "")
+
     # event_audit.jsonl retention. The audit log is append-only; once its line
     # count exceeds EVENT_AUDIT_COMPACTION_THRESHOLD, a compaction rewrites it
     # keeping at most EVENT_AUDIT_MAX_PER_EVENT snapshots per event (the most

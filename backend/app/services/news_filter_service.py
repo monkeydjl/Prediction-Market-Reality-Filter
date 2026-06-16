@@ -139,6 +139,9 @@ def normalize_article(article: dict[str, Any]) -> dict[str, Any]:
         "kind": kind,
         "source_quality": score_source_quality(source, title),
         "age_score": score_age(published),
+        # Carried through from semantic_relevance_service (when embeddings are
+        # enabled) so score_article can blend it with keyword relevance.
+        "semantic_relevance": article.get("semantic_relevance"),
     }
 
 
@@ -151,6 +154,12 @@ def score_article(
     reasons = []
 
     relevance = relevance_score(market_question, text, semantics)
+    # When semantic relevance is available (embeddings enabled), take the
+    # stronger of the two signals: semantic rescues relevant articles that share
+    # little surface vocabulary; keyword rescues semantic noise.
+    semantic = article.get("semantic_relevance")
+    if isinstance(semantic, (int, float)):
+        relevance = max(relevance, float(semantic))
     article["relevance_score"] = relevance
     if relevance < 0.2:
         reasons.append("low_relevance")

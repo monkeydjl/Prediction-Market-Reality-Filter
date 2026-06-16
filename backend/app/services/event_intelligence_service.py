@@ -354,8 +354,12 @@ async def _build_filtered_news(
 ) -> dict[str, Any]:
     from app.services.event_collection_service import collect_articles
     from app.services.news_filter_service import filter_news_for_market
+    from app.services.semantic_relevance_service import annotate_semantic_relevance
 
     articles = await collect_articles(event_question, shared_articles=shared_articles)
+    # Opt-in semantic relevance (no-op unless EMBEDDING_MODEL is configured);
+    # filter_news_for_market blends it with keyword relevance.
+    await annotate_semantic_relevance(event_question, articles)
     return filter_news_for_market(
         market_question=event_question,
         articles=articles,

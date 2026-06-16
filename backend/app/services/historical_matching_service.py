@@ -94,6 +94,7 @@ def find_similar(
         scored.append({
             "event_id": event_id,
             "event_title": title,
+            "event_title_zh": record.get("event_title_zh", ""),
             "similarity": round(similarity, 3),
             "estimated_probability": probability.get("estimated"),
             "change": probability.get("change"),

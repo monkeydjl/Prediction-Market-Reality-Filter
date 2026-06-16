@@ -73,7 +73,7 @@ export function adaptRecord(record: EventRecord): EventView {
   const delta = num(p.change);
   return {
     id: record.event_id,
-    title: record.event_title,
+    title: record.event_title_zh || record.event_title,
     description: record.event_summary ?? "",
     category: categoryOf(record),
     currentProbability: num(p.estimated, num(p.baseline)),
@@ -99,7 +99,7 @@ export function adaptMover(m: Mover): EventView {
   const delta = num(t.net_change);
   return {
     id: m.event_id,
-    title: m.event_title ?? m.event_id,
+    title: m.event_title_zh || m.event_title || m.event_id,
     description: "",
     category: "general",
     currentProbability: num(t.latest_probability),

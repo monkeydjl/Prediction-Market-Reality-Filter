@@ -112,5 +112,6 @@ def _to_candidate_event(market: dict[str, Any]) -> dict[str, Any]:
             "baseline_probability": round(baseline, 2),
             "liquidity": liquidity,
             "volume": volume,
+            "url": str(market.get("url", "") or ""),
         },
     }

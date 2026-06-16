@@ -57,6 +57,7 @@ def parse_market(item: dict[str, Any]) -> MarketModel | None:
         yes_price, no_price = parse_outcome_prices(item.get("outcomePrices"))
         return MarketModel(
             id=str(item.get("id", "") or ""),
+            slug=str(item.get("slug", "") or ""),
             question=question,
             yes_price=yes_price,
             no_price=no_price,

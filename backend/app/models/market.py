@@ -4,6 +4,7 @@ from typing import Optional
 
 class MarketModel(BaseModel):
     id: str
+    slug: Optional[str] = None
     question: str
     yes_price: Optional[float] = None
     no_price: Optional[float] = None

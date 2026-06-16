@@ -54,8 +54,17 @@ async def list_event_intelligence(limit: int = Query(default=50, ge=1, le=200)):
 
 @router.get("/movers")
 async def get_event_movers(limit: int = Query(default=10, ge=1, le=50)):
-    """Rank tracked events by how much their probability has moved over time."""
+    """Rank tracked events by how much their probability has moved over time.
+
+    Movers carry the English event_title from the audit snapshots; enrich each
+    with the stored event_title_zh so the dashboard can show Chinese titles.
+    """
     movers = rank_movers(histories_by_event(), limit=limit)
+    for mover in movers:
+        entry = get_event(mover.get("event_id", ""))
+        title_zh = ((entry or {}).get("record") or {}).get("event_title_zh") or ""
+        if title_zh:
+            mover["event_title_zh"] = title_zh
     return {"count": len(movers), "movers": movers}
 
 

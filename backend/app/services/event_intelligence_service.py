@@ -4,6 +4,7 @@ import itertools
 import logging
 from typing import Any
 
+from app.services.translation_service import translate_articles
 from app.utils.market_utils import safe_float
 
 
@@ -173,7 +174,8 @@ async def analyze_event_question(
             liquidity=liquidity,
         )
         record["news_filter"] = filtered_news["summary"]
-        record["evidence_items"] = build_evidence_items(filtered_news.get("articles"))
+        articles = await translate_articles(filtered_news.get("articles") or [])
+        record["evidence_items"] = build_evidence_items(articles)
 
     _persist_events([record])
     return record
@@ -296,7 +298,8 @@ async def discover_events(
                     liquidity=candidate.get("liquidity"),
                 )
                 record["news_filter"] = filtered_news["summary"]
-                record["evidence_items"] = build_evidence_items(filtered_news.get("articles"))
+                articles = await translate_articles(filtered_news.get("articles") or [])
+                record["evidence_items"] = build_evidence_items(articles)
                 if use_cache:
                     set_cached_event(question, record)
                 return record, True
@@ -387,7 +390,7 @@ def build_evidence_items(articles: list[dict[str, Any]] | None) -> list[dict[str
         title = str(article.get("title") or "").strip()
         if not title:
             continue
-        items.append({
+        item = {
             "kind": article.get("kind") or "news",
             "source": str(article.get("source") or "").strip(),
             "title": title[:300],
@@ -396,7 +399,17 @@ def build_evidence_items(articles: list[dict[str, Any]] | None) -> list[dict[str
             "published": str(article.get("published") or "").strip(),
             "quality": round(_clamp01(article.get("quality_score")), 3),
             "relevance": round(_clamp01(article.get("relevance_score")), 3),
-        })
+        }
+        # Chinese translations (added by translation_service.translate_articles
+        # during discovery) carry through when present; the UI shows zh with the
+        # English original as fallback. Absent for untranslated/manual flows.
+        title_zh = str(article.get("title_zh") or "").strip()
+        if title_zh:
+            item["title_zh"] = title_zh[:300]
+        summary_zh = str(article.get("summary_zh") or "").strip()
+        if summary_zh:
+            item["summary_zh"] = summary_zh[:500]
+        items.append(item)
     return items
 
 

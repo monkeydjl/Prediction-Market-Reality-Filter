@@ -71,9 +71,25 @@ class FindSimilarTests(unittest.TestCase):
     def test_precedent_fields(self):
         top = find_similar(self.QUERY, self._entries(), limit=10, exclude_event_id="self")[0]
         self.assertEqual(set(top.keys()), {
-            "event_id", "event_title", "similarity",
+            "event_id", "event_title", "event_title_zh", "similarity",
             "estimated_probability", "change", "direction", "last_updated",
         })
+
+    def test_includes_chinese_title_when_present(self):
+        entries = [
+            _entry("self", self.QUERY),
+            {
+                "event_id": "fed-jul",
+                "last_updated": "2026-06-13T00:00:00+00:00",
+                "record": {
+                    "event_title": "Will the Federal Reserve raise interest rates in July?",
+                    "event_title_zh": "美联储七月会加息吗？",
+                    "probability": {"estimated": 60.0, "change": 10.0, "direction": "rising"},
+                },
+            },
+        ]
+        top = find_similar(self.QUERY, entries, limit=10, exclude_event_id="self")[0]
+        self.assertEqual(top["event_title_zh"], "美联储七月会加息吗？")
 
 
 class CjkFindSimilarTests(unittest.TestCase):

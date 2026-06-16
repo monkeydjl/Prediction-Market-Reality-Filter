@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock, patch
 from app.services import polymarket_event_source as source
 
 
-def _market(question, id, yes_price, volume, liquidity):
+def _market(question, id, yes_price, volume, liquidity, slug="x-slug"):
     return SimpleNamespace(
         question=question, id=id, yes_price=yes_price,
-        volume=volume, liquidity=liquidity,
+        volume=volume, liquidity=liquidity, slug=slug,
     )
 
 
@@ -35,6 +35,7 @@ class PolymarketEventSourceTests(unittest.TestCase):
                 "baseline_probability": 25.0,
                 "liquidity": 500.0,
                 "volume": 1000.0,
+                "url": "https://polymarket.com/event/x-slug",
             },
         })
 

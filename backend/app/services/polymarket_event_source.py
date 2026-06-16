@@ -56,6 +56,7 @@ def _to_candidate_event(market) -> dict[str, Any]:
     baseline = safe_float(market.yes_price, 0.5) * 100
     volume = safe_float(market.volume, 0.0)
     liquidity = safe_float(market.liquidity, 0.0)
+    url = f"https://polymarket.com/event/{market.slug}" if market.slug else ""
     return {
         "question": market.question,
         "baseline_probability": baseline,
@@ -69,5 +70,6 @@ def _to_candidate_event(market) -> dict[str, Any]:
             "baseline_probability": round(baseline, 2),
             "liquidity": liquidity,
             "volume": volume,
+            "url": url,
         },
     }

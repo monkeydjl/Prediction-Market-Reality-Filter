@@ -51,6 +51,7 @@ class KalshiEventSourceTests(unittest.TestCase):
                 "baseline_probability": 64.0,
                 "liquidity": 250.0,
                 "volume": 1000.0,
+                "url": "https://kalshi.com/markets/evt",
             },
         })
 

@@ -23,6 +23,7 @@ def _market(**overrides):
         "volume": 1000.0,
         "totalLiquidity": 500.0,
         "isResolved": False,
+        "url": "https://manifold.markets/u/x",
     }
     market.update(overrides)
     return market
@@ -47,6 +48,7 @@ class ManifoldEventSourceTests(unittest.TestCase):
                 "baseline_probability": 25.0,
                 "liquidity": 500.0,
                 "volume": 1000.0,
+                "url": "https://manifold.markets/u/x",
             },
         })
 

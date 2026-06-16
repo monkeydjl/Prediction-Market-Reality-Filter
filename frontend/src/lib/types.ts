@@ -35,6 +35,11 @@ export interface EventSource {
   platform?: string;
   type?: string;
   event_type?: string;
+  source_id?: string;
+  baseline_probability?: number;
+  volume?: number;
+  liquidity?: number;
+  url?: string;
 }
 
 export interface Semantics {
@@ -75,7 +80,9 @@ export interface EvidenceItem {
   kind?: string;
   source?: string;
   title?: string;
+  title_zh?: string;
   summary?: string;
+  summary_zh?: string;
   url?: string;
   published?: string;
   quality?: number;
@@ -131,6 +138,7 @@ export interface Trend {
 export interface Mover {
   event_id: string;
   event_title?: string;
+  event_title_zh?: string;
   trend?: Trend;
 }
 
@@ -144,6 +152,7 @@ export interface HistorySnapshot {
 export interface SimilarEvent {
   event_id: string;
   event_title: string;
+  event_title_zh?: string;
   similarity?: number;
   estimated_probability?: number;
   change?: number;

@@ -327,6 +327,31 @@ class DiscoverServiceTests(unittest.TestCase):
         )
 
 
+class MoversRouteTests(unittest.TestCase):
+    """GET /events/movers enriches each mover with the stored Chinese title."""
+
+    def test_movers_include_chinese_title(self):
+        histories = {
+            "evt1": [
+                {"timestamp": "2026-06-10T00:00:00+00:00", "estimated": 40.0,
+                 "event_title": "Will X happen?"},
+                {"timestamp": "2026-06-12T00:00:00+00:00", "estimated": 55.0,
+                 "event_title": "Will X happen?"},
+            ],
+        }
+        entry = {"record": {"event_title_zh": "X 会发生吗？"}}
+        with patch.object(events_routes, "histories_by_event", return_value=histories), \
+                patch.object(events_routes, "get_event", return_value=entry):
+            client = _events_client()
+            resp = client.get("/events/movers")
+
+        self.assertEqual(resp.status_code, 200)
+        movers = resp.json()["movers"]
+        self.assertEqual(len(movers), 1)
+        self.assertEqual(movers[0]["event_title"], "Will X happen?")
+        self.assertEqual(movers[0]["event_title_zh"], "X 会发生吗？")
+
+
 class CollectCandidateEventsTests(unittest.TestCase):
     """The multi-source candidate composition: round-robin interleave + pool cap."""
 

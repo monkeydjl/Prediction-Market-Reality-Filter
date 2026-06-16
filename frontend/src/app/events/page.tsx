@@ -180,7 +180,9 @@ function DetailInner() {
                 href={`/events?id=${encodeURIComponent(s.event_id)}`}
                 className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/40"
               >
-                <p className="line-clamp-2 text-sm font-medium leading-snug">{s.event_title}</p>
+                <p className="line-clamp-2 text-sm font-medium leading-snug">
+                  {s.event_title_zh || s.event_title}
+                </p>
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <span className="font-mono">
                     相似度 {Math.round((s.similarity ?? 0) * 100)}%

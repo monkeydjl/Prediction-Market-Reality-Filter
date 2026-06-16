@@ -34,7 +34,6 @@ templated fields are still regenerated in Chinese and text is left as-is.
 
 import argparse
 import asyncio
-import json
 import os
 import sys
 
@@ -57,6 +56,7 @@ from app.services.event_intelligence_service import (  # noqa: E402
     recommended_action,
 )
 from app.services.probability_engine_service import get_client  # noqa: E402
+from app.services.translation_service import translate_fields  # noqa: E402
 
 
 def _looks_chinese(text: str) -> bool:
@@ -68,52 +68,6 @@ def _num(value, fallback=0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return fallback
-
-
-async def _ask_translate(client, payload: dict[str, str]) -> dict[str, str]:
-    """Translate each English value in `payload` to Simplified Chinese.
-
-    Returns a dict with the same keys; on any failure returns {} so the caller
-    keeps the original text.
-    """
-    instruction = (
-        "把下面 JSON 中每个字段的英文文本翻译成简洁、自然的简体中文，"
-        "保留原意；专有名词（人名、机构、资产）保留常用形式。"
-        "只返回键名完全相同的 JSON，不要添加额外说明。"
-    )
-    try:
-        resp = await client.chat.completions.create(
-            model=settings.OPENAI_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a precise English->Simplified Chinese "
-                        "translator. Return only valid JSON."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": instruction
-                    + "\n\n"
-                    + json.dumps(payload, ensure_ascii=False),
-                },
-            ],
-            temperature=0,
-            response_format={"type": "json_object"},
-        )
-        content = resp.choices[0].message.content or "{}"
-        data = json.loads(content)
-    except Exception as exc:  # noqa: BLE001 - best effort, keep original on failure
-        print(f"    ! translation failed: {exc}")
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return {
-        key: value.strip()
-        for key, value in data.items()
-        if isinstance(value, str) and value.strip()
-    }
 
 
 def _regen_templates(record: dict) -> None:
@@ -152,7 +106,7 @@ async def _process(client, record: dict) -> None:
         payload["why"] = why
 
     if payload and client is not None:
-        translated = await _ask_translate(client, payload)
+        translated = await translate_fields(payload, client=client)
         if translated.get("title_zh"):
             record["event_title_zh"] = translated["title_zh"][:300]
         if translated.get("summary"):

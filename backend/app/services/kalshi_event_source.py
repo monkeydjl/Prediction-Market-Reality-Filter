@@ -112,6 +112,8 @@ def _to_candidate_event(event: dict[str, Any]) -> dict[str, Any]:
     baseline = _baseline_pct(market)
     volume = safe_float(market.get("volume_fp"), 0.0)
     liquidity = safe_float(market.get("liquidity_dollars"), 0.0)
+    ticker = str(event.get("event_ticker", "") or "")
+    url = f"https://kalshi.com/markets/{ticker.lower()}" if ticker else ""
     return {
         "question": question,
         "baseline_probability": baseline,
@@ -120,11 +122,12 @@ def _to_candidate_event(event: dict[str, Any]) -> dict[str, Any]:
         "source": {
             "type": "prediction_market",
             "platform": settings.KALSHI_SOURCE_NAME,
-            "source_id": str(event.get("event_ticker", "") or ""),
+            "source_id": ticker,
             "question": question,
             "baseline_probability": round(baseline, 2),
             "liquidity": liquidity,
             "volume": volume,
+            "url": url,
         },
     }
 

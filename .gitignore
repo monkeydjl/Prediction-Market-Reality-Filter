@@ -54,3 +54,6 @@ backend/archive/
 .idea/
 .DS_Store
 Thumbs.db
+
+# ── Backups (local data snapshots, e.g. event_store.json.bak) ─────────────────
+*.bak

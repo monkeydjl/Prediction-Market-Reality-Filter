@@ -1,0 +1,1356 @@
+# Event Intelligence Platform 超详细使用教程
+
+最后更新：2026-06-14  
+项目版本：0.3.0  
+适用目录：`backend/`
+
+这份文档面向第一次接触本项目的人：从“这是什么系统”讲到“如何安装、配置、运行、调用 API、看 Dashboard、做测试、部署上线、日常维护和排障”。只要按顺序操作，就可以把系统跑起来并完成一次完整事件分析。
+
+---
+
+## 1. 系统是什么
+
+Event Intelligence Platform 是一个“事件情报 + 概率变化分析”系统。
+
+它的核心目标不是自动交易，也不是普通新闻聚合，而是回答这类问题：
+
+- 某个未来事件发生概率是否正在变化？
+- 公开新闻、官方信息、预测市场价格是否支持这种变化？
+- 这个事件是否值得人工继续跟踪？
+- 系统过去对类似事件的判断准不准？
+
+系统主流程：
+
+```text
+公开信息 / 预测市场
+        ↓
+候选事件发现
+        ↓
+新闻与证据采集
+        ↓
+LLM 概率分析
+        ↓
+可信度、影响力、价值评分
+        ↓
+事件持久化与审计
+        ↓
+Dashboard / API 人工查看
+        ↓
+事件结束后人工或自动 resolve
+        ↓
+校准评估
+```
+
+你可以把它理解成一个“Human-in-the-loop 的概率情报工作台”：AI 负责收集、整理、初步估计和写报告，人负责判断是否采用、跟踪和最终裁定事件结果。
+
+本项目不是：
+
+- 自动交易机器人
+- 投资建议系统
+- 只服务 Polymarket 的扫描器
+- 保证预测正确的黑箱模型
+
+本项目是：
+
+- AI 事件情报平台
+- 公开信息和预测市场的概率分析工具
+- 人工审查前的筛选、排序和记录系统
+
+---
+
+## 2. 快速上手
+
+### 2.1 进入项目目录
+
+Windows PowerShell：
+
+```powershell
+cd "E:\Github\Prediction Market Reality Filter\backend"
+```
+
+如果你是从仓库根目录进入：
+
+```bash
+cd backend
+```
+
+### 2.2 安装依赖
+
+建议使用 Python 3.11 或更新版本。
+
+```bash
+pip install -r requirements.txt
+```
+
+依赖列表在 `requirements.txt`：
+
+- `fastapi`：Web API 框架
+- `uvicorn[standard]`：ASGI 服务运行器
+- `httpx`：异步 HTTP 客户端
+- `pydantic`：请求和数据模型
+- `python-dotenv`：读取 `.env`
+- `feedparser`：RSS 解析
+- `openai`：兼容 OpenAI 协议的 LLM 客户端
+- `gnews`：Google News 采集
+- `apscheduler`：定时任务
+
+### 2.3 创建 `.env`
+
+在 `backend/` 目录创建 `.env`。最小配置如下：
+
+```env
+OPENAI_API_KEY=sk-your-key-here
+OPENAI_MODEL=deepseek-chat
+OPENAI_BASE_URL=https://api.deepseek.com
+```
+
+如果使用 DashScope/Qwen：
+
+```env
+OPENAI_API_KEY=sk-your-dashscope-key
+OPENAI_MODEL=qwen-math-turbo
+OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+```
+
+如果使用 OpenAI 官方接口：
+
+```env
+OPENAI_API_KEY=sk-your-openai-key
+OPENAI_MODEL=gpt-4o-mini
+# OPENAI_BASE_URL 留空或删除这一行
+```
+
+注意：`.env` 里有密钥，不要提交到代码仓库。
+
+### 2.4 运行基础检查
+
+```bash
+python -m compileall app tests
+python -m unittest discover -s tests
+```
+
+当前预期结果：
+
+```text
+compileall passed
+262 tests, 1 skipped, OK
+```
+
+默认测试是无网络、无真实 LLM 调用的回归测试。
+
+### 2.5 启动服务
+
+```bash
+python run.py
+```
+
+默认访问地址：
+
+- 英文 Dashboard：http://localhost:8000/dashboard
+- 中文 Dashboard：http://localhost:8000/dashboard_zh
+- 中文兼容路径：http://localhost:8000/dashboard/zh
+- API 文档：http://localhost:8000/docs
+- API 根信息：http://localhost:8000/
+
+---
+
+## 3. 项目目录怎么读
+
+常用目录和文件：
+
+```text
+backend/
+├── app/
+│   ├── main.py                         FastAPI 应用入口
+│   ├── api/
+│   │   ├── router.py                    总路由注册
+│   │   └── routes/
+│   │       ├── events.py                事件情报核心 API
+│   │       ├── scanner.py               旧扫描器兼容 API
+│   │       └── *.py                     其他兼容接口
+│   ├── core/
+│   │   ├── config.py                    环境变量配置
+│   │   ├── scheduler.py                 APScheduler 定时任务
+│   │   └── logging.py                   日志配置
+│   ├── memory/
+│   │   ├── event_store.py               事件持久化
+│   │   ├── event_cache.py               事件分析缓存
+│   │   ├── agent_memory.py              旧预测记忆
+│   │   └── market_memory.py             旧市场分析缓存
+│   ├── models/
+│   │   └── event.py                     事件请求/响应模型
+│   └── services/
+│       ├── event_intelligence_service.py核心事件分析流程
+│       ├── probability_engine_service.pyLLM 概率估计
+│       ├── event_collection_service.py  新闻/官方信息采集
+│       ├── event_extraction_service.py  Open Web 事件抽取
+│       ├── event_resolve_service.py     事件 resolve 与校准
+│       ├── historical_matching_service.py类似历史事件匹配
+│       └── *_source_service.py          各数据源适配器
+├── static/
+│   ├── index.html                       英文 Dashboard
+│   └── index_zh.html                    中文 Dashboard
+├── tests/
+│   ├── test_*.py                        默认无网络测试
+│   └── test_integration_live.py         真实网络/LLM 集成测试
+├── docs/
+│   ├── USER_GUIDE.md                    本教程
+│   ├── PROJECT_PROGRESS.md              当前最完整进度记录
+│   └── Event Intelligence Platform.md   产品方向文档
+├── requirements.txt                     Python 依赖
+├── run.py                               本地启动脚本
+├── QUICK_START.md                       快速入门
+└── README.md                            文档导航
+```
+
+新开发者建议阅读顺序：
+
+1. `docs/USER_GUIDE.md`
+2. `QUICK_START.md`
+3. `docs/PROJECT_PROGRESS.md`
+4. `docs/Event Intelligence Platform.md`
+5. `app/main.py`
+6. `app/api/routes/events.py`
+7. `app/services/event_intelligence_service.py`
+8. `app/services/probability_engine_service.py`
+9. `app/services/event_resolve_service.py`
+10. `app/memory/event_store.py`
+
+---
+
+## 4. 环境变量完整说明
+
+所有配置由 `app/core/config.py` 读取，默认从 `.env` 加载。
+
+### 4.1 LLM 主模型
+
+```env
+OPENAI_API_KEY=你的 API key
+OPENAI_MODEL=deepseek-chat
+OPENAI_BASE_URL=https://api.deepseek.com
+```
+
+字段含义：
+
+- `OPENAI_API_KEY`：必填。兼容 OpenAI SDK 的 API key。
+- `OPENAI_MODEL`：必填或使用默认值。用于事件概率分析。
+- `OPENAI_BASE_URL`：可选。DeepSeek、DashScope 等兼容接口需要配置；OpenAI 官方接口可以留空。
+
+### 4.2 可选第二模型交叉验证
+
+```env
+CROSS_VALIDATION_MODEL=
+CROSS_VALIDATION_BASE_URL=
+CROSS_VALIDATION_API_KEY=
+```
+
+默认关闭。设置 `CROSS_VALIDATION_MODEL` 后，系统会用第二个模型重新估计同一事件概率，并计算模型间一致性。
+
+适合用于：
+
+- 降低单模型偏差
+- 发现主模型明显跑偏的判断
+- 给可信度评分增加一层参考
+
+如果 `CROSS_VALIDATION_BASE_URL` 和 `CROSS_VALIDATION_API_KEY` 留空，会复用主模型的 base URL 和 key。
+
+### 4.3 Open Web 事件抽取
+
+```env
+OPEN_WEB_EXTRACTION_MODEL=
+OPEN_WEB_SOURCE_NAME=Open Web
+```
+
+默认关闭。设置 `OPEN_WEB_EXTRACTION_MODEL` 后，系统可以从采集到的文章中抽取新的“未来事件问题”，而不仅仅依赖预测市场候选。
+
+这会增加 LLM 调用量，部署前要确认成本和速率限制。
+
+### 4.4 数据源配置
+
+```env
+GNEWS_MAX_RESULTS=10
+MARKET_SCAN_LIMIT=5
+
+OFFICIAL_RSS_URL=https://www.federalreserve.gov/feeds/press_all.xml
+OFFICIAL_SOURCE_NAME=Federal Reserve
+
+SEC_EDGAR_RSS_URL=https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&company=&dateb=&owner=include&count=40&output=atom
+SEC_SOURCE_NAME=SEC EDGAR
+SEC_USER_AGENT=Event Intelligence Platform your-email@example.com
+
+ECONOMIC_RSS_URL=https://www.bls.gov/feed/bls_latest.rss
+ECONOMIC_SOURCE_NAME=U.S. Bureau of Labor Statistics
+ECONOMIC_USER_AGENT=Event Intelligence Platform your-email@example.com
+
+MANIFOLD_API_URL=https://api.manifold.markets/v0/search-markets
+MANIFOLD_SOURCE_NAME=Manifold
+
+KALSHI_API_URL=https://api.elections.kalshi.com/trade-api/v2/events
+KALSHI_SOURCE_NAME=Kalshi
+```
+
+说明：
+
+- `GNEWS_MAX_RESULTS` 控制 Google News 返回数量。
+- `MARKET_SCAN_LIMIT` 控制市场扫描默认数量。
+- `SEC_USER_AGENT` 和 `ECONOMIC_USER_AGENT` 建议改成真实联系人；SEC/BLS 这类站点可能拒绝默认或空 User-Agent。
+- 将 `MANIFOLD_API_URL` 或 `KALSHI_API_URL` 设为空可以禁用对应来源。
+
+### 4.5 数据文件位置
+
+```env
+EVENT_STORE_FILE=event_store.json
+EVENT_AUDIT_FILE=event_audit.jsonl
+EVENT_CACHE_FILE=event_cache.json
+MEMORY_FILE=agent_memory.json
+```
+
+默认写在 `backend/` 目录。生产部署建议改成专门的数据目录，例如：
+
+```env
+EVENT_STORE_FILE=/var/lib/eip/event_store.json
+EVENT_AUDIT_FILE=/var/lib/eip/event_audit.jsonl
+EVENT_CACHE_FILE=/var/lib/eip/event_cache.json
+MEMORY_FILE=/var/lib/eip/agent_memory.json
+```
+
+Windows 可以用：
+
+```env
+EVENT_STORE_FILE=C:\eip-data\event_store.json
+EVENT_AUDIT_FILE=C:\eip-data\event_audit.jsonl
+EVENT_CACHE_FILE=C:\eip-data\event_cache.json
+MEMORY_FILE=C:\eip-data\agent_memory.json
+```
+
+### 4.6 审计日志压缩
+
+```env
+EVENT_AUDIT_COMPACTION_THRESHOLD=5000
+EVENT_AUDIT_MAX_PER_EVENT=200
+```
+
+`event_audit.jsonl` 是追加写入的概率快照日志。长期运行后会变大，系统会在超过阈值后压缩，只保留每个事件最近若干条快照。
+
+- `EVENT_AUDIT_COMPACTION_THRESHOLD=0`：关闭压缩。
+- `EVENT_AUDIT_MAX_PER_EVENT=200`：每个事件最多保留 200 条快照。
+
+---
+
+## 5. 本地运行方式
+
+### 5.1 推荐方式
+
+```bash
+python run.py
+```
+
+`run.py` 会启动 `app.main:app`，默认监听 `127.0.0.1:8000`。
+
+### 5.2 直接用 uvicorn
+
+```bash
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+开发时自动重载：
+
+```bash
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+局域网访问：
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+### 5.3 启动后会发生什么
+
+FastAPI 生命周期启动时会：
+
+1. 初始化应用。
+2. 注册 `/dashboard`、`/dashboard_zh`、`/events/*`、`/scan/*` 等路由。
+3. 启动 APScheduler 定时任务。
+4. 挂载 `static/` 静态资源。
+
+停止服务时会关闭 scheduler。
+
+---
+
+## 6. Dashboard 怎么用
+
+### 6.1 打开页面
+
+启动服务后访问：
+
+- 英文：http://localhost:8000/dashboard
+- 中文：http://localhost:8000/dashboard_zh
+- 中文兼容路径：http://localhost:8000/dashboard/zh
+
+Dashboard 是静态 HTML + 内联 JavaScript，文件在：
+
+- `static/index.html`
+- `static/index_zh.html`
+
+### 6.2 常见操作
+
+在 Dashboard 上通常会看到这些能力：
+
+- 查看已存储事件列表。
+- 触发事件发现。
+- 分析单个事件问题。
+- 查看事件概率、可信度、影响力、价值评分。
+- 查看事件历史变化。
+- 查看变动最大的事件。
+- 查看相似历史事件。
+- 切换英文/中文界面。
+
+Dashboard 调用的是同一个后端 API，所以如果页面没有数据显示，优先去 `/docs` 或命令行直接调用 API 判断是前端问题还是后端问题。
+
+### 6.3 修改 Dashboard 后的检查
+
+如果改过 `static/index.html` 或 `static/index_zh.html`，至少运行一次内联脚本语法检查：
+
+```bash
+node -e "const fs=require('fs'); for (const file of ['static/index.html','static/index_zh.html']) { const html=fs.readFileSync(file,'utf8'); const m=html.match(/<script>([\s\S]*)<\/script>/); new Function(m?m[1]:''); } console.log('dashboard scripts OK');"
+```
+
+如果浏览器打开空白页，先看开发者工具 Console，再用上面命令排除语法错误。
+
+---
+
+## 7. 核心 API 使用教程
+
+启动服务后，所有 API 可以在 Swagger 页面查看：
+
+```text
+http://localhost:8000/docs
+```
+
+### 7.1 根路径
+
+```bash
+curl http://localhost:8000/
+```
+
+用途：
+
+- 查看系统版本。
+- 查看 Dashboard 路径。
+- 查看主要 endpoint 列表。
+
+### 7.2 分析单个事件
+
+接口：
+
+```text
+POST /events/analyze
+```
+
+示例：
+
+```bash
+curl -X POST http://localhost:8000/events/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event_question": "Will Bitcoin reach $100,000 by the end of 2026?",
+    "baseline_probability": 45,
+    "news_context": "Recent institutional adoption is increasing.",
+    "volume": 100000,
+    "liquidity": 50000
+  }'
+```
+
+字段说明：
+
+- `event_question`：必填。要分析的未来事件问题。
+- `baseline_probability`：可选。当前市场或人工给出的基准概率，0 到 100。
+- `news_context`：可选。你已知的新闻或背景材料。
+- `volume`：可选。来源市场成交量。
+- `liquidity`：可选。来源市场流动性。
+
+典型返回会包含：
+
+- `event_id`：事件 ID。
+- `event_title`：事件标题。
+- `probability.baseline`：基准概率。
+- `probability.estimated`：AI 估计概率。
+- `probability.change`：变化幅度。
+- `probability.direction`：上升、下降或稳定。
+- `credibility`：可信度评分。
+- `impact`：影响力评分。
+- `value_score`：综合价值评分。
+- `intelligence_report`：给人看的情报报告。
+- `semantics`：实体、主题、时间窗口等语义信息。
+
+### 7.3 自动发现事件
+
+接口：
+
+```text
+GET /events/discover?limit=5
+```
+
+示例：
+
+```bash
+curl "http://localhost:8000/events/discover?limit=5"
+```
+
+带缓存控制：
+
+```bash
+curl "http://localhost:8000/events/discover?limit=5&use_cache=false"
+```
+
+说明：
+
+- `limit` 范围是 1 到 20。
+- 默认使用缓存，避免重复 LLM 调用。
+- 发现流程可能访问预测市场、RSS、Google News、可选 Open Web 抽取和 LLM。
+- 如果没有外网或密钥无效，可能返回空结果或降级结果。
+
+### 7.4 查看已存储事件
+
+接口：
+
+```text
+GET /events/?limit=50
+```
+
+示例：
+
+```bash
+curl "http://localhost:8000/events/?limit=20"
+```
+
+返回：
+
+```json
+{
+  "count": 20,
+  "events": []
+}
+```
+
+事件来自 `event_store.json`。
+
+### 7.5 查看单个事件详情
+
+接口：
+
+```text
+GET /events/{event_id}
+```
+
+示例：
+
+```bash
+curl "http://localhost:8000/events/your-event-id"
+```
+
+如果事件不存在，返回 404。
+
+### 7.6 查看事件概率历史
+
+接口：
+
+```text
+GET /events/{event_id}/history
+```
+
+示例：
+
+```bash
+curl "http://localhost:8000/events/your-event-id/history"
+```
+
+返回内容包括：
+
+- `trend`：趋势摘要。
+- `history`：概率快照列表。
+- `count`：快照数量。
+
+注意：resolve 后写入的 outcome 快照不会污染概率趋势。
+
+### 7.7 查看变动最大的事件
+
+接口：
+
+```text
+GET /events/movers?limit=10
+```
+
+示例：
+
+```bash
+curl "http://localhost:8000/events/movers?limit=10"
+```
+
+用途：
+
+- 找出最近概率变化最大的事件。
+- 作为每日人工复盘入口。
+
+### 7.8 查看相似历史事件
+
+接口：
+
+```text
+GET /events/{event_id}/similar?limit=5
+```
+
+示例：
+
+```bash
+curl "http://localhost:8000/events/your-event-id/similar?limit=5"
+```
+
+匹配依据：
+
+- 标题 token overlap。
+- 语义实体 overlap。
+- 两者取更强信号。
+
+### 7.9 人工 resolve 事件
+
+接口：
+
+```text
+POST /events/{event_id}/resolve
+```
+
+示例：
+
+```bash
+curl -X POST "http://localhost:8000/events/your-event-id/resolve" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "actual_outcome": 100,
+    "confidence": 1.0,
+    "notes": "Event settled YES according to official result."
+  }'
+```
+
+字段说明：
+
+- `actual_outcome`：0 到 100。`0` 表示 NO，`100` 表示 YES，中间值可表示部分发生或概率化结果。
+- `confidence`：0 到 1。你对裁定结果的信心。
+- `notes`：人工备注。
+
+resolve 后系统会：
+
+1. 把 outcome 写入事件记录。
+2. 计算校准指标。
+3. 向审计日志追加 outcome 快照。
+
+### 7.10 自动 resolve 事件
+
+接口：
+
+```text
+POST /events/resolve/auto?limit=200
+```
+
+示例：
+
+```bash
+curl -X POST "http://localhost:8000/events/resolve/auto?limit=200"
+```
+
+说明：
+
+- 系统会拉取已结算的 Polymarket 市场。
+- 用问题相似度匹配本地未 resolve 事件。
+- 匹配成功后自动写入 outcome 和校准结果。
+- 这依赖外部数据源，失败时应视为正常可降级情况。
+
+### 7.11 查看事件校准报告
+
+接口：
+
+```text
+GET /events/calibration
+```
+
+示例：
+
+```bash
+curl "http://localhost:8000/events/calibration"
+```
+
+报告包含：
+
+- 总体 Brier 分数。
+- Skill score。
+- Grade。
+- 按来源拆分。
+- 按 base-rate category 拆分。
+
+没有已 resolve 事件时会返回空或 no-data 类结果。
+
+---
+
+## 8. 兼容 API
+
+系统保留了一批早期市场扫描、交易记录和校准接口，主要用于历史兼容和内部验证。
+
+根路径 `/` 会列出当前注册的主要兼容接口，包括：
+
+```text
+GET  /scan/summary
+GET  /scan/debug
+GET  /scan/
+GET  /scan/deep
+GET  /scan/cache
+
+POST /analysis/
+
+GET  /calibration/
+GET  /calibration/history
+GET  /calibration/summary
+
+GET  /backtest/baseline
+GET  /backtest/base-rate
+
+POST /resolve/auto
+POST /resolve/manual
+GET  /resolve/pending
+
+POST /trades/open
+POST /trades/close/{id}
+GET  /trades/summary
+GET  /trades/
+
+GET  /markets/
+GET  /news/
+```
+
+新功能优先使用 `/events/*`。旧接口仍可用，但不代表当前产品方向。
+
+---
+
+## 9. 数据文件说明
+
+### 9.1 当前事件系统文件
+
+#### `event_store.json`
+
+事件主存储。记录每个事件的最新状态。
+
+常见结构：
+
+```json
+{
+  "event-id": {
+    "event_id": "event-id",
+    "first_seen": "2026-06-14T...",
+    "last_updated": "2026-06-14T...",
+    "record": {}
+  }
+}
+```
+
+#### `event_audit.jsonl`
+
+事件概率审计日志。JSON Lines 格式，每一行是一条快照。
+
+用途：
+
+- 记录概率随时间变化。
+- 支撑 `/events/{event_id}/history`。
+- 支撑 `/events/movers`。
+- 支撑 resolve 后校准分析。
+
+#### `event_cache.json`
+
+事件分析缓存。用于减少重复分析和 LLM 调用。
+
+### 9.2 旧兼容文件
+
+#### `agent_memory.json`
+
+旧预测记忆文件，主要服务早期 calibration / resolve 流程。
+
+#### `analysis_audit.jsonl`
+
+旧市场分析审计日志。
+
+#### `market_cache.json`
+
+旧市场扫描缓存。
+
+### 9.3 生产环境建议
+
+生产部署时不要把运行时数据文件留在代码目录里。建议：
+
+1. 创建单独数据目录，例如 `/var/lib/eip` 或 `C:\eip-data`。
+2. 用 `.env` 配置 `EVENT_STORE_FILE` 等路径。
+3. 给服务运行用户写权限。
+4. 做定期备份。
+5. 不要提交 `.env`、`event_store.json`、`event_audit.jsonl` 等运行时文件。
+
+---
+
+## 10. 测试教程
+
+### 10.1 默认回归测试
+
+```bash
+python -m compileall app tests
+python -m unittest discover -s tests
+```
+
+预期：
+
+```text
+262 tests, 1 skipped, OK
+```
+
+这些测试默认不访问真实网络、不调用真实 LLM，适合每次改代码后运行。
+
+### 10.2 真实集成测试
+
+真实集成测试文件：
+
+```text
+tests/test_integration_live.py
+```
+
+它会调用真实 LLM 和外部网络，默认在 `unittest discover` 下跳过。
+
+Windows cmd：
+
+```bat
+set RUN_LIVE_TESTS=1 && python -m unittest tests.test_integration_live
+```
+
+PowerShell：
+
+```powershell
+$env:RUN_LIVE_TESTS="1"
+python -m unittest tests.test_integration_live
+Remove-Item Env:RUN_LIVE_TESTS
+```
+
+Linux/macOS：
+
+```bash
+RUN_LIVE_TESTS=1 python -m unittest tests.test_integration_live
+```
+
+直接运行文件：
+
+```bash
+python tests/test_integration_live.py
+```
+
+当前 live suite 是 11 个测试，通常需要 1 到 3 分钟，并要求 `.env` 中有可用 `OPENAI_API_KEY`。
+
+如果设置了：
+
+```env
+CROSS_VALIDATION_MODEL=...
+OPEN_WEB_EXTRACTION_MODEL=...
+```
+
+对应的交叉验证和 Open Web 抽取 live 测试会真正运行；否则它们会自跳过。
+
+### 10.3 Dashboard 语法测试
+
+```bash
+node -e "const fs=require('fs'); for (const file of ['static/index.html','static/index_zh.html']) { const html=fs.readFileSync(file,'utf8'); const m=html.match(/<script>([\s\S]*)<\/script>/); new Function(m?m[1]:''); } console.log('dashboard scripts OK');"
+```
+
+### 10.4 推荐提交前检查
+
+```bash
+python -m compileall app tests
+python -m unittest discover -s tests
+```
+
+如果改过 Dashboard：
+
+```bash
+node -e "const fs=require('fs'); for (const file of ['static/index.html','static/index_zh.html']) { const html=fs.readFileSync(file,'utf8'); const m=html.match(/<script>([\s\S]*)<\/script>/); new Function(m?m[1]:''); } console.log('dashboard scripts OK');"
+```
+
+如果改过外部数据源或 LLM 逻辑，再手动跑 live tests。
+
+---
+
+## 11. 定时任务
+
+服务启动后会自动启动 APScheduler。时区是 UTC。
+
+当前任务：
+
+```text
+07:00 UTC  morning_scan
+22:00 UTC  evening_resolve
+22:30 UTC  event_auto_resolve
+```
+
+### 11.1 morning_scan
+
+每天 07:00 UTC 运行。
+
+做什么：
+
+- 拉取市场候选。
+- 过滤低流动性、低成交量、极端概率和荒诞问题。
+- 拉取 RSS 和 Google News。
+- 分析有证据支持的市场。
+- 写入旧市场分析审计和预测记忆。
+- 缓存结果。
+
+### 11.2 evening_resolve
+
+每天 22:00 UTC 运行。
+
+做什么：
+
+- 对旧预测系统运行 auto-resolve。
+- 输出 calibration 摘要到日志。
+
+### 11.3 event_auto_resolve
+
+每天 22:30 UTC 运行。
+
+做什么：
+
+- 对事件系统运行 auto-resolve。
+- 匹配已结算 Polymarket 市场。
+- 写入 outcome 和 calibration。
+
+### 11.4 注意事项
+
+- 本地启动服务也会启动 scheduler。
+- 如果你只想临时调试 API，要注意日志里可能出现定时任务运行记录。
+- 多实例部署时，每个实例都会启动 scheduler，可能导致重复任务。生产环境建议只让一个实例运行定时任务，或把 scheduler 拆成独立 worker。
+
+---
+
+## 12. 部署教程
+
+### 12.1 最小生产运行
+
+安装依赖、配置 `.env` 后：
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+这适合内网或测试环境。正式生产还需要进程守护、反向代理、HTTPS、日志和备份。
+
+### 12.2 Linux systemd 示例
+
+假设代码在：
+
+```text
+/opt/eip/backend
+```
+
+数据目录：
+
+```text
+/var/lib/eip
+```
+
+创建数据目录：
+
+```bash
+sudo mkdir -p /var/lib/eip
+sudo chown -R eip:eip /var/lib/eip
+```
+
+`.env` 示例：
+
+```env
+OPENAI_API_KEY=sk-your-key
+OPENAI_MODEL=deepseek-chat
+OPENAI_BASE_URL=https://api.deepseek.com
+
+EVENT_STORE_FILE=/var/lib/eip/event_store.json
+EVENT_AUDIT_FILE=/var/lib/eip/event_audit.jsonl
+EVENT_CACHE_FILE=/var/lib/eip/event_cache.json
+MEMORY_FILE=/var/lib/eip/agent_memory.json
+```
+
+systemd service 示例：
+
+```ini
+[Unit]
+Description=Event Intelligence Platform
+After=network.target
+
+[Service]
+User=eip
+Group=eip
+WorkingDirectory=/opt/eip/backend
+EnvironmentFile=/opt/eip/backend/.env
+ExecStart=/opt/eip/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+常用命令：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable eip
+sudo systemctl start eip
+sudo systemctl status eip
+sudo journalctl -u eip -f
+```
+
+### 12.3 Nginx 反向代理示例
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+生产环境建议再配置 HTTPS，例如 Let’s Encrypt。
+
+### 12.4 Windows 部署思路
+
+简单方式：
+
+```powershell
+cd "E:\Github\Prediction Market Reality Filter\backend"
+python run.py
+```
+
+长期运行可以用：
+
+- Windows Task Scheduler
+- NSSM
+- PowerShell 后台进程
+- Docker 或虚拟机
+
+Task Scheduler 思路：
+
+1. 创建任务。
+2. 触发器选择“系统启动时”或“用户登录时”。
+3. 操作选择启动程序：`python`。
+4. 参数：`run.py`。
+5. 起始目录：`E:\Github\Prediction Market Reality Filter\backend`。
+6. 确保 `.env` 和数据文件路径对运行用户可读写。
+
+### 12.5 Docker 部署思路
+
+项目当前没有内置 Dockerfile。如果要容器化，可以按这个方向写：
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+运行时挂载数据目录和 `.env`：
+
+```bash
+docker run --env-file .env -p 8000:8000 -v /var/lib/eip:/var/lib/eip eip:latest
+```
+
+注意：多副本容器会重复启动 scheduler。生产多实例时需要单独处理定时任务。
+
+### 12.6 CORS 安全提醒
+
+当前 `app/main.py` 的 CORS 配置较宽：
+
+```python
+allow_origins=["*"]
+allow_credentials=True
+```
+
+这对本地开发方便，但生产环境应收紧为真实域名，例如：
+
+```python
+allow_origins=["https://your-domain.example.com"]
+```
+
+如果系统只在内网使用，也应通过网络层限制访问。
+
+---
+
+## 13. 日常使用工作流
+
+### 13.1 分析一个人工给定事件
+
+适合你已经有一个明确问题：
+
+1. 打开 `/dashboard_zh`。
+2. 输入事件问题、基准概率和背景信息。
+3. 点击分析。
+4. 查看 estimated probability、change、credibility、impact、value score。
+5. 如果值得跟踪，保留在事件库。
+6. 后续通过 history / movers 看变化。
+
+命令行等价：
+
+```bash
+curl -X POST http://localhost:8000/events/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event_question": "Will the Fed cut rates at the next FOMC meeting?",
+    "baseline_probability": 35,
+    "news_context": "Recent CPI came in softer than expected."
+  }'
+```
+
+### 13.2 每日发现候选事件
+
+适合做每日情报筛选：
+
+1. 启动服务。
+2. 调用 `/events/discover?limit=10`。
+3. 查看高 `value_score` 事件。
+4. 在 Dashboard 中检查详情。
+5. 把值得跟踪的事件加入人工观察列表。
+6. 第二天看 `/events/movers`。
+
+命令：
+
+```bash
+curl "http://localhost:8000/events/discover?limit=10"
+curl "http://localhost:8000/events/movers?limit=10"
+```
+
+### 13.3 事件结束后的复盘
+
+1. 找到事件 ID。
+2. 人工确认真实结果。
+3. 调用 `/events/{event_id}/resolve`。
+4. 查看 `/events/calibration`。
+5. 观察系统在哪些来源、主题或 base-rate category 上更准。
+
+### 13.4 运营视角每日检查
+
+每天建议检查：
+
+- 服务是否运行。
+- `/` 是否返回系统信息。
+- `/dashboard_zh` 是否能打开。
+- `/events/` 是否能列出事件。
+- `event_audit.jsonl` 是否持续增长但没有异常膨胀。
+- 日志中是否有外部 API 403、429、timeout。
+- LLM API 是否报鉴权或限流错误。
+
+---
+
+## 14. 排障指南
+
+### 14.1 `ImportError: No module named ...`
+
+原因：依赖没有安装或装到了错误 Python 环境。
+
+处理：
+
+```bash
+python --version
+pip install -r requirements.txt
+python -c "import fastapi, httpx, feedparser, openai; print('dependencies OK')"
+```
+
+### 14.2 服务启动后打不开
+
+检查：
+
+```bash
+python run.py
+```
+
+确认终端没有异常。再访问：
+
+```text
+http://localhost:8000/
+```
+
+如果端口冲突，换端口：
+
+```bash
+uvicorn app.main:app --host 127.0.0.1 --port 8001
+```
+
+### 14.3 LLM 调用失败
+
+常见原因：
+
+- `.env` 不存在。
+- `OPENAI_API_KEY` 错。
+- `OPENAI_BASE_URL` 不适配当前 provider。
+- 模型名写错。
+- API 余额不足或被限流。
+
+检查配置：
+
+```bash
+python -c "from app.core.config import settings; print(settings.OPENAI_MODEL, settings.DASHSCOPE_BASE_URL, bool(settings.OPENAI_API_KEY))"
+```
+
+注意：命令不要打印完整 API key。
+
+### 14.4 `/events/discover` 没有事件
+
+可能原因：
+
+- 外部市场源暂时不可用。
+- 网络访问失败。
+- 候选事件被过滤。
+- 没有配置 LLM key。
+- 使用了缓存，缓存里没有结果。
+- Open Web 抽取未启用。
+
+尝试：
+
+```bash
+curl "http://localhost:8000/events/discover?limit=5&use_cache=false"
+```
+
+再查看服务日志。
+
+### 14.5 live tests 被跳过
+
+默认行为。要运行真实集成测试必须设置：
+
+```bash
+RUN_LIVE_TESTS=1
+```
+
+并确保 `.env` 有 `OPENAI_API_KEY`。
+
+### 14.6 Dashboard 空白
+
+处理顺序：
+
+1. 打开浏览器开发者工具 Console。
+2. 检查 `/events/` 等 API 是否 200。
+3. 运行 Dashboard JS 语法检查。
+4. 检查静态文件路径是否存在。
+
+语法检查：
+
+```bash
+node -e "const fs=require('fs'); for (const file of ['static/index.html','static/index_zh.html']) { const html=fs.readFileSync(file,'utf8'); const m=html.match(/<script>([\s\S]*)<\/script>/); new Function(m?m[1]:''); } console.log('dashboard scripts OK');"
+```
+
+### 14.7 中文乱码
+
+当前部分历史文档在 Windows 终端中可能显示 mojibake，这是历史编码问题。建议：
+
+- 用支持 UTF-8 的编辑器打开。
+- 新文档统一保存为 UTF-8。
+- PowerShell 可尝试：
+
+```powershell
+chcp 65001
+```
+
+不要为了显示问题大规模重写历史文档，除非明确要做编码清理。
+
+### 14.8 SEC 或 BLS 返回 403
+
+SEC/BLS 可能要求明确 User-Agent。配置：
+
+```env
+SEC_USER_AGENT=Event Intelligence Platform your-email@example.com
+ECONOMIC_USER_AGENT=Event Intelligence Platform your-email@example.com
+```
+
+### 14.9 数据文件写入失败
+
+检查：
+
+- `EVENT_STORE_FILE` 所在目录是否存在。
+- 服务运行用户是否有写权限。
+- Windows 路径是否转义正确。
+- Linux systemd 的 `User` 是否能写 `/var/lib/eip`。
+
+### 14.10 定时任务重复运行
+
+多实例部署时，每个实例都会启动 scheduler。解决方案：
+
+- 只运行一个后端实例。
+- 或只让一个实例负责 scheduler。
+- 或把 scheduler 拆成独立 worker。
+- 或改代码增加环境变量开关。
+
+---
+
+## 15. 上线前检查清单
+
+上线前至少确认：
+
+- `.env` 已配置并且没有提交到仓库。
+- `OPENAI_API_KEY` 可用。
+- `OPENAI_MODEL` 和 `OPENAI_BASE_URL` 匹配。
+- `python -m compileall app tests` 通过。
+- `python -m unittest discover -s tests` 通过，当前为 `262 tests, 1 skipped`。
+- `/` 可以访问。
+- `/docs` 可以访问。
+- `/dashboard` 和 `/dashboard_zh` 可以访问。
+- `/events/analyze` 能完成一次真实分析。
+- `/events/discover` 能返回结果或合理降级。
+- `event_store.json`、`event_audit.jsonl`、`event_cache.json` 路径可写。
+- 数据目录有备份策略。
+- 生产 CORS 已收紧。
+- 反向代理和 HTTPS 已配置。
+- 多实例部署不会重复运行 scheduler。
+- live tests 是否运行由运维明确决定，因为它们会消耗真实 API 和外网资源。
+
+---
+
+## 16. 最短可用路径
+
+如果你只想最快确认系统能用，按这个顺序：
+
+```bash
+cd backend
+pip install -r requirements.txt
+python -m unittest discover -s tests
+python run.py
+```
+
+浏览器打开：
+
+```text
+http://localhost:8000/dashboard_zh
+```
+
+然后调用一次：
+
+```bash
+curl -X POST http://localhost:8000/events/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event_question": "Will the Fed cut rates at the next FOMC meeting?",
+    "baseline_probability": 35,
+    "news_context": "Recent inflation data came in below expectations."
+  }'
+```
+
+如果返回了 `event_id`、`probability` 和 `intelligence_report`，说明核心链路已经跑通。

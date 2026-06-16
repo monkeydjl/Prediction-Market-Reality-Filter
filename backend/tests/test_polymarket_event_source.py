@@ -1,0 +1,57 @@
+import asyncio
+import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+from app.services import polymarket_event_source as source
+
+
+def _market(question, id, yes_price, volume, liquidity):
+    return SimpleNamespace(
+        question=question, id=id, yes_price=yes_price,
+        volume=volume, liquidity=liquidity,
+    )
+
+
+class PolymarketEventSourceTests(unittest.TestCase):
+    def test_fetch_candidate_events_normalizes(self):
+        market = _market("Will X happen?", "m1", 0.25, 1000.0, 500.0)
+        with patch("app.services.polymarket_service.fetch_markets",
+                   AsyncMock(return_value=[market])), \
+             patch("app.services.market_filter_service.filter_markets",
+                   return_value=[market]):
+            events = asyncio.run(source.fetch_candidate_events(limit=5))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0], {
+            "question": "Will X happen?",
+            "baseline_probability": 25.0,
+            "volume": 1000.0,
+            "liquidity": 500.0,
+            "source": {
+                "type": "prediction_market",
+                "platform": "Polymarket",
+                "source_id": "m1",
+                "question": "Will X happen?",
+                "baseline_probability": 25.0,
+                "liquidity": 500.0,
+                "volume": 1000.0,
+            },
+        })
+
+    def test_fetch_candidate_events_defaults_missing_fields(self):
+        market = _market("Q", "m2", None, None, None)
+        with patch("app.services.polymarket_service.fetch_markets",
+                   AsyncMock(return_value=[market])), \
+             patch("app.services.market_filter_service.filter_markets",
+                   return_value=[market]):
+            events = asyncio.run(source.fetch_candidate_events(limit=5))
+        ev = events[0]
+        # Missing yes_price defaults to 0.5 -> 50.0%; missing volume/liquidity -> 0.0.
+        self.assertEqual(ev["baseline_probability"], 50.0)
+        self.assertEqual(ev["volume"], 0.0)
+        self.assertEqual(ev["liquidity"], 0.0)
+        self.assertEqual(ev["source"]["baseline_probability"], 50.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

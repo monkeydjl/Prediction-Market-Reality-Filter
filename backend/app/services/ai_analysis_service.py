@@ -1,0 +1,199 @@
+"""
+ai_analysis_service.py
+
+Legacy compatibility adapter for the analysis stack.
+
+`analyze_market` is the single public entry point used by the older
+prediction-market surface (the scheduler, the /analysis and /scan routes) and,
+through `event_intelligence_service.analyze_event`, by the Event Intelligence
+flow. It orchestrates the two layers below it - the probability engine and the
+report generator - and assembles the legacy market/signal-shaped result dict
+those callers expect. Its signature and output are intentionally unchanged.
+
+The actual logic now lives in:
+  - app/services/probability_engine_service.py  (LLM I/O, probability math, parsing)
+  - app/services/analysis_report_service.py      (signal / risk report generation)
+
+The names re-exported below are imported here so existing callers that do
+`from app.services.ai_analysis_service import <symbol>` (e.g. scanner.scan_debug)
+keep working after the split. New code should import from the engine or report
+module directly rather than relying on these re-exports.
+"""
+
+import logging
+from typing import Any
+
+from app.services.base_rate_service import anchor_probability, classify_market
+
+logger = logging.getLogger(__name__)
+from app.services.probability_engine_service import (
+    _ask_ai,
+    _clamp,
+    _normalize_ai_analysis,
+    build_deterministic_fallback_analysis,
+    calculate_confidence_score,
+    calculate_priced_in_risk_score,
+    clamp_probability,
+    default_evidence_profile,
+    extract_evidence_profile,
+    extract_semantics_profile,
+    score_news_quality,
+)
+from app.services.analysis_report_service import (
+    build_risk_flags,
+    calculate_narrative_risk_score,
+    calculate_position_size,
+    calculate_risk_level,
+    calculate_signal,
+    calculate_signal_direction,
+    calculate_signal_strength,
+    passes_analysis_quality_gate,
+)
+
+
+async def analyze_market(
+    market_question: str,
+    market_probability: float,
+    news_context: str,
+    volume: float | None = None,
+    liquidity: float | None = None,
+) -> dict[str, Any]:
+    market_probability = _clamp(market_probability, 0, 100)
+    news_quality_score = score_news_quality(news_context)
+    evidence_profile = extract_evidence_profile(news_context)
+    semantics_profile = extract_semantics_profile(news_context)
+    priced_in_risk_score = calculate_priced_in_risk_score(
+        market_probability=market_probability,
+        evidence_profile=evidence_profile,
+        volume=volume,
+        liquidity=liquidity,
+    )
+
+    try:
+        raw_analysis = await _ask_ai(
+            market_question=market_question,
+            market_probability=market_probability,
+            news_context=news_context,
+        )
+    except Exception as exc:
+        # LLM unavailable / invalid output: fall back to the deterministic
+        # evidence-only estimate. MUST log so a provider outage does not silently
+        # degrade every analysis to fallback quality - that is the worst kind of
+        # failure (output still looks plausible, quality collapses, no signal).
+        logger.warning(
+            "LLM analysis failed, using deterministic fallback "
+            "[question=%.80s]: %s",
+            market_question, exc,
+        )
+        raw_analysis = build_deterministic_fallback_analysis(
+            market_probability=market_probability,
+            evidence_profile=evidence_profile,
+            news_quality_score=news_quality_score,
+            priced_in_risk_score=priced_in_risk_score,
+            semantics_profile=semantics_profile,
+        )
+
+    normalized = _normalize_ai_analysis(raw_analysis, market_probability)
+    narrative_type = normalized["narrative_type"]
+    base_rate = classify_market(market_question)
+    narrative_risk_score = calculate_narrative_risk_score(
+        news_context=news_context,
+        narrative_type=narrative_type,
+    )
+    confidence_score = calculate_confidence_score(
+        news_context=news_context,
+        news_quality_score=news_quality_score,
+        narrative_type=narrative_type,
+        reasoning=normalized["reasoning"],
+        reasoning_consistency=normalized["reasoning_consistency"],
+        evidence_profile=evidence_profile,
+        priced_in_risk_score=priced_in_risk_score,
+        semantics_profile=semantics_profile,
+    )
+
+    evidence_constrained_probability = clamp_probability(
+        market_probability=market_probability,
+        ai_probability=normalized["ai_probability"],
+        confidence=confidence_score,
+        narrative_type=narrative_type,
+        has_strong_evidence=normalized["has_strong_evidence"],
+        evidence_profile=evidence_profile,
+        priced_in_risk_score=priced_in_risk_score,
+        semantics_profile=semantics_profile,
+    )
+    # base_rate 锚定作为最终步骤，不再第二次 clamp（避免双重压缩）
+    ai_probability = anchor_probability(
+        llm_probability=evidence_constrained_probability,
+        base_rate=base_rate,
+        confidence=confidence_score,
+    )
+    base_rate_probability = ai_probability  # 保留字段名兼容
+    divergence = round(ai_probability - market_probability, 2)
+    signal = calculate_signal(
+        divergence=divergence,
+        confidence=confidence_score,
+        evidence_profile=evidence_profile,
+        priced_in_risk_score=priced_in_risk_score,
+        news_quality_score=news_quality_score,
+    )
+    position_size = calculate_position_size(
+        divergence=divergence,
+        confidence=confidence_score,
+        narrative_risk=narrative_risk_score,
+    )
+    signal_strength = calculate_signal_strength(
+        divergence=divergence,
+        confidence=confidence_score,
+        news_quality_score=news_quality_score,
+        narrative_risk=narrative_risk_score,
+        evidence_profile=evidence_profile,
+        priced_in_risk_score=priced_in_risk_score,
+    )
+    signal_direction = calculate_signal_direction(signal)
+    expected_edge = round(divergence / 100, 4)
+    risk_level = calculate_risk_level(narrative_risk_score, news_quality_score)
+    risk_flags = build_risk_flags(news_context, narrative_type, news_quality_score)
+
+    if signal == "WATCHLIST":
+        position_size = min(position_size, 0.02)
+
+    return {
+        "market_question": market_question,
+        "market_probability": market_probability,
+        "ai_probability": ai_probability,
+        "true_probability": ai_probability,
+        "final_probability": ai_probability,
+        "divergence": divergence,
+        "signal_strength": signal_strength,
+        "signal_direction": signal_direction,
+        "overreaction_score": abs(divergence),
+        "confidence_score": confidence_score,
+        "narrative_type": narrative_type,
+        "narrative_summary": normalized["narrative_summary"],
+        "reasoning": normalized["reasoning"],
+        "risk_flags": risk_flags,
+        "signal": signal,
+        "position_size": position_size,
+        "narrative_risk_score": narrative_risk_score,
+        "news_quality_score": news_quality_score,
+        "evidence_direction": evidence_profile["evidence_direction"],
+        "evidence_strength": evidence_profile["evidence_strength"],
+        "evidence_conflict_score": evidence_profile["conflict_score"],
+        "freshness_score": evidence_profile["freshness_score"],
+        "resolution_relevance_score": evidence_profile["resolution_relevance_score"],
+        "priced_in_risk_score": priced_in_risk_score,
+        "market_ambiguity_score": semantics_profile["ambiguity_score"],
+        "condition_type": semantics_profile["condition_type"],
+        "base_rate_category": base_rate.category,
+        "base_rate_prior": base_rate.prior,
+        "base_rate_range": [base_rate.low, base_rate.high],
+        "evidence_constrained_probability": evidence_constrained_probability,
+        "base_rate_probability": base_rate_probability,
+        "expected_edge": expected_edge,
+        "risk_level": risk_level,
+        "volume": volume,
+        "liquidity": liquidity,
+        "resolution_criteria": normalized["resolution_criteria"],
+        "time_horizon": normalized["time_horizon"],
+        "entities": normalized["entities"],
+    }

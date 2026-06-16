@@ -1,0 +1,910 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>事件情报平台</title>
+  <style>
+    :root{
+      --bg:oklch(0.16 0.02 250);
+      --surface:oklch(0.21 0.02 250);
+      --surface-2:oklch(0.19 0.02 250);
+      --surface-3:oklch(0.25 0.025 250);
+      --rail:oklch(0.19 0.022 250);
+      --line:oklch(0.30 0.025 250);
+      --line-strong:oklch(0.42 0.03 250);
+      --ink:oklch(0.95 0.01 250);
+      --ink-2:oklch(0.78 0.02 250);
+      --ink-3:oklch(0.66 0.02 250);
+      --accent:oklch(0.62 0.15 250);
+      --accent-ink:oklch(0.97 0.02 250);
+      --accent-quiet:oklch(0.32 0.07 250);
+      --up:oklch(0.74 0.16 152);
+      --up-bg:oklch(0.30 0.06 152);
+      --down:oklch(0.68 0.18 22);
+      --down-bg:oklch(0.30 0.08 22);
+      --warn:oklch(0.80 0.13 85);
+      --warn-bg:oklch(0.30 0.05 85);
+      --font-sans:-apple-system,"Segoe UI",system-ui,"Microsoft YaHei","PingFang SC",Roboto,Arial,sans-serif;
+      --font-mono:ui-monospace,"Cascadia Code","Segoe UI Mono","SF Mono",Menlo,Consolas,monospace;
+      --r:10px;--r-sm:7px;
+      --ease:cubic-bezier(.22,.61,.36,1);
+      --rail-w:224px;
+      --z-rail:100;--z-toast:300;
+    }
+    *{box-sizing:border-box}
+    html{color-scheme:dark}
+    body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.65 var(--font-sans);-webkit-font-smoothing:antialiased}
+    .mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+
+    /* App shell */
+    .app{display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr);min-height:100vh}
+
+    /* Sidebar rail */
+    .rail{position:sticky;top:0;height:100vh;background:var(--rail);border-right:1px solid var(--line);
+      display:flex;flex-direction:column;padding:16px 12px;gap:4px;z-index:var(--z-rail)}
+    .rail .brand{display:flex;align-items:center;gap:10px;padding:4px 8px 14px;margin-bottom:6px;border-bottom:1px solid var(--line)}
+    .mark{width:32px;height:32px;border:1px solid var(--line-strong);background:var(--accent-quiet);
+      display:grid;place-items:center;color:var(--accent-ink);font-weight:800;border-radius:var(--r-sm);
+      font-family:var(--font-mono);letter-spacing:-.04em;font-size:13px;flex:none}
+    .brand .bt{font-size:13.5px;font-weight:700;letter-spacing:-.01em;line-height:1.2}
+    .brand .bs{font-size:10.5px;color:var(--ink-3)}
+    .nav{display:flex;flex-direction:column;gap:2px;margin-top:8px}
+    .nav button{display:flex;align-items:center;gap:10px;width:100%;height:38px;padding:0 11px;
+      border:1px solid transparent;background:transparent;color:var(--ink-2);border-radius:var(--r-sm);
+      font:inherit;font-weight:600;font-size:13.5px;cursor:pointer;text-align:left;
+      transition:background .15s var(--ease),color .15s var(--ease)}
+    .nav button:hover{background:var(--surface-2);color:var(--ink)}
+    .nav button.on{background:var(--accent-quiet);color:var(--accent-ink);border-color:color-mix(in oklch,var(--accent) 40%,var(--line))}
+    .nav button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    .nav .ix{font-family:var(--font-mono);font-size:11px;color:var(--ink-3);width:16px;text-align:center;flex:none}
+    .nav button.on .ix{color:var(--accent-ink)}
+    .nav .badge{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--ink-3);
+      background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:0 6px;min-width:20px;text-align:center}
+    .nav button.on .badge{color:var(--ink);border-color:var(--line-strong)}
+    .rail .foot{margin-top:auto;display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:12px;border-top:1px solid var(--line)}
+    .lang{font-size:12px;color:var(--ink-3);text-decoration:none;border:1px solid var(--line);
+      height:30px;display:inline-flex;align-items:center;padding:0 11px;border-radius:var(--r-sm);
+      transition:color .15s var(--ease),border-color .15s var(--ease)}
+    .lang:hover{color:var(--ink);border-color:var(--line-strong)}
+    .dot{font-family:var(--font-mono);font-size:11px;color:var(--ink-3)}
+
+    /* Main column */
+    .main{display:flex;flex-direction:column;min-width:0}
+    .topbar{position:sticky;top:0;z-index:50;height:60px;border-bottom:1px solid var(--line);
+      background:color-mix(in oklch,var(--bg) 88%,transparent);backdrop-filter:blur(6px);
+      display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 24px}
+    .topbar .tt{font-size:16px;font-weight:700;letter-spacing:-.01em}
+    .topbar .ts{font-size:12px;color:var(--ink-3);margin-top:1px}
+    .topbar .acts{display:flex;align-items:center;gap:8px}
+    .content{padding:24px;max-width:1320px;width:100%}
+
+    /* View switching */
+    .view{display:none}
+    .view.active{display:block;animation:fade .2s var(--ease)}
+    @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+    /* Controls */
+    button.btn{font:inherit;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);
+      height:36px;border-radius:var(--r-sm);padding:0 14px;font-weight:600;cursor:pointer;
+      transition:border-color .15s var(--ease),background .15s var(--ease)}
+    button.btn:hover{border-color:var(--line-strong);background:var(--surface-3)}
+    button.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    button.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+    button.btn.primary:hover{background:oklch(0.66 0.15 250);border-color:oklch(0.66 0.15 250)}
+    button.btn.sm{height:30px;padding:0 11px;font-size:12.5px}
+    button.btn:disabled{opacity:.5;cursor:not-allowed}
+    button.btn:disabled:hover{border-color:var(--line);background:var(--surface-2)}
+
+    /* Layout primitives */
+    .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:20px}
+    .stat{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px}
+    .stat .label{font-size:11px;color:var(--ink-3);letter-spacing:.04em;font-weight:600}
+    .stat .value{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:28px;font-weight:700;margin-top:8px;letter-spacing:-.02em}
+    .split{display:grid;grid-template-columns:minmax(320px,0.85fr) minmax(0,1.55fr);gap:18px;align-items:start}
+    .stack{display:flex;flex-direction:column;gap:18px;min-width:0}
+    .two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:start}
+
+    /* Panel */
+    .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+    .ph{min-height:48px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;
+      padding:10px 16px;gap:10px}
+    .ph .pt{font-size:13px;font-weight:700;letter-spacing:.02em;color:var(--ink-2)}
+    .ph .meta{font-size:12.5px;color:var(--ink-3);font-family:var(--font-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .pb{padding:16px}
+    .scroll{max-height:620px;overflow:auto}
+
+    /* Event row */
+    .event{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-sm);padding:13px 14px;
+      cursor:pointer;transition:border-color .15s var(--ease),background .15s var(--ease)}
+    .event+.event{margin-top:11px}
+    .event:hover{border-color:var(--line-strong);background:var(--surface-3)}
+    .event.active{border-color:var(--accent);background:var(--accent-quiet)}
+    .event:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    .event-title{font-size:14px;font-weight:650;line-height:1.5;margin-bottom:10px;color:var(--ink)}
+    .row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+
+    /* Pills */
+    .pill{font-family:var(--font-mono);font-variant-numeric:tabular-nums;border:1px solid var(--line);
+      border-radius:5px;padding:2px 7px;font-size:11.5px;color:var(--ink-2);background:var(--surface);white-space:nowrap}
+    .pill.high{color:var(--up);border-color:color-mix(in oklch,var(--up) 45%,var(--line));background:var(--up-bg)}
+    .pill.medium{color:var(--warn);border-color:color-mix(in oklch,var(--warn) 40%,var(--line));background:var(--warn-bg)}
+    .pill.low{color:var(--down);border-color:color-mix(in oklch,var(--down) 45%,var(--line));background:var(--down-bg)}
+    .delta.up{color:var(--up)}
+    .delta.down{color:var(--down)}
+    .delta.flat{color:var(--ink-3)}
+    .pill.delta.up{border-color:color-mix(in oklch,var(--up) 45%,var(--line));background:var(--up-bg)}
+    .pill.delta.down{border-color:color-mix(in oklch,var(--down) 45%,var(--line));background:var(--down-bg)}
+
+    /* Report */
+    .report-title{font-size:21px;font-weight:750;line-height:1.4;letter-spacing:-.01em;text-wrap:balance;margin-bottom:8px}
+    .muted{color:var(--ink-3)}
+    .src-line{font-size:12.5px;color:var(--ink-3);font-family:var(--font-mono);margin-top:4px}
+    .metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:11px;margin:16px 0}
+    .metric{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-sm);padding:12px 13px}
+    .metric .label{font-size:11px;color:var(--ink-3);letter-spacing:.03em;font-weight:600}
+    .metric .num{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:21px;font-weight:700;margin-top:6px;letter-spacing:-.02em}
+    .section{border-top:1px solid var(--line);padding-top:14px;margin-top:15px}
+    .section b{font-size:12px;letter-spacing:.02em;color:var(--ink-2);font-weight:700;display:block;margin-bottom:6px}
+    .section p{margin:0;color:var(--ink);line-height:1.75;max-width:48em}
+
+    /* Quick actions (overview) */
+    .quick{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
+    .qa{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-sm);padding:16px;cursor:pointer;
+      text-align:left;color:var(--ink);font:inherit;transition:border-color .15s var(--ease),background .15s var(--ease)}
+    .qa:hover{border-color:var(--line-strong);background:var(--surface-3)}
+    .qa:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    .qa .qt{font-weight:700;font-size:14px;margin-bottom:4px}
+    .qa .qd{font-size:12px;color:var(--ink-3);line-height:1.6}
+
+    /* Forms */
+    textarea,input{width:100%;background:var(--surface-2);color:var(--ink);border:1px solid var(--line);
+      border-radius:var(--r-sm);padding:10px 12px;font:inherit;transition:border-color .15s var(--ease)}
+    input.mono{font-family:var(--font-mono)}
+    textarea{min-height:120px;resize:vertical;line-height:1.6}
+    textarea:focus,input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-quiet)}
+    ::placeholder{color:var(--ink-3)}
+    .form{display:grid;grid-template-columns:1fr 140px;gap:12px;margin-bottom:12px}
+    label.fl{font-size:11px;color:var(--ink-3);letter-spacing:.03em;font-weight:600;display:block;margin-bottom:5px}
+
+    /* Table */
+    table{width:100%;border-collapse:collapse;font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:13px}
+    th,td{border-bottom:1px solid var(--line);padding:9px 8px;text-align:left}
+    th{color:var(--ink-3);font-size:11px;letter-spacing:.02em;font-weight:600;
+      font-family:var(--font-sans);position:sticky;top:0;background:var(--surface)}
+    td.num,th.num{text-align:right}
+    tbody tr:hover{background:var(--surface-2)}
+
+    /* Empty + skeleton */
+    .empty{border:1px dashed var(--line-strong);border-radius:var(--r-sm);color:var(--ink-3);
+      padding:30px 20px;text-align:center;background:var(--surface-2);font-size:13.5px;line-height:1.7}
+    .skel{border-radius:var(--r-sm);background:linear-gradient(90deg,var(--surface-2) 25%,var(--surface-3) 50%,var(--surface-2) 75%);
+      background-size:200% 100%;animation:sh 1.3s var(--ease) infinite}
+    .skel.row{height:66px;margin-bottom:11px}
+    .skel.line{height:14px;margin:9px 0}
+    .skel.line.w60{width:60%}.skel.line.w40{width:40%}.skel.line.w80{width:80%}
+    @keyframes sh{to{background-position:-200% 0}}
+
+    /* Sparkline */
+    .spark{display:block;width:100%;height:104px;background:var(--surface-2);border:1px solid var(--line);
+      border-radius:var(--r-sm);margin-bottom:12px}
+    .spark .area{opacity:.16}
+    .spark .ln{fill:none;stroke-width:2;vector-effect:non-scaling-stroke}
+    .spark .dot{stroke:var(--surface);stroke-width:1.5}
+    .spark-cap{display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:11px;color:var(--ink-3);margin:-6px 2px 12px}
+
+    /* Toast */
+    #toast{position:fixed;right:18px;bottom:18px;z-index:var(--z-toast);background:var(--surface-3);
+      border:1px solid var(--line-strong);border-radius:var(--r-sm);padding:11px 14px;font-size:13px;
+      max-width:360px;box-shadow:0 8px 28px oklch(0.1 0.02 250 / .55);
+      opacity:0;transform:translateY(8px);transition:opacity .2s var(--ease),transform .2s var(--ease);pointer-events:none}
+    #toast.show{opacity:1;transform:translateY(0)}
+    #toast.err{border-color:color-mix(in oklch,var(--down) 60%,var(--line))}
+
+    /* Responsive: rail collapses to top nav */
+    @media(max-width:860px){
+      .app{grid-template-columns:1fr}
+      .rail{position:sticky;top:0;height:auto;flex-direction:row;align-items:center;flex-wrap:wrap;
+        border-right:0;border-bottom:1px solid var(--line);padding:10px 12px;gap:6px}
+      .rail .brand{border-bottom:0;padding:0 8px 0 0;margin:0}
+      .nav{flex-direction:row;flex-wrap:wrap;margin:0;flex:1}
+      .nav button{width:auto;height:34px}
+      .nav .badge{display:none}
+      .rail .foot{margin:0;border-top:0;padding:0}
+      .split,.two{grid-template-columns:1fr}
+      .stats{grid-template-columns:repeat(2,1fr)}
+      .content{padding:16px}
+    }
+    @media(max-width:520px){.stats{grid-template-columns:1fr}.form{grid-template-columns:1fr}.nav .ix{display:none}}
+    @media(prefers-reduced-motion:reduce){
+      *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+    }
+    /*__NEXT__*/
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="rail">
+      <div class="brand">
+        <div class="mark">EIP</div>
+        <div>
+          <div class="bt">事件情报平台</div>
+          <div class="bs">Event Intelligence</div>
+        </div>
+      </div>
+      <nav class="nav" id="nav">
+        <button data-view="overview" onclick="go('overview')"><span class="ix">01</span> 概览</button>
+        <button data-view="discover" onclick="go('discover')"><span class="ix">02</span> 发现 <span class="badge" id="navDiscover">0</span></button>
+        <button data-view="tracked" onclick="go('tracked')"><span class="ix">03</span> 跟踪 <span class="badge" id="navTracked">0</span></button>
+        <button data-view="movers" onclick="go('movers')"><span class="ix">04</span> 变动</button>
+        <button data-view="analyze" onclick="go('analyze')"><span class="ix">05</span> 分析</button>
+        <button data-view="health" onclick="go('health')"><span class="ix">06</span> 健康</button>
+      </nav>
+      <div class="foot">
+        <span class="dot" id="clock">--</span>
+        <a href="/dashboard" class="lang">English</a>
+      </div>
+    </aside>
+
+    <div class="main">
+      <div class="topbar">
+        <div>
+          <div class="tt" id="viewTitle">概览</div>
+          <div class="ts" id="viewSub">事件情报平台</div>
+        </div>
+        <div class="acts" id="viewActions"></div>
+      </div>
+      <div class="content">
+
+        <!-- 概览 -->
+        <section class="view" id="view-overview">
+          <div class="stats">
+            <div class="stat"><div class="label">发现事件</div><div id="stCount" class="value">0</div></div>
+            <div class="stat"><div class="label">高影响</div><div id="stHigh" class="value">0</div></div>
+            <div class="stat"><div class="label">平均可信度</div><div id="stTrust" class="value">--</div></div>
+            <div class="stat"><div class="label">最后更新</div><div id="stTime" class="value" style="font-size:16px">--</div></div>
+          </div>
+          <div class="two">
+            <div class="panel">
+              <div class="ph"><span class="pt">最大变动</span><button class="btn sm" onclick="go('movers')">查看全部</button></div>
+              <div class="pb" id="ovMovers"><div class="empty">事件至少有两次扫描后，概率变动会显示在这里。</div></div>
+            </div>
+            <div class="panel">
+              <div class="ph"><span class="pt">快捷操作</span></div>
+              <div class="pb">
+                <div class="quick">
+                  <button class="qa" onclick="discover()"><div class="qt">发现事件</div><div class="qd">扫描所有来源，识别并排序新的候选事件。</div></button>
+                  <button class="qa" onclick="go('analyze')"><div class="qt">手动分析</div><div class="qd">为你提供的问题估计概率变化。</div></button>
+                  <button class="qa" onclick="go('tracked')"><div class="qt">跟踪的事件</div><div class="qd">查看已存储事件及其概率历史。</div></button>
+                  <button class="qa" onclick="loadHealth();go('health')"><div class="qt">系统健康</div><div class="qd">查看最近的分析量与审计摘要。</div></button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 发现 -->
+        <section class="view" id="view-discover">
+          <div class="split">
+            <div class="panel">
+              <div class="ph"><span class="pt">发现的事件</span><span id="sourceLabel" class="meta">多源发现</span></div>
+              <div class="pb scroll"><div id="eventList"><div class="empty">运行发现以识别事件</div></div></div>
+            </div>
+            <div class="panel">
+              <div class="ph"><span class="pt">情报报告</span><span id="selectedLabel" class="meta">未选择事件</span></div>
+              <div class="pb" id="report"><div class="empty">选择一个事件以查看概率变化报告</div></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 跟踪 -->
+        <section class="view" id="view-tracked">
+          <div class="split">
+            <div class="panel">
+              <div class="ph"><span class="pt">跟踪的事件</span><button class="btn sm" onclick="loadTracked()">刷新</button></div>
+              <div class="pb scroll"><div id="trackedList"><div class="empty">发现或分析后，存储的事件将显示在这里</div></div></div>
+            </div>
+            <div class="stack">
+              <div class="panel">
+                <div class="ph"><span class="pt">情报报告</span><span id="trackedSelectedLabel" class="meta">未选择事件</span></div>
+                <div class="pb" id="trackedReport"><div class="empty">选择一个跟踪的事件以查看其报告。</div></div>
+              </div>
+              <div class="panel">
+                <div class="ph"><span class="pt">概率历史</span><span id="historyLabel" class="meta">未选择事件</span></div>
+                <div class="pb" id="history"><div class="empty">选择一个跟踪的事件以查看其概率如何随扫描变化</div></div>
+                <div class="pb" id="similar" style="border-top:1px solid var(--line);display:none"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 变动 -->
+        <section class="view" id="view-movers">
+          <div class="panel">
+            <div class="ph"><span class="pt">最大变动</span><button class="btn sm" onclick="loadMovers()">刷新</button></div>
+            <div class="pb"><div id="movers"><div class="empty">概率随扫描变动最大的事件会显示在这里。</div></div></div>
+          </div>
+        </section>
+
+        <!-- 分析 -->
+        <section class="view" id="view-analyze">
+          <div class="split">
+            <div class="panel">
+              <div class="ph"><span class="pt">手动事件分析</span><button class="btn sm primary" id="analyzeBtn" onclick="analyzeManual()">分析</button></div>
+              <div class="pb">
+                <div class="form">
+                  <div>
+                    <label class="fl" for="manualQuestion">事件问题</label>
+                    <input id="manualQuestion" placeholder="例如：法案是否会在6月前通过？">
+                  </div>
+                  <div>
+                    <label class="fl" for="manualProb">基线 %</label>
+                    <input id="manualProb" class="mono" type="number" min="0" max="100" value="50">
+                  </div>
+                </div>
+                <label class="fl" for="manualContext">证据上下文（可选）</label>
+                <textarea id="manualContext" placeholder="留空将自动获取 RSS 和 Google News。"></textarea>
+                <div id="manualResult" class="section muted">尚未进行手动分析</div>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="ph"><span class="pt">报告</span><span id="analyzeSelectedLabel" class="meta">尚未分析事件</span></div>
+              <div class="pb" id="analyzeReport"><div class="empty">分析一个问题以在此查看完整情报报告。</div></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 健康 -->
+        <section class="view" id="view-health">
+          <div class="panel">
+            <div class="ph"><span class="pt">系统健康</span><button class="btn sm" onclick="loadHealth()">刷新健康</button></div>
+            <div class="pb" id="health"><div class="empty">加载健康数据以查看最近的分析量</div></div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+  <script>
+    const API = window.location.origin;
+    const LEVEL_MAP = {HIGH: '高', MEDIUM: '中', LOW: '低'};
+    const DIR_MAP = {rising: '上升', falling: '下降', neutral: '中性', positive: '正面', negative: '负面'};
+    const PATTERN_ZH = {trending_up:'持续上升', trending_down:'持续下降', reversing:'反转', volatile:'震荡', stable:'平稳', insufficient_data:'数据不足'};
+    let events = [];
+    let selectedId = null;
+
+    const VIEWS = {
+      overview:{title:'概览', sub:'事件情报平台'},
+      discover:{title:'发现的事件', sub:'跨预测市场与开放网络的多源发现'},
+      tracked:{title:'跟踪的事件', sub:'已存储事件及其概率历史'},
+      movers:{title:'最大变动', sub:'扫描间概率变化最大的事件'},
+      analyze:{title:'手动事件分析', sub:'为任意问题估计概率变化'},
+      health:{title:'系统健康', sub:'审计摘要与分析量'}
+    };
+
+    function el(id){ return document.getElementById(id); }
+    function esc(value){
+      return String(value == null ? '' : value)
+        .replaceAll('&','&amp;').replaceAll('<','&lt;')
+        .replaceAll('>','&gt;').replaceAll('"','&quot;')
+        .replaceAll("'","&#39;");
+    }
+    function pct(value){ return Number(value || 0).toFixed(1) + '%'; }
+    function levelClass(level){ return String(level || '').toLowerCase(); }
+    function levelText(level){ return LEVEL_MAP[level] || level || '低'; }
+    function dirText(dir){ return DIR_MAP[dir] || dir || '中性'; }
+    function deltaClass(change){ return change > 0 ? 'up' : change < 0 ? 'down' : 'flat'; }
+    function signed(n){ return (n >= 0 ? '+' : '') + Number(n).toFixed(1); }
+    function skel(rows){
+      let out = '';
+      for(let i=0;i<(rows||3);i++){ out += '<div class="skel row"></div>'; }
+      return out;
+    }
+    function toast(message, isErr){
+      const box = el('toast');
+      box.textContent = message;
+      box.className = isErr ? 'err show' : 'show';
+      clearTimeout(window.__toastTimer);
+      window.__toastTimer = setTimeout(() => box.className = '', 2800);
+    }
+    async function api(path, options){
+      const response = await fetch(API + path, {
+        headers: {'Content-Type':'application/json'},
+        ...(options || {})
+      });
+      if(!response.ok){
+        throw new Error(await response.text());
+      }
+      return response.json();
+    }
+
+    // --- 路由：一次只聚焦一个视图 ---
+    function go(view){
+      if(!VIEWS[view]){ view = 'overview'; }
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+      const target = el('view-' + view);
+      if(target){ target.classList.add('active'); }
+      document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.view === view));
+      el('viewTitle').textContent = VIEWS[view].title;
+      el('viewSub').textContent = VIEWS[view].sub;
+      renderActions(view);
+      if(('#' + view) !== location.hash){ history.replaceState(null, '', '#' + view); }
+      window.scrollTo(0, 0);
+    }
+    function renderActions(view){
+      const box = el('viewActions');
+      if(view === 'discover' || view === 'overview'){
+        box.innerHTML = '<button class="btn primary" id="refreshBtn" onclick="discover()">发现事件</button>';
+      }else{
+        box.innerHTML = '';
+      }
+    }
+
+    async function discover(){
+      go('discover');
+      const btn = el('refreshBtn');
+      if(btn){ btn.disabled = true; btn.textContent = '发现中...'; }
+      el('eventList').innerHTML = skel(4);
+      try{
+        const data = await api('/events/discover?limit=10&use_cache=false');
+        events = data.events || [];
+        selectedId = events[0] ? events[0].event_id : null;
+        renderEvents();
+        renderReport(events[0]);
+        updateStats();
+        toast('发现完成：' + events.length + ' 个事件');
+        loadTracked();
+        loadMovers();
+        saveEventsToStorage();
+      }catch(error){
+        el('eventList').innerHTML = '<div class="empty">发现失败，请检查服务后重试。</div>';
+        toast('发现失败：' + error.message, true);
+      }finally{
+        const b = el('refreshBtn');
+        if(b){ b.disabled = false; b.textContent = '发现事件'; }
+      }
+    }
+
+    function renderEvents(){
+      el('navDiscover').textContent = events.length;
+      if(!events.length){
+        el('eventList').innerHTML = '<div class="empty">当前来源未找到事件</div>';
+        return;
+      }
+      el('eventList').innerHTML = events.map(item => {
+        const cred = item.credibility || {};
+        const imp = item.impact || {};
+        const change = Number((item.probability || {}).change || 0);
+        const active = item.event_id === selectedId ? ' active' : '';
+        return `
+          <div class="event${active}" tabindex="0" role="button"
+               onclick="selectEvent('${esc(item.event_id)}')"
+               onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectEvent('${esc(item.event_id)}')}">
+            <div class="event-title">${esc(item.event_title)}</div>
+            <div class="row">
+              <span class="pill ${levelClass(cred.level)}">可信度 ${levelText(cred.level)}</span>
+              <span class="pill ${levelClass(imp.level)}">影响 ${levelText(imp.level)}</span>
+              <span class="pill">价值 ${esc(item.value_score || 0)}</span>
+              <span class="pill delta ${deltaClass(change)}">${signed(change)} 点</span>
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    function selectEvent(id){
+      selectedId = id;
+      const item = events.find(event => event.event_id === id);
+      renderEvents();
+      renderReport(item);
+    }
+
+    // 通用化：发现、跟踪、分析三个视图各自渲染报告到自己的面板，不撞 id。
+    function renderReport(item, reportId, labelId){
+      reportId = reportId || 'report';
+      labelId = labelId || 'selectedLabel';
+      if(!item){
+        el(labelId).textContent = '未选择事件';
+        el(reportId).innerHTML = '<div class="empty">选择一个事件以查看概率变化报告</div>';
+        return;
+      }
+      const prob = item.probability || {};
+      const cred = item.credibility || {};
+      const imp = item.impact || {};
+      const report = item.intelligence_report || {};
+      const src = item.source || {};
+      const xv = item.cross_validation;
+      const AGREE_ZH = {high:'高', medium:'中', low:'低'};
+      el(labelId).textContent = src.platform ? src.platform : '手动事件';
+      const change = Number(prob.change || 0);
+      el(reportId).innerHTML = `
+        <div class="report-title">${esc(item.event_title)}</div>
+        <div class="muted">${esc(report.headline || item.event_summary || '')}</div>
+        <div class="src-line">来源：${esc(src.platform || src.type || '手动')}${src.event_type ? ' / ' + esc(src.event_type) : ''}</div>
+        <div class="metrics">
+          <div class="metric"><div class="label">基线</div><div class="num">${pct(prob.baseline)}</div></div>
+          <div class="metric"><div class="label">估计</div><div class="num">${pct(prob.estimated)}</div></div>
+          <div class="metric"><div class="label">变化</div><div class="num delta ${deltaClass(change)}">${signed(change)}</div></div>
+        </div>
+        <div class="metrics">
+          <div class="metric"><div class="label">可信度</div><div class="num">${esc(cred.score || 0)}<span class="muted" style="font-size:13px">/100</span></div></div>
+          <div class="metric"><div class="label">影响</div><div class="num">${esc(imp.score || 0)}<span class="muted" style="font-size:13px">/100</span></div></div>
+          <div class="metric"><div class="label">证据</div><div class="num" style="font-size:15px">${dirText((item.evidence || {}).direction)}</div></div>
+        </div>
+        ${xv ? `<div class="section"><b>交叉验证</b><p>${esc(xv.model)} 估计 ${pct(xv.probability)}（一致性：${esc(AGREE_ZH[xv.agreement] || xv.agreement)}，分歧 ${Number(xv.divergence || 0).toFixed(1)} 点）</p></div>` : ''}
+        <div class="section"><b>为什么重要</b><p>${esc(report.why_it_matters || '')}</p></div>
+        <div class="section"><b>概率评估</b><p>${esc(report.probability_assessment || '')}</p></div>
+        <div class="section"><b>建议行动</b><p>${esc(report.recommended_action || '')}</p></div>
+        ${renderSemanticsSection(item)}
+        ${renderOutcomeSection(item)}
+      `;
+    }
+
+    function renderSemanticsSection(item){
+      const sem = item.semantics;
+      if(!sem){ return ''; }
+      const criteria = sem.resolution_criteria;
+      const horizon = sem.time_horizon;
+      const entities = (sem.entities || []);
+      if(!criteria && !horizon && entities.length === 0){ return ''; }
+      const entityPills = entities.length
+        ? `<div class="row" style="margin-top:6px">${entities.map(e => `<span class="pill">${esc(e)}</span>`).join('')}</div>`
+        : '';
+      return `
+        <div class="section"><b>事件语义</b>
+          ${criteria ? `<p><span class="muted">裁定为"是"的条件：</span> ${esc(criteria)}</p>` : ''}
+          ${horizon ? `<p><span class="muted">时间范围：</span> ${esc(horizon)}</p>` : ''}
+          ${entityPills}
+        </div>`;
+    }
+
+    function renderOutcomeSection(item){
+      const outcome = item.outcome;
+      const cal = item.calibration;
+      if(!outcome){
+        return '<div class="section muted">尚未裁定。</div>';
+      }
+      const outcomeLabel = Number(outcome.actual_outcome) >= 50 ? '是' : '否';
+      const GRADE_ZH = {
+        EXCELLENT:'优秀', GOOD:'良好', ACCEPTABLE:'可接受',
+        POOR:'较差', RANDOM_LEVEL:'随机水平', no_data:'无数据'
+      };
+      const resolvedAt = outcome.resolved_at ? new Date(outcome.resolved_at).toLocaleString('zh-CN') : '--';
+      let calBlock = '';
+      if(cal){
+        const span = cal.trajectory_span_hours == null ? '--' : Number(cal.trajectory_span_hours).toFixed(1) + ' 小时';
+        calBlock = `
+          <div class="metrics">
+            <div class="metric"><div class="label">Brier</div><div class="num">${Number(cal.brier_score).toFixed(3)}</div></div>
+            <div class="metric"><div class="label">技巧分</div><div class="num">${Number(cal.skill_score).toFixed(3)}</div></div>
+            <div class="metric"><div class="label">评级</div><div class="num" style="font-size:16px">${esc(GRADE_ZH[cal.grade] || cal.grade)}</div></div>
+          </div>
+          <div class="muted">基于最新估计 ${pct(cal.estimated_probability)} 与裁定 ${pct(cal.actual_outcome)} 打分；${cal.trajectory_observations} 次观测，跨度 ${span}。</div>`;
+      }
+      return `
+        <div class="section"><b>裁定</b>
+          <p><b style="display:inline;font-size:13px" class="delta ${outcomeLabel==='是'?'up':'down'}">${outcomeLabel}</b> &mdash; 实际 ${pct(outcome.actual_outcome)}，置信度 ${Number(outcome.confidence || 0).toFixed(2)}，来源 ${esc(outcome.source || '手动')} &mdash; 裁定于 ${esc(resolvedAt)}</p>
+          ${outcome.notes ? `<div class="muted">${esc(outcome.notes)}</div>` : ''}
+          ${calBlock}
+        </div>`;
+    }
+
+    function updateStats(){
+      const high = events.filter(item => (item.impact || {}).level === 'HIGH').length;
+      const trustValues = events.map(item => Number((item.credibility || {}).score || 0));
+      const avgTrust = trustValues.length ? trustValues.reduce((a,b) => a + b, 0) / trustValues.length : null;
+      el('stCount').textContent = events.length;
+      el('stHigh').textContent = high;
+      el('stTrust').textContent = avgTrust == null ? '--' : Math.round(avgTrust) + '/100';
+      el('stTime').textContent = new Date().toLocaleTimeString('zh-CN');
+    }
+    async function analyzeManual(){
+      const question = el('manualQuestion').value.trim();
+      const baseline = Number(el('manualProb').value);
+      const context = el('manualContext').value.trim();
+      if(!question){ toast('请输入事件问题', true); return; }
+      if(Number.isNaN(baseline) || baseline < 0 || baseline > 100){
+        toast('基线概率必须在 0-100 之间', true);
+        return;
+      }
+      const btn = el('analyzeBtn');
+      btn.disabled = true;
+      btn.textContent = '分析中...';
+      el('manualResult').innerHTML = '<div class="skel line w80"></div><div class="skel line w40"></div>';
+      el('analyzeReport').innerHTML = '<div class="skel line w60"></div><div class="skel line"></div><div class="skel line w80"></div>';
+      try{
+        const payload = {event_question: question, baseline_probability: baseline};
+        if(context){ payload.news_context = context; }
+        const item = await api('/events/analyze', {method:'POST', body:JSON.stringify(payload)});
+        const ir = item.intelligence_report || {};
+        el('manualResult').innerHTML = `<b style="display:block;margin-bottom:6px;font-size:12px;color:var(--ink-2)">结果</b>
+          <div style="margin-bottom:8px">${esc(ir.headline || item.event_title)}</div>
+          <div class="row">
+            <span class="pill">估计 ${pct((item.probability || {}).estimated)}</span>
+            <span class="pill">可信度 ${esc((item.credibility || {}).score || 0)}/100</span>
+            <span class="pill">影响 ${esc((item.impact || {}).score || 0)}/100</span>
+          </div>`;
+        renderReport(item, 'analyzeReport', 'analyzeSelectedLabel');
+        events = [item].concat(events.filter(existing => existing.event_id !== item.event_id));
+        selectedId = item.event_id;
+        renderEvents();
+        renderReport(item);
+        updateStats();
+        toast('分析完成');
+        loadTracked();
+        loadMovers();
+        saveEventsToStorage();
+      }catch(error){
+        el('manualResult').innerHTML = '<div class="muted">分析失败。</div>';
+        el('analyzeReport').innerHTML = '<div class="empty">分析失败。</div>';
+        toast('分析失败：' + error.message, true);
+      }finally{
+        btn.disabled = false;
+        btn.textContent = '分析';
+      }
+    }
+
+    async function loadHealth(){
+      el('health').innerHTML = '<div class="skel line w60"></div><div class="skel line"></div>';
+      try{
+        const data = await api('/calibration/summary');
+        const rows = Object.entries(data.signal_breakdown || {}).map(([key,value]) =>
+          `<tr><td>${esc(key)}</td><td class="num">${esc(value)}</td></tr>`).join('');
+        el('health').innerHTML = `
+          <div class="metrics">
+            <div class="metric"><div class="label">审计记录</div><div class="num">${esc(data.count || 0)}</div></div>
+            <div class="metric"><div class="label">可操作</div><div class="num">${esc(data.actionable_count || 0)}</div></div>
+            <div class="metric"><div class="label">平均置信度</div><div class="num">${esc(data.average_confidence || 0)}</div></div>
+          </div>
+          <table><thead><tr><th>信号</th><th class="num">数量</th></tr></thead><tbody>${rows}</tbody></table>`;
+        toast('健康数据已加载');
+      }catch(error){
+        el('health').innerHTML = '<div class="empty">健康数据不可用</div>';
+        toast('健康数据加载失败：' + error.message, true);
+      }
+    }
+
+    let tracked = [];
+    let trackedSelectedId = null;
+
+    async function loadTracked(){
+      try{
+        const data = await api('/events/?limit=50');
+        tracked = data.events || [];
+        el('navTracked').textContent = tracked.length;
+        if(trackedSelectedId && !tracked.some(entry => entry.event_id === trackedSelectedId)){
+          trackedSelectedId = null;
+        }
+        renderTracked();
+      }catch(error){
+        toast('跟踪事件加载失败：' + error.message, true);
+      }
+    }
+
+    function renderTracked(){
+      if(!tracked.length){
+        el('trackedList').innerHTML = '<div class="empty">尚无存储事件。运行发现或手动分析。</div>';
+        return;
+      }
+      el('trackedList').innerHTML = tracked.map(entry => {
+        const rec = entry.record || {};
+        const prob = rec.probability || {};
+        const change = Number(prob.change || 0);
+        const active = entry.event_id === trackedSelectedId ? ' active' : '';
+        return `
+          <div class="event${active}" tabindex="0" role="button"
+               onclick="selectTracked('${esc(entry.event_id)}')"
+               onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectTracked('${esc(entry.event_id)}')}">
+            <div class="event-title">${esc(rec.event_title || entry.event_id)}</div>
+            <div class="row">
+              <span class="pill">估计 ${pct(prob.estimated)}</span>
+              <span class="pill delta ${deltaClass(change)}">${signed(change)} 点</span>
+              <span class="pill">价值 ${esc(rec.value_score || 0)}</span>
+              <span class="pill">${esc(String(entry.last_updated || '').slice(0,10))}</span>
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    async function loadMovers(){
+      try{
+        const data = await api('/events/movers?limit=10');
+        renderMovers(data.movers || []);
+      }catch(error){
+        el('movers').innerHTML = '<div class="empty">最大变动不可用</div>';
+        el('ovMovers').innerHTML = '<div class="empty">最大变动不可用</div>';
+      }
+    }
+
+    function moverRow(m){
+      const t = m.trend || {};
+      const nc = Number(t.net_change || 0);
+      return `
+        <div class="event" tabindex="0" role="button"
+             onclick="gotoTracked('${esc(m.event_id)}')"
+             onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();gotoTracked('${esc(m.event_id)}')}">
+          <div class="event-title">${esc(m.event_title || m.event_id)}</div>
+          <div class="row">
+            <span class="pill delta ${deltaClass(nc)}">${signed(nc)} 点</span>
+            <span class="pill">${dirText(t.direction)}</span>
+            <span class="pill">${esc(PATTERN_ZH[t.pattern] || t.pattern || '')}</span>
+            <span class="pill">当前 ${pct(t.latest_probability)}</span>
+            <span class="pill">${esc(t.observations || 0)} 次</span>
+          </div>
+        </div>`;
+    }
+
+    function renderMovers(movers){
+      if(!movers.length){
+        const msg = '<div class="empty">尚无变动记录。事件至少有两次扫描后才会出现在这里。</div>';
+        el('movers').innerHTML = msg;
+        el('ovMovers').innerHTML = msg;
+        return;
+      }
+      el('movers').innerHTML = movers.map(moverRow).join('');
+      el('ovMovers').innerHTML = movers.slice(0,5).map(moverRow).join('');
+    }
+
+    // 从变动/相似条目跳到跟踪视图并打开该事件。
+    function gotoTracked(id){
+      go('tracked');
+      selectTracked(id);
+    }
+
+    async function selectTracked(id){
+      trackedSelectedId = id;
+      renderTracked();
+      const entry = tracked.find(item => item.event_id === id);
+      el('historyLabel').textContent = entry && entry.record ? (entry.record.event_title || id) : id;
+      el('history').innerHTML = '<div class="skel line w40"></div><div class="skel" style="height:104px"></div>';
+      el('similar').style.display = 'none';
+      el('similar').innerHTML = '';
+      el('trackedReport').innerHTML = '<div class="skel line w60"></div><div class="skel line"></div><div class="skel line w80"></div>';
+      // 拉取完整 entry，让报告能显示 outcome/calibration
+      // （tracked 列表的摘要不带这些嵌套字段）。
+      try{
+        const detail = await api('/events/' + encodeURIComponent(id));
+        const record = (detail && detail.record) ? detail.record : (entry && entry.record) || null;
+        renderReport(record, 'trackedReport', 'trackedSelectedLabel');
+      }catch(error){
+        renderReport(entry && entry.record ? entry.record : null, 'trackedReport', 'trackedSelectedLabel');
+      }
+      try{
+        const data = await api('/events/' + encodeURIComponent(id) + '/history');
+        renderHistory(data.history || [], data.trend);
+      }catch(error){
+        el('history').innerHTML = '<div class="empty">尚未记录概率历史</div>';
+      }
+      try{
+        const sim = await api('/events/' + encodeURIComponent(id) + '/similar');
+        renderSimilar(sim.similar || []);
+      }catch(error){
+        el('similar').style.display = 'none';
+        el('similar').innerHTML = '';
+      }
+    }
+
+    function renderSimilar(similar){
+      const box = el('similar');
+      if(!similar || !similar.length){ box.style.display = 'none'; box.innerHTML = ''; return; }
+      const rows = similar.map(s => {
+        const ch = Number(s.change || 0);
+        return `<div class="event" tabindex="0" role="button"
+            onclick="gotoTracked('${esc(s.event_id)}')"
+            onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();gotoTracked('${esc(s.event_id)}')}">
+          <div class="event-title">${esc(s.event_title)}</div>
+          <div class="row">
+            <span class="pill">相似 ${Number(s.similarity || 0).toFixed(2)}</span>
+            <span class="pill">估计 ${pct(s.estimated_probability)}</span>
+            <span class="pill delta ${deltaClass(ch)}">${signed(ch)}</span>
+          </div>
+        </div>`;
+      }).join('');
+      box.style.display = 'block';
+      box.innerHTML = `<div class="ph" style="min-height:0;border:0;padding:0 0 10px"><span class="pt">相似的过往事件</span></div>${rows}`;
+    }
+
+    // 概率轨迹的内联 SVG 迷你折线图（从旧到新）。
+    function sparkline(values){
+      if(!values || values.length < 2){ return ''; }
+      const W = 600, H = 104, P = 10;
+      const lo = Math.min(...values), hi = Math.max(...values);
+      const span = (hi - lo) || 1;
+      const stepX = (W - P*2) / (values.length - 1);
+      const xy = values.map((v,i) => {
+        const x = P + i*stepX;
+        const y = H - P - ((v - lo) / span) * (H - P*2);
+        return [x, y];
+      });
+      const line = xy.map((p,i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+      const area = 'M' + xy[0][0].toFixed(1) + ' ' + (H-P) + ' ' + line.slice(1) + ' L' + xy[xy.length-1][0].toFixed(1) + ' ' + (H-P) + ' Z';
+      const rising = values[values.length-1] >= values[0];
+      const col = rising ? 'var(--up)' : 'var(--down)';
+      const last = xy[xy.length-1];
+      return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="概率轨迹">
+          <path class="area" d="${area}" fill="${col}"></path>
+          <path class="ln" d="${line}" stroke="${col}"></path>
+          <circle class="dot" cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="3.5" fill="${col}"></circle>
+        </svg>
+        <div class="spark-cap"><span>最低 ${lo.toFixed(1)}%</span><span>最高 ${hi.toFixed(1)}%</span></div>`;
+    }
+
+    function renderHistory(snapshots, trend){
+      if(!snapshots.length){
+        el('history').innerHTML = '<div class="empty">尚未记录概率历史</div>';
+        return;
+      }
+      const ordered = snapshots.slice();
+      const series = ordered.map(s => Number(s.estimated)).filter(v => !Number.isNaN(v));
+      const rows = ordered.slice().reverse().map(snap => {
+        const change = Number(snap.change || 0);
+        const when = snap.timestamp ? new Date(snap.timestamp).toLocaleString('zh-CN') : '--';
+        return `<tr>
+          <td>${esc(when)}</td>
+          <td class="num">${pct(snap.estimated)}</td>
+          <td class="num delta ${deltaClass(change)}">${signed(change)}</td>
+          <td>${dirText(snap.direction)}</td>
+        </tr>`;
+      }).join('');
+      el('history').innerHTML = `
+        ${sparkline(series)}
+        ${trendBanner(trend)}
+        <div class="muted" style="margin-bottom:8px">${snapshots.length} 个快照，最新在前</div>
+        <table><thead><tr><th>时间</th><th class="num">估计</th><th class="num">变化</th><th>方向</th></tr></thead>
+        <tbody>${rows}</tbody></table>`;
+    }
+
+    function trendBanner(trend){
+      if(!trend || !trend.observations || trend.observations < 2) return '';
+      const nc = Number(trend.net_change || 0);
+      const rc = Number(trend.recent_change || 0);
+      const lo = Number(trend.min_probability), hi = Number(trend.max_probability);
+      const span = trend.span_hours != null ? `${Number(trend.span_hours).toFixed(1)}h` : '--';
+      return `<div class="row" style="gap:8px;margin-bottom:12px">
+          <span class="pill delta ${deltaClass(nc)}">${dirText(trend.direction)} ${signed(nc)}</span>
+          <span class="pill">形态 ${esc(PATTERN_ZH[trend.pattern] || trend.pattern)}</span>
+          <span class="pill">区间 ${lo.toFixed(0)}-${hi.toFixed(0)}%</span>
+          <span class="pill">波动 ${Number(trend.volatility).toFixed(1)}</span>
+          <span class="pill">近期 ${signed(rc)}</span>
+          <span class="pill">${trend.observations} 次 / ${span}</span>
+        </div>`;
+    }
+
+    function saveEventsToStorage(){
+      try{
+        localStorage.setItem('eip_events', JSON.stringify(events));
+        localStorage.setItem('eip_selected', selectedId || '');
+      }catch(e){}
+    }
+
+    function loadEventsFromStorage(){
+      try{
+        const stored = localStorage.getItem('eip_events');
+        if(stored){
+          events = JSON.parse(stored);
+          selectedId = localStorage.getItem('eip_selected') || (events[0] ? events[0].event_id : null);
+          if(events.length){
+            renderEvents();
+            renderReport(events.find(e => e.event_id === selectedId) || events[0]);
+            updateStats();
+          }
+        }
+      }catch(e){}
+    }
+
+    function tickClock(){ el('clock').textContent = new Date().toLocaleTimeString('zh-CN'); }
+
+    window.addEventListener('hashchange', () => go((location.hash || '#overview').slice(1)));
+
+    // 启动
+    loadEventsFromStorage();
+    loadHealth();
+    loadTracked();
+    loadMovers();
+    go((location.hash || '#overview').slice(1));
+    tickClock();
+    setInterval(tickClock, 1000);
+  </script>
+</body>
+</html>

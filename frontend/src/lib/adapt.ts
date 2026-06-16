@@ -1,0 +1,106 @@
+// Adapters: real backend shapes (see lib/types.ts) -> view models the ported
+// v0 components consume. The backend probability scale is 0-100, matching the
+// design, so no rescaling is needed. Everything is best-effort: the backend
+// allows missing fields, so each accessor falls back gracefully.
+
+import type {
+  EventRecord,
+  TrackedEntry,
+  Mover,
+  HistorySnapshot,
+} from "./types";
+
+export type Trend = "up" | "down" | "flat";
+
+export interface EventView {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  currentProbability: number;
+  baselineProbability: number;
+  delta: number;
+  direction: string;
+  evidenceSupport: number; // 0-1
+  priority: "high" | "medium" | "low";
+  trend: Trend;
+  valueScore: number;
+}
+
+function num(v: unknown, fallback = 0): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+export function trendOf(delta: number): Trend {
+  return delta > 0.5 ? "up" : delta < -0.5 ? "down" : "flat";
+}
+
+// impact.level (HIGH/MEDIUM/LOW) -> human tracking priority.
+function priorityOf(record: EventRecord): "high" | "medium" | "low" {
+  const lvl = String(record.impact?.level ?? "").toUpperCase();
+  if (lvl === "HIGH") return "high";
+  if (lvl === "LOW") return "low";
+  return "medium";
+}
+
+// Category lives in legacy_analysis.base_rate_category on real records; fall
+// back to the source type, then "general".
+function categoryOf(record: EventRecord): string {
+  const legacy = (record as unknown as { legacy_analysis?: Record<string, unknown> })
+    .legacy_analysis;
+  const cat = legacy?.base_rate_category;
+  if (typeof cat === "string" && cat) return cat;
+  return record.source?.type || record.source?.platform || "general";
+}
+
+export function adaptRecord(record: EventRecord): EventView {
+  const p = record.probability ?? {};
+  const delta = num(p.change);
+  return {
+    id: record.event_id,
+    title: record.event_title,
+    description: record.event_summary ?? "",
+    category: categoryOf(record),
+    currentProbability: num(p.estimated, num(p.baseline)),
+    baselineProbability: num(p.baseline),
+    delta,
+    direction: String(p.direction ?? "flat"),
+    evidenceSupport: num(record.credibility?.confidence),
+    priority: priorityOf(record),
+    trend: trendOf(delta),
+    valueScore: num(record.value_score),
+  };
+}
+
+export function adaptEntry(entry: TrackedEntry): EventView {
+  return adaptRecord(entry.record);
+}
+
+// Movers carry a trend block (from trend_analysis_service.rank_movers) rather
+// than a full record; map what the dashboard cards need.
+export function adaptMover(m: Mover): EventView {
+  const t = m.trend ?? {};
+  const delta = num(t.net_change);
+  return {
+    id: m.event_id,
+    title: m.event_title ?? m.event_id,
+    description: "",
+    category: "general",
+    currentProbability: num(t.latest_probability),
+    baselineProbability: num(t.latest_probability) - delta,
+    delta,
+    direction: String(t.direction ?? "flat"),
+    evidenceSupport: 0,
+    priority: "medium",
+    trend: trendOf(delta),
+    valueScore: 0,
+  };
+}
+
+// History snapshots -> a compact numeric series for sparklines / the chart.
+export function sparkSeries(history: HistorySnapshot[]): number[] {
+  return history
+    .map((h) => num(h.estimated))
+    .filter((v) => v > 0);
+}

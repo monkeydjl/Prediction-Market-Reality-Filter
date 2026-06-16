@@ -1,0 +1,366 @@
+"""
+Characterization tests for ai_analysis_service.
+
+These lock the deterministic behavior of the analysis engine BEFORE the Phase 3
+item 2 split (probability engine / report generation / legacy adapter) so the
+relocation can be proven behavior-preserving. Every symbol is imported from
+`app.services.ai_analysis_service`, which must keep re-exporting them after the
+split, so this same file passes unchanged before and after.
+
+The expected values were captured from the pre-split implementation. They are
+intentionally exact: any drift is a behavior change, not a refactor.
+"""
+
+import asyncio
+import unittest
+from unittest.mock import AsyncMock, patch
+
+import app.services.ai_analysis_service as ai
+from app.services.ai_analysis_service import (
+    build_deterministic_fallback_analysis,
+    build_risk_flags,
+    calculate_confidence_score,
+    calculate_narrative_risk_score,
+    calculate_position_size,
+    calculate_priced_in_risk_score,
+    calculate_risk_level,
+    calculate_signal,
+    calculate_signal_direction,
+    calculate_signal_strength,
+    clamp_probability,
+    extract_evidence_profile,
+    extract_semantics_profile,
+    passes_analysis_quality_gate,
+    score_news_quality,
+    _normalize_ai_analysis,
+)
+
+NEWS_CONTEXT = (
+    "EVIDENCE PROFILE\n"
+    "direction: support\n"
+    "strength: 0.6\n"
+    "conflict: 0.2\n"
+    "freshness: 0.8\n"
+    "resolution_relevance: 0.5\n"
+    "source_count: 4\n"
+    "MARKET SEMANTICS\n"
+    "condition_type: threshold\n"
+    "ambiguity_score: 30\n"
+    "news item: Reuters reports official filing confirms the plan. quality: 0.7 relevance: 0.8\n"
+    "news item: Associated Press covers the court decision. quality: 0.6 relevance: 0.75\n"
+    "google news: Bloomberg analysis of the policy. quality: 0.65 relevance: 0.7\n"
+    "rss title: Policy update from the agency today. quality: 0.6 relevance: 0.72\n"
+    "title: Additional confirmation reported widely. quality: 0.58 relevance: 0.69\n"
+)
+
+EVIDENCE = {
+    "evidence_direction": "support",
+    "evidence_strength": 0.6,
+    "conflict_score": 0.2,
+    "freshness_score": 0.8,
+    "resolution_relevance_score": 0.5,
+    "source_count": 4,
+}
+SEMANTICS = {"condition_type": "threshold", "ambiguity_score": 30}
+REASONING = (
+    "This is a sufficiently long reasoning string with many words to exceed "
+    "the twelve word floor."
+)
+
+
+class ParsingTests(unittest.TestCase):
+    def test_extract_evidence_profile(self):
+        self.assertEqual(extract_evidence_profile(NEWS_CONTEXT), EVIDENCE)
+
+    def test_extract_semantics_profile(self):
+        self.assertEqual(extract_semantics_profile(NEWS_CONTEXT), SEMANTICS)
+
+    def test_score_news_quality(self):
+        self.assertEqual(score_news_quality(NEWS_CONTEXT), 0.867)
+
+
+class ProbabilityMathTests(unittest.TestCase):
+    def test_calculate_priced_in_risk_score(self):
+        self.assertEqual(
+            calculate_priced_in_risk_score(
+                market_probability=65,
+                evidence_profile=EVIDENCE,
+                volume=200000,
+                liquidity=60000,
+            ),
+            73,
+        )
+
+    def test_calculate_confidence_score(self):
+        self.assertEqual(
+            calculate_confidence_score(
+                news_context=NEWS_CONTEXT,
+                news_quality_score=0.867,
+                narrative_type="factual",
+                reasoning=REASONING,
+                reasoning_consistency=0.7,
+                evidence_profile=EVIDENCE,
+                priced_in_risk_score=30,
+                semantics_profile=SEMANTICS,
+            ),
+            0.701,
+        )
+
+    def test_clamp_probability(self):
+        self.assertEqual(
+            clamp_probability(
+                market_probability=50,
+                ai_probability=72,
+                confidence=0.7,
+                narrative_type="factual",
+                has_strong_evidence=True,
+                evidence_profile=EVIDENCE,
+                priced_in_risk_score=30,
+                semantics_profile=SEMANTICS,
+            ),
+            70.53,
+        )
+
+    def test_build_deterministic_fallback_analysis(self):
+        self.assertEqual(
+            build_deterministic_fallback_analysis(
+                market_probability=50,
+                evidence_profile=EVIDENCE,
+                news_quality_score=0.867,
+                priced_in_risk_score=30,
+                semantics_profile=SEMANTICS,
+            ),
+            {
+                "ai_probability": 51.79,
+                "narrative_type": "evidence_fallback",
+                "narrative_summary": "Deterministic fallback based on structured news evidence.",
+                "reasoning": (
+                    "LLM unavailable or invalid; probability estimated from evidence "
+                    "direction, strength, resolution relevance, freshness, conflict, news "
+                    "quality, priced-in risk, and resolution ambiguity."
+                ),
+                "has_strong_evidence": False,
+                "reasoning_consistency": 0.3,
+                "resolution_criteria": "",
+                "time_horizon": "",
+                "entities": [],
+            },
+        )
+
+    def test_normalize_ai_analysis_trims_and_clamps(self):
+        self.assertEqual(
+            _normalize_ai_analysis(
+                {
+                    "ai_probability": 80,
+                    "narrative_type": "  Factual  ",
+                    "narrative_summary": "  A summary.  ",
+                    "reasoning": "  Some reasoning.  ",
+                    "has_strong_evidence": True,
+                    "reasoning_consistency": 0.9,
+                },
+                50,
+            ),
+            {
+                "ai_probability": 80.0,
+                "narrative_type": "Factual",
+                "narrative_summary": "A summary.",
+                "reasoning": "Some reasoning.",
+                "has_strong_evidence": True,
+                "reasoning_consistency": 0.9,
+                "resolution_criteria": "",
+                "time_horizon": "",
+                "entities": [],
+            },
+        )
+
+    def test_normalize_ai_analysis_extracts_semantics_fields(self):
+        result = _normalize_ai_analysis(
+            {
+                "ai_probability": 70,
+                "resolution_criteria": "  BTC closes at or above $100k  ",
+                "time_horizon": "  by end of 2026  ",
+                "entities": ["Bitcoin", "  bitcoin  ", "SAT", "", "  ", "ETF"],
+            },
+            50,
+        )
+        self.assertEqual(result["resolution_criteria"], "BTC closes at or above $100k")
+        self.assertEqual(result["time_horizon"], "by end of 2026")
+        # Deduped case-insensitively (Bitcoin/bitcoin collapse), empties
+        # dropped, order preserved on first occurrence.
+        self.assertEqual(result["entities"], ["Bitcoin", "SAT", "ETF"])
+
+    def test_normalize_ai_analysis_caps_entities_at_ten(self):
+        result = _normalize_ai_analysis(
+            {"ai_probability": 60, "entities": [f"entity{i}" for i in range(15)]},
+            50,
+        )
+        self.assertEqual(len(result["entities"]), 10)
+        self.assertEqual(result["entities"][0], "entity0")
+
+    def test_normalize_ai_analysis_rejects_non_list_entities(self):
+        result = _normalize_ai_analysis(
+            {"ai_probability": 60, "entities": "Bitcoin, not a list"},
+            50,
+        )
+        self.assertEqual(result["entities"], [])
+
+    def test_normalize_ai_analysis_rejects_non_finite_numbers(self):
+        self.assertEqual(
+            _normalize_ai_analysis(
+                {
+                    "ai_probability": "NaN",
+                    "reasoning_consistency": "Infinity",
+                },
+                50,
+            )["ai_probability"],
+            0,
+        )
+        self.assertEqual(
+            _normalize_ai_analysis(
+                {
+                    "ai_probability": "NaN",
+                    "reasoning_consistency": "Infinity",
+                },
+                50,
+            )["reasoning_consistency"],
+            0,
+        )
+
+
+class ReportGenerationTests(unittest.TestCase):
+    def test_calculate_narrative_risk_score(self):
+        self.assertEqual(
+            calculate_narrative_risk_score(news_context=NEWS_CONTEXT, narrative_type="meme"),
+            45,
+        )
+
+    def test_passes_analysis_quality_gate(self):
+        self.assertTrue(
+            passes_analysis_quality_gate(
+                confidence=0.6,
+                evidence_profile=EVIDENCE,
+                priced_in_risk_score=30,
+                news_quality_score=0.6,
+            )
+        )
+
+    def test_calculate_signal(self):
+        self.assertEqual(
+            calculate_signal(
+                divergence=15,
+                confidence=0.6,
+                evidence_profile=EVIDENCE,
+                priced_in_risk_score=30,
+                news_quality_score=0.6,
+            ),
+            "LONG",
+        )
+
+    def test_calculate_signal_strength(self):
+        self.assertEqual(
+            calculate_signal_strength(
+                divergence=15,
+                confidence=0.6,
+                news_quality_score=0.6,
+                narrative_risk=20,
+                evidence_profile=EVIDENCE,
+                priced_in_risk_score=30,
+            ),
+            "LOW",
+        )
+
+    def test_calculate_signal_direction(self):
+        self.assertEqual(calculate_signal_direction("LONG"), "LONG")
+
+    def test_calculate_position_size(self):
+        self.assertEqual(
+            calculate_position_size(divergence=15, confidence=0.6, narrative_risk=20),
+            0.05,
+        )
+
+    def test_calculate_risk_level(self):
+        self.assertEqual(
+            calculate_risk_level(narrative_risk_score=20, news_quality_score=0.6),
+            "LOW",
+        )
+
+    def test_build_risk_flags(self):
+        self.assertEqual(
+            build_risk_flags(
+                news_context=NEWS_CONTEXT, narrative_type="meme", news_quality_score=0.6
+            ),
+            ["meme"],
+        )
+
+
+class AnalyzeMarketContractTests(unittest.TestCase):
+    """Lock the full analyze_market output via the deterministic fallback path.
+
+    _ask_ai is forced to raise so analyze_market takes its evidence-only fallback
+    branch, making the whole record deterministic. This locks both orchestration
+    and the complete output shape (the legacy contract callers depend on).
+    """
+
+    def test_analyze_market_fallback_contract(self):
+        async def run():
+            with patch.object(ai, "_ask_ai", new=AsyncMock(side_effect=RuntimeError("no llm"))):
+                return await ai.analyze_market(
+                    market_question="Will the agency approve the policy before the deadline?",
+                    market_probability=50,
+                    news_context=NEWS_CONTEXT,
+                    volume=200000,
+                    liquidity=60000,
+                )
+
+        result = asyncio.run(run())
+        self.assertEqual(
+            result,
+            {
+                "market_question": "Will the agency approve the policy before the deadline?",
+                "market_probability": 50.0,
+                "ai_probability": 50.49,
+                "true_probability": 50.49,
+                "final_probability": 50.49,
+                "divergence": 0.49,
+                "signal_strength": "LOW",
+                "signal_direction": "NEUTRAL",
+                "overreaction_score": 0.49,
+                "confidence_score": 0.562,
+                "narrative_type": "evidence_fallback",
+                "narrative_summary": "Deterministic fallback based on structured news evidence.",
+                "reasoning": (
+                    "LLM unavailable or invalid; probability estimated from evidence "
+                    "direction, strength, resolution relevance, freshness, conflict, news "
+                    "quality, priced-in risk, and resolution ambiguity."
+                ),
+                "risk_flags": [],
+                "signal": "WATCHLIST",
+                "position_size": 0.02,
+                "narrative_risk_score": 20,
+                "news_quality_score": 0.867,
+                "evidence_direction": "support",
+                "evidence_strength": 0.6,
+                "evidence_conflict_score": 0.2,
+                "freshness_score": 0.8,
+                "resolution_relevance_score": 0.5,
+                "priced_in_risk_score": 48,
+                "market_ambiguity_score": 30,
+                "condition_type": "threshold",
+                "base_rate_category": "unknown",
+                "base_rate_prior": 50,
+                "base_rate_range": [20, 80],
+                "evidence_constrained_probability": 51.16,
+                "base_rate_probability": 50.49,
+                "expected_edge": 0.0049,
+                "risk_level": "LOW",
+                "volume": 200000,
+                "liquidity": 60000,
+                "resolution_criteria": "",
+                "time_horizon": "",
+                "entities": [],
+            },
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

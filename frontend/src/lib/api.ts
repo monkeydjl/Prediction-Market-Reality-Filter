@@ -49,6 +49,14 @@ export const eventsApi = {
       body: JSON.stringify(body),
     }),
 
+  resolveAuto: () =>
+    api<{
+      status?: string;
+      resolved_count?: number;
+      checked_count?: number;
+      by_source?: Record<string, number>;
+    }>("/events/resolve/auto", { method: "POST" }),
+
   history: (id: string) =>
     api<{ history: HistorySnapshot[]; trend?: Trend; count?: number }>(
       `/events/${encodeURIComponent(id)}/history`

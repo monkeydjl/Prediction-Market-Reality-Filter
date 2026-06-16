@@ -3,14 +3,17 @@ setlocal enabledelayedexpansion
 REM ============================================================
 REM  Prediction Market Reality Filter - whole-system launcher
 REM
-REM    start.bat          Production: build frontend (if needed) +
-REM                       run backend. Everything on one origin:
-REM                         http://localhost:8000/app   (new UI)
-REM                         http://localhost:8000/dashboard (classic)
-REM                         http://localhost:8000/docs  (API docs)
+REM    start.bat          Production (default): install deps, make sure
+REM                       backend\.env exists (prompt for the API key the
+REM                       first time), build the frontend if needed, free
+REM                       port 8000, run the backend and open the browser.
+REM                       Everything on one origin:
+REM                         http://localhost:8000           (app)
+REM                         http://localhost:8000/dashboard (classic UI)
+REM                         http://localhost:8000/docs      (API docs)
 REM    start.bat build    Same, but force-rebuild the frontend first.
-REM    start.bat dev      Development: backend :8000 + Next dev :3000
-REM                       in two windows (hot reload, API proxied).
+REM    start.bat dev      Development: backend :8000 + Next dev :3000 in
+REM                       two windows (hot reload), browser opens :3000.
 REM
 REM  %~dp0 = this script's folder, so paths never break if moved.
 REM ============================================================
@@ -23,6 +26,9 @@ set "MODE=%~1"
 REM --- locate python / npm ---------------------------------------------------
 where python >nul 2>&1 || (echo [ERROR] python not found on PATH. & goto :fail)
 where npm >nul 2>&1   || (echo [ERROR] npm not found on PATH.    & goto :fail)
+
+REM --- make sure backend\.env exists and the API key is filled in ------------
+call :ensure_env || goto :fail
 
 if /i "%MODE%"=="dev" goto :dev
 
@@ -52,11 +58,14 @@ if "!DO_BUILD!"=="1" (
 )
 
 echo [4/4] Starting backend on http://localhost:8000 ...
+call :killport 8000
 echo.
-echo   New dashboard : http://localhost:8000/app
+echo   App           : http://localhost:8000
 echo   Classic UI    : http://localhost:8000/dashboard
 echo   API docs      : http://localhost:8000/docs
 echo.
+REM open the browser once the server has had a moment to come up
+start "" /b powershell -NoProfile -Command "Start-Sleep -Seconds 5; Start-Process 'http://localhost:8000'"
 pushd "%BACKEND%" & python run.py & popd
 goto :eof
 
@@ -69,14 +78,44 @@ if not exist "%FRONTEND%\node_modules" (
     pushd "%FRONTEND%" & call npm install || (popd & goto :fail)
     popd
 )
-echo [dev] Launching backend (:8000) and Next dev server (:3000) in two windows...
+echo [dev] Freeing ports and launching backend (:8000) + Next dev (:3000)...
+call :killport 8000
+call :killport 3000
 echo.
 echo   Frontend (dev) : http://localhost:3000
 echo   Backend / API  : http://localhost:8000
 echo.
 start "PMRF backend :8000" cmd /k "cd /d "%BACKEND%" && python run.py"
 start "PMRF frontend :3000" cmd /k "cd /d "%FRONTEND%" && npm run dev"
+REM Next dev needs a few seconds to compile before the page is ready
+start "" /b powershell -NoProfile -Command "Start-Sleep -Seconds 8; Start-Process 'http://localhost:3000'"
 goto :eof
+
+REM ===================== helpers =============================================
+:ensure_env
+if not exist "%BACKEND%\.env" (
+    echo [env] Creating backend\.env from .env.example ...
+    copy /y "%BACKEND%\.env.example" "%BACKEND%\.env" >nul || (echo [ERROR] could not create backend\.env & exit /b 1)
+)
+findstr /c:"sk-your-key-here" "%BACKEND%\.env" >nul 2>&1
+if not errorlevel 1 (
+    echo.
+    echo   [!] backend\.env still has the placeholder OPENAI_API_KEY.
+    echo       Notepad will open now - set your real key, SAVE, then CLOSE
+    echo       Notepad to continue startup.
+    echo.
+    notepad "%BACKEND%\.env"
+)
+exit /b 0
+
+:killport
+REM Kill any process currently LISTENING on the given TCP port (and its tree),
+REM so a stale server can never collide with the one we are about to start.
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":%~1 " ^| findstr "LISTENING"') do (
+    echo       port %~1 busy - stopping old process PID %%P ...
+    taskkill /F /T /PID %%P >nul 2>&1
+)
+exit /b 0
 
 :fail
 echo.

@@ -7,6 +7,7 @@ purge on write, and independence from the legacy market_cache file.
 import tempfile
 import time
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -35,7 +36,6 @@ class EventCacheTests(unittest.TestCase):
             with patch.object(cache, "_cache_file", return_value=path):
                 cache.set_cached_event("q", {"event_id": "x"})
                 # Force the cached_at into the past beyond the TTL.
-                import json
                 with patch.object(cache, "_cache_file", return_value=path):
                     data = json.loads(Path(path).read_text(encoding="utf-8"))
                     data[cache._cache_key("q")]["cached_at"] = time.time() - 4000
@@ -48,17 +48,31 @@ class EventCacheTests(unittest.TestCase):
             with patch.object(cache, "_cache_file", return_value=path):
                 cache.set_cached_event("old", {"event_id": "old"})
                 # Manually age the "old" entry past the TTL.
-                import json
                 data = json.loads(Path(path).read_text(encoding="utf-8"))
                 data[cache._cache_key("old")]["cached_at"] = time.time() - 4000
                 Path(path).write_text(json.dumps(data), encoding="utf-8")
                 # Writing a new entry purges the expired one.
                 cache.set_cached_event("new", {"event_id": "new"})
-                import json
                 data = json.loads(Path(path).read_text(encoding="utf-8"))
                 keys = set(data.keys())
         self.assertIn(cache._cache_key("new"), keys)
         self.assertNotIn(cache._cache_key("old"), keys)
+
+    def test_set_purges_malformed_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "event_cache.json"
+            path.write_text(
+                json.dumps({
+                    cache._cache_key("bad"): "not-an-entry",
+                    cache._cache_key("also bad"): ["not", "an", "entry"],
+                }),
+                encoding="utf-8",
+            )
+            with patch.object(cache, "_cache_file", return_value=str(path)):
+                cache.set_cached_event("new", {"event_id": "new"})
+                data = json.loads(path.read_text(encoding="utf-8"))
+                keys = set(data.keys())
+        self.assertEqual(keys, {cache._cache_key("new")})
 
     def test_key_normalizes_whitespace_and_case(self):
         with tempfile.TemporaryDirectory() as tmp:

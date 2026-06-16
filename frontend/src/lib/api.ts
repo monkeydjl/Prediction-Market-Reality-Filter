@@ -7,9 +7,9 @@ import type {
   SimilarEvent,
 } from "./types";
 
-// Same-origin in production (FastAPI serves the static export and the API).
-// In dev, next.config rewrites proxy /events + /calibration to :8000.
-const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+// Same-origin in production (FastAPI serves the static export at / and the API
+// under /api). In dev, next.config rewrites proxy /api/* to :8000.
+const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "/api";
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, {

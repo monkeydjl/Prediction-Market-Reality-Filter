@@ -459,7 +459,7 @@ class DashboardSmokeTests(unittest.TestCase):
         ):
             self.assertIn(marker, body)
         self.assertIn('href="/dashboard_zh"', body)
-        self.assertIn("const API = window.location.origin;", body)
+        self.assertIn('const API = window.location.origin + "/api";', body)
         self.assertNotIn("http://localhost:8000", body)
 
     def test_chinese_dashboard_serves_html(self):
@@ -477,7 +477,7 @@ class DashboardSmokeTests(unittest.TestCase):
         ):
             self.assertIn(marker, body)
         self.assertIn('href="/dashboard"', body)
-        self.assertIn("const API = window.location.origin;", body)
+        self.assertIn('const API = window.location.origin + "/api";', body)
         self.assertNotIn("http://localhost:8000", body)
 
     def test_chinese_dashboard_underscore_alias_serves_html(self):
@@ -486,8 +486,10 @@ class DashboardSmokeTests(unittest.TestCase):
         self.assertIn("text/html", resp.headers["content-type"])
         self.assertIn("事件情报平台", resp.text)
 
-    def test_root_metadata_lists_current_event_surface(self):
-        resp = self._render("/")
+    def test_api_overview_lists_current_event_surface(self):
+        # The machine-readable overview moved from / to /api (root now serves the
+        # SPA when built; in tests there is no build so / has no route).
+        resp = self._render("/api")
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertEqual(body["system"], "Event Intelligence Platform")

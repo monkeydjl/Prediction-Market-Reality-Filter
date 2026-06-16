@@ -27,8 +27,6 @@ function DetailInner() {
 
   useEffect(() => {
     if (!id) {
-      setError("缺少事件 ID");
-      setLoading(false);
       return;
     }
     let cancelled = false;
@@ -59,6 +57,17 @@ function DetailInner() {
       cancelled = true;
     };
   }, [id]);
+
+  if (!id) {
+    return (
+      <div className="flex flex-col items-center gap-3 py-16 text-sm text-muted-foreground">
+        <p>缺少事件 ID</p>
+        <Link href="/" className="text-primary hover:underline">
+          返回监控面板
+        </Link>
+      </div>
+    );
+  }
 
   if (loading) {
     return <div className="grid h-40 place-items-center text-sm text-muted-foreground">加载中…</div>;

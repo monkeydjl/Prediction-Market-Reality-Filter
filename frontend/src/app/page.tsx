@@ -9,6 +9,34 @@ import { EventTable } from "@/components/dashboard/event-table";
 import { eventsApi } from "@/lib/api";
 import { adaptEntry, adaptMover, sparkSeries, type EventView } from "@/lib/adapt";
 
+async function fetchDashboardData() {
+  const [list, moversResp] = await Promise.all([
+    eventsApi.list(100),
+    eventsApi.movers(10),
+  ]);
+  const events = (list.events ?? []).map(adaptEntry);
+  const movers = (moversResp.movers ?? []).map(adaptMover);
+
+  // Lazy-fetch sparkline series only for the top movers (avoid N requests).
+  const top = movers.slice(0, 3);
+  const series = await Promise.all(
+    top.map(async (m) => {
+      try {
+        const h = await eventsApi.history(m.id);
+        return [m.id, sparkSeries(h.history ?? [])] as const;
+      } catch {
+        return [m.id, []] as const;
+      }
+    }),
+  );
+
+  return {
+    events,
+    movers,
+    sparklines: Object.fromEntries(series) as Record<string, number[]>,
+  };
+}
+
 export default function DashboardPage() {
   const [events, setEvents] = useState<EventView[]>([]);
   const [movers, setMovers] = useState<EventView[]>([]);
@@ -21,28 +49,10 @@ export default function DashboardPage() {
     setLoading(true);
     setError(null);
     try {
-      const [list, moversResp] = await Promise.all([
-        eventsApi.list(100),
-        eventsApi.movers(10),
-      ]);
-      const views = (list.events ?? []).map(adaptEntry);
-      setEvents(views);
-      const moverViews = (moversResp.movers ?? []).map(adaptMover);
-      setMovers(moverViews);
-
-      // Lazy-fetch sparkline series only for the top movers (avoid N requests).
-      const top = moverViews.slice(0, 3);
-      const series = await Promise.all(
-        top.map(async (m) => {
-          try {
-            const h = await eventsApi.history(m.id);
-            return [m.id, sparkSeries(h.history ?? [])] as const;
-          } catch {
-            return [m.id, []] as const;
-          }
-        }),
-      );
-      setSparklines(Object.fromEntries(series));
+      const data = await fetchDashboardData();
+      setEvents(data.events);
+      setMovers(data.movers);
+      setSparklines(data.sparklines);
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载失败");
     } finally {
@@ -51,8 +61,26 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await fetchDashboardData();
+        if (cancelled) return;
+        setEvents(data.events);
+        setMovers(data.movers);
+        setSparklines(data.sparklines);
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "加载失败");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function discover() {
     setDiscovering(true);

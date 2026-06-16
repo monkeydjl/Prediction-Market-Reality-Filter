@@ -13,7 +13,7 @@ const NAV = [
 
 export function AppNav() {
   const pathname = usePathname();
-  // basePath (/app) is stripped from usePathname; trailingSlash adds a slash.
+  // Static export uses trailing slashes; normalize for active route matching.
   const norm = pathname.replace(/\/$/, "") || "/";
 
   return (

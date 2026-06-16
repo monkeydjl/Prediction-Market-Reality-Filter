@@ -68,7 +68,8 @@ def _purge_expired(cache: dict[str, Any], ttl: int = _DEFAULT_TTL) -> None:
     now = time.time()
     expired = [
         key for key, value in cache.items()
-        if now - value.get("cached_at", 0) > ttl
+        if not isinstance(value, dict)
+        or now - value.get("cached_at", 0) > ttl
     ]
     for key in expired:
         del cache[key]

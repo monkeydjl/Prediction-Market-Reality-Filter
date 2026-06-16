@@ -20,11 +20,22 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-# Force UTF-8 output on Windows
-if sys.platform == 'win32':
+def _force_utf8_output(stream):
+    """Best-effort UTF-8 output without assuming unittest streams expose buffer."""
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="strict")
+        return stream
+    buffer = getattr(stream, "buffer", None)
+    if buffer is None:
+        return stream
     import codecs
-    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
-    sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
+    return codecs.getwriter("utf-8")(buffer, "strict")
+
+
+# Force UTF-8 output on Windows.
+if sys.platform == "win32":
+    sys.stdout = _force_utf8_output(sys.stdout)
+    sys.stderr = _force_utf8_output(sys.stderr)
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

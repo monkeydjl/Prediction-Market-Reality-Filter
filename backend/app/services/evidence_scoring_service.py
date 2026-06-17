@@ -31,12 +31,27 @@ def build_evidence_profile(
         strength = 0.0
         conflict = 0.0
     else:
-        net = support - oppose
-        strength = abs(net) / total
+        # Two-stage evidence strength:
+        # 1) direction_signal: normalized net direction among directional
+        #    evidence only (-1..+1). Neutral articles do not dilute this.
+        # 2) evidence_volume: how many directional articles (capped at 5).
+        #    A lone article carries less weight than several agreeing ones.
+        # strength = |signal| * volume.
+        #
+        # Golden values (verified by hand):
+        #   2 support, 0 oppose -> strength=0.4, direction=support
+        #   2 support, 2 oppose -> strength=0.0, direction=neutral
+        directional_count = sum(
+            1 for it in evidence_items
+            if it["direction"] in ("support", "oppose")
+        )
+        direction_signal = (support - oppose) / max(support + oppose, 0.001)
+        evidence_volume = min(1.0, directional_count / 5.0)
+        strength = abs(direction_signal) * evidence_volume
         conflict = min(support, oppose) / max(support, oppose, 0.001)
         if strength < 0.15:
             direction = "neutral"
-        elif net > 0:
+        elif direction_signal > 0:
             direction = "support"
         else:
             direction = "oppose"

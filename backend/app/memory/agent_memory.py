@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timezone
 
 from app.core.config import settings
-from app.utils.file_store import locked_file, read_json, write_json_atomic
+from app.utils.file_store import locked_file, read_json, read_json_strict, write_json_atomic
 
 
 def _memory_path() -> str:
@@ -14,6 +14,14 @@ def _memory_path() -> str:
 def load_memory() -> list[dict]:
     path = _memory_path()
     data = read_json(path, [])
+    return data if isinstance(data, list) else []
+
+
+def _load_memory_strict() -> list[dict]:
+    """Strict load for read-modify-write: raises on corrupt/IO so the caller
+    aborts instead of overwriting legacy predictions with empty data."""
+    path = _memory_path()
+    data = read_json_strict(path, [])
     return data if isinstance(data, list) else []
 
 
@@ -30,7 +38,7 @@ def add_prediction(
 ) -> None:
     path = _memory_path()
     with locked_file(path):
-        memory = load_memory()
+        memory = _load_memory_strict()
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "market_question": market_question,
@@ -52,7 +60,7 @@ def resolve_prediction(
     """Mark the latest unresolved entry for this question as resolved."""
     path = _memory_path()
     with locked_file(path):
-        memory = load_memory()
+        memory = _load_memory_strict()
         for entry in reversed(memory):
             if (
                 entry["market_question"] == market_question

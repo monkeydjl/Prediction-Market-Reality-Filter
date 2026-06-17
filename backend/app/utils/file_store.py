@@ -1,9 +1,13 @@
 import json
+import logging
 import os
+import shutil
 import tempfile
 import threading
 from contextlib import contextmanager
 from typing import Any, Iterator
+
+logger = logging.getLogger(__name__)
 
 
 _LOCKS: dict[str, threading.RLock] = {}
@@ -27,15 +31,55 @@ def locked_file(path: str) -> Iterator[None]:
         yield
 
 
+def _quarantine_corrupt(path: str) -> None:
+    """Best-effort: copy a corrupt JSON file aside to <path>.corrupt (latest only)."""
+    try:
+        shutil.copy2(path, path + ".corrupt")
+    except OSError:
+        pass
+
+
 def read_json(path: str, fallback: Any) -> Any:
+    """Lenient read for caches / read-only paths.  Never raises.
+
+    Missing file -> fallback.  Corrupt JSON -> log + quarantine + fallback.
+    OSError -> log warning + fallback (cache reads degrade, not crash).
+    """
     with locked_file(path):
         if not os.path.exists(path):
             return fallback
         try:
             with open(path, "r", encoding="utf-8") as handle:
                 return json.load(handle)
-        except (json.JSONDecodeError, OSError):
+        except json.JSONDecodeError:
+            logger.error("Corrupt JSON at %s – quarantined, using fallback", path)
+            _quarantine_corrupt(path)
             return fallback
+        except OSError as exc:
+            logger.warning("Could not read %s (%s) – using fallback", path, exc)
+            return fallback
+
+
+def read_json_strict(path: str, fallback: Any) -> Any:
+    """Strict read for durable stores' read-modify-write paths.
+
+    Missing file -> fallback (first-run / fresh-deploy must still work).
+    Corrupt JSON or OSError -> raise so the caller ABORTS the integral write
+    instead of overwriting durable data with an empty fallback.
+    """
+    with locked_file(path):
+        if not os.path.exists(path):
+            return fallback
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except json.JSONDecodeError:
+            logger.error("Corrupt JSON at %s – quarantined, aborting write", path)
+            _quarantine_corrupt(path)
+            raise
+        except OSError:
+            logger.error("I/O error reading %s – aborting write to avoid data loss", path)
+            raise
 
 
 def write_json_atomic(path: str, data: Any, *, indent: int | None = 2) -> None:

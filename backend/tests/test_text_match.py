@@ -14,6 +14,7 @@ from app.utils.text_match import (
     normalize,
     token_overlap,
     tokenize,
+    word_in_text,
 )
 
 
@@ -145,6 +146,43 @@ class FindMatchTests(unittest.TestCase):
     def test_empty_question_returns_none(self):
         self.assertIsNone(find_match("", self.index))
         self.assertIsNone(find_match("   ", self.index))
+
+
+class WordInTextTests(unittest.TestCase):
+    """word_in_text uses \\b word-boundary regex to prevent substring matches."""
+
+    def test_word_boundary_match(self):
+        self.assertTrue(word_in_text("eth", "ETH breaks out"))
+
+    def test_word_boundary_no_match_inside_longer_word(self):
+        """eth must NOT match inside hegseth."""
+        self.assertFalse(word_in_text("eth", "Hegseth speaks today"))
+
+    def test_word_boundary_no_match_partial(self):
+        """rate must NOT match inside rates."""
+        self.assertFalse(word_in_text("rate", "interest rates rising"))
+
+    def test_word_boundary_match_standalone(self):
+        """rate DOES match when it is a standalone word."""
+        self.assertTrue(word_in_text("rate", "the rate is rising"))
+
+    def test_multi_word_phrase(self):
+        self.assertTrue(word_in_text("bitcoin etf", "Bitcoin ETF approved"))
+
+    def test_multi_word_phrase_no_match(self):
+        """bitcoin must NOT match as substring in compound context."""
+        self.assertFalse(word_in_text("bitcoin", "bitcoinetf is a scam"))
+
+    def test_non_alnum_token_fallback_to_substring(self):
+        """Tokens starting/ending with non-word chars fall back to substring."""
+        self.assertTrue(word_in_text("$100k", "BTC hits $100k mark"))
+
+    def test_empty_token_returns_false(self):
+        self.assertFalse(word_in_text("", "anything"))
+
+    def test_case_insensitive(self):
+        self.assertTrue(word_in_text("BITCOIN", "bitcoin rises"))
+        self.assertTrue(word_in_text("btc", "BTC rally"))
 
 
 if __name__ == "__main__":

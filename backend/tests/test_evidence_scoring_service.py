@@ -72,22 +72,66 @@ class BuildEvidenceProfileTests(unittest.TestCase):
         )
 
     def test_one_directional_set_has_no_conflict_and_full_strength(self):
+        """2 support articles, 0 oppose -> two-stage formula.
+
+        direction_signal = 1.0 (all directional evidence agrees)
+        evidence_volume  = min(1.0, 2/5.0) = 0.4 (2 of 5 max)
+        strength         = 1.0 * 0.4 = 0.4
+
+        Golden: 2 directional articles alone cannot reach strength=1.0;
+        the volume cap reflects that 2 sources are less certain than 5.
+        """
         profile = build_evidence_profile(QUESTION, SUPPORT_ARTICLES)
         self.assertEqual(profile["evidence_direction"], "support")
-        self.assertEqual(profile["evidence_strength"], 1.0)
+        self.assertEqual(profile["evidence_strength"], 0.4)
         self.assertEqual(profile["conflict_score"], 0.0)
         self.assertEqual(profile["oppose_score"], 0)
         self.assertEqual(profile["source_count"], 2)
         self.assertEqual(profile["sources"], ["bloomberg", "reuters"])
 
     def test_balanced_set_flags_conflict_and_neutral_direction(self):
+        """2 support + 2 oppose -> two-stage formula.
+
+        direction_signal = (0.441 - 0.341) / 0.782 ~ 0.128
+        evidence_volume  = min(1.0, 4/5.0) = 0.8
+        strength         = 0.128 * 0.8 ~ 0.102
+
+        strength (0.102) < 0.15 threshold -> direction is neutral.
+        Conflict is present but direction_signal too weak to commit.
+        """
         profile = build_evidence_profile(QUESTION, SUPPORT_ARTICLES + OPPOSE_ARTICLES)
         self.assertEqual(profile["evidence_direction"], "neutral")
         self.assertEqual(profile["support_score"], 0.441)
         self.assertEqual(profile["oppose_score"], 0.341)
         self.assertEqual(profile["conflict_score"], 0.773)
-        self.assertEqual(profile["evidence_strength"], 0.128)
+        self.assertEqual(profile["evidence_strength"], 0.102)
         self.assertEqual(profile["source_count"], 4)
+
+    def test_neutral_articles_do_not_dilute_direction_signal(self):
+        """Neutral articles increase total but not direction_signal.
+
+        Old formula: strength = |net| / total  (neutral dilutes)
+        New formula: strength = |signal| * volume  (neutral excluded from both)
+
+        2 support + 3 neutral:
+          direction_signal = 0.441 / 0.441 = 1.0  (no oppose to dilute)
+          evidence_volume  = min(1.0, 2/5.0) = 0.4  (only 2 directional)
+          strength         = 1.0 * 0.4 = 0.4
+
+        With the old formula: strength = 0.441 / (0.441 + neutral) < 0.441
+        """
+        neutral_articles = SUPPORT_ARTICLES + [
+            _article("Market update", "trading continues normally",
+                     "reuters", quality=0.5, relevance=0.3),
+            _article("Daily report", "standard weekly summary released",
+                     "bloomberg", quality=0.5, relevance=0.3),
+            _article("Sector overview", "broad industry analysis piece",
+                     "cnbc", quality=0.5, relevance=0.3),
+        ]
+        profile = build_evidence_profile(QUESTION, neutral_articles)
+        self.assertEqual(profile["evidence_direction"], "support")
+        # Strength is 0.4 despite 3 neutral articles: they don't dilute.
+        self.assertEqual(profile["evidence_strength"], 0.4)
 
 
 class InferDirectionTests(unittest.TestCase):

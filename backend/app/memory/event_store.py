@@ -13,7 +13,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.models.event import EventRecord
-from app.utils.file_store import locked_file, read_json, write_json_atomic
+from app.utils.file_store import locked_file, read_json, read_json_strict, write_json_atomic
 
 
 def _store_path() -> str:
@@ -26,6 +26,13 @@ def _now() -> str:
 
 def _load_unlocked(path: str) -> dict[str, Any]:
     data = read_json(path, {})
+    return data if isinstance(data, dict) else {}
+
+
+def _load_for_write(path: str) -> dict[str, Any]:
+    """Strict load for read-modify-write paths: raises on corrupt/IO error so
+    the caller aborts instead of overwriting the durable store with empty data."""
+    data = read_json_strict(path, {})
     return data if isinstance(data, dict) else {}
 
 
@@ -44,7 +51,7 @@ def save_events(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     path = _store_path()
     stored: list[dict[str, Any]] = []
     with locked_file(path):
-        store = _load_unlocked(path)
+        store = _load_for_write(path)
         now = _now()
         for record in records:
             event_id = record["event_id"]
@@ -92,7 +99,7 @@ def resolve_event(
     """
     path = _store_path()
     with locked_file(path):
-        store = _load_unlocked(path)
+        store = _load_for_write(path)
         entry = store.get(event_id)
         if entry is None:
             return None
@@ -127,7 +134,7 @@ def set_tracking(
     """
     path = _store_path()
     with locked_file(path):
-        store = _load_unlocked(path)
+        store = _load_for_write(path)
         entry = store.get(event_id)
         if entry is None:
             return None

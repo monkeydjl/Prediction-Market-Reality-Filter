@@ -8,6 +8,7 @@ from app.services.market_semantics_service import (
     build_semantics_context,
     parse_market_semantics,
 )
+from app.utils.text_match import word_in_text
 
 
 TRUSTED_SOURCES = (
@@ -212,24 +213,13 @@ def relevance_score(
     # boundaries in the article text. (Stemming is intentionally NOT supported
     # here: a "rate" token should not match "rates" any more than "eth" should
     # match "hegseth" - both are the same substring-matching failure mode.)
-    hits = sum(1 for token in question_tokens if _word_in(token, news_text))
+    hits = sum(1 for token in question_tokens if word_in_text(token, news_text))
     return max(0.0, min(1.0, hits / min(len(question_tokens), 6)))
 
 
 def _word_in(token: str, text: str) -> bool:
-    """True if `token` appears in `text` on word boundaries.
-
-    `\\b` works for alphanumerics; for tokens that start/end with a non-word
-    char (e.g. "$100k" - the leading "$" is a non-word char so there is no
-    word boundary before it), fall back to a substring match, which is the
-    prior behavior and still safe because such tokens are already specific.
-    """
-    if not token:
-        return False
-    first, last = token[0], token[-1]
-    if not (first.isalnum() and last.isalnum()):
-        return token in text
-    return re.search(r"\b" + re.escape(token) + r"\b", text) is not None
+    """Deprecated alias - use word_in_text from app.utils.text_match directly."""
+    return word_in_text(token, text)
 
 
 def extract_keywords(text: str) -> list[str]:

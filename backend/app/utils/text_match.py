@@ -132,3 +132,29 @@ def find_match(
     if best_score >= FUZZY_THRESHOLD and best_entry is not None:
         return best_entry[0], best_entry[1], best_score
     return None
+
+
+def word_in_text(token: str, text: str) -> bool:
+    """True if `token` appears in `text` on word boundaries, case-insensitively.
+
+    ``\\b`` works for alphanumerics; for tokens that start/end with a non-word
+    char (e.g. ``$100k`` - the leading ``$`` is a non-word char so there is no
+    word boundary before it), fall back to a substring match, which is the
+    prior behavior and still safe because such tokens are already specific.
+
+    Case-insensitive: both sides are folded to lowercase so ``"eth"`` matches
+    ``"ETH"`` in news text.
+
+    Shared between news_filter_service (relevance scoring) and
+    base_rate_service (market classification) so a token like ``"rate"``
+    never substring-matches ``"rates"`` and ``"btc"`` never matches
+    ``"hegseth"`` - both are the same class of failure.
+    """
+    if not token:
+        return False
+    lower_token = token.lower()
+    first, last = lower_token[0], lower_token[-1]
+    haystack = text.lower()
+    if not (first.isalnum() and last.isalnum()):
+        return lower_token in haystack
+    return re.search(r"\b" + re.escape(lower_token) + r"\b", haystack) is not None

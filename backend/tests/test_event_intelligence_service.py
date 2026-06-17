@@ -9,6 +9,7 @@ from app.services.event_intelligence_service import (
     build_evidence_items,
     calculate_impact_score,
     calculate_trust_score,
+    calculate_value_score,
     impact_drivers,
     probability_direction,
 )
@@ -383,3 +384,36 @@ class CollectCandidateEventsCryptoOptInTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CalculateValueScoreTests(unittest.TestCase):
+    """calculate_value_score is linear: impact * trust / 100.
+
+    The old formula ``impact * (0.5 + trust/200)`` gave impact*0.5 when
+    trust=0, overstating low-trust events by up to 50 points.
+    """
+
+    def test_zero_trust_gives_zero_value(self):
+        """Core regression: trust=0 -> value=0."""
+        self.assertEqual(calculate_value_score(80, 0), 0)
+        self.assertEqual(calculate_value_score(50, 0), 0)
+
+    def test_full_trust_gives_full_impact(self):
+        """trust=100 -> value = impact."""
+        self.assertEqual(calculate_value_score(80, 100), 80)
+        self.assertEqual(calculate_value_score(50, 100), 50)
+
+    def test_half_trust_gives_half_impact(self):
+        """trust=50 -> value = impact/2."""
+        self.assertEqual(calculate_value_score(80, 50), 40)
+        self.assertEqual(calculate_value_score(100, 50), 50)
+
+    def test_zero_impact_gives_zero_value(self):
+        self.assertEqual(calculate_value_score(0, 80), 0)
+
+    def test_both_zero(self):
+        self.assertEqual(calculate_value_score(0, 0), 0)
+
+    def test_rounding(self):
+        # 73 * 67 / 100 = 48.91 -> 49
+        self.assertEqual(calculate_value_score(73, 67), 49)

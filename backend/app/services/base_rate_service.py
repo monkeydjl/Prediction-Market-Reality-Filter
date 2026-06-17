@@ -11,6 +11,8 @@ base_rate_service.py  — 改进版
 
 from dataclasses import dataclass
 
+from app.utils.text_match import word_in_text
+
 
 @dataclass
 class BaseRate:
@@ -200,10 +202,14 @@ def classify_market(question: str) -> BaseRate:
     """
     匹配优先级：长短语 > 短关键词。
     对同等长度的规则，靠前的优先。
+
+    Uses word_in_text (word-boundary match) so short keywords like ``eth`` or
+    ``rate`` do not substring-match inside ``hegseth`` or ``interest rates``
+    and incorrectly classify the market.
     """
     text = question.lower()
     for keywords, base_rate in _RULES_SORTED:
-        if any(kw in text for kw in keywords):
+        if any(word_in_text(kw, text) for kw in keywords):
             return base_rate
     return _DEFAULT
 

@@ -519,7 +519,15 @@ def calculate_impact_score(analysis: dict[str, Any]) -> int:
 
 
 def calculate_value_score(impact_score: int, trust_score: int) -> int:
-    return int(round(impact_score * (0.5 + trust_score / 200)))
+    """Linear value score: impact weighted by trust.
+
+    trust=100 -> value = impact  (full trust, full value)
+    trust=0   -> value = 0       (zero trust, zero value)
+
+    The old formula ``impact * (0.5 + trust/200)`` kept half the impact even
+    when trust was zero, which overstated low-trust events by up to 50 points.
+    """
+    return int(round(impact_score * trust_score / 100))
 
 
 def probability_direction(change: float) -> str:

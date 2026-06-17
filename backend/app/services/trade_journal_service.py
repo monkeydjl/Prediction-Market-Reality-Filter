@@ -17,12 +17,12 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from app.utils.file_store import locked_file, read_json, write_json_atomic
+from app.utils.file_store import locked_file, read_json, read_json_strict, write_json_atomic
 
 
 def _journal_path() -> str:
     base = os.path.dirname(os.path.abspath(__file__))
-    root = os.path.join(base, "..", "..", "..", "trade_journal.json")
+    root = os.path.join(base, "..", "..", "trade_journal.json")
     return os.path.abspath(root)
 
 
@@ -40,6 +40,13 @@ def _save(trades: list[dict]) -> None:
 
 def _load_unlocked(path: str) -> list[dict]:
     data = read_json(path, [])
+    return data if isinstance(data, list) else []
+
+
+def _load_unlocked_strict(path: str) -> list[dict]:
+    """Strict load for read-modify-write: raises on corrupt/IO so the caller
+    aborts instead of overwriting the journal with empty data."""
+    data = read_json_strict(path, [])
     return data if isinstance(data, list) else []
 
 
@@ -66,7 +73,7 @@ def open_trade(
     """开仓：记录一笔新交易。"""
     p = _journal_path()
     with locked_file(p):
-        trades = _load_unlocked(p)
+        trades = _load_unlocked_strict(p)
         trade_id = f"T{int(time.time() * 1000) % 10**9:09d}"
         side = _normalize_direction(direction)
         position_price = _position_price(side, entry_price)
@@ -113,7 +120,7 @@ def close_trade(
     """平仓：记录出场价格，计算盈亏。"""
     p = _journal_path()
     with locked_file(p):
-        trades = _load_unlocked(p)
+        trades = _load_unlocked_strict(p)
         for t in trades:
             if t["id"] == trade_id and t["status"] == "OPEN":
                 shares = t["shares"]

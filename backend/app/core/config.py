@@ -114,6 +114,23 @@ class Settings:
     EMBEDDING_BASE_URL: str = os.getenv("EMBEDDING_BASE_URL", "")
     EMBEDDING_API_KEY: str = os.getenv("EMBEDDING_API_KEY", "")
 
+    # Calibration feedback loop. Opt-in: disabled unless
+    # CALIBRATION_FEEDBACK_ENABLED is true. When enabled, the event layer uses
+    # the Brier history of already-resolved events to (1) weight the market /
+    # LLM / cross-validation probability signals by how accurate each has been
+    # and (2) shrink a category's estimate toward its base rate when that
+    # category has been historically overconfident. A breakdown is only used
+    # once it has at least CALIBRATION_FEEDBACK_MIN_SAMPLES resolved samples;
+    # below that the feedback is a no-op, so the published probability is
+    # unchanged until enough outcomes have accumulated to be meaningful.
+    CALIBRATION_FEEDBACK_ENABLED: bool = (
+        os.getenv("CALIBRATION_FEEDBACK_ENABLED", "").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    CALIBRATION_FEEDBACK_MIN_SAMPLES: int = int(
+        os.getenv("CALIBRATION_FEEDBACK_MIN_SAMPLES", "8")
+    )
+
     # event_audit.jsonl retention. The audit log is append-only; once its line
     # count exceeds EVENT_AUDIT_COMPACTION_THRESHOLD, a compaction rewrites it
     # keeping at most EVENT_AUDIT_MAX_PER_EVENT snapshots per event (the most

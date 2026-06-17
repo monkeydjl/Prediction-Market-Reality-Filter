@@ -2,8 +2,10 @@ import asyncio
 import hashlib
 import itertools
 import logging
+import math
 from typing import Any
 
+from app.core.config import settings
 from app.services.translation_service import translate_articles
 from app.utils.market_utils import safe_float
 
@@ -144,7 +146,59 @@ async def analyze_event(
         adjusted = max(0, min(100, credibility["score"] + credibility_delta(cross["agreement"])))
         credibility["score"] = adjusted
         credibility["level"] = score_level(adjusted)
+    _apply_calibration_feedback(record, analysis, cross)
     return record
+
+
+def _apply_calibration_feedback(
+    record: dict[str, Any],
+    analysis: dict[str, Any],
+    cross: dict[str, Any] | None,
+) -> None:
+    """Record the probability signals and, when enabled, fold calibration
+    history back into the published estimate.
+
+    The component probabilities (market baseline, anchored LLM estimate, and the
+    cross-validation model when present) are ALWAYS recorded under
+    `calibration_components`, so a per-component Brier history can accumulate as
+    events resolve - this is the data the feedback loop later weights by, and it
+    must be captured even while the loop is off.
+
+    When settings.CALIBRATION_FEEDBACK_ENABLED is on, the recorded signals are
+    fused (weighted by each component's Brier history) and shrunk toward the
+    base-rate prior (by the category's Brier history), and the result overwrites
+    the published probability. Until enough outcomes have accumulated this is a
+    no-op (the adjusted value equals the LLM estimate), so the default-off and
+    early-on behavior is identical to today's single-LLM estimate.
+    """
+    probability = record["probability"]
+    components = {
+        "market": probability["baseline"],
+        "llm": probability["estimated"],
+    }
+    if cross is not None and _looks_numeric(cross.get("probability")):
+        components["cross_validation"] = float(cross["probability"])
+    record["calibration_components"] = components
+
+    if not settings.CALIBRATION_FEEDBACK_ENABLED:
+        return
+
+    from app.services.calibration_feedback_service import adjust_probability
+
+    category = str(analysis.get("base_rate_category") or "unknown")
+    prior = safe_float(analysis.get("base_rate_prior"), probability["baseline"])
+    adjusted, info = adjust_probability(components, category, prior)
+
+    baseline = probability["baseline"]
+    probability["estimated"] = adjusted
+    probability["change"] = round(adjusted - baseline, 2)
+    probability["direction"] = probability_direction(probability["change"])
+    record["calibration_feedback"] = info
+    record["intelligence_report"]["probability_assessment"] = (
+        build_probability_assessment(
+            baseline, adjusted, record["credibility"]["score"]
+        )
+    )
 
 
 async def analyze_event_question(
@@ -586,3 +640,10 @@ def _event_id(text: str) -> str:
 
 def _clamp01(value: Any) -> float:
     return max(0.0, min(1.0, safe_float(value, 0.0)))
+
+
+def _looks_numeric(value: Any) -> bool:
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False

@@ -261,13 +261,21 @@ async def _collect_candidate_events(
     )
     from app.services.polymarket_event_source import (
         fetch_candidate_events as fetch_polymarket_events,
+        fetch_crypto_candidate_events as fetch_polymarket_crypto_events,
     )
 
-    market_sources = (
+    market_sources: list[tuple[str, Any]] = [
         ("Polymarket", fetch_polymarket_events),
         ("Manifold", fetch_manifold_events),
         ("Kalshi", fetch_kalshi_events),
-    )
+    ]
+    # Opt-in crypto-only Polymarket fetch. The default Polymarket fetch ranks by
+    # volume, so geopolitics crowds crypto out of the top-N; this adds a
+    # crypto-only fetch as an extra candidate source so crypto markets reach the
+    # pool. Dedupe keeps cross-source duplicates out (a crypto market surfacing
+    # in both the default and the crypto-only fetch is analyzed once).
+    if settings.POLYMARKET_CRYPTO_FETCH_ENABLED:
+        market_sources.append(("Polymarket Crypto", fetch_polymarket_crypto_events))
     labels = [name for name, _ in market_sources] + ["Open Web"]
     results = await asyncio.gather(
         *(fetch(limit) for _, fetch in market_sources),

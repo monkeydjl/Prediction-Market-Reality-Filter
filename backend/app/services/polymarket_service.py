@@ -18,8 +18,18 @@ ALLOWED_KEYWORDS = (
     "solana", "inflation", "rate", "nasdaq", "spy", "sp500",
 )
 
+# Crypto-only fetch gate (POLYMARKET_CRYPTO_FETCH_ENABLED). The gamma-api `tag_id`
+# parameter is best-effort; this keyword set backstops it so a wrong/empty tag
+# never floods the crypto pool with non-crypto markets. Substring match is fine
+# here because these tokens (bitcoin/btc/crypto/ethereum/eth/solana/sol) are
+# specific enough that accidental substring hits on a market *question* are
+# rare, and the evidence-layer word-boundary match catches the rest downstream.
+CRYPTO_KEYWORDS = (
+    "bitcoin", "btc", "crypto", "ethereum", "eth", "solana", "sol",
+)
 
-async def fetch_markets(limit: int = 10) -> list[MarketModel]:
+
+async def fetch_markets(limit: int = 10, crypto_only: bool = False) -> list[MarketModel]:
     params = {
         "limit": str(max(limit, 1) * 3),
         "closed": "false",
@@ -27,6 +37,12 @@ async def fetch_markets(limit: int = 10) -> list[MarketModel]:
         "order": "volume",
         "ascending": "false",
     }
+    # Polymarket files crypto under a "crypto" tag. The tag_id filter is
+    # best-effort: it narrows the ranked set toward crypto markets so they are
+    # not crowded out by geopolitics in the volume ranking. If the tag is wrong
+    # / empty / unsupported, the CRYPTO_KEYWORDS gate below still backstops it.
+    if crypto_only:
+        params["tag_id"] = "crypto"
 
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.get(POLYMARKET_API, params=params)
@@ -38,7 +54,12 @@ async def fetch_markets(limit: int = 10) -> list[MarketModel]:
         market = parse_market(item)
         if market is None:
             continue
-        if not is_allowed_market(market):
+        if crypto_only:
+            # Tag filter is best-effort; re-gate on crypto keywords so a bad tag
+            # never lets non-crypto markets into the crypto pool.
+            if not is_crypto_market(market):
+                continue
+        elif not is_allowed_market(market):
             continue
 
         markets.append(market)
@@ -92,3 +113,16 @@ def is_allowed_market(market: MarketModel) -> bool:
         return False
     question = market.question.lower()
     return any(keyword in question for keyword in ALLOWED_KEYWORDS)
+
+
+def is_crypto_market(market: MarketModel) -> bool:
+    """True when a market's question names a crypto asset / the crypto category.
+
+    Backstops the best-effort `tag_id=crypto` gamma-api filter: a wrong/empty
+    tag must never flood the crypto pool with non-crypto markets. A resolved /
+    closed market is rejected first (mirrors is_allowed_market).
+    """
+    if market.closed or market.archived or market.resolved:
+        return False
+    question = market.question.lower()
+    return any(keyword in question for keyword in CRYPTO_KEYWORDS)

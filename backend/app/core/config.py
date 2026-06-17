@@ -131,6 +131,20 @@ class Settings:
         os.getenv("CALIBRATION_FEEDBACK_MIN_SAMPLES", "8")
     )
 
+    # Polymarket crypto-only candidate fetch. Opt-in: disabled unless
+    # POLYMARKET_CRYPTO_FETCH_ENABLED is true. The default Polymarket fetch ranks
+    # by volume, so geopolitics dominates the top-N and crypto markets never
+    # reach the candidate pool. When enabled, discovery additionally runs a
+    # crypto-only fetch (gamma-api tag filter + crypto-keyword gate) and merges
+    # it into the candidate pool; dedupe keeps cross-source duplicates out. The
+    # default-off keeps discovery behavior unchanged. The gamma-api tag parameter
+    # is best-effort; a crypto-keyword gate backstops it so a wrong/empty tag
+    # never floods the pool with non-crypto markets.
+    POLYMARKET_CRYPTO_FETCH_ENABLED: bool = (
+        os.getenv("POLYMARKET_CRYPTO_FETCH_ENABLED", "").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+
     # event_audit.jsonl retention. The audit log is append-only; once its line
     # count exceeds EVENT_AUDIT_COMPACTION_THRESHOLD, a compaction rewrites it
     # keeping at most EVENT_AUDIT_MAX_PER_EVENT snapshots per event (the most

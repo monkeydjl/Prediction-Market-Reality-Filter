@@ -52,6 +52,32 @@ async def fetch_candidate_events(limit: int = 10) -> list[dict[str, Any]]:
     return [_to_candidate_event(market) for market in markets]
 
 
+async def fetch_crypto_candidate_events(limit: int = 10) -> list[dict[str, Any]]:
+    """Fetch and normalize crypto-only candidate events from Polymarket.
+
+    The default `fetch_candidate_events` ranks by volume, so geopolitics crowds
+    crypto out of the top-N. This runs a crypto-only fetch (gamma-api tag filter
+    + crypto-keyword gate) so crypto markets reach the candidate pool. Shape is
+    identical to `fetch_candidate_events` and goes through the same filter +
+    normalization, so discovery treats it as just another candidate source
+    (dedupe keeps cross-source duplicates out).
+
+    Guarded by settings.POLYMARKET_CRYPTO_FETCH_ENABLED at the call site
+    (`_collect_candidate_events`); this function itself does not check the flag
+    so it stays a pure fetch+normalize and is trivially testable.
+    """
+    from app.services.market_filter_service import filter_markets
+    from app.services.polymarket_service import fetch_markets
+
+    candidate_limit = min(max(limit * 5, limit), 100)
+    candidate_markets = await fetch_markets(limit=candidate_limit, crypto_only=True)
+    markets = filter_markets(
+        candidate_markets,
+        max_markets=min(max(limit * 3, limit), 30),
+    )
+    return [_to_candidate_event(market) for market in markets]
+
+
 def _to_candidate_event(market) -> dict[str, Any]:
     baseline = safe_float(market.yes_price, 0.5) * 100
     volume = safe_float(market.volume, 0.0)

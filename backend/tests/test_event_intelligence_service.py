@@ -328,5 +328,58 @@ class AnalyzeEventCalibrationFeedbackTests(unittest.TestCase):
         self.assertEqual(record["probability"]["estimated"], disabled_estimate)
 
 
+class CollectCandidateEventsCryptoOptInTests(unittest.TestCase):
+    """The opt-in Polymarket crypto fetch (POLYMARKET_CRYPTO_FETCH_ENABLED).
+
+    Default-off: the crypto-only fetch is NOT part of the candidate gather. When
+    enabled, it is added as an extra concurrent source. All real fetches are
+    mocked so this is network-free; we assert on whether the crypto fetch ran.
+    """
+
+    def _stub_sources(self, crypto_fetch):
+        """Patch every real source fetch so _collect_candidate_events runs without
+        network. The crypto fetch is the one under test (the rest just need to
+        return empty lists so they don't shape the result)."""
+        patches = [
+            patch("app.services.polymarket_event_source.fetch_candidate_events",
+                  new=AsyncMock(return_value=[])),
+            patch("app.services.manifold_event_source.fetch_candidate_events",
+                  new=AsyncMock(return_value=[])),
+            patch("app.services.kalshi_event_source.fetch_candidate_events",
+                  new=AsyncMock(return_value=[])),
+            patch("app.services.polymarket_event_source.fetch_crypto_candidate_events",
+                  new=crypto_fetch),
+            patch("app.services.event_extraction_service.extract_candidate_events",
+                  new=AsyncMock(return_value=[])),
+        ]
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+
+    def test_crypto_fetch_not_called_when_disabled(self):
+        crypto_fetch = AsyncMock(return_value=[])
+        with patch.object(eis.settings, "POLYMARKET_CRYPTO_FETCH_ENABLED", False):
+            self._stub_sources(crypto_fetch)
+            _run(eis._collect_candidate_events(limit=5))
+        crypto_fetch.assert_not_awaited()
+
+    def test_crypto_fetch_called_when_enabled(self):
+        crypto_fetch = AsyncMock(return_value=[
+            {"question": "Will Bitcoin reach $100k?", "baseline_probability": 50,
+             "volume": 1, "liquidity": 1,
+             "source": {"type": "prediction_market", "platform": "Polymarket",
+                        "source_id": "c1", "question": "Will Bitcoin reach $100k?",
+                        "baseline_probability": 50.0, "liquidity": 1, "volume": 1,
+                        "url": "https://polymarket.com/event/x"}},
+        ])
+        with patch.object(eis.settings, "POLYMARKET_CRYPTO_FETCH_ENABLED", True):
+            self._stub_sources(crypto_fetch)
+            candidates = _run(eis._collect_candidate_events(limit=5))
+        crypto_fetch.assert_awaited_once()
+        # The crypto candidate reached the pool.
+        questions = [c.get("question") for c in candidates]
+        self.assertIn("Will Bitcoin reach $100k?", questions)
+
+
 if __name__ == "__main__":
     unittest.main()

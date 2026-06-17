@@ -1,6 +1,11 @@
 import unittest
 
-from app.services.news_filter_service import filter_news_for_market, score_article
+from app.services.market_semantics_service import parse_market_semantics
+from app.services.news_filter_service import (
+    filter_news_for_market,
+    relevance_score,
+    score_article,
+)
 
 
 class NewsFilterServiceContractTests(unittest.TestCase):
@@ -110,6 +115,82 @@ class RelevanceBlendTests(unittest.TestCase):
         )
         score_article(self.QUESTION, article)
         self.assertGreater(article["relevance_score"], 0.0)
+
+
+class RelevanceSemanticsTokenTests(unittest.TestCase):
+    """relevance_score must use only the event's concrete entities from
+    semantics, not the yes/no condition templates. Those templates are generic
+    boilerplate ("the referenced metric reaches or exceeds ... does not ...")
+    whose filler words match unrelated news and inflate relevance. Regression
+    for the template-pollution fix.
+    """
+
+    QUESTION = "Will Bitcoin reach $100,000 by end of 2026?"
+
+    def test_template_boilerplate_words_do_not_match(self):
+        semantics = parse_market_semantics(self.QUESTION)
+        # Made only of yes/no-condition boilerplate words that are NOT in the
+        # question. With the templates excluded these are not matching tokens.
+        boilerplate = "the referenced metric exceeds its target and the event occurs"
+        self.assertEqual(relevance_score(self.QUESTION, boilerplate, semantics), 0.0)
+
+    def test_entity_article_still_matches(self):
+        semantics = parse_market_semantics(self.QUESTION)
+        self.assertGreater(
+            relevance_score(self.QUESTION, "bitcoin rallies toward a new high", semantics),
+            0.0,
+        )
+
+    def test_real_crypto_news_outranks_unrelated_politics(self):
+        """The motivating regression: an unrelated politics headline must not
+        score as high as real Bitcoin news on a Bitcoin question."""
+        semantics = parse_market_semantics(self.QUESTION)
+        politics = relevance_score(
+            self.QUESTION, "federal judge blocks state ban enforcement", semantics
+        )
+        crypto = relevance_score(
+            self.QUESTION, "morgan stanley says bitcoin reaching new highs", semantics
+        )
+        self.assertGreater(crypto, politics)
+
+
+class RelevanceWordBoundaryTests(unittest.TestCase):
+    """relevance_score must match question tokens on word boundaries, not as
+    bare substrings. Regression for the substring false-positive that let a
+    short token like "eth" match inside "hegseth" / "whether" (and "end"
+    inside "transgender"), inflating relevance on unrelated news.
+    """
+
+    def test_short_token_does_not_match_inside_a_longer_word(self):
+        # "eth" must NOT match inside "hegseth". No other crypto token present
+        # -> relevance is 0. (Question chosen so its only matching token is eth.)
+        self.assertEqual(
+            relevance_score("Will ETH rally?", "hegseth may leave the cabinet", None),
+            0.0,
+        )
+        self.assertEqual(
+            relevance_score("Will ETH rally?", "whether the bill passes", None),
+            0.0,
+        )
+
+    def test_token_still_matches_as_a_whole_word(self):
+        # Word-boundary does not break legitimate matches: "eth" matches " eth ".
+        self.assertGreater(
+            relevance_score("Will ETH rally?", "eth breaks out to a new high", None),
+            0.0,
+        )
+        self.assertGreater(
+            relevance_score("Will Bitcoin reach $100k?", "bitcoin nears all-time high", None),
+            0.0,
+        )
+
+    def test_non_alphanumeric_token_falls_back_to_substring(self):
+        # A token like "$100k" starts with a non-word char, so there is no word
+        # boundary before it; it falls back to a substring match and still hits.
+        self.assertGreater(
+            relevance_score("Will Bitcoin reach $100k?", "price eyes $100k milestone", None),
+            0.0,
+        )
 
 
 if __name__ == "__main__":

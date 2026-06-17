@@ -207,6 +207,52 @@ class EventIntelligenceServiceTests(unittest.TestCase):
         self.assertIsNone(record.get("semantics"))
 
 
+class BuildFilteredNewsSemanticsTests(unittest.TestCase):
+    """The semantics passthrough in _build_filtered_news.
+
+    Locks the fix: parsed market semantics (entities + resolution conditions)
+    must reach annotate_semantic_relevance, so the embedding query is enriched
+    for threshold questions (e.g. crypto "reach $2,000") rather than embedding
+    the bare question. collect_articles and annotate are mocked - network-free.
+    """
+
+    QUESTION = "Will Ethereum reach $2,000 in June?"
+    ARTICLES = [{"title": "ETH rallies", "description": "ether climbs", "source": "Decrypt"}]
+
+    def test_semantics_passed_to_annotate(self):
+        captured = {}
+
+        async def fake_annotate(question, articles, semantics=None):
+            captured["question"] = question
+            captured["semantics"] = semantics
+            return articles
+
+        with patch("app.services.event_collection_service.collect_articles",
+                   new=AsyncMock(return_value=self.ARTICLES)), \
+                patch("app.services.semantic_relevance_service.annotate_semantic_relevance",
+                      new=fake_annotate):
+            _run(eis._build_filtered_news(self.QUESTION))
+
+        self.assertEqual(captured["question"], self.QUESTION)
+        self.assertIsInstance(captured["semantics"], dict)
+        # The parsed semantics must carry the structured signal the embedding
+        # query relies on: the entity (Ethereum) and the YES resolution condition.
+        entities = [e.lower() for e in captured["semantics"].get("entities", [])]
+        self.assertIn("ethereum", entities)
+        self.assertTrue(captured["semantics"].get("yes_condition"))
+
+    def test_returns_filter_result_shape(self):
+        """The fix must not change the returned shape (context + summary)."""
+        with patch("app.services.event_collection_service.collect_articles",
+                   new=AsyncMock(return_value=self.ARTICLES)), \
+                patch("app.services.semantic_relevance_service.annotate_semantic_relevance",
+                      new=AsyncMock(return_value=self.ARTICLES)):
+            result = _run(eis._build_filtered_news(self.QUESTION))
+        self.assertIn("context", result)
+        self.assertIn("summary", result)
+        self.assertIn("selected_count", result["summary"])
+
+
 class AnalyzeEventCalibrationFeedbackTests(unittest.TestCase):
     """The calibration feedback wiring in analyze_event.
 

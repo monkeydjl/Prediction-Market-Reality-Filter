@@ -190,9 +190,14 @@ def relevance_score(
 ) -> float:
     semantic_tokens = []
     if semantics:
+        # Only the event's concrete entities add real signal here. The yes/no
+        # conditions are generic boilerplate templates ("The referenced metric
+        # reaches or exceeds ... does not ...") whose filler words (referenced,
+        # metric, reaches, exceeds, occurs, does, not) match unrelated news and
+        # inflate relevance - e.g. a politics article scoring 0.5 on a Bitcoin
+        # question. The threshold / deadline already surface as entity tokens, so
+        # dropping the templates removes noise without losing event-specific signal.
         semantic_tokens = list(semantics.get("entities", []))
-        semantic_tokens += extract_keywords(semantics.get("yes_condition", ""))
-        semantic_tokens += extract_keywords(semantics.get("no_condition", ""))
 
     question_tokens = list(dict.fromkeys(
         extract_keywords(market_question) + semantic_tokens
@@ -200,8 +205,31 @@ def relevance_score(
     if not question_tokens:
         return 0.0
 
-    hits = sum(1 for token in question_tokens if token in news_text)
+    # Word-boundary match instead of a bare substring, so a short token like
+    # "eth" no longer matches inside "hegseth" / "whether", and "end" no longer
+    # matches inside "transgender". Tokenizing the article already isolated
+    # whole words; this stops a question token from bleeding across word
+    # boundaries in the article text. (Stemming is intentionally NOT supported
+    # here: a "rate" token should not match "rates" any more than "eth" should
+    # match "hegseth" - both are the same substring-matching failure mode.)
+    hits = sum(1 for token in question_tokens if _word_in(token, news_text))
     return max(0.0, min(1.0, hits / min(len(question_tokens), 6)))
+
+
+def _word_in(token: str, text: str) -> bool:
+    """True if `token` appears in `text` on word boundaries.
+
+    `\\b` works for alphanumerics; for tokens that start/end with a non-word
+    char (e.g. "$100k" - the leading "$" is a non-word char so there is no
+    word boundary before it), fall back to a substring match, which is the
+    prior behavior and still safe because such tokens are already specific.
+    """
+    if not token:
+        return False
+    first, last = token[0], token[-1]
+    if not (first.isalnum() and last.isalnum()):
+        return token in text
+    return re.search(r"\b" + re.escape(token) + r"\b", text) is not None
 
 
 def extract_keywords(text: str) -> list[str]:

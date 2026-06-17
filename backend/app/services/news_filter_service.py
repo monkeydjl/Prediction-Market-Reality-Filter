@@ -27,6 +27,20 @@ TRUSTED_SOURCES = (
     "the verge",
 )
 
+# Official government/regulatory domains (minimal version - Doc 4/5/6)
+# These are high-confidence official sources that should NOT be scored
+# the same as unknown blogs (0.55). This is a correctness fix, not tuning.
+OFFICIAL_DOMAINS = (
+    "sec.gov",
+    "federalreserve.gov",
+    "treasury.gov",
+    "whitehouse.gov",
+    "bls.gov",
+    "cftc.gov",
+    "fda.gov",
+    # Future: add more as needed
+)
+
 LOW_QUALITY_TERMS = (
     "rumor",
     "unconfirmed",
@@ -233,6 +247,11 @@ def extract_keywords(text: str) -> list[str]:
 
 def score_source_quality(source: str, title: str) -> float:
     haystack = f"{source} {title}".lower()
+    
+    # Check official domains first (minimal version)
+    if any(domain in haystack for domain in OFFICIAL_DOMAINS):
+        return 0.85  # At least mainstream media tier
+    
     if any(source_name in haystack for source_name in TRUSTED_SOURCES):
         return 0.9
     if source:

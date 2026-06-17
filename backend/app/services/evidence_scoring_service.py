@@ -12,6 +12,39 @@ from app.services.evidence_extraction_service import classify_evidence
 from app.services.market_semantics_service import parse_market_semantics
 
 
+def normalize_source_name(source: str) -> str:
+    """Normalize feed/publisher name to media root.
+    
+    Current source field is a feed display name (e.g., "Reuters Politics"),
+    NOT a domain. This function only handles known same-outlet multi-feed
+    merging, NOT URL/domain parsing.
+    
+    Known mappings:
+    - "Reuters Politics" -> "reuters"
+    - "Reuters Business" -> "reuters"
+    - Future GNews publishers like "Reuters", "Reuters.com", etc.
+      will be added case-by-case.
+    
+    Residual limitation: Cross-outlet转载 of the same wire article
+    will still be overcounted. This is a conscious trade-off, not an
+    oversight.
+    """
+    if not source:
+        return ""
+    
+    source_lower = source.lower().strip()
+    
+    # Reuters family feeds
+    if "reuters" in source_lower:
+        return "reuters"
+    
+    # Future: add more media mappings
+    # if "bloomberg" in source_lower:
+    #     return "bloomberg"
+    
+    return source_lower
+
+
 def build_evidence_profile(
     market_question: str,
     articles: list[dict[str, Any]],
@@ -46,7 +79,15 @@ def build_evidence_profile(
             if it["direction"] in ("support", "oppose")
         )
         direction_signal = (support - oppose) / max(support + oppose, 0.001)
-        evidence_volume = min(1.0, directional_count / 5.0)
+        
+        # Use deduplicated source count instead of article count
+        # This prevents single-feed重复 from inflating evidence volume
+        directional_sources = {
+            normalize_source_name(it["source"])
+            for it in evidence_items
+            if it["direction"] in ("support", "oppose") and it["source"]
+        }
+        evidence_volume = min(1.0, len(directional_sources) / 5.0)
         strength = abs(direction_signal) * evidence_volume
         conflict = min(support, oppose) / max(support, oppose, 0.001)
         if strength < 0.15:
@@ -57,7 +98,7 @@ def build_evidence_profile(
             direction = "oppose"
 
     sources = sorted({
-        item["source"]
+        normalize_source_name(item["source"])
         for item in evidence_items
         if item["source"]
     })

@@ -29,6 +29,7 @@ def parse_market_semantics(market_question: str) -> dict[str, Any]:
     deadline = extract_deadline(question)
     threshold = extract_threshold(question)
     condition_type = infer_condition_type(question)
+    threshold_direction = infer_threshold_direction(question, condition_type)
     yes_condition = build_yes_condition(question, condition_type, deadline, threshold)
     no_condition = build_no_condition(question, condition_type, deadline, threshold)
     ambiguity_score, ambiguity_flags = score_resolution_ambiguity(question)
@@ -36,6 +37,7 @@ def parse_market_semantics(market_question: str) -> dict[str, Any]:
     return {
         "question": question,
         "condition_type": condition_type,
+        "threshold_direction": threshold_direction,
         "yes_condition": yes_condition,
         "no_condition": no_condition,
         "deadline": deadline,
@@ -52,7 +54,10 @@ def normalize_question(question: str) -> str:
 
 def infer_condition_type(question: str) -> str:
     q = question.lower()
-    if any(term in q for term in ("above", "over", "at least", "hit", "reach")):
+    # Threshold: above/over + below/under + exceed/surpass
+    if any(term in q for term in ("above", "over", "at least", "hit", "reach",
+                                   "below", "under", "less than", "at most",
+                                   "fewer than", "exceed", "surpass", "top")):
         return "threshold"
     if any(term in q for term in ("win", "wins", "elected", "nominee")):
         return "election"
@@ -61,6 +66,36 @@ def infer_condition_type(question: str) -> str:
     if any(term in q for term in ("war", "ceasefire", "tariff", "rate cut", "rate hike")):
         return "policy_or_geopolitical"
     return "binary_event"
+
+
+def infer_threshold_direction(question: str, condition_type: str) -> str:
+    """Infer whether threshold market asks for above or below.
+    
+    Returns 'above', 'below', or 'unknown' (for non-threshold markets).
+    This is critical for correct direction inference in evidence extraction.
+    
+    Examples:
+    - "Will CPI be above 3%?" -> 'above'
+    - "Will CPI be under 3%?" -> 'below'
+    - "Will unemployment exceed 5%?" -> 'above'
+    - "Will BTC be below $80k?" -> 'below'
+    """
+    if condition_type != "threshold":
+        return "unknown"
+    
+    q = question.lower()
+    
+    # Above-direction indicators
+    if any(term in q for term in ("above", "over", "at least", "hit", "reach",
+                                   "exceed", "surpass", "top")):
+        return "above"
+    
+    # Below-direction indicators
+    if any(term in q for term in ("below", "under", "less than", "at most",
+                                   "fewer than")):
+        return "below"
+    
+    return "unknown"
 
 
 def build_yes_condition(

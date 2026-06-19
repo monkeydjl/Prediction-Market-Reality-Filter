@@ -18,13 +18,6 @@ class Settings:
     )
 
     GNEWS_MAX_RESULTS: int = int(os.getenv("GNEWS_MAX_RESULTS", "10"))
-    MARKET_SCAN_LIMIT: int = int(os.getenv("MARKET_SCAN_LIMIT", "5"))
-    MEMORY_FILE: str = os.getenv(
-        "MEMORY_FILE",
-        os.path.join(
-            os.path.dirname(__file__), "..", "..", "agent_memory.json"
-        ),
-    )
     EVENT_STORE_FILE: str = os.getenv(
         "EVENT_STORE_FILE",
         os.path.join(
@@ -41,6 +34,15 @@ class Settings:
         "EVENT_CACHE_FILE",
         os.path.join(
             os.path.dirname(__file__), "..", "..", "event_cache.json"
+        ),
+    )
+    # V2 loop store (SQLite). Holds the relational tables the feedback loop
+    # depends on - starting with event_market_links (M0). Single file, no
+    # server; sits alongside the JSON event_store rather than replacing it.
+    LOOP_DB_FILE: str = os.getenv(
+        "LOOP_DB_FILE",
+        os.path.join(
+            os.path.dirname(__file__), "..", "..", "v2_loop.db"
         ),
     )
     OFFICIAL_RSS_URL: str = os.getenv(
@@ -156,6 +158,57 @@ class Settings:
     EVENT_AUDIT_MAX_PER_EVENT: int = int(
         os.getenv("EVENT_AUDIT_MAX_PER_EVENT", "200")
     )
+
+    # Event->market link auto-verification threshold (M0 identity gate). An
+    # auto-resolve question match at or above this score is treated as a
+    # verified link and is eligible to be scored; below it the link is recorded
+    # but left unverified (pending human review) and is NOT scored - fail-closed,
+    # so a fuzzy match never silently scores an event against the wrong outcome.
+    # Default 1.0 = only exact normalized-question matches auto-verify.
+    AUTO_VERIFY_THRESHOLD: float = float(
+        os.getenv("AUTO_VERIFY_THRESHOLD", "1.0")
+    )
+
+    # Disagreement Diagnosis (M2). A committed prediction's raw edge (AI - market)
+    # is trust-weighted into an adjusted edge: a divergence is only trusted in a
+    # category where past resolved predictions actually beat the market.
+    #   trust  = clamp(skill, 0, 1) once the category has CALIBRATION_FEEDBACK_MIN_SAMPLES
+    #            scored predictions; below that the category is dormant and trust
+    #            defaults to DIAGNOSIS_DORMANT_TRUST.
+    #   adjusted_edge = raw_edge * trust * liquidity_factor, where liquidity_factor
+    #            ramps 0->1 up to DIAGNOSIS_LIQUIDITY_FLOOR (unknown liquidity = 1.0).
+    # The Decision Gate then sets act/watch/skip from the adjusted edge; "act"
+    # requires a qualified (non-dormant) category, so an unproven segment caps at
+    # "watch" no matter how large the divergence.
+    DIAGNOSIS_DORMANT_TRUST: float = float(
+        os.getenv("DIAGNOSIS_DORMANT_TRUST", "0.5")
+    )
+    DIAGNOSIS_LIQUIDITY_FLOOR: float = float(
+        os.getenv("DIAGNOSIS_LIQUIDITY_FLOOR", "5000.0")
+    )
+    DECISION_ACT_EDGE: float = float(os.getenv("DECISION_ACT_EDGE", "10.0"))
+    DECISION_WATCH_EDGE: float = float(os.getenv("DECISION_WATCH_EDGE", "3.0"))
+
+    # Edge trajectory freshness (M3). An event's edge (AI - market) is tracked over
+    # the audit snapshots. If the latest snapshot is older than EDGE_STALE_HOURS the
+    # edge is "stale" (we have not re-evaluated recently); otherwise a material edge
+    # (>= DECISION_WATCH_EDGE) that is holding near its peak is "fresh", one that has
+    # shrunk from its peak is "decaying". The point is to act on edges while they are
+    # live, not after the market has absorbed them.
+    EDGE_STALE_HOURS: float = float(os.getenv("EDGE_STALE_HOURS", "72.0"))
+
+    # Scheduled event discovery (M4 loop-unblock). The event layer freezes a
+    # committed prediction per market-derived event on discovery; auto-resolve
+    # (already scheduled at 22:30 UTC) scores them as markets settle. Without a
+    # scheduled discovery run the loop never accrues predictions, so calibration
+    # stays no_data and M2 trust stays dormant. Default-enabled because letting
+    # the loop accrue data is the point; an operator without API keys (or who
+    # does not want the per-run LLM cost) sets EVENT_DISCOVER_ENABLED false.
+    EVENT_DISCOVER_ENABLED: bool = (
+        os.getenv("EVENT_DISCOVER_ENABLED", "true").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    EVENT_DISCOVER_LIMIT: int = int(os.getenv("EVENT_DISCOVER_LIMIT", "10"))
 
 
 settings = Settings()

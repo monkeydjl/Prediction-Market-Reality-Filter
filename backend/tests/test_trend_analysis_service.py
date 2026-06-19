@@ -17,13 +17,29 @@ from fastapi.testclient import TestClient
 
 from app.api.routes import events as events_routes
 from app.services import event_audit_service as audit
-from app.services.trend_analysis_service import analyze_trend, rank_movers
+from app.services.trend_analysis_service import (
+    analyze_edge_trajectory,
+    analyze_trend,
+    rank_fresh_edges,
+    rank_movers,
+)
 
 TS0 = "2026-06-12T00:00:00+00:00"
+NOW_FRESH = "2026-06-12T01:00:00+00:00"   # 1h after TS0 -> FRESH band
+NOW_STALE = "2026-06-16T00:00:00+00:00"   # 96h after TS0 -> stale (> EDGE_STALE_HOURS 72)
 
 
 def _snap(estimated, timestamp=TS0):
     return {"estimated": estimated, "timestamp": timestamp}
+
+
+def _esnap(estimated, baseline, timestamp=TS0, **extra):
+    return {"estimated": estimated, "baseline": baseline, "timestamp": timestamp, **extra}
+
+
+def _dt(iso: str):
+    from datetime import datetime
+    return datetime.fromisoformat(iso)
 
 
 class AnalyzeTrendTests(unittest.TestCase):
@@ -231,6 +247,113 @@ class MoversRouteTests(unittest.TestCase):
                 resp = client.get("/events/movers")
         self.assertEqual(resp.status_code, 200)
         self.assertIn("movers", resp.json())
+
+
+class AnalyzeEdgeTrajectoryTests(unittest.TestCase):
+    def test_no_numeric_snapshots_is_no_data(self):
+        out = analyze_edge_trajectory([{"estimated": None, "baseline": 50}], now=_dt(NOW_FRESH))
+        self.assertEqual(out["classification"], "no_data")
+        self.assertEqual(out["observations"], 0)
+
+    def test_missing_baseline_snapshot_is_skipped(self):
+        out = analyze_edge_trajectory(
+            [{"estimated": 60, "timestamp": TS0}, _esnap(64, 50)], now=_dt(NOW_FRESH)
+        )
+        self.assertEqual(out["observations"], 1)  # first snap skipped (no baseline)
+        self.assertEqual(out["latest_edge"], 14.0)
+
+    def test_fresh_edge_holding_near_peak(self):
+        snaps = [_esnap(55, 50), _esnap(62, 50), _esnap(64, 50)]  # edges 5,12,14
+        out = analyze_edge_trajectory(snaps, now=_dt(NOW_FRESH))
+        self.assertEqual(out["latest_edge"], 14.0)
+        self.assertEqual(out["peak_edge"], 14.0)
+        self.assertEqual(out["freshness_band"], "FRESH")
+        self.assertEqual(out["classification"], "fresh")
+
+    def test_decaying_edge_shrunk_from_peak(self):
+        snaps = [_esnap(70, 50), _esnap(80, 50), _esnap(56, 50)]  # edges 20,30,6
+        out = analyze_edge_trajectory(snaps, now=_dt(NOW_FRESH))
+        self.assertEqual(out["latest_edge"], 6.0)
+        self.assertEqual(out["peak_edge"], 30.0)
+        self.assertEqual(out["classification"], "decaying")  # 6 < 0.7*30
+
+    def test_closed_edge_below_materiality(self):
+        snaps = [_esnap(60, 50), _esnap(52, 50)]  # edges 10, 2
+        out = analyze_edge_trajectory(snaps, now=_dt(NOW_FRESH))
+        self.assertEqual(out["classification"], "closed")  # latest 2 < watch 3
+
+    def test_stale_when_last_snapshot_old(self):
+        snaps = [_esnap(70, 50), _esnap(90, 50)]  # big edge, but old
+        out = analyze_edge_trajectory(snaps, now=_dt(NOW_STALE))
+        self.assertGreater(out["age_hours"], 72)
+        self.assertEqual(out["classification"], "stale")
+
+
+class RankFreshEdgesTests(unittest.TestCase):
+    def test_keeps_only_fresh_ranked_by_edge(self):
+        histories = {
+            "bigfresh": [_esnap(50, 50), _esnap(90, 50)],   # edge 40, fresh
+            "midfresh": [_esnap(50, 50), _esnap(65, 50)],   # edge 15, fresh
+            "decayed": [_esnap(90, 50), _esnap(53, 50)],    # 40 -> 3 ... 3>=0.7*40? no -> decaying
+            "closed": [_esnap(51, 50)],                     # edge 1 -> closed
+        }
+        out = rank_fresh_edges(histories, limit=10, now=_dt(NOW_FRESH))
+        ids = [e["event_id"] for e in out]
+        self.assertEqual(ids, ["bigfresh", "midfresh"])  # only fresh, by |edge| desc
+        self.assertEqual(set(out[0].keys()), {"event_id", "event_title", "edge"})
+
+    def test_stale_events_excluded(self):
+        histories = {"old": [_esnap(50, 50), _esnap(90, 50)]}  # big edge but old
+        self.assertEqual(rank_fresh_edges(histories, now=_dt(NOW_STALE)), [])
+
+    def test_respects_limit(self):
+        histories = {f"e{i}": [_esnap(50, 50), _esnap(50 + 5 * i, 50)] for i in range(1, 6)}
+        out = rank_fresh_edges(histories, limit=2, now=_dt(NOW_FRESH))
+        self.assertEqual([e["event_id"] for e in out], ["e5", "e4"])
+
+
+class EdgeRouteTests(unittest.TestCase):
+    def test_history_route_includes_edge_block(self):
+        app = FastAPI()
+        app.include_router(events_routes.router, prefix="/events")
+        client = TestClient(app)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_audit.jsonl")
+            with patch.object(audit, "_audit_path", return_value=path):
+                audit.record_event(_record("evtE", 40.0))  # edge 0 (baseline 40)
+                audit.record_event(_record("evtE", 70.0))  # edge 30
+                resp = client.get("/events/evtE/history")
+        self.assertEqual(resp.status_code, 200)
+        edge = resp.json()["edge"]
+        self.assertEqual(edge["latest_edge"], 30.0)
+        self.assertIn("classification", edge)
+
+    def test_fresh_edges_route_returns_only_material_fresh(self):
+        app = FastAPI()
+        app.include_router(events_routes.router, prefix="/events")
+        client = TestClient(app)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_audit.jsonl")
+            with patch.object(audit, "_audit_path", return_value=path):
+                audit.record_event(_record("bigedge", 85.0))    # edge 45 -> fresh
+                audit.record_event(_record("closededge", 41.0))  # edge 1 -> closed
+                resp = client.get("/events/edges/fresh")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        ids = [e["event_id"] for e in body["edges"]]
+        self.assertIn("bigedge", ids)
+        self.assertNotIn("closededge", ids)
+
+    def test_fresh_edges_route_empty_audit(self):
+        app = FastAPI()
+        app.include_router(events_routes.router, prefix="/events")
+        client = TestClient(app)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_audit.jsonl")
+            with patch.object(audit, "_audit_path", return_value=path):
+                resp = client.get("/events/edges/fresh")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"count": 0, "edges": []})
 
 
 if __name__ == "__main__":

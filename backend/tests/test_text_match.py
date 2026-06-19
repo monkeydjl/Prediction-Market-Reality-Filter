@@ -1,8 +1,8 @@
 """Tests for the shared text matching utilities (app/utils/text_match).
 
-These lock the behavior extracted verbatim from auto_resolve_service. The
-market-layer auto_resolve_service now imports these helpers, and the event
-layer's auto-resolve uses them too, so this is the regression net for both.
+These lock the question-similarity matching behavior. The event layer's
+auto-resolve (event_resolve_service) uses these helpers as the fallback match
+for not-yet-linked events, so this is its regression net.
 """
 
 import unittest

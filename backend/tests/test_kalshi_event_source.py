@@ -97,18 +97,18 @@ class KalshiEventSourceTests(unittest.TestCase):
 
     def test_fetch_resolved_markets_maps_results(self):
         raw = [
-            {"title": "Q yes", "markets": [{"result": "yes"}]},
-            {"title": "Q no", "markets": [{"result": "no"}]},
-            {"title": "Q multi", "markets": [{"result": "yes"}, {"result": "no"}]},
-            {"title": "Q none", "markets": [{"result": ""}]},
-            {"title": "", "markets": [{"result": "yes"}]},
+            {"title": "Q yes", "event_ticker": "K-YES", "markets": [{"result": "yes"}]},
+            {"title": "Q no", "event_ticker": "K-NO", "markets": [{"result": "no"}]},
+            {"title": "Q multi", "event_ticker": "K-M", "markets": [{"result": "yes"}, {"result": "no"}]},
+            {"title": "Q none", "event_ticker": "K-X", "markets": [{"result": ""}]},
+            {"title": "", "event_ticker": "K-E", "markets": [{"result": "yes"}]},
         ]
         with patch.object(source, "_fetch_raw_resolved",
                           new=AsyncMock(return_value=raw)):
             out = asyncio.run(source.fetch_resolved_markets(limit=10))
         self.assertEqual(out, [
-            {"question": "Q yes", "actual_outcome": 100.0},
-            {"question": "Q no", "actual_outcome": 0.0},
+            {"id": "K-YES", "question": "Q yes", "actual_outcome": 100.0},
+            {"id": "K-NO", "question": "Q no", "actual_outcome": 0.0},
         ])
 
     def test_fetch_resolved_error_degrades_to_empty(self):

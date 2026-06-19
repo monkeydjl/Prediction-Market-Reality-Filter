@@ -133,7 +133,7 @@ python -m unittest discover -s tests
 
 ```text
 compileall passed
-262 tests, 1 skipped, OK
+350 tests, 1 skipped, OK
 ```
 
 默认测试是无网络、无真实 LLM 调用的回归测试。
@@ -146,9 +146,7 @@ python run.py
 
 默认访问地址：
 
-- 英文 Dashboard：http://localhost:8000/dashboard
-- 中文 Dashboard：http://localhost:8000/dashboard_zh
-- 中文兼容路径：http://localhost:8000/dashboard/zh
+- 仪表盘（根路径）：http://localhost:8000
 - API 文档：http://localhost:8000/docs
 - API 根信息：http://localhost:8000/
 
@@ -165,18 +163,14 @@ backend/
 │   ├── api/
 │   │   ├── router.py                    总路由注册
 │   │   └── routes/
-│   │       ├── events.py                事件情报核心 API
-│   │       ├── scanner.py               旧扫描器兼容 API
-│   │       └── *.py                     其他兼容接口
+│   │       └── events.py                事件情报核心 API
 │   ├── core/
 │   │   ├── config.py                    环境变量配置
 │   │   ├── scheduler.py                 APScheduler 定时任务
 │   │   └── logging.py                   日志配置
 │   ├── memory/
 │   │   ├── event_store.py               事件持久化
-│   │   ├── event_cache.py               事件分析缓存
-│   │   ├── agent_memory.py              旧预测记忆
-│   │   └── market_memory.py             旧市场分析缓存
+│   │   └── event_cache.py               事件分析缓存
 │   ├── models/
 │   │   └── event.py                     事件请求/响应模型
 │   └── services/
@@ -269,7 +263,6 @@ OPEN_WEB_SOURCE_NAME=Open Web
 
 ```env
 GNEWS_MAX_RESULTS=10
-MARKET_SCAN_LIMIT=5
 
 OFFICIAL_RSS_URL=https://www.federalreserve.gov/feeds/press_all.xml
 OFFICIAL_SOURCE_NAME=Federal Reserve
@@ -292,7 +285,6 @@ KALSHI_SOURCE_NAME=Kalshi
 说明：
 
 - `GNEWS_MAX_RESULTS` 控制 Google News 返回数量。
-- `MARKET_SCAN_LIMIT` 控制市场扫描默认数量。
 - `SEC_USER_AGENT` 和 `ECONOMIC_USER_AGENT` 建议改成真实联系人；SEC/BLS 这类站点可能拒绝默认或空 User-Agent。
 - 将 `MANIFOLD_API_URL` 或 `KALSHI_API_URL` 设为空可以禁用对应来源。
 
@@ -302,7 +294,6 @@ KALSHI_SOURCE_NAME=Kalshi
 EVENT_STORE_FILE=event_store.json
 EVENT_AUDIT_FILE=event_audit.jsonl
 EVENT_CACHE_FILE=event_cache.json
-MEMORY_FILE=agent_memory.json
 ```
 
 默认写在 `backend/` 目录。生产部署建议改成专门的数据目录，例如：
@@ -311,7 +302,6 @@ MEMORY_FILE=agent_memory.json
 EVENT_STORE_FILE=/var/lib/eip/event_store.json
 EVENT_AUDIT_FILE=/var/lib/eip/event_audit.jsonl
 EVENT_CACHE_FILE=/var/lib/eip/event_cache.json
-MEMORY_FILE=/var/lib/eip/agent_memory.json
 ```
 
 Windows 可以用：
@@ -320,7 +310,6 @@ Windows 可以用：
 EVENT_STORE_FILE=C:\eip-data\event_store.json
 EVENT_AUDIT_FILE=C:\eip-data\event_audit.jsonl
 EVENT_CACHE_FILE=C:\eip-data\event_cache.json
-MEMORY_FILE=C:\eip-data\agent_memory.json
 ```
 
 ### 4.6 审计日志压缩
@@ -370,7 +359,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 FastAPI 生命周期启动时会：
 
 1. 初始化应用。
-2. 注册 `/dashboard`、`/dashboard_zh`、`/events/*`、`/scan/*` 等路由。
+2. 注册 `/events/*`、`/api` 等路由。
 3. 启动 APScheduler 定时任务。
 4. 挂载 `static/` 静态资源。
 
@@ -382,16 +371,11 @@ FastAPI 生命周期启动时会：
 
 ### 6.1 打开页面
 
-启动服务后访问：
+启动服务后访问根路径：
 
-- 英文：http://localhost:8000/dashboard
-- 中文：http://localhost:8000/dashboard_zh
-- 中文兼容路径：http://localhost:8000/dashboard/zh
+- http://localhost:8000
 
-Dashboard 是静态 HTML + 内联 JavaScript，文件在：
-
-- `static/index.html`
-- `static/index_zh.html`
+Dashboard 是 Next.js 应用，前端代码在 `frontend/`。
 
 ### 6.2 常见操作
 
@@ -692,42 +676,11 @@ curl "http://localhost:8000/events/calibration"
 
 ---
 
-## 8. 兼容 API
+## 8. 接口现状
 
-系统保留了一批早期市场扫描、交易记录和校准接口，主要用于历史兼容和内部验证。
+早期的市场扫描、交易记录和旧校准接口已经移除。当前系统只保留事件情报接口 `/events/*`，以及 `/api`、`/docs` 等基础路由。
 
-根路径 `/` 会列出当前注册的主要兼容接口，包括：
-
-```text
-GET  /scan/summary
-GET  /scan/debug
-GET  /scan/
-GET  /scan/deep
-GET  /scan/cache
-
-POST /analysis/
-
-GET  /calibration/
-GET  /calibration/history
-GET  /calibration/summary
-
-GET  /backtest/baseline
-GET  /backtest/base-rate
-
-POST /resolve/auto
-POST /resolve/manual
-GET  /resolve/pending
-
-POST /trades/open
-POST /trades/close/{id}
-GET  /trades/summary
-GET  /trades/
-
-GET  /markets/
-GET  /news/
-```
-
-新功能优先使用 `/events/*`。旧接口仍可用，但不代表当前产品方向。
+根路径 `/` 会列出当前注册的主要接口。新功能统一使用 `/events/*`。
 
 ---
 
@@ -767,21 +720,7 @@ GET  /news/
 
 事件分析缓存。用于减少重复分析和 LLM 调用。
 
-### 9.2 旧兼容文件
-
-#### `agent_memory.json`
-
-旧预测记忆文件，主要服务早期 calibration / resolve 流程。
-
-#### `analysis_audit.jsonl`
-
-旧市场分析审计日志。
-
-#### `market_cache.json`
-
-旧市场扫描缓存。
-
-### 9.3 生产环境建议
+### 9.2 生产环境建议
 
 生产部署时不要把运行时数据文件留在代码目录里。建议：
 
@@ -805,7 +744,7 @@ python -m unittest discover -s tests
 预期：
 
 ```text
-262 tests, 1 skipped, OK
+350 tests, 1 skipped, OK
 ```
 
 这些测试默认不访问真实网络、不调用真实 LLM，适合每次改代码后运行。
@@ -887,34 +826,21 @@ node -e "const fs=require('fs'); for (const file of ['static/index.html','static
 当前任务：
 
 ```text
-07:00 UTC  morning_scan
-22:00 UTC  evening_resolve
+07:15 UTC  event_discover
 22:30 UTC  event_auto_resolve
 ```
 
-### 11.1 morning_scan
+### 11.1 event_discover
 
-每天 07:00 UTC 运行。
-
-做什么：
-
-- 拉取市场候选。
-- 过滤低流动性、低成交量、极端概率和荒诞问题。
-- 拉取 RSS 和 Google News。
-- 分析有证据支持的市场。
-- 写入旧市场分析审计和预测记忆。
-- 缓存结果。
-
-### 11.2 evening_resolve
-
-每天 22:00 UTC 运行。
+每天 07:15 UTC 运行。
 
 做什么：
 
-- 对旧预测系统运行 auto-resolve。
-- 输出 calibration 摘要到日志。
+- 发现并分析候选事件。
+- 冻结当日预测。
+- 写入事件库与审计日志。
 
-### 11.3 event_auto_resolve
+### 11.2 event_auto_resolve
 
 每天 22:30 UTC 运行。
 
@@ -924,7 +850,7 @@ node -e "const fs=require('fs'); for (const file of ['static/index.html','static
 - 匹配已结算 Polymarket 市场。
 - 写入 outcome 和 calibration。
 
-### 11.4 注意事项
+### 11.3 注意事项
 
 - 本地启动服务也会启动 scheduler。
 - 如果你只想临时调试 API，要注意日志里可能出现定时任务运行记录。
@@ -975,7 +901,6 @@ OPENAI_BASE_URL=https://api.deepseek.com
 EVENT_STORE_FILE=/var/lib/eip/event_store.json
 EVENT_AUDIT_FILE=/var/lib/eip/event_audit.jsonl
 EVENT_CACHE_FILE=/var/lib/eip/event_cache.json
-MEMORY_FILE=/var/lib/eip/agent_memory.json
 ```
 
 systemd service 示例：
@@ -1103,7 +1028,7 @@ allow_origins=["https://your-domain.example.com"]
 
 适合你已经有一个明确问题：
 
-1. 打开 `/dashboard_zh`。
+1. 打开 http://localhost:8000。
 2. 输入事件问题、基准概率和背景信息。
 3. 点击分析。
 4. 查看 estimated probability、change、credibility、impact、value score。
@@ -1154,7 +1079,7 @@ curl "http://localhost:8000/events/movers?limit=10"
 
 - 服务是否运行。
 - `/` 是否返回系统信息。
-- `/dashboard_zh` 是否能打开。
+- http://localhost:8000 是否能打开。
 - `/events/` 是否能列出事件。
 - `event_audit.jsonl` 是否持续增长但没有异常膨胀。
 - 日志中是否有外部 API 403、429、timeout。
@@ -1309,10 +1234,10 @@ ECONOMIC_USER_AGENT=Event Intelligence Platform your-email@example.com
 - `OPENAI_API_KEY` 可用。
 - `OPENAI_MODEL` 和 `OPENAI_BASE_URL` 匹配。
 - `python -m compileall app tests` 通过。
-- `python -m unittest discover -s tests` 通过，当前为 `262 tests, 1 skipped`。
+- `python -m unittest discover -s tests` 通过，当前为 `350 tests, 1 skipped`。
 - `/` 可以访问。
 - `/docs` 可以访问。
-- `/dashboard` 和 `/dashboard_zh` 可以访问。
+- http://localhost:8000 可以访问。
 - `/events/analyze` 能完成一次真实分析。
 - `/events/discover` 能返回结果或合理降级。
 - `event_store.json`、`event_audit.jsonl`、`event_cache.json` 路径可写。
@@ -1338,7 +1263,7 @@ python run.py
 浏览器打开：
 
 ```text
-http://localhost:8000/dashboard_zh
+http://localhost:8000
 ```
 
 然后调用一次：

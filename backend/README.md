@@ -22,7 +22,6 @@ python run.py                          # http://localhost:8000
 | 最大变动事件 | `GET /events/movers` |
 | 相似历史事件 | `GET /events/{id}/similar` |
 | 事件校准 | `GET /events/calibration` |
-| 经典仪表盘 | `/dashboard` ・ `/dashboard_zh` |
 
 ## 主要目录
 
@@ -31,9 +30,7 @@ app/main.py                                  FastAPI app
 app/api/routes/events.py                     Event Intelligence API
 app/services/event_intelligence_service.py   发现 / 分析编排
 app/services/cross_validation_service.py     多模型交叉验证（可选）
-app/agents/                                  概率 / 叙事 LLM agents
 app/memory/event_store.py                    事件持久化
-static/                                       经典仪表盘（单文件）
 tests/                                        无网络回归测试
 ```
 

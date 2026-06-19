@@ -76,7 +76,7 @@ class Outcome(BaseModel):
     actual_outcome: float  # 0-100: 0=NO, 100=YES, middle=partial/probabilistic
     confidence: float      # 0-1: how certain this resolution is
     resolved_at: str       # ISO 8601 timestamp
-    source: str            # "manual" (later: "auto_polymarket", ...)
+    source: str            # "manual", "auto_market", ...
     notes: str = ""        # optional human-readable explanation
 
 
@@ -150,6 +150,75 @@ class Tracking(BaseModel):
 
     status: str = "watching"
     priority: str = "medium"
+
+
+class MarketLink(BaseModel):
+    """Binds an event to a specific prediction-market contract - the join the
+    feedback loop depends on (see docs/user/DATABASE_DESIGN.md).
+
+    Persisted in the SQLite loop store. A link is only eligible to be scored
+    when ``verified`` is True; an unverified link (e.g. a fuzzy question match)
+    is recorded but fail-closed, so an event is never scored against the wrong
+    market's outcome. ``market_question`` and ``resolution_criteria`` are stored
+    so a later resolution can be checked to mean the same thing we predicted.
+    """
+
+    event_id: str
+    market_name: str = ""              # source platform / feed name
+    contract_id: str = ""              # market/contract id on that platform
+    market_question: str = ""          # the market's own question text
+    resolution_criteria: str = ""      # how the market resolves YES/NO
+    link_method: str = "auto"          # auto | manual
+    link_confidence: float = 0.0       # 0..1 (auto = match score; manual = 1.0)
+    verified: bool = False             # only verified links are scored
+    linked_at: str = ""                # ISO 8601 timestamp
+
+
+class Prediction(BaseModel):
+    """A point-in-time committed prediction: the AI probability vs the market
+    price for an event, frozen at decision time, with the raw edge between them.
+
+    One event, one prediction (commitment, not trajectory): exactly one row per
+    event, frozen at first sight and never overwritten or re-versioned - a
+    re-scan is a no-op (UNIQUE(event_id) + ON CONFLICT DO NOTHING). Probability
+    and edge trajectories live in the audit log, not here. Terminal statuses:
+    `scored` (an act row resolved -> in calibration), `observed` (a watch/skip row
+    resolved -> outcome+Brier kept but excluded from calibration), and `voided`
+    (a non-genuine resolution: identity conflict / void market - closed without
+    scoring). `open` is the live committed prediction before resolution.
+
+    raw_edge = ai_probability - market_probability (both 0-100). adjusted_edge is
+    raw_edge trust-weighted by conditional calibration and liquidity (M2). The
+    diagnosis fields (liquidity_factor, qualified, segment_n, segment_skill) are
+    the inputs behind the verdict, frozen at decision time so a decision report
+    can explain WHY without recomputing. ``decision`` is act / watch / skip
+    (legacy default "tracked" predates the M2 Decision Gate).
+    """
+
+    event_id: str
+    contract_id: str = ""
+    platform: str = ""
+    base_rate_category: str = "unknown"   # segment key for conditional calibration
+    ai_probability: float        # 0-100, frozen estimated
+    market_probability: float    # 0-100, frozen market-implied price
+    raw_edge: float              # ai_probability - market_probability
+    trust: float | None = None       # M2: 0-1 calibration trust in this divergence
+    adjusted_edge: float | None = None  # M2: raw_edge * trust * liquidity_factor
+    liquidity: float = 0.0
+    volume: float = 0.0
+    decision: str = "tracked"    # M2: act | watch | skip (tracked = pre-M2 default)
+    # Diagnosis explanation, frozen at decision time (why this verdict, not
+    # recomputed at read): the liquidity weight, whether the segment was
+    # qualified (>= min_samples), its sample count, and its skill (None=dormant).
+    liquidity_factor: float | None = None
+    qualified: bool | None = None
+    segment_n: int | None = None
+    segment_skill: float | None = None
+    created_at: str = ""         # ISO 8601
+    status: str = "open"         # open | scored
+    actual_outcome: float | None = None   # 0-100, filled at resolve
+    brier_score: float | None = None       # filled at resolve
+    resolved_at: str | None = None
 
 
 class EventRecord(BaseModel):

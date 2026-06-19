@@ -151,8 +151,10 @@ def _baseline_pct(market: dict[str, Any]) -> float:
 async def fetch_resolved_markets(limit: int = 200) -> list[dict[str, Any]]:
     """Fetch settled Kalshi events for event auto-resolution.
 
-    Returns [{question, actual_outcome}] from single-leg settled events: the
-    market result yes->100, no->0; anything else is skipped. Empty list when not
+    Returns [{id, question, actual_outcome}] from single-leg settled events: the
+    market result yes->100, no->0; anything else is skipped. `id` is the
+    event_ticker (same scheme as the candidate source's source_id) so the
+    event->market identity holds through to resolve. Empty list when not
     configured or unreachable (graceful), so a down source never breaks
     auto-resolve.
     """
@@ -166,14 +168,15 @@ async def fetch_resolved_markets(limit: int = 200) -> list[dict[str, Any]]:
         if not isinstance(event, dict):
             continue
         question = str(event.get("title", "") or "").strip()
+        ticker = str(event.get("event_ticker", "") or "")
         markets = event.get("markets")
         if not question or not isinstance(markets, list) or len(markets) != 1:
             continue
         result = str((markets[0] or {}).get("result", "") or "").lower()
         if result == "yes":
-            resolved.append({"question": question, "actual_outcome": 100.0})
+            resolved.append({"id": ticker, "question": question, "actual_outcome": 100.0})
         elif result == "no":
-            resolved.append({"question": question, "actual_outcome": 0.0})
+            resolved.append({"id": ticker, "question": question, "actual_outcome": 0.0})
     return resolved
 
 

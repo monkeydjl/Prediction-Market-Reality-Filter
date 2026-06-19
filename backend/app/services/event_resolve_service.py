@@ -10,7 +10,8 @@ the record, and appends an outcome snapshot to the audit log. Centralizing it
 here keeps the calibration computation in one place (no duplication between
 manual and auto paths).
 
-`auto_resolve_events` fetches resolved Polymarket markets, matches each
+`auto_resolve_events` fetches resolved prediction markets from all sources
+(Polymarket, Manifold, Kalshi), matches each
 unresolved local event by question similarity (shared text_match utilities),
 and resolves each match with a calibration snapshot. It mirrors the
 market-layer auto_resolve_service but writes to the event store / event audit
@@ -24,11 +25,14 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.config import settings
+from app.memory.event_market_link_store import get_verified_link, upsert_link
 from app.memory.event_store import get_event, list_all_events, resolve_event
+from app.memory.prediction_store import score_prediction, void_prediction
 from app.services.calibration_service_event import score_event
 from app.services.event_audit_service import histories_by_event, history_for_event, record_outcome
 from app.services.trend_analysis_service import analyze_trend
-from app.utils.text_match import build_index, find_match
+from app.utils.text_match import build_index, find_match, normalize
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +44,7 @@ async def resolve_with_calibration(
     source: str = "manual",
     notes: str = "",
     snapshots: list[dict[str, Any]] | None = None,
+    status: str = "resolved",
 ) -> dict[str, Any] | None:
     """Resolve an event with a settled outcome and a calibration snapshot.
 
@@ -55,12 +60,36 @@ async def resolve_with_calibration(
     caller may pass them when resolving many events to avoid an N-times full
     audit-log read (auto-resolve passes one slice per event from a single
     histories_by_event() read). When None, the snapshots are read here.
+
+    `status` is the outcome state. "resolved" is the normal case and gets a
+    calibration score. A non-resolved status (e.g. "invalid", written when a
+    verified link diverges - see auto_resolve_events) records the outcome marker
+    but is NOT scored, so it never enters the calibration aggregate.
+
+    A manual resolution is itself a human verification of identity, so it records
+    a verified manual link as provenance (a machine match is the only thing the
+    fail-closed gate distrusts).
     """
     entry = get_event(event_id)
     if entry is None:
         return None
 
     record = entry.get("record") or {}
+
+    if source == "manual":
+        upsert_link(
+            event_id,
+            market_name="manual",
+            market_question=record.get("event_title", ""),
+            # Persist the event's own resolution criteria (as the analysis
+            # engine understood it) so a later audit can confirm a resolution
+            # means what we predicted. M0 exit criteria: every prediction traces
+            # to a verified contract AND a resolution-criteria string.
+            resolution_criteria=(record.get("semantics") or {}).get("resolution_criteria", ""),
+            link_method="manual",
+            link_confidence=1.0,
+            verified=True,
+        )
 
     # Outcome snapshots are filtered out so "latest" is the latest probability
     # estimate, not a settlement marker. analyze_trend already skips
@@ -78,15 +107,20 @@ async def resolve_with_calibration(
         # the event still gets a calibration score rather than None.
         estimated = (record.get("probability") or {}).get("baseline", 50.0)
 
-    calibration = score_event(
-        estimated=estimated,
-        actual_outcome=actual_outcome,
-        trajectory_observations=trend["observations"],
-        trajectory_span_hours=trend["span_hours"],
-    )
+    # Only a genuine resolution is scored. An invalid/void outcome records the
+    # marker but carries no calibration, so it is excluded from Brier.
+    if status == "resolved":
+        calibration = score_event(
+            estimated=estimated,
+            actual_outcome=actual_outcome,
+            trajectory_observations=trend["observations"],
+            trajectory_span_hours=trend["span_hours"],
+        )
+    else:
+        calibration = None
 
     outcome = {
-        "status": "resolved",
+        "status": status,
         "actual_outcome": actual_outcome,
         "confidence": confidence,
         "resolved_at": datetime.now(timezone.utc).isoformat(),
@@ -96,17 +130,28 @@ async def resolve_with_calibration(
     updated = resolve_event(event_id, outcome, calibration=calibration)
     record = (updated or {}).get("record") or {}
     record_outcome(event_id, record.get("event_title", ""), outcome)
+    # Score the event's frozen, point-in-time prediction against the outcome.
+    # A genuine resolution scores it (act -> scored, watch/skip -> observed); a
+    # non-genuine outcome (invalid identity conflict / void) closes the open
+    # prediction as `voided` instead - no Brier, but it leaves the opportunity
+    # surface so an invalidated event stops showing as actionable.
+    if status == "resolved":
+        score_prediction(event_id, actual_outcome)
+    else:
+        void_prediction(event_id)
     return updated
 
 
 async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
-    """Auto-resolve events whose questions match resolved Polymarket markets.
+    """Auto-resolve events whose questions match resolved prediction markets
+    (Polymarket, Manifold, Kalshi).
 
-    Fetches resolved markets, builds a question index, and for each unresolved
-    local event whose question matches (exact normalized key or fuzzy overlap
-    >= FUZZY_THRESHOLD), resolves it with a calibration snapshot
-    (source = "auto_polymarket"). Already-resolved events are skipped. Returns
-    a summary; never raises (network / match failures degrade to fewer
+    Fetches resolved markets from all sources concurrently, builds a question
+    index, and for each unresolved local event whose question matches (exact
+    normalized key or fuzzy overlap >= FUZZY_THRESHOLD), resolves it with a
+    calibration snapshot (source = "auto_market"). Already-resolved events are
+    skipped. Returns a summary; never raises (network / match failures
+    degrade to fewer
     resolutions).
     """
     from app.services.polymarket_history_service import (
@@ -139,15 +184,37 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
             logger.warning("auto_resolve: %s resolved fetch failed: %s", name, result)
             continue
         by_source[name] = len(result)
+        for market in result:
+            market["_source_platform"] = name  # tag for link provenance
         resolved_markets.extend(result)
 
     if not resolved_markets:
         return {"status": "no_resolved_markets", "resolved_count": 0,
+                "pending_count": 0, "invalid_count": 0,
                 "checked_count": 0, "unresolved_events": _count_unresolved(),
                 "matches": [], "by_source": by_source}
 
     index = build_index(resolved_markets)
+    # Map a matched question back to its market record so we can persist the
+    # contract identity on the link. Keyed by the same normalized question as
+    # the index (later wins, matching build_index).
+    market_by_key = {
+        normalize(m.get("question", "")): m
+        for m in resolved_markets if m.get("question")
+    }
+    # Contract-id index: the PRIMARY settlement path. An event already bound to a
+    # verified contract is resolved the moment that contract id appears in the
+    # resolved set - no dependence on question-text staying byte-identical between
+    # freeze and settle. Text matching (market_by_key) is only the fallback for
+    # events not yet bound to a contract.
+    market_by_contract = {
+        str(m.get("id") or m.get("contract_id")): m
+        for m in resolved_markets
+        if (m.get("id") or m.get("contract_id"))
+    }
     resolved_count = 0
+    pending_count = 0
+    invalid_count = 0
     match_log: list[dict[str, Any]] = []
 
     # Scan EVERY stored event (unranked, unbounded), not just the top-200 by
@@ -165,6 +232,43 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
         event_id = entry.get("event_id")
         if not event_id:
             continue
+
+        # PRIMARY path: if the event is already bound to a verified contract and
+        # that contract is in the resolved set, settle directly by id - no text
+        # match needed. This is what keeps a linked event from going stale just
+        # because the market's question wording drifted since freeze.
+        linked = get_verified_link(event_id)
+        if linked and linked.get("contract_id"):
+            settled = market_by_contract.get(str(linked["contract_id"]))
+            if settled is not None:
+                try:
+                    await resolve_with_calibration(
+                        event_id=event_id,
+                        actual_outcome=settled.get("actual_outcome"),
+                        confidence=1.0,
+                        source="auto_market",
+                        notes=f"contract match: {linked['contract_id']}",
+                        snapshots=histories.get(event_id, []),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "auto_resolve: failed to resolve linked event %s: %s",
+                        event_id, exc,
+                    )
+                    continue
+                resolved_count += 1
+                match_log.append({
+                    "event_id": event_id,
+                    "event_title": (record.get("event_title") or "")[:80],
+                    "matched_to": linked["contract_id"],
+                    "result": "resolved_by_contract",
+                })
+                continue
+            # Linked but its contract has not settled yet: do NOT fall through to
+            # text matching (that could match a DIFFERENT market and trigger a
+            # false divergence). Wait for the bound contract to settle.
+            continue
+
         question = record.get("event_title") or ""
         if not question:
             # No title means nothing to match on; do NOT fall back to
@@ -174,6 +278,46 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
         if match is None:
             continue
         matched_question, actual_outcome, score = match
+        market = market_by_key.get(normalize(matched_question)) or {}
+        contract_id = str(market.get("id") or market.get("contract_id") or "")
+        market_name = str(market.get("_source_platform", ""))
+        verified = score >= settings.AUTO_VERIFY_THRESHOLD
+
+        # This is the fallback path for an event NOT yet bound to a verified
+        # contract (linked events settle by contract id above and never reach
+        # here). The match binds the event to its contract for the first time;
+        # there is no prior link to diverge from, so the old identity-conflict
+        # check is unreachable here and has been removed - contract-first
+        # settlement now provides the no-wrong-contract guarantee.
+        upsert_link(
+            event_id,
+            market_name=market_name,
+            contract_id=contract_id,
+            market_question=matched_question,
+            # Event-side resolution criteria (as our analysis understood it).
+            # The matched market's OWN criteria is not in fetch_resolved_markets
+            # yet (a source-adapter change); record what we have so the column
+            # is meaningful rather than empty. See V2_ROADMAP M0 exit criteria.
+            resolution_criteria=(record.get("semantics") or {}).get("resolution_criteria", ""),
+            link_method="auto",
+            link_confidence=score,
+            verified=verified,
+        )
+
+        # Fail-closed gate: an unverified (fuzzy) link is recorded for human
+        # review but never scored, so a fuzzy match cannot silently resolve an
+        # event against the wrong outcome.
+        if not verified:
+            pending_count += 1
+            match_log.append({
+                "event_id": event_id,
+                "event_title": question[:80],
+                "matched_to": matched_question[:80],
+                "match_score": round(score, 3),
+                "result": "pending",
+            })
+            continue
+
         try:
             await resolve_with_calibration(
                 event_id=event_id,
@@ -195,6 +339,7 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
             "matched_to": matched_question[:80],
             "actual_outcome": actual_outcome,
             "match_score": round(score, 3),
+            "result": "resolved",
         })
 
     unresolved_events = sum(
@@ -204,6 +349,8 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
     return {
         "status": "ok",
         "resolved_count": resolved_count,
+        "pending_count": pending_count,
+        "invalid_count": invalid_count,
         "checked_count": len(resolved_markets),
         "unresolved_events": unresolved_events,
         "matches": match_log,

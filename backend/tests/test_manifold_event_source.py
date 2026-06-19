@@ -89,9 +89,9 @@ class ManifoldEventSourceTests(unittest.TestCase):
 
     def test_fetch_resolved_markets_maps_outcomes(self):
         raw = [
-            {"question": "Q yes", "isResolved": True, "resolution": "YES"},
-            {"question": "Q no", "isResolved": True, "resolution": "NO"},
-            {"question": "Q mkt", "isResolved": True, "resolution": "MKT",
+            {"id": "m-yes", "question": "Q yes", "isResolved": True, "resolution": "YES"},
+            {"id": "m-no", "question": "Q no", "isResolved": True, "resolution": "NO"},
+            {"id": "m-mkt", "question": "Q mkt", "isResolved": True, "resolution": "MKT",
              "resolutionProbability": 0.7},
             {"question": "Q cancel", "isResolved": True, "resolution": "CANCEL"},
             {"question": "Q open", "isResolved": False, "resolution": ""},
@@ -100,9 +100,9 @@ class ManifoldEventSourceTests(unittest.TestCase):
                           new=AsyncMock(return_value=raw)):
             out = asyncio.run(source.fetch_resolved_markets(limit=10))
         self.assertEqual(out, [
-            {"question": "Q yes", "actual_outcome": 100.0},
-            {"question": "Q no", "actual_outcome": 0.0},
-            {"question": "Q mkt", "actual_outcome": 70.0},
+            {"id": "m-yes", "question": "Q yes", "actual_outcome": 100.0},
+            {"id": "m-no", "question": "Q no", "actual_outcome": 0.0},
+            {"id": "m-mkt", "question": "Q mkt", "actual_outcome": 70.0},
         ])
 
     def test_fetch_resolved_error_degrades_to_empty(self):

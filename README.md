@@ -13,7 +13,7 @@ AI 驱动的**事件情报与概率变化分析平台**。采集公开信息，�
 | 部分 | 技术 | 说明 |
 |------|------|------|
 | `backend/` | FastAPI + Python | 事件发现 / 分析 / 存储 / 校准 API，多源采集，多模型交叉验证 |
-| `frontend/` | Next.js 16 (静态导出) | 仪表盘 UI，构建后由后端在 `/app` 路径一并服务 |
+| `frontend/` | Next.js 16 (静态导出) | 仪表盘 UI，构建后由后端在 `/` 路径一并服务 |
 
 生产模式下前端构建到 `frontend/out/`，由 FastAPI 同源服务，整个系统跑在一个端口（`:8000`）。
 
@@ -44,8 +44,7 @@ npm run build
 
 访问：
 
-- 新仪表盘：http://localhost:8000/app
-- 经典仪表盘：http://localhost:8000/dashboard ・ http://localhost:8000/dashboard_zh
+- 仪表盘：http://localhost:8000
 - API 文档：http://localhost:8000/docs
 
 ## 配置

@@ -184,6 +184,26 @@ class RelevanceWordBoundaryTests(unittest.TestCase):
             0.0,
         )
 
+    def test_matches_regardless_of_case(self):
+        """Regression: question tokens are lowercased but news_text keeps its
+        original casing, so matching MUST be case-insensitive. A literal \\bregex
+        would silently never match "ETH" / "Bitcoin" real headlines - worse than
+        the old substring match. Real news titles are almost always capitalized."""
+        # Uppercase, mixed-case, title-case headlines all match.
+        self.assertGreater(
+            relevance_score("Will ETH rally?", "ETH breaks out to a new high", None),
+            0.0,
+        )
+        self.assertGreater(
+            relevance_score("Will Bitcoin reach $100k?", "Bitcoin Nears All-Time High", None),
+            0.0,
+        )
+        # Word-boundary still holds on mixed case: "ETH" must not match "HEGSETH".
+        self.assertEqual(
+            relevance_score("Will ETH rally?", "HEGSETH may leave the cabinet", None),
+            0.0,
+        )
+
     def test_non_alphanumeric_token_falls_back_to_substring(self):
         # A token like "$100k" starts with a non-word char, so there is no word
         # boundary before it; it falls back to a substring match and still hits.

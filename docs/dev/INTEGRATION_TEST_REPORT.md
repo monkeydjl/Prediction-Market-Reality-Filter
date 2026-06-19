@@ -183,7 +183,7 @@ OK
 
 1. **LLM Cost**: Each event analysis costs ~$0.001-0.003 (depending on provider)
 2. **Rate Limits**: Google News has rate limits (not hit in tests)
-3. **Polymarket Dependency**: Event discovery currently only supports Polymarket
+3. **Multi-source Event Discovery**: Supports Polymarket, Manifold, and Kalshi (auto-resolve matches all three)
 4. **News Quality**: Some RSS sources occasionally return low-quality articles
 
 ---
@@ -211,7 +211,7 @@ OK
 - ⚠️ No security audit performed
 - ⚠️ No monitoring/alerting configured
 
-**Production Readiness**: 70% - Core features work, but operational concerns remain
+**Production Readiness**: Core features validated with 350 passing tests; operational hardening (load testing, security audit, monitoring) remains
 
 ---
 

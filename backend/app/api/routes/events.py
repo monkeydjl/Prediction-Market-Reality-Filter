@@ -1,5 +1,12 @@
 from fastapi import APIRouter, Body, HTTPException, Query
 
+from app.memory.event_market_link_store import list_pending, set_verified
+from app.memory.prediction_store import (
+    calibration_summary,
+    get_prediction,
+    list_open_opportunities,
+    list_recent,
+)
 from app.memory.event_store import (
     get_event,
     list_events,
@@ -8,6 +15,7 @@ from app.memory.event_store import (
 )
 from app.models.event import EventAnalysisRequest
 from app.services.calibration_service_event import summarize
+from app.services.decision_report_service import build_decision_report
 from app.services.event_audit_service import histories_by_event, history_for_event
 from app.services.event_intelligence_service import (
     analyze_event_question,
@@ -18,7 +26,12 @@ from app.services.event_resolve_service import (
     resolve_with_calibration,
 )
 from app.services.historical_matching_service import find_similar
-from app.services.trend_analysis_service import analyze_trend, rank_movers
+from app.services.trend_analysis_service import (
+    analyze_edge_trajectory,
+    analyze_trend,
+    rank_fresh_edges,
+    rank_movers,
+)
 
 
 router = APIRouter()
@@ -150,6 +163,7 @@ async def get_event_probability_history(event_id: str):
         "event_id": event_id,
         "count": len(probability_snapshots),
         "trend": analyze_trend(probability_snapshots),
+        "edge": analyze_edge_trajectory(probability_snapshots),
         "history": probability_snapshots,
     }
 
@@ -188,14 +202,114 @@ async def resolve_event_intelligence(
 async def auto_resolve_event_intelligence(
     limit: int = Query(default=200, ge=1, le=1000),
 ):
-    """Auto-resolve events whose questions match resolved Polymarket markets.
+    """Auto-resolve events whose questions match resolved prediction markets
+    (Polymarket, Manifold, Kalshi).
 
-    Fetches resolved markets, matches each unresolved local event by question
-    similarity, and resolves each match with a calibration snapshot
-    (source = "auto_polymarket"). Returns a summary
+    Fetches resolved markets from all sources, matches each unresolved local
+    event by question similarity, and resolves each match with a calibration
+    snapshot (source = "auto_market"). Returns a summary
     {status, resolved_count, checked_count, unresolved_events, matches}.
     """
     return await auto_resolve_events(resolved_limit=limit)
+
+
+@router.get("/links/pending")
+async def list_pending_links():
+    """List event->market links awaiting human verification.
+
+    These are fuzzy auto-matches recorded below the auto-verify threshold: they
+    are NOT scored (fail-closed) until a human verifies them via
+    POST /events/{event_id}/link/verify. Returns the review queue.
+    """
+    return {"pending": list_pending()}
+
+
+@router.post("/{event_id}/link/verify")
+async def verify_event_link(
+    event_id: str,
+    contract_id: str = Body(default="", embed=True),
+):
+    """Verify (promote) a pending event->market link so it becomes eligible to
+    be scored. `contract_id` identifies which of the event's links to verify
+    (the value shown in the pending queue). 404 if no such link exists.
+
+    Verifying only marks the link trustworthy; the event is scored on the next
+    auto-resolve (or a manual resolve), not here.
+    """
+    updated = set_verified(event_id, contract_id, True)
+    if updated is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No link for event '{event_id}' with contract '{contract_id}'",
+        )
+    return updated
+
+
+@router.get("/predictions/calibration")
+async def get_prediction_calibration():
+    """Calibration scorecard over committed, point-in-time predictions: an overall
+    block (mean Brier, grade, count, mean raw edge) plus `realized_edge` /
+    `directional_hit_rate` (did our divergences from the market move toward reality)
+    and a per-category breakdown (`by_category`, the conditional calibration the
+    Disagreement Diagnosis trust-weights with). Empty (no_data) until predictions resolve.
+    """
+    return calibration_summary()
+
+
+@router.get("/predictions/recent")
+async def get_recent_predictions(limit: int = Query(default=50, ge=1, le=200)):
+    """Recent frozen predictions (AI vs market price, raw edge, and - once
+    resolved - the scored Brier). Visibility into what the loop has committed."""
+    return {"predictions": list_recent(limit=limit)}
+
+
+@router.get("/decisions/open")
+async def get_open_decisions(
+    limit: int = Query(default=50, ge=1, le=200),
+    decision: str | None = Query(default=None, pattern="^(act|watch)$"),
+):
+    """Open opportunities: unresolved committed predictions worth a human's
+    attention, ranked by absolute adjusted edge, each rendered as a decision
+    report (event / probability / market view / edge / confidence / recommendation
+    / risk). Defaults to act + watch; pass `decision=act` to narrow (an invalid
+    value is rejected with 422 rather than silently returning nothing). While
+    every category is dormant this surfaces watch-grade items (or is empty).
+    """
+    decisions = (decision,) if decision else ("act", "watch")
+    reports = []
+    for prediction in list_open_opportunities(decisions=decisions, limit=limit):
+        entry = get_event(prediction["event_id"])
+        record = entry.get("record") if entry else None
+        reports.append(build_decision_report(prediction, record))
+    return {"count": len(reports), "decisions": reports}
+
+
+@router.get("/edges/fresh")
+async def get_fresh_edges(limit: int = Query(default=10, ge=1, le=50)):
+    """Events with a live (fresh) edge: a material AI-vs-market divergence that is
+    recent and holding near its peak, ranked by edge size. The 'catch edges when
+    real' surface - it deliberately excludes decayed or stale edges.
+    """
+    edges = rank_fresh_edges(histories_by_event(), limit=limit)
+    return {"count": len(edges), "edges": edges}
+
+
+@router.get("/{event_id}/decision")
+async def get_event_decision(event_id: str):
+    """The decision report for one event: its committed prediction joined with the
+    event intelligence record (event / probability / market view / edge+trust /
+    confidence / recommendation / risk). 404 when the event has no committed
+    prediction (e.g. a non-market event, which has no edge to act on).
+    """
+    prediction = get_prediction(event_id)
+    if prediction is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No committed prediction for event '{event_id}'",
+        )
+    entry = get_event(event_id)
+    record = entry.get("record") if entry else None
+    return build_decision_report(prediction, record)
 
 
 @router.get("/{event_id}/similar")

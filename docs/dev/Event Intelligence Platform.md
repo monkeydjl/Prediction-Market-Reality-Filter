@@ -382,8 +382,6 @@ Telegram推送
 * 概率历史：`GET /events/{event_id}/history`
 * 最大变动事件：`GET /events/movers`
 * 相似历史事件：`GET /events/{event_id}/similar`
-* 英文 Dashboard：`/dashboard`
-* 中文 Dashboard：`/dashboard_zh`
 * 可选多模型交叉验证
 * 可选开放网页事件抽取
 
@@ -404,7 +402,7 @@ python -m unittest discover -s tests   -> passed, 141 tests (1 skipped)
 * 为 JSON 文件存储迁移到数据库做设计决策
 * 保持新功能围绕事件情报，而不是自动交易
 
-遗留 `/scan/*`、`/trades/*`、`/analysis/*` 等接口保留为兼容层或历史实验能力，不应作为新产品入口。
+遗留的市场交易层（`/scan/*`、`/trades/*`、`/analysis/*`、多 Agent 编排等）已于 2026-06 移除，产品入口收敛到事件情报闭环 `/events/*`。
 
 ---
 

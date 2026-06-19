@@ -1,89 +1,20 @@
 """Tests for scheduler job logic.
 
-The scheduler jobs are thin glue (fetch -> process -> log), but
-_job_morning_scan was refactored from a serial loop to a Semaphore(4) +
-asyncio.gather concurrent model, so this locks the concurrency behavior:
-every market is processed exactly once, the signal-count aggregation is
-correct, and a single market's failure does not abort the scan.
+The scheduler jobs are thin glue (fetch -> process -> log). These lock the
+event-layer jobs: event_discover passes the configured limit and forces a
+fresh re-scan, a discovery failure cannot crash the scheduler, the job is
+gated on EVENT_DISCOVER_ENABLED, and the misfire-grace defaults are set so a
+missed run is not silently dropped.
 
-All external dependencies are mocked (fetch_markets / fetch_google_news /
-analyze_market / persistence), so no network or LLM is hit.
+All external dependencies are mocked (discover_events), so no network or LLM
+is hit.
 """
 
 import asyncio
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.core import scheduler
-from app.models.market import MarketModel
-
-
-def _market(qid, signal_target=None):
-    """A valid market (passes _is_valid_market: liquidity>=5k, volume>=1k,
-    yes_price 0.08-0.92, non-absurd question)."""
-    return MarketModel(
-        id=str(qid),
-        question=f"Will something real happen before 2030 number {qid}?",
-        yes_price=0.45,
-        volume=10_000.0,
-        liquidity=20_000.0,
-    )
-
-
-class MorningScanConcurrencyTests(unittest.TestCase):
-    """_job_morning_scan processes markets concurrently (Semaphore 4) and
-    aggregates signal counts correctly."""
-
-    def _run_with_mocks(self, markets, analyze_side_effect=None):
-        """Run _job_morning_scan with all deps mocked; return (signal_counts,
-        actionable_len, log_calls)."""
-        async def fake_analyze(**kwargs):
-            if analyze_side_effect:
-                return analyze_side_effect(kwargs.get("market_question", ""))
-            return {"signal": "WATCHLIST", "ai_probability": 50.0,
-                    "confidence_score": 0.5, "divergence": 0.0,
-                    "market_question": kwargs.get("market_question", "")}
-
-        with patch("app.services.polymarket_service.fetch_markets",
-                   new=AsyncMock(return_value=markets)), \
-                patch("app.services.gnews_service.fetch_google_news",
-                      new=AsyncMock(return_value=[])), \
-                patch("app.services.rss_service.fetch_news",
-                      new=AsyncMock(return_value=[])), \
-                patch("app.services.ai_analysis_service.analyze_market",
-                      new=AsyncMock(side_effect=fake_analyze)), \
-                patch("app.services.analysis_audit_service.record_analysis"), \
-                patch("app.memory.market_memory.get_cached_analysis",
-                      return_value=None), \
-                patch("app.memory.market_memory.set_cached_analysis"), \
-                patch("app.memory.agent_memory.add_prediction"):
-            asyncio.run(scheduler._job_morning_scan())
-
-    def test_all_markets_processed_and_counted(self):
-        markets = [_market(i) for i in range(6)]
-        # No analyze failures, all return WATCHLIST.
-        self._run_with_mocks(markets)
-        # If we got here without raising, the gather completed for all 6.
-
-    def test_single_market_failure_does_not_abort_scan(self):
-        markets = [_market(i) for i in range(4)]
-
-        def side_effect(question):
-            if "number 2" in question:
-                raise RuntimeError("analyze blew up")
-            return {"signal": "WATCHLIST", "ai_probability": 50.0,
-                    "confidence_score": 0.5, "divergence": 0.0,
-                    "market_question": question}
-
-        # Should not raise: the failing market is isolated, the rest still run.
-        self._run_with_mocks(markets, analyze_side_effect=side_effect)
-
-    def test_invalid_market_is_skipped(self):
-        # yes_price 0.95 -> prob 95 >= 92 certainty ceiling -> invalid.
-        m = MarketModel(id="x", question="Will something real happen before 2030?",
-                        yes_price=0.95, volume=10_000.0, liquidity=20_000.0)
-        self._run_with_mocks([m])
-        # Should complete; the invalid market is skipped (not analyzed).
 
 
 class JobDefaultsTests(unittest.TestCase):
@@ -93,6 +24,63 @@ class JobDefaultsTests(unittest.TestCase):
         defaults = scheduler.scheduler._job_defaults
         self.assertTrue(defaults.get("coalesce"))
         self.assertGreater(defaults.get("misfire_grace_time", 0), 60)
+
+
+class EventDiscoverJobTests(unittest.TestCase):
+    """_job_event_discover runs the event-layer discovery (which freezes
+    predictions), passing the configured limit and forcing a fresh re-scan."""
+
+    def test_job_calls_discover_events_with_config(self):
+        captured = {}
+
+        async def fake_discover(**kwargs):
+            captured.update(kwargs)
+            return {"count": 3}
+
+        with patch("app.services.event_intelligence_service.discover_events",
+                   new=AsyncMock(side_effect=fake_discover)), \
+                patch.object(scheduler.settings, "EVENT_DISCOVER_ENABLED", True), \
+                patch.object(scheduler.settings, "EVENT_DISCOVER_LIMIT", 7):
+            asyncio.run(scheduler._job_event_discover())
+        self.assertEqual(captured.get("limit"), 7)
+        self.assertEqual(captured.get("use_cache"), False)  # fresh re-scan each run
+
+    def test_job_failure_is_isolated(self):
+        with patch("app.services.event_intelligence_service.discover_events",
+                   new=AsyncMock(side_effect=RuntimeError("boom"))), \
+                patch.object(scheduler.settings, "EVENT_DISCOVER_ENABLED", True):
+            # Must not raise: a discovery failure cannot crash the scheduler.
+            asyncio.run(scheduler._job_event_discover())
+
+    def test_job_skips_when_disabled(self):
+        mock_discover = AsyncMock(return_value={"count": 1})
+        with patch("app.services.event_intelligence_service.discover_events",
+                   new=mock_discover), \
+                patch.object(scheduler.settings, "EVENT_DISCOVER_ENABLED", False):
+            asyncio.run(scheduler._job_event_discover())
+        mock_discover.assert_not_called()
+
+
+class EventDiscoverRegistrationTests(unittest.TestCase):
+    """The event_discover job is registered only when EVENT_DISCOVER_ENABLED;
+    event_auto_resolve is always registered."""
+
+    def _registered_ids(self, enabled):
+        fake = MagicMock()
+        with patch.object(scheduler, "scheduler", fake), \
+                patch.object(scheduler.settings, "EVENT_DISCOVER_ENABLED", enabled):
+            scheduler.start_scheduler()
+        return [call.kwargs.get("id") for call in fake.add_job.call_args_list]
+
+    def test_registered_when_enabled(self):
+        ids = self._registered_ids(True)
+        self.assertIn("event_discover", ids)
+        self.assertIn("event_auto_resolve", ids)
+
+    def test_not_registered_when_disabled(self):
+        ids = self._registered_ids(False)
+        self.assertNotIn("event_discover", ids)
+        self.assertIn("event_auto_resolve", ids)  # always registered
 
 
 if __name__ == "__main__":

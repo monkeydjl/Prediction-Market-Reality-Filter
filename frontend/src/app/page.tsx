@@ -60,27 +60,12 @@ export default function DashboardPage() {
     }
   }, []);
 
+  // Initial load on mount. `load` is stable (useCallback with []), so this
+  // runs once. React 18+ ignores state updates after unmount, so no cancelled
+  // guard is needed.
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await fetchDashboardData();
-        if (cancelled) return;
-        setEvents(data.events);
-        setMovers(data.movers);
-        setSparklines(data.sparklines);
-      } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "加载失败");
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    load();
+  }, [load]);
 
   async function discover() {
     setDiscovering(true);

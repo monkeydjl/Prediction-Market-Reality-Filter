@@ -15,8 +15,10 @@ Event vocabulary only (no trading terms). Net direction is rising / falling /
 stable, mirroring event_intelligence_service.probability_direction.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
+
+from app.core.config import settings
 
 # Moves within +-2 points are "stable" - the same band probability_direction uses.
 _STABLE_BAND = 2.0
@@ -172,3 +174,139 @@ def _latest_title(snapshots: list[dict[str, Any]]) -> str:
         if title:
             return str(title)
     return ""
+
+
+def analyze_edge_trajectory(
+    snapshots: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Summarize how an event's edge (AI - market) has moved over its snapshots.
+
+    Each audit snapshot carries `baseline` (market price) and `estimated` (AI
+    probability); edge = estimated - baseline per snapshot (oldest-to-newest).
+    Snapshots missing either value are skipped (outcome markers have estimated
+    None, so they drop out). Returns the edge series summary plus a freshness
+    classification:
+
+      no_data  - no usable snapshots
+      stale    - latest snapshot older than EDGE_STALE_HOURS (info is old)
+      closed   - latest edge below the materiality floor (DECISION_WATCH_EDGE)
+      fresh    - material edge holding near its peak (|latest| >= 0.7*|peak|)
+      decaying - material edge that has shrunk from its peak
+
+    `now` defaults to the current UTC time; pass it for deterministic tests.
+    """
+    edges: list[float] = []
+    times: list[Any] = []
+    for snap in snapshots:
+        try:
+            estimated = float(snap.get("estimated"))
+            baseline = float(snap.get("baseline"))
+        except (TypeError, ValueError):
+            continue
+        edges.append(estimated - baseline)
+        times.append(snap.get("timestamp"))
+
+    count = len(edges)
+    if count == 0:
+        return _empty_edge()
+
+    first = edges[0]
+    latest = edges[-1]
+    peak = max(edges, key=abs)  # signed edge with the largest magnitude
+    recent_edge_change = round(edges[-1] - edges[-2], 2) if count >= 2 else 0.0
+    age_hours = _age_hours(times[-1], now)
+
+    return {
+        "observations": count,
+        "latest_edge": round(latest, 2),
+        "first_edge": round(first, 2),
+        "peak_edge": round(peak, 2),
+        "net_edge_change": round(latest - first, 2),
+        "recent_edge_change": recent_edge_change,
+        "first_seen": times[0],
+        "last_seen": times[-1],
+        "span_hours": _span_hours(times[0], times[-1]),
+        "age_hours": age_hours,
+        "freshness_band": _freshness_band(age_hours),
+        "classification": _classify_edge(latest, peak, age_hours),
+    }
+
+
+def _empty_edge() -> dict[str, Any]:
+    return {
+        "observations": 0,
+        "latest_edge": None,
+        "first_edge": None,
+        "peak_edge": None,
+        "net_edge_change": 0.0,
+        "recent_edge_change": 0.0,
+        "first_seen": None,
+        "last_seen": None,
+        "span_hours": None,
+        "age_hours": None,
+        "freshness_band": "UNKNOWN",
+        "classification": "no_data",
+    }
+
+
+def _age_hours(last_seen: Any, now: datetime | None) -> float | None:
+    last_dt = _parse_timestamp(last_seen)
+    if last_dt is None:
+        return None
+    if last_dt.tzinfo is None:
+        last_dt = last_dt.replace(tzinfo=timezone.utc)
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return round((now - last_dt).total_seconds() / 3600.0, 2)
+
+
+def _freshness_band(age_hours: float | None) -> str:
+    if age_hours is None:
+        return "UNKNOWN"
+    if age_hours <= 24:
+        return "FRESH"
+    if age_hours <= 72:
+        return "WARM"
+    if age_hours <= 168:
+        return "COOL"
+    return "STALE"
+
+
+def _classify_edge(latest: float, peak: float, age_hours: float | None) -> str:
+    if age_hours is not None and age_hours > settings.EDGE_STALE_HOURS:
+        return "stale"
+    if abs(latest) < settings.DECISION_WATCH_EDGE:
+        return "closed"
+    if abs(peak) > 0 and abs(latest) >= 0.7 * abs(peak):
+        return "fresh"
+    return "decaying"
+
+
+def rank_fresh_edges(
+    histories: dict[str, list[dict[str, Any]]],
+    limit: int = 10,
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Rank events by a live (fresh) edge - the 'catch edges when real' surface.
+
+    `histories` maps event_id -> snapshots (oldest-to-newest). Each event's edge
+    trajectory is classified; only those whose edge is currently `fresh` (recent
+    and holding near its peak) are kept, ranked by |latest_edge| descending.
+    """
+    fresh: list[dict[str, Any]] = []
+    for event_id, snapshots in histories.items():
+        edge = analyze_edge_trajectory(snapshots, now=now)
+        if edge["classification"] != "fresh":
+            continue
+        fresh.append({
+            "event_id": event_id,
+            "event_title": _latest_title(snapshots),
+            "edge": edge,
+        })
+    fresh.sort(key=lambda item: abs(item["edge"]["latest_edge"]), reverse=True)
+    return fresh[:limit]

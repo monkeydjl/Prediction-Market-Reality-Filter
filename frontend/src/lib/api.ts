@@ -20,6 +20,77 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export interface CalibrationAgg {
+  brier_score: number | null;
+  skill_score: number | null;
+  grade: string;
+  n: number;
+}
+
+// A committed prediction rendered for human review (M5 decision report).
+// Mirrors decision_report_service.build_decision_report.
+export interface DecisionReport {
+  event_id: string;
+  event: { title: string; summary: string };
+  probability: {
+    estimated: number | null;
+    baseline: number | null;
+    change: number | null;
+    direction: string | null;
+  };
+  market_view: {
+    market_probability: number | null;
+    platform: string;
+    liquidity: number | null;
+    volume: number | null;
+  };
+  edge: { raw: number | null; adjusted: number | null; trust: number | null };
+  diagnosis: {
+    qualified: boolean | null;
+    segment_n: number | null;
+    segment_skill: number | null;
+    liquidity_factor: number | null;
+    reason: string;
+  };
+  confidence: { level: string | null; score: number | null; confidence: number | null };
+  recommendation: { decision: string | null; action: string };
+  risk: { level: string | null; flags: string[] };
+  category: string | null;
+  status: string | null;
+}
+
+// An event's edge trajectory + freshness (M5 fresh-edge surface).
+// Mirrors trend_analysis_service.analyze_edge_trajectory.
+export interface EdgeTrajectory {
+  observations: number;
+  latest_edge: number | null;
+  first_edge: number | null;
+  peak_edge: number | null;
+  net_edge_change: number;
+  recent_edge_change: number;
+  age_hours: number | null;
+  freshness_band: string;
+  classification: string; // no_data | stale | closed | fresh | decaying
+}
+
+export interface FreshEdge {
+  event_id: string;
+  event_title: string;
+  edge: EdgeTrajectory;
+}
+
+// The act-only prediction calibration scorecard (M2/M5).
+// Mirrors prediction_store.calibration_summary.
+export interface PredictionCalibration {
+  n: number;
+  brier_score: number | null;
+  grade: string;
+  mean_raw_edge: number | null;
+  realized_edge: number | null;
+  directional_hit_rate: number | null;
+  by_category: Record<string, { n: number; brier_score: number; skill_score: number; grade: string }>;
+}
+
 export const eventsApi = {
   discover: (limit = 2, useCache = false, signal?: AbortSignal) =>
     api<{ events: EventRecord[]; source?: string; count?: number }>(
@@ -70,25 +141,24 @@ export const eventsApi = {
   movers: (limit = 10) =>
     api<{ movers: Mover[]; count?: number }>(`/events/movers?limit=${limit}`),
 
-  health: () =>
-    api<{
-      count?: number;
-      actionable_count?: number;
-      average_confidence?: number;
-      signal_breakdown?: Record<string, number>;
-    }>("/calibration/summary"),
-
   calibration: () =>
     api<{
       overall: CalibrationAgg;
       by_source: Record<string, CalibrationAgg>;
       by_base_rate_category: Record<string, CalibrationAgg>;
     }>("/events/calibration"),
-};
 
-export interface CalibrationAgg {
-  brier_score: number | null;
-  skill_score: number | null;
-  grade: string;
-  n: number;
-}
+  // M5 opportunity surface. Defaults to act + watch; pass "act" to narrow.
+  openDecisions: (decision?: "act" | "watch", limit = 50) =>
+    api<{ count: number; decisions: DecisionReport[] }>(
+      `/events/decisions/open?limit=${limit}${decision ? `&decision=${decision}` : ""}`,
+    ),
+
+  // M5 fresh-edge surface (recent, holding-near-peak divergences).
+  freshEdges: (limit = 10) =>
+    api<{ count: number; edges: FreshEdge[] }>(`/events/edges/fresh?limit=${limit}`),
+
+  // M2/M5 act-only prediction calibration scorecard.
+  predictionCalibration: () =>
+    api<PredictionCalibration>("/events/predictions/calibration"),
+};

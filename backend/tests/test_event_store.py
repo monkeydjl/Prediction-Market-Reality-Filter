@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.api.routes import events as events_routes
 from app.memory import event_store as store
 from app.services import event_audit_service as audit
+from app.utils import sqlite_db
 
 
 def _make_record(event_id="evt1", value_score=50, estimated=60.0):
@@ -150,6 +151,33 @@ class EventStoreTests(unittest.TestCase):
         self.assertEqual(after["record"]["tracking"]["status"], "archived")
         self.assertEqual(after["record"]["tracking"]["priority"], "low")
         self.assertEqual(after["record"]["value_score"], 40)
+
+    def test_rescan_does_not_revert_resolved_outcome(self):
+        # A resolved event re-discovered by the same event_id (the discovery
+        # record carries no outcome/calibration) must NOT be reverted to
+        # unresolved - the resolution result is preserved across the upsert.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                store.save_event(_make_record("evtRes", value_score=30))
+                store.resolve_event(
+                    "evtRes",
+                    {"status": "resolved", "actual_outcome": 100.0, "confidence": 1.0,
+                     "resolved_at": "t", "source": "auto_market"},
+                    calibration={"brier_score": 0.04, "skill_score": 0.84,
+                                 "grade": "EXCELLENT", "estimated_probability": 80.0,
+                                 "actual_outcome": 100.0, "trajectory_observations": 2},
+                )
+                # A fresh discovery pass re-saves the record WITHOUT outcome/calibration.
+                store.save_event(_make_record("evtRes", value_score=40))
+                after = store.get_event("evtRes")
+                resolved_ids = [e["event_id"] for e in store.list_resolved_events()]
+        self.assertIsNotNone(after["record"].get("outcome"))          # not reverted
+        self.assertEqual(after["record"]["outcome"]["status"], "resolved")
+        self.assertEqual(after["record"]["outcome"]["actual_outcome"], 100.0)
+        self.assertIsNotNone(after["record"].get("calibration"))      # sample kept
+        self.assertIn("evtRes", resolved_ids)                          # still resolved
+        self.assertEqual(after["record"]["value_score"], 40)          # other fields refresh
 
     def test_resolve_event_returns_none_for_unknown_id(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -392,7 +420,8 @@ class EventReadRouteTests(unittest.TestCase):
             store_path = str(Path(tmp) / "event_store.json")
             audit_path = str(Path(tmp) / "event_audit.jsonl")
             with patch.object(store, "_store_path", return_value=store_path), \
-                    patch.object(audit, "_audit_path", return_value=audit_path):
+                    patch.object(audit, "_audit_path", return_value=audit_path), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
                 store.save_event(_make_record("evtRes", value_score=42))
                 resp = client.post(
                     "/events/evtRes/resolve",
@@ -439,7 +468,8 @@ class EventReadRouteTests(unittest.TestCase):
             store_path = str(Path(tmp) / "event_store.json")
             audit_path = str(Path(tmp) / "event_audit.jsonl")
             with patch.object(store, "_store_path", return_value=store_path), \
-                    patch.object(audit, "_audit_path", return_value=audit_path):
+                    patch.object(audit, "_audit_path", return_value=audit_path), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
                 store.save_event(_make_record("evtCal", estimated=70.0, value_score=42))
                 # Record a probability trajectory: latest estimate is 80%.
                 audit.record_event(_make_record("evtCal", estimated=80.0))
@@ -464,7 +494,8 @@ class EventReadRouteTests(unittest.TestCase):
             store_path = str(Path(tmp) / "event_store.json")
             audit_path = str(Path(tmp) / "event_audit.jsonl")
             with patch.object(store, "_store_path", return_value=store_path), \
-                    patch.object(audit, "_audit_path", return_value=audit_path):
+                    patch.object(audit, "_audit_path", return_value=audit_path), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
                 # Before any resolution: no_data.
                 empty = client.get("/events/calibration")
                 # Resolve two events from different sources and base-rate

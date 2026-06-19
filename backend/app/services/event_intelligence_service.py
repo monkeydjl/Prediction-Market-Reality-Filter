@@ -392,22 +392,47 @@ async def discover_events(
 
 
 def _persist_events(records: list[dict[str, Any]]) -> None:
-    """Best-effort durable persistence + audit for event records.
+    """Durable persistence + audit + prediction freeze for event records.
 
-    Failures here must not break discovery/analysis, so they are logged and
-    swallowed (mirrors the per-event isolation in discover_events).
+    Each stage has its own error boundary so a failure in one does not silently
+    swallow the others (a single shared try/except previously meant a freeze
+    error could leave events saved but predictions missing, with only a generic
+    warning):
+
+    - save_events is the gate: if the durable store write fails, abort (audit and
+      freeze would reference unsaved events), logging the failure explicitly.
+    - record_event (audit) failures are isolated per event and never block the
+      freeze - the audit log is observability, not the loop's source of truth.
+    - freeze_prediction failures are isolated per event and logged with the
+      event_id + reason, so a missing prediction is visible, not hidden.
     """
     if not records:
         return
-    try:
-        from app.memory.event_store import save_events
-        from app.services.event_audit_service import record_event
+    from app.memory.event_store import save_events
+    from app.memory.prediction_store import freeze_prediction
+    from app.services.event_audit_service import record_event
 
+    try:
         save_events(records)
-        for record in records:
-            record_event(record)
     except Exception as exc:
-        logger.warning("Event persistence failed: %s", exc)
+        # The store write is the foundation; without it audit/freeze would
+        # reference unsaved events. Abort the batch and surface it.
+        logger.error("Event store write failed, skipping audit/freeze: %s", exc)
+        return
+
+    for record in records:
+        event_id = record.get("event_id")
+        try:
+            record_event(record)
+        except Exception as exc:
+            logger.warning("Event audit failed for %s: %s", event_id, exc)
+        try:
+            # Freeze a committed prediction for market-derived events. Idempotent
+            # and market-gated inside the store, so re-scans and news events are
+            # safe no-ops (no market price -> no edge -> no prediction).
+            freeze_prediction(record)
+        except Exception as exc:
+            logger.warning("Prediction freeze failed for %s: %s", event_id, exc)
 
 
 async def _build_filtered_news(

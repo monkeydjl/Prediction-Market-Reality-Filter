@@ -56,6 +56,7 @@ from app.services.calibration_service_event import summarize
 from app.services.event_extraction_service import extract_candidate_events
 from app.memory import event_store, event_cache
 from app.services import event_audit_service
+from app.utils import sqlite_db
 from app.services.rss_service import fetch_news
 from app.services.gnews_service import fetch_google_news
 
@@ -243,6 +244,7 @@ class LiveIntegrationTests(unittest.TestCase):
                 self.store = str(Path(tmpdir) / "event_store.json")
                 self.audit = str(Path(tmpdir) / "event_audit.jsonl")
                 self.cache = str(Path(tmpdir) / "event_cache.json")
+                self.loop_db = str(Path(tmpdir) / "v2_loop.db")
                 self._patches = []
 
             def __enter__(self):
@@ -250,6 +252,7 @@ class LiveIntegrationTests(unittest.TestCase):
                     patch.object(event_store, "_store_path", return_value=self.store),
                     patch.object(event_audit_service, "_audit_path", return_value=self.audit),
                     patch.object(event_cache, "_cache_file", return_value=self.cache),
+                    patch.object(sqlite_db, "loop_db_path", return_value=self.loop_db),
                 ]
                 for p in self._patches:
                     p.start()

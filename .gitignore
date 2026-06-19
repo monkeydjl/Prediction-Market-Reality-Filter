@@ -26,6 +26,9 @@ backend/market_cache.json
 backend/agent_memory.json
 backend/analysis_audit.jsonl
 backend/_full_out.txt
+backend/v2_loop.db
+backend/v2_loop.db-wal
+backend/v2_loop.db-shm
 
 # ── Internal working logs (huge, internal — kept locally, not published) ─────
 backend/docs/PROJECT_PROGRESS.md
@@ -41,6 +44,12 @@ backend/skills-lock.json
 CLAUDE.md
 AGENTS.md
 HANDOFF.md
+.qoder/
+.workbuddy/
+
+# ── Local debug / diff scratch (not source) ──────────────────────────────────
+debug.log
+.diff_temp.txt
 
 # ── Reference material & backups (kept locally, not published) ───────────────
 New-frontend/
@@ -48,6 +57,7 @@ New-frontend/
 *.tar.gz
 *.7z
 backend/archive/
+docs/Review-doc/
 
 # ── Editor / OS ──────────────────────────────────────────────────────────────
 .vscode/

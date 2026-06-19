@@ -120,10 +120,12 @@ def _to_candidate_event(market: dict[str, Any]) -> dict[str, Any]:
 async def fetch_resolved_markets(limit: int = 200) -> list[dict[str, Any]]:
     """Fetch settled Manifold markets for event auto-resolution.
 
-    Returns [{question, actual_outcome}] (0-100): YES->100, NO->0, MKT (a
+    Returns [{id, question, actual_outcome}] (0-100): YES->100, NO->0, MKT (a
     probabilistic resolution) -> resolutionProbability*100. CANCEL / unresolved
-    are skipped. Empty list when not configured or unreachable (graceful), so a
-    down source never breaks auto-resolve.
+    are skipped. `id` is the Manifold market id (same scheme as the candidate
+    source's source_id) so the event->market identity holds through to resolve;
+    empty when the API omits it. Empty list when not configured or unreachable
+    (graceful), so a down source never breaks auto-resolve.
     """
     try:
         raw = await _fetch_raw_resolved(limit)
@@ -139,7 +141,11 @@ async def fetch_resolved_markets(limit: int = 200) -> list[dict[str, Any]]:
             continue
         outcome = _resolved_outcome(market)
         if outcome is not None:
-            resolved.append({"question": question, "actual_outcome": outcome})
+            resolved.append({
+                "id": str(market.get("id", "") or ""),
+                "question": question,
+                "actual_outcome": outcome,
+            })
     return resolved
 
 

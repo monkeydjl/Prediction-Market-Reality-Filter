@@ -462,65 +462,17 @@ class DashboardSmokeTests(unittest.TestCase):
             with TestClient(main_app) as client:
                 return client.get(path)
 
-    def test_dashboard_serves_html(self):
-        resp = self._render("/dashboard")
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("text/html", resp.headers["content-type"])
-        body = resp.text
-        for marker in (
-            "Event Intelligence Platform",
-            "Discovered Events",
-            "Multi-source discovery",
-            "Manual Event Analysis",
-            "Tracked Events",
-            "Probability History",
-        ):
-            self.assertIn(marker, body)
-        for marker in (
-            "fetch(API + path",
-            "/events/discover?limit=10&use_cache=false",
-            "/events/?limit=50",
-            "/events/movers?limit=10",
-        ):
-            self.assertIn(marker, body)
-        self.assertIn('href="/dashboard_zh"', body)
-        self.assertIn('const API = window.location.origin + "/api";', body)
-        self.assertNotIn("http://localhost:8000", body)
-
-    def test_chinese_dashboard_serves_html(self):
-        resp = self._render("/dashboard/zh")
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("text/html", resp.headers["content-type"])
-        body = resp.text
-        for marker in ("事件情报平台", "发现的事件", "多源发现", "手动事件分析", "跟踪的事件", "概率历史"):
-            self.assertIn(marker, body)
-        for marker in (
-            "fetch(API + path",
-            "/events/discover?limit=10&use_cache=false",
-            "/events/?limit=50",
-            "/events/movers?limit=10",
-        ):
-            self.assertIn(marker, body)
-        self.assertIn('href="/dashboard"', body)
-        self.assertIn('const API = window.location.origin + "/api";', body)
-        self.assertNotIn("http://localhost:8000", body)
-
-    def test_chinese_dashboard_underscore_alias_serves_html(self):
-        resp = self._render("/dashboard_zh")
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("text/html", resp.headers["content-type"])
-        self.assertIn("事件情报平台", resp.text)
-
     def test_api_overview_lists_current_event_surface(self):
-        # The machine-readable overview moved from / to /api (root now serves the
-        # SPA when built; in tests there is no build so / has no route).
+        # The machine-readable overview lives at /api (root serves the Next.js
+        # SPA when built; in tests there is no build so / has no route). After
+        # the legacy trading layer was removed, the overview is V2-only.
         resp = self._render("/api")
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertEqual(body["system"], "Event Intelligence Platform")
-        self.assertEqual(body["dashboard"], "/dashboard")
-        self.assertEqual(body["dashboard_zh"], "/dashboard_zh")
         self.assertEqual(body["docs"], "/docs")
+        # No legacy dashboard pointers anymore.
+        self.assertNotIn("dashboard", body)
         endpoints = body["endpoints"]
         for key in (
             "event_discovery",
@@ -530,10 +482,15 @@ class DashboardSmokeTests(unittest.TestCase):
             "event_history",
             "event_movers",
             "event_similar",
+            "event_calibration",
+            "prediction_calibration",
         ):
             self.assertIn(key, endpoints)
+        # No legacy endpoints leak into the overview.
+        for legacy_key in ("full_scan", "manual_analysis", "open_trade", "markets"):
+            self.assertNotIn(legacy_key, endpoints)
 
-    def test_startup_log_uses_deployment_neutral_dashboard_path(self):
+    def test_startup_log_is_deployment_neutral(self):
         from app.main import app as main_app
 
         with patch("app.main.start_scheduler", lambda: None), \
@@ -543,7 +500,7 @@ class DashboardSmokeTests(unittest.TestCase):
                 pass
 
         startup_logs = "\n".join(logs.output)
-        self.assertIn("dashboard: /dashboard", startup_logs)
+        self.assertIn("EIP v0.3.0 starting", startup_logs)
         self.assertNotIn("http://localhost:8000", startup_logs)
 
 

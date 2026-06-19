@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, FlaskConical, History, Radar } from "lucide-react";
+import { Activity, FlaskConical, History, Radar, Target } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV = [
   { href: "/", label: "监控面板", icon: Radar, match: ["/", "/events"] },
+  { href: "/decisions", label: "决策机会", icon: Target, match: ["/decisions"] },
   { href: "/analyze", label: "人工分析", icon: FlaskConical, match: ["/analyze"] },
   { href: "/history", label: "历史复盘", icon: History, match: ["/history"] },
 ];
@@ -54,12 +55,6 @@ export function AppNav() {
         </nav>
 
         <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
-          <a
-            href="/dashboard"
-            className="hidden rounded-md px-2 py-1 transition-colors hover:bg-secondary/60 hover:text-foreground sm:inline"
-          >
-            经典
-          </a>
           <span className="hidden items-center gap-1.5 font-mono sm:flex">
             <span className="size-1.5 animate-pulse rounded-full bg-pos" aria-hidden="true" />
             实时情报通道

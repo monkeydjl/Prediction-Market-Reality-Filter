@@ -47,6 +47,15 @@ def save_events(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     Each record is validated against EventRecord before storing, so a malformed
     record raises instead of silently corrupting the store. first_seen is
     preserved across updates; last_updated is refreshed.
+
+    A re-scan must not erase a settled event: `outcome` and `calibration` are
+    write-once results of resolution, so an incoming record that lacks them
+    (a fresh discovery pass carries neither) inherits the stored ones rather than
+    blanking them. Without this, re-discovering an already-resolved event by the
+    same event_id would revert it to unresolved - dropping it from
+    list_resolved_events, breaking auto-resolve idempotency, and losing the
+    calibration sample. (tracking is preserved for the same reason - it is a
+    user-owned decision.)
     """
     path = _store_path()
     stored: list[dict[str, Any]] = []
@@ -56,11 +65,19 @@ def save_events(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for record in records:
             event_id = record["event_id"]
             existing = store.get(event_id) or {}
+            existing_record = existing.get("record") or {}
             # Tracking is a user-owned decision; a re-scan must not reset it to
             # the default. Preserve any existing tracking over the incoming one.
-            existing_tracking = (existing.get("record") or {}).get("tracking")
+            existing_tracking = existing_record.get("tracking")
             if existing_tracking is not None:
                 record["tracking"] = existing_tracking
+            # Outcome / calibration are resolution results: preserve them when the
+            # incoming record (e.g. a re-discovery) does not carry them, so a
+            # settled event is never silently reverted to unresolved.
+            if "outcome" not in record and existing_record.get("outcome") is not None:
+                record["outcome"] = existing_record["outcome"]
+            if "calibration" not in record and existing_record.get("calibration") is not None:
+                record["calibration"] = existing_record["calibration"]
             EventRecord.model_validate(record)
             entry = {
                 "event_id": event_id,
@@ -169,16 +186,22 @@ def list_all_events() -> list[dict[str, Any]]:
 
 
 def list_resolved_events() -> list[dict[str, Any]]:
-    """Return every stored entry that has been resolved (has an outcome).
+    """Return every stored entry that has been genuinely resolved.
 
     Unlike list_events, this is unranked and unbounded: it returns the full set
     of resolved entries so a calibration aggregate never silently drops
     low-value-score events. Order is the store's insertion/upsert order.
+
+    Only outcomes with status == "resolved" are returned. A non-resolved status
+    (e.g. "invalid", written when a verified event->market link diverges) records
+    that the event was settled but excludes it from calibration, so a wrong-link
+    settlement never enters the Brier aggregate.
     """
     store = _load_unlocked(_store_path())
     return [
         entry for entry in store.values()
-        if (entry.get("record") or {}).get("outcome") is not None
+        if (outcome := (entry.get("record") or {}).get("outcome")) is not None
+        and outcome.get("status", "resolved") == "resolved"
     ]
 
 

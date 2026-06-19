@@ -4,14 +4,20 @@ import { useCallback, useEffect, useState } from "react";
 import { Gavel, Loader2 } from "lucide-react";
 import { AppNav } from "@/components/app-nav";
 import { AccuracySummary } from "@/components/history/accuracy-summary";
+import { PredictionCalibrationCard } from "@/components/history/prediction-calibration";
 import { CategoryAccuracy, toCategoryData, type CategoryDatum } from "@/components/history/category-accuracy";
 import { ReviewTable, toReview, type ResolvedReview } from "@/components/history/review-table";
-import { eventsApi, type CalibrationAgg } from "@/lib/api";
+import { eventsApi, type CalibrationAgg, type PredictionCalibration } from "@/lib/api";
 
 const EMPTY_OVERALL: CalibrationAgg = { brier_score: null, skill_score: null, grade: "no_data", n: 0 };
+const EMPTY_PRED: PredictionCalibration = {
+  n: 0, brier_score: null, grade: "no_data", mean_raw_edge: null,
+  realized_edge: null, directional_hit_rate: null, by_category: {},
+};
 
 export default function HistoryPage() {
   const [overall, setOverall] = useState<CalibrationAgg>(EMPTY_OVERALL);
+  const [predCal, setPredCal] = useState<PredictionCalibration>(EMPTY_PRED);
   const [categoryData, setCategoryData] = useState<CategoryDatum[]>([]);
   const [reviews, setReviews] = useState<ResolvedReview[]>([]);
   const [loading, setLoading] = useState(true);
@@ -20,11 +26,13 @@ export default function HistoryPage() {
   const [error, setError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
-    const [cal, list] = await Promise.all([
+    const [cal, predCalibration, list] = await Promise.all([
       eventsApi.calibration(),
+      eventsApi.predictionCalibration(),
       eventsApi.list(200),
     ]);
     setOverall(cal.overall ?? EMPTY_OVERALL);
+    setPredCal(predCalibration ?? EMPTY_PRED);
     setCategoryData(toCategoryData(cal.by_base_rate_category ?? {}));
     setReviews(
       (list.events ?? [])
@@ -110,6 +118,7 @@ export default function HistoryPage() {
         ) : (
           <>
             <AccuracySummary overall={overall} />
+            <PredictionCalibrationCard data={predCal} />
             <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
               <CategoryAccuracy data={categoryData} />
               <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5">

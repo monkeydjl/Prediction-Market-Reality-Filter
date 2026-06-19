@@ -18,12 +18,12 @@ Create `.env` file:
 ```bash
 # LLM Configuration (Required)
 OPENAI_API_KEY=sk-your-key-here
-OPENAI_MODEL=qwen-math-turbo
-OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+OPENAI_MODEL=deepseek-v3.2
+OPENAI_BASE_URL=https://api.deepseek.com
 
 # Optional Settings
 GNEWS_MAX_RESULTS=10
-MARKET_SCAN_LIMIT=5
+# CROSS_VALIDATION_MODEL=   # set a 2nd model id to enable cross-validation
 ```
 
 ### 3. Verify Installation
@@ -34,7 +34,7 @@ python -c "import feedparser, httpx, fastapi; print('✅ Dependencies OK')"
 
 # Run tests
 python -m unittest discover -s tests
-# Expected: 262 tests, 1 skipped, OK
+# Expected: 350 tests, 1 skipped, OK
 ```
 
 ---
@@ -50,17 +50,16 @@ python run.py
 
 ### Access Interfaces
 
-- **Dashboard**: http://localhost:8000/dashboard
-- **Chinese Dashboard**: http://localhost:8000/dashboard_zh
+- **Dashboard**: http://localhost:8000
 - **API Docs**: http://localhost:8000/docs
-- **API Root**: http://localhost:8000/
+- **API Root**: http://localhost:8000/api
 
 ### API Examples
 
 #### Analyze an Event
 
 ```bash
-curl -X POST http://localhost:8000/events/analyze \
+curl -X POST http://localhost:8000/api/events/analyze \
   -H "Content-Type: application/json" \
   -d '{
     "event_question": "Will Bitcoin reach $100,000 by end of 2026?",
@@ -92,7 +91,7 @@ curl -X POST http://localhost:8000/events/analyze \
 #### Discover Events
 
 ```bash
-curl http://localhost:8000/events/discover?limit=5
+curl http://localhost:8000/api/events/discover?limit=5
 ```
 
 ---
@@ -103,7 +102,7 @@ curl http://localhost:8000/events/discover?limit=5
 
 ```bash
 python -m unittest discover -s tests
-# 262 tests, 1 skipped, no external API calls
+# 350 tests, 1 skipped, no external API calls
 ```
 
 ### Integration Tests (Real API Calls)
@@ -167,7 +166,7 @@ backend/
 │   └── memory/
 │       └── event_store.py         # Event persistence
 ├── tests/
-│   ├── test_*.py                  # Unit tests (262 tests, 1 skipped)
+│   ├── test_*.py                  # Unit tests (350 tests, 1 skipped)
 │   └── test_integration_live.py   # Integration tests (11 tests)
 ├── static/
 │   ├── index.html                 # English dashboard
@@ -280,11 +279,9 @@ Configure in `app/core/config.py`:
 - **Format**: JSON Lines, one snapshot per scan
 - **Use**: Track probability changes over time
 
-### Legacy Files (Compatibility)
+### Compute Cache
 
-- `agent_memory.json` - Old prediction memory
-- `market_cache.json` - 1-hour compute cache
-- `analysis_audit.jsonl` - Legacy analysis log
+- `event_cache.json` - 1-hour LLM compute cache (safe to delete)
 
 ---
 
@@ -322,10 +319,10 @@ sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
 
 ## 📚 Resources
 
-- **中文完整使用教程**: `docs/中文使用教程.md`
-- **Full User Guide**: `docs/USER_GUIDE.md`
-- **Project Progress**: `docs/PROJECT_PROGRESS.md`
-- **Integration Test Report**: `INTEGRATION_TEST_REPORT.md`
+- **中文完整使用教程**: `docs/user/中文使用教程.md`
+- **Full User Guide**: `docs/user/USER_GUIDE.md`
+- **Project Progress**: `backend/docs/PROJECT_PROGRESS.md`
+- **Integration Test Report**: `docs/dev/INTEGRATION_TEST_REPORT.md`
 - **Skills**: `.claude/skills/` (prime-context, event-conventions, run-checks, etc.)
 
 ---
@@ -335,7 +332,7 @@ sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
 Before considering the platform ready:
 
 - ✅ Dependencies installed
-- ✅ Unit tests pass (262 tests, 1 skipped)
+- ✅ Unit tests pass (350 tests, 1 skipped)
 - ✅ Integration tests pass (11 tests)
 - ✅ Server starts successfully
 - ✅ Event analysis works with real LLM

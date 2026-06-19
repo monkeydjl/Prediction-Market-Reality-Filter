@@ -6,8 +6,9 @@ import { useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { AppNav } from "@/components/app-nav";
 import { SignalSummary } from "@/components/detail/signal-summary";
+import { MarketPanel } from "@/components/detail/market-links";
 import { SignalPanel } from "@/components/detail/signal-panel";
-import { EvidenceList } from "@/components/detail/evidence-list";
+import { OfficialColumn, NewsColumn } from "@/components/detail/evidence-list";
 import { TrackingDecision } from "@/components/detail/tracking-decision";
 import { ProbabilityChart, buildSeries } from "@/components/detail/probability-chart";
 import { DeltaPill, SupportMeter } from "@/components/indicators";
@@ -162,7 +163,11 @@ function DetailInner() {
             官方信息 · 公开新闻 · 预测市场
           </span>
         </div>
-        <EvidenceList record={record} />
+        <div className="grid gap-4 md:grid-cols-3">
+          <OfficialColumn record={record} />
+          <NewsColumn record={record} />
+          <MarketPanel record={record} />
+        </div>
       </section>
 
       <section className="flex flex-col gap-3">

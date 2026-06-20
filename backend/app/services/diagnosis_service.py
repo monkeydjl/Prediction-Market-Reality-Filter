@@ -29,18 +29,25 @@ def calibration_trust(
     *,
     min_samples: int,
     dormant_trust: float,
+    qualified_floor: float = 0.0,
 ) -> float:
     """Trust in 0..1 for a divergence, from the segment's calibration history.
 
     Dormant (fewer than min_samples scored predictions in the segment) -> the
-    conservative default. Otherwise trust = clamp(skill, 0, 1): a segment that
-    historically beat the market earns high trust; one at or below random earns 0.
+    conservative default. Otherwise trust = clamp(skill, floor, 1): a segment
+    that historically beat the market earns high trust; one at or below random
+    earns `qualified_floor`. The floor (>0) stops a worse-than-random segment
+    from collapsing to trust 0 forever - at 0 the adjusted edge is always 0, so
+    it only ever skips, skip rows are excluded from segment_skill, and its Brier
+    can never improve (an absorbing state). A small floor keeps the penalty
+    severe yet lets a large raw edge occasionally clear the watch gate, so the
+    segment keeps sampling and can recover.
     """
     n = segment_stats.get("n") or 0
     mean_brier = segment_stats.get("mean_brier")
     if n < min_samples or mean_brier is None:
         return dormant_trust
-    return round(_clamp01(skill_score(mean_brier)), 4)
+    return round(max(qualified_floor, _clamp01(skill_score(mean_brier))), 4)
 
 
 def liquidity_factor(liquidity: float, *, floor: float) -> float:
@@ -91,6 +98,7 @@ def diagnose(
         segment_stats,
         min_samples=min_samples,
         dormant_trust=settings.DIAGNOSIS_DORMANT_TRUST,
+        qualified_floor=settings.DIAGNOSIS_TRUST_FLOOR,
     )
     liq = liquidity_factor(liquidity, floor=settings.DIAGNOSIS_LIQUIDITY_FLOOR)
     adjusted_edge = round(raw_edge * trust * liq, 2)

@@ -1,0 +1,11 @@
+[Unit]
+Description=PMRF daily store backup
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/prediction-market-reality-filter/backend
+EnvironmentFile=/etc/prediction-market-reality-filter.env
+ExecStart=/opt/prediction-market-reality-filter/.venv/bin/python scripts/backup_stores.py
+User=pmrf
+Group=pmrf

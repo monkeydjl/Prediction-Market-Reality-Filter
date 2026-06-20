@@ -1,0 +1,19 @@
+[Unit]
+Description=Prediction Market Reality Filter API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/prediction-market-reality-filter/backend
+EnvironmentFile=/etc/prediction-market-reality-filter.env
+ExecStart=/opt/prediction-market-reality-filter/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=30
+User=pmrf
+Group=pmrf
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=PMRF health check ping timer
+Requires=prediction-market-reality-filter-healthcheck.service
+
+[Timer]
+OnUnitActiveSec=300
+Persistent=false
+
+[Install]
+WantedBy=timers.target

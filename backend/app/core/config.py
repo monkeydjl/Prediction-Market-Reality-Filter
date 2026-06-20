@@ -4,9 +4,40 @@ import os
 load_dotenv()
 
 
+def _env_bool(name: str, default: str = "") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_csv(name: str, default: str) -> list[str]:
+    return [
+        item.strip()
+        for item in os.getenv(name, default).split(",")
+        if item.strip()
+    ]
+
+
 class Settings:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "deepseek-chat")
+
+    CORS_ALLOWED_ORIGINS: list[str] = _env_csv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:8000,http://127.0.0.1:8000",
+    )
+    CORS_ALLOW_CREDENTIALS: bool = _env_bool("CORS_ALLOW_CREDENTIALS", "false")
+
+    API_WRITE_KEY: str = os.getenv("API_WRITE_KEY", "")
+    RATE_LIMIT_ENABLED: bool = _env_bool("RATE_LIMIT_ENABLED", "true")
+    RATE_LIMIT_WINDOW_SECONDS: int = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
+    RATE_LIMIT_MAX_REQUESTS: int = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "120"))
+
+    LOG_FILE: str = os.getenv(
+        "LOG_FILE",
+        os.path.join(os.path.dirname(__file__), "..", "..", "logs", "app.log"),
+    )
+    LOG_MAX_BYTES: int = int(os.getenv("LOG_MAX_BYTES", "10485760"))
+    LOG_BACKUP_COUNT: int = int(os.getenv("LOG_BACKUP_COUNT", "5"))
 
     # Base URL 可通过 .env 的 OPENAI_BASE_URL 覆盖
     # DeepSeek:  https://api.deepseek.com
@@ -186,6 +217,18 @@ class Settings:
     DIAGNOSIS_LIQUIDITY_FLOOR: float = float(
         os.getenv("DIAGNOSIS_LIQUIDITY_FLOOR", "5000.0")
     )
+    # Trust floor for a QUALIFIED segment. A category whose mean Brier is worse
+    # than random (>0.25) scores negative skill -> clamp(skill,0,1) would be 0 ->
+    # adjusted_edge 0 -> every new prediction skips -> skip rows are excluded from
+    # segment_skill -> the segment's Brier can never improve: a self-reinforcing
+    # absorbing state with no recovery. Flooring trust at a small positive value
+    # keeps the penalty severe (still far below a trusted segment) while letting a
+    # large enough raw edge occasionally clear the watch gate, so the category
+    # keeps sampling and can climb back out. Does not apply to dormant segments
+    # (those use DIAGNOSIS_DORMANT_TRUST).
+    DIAGNOSIS_TRUST_FLOOR: float = float(
+        os.getenv("DIAGNOSIS_TRUST_FLOOR", "0.1")
+    )
     DECISION_ACT_EDGE: float = float(os.getenv("DECISION_ACT_EDGE", "10.0"))
     DECISION_WATCH_EDGE: float = float(os.getenv("DECISION_WATCH_EDGE", "3.0"))
 
@@ -209,6 +252,9 @@ class Settings:
         in {"1", "true", "yes", "on"}
     )
     EVENT_DISCOVER_LIMIT: int = int(os.getenv("EVENT_DISCOVER_LIMIT", "10"))
+    SCHEDULER_MISFIRE_GRACE_SECONDS: int = int(
+        os.getenv("SCHEDULER_MISFIRE_GRACE_SECONDS", "86400")
+    )
 
 
 settings = Settings()

@@ -111,6 +111,22 @@ class AutoResolveEventsTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+        # Seal the real stores for the whole class. auto_resolve_events now runs
+        # reconcile_predictions() first, which reads the event store and (for any
+        # resolved event) the loop DB - so even an early-return test must be
+        # isolated or it leaks backend/v2_loop.db. Per-test `with` blocks that set
+        # their own tmp paths still override these (inner patch wins).
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name)
+        for target in (
+            patch.object(store, "_store_path", return_value=str(base / "event_store.json")),
+            patch.object(audit, "_audit_path", return_value=str(base / "event_audit.jsonl")),
+            patch.object(sqlite_db, "loop_db_path", return_value=str(base / "v2_loop.db")),
+        ):
+            target.start()
+            self.addCleanup(target.stop)
+
     def test_no_resolved_markets_returns_no_data(self):
         with patch.object(phs, "fetch_resolved_markets",
                           new=AsyncMock(return_value=[])):
@@ -503,6 +519,40 @@ class ResolutionCriteriaPersistenceTests(unittest.TestCase):
                 link = links.get_verified_link("evtRCn")
         self.assertIsNotNone(link)
         self.assertEqual(link["resolution_criteria"], "")
+
+
+class ReconcilePredictionsTests(unittest.TestCase):
+    """reconcile_predictions heals orphans: event resolved but prediction open."""
+
+    def test_heals_orphan_scored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(store, "_store_path", return_value=str(Path(tmp) / "event_store.json")), \
+                    patch.object(audit, "_audit_path", return_value=str(Path(tmp) / "event_audit.jsonl")), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+                # Insert an open act prediction, then resolve ONLY the event
+                # store outcome out-of-band - simulating a crash after the JSON
+                # write but before scoring (a pre-fix orphan).
+                rec = _make_record("evtOrphan", estimated=90.0, value_score=30)
+                store.save_event(rec)
+                _seed_open_act("evtOrphan", ai_probability=90.0, market_probability=50.0)
+                store.resolve_event("evtOrphan", {
+                    "status": "resolved", "actual_outcome": 100.0,
+                    "confidence": 1.0, "resolved_at": "t", "source": "auto_market",
+                })
+                self.assertEqual(preds.get_prediction("evtOrphan")["status"], "open")
+
+                healed = ers.reconcile_predictions()
+
+                self.assertEqual(healed, 1)
+                p = preds.get_prediction("evtOrphan")
+                self.assertEqual(p["status"], "scored")  # act row -> scored
+                self.assertEqual(p["actual_outcome"], 100.0)
+
+    def test_no_orphan_is_noop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(store, "_store_path", return_value=str(Path(tmp) / "event_store.json")), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+                self.assertEqual(ers.reconcile_predictions(), 0)
 
 
 if __name__ == "__main__":

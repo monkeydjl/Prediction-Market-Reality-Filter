@@ -11,10 +11,14 @@ is hit.
 """
 
 import asyncio
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.core import scheduler
+from app.memory import loop_run_store
+from app.utils import sqlite_db
 
 
 class JobDefaultsTests(unittest.TestCase):
@@ -37,20 +41,30 @@ class EventDiscoverJobTests(unittest.TestCase):
             captured.update(kwargs)
             return {"count": 3}
 
-        with patch("app.services.event_intelligence_service.discover_events",
-                   new=AsyncMock(side_effect=fake_discover)), \
-                patch.object(scheduler.settings, "EVENT_DISCOVER_ENABLED", True), \
-                patch.object(scheduler.settings, "EVENT_DISCOVER_LIMIT", 7):
-            asyncio.run(scheduler._job_event_discover())
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch("app.services.event_intelligence_service.discover_events",
+                          new=AsyncMock(side_effect=fake_discover)), \
+                    patch.object(scheduler.settings, "EVENT_DISCOVER_ENABLED", True), \
+                    patch.object(scheduler.settings, "EVENT_DISCOVER_LIMIT", 7):
+                asyncio.run(scheduler._job_event_discover())
+                run = loop_run_store.last_run("event_discover")
         self.assertEqual(captured.get("limit"), 7)
         self.assertEqual(captured.get("use_cache"), False)  # fresh re-scan each run
+        self.assertEqual(run["status"], "success")
+        self.assertEqual(run["result"]["count"], 3)
 
     def test_job_failure_is_isolated(self):
-        with patch("app.services.event_intelligence_service.discover_events",
-                   new=AsyncMock(side_effect=RuntimeError("boom"))), \
-                patch.object(scheduler.settings, "EVENT_DISCOVER_ENABLED", True):
-            # Must not raise: a discovery failure cannot crash the scheduler.
-            asyncio.run(scheduler._job_event_discover())
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch("app.services.event_intelligence_service.discover_events",
+                          new=AsyncMock(side_effect=RuntimeError("boom"))), \
+                    patch.object(scheduler.settings, "EVENT_DISCOVER_ENABLED", True):
+                # Must not raise: a discovery failure cannot crash the scheduler.
+                asyncio.run(scheduler._job_event_discover())
+                run = loop_run_store.last_run("event_discover")
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("boom", run["error"])
 
     def test_job_skips_when_disabled(self):
         mock_discover = AsyncMock(return_value={"count": 1})

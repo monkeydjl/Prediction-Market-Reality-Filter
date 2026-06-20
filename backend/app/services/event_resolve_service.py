@@ -28,7 +28,7 @@ from typing import Any
 from app.core.config import settings
 from app.memory.event_market_link_store import get_verified_link, upsert_link
 from app.memory.event_store import get_event, list_all_events, resolve_event
-from app.memory.prediction_store import score_prediction, void_prediction
+from app.memory.prediction_store import get_prediction, score_prediction, void_prediction
 from app.services.calibration_service_event import score_event
 from app.services.event_audit_service import histories_by_event, history_for_event, record_outcome
 from app.services.trend_analysis_service import analyze_trend
@@ -127,19 +127,80 @@ async def resolve_with_calibration(
         "source": source,
         "notes": notes,
     }
-    updated = resolve_event(event_id, outcome, calibration=calibration)
-    record = (updated or {}).get("record") or {}
-    record_outcome(event_id, record.get("event_title", ""), outcome)
-    # Score the event's frozen, point-in-time prediction against the outcome.
+
+    # Score the prediction (SQLite) BEFORE writing the event outcome (JSON).
+    # These two stores have no shared transaction, so ordering decides what a
+    # mid-resolve crash leaves behind. event_store.outcome is the "already
+    # resolved -> skip next run" gate (auto_resolve_events), so if we wrote it
+    # first and then crashed before scoring, the prediction would stay `open`
+    # forever (the event is skipped on every future run): a silent, permanent
+    # orphan. By scoring first, a crash before resolve_event leaves the event
+    # UNresolved -> the next run retries the whole resolution. score_prediction /
+    # void_prediction are idempotent (WHERE status='open'), so the retry is safe.
+    #
     # A genuine resolution scores it (act -> scored, watch/skip -> observed); a
     # non-genuine outcome (invalid identity conflict / void) closes the open
-    # prediction as `voided` instead - no Brier, but it leaves the opportunity
-    # surface so an invalidated event stops showing as actionable.
+    # prediction as `voided` - no Brier, but it leaves the opportunity surface so
+    # an invalidated event stops showing as actionable. A None return means the
+    # event has no open prediction (e.g. a news event that was never frozen, or
+    # already resolved) - that is expected, not a failure, so we proceed to write
+    # the outcome. A raised exception (DB failure) aborts BEFORE the outcome is
+    # written, so the next run can retry.
     if status == "resolved":
         score_prediction(event_id, actual_outcome)
     else:
         void_prediction(event_id)
+
+    updated = resolve_event(event_id, outcome, calibration=calibration)
+    record = (updated or {}).get("record") or {}
+    record_outcome(event_id, record.get("event_title", ""), outcome)
     return updated
+
+
+def reconcile_predictions() -> int:
+    """Heal orphaned predictions left by a crash mid-resolve.
+
+    The resolve path writes the prediction (SQLite) and the event outcome (JSON)
+    without a shared transaction. If the process died after the event outcome was
+    written but before the prediction was scored (the pre-fix ordering, or any
+    future regression), the event is "resolved" yet its prediction is still
+    `open` - and auto_resolve skips resolved events, so that prediction would
+    never be scored. This startup/per-run scan finds those orphans (event has an
+    outcome, prediction still open) and applies the stored outcome: a genuine
+    resolution scores it (act->scored, watch/skip->observed), a non-genuine one
+    voids it. Idempotent (score/void are WHERE status='open'); returns how many
+    it healed. Best-effort: a single failure is logged and skipped, never raises.
+    """
+    healed = 0
+    for entry in list_all_events():
+        record = entry.get("record") or {}
+        outcome = record.get("outcome")
+        if outcome is None:
+            continue
+        event_id = entry.get("event_id")
+        if not event_id:
+            continue
+        pred = get_prediction(event_id)
+        if pred is None or pred.get("status") != "open":
+            continue  # never predicted, or already terminal - nothing to heal
+        try:
+            if outcome.get("status") == "resolved":
+                actual = float(outcome.get("actual_outcome"))
+                score_prediction(event_id, actual)
+            else:
+                void_prediction(event_id)
+            healed += 1
+            logger.warning(
+                "reconcile: healed orphan prediction for resolved event %s "
+                "(outcome status=%s)",
+                event_id, outcome.get("status"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "reconcile: failed to heal orphan prediction %s: %s",
+                event_id, exc,
+            )
+    return healed
 
 
 async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
@@ -154,6 +215,8 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
     degrade to fewer
     resolutions).
     """
+    # Heal any orphans left by a prior mid-resolve crash before doing new work.
+    reconciled = reconcile_predictions()
     from app.services.polymarket_history_service import (
         fetch_resolved_markets as fetch_polymarket_resolved,
     )
@@ -353,6 +416,7 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
         "invalid_count": invalid_count,
         "checked_count": len(resolved_markets),
         "unresolved_events": unresolved_events,
+        "reconciled_count": reconciled,
         "matches": match_log,
         "by_source": by_source,
     }

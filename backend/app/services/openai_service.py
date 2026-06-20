@@ -15,6 +15,8 @@ def get_client() -> AsyncOpenAI:
         _client = AsyncOpenAI(
             api_key=settings.OPENAI_API_KEY,
             base_url=settings.DASHSCOPE_BASE_URL,
+            timeout=60.0,
+            max_retries=2,
         )
     return _client
 

@@ -1,0 +1,9 @@
+[Unit]
+Description=PMRF health check ping
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/curl -sf -o /dev/null -w "%%{http_code}" http://localhost:8000/api/health
+User=pmrf
+Group=pmrf

@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.config import settings
+from app.memory.event_market_link_store import upsert_link
 from app.models.event import Prediction
 from app.services.calibration_service_event import brier_score, grade, skill_score
 from app.services.diagnosis_service import diagnose
@@ -230,7 +231,7 @@ def freeze_prediction(record: dict[str, Any]) -> dict[str, Any] | None:
     _ensure_schema(path)
     with writing(path) as conn:
         # DO NOTHING on conflict: the first commitment is frozen forever.
-        conn.execute(
+        cursor = conn.execute(
             """
             INSERT INTO predictions (
                 id, event_id, contract_id, platform, base_rate_category,
@@ -251,6 +252,28 @@ def freeze_prediction(record: dict[str, Any]) -> dict[str, Any] | None:
                 prediction.segment_n, prediction.segment_skill,
                 prediction.created_at,
             ),
+        )
+        inserted = cursor.rowcount > 0
+
+    # Seed a verified event->contract link at FIRST freeze only. The contract_id
+    # comes from source.source_id - the market this event was DERIVED from, i.e.
+    # ground-truth identity, not a fuzzy text match. This lets auto_resolve settle
+    # the event by contract id on the first pass (the contract-first PRIMARY
+    # path), instead of depending on an exact question-text match at settlement.
+    # Without it, get_verified_link is None on first resolve and wording drift
+    # between freeze and settlement silently blocks resolution.
+    #
+    # Gated on `inserted` so a re-scan (ON CONFLICT DO NOTHING) does not rewrite
+    # linked_at or silently re-verify a link a human deliberately un-verified.
+    if inserted:
+        upsert_link(
+            event_id,
+            market_name=str(source.get("platform") or ""),
+            contract_id=contract_id,
+            market_question=str(record.get("event_title") or ""),
+            link_method="freeze",
+            link_confidence=1.0,
+            verified=True,
         )
     return get_prediction(event_id)
 

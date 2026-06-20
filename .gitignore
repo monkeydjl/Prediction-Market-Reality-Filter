@@ -67,3 +67,4 @@ Thumbs.db
 
 # ── Backups (local data snapshots, e.g. event_store.json.bak) ─────────────────
 *.bak
+nul

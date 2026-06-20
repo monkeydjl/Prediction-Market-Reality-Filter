@@ -9,11 +9,13 @@ APScheduler 定时任务。随 FastAPI 启动自动运行。
 """
 
 import logging
+from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.core.config import settings
+from app.memory import loop_run_store
 
 logger = logging.getLogger(__name__)
 # job_defaults apply to every job added via start_scheduler (and to any added
@@ -25,23 +27,52 @@ logger = logging.getLogger(__name__)
 #     is dropped (and logged), instead of the default 1s silent drop.
 scheduler = AsyncIOScheduler(
     timezone="UTC",
-    job_defaults={"coalesce": True, "misfire_grace_time": 300},
+    job_defaults={
+        "coalesce": True,
+        "misfire_grace_time": settings.SCHEDULER_MISFIRE_GRACE_SECONDS,
+    },
 )
+
+
+def _start_run(job_name: str) -> str | None:
+    try:
+        return loop_run_store.start_run(job_name)
+    except Exception:
+        logger.exception("[Scheduler] Failed to start run ledger for %s", job_name)
+        return None
+
+
+def _finish_run(
+    run_id: str | None,
+    status: str,
+    *,
+    result: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> None:
+    if run_id is None:
+        return
+    try:
+        loop_run_store.finish_run(run_id, status, result=result, error=error)
+    except Exception:
+        logger.exception("[Scheduler] Failed to finish run ledger for %s", run_id)
 
 
 async def _job_event_auto_resolve():
     """每天 22:30 UTC 自动裁定事件层（匹配已结算预测市场）。"""
     logger.info("[Scheduler] Event auto-resolve starting...")
+    run_id = _start_run("event_auto_resolve")
     try:
         from app.services.event_resolve_service import auto_resolve_events
 
         result = await auto_resolve_events(resolved_limit=200)
+        _finish_run(run_id, "success", result=result)
         logger.info(
             "[Scheduler] Event auto-resolve: resolved=%d checked=%d",
             result.get("resolved_count", 0),
             result.get("checked_count", 0),
         )
-    except Exception:
+    except Exception as exc:
+        _finish_run(run_id, "failed", error=str(exc))
         logger.exception("[Scheduler] Event auto-resolve failed")
 
 
@@ -57,17 +88,20 @@ async def _job_event_discover():
     if not settings.EVENT_DISCOVER_ENABLED:
         return
     logger.info("[Scheduler] Event discover starting...")
+    run_id = _start_run("event_discover")
     try:
         from app.services.event_intelligence_service import discover_events
 
         result = await discover_events(
             limit=settings.EVENT_DISCOVER_LIMIT, use_cache=False
         )
+        _finish_run(run_id, "success", result=result)
         logger.info(
             "[Scheduler] Event discover: count=%d",
             result.get("count", 0),
         )
-    except Exception:
+    except Exception as exc:
+        _finish_run(run_id, "failed", error=str(exc))
         logger.exception("[Scheduler] Event discover failed")
 
 

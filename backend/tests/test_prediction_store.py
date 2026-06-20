@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.memory import prediction_store as preds
+from app.memory import event_market_link_store as links
 from app.utils import sqlite_db
 
 
@@ -105,6 +106,30 @@ class FreezePredictionTests(unittest.TestCase):
             self.assertEqual(frozen["liquidity"], 1000.0)
             self.assertEqual(frozen["volume"], 5000.0)
             self.assertEqual(frozen["status"], "open")
+
+    def test_freeze_seeds_verified_link(self):
+        # 补-A: freezing a market event also seeds a verified event->contract link
+        # from the known source_id, so auto_resolve's contract-first PRIMARY path
+        # engages on the first pass (instead of needing an exact text match).
+        with tempfile.TemporaryDirectory() as tmp, self._db(tmp):
+            rec = _market_record("evtLink", estimated=70.0, contract="cABC")
+            rec["event_title"] = "Will X happen?"
+            preds.freeze_prediction(rec)
+            link = links.get_verified_link("evtLink")
+            self.assertIsNotNone(link)
+            self.assertEqual(link["contract_id"], "cABC")
+            self.assertTrue(link["verified"])
+            self.assertEqual(link["link_method"], "freeze")
+            self.assertEqual(link["market_question"], "Will X happen?")
+
+    def test_rescan_does_not_re_verify_link(self):
+        # A re-scan freeze is a no-op (DO NOTHING); it must not rewrite the link
+        # or silently re-verify one a human deliberately un-verified.
+        with tempfile.TemporaryDirectory() as tmp, self._db(tmp):
+            preds.freeze_prediction(_market_record("evtRV", estimated=70.0, contract="cRV"))
+            links.set_verified("evtRV", "cRV", False)  # human quarantines it
+            preds.freeze_prediction(_market_record("evtRV", estimated=95.0, contract="cRV"))
+            self.assertIsNone(links.get_verified_link("evtRV"))  # stays un-verified
 
     def test_rescan_is_noop_commitment_frozen(self):
         # One Event -> One Prediction: the first freeze is the committed estimate;

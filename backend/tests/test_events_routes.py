@@ -13,15 +13,23 @@ Route + dashboard tests for the Event Intelligence surface (Phase 4 items 1-3).
 """
 
 import asyncio
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.routes import events as events_routes
+from app.memory import event_store as store
+from app.memory import loop_run_store
+from app.memory import prediction_store as preds
+from app.utils import sqlite_db
 import app.services.ai_analysis_service as ai
+from app.services import event_audit_service as audit
 import app.services.event_intelligence_service as eis
+from tests.test_event_store import _make_record
 
 
 def _events_client() -> TestClient:
@@ -101,6 +109,43 @@ class DiscoverRouteTests(unittest.TestCase):
         client = _events_client()
         self.assertEqual(client.get("/events/discover?limit=0").status_code, 422)
         self.assertEqual(client.get("/events/discover?limit=21").status_code, 422)
+
+
+class LoopStatusRouteTests(unittest.TestCase):
+    def test_loop_status_returns_run_and_core_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            with patch.object(store, "_store_path", return_value=str(base / "event_store.json")), \
+                    patch.object(audit, "_audit_path", return_value=str(base / "event_audit.jsonl")), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(base / "v2_loop.db")):
+                store.save_event(_make_record("evtLoop", estimated=70.0, value_score=30))
+                rec = _make_record("evtPred", estimated=80.0, value_score=40)
+                rec["source"] = {
+                    "type": "prediction_market",
+                    "source_id": "cLoop",
+                    "platform": "Polymarket",
+                    "liquidity": 20000.0,
+                }
+                store.save_event(rec)
+                preds.freeze_prediction(rec)
+                run_id = loop_run_store.start_run("event_auto_resolve")
+                loop_run_store.finish_run(
+                    run_id,
+                    "success",
+                    result={"resolved_count": 1, "checked_count": 2},
+                )
+
+                client = _events_client()
+                resp = client.get("/events/loop/status")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertIn("scheduler", body)
+        self.assertEqual(body["runs"]["event_auto_resolve"]["status"], "success")
+        self.assertEqual(body["runs"]["event_auto_resolve"]["result"]["resolved_count"], 1)
+        self.assertEqual(body["counts"]["events"], 2)
+        self.assertEqual(body["counts"]["predictions"]["open"], 1)
+        self.assertIn("calibration_n", body["counts"])
 
 
 class DiscoverServiceTests(unittest.TestCase):

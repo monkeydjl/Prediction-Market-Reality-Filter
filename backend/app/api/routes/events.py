@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from app.api.security import require_write_key
 from app.memory.event_market_link_store import list_pending, set_verified
 from app.memory.prediction_store import (
     calibration_summary,
@@ -26,6 +27,7 @@ from app.services.event_resolve_service import (
     resolve_with_calibration,
 )
 from app.services.historical_matching_service import find_similar
+from app.services.loop_status_service import loop_status
 from app.services.trend_analysis_service import (
     analyze_edge_trajectory,
     analyze_trend,
@@ -41,13 +43,17 @@ router = APIRouter()
 async def discover_event_intelligence(
     limit: int = Query(default=10, ge=1, le=20),
     use_cache: bool = Query(default=True),
+    _auth: None = Depends(require_write_key),
 ):
     """Discover high-value events and return intelligence records."""
     return await discover_events(limit=limit, use_cache=use_cache)
 
 
 @router.post("/analyze")
-async def analyze_event_intelligence(payload: EventAnalysisRequest):
+async def analyze_event_intelligence(
+    payload: EventAnalysisRequest,
+    _auth: None = Depends(require_write_key),
+):
     """Analyze one event question and estimate probability change."""
     return await analyze_event_question(
         event_question=payload.event_question,
@@ -104,6 +110,14 @@ async def get_event_calibration():
     return summarize(events)
 
 
+@router.get("/loop/status")
+async def get_loop_status():
+    """Operational status for the unattended reality feedback loop."""
+    from app.core.scheduler import scheduler
+
+    return loop_status(scheduler_running=scheduler.running)
+
+
 # Dynamic routes declared after the static /discover, /analyze, / and /movers
 # routes so the path parameter does not shadow them.
 @router.get("/{event_id}")
@@ -120,6 +134,7 @@ async def update_event_tracking(
     event_id: str,
     status: str | None = Body(default=None, embed=True),
     priority: str | None = Body(default=None, embed=True),
+    _auth: None = Depends(require_write_key),
 ):
     """Update the human tracking decision (status / priority) for an event.
 
@@ -174,6 +189,7 @@ async def resolve_event_intelligence(
     actual_outcome: float = Body(..., ge=0, le=100, embed=True),
     confidence: float = Body(default=1.0, ge=0, le=1, embed=True),
     notes: str = Body(default="", embed=True),
+    _auth: None = Depends(require_write_key),
 ):
     """Manually resolve an event with a settled outcome.
 
@@ -201,6 +217,7 @@ async def resolve_event_intelligence(
 @router.post("/resolve/auto")
 async def auto_resolve_event_intelligence(
     limit: int = Query(default=200, ge=1, le=1000),
+    _auth: None = Depends(require_write_key),
 ):
     """Auto-resolve events whose questions match resolved prediction markets
     (Polymarket, Manifold, Kalshi).
@@ -228,6 +245,7 @@ async def list_pending_links():
 async def verify_event_link(
     event_id: str,
     contract_id: str = Body(default="", embed=True),
+    _auth: None = Depends(require_write_key),
 ):
     """Verify (promote) a pending event->market link so it becomes eligible to
     be scored. `contract_id` identifies which of the event's links to verify

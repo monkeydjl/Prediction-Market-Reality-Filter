@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily PMRF store backup timer
+Requires=prediction-market-reality-filter-backup.service
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1800
+
+[Install]
+WantedBy=timers.target

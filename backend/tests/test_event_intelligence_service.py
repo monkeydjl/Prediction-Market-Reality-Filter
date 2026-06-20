@@ -7,6 +7,8 @@ import app.services.event_intelligence_service as eis
 from app.services.event_intelligence_service import (
     build_event_record,
     build_evidence_items,
+)
+from app.services.scoring_service import (
     calculate_impact_score,
     calculate_trust_score,
     calculate_value_score,

@@ -23,7 +23,7 @@ from app.services.probability_engine_service import (
     clamp_probability,
     default_evidence_profile,
 )
-from app.services.event_intelligence_service import probability_direction
+from app.services.scoring_service import probability_direction
 
 STRONG_EVIDENCE = {
     "evidence_direction": "support",

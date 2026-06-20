@@ -23,6 +23,7 @@ from typing import Any
 
 from app.models.event import MarketLink
 from app.utils import sqlite_db
+from app.utils.helpers import utc_now
 from app.utils.sqlite_db import reading, writing
 
 _SCHEMA = """
@@ -59,10 +60,6 @@ def _ensure_schema(path: str) -> None:
         _INITIALIZED.add(path)
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _row_to_dict(row: Any) -> dict[str, Any]:
     data = dict(row)
     data["verified"] = bool(data["verified"])
@@ -95,7 +92,7 @@ def upsert_link(
         link_method=link_method,
         link_confidence=link_confidence,
         verified=verified,
-        linked_at=_now(),
+        linked_at=utc_now(),
     )
     path = sqlite_db.loop_db_path()
     _ensure_schema(path)

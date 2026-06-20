@@ -389,7 +389,7 @@ Telegram推送
 
 ```text
 python -m compileall app tests        -> passed
-python -m unittest discover -s tests   -> passed, 141 tests (1 skipped)
+python -m unittest discover -s tests   -> passed, 503 tests (1 skipped)
 ```
 
 2026-06-12 已完成首次真实端到端验证，覆盖真实 LLM 调用、Polymarket 事件发现、多源新闻采集和事件持久化。真实集成测试需要外部网络和 API key。

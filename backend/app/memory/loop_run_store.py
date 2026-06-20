@@ -6,11 +6,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.utils import sqlite_db
+from app.utils.helpers import utc_now
 from app.utils.sqlite_db import reading, writing
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _ensure_schema(path: str) -> None:
@@ -49,7 +46,7 @@ def start_run(job_name: str) -> str:
             INSERT INTO loop_runs (id, job_name, status, started_at)
             VALUES (?, ?, 'running', ?)
             """,
-            (run_id, job_name, _now()),
+            (run_id, job_name, utc_now()),
         )
     return run_id
 
@@ -65,7 +62,7 @@ def finish_run(
         raise ValueError("status must be 'success' or 'failed'")
     path = sqlite_db.loop_db_path()
     _ensure_schema(path)
-    finished_at = _now()
+    finished_at = utc_now()
     result_json = json.dumps(result or {}, ensure_ascii=False, sort_keys=True)
     with writing(path) as conn:
         row = conn.execute(

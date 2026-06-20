@@ -252,6 +252,7 @@ class Settings:
         in {"1", "true", "yes", "on"}
     )
     EVENT_DISCOVER_LIMIT: int = int(os.getenv("EVENT_DISCOVER_LIMIT", "10"))
+    LLM_CONCURRENCY: int = int(os.getenv("LLM_CONCURRENCY", "4"))
     SCHEDULER_MISFIRE_GRACE_SECONDS: int = int(
         os.getenv("SCHEDULER_MISFIRE_GRACE_SECONDS", "86400")
     )

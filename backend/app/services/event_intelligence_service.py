@@ -8,6 +8,7 @@ from typing import Any
 from app.core.config import settings
 from app.services.translation_service import translate_articles
 from app.utils.market_utils import safe_float
+from app.utils.helpers import clamp01
 
 
 logger = logging.getLogger(__name__)
@@ -43,9 +44,9 @@ def build_event_record(
         estimated_value = analysis.get("final_probability")
     estimated = safe_float(estimated_value, baseline)
     change = round(estimated - baseline, 2)
-    confidence = _clamp01(analysis.get("confidence_score"))
-    news_quality = _clamp01(analysis.get("news_quality_score"))
-    evidence_strength = _clamp01(analysis.get("evidence_strength"))
+    confidence = clamp01(analysis.get("confidence_score"))
+    news_quality = clamp01(analysis.get("news_quality_score"))
+    evidence_strength = clamp01(analysis.get("evidence_strength"))
     source_count = max(0, int(safe_float(analysis.get("source_count"), 0)))
     trust_score = calculate_trust_score(analysis)
     impact_score = calculate_impact_score(analysis)
@@ -81,10 +82,10 @@ def build_event_record(
         "evidence": {
             "direction": evidence_direction,
             "strength": round(evidence_strength, 3),
-            "conflict": round(_clamp01(analysis.get("evidence_conflict_score")), 3),
-            "freshness": round(_clamp01(analysis.get("freshness_score")), 3),
+            "conflict": round(clamp01(analysis.get("evidence_conflict_score")), 3),
+            "freshness": round(clamp01(analysis.get("freshness_score")), 3),
             "resolution_relevance": round(
-                _clamp01(analysis.get("resolution_relevance_score")), 3
+                clamp01(analysis.get("resolution_relevance_score")), 3
             ),
         },
         "source": source_info,
@@ -319,7 +320,7 @@ async def discover_events(
     candidate_events = await _collect_candidate_events(
         limit, shared_articles=shared_articles
     )
-    semaphore = asyncio.Semaphore(4)
+    semaphore = asyncio.Semaphore(getattr(settings, "LLM_CONCURRENCY", 4))
 
     async def process_event(
         candidate: dict[str, Any],
@@ -494,8 +495,8 @@ def build_evidence_items(articles: list[dict[str, Any]] | None) -> list[dict[str
             "summary": str(article.get("description") or "").strip()[:500],
             "url": str(article.get("url") or "").strip(),
             "published": str(article.get("published") or "").strip(),
-            "quality": round(_clamp01(article.get("quality_score")), 3),
-            "relevance": round(_clamp01(article.get("relevance_score")), 3),
+            "quality": round(clamp01(article.get("quality_score")), 3),
+            "relevance": round(clamp01(article.get("relevance_score")), 3),
         }
         # Chinese translations (added by translation_service.translate_articles
         # during discovery) carry through when present; the UI shows zh with the
@@ -511,11 +512,11 @@ def build_evidence_items(articles: list[dict[str, Any]] | None) -> list[dict[str
 
 
 def calculate_trust_score(analysis: dict[str, Any]) -> int:
-    confidence = _clamp01(analysis.get("confidence_score"))
-    news_quality = _clamp01(analysis.get("news_quality_score"))
-    evidence_strength = _clamp01(analysis.get("evidence_strength"))
-    relevance = _clamp01(analysis.get("resolution_relevance_score"))
-    conflict_penalty = 1.0 - _clamp01(analysis.get("evidence_conflict_score"))
+    confidence = clamp01(analysis.get("confidence_score"))
+    news_quality = clamp01(analysis.get("news_quality_score"))
+    evidence_strength = clamp01(analysis.get("evidence_strength"))
+    relevance = clamp01(analysis.get("resolution_relevance_score"))
+    conflict_penalty = 1.0 - clamp01(analysis.get("evidence_conflict_score"))
     score = (
         confidence * 30
         + news_quality * 25
@@ -531,9 +532,9 @@ def calculate_impact_score(analysis: dict[str, Any]) -> int:
         abs(safe_float(analysis.get("divergence"), 0.0)),
         40.0,
     ) / 40.0
-    confidence = _clamp01(analysis.get("confidence_score"))
-    evidence_strength = _clamp01(analysis.get("evidence_strength"))
-    relevance = _clamp01(analysis.get("resolution_relevance_score"))
+    confidence = clamp01(analysis.get("confidence_score"))
+    evidence_strength = clamp01(analysis.get("evidence_strength"))
+    relevance = clamp01(analysis.get("resolution_relevance_score"))
     score = (
         probability_change * 45
         + confidence * 20
@@ -575,9 +576,9 @@ def impact_drivers(analysis: dict[str, Any]) -> list[str]:
     drivers = []
     if abs(safe_float(analysis.get("divergence"), 0.0)) >= 10:
         drivers.append("material_probability_change")
-    if _clamp01(analysis.get("evidence_strength")) >= 0.35:
+    if clamp01(analysis.get("evidence_strength")) >= 0.35:
         drivers.append("strong_evidence")
-    if _clamp01(analysis.get("resolution_relevance_score")) >= 0.35:
+    if clamp01(analysis.get("resolution_relevance_score")) >= 0.35:
         drivers.append("direct_resolution_relevance")
     base_rate_category = analysis.get("base_rate_category")
     if (
@@ -683,10 +684,6 @@ def _build_semantics(analysis: dict[str, Any]) -> dict[str, Any] | None:
 
 def _event_id(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()[:12]
-
-
-def _clamp01(value: Any) -> float:
-    return max(0.0, min(1.0, safe_float(value, 0.0)))
 
 
 def _looks_numeric(value: Any) -> bool:

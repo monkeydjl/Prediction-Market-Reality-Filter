@@ -18,10 +18,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.services.calibration_service_event import skill_score
-
-
-def _clamp01(value: float) -> float:
-    return max(0.0, min(1.0, value))
+from app.utils.helpers import clamp01
 
 
 def calibration_trust(
@@ -47,7 +44,7 @@ def calibration_trust(
     mean_brier = segment_stats.get("mean_brier")
     if n < min_samples or mean_brier is None:
         return dormant_trust
-    return round(max(qualified_floor, _clamp01(skill_score(mean_brier))), 4)
+    return round(max(qualified_floor, clamp01(skill_score(mean_brier))), 4)
 
 
 def liquidity_factor(liquidity: float, *, floor: float) -> float:
@@ -56,7 +53,7 @@ def liquidity_factor(liquidity: float, *, floor: float) -> float:
     Otherwise ramps linearly from 0 to 1 as liquidity approaches `floor`."""
     if liquidity is None or liquidity <= 0 or floor <= 0:
         return 1.0
-    return round(_clamp01(liquidity / floor), 4)
+    return round(clamp01(liquidity / floor), 4)
 
 
 def decide(

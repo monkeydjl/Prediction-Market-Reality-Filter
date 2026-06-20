@@ -14,14 +14,11 @@ from typing import Any
 from app.core.config import settings
 from app.models.event import EventRecord
 from app.utils.file_store import locked_file, read_json, read_json_strict, write_json_atomic
+from app.utils.helpers import utc_now
 
 
 def _store_path() -> str:
     return os.path.abspath(settings.EVENT_STORE_FILE)
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _load_unlocked(path: str) -> dict[str, Any]:
@@ -61,7 +58,7 @@ def save_events(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     stored: list[dict[str, Any]] = []
     with locked_file(path):
         store = _load_for_write(path)
-        now = _now()
+        now = utc_now()
         for record in records:
             event_id = record["event_id"]
             existing = store.get(event_id) or {}
@@ -125,7 +122,7 @@ def resolve_event(
         if calibration is not None:
             record["calibration"] = calibration
         EventRecord.model_validate(record)  # gate: bad outcome/calibration raises here
-        now = _now()
+        now = utc_now()
         updated = {
             "event_id": event_id,
             "first_seen": entry.get("first_seen", now),
@@ -163,7 +160,7 @@ def set_tracking(
             tracking["priority"] = priority
         record["tracking"] = tracking
         EventRecord.model_validate(record)  # gate: bad tracking raises here
-        now = _now()
+        now = utc_now()
         updated = {
             "event_id": event_id,
             "first_seen": entry.get("first_seen", now),

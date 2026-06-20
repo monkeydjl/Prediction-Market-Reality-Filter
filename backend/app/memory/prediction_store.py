@@ -29,6 +29,7 @@ from app.memory.event_market_link_store import upsert_link
 from app.models.event import Prediction
 from app.services.calibration_service_event import brier_score, grade, skill_score
 from app.services.diagnosis_service import diagnose
+from app.utils.helpers import utc_now
 from app.utils import sqlite_db
 from app.utils.sqlite_db import reading, writing
 
@@ -156,7 +157,7 @@ def _ensure_schema(path: str) -> None:
         _INITIALIZED.add(path)
 
 
-def _now() -> str:
+def utcutc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -224,7 +225,7 @@ def freeze_prediction(record: dict[str, Any]) -> dict[str, Any] | None:
         qualified=diag["qualified"],
         segment_n=diag["segment_n"],
         segment_skill=diag["segment_skill"],
-        created_at=_now(),
+        created_at=utc_now(),
     )
 
     path = sqlite_db.loop_db_path()
@@ -315,7 +316,7 @@ def score_prediction(event_id: str, actual_outcome: float) -> dict[str, Any] | N
             SET status=?, actual_outcome=?, brier_score=?, resolved_at=?
             WHERE event_id=? AND status='open'
             """,
-            (new_status, round(_num(actual_outcome), 2), brier, _now(), event_id),
+            (new_status, round(_num(actual_outcome), 2), brier, utc_now(), event_id),
         )
     return get_prediction(event_id)
 
@@ -340,7 +341,7 @@ def void_prediction(event_id: str) -> dict[str, Any] | None:
         conn.execute(
             "UPDATE predictions SET status='voided', resolved_at=? "
             "WHERE event_id=? AND status='open'",
-            (_now(), event_id),
+            (utc_now(), event_id),
         )
     return get_prediction(event_id)
 

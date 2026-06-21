@@ -17,14 +17,16 @@
 
 | 维度 | 数量 |
 |---|---|
-| 核实已修复（FIXED） | ~74（含 2026-06-21 P0 修复批次的 P0-1/P0-2/P0-3 + P1-2/P1-4/P1-9） |
-| 核实仍开放（OPEN / PARTIAL） | ~50 |
+| 核实已修复（FIXED） | ~101（含 2026-06-21 P0 修复批次 + 2026-06-22 P1/P2 前端/闭环/scheduler/CORS/LLM 启动校验/dead-man/event_id 迁移批次） |
+| 核实仍开放（OPEN / PARTIAL） | ~23 |
 | 设计取舍（OPEN by-design，非缺陷） | 6 |
 | 已过时 / 误报（OBSOLETE / FALSE-POSITIVE） | 3 |
 
-**上线裁决（2026-06-21 修订）：3 个上线阻断 P0（fail-open 鉴权、迁移非原子、Docker healthcheck）已全部修复并经代码核实 + 518 passed / 11 skipped 测试确认（见 [p0-fix-report-2026-06-21.md](p0-fix-report-2026-06-21.md)）。剩余为 P1 安全/运维/数据闭环项，可在上线后持续迭代。无 P0 阻断。**
+**上线裁决（2026-06-22 修订）：3 个上线阻断 P0（fail-open 鉴权、迁移非原子、Docker healthcheck）仍全部关闭；本轮继续关闭多项 P1/P2 前端/闭环/scheduler/CORS/LLM 启动校验/dead-man/event_id 迁移/Recharts lazy/路由 loading/后端性能与 API 契约问题。最新后端验证 567 tests / 1 skipped；前端验证 20 tests + lint/build。无 P0 阻断。**
 
 > **2026-06-21 修订注：** 本文档早期版本把 P0-1/P0-2/P0-3 列为 OPEN；这些已由 p0-fix-report-2026-06-21 修复批次落地，本次同步将之移入第一部分（FIXED），并修正"P0-2 多 worker 双跑"的优先级标错——它是 P1-8，非 P0。
+
+> **2026-06-22 修订注：** P1-3/P1-5/P1-6/P1-7/P1-8/P1-10/P1-11/P1-12/P1-13/P1-14/P1-15/P1-16/P1-17/P1-18/P1-19/P1-20/P1-21/P1-22/P1-23 与 P2-12/P2-13/P2-14/P2-15/P2-16/P2-17/P2-18 已由 2026-06-21/22 批次落地，本次同步从 OPEN 索引移入 FIXED。
 
 ---
 
@@ -102,6 +104,37 @@
 
 **设计取舍注：** P0-1 强制点放在启动守卫（部署期单点）而非请求路径，避免破坏 bare-app 路由测试（不走 lifespan → 守卫不跑 → 请求路径保持简单）。运行期改空 key 需重启才生效，故"运行中被改空"不在守卫覆盖范围但实际不可达。
 
+### 2026-06-21/22 P1 前端/闭环/scheduler 批次 — 已核实
+
+| 问题（原编号） | 核实证据 |
+|---|---|
+| **P1-3** 匿名泄露 job 原始 error | `/api/health` 与 `/events/loop/status` 默认脱敏；带写 key 才返回 run detail |
+| **P1-5** 缺安全响应头 | `main.py` 全局添加 X-Content-Type-Options / X-Frame-Options / Referrer-Policy / HSTS / CSP |
+| **P1-6** 限流器内存增长 + 代理盲 | `rate_limit.py` 支持 forwarded client IP、动态路径归一、过期桶清理和总桶上限 |
+| **P1-7** CORS 通配方法/头 | `config.py` 默认显式 `CORS_ALLOWED_METHODS`/`CORS_ALLOWED_HEADERS`；`main.py` 启动校验拒绝 methods/headers wildcard 与 `origins=* + credentials=true` |
+| **P1-8** 多 worker 双跑 / 生产 reload | `run.py` 默认 `SERVER_RELOAD=false`；`start.bat dev` 显式开启 reload；`main.py` 受 `SCHEDULER_ENABLED` 门控；`scheduler.py` 使用本机进程锁防止同机多 worker 重复启动 |
+| **P1-10** 无启动期 LLM key 校验 | `LLM_STARTUP_CHECK_ENABLED=true` 时启动期发极小 chat 请求验证 primary LLM key/model/base URL，失败拒绝启动并脱敏 key |
+| **P1-11** Docker 安全 | `deploy/Dockerfile` 切换非 root `app` 用户；`.dockerignore` 排除 env/cache/runtime stores |
+| **P1-12** 无外部监控 / dead-man switch | `scripts/healthcheck.py` 先校验本地 `/api/health` 为 ok，再 ping 可选 `PMRF_DEADMAN_URL`；systemd healthcheck timer 已改为执行该脚本 |
+| **P1-13** 一条坏记录 abort 整批 | `event_store.py` 批量保存改为 per-record 隔离 |
+| **P1-14** 瞬时 LLM 故障毒化首见事件 | fallback 分析只 audit，不 freeze prediction |
+| **P1-15** event_id 48-bit 文本耦合 / 旧数据未迁移 | 新生成 ID 已为 16 hex；`scripts/migrate_event_ids.py` 默认 dry-run、`--apply` 同步 JSON event_store、audit JSONL、predictions、event_market_links；本地已迁移 78 个旧 ID |
+| **P1-16** Kalshi resolved-side 近零产出 | resolved 侧 over-fetch 到 200，并对本地有未结算 Kalshi 但远端 0 resolved 的场景告警 |
+| **P1-21** 不可逆结算无二次确认 | manual resolve 与批量 auto-resolve 均增加预览/二次确认 |
+| **P1-22** recharts 静态导入未 lazy | probability/edge/category/edges timeline 图表拆到 Next dynamic 子组件，父组件保留轻量 wrapper 与 skeleton |
+| **P1-23** 子路由缺 `loading.tsx` | `analyze`/`decisions`/`edges`/`events`/`history` 均补路由级 loading UI |
+| **P1-17** `/decisions/open` N+1 | `/events/decisions/open` 一次性 `list_all_events()` 建 event_id 索引，循环内不再逐条 `get_event` 全量读 JSON |
+| **P1-18** `histories_by_event()` 每次全量扫描 | audit 历史按文件 `mtime_ns + size` 做进程内缓存；`history_for_event()` 复用缓存；返回副本避免调用方污染 |
+| **P1-19** 端点零 `response_model=` | events router 全端点声明 response_model；新增 OpenAPI 契约测试防回归 |
+| **P1-20** RSS/SEC/Polymarket 静默失败 | RSS/SEC 抓取异常与 Polymarket 单市场坏行均记录 warning，仍 fail-soft 返回可用结果 |
+| **P2-12** NaN 渲染 | `fmtPct`/`fmtSignedPct`/decision edge formatter 对非 finite 数字返回 `—` |
+| **P2-13** recent-predictions 缺字段崩险 | 最近预测列表不再直接 `.toFixed()` permissive 字段，改用 `fmtPct` 与 Brier finite guard |
+| **P2-14** CSV 公式注入 + Excel 乱码 | `toCsv()` 加 UTF-8 BOM，并对 `= + - @` 开头单元格前缀 `'` |
+| **P2-15** sparkSeries 丢 0% | `sparkSeries()` 直接按 `Number(estimated)` 过滤 finite 值，保留真实 0% |
+| **P2-16** 主题 FOUC | root layout head 内联脚本在首屏绘制前同步设置 `light`/`dark` class；ThemeControl 只同步按钮状态 |
+| **P2-17** 缺 global-error.tsx | 新增 `app/global-error.tsx`，根布局异常时显示可重试的全屏错误页 |
+| **P2-18** 状态/交互细节 | TrackingDecision 随事件/状态 key 重挂载；SystemStatus 初始 loading；移动端 nav 换行横滑；Event/Review 表格移动端补列标签 |
+
 ---
 
 ## 第二部分：核实仍开放（OPEN / PARTIAL）
@@ -109,45 +142,30 @@
 按子系统列出。完整含证据与建议修复见 **[open-issues-verified-2026-06-21.md](open-issues-verified-2026-06-21.md)**；此处为索引。
 
 ### 安全 / 鉴权
-- **[P1]** 未鉴权成本放大（discover/analyze 仅 require_write_key 守护；P0-1 启动守卫已封堵主入口，强制 key 后不再匿名可调）
-- **[P1]** health/loop-status 向匿名泄露 job 原始 error 串（`loop_run_store.py:138 dict(row)`）
-- **[P1]** CORS allow_methods/headers=["*"]，无 origins=* + credentials 守卫（PARTIAL：origins 默认安全）
-- **[P1]** 缺安全响应头（X-Content-Type-Options / X-Frame-Options / CSP / HSTS）
-- **[P1]** 限流器 `_hits` 按含路径参数的 key 永不清理（内存增长）+ 代理盲（`rate_limit.py:24-25`）
 
-> **2026-06-21 已修（移入第一部分）：** ~~P0-1 fail-open~~（启动守卫）、~~P0-2 迁移非原子~~（discrete execute）、~~P1-2 key 非常量时间比较~~（hmac.compare_digest）、~~P1-4 无 max_length~~（Field 约束）。
+> **已修（移入第一部分）：** ~~P0-1 fail-open / 未鉴权成本放大主入口~~（启动守卫）、~~P0-2 迁移非原子~~（discrete execute）、~~P1-2 key 非常量时间比较~~（hmac.compare_digest）、~~P1-3 health/loop-status 匿名泄露~~、~~P1-4 无 max_length~~（Field 约束）、~~P1-5 缺安全响应头~~、~~P1-6 限流器内存增长 + 代理盲~~、~~P1-7 CORS allow_methods/headers wildcard~~。
 
 ### 调度 / 运维 / 部署
-- **[P1]** 多 worker 双跑（`main.py:43` 无条件 start_scheduler；`run.py:8 reload=True`）
-- **[P1]** 无启动期 LLM key 有效性校验（仅记长度）
-- **[P1]** Docker 以 root 运行；无 `.dockerignore`（.env 可能进镜像层）
-- **[P1]** 缺外部监控 / dead-man switch（无人 ping /api/health）
 - **[P2]** 调度器无持久 jobstore、与 API 进程同生死，无 supervisor（systemd 文件存在但需部署）
 - **[P2]** graceful shutdown `shutdown(wait=False)` 可中断结算中
 - **[P2]** misfire 注释（300s）与实际（86400s）不符（`scheduler.py:25-26`）
 - **[P2]** CI 无 pip-audit/npm audit，无前端 job
 
-> **2026-06-21 已修（移入第一部分）：** ~~P0-3 Docker healthcheck~~（python urllib）、~~P1-9 health 降级返 200~~（503）。注：早期版本曾把"多 worker 双跑"误标为 P0，实际为 P1-8（与 open-issues 一致）。
+> **已修（移入第一部分）：** ~~P0-3 Docker healthcheck~~（python urllib）、~~P1-8 多 worker 双跑 / 生产 reload~~（本机进程锁 + reload 默认关）、~~P1-9 health 降级返 200~~（503）、~~P1-10 无启动期 LLM key 有效性校验~~、~~P1-11 Docker 以 root 运行 / 无 `.dockerignore`~~、~~P1-12 外部监控 / dead-man switch~~。
 
 ### 后端数据闭环
-- **[P1]** 一条坏记录 abort 整批 discover 保存（`event_store.py:78`）
-- **[P1]** 瞬时 LLM 故障当天首见事件冻结降级预测且永不替换
-- **[P1]** event_id = SHA1(question)[:12]（48-bit，文本耦合，`event_intelligence_service.py:573`）
-- **[P1]** Kalshi resolved-side 近零产出，Kalshi 事件永不结算
 - **[P2]** resolve_event 无条件覆盖 outcome（非幂等，无版本史）（by-design）
 - **[P2]** AUTO_VERIFY_THRESHOLD=1.0 仅精确匹配自动核验（by-design，fail-closed）
 
+> **已修（移入第一部分）：** ~~P1-13 一条坏记录 abort 整批~~、~~P1-14 瞬时 LLM 故障冻结降级预测~~、~~P1-15 event_id 48-bit / 旧数据未迁移~~、~~P1-16 Kalshi resolved-side 近零产出~~。
+
 ### 后端存储 / 性能（多为规模债，当前量级未触发）
-- **[P1]** /decisions/open N+1：每预测一次 `get_event` 全量读 JSON（`events.py:303-306`）
-- **[P1]** `histories_by_event()` 每次全量读 audit 文件（`event_audit_service.py:198-210`）
 - **[P2]** event_store.json 每次 save 全量重写（无归档/TTL）
 - **[P2]** SQLite 无 wal_checkpoint 管理；无 integrity_check
 - **[P2]** 跨存储无外键/引用完整性；无 schema version 表
 - **[P3]** `utcutc_now` 死代码（`prediction_store.py:160-161`）
 
 ### 后端服务（可观测性 / API 契约）
-- **[P1]** 端点零 `response_model=`（OpenAPI 响应 schema 空，前端无类型安全）
-- **[P1]** rss/sec_edgar 静默 `except: return []` 无日志；polymarket_history 内层 per-market 静默 continue（PARTIAL：外层已加日志）
 - **[P2]** {event_id} 路径参数无格式校验
 - **[P2]** 无 API 版本前缀 /v1/（by-design）
 - **[P2]** 异常处理模式不统一（[] / fallback / None 三种）
@@ -155,16 +173,8 @@
 - **[P3]** 类型注解不全；中英混合注释；懒导入隐藏依赖
 
 ### 前端（多为 P2/P3 体验/无障碍/性能，未逐条复核，按文档计 OPEN）
-- **[P1]** 不可逆结算无二次确认（manual-resolve + 批量 auto-resolve 单击即提交）
-- **[P1]** recharts 静态导入未 lazy（每页 ~200KB）
-- **[P1]** 路由级 loading.tsx 仅根级，子路由缺
-- **[P2]** fmtPct/fmtEdge 用 `Number(n ?? 0)` 漏真 NaN → 渲染 "NaN%"（`format.ts:76,80`）
-- **[P2]** recent-predictions 对 permissive 字段直接 `.toFixed()`，缺失即渲染崩（`:59,62`）
-- **[P2]** csv.ts 未中和 `= + - @`（公式注入）+ 无 UTF-8 BOM（Excel 乱码）
-- **[P2]** sparkSeries `v > 0` 过滤丢真 0%（`adapt.ts:118-122`）
-- **[P2]** 主题 FOUC（useEffect 应用主题，无阻塞内联脚本）
-- **[P2]** 缺 global-error.tsx（根布局抛错则白屏）
-- **[P2]** TrackingDecision props 变化不同步；SystemStatus 首帧闪烁；移动端 nav 不折叠；表格移动端丢列头
+
+> **已修（移入第一部分）：** ~~P1-21 不可逆结算无二次确认~~、~~P1-22 recharts 未 lazy~~、~~P1-23 子路由缺 loading~~、~~P2-12 NaN 渲染~~、~~P2-13 recent-predictions 缺字段崩险~~、~~P2-14 CSV 公式注入 + 无 BOM~~、~~P2-15 sparkSeries 丢 0%~~、~~P2-16 主题 FOUC~~、~~P2-17 缺 global-error.tsx~~、~~P2-18 状态/交互细节~~。
 - **[P3]** recent-predictions 显示 event_id 而非标题；图标按钮缺 aria-label；焦点环缺失；fmtDateTime 每次 new Intl；按钮/inputCls 样式重复；等约 25 项体验/无障碍长尾
 
 ### 设计取舍（非缺陷，记录在案）
@@ -177,4 +187,3 @@
 - manual-resolve 测试"2 失败"：现 16/16 通过（OBSOLETE）
 - /dashboard 死链：不存在（FALSE-POSITIVE）
 - legacy 交易层、多行 ledger 相关里程碑问题：对应代码已删除/回退（OBSOLETE）
-

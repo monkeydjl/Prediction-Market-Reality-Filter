@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { AlertCircle, Check, Loader2 } from "lucide-react";
 import { eventsApi } from "@/lib/api";
 import { PRIORITY_LABELS, STATUS_LABELS } from "@/lib/format";
@@ -22,10 +22,16 @@ export function TrackingDecision({
   const [curPriority, setCurPriority] = useState(priority ?? "medium");
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
+  const saveSeq = useRef(0);
 
   async function save(next: { status?: string; priority?: string }) {
+    if (pending) return;
+
     const prevStatus = curStatus;
     const prevPriority = curPriority;
+    const seq = saveSeq.current + 1;
+    saveSeq.current = seq;
+
     if (next.status) setCurStatus(next.status);
     if (next.priority) setCurPriority(next.priority);
     setPending(true);
@@ -33,11 +39,15 @@ export function TrackingDecision({
     try {
       await eventsApi.setTracking(id, next);
     } catch {
-      setCurStatus(prevStatus);
-      setCurPriority(prevPriority);
-      setFailed(true);
+      if (saveSeq.current === seq) {
+        setCurStatus(prevStatus);
+        setCurPriority(prevPriority);
+        setFailed(true);
+      }
     } finally {
-      setPending(false);
+      if (saveSeq.current === seq) {
+        setPending(false);
+      }
     }
   }
 

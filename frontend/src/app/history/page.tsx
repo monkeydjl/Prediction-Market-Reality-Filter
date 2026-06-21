@@ -7,6 +7,9 @@ import { AccuracySummary } from "@/components/history/accuracy-summary";
 import { PredictionCalibrationCard } from "@/components/history/prediction-calibration";
 import { CategoryAccuracy, toCategoryData, type CategoryDatum } from "@/components/history/category-accuracy";
 import { ReviewTable, toReview, type ResolvedReview } from "@/components/history/review-table";
+import { PendingLinks } from "@/components/history/pending-links";
+import { RecentPredictions } from "@/components/history/recent-predictions";
+import { SectionErrorBoundary } from "@/components/section-error-boundary";
 import { eventsApi, type CalibrationAgg, type PredictionCalibration } from "@/lib/api";
 
 const EMPTY_OVERALL: CalibrationAgg = { brier_score: null, skill_score: null, grade: "no_data", n: 0 };
@@ -14,13 +17,17 @@ const EMPTY_PRED: PredictionCalibration = {
   n: 0, brier_score: null, grade: "no_data", mean_raw_edge: null,
   realized_edge: null, directional_hit_rate: null, by_category: {},
 };
+const REVIEW_PAGE_SIZE = 50;
 
 export default function HistoryPage() {
   const [overall, setOverall] = useState<CalibrationAgg>(EMPTY_OVERALL);
   const [predCal, setPredCal] = useState<PredictionCalibration>(EMPTY_PRED);
   const [categoryData, setCategoryData] = useState<CategoryDatum[]>([]);
   const [reviews, setReviews] = useState<ResolvedReview[]>([]);
+  const [loadedEvents, setLoadedEvents] = useState(0);
+  const [totalEvents, setTotalEvents] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMoreReviews, setLoadingMoreReviews] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [resolveMsg, setResolveMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -29,17 +36,39 @@ export default function HistoryPage() {
     const [cal, predCalibration, list] = await Promise.all([
       eventsApi.calibration(),
       eventsApi.predictionCalibration(),
-      eventsApi.list(200),
+      eventsApi.list(REVIEW_PAGE_SIZE, 0),
     ]);
     setOverall(cal.overall ?? EMPTY_OVERALL);
     setPredCal(predCalibration ?? EMPTY_PRED);
     setCategoryData(toCategoryData(cal.by_base_rate_category ?? {}));
+    setLoadedEvents((list.events ?? []).length);
+    setTotalEvents(list.total ?? list.count ?? 0);
     setReviews(
       (list.events ?? [])
         .map((e) => toReview(e.record))
         .filter((r): r is ResolvedReview => r !== null),
     );
   }, []);
+
+  const loadMoreReviews = useCallback(async () => {
+    setLoadingMoreReviews(true);
+    setError(null);
+    try {
+      const list = await eventsApi.list(REVIEW_PAGE_SIZE, loadedEvents);
+      setLoadedEvents((current) => current + (list.events ?? []).length);
+      setTotalEvents(list.total ?? totalEvents);
+      setReviews((current) => [
+        ...current,
+        ...(list.events ?? [])
+          .map((e) => toReview(e.record))
+          .filter((r): r is ResolvedReview => r !== null),
+      ]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "加载更多复盘失败");
+    } finally {
+      setLoadingMoreReviews(false);
+    }
+  }, [loadedEvents, totalEvents]);
 
   useEffect(() => {
     let cancelled = false;
@@ -117,10 +146,22 @@ export default function HistoryPage() {
           </div>
         ) : (
           <>
-            <AccuracySummary overall={overall} />
-            <PredictionCalibrationCard data={predCal} />
+            <SectionErrorBoundary title="准确率摘要">
+              <AccuracySummary overall={overall} />
+            </SectionErrorBoundary>
+            <SectionErrorBoundary title="预测校准">
+              <PredictionCalibrationCard data={predCal} />
+            </SectionErrorBoundary>
+            <SectionErrorBoundary title="待审链接">
+              <PendingLinks />
+            </SectionErrorBoundary>
+            <SectionErrorBoundary title="预测记录">
+              <RecentPredictions />
+            </SectionErrorBoundary>
             <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
-              <CategoryAccuracy data={categoryData} />
+              <SectionErrorBoundary title="领域校准">
+                <CategoryAccuracy data={categoryData} />
+              </SectionErrorBoundary>
               <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5">
                 <h2 className="text-sm font-semibold">校准提示</h2>
                 <ul className="flex flex-col gap-3 text-sm leading-relaxed text-muted-foreground">
@@ -139,7 +180,15 @@ export default function HistoryPage() {
                 </ul>
               </div>
             </div>
-            <ReviewTable reviews={reviews} />
+            <SectionErrorBoundary title="复盘表">
+              <ReviewTable
+                reviews={reviews}
+                loaded={loadedEvents}
+                total={totalEvents}
+                loadingMore={loadingMoreReviews}
+                onLoadMore={loadMoreReviews}
+              />
+            </SectionErrorBoundary>
           </>
         )}
       </main>

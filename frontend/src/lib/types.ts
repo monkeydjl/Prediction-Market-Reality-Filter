@@ -74,6 +74,15 @@ export interface CrossValidation {
   divergence?: number;
 }
 
+export interface EvidenceAggregate {
+  direction?: string;
+  strength?: number;
+  conflict?: number;
+  freshness?: number;
+  resolution_relevance?: number;
+  source_count?: number;
+}
+
 // One collected piece of source evidence (news article / official release).
 // kind groups it in the detail UI: "official" vs "news".
 export interface EvidenceItem {
@@ -103,7 +112,7 @@ export interface EventRecord {
   probability?: Probability;
   credibility?: Credibility;
   impact?: Impact;
-  evidence?: { direction?: string };
+  evidence?: EvidenceAggregate;
   evidence_items?: EvidenceItem[];
   tracking?: Tracking | null;
   source?: EventSource;

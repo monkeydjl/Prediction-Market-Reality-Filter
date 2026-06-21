@@ -18,6 +18,8 @@ const inputCls =
 export default function AnalyzePage() {
   const [question, setQuestion] = useState("");
   const [baseline, setBaseline] = useState("50");
+  const [volume, setVolume] = useState("");
+  const [liquidity, setLiquidity] = useState("");
   const [news, setNews] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,14 +27,40 @@ export default function AnalyzePage() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (baseline.trim() === "") {
+      setError("请输入有效的基准概率");
+      return;
+    }
+    const baselineValue = Number(baseline);
+    if (!Number.isFinite(baselineValue)) {
+      setError("请输入有效的基准概率");
+      return;
+    }
+    if (baselineValue < 0 || baselineValue > 100) {
+      setError("基准概率必须在 0 到 100 之间");
+      return;
+    }
+    const volumeValue = volume.trim() === "" ? undefined : Number(volume);
+    if (volumeValue !== undefined && (!Number.isFinite(volumeValue) || volumeValue < 0)) {
+      setError("成交量必须是非负数字");
+      return;
+    }
+    const liquidityValue = liquidity.trim() === "" ? undefined : Number(liquidity);
+    if (liquidityValue !== undefined && (!Number.isFinite(liquidityValue) || liquidityValue < 0)) {
+      setError("流动性必须是非负数字");
+      return;
+    }
+
     setPending(true);
     setError(null);
     setResult(null);
     try {
       const rec = await eventsApi.analyze({
         event_question: question.trim(),
-        baseline_probability: Number(baseline),
+        baseline_probability: baselineValue,
         news_context: news.trim() || undefined,
+        volume: volumeValue,
+        liquidity: liquidityValue,
       });
       setResult(rec);
     } catch (err) {
@@ -76,10 +104,37 @@ export default function AnalyzePage() {
               type="number"
               min={0}
               max={100}
+              step="any"
               value={baseline}
               onChange={(e) => setBaseline(e.target.value)}
               required
             />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs text-muted-foreground">成交量（可选）</label>
+              <input
+                className={inputCls}
+                type="number"
+                min={0}
+                step="any"
+                value={volume}
+                onChange={(e) => setVolume(e.target.value)}
+                placeholder="用于衡量市场深度"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs text-muted-foreground">流动性（可选）</label>
+              <input
+                className={inputCls}
+                type="number"
+                min={0}
+                step="any"
+                value={liquidity}
+                onChange={(e) => setLiquidity(e.target.value)}
+                placeholder="用于 priced-in 风险评分"
+              />
+            </div>
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-xs text-muted-foreground">新闻背景（可选）</label>

@@ -10,6 +10,8 @@ import { MarketPanel } from "@/components/detail/market-links";
 import { SignalPanel } from "@/components/detail/signal-panel";
 import { OfficialColumn, NewsColumn } from "@/components/detail/evidence-list";
 import { TrackingDecision } from "@/components/detail/tracking-decision";
+import { ManualResolvePanel } from "@/components/detail/manual-resolve-panel";
+import { DecisionReportPanel } from "@/components/detail/decision-report-panel";
 import { ProbabilityChart, buildSeries } from "@/components/detail/probability-chart";
 import { DeltaPill, SupportMeter } from "@/components/indicators";
 import { eventsApi } from "@/lib/api";
@@ -153,6 +155,13 @@ function DetailInner() {
             status={record.tracking?.status}
             priority={record.tracking?.priority}
           />
+          <ManualResolvePanel
+            record={record}
+            onResolved={(entry) => {
+              setRecord(entry.record);
+              setView(adaptRecord(entry.record));
+            }}
+          />
         </div>
       </div>
 
@@ -174,6 +183,8 @@ function DetailInner() {
         <h2 className="text-sm font-semibold">证据与交叉验证</h2>
         <SignalPanel record={record} />
       </section>
+
+      <DecisionReportPanel eventId={record.event_id} />
 
       {similar.length > 0 && (
         <section className="flex flex-col gap-3">

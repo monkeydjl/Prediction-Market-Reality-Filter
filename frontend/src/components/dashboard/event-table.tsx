@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Download, Search } from "lucide-react";
 import type { EventView } from "@/lib/adapt";
 import { categoryLabel, fmtPct, STATUS_LABELS } from "@/lib/format";
 import {
@@ -13,6 +13,7 @@ import {
 } from "@/components/indicators";
 import { Sparkline } from "@/components/sparkline";
 import { cn } from "@/lib/utils";
+import { downloadCsv } from "@/lib/csv";
 
 type SortKey = "delta" | "probability" | "support" | "value";
 type StatusFilter = "active" | "tracking" | "watching" | "archived" | "all";
@@ -32,13 +33,16 @@ const selectCls =
 export function EventTable({
   events,
   sparklines = {},
+  total,
 }: {
   events: EventView[];
   sparklines?: Record<string, number[]>;
+  total?: number;
 }) {
   const [category, setCategory] = useState("all");
   const [status, setStatus] = useState<StatusFilter>("active");
   const [sort, setSort] = useState<SortKey>("delta");
+  const [query, setQuery] = useState("");
 
   const categories = useMemo(
     () => Array.from(new Set(events.map((e) => e.category))),
@@ -47,6 +51,14 @@ export function EventTable({
 
   const rows = useMemo(() => {
     let r = events;
+    const q = query.trim().toLowerCase();
+    if (q) {
+      r = r.filter((e) =>
+        `${e.title} ${e.description} ${categoryLabel(e.category)}`
+          .toLowerCase()
+          .includes(q),
+      );
+    }
     if (status === "active") r = r.filter((e) => e.trackingStatus !== "archived");
     else if (status !== "all") r = r.filter((e) => e.trackingStatus === status);
     if (category !== "all") r = r.filter((e) => e.category === category);
@@ -62,7 +74,24 @@ export function EventTable({
           return b.valueScore - a.valueScore;
       }
     });
-  }, [events, category, status, sort]);
+  }, [events, category, status, sort, query]);
+
+  function exportRows() {
+    downloadCsv(
+      "pmrf-events.csv",
+      rows.map((e) => ({
+        id: e.id,
+        title: e.title,
+        category: categoryLabel(e.category),
+        probability: e.currentProbability,
+        baseline: e.baselineProbability,
+        delta: e.delta,
+        support: e.evidenceSupport,
+        priority: e.priority,
+        status: e.trackingStatus,
+      })),
+    );
+  }
 
   return (
     <section className="flex flex-col gap-3">
@@ -70,10 +99,29 @@ export function EventTable({
         <h2 className="text-sm font-semibold">
           全部事件
           <span className="ml-2 font-mono text-xs font-normal text-muted-foreground">
-            {rows.length}
+            {rows.length}/{events.length}{total != null ? ` / ${total}` : ""}
           </span>
         </h2>
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={exportRows}
+            disabled={rows.length === 0}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-secondary px-2 text-xs text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+          >
+            <Download className="size-3.5" aria-hidden="true" />
+            导出
+          </button>
+          <label className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+            <input
+              className="h-8 w-48 rounded-md border border-border bg-secondary pl-7 pr-2 text-xs text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="搜索事件"
+              aria-label="搜索事件"
+            />
+          </label>
           <select
             className={selectCls}
             value={category}

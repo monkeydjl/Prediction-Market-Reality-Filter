@@ -1,7 +1,8 @@
-import { Check, X } from "lucide-react";
+import { Check, Download, X } from "lucide-react";
 import type { EventRecord } from "@/lib/types";
 import { fmtDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { downloadCsv } from "@/lib/csv";
 
 export interface ResolvedReview {
   id: string;
@@ -48,13 +49,52 @@ function OutcomeTag({ correct }: { correct: boolean }) {
   );
 }
 
-export function ReviewTable({ reviews }: { reviews: ResolvedReview[] }) {
+export function ReviewTable({
+  reviews,
+  loaded,
+  total,
+  loadingMore,
+  onLoadMore,
+}: {
+  reviews: ResolvedReview[];
+  loaded?: number;
+  total?: number;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
+}) {
+  function exportRows() {
+    downloadCsv(
+      "pmrf-resolved-reviews.csv",
+      reviews.map((r) => ({
+        id: r.id,
+        title: r.title,
+        predicted: r.predicted,
+        actual: r.actual,
+        brier: r.brier,
+        grade: r.grade,
+        correct: r.correct,
+        resolved_at: r.resolvedAt,
+      })),
+    );
+  }
+
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-sm font-semibold">
-        已结算判断
-        <span className="ml-2 font-mono text-xs font-normal text-muted-foreground">{reviews.length}</span>
-      </h2>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold">
+          已结算判断
+          <span className="ml-2 font-mono text-xs font-normal text-muted-foreground">{reviews.length}</span>
+        </h2>
+        <button
+          type="button"
+          onClick={exportRows}
+          disabled={reviews.length === 0}
+          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-secondary px-2 text-xs text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+        >
+          <Download className="size-3.5" aria-hidden="true" />
+          导出
+        </button>
+      </div>
       <div className="overflow-hidden rounded-lg border border-border bg-card">
         <div className="hidden grid-cols-[1fr_auto_auto_auto_auto] items-center gap-4 border-b border-border px-4 py-2.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground md:grid">
           <div>历史事件</div>
@@ -107,6 +147,18 @@ export function ReviewTable({ reviews }: { reviews: ResolvedReview[] }) {
           </ul>
         )}
       </div>
+      {onLoadMore && loaded != null && total != null && loaded < total && (
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={loadingMore}
+            className="inline-flex h-9 items-center rounded-md border border-border bg-secondary px-4 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+          >
+            {loadingMore ? "加载中…" : `加载更多事件（${loaded}/${total}）`}
+          </button>
+        </div>
+      )}
     </section>
   );
 }

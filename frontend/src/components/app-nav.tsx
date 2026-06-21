@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Activity, FlaskConical, History, Radar, Target } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { OperatorKeyControl } from "@/components/operator-key-control";
+import { ThemeControl } from "@/components/theme-control";
 
 const NAV = [
   { href: "/", label: "监控面板", icon: Radar, match: ["/", "/events"] },
@@ -59,6 +61,8 @@ export function AppNav() {
             <span className="size-1.5 animate-pulse rounded-full bg-pos" aria-hidden="true" />
             实时情报通道
           </span>
+          <ThemeControl />
+          <OperatorKeyControl />
         </div>
       </div>
     </header>

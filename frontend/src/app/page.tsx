@@ -6,12 +6,16 @@ import { AppNav } from "@/components/app-nav";
 import { SummaryBar, summarize } from "@/components/dashboard/summary-bar";
 import { MoversBoard } from "@/components/dashboard/movers-board";
 import { EventTable } from "@/components/dashboard/event-table";
+import { SystemStatus } from "@/components/dashboard/system-status";
+import { SectionErrorBoundary } from "@/components/section-error-boundary";
 import { eventsApi } from "@/lib/api";
 import { adaptEntry, adaptMover, sparkSeries, type EventView } from "@/lib/adapt";
 
-async function fetchDashboardData() {
+const PAGE_SIZE = 50;
+
+async function fetchDashboardData(limit = PAGE_SIZE, offset = 0) {
   const [list, moversResp] = await Promise.all([
-    eventsApi.list(100),
+    eventsApi.list(limit, offset),
     eventsApi.movers(10),
   ]);
   const events = (list.events ?? []).map(adaptEntry);
@@ -32,6 +36,7 @@ async function fetchDashboardData() {
 
   return {
     events,
+    total: list.total ?? list.count ?? events.length,
     movers,
     sparklines: Object.fromEntries(series) as Record<string, number[]>,
   };
@@ -41,7 +46,9 @@ export default function DashboardPage() {
   const [events, setEvents] = useState<EventView[]>([]);
   const [movers, setMovers] = useState<EventView[]>([]);
   const [sparklines, setSparklines] = useState<Record<string, number[]>>({});
+  const [totalEvents, setTotalEvents] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -51,6 +58,7 @@ export default function DashboardPage() {
     try {
       const data = await fetchDashboardData();
       setEvents(data.events);
+      setTotalEvents(data.total);
       setMovers(data.movers);
       setSparklines(data.sparklines);
     } catch (e) {
@@ -60,11 +68,27 @@ export default function DashboardPage() {
     }
   }, []);
 
+  const loadMore = useCallback(async () => {
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const data = await fetchDashboardData(PAGE_SIZE, events.length);
+      setEvents((current) => [...current, ...data.events]);
+      setTotalEvents(data.total);
+      setMovers(data.movers);
+      setSparklines((current) => ({ ...current, ...data.sparklines }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "加载更多失败");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [events.length]);
+
   // Initial load on mount. `load` is stable (useCallback with []), so this
-  // runs once. React 18+ ignores state updates after unmount, so no cancelled
-  // guard is needed.
+  // runs once.
   useEffect(() => {
-    load();
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
   }, [load]);
 
   async function discover() {
@@ -137,15 +161,36 @@ export default function DashboardPage() {
           </div>
         )}
 
-        <SummaryBar summary={summary} />
+        <SectionErrorBoundary title="摘要栏">
+          <SummaryBar summary={summary} />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary title="系统状态">
+          <SystemStatus />
+        </SectionErrorBoundary>
         {loading && events.length === 0 ? (
           <div className="grid h-40 place-items-center rounded-lg border border-border bg-card text-sm text-muted-foreground">
             加载中…
           </div>
         ) : (
           <>
-            <MoversBoard movers={movers} sparklines={sparklines} />
-            <EventTable events={events} sparklines={sparklines} />
+            <SectionErrorBoundary title="概率异动榜">
+              <MoversBoard movers={movers} sparklines={sparklines} />
+            </SectionErrorBoundary>
+            <SectionErrorBoundary title="事件列表">
+              <EventTable events={events} sparklines={sparklines} total={totalEvents} />
+            </SectionErrorBoundary>
+            {events.length < totalEvents && (
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  className="inline-flex h-9 items-center rounded-md border border-border bg-secondary px-4 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+                >
+                  {loadingMore ? "加载中…" : `加载更多（${events.length}/${totalEvents}）`}
+                </button>
+              </div>
+            )}
           </>
         )}
       </main>

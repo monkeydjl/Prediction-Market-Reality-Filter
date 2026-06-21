@@ -30,7 +30,13 @@
 
 ## History
 - [Changelog](../CHANGELOG.md)
-- [Archive](archive/) — Historical milestone reviews and code audits
+- [Archive](archive/) — Historical dashboard/phase summaries and change logs
+
+## Reviews & Audits
+- [Reviews Index](reviews/README.md) — All code reviews, multi-AI audits, Go/No-Go assessments (consolidated 2026-06-21)
+- [Consolidated Issue Registry](reviews/consolidated-issue-registry-2026-06-21.md) — All ~150 deduped issues with verified status
+- [Open Issues (verified)](reviews/open-issues-verified-2026-06-21.md) — Remaining open issues with file:line evidence (P0 all fixed, no blockers)
+- [P0 Fix Report](reviews/p0-fix-report-2026-06-21.md) — 3 launch-blocking P0 fixes + verification (518 passed)
 
 ## External References
 - `/docs` — OpenAPI (Swagger) auto-generated

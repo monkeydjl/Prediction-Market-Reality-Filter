@@ -15,7 +15,9 @@ services:
       - pmrf_logs:/app/logs
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/health"]
+      # python (not curl) — curl is absent from python:3.11-slim. Exit non-zero on
+      # any non-2xx so the orchestrator sees /api/health degraded states too.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health', timeout=5).status < 400 else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3

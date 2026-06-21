@@ -33,7 +33,12 @@ from app.utils.helpers import utc_now
 from app.utils import sqlite_db
 from app.utils.sqlite_db import reading, writing
 
-_SCHEMA = """
+# Schema as discrete statements. _SCHEMA (joined) is used for the idempotent
+# first-run create via executescript; the individual statements in
+# _SCHEMA_STATEMENTS are replayed one-by-one with conn.execute() inside _migrate
+# so the table rebuild rides a single transaction (executescript would force an
+# implicit COMMIT mid-rebuild, breaking atomicity — see _migrate).
+_CREATE_PREDICTIONS = """
 CREATE TABLE IF NOT EXISTS predictions (
     id                  TEXT PRIMARY KEY,
     event_id            TEXT NOT NULL UNIQUE,
@@ -57,9 +62,13 @@ CREATE TABLE IF NOT EXISTS predictions (
     actual_outcome      REAL,
     brier_score         REAL,
     resolved_at         TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_pred_status ON predictions(status);
+)
 """
+_CREATE_STATUS_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_pred_status ON predictions(status)"
+)
+_SCHEMA_STATEMENTS = (_CREATE_PREDICTIONS, _CREATE_STATUS_INDEX)
+_SCHEMA = ";\n".join(stmt.strip() for stmt in _SCHEMA_STATEMENTS) + ";"
 
 # Columns added after the M1 schema; _migrate adds any missing on an existing DB.
 _MIGRATIONS = {
@@ -108,6 +117,12 @@ def _migrate(conn: Any) -> None:
     # rebuild would fail on duplicate event_ids). Keep the open row per event if
     # one exists (the standing commitment), else the latest by created_at; drop
     # the rest (superseded history is not part of the commitment model).
+    #
+    # All steps run via conn.execute() (NOT executescript) so the whole rebuild
+    # rides the single transaction opened by writing(): executescript() issues an
+    # implicit COMMIT before running, which would commit the RENAME + CREATE before
+    # the data copy — a failure mid-copy would then leave an empty predictions
+    # table with the rows stranded in predictions_old and no way to roll back.
     cols = [row["name"] for row in conn.execute("PRAGMA table_info(predictions)")]
     not_null_defaults = {
         "contract_id": "''", "platform": "''", "base_rate_category": "'unknown'",
@@ -120,19 +135,28 @@ def _migrate(conn: Any) -> None:
         for c in cols
     )
     conn.execute("ALTER TABLE predictions RENAME TO predictions_old")
-    conn.executescript(_SCHEMA)
-    # Rank rows per event: open first (status='open' -> 0), then most recent
-    # created_at; keep rank 1 only. ROW_NUMBER is available in SQLite >= 3.25.
+    # Index names are global; after the RENAME they stay attached to
+    # predictions_old but keep their names, so a plain CREATE INDEX IF NOT EXISTS
+    # below would no-op and leave the rebuilt table unindexed. Drop them first so
+    # the rebuild recreates them on the new table.
+    conn.execute("DROP INDEX IF EXISTS idx_pred_status")
+    conn.execute("DROP INDEX IF EXISTS idx_pred_category")
+    for stmt in _SCHEMA_STATEMENTS:
+        conn.execute(stmt)
+    # Keep one row per event without ROW_NUMBER() (unavailable on SQLite < 3.25):
+    # a correlated subquery selects, for each event, the rowid of its preferred
+    # survivor — open first (status='open' sorts last so DESC puts it first), then
+    # most recent created_at, then highest rowid as a stable tiebreak.
     conn.execute(
         f"""
         INSERT INTO predictions ({col_csv})
-        SELECT {select_csv} FROM (
-            SELECT *, ROW_NUMBER() OVER (
-                PARTITION BY event_id
-                ORDER BY (status='open') DESC, created_at DESC, rowid DESC
-            ) AS _rn
-            FROM predictions_old
-        ) WHERE _rn = 1
+        SELECT {select_csv} FROM predictions_old p
+        WHERE p.rowid = (
+            SELECT q.rowid FROM predictions_old q
+            WHERE q.event_id = p.event_id
+            ORDER BY (q.status='open') DESC, q.created_at DESC, q.rowid DESC
+            LIMIT 1
+        )
         """
     )
     conn.execute("DROP TABLE predictions_old")

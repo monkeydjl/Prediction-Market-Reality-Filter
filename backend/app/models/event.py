@@ -1,14 +1,16 @@
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class EventAnalysisRequest(BaseModel):
-    event_question: str
-    baseline_probability: float = 50.0
-    news_context: str | None = None
-    volume: float | None = None
-    liquidity: float | None = None
+    # Length caps bound LLM token cost / log size / memory on the analyze path,
+    # which is reachable by any authenticated caller. Generous but not unbounded.
+    event_question: str = Field(min_length=1, max_length=2000)
+    baseline_probability: float = Field(default=50.0, ge=0.0, le=100.0)
+    news_context: str | None = Field(default=None, max_length=20000)
+    volume: float | None = Field(default=None, ge=0.0)
+    liquidity: float | None = Field(default=None, ge=0.0)
 
 
 class Probability(BaseModel):

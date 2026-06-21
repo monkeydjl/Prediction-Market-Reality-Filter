@@ -28,6 +28,11 @@ class Settings:
     CORS_ALLOW_CREDENTIALS: bool = _env_bool("CORS_ALLOW_CREDENTIALS", "false")
 
     API_WRITE_KEY: str = os.getenv("API_WRITE_KEY", "")
+    # Fail-closed by default: when API_WRITE_KEY is empty the app refuses to start
+    # so a deploy that forgets to set it is never silently public. Set
+    # ALLOW_OPEN_WRITES=true to explicitly opt into keyless (open) write endpoints
+    # for local dev.
+    ALLOW_OPEN_WRITES: bool = _env_bool("ALLOW_OPEN_WRITES", "false")
     RATE_LIMIT_ENABLED: bool = _env_bool("RATE_LIMIT_ENABLED", "true")
     RATE_LIMIT_WINDOW_SECONDS: int = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
     RATE_LIMIT_MAX_REQUESTS: int = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "120"))

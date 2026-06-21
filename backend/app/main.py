@@ -2,7 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status as http_status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -23,11 +23,23 @@ async def lifespan(app: FastAPI):
     if not settings.OPENAI_API_KEY:
         logger.critical("OPENAI_API_KEY is empty — LLM calls will fail at runtime")
     else:
-        logger.info("OPENAI_API_KEY is configured (%.3s...)", settings.OPENAI_API_KEY[:3])
+        logger.info("OPENAI_API_KEY is configured (len=%d)", len(settings.OPENAI_API_KEY))
     if settings.API_WRITE_KEY:
         logger.info("API_WRITE_KEY is configured (len=%d)", len(settings.API_WRITE_KEY))
+    elif settings.ALLOW_OPEN_WRITES:
+        logger.warning(
+            "API_WRITE_KEY is empty and ALLOW_OPEN_WRITES=true — write endpoints "
+            "are PUBLIC. Never use this in production."
+        )
     else:
-        logger.warning("API_WRITE_KEY is empty — write endpoints are public")
+        # Fail closed: an empty key with no explicit opt-in would silently expose
+        # every mutating endpoint (manual resolve, auto-resolve, discover/analyze
+        # LLM spend). Refuse to boot rather than run wide open.
+        raise RuntimeError(
+            "API_WRITE_KEY is empty. Set API_WRITE_KEY to protect write endpoints, "
+            "or set ALLOW_OPEN_WRITES=true to explicitly run with public writes "
+            "(local dev only)."
+        )
     start_scheduler()
     try:
         yield
@@ -91,7 +103,7 @@ async def api_overview():
 
 
 @app.get("/api/health")
-async def api_health():
+async def api_health(response: Response):
     from app.core.scheduler import scheduler
     from app.services.loop_status_service import loop_status
 
@@ -101,8 +113,15 @@ async def api_health():
         for job, run in status.get("runs", {}).items()
         if run and run.get("status") == "failed"
     ]
+    degraded = bool(failed_runs) or not scheduler.running
+    # Return 503 when degraded so container/systemd healthchecks and external
+    # uptime monitors actually trip instead of seeing a perpetual 200. The body
+    # still carries the detail for a human reading the response.
+    response.status_code = (
+        http_status.HTTP_503_SERVICE_UNAVAILABLE if degraded else http_status.HTTP_200_OK
+    )
     return {
-        "status": "degraded" if failed_runs else "ok",
+        "status": "degraded" if degraded else "ok",
         "version": "0.3.0",
         "scheduler_running": scheduler.running,
         "failed_runs": failed_runs,

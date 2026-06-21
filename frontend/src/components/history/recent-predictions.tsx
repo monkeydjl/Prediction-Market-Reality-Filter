@@ -3,7 +3,12 @@
 import { useEffect, useState } from "react";
 import { ClipboardList } from "lucide-react";
 import { eventsApi, type PredictionRecord } from "@/lib/api";
-import { fmtDateTime, fmtSignedPct } from "@/lib/format";
+import { fmtDateTime, fmtPct, fmtSignedPct } from "@/lib/format";
+
+function fmtBrier(n: number | null | undefined) {
+  const v = Number(n);
+  return Number.isFinite(v) ? v.toFixed(3) : "—";
+}
 
 export function RecentPredictions() {
   const [predictions, setPredictions] = useState<PredictionRecord[]>([]);
@@ -56,16 +61,16 @@ export function RecentPredictions() {
                 </p>
               </div>
               <div className="font-mono tabular-nums md:w-[72px] md:text-right">
-                AI {p.ai_probability.toFixed(0)}%
+                AI {fmtPct(p.ai_probability)}
               </div>
               <div className="font-mono tabular-nums md:w-[92px] md:text-right">
-                市场 {p.market_probability.toFixed(0)}%
+                市场 {fmtPct(p.market_probability)}
               </div>
               <div className="font-mono tabular-nums md:w-[76px] md:text-right">
                 {fmtSignedPct(p.raw_edge)}
               </div>
               <div className="font-mono tabular-nums text-muted-foreground md:w-[72px] md:text-right">
-                {p.brier_score != null ? p.brier_score.toFixed(3) : "—"}
+                {fmtBrier(p.brier_score)}
               </div>
             </li>
           ))}

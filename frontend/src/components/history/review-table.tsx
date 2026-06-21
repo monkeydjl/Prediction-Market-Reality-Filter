@@ -121,15 +121,17 @@ export function ReviewTable({
                   </span>
                   <span className="truncate text-sm font-medium">{r.title}</span>
                 </div>
-                <div className="text-right font-mono text-sm tabular-nums md:w-[88px]">
-                  {r.predicted.toFixed(0)}%
+                <div className="flex items-center justify-between gap-3 md:block md:w-[88px] md:text-right">
+                  <span className="text-[11px] text-muted-foreground md:hidden">预测概率</span>
+                  <span className="font-mono text-sm tabular-nums">{r.predicted.toFixed(0)}%</span>
                 </div>
-                <div className="text-right font-mono text-sm tabular-nums md:w-[64px]">
-                  {r.actual >= 50 ? "发生" : "未发生"}
+                <div className="flex items-center justify-between gap-3 md:block md:w-[64px] md:text-right">
+                  <span className="text-[11px] text-muted-foreground md:hidden">实际</span>
+                  <span className="font-mono text-sm tabular-nums">{r.actual >= 50 ? "发生" : "未发生"}</span>
                 </div>
                 <div
                   className={cn(
-                    "text-right font-mono text-sm tabular-nums md:w-[80px]",
+                    "flex items-center justify-between gap-3 md:block md:w-[80px] md:text-right",
                     r.brier != null && r.brier < 0.2
                       ? "text-pos"
                       : r.brier != null && r.brier > 0.35
@@ -137,9 +139,11 @@ export function ReviewTable({
                         : "text-muted-foreground",
                   )}
                 >
-                  {r.brier != null ? r.brier.toFixed(3) : "—"}
+                  <span className="text-[11px] text-muted-foreground md:hidden">Brier</span>
+                  <span className="font-mono text-sm tabular-nums">{r.brier != null ? r.brier.toFixed(3) : "—"}</span>
                 </div>
-                <div className="flex justify-end md:w-[88px]">
+                <div className="flex items-center justify-between gap-3 md:w-[88px] md:justify-end">
+                  <span className="text-[11px] text-muted-foreground md:hidden">结果</span>
                   <OutcomeTag correct={r.correct} />
                 </div>
               </li>

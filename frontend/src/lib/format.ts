@@ -73,11 +73,13 @@ export function categoryLabel(c: string | undefined) {
 }
 
 export function fmtPct(n: number | null | undefined, digits = 0) {
-  return `${Number(n ?? 0).toFixed(digits)}%`;
+  const v = Number(n ?? 0);
+  return Number.isFinite(v) ? `${v.toFixed(digits)}%` : "—";
 }
 
 export function fmtSignedPct(n: number | null | undefined, digits = 0) {
   const v = Number(n ?? 0);
+  if (!Number.isFinite(v)) return "—";
   const sign = v > 0 ? "+" : "";
   return `${sign}${v.toFixed(digits)}pt`;
 }

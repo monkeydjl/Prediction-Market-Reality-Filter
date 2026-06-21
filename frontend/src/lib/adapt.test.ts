@@ -48,7 +48,11 @@ describe("trendOf", () => {
 });
 
 describe("sparkSeries", () => {
-  it("drops missing and zero estimates", () => {
-    expect(sparkSeries([{ estimated: 10 }, {}, { estimated: 0 }, { estimated: 35 }])).toEqual([10, 35]);
+  it("keeps real zero estimates and drops invalid values", () => {
+    expect(sparkSeries([{ estimated: 10 }, {}, { estimated: 0 }, { estimated: 35 }, { estimated: "bad" }])).toEqual([
+      10,
+      0,
+      35,
+    ]);
   });
 });

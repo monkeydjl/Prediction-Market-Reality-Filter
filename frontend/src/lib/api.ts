@@ -82,7 +82,7 @@ export function buildApiErrorMessage(status: number, bodyText: string): string {
 async function api<T>(
   path: string,
   init?: RequestInit,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; acceptStatuses?: number[] } = {},
 ): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const isGet = method === "GET";
@@ -116,7 +116,7 @@ async function api<T>(
       headers,
       signal: controller.signal,
     });
-    if (!res.ok) {
+    if (!res.ok && !options.acceptStatuses?.includes(res.status)) {
       const bodyText = await res.text();
       throw new Error(buildApiErrorMessage(res.status, bodyText));
     }
@@ -176,6 +176,7 @@ export interface DecisionReport {
   diagnosis: {
     qualified: boolean | null;
     segment_n: number | null;
+    segment_min_samples?: number | null;
     segment_skill: number | null;
     liquidity_factor: number | null;
     reason: string;
@@ -201,25 +202,38 @@ export interface EdgeTrajectory {
   classification: string; // no_data | stale | closed | fresh | decaying
 }
 
+export interface EdgePoint {
+  timestamp?: string | null;
+  estimated: number;
+  baseline: number;
+  edge: number;
+}
+
 export interface FreshEdge {
   event_id: string;
   event_title: string;
   edge: EdgeTrajectory;
+  series?: EdgePoint[];
 }
 
 export interface LoopRun {
-  job: string;
+  id?: string;
+  job?: string;
+  job_name?: string;
   status: string;
   started_at?: string;
-  finished_at?: string;
+  finished_at?: string | null;
+  duration_ms?: number | null;
   duration_seconds?: number | null;
-  error?: string;
+  error?: string | null;
+  result?: Record<string, unknown>;
   details?: Record<string, unknown>;
 }
 
 export interface LoopStatus {
   scheduler?: { running?: boolean | null };
   runs?: Record<string, LoopRun | null>;
+  recent_runs?: LoopRun[];
   counts?: {
     events?: number;
     resolved_events?: number;
@@ -232,9 +246,29 @@ export interface LoopStatus {
   calibration?: PredictionCalibration;
 }
 
+export interface ApiOverview {
+  system: string;
+  version: string;
+  app: string;
+  docs: string;
+  endpoints: Record<string, string>;
+}
+
+export interface ApiHealth {
+  status: "ok" | "degraded" | string;
+  version: string;
+  scheduler_running?: boolean | null;
+  failed_runs?: string[];
+  loop: LoopStatus;
+}
+
 export interface PendingLink {
   event_id: string;
   id?: string;
+  event_title?: string;
+  event_title_zh?: string;
+  event_summary?: string;
+  event_resolution_criteria?: string;
   market_name?: string;
   contract_id?: string;
   market_question?: string;
@@ -243,6 +277,30 @@ export interface PendingLink {
   link_confidence?: number;
   linked_at?: string;
   verified?: boolean;
+}
+
+export interface AutoResolveMatch {
+  event_id?: string;
+  event_title?: string;
+  matched_to?: string;
+  market_name?: string;
+  contract_id?: string;
+  actual_outcome?: number | null;
+  match_score?: number;
+  result?: string;
+}
+
+export interface AutoResolveResult {
+  status?: string;
+  dry_run?: boolean;
+  resolved_count?: number;
+  pending_count?: number;
+  invalid_count?: number;
+  checked_count?: number;
+  unresolved_events?: number;
+  reconciled_count?: number;
+  matches?: AutoResolveMatch[];
+  by_source?: Record<string, number>;
 }
 
 // The act-only prediction calibration scorecard (M2/M5).
@@ -254,7 +312,16 @@ export interface PredictionCalibration {
   mean_raw_edge: number | null;
   realized_edge: number | null;
   directional_hit_rate: number | null;
+  segment_min_samples?: number | null;
   by_category: Record<string, { n: number; brier_score: number; skill_score: number; grade: string }>;
+  segments?: Record<string, {
+    n: number;
+    brier_score: number;
+    skill_score: number;
+    grade: string;
+    segment_min_samples?: number | null;
+    qualified?: boolean;
+  }>;
 }
 
 export interface PredictionRecord {
@@ -276,7 +343,20 @@ export interface PredictionRecord {
   resolved_at?: string | null;
 }
 
+export interface EventListFilters {
+  q?: string;
+  status?: "active" | "tracking" | "watching" | "archived" | "all";
+  category?: string;
+  sort?: "value" | "delta" | "probability" | "support";
+}
+
 export const eventsApi = {
+  overview: () =>
+    api<ApiOverview>(""),
+
+  health: () =>
+    api<ApiHealth>("/health", undefined, { acceptStatuses: [503] }),
+
   discover: (limit = 2, useCache = false, signal?: AbortSignal) =>
     api<{ events: EventRecord[]; source?: string; count?: number }>(
       `/events/discover?limit=${limit}&use_cache=${useCache}`,
@@ -300,14 +380,23 @@ export const eventsApi = {
       { timeoutMs: 180_000 },
     ),
 
-  list: (limit = 50, offset = 0) =>
-    api<{
+  list: (limit = 50, offset = 0, filters: EventListFilters = {}) => {
+    const params = new URLSearchParams({
+      limit: String(limit),
+      offset: String(offset),
+    });
+    if (filters.q) params.set("q", filters.q);
+    if (filters.status && filters.status !== "all") params.set("status", filters.status);
+    if (filters.category && filters.category !== "all") params.set("category", filters.category);
+    if (filters.sort && filters.sort !== "value") params.set("sort", filters.sort);
+    return api<{
       events: TrackedEntry[];
       count?: number;
       total?: number;
       limit?: number;
       offset?: number;
-    }>(`/events/?limit=${limit}&offset=${offset}`),
+    }>(`/events/?${params.toString()}`);
+  },
 
   detail: (id: string) =>
     api<TrackedEntry>(`/events/${encodeURIComponent(id)}`),
@@ -318,13 +407,12 @@ export const eventsApi = {
       body: JSON.stringify(body),
     }),
 
-  resolveAuto: () =>
-    api<{
-      status?: string;
-      resolved_count?: number;
-      checked_count?: number;
-      by_source?: Record<string, number>;
-    }>("/events/resolve/auto", { method: "POST" }, { timeoutMs: 180_000 }),
+  resolveAuto: (limit = 200, dryRun = false) =>
+    api<AutoResolveResult>(
+      `/events/resolve/auto?limit=${limit}&dry_run=${dryRun}`,
+      { method: "POST" },
+      { timeoutMs: 180_000 },
+    ),
 
   resolveManual: (
     id: string,
@@ -367,6 +455,11 @@ export const eventsApi = {
   // M5 fresh-edge surface (recent, holding-near-peak divergences).
   freshEdges: (limit = 10) =>
     api<{ count: number; edges: FreshEdge[] }>(`/events/edges/fresh?limit=${limit}`),
+
+  edgeMonitor: (limit = 50) =>
+    api<{ count: number; classification: string; edges: FreshEdge[] }>(
+      `/events/edges/fresh?limit=${limit}&classification=all&include_series=true`,
+    ),
 
   // M2/M5 act-only prediction calibration scorecard.
   predictionCalibration: () =>

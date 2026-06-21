@@ -38,7 +38,7 @@ describe("ManualResolvePanel", () => {
     expect(eventsApi.resolveManual).not.toHaveBeenCalled();
   });
 
-  it("submits a valid manual resolution", async () => {
+  it("requires confirmation before submitting a valid manual resolution", async () => {
     const onResolved = vi.fn();
     const entry: TrackedEntry = { event_id: "evt-1", record };
     vi.mocked(eventsApi.resolveManual).mockResolvedValue(entry);
@@ -49,6 +49,11 @@ describe("ManualResolvePanel", () => {
     await userEvent.type(screen.getByLabelText("置信度（0–1）"), "0.9");
     await userEvent.type(screen.getByLabelText("备注"), "official result");
     await userEvent.click(screen.getByRole("button", { name: "确认结算" }));
+
+    expect(eventsApi.resolveManual).not.toHaveBeenCalled();
+    expect(screen.getByText("再次确认后写入：结果 100%，置信度 0.9。")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "写入结算" }));
 
     expect(eventsApi.resolveManual).toHaveBeenCalledWith("evt-1", {
       actual_outcome: 100,

@@ -117,6 +117,6 @@ export function adaptMover(m: Mover): EventView {
 // History snapshots -> a compact numeric series for sparklines / the chart.
 export function sparkSeries(history: HistorySnapshot[]): number[] {
   return history
-    .map((h) => num(h.estimated))
-    .filter((v) => v > 0);
+    .map((h) => Number(h.estimated))
+    .filter((v) => Number.isFinite(v));
 }

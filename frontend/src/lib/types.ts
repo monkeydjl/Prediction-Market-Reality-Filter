@@ -153,6 +153,7 @@ export interface Mover {
 
 export interface HistorySnapshot {
   timestamp?: string;
+  baseline?: number;
   estimated?: number;
   change?: number;
   direction?: string;

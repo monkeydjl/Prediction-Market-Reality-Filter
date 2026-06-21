@@ -1,9 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Check, Link2, Loader2 } from "lucide-react";
 import { eventsApi, type PendingLink } from "@/lib/api";
 import { fmtDateTime } from "@/lib/format";
+
+function textOrDash(value: string | null | undefined) {
+  const text = String(value ?? "").trim();
+  return text || "—";
+}
 
 export function PendingLinks() {
   const [links, setLinks] = useState<PendingLink[]>([]);
@@ -59,33 +65,71 @@ export function PendingLinks() {
       ) : links.length === 0 ? (
         <p className="py-6 text-center text-sm text-muted-foreground">暂无待人工确认的市场链接。</p>
       ) : (
-        <ul className="divide-y divide-border">
+        <ul className="flex flex-col gap-3">
           {links.map((link) => {
             const key = `${link.event_id}:${link.contract_id}`;
             return (
-              <li key={key} className="grid gap-3 py-3 md:grid-cols-[1fr_auto] md:items-center">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">
-                    {link.market_question || link.contract_id || link.event_id}
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {link.market_name || "prediction market"} · 置信度{" "}
-                    {Math.round((link.link_confidence ?? 0) * 100)}% · {fmtDateTime(link.linked_at)}
-                  </p>
+              <li key={key} className="flex flex-col gap-3 rounded-md border border-border bg-background/40 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span className="rounded bg-secondary px-2 py-0.5 font-mono">
+                      {link.market_name || "market"}
+                    </span>
+                    <span>置信度 {Math.round((link.link_confidence ?? 0) * 100)}%</span>
+                    <span>{fmtDateTime(link.linked_at)}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Link
+                      href={`/events?id=${encodeURIComponent(link.event_id)}`}
+                      className="inline-flex h-9 items-center justify-center rounded-md border border-border bg-secondary px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+                    >
+                      查看事件
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => verify(link)}
+                      disabled={verifying === key || !link.contract_id}
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-primary bg-primary/15 px-3 text-sm font-medium text-primary transition-colors hover:bg-primary/25 disabled:opacity-50"
+                    >
+                      {verifying === key ? (
+                        <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <Check className="size-3.5" aria-hidden="true" />
+                      )}
+                      确认关联
+                    </button>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => verify(link)}
-                  disabled={verifying === key || !link.contract_id}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-primary bg-primary/15 px-3 text-sm font-medium text-primary transition-colors hover:bg-primary/25 disabled:opacity-50"
-                >
-                  {verifying === key ? (
-                    <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-                  ) : (
-                    <Check className="size-3.5" aria-hidden="true" />
-                  )}
-                  确认关联
-                </button>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                    <div className="text-[11px] font-medium text-muted-foreground">事件侧</div>
+                    <p className="line-clamp-2 text-sm font-medium">
+                      {textOrDash(link.event_title_zh || link.event_title || link.event_id)}
+                    </p>
+                    <div className="text-xs leading-relaxed text-muted-foreground">
+                      <span className="font-medium text-foreground">解析标准：</span>
+                      {textOrDash(link.event_resolution_criteria)}
+                    </div>
+                    {link.event_summary && (
+                      <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                        {link.event_summary}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                    <div className="text-[11px] font-medium text-muted-foreground">市场侧</div>
+                    <p className="line-clamp-2 text-sm font-medium">
+                      {textOrDash(link.market_question || link.contract_id)}
+                    </p>
+                    <div className="text-xs leading-relaxed text-muted-foreground">
+                      <span className="font-medium text-foreground">解析标准：</span>
+                      {textOrDash(link.resolution_criteria)}
+                    </div>
+                    <p className="truncate font-mono text-xs text-muted-foreground">
+                      {textOrDash(link.contract_id)}
+                    </p>
+                  </div>
+                </div>
               </li>
             );
           })}

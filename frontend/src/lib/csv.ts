@@ -2,13 +2,14 @@ export function toCsv(rows: Record<string, unknown>[]): string {
   if (rows.length === 0) return "";
   const headers = Object.keys(rows[0]);
   const escape = (value: unknown) => {
-    const text = String(value ?? "");
+    const raw = String(value ?? "");
+    const text = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
     return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
   };
-  return [
+  return `\uFEFF${[
     headers.join(","),
     ...rows.map((row) => headers.map((header) => escape(row[header])).join(",")),
-  ].join("\n");
+  ].join("\n")}`;
 }
 
 export function downloadCsv(filename: string, rows: Record<string, unknown>[]) {

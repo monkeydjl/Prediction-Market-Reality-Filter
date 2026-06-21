@@ -12,12 +12,113 @@ import { OfficialColumn, NewsColumn } from "@/components/detail/evidence-list";
 import { TrackingDecision } from "@/components/detail/tracking-decision";
 import { ManualResolvePanel } from "@/components/detail/manual-resolve-panel";
 import { DecisionReportPanel } from "@/components/detail/decision-report-panel";
-import { ProbabilityChart, buildSeries } from "@/components/detail/probability-chart";
+import { EdgeChart, ProbabilityChart, buildSeries } from "@/components/detail/probability-chart";
 import { DeltaPill, SupportMeter } from "@/components/indicators";
-import { eventsApi } from "@/lib/api";
+import { eventsApi, type EdgeTrajectory } from "@/lib/api";
 import { adaptRecord, type EventView } from "@/lib/adapt";
-import { categoryLabel, fmtPct } from "@/lib/format";
-import type { EventRecord, HistorySnapshot, SimilarEvent } from "@/lib/types";
+import { categoryLabel, fmtPct, fmtSignedPct } from "@/lib/format";
+import type { EventRecord, HistorySnapshot, SimilarEvent, Trend } from "@/lib/types";
+
+const TREND_PATTERN_LABELS: Record<string, string> = {
+  insufficient_data: "样本不足",
+  stable: "稳定",
+  trending_up: "持续上行",
+  trending_down: "持续下行",
+  reversing: "反转中",
+  volatile: "高波动",
+};
+
+const TREND_DIRECTION_LABELS: Record<string, string> = {
+  rising: "上行",
+  falling: "下行",
+  stable: "稳定",
+};
+
+const EDGE_CLASS_LABELS: Record<string, string> = {
+  fresh: "新鲜",
+  decaying: "衰减中",
+  stale: "已过时",
+  closed: "已收敛",
+  no_data: "无数据",
+};
+
+function fmtMaybePct(n: number | null | undefined, digits = 0) {
+  if (n == null) return "—";
+  return fmtPct(n, digits);
+}
+
+function fmtMaybeSigned(n: number | null | undefined, digits = 1) {
+  if (n == null) return "—";
+  return fmtSignedPct(n, digits);
+}
+
+function fmtHours(hours: number | null | undefined) {
+  if (hours == null) return "—";
+  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))}m`;
+  if (hours < 24) return `${hours.toFixed(1)}h`;
+  return `${(hours / 24).toFixed(1)}d`;
+}
+
+function signedTone(n: number | null | undefined) {
+  if (n == null || n === 0) return "text-muted-foreground";
+  return n > 0 ? "text-pos" : "text-neg";
+}
+
+function SmallMetric({ label, value, tone = "text-foreground" }: { label: string; value: string; tone?: string }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[11px] text-muted-foreground">{label}</span>
+      <span className={`font-mono text-sm font-semibold tabular-nums ${tone}`}>{value}</span>
+    </div>
+  );
+}
+
+function TrendEdgeSummary({
+  trend,
+  edge,
+}: {
+  trend: Trend | null;
+  edge: EdgeTrajectory | null;
+}) {
+  if (!trend && !edge) return null;
+  const pattern = trend?.pattern ? TREND_PATTERN_LABELS[trend.pattern] ?? trend.pattern : "—";
+  const direction = trend?.direction ? TREND_DIRECTION_LABELS[trend.direction] ?? trend.direction : "—";
+  const edgeClass = edge?.classification ? EDGE_CLASS_LABELS[edge.classification] ?? edge.classification : "—";
+
+  return (
+    <div className="grid gap-4 border-t border-border pt-3 md:grid-cols-2">
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-medium">概率趋势</span>
+          <span className="rounded bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">{pattern}</span>
+        </div>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+          <SmallMetric label="方向" value={direction} />
+          <SmallMetric label="样本" value={String(trend?.observations ?? 0)} />
+          <SmallMetric label="当前" value={fmtMaybePct(trend?.latest_probability, 1)} />
+          <SmallMetric label="净变化" value={fmtMaybeSigned(trend?.net_change)} tone={signedTone(trend?.net_change)} />
+          <SmallMetric label="近期变化" value={fmtMaybeSigned(trend?.recent_change)} tone={signedTone(trend?.recent_change)} />
+          <SmallMetric label="平均波动" value={fmtMaybeSigned(trend?.volatility)} />
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-medium">Edge 轨迹</span>
+          <span className="rounded bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">{edgeClass}</span>
+        </div>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+          <SmallMetric label="样本" value={String(edge?.observations ?? 0)} />
+          <SmallMetric label="年龄" value={fmtHours(edge?.age_hours)} />
+          <SmallMetric label="当前 edge" value={fmtMaybeSigned(edge?.latest_edge)} tone={signedTone(edge?.latest_edge)} />
+          <SmallMetric label="峰值 edge" value={fmtMaybeSigned(edge?.peak_edge)} tone={signedTone(edge?.peak_edge)} />
+          <SmallMetric label="净变化" value={fmtMaybeSigned(edge?.net_edge_change)} tone={signedTone(edge?.net_edge_change)} />
+          <SmallMetric label="近期变化" value={fmtMaybeSigned(edge?.recent_edge_change)} tone={signedTone(edge?.recent_edge_change)} />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function DetailInner() {
   const params = useSearchParams();
@@ -26,6 +127,8 @@ function DetailInner() {
   const [record, setRecord] = useState<EventRecord | null>(null);
   const [view, setView] = useState<EventView | null>(null);
   const [history, setHistory] = useState<HistorySnapshot[]>([]);
+  const [trend, setTrend] = useState<Trend | null>(null);
+  const [edge, setEdge] = useState<EdgeTrajectory | null>(null);
   const [similar, setSimilar] = useState<SimilarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -46,11 +149,17 @@ function DetailInner() {
         setView(adaptRecord(rec));
         // History + similar are best-effort; 404 just means none yet.
         const [h, s] = await Promise.all([
-          eventsApi.history(id).catch(() => ({ history: [] as HistorySnapshot[] })),
+          eventsApi.history(id).catch(() => ({
+            history: [] as HistorySnapshot[],
+            trend: undefined,
+            edge: undefined,
+          })),
           eventsApi.similar(id).catch(() => ({ similar: [] as SimilarEvent[] })),
         ]);
         if (cancelled) return;
         setHistory(h.history ?? []);
+        setTrend(h.trend ?? null);
+        setEdge(h.edge ?? null);
         setSimilar(s.similar ?? []);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "加载失败");
@@ -87,6 +196,7 @@ function DetailInner() {
       </div>
     );
   }
+  const series = buildSeries(history);
 
   return (
     <>
@@ -142,7 +252,15 @@ function DetailInner() {
               模型估计
             </span>
           </div>
-          <ProbabilityChart data={buildSeries(history)} baseline={view.baselineProbability} />
+          <ProbabilityChart data={series} baseline={view.baselineProbability} />
+          <TrendEdgeSummary trend={trend} edge={edge} />
+          <div className="border-t border-border pt-3">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-xs font-medium">Edge 变化</h3>
+              <span className="text-[11px] text-muted-foreground">AI 估计 - 市场基准</span>
+            </div>
+            <EdgeChart data={series} />
+          </div>
         </div>
         <div className="flex flex-col gap-4">
           <SignalSummary
@@ -151,6 +269,7 @@ function DetailInner() {
             recommendedAction={record.intelligence_report?.recommended_action}
           />
           <TrackingDecision
+            key={`${record.event_id}:${record.tracking?.status ?? ""}:${record.tracking?.priority ?? ""}`}
             id={record.event_id}
             status={record.tracking?.status}
             priority={record.tracking?.priority}

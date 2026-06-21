@@ -20,7 +20,6 @@ export function ThemeControl() {
       const prefersLight = window.matchMedia("(prefers-color-scheme: light)").matches;
       const next: Theme = saved === "light" || (!saved && prefersLight) ? "light" : "dark";
       setTheme(next);
-      applyTheme(next);
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);

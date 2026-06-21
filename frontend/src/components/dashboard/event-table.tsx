@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ChevronRight, Download, Search } from "lucide-react";
 import type { EventView } from "@/lib/adapt";
@@ -26,6 +26,9 @@ const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
   { value: "archived", label: STATUS_LABELS.archived },
   { value: "all", label: "全部状态" },
 ];
+const STATUS_VALUES = new Set(STATUS_FILTERS.map((s) => s.value));
+const SORT_VALUES = new Set<SortKey>(["delta", "probability", "support", "value"]);
+const TABLE_FILTER_EVENT = "pmrf:event-table-filters-change";
 
 const selectCls =
   "h-8 rounded-md border border-border bg-secondary px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -43,6 +46,51 @@ export function EventTable({
   const [status, setStatus] = useState<StatusFilter>("active");
   const [sort, setSort] = useState<SortKey>("delta");
   const [query, setQuery] = useState("");
+  const [urlReady, setUrlReady] = useState(false);
+  const firstUrlSync = useRef(true);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams(window.location.search);
+      const nextStatus = params.get("status");
+      const nextSort = params.get("sort");
+      setQuery(params.get("q") ?? "");
+      setCategory(params.get("category") ?? "all");
+      if (nextStatus && STATUS_VALUES.has(nextStatus as StatusFilter)) {
+        setStatus(nextStatus as StatusFilter);
+      }
+      if (nextSort && SORT_VALUES.has(nextSort as SortKey)) {
+        setSort(nextSort as SortKey);
+      }
+      setUrlReady(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!urlReady) return;
+    const preservePage = firstUrlSync.current;
+    firstUrlSync.current = false;
+    const params = new URLSearchParams(window.location.search);
+    const q = query.trim();
+    if (q) params.set("q", q);
+    else params.delete("q");
+    if (category !== "all") params.set("category", category);
+    else params.delete("category");
+    if (status !== "active") params.set("status", status);
+    else params.delete("status");
+    if (sort !== "delta") params.set("sort", sort);
+    else params.delete("sort");
+    if (!preservePage) params.delete("page");
+    const search = params.toString();
+    const nextUrl = `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`;
+    if (nextUrl !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      window.history.replaceState(null, "", nextUrl);
+      if (!preservePage) {
+        window.dispatchEvent(new Event(TABLE_FILTER_EVENT));
+      }
+    }
+  }, [category, query, sort, status, urlReady]);
 
   const categories = useMemo(
     () => Array.from(new Set(events.map((e) => e.category))),
@@ -193,23 +241,30 @@ export function EventTable({
                     <span className="truncate text-sm font-medium">{e.title}</span>
                   </div>
 
-                  <div className="flex justify-end md:w-[88px]">
+                  <div className="flex items-center justify-between gap-3 md:w-[88px] md:justify-end">
+                    <span className="text-[11px] text-muted-foreground md:hidden">趋势</span>
                     <Sparkline data={sparklines[e.id] ?? []} trend={e.trend} />
                   </div>
 
-                  <div className="text-right font-mono text-sm font-semibold tabular-nums md:w-[64px]">
-                    {fmtPct(e.currentProbability)}
+                  <div className="flex items-center justify-between gap-3 md:block md:w-[64px] md:text-right">
+                    <span className="text-[11px] text-muted-foreground md:hidden">概率</span>
+                    <span className="font-mono text-sm font-semibold tabular-nums">
+                      {fmtPct(e.currentProbability)}
+                    </span>
                   </div>
 
-                  <div className="flex justify-end md:w-[80px]">
+                  <div className="flex items-center justify-between gap-3 md:w-[80px] md:justify-end">
+                    <span className="text-[11px] text-muted-foreground md:hidden">变动</span>
                     <DeltaPill delta={e.delta} />
                   </div>
 
-                  <div className={cn("md:w-[110px]")}>
+                  <div className={cn("flex items-center justify-between gap-3 md:block md:w-[110px]")}>
+                    <span className="text-[11px] text-muted-foreground md:hidden">证据支持</span>
                     <SupportMeter value={e.evidenceSupport} />
                   </div>
 
-                  <div className="flex items-center justify-end gap-1 md:w-[56px]">
+                  <div className="flex items-center justify-between gap-3 md:w-[56px] md:justify-end md:gap-1">
+                    <span className="text-[11px] text-muted-foreground md:hidden">优先级</span>
                     <PriorityBadge priority={e.priority} />
                     <ChevronRight
                       className="hidden size-4 text-muted-foreground md:block"

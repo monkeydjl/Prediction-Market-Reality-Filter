@@ -202,7 +202,7 @@ def list_resolved_events() -> list[dict[str, Any]]:
     ]
 
 
-def list_events(limit: int = 50) -> list[dict[str, Any]]:
+def list_events(limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
     """Return stored entries sorted by record value_score (descending)."""
     entries = _load_unlocked(_store_path()).values()
     ranked = sorted(
@@ -210,4 +210,4 @@ def list_events(limit: int = 50) -> list[dict[str, Any]]:
         key=lambda e: e.get("record", {}).get("value_score", 0),
         reverse=True,
     )
-    return ranked[:limit]
+    return ranked[offset:offset + limit]

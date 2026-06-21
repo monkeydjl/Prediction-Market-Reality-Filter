@@ -10,6 +10,7 @@ from app.memory.prediction_store import (
 )
 from app.memory.event_store import (
     get_event,
+    list_all_events,
     list_events,
     list_resolved_events,
     set_tracking,
@@ -65,10 +66,14 @@ async def analyze_event_intelligence(
 
 
 @router.get("/")
-async def list_event_intelligence(limit: int = Query(default=50, ge=1, le=200)):
+async def list_event_intelligence(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
     """List stored event intelligence records, ranked by value_score."""
-    entries = list_events(limit=limit)
-    return {"count": len(entries), "events": entries}
+    entries = list_events(limit=limit, offset=offset)
+    total = len(list_all_events())
+    return {"count": len(entries), "total": total, "limit": limit, "offset": offset, "events": entries}
 
 
 @router.get("/movers")

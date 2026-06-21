@@ -22,6 +22,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.routes import events as events_routes
+from app.core.config import settings
 from app.memory import event_store as store
 from app.memory import loop_run_store
 from app.memory import prediction_store as preds
@@ -109,6 +110,28 @@ class DiscoverRouteTests(unittest.TestCase):
         client = _events_client()
         self.assertEqual(client.get("/events/discover?limit=0").status_code, 422)
         self.assertEqual(client.get("/events/discover?limit=21").status_code, 422)
+
+
+class ListRouteTests(unittest.TestCase):
+    def test_list_events_returns_page_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                store.save_events([
+                    _make_record("low", value_score=10),
+                    _make_record("high", value_score=90),
+                    _make_record("mid", value_score=50),
+                ])
+                client = _events_client()
+                resp = client.get("/events/?limit=1&offset=1")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["total"], 3)
+        self.assertEqual(body["limit"], 1)
+        self.assertEqual(body["offset"], 1)
+        self.assertEqual(body["events"][0]["event_id"], "mid")
 
 
 class LoopStatusRouteTests(unittest.TestCase):
@@ -501,9 +524,12 @@ class DashboardSmokeTests(unittest.TestCase):
     def _render(path):
         from app.main import app as main_app
 
-        # Patch the scheduler so the lifespan startup is side-effect free.
+        # Patch the scheduler so the lifespan startup is side-effect free, and
+        # give the lifespan a write key so its fail-closed guard (empty key +
+        # no ALLOW_OPEN_WRITES => refuse boot) does not trip during the test.
         with patch("app.main.start_scheduler", lambda: None), \
-                patch("app.main.stop_scheduler", lambda: None):
+                patch("app.main.stop_scheduler", lambda: None), \
+                patch.object(settings, "API_WRITE_KEY", "test-key"):
             with TestClient(main_app) as client:
                 return client.get(path)
 
@@ -540,6 +566,7 @@ class DashboardSmokeTests(unittest.TestCase):
 
         with patch("app.main.start_scheduler", lambda: None), \
                 patch("app.main.stop_scheduler", lambda: None), \
+                patch.object(settings, "API_WRITE_KEY", "test-key"), \
                 self.assertLogs("app.main", level="INFO") as logs:
             with TestClient(main_app):
                 pass

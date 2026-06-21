@@ -88,6 +88,18 @@ class EventStoreTests(unittest.TestCase):
                 listed = store.list_events(limit=2)
         self.assertEqual([e["event_id"] for e in listed], ["high", "mid"])
 
+    def test_list_events_supports_offset_after_sorting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                store.save_events([
+                    _make_record("low", value_score=10),
+                    _make_record("high", value_score=90),
+                    _make_record("mid", value_score=50),
+                ])
+                listed = store.list_events(limit=2, offset=1)
+        self.assertEqual([e["event_id"] for e in listed], ["mid", "low"])
+
     def test_save_event_rejects_missing_event_id(self):
         bad = _make_record()
         del bad["event_id"]

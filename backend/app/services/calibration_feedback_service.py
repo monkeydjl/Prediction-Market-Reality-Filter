@@ -30,12 +30,15 @@ network-free and trivially testable.
 Event vocabulary only - no trading terms.
 """
 
+import logging
 import math
 from collections import defaultdict
 from statistics import mean
 from typing import Any
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Weighting: weight = 1 / (mean_brier + EPS). A small EPS keeps a perfect
 # (brier 0) component from dividing by zero and bounds how far it can dominate.
@@ -223,4 +226,8 @@ def _load_resolved_records() -> list[dict[str, Any]]:
 
         return [(entry.get("record") or {}) for entry in list_resolved_events()]
     except Exception:
+        logger.warning(
+            "Failed to load resolved records for calibration feedback",
+            exc_info=True,
+        )
         return []

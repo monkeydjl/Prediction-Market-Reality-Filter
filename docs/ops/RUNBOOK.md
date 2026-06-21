@@ -28,12 +28,20 @@ cd /opt/prediction-market-reality-filter/backend
 The archive includes the JSON event store, audit log, cache, SQLite loop DB,
 and SQLite WAL/SHM files when present.
 
+By default the script keeps the latest 30 `pmrf-backup-*.zip` archives in the
+backup directory. Override this with `--keep N` if the host has a different
+retention policy.
+
 Enable the daily backup timer (runs backup_stores.py via systemd):
 
 ```bash
 sudo systemctl enable prediction-market-reality-filter-backup.timer
 sudo systemctl start prediction-market-reality-filter-backup.timer
 ```
+
+After restoring from an archive, run one auto-resolve pass before resuming
+normal unattended operation. The pass calls `reconcile_predictions()` and heals
+any temporary JSON/SQLite mismatch captured while a backup was being written.
 
 ## Monitoring
 

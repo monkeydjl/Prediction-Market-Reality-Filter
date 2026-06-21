@@ -19,6 +19,12 @@ def _env_csv(name: str, default: str) -> list[str]:
 class Settings:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "deepseek-chat")
+    LLM_STARTUP_CHECK_ENABLED: bool = _env_bool(
+        "LLM_STARTUP_CHECK_ENABLED", "false"
+    )
+    LLM_STARTUP_CHECK_TIMEOUT_SECONDS: float = float(
+        os.getenv("LLM_STARTUP_CHECK_TIMEOUT_SECONDS", "5.0")
+    )
 
     CORS_ALLOWED_ORIGINS: list[str] = _env_csv(
         "CORS_ALLOWED_ORIGINS",
@@ -26,6 +32,14 @@ class Settings:
         "http://localhost:8000,http://127.0.0.1:8000",
     )
     CORS_ALLOW_CREDENTIALS: bool = _env_bool("CORS_ALLOW_CREDENTIALS", "false")
+    CORS_ALLOWED_METHODS: list[str] = _env_csv(
+        "CORS_ALLOWED_METHODS",
+        "GET,POST,PATCH,OPTIONS",
+    )
+    CORS_ALLOWED_HEADERS: list[str] = _env_csv(
+        "CORS_ALLOWED_HEADERS",
+        "Accept,Accept-Language,Content-Language,Content-Type,X-API-Key",
+    )
 
     API_WRITE_KEY: str = os.getenv("API_WRITE_KEY", "")
     # Fail-closed by default: when API_WRITE_KEY is empty the app refuses to start
@@ -257,10 +271,17 @@ class Settings:
         in {"1", "true", "yes", "on"}
     )
     EVENT_DISCOVER_LIMIT: int = int(os.getenv("EVENT_DISCOVER_LIMIT", "10"))
+    SCHEDULER_ENABLED: bool = _env_bool("SCHEDULER_ENABLED", "true")
+    SCHEDULER_LOCK_ENABLED: bool = _env_bool("SCHEDULER_LOCK_ENABLED", "true")
+    SCHEDULER_LOCK_FILE: str = os.getenv(
+        "SCHEDULER_LOCK_FILE",
+        LOOP_DB_FILE + ".scheduler.lock",
+    )
     LLM_CONCURRENCY: int = int(os.getenv("LLM_CONCURRENCY", "4"))
     SCHEDULER_MISFIRE_GRACE_SECONDS: int = int(
         os.getenv("SCHEDULER_MISFIRE_GRACE_SECONDS", "86400")
     )
+    SERVER_RELOAD: bool = _env_bool("SERVER_RELOAD", "false")
 
 
 settings = Settings()

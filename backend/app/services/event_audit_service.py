@@ -8,11 +8,19 @@ probability snapshot so probability change can be tracked over time.
 
 import json
 import os
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
 from app.core.config import settings
 from app.utils.file_store import locked_file, rewrite_lines_atomic
+
+
+_HISTORY_CACHE_LOCK = threading.Lock()
+_HISTORY_CACHE: dict[
+    str,
+    tuple[tuple[int, int] | None, dict[str, list[dict[str, Any]]]],
+] = {}
 
 
 def _audit_path() -> str:
@@ -181,6 +189,33 @@ def _read_all(path: str) -> list[dict[str, Any]]:
     return records
 
 
+def _file_signature(path: str) -> tuple[int, int] | None:
+    try:
+        stat = os.stat(path)
+    except FileNotFoundError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _group_records(records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        event_id = record.get("event_id")
+        if not event_id:
+            continue
+        grouped.setdefault(event_id, []).append(record)
+    return grouped
+
+
+def _copy_grouped(
+    grouped: dict[str, list[dict[str, Any]]],
+) -> dict[str, list[dict[str, Any]]]:
+    return {
+        event_id: [dict(snapshot) for snapshot in snapshots]
+        for event_id, snapshots in grouped.items()
+    }
+
+
 def load_recent_events(limit: int = 100) -> list[dict[str, Any]]:
     """Return the most recent event observations (oldest-to-newest)."""
     return _read_all(_audit_path())[-limit:]
@@ -188,23 +223,25 @@ def load_recent_events(limit: int = 100) -> list[dict[str, Any]]:
 
 def history_for_event(event_id: str) -> list[dict[str, Any]]:
     """Return all audit snapshots for one event_id, oldest-to-newest."""
-    return [
-        record
-        for record in _read_all(_audit_path())
-        if record.get("event_id") == event_id
-    ]
+    return histories_by_event().get(event_id, [])
 
 
 def histories_by_event() -> dict[str, list[dict[str, Any]]]:
     """Group every audit snapshot by event_id, oldest-to-newest within each group.
 
-    One pass over the log (unlike history_for_event, which re-reads per event),
-    so this is the efficient way to summarize every tracked event at once.
+    Reuses an in-process cache while the audit file's mtime and size are
+    unchanged, so route-level summaries do not rescan the full JSONL log on
+    every request. A copy is returned so callers cannot mutate the cached lists.
     """
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for record in _read_all(_audit_path()):
-        event_id = record.get("event_id")
-        if not event_id:
-            continue
-        grouped.setdefault(event_id, []).append(record)
-    return grouped
+    path = _audit_path()
+    signature = _file_signature(path)
+    with _HISTORY_CACHE_LOCK:
+        cached = _HISTORY_CACHE.get(path)
+        if cached is not None and cached[0] == signature:
+            return _copy_grouped(cached[1])
+
+    grouped = _group_records(_read_all(path))
+    signature = _file_signature(path)
+    with _HISTORY_CACHE_LOCK:
+        _HISTORY_CACHE[path] = (signature, grouped)
+    return _copy_grouped(grouped)

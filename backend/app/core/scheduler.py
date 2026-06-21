@@ -9,6 +9,7 @@ APScheduler 定时任务。随 FastAPI 启动自动运行。
 """
 
 import logging
+import os
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -18,6 +19,81 @@ from app.core.config import settings
 from app.memory import loop_run_store
 
 logger = logging.getLogger(__name__)
+_scheduler_lock_handle: Any | None = None
+_scheduler_lock_skipped = False
+
+
+def _acquire_process_lock(handle: Any) -> None:
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _release_process_lock(handle: Any) -> None:
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _try_acquire_scheduler_lock() -> bool:
+    global _scheduler_lock_handle, _scheduler_lock_skipped
+
+    _scheduler_lock_skipped = False
+    if not settings.SCHEDULER_LOCK_ENABLED:
+        return True
+    if _scheduler_lock_handle is not None:
+        return True
+
+    lock_path = os.path.abspath(settings.SCHEDULER_LOCK_FILE)
+    lock_dir = os.path.dirname(lock_path)
+    if lock_dir:
+        os.makedirs(lock_dir, exist_ok=True)
+    handle = open(lock_path, "a+", encoding="utf-8")
+    try:
+        _acquire_process_lock(handle)
+    except OSError:
+        handle.close()
+        _scheduler_lock_skipped = True
+        return False
+
+    handle.seek(0)
+    handle.truncate()
+    handle.write(str(os.getpid()))
+    handle.flush()
+    _scheduler_lock_handle = handle
+    return True
+
+
+def _release_scheduler_lock() -> None:
+    global _scheduler_lock_handle
+
+    if _scheduler_lock_handle is None:
+        return
+    handle = _scheduler_lock_handle
+    _scheduler_lock_handle = None
+    try:
+        if settings.SCHEDULER_LOCK_ENABLED:
+            _release_process_lock(handle)
+    finally:
+        handle.close()
+
+
+def scheduler_start_skipped_due_to_lock() -> bool:
+    return _scheduler_lock_skipped
+
+
 # job_defaults apply to every job added via start_scheduler (and to any added
 # later that don't override them):
 #   - coalesce=True: if the scheduler fell behind and a job would fire more
@@ -106,31 +182,48 @@ async def _job_event_discover():
 
 
 def start_scheduler():
-    if settings.EVENT_DISCOVER_ENABLED:
+    if scheduler.running is True:
+        logger.info("[Scheduler] Already running; startup skipped.")
+        return True
+    if not _try_acquire_scheduler_lock():
+        logger.warning(
+            "[Scheduler] Another process holds %s; startup skipped.",
+            settings.SCHEDULER_LOCK_FILE,
+        )
+        return False
+    try:
+        if settings.EVENT_DISCOVER_ENABLED:
+            scheduler.add_job(
+                _job_event_discover,
+                CronTrigger(hour=7, minute=15),
+                id="event_discover",
+                replace_existing=True,
+                max_instances=1,
+            )
         scheduler.add_job(
-            _job_event_discover,
-            CronTrigger(hour=7, minute=15),
-            id="event_discover",
+            _job_event_auto_resolve,
+            CronTrigger(hour=22, minute=30),
+            id="event_auto_resolve",
             replace_existing=True,
             max_instances=1,
         )
-    scheduler.add_job(
-        _job_event_auto_resolve,
-        CronTrigger(hour=22, minute=30),
-        id="event_auto_resolve",
-        replace_existing=True,
-        max_instances=1,
-    )
-    scheduler.start()
+        scheduler.start()
+    except Exception:
+        _release_scheduler_lock()
+        raise
     discover_state = "on" if settings.EVENT_DISCOVER_ENABLED else "off"
     logger.info(
         "[Scheduler] Started — event_discover@07:15UTC(%s) | "
         "event_auto_resolve@22:30UTC",
         discover_state,
     )
+    return True
 
 
 def stop_scheduler():
-    if scheduler.running:
-        scheduler.shutdown(wait=False)
-        logger.info("[Scheduler] Stopped.")
+    try:
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
+            logger.info("[Scheduler] Stopped.")
+    finally:
+        _release_scheduler_lock()

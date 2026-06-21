@@ -30,6 +30,37 @@ class JobDefaultsTests(unittest.TestCase):
         self.assertGreater(defaults.get("misfire_grace_time", 0), 60)
 
 
+class SchedulerLockTests(unittest.TestCase):
+    """The scheduler process lock prevents same-host worker duplication."""
+
+    def tearDown(self):
+        scheduler._release_scheduler_lock()
+
+    def test_process_lock_acquires_and_releases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = str(Path(tmp) / "scheduler.lock")
+            with patch.object(scheduler.settings, "SCHEDULER_LOCK_ENABLED", True), \
+                    patch.object(scheduler.settings, "SCHEDULER_LOCK_FILE", lock_path):
+                self.assertTrue(scheduler._try_acquire_scheduler_lock())
+                self.assertFalse(scheduler.scheduler_start_skipped_due_to_lock())
+                scheduler._release_scheduler_lock()
+                self.assertTrue(scheduler._try_acquire_scheduler_lock())
+                scheduler._release_scheduler_lock()
+
+    def test_process_lock_detects_external_owner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = str(Path(tmp) / "scheduler.lock")
+            with open(lock_path, "a+", encoding="utf-8") as owner:
+                scheduler._acquire_process_lock(owner)
+                try:
+                    with patch.object(scheduler.settings, "SCHEDULER_LOCK_ENABLED", True), \
+                            patch.object(scheduler.settings, "SCHEDULER_LOCK_FILE", lock_path):
+                        self.assertFalse(scheduler._try_acquire_scheduler_lock())
+                        self.assertTrue(scheduler.scheduler_start_skipped_due_to_lock())
+                finally:
+                    scheduler._release_process_lock(owner)
+
+
 class EventDiscoverJobTests(unittest.TestCase):
     """_job_event_discover runs the event-layer discovery (which freezes
     predictions), passing the configured limit and forcing a fresh re-scan."""
@@ -82,6 +113,7 @@ class EventDiscoverRegistrationTests(unittest.TestCase):
     def _registered_ids(self, enabled):
         fake = MagicMock()
         with patch.object(scheduler, "scheduler", fake), \
+                patch.object(scheduler.settings, "SCHEDULER_LOCK_ENABLED", False), \
                 patch.object(scheduler.settings, "EVENT_DISCOVER_ENABLED", enabled):
             scheduler.start_scheduler()
         return [call.kwargs.get("id") for call in fake.add_job.call_args_list]
@@ -95,6 +127,24 @@ class EventDiscoverRegistrationTests(unittest.TestCase):
         ids = self._registered_ids(False)
         self.assertNotIn("event_discover", ids)
         self.assertIn("event_auto_resolve", ids)  # always registered
+
+    def test_start_is_noop_when_already_running(self):
+        fake = MagicMock()
+        fake.running = True
+        with patch.object(scheduler, "scheduler", fake):
+            scheduler.start_scheduler()
+        fake.add_job.assert_not_called()
+        fake.start.assert_not_called()
+
+    def test_start_skips_when_process_lock_is_held(self):
+        fake = MagicMock()
+        fake.running = False
+        with patch.object(scheduler, "scheduler", fake), \
+                patch.object(scheduler, "_try_acquire_scheduler_lock", return_value=False):
+            started = scheduler.start_scheduler()
+        self.assertFalse(started)
+        fake.add_job.assert_not_called()
+        fake.start.assert_not_called()
 
 
 if __name__ == "__main__":

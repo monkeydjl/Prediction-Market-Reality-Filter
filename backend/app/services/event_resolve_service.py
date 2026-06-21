@@ -203,7 +203,11 @@ def reconcile_predictions() -> int:
     return healed
 
 
-async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
+async def auto_resolve_events(
+    resolved_limit: int = 200,
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
     """Auto-resolve events whose questions match resolved prediction markets
     (Polymarket, Manifold, Kalshi).
 
@@ -216,7 +220,8 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
     resolutions).
     """
     # Heal any orphans left by a prior mid-resolve crash before doing new work.
-    reconciled = reconcile_predictions()
+    # A dry-run must be read-only, so it deliberately skips reconciliation too.
+    reconciled = 0 if dry_run else reconcile_predictions()
     from app.services.polymarket_history_service import (
         fetch_resolved_markets as fetch_polymarket_resolved,
     )
@@ -251,10 +256,18 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
             market["_source_platform"] = name  # tag for link provenance
         resolved_markets.extend(result)
 
+    entries = list_all_events()
+    if by_source.get("Kalshi", 0) == 0 and _has_unresolved_source_event(entries, "Kalshi"):
+        logger.warning(
+            "auto_resolve: Kalshi returned 0 resolved markets while unresolved "
+            "Kalshi events exist; verify the Kalshi settled endpoint/status filter"
+        )
+
     if not resolved_markets:
-        return {"status": "no_resolved_markets", "resolved_count": 0,
+        return {"status": "no_resolved_markets", "dry_run": dry_run,
+                "resolved_count": 0,
                 "pending_count": 0, "invalid_count": 0,
-                "checked_count": 0, "unresolved_events": _count_unresolved(),
+                "checked_count": 0, "unresolved_events": _count_unresolved(entries),
                 "matches": [], "by_source": by_source}
 
     index = build_index(resolved_markets)
@@ -284,7 +297,6 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
     # value_score - otherwise low-value events would never be resolved and the
     # calibration aggregate (which reads all resolved events) would be silently
     # biased toward high-value events.
-    entries = list_all_events()
     # Read the audit log once and group by event_id, instead of calling
     # history_for_event per event (which would re-read the whole file N times).
     histories = histories_by_event()
@@ -304,6 +316,19 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
         if linked and linked.get("contract_id"):
             settled = market_by_contract.get(str(linked["contract_id"]))
             if settled is not None:
+                resolved_count += 1
+                match_log.append({
+                    "event_id": event_id,
+                    "event_title": (record.get("event_title") or "")[:80],
+                    "matched_to": linked["contract_id"],
+                    "market_name": str(settled.get("_source_platform", linked.get("market_name", ""))),
+                    "contract_id": str(linked["contract_id"]),
+                    "actual_outcome": settled.get("actual_outcome"),
+                    "match_score": 1.0,
+                    "result": "would_resolve_by_contract" if dry_run else "resolved_by_contract",
+                })
+                if dry_run:
+                    continue
                 try:
                     await resolve_with_calibration(
                         event_id=event_id,
@@ -318,14 +343,9 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
                         "auto_resolve: failed to resolve linked event %s: %s",
                         event_id, exc,
                     )
+                    resolved_count -= 1
+                    match_log.pop()
                     continue
-                resolved_count += 1
-                match_log.append({
-                    "event_id": event_id,
-                    "event_title": (record.get("event_title") or "")[:80],
-                    "matched_to": linked["contract_id"],
-                    "result": "resolved_by_contract",
-                })
                 continue
             # Linked but its contract has not settled yet: do NOT fall through to
             # text matching (that could match a DIFFERENT market and trigger a
@@ -352,20 +372,21 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
         # there is no prior link to diverge from, so the old identity-conflict
         # check is unreachable here and has been removed - contract-first
         # settlement now provides the no-wrong-contract guarantee.
-        upsert_link(
-            event_id,
-            market_name=market_name,
-            contract_id=contract_id,
-            market_question=matched_question,
-            # Event-side resolution criteria (as our analysis understood it).
-            # The matched market's OWN criteria is not in fetch_resolved_markets
-            # yet (a source-adapter change); record what we have so the column
-            # is meaningful rather than empty. See V2_ROADMAP M0 exit criteria.
-            resolution_criteria=(record.get("semantics") or {}).get("resolution_criteria", ""),
-            link_method="auto",
-            link_confidence=score,
-            verified=verified,
-        )
+        if not dry_run:
+            upsert_link(
+                event_id,
+                market_name=market_name,
+                contract_id=contract_id,
+                market_question=matched_question,
+                # Event-side resolution criteria (as our analysis understood it).
+                # The matched market's OWN criteria is not in fetch_resolved_markets
+                # yet (a source-adapter change); record what we have so the column
+                # is meaningful rather than empty. See V2_ROADMAP M0 exit criteria.
+                resolution_criteria=(record.get("semantics") or {}).get("resolution_criteria", ""),
+                link_method="auto",
+                link_confidence=score,
+                verified=verified,
+            )
 
         # Fail-closed gate: an unverified (fuzzy) link is recorded for human
         # review but never scored, so a fuzzy match cannot silently resolve an
@@ -376,11 +397,27 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
                 "event_id": event_id,
                 "event_title": question[:80],
                 "matched_to": matched_question[:80],
+                "market_name": market_name,
+                "contract_id": contract_id,
+                "actual_outcome": actual_outcome,
                 "match_score": round(score, 3),
-                "result": "pending",
+                "result": "would_pending" if dry_run else "pending",
             })
             continue
 
+        resolved_count += 1
+        match_log.append({
+            "event_id": event_id,
+            "event_title": question[:80],
+            "matched_to": matched_question[:80],
+            "market_name": market_name,
+            "contract_id": contract_id,
+            "actual_outcome": actual_outcome,
+            "match_score": round(score, 3),
+            "result": "would_resolve" if dry_run else "resolved",
+        })
+        if dry_run:
+            continue
         try:
             await resolve_with_calibration(
                 event_id=event_id,
@@ -394,16 +431,9 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
             logger.warning(
                 "auto_resolve: failed to resolve event %s: %s", event_id, exc
             )
+            resolved_count -= 1
+            match_log.pop()
             continue
-        resolved_count += 1
-        match_log.append({
-            "event_id": event_id,
-            "event_title": question[:80],
-            "matched_to": matched_question[:80],
-            "actual_outcome": actual_outcome,
-            "match_score": round(score, 3),
-            "result": "resolved",
-        })
 
     unresolved_events = sum(
         1 for entry in entries
@@ -411,6 +441,7 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
     )
     return {
         "status": "ok",
+        "dry_run": dry_run,
         "resolved_count": resolved_count,
         "pending_count": pending_count,
         "invalid_count": invalid_count,
@@ -422,13 +453,26 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
     }
 
 
-def _count_unresolved() -> int:
+def _has_unresolved_source_event(entries: list[dict[str, Any]], platform: str) -> bool:
+    platform_l = platform.lower()
+    for entry in entries:
+        record = entry.get("record") or {}
+        if record.get("outcome") is not None:
+            continue
+        source = record.get("source") or {}
+        if str(source.get("platform", "")).lower() == platform_l:
+            return True
+    return False
+
+
+def _count_unresolved(entries: list[dict[str, Any]] | None = None) -> int:
     """Count stored events without an outcome (best-effort, for reporting).
 
     Unranked and unbounded so the count is accurate, not capped at the top-200
     by value_score like list_events.
     """
+    entries = entries if entries is not None else list_all_events()
     return sum(
-        1 for entry in list_all_events()
+        1 for entry in entries
         if (entry.get("record") or {}).get("outcome") is None
     )

@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 
-from app.api.security import require_write_key
+from app.api.security import is_write_key_valid, require_write_key
 from app.memory.event_market_link_store import list_pending, set_verified
 from app.memory.prediction_store import (
     calibration_summary,
@@ -9,13 +9,13 @@ from app.memory.prediction_store import (
     list_recent,
 )
 from app.memory.event_store import (
+    count_events,
     get_event,
     list_all_events,
     list_events,
     list_resolved_events,
     set_tracking,
 )
-from app.models.event import EventAnalysisRequest
 from app.services.calibration_service_event import summarize
 from app.services.decision_report_service import build_decision_report
 from app.services.event_audit_service import histories_by_event, history_for_event
@@ -32,15 +32,31 @@ from app.services.loop_status_service import loop_status
 from app.services.trend_analysis_service import (
     analyze_edge_trajectory,
     analyze_trend,
+    list_edge_trajectories,
     rank_fresh_edges,
     rank_movers,
+)
+from app.models.event import (
+    AutoResolveResponse,
+    EventAnalysisRequest,
+    EventDiscoveryResponse,
+    EventHistoryResponse,
+    EventListResponse,
+    EventMoversResponse,
+    EventStoreEntry,
+    FlexibleResponse,
+    FreshEdgesResponse,
+    OpenDecisionsResponse,
+    PendingLinksResponse,
+    RecentPredictionsResponse,
+    SimilarEventsResponse,
 )
 
 
 router = APIRouter()
 
 
-@router.get("/discover")
+@router.get("/discover", response_model=EventDiscoveryResponse)
 async def discover_event_intelligence(
     limit: int = Query(default=10, ge=1, le=20),
     use_cache: bool = Query(default=True),
@@ -50,7 +66,7 @@ async def discover_event_intelligence(
     return await discover_events(limit=limit, use_cache=use_cache)
 
 
-@router.post("/analyze")
+@router.post("/analyze", response_model=FlexibleResponse)
 async def analyze_event_intelligence(
     payload: EventAnalysisRequest,
     _auth: None = Depends(require_write_key),
@@ -65,18 +81,29 @@ async def analyze_event_intelligence(
     )
 
 
-@router.get("/")
+@router.get("/", response_model=EventListResponse)
 async def list_event_intelligence(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    q: str = Query(default="", max_length=200),
+    status: str = Query(default="all", pattern="^(active|tracking|watching|archived|all)$"),
+    category: str = Query(default="all", max_length=80),
+    sort: str = Query(default="value", pattern="^(value|delta|probability|support)$"),
 ):
-    """List stored event intelligence records, ranked by value_score."""
-    entries = list_events(limit=limit, offset=offset)
-    total = len(list_all_events())
+    """List stored event intelligence records for the dashboard table."""
+    entries = list_events(
+        limit=limit,
+        offset=offset,
+        query=q,
+        status=status,
+        category=category,
+        sort=sort,
+    )
+    total = count_events(query=q, status=status, category=category, sort=sort)
     return {"count": len(entries), "total": total, "limit": limit, "offset": offset, "events": entries}
 
 
-@router.get("/movers")
+@router.get("/movers", response_model=EventMoversResponse)
 async def get_event_movers(limit: int = Query(default=10, ge=1, le=50)):
     """Rank tracked events by how much their probability has moved over time.
 
@@ -92,7 +119,7 @@ async def get_event_movers(limit: int = Query(default=10, ge=1, le=50)):
     return {"count": len(movers), "movers": movers}
 
 
-@router.get("/calibration")
+@router.get("/calibration", response_model=FlexibleResponse)
 async def get_event_calibration():
     """Cross-event calibration report: how accurate resolved events' latest
     probability estimates were vs their settled outcomes.
@@ -115,17 +142,20 @@ async def get_event_calibration():
     return summarize(events)
 
 
-@router.get("/loop/status")
-async def get_loop_status():
+@router.get("/loop/status", response_model=FlexibleResponse)
+async def get_loop_status(x_api_key: str | None = Header(default=None)):
     """Operational status for the unattended reality feedback loop."""
     from app.core.scheduler import scheduler
 
-    return loop_status(scheduler_running=scheduler.running)
+    return loop_status(
+        scheduler_running=scheduler.running,
+        include_run_details=is_write_key_valid(x_api_key),
+    )
 
 
 # Dynamic routes declared after the static /discover, /analyze, / and /movers
 # routes so the path parameter does not shadow them.
-@router.get("/{event_id}")
+@router.get("/{event_id}", response_model=EventStoreEntry)
 async def get_event_intelligence(event_id: str):
     """Return a stored event intelligence record by event_id (404 if unknown)."""
     entry = get_event(event_id)
@@ -134,7 +164,7 @@ async def get_event_intelligence(event_id: str):
     return entry
 
 
-@router.patch("/{event_id}/tracking")
+@router.patch("/{event_id}/tracking", response_model=EventStoreEntry)
 async def update_event_tracking(
     event_id: str,
     status: str | None = Body(default=None, embed=True),
@@ -162,7 +192,7 @@ async def update_event_tracking(
     return updated
 
 
-@router.get("/{event_id}/history")
+@router.get("/{event_id}/history", response_model=EventHistoryResponse)
 async def get_event_probability_history(event_id: str):
     """Return the probability snapshots recorded for an event over time.
 
@@ -188,7 +218,7 @@ async def get_event_probability_history(event_id: str):
     }
 
 
-@router.post("/{event_id}/resolve")
+@router.post("/{event_id}/resolve", response_model=EventStoreEntry)
 async def resolve_event_intelligence(
     event_id: str,
     actual_outcome: float = Body(..., ge=0, le=100, embed=True),
@@ -219,9 +249,14 @@ async def resolve_event_intelligence(
     return updated
 
 
-@router.post("/resolve/auto")
+@router.post(
+    "/resolve/auto",
+    response_model=AutoResolveResponse,
+    response_model_exclude_unset=True,
+)
 async def auto_resolve_event_intelligence(
     limit: int = Query(default=200, ge=1, le=1000),
+    dry_run: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
 ):
     """Auto-resolve events whose questions match resolved prediction markets
@@ -229,13 +264,14 @@ async def auto_resolve_event_intelligence(
 
     Fetches resolved markets from all sources, matches each unresolved local
     event by question similarity, and resolves each match with a calibration
-    snapshot (source = "auto_market"). Returns a summary
-    {status, resolved_count, checked_count, unresolved_events, matches}.
+    snapshot (source = "auto_market"). With dry_run=true it only returns the
+    candidate matches and writes nothing. Returns a summary
+    {status, dry_run, resolved_count, checked_count, unresolved_events, matches}.
     """
-    return await auto_resolve_events(resolved_limit=limit)
+    return await auto_resolve_events(resolved_limit=limit, dry_run=dry_run)
 
 
-@router.get("/links/pending")
+@router.get("/links/pending", response_model=PendingLinksResponse)
 async def list_pending_links():
     """List event->market links awaiting human verification.
 
@@ -243,10 +279,22 @@ async def list_pending_links():
     are NOT scored (fail-closed) until a human verifies them via
     POST /events/{event_id}/link/verify. Returns the review queue.
     """
-    return {"pending": list_pending()}
+    pending = []
+    for link in list_pending():
+        entry = get_event(link.get("event_id", ""))
+        record = (entry or {}).get("record") or {}
+        semantics = record.get("semantics") or {}
+        pending.append({
+            **link,
+            "event_title": record.get("event_title", ""),
+            "event_title_zh": record.get("event_title_zh", ""),
+            "event_summary": record.get("event_summary", ""),
+            "event_resolution_criteria": semantics.get("resolution_criteria", ""),
+        })
+    return {"pending": pending}
 
 
-@router.post("/{event_id}/link/verify")
+@router.post("/{event_id}/link/verify", response_model=FlexibleResponse)
 async def verify_event_link(
     event_id: str,
     contract_id: str = Body(default="", embed=True),
@@ -268,7 +316,7 @@ async def verify_event_link(
     return updated
 
 
-@router.get("/predictions/calibration")
+@router.get("/predictions/calibration", response_model=FlexibleResponse)
 async def get_prediction_calibration():
     """Calibration scorecard over committed, point-in-time predictions: an overall
     block (mean Brier, grade, count, mean raw edge) plus `realized_edge` /
@@ -279,14 +327,14 @@ async def get_prediction_calibration():
     return calibration_summary()
 
 
-@router.get("/predictions/recent")
+@router.get("/predictions/recent", response_model=RecentPredictionsResponse)
 async def get_recent_predictions(limit: int = Query(default=50, ge=1, le=200)):
     """Recent frozen predictions (AI vs market price, raw edge, and - once
     resolved - the scored Brier). Visibility into what the loop has committed."""
     return {"predictions": list_recent(limit=limit)}
 
 
-@router.get("/decisions/open")
+@router.get("/decisions/open", response_model=OpenDecisionsResponse)
 async def get_open_decisions(
     limit: int = Query(default=50, ge=1, le=200),
     decision: str | None = Query(default=None, pattern="^(act|watch)$"),
@@ -300,24 +348,49 @@ async def get_open_decisions(
     """
     decisions = (decision,) if decision else ("act", "watch")
     reports = []
+    events_by_id = {entry.get("event_id"): entry for entry in list_all_events()}
     for prediction in list_open_opportunities(decisions=decisions, limit=limit):
-        entry = get_event(prediction["event_id"])
+        entry = events_by_id.get(prediction["event_id"])
         record = entry.get("record") if entry else None
         reports.append(build_decision_report(prediction, record))
     return {"count": len(reports), "decisions": reports}
 
 
-@router.get("/edges/fresh")
-async def get_fresh_edges(limit: int = Query(default=10, ge=1, le=50)):
+@router.get(
+    "/edges/fresh",
+    response_model=FreshEdgesResponse,
+    response_model_exclude_unset=True,
+)
+async def get_fresh_edges(
+    limit: int = Query(default=10, ge=1, le=50),
+    classification: str = Query(
+        default="fresh",
+        pattern="^(all|fresh|decaying|stale|closed|no_data)$",
+    ),
+    include_series: bool = Query(default=False),
+):
     """Events with a live (fresh) edge: a material AI-vs-market divergence that is
-    recent and holding near its peak, ranked by edge size. The 'catch edges when
-    real' surface - it deliberately excludes decayed or stale edges.
+    recent and holding near its peak, ranked by edge size. Pass
+    classification=all for the monitoring view that groups fresh/decaying/stale/
+    closed edges; default behavior deliberately excludes decayed or stale edges.
     """
-    edges = rank_fresh_edges(histories_by_event(), limit=limit)
-    return {"count": len(edges), "edges": edges}
+    histories = histories_by_event()
+    if classification == "fresh" and not include_series:
+        edges = rank_fresh_edges(histories, limit=limit)
+    else:
+        edges = list_edge_trajectories(
+            histories,
+            limit=limit,
+            classification=classification,
+            include_series=include_series,
+        )
+    body = {"count": len(edges), "edges": edges}
+    if classification != "fresh" or include_series:
+        body["classification"] = classification
+    return body
 
 
-@router.get("/{event_id}/decision")
+@router.get("/{event_id}/decision", response_model=FlexibleResponse)
 async def get_event_decision(event_id: str):
     """The decision report for one event: its committed prediction joined with the
     event intelligence record (event / probability / market view / edge+trust /
@@ -335,7 +408,7 @@ async def get_event_decision(event_id: str):
     return build_decision_report(prediction, record)
 
 
-@router.get("/{event_id}/similar")
+@router.get("/{event_id}/similar", response_model=SimilarEventsResponse)
 async def get_similar_events(
     event_id: str,
     limit: int = Query(default=5, ge=1, le=20),

@@ -359,6 +359,7 @@ class AnalyzeMarketContractTests(unittest.TestCase):
                 "resolution_criteria": "",
                 "time_horizon": "",
                 "entities": [],
+                "analysis_quality": "deterministic_fallback",
             },
         )
 

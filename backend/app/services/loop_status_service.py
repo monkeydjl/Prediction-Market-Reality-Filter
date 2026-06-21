@@ -14,7 +14,11 @@ from app.utils import sqlite_db
 from app.utils.sqlite_db import reading
 
 
-def loop_status(*, scheduler_running: bool | None = None) -> dict[str, Any]:
+def loop_status(
+    *,
+    scheduler_running: bool | None = None,
+    include_run_details: bool = False,
+) -> dict[str, Any]:
     events = list_all_events()
     resolved = list_resolved_events()
     prediction_counts = _prediction_counts()
@@ -23,9 +27,22 @@ def loop_status(*, scheduler_running: bool | None = None) -> dict[str, Any]:
     return {
         "scheduler": {"running": scheduler_running},
         "runs": {
-            "event_discover": loop_run_store.last_run("event_discover"),
-            "event_auto_resolve": loop_run_store.last_run("event_auto_resolve"),
+            "event_discover": _visible_run(
+                loop_run_store.last_run("event_discover"),
+                include_run_details=include_run_details,
+            ),
+            "event_auto_resolve": _visible_run(
+                loop_run_store.last_run("event_auto_resolve"),
+                include_run_details=include_run_details,
+            ),
         },
+        "recent_runs": [
+            run for run in (
+                _visible_run(item, include_run_details=include_run_details)
+                for item in loop_run_store.recent_runs(limit=20)
+            )
+            if run is not None
+        ],
         "counts": {
             "events": len(events),
             "resolved_events": len(resolved),
@@ -36,6 +53,22 @@ def loop_status(*, scheduler_running: bool | None = None) -> dict[str, Any]:
             "calibration_n": calibration.get("n", 0),
         },
         "calibration": calibration,
+    }
+
+
+def _visible_run(
+    run: dict[str, Any] | None,
+    *,
+    include_run_details: bool,
+) -> dict[str, Any] | None:
+    if run is None:
+        return None
+    if include_run_details:
+        return run
+    return {
+        key: run.get(key)
+        for key in ("job_name", "status", "started_at", "finished_at", "duration_ms")
+        if key in run
     }
 
 

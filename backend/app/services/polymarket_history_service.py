@@ -85,7 +85,12 @@ async def fetch_resolved_markets(
                 "start_date": item.get("startDate", ""),
                 "end_date": item.get("endDate", ""),
             })
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Skipping malformed Polymarket resolved market [id=%s]: %s",
+                item.get("id", ""),
+                exc,
+            )
             continue
 
     return markets

@@ -426,14 +426,14 @@ def _persist_events(records: list[dict[str, Any]]) -> None:
     from app.services.event_audit_service import record_event
 
     try:
-        save_events(records)
+        saved_entries = save_events(records)
     except Exception as exc:
         # The store write is the foundation; without it audit/freeze would
         # reference unsaved events. Abort the batch and surface it.
         logger.error("Event store write failed, skipping audit/freeze: %s", exc)
         return
 
-    for record in records:
+    for record in [entry["record"] for entry in saved_entries]:
         event_id = record.get("event_id")
         try:
             record_event(record)
@@ -443,6 +443,12 @@ def _persist_events(records: list[dict[str, Any]]) -> None:
             # Freeze a committed prediction for market-derived events. Idempotent
             # and market-gated inside the store, so re-scans and news events are
             # safe no-ops (no market price -> no edge -> no prediction).
+            if (record.get("legacy_analysis") or {}).get("analysis_quality") == "deterministic_fallback":
+                logger.warning(
+                    "Skipping prediction freeze for fallback analysis [%s]",
+                    event_id,
+                )
+                continue
             freeze_prediction(record)
         except Exception as exc:
             logger.warning("Prediction freeze failed for %s: %s", event_id, exc)
@@ -570,7 +576,7 @@ def _build_semantics(analysis: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _event_id(text: str) -> str:
-    return hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()[:12]
+    return hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()[:16]
 
 
 def _looks_numeric(value: Any) -> bool:

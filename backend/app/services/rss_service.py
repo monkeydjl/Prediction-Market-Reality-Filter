@@ -11,9 +11,12 @@ rss_service.py — 改进版
 """
 
 import asyncio
+import logging
 from functools import partial
 
 import feedparser
+
+logger = logging.getLogger(__name__)
 
 # (名称, URL, 类别标签)
 RSS_FEEDS = [
@@ -48,7 +51,8 @@ def _fetch_one(name: str, url: str, limit: int) -> list[dict]:
             }
             for entry in feed.entries[:limit]
         ]
-    except Exception:
+    except Exception as exc:
+        logger.warning("RSS feed fetch failed [source=%s]: %s", name, exc)
         return []
 
 
@@ -67,7 +71,10 @@ async def fetch_news(limit: int = 5) -> list:
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     articles = []
-    for result in results:
+    for (name, _, _), result in zip(RSS_FEEDS, results):
+        if isinstance(result, Exception):
+            logger.warning("RSS feed task failed [source=%s]: %s", name, result)
+            continue
         if isinstance(result, list):
             for item in result:
                 articles.append(NewsModel(

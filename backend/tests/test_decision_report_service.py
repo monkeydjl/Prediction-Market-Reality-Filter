@@ -78,13 +78,15 @@ class BuildDecisionReportTests(unittest.TestCase):
     def test_diagnosis_block_surfaces_frozen_inputs_and_reason(self):
         # The frozen diagnosis inputs explain the verdict. A dormant (not
         # qualified) watch row reports the sample-shortfall reason.
-        pred = _prediction(qualified=False, segment_n=3, segment_skill=None,
+        pred = _prediction(qualified=False, segment_n=3, segment_min_samples=8, segment_skill=None,
                            liquidity_factor=0.2, decision="watch")
         report = build_decision_report(pred, _record())
         diag = report["diagnosis"]
         self.assertEqual(diag["qualified"], False)
         self.assertEqual(diag["segment_n"], 3)
+        self.assertEqual(diag["segment_min_samples"], 8)
         self.assertEqual(diag["liquidity_factor"], 0.2)
+        self.assertIn("3/8", diag["reason"])
         self.assertIn("样本不足", diag["reason"])  # dormancy named before liquidity
 
     def test_diagnosis_reason_act_vs_liquidity(self):
@@ -129,6 +131,25 @@ class DecisionEndpointTests(unittest.TestCase):
         self.assertEqual(report["event_id"], "op1")
         self.assertEqual(report["recommendation"]["decision"], "watch")
         self.assertEqual(report["event"]["title"], rec["event_title"])  # joined from record
+
+    def test_open_decisions_loads_event_store_once(self):
+        client = self._client()
+        predictions = [
+            _prediction(event_id="op1", adjusted_edge=20.0),
+            _prediction(event_id="op2", adjusted_edge=10.0),
+        ]
+        entries = [
+            {"event_id": "op1", "record": _record()},
+            {"event_id": "op2", "record": _record()},
+        ]
+        with patch.object(events_routes, "list_open_opportunities", return_value=predictions), \
+                patch.object(events_routes, "list_all_events", return_value=entries) as list_all, \
+                patch.object(events_routes, "get_event", side_effect=AssertionError("N+1 lookup")):
+            resp = client.get("/events/decisions/open")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["count"], 2)
+        self.assertEqual(list_all.call_count, 1)
 
     def test_event_decision_returns_report_or_404(self):
         client = self._client()

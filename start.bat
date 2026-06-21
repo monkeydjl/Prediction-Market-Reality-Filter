@@ -85,7 +85,7 @@ echo.
 echo   Frontend (dev) : http://localhost:3000
 echo   Backend / API  : http://localhost:8000
 echo.
-start "PMRF backend :8000" cmd /k "cd /d "%BACKEND%" && python run.py"
+start "PMRF backend :8000" cmd /k "cd /d "%BACKEND%" && set SERVER_RELOAD=true&& python run.py"
 start "PMRF frontend :3000" cmd /k "cd /d "%FRONTEND%" && npm run dev"
 REM Next dev needs a few seconds to compile before the page is ready
 start "" /b powershell -NoProfile -Command "Start-Sleep -Seconds 8; Start-Process 'http://localhost:3000'"

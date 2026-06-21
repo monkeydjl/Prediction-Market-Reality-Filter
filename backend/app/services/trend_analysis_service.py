@@ -22,6 +22,13 @@ from app.core.config import settings
 
 # Moves within +-2 points are "stable" - the same band probability_direction uses.
 _STABLE_BAND = 2.0
+_EDGE_CLASS_ORDER = {
+    "fresh": 0,
+    "decaying": 1,
+    "stale": 2,
+    "closed": 3,
+    "no_data": 4,
+}
 
 
 def analyze_trend(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
@@ -284,6 +291,66 @@ def _classify_edge(latest: float, peak: float, age_hours: float | None) -> str:
     if abs(peak) > 0 and abs(latest) >= 0.7 * abs(peak):
         return "fresh"
     return "decaying"
+
+
+def edge_series(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return timestamped AI-vs-market edge points for compact frontend charts."""
+    points: list[dict[str, Any]] = []
+    for snap in snapshots:
+        try:
+            estimated = float(snap.get("estimated"))
+            baseline = float(snap.get("baseline"))
+        except (TypeError, ValueError):
+            continue
+        points.append({
+            "timestamp": snap.get("timestamp"),
+            "estimated": round(estimated, 2),
+            "baseline": round(baseline, 2),
+            "edge": round(estimated - baseline, 2),
+        })
+    return points
+
+
+def list_edge_trajectories(
+    histories: dict[str, list[dict[str, Any]]],
+    limit: int = 50,
+    *,
+    classification: str = "all",
+    include_series: bool = False,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """List edge trajectories across freshness classes for monitoring views.
+
+    `classification="all"` skips no-data rows and returns fresh, decaying,
+    stale, and closed edges grouped by a stable sort order. A concrete
+    classification returns only that class.
+    """
+    items: list[dict[str, Any]] = []
+    for event_id, snapshots in histories.items():
+        edge = analyze_edge_trajectory(snapshots, now=now)
+        edge_class = edge["classification"]
+        if classification == "all":
+            if edge_class == "no_data":
+                continue
+        elif edge_class != classification:
+            continue
+        item = {
+            "event_id": event_id,
+            "event_title": _latest_title(snapshots),
+            "edge": edge,
+        }
+        if include_series:
+            item["series"] = edge_series(snapshots)
+        items.append(item)
+
+    items.sort(
+        key=lambda item: (
+            _EDGE_CLASS_ORDER.get(item["edge"]["classification"], 99),
+            -abs(item["edge"]["latest_edge"] or 0.0),
+            item["event_id"],
+        )
+    )
+    return items[:limit]
 
 
 def rank_fresh_edges(

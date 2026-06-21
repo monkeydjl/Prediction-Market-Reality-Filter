@@ -69,6 +69,7 @@ async def analyze_market(
         liquidity=liquidity,
     )
 
+    used_fallback = False
     try:
         raw_analysis = await _ask_ai(
             market_question=market_question,
@@ -92,6 +93,7 @@ async def analyze_market(
             priced_in_risk_score=priced_in_risk_score,
             semantics_profile=semantics_profile,
         )
+        used_fallback = True
 
     normalized = _normalize_ai_analysis(raw_analysis, market_probability)
     narrative_type = normalized["narrative_type"]
@@ -197,4 +199,5 @@ async def analyze_market(
         "resolution_criteria": normalized["resolution_criteria"],
         "time_horizon": normalized["time_horizon"],
         "entities": normalized["entities"],
+        "analysis_quality": "deterministic_fallback" if used_fallback else "llm",
     }

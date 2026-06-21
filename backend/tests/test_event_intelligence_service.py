@@ -290,6 +290,10 @@ class AnalyzeEventCalibrationFeedbackTests(unittest.TestCase):
             record = self._analyze()
         self.assertNotIn("calibration_feedback", record)
         self.assertEqual(
+            record["legacy_analysis"]["analysis_quality"],
+            "deterministic_fallback",
+        )
+        self.assertEqual(
             record["probability"]["estimated"],
             record["calibration_components"]["llm"],
         )
@@ -329,6 +333,12 @@ class AnalyzeEventCalibrationFeedbackTests(unittest.TestCase):
                       return_value=[]):
             record = self._analyze()
         self.assertEqual(record["probability"]["estimated"], disabled_estimate)
+
+
+class EventIdentityTests(unittest.TestCase):
+    def test_event_id_uses_64_bit_sha1_prefix(self):
+        self.assertEqual(len(eis._event_id("Will it pass?")), 16)
+        self.assertEqual(eis._event_id("Will it pass?"), eis._event_id("Will it pass?"))
 
 
 class CollectCandidateEventsCryptoOptInTests(unittest.TestCase):

@@ -215,6 +215,7 @@ class Prediction(BaseModel):
     liquidity_factor: float | None = None
     qualified: bool | None = None
     segment_n: int | None = None
+    segment_min_samples: int | None = None
     segment_skill: float | None = None
     created_at: str = ""         # ISO 8601
     status: str = "open"         # open | scored
@@ -252,3 +253,81 @@ class EventRecord(BaseModel):
     outcome: Outcome | None = None
     calibration: Calibration | None = None
     semantics: EventSemantics | None = None
+
+
+class FlexibleResponse(BaseModel):
+    """Permissive response base for endpoints whose nested payloads are dynamic."""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class EventStoreEntry(FlexibleResponse):
+    event_id: str = ""
+    first_seen: str = ""
+    last_updated: str = ""
+    record: dict[str, Any] = Field(default_factory=dict)
+
+
+class EventDiscoveryResponse(FlexibleResponse):
+    platform: str = ""
+    source: str = ""
+    count: int = 0
+    events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class EventListResponse(FlexibleResponse):
+    count: int = 0
+    total: int = 0
+    limit: int = 0
+    offset: int = 0
+    events: list[EventStoreEntry] = Field(default_factory=list)
+
+
+class EventMoversResponse(FlexibleResponse):
+    count: int = 0
+    movers: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class EventHistoryResponse(FlexibleResponse):
+    event_id: str = ""
+    count: int = 0
+    trend: dict[str, Any] = Field(default_factory=dict)
+    edge: dict[str, Any] = Field(default_factory=dict)
+    history: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AutoResolveResponse(FlexibleResponse):
+    status: str = ""
+    dry_run: bool = False
+    resolved_count: int = 0
+    pending_count: int = 0
+    invalid_count: int = 0
+    checked_count: int = 0
+    unresolved_events: int = 0
+    matches: list[dict[str, Any]] = Field(default_factory=list)
+    by_source: dict[str, int] = Field(default_factory=dict)
+
+
+class PendingLinksResponse(FlexibleResponse):
+    pending: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class RecentPredictionsResponse(FlexibleResponse):
+    predictions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class OpenDecisionsResponse(FlexibleResponse):
+    count: int = 0
+    decisions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class FreshEdgesResponse(FlexibleResponse):
+    count: int = 0
+    classification: str | None = None
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SimilarEventsResponse(FlexibleResponse):
+    event_id: str = ""
+    count: int = 0
+    similar: list[dict[str, Any]] = Field(default_factory=list)

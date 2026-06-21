@@ -8,6 +8,7 @@ the same event accumulate updates across scans.
 """
 
 import os
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -15,6 +16,9 @@ from app.core.config import settings
 from app.models.event import EventRecord
 from app.utils.file_store import locked_file, read_json, read_json_strict, write_json_atomic
 from app.utils.helpers import utc_now
+
+
+logger = logging.getLogger(__name__)
 
 
 def _store_path() -> str:
@@ -35,15 +39,20 @@ def _load_for_write(path: str) -> dict[str, Any]:
 
 def save_event(record: dict[str, Any]) -> dict[str, Any]:
     """Upsert a single event record by event_id. Returns the stored entry."""
-    return save_events([record])[0]
+    return save_events([record], skip_invalid=False)[0]
 
 
-def save_events(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def save_events(
+    records: list[dict[str, Any]],
+    *,
+    skip_invalid: bool = True,
+) -> list[dict[str, Any]]:
     """Upsert a batch of event records in one locked write.
 
-    Each record is validated against EventRecord before storing, so a malformed
-    record raises instead of silently corrupting the store. first_seen is
-    preserved across updates; last_updated is refreshed.
+    Each record is validated against EventRecord before storing. In batch mode,
+    malformed records are skipped so one bad LLM output does not drop the rest
+    of the batch. save_event keeps strict single-record semantics and raises.
+    first_seen is preserved across updates; last_updated is refreshed.
 
     A re-scan must not erase a settled event: `outcome` and `calibration` are
     write-once results of resolution, so an incoming record that lacks them
@@ -60,31 +69,43 @@ def save_events(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         store = _load_for_write(path)
         now = utc_now()
         for record in records:
-            event_id = record["event_id"]
-            existing = store.get(event_id) or {}
-            existing_record = existing.get("record") or {}
-            # Tracking is a user-owned decision; a re-scan must not reset it to
-            # the default. Preserve any existing tracking over the incoming one.
-            existing_tracking = existing_record.get("tracking")
-            if existing_tracking is not None:
-                record["tracking"] = existing_tracking
-            # Outcome / calibration are resolution results: preserve them when the
-            # incoming record (e.g. a re-discovery) does not carry them, so a
-            # settled event is never silently reverted to unresolved.
-            if "outcome" not in record and existing_record.get("outcome") is not None:
-                record["outcome"] = existing_record["outcome"]
-            if "calibration" not in record and existing_record.get("calibration") is not None:
-                record["calibration"] = existing_record["calibration"]
-            EventRecord.model_validate(record)
+            try:
+                event_id = record["event_id"]
+                existing = store.get(event_id) or {}
+                existing_record = existing.get("record") or {}
+                candidate = dict(record)
+                # Tracking is a user-owned decision; a re-scan must not reset it to
+                # the default. Preserve any existing tracking over the incoming one.
+                existing_tracking = existing_record.get("tracking")
+                if existing_tracking is not None:
+                    candidate["tracking"] = existing_tracking
+                # Outcome / calibration are resolution results: preserve them when the
+                # incoming record (e.g. a re-discovery) does not carry them, so a
+                # settled event is never silently reverted to unresolved.
+                if "outcome" not in candidate and existing_record.get("outcome") is not None:
+                    candidate["outcome"] = existing_record["outcome"]
+                if "calibration" not in candidate and existing_record.get("calibration") is not None:
+                    candidate["calibration"] = existing_record["calibration"]
+                EventRecord.model_validate(candidate)
+            except Exception as exc:
+                if not skip_invalid:
+                    raise
+                logger.warning(
+                    "Skipping invalid event record in batch [event_id=%s]: %s",
+                    record.get("event_id", "<missing>") if isinstance(record, dict) else "<non-dict>",
+                    exc,
+                )
+                continue
             entry = {
                 "event_id": event_id,
                 "first_seen": existing.get("first_seen", now),
                 "last_updated": now,
-                "record": record,
+                "record": candidate,
             }
             store[event_id] = entry
             stored.append(entry)
-        write_json_atomic(path, store, indent=2)
+        if stored:
+            write_json_atomic(path, store, indent=2)
     return stored
 
 
@@ -202,12 +223,115 @@ def list_resolved_events() -> list[dict[str, Any]]:
     ]
 
 
-def list_events(limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
-    """Return stored entries sorted by record value_score (descending)."""
-    entries = _load_unlocked(_store_path()).values()
-    ranked = sorted(
-        entries,
-        key=lambda e: e.get("record", {}).get("value_score", 0),
-        reverse=True,
+def _category(record: dict[str, Any]) -> str:
+    legacy = record.get("legacy_analysis") or {}
+    source = record.get("source") or {}
+    return str(
+        legacy.get("base_rate_category")
+        or source.get("type")
+        or source.get("platform")
+        or "general"
+    )
+
+
+def _tracking_status(record: dict[str, Any]) -> str:
+    tracking = record.get("tracking") or {}
+    status = tracking.get("status")
+    if status in {"tracking", "archived"}:
+        return str(status)
+    return "watching"
+
+
+def _probability(record: dict[str, Any], key: str) -> float:
+    try:
+        return float((record.get("probability") or {}).get(key) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _event_query_text(entry: dict[str, Any]) -> str:
+    record = entry.get("record") or {}
+    return " ".join(
+        str(value or "")
+        for value in (
+            record.get("event_title"),
+            record.get("event_title_zh"),
+            record.get("event_summary"),
+            _category(record),
+        )
+    ).lower()
+
+
+def _filtered_ranked_events(
+    *,
+    query: str = "",
+    status: str = "all",
+    category: str = "all",
+    sort: str = "value",
+) -> list[dict[str, Any]]:
+    entries = list(_load_unlocked(_store_path()).values())
+    q = query.strip().lower()
+    if q:
+        entries = [entry for entry in entries if q in _event_query_text(entry)]
+    if status == "active":
+        entries = [
+            entry for entry in entries
+            if _tracking_status(entry.get("record") or {}) != "archived"
+        ]
+    elif status != "all":
+        entries = [
+            entry for entry in entries
+            if _tracking_status(entry.get("record") or {}) == status
+        ]
+    if category != "all":
+        entries = [
+            entry for entry in entries
+            if _category(entry.get("record") or {}) == category
+        ]
+
+    def sort_key(entry: dict[str, Any]) -> float:
+        record = entry.get("record") or {}
+        if sort == "delta":
+            return abs(_probability(record, "change"))
+        if sort == "probability":
+            return _probability(record, "estimated")
+        if sort == "support":
+            return float(((record.get("credibility") or {}).get("confidence") or 0.0))
+        return float(record.get("value_score") or 0.0)
+
+    return sorted(entries, key=sort_key, reverse=True)
+
+
+def count_events(
+    *,
+    query: str = "",
+    status: str = "all",
+    category: str = "all",
+    sort: str = "value",
+) -> int:
+    """Count stored entries after the same filters used by list_events."""
+    return len(_filtered_ranked_events(
+        query=query,
+        status=status,
+        category=category,
+        sort=sort,
+    ))
+
+
+def list_events(
+    limit: int = 50,
+    offset: int = 0,
+    *,
+    query: str = "",
+    status: str = "all",
+    category: str = "all",
+    sort: str = "value",
+) -> list[dict[str, Any]]:
+    """Return stored entries filtered and sorted for the dashboard table."""
+    ranked = _filtered_ranked_events(
+        query=query,
+        status=status,
+        category=category,
+        sort=sort,
     )
     return ranked[offset:offset + limit]

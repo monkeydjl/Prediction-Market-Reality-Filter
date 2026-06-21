@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 
 from app.api.routes import events as events_routes
 from app.core.config import settings
+from app.memory import event_market_link_store as links
 from app.memory import event_store as store
 from app.memory import loop_run_store
 from app.memory import prediction_store as preds
@@ -133,6 +134,106 @@ class ListRouteTests(unittest.TestCase):
         self.assertEqual(body["offset"], 1)
         self.assertEqual(body["events"][0]["event_id"], "mid")
 
+    def test_list_events_filters_before_paginating(self):
+        fed = _make_record("fed", value_score=70, estimated=65)
+        fed["event_title"] = "Federal Reserve rate cut"
+        fed["legacy_analysis"] = {"base_rate_category": "monetary"}
+        fed["tracking"] = {"status": "tracking", "priority": "high"}
+        eth = _make_record("eth", value_score=40, estimated=85)
+        eth["event_title"] = "Ethereum ETF approval"
+        eth["legacy_analysis"] = {"base_rate_category": "crypto"}
+        eth["tracking"] = {"status": "watching", "priority": "medium"}
+        archived = _make_record("old", value_score=95, estimated=90)
+        archived["event_title"] = "Archived crypto item"
+        archived["legacy_analysis"] = {"base_rate_category": "crypto"}
+        archived["tracking"] = {"status": "archived", "priority": "low"}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                store.save_events([fed, eth, archived])
+                client = _events_client()
+                resp = client.get(
+                    "/events/?limit=1&offset=0&q=ethereum&status=watching"
+                    "&category=crypto&sort=probability"
+                )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["total"], 1)
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["events"][0]["event_id"], "eth")
+
+    def test_list_events_validates_filter_vocab(self):
+        client = _events_client()
+        self.assertEqual(client.get("/events/?status=bogus").status_code, 422)
+        self.assertEqual(client.get("/events/?sort=bogus").status_code, 422)
+
+
+class AutoResolveRouteTests(unittest.TestCase):
+    def test_auto_resolve_passes_limit_and_dry_run(self):
+        payload = {
+            "status": "ok",
+            "dry_run": True,
+            "resolved_count": 1,
+            "pending_count": 0,
+            "checked_count": 1,
+            "matches": [],
+            "by_source": {},
+        }
+        with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch.object(events_routes, "auto_resolve_events",
+                             new=AsyncMock(return_value=payload)) as mock_resolve:
+            client = _events_client()
+            resp = client.post(
+                "/events/resolve/auto?limit=50&dry_run=true",
+                headers={"X-API-Key": "secret"},
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), payload)
+        mock_resolve.assert_awaited_once_with(resolved_limit=50, dry_run=True)
+
+
+class PendingLinksRouteTests(unittest.TestCase):
+    def test_pending_links_are_enriched_with_event_context(self):
+        record = _make_record("evtLinkCtx", value_score=30)
+        record["event_title"] = "Will the Fed cut rates in July 2026?"
+        record["event_title_zh"] = "美联储会在 2026 年 7 月降息吗？"
+        record["event_summary"] = "A policy-rate resolution event."
+        record["semantics"] = {
+            "resolution_criteria": "YES if FOMC lowers the target range in July 2026",
+            "time_horizon": "July 2026",
+            "entities": ["Fed"],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(store, "_store_path", return_value=str(Path(tmp) / "event_store.json")), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+                store.save_event(record)
+                links.upsert_link(
+                    "evtLinkCtx",
+                    market_name="Polymarket",
+                    contract_id="poly-ctx",
+                    market_question="Will the Fed cut rates by July?",
+                    resolution_criteria="YES if rates are lower after the July meeting",
+                    link_confidence=0.83,
+                    verified=False,
+                )
+                client = _events_client()
+                resp = client.get("/events/links/pending")
+
+        self.assertEqual(resp.status_code, 200)
+        pending = resp.json()["pending"]
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["event_title_zh"], "美联储会在 2026 年 7 月降息吗？")
+        self.assertEqual(
+            pending[0]["event_resolution_criteria"],
+            "YES if FOMC lowers the target range in July 2026",
+        )
+        self.assertEqual(
+            pending[0]["resolution_criteria"],
+            "YES if rates are lower after the July meeting",
+        )
+
 
 class LoopStatusRouteTests(unittest.TestCase):
     def test_loop_status_returns_run_and_core_counts(self):
@@ -160,15 +261,30 @@ class LoopStatusRouteTests(unittest.TestCase):
 
                 client = _events_client()
                 resp = client.get("/events/loop/status")
+                with patch.object(settings, "API_WRITE_KEY", "secret"):
+                    authed_resp = client.get(
+                        "/events/loop/status",
+                        headers={"X-API-Key": "secret"},
+                    )
 
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertIn("scheduler", body)
         self.assertEqual(body["runs"]["event_auto_resolve"]["status"], "success")
-        self.assertEqual(body["runs"]["event_auto_resolve"]["result"]["resolved_count"], 1)
+        self.assertNotIn("result", body["runs"]["event_auto_resolve"])
+        self.assertNotIn("error", body["runs"]["event_auto_resolve"])
+        self.assertEqual(body["recent_runs"][0]["status"], "success")
+        self.assertNotIn("result", body["recent_runs"][0])
         self.assertEqual(body["counts"]["events"], 2)
         self.assertEqual(body["counts"]["predictions"]["open"], 1)
         self.assertIn("calibration_n", body["counts"])
+        self.assertEqual(authed_resp.status_code, 200)
+        authed_body = authed_resp.json()
+        self.assertEqual(
+            authed_body["runs"]["event_auto_resolve"]["result"]["resolved_count"],
+            1,
+        )
+        self.assertEqual(authed_body["recent_runs"][0]["result"]["checked_count"], 2)
 
 
 class DiscoverServiceTests(unittest.TestCase):

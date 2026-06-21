@@ -32,6 +32,8 @@ backend/_full_out.txt
 backend/v2_loop.db
 backend/v2_loop.db-wal
 backend/v2_loop.db-shm
+backend/*.scheduler.lock
+backend/backups/
 
 # ── Internal working logs (huge, internal — kept locally, not published) ─────
 backend/docs/PROJECT_PROGRESS.md

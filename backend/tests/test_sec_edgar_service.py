@@ -42,11 +42,13 @@ class SecEdgarServiceTests(unittest.TestCase):
             articles = asyncio.run(sec.fetch_sec_filings())
         self.assertEqual(articles, [])
 
-    def test_fetch_swallows_parse_errors(self):
+    def test_fetch_logs_parse_errors(self):
         with patch.object(sec.feedparser, "parse", side_effect=Exception("boom")), \
-             patch.object(sec.settings, "SEC_EDGAR_RSS_URL", "http://example/edgar"):
+             patch.object(sec.settings, "SEC_EDGAR_RSS_URL", "http://example/edgar"), \
+             self.assertLogs("app.services.sec_edgar_service", level="WARNING") as logs:
             articles = asyncio.run(sec.fetch_sec_filings())
         self.assertEqual(articles, [])
+        self.assertIn("SEC EDGAR feed fetch failed", "\n".join(logs.output))
 
 
 if __name__ == "__main__":

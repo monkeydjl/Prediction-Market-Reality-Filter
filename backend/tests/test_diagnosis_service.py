@@ -107,6 +107,8 @@ class DiagnoseTests(unittest.TestCase):
         self.assertEqual(out["trust"], 0.5)
         self.assertEqual(out["adjusted_edge"], 20.0)
         self.assertEqual(out["decision"], "watch")
+        self.assertEqual(out["segment_n"], 0)
+        self.assertEqual(out["segment_min_samples"], 8)
 
     def test_qualified_strong_segment_acts(self):
         with self._settings():

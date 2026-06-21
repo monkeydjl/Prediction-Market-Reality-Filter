@@ -15,11 +15,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+RUN groupadd --system app \
+    && useradd --system --gid app --home-dir /app --shell /usr/sbin/nologin app \
+    && mkdir -p /app/logs \
+    && chown -R app:app /app
+
 # Copy backend
-COPY backend/ /app/
+COPY --chown=app:app backend/ /app/
 
 # Copy pre-built frontend (build separately with `npm run build` in frontend/)
-COPY frontend/out/ /frontend/out/
+COPY --chown=app:app frontend/out/ /frontend/out/
+
+USER app
 
 # Expose and run
 EXPOSE 8000

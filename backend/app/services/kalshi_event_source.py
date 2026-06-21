@@ -48,6 +48,8 @@ from app.utils.market_utils import safe_float
 logger = logging.getLogger(__name__)
 
 _SETTLED_STATUSES = {"settled", "finalized", "closed", "determined"}
+_RESOLVED_FETCH_FACTOR = 5
+_RESOLVED_FETCH_MAX = 200
 
 
 async def fetch_candidate_events(limit: int = 10) -> list[dict[str, Any]]:
@@ -187,7 +189,9 @@ async def _fetch_raw_resolved(limit: int) -> list[dict[str, Any]]:
     params = {
         "status": "settled",
         "with_nested_markets": "true",
-        "limit": str(min(max(limit, 1), 200)),
+        "limit": str(
+            min(max(limit * _RESOLVED_FETCH_FACTOR, limit, 1), _RESOLVED_FETCH_MAX)
+        ),
     }
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.get(url, params=params)

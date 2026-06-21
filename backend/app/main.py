@@ -2,15 +2,17 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Response, status as http_status
+from fastapi import FastAPI, Header, Request, Response, status as http_status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api.router import api_router
+from app.api.security import is_write_key_valid
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.rate_limit import InMemoryRateLimitMiddleware
 from app.core.scheduler import start_scheduler, stop_scheduler
+from app.services.llm_startup_check_service import validate_primary_llm_startup
 
 
 setup_logging()
@@ -24,6 +26,9 @@ async def lifespan(app: FastAPI):
         logger.critical("OPENAI_API_KEY is empty — LLM calls will fail at runtime")
     else:
         logger.info("OPENAI_API_KEY is configured (len=%d)", len(settings.OPENAI_API_KEY))
+    if settings.LLM_STARTUP_CHECK_ENABLED:
+        await validate_primary_llm_startup()
+        logger.info("Primary LLM startup check passed.")
     if settings.API_WRITE_KEY:
         logger.info("API_WRITE_KEY is configured (len=%d)", len(settings.API_WRITE_KEY))
     elif settings.ALLOW_OPEN_WRITES:
@@ -40,11 +45,16 @@ async def lifespan(app: FastAPI):
             "or set ALLOW_OPEN_WRITES=true to explicitly run with public writes "
             "(local dev only)."
         )
-    start_scheduler()
+    scheduler_started = False
+    if settings.SCHEDULER_ENABLED:
+        scheduler_started = start_scheduler()
+    else:
+        logger.warning("Scheduler disabled by SCHEDULER_ENABLED=false")
     try:
         yield
     finally:
-        stop_scheduler()
+        if scheduler_started:
+            stop_scheduler()
 
 
 app = FastAPI(
@@ -58,12 +68,55 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; "
+        "font-src 'self' data:; "
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'"
+    ),
+}
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    for name, value in _SECURITY_HEADERS.items():
+        if name not in response.headers:
+            response.headers[name] = value
+    return response
+
+
+def _validate_cors_settings() -> None:
+    if settings.CORS_ALLOW_CREDENTIALS and "*" in settings.CORS_ALLOWED_ORIGINS:
+        raise RuntimeError(
+            "CORS_ALLOW_CREDENTIALS=true cannot be used with "
+            "CORS_ALLOWED_ORIGINS=*."
+        )
+    for name, values in (
+        ("CORS_ALLOWED_METHODS", settings.CORS_ALLOWED_METHODS),
+        ("CORS_ALLOWED_HEADERS", settings.CORS_ALLOWED_HEADERS),
+    ):
+        if "*" in values:
+            raise RuntimeError(f"{name} must list explicit values, not '*'.")
+
+
+_validate_cors_settings()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ALLOWED_ORIGINS,
     allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=settings.CORS_ALLOWED_METHODS,
+    allow_headers=settings.CORS_ALLOWED_HEADERS,
 )
 app.add_middleware(InMemoryRateLimitMiddleware)
 
@@ -103,17 +156,27 @@ async def api_overview():
 
 
 @app.get("/api/health")
-async def api_health(response: Response):
-    from app.core.scheduler import scheduler
+async def api_health(
+    response: Response,
+    x_api_key: str | None = Header(default=None),
+):
+    from app.core.scheduler import scheduler, scheduler_start_skipped_due_to_lock
     from app.services.loop_status_service import loop_status
 
-    status = loop_status(scheduler_running=scheduler.running)
+    status = loop_status(
+        scheduler_running=scheduler.running,
+        include_run_details=is_write_key_valid(x_api_key),
+    )
     failed_runs = [
         job
         for job, run in status.get("runs", {}).items()
         if run and run.get("status") == "failed"
     ]
-    degraded = bool(failed_runs) or not scheduler.running
+    degraded = bool(failed_runs) or (
+        settings.SCHEDULER_ENABLED
+        and not scheduler.running
+        and not scheduler_start_skipped_due_to_lock()
+    )
     # Return 503 when degraded so container/systemd healthchecks and external
     # uptime monitors actually trip instead of seeing a perpetual 200. The body
     # still carries the detail for a human reading the response.
@@ -124,6 +187,8 @@ async def api_health(response: Response):
         "status": "degraded" if degraded else "ok",
         "version": "0.3.0",
         "scheduler_running": scheduler.running,
+        "scheduler_enabled": settings.SCHEDULER_ENABLED,
+        "scheduler_lock_skipped": scheduler_start_skipped_due_to_lock(),
         "failed_runs": failed_runs,
         "loop": status,
     }

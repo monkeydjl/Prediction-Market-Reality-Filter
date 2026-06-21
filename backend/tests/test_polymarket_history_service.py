@@ -63,6 +63,16 @@ class PolymarketHistoryServiceTests(unittest.TestCase):
         self.assertEqual(markets, [])
         self.assertTrue(all(math.isfinite(m["final_yes_price"]) for m in markets))
 
+    def test_fetch_resolved_markets_logs_malformed_market_rows(self):
+        data = [_market(outcomePrices="[bad json")]
+
+        with patch.object(source.httpx, "AsyncClient", return_value=_Client(data)), \
+                self.assertLogs("app.services.polymarket_history_service", level="WARNING") as logs:
+            markets = asyncio.run(source.fetch_resolved_markets(limit=1))
+
+        self.assertEqual(markets, [])
+        self.assertIn("Skipping malformed Polymarket resolved market", "\n".join(logs.output))
+
 
 if __name__ == "__main__":
     unittest.main()

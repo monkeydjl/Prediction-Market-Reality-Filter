@@ -88,6 +88,7 @@ def diagnose(
     liquidity_factor= the 0..1 liquidity weight applied
     qualified       = segment has >= min_samples resolved (act+watch) predictions
     segment_n       = that sample count
+    segment_min_samples = threshold needed for a qualified segment
     segment_skill   = the segment's skill score (None when dormant)
     """
     min_samples = settings.CALIBRATION_FEEDBACK_MIN_SAMPLES
@@ -114,5 +115,6 @@ def diagnose(
         "liquidity_factor": liq,
         "qualified": qualified,
         "segment_n": segment_n,
+        "segment_min_samples": min_samples,
         "segment_skill": segment_stats.get("skill"),
     }

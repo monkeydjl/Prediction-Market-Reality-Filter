@@ -4,6 +4,8 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/curl -sf -o /dev/null -w "%%{http_code}" http://localhost:8000/api/health
+WorkingDirectory=/opt/prediction-market-reality-filter/backend
+EnvironmentFile=/etc/prediction-market-reality-filter.env
+ExecStart=/opt/prediction-market-reality-filter/.venv/bin/python scripts/healthcheck.py
 User=pmrf
 Group=pmrf

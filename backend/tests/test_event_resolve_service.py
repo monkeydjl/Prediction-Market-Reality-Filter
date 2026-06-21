@@ -134,6 +134,25 @@ class AutoResolveEventsTests(unittest.TestCase):
         self.assertEqual(result["status"], "no_resolved_markets")
         self.assertEqual(result["resolved_count"], 0)
 
+    def test_warns_when_kalshi_open_events_exist_but_resolved_is_empty(self):
+        record = _make_record("evtKalshi", value_score=30)
+        record["source"] = {
+            "type": "prediction_market",
+            "platform": "Kalshi",
+            "source_id": "KALSHI-1",
+        }
+        store.save_event(record)
+
+        with patch.object(phs, "fetch_resolved_markets",
+                          new=AsyncMock(return_value=[])), \
+                self.assertLogs("app.services.event_resolve_service", level="WARNING") as logs:
+            result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
+
+        self.assertEqual(result["status"], "no_resolved_markets")
+        self.assertTrue(
+            any("Kalshi returned 0 resolved markets" in msg for msg in logs.output)
+        )
+
     def test_matches_and_resolves_unresolved_event(self):
         resolved_market = {
             "question": "Will Bitcoin reach $100,000 by end of 2026?",
@@ -158,6 +177,41 @@ class AutoResolveEventsTests(unittest.TestCase):
         self.assertEqual(result["matches"][0]["actual_outcome"], 100.0)
         self.assertEqual(after["record"]["outcome"]["source"], "auto_market")
         self.assertIsNotNone(after["record"]["calibration"])
+
+    def test_dry_run_returns_matches_without_writing(self):
+        resolved_market = {
+            "question": "Will Bitcoin reach $100,000 by end of 2026?",
+            "actual_outcome": 100.0,
+            "id": "poly-dry",
+        }
+        record = _make_record("evtDry", value_score=30)
+        record["event_title"] = "Will Bitcoin reach $100,000 by end of 2026?"
+        with tempfile.TemporaryDirectory() as tmp:
+            store_path = str(Path(tmp) / "event_store.json")
+            audit_path = str(Path(tmp) / "event_audit.jsonl")
+            with patch.object(store, "_store_path", return_value=store_path), \
+                    patch.object(audit, "_audit_path", return_value=audit_path), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(phs, "fetch_resolved_markets",
+                                 new=AsyncMock(return_value=[resolved_market])):
+                store.save_event(record)
+                _seed_open_act("evtDry", ai_probability=80.0)
+                result = asyncio.run(ers.auto_resolve_events(
+                    resolved_limit=50,
+                    dry_run=True,
+                ))
+                after = store.get_event("evtDry")
+                prediction = preds.get_prediction("evtDry")
+                pending = links.list_pending()
+
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(result["resolved_count"], 1)
+        self.assertEqual(result["pending_count"], 0)
+        self.assertEqual(result["matches"][0]["result"], "would_resolve")
+        self.assertEqual(result["matches"][0]["contract_id"], "poly-dry")
+        self.assertIsNone(after["record"].get("outcome"))
+        self.assertEqual(prediction["status"], "open")
+        self.assertEqual(pending, [])
 
     def test_skips_already_resolved_events(self):
         resolved_market = {

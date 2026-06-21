@@ -15,6 +15,33 @@ from unittest.mock import AsyncMock, patch
 from app.services import kalshi_event_source as source
 
 
+class _Response:
+    def __init__(self, data):
+        self._data = data
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._data
+
+
+class _Client:
+    def __init__(self, data):
+        self._data = data
+        self.params = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def get(self, url, params=None):
+        self.params = params
+        return _Response(self._data)
+
+
 def _event(title="Will it rain?", event_ticker="EVT", market=None, markets=None):
     if markets is None:
         base = {
@@ -115,6 +142,17 @@ class KalshiEventSourceTests(unittest.TestCase):
         with patch.object(source, "_fetch_raw_resolved",
                           new=AsyncMock(side_effect=RuntimeError("boom"))):
             self.assertEqual(asyncio.run(source.fetch_resolved_markets()), [])
+
+    def test_fetch_raw_resolved_overfetches_for_single_leg_results(self):
+        client = _Client({"events": []})
+        with patch.object(source.settings, "KALSHI_API_URL", "https://kalshi.test/events"), \
+                patch.object(source.httpx, "AsyncClient", return_value=client):
+            events = asyncio.run(source._fetch_raw_resolved(limit=10))
+
+        self.assertEqual(events, [])
+        self.assertEqual(client.params["status"], "settled")
+        self.assertEqual(client.params["with_nested_markets"], "true")
+        self.assertEqual(client.params["limit"], "50")
 
 
 if __name__ == "__main__":

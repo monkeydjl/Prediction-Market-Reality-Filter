@@ -100,6 +100,38 @@ class EventStoreTests(unittest.TestCase):
                 listed = store.list_events(limit=2, offset=1)
         self.assertEqual([e["event_id"] for e in listed], ["mid", "low"])
 
+    def test_list_events_filters_and_counts_same_scope(self):
+        fed = _make_record("fed", value_score=70, estimated=65)
+        fed["event_title"] = "Federal Reserve rate cut"
+        fed["legacy_analysis"] = {"base_rate_category": "monetary"}
+        fed["tracking"] = {"status": "tracking", "priority": "high"}
+        eth = _make_record("eth", value_score=40, estimated=85)
+        eth["event_title"] = "Ethereum ETF approval"
+        eth["legacy_analysis"] = {"base_rate_category": "crypto"}
+        eth["tracking"] = {"status": "watching", "priority": "medium"}
+        old = _make_record("old", value_score=95, estimated=90)
+        old["event_title"] = "Archived crypto item"
+        old["legacy_analysis"] = {"base_rate_category": "crypto"}
+        old["tracking"] = {"status": "archived", "priority": "low"}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                store.save_events([fed, eth, old])
+                listed = store.list_events(
+                    query="ethereum",
+                    status="watching",
+                    category="crypto",
+                    sort="probability",
+                )
+                count = store.count_events(
+                    query="ethereum",
+                    status="watching",
+                    category="crypto",
+                    sort="probability",
+                )
+        self.assertEqual([e["event_id"] for e in listed], ["eth"])
+        self.assertEqual(count, 1)
+
     def test_save_event_rejects_missing_event_id(self):
         bad = _make_record()
         del bad["event_id"]
@@ -108,6 +140,20 @@ class EventStoreTests(unittest.TestCase):
             with patch.object(store, "_store_path", return_value=path):
                 with self.assertRaises(Exception):
                     store.save_event(bad)
+
+    def test_save_events_skips_invalid_record_in_batch(self):
+        bad = _make_record()
+        del bad["event_id"]
+        good = _make_record("evtGood", value_score=80)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                with self.assertLogs("app.memory.event_store", level="WARNING"):
+                    saved = store.save_events([bad, good])
+                listed = store.list_events()
+
+        self.assertEqual([entry["event_id"] for entry in saved], ["evtGood"])
+        self.assertEqual([entry["event_id"] for entry in listed], ["evtGood"])
 
     def test_resolve_event_attaches_outcome_and_preserves_first_seen(self):
         outcome = {

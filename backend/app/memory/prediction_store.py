@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS predictions (
     liquidity_factor    REAL,
     qualified           INTEGER,
     segment_n           INTEGER,
+    segment_min_samples INTEGER,
     segment_skill       REAL,
     created_at          TEXT NOT NULL DEFAULT '',
     status              TEXT NOT NULL DEFAULT 'open',
@@ -78,6 +79,7 @@ _MIGRATIONS = {
     "liquidity_factor": "REAL",
     "qualified": "INTEGER",
     "segment_n": "INTEGER",
+    "segment_min_samples": "INTEGER",
     "segment_skill": "REAL",
 }
 
@@ -248,6 +250,7 @@ def freeze_prediction(record: dict[str, Any]) -> dict[str, Any] | None:
         liquidity_factor=diag["liquidity_factor"],
         qualified=diag["qualified"],
         segment_n=diag["segment_n"],
+        segment_min_samples=diag["segment_min_samples"],
         segment_skill=diag["segment_skill"],
         created_at=utc_now(),
     )
@@ -262,8 +265,8 @@ def freeze_prediction(record: dict[str, Any]) -> dict[str, Any] | None:
                 id, event_id, contract_id, platform, base_rate_category,
                 ai_probability, market_probability, raw_edge, trust, adjusted_edge,
                 liquidity, volume, decision, liquidity_factor, qualified,
-                segment_n, segment_skill, created_at, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+                segment_n, segment_min_samples, segment_skill, created_at, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
             ON CONFLICT(event_id) DO NOTHING
             """,
             (
@@ -274,7 +277,8 @@ def freeze_prediction(record: dict[str, Any]) -> dict[str, Any] | None:
                 prediction.liquidity, prediction.volume, prediction.decision,
                 prediction.liquidity_factor,
                 int(prediction.qualified) if prediction.qualified is not None else None,
-                prediction.segment_n, prediction.segment_skill,
+                prediction.segment_n, prediction.segment_min_samples,
+                prediction.segment_skill,
                 prediction.created_at,
             ),
         )
@@ -480,6 +484,15 @@ def calibration_summary() -> dict[str, Any]:
             GROUP BY base_rate_category
             """,
         ).fetchall()
+        segment_rows = conn.execute(
+            """
+            SELECT base_rate_category AS cat, COUNT(*) AS n,
+                   AVG(brier_score) AS mean_brier
+            FROM predictions
+            WHERE status IN ('scored', 'observed') AND decision IN ('act', 'watch')
+            GROUP BY base_rate_category
+            """,
+        ).fetchall()
         scored_rows = conn.execute(
             """
             SELECT raw_edge, market_probability, actual_outcome
@@ -495,6 +508,18 @@ def calibration_summary() -> dict[str, Any]:
         }
         for r in cat_rows
     }
+    min_samples = settings.CALIBRATION_FEEDBACK_MIN_SAMPLES
+    segments = {
+        r["cat"]: {
+            "n": r["n"],
+            "brier_score": round(r["mean_brier"], 4),
+            "skill_score": round(skill_score(r["mean_brier"]), 4),
+            "grade": grade(r["mean_brier"]),
+            "segment_min_samples": min_samples,
+            "qualified": (r["n"] or 0) >= min_samples,
+        }
+        for r in segment_rows
+    }
     # Realized vs predicted edge: did reality move the way we said the market was
     # wrong? realized = sign(raw_edge) * (actual_outcome - market_probability);
     # positive means our divergence beat the market. directional_hit_rate is the
@@ -508,7 +533,8 @@ def calibration_summary() -> dict[str, Any]:
     if n == 0:
         return {"n": 0, "brier_score": None, "grade": "no_data",
                 "mean_raw_edge": None, "realized_edge": None,
-                "directional_hit_rate": None, "by_category": by_category}
+                "directional_hit_rate": None, "by_category": by_category,
+                "segment_min_samples": min_samples, "segments": segments}
     mean_brier = round(row["mean_brier"], 4)
     return {
         "n": n,
@@ -520,4 +546,6 @@ def calibration_summary() -> dict[str, Any]:
             sum(1 for v in realized_vals if v > 0) / len(realized_vals), 4
         ),
         "by_category": by_category,
+        "segment_min_samples": min_samples,
+        "segments": segments,
     }

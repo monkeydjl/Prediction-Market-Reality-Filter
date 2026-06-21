@@ -13,18 +13,22 @@ Returns the normalized article shape the news filter expects:
 """
 
 import asyncio
+import logging
 from functools import partial
 
 import feedparser
 
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
 
 def _fetch_sync(url: str, source_name: str, user_agent: str, limit: int) -> list[dict]:
     """Synchronous SEC EDGAR fetch + normalize. Runs in a thread pool."""
     try:
         feed = feedparser.parse(url, agent=user_agent)
-    except Exception:
+    except Exception as exc:
+        logger.warning("SEC EDGAR feed fetch failed [url=%s]: %s", url, exc)
         return []
     articles = []
     for entry in feed.entries[:limit]:

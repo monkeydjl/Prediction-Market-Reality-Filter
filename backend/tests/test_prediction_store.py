@@ -296,6 +296,58 @@ class PersistEventsFreezeTests(unittest.TestCase):
         self.assertIsNotNone(saved)                          # event survived
         self.assertEqual(saved["record"]["source"]["source_id"], "poly-err")
 
+    def test_persist_events_freezes_only_records_saved_by_batch(self):
+        from app.memory import event_store as store
+        from app.services import event_audit_service as audit
+        from app.services import event_intelligence_service as eis
+        from tests.test_event_store import _make_record
+        from unittest.mock import patch as _patch
+
+        bad = _make_record("evtBad", value_score=10)
+        del bad["event_id"]
+        good = _make_record("evtGood", value_score=30)
+        good["source"] = {
+            "type": "prediction_market", "platform": "Polymarket",
+            "source_id": "poly-good", "liquidity": 100.0, "volume": 200.0,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(store, "_store_path", return_value=str(Path(tmp) / "event_store.json")), \
+                    patch.object(audit, "_audit_path", return_value=str(Path(tmp) / "event_audit.jsonl")), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    _patch("app.memory.prediction_store.freeze_prediction") as freeze:
+                eis._persist_events([bad, good])
+                saved_bad = store.get_event("evtBad")
+                saved_good = store.get_event("evtGood")
+
+        self.assertIsNone(saved_bad)
+        self.assertIsNotNone(saved_good)
+        freeze.assert_called_once()
+        self.assertEqual(freeze.call_args.args[0]["event_id"], "evtGood")
+
+    def test_persist_events_skips_freeze_for_fallback_analysis(self):
+        from app.memory import event_store as store
+        from app.services import event_audit_service as audit
+        from app.services import event_intelligence_service as eis
+        from tests.test_event_store import _make_record
+        from unittest.mock import patch as _patch
+
+        rec = _make_record("evtFallback", value_score=30)
+        rec["source"] = {
+            "type": "prediction_market", "platform": "Polymarket",
+            "source_id": "poly-fallback", "liquidity": 100.0, "volume": 200.0,
+        }
+        rec["legacy_analysis"] = {"analysis_quality": "deterministic_fallback"}
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(store, "_store_path", return_value=str(Path(tmp) / "event_store.json")), \
+                    patch.object(audit, "_audit_path", return_value=str(Path(tmp) / "event_audit.jsonl")), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    _patch("app.memory.prediction_store.freeze_prediction") as freeze:
+                eis._persist_events([rec])
+                saved = store.get_event("evtFallback")
+
+        self.assertIsNotNone(saved)
+        freeze.assert_not_called()
+
 
 class Milestone2DiagnosisTests(unittest.TestCase):
     """M2: freeze stores category + diagnosis; segment calibration + by_category."""
@@ -361,6 +413,20 @@ class Milestone2DiagnosisTests(unittest.TestCase):
             self.assertIn("cpi", summary["by_category"])
             self.assertIn("fed_hike", summary["by_category"])
             self.assertEqual(summary["by_category"]["cpi"]["n"], 1)
+            self.assertEqual(summary["segment_min_samples"], 8)
+            self.assertEqual(summary["segments"]["cpi"]["n"], 1)
+            self.assertEqual(summary["segments"]["cpi"]["segment_min_samples"], 8)
+            self.assertFalse(summary["segments"]["cpi"]["qualified"])
+
+    def test_calibration_summary_segments_count_watch_exclude_skip(self):
+        with tempfile.TemporaryDirectory() as tmp, self._db(tmp):
+            _seed_resolved("s_act", decision="act", status="scored", brier=0.04, category="cpi")
+            _seed_resolved("s_watch", decision="watch", status="observed", brier=0.04, category="cpi")
+            _seed_resolved("s_skip", decision="skip", status="observed", brier=0.0, category="cpi")
+            summary = preds.calibration_summary()
+            self.assertEqual(summary["by_category"]["cpi"]["n"], 1)  # act-only scorecard
+            self.assertEqual(summary["segments"]["cpi"]["n"], 2)     # act + watch trust gate
+            self.assertAlmostEqual(summary["segments"]["cpi"]["skill_score"], 0.84)
 
     def test_segment_skill_counts_watch_excludes_skip(self):
         # The trust gate counts act+watch (so a fresh category can bootstrap out
@@ -469,7 +535,8 @@ class CommitmentMigrationTests(unittest.TestCase):
             trust REAL, adjusted_edge REAL,
             liquidity REAL NOT NULL DEFAULT 0.0, volume REAL NOT NULL DEFAULT 0.0,
             decision TEXT NOT NULL DEFAULT 'tracked',
-            liquidity_factor REAL, qualified INTEGER, segment_n INTEGER, segment_skill REAL,
+            liquidity_factor REAL, qualified INTEGER, segment_n INTEGER,
+            segment_min_samples INTEGER, segment_skill REAL,
             created_at TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open',
             actual_outcome REAL, brier_score REAL, resolved_at TEXT
         );
@@ -528,4 +595,3 @@ class CommitmentMigrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

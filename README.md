@@ -53,6 +53,8 @@ npm run build
 
 - `OPENAI_API_KEY` / `OPENAI_BASE_URL`：LLM 提供商（默认阿里云 DashScope 兼容接口）。
 - `OPENAI_MODEL`：主分析模型。
+- `LLM_STARTUP_CHECK_ENABLED=true`：生产可开启启动期 LLM 探测，key/model/base URL 无效时拒绝启动。
+- `PMRF_DEADMAN_URL`：生产可配置外部 dead-man ping；systemd healthcheck 会先确认本地 `/api/health` 为 ok，再 ping 该 URL。
 - `CROSS_VALIDATION_MODEL` / `OPEN_WEB_EXTRACTION_MODEL`：可选能力的模型，留空则关闭。
 
 ## 验证

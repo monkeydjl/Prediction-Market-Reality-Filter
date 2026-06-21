@@ -21,12 +21,14 @@ def _diagnosis_reason(prediction: dict[str, Any]) -> str:
     decision = prediction.get("decision")
     qualified = prediction.get("qualified")
     segment_n = prediction.get("segment_n")
+    segment_min = prediction.get("segment_min_samples")
     liq_factor = prediction.get("liquidity_factor")
     if decision == "act":
         return "已合格类别 + 调整后 edge 达到行动阈值"
     # watch / skip: name the dominant reason it is not act.
     if qualified is False:
-        return f"类别样本不足（{segment_n or 0} 条，未达合格线），暂不行动"
+        suffix = f"/{segment_min}" if segment_min else ""
+        return f"类别样本不足（{segment_n or 0}{suffix} 条，未达合格线），暂不行动"
     if liq_factor is not None and liq_factor < 1.0:
         return f"流动性折损（factor {liq_factor}），调整后 edge 被压低"
     return "调整后 edge 未达行动阈值"
@@ -77,6 +79,7 @@ def build_decision_report(
         "diagnosis": {
             "qualified": prediction.get("qualified"),
             "segment_n": prediction.get("segment_n"),
+            "segment_min_samples": prediction.get("segment_min_samples"),
             "segment_skill": prediction.get("segment_skill"),
             "liquidity_factor": prediction.get("liquidity_factor"),
             "reason": _diagnosis_reason(prediction),

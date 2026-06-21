@@ -45,16 +45,42 @@ any temporary JSON/SQLite mismatch captured while a backup was being written.
 
 ## Monitoring
 
-Enable the built-in health check timer (pings `/api/health` every 5 min):
+Enable the built-in health check timer. It runs `backend/scripts/healthcheck.py`
+every 5 min, verifies local `/api/health`, and only then pings the optional
+external dead-man URL:
 
 ```bash
 sudo systemctl enable prediction-market-reality-filter-healthcheck.timer
 sudo systemctl start prediction-market-reality-filter-healthcheck.timer
 ```
 
-For external dead-man monitoring, point a service like UptimeRobot or cronitor
-at `https://<your-host>/api/health`. The endpoint returns `{"status":"degraded",...}`
-when any scheduler job has failed.
+Configure the target in `/etc/prediction-market-reality-filter.env`:
+
+```bash
+PMRF_HEALTHCHECK_URL=http://localhost:8000/api/health
+PMRF_HEALTHCHECK_TIMEOUT_SECONDS=5
+PMRF_DEADMAN_URL=https://<uptime-provider>/<dead-man-token>
+```
+
+Leave `PMRF_DEADMAN_URL` empty for local-only health checking. With it set,
+missed pings indicate that the service is down, degraded, or unable to reach
+the external monitor.
+
+## Event ID Migration
+
+New events use 16-hex SHA-1 prefixes. To migrate legacy 12-hex event IDs across
+the JSON event store, audit JSONL, and loop SQLite tables, run a dry-run first:
+
+```bash
+cd /opt/prediction-market-reality-filter/backend
+/opt/prediction-market-reality-filter/.venv/bin/python scripts/migrate_event_ids.py
+```
+
+If the report has no conflicts, take a backup and apply:
+
+```bash
+/opt/prediction-market-reality-filter/.venv/bin/python scripts/migrate_event_ids.py --apply
+```
 
 ## Docker Deployment
 

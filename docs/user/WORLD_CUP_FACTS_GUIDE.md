@@ -42,6 +42,10 @@ Body: {"facts": [...]}
 Import trusted match-data snapshots:
 
 ```text
+POST /api/events/sports/world-cup/data/preview
+Header: X-API-Key: <API_WRITE_KEY>
+Body: {"matches": [...], "qualifications": [...], "player_awards": [...]}
+
 POST /api/events/sports/world-cup/data/import?replace=false
 Header: X-API-Key: <API_WRITE_KEY>
 Body: {"matches": [...], "qualifications": [...], "player_awards": [...]}
@@ -69,11 +73,12 @@ Header: X-API-Key: <API_WRITE_KEY>
    `docs/examples/world-cup-data.sample.json`; PMRF converts it into facts.
    If your source exports CSV, use the JSON-wrapped CSV sample at
    `docs/examples/world-cup-data-csv.sample.json`.
-3. Import with `replace=true` when the file is the current full fact snapshot.
+3. For trusted match data, call `data/preview` and inspect the generated facts.
+4. Import with `replace=true` when the file is the current full fact snapshot.
    Use `replace=false` for incremental upserts.
-4. Call the facts list endpoint and inspect the normalized records.
-5. Run `resolve?dry_run=true` and review every `would_resolve` row.
-6. Run `resolve?dry_run=false` only when the dry-run output is correct.
+5. Call the facts list endpoint and inspect the normalized records.
+6. Run `resolve?dry_run=true` and review every `would_resolve` row.
+7. Run `resolve?dry_run=false` only when the dry-run output is correct.
 
 ## PowerShell Example
 
@@ -99,6 +104,13 @@ For a trusted match-data snapshot, switch the import URL and body file:
 $body = Get-Content -Raw docs\examples\world-cup-data.sample.json
 Invoke-RestMethod `
   -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/preview" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
+
+Invoke-RestMethod `
+  -Method Post `
   -Uri "http://localhost:8000/api/events/sports/world-cup/data/import?replace=false" `
   -Headers @{ "X-API-Key" = $key } `
   -ContentType "application/json" `
@@ -109,6 +121,13 @@ For CSV exports, use the same endpoint with the CSV sample:
 
 ```powershell
 $body = Get-Content -Raw docs\examples\world-cup-data-csv.sample.json
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/preview" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
+
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:8000/api/events/sports/world-cup/data/import?replace=false" `
@@ -202,8 +221,9 @@ Golden Boot / scorer threshold:
 
 ## Trusted Data Import Shape
 
-`data/import` accepts a compact source-normalized snapshot and converts it to
-the same facts used by analysis and auto-resolution:
+`data/preview` and `data/import` accept a compact source-normalized snapshot and
+convert it to the same facts used by analysis and auto-resolution. Preview
+returns generated facts without writing them:
 
 - `matches`: creates `match_result` facts with score, red/yellow cards,
   `extra_time`, and `penalty_shootout`.

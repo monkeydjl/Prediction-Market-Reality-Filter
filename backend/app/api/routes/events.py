@@ -38,7 +38,10 @@ from app.services.sports_fact_service import (
     sports_fact_status,
 )
 from app.services.sports_resolution_service import resolve_world_cup_events
-from app.services.world_cup_data_source_service import import_world_cup_data
+from app.services.world_cup_data_source_service import (
+    import_world_cup_data,
+    world_cup_data_to_facts,
+)
 from app.services.trend_analysis_service import (
     analyze_edge_trajectory,
     analyze_trend,
@@ -232,6 +235,19 @@ async def import_world_cup_data_source(
     if result["imported"] == 0 and result["error_count"] > 0:
         raise HTTPException(status_code=422, detail=result["errors"])
     return result
+
+
+@router.post("/sports/world-cup/data/preview", response_model=FlexibleResponse)
+async def preview_world_cup_data_source(
+    payload: Any = Body(...),
+    _auth: None = Depends(require_write_key),
+):
+    """Preview facts that would be produced from a trusted World Cup payload."""
+    try:
+        facts = world_cup_data_to_facts(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"converted_fact_count": len(facts), "facts": facts}
 
 
 @router.post("/sports/world-cup/resolve", response_model=FlexibleResponse)

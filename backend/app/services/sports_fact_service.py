@@ -183,6 +183,9 @@ def normalize_sports_fact(
         "venue",
         "referee",
         "minute",
+        "position",
+        "formation",
+        "jersey_number",
         "qualified",
         "eliminated",
     ):

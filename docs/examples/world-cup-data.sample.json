@@ -49,6 +49,19 @@
       "status": "current"
     }
   ],
+  "player_statuses": [
+    {
+      "kind": "lineup",
+      "team": "Team A",
+      "player": "Player A",
+      "status": "starting",
+      "match_id": "round16-1",
+      "stage": "round_of_16",
+      "position": "F",
+      "formation": "4-3-3",
+      "jersey_number": "10"
+    }
+  ],
   "tournament_status": {
     "status": "in_progress",
     "tournament_complete": false

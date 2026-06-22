@@ -421,6 +421,9 @@ def _player_status_facts(
             "severity": _clean(raw.get("severity")).lower(),
             "match_id": match_id,
             "stage": _clean(raw.get("stage")),
+            "position": _clean(raw.get("position")),
+            "formation": _clean(raw.get("formation")),
+            "jersey_number": _clean(raw.get("jersey_number") or raw.get("number")),
             "notes": _clean(raw.get("notes") or raw.get("reason") or raw.get("description")),
             "applies_to": _clean_list(raw.get("applies_to")),
         })

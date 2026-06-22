@@ -59,6 +59,10 @@ from app.services.world_cup_match_events_source import (
     import_world_cup_match_events_source,
     preview_world_cup_match_events_source,
 )
+from app.services.world_cup_lineups_source import (
+    import_world_cup_lineups_source,
+    preview_world_cup_lineups_source,
+)
 from app.services.world_cup_player_awards_source import (
     import_world_cup_player_awards_source,
     preview_world_cup_player_awards_source,
@@ -491,6 +495,31 @@ async def import_world_cup_match_events_source_route(
     """Import discipline facts from raw World Cup match event/card data."""
     try:
         return import_world_cup_match_events_source(payload, replace=replace)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sports/world-cup/lineups/preview", response_model=FlexibleResponse)
+async def preview_world_cup_lineups_source_route(
+    payload: Any = Body(...),
+    _auth: None = Depends(require_write_key),
+):
+    """Preview lineup facts from raw World Cup lineup data."""
+    try:
+        return preview_world_cup_lineups_source(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sports/world-cup/lineups/import", response_model=FlexibleResponse)
+async def import_world_cup_lineups_source_route(
+    payload: Any = Body(...),
+    replace: bool = Query(default=False),
+    _auth: None = Depends(require_write_key),
+):
+    """Import lineup facts from raw World Cup lineup data."""
+    try:
+        return import_world_cup_lineups_source(payload, replace=replace)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

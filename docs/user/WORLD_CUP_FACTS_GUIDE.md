@@ -73,7 +73,7 @@ Body: {"sources": [{"kind": "matches", "payload": {...}}, {"kind": "player_statu
 The bundle endpoint is an operator convenience: it runs the same conservative
 adapters used by the individual endpoints and imports the combined facts in one
 write. Supported `kind` values are `data`, `matches`, `standings`,
-`match_events`, `player_awards`, and `player_status`.
+`match_events`, `lineups`, `player_awards`, and `player_status`.
 
 Import the configured multi-source bundle file:
 
@@ -137,6 +137,18 @@ Body: {"fixture": {"id": 1001}, "response": [{"type": "Card", "detail": "Red Car
 POST /api/events/sports/world-cup/match-events/import?replace=false
 Header: X-API-Key: <API_WRITE_KEY>
 Body: {"fixture": {"id": 1001}, "response": [{"type": "Card", "detail": "Red Card"}]}
+```
+
+Import raw starting-XI/bench exports through the lineups adapter:
+
+```text
+POST /api/events/sports/world-cup/lineups/preview
+Header: X-API-Key: <API_WRITE_KEY>
+Body: {"fixture": {"id": 1001}, "response": [{"team": {"name": "Team A"}, "startXI": [...]}]}
+
+POST /api/events/sports/world-cup/lineups/import?replace=false
+Header: X-API-Key: <API_WRITE_KEY>
+Body: {"fixture": {"id": 1001}, "response": [{"team": {"name": "Team A"}, "startXI": [...]}]}
 ```
 
 Import raw standings/group-table exports through the standings adapter:
@@ -235,6 +247,9 @@ Header: X-API-Key: <API_WRITE_KEY>
    If your source exports raw match event/card rows, use
    `docs/examples/world-cup-match-events-source.sample.json` with the
    `match-events/*` endpoints; PMRF normalizes card rows into discipline facts.
+   If your source exports raw starting-XI or bench rows, use
+   `docs/examples/world-cup-lineups-source.sample.json` with the `lineups/*`
+   endpoints.
    If your source exports raw standings/group tables, use
    `docs/examples/world-cup-standings-source.sample.json` with the
    `standings/*` endpoints.
@@ -248,7 +263,8 @@ Header: X-API-Key: <API_WRITE_KEY>
    For multi-source bundles, call `data/bundle/preview`.
    For raw fixture/result exports, call `matches/preview`; for raw standings,
    call `standings/preview`; for raw match event/card exports, call
-   `match-events/preview`; for raw top-scorers/player-awards exports, call
+   `match-events/preview`; for raw starting-XI/bench exports, call
+   `lineups/preview`; for raw top-scorers/player-awards exports, call
    `player-awards/preview`; for raw player status exports, call
    `player-status/preview`. If the data lives in `WORLD_CUP_DATA_FILE`, call
    `data/source/preview`. If a multi-source bundle lives in
@@ -256,8 +272,9 @@ Header: X-API-Key: <API_WRITE_KEY>
    If it lives behind `WORLD_CUP_SOURCE_BUNDLE_URL`, call
    `data/bundle/url/preview`. If raw source feeds are configured with
    `WORLD_CUP_MATCH_SOURCE_URL`, `WORLD_CUP_MATCH_EVENTS_SOURCE_URL`,
-   `WORLD_CUP_STANDINGS_SOURCE_URL`, `WORLD_CUP_PLAYER_AWARDS_SOURCE_URL`, or
-   `WORLD_CUP_PLAYER_STATUS_SOURCE_URL`, call `data/bundle/feeds/preview`.
+   `WORLD_CUP_LINEUPS_SOURCE_URL`, `WORLD_CUP_STANDINGS_SOURCE_URL`,
+   `WORLD_CUP_PLAYER_AWARDS_SOURCE_URL`, or `WORLD_CUP_PLAYER_STATUS_SOURCE_URL`,
+   call `data/bundle/feeds/preview`.
    If `WORLD_CUP_API_FOOTBALL_API_KEY` is configured, call
    `data/bundle/api-football/preview`.
 4. Import with `replace=true` when the file is the current full fact snapshot.
@@ -374,6 +391,25 @@ Invoke-RestMethod `
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:8000/api/events/sports/world-cup/match-events/import?replace=false" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+For raw starting-XI/bench exports, use the lineups adapter first:
+
+```powershell
+$body = Get-Content -Raw docs\examples\world-cup-lineups-source.sample.json
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/lineups/preview" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/lineups/import?replace=false" `
   -Headers @{ "X-API-Key" = $key } `
   -ContentType "application/json" `
   -Body $body
@@ -523,10 +559,11 @@ Invoke-RestMethod `
 
 For configured raw source feeds, set one or more of
 `WORLD_CUP_MATCH_SOURCE_URL`, `WORLD_CUP_MATCH_EVENTS_SOURCE_URL`,
-`WORLD_CUP_STANDINGS_SOURCE_URL`, `WORLD_CUP_PLAYER_AWARDS_SOURCE_URL`, and
-`WORLD_CUP_PLAYER_STATUS_SOURCE_URL`. PMRF fetches each configured URL, strips
-query strings from returned `source_url` metadata, adds a fetch timestamp when
-the payload lacks `observed_at`, and then runs the existing bundle adapters.
+`WORLD_CUP_LINEUPS_SOURCE_URL`, `WORLD_CUP_STANDINGS_SOURCE_URL`,
+`WORLD_CUP_PLAYER_AWARDS_SOURCE_URL`, and `WORLD_CUP_PLAYER_STATUS_SOURCE_URL`.
+PMRF fetches each configured URL, strips query strings from returned
+`source_url` metadata, adds a fetch timestamp when the payload lacks
+`observed_at`, and then runs the existing bundle adapters.
 Use the shared `WORLD_CUP_SOURCE_BUNDLE_AUTH_HEADER` /
 `WORLD_CUP_SOURCE_BUNDLE_AUTH_VALUE` settings when every configured feed uses
 the same upstream auth header.
@@ -551,7 +588,9 @@ scorers, and injuries; empty `response: []` feeds are skipped, while
 API-Football `errors` fail closed. Set
 `WORLD_CUP_API_FOOTBALL_FETCH_EVENTS=true` only when you want PMRF to make
 additional `fixtures/events?fixture=...` calls and convert card rows into
-`discipline` facts.
+`discipline` facts. Set `WORLD_CUP_API_FOOTBALL_FETCH_LINEUPS=true` only when
+you want PMRF to make additional `fixtures/lineups?fixture=...` calls and
+convert starting-XI/bench rows into `lineup` facts.
 
 ```powershell
 Invoke-RestMethod `
@@ -676,7 +715,8 @@ returns generated facts without writing them:
 - `player_awards`: creates `player_award` facts for Golden Boot / top scorer
   events.
 - `player_statuses`: creates `injury`, `availability`, `suspension`, or
-  `lineup` facts for player status and availability context.
+  `lineup` facts for player status and availability context, preserving
+  `position`, `formation`, and `jersey_number` when present.
 - `tournament_status`: creates one `tournament_status` fact.
 
 CSV exports can be wrapped under `csv.matches`, `csv.discipline`,
@@ -684,4 +724,5 @@ CSV exports can be wrapped under `csv.matches`, `csv.discipline`,
 row must be headers whose names match the JSON fields, such as `match_id`,
 `stage`, `home_team`, `away_team`, `status`, `kickoff_at`, `venue`, `referee`,
 `minute`, `red_cards`, `yellow_cards`, `penalty_shootout`, `team`,
-`already_qualified`, `award`, `player`, `goals`, `severity`, and `reason`.
+`already_qualified`, `award`, `player`, `goals`, `severity`, `position`,
+`formation`, `jersey_number`, and `reason`.

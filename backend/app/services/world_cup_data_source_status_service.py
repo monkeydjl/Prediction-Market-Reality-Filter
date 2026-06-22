@@ -14,6 +14,7 @@ from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT, sports_fact_s
 _FEED_URL_SETTINGS = (
     ("matches", "WORLD_CUP_MATCH_SOURCE_URL"),
     ("match_events", "WORLD_CUP_MATCH_EVENTS_SOURCE_URL"),
+    ("lineups", "WORLD_CUP_LINEUPS_SOURCE_URL"),
     ("standings", "WORLD_CUP_STANDINGS_SOURCE_URL"),
     ("player_awards", "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL"),
     ("player_status", "WORLD_CUP_PLAYER_STATUS_SOURCE_URL"),
@@ -42,6 +43,7 @@ def world_cup_data_source_status() -> dict[str, Any]:
                 "league_id": _clean(settings.WORLD_CUP_API_FOOTBALL_LEAGUE_ID),
                 "season": _clean(settings.WORLD_CUP_API_FOOTBALL_SEASON),
                 "fetch_events": settings.WORLD_CUP_API_FOOTBALL_FETCH_EVENTS,
+                "fetch_lineups": settings.WORLD_CUP_API_FOOTBALL_FETCH_LINEUPS,
             },
         },
         "scheduled_import": {

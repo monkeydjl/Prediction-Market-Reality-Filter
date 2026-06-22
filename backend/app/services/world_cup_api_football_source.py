@@ -62,6 +62,17 @@ def build_world_cup_api_football_bundle(
                 "reason": "empty response",
             })
 
+    if settings.WORLD_CUP_API_FOOTBALL_FETCH_LINEUPS and fixture_payload:
+        lineups_source = _fixture_lineups_source(fixture_payload, observed_at)
+        if lineups_source:
+            sources.append(lineups_source)
+        else:
+            skipped_sources.append({
+                "kind": "lineups",
+                "source_url": _display_url(_api_football_url("fixtures/lineups", {"fixture": "0"})),
+                "reason": "empty response",
+            })
+
     if not sources:
         raise ValueError("API-Football returned no usable World Cup source feeds")
     return {
@@ -202,6 +213,37 @@ def _fixture_events_source(
         "match_events",
         source_url or _api_football_url("fixtures/events", {"fixture": "0"}),
         {"response": events},
+        {},
+        observed_at,
+    )
+
+
+def _fixture_lineups_source(
+    fixture_payload: dict[str, Any],
+    observed_at: str,
+) -> dict[str, Any] | None:
+    lineups: list[dict[str, Any]] = []
+    source_url = ""
+    for fixture_id in _fixture_ids(fixture_payload):
+        lineup_url = _api_football_url("fixtures/lineups", {"fixture": fixture_id})
+        source_url = source_url or lineup_url
+        payload = _fetch_api_football_json(lineup_url)
+        response = payload.get("response")
+        if not isinstance(response, list):
+            continue
+        for row in response:
+            if not isinstance(row, dict):
+                continue
+            enriched = dict(row)
+            if "fixture" not in enriched and "fixture_id" not in enriched:
+                enriched["fixture"] = {"id": fixture_id}
+            lineups.append(enriched)
+    if not lineups:
+        return None
+    return _bundle_entry(
+        "lineups",
+        source_url or _api_football_url("fixtures/lineups", {"fixture": "0"}),
+        {"response": lineups},
         {},
         observed_at,
     )

@@ -23,6 +23,7 @@ from app.services.world_cup_match_source import world_cup_match_source_to_data
 from app.services.world_cup_match_events_source import (
     world_cup_match_events_source_to_data,
 )
+from app.services.world_cup_lineups_source import world_cup_lineups_source_to_data
 from app.services.world_cup_player_awards_source import (
     world_cup_player_awards_source_to_data,
 )
@@ -35,6 +36,7 @@ from app.utils.file_store import read_json_strict
 _SOURCE_FEED_URL_SETTINGS = (
     ("matches", "WORLD_CUP_MATCH_SOURCE_URL"),
     ("match_events", "WORLD_CUP_MATCH_EVENTS_SOURCE_URL"),
+    ("lineups", "WORLD_CUP_LINEUPS_SOURCE_URL"),
     ("standings", "WORLD_CUP_STANDINGS_SOURCE_URL"),
     ("player_awards", "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL"),
     ("player_status", "WORLD_CUP_PLAYER_STATUS_SOURCE_URL"),
@@ -281,6 +283,10 @@ def _source_kind(entry: Any, index: int) -> str:
         "cards": "match_events",
         "card_events": "match_events",
         "discipline": "match_events",
+        "lineup": "lineups",
+        "lineups": "lineups",
+        "starting_xi": "lineups",
+        "startxi": "lineups",
         "standings": "standings",
         "qualification": "standings",
         "qualifications": "standings",
@@ -293,10 +299,9 @@ def _source_kind(entry: Any, index: int) -> str:
         "injuries": "player_status",
         "availability": "player_status",
         "suspensions": "player_status",
-        "lineups": "player_status",
     }
     kind = aliases.get(kind, kind)
-    if kind not in {"data", "matches", "match_events", "standings", "player_awards", "player_status"}:
+    if kind not in {"data", "matches", "match_events", "lineups", "standings", "player_awards", "player_status"}:
         raise ValueError(f"sources[{index}] unsupported source kind '{raw}'")
     return kind
 
@@ -316,6 +321,8 @@ def _source_to_data(kind: str, payload: Any) -> dict[str, Any]:
         return world_cup_match_source_to_data(payload)
     if kind == "match_events":
         return world_cup_match_events_source_to_data(payload)
+    if kind == "lineups":
+        return world_cup_lineups_source_to_data(payload)
     if kind == "standings":
         return world_cup_standings_source_to_data(payload)
     if kind == "player_awards":

@@ -75,6 +75,34 @@
       }
     },
     {
+      "kind": "lineups",
+      "payload": {
+        "source": "api_football_lineups",
+        "source_url": "https://example.com/fixtures/lineups",
+        "observed_at": "2026-07-20T18:00:00Z",
+        "fixture": {
+          "id": 1001
+        },
+        "response": [
+          {
+            "team": {
+              "name": "Team A"
+            },
+            "formation": "4-3-3",
+            "startXI": [
+              {
+                "player": {
+                  "name": "Player A",
+                  "number": 10,
+                  "pos": "F"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "kind": "standings",
       "payload": {
         "source": "api_football",

@@ -48,6 +48,7 @@
 - [World Cup CSV data sample](examples/world-cup-data-csv.sample.json) — Example JSON-wrapped CSV payload for trusted data-source import
 - [World Cup match-source sample](examples/world-cup-match-source.sample.json) — Example raw fixture/result payload normalized by the match-source adapter
 - [World Cup match-events source sample](examples/world-cup-match-events-source.sample.json) — Example raw match card/event payload normalized into discipline facts
+- [World Cup lineups source sample](examples/world-cup-lineups-source.sample.json) — Example raw starting-XI payload normalized into lineup facts
 - [World Cup standings-source sample](examples/world-cup-standings-source.sample.json) — Example raw standings payload normalized into qualification facts
 - [World Cup player-awards source sample](examples/world-cup-player-awards-source.sample.json) — Example raw top-scorers payload normalized into player-award facts
 - [World Cup player-status source sample](examples/world-cup-player-status-source.sample.json) — Example raw injury/availability/suspension/lineup payload normalized into player-status facts

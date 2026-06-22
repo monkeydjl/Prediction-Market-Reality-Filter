@@ -8,12 +8,14 @@ vi.mock("@/lib/api", () => ({
   eventsApi: {
     worldCupResolveDryRun: vi.fn(),
     detail: vi.fn(),
+    resolveManual: vi.fn(),
   },
 }));
 
 const api = eventsApi as unknown as {
   worldCupResolveDryRun: Mock;
   detail: Mock;
+  resolveManual: Mock;
 };
 
 const dryRunResult = {
@@ -54,8 +56,10 @@ describe("WorldCupResolutionPanel", () => {
   beforeEach(() => {
     api.worldCupResolveDryRun.mockReset();
     api.detail.mockReset();
+    api.resolveManual.mockReset();
     api.worldCupResolveDryRun.mockResolvedValue(dryRunResult);
     api.detail.mockResolvedValue(detail);
+    api.resolveManual.mockResolvedValue({ event_id: "wc-1", record: detail.record });
   });
 
   it("loads World Cup dry-run candidates and enriches them with event source details", async () => {
@@ -92,13 +96,47 @@ describe("WorldCupResolutionPanel", () => {
     expect(api.detail).not.toHaveBeenCalled();
   });
 
-  it("refreshes the read-only dry-run without writing settlements", async () => {
+  it("refreshes the dry-run without writing settlements", async () => {
     render(<WorldCupResolutionPanel />);
 
     await screen.findByText("1 candidates");
     await userEvent.click(screen.getByRole("button", { name: "刷新检查" }));
 
     await waitFor(() => expect(api.worldCupResolveDryRun).toHaveBeenCalledTimes(2));
+    expect(api.resolveManual).not.toHaveBeenCalled();
+  });
+
+  it("requires per-candidate confirmation before writing a World Cup resolution", async () => {
+    render(<WorldCupResolutionPanel />);
+
+    await screen.findByText("1 candidates");
+    await userEvent.click(screen.getByRole("button", { name: "确认结算" }));
+
+    expect(api.resolveManual).not.toHaveBeenCalled();
+    expect(screen.getByText("再次确认后写入：结果 100%，置信度 0.94。")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "写入结算" }));
+
+    await waitFor(() => expect(api.resolveManual).toHaveBeenCalledWith("wc-1", {
+      actual_outcome: 100,
+      confidence: 0.94,
+      notes: "Mexico reached knockout_stage.",
+    }));
+    await waitFor(() => expect(api.worldCupResolveDryRun).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("已写入结算：Will Mexico reach the knockout stage? 100%")).toBeInTheDocument();
+  });
+
+  it("keeps the candidate visible when a confirmed write fails", async () => {
+    api.resolveManual.mockRejectedValue(new Error("operator key missing"));
+
+    render(<WorldCupResolutionPanel />);
+
+    await screen.findByText("1 candidates");
+    await userEvent.click(screen.getByRole("button", { name: "确认结算" }));
+    await userEvent.click(screen.getByRole("button", { name: "写入结算" }));
+
+    expect(await screen.findByText("operator key missing")).toBeInTheDocument();
+    expect(screen.getByText("Will Mexico reach the knockout stage?")).toBeInTheDocument();
   });
 
   it("renders an error state without reporting an empty candidate result", async () => {

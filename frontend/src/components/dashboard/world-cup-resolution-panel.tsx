@@ -109,12 +109,21 @@ function SummaryPill({
 function CandidateCard({
   match,
   detail,
+  confirming,
+  resolving,
+  actionDisabled,
+  onApprove,
 }: {
   match: WorldCupResolveMatch;
   detail: TrackedEntry | undefined;
+  confirming: boolean;
+  resolving: boolean;
+  actionDisabled: boolean;
+  onApprove: (match: WorldCupResolveMatch) => void;
 }) {
   const facts = factIds(match);
   const url = marketUrl(detail);
+  const canApprove = Boolean(match.event_id && match.result === "would_resolve" && match.actual_outcome != null);
 
   return (
     <li className="grid gap-3 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
@@ -173,10 +182,34 @@ function CandidateCard({
             ))}
           </div>
         )}
+
+        {confirming && (
+          <div className="mt-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
+            再次确认后写入：结果 {outcomeLabel(match.actual_outcome)}，置信度 {confidenceLabel(match.confidence)}。
+          </div>
+        )}
       </div>
 
-      <div className="font-mono text-sm font-semibold tabular-nums text-foreground md:text-right">
-        {outcomeLabel(match.actual_outcome)}
+      <div className="flex items-center gap-2 md:flex-col md:items-end">
+        <div className="font-mono text-sm font-semibold tabular-nums text-foreground md:text-right">
+          {outcomeLabel(match.actual_outcome)}
+        </div>
+        {canApprove && (
+          <button
+            type="button"
+            onClick={() => onApprove(match)}
+            disabled={actionDisabled || resolving}
+            className={cn(
+              "inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors disabled:opacity-50",
+              confirming
+                ? "border-warn bg-warn/15 text-warn hover:bg-warn/25"
+                : "border-primary bg-primary/15 text-primary hover:bg-primary/25",
+            )}
+          >
+            {resolving && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
+            {resolving ? "写入中" : confirming ? "写入结算" : "确认结算"}
+          </button>
+        )}
       </div>
     </li>
   );
@@ -187,6 +220,9 @@ export function WorldCupResolutionPanel() {
   const [details, setDetails] = useState<Record<string, TrackedEntry>>({});
   const [detailErrorCount, setDetailErrorCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const matches = useMemo(() => result?.matches ?? [], [result]);
@@ -218,6 +254,44 @@ export function WorldCupResolutionPanel() {
       setError(e instanceof Error ? e.message : "世界杯结算 dry-run 加载失败");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function approveMatch(match: WorldCupResolveMatch) {
+    const eventId = match.event_id ?? "";
+    const actualOutcome = Number(match.actual_outcome);
+    if (!eventId || !Number.isFinite(actualOutcome) || actualOutcome < 0 || actualOutcome > 100) {
+      setError("候选结算结果无效，不能写入。");
+      return;
+    }
+    const confidence = Number(match.confidence ?? 1);
+    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+      setError("候选结算置信度无效，不能写入。");
+      return;
+    }
+    if (confirmingId !== eventId) {
+      setConfirmingId(eventId);
+      setMessage(null);
+      setError(null);
+      return;
+    }
+
+    setResolvingId(eventId);
+    setMessage(null);
+    setError(null);
+    try {
+      await eventsApi.resolveManual(eventId, {
+        actual_outcome: actualOutcome,
+        confidence,
+        notes: match.reason || "World Cup structured facts",
+      });
+      setConfirmingId(null);
+      setMessage(`已写入结算：${match.event_title || eventId} ${outcomeLabel(actualOutcome)}`);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "世界杯结算写入失败");
+    } finally {
+      setResolvingId(null);
     }
   }
 
@@ -277,6 +351,12 @@ export function WorldCupResolutionPanel() {
         </div>
       )}
 
+      {message && (
+        <div className="rounded-md border border-pos/40 bg-pos/10 px-3 py-2 text-xs leading-relaxed text-pos">
+          {message}
+        </div>
+      )}
+
       <div className="flex flex-wrap gap-1.5">
         <SummaryPill label="checked" value={result?.checked_count} />
         <SummaryPill label="would resolve" value={result?.resolved_count} tone="primary" />
@@ -305,6 +385,10 @@ export function WorldCupResolutionPanel() {
               key={`${match.event_id ?? "match"}:${index}`}
               match={match}
               detail={match.event_id ? details[match.event_id] : undefined}
+              confirming={confirmingId === match.event_id}
+              resolving={resolvingId === match.event_id}
+              actionDisabled={loading || Boolean(resolvingId)}
+              onApprove={(candidate) => void approveMatch(candidate)}
             />
           ))}
         </ul>

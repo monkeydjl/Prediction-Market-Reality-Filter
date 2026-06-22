@@ -58,6 +58,7 @@ npm run build
 - `PMRF_DEADMAN_URL`：生产可配置外部 dead-man ping；systemd healthcheck 会先确认本地 `/api/health` 为 ok，再 ping 该 URL。
 - `CROSS_VALIDATION_MODEL` / `OPEN_WEB_EXTRACTION_MODEL`：可选能力的模型，留空则关闭。
 - `WORLD_CUP_SOURCE_ENABLED`：启用 2026 世界杯策划事件源，丰富发现流的体育候选事件。
+- `SPORTS_FACT_FILE`：结构化世界杯事实 JSON 文件，用于 sports signals 和自动结算。
 
 ## 验证
 
@@ -79,6 +80,7 @@ npm run build
 | [docs/dev/Event Intelligence Platform.md](docs/dev/Event%20Intelligence%20Platform.md) | 产品愿景与边界 |
 | [docs/dev/DESIGN.md](docs/dev/DESIGN.md) ・ [PRODUCT.md](docs/dev/PRODUCT.md) | 设计系统与产品上下文 |
 | [docs/dev/WORLD_CUP_PREDICTION_SYSTEM_DESIGN.md](docs/dev/WORLD_CUP_PREDICTION_SYSTEM_DESIGN.md) | 世界杯预测系统设计与后续优先级 |
+| [docs/user/WORLD_CUP_FACTS_GUIDE.md](docs/user/WORLD_CUP_FACTS_GUIDE.md) | 世界杯 facts 导入、预览结算和样例流程 |
 | [docs/dev/INTEGRATION_TEST_REPORT.md](docs/dev/INTEGRATION_TEST_REPORT.md) | 端到端集成验证记录 |
 | [docs/archive/](docs/archive/) | 历史里程碑与过程文档 |
 

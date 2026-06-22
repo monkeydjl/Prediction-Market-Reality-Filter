@@ -4,6 +4,7 @@
 - [Quick Start](user/QUICK_START.md) — Install, configure, run
 - [User Guide](user/USER_GUIDE.md) — Full usage guide
 - [中文使用教程](user/中文使用教程.md) — Chinese tutorial
+- [World Cup Facts Guide](user/WORLD_CUP_FACTS_GUIDE.md) — Import structured sports facts and preview deterministic World Cup resolution
 
 ## Architecture & Design
 - [Architecture Overview](dev/ARCHITECTURE.md) — System context, data flow, deployment
@@ -42,3 +43,4 @@
 ## External References
 - `/docs` — OpenAPI (Swagger) auto-generated
 - `README.md` — Project overview and quick start
+- [World Cup facts sample](examples/world-cup-facts.sample.json) — Example import payload for the sports facts API

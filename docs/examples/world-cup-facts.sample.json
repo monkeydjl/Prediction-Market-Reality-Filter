@@ -1,0 +1,90 @@
+{
+  "facts": [
+    {
+      "fact_id": "wc2026:injury:brazil:player-a",
+      "kind": "injury",
+      "tournament": "2026 FIFA World Cup",
+      "team": "Brazil",
+      "player": "Player A",
+      "status": "out",
+      "severity": "high",
+      "source": "manual",
+      "confidence": 0.95,
+      "observed_at": "2026-06-22T00:00:00Z",
+      "applies_to": ["world-cup-2026:brazil-semifinal"],
+      "notes": "Example injury fact. Replace with a verified source before use."
+    },
+    {
+      "fact_id": "wc2026:qualification:mexico:knockout",
+      "kind": "qualification",
+      "tournament": "2026 FIFA World Cup",
+      "team": "Mexico",
+      "status": "qualified",
+      "already_qualified": true,
+      "stage": "round_of_32",
+      "source": "manual",
+      "confidence": 1.0,
+      "observed_at": "2026-06-22T00:00:00Z"
+    },
+    {
+      "fact_id": "wc2026:qualification:canada:eliminated",
+      "kind": "qualification",
+      "tournament": "2026 FIFA World Cup",
+      "team": "Canada",
+      "status": "eliminated",
+      "already_eliminated": true,
+      "source": "manual",
+      "confidence": 1.0,
+      "observed_at": "2026-06-22T00:00:00Z"
+    },
+    {
+      "fact_id": "wc2026:discipline:red-cards-total",
+      "kind": "discipline",
+      "tournament": "2026 FIFA World Cup",
+      "red_cards": 8,
+      "source": "manual",
+      "confidence": 1.0,
+      "observed_at": "2026-06-22T00:00:00Z"
+    },
+    {
+      "fact_id": "wc2026:match:round16-1",
+      "kind": "match_result",
+      "tournament": "2026 FIFA World Cup",
+      "match_id": "worldcup2026:round-of-16:example-1",
+      "stage": "round_of_16",
+      "home_team": "Team A",
+      "away_team": "Team B",
+      "status": "finished",
+      "penalty_shootout": true,
+      "extra_time": true,
+      "source": "manual",
+      "confidence": 1.0,
+      "observed_at": "2026-06-22T00:00:00Z"
+    },
+    {
+      "fact_id": "wc2026:match:final",
+      "kind": "match_result",
+      "tournament": "2026 FIFA World Cup",
+      "match_id": "worldcup2026:final",
+      "stage": "final",
+      "home_team": "Finalist A",
+      "away_team": "Finalist B",
+      "status": "finished",
+      "extra_time": false,
+      "penalty_shootout": false,
+      "source": "manual",
+      "confidence": 1.0,
+      "observed_at": "2026-06-22T00:00:00Z"
+    },
+    {
+      "fact_id": "wc2026:tournament:complete",
+      "kind": "tournament_status",
+      "tournament": "2026 FIFA World Cup",
+      "status": "complete",
+      "tournament_complete": true,
+      "source": "manual",
+      "confidence": 1.0,
+      "observed_at": "2026-06-22T00:00:00Z"
+    }
+  ]
+}

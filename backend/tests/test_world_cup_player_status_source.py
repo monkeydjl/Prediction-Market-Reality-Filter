@@ -65,6 +65,27 @@ class WorldCupPlayerStatusSourceTests(unittest.TestCase):
         self.assertEqual(data["player_statuses"][0]["team"], "France")
         self.assertEqual(data["player_statuses"][0]["kind"], "injury")
 
+    def test_normalizes_api_football_injury_rows(self):
+        data = world_cup_player_status_source_to_data({
+            "provider": "api_football",
+            "observed_at": "2026-06-25T00:00:00Z",
+            "response": [{
+                "player": {
+                    "name": "Player C",
+                    "type": "Missing Fixture",
+                    "reason": "Hamstring injury",
+                },
+                "team": {"name": "Brazil"},
+                "fixture": {"id": 1002},
+            }],
+        })
+
+        status = data["player_statuses"][0]
+        self.assertEqual(status["kind"], "injury")
+        self.assertEqual(status["status"], "injured")
+        self.assertEqual(status["reason"], "Hamstring injury")
+        self.assertEqual(status["match_id"], "1002")
+
     def test_preview_converts_statuses_to_facts(self):
         result = preview_world_cup_player_status_source(_raw_status_payload())
 

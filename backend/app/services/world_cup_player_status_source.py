@@ -159,7 +159,11 @@ def _kind(raw: dict[str, Any], default_kind: str) -> str:
         return "suspension"
     if status in {"starting", "starter", "bench", "substitute"}:
         return "lineup"
-    if status in {"out", "injured", "doubtful", "questionable"} or raw.get("injury"):
+    if (
+        status in {"out", "injured", "doubtful", "questionable"}
+        or raw.get("injury")
+        or _provider_injury_reason(raw)
+    ):
         return "injury"
     if status:
         return "availability"
@@ -230,7 +234,19 @@ def _reason(raw: dict[str, Any]) -> str:
         ("description",),
         ("note",),
         ("notes",),
+        ("player", "reason"),
+        ("player", "type"),
     ) or injury)
+
+
+def _provider_injury_reason(raw: dict[str, Any]) -> str:
+    reason = _clean(_first(raw, ("player", "reason")))
+    if reason:
+        return reason
+    status_type = _clean(_first(raw, ("player", "type"))).lower()
+    if status_type in {"missing fixture", "injury", "injured", "doubtful", "questionable"}:
+        return status_type
+    return ""
 
 
 def _first(raw: dict[str, Any], *paths: tuple[str, ...]) -> Any:

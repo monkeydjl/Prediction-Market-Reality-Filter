@@ -28,6 +28,19 @@
       },
       "status": "suspended",
       "reason": "red card ban"
+    },
+    {
+      "player": {
+        "name": "Player C",
+        "type": "Missing Fixture",
+        "reason": "Hamstring injury"
+      },
+      "team": {
+        "name": "Brazil"
+      },
+      "fixture": {
+        "id": "group-a-2"
+      }
     }
   ]
 }

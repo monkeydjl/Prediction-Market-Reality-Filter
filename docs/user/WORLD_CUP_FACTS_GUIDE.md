@@ -161,7 +161,9 @@ Body: {"response": [{"player": {...}, "team": {...}, "status": "out"}]}
 The player-status adapter maps raw injury, availability, suspension, and lineup
 exports into `injury`, `availability`, `suspension`, or `lineup` facts. It
 requires player and team names, and preserves status, severity, fixture/match
-id, stage, notes/reason, and applies-to hints when present.
+id, stage, notes/reason, and applies-to hints when present. API-Football style
+injury rows with `player.reason` or `player.type=Missing Fixture` are treated
+as injury statuses.
 
 Import the configured trusted data-source file:
 

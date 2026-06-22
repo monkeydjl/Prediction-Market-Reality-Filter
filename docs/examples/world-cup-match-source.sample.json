@@ -1,0 +1,48 @@
+{
+  "source": "api_football",
+  "source_url": "https://example.com/fixtures",
+  "observed_at": "2026-07-20T00:00:00Z",
+  "response": [
+    {
+      "fixture": {
+        "id": 1001,
+        "status": {
+          "short": "PEN"
+        }
+      },
+      "league": {
+        "round": "Round of 16"
+      },
+      "teams": {
+        "home": {
+          "name": "Team A",
+          "winner": true
+        },
+        "away": {
+          "name": "Team B",
+          "winner": false
+        }
+      },
+      "goals": {
+        "home": 1,
+        "away": 1
+      },
+      "score": {
+        "penalty": {
+          "home": 5,
+          "away": 4
+        }
+      },
+      "cards": {
+        "home": {
+          "red": 1,
+          "yellow": 2
+        },
+        "away": {
+          "red": 0,
+          "yellow": 3
+        }
+      }
+    }
+  ]
+}

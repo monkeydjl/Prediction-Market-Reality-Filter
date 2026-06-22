@@ -44,6 +44,10 @@ from app.services.world_cup_data_source_service import (
     preview_world_cup_data_file,
     world_cup_data_to_facts,
 )
+from app.services.world_cup_match_source import (
+    import_world_cup_match_source,
+    preview_world_cup_match_source,
+)
 from app.services.trend_analysis_service import (
     analyze_edge_trajectory,
     analyze_trend,
@@ -275,6 +279,31 @@ async def import_configured_world_cup_data_source(
         return import_world_cup_data_file(replace=replace)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"World Cup data file not found: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sports/world-cup/matches/preview", response_model=FlexibleResponse)
+async def preview_world_cup_match_source_route(
+    payload: Any = Body(...),
+    _auth: None = Depends(require_write_key),
+):
+    """Preview facts from a raw World Cup fixture/result payload."""
+    try:
+        return preview_world_cup_match_source(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sports/world-cup/matches/import", response_model=FlexibleResponse)
+async def import_world_cup_match_source_route(
+    payload: Any = Body(...),
+    replace: bool = Query(default=False),
+    _auth: None = Depends(require_write_key),
+):
+    """Import facts from a raw World Cup fixture/result payload."""
+    try:
+        return import_world_cup_match_source(payload, replace=replace)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

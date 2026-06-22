@@ -51,6 +51,18 @@ Header: X-API-Key: <API_WRITE_KEY>
 Body: {"matches": [...], "qualifications": [...], "player_awards": [...]}
 ```
 
+Import raw fixture/result exports through the match-source adapter:
+
+```text
+POST /api/events/sports/world-cup/matches/preview
+Header: X-API-Key: <API_WRITE_KEY>
+Body: {"response": [{"fixture": {...}, "teams": {...}, "goals": {...}}]}
+
+POST /api/events/sports/world-cup/matches/import?replace=false
+Header: X-API-Key: <API_WRITE_KEY>
+Body: {"response": [{"fixture": {...}, "teams": {...}, "goals": {...}}]}
+```
+
 Import the configured trusted data-source file:
 
 ```text
@@ -88,8 +100,12 @@ Header: X-API-Key: <API_WRITE_KEY>
    `docs/examples/world-cup-data.sample.json`; PMRF converts it into facts.
    If your source exports CSV, use the JSON-wrapped CSV sample at
    `docs/examples/world-cup-data-csv.sample.json`.
+   If your source exports raw fixture/result records, use
+   `docs/examples/world-cup-match-source.sample.json` with the `matches/*`
+   endpoints; PMRF normalizes it first, then converts it into facts.
 3. For trusted match data, call `data/preview` and inspect the generated facts.
-   If the data lives in `WORLD_CUP_DATA_FILE`, call `data/source/preview`.
+   For raw fixture/result exports, call `matches/preview`. If the data lives in
+   `WORLD_CUP_DATA_FILE`, call `data/source/preview`.
 4. Import with `replace=true` when the file is the current full fact snapshot.
    Use `replace=false` for incremental upserts.
 5. Call the facts list endpoint and inspect the normalized records.
@@ -147,6 +163,25 @@ Invoke-RestMethod `
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:8000/api/events/sports/world-cup/data/import?replace=false" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+For raw fixture/result exports, use the match-source adapter first:
+
+```powershell
+$body = Get-Content -Raw docs\examples\world-cup-match-source.sample.json
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/matches/preview" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/matches/import?replace=false" `
   -Headers @{ "X-API-Key" = $key } `
   -ContentType "application/json" `
   -Body $body

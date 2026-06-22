@@ -49,3 +49,4 @@
 - [World Cup match-source sample](examples/world-cup-match-source.sample.json) — Example raw fixture/result payload normalized by the match-source adapter
 - [World Cup standings-source sample](examples/world-cup-standings-source.sample.json) — Example raw standings payload normalized into qualification facts
 - [World Cup player-awards source sample](examples/world-cup-player-awards-source.sample.json) — Example raw top-scorers payload normalized into player-award facts
+- [World Cup player-status source sample](examples/world-cup-player-status-source.sample.json) — Example raw injury/availability/suspension/lineup payload normalized into player-status facts

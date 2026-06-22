@@ -56,6 +56,14 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
                 "rank": 1,
                 "status": "current",
             }],
+            "player_statuses": [{
+                "kind": "injury",
+                "team": "Brazil",
+                "player": "Player B",
+                "status": "out",
+                "severity": "high",
+                "reason": "hamstring",
+            }],
             "tournament_status": {
                 "status": "complete",
                 "tournament_complete": True,
@@ -69,6 +77,8 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
         self.assertTrue(by_kind["match_result"]["penalty_shootout"])
         self.assertEqual(by_kind["qualification"]["team"], "Mexico")
         self.assertEqual(by_kind["player_award"]["goals"], 7)
+        self.assertEqual(by_kind["injury"]["player"], "Player B")
+        self.assertEqual(by_kind["injury"]["notes"], "hamstring")
         self.assertTrue(by_kind["tournament_status"]["tournament_complete"])
 
     def test_converts_csv_sections_to_structured_facts(self):

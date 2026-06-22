@@ -36,6 +36,7 @@ def world_cup_data_to_facts(payload: Any) -> list[dict[str, Any]]:
     facts.extend(_match_facts(payload.get("matches", []), tournament, source, source_url, observed_at))
     facts.extend(_qualification_facts(payload.get("qualifications", []), tournament, source, source_url, observed_at))
     facts.extend(_player_award_facts(payload.get("player_awards", []), tournament, source, source_url, observed_at))
+    facts.extend(_player_status_facts(payload.get("player_statuses", []), tournament, source, source_url, observed_at))
 
     status_fact = _tournament_status_fact(payload, tournament, source, source_url, observed_at)
     if status_fact:
@@ -173,7 +174,7 @@ def _expand_csv_payload(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("csv must be an object")
 
     expanded = dict(payload)
-    for section in ("matches", "qualifications", "player_awards"):
+    for section in ("matches", "qualifications", "player_awards", "player_statuses"):
         csv_text = csv_payload.get(section)
         if csv_text in (None, ""):
             continue
@@ -319,6 +320,52 @@ def _player_award_facts(
     return facts
 
 
+def _player_status_facts(
+    statuses: Any,
+    tournament: str,
+    source: str,
+    source_url: str,
+    observed_at: str,
+) -> list[dict[str, Any]]:
+    rows = _require_list(statuses, "player_statuses")
+    facts: list[dict[str, Any]] = []
+    for index, raw in enumerate(rows):
+        if not isinstance(raw, dict):
+            raise ValueError(f"player_statuses[{index}] must be an object")
+        player = _clean(raw.get("player") or raw.get("name"))
+        team = _clean(raw.get("team"))
+        if not player:
+            raise ValueError(f"player_statuses[{index}] missing player")
+        if not team:
+            raise ValueError(f"player_statuses[{index}] missing team")
+        kind = _player_status_kind(raw)
+        status = _player_status(raw, kind)
+        match_id = _clean(raw.get("match_id") or raw.get("fixture_id"))
+        fact = _base_fact(
+            fact_id=(
+                f"wc2026:player-status:{kind}:{_slug(team)}:{_slug(player)}:"
+                f"{_slug(match_id or status or index)}"
+            ),
+            kind=kind,
+            tournament=tournament,
+            source=source,
+            source_url=source_url,
+            observed_at=observed_at,
+        )
+        fact.update({
+            "team": team,
+            "player": player,
+            "status": status,
+            "severity": _clean(raw.get("severity")).lower(),
+            "match_id": match_id,
+            "stage": _clean(raw.get("stage")),
+            "notes": _clean(raw.get("notes") or raw.get("reason") or raw.get("description")),
+            "applies_to": _clean_list(raw.get("applies_to")),
+        })
+        facts.append(_compact(fact))
+    return facts
+
+
 def _tournament_status_fact(
     payload: dict[str, Any],
     tournament: str,
@@ -348,6 +395,47 @@ def _tournament_status_fact(
     if _has_value(complete):
         fact["tournament_complete"] = _bool(complete, "tournament_complete")
     return _compact(fact)
+
+
+def _player_status_kind(raw: dict[str, Any]) -> str:
+    kind = _clean(raw.get("kind") or raw.get("type") or raw.get("category")).lower()
+    aliases = {
+        "injuries": "injury",
+        "injury_status": "injury",
+        "availability_status": "availability",
+        "available": "availability",
+        "suspensions": "suspension",
+        "suspended": "suspension",
+        "lineups": "lineup",
+        "starter": "lineup",
+    }
+    kind = aliases.get(kind, kind)
+    if kind in {"injury", "availability", "suspension", "lineup"}:
+        return kind
+
+    status = _clean(raw.get("status") or raw.get("availability") or raw.get("state")).lower()
+    if status in {"suspended", "banned"}:
+        return "suspension"
+    if status in {"starting", "starter", "bench", "substitute"}:
+        return "lineup"
+    if status in {"out", "injured", "doubtful", "questionable"} or raw.get("injury"):
+        return "injury"
+    if status:
+        return "availability"
+    raise ValueError("player_statuses kind must be injury, availability, suspension, or lineup")
+
+
+def _player_status(raw: dict[str, Any], kind: str) -> str:
+    status = _clean(raw.get("status") or raw.get("availability") or raw.get("state")).lower()
+    if status:
+        return status
+    if kind == "injury":
+        return "injured"
+    if kind == "suspension":
+        return "suspended"
+    if kind == "lineup":
+        return "listed"
+    return "unknown"
 
 
 def _base_fact(
@@ -422,6 +510,12 @@ def _bool(value: Any, field: str) -> bool:
 
 def _has_value(value: Any) -> bool:
     return value is not None and _clean(value) != ""
+
+
+def _clean_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [_clean(item) for item in value if _clean(item)]
 
 
 def _compact(fact: dict[str, Any]) -> dict[str, Any]:

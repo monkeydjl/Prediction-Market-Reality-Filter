@@ -44,11 +44,11 @@ Import trusted match-data snapshots:
 ```text
 POST /api/events/sports/world-cup/data/preview
 Header: X-API-Key: <API_WRITE_KEY>
-Body: {"matches": [...], "qualifications": [...], "player_awards": [...]}
+Body: {"matches": [...], "qualifications": [...], "player_awards": [...], "player_statuses": [...]}
 
 POST /api/events/sports/world-cup/data/import?replace=false
 Header: X-API-Key: <API_WRITE_KEY>
-Body: {"matches": [...], "qualifications": [...], "player_awards": [...]}
+Body: {"matches": [...], "qualifications": [...], "player_awards": [...], "player_statuses": [...]}
 ```
 
 Import raw fixture/result exports through the match-source adapter:
@@ -90,6 +90,24 @@ POST /api/events/sports/world-cup/player-awards/import?replace=false
 Header: X-API-Key: <API_WRITE_KEY>
 Body: {"response": [{"player": {...}, "statistics": [{"goals": {...}}]}]}
 ```
+
+Import raw injury/availability/suspension/lineup exports through the
+player-status adapter:
+
+```text
+POST /api/events/sports/world-cup/player-status/preview
+Header: X-API-Key: <API_WRITE_KEY>
+Body: {"response": [{"player": {...}, "team": {...}, "status": "out"}]}
+
+POST /api/events/sports/world-cup/player-status/import?replace=false
+Header: X-API-Key: <API_WRITE_KEY>
+Body: {"response": [{"player": {...}, "team": {...}, "status": "out"}]}
+```
+
+The player-status adapter maps raw injury, availability, suspension, and lineup
+exports into `injury`, `availability`, `suspension`, or `lineup` facts. It
+requires player and team names, and preserves status, severity, fixture/match
+id, stage, notes/reason, and applies-to hints when present.
 
 Import the configured trusted data-source file:
 
@@ -137,10 +155,14 @@ Header: X-API-Key: <API_WRITE_KEY>
    If your source exports raw top-scorers/player-awards records, use
    `docs/examples/world-cup-player-awards-source.sample.json` with the
    `player-awards/*` endpoints.
+   If your source exports raw player injury, availability, suspension, or lineup
+   records, use `docs/examples/world-cup-player-status-source.sample.json` with
+   the `player-status/*` endpoints.
 3. For trusted match data, call `data/preview` and inspect the generated facts.
    For raw fixture/result exports, call `matches/preview`; for raw standings,
    call `standings/preview`; for raw top-scorers/player-awards exports, call
-   `player-awards/preview`. If the data lives in `WORLD_CUP_DATA_FILE`, call
+   `player-awards/preview`; for raw player status exports, call
+   `player-status/preview`. If the data lives in `WORLD_CUP_DATA_FILE`, call
    `data/source/preview`.
 4. Import with `replace=true` when the file is the current full fact snapshot.
    Use `replace=false` for incremental upserts.
@@ -256,6 +278,26 @@ Invoke-RestMethod `
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:8000/api/events/sports/world-cup/player-awards/import?replace=false" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+For raw injury/availability/suspension/lineup exports, use the player-status
+adapter first:
+
+```powershell
+$body = Get-Content -Raw docs\examples\world-cup-player-status-source.sample.json
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/player-status/preview" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/player-status/import?replace=false" `
   -Headers @{ "X-API-Key" = $key } `
   -ContentType "application/json" `
   -Body $body
@@ -379,10 +421,12 @@ returns generated facts without writing them:
 - `qualifications`: creates `qualification` facts for team progression.
 - `player_awards`: creates `player_award` facts for Golden Boot / top scorer
   events.
+- `player_statuses`: creates `injury`, `availability`, `suspension`, or
+  `lineup` facts for player status and availability context.
 - `tournament_status`: creates one `tournament_status` fact.
 
 CSV exports can be wrapped under `csv.matches`, `csv.qualifications`, and
-`csv.player_awards`. The first row must be headers whose names match the JSON
-fields, such as `match_id`, `stage`, `home_team`, `away_team`, `status`,
-`penalty_shootout`, `team`, `already_qualified`, `award`, `player`, and
-`goals`.
+`csv.player_awards`, and `csv.player_statuses`. The first row must be headers
+whose names match the JSON fields, such as `match_id`, `stage`, `home_team`,
+`away_team`, `status`, `penalty_shootout`, `team`, `already_qualified`,
+`award`, `player`, `goals`, `severity`, and `reason`.

@@ -16,6 +16,7 @@ import asyncio
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -42,6 +43,10 @@ def _events_client() -> TestClient:
 
 
 AUTH_HEADERS = {"X-API-Key": "secret"}
+
+
+def _observed_at_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 NEWS_CONTEXT = (
@@ -240,6 +245,8 @@ class WorldCupFactRouteTests(unittest.TestCase):
             facts_path = base / "facts.json"
             data_path.write_text(json.dumps({
                 "source": "official_file",
+                "source_url": "https://example.com/world-cup-feed",
+                "observed_at": _observed_at_now(),
                 "matches": [{
                     "match_id": "round16-1",
                     "home_team": "Team A",
@@ -259,6 +266,7 @@ class WorldCupFactRouteTests(unittest.TestCase):
 
         self.assertEqual(preview_resp.status_code, 200)
         self.assertEqual(preview_resp.json()["converted_fact_count"], 1)
+        self.assertEqual(preview_resp.json()["source_metadata"]["source"], "official_file")
         self.assertEqual(preview_resp.json()["facts"][0]["match_id"], "round16-1")
         self.assertEqual(facts_resp.json()["count"], 0)
 
@@ -269,6 +277,8 @@ class WorldCupFactRouteTests(unittest.TestCase):
             facts_path = base / "facts.json"
             data_path.write_text(json.dumps({
                 "source": "official_file",
+                "source_url": "https://example.com/world-cup-feed",
+                "observed_at": _observed_at_now(),
                 "matches": [{
                     "match_id": "round16-1",
                     "home_team": "Team A",
@@ -288,6 +298,7 @@ class WorldCupFactRouteTests(unittest.TestCase):
 
         self.assertEqual(import_resp.status_code, 200)
         self.assertEqual(import_resp.json()["converted_fact_count"], 1)
+        self.assertEqual(import_resp.json()["source_metadata"]["source"], "official_file")
         self.assertEqual(facts_resp.json()["count"], 1)
         self.assertEqual(facts_resp.json()["facts"][0]["match_id"], "round16-1")
 
@@ -301,6 +312,27 @@ class WorldCupFactRouteTests(unittest.TestCase):
                 headers=AUTH_HEADERS,
             )
         self.assertEqual(resp.status_code, 404)
+
+    def test_world_cup_configured_data_source_missing_metadata_returns_422(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "world_cup_data.json"
+            data_path.write_text(json.dumps({
+                "source": "official_file",
+                "matches": [{
+                    "match_id": "round16-1",
+                    "home_team": "Team A",
+                    "away_team": "Team B",
+                }],
+            }), encoding="utf-8")
+            with patch.object(settings, "WORLD_CUP_DATA_FILE", str(data_path)), \
+                    patch.object(settings, "API_WRITE_KEY", "secret"):
+                client = _events_client()
+                resp = client.post(
+                    "/events/sports/world-cup/data/source/preview",
+                    headers=AUTH_HEADERS,
+                )
+        self.assertEqual(resp.status_code, 422)
+        self.assertIn("observed_at", resp.json()["detail"])
 
     def test_world_cup_resolve_requires_write_key(self):
         with patch.object(settings, "API_WRITE_KEY", "secret"):

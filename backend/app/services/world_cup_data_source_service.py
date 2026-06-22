@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import os
+from datetime import datetime, timezone
 from io import StringIO
 from typing import Any
 
@@ -70,10 +71,82 @@ def load_world_cup_data_file(path: str | None = None) -> dict[str, Any]:
     return payload
 
 
+def validate_world_cup_data_source_metadata(
+    payload: dict[str, Any],
+    *,
+    now: datetime | None = None,
+    max_age_hours: float | None = None,
+) -> dict[str, Any]:
+    """Validate configured data-source metadata before trusted-file import."""
+
+    source = _clean(payload.get("source"))
+    if not source:
+        raise ValueError("World Cup data file missing source")
+    observed_at_text = _clean(payload.get("observed_at"))
+    if not observed_at_text:
+        raise ValueError("World Cup data file missing observed_at")
+
+    observed_at = _parse_observed_at(observed_at_text)
+    current_time = now or datetime.now(timezone.utc)
+    if current_time.tzinfo is None or current_time.utcoffset() is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+    current_time = current_time.astimezone(timezone.utc)
+    age_seconds = int(max(0.0, (current_time - observed_at).total_seconds()))
+    age_limit = (
+        settings.WORLD_CUP_DATA_MAX_AGE_HOURS
+        if max_age_hours is None
+        else max_age_hours
+    )
+    if age_limit > 0 and age_seconds > age_limit * 3600:
+        raise ValueError(
+            f"World Cup data file is stale: observed_at older than {age_limit:g} hours"
+        )
+
+    return {
+        "source": source,
+        "source_url": _clean(payload.get("source_url") or payload.get("url")),
+        "observed_at": _format_utc(observed_at),
+        "age_seconds": age_seconds,
+        "max_age_hours": age_limit,
+    }
+
+
+def preview_world_cup_data_file(path: str | None = None) -> dict[str, Any]:
+    """Preview facts from the configured data-source file with metadata checks."""
+
+    source_path = os.path.abspath(path or settings.WORLD_CUP_DATA_FILE)
+    payload = load_world_cup_data_file(source_path)
+    metadata = validate_world_cup_data_source_metadata(payload)
+    facts = world_cup_data_to_facts(payload)
+    return {
+        "source_file": source_path,
+        "source_metadata": metadata,
+        "converted_fact_count": len(facts),
+        "facts": facts,
+    }
+
+
 def world_cup_data_file_to_facts(path: str | None = None) -> list[dict[str, Any]]:
     """Convert the configured data-source snapshot into facts without writing."""
 
-    return world_cup_data_to_facts(load_world_cup_data_file(path))
+    return preview_world_cup_data_file(path)["facts"]
+
+
+def _parse_observed_at(value: str) -> datetime:
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError("observed_at must be an ISO 8601 timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("observed_at must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def _format_utc(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def import_world_cup_data_file(
@@ -84,8 +157,11 @@ def import_world_cup_data_file(
     """Import facts from the configured trusted World Cup data-source file."""
 
     source_path = os.path.abspath(path or settings.WORLD_CUP_DATA_FILE)
-    result = import_world_cup_data(load_world_cup_data_file(source_path), replace=replace)
+    payload = load_world_cup_data_file(source_path)
+    metadata = validate_world_cup_data_source_metadata(payload)
+    result = import_world_cup_data(payload, replace=replace)
     result["source_file"] = source_path
+    result["source_metadata"] = metadata
     return result
 
 

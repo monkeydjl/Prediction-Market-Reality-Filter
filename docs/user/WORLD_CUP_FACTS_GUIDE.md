@@ -61,6 +61,11 @@ POST /api/events/sports/world-cup/data/source/import?replace=false
 Header: X-API-Key: <API_WRITE_KEY>
 ```
 
+Configured source files must include `source` and a timezone-aware
+`observed_at` timestamp. PMRF rejects stale configured snapshots older than
+`WORLD_CUP_DATA_MAX_AGE_HOURS` (default: 168). Set the value to `0` only if an
+operator intentionally wants to disable the age check.
+
 Preview deterministic resolution:
 
 ```text
@@ -148,7 +153,16 @@ Invoke-RestMethod `
 ```
 
 For a configured source file, set `WORLD_CUP_DATA_FILE` and call the source
-endpoints:
+endpoints. The file must include fresh source metadata:
+
+```json
+{
+  "source": "official_feed",
+  "source_url": "https://example.com/world-cup-feed",
+  "observed_at": "2026-07-20T00:00:00Z",
+  "matches": []
+}
+```
 
 ```powershell
 Invoke-RestMethod `

@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,10 +12,16 @@ from app.services.world_cup_data_source_service import (
     import_world_cup_data_file,
     load_world_cup_data_file,
     import_world_cup_data,
+    preview_world_cup_data_file,
+    validate_world_cup_data_source_metadata,
     world_cup_data_file_to_facts,
     world_cup_data_to_facts,
 )
 from tests.test_sports_resolution_service import _sports_record
+
+
+def _observed_at_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 class WorldCupDataSourceServiceTests(unittest.TestCase):
@@ -143,6 +150,8 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
             fact_path = base / "sports_facts.json"
             data_path.write_text(json.dumps({
                 "source": "official_file",
+                "source_url": "https://example.com/world-cup-feed",
+                "observed_at": _observed_at_now(),
                 "matches": [{
                     "match_id": "round16-1",
                     "stage": "round_of_16",
@@ -156,13 +165,17 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
             with patch.object(settings, "WORLD_CUP_DATA_FILE", str(data_path)), \
                     patch.object(settings, "SPORTS_FACT_FILE", str(fact_path)):
                 payload = load_world_cup_data_file()
+                preview_result = preview_world_cup_data_file()
                 preview = world_cup_data_file_to_facts()
                 result = import_world_cup_data_file(replace=True)
                 stored = load_sports_facts(tournament=WORLD_CUP_TOURNAMENT)
 
         self.assertEqual(payload["source"], "official_file")
+        self.assertEqual(preview_result["source_metadata"]["source"], "official_file")
+        self.assertEqual(preview_result["converted_fact_count"], 1)
         self.assertEqual(preview[0]["match_id"], "round16-1")
         self.assertEqual(result["converted_fact_count"], 1)
+        self.assertEqual(result["source_metadata"]["source"], "official_file")
         self.assertEqual(stored[0]["match_id"], "round16-1")
 
     def test_configured_data_file_missing_fails_closed(self):
@@ -171,6 +184,47 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
             with patch.object(settings, "WORLD_CUP_DATA_FILE", missing):
                 with self.assertRaises(FileNotFoundError):
                     load_world_cup_data_file()
+
+    def test_configured_data_file_requires_source_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "world_cup_data.json"
+            data_path.write_text(json.dumps({
+                "matches": [{
+                    "match_id": "round16-1",
+                    "home_team": "Team A",
+                    "away_team": "Team B",
+                }],
+            }), encoding="utf-8")
+            with patch.object(settings, "WORLD_CUP_DATA_FILE", str(data_path)):
+                with self.assertRaisesRegex(ValueError, "missing source"):
+                    world_cup_data_file_to_facts()
+
+    def test_configured_data_file_rejects_stale_snapshot(self):
+        observed_at = (
+            datetime.now(timezone.utc) - timedelta(hours=2)
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "world_cup_data.json"
+            data_path.write_text(json.dumps({
+                "source": "official_file",
+                "observed_at": observed_at,
+                "matches": [{
+                    "match_id": "round16-1",
+                    "home_team": "Team A",
+                    "away_team": "Team B",
+                }],
+            }), encoding="utf-8")
+            with patch.object(settings, "WORLD_CUP_DATA_FILE", str(data_path)), \
+                    patch.object(settings, "WORLD_CUP_DATA_MAX_AGE_HOURS", 1):
+                with self.assertRaisesRegex(ValueError, "stale"):
+                    world_cup_data_file_to_facts()
+
+    def test_source_metadata_requires_timezone(self):
+        with self.assertRaisesRegex(ValueError, "timezone"):
+            validate_world_cup_data_source_metadata({
+                "source": "official_file",
+                "observed_at": "2026-06-22T00:00:00",
+            })
 
 
 if __name__ == "__main__":

@@ -45,6 +45,7 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
             patch.object(settings, "WORLD_CUP_API_FOOTBALL_SEASON", "2026"),
             patch.object(settings, "WORLD_CUP_API_FOOTBALL_FETCH_EVENTS", False),
             patch.object(settings, "WORLD_CUP_API_FOOTBALL_FETCH_LINEUPS", False),
+            patch.object(settings, "WORLD_CUP_API_FOOTBALL_FETCH_STATISTICS", False),
         )
 
     def test_preview_fetches_provider_feeds_without_writing_facts(self):
@@ -55,8 +56,8 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
             _Body.injuries(),
         ]
         with tempfile.TemporaryDirectory() as tmp:
-            sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups = self._settings(tmp)
-            with sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, \
+            sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics = self._settings(tmp)
+            with sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics, \
                     patch(
                         "app.services.world_cup_api_football_source.urlopen",
                         side_effect=[_UrlResponse(body) for body in bodies],
@@ -103,8 +104,8 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
             _body({"errors": [], "response": []}),
         ]
         with tempfile.TemporaryDirectory() as tmp:
-            sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups = self._settings(tmp)
-            with sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, \
+            sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics = self._settings(tmp)
+            with sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics, \
                     patch(
                         "app.services.world_cup_api_football_source.urlopen",
                         side_effect=[_UrlResponse(body) for body in bodies],
@@ -133,8 +134,8 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
             _Body.fixture_events(),
         ]
         with tempfile.TemporaryDirectory() as tmp:
-            sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups = self._settings(tmp)
-            with sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, \
+            sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics = self._settings(tmp)
+            with sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics, \
                     patch.object(settings, "WORLD_CUP_API_FOOTBALL_FETCH_EVENTS", True), \
                     patch(
                         "app.services.world_cup_api_football_source.urlopen",
@@ -165,8 +166,8 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
             _Body.fixture_lineups(),
         ]
         with tempfile.TemporaryDirectory() as tmp:
-            sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups = self._settings(tmp)
-            with sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, \
+            sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics = self._settings(tmp)
+            with sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics, \
                     patch.object(settings, "WORLD_CUP_API_FOOTBALL_FETCH_LINEUPS", True), \
                     patch(
                         "app.services.world_cup_api_football_source.urlopen",
@@ -189,6 +190,44 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
         self.assertEqual(lineup["status"], "starting")
         self.assertEqual(lineup["position"], "F")
         self.assertEqual(lineup["formation"], "4-3-3")
+
+    def test_preview_optionally_fetches_fixture_statistics_as_stat_facts(self):
+        bodies = [
+            _Body.fixtures(),
+            _Body.standings(),
+            _Body.top_scorers(),
+            _Body.injuries(),
+            _Body.fixture_statistics(),
+            _Body.fixture_players(),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics = self._settings(tmp)
+            with sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics, \
+                    patch.object(settings, "WORLD_CUP_API_FOOTBALL_FETCH_STATISTICS", True), \
+                    patch(
+                        "app.services.world_cup_api_football_source.urlopen",
+                        side_effect=[_UrlResponse(body) for body in bodies],
+                    ) as open_mock:
+                result = preview_world_cup_api_football_bundle(
+                    now=datetime(2026, 6, 25, 12, tzinfo=timezone.utc)
+                )
+
+        urls = [call.args[0].full_url for call in open_mock.call_args_list]
+        self.assertEqual(
+            urls[-2:],
+            [
+                "https://api-football.example/v3/fixtures/statistics?fixture=1001",
+                "https://api-football.example/v3/fixtures/players?fixture=1001",
+            ],
+        )
+        self.assertEqual(result["source_count"], 5)
+        self.assertIn("statistics", {source["kind"] for source in result["sources"]})
+        team_stat = next(fact for fact in result["facts"] if fact["kind"] == "team_stat")
+        player_stat = next(fact for fact in result["facts"] if fact["kind"] == "player_stat")
+        self.assertEqual(team_stat["stat_name"], "shots on goal")
+        self.assertEqual(team_stat["stat_value"], 5.0)
+        self.assertEqual(player_stat["player"], "Player A")
+        self.assertEqual(player_stat["stat_name"], "shots.total")
 
     def test_missing_api_key_fails_closed(self):
         with patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", ""):
@@ -284,6 +323,32 @@ class _Body:
                 "formation": "4-3-3",
                 "startXI": [{
                     "player": {"name": "Player A", "number": 10, "pos": "F"},
+                }],
+            }],
+        })
+
+    @staticmethod
+    def fixture_statistics() -> bytes:
+        return _body({
+            "errors": [],
+            "response": [{
+                "team": {"name": "Team A"},
+                "statistics": [{"type": "Shots on Goal", "value": 5}],
+            }],
+        })
+
+    @staticmethod
+    def fixture_players() -> bytes:
+        return _body({
+            "errors": [],
+            "response": [{
+                "team": {"name": "Team A"},
+                "players": [{
+                    "player": {"name": "Player A"},
+                    "statistics": [{
+                        "games": {"position": "F", "number": 10},
+                        "shots": {"total": 3},
+                    }],
                 }],
             }],
         })

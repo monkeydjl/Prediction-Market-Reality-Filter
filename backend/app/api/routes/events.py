@@ -93,6 +93,10 @@ from app.services.world_cup_standings_source import (
     import_world_cup_standings_source,
     preview_world_cup_standings_source,
 )
+from app.services.world_cup_statistics_source import (
+    import_world_cup_statistics_source,
+    preview_world_cup_statistics_source,
+)
 from app.services.trend_analysis_service import (
     analyze_edge_trajectory,
     analyze_trend,
@@ -651,6 +655,31 @@ async def import_world_cup_player_status_source_route(
     """Import injury/availability/suspension/lineup facts from raw player-status data."""
     try:
         return import_world_cup_player_status_source(payload, replace=replace)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sports/world-cup/statistics/preview", response_model=FlexibleResponse)
+async def preview_world_cup_statistics_source_route(
+    payload: Any = Body(...),
+    _auth: None = Depends(require_write_key),
+):
+    """Preview team/player statistic facts from raw World Cup statistics data."""
+    try:
+        return preview_world_cup_statistics_source(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sports/world-cup/statistics/import", response_model=FlexibleResponse)
+async def import_world_cup_statistics_source_route(
+    payload: Any = Body(...),
+    replace: bool = Query(default=False),
+    _auth: None = Depends(require_write_key),
+):
+    """Import team/player statistic facts from raw World Cup statistics data."""
+    try:
+        return import_world_cup_statistics_source(payload, replace=replace)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

@@ -74,6 +74,25 @@ _PROFILE_HEADERS: dict[str, tuple[str, ...]] = {
         "reason",
         "applies_to",
     ),
+    "team_stats": (
+        "team",
+        "match_id",
+        "stage",
+        "stat_name",
+        "stat_value",
+        "stat_unit",
+    ),
+    "player_stats": (
+        "team",
+        "player",
+        "match_id",
+        "stage",
+        "position",
+        "jersey_number",
+        "stat_name",
+        "stat_value",
+        "stat_unit",
+    ),
 }
 
 

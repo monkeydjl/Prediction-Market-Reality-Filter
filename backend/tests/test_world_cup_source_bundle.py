@@ -260,6 +260,31 @@ class WorldCupSourceBundleTests(unittest.TestCase):
         self.assertEqual(result["facts"][0]["kind"], "match_result")
         self.assertEqual(result["facts"][0]["yellow_cards"], 3.0)
 
+    def test_bundle_converts_statistics_source(self):
+        result = preview_world_cup_source_bundle({
+            "sources": [{
+                "kind": "statistics",
+                "payload": {
+                    "source": "api_football_statistics",
+                    "observed_at": "2026-07-20T00:00:00Z",
+                    "fixture": {"id": 1001},
+                    "response": [{
+                        "team": {"name": "Team A"},
+                        "statistics": [{
+                            "type": "Shots on Goal",
+                            "value": 5,
+                        }],
+                    }],
+                },
+            }],
+        })
+
+        self.assertEqual(result["source_count"], 1)
+        self.assertEqual(result["sources"][0]["kind"], "statistics")
+        self.assertEqual(result["converted_fact_count"], 1)
+        self.assertEqual(result["facts"][0]["kind"], "team_stat")
+        self.assertEqual(result["facts"][0]["stat_value"], 5.0)
+
     def test_configured_bundle_file_can_be_previewed_and_imported(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -357,6 +382,7 @@ class WorldCupSourceBundleTests(unittest.TestCase):
                 patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
                 patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
                 patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", "https://status.example/injuries"), \
+                patch.object(settings, "WORLD_CUP_STATISTICS_SOURCE_URL", ""), \
                 patch(
                     "app.services.world_cup_source_bundle.urlopen",
                     side_effect=[_UrlResponse(match_body), _UrlResponse(status_body)],
@@ -396,6 +422,7 @@ class WorldCupSourceBundleTests(unittest.TestCase):
                     patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
                     patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
                     patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""), \
+                    patch.object(settings, "WORLD_CUP_STATISTICS_SOURCE_URL", ""), \
                     patch(
                         "app.services.world_cup_source_bundle.urlopen",
                         return_value=_UrlResponse(body),
@@ -416,7 +443,8 @@ class WorldCupSourceBundleTests(unittest.TestCase):
                 patch.object(settings, "WORLD_CUP_LINEUPS_SOURCE_URL", ""), \
                 patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
                 patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
-                patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""):
+                patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""), \
+                patch.object(settings, "WORLD_CUP_STATISTICS_SOURCE_URL", ""):
             with self.assertRaisesRegex(ValueError, "No World Cup source feed URLs"):
                 preview_world_cup_source_bundle_feeds()
 

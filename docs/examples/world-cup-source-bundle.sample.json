@@ -176,6 +176,30 @@
           }
         ]
       }
+    },
+    {
+      "kind": "statistics",
+      "payload": {
+        "source": "api_football_statistics",
+        "source_url": "https://example.com/fixtures/statistics",
+        "observed_at": "2026-07-20T00:00:00Z",
+        "fixture": {
+          "id": 1001
+        },
+        "response": [
+          {
+            "team": {
+              "name": "Team A"
+            },
+            "statistics": [
+              {
+                "type": "Shots on Goal",
+                "value": 5
+              }
+            ]
+          }
+        ]
+      }
     }
   ]
 }

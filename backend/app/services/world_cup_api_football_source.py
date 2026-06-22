@@ -73,6 +73,17 @@ def build_world_cup_api_football_bundle(
                 "reason": "empty response",
             })
 
+    if settings.WORLD_CUP_API_FOOTBALL_FETCH_STATISTICS and fixture_payload:
+        statistics_source = _fixture_statistics_source(fixture_payload, observed_at)
+        if statistics_source:
+            sources.append(statistics_source)
+        else:
+            skipped_sources.append({
+                "kind": "statistics",
+                "source_url": _display_url(_api_football_url("fixtures/statistics", {"fixture": "0"})),
+                "reason": "empty response",
+            })
+
     if not sources:
         raise ValueError("API-Football returned no usable World Cup source feeds")
     return {
@@ -247,6 +258,50 @@ def _fixture_lineups_source(
         {},
         observed_at,
     )
+
+
+def _fixture_statistics_source(
+    fixture_payload: dict[str, Any],
+    observed_at: str,
+) -> dict[str, Any] | None:
+    rows: list[dict[str, Any]] = []
+    source_url = ""
+    for fixture_id in _fixture_ids(fixture_payload):
+        statistics_url = _api_football_url("fixtures/statistics", {"fixture": fixture_id})
+        source_url = source_url or statistics_url
+        statistics_payload = _fetch_api_football_json(statistics_url)
+        _append_fixture_rows(rows, statistics_payload, fixture_id)
+
+        players_url = _api_football_url("fixtures/players", {"fixture": fixture_id})
+        source_url = source_url or players_url
+        players_payload = _fetch_api_football_json(players_url)
+        _append_fixture_rows(rows, players_payload, fixture_id)
+    if not rows:
+        return None
+    return _bundle_entry(
+        "statistics",
+        source_url or _api_football_url("fixtures/statistics", {"fixture": "0"}),
+        {"response": rows},
+        {},
+        observed_at,
+    )
+
+
+def _append_fixture_rows(
+    rows: list[dict[str, Any]],
+    payload: dict[str, Any],
+    fixture_id: str,
+) -> None:
+    response = payload.get("response")
+    if not isinstance(response, list):
+        return
+    for row in response:
+        if not isinstance(row, dict):
+            continue
+        enriched = dict(row)
+        if "fixture" not in enriched and "fixture_id" not in enriched:
+            enriched["fixture"] = {"id": fixture_id}
+        rows.append(enriched)
 
 
 def _fixture_ids(payload: dict[str, Any]) -> list[str]:

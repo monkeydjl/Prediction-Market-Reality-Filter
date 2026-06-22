@@ -18,6 +18,7 @@ _FEED_URL_SETTINGS = (
     ("standings", "WORLD_CUP_STANDINGS_SOURCE_URL"),
     ("player_awards", "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL"),
     ("player_status", "WORLD_CUP_PLAYER_STATUS_SOURCE_URL"),
+    ("statistics", "WORLD_CUP_STATISTICS_SOURCE_URL"),
 )
 
 
@@ -44,6 +45,7 @@ def world_cup_data_source_status() -> dict[str, Any]:
                 "season": _clean(settings.WORLD_CUP_API_FOOTBALL_SEASON),
                 "fetch_events": settings.WORLD_CUP_API_FOOTBALL_FETCH_EVENTS,
                 "fetch_lineups": settings.WORLD_CUP_API_FOOTBALL_FETCH_LINEUPS,
+                "fetch_statistics": settings.WORLD_CUP_API_FOOTBALL_FETCH_STATISTICS,
             },
             "sportmonks": {
                 "configured": bool(

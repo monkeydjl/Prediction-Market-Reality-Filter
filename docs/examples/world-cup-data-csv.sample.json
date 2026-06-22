@@ -7,7 +7,9 @@
     "discipline": "match_id,team,player,minute,status,red_cards,yellow_cards\nround16-1,Team A,Player A,72+1,red_card,1,0\n",
     "qualifications": "team,status,stage,already_qualified,already_eliminated\nMexico,qualified,round_of_32,true,false\n",
     "player_awards": "award,player,team,goals,rank,status\ngolden_boot,Player C,Team C,7,1,current\n",
-    "player_statuses": "kind,team,player,status,match_id,stage,position,formation,jersey_number,reason\nlineup,Team A,Player A,starting,round16-1,round_of_16,F,4-3-3,10,official starting XI\n"
+    "player_statuses": "kind,team,player,status,match_id,stage,position,formation,jersey_number,reason\nlineup,Team A,Player A,starting,round16-1,round_of_16,F,4-3-3,10,official starting XI\n",
+    "team_stats": "team,match_id,stage,stat_name,stat_value,stat_unit\nTeam A,round16-1,round_of_16,ball possession,60,%\n",
+    "player_stats": "team,player,match_id,stage,position,jersey_number,stat_name,stat_value,stat_unit\nTeam A,Player A,round16-1,round_of_16,F,10,shots.total,3,\n"
   },
   "tournament_status": {
     "status": "in_progress",

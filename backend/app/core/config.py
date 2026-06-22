@@ -117,6 +117,7 @@ class Settings:
     WORLD_CUP_PLAYER_STATUS_SOURCE_URL: str = os.getenv(
         "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""
     )
+    WORLD_CUP_STATISTICS_SOURCE_URL: str = os.getenv("WORLD_CUP_STATISTICS_SOURCE_URL", "")
     WORLD_CUP_API_FOOTBALL_BASE_URL: str = os.getenv(
         "WORLD_CUP_API_FOOTBALL_BASE_URL",
         "https://v3.football.api-sports.io",
@@ -135,6 +136,9 @@ class Settings:
     )
     WORLD_CUP_API_FOOTBALL_FETCH_LINEUPS: bool = _env_bool(
         "WORLD_CUP_API_FOOTBALL_FETCH_LINEUPS", "false"
+    )
+    WORLD_CUP_API_FOOTBALL_FETCH_STATISTICS: bool = _env_bool(
+        "WORLD_CUP_API_FOOTBALL_FETCH_STATISTICS", "false"
     )
     WORLD_CUP_SPORTMONKS_API_TOKEN: str = os.getenv(
         "WORLD_CUP_SPORTMONKS_API_TOKEN", ""

@@ -1,0 +1,53 @@
+{
+  "source": "api_football_statistics",
+  "source_url": "https://example.com/fixtures/statistics",
+  "observed_at": "2026-07-20T00:00:00Z",
+  "fixture": {
+    "id": 1001
+  },
+  "response": [
+    {
+      "team": {
+        "name": "Team A"
+      },
+      "statistics": [
+        {
+          "type": "Shots on Goal",
+          "value": 5
+        },
+        {
+          "type": "Ball Possession",
+          "value": "60%"
+        }
+      ]
+    },
+    {
+      "team": {
+        "name": "Team A"
+      },
+      "players": [
+        {
+          "player": {
+            "name": "Player A"
+          },
+          "statistics": [
+            {
+              "games": {
+                "position": "F",
+                "number": 10,
+                "rating": "7.2"
+              },
+              "shots": {
+                "total": 3,
+                "on": 2
+              },
+              "passes": {
+                "key": 1
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

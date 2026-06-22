@@ -75,6 +75,20 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
                 "severity": "high",
                 "reason": "hamstring",
             }],
+            "team_stats": [{
+                "team": "Team A",
+                "match_id": "round16-1",
+                "stat_name": "ball possession",
+                "stat_value": 60,
+                "stat_unit": "%",
+            }],
+            "player_stats": [{
+                "team": "Team A",
+                "player": "Player A",
+                "match_id": "round16-1",
+                "stat_name": "shots.total",
+                "stat_value": 3,
+            }],
             "tournament_status": {
                 "status": "complete",
                 "tournament_complete": True,
@@ -96,6 +110,9 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
         self.assertEqual(by_kind["player_award"]["goals"], 7)
         self.assertEqual(by_kind["injury"]["player"], "Player B")
         self.assertEqual(by_kind["injury"]["notes"], "hamstring")
+        self.assertEqual(by_kind["team_stat"]["stat_value"], 60.0)
+        self.assertEqual(by_kind["team_stat"]["stat_unit"], "%")
+        self.assertEqual(by_kind["player_stat"]["player"], "Player A")
         self.assertTrue(by_kind["tournament_status"]["tournament_complete"])
 
     def test_converts_csv_sections_to_structured_facts(self):
@@ -122,6 +139,14 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
                     "award,player,team,goals,rank,status\n"
                     "golden_boot,Player A,Team A,7,1,current\n"
                 ),
+                "team_stats": (
+                    "team,match_id,stage,stat_name,stat_value,stat_unit\n"
+                    "Team A,round16-1,round_of_16,ball possession,60,%\n"
+                ),
+                "player_stats": (
+                    "team,player,match_id,stage,position,jersey_number,stat_name,stat_value,stat_unit\n"
+                    "Team A,Player A,round16-1,round_of_16,F,10,shots.total,3,\n"
+                ),
             },
             "tournament_status": {
                 "status": "in_progress",
@@ -141,6 +166,8 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
         self.assertTrue(by_kind["qualification"]["already_qualified"])
         self.assertFalse(by_kind["qualification"]["already_eliminated"])
         self.assertEqual(by_kind["player_award"]["goals"], "7")
+        self.assertEqual(by_kind["team_stat"]["stat_value"], 60.0)
+        self.assertEqual(by_kind["player_stat"]["position"], "F")
 
     def test_rejects_unknown_boolean_values(self):
         with self.assertRaisesRegex(ValueError, "penalty_shootout must be a boolean"):

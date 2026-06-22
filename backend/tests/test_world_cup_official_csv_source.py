@@ -46,6 +46,14 @@ def _official_csv_payload() -> dict:
                 "lineup,Team A,Player A,starting,,round16-1,round_of_16,F,4-3-3,"
                 "10,official starting XI,world-cup-2026:team-a-round16\n"
             ),
+            "team_stats": (
+                "team,match_id,stage,stat_name,stat_value,stat_unit\n"
+                "Team A,round16-1,round_of_16,ball possession,60,%\n"
+            ),
+            "player_stats": (
+                "team,player,match_id,stage,position,jersey_number,stat_name,stat_value,stat_unit\n"
+                "Team A,Player A,round16-1,round_of_16,F,10,shots.total,3,\n"
+            ),
         },
     }
 
@@ -60,6 +68,8 @@ class WorldCupOfficialCsvSourceTests(unittest.TestCase):
         self.assertEqual(data["matches"][0]["home_yellow_cards"], "2")
         self.assertEqual(data["discipline"][0]["event_id"], "card-1")
         self.assertEqual(data["player_statuses"][0]["formation"], "4-3-3")
+        self.assertEqual(data["team_stats"][0]["stat_name"], "ball possession")
+        self.assertEqual(data["player_stats"][0]["player"], "Player A")
         self.assertEqual(
             data["player_statuses"][0]["applies_to"],
             ["world-cup-2026:team-a-round16"],
@@ -72,10 +82,18 @@ class WorldCupOfficialCsvSourceTests(unittest.TestCase):
             facts = load_sports_facts(tournament=WORLD_CUP_TOURNAMENT)
 
         self.assertEqual(result["profile"], "official_csv_v1")
-        self.assertEqual(result["converted_fact_count"], 5)
+        self.assertEqual(result["converted_fact_count"], 7)
         self.assertEqual(
             {fact["kind"] for fact in result["facts"]},
-            {"match_result", "discipline", "qualification", "player_award", "lineup"},
+            {
+                "match_result",
+                "discipline",
+                "qualification",
+                "player_award",
+                "lineup",
+                "team_stat",
+                "player_stat",
+            },
         )
         lineup = next(fact for fact in result["facts"] if fact["kind"] == "lineup")
         self.assertEqual(lineup["position"], "F")
@@ -92,9 +110,9 @@ class WorldCupOfficialCsvSourceTests(unittest.TestCase):
                 )
                 facts = load_sports_facts(tournament=WORLD_CUP_TOURNAMENT)
 
-        self.assertEqual(result["converted_fact_count"], 5)
-        self.assertEqual(result["imported"], 5)
-        self.assertEqual(len(facts), 5)
+        self.assertEqual(result["converted_fact_count"], 7)
+        self.assertEqual(result["imported"], 7)
+        self.assertEqual(len(facts), 7)
 
     def test_rejects_missing_or_reordered_headers(self):
         payload = _official_csv_payload()

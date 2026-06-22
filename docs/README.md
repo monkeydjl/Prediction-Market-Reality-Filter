@@ -53,4 +53,5 @@
 - [World Cup standings-source sample](examples/world-cup-standings-source.sample.json) — Example raw standings payload normalized into qualification facts
 - [World Cup player-awards source sample](examples/world-cup-player-awards-source.sample.json) — Example raw top-scorers payload normalized into player-award facts
 - [World Cup player-status source sample](examples/world-cup-player-status-source.sample.json) — Example raw injury/availability/suspension/lineup payload normalized into player-status facts
+- [World Cup statistics source sample](examples/world-cup-statistics-source.sample.json) — Example raw team/player statistics payload normalized into stat facts
 - [World Cup source bundle sample](examples/world-cup-source-bundle.sample.json) — Example multi-source payload that previews/imports several World Cup feeds in one request

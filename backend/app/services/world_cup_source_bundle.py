@@ -34,6 +34,7 @@ from app.services.world_cup_player_status_source import (
     world_cup_player_status_source_to_data,
 )
 from app.services.world_cup_standings_source import world_cup_standings_source_to_data
+from app.services.world_cup_statistics_source import world_cup_statistics_source_to_data
 from app.utils.file_store import read_json_strict
 
 _SOURCE_FEED_URL_SETTINGS = (
@@ -43,6 +44,7 @@ _SOURCE_FEED_URL_SETTINGS = (
     ("standings", "WORLD_CUP_STANDINGS_SOURCE_URL"),
     ("player_awards", "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL"),
     ("player_status", "WORLD_CUP_PLAYER_STATUS_SOURCE_URL"),
+    ("statistics", "WORLD_CUP_STATISTICS_SOURCE_URL"),
 )
 
 
@@ -306,6 +308,10 @@ def _source_kind(entry: Any, index: int) -> str:
         "injuries": "player_status",
         "availability": "player_status",
         "suspensions": "player_status",
+        "stats": "statistics",
+        "statistics": "statistics",
+        "team_stats": "statistics",
+        "player_stats": "statistics",
     }
     kind = aliases.get(kind, kind)
     if kind not in {
@@ -317,6 +323,7 @@ def _source_kind(entry: Any, index: int) -> str:
         "standings",
         "player_awards",
         "player_status",
+        "statistics",
     }:
         raise ValueError(f"sources[{index}] unsupported source kind '{raw}'")
     return kind
@@ -345,6 +352,8 @@ def _source_to_data(kind: str, payload: Any) -> dict[str, Any]:
         return world_cup_standings_source_to_data(payload)
     if kind == "player_awards":
         return world_cup_player_awards_source_to_data(payload)
+    if kind == "statistics":
+        return world_cup_statistics_source_to_data(payload)
     return world_cup_player_status_source_to_data(payload)
 
 

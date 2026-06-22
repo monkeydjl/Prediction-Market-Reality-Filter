@@ -38,6 +38,8 @@ def world_cup_data_to_facts(payload: Any) -> list[dict[str, Any]]:
     facts.extend(_qualification_facts(payload.get("qualifications", []), tournament, source, source_url, observed_at))
     facts.extend(_player_award_facts(payload.get("player_awards", []), tournament, source, source_url, observed_at))
     facts.extend(_player_status_facts(payload.get("player_statuses", []), tournament, source, source_url, observed_at))
+    facts.extend(_team_stat_facts(payload.get("team_stats", []), tournament, source, source_url, observed_at))
+    facts.extend(_player_stat_facts(payload.get("player_stats", []), tournament, source, source_url, observed_at))
 
     status_fact = _tournament_status_fact(payload, tournament, source, source_url, observed_at)
     if status_fact:
@@ -175,7 +177,15 @@ def _expand_csv_payload(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("csv must be an object")
 
     expanded = dict(payload)
-    for section in ("matches", "discipline", "qualifications", "player_awards", "player_statuses"):
+    for section in (
+        "matches",
+        "discipline",
+        "qualifications",
+        "player_awards",
+        "player_statuses",
+        "team_stats",
+        "player_stats",
+    ):
         csv_text = csv_payload.get(section)
         if csv_text in (None, ""):
             continue
@@ -426,6 +436,104 @@ def _player_status_facts(
             "jersey_number": _clean(raw.get("jersey_number") or raw.get("number")),
             "notes": _clean(raw.get("notes") or raw.get("reason") or raw.get("description")),
             "applies_to": _clean_list(raw.get("applies_to")),
+        })
+        facts.append(_compact(fact))
+    return facts
+
+
+def _team_stat_facts(
+    stats: Any,
+    tournament: str,
+    source: str,
+    source_url: str,
+    observed_at: str,
+) -> list[dict[str, Any]]:
+    rows = _require_list(stats, "team_stats")
+    facts: list[dict[str, Any]] = []
+    for index, raw in enumerate(rows):
+        if not isinstance(raw, dict):
+            raise ValueError(f"team_stats[{index}] must be an object")
+        team = _clean(raw.get("team"))
+        stat_name = _clean(raw.get("stat_name") or raw.get("name") or raw.get("type")).lower()
+        raw_value = raw.get("stat_value") if raw.get("stat_value") is not None else raw.get("value")
+        stat_value = _number(raw_value)
+        if not team:
+            raise ValueError(f"team_stats[{index}] missing team")
+        if not stat_name:
+            raise ValueError(f"team_stats[{index}] missing stat_name")
+        if stat_value is None:
+            raise ValueError(f"team_stats[{index}] missing stat_value")
+        match_id = _clean(raw.get("match_id") or raw.get("fixture_id"))
+        fact = _base_fact(
+            fact_id=(
+                f"wc2026:team-stat:{_slug(team)}:{_slug(match_id or 'tournament')}:"
+                f"{_slug(stat_name)}"
+            ),
+            kind="team_stat",
+            tournament=tournament,
+            source=source,
+            source_url=source_url,
+            observed_at=observed_at,
+        )
+        fact.update({
+            "team": team,
+            "match_id": match_id,
+            "stage": _clean(raw.get("stage")),
+            "stat_name": stat_name,
+            "stat_value": stat_value,
+            "stat_unit": _clean(raw.get("stat_unit") or raw.get("unit")),
+            "notes": _clean(raw.get("notes") or raw.get("reason") or raw.get("description")),
+        })
+        facts.append(_compact(fact))
+    return facts
+
+
+def _player_stat_facts(
+    stats: Any,
+    tournament: str,
+    source: str,
+    source_url: str,
+    observed_at: str,
+) -> list[dict[str, Any]]:
+    rows = _require_list(stats, "player_stats")
+    facts: list[dict[str, Any]] = []
+    for index, raw in enumerate(rows):
+        if not isinstance(raw, dict):
+            raise ValueError(f"player_stats[{index}] must be an object")
+        player = _clean(raw.get("player") or raw.get("name"))
+        stat_name = _clean(raw.get("stat_name") or raw.get("name") or raw.get("type")).lower()
+        raw_value = raw.get("stat_value") if raw.get("stat_value") is not None else raw.get("value")
+        stat_value = _number(raw_value)
+        if not player:
+            raise ValueError(f"player_stats[{index}] missing player")
+        if not stat_name:
+            raise ValueError(f"player_stats[{index}] missing stat_name")
+        if stat_value is None:
+            raise ValueError(f"player_stats[{index}] missing stat_value")
+        team = _clean(raw.get("team"))
+        match_id = _clean(raw.get("match_id") or raw.get("fixture_id"))
+        fact = _base_fact(
+            fact_id=(
+                f"wc2026:player-stat:{_slug(team)}:{_slug(player)}:"
+                f"{_slug(match_id or 'tournament')}:{_slug(stat_name)}"
+            ),
+            kind="player_stat",
+            tournament=tournament,
+            source=source,
+            source_url=source_url,
+            observed_at=observed_at,
+        )
+        fact.update({
+            "team": team,
+            "player": player,
+            "match_id": match_id,
+            "stage": _clean(raw.get("stage")),
+            "position": _clean(raw.get("position")),
+            "jersey_number": _clean(raw.get("jersey_number") or raw.get("number")),
+            "stat_name": stat_name,
+            "stat_value": stat_value,
+            "stat_unit": _clean(raw.get("stat_unit") or raw.get("unit")),
+            "notes": _clean(raw.get("notes") or raw.get("reason") or raw.get("description")),
         })
         facts.append(_compact(fact))
     return facts

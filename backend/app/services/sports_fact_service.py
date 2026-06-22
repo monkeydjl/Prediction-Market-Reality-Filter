@@ -29,6 +29,8 @@ _KNOWN_KINDS = {
     "match_result",
     "lineup",
     "player_award",
+    "team_stat",
+    "player_stat",
     "tournament_status",
 }
 
@@ -186,13 +188,23 @@ def normalize_sports_fact(
         "position",
         "formation",
         "jersey_number",
+        "stat_name",
+        "stat_unit",
         "qualified",
         "eliminated",
     ):
         if raw.get(field) is not None:
             fact[field] = _clean(raw.get(field))
 
-    for field in ("red_cards", "yellow_cards", "goals_for", "goals_against", "goals", "rank"):
+    for field in (
+        "red_cards",
+        "yellow_cards",
+        "goals_for",
+        "goals_against",
+        "goals",
+        "rank",
+        "stat_value",
+    ):
         value = _non_negative_number(raw.get(field))
         if value is not None:
             fact[field] = value
@@ -257,6 +269,7 @@ def _make_fact_id(fact: dict[str, Any]) -> str:
             "player",
             "match_id",
             "status",
+            "stat_name",
             "source",
             "observed_at",
         )

@@ -174,6 +174,7 @@ class WorldCupFactRouteTests(unittest.TestCase):
                     patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
                     patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
                     patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""), \
+                    patch.object(settings, "WORLD_CUP_STATISTICS_SOURCE_URL", ""), \
                     patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", "provider-secret"), \
                     patch.object(settings, "WORLD_CUP_SPORTMONKS_API_TOKEN", "sportmonks-secret"), \
                     patch.object(settings, "WORLD_CUP_SPORTMONKS_FIXTURES_URL", "https://sportmonks.example/fixtures?api_token=secret"), \
@@ -678,6 +679,7 @@ class WorldCupFactRouteTests(unittest.TestCase):
                 patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
                 patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
                 patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""), \
+                patch.object(settings, "WORLD_CUP_STATISTICS_SOURCE_URL", ""), \
                 patch.object(settings, "API_WRITE_KEY", "secret"), \
                 patch("app.services.world_cup_source_bundle.urlopen", return_value=_UrlResponse(body)):
             client = _events_client()
@@ -713,6 +715,7 @@ class WorldCupFactRouteTests(unittest.TestCase):
                 patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
                 patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
                 patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""), \
+                patch.object(settings, "WORLD_CUP_STATISTICS_SOURCE_URL", ""), \
                 patch.object(settings, "API_WRITE_KEY", "secret"), \
                 patch("app.services.world_cup_source_bundle.urlopen", return_value=_UrlResponse(body)):
             client = _events_client()
@@ -733,6 +736,7 @@ class WorldCupFactRouteTests(unittest.TestCase):
                 patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
                 patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
                 patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""), \
+                patch.object(settings, "WORLD_CUP_STATISTICS_SOURCE_URL", ""), \
                 patch.object(settings, "API_WRITE_KEY", "secret"):
             client = _events_client()
             resp = client.post(
@@ -760,6 +764,7 @@ class WorldCupFactRouteTests(unittest.TestCase):
                 patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", "provider-secret"), \
                 patch.object(settings, "WORLD_CUP_API_FOOTBALL_FETCH_EVENTS", False), \
                 patch.object(settings, "WORLD_CUP_API_FOOTBALL_FETCH_LINEUPS", False), \
+                patch.object(settings, "WORLD_CUP_API_FOOTBALL_FETCH_STATISTICS", False), \
                 patch.object(settings, "API_WRITE_KEY", "secret"), \
                 patch(
                     "app.services.world_cup_api_football_source.urlopen",
@@ -1320,6 +1325,58 @@ class WorldCupFactRouteTests(unittest.TestCase):
                 json={"source": "empty_feed", "response": []},
             )
         self.assertEqual(resp.status_code, 422)
+
+    def test_world_cup_statistics_source_preview_converts_without_writing_facts(self):
+        payload = {
+            "source": "api_football_statistics",
+            "observed_at": "2026-07-20T00:00:00Z",
+            "fixture": {"id": 1001},
+            "response": [{
+                "team": {"name": "Team A"},
+                "statistics": [{"type": "Shots on Goal", "value": 5}],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \
+                patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            preview_resp = client.post(
+                "/events/sports/world-cup/statistics/preview",
+                headers=AUTH_HEADERS,
+                json=payload,
+            )
+            facts_resp = client.get("/events/sports/world-cup/facts")
+
+        self.assertEqual(preview_resp.status_code, 200)
+        self.assertEqual(preview_resp.json()["normalized_team_stat_count"], 1)
+        self.assertEqual(preview_resp.json()["facts"][0]["kind"], "team_stat")
+        self.assertEqual(preview_resp.json()["facts"][0]["stat_value"], 5.0)
+        self.assertEqual(facts_resp.json()["count"], 0)
+
+    def test_world_cup_statistics_source_import_writes_facts(self):
+        payload = {
+            "source": "api_football_statistics",
+            "observed_at": "2026-07-20T00:00:00Z",
+            "team_stats": [{
+                "team": "Team A",
+                "stat_name": "shots on goal",
+                "stat_value": 5,
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \
+                patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            import_resp = client.post(
+                "/events/sports/world-cup/statistics/import?replace=true",
+                headers=AUTH_HEADERS,
+                json=payload,
+            )
+            facts_resp = client.get("/events/sports/world-cup/facts?kind=team_stat")
+
+        self.assertEqual(import_resp.status_code, 200)
+        self.assertEqual(import_resp.json()["converted_fact_count"], 1)
+        self.assertEqual(facts_resp.json()["count"], 1)
 
     def test_world_cup_resolve_requires_write_key(self):
         with patch.object(settings, "API_WRITE_KEY", "secret"):

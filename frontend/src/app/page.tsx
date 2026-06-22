@@ -7,6 +7,7 @@ import { SummaryBar, summarize } from "@/components/dashboard/summary-bar";
 import { MoversBoard } from "@/components/dashboard/movers-board";
 import { EventTable } from "@/components/dashboard/event-table";
 import { SystemStatus } from "@/components/dashboard/system-status";
+import { WorldCupDataSources } from "@/components/dashboard/world-cup-data-sources";
 import { SectionErrorBoundary } from "@/components/section-error-boundary";
 import { eventsApi, type EventListFilters } from "@/lib/api";
 import { adaptEntry, adaptMover, sparkSeries, type EventView } from "@/lib/adapt";
@@ -271,6 +272,9 @@ export default function DashboardPage() {
         </SectionErrorBoundary>
         <SectionErrorBoundary title="系统状态">
           <SystemStatus />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary title="世界杯数据源">
+          <WorldCupDataSources />
         </SectionErrorBoundary>
         {loading && events.length === 0 ? (
           <div className="grid h-40 place-items-center rounded-lg border border-border bg-card text-sm text-muted-foreground">

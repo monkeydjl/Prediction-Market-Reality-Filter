@@ -258,6 +258,124 @@ export interface LoopStatus {
   calibration?: PredictionCalibration;
 }
 
+export interface WorldCupSourceFetch {
+  kind?: string;
+  source_url?: string;
+  status?: string;
+  duration_ms?: number;
+  error?: string;
+}
+
+export interface WorldCupSkippedSource {
+  kind?: string;
+  source_url?: string;
+  reason?: string;
+  required_calls?: number;
+  remaining_calls?: number;
+}
+
+export interface WorldCupCallBudget {
+  fixture_count?: number;
+  max_detail_calls?: number;
+  enabled_detail_feeds?: string[];
+  detail_calls_used?: number;
+  detail_calls_skipped?: number;
+  detail_calls_remaining?: number;
+}
+
+export interface WorldCupRunSummary {
+  status?: string;
+  duration_ms?: number;
+  source_count?: number;
+  converted_fact_count?: number;
+  skipped_source_count?: number;
+  source_fetch_count?: number;
+  source_fetch_duration_ms?: number;
+}
+
+export interface WorldCupFileConfig {
+  configured?: boolean;
+  path?: string;
+  exists?: boolean;
+}
+
+export interface WorldCupUrlConfig {
+  configured?: boolean;
+  source_url?: string;
+}
+
+export interface WorldCupFeedConfig extends WorldCupUrlConfig {
+  kind?: string;
+  source?: string;
+  observed_at?: string;
+}
+
+export interface WorldCupDataSourceStatus {
+  facts?: {
+    count?: number;
+    by_kind?: Record<string, number>;
+    last_updated?: string | null;
+  };
+  configured_sources?: {
+    data_file?: WorldCupFileConfig;
+    bundle_file?: WorldCupFileConfig;
+    bundle_url?: WorldCupUrlConfig;
+    feeds?: WorldCupFeedConfig[];
+    api_football?: {
+      configured?: boolean;
+      base_url?: string;
+      league_id?: string;
+      season?: string;
+      fetch_events?: boolean;
+      fetch_lineups?: boolean;
+      fetch_statistics?: boolean;
+      max_detail_calls?: number;
+    };
+    sportmonks?: {
+      configured?: boolean;
+      feeds?: WorldCupFeedConfig[];
+    };
+  };
+  scheduled_import?: {
+    enabled?: boolean;
+    mode?: string;
+    replace?: boolean;
+    hour_utc?: number;
+    minute_utc?: number;
+  };
+  runs?: {
+    world_cup_source_bundle_import?: LoopRun | null;
+  };
+}
+
+export type WorldCupDataSourceActionMode =
+  | "data_file"
+  | "bundle_file"
+  | "bundle_url"
+  | "feeds"
+  | "api_football"
+  | "sportmonks";
+
+export interface WorldCupDataSourceActionResult {
+  provider?: string;
+  source_count?: number;
+  converted_fact_count?: number;
+  imported?: number;
+  error_count?: number;
+  total?: number;
+  replace?: boolean;
+  source_url?: string;
+  source_file?: string;
+  source_feeds?: WorldCupFeedConfig[];
+  skipped_source_count?: number;
+  skipped_sources?: WorldCupSkippedSource[];
+  source_fetch_count?: number;
+  source_fetches?: WorldCupSourceFetch[];
+  call_budget?: WorldCupCallBudget;
+  run?: WorldCupRunSummary;
+  errors?: unknown[];
+}
+
 export interface ApiOverview {
   system: string;
   version: string;
@@ -363,6 +481,15 @@ export interface EventListFilters {
   category?: string;
   sort?: "value" | "delta" | "probability" | "support";
 }
+
+const WORLD_CUP_DATA_SOURCE_ACTION_PATHS: Record<WorldCupDataSourceActionMode, string> = {
+  data_file: "/events/sports/world-cup/data/source",
+  bundle_file: "/events/sports/world-cup/data/bundle/source",
+  bundle_url: "/events/sports/world-cup/data/bundle/url",
+  feeds: "/events/sports/world-cup/data/bundle/feeds",
+  api_football: "/events/sports/world-cup/data/bundle/api-football",
+  sportmonks: "/events/sports/world-cup/data/bundle/sportmonks",
+};
 
 export const eventsApi = {
   overview: () =>
@@ -493,4 +620,21 @@ export const eventsApi = {
       method: "POST",
       body: JSON.stringify({ contract_id: contractId }),
     }),
+
+  worldCupDataSourcesStatus: () =>
+    api<WorldCupDataSourceStatus>("/events/sports/world-cup/data/sources/status"),
+
+  worldCupDataSourcePreview: (mode: WorldCupDataSourceActionMode) =>
+    api<WorldCupDataSourceActionResult>(
+      `${WORLD_CUP_DATA_SOURCE_ACTION_PATHS[mode]}/preview`,
+      { method: "POST" },
+      { timeoutMs: 180_000 },
+    ),
+
+  worldCupDataSourceImport: (mode: WorldCupDataSourceActionMode, replace = false) =>
+    api<WorldCupDataSourceActionResult>(
+      `${WORLD_CUP_DATA_SOURCE_ACTION_PATHS[mode]}/import?replace=${replace}`,
+      { method: "POST" },
+      { timeoutMs: 180_000 },
+    ),
 };

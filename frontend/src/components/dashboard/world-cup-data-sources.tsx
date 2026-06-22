@@ -1,0 +1,505 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Database,
+  Eye,
+  RefreshCw,
+  UploadCloud,
+} from "lucide-react";
+import {
+  eventsApi,
+  type LoopRun,
+  type WorldCupCallBudget,
+  type WorldCupDataSourceActionMode,
+  type WorldCupDataSourceActionResult,
+  type WorldCupDataSourceStatus,
+  type WorldCupFeedConfig,
+  type WorldCupSkippedSource,
+  type WorldCupSourceFetch,
+} from "@/lib/api";
+import { fmtDateTime } from "@/lib/format";
+import { cn } from "@/lib/utils";
+
+type SourceAction = "preview" | "import";
+
+interface SourceRow {
+  mode: WorldCupDataSourceActionMode;
+  label: string;
+  configured: boolean;
+  ready: boolean;
+  detail: string;
+  meta: string[];
+}
+
+interface ActionState {
+  mode: WorldCupDataSourceActionMode;
+  action: SourceAction;
+}
+
+interface CompletedAction extends ActionState {
+  result: WorldCupDataSourceActionResult;
+  completedAt: Date;
+}
+
+const SOURCE_LABELS: Record<WorldCupDataSourceActionMode, string> = {
+  data_file: "Data file",
+  bundle_file: "Bundle file",
+  bundle_url: "Bundle URL",
+  feeds: "Raw feeds",
+  api_football: "API-Football",
+  sportmonks: "Sportmonks",
+};
+
+const RUN_STATUS_META: Record<string, { label: string; cls: string; icon: "ok" | "warn" }> = {
+  success: { label: "成功", cls: "border-pos/40 bg-pos/10 text-pos", icon: "ok" },
+  failed: { label: "失败", cls: "border-neg/40 bg-neg/10 text-neg", icon: "warn" },
+  running: { label: "运行中", cls: "border-primary/40 bg-primary/10 text-primary", icon: "ok" },
+};
+
+function formatDurationMs(ms: unknown) {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) return "—";
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  return `${minutes}m ${rest}s`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function formatValue(value: unknown) {
+  if (value == null || value === "") return "—";
+  if (typeof value === "number") return Number.isFinite(value) ? value.toLocaleString("zh-CN") : String(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return `${value.length} 项`;
+  if (typeof value === "object") return `${Object.keys(value).length} 项`;
+  return String(value);
+}
+
+function statusBadge(status: string | undefined, fallback = "未知") {
+  const meta = RUN_STATUS_META[status ?? ""];
+  if (meta) return meta;
+  return {
+    label: status || fallback,
+    cls: "border-border bg-secondary text-muted-foreground",
+    icon: "warn" as const,
+  };
+}
+
+function configuredFeeds(feeds: WorldCupFeedConfig[] | undefined) {
+  return (feeds ?? []).filter((feed) => feed.configured);
+}
+
+function sourceRows(status: WorldCupDataSourceStatus | null): SourceRow[] {
+  const sources = status?.configured_sources ?? {};
+  const feeds = configuredFeeds(sources.feeds);
+  const sportmonksFeeds = configuredFeeds(sources.sportmonks?.feeds);
+  const api = sources.api_football;
+  const sportmonks = sources.sportmonks;
+
+  return [
+    {
+      mode: "data_file",
+      label: SOURCE_LABELS.data_file,
+      configured: Boolean(sources.data_file?.configured),
+      ready: Boolean(sources.data_file?.configured && sources.data_file?.exists),
+      detail: sources.data_file?.configured
+        ? sources.data_file.exists ? sources.data_file.path || "已配置" : "文件不存在"
+        : "未配置",
+      meta: [],
+    },
+    {
+      mode: "bundle_file",
+      label: SOURCE_LABELS.bundle_file,
+      configured: Boolean(sources.bundle_file?.configured),
+      ready: Boolean(sources.bundle_file?.configured && sources.bundle_file?.exists),
+      detail: sources.bundle_file?.configured
+        ? sources.bundle_file.exists ? sources.bundle_file.path || "已配置" : "文件不存在"
+        : "未配置",
+      meta: [],
+    },
+    {
+      mode: "bundle_url",
+      label: SOURCE_LABELS.bundle_url,
+      configured: Boolean(sources.bundle_url?.configured),
+      ready: Boolean(sources.bundle_url?.configured),
+      detail: sources.bundle_url?.source_url || "未配置",
+      meta: [],
+    },
+    {
+      mode: "feeds",
+      label: SOURCE_LABELS.feeds,
+      configured: feeds.length > 0,
+      ready: feeds.length > 0,
+      detail: feeds.length > 0 ? feeds.map((feed) => feed.kind).filter(Boolean).join(", ") : "未配置",
+      meta: feeds.length > 0 ? [`${feeds.length} 个 feed`] : [],
+    },
+    {
+      mode: "api_football",
+      label: SOURCE_LABELS.api_football,
+      configured: Boolean(api?.configured),
+      ready: Boolean(api?.configured),
+      detail: api?.configured
+        ? `league ${api.league_id || "—"} · season ${api.season || "—"}`
+        : "未配置",
+      meta: [
+        api?.fetch_events ? "events" : "",
+        api?.fetch_lineups ? "lineups" : "",
+        api?.fetch_statistics ? "statistics" : "",
+        api?.max_detail_calls != null ? `budget ${api.max_detail_calls}` : "",
+      ].filter(Boolean),
+    },
+    {
+      mode: "sportmonks",
+      label: SOURCE_LABELS.sportmonks,
+      configured: Boolean(sportmonks?.configured),
+      ready: Boolean(sportmonks?.configured),
+      detail: sportmonksFeeds.length > 0
+        ? sportmonksFeeds.map((feed) => feed.kind).filter(Boolean).join(", ")
+        : "未配置",
+      meta: sportmonksFeeds.length > 0 ? [`${sportmonksFeeds.length} 个 feed`] : [],
+    },
+  ];
+}
+
+function resultPills(result: Record<string, unknown>) {
+  const items: [string, unknown][] = [
+    ["provider", result.provider],
+    ["mode", result.mode],
+    ["sources", result.source_count],
+    ["converted", result.converted_fact_count],
+    ["imported", result.imported],
+    ["errors", result.error_count],
+    ["fetches", result.source_fetch_count],
+    ["skipped", result.skipped_source_count],
+    ["duration", result.duration_ms != null ? formatDurationMs(result.duration_ms) : undefined],
+    ["replace", result.replace],
+  ];
+  return items.filter(([, value]) => value != null && value !== "");
+}
+
+function fetchesFromRun(run: LoopRun | null | undefined): WorldCupSourceFetch[] {
+  const value = run?.result?.source_fetches;
+  return Array.isArray(value) ? value as WorldCupSourceFetch[] : [];
+}
+
+function skippedFromRun(run: LoopRun | null | undefined): WorldCupSkippedSource[] {
+  const value = run?.result?.skipped_sources;
+  return Array.isArray(value) ? value as WorldCupSkippedSource[] : [];
+}
+
+function budgetFromRun(run: LoopRun | null | undefined): WorldCupCallBudget {
+  return asRecord(run?.result?.call_budget) as WorldCupCallBudget;
+}
+
+function callBudgetEntries(budget: WorldCupCallBudget | undefined) {
+  if (!budget || Object.keys(budget).length === 0) return [];
+  return [
+    ["fixtures", budget.fixture_count],
+    ["max", budget.max_detail_calls],
+    ["used", budget.detail_calls_used],
+    ["skipped", budget.detail_calls_skipped],
+    ["remaining", budget.detail_calls_remaining],
+  ].filter(([, value]) => value != null);
+}
+
+function RunPills({ result }: { result: Record<string, unknown> }) {
+  const pills = resultPills(result);
+  if (pills.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {pills.map(([key, value]) => (
+        <span key={key} className="rounded bg-secondary px-2 py-1 font-mono text-[11px] text-muted-foreground">
+          <span className="text-foreground">{key}</span> {formatValue(value)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function FetchList({ fetches }: { fetches: WorldCupSourceFetch[] }) {
+  if (fetches.length === 0) return null;
+  return (
+    <div className="grid gap-1.5">
+      <span className="text-xs font-medium text-foreground">Fetches</span>
+      <div className="divide-y divide-border overflow-hidden border-y border-border">
+        {fetches.slice(0, 8).map((fetch, index) => {
+          const meta = statusBadge(fetch.status, "unknown");
+          return (
+            <div key={`${fetch.kind ?? "fetch"}:${fetch.source_url ?? index}`} className="grid gap-1 py-2 md:grid-cols-[8rem_minmax(0,1fr)_auto] md:items-center">
+              <span className="font-mono text-xs text-foreground">{fetch.kind || "—"}</span>
+              <span className="truncate text-xs text-muted-foreground">{fetch.source_url || "—"}</span>
+              <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className={cn("rounded-md border px-2 py-0.5 text-[11px] font-medium", meta.cls)}>
+                  {meta.label}
+                </span>
+                {formatDurationMs(fetch.duration_ms)}
+              </span>
+              {fetch.error && (
+                <span className="text-xs text-neg md:col-span-3">{fetch.error}</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SkippedList({ skipped }: { skipped: WorldCupSkippedSource[] }) {
+  if (skipped.length === 0) return null;
+  return (
+    <div className="grid gap-1.5">
+      <span className="text-xs font-medium text-foreground">Skipped</span>
+      <div className="divide-y divide-border overflow-hidden border-y border-border">
+        {skipped.slice(0, 8).map((item, index) => (
+          <div key={`${item.kind ?? "skip"}:${item.source_url ?? index}`} className="grid gap-1 py-2 md:grid-cols-[8rem_minmax(0,1fr)_auto] md:items-center">
+            <span className="font-mono text-xs text-foreground">{item.kind || "—"}</span>
+            <span className="truncate text-xs text-muted-foreground">{item.source_url || "—"}</span>
+            <span className="text-xs text-warn">
+              {item.reason || "skipped"}
+              {item.required_calls != null ? ` · ${item.required_calls}/${item.remaining_calls ?? 0}` : ""}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CallBudget({ budget }: { budget: WorldCupCallBudget | undefined }) {
+  const entries = callBudgetEntries(budget);
+  if (entries.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {entries.map(([key, value]) => (
+        <span key={key} className="rounded bg-secondary px-2 py-1 font-mono text-[11px] text-muted-foreground">
+          <span className="text-foreground">{key}</span> {formatValue(value)}
+        </span>
+      ))}
+      {(budget?.enabled_detail_feeds ?? []).map((feed) => (
+        <span key={feed} className="rounded bg-primary/10 px-2 py-1 font-mono text-[11px] text-primary">
+          {feed}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+export function WorldCupDataSources() {
+  const [status, setStatus] = useState<WorldCupDataSourceStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [replace, setReplace] = useState(false);
+  const [running, setRunning] = useState<ActionState | null>(null);
+  const [completed, setCompleted] = useState<CompletedAction | null>(null);
+
+  const rows = useMemo(() => sourceRows(status), [status]);
+  const lastRun = status?.runs?.world_cup_source_bundle_import ?? null;
+  const lastRunResult = lastRun?.result ?? {};
+  const lastFetches = fetchesFromRun(lastRun);
+  const lastSkipped = skippedFromRun(lastRun);
+  const lastBudget = budgetFromRun(lastRun);
+  const actionFetches = completed?.result.source_fetches ?? [];
+  const actionSkipped = completed?.result.skipped_sources ?? [];
+
+  async function load(silent = false) {
+    if (!silent) setLoading(true);
+    setError(null);
+    try {
+      setStatus(await eventsApi.worldCupDataSourcesStatus());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "世界杯数据源状态加载失败");
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }
+
+  async function runSourceAction(mode: WorldCupDataSourceActionMode, action: SourceAction) {
+    setRunning({ mode, action });
+    setError(null);
+    try {
+      const result = action === "preview"
+        ? await eventsApi.worldCupDataSourcePreview(mode)
+        : await eventsApi.worldCupDataSourceImport(mode, replace);
+      setCompleted({ mode, action, result, completedAt: new Date() });
+      if (action === "import") await load(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "世界杯数据源操作失败");
+    } finally {
+      setRunning(null);
+    }
+  }
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  return (
+    <section className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4">
+      <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-start">
+        <div className="flex items-start gap-3">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Database className="size-4" aria-hidden="true" />
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-sm font-medium">世界杯数据源</h2>
+              <span className="rounded-md border border-border bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">
+                facts {status?.facts?.count ?? "—"}
+              </span>
+              <span className="rounded-md border border-border bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">
+                schedule {status?.scheduled_import?.enabled ? status.scheduled_import.mode : "off"}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {status?.facts?.last_updated ? `facts 更新 ${fmtDateTime(status.facts.last_updated)}` : "facts 更新 —"}
+              {status?.scheduled_import?.enabled
+                ? ` · ${String(status.scheduled_import.hour_utc).padStart(2, "0")}:${String(status.scheduled_import.minute_utc).padStart(2, "0")} UTC`
+                : ""}
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 md:justify-end">
+          <label className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-secondary px-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={replace}
+              onChange={(e) => setReplace(e.target.checked)}
+              className="size-3.5 accent-primary"
+            />
+            替换导入
+          </label>
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={loading}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-secondary px-2 text-xs text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+          >
+            <RefreshCw className={cn("size-3.5", loading && "animate-spin")} aria-hidden="true" />
+            刷新数据源
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="rounded-md border border-neg/40 bg-neg/10 px-3 py-2 text-xs leading-relaxed text-neg">
+          {error}
+        </div>
+      )}
+
+      <div className="divide-y divide-border border-y border-border">
+        {rows.map((row) => {
+          const previewBusy = running?.mode === row.mode && running.action === "preview";
+          const importBusy = running?.mode === row.mode && running.action === "import";
+          return (
+            <div key={row.mode} className="grid gap-3 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  {row.ready ? (
+                    <CheckCircle2 className="size-3.5 text-pos" aria-hidden="true" />
+                  ) : (
+                    <AlertTriangle className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                  )}
+                  <span className="text-sm font-medium">{row.label}</span>
+                  <span
+                    className={cn(
+                      "rounded-md border px-2 py-0.5 text-[11px] font-medium",
+                      row.ready
+                        ? "border-pos/40 bg-pos/10 text-pos"
+                        : row.configured
+                          ? "border-warn/40 bg-warn/10 text-warn"
+                          : "border-border bg-secondary text-muted-foreground",
+                    )}
+                  >
+                    {row.ready ? "ready" : row.configured ? "check" : "missing"}
+                  </span>
+                </div>
+                <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  <span className="truncate">{row.detail}</span>
+                  {row.meta.map((item) => (
+                    <span key={item} className="font-mono">{item}</span>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 md:justify-end">
+                <button
+                  type="button"
+                  aria-label={`${row.label} 预览`}
+                  disabled={!row.ready || Boolean(running)}
+                  onClick={() => void runSourceAction(row.mode, "preview")}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-secondary px-2 text-xs text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+                >
+                  <Eye className={cn("size-3.5", previewBusy && "animate-pulse")} aria-hidden="true" />
+                  预览
+                </button>
+                <button
+                  type="button"
+                  aria-label={`${row.label} 导入`}
+                  disabled={!row.ready || Boolean(running)}
+                  onClick={() => void runSourceAction(row.mode, "import")}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-primary bg-primary/15 px-2 text-xs font-medium text-primary transition-colors hover:bg-primary/25 disabled:opacity-50"
+                >
+                  <UploadCloud className={cn("size-3.5", importBusy && "animate-pulse")} aria-hidden="true" />
+                  导入
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {completed && (
+        <div className="grid gap-3 border-t border-border pt-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-medium text-foreground">
+              {SOURCE_LABELS[completed.mode]} {completed.action === "preview" ? "preview" : "import"}
+            </span>
+            <span className="text-[11px] text-muted-foreground">
+              {completed.completedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+            </span>
+          </div>
+          <RunPills result={completed.result as Record<string, unknown>} />
+          <CallBudget budget={completed.result.call_budget} />
+          <FetchList fetches={actionFetches} />
+          <SkippedList skipped={actionSkipped} />
+        </div>
+      )}
+
+      {lastRun && (
+        <div className="grid gap-3 border-t border-border pt-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium text-foreground">最近定时导入</span>
+              <span className={cn("rounded-md border px-2 py-0.5 text-[11px] font-medium", statusBadge(lastRun.status).cls)}>
+                {statusBadge(lastRun.status).label}
+              </span>
+            </div>
+            <span className="text-[11px] text-muted-foreground">
+              {fmtDateTime(lastRun.finished_at ?? lastRun.started_at)} · {formatDurationMs(lastRun.duration_ms)}
+            </span>
+          </div>
+          {lastRun.error && (
+            <div className="rounded-md border border-neg/40 bg-neg/10 px-3 py-2 text-xs leading-relaxed text-neg">
+              {lastRun.error}
+            </div>
+          )}
+          <RunPills result={lastRunResult} />
+          <CallBudget budget={lastBudget} />
+          <FetchList fetches={lastFetches} />
+          <SkippedList skipped={lastSkipped} />
+        </div>
+      )}
+    </section>
+  );
+}

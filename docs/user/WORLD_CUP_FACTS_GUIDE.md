@@ -23,6 +23,13 @@ Read status:
 GET /api/events/sports/world-cup/status
 ```
 
+Read configured data-source status:
+
+```text
+GET /api/events/sports/world-cup/data/sources/status
+Header: X-API-Key: <API_WRITE_KEY>
+```
+
 List facts:
 
 ```text

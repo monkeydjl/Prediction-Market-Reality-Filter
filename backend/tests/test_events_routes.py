@@ -159,6 +159,54 @@ class WorldCupFactRouteTests(unittest.TestCase):
         self.assertEqual(facts_resp.json()["count"], 1)
         self.assertEqual(facts_resp.json()["facts"][0]["player"], "Player A")
 
+    def test_world_cup_data_source_status_requires_key_and_sanitizes_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            run_db = str(base / "v2_loop.db")
+            with patch.object(sqlite_db, "loop_db_path", return_value=run_db), \
+                    patch.object(settings, "SPORTS_FACT_FILE", str(base / "facts.json")), \
+                    patch.object(settings, "WORLD_CUP_DATA_FILE", str(base / "world_cup_data.json")), \
+                    patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_FILE", str(base / "bundle.json")), \
+                    patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_URL", "https://example.com/bundle?token=secret"), \
+                    patch.object(settings, "WORLD_CUP_MATCH_SOURCE_URL", "https://example.com/matches?token=secret"), \
+                    patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
+                    patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
+                    patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""), \
+                    patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED", True), \
+                    patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE", "feeds"), \
+                    patch.object(settings, "API_WRITE_KEY", "secret"):
+                run_id = loop_run_store.start_run("world_cup_source_bundle_import")
+                loop_run_store.finish_run(
+                    run_id,
+                    "success",
+                    result={
+                        "mode": "feeds",
+                        "converted_fact_count": 1,
+                        "source_feeds": [{
+                            "kind": "matches",
+                            "source_url": "https://example.com/matches",
+                        }],
+                    },
+                )
+                client = _events_client()
+                unauthorized = client.get("/events/sports/world-cup/data/sources/status")
+                resp = client.get(
+                    "/events/sports/world-cup/data/sources/status",
+                    headers=AUTH_HEADERS,
+                )
+
+        self.assertEqual(unauthorized.status_code, 401)
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["configured_sources"]["bundle_url"]["source_url"], "https://example.com/bundle")
+        self.assertEqual(body["configured_sources"]["feeds"][0]["source_url"], "https://example.com/matches")
+        self.assertTrue(body["scheduled_import"]["enabled"])
+        self.assertEqual(
+            body["runs"]["world_cup_source_bundle_import"]["result"]["mode"],
+            "feeds",
+        )
+        self.assertNotIn("secret", json.dumps(body))
+
     def test_world_cup_data_import_converts_match_payload(self):
         with tempfile.TemporaryDirectory() as tmp, \
                 patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \

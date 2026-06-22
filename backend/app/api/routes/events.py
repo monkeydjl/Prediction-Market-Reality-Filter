@@ -44,6 +44,9 @@ from app.services.world_cup_data_source_service import (
     preview_world_cup_data_file,
     world_cup_data_to_facts,
 )
+from app.services.world_cup_data_source_status_service import (
+    world_cup_data_source_status,
+)
 from app.services.world_cup_match_source import (
     import_world_cup_match_source,
     preview_world_cup_match_source,
@@ -209,6 +212,14 @@ async def get_loop_status(x_api_key: str | None = Header(default=None)):
 async def get_world_cup_status():
     """Return World Cup fact-store status for the sports vertical."""
     return sports_fact_status(tournament=WORLD_CUP_TOURNAMENT)
+
+
+@router.get("/sports/world-cup/data/sources/status", response_model=FlexibleResponse)
+async def get_world_cup_data_source_status(
+    _auth: None = Depends(require_write_key),
+):
+    """Return configured World Cup data-source and import-run status."""
+    return world_cup_data_source_status()
 
 
 @router.get("/sports/world-cup/facts", response_model=FlexibleResponse)

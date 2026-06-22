@@ -376,6 +376,26 @@ export interface WorldCupDataSourceActionResult {
   errors?: unknown[];
 }
 
+export interface WorldCupResolveMatch {
+  event_id?: string;
+  event_title?: string;
+  actual_outcome?: number | null;
+  confidence?: number | null;
+  reason?: string;
+  facts?: string[];
+  result?: string;
+}
+
+export interface WorldCupResolveResult {
+  status?: string;
+  dry_run?: boolean;
+  resolved_count?: number;
+  pending_count?: number;
+  checked_count?: number;
+  unresolved_events?: number;
+  matches?: WorldCupResolveMatch[];
+}
+
 export interface ApiOverview {
   system: string;
   version: string;
@@ -634,6 +654,13 @@ export const eventsApi = {
   worldCupDataSourceImport: (mode: WorldCupDataSourceActionMode, replace = false) =>
     api<WorldCupDataSourceActionResult>(
       `${WORLD_CUP_DATA_SOURCE_ACTION_PATHS[mode]}/import?replace=${replace}`,
+      { method: "POST" },
+      { timeoutMs: 180_000 },
+    ),
+
+  worldCupResolveDryRun: (limit = 200) =>
+    api<WorldCupResolveResult>(
+      `/events/sports/world-cup/resolve?dry_run=true&limit=${limit}`,
       { method: "POST" },
       { timeoutMs: 180_000 },
     ),

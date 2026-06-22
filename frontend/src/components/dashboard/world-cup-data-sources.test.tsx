@@ -9,6 +9,7 @@ vi.mock("@/lib/api", () => ({
     worldCupDataSourcesStatus: vi.fn(),
     worldCupDataSourcePreview: vi.fn(),
     worldCupDataSourceImport: vi.fn(),
+    worldCupResolveDryRun: vi.fn(),
   },
 }));
 
@@ -16,10 +17,15 @@ const api = eventsApi as unknown as {
   worldCupDataSourcesStatus: Mock;
   worldCupDataSourcePreview: Mock;
   worldCupDataSourceImport: Mock;
+  worldCupResolveDryRun: Mock;
 };
 
 const status = {
-  facts: { count: 4, last_updated: "2026-06-23T00:00:00Z" },
+  facts: {
+    count: 4,
+    by_kind: { match_result: 2, qualification: 1, team_stat: 1 },
+    last_updated: "2026-06-23T00:00:00Z",
+  },
   configured_sources: {
     data_file: { configured: true, path: "world_cup_data.json", exists: false },
     bundle_file: { configured: true, path: "world_cup_source_bundle.json", exists: true },
@@ -86,6 +92,7 @@ describe("WorldCupDataSources", () => {
     api.worldCupDataSourcesStatus.mockReset();
     api.worldCupDataSourcePreview.mockReset();
     api.worldCupDataSourceImport.mockReset();
+    api.worldCupResolveDryRun.mockReset();
     api.worldCupDataSourcesStatus.mockResolvedValue(status);
     api.worldCupDataSourcePreview.mockResolvedValue({
       provider: "api_football",
@@ -113,6 +120,25 @@ describe("WorldCupDataSources", () => {
       imported: 4,
       replace: true,
     });
+    api.worldCupResolveDryRun.mockResolvedValue({
+      status: "ok",
+      dry_run: true,
+      checked_count: 3,
+      resolved_count: 1,
+      pending_count: 2,
+      unresolved_events: 3,
+      matches: [
+        {
+          event_id: "wc-1",
+          event_title: "Will Mexico reach the knockout stage?",
+          actual_outcome: 100,
+          confidence: 1,
+          reason: "Mexico reached knockout_stage.",
+          facts: ["wc2026:qualification:mexico:qualified"],
+          result: "would_resolve",
+        },
+      ],
+    });
   });
 
   it("renders configured source status and last run metrics", async () => {
@@ -122,6 +148,7 @@ describe("WorldCupDataSources", () => {
     expect(screen.getByText("facts 4")).toBeInTheDocument();
     expect(screen.getByText("API-Football")).toBeInTheDocument();
     expect(screen.getByText("budget 25")).toBeInTheDocument();
+    expect(screen.getByText("match_result")).toBeInTheDocument();
     expect(screen.getByText("最近定时导入")).toBeInTheDocument();
     expect(screen.getByText("https://api-football.example/v3/fixtures")).toBeInTheDocument();
   });
@@ -146,5 +173,17 @@ describe("WorldCupDataSources", () => {
     await userEvent.click(screen.getByRole("button", { name: "Bundle URL 导入" }));
 
     await waitFor(() => expect(api.worldCupDataSourceImport).toHaveBeenCalledWith("bundle_url", true));
+  });
+
+  it("runs World Cup resolution dry-run from the data-source panel", async () => {
+    render(<WorldCupDataSources />);
+
+    await screen.findByText("世界杯数据源");
+    await userEvent.click(screen.getByRole("button", { name: "dry-run" }));
+
+    await waitFor(() => expect(api.worldCupResolveDryRun).toHaveBeenCalledWith(200));
+    expect(await screen.findByText("结算 dry-run")).toBeInTheDocument();
+    expect(screen.getByText("Will Mexico reach the knockout stage?")).toBeInTheDocument();
+    expect(screen.getByText("100%")).toBeInTheDocument();
   });
 });

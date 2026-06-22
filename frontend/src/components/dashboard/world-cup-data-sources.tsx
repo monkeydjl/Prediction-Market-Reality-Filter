@@ -6,6 +6,8 @@ import {
   CheckCircle2,
   Database,
   Eye,
+  Gavel,
+  Loader2,
   RefreshCw,
   UploadCloud,
 } from "lucide-react";
@@ -17,6 +19,8 @@ import {
   type WorldCupDataSourceActionResult,
   type WorldCupDataSourceStatus,
   type WorldCupFeedConfig,
+  type WorldCupResolveMatch,
+  type WorldCupResolveResult,
   type WorldCupSkippedSource,
   type WorldCupSourceFetch,
 } from "@/lib/api";
@@ -43,6 +47,8 @@ interface CompletedAction extends ActionState {
   result: WorldCupDataSourceActionResult;
   completedAt: Date;
 }
+
+const RESOLVE_DRY_RUN_LIMIT = 200;
 
 const SOURCE_LABELS: Record<WorldCupDataSourceActionMode, string> = {
   data_file: "Data file",
@@ -83,6 +89,17 @@ function formatValue(value: unknown) {
   if (Array.isArray(value)) return `${value.length} 项`;
   if (typeof value === "object") return `${Object.keys(value).length} 项`;
   return String(value);
+}
+
+function outcomeLabel(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(Number(value))) return "—";
+  return `${Number(value).toFixed(0)}%`;
+}
+
+function matchResultLabel(result: string | undefined) {
+  if (result === "would_resolve") return "将结算";
+  if (result === "resolved") return "已结算";
+  return result || "未知";
 }
 
 function statusBadge(status: string | undefined, fallback = "未知") {
@@ -295,6 +312,88 @@ function CallBudget({ budget }: { budget: WorldCupCallBudget | undefined }) {
   );
 }
 
+function FactKindPills({ byKind }: { byKind: Record<string, number> | undefined }) {
+  const entries = Object.entries(byKind ?? {})
+    .filter(([, count]) => Number.isFinite(count) && count > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10);
+  if (entries.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {entries.map(([kind, count]) => (
+        <span key={kind} className="rounded bg-secondary px-2 py-1 font-mono text-[11px] text-muted-foreground">
+          <span className="text-foreground">{kind}</span> {count.toLocaleString("zh-CN")}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ResolveMatches({ matches }: { matches: WorldCupResolveMatch[] }) {
+  if (matches.length === 0) {
+    return (
+      <p className="rounded-md border border-border bg-secondary px-3 py-2 text-xs text-muted-foreground">
+        当前 facts 还没有触发可结算的世界杯事件。
+      </p>
+    );
+  }
+  return (
+    <div className="divide-y divide-border overflow-hidden border-y border-border">
+      {matches.slice(0, 6).map((match, index) => (
+        <div key={`${match.event_id ?? "match"}:${index}`} className="grid gap-2 py-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-md border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                {matchResultLabel(match.result)}
+              </span>
+              {match.confidence != null && (
+                <span className="font-mono text-[11px] text-muted-foreground">
+                  confidence {Number(match.confidence).toFixed(2)}
+                </span>
+              )}
+              {(match.facts?.length ?? 0) > 0 && (
+                <span className="font-mono text-[11px] text-muted-foreground">
+                  facts {match.facts?.length}
+                </span>
+              )}
+            </div>
+            <p className="mt-1 line-clamp-2 text-sm font-medium">{match.event_title || match.event_id || "—"}</p>
+            {match.reason && (
+              <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{match.reason}</p>
+            )}
+          </div>
+          <div className="font-mono text-sm font-semibold text-foreground md:text-right">
+            {outcomeLabel(match.actual_outcome)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ResolveDryRun({ result }: { result: WorldCupResolveResult }) {
+  const matches = result.matches ?? [];
+  return (
+    <div className="grid gap-3 border-t border-border pt-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs font-medium text-foreground">结算 dry-run</span>
+        <span className="text-[11px] text-muted-foreground">
+          checked {result.checked_count ?? 0} · would resolve {result.resolved_count ?? 0} · pending {result.pending_count ?? 0}
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        <span className="rounded bg-secondary px-2 py-1 font-mono text-[11px] text-muted-foreground">
+          <span className="text-foreground">unresolved</span> {formatValue(result.unresolved_events)}
+        </span>
+        <span className="rounded bg-secondary px-2 py-1 font-mono text-[11px] text-muted-foreground">
+          <span className="text-foreground">matches</span> {matches.length}
+        </span>
+      </div>
+      <ResolveMatches matches={matches} />
+    </div>
+  );
+}
+
 export function WorldCupDataSources() {
   const [status, setStatus] = useState<WorldCupDataSourceStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -302,6 +401,8 @@ export function WorldCupDataSources() {
   const [replace, setReplace] = useState(false);
   const [running, setRunning] = useState<ActionState | null>(null);
   const [completed, setCompleted] = useState<CompletedAction | null>(null);
+  const [dryRunLoading, setDryRunLoading] = useState(false);
+  const [dryRunResult, setDryRunResult] = useState<WorldCupResolveResult | null>(null);
 
   const rows = useMemo(() => sourceRows(status), [status]);
   const lastRun = status?.runs?.world_cup_source_bundle_import ?? null;
@@ -337,6 +438,18 @@ export function WorldCupDataSources() {
       setError(e instanceof Error ? e.message : "世界杯数据源操作失败");
     } finally {
       setRunning(null);
+    }
+  }
+
+  async function runResolveDryRun() {
+    setDryRunLoading(true);
+    setError(null);
+    try {
+      setDryRunResult(await eventsApi.worldCupResolveDryRun(RESOLVE_DRY_RUN_LIMIT));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "世界杯结算 dry-run 失败");
+    } finally {
+      setDryRunLoading(false);
     }
   }
 
@@ -383,11 +496,24 @@ export function WorldCupDataSources() {
           <button
             type="button"
             onClick={() => void load()}
-            disabled={loading}
+            disabled={loading || dryRunLoading || Boolean(running)}
             className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-secondary px-2 text-xs text-foreground transition-colors hover:bg-accent disabled:opacity-50"
           >
             <RefreshCw className={cn("size-3.5", loading && "animate-spin")} aria-hidden="true" />
             刷新数据源
+          </button>
+          <button
+            type="button"
+            onClick={() => void runResolveDryRun()}
+            disabled={loading || dryRunLoading || Boolean(running)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-primary bg-primary/15 px-2 text-xs font-medium text-primary transition-colors hover:bg-primary/25 disabled:opacity-50"
+          >
+            {dryRunLoading ? (
+              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <Gavel className="size-3.5" aria-hidden="true" />
+            )}
+            dry-run
           </button>
         </div>
       </div>
@@ -397,6 +523,8 @@ export function WorldCupDataSources() {
           {error}
         </div>
       )}
+
+      <FactKindPills byKind={status?.facts?.by_kind} />
 
       <div className="divide-y divide-border border-y border-border">
         {rows.map((row) => {
@@ -475,6 +603,8 @@ export function WorldCupDataSources() {
           <SkippedList skipped={actionSkipped} />
         </div>
       )}
+
+      {dryRunResult && <ResolveDryRun result={dryRunResult} />}
 
       {lastRun && (
         <div className="grid gap-3 border-t border-border pt-3">

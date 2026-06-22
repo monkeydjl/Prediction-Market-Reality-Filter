@@ -137,6 +137,78 @@ class LoopDbMaintenanceJobTests(unittest.TestCase):
         self.assertIn("bad db", run["error"])
 
 
+class WorldCupBundleImportJobTests(unittest.TestCase):
+    def test_job_imports_remote_bundle_and_records_summary(self):
+        result = {
+            "source_count": 2,
+            "converted_fact_count": 4,
+            "imported": 4,
+            "error_count": 0,
+            "total": 12,
+            "replace": True,
+            "source_url": "https://example.com/bundle",
+            "sources": [{"normalized_data": {"large": "payload"}}],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch("app.services.world_cup_source_bundle.import_world_cup_source_bundle_url",
+                          return_value=result) as import_url, \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED", True), \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE", "url"), \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE", True):
+                asyncio.run(scheduler._job_world_cup_source_bundle_import())
+                run = loop_run_store.last_run("world_cup_source_bundle_import")
+
+        import_url.assert_called_once_with(replace=True)
+        self.assertEqual(run["status"], "success")
+        self.assertEqual(run["result"]["mode"], "url")
+        self.assertEqual(run["result"]["converted_fact_count"], 4)
+        self.assertEqual(run["result"]["source_url"], "https://example.com/bundle")
+        self.assertNotIn("sources", run["result"])
+
+    def test_job_imports_configured_file_when_mode_is_file(self):
+        result = {
+            "source_count": 1,
+            "converted_fact_count": 1,
+            "imported": 1,
+            "replace": False,
+            "source_file": "world_cup_source_bundle.json",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch("app.services.world_cup_source_bundle.import_world_cup_source_bundle_file",
+                          return_value=result) as import_file, \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED", True), \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE", "file"), \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE", False):
+                asyncio.run(scheduler._job_world_cup_source_bundle_import())
+                run = loop_run_store.last_run("world_cup_source_bundle_import")
+
+        import_file.assert_called_once_with(replace=False)
+        self.assertEqual(run["status"], "success")
+        self.assertEqual(run["result"]["mode"], "file")
+        self.assertEqual(run["result"]["source_file"], "world_cup_source_bundle.json")
+
+    def test_job_failure_is_isolated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch("app.services.world_cup_source_bundle.import_world_cup_source_bundle_url",
+                          side_effect=RuntimeError("feed down")), \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED", True), \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE", "url"):
+                asyncio.run(scheduler._job_world_cup_source_bundle_import())
+                run = loop_run_store.last_run("world_cup_source_bundle_import")
+
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("feed down", run["error"])
+
+    def test_job_skips_when_disabled(self):
+        with patch("app.services.world_cup_source_bundle.import_world_cup_source_bundle_url") as import_url, \
+                patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED", False):
+            asyncio.run(scheduler._job_world_cup_source_bundle_import())
+        import_url.assert_not_called()
+
+
 class EventDiscoverRegistrationTests(unittest.TestCase):
     """The event_discover job is registered only when EVENT_DISCOVER_ENABLED;
     event_auto_resolve is always registered."""
@@ -160,6 +232,18 @@ class EventDiscoverRegistrationTests(unittest.TestCase):
         self.assertNotIn("event_discover", ids)
         self.assertIn("event_auto_resolve", ids)  # always registered
         self.assertIn("loop_db_maintenance", ids)
+
+    def test_world_cup_bundle_import_registered_when_enabled(self):
+        fake = MagicMock()
+        with patch.object(scheduler, "scheduler", fake), \
+                patch.object(scheduler.settings, "SCHEDULER_LOCK_ENABLED", False), \
+                patch.object(scheduler.settings, "EVENT_DISCOVER_ENABLED", False), \
+                patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED", True), \
+                patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_HOUR_UTC", 5), \
+                patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MINUTE_UTC", 20):
+            scheduler.start_scheduler()
+        ids = [call.kwargs.get("id") for call in fake.add_job.call_args_list]
+        self.assertIn("world_cup_source_bundle_import", ids)
 
     def test_start_is_noop_when_already_running(self):
         fake = MagicMock()

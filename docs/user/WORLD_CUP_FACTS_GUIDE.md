@@ -452,6 +452,16 @@ Invoke-RestMethod `
   -Headers @{ "X-API-Key" = $key }
 ```
 
+To import a configured bundle on a schedule, set
+`WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED=true`. Use
+`WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE=url` for `WORLD_CUP_SOURCE_BUNDLE_URL`, or
+`WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE=file` for `WORLD_CUP_SOURCE_BUNDLE_FILE`.
+The default run time is 05:20 UTC and can be changed with
+`WORLD_CUP_SOURCE_BUNDLE_IMPORT_HOUR_UTC` and
+`WORLD_CUP_SOURCE_BUNDLE_IMPORT_MINUTE_UTC`. Keep
+`WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE=false` for incremental upserts; set it
+to `true` only when the configured bundle is the full current fact snapshot.
+
 Do not put real keys in committed files or docs.
 
 ## Fact Shape

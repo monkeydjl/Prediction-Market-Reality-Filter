@@ -5,6 +5,7 @@ APScheduler 定时任务。随 FastAPI 启动自动运行。
 
 任务：
   07:15 UTC — event discover（freeze 预测，让反馈闭环持续积累样本）
+  05:20 UTC — World Cup source bundle import（可选，默认关闭）
   22:30 UTC — event auto-resolve（匹配已结算预测市场并打分）
 """
 
@@ -200,6 +201,65 @@ async def _job_loop_db_maintenance():
         logger.exception("[Scheduler] Loop DB maintenance failed")
 
 
+async def _job_world_cup_source_bundle_import():
+    """Import the configured World Cup source bundle into sports facts."""
+    if not settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED:
+        return
+
+    mode = settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE.strip().lower()
+    logger.info("[Scheduler] World Cup source bundle import starting...")
+    run_id = _start_run("world_cup_source_bundle_import")
+    try:
+        from app.services.world_cup_source_bundle import (
+            import_world_cup_source_bundle_file,
+            import_world_cup_source_bundle_url,
+        )
+
+        if mode == "url":
+            result = import_world_cup_source_bundle_url(
+                replace=settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE
+            )
+        elif mode == "file":
+            result = import_world_cup_source_bundle_file(
+                replace=settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE
+            )
+        else:
+            raise ValueError(
+                "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE must be 'url' or 'file'"
+            )
+
+        summary = _world_cup_bundle_import_summary(result, mode)
+        _finish_run(run_id, "success", result=summary)
+        logger.info(
+            "[Scheduler] World Cup source bundle import: facts=%d sources=%d mode=%s",
+            summary.get("converted_fact_count", 0),
+            summary.get("source_count", 0),
+            mode,
+        )
+    except Exception as exc:
+        _finish_run(run_id, "failed", error=str(exc))
+        logger.exception("[Scheduler] World Cup source bundle import failed")
+
+
+def _world_cup_bundle_import_summary(result: dict[str, Any], mode: str) -> dict[str, Any]:
+    summary = {
+        "mode": mode,
+        "source_count": result.get("source_count", 0),
+        "converted_fact_count": result.get("converted_fact_count", 0),
+        "imported": result.get("imported", 0),
+        "error_count": result.get("error_count", 0),
+        "total": result.get("total", 0),
+        "replace": result.get("replace", False),
+    }
+    if result.get("source_file"):
+        summary["source_file"] = result["source_file"]
+    if result.get("source_url"):
+        summary["source_url"] = result["source_url"]
+    if result.get("source_metadata"):
+        summary["source_metadata"] = result["source_metadata"]
+    return summary
+
+
 def start_scheduler():
     if scheduler.running is True:
         logger.info("[Scheduler] Already running; startup skipped.")
@@ -233,15 +293,33 @@ def start_scheduler():
             replace_existing=True,
             max_instances=1,
         )
+        if settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED:
+            scheduler.add_job(
+                _job_world_cup_source_bundle_import,
+                CronTrigger(
+                    hour=settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_HOUR_UTC,
+                    minute=settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_MINUTE_UTC,
+                ),
+                id="world_cup_source_bundle_import",
+                replace_existing=True,
+                max_instances=1,
+            )
         scheduler.start()
     except Exception:
         _release_scheduler_lock()
         raise
     discover_state = "on" if settings.EVENT_DISCOVER_ENABLED else "off"
+    world_cup_state = (
+        "on" if settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED else "off"
+    )
     logger.info(
         "[Scheduler] Started — event_discover@07:15UTC(%s) | "
+        "world_cup_source_bundle_import@%02d:%02dUTC(%s) | "
         "loop_db_maintenance@06:45UTC | event_auto_resolve@22:30UTC",
         discover_state,
+        settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_HOUR_UTC,
+        settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_MINUTE_UTC,
+        world_cup_state,
     )
     return True
 

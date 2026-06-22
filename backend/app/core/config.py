@@ -121,6 +121,21 @@ class Settings:
     WORLD_CUP_SOURCE_BUNDLE_AUTH_VALUE: str = os.getenv(
         "WORLD_CUP_SOURCE_BUNDLE_AUTH_VALUE", ""
     )
+    WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED: bool = _env_bool(
+        "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED", "false"
+    )
+    WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE: str = os.getenv(
+        "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE", "url"
+    )
+    WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE: bool = _env_bool(
+        "WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE", "false"
+    )
+    WORLD_CUP_SOURCE_BUNDLE_IMPORT_HOUR_UTC: int = int(
+        os.getenv("WORLD_CUP_SOURCE_BUNDLE_IMPORT_HOUR_UTC", "5")
+    )
+    WORLD_CUP_SOURCE_BUNDLE_IMPORT_MINUTE_UTC: int = int(
+        os.getenv("WORLD_CUP_SOURCE_BUNDLE_IMPORT_MINUTE_UTC", "20")
+    )
     WORLD_CUP_DATA_MAX_AGE_HOURS: float = float(
         os.getenv("WORLD_CUP_DATA_MAX_AGE_HOURS", "168")
     )

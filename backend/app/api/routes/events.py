@@ -48,6 +48,10 @@ from app.services.world_cup_match_source import (
     import_world_cup_match_source,
     preview_world_cup_match_source,
 )
+from app.services.world_cup_standings_source import (
+    import_world_cup_standings_source,
+    preview_world_cup_standings_source,
+)
 from app.services.trend_analysis_service import (
     analyze_edge_trajectory,
     analyze_trend,
@@ -304,6 +308,31 @@ async def import_world_cup_match_source_route(
     """Import facts from a raw World Cup fixture/result payload."""
     try:
         return import_world_cup_match_source(payload, replace=replace)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sports/world-cup/standings/preview", response_model=FlexibleResponse)
+async def preview_world_cup_standings_source_route(
+    payload: Any = Body(...),
+    _auth: None = Depends(require_write_key),
+):
+    """Preview qualification facts from raw World Cup standings data."""
+    try:
+        return preview_world_cup_standings_source(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sports/world-cup/standings/import", response_model=FlexibleResponse)
+async def import_world_cup_standings_source_route(
+    payload: Any = Body(...),
+    replace: bool = Query(default=False),
+    _auth: None = Depends(require_write_key),
+):
+    """Import qualification facts from raw World Cup standings data."""
+    try:
+        return import_world_cup_standings_source(payload, replace=replace)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

@@ -47,3 +47,4 @@
 - [World Cup data sample](examples/world-cup-data.sample.json) — Example match-data payload for trusted data-source import
 - [World Cup CSV data sample](examples/world-cup-data-csv.sample.json) — Example JSON-wrapped CSV payload for trusted data-source import
 - [World Cup match-source sample](examples/world-cup-match-source.sample.json) — Example raw fixture/result payload normalized by the match-source adapter
+- [World Cup standings-source sample](examples/world-cup-standings-source.sample.json) — Example raw standings payload normalized into qualification facts

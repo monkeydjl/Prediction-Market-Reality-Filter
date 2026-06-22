@@ -63,6 +63,22 @@ Header: X-API-Key: <API_WRITE_KEY>
 Body: {"response": [{"fixture": {...}, "teams": {...}, "goals": {...}}]}
 ```
 
+Import raw standings/group-table exports through the standings adapter:
+
+```text
+POST /api/events/sports/world-cup/standings/preview
+Header: X-API-Key: <API_WRITE_KEY>
+Body: {"response": [{"league": {"standings": [[...] ]}}]}
+
+POST /api/events/sports/world-cup/standings/import?replace=false
+Header: X-API-Key: <API_WRITE_KEY>
+Body: {"response": [{"league": {"standings": [[...] ]}}]}
+```
+
+The standings adapter is conservative: it maps explicit source statuses such as
+`qualified`, `advanced`, `knockout`, or `eliminated` into qualification facts. It
+does not infer qualification from points, rank, or goal difference by itself.
+
 Import the configured trusted data-source file:
 
 ```text
@@ -103,9 +119,13 @@ Header: X-API-Key: <API_WRITE_KEY>
    If your source exports raw fixture/result records, use
    `docs/examples/world-cup-match-source.sample.json` with the `matches/*`
    endpoints; PMRF normalizes it first, then converts it into facts.
+   If your source exports raw standings/group tables, use
+   `docs/examples/world-cup-standings-source.sample.json` with the
+   `standings/*` endpoints.
 3. For trusted match data, call `data/preview` and inspect the generated facts.
-   For raw fixture/result exports, call `matches/preview`. If the data lives in
-   `WORLD_CUP_DATA_FILE`, call `data/source/preview`.
+   For raw fixture/result exports, call `matches/preview`; for raw standings,
+   call `standings/preview`. If the data lives in `WORLD_CUP_DATA_FILE`, call
+   `data/source/preview`.
 4. Import with `replace=true` when the file is the current full fact snapshot.
    Use `replace=false` for incremental upserts.
 5. Call the facts list endpoint and inspect the normalized records.
@@ -182,6 +202,25 @@ Invoke-RestMethod `
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:8000/api/events/sports/world-cup/matches/import?replace=false" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+For raw standings/group-table exports, use the standings adapter first:
+
+```powershell
+$body = Get-Content -Raw docs\examples\world-cup-standings-source.sample.json
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/standings/preview" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/standings/import?replace=false" `
   -Headers @{ "X-API-Key" = $key } `
   -ContentType "application/json" `
   -Body $body

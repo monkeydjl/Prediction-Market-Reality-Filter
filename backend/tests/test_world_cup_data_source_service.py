@@ -32,6 +32,9 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
             "matches": [{
                 "match_id": "round16-1",
                 "stage": "round_of_16",
+                "kickoff_at": "2026-07-20T19:00:00+00:00",
+                "venue": "Stadium A, City A",
+                "referee": "Referee A",
                 "home_team": "Team A",
                 "away_team": "Team B",
                 "status": "finished",
@@ -72,6 +75,9 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
 
         by_kind = {fact["kind"]: fact for fact in facts}
         self.assertEqual(by_kind["match_result"]["fact_id"], "wc2026:match:round16-1")
+        self.assertEqual(by_kind["match_result"]["kickoff_at"], "2026-07-20T19:00:00+00:00")
+        self.assertEqual(by_kind["match_result"]["venue"], "Stadium A, City A")
+        self.assertEqual(by_kind["match_result"]["referee"], "Referee A")
         self.assertEqual(by_kind["match_result"]["score"], {"home": 1, "away": 1})
         self.assertEqual(by_kind["match_result"]["red_cards"], 1.0)
         self.assertTrue(by_kind["match_result"]["penalty_shootout"])
@@ -86,9 +92,12 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
             "source": "official_csv",
             "csv": {
                 "matches": (
-                    "match_id,stage,home_team,away_team,status,home_score,away_score,"
+                    "match_id,stage,kickoff_at,venue,referee,home_team,away_team,status,"
+                    "home_score,away_score,"
                     "extra_time,penalty_shootout,home_red_cards,away_red_cards\n"
-                    "round16-1,round_of_16,Team A,Team B,finished,1,1,false,true,1,0\n"
+                    "round16-1,round_of_16,2026-07-20T19:00:00+00:00,"
+                    "\"Stadium A, City A\",Referee A,Team A,Team B,finished,1,1,"
+                    "false,true,1,0\n"
                 ),
                 "qualifications": (
                     "team,status,stage,already_qualified,already_eliminated\n"
@@ -106,6 +115,9 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
         })
 
         by_kind = {fact["kind"]: fact for fact in facts}
+        self.assertEqual(by_kind["match_result"]["kickoff_at"], "2026-07-20T19:00:00+00:00")
+        self.assertEqual(by_kind["match_result"]["venue"], "Stadium A, City A")
+        self.assertEqual(by_kind["match_result"]["referee"], "Referee A")
         self.assertFalse(by_kind["match_result"]["extra_time"])
         self.assertTrue(by_kind["match_result"]["penalty_shootout"])
         self.assertEqual(by_kind["match_result"]["red_cards"], 1.0)

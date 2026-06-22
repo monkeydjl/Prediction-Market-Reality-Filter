@@ -179,6 +179,9 @@ def normalize_sports_fact(
         "home_team",
         "away_team",
         "winner",
+        "kickoff_at",
+        "venue",
+        "referee",
         "qualified",
         "eliminated",
     ):

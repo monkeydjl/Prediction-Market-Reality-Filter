@@ -123,6 +123,15 @@ def _normalize_match(raw: Any, index: int) -> dict[str, Any]:
         "away_team": away_team,
         "status": _normalize_status(status_text),
     }
+    kickoff_at = _text(_first(raw, ("kickoff_at",), ("date",), ("fixture", "date")))
+    if kickoff_at:
+        match["kickoff_at"] = kickoff_at
+    venue = _venue(raw)
+    if venue:
+        match["venue"] = venue
+    referee = _text(_first(raw, ("referee",), ("fixture", "referee")))
+    if referee:
+        match["referee"] = referee
 
     winner = _winner(raw, home_team, away_team)
     if winner:
@@ -228,6 +237,17 @@ def _winner(raw: dict[str, Any], home_team: str, away_team: str) -> str:
     if away_winner is True:
         return away_team
     return ""
+
+
+def _venue(raw: dict[str, Any]) -> str:
+    venue = _first(raw, ("venue",), ("fixture", "venue"))
+    if isinstance(venue, dict):
+        name = _text(venue.get("name"))
+        city = _text(venue.get("city"))
+        if name and city:
+            return f"{name}, {city}"
+        return name or city
+    return _text(venue)
 
 
 def _normalize_status(value: str) -> str:

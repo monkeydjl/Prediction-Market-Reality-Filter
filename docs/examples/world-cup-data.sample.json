@@ -6,6 +6,9 @@
     {
       "match_id": "round16-1",
       "stage": "round_of_16",
+      "kickoff_at": "2026-07-20T19:00:00+00:00",
+      "venue": "Stadium A, City A",
+      "referee": "Referee A",
       "home_team": "Team A",
       "away_team": "Team B",
       "status": "finished",

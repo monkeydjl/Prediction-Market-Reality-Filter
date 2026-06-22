@@ -630,7 +630,8 @@ convert it to the same facts used by analysis and auto-resolution. Preview
 returns generated facts without writing them:
 
 - `matches`: creates `match_result` facts with score, red/yellow cards,
-  `extra_time`, and `penalty_shootout`.
+  `extra_time`, `penalty_shootout`, and match context such as `kickoff_at`,
+  `venue`, and `referee` when present.
 - `qualifications`: creates `qualification` facts for team progression.
 - `player_awards`: creates `player_award` facts for Golden Boot / top scorer
   events.
@@ -641,5 +642,6 @@ returns generated facts without writing them:
 CSV exports can be wrapped under `csv.matches`, `csv.qualifications`, and
 `csv.player_awards`, and `csv.player_statuses`. The first row must be headers
 whose names match the JSON fields, such as `match_id`, `stage`, `home_team`,
-`away_team`, `status`, `penalty_shootout`, `team`, `already_qualified`,
-`award`, `player`, `goals`, `severity`, and `reason`.
+`away_team`, `status`, `kickoff_at`, `venue`, `referee`, `penalty_shootout`,
+`team`, `already_qualified`, `award`, `player`, `goals`, `severity`, and
+`reason`.

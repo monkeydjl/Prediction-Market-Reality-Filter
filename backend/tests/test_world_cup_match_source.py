@@ -22,6 +22,9 @@ def _raw_match_payload() -> dict:
         "response": [{
             "fixture": {
                 "id": 1001,
+                "date": "2026-07-20T19:00:00+00:00",
+                "referee": "Referee A",
+                "venue": {"name": "Stadium A", "city": "City A"},
                 "status": {"short": "PEN"},
             },
             "league": {"round": "Round of 16"},
@@ -50,6 +53,9 @@ class WorldCupMatchSourceTests(unittest.TestCase):
         self.assertEqual(match["stage"], "Round of 16")
         self.assertEqual(match["home_team"], "Team A")
         self.assertEqual(match["away_team"], "Team B")
+        self.assertEqual(match["kickoff_at"], "2026-07-20T19:00:00+00:00")
+        self.assertEqual(match["venue"], "Stadium A, City A")
+        self.assertEqual(match["referee"], "Referee A")
         self.assertEqual(match["winner"], "Team A")
         self.assertEqual(match["status"], "finished")
         self.assertEqual(match["home_score"], 1)
@@ -66,6 +72,9 @@ class WorldCupMatchSourceTests(unittest.TestCase):
         fact = result["facts"][0]
         self.assertEqual(fact["kind"], "match_result")
         self.assertEqual(fact["match_id"], "1001")
+        self.assertEqual(fact["kickoff_at"], "2026-07-20T19:00:00+00:00")
+        self.assertEqual(fact["venue"], "Stadium A, City A")
+        self.assertEqual(fact["referee"], "Referee A")
         self.assertEqual(fact["score"], {"home": 1, "away": 1})
         self.assertEqual(fact["red_cards"], 1.0)
         self.assertTrue(fact["penalty_shootout"])
@@ -87,6 +96,7 @@ class WorldCupMatchSourceTests(unittest.TestCase):
 
         decision = resolver.evaluate_world_cup_resolution(record, facts)
         self.assertEqual(result["converted_fact_count"], 1)
+        self.assertEqual(facts[0]["kickoff_at"], "2026-07-20T19:00:00+00:00")
         self.assertEqual(decision["actual_outcome"], 100.0)
 
     def test_accepts_flat_single_match_payload(self):

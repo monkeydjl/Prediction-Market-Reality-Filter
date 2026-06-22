@@ -3,7 +3,7 @@
   "source_url": "https://example.com/world-cup-feed.csv",
   "observed_at": "2026-07-20T00:00:00Z",
   "csv": {
-    "matches": "match_id,stage,home_team,away_team,status,home_score,away_score,winner,extra_time,penalty_shootout,home_red_cards,away_red_cards\nround16-1,round_of_16,Team A,Team B,finished,1,1,Team A,false,true,1,0\n",
+    "matches": "match_id,stage,kickoff_at,venue,referee,home_team,away_team,status,home_score,away_score,winner,extra_time,penalty_shootout,home_red_cards,away_red_cards\nround16-1,round_of_16,2026-07-20T19:00:00+00:00,\"Stadium A, City A\",Referee A,Team A,Team B,finished,1,1,Team A,false,true,1,0\n",
     "qualifications": "team,status,stage,already_qualified,already_eliminated\nMexico,qualified,round_of_32,true,false\n",
     "player_awards": "award,player,team,goals,rank,status\ngolden_boot,Player C,Team C,7,1,current\n"
   },

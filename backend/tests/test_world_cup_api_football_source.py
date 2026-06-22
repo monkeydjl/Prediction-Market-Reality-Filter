@@ -84,6 +84,12 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
             {fact["kind"] for fact in result["facts"]},
             {"match_result", "qualification", "player_award", "injury"},
         )
+        match_fact = next(
+            fact for fact in result["facts"] if fact["kind"] == "match_result"
+        )
+        self.assertEqual(match_fact["kickoff_at"], "2026-07-20T19:00:00+00:00")
+        self.assertEqual(match_fact["venue"], "Stadium A, City A")
+        self.assertEqual(match_fact["referee"], "Referee A")
         self.assertEqual(facts, [])
         self.assertNotIn("secret-key", json.dumps(result))
 
@@ -112,6 +118,9 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
         self.assertEqual(result["skipped_source_count"], 3)
         self.assertEqual(result["imported"], 1)
         self.assertEqual(len(facts), 1)
+        self.assertEqual(facts[0]["kickoff_at"], "2026-07-20T19:00:00+00:00")
+        self.assertEqual(facts[0]["venue"], "Stadium A, City A")
+        self.assertEqual(facts[0]["referee"], "Referee A")
 
     def test_missing_api_key_fails_closed(self):
         with patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", ""):
@@ -125,7 +134,13 @@ class _Body:
         return _body({
             "errors": [],
             "response": [{
-                "fixture": {"id": 1001, "status": {"short": "FT"}},
+                "fixture": {
+                    "id": 1001,
+                    "date": "2026-07-20T19:00:00+00:00",
+                    "referee": "Referee A",
+                    "venue": {"name": "Stadium A", "city": "City A"},
+                    "status": {"short": "FT"},
+                },
                 "league": {"round": "Group A"},
                 "teams": {
                     "home": {"name": "Team A", "winner": True},

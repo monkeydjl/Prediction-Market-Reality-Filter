@@ -226,6 +226,9 @@ def _match_facts(
         fact.update({
             "match_id": match_id,
             "stage": _clean(raw.get("stage")),
+            "kickoff_at": _clean(raw.get("kickoff_at")),
+            "venue": _clean(raw.get("venue")),
+            "referee": _clean(raw.get("referee")),
             "home_team": _clean(raw.get("home_team") or raw.get("home")),
             "away_team": _clean(raw.get("away_team") or raw.get("away")),
             "winner": _clean(raw.get("winner")),

@@ -182,6 +182,31 @@ class WorldCupSourceBundleTests(unittest.TestCase):
         self.assertEqual(normalized["source"], "entry_source")
         self.assertEqual(normalized["observed_at"], "2026-07-20T00:00:00Z")
 
+    def test_bundle_converts_match_events_source(self):
+        result = preview_world_cup_source_bundle({
+            "sources": [{
+                "kind": "match_events",
+                "payload": {
+                    "source": "api_football_events",
+                    "observed_at": "2026-07-20T00:00:00Z",
+                    "fixture": {"id": 1001},
+                    "response": [{
+                        "time": {"elapsed": 72},
+                        "team": {"name": "Team A"},
+                        "player": {"name": "Player A"},
+                        "type": "Card",
+                        "detail": "Red Card",
+                    }],
+                },
+            }],
+        })
+
+        self.assertEqual(result["source_count"], 1)
+        self.assertEqual(result["sources"][0]["kind"], "match_events")
+        self.assertEqual(result["converted_fact_count"], 1)
+        self.assertEqual(result["facts"][0]["kind"], "discipline")
+        self.assertEqual(result["facts"][0]["red_cards"], 1.0)
+
     def test_configured_bundle_file_can_be_previewed_and_imported(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -274,6 +299,7 @@ class WorldCupSourceBundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
                 patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \
                 patch.object(settings, "WORLD_CUP_MATCH_SOURCE_URL", "https://example.com/matches?token=secret"), \
+                patch.object(settings, "WORLD_CUP_MATCH_EVENTS_SOURCE_URL", ""), \
                 patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
                 patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
                 patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", "https://status.example/injuries"), \
@@ -311,6 +337,7 @@ class WorldCupSourceBundleTests(unittest.TestCase):
             fact_path = str(Path(tmp) / "facts.json")
             with patch.object(settings, "SPORTS_FACT_FILE", fact_path), \
                     patch.object(settings, "WORLD_CUP_MATCH_SOURCE_URL", "https://example.com/matches"), \
+                    patch.object(settings, "WORLD_CUP_MATCH_EVENTS_SOURCE_URL", ""), \
                     patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
                     patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
                     patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""), \
@@ -330,6 +357,7 @@ class WorldCupSourceBundleTests(unittest.TestCase):
 
     def test_configured_source_feeds_require_at_least_one_url(self):
         with patch.object(settings, "WORLD_CUP_MATCH_SOURCE_URL", ""), \
+                patch.object(settings, "WORLD_CUP_MATCH_EVENTS_SOURCE_URL", ""), \
                 patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
                 patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
                 patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""):

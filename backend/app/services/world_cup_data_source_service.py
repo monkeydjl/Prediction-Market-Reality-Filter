@@ -34,6 +34,7 @@ def world_cup_data_to_facts(payload: Any) -> list[dict[str, Any]]:
 
     facts: list[dict[str, Any]] = []
     facts.extend(_match_facts(payload.get("matches", []), tournament, source, source_url, observed_at))
+    facts.extend(_discipline_facts(payload.get("discipline", []), tournament, source, source_url, observed_at))
     facts.extend(_qualification_facts(payload.get("qualifications", []), tournament, source, source_url, observed_at))
     facts.extend(_player_award_facts(payload.get("player_awards", []), tournament, source, source_url, observed_at))
     facts.extend(_player_status_facts(payload.get("player_statuses", []), tournament, source, source_url, observed_at))
@@ -174,7 +175,7 @@ def _expand_csv_payload(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("csv must be an object")
 
     expanded = dict(payload)
-    for section in ("matches", "qualifications", "player_awards", "player_statuses"):
+    for section in ("matches", "discipline", "qualifications", "player_awards", "player_statuses"):
         csv_text = csv_payload.get(section)
         if csv_text in (None, ""):
             continue
@@ -246,6 +247,64 @@ def _match_facts(
         for field in ("extra_time", "penalty_shootout"):
             if _has_value(raw.get(field)):
                 fact[field] = _bool(raw.get(field), field)
+        facts.append(_compact(fact))
+    return facts
+
+
+def _discipline_facts(
+    discipline: Any,
+    tournament: str,
+    source: str,
+    source_url: str,
+    observed_at: str,
+) -> list[dict[str, Any]]:
+    rows = _require_list(discipline, "discipline")
+    facts: list[dict[str, Any]] = []
+    for index, raw in enumerate(rows):
+        if not isinstance(raw, dict):
+            raise ValueError(f"discipline[{index}] must be an object")
+        red_cards = _number(raw.get("red_cards"))
+        yellow_cards = _number(raw.get("yellow_cards"))
+        if red_cards is None and yellow_cards is None:
+            raise ValueError(f"discipline[{index}] missing card counts")
+        match_id = _clean(raw.get("match_id") or raw.get("fixture_id"))
+        team = _clean(raw.get("team"))
+        player = _clean(raw.get("player"))
+        status = _clean(raw.get("status") or raw.get("card") or raw.get("detail")).lower()
+        suffix = _slug(
+            raw.get("event_id")
+            or raw.get("id")
+            or ":".join([
+                match_id,
+                team,
+                player,
+                _clean(raw.get("minute")),
+                status,
+                str(index),
+            ])
+        )
+        fact = _base_fact(
+            fact_id=_clean(raw.get("fact_id")) or f"wc2026:discipline:{suffix}",
+            kind="discipline",
+            tournament=tournament,
+            source=source,
+            source_url=source_url,
+            observed_at=observed_at,
+        )
+        fact.update({
+            "match_id": match_id,
+            "team": team,
+            "player": player,
+            "stage": _clean(raw.get("stage")),
+            "status": status or "reported",
+            "minute": _clean(raw.get("minute")),
+            "notes": _clean(raw.get("notes") or raw.get("reason") or raw.get("detail")),
+            "applies_to": _clean_list(raw.get("applies_to")),
+        })
+        if red_cards is not None:
+            fact["red_cards"] = red_cards
+        if yellow_cards is not None:
+            fact["yellow_cards"] = yellow_cards
         facts.append(_compact(fact))
     return facts
 

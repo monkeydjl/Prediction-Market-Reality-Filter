@@ -13,6 +13,7 @@ from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT, sports_fact_s
 
 _FEED_URL_SETTINGS = (
     ("matches", "WORLD_CUP_MATCH_SOURCE_URL"),
+    ("match_events", "WORLD_CUP_MATCH_EVENTS_SOURCE_URL"),
     ("standings", "WORLD_CUP_STANDINGS_SOURCE_URL"),
     ("player_awards", "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL"),
     ("player_status", "WORLD_CUP_PLAYER_STATUS_SOURCE_URL"),

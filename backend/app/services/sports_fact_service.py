@@ -182,6 +182,7 @@ def normalize_sports_fact(
         "kickoff_at",
         "venue",
         "referee",
+        "minute",
         "qualified",
         "eliminated",
     ):

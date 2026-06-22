@@ -52,6 +52,14 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
                 "stage": "round_of_32",
                 "already_qualified": True,
             }],
+            "discipline": [{
+                "match_id": "round16-1",
+                "team": "Team A",
+                "player": "Player A",
+                "minute": "72+1",
+                "status": "red_card",
+                "red_cards": 1,
+            }],
             "player_awards": [{
                 "award": "golden_boot",
                 "player": "Player A",
@@ -81,6 +89,9 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
         self.assertEqual(by_kind["match_result"]["score"], {"home": 1, "away": 1})
         self.assertEqual(by_kind["match_result"]["red_cards"], 1.0)
         self.assertTrue(by_kind["match_result"]["penalty_shootout"])
+        self.assertEqual(by_kind["discipline"]["match_id"], "round16-1")
+        self.assertEqual(by_kind["discipline"]["minute"], "72+1")
+        self.assertEqual(by_kind["discipline"]["red_cards"], 1.0)
         self.assertEqual(by_kind["qualification"]["team"], "Mexico")
         self.assertEqual(by_kind["player_award"]["goals"], 7)
         self.assertEqual(by_kind["injury"]["player"], "Player B")
@@ -103,6 +114,10 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
                     "team,status,stage,already_qualified,already_eliminated\n"
                     "Mexico,qualified,round_of_32,true,false\n"
                 ),
+                "discipline": (
+                    "match_id,team,player,minute,status,red_cards,yellow_cards\n"
+                    "round16-1,Team A,Player A,72+1,red_card,1,0\n"
+                ),
                 "player_awards": (
                     "award,player,team,goals,rank,status\n"
                     "golden_boot,Player A,Team A,7,1,current\n"
@@ -121,6 +136,8 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
         self.assertFalse(by_kind["match_result"]["extra_time"])
         self.assertTrue(by_kind["match_result"]["penalty_shootout"])
         self.assertEqual(by_kind["match_result"]["red_cards"], 1.0)
+        self.assertEqual(by_kind["discipline"]["minute"], "72+1")
+        self.assertEqual(by_kind["discipline"]["red_cards"], 1.0)
         self.assertTrue(by_kind["qualification"]["already_qualified"])
         self.assertFalse(by_kind["qualification"]["already_eliminated"])
         self.assertEqual(by_kind["player_award"]["goals"], "7")

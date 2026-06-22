@@ -21,6 +21,16 @@
       "away_red_cards": 0
     }
   ],
+  "discipline": [
+    {
+      "match_id": "round16-1",
+      "team": "Team A",
+      "player": "Player A",
+      "minute": "72+1",
+      "status": "red_card",
+      "red_cards": 1
+    }
+  ],
   "qualifications": [
     {
       "team": "Mexico",

@@ -60,6 +60,7 @@ npm run build
 - `WORLD_CUP_SOURCE_ENABLED`：启用 2026 世界杯策划事件源，丰富发现流的体育候选事件。
 - `SPORTS_FACT_FILE`：结构化世界杯事实 JSON 文件，用于 sports signals 和自动结算。
 - `WORLD_CUP_DATA_FILE`：可信世界杯数据源快照 JSON 文件，可通过 source preview/import 转换为 facts。
+- `WORLD_CUP_SOURCE_BUNDLE_FILE`：多源世界杯数据源快照 JSON 文件，可通过 bundle source preview/import 一次转换多路 feed。
 - `WORLD_CUP_DATA_MAX_AGE_HOURS`：配置源快照最大年龄，默认 168 小时；配置文件导入会拒绝缺少 `source` / `observed_at` 或过期的快照。
 
 ## 验证

@@ -1,5 +1,7 @@
+import json
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -7,7 +9,11 @@ from app.core.config import settings
 from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT, load_sports_facts
 from app.services.world_cup_source_bundle import (
     import_world_cup_source_bundle,
+    import_world_cup_source_bundle_file,
+    load_world_cup_source_bundle_file,
     preview_world_cup_source_bundle,
+    preview_world_cup_source_bundle_file,
+    validate_world_cup_source_bundle_metadata,
 )
 
 
@@ -135,6 +141,95 @@ class WorldCupSourceBundleTests(unittest.TestCase):
         self.assertEqual(normalized["source"], "entry_source")
         self.assertEqual(normalized["source_url"], "https://example.com/feed")
         self.assertEqual(normalized["observed_at"], "2026-07-20T00:00:00Z")
+
+    def test_entry_metadata_is_applied_to_list_payloads(self):
+        result = preview_world_cup_source_bundle({
+            "sources": [{
+                "kind": "matches",
+                "source": "entry_source",
+                "observed_at": "2026-07-20T00:00:00Z",
+                "payload": [{
+                    "fixture": {"id": 1001, "status": {"short": "FT"}},
+                    "teams": {
+                        "home": {"name": "Team A", "winner": True},
+                        "away": {"name": "Team B", "winner": False},
+                    },
+                    "goals": {"home": 2, "away": 0},
+                }],
+            }],
+        })
+
+        normalized = result["sources"][0]["normalized_data"]
+        self.assertEqual(normalized["source"], "entry_source")
+        self.assertEqual(normalized["observed_at"], "2026-07-20T00:00:00Z")
+
+    def test_configured_bundle_file_can_be_previewed_and_imported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            bundle_path = base / "world_cup_source_bundle.json"
+            facts_path = base / "facts.json"
+            bundle_path.write_text(json.dumps(_bundle_payload()), encoding="utf-8")
+
+            with patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_FILE", str(bundle_path)), \
+                    patch.object(settings, "SPORTS_FACT_FILE", str(facts_path)):
+                payload = load_world_cup_source_bundle_file()
+                preview = preview_world_cup_source_bundle_file()
+                result = import_world_cup_source_bundle_file(replace=True)
+                facts = load_sports_facts(tournament=WORLD_CUP_TOURNAMENT)
+
+        self.assertEqual(payload["sources"][0]["kind"], "matches")
+        self.assertEqual(preview["source_file"], str(bundle_path))
+        self.assertEqual(len(preview["source_metadata"]), 4)
+        self.assertEqual(preview["converted_fact_count"], 4)
+        self.assertEqual(result["converted_fact_count"], 4)
+        self.assertEqual(len(facts), 4)
+
+    def test_configured_bundle_file_missing_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_FILE", str(Path(tmp) / "missing.json")):
+            with self.assertRaises(FileNotFoundError):
+                load_world_cup_source_bundle_file()
+
+    def test_configured_bundle_requires_source_metadata(self):
+        with self.assertRaisesRegex(ValueError, r"sources\[0\] matches: .*source"):
+            validate_world_cup_source_bundle_metadata({
+                "sources": [{
+                    "kind": "matches",
+                    "payload": {
+                        "observed_at": "2026-07-20T00:00:00Z",
+                        "response": [{
+                            "fixture": {"id": 1001, "status": {"short": "FT"}},
+                            "teams": {
+                                "home": {"name": "Team A", "winner": True},
+                                "away": {"name": "Team B", "winner": False},
+                            },
+                        }],
+                    },
+                }]
+            })
+
+    def test_configured_bundle_rejects_stale_source_metadata(self):
+        with self.assertRaisesRegex(ValueError, r"sources\[0\] matches: .*stale"):
+            validate_world_cup_source_bundle_metadata(
+                {
+                    "sources": [{
+                        "kind": "matches",
+                        "source": "api_football",
+                        "observed_at": "2026-06-01T00:00:00Z",
+                        "payload": {
+                            "response": [{
+                                "fixture": {"id": 1001, "status": {"short": "FT"}},
+                                "teams": {
+                                    "home": {"name": "Team A", "winner": True},
+                                    "away": {"name": "Team B", "winner": False},
+                                },
+                            }],
+                        },
+                    }]
+                },
+                now=datetime(2026, 6, 3, tzinfo=timezone.utc),
+                max_age_hours=1,
+            )
 
     def test_rejects_empty_bundle(self):
         with self.assertRaisesRegex(ValueError, "at least one source"):

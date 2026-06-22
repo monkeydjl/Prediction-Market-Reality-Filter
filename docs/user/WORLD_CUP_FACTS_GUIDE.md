@@ -68,6 +68,16 @@ adapters used by the individual endpoints and imports the combined facts in one
 write. Supported `kind` values are `data`, `matches`, `standings`,
 `player_awards`, and `player_status`.
 
+Import the configured multi-source bundle file:
+
+```text
+POST /api/events/sports/world-cup/data/bundle/source/preview
+Header: X-API-Key: <API_WRITE_KEY>
+
+POST /api/events/sports/world-cup/data/bundle/source/import?replace=false
+Header: X-API-Key: <API_WRITE_KEY>
+```
+
 Import raw fixture/result exports through the match-source adapter:
 
 ```text
@@ -137,7 +147,9 @@ Header: X-API-Key: <API_WRITE_KEY>
 ```
 
 Configured source files must include `source` and a timezone-aware
-`observed_at` timestamp. PMRF rejects stale configured snapshots older than
+`observed_at` timestamp. For `WORLD_CUP_SOURCE_BUNDLE_FILE`, each `sources[]`
+entry must provide that metadata either at the entry level or inside its
+`payload`. PMRF rejects stale configured snapshots older than
 `WORLD_CUP_DATA_MAX_AGE_HOURS` (default: 168). Set the value to `0` only if an
 operator intentionally wants to disable the age check.
 
@@ -184,7 +196,8 @@ Header: X-API-Key: <API_WRITE_KEY>
    call `standings/preview`; for raw top-scorers/player-awards exports, call
    `player-awards/preview`; for raw player status exports, call
    `player-status/preview`. If the data lives in `WORLD_CUP_DATA_FILE`, call
-   `data/source/preview`.
+   `data/source/preview`. If a multi-source bundle lives in
+   `WORLD_CUP_SOURCE_BUNDLE_FILE`, call `data/bundle/source/preview`.
 4. Import with `replace=true` when the file is the current full fact snapshot.
    Use `replace=false` for incremental upserts.
 5. Call the facts list endpoint and inspect the normalized records.
@@ -364,6 +377,47 @@ Invoke-RestMethod `
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:8000/api/events/sports/world-cup/data/source/import?replace=false" `
+  -Headers @{ "X-API-Key" = $key }
+```
+
+For a configured multi-source bundle file, set `WORLD_CUP_SOURCE_BUNDLE_FILE`
+and call the bundle source endpoints. Each bundle source must include fresh
+metadata:
+
+```json
+{
+  "sources": [
+    {
+      "kind": "matches",
+      "source": "api_football",
+      "source_url": "https://example.com/fixtures",
+      "observed_at": "2026-07-20T00:00:00Z",
+      "payload": {
+        "response": [
+          {
+            "fixture": {"id": 1001, "status": {"short": "FT"}},
+            "teams": {
+              "home": {"name": "Team A", "winner": true},
+              "away": {"name": "Team B", "winner": false}
+            },
+            "goals": {"home": 2, "away": 0}
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/bundle/source/preview" `
+  -Headers @{ "X-API-Key" = $key }
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/bundle/source/import?replace=false" `
   -Headers @{ "X-API-Key" = $key }
 ```
 

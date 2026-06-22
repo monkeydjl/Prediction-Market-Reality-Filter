@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import os
+from datetime import datetime
 from typing import Any
 
+from app.core.config import settings
 from app.services.sports_fact_service import (
     WORLD_CUP_TOURNAMENT,
     import_sports_facts,
 )
-from app.services.world_cup_data_source_service import world_cup_data_to_facts
+from app.services.world_cup_data_source_service import (
+    validate_world_cup_data_source_metadata,
+    world_cup_data_to_facts,
+)
 from app.services.world_cup_match_source import world_cup_match_source_to_data
 from app.services.world_cup_player_awards_source import (
     world_cup_player_awards_source_to_data,
@@ -17,6 +23,7 @@ from app.services.world_cup_player_status_source import (
     world_cup_player_status_source_to_data,
 )
 from app.services.world_cup_standings_source import world_cup_standings_source_to_data
+from app.utils.file_store import read_json_strict
 
 
 def preview_world_cup_source_bundle(payload: Any) -> dict[str, Any]:
@@ -50,6 +57,76 @@ def import_world_cup_source_bundle(
     return result
 
 
+def load_world_cup_source_bundle_file(path: str | None = None) -> dict[str, Any]:
+    """Load the configured multi-source World Cup bundle file."""
+
+    source_path = os.path.abspath(path or settings.WORLD_CUP_SOURCE_BUNDLE_FILE)
+    if not os.path.exists(source_path):
+        raise FileNotFoundError(source_path)
+    payload = read_json_strict(source_path, {})
+    if not isinstance(payload, dict):
+        raise ValueError("World Cup source bundle file must contain a JSON object")
+    return payload
+
+
+def validate_world_cup_source_bundle_metadata(
+    payload: dict[str, Any],
+    *,
+    now: datetime | None = None,
+    max_age_hours: float | None = None,
+) -> list[dict[str, Any]]:
+    """Validate freshness metadata for each source in a configured bundle."""
+
+    metadata: list[dict[str, Any]] = []
+    entries = _source_entries(payload)
+    for index, entry in enumerate(entries):
+        kind = _source_kind(entry, index)
+        source_payload = _source_payload(entry, index)
+        source_metadata = _source_metadata(entry, source_payload)
+        try:
+            validated = validate_world_cup_data_source_metadata(
+                source_metadata,
+                now=now,
+                max_age_hours=max_age_hours,
+            )
+        except ValueError as exc:
+            raise ValueError(f"sources[{index}] {kind}: {exc}") from exc
+        metadata.append({
+            "index": index,
+            "kind": kind,
+            **validated,
+        })
+    return metadata
+
+
+def preview_world_cup_source_bundle_file(path: str | None = None) -> dict[str, Any]:
+    """Preview facts from the configured multi-source bundle file."""
+
+    source_path = os.path.abspath(path or settings.WORLD_CUP_SOURCE_BUNDLE_FILE)
+    payload = load_world_cup_source_bundle_file(source_path)
+    metadata = validate_world_cup_source_bundle_metadata(payload)
+    result = preview_world_cup_source_bundle(payload)
+    result["source_file"] = source_path
+    result["source_metadata"] = metadata
+    return result
+
+
+def import_world_cup_source_bundle_file(
+    *,
+    replace: bool = False,
+    path: str | None = None,
+) -> dict[str, Any]:
+    """Import facts from the configured multi-source bundle file."""
+
+    source_path = os.path.abspath(path or settings.WORLD_CUP_SOURCE_BUNDLE_FILE)
+    payload = load_world_cup_source_bundle_file(source_path)
+    metadata = validate_world_cup_source_bundle_metadata(payload)
+    result = import_world_cup_source_bundle(payload, replace=replace)
+    result["source_file"] = source_path
+    result["source_metadata"] = metadata
+    return result
+
+
 def _convert_bundle(payload: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     entries = _source_entries(payload)
     sources: list[dict[str, Any]] = []
@@ -57,7 +134,7 @@ def _convert_bundle(payload: Any) -> tuple[list[dict[str, Any]], list[dict[str, 
     for index, entry in enumerate(entries):
         kind = _source_kind(entry, index)
         source_payload = _source_payload(entry, index)
-        source_payload = _with_entry_metadata(source_payload, entry)
+        source_payload = _with_entry_metadata(source_payload, entry, kind)
         try:
             normalized_data = _source_to_data(kind, source_payload)
             source_facts = world_cup_data_to_facts(normalized_data)
@@ -135,7 +212,9 @@ def _source_to_data(kind: str, payload: Any) -> dict[str, Any]:
     return world_cup_player_status_source_to_data(payload)
 
 
-def _with_entry_metadata(payload: Any, entry: dict[str, Any]) -> Any:
+def _with_entry_metadata(payload: Any, entry: dict[str, Any], kind: str) -> Any:
+    if isinstance(payload, list) and kind != "data":
+        payload = {"response": payload}
     if not isinstance(payload, dict):
         return payload
     merged = dict(payload)
@@ -147,6 +226,22 @@ def _with_entry_metadata(payload: Any, entry: dict[str, Any]) -> Any:
             continue
         merged[field] = value
     return merged
+
+
+def _source_metadata(entry: dict[str, Any], payload: Any) -> dict[str, Any]:
+    payload_data = payload if isinstance(payload, dict) else {}
+    return {
+        "source": (
+            _clean(entry.get("source"))
+            or _clean(payload_data.get("source"))
+            or _clean(payload_data.get("provider"))
+        ),
+        "source_url": (
+            _clean(entry.get("source_url") or entry.get("url"))
+            or _clean(payload_data.get("source_url") or payload_data.get("url"))
+        ),
+        "observed_at": _clean(entry.get("observed_at") or payload_data.get("observed_at")),
+    }
 
 
 def _has_metadata(payload: dict[str, Any], field: str) -> bool:

@@ -98,6 +98,12 @@ class Settings:
             os.path.dirname(__file__), "..", "..", "world_cup_data.json"
         ),
     )
+    WORLD_CUP_SOURCE_BUNDLE_FILE: str = os.getenv(
+        "WORLD_CUP_SOURCE_BUNDLE_FILE",
+        os.path.join(
+            os.path.dirname(__file__), "..", "..", "world_cup_source_bundle.json"
+        ),
+    )
     WORLD_CUP_DATA_MAX_AGE_HOURS: float = float(
         os.getenv("WORLD_CUP_DATA_MAX_AGE_HOURS", "168")
     )

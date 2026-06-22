@@ -79,6 +79,18 @@ The standings adapter is conservative: it maps explicit source statuses such as
 `qualified`, `advanced`, `knockout`, or `eliminated` into qualification facts. It
 does not infer qualification from points, rank, or goal difference by itself.
 
+Import raw top-scorers/player-awards exports through the player-awards adapter:
+
+```text
+POST /api/events/sports/world-cup/player-awards/preview
+Header: X-API-Key: <API_WRITE_KEY>
+Body: {"response": [{"player": {...}, "statistics": [{"goals": {...}}]}]}
+
+POST /api/events/sports/world-cup/player-awards/import?replace=false
+Header: X-API-Key: <API_WRITE_KEY>
+Body: {"response": [{"player": {...}, "statistics": [{"goals": {...}}]}]}
+```
+
 Import the configured trusted data-source file:
 
 ```text
@@ -122,9 +134,13 @@ Header: X-API-Key: <API_WRITE_KEY>
    If your source exports raw standings/group tables, use
    `docs/examples/world-cup-standings-source.sample.json` with the
    `standings/*` endpoints.
+   If your source exports raw top-scorers/player-awards records, use
+   `docs/examples/world-cup-player-awards-source.sample.json` with the
+   `player-awards/*` endpoints.
 3. For trusted match data, call `data/preview` and inspect the generated facts.
    For raw fixture/result exports, call `matches/preview`; for raw standings,
-   call `standings/preview`. If the data lives in `WORLD_CUP_DATA_FILE`, call
+   call `standings/preview`; for raw top-scorers/player-awards exports, call
+   `player-awards/preview`. If the data lives in `WORLD_CUP_DATA_FILE`, call
    `data/source/preview`.
 4. Import with `replace=true` when the file is the current full fact snapshot.
    Use `replace=false` for incremental upserts.
@@ -221,6 +237,25 @@ Invoke-RestMethod `
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:8000/api/events/sports/world-cup/standings/import?replace=false" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+For raw top-scorers/player-awards exports, use the player-awards adapter first:
+
+```powershell
+$body = Get-Content -Raw docs\examples\world-cup-player-awards-source.sample.json
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/player-awards/preview" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/player-awards/import?replace=false" `
   -Headers @{ "X-API-Key" = $key } `
   -ContentType "application/json" `
   -Body $body

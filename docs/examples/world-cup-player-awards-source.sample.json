@@ -1,0 +1,24 @@
+{
+  "source": "api_football",
+  "source_url": "https://example.com/topscorers",
+  "observed_at": "2026-07-20T00:00:00Z",
+  "award": "golden_boot",
+  "response": [
+    {
+      "rank": 1,
+      "player": {
+        "name": "Player A"
+      },
+      "statistics": [
+        {
+          "team": {
+            "name": "Team A"
+          },
+          "goals": {
+            "total": 7
+          }
+        }
+      ]
+    }
+  ]
+}

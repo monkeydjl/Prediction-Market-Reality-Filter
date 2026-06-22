@@ -470,6 +470,75 @@ class WorldCupFactRouteTests(unittest.TestCase):
             )
         self.assertEqual(resp.status_code, 422)
 
+    def test_world_cup_player_awards_source_preview_converts_without_writing_facts(self):
+        payload = {
+            "source": "api_football",
+            "observed_at": "2026-07-20T00:00:00Z",
+            "award": "golden_boot",
+            "response": [{
+                "rank": 1,
+                "player": {"name": "Player A"},
+                "statistics": [{
+                    "team": {"name": "Team A"},
+                    "goals": {"total": 7},
+                }],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \
+                patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            preview_resp = client.post(
+                "/events/sports/world-cup/player-awards/preview",
+                headers=AUTH_HEADERS,
+                json=payload,
+            )
+            facts_resp = client.get("/events/sports/world-cup/facts")
+
+        self.assertEqual(preview_resp.status_code, 200)
+        self.assertEqual(preview_resp.json()["normalized_award_count"], 1)
+        self.assertEqual(preview_resp.json()["facts"][0]["goals"], 7)
+        self.assertEqual(facts_resp.json()["count"], 0)
+
+    def test_world_cup_player_awards_source_import_writes_facts(self):
+        payload = {
+            "source": "api_football",
+            "observed_at": "2026-07-20T00:00:00Z",
+            "response": [{
+                "rank": 1,
+                "player": {"name": "Player A"},
+                "statistics": [{
+                    "team": {"name": "Team A"},
+                    "goals": {"total": 7},
+                }],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \
+                patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            import_resp = client.post(
+                "/events/sports/world-cup/player-awards/import?replace=true",
+                headers=AUTH_HEADERS,
+                json=payload,
+            )
+            facts_resp = client.get("/events/sports/world-cup/facts?kind=player_award")
+
+        self.assertEqual(import_resp.status_code, 200)
+        self.assertEqual(import_resp.json()["converted_fact_count"], 1)
+        self.assertEqual(facts_resp.json()["count"], 1)
+        self.assertEqual(facts_resp.json()["facts"][0]["player"], "Player A")
+
+    def test_world_cup_player_awards_source_invalid_payload_returns_422(self):
+        with patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            resp = client.post(
+                "/events/sports/world-cup/player-awards/preview",
+                headers=AUTH_HEADERS,
+                json={"source": "empty_feed", "response": []},
+            )
+        self.assertEqual(resp.status_code, 422)
+
     def test_world_cup_resolve_requires_write_key(self):
         with patch.object(settings, "API_WRITE_KEY", "secret"):
             client = _events_client()

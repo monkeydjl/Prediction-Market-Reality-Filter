@@ -36,6 +36,7 @@ const status = {
     ],
     api_football: {
       configured: true,
+      base_url: "https://api-football.example/v3",
       league_id: "1",
       season: "2026",
       fetch_events: true,
@@ -44,8 +45,11 @@ const status = {
       max_detail_calls: 25,
     },
     sportmonks: {
-      configured: false,
-      feeds: [],
+      configured: true,
+      feeds: [
+        { kind: "matches", configured: true, source_url: "https://sportmonks.example/fixtures" },
+        { kind: "standings", configured: false, source_url: "" },
+      ],
     },
   },
   scheduled_import: {
@@ -98,6 +102,12 @@ describe("WorldCupDataSources", () => {
       provider: "api_football",
       source_count: 2,
       converted_fact_count: 7,
+      error_count: 1,
+      source_url: "https://api-football.example/v3/fixtures",
+      source_feeds: [
+        { kind: "matches", source_url: "https://api-football.example/v3/fixtures" },
+        { kind: "statistics", source_url: "https://api-football.example/v3/statistics" },
+      ],
       source_fetch_count: 2,
       source_fetches: [
         {
@@ -113,6 +123,7 @@ describe("WorldCupDataSources", () => {
         detail_calls_used: 0,
         detail_calls_remaining: 25,
       },
+      errors: [{ index: 2, error: "invalid fact" }],
     });
     api.worldCupDataSourceImport.mockResolvedValue({
       source_count: 1,
@@ -148,6 +159,9 @@ describe("WorldCupDataSources", () => {
     expect(screen.getByText("facts 4")).toBeInTheDocument();
     expect(screen.getByText("API-Football")).toBeInTheDocument();
     expect(screen.getByText("budget 25")).toBeInTheDocument();
+    expect(screen.getByText("https://api-football.example/v3")).toBeInTheDocument();
+    expect(screen.getByText("https://example.com/matches")).toBeInTheDocument();
+    expect(screen.getByText("https://sportmonks.example/fixtures")).toBeInTheDocument();
     expect(screen.getByText("match_result")).toBeInTheDocument();
     expect(screen.getByText("最近定时导入")).toBeInTheDocument();
     expect(screen.getByText("https://api-football.example/v3/fixtures")).toBeInTheDocument();
@@ -163,6 +177,8 @@ describe("WorldCupDataSources", () => {
     expect(await screen.findByText("API-Football preview")).toBeInTheDocument();
     expect(screen.getAllByText("converted").length).toBeGreaterThan(0);
     expect(screen.getByText("7")).toBeInTheDocument();
+    expect(screen.getByText("https://api-football.example/v3/statistics")).toBeInTheDocument();
+    expect(screen.getByText("#2 invalid fact")).toBeInTheDocument();
   });
 
   it("imports with replace when the operator toggles replace import", async () => {

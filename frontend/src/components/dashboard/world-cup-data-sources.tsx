@@ -36,6 +36,7 @@ interface SourceRow {
   ready: boolean;
   detail: string;
   meta: string[];
+  references: SourceReference[];
 }
 
 interface ActionState {
@@ -46,6 +47,11 @@ interface ActionState {
 interface CompletedAction extends ActionState {
   result: WorldCupDataSourceActionResult;
   completedAt: Date;
+}
+
+interface SourceReference {
+  label: string;
+  value: string;
 }
 
 const RESOLVE_DRY_RUN_LIMIT = 200;
@@ -116,6 +122,15 @@ function configuredFeeds(feeds: WorldCupFeedConfig[] | undefined) {
   return (feeds ?? []).filter((feed) => feed.configured);
 }
 
+function feedReferences(feeds: WorldCupFeedConfig[] | undefined): SourceReference[] {
+  return (feeds ?? [])
+    .map((feed) => ({
+      label: feed.kind || feed.source || "feed",
+      value: feed.source_url || "",
+    }))
+    .filter((reference) => reference.value);
+}
+
 function sourceRows(status: WorldCupDataSourceStatus | null): SourceRow[] {
   const sources = status?.configured_sources ?? {};
   const feeds = configuredFeeds(sources.feeds);
@@ -133,6 +148,7 @@ function sourceRows(status: WorldCupDataSourceStatus | null): SourceRow[] {
         ? sources.data_file.exists ? sources.data_file.path || "已配置" : "文件不存在"
         : "未配置",
       meta: [],
+      references: [],
     },
     {
       mode: "bundle_file",
@@ -143,6 +159,7 @@ function sourceRows(status: WorldCupDataSourceStatus | null): SourceRow[] {
         ? sources.bundle_file.exists ? sources.bundle_file.path || "已配置" : "文件不存在"
         : "未配置",
       meta: [],
+      references: [],
     },
     {
       mode: "bundle_url",
@@ -151,6 +168,7 @@ function sourceRows(status: WorldCupDataSourceStatus | null): SourceRow[] {
       ready: Boolean(sources.bundle_url?.configured),
       detail: sources.bundle_url?.source_url || "未配置",
       meta: [],
+      references: [],
     },
     {
       mode: "feeds",
@@ -159,6 +177,7 @@ function sourceRows(status: WorldCupDataSourceStatus | null): SourceRow[] {
       ready: feeds.length > 0,
       detail: feeds.length > 0 ? feeds.map((feed) => feed.kind).filter(Boolean).join(", ") : "未配置",
       meta: feeds.length > 0 ? [`${feeds.length} 个 feed`] : [],
+      references: feedReferences(feeds),
     },
     {
       mode: "api_football",
@@ -174,6 +193,7 @@ function sourceRows(status: WorldCupDataSourceStatus | null): SourceRow[] {
         api?.fetch_statistics ? "statistics" : "",
         api?.max_detail_calls != null ? `budget ${api.max_detail_calls}` : "",
       ].filter(Boolean),
+      references: api?.base_url ? [{ label: "base", value: api.base_url }] : [],
     },
     {
       mode: "sportmonks",
@@ -184,6 +204,7 @@ function sourceRows(status: WorldCupDataSourceStatus | null): SourceRow[] {
         ? sportmonksFeeds.map((feed) => feed.kind).filter(Boolean).join(", ")
         : "未配置",
       meta: sportmonksFeeds.length > 0 ? [`${sportmonksFeeds.length} 个 feed`] : [],
+      references: feedReferences(sportmonksFeeds),
     },
   ];
 }
@@ -218,6 +239,26 @@ function budgetFromRun(run: LoopRun | null | undefined): WorldCupCallBudget {
   return asRecord(run?.result?.call_budget) as WorldCupCallBudget;
 }
 
+function sourceReferencesFromResult(result: Record<string, unknown> | undefined): SourceReference[] {
+  const references: SourceReference[] = [];
+  if (!result) return references;
+
+  if (typeof result.source_file === "string" && result.source_file) {
+    references.push({ label: "file", value: result.source_file });
+  }
+  if (typeof result.source_url === "string" && result.source_url) {
+    references.push({ label: "url", value: result.source_url });
+  }
+  if (Array.isArray(result.source_feeds)) {
+    references.push(...feedReferences(result.source_feeds as WorldCupFeedConfig[]));
+  }
+  return references;
+}
+
+function errorsFromResult(result: Record<string, unknown> | undefined): unknown[] {
+  return Array.isArray(result?.errors) ? result.errors : [];
+}
+
 function callBudgetEntries(budget: WorldCupCallBudget | undefined) {
   if (!budget || Object.keys(budget).length === 0) return [];
   return [
@@ -239,6 +280,39 @@ function RunPills({ result }: { result: Record<string, unknown> }) {
           <span className="text-foreground">{key}</span> {formatValue(value)}
         </span>
       ))}
+    </div>
+  );
+}
+
+function SourceReferenceList({
+  references,
+  title,
+  limit = 8,
+  className,
+}: {
+  references: SourceReference[];
+  title?: string;
+  limit?: number;
+  className?: string;
+}) {
+  if (references.length === 0) return null;
+  const visible = references.slice(0, limit);
+  return (
+    <div className={cn("grid gap-1.5", className)}>
+      {title && <span className="text-xs font-medium text-foreground">{title}</span>}
+      <div className="divide-y divide-border overflow-hidden border-y border-border">
+        {visible.map((reference, index) => (
+          <div key={`${reference.label}:${reference.value}:${index}`} className="grid gap-1 py-2 md:grid-cols-[8rem_minmax(0,1fr)] md:items-center">
+            <span className="font-mono text-xs text-foreground">{reference.label}</span>
+            <span className="truncate text-xs text-muted-foreground">{reference.value}</span>
+          </div>
+        ))}
+        {references.length > visible.length && (
+          <div className="py-2 text-xs text-muted-foreground">
+            +{references.length - visible.length} more
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -267,6 +341,43 @@ function FetchList({ fetches }: { fetches: WorldCupSourceFetch[] }) {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function errorText(error: unknown) {
+  if (typeof error === "string") return error;
+  const record = asRecord(error);
+  const message = record.error ?? record.message ?? record.detail;
+  if (message != null) {
+    const prefix = record.index != null ? `#${formatValue(record.index)} ` : "";
+    return `${prefix}${formatValue(message)}`;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function ErrorList({ errors }: { errors: unknown[] }) {
+  if (errors.length === 0) return null;
+  const visible = errors.slice(0, 6);
+  return (
+    <div className="grid gap-1.5">
+      <span className="text-xs font-medium text-neg">Errors</span>
+      <div className="divide-y divide-neg/20 overflow-hidden border-y border-neg/30">
+        {visible.map((error, index) => (
+          <div key={index} className="py-2 text-xs leading-relaxed text-neg">
+            {errorText(error)}
+          </div>
+        ))}
+        {errors.length > visible.length && (
+          <div className="py-2 text-xs text-neg">
+            +{errors.length - visible.length} more
+          </div>
+        )}
       </div>
     </div>
   );
@@ -412,6 +523,11 @@ export function WorldCupDataSources() {
   const lastBudget = budgetFromRun(lastRun);
   const actionFetches = completed?.result.source_fetches ?? [];
   const actionSkipped = completed?.result.skipped_sources ?? [];
+  const actionResult = completed?.result as Record<string, unknown> | undefined;
+  const actionSources = sourceReferencesFromResult(actionResult);
+  const actionErrors = errorsFromResult(actionResult);
+  const lastRunSources = sourceReferencesFromResult(lastRunResult);
+  const lastRunErrors = errorsFromResult(lastRunResult);
 
   async function load(silent = false) {
     if (!silent) setLoading(true);
@@ -559,6 +675,7 @@ export function WorldCupDataSources() {
                     <span key={item} className="font-mono">{item}</span>
                   ))}
                 </div>
+                <SourceReferenceList references={row.references} className="mt-2" />
               </div>
               <div className="flex items-center gap-2 md:justify-end">
                 <button
@@ -598,7 +715,9 @@ export function WorldCupDataSources() {
             </span>
           </div>
           <RunPills result={completed.result as Record<string, unknown>} />
+          <SourceReferenceList references={actionSources} title="Sources" />
           <CallBudget budget={completed.result.call_budget} />
+          <ErrorList errors={actionErrors} />
           <FetchList fetches={actionFetches} />
           <SkippedList skipped={actionSkipped} />
         </div>
@@ -625,7 +744,9 @@ export function WorldCupDataSources() {
             </div>
           )}
           <RunPills result={lastRunResult} />
+          <SourceReferenceList references={lastRunSources} title="Sources" />
           <CallBudget budget={lastBudget} />
+          <ErrorList errors={lastRunErrors} />
           <FetchList fetches={lastFetches} />
           <SkippedList skipped={lastSkipped} />
         </div>

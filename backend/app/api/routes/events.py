@@ -38,6 +38,7 @@ from app.services.sports_fact_service import (
     sports_fact_status,
 )
 from app.services.sports_resolution_service import resolve_world_cup_events
+from app.services.world_cup_data_source_service import import_world_cup_data
 from app.services.trend_analysis_service import (
     analyze_edge_trajectory,
     analyze_trend,
@@ -210,6 +211,22 @@ async def import_world_cup_facts(
             replace=replace,
             default_tournament=WORLD_CUP_TOURNAMENT,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if result["imported"] == 0 and result["error_count"] > 0:
+        raise HTTPException(status_code=422, detail=result["errors"])
+    return result
+
+
+@router.post("/sports/world-cup/data/import", response_model=FlexibleResponse)
+async def import_world_cup_data_source(
+    payload: Any = Body(...),
+    replace: bool = Query(default=False),
+    _auth: None = Depends(require_write_key),
+):
+    """Convert trusted World Cup data-source payloads into facts and import them."""
+    try:
+        result = import_world_cup_data(payload, replace=replace)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if result["imported"] == 0 and result["error_count"] > 0:

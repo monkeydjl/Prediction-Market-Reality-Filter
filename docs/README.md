@@ -44,3 +44,4 @@
 - `/docs` — OpenAPI (Swagger) auto-generated
 - `README.md` — Project overview and quick start
 - [World Cup facts sample](examples/world-cup-facts.sample.json) — Example import payload for the sports facts API
+- [World Cup data sample](examples/world-cup-data.sample.json) — Example match-data payload for trusted data-source import

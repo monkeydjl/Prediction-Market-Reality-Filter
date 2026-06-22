@@ -39,6 +39,14 @@ Header: X-API-Key: <API_WRITE_KEY>
 Body: {"facts": [...]}
 ```
 
+Import trusted match-data snapshots:
+
+```text
+POST /api/events/sports/world-cup/data/import?replace=false
+Header: X-API-Key: <API_WRITE_KEY>
+Body: {"matches": [...], "qualifications": [...], "player_awards": [...]}
+```
+
 Preview deterministic resolution:
 
 ```text
@@ -57,11 +65,13 @@ Header: X-API-Key: <API_WRITE_KEY>
 
 1. Put structured facts in a JSON file using the sample at
    `docs/examples/world-cup-facts.sample.json`.
-2. Import with `replace=true` when the file is the current full fact snapshot.
+2. Or put trusted feed-shaped match data in a JSON file using the sample at
+   `docs/examples/world-cup-data.sample.json`; PMRF converts it into facts.
+3. Import with `replace=true` when the file is the current full fact snapshot.
    Use `replace=false` for incremental upserts.
-3. Call the facts list endpoint and inspect the normalized records.
-4. Run `resolve?dry_run=true` and review every `would_resolve` row.
-5. Run `resolve?dry_run=false` only when the dry-run output is correct.
+4. Call the facts list endpoint and inspect the normalized records.
+5. Run `resolve?dry_run=true` and review every `would_resolve` row.
+6. Run `resolve?dry_run=false` only when the dry-run output is correct.
 
 ## PowerShell Example
 
@@ -79,6 +89,18 @@ Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:8000/api/events/sports/world-cup/resolve?dry_run=true" `
   -Headers @{ "X-API-Key" = $key }
+```
+
+For a trusted match-data snapshot, switch the import URL and body file:
+
+```powershell
+$body = Get-Content -Raw docs\examples\world-cup-data.sample.json
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/import?replace=false" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
 ```
 
 Do not put real keys in committed files or docs.
@@ -163,3 +185,15 @@ Golden Boot / scorer threshold:
   facts.
 - Use `tournament_status` with `tournament_complete=true` only after the whole
   tournament is complete.
+
+## Trusted Data Import Shape
+
+`data/import` accepts a compact source-normalized snapshot and converts it to
+the same facts used by analysis and auto-resolution:
+
+- `matches`: creates `match_result` facts with score, red/yellow cards,
+  `extra_time`, and `penalty_shootout`.
+- `qualifications`: creates `qualification` facts for team progression.
+- `player_awards`: creates `player_award` facts for Golden Boot / top scorer
+  events.
+- `tournament_status`: creates one `tournament_status` fact.

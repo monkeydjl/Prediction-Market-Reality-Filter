@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,7 +8,10 @@ from app.core.config import settings
 from app.services import sports_resolution_service as resolver
 from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT, load_sports_facts
 from app.services.world_cup_data_source_service import (
+    import_world_cup_data_file,
+    load_world_cup_data_file,
     import_world_cup_data,
+    world_cup_data_file_to_facts,
     world_cup_data_to_facts,
 )
 from tests.test_sports_resolution_service import _sports_record
@@ -131,6 +135,42 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
         decision = resolver.evaluate_world_cup_resolution(record, facts)
         self.assertEqual(result["converted_fact_count"], 1)
         self.assertEqual(decision["actual_outcome"], 100.0)
+
+    def test_configured_data_file_can_be_previewed_and_imported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            data_path = base / "world_cup_data.json"
+            fact_path = base / "sports_facts.json"
+            data_path.write_text(json.dumps({
+                "source": "official_file",
+                "matches": [{
+                    "match_id": "round16-1",
+                    "stage": "round_of_16",
+                    "home_team": "Team A",
+                    "away_team": "Team B",
+                    "status": "finished",
+                    "penalty_shootout": True,
+                }],
+            }), encoding="utf-8")
+
+            with patch.object(settings, "WORLD_CUP_DATA_FILE", str(data_path)), \
+                    patch.object(settings, "SPORTS_FACT_FILE", str(fact_path)):
+                payload = load_world_cup_data_file()
+                preview = world_cup_data_file_to_facts()
+                result = import_world_cup_data_file(replace=True)
+                stored = load_sports_facts(tournament=WORLD_CUP_TOURNAMENT)
+
+        self.assertEqual(payload["source"], "official_file")
+        self.assertEqual(preview[0]["match_id"], "round16-1")
+        self.assertEqual(result["converted_fact_count"], 1)
+        self.assertEqual(stored[0]["match_id"], "round16-1")
+
+    def test_configured_data_file_missing_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = str(Path(tmp) / "missing.json")
+            with patch.object(settings, "WORLD_CUP_DATA_FILE", missing):
+                with self.assertRaises(FileNotFoundError):
+                    load_world_cup_data_file()
 
 
 if __name__ == "__main__":

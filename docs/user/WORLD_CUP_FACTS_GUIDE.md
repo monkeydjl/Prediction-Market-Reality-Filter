@@ -51,6 +51,16 @@ Header: X-API-Key: <API_WRITE_KEY>
 Body: {"matches": [...], "qualifications": [...], "player_awards": [...]}
 ```
 
+Import the configured trusted data-source file:
+
+```text
+POST /api/events/sports/world-cup/data/source/preview
+Header: X-API-Key: <API_WRITE_KEY>
+
+POST /api/events/sports/world-cup/data/source/import?replace=false
+Header: X-API-Key: <API_WRITE_KEY>
+```
+
 Preview deterministic resolution:
 
 ```text
@@ -74,6 +84,7 @@ Header: X-API-Key: <API_WRITE_KEY>
    If your source exports CSV, use the JSON-wrapped CSV sample at
    `docs/examples/world-cup-data-csv.sample.json`.
 3. For trusted match data, call `data/preview` and inspect the generated facts.
+   If the data lives in `WORLD_CUP_DATA_FILE`, call `data/source/preview`.
 4. Import with `replace=true` when the file is the current full fact snapshot.
    Use `replace=false` for incremental upserts.
 5. Call the facts list endpoint and inspect the normalized records.
@@ -134,6 +145,21 @@ Invoke-RestMethod `
   -Headers @{ "X-API-Key" = $key } `
   -ContentType "application/json" `
   -Body $body
+```
+
+For a configured source file, set `WORLD_CUP_DATA_FILE` and call the source
+endpoints:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/source/preview" `
+  -Headers @{ "X-API-Key" = $key }
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/source/import?replace=false" `
+  -Headers @{ "X-API-Key" = $key }
 ```
 
 Do not put real keys in committed files or docs.

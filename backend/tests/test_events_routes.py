@@ -13,6 +13,7 @@ Route + dashboard tests for the Event Intelligence surface (Phase 4 items 1-3).
 """
 
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -231,6 +232,75 @@ class WorldCupFactRouteTests(unittest.TestCase):
                 },
             )
         self.assertEqual(resp.status_code, 401)
+
+    def test_world_cup_configured_data_preview_does_not_write_facts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            data_path = base / "world_cup_data.json"
+            facts_path = base / "facts.json"
+            data_path.write_text(json.dumps({
+                "source": "official_file",
+                "matches": [{
+                    "match_id": "round16-1",
+                    "home_team": "Team A",
+                    "away_team": "Team B",
+                    "status": "finished",
+                }],
+            }), encoding="utf-8")
+            with patch.object(settings, "WORLD_CUP_DATA_FILE", str(data_path)), \
+                    patch.object(settings, "SPORTS_FACT_FILE", str(facts_path)), \
+                    patch.object(settings, "API_WRITE_KEY", "secret"):
+                client = _events_client()
+                preview_resp = client.post(
+                    "/events/sports/world-cup/data/source/preview",
+                    headers=AUTH_HEADERS,
+                )
+                facts_resp = client.get("/events/sports/world-cup/facts")
+
+        self.assertEqual(preview_resp.status_code, 200)
+        self.assertEqual(preview_resp.json()["converted_fact_count"], 1)
+        self.assertEqual(preview_resp.json()["facts"][0]["match_id"], "round16-1")
+        self.assertEqual(facts_resp.json()["count"], 0)
+
+    def test_world_cup_configured_data_import_writes_facts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            data_path = base / "world_cup_data.json"
+            facts_path = base / "facts.json"
+            data_path.write_text(json.dumps({
+                "source": "official_file",
+                "matches": [{
+                    "match_id": "round16-1",
+                    "home_team": "Team A",
+                    "away_team": "Team B",
+                    "status": "finished",
+                }],
+            }), encoding="utf-8")
+            with patch.object(settings, "WORLD_CUP_DATA_FILE", str(data_path)), \
+                    patch.object(settings, "SPORTS_FACT_FILE", str(facts_path)), \
+                    patch.object(settings, "API_WRITE_KEY", "secret"):
+                client = _events_client()
+                import_resp = client.post(
+                    "/events/sports/world-cup/data/source/import?replace=true",
+                    headers=AUTH_HEADERS,
+                )
+                facts_resp = client.get("/events/sports/world-cup/facts?kind=match_result")
+
+        self.assertEqual(import_resp.status_code, 200)
+        self.assertEqual(import_resp.json()["converted_fact_count"], 1)
+        self.assertEqual(facts_resp.json()["count"], 1)
+        self.assertEqual(facts_resp.json()["facts"][0]["match_id"], "round16-1")
+
+    def test_world_cup_configured_data_source_missing_returns_404(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(settings, "WORLD_CUP_DATA_FILE", str(Path(tmp) / "missing.json")), \
+                patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            resp = client.post(
+                "/events/sports/world-cup/data/source/preview",
+                headers=AUTH_HEADERS,
+            )
+        self.assertEqual(resp.status_code, 404)
 
     def test_world_cup_resolve_requires_write_key(self):
         with patch.object(settings, "API_WRITE_KEY", "secret"):

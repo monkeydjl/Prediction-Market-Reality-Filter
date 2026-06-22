@@ -59,6 +59,7 @@ npm run build
 - `CROSS_VALIDATION_MODEL` / `OPEN_WEB_EXTRACTION_MODEL`：可选能力的模型，留空则关闭。
 - `WORLD_CUP_SOURCE_ENABLED`：启用 2026 世界杯策划事件源，丰富发现流的体育候选事件。
 - `SPORTS_FACT_FILE`：结构化世界杯事实 JSON 文件，用于 sports signals 和自动结算。
+- `WORLD_CUP_DATA_FILE`：可信世界杯数据源快照 JSON 文件，可通过 source preview/import 转换为 facts。
 
 ## 验证
 

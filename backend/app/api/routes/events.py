@@ -3,6 +3,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Path, Query
 
 from app.api.security import is_write_key_valid, require_write_key
+from app.core.config import settings
 from app.memory.event_market_link_store import list_pending, set_verified
 from app.memory.prediction_store import (
     calibration_summary,
@@ -40,6 +41,8 @@ from app.services.sports_fact_service import (
 from app.services.sports_resolution_service import resolve_world_cup_events
 from app.services.world_cup_data_source_service import (
     import_world_cup_data,
+    import_world_cup_data_file,
+    world_cup_data_file_to_facts,
     world_cup_data_to_facts,
 )
 from app.services.trend_analysis_service import (
@@ -248,6 +251,38 @@ async def preview_world_cup_data_source(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"converted_fact_count": len(facts), "facts": facts}
+
+
+@router.post("/sports/world-cup/data/source/preview", response_model=FlexibleResponse)
+async def preview_configured_world_cup_data_source(
+    _auth: None = Depends(require_write_key),
+):
+    """Preview facts from the configured WORLD_CUP_DATA_FILE without writing."""
+    try:
+        facts = world_cup_data_file_to_facts()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"World Cup data file not found: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "source_file": settings.WORLD_CUP_DATA_FILE,
+        "converted_fact_count": len(facts),
+        "facts": facts,
+    }
+
+
+@router.post("/sports/world-cup/data/source/import", response_model=FlexibleResponse)
+async def import_configured_world_cup_data_source(
+    replace: bool = Query(default=False),
+    _auth: None = Depends(require_write_key),
+):
+    """Import facts from the configured WORLD_CUP_DATA_FILE."""
+    try:
+        return import_world_cup_data_file(replace=replace)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"World Cup data file not found: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/sports/world-cup/resolve", response_model=FlexibleResponse)

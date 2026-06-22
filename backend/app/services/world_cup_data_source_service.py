@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import csv
+import os
 from io import StringIO
 from typing import Any
 
+from app.core.config import settings
 from app.services.sports_fact_service import (
     WORLD_CUP_TOURNAMENT,
     import_sports_facts,
 )
+from app.utils.file_store import read_json_strict
 
 
 def world_cup_data_to_facts(payload: Any) -> list[dict[str, Any]]:
@@ -52,6 +55,37 @@ def import_world_cup_data(payload: Any, *, replace: bool = False) -> dict[str, A
         default_tournament=WORLD_CUP_TOURNAMENT,
     )
     result["converted_fact_count"] = len(facts)
+    return result
+
+
+def load_world_cup_data_file(path: str | None = None) -> dict[str, Any]:
+    """Load the configured trusted World Cup data-source snapshot."""
+
+    source_path = os.path.abspath(path or settings.WORLD_CUP_DATA_FILE)
+    if not os.path.exists(source_path):
+        raise FileNotFoundError(source_path)
+    payload = read_json_strict(source_path, {})
+    if not isinstance(payload, dict):
+        raise ValueError("World Cup data file must contain a JSON object")
+    return payload
+
+
+def world_cup_data_file_to_facts(path: str | None = None) -> list[dict[str, Any]]:
+    """Convert the configured data-source snapshot into facts without writing."""
+
+    return world_cup_data_to_facts(load_world_cup_data_file(path))
+
+
+def import_world_cup_data_file(
+    *,
+    replace: bool = False,
+    path: str | None = None,
+) -> dict[str, Any]:
+    """Import facts from the configured trusted World Cup data-source file."""
+
+    source_path = os.path.abspath(path or settings.WORLD_CUP_DATA_FILE)
+    result = import_world_cup_data(load_world_cup_data_file(source_path), replace=replace)
+    result["source_file"] = source_path
     return result
 
 

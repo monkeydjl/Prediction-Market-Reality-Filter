@@ -92,6 +92,12 @@ class Settings:
             os.path.dirname(__file__), "..", "..", "sports_facts.json"
         ),
     )
+    WORLD_CUP_DATA_FILE: str = os.getenv(
+        "WORLD_CUP_DATA_FILE",
+        os.path.join(
+            os.path.dirname(__file__), "..", "..", "world_cup_data.json"
+        ),
+    )
     # V2 loop store (SQLite). Holds the relational tables the feedback loop
     # depends on - starting with event_market_links (M0). Single file, no
     # server; sits alongside the JSON event_store rather than replacing it.

@@ -51,6 +51,23 @@ Header: X-API-Key: <API_WRITE_KEY>
 Body: {"matches": [...], "qualifications": [...], "player_awards": [...], "player_statuses": [...]}
 ```
 
+Import multiple data-source payloads as one bundle:
+
+```text
+POST /api/events/sports/world-cup/data/bundle/preview
+Header: X-API-Key: <API_WRITE_KEY>
+Body: {"sources": [{"kind": "matches", "payload": {...}}, {"kind": "standings", "payload": {...}}]}
+
+POST /api/events/sports/world-cup/data/bundle/import?replace=false
+Header: X-API-Key: <API_WRITE_KEY>
+Body: {"sources": [{"kind": "matches", "payload": {...}}, {"kind": "player_status", "payload": {...}}]}
+```
+
+The bundle endpoint is an operator convenience: it runs the same conservative
+adapters used by the individual endpoints and imports the combined facts in one
+write. Supported `kind` values are `data`, `matches`, `standings`,
+`player_awards`, and `player_status`.
+
 Import raw fixture/result exports through the match-source adapter:
 
 ```text
@@ -146,6 +163,9 @@ Header: X-API-Key: <API_WRITE_KEY>
    `docs/examples/world-cup-data.sample.json`; PMRF converts it into facts.
    If your source exports CSV, use the JSON-wrapped CSV sample at
    `docs/examples/world-cup-data-csv.sample.json`.
+   If you want to preview or import several raw exports in one request, use
+   `docs/examples/world-cup-source-bundle.sample.json` with the
+   `data/bundle/*` endpoints.
    If your source exports raw fixture/result records, use
    `docs/examples/world-cup-match-source.sample.json` with the `matches/*`
    endpoints; PMRF normalizes it first, then converts it into facts.
@@ -159,6 +179,7 @@ Header: X-API-Key: <API_WRITE_KEY>
    records, use `docs/examples/world-cup-player-status-source.sample.json` with
    the `player-status/*` endpoints.
 3. For trusted match data, call `data/preview` and inspect the generated facts.
+   For multi-source bundles, call `data/bundle/preview`.
    For raw fixture/result exports, call `matches/preview`; for raw standings,
    call `standings/preview`; for raw top-scorers/player-awards exports, call
    `player-awards/preview`; for raw player status exports, call
@@ -221,6 +242,25 @@ Invoke-RestMethod `
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:8000/api/events/sports/world-cup/data/import?replace=false" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+For a multi-source bundle, use the bundle adapter:
+
+```powershell
+$body = Get-Content -Raw docs\examples\world-cup-source-bundle.sample.json
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/bundle/preview" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/bundle/import?replace=false" `
   -Headers @{ "X-API-Key" = $key } `
   -ContentType "application/json" `
   -Body $body

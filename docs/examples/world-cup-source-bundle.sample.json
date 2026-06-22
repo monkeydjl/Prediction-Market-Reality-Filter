@@ -1,0 +1,120 @@
+{
+  "sources": [
+    {
+      "kind": "matches",
+      "payload": {
+        "source": "api_football",
+        "source_url": "https://example.com/fixtures",
+        "observed_at": "2026-07-20T00:00:00Z",
+        "response": [
+          {
+            "fixture": {
+              "id": 1001,
+              "status": {
+                "short": "PEN"
+              }
+            },
+            "league": {
+              "round": "Round of 16"
+            },
+            "teams": {
+              "home": {
+                "name": "Team A",
+                "winner": true
+              },
+              "away": {
+                "name": "Team B",
+                "winner": false
+              }
+            },
+            "goals": {
+              "home": 1,
+              "away": 1
+            },
+            "score": {
+              "penalty": {
+                "home": 5,
+                "away": 4
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "kind": "standings",
+      "payload": {
+        "source": "api_football",
+        "source_url": "https://example.com/standings",
+        "observed_at": "2026-06-28T00:00:00Z",
+        "response": [
+          {
+            "league": {
+              "standings": [
+                [
+                  {
+                    "team": {
+                      "name": "Mexico"
+                    },
+                    "group": "Group A",
+                    "description": "Qualified for knockout stage"
+                  }
+                ]
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "kind": "player_awards",
+      "payload": {
+        "source": "api_football",
+        "source_url": "https://example.com/topscorers",
+        "observed_at": "2026-07-20T00:00:00Z",
+        "award": "golden_boot",
+        "response": [
+          {
+            "rank": 1,
+            "player": {
+              "name": "Player A"
+            },
+            "statistics": [
+              {
+                "team": {
+                  "name": "Team A"
+                },
+                "goals": {
+                  "total": 7
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "kind": "player_status",
+      "payload": {
+        "source": "official_injury_feed",
+        "source_url": "https://example.com/injuries",
+        "observed_at": "2026-06-25T00:00:00Z",
+        "response": [
+          {
+            "player": {
+              "name": "Player B"
+            },
+            "team": {
+              "name": "Brazil"
+            },
+            "status": "out",
+            "injury": {
+              "type": "hamstring"
+            },
+            "severity": "high"
+          }
+        ]
+      }
+    }
+  ]
+}

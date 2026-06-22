@@ -56,6 +56,10 @@ from app.services.world_cup_player_status_source import (
     import_world_cup_player_status_source,
     preview_world_cup_player_status_source,
 )
+from app.services.world_cup_source_bundle import (
+    import_world_cup_source_bundle,
+    preview_world_cup_source_bundle,
+)
 from app.services.world_cup_standings_source import (
     import_world_cup_standings_source,
     preview_world_cup_standings_source,
@@ -266,6 +270,31 @@ async def preview_world_cup_data_source(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"converted_fact_count": len(facts), "facts": facts}
+
+
+@router.post("/sports/world-cup/data/bundle/preview", response_model=FlexibleResponse)
+async def preview_world_cup_source_bundle_route(
+    payload: Any = Body(...),
+    _auth: None = Depends(require_write_key),
+):
+    """Preview facts from a bundle of World Cup data-source payloads."""
+    try:
+        return preview_world_cup_source_bundle(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sports/world-cup/data/bundle/import", response_model=FlexibleResponse)
+async def import_world_cup_source_bundle_route(
+    payload: Any = Body(...),
+    replace: bool = Query(default=False),
+    _auth: None = Depends(require_write_key),
+):
+    """Import facts from a bundle of World Cup data-source payloads."""
+    try:
+        return import_world_cup_source_bundle(payload, replace=replace)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/sports/world-cup/data/source/preview", response_model=FlexibleResponse)

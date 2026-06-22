@@ -82,6 +82,28 @@ class SportsFactServiceTests(unittest.TestCase):
         self.assertEqual(status["by_kind"]["discipline"], 1)
         self.assertEqual(status["by_kind"]["qualification"], 1)
 
+    def test_player_award_facts_keep_goal_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "sports_facts.json")
+            with patch.object(settings, "SPORTS_FACT_FILE", path):
+                result = facts.import_sports_facts([{
+                    "kind": "player_award",
+                    "award": "Golden Boot",
+                    "player": "Player A",
+                    "goals": 7,
+                    "rank": 1,
+                    "status": "official",
+                }])
+                stored = facts.load_sports_facts(
+                    tournament=facts.WORLD_CUP_TOURNAMENT,
+                    kind="player_award",
+                )
+
+        self.assertEqual(result["imported"], 1)
+        self.assertEqual(stored[0]["award"], "golden boot")
+        self.assertEqual(stored[0]["goals"], 7.0)
+        self.assertEqual(stored[0]["rank"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -104,6 +104,67 @@ class SportsResolutionRuleTests(unittest.TestCase):
         }])
         self.assertEqual(decision["actual_outcome"], 0.0)
 
+    def test_top_scorer_goal_threshold_resolves_yes(self):
+        record = _sports_record(
+            "golden-boot",
+            "Will the top scorer at the 2026 FIFA World Cup finish with at least 7 goals?",
+            "world-cup-2026:top-scorer-seven-goals",
+            "player_awards",
+            [WORLD_CUP_TOURNAMENT, "top scorer", "Golden Boot"],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [{
+            "fact_id": "golden-boot",
+            "kind": "player_award",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "award": "golden_boot",
+            "player": "Player A",
+            "goals": 7,
+            "status": "current",
+            "confidence": 0.9,
+        }])
+        self.assertEqual(decision["actual_outcome"], 100.0)
+        self.assertEqual(decision["confidence"], 0.9)
+
+    def test_final_top_scorer_below_threshold_resolves_no(self):
+        record = _sports_record(
+            "golden-boot",
+            "Will the top scorer at the 2026 FIFA World Cup finish with at least 7 goals?",
+            "world-cup-2026:top-scorer-seven-goals",
+            "player_awards",
+            [WORLD_CUP_TOURNAMENT, "top scorer", "Golden Boot"],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [{
+            "fact_id": "golden-boot",
+            "kind": "player_award",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "award": "golden_boot",
+            "player": "Player A",
+            "goals": 6,
+            "status": "official",
+            "confidence": 1.0,
+        }])
+        self.assertEqual(decision["actual_outcome"], 0.0)
+
+    def test_top_scorer_below_threshold_stays_pending_before_final(self):
+        record = _sports_record(
+            "golden-boot",
+            "Will the top scorer at the 2026 FIFA World Cup finish with at least 7 goals?",
+            "world-cup-2026:top-scorer-seven-goals",
+            "player_awards",
+            [WORLD_CUP_TOURNAMENT, "top scorer", "Golden Boot"],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [{
+            "fact_id": "golden-boot",
+            "kind": "player_award",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "award": "golden_boot",
+            "player": "Player A",
+            "goals": 6,
+            "status": "current",
+            "confidence": 1.0,
+        }])
+        self.assertIsNone(decision)
+
 
 class SportsResolutionWorkflowTests(unittest.TestCase):
     def test_dry_run_reports_without_writing_outcome(self):

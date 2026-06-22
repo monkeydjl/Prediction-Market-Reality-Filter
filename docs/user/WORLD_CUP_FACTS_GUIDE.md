@@ -116,6 +116,7 @@ qualification
 match_state
 match_result
 lineup
+player_award
 tournament_status
 ```
 
@@ -144,7 +145,12 @@ Final extra time:
 - YES when a final `match_result` has `extra_time=true`.
 - NO when a final `match_result` is finished and has `extra_time=false`.
 
-Gold Boot / scorer-threshold events are not auto-resolved yet.
+Golden Boot / scorer threshold:
+
+- YES when a top-scorer / Golden Boot `player_award` fact has `goals` at or
+  above the threshold in the event title.
+- NO when final top-scorer facts or a complete tournament show the top scorer
+  finished below the threshold.
 
 ## Field Notes
 

@@ -98,6 +98,40 @@ class SportsSignalServiceTests(unittest.TestCase):
         self.assertEqual(qualification["direction"], "supports_yes")
         self.assertTrue(qualification["already_qualified"])
 
+    def test_player_award_fact_becomes_goal_threshold_signal(self):
+        source = {
+            "type": "sports_event",
+            "category": "player_awards",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "source_id": "world-cup-2026:top-scorer-seven-goals",
+            "entities": [WORLD_CUP_TOURNAMENT, "top scorer", "Golden Boot"],
+        }
+        facts = [{
+            "fact_id": "golden-boot",
+            "kind": "player_award",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "award": "golden_boot",
+            "player": "Player A",
+            "goals": 7,
+            "rank": 1,
+            "status": "current",
+            "source": "manual",
+            "confidence": 0.9,
+        }]
+
+        bundle = signals.build_sports_signals(
+            "Will the top scorer at the 2026 FIFA World Cup finish with at least 7 goals?",
+            source,
+            facts,
+        )
+        context = signals.render_sports_context(bundle)
+
+        award = bundle["signals"]["player_award_signal"]
+        self.assertEqual(award["direction"], "supports_yes")
+        self.assertEqual(award["goal_threshold"], 7)
+        self.assertEqual(award["top_scorer_goals"], 7)
+        self.assertIn("goals=7", context)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -43,6 +43,10 @@ def build_sports_signals(
     if match_format:
         signals["match_format_signal"] = match_format
 
+    player_award = _player_award_signal(event_question, relevant)
+    if player_award:
+        signals["player_award_signal"] = player_award
+
     return {
         "tournament": tournament,
         "fact_count": len(relevant),
@@ -76,6 +80,8 @@ def render_sports_context(bundle: dict[str, Any]) -> str:
             f"kind={fact.get('kind', '')} "
             f"team={fact.get('team', '')} "
             f"player={fact.get('player', '')} "
+            f"award={fact.get('award', '')} "
+            f"goals={fact.get('goals', '')} "
             f"status={fact.get('status', '')} "
             f"source={fact.get('source', '')} "
             f"confidence={fact.get('confidence', '')}"
@@ -104,7 +110,7 @@ def _is_relevant_fact(
         return True
     if category == "team_progression":
         return _fact_matches_source_entities(fact, source)
-    if category == "player_awards" and kind in {"injury", "availability", "lineup"}:
+    if category == "player_awards" and kind in {"injury", "availability", "lineup", "player_award"}:
         return True
 
     text = _norm(" ".join([
@@ -237,23 +243,62 @@ def _match_format_signal(
     }
 
 
+def _player_award_signal(
+    event_question: str,
+    facts: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    award_facts = [
+        fact for fact in facts
+        if fact.get("kind") == "player_award" and _number(fact.get("goals")) is not None
+    ]
+    if not award_facts:
+        return None
+    threshold = _parse_goal_threshold(event_question)
+    top_goals = max(_number(fact.get("goals")) or 0.0 for fact in award_facts)
+    progress = round(top_goals / threshold, 3) if threshold else None
+    final = any(
+        str(fact.get("status") or "").lower()
+        in {"final", "official", "confirmed", "complete", "completed", "finished"}
+        for fact in award_facts
+    )
+    direction = "neutral"
+    if threshold and top_goals >= threshold:
+        direction = "supports_yes"
+    elif threshold and final:
+        direction = "supports_no"
+    return {
+        "level": "high" if direction != "neutral" else "medium",
+        "direction": direction,
+        "summary": f"top_scorer_goals={top_goals:g}; final={final}.",
+        "top_scorer_goals": top_goals,
+        "goal_threshold": threshold,
+        "threshold_progress": progress,
+        "final": final,
+        "facts": [fact["fact_id"] for fact in award_facts],
+    }
+
+
 def _fact_summary(fact: dict[str, Any]) -> dict[str, Any]:
     keep = (
         "fact_id",
         "kind",
         "team",
         "player",
+        "award",
         "match_id",
         "status",
         "severity",
         "source",
         "confidence",
         "observed_at",
+        "goals",
+        "rank",
         "red_cards",
         "extra_time",
         "penalty_shootout",
         "already_qualified",
         "already_eliminated",
+        "tournament_complete",
     )
     return {key: fact[key] for key in keep if key in fact}
 
@@ -287,6 +332,22 @@ def _parse_red_card_threshold(event_question: str) -> float | None:
     if not match:
         return None
     return float(match.group(1))
+
+
+def _parse_goal_threshold(event_question: str) -> float | None:
+    question = _norm(event_question)
+    match = re.search(r"at least\s+(\d+(?:\.\d+)?)\s+goals?", question)
+    if not match:
+        return None
+    return float(match.group(1))
+
+
+def _number(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number
 
 
 def _norm(value: Any) -> str:

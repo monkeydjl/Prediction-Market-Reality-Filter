@@ -77,6 +77,19 @@
       "observed_at": "2026-06-22T00:00:00Z"
     },
     {
+      "fact_id": "wc2026:award:golden-boot",
+      "kind": "player_award",
+      "tournament": "2026 FIFA World Cup",
+      "award": "golden_boot",
+      "player": "Player C",
+      "goals": 7,
+      "rank": 1,
+      "status": "official",
+      "source": "manual",
+      "confidence": 1.0,
+      "observed_at": "2026-06-22T00:00:00Z"
+    },
+    {
       "fact_id": "wc2026:tournament:complete",
       "kind": "tournament_status",
       "tournament": "2026 FIFA World Cup",

@@ -85,6 +85,8 @@ def evaluate_world_cup_resolution(
         return _red_card_resolution(record, facts)
     if category == "match_format":
         return _match_format_resolution(record, facts)
+    if category == "player_awards":
+        return _player_award_resolution(record, facts)
     return None
 
 
@@ -189,6 +191,42 @@ def _match_format_resolution(
     return None
 
 
+def _player_award_resolution(
+    record: dict[str, Any],
+    facts: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    threshold = _parse_threshold(record.get("event_title", ""), "goals")
+    if threshold is None:
+        return None
+    relevant = [
+        fact for fact in facts
+        if fact.get("kind") in {"player_award", "tournament_status"}
+    ]
+    scorer_facts = [
+        fact for fact in relevant
+        if fact.get("kind") == "player_award"
+        and _is_top_scorer_fact(fact)
+        and _number(fact.get("goals")) is not None
+    ]
+    if not scorer_facts:
+        return None
+
+    top_goals = max(_number(fact.get("goals")) or 0.0 for fact in scorer_facts)
+    if top_goals >= threshold:
+        return _decision(
+            100.0,
+            f"Top-scorer facts record {top_goals:g} goals, meeting the {threshold:g} threshold.",
+            scorer_facts,
+        )
+    if any(_is_final_award_fact(fact) for fact in scorer_facts) or _tournament_complete(relevant):
+        return _decision(
+            0.0,
+            f"Final top-scorer facts record {top_goals:g} goals, below the {threshold:g} threshold.",
+            relevant,
+        )
+    return None
+
+
 def _required_progression_stage(source: dict[str, Any], title: str) -> str:
     source_id = str(source.get("source_id") or "")
     text = _norm(f"{source_id} {title}")
@@ -248,6 +286,37 @@ def _tournament_complete(facts: list[dict[str, Any]]) -> bool:
 
 def _is_finished(fact: dict[str, Any]) -> bool:
     return str(fact.get("status") or "").lower() in {"finished", "complete", "completed"}
+
+
+def _is_top_scorer_fact(fact: dict[str, Any]) -> bool:
+    text = _norm(f"{fact.get('award', '')} {fact.get('status', '')}")
+    return (
+        "top scorer" in text
+        or "top_scorer" in text
+        or "golden boot" in text
+        or "golden_boot" in text
+        or "scoring leader" in text
+        or "scoring_leader" in text
+    )
+
+
+def _is_final_award_fact(fact: dict[str, Any]) -> bool:
+    return str(fact.get("status") or "").lower() in {
+        "final",
+        "official",
+        "confirmed",
+        "complete",
+        "completed",
+        "finished",
+    }
+
+
+def _number(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number
 
 
 def _decision(

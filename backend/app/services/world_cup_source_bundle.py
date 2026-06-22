@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit, urlunsplit
+from urllib.request import Request, urlopen
 
 from app.core.config import settings
 from app.services.sports_fact_service import (
@@ -54,6 +58,61 @@ def import_world_cup_source_bundle(
     result["source_count"] = len(sources)
     result["converted_fact_count"] = len(facts)
     result["sources"] = sources
+    return result
+
+
+def fetch_world_cup_source_bundle_url(url: str | None = None) -> dict[str, Any]:
+    """Fetch the configured remote multi-source World Cup bundle JSON."""
+
+    source_url = _configured_source_bundle_url(url)
+    request = Request(source_url, headers=_bundle_url_headers())
+    try:
+        with urlopen(
+            request,
+            timeout=settings.WORLD_CUP_SOURCE_BUNDLE_TIMEOUT_SECONDS,
+        ) as response:
+            body = response.read(settings.WORLD_CUP_SOURCE_BUNDLE_MAX_BYTES + 1)
+    except HTTPError as exc:
+        raise ValueError(f"World Cup source bundle URL returned HTTP {exc.code}") from exc
+    except (TimeoutError, URLError) as exc:
+        raise ValueError("World Cup source bundle URL fetch failed") from exc
+
+    if len(body) > settings.WORLD_CUP_SOURCE_BUNDLE_MAX_BYTES:
+        raise ValueError("World Cup source bundle URL response too large")
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("World Cup source bundle URL did not return valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("World Cup source bundle URL must return a JSON object")
+    return payload
+
+
+def preview_world_cup_source_bundle_url(url: str | None = None) -> dict[str, Any]:
+    """Preview facts from the configured remote multi-source bundle URL."""
+
+    source_url = _configured_source_bundle_url(url)
+    payload = fetch_world_cup_source_bundle_url(source_url)
+    metadata = validate_world_cup_source_bundle_metadata(payload)
+    result = preview_world_cup_source_bundle(payload)
+    result["source_url"] = _display_url(source_url)
+    result["source_metadata"] = metadata
+    return result
+
+
+def import_world_cup_source_bundle_url(
+    *,
+    replace: bool = False,
+    url: str | None = None,
+) -> dict[str, Any]:
+    """Import facts from the configured remote multi-source bundle URL."""
+
+    source_url = _configured_source_bundle_url(url)
+    payload = fetch_world_cup_source_bundle_url(source_url)
+    metadata = validate_world_cup_source_bundle_metadata(payload)
+    result = import_world_cup_source_bundle(payload, replace=replace)
+    result["source_url"] = _display_url(source_url)
+    result["source_metadata"] = metadata
     return result
 
 
@@ -210,6 +269,30 @@ def _source_to_data(kind: str, payload: Any) -> dict[str, Any]:
     if kind == "player_awards":
         return world_cup_player_awards_source_to_data(payload)
     return world_cup_player_status_source_to_data(payload)
+
+
+def _configured_source_bundle_url(url: str | None = None) -> str:
+    source_url = _clean(url or settings.WORLD_CUP_SOURCE_BUNDLE_URL)
+    if not source_url:
+        raise ValueError("WORLD_CUP_SOURCE_BUNDLE_URL is not configured")
+    return source_url
+
+
+def _bundle_url_headers() -> dict[str, str]:
+    headers = {"Accept": "application/json"}
+    user_agent = _clean(settings.WORLD_CUP_SOURCE_BUNDLE_USER_AGENT)
+    if user_agent:
+        headers["User-Agent"] = user_agent
+    auth_header = _clean(settings.WORLD_CUP_SOURCE_BUNDLE_AUTH_HEADER)
+    auth_value = _clean(settings.WORLD_CUP_SOURCE_BUNDLE_AUTH_VALUE)
+    if auth_header and auth_value:
+        headers[auth_header] = auth_value
+    return headers
+
+
+def _display_url(url: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
 
 def _with_entry_metadata(payload: Any, entry: dict[str, Any], kind: str) -> Any:

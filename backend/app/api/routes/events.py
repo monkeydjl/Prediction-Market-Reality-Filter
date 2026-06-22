@@ -59,8 +59,10 @@ from app.services.world_cup_player_status_source import (
 from app.services.world_cup_source_bundle import (
     import_world_cup_source_bundle,
     import_world_cup_source_bundle_file,
+    import_world_cup_source_bundle_url,
     preview_world_cup_source_bundle,
     preview_world_cup_source_bundle_file,
+    preview_world_cup_source_bundle_url,
 )
 from app.services.world_cup_standings_source import (
     import_world_cup_standings_source,
@@ -322,6 +324,29 @@ async def import_configured_world_cup_source_bundle_route(
         return import_world_cup_source_bundle_file(replace=replace)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"World Cup source bundle file not found: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sports/world-cup/data/bundle/url/preview", response_model=FlexibleResponse)
+async def preview_remote_world_cup_source_bundle_route(
+    _auth: None = Depends(require_write_key),
+):
+    """Preview facts from the configured WORLD_CUP_SOURCE_BUNDLE_URL."""
+    try:
+        return preview_world_cup_source_bundle_url()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sports/world-cup/data/bundle/url/import", response_model=FlexibleResponse)
+async def import_remote_world_cup_source_bundle_route(
+    replace: bool = Query(default=False),
+    _auth: None = Depends(require_write_key),
+):
+    """Import facts from the configured WORLD_CUP_SOURCE_BUNDLE_URL."""
+    try:
+        return import_world_cup_source_bundle_url(replace=replace)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

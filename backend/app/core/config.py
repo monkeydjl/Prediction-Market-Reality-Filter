@@ -104,6 +104,23 @@ class Settings:
             os.path.dirname(__file__), "..", "..", "world_cup_source_bundle.json"
         ),
     )
+    WORLD_CUP_SOURCE_BUNDLE_URL: str = os.getenv("WORLD_CUP_SOURCE_BUNDLE_URL", "")
+    WORLD_CUP_SOURCE_BUNDLE_TIMEOUT_SECONDS: float = float(
+        os.getenv("WORLD_CUP_SOURCE_BUNDLE_TIMEOUT_SECONDS", "10.0")
+    )
+    WORLD_CUP_SOURCE_BUNDLE_MAX_BYTES: int = int(
+        os.getenv("WORLD_CUP_SOURCE_BUNDLE_MAX_BYTES", "2097152")
+    )
+    WORLD_CUP_SOURCE_BUNDLE_USER_AGENT: str = os.getenv(
+        "WORLD_CUP_SOURCE_BUNDLE_USER_AGENT",
+        "Event Intelligence Platform research-contact@example.com",
+    )
+    WORLD_CUP_SOURCE_BUNDLE_AUTH_HEADER: str = os.getenv(
+        "WORLD_CUP_SOURCE_BUNDLE_AUTH_HEADER", ""
+    )
+    WORLD_CUP_SOURCE_BUNDLE_AUTH_VALUE: str = os.getenv(
+        "WORLD_CUP_SOURCE_BUNDLE_AUTH_VALUE", ""
+    )
     WORLD_CUP_DATA_MAX_AGE_HOURS: float = float(
         os.getenv("WORLD_CUP_DATA_MAX_AGE_HOURS", "168")
     )

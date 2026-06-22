@@ -78,6 +78,16 @@ POST /api/events/sports/world-cup/data/bundle/source/import?replace=false
 Header: X-API-Key: <API_WRITE_KEY>
 ```
 
+Import the configured remote multi-source bundle URL:
+
+```text
+POST /api/events/sports/world-cup/data/bundle/url/preview
+Header: X-API-Key: <API_WRITE_KEY>
+
+POST /api/events/sports/world-cup/data/bundle/url/import?replace=false
+Header: X-API-Key: <API_WRITE_KEY>
+```
+
 Import raw fixture/result exports through the match-source adapter:
 
 ```text
@@ -146,10 +156,10 @@ POST /api/events/sports/world-cup/data/source/import?replace=false
 Header: X-API-Key: <API_WRITE_KEY>
 ```
 
-Configured source files must include `source` and a timezone-aware
-`observed_at` timestamp. For `WORLD_CUP_SOURCE_BUNDLE_FILE`, each `sources[]`
-entry must provide that metadata either at the entry level or inside its
-`payload`. PMRF rejects stale configured snapshots older than
+Configured source files and remote bundle responses must include `source` and a
+timezone-aware `observed_at` timestamp. For `WORLD_CUP_SOURCE_BUNDLE_FILE` or
+`WORLD_CUP_SOURCE_BUNDLE_URL`, each `sources[]` entry must provide that metadata
+either at the entry level or inside its `payload`. PMRF rejects stale snapshots older than
 `WORLD_CUP_DATA_MAX_AGE_HOURS` (default: 168). Set the value to `0` only if an
 operator intentionally wants to disable the age check.
 
@@ -198,6 +208,8 @@ Header: X-API-Key: <API_WRITE_KEY>
    `player-status/preview`. If the data lives in `WORLD_CUP_DATA_FILE`, call
    `data/source/preview`. If a multi-source bundle lives in
    `WORLD_CUP_SOURCE_BUNDLE_FILE`, call `data/bundle/source/preview`.
+   If it lives behind `WORLD_CUP_SOURCE_BUNDLE_URL`, call
+   `data/bundle/url/preview`.
 4. Import with `replace=true` when the file is the current full fact snapshot.
    Use `replace=false` for incremental upserts.
 5. Call the facts list endpoint and inspect the normalized records.
@@ -418,6 +430,25 @@ Invoke-RestMethod `
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:8000/api/events/sports/world-cup/data/bundle/source/import?replace=false" `
+  -Headers @{ "X-API-Key" = $key }
+```
+
+For a configured remote multi-source bundle, set `WORLD_CUP_SOURCE_BUNDLE_URL`
+and call the bundle URL endpoints. The URL must return the same JSON shape as
+`docs/examples/world-cup-source-bundle.sample.json`. If the upstream requires a
+key, configure `WORLD_CUP_SOURCE_BUNDLE_AUTH_HEADER` and
+`WORLD_CUP_SOURCE_BUNDLE_AUTH_VALUE`; avoid putting real keys in URL query
+strings.
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/bundle/url/preview" `
+  -Headers @{ "X-API-Key" = $key }
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/bundle/url/import?replace=false" `
   -Headers @{ "X-API-Key" = $key }
 ```
 

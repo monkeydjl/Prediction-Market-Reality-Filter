@@ -46,6 +46,7 @@
 - [World Cup facts sample](examples/world-cup-facts.sample.json) — Example import payload for the sports facts API
 - [World Cup data sample](examples/world-cup-data.sample.json) — Example match-data payload for trusted data-source import
 - [World Cup CSV data sample](examples/world-cup-data-csv.sample.json) — Example JSON-wrapped CSV payload for trusted data-source import
+- [World Cup official CSV source sample](examples/world-cup-official-csv-source.sample.json) — Strict fixed-column CSV profile for official source imports
 - [World Cup match-source sample](examples/world-cup-match-source.sample.json) — Example raw fixture/result payload normalized by the match-source adapter
 - [World Cup match-events source sample](examples/world-cup-match-events-source.sample.json) — Example raw match card/event payload normalized into discipline facts
 - [World Cup lineups source sample](examples/world-cup-lineups-source.sample.json) — Example raw starting-XI payload normalized into lineup facts

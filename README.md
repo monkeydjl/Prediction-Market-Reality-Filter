@@ -60,6 +60,7 @@ npm run build
 - `WORLD_CUP_SOURCE_ENABLED`：启用 2026 世界杯策划事件源，丰富发现流的体育候选事件。
 - `SPORTS_FACT_FILE`：结构化世界杯事实 JSON 文件，用于 sports signals 和自动结算。
 - `WORLD_CUP_DATA_FILE`：可信世界杯数据源快照 JSON 文件，可通过 source preview/import 转换为 facts。
+- `official-csv/preview|import`：严格固定列 CSV profile；用于官方/运营 CSV 导入，缺列、额外列或列顺序变化会 fail closed。
 - `WORLD_CUP_SOURCE_BUNDLE_FILE`：多源世界杯数据源快照 JSON 文件，可通过 bundle source preview/import 一次转换多路 feed。
 - `WORLD_CUP_SOURCE_BUNDLE_URL`：可信远程多源 bundle JSON URL，可通过 bundle URL preview/import 拉取后转换为 facts；如需鉴权，用 `WORLD_CUP_SOURCE_BUNDLE_AUTH_HEADER` / `WORLD_CUP_SOURCE_BUNDLE_AUTH_VALUE`。
 - `WORLD_CUP_MATCH_SOURCE_URL` / `WORLD_CUP_MATCH_EVENTS_SOURCE_URL` / `WORLD_CUP_LINEUPS_SOURCE_URL` / `WORLD_CUP_STANDINGS_SOURCE_URL` / `WORLD_CUP_PLAYER_AWARDS_SOURCE_URL` / `WORLD_CUP_PLAYER_STATUS_SOURCE_URL`：可选 raw feed URL；通过 bundle feeds preview/import 拉取后组装成多源 bundle。

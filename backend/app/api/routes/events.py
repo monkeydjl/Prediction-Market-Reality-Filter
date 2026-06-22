@@ -63,6 +63,10 @@ from app.services.world_cup_lineups_source import (
     import_world_cup_lineups_source,
     preview_world_cup_lineups_source,
 )
+from app.services.world_cup_official_csv_source import (
+    import_world_cup_official_csv_source,
+    preview_world_cup_official_csv_source,
+)
 from app.services.world_cup_player_awards_source import (
     import_world_cup_player_awards_source,
     preview_world_cup_player_awards_source,
@@ -445,6 +449,31 @@ async def import_configured_world_cup_data_source(
         return import_world_cup_data_file(replace=replace)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"World Cup data file not found: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sports/world-cup/official-csv/preview", response_model=FlexibleResponse)
+async def preview_world_cup_official_csv_source_route(
+    payload: Any = Body(...),
+    _auth: None = Depends(require_write_key),
+):
+    """Preview facts from the strict official World Cup CSV profile."""
+    try:
+        return preview_world_cup_official_csv_source(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sports/world-cup/official-csv/import", response_model=FlexibleResponse)
+async def import_world_cup_official_csv_source_route(
+    payload: Any = Body(...),
+    replace: bool = Query(default=False),
+    _auth: None = Depends(require_write_key),
+):
+    """Import facts from the strict official World Cup CSV profile."""
+    try:
+        return import_world_cup_official_csv_source(payload, replace=replace)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

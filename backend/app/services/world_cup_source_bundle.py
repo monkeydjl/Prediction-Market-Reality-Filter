@@ -24,6 +24,9 @@ from app.services.world_cup_match_events_source import (
     world_cup_match_events_source_to_data,
 )
 from app.services.world_cup_lineups_source import world_cup_lineups_source_to_data
+from app.services.world_cup_official_csv_source import (
+    world_cup_official_csv_source_to_data,
+)
 from app.services.world_cup_player_awards_source import (
     world_cup_player_awards_source_to_data,
 )
@@ -287,6 +290,10 @@ def _source_kind(entry: Any, index: int) -> str:
         "lineups": "lineups",
         "starting_xi": "lineups",
         "startxi": "lineups",
+        "csv": "official_csv",
+        "official_csv": "official_csv",
+        "official_csv_v1": "official_csv",
+        "strict_csv": "official_csv",
         "standings": "standings",
         "qualification": "standings",
         "qualifications": "standings",
@@ -301,7 +308,16 @@ def _source_kind(entry: Any, index: int) -> str:
         "suspensions": "player_status",
     }
     kind = aliases.get(kind, kind)
-    if kind not in {"data", "matches", "match_events", "lineups", "standings", "player_awards", "player_status"}:
+    if kind not in {
+        "data",
+        "matches",
+        "match_events",
+        "lineups",
+        "official_csv",
+        "standings",
+        "player_awards",
+        "player_status",
+    }:
         raise ValueError(f"sources[{index}] unsupported source kind '{raw}'")
     return kind
 
@@ -323,6 +339,8 @@ def _source_to_data(kind: str, payload: Any) -> dict[str, Any]:
         return world_cup_match_events_source_to_data(payload)
     if kind == "lineups":
         return world_cup_lineups_source_to_data(payload)
+    if kind == "official_csv":
+        return world_cup_official_csv_source_to_data(payload)
     if kind == "standings":
         return world_cup_standings_source_to_data(payload)
     if kind == "player_awards":

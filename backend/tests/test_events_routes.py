@@ -304,6 +304,68 @@ class WorldCupFactRouteTests(unittest.TestCase):
             )
         self.assertEqual(resp.status_code, 401)
 
+    def test_world_cup_official_csv_source_preview_converts_without_writing_facts(self):
+        payload = {
+            "source": "official_csv",
+            "observed_at": "2026-07-20T00:00:00Z",
+            "csv": {
+                "matches": (
+                    "match_id,stage,kickoff_at,venue,referee,home_team,away_team,"
+                    "status,home_score,away_score,winner,extra_time,penalty_shootout,"
+                    "home_red_cards,away_red_cards,home_yellow_cards,away_yellow_cards\n"
+                    "round16-1,round_of_16,2026-07-20T19:00:00+00:00,"
+                    "\"Stadium A, City A\",Referee A,Team A,Team B,finished,1,1,"
+                    "Team A,true,true,1,0,2,1\n"
+                )
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \
+                patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            preview_resp = client.post(
+                "/events/sports/world-cup/official-csv/preview",
+                headers=AUTH_HEADERS,
+                json=payload,
+            )
+            facts_resp = client.get("/events/sports/world-cup/facts")
+
+        self.assertEqual(preview_resp.status_code, 200)
+        self.assertEqual(preview_resp.json()["profile"], "official_csv_v1")
+        self.assertEqual(preview_resp.json()["converted_fact_count"], 1)
+        self.assertEqual(preview_resp.json()["facts"][0]["yellow_cards"], 3.0)
+        self.assertEqual(facts_resp.json()["count"], 0)
+
+    def test_world_cup_official_csv_source_import_writes_facts(self):
+        payload = {
+            "source": "official_csv",
+            "observed_at": "2026-07-20T00:00:00Z",
+            "csv": {
+                "matches": (
+                    "match_id,stage,kickoff_at,venue,referee,home_team,away_team,"
+                    "status,home_score,away_score,winner,extra_time,penalty_shootout,"
+                    "home_red_cards,away_red_cards,home_yellow_cards,away_yellow_cards\n"
+                    "round16-1,round_of_16,2026-07-20T19:00:00+00:00,"
+                    "\"Stadium A, City A\",Referee A,Team A,Team B,finished,1,1,"
+                    "Team A,true,true,1,0,2,1\n"
+                )
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \
+                patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            import_resp = client.post(
+                "/events/sports/world-cup/official-csv/import?replace=true",
+                headers=AUTH_HEADERS,
+                json=payload,
+            )
+            facts_resp = client.get("/events/sports/world-cup/facts?kind=match_result")
+
+        self.assertEqual(import_resp.status_code, 200)
+        self.assertEqual(import_resp.json()["converted_fact_count"], 1)
+        self.assertEqual(facts_resp.json()["count"], 1)
+
     def test_world_cup_source_bundle_preview_converts_without_writing_facts(self):
         payload = {
             "sources": [{

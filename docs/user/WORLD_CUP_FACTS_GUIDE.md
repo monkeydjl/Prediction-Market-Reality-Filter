@@ -58,6 +58,18 @@ Header: X-API-Key: <API_WRITE_KEY>
 Body: {"matches": [...], "discipline": [...], "qualifications": [...], "player_awards": [...], "player_statuses": [...]}
 ```
 
+Import strict official fixed-column CSV exports:
+
+```text
+POST /api/events/sports/world-cup/official-csv/preview
+Header: X-API-Key: <API_WRITE_KEY>
+Body: {"csv": {"matches": "...", "discipline": "...", "qualifications": "...", "player_awards": "...", "player_statuses": "..."}}
+
+POST /api/events/sports/world-cup/official-csv/import?replace=false
+Header: X-API-Key: <API_WRITE_KEY>
+Body: {"csv": {"matches": "...", "discipline": "...", "qualifications": "...", "player_awards": "...", "player_statuses": "..."}}
+```
+
 Import multiple data-source payloads as one bundle:
 
 ```text
@@ -73,7 +85,8 @@ Body: {"sources": [{"kind": "matches", "payload": {...}}, {"kind": "player_statu
 The bundle endpoint is an operator convenience: it runs the same conservative
 adapters used by the individual endpoints and imports the combined facts in one
 write. Supported `kind` values are `data`, `matches`, `standings`,
-`match_events`, `lineups`, `player_awards`, and `player_status`.
+`match_events`, `lineups`, `official_csv`, `player_awards`, and
+`player_status`.
 
 Import the configured multi-source bundle file:
 
@@ -238,6 +251,9 @@ Header: X-API-Key: <API_WRITE_KEY>
    `docs/examples/world-cup-data.sample.json`; PMRF converts it into facts.
    If your source exports CSV, use the JSON-wrapped CSV sample at
    `docs/examples/world-cup-data-csv.sample.json`.
+   If your official CSV export must be schema-locked, use
+   `docs/examples/world-cup-official-csv-source.sample.json` with the
+   `official-csv/*` endpoints.
    If you want to preview or import several raw exports in one request, use
    `docs/examples/world-cup-source-bundle.sample.json` with the
    `data/bundle/*` endpoints.
@@ -260,6 +276,7 @@ Header: X-API-Key: <API_WRITE_KEY>
    records, use `docs/examples/world-cup-player-status-source.sample.json` with
    the `player-status/*` endpoints.
 3. For trusted match data, call `data/preview` and inspect the generated facts.
+   For fixed-column official CSV, call `official-csv/preview`.
    For multi-source bundles, call `data/bundle/preview`.
    For raw fixture/result exports, call `matches/preview`; for raw standings,
    call `standings/preview`; for raw match event/card exports, call
@@ -334,6 +351,25 @@ Invoke-RestMethod `
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:8000/api/events/sports/world-cup/data/import?replace=false" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+For strict fixed-column official CSV exports, use the official CSV adapter:
+
+```powershell
+$body = Get-Content -Raw docs\examples\world-cup-official-csv-source.sample.json
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/official-csv/preview" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/official-csv/import?replace=false" `
   -Headers @{ "X-API-Key" = $key } `
   -ContentType "application/json" `
   -Body $body
@@ -726,3 +762,15 @@ row must be headers whose names match the JSON fields, such as `match_id`,
 `minute`, `red_cards`, `yellow_cards`, `penalty_shootout`, `team`,
 `already_qualified`, `award`, `player`, `goals`, `severity`, `position`,
 `formation`, `jersey_number`, and `reason`.
+
+The `official-csv/*` adapter is stricter than generic `data/preview`: it accepts
+the same `csv.*` sections but rejects missing columns, extra columns, or column
+order changes. The fixed headers are:
+
+```text
+csv.matches: match_id,stage,kickoff_at,venue,referee,home_team,away_team,status,home_score,away_score,winner,extra_time,penalty_shootout,home_red_cards,away_red_cards,home_yellow_cards,away_yellow_cards
+csv.discipline: event_id,match_id,stage,team,player,minute,status,red_cards,yellow_cards,reason
+csv.qualifications: team,stage,status,already_qualified,already_eliminated
+csv.player_awards: award,player,team,goals,rank,status
+csv.player_statuses: kind,team,player,status,severity,match_id,stage,position,formation,jersey_number,reason,applies_to
+```

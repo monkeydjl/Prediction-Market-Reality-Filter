@@ -232,6 +232,34 @@ class WorldCupSourceBundleTests(unittest.TestCase):
         self.assertEqual(result["facts"][0]["kind"], "lineup")
         self.assertEqual(result["facts"][0]["formation"], "4-3-3")
 
+    def test_bundle_converts_official_csv_source(self):
+        result = preview_world_cup_source_bundle({
+            "sources": [{
+                "kind": "official_csv",
+                "payload": {
+                    "source": "official_csv",
+                    "observed_at": "2026-07-20T00:00:00Z",
+                    "csv": {
+                        "matches": (
+                            "match_id,stage,kickoff_at,venue,referee,home_team,"
+                            "away_team,status,home_score,away_score,winner,"
+                            "extra_time,penalty_shootout,home_red_cards,"
+                            "away_red_cards,home_yellow_cards,away_yellow_cards\n"
+                            "round16-1,round_of_16,2026-07-20T19:00:00+00:00,"
+                            "\"Stadium A, City A\",Referee A,Team A,Team B,"
+                            "finished,1,1,Team A,true,true,1,0,2,1\n"
+                        )
+                    },
+                },
+            }],
+        })
+
+        self.assertEqual(result["source_count"], 1)
+        self.assertEqual(result["sources"][0]["kind"], "official_csv")
+        self.assertEqual(result["converted_fact_count"], 1)
+        self.assertEqual(result["facts"][0]["kind"], "match_result")
+        self.assertEqual(result["facts"][0]["yellow_cards"], 3.0)
+
     def test_configured_bundle_file_can_be_previewed_and_imported(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

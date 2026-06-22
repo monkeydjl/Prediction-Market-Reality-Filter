@@ -175,6 +175,10 @@ class WorldCupFactRouteTests(unittest.TestCase):
                     patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
                     patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""), \
                     patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", "provider-secret"), \
+                    patch.object(settings, "WORLD_CUP_SPORTMONKS_API_TOKEN", "sportmonks-secret"), \
+                    patch.object(settings, "WORLD_CUP_SPORTMONKS_FIXTURES_URL", "https://sportmonks.example/fixtures?api_token=secret"), \
+                    patch.object(settings, "WORLD_CUP_SPORTMONKS_STANDINGS_URL", ""), \
+                    patch.object(settings, "WORLD_CUP_SPORTMONKS_TOP_SCORERS_URL", ""), \
                     patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED", True), \
                     patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE", "feeds"), \
                     patch.object(settings, "API_WRITE_KEY", "secret"):
@@ -204,6 +208,11 @@ class WorldCupFactRouteTests(unittest.TestCase):
         self.assertEqual(body["configured_sources"]["bundle_url"]["source_url"], "https://example.com/bundle")
         self.assertEqual(body["configured_sources"]["feeds"][0]["source_url"], "https://example.com/matches")
         self.assertTrue(body["configured_sources"]["api_football"]["configured"])
+        self.assertTrue(body["configured_sources"]["sportmonks"]["configured"])
+        self.assertEqual(
+            body["configured_sources"]["sportmonks"]["feeds"][0]["source_url"],
+            "https://sportmonks.example/fixtures",
+        )
         self.assertTrue(body["scheduled_import"]["enabled"])
         self.assertEqual(
             body["runs"]["world_cup_source_bundle_import"]["result"]["mode"],
@@ -772,6 +781,46 @@ class WorldCupFactRouteTests(unittest.TestCase):
         self.assertEqual(preview_resp.json()["provider"], "api_football")
         self.assertEqual(preview_resp.json()["source_count"], 1)
         self.assertEqual(preview_resp.json()["skipped_source_count"], 3)
+        self.assertEqual(preview_resp.json()["converted_fact_count"], 1)
+        self.assertEqual(facts_resp.json()["count"], 0)
+        self.assertNotIn("provider-secret", json.dumps(preview_resp.json()))
+
+    def test_world_cup_sportmonks_bundle_preview_does_not_write_facts(self):
+        fixture_body = json.dumps({
+            "data": [{
+                "id": 1001,
+                "state": {"short_name": "FT"},
+                "participants": [
+                    {"id": 1, "name": "Team A", "meta": {"location": "home"}},
+                    {"id": 2, "name": "Team B", "meta": {"location": "away"}},
+                ],
+                "scores": [
+                    {"participant_id": 1, "score": {"goals": 2}},
+                    {"participant_id": 2, "score": {"goals": 0}},
+                ],
+            }]
+        }).encode("utf-8")
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \
+                patch.object(settings, "WORLD_CUP_SPORTMONKS_API_TOKEN", "provider-secret"), \
+                patch.object(settings, "WORLD_CUP_SPORTMONKS_FIXTURES_URL", "https://sportmonks.example/fixtures?include=participants"), \
+                patch.object(settings, "WORLD_CUP_SPORTMONKS_STANDINGS_URL", ""), \
+                patch.object(settings, "WORLD_CUP_SPORTMONKS_TOP_SCORERS_URL", ""), \
+                patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch(
+                    "app.services.world_cup_sportmonks_source.urlopen",
+                    return_value=_UrlResponse(fixture_body),
+                ):
+            client = _events_client()
+            preview_resp = client.post(
+                "/events/sports/world-cup/data/bundle/sportmonks/preview",
+                headers=AUTH_HEADERS,
+            )
+            facts_resp = client.get("/events/sports/world-cup/facts")
+
+        self.assertEqual(preview_resp.status_code, 200)
+        self.assertEqual(preview_resp.json()["provider"], "sportmonks")
+        self.assertEqual(preview_resp.json()["source_count"], 1)
         self.assertEqual(preview_resp.json()["converted_fact_count"], 1)
         self.assertEqual(facts_resp.json()["count"], 0)
         self.assertNotIn("provider-secret", json.dumps(preview_resp.json()))

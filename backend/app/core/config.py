@@ -136,6 +136,18 @@ class Settings:
     WORLD_CUP_API_FOOTBALL_FETCH_LINEUPS: bool = _env_bool(
         "WORLD_CUP_API_FOOTBALL_FETCH_LINEUPS", "false"
     )
+    WORLD_CUP_SPORTMONKS_API_TOKEN: str = os.getenv(
+        "WORLD_CUP_SPORTMONKS_API_TOKEN", ""
+    )
+    WORLD_CUP_SPORTMONKS_FIXTURES_URL: str = os.getenv(
+        "WORLD_CUP_SPORTMONKS_FIXTURES_URL", ""
+    )
+    WORLD_CUP_SPORTMONKS_STANDINGS_URL: str = os.getenv(
+        "WORLD_CUP_SPORTMONKS_STANDINGS_URL", ""
+    )
+    WORLD_CUP_SPORTMONKS_TOP_SCORERS_URL: str = os.getenv(
+        "WORLD_CUP_SPORTMONKS_TOP_SCORERS_URL", ""
+    )
     WORLD_CUP_SOURCE_BUNDLE_TIMEOUT_SECONDS: float = float(
         os.getenv("WORLD_CUP_SOURCE_BUNDLE_TIMEOUT_SECONDS", "10.0")
     )

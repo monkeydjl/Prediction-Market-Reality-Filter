@@ -85,6 +85,10 @@ from app.services.world_cup_source_bundle import (
     preview_world_cup_source_bundle_file,
     preview_world_cup_source_bundle_url,
 )
+from app.services.world_cup_sportmonks_source import (
+    import_world_cup_sportmonks_bundle,
+    preview_world_cup_sportmonks_bundle,
+)
 from app.services.world_cup_standings_source import (
     import_world_cup_standings_source,
     preview_world_cup_standings_source,
@@ -422,6 +426,29 @@ async def import_api_football_world_cup_source_bundle_route(
     """Import facts from configured API-Football World Cup feeds."""
     try:
         return import_world_cup_api_football_bundle(replace=replace)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sports/world-cup/data/bundle/sportmonks/preview", response_model=FlexibleResponse)
+async def preview_sportmonks_world_cup_source_bundle_route(
+    _auth: None = Depends(require_write_key),
+):
+    """Preview facts from configured Sportmonks-style World Cup feeds."""
+    try:
+        return preview_world_cup_sportmonks_bundle()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sports/world-cup/data/bundle/sportmonks/import", response_model=FlexibleResponse)
+async def import_sportmonks_world_cup_source_bundle_route(
+    replace: bool = Query(default=False),
+    _auth: None = Depends(require_write_key),
+):
+    """Import facts from configured Sportmonks-style World Cup feeds."""
+    try:
+        return import_world_cup_sportmonks_bundle(replace=replace)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

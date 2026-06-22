@@ -251,6 +251,37 @@ class WorldCupBundleImportJobTests(unittest.TestCase):
         self.assertEqual(run["result"]["skipped_source_count"], 3)
         self.assertNotIn("sources", run["result"])
 
+    def test_job_imports_sportmonks_when_mode_is_sportmonks(self):
+        result = {
+            "provider": "sportmonks",
+            "source_count": 1,
+            "converted_fact_count": 1,
+            "imported": 1,
+            "replace": False,
+            "source_feeds": [{
+                "kind": "matches",
+                "source_url": "https://sportmonks.example/fixtures",
+            }],
+            "skipped_source_count": 2,
+            "sources": [{"normalized_data": {"large": "payload"}}],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch("app.services.world_cup_sportmonks_source.import_world_cup_sportmonks_bundle",
+                          return_value=result) as import_provider, \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED", True), \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE", "sportmonks"), \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE", False):
+                asyncio.run(scheduler._job_world_cup_source_bundle_import())
+                run = loop_run_store.last_run("world_cup_source_bundle_import")
+
+        import_provider.assert_called_once_with(replace=False)
+        self.assertEqual(run["status"], "success")
+        self.assertEqual(run["result"]["mode"], "sportmonks")
+        self.assertEqual(run["result"]["provider"], "sportmonks")
+        self.assertEqual(run["result"]["skipped_source_count"], 2)
+        self.assertNotIn("sources", run["result"])
+
     def test_job_failure_is_isolated(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \

@@ -213,6 +213,9 @@ async def _job_world_cup_source_bundle_import():
         from app.services.world_cup_api_football_source import (
             import_world_cup_api_football_bundle,
         )
+        from app.services.world_cup_sportmonks_source import (
+            import_world_cup_sportmonks_bundle,
+        )
         from app.services.world_cup_source_bundle import (
             import_world_cup_source_bundle_feeds,
             import_world_cup_source_bundle_file,
@@ -235,9 +238,14 @@ async def _job_world_cup_source_bundle_import():
             result = import_world_cup_api_football_bundle(
                 replace=settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE
             )
+        elif mode == "sportmonks":
+            result = import_world_cup_sportmonks_bundle(
+                replace=settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE
+            )
         else:
             raise ValueError(
-                "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE must be 'url', 'file', 'feeds', or 'api_football'"
+                "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE must be 'url', 'file', 'feeds', "
+                "'api_football', or 'sportmonks'"
             )
 
         summary = _world_cup_bundle_import_summary(result, mode)

@@ -128,6 +128,16 @@ POST /api/events/sports/world-cup/data/bundle/api-football/import?replace=false
 Header: X-API-Key: <API_WRITE_KEY>
 ```
 
+Import configured Sportmonks-style World Cup feeds as one bundle:
+
+```text
+POST /api/events/sports/world-cup/data/bundle/sportmonks/preview
+Header: X-API-Key: <API_WRITE_KEY>
+
+POST /api/events/sports/world-cup/data/bundle/sportmonks/import?replace=false
+Header: X-API-Key: <API_WRITE_KEY>
+```
+
 Import raw fixture/result exports through the match-source adapter:
 
 ```text
@@ -294,6 +304,8 @@ Header: X-API-Key: <API_WRITE_KEY>
    call `data/bundle/feeds/preview`.
    If `WORLD_CUP_API_FOOTBALL_API_KEY` is configured, call
    `data/bundle/api-football/preview`.
+   If `WORLD_CUP_SPORTMONKS_API_TOKEN` and at least one Sportmonks feed URL are
+   configured, call `data/bundle/sportmonks/preview`.
 4. Import with `replace=true` when the file is the current full fact snapshot.
    Use `replace=false` for incremental upserts.
 5. Call the facts list endpoint and inspect the normalized records.
@@ -640,13 +652,36 @@ Invoke-RestMethod `
   -Headers @{ "X-API-Key" = $key }
 ```
 
+For Sportmonks-style provider feeds, set `WORLD_CUP_SPORTMONKS_API_TOKEN` and
+one or more of `WORLD_CUP_SPORTMONKS_FIXTURES_URL`,
+`WORLD_CUP_SPORTMONKS_STANDINGS_URL`, or
+`WORLD_CUP_SPORTMONKS_TOP_SCORERS_URL`. PMRF appends `api_token` to the request
+URL when it is not already present, strips query strings from returned metadata,
+and converts explicit provider facts only: fixtures to `match_result`,
+standings rows with explicit qualified/eliminated descriptions to
+`qualification`, and top-scorer rows to `player_award`. Empty configured feeds
+are skipped.
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/bundle/sportmonks/preview" `
+  -Headers @{ "X-API-Key" = $key }
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/bundle/sportmonks/import?replace=false" `
+  -Headers @{ "X-API-Key" = $key }
+```
+
 To import a configured bundle on a schedule, set
 `WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED=true`. Use
 `WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE=url` for `WORLD_CUP_SOURCE_BUNDLE_URL`, or
 `WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE=file` for `WORLD_CUP_SOURCE_BUNDLE_FILE`,
 or `WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE=feeds` for the configured raw source
 feed URLs, or `WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE=api_football` for the
-configured API-Football provider.
+configured API-Football provider, or `WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE=sportmonks`
+for the configured Sportmonks-style provider.
 The default run time is 05:20 UTC and can be changed with
 `WORLD_CUP_SOURCE_BUNDLE_IMPORT_HOUR_UTC` and
 `WORLD_CUP_SOURCE_BUNDLE_IMPORT_MINUTE_UTC`. Keep

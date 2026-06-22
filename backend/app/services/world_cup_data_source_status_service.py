@@ -45,6 +45,30 @@ def world_cup_data_source_status() -> dict[str, Any]:
                 "fetch_events": settings.WORLD_CUP_API_FOOTBALL_FETCH_EVENTS,
                 "fetch_lineups": settings.WORLD_CUP_API_FOOTBALL_FETCH_LINEUPS,
             },
+            "sportmonks": {
+                "configured": bool(
+                    _clean(settings.WORLD_CUP_SPORTMONKS_API_TOKEN)
+                    and (
+                        _clean(settings.WORLD_CUP_SPORTMONKS_FIXTURES_URL)
+                        or _clean(settings.WORLD_CUP_SPORTMONKS_STANDINGS_URL)
+                        or _clean(settings.WORLD_CUP_SPORTMONKS_TOP_SCORERS_URL)
+                    )
+                ),
+                "feeds": [
+                    {
+                        "kind": "matches",
+                        **_url_config(settings.WORLD_CUP_SPORTMONKS_FIXTURES_URL),
+                    },
+                    {
+                        "kind": "standings",
+                        **_url_config(settings.WORLD_CUP_SPORTMONKS_STANDINGS_URL),
+                    },
+                    {
+                        "kind": "player_awards",
+                        **_url_config(settings.WORLD_CUP_SPORTMONKS_TOP_SCORERS_URL),
+                    },
+                ],
+            },
         },
         "scheduled_import": {
             "enabled": settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED,

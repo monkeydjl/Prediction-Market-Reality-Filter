@@ -35,6 +35,12 @@ def world_cup_data_source_status() -> dict[str, Any]:
                 }
                 for kind, setting_name in _FEED_URL_SETTINGS
             ],
+            "api_football": {
+                "configured": bool(_clean(settings.WORLD_CUP_API_FOOTBALL_API_KEY)),
+                "base_url": _display_url(settings.WORLD_CUP_API_FOOTBALL_BASE_URL),
+                "league_id": _clean(settings.WORLD_CUP_API_FOOTBALL_LEAGUE_ID),
+                "season": _clean(settings.WORLD_CUP_API_FOOTBALL_SEASON),
+            },
         },
         "scheduled_import": {
             "enabled": settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED,

@@ -210,6 +210,9 @@ async def _job_world_cup_source_bundle_import():
     logger.info("[Scheduler] World Cup source bundle import starting...")
     run_id = _start_run("world_cup_source_bundle_import")
     try:
+        from app.services.world_cup_api_football_source import (
+            import_world_cup_api_football_bundle,
+        )
         from app.services.world_cup_source_bundle import (
             import_world_cup_source_bundle_feeds,
             import_world_cup_source_bundle_file,
@@ -228,9 +231,13 @@ async def _job_world_cup_source_bundle_import():
             result = import_world_cup_source_bundle_feeds(
                 replace=settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE
             )
+        elif mode == "api_football":
+            result = import_world_cup_api_football_bundle(
+                replace=settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE
+            )
         else:
             raise ValueError(
-                "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE must be 'url', 'file', or 'feeds'"
+                "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE must be 'url', 'file', 'feeds', or 'api_football'"
             )
 
         summary = _world_cup_bundle_import_summary(result, mode)
@@ -262,6 +269,10 @@ def _world_cup_bundle_import_summary(result: dict[str, Any], mode: str) -> dict[
         summary["source_url"] = result["source_url"]
     if result.get("source_feeds"):
         summary["source_feeds"] = result["source_feeds"]
+    if result.get("provider"):
+        summary["provider"] = result["provider"]
+    if result.get("skipped_source_count") is not None:
+        summary["skipped_source_count"] = result["skipped_source_count"]
     if result.get("source_metadata"):
         summary["source_metadata"] = result["source_metadata"]
     return summary

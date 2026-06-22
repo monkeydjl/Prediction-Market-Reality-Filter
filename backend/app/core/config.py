@@ -113,6 +113,19 @@ class Settings:
     WORLD_CUP_PLAYER_STATUS_SOURCE_URL: str = os.getenv(
         "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""
     )
+    WORLD_CUP_API_FOOTBALL_BASE_URL: str = os.getenv(
+        "WORLD_CUP_API_FOOTBALL_BASE_URL",
+        "https://v3.football.api-sports.io",
+    )
+    WORLD_CUP_API_FOOTBALL_API_KEY: str = os.getenv(
+        "WORLD_CUP_API_FOOTBALL_API_KEY", ""
+    )
+    WORLD_CUP_API_FOOTBALL_LEAGUE_ID: str = os.getenv(
+        "WORLD_CUP_API_FOOTBALL_LEAGUE_ID", "1"
+    )
+    WORLD_CUP_API_FOOTBALL_SEASON: str = os.getenv(
+        "WORLD_CUP_API_FOOTBALL_SEASON", "2026"
+    )
     WORLD_CUP_SOURCE_BUNDLE_TIMEOUT_SECONDS: float = float(
         os.getenv("WORLD_CUP_SOURCE_BUNDLE_TIMEOUT_SECONDS", "10.0")
     )

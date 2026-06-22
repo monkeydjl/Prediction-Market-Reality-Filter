@@ -220,6 +220,37 @@ class WorldCupBundleImportJobTests(unittest.TestCase):
         )
         self.assertNotIn("sources", run["result"])
 
+    def test_job_imports_api_football_when_mode_is_api_football(self):
+        result = {
+            "provider": "api_football",
+            "source_count": 1,
+            "converted_fact_count": 1,
+            "imported": 1,
+            "replace": False,
+            "source_feeds": [{
+                "kind": "matches",
+                "source_url": "https://api-football.example/v3/fixtures",
+            }],
+            "skipped_source_count": 3,
+            "sources": [{"normalized_data": {"large": "payload"}}],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch("app.services.world_cup_api_football_source.import_world_cup_api_football_bundle",
+                          return_value=result) as import_provider, \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED", True), \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE", "api_football"), \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE", False):
+                asyncio.run(scheduler._job_world_cup_source_bundle_import())
+                run = loop_run_store.last_run("world_cup_source_bundle_import")
+
+        import_provider.assert_called_once_with(replace=False)
+        self.assertEqual(run["status"], "success")
+        self.assertEqual(run["result"]["mode"], "api_football")
+        self.assertEqual(run["result"]["provider"], "api_football")
+        self.assertEqual(run["result"]["skipped_source_count"], 3)
+        self.assertNotIn("sources", run["result"])
+
     def test_job_failure_is_isolated(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \

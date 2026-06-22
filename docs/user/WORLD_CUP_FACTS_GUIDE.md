@@ -105,6 +105,16 @@ POST /api/events/sports/world-cup/data/bundle/feeds/import?replace=false
 Header: X-API-Key: <API_WRITE_KEY>
 ```
 
+Import configured API-Football World Cup feeds as one bundle:
+
+```text
+POST /api/events/sports/world-cup/data/bundle/api-football/preview
+Header: X-API-Key: <API_WRITE_KEY>
+
+POST /api/events/sports/world-cup/data/bundle/api-football/import?replace=false
+Header: X-API-Key: <API_WRITE_KEY>
+```
+
 Import raw fixture/result exports through the match-source adapter:
 
 ```text
@@ -232,6 +242,8 @@ Header: X-API-Key: <API_WRITE_KEY>
    `WORLD_CUP_MATCH_SOURCE_URL`, `WORLD_CUP_STANDINGS_SOURCE_URL`,
    `WORLD_CUP_PLAYER_AWARDS_SOURCE_URL`, or
    `WORLD_CUP_PLAYER_STATUS_SOURCE_URL`, call `data/bundle/feeds/preview`.
+   If `WORLD_CUP_API_FOOTBALL_API_KEY` is configured, call
+   `data/bundle/api-football/preview`.
 4. Import with `replace=true` when the file is the current full fact snapshot.
    Use `replace=false` for incremental upserts.
 5. Call the facts list endpoint and inspect the normalized records.
@@ -496,12 +508,32 @@ Invoke-RestMethod `
   -Headers @{ "X-API-Key" = $key }
 ```
 
+For API-Football, set `WORLD_CUP_API_FOOTBALL_API_KEY`. The defaults use
+`WORLD_CUP_API_FOOTBALL_BASE_URL=https://v3.football.api-sports.io`,
+`WORLD_CUP_API_FOOTBALL_LEAGUE_ID=1`, and
+`WORLD_CUP_API_FOOTBALL_SEASON=2026`. PMRF fetches fixtures, standings, top
+scorers, and injuries; empty `response: []` feeds are skipped, while
+API-Football `errors` fail closed.
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/bundle/api-football/preview" `
+  -Headers @{ "X-API-Key" = $key }
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/bundle/api-football/import?replace=false" `
+  -Headers @{ "X-API-Key" = $key }
+```
+
 To import a configured bundle on a schedule, set
 `WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED=true`. Use
 `WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE=url` for `WORLD_CUP_SOURCE_BUNDLE_URL`, or
 `WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE=file` for `WORLD_CUP_SOURCE_BUNDLE_FILE`,
 or `WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE=feeds` for the configured raw source
-feed URLs.
+feed URLs, or `WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE=api_football` for the
+configured API-Football provider.
 The default run time is 05:20 UTC and can be changed with
 `WORLD_CUP_SOURCE_BUNDLE_IMPORT_HOUR_UTC` and
 `WORLD_CUP_SOURCE_BUNDLE_IMPORT_MINUTE_UTC`. Keep

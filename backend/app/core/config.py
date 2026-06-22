@@ -129,6 +129,9 @@ class Settings:
     WORLD_CUP_API_FOOTBALL_SEASON: str = os.getenv(
         "WORLD_CUP_API_FOOTBALL_SEASON", "2026"
     )
+    WORLD_CUP_API_FOOTBALL_FETCH_EVENTS: bool = _env_bool(
+        "WORLD_CUP_API_FOOTBALL_FETCH_EVENTS", "false"
+    )
     WORLD_CUP_SOURCE_BUNDLE_TIMEOUT_SECONDS: float = float(
         os.getenv("WORLD_CUP_SOURCE_BUNDLE_TIMEOUT_SECONDS", "10.0")
     )

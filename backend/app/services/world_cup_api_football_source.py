@@ -34,6 +34,7 @@ def build_world_cup_api_football_bundle(
     observed_at = _utc_timestamp(now)
     sources: list[dict[str, Any]] = []
     skipped_sources: list[dict[str, Any]] = []
+    fixture_payload: dict[str, Any] | None = None
     for kind, path, payload_defaults in _FEEDS:
         source_url = _api_football_url(path)
         payload = _fetch_api_football_json(source_url)
@@ -44,9 +45,22 @@ def build_world_cup_api_football_bundle(
                 "reason": "empty response",
             })
             continue
+        if kind == "matches":
+            fixture_payload = payload
         sources.append(
             _bundle_entry(kind, source_url, payload, payload_defaults, observed_at)
         )
+
+    if settings.WORLD_CUP_API_FOOTBALL_FETCH_EVENTS and fixture_payload:
+        event_source = _fixture_events_source(fixture_payload, observed_at)
+        if event_source:
+            sources.append(event_source)
+        else:
+            skipped_sources.append({
+                "kind": "match_events",
+                "source_url": _display_url(_api_football_url("fixtures/events", {"fixture": "0"})),
+                "reason": "empty response",
+            })
 
     if not sources:
         raise ValueError("API-Football returned no usable World Cup source feeds")
@@ -83,12 +97,15 @@ def import_world_cup_api_football_bundle(
     return result
 
 
-def _api_football_url(path: str) -> str:
+def _api_football_url(path: str, params: dict[str, str] | None = None) -> str:
     base_url = _clean(settings.WORLD_CUP_API_FOOTBALL_BASE_URL).rstrip("/")
-    league_id = _clean(settings.WORLD_CUP_API_FOOTBALL_LEAGUE_ID)
-    season = _clean(settings.WORLD_CUP_API_FOOTBALL_SEASON)
     if not base_url:
         raise ValueError("WORLD_CUP_API_FOOTBALL_BASE_URL is not configured")
+    if params is not None:
+        return f"{base_url}/{path}?{urlencode(params)}"
+
+    league_id = _clean(settings.WORLD_CUP_API_FOOTBALL_LEAGUE_ID)
+    season = _clean(settings.WORLD_CUP_API_FOOTBALL_SEASON)
     if not league_id:
         raise ValueError("WORLD_CUP_API_FOOTBALL_LEAGUE_ID is not configured")
     if not season:
@@ -157,6 +174,59 @@ def _bundle_entry(
         "observed_at": enriched_payload["observed_at"],
         "payload": enriched_payload,
     }
+
+
+def _fixture_events_source(
+    fixture_payload: dict[str, Any],
+    observed_at: str,
+) -> dict[str, Any] | None:
+    events: list[dict[str, Any]] = []
+    source_url = ""
+    for fixture_id in _fixture_ids(fixture_payload):
+        event_url = _api_football_url("fixtures/events", {"fixture": fixture_id})
+        source_url = source_url or event_url
+        payload = _fetch_api_football_json(event_url)
+        response = payload.get("response")
+        if not isinstance(response, list):
+            continue
+        for row in response:
+            if not isinstance(row, dict):
+                continue
+            enriched = dict(row)
+            if "fixture" not in enriched and "fixture_id" not in enriched:
+                enriched["fixture"] = {"id": fixture_id}
+            events.append(enriched)
+    if not events:
+        return None
+    return _bundle_entry(
+        "match_events",
+        source_url or _api_football_url("fixtures/events", {"fixture": "0"}),
+        {"response": events},
+        {},
+        observed_at,
+    )
+
+
+def _fixture_ids(payload: dict[str, Any]) -> list[str]:
+    response = payload.get("response")
+    if not isinstance(response, list):
+        return []
+    fixture_ids: list[str] = []
+    seen: set[str] = set()
+    for row in response:
+        if not isinstance(row, dict):
+            continue
+        fixture_id = _clean(row.get("fixture_id"))
+        fixture = row.get("fixture")
+        if not fixture_id and isinstance(fixture, dict):
+            fixture_id = _clean(fixture.get("id"))
+        if not fixture_id:
+            fixture_id = _clean(row.get("id"))
+        if not fixture_id or fixture_id in seen:
+            continue
+        seen.add(fixture_id)
+        fixture_ids.append(fixture_id)
+    return fixture_ids
 
 
 def _provider_result_metadata(

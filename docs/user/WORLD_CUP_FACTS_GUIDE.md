@@ -548,7 +548,10 @@ For API-Football, set `WORLD_CUP_API_FOOTBALL_API_KEY`. The defaults use
 `WORLD_CUP_API_FOOTBALL_LEAGUE_ID=1`, and
 `WORLD_CUP_API_FOOTBALL_SEASON=2026`. PMRF fetches fixtures, standings, top
 scorers, and injuries; empty `response: []` feeds are skipped, while
-API-Football `errors` fail closed.
+API-Football `errors` fail closed. Set
+`WORLD_CUP_API_FOOTBALL_FETCH_EVENTS=true` only when you want PMRF to make
+additional `fixtures/events?fixture=...` calls and convert card rows into
+`discipline` facts.
 
 ```powershell
 Invoke-RestMethod `

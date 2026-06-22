@@ -683,6 +683,7 @@ class WorldCupFactRouteTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
                 patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \
                 patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", "provider-secret"), \
+                patch.object(settings, "WORLD_CUP_API_FOOTBALL_FETCH_EVENTS", False), \
                 patch.object(settings, "API_WRITE_KEY", "secret"), \
                 patch(
                     "app.services.world_cup_api_football_source.urlopen",

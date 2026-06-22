@@ -43,6 +43,7 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
             patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", "secret-key"),
             patch.object(settings, "WORLD_CUP_API_FOOTBALL_LEAGUE_ID", "1"),
             patch.object(settings, "WORLD_CUP_API_FOOTBALL_SEASON", "2026"),
+            patch.object(settings, "WORLD_CUP_API_FOOTBALL_FETCH_EVENTS", False),
         )
 
     def test_preview_fetches_provider_feeds_without_writing_facts(self):
@@ -53,8 +54,8 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
             _Body.injuries(),
         ]
         with tempfile.TemporaryDirectory() as tmp:
-            sports_file, base_url, api_key, league_id, season = self._settings(tmp)
-            with sports_file, base_url, api_key, league_id, season, \
+            sports_file, base_url, api_key, league_id, season, fetch_events = self._settings(tmp)
+            with sports_file, base_url, api_key, league_id, season, fetch_events, \
                     patch(
                         "app.services.world_cup_api_football_source.urlopen",
                         side_effect=[_UrlResponse(body) for body in bodies],
@@ -101,8 +102,8 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
             _body({"errors": [], "response": []}),
         ]
         with tempfile.TemporaryDirectory() as tmp:
-            sports_file, base_url, api_key, league_id, season = self._settings(tmp)
-            with sports_file, base_url, api_key, league_id, season, \
+            sports_file, base_url, api_key, league_id, season, fetch_events = self._settings(tmp)
+            with sports_file, base_url, api_key, league_id, season, fetch_events, \
                     patch(
                         "app.services.world_cup_api_football_source.urlopen",
                         side_effect=[_UrlResponse(body) for body in bodies],
@@ -121,6 +122,38 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
         self.assertEqual(facts[0]["kickoff_at"], "2026-07-20T19:00:00+00:00")
         self.assertEqual(facts[0]["venue"], "Stadium A, City A")
         self.assertEqual(facts[0]["referee"], "Referee A")
+
+    def test_preview_optionally_fetches_fixture_events_as_discipline_facts(self):
+        bodies = [
+            _Body.fixtures(),
+            _Body.standings(),
+            _Body.top_scorers(),
+            _Body.injuries(),
+            _Body.fixture_events(),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            sports_file, base_url, api_key, league_id, season, fetch_events = self._settings(tmp)
+            with sports_file, base_url, api_key, league_id, season, fetch_events, \
+                    patch.object(settings, "WORLD_CUP_API_FOOTBALL_FETCH_EVENTS", True), \
+                    patch(
+                        "app.services.world_cup_api_football_source.urlopen",
+                        side_effect=[_UrlResponse(body) for body in bodies],
+                    ) as open_mock:
+                result = preview_world_cup_api_football_bundle(
+                    now=datetime(2026, 6, 25, 12, tzinfo=timezone.utc)
+                )
+
+        urls = [call.args[0].full_url for call in open_mock.call_args_list]
+        self.assertEqual(
+            urls[-1],
+            "https://api-football.example/v3/fixtures/events?fixture=1001",
+        )
+        self.assertEqual(result["source_count"], 5)
+        self.assertIn("match_events", {source["kind"] for source in result["sources"]})
+        discipline = next(fact for fact in result["facts"] if fact["kind"] == "discipline")
+        self.assertEqual(discipline["match_id"], "1001")
+        self.assertEqual(discipline["red_cards"], 1.0)
+        self.assertEqual(discipline["minute"], "72")
 
     def test_missing_api_key_fails_closed(self):
         with patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", ""):
@@ -191,6 +224,19 @@ class _Body:
                 },
                 "team": {"name": "Brazil"},
                 "fixture": {"id": 1002},
+            }],
+        })
+
+    @staticmethod
+    def fixture_events() -> bytes:
+        return _body({
+            "errors": [],
+            "response": [{
+                "time": {"elapsed": 72},
+                "team": {"name": "Team A"},
+                "player": {"name": "Player A"},
+                "type": "Card",
+                "detail": "Red Card",
             }],
         })
 

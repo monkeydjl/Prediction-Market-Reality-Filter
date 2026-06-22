@@ -140,6 +140,9 @@ class Settings:
     WORLD_CUP_API_FOOTBALL_FETCH_STATISTICS: bool = _env_bool(
         "WORLD_CUP_API_FOOTBALL_FETCH_STATISTICS", "false"
     )
+    WORLD_CUP_API_FOOTBALL_MAX_DETAIL_CALLS: int = int(
+        os.getenv("WORLD_CUP_API_FOOTBALL_MAX_DETAIL_CALLS", "100")
+    )
     WORLD_CUP_SPORTMONKS_API_TOKEN: str = os.getenv(
         "WORLD_CUP_SPORTMONKS_API_TOKEN", ""
     )

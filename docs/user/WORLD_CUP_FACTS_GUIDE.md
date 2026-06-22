@@ -88,6 +88,14 @@ write. Supported `kind` values are `data`, `matches`, `standings`,
 `match_events`, `lineups`, `official_csv`, `player_awards`, `player_status`,
 and `statistics`.
 
+Bundle preview/import responses include operational metadata for inspection:
+`run` reports total conversion duration, source count, converted fact count,
+skipped source count, and fetch count when remote feeds were used. Each
+`sources[]` item includes its conversion `duration_ms` and status. Configured
+feed and provider routes also include sanitized `source_fetches` entries with
+request kind, URL without query string, status, and duration. Provider responses
+include `skipped_sources` when empty feeds or call-budget limits skip a source.
+
 Import the configured multi-source bundle file:
 
 ```text
@@ -677,6 +685,13 @@ convert starting-XI/bench rows into `lineup` facts. Set
 `WORLD_CUP_API_FOOTBALL_FETCH_STATISTICS=true` only when you want PMRF to make
 additional `fixtures/statistics?fixture=...` and `fixtures/players?fixture=...`
 calls and convert team/player rows into `team_stat` / `player_stat` facts.
+Use `WORLD_CUP_API_FOOTBALL_MAX_DETAIL_CALLS` to cap those fixture-level detail
+requests across events, lineups, and statistics. If an optional detail source
+would exceed the remaining budget, PMRF skips that source and reports it in
+`skipped_sources` with `reason: "call budget exceeded"` plus `required_calls`
+and `remaining_calls`. API-Football responses include a `call_budget` block with
+fixture count, enabled detail feeds, used calls, skipped calls, and remaining
+calls.
 
 ```powershell
 Invoke-RestMethod `

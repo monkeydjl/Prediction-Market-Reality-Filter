@@ -232,6 +232,21 @@ class WorldCupBundleImportJobTests(unittest.TestCase):
                 "source_url": "https://api-football.example/v3/fixtures",
             }],
             "skipped_source_count": 3,
+            "source_fetch_count": 4,
+            "source_fetches": [{
+                "kind": "matches",
+                "source_url": "https://api-football.example/v3/fixtures",
+                "status": "success",
+                "duration_ms": 12,
+            }],
+            "call_budget": {
+                "fixture_count": 1,
+                "max_detail_calls": 100,
+                "detail_calls_used": 0,
+                "detail_calls_skipped": 0,
+                "detail_calls_remaining": 100,
+                "enabled_detail_feeds": [],
+            },
             "sources": [{"normalized_data": {"large": "payload"}}],
         }
         with tempfile.TemporaryDirectory() as tmp:
@@ -249,6 +264,9 @@ class WorldCupBundleImportJobTests(unittest.TestCase):
         self.assertEqual(run["result"]["mode"], "api_football")
         self.assertEqual(run["result"]["provider"], "api_football")
         self.assertEqual(run["result"]["skipped_source_count"], 3)
+        self.assertEqual(run["result"]["source_fetch_count"], 4)
+        self.assertEqual(run["result"]["source_fetches"][0]["status"], "success")
+        self.assertEqual(run["result"]["call_budget"]["max_detail_calls"], 100)
         self.assertNotIn("sources", run["result"])
 
     def test_job_imports_sportmonks_when_mode_is_sportmonks(self):

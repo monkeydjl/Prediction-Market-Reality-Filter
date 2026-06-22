@@ -84,6 +84,10 @@ class WorldCupSportmonksSourceTests(unittest.TestCase):
         self.assertEqual(result["provider"], "sportmonks")
         self.assertEqual(result["source_count"], 3)
         self.assertEqual(result["converted_fact_count"], 3)
+        self.assertEqual(result["source_fetch_count"], 3)
+        self.assertEqual(result["run"]["source_fetch_count"], 3)
+        self.assertEqual(result["source_fetches"][0]["status"], "success")
+        self.assertGreaterEqual(result["source_fetches"][0]["duration_ms"], 0)
         self.assertEqual(
             {fact["kind"] for fact in result["facts"]},
             {"match_result", "qualification", "player_award"},

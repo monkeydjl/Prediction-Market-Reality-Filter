@@ -209,6 +209,7 @@ class WorldCupFactRouteTests(unittest.TestCase):
         self.assertEqual(body["configured_sources"]["bundle_url"]["source_url"], "https://example.com/bundle")
         self.assertEqual(body["configured_sources"]["feeds"][0]["source_url"], "https://example.com/matches")
         self.assertTrue(body["configured_sources"]["api_football"]["configured"])
+        self.assertEqual(body["configured_sources"]["api_football"]["max_detail_calls"], 100)
         self.assertTrue(body["configured_sources"]["sportmonks"]["configured"])
         self.assertEqual(
             body["configured_sources"]["sportmonks"]["feeds"][0]["source_url"],

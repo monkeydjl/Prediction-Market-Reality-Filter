@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
@@ -37,8 +38,13 @@ def build_world_cup_sportmonks_bundle(
     observed_at = _utc_timestamp(now)
     sources: list[dict[str, Any]] = []
     skipped_sources: list[dict[str, Any]] = []
+    source_fetches: list[dict[str, Any]] = []
     for kind, source_url, converter in configured:
-        payload = _fetch_sportmonks_json(source_url)
+        payload = _fetch_sportmonks_json(
+            source_url,
+            source_kind=kind,
+            source_fetches=source_fetches,
+        )
         data = converter(payload, _display_url(source_url), observed_at)
         if not _has_rows(data):
             skipped_sources.append({
@@ -54,6 +60,7 @@ def build_world_cup_sportmonks_bundle(
     return {
         "sources": sources,
         "skipped_sources": skipped_sources,
+        "source_fetches": source_fetches,
     }
 
 
@@ -93,9 +100,23 @@ def _configured_feeds() -> list[tuple[str, str, Callable[[dict[str, Any], str, s
     return feeds
 
 
-def _fetch_sportmonks_json(source_url: str) -> dict[str, Any]:
+def _fetch_sportmonks_json(
+    source_url: str,
+    *,
+    source_kind: str,
+    source_fetches: list[dict[str, Any]],
+) -> dict[str, Any]:
+    started = time.perf_counter()
     api_token = _clean(settings.WORLD_CUP_SPORTMONKS_API_TOKEN)
     if not api_token:
+        _record_fetch(
+            source_fetches,
+            source_kind,
+            source_url,
+            started,
+            "failed",
+            "WORLD_CUP_SPORTMONKS_API_TOKEN is not configured",
+        )
         raise ValueError("WORLD_CUP_SPORTMONKS_API_TOKEN is not configured")
 
     request_url = _with_api_token(source_url, api_token)
@@ -113,20 +134,69 @@ def _fetch_sportmonks_json(source_url: str) -> dict[str, Any]:
         ) as response:
             body = response.read(settings.WORLD_CUP_SOURCE_BUNDLE_MAX_BYTES + 1)
     except HTTPError as exc:
+        _record_fetch(
+            source_fetches,
+            source_kind,
+            source_url,
+            started,
+            "failed",
+            f"HTTP {exc.code}",
+        )
         raise ValueError(f"Sportmonks returned HTTP {exc.code}") from exc
     except (TimeoutError, URLError) as exc:
+        _record_fetch(
+            source_fetches,
+            source_kind,
+            source_url,
+            started,
+            "failed",
+            "fetch failed",
+        )
         raise ValueError("Sportmonks fetch failed") from exc
 
     if len(body) > settings.WORLD_CUP_SOURCE_BUNDLE_MAX_BYTES:
+        _record_fetch(
+            source_fetches,
+            source_kind,
+            source_url,
+            started,
+            "failed",
+            "response too large",
+        )
         raise ValueError("Sportmonks response too large")
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        _record_fetch(
+            source_fetches,
+            source_kind,
+            source_url,
+            started,
+            "failed",
+            "invalid JSON",
+        )
         raise ValueError("Sportmonks did not return valid JSON") from exc
     if not isinstance(payload, dict):
+        _record_fetch(
+            source_fetches,
+            source_kind,
+            source_url,
+            started,
+            "failed",
+            "response must be a JSON object",
+        )
         raise ValueError("Sportmonks response must be a JSON object")
     if payload.get("errors"):
+        _record_fetch(
+            source_fetches,
+            source_kind,
+            source_url,
+            started,
+            "failed",
+            "provider returned errors",
+        )
         raise ValueError("Sportmonks returned errors")
+    _record_fetch(source_fetches, source_kind, source_url, started, "success")
     return payload
 
 
@@ -401,6 +471,7 @@ def _provider_result_metadata(
 ) -> dict[str, Any]:
     sources = payload.get("sources") if isinstance(payload, dict) else []
     skipped = payload.get("skipped_sources") if isinstance(payload, dict) else []
+    source_fetches = payload.get("source_fetches") if isinstance(payload, dict) else []
     return {
         "provider": _PROVIDER,
         "source_feeds": [
@@ -415,6 +486,8 @@ def _provider_result_metadata(
         ],
         "skipped_source_count": len(skipped) if isinstance(skipped, list) else 0,
         "skipped_sources": skipped if isinstance(skipped, list) else [],
+        "source_fetch_count": len(source_fetches) if isinstance(source_fetches, list) else 0,
+        "source_fetches": source_fetches if isinstance(source_fetches, list) else [],
         "source_metadata": source_metadata,
     }
 
@@ -487,3 +560,26 @@ def _compact(data: dict[str, Any]) -> dict[str, Any]:
 
 def _clean(value: Any) -> str:
     return " ".join(str(value or "").strip().split())
+
+
+def _record_fetch(
+    source_fetches: list[dict[str, Any]],
+    kind: str,
+    source_url: str,
+    started: float,
+    status: str,
+    error: str = "",
+) -> None:
+    item = {
+        "kind": kind,
+        "source_url": _display_url(source_url),
+        "status": status,
+        "duration_ms": _duration_ms(started),
+    }
+    if error:
+        item["error"] = error
+    source_fetches.append(item)
+
+
+def _duration_ms(started: float) -> int:
+    return max(0, int((time.perf_counter() - started) * 1000))

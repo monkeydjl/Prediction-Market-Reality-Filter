@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -51,13 +52,15 @@ _SOURCE_FEED_URL_SETTINGS = (
 def preview_world_cup_source_bundle(payload: Any) -> dict[str, Any]:
     """Preview facts produced by a bundle of World Cup data sources."""
 
-    sources, facts = _convert_bundle(payload)
-    return {
+    sources, facts, run = _convert_bundle(payload)
+    result = {
         "source_count": len(sources),
         "converted_fact_count": len(facts),
         "sources": sources,
         "facts": facts,
     }
+    _attach_run_metadata(result, run, payload)
+    return result
 
 
 def import_world_cup_source_bundle(
@@ -67,7 +70,7 @@ def import_world_cup_source_bundle(
 ) -> dict[str, Any]:
     """Import facts produced by a bundle of World Cup data sources."""
 
-    sources, facts = _convert_bundle(payload)
+    sources, facts, run = _convert_bundle(payload)
     result = import_sports_facts(
         {"facts": facts},
         replace=replace,
@@ -76,6 +79,7 @@ def import_world_cup_source_bundle(
     result["source_count"] = len(sources)
     result["converted_fact_count"] = len(facts)
     result["sources"] = sources
+    _attach_run_metadata(result, run, payload)
     return result
 
 
@@ -124,18 +128,26 @@ def build_world_cup_source_bundle_from_feeds(
     """Fetch configured raw source feeds and assemble a bundle payload."""
 
     entries: list[dict[str, Any]] = []
+    source_fetches: list[dict[str, Any]] = []
     observed_at = _utc_timestamp(now)
     for kind, setting_name, source_url in _configured_source_feed_urls():
+        started = time.perf_counter()
         payload = _fetch_json_url(
             source_url,
             label=f"{setting_name} World Cup source feed",
         )
+        source_fetches.append({
+            "kind": kind,
+            "source_url": _display_url(source_url),
+            "status": "success",
+            "duration_ms": _duration_ms(started),
+        })
         if not isinstance(payload, (dict, list)):
             raise ValueError(f"{setting_name} must return a JSON object or array")
         entries.append(_source_feed_entry(kind, source_url, payload, observed_at))
     if not entries:
         raise ValueError("No World Cup source feed URLs are configured")
-    return {"sources": entries}
+    return {"sources": entries, "source_fetches": source_fetches}
 
 
 def preview_world_cup_source_bundle_feeds(
@@ -237,7 +249,8 @@ def import_world_cup_source_bundle_file(
     return result
 
 
-def _convert_bundle(payload: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _convert_bundle(payload: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    started = time.perf_counter()
     entries = _source_entries(payload)
     sources: list[dict[str, Any]] = []
     facts: list[dict[str, Any]] = []
@@ -245,6 +258,7 @@ def _convert_bundle(payload: Any) -> tuple[list[dict[str, Any]], list[dict[str, 
         kind = _source_kind(entry, index)
         source_payload = _source_payload(entry, index)
         source_payload = _with_entry_metadata(source_payload, entry, kind)
+        source_started = time.perf_counter()
         try:
             normalized_data = _source_to_data(kind, source_payload)
             source_facts = world_cup_data_to_facts(normalized_data)
@@ -254,10 +268,51 @@ def _convert_bundle(payload: Any) -> tuple[list[dict[str, Any]], list[dict[str, 
             "index": index,
             "kind": kind,
             "converted_fact_count": len(source_facts),
+            "duration_ms": _duration_ms(source_started),
+            "status": "converted",
             "normalized_data": normalized_data,
         })
         facts.extend(source_facts)
-    return sources, facts
+    run = _bundle_run_summary(payload, sources, facts, started)
+    return sources, facts, run
+
+
+def _attach_run_metadata(
+    result: dict[str, Any],
+    run: dict[str, Any],
+    payload: Any,
+) -> None:
+    result["run"] = run
+    if not isinstance(payload, dict):
+        return
+    source_fetches = payload.get("source_fetches")
+    if isinstance(source_fetches, list):
+        result["source_fetches"] = source_fetches
+
+
+def _bundle_run_summary(
+    payload: Any,
+    sources: list[dict[str, Any]],
+    facts: list[dict[str, Any]],
+    started: float,
+) -> dict[str, Any]:
+    skipped = payload.get("skipped_sources") if isinstance(payload, dict) else []
+    source_fetches = payload.get("source_fetches") if isinstance(payload, dict) else []
+    run = {
+        "status": "success",
+        "duration_ms": _duration_ms(started),
+        "source_count": len(sources),
+        "converted_fact_count": len(facts),
+        "skipped_source_count": len(skipped) if isinstance(skipped, list) else 0,
+    }
+    if isinstance(source_fetches, list):
+        run["source_fetch_count"] = len(source_fetches)
+        run["source_fetch_duration_ms"] = sum(
+            int(fetch.get("duration_ms", 0))
+            for fetch in source_fetches
+            if isinstance(fetch, dict)
+        )
+    return run
 
 
 def _source_entries(payload: Any) -> list[Any]:
@@ -502,3 +557,7 @@ def _has_metadata(payload: dict[str, Any], field: str) -> bool:
 
 def _clean(value: Any) -> str:
     return " ".join(str(value or "").strip().split())
+
+
+def _duration_ms(started: float) -> int:
+    return max(0, int((time.perf_counter() - started) * 1000))

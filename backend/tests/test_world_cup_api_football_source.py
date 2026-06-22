@@ -83,6 +83,11 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
         self.assertEqual(result["provider"], "api_football")
         self.assertEqual(result["source_count"], 4)
         self.assertEqual(result["converted_fact_count"], 4)
+        self.assertEqual(result["source_fetch_count"], 4)
+        self.assertEqual(result["run"]["source_fetch_count"], 4)
+        self.assertEqual(result["source_fetches"][0]["status"], "success")
+        self.assertGreaterEqual(result["source_fetches"][0]["duration_ms"], 0)
+        self.assertEqual(result["call_budget"]["max_detail_calls"], 100)
         self.assertEqual(
             {fact["kind"] for fact in result["facts"]},
             {"match_result", "qualification", "player_award", "injury"},
@@ -221,6 +226,9 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
             ],
         )
         self.assertEqual(result["source_count"], 5)
+        self.assertEqual(result["source_fetch_count"], 6)
+        self.assertEqual(result["call_budget"]["detail_calls_used"], 2)
+        self.assertEqual(result["call_budget"]["detail_calls_remaining"], 98)
         self.assertIn("statistics", {source["kind"] for source in result["sources"]})
         team_stat = next(fact for fact in result["facts"] if fact["kind"] == "team_stat")
         player_stat = next(fact for fact in result["facts"] if fact["kind"] == "player_stat")
@@ -228,6 +236,35 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
         self.assertEqual(team_stat["stat_value"], 5.0)
         self.assertEqual(player_stat["player"], "Player A")
         self.assertEqual(player_stat["stat_name"], "shots.total")
+
+    def test_fixture_detail_fetches_respect_call_budget(self):
+        bodies = [
+            _Body.fixtures(),
+            _Body.standings(),
+            _Body.top_scorers(),
+            _Body.injuries(),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics = self._settings(tmp)
+            with sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics, \
+                    patch.object(settings, "WORLD_CUP_API_FOOTBALL_FETCH_EVENTS", True), \
+                    patch.object(settings, "WORLD_CUP_API_FOOTBALL_MAX_DETAIL_CALLS", 0), \
+                    patch(
+                        "app.services.world_cup_api_football_source.urlopen",
+                        side_effect=[_UrlResponse(body) for body in bodies],
+                    ) as open_mock:
+                result = preview_world_cup_api_football_bundle(
+                    now=datetime(2026, 6, 25, 12, tzinfo=timezone.utc)
+                )
+
+        self.assertEqual(open_mock.call_count, 4)
+        self.assertEqual(result["source_count"], 4)
+        self.assertEqual(result["source_fetch_count"], 4)
+        self.assertEqual(result["skipped_source_count"], 1)
+        self.assertEqual(result["skipped_sources"][0]["kind"], "match_events")
+        self.assertEqual(result["skipped_sources"][0]["reason"], "call budget exceeded")
+        self.assertEqual(result["call_budget"]["detail_calls_used"], 0)
+        self.assertEqual(result["call_budget"]["detail_calls_skipped"], 1)
 
     def test_missing_api_key_fails_closed(self):
         with patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", ""):

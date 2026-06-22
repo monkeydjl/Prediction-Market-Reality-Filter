@@ -281,6 +281,16 @@ def _world_cup_bundle_import_summary(result: dict[str, Any], mode: str) -> dict[
         summary["provider"] = result["provider"]
     if result.get("skipped_source_count") is not None:
         summary["skipped_source_count"] = result["skipped_source_count"]
+    if result.get("skipped_sources"):
+        summary["skipped_sources"] = result["skipped_sources"]
+    if result.get("source_fetch_count") is not None:
+        summary["source_fetch_count"] = result["source_fetch_count"]
+    if result.get("source_fetches"):
+        summary["source_fetches"] = result["source_fetches"]
+    if result.get("call_budget"):
+        summary["call_budget"] = result["call_budget"]
+    if result.get("run"):
+        summary["run"] = result["run"]
     if result.get("source_metadata"):
         summary["source_metadata"] = result["source_metadata"]
     return summary

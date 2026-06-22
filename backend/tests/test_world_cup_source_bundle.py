@@ -109,6 +109,11 @@ class WorldCupSourceBundleTests(unittest.TestCase):
 
         self.assertEqual(result["source_count"], 4)
         self.assertEqual(result["converted_fact_count"], 4)
+        self.assertEqual(result["run"]["status"], "success")
+        self.assertEqual(result["run"]["source_count"], 4)
+        self.assertGreaterEqual(result["run"]["duration_ms"], 0)
+        self.assertEqual(result["sources"][0]["status"], "converted")
+        self.assertGreaterEqual(result["sources"][0]["duration_ms"], 0)
         self.assertEqual([source["kind"] for source in result["sources"]], [
             "matches",
             "standings",
@@ -397,6 +402,9 @@ class WorldCupSourceBundleTests(unittest.TestCase):
         self.assertEqual(requests[1].full_url, "https://status.example/injuries")
         self.assertEqual(result["source_count"], 2)
         self.assertEqual(result["converted_fact_count"], 2)
+        self.assertEqual(result["run"]["source_fetch_count"], 2)
+        self.assertEqual(result["source_fetches"][0]["status"], "success")
+        self.assertGreaterEqual(result["source_fetches"][0]["duration_ms"], 0)
         self.assertEqual(result["source_feeds"][0]["source_url"], "https://example.com/matches")
         self.assertEqual(result["source_metadata"][0]["source"], "example.com")
         self.assertNotIn("secret", json.dumps(result))

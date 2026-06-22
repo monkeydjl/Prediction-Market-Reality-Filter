@@ -46,6 +46,7 @@ def world_cup_data_source_status() -> dict[str, Any]:
                 "fetch_events": settings.WORLD_CUP_API_FOOTBALL_FETCH_EVENTS,
                 "fetch_lineups": settings.WORLD_CUP_API_FOOTBALL_FETCH_LINEUPS,
                 "fetch_statistics": settings.WORLD_CUP_API_FOOTBALL_FETCH_STATISTICS,
+                "max_detail_calls": settings.WORLD_CUP_API_FOOTBALL_MAX_DETAIL_CALLS,
             },
             "sportmonks": {
                 "configured": bool(

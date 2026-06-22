@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
@@ -28,6 +28,13 @@ from app.services.world_cup_player_status_source import (
 )
 from app.services.world_cup_standings_source import world_cup_standings_source_to_data
 from app.utils.file_store import read_json_strict
+
+_SOURCE_FEED_URL_SETTINGS = (
+    ("matches", "WORLD_CUP_MATCH_SOURCE_URL"),
+    ("standings", "WORLD_CUP_STANDINGS_SOURCE_URL"),
+    ("player_awards", "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL"),
+    ("player_status", "WORLD_CUP_PLAYER_STATUS_SOURCE_URL"),
+)
 
 
 def preview_world_cup_source_bundle(payload: Any) -> dict[str, Any]:
@@ -65,24 +72,7 @@ def fetch_world_cup_source_bundle_url(url: str | None = None) -> dict[str, Any]:
     """Fetch the configured remote multi-source World Cup bundle JSON."""
 
     source_url = _configured_source_bundle_url(url)
-    request = Request(source_url, headers=_bundle_url_headers())
-    try:
-        with urlopen(
-            request,
-            timeout=settings.WORLD_CUP_SOURCE_BUNDLE_TIMEOUT_SECONDS,
-        ) as response:
-            body = response.read(settings.WORLD_CUP_SOURCE_BUNDLE_MAX_BYTES + 1)
-    except HTTPError as exc:
-        raise ValueError(f"World Cup source bundle URL returned HTTP {exc.code}") from exc
-    except (TimeoutError, URLError) as exc:
-        raise ValueError("World Cup source bundle URL fetch failed") from exc
-
-    if len(body) > settings.WORLD_CUP_SOURCE_BUNDLE_MAX_BYTES:
-        raise ValueError("World Cup source bundle URL response too large")
-    try:
-        payload = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("World Cup source bundle URL did not return valid JSON") from exc
+    payload = _fetch_json_url(source_url, label="World Cup source bundle URL")
     if not isinstance(payload, dict):
         raise ValueError("World Cup source bundle URL must return a JSON object")
     return payload
@@ -112,6 +102,56 @@ def import_world_cup_source_bundle_url(
     metadata = validate_world_cup_source_bundle_metadata(payload)
     result = import_world_cup_source_bundle(payload, replace=replace)
     result["source_url"] = _display_url(source_url)
+    result["source_metadata"] = metadata
+    return result
+
+
+def build_world_cup_source_bundle_from_feeds(
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Fetch configured raw source feeds and assemble a bundle payload."""
+
+    entries: list[dict[str, Any]] = []
+    observed_at = _utc_timestamp(now)
+    for kind, setting_name, source_url in _configured_source_feed_urls():
+        payload = _fetch_json_url(
+            source_url,
+            label=f"{setting_name} World Cup source feed",
+        )
+        if not isinstance(payload, (dict, list)):
+            raise ValueError(f"{setting_name} must return a JSON object or array")
+        entries.append(_source_feed_entry(kind, source_url, payload, observed_at))
+    if not entries:
+        raise ValueError("No World Cup source feed URLs are configured")
+    return {"sources": entries}
+
+
+def preview_world_cup_source_bundle_feeds(
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Preview facts from configured raw World Cup source feed URLs."""
+
+    payload = build_world_cup_source_bundle_from_feeds(now=now)
+    metadata = validate_world_cup_source_bundle_metadata(payload)
+    result = preview_world_cup_source_bundle(payload)
+    result["source_feeds"] = _source_feed_summary(payload)
+    result["source_metadata"] = metadata
+    return result
+
+
+def import_world_cup_source_bundle_feeds(
+    *,
+    replace: bool = False,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Import facts from configured raw World Cup source feed URLs."""
+
+    payload = build_world_cup_source_bundle_from_feeds(now=now)
+    metadata = validate_world_cup_source_bundle_metadata(payload)
+    result = import_world_cup_source_bundle(payload, replace=replace)
+    result["source_feeds"] = _source_feed_summary(payload)
     result["source_metadata"] = metadata
     return result
 
@@ -278,6 +318,36 @@ def _configured_source_bundle_url(url: str | None = None) -> str:
     return source_url
 
 
+def _configured_source_feed_urls() -> list[tuple[str, str, str]]:
+    urls: list[tuple[str, str, str]] = []
+    for kind, setting_name in _SOURCE_FEED_URL_SETTINGS:
+        source_url = _clean(getattr(settings, setting_name, ""))
+        if source_url:
+            urls.append((kind, setting_name, source_url))
+    return urls
+
+
+def _fetch_json_url(source_url: str, *, label: str) -> Any:
+    request = Request(source_url, headers=_bundle_url_headers())
+    try:
+        with urlopen(
+            request,
+            timeout=settings.WORLD_CUP_SOURCE_BUNDLE_TIMEOUT_SECONDS,
+        ) as response:
+            body = response.read(settings.WORLD_CUP_SOURCE_BUNDLE_MAX_BYTES + 1)
+    except HTTPError as exc:
+        raise ValueError(f"{label} returned HTTP {exc.code}") from exc
+    except (TimeoutError, URLError) as exc:
+        raise ValueError(f"{label} fetch failed") from exc
+
+    if len(body) > settings.WORLD_CUP_SOURCE_BUNDLE_MAX_BYTES:
+        raise ValueError(f"{label} response too large")
+    try:
+        return json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} did not return valid JSON") from exc
+
+
 def _bundle_url_headers() -> dict[str, str]:
     headers = {"Accept": "application/json"}
     user_agent = _clean(settings.WORLD_CUP_SOURCE_BUNDLE_USER_AGENT)
@@ -293,6 +363,55 @@ def _bundle_url_headers() -> dict[str, str]:
 def _display_url(url: str) -> str:
     parts = urlsplit(url)
     return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
+
+def _source_feed_entry(
+    kind: str,
+    source_url: str,
+    payload: dict[str, Any] | list[Any],
+    observed_at: str,
+) -> dict[str, Any]:
+    source = ""
+    payload_observed_at = ""
+    feed_payload: dict[str, Any] | list[Any] = payload
+    display_url = _display_url(source_url)
+    if isinstance(payload, dict):
+        source = _clean(payload.get("source") or payload.get("provider"))
+        payload_observed_at = _clean(payload.get("observed_at"))
+        feed_payload = dict(payload)
+        feed_payload["source_url"] = display_url
+
+    return {
+        "kind": kind,
+        "source": source or _source_name_from_url(source_url),
+        "source_url": display_url,
+        "observed_at": payload_observed_at or observed_at,
+        "payload": feed_payload,
+    }
+
+
+def _source_feed_summary(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "kind": _clean(entry.get("kind")),
+            "source": _clean(entry.get("source")),
+            "source_url": _clean(entry.get("source_url")),
+            "observed_at": _clean(entry.get("observed_at")),
+        }
+        for entry in _source_entries(payload)
+    ]
+
+
+def _source_name_from_url(source_url: str) -> str:
+    host = _clean(urlsplit(source_url).netloc)
+    return host or "world_cup_configured_source"
+
+
+def _utc_timestamp(now: datetime | None = None) -> str:
+    value = now or datetime.now(timezone.utc)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _with_entry_metadata(payload: Any, entry: dict[str, Any], kind: str) -> Any:

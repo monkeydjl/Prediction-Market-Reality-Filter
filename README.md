@@ -62,7 +62,8 @@ npm run build
 - `WORLD_CUP_DATA_FILE`：可信世界杯数据源快照 JSON 文件，可通过 source preview/import 转换为 facts。
 - `WORLD_CUP_SOURCE_BUNDLE_FILE`：多源世界杯数据源快照 JSON 文件，可通过 bundle source preview/import 一次转换多路 feed。
 - `WORLD_CUP_SOURCE_BUNDLE_URL`：可信远程多源 bundle JSON URL，可通过 bundle URL preview/import 拉取后转换为 facts；如需鉴权，用 `WORLD_CUP_SOURCE_BUNDLE_AUTH_HEADER` / `WORLD_CUP_SOURCE_BUNDLE_AUTH_VALUE`。
-- `WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED=true`：可选定时导入多源 bundle；默认关闭，模式由 `WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE=url|file` 决定。
+- `WORLD_CUP_MATCH_SOURCE_URL` / `WORLD_CUP_STANDINGS_SOURCE_URL` / `WORLD_CUP_PLAYER_AWARDS_SOURCE_URL` / `WORLD_CUP_PLAYER_STATUS_SOURCE_URL`：可选 raw feed URL；通过 bundle feeds preview/import 拉取后组装成多源 bundle。
+- `WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED=true`：可选定时导入多源 bundle；默认关闭，模式由 `WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE=url|file|feeds` 决定。
 - `WORLD_CUP_DATA_MAX_AGE_HOURS`：配置源快照最大年龄，默认 168 小时；配置文件导入会拒绝缺少 `source` / `observed_at` 或过期的快照。
 
 ## 验证

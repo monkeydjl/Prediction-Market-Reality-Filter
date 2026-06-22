@@ -536,6 +536,83 @@ class WorldCupFactRouteTests(unittest.TestCase):
         self.assertEqual(import_resp.json()["converted_fact_count"], 1)
         self.assertEqual(facts_resp.json()["count"], 1)
 
+    def test_world_cup_configured_source_feeds_preview_does_not_write_facts(self):
+        body = json.dumps({
+            "response": [{
+                "fixture": {"id": 1001, "status": {"short": "FT"}},
+                "teams": {
+                    "home": {"name": "Team A", "winner": True},
+                    "away": {"name": "Team B", "winner": False},
+                },
+                "goals": {"home": 2, "away": 0},
+            }]
+        }).encode("utf-8")
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \
+                patch.object(settings, "WORLD_CUP_MATCH_SOURCE_URL", "https://example.com/matches?token=secret"), \
+                patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
+                patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
+                patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""), \
+                patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch("app.services.world_cup_source_bundle.urlopen", return_value=_UrlResponse(body)):
+            client = _events_client()
+            preview_resp = client.post(
+                "/events/sports/world-cup/data/bundle/feeds/preview",
+                headers=AUTH_HEADERS,
+            )
+            facts_resp = client.get("/events/sports/world-cup/facts")
+
+        self.assertEqual(preview_resp.status_code, 200)
+        self.assertEqual(preview_resp.json()["source_count"], 1)
+        self.assertEqual(preview_resp.json()["source_feeds"][0]["source_url"], "https://example.com/matches")
+        self.assertEqual(preview_resp.json()["converted_fact_count"], 1)
+        self.assertEqual(facts_resp.json()["count"], 0)
+        self.assertNotIn("secret", json.dumps(preview_resp.json()))
+
+    def test_world_cup_configured_source_feeds_import_writes_facts(self):
+        body = json.dumps({
+            "response": [{
+                "fixture": {"id": 1001, "status": {"short": "FT"}},
+                "teams": {
+                    "home": {"name": "Team A", "winner": True},
+                    "away": {"name": "Team B", "winner": False},
+                },
+                "goals": {"home": 2, "away": 0},
+            }]
+        }).encode("utf-8")
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \
+                patch.object(settings, "WORLD_CUP_MATCH_SOURCE_URL", "https://example.com/matches"), \
+                patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
+                patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
+                patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""), \
+                patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch("app.services.world_cup_source_bundle.urlopen", return_value=_UrlResponse(body)):
+            client = _events_client()
+            import_resp = client.post(
+                "/events/sports/world-cup/data/bundle/feeds/import?replace=true",
+                headers=AUTH_HEADERS,
+            )
+            facts_resp = client.get("/events/sports/world-cup/facts?kind=match_result")
+
+        self.assertEqual(import_resp.status_code, 200)
+        self.assertEqual(import_resp.json()["converted_fact_count"], 1)
+        self.assertEqual(facts_resp.json()["count"], 1)
+
+    def test_world_cup_configured_source_feeds_missing_urls_returns_422(self):
+        with patch.object(settings, "WORLD_CUP_MATCH_SOURCE_URL", ""), \
+                patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
+                patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
+                patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""), \
+                patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            resp = client.post(
+                "/events/sports/world-cup/data/bundle/feeds/preview",
+                headers=AUTH_HEADERS,
+            )
+        self.assertEqual(resp.status_code, 422)
+        self.assertIn("No World Cup source feed URLs", resp.json()["detail"])
+
     def test_world_cup_remote_source_bundle_missing_url_returns_422(self):
         with patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_URL", ""), \
                 patch.object(settings, "API_WRITE_KEY", "secret"):

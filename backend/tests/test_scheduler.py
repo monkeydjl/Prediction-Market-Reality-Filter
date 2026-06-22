@@ -189,6 +189,37 @@ class WorldCupBundleImportJobTests(unittest.TestCase):
         self.assertEqual(run["result"]["mode"], "file")
         self.assertEqual(run["result"]["source_file"], "world_cup_source_bundle.json")
 
+    def test_job_imports_configured_feeds_when_mode_is_feeds(self):
+        result = {
+            "source_count": 1,
+            "converted_fact_count": 1,
+            "imported": 1,
+            "replace": False,
+            "source_feeds": [{
+                "kind": "matches",
+                "source_url": "https://example.com/matches",
+            }],
+            "sources": [{"normalized_data": {"large": "payload"}}],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch("app.services.world_cup_source_bundle.import_world_cup_source_bundle_feeds",
+                          return_value=result) as import_feeds, \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED", True), \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE", "feeds"), \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE", False):
+                asyncio.run(scheduler._job_world_cup_source_bundle_import())
+                run = loop_run_store.last_run("world_cup_source_bundle_import")
+
+        import_feeds.assert_called_once_with(replace=False)
+        self.assertEqual(run["status"], "success")
+        self.assertEqual(run["result"]["mode"], "feeds")
+        self.assertEqual(
+            run["result"]["source_feeds"][0]["source_url"],
+            "https://example.com/matches",
+        )
+        self.assertNotIn("sources", run["result"])
+
     def test_job_failure_is_isolated(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \

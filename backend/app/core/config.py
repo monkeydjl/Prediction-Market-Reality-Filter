@@ -105,6 +105,14 @@ class Settings:
         ),
     )
     WORLD_CUP_SOURCE_BUNDLE_URL: str = os.getenv("WORLD_CUP_SOURCE_BUNDLE_URL", "")
+    WORLD_CUP_MATCH_SOURCE_URL: str = os.getenv("WORLD_CUP_MATCH_SOURCE_URL", "")
+    WORLD_CUP_STANDINGS_SOURCE_URL: str = os.getenv("WORLD_CUP_STANDINGS_SOURCE_URL", "")
+    WORLD_CUP_PLAYER_AWARDS_SOURCE_URL: str = os.getenv(
+        "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""
+    )
+    WORLD_CUP_PLAYER_STATUS_SOURCE_URL: str = os.getenv(
+        "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""
+    )
     WORLD_CUP_SOURCE_BUNDLE_TIMEOUT_SECONDS: float = float(
         os.getenv("WORLD_CUP_SOURCE_BUNDLE_TIMEOUT_SECONDS", "10.0")
     )

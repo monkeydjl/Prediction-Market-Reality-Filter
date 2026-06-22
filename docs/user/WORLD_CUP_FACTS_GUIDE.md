@@ -88,6 +88,16 @@ POST /api/events/sports/world-cup/data/bundle/url/import?replace=false
 Header: X-API-Key: <API_WRITE_KEY>
 ```
 
+Import configured raw source feed URLs as one bundle:
+
+```text
+POST /api/events/sports/world-cup/data/bundle/feeds/preview
+Header: X-API-Key: <API_WRITE_KEY>
+
+POST /api/events/sports/world-cup/data/bundle/feeds/import?replace=false
+Header: X-API-Key: <API_WRITE_KEY>
+```
+
 Import raw fixture/result exports through the match-source adapter:
 
 ```text
@@ -209,7 +219,10 @@ Header: X-API-Key: <API_WRITE_KEY>
    `data/source/preview`. If a multi-source bundle lives in
    `WORLD_CUP_SOURCE_BUNDLE_FILE`, call `data/bundle/source/preview`.
    If it lives behind `WORLD_CUP_SOURCE_BUNDLE_URL`, call
-   `data/bundle/url/preview`.
+   `data/bundle/url/preview`. If raw source feeds are configured with
+   `WORLD_CUP_MATCH_SOURCE_URL`, `WORLD_CUP_STANDINGS_SOURCE_URL`,
+   `WORLD_CUP_PLAYER_AWARDS_SOURCE_URL`, or
+   `WORLD_CUP_PLAYER_STATUS_SOURCE_URL`, call `data/bundle/feeds/preview`.
 4. Import with `replace=true` when the file is the current full fact snapshot.
    Use `replace=false` for incremental upserts.
 5. Call the facts list endpoint and inspect the normalized records.
@@ -452,10 +465,34 @@ Invoke-RestMethod `
   -Headers @{ "X-API-Key" = $key }
 ```
 
+For configured raw source feeds, set one or more of
+`WORLD_CUP_MATCH_SOURCE_URL`, `WORLD_CUP_STANDINGS_SOURCE_URL`,
+`WORLD_CUP_PLAYER_AWARDS_SOURCE_URL`, and
+`WORLD_CUP_PLAYER_STATUS_SOURCE_URL`. PMRF fetches each configured URL, strips
+query strings from returned `source_url` metadata, adds a fetch timestamp when
+the payload lacks `observed_at`, and then runs the existing bundle adapters.
+Use the shared `WORLD_CUP_SOURCE_BUNDLE_AUTH_HEADER` /
+`WORLD_CUP_SOURCE_BUNDLE_AUTH_VALUE` settings when every configured feed uses
+the same upstream auth header.
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/bundle/feeds/preview" `
+  -Headers @{ "X-API-Key" = $key }
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/bundle/feeds/import?replace=false" `
+  -Headers @{ "X-API-Key" = $key }
+```
+
 To import a configured bundle on a schedule, set
 `WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED=true`. Use
 `WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE=url` for `WORLD_CUP_SOURCE_BUNDLE_URL`, or
-`WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE=file` for `WORLD_CUP_SOURCE_BUNDLE_FILE`.
+`WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE=file` for `WORLD_CUP_SOURCE_BUNDLE_FILE`,
+or `WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE=feeds` for the configured raw source
+feed URLs.
 The default run time is 05:20 UTC and can be changed with
 `WORLD_CUP_SOURCE_BUNDLE_IMPORT_HOUR_UTC` and
 `WORLD_CUP_SOURCE_BUNDLE_IMPORT_MINUTE_UTC`. Keep

@@ -211,6 +211,7 @@ async def _job_world_cup_source_bundle_import():
     run_id = _start_run("world_cup_source_bundle_import")
     try:
         from app.services.world_cup_source_bundle import (
+            import_world_cup_source_bundle_feeds,
             import_world_cup_source_bundle_file,
             import_world_cup_source_bundle_url,
         )
@@ -223,9 +224,13 @@ async def _job_world_cup_source_bundle_import():
             result = import_world_cup_source_bundle_file(
                 replace=settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE
             )
+        elif mode == "feeds":
+            result = import_world_cup_source_bundle_feeds(
+                replace=settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE
+            )
         else:
             raise ValueError(
-                "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE must be 'url' or 'file'"
+                "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE must be 'url', 'file', or 'feeds'"
             )
 
         summary = _world_cup_bundle_import_summary(result, mode)
@@ -255,6 +260,8 @@ def _world_cup_bundle_import_summary(result: dict[str, Any], mode: str) -> dict[
         summary["source_file"] = result["source_file"]
     if result.get("source_url"):
         summary["source_url"] = result["source_url"]
+    if result.get("source_feeds"):
+        summary["source_feeds"] = result["source_feeds"]
     if result.get("source_metadata"):
         summary["source_metadata"] = result["source_metadata"]
     return summary

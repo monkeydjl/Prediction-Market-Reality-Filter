@@ -8,12 +8,14 @@ from unittest.mock import patch
 from app.core.config import settings
 from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT, load_sports_facts
 from app.services.world_cup_source_bundle import (
+    import_world_cup_source_bundle_feeds,
     fetch_world_cup_source_bundle_url,
     import_world_cup_source_bundle,
     import_world_cup_source_bundle_file,
     import_world_cup_source_bundle_url,
     load_world_cup_source_bundle_file,
     preview_world_cup_source_bundle,
+    preview_world_cup_source_bundle_feeds,
     preview_world_cup_source_bundle_file,
     preview_world_cup_source_bundle_url,
     validate_world_cup_source_bundle_metadata,
@@ -250,6 +252,89 @@ class WorldCupSourceBundleTests(unittest.TestCase):
         self.assertEqual(result["converted_fact_count"], 4)
         self.assertEqual(result["imported"], 4)
         self.assertEqual(len(facts), 4)
+
+    def test_configured_source_feeds_preview_fetches_multiple_urls(self):
+        match_body = json.dumps({
+            "response": [{
+                "fixture": {"id": 1001, "status": {"short": "FT"}},
+                "teams": {
+                    "home": {"name": "Team A", "winner": True},
+                    "away": {"name": "Team B", "winner": False},
+                },
+                "goals": {"home": 2, "away": 0},
+            }]
+        }).encode("utf-8")
+        status_body = json.dumps([{
+            "player": {"name": "Player B"},
+            "team": {"name": "Brazil"},
+            "status": "out",
+            "injury": {"type": "hamstring"},
+        }]).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \
+                patch.object(settings, "WORLD_CUP_MATCH_SOURCE_URL", "https://example.com/matches?token=secret"), \
+                patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
+                patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
+                patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", "https://status.example/injuries"), \
+                patch(
+                    "app.services.world_cup_source_bundle.urlopen",
+                    side_effect=[_UrlResponse(match_body), _UrlResponse(status_body)],
+                ) as open_mock:
+            result = preview_world_cup_source_bundle_feeds(
+                now=datetime(2026, 6, 25, 12, tzinfo=timezone.utc)
+            )
+            facts = load_sports_facts(tournament=WORLD_CUP_TOURNAMENT)
+
+        requests = [call.args[0] for call in open_mock.call_args_list]
+        self.assertEqual(requests[0].full_url, "https://example.com/matches?token=secret")
+        self.assertEqual(requests[1].full_url, "https://status.example/injuries")
+        self.assertEqual(result["source_count"], 2)
+        self.assertEqual(result["converted_fact_count"], 2)
+        self.assertEqual(result["source_feeds"][0]["source_url"], "https://example.com/matches")
+        self.assertEqual(result["source_metadata"][0]["source"], "example.com")
+        self.assertNotIn("secret", json.dumps(result))
+        self.assertEqual(facts, [])
+
+    def test_configured_source_feeds_import_writes_facts(self):
+        body = json.dumps({
+            "response": [{
+                "fixture": {"id": 1001, "status": {"short": "FT"}},
+                "teams": {
+                    "home": {"name": "Team A", "winner": True},
+                    "away": {"name": "Team B", "winner": False},
+                },
+                "goals": {"home": 2, "away": 0},
+            }]
+        }).encode("utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            fact_path = str(Path(tmp) / "facts.json")
+            with patch.object(settings, "SPORTS_FACT_FILE", fact_path), \
+                    patch.object(settings, "WORLD_CUP_MATCH_SOURCE_URL", "https://example.com/matches"), \
+                    patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
+                    patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
+                    patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""), \
+                    patch(
+                        "app.services.world_cup_source_bundle.urlopen",
+                        return_value=_UrlResponse(body),
+                    ):
+                result = import_world_cup_source_bundle_feeds(
+                    replace=True,
+                    now=datetime(2026, 6, 25, 12, tzinfo=timezone.utc),
+                )
+                facts = load_sports_facts(tournament=WORLD_CUP_TOURNAMENT)
+
+        self.assertEqual(result["converted_fact_count"], 1)
+        self.assertEqual(result["imported"], 1)
+        self.assertEqual(len(facts), 1)
+
+    def test_configured_source_feeds_require_at_least_one_url(self):
+        with patch.object(settings, "WORLD_CUP_MATCH_SOURCE_URL", ""), \
+                patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
+                patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
+                patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""):
+            with self.assertRaisesRegex(ValueError, "No World Cup source feed URLs"):
+                preview_world_cup_source_bundle_feeds()
 
     def test_remote_bundle_url_requires_configured_url(self):
         with patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_URL", ""):

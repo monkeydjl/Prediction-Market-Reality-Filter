@@ -7,6 +7,7 @@ from typing import Any
 from gnews import GNews
 
 from app.core.config import settings
+from app.utils.failure_policy import fail_closed_empty_list, log_service_failure
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +29,12 @@ def _sync_fetch(query: str) -> list[dict[str, Any]]:
     try:
         results = _gnews_client.get_news(query)
     except Exception as exc:
-        # Log so an empty result list is distinguishable from a GNews failure
-        # (rate limit / network / parser). Previously swallowed silently.
-        logger.warning("gnews fetch failed [query=%.60s]: %s", query, exc)
-        return []
+        return fail_closed_empty_list(
+            logger,
+            "gnews",
+            exc,
+            context={"query": query[:60]},
+        )
 
     articles = []
     for item in results:
@@ -61,8 +64,15 @@ async def fetch_google_news(query: str) -> list[dict[str, Any]]:
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     articles = []
-    for result in results:
+    for query_item, result in zip(queries, results):
         if isinstance(result, Exception):
+            log_service_failure(
+                logger,
+                "gnews_task",
+                result,
+                policy="fail_closed_empty_list",
+                context={"query": query_item[:60]},
+            )
             continue
         articles.extend(result)
 

@@ -17,6 +17,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from app.core.config import settings
 from app.memory import loop_run_store
+from app.utils import sqlite_db
 
 logger = logging.getLogger(__name__)
 _scheduler_lock_handle: Any | None = None
@@ -98,9 +99,10 @@ def scheduler_start_skipped_due_to_lock() -> bool:
 # later that don't override them):
 #   - coalesce=True: if the scheduler fell behind and a job would fire more
 #     than once to catch up, run it just once (no backlog stampede).
-#   - misfire_grace_time=300: a missed run (e.g. the app was down at 07:15)
-#     still fires if the scheduler catches up within 5 minutes; beyond that it
-#     is dropped (and logged), instead of the default 1s silent drop.
+#   - misfire_grace_time=settings.SCHEDULER_MISFIRE_GRACE_SECONDS (default 24h):
+#     a missed run still fires if the scheduler catches up inside that window;
+#     beyond it the run is dropped and logged instead of using the default 1s
+#     grace.
 scheduler = AsyncIOScheduler(
     timezone="UTC",
     job_defaults={
@@ -181,6 +183,23 @@ async def _job_event_discover():
         logger.exception("[Scheduler] Event discover failed")
 
 
+async def _job_loop_db_maintenance():
+    """Daily SQLite loop-store maintenance: WAL truncation + integrity check."""
+    logger.info("[Scheduler] Loop DB maintenance starting...")
+    run_id = _start_run("loop_db_maintenance")
+    try:
+        result = sqlite_db.maintain()
+        _finish_run(run_id, "success", result=result)
+        checkpoint = result.get("checkpoint", {})
+        logger.info(
+            "[Scheduler] Loop DB maintenance ok: checkpoint=%s",
+            checkpoint,
+        )
+    except Exception as exc:
+        _finish_run(run_id, "failed", error=str(exc))
+        logger.exception("[Scheduler] Loop DB maintenance failed")
+
+
 def start_scheduler():
     if scheduler.running is True:
         logger.info("[Scheduler] Already running; startup skipped.")
@@ -207,6 +226,13 @@ def start_scheduler():
             replace_existing=True,
             max_instances=1,
         )
+        scheduler.add_job(
+            _job_loop_db_maintenance,
+            CronTrigger(hour=6, minute=45),
+            id="loop_db_maintenance",
+            replace_existing=True,
+            max_instances=1,
+        )
         scheduler.start()
     except Exception:
         _release_scheduler_lock()
@@ -214,7 +240,7 @@ def start_scheduler():
     discover_state = "on" if settings.EVENT_DISCOVER_ENABLED else "off"
     logger.info(
         "[Scheduler] Started — event_discover@07:15UTC(%s) | "
-        "event_auto_resolve@22:30UTC",
+        "loop_db_maintenance@06:45UTC | event_auto_resolve@22:30UTC",
         discover_state,
     )
     return True
@@ -223,7 +249,7 @@ def start_scheduler():
 def stop_scheduler():
     try:
         if scheduler.running:
-            scheduler.shutdown(wait=False)
+            scheduler.shutdown(wait=True)
             logger.info("[Scheduler] Stopped.")
     finally:
         _release_scheduler_lock()

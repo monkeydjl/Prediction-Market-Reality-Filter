@@ -22,10 +22,14 @@ def loop_status(
     events = list_all_events()
     resolved = list_resolved_events()
     prediction_counts = _prediction_counts()
+    dangling_refs = _dangling_event_refs(events)
     orphan_count = _orphan_prediction_count(events)
     calibration = calibration_summary()
     return {
         "scheduler": {"running": scheduler_running},
+        "storage": {
+            "loop_db_schema_versions": sqlite_db.schema_versions(),
+        },
         "runs": {
             "event_discover": _visible_run(
                 loop_run_store.last_run("event_discover"),
@@ -33,6 +37,10 @@ def loop_status(
             ),
             "event_auto_resolve": _visible_run(
                 loop_run_store.last_run("event_auto_resolve"),
+                include_run_details=include_run_details,
+            ),
+            "loop_db_maintenance": _visible_run(
+                loop_run_store.last_run("loop_db_maintenance"),
                 include_run_details=include_run_details,
             ),
         },
@@ -50,6 +58,8 @@ def loop_status(
             "predictions": prediction_counts,
             "pending_links": len(list_pending()),
             "orphan_predictions": orphan_count,
+            "dangling_predictions": dangling_refs["predictions"],
+            "dangling_links": dangling_refs["links"],
             "calibration_n": calibration.get("n", 0),
         },
         "calibration": calibration,
@@ -86,6 +96,34 @@ def _prediction_counts() -> dict[str, int]:
     except Exception:
         return {}
     return {str(row["status"]): int(row["n"] or 0) for row in rows}
+
+
+def _dangling_event_refs(events: list[dict[str, Any]]) -> dict[str, int]:
+    event_ids = {
+        str(entry.get("event_id") or "")
+        for entry in events
+        if entry.get("event_id")
+    }
+    return {
+        "predictions": _dangling_count("predictions", event_ids),
+        "links": _dangling_count("event_market_links", event_ids),
+    }
+
+
+def _dangling_count(table: str, event_ids: set[str]) -> int:
+    path = sqlite_db.loop_db_path()
+    try:
+        with reading(path) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT DISTINCT event_id
+                FROM {table}
+                WHERE event_id IS NOT NULL AND event_id != ''
+                """
+            ).fetchall()
+    except Exception:
+        return 0
+    return sum(1 for row in rows if str(row["event_id"]) not in event_ids)
 
 
 def _orphan_prediction_count(events: list[dict[str, Any]]) -> int:

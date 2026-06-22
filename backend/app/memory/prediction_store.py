@@ -21,7 +21,6 @@ docs/user/DATABASE_DESIGN.md.
 
 import threading
 import uuid
-from datetime import datetime, timezone
 from typing import Any
 
 from app.core.config import settings
@@ -85,6 +84,7 @@ _MIGRATIONS = {
 
 _INITIALIZED: set[str] = set()
 _INIT_GUARD = threading.Lock()
+_SCHEMA_VERSION = 3
 
 
 def _migrate(conn: Any) -> None:
@@ -180,11 +180,8 @@ def _ensure_schema(path: str) -> None:
                 "CREATE INDEX IF NOT EXISTS idx_pred_category "
                 "ON predictions(base_rate_category)"
             )
+            sqlite_db.record_schema_version(conn, "predictions", _SCHEMA_VERSION)
         _INITIALIZED.add(path)
-
-
-def utcutc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _num(value: Any, default: float = 0.0) -> float:

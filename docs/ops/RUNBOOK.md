@@ -96,6 +96,20 @@ The container includes a healthcheck that pings `/api/health` every 30 seconds.
 
 ## Process Supervision
 
-Use `deploy/prediction-market-reality-filter.service` as the systemd template.
-The service restarts automatically after crashes and starts after the network
-is online.
+Use the two systemd units in `deploy/`:
+
+```bash
+sudo cp deploy/prediction-market-reality-filter.service /etc/systemd/system/
+sudo cp deploy/prediction-market-reality-filter-scheduler.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable prediction-market-reality-filter.service
+sudo systemctl enable prediction-market-reality-filter-scheduler.service
+sudo systemctl start prediction-market-reality-filter.service
+sudo systemctl start prediction-market-reality-filter-scheduler.service
+```
+
+The API unit sets `SCHEDULER_ENABLED=false`; the scheduler unit sets
+`SCHEDULER_ENABLED=true` and runs `backend/scripts/run_scheduler.py`. This keeps
+APScheduler out of the web process while preserving the same job definitions,
+SQLite run ledger, and process lock. If both units accidentally try to own the
+scheduler, the lock file allows only one process to start jobs.

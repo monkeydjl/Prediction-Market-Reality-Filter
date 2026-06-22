@@ -118,9 +118,13 @@ class KalshiEventSourceTests(unittest.TestCase):
 
     def test_fetch_error_degrades_to_empty(self):
         with patch.object(source, "_fetch_raw_events",
-                          new=AsyncMock(side_effect=RuntimeError("boom"))):
+                          new=AsyncMock(side_effect=RuntimeError("boom"))), \
+             self.assertLogs("app.services.kalshi_event_source", level="WARNING") as logs:
             events = asyncio.run(source.fetch_candidate_events(limit=5))
         self.assertEqual(events, [])
+        text = "\n".join(logs.output)
+        self.assertIn("source=kalshi_candidates", text)
+        self.assertIn("policy=fail_closed_empty_list", text)
 
     def test_fetch_resolved_markets_maps_results(self):
         raw = [
@@ -140,8 +144,12 @@ class KalshiEventSourceTests(unittest.TestCase):
 
     def test_fetch_resolved_error_degrades_to_empty(self):
         with patch.object(source, "_fetch_raw_resolved",
-                          new=AsyncMock(side_effect=RuntimeError("boom"))):
+                          new=AsyncMock(side_effect=RuntimeError("boom"))), \
+             self.assertLogs("app.services.kalshi_event_source", level="WARNING") as logs:
             self.assertEqual(asyncio.run(source.fetch_resolved_markets()), [])
+        text = "\n".join(logs.output)
+        self.assertIn("source=kalshi_resolved", text)
+        self.assertIn("policy=fail_closed_empty_list", text)
 
     def test_fetch_raw_resolved_overfetches_for_single_leg_results(self):
         client = _Client({"events": []})

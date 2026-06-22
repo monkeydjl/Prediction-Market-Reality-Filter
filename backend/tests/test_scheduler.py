@@ -30,6 +30,15 @@ class JobDefaultsTests(unittest.TestCase):
         self.assertGreater(defaults.get("misfire_grace_time", 0), 60)
 
 
+class StopSchedulerTests(unittest.TestCase):
+    def test_stop_waits_for_running_jobs(self):
+        fake = MagicMock()
+        fake.running = True
+        with patch.object(scheduler, "scheduler", fake):
+            scheduler.stop_scheduler()
+        fake.shutdown.assert_called_once_with(wait=True)
+
+
 class SchedulerLockTests(unittest.TestCase):
     """The scheduler process lock prevents same-host worker duplication."""
 
@@ -106,6 +115,28 @@ class EventDiscoverJobTests(unittest.TestCase):
         mock_discover.assert_not_called()
 
 
+class LoopDbMaintenanceJobTests(unittest.TestCase):
+    def test_job_runs_sqlite_maintenance_and_records_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = {"ok": True, "integrity": ["ok"], "checkpoint": {"busy": 0}}
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(scheduler.sqlite_db, "maintain", return_value=result):
+                asyncio.run(scheduler._job_loop_db_maintenance())
+                run = loop_run_store.last_run("loop_db_maintenance")
+        self.assertEqual(run["status"], "success")
+        self.assertEqual(run["result"], result)
+
+    def test_job_failure_is_isolated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(scheduler.sqlite_db, "maintain",
+                                 side_effect=RuntimeError("bad db")):
+                asyncio.run(scheduler._job_loop_db_maintenance())
+                run = loop_run_store.last_run("loop_db_maintenance")
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("bad db", run["error"])
+
+
 class EventDiscoverRegistrationTests(unittest.TestCase):
     """The event_discover job is registered only when EVENT_DISCOVER_ENABLED;
     event_auto_resolve is always registered."""
@@ -122,11 +153,13 @@ class EventDiscoverRegistrationTests(unittest.TestCase):
         ids = self._registered_ids(True)
         self.assertIn("event_discover", ids)
         self.assertIn("event_auto_resolve", ids)
+        self.assertIn("loop_db_maintenance", ids)
 
     def test_not_registered_when_disabled(self):
         ids = self._registered_ids(False)
         self.assertNotIn("event_discover", ids)
         self.assertIn("event_auto_resolve", ids)  # always registered
+        self.assertIn("loop_db_maintenance", ids)
 
     def test_start_is_noop_when_already_running(self):
         fake = MagicMock()

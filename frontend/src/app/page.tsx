@@ -199,7 +199,7 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen">
       <AppNav />
-      <main className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
+      <main id="main-content" className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="flex flex-col gap-1">
             <h1 className="text-balance text-xl font-semibold md:text-2xl">事件概率监控面板</h1>

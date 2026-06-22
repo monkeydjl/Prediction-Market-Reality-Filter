@@ -106,6 +106,7 @@ class FreezePredictionTests(unittest.TestCase):
             self.assertEqual(frozen["liquidity"], 1000.0)
             self.assertEqual(frozen["volume"], 5000.0)
             self.assertEqual(frozen["status"], "open")
+            self.assertEqual(sqlite_db.schema_versions()["predictions"], 3)
 
     def test_freeze_seeds_verified_link(self):
         # 补-A: freezing a market event also seeds a verified event->contract link

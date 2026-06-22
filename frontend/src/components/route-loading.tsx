@@ -10,7 +10,7 @@ export function RouteLoading({
   return (
     <div className="min-h-screen">
       <AppNav />
-      <main className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
+      <main id="main-content" className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
         <div className="flex flex-col gap-2">
           <div className="h-7 w-52 animate-pulse rounded-md bg-secondary" />
           <div className="h-4 w-full max-w-xl animate-pulse rounded bg-secondary/70" />

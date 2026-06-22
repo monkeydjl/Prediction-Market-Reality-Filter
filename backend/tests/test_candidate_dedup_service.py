@@ -1,9 +1,9 @@
 """Tests for cross-source candidate dedup (candidate_dedup_service).
 
 The dedup drops candidates whose question is similar to an already-accepted
-candidate's, keeping the higher-priority source (market platforms before Open
-Web). Similarity is token-set Jaccard with a tiered threshold: 0.82 for
-market-vs-market, 0.6 when either side is Open Web.
+candidate's, keeping the higher-priority source (market platforms before curated
+sports before Open Web). Similarity is token-set Jaccard with a tiered threshold:
+0.82 for structured-vs-structured, 0.6 when either side is Open Web.
 
 To make the Jaccard values deterministic and readable, most cases use
 controlled token-set questions (e.g. "alpha beta gamma delta epsilon zeta") so
@@ -147,6 +147,28 @@ class OpenWebThresholdTests(unittest.TestCase):
         result = dedupe_candidates(candidates)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["source"]["platform"], "Polymarket")
+
+
+class SportsEventThresholdTests(unittest.TestCase):
+    def test_sports_events_use_strict_structured_threshold(self):
+        # Same 5/7 ~ 0.714 overlap as the Open Web test. Because neither side is
+        # Open Web, the stricter 0.82 structured threshold applies and both
+        # curated sports questions are kept.
+        candidates = [
+            _candidate(_NEAR_DUPE, "World Cup", source_type="sports_event"),
+            _candidate(_NEAR_DUPE_OTHER_YEAR, "World Cup", source_type="sports_event"),
+        ]
+        result = dedupe_candidates(candidates)
+        self.assertEqual(len(result), 2)
+
+    def test_sports_event_outranks_openweb_duplicate(self):
+        candidates = [
+            _candidate(_NEAR_DUPE_OTHER_YEAR, "Open Web", source_type="open_web"),
+            _candidate(_NEAR_DUPE, "World Cup", source_type="sports_event"),
+        ]
+        result = dedupe_candidates(candidates)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["source"]["type"], "sports_event")
 
 
 class BoundaryTests(unittest.TestCase):

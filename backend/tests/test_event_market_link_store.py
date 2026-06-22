@@ -25,6 +25,8 @@ class EventMarketLinkStoreTests(unittest.TestCase):
             # A read on a brand-new DB must not raise (schema created lazily).
             self.assertEqual(links.list_pending(), [])
             self.assertIsNone(links.get_verified_link("nope"))
+            versions = sqlite_db.schema_versions()
+        self.assertEqual(versions["event_market_links"], 1)
 
     def test_upsert_and_get_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp, self._db(tmp):

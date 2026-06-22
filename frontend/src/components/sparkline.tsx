@@ -1,19 +1,23 @@
+import { memo } from "react";
+
 import type { Trend } from "@/lib/adapt";
 
-// Hand-rolled SVG sparkline — no chart lib, works in static export.
-export function Sparkline({
-  data,
-  trend,
-  label = "概率趋势",
-  width = 88,
-  height = 28,
-}: {
+type SparklineProps = {
   data: number[];
   trend: Trend;
   label?: string;
   width?: number;
   height?: number;
-}) {
+};
+
+// Hand-rolled SVG sparkline — no chart lib, works in static export.
+function SparklineBase({
+  data,
+  trend,
+  label = "概率趋势",
+  width = 88,
+  height = 28,
+}: SparklineProps) {
   if (!data || data.length < 2) {
     return <div className="h-7 w-[88px]" role="img" aria-label={`${label}暂无足够数据`} />;
   }
@@ -74,3 +78,6 @@ export function Sparkline({
     </svg>
   );
 }
+
+export const Sparkline = memo(SparklineBase);
+Sparkline.displayName = "Sparkline";

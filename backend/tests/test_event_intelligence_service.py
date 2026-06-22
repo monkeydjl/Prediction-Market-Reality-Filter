@@ -1,5 +1,7 @@
 import asyncio
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import app.services.ai_analysis_service as ai
@@ -341,6 +343,56 @@ class EventIdentityTests(unittest.TestCase):
         self.assertEqual(eis._event_id("Will it pass?"), eis._event_id("Will it pass?"))
 
 
+class SportsContextIntegrationTests(unittest.TestCase):
+    def test_analyze_event_appends_sports_context_for_sports_source(self):
+        from app.core.config import settings
+        from app.services.sports_fact_service import import_sports_facts
+
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp, \
+                    patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")):
+                import_sports_facts([{
+                    "kind": "injury",
+                    "team": "Brazil",
+                    "player": "Player A",
+                    "status": "out",
+                    "severity": "high",
+                }])
+                analyze = AsyncMock(return_value={
+                    "market_question": "Will Brazil reach the semifinals of the 2026 FIFA World Cup?",
+                    "market_probability": 38.0,
+                    "ai_probability": 34.0,
+                    "confidence_score": 0.6,
+                    "news_quality_score": 0.5,
+                    "evidence_strength": 0.3,
+                    "source_count": 1,
+                })
+                with patch("app.services.ai_analysis_service.analyze_market", new=analyze), \
+                        patch("app.services.cross_validation_service.cross_validate",
+                              new=AsyncMock(return_value=None)):
+                    record = await eis.analyze_event(
+                        "Will Brazil reach the semifinals of the 2026 FIFA World Cup?",
+                        baseline_probability=38.0,
+                        news_context="EVIDENCE PROFILE\nSOURCE_COUNT: 1",
+                        source={
+                            "type": "sports_event",
+                            "category": "team_progression",
+                            "tournament": "2026 FIFA World Cup",
+                            "entities": ["Brazil", "2026 FIFA World Cup"],
+                        },
+                    )
+                return record, analyze.await_args.kwargs["news_context"]
+
+        record, context = _run(run())
+        self.assertIn("SPORTS FACT SIGNALS", context)
+        self.assertIn("Player A", context)
+        self.assertIn("sports_context", record)
+        self.assertEqual(
+            record["sports_context"]["signals"]["injury_signal"]["direction"],
+            "supports_no",
+        )
+
+
 class CollectCandidateEventsCryptoOptInTests(unittest.TestCase):
     """The opt-in Polymarket crypto fetch (POLYMARKET_CRYPTO_FETCH_ENABLED).
 
@@ -359,6 +411,8 @@ class CollectCandidateEventsCryptoOptInTests(unittest.TestCase):
             patch("app.services.manifold_event_source.fetch_candidate_events",
                   new=AsyncMock(return_value=[])),
             patch("app.services.kalshi_event_source.fetch_candidate_events",
+                  new=AsyncMock(return_value=[])),
+            patch("app.services.world_cup_event_source.fetch_candidate_events",
                   new=AsyncMock(return_value=[])),
             patch("app.services.polymarket_event_source.fetch_crypto_candidate_events",
                   new=crypto_fetch),

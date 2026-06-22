@@ -63,7 +63,7 @@ export function DecisionCard({
   return (
     <Link
       href={`/events?id=${encodeURIComponent(report.event_id)}`}
-      className="group flex flex-col gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/40 hover:bg-secondary/30"
+      className="group flex flex-col gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/40 hover:bg-secondary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <div className="flex items-start justify-between gap-3">
         <h3 className="line-clamp-2 text-sm font-medium leading-snug text-foreground group-hover:text-primary">

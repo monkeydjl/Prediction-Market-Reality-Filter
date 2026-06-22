@@ -10,6 +10,7 @@
 - [Architecture Philosophy](user/ARCHITECTURE_PHILOSOPHY.md) — 8 design principles
 - [Design System](dev/DESIGN.md) — Visual design (OKLCH colors, typography, components)
 - [Product Context](dev/PRODUCT.md) — User personas, brand, anti-patterns
+- [World Cup Prediction System Design](dev/WORLD_CUP_PREDICTION_SYSTEM_DESIGN.md) — 世界杯预测系统设计与优先级
 
 ## Architecture Decision Records
 - [ADR-001: JSON File Store](dev/adr/001-json-file-store.md)

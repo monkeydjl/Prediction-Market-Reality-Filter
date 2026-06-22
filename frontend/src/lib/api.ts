@@ -17,6 +17,12 @@ const GET_CACHE_TTL_MS = 15_000;
 const getCache = new Map<string, { expiresAt: number; value: unknown }>();
 const inflightGets = new Map<string, Promise<unknown>>();
 
+function pruneExpiredGetCache(now = Date.now()): void {
+  for (const [key, cached] of getCache.entries()) {
+    if (cached.expiresAt <= now) getCache.delete(key);
+  }
+}
+
 export function getOperatorApiKey(): string {
   if (typeof window === "undefined") return "";
   return window.sessionStorage.getItem(OPERATOR_KEY_STORAGE) ?? "";
@@ -69,7 +75,7 @@ export function buildApiErrorMessage(status: number, bodyText: string): string {
   }
 
   if (status === 401 || status === 403) {
-    return "当前请求未获授权";
+    return "当前请求未获授权：请先在右上角「授权」中输入 backend/.env 里的 API_WRITE_KEY";
   }
 
   if (status === 400) {
@@ -89,6 +95,7 @@ async function api<T>(
   const cacheKey = `${BASE}${path}`;
 
   if (isGet) {
+    pruneExpiredGetCache();
     const cached = getCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.value as T;
     const pending = inflightGets.get(cacheKey);
@@ -240,8 +247,13 @@ export interface LoopStatus {
     open_opportunities?: number;
     pending_links?: number;
     orphan_predictions?: number;
+    dangling_predictions?: number;
+    dangling_links?: number;
     calibration_n?: number;
     predictions?: Record<string, number>;
+  };
+  storage?: {
+    loop_db_schema_versions?: Record<string, number>;
   };
   calibration?: PredictionCalibration;
 }
@@ -327,6 +339,8 @@ export interface PredictionCalibration {
 export interface PredictionRecord {
   id: string;
   event_id: string;
+  event_title?: string;
+  event_title_zh?: string;
   contract_id?: string;
   platform?: string;
   base_rate_category?: string;

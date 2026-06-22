@@ -1,13 +1,13 @@
 # 待修复问题（已对当前代码核实）· Open Issues — Verified
 
-**生成日期：** 2026-06-21（**2026-06-22 修订：P1 前端/闭环 + scheduler 多进程守卫批次后同步**）
+**生成日期：** 2026-06-21（**2026-06-22 修订：P1 前端/闭环 + scheduler 多进程守卫 + P2/P3 批次后同步**）
 **核实方式：** 对 `docs/reviews/` 全部审查文档去重后，逐条读取当前代码 `file:line` 核实，仅保留确认"仍存在"的项。
 **分支：** `fix/v0.3.0-hardening`
 
 > 本文档只列**核实后仍开放**的问题。已修复项见 [consolidated-issue-registry-2026-06-21.md](consolidated-issue-registry-2026-06-21.md) 第一部分。
 > 每条含：核实证据（`file:line`）、影响、建议修复。状态分 OPEN（确认缺陷）/ PARTIAL（部分到位）/ BY-DESIGN（设计取舍，列出供决策）。
 
-> ✅ **2026-06-22 修订：原 3 个 P0（fail-open 鉴权 / 迁移非原子 / Docker healthcheck）仍关闭；P1-3/P1-5/P1-6/P1-7/P1-8/P1-10/P1-11/P1-12/P1-13/P1-14/P1-15/P1-16/P1-17/P1-18/P1-19/P1-20/P1-21/P1-22/P1-23 与 P2-12/P2-13/P2-14/P2-15/P2-16/P2-17/P2-18 已由 2026-06-21/22 批次落地并从本清单移除。最新后端验证 567 tests / 1 skipped，前端验证 20 tests + lint/build。**
+> ✅ **2026-06-22 修订：原 3 个 P0（fail-open 鉴权 / 迁移非原子 / Docker healthcheck）仍关闭；P1-3/P1-5/P1-6/P1-7/P1-8/P1-10/P1-11/P1-12/P1-13/P1-14/P1-15/P1-16/P1-17/P1-18/P1-19/P1-20/P1-21/P1-22/P1-23，P2-2/P2-5/P2-6/P2-7/P2-8/P2-9/P2-11/P2-12/P2-13/P2-14/P2-15/P2-16/P2-17/P2-18，以及一批 P3 后端/前端整洁项已由 2026-06-21/22 批次落地并从本清单移除。最新后端验证 592 tests / 1 skipped，前端验证 20 tests + lint/build。**
 
 ---
 
@@ -39,16 +39,11 @@
 
 ### 后端
 - **P2-1 event_store.json 每次 save 全量重写** — `event_store.py:59-87` 整文件 load+rewrite，无归档/TTL。规模债，当前量级未触发。
-- **P2-2 SQLite 无 wal_checkpoint / integrity_check** — `sqlite_db.py:54` 仅设 WAL；长跑 WAL 可膨胀，无完整性校验。修复：启动 `wal_checkpoint(TRUNCATE)` + 周期 `PRAGMA integrity_check`。
-- **P2-3 跨存储无引用完整性 / schema version** — event_id 是 JSON+SQLite 无外键 join；迁移靠结构探测无版本表。
+- **P2-3 跨存储无硬外键 join（PARTIAL）** — event_id 仍跨 JSON event store + SQLite loop store，无法由 SQLite FK 强制约束；已补 SQLite schema version 表与 loop status dangling prediction/link 监控。
 - **P2-4 resolve_event 无条件覆盖 outcome** — `event_store.py:121-124` 非幂等无版本史（BY-DESIGN：承诺模型，但重结算分歧需注意）。
-- **P2-5 graceful shutdown wait=False** — `scheduler.py:135` 可中断结算中。修复：`wait=True` + 超时。
-- **P2-6 misfire 注释与实际不符** — `scheduler.py:25-26` 注释 300s，实际 `config.py:257` 86400s。修复：改注释。
-- **P2-7 CI 无安全扫描** — `.github/workflows/ci.yml` 仅 compileall+unittest，无 pip-audit/npm audit，无前端 job。
-- **P2-8 {event_id} 路径参数无校验** — `events.py` 多处裸 str，未导入 Path。
-- **P2-9 异常处理模式不统一** — [] / fallback / None 三种，失败模式难推理。
-- **P2-10 魔法数 / 占位邮箱** — 校准评级阈值内联；`config.py` SEC_USER_AGENT 占位邮箱（SEC 可能拒）。
-- **P2-11 调度器无持久 jobstore / 与 API 同生死** — systemd 文件存在但需部署单实例 + 文档化。
+- **P2-10 SEC_USER_AGENT 真实联系人仍需运营配置** — 校准评级阈值已常量化；`config.py` 默认 User-Agent 仍只能作为声明占位，生产应在 `.env` 配置真实联系人（人工/运营项，本批按用户要求不处理）。
+
+> ✅ **已修（移出本清单）：** ~~P2-2 SQLite 无 wal_checkpoint / integrity_check~~（启动维护 + daily `loop_db_maintenance`：`wal_checkpoint(TRUNCATE)` + `PRAGMA integrity_check`）、~~P2-5 graceful shutdown wait=False~~（`scheduler.shutdown(wait=True)`）、~~P2-6 misfire 注释与实际不符~~、~~P2-7 CI 无安全扫描~~（backend `pip-audit` + frontend npm test/lint/build/audit job）、~~P2-8 `{event_id}` 路径参数无校验~~（FastAPI `Path` pattern/length）、~~P2-9 异常处理模式不统一~~（`failure_policy.py` 统一 fail-closed empty-list / None / fallback 日志语义，主要外部源与可选 LLM 辅助路径已接入）、~~P2-11 调度器与 API 同生死 / 无 supervisor~~（新增独立 scheduler worker + systemd unit；API unit 默认关闭 in-process scheduler，进程锁兜底单 owner）。
 
 ### 前端
 
@@ -56,8 +51,10 @@
 
 ## 🔵 P3 — 长尾（体验 / 无障碍 / 整洁）
 
-- 后端：类型注解不全；中英混合注释；懒导入隐藏依赖；`utcutc_now` 死代码（`prediction_store.py:160-161`）；无 test_config.py；无覆盖率配置（.coveragerc/pytest.ini）；无完整 analyze→resolve HTTP E2E（已有 TestClient 单点集成）。
-- 前端（约 25 项，多源自 frontend-optimization 批，未逐条复核按文档计 OPEN）：recent-predictions 显示 event_id 而非标题；图标按钮缺 aria-label；Link 卡片缺 focus-visible 环；缺 aria-current/skip-link；summarize/Sparkline 未 memo；fmtDateTime 每次 new Intl；relativeTime 陈旧；按钮/inputCls 样式重复 8+ 处；外链 rel 不一致；截断标题无 tooltip；过滤下拉无可见标签；API cache 不清过期；EvidenceList 死代码导出；等。
+- 后端：类型注解不全；中英混合注释；懒导入隐藏依赖。
+- 前端（剩余长尾）：图标按钮 aria-label 需继续逐页抽查；按钮/inputCls 样式重复 8+ 处；少量标题 tooltip 需继续补齐；等。
+
+> ✅ **本批已修 P3：** 后端删除 `utcutc_now` 死代码并补 `test_config.py`、`.coveragerc`、完整 analyze→resolve HTTP E2E；前端 recent-predictions 显示事件标题、Link 卡片 focus-visible、AppNav `aria-current` + skip-link、Sparkline memo、`fmtDateTime` 复用 `Intl.DateTimeFormat`、证据时间改绝对时间、外链 `rel="noopener noreferrer"`、recent prediction 截断标题 tooltip、GET cache 过期清理、过滤控件可见 label、删除 `EvidenceList` 死导出。
 
 ## ⚪ 设计取舍（BY-DESIGN，非缺陷 — 列出供决策）
 
@@ -75,4 +72,4 @@
 > ✅ **P0 全部完成（2026-06-21）；多项 P1 已在 2026-06-21/22 批次完成。** 以下为仍开放的上线前/上线后可选迭代。
 
 1. **安全/运维人工项：** 轮换真实 DashScope key，清理含 `.env` 的备份包。
-2. **其余 P2/P3：** 上线后迭代。
+2. **其余 P2/P3：** 重点是 P2-1/P2-3 硬 FK 这类结构性项，以及剩余前端长尾一致性。

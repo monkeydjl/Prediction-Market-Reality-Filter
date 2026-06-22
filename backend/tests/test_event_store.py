@@ -7,9 +7,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.routes import events as events_routes
+from app.core.config import settings
 from app.memory import event_store as store
 from app.services import event_audit_service as audit
 from app.utils import sqlite_db
+
+
+AUTH_HEADERS = {"X-API-Key": "secret"}
 
 
 def _make_record(event_id="evt1", value_score=50, estimated=60.0):
@@ -422,14 +426,24 @@ class EventReadRouteTests(unittest.TestCase):
         client = TestClient(app)
         with tempfile.TemporaryDirectory() as tmp:
             path = str(Path(tmp) / "event_store.json")
-            with patch.object(store, "_store_path", return_value=path):
+            with patch.object(store, "_store_path", return_value=path), \
+                    patch.object(settings, "API_WRITE_KEY", "secret"):
                 store.save_event(_make_record("evtTrk", value_score=42))
                 ok = client.patch(
                     "/events/evtTrk/tracking",
+                    headers=AUTH_HEADERS,
                     json={"status": "tracking", "priority": "high"},
                 )
-                bad = client.patch("/events/evtTrk/tracking", json={"status": "bogus"})
-                missing = client.patch("/events/none/tracking", json={"status": "tracking"})
+                bad = client.patch(
+                    "/events/evtTrk/tracking",
+                    headers=AUTH_HEADERS,
+                    json={"status": "bogus"},
+                )
+                missing = client.patch(
+                    "/events/none/tracking",
+                    headers=AUTH_HEADERS,
+                    json={"status": "tracking"},
+                )
                 entry = client.get("/events/evtTrk")
         self.assertEqual(ok.status_code, 200)
         self.assertEqual(ok.json()["record"]["tracking"]["status"], "tracking")
@@ -479,14 +493,17 @@ class EventReadRouteTests(unittest.TestCase):
             audit_path = str(Path(tmp) / "event_audit.jsonl")
             with patch.object(store, "_store_path", return_value=store_path), \
                     patch.object(audit, "_audit_path", return_value=audit_path), \
-                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(settings, "API_WRITE_KEY", "secret"):
                 store.save_event(_make_record("evtRes", value_score=42))
                 resp = client.post(
                     "/events/evtRes/resolve",
+                    headers=AUTH_HEADERS,
                     json={"actual_outcome": 100.0, "confidence": 0.9, "notes": "settled"},
                 )
                 missing = client.post(
                     "/events/unknown/resolve",
+                    headers=AUTH_HEADERS,
                     json={"actual_outcome": 0.0},
                 )
                 # GET now reflects the resolved outcome.
@@ -527,12 +544,14 @@ class EventReadRouteTests(unittest.TestCase):
             audit_path = str(Path(tmp) / "event_audit.jsonl")
             with patch.object(store, "_store_path", return_value=store_path), \
                     patch.object(audit, "_audit_path", return_value=audit_path), \
-                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(settings, "API_WRITE_KEY", "secret"):
                 store.save_event(_make_record("evtCal", estimated=70.0, value_score=42))
                 # Record a probability trajectory: latest estimate is 80%.
                 audit.record_event(_make_record("evtCal", estimated=80.0))
                 resp = client.post(
                     "/events/evtCal/resolve",
+                    headers=AUTH_HEADERS,
                     json={"actual_outcome": 100.0},
                 )
         self.assertEqual(resp.status_code, 200)
@@ -553,7 +572,8 @@ class EventReadRouteTests(unittest.TestCase):
             audit_path = str(Path(tmp) / "event_audit.jsonl")
             with patch.object(store, "_store_path", return_value=store_path), \
                     patch.object(audit, "_audit_path", return_value=audit_path), \
-                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(settings, "API_WRITE_KEY", "secret"):
                 # Before any resolution: no_data.
                 empty = client.get("/events/calibration")
                 # Resolve two events from different sources and base-rate
@@ -566,8 +586,16 @@ class EventReadRouteTests(unittest.TestCase):
                 rec2["legacy_analysis"] = {"base_rate_category": "crypto_price_btc"}
                 store.save_event(rec1)
                 store.save_event(rec2)
-                client.post("/events/evtA/resolve", json={"actual_outcome": 100.0})
-                client.post("/events/evtB/resolve", json={"actual_outcome": 0.0})
+                client.post(
+                    "/events/evtA/resolve",
+                    headers=AUTH_HEADERS,
+                    json={"actual_outcome": 100.0},
+                )
+                client.post(
+                    "/events/evtB/resolve",
+                    headers=AUTH_HEADERS,
+                    json={"actual_outcome": 0.0},
+                )
                 # Both estimated=50 vs outcome: brier=0.25 each.
                 report = client.get("/events/calibration")
         self.assertEqual(empty.status_code, 200)

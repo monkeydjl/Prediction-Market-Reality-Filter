@@ -54,8 +54,10 @@ npm run build
 - `OPENAI_API_KEY` / `OPENAI_BASE_URL`：LLM 提供商（默认阿里云 DashScope 兼容接口）。
 - `OPENAI_MODEL`：主分析模型。
 - `LLM_STARTUP_CHECK_ENABLED=true`：生产可开启启动期 LLM 探测，key/model/base URL 无效时拒绝启动。
+- `SCHEDULER_ENABLED`：本地默认 `true`；systemd 部署时 API unit 会覆盖为 `false`，由独立 scheduler unit 运行定时任务。
 - `PMRF_DEADMAN_URL`：生产可配置外部 dead-man ping；systemd healthcheck 会先确认本地 `/api/health` 为 ok，再 ping 该 URL。
 - `CROSS_VALIDATION_MODEL` / `OPEN_WEB_EXTRACTION_MODEL`：可选能力的模型，留空则关闭。
+- `WORLD_CUP_SOURCE_ENABLED`：启用 2026 世界杯策划事件源，丰富发现流的体育候选事件。
 
 ## 验证
 
@@ -76,6 +78,7 @@ npm run build
 | [docs/user/USER_GUIDE.md](docs/user/USER_GUIDE.md) ・ [中文使用教程](docs/user/中文使用教程.md) | 使用教程 |
 | [docs/dev/Event Intelligence Platform.md](docs/dev/Event%20Intelligence%20Platform.md) | 产品愿景与边界 |
 | [docs/dev/DESIGN.md](docs/dev/DESIGN.md) ・ [PRODUCT.md](docs/dev/PRODUCT.md) | 设计系统与产品上下文 |
+| [docs/dev/WORLD_CUP_PREDICTION_SYSTEM_DESIGN.md](docs/dev/WORLD_CUP_PREDICTION_SYSTEM_DESIGN.md) | 世界杯预测系统设计与后续优先级 |
 | [docs/dev/INTEGRATION_TEST_REPORT.md](docs/dev/INTEGRATION_TEST_REPORT.md) | 端到端集成验证记录 |
 | [docs/archive/](docs/archive/) | 历史里程碑与过程文档 |
 

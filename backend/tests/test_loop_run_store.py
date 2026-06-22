@@ -27,6 +27,7 @@ class LoopRunStoreTests(unittest.TestCase):
                 self.assertIsNotNone(finished["finished_at"])
                 self.assertGreaterEqual(finished["duration_ms"], 0)
                 self.assertEqual(runs.last_run("event_discover")["id"], run_id)
+                self.assertEqual(sqlite_db.schema_versions()["loop_runs"], 1)
 
     def test_failed_run_records_error(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -112,6 +112,7 @@ class StartupGuardTests(unittest.TestCase):
         started = {"n": 0}
         with patch.object(settings, "API_WRITE_KEY", ""), \
                 patch.object(settings, "ALLOW_OPEN_WRITES", True), \
+                patch("app.main.sqlite_db.maintain", return_value={"ok": True}), \
                 patch("app.main.start_scheduler", lambda: started.__setitem__("n", started["n"] + 1)), \
                 patch("app.main.stop_scheduler", lambda: None):
             with TestClient(app):
@@ -122,10 +123,23 @@ class StartupGuardTests(unittest.TestCase):
         from app.main import app
 
         with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch("app.main.sqlite_db.maintain", return_value={"ok": True}), \
                 patch("app.main.start_scheduler", lambda: None), \
                 patch("app.main.stop_scheduler", lambda: None):
             with TestClient(app):
                 pass
+
+    def test_lifespan_refuses_boot_when_sqlite_maintenance_fails(self):
+        from app.main import app
+
+        with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch("app.main.sqlite_db.maintain",
+                      side_effect=RuntimeError("bad loop db")), \
+                patch("app.main.start_scheduler", lambda: None), \
+                patch("app.main.stop_scheduler", lambda: None):
+            with self.assertRaisesRegex(RuntimeError, "bad loop db"):
+                with TestClient(app):
+                    pass
 
     def test_lifespan_does_not_check_llm_by_default(self):
         from app.main import app
@@ -133,6 +147,7 @@ class StartupGuardTests(unittest.TestCase):
         check = AsyncMock()
         with patch.object(settings, "API_WRITE_KEY", "secret"), \
                 patch.object(settings, "LLM_STARTUP_CHECK_ENABLED", False), \
+                patch("app.main.sqlite_db.maintain", return_value={"ok": True}), \
                 patch("app.main.validate_primary_llm_startup", check), \
                 patch("app.main.start_scheduler", lambda: None), \
                 patch("app.main.stop_scheduler", lambda: None):
@@ -146,6 +161,7 @@ class StartupGuardTests(unittest.TestCase):
         check = AsyncMock()
         with patch.object(settings, "API_WRITE_KEY", "secret"), \
                 patch.object(settings, "LLM_STARTUP_CHECK_ENABLED", True), \
+                patch("app.main.sqlite_db.maintain", return_value={"ok": True}), \
                 patch("app.main.validate_primary_llm_startup", check), \
                 patch("app.main.start_scheduler", lambda: None), \
                 patch("app.main.stop_scheduler", lambda: None):
@@ -173,6 +189,7 @@ class StartupGuardTests(unittest.TestCase):
         calls = {"start": 0, "stop": 0}
         with patch.object(settings, "API_WRITE_KEY", "secret"), \
                 patch.object(settings, "SCHEDULER_ENABLED", False), \
+                patch("app.main.sqlite_db.maintain", return_value={"ok": True}), \
                 patch(
                     "app.main.start_scheduler",
                     lambda: calls.__setitem__("start", calls["start"] + 1),
@@ -406,6 +423,10 @@ class HealthTests(unittest.TestCase):
 
         client = TestClient(app)
         with patch("app.core.scheduler.scheduler", _FakeScheduler(False)), \
+                patch(
+                    "app.core.scheduler.scheduler_start_skipped_due_to_lock",
+                    return_value=False,
+                ), \
                 patch(
                     "app.services.loop_status_service.loop_status",
                     return_value={"runs": {}},

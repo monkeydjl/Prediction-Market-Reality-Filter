@@ -16,7 +16,9 @@ describe("buildApiErrorMessage", () => {
   });
 
   it("maps auth and server errors to stable user-facing text", () => {
-    expect(buildApiErrorMessage(401, "")).toBe("当前请求未获授权");
+    expect(buildApiErrorMessage(401, "")).toBe(
+      "当前请求未获授权：请先在右上角「授权」中输入 backend/.env 里的 API_WRITE_KEY",
+    );
     expect(buildApiErrorMessage(503, "upstream down")).toBe("服务器暂时不可用，请稍后重试");
   });
 

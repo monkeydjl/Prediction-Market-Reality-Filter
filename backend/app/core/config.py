@@ -86,6 +86,12 @@ class Settings:
             os.path.dirname(__file__), "..", "..", "event_cache.json"
         ),
     )
+    SPORTS_FACT_FILE: str = os.getenv(
+        "SPORTS_FACT_FILE",
+        os.path.join(
+            os.path.dirname(__file__), "..", "..", "sports_facts.json"
+        ),
+    )
     # V2 loop store (SQLite). Holds the relational tables the feedback loop
     # depends on - starting with event_market_links (M0). Single file, no
     # server; sits alongside the JSON event_store rather than replacing it.
@@ -140,6 +146,15 @@ class Settings:
         "https://api.elections.kalshi.com/trade-api/v2/events",
     )
     KALSHI_SOURCE_NAME: str = os.getenv("KALSHI_SOURCE_NAME", "Kalshi")
+
+    # Curated 2026 FIFA World Cup event source. Local/deterministic: contributes
+    # high-interest sports questions to discovery without depending on a sports
+    # data API. Set WORLD_CUP_SOURCE_ENABLED=false to disable it.
+    WORLD_CUP_SOURCE_ENABLED: bool = _env_bool("WORLD_CUP_SOURCE_ENABLED", "true")
+    WORLD_CUP_SOURCE_NAME: str = os.getenv(
+        "WORLD_CUP_SOURCE_NAME",
+        "2026 FIFA World Cup",
+    )
 
     # Multi-model cross-validation: an independent second model re-estimates the
     # probability for the same question + evidence, surfaced as agreement /

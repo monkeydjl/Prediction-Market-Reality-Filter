@@ -160,52 +160,64 @@ export function EventTable({
             <Download className="size-3.5" aria-hidden="true" />
             导出
           </button>
-          <label className="relative">
-            <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-            <input
-              className="h-8 w-48 rounded-md border border-border bg-secondary pl-7 pr-2 text-xs text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索事件"
-              aria-label="搜索事件"
-            />
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span>搜索</span>
+            <span className="relative">
+              <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+              <input
+                className="h-8 w-48 rounded-md border border-border bg-secondary pl-7 pr-2 text-xs text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="搜索事件"
+                aria-label="搜索事件"
+              />
+            </span>
           </label>
-          <select
-            className={selectCls}
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            aria-label="按领域筛选"
-          >
-            <option value="all">全部领域</option>
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {categoryLabel(c)}
-              </option>
-            ))}
-          </select>
-          <select
-            className={selectCls}
-            value={status}
-            onChange={(e) => setStatus(e.target.value as StatusFilter)}
-            aria-label="按跟踪状态筛选"
-          >
-            {STATUS_FILTERS.map((s) => (
-              <option key={s.value} value={s.value}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-          <select
-            className={selectCls}
-            value={sort}
-            onChange={(e) => setSort(e.target.value as SortKey)}
-            aria-label="排序方式"
-          >
-            <option value="delta">按变动幅度</option>
-            <option value="probability">按当前概率</option>
-            <option value="support">按证据支持度</option>
-            <option value="value">按情报价值</option>
-          </select>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span>领域</span>
+            <select
+              className={selectCls}
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              aria-label="按领域筛选"
+            >
+              <option value="all">全部领域</option>
+              {categories.map((c) => (
+                <option key={c} value={c}>
+                  {categoryLabel(c)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span>状态</span>
+            <select
+              className={selectCls}
+              value={status}
+              onChange={(e) => setStatus(e.target.value as StatusFilter)}
+              aria-label="按跟踪状态筛选"
+            >
+              {STATUS_FILTERS.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span>排序</span>
+            <select
+              className={selectCls}
+              value={sort}
+              onChange={(e) => setSort(e.target.value as SortKey)}
+              aria-label="排序方式"
+            >
+              <option value="delta">按变动幅度</option>
+              <option value="probability">按当前概率</option>
+              <option value="support">按证据支持度</option>
+              <option value="value">按情报价值</option>
+            </select>
+          </label>
         </div>
       </div>
 
@@ -229,7 +241,7 @@ export function EventTable({
               <li key={e.id}>
                 <Link
                   href={`/events?id=${encodeURIComponent(e.id)}`}
-                  className="grid grid-cols-2 items-center gap-x-4 gap-y-3 px-4 py-3 transition-colors hover:bg-secondary/40 md:grid-cols-[1fr_auto_auto_auto_auto_auto]"
+                  className="grid grid-cols-2 items-center gap-x-4 gap-y-3 px-4 py-3 transition-colors hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:grid-cols-[1fr_auto_auto_auto_auto_auto]"
                 >
                   <div className="col-span-2 flex min-w-0 flex-col gap-1 md:col-span-1">
                     <span className="flex items-center gap-2 text-[11px] text-muted-foreground">

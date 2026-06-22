@@ -20,12 +20,13 @@ Strategy: priority-aware incremental build.
 Similarity is token-set Jaccard (reusing app.utils.text_match's normalize /
 tokenize / token_overlap). The threshold is tiered:
 
-  - market-vs-market: MARKET_THRESHOLD (0.82). Market questions from different
-    platforms are close in phrasing, so a strict threshold avoids merging
-    genuinely different events. This matches auto-resolve's threshold.
-  - any side open-web: CROSS_THRESHOLD (0.6). Open-Web questions are LLM-
-    reworded from article text, so they diverge more from market phrasing; a
-    looser threshold is needed to catch the same event across that gap.
+  - structured-vs-structured: MARKET_THRESHOLD (0.82). Market and curated
+    structured questions can share repeated domain terms, so a strict threshold
+    avoids merging genuinely different events. This matches auto-resolve's
+    threshold.
+  - any side open-web: CROSS_THRESHOLD (0.6). Open-Web questions are LLM-reworded
+    from article text, so they diverge more from structured phrasing; a looser
+    threshold is needed to catch the same event across that gap.
 
 Pure and deterministic: a candidate list in, a smaller candidate list out.
 Reuses text_match's token utilities but owns its threshold logic (find_match's
@@ -37,11 +38,12 @@ from typing import Any
 from app.utils.text_match import normalize, tokenize, token_overlap
 
 
-# Source priority (lower = kept first). Market sources carry a baseline
-# probability and volume/liquidity, which are better analysis inputs than an
-# Open-Web candidate's flat 50% prior, so markets win on a duplicate.
+# Source priority (lower = kept first). Market sources carry a market baseline
+# and volume/liquidity, so they win on duplicates. Curated sports events are
+# structured and human-authored, so they outrank open-web LLM extractions while
+# still staying below markets.
 _SOURCE_PRIORITY: dict[str, int] = {"Polymarket": 0, "Manifold": 1, "Kalshi": 2}
-_MARKET_TYPE = "prediction_market"
+_SPORTS_EVENT_TYPE = "sports_event"
 _OPEN_WEB_TYPE = "open_web"
 
 # Market-vs-market duplicate threshold (strict; market questions are close).
@@ -71,16 +73,16 @@ def dedupe_candidates(
     for candidate in candidates:
         question = candidate.get("question") or ""
         tokens = set(tokenize(normalize(question)))
-        candidate_is_market = _is_market(candidate)
+        candidate_is_open_web = _is_open_web(candidate)
         candidate_priority = _priority(candidate)
         duplicate_index = None
-        for index, (prior_tokens, prior_is_market) in enumerate(
-            zip(accepted_tokens, (_is_market(a) for a in accepted))
+        for index, (prior_tokens, prior_is_open_web) in enumerate(
+            zip(accepted_tokens, (_is_open_web(a) for a in accepted))
         ):
             threshold = (
-                market_threshold
-                if candidate_is_market and prior_is_market
-                else cross_threshold
+                cross_threshold
+                if candidate_is_open_web or prior_is_open_web
+                else market_threshold
             )
             if token_overlap(tokens, prior_tokens) >= threshold:
                 duplicate_index = index
@@ -99,16 +101,18 @@ def dedupe_candidates(
 
 
 def _priority(candidate: dict[str, Any]) -> int:
-    """Source priority. Market platforms by name, then Open Web, then unknown."""
+    """Source priority: markets, curated sports, Open Web, then unknown."""
     source = candidate.get("source") or {}
     source_type = source.get("type")
+    if source_type == _SPORTS_EVENT_TYPE:
+        return len(_SOURCE_PRIORITY)
     if source_type == _OPEN_WEB_TYPE:
-        return len(_SOURCE_PRIORITY)  # Open Web ranks below all market platforms.
+        return len(_SOURCE_PRIORITY) + 1
     platform = source.get("platform")
     if isinstance(platform, str) and platform in _SOURCE_PRIORITY:
         return _SOURCE_PRIORITY[platform]
     return _UNKNOWN_PRIORITY
 
 
-def _is_market(candidate: dict[str, Any]) -> bool:
-    return (candidate.get("source") or {}).get("type") == _MARKET_TYPE
+def _is_open_web(candidate: dict[str, Any]) -> bool:
+    return (candidate.get("source") or {}).get("type") == _OPEN_WEB_TYPE

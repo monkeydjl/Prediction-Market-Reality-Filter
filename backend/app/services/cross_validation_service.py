@@ -31,6 +31,7 @@ from app.services.probability_engine_service import (
     _build_system_prompt,
     _build_user_prompt,
 )
+from app.utils.failure_policy import fail_closed_none
 from app.utils.market_utils import safe_float
 
 logger = logging.getLogger(__name__)
@@ -59,8 +60,12 @@ async def cross_validate(
             news_context=news_context,
         )
     except Exception as exc:
-        logger.warning("Cross-validation failed: %s", exc)
-        return None
+        return fail_closed_none(
+            logger,
+            "cross_validation",
+            exc,
+            context={"model": settings.CROSS_VALIDATION_MODEL},
+        )
 
     second = _clamp_pct(raw.get("ai_probability"), primary_probability)
     divergence = round(abs(second - primary_probability), 2)

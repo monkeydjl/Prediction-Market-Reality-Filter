@@ -17,16 +17,16 @@
 
 | 维度 | 数量 |
 |---|---|
-| 核实已修复（FIXED） | ~101（含 2026-06-21 P0 修复批次 + 2026-06-22 P1/P2 前端/闭环/scheduler/CORS/LLM 启动校验/dead-man/event_id 迁移批次） |
-| 核实仍开放（OPEN / PARTIAL） | ~23 |
+| 核实已修复（FIXED） | ~122（含 2026-06-21 P0 修复批次 + 2026-06-22 P1/P2/P3 前端/闭环/scheduler/CORS/LLM 启动校验/dead-man/event_id 迁移/SQLite 维护/CI/异常策略/独立 scheduler 批次） |
+| 核实仍开放（OPEN / PARTIAL） | ~8 |
 | 设计取舍（OPEN by-design，非缺陷） | 6 |
 | 已过时 / 误报（OBSOLETE / FALSE-POSITIVE） | 3 |
 
-**上线裁决（2026-06-22 修订）：3 个上线阻断 P0（fail-open 鉴权、迁移非原子、Docker healthcheck）仍全部关闭；本轮继续关闭多项 P1/P2 前端/闭环/scheduler/CORS/LLM 启动校验/dead-man/event_id 迁移/Recharts lazy/路由 loading/后端性能与 API 契约问题。最新后端验证 567 tests / 1 skipped；前端验证 20 tests + lint/build。无 P0 阻断。**
+**上线裁决（2026-06-22 修订）：3 个上线阻断 P0（fail-open 鉴权、迁移非原子、Docker healthcheck）仍全部关闭；本轮继续关闭多项 P1/P2/P3 前端/闭环/scheduler/CORS/LLM 启动校验/dead-man/event_id 迁移/Recharts lazy/路由 loading/后端性能、API 契约、SQLite 维护、CI 安全扫描、异常策略、独立 scheduler 与前端无障碍/整洁问题。最新后端验证 592 tests / 1 skipped；前端验证 20 tests + lint/build。无 P0 阻断。**
 
 > **2026-06-21 修订注：** 本文档早期版本把 P0-1/P0-2/P0-3 列为 OPEN；这些已由 p0-fix-report-2026-06-21 修复批次落地，本次同步将之移入第一部分（FIXED），并修正"P0-2 多 worker 双跑"的优先级标错——它是 P1-8，非 P0。
 
-> **2026-06-22 修订注：** P1-3/P1-5/P1-6/P1-7/P1-8/P1-10/P1-11/P1-12/P1-13/P1-14/P1-15/P1-16/P1-17/P1-18/P1-19/P1-20/P1-21/P1-22/P1-23 与 P2-12/P2-13/P2-14/P2-15/P2-16/P2-17/P2-18 已由 2026-06-21/22 批次落地，本次同步从 OPEN 索引移入 FIXED。
+> **2026-06-22 修订注：** P1-3/P1-5/P1-6/P1-7/P1-8/P1-10/P1-11/P1-12/P1-13/P1-14/P1-15/P1-16/P1-17/P1-18/P1-19/P1-20/P1-21/P1-22/P1-23，P2-2/P2-5/P2-6/P2-7/P2-8/P2-9/P2-11/P2-12/P2-13/P2-14/P2-15/P2-16/P2-17/P2-18，以及一批 P3 后端/前端整洁项已由 2026-06-21/22 批次落地，本次同步从 OPEN 索引移入 FIXED。
 
 ---
 
@@ -73,6 +73,7 @@
 | 无架构文档 / ADR | `docs/dev/ARCHITECTURE.md` + `docs/dev/adr/001..003` 存在 |
 | 文档"141 tests"陈旧 | `Event Intelligence Platform.md:392` 已更新为 503 tests |
 | 代码评审混在 docs/user/ | 已迁出，docs/user/ 仅余用户文档 |
+| 无 test_config.py | `backend/tests/test_config.py` 覆盖 config helper 与关键默认值 |
 
 ### 前端 — 已核实（fix-verification 批次属实）
 
@@ -135,6 +136,26 @@
 | **P2-17** 缺 global-error.tsx | 新增 `app/global-error.tsx`，根布局异常时显示可重试的全屏错误页 |
 | **P2-18** 状态/交互细节 | TrackingDecision 随事件/状态 key 重挂载；SystemStatus 初始 loading；移动端 nav 换行横滑；Event/Review 表格移动端补列标签 |
 
+### 2026-06-22 P2/P3 后端/前端长尾批次 — 已核实
+
+| 问题（原编号） | 核实证据 |
+|---|---|
+| **P2-2** SQLite 无 WAL checkpoint / integrity_check | `sqlite_db.py` 新增 `wal_checkpoint()` / `integrity_check()` / `maintain()`；`main.py` 启动期执行；`scheduler.py` 每日 `loop_db_maintenance@06:45UTC` 记录 run ledger |
+| **P2-5** scheduler shutdown `wait=False` | `scheduler.py` 改 `scheduler.shutdown(wait=True)`，测试锁定 |
+| **P2-6** misfire 注释与实际不符 | `scheduler.py` 注释改为读取 `settings.SCHEDULER_MISFIRE_GRACE_SECONDS`（默认 24h） |
+| **P2-7** CI 无安全扫描 / 无前端 job | `.github/workflows/ci.yml` 增加 backend `pip-audit`，新增 frontend `npm ci` + `npm audit` + test/lint/build job |
+| **P2-11** 调度器与 API 同生死 / 无 supervisor | 新增 `backend/scripts/run_scheduler.py` 独立 worker 与 `deploy/prediction-market-reality-filter-scheduler.service`；API systemd unit 设置 `SCHEDULER_ENABLED=false`，scheduler unit 设置 `true`，进程锁防双 owner |
+| **P2-8** `{event_id}` 路径参数无校验 | `events.py` 使用 FastAPI `Path` pattern/length；非法空白/超长 id 返回 422 |
+| **P2-9** 异常处理模式不统一 | `failure_policy.py` 统一 `fail_closed_empty_list` / `fail_closed_none` / `deterministic_fallback` 日志语义；RSS/GNews/official/economic/SEC/Kalshi/Manifold/Polymarket resolved、collector、open-web extraction、cross-validation 已接入并补测试 |
+| **P2-10** 校准评级阈值魔法数 | `calibration_service_event.py` 提升为 `RANDOM_BRIER` / `GRADE_BANDS` 常量；SEC 真实联系人仍属人工运营配置 |
+| **P2-3（部分）** schema version / cross-store dangling refs 不可观测 | SQLite store 记录 `loop_schema_versions`；loop status 暴露 `dangling_predictions` / `dangling_links` 与 schema versions（硬 FK 仍因 JSON store 架构保留为 PARTIAL） |
+| **P3** prediction_store 死代码 | 删除 `utcutc_now` 与未用 `datetime/timezone` import |
+| **P3** 无 config 测试 | 新增 `backend/tests/test_config.py` |
+| **P3** 无覆盖率配置 | 新增 `backend/.coveragerc`，供 `coverage run -m unittest discover -s tests` 使用 |
+| **P3** 无完整 analyze→resolve HTTP E2E | 新增 `backend/tests/test_http_e2e.py` 覆盖 analyze 落库/审计、manual resolve、calibration endpoint |
+| **P3** recent-predictions 显示 event_id | `/events/predictions/recent` 返回 `event_title/event_title_zh`；前端优先显示标题，event_id 降为辅助信息 |
+| **P3** 前端可访问性/整洁长尾 | `AppNav` 增 `aria-current` + skip-link；页面 `<main id="main-content">`；主要 Link 卡片 focus-visible；Dashboard 过滤控件补可见 label；Sparkline memo；`fmtDateTime` 复用 formatter；证据时间改绝对时间；外链 rel 统一；GET cache 清过期；删除 `EvidenceList` 死导出 |
+
 ---
 
 ## 第二部分：核实仍开放（OPEN / PARTIAL）
@@ -146,12 +167,8 @@
 > **已修（移入第一部分）：** ~~P0-1 fail-open / 未鉴权成本放大主入口~~（启动守卫）、~~P0-2 迁移非原子~~（discrete execute）、~~P1-2 key 非常量时间比较~~（hmac.compare_digest）、~~P1-3 health/loop-status 匿名泄露~~、~~P1-4 无 max_length~~（Field 约束）、~~P1-5 缺安全响应头~~、~~P1-6 限流器内存增长 + 代理盲~~、~~P1-7 CORS allow_methods/headers wildcard~~。
 
 ### 调度 / 运维 / 部署
-- **[P2]** 调度器无持久 jobstore、与 API 进程同生死，无 supervisor（systemd 文件存在但需部署）
-- **[P2]** graceful shutdown `shutdown(wait=False)` 可中断结算中
-- **[P2]** misfire 注释（300s）与实际（86400s）不符（`scheduler.py:25-26`）
-- **[P2]** CI 无 pip-audit/npm audit，无前端 job
 
-> **已修（移入第一部分）：** ~~P0-3 Docker healthcheck~~（python urllib）、~~P1-8 多 worker 双跑 / 生产 reload~~（本机进程锁 + reload 默认关）、~~P1-9 health 降级返 200~~（503）、~~P1-10 无启动期 LLM key 有效性校验~~、~~P1-11 Docker 以 root 运行 / 无 `.dockerignore`~~、~~P1-12 外部监控 / dead-man switch~~。
+> **已修（移入第一部分）：** ~~P0-3 Docker healthcheck~~（python urllib）、~~P1-8 多 worker 双跑 / 生产 reload~~（本机进程锁 + reload 默认关）、~~P1-9 health 降级返 200~~（503）、~~P1-10 无启动期 LLM key 有效性校验~~、~~P1-11 Docker 以 root 运行 / 无 `.dockerignore`~~、~~P1-12 外部监控 / dead-man switch~~、~~P2-5 graceful shutdown wait=False~~、~~P2-6 misfire 注释不符~~、~~P2-7 CI 无 pip-audit/npm audit/前端 job~~、~~P2-11 调度器与 API 同生死 / 无 supervisor~~。
 
 ### 后端数据闭环
 - **[P2]** resolve_event 无条件覆盖 outcome（非幂等，无版本史）（by-design）
@@ -161,21 +178,23 @@
 
 ### 后端存储 / 性能（多为规模债，当前量级未触发）
 - **[P2]** event_store.json 每次 save 全量重写（无归档/TTL）
-- **[P2]** SQLite 无 wal_checkpoint 管理；无 integrity_check
-- **[P2]** 跨存储无外键/引用完整性；无 schema version 表
-- **[P3]** `utcutc_now` 死代码（`prediction_store.py:160-161`）
+- **[P2]** 跨存储无硬外键/引用完整性（PARTIAL：schema version + dangling ref 监控已补；JSON+SQLite 架构仍无法 FK）
+
+> **已修（移入第一部分）：** ~~P2-2 SQLite 无 wal_checkpoint / integrity_check~~、~~P3 `utcutc_now` 死代码~~。
 
 ### 后端服务（可观测性 / API 契约）
-- **[P2]** {event_id} 路径参数无格式校验
 - **[P2]** 无 API 版本前缀 /v1/（by-design）
-- **[P2]** 异常处理模式不统一（[] / fallback / None 三种）
-- **[P2]** 校准评级阈值魔法数；SEC User-Agent 占位邮箱
+- **[P2]** SEC User-Agent 生产真实联系人需运营配置（人工项）；校准评级阈值已常量化
 - **[P3]** 类型注解不全；中英混合注释；懒导入隐藏依赖
+
+> **已修（移入第一部分）：** ~~P2-8 `{event_id}` 路径参数无格式校验~~、~~P2-9 异常处理模式不统一~~、~~P2-10 校准评级阈值魔法数~~。
 
 ### 前端（多为 P2/P3 体验/无障碍/性能，未逐条复核，按文档计 OPEN）
 
 > **已修（移入第一部分）：** ~~P1-21 不可逆结算无二次确认~~、~~P1-22 recharts 未 lazy~~、~~P1-23 子路由缺 loading~~、~~P2-12 NaN 渲染~~、~~P2-13 recent-predictions 缺字段崩险~~、~~P2-14 CSV 公式注入 + 无 BOM~~、~~P2-15 sparkSeries 丢 0%~~、~~P2-16 主题 FOUC~~、~~P2-17 缺 global-error.tsx~~、~~P2-18 状态/交互细节~~。
-- **[P3]** recent-predictions 显示 event_id 而非标题；图标按钮缺 aria-label；焦点环缺失；fmtDateTime 每次 new Intl；按钮/inputCls 样式重复；等约 25 项体验/无障碍长尾
+- **[P3]** 图标按钮 aria-label 需继续逐页抽查；按钮/inputCls 样式重复；少量标题 tooltip 需继续补齐；等体验/无障碍长尾
+
+> **本批已修（移入第一部分）：** ~~recent-predictions 显示 event_id 而非标题~~、~~Link 卡片焦点环缺失~~、~~缺 aria-current/skip-link~~、~~过滤控件无可见 label~~、~~Sparkline 未 memo~~、~~fmtDateTime 每次 new Intl~~、~~relativeTime 陈旧~~、~~外链 rel 不一致~~、~~API cache 不清过期~~、~~EvidenceList 死导出~~。
 
 ### 设计取舍（非缺陷，记录在案）
 - AUTO_VERIFY_THRESHOLD=1.0（fail-closed，宁缺勿错）

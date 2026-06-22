@@ -16,6 +16,8 @@ from functools import partial
 
 import feedparser
 
+from app.utils.failure_policy import fail_closed_empty_list, log_service_failure
+
 logger = logging.getLogger(__name__)
 
 # (名称, URL, 类别标签)
@@ -34,6 +36,9 @@ RSS_FEEDS = [
     ("CoinDesk",         "https://www.coindesk.com/arc/outboundfeeds/rss/",   "crypto"),
     # AI/科技
     ("TechCrunch",       "https://techcrunch.com/feed/",                       "tech"),
+    # Sports / World Cup context
+    ("BBC Football",     "https://feeds.bbci.co.uk/sport/football/rss.xml",    "sports"),
+    ("Guardian Football", "https://www.theguardian.com/football/rss",          "sports"),
 ]
 
 
@@ -52,8 +57,12 @@ def _fetch_one(name: str, url: str, limit: int) -> list[dict]:
             for entry in feed.entries[:limit]
         ]
     except Exception as exc:
-        logger.warning("RSS feed fetch failed [source=%s]: %s", name, exc)
-        return []
+        return fail_closed_empty_list(
+            logger,
+            "rss_feed",
+            exc,
+            context={"name": name, "url": url},
+        )
 
 
 async def fetch_news(limit: int = 5) -> list:
@@ -73,7 +82,13 @@ async def fetch_news(limit: int = 5) -> list:
     articles = []
     for (name, _, _), result in zip(RSS_FEEDS, results):
         if isinstance(result, Exception):
-            logger.warning("RSS feed task failed [source=%s]: %s", name, result)
+            log_service_failure(
+                logger,
+                "rss_task",
+                result,
+                policy="fail_closed_empty_list",
+                context={"name": name},
+            )
             continue
         if isinstance(result, list):
             for item in result:

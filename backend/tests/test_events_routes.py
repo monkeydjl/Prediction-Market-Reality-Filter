@@ -40,6 +40,9 @@ def _events_client() -> TestClient:
     return TestClient(app)
 
 
+AUTH_HEADERS = {"X-API-Key": "secret"}
+
+
 NEWS_CONTEXT = (
     "EVIDENCE PROFILE\n"
     "direction: support\nstrength: 0.5\nconflict: 0.2\nfreshness: 0.8\n"
@@ -54,10 +57,12 @@ class AnalyzeRouteTests(unittest.TestCase):
         with patch.object(ai, "_ask_ai", new=AsyncMock(side_effect=RuntimeError("no llm"))), \
                 patch.object(eis, "_persist_events", new=lambda records: None), \
                 patch("app.services.cross_validation_service.cross_validate",
-                      new=AsyncMock(return_value=None)):
+                      new=AsyncMock(return_value=None)), \
+                patch.object(settings, "API_WRITE_KEY", "secret"):
             client = _events_client()
             resp = client.post(
                 "/events/analyze",
+                headers=AUTH_HEADERS,
                 json={
                     "event_question": "Will the agency approve the policy before the deadline?",
                     "baseline_probability": 50,
@@ -84,9 +89,84 @@ class AnalyzeRouteTests(unittest.TestCase):
 
     def test_analyze_rejects_missing_event_question(self):
         # Pydantic validation fails before the service is called - no patching needed.
-        client = _events_client()
-        resp = client.post("/events/analyze", json={"baseline_probability": 50})
+        with patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            resp = client.post(
+                "/events/analyze",
+                headers=AUTH_HEADERS,
+                json={"baseline_probability": 50},
+            )
         self.assertEqual(resp.status_code, 422)
+
+
+class WorldCupFactRouteTests(unittest.TestCase):
+    def test_import_requires_write_key(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \
+                patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            resp = client.post(
+                "/events/sports/world-cup/facts/import",
+                json={"facts": [{"kind": "discipline", "red_cards": 1}]},
+            )
+        self.assertEqual(resp.status_code, 401)
+
+    def test_import_status_and_list_facts(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \
+                patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            import_resp = client.post(
+                "/events/sports/world-cup/facts/import?replace=true",
+                headers=AUTH_HEADERS,
+                json={
+                    "facts": [{
+                        "kind": "injury",
+                        "team": "Brazil",
+                        "player": "Player A",
+                        "status": "out",
+                    }]
+                },
+            )
+            status_resp = client.get("/events/sports/world-cup/status")
+            facts_resp = client.get("/events/sports/world-cup/facts?kind=injury&team=Brazil")
+
+        self.assertEqual(import_resp.status_code, 200)
+        self.assertEqual(import_resp.json()["imported"], 1)
+        self.assertEqual(status_resp.status_code, 200)
+        self.assertEqual(status_resp.json()["count"], 1)
+        self.assertEqual(facts_resp.status_code, 200)
+        self.assertEqual(facts_resp.json()["count"], 1)
+        self.assertEqual(facts_resp.json()["facts"][0]["player"], "Player A")
+
+    def test_world_cup_resolve_requires_write_key(self):
+        with patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            resp = client.post("/events/sports/world-cup/resolve")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_world_cup_resolve_passes_dry_run_and_limit(self):
+        payload = {
+            "status": "ok",
+            "dry_run": True,
+            "resolved_count": 0,
+            "pending_count": 0,
+            "checked_count": 0,
+            "unresolved_events": 0,
+            "matches": [],
+        }
+        with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch.object(events_routes, "resolve_world_cup_events",
+                             new=AsyncMock(return_value=payload)) as mock_resolve:
+            client = _events_client()
+            resp = client.post(
+                "/events/sports/world-cup/resolve?dry_run=true&limit=25",
+                headers=AUTH_HEADERS,
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), payload)
+        mock_resolve.assert_awaited_once_with(dry_run=True, limit=25)
 
 
 class DiscoverRouteTests(unittest.TestCase):
@@ -99,18 +179,28 @@ class DiscoverRouteTests(unittest.TestCase):
         }
         with patch.object(
             events_routes, "discover_events", new=AsyncMock(return_value=canned)
-        ) as mock_discover:
+        ) as mock_discover, patch.object(settings, "API_WRITE_KEY", "secret"):
             client = _events_client()
-            resp = client.get("/events/discover?limit=5&use_cache=false")
+            resp = client.get(
+                "/events/discover?limit=5&use_cache=false",
+                headers=AUTH_HEADERS,
+            )
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json(), canned)
         mock_discover.assert_awaited_once_with(limit=5, use_cache=False)
 
     def test_discover_validates_limit_bounds(self):
-        client = _events_client()
-        self.assertEqual(client.get("/events/discover?limit=0").status_code, 422)
-        self.assertEqual(client.get("/events/discover?limit=21").status_code, 422)
+        with patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            self.assertEqual(
+                client.get("/events/discover?limit=0", headers=AUTH_HEADERS).status_code,
+                422,
+            )
+            self.assertEqual(
+                client.get("/events/discover?limit=21", headers=AUTH_HEADERS).status_code,
+                422,
+            )
 
 
 class ListRouteTests(unittest.TestCase):
@@ -167,6 +257,13 @@ class ListRouteTests(unittest.TestCase):
         client = _events_client()
         self.assertEqual(client.get("/events/?status=bogus").status_code, 422)
         self.assertEqual(client.get("/events/?sort=bogus").status_code, 422)
+
+
+class EventIdValidationTests(unittest.TestCase):
+    def test_dynamic_event_routes_reject_invalid_event_id(self):
+        client = _events_client()
+        self.assertEqual(client.get("/events/%20bad").status_code, 422)
+        self.assertEqual(client.get(f"/events/{'a' * 129}").status_code, 422)
 
 
 class AutoResolveRouteTests(unittest.TestCase):
@@ -285,6 +382,61 @@ class LoopStatusRouteTests(unittest.TestCase):
             1,
         )
         self.assertEqual(authed_body["recent_runs"][0]["result"]["checked_count"], 2)
+
+    def test_loop_status_reports_dangling_cross_store_refs(self):
+        rec = _make_record("ghostPred", estimated=70.0, value_score=30)
+        rec["source"] = {
+            "type": "prediction_market",
+            "platform": "Polymarket",
+            "source_id": "poly-ghost",
+            "liquidity": 1000.0,
+            "volume": 5000.0,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(store, "_store_path", return_value=str(Path(tmp) / "event_store.json")), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+                # Freeze a prediction/link without writing the JSON event. The
+                # loop status should surface this cross-store dangling ref.
+                preds.freeze_prediction(rec)
+                client = _events_client()
+                resp = client.get("/events/loop/status")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["counts"]["dangling_predictions"], 1)
+        self.assertEqual(body["counts"]["dangling_links"], 1)
+        self.assertEqual(body["storage"]["loop_db_schema_versions"]["predictions"], 3)
+        self.assertEqual(
+            body["storage"]["loop_db_schema_versions"]["event_market_links"],
+            1,
+        )
+
+
+class RecentPredictionsRouteTests(unittest.TestCase):
+    def test_recent_predictions_include_event_titles(self):
+        rec = _make_record("evtRecent", estimated=70.0, value_score=30)
+        rec["event_title"] = "Will the recent event resolve yes?"
+        rec["event_title_zh"] = "最近事件会以 YES 结算吗？"
+        rec["source"] = {
+            "type": "prediction_market",
+            "platform": "Polymarket",
+            "source_id": "poly-recent",
+            "liquidity": 1000.0,
+            "volume": 5000.0,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(store, "_store_path", return_value=str(Path(tmp) / "event_store.json")), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+                store.save_event(rec)
+                preds.freeze_prediction(rec)
+                client = _events_client()
+                resp = client.get("/events/predictions/recent")
+
+        self.assertEqual(resp.status_code, 200)
+        predictions = resp.json()["predictions"]
+        self.assertEqual(len(predictions), 1)
+        self.assertEqual(predictions[0]["event_title"], "Will the recent event resolve yes?")
+        self.assertEqual(predictions[0]["event_title_zh"], "最近事件会以 YES 结算吗？")
 
 
 class DiscoverServiceTests(unittest.TestCase):
@@ -573,7 +725,9 @@ class CollectCandidateEventsTests(unittest.TestCase):
                     patch("app.services.manifold_event_source.fetch_candidate_events",
                           new=AsyncMock(return_value=manifold)), \
                     patch("app.services.kalshi_event_source.fetch_candidate_events",
-                          new=AsyncMock(return_value=kalshi)):
+                          new=AsyncMock(return_value=kalshi)), \
+                    patch("app.services.world_cup_event_source.fetch_candidate_events",
+                          new=AsyncMock(return_value=[])):
                 return await eis._collect_candidate_events(limit)
         return asyncio.run(run())
 
@@ -605,7 +759,9 @@ class CollectCandidateEventsTests(unittest.TestCase):
                     patch("app.services.manifold_event_source.fetch_candidate_events",
                           new=AsyncMock(side_effect=RuntimeError("down"))), \
                     patch("app.services.kalshi_event_source.fetch_candidate_events",
-                          new=AsyncMock(return_value=self._cands("Kalshi", 5, offset=10))):
+                          new=AsyncMock(return_value=self._cands("Kalshi", 5, offset=10))), \
+                    patch("app.services.world_cup_event_source.fetch_candidate_events",
+                          new=AsyncMock(return_value=[])):
                 return await eis._collect_candidate_events(10)
 
         out = asyncio.run(run())
@@ -624,6 +780,8 @@ class CollectCandidateEventsTests(unittest.TestCase):
                           new=AsyncMock(return_value=[])), \
                     patch("app.services.kalshi_event_source.fetch_candidate_events",
                           new=AsyncMock(return_value=[])), \
+                    patch("app.services.world_cup_event_source.fetch_candidate_events",
+                          new=AsyncMock(return_value=[])), \
                     patch("app.services.event_extraction_service.extract_candidate_events",
                           new=AsyncMock(return_value=self._cands(
                               "Open Web", 4, offset=10, source_type="open_web"))):
@@ -633,6 +791,29 @@ class CollectCandidateEventsTests(unittest.TestCase):
         counts = Counter(c["source"]["platform"] for c in out)
         self.assertEqual(counts["Polymarket"], 4)
         self.assertEqual(counts["Open Web"], 4)
+
+    def test_world_cup_source_is_interleaved(self):
+        from collections import Counter
+
+        async def run():
+            with patch("app.services.polymarket_event_source.fetch_candidate_events",
+                       new=AsyncMock(return_value=self._cands("Polymarket", 3))), \
+                    patch("app.services.manifold_event_source.fetch_candidate_events",
+                          new=AsyncMock(return_value=[])), \
+                    patch("app.services.kalshi_event_source.fetch_candidate_events",
+                          new=AsyncMock(return_value=[])), \
+                    patch("app.services.world_cup_event_source.fetch_candidate_events",
+                          new=AsyncMock(return_value=self._cands(
+                              "2026 FIFA World Cup", 3, offset=10,
+                              source_type="sports_event"))), \
+                    patch("app.services.event_extraction_service.extract_candidate_events",
+                          new=AsyncMock(return_value=[])):
+                return await eis._collect_candidate_events(10)
+
+        out = asyncio.run(run())
+        counts = Counter(c["source"]["platform"] for c in out)
+        self.assertEqual(counts["Polymarket"], 3)
+        self.assertEqual(counts["2026 FIFA World Cup"], 3)
 
 
 class DashboardSmokeTests(unittest.TestCase):
@@ -645,6 +826,7 @@ class DashboardSmokeTests(unittest.TestCase):
         # no ALLOW_OPEN_WRITES => refuse boot) does not trip during the test.
         with patch("app.main.start_scheduler", lambda: None), \
                 patch("app.main.stop_scheduler", lambda: None), \
+                patch("app.main.sqlite_db.maintain", return_value={"ok": True}), \
                 patch.object(settings, "API_WRITE_KEY", "test-key"):
             with TestClient(main_app) as client:
                 return client.get(path)
@@ -682,6 +864,7 @@ class DashboardSmokeTests(unittest.TestCase):
 
         with patch("app.main.start_scheduler", lambda: None), \
                 patch("app.main.stop_scheduler", lambda: None), \
+                patch("app.main.sqlite_db.maintain", return_value={"ok": True}), \
                 patch.object(settings, "API_WRITE_KEY", "test-key"), \
                 self.assertLogs("app.main", level="INFO") as logs:
             with TestClient(main_app):

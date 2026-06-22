@@ -19,6 +19,7 @@ from functools import partial
 import feedparser
 
 from app.core.config import settings
+from app.utils.failure_policy import fail_closed_empty_list
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +29,12 @@ def _fetch_sync(url: str, source_name: str, user_agent: str, limit: int) -> list
     try:
         feed = feedparser.parse(url, agent=user_agent)
     except Exception as exc:
-        logger.warning("SEC EDGAR feed fetch failed [url=%s]: %s", url, exc)
-        return []
+        return fail_closed_empty_list(
+            logger,
+            "sec_edgar_rss",
+            exc,
+            context={"url": url},
+        )
     articles = []
     for entry in feed.entries[:limit]:
         articles.append({

@@ -6,7 +6,7 @@ export default function NotFound() {
   return (
     <div className="min-h-screen">
       <AppNav />
-      <main className="mx-auto flex min-h-[calc(100vh-3.5rem)] max-w-7xl items-center px-4 py-6 md:px-6 md:py-8">
+      <main id="main-content" className="mx-auto flex min-h-[calc(100vh-3.5rem)] max-w-7xl items-center px-4 py-6 md:px-6 md:py-8">
         <section className="flex w-full flex-col items-center gap-4 rounded-lg border border-border bg-card px-6 py-12 text-center">
           <span className="flex size-12 items-center justify-center rounded-full bg-warn/10 text-warn">
             <AlertTriangle className="size-6" aria-hidden="true" />

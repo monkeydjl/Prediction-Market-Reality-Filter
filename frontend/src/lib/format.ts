@@ -67,6 +67,13 @@ export const AGREEMENT_LABELS: Record<string, string> = {
   divergent: "明显背离",
 };
 
+const DATE_TIME_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
 export function categoryLabel(c: string | undefined) {
   if (!c) return "未分类";
   return CATEGORY_LABELS[c] ?? c;
@@ -88,22 +95,5 @@ export function fmtDateTime(d: string | number | Date | null | undefined) {
   if (!d) return "—";
   const date = d instanceof Date ? d : new Date(d);
   if (Number.isNaN(date.getTime())) return "—";
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
-export function relativeTime(d: string | number | Date | null | undefined) {
-  if (!d) return "—";
-  const date = d instanceof Date ? d : new Date(d);
-  if (Number.isNaN(date.getTime())) return "—";
-  const diff = Date.now() - date.getTime();
-  const hours = Math.round(diff / (1000 * 60 * 60));
-  if (hours < 1) return "刚刚";
-  if (hours < 24) return `${hours} 小时前`;
-  const days = Math.round(hours / 24);
-  return `${days} 天前`;
+  return DATE_TIME_FORMATTER.format(date);
 }

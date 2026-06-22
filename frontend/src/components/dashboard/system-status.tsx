@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 const JOB_LABELS: Record<string, string> = {
   event_discover: "事件发现",
   event_auto_resolve: "自动结算",
+  loop_db_maintenance: "数据库维护",
 };
 
 const RUN_STATUS_META: Record<string, { label: string; cls: string }> = {
@@ -156,6 +157,8 @@ export function SystemStatus() {
   const degraded = apiMeta.degraded || failed || running === false;
   const failedWithoutDetails = runs.some(([, r]) => r.status === "failed" && !r.error);
   const endpointCount = overview?.endpoints ? Object.keys(overview.endpoints).length : null;
+  const danglingRefs =
+    (status?.counts?.dangling_predictions ?? 0) + (status?.counts?.dangling_links ?? 0);
 
   return (
     <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
@@ -191,6 +194,7 @@ export function SystemStatus() {
             <span className="rounded bg-secondary px-2 py-1">事件 {status?.counts?.events ?? "—"}</span>
             <span className="rounded bg-secondary px-2 py-1">已结算 {status?.counts?.resolved_events ?? "—"}</span>
             <span className="rounded bg-secondary px-2 py-1">待审链接 {status?.counts?.pending_links ?? "—"}</span>
+            <span className="rounded bg-secondary px-2 py-1">引用异常 {danglingRefs}</span>
             <span className="rounded bg-secondary px-2 py-1">校准样本 {status?.counts?.calibration_n ?? "—"}</span>
             <span className="rounded bg-secondary px-2 py-1">版本 {overview?.version ?? health?.version ?? "—"}</span>
             <span className="rounded bg-secondary px-2 py-1">接口 {endpointCount ?? "—"}</span>
@@ -201,7 +205,7 @@ export function SystemStatus() {
           <a
             href="/api"
             target="_blank"
-            rel="noreferrer"
+            rel="noopener noreferrer"
             className="inline-flex h-8 items-center rounded-md border border-border bg-secondary px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             API 目录
@@ -209,7 +213,7 @@ export function SystemStatus() {
           <a
             href={overview?.docs ?? "/docs"}
             target="_blank"
-            rel="noreferrer"
+            rel="noopener noreferrer"
             className="inline-flex h-8 items-center rounded-md border border-border bg-secondary px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             Docs

@@ -2,12 +2,14 @@
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from app.utils import sqlite_db
 from app.utils.helpers import utc_now
 from app.utils.sqlite_db import reading, writing
+
+_SCHEMA_VERSION = 1
 
 
 def _ensure_schema(path: str) -> None:
@@ -34,6 +36,7 @@ def _ensure_schema(path: str) -> None:
             "CREATE INDEX IF NOT EXISTS idx_loop_runs_status "
             "ON loop_runs(status)"
         )
+        sqlite_db.record_schema_version(conn, "loop_runs", _SCHEMA_VERSION)
 
 
 def start_run(job_name: str) -> str:

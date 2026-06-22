@@ -339,7 +339,7 @@ export default function EventDetailPage() {
   return (
     <div className="min-h-screen">
       <AppNav />
-      <main className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
+      <main id="main-content" className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
         <Suspense fallback={<div className="grid h-40 place-items-center text-sm text-muted-foreground">加载中…</div>}>
           <DetailInner />
         </Suspense>

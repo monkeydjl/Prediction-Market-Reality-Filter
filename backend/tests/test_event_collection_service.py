@@ -70,21 +70,29 @@ class EventCollectionServiceTests(unittest.TestCase):
              patch("app.services.sec_edgar_service.fetch_sec_filings",
                    AsyncMock(return_value=[])), \
              patch("app.services.economic_data_service.fetch_economic_data",
-                   AsyncMock(return_value=[])):
+                   AsyncMock(return_value=[])), \
+             self.assertLogs("app.services.event_collection_service",
+                             level="WARNING") as logs:
             articles = asyncio.run(collection.collect_shared_articles())
         # The failing RSS source contributes nothing; the others still collected.
         self.assertEqual(articles, [{**official[0], "kind": "official"}])
+        self.assertIn("policy=fail_closed_empty_list", "\n".join(logs.output))
 
     def test_collect_articles_isolates_failing_gnews(self):
         shared = [{"title": "shared", "description": "d",
                    "source": "s", "published": "p"}]
         with patch("app.services.gnews_service.fetch_google_news",
-                   AsyncMock(side_effect=Exception("gnews down"))):
+                   AsyncMock(side_effect=Exception("gnews down"))), \
+             self.assertLogs("app.services.event_collection_service",
+                             level="WARNING") as logs:
             articles = asyncio.run(
                 collection.collect_articles("will X happen?", shared_articles=shared)
             )
 
         self.assertEqual(articles, shared)
+        text = "\n".join(logs.output)
+        self.assertIn("source=query_source", text)
+        self.assertIn("policy=fail_closed_empty_list", text)
 
 
 if __name__ == "__main__":

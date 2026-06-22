@@ -19,6 +19,8 @@ import asyncio
 import logging
 from typing import Any
 
+from app.utils.failure_policy import fail_closed_empty_list, log_service_failure
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,7 +45,13 @@ async def collect_shared_articles() -> list[dict[str, Any]]:
     cleaned = []
     for label, result in zip(("rss", "official", "sec", "economic"), results):
         if isinstance(result, Exception):
-            logger.warning("Source collection failed [%s]: %s", label, result)
+            log_service_failure(
+                logger,
+                "shared_source",
+                result,
+                policy="fail_closed_empty_list",
+                context={"label": label},
+            )
             result = []
         cleaned.append(result)
     rss_news, official_news, sec_filings, economic_data = cleaned
@@ -85,7 +93,11 @@ async def collect_articles(
     try:
         google_news = await fetch_google_news(event_question)
     except Exception as exc:
-        logger.warning("Source collection failed [gnews]: %s", exc)
-        google_news = []
+        google_news = fail_closed_empty_list(
+            logger,
+            "query_source",
+            exc,
+            context={"label": "gnews"},
+        )
     google_news = [{**article, "kind": "news"} for article in google_news]
     return shared_articles + google_news

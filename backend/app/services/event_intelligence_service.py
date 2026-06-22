@@ -140,17 +140,22 @@ async def analyze_event(
     from app.services.ai_analysis_service import analyze_market
     from app.services.cross_validation_service import credibility_delta, cross_validate
 
+    sports_context = _build_sports_analysis_context(event_question, source)
+    combined_context = _append_context(
+        news_context,
+        sports_context.get("context", ""),
+    )
     analysis = await analyze_market(
         market_question=event_question,
         market_probability=baseline_probability,
-        news_context=news_context,
+        news_context=combined_context,
         volume=volume,
         liquidity=liquidity,
     )
     record = build_event_record(analysis, source=source)
     cross = await cross_validate(
         question=event_question,
-        news_context=news_context,
+        news_context=combined_context,
         primary_probability=record["probability"]["estimated"],
     )
     if cross is not None:
@@ -159,6 +164,12 @@ async def analyze_event(
         adjusted = max(0, min(100, credibility["score"] + credibility_delta(cross["agreement"])))
         credibility["score"] = adjusted
         credibility["level"] = score_level(adjusted)
+    if sports_context.get("context"):
+        record["sports_context"] = {
+            "fact_count": sports_context.get("fact_count", 0),
+            "signals": sports_context.get("signals", {}),
+            "facts": sports_context.get("facts", []),
+        }
     _apply_calibration_feedback(record, analysis, cross)
     return record
 
@@ -276,8 +287,11 @@ async def _collect_candidate_events(
         fetch_candidate_events as fetch_polymarket_events,
         fetch_crypto_candidate_events as fetch_polymarket_crypto_events,
     )
+    from app.services.world_cup_event_source import (
+        fetch_candidate_events as fetch_world_cup_events,
+    )
 
-    market_sources: list[tuple[str, Any]] = [
+    candidate_sources: list[tuple[str, Any]] = [
         ("Polymarket", fetch_polymarket_events),
         ("Manifold", fetch_manifold_events),
         ("Kalshi", fetch_kalshi_events),
@@ -288,10 +302,12 @@ async def _collect_candidate_events(
     # pool. Dedupe keeps cross-source duplicates out (a crypto market surfacing
     # in both the default and the crypto-only fetch is analyzed once).
     if settings.POLYMARKET_CRYPTO_FETCH_ENABLED:
-        market_sources.append(("Polymarket Crypto", fetch_polymarket_crypto_events))
-    labels = [name for name, _ in market_sources] + ["Open Web"]
+        candidate_sources.append(("Polymarket Crypto", fetch_polymarket_crypto_events))
+    if settings.WORLD_CUP_SOURCE_ENABLED:
+        candidate_sources.append(("World Cup", fetch_world_cup_events))
+    labels = [name for name, _ in candidate_sources] + ["Open Web"]
     results = await asyncio.gather(
-        *(fetch(limit) for _, fetch in market_sources),
+        *(fetch(limit) for _, fetch in candidate_sources),
         extract_candidate_events(shared_articles or [], limit),
         return_exceptions=True,
     )
@@ -359,7 +375,12 @@ async def discover_events(
                 filtered_news = await _build_filtered_news(
                     question, shared_articles=shared_articles
                 )
-                if filtered_news["summary"]["selected_count"] == 0:
+                source = candidate.get("source")
+                sports_context = _build_sports_analysis_context(question, source)
+                if (
+                    filtered_news["summary"]["selected_count"] == 0
+                    and not sports_context.get("context")
+                ):
                     return None
 
                 record = await analyze_event(
@@ -368,7 +389,7 @@ async def discover_events(
                         candidate.get("baseline_probability"), 50.0
                     ),
                     news_context=filtered_news["context"],
-                    source=candidate.get("source"),
+                    source=source,
                     volume=candidate.get("volume"),
                     liquidity=candidate.get("liquidity"),
                 )
@@ -476,6 +497,31 @@ async def _build_filtered_news(
         market_question=event_question,
         articles=articles,
     )
+
+
+def _build_sports_analysis_context(
+    event_question: str,
+    source: dict[str, Any] | None,
+) -> dict[str, Any]:
+    source = source or {}
+    if source.get("type") != "sports_event":
+        return {}
+    from app.services.sports_fact_service import load_sports_facts
+    from app.services.sports_signal_service import (
+        build_sports_signals,
+        render_sports_context,
+    )
+
+    tournament = str(source.get("tournament") or "2026 FIFA World Cup")
+    facts = load_sports_facts(tournament=tournament)
+    bundle = build_sports_signals(event_question, source, facts)
+    context = render_sports_context(bundle)
+    return {**bundle, "context": context}
+
+
+def _append_context(news_context: str, extra_context: str) -> str:
+    parts = [part.strip() for part in (news_context, extra_context) if part and part.strip()]
+    return "\n\n".join(parts)
 
 
 def _priority_from_score(score: int) -> str:

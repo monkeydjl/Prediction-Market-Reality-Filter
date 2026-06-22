@@ -48,7 +48,9 @@ class SecEdgarServiceTests(unittest.TestCase):
              self.assertLogs("app.services.sec_edgar_service", level="WARNING") as logs:
             articles = asyncio.run(sec.fetch_sec_filings())
         self.assertEqual(articles, [])
-        self.assertIn("SEC EDGAR feed fetch failed", "\n".join(logs.output))
+        text = "\n".join(logs.output)
+        self.assertIn("source=sec_edgar_rss", text)
+        self.assertIn("policy=fail_closed_empty_list", text)
 
 
 if __name__ == "__main__":

@@ -10,19 +10,28 @@ Returns the normalized article shape the news filter expects:
 """
 
 import asyncio
+import logging
 from functools import partial
 
 import feedparser
 
 from app.core.config import settings
+from app.utils.failure_policy import fail_closed_empty_list
+
+logger = logging.getLogger(__name__)
 
 
 def _fetch_sync(url: str, source_name: str, limit: int) -> list[dict]:
     """Synchronous RSS fetch + normalize. Runs in a thread pool."""
     try:
         feed = feedparser.parse(url)
-    except Exception:
-        return []
+    except Exception as exc:
+        return fail_closed_empty_list(
+            logger,
+            "official_rss",
+            exc,
+            context={"url": url},
+        )
     articles = []
     for entry in feed.entries[:limit]:
         articles.append({

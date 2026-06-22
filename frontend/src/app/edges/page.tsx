@@ -82,7 +82,7 @@ function EdgeCard({ item }: { item: FreshEdge }) {
   return (
     <Link
       href={`/events?id=${encodeURIComponent(item.event_id)}`}
-      className="grid gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/40 hover:bg-secondary/20"
+      className="grid gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/40 hover:bg-secondary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <div className="flex items-start justify-between gap-3">
         <h3 className="line-clamp-2 text-sm font-medium leading-snug">{item.event_title || item.event_id}</h3>
@@ -159,7 +159,7 @@ export default function EdgesPage() {
   return (
     <div className="min-h-screen">
       <AppNav />
-      <main className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
+      <main id="main-content" className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-2 text-primary">

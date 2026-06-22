@@ -42,6 +42,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.utils.failure_policy import fail_closed_empty_list
 from app.utils.market_utils import safe_float
 
 
@@ -62,8 +63,12 @@ async def fetch_candidate_events(limit: int = 10) -> list[dict[str, Any]]:
     try:
         raw_events = await _fetch_raw_events(limit)
     except Exception as exc:
-        logger.warning("Kalshi event source failed: %s", exc)
-        return []
+        return fail_closed_empty_list(
+            logger,
+            "kalshi_candidates",
+            exc,
+            context={"limit": limit},
+        )
     candidates = [
         _to_candidate_event(event)
         for event in raw_events
@@ -163,8 +168,12 @@ async def fetch_resolved_markets(limit: int = 200) -> list[dict[str, Any]]:
     try:
         raw = await _fetch_raw_resolved(limit)
     except Exception as exc:
-        logger.warning("Kalshi resolved fetch failed: %s", exc)
-        return []
+        return fail_closed_empty_list(
+            logger,
+            "kalshi_resolved",
+            exc,
+            context={"limit": limit},
+        )
     resolved: list[dict[str, Any]] = []
     for event in raw:
         if not isinstance(event, dict):

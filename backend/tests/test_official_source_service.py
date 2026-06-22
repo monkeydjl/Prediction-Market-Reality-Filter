@@ -36,11 +36,15 @@ class OfficialSourceServiceTests(unittest.TestCase):
             articles = asyncio.run(official.fetch_official_news())
         self.assertEqual(articles, [])
 
-    def test_fetch_swallows_parse_errors(self):
+    def test_fetch_logs_parse_errors(self):
         with patch.object(official.feedparser, "parse", side_effect=Exception("boom")), \
-             patch.object(official.settings, "OFFICIAL_RSS_URL", "http://example/feed"):
+             patch.object(official.settings, "OFFICIAL_RSS_URL", "http://example/feed"), \
+             self.assertLogs("app.services.official_source_service", level="WARNING") as logs:
             articles = asyncio.run(official.fetch_official_news())
         self.assertEqual(articles, [])
+        text = "\n".join(logs.output)
+        self.assertIn("source=official_rss", text)
+        self.assertIn("policy=fail_closed_empty_list", text)
 
 
 if __name__ == "__main__":

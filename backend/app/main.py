@@ -13,6 +13,7 @@ from app.core.logging import setup_logging
 from app.core.rate_limit import InMemoryRateLimitMiddleware
 from app.core.scheduler import start_scheduler, stop_scheduler
 from app.services.llm_startup_check_service import validate_primary_llm_startup
+from app.utils import sqlite_db
 
 
 setup_logging()
@@ -45,6 +46,8 @@ async def lifespan(app: FastAPI):
             "or set ALLOW_OPEN_WRITES=true to explicitly run with public writes "
             "(local dev only)."
         )
+    sqlite_maintenance = sqlite_db.maintain()
+    logger.info("Loop DB maintenance passed: %s", sqlite_maintenance)
     scheduler_started = False
     if settings.SCHEDULER_ENABLED:
         scheduler_started = start_scheduler()

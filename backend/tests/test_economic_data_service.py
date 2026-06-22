@@ -44,11 +44,15 @@ class EconomicDataServiceTests(unittest.TestCase):
             articles = asyncio.run(economic.fetch_economic_data())
         self.assertEqual(articles, [])
 
-    def test_fetch_swallows_parse_errors(self):
+    def test_fetch_logs_parse_errors(self):
         with patch.object(economic.feedparser, "parse", side_effect=Exception("boom")), \
-             patch.object(economic.settings, "ECONOMIC_RSS_URL", "http://example/bls"):
+             patch.object(economic.settings, "ECONOMIC_RSS_URL", "http://example/bls"), \
+             self.assertLogs("app.services.economic_data_service", level="WARNING") as logs:
             articles = asyncio.run(economic.fetch_economic_data())
         self.assertEqual(articles, [])
+        text = "\n".join(logs.output)
+        self.assertIn("source=economic_rss", text)
+        self.assertIn("policy=fail_closed_empty_list", text)
 
 
 if __name__ == "__main__":

@@ -35,7 +35,10 @@ class RssServiceTests(unittest.TestCase):
             articles = asyncio.run(rss.fetch_news(limit=5))
 
         self.assertEqual(articles, [])
-        self.assertIn("RSS feed fetch failed [source=Broken]", "\n".join(logs.output))
+        text = "\n".join(logs.output)
+        self.assertIn("source=rss_feed", text)
+        self.assertIn("policy=fail_closed_empty_list", text)
+        self.assertIn("name=Broken", text)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
+from typing import Annotated, Any
+
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Path, Query
 
 from app.api.security import is_write_key_valid, require_write_key
 from app.memory.event_market_link_store import list_pending, set_verified
@@ -29,6 +31,13 @@ from app.services.event_resolve_service import (
 )
 from app.services.historical_matching_service import find_similar
 from app.services.loop_status_service import loop_status
+from app.services.sports_fact_service import (
+    WORLD_CUP_TOURNAMENT,
+    import_sports_facts,
+    load_sports_facts,
+    sports_fact_status,
+)
+from app.services.sports_resolution_service import resolve_world_cup_events
 from app.services.trend_analysis_service import (
     analyze_edge_trajectory,
     analyze_trend,
@@ -54,6 +63,17 @@ from app.models.event import (
 
 
 router = APIRouter()
+
+EVENT_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+EventId = Annotated[
+    str,
+    Path(
+        min_length=1,
+        max_length=128,
+        pattern=EVENT_ID_PATTERN,
+        description="Stored event id.",
+    ),
+]
 
 
 @router.get("/discover", response_model=EventDiscoveryResponse)
@@ -153,10 +173,68 @@ async def get_loop_status(x_api_key: str | None = Header(default=None)):
     )
 
 
+@router.get("/sports/world-cup/status", response_model=FlexibleResponse)
+async def get_world_cup_status():
+    """Return World Cup fact-store status for the sports vertical."""
+    return sports_fact_status(tournament=WORLD_CUP_TOURNAMENT)
+
+
+@router.get("/sports/world-cup/facts", response_model=FlexibleResponse)
+async def list_world_cup_facts(
+    kind: str | None = Query(default=None, max_length=40),
+    team: str | None = Query(default=None, max_length=80),
+):
+    """List imported structured World Cup facts."""
+    facts = load_sports_facts(tournament=WORLD_CUP_TOURNAMENT, kind=kind)
+    if team:
+        needle = team.strip().lower()
+        facts = [
+            fact for fact in facts
+            if needle in str(fact.get("team", "")).lower()
+            or needle in str(fact.get("home_team", "")).lower()
+            or needle in str(fact.get("away_team", "")).lower()
+        ]
+    return {"count": len(facts), "facts": facts}
+
+
+@router.post("/sports/world-cup/facts/import", response_model=FlexibleResponse)
+async def import_world_cup_facts(
+    payload: Any = Body(...),
+    replace: bool = Query(default=False),
+    _auth: None = Depends(require_write_key),
+):
+    """Import structured World Cup facts from a list or {"facts": [...]} body."""
+    try:
+        result = import_sports_facts(
+            payload,
+            replace=replace,
+            default_tournament=WORLD_CUP_TOURNAMENT,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if result["imported"] == 0 and result["error_count"] > 0:
+        raise HTTPException(status_code=422, detail=result["errors"])
+    return result
+
+
+@router.post("/sports/world-cup/resolve", response_model=FlexibleResponse)
+async def resolve_world_cup_sports_events(
+    dry_run: bool = Query(default=True),
+    limit: int = Query(default=200, ge=1, le=1000),
+    _auth: None = Depends(require_write_key),
+):
+    """Resolve World Cup sports events from structured facts.
+
+    Defaults to dry-run so operators can inspect deterministic matches before
+    writing outcomes.
+    """
+    return await resolve_world_cup_events(dry_run=dry_run, limit=limit)
+
+
 # Dynamic routes declared after the static /discover, /analyze, / and /movers
 # routes so the path parameter does not shadow them.
 @router.get("/{event_id}", response_model=EventStoreEntry)
-async def get_event_intelligence(event_id: str):
+async def get_event_intelligence(event_id: EventId):
     """Return a stored event intelligence record by event_id (404 if unknown)."""
     entry = get_event(event_id)
     if entry is None:
@@ -166,7 +244,7 @@ async def get_event_intelligence(event_id: str):
 
 @router.patch("/{event_id}/tracking", response_model=EventStoreEntry)
 async def update_event_tracking(
-    event_id: str,
+    event_id: EventId,
     status: str | None = Body(default=None, embed=True),
     priority: str | None = Body(default=None, embed=True),
     _auth: None = Depends(require_write_key),
@@ -193,7 +271,7 @@ async def update_event_tracking(
 
 
 @router.get("/{event_id}/history", response_model=EventHistoryResponse)
-async def get_event_probability_history(event_id: str):
+async def get_event_probability_history(event_id: EventId):
     """Return the probability snapshots recorded for an event over time.
 
     Outcome snapshots (kind="outcome") are excluded from this view: they are
@@ -220,7 +298,7 @@ async def get_event_probability_history(event_id: str):
 
 @router.post("/{event_id}/resolve", response_model=EventStoreEntry)
 async def resolve_event_intelligence(
-    event_id: str,
+    event_id: EventId,
     actual_outcome: float = Body(..., ge=0, le=100, embed=True),
     confidence: float = Body(default=1.0, ge=0, le=1, embed=True),
     notes: str = Body(default="", embed=True),
@@ -296,7 +374,7 @@ async def list_pending_links():
 
 @router.post("/{event_id}/link/verify", response_model=FlexibleResponse)
 async def verify_event_link(
-    event_id: str,
+    event_id: EventId,
     contract_id: str = Body(default="", embed=True),
     _auth: None = Depends(require_write_key),
 ):
@@ -331,7 +409,17 @@ async def get_prediction_calibration():
 async def get_recent_predictions(limit: int = Query(default=50, ge=1, le=200)):
     """Recent frozen predictions (AI vs market price, raw edge, and - once
     resolved - the scored Brier). Visibility into what the loop has committed."""
-    return {"predictions": list_recent(limit=limit)}
+    events_by_id = {entry.get("event_id"): entry for entry in list_all_events()}
+    predictions = []
+    for prediction in list_recent(limit=limit):
+        entry = events_by_id.get(prediction.get("event_id"))
+        record = entry.get("record") if entry else None
+        predictions.append({
+            **prediction,
+            "event_title": (record or {}).get("event_title", ""),
+            "event_title_zh": (record or {}).get("event_title_zh", ""),
+        })
+    return {"predictions": predictions}
 
 
 @router.get("/decisions/open", response_model=OpenDecisionsResponse)
@@ -391,7 +479,7 @@ async def get_fresh_edges(
 
 
 @router.get("/{event_id}/decision", response_model=FlexibleResponse)
-async def get_event_decision(event_id: str):
+async def get_event_decision(event_id: EventId):
     """The decision report for one event: its committed prediction joined with the
     event intelligence record (event / probability / market view / edge+trust /
     confidence / recommendation / risk). 404 when the event has no committed
@@ -410,7 +498,7 @@ async def get_event_decision(event_id: str):
 
 @router.get("/{event_id}/similar", response_model=SimilarEventsResponse)
 async def get_similar_events(
-    event_id: str,
+    event_id: EventId,
     limit: int = Query(default=5, ge=1, le=20),
 ):
     """Find stored events most similar to this one (precedent context).

@@ -10,6 +10,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   crypto: "加密资产",
   macro: "宏观",
   politics: "政治",
+  sports_event: "世界杯",
   general: "综合",
   crypto_price_btc: "BTC 价格",
   crypto_price_eth: "ETH 价格",

@@ -58,9 +58,10 @@ function trackingStatusOf(
   return "watching";
 }
 
-// Category lives in legacy_analysis.base_rate_category on real records; fall
-// back to the source type, then "general".
+// Sports events use source type as the dashboard segment; other records use
+// legacy_analysis.base_rate_category, then fall back to the source type.
 function categoryOf(record: EventRecord): string {
+  if (record.source?.type === "sports_event") return "sports_event";
   const legacy = (record as unknown as { legacy_analysis?: Record<string, unknown> })
     .legacy_analysis;
   const cat = legacy?.base_rate_category;

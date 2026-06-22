@@ -226,6 +226,8 @@ def list_resolved_events() -> list[dict[str, Any]]:
 def _category(record: dict[str, Any]) -> str:
     legacy = record.get("legacy_analysis") or {}
     source = record.get("source") or {}
+    if source.get("type") == "sports_event":
+        return "sports_event"
     return str(
         legacy.get("base_rate_category")
         or source.get("type")

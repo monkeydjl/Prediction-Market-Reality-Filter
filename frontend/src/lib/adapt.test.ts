@@ -37,6 +37,19 @@ describe("adaptRecord", () => {
     expect(view.trackingStatus).toBe("watching");
     expect(view.category).toBe("general");
   });
+
+  it("keeps sports events in the World Cup dashboard category", () => {
+    const record = {
+      event_id: "evt-3",
+      event_title: "Will Brazil reach the World Cup semifinals?",
+      source: { type: "sports_event", platform: "world_cup_2026" },
+      legacy_analysis: { base_rate_category: "geopolitics" },
+    } as EventRecord & { legacy_analysis: { base_rate_category: string } };
+
+    const view = adaptRecord(record);
+
+    expect(view.category).toBe("sports_event");
+  });
 });
 
 describe("trendOf", () => {

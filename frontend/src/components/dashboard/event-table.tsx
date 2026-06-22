@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, Download, Search } from "lucide-react";
+import { ChevronRight, Download, Search, Trophy } from "lucide-react";
 import type { EventView } from "@/lib/adapt";
 import { categoryLabel, fmtPct, STATUS_LABELS } from "@/lib/format";
 import {
@@ -29,6 +29,7 @@ const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
 const STATUS_VALUES = new Set(STATUS_FILTERS.map((s) => s.value));
 const SORT_VALUES = new Set<SortKey>(["delta", "probability", "support", "value"]);
 const TABLE_FILTER_EVENT = "pmrf:event-table-filters-change";
+const WORLD_CUP_CATEGORY = "sports_event";
 
 const selectCls =
   "h-8 rounded-md border border-border bg-secondary px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -92,10 +93,11 @@ export function EventTable({
     }
   }, [category, query, sort, status, urlReady]);
 
-  const categories = useMemo(
-    () => Array.from(new Set(events.map((e) => e.category))),
+  const categoryOptions = useMemo(
+    () => Array.from(new Set([WORLD_CUP_CATEGORY, ...events.map((e) => e.category)])),
     [events],
   );
+  const isWorldCupFilter = category === WORLD_CUP_CATEGORY;
 
   const rows = useMemo(() => {
     let r = events;
@@ -153,6 +155,20 @@ export function EventTable({
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
+            onClick={() => setCategory(isWorldCupFilter ? "all" : WORLD_CUP_CATEGORY)}
+            aria-pressed={isWorldCupFilter}
+            className={cn(
+              "inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs transition-colors",
+              isWorldCupFilter
+                ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90"
+                : "border-border bg-secondary text-foreground hover:bg-accent",
+            )}
+          >
+            <Trophy className="size-3.5" aria-hidden="true" />
+            世界杯
+          </button>
+          <button
+            type="button"
             onClick={exportRows}
             disabled={rows.length === 0}
             className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-secondary px-2 text-xs text-foreground transition-colors hover:bg-accent disabled:opacity-50"
@@ -182,7 +198,7 @@ export function EventTable({
               aria-label="按领域筛选"
             >
               <option value="all">全部领域</option>
-              {categories.map((c) => (
+              {categoryOptions.map((c) => (
                 <option key={c} value={c}>
                   {categoryLabel(c)}
                 </option>

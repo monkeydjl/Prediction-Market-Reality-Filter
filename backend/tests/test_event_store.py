@@ -136,6 +136,26 @@ class EventStoreTests(unittest.TestCase):
         self.assertEqual([e["event_id"] for e in listed], ["eth"])
         self.assertEqual(count, 1)
 
+    def test_sports_events_filter_by_source_type_over_base_rate_category(self):
+        sports = _make_record("world-cup", value_score=70, estimated=62)
+        sports["event_title"] = "Will Brazil reach the World Cup semifinals?"
+        sports["source"] = {"type": "sports_event", "platform": "world_cup_2026"}
+        sports["legacy_analysis"] = {"base_rate_category": "geopolitics"}
+        other = _make_record("geopolitics", value_score=60, estimated=58)
+        other["event_title"] = "Will a policy meeting happen?"
+        other["source"] = {"type": "manual"}
+        other["legacy_analysis"] = {"base_rate_category": "geopolitics"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                store.save_events([sports, other])
+                listed = store.list_events(category="sports_event")
+                count = store.count_events(category="sports_event")
+
+        self.assertEqual([e["event_id"] for e in listed], ["world-cup"])
+        self.assertEqual(count, 1)
+
     def test_save_event_rejects_missing_event_id(self):
         bad = _make_record()
         del bad["event_id"]

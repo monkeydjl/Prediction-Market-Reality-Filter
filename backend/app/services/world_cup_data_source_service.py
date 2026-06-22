@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+from io import StringIO
 from typing import Any
 
 from app.services.sports_fact_service import (
@@ -20,6 +22,7 @@ def world_cup_data_to_facts(payload: Any) -> list[dict[str, Any]]:
 
     if not isinstance(payload, dict):
         raise ValueError("payload must be an object")
+    payload = _expand_csv_payload(payload)
     tournament = _clean(payload.get("tournament")) or WORLD_CUP_TOURNAMENT
     source = _clean(payload.get("source")) or "structured_data"
     source_url = _clean(payload.get("source_url") or payload.get("url"))
@@ -50,6 +53,40 @@ def import_world_cup_data(payload: Any, *, replace: bool = False) -> dict[str, A
     )
     result["converted_fact_count"] = len(facts)
     return result
+
+
+def _expand_csv_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    csv_payload = payload.get("csv")
+    if csv_payload is None:
+        return payload
+    if not isinstance(csv_payload, dict):
+        raise ValueError("csv must be an object")
+
+    expanded = dict(payload)
+    for section in ("matches", "qualifications", "player_awards"):
+        csv_text = csv_payload.get(section)
+        if csv_text in (None, ""):
+            continue
+        if expanded.get(section):
+            raise ValueError(f"provide either {section} or csv.{section}, not both")
+        expanded[section] = _csv_rows(csv_text, f"csv.{section}")
+    expanded.pop("csv", None)
+    return expanded
+
+
+def _csv_rows(csv_text: Any, name: str) -> list[dict[str, str]]:
+    if not isinstance(csv_text, str):
+        raise ValueError(f"{name} must be a string")
+    reader = csv.DictReader(StringIO(csv_text.strip()))
+    if not reader.fieldnames:
+        raise ValueError(f"{name} must include a header row")
+    rows = [
+        {str(key).strip(): str(value or "").strip() for key, value in row.items() if key}
+        for row in reader
+    ]
+    if not rows:
+        raise ValueError(f"{name} must include at least one data row")
+    return rows
 
 
 def _match_facts(
@@ -93,8 +130,8 @@ def _match_facts(
         if yellow_cards is not None:
             fact["yellow_cards"] = yellow_cards
         for field in ("extra_time", "penalty_shootout"):
-            if raw.get(field) is not None:
-                fact[field] = bool(raw.get(field))
+            if _has_value(raw.get(field)):
+                fact[field] = _bool(raw.get(field), field)
         facts.append(_compact(fact))
     return facts
 
@@ -129,8 +166,8 @@ def _qualification_facts(
             "status": status,
         })
         for field in ("already_qualified", "already_eliminated"):
-            if raw.get(field) is not None:
-                fact[field] = bool(raw.get(field))
+            if _has_value(raw.get(field)):
+                fact[field] = _bool(raw.get(field), field)
         facts.append(_compact(fact))
     return facts
 
@@ -198,8 +235,8 @@ def _tournament_status_fact(
         observed_at=observed_at,
     )
     fact["status"] = status
-    if complete is not None:
-        fact["tournament_complete"] = bool(complete)
+    if _has_value(complete):
+        fact["tournament_complete"] = _bool(complete, "tournament_complete")
     return _compact(fact)
 
 
@@ -260,6 +297,21 @@ def _number(value: Any) -> float | None:
         return max(0.0, float(value))
     except (TypeError, ValueError):
         return None
+
+
+def _bool(value: Any, field: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = _clean(value).lower()
+    if text in {"1", "true", "yes", "y"}:
+        return True
+    if text in {"0", "false", "no", "n"}:
+        return False
+    raise ValueError(f"{field} must be a boolean")
+
+
+def _has_value(value: Any) -> bool:
+    return value is not None and _clean(value) != ""
 
 
 def _compact(fact: dict[str, Any]) -> dict[str, Any]:

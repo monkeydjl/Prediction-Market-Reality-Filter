@@ -167,6 +167,30 @@ class WorldCupFactRouteTests(unittest.TestCase):
         self.assertEqual(facts_resp.json()["count"], 1)
         self.assertEqual(facts_resp.json()["facts"][0]["match_id"], "round16-1")
 
+    def test_world_cup_data_import_accepts_csv_payload(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \
+                patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            import_resp = client.post(
+                "/events/sports/world-cup/data/import?replace=true",
+                headers=AUTH_HEADERS,
+                json={
+                    "source": "official_csv",
+                    "csv": {
+                        "matches": (
+                            "match_id,stage,home_team,away_team,status,penalty_shootout\n"
+                            "round16-1,round_of_16,Team A,Team B,finished,true\n"
+                        )
+                    },
+                },
+            )
+            facts_resp = client.get("/events/sports/world-cup/facts?kind=match_result")
+
+        self.assertEqual(import_resp.status_code, 200)
+        self.assertEqual(import_resp.json()["converted_fact_count"], 1)
+        self.assertTrue(facts_resp.json()["facts"][0]["penalty_shootout"])
+
     def test_world_cup_resolve_requires_write_key(self):
         with patch.object(settings, "API_WRITE_KEY", "secret"):
             client = _events_client()

@@ -67,6 +67,8 @@ Header: X-API-Key: <API_WRITE_KEY>
    `docs/examples/world-cup-facts.sample.json`.
 2. Or put trusted feed-shaped match data in a JSON file using the sample at
    `docs/examples/world-cup-data.sample.json`; PMRF converts it into facts.
+   If your source exports CSV, use the JSON-wrapped CSV sample at
+   `docs/examples/world-cup-data-csv.sample.json`.
 3. Import with `replace=true` when the file is the current full fact snapshot.
    Use `replace=false` for incremental upserts.
 4. Call the facts list endpoint and inspect the normalized records.
@@ -95,6 +97,18 @@ For a trusted match-data snapshot, switch the import URL and body file:
 
 ```powershell
 $body = Get-Content -Raw docs\examples\world-cup-data.sample.json
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/events/sports/world-cup/data/import?replace=false" `
+  -Headers @{ "X-API-Key" = $key } `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+For CSV exports, use the same endpoint with the CSV sample:
+
+```powershell
+$body = Get-Content -Raw docs\examples\world-cup-data-csv.sample.json
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:8000/api/events/sports/world-cup/data/import?replace=false" `
@@ -197,3 +211,9 @@ the same facts used by analysis and auto-resolution:
 - `player_awards`: creates `player_award` facts for Golden Boot / top scorer
   events.
 - `tournament_status`: creates one `tournament_status` fact.
+
+CSV exports can be wrapped under `csv.matches`, `csv.qualifications`, and
+`csv.player_awards`. The first row must be headers whose names match the JSON
+fields, such as `match_id`, `stage`, `home_team`, `away_team`, `status`,
+`penalty_shootout`, `team`, `already_qualified`, `award`, `player`, and
+`goals`.

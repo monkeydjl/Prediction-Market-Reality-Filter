@@ -45,3 +45,4 @@
 - `README.md` — Project overview and quick start
 - [World Cup facts sample](examples/world-cup-facts.sample.json) — Example import payload for the sports facts API
 - [World Cup data sample](examples/world-cup-data.sample.json) — Example match-data payload for trusted data-source import
+- [World Cup CSV data sample](examples/world-cup-data-csv.sample.json) — Example JSON-wrapped CSV payload for trusted data-source import

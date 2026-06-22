@@ -60,6 +60,49 @@ class WorldCupDataSourceServiceTests(unittest.TestCase):
         self.assertEqual(by_kind["player_award"]["goals"], 7)
         self.assertTrue(by_kind["tournament_status"]["tournament_complete"])
 
+    def test_converts_csv_sections_to_structured_facts(self):
+        facts = world_cup_data_to_facts({
+            "source": "official_csv",
+            "csv": {
+                "matches": (
+                    "match_id,stage,home_team,away_team,status,home_score,away_score,"
+                    "extra_time,penalty_shootout,home_red_cards,away_red_cards\n"
+                    "round16-1,round_of_16,Team A,Team B,finished,1,1,false,true,1,0\n"
+                ),
+                "qualifications": (
+                    "team,status,stage,already_qualified,already_eliminated\n"
+                    "Mexico,qualified,round_of_32,true,false\n"
+                ),
+                "player_awards": (
+                    "award,player,team,goals,rank,status\n"
+                    "golden_boot,Player A,Team A,7,1,current\n"
+                ),
+            },
+            "tournament_status": {
+                "status": "in_progress",
+                "tournament_complete": False,
+            },
+        })
+
+        by_kind = {fact["kind"]: fact for fact in facts}
+        self.assertFalse(by_kind["match_result"]["extra_time"])
+        self.assertTrue(by_kind["match_result"]["penalty_shootout"])
+        self.assertEqual(by_kind["match_result"]["red_cards"], 1.0)
+        self.assertTrue(by_kind["qualification"]["already_qualified"])
+        self.assertFalse(by_kind["qualification"]["already_eliminated"])
+        self.assertEqual(by_kind["player_award"]["goals"], "7")
+
+    def test_rejects_unknown_boolean_values(self):
+        with self.assertRaisesRegex(ValueError, "penalty_shootout must be a boolean"):
+            world_cup_data_to_facts({
+                "csv": {
+                    "matches": (
+                        "match_id,stage,home_team,away_team,status,penalty_shootout\n"
+                        "round16-1,round_of_16,Team A,Team B,finished,maybe\n"
+                    )
+                }
+            })
+
     def test_imported_match_data_feeds_existing_resolution(self):
         record = _sports_record(
             "penalties",

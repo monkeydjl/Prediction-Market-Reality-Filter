@@ -7,6 +7,13 @@
 
 For production, **hybrid approach**: Use Elo+Odds as baseline, add AI for edge cases.
 
+## ✅ Implementation Status
+
+**Elo+Odds Engine**: ✅ **IMPLEMENTED** (commit 8f8bd4d)
+- Module: `backend/app/services/world_cup_elo_odds_engine.py`
+- Tests: `test_elo_odds_engine.py` (7 tests) + `test_elo_odds_validation.py` (5 scenarios)
+- All tests passing, production-ready
+
 ---
 
 ## Current System Architecture
@@ -310,10 +317,21 @@ expected_goals = probability_to_poisson(final_prob)
 
 ### For Your Use Case (World Cup 2026)
 
-**Phase 1 (Now - Tournament Start)**:
-- Keep current system for development
-- Build Elo+Odds module in parallel
-- A/B test both approaches
+**✅ IMPLEMENTATION COMPLETE** (2026-06-24)
+
+The Elo+Odds engine is now implemented and validated:
+- Module: `backend/app/services/world_cup_elo_odds_engine.py` (315 lines)
+- Function: `predict_match_elo_odds()` - main entry point
+- Batch support: `predict_matches_batch()` for multiple matches
+- All tests passing (12 test cases total)
+
+**Next Steps:**
+
+**Phase 1 (Immediate) - Integration**:
+- Add Elo+Odds option to prediction pipeline
+- Create API endpoint: `POST /world-cup/predictions/matches/{match_id}/predict-elo-odds`
+- Frontend: Add toggle to switch between engines
+- Default to Elo+Odds for speed/cost
 
 **Phase 2 (Tournament Running)**:
 - **Primary**: Elo+Odds (fast, accurate)

@@ -149,3 +149,32 @@ class PredictionAccuracy(Base):
 
     # Updated timestamp
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TeamMarketValue(Base):
+    """Team squad market value from Transfermarkt."""
+
+    __tablename__ = "team_market_values"
+
+    team_name = Column(String(64), primary_key=True)
+    total_market_value = Column(Float, nullable=False)  # millions of euros
+    avg_player_value = Column(Float, nullable=False)  # millions of euros
+    num_players = Column(Integer, nullable=False)
+    url = Column(String(256))
+    scraped_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TeamSentiment(Base):
+    """Team sentiment from news and social media."""
+
+    __tablename__ = "team_sentiment"
+
+    team_name = Column(String(64), primary_key=True)
+    overall_sentiment = Column(Float, nullable=False)  # -1 to 1
+    news_sentiment = Column(Float, nullable=False)  # -1 to 1
+    reddit_sentiment = Column(Float, nullable=False)  # -1 to 1
+    confidence = Column(Float, nullable=False)  # 0 to 1 (data volume)
+    article_count = Column(Integer, nullable=False)
+    scraped_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

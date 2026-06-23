@@ -230,8 +230,11 @@ def sync_world_cup_fixtures() -> dict[str, Any]:
     """
 
     try:
+        # Get season from settings
+        season = _clean(settings.WORLD_CUP_API_FOOTBALL_SEASON) or "2026"
+
         # Fetch from API
-        raw_fixtures = fetch_world_cup_fixtures()
+        raw_fixtures = fetch_world_cup_fixtures(season=season)
 
         # Parse fixtures
         parsed = []
@@ -250,10 +253,14 @@ def sync_world_cup_fixtures() -> dict[str, Any]:
 
         return {
             "status": "ok",
+            "fixtures_synced": stats["created"] + stats["updated"],
             "fixtures_fetched": len(raw_fixtures),
             "fixtures_parsed": len(parsed),
-            "db_stats": stats,
-            "remaining_matches": len(remaining)
+            "created": stats["created"],
+            "updated": stats["updated"],
+            "skipped": stats["skipped"],
+            "remaining_matches": len(remaining),
+            "season": season
         }
 
     except Exception as e:

@@ -70,7 +70,7 @@ export async function fetchMatches(params?: {
   if (params?.limit) query.set('limit', params.limit.toString());
 
   const response = await fetch(
-    `${API_BASE}/world-cup/predictions/matches?${query}`,
+    `${API_BASE}/api/world-cup/predictions/matches?${query}`,
     { cache: 'no-store' }
   );
 
@@ -87,7 +87,7 @@ export async function fetchMatches(params?: {
  */
 export async function fetchMatchWithPrediction(matchId: string): Promise<MatchWithPrediction> {
   const response = await fetch(
-    `${API_BASE}/world-cup/predictions/matches/${matchId}`,
+    `${API_BASE}/api/world-cup/predictions/matches/${matchId}`,
     { cache: 'no-store' }
   );
 
@@ -103,7 +103,7 @@ export async function fetchMatchWithPrediction(matchId: string): Promise<MatchWi
  */
 export async function fetchPredictionHistory(matchId: string): Promise<PredictionHistoryEntry[]> {
   const response = await fetch(
-    `${API_BASE}/world-cup/predictions/matches/${matchId}/prediction-history`,
+    `${API_BASE}/api/world-cup/predictions/matches/${matchId}/prediction-history`,
     { cache: 'no-store' }
   );
 
@@ -120,7 +120,7 @@ export async function fetchPredictionHistory(matchId: string): Promise<Predictio
  */
 export async function fetchTodayMatches(): Promise<MatchWithPrediction[]> {
   const response = await fetch(
-    `${API_BASE}/world-cup/predictions/today`,
+    `${API_BASE}/api/world-cup/predictions/today`,
     { cache: 'no-store' }
   );
 
@@ -140,7 +140,7 @@ export async function triggerPrediction(
   engine?: "elo_odds" | "hybrid" | "auto"
 ): Promise<any> {
   const response = await fetch(
-    `${API_BASE}/world-cup/predictions/matches/${matchId}/predict`,
+    `${API_BASE}/api/world-cup/predictions/matches/${matchId}/predict`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -184,7 +184,7 @@ export async function compareEngines(matchId: string): Promise<{
  */
 export async function syncFixtures(): Promise<void> {
   const response = await fetch(
-    `${API_BASE}/world-cup/predictions/sync-fixtures`,
+    `${API_BASE}/api/world-cup/predictions/sync-fixtures`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

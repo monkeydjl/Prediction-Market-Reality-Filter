@@ -270,6 +270,12 @@ class Settings:
         ),
     )
 
+    # The Odds API - Betting odds data source
+    # Free tier: 500 requests/month
+    # Register at: https://the-odds-api.com/
+    ODDS_API_KEY: str = os.getenv("ODDS_API_KEY", "")
+    ODDS_API_ENABLED: bool = _env_bool("ODDS_API_ENABLED", "false")
+
     # Multi-model cross-validation: an independent second model re-estimates the
     # probability for the same question + evidence, surfaced as agreement /
     # divergence. Disabled unless CROSS_VALIDATION_MODEL is set. Base URL / key

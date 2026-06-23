@@ -531,5 +531,195 @@ class KnockoutResolutionTests(unittest.TestCase):
         self.assertIsNone(decision)
 
 
+class GroupStageResolutionTests(unittest.TestCase):
+    def _group_fact(self, team, rank=None, points=None, status="group_stage",
+                    stage="group_stage", observed_at="2026-06-23T00:00:00Z"):
+        fact = {
+            "fact_id": f"wc2026:qualification:{team.lower().replace(' ', '-')}",
+            "kind": "qualification",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "team": team,
+            "status": status,
+            "stage": stage,
+            "confidence": 1.0,
+            "observed_at": observed_at,
+        }
+        if rank is not None:
+            fact["rank"] = rank
+        if points is not None:
+            fact["points"] = points
+        return fact
+
+    def test_advance_from_group_resolves_yes_with_rank_2(self):
+        record = _sports_record(
+            "usa-advance",
+            "Will the United States advance from the group stage of the 2026 FIFA World Cup?",
+            "world-cup-2026:usa-advance-from-group",
+            "group_stage",
+            ["United States", "USMNT", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [
+            self._group_fact("United States", rank=2, points=6),
+        ])
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 100.0)
+
+    def test_advance_from_group_resolves_yes_with_already_qualified(self):
+        record = _sports_record(
+            "mexico-advance",
+            "Will Mexico advance from the group stage of the 2026 FIFA World Cup?",
+            "world-cup-2026:mexico-advance-from-group",
+            "group_stage",
+            ["Mexico", WORLD_CUP_TOURNAMENT],
+        )
+        fact = self._group_fact("Mexico", rank=1, points=9)
+        fact["already_qualified"] = True
+        decision = resolver.evaluate_world_cup_resolution(record, [fact])
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 100.0)
+
+    def test_advance_from_group_resolves_no_when_eliminated_and_group_complete(self):
+        record = _sports_record(
+            "canada-advance",
+            "Will Canada advance from the group stage of the 2026 FIFA World Cup?",
+            "world-cup-2026:canada-advance-from-group",
+            "group_stage",
+            ["Canada", WORLD_CUP_TOURNAMENT],
+        )
+        fact = self._group_fact("Canada", rank=4, points=1, status="eliminated")
+        fact["already_eliminated"] = True
+        decision = resolver.evaluate_world_cup_resolution(record, [
+            fact,
+            {
+                "fact_id": "wc2026:tournament-status",
+                "kind": "tournament_status",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "status": "complete",
+                "stage": "group_stage",
+                "confidence": 1.0,
+            },
+        ])
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 0.0)
+
+    def test_advance_from_group_pending_before_complete(self):
+        record = _sports_record(
+            "canada-advance",
+            "Will Canada advance from the group stage of the 2026 FIFA World Cup?",
+            "world-cup-2026:canada-advance-from-group",
+            "group_stage",
+            ["Canada", WORLD_CUP_TOURNAMENT],
+        )
+        fact = self._group_fact("Canada", rank=3, points=3, status="group_stage")
+        decision = resolver.evaluate_world_cup_resolution(record, [fact])
+        self.assertIsNone(decision)
+
+    def test_win_group_resolves_yes_with_rank_1(self):
+        record = _sports_record(
+            "argentina-win-group",
+            "Will Argentina win its group at the 2026 FIFA World Cup?",
+            "world-cup-2026:argentina-win-group",
+            "group_stage",
+            ["Argentina", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [
+            self._group_fact("Argentina", rank=1, points=9),
+        ])
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 100.0)
+        self.assertIn("won its group", decision["reason"])
+
+    def test_win_group_resolves_no_when_rank_2_and_complete(self):
+        record = _sports_record(
+            "argentina-win-group",
+            "Will Argentina win its group at the 2026 FIFA World Cup?",
+            "world-cup-2026:argentina-win-group",
+            "group_stage",
+            ["Argentina", WORLD_CUP_TOURNAMENT],
+        )
+        facts = [
+            self._group_fact("Argentina", rank=2, points=6),
+            {
+                "fact_id": "wc2026:tournament-status",
+                "kind": "tournament_status",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "status": "complete",
+                "stage": "group_stage",
+                "confidence": 1.0,
+            },
+        ]
+        decision = resolver.evaluate_world_cup_resolution(record, facts)
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 0.0)
+
+    def test_points_threshold_resolves_yes(self):
+        record = _sports_record(
+            "brazil-points",
+            "Will Brazil finish the group stage with at least 7 points at the 2026 FIFA World Cup?",
+            "world-cup-2026:brazil-7-points-in-group",
+            "group_stage",
+            ["Brazil", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [
+            self._group_fact("Brazil", rank=1, points=9),
+        ])
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 100.0)
+        self.assertIn("7", decision["reason"])
+
+    def test_points_threshold_resolves_no_when_complete_and_below(self):
+        record = _sports_record(
+            "brazil-points",
+            "Will Brazil finish the group stage with at least 7 points at the 2026 FIFA World Cup?",
+            "world-cup-2026:brazil-7-points-in-group",
+            "group_stage",
+            ["Brazil", WORLD_CUP_TOURNAMENT],
+        )
+        facts = [
+            self._group_fact("Brazil", rank=2, points=5),
+            {
+                "fact_id": "wc2026:tournament-status",
+                "kind": "tournament_status",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "status": "complete",
+                "stage": "group_stage",
+                "confidence": 1.0,
+            },
+        ]
+        decision = resolver.evaluate_world_cup_resolution(record, facts)
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 0.0)
+
+    def test_points_threshold_pending_when_below_not_complete(self):
+        record = _sports_record(
+            "brazil-points",
+            "Will Brazil finish the group stage with at least 7 points at the 2026 FIFA World Cup?",
+            "world-cup-2026:brazil-7-points-in-group",
+            "group_stage",
+            ["Brazil", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [
+            self._group_fact("Brazil", rank=1, points=3),
+        ])
+        self.assertIsNone(decision)
+
+    def test_group_stage_uses_latest_observed_fact(self):
+        record = _sports_record(
+            "usa-advance",
+            "Will the United States advance from the group stage of the 2026 FIFA World Cup?",
+            "world-cup-2026:usa-advance-from-group",
+            "group_stage",
+            ["United States", "USMNT", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [
+            self._group_fact("United States", rank=3, points=0,
+                             observed_at="2026-06-11T00:00:00Z"),
+            self._group_fact("United States", rank=1, points=7,
+                             observed_at="2026-06-23T12:00:00Z"),
+        ])
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 100.0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -247,6 +247,66 @@ _CANDIDATES: tuple[dict[str, Any], ...] = (
         ),
         "time_horizon": "before the 2026 FIFA World Cup semifinals",
     },
+    {
+        "id": "usa-advance-from-group",
+        "question": "Will the United States advance from the group stage of the 2026 FIFA World Cup?",
+        "baseline_probability": 78.0,
+        "category": "group_stage",
+        "entities": ["United States", "USMNT", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if the United States finishes in the top two of its group at "
+            "the 2026 FIFA World Cup and advances to the knockout stage."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "mexico-advance-from-group",
+        "question": "Will Mexico advance from the group stage of the 2026 FIFA World Cup?",
+        "baseline_probability": 72.0,
+        "category": "group_stage",
+        "entities": ["Mexico", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Mexico finishes in the top two of its group at the 2026 "
+            "FIFA World Cup and advances to the knockout stage."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "canada-advance-from-group",
+        "question": "Will Canada advance from the group stage of the 2026 FIFA World Cup?",
+        "baseline_probability": 55.0,
+        "category": "group_stage",
+        "entities": ["Canada", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Canada finishes in the top two of its group at the 2026 "
+            "FIFA World Cup and advances to the knockout stage."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "argentina-win-group",
+        "question": "Will Argentina win its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 65.0,
+        "category": "group_stage",
+        "entities": ["Argentina", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Argentina finishes first in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "brazil-7-points-in-group",
+        "question": "Will Brazil finish the group stage with at least 7 points at the 2026 FIFA World Cup?",
+        "baseline_probability": 60.0,
+        "category": "group_stage",
+        "entities": ["Brazil", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Brazil's official group-stage points total is 7 or more "
+            "after all group matches at the 2026 FIFA World Cup."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
 )
 
 

@@ -81,6 +81,8 @@ def evaluate_world_cup_resolution(
     category = str(source.get("category") or "")
     if category in {"team_progression", "tournament_winner"}:
         return _team_progression_resolution(record, facts)
+    if category == "group_stage":
+        return _group_stage_resolution(record, facts)
     if category == "discipline":
         return _red_card_resolution(record, facts)
     if category == "match_format":
@@ -150,6 +152,183 @@ def _team_progression_resolution(
              and any(_same_text(fact.get("team"), t) for t in teams)],
         )
     return None
+
+
+_GROUP_STAGE_FINAL_STAGES = frozenset({
+    "complete", "completed", "finished", "final", "official",
+})
+
+
+def _group_stage_resolution(
+    record: dict[str, Any],
+    facts: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Resolve group-stage questions from qualification/group-table facts.
+
+    Handles three question shapes detectable from the event title:
+      1. "advance from the group stage" / "advance from its group" -> top 2
+      2. "win its group" / "win the group" / "finish first" -> rank 1
+      3. "at least N points" -> points threshold
+    """
+
+    source = record.get("source") or {}
+    teams = _candidate_teams(source)
+    if not teams:
+        return None
+    title = _norm(record.get("event_title", ""))
+
+    threshold = _parse_threshold(record.get("event_title", ""), "points")
+    win_group = (
+        "win its group" in title
+        or "win the group" in title
+        or "win his group" in title
+        or "win their group" in title
+        or "finish first" in title
+        or "finish top" in title
+        or "top of the group" in title
+        or "first in its group" in title
+        or "first in the group" in title
+    )
+    advance = (
+        "advance from the group" in title
+        or "advance from its group" in title
+        or "escape the group" in title
+        or "get out of the group" in title
+        or "qualify from the group" in title
+    )
+    if threshold is None and not win_group and not advance:
+        return None
+
+    team_facts: dict[str, list[dict[str, Any]]] = {}
+    for team in teams:
+        team_norm = _norm(team)
+        team_facts[team] = [
+            fact for fact in facts
+            if fact.get("kind") == "qualification"
+            and _norm(fact.get("team")) == team_norm
+        ]
+
+    group_complete = _group_stage_complete(facts)
+    multi = len(teams) > 1
+    resolved_no: list[dict[str, Any]] = []
+
+    for team in teams:
+        relevant = team_facts[team]
+        if not relevant:
+            continue
+
+        latest = _latest_group_fact(relevant)
+
+        if threshold is not None:
+            points = _number(latest.get("points"))
+            if points is not None and points >= threshold:
+                return _decision(
+                    100.0,
+                    f"{team} reached {points:g} points in the group stage, "
+                    f"meeting the {threshold:g} threshold.",
+                    [latest],
+                )
+            if points is not None and group_complete and points < threshold:
+                if not multi:
+                    return _decision(
+                        0.0,
+                        f"{team} finished with {points:g} points, below the "
+                        f"{threshold:g} threshold.",
+                        [latest],
+                    )
+                resolved_no.append(latest)
+                continue
+
+        if win_group:
+            rank = _number(latest.get("rank"))
+            status = str(latest.get("status") or "").lower()
+            if rank == 1 or status in {"group_winner", "won_group"}:
+                return _decision(
+                    100.0,
+                    f"{team} won its group (rank 1).",
+                    [latest],
+                )
+            if group_complete and (
+                (rank is not None and rank > 1)
+                or _group_stage_eliminated(status, latest)
+            ):
+                if not multi:
+                    return _decision(
+                        0.0,
+                        f"{team} did not win its group "
+                        f"(rank {rank if rank is not None else '?'}).",
+                        [latest],
+                    )
+                resolved_no.append(latest)
+                continue
+
+        if advance:
+            rank = _number(latest.get("rank"))
+            status = str(latest.get("status") or "").lower()
+            qualified = latest.get("already_qualified") is True
+            if (
+                qualified
+                or (rank is not None and rank <= 2)
+                or status in {"qualified", "advanced", "knockout_stage"}
+            ):
+                return _decision(
+                    100.0,
+                    f"{team} advanced from the group stage "
+                    f"(rank {rank if rank is not None else '?'}).",
+                    [latest],
+                )
+            if group_complete and _group_stage_eliminated(status, latest):
+                if not multi:
+                    return _decision(
+                        0.0,
+                        f"{team} was eliminated in the group stage.",
+                        [latest],
+                    )
+                resolved_no.append(latest)
+                continue
+
+    if multi and resolved_no and len(resolved_no) == len(teams):
+        return _decision(
+            0.0,
+            "All candidate teams failed to meet the group-stage condition.",
+            resolved_no,
+        )
+    return None
+
+
+def _latest_group_fact(facts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return the most recently observed qualification fact for a team."""
+
+    def _key(fact: dict[str, Any]) -> str:
+        return str(fact.get("observed_at") or "")
+    return max(facts, key=_key)
+
+
+def _group_stage_complete(facts: list[dict[str, Any]]) -> bool:
+    """Check whether the group stage is officially over."""
+
+    for fact in facts:
+        if fact.get("kind") == "tournament_status":
+            text = _norm(f"{fact.get('status', '')} {fact.get('stage', '')}")
+            if (
+                str(fact.get("status") or "").lower() in _GROUP_STAGE_FINAL_STAGES
+                or "group stage complete" in text
+                or "groups completed" in text
+            ):
+                return True
+        if (
+            fact.get("kind") == "qualification"
+            and str(fact.get("stage") or "").lower() == "group_stage"
+            and str(fact.get("status") or "").lower() in _GROUP_STAGE_FINAL_STAGES
+        ):
+            return True
+    return False
+
+
+def _group_stage_eliminated(status: str, fact: dict[str, Any]) -> bool:
+    if fact.get("already_eliminated") is True:
+        return True
+    return status in {"eliminated", "out", "failed_to_advance"}
 
 
 def _red_card_resolution(

@@ -11,6 +11,10 @@ function textOrDash(value: string | null | undefined) {
   return text || "—";
 }
 
+function linkKey(link: PendingLink) {
+  return `${link.event_id}:${link.contract_id}`;
+}
+
 export function PendingLinks() {
   const [links, setLinks] = useState<PendingLink[]>([]);
   const [loading, setLoading] = useState(true);
@@ -37,12 +41,12 @@ export function PendingLinks() {
 
   async function verify(link: PendingLink) {
     if (!link.contract_id) return;
-    const key = `${link.event_id}:${link.contract_id}`;
+    const key = linkKey(link);
     setVerifying(key);
     setError(null);
     try {
       await eventsApi.verifyLink(link.event_id, link.contract_id);
-      setLinks((items) => items.filter((item) => item !== link));
+      setLinks((items) => items.filter((item) => linkKey(item) !== key));
     } catch (e) {
       setError(e instanceof Error ? e.message : "确认关联失败");
     } finally {
@@ -67,7 +71,7 @@ export function PendingLinks() {
       ) : (
         <ul className="flex flex-col gap-3">
           {links.map((link) => {
-            const key = `${link.event_id}:${link.contract_id}`;
+            const key = linkKey(link);
             return (
               <li key={key} className="flex flex-col gap-3 rounded-md border border-border bg-background/40 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">

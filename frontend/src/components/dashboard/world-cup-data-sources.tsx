@@ -21,9 +21,11 @@ import {
   type WorldCupDataSourceActionResult,
   type WorldCupDataSourceStatus,
   type WorldCupFeedConfig,
+  type WorldCupPipelineValidateResult,
   type WorldCupResolveMatch,
   type WorldCupResolveResult,
   type WorldCupSkippedSource,
+  type WorldCupSportmonksConnectionResult,
   type WorldCupSourceFetch,
 } from "@/lib/api";
 import { fmtDateTime } from "@/lib/format";
@@ -518,6 +520,8 @@ export function WorldCupDataSources() {
   const [dryRunResult, setDryRunResult] = useState<WorldCupResolveResult | null>(null);
   const [connTesting, setConnTesting] = useState(false);
   const [connResult, setConnResult] = useState<WorldCupApiFootballConnectionResult | null>(null);
+  const [validating, setValidating] = useState(false);
+  const [validateResult, setValidateResult] = useState<WorldCupPipelineValidateResult | null>(null);
 
   const rows = useMemo(() => sourceRows(status), [status]);
   const lastRun = status?.runs?.world_cup_source_bundle_import ?? null;
@@ -583,6 +587,19 @@ export function WorldCupDataSources() {
       setError(e instanceof Error ? e.message : "连接测试失败");
     } finally {
       setConnTesting(false);
+    }
+  }
+
+  async function runPipelineValidation() {
+    setValidating(true);
+    setValidateResult(null);
+    setError(null);
+    try {
+      setValidateResult(await eventsApi.worldCupApiFootballValidate());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Pipeline验证失败");
+    } finally {
+      setValidating(false);
     }
   }
 
@@ -663,6 +680,19 @@ export function WorldCupDataSources() {
           </button>
           <button
             type="button"
+            onClick={() => void runPipelineValidation()}
+            disabled={loading || validating || Boolean(running)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-secondary px-2 text-xs text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+          >
+            {validating ? (
+              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <Eye className="size-3.5" aria-hidden="true" />
+            )}
+            验证Pipeline
+          </button>
+          <button
+            type="button"
             onClick={() => void runResolveDryRun()}
             disabled={loading || dryRunLoading || Boolean(running)}
             className="inline-flex h-8 items-center gap-1.5 rounded-md border border-primary bg-primary/15 px-2 text-xs font-medium text-primary transition-colors hover:bg-primary/25 disabled:opacity-50"
@@ -702,6 +732,77 @@ export function WorldCupDataSources() {
             <span className="text-muted-foreground">
               {connResult.subscription.plan} · {connResult.requests_today}/{connResult.requests_limit} requests today
             </span>
+          )}
+        </div>
+      )}
+
+      {validateResult && (
+        <div className={cn(
+          "rounded-md border px-3 py-3 text-xs",
+          validateResult.ok
+            ? "border-pos/40 bg-pos/10 text-pos"
+            : "border-neg/40 bg-neg/10 text-neg",
+        )}>
+          <div className="flex items-center gap-2 font-medium">
+            {validateResult.ok ? (
+              <CheckCircle2 className="size-3.5" aria-hidden="true" />
+            ) : (
+              <AlertTriangle className="size-3.5" aria-hidden="true" />
+            )}
+            <span>Pipeline验证 {validateResult.ok ? "通过" : "失败"}</span>
+          </div>
+          {validateResult.summary && (
+            <p className="mt-2 text-muted-foreground">{validateResult.summary}</p>
+          )}
+          {validateResult.steps && validateResult.steps.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {validateResult.steps.map((step, idx) => (
+                <div key={idx} className="flex items-start gap-2 rounded bg-card/50 px-2 py-1.5">
+                  {step.ok ? (
+                    <CheckCircle2 className="size-3 shrink-0 text-pos" aria-hidden="true" />
+                  ) : (
+                    <AlertTriangle className="size-3 shrink-0 text-neg" aria-hidden="true" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium capitalize">{step.name}</div>
+                    {step.error && <div className="mt-0.5 text-neg">{step.error}</div>}
+                    {step.detail && typeof step.detail === "object" && (
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {Object.entries(step.detail as Record<string, unknown>).map(([key, value]) => (
+                          <span key={key} className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px]">
+                            {key}: {formatValue(value)}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {validateResult.coverage && (
+            <div className="mt-3 grid grid-cols-2 gap-2 rounded bg-card/50 p-2 text-[11px] sm:grid-cols-3">
+              <div>
+                <div className="text-muted-foreground">API fixtures</div>
+                <div className="font-mono font-medium">{validateResult.coverage.api_fixture_count}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">Stored facts</div>
+                <div className="font-mono font-medium">{validateResult.coverage.stored_fact_count}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">Covered</div>
+                <div className="font-mono font-medium">{validateResult.coverage.covered}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">Missing</div>
+                <div className="font-mono font-medium">{validateResult.coverage.missing_from_store}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">Extra</div>
+                <div className="font-mono font-medium">{validateResult.coverage.extra_in_store}</div>
+              </div>
+            </div>
           )}
         </div>
       )}

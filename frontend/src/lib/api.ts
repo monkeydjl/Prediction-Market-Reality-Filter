@@ -411,6 +411,39 @@ export interface WorldCupApiFootballConnectionResult {
   error?: string | null;
 }
 
+export interface WorldCupSportmonksConnectionResult {
+  ok: boolean;
+  feed_tested?: string;
+  feed_url?: string;
+  item_count?: number;
+  rate_limit?: {
+    remaining?: number;
+    limit?: number;
+    resets_at?: number;
+  } | null;
+  error?: string | null;
+}
+
+export interface WorldCupPipelineValidateResult {
+  ok?: boolean;
+  steps?: Array<{
+    name: string;
+    ok: boolean;
+    detail?: any;
+    error?: string;
+  }>;
+  coverage?: {
+    api_fixture_count: number;
+    stored_fact_count: number;
+    covered: number;
+    missing_from_store: number;
+    missing_ids_sample: string[];
+    extra_in_store: number;
+  };
+  summary?: string;
+  error?: string | null;
+}
+
 export interface ApiOverview {
   system: string;
   version: string;
@@ -685,5 +718,26 @@ export const eventsApi = {
       "/events/sports/world-cup/data/bundle/api-football/test",
       { method: "POST" },
       { timeoutMs: 15_000 },
+    ),
+
+  worldCupApiFootballValidate: () =>
+    api<WorldCupPipelineValidateResult>(
+      "/events/sports/world-cup/data/bundle/api-football/validate",
+      { method: "POST" },
+      { timeoutMs: 30_000 },
+    ),
+
+  worldCupSportmonksTest: () =>
+    api<WorldCupSportmonksConnectionResult>(
+      "/events/sports/world-cup/data/bundle/sportmonks/test",
+      { method: "POST" },
+      { timeoutMs: 15_000 },
+    ),
+
+  worldCupSportmonksValidate: () =>
+    api<WorldCupPipelineValidateResult>(
+      "/events/sports/world-cup/data/bundle/sportmonks/validate",
+      { method: "POST" },
+      { timeoutMs: 30_000 },
     ),
 };

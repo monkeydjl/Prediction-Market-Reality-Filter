@@ -24,6 +24,7 @@ export function OperatorKeyControl() {
       <button
         type="button"
         onClick={() => setEditing(true)}
+        aria-label={value ? "编辑写接口 API key" : "配置写接口 API key"}
         className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-secondary px-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
         title="配置写接口 API key"
       >
@@ -47,10 +48,12 @@ export function OperatorKeyControl() {
         onChange={(e) => setValue(e.target.value)}
         className="h-8 w-32 rounded-md border border-border bg-secondary px-2 text-xs text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
         placeholder="API key"
+        aria-label="写接口 API key"
         autoFocus
       />
       <button
         type="submit"
+        aria-label="保存写接口 API key"
         className="h-8 rounded-md border border-primary bg-primary/15 px-2 text-xs font-medium text-primary"
       >
         保存
@@ -61,6 +64,7 @@ export function OperatorKeyControl() {
           setValue(getOperatorApiKey());
           setEditing(false);
         }}
+        aria-label="取消编辑写接口 API key"
         className="h-8 rounded-md border border-border bg-secondary px-2 text-xs text-muted-foreground"
       >
         取消

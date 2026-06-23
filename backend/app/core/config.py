@@ -262,6 +262,14 @@ class Settings:
         "2026 FIFA World Cup",
     )
 
+    # World Cup dynamic score prediction database (SQLite)
+    WORLD_CUP_PREDICTION_DB_FILE: str = os.getenv(
+        "WORLD_CUP_PREDICTION_DB_FILE",
+        os.path.join(
+            os.path.dirname(__file__), "..", "..", "world_cup_predictions.db"
+        ),
+    )
+
     # Multi-model cross-validation: an independent second model re-estimates the
     # probability for the same question + evidence, surfaced as agreement /
     # divergence. Disabled unless CROSS_VALIDATION_MODEL is set. Base URL / key

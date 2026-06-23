@@ -79,6 +79,7 @@ export function TrackingDecision({
               type="button"
               disabled={pending}
               onClick={() => save({ status: s })}
+              aria-pressed={curStatus === s}
               className={cn(
                 "rounded-md border px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-60",
                 curStatus === s
@@ -101,6 +102,7 @@ export function TrackingDecision({
               type="button"
               disabled={pending}
               onClick={() => save({ priority: p })}
+              aria-pressed={curPriority === p}
               className={cn(
                 "rounded-md border px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-60",
                 curPriority === p

@@ -138,7 +138,7 @@ export async function fetchTodayMatches(): Promise<MatchWithPrediction[]> {
 export async function triggerPrediction(
   matchId: string,
   engine?: "elo_odds" | "hybrid" | "auto"
-): Promise<void> {
+): Promise<any> {
   const response = await fetch(
     `${API_BASE}/world-cup/predictions/matches/${matchId}/predict`,
     {
@@ -150,6 +150,32 @@ export async function triggerPrediction(
 
   if (!response.ok) {
     throw new Error(`Failed to trigger prediction: ${response.statusText}`);
+  }
+
+  return await response.json();
+}
+
+/**
+ * Compare predictions from different engines
+ */
+export async function compareEngines(matchId: string): Promise<{
+  elo_odds?: MatchPrediction;
+  hybrid?: MatchPrediction;
+}> {
+  try {
+    // Trigger both engines in parallel
+    const [eloResult, hybridResult] = await Promise.all([
+      triggerPrediction(matchId, "elo_odds"),
+      triggerPrediction(matchId, "hybrid")
+    ]);
+
+    return {
+      elo_odds: eloResult.prediction,
+      hybrid: hybridResult.prediction
+    };
+  } catch (error) {
+    console.error("Failed to compare engines:", error);
+    return {};
   }
 }
 

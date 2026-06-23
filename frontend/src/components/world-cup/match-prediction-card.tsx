@@ -1,8 +1,10 @@
 "use client";
 
-import { useMemo } from "react";
-import { Trophy, TrendingUp, Clock, AlertCircle, Zap, Brain } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Trophy, TrendingUp, Clock, AlertCircle, Zap, Brain, GitCompare } from "lucide-react";
 import type { MatchFixture, MatchPrediction } from "@/lib/world-cup-predictions";
+import { compareEngines } from "@/lib/world-cup-predictions";
+import { EngineComparisonCard } from "./engine-comparison-card";
 import { cn } from "@/lib/utils";
 
 interface MatchPredictionCardProps {
@@ -60,6 +62,32 @@ function getEngineLabel(prediction?: MatchPrediction): { icon: any; label: strin
 }
 
 export function MatchPredictionCard({ match, prediction }: MatchPredictionCardProps) {
+  const [showComparison, setShowComparison] = useState(false);
+  const [isLoadingComparison, setIsLoadingComparison] = useState(false);
+  const [comparisonData, setComparisonData] = useState<{
+    elo_odds?: MatchPrediction;
+    hybrid?: MatchPrediction;
+  }>({});
+
+  const handleCompare = async () => {
+    if (showComparison) {
+      setShowComparison(false);
+      return;
+    }
+
+    setIsLoadingComparison(true);
+    setShowComparison(true);
+
+    try {
+      const data = await compareEngines(match.match_id);
+      setComparisonData(data);
+    } catch (error) {
+      console.error("Failed to load comparison:", error);
+    } finally {
+      setIsLoadingComparison(false);
+    }
+  };
+
   const isPredicted = prediction != null;
   const isFinished = match.status === "finished";
   const isLive = match.status === "in_play";
@@ -247,6 +275,33 @@ export function MatchPredictionCard({ match, prediction }: MatchPredictionCardPr
           <div className="mt-4 flex items-center gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
             <AlertCircle className="size-3.5" />
             <span>暂无预测数据</span>
+          </div>
+        )}
+
+        {/* Engine Comparison Button */}
+        {isPredicted && (
+          <div className="mt-4">
+            <button
+              onClick={handleCompare}
+              className="w-full rounded-md border bg-secondary/50 px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+            >
+              <div className="flex items-center justify-center gap-2">
+                <GitCompare className="size-3.5" />
+                <span>{showComparison ? "隐藏引擎对比" : "显示引擎对比"}</span>
+              </div>
+            </button>
+          </div>
+        )}
+
+        {/* Engine Comparison View */}
+        {showComparison && (
+          <div className="mt-4">
+            <EngineComparisonCard
+              match={match}
+              eloOddsPrediction={comparisonData.elo_odds}
+              hybridPrediction={comparisonData.hybrid}
+              isLoading={isLoadingComparison}
+            />
           </div>
         )}
       </div>

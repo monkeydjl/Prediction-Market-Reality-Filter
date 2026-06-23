@@ -184,6 +184,140 @@ def import_world_cup_api_football_bundle(
     return result
 
 
+def test_world_cup_api_football_connection() -> dict[str, Any]:
+    """Test connectivity to API-Football by hitting the /status endpoint."""
+
+    api_key = _clean(settings.WORLD_CUP_API_FOOTBALL_API_KEY)
+    if not api_key:
+        return {"ok": False, "error": "API key not configured"}
+
+    base_url = _clean(settings.WORLD_CUP_API_FOOTBALL_BASE_URL).rstrip("/")
+    if not base_url:
+        return {"ok": False, "error": "API-Football base URL not configured"}
+
+    url = f"{base_url}/status"
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "x-apisports-key": api_key,
+        },
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            body = response.read(64 * 1024)
+    except HTTPError as exc:
+        return {"ok": False, "error": f"HTTP {exc.code}"}
+    except (TimeoutError, URLError) as exc:
+        return {"ok": False, "error": f"Connection failed: {exc}"}
+
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"ok": False, "error": "Invalid JSON response"}
+
+    account = data.get("response", {}).get("account", {})
+    subscription = data.get("response", {}).get("subscription", {})
+    requests_info = data.get("response", {}).get("requests", {})
+
+    return {
+        "ok": True,
+        "account": {
+            "firstname": account.get("firstname", ""),
+            "lastname": account.get("lastname", ""),
+            "email": account.get("email", ""),
+        },
+        "subscription": {
+            "plan": subscription.get("plan", ""),
+            "active": subscription.get("active", False),
+            "end": subscription.get("end"),
+        },
+        "requests_today": requests_info.get("current", 0),
+        "requests_limit": requests_info.get("limit_day", 0),
+        "error": None,
+    }
+
+
+def validate_world_cup_api_football_pipeline() -> dict[str, Any]:
+    """Run a full pipeline diagnostic: connection + sample fetch + fact coverage."""
+    from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT, load_sports_facts
+
+    result: dict[str, Any] = {"steps": []}
+
+    # Step 1: connection test
+    conn = test_world_cup_api_football_connection()
+    result["steps"].append({"name": "connection", "ok": conn["ok"], "detail": conn})
+    if not conn["ok"]:
+        result["ok"] = False
+        result["error"] = conn.get("error", "Connection failed")
+        return result
+
+    # Step 2: sample fixture fetch (counts against quota — 1 call)
+    api_key = _clean(settings.WORLD_CUP_API_FOOTBALL_API_KEY)
+    base_url = _clean(settings.WORLD_CUP_API_FOOTBALL_BASE_URL).rstrip("/")
+    league_id = _clean(settings.WORLD_CUP_API_FOOTBALL_LEAGUE_ID)
+    season = _clean(settings.WORLD_CUP_API_FOOTBALL_SEASON)
+    fixture_url = f"{base_url}/fixtures?league={league_id}&season={season}"
+    request = Request(
+        fixture_url,
+        headers={"Accept": "application/json", "x-apisports-key": api_key},
+    )
+    try:
+        with urlopen(request, timeout=10) as response:
+            body = response.read(2 * 1024 * 1024)
+        fixture_data = json.loads(body.decode("utf-8"))
+        api_fixtures = fixture_data.get("response", [])
+        api_fixture_ids = set()
+        for row in api_fixtures:
+            if isinstance(row, dict):
+                fixture = row.get("fixture", {})
+                fid = str(fixture.get("id", "")) if isinstance(fixture, dict) else ""
+                if fid:
+                    api_fixture_ids.add(fid)
+        result["steps"].append({
+            "name": "fixture_fetch",
+            "ok": True,
+            "fixture_count": len(api_fixtures),
+            "fixture_ids_sample": sorted(api_fixture_ids)[:10],
+        })
+    except Exception as exc:
+        result["steps"].append({
+            "name": "fixture_fetch",
+            "ok": False,
+            "error": str(exc),
+        })
+        result["ok"] = False
+        result["error"] = f"Fixture fetch failed: {exc}"
+        return result
+
+    # Step 3: compare with stored facts
+    stored_facts = load_sports_facts(tournament=WORLD_CUP_TOURNAMENT, kind="match_result")
+    stored_match_ids = {f.get("match_id") for f in stored_facts if f.get("match_id")}
+    covered = api_fixture_ids & stored_match_ids
+    missing = api_fixture_ids - stored_match_ids
+    extra = stored_match_ids - api_fixture_ids
+
+    coverage = {
+        "api_fixture_count": len(api_fixture_ids),
+        "stored_fact_count": len(stored_facts),
+        "covered": len(covered),
+        "missing_from_store": len(missing),
+        "missing_ids_sample": sorted(missing)[:10],
+        "extra_in_store": len(extra),
+    }
+    coverage_ok = len(missing) == 0 or len(stored_facts) > 0
+    result["steps"].append({"name": "fact_coverage", "ok": coverage_ok, "detail": coverage})
+
+    result["ok"] = True
+    result["coverage"] = coverage
+    result["summary"] = (
+        f"Connected. {len(api_fixture_ids)} fixtures from API, "
+        f"{len(stored_facts)} match facts stored, "
+        f"{len(missing)} fixtures not yet imported."
+    )
+    return result
+
+
 def _api_football_url(path: str, params: dict[str, str] | None = None) -> str:
     base_url = _clean(settings.WORLD_CUP_API_FOOTBALL_BASE_URL).rstrip("/")
     if not base_url:

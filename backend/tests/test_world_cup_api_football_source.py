@@ -10,6 +10,8 @@ from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT, load_sports_f
 from app.services.world_cup_api_football_source import (
     import_world_cup_api_football_bundle,
     preview_world_cup_api_football_bundle,
+    test_world_cup_api_football_connection,
+    validate_world_cup_api_football_pipeline,
 )
 
 
@@ -389,6 +391,169 @@ class _Body:
                 }],
             }],
         })
+
+
+class WorldCupApiFootballConnectionTests(unittest.TestCase):
+    def test_connection_success(self):
+        status_body = _body({
+            "response": {
+                "account": {
+                    "firstname": "John",
+                    "lastname": "Doe",
+                    "email": "john@example.com",
+                },
+                "subscription": {
+                    "plan": "Pro",
+                    "active": True,
+                    "end": "2026-12-31",
+                },
+                "requests": {
+                    "current": 42,
+                    "limit_day": 100,
+                },
+            }
+        })
+        with patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", "test-key"), \
+                patch.object(settings, "WORLD_CUP_API_FOOTBALL_BASE_URL", "https://api.example/v3"), \
+                patch(
+                    "app.services.world_cup_api_football_source.urlopen",
+                    return_value=_UrlResponse(status_body),
+                ) as open_mock:
+            result = test_world_cup_api_football_connection()
+
+        self.assertTrue(result["ok"])
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["account"]["firstname"], "John")
+        self.assertEqual(result["subscription"]["plan"], "Pro")
+        self.assertTrue(result["subscription"]["active"])
+        self.assertEqual(result["requests_today"], 42)
+        self.assertEqual(result["requests_limit"], 100)
+        req = open_mock.call_args.args[0]
+        self.assertEqual(req.full_url, "https://api.example/v3/status")
+        self.assertEqual(req.headers["X-apisports-key"], "test-key")
+
+    def test_connection_no_api_key(self):
+        with patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", ""):
+            result = test_world_cup_api_football_connection()
+
+        self.assertFalse(result["ok"])
+        self.assertIn("not configured", result["error"])
+
+    def test_connection_no_base_url(self):
+        with patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", "key"), \
+                patch.object(settings, "WORLD_CUP_API_FOOTBALL_BASE_URL", ""):
+            result = test_world_cup_api_football_connection()
+
+        self.assertFalse(result["ok"])
+        self.assertIn("base URL not configured", result["error"])
+
+    def test_connection_http_error(self):
+        from urllib.error import HTTPError
+
+        with patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", "key"), \
+                patch.object(settings, "WORLD_CUP_API_FOOTBALL_BASE_URL", "https://api.example/v3"), \
+                patch(
+                    "app.services.world_cup_api_football_source.urlopen",
+                    side_effect=HTTPError("url", 401, "Unauthorized", {}, None),
+                ):
+            result = test_world_cup_api_football_connection()
+
+        self.assertFalse(result["ok"])
+        self.assertIn("401", result["error"])
+
+    def test_connection_timeout(self):
+        with patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", "key"), \
+                patch.object(settings, "WORLD_CUP_API_FOOTBALL_BASE_URL", "https://api.example/v3"), \
+                patch(
+                    "app.services.world_cup_api_football_source.urlopen",
+                    side_effect=TimeoutError("timed out"),
+                ):
+            result = test_world_cup_api_football_connection()
+
+        self.assertFalse(result["ok"])
+        self.assertIn("Connection failed", result["error"])
+
+
+class WorldCupApiFootballValidateTests(unittest.TestCase):
+    def _status_body(self):
+        return _body({
+            "response": {
+                "account": {"firstname": "A", "lastname": "B", "email": "a@b.com"},
+                "subscription": {"plan": "Pro", "active": True, "end": "2026-12-31"},
+                "requests": {"current": 10, "limit_day": 100},
+            }
+        })
+
+    def _fixtures_body(self, fixture_ids):
+        return _body({
+            "errors": [],
+            "response": [
+                {"fixture": {"id": fid, "date": "2026-07-01T18:00:00+00:00", "status": {"short": "NS"}},
+                 "teams": {"home": {"name": "A"}, "away": {"name": "B"}},
+                 "goals": {"home": None, "away": None}}
+                for fid in fixture_ids
+            ],
+        })
+
+    def test_validate_success_with_stored_facts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fact_file = str(Path(tmp) / "facts.json")
+            facts_data = {"tournament": "2026 FIFA World Cup", "facts": [
+                {"fact_id": "m_1001", "kind": "match_result", "match_id": "1001",
+                 "tournament": "2026 FIFA World Cup", "home_team": "A", "away_team": "B"},
+            ]}
+            Path(fact_file).write_text(json.dumps(facts_data))
+
+            with patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", "key"), \
+                    patch.object(settings, "WORLD_CUP_API_FOOTBALL_BASE_URL", "https://api.example/v3"), \
+                    patch.object(settings, "WORLD_CUP_API_FOOTBALL_LEAGUE_ID", "1"), \
+                    patch.object(settings, "WORLD_CUP_API_FOOTBALL_SEASON", "2026"), \
+                    patch.object(settings, "SPORTS_FACT_FILE", fact_file), \
+                    patch(
+                        "app.services.world_cup_api_football_source.urlopen",
+                        side_effect=[
+                            _UrlResponse(self._status_body()),
+                            _UrlResponse(self._fixtures_body([1001, 1002])),
+                        ],
+                    ):
+                result = validate_world_cup_api_football_pipeline()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(result["steps"]), 3)
+        self.assertTrue(result["steps"][0]["ok"])
+        self.assertTrue(result["steps"][1]["ok"])
+        self.assertEqual(result["steps"][1]["fixture_count"], 2)
+        self.assertEqual(result["coverage"]["covered"], 1)
+        self.assertEqual(result["coverage"]["missing_from_store"], 1)
+        self.assertIn("1002", result["coverage"]["missing_ids_sample"])
+
+    def test_validate_fails_on_bad_connection(self):
+        with patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", ""):
+            result = validate_world_cup_api_football_pipeline()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["steps"][0]["name"], "connection")
+        self.assertFalse(result["steps"][0]["ok"])
+
+    def test_validate_fails_on_fixture_fetch_error(self):
+        from urllib.error import HTTPError
+
+        with patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", "key"), \
+                patch.object(settings, "WORLD_CUP_API_FOOTBALL_BASE_URL", "https://api.example/v3"), \
+                patch.object(settings, "WORLD_CUP_API_FOOTBALL_LEAGUE_ID", "1"), \
+                patch.object(settings, "WORLD_CUP_API_FOOTBALL_SEASON", "2026"), \
+                patch(
+                    "app.services.world_cup_api_football_source.urlopen",
+                    side_effect=[
+                        _UrlResponse(self._status_body()),
+                        HTTPError("url", 500, "Server Error", {}, None),
+                    ],
+                ):
+            result = validate_world_cup_api_football_pipeline()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(len(result["steps"]), 2)
+        self.assertFalse(result["steps"][1]["ok"])
 
 
 if __name__ == "__main__":

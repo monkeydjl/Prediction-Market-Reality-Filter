@@ -41,6 +41,8 @@ from app.services.sports_resolution_service import resolve_world_cup_events
 from app.services.world_cup_api_football_source import (
     import_world_cup_api_football_bundle,
     preview_world_cup_api_football_bundle,
+    test_world_cup_api_football_connection,
+    validate_world_cup_api_football_pipeline,
 )
 from app.services.world_cup_data_source_service import (
     import_world_cup_data,
@@ -88,6 +90,8 @@ from app.services.world_cup_source_bundle import (
 from app.services.world_cup_sportmonks_source import (
     import_world_cup_sportmonks_bundle,
     preview_world_cup_sportmonks_bundle,
+    test_world_cup_sportmonks_connection,
+    validate_world_cup_sportmonks_pipeline,
 )
 from app.services.world_cup_standings_source import (
     import_world_cup_standings_source,
@@ -434,6 +438,22 @@ async def import_api_football_world_cup_source_bundle_route(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post("/sports/world-cup/data/bundle/api-football/test", response_model=FlexibleResponse)
+async def test_api_football_connection_route(
+    _auth: None = Depends(require_write_key),
+):
+    """Test API-Football connectivity and return account status."""
+    return test_world_cup_api_football_connection()
+
+
+@router.post("/sports/world-cup/data/bundle/api-football/validate", response_model=FlexibleResponse)
+async def validate_api_football_pipeline_route(
+    _auth: None = Depends(require_write_key),
+):
+    """Validate pipeline: connection + sample fetch + compare with stored facts."""
+    return validate_world_cup_api_football_pipeline()
+
+
 @router.post("/sports/world-cup/data/bundle/sportmonks/preview", response_model=FlexibleResponse)
 async def preview_sportmonks_world_cup_source_bundle_route(
     _auth: None = Depends(require_write_key),
@@ -455,6 +475,22 @@ async def import_sportmonks_world_cup_source_bundle_route(
         return import_world_cup_sportmonks_bundle(replace=replace)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sports/world-cup/data/bundle/sportmonks/test", response_model=FlexibleResponse)
+async def test_sportmonks_connection_route(
+    _auth: None = Depends(require_write_key),
+):
+    """Test Sportmonks connectivity and return connection status."""
+    return test_world_cup_sportmonks_connection()
+
+
+@router.post("/sports/world-cup/data/bundle/sportmonks/validate", response_model=FlexibleResponse)
+async def validate_sportmonks_pipeline_route(
+    _auth: None = Depends(require_write_key),
+):
+    """Run Sportmonks pipeline diagnostic: connection + feed fetch + fact coverage."""
+    return validate_world_cup_sportmonks_pipeline()
 
 
 @router.post("/sports/world-cup/data/source/preview", response_model=FlexibleResponse)

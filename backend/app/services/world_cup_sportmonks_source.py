@@ -91,6 +91,134 @@ def import_world_cup_sportmonks_bundle(
     return result
 
 
+def test_world_cup_sportmonks_connection() -> dict[str, Any]:
+    """Test connectivity to Sportmonks by hitting the first configured feed URL."""
+
+    api_token = _clean(settings.WORLD_CUP_SPORTMONKS_API_TOKEN)
+    if not api_token:
+        return {"ok": False, "error": "API token not configured"}
+
+    configured = _configured_feeds()
+    if not configured:
+        return {"ok": False, "error": "No Sportmonks feed URLs configured"}
+
+    kind, source_url, _converter = configured[0]
+    request_url = _with_api_token(source_url, api_token)
+    request = Request(
+        request_url,
+        headers={"Accept": "application/json"},
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            body = response.read(64 * 1024)
+    except HTTPError as exc:
+        return {"ok": False, "error": f"HTTP {exc.code}"}
+    except (TimeoutError, URLError) as exc:
+        return {"ok": False, "error": f"Connection failed: {exc}"}
+
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"ok": False, "error": "Invalid JSON response"}
+
+    if not isinstance(data, dict):
+        return {"ok": False, "error": "Unexpected response format"}
+    if data.get("errors"):
+        return {"ok": False, "error": f"Provider errors: {data['errors']}"}
+
+    items = data.get("data") or data.get("response") or []
+    rate_limit = data.get("rate_limit", {})
+
+    return {
+        "ok": True,
+        "feed_tested": kind,
+        "feed_url": _display_url(source_url),
+        "item_count": len(items) if isinstance(items, list) else 0,
+        "rate_limit": {
+            "remaining": rate_limit.get("remaining"),
+            "limit": rate_limit.get("limit"),
+            "resets_at": rate_limit.get("resets_at_timestamp"),
+        } if isinstance(rate_limit, dict) and rate_limit else None,
+        "error": None,
+    }
+
+
+def validate_world_cup_sportmonks_pipeline() -> dict[str, Any]:
+    """Run a full pipeline diagnostic: connection + fixture fetch + fact coverage."""
+    from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT, load_sports_facts
+
+    result: dict[str, Any] = {"steps": []}
+
+    # Step 1: connection test
+    conn = test_world_cup_sportmonks_connection()
+    result["steps"].append({"name": "connection", "ok": conn["ok"], "detail": conn})
+    if not conn["ok"]:
+        result["ok"] = False
+        result["error"] = conn.get("error", "Connection failed")
+        return result
+
+    # Step 2: fetch fixtures feed
+    api_token = _clean(settings.WORLD_CUP_SPORTMONKS_API_TOKEN)
+    fixtures_url = _clean(settings.WORLD_CUP_SPORTMONKS_FIXTURES_URL)
+    if not fixtures_url:
+        result["steps"].append({"name": "fixture_fetch", "ok": False, "error": "No fixtures feed URL configured"})
+        result["ok"] = False
+        result["error"] = "No fixtures feed URL configured"
+        return result
+
+    request_url = _with_api_token(fixtures_url, api_token)
+    request = Request(request_url, headers={"Accept": "application/json"})
+    try:
+        with urlopen(request, timeout=10) as response:
+            body = response.read(2 * 1024 * 1024)
+        data = json.loads(body.decode("utf-8"))
+        items = data.get("data") or data.get("response") or []
+        fixture_ids: set[str] = set()
+        for row in items:
+            if isinstance(row, dict):
+                fid = str(row.get("id") or row.get("fixture_id") or row.get("match_id") or "")
+                if fid:
+                    fixture_ids.add(fid)
+        result["steps"].append({
+            "name": "fixture_fetch",
+            "ok": True,
+            "fixture_count": len(items) if isinstance(items, list) else 0,
+            "fixture_ids_sample": sorted(fixture_ids)[:10],
+        })
+    except Exception as exc:
+        result["steps"].append({"name": "fixture_fetch", "ok": False, "error": str(exc)})
+        result["ok"] = False
+        result["error"] = f"Fixture fetch failed: {exc}"
+        return result
+
+    # Step 3: compare with stored facts
+    stored_facts = load_sports_facts(tournament=WORLD_CUP_TOURNAMENT, kind="match_result")
+    stored_match_ids = {f.get("match_id") for f in stored_facts if f.get("match_id")}
+    covered = fixture_ids & stored_match_ids
+    missing = fixture_ids - stored_match_ids
+    extra = stored_match_ids - fixture_ids
+
+    coverage = {
+        "api_fixture_count": len(fixture_ids),
+        "stored_fact_count": len(stored_facts),
+        "covered": len(covered),
+        "missing_from_store": len(missing),
+        "missing_ids_sample": sorted(missing)[:10],
+        "extra_in_store": len(extra),
+    }
+    coverage_ok = len(missing) == 0 or len(stored_facts) > 0
+    result["steps"].append({"name": "fact_coverage", "ok": coverage_ok, "detail": coverage})
+
+    result["ok"] = True
+    result["coverage"] = coverage
+    result["summary"] = (
+        f"Connected. {len(fixture_ids)} fixtures from Sportmonks, "
+        f"{len(stored_facts)} match facts stored, "
+        f"{len(missing)} fixtures not yet imported."
+    )
+    return result
+
+
 def _configured_feeds() -> list[tuple[str, str, Callable[[dict[str, Any], str, str], dict[str, Any]]]]:
     feeds = []
     for kind, setting_name, converter in _FEEDS:

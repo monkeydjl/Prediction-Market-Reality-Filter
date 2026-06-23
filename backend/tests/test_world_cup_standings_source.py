@@ -126,6 +126,89 @@ class WorldCupStandingsSourceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be an object or list"):
             world_cup_standings_source_to_data({"standings": ["Mexico"]})
 
+    def test_extracts_group_table_metrics(self):
+        data = world_cup_standings_source_to_data({
+            "source": "manual_table",
+            "standings": [{
+                "team": "Brazil",
+                "group": "Group G",
+                "rank": 1,
+                "played": 3,
+                "won": 3,
+                "drawn": 0,
+                "lost": 0,
+                "points": 9,
+                "goals_for": 8,
+                "goals_against": 1,
+                "goal_diff": 7,
+                "description": "Qualified for knockout stage",
+            }],
+        })
+        q = data["qualifications"][0]
+        self.assertEqual(q["team"], "Brazil")
+        self.assertEqual(q["rank"], 1)
+        self.assertEqual(q["played"], 3)
+        self.assertEqual(q["won"], 3)
+        self.assertEqual(q["drawn"], 0)
+        self.assertEqual(q["lost"], 0)
+        self.assertEqual(q["points"], 9)
+        self.assertEqual(q["goals_for"], 8)
+        self.assertEqual(q["goals_against"], 1)
+        self.assertEqual(q["goal_diff"], 7)
+        self.assertEqual(q["group"], "Group G")
+
+    def test_group_table_short_field_aliases(self):
+        data = world_cup_standings_source_to_data({
+            "source": "manual_table",
+            "standings": [{
+                "team": "France",
+                "group": "Group H",
+                "pos": 2,
+                "P": 2,
+                "W": 1,
+                "D": 1,
+                "L": 0,
+                "Pts": 4,
+                "GF": 3,
+                "GA": 2,
+                "GD": 1,
+                "description": "not yet qualified",
+            }],
+        })
+        q = data["qualifications"][0]
+        self.assertEqual(q["rank"], 2)
+        self.assertEqual(q["played"], 2)
+        self.assertEqual(q["won"], 1)
+        self.assertEqual(q["drawn"], 1)
+        self.assertEqual(q["lost"], 0)
+        self.assertEqual(q["points"], 4)
+        self.assertEqual(q["goals_for"], 3)
+        self.assertEqual(q["goals_against"], 2)
+        self.assertEqual(q["goal_diff"], 1)
+
+    def test_group_table_metrics_flow_through_to_facts(self):
+        result = preview_world_cup_standings_source({
+            "source": "manual_table",
+            "standings": [{
+                "team": "Spain",
+                "group": "Group F",
+                "rank": 1,
+                "points": 7,
+                "won": 2,
+                "drawn": 1,
+                "lost": 0,
+                "description": "Qualified for knockout stage",
+            }],
+        })
+        self.assertEqual(result["converted_fact_count"], 1)
+        fact = result["facts"][0]
+        self.assertEqual(fact["points"], 7)
+        self.assertEqual(fact["rank"], 1)
+        self.assertEqual(fact["won"], 2)
+        self.assertEqual(fact["drawn"], 1)
+        self.assertEqual(fact["lost"], 0)
+        self.assertEqual(fact["group"], "Group F")
+
 
 if __name__ == "__main__":
     unittest.main()

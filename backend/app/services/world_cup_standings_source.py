@@ -131,6 +131,19 @@ def _normalize_standing(raw: dict[str, Any], index: int) -> dict[str, Any]:
         "stage": _text(_first(raw, ("stage",), ("group",), ("round",))),
         "status": status,
     }
+    group_value = _text(_first(raw, ("group",), ("group_name",)))
+    if group_value:
+        qualification["group"] = group_value
+    elif stage := qualification.get("stage", ""):
+        # If a group wrapper was used as the stage label, mirror it into group.
+        normalized_stage = stage.strip().upper()
+        if normalized_stage.startswith("GROUP") and normalized_stage != stage.strip():
+            qualification["group"] = stage.strip()
+    for field in ("rank", "played", "won", "drawn", "lost", "points",
+                  "goals_for", "goals_against", "goal_diff"):
+        value = _first_number(raw, field)
+        if value is not None:
+            qualification[field] = value
     if explicit_qualified is not None:
         qualification["already_qualified"] = explicit_qualified
     elif status in {"qualified", "advanced", "knockout_stage"}:
@@ -207,6 +220,39 @@ def _boolish(value: Any) -> bool | None:
     if text in {"0", "false", "no", "n"}:
         return False
     return None
+
+
+def _first_number(raw: dict[str, Any], field: str) -> float | None:
+    """Return the first numeric value found under any alias of ``field``."""
+
+    aliases: tuple[str, ...] = (field,)
+    short = {
+        "goals_for": ("gf",),
+        "goals_against": ("ga",),
+        "goal_diff": ("gd", "difference"),
+        "played": ("p", "mp", "matches", "games"),
+        "won": ("w", "wins"),
+        "drawn": ("d", "draws"),
+        "lost": ("l", "losses"),
+        "points": ("pts",),
+        "rank": ("pos", "position", "ranking"),
+    }.get(field, ())
+    lowered = {str(k).lower(): v for k, v in raw.items()}
+    for alias in aliases + short:
+        if alias in lowered:
+            return _number(lowered[alias])
+    return None
+
+
+def _number(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _compact(data: dict[str, Any]) -> dict[str, Any]:

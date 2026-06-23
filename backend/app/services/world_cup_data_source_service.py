@@ -348,9 +348,18 @@ def _qualification_facts(
             "stage": _clean(raw.get("stage")),
             "status": status,
         })
+        for opt in ("group",):
+            value = _clean(raw.get(opt))
+            if value:
+                fact[opt] = value
         for field in ("already_qualified", "already_eliminated"):
             if _has_value(raw.get(field)):
                 fact[field] = _bool(raw.get(field), field)
+        for field in ("rank", "played", "won", "drawn", "lost", "points",
+                      "goals_for", "goals_against", "goal_diff"):
+            number = _number(raw.get(field))
+            if number is not None:
+                fact[field] = number
         facts.append(_compact(fact))
     return facts
 

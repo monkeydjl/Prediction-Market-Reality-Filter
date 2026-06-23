@@ -192,6 +192,7 @@ def normalize_sports_fact(
         "stat_unit",
         "qualified",
         "eliminated",
+        "group",
     ):
         if raw.get(field) is not None:
             fact[field] = _clean(raw.get(field))
@@ -203,6 +204,12 @@ def normalize_sports_fact(
         "goals_against",
         "goals",
         "rank",
+        "played",
+        "won",
+        "drawn",
+        "lost",
+        "points",
+        "goal_diff",
         "stat_value",
     ):
         value = _non_negative_number(raw.get(field))

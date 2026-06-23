@@ -356,6 +356,25 @@ async def _job_world_cup_prediction_update():
         logger.exception("[Scheduler] World Cup prediction update failed")
 
 
+async def _job_world_cup_live_update():
+    """Live World Cup prediction updates during active matches (every 2 minutes)."""
+    from app.services.world_cup_live_update_service import update_live_predictions
+
+    try:
+        result = await update_live_predictions()
+
+        # Only log if there were matches to update
+        if result.get("matches_checked", 0) > 0:
+            logger.info(
+                "[Scheduler] Live update: checked=%d live=%d updated=%d",
+                result.get("matches_checked", 0),
+                result.get("live_count", 0),
+                result.get("updated", 0),
+            )
+    except Exception as exc:
+        logger.exception("[Scheduler] Live update failed: %s", exc)
+
+
 def _summarize_prediction_update(result: dict[str, Any]) -> dict[str, Any]:
     """Summarize prediction update result for scheduler run log."""
     if result.get("status") == "error":
@@ -482,6 +501,14 @@ def start_scheduler():
             replace_existing=True,
             max_instances=1,
         )
+        # World Cup live prediction updates (every 2 minutes)
+        scheduler.add_job(
+            _job_world_cup_live_update,
+            IntervalTrigger(minutes=2),
+            id="world_cup_live_update",
+            replace_existing=True,
+            max_instances=1,
+        )
         scheduler.start()
     except Exception:
         _release_scheduler_lock()
@@ -495,6 +522,8 @@ def start_scheduler():
         "[Scheduler] Started — event_discover@07:15UTC(%s) | "
         "world_cup_source_bundle_import@%02d:%02dUTC(%s) | "
         "world_cup_matchday_refresh@%dmin(%s) | "
+        "world_cup_prediction_update@06:00UTC | "
+        "world_cup_live_update@2min | "
         "loop_db_maintenance@06:45UTC | event_auto_resolve@22:30UTC",
         discover_state,
         settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_HOUR_UTC,

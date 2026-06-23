@@ -7,6 +7,9 @@ factors used by the prediction engines.
 from datetime import datetime, timedelta
 from typing import Any
 
+from app.services.transfermarkt_scraper import get_cached_market_value
+from app.services.sentiment_aggregator import get_cached_sentiment
+
 
 def calculate_team_factors(
     team_name: str,
@@ -57,6 +60,24 @@ def calculate_team_factors(
     # Home advantage modifier
     home_advantage = 0.10 if is_home else 0.0
 
+    # NEW: Market value factor (team quality proxy)
+    market_value_rating = 0.5  # Default neutral
+    market_value_cached = get_cached_market_value(team_name, ttl_days=7)  # 7 days
+    if market_value_cached:
+        total_value = market_value_cached["total_market_value"]
+        # Normalize: top teams ~1000m, mid ~400m, low ~150m
+        # Map to 0-1 scale: 1000m+ = 1.0, 150m = 0.0
+        market_value_rating = min(1.0, max(0.0, (total_value - 150) / (1000 - 150)))
+
+    # NEW: Sentiment factor (momentum/morale signal)
+    sentiment_rating = 0.0  # Default neutral
+    sentiment_confidence = 0.0
+    sentiment_cached = get_cached_sentiment(team_name, ttl_hours=6)
+    if sentiment_cached:
+        # Sentiment is -1 to 1, convert to 0 to 1
+        sentiment_rating = (sentiment_cached["overall_sentiment"] + 1) / 2
+        sentiment_confidence = sentiment_cached["confidence"]
+
     return {
         "fifa_ranking": team_stats.get("fifa_ranking"),
         "recent_form": round(recent_form, 3),
@@ -69,7 +90,12 @@ def calculate_team_factors(
         "matches_played": matches_played,
         "wins": wins,
         "draws": draws,
-        "losses": losses
+        "losses": losses,
+        # New factors
+        "market_value_rating": round(market_value_rating, 3),
+        "market_value_euros": round(market_value_cached["total_market_value"], 1) if market_value_cached else None,
+        "sentiment_rating": round(sentiment_rating, 3),
+        "sentiment_confidence": round(sentiment_confidence, 3)
     }
 
 

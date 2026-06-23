@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { Trophy, TrendingUp, Clock, AlertCircle } from "lucide-react";
+import { Trophy, TrendingUp, Clock, AlertCircle, Zap, Brain } from "lucide-react";
 import type { MatchFixture, MatchPrediction } from "@/lib/world-cup-predictions";
 import { cn } from "@/lib/utils";
 
@@ -40,6 +40,23 @@ function confidenceTone(confidence: number): string {
 
 function probabilityBar(probability: number): string {
   return `${Math.round(probability * 100)}%`;
+}
+
+function getEngineLabel(prediction?: MatchPrediction): { icon: any; label: string; color: string } | null {
+  if (!prediction) return null;
+
+  const method = prediction.prediction_method;
+  const hasOdds = prediction.has_betting_odds;
+
+  if (method === "elo_odds_fusion" || (hasOdds && method?.includes("elo"))) {
+    return { icon: Zap, label: "Elo+赔率", color: "text-primary" };
+  }
+
+  if (method === "elo_only") {
+    return { icon: TrendingUp, label: "Elo评级", color: "text-muted-foreground" };
+  }
+
+  return { icon: Brain, label: "混合引擎", color: "text-muted-foreground" };
 }
 
 export function MatchPredictionCard({ match, prediction }: MatchPredictionCardProps) {
@@ -177,17 +194,51 @@ export function MatchPredictionCard({ match, prediction }: MatchPredictionCardPr
 
         {/* Confidence */}
         {isPredicted && (
-          <div className="mt-3 flex items-center justify-between rounded-md border bg-secondary/50 px-3 py-2">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <TrendingUp className="size-3.5" />
-              <span>预测置信度</span>
+          <div className="mt-3 space-y-2">
+            <div className="flex items-center justify-between rounded-md border bg-secondary/50 px-3 py-2">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <TrendingUp className="size-3.5" />
+                <span>预测置信度</span>
+              </div>
+              <span className={cn(
+                "font-mono text-sm font-semibold tabular-nums",
+                confidenceTone(prediction.confidence)
+              )}>
+                {probabilityBar(prediction.confidence)}
+              </span>
             </div>
-            <span className={cn(
-              "font-mono text-sm font-semibold tabular-nums",
-              confidenceTone(prediction.confidence)
-            )}>
-              {probabilityBar(prediction.confidence)}
-            </span>
+
+            {/* Engine Badge */}
+            {(() => {
+              const engineInfo = getEngineLabel(prediction);
+              if (!engineInfo) return null;
+              const Icon = engineInfo.icon;
+              return (
+                <div className="flex items-center justify-between rounded-md border bg-secondary/30 px-3 py-2">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Icon className="size-3.5" />
+                    <span>预测引擎</span>
+                  </div>
+                  <span className={cn("text-xs font-medium", engineInfo.color)}>
+                    {engineInfo.label}
+                  </span>
+                </div>
+              );
+            })()}
+
+            {/* Elo Ratings Display */}
+            {prediction.elo_ratings && (
+              <div className="rounded-md border bg-secondary/30 px-3 py-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Elo评级</span>
+                  <div className="flex items-center gap-3 font-mono text-xs font-medium tabular-nums">
+                    <span>{Math.round(prediction.elo_ratings.home)}</span>
+                    <span className="text-muted-foreground">vs</span>
+                    <span>{Math.round(prediction.elo_ratings.away)}</span>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

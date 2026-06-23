@@ -224,7 +224,7 @@ export default function WorldCupPage() {
                 </h2>
                 <div className="grid gap-4 md:grid-cols-2">
                   {dateMatches.map((m) => (
-                    <SectionErrorBoundary key={m.match.match_id}>
+                    <SectionErrorBoundary key={m.match.match_id} title="比赛预测卡片">
                       <MatchPredictionCard
                         match={m.match}
                         prediction={m.prediction}

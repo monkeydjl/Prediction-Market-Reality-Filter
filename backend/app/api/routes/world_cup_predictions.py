@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Body
 from pydantic import BaseModel
 
 from app.models.world_cup_prediction import MatchFixture, MatchPrediction, PredictionHistory
@@ -20,6 +20,11 @@ class FlexibleResponse(BaseModel):
     """Flexible response model that accepts any fields."""
     class Config:
         extra = "allow"
+
+
+class PredictionRequest(BaseModel):
+    """Request body for prediction trigger."""
+    engine: str = "auto"
 
 
 @router.post("/init-db", response_model=FlexibleResponse)
@@ -124,7 +129,9 @@ async def get_match(match_id: str):
                 "prediction_method": prediction.prediction_method,
                 "ai_reasoning": prediction.ai_reasoning,
                 "key_factors": prediction.key_factors,
-                "last_updated": prediction.last_updated.isoformat() if prediction.last_updated else None
+                "last_updated": prediction.last_updated.isoformat() if prediction.last_updated else None,
+                "elo_ratings": getattr(prediction, "elo_ratings", None),
+                "has_betting_odds": getattr(prediction, "has_betting_odds", False)
             }
 
         return result
@@ -170,11 +177,17 @@ async def get_prediction_history(match_id: str):
 
 
 @router.post("/matches/{match_id}/predict", response_model=FlexibleResponse)
-async def trigger_prediction(match_id: str):
-    """Manually trigger prediction generation for a match."""
+async def trigger_prediction(match_id: str, request: PredictionRequest = Body(default=PredictionRequest())):
+    """Manually trigger prediction generation for a match.
+
+    Args:
+        match_id: Match ID to predict
+        request: Prediction request with optional engine selection
+            - engine: "auto" (default), "elo_odds", or "hybrid"
+    """
     from app.services.world_cup_prediction_pipeline import run_prediction_pipeline
 
-    result = await run_prediction_pipeline(match_id, trigger="manual")
+    result = await run_prediction_pipeline(match_id, trigger="manual", engine=request.engine)
 
     if result.get("status") == "error":
         raise HTTPException(status_code=500, detail=result.get("error"))
@@ -183,11 +196,16 @@ async def trigger_prediction(match_id: str):
 
 
 @router.post("/batch-predict", response_model=FlexibleResponse)
-async def batch_predict(match_ids: list[str] | None = None):
-    """Run predictions for multiple matches."""
+async def batch_predict(match_ids: list[str] | None = None, engine: str = "auto"):
+    """Run predictions for multiple matches.
+
+    Args:
+        match_ids: Optional list of match IDs (None = all remaining matches)
+        engine: Prediction engine to use ("auto", "elo_odds", "hybrid")
+    """
     from app.services.world_cup_prediction_pipeline import batch_predict_matches
 
-    result = await batch_predict_matches(match_ids, trigger="batch_manual")
+    result = await batch_predict_matches(match_ids, trigger="batch_manual", engine=engine)
     return result
 
 

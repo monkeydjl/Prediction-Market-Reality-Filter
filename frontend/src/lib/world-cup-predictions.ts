@@ -33,6 +33,12 @@ export interface MatchPrediction {
   ai_reasoning?: string;
   key_factors?: string[];
   last_updated?: string;
+  elo_ratings?: {
+    home: number;
+    away: number;
+  };
+  has_betting_odds?: boolean;
+  engine_used?: "elo_odds" | "hybrid" | "auto";
 }
 
 export interface MatchWithPrediction {
@@ -129,12 +135,16 @@ export async function fetchTodayMatches(): Promise<MatchWithPrediction[]> {
 /**
  * Trigger manual prediction for a match
  */
-export async function triggerPrediction(matchId: string): Promise<void> {
+export async function triggerPrediction(
+  matchId: string,
+  engine?: "elo_odds" | "hybrid" | "auto"
+): Promise<void> {
   const response = await fetch(
     `${API_BASE}/world-cup/predictions/matches/${matchId}/predict`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ engine: engine || 'auto' }),
     }
   );
 

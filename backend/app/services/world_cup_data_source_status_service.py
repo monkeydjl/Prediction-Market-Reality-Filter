@@ -80,9 +80,17 @@ def world_cup_data_source_status() -> dict[str, Any]:
             "hour_utc": settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_HOUR_UTC,
             "minute_utc": settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_MINUTE_UTC,
         },
+        "matchday_refresh": {
+            "enabled": settings.WORLD_CUP_MATCHDAY_REFRESH_ENABLED,
+            "interval_minutes": settings.WORLD_CUP_MATCHDAY_REFRESH_INTERVAL_MINUTES,
+            "window_hours": settings.WORLD_CUP_MATCHDAY_REFRESH_WINDOW_HOURS,
+        },
         "runs": {
             "world_cup_source_bundle_import": loop_run_store.last_run(
                 "world_cup_source_bundle_import"
+            ),
+            "world_cup_matchday_refresh": loop_run_store.last_run(
+                "world_cup_matchday_refresh"
             ),
         },
     }

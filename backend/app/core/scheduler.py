@@ -15,6 +15,7 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from app.core.config import settings
 from app.memory import loop_run_store
@@ -261,6 +262,85 @@ async def _job_world_cup_source_bundle_import():
         logger.exception("[Scheduler] World Cup source bundle import failed")
 
 
+async def _job_world_cup_matchday_refresh():
+    """Refresh World Cup data during active match windows."""
+    if not settings.WORLD_CUP_MATCHDAY_REFRESH_ENABLED:
+        return
+    if not settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED:
+        return
+
+    from datetime import datetime, timezone, timedelta
+    from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT, load_sports_facts
+
+    now = datetime.now(timezone.utc)
+    window_hours = settings.WORLD_CUP_MATCHDAY_REFRESH_WINDOW_HOURS
+    facts = load_sports_facts(tournament=WORLD_CUP_TOURNAMENT)
+
+    has_live_match = False
+    for fact in facts:
+        if fact.get("kind") != "match_result":
+            continue
+        status = (fact.get("status") or "").upper()
+        if status in ("FT", "AET", "PEN"):
+            continue
+        kickoff_str = fact.get("kickoff_at")
+        if not kickoff_str:
+            continue
+        try:
+            kickoff = datetime.fromisoformat(kickoff_str)
+            if kickoff.tzinfo is None:
+                kickoff = kickoff.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            continue
+        if abs((now - kickoff).total_seconds()) <= window_hours * 3600:
+            has_live_match = True
+            break
+
+    if not has_live_match:
+        logger.debug("[Scheduler] Matchday refresh: no active matches in window, skipping.")
+        return
+
+    logger.info("[Scheduler] Matchday refresh: active match detected, importing...")
+    run_id = _start_run("world_cup_matchday_refresh")
+    try:
+        mode = settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE.strip().lower()
+        from app.services.world_cup_api_football_source import (
+            import_world_cup_api_football_bundle,
+        )
+        from app.services.world_cup_sportmonks_source import (
+            import_world_cup_sportmonks_bundle,
+        )
+        from app.services.world_cup_source_bundle import (
+            import_world_cup_source_bundle_feeds,
+            import_world_cup_source_bundle_file,
+            import_world_cup_source_bundle_url,
+        )
+
+        if mode == "url":
+            result = import_world_cup_source_bundle_url(replace=True)
+        elif mode == "file":
+            result = import_world_cup_source_bundle_file(replace=True)
+        elif mode == "feeds":
+            result = import_world_cup_source_bundle_feeds(replace=True)
+        elif mode == "api_football":
+            result = import_world_cup_api_football_bundle(replace=True)
+        elif mode == "sportmonks":
+            result = import_world_cup_sportmonks_bundle(replace=True)
+        else:
+            raise ValueError(f"Unknown import mode: {mode}")
+
+        summary = _world_cup_bundle_import_summary(result, mode)
+        _finish_run(run_id, "success", result=summary)
+        logger.info(
+            "[Scheduler] Matchday refresh: facts=%d mode=%s",
+            summary.get("converted_fact_count", 0),
+            mode,
+        )
+    except Exception as exc:
+        _finish_run(run_id, "failed", error=str(exc))
+        logger.exception("[Scheduler] Matchday refresh failed")
+
+
 def _world_cup_bundle_import_summary(result: dict[str, Any], mode: str) -> dict[str, Any]:
     summary = {
         "mode": mode,
@@ -340,6 +420,16 @@ def start_scheduler():
                 replace_existing=True,
                 max_instances=1,
             )
+        if settings.WORLD_CUP_MATCHDAY_REFRESH_ENABLED:
+            scheduler.add_job(
+                _job_world_cup_matchday_refresh,
+                IntervalTrigger(
+                    minutes=settings.WORLD_CUP_MATCHDAY_REFRESH_INTERVAL_MINUTES,
+                ),
+                id="world_cup_matchday_refresh",
+                replace_existing=True,
+                max_instances=1,
+            )
         scheduler.start()
     except Exception:
         _release_scheduler_lock()
@@ -348,14 +438,18 @@ def start_scheduler():
     world_cup_state = (
         "on" if settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED else "off"
     )
+    matchday_state = "on" if settings.WORLD_CUP_MATCHDAY_REFRESH_ENABLED else "off"
     logger.info(
         "[Scheduler] Started — event_discover@07:15UTC(%s) | "
         "world_cup_source_bundle_import@%02d:%02dUTC(%s) | "
+        "world_cup_matchday_refresh@%dmin(%s) | "
         "loop_db_maintenance@06:45UTC | event_auto_resolve@22:30UTC",
         discover_state,
         settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_HOUR_UTC,
         settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_MINUTE_UTC,
         world_cup_state,
+        settings.WORLD_CUP_MATCHDAY_REFRESH_INTERVAL_MINUTES,
+        matchday_state,
     )
     return True
 

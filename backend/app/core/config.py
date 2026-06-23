@@ -189,6 +189,15 @@ class Settings:
     WORLD_CUP_DATA_MAX_AGE_HOURS: float = float(
         os.getenv("WORLD_CUP_DATA_MAX_AGE_HOURS", "168")
     )
+    WORLD_CUP_MATCHDAY_REFRESH_ENABLED: bool = _env_bool(
+        "WORLD_CUP_MATCHDAY_REFRESH_ENABLED", "false"
+    )
+    WORLD_CUP_MATCHDAY_REFRESH_INTERVAL_MINUTES: int = int(
+        os.getenv("WORLD_CUP_MATCHDAY_REFRESH_INTERVAL_MINUTES", "30")
+    )
+    WORLD_CUP_MATCHDAY_REFRESH_WINDOW_HOURS: int = int(
+        os.getenv("WORLD_CUP_MATCHDAY_REFRESH_WINDOW_HOURS", "6")
+    )
     # V2 loop store (SQLite). Holds the relational tables the feedback loop
     # depends on - starting with event_market_links (M0). Single file, no
     # server; sits alongside the JSON event_store rather than replacing it.

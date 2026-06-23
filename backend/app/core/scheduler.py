@@ -341,6 +341,50 @@ async def _job_world_cup_matchday_refresh():
         logger.exception("[Scheduler] Matchday refresh failed")
 
 
+async def _job_world_cup_prediction_update():
+    """Daily World Cup score prediction update at 06:00 UTC."""
+    logger.info("[Scheduler] World Cup prediction update starting...")
+    run_id = _start_run("world_cup_prediction_update")
+    try:
+        from app.services.world_cup_prediction_scheduler import run_daily_prediction_update
+
+        result = await run_daily_prediction_update()
+        _finish_run(run_id, "success", result=_summarize_prediction_update(result))
+        logger.info("[Scheduler] World Cup prediction update completed")
+    except Exception as exc:
+        _finish_run(run_id, "failed", error=str(exc))
+        logger.exception("[Scheduler] World Cup prediction update failed")
+
+
+def _summarize_prediction_update(result: dict[str, Any]) -> dict[str, Any]:
+    """Summarize prediction update result for scheduler run log."""
+    if result.get("status") == "error":
+        return {
+            "status": "error",
+            "error": result.get("error"),
+            "step": result.get("step")
+        }
+
+    summary = {
+        "status": "ok",
+        "timestamp": result.get("timestamp"),
+    }
+
+    if result.get("fixture_sync"):
+        sync = result["fixture_sync"]
+        summary["fixtures_synced"] = sync.get("fixtures_parsed", 0)
+        summary["remaining_matches"] = sync.get("remaining_matches", 0)
+
+    if result.get("predictions"):
+        pred = result["predictions"]
+        summary["predictions_total"] = pred.get("total", 0)
+        summary["predictions_succeeded"] = pred.get("succeeded", 0)
+        summary["predictions_failed"] = pred.get("failed", 0)
+        summary["predictions_skipped"] = pred.get("skipped", 0)
+
+    return summary
+
+
 def _world_cup_bundle_import_summary(result: dict[str, Any], mode: str) -> dict[str, Any]:
     summary = {
         "mode": mode,
@@ -430,6 +474,14 @@ def start_scheduler():
                 replace_existing=True,
                 max_instances=1,
             )
+        # World Cup daily prediction update at 06:00 UTC
+        scheduler.add_job(
+            _job_world_cup_prediction_update,
+            CronTrigger(hour=6, minute=0),
+            id="world_cup_prediction_update",
+            replace_existing=True,
+            max_instances=1,
+        )
         scheduler.start()
     except Exception:
         _release_scheduler_lock()

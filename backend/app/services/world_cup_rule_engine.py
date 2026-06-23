@@ -16,7 +16,10 @@ def poisson_probability(expected_goals: float, actual_goals: int) -> float:
 
 
 def calculate_outcome_probabilities(home_xg: float, away_xg: float, max_goals: int = 8) -> dict[str, float]:
-    """Calculate win/draw/loss probabilities from expected goals using Poisson."""
+    """Calculate win/draw/loss probabilities from expected goals using Poisson.
+
+    Returns probabilities as decimals (0.0 to 1.0), not percentages.
+    """
     home_win = 0.0
     draw = 0.0
     away_win = 0.0
@@ -35,9 +38,9 @@ def calculate_outcome_probabilities(home_xg: float, away_xg: float, max_goals: i
                 draw += joint_prob
 
     return {
-        "home_win": round(home_win * 100, 2),
-        "draw": round(draw * 100, 2),
-        "away_win": round(away_win * 100, 2)
+        "home_win": round(home_win, 4),
+        "draw": round(draw, 4),
+        "away_win": round(away_win, 4)
     }
 
 

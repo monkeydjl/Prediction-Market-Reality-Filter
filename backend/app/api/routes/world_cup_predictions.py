@@ -171,32 +171,24 @@ async def get_prediction_history(match_id: str):
 
 @router.post("/matches/{match_id}/predict", response_model=FlexibleResponse)
 async def trigger_prediction(match_id: str):
-    """Manually trigger prediction generation for a match.
+    """Manually trigger prediction generation for a match."""
+    from app.services.world_cup_prediction_pipeline import run_prediction_pipeline
 
-    This is a simplified version for testing. In production, this would:
-    1. Fetch team statistics from API
-    2. Calculate factors
-    3. Run prediction engine
-    4. Save to database
-    """
-    session = get_prediction_session()
-    try:
-        # Get match
-        match = session.query(MatchFixture).filter_by(match_id=match_id).first()
-        if not match:
-            raise HTTPException(status_code=404, detail="Match not found")
+    result = await run_prediction_pipeline(match_id, trigger="manual")
 
-        # For now, return a placeholder response
-        # TODO: Implement full prediction pipeline
-        return {
-            "status": "ok",
-            "message": "Prediction pipeline not yet fully implemented",
-            "match_id": match_id,
-            "note": "Need to implement: team stats fetching, factor calculation, prediction engine execution"
-        }
+    if result.get("status") == "error":
+        raise HTTPException(status_code=500, detail=result.get("error"))
 
-    finally:
-        close_prediction_session(session)
+    return result
+
+
+@router.post("/batch-predict", response_model=FlexibleResponse)
+async def batch_predict(match_ids: list[str] | None = None):
+    """Run predictions for multiple matches."""
+    from app.services.world_cup_prediction_pipeline import batch_predict_matches
+
+    result = await batch_predict_matches(match_ids, trigger="batch_manual")
+    return result
 
 
 @router.get("/today", response_model=FlexibleResponse)

@@ -17,9 +17,10 @@ import { eventsApi } from "@/lib/api";
 import type { TrackedEntry } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-type CategoryKey = "team_progression" | "match_format" | "discipline" | "player_awards" | "tournament_totals";
+type CategoryKey = "team_progression" | "match_format" | "discipline" | "player_awards" | "tournament_totals" | "group_stage";
 
 const CATEGORY_META: Record<CategoryKey, { label: string; tone: string }> = {
+  group_stage: { label: "小组赛", tone: "text-primary" },
   team_progression: { label: "球队晋级", tone: "text-primary" },
   match_format: { label: "赛制形式", tone: "text-warn" },
   discipline: { label: "纪律处分", tone: "text-neg" },
@@ -136,7 +137,7 @@ export default function WorldCupPage() {
     return groups;
   }, [entries]);
 
-  const categoryOrder: CategoryKey[] = ["team_progression", "match_format", "discipline", "player_awards", "tournament_totals"];
+  const categoryOrder: CategoryKey[] = ["group_stage", "team_progression", "match_format", "discipline", "player_awards", "tournament_totals"];
   const resolvedCount = entries.filter((e) => e.record?.outcome?.actual_outcome != null).length;
   const pendingCount = entries.length - resolvedCount;
 

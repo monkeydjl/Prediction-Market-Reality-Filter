@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, FlaskConical, History, Radar, Target, Zap } from "lucide-react";
+import { Activity, FlaskConical, History, Radar, Target, Trophy, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { OperatorKeyControl } from "@/components/operator-key-control";
 import { ThemeControl } from "@/components/theme-control";
@@ -13,6 +13,7 @@ const NAV = [
   { href: "/edges", label: "Edge 监测", icon: Zap, match: ["/edges"] },
   { href: "/analyze", label: "人工分析", icon: FlaskConical, match: ["/analyze"] },
   { href: "/history", label: "历史复盘", icon: History, match: ["/history"] },
+  { href: "/world-cup", label: "世界杯", icon: Trophy, match: ["/world-cup"] },
 ];
 
 export function AppNav() {

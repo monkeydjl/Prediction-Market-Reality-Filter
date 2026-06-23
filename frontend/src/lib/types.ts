@@ -40,6 +40,9 @@ export interface EventSource {
   volume?: number;
   liquidity?: number;
   url?: string;
+  category?: string;
+  tournament?: string;
+  entities?: string[];
 }
 
 export interface Semantics {

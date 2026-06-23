@@ -224,6 +224,9 @@ export function WorldCupResolutionPanel() {
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [batchChecked, setBatchChecked] = useState(false);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
 
   const matches = useMemo(() => result?.matches ?? [], [result]);
   const pendingCount = result?.pending_count ?? 0;
@@ -295,6 +298,42 @@ export function WorldCupResolutionPanel() {
     }
   }
 
+  const batchCandidates = useMemo(
+    () => matches.filter((m) => m.result === "would_resolve" && m.event_id && m.actual_outcome != null),
+    [matches],
+  );
+
+  async function batchApproveAll() {
+    if (!batchChecked || batchCandidates.length === 0) return;
+    setBatchRunning(true);
+    setBatchProgress({ done: 0, total: batchCandidates.length });
+    setMessage(null);
+    setError(null);
+    let successes = 0;
+    for (let i = 0; i < batchCandidates.length; i++) {
+      const match = batchCandidates[i];
+      const eventId = match.event_id!;
+      const actualOutcome = Number(match.actual_outcome);
+      const confidence = Number(match.confidence ?? 1);
+      try {
+        await eventsApi.resolveManual(eventId, {
+          actual_outcome: actualOutcome,
+          confidence,
+          notes: match.reason || "World Cup structured facts (batch)",
+        });
+        successes++;
+      } catch {
+        // continue batch on individual failures
+      }
+      setBatchProgress({ done: i + 1, total: batchCandidates.length });
+    }
+    setBatchRunning(false);
+    setBatchChecked(false);
+    setBatchProgress(null);
+    setMessage(`批量结算完成：${successes}/${batchCandidates.length} 成功写入`);
+    await load();
+  }
+
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
@@ -363,6 +402,32 @@ export function WorldCupResolutionPanel() {
         <SummaryPill label="pending/no match" value={noMatchCount} tone={noMatchCount > 0 ? "warn" : "neutral"} />
         <SummaryPill label="unresolved" value={result?.unresolved_events} />
       </div>
+
+      {batchCandidates.length >= 2 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-secondary px-3 py-2">
+          <label className="flex items-center gap-2 text-xs text-foreground">
+            <input
+              type="checkbox"
+              checked={batchChecked}
+              onChange={(e) => setBatchChecked(e.target.checked)}
+              disabled={batchRunning || Boolean(resolvingId)}
+              className="size-3.5 rounded border-border"
+            />
+            确认批量写入 {batchCandidates.length} 条结算
+          </label>
+          <button
+            type="button"
+            onClick={() => void batchApproveAll()}
+            disabled={!batchChecked || batchRunning || Boolean(resolvingId)}
+            className="inline-flex h-7 items-center gap-1.5 rounded-md border border-primary bg-primary/15 px-2 text-xs font-medium text-primary transition-colors hover:bg-primary/25 disabled:opacity-50"
+          >
+            {batchRunning && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
+            {batchRunning
+              ? `写入中 ${batchProgress?.done ?? 0}/${batchProgress?.total ?? 0}`
+              : "全部确认结算"}
+          </button>
+        </div>
+      )}
 
       {loading && !result ? (
         <div className="grid h-24 place-items-center rounded-md border border-border bg-secondary text-xs text-muted-foreground">

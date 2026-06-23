@@ -8,12 +8,14 @@ import {
   Eye,
   Gavel,
   Loader2,
+  Plug,
   RefreshCw,
   UploadCloud,
 } from "lucide-react";
 import {
   eventsApi,
   type LoopRun,
+  type WorldCupApiFootballConnectionResult,
   type WorldCupCallBudget,
   type WorldCupDataSourceActionMode,
   type WorldCupDataSourceActionResult,
@@ -514,6 +516,8 @@ export function WorldCupDataSources() {
   const [completed, setCompleted] = useState<CompletedAction | null>(null);
   const [dryRunLoading, setDryRunLoading] = useState(false);
   const [dryRunResult, setDryRunResult] = useState<WorldCupResolveResult | null>(null);
+  const [connTesting, setConnTesting] = useState(false);
+  const [connResult, setConnResult] = useState<WorldCupApiFootballConnectionResult | null>(null);
 
   const rows = useMemo(() => sourceRows(status), [status]);
   const lastRun = status?.runs?.world_cup_source_bundle_import ?? null;
@@ -569,6 +573,19 @@ export function WorldCupDataSources() {
     }
   }
 
+  async function runConnectionTest() {
+    setConnTesting(true);
+    setConnResult(null);
+    setError(null);
+    try {
+      setConnResult(await eventsApi.worldCupApiFootballTest());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "连接测试失败");
+    } finally {
+      setConnTesting(false);
+    }
+  }
+
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
@@ -590,11 +607,24 @@ export function WorldCupDataSources() {
               <span className="rounded-md border border-border bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">
                 schedule {status?.scheduled_import?.enabled ? status.scheduled_import.mode : "off"}
               </span>
+              <span className={cn(
+                "rounded-md border px-2 py-0.5 text-[11px]",
+                status?.matchday_refresh?.enabled
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-border bg-secondary text-muted-foreground",
+              )}>
+                matchday {status?.matchday_refresh?.enabled
+                  ? `${status.matchday_refresh.interval_minutes}m / ${status.matchday_refresh.window_hours}h`
+                  : "off"}
+              </span>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               {status?.facts?.last_updated ? `facts 更新 ${fmtDateTime(status.facts.last_updated)}` : "facts 更新 —"}
               {status?.scheduled_import?.enabled
                 ? ` · ${String(status.scheduled_import.hour_utc).padStart(2, "0")}:${String(status.scheduled_import.minute_utc).padStart(2, "0")} UTC`
+                : ""}
+              {status?.runs?.world_cup_matchday_refresh?.started_at
+                ? ` · matchday 上次 ${fmtDateTime(status.runs.world_cup_matchday_refresh.finished_at ?? status.runs.world_cup_matchday_refresh.started_at)}`
                 : ""}
             </p>
           </div>
@@ -620,6 +650,19 @@ export function WorldCupDataSources() {
           </button>
           <button
             type="button"
+            onClick={() => void runConnectionTest()}
+            disabled={loading || connTesting || Boolean(running)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-secondary px-2 text-xs text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+          >
+            {connTesting ? (
+              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <Plug className="size-3.5" aria-hidden="true" />
+            )}
+            测试连接
+          </button>
+          <button
+            type="button"
             onClick={() => void runResolveDryRun()}
             disabled={loading || dryRunLoading || Boolean(running)}
             className="inline-flex h-8 items-center gap-1.5 rounded-md border border-primary bg-primary/15 px-2 text-xs font-medium text-primary transition-colors hover:bg-primary/25 disabled:opacity-50"
@@ -637,6 +680,29 @@ export function WorldCupDataSources() {
       {error && (
         <div className="rounded-md border border-neg/40 bg-neg/10 px-3 py-2 text-xs leading-relaxed text-neg">
           {error}
+        </div>
+      )}
+
+      {connResult && (
+        <div className={cn(
+          "flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 text-xs",
+          connResult.ok
+            ? "border-pos/40 bg-pos/10 text-pos"
+            : "border-neg/40 bg-neg/10 text-neg",
+        )}>
+          {connResult.ok ? (
+            <CheckCircle2 className="size-3.5" aria-hidden="true" />
+          ) : (
+            <AlertTriangle className="size-3.5" aria-hidden="true" />
+          )}
+          <span className="font-medium">
+            {connResult.ok ? "API-Football 连接正常" : `API-Football 连接失败: ${connResult.error}`}
+          </span>
+          {connResult.ok && connResult.subscription && (
+            <span className="text-muted-foreground">
+              {connResult.subscription.plan} · {connResult.requests_today}/{connResult.requests_limit} requests today
+            </span>
+          )}
         </div>
       )}
 

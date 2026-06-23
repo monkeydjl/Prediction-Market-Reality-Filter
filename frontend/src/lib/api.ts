@@ -343,8 +343,14 @@ export interface WorldCupDataSourceStatus {
     hour_utc?: number;
     minute_utc?: number;
   };
+  matchday_refresh?: {
+    enabled?: boolean;
+    interval_minutes?: number;
+    window_hours?: number;
+  };
   runs?: {
     world_cup_source_bundle_import?: LoopRun | null;
+    world_cup_matchday_refresh?: LoopRun | null;
   };
 }
 
@@ -394,6 +400,15 @@ export interface WorldCupResolveResult {
   checked_count?: number;
   unresolved_events?: number;
   matches?: WorldCupResolveMatch[];
+}
+
+export interface WorldCupApiFootballConnectionResult {
+  ok: boolean;
+  account?: { firstname?: string; lastname?: string; email?: string };
+  subscription?: { plan?: string; active?: boolean; end?: string | null };
+  requests_today?: number;
+  requests_limit?: number;
+  error?: string | null;
 }
 
 export interface ApiOverview {
@@ -663,5 +678,12 @@ export const eventsApi = {
       `/events/sports/world-cup/resolve?dry_run=true&limit=${limit}`,
       { method: "POST" },
       { timeoutMs: 180_000 },
+    ),
+
+  worldCupApiFootballTest: () =>
+    api<WorldCupApiFootballConnectionResult>(
+      "/events/sports/world-cup/data/bundle/api-football/test",
+      { method: "POST" },
+      { timeoutMs: 15_000 },
     ),
 };

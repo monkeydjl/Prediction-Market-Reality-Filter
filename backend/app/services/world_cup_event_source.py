@@ -140,6 +140,113 @@ _CANDIDATES: tuple[dict[str, Any], ...] = (
         ),
         "time_horizon": "after the 2026 FIFA World Cup final",
     },
+    {
+        "id": "france-quarterfinal",
+        "question": "Will France reach the quarterfinals of the 2026 FIFA World Cup?",
+        "baseline_probability": 60.0,
+        "category": "team_progression",
+        "entities": ["France", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if France qualifies for a quarterfinal match at the 2026 "
+            "FIFA World Cup."
+        ),
+        "time_horizon": "before the 2026 FIFA World Cup quarterfinals",
+    },
+    {
+        "id": "total-goals-140",
+        "question": "Will the 2026 FIFA World Cup have at least 140 total goals?",
+        "baseline_probability": 52.0,
+        "category": "tournament_totals",
+        "entities": [_TOURNAMENT, "total goals"],
+        "resolution_criteria": (
+            "YES if 140 or more goals are scored across all 2026 FIFA World "
+            "Cup matches by the final official tournament records."
+        ),
+        "time_horizon": "after the 2026 FIFA World Cup final",
+    },
+    {
+        "id": "argentina-winner",
+        "question": "Will Argentina win the 2026 FIFA World Cup?",
+        "baseline_probability": 18.0,
+        "category": "tournament_winner",
+        "entities": ["Argentina", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Argentina wins the 2026 FIFA World Cup final."
+        ),
+        "time_horizon": "2026 FIFA World Cup final",
+    },
+    {
+        "id": "host-nation-semifinal",
+        "question": "Will a host nation reach the semifinals of the 2026 FIFA World Cup?",
+        "baseline_probability": 42.0,
+        "category": "team_progression",
+        "entities": ["United States", "Mexico", "Canada", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if the United States, Mexico, or Canada qualifies for a "
+            "semifinal match at the 2026 FIFA World Cup."
+        ),
+        "time_horizon": "before the 2026 FIFA World Cup semifinals",
+    },
+    {
+        "id": "germany-quarterfinal",
+        "question": "Will Germany reach the quarterfinals of the 2026 FIFA World Cup?",
+        "baseline_probability": 55.0,
+        "category": "team_progression",
+        "entities": ["Germany", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Germany qualifies for a quarterfinal match at the 2026 "
+            "FIFA World Cup."
+        ),
+        "time_horizon": "before the 2026 FIFA World Cup quarterfinals",
+    },
+    {
+        "id": "spain-quarterfinal",
+        "question": "Will Spain reach the quarterfinals of the 2026 FIFA World Cup?",
+        "baseline_probability": 58.0,
+        "category": "team_progression",
+        "entities": ["Spain", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Spain qualifies for a quarterfinal match at the 2026 "
+            "FIFA World Cup."
+        ),
+        "time_horizon": "before the 2026 FIFA World Cup quarterfinals",
+    },
+    {
+        "id": "knockout-underdog-quarterfinal",
+        "question": "Will a team ranked outside the FIFA top 16 reach the 2026 World Cup quarterfinals?",
+        "baseline_probability": 40.0,
+        "category": "team_progression",
+        "entities": [_TOURNAMENT, "quarterfinals", "underdog"],
+        "resolution_criteria": (
+            "YES if any team whose FIFA ranking was outside the top 16 at "
+            "the start of the tournament qualifies for a quarterfinal match."
+        ),
+        "time_horizon": "before the 2026 FIFA World Cup quarterfinals",
+    },
+    {
+        "id": "european-finalist",
+        "question": "Will at least one European team reach the 2026 FIFA World Cup final?",
+        "baseline_probability": 78.0,
+        "category": "team_progression",
+        "entities": [_TOURNAMENT, "Europe", "final"],
+        "resolution_criteria": (
+            "YES if at least one UEFA-member nation plays in the 2026 FIFA "
+            "World Cup final."
+        ),
+        "time_horizon": "2026 FIFA World Cup final",
+    },
+    {
+        "id": "south-american-semifinal",
+        "question": "Will at least two South American teams reach the 2026 World Cup semifinals?",
+        "baseline_probability": 28.0,
+        "category": "team_progression",
+        "entities": [_TOURNAMENT, "CONMEBOL", "semifinals"],
+        "resolution_criteria": (
+            "YES if two or more CONMEBOL-member nations qualify for semifinal "
+            "matches at the 2026 FIFA World Cup."
+        ),
+        "time_horizon": "before the 2026 FIFA World Cup semifinals",
+    },
 )
 
 

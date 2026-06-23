@@ -166,6 +166,204 @@ class SportsResolutionRuleTests(unittest.TestCase):
         self.assertIsNone(decision)
 
 
+class StageAliasResolutionTests(unittest.TestCase):
+    def test_quarterfinal_stage_resolves_yes(self):
+        record = _sports_record(
+            "france-qf",
+            "Will France reach the quarterfinals of the 2026 FIFA World Cup?",
+            "world-cup-2026:france-quarterfinal",
+            "team_progression",
+            ["France", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [{
+            "fact_id": "france-qf",
+            "kind": "qualification",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "team": "France",
+            "stage": "quarterfinal",
+            "status": "reached_quarterfinal",
+            "confidence": 1.0,
+        }])
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 100.0)
+
+    def test_round_of_16_stage_resolves_yes(self):
+        record = _sports_record(
+            "japan-r16",
+            "Will Japan reach the round of 16 of the 2026 FIFA World Cup?",
+            "world-cup-2026:japan-round-of-16",
+            "team_progression",
+            ["Japan", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [{
+            "fact_id": "japan-r16",
+            "kind": "qualification",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "team": "Japan",
+            "stage": "round_of_16",
+            "status": "advanced",
+            "confidence": 1.0,
+        }])
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 100.0)
+
+    def test_final_winner_resolves_yes(self):
+        record = _sports_record(
+            "brazil-win",
+            "Will Brazil win the 2026 FIFA World Cup?",
+            "world-cup-2026:brazil-champion",
+            "team_progression",
+            ["Brazil", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [{
+            "fact_id": "brazil-champ",
+            "kind": "qualification",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "team": "Brazil",
+            "status": "champion",
+            "confidence": 1.0,
+        }])
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 100.0)
+
+    def test_final_winner_not_resolved_by_mere_qualification(self):
+        record = _sports_record(
+            "brazil-win",
+            "Will Brazil win the 2026 FIFA World Cup?",
+            "world-cup-2026:brazil-champion",
+            "team_progression",
+            ["Brazil", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [{
+            "fact_id": "brazil-qf",
+            "kind": "qualification",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "team": "Brazil",
+            "stage": "quarterfinal",
+            "status": "reached_quarterfinal",
+            "confidence": 1.0,
+        }])
+        self.assertIsNone(decision)
+
+    def test_quarterfinal_eliminated_resolves_no(self):
+        record = _sports_record(
+            "france-qf",
+            "Will France reach the quarterfinals of the 2026 FIFA World Cup?",
+            "world-cup-2026:france-quarterfinal",
+            "team_progression",
+            ["France", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [{
+            "fact_id": "france-out",
+            "kind": "qualification",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "team": "France",
+            "status": "eliminated",
+            "already_eliminated": True,
+            "confidence": 1.0,
+        }])
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 0.0)
+
+
+class TotalGoalsResolutionTests(unittest.TestCase):
+    def test_total_goals_above_threshold_resolves_yes(self):
+        record = _sports_record(
+            "total-goals",
+            "Will the 2026 FIFA World Cup have at least 140 total goals?",
+            "world-cup-2026:total-goals-140",
+            "tournament_totals",
+            [WORLD_CUP_TOURNAMENT, "total goals"],
+        )
+        facts = [
+            {
+                "fact_id": f"m{i}",
+                "kind": "match_result",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "home_goals": 2,
+                "away_goals": 1,
+                "confidence": 1.0,
+            }
+            for i in range(47)
+        ]
+        decision = resolver.evaluate_world_cup_resolution(record, facts)
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 100.0)
+        self.assertIn("141", decision["reason"])
+
+    def test_total_goals_below_threshold_pending_before_complete(self):
+        record = _sports_record(
+            "total-goals",
+            "Will the 2026 FIFA World Cup have at least 140 total goals?",
+            "world-cup-2026:total-goals-140",
+            "tournament_totals",
+            [WORLD_CUP_TOURNAMENT, "total goals"],
+        )
+        facts = [{
+            "fact_id": "m1",
+            "kind": "match_result",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "home_goals": 2,
+            "away_goals": 1,
+            "confidence": 1.0,
+        }]
+        decision = resolver.evaluate_world_cup_resolution(record, facts)
+        self.assertIsNone(decision)
+
+    def test_total_goals_below_threshold_resolves_no_when_complete(self):
+        record = _sports_record(
+            "total-goals",
+            "Will the 2026 FIFA World Cup have at least 140 total goals?",
+            "world-cup-2026:total-goals-140",
+            "tournament_totals",
+            [WORLD_CUP_TOURNAMENT, "total goals"],
+        )
+        facts = [
+            {
+                "fact_id": "m1",
+                "kind": "match_result",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "home_goals": 2,
+                "away_goals": 1,
+                "confidence": 1.0,
+            },
+            {
+                "fact_id": "ts",
+                "kind": "tournament_status",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "status": "completed",
+                "tournament_complete": True,
+                "confidence": 1.0,
+            },
+        ]
+        decision = resolver.evaluate_world_cup_resolution(record, facts)
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 0.0)
+
+    def test_total_goals_title_fallback_without_category(self):
+        record = _sports_record(
+            "total-goals-2",
+            "Will the 2026 FIFA World Cup have at least 100 total goals?",
+            "world-cup-2026:total-goals-100",
+            "match_format",
+            [WORLD_CUP_TOURNAMENT, "total goals"],
+        )
+        facts = [
+            {
+                "fact_id": f"m{i}",
+                "kind": "match_result",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "home_goals": 3,
+                "away_goals": 1,
+                "confidence": 1.0,
+            }
+            for i in range(26)
+        ]
+        decision = resolver.evaluate_world_cup_resolution(record, facts)
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 100.0)
+
+
 class SportsResolutionWorkflowTests(unittest.TestCase):
     def test_dry_run_reports_without_writing_outcome(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -219,6 +417,118 @@ class SportsResolutionWorkflowTests(unittest.TestCase):
         self.assertEqual(result["unresolved_events"], 0)
         self.assertEqual(after["record"]["outcome"]["actual_outcome"], 100.0)
         self.assertEqual(after["record"]["outcome"]["source"], "auto_sports")
+
+
+class KnockoutResolutionTests(unittest.TestCase):
+    def test_tournament_winner_resolves_yes(self):
+        record = _sports_record(
+            "argentina-winner",
+            "Will Argentina win the 2026 FIFA World Cup?",
+            "world-cup-2026:argentina-winner",
+            "tournament_winner",
+            ["Argentina", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [{
+            "fact_id": "arg-champ",
+            "kind": "qualification",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "team": "Argentina",
+            "status": "champion",
+            "confidence": 1.0,
+        }])
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 100.0)
+
+    def test_multi_team_progression_resolves_yes_when_any_advances(self):
+        record = _sports_record(
+            "host-semifinal",
+            "Will a host nation reach the semifinals of the 2026 FIFA World Cup?",
+            "world-cup-2026:host-nation-semifinal",
+            "team_progression",
+            ["United States", "Mexico", "Canada", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [
+            {
+                "fact_id": "usa-out",
+                "kind": "qualification",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "team": "United States",
+                "status": "eliminated",
+                "already_eliminated": True,
+                "confidence": 1.0,
+            },
+            {
+                "fact_id": "mex-sf",
+                "kind": "qualification",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "team": "Mexico",
+                "status": "reached_semifinal",
+                "stage": "semifinal",
+                "confidence": 1.0,
+            },
+        ])
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 100.0)
+        self.assertIn("Mexico", decision["reason"])
+
+    def test_multi_team_progression_resolves_no_when_all_eliminated(self):
+        record = _sports_record(
+            "host-semifinal",
+            "Will a host nation reach the semifinals of the 2026 FIFA World Cup?",
+            "world-cup-2026:host-nation-semifinal",
+            "team_progression",
+            ["United States", "Mexico", "Canada", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [
+            {
+                "fact_id": "usa-out",
+                "kind": "qualification",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "team": "United States",
+                "status": "eliminated",
+                "already_eliminated": True,
+                "confidence": 1.0,
+            },
+            {
+                "fact_id": "mex-out",
+                "kind": "qualification",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "team": "Mexico",
+                "status": "eliminated",
+                "already_eliminated": True,
+                "confidence": 1.0,
+            },
+            {
+                "fact_id": "can-out",
+                "kind": "qualification",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "team": "Canada",
+                "status": "eliminated",
+                "already_eliminated": True,
+                "confidence": 1.0,
+            },
+        ])
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 0.0)
+
+    def test_multi_team_progression_pending_when_one_eliminated_others_unknown(self):
+        record = _sports_record(
+            "host-semifinal",
+            "Will a host nation reach the semifinals of the 2026 FIFA World Cup?",
+            "world-cup-2026:host-nation-semifinal",
+            "team_progression",
+            ["United States", "Mexico", "Canada", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [{
+            "fact_id": "usa-out",
+            "kind": "qualification",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "team": "United States",
+            "status": "eliminated",
+            "already_eliminated": True,
+            "confidence": 1.0,
+        }])
+        self.assertIsNone(decision)
 
 
 if __name__ == "__main__":

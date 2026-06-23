@@ -79,14 +79,21 @@ def evaluate_world_cup_resolution(
         return None
 
     category = str(source.get("category") or "")
-    if category == "team_progression":
+    if category in {"team_progression", "tournament_winner"}:
         return _team_progression_resolution(record, facts)
     if category == "discipline":
         return _red_card_resolution(record, facts)
     if category == "match_format":
-        return _match_format_resolution(record, facts)
+        result = _match_format_resolution(record, facts)
+        if result:
+            return result
     if category == "player_awards":
         return _player_award_resolution(record, facts)
+    if category == "tournament_totals":
+        return _total_goals_resolution(record, facts)
+    result = _total_goals_resolution(record, facts)
+    if result:
+        return result
     return None
 
 
@@ -107,29 +114,41 @@ def _team_progression_resolution(
     required_stage = _required_progression_stage(source, record.get("event_title", ""))
     if not required_stage:
         return None
-    team = _primary_team(source)
-    if not team:
+    teams = _candidate_teams(source)
+    if not teams:
         return None
-    relevant = [
-        fact for fact in facts
-        if fact.get("kind") == "qualification"
-        and _same_text(fact.get("team"), team)
-    ]
-    for fact in relevant:
-        status = str(fact.get("status") or "").lower()
-        stage = str(fact.get("stage") or "").lower()
-        if _progression_yes(required_stage, status, stage, fact):
-            return _decision(
-                100.0,
-                f"{team} reached {required_stage}.",
-                [fact],
-            )
-        if _progression_no(status, fact):
-            return _decision(
-                0.0,
-                f"{team} was eliminated before reaching {required_stage}.",
-                [fact],
-            )
+    multi = len(teams) > 1
+    eliminated_count = 0
+    for team in teams:
+        relevant = [
+            fact for fact in facts
+            if fact.get("kind") == "qualification"
+            and _same_text(fact.get("team"), team)
+        ]
+        for fact in relevant:
+            status = str(fact.get("status") or "").lower()
+            stage = str(fact.get("stage") or "").lower()
+            if _progression_yes(required_stage, status, stage, fact):
+                return _decision(
+                    100.0,
+                    f"{team} reached {required_stage}.",
+                    [fact],
+                )
+            if _progression_no(status, fact):
+                if not multi:
+                    return _decision(
+                        0.0,
+                        f"{team} was eliminated before reaching {required_stage}.",
+                        [fact],
+                    )
+                eliminated_count += 1
+    if multi and eliminated_count == len(teams):
+        return _decision(
+            0.0,
+            f"All candidate teams eliminated before reaching {required_stage}.",
+            [fact for fact in facts if fact.get("kind") == "qualification"
+             and any(_same_text(fact.get("team"), t) for t in teams)],
+        )
     return None
 
 
@@ -227,11 +246,51 @@ def _player_award_resolution(
     return None
 
 
+def _total_goals_resolution(
+    record: dict[str, Any],
+    facts: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    threshold = _parse_threshold(record.get("event_title", ""), "total goals")
+    if threshold is None:
+        return None
+    relevant = [
+        fact for fact in facts
+        if fact.get("kind") in {"match_result", "tournament_status"}
+    ]
+    match_facts = [fact for fact in relevant if fact.get("kind") == "match_result"]
+    total = 0.0
+    for fact in match_facts:
+        score = fact.get("score") or {}
+        total += float(fact.get("home_goals") or fact.get("home_score") or score.get("home") or 0)
+        total += float(fact.get("away_goals") or fact.get("away_score") or score.get("away") or 0)
+    if total >= threshold:
+        return _decision(
+            100.0,
+            f"Match results record {total:g} total goals, meeting the {threshold:g} threshold.",
+            match_facts,
+        )
+    if _tournament_complete(relevant):
+        return _decision(
+            0.0,
+            f"Tournament complete with {total:g} total goals, below the {threshold:g} threshold.",
+            relevant,
+        )
+    return None
+
+
 def _required_progression_stage(source: dict[str, Any], title: str) -> str:
     source_id = str(source.get("source_id") or "")
     text = _norm(f"{source_id} {title}")
-    if "semifinal" in text:
+    if ("win" in text or "champion" in text) and "knockout" not in text:
+        return "final_winner"
+    if "final" in text and "semifinal" not in text and "quarterfinal" not in text and "quarter-final" not in text:
+        return "final"
+    if "semifinal" in text or "semi-final" in text:
         return "semifinal"
+    if "quarterfinal" in text or "quarter-final" in text or "quarter final" in text:
+        return "quarterfinal"
+    if "round of 16" in text or "round_of_16" in text or "last 16" in text:
+        return "round_of_16"
     if "knockout" in text:
         return "knockout_stage"
     return ""
@@ -243,6 +302,26 @@ def _primary_team(source: dict[str, Any]) -> str:
         if text and text != WORLD_CUP_TOURNAMENT:
             return text
     return ""
+
+
+_NON_TEAM_ENTITIES = frozenset({
+    "knockout stage", "quarterfinals", "semifinals", "final",
+    "round of 16", "underdog", "europe", "conmebol", "uefa",
+    "south america", "penalty shootout", "extra time", "red cards",
+    "total goals", "top scorer", "golden boot", "golden glove",
+})
+
+
+def _candidate_teams(source: dict[str, Any]) -> list[str]:
+    teams = []
+    for entity in source.get("entities") or []:
+        text = str(entity or "").strip()
+        if not text or text == WORLD_CUP_TOURNAMENT:
+            continue
+        if text.lower() in _NON_TEAM_ENTITIES:
+            continue
+        teams.append(text)
+    return teams
 
 
 def _progression_yes(
@@ -257,8 +336,22 @@ def _progression_yes(
             or status in {"qualified", "advanced", "knockout_stage", "reached_knockout"}
             or stage in {"knockout", "round_of_32", "round_of_16", "quarterfinal", "semifinal", "final"}
         )
+    if required_stage == "round_of_16":
+        return (
+            status in {"round_of_16", "reached_round_of_16", "advanced"}
+            or stage in {"round_of_16", "quarterfinal", "semifinal", "final"}
+        )
+    if required_stage == "quarterfinal":
+        return (
+            status in {"quarterfinal", "reached_quarterfinal", "qualified_quarterfinal", "advanced"}
+            or stage in {"quarterfinal", "semifinal", "final"}
+        )
     if required_stage == "semifinal":
         return status in {"semifinal", "reached_semifinal", "qualified_semifinal"} or stage in {"semifinal", "final"}
+    if required_stage == "final":
+        return status in {"final", "reached_final", "qualified_final"} or stage == "final"
+    if required_stage == "final_winner":
+        return status in {"champion", "winner", "won_final"}
     return False
 
 

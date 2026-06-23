@@ -133,5 +133,248 @@ class SportsSignalServiceTests(unittest.TestCase):
         self.assertIn("goals=7", context)
 
 
+    def test_schedule_fatigue_signal_high_when_three_matches_in_five_days(self):
+        source = {
+            "type": "sports_event",
+            "category": "team_progression",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "source_id": "world-cup-2026:brazil-semifinal",
+            "entities": ["Brazil", WORLD_CUP_TOURNAMENT],
+        }
+        facts = [
+            {
+                "fact_id": "m1",
+                "kind": "match_result",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "home_team": "Brazil",
+                "away_team": "Serbia",
+                "kickoff_at": "2026-06-15T18:00:00+00:00",
+                "source": "manual",
+                "confidence": 1.0,
+            },
+            {
+                "fact_id": "m2",
+                "kind": "match_result",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "home_team": "Switzerland",
+                "away_team": "Brazil",
+                "kickoff_at": "2026-06-18T18:00:00+00:00",
+                "source": "manual",
+                "confidence": 1.0,
+            },
+            {
+                "fact_id": "m3",
+                "kind": "match_result",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "home_team": "Brazil",
+                "away_team": "Cameroon",
+                "kickoff_at": "2026-06-20T18:00:00+00:00",
+                "source": "manual",
+                "confidence": 1.0,
+            },
+        ]
+
+        bundle = signals.build_sports_signals(
+            "Will Brazil reach the semifinals of the 2026 FIFA World Cup?",
+            source,
+            facts,
+        )
+
+        fatigue = bundle["signals"].get("schedule_fatigue_signal")
+        self.assertIsNotNone(fatigue)
+        self.assertEqual(fatigue["level"], "high")
+        self.assertEqual(fatigue["matches_in_window"], 3)
+        self.assertEqual(fatigue["team"], "Brazil")
+
+    def test_schedule_fatigue_signal_absent_when_one_match(self):
+        source = {
+            "type": "sports_event",
+            "category": "team_progression",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "source_id": "world-cup-2026:brazil-semifinal",
+            "entities": ["Brazil", WORLD_CUP_TOURNAMENT],
+        }
+        facts = [{
+            "fact_id": "m1",
+            "kind": "match_result",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "home_team": "Brazil",
+            "away_team": "Serbia",
+            "kickoff_at": "2026-06-15T18:00:00+00:00",
+            "source": "manual",
+            "confidence": 1.0,
+        }]
+
+        bundle = signals.build_sports_signals(
+            "Will Brazil reach the semifinals of the 2026 FIFA World Cup?",
+            source,
+            facts,
+        )
+
+        self.assertNotIn("schedule_fatigue_signal", bundle["signals"])
+
+    def test_lineup_signal_detects_unavailable_starters(self):
+        source = {
+            "type": "sports_event",
+            "category": "team_progression",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "source_id": "world-cup-2026:england-semifinal",
+            "entities": ["England", WORLD_CUP_TOURNAMENT],
+        }
+        facts = [
+            {
+                "fact_id": "l1",
+                "kind": "lineup",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "team": "England",
+                "player": "Kane",
+                "status": "starting",
+                "source": "manual",
+                "confidence": 1.0,
+            },
+            {
+                "fact_id": "l2",
+                "kind": "lineup",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "team": "England",
+                "player": "Bellingham",
+                "status": "starting",
+                "source": "manual",
+                "confidence": 1.0,
+            },
+            {
+                "fact_id": "i1",
+                "kind": "injury",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "team": "England",
+                "player": "Kane",
+                "status": "injured",
+                "source": "manual",
+                "confidence": 0.9,
+            },
+            {
+                "fact_id": "s1",
+                "kind": "suspension",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "team": "England",
+                "player": "Bellingham",
+                "status": "suspended",
+                "source": "manual",
+                "confidence": 1.0,
+            },
+        ]
+
+        bundle = signals.build_sports_signals(
+            "Will England reach the semifinals of the 2026 FIFA World Cup?",
+            source,
+            facts,
+        )
+
+        lineup = bundle["signals"].get("lineup_signal")
+        self.assertIsNotNone(lineup)
+        self.assertEqual(lineup["level"], "high")
+        self.assertEqual(lineup["direction"], "supports_no")
+        self.assertEqual(lineup["unavailable_starters"], 2)
+
+    def test_lineup_signal_absent_when_no_starters_unavailable(self):
+        source = {
+            "type": "sports_event",
+            "category": "team_progression",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "source_id": "world-cup-2026:england-semifinal",
+            "entities": ["England", WORLD_CUP_TOURNAMENT],
+        }
+        facts = [
+            {
+                "fact_id": "l1",
+                "kind": "lineup",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "team": "England",
+                "player": "Kane",
+                "status": "starting",
+                "source": "manual",
+                "confidence": 1.0,
+            },
+        ]
+
+        bundle = signals.build_sports_signals(
+            "Will England reach the semifinals of the 2026 FIFA World Cup?",
+            source,
+            facts,
+        )
+
+        self.assertNotIn("lineup_signal", bundle["signals"])
+
+    def test_suspension_signal_multiple_players(self):
+        source = {
+            "type": "sports_event",
+            "category": "team_progression",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "source_id": "world-cup-2026:argentina-semifinal",
+            "entities": ["Argentina", WORLD_CUP_TOURNAMENT],
+        }
+        facts = [
+            {
+                "fact_id": "sus1",
+                "kind": "suspension",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "team": "Argentina",
+                "player": "Di Maria",
+                "status": "suspended",
+                "source": "manual",
+                "confidence": 1.0,
+            },
+            {
+                "fact_id": "sus2",
+                "kind": "suspension",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "team": "Argentina",
+                "player": "De Paul",
+                "status": "suspended",
+                "source": "manual",
+                "confidence": 1.0,
+            },
+        ]
+
+        bundle = signals.build_sports_signals(
+            "Will Argentina reach the semifinals of the 2026 FIFA World Cup?",
+            source,
+            facts,
+        )
+
+        suspension = bundle["signals"].get("suspension_signal")
+        self.assertIsNotNone(suspension)
+        self.assertEqual(suspension["level"], "high")
+        self.assertEqual(suspension["direction"], "supports_no")
+        self.assertEqual(suspension["suspended_count"], 2)
+        self.assertIn("Di Maria", suspension["summary"])
+
+    def test_suspension_signal_absent_when_no_suspensions(self):
+        source = {
+            "type": "sports_event",
+            "category": "team_progression",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "source_id": "world-cup-2026:argentina-semifinal",
+            "entities": ["Argentina", WORLD_CUP_TOURNAMENT],
+        }
+        facts = [{
+            "fact_id": "q1",
+            "kind": "qualification",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "team": "Argentina",
+            "status": "qualified",
+            "source": "manual",
+            "confidence": 1.0,
+        }]
+
+        bundle = signals.build_sports_signals(
+            "Will Argentina reach the semifinals of the 2026 FIFA World Cup?",
+            source,
+            facts,
+        )
+
+        self.assertNotIn("suspension_signal", bundle["signals"])
+
+
 if __name__ == "__main__":
     unittest.main()

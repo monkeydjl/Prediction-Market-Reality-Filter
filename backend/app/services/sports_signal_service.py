@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT
@@ -46,6 +47,18 @@ def build_sports_signals(
     player_award = _player_award_signal(event_question, relevant)
     if player_award:
         signals["player_award_signal"] = player_award
+
+    schedule_fatigue = _schedule_fatigue_signal(event_question, source, relevant)
+    if schedule_fatigue:
+        signals["schedule_fatigue_signal"] = schedule_fatigue
+
+    lineup = _lineup_signal(event_question, source, relevant)
+    if lineup:
+        signals["lineup_signal"] = lineup
+
+    suspension = _suspension_signal(event_question, source, relevant)
+    if suspension:
+        signals["suspension_signal"] = suspension
 
     return {
         "tournament": tournament,
@@ -278,6 +291,123 @@ def _player_award_signal(
     }
 
 
+def _schedule_fatigue_signal(
+    event_question: str,
+    source: dict[str, Any],
+    facts: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    team = _primary_team(source)
+    if not team:
+        return None
+    team_norm = _norm(team)
+    match_facts = [
+        fact for fact in facts
+        if fact.get("kind") == "match_result"
+        and (
+            _norm(fact.get("home_team", "")) == team_norm
+            or _norm(fact.get("away_team", "")) == team_norm
+            or _norm(fact.get("team", "")) == team_norm
+        )
+        and fact.get("kickoff_at")
+    ]
+    if not match_facts:
+        return None
+    now_str = max(fact.get("kickoff_at", "") for fact in match_facts)
+    try:
+        latest_dt = datetime.fromisoformat(str(now_str).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    recent = []
+    for fact in match_facts:
+        try:
+            ko = datetime.fromisoformat(str(fact["kickoff_at"]).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            continue
+        days_diff = (latest_dt - ko).total_seconds() / 86400
+        if days_diff <= 5:
+            recent.append(fact)
+    if len(recent) < 2:
+        return None
+    level = "high" if len(recent) >= 3 else "medium"
+    return {
+        "level": level,
+        "direction": "neutral",
+        "summary": f"{team} played {len(recent)} match(es) within 5 days of their latest fixture.",
+        "matches_in_window": len(recent),
+        "team": team,
+        "facts": [fact["fact_id"] for fact in recent if fact.get("fact_id")],
+    }
+
+
+def _lineup_signal(
+    event_question: str,
+    source: dict[str, Any],
+    facts: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    team = _primary_team(source)
+    if not team:
+        return None
+    team_norm = _norm(team)
+    starters = [
+        fact for fact in facts
+        if fact.get("kind") == "lineup"
+        and _norm(fact.get("team", "")) == team_norm
+        and str(fact.get("status", "")).lower() in {"starting", "starter"}
+    ]
+    if not starters:
+        return None
+    starter_names = {_norm(fact.get("player", "")) for fact in starters if fact.get("player")}
+    unavailable = [
+        fact for fact in facts
+        if fact.get("kind") in {"injury", "suspension"}
+        and _norm(fact.get("team", "")) == team_norm
+        and _norm(fact.get("player", "")) in starter_names
+        and str(fact.get("status", "")).lower() in {"out", "injured", "suspended", "banned"}
+    ]
+    if not unavailable:
+        return None
+    level = "high" if len(unavailable) >= 2 else "medium"
+    direction = "supports_no" if _is_yes_team_progression(event_question, source) else "neutral"
+    names = [fact.get("player", "") for fact in unavailable[:4]]
+    return {
+        "level": level,
+        "direction": direction,
+        "summary": f"{len(unavailable)} starter(s) unavailable for {team}: {', '.join(names)}.",
+        "unavailable_starters": len(unavailable),
+        "team": team,
+        "facts": [fact["fact_id"] for fact in unavailable if fact.get("fact_id")],
+    }
+
+
+def _suspension_signal(
+    event_question: str,
+    source: dict[str, Any],
+    facts: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    team = _primary_team(source)
+    if not team:
+        return None
+    team_norm = _norm(team)
+    suspension_facts = [
+        fact for fact in facts
+        if fact.get("kind") == "suspension"
+        and _norm(fact.get("team", "")) == team_norm
+    ]
+    if not suspension_facts:
+        return None
+    level = "high" if len(suspension_facts) >= 2 else "medium"
+    direction = "supports_no" if _is_yes_team_progression(event_question, source) else "neutral"
+    names = [fact.get("player", "") for fact in suspension_facts[:4] if fact.get("player")]
+    return {
+        "level": level,
+        "direction": direction,
+        "summary": f"{len(suspension_facts)} player(s) suspended for {team}: {', '.join(names)}.",
+        "suspended_count": len(suspension_facts),
+        "team": team,
+        "facts": [fact["fact_id"] for fact in suspension_facts if fact.get("fact_id")],
+    }
+
+
 def _fact_summary(fact: dict[str, Any]) -> dict[str, Any]:
     keep = (
         "fact_id",
@@ -316,6 +446,14 @@ def _fact_tokens(fact: dict[str, Any]) -> list[str]:
         _norm(fact.get("away_team", "")),
         _norm(fact.get("winner", "")),
     ]
+
+
+def _primary_team(source: dict[str, Any]) -> str:
+    for entity in source.get("entities") or []:
+        text = str(entity or "").strip()
+        if text and text != WORLD_CUP_TOURNAMENT:
+            return text
+    return ""
 
 
 def _is_yes_team_progression(event_question: str, source: dict[str, Any]) -> bool:

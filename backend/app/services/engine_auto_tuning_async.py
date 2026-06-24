@@ -76,7 +76,7 @@ async def run_async_optimization(engine_name: str, task_id: str) -> dict[str, An
             )
 
             try:
-                # Run AI optimization with timeout
+                # Run AI optimization with longer timeout
                 optimization_result = await asyncio.wait_for(
                     optimize_prediction_with_ai(
                         home_team=fixture.home_team,
@@ -97,7 +97,7 @@ async def run_async_optimization(engine_name: str, task_id: str) -> dict[str, An
                         prediction_method=prediction.prediction_method,
                         match_context=None
                     ),
-                    timeout=30.0  # 30 second timeout per match
+                    timeout=60.0  # Increase to 60 seconds per match
                 )
 
                 results["total_processed"] += 1
@@ -160,7 +160,7 @@ async def run_async_optimization(engine_name: str, task_id: str) -> dict[str, An
                     )
 
             except asyncio.TimeoutError:
-                error_msg = "AI优化超时(30秒)"
+                error_msg = "AI优化超时(60秒)"
                 results["errors"].append({
                     "match_id": fixture.match_id,
                     "match": match_name,

@@ -23,6 +23,8 @@ export interface MatchFixture {
   stage: string;
   group?: string;
   status: string;
+  home_score?: number;
+  away_score?: number;
 }
 
 export interface MatchPrediction {
@@ -52,6 +54,20 @@ export interface PredictionHistoryEntry {
   outcome_probabilities: OutcomeProbabilities;
   confidence: number;
   trigger: string;
+  prediction_method?: string;
+}
+
+export interface PredictionTriggerResult {
+  status?: string;
+  match_id?: string;
+  predicted_score?: PredictedScore;
+  outcome_probabilities?: OutcomeProbabilities;
+  confidence?: number;
+  prediction_method?: string;
+  elo_ratings?: MatchPrediction["elo_ratings"];
+  has_betting_odds?: boolean;
+  engine_used?: MatchPrediction["engine_used"];
+  error?: string;
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
@@ -63,11 +79,14 @@ export async function fetchMatches(params?: {
   stage?: string;
   status?: string;
   limit?: number;
-}): Promise<MatchFixture[]> {
+}): Promise<MatchWithPrediction[]> {
   const query = new URLSearchParams();
   if (params?.stage) query.set('stage', params.stage);
   if (params?.status) query.set('status', params.status);
   if (params?.limit) query.set('limit', params.limit.toString());
+
+  // Add cache-busting timestamp
+  query.set('_t', Date.now().toString());
 
   const response = await fetch(
     `${API_BASE}/api/world-cup/predictions/matches?${query}`,
@@ -120,7 +139,7 @@ export async function fetchPredictionHistory(matchId: string): Promise<Predictio
  */
 export async function fetchTodayMatches(): Promise<MatchWithPrediction[]> {
   const response = await fetch(
-    `${API_BASE}/api/world-cup/predictions/today`,
+    `${API_BASE}/api/world-cup/predictions/today?_t=${Date.now()}`,
     { cache: 'no-store' }
   );
 
@@ -138,7 +157,7 @@ export async function fetchTodayMatches(): Promise<MatchWithPrediction[]> {
 export async function triggerPrediction(
   matchId: string,
   engine?: "elo_odds" | "hybrid" | "auto"
-): Promise<any> {
+): Promise<PredictionTriggerResult> {
   const response = await fetch(
     `${API_BASE}/api/world-cup/predictions/matches/${matchId}/predict`,
     {
@@ -169,14 +188,56 @@ export async function compareEngines(matchId: string): Promise<{
       triggerPrediction(matchId, "hybrid")
     ]);
 
+    // Convert flat API response to MatchPrediction format
+    const toMatchPrediction = (result: PredictionTriggerResult): MatchPrediction | undefined => {
+      if (
+        result.status === "error" ||
+        !result.predicted_score ||
+        !result.outcome_probabilities ||
+        result.confidence == null
+      ) {
+        return undefined;
+      }
+
+      return {
+        predicted_score: result.predicted_score,
+        outcome_probabilities: result.outcome_probabilities,
+        confidence: result.confidence,
+        prediction_method: result.prediction_method,
+        elo_ratings: result.elo_ratings,
+        has_betting_odds: result.has_betting_odds,
+        engine_used: result.engine_used
+      };
+    };
+
     return {
-      elo_odds: eloResult.prediction,
-      hybrid: hybridResult.prediction
+      elo_odds: toMatchPrediction(eloResult),
+      hybrid: toMatchPrediction(hybridResult)
     };
   } catch (error) {
     console.error("Failed to compare engines:", error);
     return {};
   }
+}
+
+/**
+ * Get AI analysis of a match prediction
+ */
+export async function analyzePrediction(matchId: string): Promise<string> {
+  const response = await fetch(
+    `${API_BASE}/api/world-cup/predictions/matches/${matchId}/analyze`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to analyze prediction: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  return data.analysis || "分析结果为空";
 }
 
 /**

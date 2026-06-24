@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
@@ -9,12 +9,23 @@ import {
   Trophy,
   Calendar,
   Filter,
+  X,
 } from "lucide-react";
 import { AppNav } from "@/components/app-nav";
 import { MatchPredictionCard } from "@/components/world-cup/match-prediction-card";
+import { GroupStandingsTable } from "@/components/world-cup/group-standings-table";
+import { QualificationTable } from "@/components/world-cup/qualification-table";
+import { KnockoutView } from "@/components/world-cup/knockout-view";
+import { EngineComparisonView } from "@/components/world-cup/engine-comparison-view";
+import { EngineAutoTuneDashboard } from "@/components/world-cup/engine-auto-tune-dashboard";
 import { SectionErrorBoundary } from "@/components/section-error-boundary";
-import { fetchMatches, fetchTodayMatches, syncFixtures, type MatchFixture } from "@/lib/world-cup-predictions";
+import { fetchMatches, fetchTodayMatches, syncFixtures, type MatchWithPrediction } from "@/lib/world-cup-predictions";
+import { calculateGroupStandings } from "@/lib/group-standings";
+import { calculateQualificationProbabilities } from "@/lib/qualification-probability";
+import { translateTeamName } from "@/lib/team-names-zh";
 import { cn } from "@/lib/utils";
+
+type TabView = "matches" | "standings" | "qualification" | "knockout" | "engine-stats" | "auto-tune";
 
 type StageFilter = "all" | "GROUP_STAGE" | "KNOCKOUT";
 type TimeFilter = "all" | "today" | "upcoming";
@@ -31,36 +42,45 @@ const TIME_LABELS: Record<string, string> = {
   upcoming: "未来比赛",
 };
 
-interface MatchWithPrediction {
-  match: MatchFixture;
-  prediction?: any;
-}
-
 export default function WorldCupPage() {
   const [matches, setMatches] = useState<MatchWithPrediction[]>([]);
+  const [allMatches, setAllMatches] = useState<MatchWithPrediction[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stageFilter, setStageFilter] = useState<StageFilter>("all");
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
+  const [teamFilter, setTeamFilter] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<TabView>("matches");
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const loadMatches = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
 
-      let data: any[];
+      let data: MatchWithPrediction[];
 
       if (timeFilter === "today") {
         data = await fetchTodayMatches();
       } else {
-        const matchData = await fetchMatches({
+        data = await fetchMatches({
           status: timeFilter === "upcoming" ? "scheduled" : undefined,
           limit: 100,
         });
-        // Convert to MatchWithPrediction format
-        data = matchData.map(m => ({ match: m }));
       }
+
+      console.log('[Page] loadMatches fetched', data.length, 'matches');
+      const testMatch = data.find(m => m.match.match_id === 'fd-537412');
+      if (testMatch) {
+        console.log('[Page] Test match fd-537412 data:', {
+          confidence: testMatch.prediction?.confidence,
+          method: testMatch.prediction?.prediction_method
+        });
+      }
+
+      // Store all matches for standings calculation
+      setAllMatches(data);
 
       // Apply stage filter
       if (stageFilter !== "all") {
@@ -70,9 +90,24 @@ export default function WorldCupPage() {
               m.match.stage !== "GROUP_STAGE" &&
               m.match.stage !== "group_stage"
           );
+        } else if (stageFilter === "GROUP_STAGE") {
+          data = data.filter(
+            (m) =>
+              m.match.stage === "GROUP_STAGE" ||
+              m.match.stage === "group_stage"
+          );
         } else {
           data = data.filter((m) => m.match.stage === stageFilter);
         }
+      }
+
+      // Apply team filter
+      if (teamFilter) {
+        data = data.filter(
+          (m) =>
+            m.match.home_team === teamFilter ||
+            m.match.away_team === teamFilter
+        );
       }
 
       setMatches(data);
@@ -81,7 +116,7 @@ export default function WorldCupPage() {
     } finally {
       setLoading(false);
     }
-  }, [stageFilter, timeFilter]);
+  }, [stageFilter, timeFilter, teamFilter]);
 
   const handleSync = useCallback(async () => {
     try {
@@ -96,20 +131,48 @@ export default function WorldCupPage() {
   }, [loadMatches]);
 
   useEffect(() => {
-    loadMatches();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadMatches();
   }, [loadMatches]);
 
-  const groupedByDate = matches.reduce((acc, m) => {
-    const date = new Date(m.match.kickoff_utc).toLocaleDateString("zh-CN", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-      weekday: "long",
+  const groupedByDate = useMemo(() => {
+    const grouped = matches.reduce((acc, m) => {
+      const date = new Date(m.match.kickoff_utc).toLocaleDateString("zh-CN", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        weekday: "long",
+      });
+      if (!acc[date]) acc[date] = [];
+      acc[date].push(m);
+      return acc;
+    }, {} as Record<string, MatchWithPrediction[]>);
+
+    // Sort matches within each date: in_play/scheduled first, finished last
+    Object.keys(grouped).forEach((date) => {
+      grouped[date].sort((a, b) => {
+        const statusOrder = { in_play: 0, scheduled: 1, finished: 2 };
+        const aOrder = statusOrder[a.match.status as keyof typeof statusOrder] ?? 3;
+        const bOrder = statusOrder[b.match.status as keyof typeof statusOrder] ?? 3;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        // Same status, sort by kickoff time
+        return new Date(a.match.kickoff_utc).getTime() - new Date(b.match.kickoff_utc).getTime();
+      });
     });
-    if (!acc[date]) acc[date] = [];
-    acc[date].push(m);
-    return acc;
-  }, {} as Record<string, MatchWithPrediction[]>);
+
+    return grouped;
+  }, [matches]);
+
+  const groupStandings = useMemo(() => {
+    return calculateGroupStandings(allMatches.map(m => m.match));
+  }, [allMatches]);
+
+  const qualificationProbabilities = useMemo(() => {
+    return calculateQualificationProbabilities(
+      allMatches.map(m => m.match),
+      groupStandings
+    );
+  }, [allMatches, groupStandings]);
 
   return (
     <>
@@ -139,8 +202,79 @@ export default function WorldCupPage() {
           </button>
         </div>
 
-        {/* Filters */}
-        <div className="mb-6 flex flex-wrap items-center gap-3">
+        {/* Tab Navigation */}
+        <div className="mb-6 flex gap-1 rounded-lg border bg-secondary p-1">
+          <button
+            onClick={() => setActiveTab("matches")}
+            className={cn(
+              "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+              activeTab === "matches"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            比赛赛程
+          </button>
+          <button
+            onClick={() => setActiveTab("standings")}
+            className={cn(
+              "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+              activeTab === "standings"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            小组积分榜
+          </button>
+          <button
+            onClick={() => setActiveTab("qualification")}
+            className={cn(
+              "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+              activeTab === "qualification"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            出线概率
+          </button>
+          <button
+            onClick={() => setActiveTab("knockout")}
+            className={cn(
+              "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+              activeTab === "knockout"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            淘汰赛
+          </button>
+          <button
+            onClick={() => setActiveTab("engine-stats")}
+            className={cn(
+              "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+              activeTab === "engine-stats"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            引擎对比
+          </button>
+          <button
+            onClick={() => setActiveTab("auto-tune")}
+            className={cn(
+              "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+              activeTab === "auto-tune"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            自动调教
+          </button>
+        </div>
+
+        {/* Filters - only show for matches tab */}
+        {activeTab === "matches" && (
+          <div className="mb-6 flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Filter className="size-4" />
             <span>筛选:</span>
@@ -181,7 +315,23 @@ export default function WorldCupPage() {
               </button>
             ))}
           </div>
+
+          {/* Team Filter Badge */}
+          {teamFilter && (
+            <div className="flex items-center gap-2 rounded-lg border bg-primary/10 px-3 py-1 text-sm">
+              <span className="font-medium text-primary">
+                球队: {translateTeamName(teamFilter)}
+              </span>
+              <button
+                onClick={() => setTeamFilter(null)}
+                className="rounded-sm hover:bg-primary/20 transition-colors"
+              >
+                <X className="size-4 text-primary" />
+              </button>
+            </div>
+          )}
         </div>
+        )}
 
         {/* Loading State */}
         {loading && (
@@ -201,7 +351,7 @@ export default function WorldCupPage() {
         )}
 
         {/* Empty State */}
-        {!loading && !error && matches.length === 0 && (
+        {!loading && !error && activeTab === "matches" && matches.length === 0 && (
           <div className="rounded-lg border border-dashed py-16 text-center">
             <Calendar className="mx-auto size-12 text-muted-foreground opacity-50" />
             <p className="mt-4 text-muted-foreground">
@@ -211,7 +361,7 @@ export default function WorldCupPage() {
         )}
 
         {/* Matches Grouped by Date */}
-        {!loading && !error && matches.length > 0 && (
+        {!loading && !error && activeTab === "matches" && matches.length > 0 && (
           <div className="space-y-8">
             {Object.entries(groupedByDate).map(([date, dateMatches]) => (
               <div key={date}>
@@ -226,8 +376,21 @@ export default function WorldCupPage() {
                   {dateMatches.map((m) => (
                     <SectionErrorBoundary key={m.match.match_id} title="比赛预测卡片">
                       <MatchPredictionCard
+                        key={`${m.match.match_id}-${refreshKey}`}
                         match={m.match}
                         prediction={m.prediction}
+                        onTeamClick={setTeamFilter}
+                        onPredictionUpdated={async () => {
+                          console.log('[Page] onPredictionUpdated called, reloading matches...');
+                          // First reload data
+                          await loadMatches();
+                          console.log('[Page] loadMatches completed, incrementing refreshKey');
+                          // Then force re-render
+                          setRefreshKey(prev => {
+                            console.log('[Page] Incrementing refreshKey from', prev, 'to', prev + 1);
+                            return prev + 1;
+                          });
+                        }}
                       />
                     </SectionErrorBoundary>
                   ))}
@@ -235,6 +398,49 @@ export default function WorldCupPage() {
               </div>
             ))}
           </div>
+        )}
+
+        {/* Group Standings */}
+        {!loading && !error && activeTab === "standings" && (
+          <GroupStandingsTable
+            standings={groupStandings}
+            onTeamClick={(team) => {
+              setTeamFilter(team);
+              setActiveTab("matches");
+            }}
+          />
+        )}
+
+        {/* Qualification Probabilities */}
+        {!loading && !error && activeTab === "qualification" && (
+          <QualificationTable
+            probabilities={qualificationProbabilities}
+            onTeamClick={(team) => {
+              setTeamFilter(team);
+              setActiveTab("matches");
+            }}
+          />
+        )}
+
+        {/* Knockout Stage */}
+        {!loading && !error && activeTab === "knockout" && (
+          <KnockoutView
+            matches={allMatches.map(m => m.match)}
+            onTeamClick={(team) => {
+              setTeamFilter(team);
+              setActiveTab("matches");
+            }}
+          />
+        )}
+
+        {/* Engine Comparison Stats */}
+        {activeTab === "engine-stats" && (
+          <EngineComparisonView />
+        )}
+
+        {/* Auto-Tune Dashboard */}
+        {activeTab === "auto-tune" && (
+          <EngineAutoTuneDashboard />
         )}
 
         {/* Legacy Events Link */}

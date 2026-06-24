@@ -1,15 +1,21 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Trophy, TrendingUp, Clock, AlertCircle, Zap, Brain, GitCompare } from "lucide-react";
+import { Trophy, TrendingUp, Clock, AlertCircle, Zap, Brain, GitCompare, History, Sparkles, type LucideIcon } from "lucide-react";
 import type { MatchFixture, MatchPrediction } from "@/lib/world-cup-predictions";
 import { compareEngines } from "@/lib/world-cup-predictions";
+import { translateTeamName } from "@/lib/team-names-zh";
 import { EngineComparisonCard } from "./engine-comparison-card";
+import { PredictionHistoryCard } from "./prediction-history-card";
+import { PredictionAnalysisCard } from "./prediction-analysis-card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
 interface MatchPredictionCardProps {
   match: MatchFixture;
   prediction?: MatchPrediction;
+  onTeamClick?: (teamName: string) => void;
+  onPredictionUpdated?: () => void;
 }
 
 function formatKickoff(kickoffUtc: string): string {
@@ -44,25 +50,28 @@ function probabilityBar(probability: number): string {
   return `${Math.round(probability * 100)}%`;
 }
 
-function getEngineLabel(prediction?: MatchPrediction): { icon: any; label: string; color: string } | null {
+function getEngineLabel(prediction?: MatchPrediction): { icon: LucideIcon; label: string; color: string } | null {
   if (!prediction) return null;
 
-  const method = prediction.prediction_method;
+  const method = prediction.prediction_method || "";
+  const engine = prediction.engine_used;
   const hasOdds = prediction.has_betting_odds;
-
-  if (method === "elo_odds_fusion" || (hasOdds && method?.includes("elo"))) {
-    return { icon: Zap, label: "Elo+赔率", color: "text-primary" };
-  }
 
   if (method === "elo_only") {
     return { icon: TrendingUp, label: "Elo评级", color: "text-muted-foreground" };
   }
 
+  if (engine === "elo_odds" || method.includes("elo_odds") || (hasOdds && method.includes("elo"))) {
+    return { icon: Zap, label: "Elo+赔率", color: "text-primary" };
+  }
+
   return { icon: Brain, label: "混合引擎", color: "text-muted-foreground" };
 }
 
-export function MatchPredictionCard({ match, prediction }: MatchPredictionCardProps) {
+export function MatchPredictionCard({ match, prediction, onTeamClick, onPredictionUpdated }: MatchPredictionCardProps) {
   const [showComparison, setShowComparison] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [showAnalysis, setShowAnalysis] = useState(false);
   const [isLoadingComparison, setIsLoadingComparison] = useState(false);
   const [comparisonData, setComparisonData] = useState<{
     elo_odds?: MatchPrediction;
@@ -135,21 +144,35 @@ export function MatchPredictionCard({ match, prediction }: MatchPredictionCardPr
             "text-right",
             highestOutcome === "home" && "font-semibold"
           )}>
-            <div className="text-base">{match.home_team}</div>
-            {isPredicted && (
+            <button
+              onClick={() => onTeamClick?.(match.home_team)}
+              className="text-base hover:text-primary hover:underline transition-colors"
+            >
+              {translateTeamName(match.home_team)}
+            </button>
+            {isFinished && match.home_score != null ? (
+              <div className="mt-1 font-mono text-2xl font-bold tabular-nums text-foreground">
+                {match.home_score}
+              </div>
+            ) : isPredicted ? (
               <div className={cn(
                 "mt-1 font-mono text-2xl font-bold tabular-nums",
                 highestOutcome === "home" ? "text-primary" : "text-muted-foreground"
               )}>
-                {prediction.predicted_score.home.toFixed(1)}
+                {Math.round(prediction.predicted_score.home)}
               </div>
-            )}
+            ) : null}
           </div>
 
           {/* VS / Score Separator */}
           <div className="flex flex-col items-center gap-1">
-            {isPredicted ? (
-              <div className="text-sm font-medium text-muted-foreground">vs</div>
+            {isFinished && match.home_score != null ? (
+              <div className="text-sm font-medium text-foreground">-</div>
+            ) : isPredicted ? (
+              <div className="flex flex-col items-center gap-1">
+                <div className="text-xs text-primary/70">预测</div>
+                <div className="text-sm font-medium text-muted-foreground">vs</div>
+              </div>
             ) : (
               <div className="text-xs text-muted-foreground">待预测</div>
             )}
@@ -160,15 +183,24 @@ export function MatchPredictionCard({ match, prediction }: MatchPredictionCardPr
             "text-left",
             highestOutcome === "away" && "font-semibold"
           )}>
-            <div className="text-base">{match.away_team}</div>
-            {isPredicted && (
+            <button
+              onClick={() => onTeamClick?.(match.away_team)}
+              className="text-base hover:text-primary hover:underline transition-colors"
+            >
+              {translateTeamName(match.away_team)}
+            </button>
+            {isFinished && match.away_score != null ? (
+              <div className="mt-1 font-mono text-2xl font-bold tabular-nums text-foreground">
+                {match.away_score}
+              </div>
+            ) : isPredicted ? (
               <div className={cn(
                 "mt-1 font-mono text-2xl font-bold tabular-nums",
                 highestOutcome === "away" ? "text-primary" : "text-muted-foreground"
               )}>
-                {prediction.predicted_score.away.toFixed(1)}
+                {Math.round(prediction.predicted_score.away)}
               </div>
-            )}
+            ) : null}
           </div>
         </div>
 
@@ -237,7 +269,7 @@ export function MatchPredictionCard({ match, prediction }: MatchPredictionCardPr
             </div>
 
             {/* Engine Badge */}
-            {(() => {
+            {isPredicted && prediction && (() => {
               const engineInfo = getEngineLabel(prediction);
               if (!engineInfo) return null;
               const Icon = engineInfo.icon;
@@ -278,33 +310,78 @@ export function MatchPredictionCard({ match, prediction }: MatchPredictionCardPr
           </div>
         )}
 
-        {/* Engine Comparison Button */}
+        {/* Action Buttons */}
         {isPredicted && (
-          <div className="mt-4">
+          <div className="mt-4 grid grid-cols-3 gap-2">
             <button
               onClick={handleCompare}
-              className="w-full rounded-md border bg-secondary/50 px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              className="rounded-md border bg-secondary/50 px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
             >
               <div className="flex items-center justify-center gap-2">
                 <GitCompare className="size-3.5" />
-                <span>{showComparison ? "隐藏引擎对比" : "显示引擎对比"}</span>
+                <span>引擎对比</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setShowHistory(true)}
+              className="rounded-md border bg-secondary/50 px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+            >
+              <div className="flex items-center justify-center gap-2">
+                <History className="size-3.5" />
+                <span>预测历史</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setShowAnalysis(true)}
+              className="rounded-md border bg-secondary/50 px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+            >
+              <div className="flex items-center justify-center gap-2">
+                <Sparkles className="size-3.5" />
+                <span>AI分析</span>
               </div>
             </button>
           </div>
         )}
-
-        {/* Engine Comparison View */}
-        {showComparison && (
-          <div className="mt-4">
-            <EngineComparisonCard
-              match={match}
-              eloOddsPrediction={comparisonData.elo_odds}
-              hybridPrediction={comparisonData.hybrid}
-              isLoading={isLoadingComparison}
-            />
-          </div>
-        )}
       </div>
+
+      {/* Engine Comparison Dialog */}
+      <Dialog open={showComparison} onOpenChange={setShowComparison}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>引擎对比分析</DialogTitle>
+          </DialogHeader>
+          <EngineComparisonCard
+            match={match}
+            eloOddsPrediction={comparisonData.elo_odds}
+            hybridPrediction={comparisonData.hybrid}
+            isLoading={isLoadingComparison}
+            onApplyPrediction={() => {
+              onPredictionUpdated?.();
+              setShowComparison(false);
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+
+      {/* Prediction History Dialog */}
+      <Dialog open={showHistory} onOpenChange={setShowHistory}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>预测历史记录</DialogTitle>
+          </DialogHeader>
+          <PredictionHistoryCard match={match} />
+        </DialogContent>
+      </Dialog>
+
+      {/* AI Analysis Dialog */}
+      <Dialog open={showAnalysis} onOpenChange={setShowAnalysis}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>AI 预测分析</DialogTitle>
+          </DialogHeader>
+          {prediction && <PredictionAnalysisCard match={match} prediction={prediction} />}
+        </DialogContent>
+      </Dialog>
 
       {/* Venue */}
       <div className="border-t bg-secondary/30 px-4 py-2 text-xs text-muted-foreground">

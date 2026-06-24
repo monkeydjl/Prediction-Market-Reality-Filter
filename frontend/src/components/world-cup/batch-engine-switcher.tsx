@@ -15,12 +15,18 @@ interface SwitchResult {
   engine?: string;
 }
 
-export function BatchEngineSwitcher() {
+interface BatchEngineSwitcherProps {
+  onCompleted?: () => void | Promise<void>;
+}
+
+export function BatchEngineSwitcher({ onCompleted }: BatchEngineSwitcherProps) {
   const [switching, setSwitching] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<SwitchResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleSwitch = async (engine: string) => {
+    if (switching) return;
+
     setSwitching(engine);
     setError(null);
     setLastResult(null);
@@ -66,11 +72,10 @@ export function BatchEngineSwitcher() {
       const data = await response.json();
       setLastResult(data);
 
-      // Refresh the page after 2 seconds to show updated predictions
       if (data.succeeded > 0) {
-        setTimeout(() => {
-          window.location.reload();
-        }, 2000);
+        void Promise.resolve(onCompleted?.()).catch((refreshError) => {
+          console.error("Failed to refresh predictions after batch switch:", refreshError);
+        });
       }
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
@@ -198,7 +203,7 @@ export function BatchEngineSwitcher() {
               </div>
               {lastResult.succeeded > 0 && (
                 <p className="text-xs text-muted-foreground">
-                  页面将在 2 秒后自动刷新...
+                  预测列表正在后台刷新
                 </p>
               )}
             </div>

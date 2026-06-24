@@ -1,13 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Trophy, TrendingUp, Clock, AlertCircle, Zap, Brain, GitCompare, History, Sparkles, type LucideIcon } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
+import { Trophy, TrendingUp, Clock, AlertCircle, Zap, Brain, GitCompare, History, Sparkles, Loader2, type LucideIcon } from "lucide-react";
 import type { MatchFixture, MatchPrediction } from "@/lib/world-cup-predictions";
 import { compareEngines } from "@/lib/world-cup-predictions";
 import { translateTeamName } from "@/lib/team-names-zh";
-import { EngineComparisonCard } from "./engine-comparison-card";
-import { PredictionHistoryCard } from "./prediction-history-card";
-import { PredictionAnalysisCard } from "./prediction-analysis-card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
@@ -68,6 +66,28 @@ function getEngineLabel(prediction?: MatchPrediction): { icon: LucideIcon; label
   return { icon: Brain, label: "混合引擎", color: "text-muted-foreground" };
 }
 
+function DialogLoading({ label }: { label: string }) {
+  return (
+    <div className="flex items-center justify-center rounded-lg border bg-card p-6 text-sm text-muted-foreground">
+      <Loader2 className="mr-2 size-4 animate-spin" />
+      {label}
+    </div>
+  );
+}
+
+const EngineComparisonCard = dynamic(
+  () => import("./engine-comparison-card").then((mod) => mod.EngineComparisonCard),
+  { loading: () => <DialogLoading label="加载引擎对比..." /> }
+);
+const PredictionHistoryCard = dynamic(
+  () => import("./prediction-history-card").then((mod) => mod.PredictionHistoryCard),
+  { loading: () => <DialogLoading label="加载预测历史..." /> }
+);
+const PredictionAnalysisCard = dynamic(
+  () => import("./prediction-analysis-card").then((mod) => mod.PredictionAnalysisCard),
+  { loading: () => <DialogLoading label="加载 AI 分析..." /> }
+);
+
 export function MatchPredictionCard({ match, prediction, onTeamClick, onPredictionUpdated }: MatchPredictionCardProps) {
   const [showComparison, setShowComparison] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -79,15 +99,19 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
     hybrid?: MatchPrediction;
   }>({});
 
-  const handleCompare = async () => {
+  const hasComparisonData = comparisonData.elo_odds != null || comparisonData.hybrid != null;
+
+  const handleCompare = useCallback(async () => {
     if (showComparison) {
       setShowComparison(false);
       return;
     }
 
+    setShowComparison(true);
+    if (hasComparisonData || isLoadingComparison) return;
+
     setIsLoadingComparison(true);
     setComparisonError(null);
-    setShowComparison(true);
 
     try {
       const data = await compareEngines(match.match_id);
@@ -99,7 +123,7 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
     } finally {
       setIsLoadingComparison(false);
     }
-  };
+  }, [hasComparisonData, isLoadingComparison, match.match_id, showComparison]);
 
   const isPredicted = prediction != null;
   const isFinished = match.status === "finished";
@@ -336,11 +360,16 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
           <div className="mt-4 grid grid-cols-3 gap-2">
             <button
               onClick={handleCompare}
-              className="rounded-md border bg-secondary/50 px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              disabled={isLoadingComparison}
+              className="rounded-md border bg-secondary/50 px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:cursor-wait disabled:opacity-70"
             >
               <div className="flex items-center justify-center gap-2">
-                <GitCompare className="size-3.5" />
-                <span>引擎对比</span>
+                {isLoadingComparison ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <GitCompare className="size-3.5" />
+                )}
+                <span>{isLoadingComparison ? "加载中" : "引擎对比"}</span>
               </div>
             </button>
             <button

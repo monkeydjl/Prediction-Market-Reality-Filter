@@ -53,7 +53,7 @@ if /i "%MODE%"=="build" (
     echo       out\ exists - skipping build. Use "start.bat build" to force a rebuild.
 )
 if "!DO_BUILD!"=="1" (
-    pushd "%FRONTEND%" & call npm run build || (popd & goto :fail)
+    pushd "%FRONTEND%" & set "NEXT_PUBLIC_API_BASE=http://localhost:8000/api" & call npm run build || (popd & goto :fail)
     popd
 )
 
@@ -66,7 +66,7 @@ echo   Backend API   : http://localhost:8000
 echo   API docs      : http://localhost:8000/docs
 echo.
 start "PMRF backend :8000" cmd /k "cd /d "%BACKEND%" && python run.py"
-start "PMRF frontend :3000" cmd /k "cd /d "%FRONTEND%" && npx serve out -l 3000"
+start "PMRF frontend :3000" cmd /k "cd /d "%FRONTEND%\out" && python -m http.server 3000 --bind localhost"
 REM open the browser once both servers are up
 start "" /b powershell -NoProfile -Command "Start-Sleep -Seconds 6; Start-Process 'http://localhost:3000'"
 goto :eof

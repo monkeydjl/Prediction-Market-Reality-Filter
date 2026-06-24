@@ -35,10 +35,11 @@ function formatTimestamp(isoString: string): string {
 export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysisCardProps) {
   const [analysis, setAnalysis] = useState<string | null>(null);
   const [history, setHistory] = useState<AnalysisHistoryEntry[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [activeAction, setActiveAction] = useState<"analyze" | "optimize" | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [cached, setCached] = useState(false);
+  const loading = activeAction != null;
 
   // Load analysis history on mount
   useEffect(() => {
@@ -71,7 +72,7 @@ export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysis
   }, [match.match_id]);
 
   const handleAnalyze = async () => {
-    setLoading(true);
+    setActiveAction("analyze");
     setError(null);
 
     try {
@@ -99,12 +100,12 @@ export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysis
         setError(errorMessage);
       }
     } finally {
-      setLoading(false);
+      setActiveAction(null);
     }
   };
 
   const handleOptimize = async () => {
-    setLoading(true);
+    setActiveAction("optimize");
     setError(null);
 
     try {
@@ -180,7 +181,7 @@ export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysis
         setError(`AI优化失败: ${errorMessage}`);
       }
     } finally {
-      setLoading(false);
+      setActiveAction(null);
     }
   };
 
@@ -203,16 +204,22 @@ export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysis
             <button
               onClick={handleAnalyze}
               disabled={loading}
-              className="rounded-md border bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
+              className="rounded-md border bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20 disabled:cursor-wait disabled:opacity-50"
             >
-              {loading ? "处理中..." : "AI分析"}
+              <span className="inline-flex items-center gap-1.5">
+                {activeAction === "analyze" && <Loader2 className="size-3 animate-spin" />}
+                {activeAction === "analyze" ? "分析中" : "AI分析"}
+              </span>
             </button>
             <button
               onClick={handleOptimize}
               disabled={loading}
-              className="rounded-md border bg-secondary px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary/80 disabled:opacity-50"
+              className="rounded-md border bg-secondary px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary/80 disabled:cursor-wait disabled:opacity-50"
             >
-              AI优化
+              <span className="inline-flex items-center gap-1.5">
+                {activeAction === "optimize" && <Loader2 className="size-3 animate-spin" />}
+                {activeAction === "optimize" ? "优化中" : "AI优化"}
+              </span>
             </button>
           </div>
         </div>
@@ -288,7 +295,7 @@ export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysis
             <div className="py-8 text-center">
               <Brain className="mx-auto size-12 text-muted-foreground opacity-50" />
               <p className="mt-3 text-sm text-muted-foreground">
-                点击"AI分析"查看预测评估，或点击"AI优化"获取改进建议
+                点击 AI分析 查看预测评估，或点击 AI优化 获取改进建议
               </p>
             </div>
           )}

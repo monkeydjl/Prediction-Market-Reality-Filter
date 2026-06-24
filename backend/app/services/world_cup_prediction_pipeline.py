@@ -10,7 +10,7 @@ This module ties together all prediction components:
 7. Record prediction history
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
 import logging
 
@@ -46,6 +46,20 @@ logger = logging.getLogger(__name__)
 # Prediction engine selection
 PredictionEngine = Literal["elo_odds", "hybrid", "auto"]
 DEFAULT_ENGINE: PredictionEngine = "auto"  # Auto-select based on data availability
+
+
+def _utc_naive(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _has_match_started(match: MatchFixture, now: datetime | None = None) -> bool:
+    kickoff = getattr(match, "kickoff_utc", None)
+    if kickoff is None:
+        return False
+    current = _utc_naive(now or datetime.now(timezone.utc))
+    return _utc_naive(kickoff) <= current
 
 
 def fetch_team_stats(team_name: str, team_id: int | None = None) -> dict[str, Any]:
@@ -296,11 +310,13 @@ async def run_prediction_pipeline(
         if not match:
             return {"status": "error", "error": "Match not found"}
 
-        # Don't predict matches that have already started or finished
+        # Don't predict matches that have already started or finished.
+        # Status can lag behind kickoff when an upstream fixture sync is late,
+        # so kickoff time is the durable freeze boundary for pre-match scores.
         if match.status == "finished":
             return {"status": "skipped", "reason": "Match already finished"}
-        if match.status == "in_play":
-            return {"status": "skipped", "reason": "Match already started (in play)"}
+        if match.status == "in_play" or _has_match_started(match):
+            return {"status": "skipped", "reason": "Match already started"}
 
         # Step 2: Fetch Elo ratings and betting odds
         home_elo_data = await get_elo_rating(match.home_team)
@@ -701,7 +717,8 @@ async def batch_predict_matches(
         else:
             # Predict all remaining matches (only scheduled, not in_play/finished)
             matches = session.query(MatchFixture).filter(
-                MatchFixture.status == "scheduled"
+                MatchFixture.status == "scheduled",
+                MatchFixture.kickoff_utc > _utc_naive(datetime.now(timezone.utc)),
             ).order_by(MatchFixture.kickoff_utc).all()
 
         results = {

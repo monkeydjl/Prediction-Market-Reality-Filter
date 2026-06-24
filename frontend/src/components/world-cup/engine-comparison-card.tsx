@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Zap, Brain, TrendingUp, AlertCircle, ChevronDown, ChevronUp } from "lucide-react";
+import { Zap, Brain, AlertCircle, Check, type LucideIcon } from "lucide-react";
 import type { MatchFixture, MatchPrediction } from "@/lib/world-cup-predictions";
+import { triggerPrediction } from "@/lib/world-cup-predictions";
 import { cn } from "@/lib/utils";
 
 interface EngineComparisonCardProps {
@@ -10,6 +11,7 @@ interface EngineComparisonCardProps {
   eloOddsPrediction?: MatchPrediction;
   hybridPrediction?: MatchPrediction;
   isLoading?: boolean;
+  onApplyPrediction?: () => void;
 }
 
 function probabilityBar(probability: number): string {
@@ -20,13 +22,41 @@ function PredictionColumn({
   label,
   icon: Icon,
   color,
-  prediction
+  prediction,
+  engine,
+  matchId,
+  onApply
 }: {
   label: string;
-  icon: any;
+  icon: LucideIcon;
   color: string;
   prediction?: MatchPrediction;
+  engine: "elo_odds" | "hybrid";
+  matchId: string;
+  onApply?: () => void;
 }) {
+  const [applying, setApplying] = useState(false);
+  const [applied, setApplied] = useState(false);
+
+  const handleApply = async () => {
+    setApplying(true);
+    try {
+      console.log('[EngineCompare] Applying prediction with engine:', engine);
+      await triggerPrediction(matchId, engine);
+      console.log('[EngineCompare] Prediction applied successfully');
+      setApplied(true);
+      setTimeout(() => setApplied(false), 2000);
+
+      // Notify parent to reload
+      console.log('[EngineCompare] Calling onApply callback');
+      onApply?.();
+    } catch (error) {
+      console.error("[EngineCompare] Failed to apply prediction:", error);
+    } finally {
+      setApplying(false);
+    }
+  };
+
   if (!prediction) {
     return (
       <div className="flex-1 rounded-lg border border-dashed bg-secondary/30 p-4 text-center">
@@ -47,7 +77,7 @@ function PredictionColumn({
   })();
 
   return (
-    <div className="flex-1 rounded-lg border bg-card p-4">
+    <div className="flex-1 rounded-lg border bg-card p-4 flex flex-col">
       {/* Engine Header */}
       <div className="flex items-center justify-between border-b pb-2">
         <div className={cn("flex items-center gap-2 text-sm font-medium", color)}>
@@ -65,19 +95,19 @@ function PredictionColumn({
           "font-mono text-xl font-bold tabular-nums",
           highestOutcome === "home" ? "text-primary" : "text-muted-foreground"
         )}>
-          {prediction.predicted_score.home.toFixed(1)}
+          {Math.round(prediction.predicted_score.home)}
         </div>
         <div className="text-xs text-muted-foreground">vs</div>
         <div className={cn(
           "font-mono text-xl font-bold tabular-nums",
           highestOutcome === "away" ? "text-primary" : "text-muted-foreground"
         )}>
-          {prediction.predicted_score.away.toFixed(1)}
+          {Math.round(prediction.predicted_score.away)}
         </div>
       </div>
 
       {/* Outcome Probabilities - Compact */}
-      <div className="mt-3 space-y-1.5">
+      <div className="mt-3 space-y-1.5 flex-1">
         <div className="flex items-center justify-between text-xs">
           <span className="w-8 text-muted-foreground">主</span>
           <div className="h-1 flex-1 mx-2 overflow-hidden rounded-full bg-secondary">
@@ -117,7 +147,7 @@ function PredictionColumn({
       </div>
 
       {/* Elo Ratings (if available) */}
-      {prediction.elo_ratings && (
+      {prediction.elo_ratings ? (
         <div className="mt-3 rounded border bg-secondary/30 px-2 py-1.5 text-xs">
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Elo</span>
@@ -126,7 +156,35 @@ function PredictionColumn({
             </span>
           </div>
         </div>
+      ) : (
+        <div className="mt-3 h-[34px]" />
       )}
+
+      {/* Apply Button */}
+      <button
+        onClick={handleApply}
+        disabled={applying || applied}
+        className={cn(
+          "mt-3 w-full rounded-md border px-3 py-2 text-xs font-medium transition-colors",
+          applied
+            ? "border-pos/40 bg-pos/10 text-pos cursor-default"
+            : "bg-secondary/50 text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed"
+        )}
+      >
+        {applied ? (
+          <div className="flex items-center justify-center gap-1.5">
+            <Check className="size-3.5" />
+            <span>已应用</span>
+          </div>
+        ) : applying ? (
+          <div className="flex items-center justify-center gap-1.5">
+            <div className="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            <span>应用中...</span>
+          </div>
+        ) : (
+          <span>应用此预测</span>
+        )}
+      </button>
     </div>
   );
 }
@@ -135,46 +193,56 @@ export function EngineComparisonCard({
   match,
   eloOddsPrediction,
   hybridPrediction,
-  isLoading
+  isLoading,
+  onApplyPrediction
 }: EngineComparisonCardProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
-
   // Calculate agreement level
   const agreement = (() => {
     if (!eloOddsPrediction || !hybridPrediction) return null;
 
-    const elo_winner = eloOddsPrediction.outcome_probabilities.home_win >= eloOddsPrediction.outcome_probabilities.away_win ? "home" : "away";
-    const hybrid_winner = hybridPrediction.outcome_probabilities.home_win >= hybridPrediction.outcome_probabilities.away_win ? "home" : "away";
+    const getOutcome = (probs: { home_win: number; draw: number; away_win: number }) => {
+      if (probs.home_win >= probs.draw && probs.home_win >= probs.away_win) return "home";
+      if (probs.away_win >= probs.draw) return "away";
+      return "draw";
+    };
 
-    const score_diff = Math.abs(
-      (eloOddsPrediction.predicted_score.home - eloOddsPrediction.predicted_score.away) -
-      (hybridPrediction.predicted_score.home - hybridPrediction.predicted_score.away)
+    const elo_outcome = getOutcome(eloOddsPrediction.outcome_probabilities);
+    const hybrid_outcome = getOutcome(hybridPrediction.outcome_probabilities);
+
+    // If outcomes differ, low agreement
+    if (elo_outcome !== hybrid_outcome) return "low";
+
+    // Same outcome - check probability similarity
+    const prob_diff = Math.abs(
+      eloOddsPrediction.outcome_probabilities.home_win - hybridPrediction.outcome_probabilities.home_win
+    ) + Math.abs(
+      eloOddsPrediction.outcome_probabilities.draw - hybridPrediction.outcome_probabilities.draw
+    ) + Math.abs(
+      eloOddsPrediction.outcome_probabilities.away_win - hybridPrediction.outcome_probabilities.away_win
     );
 
-    if (elo_winner === hybrid_winner && score_diff < 0.5) return "high";
-    if (elo_winner === hybrid_winner) return "medium";
+    // prob_diff: 0-3 (sum of absolute differences)
+    // < 0.3: high agreement, 0.3-0.6: medium, > 0.6: low
+    if (prob_diff < 0.3) return "high";
+    if (prob_diff < 0.6) return "medium";
     return "low";
   })();
 
-  return (
-    <div className="rounded-lg border bg-card overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b bg-secondary px-4 py-2">
-        <div className="flex items-center gap-2 text-xs font-medium">
-          <TrendingUp className="size-3.5" />
-          <span>引擎对比</span>
+  if (isLoading) {
+    return (
+      <div className="px-4 py-12 text-center">
+        <div className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+          <span>加载对比数据...</span>
         </div>
-        <button
-          onClick={() => setIsExpanded(!isExpanded)}
-          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-        >
-          {isExpanded ? "收起" : "展开"}
-          {isExpanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
-        </button>
       </div>
+    );
+  }
 
+  return (
+    <div className="space-y-4">
       {/* Match Info */}
-      <div className="px-4 py-3 border-b">
+      <div className="rounded-lg border bg-secondary/30 px-4 py-3">
         <div className="flex items-center justify-between text-sm">
           <span className="font-medium">{match.home_team}</span>
           <span className="text-xs text-muted-foreground">vs</span>
@@ -183,49 +251,41 @@ export function EngineComparisonCard({
       </div>
 
       {/* Comparison Grid */}
-      {isExpanded && (
-        <div className="p-4 space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <PredictionColumn
-              label="Elo+赔率"
-              icon={Zap}
-              color="text-primary"
-              prediction={eloOddsPrediction}
-            />
-            <PredictionColumn
-              label="混合引擎"
-              icon={Brain}
-              color="text-muted-foreground"
-              prediction={hybridPrediction}
-            />
-          </div>
+      <div className="grid grid-cols-2 gap-3">
+        <PredictionColumn
+          label="Elo+赔率"
+          icon={Zap}
+          color="text-primary"
+          prediction={eloOddsPrediction}
+          engine="elo_odds"
+          matchId={match.match_id}
+          onApply={onApplyPrediction}
+        />
+        <PredictionColumn
+          label="混合引擎"
+          icon={Brain}
+          color="text-muted-foreground"
+          prediction={hybridPrediction}
+          engine="hybrid"
+          matchId={match.match_id}
+          onApply={onApplyPrediction}
+        />
+      </div>
 
-          {/* Agreement Indicator */}
-          {agreement && (
-            <div className={cn(
-              "flex items-center gap-2 rounded-md border px-3 py-2 text-xs",
-              agreement === "high" && "border-pos/40 bg-pos/10 text-pos",
-              agreement === "medium" && "border-warn/40 bg-warn/10 text-warn",
-              agreement === "low" && "border-neg/40 bg-neg/10 text-neg"
-            )}>
-              <AlertCircle className="size-3.5" />
-              <span>
-                {agreement === "high" && "两种引擎高度一致"}
-                {agreement === "medium" && "两种引擎基本一致"}
-                {agreement === "low" && "两种引擎存在分歧"}
-              </span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Loading State */}
-      {isLoading && (
-        <div className="px-4 py-6 text-center">
-          <div className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-            <div className="size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-            <span>加载对比数据...</span>
-          </div>
+      {/* Agreement Indicator */}
+      {agreement && (
+        <div className={cn(
+          "flex items-center gap-2 rounded-md border px-3 py-2 text-xs",
+          agreement === "high" && "border-pos/40 bg-pos/10 text-pos",
+          agreement === "medium" && "border-warn/40 bg-warn/10 text-warn",
+          agreement === "low" && "border-neg/40 bg-neg/10 text-neg"
+        )}>
+          <AlertCircle className="size-3.5" />
+          <span>
+            {agreement === "high" && "两种引擎高度一致"}
+            {agreement === "medium" && "两种引擎基本一致"}
+            {agreement === "low" && "两种引擎存在分歧"}
+          </span>
         </div>
       )}
     </div>

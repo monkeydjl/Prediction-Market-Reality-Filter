@@ -20,8 +20,10 @@ import math
 def calculate_elo_win_probability(elo_home: float, elo_away: float) -> dict[str, float]:
     """Calculate win probabilities from Elo ratings.
 
-    Uses the standard Elo formula:
-    P(home wins) = 1 / (1 + 10^(-(elo_home - elo_away) / 400))
+    Uses the standard Elo formula with proper three-way outcome handling:
+    1. Calculate raw win expectancy (ignoring draws)
+    2. Estimate draw probability
+    3. Redistribute remaining probability between home/away wins
 
     Args:
         elo_home: Home team Elo rating (typically 1000-2200)
@@ -32,18 +34,31 @@ def calculate_elo_win_probability(elo_home: float, elo_away: float) -> dict[str,
     """
     elo_diff = elo_home - elo_away
 
-    # Calculate home win probability
-    home_win = 1 / (1 + 10 ** (-elo_diff / 400))
+    # Step 1: Calculate raw win expectancy (for a two-outcome scenario)
+    # This tells us the relative strength, not absolute probability
+    raw_home_expectancy = 1 / (1 + 10 ** (-elo_diff / 400))
 
-    # Estimate draw probability (typically ~27% in football)
+    # Step 2: Estimate draw probability (typically ~27% in football)
     # Closer teams = higher draw probability
+    # World Cup average is around 25-27%
     base_draw = 0.27
-    quality_factor = (elo_home + elo_away) / 3000  # Higher quality = fewer draws
-    draw = base_draw * (1.1 - quality_factor * 0.2)
+
+    # Adjust based on Elo difference
+    # Large gap → lower draw probability (dominant team rarely draws)
+    # Small gap → higher draw probability (evenly matched)
+    elo_gap_factor = min(abs(elo_diff) / 400, 1.0)  # Normalize to 0-1
+    draw = base_draw * (1.0 - elo_gap_factor * 0.3)  # Reduce draw by up to 30%
     draw = max(0.15, min(0.35, draw))  # Clamp between 15-35%
 
-    # Away win is remainder
-    away_win = 1.0 - home_win - draw
+    # Step 3: Distribute remaining probability (1 - draw) between home and away
+    # Use the raw expectancy as the ratio
+    remaining_prob = 1.0 - draw
+    home_win = remaining_prob * raw_home_expectancy
+    away_win = remaining_prob * (1.0 - raw_home_expectancy)
+
+    # Verify sum is 1.0 (should always be true now)
+    total = home_win + draw + away_win
+    assert abs(total - 1.0) < 0.001, f"Probabilities don't sum to 1: {total}"
 
     return {
         "home_win": round(home_win, 4),

@@ -327,7 +327,8 @@ async def run_prediction_pipeline(
             draw_prob=prediction_result["outcome_probabilities"]["draw"],
             away_win_prob=prediction_result["outcome_probabilities"]["away_win"],
             confidence=prediction_result["confidence"],
-            trigger=trigger
+            trigger=trigger,
+            prediction_method=prediction_result.get("prediction_method")
         )
         session.add(history_entry)
 
@@ -340,10 +341,12 @@ async def run_prediction_pipeline(
             "home_team": match.home_team,
             "away_team": match.away_team,
             "predicted_score": prediction_result["predicted_score"],
+            "outcome_probabilities": prediction_result["outcome_probabilities"],
             "confidence": prediction_result["confidence"],
             "prediction_method": prediction_result["prediction_method"],
             "engine_used": selected_engine,
-            "has_betting_odds": prediction_result.get("has_betting_odds", False)
+            "has_betting_odds": prediction_result.get("has_betting_odds", False),
+            "elo_ratings": prediction_result.get("elo_ratings")
         }
 
     except Exception as e:

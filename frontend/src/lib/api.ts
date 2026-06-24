@@ -429,7 +429,7 @@ export interface WorldCupPipelineValidateResult {
   steps?: Array<{
     name: string;
     ok: boolean;
-    detail?: any;
+    detail?: Record<string, unknown>;
     error?: string;
   }>;
   coverage?: {

@@ -37,10 +37,17 @@ def calculate_outcome_probabilities(home_xg: float, away_xg: float, max_goals: i
             else:
                 draw += joint_prob
 
+    # Normalize to ensure sum is exactly 1.0 (avoid rounding errors)
+    total = home_win + draw + away_win
+    if total > 0:
+        home_win = home_win / total
+        draw = draw / total
+        away_win = away_win / total
+
     return {
-        "home_win": round(home_win, 4),
-        "draw": round(draw, 4),
-        "away_win": round(away_win, 4)
+        "home_win": round(max(0.0, home_win), 4),
+        "draw": round(max(0.0, draw), 4),
+        "away_win": round(max(0.0, away_win), 4)
     }
 
 
@@ -122,9 +129,10 @@ def predict_score_rule_based(factors: dict[str, Any]) -> dict[str, Any]:
     away_injury = away.get("injury_impact", 0.0)
 
     # Calculate expected goals
+    # NOTE: World Cup matches are played on neutral ground - no home advantage
     home_xg = calculate_expected_goals(
         home_attack, home_defense, away_attack, away_defense,
-        is_home=True,
+        is_home=False,  # No home advantage in World Cup (neutral venue)
         form_factor=home_form,
         fatigue_factor=home_fatigue,
         injury_impact=home_injury
@@ -132,7 +140,7 @@ def predict_score_rule_based(factors: dict[str, Any]) -> dict[str, Any]:
 
     away_xg = calculate_expected_goals(
         away_attack, away_defense, home_attack, home_defense,
-        is_home=False,
+        is_home=False,  # No home advantage in World Cup (neutral venue)
         form_factor=away_form,
         fatigue_factor=away_fatigue,
         injury_impact=away_injury

@@ -23,6 +23,11 @@ class MatchFixture(Base):
     stage = Column(String(32), nullable=False, index=True)  # group_stage, round_of_16, etc.
     group = Column(String(8))  # A, B, C, etc. (null for knockout)
     status = Column(String(16), default="scheduled")  # scheduled, in_play, finished, postponed
+
+    # Live/final scores
+    home_score = Column(Integer)  # null if not started, updated during match
+    away_score = Column(Integer)  # null if not started, updated during match
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -85,6 +90,9 @@ class PredictionHistory(Base):
     # What triggered this snapshot
     trigger = Column(String(32))  # daily_update, live_update, goal_event, etc.
 
+    # Which engine was used for this prediction
+    prediction_method = Column(String(128))  # elo_odds_fusion, hybrid, etc.
+
     # Live context if during match
     match_minute = Column(Integer)
     actual_home_score = Column(Integer)
@@ -142,12 +150,97 @@ class PredictionAccuracy(Base):
     outcome_correct = Column(Integer)  # Win/draw/loss correct
     outcome_accuracy = Column(Float)  # Percentage
 
-    # Probabilistic accuracy
-    avg_brier_score = Column(Float)
-    avg_confidence = Column(Float)
-    calibration_score = Column(Float)
 
-    # Updated timestamp
+class AIAnalysisHistory(Base):
+    """Store AI analysis results to avoid redundant API calls."""
+
+    __tablename__ = "ai_analysis_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(String(64), nullable=False, index=True)
+
+    # Analysis content
+    analysis_text = Column(Text, nullable=False)
+
+    # Context snapshot (to detect if re-analysis is needed)
+    predicted_home_score = Column(Float, nullable=False)
+    predicted_away_score = Column(Float, nullable=False)
+    confidence = Column(Float, nullable=False)
+    prediction_method = Column(String(128))
+
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    api_cost_tokens = Column(Integer)  # Track token usage if available
+
+
+class AIOptimizedPrediction(Base):
+    """Store AI-optimized predictions for comparison with original engine predictions."""
+
+    __tablename__ = "ai_optimized_predictions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(String(64), nullable=False, index=True)
+
+    # Original engine prediction
+    original_engine = Column(String(128), nullable=False)  # elo_odds, hybrid, etc.
+    original_home_score = Column(Float, nullable=False)
+    original_away_score = Column(Float, nullable=False)
+    original_home_win_prob = Column(Float, nullable=False)
+    original_draw_prob = Column(Float, nullable=False)
+    original_away_win_prob = Column(Float, nullable=False)
+    original_confidence = Column(Float, nullable=False)
+
+    # AI optimized prediction
+    optimized_home_score = Column(Float, nullable=False)
+    optimized_away_score = Column(Float, nullable=False)
+    optimized_home_win_prob = Column(Float, nullable=False)
+    optimized_draw_prob = Column(Float, nullable=False)
+    optimized_away_win_prob = Column(Float, nullable=False)
+    optimized_confidence = Column(Float, nullable=False)
+
+    # AI reasoning
+    blind_spots = Column(JSON)  # List of identified blind spots
+    calibration_issues = Column(JSON)  # List of calibration issues
+    optimization_reasoning = Column(Text)
+
+    # Accuracy comparison (filled after match finishes)
+    actual_home_score = Column(Integer)
+    actual_away_score = Column(Integer)
+    original_error = Column(Float)  # MAE of original prediction
+    optimized_error = Column(Float)  # MAE of optimized prediction
+    optimization_improved = Column(Integer)  # 1 if optimized was better, 0 otherwise
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class EngineCalibration(Base):
+    """Store engine calibration adjustments learned from AI optimization patterns."""
+
+    __tablename__ = "engine_calibration"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    engine_name = Column(String(128), nullable=False, index=True)  # elo_odds, hybrid
+
+    # Calibration parameters (JSON for flexibility)
+    calibration_params = Column(JSON, nullable=False)
+    # Example structure:
+    # {
+    #   "home_advantage_bias": -0.1,  # Reduce home advantage by 0.1
+    #   "draw_probability_shift": 0.05,  # Increase draw prob by 5%
+    #   "confidence_deflation": 0.9,  # Multiply confidence by 0.9
+    #   "strong_team_overconfidence": -0.08  # Reduce strong team win prob
+    # }
+
+    # Learning metadata
+    based_on_matches = Column(Integer, nullable=False)  # How many matches informed this
+    avg_improvement = Column(Float)  # Average error reduction when applied
+    confidence_score = Column(Float)  # How confident we are in this calibration
+
+    # Version control
+    version = Column(Integer, nullable=False, default=1)
+    is_active = Column(Integer, nullable=False, default=1)  # 1 = active, 0 = superseded
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

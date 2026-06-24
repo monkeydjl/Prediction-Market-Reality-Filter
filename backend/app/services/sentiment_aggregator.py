@@ -6,8 +6,9 @@ Aggregates sentiment signals from:
 3. RSS News Feeds - major sports news outlets
 """
 
-import re
 import hashlib
+import logging
+import re
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -16,6 +17,8 @@ import feedparser
 from bs4 import BeautifulSoup
 
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
+
+logger = logging.getLogger(__name__)
 
 
 # RSS News Feeds for World Cup coverage
@@ -132,7 +135,7 @@ async def fetch_rss_news(
                 articles.append(article)
 
         except Exception as e:
-            print(f"Error fetching RSS feed {feed['name']}: {e}")
+            logger.error("Error fetching RSS feed %s: %s", feed['name'], e, exc_info=True)
             continue
 
     # Sort by publish date (most recent first)
@@ -213,7 +216,7 @@ async def fetch_reddit_sentiment(
         }
 
     except Exception as e:
-        print(f"Error fetching Reddit r/{subreddit}: {e}")
+        logger.error("Error fetching Reddit r/%s: %s", subreddit, e, exc_info=True)
         return {
             "subreddit": subreddit,
             "team_name": team_name,
@@ -361,7 +364,7 @@ def cache_sentiment(data: dict[str, Any]) -> None:
 
     except Exception as e:
         session.rollback()
-        print(f"Error caching sentiment: {e}")
+        logger.error("Error caching sentiment: %s", e, exc_info=True)
 
     finally:
         close_prediction_session(session)

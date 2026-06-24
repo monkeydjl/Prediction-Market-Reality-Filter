@@ -4,6 +4,7 @@ Scrapes team squad market values from Transfermarkt to enhance team strength pre
 Market value is a strong proxy for team quality.
 """
 
+import logging
 import re
 import time
 from typing import Any
@@ -14,6 +15,8 @@ from bs4 import BeautifulSoup
 
 from app.core.config import settings
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
+
+logger = logging.getLogger(__name__)
 
 
 # Team URL mapping for World Cup 2026 teams
@@ -170,7 +173,7 @@ async def scrape_team_market_value(team_name: str, use_cache: bool = True) -> di
             return result
 
     except Exception as e:
-        print(f"Error scraping Transfermarkt for {team_name}: {e}")
+        logger.error("Error scraping Transfermarkt for %s: %s", team_name, e, exc_info=True)
         return None
 
 
@@ -248,7 +251,7 @@ def cache_market_value(data: dict[str, Any]) -> None:
 
     except Exception as e:
         session.rollback()
-        print(f"Error caching market value: {e}")
+        logger.error("Error caching market value: %s", e, exc_info=True)
 
     finally:
         close_prediction_session(session)
@@ -272,7 +275,7 @@ async def batch_scrape_world_cup_teams(delay_seconds: float = 2.0) -> dict[str, 
     }
 
     for i, team_name in enumerate(TRANSFERMARKT_TEAM_URLS.keys()):
-        print(f"Scraping {team_name} ({i+1}/{len(TRANSFERMARKT_TEAM_URLS)})...")
+        logger.info("Scraping %s (%s/%s)...", team_name, i + 1, len(TRANSFERMARKT_TEAM_URLS))
 
         data = await scrape_team_market_value(team_name, use_cache=False)
 
@@ -283,14 +286,14 @@ async def batch_scrape_world_cup_teams(delay_seconds: float = 2.0) -> dict[str, 
                 "value": data["total_market_value"],
                 "status": "ok"
             })
-            print(f"  ✓ {team_name}: €{data['total_market_value']:.1f}m")
+            logger.info("  ✓ %s: €%.1fm", team_name, data['total_market_value'])
         else:
             results["failed"] += 1
             results["teams"].append({
                 "team": team_name,
                 "status": "failed"
             })
-            print(f"  ✗ {team_name}: Failed")
+            logger.warning("  ✗ %s: Failed", team_name)
 
         # Rate limiting
         if i < len(TRANSFERMARKT_TEAM_URLS) - 1:

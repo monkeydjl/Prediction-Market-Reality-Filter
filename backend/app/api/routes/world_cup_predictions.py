@@ -371,6 +371,66 @@ async def batch_predict(match_ids: list[str] | None = None, engine: str = "auto"
     return result
 
 
+@router.post("/batch-switch-engine", response_model=FlexibleResponse)
+async def batch_switch_engine(
+    engine: str = Query(..., description='Target engine: "elo_odds", "hybrid", or "high_confidence"'),
+    status_filter: str = Query("scheduled", description='Match status filter (default: "scheduled")')
+):
+    """Batch switch all matches to a specific prediction engine.
+
+    Args:
+        engine: Target engine to use
+            - "elo_odds": Fast ELO + odds fusion engine
+            - "hybrid": Full hybrid engine (rule + AI)
+            - "high_confidence": Auto-select best engine based on confidence
+        status_filter: Only process matches with this status (default: "scheduled")
+
+    Returns:
+        Batch prediction results
+    """
+    from app.services.world_cup_prediction_pipeline import batch_predict_matches
+    import logging
+
+    logger = logging.getLogger(__name__)
+    logger.info(f"batch_switch_engine called: engine={engine}, status_filter={status_filter}")
+
+    session = get_prediction_session()
+    try:
+        # Get all matches matching the status filter
+        matches = session.query(MatchFixture).filter(
+            MatchFixture.status == status_filter
+        ).all()
+
+        match_ids = [m.match_id for m in matches]
+        logger.info(f"Found {len(match_ids)} matches with status={status_filter}")
+
+        if not match_ids:
+            return {
+                "status": "ok",
+                "message": f"没有找到状态为 {status_filter} 的比赛",
+                "total": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "skipped": 0
+            }
+
+        # Run batch prediction with specified engine
+        logger.info(f"Starting batch_predict_matches for {len(match_ids)} matches")
+        result = await batch_predict_matches(
+            match_ids,
+            trigger="batch_engine_switch",
+            engine=engine
+        )
+
+        logger.info(f"batch_predict_matches completed: {result.get('status')}, succeeded={result.get('succeeded')}")
+        return result
+    except Exception as e:
+        logger.error(f"Error in batch_switch_engine: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"批量切换失败: {str(e)}")
+    finally:
+        close_prediction_session(session)
+
+
 @router.get("/today", response_model=FlexibleResponse)
 async def get_today_matches():
     """Get today's matches with predictions."""

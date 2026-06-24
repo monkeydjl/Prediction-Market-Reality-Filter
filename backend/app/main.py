@@ -48,6 +48,33 @@ async def lifespan(app: FastAPI):
         )
     sqlite_maintenance = sqlite_db.maintain()
     logger.info("Loop DB maintenance passed: %s", sqlite_maintenance)
+
+    # Heal orphan predictions left by crashes during resolve_with_calibration()
+    # (event resolved in JSON but prediction still 'open' in SQLite).
+    try:
+        from app.services.event_resolve_service import reconcile_predictions
+        healed = reconcile_predictions()
+        if healed:
+            logger.info("Startup reconciliation healed %d orphan predictions", healed)
+    except Exception as exc:
+        logger.warning("Startup reconciliation skipped: %s", exc, exc_info=True)
+
+    # Initialize World Cup prediction database (creates tables if missing)
+    try:
+        from app.utils.prediction_db import init_prediction_db
+        init_prediction_db()
+        logger.info("World Cup prediction DB initialized.")
+    except Exception as exc:
+        logger.warning("World Cup prediction DB init skipped: %s", exc, exc_info=True)
+
+    # Score finished matches (feedback loop reconciliation)
+    try:
+        from app.services.world_cup_scoring_service import score_all_finished_matches
+        scoring_result = score_all_finished_matches()
+        logger.info("Match scoring reconciliation: %s", scoring_result)
+    except Exception as exc:
+        logger.warning("Match scoring reconciliation skipped: %s", exc, exc_info=True)
+
     scheduler_started = False
     if settings.SCHEDULER_ENABLED:
         scheduler_started = start_scheduler()

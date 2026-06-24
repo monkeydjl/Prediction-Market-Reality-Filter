@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Brain, Loader2, AlertCircle, TrendingUp, Target, Clock, Sparkles } from "lucide-react";
+import { Brain, Loader2, AlertCircle, TrendingUp, Clock, Sparkles } from "lucide-react";
 import type { MatchFixture, MatchPrediction } from "@/lib/world-cup-predictions";
-import { analyzePrediction } from "@/lib/world-cup-predictions";
+import { analyzePrediction, postHeaders } from "@/lib/world-cup-predictions";
 import { translateTeamName } from "@/lib/team-names-zh";
 import { cn } from "@/lib/utils";
+import { getWorldCupApiBase } from "@/lib/env";
 
 interface PredictionAnalysisCardProps {
   match: MatchFixture;
@@ -45,7 +46,7 @@ export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysis
       try {
         setLoadingHistory(true);
         const response = await fetch(
-          `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"}/api/world-cup/predictions/matches/${match.match_id}/analysis-history`,
+          `${getWorldCupApiBase()}/api/world-cup/predictions/matches/${match.match_id}/analysis-history`,
           { cache: "no-store" }
         );
 
@@ -80,7 +81,7 @@ export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysis
 
       // Reload history to include the new analysis
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"}/api/world-cup/predictions/matches/${match.match_id}/analysis-history`,
+        `${getWorldCupApiBase()}/api/world-cup/predictions/matches/${match.match_id}/analysis-history`,
         { cache: "no-store" }
       );
 
@@ -108,10 +109,10 @@ export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysis
 
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"}/api/world-cup/predictions/matches/${match.match_id}/optimize`,
+        `${getWorldCupApiBase()}/api/world-cup/predictions/matches/${match.match_id}/optimize`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: postHeaders(),
           cache: "no-store"
         }
       );

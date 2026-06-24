@@ -202,6 +202,41 @@ async def _job_loop_db_maintenance():
         logger.exception("[Scheduler] Loop DB maintenance failed")
 
 
+def _run_world_cup_bundle_import(mode: str, replace: bool):
+    """Shared import-mode dispatch for World Cup source bundles.
+
+    Used by both the scheduled bundle import and the matchday refresh job
+    to avoid duplicating the mode-selection logic.
+    """
+    from app.services.world_cup_api_football_source import (
+        import_world_cup_api_football_bundle,
+    )
+    from app.services.world_cup_sportmonks_source import (
+        import_world_cup_sportmonks_bundle,
+    )
+    from app.services.world_cup_source_bundle import (
+        import_world_cup_source_bundle_feeds,
+        import_world_cup_source_bundle_file,
+        import_world_cup_source_bundle_url,
+    )
+
+    if mode == "url":
+        return import_world_cup_source_bundle_url(replace=replace)
+    elif mode == "file":
+        return import_world_cup_source_bundle_file(replace=replace)
+    elif mode == "feeds":
+        return import_world_cup_source_bundle_feeds(replace=replace)
+    elif mode == "api_football":
+        return import_world_cup_api_football_bundle(replace=replace)
+    elif mode == "sportmonks":
+        return import_world_cup_sportmonks_bundle(replace=replace)
+    else:
+        raise ValueError(
+            "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE must be 'url', 'file', 'feeds', "
+            "'api_football', or 'sportmonks'"
+        )
+
+
 async def _job_world_cup_source_bundle_import():
     """Import the configured World Cup source bundle into sports facts."""
     if not settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED:
@@ -211,43 +246,9 @@ async def _job_world_cup_source_bundle_import():
     logger.info("[Scheduler] World Cup source bundle import starting...")
     run_id = _start_run("world_cup_source_bundle_import")
     try:
-        from app.services.world_cup_api_football_source import (
-            import_world_cup_api_football_bundle,
+        result = _run_world_cup_bundle_import(
+            mode, replace=settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE
         )
-        from app.services.world_cup_sportmonks_source import (
-            import_world_cup_sportmonks_bundle,
-        )
-        from app.services.world_cup_source_bundle import (
-            import_world_cup_source_bundle_feeds,
-            import_world_cup_source_bundle_file,
-            import_world_cup_source_bundle_url,
-        )
-
-        if mode == "url":
-            result = import_world_cup_source_bundle_url(
-                replace=settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE
-            )
-        elif mode == "file":
-            result = import_world_cup_source_bundle_file(
-                replace=settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE
-            )
-        elif mode == "feeds":
-            result = import_world_cup_source_bundle_feeds(
-                replace=settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE
-            )
-        elif mode == "api_football":
-            result = import_world_cup_api_football_bundle(
-                replace=settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE
-            )
-        elif mode == "sportmonks":
-            result = import_world_cup_sportmonks_bundle(
-                replace=settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE
-            )
-        else:
-            raise ValueError(
-                "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE must be 'url', 'file', 'feeds', "
-                "'api_football', or 'sportmonks'"
-            )
 
         summary = _world_cup_bundle_import_summary(result, mode)
         _finish_run(run_id, "success", result=summary)
@@ -304,30 +305,7 @@ async def _job_world_cup_matchday_refresh():
     run_id = _start_run("world_cup_matchday_refresh")
     try:
         mode = settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE.strip().lower()
-        from app.services.world_cup_api_football_source import (
-            import_world_cup_api_football_bundle,
-        )
-        from app.services.world_cup_sportmonks_source import (
-            import_world_cup_sportmonks_bundle,
-        )
-        from app.services.world_cup_source_bundle import (
-            import_world_cup_source_bundle_feeds,
-            import_world_cup_source_bundle_file,
-            import_world_cup_source_bundle_url,
-        )
-
-        if mode == "url":
-            result = import_world_cup_source_bundle_url(replace=True)
-        elif mode == "file":
-            result = import_world_cup_source_bundle_file(replace=True)
-        elif mode == "feeds":
-            result = import_world_cup_source_bundle_feeds(replace=True)
-        elif mode == "api_football":
-            result = import_world_cup_api_football_bundle(replace=True)
-        elif mode == "sportmonks":
-            result = import_world_cup_sportmonks_bundle(replace=True)
-        else:
-            raise ValueError(f"Unknown import mode: {mode}")
+        result = _run_world_cup_bundle_import(mode, replace=True)
 
         summary = _world_cup_bundle_import_summary(result, mode)
         _finish_run(run_id, "success", result=summary)

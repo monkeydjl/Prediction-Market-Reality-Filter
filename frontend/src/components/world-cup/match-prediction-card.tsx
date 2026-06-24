@@ -73,6 +73,7 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
   const [showHistory, setShowHistory] = useState(false);
   const [showAnalysis, setShowAnalysis] = useState(false);
   const [isLoadingComparison, setIsLoadingComparison] = useState(false);
+  const [comparisonError, setComparisonError] = useState<string | null>(null);
   const [comparisonData, setComparisonData] = useState<{
     elo_odds?: MatchPrediction;
     hybrid?: MatchPrediction;
@@ -85,12 +86,15 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
     }
 
     setIsLoadingComparison(true);
+    setComparisonError(null);
     setShowComparison(true);
 
     try {
       const data = await compareEngines(match.match_id);
       setComparisonData(data);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setComparisonError(`加载对比数据失败: ${message}`);
       console.error("Failed to load comparison:", error);
     } finally {
       setIsLoadingComparison(false);
@@ -299,6 +303,23 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
                 </div>
               </div>
             )}
+
+            {/* Data Quality Badge */}
+            {prediction.data_quality && prediction.data_quality !== "real" && (
+              <div className={cn(
+                "flex items-center gap-2 rounded-md border px-3 py-2 text-xs",
+                prediction.data_quality === "mock"
+                  ? "border-neg/40 bg-neg/10 text-neg"
+                  : "border-warn/40 bg-warn/10 text-warn"
+              )}>
+                <AlertCircle className="size-3.5 shrink-0" />
+                <span>
+                  {prediction.data_quality === "mock"
+                    ? "数据来源：模拟数据（API 不可用，预测可能不准确）"
+                    : "数据来源：部分模拟（部分球队数据缺失）"}
+                </span>
+              </div>
+            )}
           </div>
         )}
 
@@ -360,6 +381,12 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
               setShowComparison(false);
             }}
           />
+          {comparisonError && (
+            <div className="mt-4 flex items-center gap-2 rounded-lg border border-neg/40 bg-neg/10 p-3 text-sm text-neg">
+              <AlertCircle className="size-4 flex-shrink-0" />
+              <span>{comparisonError}</span>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 

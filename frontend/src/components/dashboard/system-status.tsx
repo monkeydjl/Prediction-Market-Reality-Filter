@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Activity, AlertTriangle, RefreshCw } from "lucide-react";
 import { eventsApi, type ApiHealth, type ApiOverview, type LoopStatus } from "@/lib/api";
 import { fmtDateTime } from "@/lib/format";
@@ -124,7 +124,7 @@ export function SystemStatus() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -140,12 +140,12 @@ export function SystemStatus() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [load]);
 
   const run = status ? latestRun(status) : null;
   const runs = status ? runEntries(status) : [];

@@ -1,14 +1,16 @@
 """Database management for World Cup predictions."""
 
+import logging
 from pathlib import Path
-from typing import Any
+from typing import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
 from app.models.world_cup_prediction import Base
 
+logger = logging.getLogger(__name__)
 
 # Global engine and session factory (singleton)
 _engine = None
@@ -34,6 +36,15 @@ def get_prediction_engine():
             pool_pre_ping=True,
             pool_recycle=3600
         )
+
+        # Set SQLite PRAGMAs on every new connection (matches sqlite_db.py)
+        @event.listens_for(_engine, "connect")
+        def _set_sqlite_pragmas(dbapi_conn, connection_record):
+            cursor = dbapi_conn.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
     return _engine
 
 
@@ -44,7 +55,12 @@ def init_prediction_db():
 
 
 def get_prediction_session() -> Session:
-    """Get a database session for predictions."""
+    """Get a database session for predictions (manual use).
+
+    Callers MUST close the session via ``close_prediction_session(session)``
+    in a ``finally`` block, or use ``get_prediction_session_dep`` for
+    FastAPI dependency injection (auto-closed).
+    """
     global _SessionLocal
     if _SessionLocal is None:
         engine = get_prediction_engine()
@@ -54,6 +70,22 @@ def get_prediction_session() -> Session:
     # Always expire all cached objects to get fresh data
     session.expire_all()
     return session
+
+
+def get_prediction_session_dep() -> Iterator[Session]:
+    """FastAPI dependency that yields a session and auto-closes it.
+
+    Usage in route::
+
+        @router.get("/...")
+        async def endpoint(session: Session = Depends(get_prediction_session_dep)):
+            ...
+    """
+    session = get_prediction_session()
+    try:
+        yield session
+    finally:
+        close_prediction_session(session)
 
 
 def close_prediction_session(session: Session):

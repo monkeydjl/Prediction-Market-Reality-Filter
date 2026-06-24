@@ -17,7 +17,11 @@ from typing import Any
 import math
 
 
-def calculate_elo_win_probability(elo_home: float, elo_away: float) -> dict[str, float]:
+def calculate_elo_win_probability(
+    elo_home: float,
+    elo_away: float,
+    is_knockout: bool = False,
+) -> dict[str, float]:
     """Calculate win probabilities from Elo ratings.
 
     Uses the standard Elo formula with proper three-way outcome handling:
@@ -28,6 +32,8 @@ def calculate_elo_win_probability(elo_home: float, elo_away: float) -> dict[str,
     Args:
         elo_home: Home team Elo rating (typically 1000-2200)
         elo_away: Away team Elo rating
+        is_knockout: If True, reduce draw probability (knockout matches have
+                    extra time, so 90-min draw rate is ~5-8% lower than group stage)
 
     Returns:
         Dictionary with home_win, draw, away_win probabilities
@@ -35,20 +41,17 @@ def calculate_elo_win_probability(elo_home: float, elo_away: float) -> dict[str,
     elo_diff = elo_home - elo_away
 
     # Step 1: Calculate raw win expectancy (for a two-outcome scenario)
-    # This tells us the relative strength, not absolute probability
     raw_home_expectancy = 1 / (1 + 10 ** (-elo_diff / 400))
 
-    # Step 2: Estimate draw probability (typically ~27% in football)
-    # Closer teams = higher draw probability
-    # World Cup average is around 25-27%
-    base_draw = 0.27
+    # Step 2: Estimate draw probability
+    # Group stage: ~27% (World Cup average)
+    # Knockout stage: ~20% (extra time reduces 90-min draw rate)
+    base_draw = 0.20 if is_knockout else 0.27
 
     # Adjust based on Elo difference
-    # Large gap → lower draw probability (dominant team rarely draws)
-    # Small gap → higher draw probability (evenly matched)
-    elo_gap_factor = min(abs(elo_diff) / 400, 1.0)  # Normalize to 0-1
-    draw = base_draw * (1.0 - elo_gap_factor * 0.3)  # Reduce draw by up to 30%
-    draw = max(0.15, min(0.35, draw))  # Clamp between 15-35%
+    elo_gap_factor = min(abs(elo_diff) / 400, 1.0)
+    draw = base_draw * (1.0 - elo_gap_factor * 0.3)
+    draw = max(0.10 if is_knockout else 0.15, min(0.35, draw))
 
     # Step 3: Distribute remaining probability (1 - draw) between home and away
     # Use the raw expectancy as the ratio
@@ -209,10 +212,10 @@ def calculate_confidence(
 
     # Boost confidence if market is very decisive
     max_prob = max(fused_probs["home_win"], fused_probs["draw"], fused_probs["away_win"])
-    if max_prob > 0.60:
-        confidence += 0.05
-    elif max_prob > 0.70:
+    if max_prob > 0.70:
         confidence += 0.10
+    elif max_prob > 0.60:
+        confidence += 0.05
 
     return round(confidence, 3)
 
@@ -226,7 +229,8 @@ def predict_match_elo_odds(
     odds_draw: float | None = None,
     odds_away: float | None = None,
     elo_weight: float = 0.30,
-    odds_weight: float = 0.70
+    odds_weight: float = 0.70,
+    is_knockout: bool = False,
 ) -> dict[str, Any]:
     """Main entry point: Predict match outcome using Elo + Odds fusion.
 
@@ -240,12 +244,13 @@ def predict_match_elo_odds(
         odds_away: Decimal odds for away win (optional)
         elo_weight: Weight for Elo (default 0.30)
         odds_weight: Weight for odds (default 0.70)
+        is_knockout: If True, apply knockout-stage draw probability correction
 
     Returns:
         Complete prediction with probabilities, scores, and confidence
     """
     # Step 1: Calculate Elo-based probabilities
-    elo_probs = calculate_elo_win_probability(elo_home, elo_away)
+    elo_probs = calculate_elo_win_probability(elo_home, elo_away, is_knockout=is_knockout)
 
     # Step 2: Get market probabilities (if odds available)
     if odds_home and odds_draw and odds_away:
@@ -277,6 +282,40 @@ def predict_match_elo_odds(
         elo_diff = elo_home - elo_away
         market_favorite = None
 
+    # Step 7: Build score probability matrix (Poisson)
+    from math import factorial, exp
+    max_goals = 8
+    home_xg = expected_scores["home"]
+    away_xg = expected_scores["away"]
+
+    score_matrix: dict[str, float] = {}
+    for h in range(max_goals + 1):
+        for a in range(max_goals + 1):
+            # Poisson P(k; lambda) = e^(-lambda) * lambda^k / k!
+            p_h = exp(-home_xg) * (home_xg ** h) / factorial(h)
+            p_a = exp(-away_xg) * (away_xg ** a) / factorial(a)
+            score_matrix[f"{h}-{a}"] = round(p_h * p_a, 6)
+
+    # Top 5 most likely scores
+    top_scores = sorted(score_matrix.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    # Prediction interval (P10-P90 for total goals)
+    total_goals_probs: dict[int, float] = {}
+    for h in range(max_goals + 1):
+        for a in range(max_goals + 1):
+            total = h + a
+            total_goals_probs[total] = total_goals_probs.get(total, 0) + score_matrix[f"{h}-{a}"]
+
+    cumulative = 0.0
+    p10_total = p90_total = 0
+    for total in sorted(total_goals_probs.keys()):
+        cumulative += total_goals_probs[total]
+        if cumulative >= 0.10 and p10_total == 0:
+            p10_total = total
+        if cumulative >= 0.90:
+            p90_total = total
+            break
+
     return {
         "home_team": home_team,
         "away_team": away_team,
@@ -297,6 +336,13 @@ def predict_match_elo_odds(
         "market_probabilities": market_probs if has_odds else None,
         "market_favorite": market_favorite,
         "has_betting_odds": has_odds,
+        "score_probability_matrix": score_matrix,
+        "top_5_scores": [{"score": s, "probability": p} for s, p in top_scores],
+        "prediction_interval": {
+            "p10_total_goals": p10_total,
+            "p90_total_goals": p90_total,
+            "total_goals_distribution": total_goals_probs,
+        },
     }
 
 

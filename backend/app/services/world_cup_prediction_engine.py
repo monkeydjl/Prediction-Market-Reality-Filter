@@ -1,25 +1,36 @@
 """Main prediction engine that orchestrates rule-based and AI predictions."""
 
+import logging
 from datetime import datetime
 from typing import Any
 
 from app.services.world_cup_rule_engine import predict_score_rule_based
 from app.services.world_cup_ai_engine import predict_score_ai
 
+logger = logging.getLogger(__name__)
+
 
 def fuse_predictions(
     rule_pred: dict[str, Any],
     ai_pred: dict[str, Any] | None,
-    rule_weight: float = 0.7,
-    ai_weight: float = 0.3
+    rule_weight: float = 0.80,
+    ai_weight: float = 0.20
 ) -> dict[str, Any]:
     """Combine rule-based and AI predictions with weighted fusion.
+
+    The AI engine now calibrates the rule-engine prediction rather than
+    producing an independent score.  Therefore the rule engine receives a
+    higher weight (0.80) and the AI acts as a fine-tuning overlay (0.20).
+
+    If the AI is not confident in its adjustment
+    (``confidence_in_adjustment < 0.4``) the rule-engine result is used
+    directly without applying any AI delta.
 
     Args:
         rule_pred: Prediction from rule engine
         ai_pred: Prediction from AI engine (or None if AI failed)
-        rule_weight: Weight for rule-based prediction (default 0.7)
-        ai_weight: Weight for AI prediction (default 0.3)
+        rule_weight: Weight for rule-based prediction (default 0.80)
+        ai_weight: Weight for AI prediction (default 0.20)
 
     Returns:
         Fused prediction with combined score and confidence
@@ -35,6 +46,25 @@ def fuse_predictions(
             "rule_score": rule_pred["predicted_score"],
             "ai_score": None,
             "ai_reasoning": None,
+            "key_factors": []
+        }
+
+    # If the AI is not confident in its adjustment, trust the rule engine
+    # directly instead of applying a dubious delta.
+    confidence_in_adjustment = ai_pred.get("confidence_in_adjustment", 1.0)
+    if confidence_in_adjustment < 0.4:
+        logger.info(
+            "AI confidence_in_adjustment=%.2f < 0.4, using rule-only result",
+            confidence_in_adjustment,
+        )
+        return {
+            "predicted_score": rule_pred["predicted_score"],
+            "outcome_probabilities": rule_pred["outcome_probabilities"],
+            "confidence": rule_pred["confidence"],
+            "prediction_method": "rule_dominant",
+            "rule_score": rule_pred["predicted_score"],
+            "ai_score": None,
+            "ai_reasoning": ai_pred.get("reasoning"),
             "key_factors": []
         }
 
@@ -105,8 +135,8 @@ async def predict_match_score(
     # Run rule-based prediction (synchronous)
     rule_pred = predict_score_rule_based(factors)
 
-    # Run AI prediction (asynchronous)
-    ai_pred = await predict_score_ai(home_team, away_team, kickoff_str, stage, factors)
+    # Run AI prediction (asynchronous) - AI calibrates the rule-engine result
+    ai_pred = await predict_score_ai(home_team, away_team, kickoff_str, stage, factors, rule_pred)
 
     # Fuse predictions
     fused = fuse_predictions(rule_pred, ai_pred)

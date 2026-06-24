@@ -2,6 +2,23 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Path, Query
 
+# ---------------------------------------------------------------------------
+# Request body types
+#
+# Previously these endpoints used ``payload: Any = Body(...)`` which accepts
+# any JSON value (string, number, null, bool, array, object).  Switching to
+# ``dict[str, Any]`` ensures the payload is a JSON object and returns a 422
+# error for malformed requests at the API boundary instead of deep in the
+# service layer.  The facts-import endpoint accepts either a list of fact
+# objects or a ``{"facts": [...]}`` wrapper, so it uses a union type.
+# ---------------------------------------------------------------------------
+
+#: Body type for endpoints that accept a single JSON object payload.
+DictPayload = dict[str, Any]
+
+#: Body type for the facts-import endpoint (list of facts or {"facts": [...]}).
+FactsPayload = list[dict[str, Any]] | dict[str, Any]
+
 from app.api.security import is_write_key_valid, require_write_key
 from app.memory.event_market_link_store import list_pending, set_verified
 from app.memory.prediction_store import (
@@ -270,7 +287,7 @@ async def list_world_cup_facts(
 
 @router.post("/sports/world-cup/facts/import", response_model=FlexibleResponse)
 async def import_world_cup_facts(
-    payload: Any = Body(...),
+    payload: FactsPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
 ):
@@ -290,7 +307,7 @@ async def import_world_cup_facts(
 
 @router.post("/sports/world-cup/data/import", response_model=FlexibleResponse)
 async def import_world_cup_data_source(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
 ):
@@ -306,7 +323,7 @@ async def import_world_cup_data_source(
 
 @router.post("/sports/world-cup/data/preview", response_model=FlexibleResponse)
 async def preview_world_cup_data_source(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
 ):
     """Preview facts that would be produced from a trusted World Cup payload."""
@@ -319,7 +336,7 @@ async def preview_world_cup_data_source(
 
 @router.post("/sports/world-cup/data/bundle/preview", response_model=FlexibleResponse)
 async def preview_world_cup_source_bundle_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
 ):
     """Preview facts from a bundle of World Cup data-source payloads."""
@@ -331,7 +348,7 @@ async def preview_world_cup_source_bundle_route(
 
 @router.post("/sports/world-cup/data/bundle/import", response_model=FlexibleResponse)
 async def import_world_cup_source_bundle_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
 ):
@@ -522,7 +539,7 @@ async def import_configured_world_cup_data_source(
 
 @router.post("/sports/world-cup/official-csv/preview", response_model=FlexibleResponse)
 async def preview_world_cup_official_csv_source_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
 ):
     """Preview facts from the strict official World Cup CSV profile."""
@@ -534,7 +551,7 @@ async def preview_world_cup_official_csv_source_route(
 
 @router.post("/sports/world-cup/official-csv/import", response_model=FlexibleResponse)
 async def import_world_cup_official_csv_source_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
 ):
@@ -547,7 +564,7 @@ async def import_world_cup_official_csv_source_route(
 
 @router.post("/sports/world-cup/matches/preview", response_model=FlexibleResponse)
 async def preview_world_cup_match_source_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
 ):
     """Preview facts from a raw World Cup fixture/result payload."""
@@ -559,7 +576,7 @@ async def preview_world_cup_match_source_route(
 
 @router.post("/sports/world-cup/matches/import", response_model=FlexibleResponse)
 async def import_world_cup_match_source_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
 ):
@@ -572,7 +589,7 @@ async def import_world_cup_match_source_route(
 
 @router.post("/sports/world-cup/match-events/preview", response_model=FlexibleResponse)
 async def preview_world_cup_match_events_source_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
 ):
     """Preview discipline facts from raw World Cup match event/card data."""
@@ -584,7 +601,7 @@ async def preview_world_cup_match_events_source_route(
 
 @router.post("/sports/world-cup/match-events/import", response_model=FlexibleResponse)
 async def import_world_cup_match_events_source_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
 ):
@@ -597,7 +614,7 @@ async def import_world_cup_match_events_source_route(
 
 @router.post("/sports/world-cup/lineups/preview", response_model=FlexibleResponse)
 async def preview_world_cup_lineups_source_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
 ):
     """Preview lineup facts from raw World Cup lineup data."""
@@ -609,7 +626,7 @@ async def preview_world_cup_lineups_source_route(
 
 @router.post("/sports/world-cup/lineups/import", response_model=FlexibleResponse)
 async def import_world_cup_lineups_source_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
 ):
@@ -622,7 +639,7 @@ async def import_world_cup_lineups_source_route(
 
 @router.post("/sports/world-cup/standings/preview", response_model=FlexibleResponse)
 async def preview_world_cup_standings_source_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
 ):
     """Preview qualification facts from raw World Cup standings data."""
@@ -634,7 +651,7 @@ async def preview_world_cup_standings_source_route(
 
 @router.post("/sports/world-cup/standings/import", response_model=FlexibleResponse)
 async def import_world_cup_standings_source_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
 ):
@@ -647,7 +664,7 @@ async def import_world_cup_standings_source_route(
 
 @router.post("/sports/world-cup/player-awards/preview", response_model=FlexibleResponse)
 async def preview_world_cup_player_awards_source_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
 ):
     """Preview player-award facts from raw World Cup award/scorer data."""
@@ -659,7 +676,7 @@ async def preview_world_cup_player_awards_source_route(
 
 @router.post("/sports/world-cup/player-awards/import", response_model=FlexibleResponse)
 async def import_world_cup_player_awards_source_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
 ):
@@ -672,7 +689,7 @@ async def import_world_cup_player_awards_source_route(
 
 @router.post("/sports/world-cup/player-status/preview", response_model=FlexibleResponse)
 async def preview_world_cup_player_status_source_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
 ):
     """Preview injury/availability/suspension/lineup facts from raw player-status data."""
@@ -684,7 +701,7 @@ async def preview_world_cup_player_status_source_route(
 
 @router.post("/sports/world-cup/player-status/import", response_model=FlexibleResponse)
 async def import_world_cup_player_status_source_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
 ):
@@ -697,7 +714,7 @@ async def import_world_cup_player_status_source_route(
 
 @router.post("/sports/world-cup/statistics/preview", response_model=FlexibleResponse)
 async def preview_world_cup_statistics_source_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
 ):
     """Preview team/player statistic facts from raw World Cup statistics data."""
@@ -709,7 +726,7 @@ async def preview_world_cup_statistics_source_route(
 
 @router.post("/sports/world-cup/statistics/import", response_model=FlexibleResponse)
 async def import_world_cup_statistics_source_route(
-    payload: Any = Body(...),
+    payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
 ):

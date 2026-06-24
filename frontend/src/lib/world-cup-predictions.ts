@@ -2,6 +2,9 @@
  * API client for World Cup match predictions
  */
 
+import { getWorldCupApiBase } from "./env";
+import { getOperatorApiKey } from "./api";
+
 export interface PredictedScore {
   home: number;
   away: number;
@@ -41,6 +44,15 @@ export interface MatchPrediction {
   };
   has_betting_odds?: boolean;
   engine_used?: "elo_odds" | "hybrid" | "auto";
+  data_quality?: "real" | "partial" | "mock";
+  betting_analysis?: {
+    "1x2": { home_win: number; draw: number; away_win: number; implied_odds: Record<string, number> };
+    double_chance: Record<string, number>;
+    over_under: Record<string, number>;
+    btts: { yes: number; no: number };
+    top_3_correct_scores: { score: string; probability: number }[];
+  };
+  tactical_analysis?: string;
 }
 
 export interface MatchWithPrediction {
@@ -70,7 +82,18 @@ export interface PredictionTriggerResult {
   error?: string;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const API_BASE = getWorldCupApiBase();
+
+/**
+ * Build headers for POST requests, including the operator API key if set.
+ * This mirrors the behavior of the centralized `api.ts` client.
+ */
+export function postHeaders(extra?: HeadersInit): HeadersInit {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const key = getOperatorApiKey();
+  if (key) headers["X-API-Key"] = key;
+  return extra ? { ...headers, ...Object.fromEntries(new Headers(extra)) } : headers;
+}
 
 /**
  * Fetch all matches with optional filters
@@ -162,7 +185,7 @@ export async function triggerPrediction(
     `${API_BASE}/api/world-cup/predictions/matches/${matchId}/predict`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: postHeaders(),
       body: JSON.stringify({ engine: engine || 'auto' }),
     }
   );
@@ -228,7 +251,7 @@ export async function analyzePrediction(matchId: string): Promise<string> {
     `${API_BASE}/api/world-cup/predictions/matches/${matchId}/analyze`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: postHeaders(),
     }
   );
 
@@ -248,7 +271,7 @@ export async function syncFixtures(): Promise<void> {
     `${API_BASE}/api/world-cup/predictions/sync-fixtures`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: postHeaders(),
     }
   );
 

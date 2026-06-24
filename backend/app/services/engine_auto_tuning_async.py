@@ -26,6 +26,23 @@ async def run_async_optimization(engine_name: str, task_id: str) -> dict[str, An
     Returns:
         Optimization results
     """
+    # Add overall timeout of 15 minutes to prevent infinite running
+    try:
+        return await asyncio.wait_for(
+            _run_async_optimization_impl(engine_name, task_id),
+            timeout=900.0  # 15 minutes max
+        )
+    except asyncio.TimeoutError:
+        task_manager = get_task_manager()
+        await task_manager.mark_failed(
+            task_id,
+            error="整体优化超时（15分钟），请减少比赛数量或检查OpenAI API连接"
+        )
+        raise
+
+
+async def _run_async_optimization_impl(engine_name: str, task_id: str) -> dict[str, Any]:
+    """Internal implementation of async optimization."""
     task_manager = get_task_manager()
     session = get_prediction_session()
 
@@ -43,9 +60,16 @@ async def run_async_optimization(engine_name: str, task_id: str) -> dict[str, An
 
         # Apply engine filter
         if engine_name:
-            query = query.filter(
-                MatchPrediction.prediction_method.like(f"%{engine_name}%")
-            )
+            if engine_name == "hybrid":
+                # Hybrid engine includes both "hybrid" and "rule_only" predictions
+                # (rule_only is the fallback when AI optimization fails)
+                query = query.filter(
+                    MatchPrediction.prediction_method.in_(["hybrid", "rule_only"])
+                )
+            else:
+                query = query.filter(
+                    MatchPrediction.prediction_method.like(f"%{engine_name}%")
+                )
 
         matches = query.all()
         total_matches = len(matches)
@@ -76,7 +100,7 @@ async def run_async_optimization(engine_name: str, task_id: str) -> dict[str, An
             )
 
             try:
-                # Run AI optimization with longer timeout
+                # Run AI optimization with 60s timeout (allows for rate-limit retries)
                 optimization_result = await asyncio.wait_for(
                     optimize_prediction_with_ai(
                         home_team=fixture.home_team,
@@ -97,7 +121,7 @@ async def run_async_optimization(engine_name: str, task_id: str) -> dict[str, An
                         prediction_method=prediction.prediction_method,
                         match_context=None
                     ),
-                    timeout=60.0  # Increase to 60 seconds per match
+                    timeout=60.0  # Increased from 25s to allow 429 retries
                 )
 
                 results["total_processed"] += 1
@@ -170,7 +194,7 @@ async def run_async_optimization(engine_name: str, task_id: str) -> dict[str, An
                     task_id,
                     progress=idx + 1,
                     total=total_matches,
-                    log_message=f"✗ 超时: {match_name}"
+                    log_message=f"⏱ 超时跳过: {match_name}"
                 )
 
             except Exception as e:
@@ -186,6 +210,10 @@ async def run_async_optimization(engine_name: str, task_id: str) -> dict[str, An
                     total=total_matches,
                     log_message=f"✗ 错误: {match_name} - {error_msg}"
                 )
+
+            # Delay between matches to avoid OpenAI rate limits (429)
+            if idx < total_matches - 1:
+                await asyncio.sleep(3.0)
 
         # Step 2: Calculate calibration from optimizations
         if results["optimizations_generated"] > 0:

@@ -4,13 +4,15 @@ This module extracts and transforms raw team statistics into normalized
 factors used by the prediction engines.
 """
 
+import logging
 from datetime import datetime, timedelta
 from typing import Any
 
 from app.services.transfermarkt_scraper import get_cached_market_value
 from app.services.sentiment_aggregator import get_cached_sentiment
 from app.services.sports_signal_service import build_sports_signals
-from app.services.sports_fact_service import fetch_world_cup_facts
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_team_factors(
@@ -37,10 +39,30 @@ def calculate_team_factors(
     losses = team_stats.get("losses", 0)
     matches_played = wins + draws + losses
 
-    # Calculate recent form (win rate with recency weighting)
+    # Calculate recent form with time-decay weighting
+    # Recent matches weigh more than older ones
     recent_form = 0.5  # Default neutral
     if matches_played > 0:
-        recent_form = (wins + 0.5 * draws) / matches_played
+        # Check if match-level results are available for time-decay
+        match_results = team_stats.get("recent_results", [])
+        if match_results and len(match_results) > 0:
+            # Apply exponential decay: most recent match has weight 1.0,
+            # each older match decays by factor 0.75
+            decay = 0.75
+            weighted_score = 0.0
+            total_weight = 0.0
+            for i, result in enumerate(match_results):
+                w = decay ** i
+                if result == "W":
+                    weighted_score += w * 1.0
+                elif result == "D":
+                    weighted_score += w * 0.5
+                # Loss = 0 points, no contribution
+                total_weight += w
+            recent_form = weighted_score / total_weight if total_weight > 0 else 0.5
+        else:
+            # Fallback: simple win rate (no time decay data available)
+            recent_form = (wins + 0.5 * draws) / matches_played
 
     # Defense rating (inverse of goals conceded, normalized)
     # Assume avg team concedes ~1.2 goals per game
@@ -56,7 +78,7 @@ def calculate_team_factors(
         try:
             last_date = datetime.fromisoformat(last_match_date.replace('Z', '+00:00'))
             days_since_last_match = (datetime.utcnow() - last_date).days
-        except:
+        except (ValueError, TypeError):
             pass
 
     # Home advantage modifier
@@ -216,19 +238,20 @@ def build_prediction_factors(
         "match_id": match_id
     }
 
-    # Fetch sports facts and build signals
+    # Fetch sports facts and build signals (optional enhancement)
     sports_signals = {}
     try:
-        facts = fetch_world_cup_facts(
-            home_team=home_team_name,
-            away_team=away_team_name,
-            match_date=match_date
-        )
+        from app.services.sports_fact_service import load_sports_facts
+
+        # Load facts from storage
+        facts = load_sports_facts()
+
+        # Build signals from facts
         sports_signals = build_sports_signals(event_question, source, facts)
     except Exception as e:
-        # Log error but don't fail prediction
-        print(f"[Factor Service] Failed to build sports signals: {e}")
-        sports_signals = {"error": str(e), "fact_count": 0}
+        # Sports signals are optional - don't fail prediction if unavailable
+        logger.warning("[Factor Service] Sports signals unavailable: %s", e)
+        sports_signals = None
 
     factors = {
         "home_team": calculate_team_factors(home_team_name, home_team_stats, is_home=True),
@@ -237,7 +260,7 @@ def build_prediction_factors(
         "context": calculate_context_factors(stage, home_standing, away_standing, weather)
     }
 
-    # Add sports signals if available
+    # Add sports signals if available and non-empty
     if sports_signals and sports_signals.get("fact_count", 0) > 0:
         factors["sports_signals"] = sports_signals
 

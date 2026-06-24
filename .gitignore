@@ -34,6 +34,18 @@ backend/v2_loop.db-wal
 backend/v2_loop.db-shm
 backend/*.scheduler.lock
 backend/backups/
+backend/uvicorn.log
+backend/uvicorn_error.log
+backend/fifa_api_response.json
+backend/fifa_matches.html
+backend/wc_live_match.json
+backend/world_cup_predictions.db-shm
+backend/world_cup_predictions.db-wal
+check_db.py
+code-review-*/
+frontend/test-api.html
+frontend/frontend/
+backend/backend/
 
 # ── Internal working logs (huge, internal — kept locally, not published) ─────
 backend/docs/PROJECT_PROGRESS.md
@@ -43,6 +55,8 @@ backend/docs/工程进度.md
 backend/.claude/
 backend/.agents/
 backend/.impeccable/
+frontend/src/**/.impeccable/
+**/.impeccable/
 backend/CLAUDE.md
 backend/AGENTS.md
 backend/skills-lock.json

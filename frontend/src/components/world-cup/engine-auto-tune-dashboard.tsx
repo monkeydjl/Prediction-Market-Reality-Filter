@@ -1,18 +1,21 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Brain, Loader2, AlertCircle, TrendingUp, Target, Zap, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getWorldCupApiBase } from "@/lib/env";
+import { getOperatorApiKey } from "@/lib/api";
 
 interface AutoTuneResult {
   status: string;
+  message?: string;
   engine: string;
-  optimization_summary: {
+  optimization_summary?: {
     matches_processed: number;
     optimizations_generated: number;
     errors: number;
   };
-  pattern_analysis: {
+  pattern_analysis?: {
     avg_home_score_adjustment: number;
     avg_away_score_adjustment: number;
     avg_home_win_prob_adjustment: number;
@@ -20,14 +23,14 @@ interface AutoTuneResult {
     avg_away_win_prob_adjustment: number;
     avg_confidence_adjustment: number;
   };
-  calibration: {
+  calibration?: {
     calibration_id: number;
     engine: string;
     version: number;
     params: Record<string, number>;
   };
-  top_blind_spots: [string, number][];
-  top_calibration_issues: [string, number][];
+  top_blind_spots?: [string, number][];
+  top_calibration_issues?: [string, number][];
 }
 
 interface CalibrationInfo {
@@ -38,6 +41,22 @@ interface CalibrationInfo {
   created_at: string;
 }
 
+interface TaskLogEntry {
+  message: string;
+}
+
+interface TaskStatus {
+  task_id?: string;
+  status: "pending" | "running" | "completed" | "failed";
+  message?: string;
+  progress?: number;
+  total?: number;
+  current_match?: string;
+  logs?: TaskLogEntry[];
+  error?: string;
+  result?: AutoTuneResult;
+}
+
 export function EngineAutoTuneDashboard() {
   const [tuning, setTuning] = useState(false);
   const [tuneResult, setTuneResult] = useState<AutoTuneResult | null>(null);
@@ -45,8 +64,83 @@ export function EngineAutoTuneDashboard() {
   const [selectedEngine, setSelectedEngine] = useState<"elo_odds" | "hybrid">("elo_odds");
   const [calibration, setCalibration] = useState<CalibrationInfo | null>(null);
   const [loadingCalibration, setLoadingCalibration] = useState(false);
-  const [taskStatus, setTaskStatus] = useState<any>(null);
-  const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
+  const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+  }, []);
+
+  const loadCalibration = useCallback(async (engine: string) => {
+    setLoadingCalibration(true);
+    try {
+      const response = await fetch(
+        `${getWorldCupApiBase()}/api/world-cup/predictions/calibration/${engine}`,
+        { cache: "no-store" }
+      );
+
+      if (response.ok) {
+        const data: { status: string; calibration?: CalibrationInfo } = await response.json();
+        if (data.status === "ok") {
+          setCalibration(data.calibration ?? null);
+        } else {
+          setCalibration(null);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load calibration:", err);
+    } finally {
+      setLoadingCalibration(false);
+    }
+  }, []);
+
+  const startPolling = useCallback((taskId: string) => {
+    // Clear any existing interval before starting a new one
+    stopPolling();
+
+    const interval = setInterval(async () => {
+      try {
+        const response = await fetch(
+          `${getWorldCupApiBase()}/api/world-cup/predictions/auto-tune/status/${taskId}`,
+          { cache: "no-store" }
+        );
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data: { task: TaskStatus } = await response.json();
+        const task = data.task;
+
+        setTaskStatus(task);
+
+        if (task.status === "completed") {
+          setTuning(false);
+          setTuneResult(task.result ?? null);
+          stopPolling();
+          loadCalibration(selectedEngine);
+        } else if (task.status === "failed") {
+          setTuning(false);
+          setError(`优化失败: ${task.error ?? "未知错误"}`);
+          stopPolling();
+        }
+      } catch (err) {
+        console.error("Polling error:", err);
+      }
+    }, 2000); // Poll every 2 seconds
+
+    pollingRef.current = interval;
+  }, [stopPolling, selectedEngine, loadCalibration]);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      stopPolling();
+    };
+  }, [stopPolling]);
 
   const handleAutoTune = async () => {
     setTuning(true);
@@ -55,10 +149,15 @@ export function EngineAutoTuneDashboard() {
     setTaskStatus(null);
 
     try {
+      const headers: Record<string, string> = {};
+      const key = getOperatorApiKey();
+      if (key) headers["X-API-Key"] = key;
+
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"}/api/world-cup/predictions/auto-tune/${selectedEngine}?background=true`,
+        `${getWorldCupApiBase()}/api/world-cup/predictions/auto-tune/${selectedEngine}?background=true`,
         {
           method: "POST",
+          headers,
           cache: "no-store"
         }
       );
@@ -68,7 +167,7 @@ export function EngineAutoTuneDashboard() {
         throw new Error(data.detail || `HTTP ${response.status}`);
       }
 
-      const data = await response.json();
+      const data: { status: string; task_id?: string; message?: string } = await response.json();
 
       if (data.status === "accepted" && data.task_id) {
         // Start polling for task status
@@ -85,78 +184,6 @@ export function EngineAutoTuneDashboard() {
       const message = err instanceof Error ? err.message : String(err);
       setError(`自动调教失败: ${message}`);
       setTuning(false);
-    }
-  };
-
-  const startPolling = (taskId: string) => {
-    const interval = setInterval(async () => {
-      try {
-        const response = await fetch(
-          `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"}/api/world-cup/predictions/auto-tune/status/${taskId}`,
-          { cache: "no-store" }
-        );
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-
-        const data = await response.json();
-        const task = data.task;
-
-        setTaskStatus(task);
-
-        if (task.status === "completed") {
-          setTuning(false);
-          setTuneResult(task.result);
-          stopPolling();
-          loadCalibration(selectedEngine);
-        } else if (task.status === "failed") {
-          setTuning(false);
-          setError(`优化失败: ${task.error}`);
-          stopPolling();
-        }
-      } catch (err) {
-        console.error("Polling error:", err);
-      }
-    }, 2000); // Poll every 2 seconds
-
-    setPollingInterval(interval);
-  };
-
-  const stopPolling = () => {
-    if (pollingInterval) {
-      clearInterval(pollingInterval);
-      setPollingInterval(null);
-    }
-  };
-
-  // Cleanup polling on unmount
-  React.useEffect(() => {
-    return () => {
-      stopPolling();
-    };
-  }, [pollingInterval]);
-
-  const loadCalibration = async (engine: string) => {
-    setLoadingCalibration(true);
-    try {
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"}/api/world-cup/predictions/calibration/${engine}`,
-        { cache: "no-store" }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.status === "ok") {
-          setCalibration(data.calibration);
-        } else {
-          setCalibration(null);
-        }
-      }
-    } catch (err) {
-      console.error("Failed to load calibration:", err);
-    } finally {
-      setLoadingCalibration(false);
     }
   };
 
@@ -246,18 +273,18 @@ export function EngineAutoTuneDashboard() {
                 {taskStatus.status === "completed" && "完成"}
                 {taskStatus.status === "failed" && "失败"}
               </span>
-              {taskStatus.progress > 0 && taskStatus.total > 0 && (
+              {(taskStatus.progress ?? 0) > 0 && (taskStatus.total ?? 0) > 0 && (
                 <span className="text-sm text-muted-foreground">
                   {taskStatus.progress} / {taskStatus.total}
                 </span>
               )}
             </div>
 
-            {taskStatus.progress > 0 && taskStatus.total > 0 && (
+            {(taskStatus.progress ?? 0) > 0 && (taskStatus.total ?? 0) > 0 && (
               <div className="h-2 overflow-hidden rounded-full bg-secondary">
                 <div
                   className="h-full bg-primary transition-all duration-300"
-                  style={{ width: `${(taskStatus.progress / taskStatus.total) * 100}%` }}
+                  style={{ width: `${((taskStatus.progress ?? 0) / (taskStatus.total ?? 1)) * 100}%` }}
                 />
               </div>
             )}
@@ -270,7 +297,7 @@ export function EngineAutoTuneDashboard() {
 
             {taskStatus.logs && taskStatus.logs.length > 0 && (
               <div className="max-h-32 overflow-y-auto rounded border bg-background p-2 text-xs font-mono">
-                {taskStatus.logs.map((log: any, idx: number) => (
+                {taskStatus.logs.map((log: TaskLogEntry, idx: number) => (
                   <div key={idx} className="text-muted-foreground">
                     {log.message}
                   </div>
@@ -293,30 +320,47 @@ export function EngineAutoTuneDashboard() {
       {/* Tuning Results */}
       {tuneResult && (
         <div className="space-y-4">
-          {/* Summary */}
-          <div className="rounded-lg border bg-card p-6">
-            <h3 className="flex items-center gap-2 text-base font-semibold">
-              <Target className="size-4 text-primary" />
-              调教结果
-            </h3>
+          {tuneResult.status === "no_data" ? (
+            <div className="rounded-lg border border-muted bg-muted/20 p-6">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="size-5 flex-shrink-0 mt-0.5 text-muted-foreground" />
+                <div>
+                  <h3 className="font-semibold text-foreground">无可用数据</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {tuneResult.message || "当前没有使用该引擎的比赛预测，无法进行自动调优"}
+                  </p>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    提示：请确保已生成使用 <span className="font-mono">{selectedEngine}</span> 引擎的比赛预测
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Summary */}
+              <div className="rounded-lg border bg-card p-6">
+                <h3 className="flex items-center gap-2 text-base font-semibold">
+                  <Target className="size-4 text-primary" />
+                  调教结果
+                </h3>
 
-            <div className="mt-4 grid grid-cols-3 gap-4">
-              <div className="rounded-md border bg-secondary/30 p-3">
-                <div className="text-xs text-muted-foreground">处理比赛</div>
-                <div className="mt-1 text-2xl font-bold tabular-nums">
-                  {tuneResult.optimization_summary.matches_processed}
-                </div>
-              </div>
-              <div className="rounded-md border bg-secondary/30 p-3">
-                <div className="text-xs text-muted-foreground">生成优化</div>
-                <div className="mt-1 text-2xl font-bold tabular-nums">
-                  {tuneResult.optimization_summary.optimizations_generated}
-                </div>
-              </div>
-              <div className="rounded-md border bg-secondary/30 p-3">
-                <div className="text-xs text-muted-foreground">错误数</div>
-                <div className="mt-1 text-2xl font-bold tabular-nums">
-                  {tuneResult.optimization_summary.errors}
+                <div className="mt-4 grid grid-cols-3 gap-4">
+                  <div className="rounded-md border bg-secondary/30 p-3">
+                    <div className="text-xs text-muted-foreground">处理比赛</div>
+                    <div className="mt-1 text-2xl font-bold tabular-nums">
+                      {tuneResult.optimization_summary?.matches_processed || 0}
+                    </div>
+                  </div>
+                  <div className="rounded-md border bg-secondary/30 p-3">
+                    <div className="text-xs text-muted-foreground">生成优化</div>
+                    <div className="mt-1 text-2xl font-bold tabular-nums">
+                      {tuneResult.optimization_summary?.optimizations_generated || 0}
+                    </div>
+                  </div>
+                  <div className="rounded-md border bg-secondary/30 p-3">
+                    <div className="text-xs text-muted-foreground">错误数</div>
+                    <div className="mt-1 text-2xl font-bold tabular-nums">
+                      {tuneResult.optimization_summary?.errors || 0}
                 </div>
               </div>
             </div>
@@ -329,43 +373,43 @@ export function EngineAutoTuneDashboard() {
               <div className="flex justify-between">
                 <span className="text-muted-foreground">主队比分调整</span>
                 <span className="font-mono font-medium tabular-nums">
-                  {tuneResult.pattern_analysis.avg_home_score_adjustment > 0 ? "+" : ""}
-                  {tuneResult.pattern_analysis.avg_home_score_adjustment.toFixed(3)}
+                  {(tuneResult.pattern_analysis?.avg_home_score_adjustment ?? 0) > 0 ? "+" : ""}
+                  {tuneResult.pattern_analysis?.avg_home_score_adjustment?.toFixed(3) || "0.000"}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">客队比分调整</span>
                 <span className="font-mono font-medium tabular-nums">
-                  {tuneResult.pattern_analysis.avg_away_score_adjustment > 0 ? "+" : ""}
-                  {tuneResult.pattern_analysis.avg_away_score_adjustment.toFixed(3)}
+                  {(tuneResult.pattern_analysis?.avg_away_score_adjustment ?? 0) > 0 ? "+" : ""}
+                  {tuneResult.pattern_analysis?.avg_away_score_adjustment?.toFixed(3) || "0.000"}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">主胜概率调整</span>
                 <span className="font-mono font-medium tabular-nums">
-                  {tuneResult.pattern_analysis.avg_home_win_prob_adjustment > 0 ? "+" : ""}
-                  {(tuneResult.pattern_analysis.avg_home_win_prob_adjustment * 100).toFixed(1)}%
+                  {(tuneResult.pattern_analysis?.avg_home_win_prob_adjustment ?? 0) > 0 ? "+" : ""}
+                  {((tuneResult.pattern_analysis?.avg_home_win_prob_adjustment ?? 0) * 100).toFixed(1)}%
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">平局概率调整</span>
                 <span className="font-mono font-medium tabular-nums">
-                  {tuneResult.pattern_analysis.avg_draw_prob_adjustment > 0 ? "+" : ""}
-                  {(tuneResult.pattern_analysis.avg_draw_prob_adjustment * 100).toFixed(1)}%
+                  {(tuneResult.pattern_analysis?.avg_draw_prob_adjustment ?? 0) > 0 ? "+" : ""}
+                  {((tuneResult.pattern_analysis?.avg_draw_prob_adjustment ?? 0) * 100).toFixed(1)}%
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">客胜概率调整</span>
                 <span className="font-mono font-medium tabular-nums">
-                  {tuneResult.pattern_analysis.avg_away_win_prob_adjustment > 0 ? "+" : ""}
-                  {(tuneResult.pattern_analysis.avg_away_win_prob_adjustment * 100).toFixed(1)}%
+                  {(tuneResult.pattern_analysis?.avg_away_win_prob_adjustment ?? 0) > 0 ? "+" : ""}
+                  {((tuneResult.pattern_analysis?.avg_away_win_prob_adjustment ?? 0) * 100).toFixed(1)}%
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">置信度调整</span>
                 <span className="font-mono font-medium tabular-nums">
-                  {tuneResult.pattern_analysis.avg_confidence_adjustment > 0 ? "+" : ""}
-                  {(tuneResult.pattern_analysis.avg_confidence_adjustment * 100).toFixed(1)}%
+                  {(tuneResult.pattern_analysis?.avg_confidence_adjustment ?? 0) > 0 ? "+" : ""}
+                  {((tuneResult.pattern_analysis?.avg_confidence_adjustment ?? 0) * 100).toFixed(1)}%
                 </span>
               </div>
             </div>
@@ -376,24 +420,32 @@ export function EngineAutoTuneDashboard() {
             <div className="rounded-lg border bg-card p-6">
               <h3 className="text-base font-semibold">高频数据盲点</h3>
               <div className="mt-4 space-y-2">
-                {tuneResult.top_blind_spots.map(([spot, count], idx) => (
-                  <div key={idx} className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">{spot}</span>
-                    <span className="font-mono font-medium tabular-nums">{count}次</span>
-                  </div>
-                ))}
+                {(tuneResult.top_blind_spots?.length ?? 0) > 0 ? (
+                  tuneResult.top_blind_spots!.map(([spot, count], idx) => (
+                    <div key={idx} className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">{spot}</span>
+                      <span className="font-mono font-medium tabular-nums">{count}次</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground">无数据</p>
+                )}
               </div>
             </div>
 
             <div className="rounded-lg border bg-card p-6">
               <h3 className="text-base font-semibold">高频校准问题</h3>
               <div className="mt-4 space-y-2">
-                {tuneResult.top_calibration_issues.map(([issue, count], idx) => (
-                  <div key={idx} className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">{issue}</span>
-                    <span className="font-mono font-medium tabular-nums">{count}次</span>
-                  </div>
-                ))}
+                {(tuneResult.top_calibration_issues?.length ?? 0) > 0 ? (
+                  tuneResult.top_calibration_issues!.map(([issue, count], idx) => (
+                    <div key={idx} className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">{issue}</span>
+                      <span className="font-mono font-medium tabular-nums">{count}次</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground">无数据</p>
+                )}
               </div>
             </div>
           </div>
@@ -407,17 +459,19 @@ export function EngineAutoTuneDashboard() {
             <div className="mt-3 text-sm">
               <p>
                 <span className="text-muted-foreground">引擎:</span>{" "}
-                <span className="font-medium">{tuneResult.calibration.engine}</span>
+                <span className="font-medium">{tuneResult.calibration?.engine}</span>
               </p>
               <p className="mt-1">
                 <span className="text-muted-foreground">版本:</span>{" "}
-                <span className="font-medium">v{tuneResult.calibration.version}</span>
+                <span className="font-medium">v{tuneResult.calibration?.version}</span>
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
                 该校准将自动应用于后续的预测生成
               </p>
             </div>
           </div>
+            </>
+          )}
         </div>
       )}
 

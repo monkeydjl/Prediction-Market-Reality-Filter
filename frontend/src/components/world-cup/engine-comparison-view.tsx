@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Zap, Brain, Target, TrendingUp, Award, AlertCircle, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getWorldCupApiBase } from "@/lib/env";
 
 interface EngineStat {
   total_matches: number;
@@ -64,7 +65,7 @@ export function EngineComparisonView() {
         setError(null);
 
         const response = await fetch(
-          `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"}/api/world-cup/predictions/engine-comparison`,
+          `${getWorldCupApiBase()}/api/world-cup/predictions/engine-comparison`,
           { cache: "no-store" }
         );
 

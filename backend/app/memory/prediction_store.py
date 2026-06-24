@@ -323,18 +323,17 @@ def score_prediction(event_id: str, actual_outcome: float) -> dict[str, Any] | N
     """
     path = sqlite_db.loop_db_path()
     _ensure_schema(path)
-    with reading(path) as conn:
+    with writing(path) as conn:
         row = conn.execute(
             "SELECT * FROM predictions WHERE event_id=? AND status='open'",
             (event_id,),
         ).fetchone()
-    if row is None:
-        return None
+        if row is None:
+            return None
 
-    # Only act rows are scored; watch/skip are observed (recorded, not calibrated).
-    new_status = "scored" if row["decision"] == "act" else "observed"
-    brier = round(brier_score(row["ai_probability"], actual_outcome), 4)
-    with writing(path) as conn:
+        # Only act rows are scored; watch/skip are observed (recorded, not calibrated).
+        new_status = "scored" if row["decision"] == "act" else "observed"
+        brier = round(brier_score(row["ai_probability"], actual_outcome), 4)
         conn.execute(
             """
             UPDATE predictions
@@ -355,14 +354,13 @@ def void_prediction(event_id: str) -> dict[str, Any] | None:
     event has no open prediction. Idempotent."""
     path = sqlite_db.loop_db_path()
     _ensure_schema(path)
-    with reading(path) as conn:
+    with writing(path) as conn:
         row = conn.execute(
             "SELECT id FROM predictions WHERE event_id=? AND status='open'",
             (event_id,),
         ).fetchone()
-    if row is None:
-        return None
-    with writing(path) as conn:
+        if row is None:
+            return None
         conn.execute(
             "UPDATE predictions SET status='voided', resolved_at=? "
             "WHERE event_id=? AND status='open'",

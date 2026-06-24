@@ -39,7 +39,24 @@ export function MoversBoard({
   movers: EventView[];
   sparklines: Record<string, number[]>;
 }) {
-  if (movers.length === 0) return null;
+  if (movers.length === 0) {
+    return (
+      <section className="flex flex-col gap-3">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-sm font-semibold">概率异动榜</h2>
+          <span className="text-xs text-muted-foreground">概率变动最大的事件</span>
+        </div>
+        <div className="rounded-lg border border-dashed py-8 text-center">
+          <p className="text-sm text-muted-foreground">
+            暂无概率异动事件
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            事件概率发生变化后，变动最大的事件将显示在这里
+          </p>
+        </div>
+      </section>
+    );
+  }
   return (
     <section className="flex flex-col gap-3">
       <div className="flex items-baseline justify-between">

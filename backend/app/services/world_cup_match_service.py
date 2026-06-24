@@ -97,7 +97,7 @@ def parse_fixture(fixture_data: dict[str, Any]) -> dict[str, Any] | None:
         date_str = fixture.get("date", "")
         try:
             kickoff_utc = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-        except:
+        except (ValueError, TypeError):
             return None
 
     # Determine stage from round info

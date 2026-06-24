@@ -32,6 +32,12 @@ from app.services.world_cup_team_stats_service import (
     fetch_head_to_head,
     get_team_id_from_name,
 )
+from app.services.world_cup_enhanced_factors import calculate_comprehensive_factors
+from app.services.engine_auto_tuning_service import apply_calibration_to_prediction
+from app.services.world_cup_confidence_calibration import apply_confidence_calibration
+from app.services.world_cup_betting_analysis import analyze_betting_markets
+from app.services.world_cup_tactical_profiles import format_tactical_summary
+from app.services.world_cup_weather_service import get_match_weather
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
 
 logger = logging.getLogger(__name__)
@@ -66,7 +72,9 @@ def fetch_team_stats(team_name: str, team_id: int | None = None) -> dict[str, An
             return stats
 
     # Fallback to mock data
-    return generate_mock_team_stats(team_name)
+    stats = generate_mock_team_stats(team_name)
+    stats["data_source"] = "mock"  # Mark as mock for transparency
+    return stats
 
 
 def fetch_h2h_data(home_team: str, away_team: str, home_team_id: int | None = None, away_team_id: int | None = None) -> dict[str, Any]:
@@ -102,7 +110,9 @@ def fetch_h2h_data(home_team: str, away_team: str, home_team_id: int | None = No
             }
 
     # Fallback to mock data
-    return generate_mock_h2h_data(home_team, away_team)
+    h2h = generate_mock_h2h_data(home_team, away_team)
+    h2h["data_source"] = "mock"  # Mark as mock for transparency
+    return h2h
 
 
 def generate_mock_team_stats(team_name: str) -> dict[str, Any]:
@@ -166,6 +176,95 @@ def generate_mock_h2h_data(home_team: str, away_team: str) -> dict[str, Any]:
     }
 
 
+def _detect_group_stage_status(match: MatchFixture, session: Session) -> dict[str, Any] | None:
+    """Detect group stage final round status for both teams.
+
+    In the final round of group stage matches, some teams may have already
+    qualified (>= 6 points) or been effectively eliminated (0 points with
+    only 1 match remaining). This affects their motivation and lineup choices.
+
+    Args:
+        match: The match fixture being predicted
+        session: Database session
+
+    Returns:
+        Dict with "home" and "away" status values, or None if not applicable.
+        Status values: "qualified", "eliminated", or None.
+    """
+    stage = match.stage
+    if stage not in ("group_stage", "Group Stage"):
+        return None
+
+    group = match.group
+    if not group:
+        return None
+
+    # Query all matches in this group
+    group_matches = session.query(MatchFixture).filter(
+        MatchFixture.group == group
+    ).all()
+
+    finished_matches = [m for m in group_matches if m.status == "finished"]
+    finished_count = len(finished_matches)
+
+    # Final round: >= 4 finished matches in the group (of 6 total).
+    # At this point the current (unfinished) match is one of the last 2.
+    if finished_count < 4:
+        return None
+
+    # Calculate points and matches played for each team from finished matches
+    team_points: dict[str, int] = {}
+    team_matches_played: dict[str, int] = {}
+
+    for fm in finished_matches:
+        home_team = fm.home_team
+        away_team = fm.away_team
+        hs = fm.home_score
+        as_ = fm.away_score
+
+        if hs is None or as_ is None:
+            continue
+
+        team_matches_played[home_team] = team_matches_played.get(home_team, 0) + 1
+        team_matches_played[away_team] = team_matches_played.get(away_team, 0) + 1
+
+        if hs > as_:
+            team_points[home_team] = team_points.get(home_team, 0) + 3
+            team_points[away_team] = team_points.get(away_team, 0)
+        elif hs < as_:
+            team_points[away_team] = team_points.get(away_team, 0) + 3
+            team_points[home_team] = team_points.get(home_team, 0)
+        else:
+            team_points[home_team] = team_points.get(home_team, 0) + 1
+            team_points[away_team] = team_points.get(away_team, 0) + 1
+
+    # Determine status for home and away teams
+    home_status = None
+    away_status = None
+
+    home_points = team_points.get(match.home_team, 0)
+    away_points = team_points.get(match.away_team, 0)
+    home_played = team_matches_played.get(match.home_team, 0)
+    away_played = team_matches_played.get(match.away_team, 0)
+
+    # Qualified: >= 6 points (2 wins guarantees advancement)
+    if home_points >= 6:
+        home_status = "qualified"
+    if away_points >= 6:
+        away_status = "qualified"
+
+    # Eliminated: 0 points and this is their last match (already played 2)
+    if home_points == 0 and home_played == 2:
+        home_status = "eliminated"
+    if away_points == 0 and away_played == 2:
+        away_status = "eliminated"
+
+    if home_status is None and away_status is None:
+        return None
+
+    return {"home": home_status, "away": away_status}
+
+
 async def run_prediction_pipeline(
     match_id: str,
     trigger: str = "manual",
@@ -215,11 +314,76 @@ async def run_prediction_pipeline(
         # Step 3: Choose prediction engine
         selected_engine = engine
         if engine == "auto":
-            # Auto-select: prefer Elo+Odds if odds available
+            # Auto-select: use integrated mode if odds available, else hybrid
             if odds and odds.get("source") != "fallback":
-                selected_engine = "elo_odds"
+                selected_engine = "integrated"
             else:
                 selected_engine = "hybrid"
+
+        # Step 3b: Calculate prediction factors (needed for hybrid and integrated)
+        factors = None
+        if selected_engine in ("hybrid", "integrated"):
+            home_team_id = getattr(match, 'home_team_id', None)
+            away_team_id = getattr(match, 'away_team_id', None)
+
+            home_stats = fetch_team_stats(match.home_team, home_team_id)
+            away_stats = fetch_team_stats(match.away_team, away_team_id)
+            h2h_data = fetch_h2h_data(match.home_team, match.away_team, home_team_id, away_team_id)
+
+            # Track data quality
+            data_quality = "real"
+            if home_stats.get("data_source") == "mock" or away_stats.get("data_source") == "mock":
+                data_quality = "mock"
+            if h2h_data.get("data_source") == "mock":
+                data_quality = "mock" if data_quality != "real" else "partial"
+
+            # Fetch weather data for the match venue
+            weather = get_match_weather(
+                venue=getattr(match, 'venue', None),
+                city=getattr(match, 'city', None),
+                match_date=match.kickoff_utc.isoformat() if match.kickoff_utc else None,
+            )
+
+            enhanced_factors = calculate_comprehensive_factors(
+                home_team_name=match.home_team,
+                away_team_name=match.away_team,
+                home_team_stats=home_stats,
+                away_team_stats=away_stats,
+                h2h_data=h2h_data,
+                betting_odds=odds if odds and odds.get("source") != "fallback" else None,
+                context={"stage": match.stage, "match_id": match.match_id, "weather": weather},
+            )
+
+            factors = build_prediction_factors(
+                home_team_name=match.home_team,
+                away_team_name=match.away_team,
+                home_team_stats=home_stats,
+                away_team_stats=away_stats,
+                stage=match.stage,
+                h2h_data=h2h_data,
+                match_date=match.kickoff_utc.isoformat() if match.kickoff_utc else None,
+                match_id=match.match_id
+            )
+            factors["enhanced"] = enhanced_factors
+            factors["data_quality"] = data_quality
+
+            # Detect group stage final round status (qualified/eliminated teams)
+            group_status = _detect_group_stage_status(match, session)
+            if group_status:
+                factors["group_status"] = group_status
+                logger.info(
+                    "Group stage final round detected for match %s (group %s): home=%s, away=%s",
+                    match.match_id,
+                    match.group,
+                    group_status.get("home"),
+                    group_status.get("away"),
+                )
+
+        # Determine if this is a knockout match
+        is_knockout = match.stage in {
+            "round_of_16", "quarterfinal", "semifinal", "final",
+            "Round of 16", "Quarterfinal", "Semifinal", "Final",
+        }
 
         # Step 4: Run prediction based on selected engine
         if selected_engine == "elo_odds":
@@ -232,6 +396,7 @@ async def run_prediction_pipeline(
                 odds_home=odds["home"] if odds else None,
                 odds_draw=odds["draw"] if odds else None,
                 odds_away=odds["away"] if odds else None,
+                is_knockout=is_knockout,
             )
 
             # Convert to standard format
@@ -245,32 +410,100 @@ async def run_prediction_pipeline(
                 "rule_score": None,
                 "ai_score": None,
                 "ai_reasoning": None,
-                "key_factors": []
+                "key_factors": [],
+                "score_probability_matrix": prediction.get("score_probability_matrix"),
+                "top_5_scores": prediction.get("top_5_scores"),
+                "prediction_interval": prediction.get("prediction_interval"),
+            }
+
+        elif selected_engine == "integrated":
+            # Integrated engine: run both engines and fuse results
+            # This combines market signals (elo_odds) with contextual factors (hybrid)
+            elo_prediction = predict_match_elo_odds(
+                home_team=match.home_team,
+                away_team=match.away_team,
+                elo_home=home_elo_data["elo_rating"],
+                elo_away=away_elo_data["elo_rating"],
+                odds_home=odds["home"] if odds else None,
+                odds_draw=odds["draw"] if odds else None,
+                odds_away=odds["away"] if odds else None,
+                is_knockout=is_knockout,
+            )
+
+            # Also run hybrid engine with factors
+            hybrid_prediction = await predict_match_score(
+                home_team=match.home_team,
+                away_team=match.away_team,
+                kickoff_utc=match.kickoff_utc,
+                stage=match.stage,
+                factors=factors,
+            )
+
+            # Fuse: elo_odds + hybrid with dynamic weights based on data quality
+            # Default: trust market signals (elo_odds) more when all data is real
+            elo_weight = 0.70
+            if data_quality == "mock":
+                # Team stats are fake - reduce reliance on elo_odds
+                elo_weight = min(elo_weight, 0.40)
+            if odds and odds.get("source") and ("fallback" in odds.get("source") or "default" in odds.get("source")):
+                # Odds are fake - reduce reliance on elo_odds
+                elo_weight = min(elo_weight, 0.35)
+            home_elo_source = home_elo_data.get("source", "")
+            away_elo_source = away_elo_data.get("source", "")
+            if ("estimated" in home_elo_source or "default" in home_elo_source or
+                "estimated" in away_elo_source or "default" in away_elo_source):
+                # Elo ratings are estimated/default - reduce reliance on elo_odds
+                elo_weight = min(elo_weight, 0.45)
+            hybrid_weight = 1.0 - elo_weight
+
+            logger.info("Integrated engine weights: elo=%.2f hybrid=%.2f (data_quality=%s, odds_source=%s, elo_source=%s/%s)",
+                        elo_weight, hybrid_weight, data_quality,
+                        odds.get("source") if odds else "none",
+                        home_elo_data.get("source", "unknown"),
+                        away_elo_data.get("source", "unknown"))
+
+            fused_home = elo_prediction["predicted_score"]["home"] * elo_weight + \
+                         hybrid_prediction["predicted_score"]["home"] * hybrid_weight
+            fused_away = elo_prediction["predicted_score"]["away"] * elo_weight + \
+                         hybrid_prediction["predicted_score"]["away"] * hybrid_weight
+
+            # Fuse outcome probabilities
+            elo_probs = elo_prediction["outcome_probabilities"]
+            hybrid_probs = hybrid_prediction["outcome_probabilities"]
+            fused_probs = {
+                "home_win": elo_probs["home_win"] * elo_weight + hybrid_probs["home_win"] * hybrid_weight,
+                "draw": elo_probs["draw"] * elo_weight + hybrid_probs["draw"] * hybrid_weight,
+                "away_win": elo_probs["away_win"] * elo_weight + hybrid_probs["away_win"] * hybrid_weight,
+            }
+
+            # Confidence: average of both, boosted if they agree
+            elo_conf = elo_prediction["confidence"]
+            hybrid_conf = hybrid_prediction["confidence"]
+            agreement = 1.0 - abs(elo_probs["home_win"] - hybrid_probs["home_win"])
+            base_conf = (elo_conf + hybrid_conf) / 2
+            confidence = min(0.95, base_conf + agreement * 0.10)
+
+            prediction_result = {
+                "predicted_score": {"home": round(fused_home, 2), "away": round(fused_away, 2)},
+                "outcome_probabilities": {
+                    k: round(v, 4) for k, v in fused_probs.items()
+                },
+                "confidence": round(confidence, 3),
+                "prediction_method": f"integrated (elo_odds {int(elo_weight*100)}% + hybrid {int(hybrid_weight*100)}%)",
+                "elo_ratings": elo_prediction["elo_ratings"],
+                "has_betting_odds": elo_prediction["has_betting_odds"],
+                "rule_score": hybrid_prediction.get("rule_score"),
+                "ai_score": hybrid_prediction.get("ai_score"),
+                "ai_reasoning": hybrid_prediction.get("ai_reasoning"),
+                "key_factors": hybrid_prediction.get("key_factors", []),
+                "factors": factors,
+                "score_probability_matrix": elo_prediction.get("score_probability_matrix"),
+                "top_5_scores": elo_prediction.get("top_5_scores"),
+                "prediction_interval": elo_prediction.get("prediction_interval"),
             }
 
         else:  # selected_engine == "hybrid"
-            # Use comprehensive hybrid engine
-            # Step 4a: Fetch team statistics (try API-Football, fallback to mock)
-            home_team_id = getattr(match, 'home_team_id', None)
-            away_team_id = getattr(match, 'away_team_id', None)
-
-            home_stats = fetch_team_stats(match.home_team, home_team_id)
-            away_stats = fetch_team_stats(match.away_team, away_team_id)
-            h2h_data = fetch_h2h_data(match.home_team, match.away_team, home_team_id, away_team_id)
-
-            # Step 4b: Calculate prediction factors
-            factors = build_prediction_factors(
-                home_team_name=match.home_team,
-                away_team_name=match.away_team,
-                home_team_stats=home_stats,
-                away_team_stats=away_stats,
-                stage=match.stage,
-                h2h_data=h2h_data,
-                match_date=match.kickoff_utc.isoformat() if match.kickoff_utc else None,
-                match_id=match.match_id
-            )
-
-            # Step 4c: Run prediction engine
+            # Use comprehensive hybrid engine (factors already calculated in Step 3b)
             prediction_result = await predict_match_score(
                 home_team=match.home_team,
                 away_team=match.away_team,
@@ -278,6 +511,57 @@ async def run_prediction_pipeline(
                 stage=match.stage,
                 factors=factors
             )
+
+        # Step 4d: Apply engine calibration if available
+        try:
+            from app.models.world_cup_prediction import EngineCalibration
+            active_cal = session.query(EngineCalibration).filter_by(
+                engine_name=selected_engine, is_active=True
+            ).first()
+            if active_cal and active_cal.calibration_params:
+                # Pass engine name string; function will fetch calibration internally
+                prediction_result = apply_calibration_to_prediction(
+                    prediction_result, selected_engine
+                )
+                prediction_result["calibration_applied"] = {
+                    "version": active_cal.version,
+                    "params": active_cal.calibration_params,
+                }
+        except Exception as cal_err:
+            logger.warning("Calibration application skipped: %s", cal_err)
+
+        # Add data quality flag to prediction result
+        if "factors" in prediction_result and isinstance(prediction_result["factors"], dict):
+            prediction_result["data_quality"] = prediction_result["factors"].get("data_quality", "real")
+        else:
+            prediction_result["data_quality"] = "real"
+
+        # Step 4e: Apply confidence calibration (bucketed reliability curve)
+        try:
+            prediction_result = apply_confidence_calibration(
+                prediction_result, engine_name=selected_engine
+            )
+        except Exception as cal_err:
+            logger.warning("Confidence calibration skipped: %s", cal_err)
+
+        # Step 4f: Add betting market analysis from score probability matrix
+        score_matrix = prediction_result.get("score_probability_matrix")
+        if score_matrix:
+            try:
+                prediction_result["betting_analysis"] = analyze_betting_markets(
+                    score_matrix,
+                    prediction_result.get("outcome_probabilities"),
+                )
+            except Exception as ba_err:
+                logger.warning("Betting analysis skipped: %s", ba_err)
+
+        # Step 4g: Add tactical matchup analysis
+        try:
+            prediction_result["tactical_analysis"] = format_tactical_summary(
+                match.home_team, match.away_team
+            )
+        except Exception as ta_err:
+            logger.warning("Tactical analysis skipped: %s", ta_err)
 
         # Step 5: Save or update prediction in database
         existing = session.query(MatchPrediction).filter_by(match_id=match_id).first()

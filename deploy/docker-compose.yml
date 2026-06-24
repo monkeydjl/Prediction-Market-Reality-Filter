@@ -10,9 +10,18 @@ services:
       - "8000:8000"
     env_file:
       - ../backend/.env
+    environment:
+      # Persist all data files to the mounted /app/data volume
+      - EVENT_STORE_FILE=/app/data/event_store.json
+      - EVENT_AUDIT_FILE=/app/data/event_audit.jsonl
+      - EVENT_CACHE_FILE=/app/data/event_cache.json
+      - LOOP_DB_FILE=/app/data/v2_loop.db
+      - WORLD_CUP_PREDICTION_DB_FILE=/app/data/world_cup_predictions.db
+      - SPORTS_FACT_FILE=/app/data/sports_facts.json
     volumes:
       - pmrf_data:/app/backups
       - pmrf_logs:/app/logs
+      - pmrf_store:/app/data
     restart: unless-stopped
     healthcheck:
       # python (not curl) — curl is absent from python:3.11-slim. Exit non-zero on
@@ -26,3 +35,4 @@ services:
 volumes:
   pmrf_data:
   pmrf_logs:
+  pmrf_store:

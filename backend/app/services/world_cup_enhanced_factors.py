@@ -212,7 +212,7 @@ def calculate_fatigue_factor(team_stats: dict[str, Any]) -> dict[str, Any]:
         try:
             last_date = datetime.fromisoformat(last_match.replace('Z', '+00:00'))
             days_rest = (datetime.utcnow() - last_date).days
-        except:
+        except (ValueError, TypeError):
             pass
 
     # Fatigue curve: 0-2 days = high fatigue, 3-4 = medium, 5+ = rested

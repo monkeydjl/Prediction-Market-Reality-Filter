@@ -88,7 +88,7 @@ def parse_fixture(match_data: dict[str, Any]) -> dict[str, Any] | None:
     utc_date = match_data.get('utcDate', '')
     try:
         kickoff_utc = datetime.fromisoformat(utc_date.replace('Z', '+00:00'))
-    except:
+    except (ValueError, TypeError):
         return None
 
     # Map stage

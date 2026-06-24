@@ -37,20 +37,21 @@ function PredictionColumn({
 }) {
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
 
   const handleApply = async () => {
     setApplying(true);
+    setApplyError(null);
     try {
-      console.log('[EngineCompare] Applying prediction with engine:', engine);
       await triggerPrediction(matchId, engine);
-      console.log('[EngineCompare] Prediction applied successfully');
       setApplied(true);
       setTimeout(() => setApplied(false), 2000);
 
       // Notify parent to reload
-      console.log('[EngineCompare] Calling onApply callback');
       onApply?.();
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setApplyError(`应用失败: ${message}`);
       console.error("[EngineCompare] Failed to apply prediction:", error);
     } finally {
       setApplying(false);
@@ -161,6 +162,12 @@ function PredictionColumn({
       )}
 
       {/* Apply Button */}
+      {applyError && (
+        <div className="mt-2 flex items-center gap-1.5 text-xs text-neg">
+          <AlertCircle className="size-3 flex-shrink-0" />
+          <span>{applyError}</span>
+        </div>
+      )}
       <button
         onClick={handleApply}
         disabled={applying || applied}

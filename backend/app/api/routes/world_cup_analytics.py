@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from typing import Any
 
-from app.utils.prediction_db import get_prediction_session
+from app.utils.prediction_db import get_prediction_session_dep
 from app.models.world_cup_prediction import (
     MatchPrediction,
     MatchResult,
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 
 @router.get("/engine-stats")
-async def get_engine_stats(session: Session = Depends(get_prediction_session)) -> dict[str, Any]:
+async def get_engine_stats(session: Session = Depends(get_prediction_session_dep)) -> dict[str, Any]:
     """Get prediction engine usage statistics."""
 
     # Count predictions by engine
@@ -57,7 +57,7 @@ async def get_engine_stats(session: Session = Depends(get_prediction_session)) -
 
 
 @router.get("/accuracy-stats")
-async def get_accuracy_stats(session: Session = Depends(get_prediction_session)) -> dict[str, Any]:
+async def get_accuracy_stats(session: Session = Depends(get_prediction_session_dep)) -> dict[str, Any]:
     """Get prediction accuracy statistics."""
 
     results = session.query(MatchResult).all()
@@ -88,7 +88,7 @@ async def get_accuracy_stats(session: Session = Depends(get_prediction_session))
 
 
 @router.get("/odds-cache-stats")
-async def get_odds_cache_stats(session: Session = Depends(get_prediction_session)) -> dict[str, Any]:
+async def get_odds_cache_stats(session: Session = Depends(get_prediction_session_dep)) -> dict[str, Any]:
     """Get odds API cache statistics."""
 
     from datetime import datetime, timedelta
@@ -104,7 +104,9 @@ async def get_odds_cache_stats(session: Session = Depends(get_prediction_session
         }
 
     now = datetime.utcnow()
-    fresh = sum(1 for e in cache_entries if e.expires_at and e.expires_at > now)
+    # OddsCache has no expires_at column; derive freshness from cached_at + 1h TTL
+    ttl = timedelta(hours=1)
+    fresh = sum(1 for e in cache_entries if e.cached_at and (now - e.cached_at) < ttl)
     stale = len(cache_entries) - fresh
 
     # Estimate API calls saved (each cache hit = 1 API call saved)
@@ -123,7 +125,7 @@ async def get_odds_cache_stats(session: Session = Depends(get_prediction_session
 @router.get("/prediction-timeline")
 async def get_prediction_timeline(
     match_id: str,
-    session: Session = Depends(get_prediction_session)
+    session: Session = Depends(get_prediction_session_dep)
 ) -> dict[str, Any]:
     """Get prediction evolution timeline for a match."""
 
@@ -170,7 +172,7 @@ async def get_prediction_timeline(
 
 
 @router.get("/system-health")
-async def get_system_health(session: Session = Depends(get_prediction_session)) -> dict[str, Any]:
+async def get_system_health(session: Session = Depends(get_prediction_session_dep)) -> dict[str, Any]:
     """Get overall system health metrics."""
 
     from datetime import datetime, timedelta

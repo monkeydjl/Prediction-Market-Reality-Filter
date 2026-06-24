@@ -6,11 +6,13 @@ Covers: FIFA World Cup 2026 odds (1x2 markets)
 """
 
 import httpx
+import logging
 from typing import Any
 from datetime import datetime, timedelta
 
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
 
 # API Configuration
 ODDS_API_KEY = settings.ODDS_API_KEY if hasattr(settings, 'ODDS_API_KEY') else None
@@ -19,6 +21,30 @@ SPORT = "soccer_fifa_world_cup"  # Sport key for World Cup
 REGIONS = "us,eu"  # US and European bookmakers
 MARKETS = "h2h"  # Head-to-head (1x2: home/draw/away)
 ODDS_FORMAT = "decimal"  # Decimal odds (e.g., 2.10)
+
+# In-memory quota tracker (updated from API response headers)
+_quota_remaining: int | None = None
+_quota_last_checked: datetime | None = None
+
+
+def get_quota_status() -> dict[str, Any]:
+    """Get current quota status (from last API response)."""
+    return {
+        "remaining": _quota_remaining,
+        "last_checked": _quota_last_checked.isoformat() if _quota_last_checked else None,
+        "enabled": bool(ODDS_API_KEY),
+    }
+
+
+def _update_quota_from_headers(headers: httpx.Headers) -> None:
+    """Update in-memory quota tracker from API response headers."""
+    global _quota_remaining, _quota_last_checked
+    remaining = headers.get("x-requests-remaining")
+    if remaining is not None:
+        _quota_remaining = int(remaining)
+        _quota_last_checked = datetime.utcnow()
+        if _quota_remaining < 50:
+            logger.warning("Odds API quota low: %d remaining", _quota_remaining)
 
 
 async def fetch_match_odds(
@@ -45,6 +71,17 @@ async def fetch_match_odds(
         None if odds not available or API error
     """
     if not ODDS_API_KEY:
+        logger.debug("Odds API key not configured, skipping fetch")
+        return None
+
+    # Respect ODDS_API_ENABLED config flag
+    if hasattr(settings, 'ODDS_API_ENABLED') and not settings.ODDS_API_ENABLED:
+        logger.debug("Odds API disabled in config (ODDS_API_ENABLED=false), skipping fetch")
+        return None
+
+    # Skip if quota is known to be exhausted
+    if _quota_remaining is not None and _quota_remaining <= 0:
+        logger.debug("Odds API quota exhausted, skipping fetch")
         return None
 
     try:
@@ -60,7 +97,20 @@ async def fetch_match_odds(
                 }
             )
 
+            # Update quota from headers regardless of status code
+            _update_quota_from_headers(response.headers)
+
+            if response.status_code == 422:
+                # Quota exceeded or invalid sport key
+                logger.warning("Odds API returned 422: %s", response.text[:200])
+                return None
+
+            if response.status_code == 401:
+                logger.error("Odds API key invalid (401)")
+                return None
+
             if response.status_code != 200:
+                logger.warning("Odds API returned %d: %s", response.status_code, response.text[:200])
                 return None
 
             data = response.json()
@@ -80,7 +130,8 @@ async def fetch_match_odds(
             odds = extract_best_odds(match)
             return odds
 
-    except Exception:
+    except Exception as e:
+        logger.debug("Odds API fetch error: %s", e)
         return None
 
 
@@ -110,7 +161,7 @@ def find_matching_fixture(
     if isinstance(commence_time, str):
         try:
             target_time = datetime.fromisoformat(commence_time.replace('Z', '+00:00'))
-        except:
+        except (ValueError, TypeError):
             pass
     elif isinstance(commence_time, datetime):
         target_time = commence_time
@@ -138,7 +189,7 @@ def find_matching_fixture(
                     time_diff = abs((fixture_time - target_time).total_seconds())
                     if time_diff > 6 * 3600:  # 6 hours tolerance
                         continue
-                except:
+                except (ValueError, TypeError):
                     pass
 
         return fixture

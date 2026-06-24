@@ -23,6 +23,7 @@ Event vocabulary only - no trading terms.
 
 import json
 import logging
+from typing import Any
 
 from openai import AsyncOpenAI
 
@@ -43,7 +44,7 @@ async def cross_validate(
     question: str,
     news_context: str,
     primary_probability: float,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Re-estimate the probability with an independent second model.
 
     Returns None when cross-validation is disabled (no model configured) or the
@@ -94,7 +95,7 @@ async def _ask_second_model(
     market_question: str,
     market_probability: float,
     news_context: str,
-) -> dict:
+) -> dict[str, Any]:
     client = _get_second_client()
     response = await client.chat.completions.create(
         model=settings.CROSS_VALIDATION_MODEL,

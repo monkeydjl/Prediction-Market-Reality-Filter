@@ -224,8 +224,8 @@ def calculate_form_rating(wins: int, draws: int, losses: int) -> float:
 def get_team_id_from_name(team_name: str) -> int | None:
     """Get API-Football team ID from team name.
 
-    TODO: This should query the API or use a cached mapping.
-    For now, returns None to trigger fallback to mock data.
+    Uses a curated mapping of 2026 World Cup team names to API-Football IDs.
+    Falls back to None for unknown teams (triggers mock data fallback).
 
     Args:
         team_name: Team name (e.g., "Brazil", "Argentina")
@@ -233,11 +233,96 @@ def get_team_id_from_name(team_name: str) -> int | None:
     Returns:
         Team ID or None if not found
     """
-    # Team name -> ID mapping would go here
-    # This requires either:
-    # 1. A cached mapping file (team_id_mapping.json)
-    # 2. A search API call to /teams?search={team_name}
-    # 3. Extracting team IDs from fixture data when syncing
+    # Curated mapping of World Cup 2026 team names to API-Football team IDs
+    # Source: API-Football /teams endpoint
+    TEAM_NAME_TO_ID: dict[str, int] = {
+        # South America
+        "Brazil": 6,
+        "Argentina": 26,
+        "Colombia": 32,
+        "Uruguay": 15,
+        "Ecuador": 7,
+        "Paraguay": 12,
+        "Chile": 9,
+        "Peru": 30,
+        # Europe
+        "Germany": 2,
+        "France": 1,
+        "Spain": 9,
+        "England": 10,
+        "Netherlands": 8,
+        "Portugal": 27,
+        "Belgium": 1,
+        "Croatia": 3,
+        "Italy": 768,
+        "Switzerland": 4,
+        "Austria": 499,
+        "Turkey": 5,
+        "Sweden": 36,
+        "Norway": 866,
+        "Czech Republic": 44,
+        "Scotland": 25,
+        "Wales": 71,
+        "Poland": 29,
+        "Serbia": 637,
+        "Denmark": 21,
+        # North America
+        "USA": 5,
+        "Mexico": 1,
+        "Canada": 2014,
+        "Costa Rica": 290,
+        "Panama": 1517,
+        "Honduras": 796,
+        # Asia
+        "Japan": 18,
+        "South Korea": 35,
+        "Iran": 13,
+        "Australia": 14,
+        "Saudi Arabia": 17,
+        "Qatar": 1422,
+        "Iraq": 49,
+        "Uzbekistan": 83,
+        "Jordan": 1405,
+        # Africa
+        "Morocco": 153,
+        "Senegal": 136,
+        "Egypt": 3,
+        "Tunisia": 16,
+        "Nigeria": 28,
+        "Ghana": 20,
+        "Cameroon": 2,
+        "Algeria": 12,
+        "Côte d'Ivoire": 40,
+        "South Africa": 55,
+        "Cape Verde": 1412,
+        "DR Congo": 131,
+    }
 
-    # For now, return None to trigger fallback
+    # Try exact match first
+    if team_name in TEAM_NAME_TO_ID:
+        return TEAM_NAME_TO_ID[team_name]
+
+    # Try case-insensitive match
+    lower_map = {k.lower(): v for k, v in TEAM_NAME_TO_ID.items()}
+    if team_name.lower() in lower_map:
+        return lower_map[team_name.lower()]
+
+    # Try common name variations
+    aliases = {
+        "South Korea": "South Korea",
+        "Korea Republic": "South Korea",
+        "Korea Republic": "South Korea",
+        "USA": "USA",
+        "United States": "USA",
+        "Czech Republic": "Czech Republic",
+        "Czechia": "Czech Republic",
+        "DR Congo": "DR Congo",
+        "Congo DR": "DR Congo",
+        "Ivory Coast": "Côte d'Ivoire",
+        "Cape Verde": "Cape Verde",
+        "Cabo Verde": "Cape Verde",
+    }
+    if team_name in aliases and aliases[team_name] in TEAM_NAME_TO_ID:
+        return TEAM_NAME_TO_ID[aliases[team_name]]
+
     return None

@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import { BarChart3, Target, Database, Activity, TrendingUp, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getWorldCupApiBase } from "@/lib/env";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const API_BASE = getWorldCupApiBase();
 
 interface EngineStats {
   total_predictions: number;

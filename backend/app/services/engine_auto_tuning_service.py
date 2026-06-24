@@ -1,13 +1,11 @@
 """Automatic engine tuning service based on AI optimization feedback."""
 
-import json
-import asyncio
 from typing import Any
 from datetime import datetime
 
 from app.models.world_cup_prediction import (
     MatchFixture, MatchPrediction, AIOptimizedPrediction,
-    EngineCalibration, MatchResult
+    EngineCalibration,
 )
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
 from app.services.world_cup_ai_optimization_service import optimize_prediction_with_ai
@@ -246,7 +244,9 @@ def save_engine_calibration(
     engine_name: str,
     calibration_params: dict[str, Any],
     based_on_matches: int,
-    description: str = ""
+    description: str = "",
+    avg_improvement: float | None = None,
+    confidence_score: float | None = None,
 ) -> dict[str, Any]:
     """Save a new calibration version for an engine.
 
@@ -255,6 +255,8 @@ def save_engine_calibration(
         calibration_params: Calibration parameters to apply
         based_on_matches: Number of matches this calibration is based on
         description: Optional description
+        avg_improvement: Average improvement in prediction accuracy (0-1)
+        confidence_score: Confidence in this calibration (0-1), based on sample size
 
     Returns:
         Created calibration record info
@@ -274,13 +276,27 @@ def save_engine_calibration(
 
         next_version = (latest.version + 1) if latest else 1
 
+        # Calculate confidence score if not provided
+        # Based on sample size: <5 matches=0.3, 5-10=0.5, 10-20=0.7, 20+=0.9
+        if confidence_score is None:
+            if based_on_matches >= 20:
+                confidence_score = 0.9
+            elif based_on_matches >= 10:
+                confidence_score = 0.7
+            elif based_on_matches >= 5:
+                confidence_score = 0.5
+            else:
+                confidence_score = 0.3
+
         # Create new calibration
         calibration = EngineCalibration(
             engine_name=engine_name,
             calibration_params=calibration_params,
             based_on_matches=based_on_matches,
             version=next_version,
-            is_active=1
+            is_active=1,
+            avg_improvement=avg_improvement,
+            confidence_score=confidence_score,
         )
 
         session.add(calibration)
@@ -291,7 +307,9 @@ def save_engine_calibration(
             "calibration_id": calibration.id,
             "engine": engine_name,
             "version": next_version,
-            "params": calibration_params
+            "params": calibration_params,
+            "avg_improvement": avg_improvement,
+            "confidence_score": confidence_score,
         }
 
     finally:

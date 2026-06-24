@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Brain, Loader2, AlertCircle, TrendingUp, Target, Zap, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -45,15 +45,18 @@ export function EngineAutoTuneDashboard() {
   const [selectedEngine, setSelectedEngine] = useState<"elo_odds" | "hybrid">("elo_odds");
   const [calibration, setCalibration] = useState<CalibrationInfo | null>(null);
   const [loadingCalibration, setLoadingCalibration] = useState(false);
+  const [taskStatus, setTaskStatus] = useState<any>(null);
+  const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
 
   const handleAutoTune = async () => {
     setTuning(true);
     setError(null);
     setTuneResult(null);
+    setTaskStatus(null);
 
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"}/api/world-cup/predictions/auto-tune/${selectedEngine}`,
+        `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"}/api/world-cup/predictions/auto-tune/${selectedEngine}?background=true`,
         {
           method: "POST",
           cache: "no-store"
@@ -66,20 +69,73 @@ export function EngineAutoTuneDashboard() {
       }
 
       const data = await response.json();
-      if (data.status === "ok") {
-        setTuneResult(data);
-        // Reload calibration
-        loadCalibration(selectedEngine);
+
+      if (data.status === "accepted" && data.task_id) {
+        // Start polling for task status
+        setTaskStatus({
+          task_id: data.task_id,
+          status: "pending",
+          message: data.message
+        });
+        startPolling(data.task_id);
       } else {
-        throw new Error(data.message || "自动调教失败");
+        throw new Error("未返回任务ID");
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(`自动调教失败: ${message}`);
-    } finally {
       setTuning(false);
     }
   };
+
+  const startPolling = (taskId: string) => {
+    const interval = setInterval(async () => {
+      try {
+        const response = await fetch(
+          `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"}/api/world-cup/predictions/auto-tune/status/${taskId}`,
+          { cache: "no-store" }
+        );
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        const task = data.task;
+
+        setTaskStatus(task);
+
+        if (task.status === "completed") {
+          setTuning(false);
+          setTuneResult(task.result);
+          stopPolling();
+          loadCalibration(selectedEngine);
+        } else if (task.status === "failed") {
+          setTuning(false);
+          setError(`优化失败: ${task.error}`);
+          stopPolling();
+        }
+      } catch (err) {
+        console.error("Polling error:", err);
+      }
+    }, 2000); // Poll every 2 seconds
+
+    setPollingInterval(interval);
+  };
+
+  const stopPolling = () => {
+    if (pollingInterval) {
+      clearInterval(pollingInterval);
+      setPollingInterval(null);
+    }
+  };
+
+  // Cleanup polling on unmount
+  React.useEffect(() => {
+    return () => {
+      stopPolling();
+    };
+  }, [pollingInterval]);
 
   const loadCalibration = async (engine: string) => {
     setLoadingCalibration(true);
@@ -179,6 +235,52 @@ export function EngineAutoTuneDashboard() {
       </div>
 
       {/* Error Display */}
+      {/* Status Display */}
+      {tuning && taskStatus && (
+        <div className="mt-4 rounded-lg border bg-muted/50 p-4">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium">
+                {taskStatus.status === "pending" && "准备中..."}
+                {taskStatus.status === "running" && "正在优化..."}
+                {taskStatus.status === "completed" && "完成"}
+                {taskStatus.status === "failed" && "失败"}
+              </span>
+              {taskStatus.progress > 0 && taskStatus.total > 0 && (
+                <span className="text-sm text-muted-foreground">
+                  {taskStatus.progress} / {taskStatus.total}
+                </span>
+              )}
+            </div>
+
+            {taskStatus.progress > 0 && taskStatus.total > 0 && (
+              <div className="h-2 overflow-hidden rounded-full bg-secondary">
+                <div
+                  className="h-full bg-primary transition-all duration-300"
+                  style={{ width: `${(taskStatus.progress / taskStatus.total) * 100}%` }}
+                />
+              </div>
+            )}
+
+            {taskStatus.current_match && (
+              <p className="text-sm text-muted-foreground">
+                当前: {taskStatus.current_match}
+              </p>
+            )}
+
+            {taskStatus.logs && taskStatus.logs.length > 0 && (
+              <div className="max-h-32 overflow-y-auto rounded border bg-background p-2 text-xs font-mono">
+                {taskStatus.logs.map((log: any, idx: number) => (
+                  <div key={idx} className="text-muted-foreground">
+                    {log.message}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="rounded-lg border border-neg/40 bg-neg/10 p-4">
           <div className="flex items-start gap-2 text-sm text-neg">

@@ -1,0 +1,369 @@
+"use client";
+
+import { useState } from "react";
+import { Brain, Loader2, AlertCircle, TrendingUp, Target, Zap, RefreshCw } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+interface AutoTuneResult {
+  status: string;
+  engine: string;
+  optimization_summary: {
+    matches_processed: number;
+    optimizations_generated: number;
+    errors: number;
+  };
+  pattern_analysis: {
+    avg_home_score_adjustment: number;
+    avg_away_score_adjustment: number;
+    avg_home_win_prob_adjustment: number;
+    avg_draw_prob_adjustment: number;
+    avg_away_win_prob_adjustment: number;
+    avg_confidence_adjustment: number;
+  };
+  calibration: {
+    calibration_id: number;
+    engine: string;
+    version: number;
+    params: Record<string, number>;
+  };
+  top_blind_spots: [string, number][];
+  top_calibration_issues: [string, number][];
+}
+
+interface CalibrationInfo {
+  engine: string;
+  version: number;
+  params: Record<string, number>;
+  based_on_matches: number;
+  created_at: string;
+}
+
+export function EngineAutoTuneDashboard() {
+  const [tuning, setTuning] = useState(false);
+  const [tuneResult, setTuneResult] = useState<AutoTuneResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedEngine, setSelectedEngine] = useState<"elo_odds" | "hybrid">("elo_odds");
+  const [calibration, setCalibration] = useState<CalibrationInfo | null>(null);
+  const [loadingCalibration, setLoadingCalibration] = useState(false);
+
+  const handleAutoTune = async () => {
+    setTuning(true);
+    setError(null);
+    setTuneResult(null);
+
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"}/api/world-cup/predictions/auto-tune/${selectedEngine}`,
+        {
+          method: "POST",
+          cache: "no-store"
+        }
+      );
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
+        throw new Error(data.detail || `HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.status === "ok") {
+        setTuneResult(data);
+        // Reload calibration
+        loadCalibration(selectedEngine);
+      } else {
+        throw new Error(data.message || "自动调教失败");
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(`自动调教失败: ${message}`);
+    } finally {
+      setTuning(false);
+    }
+  };
+
+  const loadCalibration = async (engine: string) => {
+    setLoadingCalibration(true);
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"}/api/world-cup/predictions/calibration/${engine}`,
+        { cache: "no-store" }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.status === "ok") {
+          setCalibration(data.calibration);
+        } else {
+          setCalibration(null);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load calibration:", err);
+    } finally {
+      setLoadingCalibration(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="rounded-lg border bg-card p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">引擎自动调教</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              基于 AI 优化反馈自动校准预测引擎参数
+            </p>
+          </div>
+          <Brain className="size-8 text-primary opacity-50" />
+        </div>
+
+        {/* Engine Selection */}
+        <div className="mt-6 space-y-3">
+          <label className="text-sm font-medium">选择引擎</label>
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              onClick={() => setSelectedEngine("elo_odds")}
+              className={cn(
+                "rounded-lg border p-4 text-left transition-all",
+                selectedEngine === "elo_odds"
+                  ? "border-primary bg-primary/10"
+                  : "border-border hover:border-primary/50"
+              )}
+            >
+              <div className="flex items-center gap-2">
+                <Zap className="size-4" />
+                <span className="font-medium">Elo+赔率</span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                基于 Elo 评级和博彩赔率的融合引擎
+              </p>
+            </button>
+            <button
+              onClick={() => setSelectedEngine("hybrid")}
+              className={cn(
+                "rounded-lg border p-4 text-left transition-all",
+                selectedEngine === "hybrid"
+                  ? "border-primary bg-primary/10"
+                  : "border-border hover:border-primary/50"
+              )}
+            >
+              <div className="flex items-center gap-2">
+                <Brain className="size-4" />
+                <span className="font-medium">混合引擎</span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                结合规则模型和 AI 的混合预测引擎
+              </p>
+            </button>
+          </div>
+
+          <button
+            onClick={handleAutoTune}
+            disabled={tuning}
+            className="mt-4 w-full rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+          >
+            {tuning ? (
+              <span className="flex items-center justify-center gap-2">
+                <Loader2 className="size-4 animate-spin" />
+                调教中...
+              </span>
+            ) : (
+              <span className="flex items-center justify-center gap-2">
+                <RefreshCw className="size-4" />
+                开始自动调教
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* Error Display */}
+      {error && (
+        <div className="rounded-lg border border-neg/40 bg-neg/10 p-4">
+          <div className="flex items-start gap-2 text-sm text-neg">
+            <AlertCircle className="size-4 flex-shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Tuning Results */}
+      {tuneResult && (
+        <div className="space-y-4">
+          {/* Summary */}
+          <div className="rounded-lg border bg-card p-6">
+            <h3 className="flex items-center gap-2 text-base font-semibold">
+              <Target className="size-4 text-primary" />
+              调教结果
+            </h3>
+
+            <div className="mt-4 grid grid-cols-3 gap-4">
+              <div className="rounded-md border bg-secondary/30 p-3">
+                <div className="text-xs text-muted-foreground">处理比赛</div>
+                <div className="mt-1 text-2xl font-bold tabular-nums">
+                  {tuneResult.optimization_summary.matches_processed}
+                </div>
+              </div>
+              <div className="rounded-md border bg-secondary/30 p-3">
+                <div className="text-xs text-muted-foreground">生成优化</div>
+                <div className="mt-1 text-2xl font-bold tabular-nums">
+                  {tuneResult.optimization_summary.optimizations_generated}
+                </div>
+              </div>
+              <div className="rounded-md border bg-secondary/30 p-3">
+                <div className="text-xs text-muted-foreground">错误数</div>
+                <div className="mt-1 text-2xl font-bold tabular-nums">
+                  {tuneResult.optimization_summary.errors}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Pattern Analysis */}
+          <div className="rounded-lg border bg-card p-6">
+            <h3 className="text-base font-semibold">模式分析</h3>
+            <div className="mt-4 space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">主队比分调整</span>
+                <span className="font-mono font-medium tabular-nums">
+                  {tuneResult.pattern_analysis.avg_home_score_adjustment > 0 ? "+" : ""}
+                  {tuneResult.pattern_analysis.avg_home_score_adjustment.toFixed(3)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">客队比分调整</span>
+                <span className="font-mono font-medium tabular-nums">
+                  {tuneResult.pattern_analysis.avg_away_score_adjustment > 0 ? "+" : ""}
+                  {tuneResult.pattern_analysis.avg_away_score_adjustment.toFixed(3)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">主胜概率调整</span>
+                <span className="font-mono font-medium tabular-nums">
+                  {tuneResult.pattern_analysis.avg_home_win_prob_adjustment > 0 ? "+" : ""}
+                  {(tuneResult.pattern_analysis.avg_home_win_prob_adjustment * 100).toFixed(1)}%
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">平局概率调整</span>
+                <span className="font-mono font-medium tabular-nums">
+                  {tuneResult.pattern_analysis.avg_draw_prob_adjustment > 0 ? "+" : ""}
+                  {(tuneResult.pattern_analysis.avg_draw_prob_adjustment * 100).toFixed(1)}%
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">客胜概率调整</span>
+                <span className="font-mono font-medium tabular-nums">
+                  {tuneResult.pattern_analysis.avg_away_win_prob_adjustment > 0 ? "+" : ""}
+                  {(tuneResult.pattern_analysis.avg_away_win_prob_adjustment * 100).toFixed(1)}%
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">置信度调整</span>
+                <span className="font-mono font-medium tabular-nums">
+                  {tuneResult.pattern_analysis.avg_confidence_adjustment > 0 ? "+" : ""}
+                  {(tuneResult.pattern_analysis.avg_confidence_adjustment * 100).toFixed(1)}%
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Top Issues */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="rounded-lg border bg-card p-6">
+              <h3 className="text-base font-semibold">高频数据盲点</h3>
+              <div className="mt-4 space-y-2">
+                {tuneResult.top_blind_spots.map(([spot, count], idx) => (
+                  <div key={idx} className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">{spot}</span>
+                    <span className="font-mono font-medium tabular-nums">{count}次</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-lg border bg-card p-6">
+              <h3 className="text-base font-semibold">高频校准问题</h3>
+              <div className="mt-4 space-y-2">
+                {tuneResult.top_calibration_issues.map(([issue, count], idx) => (
+                  <div key={idx} className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">{issue}</span>
+                    <span className="font-mono font-medium tabular-nums">{count}次</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Calibration Version */}
+          <div className="rounded-lg border border-primary/40 bg-primary/5 p-6">
+            <h3 className="flex items-center gap-2 text-base font-semibold text-primary">
+              <TrendingUp className="size-4" />
+              新校准版本已保存
+            </h3>
+            <div className="mt-3 text-sm">
+              <p>
+                <span className="text-muted-foreground">引擎:</span>{" "}
+                <span className="font-medium">{tuneResult.calibration.engine}</span>
+              </p>
+              <p className="mt-1">
+                <span className="text-muted-foreground">版本:</span>{" "}
+                <span className="font-medium">v{tuneResult.calibration.version}</span>
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                该校准将自动应用于后续的预测生成
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Current Calibration */}
+      {calibration && (
+        <div className="rounded-lg border bg-card p-6">
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-semibold">当前激活校准</h3>
+            <button
+              onClick={() => loadCalibration(selectedEngine)}
+              disabled={loadingCalibration}
+              className="text-xs text-primary hover:underline"
+            >
+              刷新
+            </button>
+          </div>
+
+          <div className="mt-4 space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">引擎</span>
+              <span className="font-medium">{calibration.engine}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">版本</span>
+              <span className="font-medium">v{calibration.version}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">基于比赛数</span>
+              <span className="font-medium">{calibration.based_on_matches}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">创建时间</span>
+              <span className="font-medium">
+                {new Date(calibration.created_at).toLocaleString("zh-CN")}
+              </span>
+            </div>
+          </div>
+
+          <details className="mt-4">
+            <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+              查看参数详情
+            </summary>
+            <pre className="mt-2 rounded-md bg-secondary p-3 text-xs overflow-x-auto">
+              {JSON.stringify(calibration.params, null, 2)}
+            </pre>
+          </details>
+        </div>
+      )}
+    </div>
+  );
+}

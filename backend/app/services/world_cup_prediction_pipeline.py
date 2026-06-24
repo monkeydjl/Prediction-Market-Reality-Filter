@@ -262,7 +262,9 @@ async def run_prediction_pipeline(
                 home_team_stats=home_stats,
                 away_team_stats=away_stats,
                 stage=match.stage,
-                h2h_data=h2h_data
+                h2h_data=h2h_data,
+                match_date=match.kickoff_utc.isoformat() if match.kickoff_utc else None,
+                match_id=match.match_id
             )
 
             # Step 4c: Run prediction engine

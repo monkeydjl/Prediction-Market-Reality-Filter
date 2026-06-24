@@ -9,6 +9,8 @@ from typing import Any
 
 from app.services.transfermarkt_scraper import get_cached_market_value
 from app.services.sentiment_aggregator import get_cached_sentiment
+from app.services.sports_signal_service import build_sports_signals
+from app.services.sports_fact_service import fetch_world_cup_facts
 
 
 def calculate_team_factors(
@@ -178,7 +180,9 @@ def build_prediction_factors(
     h2h_data: dict[str, Any] | None = None,
     home_standing: dict[str, Any] | None = None,
     away_standing: dict[str, Any] | None = None,
-    weather: dict[str, Any] | None = None
+    weather: dict[str, Any] | None = None,
+    match_date: str | None = None,
+    match_id: str | None = None
 ) -> dict[str, Any]:
     """Build complete factor dictionary for prediction engines.
 
@@ -192,14 +196,49 @@ def build_prediction_factors(
         home_standing: Home team's current group standing
         away_standing: Away team's current group standing
         weather: Weather conditions
+        match_date: Match date (ISO format)
+        match_id: Match ID for signal lookup
 
     Returns:
         Complete factors dictionary ready for prediction
     """
 
-    return {
+    # Build event question for signal service
+    event_question = f"Will {home_team_name} beat {away_team_name}?"
+
+    # Build source context
+    source = {
+        "tournament": "2026 FIFA World Cup",
+        "stage": stage,
+        "home_team": home_team_name,
+        "away_team": away_team_name,
+        "match_date": match_date,
+        "match_id": match_id
+    }
+
+    # Fetch sports facts and build signals
+    sports_signals = {}
+    try:
+        facts = fetch_world_cup_facts(
+            home_team=home_team_name,
+            away_team=away_team_name,
+            match_date=match_date
+        )
+        sports_signals = build_sports_signals(event_question, source, facts)
+    except Exception as e:
+        # Log error but don't fail prediction
+        print(f"[Factor Service] Failed to build sports signals: {e}")
+        sports_signals = {"error": str(e), "fact_count": 0}
+
+    factors = {
         "home_team": calculate_team_factors(home_team_name, home_team_stats, is_home=True),
         "away_team": calculate_team_factors(away_team_name, away_team_stats, is_home=False),
         "head_to_head": calculate_head_to_head_factors(h2h_data),
         "context": calculate_context_factors(stage, home_standing, away_standing, weather)
     }
+
+    # Add sports signals if available
+    if sports_signals and sports_signals.get("fact_count", 0) > 0:
+        factors["sports_signals"] = sports_signals
+
+    return factors

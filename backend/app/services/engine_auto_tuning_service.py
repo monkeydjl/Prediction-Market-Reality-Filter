@@ -1,6 +1,7 @@
 """Automatic engine tuning service based on AI optimization feedback."""
 
 import json
+import asyncio
 from typing import Any
 from datetime import datetime
 
@@ -10,6 +11,7 @@ from app.models.world_cup_prediction import (
 )
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
 from app.services.world_cup_ai_optimization_service import optimize_prediction_with_ai
+from app.services.optimization_task_manager import get_task_manager, TaskStatus
 
 
 async def analyze_and_optimize_all_predictions(
@@ -53,13 +55,27 @@ async def analyze_and_optimize_all_predictions(
             "optimizations": []
         }
 
-        # TEMPORARY: Skip AI optimization due to timeout issues
-        # Return mock data for now
-        results["total_processed"] = len(matches)
-        results["message"] = f"找到 {len(matches)} 场比赛，但AI优化功能暂时禁用（超时问题）"
-        return results
+        # Get task_id from limit parameter (passed as "task_<uuid>")
+        task_id = None
+        task_manager = None
+        if isinstance(limit, str) and limit.startswith("task_"):
+            task_id = limit
+            task_manager = get_task_manager()
+            limit = None  # Reset limit for query
 
-        for fixture, prediction in matches:
+        total_matches = len(matches)
+
+        for idx, (fixture, prediction) in enumerate(matches):
+            # Update progress if task manager available
+            if task_manager and task_id:
+                await task_manager.update_progress(
+                    task_id,
+                    progress=idx,
+                    total=total_matches,
+                    current_match=f"{fixture.home_team} vs {fixture.away_team}",
+                    log_message=f"正在优化 {idx+1}/{total_matches}: {fixture.home_team} vs {fixture.away_team}"
+                )
+
             # Filter by engine if specified
             if engine_filter:
                 if engine_filter == "elo_odds" and not prediction.prediction_method.startswith("elo"):

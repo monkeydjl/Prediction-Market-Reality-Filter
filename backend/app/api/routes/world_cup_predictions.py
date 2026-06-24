@@ -441,16 +441,59 @@ async def compare_engine_accuracy():
 
 
 @router.post("/auto-tune/{engine_name}", response_model=FlexibleResponse)
-async def auto_tune_engine(engine_name: str):
+async def auto_tune_engine(engine_name: str, background: bool = Query(True, description="Run in background")):
     """Run automatic tuning cycle for an engine: analyze, optimize, learn, calibrate.
 
     Args:
         engine_name: Engine to tune ("elo_odds" or "hybrid")
+        background: If True, run in background and return task_id immediately
     """
-    from app.services.engine_auto_tuning_service import run_full_auto_tuning_cycle
+    if background:
+        # Create background task
+        from app.services.optimization_task_manager import get_task_manager
+        from app.services.engine_auto_tuning_async import run_async_optimization
+        import asyncio
 
-    result = await run_full_auto_tuning_cycle(engine_name)
-    return result
+        task_manager = get_task_manager()
+        task = await task_manager.create_task(engine_name)
+
+        # Start background task
+        asyncio.create_task(run_async_optimization(engine_name, task.task_id))
+
+        return {
+            "status": "accepted",
+            "task_id": task.task_id,
+            "message": f"后台优化任务已启动，任务ID: {task.task_id}",
+            "poll_url": f"/api/world-cup/predictions/auto-tune/status/{task.task_id}"
+        }
+    else:
+        # Run synchronously (legacy behavior, not recommended)
+        from app.services.engine_auto_tuning_service import run_full_auto_tuning_cycle
+
+        result = await run_full_auto_tuning_cycle(engine_name)
+        return result
+
+
+@router.get("/auto-tune/status/{task_id}", response_model=FlexibleResponse)
+async def get_auto_tune_status(task_id: str):
+    """Get status of a background auto-tune task.
+
+    Args:
+        task_id: Task ID returned from auto-tune endpoint
+    """
+    from app.services.optimization_task_manager import get_task_manager
+
+    task_manager = get_task_manager()
+    task = await task_manager.get_task(task_id)
+
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    return {
+        "status": "ok",
+        "task": task.to_dict()
+    }
+
 
 
 @router.post("/batch-optimize", response_model=FlexibleResponse)

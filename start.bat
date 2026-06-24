@@ -57,16 +57,18 @@ if "!DO_BUILD!"=="1" (
     popd
 )
 
-echo [4/4] Starting backend on http://localhost:8000 ...
+echo [4/4] Starting backend (:8000) + frontend (:3000) ...
 call :killport 8000
+call :killport 3000
 echo.
-echo   App           : http://localhost:8000
-echo   Classic UI    : http://localhost:8000/dashboard
+echo   Frontend      : http://localhost:3000
+echo   Backend API   : http://localhost:8000
 echo   API docs      : http://localhost:8000/docs
 echo.
-REM open the browser once the server has had a moment to come up
-start "" /b powershell -NoProfile -Command "Start-Sleep -Seconds 5; Start-Process 'http://localhost:8000'"
-pushd "%BACKEND%" & python run.py & popd
+start "PMRF backend :8000" cmd /k "cd /d "%BACKEND%" && python run.py"
+start "PMRF frontend :3000" cmd /k "cd /d "%FRONTEND%" && npx serve out -l 3000"
+REM open the browser once both servers are up
+start "" /b powershell -NoProfile -Command "Start-Sleep -Seconds 6; Start-Process 'http://localhost:3000'"
 goto :eof
 
 REM ===================== DEVELOPMENT =========================================

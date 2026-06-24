@@ -626,6 +626,12 @@ async def optimize_match_prediction(match_id: str):
         if not match:
             raise HTTPException(status_code=404, detail="Match not found")
 
+        # Don't optimize matches that have already started or finished
+        if match.status == "finished":
+            raise HTTPException(status_code=400, detail="Match already finished, prediction is frozen")
+        if match.status == "in_play":
+            raise HTTPException(status_code=400, detail="Match already started, prediction is frozen")
+
         # Get current prediction
         prediction = session.query(MatchPrediction).filter_by(match_id=match_id).first()
         if not prediction:

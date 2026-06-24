@@ -296,9 +296,11 @@ async def run_prediction_pipeline(
         if not match:
             return {"status": "error", "error": "Match not found"}
 
-        # Don't predict finished matches
+        # Don't predict matches that have already started or finished
         if match.status == "finished":
             return {"status": "skipped", "reason": "Match already finished"}
+        if match.status == "in_play":
+            return {"status": "skipped", "reason": "Match already started (in play)"}
 
         # Step 2: Fetch Elo ratings and betting odds
         home_elo_data = await get_elo_rating(match.home_team)
@@ -697,9 +699,9 @@ async def batch_predict_matches(
                 MatchFixture.match_id.in_(match_ids)
             ).all()
         else:
-            # Predict all remaining matches
+            # Predict all remaining matches (only scheduled, not in_play/finished)
             matches = session.query(MatchFixture).filter(
-                MatchFixture.status.in_(["scheduled", "in_play"])
+                MatchFixture.status == "scheduled"
             ).order_by(MatchFixture.kickoff_utc).all()
 
         results = {

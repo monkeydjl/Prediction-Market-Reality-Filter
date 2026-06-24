@@ -18,6 +18,7 @@ import { QualificationTable } from "@/components/world-cup/qualification-table";
 import { KnockoutView } from "@/components/world-cup/knockout-view";
 import { EngineComparisonView } from "@/components/world-cup/engine-comparison-view";
 import { EngineAutoTuneDashboard } from "@/components/world-cup/engine-auto-tune-dashboard";
+import { BatchEngineSwitcher } from "@/components/world-cup/batch-engine-switcher";
 import { SectionErrorBoundary } from "@/components/section-error-boundary";
 import { fetchMatches, fetchTodayMatches, syncFixtures, type MatchWithPrediction } from "@/lib/world-cup-predictions";
 import { calculateGroupStandings } from "@/lib/group-standings";
@@ -52,7 +53,6 @@ export default function WorldCupPage() {
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [teamFilter, setTeamFilter] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabView>("matches");
-  const [refreshKey, setRefreshKey] = useState(0);
 
   const loadMatches = useCallback(async () => {
     try {
@@ -67,15 +67,6 @@ export default function WorldCupPage() {
         data = await fetchMatches({
           status: timeFilter === "upcoming" ? "scheduled" : undefined,
           limit: 100,
-        });
-      }
-
-      console.log('[Page] loadMatches fetched', data.length, 'matches');
-      const testMatch = data.find(m => m.match.match_id === 'fd-537412');
-      if (testMatch) {
-        console.log('[Page] Test match fd-537412 data:', {
-          confidence: testMatch.prediction?.confidence,
-          method: testMatch.prediction?.prediction_method
         });
       }
 
@@ -128,6 +119,11 @@ export default function WorldCupPage() {
     } finally {
       setSyncing(false);
     }
+  }, [loadMatches]);
+
+  const handlePredictionUpdated = useCallback(async () => {
+    // Reload data to get updated predictions
+    await loadMatches();
   }, [loadMatches]);
 
   useEffect(() => {
@@ -376,21 +372,10 @@ export default function WorldCupPage() {
                   {dateMatches.map((m) => (
                     <SectionErrorBoundary key={m.match.match_id} title="比赛预测卡片">
                       <MatchPredictionCard
-                        key={`${m.match.match_id}-${refreshKey}`}
                         match={m.match}
                         prediction={m.prediction}
                         onTeamClick={setTeamFilter}
-                        onPredictionUpdated={async () => {
-                          console.log('[Page] onPredictionUpdated called, reloading matches...');
-                          // First reload data
-                          await loadMatches();
-                          console.log('[Page] loadMatches completed, incrementing refreshKey');
-                          // Then force re-render
-                          setRefreshKey(prev => {
-                            console.log('[Page] Incrementing refreshKey from', prev, 'to', prev + 1);
-                            return prev + 1;
-                          });
-                        }}
+                        onPredictionUpdated={handlePredictionUpdated}
                       />
                     </SectionErrorBoundary>
                   ))}
@@ -440,7 +425,10 @@ export default function WorldCupPage() {
 
         {/* Auto-Tune Dashboard */}
         {activeTab === "auto-tune" && (
-          <EngineAutoTuneDashboard />
+          <div className="space-y-6">
+            <BatchEngineSwitcher />
+            <EngineAutoTuneDashboard />
+          </div>
         )}
 
         {/* Legacy Events Link */}

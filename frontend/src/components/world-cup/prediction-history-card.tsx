@@ -63,16 +63,18 @@ export function PredictionHistoryCard({ match }: PredictionHistoryCardProps) {
   const isFinished = match.status === "finished" && match.home_score != null && match.away_score != null;
   const hasChanges = history.length > 1;
 
-  // Group consecutive identical predictions
+  // Group consecutive identical predictions (by score AND engine)
   const dedupedHistory = history.reduce((acc, curr, idx) => {
     if (idx === 0) return [curr];
 
-    const prev = history[idx - 1];
+    const prev = acc[acc.length - 1]; // Compare with last kept entry, not previous in original array
     const scoreChanged =
       curr.predicted_score.home !== prev.predicted_score.home ||
       curr.predicted_score.away !== prev.predicted_score.away;
+    const engineChanged = curr.prediction_method !== prev.prediction_method;
 
-    if (scoreChanged) {
+    // Keep if score OR engine changed
+    if (scoreChanged || engineChanged) {
       acc.push(curr);
     }
 

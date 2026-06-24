@@ -12,6 +12,7 @@ This module ties together all prediction components:
 
 from datetime import datetime
 from typing import Any, Literal
+import logging
 
 from sqlalchemy.orm import Session
 
@@ -32,6 +33,8 @@ from app.services.world_cup_team_stats_service import (
     get_team_id_from_name,
 )
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
+
+logger = logging.getLogger(__name__)
 
 
 # Prediction engine selection
@@ -292,7 +295,7 @@ async def run_prediction_pipeline(
             existing.rule_away_score = prediction_result.get("rule_score", {}).get("away") if prediction_result.get("rule_score") else None
             existing.ai_home_score = prediction_result.get("ai_score", {}).get("home") if prediction_result.get("ai_score") else None
             existing.ai_away_score = prediction_result.get("ai_score", {}).get("away") if prediction_result.get("ai_score") else None
-            existing.factors = getattr(prediction_result, "factors", {})
+            existing.factors = prediction_result.get("factors", {})
             existing.ai_reasoning = prediction_result.get("ai_reasoning")
             existing.key_factors = prediction_result.get("key_factors", [])
             existing.last_updated = datetime.utcnow()
@@ -312,27 +315,47 @@ async def run_prediction_pipeline(
                 rule_away_score=prediction_result.get("rule_score", {}).get("away") if prediction_result.get("rule_score") else None,
                 ai_home_score=prediction_result.get("ai_score", {}).get("home") if prediction_result.get("ai_score") else None,
                 ai_away_score=prediction_result.get("ai_score", {}).get("away") if prediction_result.get("ai_score") else None,
-                factors=getattr(prediction_result, "factors", {}),
+                factors=prediction_result.get("factors", {}),
                 ai_reasoning=prediction_result.get("ai_reasoning"),
                 key_factors=prediction_result.get("key_factors", [])
             )
             session.add(new_pred)
             action = "created"
 
-        # Step 6: Record prediction history snapshot
-        history_entry = PredictionHistory(
-            match_id=match_id,
-            timestamp=datetime.utcnow(),
-            predicted_home_score=prediction_result["predicted_score"]["home"],
-            predicted_away_score=prediction_result["predicted_score"]["away"],
-            home_win_prob=prediction_result["outcome_probabilities"]["home_win"],
-            draw_prob=prediction_result["outcome_probabilities"]["draw"],
-            away_win_prob=prediction_result["outcome_probabilities"]["away_win"],
-            confidence=prediction_result["confidence"],
-            trigger=trigger,
-            prediction_method=prediction_result.get("prediction_method")
-        )
-        session.add(history_entry)
+        # Step 6: Record prediction history snapshot (only if changed)
+        # Check if last history entry has same prediction
+        should_record_history = True
+        last_history = session.query(PredictionHistory).filter_by(
+            match_id=match_id
+        ).order_by(PredictionHistory.timestamp.desc()).first()
+
+        if last_history:
+            # Check if prediction actually changed
+            score_same = (
+                abs(last_history.predicted_home_score - prediction_result["predicted_score"]["home"]) < 0.01 and
+                abs(last_history.predicted_away_score - prediction_result["predicted_score"]["away"]) < 0.01
+            )
+            engine_same = last_history.prediction_method == prediction_result.get("prediction_method")
+            confidence_similar = abs(last_history.confidence - prediction_result["confidence"]) < 0.01  # 1% threshold
+
+            # Only skip if score, engine, and confidence are all unchanged
+            if score_same and engine_same and confidence_similar:
+                should_record_history = False
+
+        if should_record_history:
+            history_entry = PredictionHistory(
+                match_id=match_id,
+                timestamp=datetime.utcnow(),
+                predicted_home_score=prediction_result["predicted_score"]["home"],
+                predicted_away_score=prediction_result["predicted_score"]["away"],
+                home_win_prob=prediction_result["outcome_probabilities"]["home_win"],
+                draw_prob=prediction_result["outcome_probabilities"]["draw"],
+                away_win_prob=prediction_result["outcome_probabilities"]["away_win"],
+                confidence=prediction_result["confidence"],
+                trigger=trigger,
+                prediction_method=prediction_result.get("prediction_method")
+            )
+            session.add(history_entry)
 
         session.commit()
 
@@ -353,10 +376,11 @@ async def run_prediction_pipeline(
 
     except Exception as e:
         session.rollback()
+        logger.error("Prediction pipeline failed for %s: %s", match_id, e, exc_info=True)
         return {
             "status": "error",
             "match_id": match_id,
-            "error": str(e)
+            "error": "internal_error"
         }
 
     finally:

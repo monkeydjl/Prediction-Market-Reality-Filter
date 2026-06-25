@@ -138,7 +138,7 @@ async def predict_score_ai(
     try:
         # Call OpenAI directly (ask_llm returns a fixed-format dict, not raw text)
         from app.services.openai_service import get_client
-        from app.services.world_cup_rule_engine import calculate_outcome_probabilities
+        from app.services.world_cup_engines.world_cup_rule_engine import calculate_outcome_probabilities
 
         prompt = build_ai_prediction_prompt(
             home_team, away_team, kickoff_utc, stage, factors, rule_prediction

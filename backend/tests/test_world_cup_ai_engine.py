@@ -5,7 +5,7 @@ Lock AI engine behavior with mocked LLM responses.
 
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.services.world_cup_ai_engine import predict_score_ai, build_ai_prediction_prompt
+from app.services.world_cup_engines.world_cup_ai_engine import predict_score_ai, build_ai_prediction_prompt
 
 
 class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
@@ -41,7 +41,7 @@ class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_predict_score_ai_no_api_key(self):
         """Lock behavior when OPENAI_API_KEY is not set."""
-        with patch("app.services.world_cup_ai_engine.settings") as mock_settings:
+        with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
             mock_settings.OPENAI_API_KEY = None
 
             result = await predict_score_ai(

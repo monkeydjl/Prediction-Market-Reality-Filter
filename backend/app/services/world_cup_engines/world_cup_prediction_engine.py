@@ -4,8 +4,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from app.services.world_cup_rule_engine import predict_score_rule_based
-from app.services.world_cup_ai_engine import predict_score_ai
+from app.services.world_cup_engines.world_cup_rule_engine import predict_score_rule_based
+from app.services.world_cup_engines.world_cup_ai_engine import predict_score_ai
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ def fuse_predictions(
     fused_away = rule_pred["predicted_score"]["away"] * rule_w + ai_pred["predicted_score"]["away"] * ai_w
 
     # Recalculate outcome probabilities from fused scores
-    from app.services.world_cup_rule_engine import calculate_outcome_probabilities
+    from app.services.world_cup_engines.world_cup_rule_engine import calculate_outcome_probabilities
     outcome_probs = calculate_outcome_probabilities(fused_home, fused_away)
 
     # Calculate confidence based on agreement between rule and AI

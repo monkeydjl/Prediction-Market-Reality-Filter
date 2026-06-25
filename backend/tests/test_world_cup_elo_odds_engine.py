@@ -4,7 +4,7 @@ Lock the numerical output and prediction_method strings.
 """
 
 import unittest
-from app.services.world_cup_elo_odds_engine import (
+from app.services.world_cup_engines.world_cup_elo_odds_engine import (
     predict_match_elo_odds,
     calculate_elo_win_probability,
     odds_to_probabilities,

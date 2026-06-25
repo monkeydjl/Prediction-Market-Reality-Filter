@@ -5,7 +5,7 @@ Lock hybrid engine fusion behavior and prediction_method strings.
 
 import unittest
 from unittest.mock import AsyncMock, patch
-from app.services.world_cup_prediction_engine import fuse_predictions, predict_match_score
+from app.services.world_cup_engines.world_cup_prediction_engine import fuse_predictions, predict_match_score
 
 
 class PredictionEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
@@ -106,7 +106,7 @@ class PredictionEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
         }
 
         # Mock AI to return valid prediction
-        with patch("app.services.world_cup_prediction_engine.predict_score_ai") as mock_ai:
+        with patch("app.services.world_cup_engines.world_cup_prediction_engine.predict_score_ai") as mock_ai:
             mock_ai.return_value = {
                 "predicted_score": {"home": 2.0, "away": 1.2},
                 "outcome_probabilities": {"home_win": 0.50, "draw": 0.25, "away_win": 0.25},
@@ -139,7 +139,7 @@ class PredictionEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
         }
 
         # Mock AI to return None (failure)
-        with patch("app.services.world_cup_prediction_engine.predict_score_ai", return_value=None):
+        with patch("app.services.world_cup_engines.world_cup_prediction_engine.predict_score_ai", return_value=None):
             result = await predict_match_score(
                 "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage", factors
             )

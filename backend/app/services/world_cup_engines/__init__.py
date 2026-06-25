@@ -4,8 +4,8 @@ Provides unified registry for engine dispatch.
 """
 
 from typing import Callable
-from app.services.world_cup_prediction_engine import predict_match_score
-from app.services.world_cup_elo_odds_engine import predict_match_elo_odds
+from app.services.world_cup_engines.world_cup_prediction_engine import predict_match_score
+from app.services.world_cup_engines.world_cup_elo_odds_engine import predict_match_elo_odds
 
 
 # Engine registry: maps engine name to prediction function

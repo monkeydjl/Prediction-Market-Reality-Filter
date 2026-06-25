@@ -5,7 +5,7 @@ Any refactoring must produce identical results down to the decimal place shown.
 """
 
 import unittest
-from app.services.world_cup_rule_engine import (
+from app.services.world_cup_engines.world_cup_rule_engine import (
     predict_score_rule_based,
     calculate_outcome_probabilities,
     calculate_expected_goals,

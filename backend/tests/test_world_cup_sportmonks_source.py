@@ -10,7 +10,7 @@ from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT, load_sports_f
 from app.services.world_cup_sportmonks_source import (
     import_world_cup_sportmonks_bundle,
     preview_world_cup_sportmonks_bundle,
-    test_world_cup_sportmonks_connection,
+    test_world_cup_sportmonks_connection as check_sportmonks_connection,
     validate_world_cup_sportmonks_pipeline,
 )
 
@@ -207,7 +207,7 @@ class WorldCupSportmonksConnectionTests(unittest.TestCase):
             "data": [{"id": 1}, {"id": 2}],
             "rate_limit": {"remaining": 99, "limit": 100, "resets_at_timestamp": "2026-06-24T00:00:00Z"},
         }))
-        result = test_world_cup_sportmonks_connection()
+        result = check_sportmonks_connection()
         self.assertTrue(result["ok"])
         self.assertEqual(result["feed_tested"], "matches")
         self.assertEqual(result["item_count"], 2)
@@ -216,7 +216,7 @@ class WorldCupSportmonksConnectionTests(unittest.TestCase):
 
     @patch.object(settings, "WORLD_CUP_SPORTMONKS_API_TOKEN", "")
     def test_no_token(self):
-        result = test_world_cup_sportmonks_connection()
+        result = check_sportmonks_connection()
         self.assertFalse(result["ok"])
         self.assertIn("not configured", result["error"])
 
@@ -225,7 +225,7 @@ class WorldCupSportmonksConnectionTests(unittest.TestCase):
     @patch.object(settings, "WORLD_CUP_SPORTMONKS_TOP_SCORERS_URL", "")
     @patch.object(settings, "WORLD_CUP_SPORTMONKS_API_TOKEN", "test-token-123")
     def test_no_feeds_configured(self):
-        result = test_world_cup_sportmonks_connection()
+        result = check_sportmonks_connection()
         self.assertFalse(result["ok"])
         self.assertIn("No Sportmonks feed URLs configured", result["error"])
 
@@ -235,7 +235,7 @@ class WorldCupSportmonksConnectionTests(unittest.TestCase):
     def test_http_error(self, mock_urlopen):
         from urllib.error import HTTPError
         mock_urlopen.side_effect = HTTPError("https://example.com", 403, "Forbidden", {}, None)
-        result = test_world_cup_sportmonks_connection()
+        result = check_sportmonks_connection()
         self.assertFalse(result["ok"])
         self.assertIn("HTTP 403", result["error"])
 
@@ -247,7 +247,7 @@ class WorldCupSportmonksConnectionTests(unittest.TestCase):
             "data": [],
             "errors": [{"message": "Invalid token"}],
         }))
-        result = test_world_cup_sportmonks_connection()
+        result = check_sportmonks_connection()
         self.assertFalse(result["ok"])
         self.assertIn("Provider errors", result["error"])
 

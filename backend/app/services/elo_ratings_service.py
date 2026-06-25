@@ -229,7 +229,7 @@ async def get_elo_rating(
             ).first()
 
             if cached:
-                age = (datetime.utcnow() - cached.last_updated).days
+                age = (datetime.now(timezone.utc) - cached.last_updated).days
                 if age < 7:
                     return {
                         "team_name": cached.team_name,
@@ -254,7 +254,7 @@ async def get_elo_rating(
                 "elo_rating": estimated_elo,
                 "fifa_rank": fifa_rank,
                 "confederation": None,
-                "last_updated": datetime.utcnow().isoformat(),
+                "last_updated": datetime.now(timezone.utc).isoformat(),
                 "source": "estimated"
             }
             _save_to_cache(session, team_name, result)
@@ -266,7 +266,7 @@ async def get_elo_rating(
             "elo_rating": 1500.0,
             "fifa_rank": None,
             "confederation": None,
-            "last_updated": datetime.utcnow().isoformat(),
+            "last_updated": datetime.now(timezone.utc).isoformat(),
             "source": "default"
         }
 
@@ -282,7 +282,7 @@ def _save_to_cache(session, team_name: str, data: dict[str, Any]) -> None:
         cached.elo_rating = data["elo_rating"]
         cached.fifa_rank = data.get("fifa_rank")
         cached.confederation = data.get("confederation")
-        cached.last_updated = datetime.utcnow()
+        cached.last_updated = datetime.now(timezone.utc)
         cached.source = data.get("source", "unknown")
     else:
         new_rating = EloRating(
@@ -290,7 +290,7 @@ def _save_to_cache(session, team_name: str, data: dict[str, Any]) -> None:
             elo_rating=data["elo_rating"],
             fifa_rank=data.get("fifa_rank"),
             confederation=data.get("confederation"),
-            last_updated=datetime.utcnow(),
+            last_updated=datetime.now(timezone.utc),
             source=data.get("source", "unknown")
         )
         session.add(new_rating)
@@ -376,7 +376,7 @@ def _get_hardcoded_elo(team_name: str) -> dict[str, Any] | None:
                 "elo_rating": entry["elo_rating"],
                 "fifa_rank": entry.get("fifa_rank"),
                 "confederation": entry.get("confederation"),
-                "last_updated": datetime.utcnow().isoformat(),
+                "last_updated": datetime.now(timezone.utc).isoformat(),
                 "source": "hardcoded_eloratings"
             }
 
@@ -409,7 +409,7 @@ async def bulk_import_elo_ratings(ratings: list[dict[str, Any]]) -> int:
             if cached:
                 cached.elo_rating = elo_rating
                 cached.fifa_rank = fifa_rank
-                cached.last_updated = datetime.utcnow()
+                cached.last_updated = datetime.now(timezone.utc)
                 cached.source = rating.get("source", "manual_import")
             else:
                 new_rating = EloRating(
@@ -417,7 +417,7 @@ async def bulk_import_elo_ratings(ratings: list[dict[str, Any]]) -> int:
                     elo_rating=elo_rating,
                     fifa_rank=fifa_rank,
                     confederation=rating.get("confederation"),
-                    last_updated=datetime.utcnow(),
+                    last_updated=datetime.now(timezone.utc),
                     source=rating.get("source", "manual_import")
                 )
                 session.add(new_rating)

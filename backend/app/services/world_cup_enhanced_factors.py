@@ -211,7 +211,7 @@ def calculate_fatigue_factor(team_stats: dict[str, Any]) -> dict[str, Any]:
     if last_match:
         try:
             last_date = datetime.fromisoformat(last_match.replace('Z', '+00:00'))
-            days_rest = (datetime.utcnow() - last_date).days
+            days_rest = (datetime.now(timezone.utc) - last_date).days
         except (ValueError, TypeError):
             pass
 

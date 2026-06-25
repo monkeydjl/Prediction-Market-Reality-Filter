@@ -188,7 +188,7 @@ def save_fixtures_to_db(fixtures: list[dict[str, Any]]) -> dict[str, int]:
                     needs_update = True
 
                 if needs_update:
-                    existing.updated_at = datetime.utcnow()
+                    existing.updated_at = datetime.now(timezone.utc)
                     stats["updated"] += 1
                 else:
                     stats["skipped"] += 1
@@ -224,7 +224,7 @@ def get_remaining_matches(session: Session | None = None) -> list[MatchFixture]:
         session = get_prediction_session()
 
     try:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         matches = session.query(MatchFixture).filter(
             MatchFixture.status.in_(["scheduled", "in_play"]),
             MatchFixture.kickoff_utc >= now

@@ -42,7 +42,7 @@ def _update_quota_from_headers(headers: httpx.Headers) -> None:
     remaining = headers.get("x-requests-remaining")
     if remaining is not None:
         _quota_remaining = int(remaining)
-        _quota_last_checked = datetime.utcnow()
+        _quota_last_checked = datetime.now(timezone.utc)
         if _quota_remaining < 50:
             logger.warning("Odds API quota low: %d remaining", _quota_remaining)
 
@@ -236,7 +236,7 @@ def extract_best_odds(fixture: dict) -> dict[str, Any]:
             "draw": 3.2,
             "away": 3.0,
             "source": "default",
-            "last_update": datetime.utcnow().isoformat(),
+            "last_update": datetime.now(timezone.utc).isoformat(),
             "bookmakers_count": 0
         }
 
@@ -311,7 +311,7 @@ def extract_best_odds(fixture: dict) -> dict[str, Any]:
         "draw": 3.2,
         "away": 3.0,
         "source": "fallback",
-        "last_update": datetime.utcnow().isoformat(),
+        "last_update": datetime.now(timezone.utc).isoformat(),
         "bookmakers_count": 0
     }
 

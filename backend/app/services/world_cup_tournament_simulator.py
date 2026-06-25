@@ -15,7 +15,7 @@ import logging
 import random
 from typing import Any
 
-from app.services.world_cup_elo_odds_engine import predict_match_elo_odds
+from app.services.world_cup_engines import get_engine
 from app.services.elo_ratings_service import get_elo_rating
 from app.services.odds_cache_service import get_cached_odds
 
@@ -47,7 +47,7 @@ def _simulate_match(
         key = f"{home_team}_vs_{away_team}"
         odds = odds_cache.get(key)
 
-    prediction = predict_match_elo_odds(
+    prediction = get_engine("elo_odds")(
         home_team=home_team,
         away_team=away_team,
         elo_home=elo_home,
@@ -108,7 +108,7 @@ def _simulate_group(
             outcome = _sample_outcome(probs)
 
             # Estimate goals from Poisson (simplified)
-            pred = predict_match_elo_odds(
+            pred = get_engine("elo_odds")(
                 home_team=home,
                 away_team=away,
                 elo_home=elo_cache.get(home, 1500.0),

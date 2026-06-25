@@ -27,7 +27,7 @@ class OptimizationTask:
         self.current_match = None
         self.result = None
         self.error = None
-        self.created_at = datetime.utcnow()
+        self.created_at = datetime.now(timezone.utc)
         self.started_at = None
         self.completed_at = None
         self.logs = []
@@ -87,7 +87,7 @@ class OptimizationTaskManager:
                     task.current_match = current_match
                 if log_message:
                     task.logs.append({
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                         "message": log_message
                     })
 
@@ -97,7 +97,7 @@ class OptimizationTaskManager:
             task = self._tasks.get(task_id)
             if task:
                 task.status = TaskStatus.RUNNING
-                task.started_at = datetime.utcnow()
+                task.started_at = datetime.now(timezone.utc)
 
     async def mark_completed(self, task_id: str, result: dict[str, Any]):
         """Mark task as completed with result."""
@@ -105,7 +105,7 @@ class OptimizationTaskManager:
             task = self._tasks.get(task_id)
             if task:
                 task.status = TaskStatus.COMPLETED
-                task.completed_at = datetime.utcnow()
+                task.completed_at = datetime.now(timezone.utc)
                 task.result = result
 
     async def mark_failed(self, task_id: str, error: str):
@@ -114,13 +114,13 @@ class OptimizationTaskManager:
             task = self._tasks.get(task_id)
             if task:
                 task.status = TaskStatus.FAILED
-                task.completed_at = datetime.utcnow()
+                task.completed_at = datetime.now(timezone.utc)
                 task.error = error
 
     async def cleanup_old_tasks(self, max_age_hours: int = 24):
         """Remove completed/failed tasks older than max_age_hours."""
         async with self._lock:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             to_remove = []
             for task_id, task in self._tasks.items():
                 if task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED]:

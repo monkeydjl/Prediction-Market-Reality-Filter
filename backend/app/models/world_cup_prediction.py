@@ -1,10 +1,10 @@
 """SQLAlchemy models for World Cup dynamic score predictions."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import Column, DateTime, Float, Integer, String, Text, JSON
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
 
@@ -28,8 +28,8 @@ class MatchFixture(Base):
     home_score = Column(Integer)  # null if not started, updated during match
     away_score = Column(Integer)  # null if not started, updated during match
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class MatchPrediction(Base):
@@ -66,8 +66,8 @@ class MatchPrediction(Base):
     key_factors = Column(JSON)  # List of key factor strings
 
     # Timestamps
-    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    last_updated = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class PredictionHistory(Base):
@@ -77,7 +77,7 @@ class PredictionHistory(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     match_id = Column(String(64), nullable=False, index=True)
-    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
     # Snapshot of prediction at this time
     predicted_home_score = Column(Float, nullable=False)
@@ -127,7 +127,7 @@ class MatchResult(Base):
     away_error = Column(Float)  # predicted - actual (away)
     confidence_calibrated = Column(Integer)  # 1 if confidence matched accuracy
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class PredictionAccuracy(Base):
@@ -169,7 +169,7 @@ class AIAnalysisHistory(Base):
     prediction_method = Column(String(128))
 
     # Metadata
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     api_cost_tokens = Column(Integer)  # Track token usage if available
 
 
@@ -210,7 +210,7 @@ class AIOptimizedPrediction(Base):
     optimized_error = Column(Float)  # MAE of optimized prediction
     optimization_improved = Column(Integer)  # 1 if optimized was better, 0 otherwise
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 class EngineCalibration(Base):
@@ -240,8 +240,8 @@ class EngineCalibration(Base):
     version = Column(Integer, nullable=False, default=1)
     is_active = Column(Integer, nullable=False, default=1)  # 1 = active, 0 = superseded
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class TeamMarketValue(Base):
@@ -254,8 +254,8 @@ class TeamMarketValue(Base):
     avg_player_value = Column(Float, nullable=False)  # millions of euros
     num_players = Column(Integer, nullable=False)
     url = Column(String(256))
-    scraped_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    scraped_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class TeamSentiment(Base):
@@ -269,5 +269,5 @@ class TeamSentiment(Base):
     reddit_sentiment = Column(Float, nullable=False)  # -1 to 1
     confidence = Column(Float, nullable=False)  # 0 to 1 (data volume)
     article_count = Column(Integer, nullable=False)
-    scraped_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    scraped_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

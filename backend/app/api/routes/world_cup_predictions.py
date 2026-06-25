@@ -4,11 +4,10 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Body
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.models.world_cup_prediction import MatchFixture, MatchPrediction, PredictionHistory, AIAnalysisHistory
 from app.services.world_cup_match_service import sync_world_cup_fixtures, get_remaining_matches
-from app.services.world_cup_prediction_engine import predict_match_score
 from app.services.world_cup_factor_service import build_prediction_factors
 from app.utils.prediction_db import get_prediction_session, close_prediction_session, init_prediction_db
 
@@ -18,8 +17,7 @@ router = APIRouter(prefix="/world-cup/predictions", tags=["world-cup-predictions
 
 class FlexibleResponse(BaseModel):
     """Flexible response model that accepts any fields."""
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class PredictionRequest(BaseModel):
@@ -439,7 +437,7 @@ async def get_today_matches():
         # Expire all objects to force refresh from database
         session.expire_all()
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         today_start = datetime(now.year, now.month, now.day, 0, 0, 0)
         today_end = datetime(now.year, now.month, now.day, 23, 59, 59)
 

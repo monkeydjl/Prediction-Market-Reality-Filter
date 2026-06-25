@@ -250,7 +250,7 @@ async def fetch_team_sentiment(team_name: str) -> dict[str, Any]:
     # Aggregate
     result = {
         "team_name": team_name,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "news": {
             "article_count": len(news_articles),
             "avg_sentiment": news_sentiment,
@@ -296,7 +296,7 @@ async def fetch_match_sentiment(home_team: str, away_team: str) -> dict[str, Any
         "sentiment_diff": sentiment_diff,  # Positive = home favored
         "confidence": confidence,
         "interpretation": interpret_sentiment_diff(sentiment_diff),
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 
@@ -346,7 +346,7 @@ def cache_sentiment(data: dict[str, Any]) -> None:
             existing.reddit_sentiment = data["reddit"]["avg_sentiment"]
             existing.confidence = data["confidence"]
             existing.article_count = data["news"]["article_count"]
-            existing.scraped_at = datetime.utcnow()
+            existing.scraped_at = datetime.now(timezone.utc)
         else:
             # Insert new
             new_entry = TeamSentiment(
@@ -356,7 +356,7 @@ def cache_sentiment(data: dict[str, Any]) -> None:
                 reddit_sentiment=data["reddit"]["avg_sentiment"],
                 confidence=data["confidence"],
                 article_count=data["news"]["article_count"],
-                scraped_at=datetime.utcnow()
+                scraped_at=datetime.now(timezone.utc)
             )
             session.add(new_entry)
 
@@ -390,7 +390,7 @@ def get_cached_sentiment(team_name: str, ttl_hours: int = 6) -> dict[str, Any] |
             return None
 
         # Check if expired
-        age = datetime.utcnow() - cached.scraped_at
+        age = datetime.now(timezone.utc) - cached.scraped_at
         if age > timedelta(hours=ttl_hours):
             return None
 

@@ -163,7 +163,7 @@ async def scrape_team_market_value(team_name: str, use_cache: bool = True) -> di
                 "avg_player_value": total_value / num_players if num_players > 0 else 0,
                 "num_players": num_players,
                 "source": "transfermarkt",
-                "scraped_at": datetime.utcnow().isoformat(),
+                "scraped_at": datetime.now(timezone.utc).isoformat(),
                 "url": url
             }
 
@@ -197,7 +197,7 @@ def get_cached_market_value(team_name: str, ttl_days: int = 7) -> dict[str, Any]
             return None
 
         # Check if expired
-        age = datetime.utcnow() - cached.scraped_at
+        age = datetime.now(timezone.utc) - cached.scraped_at
         if age > timedelta(days=ttl_days):
             return None
 
@@ -233,7 +233,7 @@ def cache_market_value(data: dict[str, Any]) -> None:
             existing.total_market_value = data["total_market_value"]
             existing.avg_player_value = data["avg_player_value"]
             existing.num_players = data["num_players"]
-            existing.scraped_at = datetime.utcnow()
+            existing.scraped_at = datetime.now(timezone.utc)
             existing.url = data["url"]
         else:
             # Insert new
@@ -242,7 +242,7 @@ def cache_market_value(data: dict[str, Any]) -> None:
                 total_market_value=data["total_market_value"],
                 avg_player_value=data["avg_player_value"],
                 num_players=data["num_players"],
-                scraped_at=datetime.utcnow(),
+                scraped_at=datetime.now(timezone.utc),
                 url=data["url"]
             )
             session.add(new_entry)

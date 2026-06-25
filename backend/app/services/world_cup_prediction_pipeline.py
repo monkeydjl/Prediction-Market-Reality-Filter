@@ -23,8 +23,7 @@ from app.models.world_cup_prediction import (
     PredictionHistory
 )
 from app.services.world_cup_factor_service import build_prediction_factors
-from app.services.world_cup_prediction_engine import predict_match_score
-from app.services.world_cup_elo_odds_engine import predict_match_elo_odds
+from app.services.world_cup_engines import get_engine
 from app.services.elo_ratings_service import get_elo_rating
 from app.services.odds_cache_service import get_cached_odds
 from app.services.world_cup_team_stats_service import (
@@ -406,7 +405,7 @@ async def run_prediction_pipeline(
         # Step 4: Run prediction based on selected engine
         if selected_engine == "elo_odds":
             # Use fast Elo+Odds engine
-            prediction = predict_match_elo_odds(
+            prediction = get_engine("elo_odds")(
                 home_team=match.home_team,
                 away_team=match.away_team,
                 elo_home=home_elo_data["elo_rating"],
@@ -437,7 +436,7 @@ async def run_prediction_pipeline(
         elif selected_engine == "integrated":
             # Integrated engine: run both engines and fuse results
             # This combines market signals (elo_odds) with contextual factors (hybrid)
-            elo_prediction = predict_match_elo_odds(
+            elo_prediction = get_engine("elo_odds")(
                 home_team=match.home_team,
                 away_team=match.away_team,
                 elo_home=home_elo_data["elo_rating"],
@@ -449,7 +448,7 @@ async def run_prediction_pipeline(
             )
 
             # Also run hybrid engine with factors
-            hybrid_prediction = await predict_match_score(
+            hybrid_prediction = await get_engine("hybrid")(
                 home_team=match.home_team,
                 away_team=match.away_team,
                 kickoff_utc=match.kickoff_utc,
@@ -522,7 +521,7 @@ async def run_prediction_pipeline(
 
         else:  # selected_engine == "hybrid"
             # Use comprehensive hybrid engine (factors already calculated in Step 3b)
-            prediction_result = await predict_match_score(
+            prediction_result = await get_engine("hybrid")(
                 home_team=match.home_team,
                 away_team=match.away_team,
                 kickoff_utc=match.kickoff_utc,

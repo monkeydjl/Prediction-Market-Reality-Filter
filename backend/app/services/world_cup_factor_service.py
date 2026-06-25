@@ -77,7 +77,7 @@ def calculate_team_factors(
     if last_match_date:
         try:
             last_date = datetime.fromisoformat(last_match_date.replace('Z', '+00:00'))
-            days_since_last_match = (datetime.utcnow() - last_date).days
+            days_since_last_match = (datetime.now(timezone.utc) - last_date).days
         except (ValueError, TypeError):
             pass
 

@@ -1,7 +1,7 @@
 """Main prediction engine that orchestrates rule-based and AI predictions."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.services.world_cup_rule_engine import predict_score_rule_based
@@ -143,6 +143,6 @@ async def predict_match_score(
 
     # Add metadata
     fused["factors"] = factors
-    fused["timestamp"] = datetime.utcnow().isoformat()
+    fused["timestamp"] = datetime.now(timezone.utc).isoformat()
 
     return fused

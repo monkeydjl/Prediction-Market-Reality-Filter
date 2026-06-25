@@ -102,7 +102,7 @@ async def update_live_predictions() -> dict[str, Any]:
     Returns:
         Summary of actions taken
     """
-    logger.info("[Live Update] Checking match statuses at %s", datetime.utcnow().isoformat())
+    logger.info("[Live Update] Checking match statuses at %s", datetime.now(timezone.utc).isoformat())
 
     # 1. Check for newly finished matches → trigger scoring
     newly_finished = get_newly_finished_matches()
@@ -146,7 +146,7 @@ async def update_live_predictions() -> dict[str, Any]:
 
     return {
         "status": "ok",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "in_play_count": len(live_match_ids),
         "pre_match_updated": updated_count,
         "newly_finished_scored": scored_count,

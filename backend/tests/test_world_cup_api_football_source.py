@@ -10,7 +10,7 @@ from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT, load_sports_f
 from app.services.world_cup_api_football_source import (
     import_world_cup_api_football_bundle,
     preview_world_cup_api_football_bundle,
-    test_world_cup_api_football_connection,
+    test_world_cup_api_football_connection as check_api_football_connection,
     validate_world_cup_api_football_pipeline,
 )
 
@@ -419,7 +419,7 @@ class WorldCupApiFootballConnectionTests(unittest.TestCase):
                     "app.services.world_cup_api_football_source.urlopen",
                     return_value=_UrlResponse(status_body),
                 ) as open_mock:
-            result = test_world_cup_api_football_connection()
+            result = check_api_football_connection()
 
         self.assertTrue(result["ok"])
         self.assertIsNone(result["error"])
@@ -434,7 +434,7 @@ class WorldCupApiFootballConnectionTests(unittest.TestCase):
 
     def test_connection_no_api_key(self):
         with patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", ""):
-            result = test_world_cup_api_football_connection()
+            result = check_api_football_connection()
 
         self.assertFalse(result["ok"])
         self.assertIn("not configured", result["error"])
@@ -442,7 +442,7 @@ class WorldCupApiFootballConnectionTests(unittest.TestCase):
     def test_connection_no_base_url(self):
         with patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", "key"), \
                 patch.object(settings, "WORLD_CUP_API_FOOTBALL_BASE_URL", ""):
-            result = test_world_cup_api_football_connection()
+            result = check_api_football_connection()
 
         self.assertFalse(result["ok"])
         self.assertIn("base URL not configured", result["error"])
@@ -456,7 +456,7 @@ class WorldCupApiFootballConnectionTests(unittest.TestCase):
                     "app.services.world_cup_api_football_source.urlopen",
                     side_effect=HTTPError("url", 401, "Unauthorized", {}, None),
                 ):
-            result = test_world_cup_api_football_connection()
+            result = check_api_football_connection()
 
         self.assertFalse(result["ok"])
         self.assertIn("401", result["error"])
@@ -468,7 +468,7 @@ class WorldCupApiFootballConnectionTests(unittest.TestCase):
                     "app.services.world_cup_api_football_source.urlopen",
                     side_effect=TimeoutError("timed out"),
                 ):
-            result = test_world_cup_api_football_connection()
+            result = check_api_football_connection()
 
         self.assertFalse(result["ok"])
         self.assertIn("Connection failed", result["error"])

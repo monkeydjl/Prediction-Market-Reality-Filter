@@ -103,7 +103,7 @@ async def get_odds_cache_stats(session: Session = Depends(get_prediction_session
             "estimated_api_calls_saved": 0
         }
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     # OddsCache has no expires_at column; derive freshness from cached_at + 1h TTL
     ttl = timedelta(hours=1)
     fresh = sum(1 for e in cache_entries if e.cached_at and (now - e.cached_at) < ttl)
@@ -178,7 +178,7 @@ async def get_system_health(session: Session = Depends(get_prediction_session_de
     from datetime import datetime, timedelta
 
     # Recent predictions (last 24 hours)
-    yesterday = datetime.utcnow() - timedelta(days=1)
+    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
     recent_predictions = (
         session.query(MatchPrediction)
         .filter(MatchPrediction.last_updated >= yesterday)
@@ -197,7 +197,7 @@ async def get_system_health(session: Session = Depends(get_prediction_session_de
 
     data_age_hours = 0
     if latest_prediction:
-        data_age = datetime.utcnow() - latest_prediction.last_updated
+        data_age = datetime.now(timezone.utc) - latest_prediction.last_updated
         data_age_hours = data_age.total_seconds() / 3600
 
     return {

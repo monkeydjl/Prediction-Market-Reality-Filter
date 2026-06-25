@@ -57,7 +57,7 @@ async def get_cached_odds(
         cached = session.query(OddsCache).filter_by(match_key=match_key).first()
 
         if cached:
-            age_seconds = (datetime.utcnow() - cached.cached_at).total_seconds()
+            age_seconds = (datetime.now(timezone.utc) - cached.cached_at).total_seconds()
 
             if age_seconds < ttl_seconds:
                 # Cache hit
@@ -82,7 +82,7 @@ async def get_cached_odds(
                 cached.away_odds = fresh_odds["away"]
                 cached.source = fresh_odds["source"]
                 cached.bookmakers_count = fresh_odds.get("bookmakers_count")
-                cached.cached_at = datetime.utcnow()
+                cached.cached_at = datetime.now(timezone.utc)
                 cached.last_updated_api = datetime.fromisoformat(
                     fresh_odds["last_update"].replace('Z', '+00:00')
                 ) if fresh_odds.get("last_update") else None
@@ -94,7 +94,7 @@ async def get_cached_odds(
                     away_odds=fresh_odds["away"],
                     source=fresh_odds["source"],
                     bookmakers_count=fresh_odds.get("bookmakers_count"),
-                    cached_at=datetime.utcnow(),
+                    cached_at=datetime.now(timezone.utc),
                     last_updated_api=datetime.fromisoformat(
                         fresh_odds["last_update"].replace('Z', '+00:00')
                     ) if fresh_odds.get("last_update") else None
@@ -180,7 +180,7 @@ def get_cache_stats() -> dict[str, Any]:
 
     try:
         all_entries = session.query(OddsCache).all()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         fresh_count = 0
         stale_count = 0
@@ -220,7 +220,7 @@ def clear_expired_cache(max_age_hours: int = 168) -> int:
     session = get_prediction_session()
 
     try:
-        cutoff = datetime.utcnow() - timedelta(hours=max_age_hours)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
         deleted = session.query(OddsCache).filter(
             OddsCache.cached_at < cutoff
         ).delete()

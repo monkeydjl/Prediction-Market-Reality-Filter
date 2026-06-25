@@ -307,6 +307,338 @@ _CANDIDATES: tuple[dict[str, Any], ...] = (
         ),
         "time_horizon": "end of the 2026 FIFA World Cup group stage",
     },
+    {
+        "id": "argentina-group-goal-diff-plus-five",
+        "question": "Will Argentina finish the group stage with a goal difference of at least +5 at the 2026 FIFA World Cup?",
+        "baseline_probability": 42.0,
+        "category": "group_stage",
+        "entities": ["Argentina", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Argentina's official group-stage goal difference "
+            "(goals for minus goals against) is +5 or greater after all "
+            "group matches at the 2026 FIFA World Cup."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "brazil-group-goal-diff-plus-five",
+        "question": "Will Brazil finish the group stage with a goal difference of at least +5 at the 2026 FIFA World Cup?",
+        "baseline_probability": 46.0,
+        "category": "group_stage",
+        "entities": ["Brazil", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Brazil's official group-stage goal difference "
+            "(goals for minus goals against) is +5 or greater after all "
+            "group matches at the 2026 FIFA World Cup."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "france-group-goal-diff-plus-five",
+        "question": "Will France finish the group stage with a goal difference of at least +5 at the 2026 FIFA World Cup?",
+        "baseline_probability": 44.0,
+        "category": "group_stage",
+        "entities": ["France", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if France's official group-stage goal difference "
+            "(goals for minus goals against) is +5 or greater after all "
+            "group matches at the 2026 FIFA World Cup."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "england-group-goal-diff-plus-five",
+        "question": "Will England finish the group stage with a goal difference of at least +5 at the 2026 FIFA World Cup?",
+        "baseline_probability": 40.0,
+        "category": "group_stage",
+        "entities": ["England", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if England's official group-stage goal difference "
+            "(goals for minus goals against) is +5 or greater after all "
+            "group matches at the 2026 FIFA World Cup."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    # Group winner / runner-up candidate events for Pot 1 seeded teams.
+    # Argentina already has argentina-win-group above; add the remaining 11
+    # group-winner events plus 12 group-runner-up events (one per Pot 1 seed).
+    {
+        "id": "france-win-group",
+        "question": "Will France win its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 58.0,
+        "category": "group_stage",
+        "entities": ["France", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if France finishes first in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "spain-win-group",
+        "question": "Will Spain win its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 60.0,
+        "category": "group_stage",
+        "entities": ["Spain", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Spain finishes first in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "england-win-group",
+        "question": "Will England win its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 55.0,
+        "category": "group_stage",
+        "entities": ["England", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if England finishes first in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "brazil-win-group",
+        "question": "Will Brazil win its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 56.0,
+        "category": "group_stage",
+        "entities": ["Brazil", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Brazil finishes first in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "portugal-win-group",
+        "question": "Will Portugal win its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 54.0,
+        "category": "group_stage",
+        "entities": ["Portugal", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Portugal finishes first in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "netherlands-win-group",
+        "question": "Will the Netherlands win its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 50.0,
+        "category": "group_stage",
+        "entities": ["Netherlands", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if the Netherlands finishes first in its group at the 2026 "
+            "FIFA World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "belgium-win-group",
+        "question": "Will Belgium win its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 48.0,
+        "category": "group_stage",
+        "entities": ["Belgium", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Belgium finishes first in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "germany-win-group",
+        "question": "Will Germany win its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 52.0,
+        "category": "group_stage",
+        "entities": ["Germany", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Germany finishes first in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "usa-win-group",
+        "question": "Will the United States win its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 42.0,
+        "category": "group_stage",
+        "entities": ["United States", "USMNT", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if the United States finishes first in its group at the "
+            "2026 FIFA World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "mexico-win-group",
+        "question": "Will Mexico win its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 40.0,
+        "category": "group_stage",
+        "entities": ["Mexico", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Mexico finishes first in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "canada-win-group",
+        "question": "Will Canada win its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 30.0,
+        "category": "group_stage",
+        "entities": ["Canada", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Canada finishes first in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    # Group runner-up events (one per Pot 1 seeded team, 12 total).
+    {
+        "id": "argentina-runner-up-group",
+        "question": "Will Argentina finish as runner-up in its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 20.0,
+        "category": "group_stage",
+        "entities": ["Argentina", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Argentina finishes second in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "france-runner-up-group",
+        "question": "Will France finish as runner-up in its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 22.0,
+        "category": "group_stage",
+        "entities": ["France", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if France finishes second in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "spain-runner-up-group",
+        "question": "Will Spain finish as runner-up in its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 20.0,
+        "category": "group_stage",
+        "entities": ["Spain", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Spain finishes second in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "england-runner-up-group",
+        "question": "Will England finish as runner-up in its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 22.0,
+        "category": "group_stage",
+        "entities": ["England", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if England finishes second in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "brazil-runner-up-group",
+        "question": "Will Brazil finish as runner-up in its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 22.0,
+        "category": "group_stage",
+        "entities": ["Brazil", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Brazil finishes second in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "portugal-runner-up-group",
+        "question": "Will Portugal finish as runner-up in its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 23.0,
+        "category": "group_stage",
+        "entities": ["Portugal", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Portugal finishes second in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "netherlands-runner-up-group",
+        "question": "Will the Netherlands finish as runner-up in its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 25.0,
+        "category": "group_stage",
+        "entities": ["Netherlands", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if the Netherlands finishes second in its group at the 2026 "
+            "FIFA World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "belgium-runner-up-group",
+        "question": "Will Belgium finish as runner-up in its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 25.0,
+        "category": "group_stage",
+        "entities": ["Belgium", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Belgium finishes second in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "germany-runner-up-group",
+        "question": "Will Germany finish as runner-up in its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 24.0,
+        "category": "group_stage",
+        "entities": ["Germany", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Germany finishes second in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "usa-runner-up-group",
+        "question": "Will the United States finish as runner-up in its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 28.0,
+        "category": "group_stage",
+        "entities": ["United States", "USMNT", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if the United States finishes second in its group at the "
+            "2026 FIFA World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "mexico-runner-up-group",
+        "question": "Will Mexico finish as runner-up in its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 28.0,
+        "category": "group_stage",
+        "entities": ["Mexico", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Mexico finishes second in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
+    {
+        "id": "canada-runner-up-group",
+        "question": "Will Canada finish as runner-up in its group at the 2026 FIFA World Cup?",
+        "baseline_probability": 30.0,
+        "category": "group_stage",
+        "entities": ["Canada", _TOURNAMENT],
+        "resolution_criteria": (
+            "YES if Canada finishes second in its group at the 2026 FIFA "
+            "World Cup according to official final group standings."
+        ),
+        "time_horizon": "end of the 2026 FIFA World Cup group stage",
+    },
 )
 
 

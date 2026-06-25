@@ -532,8 +532,9 @@ class KnockoutResolutionTests(unittest.TestCase):
 
 
 class GroupStageResolutionTests(unittest.TestCase):
-    def _group_fact(self, team, rank=None, points=None, status="group_stage",
-                    stage="group_stage", observed_at="2026-06-23T00:00:00Z"):
+    def _group_fact(self, team, rank=None, points=None, goal_diff=None,
+                    status="group_stage", stage="group_stage",
+                    observed_at="2026-06-23T00:00:00Z"):
         fact = {
             "fact_id": f"wc2026:qualification:{team.lower().replace(' ', '-')}",
             "kind": "qualification",
@@ -548,6 +549,8 @@ class GroupStageResolutionTests(unittest.TestCase):
             fact["rank"] = rank
         if points is not None:
             fact["points"] = points
+        if goal_diff is not None:
+            fact["goal_diff"] = goal_diff
         return fact
 
     def test_advance_from_group_resolves_yes_with_rank_2(self):
@@ -719,6 +722,108 @@ class GroupStageResolutionTests(unittest.TestCase):
         ])
         self.assertIsNotNone(decision)
         self.assertEqual(decision["actual_outcome"], 100.0)
+
+    def test_goal_diff_threshold_resolves_yes(self):
+        record = _sports_record(
+            "argentina-gd",
+            "Will Argentina finish the group stage with a goal difference of at least +5 at the 2026 FIFA World Cup?",
+            "world-cup-2026:argentina-group-goal-diff-plus-five",
+            "group_stage",
+            ["Argentina", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [
+            self._group_fact("Argentina", rank=1, points=9, goal_diff=7),
+        ])
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 100.0)
+        self.assertIn("goal difference", decision["reason"])
+
+    def test_goal_diff_threshold_resolves_no_when_complete_and_below(self):
+        record = _sports_record(
+            "brazil-gd",
+            "Will Brazil finish the group stage with a goal difference of at least +5 at the 2026 FIFA World Cup?",
+            "world-cup-2026:brazil-group-goal-diff-plus-five",
+            "group_stage",
+            ["Brazil", WORLD_CUP_TOURNAMENT],
+        )
+        facts = [
+            self._group_fact("Brazil", rank=2, points=6, goal_diff=3),
+            {
+                "fact_id": "wc2026:tournament-status",
+                "kind": "tournament_status",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "status": "complete",
+                "stage": "group_stage",
+                "confidence": 1.0,
+            },
+        ]
+        decision = resolver.evaluate_world_cup_resolution(record, facts)
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 0.0)
+
+    def test_goal_diff_threshold_pending_when_below_not_complete(self):
+        record = _sports_record(
+            "france-gd",
+            "Will France finish the group stage with a goal difference of at least +5 at the 2026 FIFA World Cup?",
+            "world-cup-2026:france-group-goal-diff-plus-five",
+            "group_stage",
+            ["France", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [
+            self._group_fact("France", rank=1, points=4, goal_diff=2),
+        ])
+        self.assertIsNone(decision)
+
+    def test_runner_up_resolves_yes_with_rank_2(self):
+        record = _sports_record(
+            "france-ru",
+            "Will France finish as runner-up in its group at the 2026 FIFA World Cup?",
+            "world-cup-2026:france-runner-up-group",
+            "group_stage",
+            ["France", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [
+            self._group_fact("France", rank=2, points=6),
+        ])
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 100.0)
+        self.assertIn("runner-up", decision["reason"])
+
+    def test_runner_up_resolves_no_when_rank_1_and_complete(self):
+        record = _sports_record(
+            "argentina-ru",
+            "Will Argentina finish as runner-up in its group at the 2026 FIFA World Cup?",
+            "world-cup-2026:argentina-runner-up-group",
+            "group_stage",
+            ["Argentina", WORLD_CUP_TOURNAMENT],
+        )
+        facts = [
+            self._group_fact("Argentina", rank=1, points=9),
+            {
+                "fact_id": "wc2026:tournament-status",
+                "kind": "tournament_status",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "status": "complete",
+                "stage": "group_stage",
+                "confidence": 1.0,
+            },
+        ]
+        decision = resolver.evaluate_world_cup_resolution(record, facts)
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 0.0)
+
+    def test_runner_up_pending_when_rank_1_not_complete(self):
+        record = _sports_record(
+            "spain-ru",
+            "Will Spain finish as runner-up in its group at the 2026 FIFA World Cup?",
+            "world-cup-2026:spain-runner-up-group",
+            "group_stage",
+            ["Spain", WORLD_CUP_TOURNAMENT],
+        )
+        decision = resolver.evaluate_world_cup_resolution(record, [
+            self._group_fact("Spain", rank=1, points=6),
+        ])
+        self.assertIsNone(decision)
 
 
 if __name__ == "__main__":

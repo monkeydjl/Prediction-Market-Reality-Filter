@@ -165,10 +165,12 @@ def _group_stage_resolution(
 ) -> dict[str, Any] | None:
     """Resolve group-stage questions from qualification/group-table facts.
 
-    Handles three question shapes detectable from the event title:
+    Handles five question shapes detectable from the event title:
       1. "advance from the group stage" / "advance from its group" -> top 2
       2. "win its group" / "win the group" / "finish first" -> rank 1
-      3. "at least N points" -> points threshold
+      3. "runner-up" / "finish second" / "second in its group" -> rank 2
+      4. "at least N points" -> points threshold
+      5. "at least +N goal difference" -> goal difference threshold
     """
 
     source = record.get("source") or {}
@@ -178,6 +180,7 @@ def _group_stage_resolution(
     title = _norm(record.get("event_title", ""))
 
     threshold = _parse_threshold(record.get("event_title", ""), "points")
+    goal_diff_threshold = _parse_goal_diff_threshold(record.get("event_title", ""))
     win_group = (
         "win its group" in title
         or "win the group" in title
@@ -189,6 +192,13 @@ def _group_stage_resolution(
         or "first in its group" in title
         or "first in the group" in title
     )
+    runner_up = (
+        "runner-up" in title
+        or "runner up" in title
+        or "finish second" in title
+        or "second in its group" in title
+        or "second in the group" in title
+    )
     advance = (
         "advance from the group" in title
         or "advance from its group" in title
@@ -196,7 +206,13 @@ def _group_stage_resolution(
         or "get out of the group" in title
         or "qualify from the group" in title
     )
-    if threshold is None and not win_group and not advance:
+    if (
+        threshold is None
+        and goal_diff_threshold is None
+        and not win_group
+        and not runner_up
+        and not advance
+    ):
         return None
 
     team_facts: dict[str, list[dict[str, Any]]] = {}
@@ -239,6 +255,26 @@ def _group_stage_resolution(
                 resolved_no.append(latest)
                 continue
 
+        if goal_diff_threshold is not None:
+            gd = _number(latest.get("goal_diff"))
+            if gd is not None and gd >= goal_diff_threshold:
+                return _decision(
+                    100.0,
+                    f"{team} reached a +{gd:g} goal difference in the group "
+                    f"stage, meeting the +{goal_diff_threshold:g} threshold.",
+                    [latest],
+                )
+            if gd is not None and group_complete and gd < goal_diff_threshold:
+                if not multi:
+                    return _decision(
+                        0.0,
+                        f"{team} finished with a +{gd:g} goal difference, "
+                        f"below the +{goal_diff_threshold:g} threshold.",
+                        [latest],
+                    )
+                resolved_no.append(latest)
+                continue
+
         if win_group:
             rank = _number(latest.get("rank"))
             status = str(latest.get("status") or "").lower()
@@ -256,6 +292,29 @@ def _group_stage_resolution(
                     return _decision(
                         0.0,
                         f"{team} did not win its group "
+                        f"(rank {rank if rank is not None else '?'}).",
+                        [latest],
+                    )
+                resolved_no.append(latest)
+                continue
+
+        if runner_up:
+            rank = _number(latest.get("rank"))
+            status = str(latest.get("status") or "").lower()
+            if rank == 2 or status in {"group_runner_up", "runner_up"}:
+                return _decision(
+                    100.0,
+                    f"{team} finished as runner-up in its group (rank 2).",
+                    [latest],
+                )
+            if group_complete and (
+                (rank is not None and rank != 2)
+                or _group_stage_eliminated(status, latest)
+            ):
+                if not multi:
+                    return _decision(
+                        0.0,
+                        f"{team} did not finish as runner-up "
                         f"(rank {rank if rank is not None else '?'}).",
                         [latest],
                     )
@@ -540,6 +599,16 @@ def _progression_no(status: str, fact: dict[str, Any]) -> bool:
 
 def _parse_threshold(text: str, phrase: str) -> float | None:
     match = re.search(rf"at least\s+(\d+(?:\.\d+)?)\s+{re.escape(phrase)}", _norm(text))
+    if not match:
+        return None
+    return float(match.group(1))
+
+
+def _parse_goal_diff_threshold(text: str) -> float | None:
+    norm = _norm(text)
+    if "goal difference" not in norm:
+        return None
+    match = re.search(r"at least\s+\+?(\d+(?:\.\d+)?)", norm)
     if not match:
         return None
     return float(match.group(1))

@@ -22,6 +22,8 @@ _FEEDS: tuple[tuple[str, str, Callable[[dict[str, Any], str, str], dict[str, Any
     ("matches", "WORLD_CUP_SPORTMONKS_FIXTURES_URL", lambda payload, url, observed: _fixtures_data(payload, url, observed)),
     ("standings", "WORLD_CUP_SPORTMONKS_STANDINGS_URL", lambda payload, url, observed: _standings_data(payload, url, observed)),
     ("player_awards", "WORLD_CUP_SPORTMONKS_TOP_SCORERS_URL", lambda payload, url, observed: _top_scorers_data(payload, url, observed)),
+    ("lineups", "WORLD_CUP_SPORTMONKS_LINEUPS_URL", lambda payload, url, observed: _lineups_data(payload, url, observed)),
+    ("cards", "WORLD_CUP_SPORTMONKS_CARDS_URL", lambda payload, url, observed: _cards_data(payload, url, observed)),
 )
 
 
@@ -347,6 +349,16 @@ def _top_scorers_data(payload: dict[str, Any], source_url: str, observed_at: str
     return _base_data(source_url, observed_at, {"player_awards": awards})
 
 
+def _lineups_data(payload: dict[str, Any], source_url: str, observed_at: str) -> dict[str, Any]:
+    lineups = [_lineup_row(row) for row in _items(payload)]
+    return _base_data(source_url, observed_at, {"lineups": lineups})
+
+
+def _cards_data(payload: dict[str, Any], source_url: str, observed_at: str) -> dict[str, Any]:
+    cards = [_card_row(row) for row in _items(payload)]
+    return _base_data(source_url, observed_at, {"cards": cards})
+
+
 def _fixture_row(raw: dict[str, Any]) -> dict[str, Any]:
     match_id = _text(_first(raw, ("id",), ("fixture_id",), ("match_id",)))
     home, away = _participants(raw)
@@ -404,6 +416,60 @@ def _top_scorer_row(raw: dict[str, Any]) -> dict[str, Any]:
         "goals": _text(_first(raw, ("total",), ("goals",), ("goals", "total"))),
         "rank": _text(_first(raw, ("position",), ("rank",))),
         "status": "current",
+    })
+
+
+def _lineup_row(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a Sportmonks lineup row into a thin lineup record.
+
+    Sportmonks lineup payloads typically nest players under ``lineup`` /
+    ``players`` with per-card fields. The adapter keeps only the fields the
+    signal pipeline needs: match_id, team, player, position, and starting flag.
+    """
+    match_id = _text(_first(raw, ("fixture_id",), ("match_id",), ("id",)))
+    team = _team_name(raw)
+    players_raw = raw.get("lineup") or raw.get("players") or []
+    if not isinstance(players_raw, list):
+        players_raw = []
+    players = []
+    for entry in players_raw:
+        if not isinstance(entry, dict):
+            continue
+        player = _text(_first(entry, ("player", "name"), ("player_name",), ("name",)))
+        if not player:
+            continue
+        players.append(_compact({
+            "player": player,
+            "team": _text(_first(entry, ("team", "name"), ("team_name",))) or team,
+            "position": _text(_first(entry, ("position", "name"), ("position",), ("role",))),
+            "starting": _boolish(entry.get("starting")) or _boolish(entry.get("starter")),
+        }))
+    if not players:
+        raise ValueError("Sportmonks lineup row has no players")
+    return _compact({
+        "match_id": match_id,
+        "team": team,
+        "players": players,
+    })
+
+
+def _card_row(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a Sportmonks card event row into a thin card record."""
+    match_id = _text(_first(raw, ("fixture_id",), ("match_id",), ("id",)))
+    player = _text(_first(raw, ("player", "name"), ("player_name",), ("name",)))
+    if not player:
+        raise ValueError("Sportmonks card row missing player")
+    card_type = _text(_first(raw, ("type",), ("card_type",), ("card",))).lower()
+    if "red" in card_type:
+        card_type = "red"
+    elif "yellow" in card_type or card_type in {"y", "yc"}:
+        card_type = "yellow"
+    return _compact({
+        "match_id": match_id,
+        "player": player,
+        "team": _team_name(raw),
+        "card_type": card_type,
+        "minute": _text(_first(raw, ("minute",), ("time",))),
     })
 
 
@@ -621,7 +687,7 @@ def _provider_result_metadata(
 
 
 def _has_rows(data: dict[str, Any]) -> bool:
-    for key in ("matches", "qualifications", "player_awards"):
+    for key in ("matches", "qualifications", "player_awards", "lineups", "cards"):
         value = data.get(key)
         if isinstance(value, list) and value:
             return True
@@ -688,6 +754,16 @@ def _compact(data: dict[str, Any]) -> dict[str, Any]:
 
 def _clean(value: Any) -> str:
     return " ".join(str(value or "").strip().split())
+
+
+def _boolish(value: Any) -> bool:
+    """Normalize truthy/falsy values from API responses to a Python bool."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "y", "starting", "starter"}
 
 
 def _record_fetch(

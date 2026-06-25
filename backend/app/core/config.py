@@ -155,6 +155,12 @@ class Settings:
     WORLD_CUP_SPORTMONKS_TOP_SCORERS_URL: str = os.getenv(
         "WORLD_CUP_SPORTMONKS_TOP_SCORERS_URL", ""
     )
+    WORLD_CUP_SPORTMONKS_LINEUPS_URL: str = os.getenv(
+        "WORLD_CUP_SPORTMONKS_LINEUPS_URL", ""
+    )
+    WORLD_CUP_SPORTMONKS_CARDS_URL: str = os.getenv(
+        "WORLD_CUP_SPORTMONKS_CARDS_URL", ""
+    )
     WORLD_CUP_SOURCE_BUNDLE_TIMEOUT_SECONDS: float = float(
         os.getenv("WORLD_CUP_SOURCE_BUNDLE_TIMEOUT_SECONDS", "10.0")
     )

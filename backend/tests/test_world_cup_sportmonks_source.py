@@ -196,6 +196,40 @@ class _Body:
             }],
         })
 
+    @staticmethod
+    def lineups() -> bytes:
+        return _body({
+            "data": [{
+                "fixture_id": 1001,
+                "participant": {"name": "Team A"},
+                "lineup": [
+                    {"player": {"name": "Goalkeeper A"}, "position": {"name": "GK"}, "starting": True},
+                    {"player": {"name": "Striker A"}, "position": {"name": "FW"}, "starting": False},
+                ],
+            }],
+        })
+
+    @staticmethod
+    def cards() -> bytes:
+        return _body({
+            "data": [
+                {
+                    "fixture_id": 1001,
+                    "player": {"name": "Player A"},
+                    "participant": {"name": "Team A"},
+                    "type": "yellowcard",
+                    "minute": 35,
+                },
+                {
+                    "fixture_id": 1002,
+                    "player": {"name": "Player B"},
+                    "participant": {"name": "Team B"},
+                    "type": "redcard",
+                    "minute": 78,
+                },
+            ],
+        })
+
 
 class WorldCupSportmonksConnectionTests(unittest.TestCase):
 
@@ -315,6 +349,71 @@ class WorldCupSportmonksValidateTests(unittest.TestCase):
         result = validate_world_cup_sportmonks_pipeline()
         self.assertFalse(result["ok"])
         self.assertIn("Fixture fetch failed", result.get("error", ""))
+
+
+class LineupsCardsAdapterTests(unittest.TestCase):
+    """Unit tests for the thin lineups/cards adapters."""
+
+    def test_lineup_row_normalizes_players(self):
+        from app.services.world_cup_sportmonks_source import _lineup_row
+
+        raw = {
+            "fixture_id": 1001,
+            "participant": {"name": "Team A"},
+            "lineup": [
+                {"player": {"name": "Goalkeeper A"}, "position": {"name": "GK"}, "starting": True},
+                {"player": {"name": "Striker A"}, "position": "FW", "starting": False},
+            ],
+        }
+        result = _lineup_row(raw)
+        self.assertEqual(result["match_id"], "1001")
+        self.assertEqual(result["team"], "Team A")
+        self.assertEqual(len(result["players"]), 2)
+        self.assertEqual(result["players"][0]["player"], "Goalkeeper A")
+        self.assertEqual(result["players"][0]["position"], "GK")
+        self.assertTrue(result["players"][0]["starting"])
+        self.assertFalse(result["players"][1]["starting"])
+
+    def test_lineup_row_raises_on_no_players(self):
+        from app.services.world_cup_sportmonks_source import _lineup_row
+
+        with self.assertRaisesRegex(ValueError, "no players"):
+            _lineup_row({"fixture_id": 1001, "participant": {"name": "Team A"}})
+
+    def test_card_row_normalizes_yellow_card(self):
+        from app.services.world_cup_sportmonks_source import _card_row
+
+        raw = {
+            "fixture_id": 1001,
+            "player": {"name": "Player A"},
+            "participant": {"name": "Team A"},
+            "type": "yellowcard",
+            "minute": 35,
+        }
+        result = _card_row(raw)
+        self.assertEqual(result["match_id"], "1001")
+        self.assertEqual(result["player"], "Player A")
+        self.assertEqual(result["card_type"], "yellow")
+        self.assertEqual(result["minute"], "35")
+
+    def test_card_row_normalizes_red_card(self):
+        from app.services.world_cup_sportmonks_source import _card_row
+
+        raw = {
+            "fixture_id": 1002,
+            "player": {"name": "Player B"},
+            "participant": {"name": "Team B"},
+            "type": "redcard",
+            "minute": 78,
+        }
+        result = _card_row(raw)
+        self.assertEqual(result["card_type"], "red")
+
+    def test_card_row_raises_on_missing_player(self):
+        from app.services.world_cup_sportmonks_source import _card_row
+
+        with self.assertRaisesRegex(ValueError, "missing player"):
+            _card_row({"fixture_id": 1001, "type": "yellow"})
 
 
 if __name__ == "__main__":

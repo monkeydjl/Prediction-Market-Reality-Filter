@@ -60,6 +60,10 @@ def build_sports_signals(
     if suspension:
         signals["suspension_signal"] = suspension
 
+    group_strength = _group_strength_signal(event_question, source, facts)
+    if group_strength:
+        signals["group_strength_signal"] = group_strength
+
     return {
         "tournament": tournament,
         "fact_count": len(relevant),
@@ -408,6 +412,79 @@ def _suspension_signal(
     }
 
 
+def _group_strength_signal(
+    event_question: str,
+    source: dict[str, Any],
+    facts: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Compare a team's FIFA rank to its group's average rank.
+
+    Uses ``team_stat`` facts that carry a ``group`` plus a ``stat_name``
+    containing "rank"/"fifa" and a numeric ``stat_value``. Lower FIFA rank
+    means a stronger team, so a team ranked well above (numerically below)
+    its group average is favored in yes-framed progression/group questions.
+    """
+    team = _primary_team(source)
+    if not team:
+        return None
+    team_norm = _norm(team)
+    target_group = None
+    for fact in facts:
+        if _norm(fact.get("team", "")) == team_norm and fact.get("group"):
+            target_group = str(fact.get("group"))
+            break
+    if not target_group:
+        return None
+
+    ranks: list[tuple[str, float]] = []
+    seen: set[str] = set()
+    for fact in facts:
+        if fact.get("kind") != "team_stat":
+            continue
+        if str(fact.get("group", "")) != target_group:
+            continue
+        team_name = _norm(fact.get("team", ""))
+        if not team_name or team_name in seen:
+            continue
+        stat_name = _norm(fact.get("stat_name", ""))
+        if "rank" not in stat_name and "fifa" not in stat_name:
+            continue
+        rank = _number(fact.get("stat_value"))
+        if rank is None:
+            continue
+        ranks.append((team_name, rank))
+        seen.add(team_name)
+
+    if len(ranks) < 2:
+        return None
+
+    avg_rank = sum(rank for _, rank in ranks) / len(ranks)
+    target_rank = next((rank for name, rank in ranks if name == team_norm), None)
+    if target_rank is None:
+        return None
+
+    yes_progression = _is_yes_team_progression(event_question, source)
+    direction = "neutral"
+    if target_rank < avg_rank:
+        direction = "supports_yes" if yes_progression else "neutral"
+    elif target_rank > avg_rank:
+        direction = "supports_no" if yes_progression else "neutral"
+    spread = abs(target_rank - avg_rank)
+    level = "high" if spread >= 10 else "medium"
+    return {
+        "level": level,
+        "direction": direction,
+        "summary": (
+            f"{team} (FIFA rank {target_rank:g}) in {target_group}; "
+            f"group avg rank {avg_rank:.1f}."
+        ),
+        "team_rank": target_rank,
+        "group_avg_rank": round(avg_rank, 1),
+        "group": target_group,
+        "facts": [],
+    }
+
+
 def _fact_summary(fact: dict[str, Any]) -> dict[str, Any]:
     keep = (
         "fact_id",
@@ -458,6 +535,8 @@ def _primary_team(source: dict[str, Any]) -> str:
 
 def _is_yes_team_progression(event_question: str, source: dict[str, Any]) -> bool:
     category = str(source.get("category") or "").lower()
+    if category == "group_stage":
+        return True
     if category != "team_progression":
         return False
     question = _norm(event_question)

@@ -376,5 +376,122 @@ class SportsSignalServiceTests(unittest.TestCase):
         self.assertNotIn("suspension_signal", bundle["signals"])
 
 
+def _team_stat_fact(team: str, group: str, stat_name: str, stat_value) -> dict:
+    return {
+        "fact_id": f"wc2026:team_stat:{team.lower().replace(' ', '-')}:{stat_name.lower()}",
+        "kind": "team_stat",
+        "tournament": WORLD_CUP_TOURNAMENT,
+        "team": team,
+        "group": group,
+        "stat_name": stat_name,
+        "stat_value": stat_value,
+        "confidence": 1.0,
+        "observed_at": "2026-06-01T00:00:00Z",
+    }
+
+
+def _qualification_fact(team: str, group: str) -> dict:
+    return {
+        "fact_id": f"wc2026:qualification:{team.lower().replace(' ', '-')}",
+        "kind": "qualification",
+        "tournament": WORLD_CUP_TOURNAMENT,
+        "team": team,
+        "group": group,
+        "status": "group_stage",
+        "stage": "group_stage",
+        "confidence": 1.0,
+        "observed_at": "2026-06-23T00:00:00Z",
+    }
+
+
+def _group_source(team: str, category: str = "group_stage") -> dict:
+    return {
+        "type": "sports_event",
+        "tournament": WORLD_CUP_TOURNAMENT,
+        "category": category,
+        "entities": [team, WORLD_CUP_TOURNAMENT],
+    }
+
+
+class GroupStrengthSignalTests(unittest.TestCase):
+    def test_signal_supports_yes_when_team_ranked_above_group_average(self):
+        # Argentina FIFA rank 1 vs group of four (1, 12, 30, 40) -> avg 20.75
+        # spread = 19.75 -> high; direction = supports_yes (group_stage is yes-framed)
+        facts = [
+            _qualification_fact("Argentina", "Group A"),
+            _team_stat_fact("Argentina", "Group A", "fifa_rank", 1),
+            _team_stat_fact("Rival B", "Group A", "fifa_rank", 12),
+            _team_stat_fact("Rival C", "Group A", "fifa_rank", 30),
+            _team_stat_fact("Rival D", "Group A", "fifa_rank", 40),
+        ]
+        bundle = signals.build_sports_signals(
+            "Will Argentina win its group at the 2026 FIFA World Cup?",
+            _group_source("Argentina"),
+            facts,
+        )
+        sig = bundle["signals"].get("group_strength_signal")
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig["direction"], "supports_yes")
+        self.assertEqual(sig["level"], "high")
+        self.assertEqual(sig["team_rank"], 1)
+        # Implementation rounds group_avg_rank to 1 decimal place (20.75 -> 20.8)
+        self.assertAlmostEqual(sig["group_avg_rank"], 20.8)
+        self.assertEqual(sig["group"], "Group A")
+
+    def test_signal_supports_no_when_team_ranked_below_group_average(self):
+        # Weak team rank 40 vs strong group (1, 5, 8, 40) -> avg 13.5
+        # spread = 26.5 -> high; direction = supports_no
+        facts = [
+            _qualification_fact("Weak Side", "Group B"),
+            _team_stat_fact("Weak Side", "Group B", "fifa_rank", 40),
+            _team_stat_fact("Strong A", "Group B", "fifa_rank", 1),
+            _team_stat_fact("Strong C", "Group B", "fifa_rank", 5),
+            _team_stat_fact("Strong D", "Group B", "fifa_rank", 8),
+        ]
+        bundle = signals.build_sports_signals(
+            "Will Weak Side win its group at the 2026 FIFA World Cup?",
+            _group_source("Weak Side"),
+            facts,
+        )
+        sig = bundle["signals"].get("group_strength_signal")
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig["direction"], "supports_no")
+        self.assertEqual(sig["level"], "high")
+        self.assertEqual(sig["team_rank"], 40)
+
+    def test_signal_returns_none_when_no_group_on_team(self):
+        # No fact carries a `group` for the target team -> cannot resolve group -> None
+        facts = [
+            {
+                "fact_id": "wc2026:team_stat:argentina:fifa_rank",
+                "kind": "team_stat",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "team": "Argentina",
+                "stat_name": "fifa_rank",
+                "stat_value": 1,
+                "confidence": 1.0,
+            },
+        ]
+        bundle = signals.build_sports_signals(
+            "Will Argentina win its group at the 2026 FIFA World Cup?",
+            _group_source("Argentina"),
+            facts,
+        )
+        self.assertNotIn("group_strength_signal", bundle["signals"])
+
+    def test_signal_returns_none_when_only_one_team_in_group(self):
+        # Only one team_stat in the group -> len(ranks) < 2 -> None
+        facts = [
+            _qualification_fact("Argentina", "Group A"),
+            _team_stat_fact("Argentina", "Group A", "fifa_rank", 1),
+        ]
+        bundle = signals.build_sports_signals(
+            "Will Argentina win its group at the 2026 FIFA World Cup?",
+            _group_source("Argentina"),
+            facts,
+        )
+        self.assertNotIn("group_strength_signal", bundle["signals"])
+
+
 if __name__ == "__main__":
     unittest.main()

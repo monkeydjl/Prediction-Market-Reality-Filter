@@ -98,6 +98,11 @@ class PredictionHistory(Base):
     actual_home_score = Column(Integer)
     actual_away_score = Column(Integer)
 
+    # Performance monitoring (optional)
+    execution_time_ms = Column(Float)  # Engine execution time
+    data_fetch_time_ms = Column(Float)  # Time to fetch Elo/odds/stats
+    total_pipeline_time_ms = Column(Float)  # End-to-end pipeline time
+
 
 class MatchResult(Base):
     """Final result and prediction accuracy."""

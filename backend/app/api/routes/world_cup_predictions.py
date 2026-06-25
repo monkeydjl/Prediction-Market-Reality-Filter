@@ -655,7 +655,13 @@ async def optimize_match_prediction(match_id: str):
                 "elo_ratings": prediction.factors.get("elo_ratings") if prediction.factors else None
             },
             prediction_method=prediction.prediction_method,
-            match_context=None  # TODO: Add context from factors if available
+            match_context={
+                "stage": match_fixture.stage if match_fixture else None,
+                "group": match_fixture.group if match_fixture else None,
+                "venue": match_fixture.venue if match_fixture else None,
+                "data_quality": prediction.factors.get("data_quality") if prediction.factors else None,
+                "key_factors": prediction.key_factors[:5] if prediction.key_factors else []
+            }
         )
 
         if optimization_result.get("status") == "error":

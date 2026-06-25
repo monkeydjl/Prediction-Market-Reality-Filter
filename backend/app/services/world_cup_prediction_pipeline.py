@@ -13,6 +13,7 @@ This module ties together all prediction components:
 from datetime import datetime, timezone
 from typing import Any, Literal
 import logging
+import time
 
 from sqlalchemy.orm import Session
 
@@ -299,6 +300,12 @@ async def run_prediction_pipeline(
         Result summary with prediction details
     """
 
+    # Performance monitoring
+    pipeline_start_time = time.perf_counter()
+    data_fetch_start = None
+    data_fetch_time = None
+    engine_exec_time = None
+    
     should_close = session is None
     if session is None:
         session = get_prediction_session()
@@ -328,6 +335,10 @@ async def run_prediction_pipeline(
             commence_time=match.kickoff_utc
         )
 
+        # End data fetch timing
+        if data_fetch_start:
+            data_fetch_time = (time.perf_counter() - data_fetch_start) * 1000  # Convert to ms
+        
         # Step 3: Choose prediction engine
         selected_engine = engine
         if engine == "auto":
@@ -347,12 +358,24 @@ async def run_prediction_pipeline(
             away_stats = fetch_team_stats(match.away_team, away_team_id)
             h2h_data = fetch_h2h_data(match.home_team, match.away_team, home_team_id, away_team_id)
 
-            # Track data quality
+            # Track data quality with enhanced metrics
             data_quality = "real"
             if home_stats.get("data_source") == "mock" or away_stats.get("data_source") == "mock":
                 data_quality = "mock"
             if h2h_data.get("data_source") == "mock":
                 data_quality = "mock" if data_quality != "real" else "partial"
+            
+            # Enhanced data quality metrics
+            data_quality_metrics = {
+                "quality": data_quality,
+                "has_elo": home_elo_data is not None and away_elo_data is not None,
+                "has_odds": odds is not None and odds.get("source") != "fallback",
+                "has_h2h": h2h_data and h2h_data.get("data_source") == "real",
+                "has_weather": False,  # Will be set after weather fetch
+                "elo_source": f"{home_elo_data.get('source', 'unknown')}/{away_elo_data.get('source', 'unknown')}",
+                "odds_source": odds.get("source") if odds else "none",
+                "stats_source": f"{home_stats.get('data_source', 'unknown')}/{away_stats.get('data_source', 'unknown')}",
+            }
 
             # Fetch weather data for the match venue
             weather = get_match_weather(
@@ -360,6 +383,74 @@ async def run_prediction_pipeline(
                 city=getattr(match, 'city', None),
                 match_date=match.kickoff_utc.isoformat() if match.kickoff_utc else None,
             )
+            if weather:
+                data_quality_metrics["has_weather"] = True
+
+            # Calculate data freshness (age in appropriate units)
+            now = datetime.now(timezone.utc)
+            
+            # Elo ratings age (days)
+            elo_age_days = None
+            if home_elo_data and 'updated_at' in home_elo_data:
+                elo_updated = datetime.fromisoformat(home_elo_data['updated_at'].replace('Z', '+00:00'))
+                elo_age_days = (now - elo_updated).total_seconds() / 86400
+            
+            # Odds age (minutes)
+            odds_age_minutes = None
+            if odds and 'fetched_at' in odds:
+                odds_fetched = datetime.fromisoformat(odds['fetched_at'].replace('Z', '+00:00'))
+                odds_age_minutes = (now - odds_fetched).total_seconds() / 60
+            
+            # Stats age (hours) - use home_stats as proxy
+            stats_age_hours = None
+            if home_stats and 'updated_at' in home_stats:
+                stats_updated = datetime.fromisoformat(home_stats['updated_at'].replace('Z', '+00:00'))
+                stats_age_hours = (now - stats_updated).total_seconds() / 3600
+            
+            # Add freshness to metrics
+            data_quality_metrics['elo_age_days'] = round(elo_age_days, 2) if elo_age_days is not None else None
+            data_quality_metrics['odds_age_minutes'] = round(odds_age_minutes, 2) if odds_age_minutes is not None else None
+            data_quality_metrics['stats_age_hours'] = round(stats_age_hours, 2) if stats_age_hours is not None else None
+            
+            # Calculate composite quality score (0-100)
+            quality_score = 0.0
+            
+            # Coverage component (40 points max)
+            coverage_score = 0
+            if data_quality_metrics['has_elo']:
+                coverage_score += 10
+            if data_quality_metrics['has_odds']:
+                coverage_score += 15
+            if data_quality_metrics['has_h2h']:
+                coverage_score += 10
+            if data_quality_metrics['has_weather']:
+                coverage_score += 5
+            
+            # Freshness component (40 points max)
+            freshness_score = 0
+            if elo_age_days is not None:
+                # Elo: fresh if < 7 days, stale if > 30 days
+                elo_freshness = max(0, min(1, 1 - (elo_age_days - 7) / 23))
+                freshness_score += elo_freshness * 10
+            if odds_age_minutes is not None:
+                # Odds: fresh if < 30 min, stale if > 120 min
+                odds_freshness = max(0, min(1, 1 - (odds_age_minutes - 30) / 90))
+                freshness_score += odds_freshness * 20
+            if stats_age_hours is not None:
+                # Stats: fresh if < 24h, stale if > 72h
+                stats_freshness = max(0, min(1, 1 - (stats_age_hours - 24) / 48))
+                freshness_score += stats_freshness * 10
+            
+            # Quality level component (20 points max)
+            if data_quality == 'real':
+                quality_level_score = 20
+            elif data_quality == 'partial':
+                quality_level_score = 12
+            else:  # mock
+                quality_level_score = 5
+            
+            quality_score = coverage_score + freshness_score + quality_level_score
+            data_quality_metrics['quality_score'] = round(quality_score, 1)
 
             enhanced_factors = calculate_comprehensive_factors(
                 home_team_name=match.home_team,
@@ -383,6 +474,7 @@ async def run_prediction_pipeline(
             )
             factors["enhanced"] = enhanced_factors
             factors["data_quality"] = data_quality
+            factors["data_quality_metrics"] = data_quality_metrics
 
             # Detect group stage final round status (qualified/eliminated teams)
             group_status = _detect_group_stage_status(match, session)
@@ -403,6 +495,7 @@ async def run_prediction_pipeline(
         }
 
         # Step 4: Run prediction based on selected engine
+        engine_start_time = time.perf_counter()
         if selected_engine == "elo_odds":
             # Use fast Elo+Odds engine
             prediction = get_engine("elo_odds")(
@@ -572,6 +665,10 @@ async def run_prediction_pipeline(
             except Exception as ba_err:
                 logger.warning("Betting analysis skipped: %s", ba_err)
 
+        # End engine execution timing
+        if engine_start_time:
+            engine_exec_time = (time.perf_counter() - engine_start_time) * 1000  # Convert to ms
+        
         # Step 4g: Add tactical matchup analysis
         try:
             prediction_result["tactical_analysis"] = format_tactical_summary(
@@ -696,6 +793,9 @@ async def run_prediction_pipeline(
                 should_record_history = False
 
         if should_record_history:
+            # Calculate total pipeline time
+            total_pipeline_time = (time.perf_counter() - pipeline_start_time) * 1000 if pipeline_start_time else None
+            
             # Record primary engine prediction
             history_entry = PredictionHistory(
                 match_id=match_id,
@@ -707,7 +807,10 @@ async def run_prediction_pipeline(
                 away_win_prob=prediction_result["outcome_probabilities"]["away_win"],
                 confidence=prediction_result["confidence"],
                 trigger=trigger,
-                prediction_method=prediction_result.get("prediction_method")
+                prediction_method=prediction_result.get("prediction_method"),
+                execution_time_ms=engine_exec_time,
+                data_fetch_time_ms=data_fetch_time,
+                total_pipeline_time_ms=total_pipeline_time
             )
             session.add(history_entry)
             

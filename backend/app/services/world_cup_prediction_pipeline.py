@@ -580,6 +580,58 @@ async def run_prediction_pipeline(
         except Exception as ta_err:
             logger.warning("Tactical analysis skipped: %s", ta_err)
 
+        # Step 4h: Run alternative engine for comparison (always record both engines)
+        alternative_predictions = []
+        
+        # Determine which engines to run for comparison
+        if selected_engine in ('elo_odds', 'integrated'):
+            # Primary used elo_odds, also run hybrid for comparison
+            if factors:  # Only if we have factors
+                try:
+                    hybrid_comparison = await get_engine('hybrid')(
+                        home_team=match.home_team,
+                        away_team=match.away_team,
+                        kickoff_utc=match.kickoff_utc,
+                        stage=match.stage,
+                        factors=factors,
+                    )
+                    alternative_predictions.append({
+                        'engine': 'hybrid',
+                        'predicted_score': hybrid_comparison['predicted_score'],
+                        'outcome_probabilities': hybrid_comparison['outcome_probabilities'],
+                        'confidence': hybrid_comparison['confidence'],
+                        'prediction_method': hybrid_comparison['prediction_method'],
+                    })
+                    logger.info('Ran hybrid engine for comparison: %s vs %s', 
+                               hybrid_comparison['predicted_score'], prediction_result['predicted_score'])
+                except Exception as alt_err:
+                    logger.warning('Alternative hybrid engine failed: %s', alt_err)
+        
+        if selected_engine in ('hybrid', 'integrated'):
+            # Primary used hybrid or integrated, also run pure elo_odds for comparison
+            try:
+                elo_comparison = get_engine('elo_odds')(
+                    home_team=match.home_team,
+                    away_team=match.away_team,
+                    elo_home=home_elo_data['elo_rating'],
+                    elo_away=away_elo_data['elo_rating'],
+                    odds_home=odds['home'] if odds else None,
+                    odds_draw=odds['draw'] if odds else None,
+                    odds_away=odds['away'] if odds else None,
+                    is_knockout=is_knockout,
+                )
+                alternative_predictions.append({
+                    'engine': 'elo_odds',
+                    'predicted_score': elo_comparison['predicted_score'],
+                    'outcome_probabilities': elo_comparison['outcome_probabilities'],
+                    'confidence': elo_comparison['confidence'],
+                    'prediction_method': elo_comparison['prediction_method'],
+                })
+                logger.info('Ran elo_odds engine for comparison: %s vs %s', 
+                           elo_comparison['predicted_score'], prediction_result['predicted_score'])
+            except Exception as alt_err:
+                logger.warning('Alternative elo_odds engine failed: %s', alt_err)
+
         # Step 5: Save or update prediction in database
         existing = session.query(MatchPrediction).filter_by(match_id=match_id).first()
 
@@ -644,6 +696,7 @@ async def run_prediction_pipeline(
                 should_record_history = False
 
         if should_record_history:
+            # Record primary engine prediction
             history_entry = PredictionHistory(
                 match_id=match_id,
                 timestamp=datetime.utcnow(),
@@ -657,6 +710,24 @@ async def run_prediction_pipeline(
                 prediction_method=prediction_result.get("prediction_method")
             )
             session.add(history_entry)
+            
+            # Also record alternative engine predictions for comparison
+            for alt_pred in alternative_predictions:
+                alt_history = PredictionHistory(
+                    match_id=match_id,
+                    timestamp=datetime.utcnow(),
+                    predicted_home_score=alt_pred["predicted_score"]["home"],
+                    predicted_away_score=alt_pred["predicted_score"]["away"],
+                    home_win_prob=alt_pred["outcome_probabilities"]["home_win"],
+                    draw_prob=alt_pred["outcome_probabilities"]["draw"],
+                    away_win_prob=alt_pred["outcome_probabilities"]["away_win"],
+                    confidence=alt_pred["confidence"],
+                    trigger=trigger + "_comparison",
+                    prediction_method=alt_pred["prediction_method"]
+                )
+                session.add(alt_history)
+                logger.info("Recorded comparison history for %s engine: method=%s", 
+                           alt_pred["engine"], alt_pred["prediction_method"])
 
         session.commit()
 

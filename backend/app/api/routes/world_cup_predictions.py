@@ -1,9 +1,12 @@
 """API routes for World Cup dynamic score predictions."""
 
+import json
+import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
 from app.models.world_cup_prediction import MatchFixture, MatchPrediction, PredictionHistory, AIAnalysisHistory
@@ -13,6 +16,8 @@ from app.utils.prediction_db import get_prediction_session, close_prediction_ses
 
 
 router = APIRouter(prefix="/world-cup/predictions", tags=["world-cup-predictions"])
+
+logger = logging.getLogger(__name__)
 
 
 class FlexibleResponse(BaseModel):
@@ -391,9 +396,7 @@ async def batch_switch_engine(
         Batch prediction results
     """
     from app.services.world_cup_prediction_pipeline import batch_predict_matches
-    import logging
 
-    logger = logging.getLogger(__name__)
     logger.info(f"batch_switch_engine called: engine={engine}, status_filter={status_filter}")
 
     session = get_prediction_session()
@@ -431,6 +434,131 @@ async def batch_switch_engine(
         raise HTTPException(status_code=500, detail=f"批量切换失败: {str(e)}")
     finally:
         close_prediction_session(session)
+
+
+@router.get("/batch-switch-engine-stream")
+async def batch_switch_engine_stream(
+    engine: str = Query(..., description='Target engine: "elo_odds", "hybrid", or "high_confidence"'),
+    status_filter: str = Query("scheduled", description="Match status filter (default: scheduled)"),
+):
+    """Stream batch engine switch progress as Server-Sent Events.
+
+    Emits one ``progress`` event per match processed and a final ``complete``
+    event with the aggregate summary. Replaces the long-poll
+    ``POST /batch-switch-engine`` for clients that want real-time feedback.
+    """
+
+    async def event_stream() -> AsyncGenerator[str, None]:
+        from app.services.world_cup_prediction_pipeline import run_prediction_pipeline
+
+        logger.info(
+            "batch_switch_engine_stream start: engine=%s status_filter=%s",
+            engine,
+            status_filter,
+        )
+
+        def sse(event: str, payload: dict[str, Any]) -> str:
+            return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+        session = get_prediction_session()
+        succeeded = 0
+        failed = 0
+        skipped = 0
+        elo_odds_count = 0
+        hybrid_count = 0
+        total = 0
+        try:
+            matches = session.query(MatchFixture).filter(
+                MatchFixture.status == status_filter
+            ).all()
+            total = len(matches)
+            match_ids = [m.match_id for m in matches]
+
+            if not match_ids:
+                yield sse("complete", {
+                    "status": "ok",
+                    "message": f"没有找到状态为 {status_filter} 的比赛",
+                    "total": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "skipped": 0,
+                })
+                return
+
+            yield sse("start", {"total": total, "engine": engine})
+
+            for idx, match_id in enumerate(match_ids, start=1):
+                try:
+                    result = await run_prediction_pipeline(
+                        match_id,
+                        trigger="batch_engine_switch",
+                        engine=engine,
+                        session=session,
+                    )
+                    status = result.get("status")
+                    if status == "ok":
+                        succeeded += 1
+                        engine_used = result.get("engine_used")
+                        if engine_used == "elo_odds":
+                            elo_odds_count += 1
+                        elif engine_used == "hybrid":
+                            hybrid_count += 1
+                    elif status == "skipped":
+                        skipped += 1
+                    else:
+                        failed += 1
+
+                    yield sse("progress", {
+                        "current": idx,
+                        "total": total,
+                        "match_id": match_id,
+                        "status": status,
+                        "succeeded": succeeded,
+                        "failed": failed,
+                        "skipped": skipped,
+                    })
+                except Exception as exc:  # noqa: BLE001 - per-match isolation
+                    failed += 1
+                    logger.error(
+                        "batch_switch_engine_stream match %s failed: %s",
+                        match_id,
+                        exc,
+                    )
+                    yield sse("progress", {
+                        "current": idx,
+                        "total": total,
+                        "match_id": match_id,
+                        "status": "error",
+                        "error": str(exc),
+                        "succeeded": succeeded,
+                        "failed": failed,
+                        "skipped": skipped,
+                    })
+
+            yield sse("complete", {
+                "status": "ok",
+                "total": total,
+                "succeeded": succeeded,
+                "failed": failed,
+                "skipped": skipped,
+                "elo_odds_count": elo_odds_count,
+                "hybrid_count": hybrid_count,
+            })
+        except Exception as exc:  # noqa: BLE001 - surface fatal errors
+            logger.error("batch_switch_engine_stream fatal: %s", exc, exc_info=True)
+            yield sse("error", {"message": str(exc)})
+        finally:
+            close_prediction_session(session)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/today", response_model=FlexibleResponse)

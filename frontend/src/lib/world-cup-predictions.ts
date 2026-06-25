@@ -45,6 +45,7 @@ export interface MatchPrediction {
   has_betting_odds?: boolean;
   engine_used?: "elo_odds" | "hybrid" | "auto";
   data_quality?: "real" | "partial" | "mock";
+  data_quality_score?: number;
   betting_analysis?: {
     "1x2": { home_win: number; draw: number; away_win: number; implied_odds: Record<string, number> };
     double_chance: Record<string, number>;

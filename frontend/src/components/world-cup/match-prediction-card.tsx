@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { Trophy, TrendingUp, Clock, AlertCircle, Zap, Brain, GitCompare, History, Sparkles, Loader2, type LucideIcon } from "lucide-react";
+import { Trophy, TrendingUp, Clock, AlertCircle, Zap, Brain, GitCompare, History, Sparkles, Loader2, ChevronDown, Lightbulb, Gauge, type LucideIcon } from "lucide-react";
 import type { MatchFixture, MatchPrediction } from "@/lib/world-cup-predictions";
 import { compareEngines } from "@/lib/world-cup-predictions";
 import { translateTeamName } from "@/lib/team-names-zh";
@@ -42,6 +42,18 @@ function confidenceTone(confidence: number): string {
   if (confidence >= 0.8) return "text-pos";
   if (confidence >= 0.6) return "text-warn";
   return "text-neg";
+}
+
+function qualityScoreTone(score: number): string {
+  if (score >= 70) return "text-pos";
+  if (score >= 45) return "text-warn";
+  return "text-neg";
+}
+
+function qualityScoreLabel(score: number): string {
+  if (score >= 70) return "数据充分";
+  if (score >= 45) return "数据一般";
+  return "数据有限";
 }
 
 function probabilityBar(probability: number): string {
@@ -92,6 +104,7 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
   const [showComparison, setShowComparison] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showAnalysis, setShowAnalysis] = useState(false);
+  const [showReasoning, setShowReasoning] = useState(false);
   const [isLoadingComparison, setIsLoadingComparison] = useState(false);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
   const [comparisonData, setComparisonData] = useState<{
@@ -136,6 +149,15 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
     if (probs.away_win >= probs.draw) return "away";
     return "draw";
   }, [prediction]);
+
+  // Explanation data: top key factors, AI reasoning, and data quality score.
+  const keyFactors = useMemo(
+    () => (prediction?.key_factors ?? []).filter((f) => f && f.trim()).slice(0, 3),
+    [prediction]
+  );
+  const reasoning = prediction?.ai_reasoning?.trim() || null;
+  const qualityScore = prediction?.data_quality_score ?? null;
+  const hasExplanation = keyFactors.length > 0 || reasoning != null || qualityScore != null;
 
   return (
     <div className={cn(
@@ -342,6 +364,79 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
                     ? "数据来源：模拟数据（API 不可用，预测可能不准确）"
                     : "数据来源：部分模拟（部分球队数据缺失）"}
                 </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Why this prediction — collapsible explanation */}
+        {isPredicted && hasExplanation && (
+          <div className="mt-3">
+            <button
+              onClick={() => setShowReasoning((v) => !v)}
+              className="flex w-full items-center justify-between rounded-md border bg-secondary/30 px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              aria-expanded={showReasoning}
+            >
+              <div className="flex items-center gap-2">
+                <Lightbulb className="size-3.5" />
+                <span>为何这样预测？</span>
+              </div>
+              <ChevronDown className={cn("size-3.5 transition-transform", showReasoning && "rotate-180")} />
+            </button>
+
+            {showReasoning && (
+              <div className="mt-2 space-y-3 rounded-md border bg-secondary/20 px-3 py-3">
+                {/* Data quality score */}
+                {qualityScore != null && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <Gauge className="size-3.5" />
+                        <span>数据质量</span>
+                      </div>
+                      <span className={cn("font-mono text-xs font-semibold tabular-nums", qualityScoreTone(qualityScore))}>
+                        {Math.round(qualityScore)}/100 · {qualityScoreLabel(qualityScore)}
+                      </span>
+                    </div>
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+                      <div
+                        className={cn(
+                          "h-full transition-all",
+                          qualityScore >= 70 ? "bg-pos" : qualityScore >= 45 ? "bg-warn" : "bg-neg"
+                        )}
+                        style={{ width: `${Math.max(0, Math.min(100, qualityScore))}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Key factors */}
+                {keyFactors.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="text-xs font-medium text-foreground">关键因素</div>
+                    <ul className="space-y-1">
+                      {keyFactors.map((factor, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
+                          <span className="mt-1 size-1 shrink-0 rounded-full bg-primary" />
+                          <span>{factor}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* AI reasoning summary */}
+                {reasoning && (
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-xs font-medium text-foreground">
+                      <Brain className="size-3.5" />
+                      <span>AI 解读</span>
+                    </div>
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      {reasoning.length > 160 ? `${reasoning.slice(0, 160)}…` : reasoning}
+                    </p>
+                  </div>
+                )}
               </div>
             )}
           </div>

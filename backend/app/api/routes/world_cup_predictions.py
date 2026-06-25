@@ -33,6 +33,8 @@ def _engine_used_from_method(method: str | None) -> str:
 
 def _serialize_prediction(prediction: MatchPrediction) -> dict[str, Any]:
     method = prediction.prediction_method
+    factors = prediction.factors or {}
+    quality_metrics = factors.get("data_quality_metrics") or {}
     return {
         "predicted_score": {
             "home": prediction.predicted_home_score,
@@ -50,6 +52,8 @@ def _serialize_prediction(prediction: MatchPrediction) -> dict[str, Any]:
         "key_factors": prediction.key_factors,
         "last_updated": prediction.last_updated.isoformat() if prediction.last_updated else None,
         "has_betting_odds": bool(method and "elo_odds" in method),
+        "data_quality": factors.get("data_quality"),
+        "data_quality_score": quality_metrics.get("quality_score"),
     }
 
 
@@ -656,9 +660,9 @@ async def optimize_match_prediction(match_id: str):
             },
             prediction_method=prediction.prediction_method,
             match_context={
-                "stage": match_fixture.stage if match_fixture else None,
-                "group": match_fixture.group if match_fixture else None,
-                "venue": match_fixture.venue if match_fixture else None,
+                "stage": match.stage if match else None,
+                "group": match.group if match else None,
+                "venue": match.venue if match else None,
                 "data_quality": prediction.factors.get("data_quality") if prediction.factors else None,
                 "key_factors": prediction.key_factors[:5] if prediction.key_factors else []
             }

@@ -1,8 +1,10 @@
 "use client";
 
-import { CartesianGrid, Line, LineChart, ReferenceLine, XAxis, YAxis } from "recharts";
+import { Brush, CartesianGrid, Line, LineChart, ReferenceLine, XAxis, YAxis } from "recharts";
 import { ChartFrame, DarkTooltip } from "@/components/ui/chart-lite";
 import type { SeriesPoint } from "./probability-chart";
+
+const BRUSH_MIN_POINTS = 10;
 
 export function ProbabilityChartRenderer({
   data,
@@ -11,8 +13,9 @@ export function ProbabilityChartRenderer({
   data: SeriesPoint[];
   baseline: number;
 }) {
+  const showBrush = data.length > BRUSH_MIN_POINTS;
   return (
-    <ChartFrame height={280}>
+    <ChartFrame height={showBrush ? 310 : 280}>
       <LineChart data={data} margin={{ left: 4, right: 8, top: 8, bottom: 4 }}>
         <CartesianGrid vertical={false} stroke="var(--border)" />
         <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} />
@@ -56,14 +59,24 @@ export function ProbabilityChartRenderer({
           dot={false}
           connectNulls
         />
+        {showBrush && (
+          <Brush
+            dataKey="label"
+            height={24}
+            stroke="var(--chart-1)"
+            fill="var(--secondary)"
+            travellerWidth={8}
+          />
+        )}
       </LineChart>
     </ChartFrame>
   );
 }
 
 export function EdgeChartRenderer({ data }: { data: SeriesPoint[] }) {
+  const showBrush = data.length > BRUSH_MIN_POINTS;
   return (
-    <ChartFrame height={220}>
+    <ChartFrame height={showBrush ? 250 : 220}>
       <LineChart data={data} margin={{ left: 4, right: 8, top: 8, bottom: 4 }}>
         <CartesianGrid vertical={false} stroke="var(--border)" />
         <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} />
@@ -85,6 +98,15 @@ export function EdgeChartRenderer({ data }: { data: SeriesPoint[] }) {
           dot={false}
           connectNulls
         />
+        {showBrush && (
+          <Brush
+            dataKey="label"
+            height={24}
+            stroke="var(--chart-2)"
+            fill="var(--secondary)"
+            travellerWidth={8}
+          />
+        )}
       </LineChart>
     </ChartFrame>
   );

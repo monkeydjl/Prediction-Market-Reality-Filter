@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import {
@@ -11,17 +11,19 @@ import {
   Calendar,
   Filter,
   X,
+  Layers,
 } from "lucide-react";
 import { AppNav } from "@/components/app-nav";
 import { MatchPredictionCard } from "@/components/world-cup/match-prediction-card";
 import { SectionErrorBoundary } from "@/components/section-error-boundary";
-import { fetchMatches, syncFixtures, type MatchWithPrediction } from "@/lib/world-cup-predictions";
+import { syncFixtures, type MatchWithPrediction } from "@/lib/world-cup-predictions";
+import { useWorldCupMatches } from "@/lib/swr-hooks";
 import { calculateGroupStandings } from "@/lib/group-standings";
 import { calculateQualificationProbabilities } from "@/lib/qualification-probability";
 import { translateTeamName } from "@/lib/team-names-zh";
 import { cn } from "@/lib/utils";
 
-type TabView = "matches" | "standings" | "qualification" | "knockout" | "engine-stats" | "auto-tune";
+type TabView = "matches" | "groups" | "standings" | "qualification" | "knockout" | "engine-stats" | "auto-tune";
 
 type StageFilter = "all" | "GROUP_STAGE" | "KNOCKOUT";
 type TimeFilter = "all" | "today" | "upcoming";
@@ -83,55 +85,40 @@ function isUtcToday(isoDate: string): boolean {
 }
 
 export default function WorldCupPage() {
-  const [allMatches, setAllMatches] = useState<MatchWithPrediction[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const {
+    data: allMatches = [],
+    error: swrError,
+    isLoading: loading,
+    isValidating,
+    mutate,
+  } = useWorldCupMatches({ limit: 200 });
+  const refreshing = isValidating && !loading;
   const [syncing, setSyncing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const error = syncError || (swrError ? (swrError instanceof Error ? swrError.message : "加载失败") : null);
   const [stageFilter, setStageFilter] = useState<StageFilter>("all");
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [teamFilter, setTeamFilter] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabView>("matches");
   const [isPending, startTransition] = useTransition();
-  const hasLoadedRef = useRef(false);
-
-  const loadMatches = useCallback(async () => {
-    const initialLoad = !hasLoadedRef.current;
-    try {
-      if (initialLoad) {
-        setLoading(true);
-      } else {
-        setRefreshing(true);
-      }
-      setError(null);
-
-      const data = await fetchMatches({ limit: 200 });
-      setAllMatches(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "加载失败");
-    } finally {
-      hasLoadedRef.current = true;
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
 
   const handleSync = useCallback(async () => {
     try {
       setSyncing(true);
+      setSyncError(null);
       await syncFixtures();
-      await loadMatches();
+      await mutate();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "同步失败");
+      setSyncError(err instanceof Error ? err.message : "同步失败");
     } finally {
       setSyncing(false);
     }
-  }, [loadMatches]);
+  }, [mutate]);
 
   const handlePredictionUpdated = useCallback(async () => {
     // Reload data to get updated predictions
-    await loadMatches();
-  }, [loadMatches]);
+    await mutate();
+  }, [mutate]);
 
   const handleTabChange = useCallback((tab: TabView) => {
     startTransition(() => setActiveTab(tab));
@@ -155,11 +142,6 @@ export default function WorldCupPage() {
   const handleClearTeamFilter = useCallback(() => {
     startTransition(() => setTeamFilter(null));
   }, [startTransition]);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadMatches();
-  }, [loadMatches]);
 
   const matches = useMemo(() => {
     let data = allMatches;
@@ -227,6 +209,39 @@ export default function WorldCupPage() {
     return grouped;
   }, [matches]);
 
+  const groupedByGroup = useMemo(() => {
+    // Start from allMatches so groups view is independent of stage/time filters.
+    let data = allMatches.filter(
+      (m) =>
+        (m.match.stage === "GROUP_STAGE" || m.match.stage === "group_stage") &&
+        m.match.group
+    );
+    if (teamFilter) {
+      data = data.filter(
+        (m) =>
+          m.match.home_team === teamFilter ||
+          m.match.away_team === teamFilter
+      );
+    }
+    const grouped = data.reduce((acc, m) => {
+      const group = m.match.group!;
+      if (!acc[group]) acc[group] = [];
+      acc[group].push(m);
+      return acc;
+    }, {} as Record<string, MatchWithPrediction[]>);
+    // Sort matches within each group by kickoff time
+    Object.keys(grouped).forEach((group) => {
+      grouped[group].sort((a, b) => {
+        const statusOrder = { in_play: 0, scheduled: 1, finished: 2 };
+        const aOrder = statusOrder[a.match.status as keyof typeof statusOrder] ?? 3;
+        const bOrder = statusOrder[b.match.status as keyof typeof statusOrder] ?? 3;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return new Date(a.match.kickoff_utc).getTime() - new Date(b.match.kickoff_utc).getTime();
+      });
+    });
+    return grouped;
+  }, [allMatches, teamFilter]);
+
   const groupStandings = useMemo(() => {
     return calculateGroupStandings(allMatches.map(m => m.match));
   }, [allMatches]);
@@ -288,6 +303,17 @@ export default function WorldCupPage() {
             )}
           >
             比赛赛程
+          </button>
+          <button
+            onClick={() => handleTabChange("groups")}
+            className={cn(
+              "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+              activeTab === "groups"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            小组分组
           </button>
           <button
             onClick={() => handleTabChange("standings")}
@@ -460,6 +486,106 @@ export default function WorldCupPage() {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Matches Grouped by A-H Group */}
+        {!loading && !error && activeTab === "groups" && (
+          <div className="space-y-8">
+            {teamFilter && (
+              <div className="flex items-center gap-2 rounded-lg border bg-primary/10 px-3 py-1 text-sm">
+                <span className="font-medium text-primary">
+                  球队: {translateTeamName(teamFilter)}
+                </span>
+                <button
+                  onClick={handleClearTeamFilter}
+                  className="rounded-sm hover:bg-primary/20 transition-colors"
+                >
+                  <X className="size-4 text-primary" />
+                </button>
+              </div>
+            )}
+            {Object.keys(groupedByGroup).length === 0 && (
+              <div className="rounded-lg border border-dashed py-16 text-center">
+                <Layers className="mx-auto size-12 text-muted-foreground opacity-50" />
+                <p className="mt-4 text-muted-foreground">
+                  暂无小组赛比赛数据
+                </p>
+              </div>
+            )}
+            {Object.entries(groupedByGroup)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([group, groupMatches]) => {
+                const fullStandings = groupStandings.find((s) => s.group === group)?.teams ?? [];
+                return (
+                  <div key={group}>
+                    <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold">
+                      <Layers className="size-5 text-primary" />
+                      {group} 组
+                      <span className="ml-2 rounded-md border bg-secondary px-2 py-0.5 text-sm font-normal text-muted-foreground">
+                        {groupMatches.length} 场
+                      </span>
+                    </h2>
+                    {fullStandings.length > 0 && (
+                      <div className="mb-4 overflow-hidden rounded-lg border">
+                        <table className="w-full text-sm">
+                          <thead className="bg-secondary">
+                            <tr>
+                              <th className="px-3 py-2 text-left font-medium">球队</th>
+                              <th className="px-3 py-2 text-right font-medium">场</th>
+                              <th className="px-3 py-2 text-right font-medium">胜</th>
+                              <th className="px-3 py-2 text-right font-medium">平</th>
+                              <th className="px-3 py-2 text-right font-medium">负</th>
+                              <th className="px-3 py-2 text-right font-medium">净胜</th>
+                              <th className="px-3 py-2 text-right font-medium">积分</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {fullStandings.map((t, idx) => (
+                              <tr
+                                key={t.team}
+                                className={cn(
+                                  "border-t",
+                                  idx < 2 && "bg-primary/5"
+                                )}
+                              >
+                                <td className="px-3 py-2">
+                                  <button
+                                    onClick={() => handleTeamClick(t.team)}
+                                    className="text-left font-medium hover:text-primary hover:underline"
+                                  >
+                                    {translateTeamName(t.team)}
+                                  </button>
+                                </td>
+                                <td className="px-3 py-2 text-right text-muted-foreground">{t.played}</td>
+                                <td className="px-3 py-2 text-right text-muted-foreground">{t.won}</td>
+                                <td className="px-3 py-2 text-right text-muted-foreground">{t.drawn}</td>
+                                <td className="px-3 py-2 text-right text-muted-foreground">{t.lost}</td>
+                                <td className="px-3 py-2 text-right text-muted-foreground">
+                                  {t.goalDifference > 0 ? `+${t.goalDifference}` : t.goalDifference}
+                                </td>
+                                <td className="px-3 py-2 text-right font-semibold">{t.points}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                    <div className="grid gap-4 md:grid-cols-2">
+                      {groupMatches.map((m) => (
+                        <SectionErrorBoundary key={m.match.match_id} title="比赛预测卡片">
+                          <MatchPredictionCard
+                            match={m.match}
+                            prediction={m.prediction}
+                            onTeamClick={handleTeamClick}
+                            onPredictionUpdated={handlePredictionUpdated}
+                          />
+                        </SectionErrorBoundary>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
           </div>
         )}
 

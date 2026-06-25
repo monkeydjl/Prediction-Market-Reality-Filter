@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { SWRProvider } from "@/components/providers/swr-provider";
 
 export const metadata: Metadata = {
   title: "Probability Watch — 事件情报与概率变化分析",
@@ -35,7 +36,9 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
       </head>
-      <body className="min-h-full">{children}</body>
+      <body className="min-h-full">
+        <SWRProvider>{children}</SWRProvider>
+      </body>
     </html>
   );
 }

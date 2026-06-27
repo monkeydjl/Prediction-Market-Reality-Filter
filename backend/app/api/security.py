@@ -14,12 +14,17 @@ def is_write_key_valid(x_api_key: str | None) -> bool:
 
 async def require_write_key(x_api_key: str | None = Header(default=None)):
     if not settings.API_WRITE_KEY:
-        # No key configured -> pass through. This is only reachable in a running
-        # app because the startup guard (app.main.lifespan) refuses to boot with
-        # an empty key UNLESS ALLOW_OPEN_WRITES was explicitly set, so an empty
-        # key here means the operator opted into public writes. The guard is the
-        # enforcement point; see app/main.py.
-        return
+        # No key configured. Only allow writes if the operator explicitly opted
+        # into public writes via ALLOW_OPEN_WRITES=true. This is a runtime
+        # second-check that complements the startup guard in app/main.py —
+        # if someone flips the env var and reloads mid-run without restarting,
+        # this still refuses to open the write surface.
+        if settings.ALLOW_OPEN_WRITES:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Write API key not configured (set API_WRITE_KEY or ALLOW_OPEN_WRITES=true)",
+        )
     # Constant-time comparison to avoid leaking the key via response timing.
     if not is_write_key_valid(x_api_key):
         raise HTTPException(

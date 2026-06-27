@@ -20,7 +20,7 @@ jobs:
       - name: Install backend dependencies
         run: python -m pip install -r requirements.txt
       - name: Install dev dependencies
-        run: python -m pip install ruff pytest pytest-cov
+        run: python -m pip install ruff pytest pytest-cov mypy
       - name: Audit backend dependencies
         run: |
           python -m pip install pip-audit
@@ -29,6 +29,12 @@ jobs:
         run: ruff check app/
       - name: Compile backend
         run: python -m compileall app tests
+      # Non-blocking baseline (P-16): ~256 pre-existing errors, mostly
+      # SQLAlchemy Column friction. Tighten incrementally until this can be
+      # flipped to a blocking gate.
+      - name: Type-check backend (mypy, non-blocking baseline)
+        run: mypy app/ --config-file mypy.ini
+        continue-on-error: true
       - name: Run backend tests with coverage
         run: pytest tests/ --cov=app --cov-report=term-missing --cov-report=xml
 
@@ -54,3 +60,15 @@ jobs:
         run: npm run lint
       - name: Build frontend
         run: npm run build
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan for leaked secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true

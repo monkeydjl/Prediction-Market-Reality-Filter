@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Zap, Brain, Target, TrendingUp, Award, AlertCircle, Loader2 } from "lucide-react";
+import { Zap, Brain, GitCompare, Target, Award, AlertCircle, Loader2, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getWorldCupApiBase } from "@/lib/env";
+
+type EngineKey = "elo_odds" | "hybrid" | "integrated";
 
 interface EngineStat {
   total_matches: number;
@@ -24,10 +26,47 @@ interface EngineStat {
   }>;
 }
 
-interface EngineComparisonData {
-  elo_odds?: EngineStat;
-  hybrid?: EngineStat;
+type EngineComparisonData = Partial<Record<EngineKey, EngineStat>>;
+
+interface EngineConfig {
+  key: EngineKey;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+  headerClass: string;
+  iconClass: string;
+  titleClass: string;
 }
+
+const ENGINE_CONFIGS: EngineConfig[] = [
+  {
+    key: "elo_odds",
+    label: "Elo+赔率",
+    description: "基于 Elo 评级和赔率信号",
+    icon: Zap,
+    headerClass: "bg-primary/5",
+    iconClass: "text-primary",
+    titleClass: "text-primary",
+  },
+  {
+    key: "hybrid",
+    label: "混合引擎",
+    description: "多因素综合分析",
+    icon: Brain,
+    headerClass: "bg-secondary",
+    iconClass: "text-muted-foreground",
+    titleClass: "text-foreground",
+  },
+  {
+    key: "integrated",
+    label: "集成引擎",
+    description: "融合 Elo+赔率 与混合引擎",
+    icon: GitCompare,
+    headerClass: "bg-primary/5",
+    iconClass: "text-primary",
+    titleClass: "text-primary",
+  },
+];
 
 function percentage(value: number): string {
   return `${Math.round(value * 100)}%`;
@@ -49,6 +88,61 @@ function StatCard({
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className={cn("mt-1 text-2xl font-bold tabular-nums", color)}>{value}</div>
       {subtitle && <div className="mt-1 text-xs text-muted-foreground">{subtitle}</div>}
+    </div>
+  );
+}
+
+function EngineStatsPanel({ config, stats }: { config: EngineConfig; stats?: EngineStat }) {
+  const Icon = config.icon;
+
+  return (
+    <div className="space-y-4">
+      <div className={cn("flex items-center gap-2 rounded-lg border px-4 py-3", config.headerClass)}>
+        <Icon className={cn("size-5", config.iconClass)} />
+        <div>
+          <h3 className={cn("font-semibold", config.titleClass)}>{config.label}</h3>
+          <p className="text-xs text-muted-foreground">{config.description}</p>
+        </div>
+      </div>
+
+      {!stats ? (
+        <div className="rounded-lg border border-dashed bg-secondary/30 p-6 text-center text-sm text-muted-foreground">
+          暂无已完赛统计
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <StatCard
+              label="预测场次"
+              value={stats.total_matches.toString()}
+              subtitle="已完赛比赛"
+            />
+            <StatCard
+              label="胜负准确率"
+              value={percentage(stats.outcome_accuracy)}
+              color={stats.outcome_accuracy >= 0.7 ? "text-pos" : stats.outcome_accuracy >= 0.6 ? "text-warn" : "text-neg"}
+              subtitle="预测胜平负正确"
+            />
+            <StatCard
+              label="完全命中率"
+              value={percentage(stats.exact_score_rate)}
+              color="text-primary"
+              subtitle="比分完全正确"
+            />
+            <StatCard
+              label="净胜球准确率"
+              value={percentage(stats.goal_diff_accuracy)}
+              subtitle="净胜球数正确"
+            />
+          </div>
+
+          <StatCard
+            label="平均比分误差"
+            value={stats.avg_score_error.toFixed(2)}
+            subtitle="预测分数与实际分数的平均偏差"
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -112,7 +206,9 @@ export function EngineComparisonView() {
     );
   }
 
-  if (!data || (!data.elo_odds && !data.hybrid)) {
+  const hasAnyStats = data != null && ENGINE_CONFIGS.some((config) => data[config.key] != null);
+
+  if (!hasAnyStats) {
     return (
       <div className="rounded-lg border border-dashed p-12 text-center">
         <Target className="mx-auto size-12 text-muted-foreground opacity-50" />
@@ -122,8 +218,15 @@ export function EngineComparisonView() {
     );
   }
 
-  const eloStats = data.elo_odds;
-  const hybridStats = data.hybrid;
+  const availableEngines = ENGINE_CONFIGS
+    .map((config) => ({ config, stats: data?.[config.key] }))
+    .filter((item): item is { config: EngineConfig; stats: EngineStat } => (
+      item.stats != null && item.stats.total_matches > 0
+    ));
+  const bestOutcome = availableEngines.length > 0
+    ? Math.max(...availableEngines.map((item) => item.stats.outcome_accuracy))
+    : 0;
+  const bestEngines = availableEngines.filter((item) => item.stats.outcome_accuracy === bestOutcome);
 
   return (
     <div className="space-y-6">
@@ -136,120 +239,34 @@ export function EngineComparisonView() {
       </div>
 
       {/* Comparison Grid */}
-      <div className="grid gap-6 md:grid-cols-2">
-        {/* Elo+Odds Engine */}
-        {eloStats && (
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 rounded-lg border bg-primary/5 px-4 py-3">
-              <Zap className="size-5 text-primary" />
-              <div>
-                <h3 className="font-semibold text-primary">Elo+赔率引擎</h3>
-                <p className="text-xs text-muted-foreground">
-                  快速预测 · 基于Elo评级和博彩赔率
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <StatCard
-                label="预测场次"
-                value={eloStats.total_matches.toString()}
-                subtitle="已完赛比赛"
-              />
-              <StatCard
-                label="胜负准确率"
-                value={percentage(eloStats.outcome_accuracy)}
-                color={eloStats.outcome_accuracy >= 0.7 ? "text-pos" : eloStats.outcome_accuracy >= 0.6 ? "text-warn" : "text-neg"}
-                subtitle="预测胜平负正确"
-              />
-              <StatCard
-                label="完全命中率"
-                value={percentage(eloStats.exact_score_rate)}
-                color="text-primary"
-                subtitle="比分完全正确"
-              />
-              <StatCard
-                label="净胜球准确率"
-                value={percentage(eloStats.goal_diff_accuracy)}
-                subtitle="净胜球数正确"
-              />
-            </div>
-
-            <StatCard
-              label="平均比分误差"
-              value={eloStats.avg_score_error.toFixed(2)}
-              subtitle="预测分数与实际分数的平均偏差"
-            />
-          </div>
-        )}
-
-        {/* Hybrid Engine */}
-        {hybridStats && (
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 rounded-lg border bg-secondary px-4 py-3">
-              <Brain className="size-5 text-muted-foreground" />
-              <div>
-                <h3 className="font-semibold">混合引擎</h3>
-                <p className="text-xs text-muted-foreground">
-                  Rule+AI · 多因素综合分析
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <StatCard
-                label="预测场次"
-                value={hybridStats.total_matches.toString()}
-                subtitle="已完赛比赛"
-              />
-              <StatCard
-                label="胜负准确率"
-                value={percentage(hybridStats.outcome_accuracy)}
-                color={hybridStats.outcome_accuracy >= 0.7 ? "text-pos" : hybridStats.outcome_accuracy >= 0.6 ? "text-warn" : "text-neg"}
-                subtitle="预测胜平负正确"
-              />
-              <StatCard
-                label="完全命中率"
-                value={percentage(hybridStats.exact_score_rate)}
-                color="text-primary"
-                subtitle="比分完全正确"
-              />
-              <StatCard
-                label="净胜球准确率"
-                value={percentage(hybridStats.goal_diff_accuracy)}
-                subtitle="净胜球数正确"
-              />
-            </div>
-
-            <StatCard
-              label="平均比分误差"
-              value={hybridStats.avg_score_error.toFixed(2)}
-              subtitle="预测分数与实际分数的平均偏差"
-            />
-          </div>
-        )}
+      <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+        {ENGINE_CONFIGS.map((config) => (
+          <EngineStatsPanel
+            key={config.key}
+            config={config}
+            stats={data?.[config.key]}
+          />
+        ))}
       </div>
 
       {/* Winner Badge */}
-      {eloStats && hybridStats && (
+      {availableEngines.length >= 2 && (
         <div className="rounded-lg border bg-card p-6">
           <div className="flex items-center gap-3">
             <Award className="size-6 text-primary" />
             <div>
               <h3 className="font-semibold">综合表现</h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                {eloStats.outcome_accuracy > hybridStats.outcome_accuracy ? (
+                {bestEngines.length === 1 ? (
                   <span>
-                    <span className="font-medium text-primary">Elo+赔率引擎</span> 在胜负预测上表现更优（
-                    {percentage(eloStats.outcome_accuracy)} vs {percentage(hybridStats.outcome_accuracy)}）
-                  </span>
-                ) : eloStats.outcome_accuracy < hybridStats.outcome_accuracy ? (
-                  <span>
-                    <span className="font-medium">混合引擎</span> 在胜负预测上表现更优（
-                    {percentage(hybridStats.outcome_accuracy)} vs {percentage(eloStats.outcome_accuracy)}）
+                    <span className="font-medium text-primary">{bestEngines[0].config.label}</span>
+                    在胜负预测上表现更优（{percentage(bestOutcome)}）
                   </span>
                 ) : (
-                  <span>两种引擎在胜负预测上表现相当</span>
+                  <span>
+                    {bestEngines.map((item) => item.config.label).join("、")}
+                    在胜负预测上表现相当（{percentage(bestOutcome)}）
+                  </span>
                 )}
               </p>
             </div>

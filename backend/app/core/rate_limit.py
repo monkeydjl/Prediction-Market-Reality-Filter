@@ -95,14 +95,23 @@ class InMemoryRateLimitMiddleware(BaseHTTPMiddleware):
 
 
 def _client_host(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        first = forwarded.split(",", 1)[0].strip()
-        if first:
-            return first
-    real_ip = request.headers.get("x-real-ip", "").strip()
-    if real_ip:
-        return real_ip
+    # X-Forwarded-For / X-Real-IP are only honored when the deployment sits
+    # behind a trusted reverse proxy that overwrites those headers with the
+    # real client address. Without that guarantee an attacker on the public
+    # internet can spoof X-Forwarded-For on every request and rotate the rate
+    # limit key indefinitely (defeating per-IP throttling and any key-bruteforce
+    # detection). When TRUSTED_PROXY_HEADER is false (default) we fall back to
+    # the raw socket peer — which is the proxy address in proxied deploys, so
+    # the proxy MUST set the header (and we MUST trust it) before enabling this.
+    if settings.TRUSTED_PROXY_HEADER:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            first = forwarded.split(",", 1)[0].strip()
+            if first:
+                return first
+        real_ip = request.headers.get("x-real-ip", "").strip()
+        if real_ip:
+            return real_ip
     return request.client.host if request.client else "unknown"
 
 

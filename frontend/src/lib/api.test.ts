@@ -1,5 +1,49 @@
-import { describe, expect, it } from "vitest";
-import { buildApiErrorMessage } from "./api";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  buildApiErrorMessage,
+  eventsApi,
+  getOperatorApiKey,
+  getOperatorId,
+  setOperatorApiKey,
+  setOperatorId,
+} from "./api";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  window.sessionStorage.clear();
+});
+
+describe("operator credentials", () => {
+  it("stores trimmed API keys and operator ids in session storage", () => {
+    window.sessionStorage.clear();
+
+    setOperatorApiKey("  secret  ");
+    setOperatorId("  alice  ");
+    expect(getOperatorApiKey()).toBe("secret");
+    expect(getOperatorId()).toBe("alice");
+
+    setOperatorApiKey(" ");
+    setOperatorId(" ");
+    expect(getOperatorApiKey()).toBe("");
+    expect(getOperatorId()).toBe("");
+  });
+
+  it("adds operator headers to write requests", async () => {
+    setOperatorApiKey("secret");
+    setOperatorId("alice");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "event-1" }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await eventsApi.resolveManual("event-1", { actual_outcome: 1 });
+
+    const headers = fetchMock.mock.calls[0][1]?.headers;
+    expect(headers).toBeInstanceOf(Headers);
+    expect((headers as Headers).get("X-API-Key")).toBe("secret");
+    expect((headers as Headers).get("X-Operator")).toBe("alice");
+  });
+});
 
 describe("buildApiErrorMessage", () => {
   it("extracts FastAPI validation messages from 422 bodies", () => {

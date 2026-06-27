@@ -1,5 +1,6 @@
 """Operational status summary for the reality feedback loop."""
 
+import logging
 from typing import Any
 
 from app.memory import loop_run_store
@@ -12,6 +13,8 @@ from app.memory.prediction_store import (
 )
 from app.utils import sqlite_db
 from app.utils.sqlite_db import reading
+
+logger = logging.getLogger(__name__)
 
 
 def loop_status(
@@ -94,6 +97,7 @@ def _prediction_counts() -> dict[str, int]:
                 """
             ).fetchall()
     except Exception:
+        logger.warning("prediction status counts query failed", exc_info=True)
         return {}
     return {str(row["status"]): int(row["n"] or 0) for row in rows}
 
@@ -122,6 +126,7 @@ def _dangling_count(table: str, event_ids: set[str]) -> int:
                 """
             ).fetchall()
     except Exception:
+        logger.warning("dangling count query failed for table=%s", table, exc_info=True)
         return 0
     return sum(1 for row in rows if str(row["event_id"]) not in event_ids)
 

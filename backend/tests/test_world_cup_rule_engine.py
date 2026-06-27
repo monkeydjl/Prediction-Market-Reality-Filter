@@ -24,13 +24,44 @@ class RuleEngineGoldenTests(unittest.TestCase):
         self.assertAlmostEqual(poisson_probability(2.0, 3), 0.1804, places=4)
 
     def test_calculate_outcome_probabilities_dixon_coles(self):
-        """Lock Dixon-Coles corrected outcome probabilities."""
-        probs = calculate_outcome_probabilities(1.5, 1.2)
-        # These exact values from current rule_engine.py with rho=0.96
-        self.assertAlmostEqual(probs["home_win"], 0.4463, places=4)
-        self.assertAlmostEqual(probs["draw"], 0.2451, places=4)
-        self.assertAlmostEqual(probs["away_win"], 0.3086, places=4)
+        """Lock Dixon-Coles corrected outcome probabilities with fitted rho.
+
+        These values use the standard Dixon-Coles (1997) convention where a
+        NEGATIVE rho boosts low-scoring results (0-0, 1-1) — correcting
+        Poisson's systematic underestimation of draws. The fitted rho is
+        loaded from data/dixon_coles_params.json (produced by
+        scripts/fit_dixon_coles.py); if absent, rho=0 falls back to pure
+        independent Poisson.
+
+        Previously this test was locked to rho_dc=+0.04 (legacy hardcoded
+        rho=0.96 in the inverted convention), which REDUCED 1-1 probability
+        — directionally wrong. The fitted rho_dc=-0.0763 produces a higher
+        draw probability (0.2733 vs 0.2451), which is the intended effect.
+        """
+        import app.services.world_cup_engines.world_cup_rule_engine as rule_engine
+        from unittest.mock import patch
+
+        # Patch _load_rho so the test does not depend on the fitted params
+        # file existing on disk (CI / fresh checkout without it).
+        with patch.object(rule_engine, "_load_rho", return_value=-0.0763):
+            probs = calculate_outcome_probabilities(1.5, 1.2)
+        self.assertAlmostEqual(probs["home_win"], 0.4322, places=4)
+        self.assertAlmostEqual(probs["draw"], 0.2733, places=4)
+        self.assertAlmostEqual(probs["away_win"], 0.2945, places=4)
         # Total must be 1.0
+        self.assertAlmostEqual(sum(probs.values()), 1.0, places=10)
+
+    def test_calculate_outcome_probabilities_rho_zero_fallback(self):
+        """When rho=0 (no params file), tau correction is identity (pure Poisson)."""
+        import app.services.world_cup_engines.world_cup_rule_engine as rule_engine
+        from unittest.mock import patch
+
+        with patch.object(rule_engine, "_load_rho", return_value=0.0):
+            probs = calculate_outcome_probabilities(1.5, 1.2)
+        # rho=0 -> no low-score correction -> pure independent Poisson.
+        # Draw probability should be lower than the rho<0 (boosted) case.
+        self.assertLess(probs["draw"], 0.27)
+        # Probabilities still sum to 1.0
         self.assertAlmostEqual(sum(probs.values()), 1.0, places=10)
 
     def test_calculate_expected_goals_base_case(self):
@@ -103,10 +134,11 @@ class RuleEngineGoldenTests(unittest.TestCase):
         self.assertAlmostEqual(result["predicted_score"]["home"], 1.98, places=2)
         self.assertAlmostEqual(result["predicted_score"]["away"], 1.21, places=2)
 
-        # Lock outcome probabilities
-        self.assertAlmostEqual(result["outcome_probabilities"]["home_win"], 0.5553, places=4)
-        self.assertAlmostEqual(result["outcome_probabilities"]["draw"], 0.2096, places=4)
-        self.assertAlmostEqual(result["outcome_probabilities"]["away_win"], 0.2351, places=4)
+        # Lock outcome probabilities (rho=-0.0763 fitted from historical results;
+        # see scripts/fit_dixon_coles.py and data/dixon_coles_params.json)
+        self.assertAlmostEqual(result["outcome_probabilities"]["home_win"], 0.5438, places=4)
+        self.assertAlmostEqual(result["outcome_probabilities"]["draw"], 0.2325, places=4)
+        self.assertAlmostEqual(result["outcome_probabilities"]["away_win"], 0.2237, places=4)
 
         # Lock confidence
         self.assertAlmostEqual(result["confidence"], 0.78, places=2)
@@ -397,6 +429,88 @@ class RuleEngineGoldenTests(unittest.TestCase):
         # Verify descending order
         probs = [item["probability"] for item in top_5]
         self.assertEqual(probs, sorted(probs, reverse=True))
+
+    def test_schedule_density_reduces_expected_goals(self):
+        """High match density should be visible and reduce expected goals."""
+        base = {
+            "home_team": {
+                "goals_per_game": 1.8,
+                "goals_conceded_per_game": 1.1,
+                "recent_form": 0.6,
+                "days_since_last_match": 4,
+                "injury_impact": 0.0,
+                "market_value_rating": 0.5,
+                "sentiment_rating": 0.5,
+            },
+            "away_team": {
+                "goals_per_game": 1.8,
+                "goals_conceded_per_game": 1.1,
+                "recent_form": 0.6,
+                "days_since_last_match": 4,
+                "injury_impact": 0.0,
+                "market_value_rating": 0.5,
+                "sentiment_rating": 0.5,
+            },
+            "head_to_head": {"matches_played": 0},
+            "context": {"tournament_stage": "group_stage", "stakes": "medium"},
+        }
+        dense = {
+            **base,
+            "home_team": {
+                **base["home_team"],
+                "schedule_density": "high",
+                "matches_last_14_days": 4,
+            },
+        }
+
+        base_result = predict_score_rule_based(base)
+        dense_result = predict_score_rule_based(dense)
+
+        self.assertLess(dense_result["expected_goals"]["home"], base_result["expected_goals"]["home"])
+        self.assertEqual(
+            dense_result["factor_breakdown"]["schedule_factor"]["home"]["schedule_density"],
+            "high",
+        )
+        self.assertAlmostEqual(
+            dense_result["factor_breakdown"]["schedule_factor"]["home"]["fatigue_multiplier"],
+            0.96,
+            places=3,
+        )
+
+    def test_group_stage_standings_trigger_must_win_with_uppercase_stage(self):
+        """GROUP_STAGE plus group-context standings should trigger must-win."""
+        factors = {
+            "home_team": {
+                "goals_per_game": 2.0,
+                "goals_conceded_per_game": 1.0,
+                "recent_form": 0.7,
+                "days_since_last_match": 4,
+                "injury_impact": 0.0,
+                "market_value_rating": 0.5,
+                "sentiment_rating": 0.5,
+            },
+            "away_team": {
+                "goals_per_game": 1.5,
+                "goals_conceded_per_game": 1.2,
+                "recent_form": 0.5,
+                "days_since_last_match": 4,
+                "injury_impact": 0.0,
+                "market_value_rating": 0.5,
+                "sentiment_rating": 0.5,
+            },
+            "head_to_head": {"matches_played": 0},
+            "context": {
+                "tournament_stage": "GROUP_STAGE",
+                "stakes": "medium",
+                "home_team_standing": {"played": 2, "points": 6},
+                "away_team_standing": {"played": 2, "points": 3},
+            },
+        }
+
+        result = predict_score_rule_based(factors)
+
+        self.assertFalse(result["factor_breakdown"]["must_win"]["home"])
+        self.assertTrue(result["factor_breakdown"]["must_win"]["away"])
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ For production, **hybrid approach**: Use Elo+Odds as baseline, add AI for edge c
 
 **Elo+Odds Engine**: ✅ **IMPLEMENTED** (commit 8f8bd4d)
 - Module: `backend/app/services/world_cup_elo_odds_engine.py`
-- Tests: `test_elo_odds_engine.py` (7 tests) + `test_elo_odds_validation.py` (5 scenarios)
+- Tests: `tests/manual/manual_elo_odds_engine.py` (7 scenarios) + `tests/manual/manual_elo_odds_validation.py` (5 scenarios); automated coverage in `tests/test_world_cup_elo_odds_engine.py`
 - All tests passing, production-ready
 
 ---

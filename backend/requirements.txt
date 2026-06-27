@@ -8,3 +8,7 @@ openai>=1.40,<2.0
 gnews>=0.3,<1.0
 apscheduler>=3.10,<4.0
 sqlalchemy>=2.0,<3.0
+pyzipper>=0.3,<1.0
+numpy>=1.26,<3.0
+scipy>=1.11,<2.0
+lightgbm>=4.0,<5.0

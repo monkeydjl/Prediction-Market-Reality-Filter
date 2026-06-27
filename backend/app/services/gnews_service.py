@@ -55,7 +55,7 @@ def _sync_fetch(query: str) -> list[dict[str, Any]]:
 
 
 async def fetch_google_news(query: str) -> list[dict[str, Any]]:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     queries = build_news_queries(query)
     tasks = [
         loop.run_in_executor(None, partial(_sync_fetch, q))

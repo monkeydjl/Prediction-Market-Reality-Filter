@@ -62,7 +62,7 @@ All 5 analytics endpoints responding correctly:
 
 #### 5. Enhanced Factors Integration
 - **Status:** PASSED
-- **Test file:** `test_enhanced_factors.py`
+- **Test file:** `tests/manual/manual_enhanced_factors.py`
 - **Results:**
   - ✅ Market value integration working
     - Brazil: €928.2m → rating 0.916

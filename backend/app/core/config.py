@@ -38,7 +38,8 @@ class Settings:
     )
     CORS_ALLOWED_HEADERS: list[str] = _env_csv(
         "CORS_ALLOWED_HEADERS",
-        "Accept,Accept-Language,Content-Language,Content-Type,X-API-Key",
+        "Accept,Accept-Language,Content-Language,Content-Type,"
+        "X-API-Key,X-Client-Source,X-Operator",
     )
 
     API_WRITE_KEY: str = os.getenv("API_WRITE_KEY", "")
@@ -50,6 +51,12 @@ class Settings:
     RATE_LIMIT_ENABLED: bool = _env_bool("RATE_LIMIT_ENABLED", "true")
     RATE_LIMIT_WINDOW_SECONDS: int = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
     RATE_LIMIT_MAX_REQUESTS: int = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "120"))
+    # Whether the deployment sits behind a trusted reverse proxy (nginx/caddy/
+    # Cloudflare) that overwrites X-Forwarded-For / X-Real-IP with the real
+    # client address. When false (default, direct-to-internet / dev) those
+    # headers are ignored because anyone can spoof them, so rate limiting keys
+    # off request.client.host only. When true the proxy headers are honored.
+    TRUSTED_PROXY_HEADER: bool = _env_bool("TRUSTED_PROXY_HEADER", "false")
 
     LOG_FILE: str = os.getenv(
         "LOG_FILE",
@@ -213,6 +220,11 @@ class Settings:
             os.path.dirname(__file__), "..", "..", "v2_loop.db"
         ),
     )
+    # AES passphrase for backup archives (scripts/backup_stores.py). When set,
+    # backups are written as pyzipper AES-256 encrypted zips; when empty the
+    # legacy plaintext zip is produced. Must be set in any environment where
+    # the backup volume is not otherwise protected at rest.
+    BACKUP_ENCRYPTION_KEY: str = os.getenv("BACKUP_ENCRYPTION_KEY", "")
     OFFICIAL_RSS_URL: str = os.getenv(
         "OFFICIAL_RSS_URL",
         "https://www.federalreserve.gov/feeds/press_all.xml",

@@ -39,6 +39,21 @@ class LoopRunStoreTests(unittest.TestCase):
                 self.assertEqual(finished["error"], "boom")
                 self.assertEqual(finished["result"], {})
 
+    def test_recent_runs_can_filter_by_job_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+                first = runs.start_run("world_cup_post_match_backfill")
+                runs.finish_run(first, "success", result={"candidate_count": 2})
+                other = runs.start_run("event_auto_resolve")
+                runs.finish_run(other, "success", result={"count": 1})
+                second = runs.start_run("world_cup_post_match_backfill")
+                runs.finish_run(second, "failed", error="source unavailable")
+
+                filtered = runs.recent_runs(limit=5, job_name="world_cup_post_match_backfill")
+
+                self.assertEqual([run["id"] for run in filtered], [second, first])
+                self.assertTrue(all(run["job_name"] == "world_cup_post_match_backfill" for run in filtered))
+
 
 if __name__ == "__main__":
     unittest.main()

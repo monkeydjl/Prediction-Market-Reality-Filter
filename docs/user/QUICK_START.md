@@ -122,7 +122,7 @@ set RUN_LIVE_TESTS=1 && python -m unittest tests.test_integration_live
 python tests/test_integration_live.py
 
 # Simple standalone live test (single LLM call)
-python test_live_integration.py
+python tests/manual/manual_live_integration.py
 ```
 
 The opt-in LLM features (cross-validation, open-web extraction) only run their
@@ -306,7 +306,7 @@ sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
 
 1. Check `.env` file exists and has correct API key
 2. Verify API key is valid: `python -c "from app.core.config import settings; print(settings.OPENAI_API_KEY[:10])"`
-3. Test API directly: `python test_live_integration.py`
+3. Test API directly: `python tests/manual/manual_live_integration.py`
 
 ### No Events Discovered
 

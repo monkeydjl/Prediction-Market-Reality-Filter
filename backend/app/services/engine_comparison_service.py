@@ -1,15 +1,27 @@
 """Service for comparing prediction engine performance."""
 
+import logging
+
 from sqlalchemy import func
 from app.models.world_cup_prediction import MatchFixture, PredictionHistory
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
 
+logger = logging.getLogger(__name__)
+
 
 def _bucket_engine(method: str) -> str:
     """Map a prediction_method string to an engine bucket."""
-    if "elo_odds" in method or ("elo" in method and "odds" in method):
+    normalized = (method or "").lower()
+    if normalized.startswith("integrated") or "integrated" in normalized:
+        return "integrated"
+    if normalized.startswith("elo") or "elo_odds" in normalized or ("elo" in normalized and "odds" in normalized):
         return "elo_odds"
     return "hybrid"
+
+
+def _is_applied_history(history: PredictionHistory) -> bool:
+    trigger = history.trigger or ""
+    return not trigger.endswith("_comparison")
 
 
 def _credit_engine_prediction(engines_stats, engine, match, last_prediction):
@@ -125,6 +137,8 @@ def calculate_engine_accuracy():
             # silently dropped from the comparison.
             latest_by_engine: dict[str, PredictionHistory] = {}
             for p in predictions:
+                if not _is_applied_history(p):
+                    continue
                 if not p.prediction_method:
                     continue
                 bucket = _bucket_engine(p.prediction_method)
@@ -152,6 +166,18 @@ def calculate_engine_accuracy():
         return {
             "status": "ok",
             "engines": result
+        }
+
+    except Exception as cmp_err:
+        # Degrade to empty engines dict instead of raising. The engine
+        # comparison tab already renders an empty state when both elo_odds
+        # and hybrid are absent, so a 500 here would just surface as
+        # "Failed to fetch" on the frontend with no useful context.
+        logger.error("Engine comparison failed: %s", cmp_err, exc_info=True)
+        return {
+            "status": "ok",
+            "message": "Engine comparison unavailable",
+            "engines": {},
         }
 
     finally:

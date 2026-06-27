@@ -103,16 +103,44 @@ _SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    # CSP hardening for the operator-key XSS threat model (P-9 mitigation).
+    #
+    # The frontend stores API_WRITE_KEY in sessionStorage and sends it on
+    # every write request as X-API-Key. An XSS could read it and exfiltrate.
+    # The complete fix is nonce-based CSP, but this app ships a Next.js static
+    # export (frontend/out/, no SSR runtime), so per-request nonces are not
+    # possible without major refactoring. The directives below harden what we
+    # can without breaking the app:
+    #
+    #   - script-src still carries 'unsafe-inline' because Next.js's static
+    #     export emits inline <script> tags with hydration data (__NEXT_DATA__).
+    #     Removing it breaks every page. The connect-src 'self' directive
+    #     limits the blast radius: an injected inline script cannot fetch()
+    #     to an attacker-controlled origin, so it cannot directly exfiltrate
+    #     the operator key.
+    #   - img-src tightened to 'self' data: — the app loads no external images,
+    #     so the previous 'https:' wildcard (which allowed any HTTPS image) is
+    #     unnecessary attack surface.
+    #   - form-action 'self' prevents XSS-driven <form> exfiltration (an
+    #     attacker can't POST the operator key to their server via a form).
+    #   - frame-src 'none' explicitly forbids iframes (frame-ancestors only
+    #     restricts who can frame US; frame-src restricts who WE can frame).
+    #   - upgrade-insecure-requests + block-all-mixed-content ensure no
+    #     HTTP subresource can be injected on an HTTPS page.
     "Content-Security-Policy": (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data: https:; "
+        "img-src 'self' data:; "
         "font-src 'self' data:; "
         "connect-src 'self'; "
         "object-src 'none'; "
         "base-uri 'self'; "
-        "frame-ancestors 'none'"
+        "form-action 'self'; "
+        "frame-src 'none'; "
+        "frame-ancestors 'none'; "
+        "upgrade-insecure-requests; "
+        "block-all-mixed-content"
     ),
 }
 

@@ -37,6 +37,9 @@
 
 ### POST `/api/world-cup/predictions/batch-switch-engine`
 
+**请求头**:
+- `X-API-Key` (required): 后端 `API_WRITE_KEY`。
+
 **参数**:
 - `engine` (required): 目标引擎 (`elo_odds` | `hybrid` | `high_confidence`)
 - `status_filter` (optional): 比赛状态过滤 (默认: `scheduled`)
@@ -51,6 +54,12 @@
   "skipped": 0
 }
 ```
+
+### GET `/api/world-cup/predictions/batch-switch-engine-stream`
+
+需要同样的 `X-API-Key` 请求头。这个流式端点也会执行受保护的批量引擎切换，并持续返回进度事件。
+
+前端使用 `fetch` streaming 调用该端点，因为浏览器原生 `EventSource` 不能发送自定义请求头。不要把 operator key 放进 URL query string。
 
 ## 技术实现
 

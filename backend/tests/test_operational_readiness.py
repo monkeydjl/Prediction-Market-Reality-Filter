@@ -10,7 +10,9 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+from app.api.router import api_router
 from app.api.routes import events as events_routes
+from app.api.security import require_write_key
 from app.core.rate_limit import InMemoryRateLimitMiddleware
 from app.core.config import settings
 from scripts import backup_stores, healthcheck
@@ -27,10 +29,54 @@ class OpenAPIContractTests(unittest.TestCase):
 
 
 class WriteAuthTests(unittest.TestCase):
+    SENSITIVE_GET_ROUTES = {
+        "/events/discover",
+        "/events/sports/world-cup/data/sources/status",
+        "/world-cup/predictions/batch-switch-engine-stream",
+    }
+
     def _client(self):
         app = FastAPI()
         app.include_router(events_routes.router, prefix="/events")
         return TestClient(app)
+
+    def _iter_api_routes(self, router, prefix=""):
+        for route in router.routes:
+            if isinstance(route, APIRoute):
+                yield prefix + route.path, route
+            elif hasattr(route, "original_router") and hasattr(route, "include_context"):
+                yield from self._iter_api_routes(
+                    route.original_router,
+                    prefix + route.include_context.prefix,
+                )
+
+    def _has_write_key_dependency(self, dependant) -> bool:
+        return dependant.call is require_write_key or any(
+            self._has_write_key_dependency(child)
+            for child in dependant.dependencies
+        )
+
+    def _route_requires_write_key(self, route: APIRoute) -> bool:
+        return any(
+            self._has_write_key_dependency(dependency)
+            for dependency in route.dependant.dependencies
+        )
+
+    def test_all_write_and_sensitive_get_routes_require_write_key(self):
+        missing_auth = []
+        found_sensitive_gets = set()
+
+        for path, route in self._iter_api_routes(api_router):
+            methods = route.methods or set()
+            is_write_method = bool(methods - {"GET", "HEAD", "OPTIONS"})
+            is_sensitive_get = "GET" in methods and path in self.SENSITIVE_GET_ROUTES
+            if is_sensitive_get:
+                found_sensitive_gets.add(path)
+            if (is_write_method or is_sensitive_get) and not self._route_requires_write_key(route):
+                missing_auth.append(f"{','.join(sorted(methods))} {path}")
+
+        self.assertEqual(missing_auth, [])
+        self.assertEqual(found_sensitive_gets, self.SENSITIVE_GET_ROUTES)
 
     def test_write_key_blocks_mutating_and_costly_routes_when_configured(self):
         with patch.object(settings, "API_WRITE_KEY", "secret"):
@@ -271,7 +317,10 @@ class RateLimitTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 429)
 
-    def test_rate_limit_uses_forwarded_client_ip(self):
+    def test_rate_limit_ignores_forwarded_header_by_default(self):
+        # Default (TRUSTED_PROXY_HEADER=false): X-Forwarded-For is attacker-
+        # controllable on direct deploys, so it MUST be ignored. All requests
+        # share the TestClient socket peer as the rate-limit key.
         app = FastAPI()
         app.add_middleware(InMemoryRateLimitMiddleware)
 
@@ -281,7 +330,32 @@ class RateLimitTests(unittest.TestCase):
 
         with patch.object(settings, "RATE_LIMIT_ENABLED", True), \
                 patch.object(settings, "RATE_LIMIT_WINDOW_SECONDS", 60), \
-                patch.object(settings, "RATE_LIMIT_MAX_REQUESTS", 1):
+                patch.object(settings, "RATE_LIMIT_MAX_REQUESTS", 1), \
+                patch.object(settings, "TRUSTED_PROXY_HEADER", False):
+            client = TestClient(app)
+            self.assertEqual(
+                client.get("/ping", headers={"X-Forwarded-For": "203.0.113.1"}).status_code,
+                200,
+            )
+            # Same socket peer even though we rotated the spoofed header.
+            resp = client.get("/ping", headers={"X-Forwarded-For": "203.0.113.2"})
+
+        self.assertEqual(resp.status_code, 429)
+
+    def test_rate_limit_honors_forwarded_header_when_trusted_proxy_enabled(self):
+        # Opt-in (TRUSTED_PROXY_HEADER=true): deployment sits behind a trusted
+        # reverse proxy that overwrites X-Forwarded-For, so we can key off it.
+        app = FastAPI()
+        app.add_middleware(InMemoryRateLimitMiddleware)
+
+        @app.get("/ping")
+        async def ping():
+            return {"ok": True}
+
+        with patch.object(settings, "RATE_LIMIT_ENABLED", True), \
+                patch.object(settings, "RATE_LIMIT_WINDOW_SECONDS", 60), \
+                patch.object(settings, "RATE_LIMIT_MAX_REQUESTS", 1), \
+                patch.object(settings, "TRUSTED_PROXY_HEADER", True):
             client = TestClient(app)
             self.assertEqual(
                 client.get("/ping", headers={"X-Forwarded-For": "203.0.113.1"}).status_code,
@@ -291,6 +365,7 @@ class RateLimitTests(unittest.TestCase):
                 client.get("/ping", headers={"X-Forwarded-For": "203.0.113.1"}).status_code,
                 429,
             )
+            # Different spoofed IP -> different rate-limit key -> allowed again.
             resp = client.get("/ping", headers={"X-Forwarded-For": "203.0.113.2"})
 
         self.assertEqual(resp.status_code, 200)
@@ -334,13 +409,18 @@ class HealthTests(unittest.TestCase):
             headers={
                 "Origin": "http://localhost:3000",
                 "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "content-type,x-api-key",
+                "Access-Control-Request-Headers": (
+                    "content-type,x-api-key,x-client-source,x-operator"
+                ),
             },
         )
 
         self.assertEqual(resp.status_code, 200)
         self.assertIn("POST", resp.headers["access-control-allow-methods"])
-        self.assertIn("X-API-Key", resp.headers["access-control-allow-headers"])
+        allowed_headers = resp.headers["access-control-allow-headers"]
+        self.assertIn("X-API-Key", allowed_headers)
+        self.assertIn("X-Client-Source", allowed_headers)
+        self.assertIn("X-Operator", allowed_headers)
 
     def test_security_headers_are_set(self):
         from app.main import app
@@ -351,6 +431,33 @@ class HealthTests(unittest.TestCase):
         self.assertEqual(resp.headers["X-Frame-Options"], "DENY")
         self.assertIn("default-src 'self'", resp.headers["Content-Security-Policy"])
         self.assertIn("max-age=31536000", resp.headers["Strict-Transport-Security"])
+
+    def test_csp_hardens_operator_key_xss_surface(self):
+        # P-9 mitigation: the operator API key lives in sessionStorage and an
+        # XSS could try to exfiltrate it. CSP must (a) block fetch() to
+        # attacker origins via connect-src 'self', (b) block <form> POST to
+        # attacker origins via form-action 'self', (c) block any iframe the
+        # app might be tricked into embedding via frame-src 'none', and (d)
+        # not allow arbitrary external image loads (img-src must NOT include
+        # the bare 'https:' wildcard). script-src retains 'unsafe-inline'
+        # because the Next.js static export emits inline hydration scripts.
+        from app.main import app
+
+        resp = TestClient(app).get("/api")
+        csp = resp.headers["Content-Security-Policy"]
+
+        self.assertIn("connect-src 'self'", csp)
+        self.assertIn("form-action 'self'", csp)
+        self.assertIn("frame-src 'none'", csp)
+        self.assertIn("object-src 'none'", csp)
+        self.assertIn("base-uri 'self'", csp)
+        self.assertIn("frame-ancestors 'none'", csp)
+        # img-src must NOT include the bare 'https:' wildcard (was too
+        # permissive; the app loads no external images).
+        self.assertIn("img-src 'self' data:", csp)
+        self.assertNotIn("img-src 'self' data: https:", csp)
+        # script-src retains 'unsafe-inline' for Next.js static export.
+        self.assertIn("script-src 'self' 'unsafe-inline'", csp)
 
     def test_api_health_ok_returns_200_when_healthy(self):
         from app.main import app
@@ -594,6 +701,94 @@ class BackupTests(unittest.TestCase):
         self.assertNotIn("pmrf-backup-20260101-000000Z.zip", remaining)
         self.assertNotIn("pmrf-backup-20260102-000000Z.zip", remaining)
         self.assertIn("manual-note.txt", remaining)
+
+    def test_backup_encrypted_when_key_provided(self):
+        import zipfile
+
+        try:
+            import pyzipper  # noqa: F401
+        except ImportError:
+            self.skipTest("pyzipper not installed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            event_store = base / "event_store.json"
+            event_store.write_text('{"secret": 1}', encoding="utf-8")
+
+            with patch.object(settings, "EVENT_STORE_FILE", str(event_store)), \
+                    patch.object(settings, "EVENT_AUDIT_FILE", str(base / "missing.jsonl")), \
+                    patch.object(settings, "EVENT_CACHE_FILE", str(base / "missing.json")), \
+                    patch.object(settings, "LOOP_DB_FILE", str(base / "missing.db")):
+                archive = backup_stores.create_backup(
+                    str(base / "backups"),
+                    encryption_key="hunter2",
+                )
+
+            self.assertTrue(archive.exists())
+
+            # The encrypted archive cannot be opened as a plain zip (bad password
+            # / unsupported compression), proving it is actually encrypted.
+            with self.assertRaises((RuntimeError, zipfile.BadZipFile)):
+                with zipfile.ZipFile(archive) as zf:
+                    zf.read("event_store.json")
+
+            # pyzipper with the right key reads the contents back.
+            import pyzipper
+            with pyzipper.AESZipFile(archive) as zf:
+                zf.setpassword(b"hunter2")
+                content = zf.read("event_store.json")
+            self.assertEqual(content.decode("utf-8"), '{"secret": 1}')
+
+    def test_backup_plaintext_when_key_empty(self):
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            event_store = base / "event_store.json"
+            event_store.write_text("{}", encoding="utf-8")
+
+            with patch.object(settings, "EVENT_STORE_FILE", str(event_store)), \
+                    patch.object(settings, "EVENT_AUDIT_FILE", str(base / "missing.jsonl")), \
+                    patch.object(settings, "EVENT_CACHE_FILE", str(base / "missing.json")), \
+                    patch.object(settings, "LOOP_DB_FILE", str(base / "missing.db")), \
+                    patch.object(settings, "BACKUP_ENCRYPTION_KEY", ""):
+                archive = backup_stores.create_backup(str(base / "backups"))
+
+            self.assertTrue(archive.exists())
+            with zipfile.ZipFile(archive) as zf:
+                names = zf.namelist()
+            self.assertIn("event_store.json", names)
+
+    def test_backup_falls_back_to_configured_setting_key(self):
+        import zipfile
+
+        try:
+            import pyzipper  # noqa: F401
+        except ImportError:
+            self.skipTest("pyzipper not installed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            event_store = base / "event_store.json"
+            event_store.write_text("data", encoding="utf-8")
+
+            with patch.object(settings, "EVENT_STORE_FILE", str(event_store)), \
+                    patch.object(settings, "EVENT_AUDIT_FILE", str(base / "missing.jsonl")), \
+                    patch.object(settings, "EVENT_CACHE_FILE", str(base / "missing.json")), \
+                    patch.object(settings, "LOOP_DB_FILE", str(base / "missing.db")), \
+                    patch.object(settings, "BACKUP_ENCRYPTION_KEY", "from-settings"):
+                archive = backup_stores.create_backup(str(base / "backups"))
+
+            # Encrypted with the configured key, not plaintext.
+            with self.assertRaises((RuntimeError, zipfile.BadZipFile)):
+                with zipfile.ZipFile(archive) as zf:
+                    zf.read("event_store.json")
+
+            import pyzipper
+            with pyzipper.AESZipFile(archive) as zf:
+                zf.setpassword(b"from-settings")
+                content = zf.read("event_store.json")
+            self.assertEqual(content.decode("utf-8"), "data")
 
 
 if __name__ == "__main__":

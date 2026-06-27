@@ -16,58 +16,46 @@ References:
 from typing import Any
 import math
 
+from app.services.world_cup_engines.world_cup_btd_model import (
+    calculate_btd_probabilities,
+)
+
 
 def calculate_elo_win_probability(
     elo_home: float,
     elo_away: float,
     is_knockout: bool = False,
 ) -> dict[str, float]:
-    """Calculate win probabilities from Elo ratings.
+    """Calculate win probabilities from Elo ratings using BTD model.
 
-    Uses the standard Elo formula with proper three-way outcome handling:
-    1. Calculate raw win expectancy (ignoring draws)
-    2. Estimate draw probability
-    3. Redistribute remaining probability between home/away wins
+    Replaces the former hardcoded base_draw (0.27 group / 0.20 knockout) with
+    the Bradley-Terry-Davidson (1970) formula, which derives draw probability
+    from the geometric mean of team strengths:
+
+        P(draw) = gamma * sqrt(alpha_h * alpha_a) / D
+
+    where alpha = 10^(elo/400) and gamma is fitted from historical
+    international results (see scripts/fit_btd_model.py and
+    data/btd_params.json). BTD naturally reduces draw probability when teams
+    are unequal in strength, replacing the former linear elo_gap_factor hack.
 
     Args:
         elo_home: Home team Elo rating (typically 1000-2200)
         elo_away: Away team Elo rating
         is_knockout: If True, reduce draw probability (knockout matches have
-                    extra time, so 90-min draw rate is ~5-8% lower than group stage)
+                    extra time, so 90-min draw rate is lower)
 
     Returns:
         Dictionary with home_win, draw, away_win probabilities
     """
-    elo_diff = elo_home - elo_away
-
-    # Step 1: Calculate raw win expectancy (for a two-outcome scenario)
-    raw_home_expectancy = 1 / (1 + 10 ** (-elo_diff / 400))
-
-    # Step 2: Estimate draw probability
-    # Group stage: ~27% (World Cup average)
-    # Knockout stage: ~20% (extra time reduces 90-min draw rate)
-    base_draw = 0.20 if is_knockout else 0.27
-
-    # Adjust based on Elo difference
-    elo_gap_factor = min(abs(elo_diff) / 400, 1.0)
-    draw = base_draw * (1.0 - elo_gap_factor * 0.3)
-    draw = max(0.10 if is_knockout else 0.15, min(0.35, draw))
-
-    # Step 3: Distribute remaining probability (1 - draw) between home and away
-    # Use the raw expectancy as the ratio
-    remaining_prob = 1.0 - draw
-    home_win = remaining_prob * raw_home_expectancy
-    away_win = remaining_prob * (1.0 - raw_home_expectancy)
-
-    # Verify sum is 1.0 (should always be true now)
-    total = home_win + draw + away_win
-    assert abs(total - 1.0) < 0.001, f"Probabilities don't sum to 1: {total}"
-
-    return {
-        "home_win": round(home_win, 4),
-        "draw": round(draw, 4),
-        "away_win": round(away_win, 4)
-    }
+    # World Cup matches are on neutral ground; BTD's fitted home_advantage
+    # is therefore not applied here. Knockout gamma is scaled down.
+    return calculate_btd_probabilities(
+        elo_home,
+        elo_away,
+        is_neutral=True,
+        is_knockout=is_knockout,
+    )
 
 
 def odds_to_probabilities(

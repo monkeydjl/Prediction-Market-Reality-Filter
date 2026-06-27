@@ -6,12 +6,29 @@ replacing mock data with actual statistics from API-Football.
 
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from app.core.config import settings
+
+
+TEAM_ID_CACHE_PATH = Path(__file__).resolve().parents[2] / "world_cup_team_ids.json"
+
+TEAM_NAME_ALIASES: dict[str, str] = {
+    "Cabo Verde": "Cape Verde",
+    "Cape Verde Islands": "Cape Verde",
+    "Congo DR": "DR Congo",
+    "Czechia": "Czech Republic",
+    "Ivory Coast": "Ivory Coast",
+    "Korea Republic": "South Korea",
+    "United States": "USA",
+    "Bosnia-Herzegovina": "Bosnia and Herzegovina",
+}
+
+_API_FOOTBALL_QUOTA_EXHAUSTED = False
 
 
 def _api_football_request(endpoint: str, params: dict[str, Any]) -> dict[str, Any] | None:
@@ -24,6 +41,10 @@ def _api_football_request(endpoint: str, params: dict[str, Any]) -> dict[str, An
     Returns:
         Parsed JSON response or None on error
     """
+    global _API_FOOTBALL_QUOTA_EXHAUSTED
+    if _API_FOOTBALL_QUOTA_EXHAUSTED:
+        return None
+
     api_key = settings.WORLD_CUP_API_FOOTBALL_API_KEY.strip()
     base_url = settings.WORLD_CUP_API_FOOTBALL_BASE_URL.strip().rstrip("/")
 
@@ -45,9 +66,85 @@ def _api_football_request(endpoint: str, params: dict[str, Any]) -> dict[str, An
         with urlopen(request, timeout=10) as response:
             body = response.read(512 * 1024)  # 512KB limit
         data = json.loads(body.decode("utf-8"))
+        if isinstance(data, dict) and data.get("errors"):
+            errors = data.get("errors")
+            if isinstance(errors, dict) and errors.get("requests"):
+                _API_FOOTBALL_QUOTA_EXHAUSTED = True
+            return None
         return data
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError):
         return None
+
+
+def _canonical_team_name(team_name: str) -> str:
+    return TEAM_NAME_ALIASES.get(team_name, team_name)
+
+
+def _normalise_team_name(team_name: str) -> str:
+    return "".join(ch for ch in team_name.lower() if ch.isalnum())
+
+
+def _load_team_id_cache() -> dict[str, int]:
+    try:
+        data = json.loads(TEAM_ID_CACHE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    cache: dict[str, int] = {}
+    for key, value in data.items():
+        try:
+            cache[str(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return cache
+
+
+def _save_team_id_cache(cache: dict[str, int]) -> None:
+    try:
+        TEAM_ID_CACHE_PATH.write_text(
+            json.dumps(dict(sorted(cache.items())), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        return
+
+
+def _resolve_team_id_from_api(team_name: str) -> int | None:
+    response = _api_football_request("teams", {"search": team_name})
+    rows = response.get("response") if isinstance(response, dict) else None
+    if not isinstance(rows, list):
+        return None
+
+    target = _normalise_team_name(team_name)
+    candidates: list[tuple[int, int]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        team = row.get("team") if isinstance(row.get("team"), dict) else {}
+        team_id = team.get("id")
+        name = str(team.get("name") or "")
+        if not name or team_id is None:
+            continue
+        name_norm = _normalise_team_name(name)
+        score = 0
+        if name_norm == target:
+            score += 100
+        elif target in name_norm or name_norm in target:
+            score += 70
+        if team.get("national") is True:
+            score += 30
+        if score <= 0:
+            continue
+        try:
+            candidates.append((score, int(team_id)))
+        except (TypeError, ValueError):
+            continue
+
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    return candidates[0][1]
 
 
 def fetch_team_statistics(team_id: int, league_id: int, season: str) -> dict[str, Any] | None:
@@ -233,6 +330,20 @@ def get_team_id_from_name(team_name: str) -> int | None:
     Returns:
         Team ID or None if not found
     """
+    canonical_name = _canonical_team_name(team_name)
+    cache = _load_team_id_cache()
+    if canonical_name in cache:
+        return cache[canonical_name]
+    if team_name in cache:
+        return cache[team_name]
+
+    resolved_id = _resolve_team_id_from_api(canonical_name)
+    if resolved_id is not None:
+        cache[canonical_name] = resolved_id
+        cache[team_name] = resolved_id
+        _save_team_id_cache(cache)
+        return resolved_id
+
     # Curated mapping of World Cup 2026 team names to API-Football team IDs
     # Source: API-Football /teams endpoint
     TEAM_NAME_TO_ID: dict[str, int] = {
@@ -299,11 +410,15 @@ def get_team_id_from_name(team_name: str) -> int | None:
     }
 
     # Try exact match first
+    if canonical_name in TEAM_NAME_TO_ID:
+        return TEAM_NAME_TO_ID[canonical_name]
     if team_name in TEAM_NAME_TO_ID:
         return TEAM_NAME_TO_ID[team_name]
 
     # Try case-insensitive match
     lower_map = {k.lower(): v for k, v in TEAM_NAME_TO_ID.items()}
+    if canonical_name.lower() in lower_map:
+        return lower_map[canonical_name.lower()]
     if team_name.lower() in lower_map:
         return lower_map[team_name.lower()]
 
@@ -324,5 +439,7 @@ def get_team_id_from_name(team_name: str) -> int | None:
     }
     if team_name in aliases and aliases[team_name] in TEAM_NAME_TO_ID:
         return TEAM_NAME_TO_ID[aliases[team_name]]
+    if canonical_name in aliases and aliases[canonical_name] in TEAM_NAME_TO_ID:
+        return TEAM_NAME_TO_ID[aliases[canonical_name]]
 
     return None

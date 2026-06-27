@@ -6,13 +6,13 @@ Aggregates sentiment signals from:
 3. RSS News Feeds - major sports news outlets
 """
 
+import asyncio
 import hashlib
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import httpx
 import feedparser
 from bs4 import BeautifulSoup
 
@@ -81,11 +81,74 @@ def calculate_simple_sentiment(text: str) -> float:
     return max(-1.0, min(1.0, score))
 
 
+async def _fetch_single_feed(
+    feed: dict[str, str],
+    team_name: str | None,
+    per_feed_timeout: float,
+) -> list[dict[str, Any]]:
+    """Fetch and parse a single RSS feed, returning scored articles.
+
+    Wrapped in ``asyncio.wait_for`` so one hung feed cannot stall the
+    concurrent gather. Errors are logged and an empty list is returned so a
+    single broken source never aborts the whole batch.
+    """
+    try:
+        parsed = await asyncio.wait_for(
+            asyncio.to_thread(feedparser.parse, feed["url"]),
+            timeout=per_feed_timeout,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("RSS feed %s timed out after %.1fs", feed["name"], per_feed_timeout)
+        return []
+    except Exception as e:
+        logger.error("Error fetching RSS feed %s: %s", feed["name"], e, exc_info=True)
+        return []
+
+    feed_articles: list[dict[str, Any]] = []
+    for entry in parsed.entries[:20]:  # Limit per feed
+        title = entry.get("title", "")
+        summary = entry.get("summary", "")
+        link = entry.get("link", "")
+        published = entry.get("published_parsed", None)
+
+        # Skip if filtering by team and team not mentioned
+        if team_name:
+            if team_name.lower() not in title.lower() and team_name.lower() not in summary.lower():
+                continue
+
+        # Calculate sentiment
+        text = f"{title} {summary}"
+        sentiment = calculate_simple_sentiment(text)
+
+        # Parse publish date
+        pub_date = None
+        if published:
+            pub_date = datetime(*published[:6])
+
+        article = {
+            "title": title,
+            "summary": summary[:300],  # Truncate
+            "link": link,
+            "source": feed["name"],
+            "region": feed["region"],
+            "published_at": pub_date.isoformat() if pub_date else None,
+            "sentiment": sentiment,
+            "mentions_team": team_name if team_name else None
+        }
+
+        feed_articles.append(article)
+    return feed_articles
+
+
 async def fetch_rss_news(
     team_name: str | None = None,
     max_articles: int = 50
 ) -> list[dict[str, Any]]:
     """Fetch news articles from RSS feeds.
+
+    All feeds are fetched concurrently via ``asyncio.gather`` (previously
+    sequential), with a per-feed timeout so a single hung source cannot stall
+    the batch.
 
     Args:
         team_name: Filter articles mentioning this team (None = all articles)
@@ -94,49 +157,24 @@ async def fetch_rss_news(
     Returns:
         List of article dicts with sentiment scores
     """
-    articles = []
+    per_feed_timeout = 15.0
+    tasks = [
+        _fetch_single_feed(feed, team_name, per_feed_timeout)
+        for feed in NEWS_FEEDS
+    ]
+    # return_exceptions=True keeps one feed's failure from aborting the others;
+    # _fetch_single_feed already swallows errors and returns [], so the items
+    # here are always lists.
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    for feed in NEWS_FEEDS:
-        try:
-            # Parse RSS feed
-            parsed = feedparser.parse(feed["url"])
-
-            for entry in parsed.entries[:20]:  # Limit per feed
-                title = entry.get("title", "")
-                summary = entry.get("summary", "")
-                link = entry.get("link", "")
-                published = entry.get("published_parsed", None)
-
-                # Skip if filtering by team and team not mentioned
-                if team_name:
-                    if team_name.lower() not in title.lower() and team_name.lower() not in summary.lower():
-                        continue
-
-                # Calculate sentiment
-                text = f"{title} {summary}"
-                sentiment = calculate_simple_sentiment(text)
-
-                # Parse publish date
-                pub_date = None
-                if published:
-                    pub_date = datetime(*published[:6])
-
-                article = {
-                    "title": title,
-                    "summary": summary[:300],  # Truncate
-                    "link": link,
-                    "source": feed["name"],
-                    "region": feed["region"],
-                    "published_at": pub_date.isoformat() if pub_date else None,
-                    "sentiment": sentiment,
-                    "mentions_team": team_name if team_name else None
-                }
-
-                articles.append(article)
-
-        except Exception as e:
-            logger.error("Error fetching RSS feed %s: %s", feed['name'], e, exc_info=True)
+    articles: list[dict[str, Any]] = []
+    for result in results:
+        if isinstance(result, Exception):
+            # Defensive: _fetch_single_feed catches everything, but keep this
+            # guard so an unexpected error never crashes the aggregator.
+            logger.error("Unexpected error in RSS gather: %s", result, exc_info=True)
             continue
+        articles.extend(result)
 
     # Sort by publish date (most recent first)
     articles.sort(key=lambda x: x["published_at"] or "", reverse=True)
@@ -390,7 +428,11 @@ def get_cached_sentiment(team_name: str, ttl_hours: int = 6) -> dict[str, Any] |
             return None
 
         # Check if expired
-        age = datetime.now(timezone.utc) - cached.scraped_at
+        # SQLite stores naive datetimes; attach UTC tzinfo before subtracting.
+        scraped_at = cached.scraped_at.replace(tzinfo=timezone.utc) if cached.scraped_at else None
+        if not scraped_at:
+            return None
+        age = datetime.now(timezone.utc) - scraped_at
         if age > timedelta(hours=ttl_hours):
             return None
 

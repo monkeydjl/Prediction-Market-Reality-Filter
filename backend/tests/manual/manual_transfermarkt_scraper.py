@@ -124,7 +124,7 @@ async def test_batch_scrape_sample():
 
     print("\n⚠️  Note: Full batch scraping will take ~1 minute (24 teams × 2s delay)")
     print("   We'll skip this in automated tests to avoid rate limiting")
-    print("   Run manually with: python test_transfermarkt_scraper.py --batch")
+    print("   Run manually with: python tests/manual/manual_transfermarkt_scraper.py --batch")
 
     print("\n✅ Batch scraping function available")
 
@@ -186,7 +186,7 @@ async def test_integration_summary():
     print("  ⚠️  Team URLs may change over time")
 
     print("\nUsage:")
-    print("  1. Run batch scrape: python test_transfermarkt_scraper.py --batch")
+    print("  1. Run batch scrape: python tests/manual/manual_transfermarkt_scraper.py --batch")
     print("  2. Use in prediction pipeline (market value as team strength proxy)")
     print("  3. Cache refreshes automatically after 7 days")
 

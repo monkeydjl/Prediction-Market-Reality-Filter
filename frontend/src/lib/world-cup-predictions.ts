@@ -3,7 +3,7 @@
  */
 
 import { getWorldCupApiBase } from "./env";
-import { getOperatorApiKey } from "./api";
+import { buildApiErrorMessage, getOperatorApiKey, getOperatorId } from "./api";
 
 export interface PredictedScore {
   home: number;
@@ -30,10 +30,79 @@ export interface MatchFixture {
   away_score?: number;
 }
 
+export interface ConfidenceCalibrationBucket {
+  label?: string;
+  count?: number;
+  actual_accuracy?: number | null;
+  avg_confidence?: number | null;
+}
+
+export interface ConfidenceCalibrationInfo {
+  raw: number;
+  calibrated: number;
+  method: string;
+  engine_filter?: string;
+  total_samples?: number;
+  min_total_samples?: number;
+  min_bucket_samples?: number;
+  is_reliable?: boolean;
+  bucket_is_reliable?: boolean;
+  is_reference_only?: boolean;
+  reason?: string;
+  bucket?: ConfidenceCalibrationBucket | null;
+  applied_bucket?: ConfidenceCalibrationBucket | null;
+}
+
+export interface ExplanationContributionItem {
+  key: "elo" | "odds" | "schedule" | "injury" | "motivation" | "market_signal" | string;
+  label: string;
+  unit: "pp" | "xg" | "%xg" | string;
+  home_impact: number;
+  away_impact: number;
+  description: string;
+  available?: boolean;
+}
+
+export interface ExplanationContributions {
+  engine?: string;
+  home_team?: string;
+  away_team?: string;
+  prediction_method?: string;
+  engine_weights?: {
+    elo_weight?: number;
+    hybrid_weight?: number;
+    source?: string;
+  } | null;
+  items: ExplanationContributionItem[];
+}
+
 export interface MatchPrediction {
   predicted_score: PredictedScore;
   outcome_probabilities: OutcomeProbabilities;
   confidence: number;
+  raw_confidence?: number;
+  confidence_calibration?: ConfidenceCalibrationInfo | null;
+  explanation_contributions?: ExplanationContributions | null;
+  high_confidence_selection?: {
+    selected_engine?: "elo_odds" | "hybrid" | "integrated" | string;
+    selection_confidence?: number;
+    candidate_confidences?: Record<
+      string,
+      {
+        raw?: number;
+        calibrated?: number;
+        is_reliable?: boolean;
+        is_reference_only?: boolean;
+        total_samples?: number;
+        min_total_samples?: number;
+        min_bucket_samples?: number;
+        bucket_is_reliable?: boolean;
+        reason?: string;
+        bucket?: ConfidenceCalibrationBucket | null;
+        applied_bucket?: ConfidenceCalibrationBucket | null;
+      }
+    >;
+  } | null;
   prediction_method?: string;
   ai_reasoning?: string;
   key_factors?: string[];
@@ -43,7 +112,7 @@ export interface MatchPrediction {
     away: number;
   };
   has_betting_odds?: boolean;
-  engine_used?: "elo_odds" | "hybrid" | "auto";
+  engine_used?: "elo_odds" | "hybrid" | "integrated" | "high_confidence" | "auto";
   data_quality?: "real" | "partial" | "mock";
   data_quality_score?: number;
   betting_analysis?: {
@@ -66,8 +135,13 @@ export interface PredictionHistoryEntry {
   predicted_score: PredictedScore;
   outcome_probabilities: OutcomeProbabilities;
   confidence: number;
+  raw_confidence?: number;
+  confidence_calibration?: MatchPrediction["confidence_calibration"];
+  explanation_contributions?: MatchPrediction["explanation_contributions"];
+  high_confidence_selection?: MatchPrediction["high_confidence_selection"];
   trigger: string;
   prediction_method?: string;
+  engine_used?: MatchPrediction["engine_used"];
 }
 
 export interface PredictionTriggerResult {
@@ -76,11 +150,16 @@ export interface PredictionTriggerResult {
   predicted_score?: PredictedScore;
   outcome_probabilities?: OutcomeProbabilities;
   confidence?: number;
+  raw_confidence?: number;
+  confidence_calibration?: MatchPrediction["confidence_calibration"];
+  explanation_contributions?: MatchPrediction["explanation_contributions"];
+  high_confidence_selection?: MatchPrediction["high_confidence_selection"];
   prediction_method?: string;
   elo_ratings?: MatchPrediction["elo_ratings"];
   has_betting_odds?: boolean;
   engine_used?: MatchPrediction["engine_used"];
   error?: string;
+  reason?: string;
 }
 
 const API_BASE = getWorldCupApiBase();
@@ -92,8 +171,32 @@ const API_BASE = getWorldCupApiBase();
 export function postHeaders(extra?: HeadersInit): HeadersInit {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const key = getOperatorApiKey();
+  const operator = getOperatorId();
   if (key) headers["X-API-Key"] = key;
+  if (operator) headers["X-Operator"] = operator;
   return extra ? { ...headers, ...Object.fromEntries(new Headers(extra)) } : headers;
+}
+
+async function worldCupFetchError(response: Response, fallback: string): Promise<Error> {
+  const bodyText = await response.text();
+  if (response.status === 401 || response.status === 403) {
+    return new Error(buildApiErrorMessage(response.status, bodyText));
+  }
+
+  let detail = "";
+  try {
+    const data = JSON.parse(bodyText) as { detail?: unknown; message?: unknown };
+    detail =
+      typeof data.detail === "string"
+        ? data.detail
+        : typeof data.message === "string"
+          ? data.message
+          : "";
+  } catch {
+    detail = bodyText.trim();
+  }
+
+  return new Error(detail ? `${fallback}: ${detail}` : `${fallback}: ${response.statusText || response.status}`);
 }
 
 /**
@@ -155,7 +258,9 @@ export async function fetchPredictionHistory(matchId: string): Promise<Predictio
   }
 
   const data = await response.json();
-  return data.history || [];
+  return (data.history || []).filter(
+    (entry: PredictionHistoryEntry) => !entry.trigger?.endsWith("_comparison")
+  );
 }
 
 /**
@@ -180,10 +285,12 @@ export async function fetchTodayMatches(): Promise<MatchWithPrediction[]> {
  */
 export async function triggerPrediction(
   matchId: string,
-  engine?: "elo_odds" | "hybrid" | "auto"
+  engine?: "elo_odds" | "hybrid" | "integrated" | "high_confidence" | "auto",
+  options?: { compareOnly?: boolean }
 ): Promise<PredictionTriggerResult> {
+  const query = options?.compareOnly ? "?compare_only=true" : "";
   const response = await fetch(
-    `${API_BASE}/api/world-cup/predictions/matches/${matchId}/predict`,
+    `${API_BASE}/api/world-cup/predictions/matches/${matchId}/predict${query}`,
     {
       method: 'POST',
       headers: postHeaders(),
@@ -204,12 +311,15 @@ export async function triggerPrediction(
 export async function compareEngines(matchId: string): Promise<{
   elo_odds?: MatchPrediction;
   hybrid?: MatchPrediction;
+  integrated?: MatchPrediction;
 }> {
   try {
-    // Trigger both engines in parallel
-    const [eloResult, hybridResult] = await Promise.all([
-      triggerPrediction(matchId, "elo_odds"),
-      triggerPrediction(matchId, "hybrid")
+    // Trigger engines in parallel in read-only mode so the comparison
+    // card works even after kickoff (no persistence, no freeze).
+    const [eloResult, hybridResult, integratedResult] = await Promise.all([
+      triggerPrediction(matchId, "elo_odds", { compareOnly: true }),
+      triggerPrediction(matchId, "hybrid", { compareOnly: true }),
+      triggerPrediction(matchId, "integrated", { compareOnly: true })
     ]);
 
     // Convert flat API response to MatchPrediction format
@@ -227,6 +337,10 @@ export async function compareEngines(matchId: string): Promise<{
         predicted_score: result.predicted_score,
         outcome_probabilities: result.outcome_probabilities,
         confidence: result.confidence,
+        raw_confidence: result.raw_confidence,
+        confidence_calibration: result.confidence_calibration,
+        explanation_contributions: result.explanation_contributions,
+        high_confidence_selection: result.high_confidence_selection,
         prediction_method: result.prediction_method,
         elo_ratings: result.elo_ratings,
         has_betting_odds: result.has_betting_odds,
@@ -236,7 +350,8 @@ export async function compareEngines(matchId: string): Promise<{
 
     return {
       elo_odds: toMatchPrediction(eloResult),
-      hybrid: toMatchPrediction(hybridResult)
+      hybrid: toMatchPrediction(hybridResult),
+      integrated: toMatchPrediction(integratedResult)
     };
   } catch (error) {
     console.error("Failed to compare engines:", error);
@@ -277,6 +392,6 @@ export async function syncFixtures(): Promise<void> {
   );
 
   if (!response.ok) {
-    throw new Error(`Failed to sync fixtures: ${response.statusText}`);
+    throw await worldCupFetchError(response, "同步赛程失败");
   }
 }

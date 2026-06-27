@@ -5,7 +5,7 @@ factors used by the prediction engines.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.services.transfermarkt_scraper import get_cached_market_value
@@ -115,6 +115,9 @@ def calculate_team_factors(
         "wins": wins,
         "draws": draws,
         "losses": losses,
+        "squad_size": team_stats.get("squad_size"),
+        "average_squad_age": team_stats.get("average_squad_age"),
+        "squad_positions": team_stats.get("squad_positions"),
         # New factors
         "market_value_rating": round(market_value_rating, 3),
         "market_value_euros": round(market_value_cached["total_market_value"], 1) if market_value_cached else None,

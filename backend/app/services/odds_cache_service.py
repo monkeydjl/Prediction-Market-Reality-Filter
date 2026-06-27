@@ -4,7 +4,7 @@ Cache betting odds with TTL to minimize The Odds API usage.
 Free tier: 500 requests/month → need smart caching strategy.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.utils.prediction_db import get_prediction_session
@@ -36,7 +36,9 @@ async def get_cached_odds(
     home_team: str,
     away_team: str,
     ttl_seconds: int = 3600,  # 1 hour default
-    commence_time: str | None = None
+    commence_time: str | None = None,
+    allow_stale: bool = True,
+    max_stale_hours: int = 168,
 ) -> dict[str, Any] | None:
     """Get cached odds or fetch fresh if expired.
 
@@ -57,7 +59,13 @@ async def get_cached_odds(
         cached = session.query(OddsCache).filter_by(match_key=match_key).first()
 
         if cached:
-            age_seconds = (datetime.now(timezone.utc) - cached.cached_at).total_seconds()
+            # SQLite stores naive datetimes; attach UTC tzinfo before
+            # subtracting from an offset-aware "now".
+            cached_at = cached.cached_at.replace(tzinfo=timezone.utc) if cached.cached_at else None
+            if cached_at:
+                age_seconds = (datetime.now(timezone.utc) - cached_at).total_seconds()
+            else:
+                age_seconds = ttl_seconds  # treat unknown as expired
 
             if age_seconds < ttl_seconds:
                 # Cache hit
@@ -68,7 +76,8 @@ async def get_cached_odds(
                     "source": f"cached_{cached.source}",
                     "last_update": cached.last_updated_api.isoformat() if cached.last_updated_api else cached.cached_at.isoformat(),
                     "bookmakers_count": cached.bookmakers_count,
-                    "cache_age_seconds": int(age_seconds)
+                    "cache_age_seconds": int(age_seconds),
+                    "stale": False,
                 }
 
         # Cache miss or expired - fetch fresh
@@ -105,7 +114,20 @@ async def get_cached_odds(
 
             return {
                 **fresh_odds,
-                "cache_age_seconds": 0
+                "cache_age_seconds": 0,
+                "stale": False,
+            }
+
+        if cached and allow_stale and age_seconds <= max_stale_hours * 3600:
+            return {
+                "home": cached.home_odds,
+                "draw": cached.draw_odds,
+                "away": cached.away_odds,
+                "source": f"stale_cached_{cached.source}",
+                "last_update": cached.last_updated_api.isoformat() if cached.last_updated_api else cached.cached_at.isoformat(),
+                "bookmakers_count": cached.bookmakers_count,
+                "cache_age_seconds": int(age_seconds),
+                "stale": True,
             }
 
         return None

@@ -9,7 +9,7 @@ Data sources (in priority order):
 
 import httpx
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from bs4 import BeautifulSoup
 
@@ -229,7 +229,13 @@ async def get_elo_rating(
             ).first()
 
             if cached:
-                age = (datetime.now(timezone.utc) - cached.last_updated).days
+                # SQLite stores naive datetimes (no tzinfo), so attach UTC
+                # before subtracting from an offset-aware "now".
+                cached_updated = cached.last_updated.replace(tzinfo=timezone.utc) if cached.last_updated else None
+                if cached_updated:
+                    age = (datetime.now(timezone.utc) - cached_updated).days
+                else:
+                    age = 7  # treat unknown timestamp as stale
                 if age < 7:
                     return {
                         "team_name": cached.team_name,

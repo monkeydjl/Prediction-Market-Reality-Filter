@@ -2,16 +2,19 @@
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import or_
 
+from app.api.security import require_write_key
 from app.models.world_cup_prediction import MatchFixture, MatchPrediction, PredictionHistory, AIAnalysisHistory
 from app.services.world_cup_match_service import sync_world_cup_fixtures, get_remaining_matches
 from app.services.world_cup_factor_service import build_prediction_factors
+from app.services.world_cup_data_quality import enrich_data_quality_metrics
 from app.utils.prediction_db import get_prediction_session, close_prediction_session, init_prediction_db
 
 
@@ -31,6 +34,8 @@ class PredictionRequest(BaseModel):
 
 
 def _engine_used_from_method(method: str | None) -> str:
+    if method and method.startswith("integrated"):
+        return "integrated"
     if method and method.startswith("elo"):
         return "elo_odds"
     return "hybrid"
@@ -39,7 +44,15 @@ def _engine_used_from_method(method: str | None) -> str:
 def _serialize_prediction(prediction: MatchPrediction) -> dict[str, Any]:
     method = prediction.prediction_method
     factors = prediction.factors or {}
-    quality_metrics = factors.get("data_quality_metrics") or {}
+    raw_quality_metrics = factors.get("data_quality_metrics") or {}
+    quality_metrics = (
+        enrich_data_quality_metrics(raw_quality_metrics, factors)
+        if raw_quality_metrics
+        else {}
+    )
+    confidence_calibration = factors.get("confidence_calibration") or None
+    high_confidence_selection = factors.get("high_confidence_selection") or None
+    explanation_contributions = factors.get("explanation_contributions") or None
     return {
         "predicted_score": {
             "home": prediction.predicted_home_score,
@@ -56,14 +69,75 @@ def _serialize_prediction(prediction: MatchPrediction) -> dict[str, Any]:
         "ai_reasoning": prediction.ai_reasoning,
         "key_factors": prediction.key_factors,
         "last_updated": prediction.last_updated.isoformat() if prediction.last_updated else None,
-        "has_betting_odds": bool(method and "elo_odds" in method),
+        "has_betting_odds": bool(quality_metrics.get("has_odds") or (method and "elo_odds" in method)),
         "data_quality": factors.get("data_quality"),
         "data_quality_score": quality_metrics.get("quality_score"),
+        "raw_confidence": (
+            confidence_calibration.get("raw")
+            if isinstance(confidence_calibration, dict)
+            else None
+        ),
+        "confidence_calibration": confidence_calibration,
+        "high_confidence_selection": high_confidence_selection,
+        "explanation_contributions": explanation_contributions,
     }
 
 
+def _history_matches_current_prediction(
+    history: PredictionHistory,
+    prediction: MatchPrediction,
+) -> bool:
+    """Return true when a history row is the same snapshot as current prediction."""
+    if history.prediction_method != prediction.prediction_method:
+        return False
+    return (
+        abs(float(history.predicted_home_score) - float(prediction.predicted_home_score)) < 0.001
+        and abs(float(history.predicted_away_score) - float(prediction.predicted_away_score)) < 0.001
+        and abs(float(history.confidence) - float(prediction.confidence)) < 0.01
+    )
+
+
+def _serialize_history_entry(
+    history: PredictionHistory,
+    current_prediction: MatchPrediction | None = None,
+    current_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "timestamp": history.timestamp.isoformat() if history.timestamp else None,
+        "predicted_score": {
+            "home": history.predicted_home_score,
+            "away": history.predicted_away_score,
+        },
+        "outcome_probabilities": {
+            "home_win": history.home_win_prob,
+            "draw": history.draw_prob,
+            "away_win": history.away_win_prob,
+        },
+        "confidence": history.confidence,
+        "trigger": history.trigger,
+        "prediction_method": history.prediction_method,
+        "engine_used": _engine_used_from_method(history.prediction_method),
+    }
+
+    if (
+        current_prediction is not None
+        and current_payload is not None
+        and _history_matches_current_prediction(history, current_prediction)
+    ):
+        for key in (
+            "raw_confidence",
+            "confidence_calibration",
+            "high_confidence_selection",
+            "explanation_contributions",
+        ):
+            if current_payload.get(key) is not None:
+                payload[key] = current_payload[key]
+
+    return payload
+
+
 @router.post("/init-db", response_model=FlexibleResponse)
-async def initialize_prediction_db():
+async def initialize_prediction_db(_auth: None = Depends(require_write_key)):
     """Initialize the prediction database schema."""
     try:
         init_prediction_db()
@@ -73,7 +147,10 @@ async def initialize_prediction_db():
 
 
 @router.post("/sync-fixtures", response_model=FlexibleResponse)
-async def sync_fixtures(source: str = Query("football-data", description="Data source: 'football-data' or 'api-football'")):
+async def sync_fixtures(
+    source: str = Query("football-data", description="Data source: 'football-data' or 'api-football'"),
+    _auth: None = Depends(require_write_key),
+):
     """Sync World Cup fixtures to database.
 
     Args:
@@ -196,30 +273,34 @@ async def get_prediction_history(match_id: str):
     try:
         history = session.query(PredictionHistory).filter_by(
             match_id=match_id
-        ).order_by(PredictionHistory.timestamp).all()
+        ).filter(
+            or_(
+                PredictionHistory.trigger.is_(None),
+                ~PredictionHistory.trigger.like("%_comparison"),
+            )
+        ).order_by(PredictionHistory.timestamp, PredictionHistory.id).all()
+        current_prediction = session.query(MatchPrediction).filter_by(match_id=match_id).first()
+        current_payload = _serialize_prediction(current_prediction) if current_prediction else None
 
         return {
             "status": "ok",
             "match_id": match_id,
             "count": len(history),
             "history": [
-                {
-                    "timestamp": h.timestamp.isoformat() if h.timestamp else None,
-                    "predicted_score": {
-                        "home": h.predicted_home_score,
-                        "away": h.predicted_away_score
-                    },
-                    "outcome_probabilities": {
-                        "home_win": h.home_win_prob,
-                        "draw": h.draw_prob,
-                        "away_win": h.away_win_prob
-                    },
-                    "confidence": h.confidence,
-                    "trigger": h.trigger,
-                    "prediction_method": h.prediction_method
-                }
+                _serialize_history_entry(h, current_prediction, current_payload)
                 for h in history
             ]
+        }
+
+    except Exception as hist_err:
+        # Degrade to empty history instead of returning HTTP 500, so the
+        # frontend can fall back to the "no history yet" empty state.
+        logger.error("Failed to load prediction history for %s: %s", match_id, hist_err, exc_info=True)
+        return {
+            "status": "ok",
+            "match_id": match_id,
+            "count": 0,
+            "history": [],
         }
 
     finally:
@@ -227,17 +308,30 @@ async def get_prediction_history(match_id: str):
 
 
 @router.post("/matches/{match_id}/predict", response_model=FlexibleResponse)
-async def trigger_prediction(match_id: str, request: PredictionRequest = Body(default=PredictionRequest())):
+async def trigger_prediction(
+    match_id: str,
+    request: PredictionRequest = Body(default=PredictionRequest()),
+    compare_only: bool = Query(False, description="Read-only mode: run the engine without persisting (bypasses kickoff freeze, skips MatchPrediction/PredictionHistory writes)"),
+    _auth: None = Depends(require_write_key),
+):
     """Manually trigger prediction generation for a match.
 
     Args:
         match_id: Match ID to predict
         request: Prediction request with optional engine selection
-            - engine: "auto" (default), "elo_odds", or "hybrid"
+            - engine: "auto" (default), "elo_odds", "hybrid", or "integrated"
+        compare_only: When true, runs the chosen engine in read-only mode
+            so the engine-comparison card can render even after kickoff.
+            Skips persistence and bypasses the kickoff freeze.
     """
     from app.services.world_cup_prediction_pipeline import run_prediction_pipeline
 
-    result = await run_prediction_pipeline(match_id, trigger="manual", engine=request.engine)
+    result = await run_prediction_pipeline(
+        match_id,
+        trigger="manual",
+        engine=request.engine,
+        compare_only=compare_only,
+    )
 
     if result.get("status") == "error":
         raise HTTPException(status_code=500, detail=result.get("error"))
@@ -246,7 +340,10 @@ async def trigger_prediction(match_id: str, request: PredictionRequest = Body(de
 
 
 @router.post("/matches/{match_id}/analyze", response_model=FlexibleResponse)
-async def analyze_match_prediction(match_id: str):
+async def analyze_match_prediction(
+    match_id: str,
+    _auth: None = Depends(require_write_key),
+):
     """Get AI analysis of a match prediction.
 
     Args:
@@ -365,7 +462,11 @@ async def get_analysis_history(match_id: str):
 
 
 @router.post("/batch-predict", response_model=FlexibleResponse)
-async def batch_predict(match_ids: list[str] | None = None, engine: str = "auto"):
+async def batch_predict(
+    match_ids: list[str] | None = None,
+    engine: str = "auto",
+    _auth: None = Depends(require_write_key),
+):
     """Run predictions for multiple matches.
 
     Args:
@@ -380,8 +481,9 @@ async def batch_predict(match_ids: list[str] | None = None, engine: str = "auto"
 
 @router.post("/batch-switch-engine", response_model=FlexibleResponse)
 async def batch_switch_engine(
-    engine: str = Query(..., description='Target engine: "elo_odds", "hybrid", or "high_confidence"'),
-    status_filter: str = Query("scheduled", description='Match status filter (default: "scheduled")')
+    engine: str = Query(..., description='Target engine: "elo_odds", "hybrid", "integrated", or "high_confidence"'),
+    status_filter: str = Query("scheduled", description='Match status filter (default: "scheduled")'),
+    _auth: None = Depends(require_write_key),
 ):
     """Batch switch all matches to a specific prediction engine.
 
@@ -389,6 +491,7 @@ async def batch_switch_engine(
         engine: Target engine to use
             - "elo_odds": Fast ELO + odds fusion engine
             - "hybrid": Full hybrid engine (rule + AI)
+            - "integrated": Fuse elo_odds and hybrid engine results
             - "high_confidence": Auto-select best engine based on confidence
         status_filter: Only process matches with this status (default: "scheduled")
 
@@ -438,8 +541,9 @@ async def batch_switch_engine(
 
 @router.get("/batch-switch-engine-stream")
 async def batch_switch_engine_stream(
-    engine: str = Query(..., description='Target engine: "elo_odds", "hybrid", or "high_confidence"'),
+    engine: str = Query(..., description='Target engine: "elo_odds", "hybrid", "integrated", or "high_confidence"'),
     status_filter: str = Query("scheduled", description="Match status filter (default: scheduled)"),
+    _auth: None = Depends(require_write_key),
 ):
     """Stream batch engine switch progress as Server-Sent Events.
 
@@ -466,6 +570,7 @@ async def batch_switch_engine_stream(
         skipped = 0
         elo_odds_count = 0
         hybrid_count = 0
+        integrated_count = 0
         total = 0
         try:
             matches = session.query(MatchFixture).filter(
@@ -503,6 +608,8 @@ async def batch_switch_engine_stream(
                             elo_odds_count += 1
                         elif engine_used == "hybrid":
                             hybrid_count += 1
+                        elif engine_used == "integrated":
+                            integrated_count += 1
                     elif status == "skipped":
                         skipped += 1
                     else:
@@ -543,6 +650,7 @@ async def batch_switch_engine_stream(
                 "skipped": skipped,
                 "elo_odds_count": elo_odds_count,
                 "hybrid_count": hybrid_count,
+                "integrated_count": integrated_count,
             })
         except Exception as exc:  # noqa: BLE001 - surface fatal errors
             logger.error("batch_switch_engine_stream fatal: %s", exc, exc_info=True)
@@ -631,11 +739,15 @@ async def compare_engine_accuracy():
 
 
 @router.post("/auto-tune/{engine_name}", response_model=FlexibleResponse)
-async def auto_tune_engine(engine_name: str, background: bool = Query(True, description="Run in background")):
+async def auto_tune_engine(
+    engine_name: str,
+    background: bool = Query(True, description="Run in background"),
+    _auth: None = Depends(require_write_key),
+):
     """Run automatic tuning cycle for an engine: analyze, optimize, learn, calibrate.
 
     Args:
-        engine_name: Engine to tune ("elo_odds" or "hybrid")
+        engine_name: Engine to tune ("elo_odds", "hybrid", or "integrated")
         background: If True, run in background and return task_id immediately
     """
     if background:
@@ -689,7 +801,8 @@ async def get_auto_tune_status(task_id: str):
 @router.post("/batch-optimize", response_model=FlexibleResponse)
 async def batch_optimize_predictions(
     engine: str | None = Query(None, description="Filter by engine (elo_odds, hybrid)"),
-    limit: int = Query(10, ge=1, le=100, description="Max matches to process")
+    limit: int = Query(10, ge=1, le=100, description="Max matches to process"),
+    _auth: None = Depends(require_write_key),
 ):
     """Run AI optimization on multiple scheduled matches.
 
@@ -743,7 +856,10 @@ async def analyze_calibration_patterns(engine_name: str):
 
 
 @router.post("/matches/{match_id}/optimize", response_model=FlexibleResponse)
-async def optimize_match_prediction(match_id: str):
+async def optimize_match_prediction(
+    match_id: str,
+    _auth: None = Depends(require_write_key),
+):
     """Get AI optimization suggestions for a match prediction.
 
     Args:

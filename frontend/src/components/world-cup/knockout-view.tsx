@@ -3,6 +3,7 @@
 import { Trophy, Calendar } from "lucide-react";
 import type { MatchFixture } from "@/lib/world-cup-predictions";
 import { translateTeamName } from "@/lib/team-names-zh";
+import { formatBeijingMatchDateTime, getWorldCupKickoffTime } from "@/lib/world-cup-time";
 import { cn } from "@/lib/utils";
 
 interface KnockoutStage {
@@ -69,7 +70,7 @@ export function KnockoutView({ matches, onTeamClick }: KnockoutViewProps) {
       stageLabel: STAGE_LABELS[stage] || stage,
       matches: byStage[stage].sort(
         (a, b) =>
-          new Date(a.kickoff_utc).getTime() - new Date(b.kickoff_utc).getTime()
+          getWorldCupKickoffTime(a.kickoff_utc) - getWorldCupKickoffTime(b.kickoff_utc)
       ),
     }));
 
@@ -103,12 +104,7 @@ export function KnockoutView({ matches, onTeamClick }: KnockoutViewProps) {
                   <div className="flex items-center justify-between border-b bg-secondary px-4 py-2 text-xs text-muted-foreground">
                     <span>
                       <Calendar className="inline size-3 mr-1" />
-                      {new Date(match.kickoff_utc).toLocaleString("zh-CN", {
-                        month: "short",
-                        day: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
+                      北京时间 {formatBeijingMatchDateTime(match.kickoff_utc)}
                     </span>
                     {isLive && (
                       <span className="flex items-center gap-1 rounded-md bg-warn px-2 py-0.5 font-medium text-warn-foreground">

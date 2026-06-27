@@ -1,0 +1,61 @@
+{
+  "feature_names": [
+    "elo_home",
+    "elo_away",
+    "elo_diff",
+    "elo_diff_abs",
+    "home_form_winrate",
+    "away_form_winrate",
+    "home_goals_scored_avg",
+    "away_goals_scored_avg",
+    "home_goals_conceded_avg",
+    "away_goals_conceded_avg",
+    "h2h_home_winrate",
+    "h2h_draw_rate",
+    "h2h_avg_goal_diff",
+    "is_neutral",
+    "is_world_cup",
+    "days_since_last_match_home",
+    "days_since_last_match_away"
+  ],
+  "lightgbm_version": "4.6.0",
+  "training_config": {
+    "since_year": 2010,
+    "min_team_matches": 3,
+    "recent_window": 10,
+    "h2h_window": 10,
+    "elo_init": 1500.0,
+    "elo_k": 30.0,
+    "train_split": 0.8,
+    "num_boost_round": 500,
+    "early_stopping_rounds": 50,
+    "params": {
+      "objective": "regression",
+      "metric": "rmse",
+      "boosting_type": "gbdt",
+      "num_leaves": 31,
+      "learning_rate": 0.05,
+      "feature_fraction": 0.9,
+      "bagging_fraction": 0.8,
+      "bagging_freq": 5,
+      "verbose": -1,
+      "min_data_in_leaf": 20,
+      "lambda_l2": 1.0
+    }
+  },
+  "dataset_stats": {
+    "total_samples": 15852,
+    "skipped": 25,
+    "train_samples": 12681,
+    "val_samples": 3171,
+    "home_goals_mean": 1.6107115821347464,
+    "away_goals_mean": 1.1158213474640424,
+    "home_goals_std": 1.6424438575543032,
+    "away_goals_std": 1.3521730439670765
+  },
+  "validation_metrics": {
+    "home_rmse": 1.3917319888336712,
+    "away_rmse": 1.1454574383703442
+  },
+  "fitted_at": "2026-06-27T13:36:43.296557+00:00"
+}

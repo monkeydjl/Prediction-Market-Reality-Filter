@@ -12,6 +12,7 @@ from app.services.world_cup_ai_optimization_service import optimize_prediction_w
 from app.services.optimization_task_manager import get_task_manager
 from app.services.engine_auto_tuning_service import (
     calculate_optimization_patterns,
+    engine_method_filter,
     save_engine_calibration
 )
 
@@ -20,7 +21,7 @@ async def run_async_optimization(engine_name: str, task_id: str) -> dict[str, An
     """Run AI optimization in background with progress tracking.
 
     Args:
-        engine_name: Engine to optimize ("elo_odds" or "hybrid")
+        engine_name: Engine to optimize ("elo_odds", "hybrid", or "integrated")
         task_id: Task ID for progress tracking
 
     Returns:
@@ -60,16 +61,7 @@ async def _run_async_optimization_impl(engine_name: str, task_id: str) -> dict[s
 
         # Apply engine filter
         if engine_name:
-            if engine_name == "hybrid":
-                # Hybrid engine includes both "hybrid" and "rule_only" predictions
-                # (rule_only is the fallback when AI optimization fails)
-                query = query.filter(
-                    MatchPrediction.prediction_method.in_(["hybrid", "rule_only"])
-                )
-            else:
-                query = query.filter(
-                    MatchPrediction.prediction_method.like(f"%{engine_name}%")
-                )
+            query = query.filter(engine_method_filter(MatchPrediction.prediction_method, engine_name))
 
         matches = query.all()
         total_matches = len(matches)

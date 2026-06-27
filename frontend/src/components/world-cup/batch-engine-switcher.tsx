@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Zap, Brain, Target, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
+import { Zap, Brain, GitCompare, Target, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getWorldCupApiBase } from "@/lib/env";
+import { postHeaders } from "@/lib/world-cup-predictions";
 
 interface SwitchResult {
   status: string;
@@ -22,8 +24,30 @@ interface ProgressState {
   skipped: number;
 }
 
+interface SseEvent {
+  event: string;
+  data: string;
+}
+
 interface BatchEngineSwitcherProps {
   onCompleted?: () => void | Promise<void>;
+}
+
+function parseSseBlock(block: string): SseEvent | null {
+  const lines = block.split(/\r?\n/);
+  let event = "message";
+  const data: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith("event:")) {
+      event = line.slice("event:".length).trim();
+    } else if (line.startsWith("data:")) {
+      data.push(line.slice("data:".length).trimStart());
+    }
+  }
+
+  if (data.length === 0) return null;
+  return { event, data: data.join("\n") };
 }
 
 export function BatchEngineSwitcher({ onCompleted }: BatchEngineSwitcherProps) {
@@ -31,12 +55,12 @@ export function BatchEngineSwitcher({ onCompleted }: BatchEngineSwitcherProps) {
   const [progress, setProgress] = useState<ProgressState | null>(null);
   const [lastResult, setLastResult] = useState<SwitchResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const streamControllerRef = useRef<AbortController | null>(null);
 
   const closeStream = useCallback(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
+    if (streamControllerRef.current) {
+      streamControllerRef.current.abort();
+      streamControllerRef.current = null;
     }
   }, []);
 
@@ -52,79 +76,102 @@ export function BatchEngineSwitcher({ onCompleted }: BatchEngineSwitcherProps) {
       setLastResult(null);
       setProgress(null);
 
-      // Use direct backend access for SSE stream (EventSource is GET-only,
-      // bypasses Next.js rewrites which have ~30s timeout)
-      const apiUrl =
-        process.env.NODE_ENV === "development"
-          ? process.env.NEXT_PUBLIC_API_ORIGIN || "http://localhost:8000"
-          : "";
+      // Use fetch streaming instead of EventSource so the protected endpoint can
+      // receive the same operator API key header as other write requests.
+      const apiUrl = getWorldCupApiBase();
       const url = `${apiUrl}/api/world-cup/predictions/batch-switch-engine-stream?engine=${engine}&status_filter=scheduled`;
 
-      const source = new EventSource(url);
-      eventSourceRef.current = source;
+      const controller = new AbortController();
+      streamControllerRef.current = controller;
 
-      source.addEventListener("start", (e) => {
+      void (async () => {
         try {
-          const payload = JSON.parse(e.data) as { total: number };
-          setProgress({
-            current: 0,
-            total: payload.total,
-            succeeded: 0,
-            failed: 0,
-            skipped: 0,
+          const response = await fetch(url, {
+            headers: postHeaders(),
+            cache: "no-store",
+            signal: controller.signal,
           });
-        } catch {
-          // ignore malformed event
-        }
-      });
 
-      source.addEventListener("progress", (e) => {
-        try {
-          const payload = JSON.parse(e.data) as ProgressState;
-          setProgress(payload);
-        } catch {
-          // ignore malformed event
-        }
-      });
-
-      source.addEventListener("complete", (e) => {
-        try {
-          const payload = JSON.parse(e.data) as SwitchResult;
-          setLastResult(payload);
-          if (payload.succeeded > 0) {
-            void Promise.resolve(onCompleted?.()).catch((refreshError) => {
-              console.error("Failed to refresh predictions after batch switch:", refreshError);
-            });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
           }
+          if (!response.body) {
+            throw new Error("Stream body unavailable");
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          async function handleEvent(event: SseEvent): Promise<boolean> {
+            if (event.event === "start") {
+              const payload = JSON.parse(event.data) as { total: number };
+              setProgress({
+                current: 0,
+                total: payload.total,
+                succeeded: 0,
+                failed: 0,
+                skipped: 0,
+              });
+              return false;
+            }
+
+            if (event.event === "progress") {
+              const payload = JSON.parse(event.data) as ProgressState;
+              setProgress(payload);
+              return false;
+            }
+
+            if (event.event === "complete") {
+              const payload = JSON.parse(event.data) as SwitchResult;
+              setLastResult(payload);
+              if (payload.succeeded > 0) {
+                await Promise.resolve(onCompleted?.()).catch((refreshError) => {
+                  console.error("Failed to refresh predictions after batch switch:", refreshError);
+                });
+              }
+              return true;
+            }
+
+            if (event.event === "error") {
+              const payload = JSON.parse(event.data) as { message?: string };
+              throw new Error(payload.message || "切换失败");
+            }
+
+            return false;
+          }
+
+          while (true) {
+            const { value, done } = await reader.read();
+            buffer += decoder.decode(value, { stream: !done });
+
+            let separatorIndex = buffer.indexOf("\n\n");
+            while (separatorIndex >= 0) {
+              const rawEvent = buffer.slice(0, separatorIndex);
+              buffer = buffer.slice(separatorIndex + 2);
+              const event = parseSseBlock(rawEvent);
+              if (event && await handleEvent(event)) {
+                await reader.cancel();
+                return;
+              }
+              separatorIndex = buffer.indexOf("\n\n");
+            }
+
+            if (done) break;
+          }
+        } catch (err) {
+          if (controller.signal.aborted) return;
+          const message = err instanceof Error ? err.message : String(err);
+          setError(message.startsWith("HTTP 401") ? "当前请求未获授权" : message);
         } finally {
-          closeStream();
+          if (streamControllerRef.current === controller) {
+            streamControllerRef.current = null;
+          }
           setSwitching(null);
         }
-      });
-
-      source.addEventListener("error", (e) => {
-        // SSE 'error' event: could be a custom event payload or a transport error
-        closeStream();
-        setSwitching(null);
-        // Custom error event from server
-        if (e instanceof MessageEvent && typeof e.data === "string") {
-          try {
-            const payload = JSON.parse(e.data) as { message?: string };
-            setError(payload.message || "切换失败");
-            return;
-          } catch {
-            // fall through to generic error
-          }
-        }
-        // Transport error (connection dropped)
-        if (progress && progress.current > 0) {
-          setError(`连接中断（已处理 ${progress.current}/${progress.total} 场）`);
-        } else {
-          setError("连接失败，请检查后端服务是否运行");
-        }
-      });
+      })();
     },
-    [switching, closeStream, onCompleted, progress],
+    [switching, onCompleted],
   );
 
   const engines = [
@@ -147,6 +194,15 @@ export function BatchEngineSwitcher({ onCompleted }: BatchEngineSwitcherProps) {
       iconBg: "bg-purple-500/10",
     },
     {
+      id: "integrated",
+      label: "一键集成引擎",
+      description: "融合 Elo+赔率 与混合引擎",
+      icon: GitCompare,
+      accent: "text-blue-500",
+      ring: "hover:border-blue-500/50",
+      iconBg: "bg-blue-500/10",
+    },
+    {
       id: "high_confidence",
       label: "一键高置信度",
       description: "自动选择最佳引擎",
@@ -166,7 +222,7 @@ export function BatchEngineSwitcher({ onCompleted }: BatchEngineSwitcherProps) {
         </p>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         {engines.map((engine) => {
           const Icon = engine.icon;
           const isSwitching = switching === engine.id;

@@ -79,7 +79,7 @@ Open browser: http://localhost:3000/world-cup
 ### Test Market Value Integration
 
 ```bash
-python test_enhanced_factors.py
+python tests/manual/manual_enhanced_factors.py
 ```
 
 Expected output:
@@ -348,7 +348,7 @@ cd backend
 pytest app/tests/test_world_cup_*.py -v
 
 # Specific test
-python test_enhanced_factors.py
+python tests/manual/manual_enhanced_factors.py
 ```
 
 ### Frontend Component Tests

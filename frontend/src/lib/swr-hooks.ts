@@ -1,18 +1,57 @@
 "use client";
 
 import useSWR from "swr";
+import { buildApiErrorMessage, getOperatorApiKey, getOperatorId } from "./api";
 import { getWorldCupApiBase } from "./env";
 import type { MatchWithPrediction } from "./world-cup-predictions";
 
 const API_BASE = getWorldCupApiBase();
 
+// Bounded fetcher for SWR. Mirrors the auth/timeout behavior of the central
+// `api()` client in lib/api.ts so the World Cup matches endpoint receives the
+// same X-API-Key / X-Operator session headers, is bounded by an
+// AbortController timeout (a hung backend no longer leaves SWR spinning
+// indefinitely), and surfaces a localized error message instead of the opaque
+// `Failed to fetch matches: <statusText>`.
+const MATCHES_FETCHER_TIMEOUT_MS = 60_000;
+
 async function matchesFetcher(url: string): Promise<MatchWithPrediction[]> {
-  const response = await fetch(url, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch matches: ${response.statusText}`);
+  const headers: Record<string, string> = {};
+  const operatorKey = getOperatorApiKey();
+  if (operatorKey) headers["X-API-Key"] = operatorKey;
+  const operatorId = getOperatorId();
+  if (operatorId) headers["X-Operator"] = operatorId;
+
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(
+    () => controller.abort(),
+    MATCHES_FETCHER_TIMEOUT_MS,
+  );
+
+  try {
+    const response = await fetch(url, {
+      cache: "no-store",
+      headers,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const bodyText = await response.text();
+      throw new Error(buildApiErrorMessage(response.status, bodyText));
+    }
+    const data = (await response.json()) as { matches?: MatchWithPrediction[] };
+    return data.matches ?? [];
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("请求超时，请稍后重试");
+    }
+    if (error instanceof TypeError) {
+      // Network-level failure (DNS, connection refused, CORS preflight fail).
+      throw new Error("无法连接到服务器，请检查网络或后端服务状态");
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeout);
   }
-  const data = await response.json();
-  return data.matches || [];
 }
 
 /**

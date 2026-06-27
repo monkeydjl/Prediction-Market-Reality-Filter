@@ -389,7 +389,7 @@ ALERTS = {
 pytest app/tests/test_world_cup_*.py -v
 
 # Test enhanced factors
-python test_enhanced_factors.py
+python tests/manual/manual_enhanced_factors.py
 
 # Test prediction engines
 pytest app/tests/test_prediction_engines.py

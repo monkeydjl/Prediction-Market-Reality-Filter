@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Zap, Brain, AlertCircle, Check, type LucideIcon } from "lucide-react";
+import { Zap, Brain, AlertCircle, Check, GitCompare, type LucideIcon } from "lucide-react";
 import type { MatchFixture, MatchPrediction } from "@/lib/world-cup-predictions";
 import { triggerPrediction } from "@/lib/world-cup-predictions";
 import { cn } from "@/lib/utils";
@@ -10,12 +10,21 @@ interface EngineComparisonCardProps {
   match: MatchFixture;
   eloOddsPrediction?: MatchPrediction;
   hybridPrediction?: MatchPrediction;
+  integratedPrediction?: MatchPrediction;
   isLoading?: boolean;
   onApplyPrediction?: () => void;
 }
 
 function probabilityBar(probability: number): string {
   return `${Math.round(probability * 100)}%`;
+}
+
+function contributionImpact(value: number, unit: string): string {
+  const sign = value > 0 ? "+" : "";
+  if (unit === "pp") return `${sign}${value.toFixed(1)}pp`;
+  if (unit === "xg") return `${sign}${value.toFixed(2)} xG`;
+  if (unit === "%xg") return `${sign}${value.toFixed(1)}% xG`;
+  return `${sign}${value.toFixed(2)} ${unit}`;
 }
 
 function PredictionColumn({
@@ -31,7 +40,7 @@ function PredictionColumn({
   icon: LucideIcon;
   color: string;
   prediction?: MatchPrediction;
-  engine: "elo_odds" | "hybrid";
+  engine: "elo_odds" | "hybrid" | "integrated" | "high_confidence" | "auto";
   matchId: string;
   onApply?: () => void;
 }) {
@@ -43,7 +52,18 @@ function PredictionColumn({
     setApplying(true);
     setApplyError(null);
     try {
-      await triggerPrediction(matchId, engine);
+      const result = await triggerPrediction(matchId, engine);
+      // Pipeline may skip when the match has already started/finished (freeze
+      // guard). Without compare_only, it returns {"status": "skipped"} and
+      // persists nothing — surface that instead of showing a false "applied".
+      if (result.status === "skipped") {
+        setApplyError(`无法应用：${result.reason || "比赛已开赛或已结束"}`);
+        return;
+      }
+      if (result.status === "error") {
+        setApplyError(`应用失败：${result.error || "后端错误"}`);
+        return;
+      }
       setApplied(true);
       setTimeout(() => setApplied(false), 2000);
 
@@ -76,6 +96,16 @@ function PredictionColumn({
     if (probs.away_win >= probs.draw) return "away";
     return "draw";
   })();
+  const calibration = prediction.confidence_calibration ?? null;
+  const rawConfidence = calibration?.raw ?? prediction.raw_confidence ?? null;
+  const calibrationSamples =
+    calibration?.applied_bucket?.count ??
+    calibration?.bucket?.count ??
+    calibration?.total_samples ??
+    null;
+  const contributionItems = (prediction.explanation_contributions?.items ?? [])
+    .filter((item) => item && item.label)
+    .slice(0, 2);
 
   return (
     <div className="flex-1 rounded-lg border bg-card p-4 flex flex-col">
@@ -161,6 +191,32 @@ function PredictionColumn({
         <div className="mt-3 h-[34px]" />
       )}
 
+      {(rawConfidence != null || contributionItems.length > 0) && (
+        <div className="mt-3 space-y-1.5 rounded border bg-secondary/20 px-2 py-1.5 text-[11px] text-muted-foreground">
+          {rawConfidence != null && (
+            <div className="flex items-center justify-between gap-2">
+              <span>Calibration</span>
+              <span className="font-mono tabular-nums">
+                {probabilityBar(rawConfidence)} -&gt; {probabilityBar(prediction.confidence)}
+                {calibrationSamples != null ? ` n=${calibrationSamples}` : ""}
+              </span>
+            </div>
+          )}
+          {contributionItems.length > 0 && (
+            <div className="space-y-1">
+              {contributionItems.map((item) => (
+                <div key={item.key} className="flex items-center justify-between gap-2">
+                  <span className="truncate">{item.label}</span>
+                  <span className="font-mono tabular-nums">
+                    {contributionImpact(item.home_impact, item.unit)}/{contributionImpact(item.away_impact, item.unit)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Apply Button */}
       {applyError && (
         <div className="mt-2 flex items-center gap-1.5 text-xs text-neg">
@@ -200,12 +256,16 @@ export function EngineComparisonCard({
   match,
   eloOddsPrediction,
   hybridPrediction,
+  integratedPrediction,
   isLoading,
   onApplyPrediction
 }: EngineComparisonCardProps) {
   // Calculate agreement level
   const agreement = (() => {
-    if (!eloOddsPrediction || !hybridPrediction) return null;
+    const predictions = [eloOddsPrediction, hybridPrediction, integratedPrediction].filter(
+      (prediction): prediction is MatchPrediction => prediction != null
+    );
+    if (predictions.length < 2) return null;
 
     const getOutcome = (probs: { home_win: number; draw: number; away_win: number }) => {
       if (probs.home_win >= probs.draw && probs.home_win >= probs.away_win) return "home";
@@ -213,20 +273,23 @@ export function EngineComparisonCard({
       return "draw";
     };
 
-    const elo_outcome = getOutcome(eloOddsPrediction.outcome_probabilities);
-    const hybrid_outcome = getOutcome(hybridPrediction.outcome_probabilities);
+    const outcomes = predictions.map((prediction) => getOutcome(prediction.outcome_probabilities));
 
     // If outcomes differ, low agreement
-    if (elo_outcome !== hybrid_outcome) return "low";
+    if (new Set(outcomes).size > 1) return "low";
 
-    // Same outcome - check probability similarity
-    const prob_diff = Math.abs(
-      eloOddsPrediction.outcome_probabilities.home_win - hybridPrediction.outcome_probabilities.home_win
-    ) + Math.abs(
-      eloOddsPrediction.outcome_probabilities.draw - hybridPrediction.outcome_probabilities.draw
-    ) + Math.abs(
-      eloOddsPrediction.outcome_probabilities.away_win - hybridPrediction.outcome_probabilities.away_win
-    );
+    // Same outcome - check the largest pairwise probability difference.
+    let prob_diff = 0;
+    for (let i = 0; i < predictions.length; i += 1) {
+      for (let j = i + 1; j < predictions.length; j += 1) {
+        const left = predictions[i].outcome_probabilities;
+        const right = predictions[j].outcome_probabilities;
+        const diff = Math.abs(left.home_win - right.home_win)
+          + Math.abs(left.draw - right.draw)
+          + Math.abs(left.away_win - right.away_win);
+        prob_diff = Math.max(prob_diff, diff);
+      }
+    }
 
     // prob_diff: 0-3 (sum of absolute differences)
     // < 0.3: high agreement, 0.3-0.6: medium, > 0.6: low
@@ -258,7 +321,7 @@ export function EngineComparisonCard({
       </div>
 
       {/* Comparison Grid */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid gap-3 md:grid-cols-3">
         <PredictionColumn
           label="Elo+赔率"
           icon={Zap}
@@ -277,6 +340,15 @@ export function EngineComparisonCard({
           matchId={match.match_id}
           onApply={onApplyPrediction}
         />
+        <PredictionColumn
+          label="集成引擎"
+          icon={GitCompare}
+          color="text-primary"
+          prediction={integratedPrediction}
+          engine="integrated"
+          matchId={match.match_id}
+          onApply={onApplyPrediction}
+        />
       </div>
 
       {/* Agreement Indicator */}
@@ -289,9 +361,9 @@ export function EngineComparisonCard({
         )}>
           <AlertCircle className="size-3.5" />
           <span>
-            {agreement === "high" && "两种引擎高度一致"}
-            {agreement === "medium" && "两种引擎基本一致"}
-            {agreement === "low" && "两种引擎存在分歧"}
+            {agreement === "high" && "引擎结果高度一致"}
+            {agreement === "medium" && "引擎结果基本一致"}
+            {agreement === "low" && "引擎结果存在分歧"}
           </span>
         </div>
       )}

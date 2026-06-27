@@ -57,7 +57,7 @@ async def fetch_economic_data(limit: int = 8) -> list[dict]:
     url = settings.ECONOMIC_RSS_URL
     if not url:
         return []
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None,
         partial(

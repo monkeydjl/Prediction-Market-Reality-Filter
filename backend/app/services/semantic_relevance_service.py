@@ -34,6 +34,8 @@ def _embed_client() -> AsyncOpenAI:
         _client = AsyncOpenAI(
             api_key=settings.EMBEDDING_API_KEY or settings.OPENAI_API_KEY,
             base_url=settings.EMBEDDING_BASE_URL or None,
+            timeout=60.0,
+            max_retries=2,
         )
     return _client
 

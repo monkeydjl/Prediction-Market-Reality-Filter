@@ -51,7 +51,7 @@ Run the test suite:
 
 ```bash
 cd backend
-python test_odds_api_integration.py
+python tests/manual/manual_odds_api_integration.py
 ```
 
 Expected output:
@@ -246,7 +246,7 @@ Add custom mappings in `TEAM_NAME_MAPPING` if needed.
 
 - [x] ✅ API service implemented (`odds_api_service.py`)
 - [x] ✅ Configuration added (`ODDS_API_KEY` in `config.py`)
-- [x] ✅ Test suite created (`test_odds_api_integration.py`)
+- [x] ✅ Test suite created (`tests/manual/manual_odds_api_integration.py`)
 - [x] ✅ Documentation written (this file)
 - [ ] ⏭️ Add caching layer (Redis or database)
 - [ ] ⏭️ Integrate into prediction pipeline
@@ -302,7 +302,7 @@ For World Cup 2026:
 
 1. Get API key from [The Odds API](https://the-odds-api.com/)
 2. Add to `.env`: `ODDS_API_KEY=your_key`
-3. Run tests: `python test_odds_api_integration.py`
+3. Run tests: `python tests/manual/manual_odds_api_integration.py`
 4. Integrate into prediction pipeline
 5. Monitor quota usage
 

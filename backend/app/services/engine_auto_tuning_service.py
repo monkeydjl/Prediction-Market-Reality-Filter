@@ -3,6 +3,8 @@
 from typing import Any
 from datetime import datetime
 
+from sqlalchemy import and_, or_
+
 from app.models.world_cup_prediction import (
     MatchFixture, MatchPrediction, AIOptimizedPrediction,
     EngineCalibration,
@@ -12,6 +14,20 @@ from app.services.world_cup_ai_optimization_service import optimize_prediction_w
 from app.services.optimization_task_manager import get_task_manager, TaskStatus
 
 
+def engine_method_filter(method_column, engine_name: str):
+    """Build a SQL filter that keeps public engine buckets separate."""
+    if engine_name == "integrated":
+        return method_column.like("integrated%")
+    if engine_name == "elo_odds":
+        return method_column.like("elo%")
+    if engine_name == "hybrid":
+        return or_(
+            method_column.in_(["hybrid", "rule_only", "rule_dominant"]),
+            and_(method_column.like("%hybrid%"), ~method_column.like("integrated%")),
+        )
+    return method_column.like(f"%{engine_name}%")
+
+
 async def analyze_and_optimize_all_predictions(
     engine_filter: str | None = None,
     limit: int | None = None
@@ -19,7 +35,7 @@ async def analyze_and_optimize_all_predictions(
     """Run AI analysis and optimization on all scheduled matches.
 
     Args:
-        engine_filter: Only process predictions from this engine (e.g., "elo_odds", "hybrid")
+        engine_filter: Only process predictions from this engine (e.g., "elo_odds", "hybrid", "integrated")
         limit: Maximum number of matches to process (None = all)
 
     Returns:
@@ -37,9 +53,7 @@ async def analyze_and_optimize_all_predictions(
 
         # Apply engine filter if specified
         if engine_filter:
-            query = query.filter(
-                MatchPrediction.prediction_method.like(f"%{engine_filter}%")
-            )
+            query = query.filter(engine_method_filter(MatchPrediction.prediction_method, engine_filter))
 
         if limit:
             query = query.limit(limit)
@@ -73,13 +87,6 @@ async def analyze_and_optimize_all_predictions(
                     current_match=f"{fixture.home_team} vs {fixture.away_team}",
                     log_message=f"正在优化 {idx+1}/{total_matches}: {fixture.home_team} vs {fixture.away_team}"
                 )
-
-            # Filter by engine if specified
-            if engine_filter:
-                if engine_filter == "elo_odds" and not prediction.prediction_method.startswith("elo"):
-                    continue
-                elif engine_filter == "hybrid" and prediction.prediction_method.startswith("elo"):
-                    continue
 
             try:
                 # Run AI optimization
@@ -159,7 +166,7 @@ def calculate_optimization_patterns(engine_name: str) -> dict[str, Any]:
     """Analyze patterns in AI optimizations to derive calibration adjustments.
 
     Args:
-        engine_name: Engine to analyze (e.g., "elo_odds", "hybrid")
+        engine_name: Engine to analyze (e.g., "elo_odds", "hybrid", "integrated")
 
     Returns:
         Suggested calibration parameters
@@ -168,7 +175,7 @@ def calculate_optimization_patterns(engine_name: str) -> dict[str, Any]:
     try:
         # Get all optimizations for this engine
         optimizations = session.query(AIOptimizedPrediction).filter(
-            AIOptimizedPrediction.original_engine.like(f"%{engine_name}%")
+            engine_method_filter(AIOptimizedPrediction.original_engine, engine_name)
         ).all()
 
         if not optimizations:
@@ -263,44 +270,54 @@ def save_engine_calibration(
     """
     session = get_prediction_session()
     try:
-        # Deactivate previous calibrations
-        session.query(EngineCalibration).filter(
-            EngineCalibration.engine_name == engine_name,
-            EngineCalibration.is_active == 1
-        ).update({"is_active": 0})
+        # Deactivate-old + insert-new must be a single atomic unit: if the
+        # insert fails the deactivate MUST roll back, otherwise the engine is
+        # left with no active calibration (every prediction falls through to
+        # defaults). SQLAlchemy holds both statements in one transaction, but
+        # the explicit `session.begin()` block makes that contract obvious to
+        # future readers and protects against a refactor inserting a stray
+        # commit() between the two. On exit the block commits; on exception
+        # it rolls back. expire_on_commit=False (set in the session factory)
+        # keeps `calibration.id` accessible after the commit.
+        with session.begin():
+            # Deactivate previous calibrations
+            session.query(EngineCalibration).filter(
+                EngineCalibration.engine_name == engine_name,
+                EngineCalibration.is_active == 1
+            ).update({"is_active": 0})
 
-        # Get next version number
-        latest = session.query(EngineCalibration).filter(
-            EngineCalibration.engine_name == engine_name
-        ).order_by(EngineCalibration.version.desc()).first()
+            # Get next version number
+            latest = session.query(EngineCalibration).filter(
+                EngineCalibration.engine_name == engine_name
+            ).order_by(EngineCalibration.version.desc()).first()
 
-        next_version = (latest.version + 1) if latest else 1
+            next_version = (latest.version + 1) if latest else 1
 
-        # Calculate confidence score if not provided
-        # Based on sample size: <5 matches=0.3, 5-10=0.5, 10-20=0.7, 20+=0.9
-        if confidence_score is None:
-            if based_on_matches >= 20:
-                confidence_score = 0.9
-            elif based_on_matches >= 10:
-                confidence_score = 0.7
-            elif based_on_matches >= 5:
-                confidence_score = 0.5
-            else:
-                confidence_score = 0.3
+            # Calculate confidence score if not provided
+            # Based on sample size: <5 matches=0.3, 5-10=0.5, 10-20=0.7, 20+=0.9
+            if confidence_score is None:
+                if based_on_matches >= 20:
+                    confidence_score = 0.9
+                elif based_on_matches >= 10:
+                    confidence_score = 0.7
+                elif based_on_matches >= 5:
+                    confidence_score = 0.5
+                else:
+                    confidence_score = 0.3
 
-        # Create new calibration
-        calibration = EngineCalibration(
-            engine_name=engine_name,
-            calibration_params=calibration_params,
-            based_on_matches=based_on_matches,
-            version=next_version,
-            is_active=1,
-            avg_improvement=avg_improvement,
-            confidence_score=confidence_score,
-        )
+            # Create new calibration
+            calibration = EngineCalibration(
+                engine_name=engine_name,
+                calibration_params=calibration_params,
+                based_on_matches=based_on_matches,
+                version=next_version,
+                is_active=1,
+                avg_improvement=avg_improvement,
+                confidence_score=confidence_score,
+            )
 
-        session.add(calibration)
-        session.commit()
+            session.add(calibration)
+            # No explicit commit() — session.begin() commits on a clean exit.
 
         return {
             "status": "ok",
@@ -406,7 +423,7 @@ async def run_full_auto_tuning_cycle(engine_name: str) -> dict[str, Any]:
     """Run complete auto-tuning cycle: analyze, optimize, learn, calibrate.
 
     Args:
-        engine_name: Engine to tune (e.g., "elo_odds", "hybrid")
+        engine_name: Engine to tune (e.g., "elo_odds", "hybrid", "integrated")
 
     Returns:
         Summary of tuning cycle results

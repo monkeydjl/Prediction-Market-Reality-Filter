@@ -28,7 +28,7 @@
 #### 1. `.env` 文件包含真实 API Key
 - **文件**: `backend/.env`
 - **行**: 1
-- **问题**: `OPENAI_API_KEY=sk-56ec15ae124e457bbb504602ea03ef4d` 是真实密钥
+- **问题**: `OPENAI_API_KEY=sk-<redacted — rotate immediately>` 是真实密钥
 - **风险**: 虽然 `.gitignore` 排除了该文件，但任何能访问该机器/备份的人都能获取密钥。若通过屏幕共享、远程协助或物理访问泄露，攻击者可消耗 API 额度
 - **修复**: 
   1. 立即到 DashScope 控制台**轮换（revoke + regenerate）该 API Key**

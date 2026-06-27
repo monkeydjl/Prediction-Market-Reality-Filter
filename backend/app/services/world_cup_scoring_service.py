@@ -11,7 +11,7 @@ These records are consumed by:
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -112,13 +112,18 @@ def score_finished_match(match_id: str, session: Session | None = None) -> dict[
             # No prediction exists — record result with nulls
             existing_result = session.query(MatchResult).filter_by(match_id=match_id).first()
             if existing_result:
-                return None  # Already scored
+                return {
+                    "match_id": match_id,
+                    "status": "skipped_no_prediction",
+                    "actual_score": {"home": actual_home, "away": actual_away},
+                    "outcome": actual_outcome,
+                }
             result = MatchResult(
                 match_id=match_id,
                 final_home_score=actual_home,
                 final_away_score=actual_away,
                 outcome=actual_outcome,
-                finished_at=datetime.utcnow(),
+                finished_at=datetime.now(timezone.utc),
                 predicted_home_score=None,
                 predicted_away_score=None,
                 predicted_outcome_prob=None,
@@ -173,7 +178,7 @@ def score_finished_match(match_id: str, session: Session | None = None) -> dict[
             existing.final_home_score = actual_home
             existing.final_away_score = actual_away
             existing.outcome = actual_outcome
-            existing.finished_at = datetime.utcnow()
+            existing.finished_at = datetime.now(timezone.utc)
             existing.predicted_home_score = pred_home
             existing.predicted_away_score = pred_away
             existing.predicted_outcome_prob = predicted_outcome_prob
@@ -190,7 +195,7 @@ def score_finished_match(match_id: str, session: Session | None = None) -> dict[
                 final_home_score=actual_home,
                 final_away_score=actual_away,
                 outcome=actual_outcome,
-                finished_at=datetime.utcnow(),
+                finished_at=datetime.now(timezone.utc),
                 predicted_home_score=pred_home,
                 predicted_away_score=pred_away,
                 predicted_outcome_prob=predicted_outcome_prob,
@@ -267,8 +272,12 @@ def score_all_finished_matches() -> dict[str, Any]:
                 continue
 
             result = score_finished_match(match.match_id, session=session)
-            if result:
+            if not result:
+                errors += 1
+            elif result.get("status") in {"scored", "scored_no_prediction"}:
                 scored += 1
+            elif result.get("status") == "skipped_no_prediction":
+                skipped += 1
             else:
                 errors += 1
 

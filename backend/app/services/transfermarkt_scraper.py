@@ -8,7 +8,7 @@ import logging
 import re
 import time
 from typing import Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from bs4 import BeautifulSoup
@@ -197,7 +197,11 @@ def get_cached_market_value(team_name: str, ttl_days: int = 7) -> dict[str, Any]
             return None
 
         # Check if expired
-        age = datetime.now(timezone.utc) - cached.scraped_at
+        # SQLite stores naive datetimes; attach UTC tzinfo before subtracting.
+        scraped_at = cached.scraped_at.replace(tzinfo=timezone.utc) if cached.scraped_at else None
+        if not scraped_at:
+            return None
+        age = datetime.now(timezone.utc) - scraped_at
         if age > timedelta(days=ttl_days):
             return None
 

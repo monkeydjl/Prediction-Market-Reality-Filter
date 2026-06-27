@@ -20,6 +20,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.core.config import settings
 from app.memory import loop_run_store
 from app.utils import sqlite_db
+from datetime import timezone
 
 logger = logging.getLogger(__name__)
 _scheduler_lock_handle: Any | None = None
@@ -202,6 +203,29 @@ async def _job_loop_db_maintenance():
         logger.exception("[Scheduler] Loop DB maintenance failed")
 
 
+async def _job_optimization_task_cleanup():
+    """Daily cleanup of completed/failed optimization tasks older than 24h.
+
+    Auto-tune / batch-optimize tasks are persisted to the loop DB so a restart
+    does not 404 the polling frontend (see optimization_task_store). Without
+    this job the table grows without bound; the in-memory cache would also
+    accumulate stale entries across long-lived processes. Cleanup is best-
+    effort — a store failure is logged and re-raised into the run ledger so
+    degraded SQLite surfaces loudly rather than silently leaking rows.
+    """
+    logger.info("[Scheduler] Optimization task cleanup starting...")
+    run_id = _start_run("optimization_task_cleanup")
+    try:
+        from app.services.optimization_task_manager import get_task_manager
+
+        await get_task_manager().cleanup_old_tasks(max_age_hours=24)
+        _finish_run(run_id, "success", result={"cleaned": True})
+        logger.info("[Scheduler] Optimization task cleanup completed")
+    except Exception as exc:
+        _finish_run(run_id, "failed", error=str(exc))
+        logger.exception("[Scheduler] Optimization task cleanup failed")
+
+
 def _run_world_cup_bundle_import(mode: str, replace: bool):
     """Shared import-mode dispatch for World Cup source bundles.
 
@@ -379,6 +403,13 @@ def _summarize_prediction_update(result: dict[str, Any]) -> dict[str, Any]:
         summary["predictions_failed"] = pred.get("failed", 0)
         summary["predictions_skipped"] = pred.get("skipped", 0)
 
+    if result.get("post_match_backfill"):
+        backfill = result["post_match_backfill"]
+        scoring = backfill.get("scoring", {})
+        summary["post_match_candidates"] = backfill.get("candidate_count", 0)
+        summary["post_match_scored"] = scoring.get("scored", 0)
+        summary["post_match_errors"] = scoring.get("errors", 0)
+
     return summary
 
 
@@ -450,6 +481,16 @@ def start_scheduler():
             replace_existing=True,
             max_instances=1,
         )
+        # Prune completed/failed optimization tasks older than 24h so the
+        # persisted task table (and the in-memory cache) stay bounded. Runs
+        # shortly after loop_db_maintenance so a degraded DB surfaces first.
+        scheduler.add_job(
+            _job_optimization_task_cleanup,
+            CronTrigger(hour=6, minute=50),
+            id="optimization_task_cleanup",
+            replace_existing=True,
+            max_instances=1,
+        )
         if settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED:
             scheduler.add_job(
                 _job_world_cup_source_bundle_import,
@@ -502,7 +543,9 @@ def start_scheduler():
         "world_cup_matchday_refresh@%dmin(%s) | "
         "world_cup_prediction_update@06:00UTC | "
         "world_cup_live_update@2min | "
-        "loop_db_maintenance@06:45UTC | event_auto_resolve@22:30UTC",
+        "loop_db_maintenance@06:45UTC | "
+        "optimization_task_cleanup@06:50UTC | "
+        "event_auto_resolve@22:30UTC",
         discover_state,
         settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_HOUR_UTC,
         settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_MINUTE_UTC,

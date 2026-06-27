@@ -16,5 +16,30 @@ TimeoutStopSec=30
 User=pmrf
 Group=pmrf
 
+# Hardening: drop privileges, sandbox filesystem, restrict kernel surface.
+# All directives are fail-closed — if a path the app needs is missing from
+# ReadWritePaths the service will fail with EROFS / EACCES. Adjust ReadWritePaths
+# if you relocate the data dir or the venv.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/prediction-market-reality-filter/backend
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RemoveIPC=true
+RestrictNamespaces=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
 [Install]
 WantedBy=multi-user.target

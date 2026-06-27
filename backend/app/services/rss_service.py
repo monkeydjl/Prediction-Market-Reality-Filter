@@ -72,7 +72,7 @@ async def fetch_news(limit: int = 5) -> list:
     """
     from app.models.news import NewsModel
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     tasks = [
         loop.run_in_executor(None, partial(_fetch_one, name, url, limit))
         for name, url, _ in RSS_FEEDS

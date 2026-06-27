@@ -1,9 +1,13 @@
 """API endpoints for prediction analytics and monitoring."""
 
-from fastapi import APIRouter, Depends
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from typing import Any
 
+from app.api.audit_metadata import get_audit_metadata
+from app.api.security import require_write_key
 from app.utils.prediction_db import get_prediction_session_dep
 from app.models.world_cup_prediction import (
     MatchPrediction,
@@ -11,6 +15,25 @@ from app.models.world_cup_prediction import (
     PredictionHistory,
 )
 from app.services.odds_cache_service import OddsCache
+from app.services.world_cup_quality_service import (
+    apply_consistency_history_repair,
+    build_consistency_repair_plan,
+    build_quality_loop_report,
+    bucket_engine,
+    preview_consistency_history_repair,
+)
+from app.services.world_cup_result_consistency_service import (
+    audit_world_cup_result_consistency,
+)
+from app.services.world_cup_result_fact_backfill_service import (
+    list_world_cup_result_fact_backfill_runs,
+    run_world_cup_result_fact_backfill,
+)
+from app.services.world_cup_scoring_service import score_all_finished_matches
+from app.services.world_cup_post_match_backfill_service import (
+    list_post_match_backfill_runs,
+    run_post_match_backfill,
+)
 
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
@@ -24,36 +47,146 @@ async def get_engine_stats(session: Session = Depends(get_prediction_session_dep
     predictions = session.query(MatchPrediction).all()
 
     total = len(predictions)
-    elo_odds_count = sum(1 for p in predictions if p.prediction_method == "elo_odds")
-    hybrid_count = sum(1 for p in predictions if p.prediction_method == "hybrid")
+    grouped: dict[str, list[MatchPrediction]] = {
+        "elo_odds": [],
+        "hybrid": [],
+        "integrated": [],
+    }
+    for prediction in predictions:
+        grouped[bucket_engine(prediction.prediction_method)].append(prediction)
 
-    # Calculate average confidence by engine
-    elo_odds_confidence = 0.0
-    hybrid_confidence = 0.0
-
-    if elo_odds_count > 0:
-        elo_odds_predictions = [p for p in predictions if p.prediction_method == "elo_odds"]
-        elo_odds_confidence = sum(p.confidence for p in elo_odds_predictions) / elo_odds_count
-
-    if hybrid_count > 0:
-        hybrid_predictions = [p for p in predictions if p.prediction_method == "hybrid"]
-        hybrid_confidence = sum(p.confidence for p in hybrid_predictions) / hybrid_count
+    def engine_summary(engine: str) -> dict[str, Any]:
+        engine_predictions = grouped[engine]
+        count = len(engine_predictions)
+        avg_confidence = (
+            sum(float(prediction.confidence or 0.0) for prediction in engine_predictions) / count
+            if count else 0.0
+        )
+        return {
+            "count": count,
+            "percentage": (count / total * 100) if total > 0 else 0,
+            "avg_confidence": round(avg_confidence, 3),
+        }
 
     return {
         "total_predictions": total,
         "by_engine": {
-            "elo_odds": {
-                "count": elo_odds_count,
-                "percentage": (elo_odds_count / total * 100) if total > 0 else 0,
-                "avg_confidence": round(elo_odds_confidence, 3)
-            },
-            "hybrid": {
-                "count": hybrid_count,
-                "percentage": (hybrid_count / total * 100) if total > 0 else 0,
-                "avg_confidence": round(hybrid_confidence, 3)
-            }
+            "elo_odds": engine_summary("elo_odds"),
+            "hybrid": engine_summary("hybrid"),
+            "integrated": engine_summary("integrated"),
         }
     }
+
+
+@router.get("/quality-loop")
+async def get_quality_loop(session: Session = Depends(get_prediction_session_dep)) -> dict[str, Any]:
+    """Get prediction quality metrics and confidence calibration buckets."""
+    return build_quality_loop_report(session=session)
+
+
+@router.get("/consistency-repair-plan")
+async def get_consistency_repair_plan(
+    limit: int = Query(25, ge=1, le=100, description="Maximum consistency issues to inspect"),
+    session: Session = Depends(get_prediction_session_dep),
+) -> dict[str, Any]:
+    """Get a dry-run repair plan for prediction history consistency issues."""
+    return build_consistency_repair_plan(session=session, limit=limit)
+
+
+@router.get("/result-consistency")
+async def get_result_consistency(
+    limit: int = Query(100, ge=1, le=500, description="Maximum result consistency issues to return"),
+    session: Session = Depends(get_prediction_session_dep),
+) -> dict[str, Any]:
+    """Audit match-result facts against prediction DB fixtures."""
+    return audit_world_cup_result_consistency(session=session, limit=limit)
+
+
+@router.post("/result-fact-backfill")
+async def post_result_fact_backfill(
+    limit: int = Query(100, ge=1, le=500, description="Maximum missing result facts to backfill"),
+    dry_run: bool = Query(True, description="When true, only report result facts that would be imported"),
+    confirm: bool = Query(False, description="Must be true with dry_run=false to write facts"),
+    _auth: None = Depends(require_write_key),
+    audit_metadata: dict[str, str] = Depends(get_audit_metadata),
+    session: Session = Depends(get_prediction_session_dep),
+) -> dict[str, Any]:
+    """Backfill missing match-result facts from finished prediction fixtures."""
+    return run_world_cup_result_fact_backfill(
+        session=session,
+        dry_run=dry_run,
+        confirm=confirm,
+        limit=limit,
+        audit_metadata=audit_metadata,
+    )
+
+
+@router.get("/result-fact-backfill/runs")
+async def get_result_fact_backfill_runs(
+    limit: int = Query(10, ge=1, le=50, description="Maximum result fact backfill audit runs to return"),
+) -> dict[str, Any]:
+    """Get recent audit runs for confirmed result fact backfills."""
+    return list_world_cup_result_fact_backfill_runs(limit=limit)
+
+
+@router.get("/consistency-repair-preview")
+async def get_consistency_repair_preview(
+    history_ids: list[int] = Query(..., description="Prediction history row IDs to preview"),
+    session: Session = Depends(get_prediction_session_dep),
+) -> dict[str, Any]:
+    """Preview method-fill repairs for selected prediction history rows."""
+    return preview_consistency_history_repair(history_ids=history_ids, session=session)
+
+
+@router.post("/consistency-repair")
+async def post_consistency_repair(
+    history_ids: list[int] = Query(..., description="Prediction history row IDs to repair"),
+    dry_run: bool = Query(True, description="When true, only report repair actions"),
+    confirm: bool = Query(False, description="Must be true with dry_run=false to write changes"),
+    _auth: None = Depends(require_write_key),
+    audit_metadata: dict[str, str] = Depends(get_audit_metadata),
+    session: Session = Depends(get_prediction_session_dep),
+) -> dict[str, Any]:
+    """Apply selected method-fill repairs with dry-run and confirmation guards."""
+    return apply_consistency_history_repair(
+        history_ids=history_ids,
+        session=session,
+        dry_run=dry_run,
+        confirm=confirm,
+        audit_metadata=audit_metadata,
+    )
+
+
+@router.post("/reconcile-scoring")
+async def reconcile_scoring(
+    _auth: None = Depends(require_write_key),
+) -> dict[str, Any]:
+    """Score finished matches against stored predictions."""
+    return score_all_finished_matches()
+
+
+@router.post("/post-match-backfill")
+async def post_match_backfill(
+    source: str = Query("football-data", description="Fixture/result source to sync before scoring"),
+    dry_run: bool = Query(True, description="When true, report candidates without syncing or writing"),
+    _auth: None = Depends(require_write_key),
+    audit_metadata: dict[str, str] = Depends(get_audit_metadata),
+) -> dict[str, Any]:
+    """Run the World Cup post-match backfill loop."""
+    return run_post_match_backfill(
+        source=source,
+        dry_run=dry_run,
+        sync_first=True,
+        audit_metadata=audit_metadata,
+    )
+
+
+@router.get("/post-match-backfill/runs")
+async def get_post_match_backfill_runs(
+    limit: int = Query(10, ge=1, le=50, description="Maximum audit runs to return"),
+) -> dict[str, Any]:
+    """Get recent audit runs for the World Cup post-match backfill loop."""
+    return list_post_match_backfill_runs(limit=limit)
 
 
 @router.get("/accuracy-stats")
@@ -196,8 +329,10 @@ async def get_system_health(session: Session = Depends(get_prediction_session_de
     )
 
     data_age_hours = 0
-    if latest_prediction:
-        data_age = datetime.now(timezone.utc) - latest_prediction.last_updated
+    if latest_prediction and latest_prediction.last_updated:
+        # SQLite stores naive datetimes; attach UTC tzinfo before subtracting.
+        last_updated = latest_prediction.last_updated.replace(tzinfo=timezone.utc)
+        data_age = datetime.now(timezone.utc) - last_updated
         data_age_hours = data_age.total_seconds() / 3600
 
     return {

@@ -6,6 +6,7 @@ import { Trophy, TrendingUp, Clock, AlertCircle, Zap, Brain, GitCompare, History
 import type { MatchFixture, MatchPrediction } from "@/lib/world-cup-predictions";
 import { compareEngines } from "@/lib/world-cup-predictions";
 import { translateTeamName } from "@/lib/team-names-zh";
+import { formatBeijingMatchDateTime } from "@/lib/world-cup-time";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
@@ -17,13 +18,7 @@ interface MatchPredictionCardProps {
 }
 
 function formatKickoff(kickoffUtc: string): string {
-  const date = new Date(kickoffUtc);
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+  return `北京时间 ${formatBeijingMatchDateTime(kickoffUtc)}`;
 }
 
 function stageLabel(stage: string): string {
@@ -56,8 +51,29 @@ function qualityScoreLabel(score: number): string {
   return "数据有限";
 }
 
+function engineDisplayName(engine?: string): string {
+  if (engine === "elo_odds") return "Elo+赔率";
+  if (engine === "hybrid") return "混合引擎";
+  if (engine === "integrated") return "集成引擎";
+  return engine || "--";
+}
+
 function probabilityBar(probability: number): string {
   return `${Math.round(probability * 100)}%`;
+}
+
+function formatContributionImpact(value: number, unit: string): string {
+  const sign = value > 0 ? "+" : "";
+  if (unit === "pp") return `${sign}${value.toFixed(1)}pp`;
+  if (unit === "xg") return `${sign}${value.toFixed(2)} xG`;
+  if (unit === "%xg") return `${sign}${value.toFixed(1)}% xG`;
+  return `${sign}${value.toFixed(2)} ${unit}`;
+}
+
+function contributionTone(value: number): string {
+  if (value > 0.01) return "text-pos";
+  if (value < -0.01) return "text-neg";
+  return "text-muted-foreground";
 }
 
 function getEngineLabel(prediction?: MatchPrediction): { icon: LucideIcon; label: string; color: string } | null {
@@ -67,11 +83,19 @@ function getEngineLabel(prediction?: MatchPrediction): { icon: LucideIcon; label
   const engine = prediction.engine_used;
   const hasOdds = prediction.has_betting_odds;
 
-  if (method === "elo_only") {
-    return { icon: TrendingUp, label: "Elo评级", color: "text-muted-foreground" };
+  if (engine === "integrated" || method.includes("integrated")) {
+    return { icon: GitCompare, label: "集成引擎", color: "text-primary" };
+  }
+
+  if (engine === "hybrid" || method === "rule_only" || method === "rule_dominant" || method.includes("hybrid")) {
+    return { icon: Brain, label: "混合引擎", color: "text-muted-foreground" };
   }
 
   if (engine === "elo_odds" || method.includes("elo_odds") || (hasOdds && method.includes("elo"))) {
+    return { icon: Zap, label: "Elo+赔率", color: "text-primary" };
+  }
+
+  if (method === "elo_only" || method.startsWith("elo")) {
     return { icon: Zap, label: "Elo+赔率", color: "text-primary" };
   }
 
@@ -110,9 +134,13 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
   const [comparisonData, setComparisonData] = useState<{
     elo_odds?: MatchPrediction;
     hybrid?: MatchPrediction;
+    integrated?: MatchPrediction;
   }>({});
 
-  const hasComparisonData = comparisonData.elo_odds != null || comparisonData.hybrid != null;
+  const hasComparisonData =
+    comparisonData.elo_odds != null ||
+    comparisonData.hybrid != null ||
+    comparisonData.integrated != null;
 
   const handleCompare = useCallback(async () => {
     if (showComparison) {
@@ -157,7 +185,63 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
   );
   const reasoning = prediction?.ai_reasoning?.trim() || null;
   const qualityScore = prediction?.data_quality_score ?? null;
-  const hasExplanation = keyFactors.length > 0 || reasoning != null || qualityScore != null;
+  const calibration = prediction?.confidence_calibration ?? null;
+  const rawConfidence = calibration?.raw ?? prediction?.raw_confidence ?? null;
+  const calibrationReferenceOnly =
+    calibration?.is_reference_only ?? (calibration?.is_reliable === false);
+  let calibrationSamples =
+    calibration?.applied_bucket?.count ??
+    calibration?.bucket?.count ??
+    calibration?.total_samples ??
+    null;
+  if (calibration?.is_reliable === false) {
+    calibrationSamples = calibration.total_samples ?? calibration.bucket?.count ?? calibrationSamples;
+  } else if (calibration?.bucket_is_reliable === false) {
+    calibrationSamples = calibration.bucket?.count ?? null;
+  }
+  const calibrationSampleThreshold =
+    calibrationReferenceOnly
+      ? calibration?.is_reliable === false
+        ? calibration?.min_total_samples
+        : calibration?.min_bucket_samples
+      : null;
+  const highConfidenceSelection = prediction?.high_confidence_selection ?? null;
+  const highConfidenceCandidates = useMemo(() => {
+    const candidates = highConfidenceSelection?.candidate_confidences ?? {};
+    return ["elo_odds", "hybrid", "integrated"]
+      .filter((engine) => candidates[engine] != null)
+      .map((engine) => {
+        const candidate = candidates[engine];
+        let samples =
+          candidate?.total_samples ??
+          candidate?.applied_bucket?.count ??
+          candidate?.bucket?.count;
+        if (candidate?.bucket_is_reliable === false && candidate?.is_reliable !== false) {
+          samples = candidate.bucket?.count;
+        }
+
+        return {
+          engine,
+          label: engineDisplayName(engine),
+          selected: highConfidenceSelection?.selected_engine === engine,
+          calibrated: candidate?.calibrated ?? candidate?.raw ?? 0,
+          isReferenceOnly: candidate?.is_reference_only ?? (candidate?.is_reliable === false),
+          samples,
+        };
+      });
+  }, [highConfidenceSelection]);
+  const contributionItems = useMemo(
+    () => (prediction?.explanation_contributions?.items ?? []).filter((item) => item && item.label),
+    [prediction]
+  );
+  const contributionWeights = prediction?.explanation_contributions?.engine_weights ?? null;
+  const showCalibration = calibration != null && rawConfidence != null;
+  const hasExplanation =
+    keyFactors.length > 0 ||
+    reasoning != null ||
+    qualityScore != null ||
+    contributionItems.length > 0 ||
+    highConfidenceCandidates.length > 0;
 
   return (
     <div className={cn(
@@ -318,6 +402,27 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
               </span>
             </div>
 
+            {showCalibration && rawConfidence != null && (
+              <div className="flex items-center justify-between gap-3 rounded-md border bg-secondary/30 px-3 py-2">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Gauge className="size-3.5" />
+                  <span>置信校准</span>
+                </div>
+                <div className="text-right">
+                  <div className="font-mono text-xs font-medium tabular-nums text-muted-foreground">
+                    {probabilityBar(rawConfidence)} → {probabilityBar(prediction.confidence)}
+                    {calibrationSamples != null ? ` · n=${calibrationSamples}` : ""}
+                    {calibrationSampleThreshold != null ? `/${calibrationSampleThreshold}` : ""}
+                  </div>
+                  {calibrationReferenceOnly && (
+                    <div className="mt-0.5 text-[11px] font-medium text-warn">
+                      校准样本不足，仅作参考
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Engine Badge */}
             {isPredicted && prediction && (() => {
               const engineInfo = getEngineLabel(prediction);
@@ -350,22 +455,6 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
               </div>
             )}
 
-            {/* Data Quality Badge */}
-            {prediction.data_quality && prediction.data_quality !== "real" && (
-              <div className={cn(
-                "flex items-center gap-2 rounded-md border px-3 py-2 text-xs",
-                prediction.data_quality === "mock"
-                  ? "border-neg/40 bg-neg/10 text-neg"
-                  : "border-warn/40 bg-warn/10 text-warn"
-              )}>
-                <AlertCircle className="size-3.5 shrink-0" />
-                <span>
-                  {prediction.data_quality === "mock"
-                    ? "数据来源：模拟数据（API 不可用，预测可能不准确）"
-                    : "数据来源：部分模拟（部分球队数据缺失）"}
-                </span>
-              </div>
-            )}
           </div>
         )}
 
@@ -406,6 +495,74 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
                         )}
                         style={{ width: `${Math.max(0, Math.min(100, qualityScore))}%` }}
                       />
+                    </div>
+                  </div>
+                )}
+
+                {/* High-confidence engine selection */}
+                {highConfidenceCandidates.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2 text-xs font-medium text-foreground">
+                      <Sparkles className="size-3.5" />
+                      <span>高置信选择</span>
+                    </div>
+                    <div className="space-y-1">
+                      {highConfidenceCandidates.map((candidate) => (
+                        <div key={candidate.engine} className="flex items-center justify-between gap-3 text-xs">
+                          <span className={cn(candidate.selected ? "font-medium text-foreground" : "text-muted-foreground")}>
+                            {candidate.label}
+                          </span>
+                          <span className="font-mono text-xs font-medium tabular-nums text-muted-foreground">
+                            {probabilityBar(candidate.calibrated)}
+                            {candidate.samples != null ? ` · n=${candidate.samples}` : ""}
+                            {candidate.isReferenceOnly ? " · 校准样本不足，仅作参考" : ""}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Contribution breakdown */}
+                {contributionItems.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2 text-xs font-medium text-foreground">
+                      <div className="flex items-center gap-2">
+                        <Gauge className="size-3.5" />
+                        <span>贡献拆解</span>
+                      </div>
+                      {contributionWeights?.elo_weight != null && contributionWeights?.hybrid_weight != null && (
+                        <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                          Elo {Math.round(contributionWeights.elo_weight * 100)}% / 混合 {Math.round(contributionWeights.hybrid_weight * 100)}%
+                        </span>
+                      )}
+                    </div>
+                    <div className="space-y-1">
+                      {contributionItems.map((item) => (
+                        <div key={item.key} className="border-t border-border/60 pt-1.5 first:border-t-0 first:pt-0">
+                          <div className="flex items-center justify-between gap-3 text-xs">
+                            <span className={cn("font-medium", item.available === false ? "text-muted-foreground" : "text-foreground")}>
+                              {item.label}
+                            </span>
+                            {item.available === false ? (
+                              <span className="text-xs text-muted-foreground">未参与</span>
+                            ) : (
+                              <span className="flex flex-wrap justify-end gap-x-1 font-mono text-[11px] font-medium tabular-nums">
+                                <span className={contributionTone(item.home_impact)}>
+                                  {translateTeamName(match.home_team)} {formatContributionImpact(item.home_impact, item.unit)}
+                                </span>
+                                <span className="text-muted-foreground">/</span>
+                                <span className={contributionTone(item.away_impact)}>
+                                  {translateTeamName(match.away_team)} {formatContributionImpact(item.away_impact, item.unit)}
+                                </span>
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                            {item.description}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -499,6 +656,7 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
             match={match}
             eloOddsPrediction={comparisonData.elo_odds}
             hybridPrediction={comparisonData.hybrid}
+            integratedPrediction={comparisonData.integrated}
             isLoading={isLoadingComparison}
             onApplyPrediction={() => {
               onPredictionUpdated?.();

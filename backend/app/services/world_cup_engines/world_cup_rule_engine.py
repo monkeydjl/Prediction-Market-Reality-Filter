@@ -9,30 +9,97 @@ This module implements the core mathematical models for predicting match scores:
 - Dixon-Coles draw correction
 """
 
+import json
+import logging
 import math
+import os
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
+
+
+logger = logging.getLogger(__name__)
+
+
+_PARAMS_PATH = Path(os.getenv(
+    "DIXON_COLES_PARAMS_FILE",
+    str(Path(__file__).resolve().parents[3] / "data" / "dixon_coles_params.json"),
+))
+
+# Fallback used when the fitted params file is missing (e.g. fresh checkout
+# before scripts/fit_dixon_coles.py has been run). rho=0 disables the
+# correction (pure independent Poisson) rather than the legacy +0.04 which
+# was directionally wrong (it reduced 1-1 probability instead of boosting it).
+_FALLBACK_RHO = 0.0
+
+
+@lru_cache(maxsize=1)
+def _load_rho() -> float:
+    """Load the Dixon-Coles rho from the fitted params file.
+
+    rho is in the standard Dixon-Coles (1997) convention: NEGATIVE values
+    increase the probability of low-scoring results (0-0, 1-1, 1-0, 0-1),
+    correcting Poisson's systematic underestimation of draws. The file is
+    produced by ``scripts/fit_dixon_coles.py``; if absent, returns 0.0
+    (no correction, pure independent Poisson) and logs a warning so the
+    operator knows to run the fitter.
+    """
+    try:
+        if not _PARAMS_PATH.exists():
+            logger.warning(
+                "Dixon-Coles params file not found at %s; using rho=0.0 "
+                "(no low-score correction). Run `python scripts/fit_dixon_coles.py` "
+                "to fit rho from historical results.",
+                _PARAMS_PATH,
+            )
+            return _FALLBACK_RHO
+        data = json.loads(_PARAMS_PATH.read_text(encoding="utf-8"))
+        rho = float(data.get("rho", _FALLBACK_RHO))
+        # Sanity bound: literature values are typically in [-0.2, 0.1].
+        if not (-0.5 <= rho <= 0.5):
+            logger.warning(
+                "Fitted Dixon-Coles rho=%.4f is outside expected range [-0.5, 0.5]; "
+                "clamping. Re-run the fitter if this persists.",
+                rho,
+            )
+            rho = max(-0.5, min(0.5, rho))
+        return rho
+    except Exception:
+        logger.exception(
+            "Failed to load Dixon-Coles params from %s; falling back to rho=0.0",
+            _PARAMS_PATH,
+        )
+        return _FALLBACK_RHO
 
 
 def poisson_probability(expected_goals: float, actual_goals: int) -> float:
     """Calculate Poisson probability for a given goal count."""
     return (math.exp(-expected_goals) * (expected_goals ** actual_goals)) / math.factorial(actual_goals)
 
-
 def calculate_outcome_probabilities(home_xg: float, away_xg: float, max_goals: int = 8) -> dict[str, float]:
     """Calculate win/draw/loss probabilities from expected goals using Poisson.
 
     Includes Dixon-Coles correction for low-scoring games (draw underestimation).
 
+    The tau correction uses the standard Dixon-Coles (1997) convention where
+    a NEGATIVE rho INCREASES the probability of 0-0, 1-1, 1-0, 0-1 results:
+
+        (0,0): 1 - lambda_h * lambda_a * rho      # rho<0  ->  boost 0-0
+        (1,0): 1 + lambda_a * rho                  # rho<0  ->  reduce 1-0
+        (0,1): 1 + lambda_h * rho                  # rho<0  ->  reduce 0-1
+        (1,1): 1 - rho                             # rho<0  ->  boost 1-1
+
+    The fitted rho is loaded once from ``data/dixon_coles_params.json``
+    (produced by ``scripts/fit_dixon_coles.py``); if absent, rho=0 falls
+    back to pure independent Poisson.
+
     Returns probabilities as decimals (0.0 to 1.0), not percentages.
     """
+    rho = _load_rho()
+
     home_win = 0.0
     draw = 0.0
     away_win = 0.0
-
-    # Dixon-Coles correction parameter
-    # Adjusts for the fact that Poisson underestimates draws
-    # rho < 1 increases probability of 0-0, 1-1, 1-0, 0-1 results
-    rho = 0.96  # Slight draw boost
 
     for home_goals in range(max_goals + 1):
         home_prob = poisson_probability(home_xg, home_goals)
@@ -40,16 +107,16 @@ def calculate_outcome_probabilities(home_xg: float, away_xg: float, max_goals: i
             away_prob = poisson_probability(away_xg, away_goals)
             joint_prob = home_prob * away_prob
 
-            # Apply Dixon-Coles correction for low scores
+            # Apply Dixon-Coles correction for low scores (standard convention)
             if home_goals <= 1 and away_goals <= 1:
                 if home_goals == 0 and away_goals == 0:
-                    joint_prob *= (1.0 - home_xg * away_xg * (1.0 - rho))
+                    joint_prob *= (1.0 - home_xg * away_xg * rho)
                 elif home_goals == 1 and away_goals == 0:
-                    joint_prob *= (1.0 + away_xg * (1.0 - rho))
+                    joint_prob *= (1.0 + away_xg * rho)
                 elif home_goals == 0 and away_goals == 1:
-                    joint_prob *= (1.0 + home_xg * (1.0 - rho))
+                    joint_prob *= (1.0 + home_xg * rho)
                 elif home_goals == 1 and away_goals == 1:
-                    joint_prob *= (1.0 - (1.0 - rho))
+                    joint_prob *= (1.0 - rho)
 
             if home_goals > away_goals:
                 home_win += joint_prob
@@ -116,8 +183,12 @@ def calculate_expected_goals(
     return max(0.1, min(xg, 5.0))
 
 
+def _normalize_stage(stage: str | None) -> str:
+    return (stage or "").lower().replace(" ", "_").replace("-", "_")
+
+
 def _determine_must_win(
-    stage: str,
+    stage: str | None,
     home_team: dict[str, Any],
     away_team: dict[str, Any],
     context: dict[str, Any],
@@ -131,24 +202,37 @@ def _determine_must_win(
     Returns:
         (home_must_win, away_must_win)
     """
+    stage_normalized = _normalize_stage(stage)
+
     # In knockout stages, both teams must win (no draws allowed)
-    if stage in {"round_of_16", "quarterfinal", "semifinal", "final"}:
+    if stage_normalized in {
+        "round_of_16",
+        "quarterfinal",
+        "quarter_final",
+        "semifinal",
+        "semi_final",
+        "final",
+    }:
         return True, True
 
     # Group stage: check standings if available
-    if stage == "group_stage":
+    if stage_normalized == "group_stage":
         home_standing = context.get("home_team_standing", {})
         away_standing = context.get("away_team_standing", {})
 
+        if "must_win" in home_standing or "must_win" in away_standing:
+            return bool(home_standing.get("must_win")), bool(away_standing.get("must_win"))
+
         # Check if this is the final group match
-        matches_played = home_standing.get("matches_played", 0)
-        if matches_played >= 2:  # Final group match (3rd of 3)
+        home_matches_played = home_standing.get("matches_played", home_standing.get("played", 0))
+        away_matches_played = away_standing.get("matches_played", away_standing.get("played", 0))
+        if home_matches_played >= 2 or away_matches_played >= 2:  # Final group match (3rd of 3)
             home_points = home_standing.get("points", 0)
             away_points = away_standing.get("points", 0)
 
             # If team has 0-3 points and is in bottom 2, they likely need a win
-            home_must = home_points <= 3
-            away_must = away_points <= 3
+            home_must = home_matches_played >= 2 and home_points <= 3
+            away_must = away_matches_played >= 2 and away_points <= 3
 
             return home_must, away_must
 
@@ -199,6 +283,12 @@ def predict_score_rule_based(factors: dict[str, Any]) -> dict[str, Any]:
     away_rest_days = away.get("days_since_last_match", 7)
     home_fatigue = 1.0 if home_rest_days >= 4 else (0.85 + home_rest_days * 0.0375)
     away_fatigue = 1.0 if away_rest_days >= 4 else (0.85 + away_rest_days * 0.0375)
+    home_density = home.get("schedule_density", "normal")
+    away_density = away.get("schedule_density", "normal")
+    home_density_factor = 0.96 if home_density == "high" else (0.98 if home_density == "medium" else 1.0)
+    away_density_factor = 0.96 if away_density == "high" else (0.98 if away_density == "medium" else 1.0)
+    home_fatigue *= home_density_factor
+    away_fatigue *= away_density_factor
 
     # Injury impacts
     home_injury = home.get("injury_impact", 0.0)
@@ -339,6 +429,8 @@ def predict_score_rule_based(factors: dict[str, Any]) -> dict[str, Any]:
         confidence += 0.03  # Market value data available
     if home.get("sentiment_confidence", 0) > 0.5 or away.get("sentiment_confidence", 0) > 0.5:
         confidence += 0.02  # Sentiment data available
+    if home.get("squad_size") and away.get("squad_size"):
+        confidence += 0.01  # Local squad lists improve input completeness
 
     # Apply group stage final round confidence adjustment
     confidence *= confidence_multiplier
@@ -372,6 +464,30 @@ def predict_score_rule_based(factors: dict[str, Any]) -> dict[str, Any]:
             "must_win": {
                 "home": home_must_win,
                 "away": away_must_win,
+            },
+            "schedule_factor": {
+                "home": {
+                    "days_since_last_match": home_rest_days,
+                    "matches_last_14_days": home.get("matches_last_14_days"),
+                    "schedule_density": home_density,
+                    "fatigue_multiplier": round(home_fatigue, 3),
+                },
+                "away": {
+                    "days_since_last_match": away_rest_days,
+                    "matches_last_14_days": away.get("matches_last_14_days"),
+                    "schedule_density": away_density,
+                    "fatigue_multiplier": round(away_fatigue, 3),
+                },
+            },
+            "squad_depth": {
+                "home": {
+                    "squad_size": home.get("squad_size"),
+                    "average_age": home.get("average_squad_age"),
+                },
+                "away": {
+                    "squad_size": away.get("squad_size"),
+                    "average_age": away.get("average_squad_age"),
+                },
             },
             "group_status_adjustment": {
                 "home": {

@@ -17,7 +17,7 @@
 3. **Test Configuration**
    ```bash
    cd backend
-   python test_odds_api_real.py
+   python tests/manual/manual_odds_api_real.py
    ```
 
 ## API Quota Management

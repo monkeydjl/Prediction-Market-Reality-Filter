@@ -17,12 +17,13 @@ def naive() -> datetime:
 
 class EngineAccuracyComparisonTests(unittest.TestCase):
     def setUp(self):
-        engine = create_engine("sqlite:///:memory:")
-        Base.metadata.create_all(engine)
-        self.session = sessionmaker(bind=engine)()
+        self.engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(self.engine)
+        self.session = sessionmaker(bind=self.engine)()
 
     def tearDown(self):
         self.session.close()
+        self.engine.dispose()
 
     def _run(self):
         # calculate_engine_accuracy() opens its own session; point it at ours
@@ -93,7 +94,7 @@ class EngineAccuracyComparisonTests(unittest.TestCase):
         # The newer should win.
         self._add_finished_match(0, 0)  # draw
         self._add_history("elo_odds", 2.0, 0.0, 0.8, 0.1, 0.1, naive() - timedelta(hours=9))  # old, wrong
-        self._add_history("elo_odds", 0.0, 0.0, 0.2, 0.6, 0.2, naive() - timedelta(hours=1))  # new, correct
+        self._add_history("elo_only", 0.0, 0.0, 0.2, 0.6, 0.2, naive() - timedelta(hours=1))  # new, correct
         self.session.commit()
 
         engines = self._run()["engines"]
@@ -103,6 +104,36 @@ class EngineAccuracyComparisonTests(unittest.TestCase):
         # Latest predicted 0-0 == actual draw -> exact + correct outcome
         self.assertEqual(engines["elo_odds"]["exact_score_rate"], 1.0)
         self.assertEqual(engines["elo_odds"]["outcome_accuracy"], 1.0)
+
+    def test_buckets_integrated_separately_from_elo_odds(self):
+        self.assertEqual(
+            svc._bucket_engine("integrated (elo_odds 40% + hybrid 60%)"),
+            "integrated",
+        )
+        self.assertEqual(svc._bucket_engine("elo_only"), "elo_odds")
+
+    def test_excludes_comparison_history_rows(self):
+        self._add_finished_match(2, 1)
+        timestamp = naive() - timedelta(hours=4)
+        self._add_history("hybrid", 2.0, 1.0, 0.6, 0.25, 0.15, timestamp)
+        comparison = PredictionHistory(
+            match_id="m1",
+            timestamp=timestamp,
+            predicted_home_score=0.0,
+            predicted_away_score=3.0,
+            home_win_prob=0.1,
+            draw_prob=0.1,
+            away_win_prob=0.8,
+            confidence=0.9,
+            trigger="manual_comparison",
+            prediction_method="elo_only",
+        )
+        self.session.add(comparison)
+        self.session.commit()
+
+        engines = self._run()["engines"]
+
+        self.assertEqual(set(engines.keys()), {"hybrid"})
 
     def test_no_finished_matches(self):
         result = self._run()

@@ -15,9 +15,11 @@ This is more robust than Platt Scaling for small sample sizes (e.g., 64 WC match
 import logging
 from typing import Any
 
-from sqlalchemy.orm import Session
-
-from app.models.world_cup_prediction import MatchResult, MatchPrediction
+from app.services.world_cup_quality_service import (
+    build_quality_loop_report,
+    MIN_BUCKET_SAMPLES,
+    MIN_CALIBRATION_SAMPLES,
+)
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
 
 logger = logging.getLogger(__name__)
@@ -25,7 +27,7 @@ logger = logging.getLogger(__name__)
 # 5 confidence buckets
 BUCKET_BOUNDS = [0.0, 0.2, 0.4, 0.6, 0.8, 1.01]
 BUCKET_LABELS = ["0-20%", "20-40%", "40-60%", "60-80%", "80-100%"]
-MIN_SAMPLES_PER_BUCKET = 5
+MIN_SAMPLES_PER_BUCKET = MIN_BUCKET_SAMPLES
 
 
 def _get_bucket(confidence: float) -> int:
@@ -54,67 +56,23 @@ def compute_reliability_curve(engine_name: str | None = None) -> dict[str, Any]:
     """
     session = get_prediction_session()
     try:
-        query = session.query(MatchResult).filter(
-            MatchResult.outcome_correct.isnot(None),
-            MatchResult.brier_score.isnot(None),
-        )
+        quality = build_quality_loop_report(session=session)
+        stats = quality["by_engine"].get(engine_name) if engine_name else quality["overall"]
+        if not stats:
+            stats = quality["overall"]
 
-        # Join with MatchPrediction to get engine and confidence
-        query = query.join(
-            MatchPrediction,
-            MatchResult.match_id == MatchPrediction.match_id
-        )
-
-        if engine_name:
-            query = query.filter(
-                MatchPrediction.prediction_method.contains(engine_name)
-            )
-
-        results = query.all()
-
-        if not results:
-            return {
-                "buckets": [
-                    {"label": label, "count": 0, "actual_accuracy": None, "avg_confidence": None}
-                    for label in BUCKET_LABELS
-                ],
-                "total_samples": 0,
-                "is_reliable": False,
+        buckets = [
+            {
+                "label": bucket["label"],
+                "count": bucket["count"],
+                "actual_accuracy": bucket["accuracy"],
+                "avg_confidence": bucket["avg_confidence"],
             }
-
-        # Group by bucket
-        buckets: list[dict[str, Any]] = [
-            {"label": label, "count": 0, "correct": 0, "confidence_sum": 0.0}
-            for label in BUCKET_LABELS
+            for bucket in stats["calibration_buckets"]
         ]
-
-        for r in results:
-            # Get confidence from the prediction
-            pred = session.query(MatchPrediction).filter_by(match_id=r.match_id).first()
-            if not pred or pred.confidence is None:
-                continue
-
-            conf = float(pred.confidence)
-            bucket_idx = _get_bucket(conf)
-            buckets[bucket_idx]["count"] += 1
-            buckets[bucket_idx]["correct"] += int(r.outcome_correct or 0)
-            buckets[bucket_idx]["confidence_sum"] += conf
-
-        # Compute actual accuracy per bucket
-        total_samples = sum(b["count"] for b in buckets)
-        for b in buckets:
-            if b["count"] > 0:
-                b["actual_accuracy"] = round(b["correct"] / b["count"], 3)
-                b["avg_confidence"] = round(b["confidence_sum"] / b["count"], 3)
-            else:
-                b["actual_accuracy"] = None
-                b["avg_confidence"] = None
-            del b["correct"]
-            del b["confidence_sum"]
-
-        # Check reliability: need at least MIN_SAMPLES_PER_BUCKET in at least 3 buckets
-        reliable_buckets = sum(1 for b in buckets if b["count"] >= MIN_SAMPLES_PER_BUCKET)
-        is_reliable = reliable_buckets >= 3
+        total_samples = int(stats["samples"])
+        reliable_buckets = sum(1 for bucket in buckets if bucket["count"] >= MIN_SAMPLES_PER_BUCKET)
+        is_reliable = total_samples >= MIN_CALIBRATION_SAMPLES and reliable_buckets >= 1
 
         return {
             "buckets": buckets,
@@ -144,39 +102,96 @@ def calibrate_confidence(
     Returns:
         Calibrated confidence (0-1)
     """
-    # Get reliability curve
+    return build_confidence_calibration_info(
+        raw_confidence,
+        engine_name=engine_name,
+        reliability_cache=reliability_cache,
+    )["calibrated"]
+
+
+def _public_bucket(bucket: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not bucket:
+        return None
+    return {
+        "label": bucket.get("label"),
+        "count": int(bucket.get("count") or 0),
+        "actual_accuracy": bucket.get("actual_accuracy"),
+        "avg_confidence": bucket.get("avg_confidence"),
+    }
+
+
+def build_confidence_calibration_info(
+    raw_confidence: float,
+    engine_name: str | None = None,
+    reliability_cache: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return calibrated confidence together with reliability metadata."""
+    raw = max(0.0, min(1.0, float(raw_confidence or 0.0)))
+
     if reliability_cache is None:
         reliability = compute_reliability_curve(engine_name)
     else:
         reliability = reliability_cache
 
+    bucket_idx = _get_bucket(raw)
+    buckets = reliability.get("buckets") or []
+    bucket = buckets[bucket_idx] if bucket_idx < len(buckets) else None
+    bucket_is_reliable = (
+        bucket is not None
+        and int(bucket.get("count") or 0) >= MIN_SAMPLES_PER_BUCKET
+        and bucket.get("actual_accuracy") is not None
+    )
+    info = {
+        "raw": round(raw, 3),
+        "calibrated": round(raw, 3),
+        "method": "bucketed_reliability_curve",
+        "engine_filter": reliability.get("engine_filter", engine_name),
+        "total_samples": int(reliability.get("total_samples") or 0),
+        "min_total_samples": MIN_CALIBRATION_SAMPLES,
+        "min_bucket_samples": MIN_SAMPLES_PER_BUCKET,
+        "is_reliable": bool(reliability.get("is_reliable")),
+        "bucket_is_reliable": bucket_is_reliable,
+        "is_reference_only": True,
+        "bucket": _public_bucket(bucket),
+        "applied_bucket": None,
+        "reason": "insufficient_total_samples",
+    }
+
     if not reliability.get("is_reliable"):
-        # Not enough data — return raw confidence
-        return round(raw_confidence, 3)
+        return info
 
-    bucket_idx = _get_bucket(raw_confidence)
-    bucket = reliability["buckets"][bucket_idx]
-
-    if bucket["count"] < MIN_SAMPLES_PER_BUCKET or bucket["actual_accuracy"] is None:
-        # Not enough samples in this bucket — use interpolation from neighbors
+    if not bucket or bucket["count"] < MIN_SAMPLES_PER_BUCKET or bucket["actual_accuracy"] is None:
+        # Not enough samples in this bucket; use the nearest reliable bucket.
         # Find nearest bucket with enough data
         for offset in range(1, len(BUCKET_LABELS)):
             for idx in [bucket_idx - offset, bucket_idx + offset]:
-                if 0 <= idx < len(reliability["buckets"]):
-                    b = reliability["buckets"][idx]
+                if 0 <= idx < len(buckets):
+                    b = buckets[idx]
                     if b["count"] >= MIN_SAMPLES_PER_BUCKET and b["actual_accuracy"] is not None:
-                        return round(b["actual_accuracy"], 3)
+                        info.update({
+                            "calibrated": round(max(0.05, min(0.99, float(b["actual_accuracy"]))), 3),
+                            "applied_bucket": _public_bucket(b),
+                            "reason": "nearest_reliable_bucket",
+                        })
+                        return info
         # No neighbors have data either
-        return round(raw_confidence, 3)
+        info["reason"] = "insufficient_bucket_samples"
+        return info
 
     # Use the actual accuracy of this bucket as calibrated confidence
     calibrated = bucket["actual_accuracy"]
 
     # Blend with raw confidence (50% empirical, 50% raw) to avoid overfitting
     # on small samples
-    calibrated = 0.5 * calibrated + 0.5 * raw_confidence
+    calibrated = 0.5 * calibrated + 0.5 * raw
 
-    return round(max(0.05, min(0.99, calibrated)), 3)
+    info.update({
+        "calibrated": round(max(0.05, min(0.99, calibrated)), 3),
+        "applied_bucket": _public_bucket(bucket),
+        "is_reference_only": False,
+        "reason": "bucket_reliability_curve",
+    })
+    return info
 
 
 def apply_confidence_calibration(
@@ -198,14 +213,10 @@ def apply_confidence_calibration(
     raw_conf = prediction_result.get("confidence", 0.5)
 
     try:
-        calibrated = calibrate_confidence(raw_conf, engine_name)
-        prediction_result["raw_confidence"] = round(raw_conf, 3)
-        prediction_result["confidence"] = calibrated
-        prediction_result["calibration_info"] = {
-            "raw": round(raw_conf, 3),
-            "calibrated": calibrated,
-            "method": "bucketed_reliability_curve",
-        }
+        calibration_info = build_confidence_calibration_info(raw_conf, engine_name)
+        prediction_result["raw_confidence"] = calibration_info["raw"]
+        prediction_result["confidence"] = calibration_info["calibrated"]
+        prediction_result["calibration_info"] = calibration_info
     except Exception as e:
         logger.warning("Confidence calibration failed, using raw: %s", e)
 

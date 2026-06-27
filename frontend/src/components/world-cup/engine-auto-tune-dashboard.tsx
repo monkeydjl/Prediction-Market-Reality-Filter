@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Brain, Loader2, AlertCircle, TrendingUp, Target, Zap, RefreshCw } from "lucide-react";
+import { Brain, Loader2, AlertCircle, TrendingUp, Target, Zap, RefreshCw, GitCompare } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getWorldCupApiBase } from "@/lib/env";
 import { getOperatorApiKey } from "@/lib/api";
@@ -57,11 +57,13 @@ interface TaskStatus {
   result?: AutoTuneResult;
 }
 
+type EngineKey = "elo_odds" | "hybrid" | "integrated";
+
 export function EngineAutoTuneDashboard() {
   const [tuning, setTuning] = useState(false);
   const [tuneResult, setTuneResult] = useState<AutoTuneResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selectedEngine, setSelectedEngine] = useState<"elo_odds" | "hybrid">("elo_odds");
+  const [selectedEngine, setSelectedEngine] = useState<EngineKey>("elo_odds");
   const [calibration, setCalibration] = useState<CalibrationInfo | null>(null);
   const [loadingCalibration, setLoadingCalibration] = useState(false);
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
@@ -204,7 +206,7 @@ export function EngineAutoTuneDashboard() {
         {/* Engine Selection */}
         <div className="mt-6 space-y-3">
           <label className="text-sm font-medium">选择引擎</label>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid gap-3 md:grid-cols-3">
             <button
               onClick={() => setSelectedEngine("elo_odds")}
               className={cn(
@@ -237,6 +239,23 @@ export function EngineAutoTuneDashboard() {
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
                 结合规则模型和 AI 的混合预测引擎
+              </p>
+            </button>
+            <button
+              onClick={() => setSelectedEngine("integrated")}
+              className={cn(
+                "rounded-lg border p-4 text-left transition-all",
+                selectedEngine === "integrated"
+                  ? "border-primary bg-primary/10"
+                  : "border-border hover:border-primary/50"
+              )}
+            >
+              <div className="flex items-center gap-2">
+                <GitCompare className="size-4" />
+                <span className="font-medium">集成引擎</span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                融合 Elo+赔率 与混合引擎的集成预测
               </p>
             </button>
           </div>

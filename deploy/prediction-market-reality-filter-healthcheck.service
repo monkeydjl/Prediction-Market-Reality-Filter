@@ -9,3 +9,28 @@ EnvironmentFile=/etc/prediction-market-reality-filter.env
 ExecStart=/opt/prediction-market-reality-filter/.venv/bin/python scripts/healthcheck.py
 User=pmrf
 Group=pmrf
+
+# Hardening (read-only oneshot). Same profile as the API service — healthcheck
+# only does an HTTP GET so it doesn't need write access. ReadWritePaths is kept
+# for Python's __pycache__ writes; if /opt/pmrf/backend is read-only the
+# bytecode cache is silently skipped, no failure.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/prediction-market-reality-filter/backend
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RemoveIPC=true
+RestrictNamespaces=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service

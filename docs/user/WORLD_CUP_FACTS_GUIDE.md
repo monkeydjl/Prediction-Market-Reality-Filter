@@ -38,6 +38,60 @@ GET /api/events/sports/world-cup/facts?kind=injury
 GET /api/events/sports/world-cup/facts?team=Brazil
 ```
 
+Operational consistency checks:
+
+```text
+GET /api/analytics/result-consistency?limit=25
+GET /api/analytics/consistency-repair-plan?limit=25
+GET /api/analytics/consistency-repair-preview?history_ids=239&history_ids=240
+GET /api/analytics/result-fact-backfill/runs?limit=5
+GET /api/analytics/post-match-backfill/runs?limit=5
+```
+
+These analytics reads are safe inspection endpoints. Analytics writes require
+`X-API-Key`; use optional `X-Client-Source` and `X-Operator` headers to identify
+the caller in audit runs:
+
+```text
+POST /api/analytics/result-fact-backfill?limit=100&dry_run=true&confirm=false
+Header: X-API-Key: <API_WRITE_KEY>
+Header: X-Client-Source: ops-script
+Header: X-Operator: <operator-id>
+
+POST /api/analytics/consistency-repair?history_ids=239&history_ids=240&dry_run=true&confirm=false
+Header: X-API-Key: <API_WRITE_KEY>
+Header: X-Client-Source: ops-script
+Header: X-Operator: <operator-id>
+
+POST /api/analytics/post-match-backfill?dry_run=true
+Header: X-API-Key: <API_WRITE_KEY>
+Header: X-Client-Source: ops-script
+Header: X-Operator: <operator-id>
+
+POST /api/analytics/reconcile-scoring
+Header: X-API-Key: <API_WRITE_KEY>
+```
+
+`result-fact-backfill` and `consistency-repair` default to dry-run behavior; a
+real write requires `dry_run=false&confirm=true`. `post-match-backfill` also
+requires `X-API-Key`; run `dry_run=true` first and only use `dry_run=false`
+after reviewing the candidates.
+
+World Cup prediction write operations also require `X-API-Key`, including:
+
+```text
+POST /api/world-cup/predictions/init-db
+POST /api/world-cup/predictions/sync-fixtures
+POST /api/world-cup/predictions/matches/{match_id}/predict
+POST /api/world-cup/predictions/matches/{match_id}/analyze
+POST /api/world-cup/predictions/batch-predict
+POST /api/world-cup/predictions/batch-switch-engine
+GET  /api/world-cup/predictions/batch-switch-engine-stream
+POST /api/world-cup/predictions/auto-tune/{engine_name}
+POST /api/world-cup/predictions/batch-optimize
+POST /api/world-cup/predictions/matches/{match_id}/optimize
+```
+
 Import facts:
 
 ```text
@@ -340,6 +394,11 @@ Header: X-API-Key: <API_WRITE_KEY>
 
 ```powershell
 $key = "<API_WRITE_KEY>"
+$headers = @{
+  "X-API-Key" = $key
+  "X-Client-Source" = "ops-script"
+  "X-Operator" = "<operator-id>"
+}
 $body = Get-Content -Raw docs\examples\world-cup-facts.sample.json
 Invoke-RestMethod `
   -Method Post `
@@ -352,6 +411,16 @@ Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:8000/api/events/sports/world-cup/resolve?dry_run=true" `
   -Headers @{ "X-API-Key" = $key }
+```
+
+For protected analytics writes, prefer the shared `$headers` object so audit
+runs capture the caller:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/analytics/result-fact-backfill?limit=100&dry_run=true&confirm=false" `
+  -Headers $headers
 ```
 
 For a trusted match-data snapshot, switch the import URL and body file:

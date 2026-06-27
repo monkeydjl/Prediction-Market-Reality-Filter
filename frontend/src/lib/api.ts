@@ -12,6 +12,7 @@ import { getApiBase } from "./env";
 // under /api). In dev, next.config rewrites proxy /api/* to :8000.
 const BASE = getApiBase();
 const OPERATOR_KEY_STORAGE = "pmrf.operatorApiKey";
+const OPERATOR_ID_STORAGE = "pmrf.operatorId";
 const GET_CACHE_TTL_MS = 15_000;
 
 const getCache = new Map<string, { expiresAt: number; value: unknown }>();
@@ -33,6 +34,18 @@ export function setOperatorApiKey(value: string): void {
   const key = value.trim();
   if (key) window.sessionStorage.setItem(OPERATOR_KEY_STORAGE, key);
   else window.sessionStorage.removeItem(OPERATOR_KEY_STORAGE);
+}
+
+export function getOperatorId(): string {
+  if (typeof window === "undefined") return "";
+  return window.sessionStorage.getItem(OPERATOR_ID_STORAGE) ?? "";
+}
+
+export function setOperatorId(value: string): void {
+  if (typeof window === "undefined") return;
+  const operator = value.trim();
+  if (operator) window.sessionStorage.setItem(OPERATOR_ID_STORAGE, operator);
+  else window.sessionStorage.removeItem(OPERATOR_ID_STORAGE);
 }
 
 function detailToText(detail: unknown): string {
@@ -108,6 +121,8 @@ async function api<T>(
   }
   const operatorKey = getOperatorApiKey();
   if (operatorKey && !headers.has("X-API-Key")) headers.set("X-API-Key", operatorKey);
+  const operatorId = getOperatorId();
+  if (operatorId && !headers.has("X-Operator")) headers.set("X-Operator", operatorId);
 
   const controller = new AbortController();
   const timeout = globalThis.setTimeout(

@@ -10,6 +10,15 @@ export function getApiBase(): string {
   throw new Error("NEXT_PUBLIC_API_BASE must be a relative path or an http(s) URL");
 }
 
+function isLocalStaticFrontend(): boolean {
+  if (typeof window === "undefined") return false;
+  if (process.env.NODE_ENV !== "production") return false;
+  return (
+    window.location.port === "3000" &&
+    ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)
+  );
+}
+
 /**
  * Get the API base URL for World Cup components.
  *
@@ -21,12 +30,13 @@ export function getApiBase(): string {
  * - ``NEXT_PUBLIC_API_BASE`` = ``"https://host/api"`` → returns ``"https://host"``
  * - ``NEXT_PUBLIC_API_BASE`` = ``"https://host"`` → returns ``"https://host"``
  *
- * Previously, World Cup components used NEXT_PUBLIC_API_BASE_URL or
- * NEXT_PUBLIC_API_URL with a hardcoded http://localhost:8000 fallback,
- * which broke in production.
+ * Local static exports served on :3000 fall back to the backend on :8000.
+ * Deployed builds should set NEXT_PUBLIC_API_BASE or serve the export from
+ * FastAPI so same-origin /api requests work.
  */
 export function getWorldCupApiBase(): string {
   const base = process.env.NEXT_PUBLIC_API_BASE ?? "/api";
+  if (base === "/api" && isLocalStaticFrontend()) return "http://localhost:8000";
   // Relative path "/api" → empty string (fetch paths already include /api/)
   if (base === "/api") return "";
   // Strip trailing /api or /

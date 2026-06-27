@@ -56,7 +56,7 @@ async def fetch_sec_filings(limit: int = 10) -> list[dict]:
     url = settings.SEC_EDGAR_RSS_URL
     if not url:
         return []
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None,
         partial(_fetch_sync, url, settings.SEC_SOURCE_NAME, settings.SEC_USER_AGENT, limit),

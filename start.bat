@@ -65,8 +65,10 @@ echo   Frontend      : http://localhost:3000
 echo   Backend API   : http://localhost:8000
 echo   API docs      : http://localhost:8000/docs
 echo.
-start "PMRF backend :8000" cmd /k "cd /d "%BACKEND%" && python run.py"
-start "PMRF frontend :3000" cmd /k "cd /d "%FRONTEND%\out" && python -m http.server 3000 --bind localhost"
+REM Launch the server processes directly. A cmd /k parent would keep its
+REM working directory open after the server is killed, which can lock out\.
+start "PMRF backend :8000" /D "%BACKEND%" python run.py
+start "PMRF frontend :3000" /D "%FRONTEND%\out" python -m http.server 3000 --bind localhost
 REM open the browser once both servers are up
 start "" /b powershell -NoProfile -Command "Start-Sleep -Seconds 6; Start-Process 'http://localhost:3000'"
 goto :eof
@@ -87,8 +89,11 @@ echo.
 echo   Frontend (dev) : http://localhost:3000
 echo   Backend / API  : http://localhost:8000
 echo.
-start "PMRF backend :8000" cmd /k "cd /d "%BACKEND%" && set SERVER_RELOAD=true&& python run.py"
-start "PMRF frontend :3000" cmd /k "cd /d "%FRONTEND%" && npm run dev"
+REM Keep dev launches direct for the same reason: no persistent cmd /k shell.
+set "SERVER_RELOAD=true"
+start "PMRF backend :8000" /D "%BACKEND%" python run.py
+set "SERVER_RELOAD="
+start "PMRF frontend :3000" /D "%FRONTEND%" npm.cmd run dev
 REM Next dev needs a few seconds to compile before the page is ready
 start "" /b powershell -NoProfile -Command "Start-Sleep -Seconds 8; Start-Process 'http://localhost:3000'"
 goto :eof

@@ -7,9 +7,10 @@ This module schedules automatic prediction updates:
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.services.world_cup_match_service import sync_world_cup_fixtures
+from app.services.world_cup_post_match_backfill_service import run_post_match_backfill
 from app.services.world_cup_prediction_pipeline import batch_predict_matches
 
 logger = logging.getLogger(__name__)
@@ -23,12 +24,13 @@ async def run_daily_prediction_update():
     2. Run predictions for all remaining matches
     """
 
-    logger.info("World Cup daily update starting at %s", datetime.utcnow().isoformat())
+    logger.info("World Cup daily update starting at %s", datetime.now(timezone.utc).isoformat())
 
     try:
-        # Step 1: Sync fixtures
+        # Step 1: Sync fixtures (run sync I/O in a worker thread to avoid
+        # blocking the event loop; sync_world_cup_fixtures does HTTP + DB).
         logger.info("Syncing fixtures from API-Football...")
-        sync_result = sync_world_cup_fixtures()
+        sync_result = await asyncio.to_thread(sync_world_cup_fixtures)
 
         if sync_result.get("status") == "error":
             logger.error("Fixture sync failed: %s", sync_result.get("error"))
@@ -42,7 +44,23 @@ async def run_daily_prediction_update():
                      sync_result.get("fixtures_parsed", 0),
                      sync_result.get("remaining_matches", 0))
 
-        # Step 2: Run predictions for all remaining matches
+        # Step 2: Score any matches that became finished during fixture sync
+        # (run_post_match_backfill does HTTP + DB — offload to thread).
+        logger.info("Running post-match backfill scoring...")
+        post_match_result = await asyncio.to_thread(
+            run_post_match_backfill,
+            dry_run=False,
+            sync_first=False,
+        )
+
+        logger.info(
+            "Post-match backfill completed — candidates: %s, scored: %s, errors: %s",
+            post_match_result.get("candidate_count", 0),
+            post_match_result.get("scoring", {}).get("scored", 0),
+            post_match_result.get("scoring", {}).get("errors", 0),
+        )
+
+        # Step 3: Run predictions for all remaining matches
         logger.info("Running predictions...")
         predict_result = await batch_predict_matches(
             match_ids=None,  # All remaining matches
@@ -57,8 +75,9 @@ async def run_daily_prediction_update():
 
         return {
             "status": "ok",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "fixture_sync": sync_result,
+            "post_match_backfill": post_match_result,
             "predictions": predict_result
         }
 

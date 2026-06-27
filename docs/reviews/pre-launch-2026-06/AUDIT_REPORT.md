@@ -105,7 +105,7 @@ except Exception as exc:
 
 ### ✅ GOOD: API Key Protection
 **File:** `backend/.env` (not tracked by git)  
-**Observation:** The `.env` file contains a real API key (`sk-56ec15ae124e457bbb504602ea03ef4d`) but is correctly excluded from git via `.gitignore`. The `.env.example` file provides a safe template.
+**Observation:** The `.env` file contains a real API key (`sk-<redacted — rotate immediately>`) but is correctly excluded from git via `.gitignore`. The `.env.example` file provides a safe template.
 
 **Recommendation:** Consider adding a pre-commit hook to prevent accidental secret commits.
 
@@ -123,6 +123,8 @@ logger.info("OPENAI_API_KEY is configured (len=%d)", len(settings.OPENAI_API_KEY
 ---
 
 ### P2-004: CORS Configuration Too Permissive for Production
+> ✅ **已修复（2026-06-22）**：`backend/app/main.py:129-140` 已实现强校验，禁止 `*` 通配 + 凭据组合，生产环境必须显式配置 `CORS_ALLOWED_ORIGINS`。本段保留仅作历史记录。
+
 **File:** `backend/app/core/config.py:23-27`  
 **Issue:** Default CORS origins include localhost addresses:
 ```python

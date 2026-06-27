@@ -113,18 +113,29 @@ def last_run(job_name: str) -> dict[str, Any] | None:
     return _row_to_dict(row) if row else None
 
 
-def recent_runs(limit: int = 20) -> list[dict[str, Any]]:
+def recent_runs(limit: int = 20, job_name: str | None = None) -> list[dict[str, Any]]:
     path = sqlite_db.loop_db_path()
     _ensure_schema(path)
     with reading(path) as conn:
-        rows = conn.execute(
-            """
-            SELECT * FROM loop_runs
-            ORDER BY started_at DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        if job_name:
+            rows = conn.execute(
+                """
+                SELECT * FROM loop_runs
+                WHERE job_name=?
+                ORDER BY started_at DESC
+                LIMIT ?
+                """,
+                (job_name, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM loop_runs
+                ORDER BY started_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
     return [_row_to_dict(row) for row in rows]
 
 

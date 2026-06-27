@@ -8,7 +8,7 @@ This module implements a rich set of prediction factors across 5 categories:
 5. Model Features: Derived signals for ML models
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 import math
 

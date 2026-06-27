@@ -2,13 +2,31 @@
 
 ## Required Production Settings
 
-- Set `API_WRITE_KEY` and send it as `X-API-Key` for discovery, analysis,
-  manual resolution, auto-resolution, tracking, and link verification.
+- Set `API_WRITE_KEY` and send it as `X-API-Key` for all protected writes.
+  This includes discovery, analysis, manual resolution, auto-resolution,
+  tracking, link verification, analytics repair/backfill/reconcile endpoints,
+  World Cup prediction writes, and the write-like
+  `/api/world-cup/predictions/batch-switch-engine-stream` GET stream.
 - Set `CORS_ALLOWED_ORIGINS` to the deployed dashboard origins. Do not use `*`
   when credentials are enabled.
+- If overriding `CORS_ALLOWED_HEADERS`, include `X-API-Key`,
+  `X-Client-Source`, and `X-Operator` so protected browser writes can pass
+  preflight.
 - Keep `RATE_LIMIT_ENABLED=true` unless a trusted reverse proxy provides an
   equivalent limit.
 - Keep `LOG_FILE` on persistent storage.
+
+## Operator Audit Headers
+
+Protected analytics writes accept optional provenance headers:
+
+- `X-Client-Source`: stable caller name, such as `world-cup-dashboard`,
+  `ops-script`, or `scheduler`.
+- `X-Operator`: human or automation operator identifier.
+
+These headers are stored in audit run metadata for result fact backfill,
+consistency repair, and post-match backfill. `X-API-Key` is only validated and
+must not be copied into audit metadata, logs, URLs, or committed examples.
 
 ## Health Check
 
@@ -31,6 +49,26 @@ and SQLite WAL/SHM files when present.
 By default the script keeps the latest 30 `pmrf-backup-*.zip` archives in the
 backup directory. Override this with `--keep N` if the host has a different
 retention policy.
+
+### Encryption at rest
+
+Set `BACKUP_ENCRYPTION_KEY` in `backend/.env` (or pass `--encryption-key`) to
+write each archive as a pyzipper AES-256 encrypted zip. Without the key the
+archive cannot be restored, so store the passphrase alongside your other
+secrets (e.g. in the same secrets manager that holds `API_WRITE_KEY`). Leave
+`BACKUP_ENCRYPTION_KEY` empty only when the backup volume is already encrypted
+at rest (e.g. an encrypted LVM / EBS volume).
+
+To restore an encrypted archive:
+
+```bash
+/opt/prediction-market-reality-filter/.venv/bin/python -c "
+import pyzipper
+with pyzipper.AESZipFile('pmrf-backup-YYYYMMDD-HHMMSSZ.zip') as zf:
+    zf.setpassword(b'YOUR_PASSPHRASE')
+    zf.extractall('/path/to/restore/dir')
+"
+```
 
 Enable the daily backup timer (runs backup_stores.py via systemd):
 

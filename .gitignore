@@ -39,6 +39,8 @@ backend/uvicorn_error.log
 backend/fifa_api_response.json
 backend/fifa_matches.html
 backend/wc_live_match.json
+backend/*.crosslock
+backend/sports_facts.json
 backend/world_cup_predictions.db-shm
 backend/world_cup_predictions.db-wal
 backend/world_cup_predictions.db
@@ -88,4 +90,8 @@ Thumbs.db
 
 # ── Backups (local data snapshots, e.g. event_store.json.bak) ─────────────────
 *.bak
+*.db.bak*
+*.db-*
+backend/*.db.bak*
+backend/*.db-*
 nul

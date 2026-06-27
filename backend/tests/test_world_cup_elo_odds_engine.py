@@ -18,28 +18,28 @@ class EloOddsEngineGoldenTests(unittest.TestCase):
     """Lock numerical behavior of elo_odds engine with fixed inputs."""
 
     def test_calculate_elo_win_probability_even(self):
-        """Lock Elo probability calculation for even matchup."""
+        """Lock Elo probability calculation for even matchup (BTD model)."""
         probs = calculate_elo_win_probability(2000, 2000, is_knockout=False)
-        # Even Elo -> 50/50 split after draw
-        self.assertAlmostEqual(probs["home_win"], 0.3650, places=4)
-        self.assertAlmostEqual(probs["draw"], 0.2700, places=4)
-        self.assertAlmostEqual(probs["away_win"], 0.3650, places=4)
+        # Even Elo -> 50/50 split after draw; BTD gamma gives ~0.25 draw
+        self.assertAlmostEqual(probs["home_win"], 0.3743, places=4)
+        self.assertAlmostEqual(probs["draw"], 0.2515, places=4)
+        self.assertAlmostEqual(probs["away_win"], 0.3743, places=4)
 
     def test_calculate_elo_win_probability_advantage(self):
-        """Lock Elo probability with +100 Elo advantage."""
+        """Lock Elo probability with +100 Elo advantage (BTD model)."""
         probs = calculate_elo_win_probability(2100, 2000, is_knockout=False)
         # +100 Elo should give home team advantage
-        self.assertAlmostEqual(probs["home_win"], 0.4802, places=4)
-        self.assertAlmostEqual(probs["draw"], 0.2498, places=4)
-        self.assertAlmostEqual(probs["away_win"], 0.2700, places=4)
+        self.assertAlmostEqual(probs["home_win"], 0.4840, places=4)
+        self.assertAlmostEqual(probs["draw"], 0.2438, places=4)
+        self.assertAlmostEqual(probs["away_win"], 0.2722, places=4)
 
     def test_calculate_elo_win_probability_knockout(self):
-        """Lock knockout stage draw probability reduction."""
+        """Lock knockout stage draw probability reduction (BTD gamma scaled)."""
         group_probs = calculate_elo_win_probability(2000, 2000, is_knockout=False)
         knockout_probs = calculate_elo_win_probability(2000, 2000, is_knockout=True)
         # Knockout should have lower draw probability
         self.assertLess(knockout_probs["draw"], group_probs["draw"])
-        self.assertAlmostEqual(knockout_probs["draw"], 0.2000, places=4)
+        self.assertAlmostEqual(knockout_probs["draw"], 0.1991, places=4)
 
     def test_odds_to_probabilities_removes_margin(self):
         """Lock odds-to-probability conversion with margin removal."""
@@ -117,13 +117,13 @@ class EloOddsEngineGoldenTests(unittest.TestCase):
         self.assertEqual(pred["elo_ratings"]["difference"], 50.0)
 
         # Lock predicted score
-        self.assertAlmostEqual(pred["predicted_score"]["home"], 1.45, places=2)
-        self.assertAlmostEqual(pred["predicted_score"]["away"], 1.17, places=2)
+        self.assertAlmostEqual(pred["predicted_score"]["home"], 1.46, places=2)
+        self.assertAlmostEqual(pred["predicted_score"]["away"], 1.18, places=2)
 
-        # Lock outcome probabilities (Elo-only)
-        self.assertAlmostEqual(pred["outcome_probabilities"]["home_win"], 0.4230, places=4)
-        self.assertAlmostEqual(pred["outcome_probabilities"]["draw"], 0.2599, places=4)
-        self.assertAlmostEqual(pred["outcome_probabilities"]["away_win"], 0.3172, places=4)
+        # Lock outcome probabilities (Elo-only, BTD model)
+        self.assertAlmostEqual(pred["outcome_probabilities"]["home_win"], 0.4289, places=4)
+        self.assertAlmostEqual(pred["outcome_probabilities"]["draw"], 0.2495, places=4)
+        self.assertAlmostEqual(pred["outcome_probabilities"]["away_win"], 0.3216, places=4)
 
         # Lock confidence
         self.assertAlmostEqual(pred["confidence"], 0.900, places=3)
@@ -151,17 +151,17 @@ class EloOddsEngineGoldenTests(unittest.TestCase):
         self.assertAlmostEqual(pred["market_probabilities"]["draw"], 0.2909, places=4)
         self.assertAlmostEqual(pred["market_probabilities"]["away_win"], 0.2659, places=4)
 
-        # Lock fused outcome probabilities (30% Elo + 70% odds)
-        self.assertAlmostEqual(pred["outcome_probabilities"]["home_win"], 0.4232, places=4)
-        self.assertAlmostEqual(pred["outcome_probabilities"]["draw"], 0.2840, places=4)
-        self.assertAlmostEqual(pred["outcome_probabilities"]["away_win"], 0.2928, places=4)
+        # Lock fused outcome probabilities (30% Elo + 70% odds, BTD model)
+        self.assertAlmostEqual(pred["outcome_probabilities"]["home_win"], 0.4258, places=4)
+        self.assertAlmostEqual(pred["outcome_probabilities"]["draw"], 0.2790, places=4)
+        self.assertAlmostEqual(pred["outcome_probabilities"]["away_win"], 0.2952, places=4)
 
         # Lock predicted score
-        self.assertAlmostEqual(pred["predicted_score"]["home"], 1.46, places=2)
-        self.assertAlmostEqual(pred["predicted_score"]["away"], 1.12, places=2)
+        self.assertAlmostEqual(pred["predicted_score"]["home"], 1.47, places=2)
+        self.assertAlmostEqual(pred["predicted_score"]["away"], 1.13, places=2)
 
         # Lock confidence (high agreement between Elo and market)
-        self.assertAlmostEqual(pred["confidence"], 0.810, places=2)
+        self.assertAlmostEqual(pred["confidence"], 0.802, places=2)
 
     def test_predict_match_elo_odds_score_matrix(self):
         """Lock that score_probability_matrix is present and valid."""

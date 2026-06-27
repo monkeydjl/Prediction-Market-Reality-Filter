@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Clock, TrendingUp, Target, AlertCircle, Zap, Brain } from "lucide-react";
+import { Clock, TrendingUp, Target, AlertCircle, Zap, Brain, GitCompare, type LucideIcon } from "lucide-react";
 import type { MatchFixture, PredictionHistoryEntry } from "@/lib/world-cup-predictions";
 import { fetchPredictionHistory } from "@/lib/world-cup-predictions";
 import { translateTeamName } from "@/lib/team-names-zh";
@@ -11,9 +11,20 @@ interface PredictionHistoryCardProps {
   match: MatchFixture;
 }
 
-function formatTimestamp(isoString: string): string {
-  const date = new Date(isoString);
+const HISTORY_TIME_ZONES = [
+  { label: "北京时间", zoneLabel: "中国", timeZone: "Asia/Shanghai" },
+  { label: "世界杯时间", zoneLabel: "美东", timeZone: "America/New_York" },
+] as const;
+
+function parseTimestamp(isoString: string): Date {
+  const hasTimeZone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(isoString);
+  return new Date(hasTimeZone ? isoString : `${isoString}Z`);
+}
+
+function formatTimestamp(isoString: string, timeZone: string): string {
+  const date = parseTimestamp(isoString);
   return new Intl.DateTimeFormat("zh-CN", {
+    timeZone,
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
@@ -21,14 +32,21 @@ function formatTimestamp(isoString: string): string {
   }).format(date);
 }
 
-function getEngineLabel(method?: string): { label: string; icon: typeof Zap; color: string } {
+function getEngineLabel(method?: string): { label: string; icon: LucideIcon; color: string } {
   if (!method) return { label: "未知", icon: Brain, color: "text-muted-foreground" };
 
-  if (method.includes("elo_odds") || method.includes("elo") && method.includes("odds")) {
+  const normalized = method.toLowerCase();
+  if (normalized.includes("integrated")) {
+    return { label: "集成引擎", icon: GitCompare, color: "text-primary" };
+  }
+  if (normalized.startsWith("elo") || normalized.includes("elo_odds") || (normalized.includes("elo") && normalized.includes("odds"))) {
     return { label: "Elo+赔率", icon: Zap, color: "text-primary" };
   }
+  if (normalized === "rule_only" || normalized === "rule_dominant" || normalized.includes("hybrid")) {
+    return { label: "混合引擎", icon: Brain, color: "text-muted-foreground" };
+  }
 
-  return { label: "混合引擎", icon: Brain, color: "text-muted-foreground" };
+  return { label: method, icon: Brain, color: "text-muted-foreground" };
 }
 
 function calculateScoreDiff(
@@ -36,6 +54,18 @@ function calculateScoreDiff(
   actual: { home: number; away: number }
 ): number {
   return Math.abs(predicted.home - actual.home) + Math.abs(predicted.away - actual.away);
+}
+
+function probabilityLabel(probability: number): string {
+  return `${Math.round(probability * 100)}%`;
+}
+
+function contributionImpact(value: number, unit: string): string {
+  const sign = value > 0 ? "+" : "";
+  if (unit === "pp") return `${sign}${value.toFixed(1)}pp`;
+  if (unit === "xg") return `${sign}${value.toFixed(2)} xG`;
+  if (unit === "%xg") return `${sign}${value.toFixed(1)}% xG`;
+  return `${sign}${value.toFixed(2)} ${unit}`;
 }
 
 export function PredictionHistoryCard({ match }: PredictionHistoryCardProps) {
@@ -143,6 +173,16 @@ export function PredictionHistoryCard({ match }: PredictionHistoryCardProps) {
           const isLatest = idx === dedupedHistory.length - 1;
           const predictedHome = Math.round(entry.predicted_score.home);
           const predictedAway = Math.round(entry.predicted_score.away);
+          const calibration = entry.confidence_calibration ?? null;
+          const rawConfidence = calibration?.raw ?? entry.raw_confidence ?? null;
+          const calibrationSamples =
+            calibration?.applied_bucket?.count ??
+            calibration?.bucket?.count ??
+            calibration?.total_samples ??
+            null;
+          const contributionItems = (entry.explanation_contributions?.items ?? [])
+            .filter((item) => item && item.label)
+            .slice(0, 2);
 
           let accuracy: "exact" | "close" | "wrong" | null = null;
           let scoreDiff: number | null = null;
@@ -174,9 +214,15 @@ export function PredictionHistoryCard({ match }: PredictionHistoryCardProps) {
                 {/* Timestamp & Badge */}
                 <div className="flex items-center gap-3">
                   <div className="flex flex-col items-end gap-1">
-                    <span className="text-xs text-muted-foreground">
-                      {formatTimestamp(entry.timestamp)}
-                    </span>
+                    <div className="flex flex-col items-end gap-0.5 text-xs text-muted-foreground">
+                      {HISTORY_TIME_ZONES.map((zone) => (
+                        <span key={zone.timeZone}>
+                          {zone.label}
+                          <span className="mx-1 text-[10px] opacity-70">({zone.zoneLabel})</span>
+                          {formatTimestamp(entry.timestamp, zone.timeZone)}
+                        </span>
+                      ))}
+                    </div>
                     {isLatest && (
                       <span className="rounded bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground">
                         最新
@@ -254,6 +300,30 @@ export function PredictionHistoryCard({ match }: PredictionHistoryCardProps) {
                   )}
                 </div>
               </div>
+
+              {(rawConfidence != null || contributionItems.length > 0) && (
+                <div className="mt-2 space-y-1 rounded-md bg-secondary/30 px-3 py-2 text-[11px] text-muted-foreground">
+                  {rawConfidence != null && (
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span>Calibration</span>
+                      <span className="font-mono tabular-nums">
+                        {probabilityLabel(rawConfidence)} -&gt; {probabilityLabel(entry.confidence)}
+                        {calibrationSamples != null ? ` n=${calibrationSamples}` : ""}
+                      </span>
+                    </div>
+                  )}
+                  {contributionItems.length > 0 && (
+                    <div className="flex flex-wrap gap-x-2 gap-y-1">
+                      <span>Contrib</span>
+                      {contributionItems.map((item) => (
+                        <span key={item.key} className="font-mono tabular-nums">
+                          {item.label} {contributionImpact(item.home_impact, item.unit)}/{contributionImpact(item.away_impact, item.unit)}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Change Indicator */}
               {idx > 0 && (

@@ -17,7 +17,7 @@
 ## 🔴 严重（需在仓库外手动处理，代码层面无法完成）
 
 ### P-1 真实 API Key 仍在 git 历史中
-- **证据：** 密钥 `sk-56ec15ae124e457bbb504602ea03ef4d` 曾出现在
+- **证据：** 密钥 `sk-<redacted — rotate immediately>` 曾出现在
   - `docs/reviews/pre-launch-2026-06/AUDIT_REPORT.md:108`（本轮已替换为占位符）
   - `docs/reviews/deliverables/code-review-2026-06-21.md:31`（本轮已替换为占位符）
   - 但**旧提交的 git 历史仍含明文密钥**。
@@ -217,4 +217,4 @@
 - 后端导入：`sentiment_aggregator` / `semantic_relevance_service` / `loop_status_service` 导入正常。
 - 后端 mypy（宽松基线）：256 既有错误，CI `continue-on-error` 非阻塞。
 - 前端：`tsc --noEmit` exit 0；`vitest run` → 67 passed / 22 files。
-- 仓库：`grep -r "56ec15ae124e457bbb504602ea03ef4d"` 无匹配。
+- 仓库：`grep -r "<redacted>"` 无明文密钥匹配（HEAD 树已全部替换为占位符）。

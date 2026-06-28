@@ -31,6 +31,77 @@ logger = logging.getLogger(__name__)
 _CANDIDATE_POOL_FACTOR = 3
 
 
+_STRENGTH_TO_CONFIDENCE = {"HIGH": "high", "MEDIUM": "medium", "LOW": "low"}
+
+
+def _build_actionable_recommendation(
+    analysis: dict[str, Any],
+    *,
+    change: float,
+) -> dict[str, Any] | None:
+    """Build a structured actionable recommendation from the legacy signal.
+
+    Returns None when:
+    - ACTIONABLE_RECOMMENDATION_ENABLED is false
+    - signal is WATCHLIST and edge is small (direction=WAIT but still returns
+      a recommendation; only returns None when feature disabled)
+
+    Maps legacy_analysis.signal -> direction (YES/NO/AVOID/WAIT) and
+    signal_strength -> confidence (high/medium/low).
+    """
+    if not settings.ACTIONABLE_RECOMMENDATION_ENABLED:
+        return None
+
+    signal = str(analysis.get("signal") or "WATCHLIST")
+    signal_direction = str(analysis.get("signal_direction") or "NEUTRAL")
+    signal_strength = str(analysis.get("signal_strength") or "LOW")
+    confidence = _STRENGTH_TO_CONFIDENCE.get(signal_strength, "low")
+
+    # Direction from signal
+    if signal_direction in ("LONG", "STRONG_LONG"):
+        direction = "YES"
+    elif signal_direction in ("SHORT", "STRONG_SHORT"):
+        direction = "NO"
+    else:
+        direction = "WAIT"
+
+    # AVOID override: high risk + low confidence
+    risk_flags = analysis.get("risk_flags", [])
+    if not isinstance(risk_flags, list):
+        risk_flags = []
+    if len(risk_flags) >= 2 and confidence == "low":
+        direction = "AVOID"
+
+    position_size = safe_float(analysis.get("position_size"), 0.02)
+    suggested_allocation_pct = round(position_size * 100, 2)
+    expected_edge = safe_float(analysis.get("expected_edge"), 0.0)
+    edge_pct = round(expected_edge * 100, 2)
+    risk_level = str(analysis.get("risk_level") or "UNKNOWN").lower()
+    if risk_level not in ("low", "medium", "high"):
+        risk_level = "medium"
+
+    baseline = safe_float(analysis.get("market_probability"), 50.0)
+    estimated = safe_float(analysis.get("ai_probability"), baseline)
+    rationale = (
+        f"市场定价 {baseline:.1f}%，估计 {estimated:.1f}%，"
+        f"信号 {signal}，证据强度 {safe_float(analysis.get('evidence_strength'), 0.0):.2f}。"
+    )
+    # calibration_status is set by the caller (analyze_event) which has access
+    # to segment stats; default to uncalibrated_provisional for the build_event_record
+    # path (calibration_feedback may override later).
+    calibration_status = "uncalibrated_provisional"
+
+    return {
+        "direction": direction,
+        "confidence": confidence,
+        "suggested_allocation_pct": suggested_allocation_pct,
+        "edge": edge_pct,
+        "risk_level": risk_level,
+        "rationale": rationale,
+        "calibration_status": calibration_status,
+    }
+
+
 def build_event_record(
     analysis: dict[str, Any],
     source: dict[str, Any] | None = None,
@@ -117,7 +188,15 @@ def build_event_record(
                 estimated,
                 trust_score,
             ),
-            "recommended_action": recommended_action(trust_score, impact_score, change),
+            "recommended_action": recommended_action(
+                trust_score,
+                impact_score,
+                change,
+                signal_direction=analysis.get("signal_direction"),
+                confidence=_STRENGTH_TO_CONFIDENCE.get(
+                    str(analysis.get("signal_strength") or "LOW"), "low"
+                ),
+            ),
         },
         # legacy_analysis carries the full legacy market-analysis dict
         # (signal, position_size, expected_edge, ...) retained verbatim for
@@ -127,6 +206,9 @@ def build_event_record(
         # the canonical surface.
         "legacy_analysis": analysis,
         "semantics": _build_semantics(analysis),
+        "actionable_recommendation": _build_actionable_recommendation(
+            analysis, change=change
+        ),
     }
 
 

@@ -814,6 +814,85 @@ class CollectCandidateEventsCryptoOptInTests(unittest.TestCase):
         self.assertIn("Will Bitcoin reach $100k?", questions)
 
 
+class ActionableRecommendationTests(unittest.TestCase):
+    """Tests for the actionable_recommendation field on EventRecord (Stage 3)."""
+
+    def _analysis(self, **overrides):
+        """Minimal analysis dict that build_event_record accepts."""
+        base = {
+            "event_question": "Will X happen?",
+            "market_probability": 40.0,
+            "ai_probability": 55.0,
+            "title_zh": "X 是否发生",
+            "narrative_summary": "Evidence suggests X is likely.",
+            "confidence_score": 0.7,
+            "news_quality_score": 0.6,
+            "evidence_strength": 0.5,
+            "evidence_conflict_score": 0.2,
+            "freshness_score": 0.8,
+            "resolution_relevance_score": 0.5,
+            "source_count": 5,
+            "risk_level": "MEDIUM",
+            "risk_flags": [],
+            "signal": "LONG",
+            "signal_direction": "LONG",
+            "signal_strength": "HIGH",
+            "position_size": 0.10,
+            "expected_edge": 0.15,
+            "divergence": 15.0,
+            "base_rate_category": "test",
+        }
+        base.update(overrides)
+        return base
+
+    def test_long_signal_maps_to_yes_direction(self):
+        record = build_event_record(self._analysis(signal="LONG", signal_direction="LONG"))
+        rec = record["actionable_recommendation"]
+        self.assertEqual(rec["direction"], "YES")
+        self.assertEqual(rec["confidence"], "high")
+
+    def test_strong_short_signal_maps_to_no_direction(self):
+        record = build_event_record(
+            self._analysis(signal="STRONG_SHORT", signal_direction="SHORT",
+                           signal_strength="MEDIUM", divergence=-25.0, expected_edge=-0.25)
+        )
+        rec = record["actionable_recommendation"]
+        self.assertEqual(rec["direction"], "NO")
+        self.assertEqual(rec["confidence"], "medium")
+
+    def test_watchlist_signal_maps_to_wait_direction(self):
+        record = build_event_record(
+            self._analysis(signal="WATCHLIST", signal_direction="NEUTRAL",
+                           signal_strength="LOW", divergence=2.0, expected_edge=0.02)
+        )
+        rec = record["actionable_recommendation"]
+        self.assertEqual(rec["direction"], "WAIT")
+
+    def test_high_risk_low_confidence_maps_to_avoid(self):
+        record = build_event_record(
+            self._analysis(signal="LONG", signal_direction="LONG",
+                           signal_strength="LOW", risk_flags=["a", "b", "c"])
+        )
+        rec = record["actionable_recommendation"]
+        self.assertEqual(rec["direction"], "AVOID")
+
+    def test_none_when_feature_disabled(self):
+        from app.services import event_intelligence_service as svc
+        with patch.object(svc.settings, "ACTIONABLE_RECOMMENDATION_ENABLED", False):
+            record = build_event_record(self._analysis(signal="LONG"))
+        self.assertIsNone(record["actionable_recommendation"])
+
+    def test_suggested_allocation_pct_from_position_size(self):
+        record = build_event_record(self._analysis(position_size=0.15))
+        rec = record["actionable_recommendation"]
+        self.assertAlmostEqual(rec["suggested_allocation_pct"], 15.0)
+
+    def test_recommended_action_uses_signal_direction_when_available(self):
+        record = build_event_record(self._analysis(signal="LONG", signal_direction="LONG"))
+        action = record["intelligence_report"]["recommended_action"]
+        self.assertIn("YES", action)
+
+
 if __name__ == "__main__":
     unittest.main()
 

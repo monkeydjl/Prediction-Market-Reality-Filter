@@ -46,8 +46,10 @@ Be conservative: only mark high impact for clear, direct evidence.
 
 
 def _build_user_prompt(market_question: str, articles: list[dict[str, Any]]) -> str:
+    # Read the cap at call time so tests/monkeypatches on settings take effect.
+    max_articles = settings.NEWS_SENTIMENT_MAX_ARTICLES or _MAX_ARTICLES_PER_CALL
     article_blocks = []
-    for i, article in enumerate(articles[:_MAX_ARTICLES_PER_CALL]):
+    for i, article in enumerate(articles[:max_articles]):
         title = article.get("title", "")[:200]
         desc = article.get("description", "")[:500]
         full_text = article.get("full_text") or ""
@@ -78,6 +80,8 @@ async def analyze_sentiment(
     Returns sentiment profile dict. On any failure, returns a deterministic
     neutral fallback (never raises).
     """
+    if not settings.NEWS_SENTIMENT_ENABLED:
+        return _neutral_fallback("NEWS_SENTIMENT_ENABLED is false")
     if not articles:
         return _neutral_fallback("no articles")
     if not settings.OPENAI_API_KEY:

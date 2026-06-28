@@ -72,6 +72,57 @@ def test_analyze_sentiment_returns_neutral_without_api_key(monkeypatch):
     assert result["fallback"] is True
 
 
+def test_analyze_sentiment_returns_neutral_when_disabled(monkeypatch):
+    """When NEWS_SENTIMENT_ENABLED is false, the LLM is never called and the
+    neutral fallback is returned immediately (short-circuits even before the
+    empty-articles check, so non-empty articles still get the fallback).
+    """
+    monkeypatch.setattr(
+        "app.services.news_sentiment_service.settings.NEWS_SENTIMENT_ENABLED", False
+    )
+    # A real-looking client mock is set up so the test FAILS if the disabled
+    # flag doesn't short-circuit (the LLM call would actually be attempted).
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(
+        return_value=MagicMock()
+    )
+    monkeypatch.setattr(
+        "app.services.news_sentiment_service.AsyncOpenAI",
+        MagicMock(return_value=mock_client),
+    )
+    monkeypatch.setattr(
+        "app.services.news_sentiment_service.settings.OPENAI_API_KEY", "fake-key"
+    )
+
+    result = asyncio.run(
+        analyze_sentiment("Question?", [{"title": "T", "description": "D"}])
+    )
+    assert result["overall_direction"] == "neutral"
+    assert result["fallback"] is True
+    assert "NEWS_SENTIMENT_ENABLED" in result["summary"]
+    mock_client.chat.completions.create.assert_not_called()
+
+
+def test_build_user_prompt_respects_max_articles_setting(monkeypatch):
+    """The article cap is read at call time from settings.NEWS_SENTIMENT_MAX_ARTICLES,
+    so a monkeypatch lowering it from the default 6 cuts the prompt short.
+    """
+    monkeypatch.setattr(
+        "app.services.news_sentiment_service.settings.NEWS_SENTIMENT_MAX_ARTICLES", 2
+    )
+    articles = [
+        {"title": f"title-{i}", "description": "desc", "source": "src"}
+        for i in range(5)
+    ]
+    prompt = _build_user_prompt("Q?", articles)
+    # Only the first 2 articles are included.
+    assert "title-0" in prompt
+    assert "title-1" in prompt
+    assert "title-2" not in prompt
+    assert "title-3" not in prompt
+    assert "title-4" not in prompt
+
+
 def test_analyze_sentiment_parses_valid_llm_response(monkeypatch):
     mock_response = MagicMock()
     mock_response.choices = [MagicMock()]

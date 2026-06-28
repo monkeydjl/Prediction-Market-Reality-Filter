@@ -109,7 +109,7 @@ class EventCollectionServiceTests(unittest.TestCase):
         self.assertIn("policy=fail_closed_empty_list", text)
 
     def test_collect_articles_enriches_top_5_with_full_text(self):
-        """Top `_MAX_FULL_TEXT_ARTICLES` get full_text; the rest get None.
+        """Top `settings.NEWS_FULL_TEXT_MAX_ARTICLES` get full_text; the rest None.
 
         Verifies the integration of fetch_full_text into collect_articles:
         - Only the first 5 articles are passed to fetch_full_text.
@@ -200,6 +200,75 @@ class EventCollectionServiceTests(unittest.TestCase):
             )
         self.assertEqual(len(articles), 1)
         self.assertIsNone(articles[0]["full_text"])
+
+    def test_collect_articles_full_text_disabled_sets_all_none(self):
+        """When NEWS_FULL_TEXT_FETCH_ENABLED is false, every article gets
+        full_text=None and fetch_full_text is never called.
+        """
+        shared = [
+            {"title": f"shared-{i}", "description": "d", "source": "s",
+             "published": "p", "url": f"http://example.com/{i}"}
+            for i in range(3)
+        ]
+        fetch_mock = AsyncMock(return_value="should-not-be-called")
+        with patch("app.services.gnews_service.fetch_google_news",
+                   AsyncMock(return_value=[])), \
+             patch("app.services.event_collection_service.fetch_full_text",
+                   fetch_mock), \
+             patch(
+                 "app.services.event_collection_service.settings."
+                 "NEWS_FULL_TEXT_FETCH_ENABLED",
+                 False,
+             ):
+            articles = asyncio.run(
+                collection.collect_articles("will X happen?", shared_articles=shared)
+            )
+        # No fetches happened; every article carries full_text=None.
+        fetch_mock.assert_not_called()
+        self.assertEqual(len(articles), 3)
+        for article in articles:
+            self.assertIsNone(article["full_text"])
+
+    def test_collect_articles_respects_full_text_max_articles_setting(self):
+        """The NEWS_FULL_TEXT_MAX_ARTICLES setting is read at call time, so a
+        monkeypatch lowering it from the default 5 to 2 cuts the fetch count.
+        """
+        # 4 shared articles; cap lowered to 2 -> only 2 fetches.
+        shared = [
+            {"title": f"shared-{i}", "description": "d", "source": "s",
+             "published": "p", "url": f"http://example.com/{i}"}
+            for i in range(4)
+        ]
+        captured_urls: list[str] = []
+
+        async def fake_fetch(url, *, timeout=10.0):
+            captured_urls.append(url)
+            return f"FULL::{url}"
+
+        with patch("app.services.gnews_service.fetch_google_news",
+                   AsyncMock(return_value=[])), \
+             patch("app.services.event_collection_service.fetch_full_text",
+                   new=fake_fetch), \
+             patch(
+                 "app.services.event_collection_service.settings."
+                 "NEWS_FULL_TEXT_MAX_ARTICLES",
+                 2,
+             ):
+            articles = asyncio.run(
+                collection.collect_articles("will X happen?", shared_articles=shared)
+            )
+        # Only the first 2 URLs fetched.
+        self.assertEqual(captured_urls, [
+            "http://example.com/0", "http://example.com/1",
+        ])
+        # Top 2 enriched, rest None.
+        self.assertEqual(len(articles), 4)
+        for i in range(2):
+            self.assertEqual(
+                articles[i]["full_text"], f"FULL::http://example.com/{i}",
+            )
+        for i in range(2, 4):
+            self.assertIsNone(articles[i]["full_text"])
 
 
 if __name__ == "__main__":

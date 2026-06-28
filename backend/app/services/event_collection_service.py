@@ -19,14 +19,11 @@ import asyncio
 import logging
 from typing import Any
 
+from app.core.config import settings
 from app.utils.failure_policy import fail_closed_empty_list, log_service_failure
 from app.utils.full_text_fetcher import fetch_full_text
 
 logger = logging.getLogger(__name__)
-
-# Cap on how many top-ranked articles get full-text enrichment. Hardcoded for
-# now; Task 7 will expose this as NEWS_FULL_TEXT_MAX_ARTICLES in settings.
-_MAX_FULL_TEXT_ARTICLES = 5
 
 
 async def collect_shared_articles() -> list[dict[str, Any]]:
@@ -91,9 +88,12 @@ async def collect_articles(
     the query-independent feeds; otherwise they are fetched here. Google News is
     query-specific and always fetched.
 
-    The top `_MAX_FULL_TEXT_ARTICLES` articles are enriched with a `full_text`
-    field (extracted main text from the article URL) so downstream LLM sentiment
-    analysis has more signal than title+description alone. All other articles get
+    When `settings.NEWS_FULL_TEXT_FETCH_ENABLED` is true (default), the top
+    `settings.NEWS_FULL_TEXT_MAX_ARTICLES` articles are enriched with a
+    `full_text` field (extracted main text from the article URL) so downstream
+    LLM sentiment analysis has more signal than title+description alone. All
+    other articles get `full_text=None`. When the flag is false, full-text
+    fetching is skipped entirely and every article is returned with
     `full_text=None`. Failures during fetch surface as `None` (never raise) -
     full-text is an enhancement, not a blocker.
     """
@@ -113,11 +113,22 @@ async def collect_articles(
     google_news = [{**article, "kind": "news"} for article in google_news]
     articles = shared_articles + google_news
 
+    # Read the cap at call time so tests/monkeypatches on settings take effect.
+    full_text_cap = settings.NEWS_FULL_TEXT_MAX_ARTICLES
+
+    if not settings.NEWS_FULL_TEXT_FETCH_ENABLED:
+        # Feature disabled: skip the HTTP cost entirely; every article still
+        # carries the full_text key (None) so downstream consumers can rely on
+        # the key's presence regardless of the flag.
+        for article in articles:
+            article["full_text"] = None
+        return articles
+
     # Enrich top articles with full text (capped to limit cost). gather with
     # return_exceptions=True so one slow/failing URL never breaks the batch;
     # fetch_full_text also returns None on internal failure, but the
     # isinstance(str) guard below safely absorbs both None and exception objects.
-    top_articles = articles[:_MAX_FULL_TEXT_ARTICLES]
+    top_articles = articles[:full_text_cap]
     full_text_tasks = [fetch_full_text(a.get("url", "")) for a in top_articles]
     full_texts = await asyncio.gather(*full_text_tasks, return_exceptions=True)
     for article, full_text in zip(top_articles, full_texts):
@@ -127,6 +138,6 @@ async def collect_articles(
             article["full_text"] = None
     # Remaining articles: full_text not fetched, marked None so every article
     # in the returned list carries the key for downstream consumers.
-    for article in articles[_MAX_FULL_TEXT_ARTICLES:]:
+    for article in articles[full_text_cap:]:
         article["full_text"] = None
     return articles

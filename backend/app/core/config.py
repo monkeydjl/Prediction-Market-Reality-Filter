@@ -75,6 +75,25 @@ class Settings:
     )
 
     GNEWS_MAX_RESULTS: int = int(os.getenv("GNEWS_MAX_RESULTS", "10"))
+
+    # News sentiment & full-text enrichment (LLM-powered news analysis for
+    # prediction-market events). All default ON so behavior is unchanged
+    # unless an operator explicitly disables one. The sentiment flag gates
+    # the per-event LLM call; the full-text flag gates the trafilatura HTTP
+    # fetch (which the sentiment prompt then consumes when available).
+    NEWS_SENTIMENT_ENABLED: bool = _env_bool(
+        "NEWS_SENTIMENT_ENABLED", "true"
+    )
+    NEWS_SENTIMENT_MAX_ARTICLES: int = int(
+        os.getenv("NEWS_SENTIMENT_MAX_ARTICLES", "6")
+    )
+    NEWS_FULL_TEXT_FETCH_ENABLED: bool = _env_bool(
+        "NEWS_FULL_TEXT_FETCH_ENABLED", "true"
+    )
+    NEWS_FULL_TEXT_MAX_ARTICLES: int = int(
+        os.getenv("NEWS_FULL_TEXT_MAX_ARTICLES", "5")
+    )
+
     EVENT_STORE_FILE: str = os.getenv(
         "EVENT_STORE_FILE",
         os.path.join(

@@ -42,7 +42,7 @@ class EngineAccuracyComparisonTests(unittest.TestCase):
                 home_team="Team A",
                 away_team="Team B",
                 kickoff_utc=naive() - timedelta(hours=3),
-                stage="GROUP_STAGE",
+                stage="group_stage",
                 status="finished",
                 home_score=home_score,
                 away_score=away_score,

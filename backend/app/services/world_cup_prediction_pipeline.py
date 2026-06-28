@@ -78,6 +78,33 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+_STAGE_MAP = {
+    "group_stage": "group_stage",
+    "group stage": "group_stage",
+    "round_of_16": "round_of_16",
+    "round of 16": "round_of_16",
+    "quarterfinal": "quarterfinal",
+    "quarter_final": "quarterfinal",
+    "quarter final": "quarterfinal",
+    "semifinal": "semifinal",
+    "semi_final": "semifinal",
+    "semi final": "semifinal",
+    "final": "final",
+    "third_place": "third_place",
+    "third place": "third_place",
+}
+
+
+def _normalize_stage(stage: str | None) -> str:
+    """Normalize stage name to lowercase canonical form."""
+    if not stage:
+        return ""
+    return _STAGE_MAP.get(stage.lower().strip(), stage.lower().strip())
+
+
+_KNOCKOUT_STAGES = {"round_of_16", "quarterfinal", "semifinal", "final"}
+
+
 def _impact_item(
     key: str,
     label: str,
@@ -364,18 +391,43 @@ def generate_mock_team_stats(team_name: str) -> dict[str, Any]:
         "form": 0.6,
     }
 
-    # Vary stats slightly by team (very simplified)
-    if team_name in {"Brazil", "Argentina", "France", "Germany", "Spain", "England"}:
-        base_stats["goals_per_game"] = 2.1
-        base_stats["goals_conceded_per_game"] = 0.9
-        base_stats["wins"] = 4
-        base_stats["losses"] = 0
-        base_stats["form"] = 0.9
-    elif team_name in {"USA", "Mexico", "Netherlands", "Portugal"}:
-        base_stats["goals_per_game"] = 1.9
-        base_stats["goals_conceded_per_game"] = 1.0
-        base_stats["wins"] = 3
-        base_stats["form"] = 0.7
+    # Tier-based stats for 2026 World Cup participants
+    _ELITE = {
+        "Brazil", "Argentina", "France", "Germany", "Spain", "England",
+    }
+    _STRONG = {
+        "Portugal", "Netherlands", "Belgium", "Croatia", "Italy",
+        "Uruguay", "USA", "Mexico",
+    }
+    _COMPETITIVE = {
+        "Japan", "South Korea", "Denmark", "Switzerland", "Austria",
+        "Senegal", "Morocco", "Colombia", "Ecuador", "Canada",
+        "Serbia", "Turkey", "Poland", "Australia", "Ghana",
+    }
+    _EMERGING = {
+        "Iran", "Saudi Arabia", "Tunisia", "Cameroon", "Costa Rica",
+        "Panama", "Wales", "Scotland", "Jamaica", "Honduras",
+        "Qatar", "Paraguay", "Nigeria", "Algeria", "Egypt",
+    }
+
+    if team_name in _ELITE:
+        base_stats.update(goals_per_game=2.1, goals_conceded_per_game=0.9,
+                          wins=4, losses=0, form=0.9)
+    elif team_name in _STRONG:
+        base_stats.update(goals_per_game=1.9, goals_conceded_per_game=1.0,
+                          wins=3, form=0.7)
+    elif team_name in _COMPETITIVE:
+        base_stats.update(goals_per_game=1.7, goals_conceded_per_game=1.1,
+                          wins=2, draws=2, form=0.55)
+    elif team_name in _EMERGING:
+        base_stats.update(goals_per_game=1.5, goals_conceded_per_game=1.3,
+                          wins=2, draws=1, losses=2, form=0.45)
+    else:
+        # Hash-based micro-variation so unrecognized teams aren't identical
+        h = hash(team_name) % 100
+        base_stats["goals_per_game"] = round(1.5 + (h % 7) * 0.05, 2)
+        base_stats["goals_conceded_per_game"] = round(1.0 + (h % 5) * 0.06, 2)
+        base_stats["form"] = round(0.4 + (h % 4) * 0.05, 2)
 
     return base_stats
 
@@ -469,8 +521,8 @@ def _detect_group_stage_status(match: MatchFixture, session: Session) -> dict[st
         Dict with "home" and "away" status values, or None if not applicable.
         Status values: "qualified", "eliminated", or None.
     """
-    stage = match.stage
-    if stage not in ("group_stage", "Group Stage"):
+    stage = _normalize_stage(match.stage)
+    if stage != "group_stage":
         return None
 
     group = match.group
@@ -574,7 +626,6 @@ async def run_prediction_pipeline(
 
     # Performance monitoring
     pipeline_start_time = time.perf_counter()
-    data_fetch_start = None
     data_fetch_time = None
     engine_exec_time = None
     
@@ -600,6 +651,7 @@ async def run_prediction_pipeline(
                 return {"status": "skipped", "reason": "Match already started"}
 
         # Step 2: Fetch Elo ratings and betting odds
+        data_fetch_start = time.perf_counter()
         home_elo_data = await get_elo_rating(match.home_team)
         away_elo_data = await get_elo_rating(match.away_team)
 
@@ -622,7 +674,7 @@ async def run_prediction_pipeline(
                 selected_engine = "integrated"
             else:
                 selected_engine = "hybrid"
-        elif engine not in {"elo_odds", "hybrid", "integrated", "high_confidence"}:
+        elif engine not in {"elo_odds", "hybrid", "integrated", "high_confidence", "gbm"}:
             return {"status": "error", "match_id": match_id, "error": f"Unsupported engine: {engine}"}
 
         # Step 3b: Calculate prediction factors (needed for hybrid and integrated)
@@ -793,10 +845,7 @@ async def run_prediction_pipeline(
             data_quality_metrics["quality_score"] = calculate_data_quality_score(data_quality_metrics)
 
         # Determine if this is a knockout match
-        is_knockout = match.stage in {
-            "round_of_16", "quarterfinal", "semifinal", "final",
-            "Round of 16", "Quarterfinal", "Semifinal", "Final",
-        }
+        is_knockout = _normalize_stage(match.stage) in _KNOCKOUT_STAGES
 
         # Step 4: Run prediction based on selected engine
         engine_start_time = time.perf_counter()
@@ -980,6 +1029,34 @@ async def run_prediction_pipeline(
                     }
                     for name, result, confidence, selection_calibration in ranked_candidates
                 },
+            }
+
+        elif selected_engine == "gbm":
+            # GBM (Gradient Boosting Machine) engine — trained model that uses
+            # Elo-derived xG + team stats features.  Falls back to elo_odds if
+            # model files are missing (the GBM engine handles this internally).
+            elo_data_home = home_elo_data or {}
+            elo_data_away = away_elo_data or {}
+            gbm_pred = get_engine("gbm")(
+                home_team=match.home_team,
+                away_team=match.away_team,
+                elo_home=float(elo_data_home.get("elo_rating", 1500.0)),
+                elo_away=float(elo_data_away.get("elo_rating", 1500.0)),
+            )
+            prediction_result = {
+                "predicted_score": gbm_pred["predicted_score"],
+                "outcome_probabilities": gbm_pred["outcome_probabilities"],
+                "confidence": gbm_pred["confidence"],
+                "prediction_method": gbm_pred.get("prediction_method", "gbm"),
+                "elo_ratings": gbm_pred.get("elo_ratings", {}),
+                "has_betting_odds": gbm_pred.get("has_betting_odds", False),
+                "rule_score": None,
+                "ai_score": None,
+                "ai_reasoning": None,
+                "key_factors": [],
+                "score_probability_matrix": gbm_pred.get("score_probability_matrix"),
+                "top_5_scores": gbm_pred.get("top_5_scores"),
+                "prediction_interval": gbm_pred.get("prediction_interval"),
             }
 
         else:  # selected_engine == "hybrid"
@@ -1268,7 +1345,7 @@ async def run_prediction_pipeline(
         return {
             "status": "error",
             "match_id": match_id,
-            "error": "internal_error"
+            "error": f"Prediction failed: {e}"
         }
 
     finally:

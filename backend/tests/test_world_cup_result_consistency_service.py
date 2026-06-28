@@ -35,7 +35,7 @@ class WorldCupResultConsistencyServiceTests(unittest.TestCase):
             away_team=f"Away {match_id}",
             kickoff_utc=datetime(2026, 6, 20, 18, 0, 0),
             venue="Test Stadium",
-            stage="GROUP_STAGE",
+            stage="group_stage",
             status=status,
             home_score=home_score,
             away_score=away_score,

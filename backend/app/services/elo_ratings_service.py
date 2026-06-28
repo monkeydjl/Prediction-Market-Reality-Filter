@@ -363,20 +363,51 @@ WORLD_CUP_2026_ELO_ESTIMATES = [
     {"team_name": "Curacao", "elo_rating": 1605, "fifa_rank": 46, "confederation": "CONCACAF"},
     {"team_name": "New Zealand", "elo_rating": 1590, "fifa_rank": 47, "confederation": "OFC"},
     {"team_name": "Jordan", "elo_rating": 1580, "fifa_rank": 48, "confederation": "AFC"},
+    {"team_name": "Iraq", "elo_rating": 1540, "fifa_rank": 58, "confederation": "AFC"},
 ]
+
+
+# Alias map: prediction DB team name → hardcoded list team name
+_ELO_TEAM_ALIASES = {
+    "united states": "USA",
+    "bosnia-herzegovina": "Bosnia",
+    "bosnia and herzegovina": "Bosnia",
+    "congo dr": "DR Congo",
+    "cape verde islands": "Cape Verde",
+    "curaçao": "Curacao",
+    "curacao": "Curacao",
+    "ivory coast": "Ivory Coast",
+    "côte d'ivoire": "Ivory Coast",
+    "south korea": "South Korea",
+    "korea republic": "South Korea",
+    "czech republic": "Czechia",
+    "ir iran": "Iran",
+}
 
 
 def _get_hardcoded_elo(team_name: str) -> dict[str, Any] | None:
     """Get Elo rating from hardcoded estimates.
 
     Args:
-        team_name: Team name
+        team_name: Team name (supports aliases for common name variants)
 
     Returns:
         Elo rating dict or None if team not found
     """
+    lookup_name = team_name.lower()
+    alias_target = _ELO_TEAM_ALIASES.get(lookup_name)
+
     for entry in WORLD_CUP_2026_ELO_ESTIMATES:
-        if entry["team_name"].lower() == team_name.lower():
+        if entry["team_name"].lower() == lookup_name:
+            return {
+                "team_name": entry["team_name"],
+                "elo_rating": entry["elo_rating"],
+                "fifa_rank": entry.get("fifa_rank"),
+                "confederation": entry.get("confederation"),
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "source": "hardcoded_eloratings"
+            }
+        if alias_target and entry["team_name"].lower() == alias_target.lower():
             return {
                 "team_name": entry["team_name"],
                 "elo_rating": entry["elo_rating"],

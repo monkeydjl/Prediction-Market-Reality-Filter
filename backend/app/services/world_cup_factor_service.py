@@ -103,6 +103,7 @@ def calculate_team_factors(
         sentiment_confidence = sentiment_cached["confidence"]
 
     return {
+        "team_name": team_name,
         "fifa_ranking": team_stats.get("fifa_ranking"),
         "recent_form": round(recent_form, 3),
         "goals_per_game": round(goals_per_game, 2),
@@ -267,4 +268,125 @@ def build_prediction_factors(
     if sports_signals and sports_signals.get("fact_count", 0) > 0:
         factors["sports_signals"] = sports_signals
 
+        # ---- Wire signals into team factors --------------------------------
+        # The rule engine reads injury_impact from home_team/away_team dicts
+        # (see world_cup_rule_engine.predict_score_rule_based, line ~294).
+        # API-Football never populates this field, so it stays at 0.0.
+        # Extract it from sports signals (injury + lineup + suspension) here.
+        _apply_signal_injury_impact(factors, sports_signals)
+
+        # Populate key_factors from sports signals so they flow through to
+        # the prediction result and the frontend.
+        kf = _extract_key_factors(sports_signals)
+        if kf:
+            factors["key_factors"] = kf
+
     return factors
+
+
+def _apply_signal_injury_impact(
+    factors: dict[str, Any],
+    signals_bundle: dict[str, Any],
+) -> None:
+    """Derive injury_impact from sports signals and write into team factors.
+
+    The rule engine reads ``home.get("injury_impact", 0.0)`` and adds it
+    directly to xG (range −0.3 to 0).  API-Football never returns this
+    field, so we derive it from the structured signals:
+
+    * injury_signal:  high → −0.20,  medium → −0.10,  low → −0.05
+    * lineup_signal:  −0.10 per unavailable starter (cap −0.30)
+    * suspension_signal: −0.08 per suspended player (cap −0.24)
+
+    Multiple signals for the same team accumulate, hard-capped at −0.30.
+    """
+    signals = signals_bundle.get("signals") or {}
+    home_team = factors.get("home_team", {})
+    away_team = factors.get("away_team", {})
+
+    home_impact = float(home_team.get("injury_impact") or 0.0)
+    away_impact = float(away_team.get("injury_impact") or 0.0)
+
+    # --- Injury signal (no team attribution → split evenly) -----------------
+    injury = signals.get("injury_signal")
+    if injury:
+        level_map = {"high": -0.20, "medium": -0.10, "low": -0.05}
+        delta = level_map.get(injury.get("level", ""), 0.0)
+        if delta:
+            # Injury signal doesn't specify which team; apply to both.
+            # In practice this is conservative — real injuries rarely hit
+            # both squads equally.
+            home_impact += delta * 0.5
+            away_impact += delta * 0.5
+
+    # --- Lineup signal (team-specific) --------------------------------------
+    lineup = signals.get("lineup_signal")
+    if lineup:
+        unavailable = lineup.get("unavailable_starters", 0)
+        importance = lineup.get("importance", 1.0)
+        if unavailable > 0:
+            # −0.10 per unavailable starter, scaled by importance weight.
+            delta = max(-0.10 * unavailable * importance, -0.30)
+            lineup_team = _norm(lineup.get("team", ""))
+            if lineup_team and lineup_team == _norm(home_team.get("team_name", "")):
+                home_impact += delta
+            elif lineup_team and lineup_team == _norm(away_team.get("team_name", "")):
+                away_impact += delta
+            else:
+                # Can't determine which team — apply to both (halved).
+                home_impact += delta * 0.5
+                away_impact += delta * 0.5
+
+    # --- Suspension signal (team-specific) ----------------------------------
+    suspension = signals.get("suspension_signal")
+    if suspension:
+        suspended = suspension.get("suspended_count", 0)
+        if suspended > 0:
+            delta = max(-0.08 * suspended, -0.24)
+            susp_team = _norm(suspension.get("team", ""))
+            if susp_team and susp_team == _norm(home_team.get("team_name", "")):
+                home_impact += delta
+            elif susp_team and susp_team == _norm(away_team.get("team_name", "")):
+                away_impact += delta
+            else:
+                home_impact += delta * 0.5
+                away_impact += delta * 0.5
+
+    # Hard cap and write back
+    home_team["injury_impact"] = round(max(-0.30, min(0.0, home_impact)), 3)
+    away_team["injury_impact"] = round(max(-0.30, min(0.0, away_impact)), 3)
+
+
+def _extract_key_factors(signals_bundle: dict[str, Any]) -> list[str]:
+    """Build human-readable key_factors strings from sports signals.
+
+    These flow through ``prediction_result["key_factors"]`` → DB → frontend.
+    """
+    signals = signals_bundle.get("signals") or {}
+    factors: list[str] = []
+
+    _SIGNAL_LABELS = {
+        "injury_signal": "伤停",
+        "lineup_signal": "首发缺阵",
+        "suspension_signal": "停赛",
+        "qualification_signal": "出线形势",
+        "schedule_fatigue_signal": "赛程疲劳",
+        "discipline_signal": "纪律",
+        "group_strength_signal": "小组实力",
+        "match_format_signal": "赛制",
+        "player_award_signal": "射手榜",
+    }
+
+    for signal_name, label in _SIGNAL_LABELS.items():
+        signal = signals.get(signal_name)
+        if signal and signal.get("summary"):
+            level = signal.get("level", "")
+            direction = signal.get("direction", "")
+            tag = f"[{level}]" if level else ""
+            factors.append(f"{label}{tag}: {signal['summary']}")
+
+    return factors[:8]  # Cap at 8 factors
+
+
+def _norm(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())

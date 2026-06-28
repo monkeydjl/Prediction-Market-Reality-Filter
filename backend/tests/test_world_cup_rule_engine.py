@@ -500,7 +500,7 @@ class RuleEngineGoldenTests(unittest.TestCase):
             },
             "head_to_head": {"matches_played": 0},
             "context": {
-                "tournament_stage": "GROUP_STAGE",
+                "tournament_stage": "group_stage",
                 "stakes": "medium",
                 "home_team_standing": {"played": 2, "points": 6},
                 "away_team_standing": {"played": 2, "points": 3},

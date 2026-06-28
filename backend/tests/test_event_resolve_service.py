@@ -59,9 +59,9 @@ class ResolveWithCalibrationTests(unittest.TestCase):
                 store.save_event(_make_record("evtR", estimated=70.0, value_score=30))
                 # Record a probability trajectory: latest estimate 80%.
                 audit.record_event(_make_record("evtR", estimated=80.0))
-                updated = asyncio.run(ers.resolve_with_calibration(
+                updated = ers.resolve_with_calibration(
                     event_id="evtR", actual_outcome=100.0, source="manual",
-                ))
+                )
                 after = store.get_event("evtR")
         self.assertIsNotNone(updated)
         self.assertEqual(updated["record"]["outcome"]["actual_outcome"], 100.0)
@@ -75,9 +75,9 @@ class ResolveWithCalibrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store_path = str(Path(tmp) / "event_store.json")
             with patch.object(store, "_store_path", return_value=store_path):
-                result = asyncio.run(ers.resolve_with_calibration(
+                result = ers.resolve_with_calibration(
                     event_id="missing", actual_outcome=0.0,
-                ))
+                )
         self.assertIsNone(result)
 
     def test_auto_source_is_propagated(self):
@@ -88,10 +88,10 @@ class ResolveWithCalibrationTests(unittest.TestCase):
                     patch.object(audit, "_audit_path", return_value=audit_path), \
                     patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
                 store.save_event(_make_record("evtAuto", value_score=30))
-                asyncio.run(ers.resolve_with_calibration(
+                ers.resolve_with_calibration(
                     event_id="evtAuto", actual_outcome=0.0,
                     source="auto_market", notes="matched: some market",
-                ))
+                )
                 after = store.get_event("evtAuto")
         self.assertEqual(after["record"]["outcome"]["source"], "auto_market")
         self.assertIn("matched", after["record"]["outcome"]["notes"])
@@ -230,9 +230,9 @@ class AutoResolveEventsTests(unittest.TestCase):
                                  new=AsyncMock(return_value=[resolved_market])):
                 store.save_event(record)
                 # Pre-resolve it.
-                asyncio.run(ers.resolve_with_calibration(
+                ers.resolve_with_calibration(
                     event_id="evtDone", actual_outcome=100.0, source="manual",
-                ))
+                )
                 result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
         # The already-resolved event is not matched again.
         self.assertEqual(result["resolved_count"], 0)
@@ -470,9 +470,9 @@ class Milestone1PredictionScoringTests(unittest.TestCase):
                     patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
                 store.save_event(_make_record("evtPS", value_score=30))
                 _seed_open_act("evtPS", ai_probability=80.0)
-                asyncio.run(ers.resolve_with_calibration(
+                ers.resolve_with_calibration(
                     event_id="evtPS", actual_outcome=100.0, source="manual",
-                ))
+                )
                 scored = preds.get_prediction("evtPS")
         self.assertEqual(scored["status"], "scored")
         self.assertEqual(scored["actual_outcome"], 100.0)
@@ -488,9 +488,9 @@ class Milestone1PredictionScoringTests(unittest.TestCase):
                 store.save_event(_make_record("evtWatch", value_score=30))
                 # Dormant segment + liquidity -> caps at watch.
                 preds.freeze_prediction(self._market_record("evtWatch", estimated=95.0))
-                asyncio.run(ers.resolve_with_calibration(
+                ers.resolve_with_calibration(
                     event_id="evtWatch", actual_outcome=100.0, source="manual",
-                ))
+                )
                 after = preds.get_prediction("evtWatch")
                 calib_n = preds.calibration_summary()["n"]  # inside patch (loop DB)
         self.assertEqual(after["decision"], "watch")
@@ -508,10 +508,10 @@ class Milestone1PredictionScoringTests(unittest.TestCase):
                     patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
                 store.save_event(_make_record("evtInv", value_score=30))
                 preds.freeze_prediction(self._market_record("evtInv", estimated=80.0))
-                asyncio.run(ers.resolve_with_calibration(
+                ers.resolve_with_calibration(
                     event_id="evtInv", actual_outcome=100.0,
                     source="auto_market", status="invalid",
-                ))
+                )
                 after = preds.get_prediction("evtInv")
                 open_ids = [o["event_id"] for o in preds.list_open_opportunities()]
         self.assertEqual(after["status"], "voided")      # closed, not scored
@@ -533,9 +533,9 @@ class ResolutionCriteriaPersistenceTests(unittest.TestCase):
                     patch.object(audit, "_audit_path", return_value=str(Path(tmp) / "event_audit.jsonl")), \
                     patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
                 store.save_event(record)
-                asyncio.run(ers.resolve_with_calibration(
+                ers.resolve_with_calibration(
                     event_id="evtRCm", actual_outcome=100.0, source="manual",
-                ))
+                )
                 link = links.get_verified_link("evtRCm")
         self.assertIsNotNone(link)
         self.assertEqual(link["resolution_criteria"], "YES if CPI < 3.0% in June 2026")
@@ -567,9 +567,9 @@ class ResolutionCriteriaPersistenceTests(unittest.TestCase):
                     patch.object(audit, "_audit_path", return_value=str(Path(tmp) / "event_audit.jsonl")), \
                     patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
                 store.save_event(record)
-                asyncio.run(ers.resolve_with_calibration(
+                ers.resolve_with_calibration(
                     event_id="evtRCn", actual_outcome=100.0, source="manual",
-                ))
+                )
                 link = links.get_verified_link("evtRCn")
         self.assertIsNotNone(link)
         self.assertEqual(link["resolution_criteria"], "")

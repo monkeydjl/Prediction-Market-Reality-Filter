@@ -138,8 +138,22 @@ async def predict_match_score(
     # Run AI prediction (asynchronous) - AI calibrates the rule-engine result
     ai_pred = await predict_score_ai(home_team, away_team, kickoff_str, stage, factors, rule_pred)
 
+    # Use data-driven fusion weights when sufficient Brier history exists;
+    # otherwise fall back to the hardcoded 0.80/0.20 defaults.
+    rule_w, ai_w = 0.80, 0.20
+    try:
+        from app.services.world_cup_dynamic_weights import get_dynamic_rule_ai_weights
+        rule_w, ai_w = get_dynamic_rule_ai_weights()
+    except Exception:
+        pass  # Insufficient data or import issue — use defaults
+
     # Fuse predictions
-    fused = fuse_predictions(rule_pred, ai_pred)
+    fused = fuse_predictions(rule_pred, ai_pred, rule_weight=rule_w, ai_weight=ai_w)
+
+    # Propagate key_factors from sports signals when the AI engine didn't
+    # produce any (which is the common case — the AI always returns []).
+    if not fused.get("key_factors") and factors.get("key_factors"):
+        fused["key_factors"] = factors["key_factors"]
 
     # Add metadata
     fused["factors"] = factors

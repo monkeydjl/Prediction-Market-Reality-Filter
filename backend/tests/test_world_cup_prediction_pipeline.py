@@ -23,13 +23,13 @@ def selection_info(raw_confidence, engine_name=None, reliability_cache=None, cal
     return {
         "raw": raw,
         "calibrated": raw if calibrated is None else calibrated,
-        "method": "bucketed_reliability_curve",
+        "method": "piecewise_linear_reliability",
         "engine_filter": engine_name,
         "total_samples": 8,
         "is_reliable": True,
         "bucket": {"label": "80-100%", "count": 4},
         "applied_bucket": {"label": "80-100%", "count": 4},
-        "reason": "bucket_reliability_curve",
+        "reason": "piecewise_linear_calibration",
     }
 
 
@@ -162,7 +162,7 @@ class WorldCupPredictionPipelineTests(unittest.IsolatedAsyncioTestCase):
                 away_team="Team B",
                 kickoff_utc=kickoff_utc,
                 venue="Test Stadium",
-                stage="GROUP_STAGE",
+                stage="group_stage",
                 group="A",
                 status=status,
             )
@@ -316,13 +316,13 @@ class WorldCupPredictionPipelineTests(unittest.IsolatedAsyncioTestCase):
             prediction["calibration_info"] = {
                 "raw": 0.80,
                 "calibrated": 0.65,
-                "method": "bucketed_reliability_curve",
+                "method": "piecewise_linear_reliability",
                 "engine_filter": engine_name,
                 "total_samples": 8,
                 "is_reliable": True,
                 "bucket": {"label": "80-100%", "count": 4},
                 "applied_bucket": {"label": "80-100%", "count": 4},
-                "reason": "bucket_reliability_curve",
+                "reason": "piecewise_linear_calibration",
             }
             return prediction
 

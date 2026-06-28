@@ -1915,9 +1915,9 @@ class MoversRouteTests(unittest.TestCase):
                  "event_title": "Will X happen?"},
             ],
         }
-        entry = {"record": {"event_title_zh": "X 会发生吗？"}}
+        entry = {"event_id": "evt1", "record": {"event_title_zh": "X 会发生吗？"}}
         with patch.object(events_routes, "histories_by_event", return_value=histories), \
-                patch.object(events_routes, "get_event", return_value=entry):
+                patch.object(events_routes, "list_all_events", return_value=[entry]):
             client = _events_client()
             resp = client.get("/events/movers")
 

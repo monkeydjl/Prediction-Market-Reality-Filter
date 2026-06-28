@@ -370,14 +370,27 @@ def _lineup_signal(
     ]
     if not unavailable:
         return None
-    level = "high" if len(unavailable) >= 2 else "medium"
+
+    # --- Player importance weighting ----------------------------------------
+    # A star player missing from a top-ranked team has a bigger impact than
+    # a squad player missing from a lower-ranked team.  Use the team's FIFA
+    # ranking as a proxy for squad quality / depth.
+    importance = _team_importance(team_norm, facts)
+
+    # Weighted unavailable count: each missing starter × importance
+    weighted_count = len(unavailable) * importance
+    level = "high" if weighted_count >= 2.0 else "medium" if weighted_count >= 1.0 else "low"
     direction = "supports_no" if _is_yes_team_progression(event_question, source) else "neutral"
     names = [fact.get("player", "") for fact in unavailable[:4]]
     return {
         "level": level,
         "direction": direction,
-        "summary": f"{len(unavailable)} starter(s) unavailable for {team}: {', '.join(names)}.",
+        "summary": (
+            f"{len(unavailable)} starter(s) unavailable for {team}: "
+            f"{', '.join(names)} (importance={importance:.2f})."
+        ),
         "unavailable_starters": len(unavailable),
+        "importance": round(importance, 2),
         "team": team,
         "facts": [fact["fact_id"] for fact in unavailable if fact.get("fact_id")],
     }
@@ -569,3 +582,35 @@ def _number(value: Any) -> float | None:
 
 def _norm(value: Any) -> str:
     return " ".join(str(value or "").strip().lower().split())
+
+
+def _team_importance(team_norm: str, facts: list[dict[str, Any]]) -> float:
+    """Compute player importance weight from team FIFA ranking.
+
+    Losing a starter on a top-ranked team has more impact than on a
+    lower-ranked team because top teams have less squad depth relative
+    to their star players.
+
+    Returns:
+        Importance multiplier: 1.5 (top-10), 1.2 (top-30), 1.0 (default).
+    """
+    rank: float | None = None
+    for fact in facts:
+        if _norm(fact.get("team", "")) != team_norm:
+            continue
+        if fact.get("kind") != "team_stat":
+            continue
+        stat_name = _norm(fact.get("stat_name", ""))
+        if "rank" not in stat_name and "fifa" not in stat_name:
+            continue
+        rank = _number(fact.get("stat_value"))
+        if rank is not None:
+            break
+
+    if rank is None:
+        return 1.0
+    if rank <= 10:
+        return 1.5
+    if rank <= 30:
+        return 1.2
+    return 1.0

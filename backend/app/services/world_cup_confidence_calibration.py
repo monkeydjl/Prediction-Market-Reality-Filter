@@ -1,4 +1,4 @@
-"""Confidence calibration service using bucketed reliability curves.
+"""Confidence calibration service using piecewise-linear reliability curves.
 
 This module implements a data-driven confidence calibration system that
 replaces the heuristic confidence formulas with empirically-calibrated values.
@@ -6,8 +6,14 @@ replaces the heuristic confidence formulas with empirically-calibrated values.
 Approach:
 - Divide confidence into 5 buckets: [0-20%, 20-40%, 40-60%, 60-80%, 80-100%]
 - For each bucket, compute the actual accuracy rate from MatchResult records
-- Map raw confidence to calibrated confidence using the reliability curve
-- Falls back to identity mapping when insufficient data (<5 samples per bucket)
+- Use bucket centres as control points for piecewise-linear interpolation
+  to produce a smooth calibration curve across the full confidence range
+- Blend interpolated value (70%) with raw confidence (30%) to balance
+  empirical correction against over-fitting on small samples
+- Falls back to identity mapping when insufficient data
+  (< MIN_CALIBRATION_SAMPLES total or < 2 reliable buckets)
+- Engine-specific calibration falls back to overall when an individual
+  engine lacks enough reliable bucket data
 
 This is more robust than Platt Scaling for small sample sizes (e.g., 64 WC matches).
 """
@@ -28,6 +34,50 @@ logger = logging.getLogger(__name__)
 BUCKET_BOUNDS = [0.0, 0.2, 0.4, 0.6, 0.8, 1.01]
 BUCKET_LABELS = ["0-20%", "20-40%", "40-60%", "60-80%", "80-100%"]
 MIN_SAMPLES_PER_BUCKET = MIN_BUCKET_SAMPLES
+# Blend ratio: weight on interpolated accuracy vs raw confidence.
+# 0.70 gives strong correction for overconfident models while retaining
+# a 30% raw anchor to prevent over-correction on small samples.
+CALIBRATION_BLEND_RATIO = 0.70
+
+# Centre-x positions for each bucket, used as interpolation control points.
+_BUCKET_CENTERS = [0.1, 0.3, 0.5, 0.7, 0.9]
+
+
+def _piecewise_linear_calibration(raw: float, buckets: list[dict]) -> float | None:
+    """Piecewise-linear interpolation across reliable bucket accuracy points.
+
+    Uses the centre of each bucket as the x-coordinate and the observed
+    accuracy as the y-coordinate.  Returns *None* when fewer than two
+    reliable points exist (callers should fall back to raw confidence).
+    """
+    points: list[tuple[float, float]] = []
+    for i, bucket in enumerate(buckets):
+        if (
+            bucket["count"] >= MIN_SAMPLES_PER_BUCKET
+            and bucket.get("actual_accuracy") is not None
+        ):
+            points.append((_BUCKET_CENTERS[i], float(bucket["actual_accuracy"])))
+
+    if len(points) < 2:
+        return None
+
+    points.sort(key=lambda p: p[0])
+
+    # Below / above all control points — extrapolate flat (nearest value).
+    if raw <= points[0][0]:
+        return points[0][1]
+    if raw >= points[-1][0]:
+        return points[-1][1]
+
+    # Interpolate between the two surrounding control points.
+    for j in range(len(points) - 1):
+        x0, y0 = points[j]
+        x1, y1 = points[j + 1]
+        if x0 <= raw <= x1:
+            t = (raw - x0) / (x1 - x0) if x1 != x0 else 0.0
+            return y0 + t * (y1 - y0)
+
+    return points[-1][1]
 
 
 def _get_bucket(confidence: float) -> int:
@@ -72,7 +122,7 @@ def compute_reliability_curve(engine_name: str | None = None) -> dict[str, Any]:
         ]
         total_samples = int(stats["samples"])
         reliable_buckets = sum(1 for bucket in buckets if bucket["count"] >= MIN_SAMPLES_PER_BUCKET)
-        is_reliable = total_samples >= MIN_CALIBRATION_SAMPLES and reliable_buckets >= 1
+        is_reliable = total_samples >= MIN_CALIBRATION_SAMPLES and reliable_buckets >= 2
 
         return {
             "buckets": buckets,
@@ -144,7 +194,7 @@ def build_confidence_calibration_info(
     info = {
         "raw": round(raw, 3),
         "calibrated": round(raw, 3),
-        "method": "bucketed_reliability_curve",
+        "method": "piecewise_linear_reliability",
         "engine_filter": reliability.get("engine_filter", engine_name),
         "total_samples": int(reliability.get("total_samples") or 0),
         "min_total_samples": MIN_CALIBRATION_SAMPLES,
@@ -160,36 +210,25 @@ def build_confidence_calibration_info(
     if not reliability.get("is_reliable"):
         return info
 
-    if not bucket or bucket["count"] < MIN_SAMPLES_PER_BUCKET or bucket["actual_accuracy"] is None:
-        # Not enough samples in this bucket; use the nearest reliable bucket.
-        # Find nearest bucket with enough data
-        for offset in range(1, len(BUCKET_LABELS)):
-            for idx in [bucket_idx - offset, bucket_idx + offset]:
-                if 0 <= idx < len(buckets):
-                    b = buckets[idx]
-                    if b["count"] >= MIN_SAMPLES_PER_BUCKET and b["actual_accuracy"] is not None:
-                        info.update({
-                            "calibrated": round(max(0.05, min(0.99, float(b["actual_accuracy"]))), 3),
-                            "applied_bucket": _public_bucket(b),
-                            "reason": "nearest_reliable_bucket",
-                        })
-                        return info
-        # No neighbors have data either
+    # --- Piecewise-linear calibration -----------------------------------
+    # Build a smooth calibration curve from all reliable bucket centres and
+    # interpolate to find the empirically-calibrated value for *raw*.
+    interpolated = _piecewise_linear_calibration(raw, buckets)
+
+    if interpolated is None:
+        # Fewer than two reliable buckets — cannot interpolate.
         info["reason"] = "insufficient_bucket_samples"
         return info
 
-    # Use the actual accuracy of this bucket as calibrated confidence
-    calibrated = bucket["actual_accuracy"]
-
-    # Blend with raw confidence (50% empirical, 50% raw) to avoid overfitting
-    # on small samples
-    calibrated = 0.5 * calibrated + 0.5 * raw
+    # Blend: weight the interpolated value heavily but keep a raw anchor
+    # to avoid over-correction when sample counts are modest.
+    calibrated = CALIBRATION_BLEND_RATIO * interpolated + (1 - CALIBRATION_BLEND_RATIO) * raw
 
     info.update({
         "calibrated": round(max(0.05, min(0.99, calibrated)), 3),
-        "applied_bucket": _public_bucket(bucket),
+        "applied_bucket": _public_bucket(bucket) if bucket_is_reliable else None,
         "is_reference_only": False,
-        "reason": "bucket_reliability_curve",
+        "reason": "piecewise_linear_calibration",
     })
     return info
 
@@ -214,6 +253,13 @@ def apply_confidence_calibration(
 
     try:
         calibration_info = build_confidence_calibration_info(raw_conf, engine_name)
+        # Fallback: if engine-specific calibration lacks data, try overall
+        if calibration_info.get("is_reference_only") and engine_name is not None:
+            overall_info = build_confidence_calibration_info(raw_conf, engine_name=None)
+            if not overall_info.get("is_reference_only"):
+                overall_info["engine_filter"] = engine_name
+                overall_info["reason"] = overall_info["reason"] + "_via_overall"
+                calibration_info = overall_info
         prediction_result["raw_confidence"] = calibration_info["raw"]
         prediction_result["confidence"] = calibration_info["calibrated"]
         prediction_result["calibration_info"] = calibration_info

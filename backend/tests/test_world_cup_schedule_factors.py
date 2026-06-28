@@ -37,7 +37,7 @@ class WorldCupScheduleFactorsTests(unittest.TestCase):
             away_team=away,
             kickoff_utc=kickoff,
             venue="Test Stadium",
-            stage="GROUP_STAGE",
+            stage="group_stage",
             status=status,
         )
         self.session.add(match)

@@ -39,7 +39,7 @@ class WorldCupGroupContextTests(unittest.TestCase):
             away_team=away,
             kickoff_utc=naive() + timedelta(hours=len(match_id)),
             venue="Test Stadium",
-            stage="GROUP_STAGE",
+            stage="group_stage",
             group="A",
             status=status,
             home_score=home_score,

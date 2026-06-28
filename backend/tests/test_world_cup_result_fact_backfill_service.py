@@ -54,7 +54,7 @@ class WorldCupResultFactBackfillServiceTests(unittest.TestCase):
                 away_team="Team B",
                 kickoff_utc=datetime(2026, 6, 20, 18, 0, 0),
                 venue="Test Stadium",
-                stage="GROUP_STAGE",
+                stage="group_stage",
                 status="finished",
                 home_score=2,
                 away_score=1,

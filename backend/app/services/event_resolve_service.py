@@ -37,7 +37,7 @@ from app.utils.text_match import build_index, find_match, normalize
 logger = logging.getLogger(__name__)
 
 
-async def resolve_with_calibration(
+def resolve_with_calibration(
     event_id: str,
     actual_outcome: float,
     confidence: float = 1.0,
@@ -290,7 +290,6 @@ async def auto_resolve_events(
     }
     resolved_count = 0
     pending_count = 0
-    invalid_count = 0
     match_log: list[dict[str, Any]] = []
 
     # Scan EVERY stored event (unranked, unbounded), not just the top-200 by
@@ -330,7 +329,7 @@ async def auto_resolve_events(
                 if dry_run:
                     continue
                 try:
-                    await resolve_with_calibration(
+                    resolve_with_calibration(
                         event_id=event_id,
                         actual_outcome=settled.get("actual_outcome"),
                         confidence=1.0,
@@ -419,7 +418,7 @@ async def auto_resolve_events(
         if dry_run:
             continue
         try:
-            await resolve_with_calibration(
+            resolve_with_calibration(
                 event_id=event_id,
                 actual_outcome=actual_outcome,
                 confidence=1.0,
@@ -444,7 +443,6 @@ async def auto_resolve_events(
         "dry_run": dry_run,
         "resolved_count": resolved_count,
         "pending_count": pending_count,
-        "invalid_count": invalid_count,
         "checked_count": len(resolved_markets),
         "unresolved_events": unresolved_events,
         "reconciled_count": reconciled,

@@ -55,7 +55,7 @@ class WorldCupPostMatchBackfillServiceTests(unittest.TestCase):
                 away_team="Team B",
                 kickoff_utc=kickoff,
                 venue="Test Stadium",
-                stage="GROUP_STAGE",
+                stage="group_stage",
                 status="finished",
                 home_score=2,
                 away_score=1,

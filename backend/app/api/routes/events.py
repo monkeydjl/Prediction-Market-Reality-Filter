@@ -211,8 +211,10 @@ async def get_event_movers(limit: int = Query(default=10, ge=1, le=50)):
     with the stored event_title_zh so the dashboard can show Chinese titles.
     """
     movers = rank_movers(histories_by_event(), limit=limit)
+    # Batch-load events once to avoid N+1 reads
+    events_by_id = {e.get("event_id"): e for e in list_all_events()}
     for mover in movers:
-        entry = get_event(mover.get("event_id", ""))
+        entry = events_by_id.get(mover.get("event_id", ""))
         title_zh = ((entry or {}).get("record") or {}).get("event_title_zh") or ""
         if title_zh:
             mover["event_title_zh"] = title_zh
@@ -835,7 +837,7 @@ async def resolve_event_intelligence(
     The resolution + calibration logic lives in
     event_resolve_service.resolve_with_calibration, shared with auto-resolve.
     """
-    updated = await resolve_with_calibration(
+    updated = resolve_with_calibration(
         event_id=event_id,
         actual_outcome=actual_outcome,
         confidence=confidence,
@@ -877,10 +879,12 @@ async def list_pending_links():
     are NOT scored (fail-closed) until a human verifies them via
     POST /events/{event_id}/link/verify. Returns the review queue.
     """
+    # Batch-load events once to avoid N+1 reads
+    events_by_id = {e.get("event_id"): e for e in list_all_events()}
     pending = []
     for link in list_pending():
-        entry = get_event(link.get("event_id", ""))
-        record = (entry or {}).get("record") or {}
+        entry = events_by_id.get(link.get("event_id", ""))
+        record = ((entry or {}).get("record") or {})
         semantics = record.get("semantics") or {}
         pending.append({
             **link,

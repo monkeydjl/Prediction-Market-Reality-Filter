@@ -31,6 +31,8 @@ MIN_BUCKET_SAMPLES = 3
 MIN_INTEGRATED_WEIGHT = 0.25
 MAX_INTEGRATED_WEIGHT = 0.85
 QUALITY_WEIGHT_BLEND = 0.35
+# Must match CALIBRATION_BLEND_RATIO in world_cup_confidence_calibration.py
+_CALIBRATION_BLEND = 0.70
 _EPSILON = 1e-6
 
 
@@ -876,12 +878,108 @@ def build_quality_loop_report(session: Session | None = None) -> dict[str, Any]:
             close_prediction_session(session)
 
 
+def refresh_prediction_accuracy(session: Session) -> list[dict[str, Any]]:
+    """Compute by-stage accuracy from MatchResult and upsert into PredictionAccuracy.
+
+    Populates the PredictionAccuracy table (previously defined but never written)
+    with aggregated metrics grouped by match stage.  Called from the accuracy-stats
+    endpoint so the table stays in sync with live scoring data.
+
+    Returns:
+        List of dicts describing each stage row that was upserted.
+    """
+    from app.models.world_cup_prediction import (
+        MatchFixture,
+        MatchResult,
+        PredictionAccuracy,
+    )
+
+    # Join MatchResult with MatchFixture to get stage info
+    rows = (
+        session.query(MatchResult, MatchFixture)
+        .join(MatchFixture, MatchResult.match_id == MatchFixture.match_id)
+        .filter(MatchResult.brier_score.isnot(None))
+        .all()
+    )
+    if not rows:
+        return []
+
+    # Group by stage
+    stages: dict[str, list[tuple]] = {}
+    all_rows: list[tuple] = []
+    for result, fixture in rows:
+        stage = (fixture.stage or "unknown").lower()
+        stages.setdefault(stage, []).append((result, fixture))
+        all_rows.append((result, fixture))
+
+    # Add "all" as a virtual stage
+    stages["all"] = all_rows
+
+    upserted: list[dict[str, Any]] = []
+    for stage, stage_rows in stages.items():
+        n = len(stage_rows)
+        exact = sum(
+            1 for r, _ in stage_rows
+            if abs(r.home_error or 0) < 0.5 and abs(r.away_error or 0) < 0.5
+        )
+        goal_diff_correct = sum(
+            1 for r, _ in stage_rows
+            if abs((r.home_error or 0) - (r.away_error or 0)) < 0.5
+        )
+        outcome_correct = sum(1 for r, _ in stage_rows if r.outcome_correct == 1)
+        mae_vals = [r.score_mae for r, _ in stage_rows if r.score_mae is not None]
+        mae = sum(mae_vals) / len(mae_vals) if mae_vals else None
+
+        # Upsert
+        existing = session.query(PredictionAccuracy).filter_by(stage=stage).first()
+        if existing:
+            existing.matches_evaluated = n
+            existing.exact_score_correct = exact
+            existing.goal_diff_correct = goal_diff_correct
+            existing.outcome_correct = outcome_correct
+            existing.outcome_accuracy = round(outcome_correct / n, 4) if n else 0
+            existing.score_mae = round(mae, 4) if mae else None
+        else:
+            row = PredictionAccuracy(
+                stage=stage,
+                matches_evaluated=n,
+                exact_score_correct=exact,
+                goal_diff_correct=goal_diff_correct,
+                outcome_correct=outcome_correct,
+                outcome_accuracy=round(outcome_correct / n, 4) if n else 0,
+                score_mae=round(mae, 4) if mae else None,
+            )
+            session.add(row)
+
+        upserted.append({
+            "stage": stage,
+            "matches": n,
+            "exact": exact,
+            "outcome_accuracy": round(outcome_correct / n, 3) if n else 0,
+        })
+
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+
+    return upserted
+
+
 def calibrate_confidence_from_quality(
     raw_confidence: float,
     engine_name: str | None = None,
     session: Session | None = None,
 ) -> float:
-    """Calibrate confidence from the quality loop buckets."""
+    """Calibrate confidence from the quality loop buckets.
+
+    NOTE: This is a simplified standalone utility that uses single-bucket
+    nearest-neighbor blending.  The production calibration path goes through
+    ``world_cup_confidence_calibration.apply_confidence_calibration`` which
+    uses piecewise-linear interpolation across all reliable bucket centres
+    and falls back to overall calibration when engine-specific data is sparse.
+    """
     should_close = session is None
     if session is None:
         session = get_prediction_session()
@@ -907,7 +1005,10 @@ def calibrate_confidence_from_quality(
                 key=lambda item: abs(((item["lower"] + item["upper"]) / 2.0) - raw_confidence),
             )
 
-        calibrated = 0.5 * raw_confidence + 0.5 * float(bucket["accuracy"])
+        # Blend: weight the empirical accuracy heavily (70%) with a 30% raw
+        # anchor to avoid over-correction on small samples, matching the
+        # piecewise-linear calibration blend in world_cup_confidence_calibration.
+        calibrated = _CALIBRATION_BLEND * float(bucket["accuracy"]) + (1 - _CALIBRATION_BLEND) * raw_confidence
         return round(max(0.05, min(0.99, calibrated)), 3)
     finally:
         if should_close:

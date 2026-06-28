@@ -11,17 +11,20 @@ These records are consumed by:
 """
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.memory import loop_run_store
 from app.models.world_cup_prediction import (
     MatchFixture,
     MatchPrediction,
     MatchResult,
     PredictionHistory,
 )
+from app.services.audit_metadata import normalize_audit_metadata
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
 
 logger = logging.getLogger(__name__)
@@ -241,16 +244,28 @@ def score_finished_match(match_id: str, session: Session | None = None) -> dict[
             close_prediction_session(session)
 
 
-def score_all_finished_matches() -> dict[str, Any]:
+SCORING_RECONCILE_AUDIT_JOB_NAME = "world_cup_scoring_reconcile"
+
+
+def score_all_finished_matches(
+    audit_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Score all finished matches that haven't been scored yet.
 
     This is the main entry point for the reconciliation loop — call it
     on startup or on a schedule to catch up on any matches that finished
     while the service was down.
 
+    Args:
+        audit_metadata: Optional provenance metadata (trigger_source, operator).
+
     Returns:
         Summary of scoring results
     """
+    audit_meta = normalize_audit_metadata(audit_metadata)
+    run_id = loop_run_store.start_run(SCORING_RECONCILE_AUDIT_JOB_NAME)
+    started = time.monotonic()
+
     session = get_prediction_session()
     try:
         # Find all finished matches
@@ -281,18 +296,33 @@ def score_all_finished_matches() -> dict[str, Any]:
             else:
                 errors += 1
 
+        duration_ms = int((time.monotonic() - started) * 1000)
         logger.info(
             "Scoring reconciliation: %d scored, %d skipped, %d errors (total finished: %d)",
             scored, skipped, errors, len(finished),
         )
 
-        return {
+        summary = {
             "status": "ok",
             "total_finished": len(finished),
             "scored": scored,
             "skipped": skipped,
             "errors": errors,
+            "duration_ms": duration_ms,
+            "audit_metadata": audit_meta,
         }
+        loop_run_store.finish_run(run_id, "success", result=summary)
+        summary["run_id"] = run_id
+        return summary
+
+    except Exception as exc:
+        duration_ms = int((time.monotonic() - started) * 1000)
+        logger.error("Scoring reconciliation failed: %s", exc, exc_info=True)
+        loop_run_store.finish_run(
+            run_id, "failed", error=str(exc),
+            result={"duration_ms": duration_ms, "audit_metadata": audit_meta},
+        )
+        raise
 
     finally:
         close_prediction_session(session)

@@ -45,7 +45,7 @@ async def resolve_world_cup_events(
         resolved_count += 1
         if dry_run:
             continue
-        await resolve_with_calibration(
+        resolve_with_calibration(
             event_id=event_id,
             actual_outcome=decision["actual_outcome"],
             confidence=decision["confidence"],

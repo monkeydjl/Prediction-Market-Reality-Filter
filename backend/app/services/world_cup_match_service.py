@@ -103,7 +103,7 @@ def parse_fixture(fixture_data: dict[str, Any]) -> dict[str, Any] | None:
     # Determine stage from round info
     round_info = league.get("round", "").lower()
     if "group" in round_info:
-        stage = "GROUP_STAGE"
+        stage = "group_stage"
         # Extract group letter (e.g., "Group A" -> "A")
         group = None
         for char in round_info.upper():
@@ -111,19 +111,19 @@ def parse_fixture(fixture_data: dict[str, Any]) -> dict[str, Any] | None:
                 group = char
                 break
     elif "final" in round_info and "semi" not in round_info and "quarter" not in round_info:
-        stage = "FINAL"
+        stage = "final"
         group = None
     elif "semi" in round_info or "semi-final" in round_info:
-        stage = "SEMIFINAL"
+        stage = "semifinal"
         group = None
     elif "quarter" in round_info:
-        stage = "QUARTERFINAL"
+        stage = "quarterfinal"
         group = None
     elif "16" in round_info or "round of 16" in round_info:
-        stage = "ROUND_OF_16"
+        stage = "round_of_16"
         group = None
     else:
-        stage = "UNKNOWN"
+        stage = "unknown"
         group = None
 
     # Match status

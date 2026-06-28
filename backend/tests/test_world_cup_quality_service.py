@@ -60,7 +60,7 @@ class WorldCupQualityServiceTests(unittest.TestCase):
                 away_team=f"Away {match_id}",
                 kickoff_utc=kickoff,
                 venue="Test Stadium",
-                stage="GROUP_STAGE",
+                stage="group_stage",
                 status="finished",
                 home_score=home_score,
                 away_score=away_score,
@@ -412,8 +412,8 @@ class WorldCupQualityServiceTests(unittest.TestCase):
             session=self.session,
         )
 
-        # Bucket accuracy is 3/6 = 0.5, blended 50/50 with raw 0.8.
-        self.assertAlmostEqual(calibrated, 0.65)
+        # Bucket accuracy is 3/6 = 0.5, blended 70/30 with raw 0.8.
+        self.assertAlmostEqual(calibrated, 0.59)
 
     def test_integrated_weight_suggestion_requires_component_samples(self):
         kickoff = self._add_finished_match("m1", 2, 1)

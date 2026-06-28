@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Zap, Brain, GitCompare, Target, Award, AlertCircle, Loader2, type LucideIcon } from "lucide-react";
+import { Zap, Brain, GitCompare, Target, Award, AlertCircle, Loader2, BarChart3, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getWorldCupApiBase } from "@/lib/env";
 
-type EngineKey = "elo_odds" | "hybrid" | "integrated";
+type EngineKey = "elo_odds" | "hybrid" | "integrated" | "gbm";
 
 interface EngineStat {
   total_matches: number;
@@ -65,6 +65,15 @@ const ENGINE_CONFIGS: EngineConfig[] = [
     headerClass: "bg-primary/5",
     iconClass: "text-primary",
     titleClass: "text-primary",
+  },
+  {
+    key: "gbm",
+    label: "GBM",
+    description: "梯度提升模型预测",
+    icon: BarChart3,
+    headerClass: "bg-teal-500/5",
+    iconClass: "text-teal-500",
+    titleClass: "text-teal-500",
   },
 ];
 

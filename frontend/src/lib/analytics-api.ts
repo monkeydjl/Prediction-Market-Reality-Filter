@@ -167,6 +167,9 @@ export const analyticsApi = {
   resultFactBackfillRuns: <T = unknown>(limit = 5): Promise<T> =>
     analyticsFetch<T>(`/api/analytics/result-fact-backfill/runs${buildQuery({ limit })}`),
 
+  reconcileScoringRuns: <T = unknown>(limit = 5): Promise<T> =>
+    analyticsFetch<T>(`/api/analytics/reconcile-scoring/runs${buildQuery({ limit })}`),
+
   // ---- Mutating / long operations (180s timeout) ----
   runConsistencyRepair: <T = unknown>(
     historyIds: Array<number | string>,
@@ -200,5 +203,17 @@ export const analyticsApi = {
         confirm: confirm ? "true" : "false",
       })}`,
       { method: "POST", timeoutMs: LONG_OPERATION_TIMEOUT_MS },
+    ),
+
+  runReconcileScoring: <T = unknown>(): Promise<T> =>
+    analyticsFetch<T>(
+      "/api/analytics/reconcile-scoring",
+      { method: "POST", timeoutMs: LONG_OPERATION_TIMEOUT_MS },
+    ),
+
+  tournamentSimulation: <T = unknown>(numSimulations = 5000): Promise<T> =>
+    analyticsFetch<T>(
+      `/api/analytics/tournament-simulation${buildQuery({ num_simulations: numSimulations })}`,
+      { timeoutMs: LONG_OPERATION_TIMEOUT_MS },
     ),
 };

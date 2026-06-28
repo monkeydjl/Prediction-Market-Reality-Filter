@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Zap, Brain, GitCompare, Target, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
+import { Zap, Brain, GitCompare, Target, Loader2, CheckCircle2, AlertCircle, BarChart3 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getWorldCupApiBase } from "@/lib/env";
 import { postHeaders } from "@/lib/world-cup-predictions";
@@ -201,6 +201,15 @@ export function BatchEngineSwitcher({ onCompleted }: BatchEngineSwitcherProps) {
       accent: "text-blue-500",
       ring: "hover:border-blue-500/50",
       iconBg: "bg-blue-500/10",
+    },
+    {
+      id: "gbm",
+      label: "一键 GBM",
+      description: "梯度提升模型预测引擎",
+      icon: BarChart3,
+      accent: "text-teal-500",
+      ring: "hover:border-teal-500/50",
+      iconBg: "bg-teal-500/10",
     },
     {
       id: "high_confidence",

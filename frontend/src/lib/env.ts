@@ -1,5 +1,6 @@
 export function getApiBase(): string {
   const base = process.env.NEXT_PUBLIC_API_BASE ?? "/api";
+  if (base === "/api" && isLocalStaticFrontend()) return "http://localhost:8000/api";
   if (base.startsWith("/")) return base;
   try {
     const url = new URL(base);

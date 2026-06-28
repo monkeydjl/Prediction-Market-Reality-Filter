@@ -112,7 +112,7 @@ export interface MatchPrediction {
     away: number;
   };
   has_betting_odds?: boolean;
-  engine_used?: "elo_odds" | "hybrid" | "integrated" | "high_confidence" | "auto";
+  engine_used?: "elo_odds" | "hybrid" | "integrated" | "gbm" | "high_confidence" | "auto";
   data_quality?: "real" | "partial" | "mock";
   data_quality_score?: number;
   betting_analysis?: {
@@ -285,7 +285,7 @@ export async function fetchTodayMatches(): Promise<MatchWithPrediction[]> {
  */
 export async function triggerPrediction(
   matchId: string,
-  engine?: "elo_odds" | "hybrid" | "integrated" | "high_confidence" | "auto",
+  engine?: "elo_odds" | "hybrid" | "integrated" | "high_confidence" | "gbm" | "auto",
   options?: { compareOnly?: boolean }
 ): Promise<PredictionTriggerResult> {
   const query = options?.compareOnly ? "?compare_only=true" : "";
@@ -312,19 +312,36 @@ export async function compareEngines(matchId: string): Promise<{
   elo_odds?: MatchPrediction;
   hybrid?: MatchPrediction;
   integrated?: MatchPrediction;
+  gbm?: MatchPrediction;
 }> {
   try {
     // Trigger engines in parallel in read-only mode so the comparison
     // card works even after kickoff (no persistence, no freeze).
-    const [eloResult, hybridResult, integratedResult] = await Promise.all([
+    // Use allSettled so one engine failure doesn't block the others.
+    const [eloSettled, hybridSettled, integratedSettled, gbmSettled] = await Promise.allSettled([
       triggerPrediction(matchId, "elo_odds", { compareOnly: true }),
       triggerPrediction(matchId, "hybrid", { compareOnly: true }),
-      triggerPrediction(matchId, "integrated", { compareOnly: true })
+      triggerPrediction(matchId, "integrated", { compareOnly: true }),
+      triggerPrediction(matchId, "gbm", { compareOnly: true }),
     ]);
 
+    const extractResult = (
+      settled: PromiseSettledResult<PredictionTriggerResult>
+    ): PredictionTriggerResult | undefined => {
+      if (settled.status === "fulfilled") return settled.value;
+      console.warn("Engine comparison failed:", settled.reason);
+      return undefined;
+    };
+
+    const eloResult = extractResult(eloSettled);
+    const hybridResult = extractResult(hybridSettled);
+    const integratedResult = extractResult(integratedSettled);
+    const gbmResult = extractResult(gbmSettled);
+
     // Convert flat API response to MatchPrediction format
-    const toMatchPrediction = (result: PredictionTriggerResult): MatchPrediction | undefined => {
+    const toMatchPrediction = (result?: PredictionTriggerResult): MatchPrediction | undefined => {
       if (
+        !result ||
         result.status === "error" ||
         !result.predicted_score ||
         !result.outcome_probabilities ||
@@ -351,7 +368,8 @@ export async function compareEngines(matchId: string): Promise<{
     return {
       elo_odds: toMatchPrediction(eloResult),
       hybrid: toMatchPrediction(hybridResult),
-      integrated: toMatchPrediction(integratedResult)
+      integrated: toMatchPrediction(integratedResult),
+      gbm: toMatchPrediction(gbmResult),
     };
   } catch (error) {
     console.error("Failed to compare engines:", error);

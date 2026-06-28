@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { Trophy, TrendingUp, Clock, AlertCircle, Zap, Brain, GitCompare, History, Sparkles, Loader2, ChevronDown, Lightbulb, Gauge, type LucideIcon } from "lucide-react";
+import { Trophy, TrendingUp, Clock, AlertCircle, Zap, Brain, GitCompare, History, Sparkles, Loader2, ChevronDown, Lightbulb, Gauge, BarChart3, type LucideIcon } from "lucide-react";
 import type { MatchFixture, MatchPrediction } from "@/lib/world-cup-predictions";
 import { compareEngines } from "@/lib/world-cup-predictions";
 import { translateTeamName } from "@/lib/team-names-zh";
@@ -55,6 +55,7 @@ function engineDisplayName(engine?: string): string {
   if (engine === "elo_odds") return "Elo+赔率";
   if (engine === "hybrid") return "混合引擎";
   if (engine === "integrated") return "集成引擎";
+  if (engine === "gbm") return "GBM";
   return engine || "--";
 }
 
@@ -93,6 +94,10 @@ function getEngineLabel(prediction?: MatchPrediction): { icon: LucideIcon; label
 
   if (engine === "elo_odds" || method.includes("elo_odds") || (hasOdds && method.includes("elo"))) {
     return { icon: Zap, label: "Elo+赔率", color: "text-primary" };
+  }
+
+  if (engine === "gbm" || method.includes("gbm")) {
+    return { icon: BarChart3, label: "GBM", color: "text-teal-500" };
   }
 
   if (method === "elo_only" || method.startsWith("elo")) {
@@ -135,12 +140,14 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
     elo_odds?: MatchPrediction;
     hybrid?: MatchPrediction;
     integrated?: MatchPrediction;
+    gbm?: MatchPrediction;
   }>({});
 
   const hasComparisonData =
     comparisonData.elo_odds != null ||
     comparisonData.hybrid != null ||
-    comparisonData.integrated != null;
+    comparisonData.integrated != null ||
+    comparisonData.gbm != null;
 
   const handleCompare = useCallback(async () => {
     if (showComparison) {
@@ -208,7 +215,7 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
   const highConfidenceSelection = prediction?.high_confidence_selection ?? null;
   const highConfidenceCandidates = useMemo(() => {
     const candidates = highConfidenceSelection?.candidate_confidences ?? {};
-    return ["elo_odds", "hybrid", "integrated"]
+    return ["elo_odds", "hybrid", "integrated", "gbm"]
       .filter((engine) => candidates[engine] != null)
       .map((engine) => {
         const candidate = candidates[engine];
@@ -657,6 +664,7 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
             eloOddsPrediction={comparisonData.elo_odds}
             hybridPrediction={comparisonData.hybrid}
             integratedPrediction={comparisonData.integrated}
+            gbmPrediction={comparisonData.gbm}
             isLoading={isLoadingComparison}
             onApplyPrediction={() => {
               onPredictionUpdated?.();

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { BarChart3, Target, Database, Activity, TrendingUp, AlertCircle, Gauge, RefreshCw, ShieldCheck, ClipboardCheck } from "lucide-react";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { cn } from "@/lib/utils";
+import { fmtPct } from "@/lib/format";
 import { analyticsApi } from "@/lib/analytics-api";
 import { ChartFrame, DarkTooltip } from "@/components/ui/chart-lite";
 
@@ -12,7 +13,7 @@ interface EngineStats {
   by_engine: Record<EngineKey, EngineUsage>;
 }
 
-type EngineKey = "elo_odds" | "hybrid" | "integrated";
+type EngineKey = "elo_odds" | "hybrid" | "integrated" | "gbm";
 
 interface EngineUsage {
   count: number;
@@ -20,12 +21,23 @@ interface EngineUsage {
   avg_confidence: number;
 }
 
+interface AccuracyByStage {
+  stage: string;
+  matches_evaluated: number;
+  exact_score_pct: number;
+  goal_diff_pct: number;
+  outcome_accuracy: number;
+  score_mae: number | null;
+}
+
 interface AccuracyStats {
   total_matches: number;
+  predicted_matches: number;
   outcome_accuracy: number;
   avg_score_mae: number;
   avg_brier_score: number;
   exact_score_correct: number;
+  by_stage?: AccuracyByStage[];
 }
 
 interface OddsCacheStats {
@@ -351,11 +363,57 @@ interface ResultFactBackfillRunsResponse {
   runs: ResultFactBackfillRun[];
 }
 
+interface ScoringReconcileRun {
+  id: string;
+  status: string;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+  scored: number | null;
+  skipped: number | null;
+  errors: number | null;
+  trigger_source?: string;
+  operator?: string;
+  error: string | null;
+}
+
+interface ScoringReconcileRunsResponse {
+  status: string;
+  job_name: string;
+  count: number;
+  runs: ScoringReconcileRun[];
+}
+
+interface ScoringReconcileResult {
+  status: string;
+  total_finished: number;
+  scored: number;
+  skipped: number;
+  errors: number;
+  duration_ms: number;
+  run_id?: string;
+}
+
 const ENGINES: Array<{ key: EngineKey; label: string; barClass: string }> = [
   { key: "elo_odds", label: "Elo+赔率", barClass: "bg-amber-500" },
   { key: "hybrid", label: "混合引擎", barClass: "bg-purple-500" },
   { key: "integrated", label: "集成引擎", barClass: "bg-blue-500" },
+  { key: "gbm", label: "GBM", barClass: "bg-emerald-500" },
 ];
+
+const EMPTY_QUALITY_SUMMARY: QualitySummary = {
+  samples: 0,
+  outcome_accuracy: null,
+  exact_score_rate: null,
+  avg_score_mae: null,
+  avg_brier_score: null,
+  avg_log_loss: null,
+  avg_confidence: null,
+  confidence_bias: null,
+  expected_calibration_error: null,
+  is_calibratable: false,
+  calibration_buckets: [],
+};
 
 function engineLabel(engine: string): string {
   if (engine === "unknown") return "未知方法";
@@ -506,12 +564,12 @@ function QualityTrendCharts({ points }: { points: QualityTrendPoint[] }) {
                   domain={[0, 100]}
                   tickLine={false}
                   axisLine={false}
-                  tickFormatter={(value) => `${Number(value).toFixed(0)}%`}
+                  tickFormatter={(value) => fmtPct(Number(value), 0)}
                 />
                 <DarkTooltip
                   formatter={(value, name, payload) => (
                     <span className="font-mono">
-                      {String(name)} {Number(value).toFixed(1)}%
+                      {String(name)} {fmtPct(Number(value), 1)}
                       {typeof payload.samples === "number" ? ` · n=${payload.samples}` : ""}
                     </span>
                   )}
@@ -557,12 +615,12 @@ function QualityTrendCharts({ points }: { points: QualityTrendPoint[] }) {
                   width={42}
                   tickLine={false}
                   axisLine={false}
-                  tickFormatter={(value) => Number(value).toFixed(1)}
+                  tickFormatter={(value) => (Number.isFinite(Number(value)) ? Number(value).toFixed(1) : "—")}
                 />
                 <DarkTooltip
                   formatter={(value, name, payload) => (
                     <span className="font-mono">
-                      {String(name)} {Number(value).toFixed(4)}
+                      {String(name)} {Number.isFinite(Number(value)) ? Number(value).toFixed(4) : "—"}
                       {typeof payload.samples === "number" ? ` · n=${payload.samples}` : ""}
                     </span>
                   )}
@@ -741,7 +799,7 @@ function ConsistencyIssuesPanel({
               className="inline-flex items-center gap-1.5 rounded-md border bg-secondary px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary/80 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <RefreshCw className={cn("size-3.5", repairRunning === "dry" && "animate-spin")} />
-              Repair dry-run
+              修复试运行
             </button>
             <label className="inline-flex items-center gap-1.5 rounded-md border bg-secondary/50 px-2.5 py-1.5 text-xs text-muted-foreground">
               <input
@@ -750,40 +808,46 @@ function ConsistencyIssuesPanel({
                 onChange={(event) => setRepairConfirmed(event.currentTarget.checked)}
                 className="size-3.5 accent-current"
               />
-              Confirm method write
+              确认方法写入
             </label>
             <button
               type="button"
               onClick={() => runConsistencyRepair(false)}
               disabled={!canApplyRepair}
+              title="将推断的修复方法写入数据库，不可回滚"
               className="inline-flex items-center gap-1.5 rounded-md border border-warn/40 bg-warn/10 px-2.5 py-1.5 text-xs font-medium text-warn transition-colors hover:bg-warn/20 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <ShieldCheck className={cn("size-3.5", repairRunning === "write" && "animate-pulse")} />
-              Apply repair
+              应用修复
             </button>
           </div>
+          {repairResult && repairResult.inferable === 0 && repairResult.manual_review > 0 && (
+            <div className="mt-2 rounded-md border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-warn">
+              这些问题需要人工审核（{repairResult.manual_review} 项），系统无法自动推断修复方法
+            </div>
+          )}
           {repairError && (
             <div className="mt-2 rounded-md border border-neg/40 bg-neg/10 px-3 py-2 text-xs text-neg">
-              Repair error: {repairError}
+              修复错误: {repairError}
             </div>
           )}
           {repairResult && (
             <div className="mt-2 rounded-md bg-secondary/40 px-3 py-2 text-xs">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-medium text-muted-foreground">Repair result</span>
+                <span className="font-medium text-muted-foreground">修复结果</span>
                 {repairResult.run_id && (
                   <span className="font-mono text-muted-foreground tabular-nums">{repairResult.run_id}</span>
                 )}
               </div>
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground tabular-nums">
-                <span>requested {repairResult.requested}</span>
-                <span>inferable {repairResult.inferable}</span>
-                <span>updated {repairResult.updated}</span>
-                <span>skipped {repairResult.skipped}</span>
-                <span>manual {repairResult.manual_review}</span>
+                <span>请求 {repairResult.requested}</span>
+                <span>可推断 {repairResult.inferable}</span>
+                <span>已更新 {repairResult.updated}</span>
+                <span>已跳过 {repairResult.skipped}</span>
+                <span>人工 {repairResult.manual_review}</span>
               </div>
               {repairResult.protected && (
-                <div className="mt-1 text-[11px] text-warn">confirmation required</div>
+                <div className="mt-1 text-[11px] text-warn">需要确认</div>
               )}
             </div>
           )}
@@ -870,6 +934,7 @@ function PostMatchBackfillPanel({ onQualityRefresh }: { onQualityRefresh: (quali
             type="button"
             onClick={() => runBackfill(false)}
             disabled={!canWrite}
+            title="将评分写入数据库，不可回滚"
             className="inline-flex items-center gap-1.5 rounded-md border border-warn/40 bg-warn/10 px-2.5 py-1.5 text-xs font-medium text-warn transition-colors hover:bg-warn/20 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <ShieldCheck className={cn("size-3.5", isRunning === "write" && "animate-pulse")} />
@@ -973,6 +1038,154 @@ function PostMatchBackfillPanel({ onQualityRefresh }: { onQualityRefresh: (quali
   );
 }
 
+function ReconcileScoringPanel({ onQualityRefresh }: { onQualityRefresh: (quality: QualityLoopReport) => void }) {
+  const [result, setResult] = useState<ScoringReconcileResult | null>(null);
+  const [auditRuns, setAuditRuns] = useState<ScoringReconcileRun[]>([]);
+  const [isRunning, setIsRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [runsError, setRunsError] = useState<string | null>(null);
+
+  async function loadRuns() {
+    try {
+      const data = await analyticsApi.reconcileScoringRuns<ScoringReconcileRunsResponse>(5);
+      setAuditRuns(data.runs ?? []);
+      setRunsError(null);
+    } catch (err) {
+      setRunsError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  useEffect(() => {
+    void loadRuns();
+  }, []);
+
+  async function runScoring() {
+    setIsRunning(true);
+    setError(null);
+    try {
+      const data = await analyticsApi.runReconcileScoring<ScoringReconcileResult>();
+      setResult(data);
+      await loadRuns();
+      if (data.status === "ok") {
+        try {
+          onQualityRefresh(await analyticsApi.qualityLoop<QualityLoopReport>());
+        } catch {
+          // best-effort
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsRunning(false);
+    }
+  }
+
+  function runTone(run: ScoringReconcileRun): string {
+    if (run.status === "success") return "text-pos";
+    if (run.status === "failed") return "text-neg";
+    return "text-muted-foreground";
+  }
+
+  return (
+    <div className="mt-4 rounded-md border bg-background p-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <RefreshCw className="size-3.5 text-primary" />
+          <div className="text-xs font-medium text-muted-foreground">评分校准</div>
+        </div>
+        <button
+          type="button"
+          onClick={runScoring}
+          disabled={isRunning}
+          className="inline-flex items-center gap-1.5 rounded-md border bg-secondary px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary/80 disabled:cursor-wait disabled:opacity-60"
+        >
+          <RefreshCw className={cn("size-3.5", isRunning && "animate-spin")} />
+          执行评分
+        </button>
+      </div>
+
+      {error && (
+        <div className="mt-3 rounded-md border border-neg/40 bg-neg/10 px-3 py-2 text-xs text-neg">
+          {error}
+        </div>
+      )}
+
+      {result && (
+        <div className="mt-3 grid gap-2 text-xs md:grid-cols-5">
+          <div className="rounded-md bg-secondary/40 px-3 py-2">
+            <div className="text-muted-foreground">完赛</div>
+            <div className="font-mono text-base font-semibold tabular-nums">{result.total_finished}</div>
+          </div>
+          <div className="rounded-md bg-secondary/40 px-3 py-2">
+            <div className="text-muted-foreground">已评分</div>
+            <div className="font-mono text-base font-semibold tabular-nums">{result.scored}</div>
+          </div>
+          <div className="rounded-md bg-secondary/40 px-3 py-2">
+            <div className="text-muted-foreground">跳过</div>
+            <div className="font-mono text-base font-semibold tabular-nums">{result.skipped}</div>
+          </div>
+          <div className="rounded-md bg-secondary/40 px-3 py-2">
+            <div className="text-muted-foreground">错误</div>
+            <div className={cn("font-mono text-base font-semibold tabular-nums", result.errors > 0 && "text-neg")}>
+              {result.errors}
+            </div>
+          </div>
+          <div className="rounded-md bg-secondary/40 px-3 py-2">
+            <div className="text-muted-foreground">耗时</div>
+            <div className="font-mono text-base font-semibold tabular-nums">{formatDurationMs(result.duration_ms)}</div>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-3 rounded-md bg-secondary/20 px-3 py-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-muted-foreground">最近审计</span>
+          <span className="font-mono text-xs text-muted-foreground tabular-nums">{auditRuns.length}</span>
+        </div>
+        {runsError ? (
+          <div className="mt-2 text-xs text-neg">{runsError}</div>
+        ) : auditRuns.length === 0 ? (
+          <div className="mt-2 text-xs text-muted-foreground">暂无审计记录</div>
+        ) : (
+          <div className="mt-2 space-y-2">
+            {auditRuns.map((run) => (
+              <div key={run.id} className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <span className={cn("font-medium", runTone(run))}>
+                    {run.status === "success" ? "成功" : run.status === "failed" ? "失败" : run.status}
+                  </span>
+                  <span className="ml-2 text-muted-foreground">{compactDateTime(run.started_at)}</span>
+                  <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">{run.id.slice(0, 8)}</div>
+                  {(run.trigger_source || run.operator) && (
+                    <div className="text-[10px] text-muted-foreground">
+                      via {run.trigger_source}{run.operator ? `/${run.operator}` : ""}
+                    </div>
+                  )}
+                  {run.error && <div className="mt-0.5 text-neg">{run.error}</div>}
+                </div>
+                <div className="grid grid-cols-3 gap-1 text-right">
+                  <div>
+                    <div className="text-muted-foreground">评分</div>
+                    <div className="font-mono font-semibold tabular-nums">{run.scored ?? "--"}</div>
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground">跳过</div>
+                    <div className="font-mono font-semibold tabular-nums">{run.skipped ?? "--"}</div>
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground">耗时</div>
+                    <div className="font-mono font-semibold tabular-nums">{formatDurationMs(run.duration_ms)}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ResultConsistencyPanel({
   report,
   onResultRefresh,
@@ -1046,31 +1259,31 @@ function ResultConsistencyPanel({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <ClipboardCheck className={cn("size-3.5", hasIssues ? "text-warn" : "text-pos")} />
-          <div className="text-xs font-medium text-muted-foreground">Result consistency</div>
+          <div className="text-xs font-medium text-muted-foreground">比分一致性</div>
         </div>
         <div className={cn(
           "rounded-md border px-2 py-1 text-xs font-medium",
           hasErrors ? "border-neg/40 bg-neg/10 text-neg" : hasIssues ? "border-warn/40 bg-warn/10 text-warn" : "border-pos/40 bg-pos/10 text-pos"
         )}>
-          {hasIssues ? "Review" : "OK"}
+          {hasIssues ? "待检查" : "正常"}
         </div>
       </div>
 
       <div className="mt-3 grid gap-2 text-xs md:grid-cols-4">
         <div className="rounded-md bg-secondary/40 px-3 py-2">
-          <div className="text-muted-foreground">Facts</div>
+          <div className="text-muted-foreground">事实数据</div>
           <div className="font-mono text-base font-semibold tabular-nums">{report.fact_count}</div>
         </div>
         <div className="rounded-md bg-secondary/40 px-3 py-2">
-          <div className="text-muted-foreground">Fixtures</div>
+          <div className="text-muted-foreground">赛程</div>
           <div className="font-mono text-base font-semibold tabular-nums">{report.fixture_count}</div>
         </div>
         <div className="rounded-md bg-secondary/40 px-3 py-2">
-          <div className="text-muted-foreground">Checked</div>
+          <div className="text-muted-foreground">已检查</div>
           <div className="font-mono text-base font-semibold tabular-nums">{report.checked}</div>
         </div>
         <div className="rounded-md bg-secondary/40 px-3 py-2">
-          <div className="text-muted-foreground">Issues</div>
+          <div className="text-muted-foreground">问题</div>
           <div className={cn("font-mono text-base font-semibold tabular-nums", hasIssues ? "text-warn" : "text-pos")}>
             {report.issue_count}
           </div>
@@ -1080,15 +1293,15 @@ function ResultConsistencyPanel({
       {report.fact_store && (
         <div className="mt-3 rounded-md bg-secondary/20 px-3 py-2 text-xs">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="font-medium text-muted-foreground">Fact store</span>
+            <span className="font-medium text-muted-foreground">事实存储</span>
             <span className={cn("font-medium", report.fact_store.exists ? "text-pos" : "text-warn")}>
-              {report.fact_store.exists ? "Present" : "Missing fact file"}
+              {report.fact_store.exists ? "存在" : "缺少事实文件"}
             </span>
           </div>
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground tabular-nums">
-            <span>source {report.source}</span>
-            <span>stored {report.fact_store.count}</span>
-            <span>match_result {report.fact_store.by_kind?.match_result ?? 0}</span>
+            <span>来源 {report.source}</span>
+            <span>已存储 {report.fact_store.count}</span>
+            <span>比赛结果 {report.fact_store.by_kind?.match_result ?? 0}</span>
           </div>
           <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
             {report.fact_store.configured_path}
@@ -1098,16 +1311,17 @@ function ResultConsistencyPanel({
 
       <div className="mt-3 rounded-md bg-secondary/20 px-3 py-2">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-xs font-medium text-muted-foreground">Result fact backfill</div>
+          <div className="text-xs font-medium text-muted-foreground">比分事实回填</div>
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => runResultFactBackfill(true)}
               disabled={!canRunFactBackfill}
+              title="试运行比分事实回填，仅预览不写入"
               className="inline-flex items-center gap-1.5 rounded-md border bg-secondary px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary/80 disabled:cursor-wait disabled:opacity-60"
             >
               <RefreshCw className={cn("size-3.5", backfillRunning === "dry" && "animate-spin")} />
-              Fact dry-run
+              试运行
             </button>
             <label className="inline-flex items-center gap-1.5 rounded-md border bg-secondary/50 px-2.5 py-1.5 text-xs text-muted-foreground">
               <input
@@ -1116,40 +1330,41 @@ function ResultConsistencyPanel({
                 onChange={(event) => setBackfillConfirmed(event.currentTarget.checked)}
                 className="size-3.5 accent-current"
               />
-              Confirm fact write
+              确认事实写入
             </label>
             <button
               type="button"
               onClick={() => runResultFactBackfill(false)}
               disabled={!canApplyFactBackfill}
+              title="将比分事实写入数据库，不可回滚"
               className="inline-flex items-center gap-1.5 rounded-md border border-warn/40 bg-warn/10 px-2.5 py-1.5 text-xs font-medium text-warn transition-colors hover:bg-warn/20 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <ShieldCheck className={cn("size-3.5", backfillRunning === "write" && "animate-pulse")} />
-              Import facts
+              导入事实
             </button>
           </div>
         </div>
         {backfillError && (
           <div className="mt-2 rounded-md border border-neg/40 bg-neg/10 px-3 py-2 text-xs text-neg">
-            Fact backfill error: {backfillError}
+            回填错误: {backfillError}
           </div>
         )}
         {backfillResult && (
           <div className="mt-2 rounded-md bg-background/70 px-3 py-2 text-xs">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="font-medium text-muted-foreground">Fact backfill result</span>
+              <span className="font-medium text-muted-foreground">回填结果</span>
               {backfillResult.run_id && (
                 <span className="break-all font-mono text-muted-foreground tabular-nums">{backfillResult.run_id}</span>
               )}
             </div>
             <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground tabular-nums">
-              <span>finished {backfillResult.finished_fixture_count}</span>
-              <span>existing {backfillResult.existing_fact_matches}</span>
-              <span>candidates {backfillResult.candidate_count}</span>
-              <span>imported {backfillResult.imported}</span>
+              <span>已结束 {backfillResult.finished_fixture_count}</span>
+              <span>已有 {backfillResult.existing_fact_matches}</span>
+              <span>候选 {backfillResult.candidate_count}</span>
+              <span>已导入 {backfillResult.imported}</span>
             </div>
             {backfillResult.protected && (
-              <div className="mt-1 text-[11px] text-warn">confirmation required</div>
+              <div className="mt-1 text-[11px] text-warn">需要确认</div>
             )}
             {backfillResult.items.length > 0 && (
               <div className="mt-2 space-y-1">
@@ -1167,8 +1382,8 @@ function ResultConsistencyPanel({
         )}
         <div className="mt-2 rounded-md bg-background/70 px-3 py-2">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-            <span className="font-medium text-muted-foreground">Recent fact imports</span>
-            <span className="font-mono text-muted-foreground tabular-nums">{backfillRuns.length} runs</span>
+            <span className="font-medium text-muted-foreground">最近事实导入</span>
+            <span className="font-mono text-muted-foreground tabular-nums">{backfillRuns.length} 次运行</span>
           </div>
           {backfillRunsError ? (
             <div className="mt-2 rounded-md border border-neg/40 bg-neg/10 px-3 py-2 text-xs text-neg">
@@ -1176,7 +1391,7 @@ function ResultConsistencyPanel({
             </div>
           ) : backfillRuns.length === 0 ? (
             <div className="mt-2 rounded-md bg-secondary/30 px-3 py-3 text-center text-xs text-muted-foreground">
-              No confirmed fact imports
+              无已确认的事实导入
             </div>
           ) : (
             <div className="mt-2 space-y-1">
@@ -1196,9 +1411,9 @@ function ResultConsistencyPanel({
                     {run.error && <div className="mt-1 break-all text-neg">{run.error}</div>}
                   </div>
                   <div className="grid grid-cols-3 gap-2 font-mono text-[11px] text-muted-foreground tabular-nums md:text-right">
-                    <span>candidates {run.candidate_count}</span>
-                    <span>imported {run.imported}</span>
-                    <span>{run.error ? "errors" : "duration"} {run.error ? "1" : formatDurationMs(run.duration_ms)}</span>
+                    <span>候选 {run.candidate_count}</span>
+                    <span>已导入 {run.imported}</span>
+                    <span>{run.error ? "错误" : "耗时"} {run.error ? "1" : formatDurationMs(run.duration_ms)}</span>
                   </div>
                 </div>
               ))}
@@ -1248,13 +1463,13 @@ function ResultConsistencyPanel({
           </div>
           {report.issue_count > report.issues.length && (
             <div className="font-mono text-[11px] text-muted-foreground tabular-nums">
-              showing {report.issues.length} / {report.issue_count}
+              显示 {report.issues.length} / {report.issue_count}
             </div>
           )}
         </div>
       ) : (
         <div className="mt-3 rounded-md bg-pos/10 px-3 py-2 text-xs text-pos">
-          No result drift detected
+          未检测到比分漂移
         </div>
       )}
     </div>
@@ -1279,7 +1494,7 @@ export function AnalyticsDashboard() {
         setIsLoading(true);
         setError(null);
 
-        const [engine, accuracy, cache, health, quality, result, repair] = await Promise.all([
+        const [engine, accuracy, cache, health, quality, result, repair] = await Promise.allSettled([
           analyticsApi.engineStats<EngineStats>(),
           analyticsApi.accuracyStats<AccuracyStats>(),
           analyticsApi.oddsCacheStats<OddsCacheStats>(),
@@ -1287,7 +1502,17 @@ export function AnalyticsDashboard() {
           analyticsApi.qualityLoop<QualityLoopReport>(),
           analyticsApi.resultConsistency<ResultConsistencyReport>(25),
           analyticsApi.consistencyRepairPlan<ConsistencyRepairPlan>(25),
-        ]);
+        ]).then((results) =>
+          results.map((r) => (r.status === "fulfilled" ? r.value : null)) as [
+            EngineStats | null,
+            AccuracyStats | null,
+            OddsCacheStats | null,
+            SystemHealth | null,
+            QualityLoopReport | null,
+            ResultConsistencyReport | null,
+            ConsistencyRepairPlan | null,
+          ]
+        );
 
         setEngineStats(engine);
         setAccuracyStats(accuracy);
@@ -1432,6 +1657,7 @@ export function AnalyticsDashboard() {
             onQualityRefresh={setQualityLoop}
           />
           <PostMatchBackfillPanel onQualityRefresh={setQualityLoop} />
+          <ReconcileScoringPanel onQualityRefresh={setQualityLoop} />
           {resultConsistency && (
             <ResultConsistencyPanel
               report={resultConsistency}
@@ -1441,7 +1667,7 @@ export function AnalyticsDashboard() {
 
           <div className="mt-4 grid gap-3 lg:grid-cols-3">
             {ENGINES.map((engine) => {
-              const stats = qualityLoop.by_engine[engine.key];
+              const stats = qualityLoop.by_engine[engine.key] ?? EMPTY_QUALITY_SUMMARY;
               return (
                 <div key={engine.key} className="rounded-md border bg-background p-3">
                   <div className="flex items-center justify-between gap-2">
@@ -1573,6 +1799,25 @@ export function AnalyticsDashboard() {
               <div className="space-y-2">
                 {ENGINES.map((engine) => {
                   const stats = engineStats.by_engine[engine.key];
+                  if (!stats) {
+                    return (
+                      <div key={engine.key} className="rounded-md bg-secondary/50 p-3">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-medium">{engine.label}</span>
+                          <span className="text-muted-foreground">0 次</span>
+                        </div>
+                        <div className="mt-2 flex items-center gap-2">
+                          <div className="h-2 flex-1 overflow-hidden rounded-full bg-secondary">
+                            <div className={cn("h-full transition-all", engine.barClass)} style={{ width: "0%" }} />
+                          </div>
+                          <span className="font-mono text-xs tabular-nums">0.0%</span>
+                        </div>
+                        <div className="mt-2 text-xs text-muted-foreground">
+                          暂无预测数据
+                        </div>
+                      </div>
+                    );
+                  }
                   return (
                     <div key={engine.key} className="rounded-md bg-secondary/50 p-3">
                       <div className="flex items-center justify-between text-xs">
@@ -1613,19 +1858,30 @@ export function AnalyticsDashboard() {
             <div className="mt-4 space-y-3">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">已验证比赛</span>
-                <span className="font-mono text-lg font-bold tabular-nums">{accuracyStats.total_matches}</span>
+                <span className="font-mono text-lg font-bold tabular-nums">
+                  {accuracyStats.predicted_matches}
+                  <span className="text-xs font-normal text-muted-foreground"> / {accuracyStats.total_matches} 场</span>
+                </span>
               </div>
+              {accuracyStats.predicted_matches < accuracyStats.total_matches && (
+                <p className="text-xs text-muted-foreground">
+                  {accuracyStats.total_matches - accuracyStats.predicted_matches} 场已完赛但无预测记录，不计入准确率
+                </p>
+              )}
 
               <div className="space-y-2">
                 <div className="rounded-md bg-secondary/50 p-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">结果准确率</span>
+                    <span className="text-xs text-muted-foreground">胜平负命中率</span>
                     <span className={cn(
                       "font-mono text-lg font-bold tabular-nums",
                       accuracyStats.outcome_accuracy >= 0.6 ? "text-pos" : "text-warn"
                     )}>
                       {(accuracyStats.outcome_accuracy * 100).toFixed(1)}%
                     </span>
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    预测比分推导的胜平负结果是否正确
                   </div>
                   <div className="mt-2 h-2 overflow-hidden rounded-full bg-secondary">
                     <div
@@ -1644,20 +1900,69 @@ export function AnalyticsDashboard() {
                     <div className="mt-1 font-mono text-lg font-bold tabular-nums">
                       {accuracyStats.avg_score_mae.toFixed(2)}
                     </div>
+                    <div className="mt-1 text-xs text-muted-foreground">越低越好</div>
                   </div>
                   <div className="rounded-md bg-secondary/50 p-3">
                     <div className="text-xs text-muted-foreground">Brier得分</div>
                     <div className="mt-1 font-mono text-lg font-bold tabular-nums">
                       {accuracyStats.avg_brier_score.toFixed(3)}
                     </div>
+                    <div className="mt-1 text-xs text-muted-foreground">概率误差，越低越好</div>
                   </div>
                 </div>
 
                 <div className="rounded-md border bg-secondary/30 px-3 py-2 text-xs">
-                  <span className="text-muted-foreground">完全命中:</span>{" "}
+                  <span className="text-muted-foreground">比分完全命中:</span>{" "}
                   <span className="font-mono font-medium tabular-nums">{accuracyStats.exact_score_correct}</span> 场
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Accuracy by Stage */}
+        {accuracyStats?.by_stage && accuracyStats.by_stage.length > 0 && (
+          <div className="rounded-lg border bg-card p-4">
+            <div className="flex items-center gap-2 border-b pb-3">
+              <ClipboardCheck className="size-4 text-primary" />
+              <h3 className="text-sm font-semibold">分阶段准确率</h3>
+            </div>
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-xs text-muted-foreground">
+                    <th className="py-2 pr-3 text-left font-medium">阶段</th>
+                    <th className="py-2 px-2 text-center font-medium">场次</th>
+                    <th className="py-2 px-2 text-center font-medium">比分命中</th>
+                    <th className="py-2 px-2 text-center font-medium">净胜球</th>
+                    <th className="py-2 px-2 text-center font-medium">结果准确率</th>
+                    <th className="py-2 pl-2 text-center font-medium">MAE</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {accuracyStats.by_stage.map((row) => (
+                    <tr key={row.stage} className="border-b last:border-b-0">
+                      <td className="py-2 pr-3 font-medium capitalize">
+                        {row.stage === "group_stage" ? "小组赛" : row.stage === "knockout" ? "淘汰赛" : row.stage === "all" ? "全部" : row.stage}
+                      </td>
+                      <td className="py-2 px-2 text-center font-mono tabular-nums">{row.matches_evaluated}</td>
+                      <td className="py-2 px-2 text-center font-mono tabular-nums">{(row.exact_score_pct * 100).toFixed(1)}%</td>
+                      <td className="py-2 px-2 text-center font-mono tabular-nums">{(row.goal_diff_pct * 100).toFixed(1)}%</td>
+                      <td className="py-2 px-2 text-center">
+                        <span className={cn(
+                          "font-mono tabular-nums",
+                          row.outcome_accuracy >= 0.6 ? "text-pos" : "text-warn"
+                        )}>
+                          {(row.outcome_accuracy * 100).toFixed(1)}%
+                        </span>
+                      </td>
+                      <td className="py-2 pl-2 text-center font-mono tabular-nums">
+                        {row.score_mae != null ? row.score_mae.toFixed(2) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}

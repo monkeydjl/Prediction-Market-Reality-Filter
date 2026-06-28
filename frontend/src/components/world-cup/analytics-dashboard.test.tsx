@@ -50,6 +50,14 @@ function responseFor(url: string) {
       ],
     };
   }
+  if (url.includes("/reconcile-scoring/runs")) {
+    return {
+      status: "ok",
+      job_name: "world_cup_scoring_reconcile",
+      count: 0,
+      runs: [],
+    };
+  }
   if (url.includes("/result-fact-backfill")) {
     const dryRun = !url.includes("dry_run=false");
     return {
@@ -473,23 +481,23 @@ describe("AnalyticsDashboard", () => {
     expect(await screen.findByText("预览")).toBeInTheDocument();
     expect(screen.getByText("可推断 1 / 1")).toBeInTheDocument();
     expect(screen.getByText("rule_only")).toBeInTheDocument();
-    expect(screen.getByText("Result consistency")).toBeInTheDocument();
-    expect(screen.getByText("Review")).toBeInTheDocument();
-    expect(screen.getByText("Fact store")).toBeInTheDocument();
-    expect(screen.getByText("Missing fact file")).toBeInTheDocument();
-    expect(screen.getByText(/source stored_sports_facts/)).toBeInTheDocument();
-    expect(screen.getByText(/match_result 0/)).toBeInTheDocument();
-    expect(screen.getByText("Result fact backfill")).toBeInTheDocument();
-    expect(await screen.findByText("Recent fact imports")).toBeInTheDocument();
+    expect(screen.getByText("比分一致性")).toBeInTheDocument();
+    expect(screen.getByText("待检查")).toBeInTheDocument();
+    expect(screen.getByText("事实存储")).toBeInTheDocument();
+    expect(screen.getByText("缺少事实文件")).toBeInTheDocument();
+    expect(screen.getByText(/来源\s*stored_sports_facts/)).toBeInTheDocument();
+    expect(screen.getByText(/比赛结果\s*0/)).toBeInTheDocument();
+    expect(screen.getByText("比分事实回填")).toBeInTheDocument();
+    expect(await screen.findByText("最近事实导入")).toBeInTheDocument();
     expect(screen.getByText("fact-import-prev")).toBeInTheDocument();
-    expect(screen.getByText("duration 88ms")).toBeInTheDocument();
+    expect(screen.getByText("耗时 88ms")).toBeInTheDocument();
     expect(screen.getAllByText("via world-cup-dashboard / alice").length).toBeGreaterThanOrEqual(1);
-    const factWriteButton = screen.getByRole("button", { name: /Import facts/ });
+    const factWriteButton = screen.getByRole("button", { name: /导入事实/ });
     expect(factWriteButton).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: /Fact dry-run/ }));
-    expect(await screen.findByText("Fact backfill result")).toBeInTheDocument();
-    expect(screen.getAllByText("candidates 2").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("imported 0")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^试运行$/ }));
+    expect(await screen.findByText("回填结果")).toBeInTheDocument();
+    expect(screen.getAllByText(/候选\s*2/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/已导入\s*0/)).toBeInTheDocument();
     expect(screen.getByText("Argentina vs Brazil")).toBeInTheDocument();
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -513,11 +521,11 @@ describe("AnalyticsDashboard", () => {
         }),
       );
     });
-    fireEvent.click(screen.getByLabelText("Confirm fact write"));
+    fireEvent.click(screen.getByLabelText("确认事实写入"));
     expect(factWriteButton).not.toBeDisabled();
     fireEvent.click(factWriteButton);
     expect(await screen.findByText("result-fact-write-1")).toBeInTheDocument();
-    expect(screen.getAllByText("imported 2").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/已导入\s*2/).length).toBeGreaterThanOrEqual(1);
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         expect.stringContaining("dry_run=false"),
@@ -549,11 +557,11 @@ describe("AnalyticsDashboard", () => {
     expect(screen.getByText("m-score")).toBeInTheDocument();
     expect(screen.getByText("m-missing")).toBeInTheDocument();
     expect(screen.getByText(/Result fact score is 2-1/)).toBeInTheDocument();
-    const repairWriteButton = screen.getByRole("button", { name: /Apply repair/ });
+    const repairWriteButton = screen.getByRole("button", { name: /应用修复/ });
     expect(repairWriteButton).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: /Repair dry-run/ }));
+    fireEvent.click(screen.getByRole("button", { name: /修复试运行/ }));
     expect(await screen.findByText("repair-dry-run-1")).toBeInTheDocument();
-    expect(screen.getByText("updated 0")).toBeInTheDocument();
+    expect(screen.getByText(/已更新\s*0/)).toBeInTheDocument();
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         expect.stringContaining("/api/analytics/consistency-repair?"),
@@ -576,11 +584,11 @@ describe("AnalyticsDashboard", () => {
         }),
       );
     });
-    fireEvent.click(screen.getByLabelText("Confirm method write"));
+    fireEvent.click(screen.getByLabelText("确认方法写入"));
     expect(repairWriteButton).not.toBeDisabled();
     fireEvent.click(repairWriteButton);
     expect(await screen.findByText("repair-write-1")).toBeInTheDocument();
-    expect(screen.getByText("updated 1")).toBeInTheDocument();
+    expect(screen.getByText(/已更新\s*1/)).toBeInTheDocument();
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         expect.stringContaining("dry_run=false"),
@@ -605,7 +613,7 @@ describe("AnalyticsDashboard", () => {
     });
     expect(screen.getByText(/来源 42/)).toBeInTheDocument();
     expect(screen.getByText("赛后回填")).toBeInTheDocument();
-    expect(await screen.findByText("最近审计")).toBeInTheDocument();
+    expect((await screen.findAllByText("最近审计")).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("audit-dry-run-prev")).toBeInTheDocument();
     expect(screen.getByText("audit-failed-prev")).toBeInTheDocument();
     expect(screen.getByText("source unavailable")).toBeInTheDocument();

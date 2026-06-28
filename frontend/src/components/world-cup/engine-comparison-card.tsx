@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Zap, Brain, AlertCircle, Check, GitCompare, type LucideIcon } from "lucide-react";
+import { Zap, Brain, AlertCircle, Check, GitCompare, BarChart3, type LucideIcon } from "lucide-react";
 import type { MatchFixture, MatchPrediction } from "@/lib/world-cup-predictions";
 import { triggerPrediction } from "@/lib/world-cup-predictions";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,7 @@ interface EngineComparisonCardProps {
   eloOddsPrediction?: MatchPrediction;
   hybridPrediction?: MatchPrediction;
   integratedPrediction?: MatchPrediction;
+  gbmPrediction?: MatchPrediction;
   isLoading?: boolean;
   onApplyPrediction?: () => void;
 }
@@ -34,14 +35,16 @@ function PredictionColumn({
   prediction,
   engine,
   matchId,
+  isFrozen,
   onApply
 }: {
   label: string;
   icon: LucideIcon;
   color: string;
   prediction?: MatchPrediction;
-  engine: "elo_odds" | "hybrid" | "integrated" | "high_confidence" | "auto";
+  engine: "elo_odds" | "hybrid" | "integrated" | "gbm" | "high_confidence" | "auto";
   matchId: string;
+  isFrozen: boolean;
   onApply?: () => void;
 }) {
   const [applying, setApplying] = useState(false);
@@ -218,36 +221,44 @@ function PredictionColumn({
       )}
 
       {/* Apply Button */}
-      {applyError && (
-        <div className="mt-2 flex items-center gap-1.5 text-xs text-neg">
-          <AlertCircle className="size-3 flex-shrink-0" />
-          <span>{applyError}</span>
+      {isFrozen ? (
+        <div className="mt-3 rounded-md border border-neg/20 bg-neg/5 px-3 py-2 text-center text-xs text-neg/80">
+          比赛已开赛，预测已锁定
         </div>
+      ) : (
+        <>
+          {applyError && (
+            <div className="mt-2 flex items-center gap-1.5 text-xs text-neg">
+              <AlertCircle className="size-3 flex-shrink-0" />
+              <span>{applyError}</span>
+            </div>
+          )}
+          <button
+            onClick={handleApply}
+            disabled={applying || applied}
+            className={cn(
+              "mt-3 w-full rounded-md border px-3 py-2 text-xs font-medium transition-colors",
+              applied
+                ? "border-pos/40 bg-pos/10 text-pos cursor-default"
+                : "bg-secondary/50 text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed"
+            )}
+          >
+            {applied ? (
+              <div className="flex items-center justify-center gap-1.5">
+                <Check className="size-3.5" />
+                <span>已应用</span>
+              </div>
+            ) : applying ? (
+              <div className="flex items-center justify-center gap-1.5">
+                <div className="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                <span>应用中...</span>
+              </div>
+            ) : (
+              <span>应用此预测</span>
+            )}
+          </button>
+        </>
       )}
-      <button
-        onClick={handleApply}
-        disabled={applying || applied}
-        className={cn(
-          "mt-3 w-full rounded-md border px-3 py-2 text-xs font-medium transition-colors",
-          applied
-            ? "border-pos/40 bg-pos/10 text-pos cursor-default"
-            : "bg-secondary/50 text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed"
-        )}
-      >
-        {applied ? (
-          <div className="flex items-center justify-center gap-1.5">
-            <Check className="size-3.5" />
-            <span>已应用</span>
-          </div>
-        ) : applying ? (
-          <div className="flex items-center justify-center gap-1.5">
-            <div className="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-            <span>应用中...</span>
-          </div>
-        ) : (
-          <span>应用此预测</span>
-        )}
-      </button>
     </div>
   );
 }
@@ -257,12 +268,13 @@ export function EngineComparisonCard({
   eloOddsPrediction,
   hybridPrediction,
   integratedPrediction,
+  gbmPrediction,
   isLoading,
   onApplyPrediction
 }: EngineComparisonCardProps) {
   // Calculate agreement level
   const agreement = (() => {
-    const predictions = [eloOddsPrediction, hybridPrediction, integratedPrediction].filter(
+    const predictions = [eloOddsPrediction, hybridPrediction, integratedPrediction, gbmPrediction].filter(
       (prediction): prediction is MatchPrediction => prediction != null
     );
     if (predictions.length < 2) return null;
@@ -309,6 +321,9 @@ export function EngineComparisonCard({
     );
   }
 
+  // Match is frozen if it has already started or finished — predictions cannot be applied.
+  const isFrozen = match.status === "finished" || match.status === "in_play";
+
   return (
     <div className="space-y-4">
       {/* Match Info */}
@@ -321,7 +336,7 @@ export function EngineComparisonCard({
       </div>
 
       {/* Comparison Grid */}
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
         <PredictionColumn
           label="Elo+赔率"
           icon={Zap}
@@ -329,6 +344,7 @@ export function EngineComparisonCard({
           prediction={eloOddsPrediction}
           engine="elo_odds"
           matchId={match.match_id}
+          isFrozen={isFrozen}
           onApply={onApplyPrediction}
         />
         <PredictionColumn
@@ -338,6 +354,7 @@ export function EngineComparisonCard({
           prediction={hybridPrediction}
           engine="hybrid"
           matchId={match.match_id}
+          isFrozen={isFrozen}
           onApply={onApplyPrediction}
         />
         <PredictionColumn
@@ -347,6 +364,17 @@ export function EngineComparisonCard({
           prediction={integratedPrediction}
           engine="integrated"
           matchId={match.match_id}
+          isFrozen={isFrozen}
+          onApply={onApplyPrediction}
+        />
+        <PredictionColumn
+          label="GBM"
+          icon={BarChart3}
+          color="text-teal-500"
+          prediction={gbmPrediction}
+          engine="gbm"
+          matchId={match.match_id}
+          isFrozen={isFrozen}
           onApply={onApplyPrediction}
         />
       </div>

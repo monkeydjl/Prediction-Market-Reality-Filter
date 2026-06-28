@@ -13,7 +13,7 @@ from sqlalchemy.pool import StaticPool
 from app.api.routes import world_cup_analytics
 from app.core.config import settings
 from app.memory import loop_run_store
-from app.models.world_cup_prediction import Base, MatchFixture
+from app.models.world_cup_prediction import Base, MatchFixture, MatchPrediction
 from app.utils import sqlite_db
 from app.utils.prediction_db import get_prediction_session_dep
 
@@ -71,7 +71,7 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
                 away_team="Team B",
                 kickoff_utc=datetime(2026, 6, 20, 18, 0, 0),
                 venue="Test Stadium",
-                stage="GROUP_STAGE",
+                stage="group_stage",
                 status="finished",
                 home_score=2,
                 away_score=1,
@@ -134,6 +134,122 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
             run["result"]["audit_metadata"]["request_path"],
             "/analytics/result-fact-backfill",
         )
+
+    def test_reconcile_scoring_records_audit_metadata(self):
+        self._add_finished_fixture()
+        headers = {
+            **AUTH_HEADERS,
+            "X-Client-Source": "world-cup-dashboard",
+            "X-Operator": "charlie",
+        }
+
+        with (
+            patch.object(settings, "API_WRITE_KEY", "secret"),
+            patch(
+                "app.api.routes.world_cup_analytics.score_all_finished_matches",
+                return_value={
+                    "status": "ok",
+                    "total_finished": 1,
+                    "scored": 0,
+                    "skipped": 1,
+                    "errors": 0,
+                    "duration_ms": 5,
+                    "run_id": "fake-run-id",
+                    "audit_metadata": {
+                        "trigger_source": "world-cup-dashboard",
+                        "operator": "charlie",
+                    },
+                },
+            ) as mock_score,
+        ):
+            resp = self.client.post(
+                "/analytics/reconcile-scoring",
+                headers=headers,
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        mock_score.assert_called_once()
+        passed_meta = mock_score.call_args.kwargs.get("audit_metadata") or mock_score.call_args[1].get("audit_metadata")
+        self.assertIsNotNone(passed_meta)
+        self.assertEqual(passed_meta.get("trigger_source"), "world-cup-dashboard")
+        self.assertEqual(passed_meta.get("operator"), "charlie")
+
+    def test_engine_stats_includes_gbm_bucket(self):
+        self.session.add(
+            MatchPrediction(
+                match_id="m-gbm",
+                predicted_home_score=1.4,
+                predicted_away_score=0.9,
+                home_win_prob=0.55,
+                draw_prob=0.25,
+                away_win_prob=0.20,
+                confidence=0.72,
+                prediction_method="gbm_lightgbm",
+            )
+        )
+        self.session.commit()
+
+        resp = self.client.get("/analytics/engine-stats")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["total_predictions"], 1)
+        self.assertEqual(body["by_engine"]["gbm"]["count"], 1)
+        self.assertEqual(body["by_engine"]["gbm"]["avg_confidence"], 0.72)
+
+    def test_tournament_simulation_cache_is_keyed_by_num_simulations(self):
+        world_cup_analytics._TOURNAMENT_CACHE = {}
+        world_cup_analytics._TOURNAMENT_CACHE_TIME = {}
+        self.session.add_all(
+            [
+                MatchFixture(
+                    match_id="a1",
+                    fixture_id="a1",
+                    home_team="Team A1",
+                    away_team="Team A2",
+                    kickoff_utc=datetime(2026, 6, 12, 12, 0, 0),
+                    venue="Test Stadium",
+                    stage="group_stage",
+                    group="A",
+                    status="scheduled",
+                ),
+                MatchFixture(
+                    match_id="b1",
+                    fixture_id="b1",
+                    home_team="Team B1",
+                    away_team="Team B2",
+                    kickoff_utc=datetime(2026, 6, 13, 12, 0, 0),
+                    venue="Test Stadium",
+                    stage="group_stage",
+                    group="B",
+                    status="scheduled",
+                ),
+            ]
+        )
+        self.session.commit()
+
+        def fake_simulate(*, groups, elo_cache, num_simulations):
+            return {"status": "ok", "num_simulations": num_simulations}
+
+        with (
+            patch(
+                "app.services.elo_ratings_service.get_elo_rating",
+                return_value={"elo_rating": 1500.0},
+            ) as get_elo,
+            patch(
+                "app.services.world_cup_tournament_simulator.simulate_tournament",
+                side_effect=fake_simulate,
+            ) as simulate,
+        ):
+            first = self.client.get("/analytics/tournament-simulation?num_simulations=5000")
+            second = self.client.get("/analytics/tournament-simulation?num_simulations=20000")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.json()["num_simulations"], 5000)
+        self.assertEqual(second.json()["num_simulations"], 20000)
+        self.assertEqual(simulate.call_count, 2)
+        self.assertGreaterEqual(get_elo.await_count, 4)
 
 
 if __name__ == "__main__":

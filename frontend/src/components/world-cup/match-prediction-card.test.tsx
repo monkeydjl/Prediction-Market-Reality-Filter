@@ -100,12 +100,12 @@ describe("MatchPredictionCard engine label", () => {
           confidence_calibration: {
             raw: 0.8,
             calibrated: 0.65,
-            method: "bucketed_reliability_curve",
+            method: "piecewise_linear_reliability",
             total_samples: 8,
             is_reliable: true,
             bucket: { label: "80-100%", count: 4 },
             applied_bucket: { label: "80-100%", count: 4 },
-            reason: "bucket_reliability_curve",
+            reason: "piecewise_linear_calibration",
           },
         })}
       />
@@ -125,7 +125,7 @@ describe("MatchPredictionCard engine label", () => {
           confidence_calibration: {
             raw: 0.72,
             calibrated: 0.72,
-            method: "bucketed_reliability_curve",
+            method: "piecewise_linear_reliability",
             total_samples: 2,
             min_total_samples: 6,
             min_bucket_samples: 3,

@@ -25,7 +25,7 @@ import { translateTeamName } from "@/lib/team-names-zh";
 import { formatBeijingMatchDate, getWorldCupKickoffTime, parseWorldCupUtcDate } from "@/lib/world-cup-time";
 import { cn } from "@/lib/utils";
 
-type TabView = "matches" | "groups" | "qualification" | "knockout" | "engine-stats" | "auto-tune";
+type TabView = "matches" | "groups" | "qualification" | "knockout" | "tournament" | "engine-stats" | "auto-tune" | "analytics";
 
 type StageFilter = "all" | "GROUP_STAGE" | "KNOCKOUT";
 type TimeFilter = "all" | "today" | "upcoming";
@@ -135,6 +135,14 @@ const EngineAutoTuneDashboard = dynamic(
 const BatchEngineSwitcher = dynamic(
   () => import("@/components/world-cup/batch-engine-switcher").then((mod) => mod.BatchEngineSwitcher),
   { loading: () => <BlockLoading label="加载批量切换..." /> }
+);
+const TournamentSimulation = dynamic(
+  () => import("@/components/world-cup/tournament-simulation"),
+  { loading: () => <BlockLoading label="加载锦标赛模拟..." /> }
+);
+const AnalyticsDashboard = dynamic(
+  () => import("@/components/world-cup/analytics-dashboard").then((mod) => mod.AnalyticsDashboard),
+  { loading: () => <BlockLoading label="加载系统监控..." /> }
 );
 
 function isUtcToday(isoDate: string): boolean {
@@ -395,11 +403,11 @@ export default function WorldCupPage() {
         </div>
 
         {/* Tab Navigation */}
-        <div className="mb-6 flex gap-1 rounded-lg border bg-secondary p-1">
+        <div className="mb-6 flex gap-1 overflow-x-auto rounded-lg border bg-secondary p-1">
           <button
             onClick={() => handleTabChange("matches")}
             className={cn(
-              "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+              "flex-1 min-w-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors",
               activeTab === "matches"
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:text-foreground"
@@ -410,7 +418,7 @@ export default function WorldCupPage() {
           <button
             onClick={() => handleTabChange("groups")}
             className={cn(
-              "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+              "flex-1 min-w-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors",
               activeTab === "groups"
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:text-foreground"
@@ -421,7 +429,7 @@ export default function WorldCupPage() {
           <button
             onClick={() => handleTabChange("qualification")}
             className={cn(
-              "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+              "flex-1 min-w-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors",
               activeTab === "qualification"
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:text-foreground"
@@ -432,7 +440,7 @@ export default function WorldCupPage() {
           <button
             onClick={() => handleTabChange("knockout")}
             className={cn(
-              "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+              "flex-1 min-w-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors",
               activeTab === "knockout"
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:text-foreground"
@@ -441,9 +449,20 @@ export default function WorldCupPage() {
             淘汰赛
           </button>
           <button
+            onClick={() => handleTabChange("tournament")}
+            className={cn(
+              "flex-1 min-w-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors",
+              activeTab === "tournament"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            夺冠概率
+          </button>
+          <button
             onClick={() => handleTabChange("engine-stats")}
             className={cn(
-              "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+              "flex-1 min-w-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors",
               activeTab === "engine-stats"
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:text-foreground"
@@ -454,13 +473,24 @@ export default function WorldCupPage() {
           <button
             onClick={() => handleTabChange("auto-tune")}
             className={cn(
-              "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+              "flex-1 min-w-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors",
               activeTab === "auto-tune"
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:text-foreground"
             )}
           >
             自动调教
+          </button>
+          <button
+            onClick={() => handleTabChange("analytics")}
+            className={cn(
+              "flex-1 min-w-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors",
+              activeTab === "analytics"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            系统监控
           </button>
         </div>
 
@@ -516,9 +546,11 @@ export default function WorldCupPage() {
               </span>
               <button
                 onClick={handleClearTeamFilter}
+                aria-label="清除球队筛选"
+                title="清除球队筛选"
                 className="rounded-sm hover:bg-primary/20 transition-colors"
               >
-                <X className="size-4 text-primary" />
+                <X className="size-4 text-primary" aria-hidden="true" />
               </button>
             </div>
           )}
@@ -724,6 +756,11 @@ export default function WorldCupPage() {
           />
         )}
 
+        {/* Tournament Simulation */}
+        {activeTab === "tournament" && (
+          <TournamentSimulation />
+        )}
+
         {/* Engine Comparison Stats */}
         {activeTab === "engine-stats" && (
           <EngineComparisonView />
@@ -735,6 +772,11 @@ export default function WorldCupPage() {
             <BatchEngineSwitcher onCompleted={handlePredictionUpdated} />
             <EngineAutoTuneDashboard />
           </div>
+        )}
+
+        {/* System Analytics */}
+        {activeTab === "analytics" && (
+          <AnalyticsDashboard />
         )}
 
         {/* Legacy Events Link */}

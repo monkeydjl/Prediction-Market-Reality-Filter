@@ -70,7 +70,7 @@ describe("PredictionHistoryCard engine label", () => {
         confidence_calibration: {
           raw: 0.8,
           calibrated: 0.65,
-          method: "bucketed_reliability_curve",
+          method: "piecewise_linear_reliability",
           total_samples: 8,
           applied_bucket: { label: "80-100%", count: 4 },
         },

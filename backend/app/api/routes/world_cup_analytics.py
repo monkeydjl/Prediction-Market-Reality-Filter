@@ -1,6 +1,10 @@
 """API endpoints for prediction analytics and monitoring."""
 
+import logging
+import threading
 from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -8,6 +12,7 @@ from typing import Any
 
 from app.api.audit_metadata import get_audit_metadata
 from app.api.security import require_write_key
+from app.memory import loop_run_store
 from app.utils.prediction_db import get_prediction_session_dep
 from app.models.world_cup_prediction import (
     MatchPrediction,
@@ -29,7 +34,10 @@ from app.services.world_cup_result_fact_backfill_service import (
     list_world_cup_result_fact_backfill_runs,
     run_world_cup_result_fact_backfill,
 )
-from app.services.world_cup_scoring_service import score_all_finished_matches
+from app.services.world_cup_scoring_service import (
+    SCORING_RECONCILE_AUDIT_JOB_NAME,
+    score_all_finished_matches,
+)
 from app.services.world_cup_post_match_backfill_service import (
     list_post_match_backfill_runs,
     run_post_match_backfill,
@@ -47,13 +55,10 @@ async def get_engine_stats(session: Session = Depends(get_prediction_session_dep
     predictions = session.query(MatchPrediction).all()
 
     total = len(predictions)
-    grouped: dict[str, list[MatchPrediction]] = {
-        "elo_odds": [],
-        "hybrid": [],
-        "integrated": [],
-    }
+    engine_keys = ("elo_odds", "hybrid", "integrated", "gbm")
+    grouped: dict[str, list[MatchPrediction]] = {engine: [] for engine in engine_keys}
     for prediction in predictions:
-        grouped[bucket_engine(prediction.prediction_method)].append(prediction)
+        grouped.setdefault(bucket_engine(prediction.prediction_method), []).append(prediction)
 
     def engine_summary(engine: str) -> dict[str, Any]:
         engine_predictions = grouped[engine]
@@ -71,9 +76,8 @@ async def get_engine_stats(session: Session = Depends(get_prediction_session_dep
     return {
         "total_predictions": total,
         "by_engine": {
-            "elo_odds": engine_summary("elo_odds"),
-            "hybrid": engine_summary("hybrid"),
-            "integrated": engine_summary("integrated"),
+            engine: engine_summary(engine)
+            for engine in engine_keys
         }
     }
 
@@ -160,9 +164,41 @@ async def post_consistency_repair(
 @router.post("/reconcile-scoring")
 async def reconcile_scoring(
     _auth: None = Depends(require_write_key),
+    audit_metadata: dict[str, str] = Depends(get_audit_metadata),
 ) -> dict[str, Any]:
     """Score finished matches against stored predictions."""
-    return score_all_finished_matches()
+    return score_all_finished_matches(audit_metadata=audit_metadata)
+
+
+@router.get("/reconcile-scoring/runs")
+async def get_scoring_reconcile_runs(
+    limit: int = Query(10, ge=1, le=50, description="Maximum audit runs to return"),
+) -> dict[str, Any]:
+    """Get recent audit runs for scoring reconciliation."""
+    runs = loop_run_store.recent_runs(
+        limit=limit, job_name=SCORING_RECONCILE_AUDIT_JOB_NAME
+    )
+    return {
+        "status": "ok",
+        "job_name": SCORING_RECONCILE_AUDIT_JOB_NAME,
+        "count": len(runs),
+        "runs": [
+            {
+                "id": r["id"],
+                "status": r["status"],
+                "started_at": r.get("started_at"),
+                "finished_at": r.get("finished_at"),
+                "duration_ms": (r.get("result") or {}).get("duration_ms"),
+                "scored": (r.get("result") or {}).get("scored"),
+                "skipped": (r.get("result") or {}).get("skipped"),
+                "errors": (r.get("result") or {}).get("errors"),
+                "trigger_source": (r.get("result") or {}).get("audit_metadata", {}).get("trigger_source"),
+                "operator": (r.get("result") or {}).get("audit_metadata", {}).get("operator"),
+                "error": r.get("error"),
+            }
+            for r in runs
+        ],
+    }
 
 
 @router.post("/post-match-backfill")
@@ -192,6 +228,12 @@ async def get_post_match_backfill_runs(
 @router.get("/accuracy-stats")
 async def get_accuracy_stats(session: Session = Depends(get_prediction_session_dep)) -> dict[str, Any]:
     """Get prediction accuracy statistics."""
+    # Refresh PredictionAccuracy table from live MatchResult data
+    from app.services.world_cup_quality_service import refresh_prediction_accuracy
+    try:
+        refresh_prediction_accuracy(session)
+    except Exception as e:
+        logger.warning("Prediction accuracy refresh failed (using stale data): %s", e)
 
     results = session.query(MatchResult).all()
 
@@ -201,23 +243,134 @@ async def get_accuracy_stats(session: Session = Depends(get_prediction_session_d
             "outcome_accuracy": 0.0,
             "avg_score_mae": 0.0,
             "avg_brier_score": 0.0,
-            "by_engine": {}
+            "by_engine": {},
+            "by_stage": [],
         }
 
+    # Only count matches that actually have predictions (outcome_correct is not None).
+    # Matches without predictions have outcome_correct=None and would dilute accuracy.
+    predicted = [r for r in results if r.outcome_correct is not None]
     total = len(results)
-    outcome_correct = sum(1 for r in results if r.outcome_correct == 1)
+    predicted_count = len(predicted)
+    outcome_correct = sum(1 for r in predicted if r.outcome_correct == 1)
 
-    # Calculate averages
-    avg_mae = sum(r.score_mae for r in results if r.score_mae) / total
-    avg_brier = sum(r.brier_score for r in results if r.brier_score) / total
+    # Calculate averages — only over rows that have the metric
+    scored_mae = [r.score_mae for r in results if r.score_mae is not None]
+    scored_brier = [r.brier_score for r in results if r.brier_score is not None]
+    avg_mae = sum(scored_mae) / len(scored_mae) if scored_mae else 0.0
+    avg_brier = sum(scored_brier) / len(scored_brier) if scored_brier else 0.0
+
+    # By-stage breakdown from PredictionAccuracy table
+    from app.models.world_cup_prediction import PredictionAccuracy
+    stage_rows = session.query(PredictionAccuracy).all()
+    by_stage = [
+        {
+            "stage": r.stage,
+            "matches_evaluated": r.matches_evaluated,
+            "exact_score_pct": round(r.exact_score_correct / r.matches_evaluated, 3) if r.matches_evaluated and r.exact_score_correct else 0,
+            "goal_diff_pct": round(r.goal_diff_correct / r.matches_evaluated, 3) if r.matches_evaluated and r.goal_diff_correct else 0,
+            "outcome_accuracy": round(r.outcome_accuracy, 3) if r.outcome_accuracy else 0,
+            "score_mae": round(r.score_mae, 2) if r.score_mae else None,
+        }
+        for r in stage_rows
+    ]
 
     return {
         "total_matches": total,
-        "outcome_accuracy": round(outcome_correct / total, 3) if total > 0 else 0,
+        "predicted_matches": predicted_count,
+        "outcome_accuracy": round(outcome_correct / predicted_count, 3) if predicted_count > 0 else 0,
         "avg_score_mae": round(avg_mae, 2),
         "avg_brier_score": round(avg_brier, 3),
-        "exact_score_correct": sum(1 for r in results if abs(r.home_error or 0) < 0.5 and abs(r.away_error or 0) < 0.5)
+        "exact_score_correct": sum(1 for r in predicted if abs(r.home_error or 0) < 0.5 and abs(r.away_error or 0) < 0.5),
+        "by_stage": by_stage,
     }
+
+
+# ---------------------------------------------------------------------------
+# Tournament simulation (Monte Carlo)
+# ---------------------------------------------------------------------------
+
+_TOURNAMENT_CACHE: dict[int, dict[str, Any]] = {}
+_TOURNAMENT_CACHE_TIME: dict[int, float] = {}
+_TOURNAMENT_CACHE_TTL = 3600.0  # 1 hour
+_TOURNAMENT_CACHE_LOCK = threading.Lock()
+
+
+@router.get("/tournament-simulation")
+async def get_tournament_simulation(
+    num_simulations: int = Query(default=5000, ge=1000, le=20000),
+    session: Session = Depends(get_prediction_session_dep),
+) -> dict[str, Any]:
+    """Run Monte Carlo tournament simulation and return win/progression probabilities."""
+    import time as _time
+
+    global _TOURNAMENT_CACHE, _TOURNAMENT_CACHE_TIME
+
+    # Return cached result if fresh (fast path under lock)
+    with _TOURNAMENT_CACHE_LOCK:
+        now = _time.monotonic()
+        cached_result = _TOURNAMENT_CACHE.get(num_simulations)
+        cached_at = _TOURNAMENT_CACHE_TIME.get(num_simulations, 0.0)
+        if cached_result is not None and (now - cached_at) < _TOURNAMENT_CACHE_TTL:
+            return {**cached_result, "cached": True}
+
+    # Load groups from fixtures
+    from app.models.world_cup_prediction import MatchFixture
+    fixtures = session.query(MatchFixture).filter(
+        MatchFixture.group.isnot(None),
+        MatchFixture.stage == "group_stage",
+    ).all()
+
+    groups: dict[str, list[str]] = {}
+    for f in fixtures:
+        g = (f.group or "").strip()
+        if not g:
+            continue
+        groups.setdefault(g, [])
+        if f.home_team and f.home_team not in groups[g]:
+            groups[g].append(f.home_team)
+        if f.away_team and f.away_team not in groups[g]:
+            groups[g].append(f.away_team)
+
+    if len(groups) < 2:
+        return {
+            "error": "insufficient_group_data",
+            "message": "需要至少 2 个小组的赛程数据才能模拟",
+            "groups_found": len(groups),
+        }
+
+    # Pre-fetch Elo ratings (avoids asyncio.run RuntimeError in sync context)
+    from app.services.elo_ratings_service import get_elo_rating
+    all_teams = set()
+    for teams in groups.values():
+        all_teams.update(teams)
+
+    elo_cache: dict[str, float] = {}
+    for team in all_teams:
+        try:
+            data = await get_elo_rating(team)
+            elo_cache[team] = data.get("elo_rating", 1500.0)
+        except Exception as e:
+            logger.warning("Elo fetch failed for %s, using default 1500: %s", team, e)
+            elo_cache[team] = 1500.0
+
+    # Run simulation
+    from app.services.world_cup_tournament_simulator import simulate_tournament
+    result = simulate_tournament(
+        groups=groups,
+        elo_cache=elo_cache,
+        num_simulations=num_simulations,
+    )
+
+    result["cached_at"] = datetime.now(timezone.utc).isoformat()
+    result["groups"] = {g: teams for g, teams in groups.items()}
+
+    # Cache for subsequent requests (under lock)
+    with _TOURNAMENT_CACHE_LOCK:
+        _TOURNAMENT_CACHE[num_simulations] = result
+        _TOURNAMENT_CACHE_TIME[num_simulations] = _time.monotonic()
+
+    return result
 
 
 @router.get("/odds-cache-stats")

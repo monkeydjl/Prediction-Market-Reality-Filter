@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Brain, Loader2, AlertCircle, TrendingUp, Target, Zap, RefreshCw, GitCompare } from "lucide-react";
+import { Brain, Loader2, AlertCircle, TrendingUp, Target, Zap, RefreshCw, GitCompare, BarChart3 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getWorldCupApiBase } from "@/lib/env";
 import { getOperatorApiKey } from "@/lib/api";
@@ -57,7 +57,7 @@ interface TaskStatus {
   result?: AutoTuneResult;
 }
 
-type EngineKey = "elo_odds" | "hybrid" | "integrated";
+type EngineKey = "elo_odds" | "hybrid" | "integrated" | "gbm";
 
 export function EngineAutoTuneDashboard() {
   const [tuning, setTuning] = useState(false);
@@ -67,6 +67,10 @@ export function EngineAutoTuneDashboard() {
   const [calibration, setCalibration] = useState<CalibrationInfo | null>(null);
   const [loadingCalibration, setLoadingCalibration] = useState(false);
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
+  const [patterns, setPatterns] = useState<Record<string, unknown> | null>(null);
+  const [loadingPatterns, setLoadingPatterns] = useState(false);
+  const [batchOptimizing, setBatchOptimizing] = useState(false);
+  const [batchResult, setBatchResult] = useState<Record<string, unknown> | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPolling = useCallback(() => {
@@ -99,6 +103,57 @@ export function EngineAutoTuneDashboard() {
     }
   }, []);
 
+  const loadPatterns = useCallback(async (engine: string) => {
+    setLoadingPatterns(true);
+    try {
+      const response = await fetch(
+        `${getWorldCupApiBase()}/api/world-cup/predictions/calibration-patterns/${engine}`,
+        { cache: "no-store" }
+      );
+      if (response.ok) {
+        const data = await response.json();
+        setPatterns(data);
+      } else {
+        setPatterns(null);
+      }
+    } catch (err) {
+      console.error("Failed to load calibration patterns:", err);
+      setPatterns(null);
+    } finally {
+      setLoadingPatterns(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadCalibration(selectedEngine);
+    loadPatterns(selectedEngine);
+  }, [selectedEngine, loadCalibration, loadPatterns]);
+
+  const handleBatchOptimize = async () => {
+    setBatchOptimizing(true);
+    setBatchResult(null);
+    try {
+      const headers: Record<string, string> = {};
+      const key = getOperatorApiKey();
+      if (key) headers["X-API-Key"] = key;
+      const response = await fetch(
+        `${getWorldCupApiBase()}/api/world-cup/predictions/batch-optimize?engine=${selectedEngine}&limit=10`,
+        { method: "POST", headers, cache: "no-store" }
+      );
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
+        throw new Error(data.detail || `HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      setBatchResult(data);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(`批量优化失败: ${message}`);
+    } finally {
+      setBatchOptimizing(false);
+    }
+  };
+
   const startPolling = useCallback((taskId: string) => {
     // Clear any existing interval before starting a new one
     stopPolling();
@@ -124,6 +179,7 @@ export function EngineAutoTuneDashboard() {
           setTuneResult(task.result ?? null);
           stopPolling();
           loadCalibration(selectedEngine);
+          loadPatterns(selectedEngine);
         } else if (task.status === "failed") {
           setTuning(false);
           setError(`优化失败: ${task.error ?? "未知错误"}`);
@@ -206,7 +262,7 @@ export function EngineAutoTuneDashboard() {
         {/* Engine Selection */}
         <div className="mt-6 space-y-3">
           <label className="text-sm font-medium">选择引擎</label>
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-4">
             <button
               onClick={() => setSelectedEngine("elo_odds")}
               className={cn(
@@ -256,6 +312,23 @@ export function EngineAutoTuneDashboard() {
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
                 融合 Elo+赔率 与混合引擎的集成预测
+              </p>
+            </button>
+            <button
+              onClick={() => setSelectedEngine("gbm")}
+              className={cn(
+                "rounded-lg border p-4 text-left transition-all",
+                selectedEngine === "gbm"
+                  ? "border-teal-500 bg-teal-500/10"
+                  : "border-border hover:border-teal-500/50"
+              )}
+            >
+              <div className="flex items-center gap-2">
+                <BarChart3 className="size-4" />
+                <span className="font-medium">GBM</span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                梯度提升模型预测引擎
               </p>
             </button>
           </div>
@@ -539,6 +612,88 @@ export function EngineAutoTuneDashboard() {
           </details>
         </div>
       )}
+
+      {/* Calibration Patterns */}
+      {patterns && typeof patterns === "object" && (
+        <div className="rounded-lg border bg-card p-6">
+          <div className="flex items-center justify-between">
+            <h3 className="flex items-center gap-2 text-base font-semibold">
+              <BarChart3 className="size-4 text-primary" />
+              校准模式分析
+            </h3>
+            {loadingPatterns && <Loader2 className="size-3 animate-spin text-muted-foreground" />}
+          </div>
+          <div className="mt-4 space-y-2 text-sm">
+            {Object.entries(patterns).map(([key, value]) => (
+              <div key={key} className="flex justify-between">
+                <span className="text-muted-foreground">{key.replace(/_/g, " ")}</span>
+                <span className="font-mono font-medium tabular-nums">
+                  {typeof value === "number" ? value.toFixed(4) : String(value)}
+                </span>
+              </div>
+            ))}
+            {Object.keys(patterns).length === 0 && (
+              <p className="text-muted-foreground">暂无校准模式数据</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Batch Optimize */}
+      <div className="rounded-lg border bg-card p-6">
+        <h3 className="text-base font-semibold">批量优化</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          对当前引擎的近期比赛执行 AI 批量优化分析
+        </p>
+        <button
+          onClick={handleBatchOptimize}
+          disabled={batchOptimizing}
+          className="mt-4 w-full rounded-md bg-secondary px-4 py-2.5 text-sm font-medium transition-colors hover:bg-secondary/80 disabled:opacity-50"
+        >
+          {batchOptimizing ? (
+            <span className="flex items-center justify-center gap-2">
+              <Loader2 className="size-4 animate-spin" />
+              优化中...
+            </span>
+          ) : (
+            <span className="flex items-center justify-center gap-2">
+              <BarChart3 className="size-4" />
+              执行批量优化 (10场)
+            </span>
+          )}
+        </button>
+
+        {batchResult && (
+          <div className="mt-4 rounded-md border bg-secondary/30 p-4 text-sm">
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <div className="text-xs text-muted-foreground">处理场次</div>
+                <div className="font-mono font-medium tabular-nums">
+                  {(batchResult as Record<string, unknown>).matches_processed != null
+                    ? String((batchResult as Record<string, unknown>).matches_processed)
+                    : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">生成优化</div>
+                <div className="font-mono font-medium tabular-nums">
+                  {(batchResult as Record<string, unknown>).optimizations_generated != null
+                    ? String((batchResult as Record<string, unknown>).optimizations_generated)
+                    : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">错误数</div>
+                <div className="font-mono font-medium tabular-nums">
+                  {(batchResult as Record<string, unknown>).errors != null
+                    ? String((batchResult as Record<string, unknown>).errors)
+                    : "—"}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

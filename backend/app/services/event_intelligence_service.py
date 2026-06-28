@@ -19,6 +19,7 @@ from app.services.scoring_service import (
     score_level,
 )
 from app.services.translation_service import translate_articles
+from app.utils.full_text_fetcher import fetch_full_text
 from app.utils.market_utils import safe_float
 from app.utils.helpers import clamp01
 
@@ -137,6 +138,7 @@ async def analyze_event(
     volume: float | None = None,
     liquidity: float | None = None,
     sentiment_profile: dict[str, Any] | None = None,
+    market_quote: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from app.services.ai_analysis_service import analyze_market
     from app.services.cross_validation_service import credibility_delta, cross_validate
@@ -181,6 +183,8 @@ async def analyze_event(
         }
     if sentiment_profile is not None:
         record["sentiment_profile"] = sentiment_profile
+    if market_quote is not None:
+        record["market_quote"] = market_quote
     _apply_calibration_feedback(record, analysis, cross)
     return record
 
@@ -397,6 +401,7 @@ async def discover_events(
                     question, shared_articles=shared_articles
                 )
                 source = candidate.get("source")
+                market_quote = candidate.get("bid_ask")
                 sports_context = _build_sports_analysis_context(question, source)
                 if (
                     filtered_news["summary"]["selected_count"] == 0
@@ -414,6 +419,7 @@ async def discover_events(
                     volume=candidate.get("volume"),
                     liquidity=candidate.get("liquidity"),
                     sentiment_profile=filtered_news.get("sentiment_profile"),
+                    market_quote=market_quote,
                 )
                 record["news_filter"] = filtered_news["summary"]
                 articles = await translate_articles(filtered_news.get("articles") or [])
@@ -520,12 +526,38 @@ async def _build_filtered_news(
         market_question=event_question,
         articles=articles,
     )
+    # Full-text enrichment moved here from collect_articles so the per-event
+    # HTTP budget (NEWS_FULL_TEXT_MAX_ARTICLES fetches) is spent on the articles
+    # that survived relevance filtering (the most-relevant ones reach the LLM),
+    # not the source-order top-N (which filter_news_for_market may drop). Reads
+    # the cap at call time so monkeypatches on settings take effect.
+    #
+    # Fail-closed pattern preserved: gather(return_exceptions=True) so one
+    # slow/failing URL never breaks the batch; fetch_full_text also returns None
+    # on internal failure, but the isinstance(str) guard safely absorbs both
+    # None and exception objects.
+    enriched_articles = filtered.get("articles") or []
+    full_text_cap = settings.NEWS_FULL_TEXT_MAX_ARTICLES
+    if settings.NEWS_FULL_TEXT_FETCH_ENABLED:
+        top_articles = enriched_articles[:full_text_cap]
+        full_text_tasks = [fetch_full_text(a.get("url", "")) for a in top_articles]
+        full_texts = await asyncio.gather(*full_text_tasks, return_exceptions=True)
+        for article, full_text in zip(top_articles, full_texts):
+            if isinstance(full_text, str) and full_text:
+                article["full_text"] = full_text
+            else:
+                article["full_text"] = None
+        for article in enriched_articles[full_text_cap:]:
+            article["full_text"] = None
+    else:
+        for article in enriched_articles:
+            article["full_text"] = None
     # LLM sentiment analysis on the filtered articles. analyze_sentiment returns
     # a neutral fallback on any failure (never raises), so this is purely
     # additive - a fallback flows through transparently without breaking the
     # pipeline.
     filtered["sentiment_profile"] = await analyze_sentiment(
-        event_question, filtered.get("articles") or []
+        event_question, enriched_articles
     )
     return filtered
 

@@ -155,3 +155,28 @@ def test_analyze_sentiment_parses_valid_llm_response(monkeypatch):
     assert result["overall_direction"] == "support_yes"
     assert result["overall_strength"] == 0.7
     assert "fallback" not in result
+
+
+def test_analyze_sentiment_falls_back_when_llm_returns_malformed_json(monkeypatch):
+    """Valid JSON missing the required keys (articles / overall_direction) is
+    treated as malformed and the neutral fallback is returned (with
+    fallback=True)."""
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = json.dumps({"foo": "bar"})
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+    monkeypatch.setattr(
+        "app.services.news_sentiment_service.AsyncOpenAI",
+        MagicMock(return_value=mock_client),
+    )
+    monkeypatch.setattr(
+        "app.services.news_sentiment_service.settings.OPENAI_API_KEY", "fake-key"
+    )
+
+    result = asyncio.run(
+        analyze_sentiment("Question?", [{"title": "T", "description": "D"}])
+    )
+    assert result["overall_direction"] == "neutral"
+    assert result["fallback"] is True
+    assert "malformed LLM response" in result["summary"]

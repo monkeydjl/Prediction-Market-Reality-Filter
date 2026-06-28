@@ -273,6 +273,211 @@ class BuildFilteredNewsSemanticsTests(unittest.TestCase):
         self.assertEqual(result["sentiment_profile"], self.SENTIMENT)
 
 
+class BuildFilteredNewsFullTextTests(unittest.TestCase):
+    """Full-text enrichment moved from collect_articles to _build_filtered_news.
+
+    The HTTP budget (NEWS_FULL_TEXT_MAX_ARTICLES fetches) is now spent on the
+    post-filter top-N - the most-relevant articles reach the LLM with full
+    text, while the pre-filter source-order top-N may not. Network-free:
+    collect_articles, filter_news_for_market, fetch_full_text, and
+    analyze_sentiment are all mocked; the enrichment layer is the unit under
+    test. Fail-closed pattern (gather(return_exceptions=True) + isinstance(str)
+    guard) is preserved.
+    """
+
+    QUESTION = "Will X happen?"
+    SENTIMENT = {
+        "articles": [],
+        "overall_direction": "neutral",
+        "overall_strength": 0.0,
+        "conflict_level": 0.0,
+        "summary": "fallback",
+    }
+
+    def _filtered_articles(self, n):
+        return [
+            {
+                "title": f"filtered-{i}",
+                "description": "d",
+                "source": "s",
+                "published": "p",
+                "url": f"http://example.com/{i}",
+            }
+            for i in range(n)
+        ]
+
+    def _run(
+        self,
+        filtered_articles,
+        fetch_impl,
+        fetch_enabled=True,
+        max_articles=5,
+    ):
+        """Run _build_filtered_news with the supplied filtered articles and a
+        fetch_full_text implementation. Returns (result, captured_urls)."""
+        captured_urls: list[str] = []
+
+        if isinstance(fetch_impl, str):
+            # Constant return value for all URLs.
+            async def fake_fetch(url, *, timeout=10.0):
+                captured_urls.append(url)
+                return fetch_impl
+        else:
+            # fetch_impl is a callable mapping url -> text-or-None.
+            async def fake_fetch(url, *, timeout=10.0):
+                captured_urls.append(url)
+                return fetch_impl(url)
+
+        with patch(
+            "app.services.event_collection_service.collect_articles",
+            new=AsyncMock(return_value=[]),
+        ), \
+                patch(
+                    "app.services.news_filter_service.filter_news_for_market",
+                    return_value={
+                        "articles": filtered_articles,
+                        "context": "ctx",
+                        "summary": {"selected_count": len(filtered_articles)},
+                    },
+                ), \
+                patch(
+                    "app.services.semantic_relevance_service.annotate_semantic_relevance",
+                    new=AsyncMock(),
+                ), \
+                patch(
+                    "app.services.event_intelligence_service.fetch_full_text",
+                    new=fake_fetch,
+                ), \
+                patch(
+                    "app.services.event_intelligence_service.settings."
+                    "NEWS_FULL_TEXT_FETCH_ENABLED",
+                    fetch_enabled,
+                ), \
+                patch(
+                    "app.services.event_intelligence_service.settings."
+                    "NEWS_FULL_TEXT_MAX_ARTICLES",
+                    max_articles,
+                ), \
+                patch(
+                    "app.services.news_sentiment_service.analyze_sentiment",
+                    new=AsyncMock(return_value=self.SENTIMENT),
+                ):
+            result = _run(eis._build_filtered_news(self.QUESTION))
+        return result, captured_urls
+
+    def test_enriches_top_5_filtered_articles_with_full_text(self):
+        """Top `NEWS_FULL_TEXT_MAX_ARTICLES` filtered articles get full_text;
+        the rest get None. Locks the post-filter enrichment contract: the cap
+        applies to filtered["articles"] (the most-relevant ones), not the
+        pre-filter source-order list."""
+        # 10 filtered articles; default cap 5 -> top 5 enriched, rest None.
+        filtered = self._filtered_articles(10)
+        result, captured_urls = self._run(
+            filtered, fetch_impl=lambda url: f"FULL::{url}"
+        )
+        self.assertEqual(captured_urls, [
+            "http://example.com/0", "http://example.com/1",
+            "http://example.com/2", "http://example.com/3",
+            "http://example.com/4",
+        ])
+        enriched = result["articles"]
+        self.assertEqual(len(enriched), 10)
+        for i in range(5):
+            self.assertEqual(
+                enriched[i]["full_text"], f"FULL::http://example.com/{i}",
+                msg=f"filtered article {i} should have full_text",
+            )
+        for i in range(5, 10):
+            self.assertIsNone(
+                enriched[i]["full_text"],
+                msg=f"filtered article {i} should have full_text=None",
+            )
+
+    def test_handles_fetch_full_text_returning_none(self):
+        """When fetch_full_text returns None, the article still gets full_text=None."""
+        filtered = self._filtered_articles(1)
+        result, _ = self._run(filtered, fetch_impl=lambda url: None)
+        self.assertEqual(len(result["articles"]), 1)
+        self.assertIsNone(result["articles"][0]["full_text"])
+
+    def test_isolates_failing_fetch_full_text(self):
+        """A raising fetch_full_text is swallowed via gather(return_exceptions=True).
+
+        fetch_full_text is contract-bound to never raise, but the
+        return_exceptions=True + isinstance(str) guard is the safety net.
+        """
+        filtered = self._filtered_articles(1)
+
+        def raise_on_call(url):
+            raise RuntimeError("net down")
+
+        result, _ = self._run(filtered, fetch_impl=raise_on_call)
+        self.assertEqual(len(result["articles"]), 1)
+        self.assertIsNone(result["articles"][0]["full_text"])
+
+    def test_disabled_flag_sets_all_full_text_none(self):
+        """When NEWS_FULL_TEXT_FETCH_ENABLED is false, every filtered article
+        gets full_text=None and fetch_full_text is never called."""
+        filtered = self._filtered_articles(3)
+
+        async def should_not_be_called(url, *, timeout=10.0):
+            raise AssertionError("fetch_full_text should not be called when disabled")
+
+        with patch(
+            "app.services.event_collection_service.collect_articles",
+            new=AsyncMock(return_value=[]),
+        ), \
+                patch(
+                    "app.services.news_filter_service.filter_news_for_market",
+                    return_value={
+                        "articles": filtered,
+                        "context": "ctx",
+                        "summary": {"selected_count": len(filtered)},
+                    },
+                ), \
+                patch(
+                    "app.services.semantic_relevance_service.annotate_semantic_relevance",
+                    new=AsyncMock(),
+                ), \
+                patch(
+                    "app.services.event_intelligence_service.fetch_full_text",
+                    new=should_not_be_called,
+                ), \
+                patch(
+                    "app.services.event_intelligence_service.settings."
+                    "NEWS_FULL_TEXT_FETCH_ENABLED",
+                    False,
+                ), \
+                patch(
+                    "app.services.news_sentiment_service.analyze_sentiment",
+                    new=AsyncMock(return_value=self.SENTIMENT),
+                ):
+            result = _run(eis._build_filtered_news(self.QUESTION))
+        self.assertEqual(len(result["articles"]), 3)
+        for article in result["articles"]:
+            self.assertIsNone(article["full_text"])
+
+    def test_respects_max_articles_setting(self):
+        """The NEWS_FULL_TEXT_MAX_ARTICLES setting is read at call time, so a
+        monkeypatch lowering it from the default 5 to 2 cuts the fetch count."""
+        # 4 filtered articles; cap lowered to 2 -> only 2 fetches.
+        filtered = self._filtered_articles(4)
+        result, captured_urls = self._run(
+            filtered, fetch_impl=lambda url: f"FULL::{url}", max_articles=2
+        )
+        self.assertEqual(captured_urls, [
+            "http://example.com/0", "http://example.com/1",
+        ])
+        enriched = result["articles"]
+        self.assertEqual(len(enriched), 4)
+        for i in range(2):
+            self.assertEqual(
+                enriched[i]["full_text"], f"FULL::http://example.com/{i}",
+            )
+        for i in range(2, 4):
+            self.assertIsNone(enriched[i]["full_text"])
+
+
 class SentimentIntegrationTests(unittest.TestCase):
     """Task 6 wiring: analyze_sentiment -> _build_filtered_news ->
     analyze_event -> analyze_market -> _build_user_prompt.
@@ -355,6 +560,47 @@ class SentimentIntegrationTests(unittest.TestCase):
                 news_context="direction: support",
             ))
         self.assertNotIn("sentiment_profile", record)
+
+    def test_analyze_event_records_market_quote_when_provided(self):
+        """Kalshi's bid_ask surfaces on the event record as `market_quote` so the
+        Stage 1 transparency goal (make Kalshi bid/ask spreads visible in the
+        /discover response) is actually met. Mirrors the conditional-attach
+        pattern used by sentiment_profile / sports_context."""
+        analyze = AsyncMock(return_value={
+            "market_question": "Will it rain?",
+            "market_probability": 50,
+            "ai_probability": 55,
+        })
+        quote = {"bid": 42.0, "ask": 46.0, "spread": 4.0}
+        with patch("app.services.ai_analysis_service.analyze_market", new=analyze), \
+                patch("app.services.cross_validation_service.cross_validate",
+                      new=AsyncMock(return_value=None)):
+            record = _run(eis.analyze_event(
+                "Will it rain?",
+                baseline_probability=44.0,
+                news_context="direction: support",
+                market_quote=quote,
+            ))
+        self.assertEqual(record["market_quote"], quote)
+
+    def test_analyze_event_omits_market_quote_when_not_provided(self):
+        """Non-Kalshi sources don't populate bid_ask, so market_quote must be
+        absent on their records (not present-and-None). Mirrors the
+        conditional-attach pattern."""
+        analyze = AsyncMock(return_value={
+            "market_question": "Will the bill pass?",
+            "market_probability": 50,
+            "ai_probability": 55,
+        })
+        with patch("app.services.ai_analysis_service.analyze_market", new=analyze), \
+                patch("app.services.cross_validation_service.cross_validate",
+                      new=AsyncMock(return_value=None)):
+            record = _run(eis.analyze_event(
+                "Will the bill pass?",
+                baseline_probability=50,
+                news_context="direction: support",
+            ))
+        self.assertNotIn("market_quote", record)
 
     def test_build_user_prompt_includes_sentiment_section_when_present(self):
         """probability_engine_service._build_user_prompt appends a dedicated

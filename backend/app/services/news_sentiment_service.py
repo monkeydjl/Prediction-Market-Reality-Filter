@@ -111,7 +111,10 @@ async def analyze_sentiment(
         return parsed
     except Exception as exc:
         logger.warning("news_sentiment LLM call failed: %s", exc)
-        return _neutral_fallback(f"LLM error: {exc}")
+        # Generic reason in the summary: this string flows into the persisted
+        # record and the probability-engine LLM prompt, so it must not leak
+        # exception details. The detailed exception is already logged above.
+        return _neutral_fallback("LLM 调用失败")
 
 
 def _neutral_fallback(reason: str) -> dict[str, Any]:

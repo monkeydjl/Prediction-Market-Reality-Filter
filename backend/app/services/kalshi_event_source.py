@@ -24,6 +24,11 @@ event_intelligence_service.discover_events:
         "baseline_probability": float,    # 0-100, before evidence
         "volume": float,
         "liquidity": float,
+        "bid_ask": {                       # Kalshi-only; transparent quote
+            "bid": float,                 # 0-100 (yes bid in pct points)
+            "ask": float,                 # 0-100 (yes ask in pct points)
+            "spread": float,              # ask - bid, 0.0 unless both > 0
+        },                                # threaded to record["market_quote"]
         "source": {
             "type": "prediction_market",
             "platform": "Kalshi",

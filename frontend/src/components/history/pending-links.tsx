@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Check, Link2, Loader2 } from "lucide-react";
 import { eventsApi, type PendingLink } from "@/lib/api";
@@ -20,17 +20,24 @@ export function PendingLinks() {
   const [loading, setLoading] = useState(true);
   const [verifying, setVerifying] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    return () => { mountedRef.current = false; };
+  }, []);
 
   async function load() {
     setLoading(true);
     setError(null);
     try {
       const resp = await eventsApi.pendingLinks();
+      if (!mountedRef.current) return;
       setLinks(resp.pending ?? []);
     } catch (e) {
+      if (!mountedRef.current) return;
       setError(e instanceof Error ? e.message : "待审链接加载失败");
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }
 
@@ -46,11 +53,13 @@ export function PendingLinks() {
     setError(null);
     try {
       await eventsApi.verifyLink(link.event_id, link.contract_id);
+      if (!mountedRef.current) return;
       setLinks((items) => items.filter((item) => linkKey(item) !== key));
     } catch (e) {
+      if (!mountedRef.current) return;
       setError(e instanceof Error ? e.message : "确认关联失败");
     } finally {
-      setVerifying(null);
+      if (mountedRef.current) setVerifying(null);
     }
   }
 

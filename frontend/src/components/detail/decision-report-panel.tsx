@@ -11,20 +11,26 @@ export function DecisionReportPanel({ eventId }: { eventId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     const timer = window.setTimeout(() => {
       (async () => {
+        if (cancelled) return;
         setLoading(true);
         setError(null);
         try {
-          setReport(await eventsApi.decision(eventId));
+          const result = await eventsApi.decision(eventId);
+          if (!cancelled) setReport(result);
         } catch (e) {
-          setError(e instanceof Error ? e.message : "决策报告加载失败");
+          if (!cancelled) setError(e instanceof Error ? e.message : "决策报告加载失败");
         } finally {
-          setLoading(false);
+          if (!cancelled) setLoading(false);
         }
       })();
     }, 0);
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [eventId]);
 
   return (

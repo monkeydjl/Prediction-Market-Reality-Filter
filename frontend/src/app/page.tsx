@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw, Search } from "lucide-react";
 import { AppNav } from "@/components/app-nav";
 import { SummaryBar, summarize } from "@/components/dashboard/summary-bar";
@@ -97,6 +97,15 @@ export default function DashboardPage() {
   const [discoverUseCache, setDiscoverUseCache] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const mountedRef = useRef(true);
+  const discoverControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      discoverControllerRef.current?.abort();
+    };
+  }, []);
 
   const load = useCallback(async ({
     silent = false,
@@ -170,16 +179,17 @@ export default function DashboardPage() {
   async function discover() {
     setDiscovering(true);
     setError(null);
-    // discover is a minutes-long operation (many sequential LLM calls). Give it
-    // a generous 5-minute ceiling so the browser doesn't abort a working request.
     const controller = new AbortController();
+    discoverControllerRef.current = controller;
     const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
     try {
       await eventsApi.discover(discoverLimit, discoverUseCache, controller.signal);
+      if (!mountedRef.current) return;
       setPage(1);
       writePageToUrl(1, "replace");
       await load({ pageOverride: 1 });
     } catch (e) {
+      if (!mountedRef.current) return;
       if (e instanceof DOMException && e.name === "AbortError") {
         setError("发现超时（超过 5 分钟）。事件采集仍可能在后台完成，可稍后点刷新查看。");
       } else {
@@ -187,7 +197,8 @@ export default function DashboardPage() {
       }
     } finally {
       clearTimeout(timer);
-      setDiscovering(false);
+      discoverControllerRef.current = null;
+      if (mountedRef.current) setDiscovering(false);
     }
   }
 

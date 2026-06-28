@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { Activity, Clock3, RefreshCw, Zap } from "lucide-react";
@@ -107,11 +107,16 @@ export default function EdgesPage() {
   const [edges, setEdges] = useState<FreshEdge[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const load = useCallback(async () => {
     setError(null);
     const response = await eventsApi.edgeMonitor(50);
-    setEdges(response.edges ?? []);
+    if (mountedRef.current) setEdges(response.edges ?? []);
   }, []);
 
   const refresh = useCallback(async () => {
@@ -119,9 +124,9 @@ export default function EdgesPage() {
     try {
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "加载失败");
+      if (mountedRef.current) setError(e instanceof Error ? e.message : "加载失败");
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }, [load]);
 

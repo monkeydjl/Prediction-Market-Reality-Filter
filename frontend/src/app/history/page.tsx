@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Gavel, Loader2 } from "lucide-react";
 import { AppNav } from "@/components/app-nav";
 import { AccuracySummary } from "@/components/history/accuracy-summary";
@@ -134,6 +134,11 @@ export default function HistoryPage() {
   const [resolveLimit, setResolveLimit] = useState(200);
   const [resolveMsg, setResolveMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const loadData = useCallback(async () => {
     const [cal, predCalibration, list] = await Promise.all([
@@ -202,11 +207,13 @@ export default function HistoryPage() {
     setResolveMsg(null);
     try {
       const r = await eventsApi.resolveAuto(resolveLimit, true);
+      if (!mountedRef.current) return;
       setResolvePreview(r);
     } catch (e) {
+      if (!mountedRef.current) return;
       setError(e instanceof Error ? e.message : "结算预览失败");
     } finally {
-      setPreviewingResolve(false);
+      if (mountedRef.current) setPreviewingResolve(false);
     }
   }
 
@@ -216,15 +223,17 @@ export default function HistoryPage() {
     setResolveMsg(null);
     try {
       const r = await eventsApi.resolveAuto(resolveLimit, false);
+      if (!mountedRef.current) return;
       setResolveMsg(
         `本次结算 ${r.resolved_count ?? 0} 条（检查 ${r.checked_count ?? 0} 个已结算市场）`,
       );
       setResolvePreview(null);
       await loadData();
     } catch (e) {
+      if (!mountedRef.current) return;
       setError(e instanceof Error ? e.message : "结算失败");
     } finally {
-      setResolving(false);
+      if (mountedRef.current) setResolving(false);
     }
   }
 

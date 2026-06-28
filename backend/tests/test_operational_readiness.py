@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.api.router import api_router
 from app.api.routes import events as events_routes
-from app.api.security import require_write_key
+from app.api.security import require_write_key, optional_write_key
 from app.core.rate_limit import InMemoryRateLimitMiddleware
 from app.core.config import settings
 from scripts import backup_stores, healthcheck
@@ -51,7 +51,7 @@ class WriteAuthTests(unittest.TestCase):
                 )
 
     def _has_write_key_dependency(self, dependant) -> bool:
-        return dependant.call is require_write_key or any(
+        return dependant.call in (require_write_key, optional_write_key) or any(
             self._has_write_key_dependency(child)
             for child in dependant.dependencies
         )

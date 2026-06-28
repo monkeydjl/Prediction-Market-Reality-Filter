@@ -6,6 +6,7 @@ APScheduler 定时任务。随 FastAPI 启动自动运行。
 任务：
   07:15 UTC — event discover（freeze 预测，让反馈闭环持续积累样本）
   05:20 UTC — World Cup source bundle import（可选，默认关闭）
+  每 8 小时  — sentiment refresh（RSS+Reddit 情绪缓存刷新，供 rule engine 使用）
   22:30 UTC — event auto-resolve（匹配已结算预测市场并打分）
 """
 
@@ -377,6 +378,67 @@ async def _job_world_cup_live_update():
         logger.exception("[Scheduler] Live update failed: %s", exc)
 
 
+async def _job_sentiment_refresh():
+    """Refresh sentiment cache for World Cup teams with recent/upcoming matches.
+
+    Runs every 8 hours so the rule engine's sentiment_factor (mapped from
+    cached TeamSentiment rows) stays fresh.  Teams are discovered dynamically
+    from the fixture table — no hard-coded list to maintain.
+    """
+    logger.info("[Scheduler] Sentiment refresh starting...")
+    run_id = _start_run("sentiment_refresh")
+    try:
+        from datetime import datetime, timezone, timedelta
+        from app.services.sentiment_aggregator import fetch_team_sentiment, cache_sentiment
+        from app.models.world_cup_prediction import MatchFixture
+        from app.utils.prediction_db import get_prediction_session, close_prediction_session
+
+        session = get_prediction_session()
+        teams: set[str] = set()
+        try:
+            now = datetime.now(timezone.utc)
+            window = timedelta(days=7)
+            matches = (
+                session.query(MatchFixture)
+                .filter(
+                    MatchFixture.kickoff_utc.between(
+                        now - window, now + window
+                    )
+                )
+                .all()
+            )
+            for m in matches:
+                if m.home_team:
+                    teams.add(m.home_team)
+                if m.away_team:
+                    teams.add(m.away_team)
+        finally:
+            close_prediction_session(session)
+
+        fetched = 0
+        errors = 0
+        for team in sorted(teams):
+            try:
+                data = await fetch_team_sentiment(team)
+                cache_sentiment(data)
+                fetched += 1
+            except Exception as exc:
+                errors += 1
+                logger.warning(
+                    "[Scheduler] Sentiment fetch failed for %s: %s", team, exc
+                )
+
+        result = {"teams_found": len(teams), "fetched": fetched, "errors": errors}
+        _finish_run(run_id, "success", result=result)
+        logger.info(
+            "[Scheduler] Sentiment refresh: teams=%d fetched=%d errors=%d",
+            len(teams), fetched, errors,
+        )
+    except Exception as exc:
+        _finish_run(run_id, "failed", error=str(exc))
+        logger.exception("[Scheduler] Sentiment refresh failed")
+
+
 def _summarize_prediction_update(result: dict[str, Any]) -> dict[str, Any]:
     """Summarize prediction update result for scheduler run log."""
     if result.get("status") == "error":
@@ -528,6 +590,18 @@ def start_scheduler():
             replace_existing=True,
             max_instances=1,
         )
+        # Sentiment cache refresh for World Cup teams (every 8 hours).
+        # Keeps the rule engine's sentiment_factor populated with fresh data
+        # from RSS news + Reddit.  Without this job, get_cached_sentiment()
+        # always returns None (TTL expired) and sentiment_factor stays at
+        # the neutral default of 1.0.
+        scheduler.add_job(
+            _job_sentiment_refresh,
+            IntervalTrigger(hours=8),
+            id="sentiment_refresh",
+            replace_existing=True,
+            max_instances=1,
+        )
         scheduler.start()
     except Exception:
         _release_scheduler_lock()
@@ -543,6 +617,7 @@ def start_scheduler():
         "world_cup_matchday_refresh@%dmin(%s) | "
         "world_cup_prediction_update@06:00UTC | "
         "world_cup_live_update@2min | "
+        "sentiment_refresh@8h | "
         "loop_db_maintenance@06:45UTC | "
         "optimization_task_cleanup@06:50UTC | "
         "event_auto_resolve@22:30UTC",

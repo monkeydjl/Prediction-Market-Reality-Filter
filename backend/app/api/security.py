@@ -31,3 +31,14 @@ async def require_write_key(x_api_key: str | None = Header(default=None)):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing or invalid API key",
         )
+
+
+async def optional_write_key(x_api_key: str | None = Header(default=None)) -> bool:
+    """Return True if the write key is valid, False otherwise.
+
+    Unlike ``require_write_key`` this never raises — callers decide whether to
+    enforce auth based on additional context (e.g. read-only operations).
+    """
+    if not settings.API_WRITE_KEY:
+        return settings.ALLOW_OPEN_WRITES
+    return is_write_key_valid(x_api_key)

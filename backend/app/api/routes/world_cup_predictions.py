@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import or_
 
-from app.api.security import require_write_key
+from app.api.security import optional_write_key, require_write_key
 from app.models.world_cup_prediction import MatchFixture, MatchPrediction, PredictionHistory, AIAnalysisHistory
 from app.services.world_cup_match_service import sync_world_cup_fixtures, get_remaining_matches
 from app.services.world_cup_factor_service import build_prediction_factors
@@ -38,6 +38,8 @@ def _engine_used_from_method(method: str | None) -> str:
         return "integrated"
     if method and method.startswith("elo"):
         return "elo_odds"
+    if method and method.startswith("gbm"):
+        return "gbm"
     return "hybrid"
 
 
@@ -184,10 +186,18 @@ async def list_matches(
         # Get all matches first (without limit), then sort and slice
         matches = query.order_by(MatchFixture.kickoff_utc).all()
 
+        # Batch-fetch predictions for all matches (avoids N+1 query)
+        match_ids = [m.match_id for m in matches]
+        predictions = (
+            session.query(MatchPrediction)
+            .filter(MatchPrediction.match_id.in_(match_ids))
+            .all()
+        ) if match_ids else []
+        prediction_map = {p.match_id: p for p in predictions}
+
         match_list = []
         for m in matches:
-            # Get prediction for this match
-            prediction = session.query(MatchPrediction).filter_by(match_id=m.match_id).first()
+            prediction = prediction_map.get(m.match_id)
 
             match_with_prediction = {
                 "match": {
@@ -312,7 +322,7 @@ async def trigger_prediction(
     match_id: str,
     request: PredictionRequest = Body(default=PredictionRequest()),
     compare_only: bool = Query(False, description="Read-only mode: run the engine without persisting (bypasses kickoff freeze, skips MatchPrediction/PredictionHistory writes)"),
-    _auth: None = Depends(require_write_key),
+    _auth: bool = Depends(optional_write_key),
 ):
     """Manually trigger prediction generation for a match.
 
@@ -324,6 +334,12 @@ async def trigger_prediction(
             so the engine-comparison card can render even after kickoff.
             Skips persistence and bypasses the kickoff freeze.
     """
+    # compare_only is a read-only operation — no auth required.
+    if not compare_only and not _auth:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or invalid API key",
+        )
     from app.services.world_cup_prediction_pipeline import run_prediction_pipeline
 
     result = await run_prediction_pipeline(

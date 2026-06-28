@@ -69,7 +69,7 @@ class WorldCupPredictionRoutesTests(unittest.TestCase):
             "confidence_calibration": {
                 "raw": 0.80,
                 "calibrated": 0.65,
-                "method": "bucketed_reliability_curve",
+                "method": "piecewise_linear_reliability",
                 "total_samples": 8,
             },
             "explanation_contributions": {
@@ -131,7 +131,7 @@ class WorldCupPredictionRoutesTests(unittest.TestCase):
                 "confidence_calibration": {
                     "raw": 0.80,
                     "calibrated": 0.65,
-                    "method": "bucketed_reliability_curve",
+                    "method": "piecewise_linear_reliability",
                 },
             },
         )
@@ -153,6 +153,33 @@ class WorldCupPredictionRoutesTests(unittest.TestCase):
         self.assertNotIn("raw_confidence", payload)
         self.assertNotIn("confidence_calibration", payload)
         self.assertNotIn("explanation_contributions", payload)
+
+    def test_gbm_prediction_serializes_engine_used_as_gbm(self):
+        prediction = MatchPrediction(
+            match_id="m-gbm",
+            predicted_home_score=1.5,
+            predicted_away_score=0.8,
+            home_win_prob=0.58,
+            draw_prob=0.24,
+            away_win_prob=0.18,
+            confidence=0.70,
+            prediction_method="gbm_lightgbm",
+        )
+        history = PredictionHistory(
+            match_id="m-gbm",
+            timestamp=naive(),
+            predicted_home_score=1.5,
+            predicted_away_score=0.8,
+            home_win_prob=0.58,
+            draw_prob=0.24,
+            away_win_prob=0.18,
+            confidence=0.70,
+            trigger="manual",
+            prediction_method="gbm_lightgbm",
+        )
+
+        self.assertEqual(_serialize_prediction(prediction)["engine_used"], "gbm")
+        self.assertEqual(_serialize_history_entry(history)["engine_used"], "gbm")
 
 
 if __name__ == "__main__":

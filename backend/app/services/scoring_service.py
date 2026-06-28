@@ -127,7 +127,28 @@ def build_probability_assessment(
     )
 
 
-def recommended_action(trust_score: int, impact_score: int, change: float) -> str:
+def recommended_action(
+    trust_score: int,
+    impact_score: int,
+    change: float,
+    *,
+    signal_direction: str | None = None,
+    confidence: str | None = None,
+) -> str:
+    """Human-readable action recommendation.
+
+    When signal_direction is provided (from legacy_analysis), returns a
+    structured direction phrase ("押 YES（置信度：high）" etc.). When None,
+    falls back to the legacy trust/impact-based logic for backward
+    compatibility with callers that don't pass signal data.
+    """
+    if signal_direction in ("LONG", "STRONG_LONG"):
+        return f"押 YES（置信度：{confidence or '未知'}）"
+    if signal_direction in ("SHORT", "STRONG_SHORT"):
+        return f"押 NO（置信度：{confidence or '未知'}）"
+    if signal_direction == "WATCHLIST":
+        return "等待更多证据"
+    # Legacy fallback: no signal data -> trust/impact based phrase
     if trust_score >= 70 and impact_score >= 60:
         return "建议人工复核，并持续关注后续证据。"
     if trust_score >= 45 and abs(change) >= 5:

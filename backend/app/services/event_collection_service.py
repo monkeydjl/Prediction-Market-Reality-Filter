@@ -20,8 +20,13 @@ import logging
 from typing import Any
 
 from app.utils.failure_policy import fail_closed_empty_list, log_service_failure
+from app.utils.full_text_fetcher import fetch_full_text
 
 logger = logging.getLogger(__name__)
+
+# Cap on how many top-ranked articles get full-text enrichment. Hardcoded for
+# now; Task 7 will expose this as NEWS_FULL_TEXT_MAX_ARTICLES in settings.
+_MAX_FULL_TEXT_ARTICLES = 5
 
 
 async def collect_shared_articles() -> list[dict[str, Any]]:
@@ -85,6 +90,12 @@ async def collect_articles(
     Pass `shared_articles` from `collect_shared_articles()` to avoid re-fetching
     the query-independent feeds; otherwise they are fetched here. Google News is
     query-specific and always fetched.
+
+    The top `_MAX_FULL_TEXT_ARTICLES` articles are enriched with a `full_text`
+    field (extracted main text from the article URL) so downstream LLM sentiment
+    analysis has more signal than title+description alone. All other articles get
+    `full_text=None`. Failures during fetch surface as `None` (never raise) -
+    full-text is an enhancement, not a blocker.
     """
     from app.services.gnews_service import fetch_google_news
 
@@ -100,4 +111,22 @@ async def collect_articles(
             context={"label": "gnews"},
         )
     google_news = [{**article, "kind": "news"} for article in google_news]
-    return shared_articles + google_news
+    articles = shared_articles + google_news
+
+    # Enrich top articles with full text (capped to limit cost). gather with
+    # return_exceptions=True so one slow/failing URL never breaks the batch;
+    # fetch_full_text also returns None on internal failure, but the
+    # isinstance(str) guard below safely absorbs both None and exception objects.
+    top_articles = articles[:_MAX_FULL_TEXT_ARTICLES]
+    full_text_tasks = [fetch_full_text(a.get("url", "")) for a in top_articles]
+    full_texts = await asyncio.gather(*full_text_tasks, return_exceptions=True)
+    for article, full_text in zip(top_articles, full_texts):
+        if isinstance(full_text, str) and full_text:
+            article["full_text"] = full_text
+        else:
+            article["full_text"] = None
+    # Remaining articles: full_text not fetched, marked None so every article
+    # in the returned list carries the key for downstream consumers.
+    for article in articles[_MAX_FULL_TEXT_ARTICLES:]:
+        article["full_text"] = None
+    return articles

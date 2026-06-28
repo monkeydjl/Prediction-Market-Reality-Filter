@@ -138,6 +138,26 @@ class BuildDecisionReportTests(unittest.TestCase):
         self.assertEqual(report["actionable_recommendation"]["direction"], "YES")
         self.assertEqual(report["actionable_recommendation"]["suggested_allocation_pct"], 10.0)
 
+    def test_actionable_recommendation_calibration_status_overridden_by_qualification(self):
+        # The helper in event_intelligence_service hardcodes the inner
+        # calibration_status to uncalibrated_provisional (it lacks segment
+        # stats). build_decision_report must override it to match the actual
+        # prediction.qualified flag, so a calibrated act decision does NOT
+        # show the "未经校准" tag in the frontend.
+        record = _record()
+        record["actionable_recommendation"] = {
+            "direction": "YES", "confidence": "high",
+            "suggested_allocation_pct": 10.0, "edge": 15.0,
+            "risk_level": "medium", "rationale": "Strong evidence.",
+            "calibration_status": "uncalibrated_provisional",  # helper default
+        }
+        # Calibrated act prediction: qualified=True -> inner should become "calibrated"
+        pred = _prediction(decision="act", qualified=True, segment_n=10,
+                           segment_min_samples=8, liquidity_factor=1.0)
+        report = build_decision_report(pred, record)
+        self.assertEqual(report["recommendation"]["calibration_status"], "calibrated")
+        self.assertEqual(report["actionable_recommendation"]["calibration_status"], "calibrated")
+
     def test_actionable_recommendation_none_when_record_missing_it(self):
         report = build_decision_report(_prediction(), _record())  # _record() has no actionable_recommendation
         self.assertIsNone(report["actionable_recommendation"])

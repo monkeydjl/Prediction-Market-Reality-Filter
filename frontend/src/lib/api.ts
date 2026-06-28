@@ -676,8 +676,8 @@ export const eventsApi = {
       by_base_rate_category: Record<string, CalibrationAgg>;
     }>("/events/calibration"),
 
-  // M5 opportunity surface. Defaults to act + watch; pass "act" to narrow.
-  openDecisions: (decision?: "act" | "watch", limit = 50) =>
+  // M5 opportunity surface. Defaults to act + watch + provisional_act; pass "act" to narrow.
+  openDecisions: (decision?: "act" | "watch" | "provisional_act", limit = 50) =>
     api<{ count: number; decisions: DecisionReport[] }>(
       `/events/decisions/open?limit=${limit}${decision ? `&decision=${decision}` : ""}`,
     ),

@@ -59,6 +59,12 @@ def build_decision_report(
     # uncalibrated_provisional otherwise (dormant or provisional_act).
     calibration_status = "calibrated" if qualified else "uncalibrated_provisional"
     actionable = record.get("actionable_recommendation")
+    # The helper in event_intelligence_service defaults the inner
+    # calibration_status to uncalibrated_provisional (it lacks segment stats).
+    # Override here where we DO have the prediction's qualified flag, so the
+    # inner field matches the outer recommendation.calibration_status.
+    if actionable is not None:
+        actionable = {**actionable, "calibration_status": calibration_status}
 
     return {
         "event_id": prediction.get("event_id"),

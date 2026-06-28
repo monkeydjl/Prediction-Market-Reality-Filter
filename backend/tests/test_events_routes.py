@@ -1438,7 +1438,7 @@ class DiscoverRouteTests(unittest.TestCase):
                 422,
             )
             self.assertEqual(
-                client.get("/events/discover?limit=21", headers=AUTH_HEADERS).status_code,
+                client.get("/events/discover?limit=51", headers=AUTH_HEADERS).status_code,
                 422,
             )
 

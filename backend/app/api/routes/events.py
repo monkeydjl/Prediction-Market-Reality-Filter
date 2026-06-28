@@ -158,7 +158,7 @@ EventId = Annotated[
 
 @router.get("/discover", response_model=EventDiscoveryResponse)
 async def discover_event_intelligence(
-    limit: int = Query(default=10, ge=1, le=20),
+    limit: int = Query(default=10, ge=1, le=50),
     use_cache: bool = Query(default=True),
     _auth: None = Depends(require_write_key),
 ):

@@ -474,10 +474,10 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
               aria-expanded={showReasoning}
             >
               <div className="flex items-center gap-2">
-                <Lightbulb className="size-3.5" />
+                <Lightbulb className="size-3.5" aria-hidden="true" />
                 <span>为何这样预测？</span>
               </div>
-              <ChevronDown className={cn("size-3.5 transition-transform", showReasoning && "rotate-180")} />
+              <ChevronDown className={cn("size-3.5 transition-transform", showReasoning && "rotate-180")} aria-hidden="true" />
             </button>
 
             {showReasoning && (
@@ -624,9 +624,9 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
             >
               <div className="flex items-center justify-center gap-2">
                 {isLoadingComparison ? (
-                  <Loader2 className="size-3.5 animate-spin" />
+                  <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
                 ) : (
-                  <GitCompare className="size-3.5" />
+                  <GitCompare className="size-3.5" aria-hidden="true" />
                 )}
                 <span>{isLoadingComparison ? "加载中" : "引擎对比"}</span>
               </div>
@@ -636,7 +636,7 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
               className="rounded-md border bg-secondary/50 px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
             >
               <div className="flex items-center justify-center gap-2">
-                <History className="size-3.5" />
+                <History className="size-3.5" aria-hidden="true" />
                 <span>预测历史</span>
               </div>
             </button>
@@ -645,7 +645,7 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
               className="rounded-md border bg-secondary/50 px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
             >
               <div className="flex items-center justify-center gap-2">
-                <Sparkles className="size-3.5" />
+                <Sparkles className="size-3.5" aria-hidden="true" />
                 <span>AI分析</span>
               </div>
             </button>

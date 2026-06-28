@@ -204,6 +204,7 @@ export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysis
             <button
               onClick={handleAnalyze}
               disabled={loading}
+              title="调用 AI 分析该预测（结果会写入分析历史）"
               className="rounded-md border bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20 disabled:cursor-wait disabled:opacity-50"
             >
               <span className="inline-flex items-center gap-1.5">
@@ -214,6 +215,7 @@ export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysis
             <button
               onClick={handleOptimize}
               disabled={loading}
+              title="调用 AI 生成预测优化建议（写操作，可能消耗配额）"
               className="rounded-md border bg-secondary px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary/80 disabled:cursor-wait disabled:opacity-50"
             >
               <span className="inline-flex items-center gap-1.5">

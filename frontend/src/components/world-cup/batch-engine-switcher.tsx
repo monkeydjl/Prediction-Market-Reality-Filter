@@ -241,6 +241,7 @@ export function BatchEngineSwitcher({ onCompleted }: BatchEngineSwitcherProps) {
               key={engine.id}
               onClick={() => handleSwitch(engine.id)}
               disabled={switching !== null}
+              title={`批量切换所有待定比赛的预测引擎为 ${engine.label}（写入操作，可能耗时数分钟）`}
               className={cn(
                 "flex flex-col items-start gap-2 rounded-lg border border-border bg-secondary/30 p-4 text-left transition-all",
                 engine.ring,

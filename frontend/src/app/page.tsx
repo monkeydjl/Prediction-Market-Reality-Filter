@@ -256,6 +256,7 @@ export default function DashboardPage() {
               type="button"
               onClick={discover}
               disabled={discovering}
+              title="发现并采集新事件（写操作，可能耗时数分钟）"
               className="inline-flex h-9 items-center gap-2 rounded-md border border-primary bg-primary/15 px-3 text-sm font-medium text-primary transition-colors hover:bg-primary/25 disabled:opacity-50"
             >
               <Search className={`size-3.5 ${discovering ? "animate-pulse" : ""}`} aria-hidden="true" />

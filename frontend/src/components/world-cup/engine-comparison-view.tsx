@@ -147,7 +147,7 @@ function EngineStatsPanel({ config, stats }: { config: EngineConfig; stats?: Eng
 
           <StatCard
             label="平均比分误差"
-            value={stats.avg_score_error.toFixed(2)}
+            value={Number.isFinite(stats.avg_score_error) ? stats.avg_score_error.toFixed(2) : "—"}
             subtitle="预测分数与实际分数的平均偏差"
           />
         </>

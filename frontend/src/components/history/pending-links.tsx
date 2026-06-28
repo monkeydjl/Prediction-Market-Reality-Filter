@@ -102,6 +102,7 @@ export function PendingLinks() {
                       type="button"
                       onClick={() => verify(link)}
                       disabled={verifying === key || !link.contract_id}
+                      title="确认将该市场链接到事件（写操作）"
                       className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-primary bg-primary/15 px-3 text-sm font-medium text-primary transition-colors hover:bg-primary/25 disabled:opacity-50"
                     >
                       {verifying === key ? (

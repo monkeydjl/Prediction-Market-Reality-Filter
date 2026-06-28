@@ -273,7 +273,7 @@ export function EngineAutoTuneDashboard() {
               )}
             >
               <div className="flex items-center gap-2">
-                <Zap className="size-4" />
+                <Zap className="size-4" aria-hidden="true" />
                 <span className="font-medium">Elo+赔率</span>
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
@@ -290,7 +290,7 @@ export function EngineAutoTuneDashboard() {
               )}
             >
               <div className="flex items-center gap-2">
-                <Brain className="size-4" />
+                <Brain className="size-4" aria-hidden="true" />
                 <span className="font-medium">混合引擎</span>
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
@@ -307,7 +307,7 @@ export function EngineAutoTuneDashboard() {
               )}
             >
               <div className="flex items-center gap-2">
-                <GitCompare className="size-4" />
+                <GitCompare className="size-4" aria-hidden="true" />
                 <span className="font-medium">集成引擎</span>
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
@@ -324,7 +324,7 @@ export function EngineAutoTuneDashboard() {
               )}
             >
               <div className="flex items-center gap-2">
-                <BarChart3 className="size-4" />
+                <BarChart3 className="size-4" aria-hidden="true" />
                 <span className="font-medium">GBM</span>
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
@@ -336,6 +336,7 @@ export function EngineAutoTuneDashboard() {
           <button
             onClick={handleAutoTune}
             disabled={tuning}
+            title="基于 AI 优化反馈校准引擎参数（会写入新校准版本）"
             className="mt-4 w-full rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
           >
             {tuning ? (
@@ -648,6 +649,7 @@ export function EngineAutoTuneDashboard() {
         <button
           onClick={handleBatchOptimize}
           disabled={batchOptimizing}
+          title="对当前引擎近 10 场比赛执行 AI 批量优化分析（写操作，可能消耗配额）"
           className="mt-4 w-full rounded-md bg-secondary px-4 py-2.5 text-sm font-medium transition-colors hover:bg-secondary/80 disabled:opacity-50"
         >
           {batchOptimizing ? (

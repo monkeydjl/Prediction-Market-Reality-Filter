@@ -1597,7 +1597,7 @@ export function AnalyticsDashboard() {
             </div>
             <div>
               <span className="text-muted-foreground">数据新鲜度:</span>{" "}
-              <span className="font-mono font-medium tabular-nums">{systemHealth.data_freshness_hours.toFixed(1)}小时</span>
+              <span className="font-mono font-medium tabular-nums">{Number.isFinite(systemHealth.data_freshness_hours) ? systemHealth.data_freshness_hours.toFixed(1) : "—"}小时</span>
             </div>
             <div>
               <span className="text-muted-foreground">最后更新:</span>{" "}
@@ -1832,12 +1832,12 @@ export function AnalyticsDashboard() {
                           />
                         </div>
                         <span className="font-mono text-xs tabular-nums">
-                          {stats.percentage.toFixed(1)}%
+                          {Number.isFinite(stats.percentage) ? stats.percentage.toFixed(1) : "—"}%
                         </span>
                       </div>
                       <div className="mt-2 text-xs text-muted-foreground">
                         平均置信度: <span className="font-mono font-medium tabular-nums">
-                          {(stats.avg_confidence * 100).toFixed(1)}%
+                          {fmtPct(Number(stats.avg_confidence) * 100, 1)}
                         </span>
                       </div>
                     </div>
@@ -1877,7 +1877,7 @@ export function AnalyticsDashboard() {
                       "font-mono text-lg font-bold tabular-nums",
                       accuracyStats.outcome_accuracy >= 0.6 ? "text-pos" : "text-warn"
                     )}>
-                      {(accuracyStats.outcome_accuracy * 100).toFixed(1)}%
+                      {fmtPct(Number(accuracyStats.outcome_accuracy) * 100, 1)}
                     </span>
                   </div>
                   <div className="mt-1 text-xs text-muted-foreground">
@@ -1898,14 +1898,14 @@ export function AnalyticsDashboard() {
                   <div className="rounded-md bg-secondary/50 p-3">
                     <div className="text-xs text-muted-foreground">比分MAE</div>
                     <div className="mt-1 font-mono text-lg font-bold tabular-nums">
-                      {accuracyStats.avg_score_mae.toFixed(2)}
+                      {Number.isFinite(accuracyStats.avg_score_mae) ? accuracyStats.avg_score_mae.toFixed(2) : "—"}
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">越低越好</div>
                   </div>
                   <div className="rounded-md bg-secondary/50 p-3">
                     <div className="text-xs text-muted-foreground">Brier得分</div>
                     <div className="mt-1 font-mono text-lg font-bold tabular-nums">
-                      {accuracyStats.avg_brier_score.toFixed(3)}
+                      {Number.isFinite(accuracyStats.avg_brier_score) ? accuracyStats.avg_brier_score.toFixed(3) : "—"}
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">概率误差，越低越好</div>
                   </div>
@@ -1946,14 +1946,14 @@ export function AnalyticsDashboard() {
                         {row.stage === "group_stage" ? "小组赛" : row.stage === "knockout" ? "淘汰赛" : row.stage === "all" ? "全部" : row.stage}
                       </td>
                       <td className="py-2 px-2 text-center font-mono tabular-nums">{row.matches_evaluated}</td>
-                      <td className="py-2 px-2 text-center font-mono tabular-nums">{(row.exact_score_pct * 100).toFixed(1)}%</td>
-                      <td className="py-2 px-2 text-center font-mono tabular-nums">{(row.goal_diff_pct * 100).toFixed(1)}%</td>
+                      <td className="py-2 px-2 text-center font-mono tabular-nums">{fmtPct(Number(row.exact_score_pct) * 100, 1)}</td>
+                      <td className="py-2 px-2 text-center font-mono tabular-nums">{fmtPct(Number(row.goal_diff_pct) * 100, 1)}</td>
                       <td className="py-2 px-2 text-center">
                         <span className={cn(
                           "font-mono tabular-nums",
                           row.outcome_accuracy >= 0.6 ? "text-pos" : "text-warn"
                         )}>
-                          {(row.outcome_accuracy * 100).toFixed(1)}%
+                          {fmtPct(Number(row.outcome_accuracy) * 100, 1)}
                         </span>
                       </td>
                       <td className="py-2 pl-2 text-center font-mono tabular-nums">
@@ -1988,7 +1988,7 @@ export function AnalyticsDashboard() {
                       "font-mono text-lg font-bold tabular-nums",
                       cacheStats.cache_hit_rate >= 0.7 ? "text-pos" : "text-warn"
                     )}>
-                      {(cacheStats.cache_hit_rate * 100).toFixed(1)}%
+                      {fmtPct(Number(cacheStats.cache_hit_rate) * 100, 1)}
                     </span>
                   </div>
                   <div className="mt-2 h-2 overflow-hidden rounded-full bg-secondary">
@@ -2063,7 +2063,7 @@ export function AnalyticsDashboard() {
                 <div className="flex items-center justify-between rounded-md bg-secondary/30 px-3 py-2 text-xs">
                   <span className="text-muted-foreground">API效率提升</span>
                   <span className="font-mono font-medium tabular-nums text-pos">
-                    {cacheStats.total_entries > 0
+                    {cacheStats.total_entries > 0 && Number.isFinite(cacheStats.estimated_api_calls_saved)
                       ? `${((cacheStats.estimated_api_calls_saved / cacheStats.total_entries) * 100).toFixed(0)}%`
                       : "N/A"}
                   </span>

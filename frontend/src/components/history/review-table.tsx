@@ -123,7 +123,7 @@ export function ReviewTable({
                 </div>
                 <div className="flex items-center justify-between gap-3 md:block md:w-[88px] md:text-right">
                   <span className="text-[11px] text-muted-foreground md:hidden">预测概率</span>
-                  <span className="font-mono text-sm tabular-nums">{r.predicted.toFixed(0)}%</span>
+                  <span className="font-mono text-sm tabular-nums">{Number.isFinite(r.predicted) ? r.predicted.toFixed(0) : "—"}%</span>
                 </div>
                 <div className="flex items-center justify-between gap-3 md:block md:w-[64px] md:text-right">
                   <span className="text-[11px] text-muted-foreground md:hidden">实际</span>

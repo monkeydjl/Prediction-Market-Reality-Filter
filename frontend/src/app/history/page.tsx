@@ -71,6 +71,7 @@ function ResolvePreviewPanel({
           type="button"
           onClick={onExecute}
           disabled={executing || !actionable}
+          title="将预览中的候选市场批量写入结算结果（不可撤销）"
           className="inline-flex h-9 items-center gap-2 rounded-md border border-primary bg-primary/15 px-3 text-sm font-medium text-primary transition-colors hover:bg-primary/25 disabled:opacity-50"
         >
           {executing ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Gavel className="size-3.5" aria-hidden="true" />}
@@ -269,6 +270,7 @@ export default function HistoryPage() {
               type="button"
               onClick={previewResolve}
               disabled={resolving || previewingResolve}
+              title="预览自动结算候选（不写入数据库）"
               className="inline-flex h-9 items-center gap-2 rounded-md border border-primary bg-primary/15 px-3 text-sm font-medium text-primary transition-colors hover:bg-primary/25 disabled:opacity-50"
             >
               {previewingResolve ? (

@@ -6,6 +6,7 @@ import { fmtPct, categoryLabel } from "@/lib/format";
 // Decision Gate verdict -> Chinese label + tone.
 const DECISION_META: Record<string, { label: string; cls: string }> = {
   act: { label: "建议行动", cls: "border-pos/40 bg-pos/10 text-pos" },
+  provisional_act: { label: "临时行动", cls: "border-blue-400/40 bg-blue-50/10 text-blue-600 dark:text-blue-400" },
   watch: { label: "持续观察", cls: "border-warn/40 bg-warn/10 text-warn" },
   skip: { label: "暂不参与", cls: "border-border bg-secondary text-muted-foreground" },
 };
@@ -18,11 +19,57 @@ const FRESH_META: Record<string, { label: string; cls: string }> = {
   closed: { label: "已收敛", cls: "border-border bg-secondary text-muted-foreground" },
 };
 
+// Actionable recommendation direction -> Chinese label + tone.
+const DIRECTION_META: Record<string, { label: string; cls: string }> = {
+  YES: { label: "押 YES", cls: "border-pos/40 bg-pos/10 text-pos" },
+  NO: { label: "押 NO", cls: "border-neg/40 bg-neg/10 text-neg" },
+  AVOID: { label: "回避", cls: "border-warn/40 bg-warn/10 text-warn" },
+  WAIT: { label: "等待", cls: "border-border bg-secondary text-muted-foreground" },
+};
+
+const CONFIDENCE_LABEL: Record<string, string> = {
+  high: "高",
+  medium: "中",
+  low: "低",
+};
+
 function Metric({ label, value, tone = "text-foreground" }: { label: string; value: string; tone?: string }) {
   return (
     <div className="flex flex-col gap-0.5">
       <span className="text-[11px] text-muted-foreground">{label}</span>
       <span className={`font-mono text-sm font-semibold tabular-nums ${tone}`}>{value}</span>
+    </div>
+  );
+}
+
+function ActionableRecommendationBlock({
+  rec,
+}: {
+  rec: NonNullable<DecisionReport["actionable_recommendation"]>;
+}) {
+  const dm = DIRECTION_META[rec.direction] ?? DIRECTION_META.WAIT;
+  const confLabel = CONFIDENCE_LABEL[rec.confidence] ?? rec.confidence;
+  const isUncalibrated = rec.calibration_status === "uncalibrated_provisional";
+  return (
+    <div className="flex flex-col gap-2 border-t border-border pt-2.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[11px] font-medium text-foreground">可执行建议</span>
+        <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium ${dm.cls}`}>
+          {dm.label}
+        </span>
+        <span className="rounded bg-secondary px-1.5 py-0.5 text-[11px] text-muted-foreground">
+          置信度 {confLabel}
+        </span>
+        <span className="rounded bg-secondary px-1.5 py-0.5 text-[11px] text-muted-foreground">
+          建议配置 {rec.suggested_allocation_pct.toFixed(1)}%
+        </span>
+        {isUncalibrated && (
+          <span className="rounded border border-blue-400/40 bg-blue-50/10 px-1.5 py-0.5 text-[11px] text-blue-600 dark:text-blue-400">
+            未经校准
+          </span>
+        )}
+      </div>
+      <p className="text-[11px] text-muted-foreground leading-relaxed">{rec.rationale}</p>
     </div>
   );
 }
@@ -145,6 +192,10 @@ export function DecisionCard({
           )}
         </span>
       </div>
+
+      {report.actionable_recommendation && (
+        <ActionableRecommendationBlock rec={report.actionable_recommendation} />
+      )}
 
       {report.risk.flags.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5 text-[11px]">

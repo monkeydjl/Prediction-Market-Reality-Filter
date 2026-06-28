@@ -204,10 +204,19 @@ export interface DecisionReport {
     reason: string;
   };
   confidence: { level: string | null; score: number | null; confidence: number | null };
-  recommendation: { decision: string | null; action: string };
+  recommendation: { decision: string | null; action: string; calibration_status?: string | null };
   risk: { level: string | null; flags: string[] };
   category: string | null;
   status: string | null;
+  actionable_recommendation?: {
+    direction: string;
+    confidence: string;
+    suggested_allocation_pct: number;
+    edge: number;
+    risk_level: string;
+    rationale: string;
+    calibration_status: string;
+  } | null;
 }
 
 // An event's edge trajectory + freshness (M5 fresh-edge surface).

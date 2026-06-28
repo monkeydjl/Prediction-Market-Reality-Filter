@@ -219,10 +219,18 @@ class BuildFilteredNewsSemanticsTests(unittest.TestCase):
     must reach annotate_semantic_relevance, so the embedding query is enriched
     for threshold questions (e.g. crypto "reach $2,000") rather than embedding
     the bare question. collect_articles and annotate are mocked - network-free.
+    analyze_sentiment is mocked too so _build_filtered_news stays network-free.
     """
 
     QUESTION = "Will Ethereum reach $2,000 in June?"
     ARTICLES = [{"title": "ETH rallies", "description": "ether climbs", "source": "Decrypt"}]
+    SENTIMENT = {
+        "articles": [],
+        "overall_direction": "support_yes",
+        "overall_strength": 0.6,
+        "conflict_level": 0.1,
+        "summary": "证据整体支持 ETH 上行",
+    }
 
     def test_semantics_passed_to_annotate(self):
         captured = {}
@@ -235,7 +243,9 @@ class BuildFilteredNewsSemanticsTests(unittest.TestCase):
         with patch("app.services.event_collection_service.collect_articles",
                    new=AsyncMock(return_value=self.ARTICLES)), \
                 patch("app.services.semantic_relevance_service.annotate_semantic_relevance",
-                      new=fake_annotate):
+                      new=fake_annotate), \
+                patch("app.services.news_sentiment_service.analyze_sentiment",
+                      new=AsyncMock(return_value=self.SENTIMENT)):
             _run(eis._build_filtered_news(self.QUESTION))
 
         self.assertEqual(captured["question"], self.QUESTION)
@@ -247,15 +257,125 @@ class BuildFilteredNewsSemanticsTests(unittest.TestCase):
         self.assertTrue(captured["semantics"].get("yes_condition"))
 
     def test_returns_filter_result_shape(self):
-        """The fix must not change the returned shape (context + summary)."""
+        """The fix must not change the returned shape (context + summary).
+        Also locks the sentiment_profile passthrough added by Task 6."""
         with patch("app.services.event_collection_service.collect_articles",
                    new=AsyncMock(return_value=self.ARTICLES)), \
                 patch("app.services.semantic_relevance_service.annotate_semantic_relevance",
-                      new=AsyncMock(return_value=self.ARTICLES)):
+                      new=AsyncMock(return_value=self.ARTICLES)), \
+                patch("app.services.news_sentiment_service.analyze_sentiment",
+                      new=AsyncMock(return_value=self.SENTIMENT)):
             result = _run(eis._build_filtered_news(self.QUESTION))
         self.assertIn("context", result)
         self.assertIn("summary", result)
         self.assertIn("selected_count", result["summary"])
+        # sentiment_profile is now part of the filtered-news dict (Task 6).
+        self.assertEqual(result["sentiment_profile"], self.SENTIMENT)
+
+
+class SentimentIntegrationTests(unittest.TestCase):
+    """Task 6 wiring: analyze_sentiment -> _build_filtered_news ->
+    analyze_event -> analyze_market -> _build_user_prompt.
+
+    Locks the integration contract: sentiment_profile flows from
+    _build_filtered_news through analyze_event into both the LLM prompt
+    (as sentiment_summary) and the event record. analyze_market is mocked so
+    no real LLM call is made; we assert on the kwargs it received.
+    """
+
+    SENTIMENT = {
+        "articles": [{"index": 0, "sentiment": "positive", "impact": "high"}],
+        "overall_direction": "support_yes",
+        "overall_strength": 0.7,
+        "conflict_level": 0.1,
+        "summary": "证据整体支持 YES 结果",
+    }
+
+    def test_analyze_event_passes_sentiment_summary_to_analyze_market(self):
+        """The sentiment summary is forwarded as sentiment_summary kwarg so it
+        reaches _build_user_prompt via _ask_ai."""
+        captured = {}
+
+        async def fake_analyze_market(**kwargs):
+            captured.update(kwargs)
+            return {
+                "market_question": kwargs["market_question"],
+                "market_probability": kwargs["market_probability"],
+                "ai_probability": 55.0,
+            }
+
+        with patch("app.services.ai_analysis_service.analyze_market",
+                   new=fake_analyze_market), \
+                patch("app.services.cross_validation_service.cross_validate",
+                      new=AsyncMock(return_value=None)):
+            _run(eis.analyze_event(
+                "Will the bill pass?",
+                baseline_probability=50,
+                news_context="direction: support",
+                sentiment_profile=self.SENTIMENT,
+            ))
+        self.assertEqual(
+            captured.get("sentiment_summary"), self.SENTIMENT["summary"]
+        )
+
+    def test_analyze_event_records_sentiment_profile_on_record(self):
+        """sentiment_profile is added as a top-level field on the event record
+        when provided (mirrors the sports_context / cross_validation pattern)."""
+        analyze = AsyncMock(return_value={
+            "market_question": "Will the bill pass?",
+            "market_probability": 50,
+            "ai_probability": 55,
+        })
+        with patch("app.services.ai_analysis_service.analyze_market", new=analyze), \
+                patch("app.services.cross_validation_service.cross_validate",
+                      new=AsyncMock(return_value=None)):
+            record = _run(eis.analyze_event(
+                "Will the bill pass?",
+                baseline_probability=50,
+                news_context="direction: support",
+                sentiment_profile=self.SENTIMENT,
+            ))
+        self.assertEqual(record["sentiment_profile"], self.SENTIMENT)
+
+    def test_analyze_event_omits_sentiment_profile_when_not_provided(self):
+        """When sentiment_profile is None (e.g. direct analyze_event calls
+        without news filtering), the field is absent - matching how
+        cross_validation / sports_context are conditionally set."""
+        analyze = AsyncMock(return_value={
+            "market_question": "Will the bill pass?",
+            "market_probability": 50,
+            "ai_probability": 55,
+        })
+        with patch("app.services.ai_analysis_service.analyze_market", new=analyze), \
+                patch("app.services.cross_validation_service.cross_validate",
+                      new=AsyncMock(return_value=None)):
+            record = _run(eis.analyze_event(
+                "Will the bill pass?",
+                baseline_probability=50,
+                news_context="direction: support",
+            ))
+        self.assertNotIn("sentiment_profile", record)
+
+    def test_build_user_prompt_includes_sentiment_section_when_present(self):
+        """probability_engine_service._build_user_prompt appends a dedicated
+        LLM 情感分析 section when sentiment_summary is non-empty, and omits it
+        when empty (so the neutral fallback is a clean no-op)."""
+        from app.services.probability_engine_service import _build_user_prompt
+
+        prompt_with = _build_user_prompt(
+            market_question="Will the bill pass?",
+            market_probability=50,
+            news_context="direction: support",
+            sentiment_summary="证据整体支持 YES",
+        )
+        prompt_without = _build_user_prompt(
+            market_question="Will the bill pass?",
+            market_probability=50,
+            news_context="direction: support",
+        )
+        self.assertIn("LLM 情感分析", prompt_with)
+        self.assertIn("证据整体支持 YES", prompt_with)
+        self.assertNotIn("LLM 情感分析", prompt_without)
 
 
 class AnalyzeEventCalibrationFeedbackTests(unittest.TestCase):

@@ -87,6 +87,7 @@ async def _ask_ai(
     market_question: str,
     market_probability: float,
     news_context: str,
+    sentiment_summary: str = "",
 ) -> dict[str, Any]:
     client = get_client()
     response = await client.chat.completions.create(
@@ -99,6 +100,7 @@ async def _ask_ai(
                     market_question=market_question,
                     market_probability=market_probability,
                     news_context=news_context,
+                    sentiment_summary=sentiment_summary,
                 ),
             },
         ],
@@ -131,10 +133,11 @@ def _build_user_prompt(
     market_question: str,
     market_probability: float,
     news_context: str,
+    sentiment_summary: str = "",
 ) -> str:
     safe_question = _sanitize_text(market_question)[:700]
     safe_news = _sanitize_text(news_context)[:9000]
-    return f"""
+    prompt = f"""
 Task: structured Prediction Market Narrative Filter analysis.
 
 Market question:
@@ -178,6 +181,14 @@ Structured event fields (always fill these from the question + evidence):
 - entities: the key subjects the event is about - people, organizations,
   assets, laws, etc. Use the most common surface form of each name.
 """.strip()
+    # Sentiment is an additive LLM-judgment signal layered on top of the
+    # structured evidence. Only included when non-empty so the neutral
+    # fallback (no real LLM call) is a clean no-op.
+    if sentiment_summary:
+        safe_sentiment = _sanitize_text(sentiment_summary)[:500]
+        if safe_sentiment:
+            prompt += f"\n\nLLM 情感分析: {safe_sentiment}"
+    return prompt
 
 
 def _normalize_ai_analysis(

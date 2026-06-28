@@ -136,6 +136,7 @@ async def analyze_event(
     source: dict[str, Any] | None = None,
     volume: float | None = None,
     liquidity: float | None = None,
+    sentiment_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from app.services.ai_analysis_service import analyze_market
     from app.services.cross_validation_service import credibility_delta, cross_validate
@@ -145,12 +146,20 @@ async def analyze_event(
         news_context,
         sports_context.get("context", ""),
     )
+    # Fold the LLM sentiment summary into the prompt context as a dedicated
+    # signal alongside the structured evidence. Guard with `if sentiment_summary:`
+    # so a missing/empty summary (e.g. the neutral fallback) is a no-op and the
+    # integration stays additive, never blocking.
+    sentiment_summary = ""
+    if isinstance(sentiment_profile, dict):
+        sentiment_summary = str(sentiment_profile.get("summary") or "").strip()
     analysis = await analyze_market(
         market_question=event_question,
         market_probability=baseline_probability,
         news_context=combined_context,
         volume=volume,
         liquidity=liquidity,
+        sentiment_summary=sentiment_summary,
     )
     record = build_event_record(analysis, source=source)
     cross = await cross_validate(
@@ -170,6 +179,8 @@ async def analyze_event(
             "signals": sports_context.get("signals", {}),
             "facts": sports_context.get("facts", []),
         }
+    if sentiment_profile is not None:
+        record["sentiment_profile"] = sentiment_profile
     _apply_calibration_feedback(record, analysis, cross)
     return record
 
@@ -250,6 +261,7 @@ async def analyze_event_question(
             source={"type": "manual"},
             volume=volume,
             liquidity=liquidity,
+            sentiment_profile=filtered_news.get("sentiment_profile"),
         )
         record["news_filter"] = filtered_news["summary"]
         articles = await translate_articles(filtered_news.get("articles") or [])
@@ -401,6 +413,7 @@ async def discover_events(
                     source=source,
                     volume=candidate.get("volume"),
                     liquidity=candidate.get("liquidity"),
+                    sentiment_profile=filtered_news.get("sentiment_profile"),
                 )
                 record["news_filter"] = filtered_news["summary"]
                 articles = await translate_articles(filtered_news.get("articles") or [])
@@ -491,6 +504,7 @@ async def _build_filtered_news(
     from app.services.event_collection_service import collect_articles
     from app.services.market_semantics_service import parse_market_semantics
     from app.services.news_filter_service import filter_news_for_market
+    from app.services.news_sentiment_service import analyze_sentiment
     from app.services.semantic_relevance_service import annotate_semantic_relevance
 
     articles = await collect_articles(event_question, shared_articles=shared_articles)
@@ -502,10 +516,18 @@ async def _build_filtered_news(
     # the question and would otherwise be dropped by keyword relevance alone.
     semantics = parse_market_semantics(event_question)
     await annotate_semantic_relevance(event_question, articles, semantics)
-    return filter_news_for_market(
+    filtered = filter_news_for_market(
         market_question=event_question,
         articles=articles,
     )
+    # LLM sentiment analysis on the filtered articles. analyze_sentiment returns
+    # a neutral fallback on any failure (never raises), so this is purely
+    # additive - a fallback flows through transparently without breaking the
+    # pipeline.
+    filtered["sentiment_profile"] = await analyze_sentiment(
+        event_question, filtered.get("articles") or []
+    )
+    return filtered
 
 
 def _build_sports_analysis_context(

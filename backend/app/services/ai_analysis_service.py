@@ -57,6 +57,7 @@ async def analyze_market(
     news_context: str,
     volume: float | None = None,
     liquidity: float | None = None,
+    sentiment_summary: str = "",
 ) -> dict[str, Any]:
     market_probability = _clamp(market_probability, 0, 100)
     news_quality_score = score_news_quality(news_context)
@@ -75,6 +76,7 @@ async def analyze_market(
             market_question=market_question,
             market_probability=market_probability,
             news_context=news_context,
+            sentiment_summary=sentiment_summary,
         )
     except Exception as exc:
         # LLM unavailable / invalid output: fall back to the deterministic

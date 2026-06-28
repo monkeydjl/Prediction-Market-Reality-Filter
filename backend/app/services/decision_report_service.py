@@ -15,9 +15,9 @@ from typing import Any
 
 
 def _diagnosis_reason(prediction: dict[str, Any]) -> str:
-    """A short, human-readable why behind the act/watch/skip verdict, from the
-    frozen diagnosis inputs. Explains the gating factor a reviewer most needs:
-    dormancy, weak skill, or a liquidity discount."""
+    """A short, human-readable why behind the act/provisional_act/watch/skip
+    verdict, from the frozen diagnosis inputs. Explains the gating factor a
+    reviewer most needs: dormancy, weak skill, or a liquidity discount."""
     decision = prediction.get("decision")
     qualified = prediction.get("qualified")
     segment_n = prediction.get("segment_n")
@@ -25,6 +25,10 @@ def _diagnosis_reason(prediction: dict[str, Any]) -> str:
     liq_factor = prediction.get("liquidity_factor")
     if decision == "act":
         return "已合格类别 + 调整后 edge 达到行动阈值"
+    if decision == "provisional_act":
+        # Dormant but edge large: uncalibrated provisional action.
+        suffix = f"/{segment_min}" if segment_min else ""
+        return f"未经校准的临时行动建议（类别样本 {segment_n or 0}{suffix}，edge 达标但未合格）"
     # watch / skip: name the dominant reason it is not act.
     if qualified is False:
         suffix = f"/{segment_min}" if segment_min else ""
@@ -49,6 +53,12 @@ def build_decision_report(
     credibility = record.get("credibility") or {}
     risk = record.get("risk") or {}
     report = record.get("intelligence_report") or {}
+    decision = prediction.get("decision")
+    qualified = prediction.get("qualified")
+    # calibration_status: calibrated when qualified (segment has enough samples),
+    # uncalibrated_provisional otherwise (dormant or provisional_act).
+    calibration_status = "calibrated" if qualified else "uncalibrated_provisional"
+    actionable = record.get("actionable_recommendation")
 
     return {
         "event_id": prediction.get("event_id"),
@@ -90,10 +100,12 @@ def build_decision_report(
             "confidence": credibility.get("confidence"),
         },
         "recommendation": {
-            # decision = the Decision Gate verdict (act / watch / skip).
+            # decision = the Decision Gate verdict (act / provisional_act / watch / skip).
             # action = the event record's human-review action (escalate/track/watch).
+            # calibration_status = calibrated (qualified segment) vs uncalibrated_provisional.
             "decision": prediction.get("decision"),
             "action": report.get("recommended_action", ""),
+            "calibration_status": calibration_status,
         },
         "risk": {
             "level": risk.get("level"),
@@ -101,4 +113,5 @@ def build_decision_report(
         },
         "category": prediction.get("base_rate_category"),
         "status": prediction.get("status"),
+        "actionable_recommendation": actionable,
     }

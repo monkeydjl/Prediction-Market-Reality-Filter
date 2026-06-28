@@ -55,7 +55,7 @@ class BuildDecisionReportTests(unittest.TestCase):
         self.assertEqual(report["market_view"]["market_probability"], 50.0)
         self.assertEqual(report["edge"], {"raw": 30.0, "adjusted": 15.0, "trust": 0.5})
         self.assertEqual(report["confidence"]["level"], "MEDIUM")
-        self.assertEqual(report["recommendation"], {"decision": "watch", "action": "Track"})
+        self.assertEqual(report["recommendation"], {"decision": "watch", "action": "Track", "calibration_status": "uncalibrated_provisional"})
         self.assertEqual(report["risk"], {"level": "LOW", "flags": ["thin_evidence"]})
         self.assertEqual(report["category"], "cpi")
         self.assertEqual(report["status"], "open")
@@ -99,6 +99,105 @@ class BuildDecisionReportTests(unittest.TestCase):
             _prediction(decision="watch", qualified=True, segment_n=10,
                         liquidity_factor=0.2), _record())
         self.assertIn("流动性", liq["diagnosis"]["reason"])
+
+    def test_provisional_act_diagnosis_reason(self):
+        # provisional_act: dormant but edge large -> uncalibrated provisional
+        pred = _prediction(
+            decision="provisional_act", qualified=False, segment_n=0,
+            segment_min_samples=8, segment_skill=None, liquidity_factor=1.0,
+        )
+        report = build_decision_report(pred, _record())
+        self.assertIn("未经校准", report["diagnosis"]["reason"])
+        self.assertEqual(report["recommendation"]["calibration_status"], "uncalibrated_provisional")
+
+    def test_act_decision_has_calibrated_status(self):
+        pred = _prediction(
+            decision="act", qualified=True, segment_n=10,
+            segment_min_samples=8, liquidity_factor=1.0,
+        )
+        report = build_decision_report(pred, _record())
+        self.assertEqual(report["recommendation"]["calibration_status"], "calibrated")
+
+    def test_watch_decision_has_uncalibrated_status(self):
+        pred = _prediction(decision="watch", qualified=False, segment_n=2)
+        report = build_decision_report(pred, _record())
+        self.assertEqual(report["recommendation"]["calibration_status"], "uncalibrated_provisional")
+
+    def test_actionable_recommendation_passthrough_from_record(self):
+        record = _record()
+        record["actionable_recommendation"] = {
+            "direction": "YES",
+            "confidence": "high",
+            "suggested_allocation_pct": 10.0,
+            "edge": 15.0,
+            "risk_level": "medium",
+            "rationale": "Strong evidence.",
+            "calibration_status": "uncalibrated_provisional",
+        }
+        report = build_decision_report(_prediction(), record)
+        self.assertEqual(report["actionable_recommendation"]["direction"], "YES")
+        self.assertEqual(report["actionable_recommendation"]["suggested_allocation_pct"], 10.0)
+
+    def test_actionable_recommendation_none_when_record_missing_it(self):
+        report = build_decision_report(_prediction(), _record())  # _record() has no actionable_recommendation
+        self.assertIsNone(report["actionable_recommendation"])
+
+    def test_provisional_act_does_not_introduce_banned_words(self):
+        # The banned-words test must still pass with provisional_act + actionable_recommendation
+        record = _record()
+        record["actionable_recommendation"] = {
+            "direction": "YES",
+            "confidence": "high",
+            "suggested_allocation_pct": 10.0,
+            "edge": 15.0,
+            "risk_level": "medium",
+            "rationale": "Strong evidence for YES.",
+            "calibration_status": "uncalibrated_provisional",
+        }
+        pred = _prediction(
+            decision="provisional_act", qualified=False, segment_n=0,
+            segment_min_samples=8, liquidity_factor=1.0,
+        )
+        report = build_decision_report(pred, record)
+        blob = str(report).lower()
+        for banned in ("long", "short", "buy", "sell", "position", "kelly", "order"):
+            self.assertNotIn(banned, blob, f"banned word '{banned}' found in report")
+
+    def test_real_long_signal_rationale_does_not_introduce_banned_words(self):
+        # Production path: a real event record with actionable_recommendation
+        # built from a LONG signal. The rationale must not contain "long"/"short".
+        # Build a record the way build_event_record() would (Task 4 path).
+        from app.services.event_intelligence_service import build_event_record
+        analysis = {
+            "event_question": "Will X happen?",
+            "market_probability": 40.0,
+            "ai_probability": 55.0,
+            "title_zh": "X",
+            "narrative_summary": "Evidence.",
+            "confidence_score": 0.7,
+            "news_quality_score": 0.6,
+            "evidence_strength": 0.5,
+            "evidence_conflict_score": 0.2,
+            "freshness_score": 0.8,
+            "resolution_relevance_score": 0.5,
+            "source_count": 5,
+            "risk_level": "MEDIUM",
+            "risk_flags": [],
+            "signal": "LONG",
+            "signal_direction": "LONG",
+            "signal_strength": "HIGH",
+            "position_size": 0.10,
+            "expected_edge": 0.15,
+            "divergence": 15.0,
+            "base_rate_category": "test",
+        }
+        record = build_event_record(analysis)
+        pred = _prediction(decision="provisional_act", qualified=False, segment_n=0,
+                           segment_min_samples=8, liquidity_factor=1.0)
+        report = build_decision_report(pred, record)
+        blob = str(report).lower()
+        for banned in ("long", "short", "buy", "sell", "position", "kelly", "order"):
+            self.assertNotIn(banned, blob, f"banned word '{banned}' found in report with real LONG signal rationale")
 
 
 class DecisionEndpointTests(unittest.TestCase):

@@ -84,7 +84,7 @@ def _build_actionable_recommendation(
     estimated = safe_float(analysis.get("ai_probability"), baseline)
     rationale = (
         f"市场定价 {baseline:.1f}%，估计 {estimated:.1f}%，"
-        f"信号 {signal}，证据强度 {safe_float(analysis.get('evidence_strength'), 0.0):.2f}。"
+        f"方向 {direction}，证据强度 {safe_float(analysis.get('evidence_strength'), 0.0):.2f}。"
     )
     # calibration_status is set by the caller (analyze_event) which has access
     # to segment stats; default to uncalibrated_provisional for the build_event_record

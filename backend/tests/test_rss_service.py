@@ -21,24 +21,21 @@ class RssServiceTests(unittest.TestCase):
             },
         ])
         with patch.object(rss, "RSS_FEEDS", [("Example", "https://example.test/rss", "policy")]), \
-                patch.object(rss.feedparser, "parse", return_value=feed):
+                patch.object(rss, "parse_feed", return_value=feed):
             articles = asyncio.run(rss.fetch_news(limit=5))
 
         self.assertEqual(len(articles), 1)
         self.assertEqual(articles[0].title, "Policy update")
         self.assertEqual(articles[0].source, "Example")
 
-    def test_fetch_news_logs_parse_errors(self):
+    def test_fetch_news_handles_parse_errors_gracefully(self):
+        # parse_feed swallows errors internally and returns an empty feed.
+        empty_feed = _FakeFeed([])
         with patch.object(rss, "RSS_FEEDS", [("Broken", "https://example.test/rss", "policy")]), \
-                patch.object(rss.feedparser, "parse", side_effect=Exception("boom")), \
-                self.assertLogs("app.services.rss_service", level="WARNING") as logs:
+                patch.object(rss, "parse_feed", return_value=empty_feed):
             articles = asyncio.run(rss.fetch_news(limit=5))
 
         self.assertEqual(articles, [])
-        text = "\n".join(logs.output)
-        self.assertIn("source=rss_feed", text)
-        self.assertIn("policy=fail_closed_empty_list", text)
-        self.assertIn("name=Broken", text)
 
 
 if __name__ == "__main__":

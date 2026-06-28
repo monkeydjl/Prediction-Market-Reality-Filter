@@ -12,11 +12,24 @@ from app.utils.failure_policy import fail_closed_empty_list, log_service_failure
 logger = logging.getLogger(__name__)
 
 
-_gnews_client = GNews(
-    language="en",
-    country="US",
-    max_results=settings.GNEWS_MAX_RESULTS,
-)
+_gnews_client = None
+
+
+def _get_client():
+    """Lazy-init the GNews client so an import-time or network failure
+    at startup doesn't crash the whole app."""
+    global _gnews_client
+    if _gnews_client is None:
+        try:
+            _gnews_client = GNews(
+                language="en",
+                country="US",
+                max_results=settings.GNEWS_MAX_RESULTS,
+            )
+        except Exception as exc:
+            logger.error("GNews client init failed: %s", exc)
+            return None
+    return _gnews_client
 
 STOPWORDS = {
     "will", "this", "that", "with", "from", "about", "market",
@@ -26,8 +39,16 @@ STOPWORDS = {
 
 
 def _sync_fetch(query: str) -> list[dict[str, Any]]:
+    client = _get_client()
+    if client is None:
+        return fail_closed_empty_list(
+            logger,
+            "gnews",
+            RuntimeError("GNews client not available"),
+            context={"query": query[:60]},
+        )
     try:
-        results = _gnews_client.get_news(query)
+        results = client.get_news(query)
     except Exception as exc:
         return fail_closed_empty_list(
             logger,

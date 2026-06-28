@@ -13,10 +13,9 @@ import asyncio
 import logging
 from functools import partial
 
-import feedparser
-
 from app.core.config import settings
 from app.utils.failure_policy import fail_closed_empty_list
+from app.utils.rss_fetch import parse_feed
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +23,7 @@ logger = logging.getLogger(__name__)
 def _fetch_sync(url: str, source_name: str, limit: int) -> list[dict]:
     """Synchronous RSS fetch + normalize. Runs in a thread pool."""
     try:
-        feed = feedparser.parse(url)
+        feed = parse_feed(url)
     except Exception as exc:
         return fail_closed_empty_list(
             logger,

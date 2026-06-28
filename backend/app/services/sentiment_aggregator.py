@@ -17,6 +17,7 @@ import feedparser
 from bs4 import BeautifulSoup
 
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
+from app.utils.rss_fetch import parse_feed
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,8 @@ NEWS_FEEDS = [
         "region": "UK"
     },
     {
-        "name": "ESPN Soccer",
-        "url": "https://www.espn.com/espn/rss/soccer/news",
+        "name": "Goal Football",
+        "url": "https://www.goal.com/en/feeds",
         "region": "US"
     },
     {
@@ -94,7 +95,7 @@ async def _fetch_single_feed(
     """
     try:
         parsed = await asyncio.wait_for(
-            asyncio.to_thread(feedparser.parse, feed["url"]),
+            asyncio.to_thread(parse_feed, feed["url"]),
             timeout=per_feed_timeout,
         )
     except asyncio.TimeoutError:
@@ -203,7 +204,7 @@ async def fetch_reddit_sentiment(
 
     try:
         # Parse Reddit RSS
-        parsed = feedparser.parse(url)
+        parsed = parse_feed(url)
 
         posts = []
         for entry in parsed.entries:

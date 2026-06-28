@@ -18,7 +18,7 @@ class EconomicDataServiceTests(unittest.TestCase):
             {"title": "Employment Situation",
              "description": "desc only", "updated": "2026-06-11"},
         ])
-        with patch.object(economic.feedparser, "parse", return_value=feed) as parse, \
+        with patch.object(economic, "parse_feed", return_value=feed) as parse, \
              patch.object(economic.settings, "ECONOMIC_RSS_URL", "http://example/bls"), \
              patch.object(economic.settings, "ECONOMIC_SOURCE_NAME",
                           "U.S. Bureau of Labor Statistics"), \
@@ -37,22 +37,21 @@ class EconomicDataServiceTests(unittest.TestCase):
         self.assertEqual(articles[1]["description"], "desc only")
         self.assertEqual(articles[1]["published"], "2026-06-11")
         # BLS requires a declared User-Agent on every request.
-        self.assertEqual(parse.call_args.kwargs.get("agent"), "UA contact@example.com")
+        self.assertEqual(parse.call_args.kwargs.get("user_agent"), "UA contact@example.com")
 
     def test_fetch_returns_empty_when_no_url(self):
         with patch.object(economic.settings, "ECONOMIC_RSS_URL", ""):
             articles = asyncio.run(economic.fetch_economic_data())
         self.assertEqual(articles, [])
 
-    def test_fetch_logs_parse_errors(self):
-        with patch.object(economic.feedparser, "parse", side_effect=Exception("boom")), \
-             patch.object(economic.settings, "ECONOMIC_RSS_URL", "http://example/bls"), \
-             self.assertLogs("app.services.economic_data_service", level="WARNING") as logs:
+    def test_fetch_handles_parse_errors_gracefully(self):
+        # parse_feed swallows errors internally and returns an empty feed,
+        # so the service sees zero entries and returns an empty list.
+        empty_feed = _FakeFeed([])
+        with patch.object(economic, "parse_feed", return_value=empty_feed), \
+             patch.object(economic.settings, "ECONOMIC_RSS_URL", "http://example/bls"):
             articles = asyncio.run(economic.fetch_economic_data())
         self.assertEqual(articles, [])
-        text = "\n".join(logs.output)
-        self.assertIn("source=economic_rss", text)
-        self.assertIn("policy=fail_closed_empty_list", text)
 
 
 if __name__ == "__main__":

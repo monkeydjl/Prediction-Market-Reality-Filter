@@ -116,7 +116,8 @@ def _is_eligible(event: Any) -> bool:
 def _to_candidate_event(event: dict[str, Any]) -> dict[str, Any]:
     question = str(event.get("title", "") or "").strip()
     market = event["markets"][0]
-    baseline = _baseline_pct(market)
+    baseline, bid, ask = _baseline_and_quote(market)
+    spread = round(ask - bid, 2) if (bid > 0 and ask > 0) else 0.0
     volume = safe_float(market.get("volume_fp"), 0.0)
     liquidity = safe_float(market.get("liquidity_dollars"), 0.0)
     ticker = str(event.get("event_ticker", "") or "")
@@ -126,6 +127,7 @@ def _to_candidate_event(event: dict[str, Any]) -> dict[str, Any]:
         "baseline_probability": baseline,
         "volume": volume,
         "liquidity": liquidity,
+        "bid_ask": {"bid": bid, "ask": ask, "spread": spread},
         "source": {
             "type": "prediction_market",
             "platform": settings.KALSHI_SOURCE_NAME,
@@ -139,20 +141,22 @@ def _to_candidate_event(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _baseline_pct(market: dict[str, Any]) -> float:
-    """Implied YES probability (0-100) from Kalshi dollar prices.
+def _baseline_and_quote(market: dict[str, Any]) -> tuple[float, float, float]:
+    """Return ``(baseline_pct, bid, ask)`` from Kalshi dollar prices.
+
+    All three values are on the 0-100 scale. Bid/ask are 0.0 when not used.
 
     Prefer the last trade price; fall back to the yes bid/ask midpoint; default
     to 50 when the market has no price signal yet.
     """
     last = safe_float(market.get("last_price_dollars"), 0.0)
     if last > 0:
-        return last * 100
+        return last * 100, 0.0, 0.0
     bid = safe_float(market.get("yes_bid_dollars"), 0.0)
     ask = safe_float(market.get("yes_ask_dollars"), 0.0)
     if bid > 0 or ask > 0:
-        return (bid + ask) / 2 * 100
-    return 50.0
+        return (bid + ask) / 2 * 100, bid * 100, ask * 100
+    return 50.0, 0.0, 0.0
 
 
 async def fetch_resolved_markets(limit: int = 200) -> list[dict[str, Any]]:

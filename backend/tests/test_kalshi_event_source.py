@@ -65,11 +65,13 @@ class KalshiEventSourceTests(unittest.TestCase):
                           new=AsyncMock(return_value=[_event()])):
             events = asyncio.run(source.fetch_candidate_events(limit=5))
         self.assertEqual(len(events), 1)
+        # last_price_dollars=0.64 wins, so bid/ask are 0.0 and spread is 0.0.
         self.assertEqual(events[0], {
             "question": "Will it rain?",
             "baseline_probability": 64.0,
             "volume": 1000.0,
             "liquidity": 250.0,
+            "bid_ask": {"bid": 0.0, "ask": 0.0, "spread": 0.0},
             "source": {
                 "type": "prediction_market",
                 "platform": "Kalshi",
@@ -104,6 +106,55 @@ class KalshiEventSourceTests(unittest.TestCase):
         by_id = {e["source"]["source_id"]: e for e in events}
         self.assertEqual(by_id["MID"]["baseline_probability"], 45.0)
         self.assertEqual(by_id["NONE"]["baseline_probability"], 50.0)
+
+    def test_bid_ask_transparent_when_last_price_missing(self):
+        """When last_price is 0, bid/ask midpoint is used and bid_ask is populated."""
+        ev = _event(
+            event_ticker="TEST-EVENT",
+            title="Test event",
+            market={
+                "last_price_dollars": 0.0,
+                "yes_bid_dollars": 0.42,
+                "yes_ask_dollars": 0.46,
+                "volume_fp": 1000.0,
+                "liquidity_dollars": 5000.0,
+            },
+        )
+        with patch.object(source, "_fetch_raw_events",
+                          new=AsyncMock(return_value=[ev])):
+            candidates = asyncio.run(source.fetch_candidate_events(limit=1))
+        self.assertEqual(len(candidates), 1)
+        bid_ask = candidates[0]["bid_ask"]
+        self.assertEqual(bid_ask["bid"], 42.0)
+        self.assertEqual(bid_ask["ask"], 46.0)
+        self.assertEqual(bid_ask["spread"], 4.0)
+        # midpoint baseline must agree with bid/ask transparency.
+        self.assertEqual(candidates[0]["baseline_probability"], 44.0)
+
+    def test_bid_ask_zero_when_last_price_present(self):
+        """When last_price is present, bid/ask pass-through is 0/0 and spread is 0."""
+        ev = _event(event_ticker="LAST", market={
+            "last_price_dollars": 0.70,
+            "yes_bid_dollars": 0.69,
+            "yes_ask_dollars": 0.71,
+        })
+        with patch.object(source, "_fetch_raw_events",
+                          new=AsyncMock(return_value=[ev])):
+            candidates = asyncio.run(source.fetch_candidate_events(limit=1))
+        self.assertEqual(candidates[0]["bid_ask"], {"bid": 0.0, "ask": 0.0, "spread": 0.0})
+
+    def test_bid_ask_spread_zero_when_one_side_missing(self):
+        """spread is 0.0 unless BOTH bid>0 and ask>0."""
+        bid_only = _event(event_ticker="BID", market={
+            "last_price_dollars": 0.0, "yes_bid_dollars": 0.42, "yes_ask_dollars": 0.0})
+        ask_only = _event(event_ticker="ASK", market={
+            "last_price_dollars": 0.0, "yes_bid_dollars": 0.0, "yes_ask_dollars": 0.46})
+        with patch.object(source, "_fetch_raw_events",
+                          new=AsyncMock(return_value=[bid_only, ask_only])):
+            events = asyncio.run(source.fetch_candidate_events(limit=10))
+        by_id = {e["source"]["source_id"]: e for e in events}
+        self.assertEqual(by_id["BID"]["bid_ask"], {"bid": 42.0, "ask": 0.0, "spread": 0.0})
+        self.assertEqual(by_id["ASK"]["bid_ask"], {"bid": 0.0, "ask": 46.0, "spread": 0.0})
 
     def test_respects_limit(self):
         evs = [_event(event_ticker=f"E{i}") for i in range(10)]

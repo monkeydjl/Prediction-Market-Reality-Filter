@@ -283,6 +283,9 @@ async def _collect_candidate_events(
     from app.services.manifold_event_source import (
         fetch_candidate_events as fetch_manifold_events,
     )
+    from app.services.metacus_event_source import (
+        fetch_candidate_events as fetch_metaculus_events,
+    )
     from app.services.polymarket_event_source import (
         fetch_candidate_events as fetch_polymarket_events,
         fetch_crypto_candidate_events as fetch_polymarket_crypto_events,
@@ -305,6 +308,12 @@ async def _collect_candidate_events(
         candidate_sources.append(("Polymarket Crypto", fetch_polymarket_crypto_events))
     if settings.WORLD_CUP_SOURCE_ENABLED:
         candidate_sources.append(("World Cup", fetch_world_cup_events))
+    # Metaculus requires an API token; auto-disabled when unset so an empty
+    # source never makes authenticated network calls. The adapter itself also
+    # short-circuits on the empty token, but checking here keeps it out of the
+    # interleaved labels and the gather() call entirely.
+    if settings.METACULUS_API_TOKEN:
+        candidate_sources.append(("Metaculus", fetch_metaculus_events))
     labels = [name for name, _ in candidate_sources] + ["Open Web"]
     results = await asyncio.gather(
         *(fetch(limit) for _, fetch in candidate_sources),

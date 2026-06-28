@@ -30,12 +30,6 @@ export const PRIORITY_LABELS: Record<string, string> = {
   low: "低",
 };
 
-export const LEVEL_LABELS: Record<string, string> = {
-  HIGH: "高",
-  MEDIUM: "中",
-  LOW: "低",
-};
-
 export const DIRECTION_LABELS: Record<string, string> = {
   rising: "上行",
   falling: "下行",
@@ -50,14 +44,6 @@ export const KIND_LABELS: Record<string, string> = {
   official: "官方信息",
   news: "公开新闻",
   market: "预测市场",
-};
-
-// Per-item evidence stance (backend exposes aggregate direction only; kept for
-// completeness / labels).
-export const STANCE_LABELS: Record<string, string> = {
-  supports: "支持",
-  contradicts: "反对",
-  neutral: "中性",
 };
 
 // Cross-validation agreement between the model and an external estimate.

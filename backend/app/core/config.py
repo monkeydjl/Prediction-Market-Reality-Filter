@@ -271,6 +271,19 @@ class Settings:
     )
     KALSHI_SOURCE_NAME: str = os.getenv("KALSHI_SOURCE_NAME", "Kalshi")
 
+    # Metaculus is a fourth prediction-question event source (community forecasts
+    # on long-horizon science/tech/AI/policy questions). Unlike the market
+    # sources, it requires an API token — register at metaculus.com, copy the
+    # token from Account Settings, and set METACULUS_API_TOKEN. The source is
+    # auto-disabled when the token is empty, so an unset source never makes
+    # authenticated network calls.
+    METACULUS_API_URL: str = os.getenv(
+        "METACULUS_API_URL",
+        "https://www.metaculus.com/api2/posts/",
+    )
+    METACULUS_API_TOKEN: str = os.getenv("METACULUS_API_TOKEN", "")
+    METACULUS_SOURCE_NAME: str = os.getenv("METACULUS_SOURCE_NAME", "Metaculus")
+
     # Curated 2026 FIFA World Cup event source. Local/deterministic: contributes
     # high-interest sports questions to discovery without depending on a sports
     # data API. Set WORLD_CUP_SOURCE_ENABLED=false to disable it.

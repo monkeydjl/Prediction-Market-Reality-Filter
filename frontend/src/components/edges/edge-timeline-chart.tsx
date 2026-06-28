@@ -21,7 +21,7 @@ export function EdgeTimelineChart({ data }: { data: EdgeTimelinePoint[] }) {
         <DarkTooltip
           formatter={(value, name, payload) => (
             <span className="font-mono">
-              {name === "edge" ? "edge" : String(name)} {Number(value).toFixed(1)}pt
+              {name === "edge" ? "edge" : String(name)} {Number.isFinite(Number(value)) ? Number(value).toFixed(1) : "—"}pt
               {typeof payload.model === "number" && typeof payload.market === "number"
                 ? ` · AI ${payload.model.toFixed(1)}% · 市场 ${payload.market.toFixed(1)}%`
                 : ""}

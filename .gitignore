@@ -69,6 +69,8 @@ AGENTS.md
 HANDOFF.md
 .qoder/
 .workbuddy/
+hive.yml
+SESSION_MEMORY_*.md
 
 # ── Local debug / diff scratch (not source) ──────────────────────────────────
 debug.log
@@ -81,6 +83,7 @@ New-frontend/
 *.7z
 backend/archive/
 docs/Review-doc/
+docs/PIC/
 
 # ── Editor / OS ──────────────────────────────────────────────────────────────
 .vscode/

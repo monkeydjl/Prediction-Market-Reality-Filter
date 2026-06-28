@@ -436,6 +436,22 @@ class Settings:
     DECISION_ACT_EDGE: float = float(os.getenv("DECISION_ACT_EDGE", "10.0"))
     DECISION_WATCH_EDGE: float = float(os.getenv("DECISION_WATCH_EDGE", "3.0"))
 
+    # Actionable conclusions (Stage 3): surface the already-computed LONG/SHORT
+    # legacy signal as a structured actionable_recommendation on event records.
+    # When true, build_event_record adds an actionable_recommendation dict with
+    # direction (YES/NO/AVOID/WAIT) + confidence + suggested allocation. When
+    # false, the field is always None (legacy behavior).
+    ACTIONABLE_RECOMMENDATION_ENABLED: bool = _env_bool(
+        "ACTIONABLE_RECOMMENDATION_ENABLED", "true"
+    )
+    # Cold-start bypass: when a category is dormant (0 resolved samples) but
+    # the adjusted edge exceeds act_edge, emit "provisional_act" instead of
+    # "watch". This unblocks the system during cold-start. Disable to restore
+    # old behavior (dormant categories never earn "act" regardless of edge).
+    COLD_START_BYPASS_ENABLED: bool = _env_bool(
+        "COLD_START_BYPASS_ENABLED", "true"
+    )
+
     # Edge trajectory freshness (M3). An event's edge (AI - market) is tracked over
     # the audit snapshots. If the latest snapshot is older than EDGE_STALE_HOURS the
     # edge is "stale" (we have not re-evaluated recently); otherwise a material edge

@@ -55,6 +55,25 @@ class IntelligenceReport(BaseModel):
     recommended_action: str
 
 
+class ActionableRecommendation(BaseModel):
+    """Structured actionable conclusion for an event (Stage 3).
+
+    Surfaces the already-computed legacy signal as an event-vocabulary
+    recommendation: direction (YES/NO/AVOID/WAIT) + confidence + suggested
+    allocation. None when evidence quality is insufficient or the feature is
+    disabled. calibration_status distinguishes calibrated (segment has enough
+    resolved samples) from uncalibrated_provisional (dormant but edge is large).
+    """
+
+    direction: str  # YES | NO | AVOID | WAIT
+    confidence: str  # high | medium | low
+    suggested_allocation_pct: float  # 0-25, from legacy position_size * 100
+    edge: float  # expected_edge in percentage points
+    risk_level: str  # low | medium | high
+    rationale: str
+    calibration_status: str  # calibrated | uncalibrated_provisional
+
+
 class EventSource(BaseModel):
     """Where an event came from. Permissive: source adapters add their own
     fields (platform, source_id, liquidity, volume, ...)."""
@@ -253,6 +272,7 @@ class EventRecord(BaseModel):
     outcome: Outcome | None = None
     calibration: Calibration | None = None
     semantics: EventSemantics | None = None
+    actionable_recommendation: ActionableRecommendation | None = None
 
 
 class FlexibleResponse(BaseModel):

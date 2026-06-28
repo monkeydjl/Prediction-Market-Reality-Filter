@@ -120,7 +120,7 @@ class DecisionEndpointTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(store, "_store_path", return_value=str(Path(tmp) / "event_store.json")), \
                     patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
-                rec = self._market_record("op1", estimated=90.0)  # raw 40 -> dormant adj 20 -> watch
+                rec = self._market_record("op1", estimated=90.0)  # raw 40 -> dormant adj 20 -> provisional_act (cold-start bypass)
                 store.save_event(rec)
                 preds.freeze_prediction(rec)
                 resp = client.get("/events/decisions/open")
@@ -129,7 +129,7 @@ class DecisionEndpointTests(unittest.TestCase):
         self.assertEqual(body["count"], 1)
         report = body["decisions"][0]
         self.assertEqual(report["event_id"], "op1")
-        self.assertEqual(report["recommendation"]["decision"], "watch")
+        self.assertEqual(report["recommendation"]["decision"], "provisional_act")
         self.assertEqual(report["event"]["title"], rec["event_title"])  # joined from record
 
     def test_open_decisions_loads_event_store_once(self):

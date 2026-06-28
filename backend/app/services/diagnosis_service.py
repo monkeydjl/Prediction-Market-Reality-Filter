@@ -8,7 +8,8 @@ a divergence only in a category where our past resolved predictions actually bea
 the market (positive skill); in a category where we scored at random, trust is 0 and
 the adjusted edge collapses to 0. Until a category has enough resolved samples to
 judge (dormant), trust falls back to a conservative default and the Decision Gate
-caps the verdict at "watch" - an unproven segment never earns "act".
+caps the verdict at "watch" (or "provisional_act" when cold_start_bypass is
+enabled) - an unproven segment never earns "act".
 
 Pure functions: callers (prediction_store) pass in the segment's calibration stats
 and the market liquidity, so this module imports no store and is trivially testable.
@@ -62,13 +63,22 @@ def decide(
     qualified: bool,
     act_edge: float,
     watch_edge: float,
+    cold_start_bypass_enabled: bool = True,
 ) -> str:
-    """act / watch / skip from the adjusted edge. "act" requires a qualified
-    (non-dormant) segment, so an unproven segment caps at "watch" regardless of
-    how large the divergence is."""
+    """act / provisional_act / watch / skip from the adjusted edge.
+
+    "act" requires a qualified (non-dormant) segment. When
+    cold_start_bypass_enabled is true, a dormant segment with edge >= act_edge
+    earns "provisional_act" (actionable but uncalibrated) instead of "watch" -
+    this unblocks the system during cold-start. When false, dormant segments
+    cap at "watch" regardless of edge (legacy behavior)."""
     magnitude = abs(adjusted_edge)
-    if qualified and magnitude >= act_edge:
-        return "act"
+    if magnitude >= act_edge:
+        if qualified:
+            return "act"
+        if cold_start_bypass_enabled:
+            return "provisional_act"
+        return "watch"
     if magnitude >= watch_edge:
         return "watch"
     return "skip"
@@ -107,6 +117,7 @@ def diagnose(
         qualified=qualified,
         act_edge=settings.DECISION_ACT_EDGE,
         watch_edge=settings.DECISION_WATCH_EDGE,
+        cold_start_bypass_enabled=settings.COLD_START_BYPASS_ENABLED,
     )
     return {
         "trust": trust,

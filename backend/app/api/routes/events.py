@@ -949,16 +949,17 @@ async def get_recent_predictions(limit: int = Query(default=50, ge=1, le=200)):
 @router.get("/decisions/open", response_model=OpenDecisionsResponse)
 async def get_open_decisions(
     limit: int = Query(default=50, ge=1, le=200),
-    decision: str | None = Query(default=None, pattern="^(act|watch)$"),
+    decision: str | None = Query(default=None, pattern="^(act|watch|provisional_act)$"),
 ):
     """Open opportunities: unresolved committed predictions worth a human's
     attention, ranked by absolute adjusted edge, each rendered as a decision
     report (event / probability / market view / edge / confidence / recommendation
-    / risk). Defaults to act + watch; pass `decision=act` to narrow (an invalid
-    value is rejected with 422 rather than silently returning nothing). While
-    every category is dormant this surfaces watch-grade items (or is empty).
+    / risk). Defaults to act + watch + provisional_act; pass `decision=act` to
+    narrow (an invalid value is rejected with 422 rather than silently returning
+    nothing). While every category is dormant this surfaces watch-grade items
+    and cold-start provisional_act items (or is empty).
     """
-    decisions = (decision,) if decision else ("act", "watch")
+    decisions = (decision,) if decision else ("act", "watch", "provisional_act")
     reports = []
     events_by_id = {entry.get("event_id"): entry for entry in list_all_events()}
     for prediction in list_open_opportunities(decisions=decisions, limit=limit):

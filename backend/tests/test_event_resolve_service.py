@@ -479,21 +479,21 @@ class Milestone1PredictionScoringTests(unittest.TestCase):
         self.assertAlmostEqual(scored["brier_score"], 0.04)  # (80-100)/100 ^2
 
     def test_resolution_observes_watch_prediction(self):
-        # A watch prediction resolves to 'observed': outcome recorded, but it
+        # A non-act prediction resolves to 'observed': outcome recorded, but it
         # stays out of the act-only prediction calibration.
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(store, "_store_path", return_value=str(Path(tmp) / "event_store.json")), \
                     patch.object(audit, "_audit_path", return_value=str(Path(tmp) / "event_audit.jsonl")), \
                     patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
                 store.save_event(_make_record("evtWatch", value_score=30))
-                # Dormant segment + liquidity -> caps at watch.
+                # Dormant segment + large edge -> provisional_act (cold-start bypass).
                 preds.freeze_prediction(self._market_record("evtWatch", estimated=95.0))
                 ers.resolve_with_calibration(
                     event_id="evtWatch", actual_outcome=100.0, source="manual",
                 )
                 after = preds.get_prediction("evtWatch")
                 calib_n = preds.calibration_summary()["n"]  # inside patch (loop DB)
-        self.assertEqual(after["decision"], "watch")
+        self.assertEqual(after["decision"], "provisional_act")
         self.assertEqual(after["status"], "observed")
         self.assertIsNotNone(after["brier_score"])
         self.assertEqual(calib_n, 0)  # excluded from act-only calibration

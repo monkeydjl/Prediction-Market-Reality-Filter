@@ -421,13 +421,14 @@ def segment_skill(category: str) -> dict[str, Any]:
     """Conditional calibration for one category - the trust signal the
     Disagreement Diagnosis reads to weight a divergence.
 
-    Returns {n, mean_brier, skill} over the category's resolved act+watch
-    predictions (status in scored/observed, decision in act/watch). skip rows are
-    excluded: a skip means we essentially agreed with the market, an easy
-    forecast whose low Brier would inflate trust. act AND watch are counted on
-    purpose - this is the qualification gate (n >= min_samples leaves dormancy),
-    and an act-only gate could never bootstrap a fresh category (no act history
-    -> never qualified -> never acts). The headline calibration_summary stays
+    Returns {n, mean_brier, skill} over the category's resolved
+    act+watch+provisional_act predictions (status in scored/observed, decision in
+    act/watch/provisional_act). skip rows are excluded: a skip means we
+    essentially agreed with the market, an easy forecast whose low Brier would
+    inflate trust. act AND watch AND provisional_act are counted on purpose -
+    this is the qualification gate (n >= min_samples leaves dormancy), and an
+    act-only gate could never bootstrap a fresh category (no act history ->
+    never qualified -> never acts). The headline calibration_summary stays
     act-only; this trust gate is deliberately broader so the loop can learn.
     """
     path = sqlite_db.loop_db_path()
@@ -437,7 +438,8 @@ def segment_skill(category: str) -> dict[str, Any]:
             """
             SELECT COUNT(*) AS n, AVG(brier_score) AS mean_brier
             FROM predictions
-            WHERE status IN ('scored', 'observed') AND decision IN ('act', 'watch')
+            WHERE status IN ('scored', 'observed')
+              AND decision IN ('act', 'watch', 'provisional_act')
               AND base_rate_category=?
             """,
             (category,),
@@ -484,7 +486,8 @@ def calibration_summary() -> dict[str, Any]:
             SELECT base_rate_category AS cat, COUNT(*) AS n,
                    AVG(brier_score) AS mean_brier
             FROM predictions
-            WHERE status IN ('scored', 'observed') AND decision IN ('act', 'watch')
+            WHERE status IN ('scored', 'observed')
+              AND decision IN ('act', 'watch', 'provisional_act')
             GROUP BY base_rate_category
             """,
         ).fetchall()

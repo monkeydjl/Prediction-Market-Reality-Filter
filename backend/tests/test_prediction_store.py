@@ -77,13 +77,14 @@ def _act_record(event_id, category, estimated, baseline):
 
 def _bootstrap_act(event_id, *, category, estimated, baseline):
     """Drive the real freeze+score path to a genuine act row, proving the loop
-    can leave dormancy. Freeze + score 8 watch predictions in `category` with a
-    good Brier (skill ~0.84 -> trust ~0.84, qualified at min_samples=8), then
-    freeze the target with a large edge: qualified + trust*raw >= ACT_EDGE -> act."""
+    can leave dormancy. Freeze + score 8 provisional_act predictions in `category`
+    with a good Brier (skill ~0.84 -> trust ~0.84, qualified at min_samples=8),
+    then freeze the target with a large edge: qualified + trust*raw >= ACT_EDGE
+    -> act."""
     for i in range(8):
         boot = _act_record(f"{event_id}_boot{i}", category, estimated=80.0, baseline=50.0)
-        frozen = preds.freeze_prediction(boot)  # dormant trust 0.5, liq 1.0 -> adj 15 -> watch
-        assert frozen["decision"] == "watch", frozen["decision"]
+        frozen = preds.freeze_prediction(boot)  # dormant trust 0.5, liq 1.0 -> adj 15 -> provisional_act
+        assert frozen["decision"] == "provisional_act", frozen["decision"]
         preds.score_prediction(f"{event_id}_boot{i}", actual_outcome=100.0)  # brier 0.04 -> observed
     frozen = preds.freeze_prediction(_act_record(event_id, category, estimated, baseline))
     assert frozen["decision"] == "act", frozen["decision"]

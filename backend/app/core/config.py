@@ -571,6 +571,41 @@ class Settings:
     PREDICTION_CALIBRATION_ENABLED: bool = _env_bool(
         "PREDICTION_CALIBRATION_ENABLED", "false"
     )
+    # Phase 4 — Source Reliability overlay (default OFF). When enabled,
+    # analyze_event attaches a source_reliability overlay block for events
+    # that have a non-empty evidence_breakdown (prediction_market,
+    # prediction_question, open_web). Scores the diversity and quality of
+    # news sources (tier-weighted, domain diversity, trusted ratio) and
+    # downgrades YES/NO -> WAIT when the source base is too thin or
+    # untrustworthy. Omitted entirely when evidence_breakdown is empty
+    # (e.g., sports_event with match stats). Pure audit layer — does NOT
+    # mutate ai_probability, actionable_recommendation, decision_quality,
+    # or market_quality. See docs/superpowers/specs/2026-06-30-decision-quality-engine-design.md
+    SOURCE_RELIABILITY_ENABLED: bool = _env_bool(
+        "SOURCE_RELIABILITY_ENABLED", "false"
+    )
+    # Overall reliability score below this threshold triggers a YES/NO -> WAIT
+    # downgrade. 0.5 = a single failing sub-metric (with the others at 1.0)
+    # just barely stays above the threshold.
+    SOURCE_RELIABILITY_SCORE_THRESHOLD: float = float(
+        os.getenv("SOURCE_RELIABILITY_SCORE_THRESHOLD", "0.5")
+    )
+    # Minimum fraction of sources classified as official or trusted. Below
+    # this ratio, the recommendation is downgraded (too few authoritative
+    # sources backing the claim).
+    SOURCE_RELIABILITY_MIN_TRUSTED_RATIO: float = float(
+        os.getenv("SOURCE_RELIABILITY_MIN_TRUSTED_RATIO", "0.4")
+    )
+    # Minimum number of distinct domains in the evidence base. Below this,
+    # the recommendation is downgraded (single-source echo-chamber risk).
+    SOURCE_RELIABILITY_MIN_DOMAIN_DIVERSITY: int = int(
+        os.getenv("SOURCE_RELIABILITY_MIN_DOMAIN_DIVERSITY", "2")
+    )
+    # Minimum number of distinct sources. Below this, the recommendation is
+    # downgraded (source count too small to support a strong stance).
+    SOURCE_RELIABILITY_MIN_SOURCES: int = int(
+        os.getenv("SOURCE_RELIABILITY_MIN_SOURCES", "2")
+    )
     SCHEDULER_MISFIRE_GRACE_SECONDS: int = int(
         os.getenv("SCHEDULER_MISFIRE_GRACE_SECONDS", "86400")
     )

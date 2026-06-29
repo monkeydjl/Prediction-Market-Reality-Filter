@@ -123,8 +123,28 @@ class BuildDecisionReportTests(unittest.TestCase):
             "downgraded": True,
             "applied_to_displayed_direction": True,
         }
+        rec["source_reliability"] = {
+            "overall_score": 0.3,
+            "source_count": 1,
+            "domain_diversity": 1,
+            "trusted_source_ratio": 0.0,
+            "official_source_count": 0,
+            "unknown_source_ratio": 1.0,
+            "source_breakdown": [],
+            # Phase 4 Chinese template — must not contain banned words
+            # (long/short/buy/sell/position/kelly/order).
+            "downgrade_reason": "来源域名多样性不足（单一来源回声室风险）",
+            "raw_direction": "YES",
+            "suggested_direction": "WAIT",
+            "downgraded": True,
+            "applied_to_displayed_direction": False,
+        }
         rec["final_displayed_direction"] = "WAIT"
-        rec["final_downgrade_reason"] = "市场质量不足（流动性低或价差过大），降级为 WAIT。"
+        # Merged reason from both market_quality and source_reliability
+        rec["final_downgrade_reason"] = (
+            "市场质量不足（流动性低或价差过大），降级为 WAIT。 | "
+            "来源域名多样性不足（单一来源回声室风险）"
+        )
         report = build_decision_report(pred, rec)
         blob = str(report).lower()
         for banned in ("long", "short", "buy", "sell", "position", "kelly", "order"):
@@ -208,6 +228,49 @@ class BuildDecisionReportTests(unittest.TestCase):
         self.assertIsNone(report["final_displayed_direction"])
         self.assertIn("final_downgrade_reason", report)
         self.assertIsNone(report["final_downgrade_reason"])
+
+    def test_source_reliability_passes_through_report(self):
+        """Phase 4: source_reliability overlay passes through
+        build_decision_report so downstream consumers (frontend, API) can
+        read overall_score / downgrade_reason / source_breakdown."""
+        pred = _prediction()
+        rec = _record()
+        rec["source_reliability"] = {
+            "overall_score": 0.35,
+            "source_count": 1,
+            "domain_diversity": 1,
+            "trusted_source_ratio": 0.0,
+            "official_source_count": 0,
+            "unknown_source_ratio": 1.0,
+            "source_breakdown": [
+                {"source": "CryptoNews", "domain": "cryptonews.com",
+                 "tier": "aggregator", "article_count": 1,
+                 "avg_credibility": 0.4, "avg_strength": 0.5},
+            ],
+            "downgrade_reason": "来源域名多样性不足（单一来源回声室风险）",
+            "raw_direction": "YES",
+            "suggested_direction": "WAIT",
+            "downgraded": True,
+            "applied_to_displayed_direction": True,
+        }
+        report = build_decision_report(pred, rec)
+        self.assertIn("source_reliability", report)
+        self.assertIsNotNone(report["source_reliability"])
+        self.assertEqual(report["source_reliability"]["suggested_direction"], "WAIT")
+        self.assertTrue(report["source_reliability"]["applied_to_displayed_direction"])
+        self.assertIn("来源域名多样性", report["source_reliability"]["downgrade_reason"])
+        self.assertEqual(report["source_reliability"]["overall_score"], 0.35)
+
+    def test_source_reliability_none_passes_through(self):
+        """When source_reliability is None (feature off or empty
+        evidence_breakdown), the report field is None — downstream consumers
+        must handle this gracefully."""
+        pred = _prediction()
+        rec = _record()
+        # No source_reliability key set on rec -> defaults to None via .get()
+        report = build_decision_report(pred, rec)
+        self.assertIn("source_reliability", report)
+        self.assertIsNone(report["source_reliability"])
 
     def test_diagnosis_block_surfaces_frozen_inputs_and_reason(self):
         # The frozen diagnosis inputs explain the verdict. A dormant (not

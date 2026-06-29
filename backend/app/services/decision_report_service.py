@@ -134,6 +134,12 @@ def build_decision_report(
         # final_* fields are None when both overlays are off (byte-identical
         # to pre-Phase-2 records).
         "market_quality": record.get("market_quality"),
+        # Phase 4: pass through source_reliability overlay. None when
+        # SOURCE_RELIABILITY_ENABLED=false, when evidence_breakdown is empty
+        # (e.g., sports_event), or when build failed and no fallback was
+        # attached. Downstream consumers read overall_score /
+        # downgrade_reason / source_breakdown.
+        "source_reliability": record.get("source_reliability"),
         "final_displayed_direction": record.get("final_displayed_direction"),
         "final_downgrade_reason": record.get("final_downgrade_reason"),
     }

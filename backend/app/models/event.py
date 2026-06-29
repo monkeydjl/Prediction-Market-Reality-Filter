@@ -277,6 +277,49 @@ class MarketQuality(BaseModel):
     error: str | None = None
 
 
+class SourceReliability(BaseModel):
+    """Phase 4 source-reliability overlay block.
+
+    Produced by ``source_reliability_service`` for events that have a
+    non-empty ``evidence_breakdown`` (prediction_market, prediction_question,
+    open_web). For events without evidence_breakdown (e.g., sports_event with
+    match stats), the block is omitted entirely.
+
+    Assesses the quality and diversity of news sources backing an event's
+    evidence. Can downgrade YES/NO recommendations to WAIT when the source
+    base is too thin or untrustworthy (low domain diversity, low trusted
+    source ratio, too few sources, or overall score below threshold).
+
+    ``raw_direction`` mirrors the direction passed in from
+    ``actionable_recommendation.direction``. ``suggested_direction`` starts
+    equal to ``raw_direction``; it becomes ``WAIT`` when source reliability
+    fails a configured threshold. ``downgraded`` is ``true`` when
+    ``suggested_direction != raw_direction``.
+
+    ``applied_to_displayed_direction`` is set by the merge step when this
+    block's ``suggested_direction`` is stricter than the current
+    ``final_displayed_direction`` (after decision_quality and market_quality
+    have already been merged) and therefore changes the final user-facing
+    direction.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    overall_score: float = 0.0
+    source_count: int = 0
+    domain_diversity: int = 0
+    trusted_source_ratio: float = 0.0
+    official_source_count: int = 0
+    unknown_source_ratio: float = 0.0
+    source_breakdown: list[dict[str, Any]] = []
+    downgrade_reason: str | None = None
+    raw_direction: Literal["YES", "NO", "WAIT", "AVOID"] = "WAIT"
+    suggested_direction: Literal["YES", "NO", "WAIT", "AVOID"] = "WAIT"
+    downgraded: bool = False
+    applied_to_displayed_direction: bool = False
+    error: str | None = None
+
+
 class Tracking(BaseModel):
     """Human tracking decision for an event. Defaults are seeded at analysis
     time; a user's explicit choice is preserved across re-scans by the store.

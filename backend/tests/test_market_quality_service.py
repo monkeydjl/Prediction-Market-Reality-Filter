@@ -412,79 +412,88 @@ class MergeQualityOverlaysTests(unittest.TestCase):
     """Tests for merge_quality_overlays() — parallel + most-strict semantics."""
 
     def test_both_none_returns_none(self):
-        direction, reason, applied = merge_quality_overlays(None, None)
+        direction, reason, applied, source_applied = merge_quality_overlays(None, None)
         self.assertIsNone(direction)
         self.assertIsNone(reason)
         self.assertFalse(applied)
+        self.assertFalse(source_applied)
 
     def test_only_decision_quality(self):
         dq = {"displayed_direction": "WAIT", "downgrade_reason": "证据冲突"}
-        direction, reason, applied = merge_quality_overlays(dq, None)
+        direction, reason, applied, source_applied = merge_quality_overlays(dq, None)
         self.assertEqual(direction, "WAIT")
         self.assertEqual(reason, "证据冲突")
         self.assertFalse(applied)
+        self.assertFalse(source_applied)
 
     def test_only_market_quality(self):
         mq = {"suggested_direction": "WAIT", "downgrade_reason": "市场质量不足"}
-        direction, reason, applied = merge_quality_overlays(None, mq)
+        direction, reason, applied, source_applied = merge_quality_overlays(None, mq)
         self.assertEqual(direction, "WAIT")
         self.assertEqual(reason, "市场质量不足")
         self.assertFalse(applied)
+        self.assertFalse(source_applied)
 
     def test_market_stricter_than_decision(self):
         """dq=YES, mq=WAIT -> market wins, applied=True."""
         dq = {"displayed_direction": "YES", "downgrade_reason": None}
         mq = {"suggested_direction": "WAIT", "downgrade_reason": "市场质量不足"}
-        direction, reason, applied = merge_quality_overlays(dq, mq)
+        direction, reason, applied, source_applied = merge_quality_overlays(dq, mq)
         self.assertEqual(direction, "WAIT")
         self.assertEqual(reason, "市场质量不足")
         self.assertTrue(applied)
+        self.assertFalse(source_applied)
 
     def test_decision_stricter_than_market(self):
         """dq=AVOID, mq=WAIT -> decision wins, applied=False."""
         dq = {"displayed_direction": "AVOID", "downgrade_reason": "高风险"}
         mq = {"suggested_direction": "WAIT", "downgrade_reason": "市场质量不足"}
-        direction, reason, applied = merge_quality_overlays(dq, mq)
+        direction, reason, applied, source_applied = merge_quality_overlays(dq, mq)
         self.assertEqual(direction, "AVOID")
         self.assertEqual(reason, "高风险")
         self.assertFalse(applied)
+        self.assertFalse(source_applied)
 
     def test_both_wait_reasons_concatenated(self):
         """Both downgraded to WAIT -> reasons concatenated with ' | '."""
         dq = {"displayed_direction": "WAIT", "downgrade_reason": "证据冲突较高"}
         mq = {"suggested_direction": "WAIT", "downgrade_reason": "市场质量不足"}
-        direction, reason, applied = merge_quality_overlays(dq, mq)
+        direction, reason, applied, source_applied = merge_quality_overlays(dq, mq)
         self.assertEqual(direction, "WAIT")
         self.assertIn("证据冲突较高", reason)
         self.assertIn("市场质量不足", reason)
         self.assertIn(" | ", reason)
         self.assertTrue(applied)
+        self.assertFalse(source_applied)
 
     def test_both_avoid_reasons_concatenated(self):
         dq = {"displayed_direction": "AVOID", "downgrade_reason": "高风险"}
         mq = {"suggested_direction": "AVOID", "downgrade_reason": "市场极端"}
-        direction, reason, applied = merge_quality_overlays(dq, mq)
+        direction, reason, applied, source_applied = merge_quality_overlays(dq, mq)
         self.assertEqual(direction, "AVOID")
         self.assertIn(" | ", reason)
         self.assertTrue(applied)
+        self.assertFalse(source_applied)
 
     def test_market_not_applied_when_same_severity_no_market_reason(self):
         """mq has no downgrade_reason but same direction -> applied=False."""
         dq = {"displayed_direction": "WAIT", "downgrade_reason": "证据冲突"}
         mq = {"suggested_direction": "WAIT", "downgrade_reason": None}
-        direction, reason, applied = merge_quality_overlays(dq, mq)
+        direction, reason, applied, source_applied = merge_quality_overlays(dq, mq)
         self.assertEqual(direction, "WAIT")
         self.assertEqual(reason, "证据冲突")
         self.assertFalse(applied)
+        self.assertFalse(source_applied)
 
     def test_neither_downgraded_returns_raw(self):
         """dq=YES (not downgraded), mq=YES (not downgraded) -> YES, no reason."""
         dq = {"displayed_direction": "YES", "downgrade_reason": None}
         mq = {"suggested_direction": "YES", "downgrade_reason": None}
-        direction, reason, applied = merge_quality_overlays(dq, mq)
+        direction, reason, applied, source_applied = merge_quality_overlays(dq, mq)
         self.assertEqual(direction, "YES")
         self.assertIsNone(reason)
         self.assertFalse(applied)
+        self.assertFalse(source_applied)
 
 
 if __name__ == "__main__":

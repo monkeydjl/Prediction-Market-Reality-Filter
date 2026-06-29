@@ -371,21 +371,71 @@ async def analyze_event(
                 "stale_price_flag": None,
             }
 
-    # Merge overlays: most-strict direction wins. Sets
+    # Phase 4: Source Reliability overlay. Best-effort audit layer — only
+    # computed when ``evidence_breakdown`` is non-empty (prediction_market,
+    # prediction_question, open_web). ``build_source_reliability`` returns
+    # None for empty evidence_breakdown (e.g., sports_event with match stats),
+    # so the record stays byte-identical to pre-Phase-4 for those sources.
+    # When the feature flag is off, no ``source_reliability`` key is attached.
+    try:
+        if settings.SOURCE_RELIABILITY_ENABLED:
+            from app.services.source_reliability_service import build_source_reliability
+            raw_direction = (record.get("actionable_recommendation") or {}).get("direction", "WAIT")
+            sr = build_source_reliability(
+                evidence_breakdown=record.get("evidence_breakdown", []),
+                evidence_items=filtered_articles or [],
+                raw_direction=raw_direction,
+                enabled=True,
+                score_threshold=settings.SOURCE_RELIABILITY_SCORE_THRESHOLD,
+                min_trusted_ratio=settings.SOURCE_RELIABILITY_MIN_TRUSTED_RATIO,
+                min_domain_diversity=settings.SOURCE_RELIABILITY_MIN_DOMAIN_DIVERSITY,
+                min_sources=settings.SOURCE_RELIABILITY_MIN_SOURCES,
+            )
+            if sr is not None:
+                record["source_reliability"] = sr
+    except Exception as exc:
+        logger.warning("source_reliability build failed: %s", exc)
+        # Fallback only when evidence_breakdown is non-empty (matches the
+        # gating in ``build_source_reliability``). Events without evidence
+        # stay without the block, so the audit layer remains absent rather
+        # than emitting a misleading error block.
+        if record.get("evidence_breakdown"):
+            fallback_direction = (record.get("actionable_recommendation") or {}).get("direction", "WAIT")
+            record["source_reliability"] = {
+                "error": "build_failed",
+                "raw_direction": fallback_direction,
+                "suggested_direction": fallback_direction,
+                "downgraded": False,
+                "applied_to_displayed_direction": False,
+                "downgrade_reason": None,
+                "overall_score": 0.0,
+                "source_count": 0,
+                "domain_diversity": 0,
+                "trusted_source_ratio": 0.0,
+                "official_source_count": 0,
+                "unknown_source_ratio": 0.0,
+                "source_breakdown": [],
+            }
+
+    # Merge overlays: most-strict direction wins (3-way: decision_quality +
+    # market_quality + source_reliability). Sets
     # ``final_displayed_direction`` / ``final_downgrade_reason`` only when at
     # least one overlay produced a direction; otherwise both stay absent
-    # (byte-identical to pre-overlay records when both features are off).
+    # (byte-identical to pre-overlay records when all features are off).
     try:
         from app.services.market_quality_service import merge_quality_overlays
-        final_direction, final_reason, market_applied = merge_quality_overlays(
+        final_direction, final_reason, market_applied, source_applied = merge_quality_overlays(
             record.get("decision_quality"),
             record.get("market_quality"),
+            record.get("source_reliability"),
         )
         if final_direction is not None:
             record["final_displayed_direction"] = final_direction
             record["final_downgrade_reason"] = final_reason
             if market_applied and isinstance(record.get("market_quality"), dict):
                 record["market_quality"]["applied_to_displayed_direction"] = True
+            if source_applied and isinstance(record.get("source_reliability"), dict):
+                record["source_reliability"]["applied_to_displayed_direction"] = True
     except Exception as exc:
         logger.warning("merge_quality_overlays failed: %s", exc)
     return record

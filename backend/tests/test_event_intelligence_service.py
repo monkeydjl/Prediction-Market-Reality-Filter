@@ -1492,3 +1492,437 @@ class MarketQualityIntegrationTests(unittest.TestCase):
             build_mq_side_effect=RuntimeError("boom"),
         )
         self.assertNotIn("market_quality", record)
+
+
+class SourceReliabilityIntegrationTests(unittest.TestCase):
+    """Phase 4: locks the analyze_event -> source_reliability integration.
+
+    Verifies the same invariants as Phases 1/2, applied to the source layer:
+    - source_reliability attached only when SOURCE_RELIABILITY_ENABLED=true AND
+      evidence_breakdown is non-empty
+    - no source_reliability key when feature off (byte-identical to pre-Phase-4)
+    - no source_reliability key when evidence_breakdown is empty (e.g., when
+      EVIDENCE_BREAKDOWN_ENABLED is off or no filtered_articles)
+    - final_displayed_direction / final_downgrade_reason reflect the 3-way
+      merge (decision_quality + market_quality + source_reliability)
+    - source_applied_to_displayed_direction flag set when source is stricter
+      than the decision_quality base
+    - build failure falls back to error block when evidence_breakdown non-empty,
+      no error block when evidence_breakdown is empty
+    - source_reliability never mutates ai_probability or
+      actionable_recommendation.direction (no-writeback invariant)
+    """
+
+    # Sentiment with 2 articles from different sources -> 2 domains, passes
+    # diversity/min-sources gates. Used for the no-downgrade (happy path) case.
+    SENTIMENT_2SRC = {
+        "articles": [
+            {
+                "index": 0,
+                "sentiment": "positive",
+                "impact": "high",
+                "key_facts": ["fact a"],
+                "relevance_to_question": 0.8,
+                "evidence_direction": "support",
+                "evidence_strength": 0.85,
+                "source_credibility": 0.9,
+                "rationale_zh": "支持 YES。",
+            },
+            {
+                "index": 1,
+                "sentiment": "positive",
+                "impact": "medium",
+                "key_facts": ["fact b"],
+                "relevance_to_question": 0.7,
+                "evidence_direction": "support",
+                "evidence_strength": 0.75,
+                "source_credibility": 0.8,
+                "rationale_zh": "支持 YES。",
+            },
+        ],
+        "overall_direction": "support_yes",
+        "overall_strength": 0.8,
+        "conflict_level": 0.1,
+        "summary": "证据支持 YES",
+    }
+
+    FILTERED_ARTICLES_2SRC = [
+        {"source": "Reuters", "title": "Fed signals rate cut",
+         "url": "https://www.reuters.com/article/fed-cut/1", "description": "desc"},
+        {"source": "Bloomberg", "title": "Markets rally",
+         "url": "https://www.bloomberg.com/news/markets/rally", "description": "desc"},
+    ]
+
+    def _run_analyze(
+        self,
+        *,
+        sr_enabled: bool,
+        dq_enabled: bool = False,
+        mq_enabled: bool = False,
+        source: dict | None = None,
+        sentiment=None,
+        filtered_articles=None,
+        build_sr_side_effect=None,
+    ):
+        analyze = AsyncMock(return_value={
+            "market_question": "Will X happen?",
+            "market_probability": 50,
+            "ai_probability": 70,
+            "signal": "ACT",
+            "signal_direction": "LONG",
+            "signal_strength": "HIGH",
+            "risk_level": "medium",
+            "expected_edge": 0.20,
+            "position_size": 0.10,
+            "evidence_strength": 0.8,
+            "confidence_score": 0.7,
+            "news_quality_score": 0.8,
+            "source_count": 3,
+        })
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            stack.enter_context(patch("app.services.ai_analysis_service.analyze_market", new=analyze))
+            stack.enter_context(patch("app.services.cross_validation_service.cross_validate",
+                                      new=AsyncMock(return_value=None)))
+            # EVIDENCE_BREAKDOWN must be ON so evidence_breakdown is populated
+            # (source_reliability requires a non-empty evidence_breakdown).
+            stack.enter_context(patch.object(eis.settings, "EVIDENCE_BREAKDOWN_ENABLED", True))
+            stack.enter_context(patch.object(eis.settings, "DECISION_QUALITY_ENABLED", dq_enabled))
+            stack.enter_context(patch.object(eis.settings, "MARKET_QUALITY_ENABLED", mq_enabled))
+            stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_ENABLED", sr_enabled))
+            stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_SCORE_THRESHOLD", 0.5))
+            stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_MIN_TRUSTED_RATIO", 0.4))
+            stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_MIN_DOMAIN_DIVERSITY", 2))
+            stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_MIN_SOURCES", 2))
+            if build_sr_side_effect is not None:
+                stack.enter_context(patch("app.services.source_reliability_service.build_source_reliability",
+                                          side_effect=build_sr_side_effect))
+            return _run(eis.analyze_event(
+                "Will X happen?",
+                baseline_probability=50,
+                news_context="direction: support",
+                source=source,
+                sentiment_profile=sentiment or self.SENTIMENT_2SRC,
+                filtered_articles=filtered_articles if filtered_articles is not None
+                                  else self.FILTERED_ARTICLES_2SRC,
+            ))
+
+    # --- Attachment gating ---
+
+    def test_source_reliability_attached_when_enabled_with_evidence(self):
+        record = self._run_analyze(
+            sr_enabled=True,
+            source={"type": "prediction_market", "platform": "Polymarket"},
+        )
+        self.assertIn("source_reliability", record)
+        self.assertIsNotNone(record["source_reliability"])
+        self.assertEqual(record["source_reliability"]["raw_direction"], "YES")
+        self.assertNotIn("error", record["source_reliability"])
+        # 2 distinct domains (reuters.com, bloomberg.com) -> diversity=2
+        self.assertEqual(record["source_reliability"]["domain_diversity"], 2)
+        self.assertEqual(record["source_reliability"]["source_count"], 2)
+
+    def test_source_reliability_absent_when_disabled(self):
+        """When SOURCE_RELIABILITY_ENABLED=false, record has NO source_reliability
+        key — byte-identical to pre-Phase-4 records."""
+        record = self._run_analyze(
+            sr_enabled=False,
+            source={"type": "prediction_market", "platform": "Polymarket"},
+        )
+        self.assertNotIn("source_reliability", record)
+
+    def test_source_reliability_absent_when_evidence_breakdown_empty(self):
+        """When evidence_breakdown is empty (EVIDENCE_BREAKDOWN off), no
+        source_reliability block — there is no source base to assess."""
+        analyze = AsyncMock(return_value={
+            "market_question": "Will X happen?",
+            "market_probability": 50,
+            "ai_probability": 70,
+            "signal": "ACT",
+            "signal_direction": "LONG",
+            "signal_strength": "HIGH",
+            "risk_level": "medium",
+            "expected_edge": 0.20,
+            "position_size": 0.10,
+            "evidence_strength": 0.8,
+            "confidence_score": 0.7,
+            "news_quality_score": 0.8,
+            "source_count": 3,
+        })
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            stack.enter_context(patch("app.services.ai_analysis_service.analyze_market", new=analyze))
+            stack.enter_context(patch("app.services.cross_validation_service.cross_validate",
+                                      new=AsyncMock(return_value=None)))
+            stack.enter_context(patch.object(eis.settings, "EVIDENCE_BREAKDOWN_ENABLED", False))
+            stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_ENABLED", True))
+            stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_SCORE_THRESHOLD", 0.5))
+            stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_MIN_TRUSTED_RATIO", 0.4))
+            stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_MIN_DOMAIN_DIVERSITY", 2))
+            stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_MIN_SOURCES", 2))
+            record = _run(eis.analyze_event(
+                "Will X happen?",
+                baseline_probability=50,
+                news_context="direction: support",
+                source={"type": "prediction_market"},
+                sentiment_profile=self.SENTIMENT_2SRC,
+                filtered_articles=self.FILTERED_ARTICLES_2SRC,
+            ))
+        self.assertEqual(record.get("evidence_breakdown"), [])
+        self.assertNotIn("source_reliability", record)
+
+    def test_source_reliability_attached_for_metaculus_source(self):
+        """Unlike market_quality, source_reliability applies to ALL sources
+        with evidence_breakdown (including Metaculus prediction_question)."""
+        record = self._run_analyze(
+            sr_enabled=True,
+            source={"type": "prediction_question", "platform": "Metaculus"},
+        )
+        self.assertIn("source_reliability", record)
+        self.assertIsNotNone(record["source_reliability"])
+
+    # --- Downgrade behavior ---
+
+    def test_source_reliability_downgrades_yes_to_wait_single_domain(self):
+        """When all evidence comes from a single domain (diversity=1 <
+        min_domain_diversity=2), YES is downgraded to WAIT."""
+        # Single source, single domain
+        sentiment_1 = {
+            "articles": [{
+                "index": 0,
+                "sentiment": "positive",
+                "impact": "high",
+                "key_facts": ["fact"],
+                "relevance_to_question": 0.8,
+                "evidence_direction": "support",
+                "evidence_strength": 0.85,
+                "source_credibility": 0.9,
+                "rationale_zh": "支持 YES。",
+            }],
+            "overall_direction": "support_yes",
+            "overall_strength": 0.85,
+            "conflict_level": 0.1,
+            "summary": "证据支持 YES",
+        }
+        filtered_1 = [
+            {"source": "CryptoNews", "title": "BTC up",
+             "url": "https://www.cryptonews.com/news/btc-up", "description": "desc"},
+        ]
+        record = self._run_analyze(
+            sr_enabled=True,
+            source={"type": "prediction_market"},
+            sentiment=sentiment_1,
+            filtered_articles=filtered_1,
+        )
+        sr = record["source_reliability"]
+        self.assertEqual(sr["raw_direction"], "YES")
+        self.assertEqual(sr["suggested_direction"], "WAIT")
+        self.assertTrue(sr["downgraded"])
+        self.assertIsNotNone(sr["downgrade_reason"])
+        self.assertEqual(sr["domain_diversity"], 1)
+
+    def test_source_reliability_keeps_yes_when_diverse(self):
+        """With 2+ trusted sources from different domains, YES stays YES."""
+        record = self._run_analyze(
+            sr_enabled=True,
+            source={"type": "prediction_market"},
+        )
+        sr = record["source_reliability"]
+        self.assertEqual(sr["raw_direction"], "YES")
+        self.assertEqual(sr["suggested_direction"], "YES")
+        self.assertFalse(sr["downgraded"])
+        self.assertIsNone(sr["downgrade_reason"])
+
+    # --- Merge / applied flag ---
+
+    def test_source_applied_when_source_stricter_than_decision(self):
+        """When source_reliability downgrades YES->WAIT but decision_quality
+        keeps YES, the 3-way merge picks WAIT and sets
+        source_reliability.applied_to_displayed_direction=True."""
+        # Single-domain evidence -> source downgrades to WAIT.
+        # decision_quality keeps YES (high consensus, single supporting
+        # evidence with high strength).
+        sentiment_1 = {
+            "articles": [{
+                "index": 0,
+                "sentiment": "positive",
+                "impact": "high",
+                "key_facts": ["fact"],
+                "relevance_to_question": 0.8,
+                "evidence_direction": "support",
+                "evidence_strength": 0.85,
+                "source_credibility": 0.9,
+                "rationale_zh": "支持 YES。",
+            }],
+            "overall_direction": "support_yes",
+            "overall_strength": 0.85,
+            "conflict_level": 0.1,
+            "summary": "证据支持 YES",
+        }
+        filtered_1 = [
+            {"source": "CryptoNews", "title": "BTC up",
+             "url": "https://www.cryptonews.com/news/btc-up", "description": "desc"},
+        ]
+        record = self._run_analyze(
+            sr_enabled=True,
+            dq_enabled=True,
+            source={"type": "prediction_market"},
+            sentiment=sentiment_1,
+            filtered_articles=filtered_1,
+        )
+        self.assertEqual(record["final_displayed_direction"], "WAIT")
+        self.assertTrue(record["source_reliability"]["applied_to_displayed_direction"])
+        self.assertEqual(record["source_reliability"]["suggested_direction"], "WAIT")
+
+    def test_final_fields_absent_when_all_overlays_off(self):
+        """When all three features off, no final_* fields — byte-identical."""
+        record = self._run_analyze(
+            sr_enabled=False,
+            dq_enabled=False,
+            mq_enabled=False,
+            source={"type": "prediction_market"},
+        )
+        self.assertNotIn("final_displayed_direction", record)
+        self.assertNotIn("final_downgrade_reason", record)
+        self.assertNotIn("source_reliability", record)
+
+    # --- No-writeback invariant ---
+
+    def test_ai_probability_not_mutated_by_source_reliability(self):
+        record = self._run_analyze(
+            sr_enabled=True,
+            source={"type": "prediction_market"},
+        )
+        # ai_probability stays at the LLM's 70 (source_reliability is overlay only)
+        self.assertEqual(record["probability"]["estimated"], 70)
+
+    def test_actionable_recommendation_direction_not_mutated(self):
+        """Even when source_reliability downgrades YES->WAIT, the
+        actionable_recommendation.direction stays YES (no-writeback)."""
+        sentiment_1 = {
+            "articles": [{
+                "index": 0,
+                "sentiment": "positive",
+                "impact": "high",
+                "key_facts": ["fact"],
+                "relevance_to_question": 0.8,
+                "evidence_direction": "support",
+                "evidence_strength": 0.85,
+                "source_credibility": 0.9,
+                "rationale_zh": "支持 YES。",
+            }],
+            "overall_direction": "support_yes",
+            "overall_strength": 0.85,
+            "conflict_level": 0.1,
+            "summary": "证据支持 YES",
+        }
+        filtered_1 = [
+            {"source": "CryptoNews", "title": "BTC up",
+             "url": "https://www.cryptonews.com/news/btc-up", "description": "desc"},
+        ]
+        record = self._run_analyze(
+            sr_enabled=True,
+            source={"type": "prediction_market"},
+            sentiment=sentiment_1,
+            filtered_articles=filtered_1,
+        )
+        self.assertEqual(
+            record["actionable_recommendation"]["direction"], "YES"
+        )
+
+    # --- Build failure fallback ---
+
+    def test_source_reliability_build_failure_falls_back_with_evidence(self):
+        record = self._run_analyze(
+            sr_enabled=True,
+            source={"type": "prediction_market"},
+            build_sr_side_effect=RuntimeError("boom"),
+        )
+        self.assertIn("source_reliability", record)
+        self.assertEqual(record["source_reliability"]["error"], "build_failed")
+        self.assertEqual(record["source_reliability"]["raw_direction"], "YES")
+        self.assertEqual(record["source_reliability"]["suggested_direction"], "YES")
+        self.assertFalse(record["source_reliability"]["downgraded"])
+
+    def test_source_reliability_build_failure_no_block_without_evidence(self):
+        """When build fails AND evidence_breakdown is empty, no error block
+        is attached — the record stays byte-identical (no source_reliability key)."""
+        analyze = AsyncMock(return_value={
+            "market_question": "Will X happen?",
+            "market_probability": 50,
+            "ai_probability": 70,
+            "signal": "ACT",
+            "signal_direction": "LONG",
+            "signal_strength": "HIGH",
+            "risk_level": "medium",
+            "expected_edge": 0.20,
+            "position_size": 0.10,
+            "evidence_strength": 0.8,
+            "confidence_score": 0.7,
+            "news_quality_score": 0.8,
+            "source_count": 3,
+        })
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            stack.enter_context(patch("app.services.ai_analysis_service.analyze_market", new=analyze))
+            stack.enter_context(patch("app.services.cross_validation_service.cross_validate",
+                                      new=AsyncMock(return_value=None)))
+            stack.enter_context(patch.object(eis.settings, "EVIDENCE_BREAKDOWN_ENABLED", False))
+            stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_ENABLED", True))
+            stack.enter_context(patch("app.services.source_reliability_service.build_source_reliability",
+                                      side_effect=RuntimeError("boom")))
+            record = _run(eis.analyze_event(
+                "Will X happen?",
+                baseline_probability=50,
+                news_context="direction: support",
+                source={"type": "prediction_market"},
+                sentiment_profile=self.SENTIMENT_2SRC,
+                filtered_articles=self.FILTERED_ARTICLES_2SRC,
+            ))
+        self.assertNotIn("source_reliability", record)
+
+    # --- Forbidden word invariant ---
+
+    def test_downgrade_reason_no_forbidden_words(self):
+        """source_reliability.downgrade_reason must not contain forbidden
+        trading vocabulary (long, short, buy, sell, position, kelly, order)."""
+        sentiment_1 = {
+            "articles": [{
+                "index": 0,
+                "sentiment": "positive",
+                "impact": "high",
+                "key_facts": ["fact"],
+                "relevance_to_question": 0.8,
+                "evidence_direction": "support",
+                "evidence_strength": 0.85,
+                "source_credibility": 0.9,
+                "rationale_zh": "支持 YES。",
+            }],
+            "overall_direction": "support_yes",
+            "overall_strength": 0.85,
+            "conflict_level": 0.1,
+            "summary": "证据支持 YES",
+        }
+        filtered_1 = [
+            {"source": "CryptoNews", "title": "BTC up",
+             "url": "https://www.cryptonews.com/news/btc-up", "description": "desc"},
+        ]
+        record = self._run_analyze(
+            sr_enabled=True,
+            source={"type": "prediction_market"},
+            sentiment=sentiment_1,
+            filtered_articles=filtered_1,
+        )
+        reason = record["source_reliability"]["downgrade_reason"]
+        self.assertIsNotNone(reason)
+        forbidden = ("long", "short", "buy", "sell", "position", "kelly", "order")
+        reason_lower = reason.lower()
+        for word in forbidden:
+            self.assertNotIn(word, reason_lower,
+                             f"forbidden word '{word}' in downgrade_reason: {reason}")
+        # final_downgrade_reason (merged) must also be clean
+        final_reason = record.get("final_downgrade_reason") or ""
+        final_lower = final_reason.lower()
+        for word in forbidden:
+            self.assertNotIn(word, final_lower,
+                             f"forbidden word '{word}' in final_downgrade_reason: {final_reason}")

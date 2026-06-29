@@ -244,65 +244,97 @@ def _round_or_none(value: float | None) -> float | None:
 def merge_quality_overlays(
     decision_quality: dict[str, Any] | None,
     market_quality: dict[str, Any] | None,
-) -> tuple[str | None, str | None, bool]:
-    """Merge decision_quality and market_quality overlays using most-strict
-    direction wins. Returns (final_displayed_direction, final_downgrade_reason,
-    market_applied).
+    source_reliability: dict[str, Any] | None = None,
+) -> tuple[str | None, str | None, bool, bool]:
+    """Merge decision_quality, market_quality, and source_reliability overlays
+    using most-strict direction wins. Returns (final_displayed_direction,
+    final_downgrade_reason, market_applied, source_applied).
 
     Parallel + most-strict semantics per spec § Downgrade Chain:
-    - Both computed independently; neither reads the other's output.
+    - All three computed independently; none reads the others' output.
     - severity_rank: YES/NO=0, WAIT=1, AVOID=2
     - The direction with HIGHER severity wins.
-    - If both downgraded to WAIT, reasons are concatenated with " | ".
+    - When multiple overlays share the max severity (>0), their reasons are
+      concatenated with " | " in order: dq | mq | sr.
 
-    Returns ``(None, None, False)`` when neither overlay is present
-    (both features off).
+    Returns ``(None, None, False, False)`` when no overlay is present
+    (all features off). ``source_reliability`` defaults to None for backward
+    compatibility with Phase 2 callers that pass only 2 overlays — in that
+    case ``source_applied`` is always False.
+
+    ``market_applied`` / ``source_applied`` are True when that overlay's
+    suggested_direction is the strictest (unique max) OR when it contributed
+    a reason at a tied max severity. Used by the caller to set
+    ``applied_to_displayed_direction`` on each overlay block. decision_quality
+    never gets an ``applied`` flag because it is the base layer (its
+    ``displayed_direction`` is the starting point, not a downgrade suggestion).
     """
     severity = {"YES": 0, "NO": 0, "WAIT": 1, "AVOID": 2}
 
-    dq_direction: str | None = None
-    dq_reason: str | None = None
+    # Collect (direction, reason) for each present overlay, in fixed order:
+    # decision_quality, market_quality, source_reliability.
+    overlays: list[tuple[str | None, str | None]] = []
     if decision_quality is not None:
-        dq_direction = decision_quality.get("displayed_direction")
-        dq_reason = decision_quality.get("downgrade_reason")
-
-    mq_direction: str | None = None
-    mq_reason: str | None = None
+        overlays.append(
+            (decision_quality.get("displayed_direction"),
+             decision_quality.get("downgrade_reason"))
+        )
     if market_quality is not None:
-        mq_direction = market_quality.get("suggested_direction")
-        mq_reason = market_quality.get("downgrade_reason")
+        overlays.append(
+            (market_quality.get("suggested_direction"),
+             market_quality.get("downgrade_reason"))
+        )
+    if source_reliability is not None:
+        overlays.append(
+            (source_reliability.get("suggested_direction"),
+             source_reliability.get("downgrade_reason"))
+        )
 
-    if dq_direction is None and mq_direction is None:
-        return None, None, False
+    # Filter to overlays that actually have a direction.
+    present = [(d, r) for d, r in overlays if d is not None]
+    if not present:
+        return None, None, False, False
 
-    if dq_direction is None:
-        # Only market_quality present
-        return mq_direction, mq_reason, False
-    if mq_direction is None:
-        # Only decision_quality present
-        return dq_direction, dq_reason, False
+    # Compute severities; max_sev drives the final direction.
+    sev_list = [severity.get(d, 0) for d, _ in present]
+    max_sev = max(sev_list)
 
-    # Both present — most-strict wins
-    dq_sev = severity.get(dq_direction, 0)
-    mq_sev = severity.get(mq_direction, 0)
-
-    if mq_sev > dq_sev:
-        # Market quality is stricter — it changes the final direction
-        final_direction = mq_direction
-        final_reason = mq_reason
-        market_applied = True
-    elif mq_sev == dq_sev and dq_sev > 0:
-        # Same severity (both WAIT or both AVOID) — concatenate reasons
-        final_direction = dq_direction
-        if dq_reason and mq_reason:
-            final_reason = f"{dq_reason} | {mq_reason}"
-        else:
-            final_reason = dq_reason or mq_reason
-        market_applied = bool(mq_reason)  # market contributed a reason
+    if max_sev == 0:
+        # No overlay downgraded — pick the first present direction (no reason).
+        final_direction = present[0][0]
+        final_reason = None
     else:
-        # decision_quality is stricter or equal without market contribution
-        final_direction = dq_direction
-        final_reason = dq_reason
-        market_applied = False
+        # Downgrade — pick the direction at max_sev; concatenate reasons of
+        # all overlays at max_sev, in submission order.
+        max_pairs = [(d, r) for (d, r), s in zip(present, sev_list) if s == max_sev]
+        final_direction = max_pairs[0][0]
+        reasons = [r for _, r in max_pairs if r]
+        final_reason = " | ".join(reasons) if reasons else None
 
-    return final_direction, final_reason, market_applied
+    # Determine which overlay "applied" (changed the final direction).
+    # An overlay "applied" when it made the final direction stricter than
+    # the decision_quality base layer. Requires decision_quality to be
+    # present (no base = nothing to override). This mirrors the Phase 2
+    # 2-way semantics: when only market_quality is present, market_applied
+    # is False because there is no base to apply on top of.
+    unique_max = sum(1 for s in sev_list if s == max_sev) == 1
+
+    market_applied = False
+    source_applied = False
+    if max_sev > 0 and decision_quality is not None:
+        # Re-walk the original (ordered) overlays to flag market/source.
+        # decision_quality is overlays[0] when present; mq/sr follow.
+        idx = 1  # skip decision_quality (the base, never "applied")
+        if market_quality is not None:
+            d, r = overlays[idx]
+            mq_sev = severity.get(d, 0) if d is not None else 0
+            if mq_sev == max_sev:
+                market_applied = True if unique_max else bool(r)
+            idx += 1
+        if source_reliability is not None:
+            d, r = overlays[idx]
+            sr_sev = severity.get(d, 0) if d is not None else 0
+            if sr_sev == max_sev:
+                source_applied = True if unique_max else bool(r)
+
+    return final_direction, final_reason, market_applied, source_applied

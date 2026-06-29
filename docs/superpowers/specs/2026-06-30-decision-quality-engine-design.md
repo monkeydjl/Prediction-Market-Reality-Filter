@@ -579,9 +579,347 @@ This should be append-only where possible.
 
 ## Phase 4 Detailed Design
 
-Source reliability should be a derived data product, not a blocking dependency.
+Phase 4 adds a **per-event source reliability overlay** — a pure-function
+audit layer that assesses the quality and diversity of news sources backing
+an event's evidence, and can downgrade YES/NO recommendations to WAIT when
+the source base is too thin or untrustworthy.
 
-Suggested source record:
+This follows the same architecture as Phase 1 (`decision_quality`) and
+Phase 2 (`market_quality`): a pure, synchronous, deterministic function with
+no LLM/IO operations, gated by a feature flag (default OFF), wrapped in
+try/except best-effort fallback, and merged into `final_displayed_direction`
+using most-strict-direction-wins semantics.
+
+**Scope note**: The historical "source reliability memory" (a persistent
+derived data product tracking source accuracy across resolved predictions,
+as sketched in the original Phase 4 spec) is deferred to a future sub-phase
+(Phase 4b). It requires resolved predictions with source attribution, which
+does not yet exist. Phase 4a (this design) is the per-event overlay that
+provides immediate value and establishes the `source_reliability` field
+contract that Phase 4b can later enrich with historical accuracy data.
+
+### New Field: `source_reliability`
+
+```python
+{
+    "overall_score": 0.72,
+    "source_count": 5,
+    "domain_diversity": 4,
+    "trusted_source_ratio": 0.6,
+    "official_source_count": 1,
+    "unknown_source_ratio": 0.2,
+    "source_breakdown": [
+        {
+            "source": "Reuters",
+            "domain": "reuters.com",
+            "tier": "trusted",
+            "article_count": 2,
+            "avg_credibility": 0.88,
+            "avg_strength": 0.72
+        },
+        {
+            "source": "CoinDesk",
+            "domain": "coindesk.com",
+            "tier": "established",
+            "article_count": 1,
+            "avg_credibility": 0.62,
+            "avg_strength": 0.55
+        }
+    ],
+    "downgrade_reason": None,
+    "raw_direction": "YES",
+    "suggested_direction": "YES",
+    "downgraded": False,
+    "applied_to_displayed_direction": False
+}
+```
+
+`raw_direction` mirrors the direction passed in from
+`actionable_recommendation.direction`. `suggested_direction` starts equal to
+`raw_direction`; it becomes `WAIT` when source reliability fails a
+configured threshold. `downgraded` is `true` when
+`suggested_direction != raw_direction`.
+
+`applied_to_displayed_direction` is set by the merge step when
+`source_reliability.suggested_direction` is stricter than the current
+`final_displayed_direction` (after `decision_quality` and `market_quality`
+have already been merged) and therefore changes the final user-facing
+direction. This lets audits distinguish whether source reliability changed
+the final direction or merely recorded a quality score without acting.
+
+### Applicability — Evidence-Based Gating
+
+Unlike `market_quality` (market-gated to `source.type == "prediction_market"`),
+`source_reliability` applies to ALL event types that have a non-empty
+`evidence_breakdown`. This includes:
+
+- `prediction_market` (Polymarket, Kalshi) — news evidence is the primary signal
+- `prediction_question` (Metaculus) — same
+- `open_web` (manual news-driven events) — same
+- `sports_event` — typically has NO `evidence_breakdown` (uses match stats
+  instead), so the block is set to `None` (key omitted from record)
+
+When `evidence_breakdown` is empty (regardless of source type), the block is
+`None` — there is no source base to assess. This mirrors the `decision_quality`
+Rule 4 convention (empty breakdown → decision_quality handles the downgrade).
+
+### Input Fields
+
+All inputs already exist on the event record — no new data collection required:
+
+- `evidence_breakdown`: list of `EvidenceBreakdownItem` (source, title,
+  direction, strength, credibility, rationale_zh)
+- `evidence_items`: list with `url`, `source`, `quality` (used for domain
+  extraction via URL parsing)
+- `actionable_recommendation.direction`: the raw YES/NO/WAIT/AVOID direction
+
+The existing `EvidenceBreakdownItem.source` field is a **feed display name**
+(e.g., "Reuters Politics"), not a domain. Phase 4 introduces URL → domain
+extraction to enable domain-level diversity analysis.
+
+### URL → Domain Extraction
+
+New utility function `extract_domain(url)` (in
+`source_reliability_service.py`, not a separate utils module — keeps the
+Phase 4 surface area in one file):
+
+```python
+from urllib.parse import urlparse
+
+def extract_domain(url: str) -> str:
+    """Extract registrable domain from URL.
+
+    'https://www.reuters.com/article/...' -> 'reuters.com'
+    'https://www.bbc.co.uk/news/...'     -> 'bbc.co.uk'
+    Empty / invalid / missing URL        -> ''
+    """
+```
+
+Handles:
+- Strips `www.` prefix
+- Lowercases
+- Returns `""` for missing/malformed URLs
+- Does NOT attempt registrable-domain extraction (no Public Suffix List) —
+  keeps it simple; `bbc.co.uk` stays as `bbc.co.uk`, not `bbc`
+
+Domain is used for `domain_diversity` (unique domain count) and
+`source_breakdown[].domain`. When URL is missing, domain is `""` and the
+source is grouped under its display name only.
+
+### Source Tier Classification
+
+Extends the existing `news_filter_service.score_source_quality` logic into
+a 4-tier classification (deterministic, substring-based):
+
+| Tier | Label | Score | Sources (substring match) |
+| --- | --- | --- | --- |
+| 1 | `official` | 0.95 | sec.gov, federalreserve.gov, whitehouse.gov, congress.gov, treasury.gov |
+| 2 | `trusted` | 0.85 | reuters, ap, bloomberg, wall street journal, financial times, nikkei |
+| 3 | `established` | 0.65 | coin desk, decrypt, the block, cnbc, market watch, bbc, guardian, ny times, washington post |
+| 4 | `aggregator` | 0.35 | crypto news, bitcoin.com, newsbtc, any other known source |
+| — | `unknown` | 0.20 | empty / unrecognized source |
+
+Classification uses the **normalized source name** (lowercased, stripped)
+and the **extracted domain** — if either matches a known pattern, the
+source gets that tier. This is a best-effort heuristic; it does NOT replace
+the LLM's per-article `credibility` score (which is preserved in
+`source_breakdown[].avg_credibility`).
+
+### Reliability Score Computation
+
+The `overall_score` (0-1) is a weighted combination:
+
+```text
+overall_score = (
+    0.40 * weighted_avg_tier_score     # tier-based reliability
+  + 0.25 * domain_diversity_ratio      # diversity (capped at 1.0)
+  + 0.20 * trusted_source_ratio       # trusted/official share
+  + 0.15 * avg_credibility             # LLM-judged credibility
+)
+```
+
+Where:
+- `weighted_avg_tier_score`: average tier score weighted by article count per source
+- `domain_diversity_ratio`: `min(domain_diversity / MIN_DOMAIN_DIVERSITY, 1.0)`
+- `trusted_source_ratio`: `(official_count + trusted_count) / total_sources`
+- `avg_credibility`: mean of `EvidenceBreakdownItem.credibility` across all items
+
+### Downgrade Rules — Stage A First-Match-Wins
+
+When `overall_score < SOURCE_RELIABILITY_SCORE_THRESHOLD` (default 0.5),
+`suggested_direction` becomes `WAIT`. The `downgrade_reason` (Chinese)
+identifies the first matching rule:
+
+| Rule | Condition | Reason (zh) |
+| --- | --- | --- |
+| 1 | `domain_diversity < MIN_DOMAIN_DIVERSITY` | "来源域名多样性不足（单一来源回声室风险）" |
+| 2 | `trusted_source_ratio < MIN_TRUSTED_RATIO` | "可信来源占比过低" |
+| 3 | `source_count < MIN_SOURCES` | "来源数量不足" |
+| 4 | `overall_score < SCORE_THRESHOLD` | "来源整体可靠性低于阈值" |
+
+Rules are evaluated in order; the first match sets the `downgrade_reason`.
+`suggested_direction` is `WAIT` if ANY rule matches, else equals
+`raw_direction`.
+
+Non-directional recommendations (WAIT/AVOID) are never downgraded further —
+`suggested_direction` equals `raw_direction` and `downgraded` is `False`.
+This mirrors the `market_quality` convention: only YES/NO can be downgraded
+to WAIT; AVOID is already the strictest direction.
+
+### Downgrade Chain — 3-Way Parallel Merge
+
+`decision_quality`, `market_quality`, and `source_reliability` are computed
+INDEPENDENTLY and in PARALLEL. None reads another's output as input. After
+all three complete, `event_intelligence_service` merges them using
+most-strict-direction-wins:
+
+```text
+severity_rank = { YES: 0, NO: 0, WAIT: 1, AVOID: 2 }
+
+dq_direction = decision_quality.displayed_direction
+mq_direction = market_quality.suggested_direction      # may be None (non-market)
+sr_direction = source_reliability.suggested_direction  # may be None (no evidence)
+
+# Filter out None directions, then pick the one with highest severity_rank
+candidate_directions = [d for d in [dq_direction, mq_direction, sr_direction] if d is not None]
+final_displayed_direction = max(candidate_directions, key=lambda d: severity_rank[d])
+```
+
+If multiple layers downgraded, `final_downgrade_reason` concatenates their
+reasons (in order: decision_quality | market_quality | source_reliability),
+separated by ` | `. If only one layer downgraded, its reason is used as-is.
+
+The existing `merge_quality_overlays` function is extended to accept an
+optional `source_reliability` parameter. When `None` (feature disabled or
+non-applicable), the merge behaves identically to Phase 2 (2-way merge).
+
+### Feature Flags (default OFF)
+
+```
+SOURCE_RELIABILITY_ENABLED=false
+SOURCE_RELIABILITY_SCORE_THRESHOLD=0.5
+SOURCE_RELIABILITY_MIN_TRUSTED_RATIO=0.4
+SOURCE_RELIABILITY_MIN_DOMAIN_DIVERSITY=2
+SOURCE_RELIABILITY_MIN_SOURCES=2
+```
+
+When `SOURCE_RELIABILITY_ENABLED=false`:
+- The `source_reliability` key is omitted from the event record entirely
+  (byte-identical to pre-Phase-4)
+- `merge_quality_overlays` receives `source_reliability=None` and performs
+  the existing 2-way merge
+
+### Best-Effort Error Handling
+
+The entire `source_reliability` build is wrapped in try/except inside
+`analyze_event`. On any exception:
+- An error block is attached to the record (only when the feature is enabled):
+
+```python
+record["source_reliability"] = {
+    "error": "source_reliability build failed: {exception}",
+    "raw_direction": <original direction>,
+    "suggested_direction": <original direction>,
+    "downgraded": False,
+    "applied_to_displayed_direction": False,
+}
+```
+
+- `final_displayed_direction` is NOT affected (the error block's
+  `suggested_direction` equals `raw_direction`, so it never changes the merge)
+- Event production continues — Phase 4 is an audit layer, not a gate
+
+### No Mutation Invariants
+
+`build_source_reliability` must NOT modify:
+- `actionable_recommendation.direction`
+- `ai_probability`
+- `evidence_profile`
+- `regression_to_market`
+- `EvidenceBreakdownItem.direction` (Literal["support","oppose","neutral"] locked)
+
+The function reads `evidence_breakdown` and `evidence_items` as inputs and
+returns a new dict. It never writes back to the record's existing fields.
+
+### Pure Function Contract
+
+```python
+def build_source_reliability(
+    *,
+    evidence_breakdown: list[dict[str, Any]],
+    evidence_items: list[dict[str, Any]],
+    raw_direction: str | None,
+    enabled: bool,
+    score_threshold: float,
+    min_trusted_ratio: float,
+    min_domain_diversity: int,
+    min_sources: int,
+) -> dict[str, Any] | None:
+    """Build the source_reliability overlay block.
+
+    Pure function: no LLM, no I/O, no settings reads, no mutation of inputs.
+    Returns None when evidence_breakdown is empty (no source base to assess).
+    Returns a dict with keys: overall_score, source_count, domain_diversity,
+    trusted_source_ratio, official_source_count, unknown_source_ratio,
+    source_breakdown, downgrade_reason, raw_direction, suggested_direction,
+    downgraded, applied_to_displayed_direction.
+    """
+```
+
+Synchronous and deterministic — trivially testable, safe to call inside
+`analyze_event` without adding latency or failure modes. The orchestrator
+extracts scalar config values and passes them explicitly (same pattern as
+`build_decision_quality` and `build_market_quality`).
+
+### Integration Point
+
+In `event_intelligence_service.analyze_event`, AFTER `market_quality` and
+BEFORE `merge_quality_overlays`:
+
+```python
+# Phase 4: Source Reliability overlay. Best-effort audit layer.
+source_reliability = None
+try:
+    if settings.SOURCE_RELIABILITY_ENABLED:
+        from app.services.source_reliability_service import build_source_reliability
+        source_reliability = build_source_reliability(
+            evidence_breakdown=record.get("evidence_breakdown", []),
+            evidence_items=record.get("evidence_items", []),
+            raw_direction=(record.get("actionable_recommendation") or {}).get("direction"),
+            enabled=settings.SOURCE_RELIABILITY_ENABLED,
+            score_threshold=settings.SOURCE_RELIABILITY_SCORE_THRESHOLD,
+            min_trusted_ratio=settings.SOURCE_RELIABILITY_MIN_TRUSTED_RATIO,
+            min_domain_diversity=settings.SOURCE_RELIABILITY_MIN_DOMAIN_DIVERSITY,
+            min_sources=settings.SOURCE_RELIABILITY_MIN_SOURCES,
+        )
+        if source_reliability is not None:
+            record["source_reliability"] = source_reliability
+except Exception as exc:
+    logger.warning("source_reliability build failed: %s", exc)
+    # Attach error block only when feature is enabled (best-effort audit)
+    if settings.SOURCE_RELIABILITY_ENABLED:
+        raw_dir = (record.get("actionable_recommendation") or {}).get("direction") or ""
+        record["source_reliability"] = {
+            "error": f"source_reliability build failed: {exc}",
+            "raw_direction": raw_dir,
+            "suggested_direction": raw_dir,
+            "downgraded": False,
+            "applied_to_displayed_direction": False,
+        }
+
+# 3-way merge (was 2-way in Phase 2)
+final_dir, final_reason = merge_quality_overlays(
+    decision_quality=record.get("decision_quality"),
+    market_quality=record.get("market_quality"),
+    source_reliability=source_reliability,  # NEW parameter
+)
+record["final_displayed_direction"] = final_dir
+record["final_downgrade_reason"] = final_reason
+```
+
+### Historical Memory (Phase 4b — Future, Not Implemented)
+
+The original Phase 4 spec envisioned a persistent source reliability table:
 
 ```python
 {
@@ -595,7 +933,59 @@ Suggested source record:
 }
 ```
 
-Use this data only after sample thresholds are met. Before then, keep LLM `source_credibility` and simple source-tier heuristics.
+This is deferred to Phase 4b because it requires:
+1. Resolved predictions with source attribution (linking resolved outcomes
+   back to the sources that supported/opposed them)
+2. A persistent store (like `prediction_store.py` but for source reliability)
+3. Sample thresholds (the spec says "Use this data only after sample
+   thresholds are met")
+
+Phase 4a (this design) establishes the `source_reliability` field contract
+on the event record. Phase 4b can later enrich `source_breakdown[].reliability`
+with historical accuracy data by joining against the resolved-prediction
+ledger. The pure-function contract remains unchanged — Phase 4b would add
+an optional `historical_reliability` dict parameter to `build_source_reliability`.
+
+### Test Plan
+
+**Unit tests** (`tests/test_source_reliability_service.py`):
+
+1. `extract_domain` (8 tests): valid URL, www stripping, lowercase, empty
+   string, malformed URL, no hostname, port handling, path-only
+2. `classify_source_tier` (10 tests): official (sec.gov, federalreserve),
+   trusted (reuters, ap, bloomberg), established (coindesk, bbc),
+   aggregator, unknown, empty, domain-based classification, display-name
+   classification, case insensitivity
+3. `build_source_reliability` — score computation (8 tests): single source,
+   multiple sources, weighted average, domain diversity ratio, trusted ratio,
+   empty breakdown → None, all-unknown sources, official source boost
+4. `build_source_reliability` — downgrade rules (8 tests): rule 1 (low
+   diversity), rule 2 (low trusted ratio), rule 3 (low source count),
+   rule 4 (low overall score), first-match-wins ordering, non-directional
+   (WAIT/AVOID) not downgraded, threshold boundary, no downgrade when all pass
+5. `build_source_reliability` — overlay semantics (5 tests): raw_direction
+   preserved, suggested_direction set correctly, downgraded flag,
+   applied_to_displayed_direction defaults False, error-free happy path
+
+**Integration tests** (`tests/test_event_intelligence_service.py`):
+
+1. `source_reliability` attached when enabled and evidence_breakdown non-empty
+2. `source_reliability` omitted when disabled (byte-identical to pre-Phase-4)
+3. `source_reliability` omitted when evidence_breakdown empty
+4. Error block attached on build failure (best-effort, non-blocking)
+5. 3-way merge: source_reliability downgrades YES → WAIT when decision_quality
+   and market_quality both keep YES
+6. 3-way merge: source_reliability does NOT override a stricter
+   decision_quality AVOID
+7. `final_downgrade_reason` concatenates reasons from all downgrading layers
+8. sports_event source: no `source_reliability` block (no evidence_breakdown)
+
+**Report service tests** (`tests/test_decision_report_service.py`):
+
+1. `source_reliability` passes through to report output
+2. `source_reliability = None` does not break report
+3. Forbidden word filter covers `source_reliability.downgrade_reason`
+4. `final_downgrade_reason` includes source_reliability contribution
 
 ## Phase 5 Detailed Design
 

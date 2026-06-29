@@ -88,8 +88,9 @@ async def translate_title(question: str) -> str:
     """Translate a market question into a concise Chinese title.
 
     Lightweight LLM call used when the main analysis falls back to the
-    deterministic path (which never produces title_zh). Fail-closed: returns
-    empty string on any error so it never blocks the analysis pipeline.
+    deterministic path (which never produces title_zh). On LLM failure,
+    returns the original English question so events always have a visible
+    title rather than an empty field.
     """
     if not question or not question.strip():
         return ""
@@ -113,10 +114,10 @@ async def translate_title(question: str) -> str:
             max_tokens=60,
         )
         text = (response.choices[0].message.content or "").strip().strip("\"'""''")
-        return text[:300] if text else ""
+        return text[:300] if text else question[:120]
     except Exception as exc:
         logger.debug("translate_title failed [question=%.60s]: %s", question, exc)
-        return ""
+        return question[:120]
 
 
 async def _ask_ai(

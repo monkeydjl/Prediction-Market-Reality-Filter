@@ -72,6 +72,8 @@ class BuildDecisionReportTests(unittest.TestCase):
         # The decision report must not introduce trading terms (event-conventions).
         # Includes evidence_breakdown[*].rationale_zh since it flows into the
         # event record (and could surface in future report extensions).
+        # Phase 1: also includes decision_quality.decision_rationale_zh and
+        # decision_quality.downgrade_reason, which now flow through the report.
         pred = _prediction()
         rec = _record()
         rec["evidence_breakdown"] = [
@@ -84,10 +86,62 @@ class BuildDecisionReportTests(unittest.TestCase):
                 "rationale_zh": "支持 YES 的证据",  # clean — no banned words
             }
         ]
+        rec["decision_quality"] = {
+            "supporting_evidence": [
+                {
+                    "source": "Reuters",
+                    "title": "Test",
+                    "strength": 0.8,
+                    "credibility": 0.9,
+                    "rationale_zh": "支持 YES 的决策依据",  # clean — no banned words
+                }
+            ],
+            "opposing_evidence": [],
+            "conflict_score": 0.0,
+            "consensus_level": "high",
+            "decision_rationale_zh": "主要证据来自 Reuters，支持 YES 的强度较高；反向证据较弱，因此维持 YES 方向。本分析仅供参考，不构成投资建议。",
+            "reversal_triggers": [],
+            "downgrade_reason": None,
+            "raw_direction": "YES",
+            "displayed_direction": "YES",
+            "downgraded": False,
+        }
         report = build_decision_report(pred, rec)
         blob = str(report).lower()
         for banned in ("long", "short", "buy", "sell", "position", "kelly", "order"):
             self.assertNotIn(banned, blob)
+
+    def test_decision_quality_passes_through_report(self):
+        """Phase 1: decision_quality overlay passes through build_decision_report
+        so downstream consumers (frontend, API) can read displayed_direction /
+        downgrade_reason / decision_rationale_zh."""
+        pred = _prediction()
+        rec = _record()
+        rec["decision_quality"] = {
+            "raw_direction": "YES",
+            "displayed_direction": "WAIT",
+            "downgraded": True,
+            "downgrade_reason": "证据冲突较高，强方向建议降级为 WAIT。",
+            "decision_rationale_zh": "虽然存在支持 YES 的证据，但反向证据强度较高，当前结论降级为 WAIT。本分析仅供参考，不构成投资建议。",
+            "consensus_level": "low",
+            "conflict_score": 0.45,
+        }
+        report = build_decision_report(pred, rec)
+        self.assertIn("decision_quality", report)
+        self.assertIsNotNone(report["decision_quality"])
+        self.assertEqual(report["decision_quality"]["displayed_direction"], "WAIT")
+        self.assertTrue(report["decision_quality"]["downgraded"])
+        self.assertIn("证据冲突", report["decision_quality"]["downgrade_reason"])
+
+    def test_decision_quality_none_passes_through(self):
+        """When decision_quality is None (feature off), the report field
+        is None — downstream consumers must handle this gracefully."""
+        pred = _prediction()
+        rec = _record()
+        # No decision_quality key set on rec -> defaults to None via .get()
+        report = build_decision_report(pred, rec)
+        self.assertIn("decision_quality", report)
+        self.assertIsNone(report["decision_quality"])
 
     def test_diagnosis_block_surfaces_frozen_inputs_and_reason(self):
         # The frozen diagnosis inputs explain the verdict. A dormant (not

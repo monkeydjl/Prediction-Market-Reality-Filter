@@ -121,4 +121,9 @@ def build_decision_report(
         "category": prediction.get("base_rate_category"),
         "status": prediction.get("status"),
         "actionable_recommendation": actionable,
+        # Phase 1: pass through decision_quality overlay (audit/explanation
+        # layer). None when DECISION_QUALITY_ENABLED=false or build failed
+        # and no fallback was attached. Downstream consumers read
+        # displayed_direction / downgrade_reason / decision_rationale_zh.
+        "decision_quality": record.get("decision_quality"),
     }

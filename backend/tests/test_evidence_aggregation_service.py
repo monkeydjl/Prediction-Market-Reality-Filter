@@ -166,6 +166,17 @@ class AggregateEvidenceBreakdownTests(unittest.TestCase):
         out = aggregate_evidence_breakdown(sentiment, original)
         self.assertEqual(out[0]["rationale_zh"], "")
 
+    def test_rationale_explicit_none_becomes_empty_string(self):
+        # When LLM returns "rationale_zh": null (key present, value None),
+        # the default value is NOT used (key exists). Without explicit None
+        # handling, str(None) would produce the literal "None". The aggregation
+        # function must coerce None to "".
+        sentiment = [{"index": 0, "evidence_direction": "support", "evidence_strength": 0.8,
+                      "rationale_zh": None}]
+        original = [{"source": "Reuters", "title": "T"}]
+        out = aggregate_evidence_breakdown(sentiment, original)
+        self.assertEqual(out[0]["rationale_zh"], "")
+
     def test_banned_word_long_replaced(self):
         sentiment = [{"index": 0, "evidence_direction": "support", "evidence_strength": 0.8,
                       "rationale_zh": "这是 long 信号"}]
@@ -188,6 +199,7 @@ class AggregateEvidenceBreakdownTests(unittest.TestCase):
         original = [{"source": "Reuters", "title": "T"}]
         out = aggregate_evidence_breakdown(sentiment, original)
         self.assertNotIn("long", out[0]["rationale_zh"].lower())
+        self.assertIn("支持 YES", out[0]["rationale_zh"])
 
     def test_banned_word_buy_replaced(self):
         sentiment = [{"index": 0, "evidence_direction": "support", "evidence_strength": 0.8,

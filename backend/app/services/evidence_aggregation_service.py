@@ -22,6 +22,7 @@ Normalization:
 
 Output order preserves the sentiment_articles order (no re-sorting).
 """
+import re
 from typing import Any
 
 # Banned trading terms and their event-vocabulary replacements. Case-insensitive
@@ -78,7 +79,6 @@ def _filter_banned_words(text: str) -> str:
             # Simple approach: lower the whole string, replace, but that loses
             # original case. Better: find all occurrences case-insensitively
             # and replace each with the replacement string.
-            import re
             pattern = re.compile(re.escape(banned), re.IGNORECASE)
             result = pattern.sub(replacement, result)
             lowered = result.lower()
@@ -144,10 +144,8 @@ def aggregate_evidence_breakdown(
             credibility = _DEFAULT_CREDIBILITY
 
         source = str(original.get("source") or "unknown").strip() or "unknown"
-        if not source:
-            source = "unknown"
 
-        rationale_raw = item.get("rationale_zh", "")
+        rationale_raw = item.get("rationale_zh") or ""
         rationale = _filter_banned_words(str(rationale_raw).strip())[:_RATIONALE_MAX]
 
         breakdown.append({

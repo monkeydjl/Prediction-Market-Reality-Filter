@@ -98,6 +98,7 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [resetting, setResetting] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
   const mountedRef = useRef(true);
   const discoverControllerRef = useRef<AbortController | null>(null);
 
@@ -204,11 +205,9 @@ export default function DashboardPage() {
   }
 
   async function resetData() {
-    if (!window.confirm("确认删除所有事件数据（事件库、预测记录、审计日志、缓存）？\n\n此操作不可撤销，删除后需重新发现事件。")) {
-      return;
-    }
     setResetting(true);
     setError(null);
+    setShowResetConfirm(false);
     try {
       const result = await eventsApi.resetData();
       if (!mountedRef.current) return;
@@ -289,9 +288,9 @@ export default function DashboardPage() {
             </button>
             <button
               type="button"
-              onClick={resetData}
+              onClick={() => setShowResetConfirm(true)}
               disabled={resetting || discovering}
-              title="清空所有事件数据（需确认）"
+              title="清空所有事件数据（需二次确认）"
               className="inline-flex h-9 items-center gap-2 rounded-md border border-neg/40 bg-neg/10 px-3 text-sm font-medium text-neg transition-colors hover:bg-neg/20 disabled:opacity-50"
             >
               <Trash2 className={`size-3.5 ${resetting ? "animate-spin" : ""}`} aria-hidden="true" />
@@ -299,6 +298,36 @@ export default function DashboardPage() {
             </button>
           </div>
         </div>
+
+        {showResetConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowResetConfirm(false)}>
+            <div
+              className="mx-4 w-full max-w-sm rounded-lg border border-border bg-card p-6 shadow-lg"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-base font-semibold text-foreground">确认删除全部数据？</h3>
+              <p className="mt-2 text-sm text-muted-foreground">
+                将清空事件库、预测记录、审计日志和缓存。此操作不可撤销，删除后需重新发现事件。
+              </p>
+              <div className="mt-5 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowResetConfirm(false)}
+                  className="inline-flex h-9 items-center rounded-md border border-border px-4 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={resetData}
+                  className="inline-flex h-9 items-center rounded-md bg-neg px-4 text-sm font-medium text-white transition-colors hover:bg-neg/80"
+                >
+                  确认删除
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {error && (
           <div className="rounded-md border border-neg/40 bg-neg/10 px-4 py-3 text-sm text-neg">

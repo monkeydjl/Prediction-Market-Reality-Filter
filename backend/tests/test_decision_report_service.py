@@ -70,7 +70,21 @@ class BuildDecisionReportTests(unittest.TestCase):
 
     def test_report_uses_event_vocabulary_only(self):
         # The decision report must not introduce trading terms (event-conventions).
-        report = build_decision_report(_prediction(), _record())
+        # Includes evidence_breakdown[*].rationale_zh since it flows into the
+        # event record (and could surface in future report extensions).
+        pred = _prediction()
+        rec = _record()
+        rec["evidence_breakdown"] = [
+            {
+                "source": "Reuters",
+                "title": "Test",
+                "direction": "support",
+                "strength": 0.8,
+                "credibility": 0.9,
+                "rationale_zh": "支持 YES 的证据",  # clean — no banned words
+            }
+        ]
+        report = build_decision_report(pred, rec)
         blob = str(report).lower()
         for banned in ("long", "short", "buy", "sell", "position", "kelly", "order"):
             self.assertNotIn(banned, blob)

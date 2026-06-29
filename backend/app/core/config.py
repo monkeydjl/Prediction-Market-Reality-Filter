@@ -306,7 +306,7 @@ class Settings:
     # Curated 2026 FIFA World Cup event source. Local/deterministic: contributes
     # high-interest sports questions to discovery without depending on a sports
     # data API. Set WORLD_CUP_SOURCE_ENABLED=false to disable it.
-    WORLD_CUP_SOURCE_ENABLED: bool = _env_bool("WORLD_CUP_SOURCE_ENABLED", "true")
+    WORLD_CUP_SOURCE_ENABLED: bool = _env_bool("WORLD_CUP_SOURCE_ENABLED", "false")
     WORLD_CUP_SOURCE_NAME: str = os.getenv(
         "WORLD_CUP_SOURCE_NAME",
         "2026 FIFA World Cup",

@@ -362,7 +362,7 @@ class Settings:
     # below that the feedback is a no-op, so the published probability is
     # unchanged until enough outcomes have accumulated to be meaningful.
     CALIBRATION_FEEDBACK_ENABLED: bool = (
-        os.getenv("CALIBRATION_FEEDBACK_ENABLED", "").strip().lower()
+        os.getenv("CALIBRATION_FEEDBACK_ENABLED", "true").strip().lower()
         in {"1", "true", "yes", "on"}
     )
     CALIBRATION_FEEDBACK_MIN_SAMPLES: int = int(
@@ -436,8 +436,8 @@ class Settings:
     DIAGNOSIS_TRUST_FLOOR: float = float(
         os.getenv("DIAGNOSIS_TRUST_FLOOR", "0.1")
     )
-    DECISION_ACT_EDGE: float = float(os.getenv("DECISION_ACT_EDGE", "10.0"))
-    DECISION_WATCH_EDGE: float = float(os.getenv("DECISION_WATCH_EDGE", "3.0"))
+    DECISION_ACT_EDGE: float = float(os.getenv("DECISION_ACT_EDGE", "6.0"))
+    DECISION_WATCH_EDGE: float = float(os.getenv("DECISION_WATCH_EDGE", "2.0"))
     # Paper-trade generation: when true, events with decision in {act,
     # provisional_act, watch} automatically create a simulated trade row.
     # When false (legacy), no paper trades are created. Set
@@ -489,7 +489,7 @@ class Settings:
     # real market prices, not news-derived speculation.
     SOURCE_WEIGHTS: dict[str, float] = {
         "Polymarket": float(os.getenv("SOURCE_WEIGHT_POLYMARKET", "3.0")),
-        "Kalshi": float(os.getenv("SOURCE_WEIGHT_KALSHI", "0.3")),
+        "Kalshi": float(os.getenv("SOURCE_WEIGHT_KALSHI", "1.0")),
         "Manifold": float(os.getenv("SOURCE_WEIGHT_MANIFOLD", "0.3")),
         "Open Web": float(os.getenv("SOURCE_WEIGHT_OPEN_WEB", "0.5")),
         "Polymarket Crypto": float(os.getenv("SOURCE_WEIGHT_POLYMARKET_CRYPTO", "1.0")),

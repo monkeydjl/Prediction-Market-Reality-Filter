@@ -128,6 +128,14 @@ def build_event_record(
         estimated_value = analysis.get("final_probability")
     estimated = safe_float(estimated_value, baseline)
     change = round(estimated - baseline, 2)
+    # Post-hoc risk: if AI probability deviates from market by >30pp, flag it.
+    # Large deviations without strong evidence are likely hallucinations.
+    if abs(change) > 30:
+        tag = f"large_deviation_{abs(change):.0f}pp"
+        if tag not in risk_flags:
+            risk_flags.append(tag)
+        if not evidence_direction or evidence_direction == "neutral":
+            risk_flags.append("low_evidence_large_deviation")
     confidence = clamp01(analysis.get("confidence_score"))
     news_quality = clamp01(analysis.get("news_quality_score"))
     evidence_strength = clamp01(analysis.get("evidence_strength"))

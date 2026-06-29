@@ -1186,3 +1186,23 @@ async def get_closed_trades(
     from app.memory.simulated_trade_store import list_closed_trades
     trades = list_closed_trades(limit=limit)
     return {"count": len(trades), "trades": trades}
+
+
+@router.post("/trades/{event_id}/close", response_model=FlexibleResponse)
+async def manual_close_trade(
+    event_id: str,
+    exit_prob: float = Body(default=0.0, embed=True),
+    exit_reason: str = Body(default="manual", embed=True),
+    _auth: None = Depends(require_write_key),
+):
+    """Manually close a simulated trade (中途离场模拟)."""
+    from app.memory.simulated_trade_store import close_trade
+    result = close_trade(
+        event_id,
+        actual_outcome=exit_prob,
+        exit_prob=exit_prob,
+        exit_reason=exit_reason or "manual",
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="No open trade for this event")
+    return result

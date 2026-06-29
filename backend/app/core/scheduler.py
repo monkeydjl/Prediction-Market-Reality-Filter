@@ -21,7 +21,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.core.config import settings
 from app.memory import loop_run_store
 from app.utils import sqlite_db
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 _scheduler_lock_handle: Any | None = None
@@ -526,12 +526,21 @@ def start_scheduler():
         return False
     try:
         if settings.EVENT_DISCOVER_ENABLED:
+            # Run discovery every 4 hours so the system accumulates samples faster.
             scheduler.add_job(
                 _job_event_discover,
-                CronTrigger(hour=7, minute=15),
+                IntervalTrigger(hours=4),
                 id="event_discover",
                 replace_existing=True,
                 max_instances=1,
+            )
+            # Also fire once 30 seconds after startup for immediate population.
+            scheduler.add_job(
+                _job_event_discover,
+                "date",
+                run_date=datetime.now(timezone.utc) + timedelta(seconds=30),
+                id="event_discover_startup",
+                replace_existing=True,
             )
         scheduler.add_job(
             _job_event_auto_resolve,

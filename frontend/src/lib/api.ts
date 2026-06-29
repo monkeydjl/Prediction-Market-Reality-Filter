@@ -283,6 +283,47 @@ export interface LoopStatus {
   calibration?: PredictionCalibration;
 }
 
+// ── M6 Simulated trades ────────────────────────────────────────────
+
+export interface SimTrade {
+  trade_id: string;
+  event_id: string;
+  event_title: string;
+  direction: "YES" | "NO";
+  entry_prob: number;
+  market_prob: number;
+  entry_edge: number;
+  entry_time: string;
+  position_pct: number;
+  confidence: number | null;
+  trust_weight: number | null;
+  decision: string;
+  exit_prob: number | null;
+  exit_market: number | null;
+  exit_time: string | null;
+  exit_reason: string | null;
+  actual_outcome: number | null;
+  pnl_pct: number | null;
+  is_win: number | null;
+  status: "open" | "closed";
+}
+
+export interface TradeStats {
+  total_closed: number;
+  win_rate: number | null;
+  total_pnl_pct: number;
+  avg_pnl_pct: number | null;
+  avg_edge_at_entry: number | null;
+  by_direction: Record<string, {
+    total: number; wins: number; win_rate: number;
+    avg_pnl: number; total_pnl: number;
+  }>;
+  by_decision: Record<string, {
+    total: number; wins: number; win_rate: number;
+    avg_pnl: number;
+  }>;
+}
+
 export interface WorldCupSourceFetch {
   kind?: string;
   source_url?: string;
@@ -719,6 +760,14 @@ export const eventsApi = {
 
   loopStatus: () =>
     api<LoopStatus>("/events/loop/status"),
+
+  // M6 simulated trades (paper trading)
+  tradeStats: () =>
+    api<TradeStats>("/events/trades/stats"),
+  openTrades: () =>
+    api<{ count: number; trades: SimTrade[] }>("/events/trades/open"),
+  closedTrades: (limit = 50) =>
+    api<{ count: number; trades: SimTrade[] }>(`/events/trades/closed?limit=${limit}`),
 
   pendingLinks: () =>
     api<{ pending: PendingLink[] }>("/events/links/pending"),

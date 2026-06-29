@@ -453,6 +453,10 @@ class Settings:
     ACTIONABLE_RECOMMENDATION_ENABLED: bool = _env_bool(
         "ACTIONABLE_RECOMMENDATION_ENABLED", "true"
     )
+    # Auto-translate event titles to Simplified Chinese during discovery.
+    # When true (default), every event gets a Chinese title even if the LLM
+    # analysis skips title_zh — a separate lightweight translation call runs.
+    AUTO_TRANSLATE_TITLES: bool = _env_bool("AUTO_TRANSLATE_TITLES", "true")
     # Cold-start bypass: when a category is dormant (0 resolved samples) but
     # the adjusted edge exceeds act_edge, emit "provisional_act" instead of
     # "watch". This unblocks the system during cold-start. Disable to restore

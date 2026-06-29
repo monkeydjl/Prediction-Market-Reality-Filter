@@ -75,6 +75,9 @@ SESSION_MEMORY_*.md
 # ── Local debug / diff scratch (not source) ──────────────────────────────────
 debug.log
 .diff_temp.txt
+.fix-backup/
+sdd-*.diff
+sdd-task-*.md
 
 # ── Reference material & backups (kept locally, not published) ───────────────
 New-frontend/

@@ -1157,3 +1157,32 @@ async def get_similar_events(
         query_entities=query_entities,
     )
     return {"event_id": event_id, "count": len(similar), "similar": similar}
+
+
+# ── Simulated trades (paper trading) ─────────────────────────────────
+
+
+@router.get("/trades/stats", response_model=FlexibleResponse)
+async def get_trade_stats(_auth: None = Depends(require_write_key)):
+    """Return aggregate statistics for closed simulated trades."""
+    from app.memory.simulated_trade_store import trade_stats
+    return trade_stats()
+
+
+@router.get("/trades/open", response_model=FlexibleResponse)
+async def get_open_trades(_auth: None = Depends(require_write_key)):
+    """Return all open simulated trades."""
+    from app.memory.simulated_trade_store import list_open_trades
+    trades = list_open_trades()
+    return {"count": len(trades), "trades": trades}
+
+
+@router.get("/trades/closed", response_model=FlexibleResponse)
+async def get_closed_trades(
+    limit: int = Query(default=50, ge=1, le=200),
+    _auth: None = Depends(require_write_key),
+):
+    """Return recently closed simulated trades."""
+    from app.memory.simulated_trade_store import list_closed_trades
+    trades = list_closed_trades(limit=limit)
+    return {"count": len(trades), "trades": trades}

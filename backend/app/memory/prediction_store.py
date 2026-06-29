@@ -304,6 +304,20 @@ def freeze_prediction(record: dict[str, Any]) -> dict[str, Any] | None:
     return get_prediction(event_id)
 
 
+# ── Simulated trade integration ─────────────────────────────────────
+# Hooked into score_prediction so every resolved event automatically
+# closes its paper trade.
+
+def _maybe_close_trade(event_id: str, actual_outcome: float, reason: str) -> None:
+    """Close the simulated trade for event_id if one exists.  Best-effort;
+    failures are silently ignored so trade logging never blocks resolution."""
+    try:
+        from app.memory.simulated_trade_store import close_trade
+        close_trade(event_id, actual_outcome=actual_outcome, exit_reason=reason)
+    except Exception:
+        pass
+
+
 def score_prediction(event_id: str, actual_outcome: float) -> dict[str, Any] | None:
     """Resolve an event's open frozen prediction against the settled outcome.
 
@@ -342,6 +356,8 @@ def score_prediction(event_id: str, actual_outcome: float) -> dict[str, Any] | N
             """,
             (new_status, round(_num(actual_outcome), 2), brier, utc_now(), event_id),
         )
+    _maybe_close_trade(event_id, actual_outcome,
+                       "resolved_yes" if actual_outcome >= 99 else "resolved_no")
     return get_prediction(event_id)
 
 

@@ -621,7 +621,37 @@ def _persist_events(records: list[dict[str, Any]]) -> None:
                     event_id,
                 )
                 continue
-            freeze_prediction(record)
+            pred = freeze_prediction(record)
+            # Auto-create a simulated trade for paper-trading evaluation.
+            # Gate: PAPER_TRADE_ENABLED must be true; for watch-grade events
+            # PAPER_TRADE_WATCH_ENABLED must also be true.
+            trade_dec = pred.get("decision") if pred else None
+            create_trade = False
+            if trade_dec in ("act", "provisional_act"):
+                create_trade = getattr(settings, "PAPER_TRADE_ENABLED", False)
+            elif trade_dec == "watch" and getattr(settings, "PAPER_TRADE_WATCH_ENABLED", False):
+                create_trade = getattr(settings, "PAPER_TRADE_ENABLED", False)
+            if pred and create_trade:
+                try:
+                    from app.memory.simulated_trade_store import open_trade
+                    rec = record.get("actionable_recommendation") or {}
+                    direction = rec.get("direction") if rec.get("direction") in ("YES", "NO") else "YES"
+                    position = rec.get("suggested_allocation_pct", None)
+                    if position is None:
+                        position = {"act": 4.0, "provisional_act": 2.0, "watch": 1.0}.get(trade_dec, 2.0)
+                    open_trade(
+                        event_id,
+                        event_title=record.get("event_title_zh") or record.get("event_title", ""),
+                        direction=direction,
+                        entry_prob=pred.get("ai_probability", 50.0),
+                        market_prob=pred.get("market_probability", 50.0),
+                        confidence=round((record.get("credibility") or {}).get("score", 50), 1),
+                        trust_weight=pred.get("trust"),
+                        decision=trade_dec,
+                        position_pct=float(position),
+                    )
+                except Exception as exc:
+                    logger.warning("Simulated trade creation failed for %s: %s", event_id, exc)
         except Exception as exc:
             logger.warning("Prediction freeze failed for %s: %s", event_id, exc)
 

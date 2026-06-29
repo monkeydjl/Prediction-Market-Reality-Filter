@@ -438,6 +438,12 @@ class Settings:
     )
     DECISION_ACT_EDGE: float = float(os.getenv("DECISION_ACT_EDGE", "10.0"))
     DECISION_WATCH_EDGE: float = float(os.getenv("DECISION_WATCH_EDGE", "3.0"))
+    # Paper-trade generation: when true, events with decision in {act,
+    # provisional_act, watch} automatically create a simulated trade row.
+    # When false (legacy), no paper trades are created. Set
+    # PAPER_TRADE_WATCH_ENABLED=true to also include watch-grade events.
+    PAPER_TRADE_ENABLED: bool = _env_bool("PAPER_TRADE_ENABLED", "true")
+    PAPER_TRADE_WATCH_ENABLED: bool = _env_bool("PAPER_TRADE_WATCH_ENABLED", "true")
 
     # Actionable conclusions (Stage 3): surface the already-computed LONG/SHORT
     # legacy signal as a structured actionable_recommendation on event records.

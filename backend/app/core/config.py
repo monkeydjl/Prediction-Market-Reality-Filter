@@ -521,6 +521,21 @@ class Settings:
     EVENT_DISCOVER_TIMEOUT_SECONDS: int = int(
         os.getenv("EVENT_DISCOVER_TIMEOUT_SECONDS", "600")
     )
+    # Phase 1 — Decision Explanation + Conflict Layer (default OFF).
+    # When enabled, build_decision_quality() runs inside analyze_event and
+    # attaches a decision_quality overlay block to the record. The block is
+    # a pure audit layer — it MUST NOT mutate actionable_recommendation or
+    # ai_probability. See docs/superpowers/specs/2026-06-30-decision-quality-engine-design.md
+    DECISION_QUALITY_ENABLED: bool = _env_bool("DECISION_QUALITY_ENABLED", "false")
+    DECISION_QUALITY_MAX_EVIDENCE_ITEMS: int = int(
+        os.getenv("DECISION_QUALITY_MAX_EVIDENCE_ITEMS", "3")
+    )
+    DECISION_QUALITY_HIGH_CONFLICT_THRESHOLD: float = float(
+        os.getenv("DECISION_QUALITY_HIGH_CONFLICT_THRESHOLD", "0.40")
+    )
+    DECISION_QUALITY_MEDIUM_CONFLICT_THRESHOLD: float = float(
+        os.getenv("DECISION_QUALITY_MEDIUM_CONFLICT_THRESHOLD", "0.20")
+    )
     SCHEDULER_MISFIRE_GRACE_SECONDS: int = int(
         os.getenv("SCHEDULER_MISFIRE_GRACE_SECONDS", "86400")
     )

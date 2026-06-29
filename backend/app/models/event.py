@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -170,14 +170,73 @@ class EvidenceBreakdownItem(BaseModel):
     quality/relevance for the UI), this model carries the LLM's directional
     judgment (support/oppose) and is purely an audit/explanation layer: it
     MUST NOT feed back into ``evidence_profile`` or ``ai_probability``.
+
+    ``direction`` is typed as ``Literal["support", "oppose", "neutral"]`` so
+    that invalid values (e.g., ``"YES"``, ``"LONG"``, ``"buy"``) raise
+    ``ValidationError`` at model construction time, before they ever reach
+    ``decision_quality_service``. This locks the two-vocabulary separation
+    (article stance vs recommendation direction) at the model boundary.
     """
 
     source: str = ""
     title: str = ""
-    direction: str  # support | oppose
+    direction: Literal["support", "oppose", "neutral"]
     strength: float = 0.0  # 0-1
     credibility: float = 0.0  # 0-1
     rationale_zh: str = ""
+
+
+class DecisionEvidenceItem(BaseModel):
+    """One piece of evidence selected by ``decision_quality_service`` as a
+    top supporting or opposing driver for the current recommendation.
+
+    Distinct from ``EvidenceBreakdownItem``: this is the *selected, ranked,
+    capped* subset (top N by ``strength * credibility``) shown in the
+    "why this direction" panel. ``EvidenceBreakdownItem`` is the full audit
+    list. ``rationale_zh`` on this model is the same string the source
+    ``EvidenceBreakdownItem`` carried.
+    """
+
+    source: str = ""
+    title: str = ""
+    strength: float = 0.0
+    credibility: float = 0.0
+    rationale_zh: str = ""
+
+
+class DecisionQuality(BaseModel):
+    """Phase 1 decision-quality overlay block.
+
+    Pure audit/explanation layer produced by ``decision_quality_service``
+    from ``actionable_recommendation`` + ``evidence_breakdown``. Reads its
+    inputs one-way and produces overlay outputs (``displayed_direction``,
+    ``downgrade_reason``, ``decision_rationale_zh``). MUST NOT feed back
+    into ``ai_probability``, ``evidence_profile``,
+    ``regression_to_market``, or ``actionable_recommendation``.
+
+    ``raw_direction`` mirrors ``actionable_recommendation.direction`` at
+    build time and is never mutated by the downgrade pipeline.
+    ``displayed_direction`` starts equal to ``raw_direction`` and is the
+    only field that may diverge (when a downgrade rule fires).
+    ``downgraded`` is ``true`` iff ``displayed_direction != raw_direction``.
+
+    When ``error`` is non-None, the build failed and the block is the
+    fallback defined in the ``analyze_event`` integration contract.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    supporting_evidence: list[DecisionEvidenceItem] = []
+    opposing_evidence: list[DecisionEvidenceItem] = []
+    conflict_score: float = 0.0
+    consensus_level: Literal["high", "medium", "low", "none"] = "none"
+    decision_rationale_zh: str = ""
+    reversal_triggers: list[str] = []
+    downgrade_reason: str | None = None
+    raw_direction: Literal["YES", "NO", "WAIT", "AVOID"] = "WAIT"
+    displayed_direction: Literal["YES", "NO", "WAIT", "AVOID"] = "WAIT"
+    downgraded: bool = False
+    error: str | None = None
 
 
 class Tracking(BaseModel):
@@ -293,6 +352,7 @@ class EventRecord(BaseModel):
     semantics: EventSemantics | None = None
     actionable_recommendation: ActionableRecommendation | None = None
     evidence_breakdown: list[EvidenceBreakdownItem] = Field(default_factory=list)
+    decision_quality: dict[str, Any] | None = None
 
 
 class FlexibleResponse(BaseModel):

@@ -490,7 +490,7 @@ def _cross_match_world_cup(
     world_cup: list[dict[str, Any]] = []
     for c in candidates:
         src = c.get("source") or {}
-        if src.get("platform") == "World Cup":
+        if src.get("type") == "sports_event":
             world_cup.append(c)
         else:
             market.append(c)

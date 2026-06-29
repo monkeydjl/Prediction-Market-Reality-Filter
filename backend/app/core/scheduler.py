@@ -130,6 +130,7 @@ def _finish_run(
     *,
     result: dict[str, Any] | None = None,
     error: str | None = None,
+    exc: BaseException | None = None,
 ) -> None:
     if run_id is None:
         return
@@ -137,6 +138,21 @@ def _finish_run(
         loop_run_store.finish_run(run_id, status, result=result, error=error)
     except Exception:
         logger.exception("[Scheduler] Failed to finish run ledger for %s", run_id)
+    # Forward scheduler failures to Sentry (P0-7 §1.2). No-op when SENTRY_DSN
+    # is empty (the wrapper handles the disabled case). Called *after* the run
+    # ledger is written so the local SQLite record is authoritative even if
+    # Sentry ingestion is slow / down. Pass ``exc`` explicitly so Sentry gets
+    # the full stack trace even though we are outside the except block.
+    if status == "failed":
+        try:
+            from app.utils.sentry import capture_exception
+            capture_exception(
+                exc,
+                job_run_id=run_id,
+                job_error=error,
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("[Scheduler] Sentry capture failed", exc_info=True)
 
 
 async def _job_event_auto_resolve():
@@ -158,7 +174,7 @@ async def _job_event_auto_resolve():
             archived,
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc))
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
         logger.exception("[Scheduler] Event auto-resolve failed")
 
 
@@ -187,7 +203,7 @@ async def _job_event_discover():
             result.get("count", 0),
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc))
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
         logger.exception("[Scheduler] Event discover failed")
 
 
@@ -204,7 +220,7 @@ async def _job_loop_db_maintenance():
             checkpoint,
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc))
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
         logger.exception("[Scheduler] Loop DB maintenance failed")
 
 
@@ -227,7 +243,7 @@ async def _job_optimization_task_cleanup():
         _finish_run(run_id, "success", result={"cleaned": True})
         logger.info("[Scheduler] Optimization task cleanup completed")
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc))
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
         logger.exception("[Scheduler] Optimization task cleanup failed")
 
 
@@ -288,7 +304,7 @@ async def _job_world_cup_source_bundle_import():
             mode,
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc))
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
         logger.exception("[Scheduler] World Cup source bundle import failed")
 
 
@@ -344,7 +360,7 @@ async def _job_world_cup_matchday_refresh():
             mode,
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc))
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
         logger.exception("[Scheduler] Matchday refresh failed")
 
 
@@ -359,7 +375,7 @@ async def _job_world_cup_prediction_update():
         _finish_run(run_id, "success", result=_summarize_prediction_update(result))
         logger.info("[Scheduler] World Cup prediction update completed")
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc))
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
         logger.exception("[Scheduler] World Cup prediction update failed")
 
 
@@ -439,7 +455,7 @@ async def _job_sentiment_refresh():
             len(teams), fetched, errors,
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc))
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
         logger.exception("[Scheduler] Sentiment refresh failed")
 
 

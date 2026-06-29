@@ -452,6 +452,13 @@ class EventRecord(BaseModel):
     Used as a validation gate in the event store and as the schema for event
     read endpoints. ``extra='allow'`` keeps forward-compatible fields (such as
     ``news_filter``) without breaking when build_event_record adds output.
+
+    ``schema_version`` tracks which set of overlay fields the record carries.
+    Pre-Phase-4 records (created before source_reliability was added) carry
+    ``schema_version="v1.0"``; records written after Phase 5 ship with
+    ``schema_version="v2.1"``. ``event_store.normalize_event_record()`` uses
+    this to upgrade old records in place instead of silently passing them
+    through ``extra="allow"`` — see docs/superpowers/specs/2026-06-30-production-readiness-gaps.md §3.2.
     """
 
     model_config = ConfigDict(extra="allow")
@@ -476,10 +483,17 @@ class EventRecord(BaseModel):
     semantics: EventSemantics | None = None
     actionable_recommendation: ActionableRecommendation | None = None
     evidence_breakdown: list[EvidenceBreakdownItem] = Field(default_factory=list)
+    # Phase 1-5 overlay fields. Explicitly declared (not relying on
+    # extra="allow") so that Pydantic catches typos and downstream readers
+    # can introspect the schema. All default to None for backward compat.
     decision_quality: dict[str, Any] | None = None
     market_quality: dict[str, Any] | None = None
+    source_reliability: dict[str, Any] | None = None
+    llm_telemetry: dict[str, Any] | None = None
     final_displayed_direction: str | None = None
     final_downgrade_reason: str | None = None
+    # Record schema version — see normalize_event_record() in event_store.
+    schema_version: str = "v2.1"
 
 
 class FlexibleResponse(BaseModel):

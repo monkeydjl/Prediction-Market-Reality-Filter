@@ -14,6 +14,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.models.event import EventRecord
+from app.services.event_schema import normalize_event_record
 from app.utils.file_store import locked_file, read_json, read_json_strict, write_json_atomic
 from app.utils.helpers import utc_now
 
@@ -92,6 +93,10 @@ def save_events(
                 # from Chinese back to English.
                 if not candidate.get("event_title_zh") and existing_record.get("event_title_zh"):
                     candidate["event_title_zh"] = existing_record["event_title_zh"]
+                # Schema upgrade: backfill any overlay field introduced after the
+                # record's schema_version (see event_schema.normalize_event_record).
+                # Idempotent on already-current records.
+                normalize_event_record(candidate)
                 EventRecord.model_validate(candidate)
             except Exception as exc:
                 if not skip_invalid:

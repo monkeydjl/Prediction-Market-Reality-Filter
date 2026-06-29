@@ -620,5 +620,43 @@ class Settings:
     )
     SERVER_RELOAD: bool = _env_bool("SERVER_RELOAD", "false")
 
+    # Sentry error tracking (P0-7 §1.2). When SENTRY_DSN is empty, the
+    # sentry_sdk wrapper in app.utils.sentry is a no-op so the app boots
+    # without a Sentry backend configured. Set the DSN in production to
+    # capture FastAPI route exceptions + scheduler job failures.
+    SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
+    SENTRY_ENVIRONMENT: str = os.getenv("SENTRY_ENVIRONMENT", "production")
+    SENTRY_RELEASE: str = os.getenv("SENTRY_RELEASE", "")
+    # Performance trace sample rate (0.0-1.0). Default 0 = no perf monitoring
+    # (keeps P0 minimal; bump to 0.01-0.1 in prod if performance tracing wanted).
+    SENTRY_TRACES_SAMPLE_RATE: float = float(
+        os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.0")
+    )
+    SENTRY_ATTACH_STACKTRACES: bool = _env_bool(
+        "SENTRY_ATTACH_STACKTRACES", "true"
+    )
+
+    # Strategy-layer Guardrails (P0-8 §6.3 minimum set). When enabled, the
+    # post-merge final_displayed_direction is gated by global risk controls
+    # (LLM degraded mode, uncalibrated category, high evidence conflict).
+    # Default OFF so behavior is byte-identical to pre-guardrail when off.
+    # Each guardrail has its own enable flag so operators can pick which
+    # controls to enforce.
+    GUARDRAILS_ENABLED: bool = _env_bool("GUARDRAILS_ENABLED", "false")
+    GUARDRAIL_LLM_DEGRADED_BLOCKS_ACT: bool = _env_bool(
+        "GUARDRAIL_LLM_DEGRADED_BLOCKS_ACT", "true"
+    )
+    GUARDRAIL_UNCALIBRATED_CATEGORY_BLOCKS_ACT: bool = _env_bool(
+        "GUARDRAIL_UNCALIBRATED_CATEGORY_BLOCKS_ACT", "true"
+    )
+    GUARDRAIL_HIGH_CONFLICT_BLOCKS_ACT: bool = _env_bool(
+        "GUARDRAIL_HIGH_CONFLICT_BLOCKS_ACT", "true"
+    )
+    # conflict_score >= this value triggers the high-conflict guardrail.
+    # Default 0.40 matches DECISION_QUALITY_HIGH_CONFLICT_THRESHOLD (low consensus).
+    GUARDRAIL_HIGH_CONFLICT_THRESHOLD: float = float(
+        os.getenv("GUARDRAIL_HIGH_CONFLICT_THRESHOLD", "0.40")
+    )
+
 
 settings = Settings()

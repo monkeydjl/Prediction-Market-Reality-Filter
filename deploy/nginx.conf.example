@@ -1,0 +1,134 @@
+# nginx reverse-proxy example for PMRF production deployment.
+#
+# Usage:
+#   1. Copy to /etc/nginx/sites-available/pmrf.conf
+#   2. Replace server_name + TLS cert paths with your real domain
+#   3. `sudo ln -s /etc/nginx/sites-available/pmrf.conf /etc/nginx/sites-enabled/`
+#   4. `sudo nginx -t && sudo systemctl reload nginx`
+#
+# The FastAPI backend listens on 127.0.0.1:8000 (per deploy/docker-compose.yml).
+# NEVER expose port 8000 directly to the public internet — put this nginx in
+# front of it for TLS termination, rate limiting, and header hardening.
+
+# Rate limiting zone (define at http{} level — move outside server{} if needed).
+# 10 req/s per client IP, burst 20.
+limit_req_zone $binary_remote_addr zone=pmrf_limit:10m rate=10r/s;
+
+# Connection upgrade map for WebSocket / SSE (used by /api/events/discover/status
+# streaming and future realtime endpoints).
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# HTTP → HTTPS redirect.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name pmrf.example.com;
+
+    # ACME challenge passthrough (Let's Encrypt webroot).
+    location /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# HTTPS main server.
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name pmrf.example.com;
+
+    # ─── TLS ───────────────────────────────────────────────────────────────
+    ssl_certificate     /etc/letsencrypt/live/pmrf.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/pmrf.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # OCSP stapling (uncomment after certs are issued).
+    # ssl_stapling on;
+    # ssl_stapling_verify on;
+    # resolver 1.1.1.1 8.8.8.8 valid=300s;
+    # resolver_timeout 5s;
+
+    # ─── Security headers ─────────────────────────────────────────────────
+    # The backend also sets these (app/main.py), but nginx is the trust
+    # boundary — defense in depth.
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+
+    # ─── Body size ────────────────────────────────────────────────────────
+    # /api/analyze accepts up to 20KB news_context + headers; 4MB is plenty
+    # for any endpoint including world-cup batch imports.
+    client_max_body_size 4m;
+
+    # ─── Request body buffering ───────────────────────────────────────────
+    # Buffer to disk only for very large bodies; small JSON should stream.
+    client_body_buffer_size 16k;
+
+    # ─── Proxy to backend ─────────────────────────────────────────────────
+    location /api/ {
+        limit_req zone=pmrf_limit burst=20 nodelay;
+
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+
+        # Forward original request metadata so the backend sees real client
+        # IPs (used by rate limiter + audit log) instead of nginx's IP.
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP          $remote_addr;
+        proxy_set_header X-Forwarded-For    $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto  $scheme;
+        proxy_set_header X-Forwarded-Host   $host;
+
+        # WebSocket / SSE support (discover/status streaming).
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        # Long-running batch endpoints (discover can take 3-10 minutes).
+        # See .env.example: EVENT_DISCOVER_TIMEOUT_SECONDS default 600.
+        proxy_read_timeout  900s;
+        proxy_send_timeout  900s;
+        proxy_connect_timeout 10s;
+
+        # Don't buffer SSE — pass through immediately for live progress.
+        proxy_buffering off;
+    }
+
+    # ─── Static frontend (served by FastAPI when frontend/out is mounted) ─
+    # FastAPI serves frontend/out/ at / in production, so just proxy.
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP          $remote_addr;
+        proxy_set_header X-Forwarded-For    $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto  $scheme;
+    }
+
+    # ─── Health check passthrough (no rate limit, no auth) ───────────────
+    # /api/health returns 503 when degraded, so external uptime monitors
+    # (UptimeRobot, Better Uptime) should hit this path.
+    location = /api/health {
+        proxy_pass http://127.0.0.1:8000;
+        access_log off;
+    }
+
+    # ─── Block sensitive paths ────────────────────────────────────────────
+    # /docs and /openapi.json should be disabled in prod via OPENAPI_ENABLED=false,
+    # but block at nginx too as defense in depth.
+    location ~ ^/(docs|redoc|openapi\.json)$ {
+        deny all;
+        return 404;
+    }
+}

@@ -470,6 +470,57 @@ async def analyze_event(
             "estimated_token_cost": 0.0,
             "model": settings.OPENAI_MODEL,
         }
+
+    # P0-8: Strategy-layer Guardrails. Apply global risk controls AFTER the
+    # per-event overlay merge has produced final_displayed_direction AND after
+    # llm_telemetry is populated (rule 1 reads llm_telemetry.degraded_mode).
+    # The guardrail service is pure / synchronous / deterministic; the I/O
+    # (calibration_summary read) happens here so the service stays pure. When
+    # GUARDRAILS_ENABLED=false, evaluate_guardrails is a no-op and no keys
+    # are attached (byte-identical to pre-guardrail records). Best-effort:
+    # any failure here is logged and the pre-guardrail direction is preserved.
+    try:
+        if settings.GUARDRAILS_ENABLED:
+            from app.services.guardrail_service import (
+                evaluate_guardrails,
+                extract_qualified_categories,
+            )
+            # Best-effort fetch of qualified categories from the calibration
+            # store. A read failure (or no calibration data yet) passes None
+            # to evaluate_guardrails, which treats None as "skip the
+            # qualification check" — the cold-start path stays unblocked.
+            qualified_cats: set[str] | None = None
+            try:
+                from app.memory.prediction_store import calibration_summary
+                summary = calibration_summary()
+                qualified_cats = extract_qualified_categories(
+                    summary.get("segments")
+                )
+            except Exception as exc:
+                logger.debug(
+                    "calibration_summary unavailable for guardrails: %s", exc
+                )
+            fired_dir, fired_reason, fired_rules = evaluate_guardrails(
+                final_direction=record.get("final_displayed_direction"),
+                final_downgrade_reason=record.get("final_downgrade_reason"),
+                record=record,
+                enabled=True,
+                llm_degraded_blocks_act=settings.GUARDRAIL_LLM_DEGRADED_BLOCKS_ACT,
+                uncalibrated_category_blocks_act=settings.GUARDRAIL_UNCALIBRATED_CATEGORY_BLOCKS_ACT,
+                high_conflict_blocks_act=settings.GUARDRAIL_HIGH_CONFLICT_BLOCKS_ACT,
+                high_conflict_threshold=settings.GUARDRAIL_HIGH_CONFLICT_THRESHOLD,
+                qualified_categories=qualified_cats,
+            )
+            if fired_rules:
+                record["final_displayed_direction"] = fired_dir
+                record["final_downgrade_reason"] = fired_reason
+                # Record which guardrails fired (audit trail for operators /
+                # metrics). Only attached when at least one rule fired —
+                # absent key = no guardrail fired (matches the existing
+                # convention of "no key when feature off / no-op").
+                record["guardrail_fired"] = fired_rules
+    except Exception as exc:
+        logger.warning("guardrail evaluation failed: %s", exc)
     return record
 
 

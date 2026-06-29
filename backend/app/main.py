@@ -27,6 +27,16 @@ async def lifespan(app: FastAPI):
         logger.critical("OPENAI_API_KEY is empty — LLM calls will fail at runtime")
     else:
         logger.info("OPENAI_API_KEY is configured (len=%d)", len(settings.OPENAI_API_KEY))
+    # Initialize Sentry before any route / scheduler runs so failures during
+    # startup (e.g., LLM check) get captured. No-op when SENTRY_DSN is empty.
+    from app.utils.sentry import init_sentry
+    init_sentry(
+        dsn=settings.SENTRY_DSN,
+        environment=settings.SENTRY_ENVIRONMENT,
+        release=settings.SENTRY_RELEASE or "pmrf@0.3.0",
+        traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
+        attach_stacktrace=settings.SENTRY_ATTACH_STACKTRACES,
+    )
     if settings.LLM_STARTUP_CHECK_ENABLED:
         await validate_primary_llm_startup()
         logger.info("Primary LLM startup check passed.")
@@ -250,6 +260,25 @@ async def api_health(
         "failed_runs": failed_runs,
         "loop": status,
     }
+
+
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics():
+    """Prometheus metrics endpoint (P0-6 §1.1).
+
+    Exposes the default ``prometheus_client`` registry in text exposition
+    format. Refreshes aggregate gauges (direction counts, consensus
+    distribution, scheduler last-success, calibration Brier) before each
+    scrape so values stay fresh without per-event instrumentation.
+
+    Public endpoint — no ``X-API-Key`` required (Prometheus scrapers cannot
+    authenticate, and the metrics are aggregate counters only, no per-event
+    operator-grade intelligence).
+    """
+    from app.utils.metrics import render_metrics
+
+    body, content_type = render_metrics()
+    return Response(content=body, media_type=content_type)
 
 
 # Next.js dashboard (static export). Built with `npm run build` in ../frontend,

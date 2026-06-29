@@ -13,3 +13,5 @@ pyzipper>=0.3,<1.0
 numpy>=1.26,<3.0
 scipy>=1.11,<2.0
 lightgbm>=4.0,<5.0
+prometheus_client>=0.20,<1.0
+sentry-sdk[fastapi]>=2.0,<3.0

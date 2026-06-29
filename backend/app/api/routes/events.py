@@ -1207,6 +1207,16 @@ async def manual_close_trade(
     return result
 
 
+# ── Discovery progress ─────────────────────────────────────────────
+
+
+@router.get("/discover/status", response_model=FlexibleResponse)
+async def get_discovery_status():
+    """Real-time progress of the current (or most recent) discovery run."""
+    from app.services.discovery_status import snapshot
+    return snapshot()
+
+
 # ── Event title translation ────────────────────────────────────────
 
 

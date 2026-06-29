@@ -99,6 +99,7 @@ export default function DashboardPage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [resetting, setResetting] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [discoveryStatus, setDiscoveryStatus] = useState<Record<string, unknown> | null>(null);
   const mountedRef = useRef(true);
   const discoverControllerRef = useRef<AbortController | null>(null);
 
@@ -181,16 +182,29 @@ export default function DashboardPage() {
   async function discover() {
     setDiscovering(true);
     setError(null);
+    setDiscoveryStatus(null);
     const controller = new AbortController();
     discoverControllerRef.current = controller;
     const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+
+    // Poll discovery status every 2 seconds
+    const statusPoller = setInterval(async () => {
+      if (!mountedRef.current) return;
+      try {
+        const data = await eventsApi.discoverStatus();
+        if (mountedRef.current) setDiscoveryStatus(data);
+      } catch { /* ignore poll errors */ }
+    }, 2000);
+
     try {
       await eventsApi.discover(discoverLimit, discoverUseCache, controller.signal);
+      clearInterval(statusPoller);
       if (!mountedRef.current) return;
       setPage(1);
       writePageToUrl(1, "replace");
       await load({ pageOverride: 1 });
     } catch (e) {
+      clearInterval(statusPoller);
       if (!mountedRef.current) return;
       if (e instanceof DOMException && e.name === "AbortError") {
         setError("发现超时（超过 5 分钟）。事件采集仍可能在后台完成，可稍后点刷新查看。");
@@ -200,7 +214,11 @@ export default function DashboardPage() {
     } finally {
       clearTimeout(timer);
       discoverControllerRef.current = null;
-      if (mountedRef.current) setDiscovering(false);
+      if (mountedRef.current) {
+        setDiscovering(false);
+        // Keep final status visible for 3 seconds
+        setTimeout(() => { if (mountedRef.current) setDiscoveryStatus(null); }, 3000);
+      }
     }
   }
 
@@ -336,9 +354,58 @@ export default function DashboardPage() {
         )}
 
         {discovering && (
-          <div className="flex items-center gap-2.5 rounded-md border border-primary/40 bg-primary/10 px-4 py-3 text-sm text-primary">
-            <span className="size-1.5 animate-pulse rounded-full bg-primary" aria-hidden="true" />
-            正在发现最多 {discoverLimit} 个新事件 — 需采集新闻并逐个分析，通常需要数分钟，请勿关闭页面。
+          <div className="rounded-md border border-primary/40 bg-primary/10 px-4 py-3">
+            <div className="flex items-center gap-2.5 text-sm text-primary">
+              <span className="size-1.5 animate-pulse rounded-full bg-primary" aria-hidden="true" />
+              <span className="font-medium">
+                {discoveryStatus
+                  ? String(discoveryStatus.message ?? "发现中…")
+                  : `开始发现最多 ${discoverLimit} 个事件…`}
+              </span>
+            </div>
+            {discoveryStatus && (
+              <div className="mt-2 grid gap-1.5 text-xs text-muted-foreground">
+                {/* Phase indicator */}
+                <div>阶段：{String(discoveryStatus.phase ?? "—")}</div>
+
+                {/* Source status */}
+                {discoveryStatus.sources && typeof discoveryStatus.sources === "object" && Object.keys(discoveryStatus.sources as object).length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {Object.entries(discoveryStatus.sources as Record<string, {status: string; candidates: number; error: string | null}>).map(([name, s]) => (
+                      <span key={name} className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
+                        s.status === "ok" ? "bg-pos/10 text-pos" :
+                        s.status === "failed" ? "bg-neg/10 text-neg" :
+                        "bg-secondary text-muted-foreground"
+                      }`}>
+                        {name}: {s.status === "ok" ? `${s.candidates} 候选` : s.status === "failed" ? "失败" : "获取中…"}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Analysis progress */}
+                {(discoveryStatus.analyzed as number) > 0 && (
+                  <div>
+                    分析进度：{String(discoveryStatus.analyzed ?? 0)}/{String(discoveryStatus.total_to_analyze ?? 0)}
+                    {discoveryStatus.elapsed_ms ? `（已用 ${Math.round(Number(discoveryStatus.elapsed_ms) / 1000)} 秒）` : ""}
+                  </div>
+                )}
+
+                {/* Errors */}
+                {discoveryStatus.errors && Array.isArray(discoveryStatus.errors) && (discoveryStatus.errors as Array<{event: string; error: string}>).length > 0 && (
+                  <details className="mt-1">
+                    <summary className="cursor-pointer text-neg">{(discoveryStatus.errors as unknown[]).length} 个失败（点击展开）</summary>
+                    <ul className="mt-1 list-inside list-disc space-y-0.5">
+                      {(discoveryStatus.errors as Array<{event: string; error: string}>).slice(0, 5).map((e: {event: string; error: string}, i: number) => (
+                        <li key={i} className="text-neg">
+                          {e.event?.slice(0, 60)}: {e.error?.slice(0, 100)}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </div>
+            )}
           </div>
         )}
 

@@ -442,8 +442,19 @@ async def _collect_candidate_events(
     for label, result in zip(labels, results):
         if isinstance(result, Exception):
             logger.warning("Event source failed [%s]: %s", label, result)
+            # Report source failure to status tracker
+            try:
+                from app.services.discovery_status import source_done
+                asyncio.ensure_future(source_done(label, 0, str(result)[:200]))
+            except Exception:
+                pass
             continue
         per_source.append(result)
+        try:
+            from app.services.discovery_status import source_done
+            asyncio.ensure_future(source_done(label, len(result)))
+        except Exception:
+            pass
 
     # Round-robin across sources so the cap keeps every source represented.
     merged = [
@@ -550,15 +561,41 @@ async def discover_events(
 ) -> dict[str, Any]:
     from app.memory.event_cache import get_cached_event, set_cached_event
     from app.services.event_collection_service import collect_shared_articles
+    from app.services.discovery_status import (  # status tracking
+        reset as status_reset,
+        set_phase as status_phase,
+        event_analyzed as status_event,
+        event_saved as status_saved,
+        done as status_done,
+        fail as status_fail,
+    )
+
+    await status_reset(limit)
 
     # Query-independent feeds are fetched once per scan and reused twice: as
     # open-web event candidates (extraction) and as shared evidence for every
     # candidate below.
-    shared_articles = await collect_shared_articles()
-    candidate_events = await _collect_candidate_events(
-        limit, shared_articles=shared_articles
-    )
+    await status_phase("collecting", "获取 RSS 和候选事件…")
+    try:
+        shared_articles = await collect_shared_articles()
+        candidate_events = await _collect_candidate_events(
+            limit, shared_articles=shared_articles
+        )
+    except Exception as exc:
+        await status_fail(f"数据源收集失败: {exc}")
+        raise
+
+    if not candidate_events:
+        await status_fail("未获取到任何候选事件 — 检查数据源（Polymarket/Kalshi/Manifold）是否可达")
+        return {"platform": "Event Intelligence Platform",
+                "source": "Multi-source event discovery",
+                "count": 0, "events": [],
+                "status": {"message": "No candidates from any source"}}
+
+    await status_phase("analyzing", f"开始分析 {len(candidate_events)} 个候选事件…")
     semaphore = asyncio.Semaphore(getattr(settings, "LLM_CONCURRENCY", 4))
+
+    total_errors = 0
 
     async def process_event(
         candidate: dict[str, Any],
@@ -623,6 +660,7 @@ async def discover_events(
                 record["evidence_items"] = build_evidence_items(articles)
                 if use_cache:
                     set_cached_event(question, record)
+                await status_event(question, success=True)
                 return record, True
             except Exception as exc:
                 logger.warning(
@@ -630,6 +668,8 @@ async def discover_events(
                     str(candidate.get("question", ""))[:80],
                     exc,
                 )
+                q = str(candidate.get("question", ""))
+                await status_event(q, success=False, error=str(exc)[:200])
                 return None
 
     raw = await asyncio.gather(
@@ -642,11 +682,21 @@ async def discover_events(
     # have their snapshot; re-auditing them would append duplicate snapshots.
     fresh = [record for record, is_new in results if is_new]
     _persist_events(fresh)
+    await status_saved(len(events[:limit]))
+
+    error_count = sum(1 for item in raw if item is None)
+    await status_done(len(events[:limit]), error_count)
     return {
         "platform": "Event Intelligence Platform",
         "source": "Multi-source event discovery",
         "count": len(events[:limit]),
         "events": events[:limit],
+        "status": {
+            "candidates": len(candidate_events),
+            "analyzed": len(candidate_events),
+            "errors": error_count,
+            "results": len(events[:limit]),
+        },
     }
 
 

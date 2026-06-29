@@ -761,6 +761,9 @@ export const eventsApi = {
   loopStatus: () =>
     api<LoopStatus>("/events/loop/status"),
 
+  discoverStatus: () =>
+    api<Record<string, unknown>>("/events/discover/status"),
+
   // M6 simulated trades (paper trading)
   tradeStats: () =>
     api<TradeStats>("/events/trades/stats"),

@@ -698,6 +698,13 @@ export const eventsApi = {
   freshEdges: (limit = 10) =>
     api<{ count: number; edges: FreshEdge[] }>(`/events/edges/fresh?limit=${limit}`),
 
+  // Delete all event data (requires write key).
+  resetData: () =>
+    api<{ message: string; cleared: Record<string, number | string> }>(
+      "/events/reset",
+      { method: "POST" },
+    ),
+
   edgeMonitor: (limit = 50) =>
     api<{ count: number; classification: string; edges: FreshEdge[] }>(
       `/events/edges/fresh?limit=${limit}&classification=all&include_series=true`,

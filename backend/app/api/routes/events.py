@@ -181,6 +181,71 @@ async def analyze_event_intelligence(
     )
 
 
+@router.post("/reset", response_model=FlexibleResponse)
+async def reset_all_event_data(_auth: None = Depends(require_write_key)):
+    """Delete all event data: store, predictions, audit log, cache.
+
+    Returns a summary of what was cleared.  Requires write-key auth."""
+    import json
+    import os
+    import sqlite3
+
+    from app.core.config import settings
+    from app.memory.sqlite_db import loop_db_path
+
+    cleared: dict[str, int | str] = {}
+
+    # 1. event_store.json
+    store_path = os.path.abspath(settings.EVENT_STORE_FILE)
+    with open(store_path, "w", encoding="utf-8") as f:
+        f.write("{}")
+    cleared["event_store"] = str(store_path)
+
+    # 2. event_audit.jsonl
+    audit_path = os.path.abspath(settings.EVENT_AUDIT_FILE)
+    with open(audit_path, "w", encoding="utf-8") as f:
+        f.write("")
+    cleared["event_audit"] = str(audit_path)
+
+    # 3. event_cache.json
+    cache_path = os.path.abspath(settings.EVENT_CACHE_FILE)
+    with open(cache_path, "w", encoding="utf-8") as f:
+        f.write("{}")
+    cleared["event_cache"] = str(cache_path)
+
+    # 4. v2_loop.db tables
+    db_path = loop_db_path()
+    conn = sqlite3.connect(db_path)
+    tables = ("predictions", "loop_runs", "event_market_links")
+    for table in tables:
+        count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        conn.execute(f"DELETE FROM {table}")
+        cleared[f"sqlite.{table}"] = count
+    conn.commit()
+    conn.close()
+
+    # 5. Invalidate in-memory history cache so the next movers / edge
+    #    request rebuilds from the (now empty) audit file instead of
+    #    serving stale cached snapshots.
+    try:
+        from app.services.event_audit_service import invalidate_history_cache
+        invalidate_history_cache()
+        cleared["history_cache"] = "invalidated"
+    except ImportError:
+        cleared["history_cache"] = "skipped"
+
+    logger.info(
+        "Event data reset: store=%s audit=%s cache=%s predictions=%d runs=%d links=%d",
+        cleared.get("event_store"),
+        cleared.get("event_audit"),
+        cleared.get("event_cache"),
+        cleared.get("sqlite.predictions", 0),
+        cleared.get("sqlite.loop_runs", 0),
+        cleared.get("sqlite.event_market_links", 0),
+    )
+    return {"message": "All event data cleared.", "cleared": cleared}
+
+
 @router.get("/", response_model=EventListResponse)
 async def list_event_intelligence(
     limit: int = Query(default=50, ge=1, le=200),

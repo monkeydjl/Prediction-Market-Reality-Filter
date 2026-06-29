@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { RefreshCw, Search } from "lucide-react";
+import { RefreshCw, Search, Trash2 } from "lucide-react";
 import { AppNav } from "@/components/app-nav";
 import { SummaryBar, summarize } from "@/components/dashboard/summary-bar";
 import { MoversBoard } from "@/components/dashboard/movers-board";
@@ -9,10 +9,10 @@ import { EventTable } from "@/components/dashboard/event-table";
 import { SystemStatus } from "@/components/dashboard/system-status";
 import { SectionErrorBoundary } from "@/components/section-error-boundary";
 import { eventsApi, type EventListFilters } from "@/lib/api";
-import { adaptEntry, adaptMover, sparkSeries, type EventView } from "@/lib/adapt";
+import { adaptEntry, adaptMover, type EventView } from "@/lib/adapt";
 
 const PAGE_SIZE = 50;
-const DISCOVER_LIMIT_OPTIONS = [2, 5, 10, 20];
+const DISCOVER_LIMIT_OPTIONS = [2, 5, 10, 20, 50, 100];
 const TABLE_FILTER_EVENT = "pmrf:event-table-filters-change";
 
 function pageFromSearch(search: string) {
@@ -63,24 +63,24 @@ async function fetchDashboardData(limit = PAGE_SIZE, offset = 0, filters: EventL
   const events = (list.events ?? []).map(adaptEntry);
   const movers = (moversResp.movers ?? []).map(adaptMover);
 
-  // Lazy-fetch sparkline series only for the top movers (avoid N requests).
-  const top = movers.slice(0, 3);
-  const series = await Promise.all(
-    top.map(async (m) => {
-      try {
-        const h = await eventsApi.history(m.id);
-        return [m.id, sparkSeries(h.history ?? [])] as const;
-      } catch {
-        return [m.id, []] as const;
-      }
-    }),
-  );
+  // Batch-fetch sparkline series for ALL events on the current page so every
+  // row shows a trend thumbnail. Falls back to empty on failure.
+  let sparklines: Record<string, number[]> = {};
+  const ids = events.map((e) => e.id).filter(Boolean);
+  if (ids.length > 0) {
+    try {
+      const batch = await eventsApi.batchSparklines(ids);
+      sparklines = batch.sparklines ?? {};
+    } catch {
+      // Best-effort: empty sparklines on any failure.
+    }
+  }
 
   return {
     events,
     total: list.total ?? list.count ?? events.length,
     movers,
-    sparklines: Object.fromEntries(series) as Record<string, number[]>,
+    sparklines,
   };
 }
 
@@ -97,6 +97,7 @@ export default function DashboardPage() {
   const [discoverUseCache, setDiscoverUseCache] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [resetting, setResetting] = useState(false);
   const mountedRef = useRef(true);
   const discoverControllerRef = useRef<AbortController | null>(null);
 
@@ -202,7 +203,31 @@ export default function DashboardPage() {
     }
   }
 
-  const summary = summarize(events);
+  async function resetData() {
+    if (!window.confirm("确认删除所有事件数据（事件库、预测记录、审计日志、缓存）？\n\n此操作不可撤销，删除后需重新发现事件。")) {
+      return;
+    }
+    setResetting(true);
+    setError(null);
+    try {
+      const result = await eventsApi.resetData();
+      if (!mountedRef.current) return;
+      setEvents([]);
+      setMovers([]);
+      setSparklines({});
+      setTotalEvents(0);
+      setPage(1);
+      setLastUpdated(new Date());
+      setError(`已清空：${result.message}`);
+    } catch (e) {
+      if (!mountedRef.current) return;
+      setError(e instanceof Error ? e.message : "删除失败");
+    } finally {
+      if (mountedRef.current) setResetting(false);
+    }
+  }
+
+  const summary = { ...summarize(events), total: totalEvents };
   const totalPages = Math.max(1, Math.ceil(totalEvents / PAGE_SIZE));
   const pageStart = totalEvents === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const pageEnd = totalEvents === 0 ? 0 : Math.min(page * PAGE_SIZE, totalEvents);
@@ -261,6 +286,16 @@ export default function DashboardPage() {
             >
               <Search className={`size-3.5 ${discovering ? "animate-pulse" : ""}`} aria-hidden="true" />
               {discovering ? "发现中…" : "发现新事件"}
+            </button>
+            <button
+              type="button"
+              onClick={resetData}
+              disabled={resetting || discovering}
+              title="清空所有事件数据（需确认）"
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-neg/40 bg-neg/10 px-3 text-sm font-medium text-neg transition-colors hover:bg-neg/20 disabled:opacity-50"
+            >
+              <Trash2 className={`size-3.5 ${resetting ? "animate-spin" : ""}`} aria-hidden="true" />
+              {resetting ? "删除中…" : "删除数据"}
             </button>
           </div>
         </div>

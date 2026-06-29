@@ -23,6 +23,14 @@ _HISTORY_CACHE: dict[
 ] = {}
 
 
+def invalidate_history_cache() -> None:
+    """Clear the in-process history cache so the next movers / edge request
+    rebuilds from the audit file on disk.  Safe to call from an API handler
+    that has just truncated the audit file."""
+    with _HISTORY_CACHE_LOCK:
+        _HISTORY_CACHE.clear()
+
+
 def _audit_path() -> str:
     return os.path.abspath(settings.EVENT_AUDIT_FILE)
 

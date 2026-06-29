@@ -1,150 +1,27 @@
 # 生产就绪缺失项分析
 
-**文档版本**: v2.0
+**文档版本**: v3.0
 **创建日期**: 2026-06-30
 **最近更新**: 2026-06-30
-**状态**: Decision Quality Engine Phase 1-5 全部实现并提交；可观测性、部署自动化、运维工具、数据层补全仍有缺失
+**状态**: Decision Quality Engine Phase 1-5 全部实现并提交；本文档仅列出未实现的缺失项
 
 ---
 
 ## 📋 执行摘要
 
-Decision Quality Engine 的设计规格（[2026-06-30-decision-quality-engine-design.md](./2026-06-30-decision-quality-engine-design.md)）已完整定义 Phase 1-5，且**五个 Phase 均已实现并通过测试**（见 §一）。本文档列出从当前状态到生产就绪的真实缺失项，分为六类：
+Decision Quality Engine Phase 1-5 均已实现并通过测试（详见 [设计文档](./2026-06-30-decision-quality-engine-design.md)）。本文档列出从当前状态到生产就绪的**未实现**缺失项，分为五类：
 
-1. **核心功能实现状态**（Phase 1-5 均已完成，本节记录实现位置与限制）
-2. **监控与可观测性**（最大短板：无指标暴露、无错误追踪、无日志聚合）
-3. **部署与运维**（无 CD、无多环境配置、无 Secrets 管理、无反代示例、无 restore 脚本）
-4. **数据层与 Schema 演进**（部分 store 缺列级迁移、event_store.json 无版本、死代码字段）
-5. **测试覆盖与运维工具**（三路合并缺集成测试、运维 CLI/审计脚本全缺）
-6. **前端工程与文档一致性**（前后端类型手工同步、README 缺生产部署示例）
-
----
-
-## 🎯 一、核心功能实现状态 (Phase 1-5)
-
-> **重要修正**：v1.0 版本误将 Phase 1-4 标注为"未实现"。实际代码验证显示四个服务文件均已存在、有完整 docstring 与单元测试，且 `.env.example` 第 57-126 行已包含全部 5 个 Phase 的特性开关。
-
-### Phase 1: Decision Quality (决策质量层) — ✅ 已实现
-
-**实现位置**: `backend/app/services/decision_quality_service.py`
-**Commit**: `a710961`, `8814af7`, `64dfbde`, `802c29e`
-**测试**: `backend/tests/test_decision_quality_service.py`（含禁词过滤测试）
-**特性开关**: `DECISION_QUALITY_ENABLED=false`（默认 OFF，byte-identical 到 pre-Phase-1）
-
-**已实现的契约**：
-- `build_decision_quality(analysis, sentiment_profile, news_context, enabled) -> dict | None`
-- 纯函数：无 LLM / 无 IO
-- 输入：`actionable_recommendation + evidence_breakdown`
-- 输出：`raw_direction` / `displayed_direction` / `downgrade_reason` / `supporting_evidence` / `opposing_evidence` / `consensus_level` / `conflict_score`
-- 4 条降级规则：证据缺失→WAIT、冲突高→WAIT、官方反向→WAIT、高风险→AVOID
-- 禁词过滤：long/short/buy/sell/position/kelly/order（case-insensitive）
-
-**已知限制**：
-- 依赖 `actionable_recommendation` 与 `evidence_breakdown` 字段，二者缺失时返回 None
-- `consensus_level` 公式在 strength vs count 失衡时有限制（spec 注明 Phase 3 重评估）
+1. **监控与可观测性**（最大短板：无指标暴露、无错误追踪、无日志聚合）
+2. **部署与运维**（无 CD、无多环境配置、无 Secrets 管理、无反代示例、无 restore 脚本）
+3. **数据层与 Schema 演进**（部分 store 缺列级迁移、event_store.json 无版本、死代码字段）
+4. **测试覆盖与运维工具**（三路合并缺集成测试、运维 CLI/审计脚本全缺）
+5. **前端工程与文档一致性**（前后端类型手工同步、README 缺生产部署示例）
 
 ---
 
-### Phase 2: Market Quality (市场质量层) — ✅ 已实现
+## 🔍 一、监控与可观测性（最大短板）
 
-**实现位置**: `backend/app/services/market_quality_service.py`
-**Commit**: `104fb91`，wide_spread 硬截止修复在 `0b69624`
-**测试**: `backend/tests/test_market_quality_service.py`（44 测试，含 7 个 wide_spread 回归）
-**特性开关**: `MARKET_QUALITY_ENABLED=false`
-
-**已实现的契约**：
-- `build_market_quality(market_quote, source_type, enabled, max_spread_pct, min_liquidity, ...) -> dict | None`
-- 仅 `source.type == "prediction_market"` 适用（Metaculus/open_web/sports_event 跳过）
-- 评分维度：spread / liquidity / volume → 综合分数
-- **wide_spread_flag 硬截止**（v2.0 修复）：spread > max_spread_pct 时强制降级为 WAIT，独立于聚合分数，防止健康流动性掩盖不可交易价差
-- `merge_quality_overlays()` 三路合并（dq + mq + sr）：most-strict-direction-wins
-
-**已知限制**：
-- `stale_price_flag` 永远为 None（所有 adapter 都不暴露 `last_updated`，死代码）
-- 依赖外部 API 返回 spread/liquidity/volume 字段完整性
-
----
-
-### Phase 3: Prediction Calibration (预测结果校准层) — ✅ 已实现
-
-**实现位置**: `backend/app/services/prediction_calibration_service.py`
-**Commit**: `c79b62c`，backfill 脚本在 `0b69624`
-**测试**: `backend/tests/test_prediction_calibration_service.py`（54 单元 + 11 集成）
-**特性开关**: `PREDICTION_CALIBRATION_ENABLED=false`
-**配套脚本**: `backend/scripts/backfill_prediction_snapshots.py`（已支持 `--dry-run`，已修复未解包 event_store entry 的 bug）
-
-**已实现的契约**：
-- 5 个纯函数：`compute_edge_bucket` / `compute_confidence_bucket` / `compute_direction_correct` / `build_prediction_snapshot` / `build_resolution_buckets`
-- Edge bucket 半开区间：`[0,5) / [5,10) / [10,20) / [20,+inf)`，边界值归上 bucket
-- `direction_correct` 独立于 Brier score（区分方向准确度 vs 概率准确度）
-- prediction_store schema 版本 3→4，新增 10 列 snapshot 字段
-- `freeze_prediction`（捕获 snapshot）+ `score_prediction`（计算 bucket）+ `calibration_bucket_summary`（聚合）
-- `ON_CONFLICT(event_id) DO NOTHING` 保证 first commitment 冻结
-
-**已知限制**：
-- pre-Phase-3 frozen predictions 必须用 `backfill_prediction_snapshots.py` 一次性回填（spec §1616-1621 要求）
-- snapshot 缺失时 `direction_correct` 为 None，但仍计入 calibration aggregate
-
----
-
-### Phase 4: Source Reliability (来源可靠性层) — ✅ 已实现
-
-**实现位置**: `backend/app/services/source_reliability_service.py`
-**Commit**: `8764392`
-**测试**: `backend/tests/test_source_reliability_service.py`（46 单元 + 13 集成 + 2 透传）
-**特性开关**: `SOURCE_RELIABILITY_ENABLED=false`
-
-**已实现的契约**：
-- 3 个纯函数：`extract_domain`（URL→域名）/ `classify_source_tier`（5 级分类：official/trusted/established/aggregator/unknown）/ `build_source_reliability`（加权评分 + 4 条降级规则）
-- `merge_quality_overlays` 在 Phase 4 后扩展为 4-tuple 返回 `(direction, reason, market_applied, source_applied)`
-- `downgrade_reason` 使用中文模板，禁词 invariant 一致
-- 仅 `evidence_breakdown` 非空的事件适用
-
-**已知限制**：
-- tier 分类是启发式，未用 Public Suffix List（`bbc.co.uk` 不会被简化为 `bbc`）
-- 不依赖外部 `source_tier_mapping.json` 数据文件，tier 判定逻辑硬编码在 `classify_source_tier` 内
-
----
-
-### Phase 5: LLM Cost & Stability Telemetry — ✅ 已实现
-
-**实现位置**: `backend/app/services/llm_telemetry_service.py`
-**Commit**: `660655b`
-**测试**: `backend/tests/test_llm_telemetry_service.py`（35 单元）+ `backend/tests/test_event_intelligence_service.py`（13 集成）
-**特性开关**: `LLM_TELEMETRY_ENABLED=false`
-
-**已实现的契约**：
-- 混合方案：最小埋点（`_ask_ai` 捕获 `response.usage` → `_llm_usage` 私有键）+ 纯函数 overlay（`build_llm_telemetry` 聚合 `analysis_quality` + `llm_usage` + `sentiment_profile.fallback` + 定价表 → 结构化遥测块）
-- 7 个常见模型定价表（gpt-4o-mini/4o/4-turbo/4/3.5-turbo/deepseek-chat/deepseek-reasoner）+ 保守默认 $0.005/1K tokens
-- 成本估算：有真实 token 时精确计算；降级时用 chars/4 启发式
-
-**关键设计差异**：
-- 纯观测层 — **不参与 `merge_quality_overlays`**，不产生 `suggested_direction` / `downgrade_reason`
-- 适用于所有事件（不受 source.type 限制）
-
-**已知限制**：
-- `llm_call_count` 是保守下界（无法检测 `translate_title` 调用）
-- 前端无聚合仪表板（运维看不到日/周成本曲线）
-
----
-
-### 1.6 三路合并语义（已实现）
-
-**位置**: `market_quality_service.py::merge_quality_overlays`
-**集成点**: `event_intelligence_service.py::analyze_event`
-**报告透传**: `decision_report_service.py`
-
-- 三路并行：dq + mq + sr 各自独立计算（互不依赖）
-- severity 排序：YES/NO=0 < WAIT=1 < AVOID=2
-- 最高 severity 方向胜出（most-strict-direction-wins）
-- 多方并列时 reasons 用 ` | ` 拼接
-- `final_displayed_direction` + `final_downgrade_reason` 写入 record 顶层
-
----
-
-## 🔍 二、监控与可观测性（最大短板）
-
-### 2.1 应用指标暴露 — ❌ 完全空白
+### 1.1 应用指标暴露 — ❌ 完全空白
 
 **问题**：生产无法告警、无法看趋势、无法定位降级原因。
 
@@ -187,7 +64,7 @@ OVERLAY_LATENCY = Histogram(
 
 ---
 
-### 2.2 错误追踪 — ❌ 未实现
+### 1.2 错误追踪 — ❌ 未实现
 
 **问题**：线上偶发错误会丢失上下文。
 
@@ -202,7 +79,7 @@ OVERLAY_LATENCY = Histogram(
 
 ---
 
-### 2.3 日志聚合 — ❌ 未实现
+### 1.3 日志聚合 — ❌ 未实现
 
 **问题**：多实例部署时只能 SSH `tail` 日志。
 
@@ -218,7 +95,7 @@ OVERLAY_LATENCY = Histogram(
 
 ---
 
-### 2.4 质量层性能追踪 — ❌ 未实现
+### 1.4 质量层性能追踪 — ❌ 未实现
 
 **问题**：spec 承诺纯函数 <5ms / 100 证据 <20ms，但无运行时验证。
 
@@ -250,7 +127,7 @@ def track_overlay_perf(phase_name: str):
 
 ---
 
-### 2.5 特性开关 A/B 对比 — ❌ 未实现
+### 1.5 特性开关 A/B 对比 — ❌ 未实现
 
 **问题**：无法量化"启用某 Phase 后，多少 YES 变成 WAIT"。
 
@@ -270,9 +147,9 @@ def compare_phase_impact(phase: str, event_sample: int = 1000):
 
 ---
 
-## 🚀 三、部署与运维
+## 🚀 二、部署与运维
 
-### 3.1 CD 流程 — ❌ 未实现
+### 2.1 CD 流程 — ❌ 未实现
 
 **现状**：`.github/workflows/ci.yml` 三个 job（backend-tests / frontend-tests / secret-scan），但：
 - 无镜像发布到 registry
@@ -285,7 +162,7 @@ def compare_phase_impact(phase: str, event_sample: int = 1000):
 
 ---
 
-### 3.2 多环境配置 — ❌ 未实现
+### 2.2 多环境配置 — ❌ 未实现
 
 **现状**：单个 `backend/.env`，dev/staging/prod 靠人工区分。
 
@@ -296,7 +173,7 @@ def compare_phase_impact(phase: str, event_sample: int = 1000):
 
 ---
 
-### 3.3 Secrets 管理 — ❌ 未实现
+### 2.3 Secrets 管理 — ❌ 未实现
 
 **现状**：所有密钥（`OPENAI_API_KEY` / `API_WRITE_KEY` / `BACKUP_ENCRYPTION_KEY` / 各源 token）通过 `.env` 文件注入，无 vault 集成。
 
@@ -312,7 +189,7 @@ def compare_phase_impact(phase: str, event_sample: int = 1000):
 
 ---
 
-### 3.4 反代 / TLS 配置示例 — ❌ 未提供
+### 2.4 反代 / TLS 配置示例 — ❌ 未提供
 
 **现状**：`deploy/docker-compose.yml` 注释明确要求"放 nginx/caddy 在前面"（端口绑到 `127.0.0.1:8000`，禁止直接暴露公网），但仓库**无任何反代 conf 模板**。
 
@@ -341,7 +218,7 @@ server {
 
 ---
 
-### 3.5 前端构建未纳入容器 — ❌ 未串联
+### 2.5 前端构建未纳入容器 — ❌ 未串联
 
 **现状**：
 - `deploy/Dockerfile` 假设 `frontend/out/` 已在外部构建好
@@ -354,7 +231,7 @@ server {
 
 ---
 
-### 3.6 备份恢复脚本 — ❌ 未实现
+### 2.6 备份恢复脚本 — ❌ 未实现
 
 **现状**：`backend/scripts/backup_stores.py` 只生成加密 zip，**无自动 restore 脚本**。灾难恢复需手动解压 + 手动复制文件。
 
@@ -378,9 +255,9 @@ def restore_from_backup(backup_path: str, target_dir: str, encryption_key: str |
 
 ---
 
-## 📊 四、数据层与 Schema 演进
+## 📊 三、数据层与 Schema 演进
 
-### 4.1 部分 store 缺列级 migration 机制 — ⚠️ 部分实现
+### 3.1 部分 store 缺列级 migration 机制 — ⚠️ 部分实现
 
 **现状**：
 - `prediction_store` ✅ 有完整 `_MIGRATIONS` dict + `_SCHEMA_VERSION=4` + `record_schema_version`
@@ -392,7 +269,7 @@ def restore_from_backup(backup_path: str, target_dir: str, encryption_key: str |
 
 ---
 
-### 4.2 event_store.json 无 schema 版本 — ❌ 未实现
+### 3.2 event_store.json 无 schema 版本 — ❌ 未实现
 
 **现状**：
 - 靠 `EventRecord.model_validate` 做写入前校验
@@ -421,7 +298,7 @@ def normalize_event_record(record: dict) -> dict:
 
 ---
 
-### 4.3 死代码字段 — ⚠️ 需清理
+### 3.3 死代码字段 — ⚠️ 需清理
 
 **现状**：
 - `MarketQuality.stale_price_flag` 永远为 None（所有 adapter 都不暴露 `last_updated`）
@@ -433,7 +310,7 @@ def normalize_event_record(record: dict) -> dict:
 
 ---
 
-### 4.4 历史数据回填（overlay 层） — ❌ 未实现
+### 3.4 历史数据回填（overlay 层） — ❌ 未实现
 
 **注意**：Phase 3 的 prediction snapshot 已有 `backfill_prediction_snapshots.py`。但 Phase 1/2/4/5 的 overlay 字段在 pre-Phase 事件上仍为空。
 
@@ -455,9 +332,9 @@ def backfill_quality_overlays(dry_run: bool = True):
 
 ---
 
-## 🧪 五、测试覆盖与运维工具
+## 🧪 四、测试覆盖与运维工具
 
-### 5.1 三路 overlay 合并的端到端集成测试 — ❌ 缺失
+### 4.1 三路 overlay 合并的端到端集成测试 — ❌ 缺失
 
 **现状**：
 - 各 overlay 服务有独立单元测试（齐全）
@@ -488,7 +365,7 @@ class TestQualityEngineIntegration(unittest.TestCase):
 
 ---
 
-### 5.2 降级场景覆盖 — ❌ 未实现
+### 4.2 降级场景覆盖 — ❌ 未实现
 
 **缺失内容**：
 
@@ -507,7 +384,7 @@ class TestDegradedModeScenarios(unittest.TestCase):
 
 ---
 
-### 5.3 质量诊断 CLI — ❌ 未实现
+### 4.3 质量诊断 CLI — ❌ 未实现
 
 **用途**：单事件的五层分解视图，快速定位质量问题。
 
@@ -560,7 +437,7 @@ def diagnose_quality(event_id: str):
 
 ---
 
-### 5.4 批量质量审计脚本 — ❌ 未实现
+### 4.4 批量质量审计脚本 — ❌ 未实现
 
 **用途**：扫描 predictions 表 + event_store，检查 overlay 字段一致性。
 
@@ -584,9 +461,9 @@ def audit_quality_consistency():
 
 ---
 
-## 🎨 六、前端工程与文档一致性
+## 🎨 五、前端工程与文档一致性
 
-### 6.1 前后端类型手工同步 — ⚠️ 工程债
+### 5.1 前后端类型手工同步 — ⚠️ 工程债
 
 **现状**：
 - `frontend/src/lib/types.ts` 顶部注释明确："手工镜像后端 Pydantic，刻意放宽（多用 `?:`）"
@@ -602,7 +479,7 @@ def audit_quality_consistency():
 
 ---
 
-### 6.2 空状态未集中抽象 — ⚠️ 工程债
+### 5.2 空状态未集中抽象 — ⚠️ 工程债
 
 **现状**：各组件自行处理空状态（`event-table` / `movers-board` 等），未统一抽象。不一致的 UX。
 
@@ -610,20 +487,14 @@ def audit_quality_consistency():
 
 ---
 
-### 6.3 README 缺生产部署示例 — ❌ 未提供
+### 5.3 README 缺生产部署示例 — ❌ 未提供
 
 **现状**：顶层 `README.md` 含 Windows 一键 `start.bat` + 手动启动 + 配置说明，但**无生产部署**：
 - 无 nginx/caddy 反代示例
 - 无 TLS 配置
 - 无域名/端口规划
 
-**缺失内容**：增加"生产部署"章节，引用 `deploy/nginx.conf.example`（§3.4）+ docker-compose 反代示例。
-
----
-
-### 6.4 文档自身过时 — ✅ 本次修正
-
-**v1.0 版本错误**：声明"Phase 1-4 未实现"，但代码与 `.env.example` 证明均已实现。本次 v2.0 已修正。
+**缺失内容**：增加"生产部署"章节，引用 `deploy/nginx.conf.example`（§2.4）+ docker-compose 反代示例。
 
 ---
 
@@ -633,38 +504,38 @@ def audit_quality_consistency():
 
 | # | 项目 | 章节 | 理由 |
 |---|---|---|---|
-| 1 | Prometheus `/metrics` 端点 | §2.1 | 生产无法告警 |
-| 2 | Sentry 错误追踪 | §2.2 | 线上偶发错误丢失上下文 |
-| 3 | 备份 restore 脚本 | §3.6 | 灾难恢复手动操作易错 |
-| 4 | 反代 / TLS 配置示例 | §3.4 | docker-compose 已要求但未提供 |
-| 5 | 三路 overlay 集成测试 | §5.1 | 合并语义无端到端验证 |
+| 1 | Prometheus `/metrics` 端点 | §1.1 | 生产无法告警 |
+| 2 | Sentry 错误追踪 | §1.2 | 线上偶发错误丢失上下文 |
+| 3 | 备份 restore 脚本 | §2.6 | 灾难恢复手动操作易错 |
+| 4 | 反代 / TLS 配置示例 | §2.4 | docker-compose 已要求但未提供 |
+| 5 | 三路 overlay 集成测试 | §4.1 | 合并语义无端到端验证 |
 
 ### 🟡 P1 — 上线后一周内
 
 | # | 项目 | 章节 | 理由 |
 |---|---|---|---|
-| 6 | 日志结构化（JSON）+ log shipping | §2.3 | 多实例部署只能 SSH tail |
-| 7 | LLM 成本仪表板（前端 + API） | §2.1 | LLM 成本失控无监控 |
-| 8 | 前端构建纳入容器 | §3.5 | 部署者手动两步构建易错 |
-| 9 | 多环境配置分离 | §3.2 | dev/staging/prod 共享配置易错 |
-| 10 | 历史 overlay 回填脚本 | §4.4 | 旧事件缺失新字段 |
+| 6 | 日志结构化（JSON）+ log shipping | §1.3 | 多实例部署只能 SSH tail |
+| 7 | LLM 成本仪表板（前端 + API） | §1.1 | LLM 成本失控无监控 |
+| 8 | 前端构建纳入容器 | §2.5 | 部署者手动两步构建易错 |
+| 9 | 多环境配置分离 | §2.2 | dev/staging/prod 共享配置易错 |
+| 10 | 历史 overlay 回填脚本 | §3.4 | 旧事件缺失新字段 |
 
 ### 🟢 P2 — 持续改进
 
 | # | 项目 | 章节 | 理由 |
 |---|---|---|---|
-| 11 | Secrets 管理（SOPS/Vault） | §3.3 | 高敏密钥保护级别不足 |
-| 12 | CD 流程（镜像发布 + 部署） | §3.1 | 部署自动化 |
-| 13 | 质量诊断 CLI | §5.3 | 调试工具 |
-| 14 | 批量质量审计脚本 | §5.4 | 数据一致性检查 |
-| 15 | 性能追踪装饰器 | §2.4 | 纯函数 <5ms 验证 |
-| 16 | 特性开关 A/B 对比 | §2.5 | 量化 Phase 效果 |
-| 17 | 各 store 列级 migration | §4.1 | schema 演进保护 |
-| 18 | event_store schema_version | §4.2 | 旧记录静默通过风险 |
-| 19 | 前后端类型自动同步 | §6.1 | 类型漂移 |
-| 20 | 死代码清理 | §4.3 | stale_price_flag / llm_call_count |
-| 21 | 空状态共享组件 | §6.2 | UX 一致性 |
-| 22 | README 生产部署示例 | §6.3 | 文档完整性 |
+| 11 | Secrets 管理（SOPS/Vault） | §2.3 | 高敏密钥保护级别不足 |
+| 12 | CD 流程（镜像发布 + 部署） | §2.1 | 部署自动化 |
+| 13 | 质量诊断 CLI | §4.3 | 调试工具 |
+| 14 | 批量质量审计脚本 | §4.4 | 数据一致性检查 |
+| 15 | 性能追踪装饰器 | §1.4 | 纯函数 <5ms 验证 |
+| 16 | 特性开关 A/B 对比 | §1.5 | 量化 Phase 效果 |
+| 17 | 各 store 列级 migration | §3.1 | schema 演进保护 |
+| 18 | event_store schema_version | §3.2 | 旧记录静默通过风险 |
+| 19 | 前后端类型自动同步 | §5.1 | 类型漂移 |
+| 20 | 死代码清理 | §3.3 | stale_price_flag / llm_call_count |
+| 21 | 空状态共享组件 | §5.2 | UX 一致性 |
+| 22 | README 生产部署示例 | §5.3 | 文档完整性 |
 
 ---
 
@@ -678,8 +549,6 @@ def audit_quality_consistency():
 | 测试与运维工具（集成测试 + 诊断 CLI + 审计脚本） | 3 项 | 3-4 人日 |
 | 前端与文档（类型同步 + 空状态 + README） | 3 项 | 2-3 人日 |
 | **总计** | 21 项 | **19-26 人日** |
-
-> **对比 v1.0 估算**：v1.0 估 16-19 人日，但包含了"Phase 1-4 实现"（实际已完成）。v2.0 移除已实现部分，新增可观测性、部署运维、前端工程，工作量实际更高。
 
 ---
 
@@ -746,7 +615,8 @@ def audit_quality_consistency():
 | 版本 | 日期 | 变更内容 |
 |---|---|---|
 | v1.0 | 2026-06-30 | 初始版本 — Phase 5 完成后的系统缺失分析（含错误：误报 Phase 1-4 未实现） |
-| v2.0 | 2026-06-30 | **重大修正**：核实代码后确认 Phase 1-4 均已实现（commits `a710961`/`104fb91`/`c79b62c`/`8764392`）。移除"Phase 1-4 实现"章节，改为"实现状态记录"。新增可观测性、部署运维、数据层、前端工程等真实缺失项。优先级从 10 项扩展到 22 项。 |
+| v2.0 | 2026-06-30 | 核实代码后确认 Phase 1-4 均已实现；新增可观测性、部署运维、数据层、前端工程等真实缺失项。优先级从 10 项扩展到 22 项。 |
+| v3.0 | 2026-06-30 | 精简版本：移除已实现的 Phase 1-5 状态章节，只保留未实现缺失项。文档结构：监控可观测性 / 部署运维 / 数据层 / 测试与工具 / 前端与文档 五大类。 |
 
 ---
 

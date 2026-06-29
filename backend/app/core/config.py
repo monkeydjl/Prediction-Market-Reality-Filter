@@ -514,9 +514,9 @@ class Settings:
         LOOP_DB_FILE + ".scheduler.lock",
     )
     LLM_CONCURRENCY: int = int(os.getenv("LLM_CONCURRENCY", "4"))
-    # Hard timeout for a single discover_events scan (seconds). Prevents the
-    # scheduler from hanging indefinitely when the LLM provider is slow or
-    # unresponsive under load. Default 10 minutes — generous enough for a full
+    # Hard timeout for a single discover_events scan (seconds). On timeout,
+    # already-completed candidates are saved as partial results; still-running
+    # tasks are cancelled. Default 10 minutes — generous enough for a full
     # limit=100 scan at 4 concurrency, strict enough to unblock the scheduler.
     EVENT_DISCOVER_TIMEOUT_SECONDS: int = int(
         os.getenv("EVENT_DISCOVER_TIMEOUT_SECONDS", "600")

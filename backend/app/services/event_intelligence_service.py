@@ -217,6 +217,10 @@ def build_event_record(
         "actionable_recommendation": _build_actionable_recommendation(
             analysis, change=change
         ),
+        # Audit layer populated by analyze_event when EVIDENCE_BREAKDOWN_ENABLED
+        # is on. Default empty so build_event_record callers always get a
+        # complete EventRecord-shaped dict.
+        "evidence_breakdown": [],
     }
 
 
@@ -684,42 +688,40 @@ async def discover_events(
                 await status_event(q, success=False, error=str(exc)[:200])
                 return None
 
-    try:
-        raw = await asyncio.wait_for(
-            asyncio.gather(
-                *(process_event(candidate) for candidate in candidate_events),
-                return_exceptions=True,
-            ),
-            timeout=settings.EVENT_DISCOVER_TIMEOUT_SECONDS,
-        )
-    except asyncio.TimeoutError:
-        logger.error(
-            "[discover_events] Hard timeout after %ds — partial results lost",
+    # Use asyncio.wait (not wait_for+gather) so on timeout we keep already-
+    # completed results instead of losing the whole batch. Still-running tasks
+    # are cancelled; done tasks are extracted and persisted as partial results.
+    tasks = [asyncio.ensure_future(process_event(c)) for c in candidate_events]
+    done, pending = await asyncio.wait(
+        tasks, timeout=settings.EVENT_DISCOVER_TIMEOUT_SECONDS
+    )
+    timed_out = bool(pending)
+    if timed_out:
+        for t in pending:
+            t.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        logger.warning(
+            "[discover_events] Hard timeout after %ds — %d/%d candidates "
+            "completed, %d discarded",
             settings.EVENT_DISCOVER_TIMEOUT_SECONDS,
+            len(done), len(tasks), len(pending),
         )
-        await status_fail(
-            f"分析超时 ({settings.EVENT_DISCOVER_TIMEOUT_SECONDS}s)，"
-            f"请降低 EVENT_DISCOVER_LIMIT 或增加 EVENT_DISCOVER_TIMEOUT_SECONDS"
-        )
-        return {
-            "platform": "Event Intelligence Platform",
-            "source": "Multi-source event discovery",
-            "count": 0,
-            "events": [],
-            "status": {
-                "candidates": len(candidate_events),
-                "analyzed": 0,
-                "errors": len(candidate_events),
-                "results": 0,
-                "timeout": True,
-            },
-        }
-    # Exceptions from individual tasks (return_exceptions=True) are treated as
-    # failures — filter them out alongside None results.
-    results = [
-        item for item in raw
-        if item is not None and not isinstance(item, BaseException)
-    ]
+    # Extract results from done tasks in original candidate order (asyncio.wait
+    # returns a set, so we iterate the task list to stay deterministic).
+    # process_event swallows its own exceptions and returns None; .result()
+    # only raises on an unexpected bug, treated as a failure so the scan stays
+    # resilient. Pending (timed-out) tasks contribute None.
+    raw = []
+    for t in tasks:
+        if t in done:
+            try:
+                raw.append(t.result())
+            except Exception as exc:
+                logger.warning("process_event task crashed: %s", exc)
+                raw.append(None)
+        else:
+            raw.append(None)
+    results = [item for item in raw if item is not None]
     events = [record for record, _ in results]
     events.sort(key=lambda item: item.get("value_score", 0), reverse=True)
     # Persist / audit only freshly-analyzed records. Cached records already
@@ -728,10 +730,14 @@ async def discover_events(
     _persist_events(fresh)
     await status_saved(len(events[:limit]))
 
-    error_count = sum(
-        1 for item in raw if item is None or isinstance(item, BaseException)
-    )
-    await status_done(len(events[:limit]), error_count)
+    error_count = len(tasks) - len(results)
+    if timed_out and not events:
+        await status_fail(
+            f"分析超时 ({settings.EVENT_DISCOVER_TIMEOUT_SECONDS}s)，0 个结果保存。"
+            f"请降低 EVENT_DISCOVER_LIMIT 或增加 EVENT_DISCOVER_TIMEOUT_SECONDS"
+        )
+    else:
+        await status_done(len(events[:limit]), error_count)
     return {
         "platform": "Event Intelligence Platform",
         "source": "Multi-source event discovery",
@@ -739,9 +745,10 @@ async def discover_events(
         "events": events[:limit],
         "status": {
             "candidates": len(candidate_events),
-            "analyzed": len(candidate_events),
+            "analyzed": len(done),
             "errors": error_count,
             "results": len(events[:limit]),
+            **({"timeout": True} if timed_out else {}),
         },
     }
 

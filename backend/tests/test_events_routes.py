@@ -1906,6 +1906,45 @@ class DiscoverServiceTests(unittest.TestCase):
             ["qB", "qC"],
         )
 
+    def test_timeout_saves_partial_results_and_cancels_pending(self):
+        """On timeout, already-completed candidates are saved as partial results;
+        still-running tasks are cancelled. status.timeout=True marks the run.
+        """
+        persisted = []
+
+        def capture_persist(records):
+            persisted.extend(records)
+
+        async def fake_filtered(question, shared_articles=None):
+            if question == "qSlow":
+                await asyncio.sleep(5)
+            return {"context": "ctx", "summary": {"selected_count": 1}}
+
+        async def fake_analyze(event_question, **kwargs):
+            return {"event_id": event_question, "value_score": 50}
+
+        candidates = [
+            {"question": "qFast", "baseline_probability": 50, "source": {"type": "open_web"}},
+            {"question": "qSlow", "baseline_probability": 50, "source": {"type": "open_web"}},
+        ]
+
+        async def run():
+            with patch.object(eis, "_collect_candidate_events",
+                              new=AsyncMock(return_value=candidates)), \
+                    patch("app.services.event_collection_service.collect_shared_articles",
+                          new=AsyncMock(return_value=[])), \
+                    patch.object(eis, "_build_filtered_news", new=AsyncMock(side_effect=fake_filtered)), \
+                    patch.object(eis, "analyze_event", new=AsyncMock(side_effect=fake_analyze)), \
+                    patch.object(eis, "_persist_events", new=capture_persist), \
+                    patch.object(eis.settings, "EVENT_DISCOVER_TIMEOUT_SECONDS", 0.5):
+                return await eis.discover_events(limit=10, use_cache=False)
+
+        result = asyncio.run(run())
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["events"][0]["event_id"], "qFast")
+        self.assertTrue(result["status"].get("timeout"))
+        self.assertEqual([r["event_id"] for r in persisted], ["qFast"])
+
 
 class MoversRouteTests(unittest.TestCase):
     """GET /events/movers enriches each mover with the stored Chinese title."""
@@ -2028,7 +2067,8 @@ class CollectCandidateEventsTests(unittest.TestCase):
                           new=AsyncMock(return_value=[])), \
                     patch("app.services.event_extraction_service.extract_candidate_events",
                           new=AsyncMock(return_value=self._cands(
-                              "Open Web", 4, offset=10, source_type="open_web"))):
+                              "Open Web", 4, offset=10, source_type="open_web"))), \
+                    patch.object(eis.settings, "OPEN_WEB_ENABLED", True):
                 return await eis._collect_candidate_events(10, shared_articles=[{"title": "x"}])
 
         out = asyncio.run(run())
@@ -2051,7 +2091,9 @@ class CollectCandidateEventsTests(unittest.TestCase):
                               "2026 FIFA World Cup", 3, offset=10,
                               source_type="sports_event"))), \
                     patch("app.services.event_extraction_service.extract_candidate_events",
-                          new=AsyncMock(return_value=[])):
+                          new=AsyncMock(return_value=[])), \
+                    patch.object(eis.settings, "WORLD_CUP_SOURCE_ENABLED", True), \
+                    patch.object(eis, "_cross_match_world_cup", side_effect=lambda c: c):
                 return await eis._collect_candidate_events(10)
 
         out = asyncio.run(run())

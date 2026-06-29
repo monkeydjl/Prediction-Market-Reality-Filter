@@ -21,6 +21,7 @@ adapter modules, only base settings and the OpenAI client.
 """
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -28,6 +29,8 @@ from openai import AsyncOpenAI
 
 from app.core.config import settings
 from app.utils.market_utils import safe_float
+
+logger = logging.getLogger(__name__)
 
 
 HARD_RULES = """

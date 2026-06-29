@@ -2309,3 +2309,227 @@ class Phase1To4EndToEndIntegrationTests(unittest.TestCase):
         self.assertNotIn("error", record["decision_quality"])
         self.assertNotIn("error", record["market_quality"])
         self.assertNotIn("error", record["source_reliability"])
+
+
+class LLMTelemetryIntegrationTests(unittest.TestCase):
+    """Phase 5: locks the analyze_event -> llm_telemetry integration.
+
+    Verifies:
+    - llm_telemetry attached when LLM_TELEMETRY_ENABLED=true (ALL events)
+    - no llm_telemetry key when feature off (byte-identical to pre-Phase-5)
+    - degraded_mode=True when LLM mock raises (analyze_market fallback path)
+    - degraded_mode=False when LLM mock returns valid response
+    - total_tokens populated from _ask_ai instrumentation
+    - sentiment_degraded reflects sentiment_profile.fallback
+    - no mutation of analysis_quality or sentiment_profile
+    - build failure falls back to error block
+    - llm_telemetry does NOT participate in merge_quality_overlays
+    """
+
+    def _llm_analysis_with_usage(self, *, quality="llm"):
+        """A realistic analyze_market return value with llm_usage attached."""
+        d = {
+            "market_question": "Will X happen?",
+            "market_probability": 50,
+            "ai_probability": 70,
+            "signal": "ACT",
+            "signal_direction": "LONG",
+            "signal_strength": "HIGH",
+            "risk_level": "medium",
+            "expected_edge": 0.20,
+            "position_size": 0.10,
+            "evidence_strength": 0.8,
+            "confidence_score": 0.7,
+            "news_quality_score": 0.8,
+            "source_count": 3,
+            "analysis_quality": quality,
+            "llm_usage": {"prompt_tokens": 1200, "completion_tokens": 350,
+                           "total_tokens": 1550},
+        }
+        return d
+
+    def _llm_analysis_fallback(self):
+        """analyze_market return value when LLM fails (deterministic fallback)."""
+        d = self._llm_analysis_with_usage(quality="deterministic_fallback")
+        d["llm_usage"] = None  # fallback path doesn't attach usage
+        return d
+
+    def _run_analyze(
+        self,
+        *,
+        telemetry_enabled: bool,
+        llm_return: dict | None = None,
+        llm_side_effect=None,
+        sentiment=None,
+    ):
+        analyze = AsyncMock(
+            return_value=llm_return or self._llm_analysis_with_usage(),
+            side_effect=llm_side_effect,
+        )
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            stack.enter_context(patch("app.services.ai_analysis_service.analyze_market", new=analyze))
+            stack.enter_context(patch("app.services.cross_validation_service.cross_validate",
+                                      new=AsyncMock(return_value=None)))
+            stack.enter_context(patch.object(eis.settings, "LLM_TELEMETRY_ENABLED", telemetry_enabled))
+            stack.enter_context(patch.object(eis.settings, "OPENAI_MODEL", "gpt-4o-mini"))
+            return _run(eis.analyze_event(
+                "Will X happen?",
+                baseline_probability=50,
+                news_context="direction: support",
+                source={"type": "prediction_market"},
+                sentiment_profile=sentiment,
+                filtered_articles=[],
+            ))
+
+    # --- Attachment gating ---
+
+    def test_telemetry_attached_when_enabled(self):
+        record = self._run_analyze(telemetry_enabled=True)
+        self.assertIn("llm_telemetry", record)
+        self.assertIsNotNone(record["llm_telemetry"])
+        self.assertNotIn("error", record["llm_telemetry"])
+
+    def test_telemetry_absent_when_disabled(self):
+        """When LLM_TELEMETRY_ENABLED=false, record has NO llm_telemetry key."""
+        record = self._run_analyze(telemetry_enabled=False)
+        self.assertNotIn("llm_telemetry", record)
+
+    # --- Degraded mode ---
+
+    def test_not_degraded_when_llm_succeeds(self):
+        record = self._run_analyze(
+            telemetry_enabled=True,
+            llm_return=self._llm_analysis_with_usage(quality="llm"),
+        )
+        tel = record["llm_telemetry"]
+        self.assertFalse(tel["degraded_mode"])
+        self.assertIsNone(tel["degraded_reason"])
+        self.assertEqual(tel["analysis_quality"], "llm")
+        self.assertEqual(tel["llm_call_count"], 1)
+
+    def test_degraded_when_llm_fails(self):
+        """When _ask_ai raises, analyze_market falls back to deterministic
+        (analysis_quality=deterministic_fallback). Telemetry should detect this."""
+        # analyze_market's internal try/except catches the exception and returns
+        # a fallback dict. We simulate this by returning a fallback dict directly.
+        record = self._run_analyze(
+            telemetry_enabled=True,
+            llm_return=self._llm_analysis_fallback(),
+        )
+        tel = record["llm_telemetry"]
+        self.assertTrue(tel["degraded_mode"])
+        self.assertEqual(tel["degraded_reason"], "llm_call_failed")
+        self.assertEqual(tel["analysis_quality"], "deterministic_fallback")
+        # No real tokens when degraded
+        self.assertIsNone(tel["total_tokens"])
+        self.assertEqual(tel["llm_call_count"], 0)
+
+    # --- Token usage from _ask_ai instrumentation ---
+
+    def test_tokens_populated_from_llm_usage(self):
+        record = self._run_analyze(
+            telemetry_enabled=True,
+            llm_return=self._llm_analysis_with_usage(),
+        )
+        tel = record["llm_telemetry"]
+        self.assertEqual(tel["prompt_tokens"], 1200)
+        self.assertEqual(tel["completion_tokens"], 350)
+        self.assertEqual(tel["total_tokens"], 1550)
+        # estimated_token_cost computed from real tokens, rounded to 6 places
+        # gpt-4o-mini: 0.00015/1K -> 1550 * 0.00015 / 1000 = 0.0002325 -> 0.000232
+        self.assertAlmostEqual(tel["estimated_token_cost"], 0.0002325, places=5)
+
+    def test_tokens_none_when_degraded(self):
+        record = self._run_analyze(
+            telemetry_enabled=True,
+            llm_return=self._llm_analysis_fallback(),
+        )
+        tel = record["llm_telemetry"]
+        self.assertIsNone(tel["prompt_tokens"])
+        self.assertIsNone(tel["total_tokens"])
+
+    # --- Sentiment degradation ---
+
+    def test_sentiment_degraded_reflects_fallback_flag(self):
+        record = self._run_analyze(
+            telemetry_enabled=True,
+            sentiment={"fallback": True, "summary": "unavailable"},
+        )
+        self.assertTrue(record["llm_telemetry"]["sentiment_degraded"])
+
+    def test_sentiment_not_degraded_when_no_fallback(self):
+        record = self._run_analyze(
+            telemetry_enabled=True,
+            sentiment={"fallback": False, "summary": "real analysis"},
+        )
+        self.assertFalse(record["llm_telemetry"]["sentiment_degraded"])
+
+    # --- No-writeback invariant ---
+
+    def test_analysis_quality_not_mutated(self):
+        """llm_telemetry reads analysis_quality but must not mutate it."""
+        record = self._run_analyze(telemetry_enabled=True)
+        # The analysis dict is stored in legacy_analysis; check it's unchanged
+        self.assertEqual(record["legacy_analysis"]["analysis_quality"], "llm")
+
+    # --- Model field ---
+
+    def test_model_field_populated(self):
+        record = self._run_analyze(telemetry_enabled=True)
+        self.assertEqual(record["llm_telemetry"]["model"], "gpt-4o-mini")
+
+    # --- Best-effort fallback ---
+
+    def test_build_failure_falls_back_to_error_block(self):
+        """When build_llm_telemetry raises, analyze_event attaches an error
+        block instead of crashing."""
+        analyze = AsyncMock(return_value=self._llm_analysis_with_usage())
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            stack.enter_context(patch("app.services.ai_analysis_service.analyze_market", new=analyze))
+            stack.enter_context(patch("app.services.cross_validation_service.cross_validate",
+                                      new=AsyncMock(return_value=None)))
+            stack.enter_context(patch.object(eis.settings, "LLM_TELEMETRY_ENABLED", True))
+            stack.enter_context(patch.object(eis.settings, "OPENAI_MODEL", "gpt-4o-mini"))
+            stack.enter_context(patch("app.services.llm_telemetry_service.build_llm_telemetry",
+                                      side_effect=RuntimeError("boom")))
+            record = _run(eis.analyze_event(
+                "Will X happen?",
+                baseline_probability=50,
+                news_context="direction: support",
+                source={"type": "prediction_market"},
+            ))
+        self.assertIn("llm_telemetry", record)
+        self.assertEqual(record["llm_telemetry"]["error"], "build_failed")
+        # Still populates degraded_mode from analysis dict
+        self.assertFalse(record["llm_telemetry"]["degraded_mode"])
+
+    # --- Does NOT participate in merge_quality_overlays ---
+
+    def test_telemetry_does_not_affect_final_displayed_direction(self):
+        """llm_telemetry is observability-only — it must NOT change
+        final_displayed_direction even when degraded_mode=True."""
+        record = self._run_analyze(
+            telemetry_enabled=True,
+            llm_return=self._llm_analysis_fallback(),
+        )
+        # Telemetry says degraded_mode=True, but final_displayed_direction
+        # is controlled only by decision_quality/market_quality/source_reliability
+        # (none of which are enabled here, so final_* fields should be absent).
+        self.assertNotIn("final_displayed_direction", record)
+        self.assertTrue(record["llm_telemetry"]["degraded_mode"])
+
+    # --- Forbidden word invariant ---
+
+    def test_degraded_reason_no_forbidden_words(self):
+        """degraded_reason must not contain banned trading vocabulary."""
+        record = self._run_analyze(
+            telemetry_enabled=True,
+            llm_return=self._llm_analysis_fallback(),
+        )
+        reason = record["llm_telemetry"]["degraded_reason"]
+        self.assertIsNotNone(reason)
+        forbidden = ("long", "short", "buy", "sell", "position", "kelly", "order")
+        for word in forbidden:
+            self.assertNotIn(word, reason.lower())

@@ -23,6 +23,7 @@ module directly rather than relying on these re-exports.
 import logging
 from typing import Any
 
+from app.core.config import settings
 from app.services.base_rate_service import anchor_probability, classify_market, get_base_rate_context
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,9 @@ async def analyze_market(
             raw_analysis["title_zh"] = title_zh
         used_fallback = True
 
+    # Phase 5: extract _llm_usage before _normalize_ai_analysis (which copies
+    # only known keys and would drop it). None when fallback was used.
+    llm_usage = raw_analysis.pop("_llm_usage", None) if isinstance(raw_analysis, dict) else None
     normalized = _normalize_ai_analysis(raw_analysis, market_probability)
     # ── Auto-translate titles ────────────────────────────────────────────
     # AUTO_TRANSLATE_TITLES=true (default): every event gets a Chinese title.
@@ -229,6 +233,10 @@ async def analyze_market(
         "entities": normalized["entities"],
         "reasoning_steps": normalized["reasoning_steps"],
         "analysis_quality": "deterministic_fallback" if used_fallback else "llm",
+        # Phase 5: real token usage from _ask_ai's response.usage. None when
+        # the LLM call failed (deterministic fallback path). Consumed by
+        # llm_telemetry_service.build_llm_telemetry.
+        "llm_usage": llm_usage,
     }
 
 

@@ -140,6 +140,11 @@ def build_decision_report(
         # attached. Downstream consumers read overall_score /
         # downgrade_reason / source_breakdown.
         "source_reliability": record.get("source_reliability"),
+        # Phase 5: pass through llm_telemetry overlay. None when
+        # LLM_TELEMETRY_ENABLED=false. Downstream consumers read
+        # degraded_mode / analysis_quality / total_tokens /
+        # estimated_token_cost / sentiment_degraded.
+        "llm_telemetry": record.get("llm_telemetry"),
         "final_displayed_direction": record.get("final_displayed_direction"),
         "final_downgrade_reason": record.get("final_downgrade_reason"),
     }

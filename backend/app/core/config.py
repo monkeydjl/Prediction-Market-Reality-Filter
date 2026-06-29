@@ -606,6 +606,15 @@ class Settings:
     SOURCE_RELIABILITY_MIN_SOURCES: int = int(
         os.getenv("SOURCE_RELIABILITY_MIN_SOURCES", "2")
     )
+    # Phase 5 — LLM Cost and Stability Telemetry (default OFF). When enabled,
+    # analyze_event attaches an llm_telemetry overlay block for ALL events
+    # (every event makes at least one LLM call or falls back to deterministic).
+    # Records degraded_mode (LLM fallback), analysis_quality, real token
+    # counts (captured by _ask_ai instrumentation), estimated cost, and
+    # sentiment degradation flag. Pure observability layer — does NOT mutate
+    # ai_probability, actionable_recommendation, or any decision overlay.
+    # See docs/superpowers/specs/2026-06-30-decision-quality-engine-design.md
+    LLM_TELEMETRY_ENABLED: bool = _env_bool("LLM_TELEMETRY_ENABLED", "false")
     SCHEDULER_MISFIRE_GRACE_SECONDS: int = int(
         os.getenv("SCHEDULER_MISFIRE_GRACE_SECONDS", "86400")
     )

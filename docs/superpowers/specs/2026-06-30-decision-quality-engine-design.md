@@ -989,22 +989,277 @@ an optional `historical_reliability` dict parameter to `build_source_reliability
 
 ## Phase 5 Detailed Design
 
-Track LLM stability without changing user-facing behavior.
+Track LLM stability and cost without changing user-facing behavior. This is a
+**hybrid** implementation: a minimal instrumentation of `_ask_ai` to capture
+real `response.usage` token counts, plus a pure-function overlay that
+aggregates available signals into a structured `llm_telemetry` block.
 
-Suggested fields:
+### Scope Correction
+
+The original Phase 5 outline listed `sentiment_cache_hit` and
+`evidence_breakdown_cache_hit`. Research confirmed these caches **do not
+exist** — `analyze_sentiment` and `aggregate_evidence_breakdown` have no
+caching layer (the only cache is record-level at `event_cache.py`, which
+sits above `analyze_event`). These fields are therefore **dropped** from
+Phase 5. Adding a sentiment cache is a separate concern (would change
+runtime behavior) and is out of scope for the telemetry layer.
+
+### New Field: `llm_telemetry`
+
+Add an optional top-level field to `EventRecord`:
 
 ```python
 {
     "degraded_mode": false,
-    "degraded_reason": None,
-    "llm_schema_fallbacks": 0,
-    "llm_timeout_count": 0,
-    "sentiment_cache_hit": true,
-    "estimated_token_cost": 0.003
+    "degraded_reason": null,
+    "analysis_quality": "llm",
+    "sentiment_degraded": false,
+    "llm_call_count": 1,
+    "prompt_tokens": 1200,
+    "completion_tokens": 350,
+    "total_tokens": 1550,
+    "estimated_token_cost": 0.0031,
+    "model": "gpt-4o-mini",
+    "error": null
 }
 ```
 
-This can live in internal audit logs first, then become API output if useful.
+#### Field Semantics
+
+`degraded_mode` (bool): True when the event's analysis used a deterministic
+fallback instead of a real LLM call. Derived from `analysis_quality ==
+"deterministic_fallback"` (already set by `analyze_market`).
+
+`degraded_reason` (str | None): Structured reason when degraded_mode is True.
+Values: `"llm_call_failed"` (exception during `_ask_ai`), `"api_key_missing"`
+(OPENAI_API_KEY not configured). None when not degraded. Derived from the
+fallback path that was taken — `analyze_market`'s `used_fallback` flag covers
+both cases (SDK raises on missing key, caught by the same try/except).
+
+`analysis_quality` (str): Mirrors the `analysis_quality` field already present
+in the analysis dict ("llm" or "deterministic_fallback"). Included for
+self-contained telemetry without requiring callers to read `legacy_analysis`.
+
+`sentiment_degraded` (bool): True when `sentiment_profile.fallback` is True
+(the sentiment LLM call failed or returned malformed data). False when
+sentiment is real or when sentiment was not requested (NEWS_SENTIMENT_ENABLED
+off). None when sentiment_profile is absent entirely (unknown).
+
+`llm_call_count` (int): Number of LLM calls made for this event. Always >= 1
+when degraded_mode is False (the main `_ask_ai` call). +1 when
+`translate_title` was called (fallback or AUTO_TRANSLATE_TITLES). Phase 5
+does not instrument `translate_title` or `analyze_sentiment` call counts —
+`llm_call_count` is a lower bound (1 when not degraded, 0 when degraded without
+title translation, estimated as 1 when degraded with title_zh present).
+
+`prompt_tokens` / `completion_tokens` / `total_tokens` (int | None): Real
+token counts captured from `response.usage` at the `_ask_ai` call site. None
+when the LLM call failed (degraded_mode=True) or when usage data is unavailable
+(older SDK versions, mock responses in tests).
+
+`estimated_token_cost` (float): Estimated cost in USD. When `total_tokens` is
+available, computed as `total_tokens * price_per_1k_tokens / 1000`. When
+total_tokens is None (degraded), estimated from `len(news_context) / 4` as a
+rough prompt token proxy (chars/4 heuristic). Price is read from
+`settings.OPENAI_MODEL` via a small pricing table covering common models;
+unknown models default to a conservative $0.005/1K tokens.
+
+`model` (str): The model name used (`settings.OPENAI_MODEL`). Included for
+audit — cost estimation depends on the model, and the model may change between
+environments without code changes.
+
+`error` (str | None): Non-None when the telemetry build itself failed. Best-
+effort fallback: `degraded_mode` and `analysis_quality` are still populated
+from the analysis dict; token fields are None.
+
+### Minimal Instrumentation: `_ask_ai`
+
+The ONLY LLM call site instrumented is `_ask_ai` in `probability_engine_service.py`
+(the main market analysis call). This is the highest-value call (longest prompt,
+most expensive) and the one whose failure triggers the deterministic fallback.
+
+**Change**: `_ask_ai` attaches `response.usage` to the returned dict under a
+private `_llm_usage` key:
+
+```python
+async def _ask_ai(...) -> dict[str, Any]:
+    client = get_client()
+    response = await client.chat.completions.create(...)
+    content = response.choices[0].message.content or "{}"
+    parsed = json.loads(content)
+    if not isinstance(parsed, dict):
+        raise ValueError("AI returned non-object JSON")
+    # Phase 5: capture token usage for telemetry. Attached as a private key
+    # so _normalize_ai_analysis (which copies only known keys) preserves it
+    # only if explicitly extracted by the caller (analyze_market).
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        parsed["_llm_usage"] = {
+            "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+            "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+            "total_tokens": getattr(usage, "total_tokens", 0) or 0,
+        }
+    return parsed
+```
+
+**Change**: `analyze_market` extracts `_llm_usage` before normalization and
+adds it to the final returned dict:
+
+```python
+# In analyze_market, after the try/except that calls _ask_ai:
+llm_usage = raw_analysis.pop("_llm_usage", None)  # extract before normalize
+normalized = _normalize_ai_analysis(raw_analysis, market_probability)
+# ... existing logic ...
+return {
+    ...,
+    "analysis_quality": "deterministic_fallback" if used_fallback else "llm",
+    "llm_usage": llm_usage,  # None when fallback was used
+}
+```
+
+`translate_title` and `analyze_sentiment` are NOT instrumented — they are
+secondary calls whose token usage is small, and instrumenting them would
+touch 3 more files for marginal benefit. The `llm_call_count` field is a
+lower bound that accounts for this.
+
+### Pricing Table
+
+A small dict in `llm_telemetry_service.py` maps model names to USD per 1K
+tokens. Unknown models default to a conservative estimate. This is NOT a
+billing system — it's a cost *estimate* for observability.
+
+```python
+_MODEL_PRICING_PER_1K = {
+    "gpt-4o-mini": 0.00015,
+    "gpt-4o": 0.005,
+    "gpt-4-turbo": 0.01,
+    "gpt-4": 0.03,
+    "gpt-3.5-turbo": 0.0005,
+    "deepseek-chat": 0.00014,
+    "deepseek-reasoner": 0.00055,
+}
+_DEFAULT_PRICE_PER_1K = 0.005  # conservative fallback
+```
+
+### Pure Function Contract
+
+```python
+def build_llm_telemetry(
+    *,
+    analysis: dict[str, Any] | None,
+    sentiment_profile: dict[str, Any] | None,
+    news_context: str,
+    model: str,
+    enabled: bool,
+) -> dict[str, Any] | None:
+    """Build the llm_telemetry overlay block.
+
+    Pure function: reads inputs, returns overlay block, no writeback.
+    Never raises — malformed inputs produce a best-effort block with error.
+    Returns None when disabled (no key attached, byte-identical to pre-Phase-5).
+    """
+```
+
+`settings` is intentionally not passed; the orchestrator extracts concrete
+scalar config values and passes them explicitly.
+
+### Applicability Gating
+
+Unlike `market_quality` (prediction_market only) and `source_reliability`
+(evidence_breakdown non-empty), `llm_telemetry` applies to **ALL** events —
+every event makes at least one LLM call (or falls back to deterministic).
+The block is always attached when `LLM_TELEMETRY_ENABLED` is on.
+
+### No Mutation Invariants
+
+`llm_telemetry` MUST NOT mutate:
+- `ai_probability` or any probability field
+- `actionable_recommendation`
+- `decision_quality`, `market_quality`, `source_reliability`
+- `evidence_breakdown`
+- `analysis_quality` (read-only mirror)
+- `sentiment_profile` (read-only mirror of `fallback` flag)
+
+The data flow is one-way:
+```
+analysis (analysis_quality, llm_usage) + sentiment_profile (fallback)
+  -> build_llm_telemetry
+  -> llm_telemetry (overlay only, no writeback)
+```
+
+### Best-Effort Error Handling
+
+`analyze_event` wraps the call in try/except. On failure, a fallback block
+is attached with `error: "build_failed"`, `degraded_mode` and
+`analysis_quality` still populated from the analysis dict, and token fields
+set to None. Event production is never blocked.
+
+### Feature Flag
+
+`LLM_TELEMETRY_ENABLED` (default: false). When false, no `llm_telemetry` key
+is attached — byte-identical to pre-Phase-5 records. The `_ask_ai`
+instrumentation (`_llm_usage` key in the dict) is always active (it's a
+no-op when the telemetry service doesn't read it), so there is no separate
+flag for the instrumentation layer.
+
+### Integration Point
+
+```python
+# In analyze_event, after the merge_quality_overlays call:
+try:
+    if settings.LLM_TELEMETRY_ENABLED:
+        from app.services.llm_telemetry_service import build_llm_telemetry
+        record["llm_telemetry"] = build_llm_telemetry(
+            analysis=analysis,
+            sentiment_profile=sentiment_profile,
+            news_context=combined_context,
+            model=settings.OPENAI_MODEL,
+            enabled=True,
+        )
+except Exception as exc:
+    logger.warning("llm_telemetry build failed: %s", exc)
+    record["llm_telemetry"] = {
+        "error": "build_failed",
+        "degraded_mode": (analysis or {}).get("analysis_quality") == "deterministic_fallback",
+        "degraded_reason": None,
+        "analysis_quality": (analysis or {}).get("analysis_quality", "unknown"),
+        "sentiment_degraded": False,
+        "llm_call_count": 0,
+        "prompt_tokens": None,
+        "completion_tokens": None,
+        "total_tokens": None,
+        "estimated_token_cost": 0.0,
+        "model": settings.OPENAI_MODEL,
+    }
+```
+
+### Test Plan
+
+**Unit tests** (`test_llm_telemetry_service.py`):
+- `degraded_mode=True` when `analysis_quality="deterministic_fallback"`
+- `degraded_mode=False` when `analysis_quality="llm"`
+- `sentiment_degraded=True` when `sentiment_profile.fallback=True`
+- `sentiment_degraded=False` when `sentiment_profile.fallback=False` or absent
+- `total_tokens` populated from `llm_usage` when present
+- `total_tokens=None` when `llm_usage` is None (degraded)
+- `estimated_token_cost` computed from real tokens when available
+- `estimated_token_cost` estimated from news_context length when tokens unavailable
+- `model` field mirrors the passed model name
+- Pricing table lookup for known/unknown models
+- Returns None when `enabled=False`
+- Never raises on malformed input (best-effort)
+
+**Integration tests** (`test_event_intelligence_service.py`):
+- `llm_telemetry` attached when flag ON, absent when OFF
+- `degraded_mode=True` when LLM mock raises (analyze_market fallback path)
+- `degraded_mode=False` when LLM mock returns valid response
+- `total_tokens` populated from mocked `_llm_usage`
+- No mutation of `analysis_quality` or `sentiment_profile`
+- Best-effort fallback block when `build_llm_telemetry` raises
+
+**Forbidden word test**: `degraded_reason` must not contain banned trading
+vocabulary (long/short/buy/sell/position/kelly/order). The structured values
+("llm_call_failed", "api_key_missing") are safe by construction.
 
 ## Architecture
 

@@ -320,6 +320,48 @@ class SourceReliability(BaseModel):
     error: str | None = None
 
 
+class LLMTelemetry(BaseModel):
+    """Phase 5 LLM telemetry overlay block.
+
+    Produced by ``llm_telemetry_service`` for ALL events (every event makes
+    at least one LLM call or falls back to deterministic). This is an
+    observability layer — unlike Phases 1-4 (decision overlays), it does NOT
+    participate in ``merge_quality_overlays`` and does NOT produce
+    ``suggested_direction`` / ``downgrade_reason``. It only records what
+    happened during the LLM call for audit/monitoring.
+
+    Hybrid implementation: ``_ask_ai`` captures real ``response.usage`` token
+    counts (attached as ``llm_usage`` on the analysis dict); this service
+    reads that + ``analysis_quality`` + ``sentiment_profile.fallback`` to
+    produce the structured block.
+
+    ``degraded_mode`` is True when the analysis used the deterministic
+    fallback (LLM call failed). ``degraded_reason`` is a structured enum
+    value (``"llm_call_failed"``). ``analysis_quality`` mirrors the field
+    already on the analysis dict (``"llm"`` / ``"deterministic_fallback"``).
+
+    ``prompt_tokens`` / ``completion_tokens`` / ``total_tokens`` are real
+    counts from the API when available; None when the LLM call failed or
+    usage data is unavailable. ``estimated_token_cost`` is computed from
+    real tokens when available, or estimated from ``news_context`` length
+    (chars/4 heuristic) when degraded.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    degraded_mode: bool = False
+    degraded_reason: str | None = None
+    analysis_quality: str = "unknown"
+    sentiment_degraded: bool = False
+    llm_call_count: int = 0
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    estimated_token_cost: float = 0.0
+    model: str = ""
+    error: str | None = None
+
+
 class Tracking(BaseModel):
     """Human tracking decision for an event. Defaults are seeded at analysis
     time; a user's explicit choice is preserved across re-scans by the store.

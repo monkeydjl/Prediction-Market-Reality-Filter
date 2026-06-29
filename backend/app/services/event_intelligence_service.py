@@ -438,6 +438,38 @@ async def analyze_event(
                 record["source_reliability"]["applied_to_displayed_direction"] = True
     except Exception as exc:
         logger.warning("merge_quality_overlays failed: %s", exc)
+
+    # Phase 5: LLM Telemetry overlay. Best-effort observability layer —
+    # applies to ALL events (every event makes at least one LLM call or
+    # falls back to deterministic). Records degraded_mode, analysis_quality,
+    # real token counts (from _ask_ai instrumentation), estimated cost, and
+    # sentiment degradation flag. Pure observability — does NOT participate
+    # in merge_quality_overlays and does NOT mutate any overlay block.
+    try:
+        if settings.LLM_TELEMETRY_ENABLED:
+            from app.services.llm_telemetry_service import build_llm_telemetry
+            record["llm_telemetry"] = build_llm_telemetry(
+                analysis=analysis,
+                sentiment_profile=sentiment_profile,
+                news_context=combined_context,
+                model=settings.OPENAI_MODEL,
+                enabled=True,
+            )
+    except Exception as exc:
+        logger.warning("llm_telemetry build failed: %s", exc)
+        record["llm_telemetry"] = {
+            "error": "build_failed",
+            "degraded_mode": (analysis or {}).get("analysis_quality") == "deterministic_fallback",
+            "degraded_reason": None,
+            "analysis_quality": (analysis or {}).get("analysis_quality", "unknown"),
+            "sentiment_degraded": False,
+            "llm_call_count": 0,
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "total_tokens": None,
+            "estimated_token_cost": 0.0,
+            "model": settings.OPENAI_MODEL,
+        }
     return record
 
 

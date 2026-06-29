@@ -151,6 +151,16 @@ async def _ask_ai(
     parsed = json.loads(content)
     if not isinstance(parsed, dict):
         raise ValueError("AI returned non-object JSON")
+    # Phase 5: capture token usage for telemetry. Attached as a private key
+    # so _normalize_ai_analysis (which copies only known keys) does not
+    # propagate it — analyze_market explicitly extracts it before normalize.
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        parsed["_llm_usage"] = {
+            "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+            "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+            "total_tokens": getattr(usage, "total_tokens", 0) or 0,
+        }
     return parsed
 
 

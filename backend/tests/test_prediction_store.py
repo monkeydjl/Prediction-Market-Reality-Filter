@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from app.core.config import settings
 from app.memory import prediction_store as preds
 from app.memory import event_market_link_store as links
 from app.utils import sqlite_db
@@ -62,6 +63,43 @@ def _seed_resolved(
         )
 
 
+def _seed_resolved_with_buckets(
+    event_id,
+    *,
+    decision,
+    status,
+    brier,
+    edge_bucket,
+    confidence_bucket,
+    direction_correct,
+    raw_edge=10.0,
+    market_probability=50.0,
+    actual_outcome=100.0,
+    category="cpi",
+    ai_probability=80.0,
+):
+    """Like _seed_resolved but also sets the Phase 3 bucket columns. Used to
+    test calibration_bucket_summary() in isolation, bypassing the decision gate
+    (which would classify small-edge predictions as skip — excluded from the
+    summary). direction_correct is stored as INTEGER (1/0/NULL) per SQLite."""
+    path = sqlite_db.loop_db_path()
+    preds._ensure_schema(path)
+    with sqlite_db.writing(path) as conn:
+        conn.execute(
+            """
+            INSERT INTO predictions (
+                id, event_id, base_rate_category, ai_probability,
+                market_probability, raw_edge, decision, status,
+                actual_outcome, brier_score, created_at, resolved_at,
+                edge_bucket, confidence_bucket, direction_correct
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (event_id, event_id, category, ai_probability, market_probability,
+             raw_edge, decision, status, actual_outcome, brier, "t0", "t1",
+             edge_bucket, confidence_bucket, direction_correct),
+        )
+
+
 def _act_record(event_id, category, estimated, baseline):
     """A market record with NO liquidity (liq factor 1.0) so a bootstrapped,
     qualified, high-skill segment yields a real act decision."""
@@ -107,7 +145,7 @@ class FreezePredictionTests(unittest.TestCase):
             self.assertEqual(frozen["liquidity"], 1000.0)
             self.assertEqual(frozen["volume"], 5000.0)
             self.assertEqual(frozen["status"], "open")
-            self.assertEqual(sqlite_db.schema_versions()["predictions"], 3)
+            self.assertEqual(sqlite_db.schema_versions()["predictions"], 4)
 
     def test_freeze_seeds_verified_link(self):
         # 补-A: freezing a market event also seeds a verified event->contract link
@@ -593,6 +631,206 @@ class CommitmentMigrationTests(unittest.TestCase):
             seg = preds.segment_skill("cpi")
             self.assertEqual(seg["n"], 2)               # act + watch, skip excluded
             self.assertAlmostEqual(seg["mean_brier"], 0.04)
+
+
+class Phase3CalibrationIntegrationTests(unittest.TestCase):
+    """Phase 3 integration: freeze_prediction captures snapshot fields and
+    score_prediction computes resolution buckets — both gated by
+    PREDICTION_CALIBRATION_ENABLED, both best-effort (never block the core
+    freeze/score path on failure)."""
+
+    def _db(self, tmp):
+        return patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db"))
+
+    def _phase3_record(self, event_id="evtP3", estimated=80.0, baseline=50.0):
+        """A market record carrying Phase 3 snapshot sources: an actionable
+        recommendation (YES/high), evidence profile, market_quality, event title."""
+        rec = _market_record(event_id, estimated=estimated, baseline=baseline)
+        rec["event_title"] = "Will Phase 3 ship on time?"
+        rec["actionable_recommendation"] = {
+            "direction": "YES",
+            "confidence": "high",
+            "rationale": "edge and calibration look good",
+        }
+        rec["evidence"] = {"strength": 0.78, "conflict": 0.22}
+        rec["market_quality"] = {"score": 0.66, "liquidity_score": 0.9}
+        return rec
+
+    # ── flag OFF: byte-identical to pre-Phase-3 ──────────────────────────
+
+    def test_freeze_snapshot_empty_when_flag_off(self):
+        # When PREDICTION_CALIBRATION_ENABLED is false, the snapshot columns
+        # stay NULL / '' — byte-identical to pre-Phase-3 behavior. The Phase 3
+        # record is ignored entirely.
+        with tempfile.TemporaryDirectory() as tmp, self._db(tmp), \
+                patch.object(settings, "PREDICTION_CALIBRATION_ENABLED", False):
+            frozen = preds.freeze_prediction(self._phase3_record("evtOff"))
+            self.assertEqual(frozen["snapshot_question"], "")
+            self.assertEqual(frozen["snapshot_recommendation"], "")
+            self.assertEqual(frozen["snapshot_confidence"], "")
+            self.assertIsNone(frozen["snapshot_evidence_strength"])
+            self.assertIsNone(frozen["snapshot_conflict_score"])
+            self.assertIsNone(frozen["snapshot_market_quality_score"])
+            self.assertEqual(frozen["snapshot_source_platform"], "")
+
+    def test_score_buckets_empty_when_flag_off(self):
+        # When PREDICTION_CALIBRATION_ENABLED is false, score_prediction does
+        # NOT write direction_correct / edge_bucket / confidence_bucket — they
+        # stay NULL / ''.
+        with tempfile.TemporaryDirectory() as tmp, self._db(tmp), \
+                patch.object(settings, "PREDICTION_CALIBRATION_ENABLED", False):
+            preds.freeze_prediction(self._phase3_record("evtOffS"))
+            scored = preds.score_prediction("evtOffS", actual_outcome=100.0)
+            self.assertIsNone(scored["direction_correct"])
+            self.assertEqual(scored["edge_bucket"], "")
+            self.assertEqual(scored["confidence_bucket"], "")
+            # Brier + outcome still recorded (core path unaffected).
+            self.assertAlmostEqual(scored["brier_score"], 0.04)
+
+    # ── flag ON: snapshot + buckets captured ─────────────────────────────
+
+    def test_freeze_captures_snapshot_when_flag_on(self):
+        with tempfile.TemporaryDirectory() as tmp, self._db(tmp), \
+                patch.object(settings, "PREDICTION_CALIBRATION_ENABLED", True):
+            frozen = preds.freeze_prediction(self._phase3_record("evtOn"))
+            self.assertEqual(frozen["snapshot_question"], "Will Phase 3 ship on time?")
+            self.assertEqual(frozen["snapshot_recommendation"], "YES")
+            self.assertEqual(frozen["snapshot_confidence"], "high")
+            self.assertAlmostEqual(frozen["snapshot_evidence_strength"], 0.78)
+            self.assertAlmostEqual(frozen["snapshot_conflict_score"], 0.22)
+            self.assertAlmostEqual(frozen["snapshot_market_quality_score"], 0.66)
+            self.assertEqual(frozen["snapshot_source_platform"], "Polymarket")
+
+    def test_score_computes_buckets_when_flag_on_yes_correct(self):
+        # YES recommendation + outcome 100 (YES) -> direction_correct=True,
+        # edge_bucket="20+" (raw_edge=30), confidence_bucket="high".
+        with tempfile.TemporaryDirectory() as tmp, self._db(tmp), \
+                patch.object(settings, "PREDICTION_CALIBRATION_ENABLED", True):
+            preds.freeze_prediction(self._phase3_record("evtYes", estimated=80.0, baseline=50.0))
+            scored = preds.score_prediction("evtYes", actual_outcome=100.0)
+            self.assertEqual(scored["direction_correct"], 1)  # SQLite stores as INTEGER
+            self.assertEqual(scored["edge_bucket"], "20+")
+            self.assertEqual(scored["confidence_bucket"], "high")
+
+    def test_score_computes_buckets_when_flag_on_no_incorrect(self):
+        # NO recommendation (recommendation.direction="NO") + outcome 100 (YES)
+        # -> direction_correct=False (0 in SQLite).
+        with tempfile.TemporaryDirectory() as tmp, self._db(tmp), \
+                patch.object(settings, "PREDICTION_CALIBRATION_ENABLED", True):
+            rec = self._phase3_record("evtNo", estimated=20.0, baseline=50.0)
+            rec["actionable_recommendation"]["direction"] = "NO"
+            preds.freeze_prediction(rec)
+            scored = preds.score_prediction("evtNo", actual_outcome=100.0)
+            self.assertEqual(scored["direction_correct"], 0)
+            self.assertEqual(scored["edge_bucket"], "20+")
+            self.assertEqual(scored["confidence_bucket"], "high")
+
+    def test_score_buckets_when_recommendation_is_wait(self):
+        # WAIT recommendation -> direction_correct=None (NULL in SQLite).
+        # raw_edge=4.0 -> bucket "0-5".
+        with tempfile.TemporaryDirectory() as tmp, self._db(tmp), \
+                patch.object(settings, "PREDICTION_CALIBRATION_ENABLED", True):
+            rec = self._phase3_record("evtWait", estimated=54.0, baseline=50.0)
+            rec["actionable_recommendation"] = {"direction": "WAIT", "confidence": "medium"}
+            preds.freeze_prediction(rec)
+            scored = preds.score_prediction("evtWait", actual_outcome=100.0)
+            self.assertIsNone(scored["direction_correct"])
+            self.assertEqual(scored["edge_bucket"], "0-5")
+            self.assertEqual(scored["confidence_bucket"], "medium")
+
+    # ── best-effort: snapshot build failure doesn't block freeze ──────────
+
+    def test_freeze_snapshot_failure_leaves_defaults(self):
+        # If build_prediction_snapshot raises, the snapshot columns stay at
+        # their defaults and the prediction is still frozen with its core
+        # commitment fields. Phase 3 is an audit layer, not a gate.
+        with tempfile.TemporaryDirectory() as tmp, self._db(tmp), \
+                patch.object(settings, "PREDICTION_CALIBRATION_ENABLED", True), \
+                patch("app.services.prediction_calibration_service.build_prediction_snapshot",
+                      side_effect=RuntimeError("snapshot boom")) as mock_snap:
+            frozen = preds.freeze_prediction(self._phase3_record("evtBoom"))
+            self.assertIsNotNone(frozen)  # freeze still succeeded
+            self.assertEqual(frozen["snapshot_question"], "")
+            self.assertEqual(frozen["snapshot_recommendation"], "")
+            self.assertEqual(frozen["ai_probability"], 80.0)  # core field intact
+            mock_snap.assert_called_once()
+
+    def test_score_bucket_failure_leaves_defaults(self):
+        # If build_resolution_buckets raises, score_prediction still records
+        # the Brier + outcome (the core scoring path).
+        with tempfile.TemporaryDirectory() as tmp, self._db(tmp), \
+                patch.object(settings, "PREDICTION_CALIBRATION_ENABLED", True), \
+                patch("app.services.prediction_calibration_service.build_resolution_buckets",
+                      side_effect=RuntimeError("bucket boom")):
+            preds.freeze_prediction(self._phase3_record("evtScoreBoom"))
+            scored = preds.score_prediction("evtScoreBoom", actual_outcome=100.0)
+            self.assertIsNotNone(scored)  # score still succeeded
+            self.assertIsNone(scored["direction_correct"])
+            self.assertEqual(scored["edge_bucket"], "")
+            self.assertEqual(scored["confidence_bucket"], "")
+            self.assertAlmostEqual(scored["brier_score"], 0.04)  # core path intact
+
+    # ── calibration_bucket_summary ───────────────────────────────────────
+
+    def test_calibration_bucket_summary_no_data(self):
+        with tempfile.TemporaryDirectory() as tmp, self._db(tmp):
+            summary = preds.calibration_bucket_summary()
+            self.assertEqual(summary["n"], 0)
+            self.assertEqual(summary["by_edge_bucket"], {})
+            self.assertEqual(summary["by_confidence_bucket"], {})
+            self.assertEqual(summary["by_edge_x_confidence"], {})
+
+    def test_calibration_bucket_summary_groups_rows(self):
+        # Seed three resolved rows with explicit Phase 3 bucket columns.
+        # Direct insert (via _seed_resolved_with_buckets) bypasses the decision
+        # gate, which would otherwise classify small-edge predictions as skip
+        # (excluded from the summary). This isolates the aggregate logic.
+        with tempfile.TemporaryDirectory() as tmp, self._db(tmp):
+            _seed_resolved_with_buckets(
+                "r1", decision="act", status="scored", brier=0.04,
+                edge_bucket="20+", confidence_bucket="high", direction_correct=1,
+            )
+            _seed_resolved_with_buckets(
+                "r2", decision="act", status="scored", brier=0.32,
+                edge_bucket="5-10", confidence_bucket="medium", direction_correct=0,
+            )
+            _seed_resolved_with_buckets(
+                "r3", decision="watch", status="observed", brier=0.12,
+                edge_bucket="10-20", confidence_bucket="low", direction_correct=None,
+            )
+            summary = preds.calibration_bucket_summary()
+            self.assertEqual(summary["n"], 3)
+            # by_edge_bucket groups all three
+            self.assertEqual(summary["by_edge_bucket"]["20+"]["n"], 1)
+            self.assertEqual(summary["by_edge_bucket"]["5-10"]["n"], 1)
+            self.assertEqual(summary["by_edge_bucket"]["10-20"]["n"], 1)
+            # by_confidence_bucket groups all three
+            self.assertEqual(summary["by_confidence_bucket"]["high"]["n"], 1)
+            self.assertEqual(summary["by_confidence_bucket"]["medium"]["n"], 1)
+            self.assertEqual(summary["by_confidence_bucket"]["low"]["n"], 1)
+            # cross product: 3 unique cells, each n=1
+            self.assertEqual(summary["by_edge_x_confidence"]["20+|high"]["n"], 1)
+            self.assertEqual(summary["by_edge_x_confidence"]["5-10|medium"]["n"], 1)
+            self.assertEqual(summary["by_edge_x_confidence"]["10-20|low"]["n"], 1)
+            # direction_correct_rate: r1=True (1/1=1.0), r2=False (0/1=0.0),
+            # r3 has no direction_correct value (None) so its cell's rate is None.
+            self.assertEqual(summary["by_edge_bucket"]["20+"]["direction_correct_rate"], 1.0)
+            self.assertEqual(summary["by_edge_bucket"]["5-10"]["direction_correct_rate"], 0.0)
+            self.assertIsNone(summary["by_edge_bucket"]["10-20"]["direction_correct_rate"])
+
+    def test_calibration_bucket_summary_groups_unknown_when_buckets_missing(self):
+        # Pre-Phase-3 predictions (no snapshot fields) resolve with empty
+        # edge_bucket / confidence_bucket — these are grouped under "unknown"
+        # rather than silently dropped.
+        with tempfile.TemporaryDirectory() as tmp, self._db(tmp), \
+                patch.object(settings, "PREDICTION_CALIBRATION_ENABLED", False):
+            preds.freeze_prediction(self._phase3_record("preP3", estimated=80.0, baseline=50.0))
+            preds.score_prediction("preP3", actual_outcome=100.0)
+            summary = preds.calibration_bucket_summary()
+            self.assertEqual(summary["n"], 1)
+            self.assertIn("unknown", summary["by_edge_bucket"])
+            self.assertIn("unknown", summary["by_confidence_bucket"])
+            self.assertEqual(summary["by_edge_x_confidence"]["unknown|unknown"]["n"], 1)
 
 
 if __name__ == "__main__":

@@ -559,6 +559,18 @@ class Settings:
     MARKET_QUALITY_SCORE_THRESHOLD: float = float(
         os.getenv("MARKET_QUALITY_SCORE_THRESHOLD", "0.5")
     )
+    # Phase 3 — Prediction Outcome Calibration (default OFF). When enabled,
+    # freeze_prediction captures a richer snapshot (question, recommendation,
+    # confidence, evidence_strength, conflict_score, market_quality_score,
+    # source_platform) and score_prediction computes direction_correct,
+    # edge_bucket, and confidence_bucket. calibration_bucket_summary()
+    # aggregates resolved predictions by edge_bucket × confidence_bucket.
+    # When disabled, the snapshot columns stay NULL and buckets are not
+    # computed — byte-identical to pre-Phase-3. This is a long-term feature:
+    # it only becomes valuable after enough resolved samples exist.
+    PREDICTION_CALIBRATION_ENABLED: bool = _env_bool(
+        "PREDICTION_CALIBRATION_ENABLED", "false"
+    )
     SCHEDULER_MISFIRE_GRACE_SECONDS: int = int(
         os.getenv("SCHEDULER_MISFIRE_GRACE_SECONDS", "86400")
     )

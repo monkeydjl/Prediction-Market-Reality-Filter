@@ -1645,7 +1645,7 @@ class LoopStatusRouteTests(unittest.TestCase):
         body = resp.json()
         self.assertEqual(body["counts"]["dangling_predictions"], 1)
         self.assertEqual(body["counts"]["dangling_links"], 1)
-        self.assertEqual(body["storage"]["loop_db_schema_versions"]["predictions"], 3)
+        self.assertEqual(body["storage"]["loop_db_schema_versions"]["predictions"], 4)
         self.assertEqual(
             body["storage"]["loop_db_schema_versions"]["event_market_links"],
             1,

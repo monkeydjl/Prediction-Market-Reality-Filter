@@ -61,7 +61,17 @@ CREATE TABLE IF NOT EXISTS predictions (
     status              TEXT NOT NULL DEFAULT 'open',
     actual_outcome      REAL,
     brier_score         REAL,
-    resolved_at         TEXT
+    resolved_at         TEXT,
+    snapshot_question                TEXT DEFAULT '',
+    snapshot_recommendation          TEXT DEFAULT '',
+    snapshot_confidence              TEXT DEFAULT '',
+    snapshot_evidence_strength       REAL,
+    snapshot_conflict_score          REAL,
+    snapshot_market_quality_score    REAL,
+    snapshot_source_platform         TEXT DEFAULT '',
+    direction_correct    INTEGER,
+    edge_bucket          TEXT DEFAULT '',
+    confidence_bucket    TEXT DEFAULT ''
 )
 """
 _CREATE_STATUS_INDEX = (
@@ -80,11 +90,25 @@ _MIGRATIONS = {
     "segment_n": "INTEGER",
     "segment_min_samples": "INTEGER",
     "segment_skill": "REAL",
+    # Phase 3 snapshot context (captured at freeze time when flag enabled).
+    "snapshot_question": "TEXT DEFAULT ''",
+    "snapshot_recommendation": "TEXT DEFAULT ''",
+    "snapshot_confidence": "TEXT DEFAULT ''",
+    "snapshot_evidence_strength": "REAL",
+    "snapshot_conflict_score": "REAL",
+    "snapshot_market_quality_score": "REAL",
+    "snapshot_source_platform": "TEXT DEFAULT ''",
+    # Phase 3 resolution buckets (computed at score_prediction time when flag
+    # enabled). direction_correct is INTEGER (1/0/NULL) because SQLite has no
+    # native BOOL type.
+    "direction_correct": "INTEGER",
+    "edge_bucket": "TEXT DEFAULT ''",
+    "confidence_bucket": "TEXT DEFAULT ''",
 }
 
 _INITIALIZED: set[str] = set()
 _INIT_GUARD = threading.Lock()
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 
 def _migrate(conn: Any) -> None:
@@ -191,6 +215,22 @@ def _num(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _empty_snapshot() -> dict[str, Any]:
+    """Phase 3 snapshot defaults — written to the prediction row when
+    PREDICTION_CALIBRATION_ENABLED is false (so the columns are NULL /
+    empty, byte-identical to pre-Phase-3) or when build_prediction_snapshot
+    raises (best-effort)."""
+    return {
+        "snapshot_question": "",
+        "snapshot_recommendation": "",
+        "snapshot_confidence": "",
+        "snapshot_evidence_strength": None,
+        "snapshot_conflict_score": None,
+        "snapshot_market_quality_score": None,
+        "snapshot_source_platform": "",
+    }
+
+
 def freeze_prediction(record: dict[str, Any]) -> dict[str, Any] | None:
     """Freeze one committed point-in-time prediction from an analyzed event record.
 
@@ -252,18 +292,43 @@ def freeze_prediction(record: dict[str, Any]) -> dict[str, Any] | None:
         created_at=utc_now(),
     )
 
+    # Phase 3: capture the snapshot context (question, recommendation,
+    # confidence, evidence scores, market_quality_score) at freeze time so
+    # the calibration aggregate can slice resolved predictions by these
+    # dimensions later. Best-effort: never raises on missing fields. When
+    # PREDICTION_CALIBRATION_ENABLED=false, snapshot stays empty (the
+    # columns default to NULL / '') — byte-identical to pre-Phase-3.
+    snapshot = _empty_snapshot()
+    if settings.PREDICTION_CALIBRATION_ENABLED:
+        try:
+            from app.services.prediction_calibration_service import (
+                build_prediction_snapshot,
+            )
+            snapshot = build_prediction_snapshot(record)
+        except Exception:
+            # Best-effort: a snapshot build failure leaves the columns at
+            # their defaults. The prediction is still frozen with its core
+            # commitment fields — Phase 3 is an audit layer, not a gate.
+            pass
+
     path = sqlite_db.loop_db_path()
     _ensure_schema(path)
     with writing(path) as conn:
         # DO NOTHING on conflict: the first commitment is frozen forever.
+        # Phase 3 snapshot columns are included in the INSERT so they are
+        # captured at first freeze alongside the core commitment fields.
         cursor = conn.execute(
             """
             INSERT INTO predictions (
                 id, event_id, contract_id, platform, base_rate_category,
                 ai_probability, market_probability, raw_edge, trust, adjusted_edge,
                 liquidity, volume, decision, liquidity_factor, qualified,
-                segment_n, segment_min_samples, segment_skill, created_at, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+                segment_n, segment_min_samples, segment_skill, created_at, status,
+                snapshot_question, snapshot_recommendation, snapshot_confidence,
+                snapshot_evidence_strength, snapshot_conflict_score,
+                snapshot_market_quality_score, snapshot_source_platform
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open',
+                      ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(event_id) DO NOTHING
             """,
             (
@@ -277,6 +342,13 @@ def freeze_prediction(record: dict[str, Any]) -> dict[str, Any] | None:
                 prediction.segment_n, prediction.segment_min_samples,
                 prediction.segment_skill,
                 prediction.created_at,
+                snapshot["snapshot_question"],
+                snapshot["snapshot_recommendation"],
+                snapshot["snapshot_confidence"],
+                snapshot["snapshot_evidence_strength"],
+                snapshot["snapshot_conflict_score"],
+                snapshot["snapshot_market_quality_score"],
+                snapshot["snapshot_source_platform"],
             ),
         )
         inserted = cursor.rowcount > 0
@@ -348,14 +420,54 @@ def score_prediction(event_id: str, actual_outcome: float) -> dict[str, Any] | N
         # Only act rows are scored; watch/skip are observed (recorded, not calibrated).
         new_status = "scored" if row["decision"] == "act" else "observed"
         brier = round(brier_score(row["ai_probability"], actual_outcome), 4)
-        conn.execute(
-            """
+
+        # Phase 3: compute resolution buckets (direction_correct,
+        # edge_bucket, confidence_bucket) at resolve time. Derived from the
+        # frozen snapshot_recommendation / snapshot_confidence + raw_edge +
+        # the settled actual_outcome. When PREDICTION_CALIBRATION_ENABLED is
+        # false, the buckets stay at their defaults (NULL / '') —
+        # byte-identical to pre-Phase-3. Best-effort: a build failure leaves
+        # the buckets at their defaults without blocking resolution.
+        update_sql = """
             UPDATE predictions
             SET status=?, actual_outcome=?, brier_score=?, resolved_at=?
             WHERE event_id=? AND status='open'
-            """,
-            (new_status, round(_num(actual_outcome), 2), brier, utc_now(), event_id),
-        )
+        """
+        update_params: list[Any] = [
+            new_status, round(_num(actual_outcome), 2), brier, utc_now(), event_id,
+        ]
+        if settings.PREDICTION_CALIBRATION_ENABLED:
+            try:
+                from app.services.prediction_calibration_service import (
+                    build_resolution_buckets,
+                )
+                buckets = build_resolution_buckets(
+                    snapshot_recommendation=row["snapshot_recommendation"]
+                        if "snapshot_recommendation" in row.keys() else None,
+                    snapshot_confidence=row["snapshot_confidence"]
+                        if "snapshot_confidence" in row.keys() else None,
+                    raw_edge=row["raw_edge"],
+                    actual_outcome=actual_outcome,
+                )
+                dc = buckets["direction_correct"]
+                update_sql = """
+                    UPDATE predictions
+                    SET status=?, actual_outcome=?, brier_score=?, resolved_at=?,
+                        direction_correct=?, edge_bucket=?, confidence_bucket=?
+                    WHERE event_id=? AND status='open'
+                """
+                update_params = [
+                    new_status, round(_num(actual_outcome), 2), brier, utc_now(),
+                    int(dc) if dc is not None else None,
+                    buckets["edge_bucket"],
+                    buckets["confidence_bucket"],
+                    event_id,
+                ]
+            except Exception:
+                # Best-effort: buckets stay at defaults; resolution still
+                # records the Brier + outcome (the core scoring path).
+                pass
+        conn.execute(update_sql, tuple(update_params))
     _maybe_close_trade(event_id, actual_outcome,
                        "resolved_yes" if actual_outcome >= 99 else "resolved_no")
     return get_prediction(event_id)
@@ -562,4 +674,94 @@ def calibration_summary() -> dict[str, Any]:
         "by_category": by_category,
         "segment_min_samples": min_samples,
         "segments": segments,
+    }
+
+
+def calibration_bucket_summary() -> dict[str, Any]:
+    """Phase 3 calibration aggregate: groups resolved predictions by
+    edge_bucket × confidence_bucket and reports count, mean Brier, and
+    direction_correct_rate per cell.
+
+    This is the diagnostic that tells operators which (edge, confidence)
+    combinations the engine is actually good at. Unlike
+    ``calibration_summary()`` (act-only), this includes BOTH scored and
+    observed rows (act + watch + provisional_act) so the diagnostic covers
+    every resolved prediction — the point is to see WHERE calibration is
+    weak, not just how good the act-only subset is.
+
+    Returns a ``no_data`` block when no resolved predictions have bucket
+    data (Phase 3 disabled, or no resolved predictions yet). The structure:
+
+    ```python
+    {
+        "n": 42,
+        "by_edge_bucket": {
+            "0-5": {"n": 10, "brier_score": 0.18, "direction_correct_rate": 0.6},
+            "5-10": {"n": 15, ...},
+            ...
+        },
+        "by_confidence_bucket": {
+            "high": {"n": 20, "brier_score": 0.12, "direction_correct_rate": 0.85},
+            "medium": {"n": 15, ...},
+            "low": {"n": 7, ...},
+        },
+        "by_edge_x_confidence": {
+            "5-10|high": {"n": 8, "brier_score": 0.10, "direction_correct_rate": 0.875},
+            ...
+        }
+    }
+    ```
+
+    Rows with empty edge_bucket or confidence_bucket (pre-Phase-3
+    predictions that lack snapshot fields) are grouped under ``"unknown"``
+    so they appear in the aggregate rather than being silently dropped.
+    """
+    path = sqlite_db.loop_db_path()
+    _ensure_schema(path)
+    with reading(path) as conn:
+        rows = conn.execute(
+            """
+            SELECT edge_bucket, confidence_bucket, direction_correct,
+                   brier_score
+            FROM predictions
+            WHERE status IN ('scored', 'observed')
+              AND decision IN ('act', 'watch', 'provisional_act')
+            """,
+        ).fetchall()
+
+    if not rows:
+        return {"n": 0, "by_edge_bucket": {}, "by_confidence_bucket": {},
+                "by_edge_x_confidence": {}}
+
+    def _cell(group_rows: list[dict[str, Any]]) -> dict[str, Any]:
+        n = len(group_rows)
+        briers = [r["brier_score"] for r in group_rows if r["brier_score"] is not None]
+        dc_vals = [r["direction_correct"] for r in group_rows
+                   if r["direction_correct"] is not None]
+        mean_brier = round(sum(briers) / len(briers), 4) if briers else None
+        dc_rate = round(sum(1 for v in dc_vals if v) / len(dc_vals), 4) if dc_vals else None
+        return {
+            "n": n,
+            "brier_score": mean_brier,
+            "direction_correct_rate": dc_rate,
+        }
+
+    # Group by edge_bucket, confidence_bucket, and the cross product
+    from collections import defaultdict
+    by_edge: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_conf: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_cross: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        r_dict = dict(r)
+        eb = r_dict.get("edge_bucket") or "unknown"
+        cb = r_dict.get("confidence_bucket") or "unknown"
+        by_edge[eb].append(r_dict)
+        by_conf[cb].append(r_dict)
+        by_cross[f"{eb}|{cb}"].append(r_dict)
+
+    return {
+        "n": len(rows),
+        "by_edge_bucket": {k: _cell(v) for k, v in sorted(by_edge.items())},
+        "by_confidence_bucket": {k: _cell(v) for k, v in sorted(by_conf.items())},
+        "by_edge_x_confidence": {k: _cell(v) for k, v in sorted(by_cross.items())},
     }

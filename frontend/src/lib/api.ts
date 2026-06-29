@@ -573,6 +573,7 @@ export interface EventListFilters {
   status?: "active" | "tracking" | "watching" | "archived" | "all";
   category?: string;
   sort?: "value" | "delta" | "probability" | "support";
+  exclude_expired?: boolean;
 }
 
 const WORLD_CUP_DATA_SOURCE_ACTION_PATHS: Record<WorldCupDataSourceActionMode, string> = {
@@ -618,6 +619,7 @@ export const eventsApi = {
     const params = new URLSearchParams({
       limit: String(limit),
       offset: String(offset),
+      exclude_expired: String(filters.exclude_expired ?? true),
     });
     if (filters.q) params.set("q", filters.q);
     if (filters.status && filters.status !== "all") params.set("status", filters.status);

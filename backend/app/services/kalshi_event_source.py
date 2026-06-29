@@ -126,7 +126,15 @@ def _to_candidate_event(event: dict[str, Any]) -> dict[str, Any]:
     volume = safe_float(market.get("volume_fp"), 0.0)
     liquidity = safe_float(market.get("liquidity_dollars"), 0.0)
     ticker = str(event.get("event_ticker", "") or "")
-    url = f"https://kalshi.com/markets/{ticker.lower()}" if ticker else ""
+    # Kalshi URLs use the series_ticker (e.g. "KXELONMARS"), not the full
+    # event_ticker (e.g. "KXELONMARS-99" with a per-instance suffix). The
+    # event_ticker-based URL 404s.  Fall back to event_ticker when series_ticker
+    # is unavailable (API versions may differ).
+    series = str(event.get("series_ticker", "") or "").strip()
+    url_ticker = series or ticker
+    url = f"https://kalshi.com/markets/{url_ticker.lower()}" if url_ticker else ""
+    close_time = str(market.get("close_time", "") or "")
+    status = str(market.get("status", "") or "").lower()
     return {
         "question": question,
         "baseline_probability": baseline,
@@ -142,6 +150,8 @@ def _to_candidate_event(event: dict[str, Any]) -> dict[str, Any]:
             "liquidity": liquidity,
             "volume": volume,
             "url": url,
+            "status": status,
+            "close_time": close_time,
         },
     }
 

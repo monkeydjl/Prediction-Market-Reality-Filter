@@ -86,6 +86,12 @@ def save_events(
                     candidate["outcome"] = existing_record["outcome"]
                 if "calibration" not in candidate and existing_record.get("calibration") is not None:
                     candidate["calibration"] = existing_record["calibration"]
+                # Chinese title preservation: a re-scan that falls back to the
+                # deterministic path produces an empty event_title_zh. Keep the
+                # previously LLM-generated Chinese title so the UI never regresses
+                # from Chinese back to English.
+                if not candidate.get("event_title_zh") and existing_record.get("event_title_zh"):
+                    candidate["event_title_zh"] = existing_record["event_title_zh"]
                 EventRecord.model_validate(candidate)
             except Exception as exc:
                 if not skip_invalid:
@@ -142,6 +148,14 @@ def resolve_event(
         record["outcome"] = outcome
         if calibration is not None:
             record["calibration"] = calibration
+        # Auto-archive: resolved events leave the active tracking list and enter
+        # the calibration/review database. Preserves any existing priority so
+        # the historical review page can still sort by human-assigned priority.
+        tracking = record.get("tracking") or {}
+        if not isinstance(tracking, dict):
+            tracking = {}
+        tracking["status"] = "archived"
+        record["tracking"] = tracking
         EventRecord.model_validate(record)  # gate: bad outcome/calibration raises here
         now = utc_now()
         updated = {
@@ -201,6 +215,57 @@ def list_all_events() -> list[dict[str, Any]]:
     low-value-score events. Order is the store's insertion/upsert order.
     """
     return list(_load_unlocked(_store_path()).values())
+
+
+def auto_archive_expired(events: list[dict[str, Any]] | None = None) -> int:
+    """Archive events whose source market is confirmed closed/expired.
+
+    Modifies tracking.status to 'archived' for any non-resolved event whose
+    source market is expired (per _is_source_expired).  Uses a direct low-level
+    write (bypasses save_events) because save_events preserves tracking as a
+    user-owned field.  Returns the count of newly archived events.
+
+    Accepts an optional pre-loaded event list (e.g. from list_all_events) to
+    avoid a duplicate store read during batch operations.
+    """
+    if events is None:
+        events = list_all_events()
+    to_archive: list[str] = []
+    for entry in events:
+        record = entry.get("record") or {}
+        event_id = entry.get("event_id") or record.get("event_id", "")
+        if not event_id:
+            continue
+        tracking = record.get("tracking") or {}
+        current_status = tracking.get("status", "watching")
+        if current_status == "archived":
+            continue
+        if (record.get("outcome") or {}).get("status"):
+            continue  # resolved events are handled by their outcome
+        if not _is_source_expired(record):
+            continue
+        to_archive.append(event_id)
+
+    if not to_archive:
+        return 0
+
+    path = _store_path()
+    with locked_file(path):
+        store = _load_for_write(path)
+        now = utc_now()
+        for event_id in to_archive:
+            entry = store.get(event_id)
+            if entry is None:
+                continue
+            record = entry.get("record") or {}
+            record.setdefault("tracking", {})["status"] = "archived"
+            entry["last_updated"] = now
+            store[event_id] = entry
+        write_json_atomic(path, store, indent=2)
+
+    logger = __import__("logging").getLogger(__name__)
+    logger.info("Auto-archived %d events with expired source markets", len(to_archive))
+    return len(to_archive)
 
 
 def list_resolved_events() -> list[dict[str, Any]]:
@@ -264,12 +329,46 @@ def _event_query_text(entry: dict[str, Any]) -> str:
     ).lower()
 
 
+def _is_source_expired(record: dict[str, Any]) -> bool:
+    """Return True when the source market is clearly closed or past its close date.
+
+    Checks:
+    1. source.closed == True (Polymarket)
+    2. source.status in settled statuses (Kalshi)
+    3. source.end_date or source.close_time is in the past (and the event is
+       not resolved — resolved events are handled by their outcome.status).
+    """
+    source = (record or {}).get("source") or {}
+    # Explicit close / settled flag from source adapter
+    if source.get("closed") is True:
+        return True
+    status = str(source.get("status", "") or "").lower()
+    if status in {"settled", "finalized", "closed", "determined", "resolved"}:
+        return True
+
+    # Don't auto-expire if already resolved (outcome.status controls that)
+    if (record.get("outcome") or {}).get("status"):
+        return False
+
+    # End-date / close-time check
+    end_str = str(source.get("end_date") or source.get("close_time") or "").strip()
+    if not end_str:
+        return False
+    try:
+        from datetime import datetime, timezone
+        end_date = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+        return end_date < datetime.now(timezone.utc)
+    except (ValueError, TypeError):
+        return False
+
+
 def _filtered_ranked_events(
     *,
     query: str = "",
     status: str = "all",
     category: str = "all",
     sort: str = "value",
+    exclude_expired: bool = True,
 ) -> list[dict[str, Any]]:
     entries = list(_load_unlocked(_store_path()).values())
     q = query.strip().lower()
@@ -289,6 +388,11 @@ def _filtered_ranked_events(
         entries = [
             entry for entry in entries
             if _category(entry.get("record") or {}) == category
+        ]
+    if exclude_expired:
+        entries = [
+            entry for entry in entries
+            if not _is_source_expired(entry.get("record") or {})
         ]
 
     def sort_key(entry: dict[str, Any]) -> float:
@@ -310,6 +414,7 @@ def count_events(
     status: str = "all",
     category: str = "all",
     sort: str = "value",
+    exclude_expired: bool = True,
 ) -> int:
     """Count stored entries after the same filters used by list_events."""
     return len(_filtered_ranked_events(
@@ -317,6 +422,7 @@ def count_events(
         status=status,
         category=category,
         sort=sort,
+        exclude_expired=exclude_expired,
     ))
 
 
@@ -328,6 +434,7 @@ def list_events(
     status: str = "all",
     category: str = "all",
     sort: str = "value",
+    exclude_expired: bool = True,
 ) -> list[dict[str, Any]]:
     """Return stored entries filtered and sorted for the dashboard table."""
     ranked = _filtered_ranked_events(
@@ -335,5 +442,6 @@ def list_events(
         status=status,
         category=category,
         sort=sort,
+        exclude_expired=exclude_expired,
     )
     return ranked[offset:offset + limit]

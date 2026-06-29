@@ -140,18 +140,22 @@ def _finish_run(
 
 
 async def _job_event_auto_resolve():
-    """每天 22:30 UTC 自动裁定事件层（匹配已结算预测市场）。"""
+    """每天 22:30 UTC 自动裁定事件层（匹配已结算预测市场），同时归档已过期源市场事件。"""
     logger.info("[Scheduler] Event auto-resolve starting...")
     run_id = _start_run("event_auto_resolve")
     try:
+        from app.memory.event_store import auto_archive_expired
         from app.services.event_resolve_service import auto_resolve_events
 
-        result = await auto_resolve_events(resolved_limit=200)
+        archived = auto_archive_expired()
+        result = await auto_resolve_events(resolved_limit=500)
+        result["archived_count"] = archived
         _finish_run(run_id, "success", result=result)
         logger.info(
-            "[Scheduler] Event auto-resolve: resolved=%d checked=%d",
+            "[Scheduler] Event auto-resolve: resolved=%d checked=%d archived=%d",
             result.get("resolved_count", 0),
             result.get("checked_count", 0),
+            archived,
         )
     except Exception as exc:
         _finish_run(run_id, "failed", error=str(exc))

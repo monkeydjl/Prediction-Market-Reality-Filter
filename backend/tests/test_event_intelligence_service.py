@@ -1089,3 +1089,139 @@ class EvidenceBreakdownTests(unittest.TestCase):
                 # NOTE: no filtered_articles kwarg
             ))
         self.assertEqual(record.get("evidence_breakdown", []), [])
+
+
+class DecisionQualityIntegrationTests(unittest.TestCase):
+    """Phase 1: locks the analyze_event -> decision_quality integration.
+    Verifies:
+    - decision_quality attached when DECISION_QUALITY_ENABLED=true
+    - no decision_quality key when DECISION_QUALITY_ENABLED=false (byte-identical)
+    - raw ai_probability / actionable_recommendation.direction NOT mutated
+    - build failure falls back to error block without blocking event production
+    """
+
+    SENTIMENT = {
+        "articles": [{
+            "index": 0,
+            "sentiment": "positive",
+            "impact": "high",
+            "key_facts": ["fact"],
+            "relevance_to_question": 0.8,
+            "evidence_direction": "support",
+            "evidence_strength": 0.85,
+            "source_credibility": 0.9,
+            "rationale_zh": "支持 YES 的事实。",
+        }],
+        "overall_direction": "support_yes",
+        "overall_strength": 0.85,
+        "conflict_level": 0.1,
+        "summary": "证据支持 YES",
+    }
+
+    FILTERED_ARTICLES = [
+        {"source": "Reuters", "title": "Fed signals rate cut", "description": "desc"}
+    ]
+
+    def _run_analyze(self, dq_enabled, evidence_enabled=True):
+        analyze = AsyncMock(return_value={
+            "market_question": "Will the bill pass?",
+            "market_probability": 50,
+            "ai_probability": 55,
+            "signal": "ACT",
+            "signal_direction": "LONG",
+            "signal_strength": "HIGH",
+            "risk_level": "medium",
+            "expected_edge": 0.05,
+            "position_size": 0.02,
+            "evidence_strength": 0.8,
+            "confidence_score": 0.7,
+            "news_quality_score": 0.8,
+            "source_count": 3,
+        })
+        with patch("app.services.ai_analysis_service.analyze_market", new=analyze), \
+                patch("app.services.cross_validation_service.cross_validate",
+                      new=AsyncMock(return_value=None)), \
+                patch.object(eis.settings, "EVIDENCE_BREAKDOWN_ENABLED", evidence_enabled), \
+                patch.object(eis.settings, "DECISION_QUALITY_ENABLED", dq_enabled), \
+                patch.object(eis.settings, "DECISION_QUALITY_MAX_EVIDENCE_ITEMS", 3), \
+                patch.object(eis.settings, "DECISION_QUALITY_HIGH_CONFLICT_THRESHOLD", 0.40), \
+                patch.object(eis.settings, "DECISION_QUALITY_MEDIUM_CONFLICT_THRESHOLD", 0.20):
+            return _run(eis.analyze_event(
+                "Will the bill pass?",
+                baseline_probability=50,
+                news_context="direction: support",
+                sentiment_profile=self.SENTIMENT,
+                filtered_articles=self.FILTERED_ARTICLES,
+            ))
+
+    def test_decision_quality_attached_when_enabled(self):
+        record = self._run_analyze(dq_enabled=True)
+        self.assertIn("decision_quality", record)
+        self.assertIsNotNone(record["decision_quality"])
+        dq = record["decision_quality"]
+        self.assertEqual(dq["raw_direction"], "YES")
+        self.assertIn("decision_rationale_zh", dq)
+        self.assertTrue(dq["decision_rationale_zh"].endswith("不构成投资建议。"))
+
+    def test_decision_quality_absent_when_disabled(self):
+        """When DECISION_QUALITY_ENABLED=false, record has NO decision_quality
+        key — byte-identical to pre-Phase-1 records."""
+        record = self._run_analyze(dq_enabled=False)
+        self.assertNotIn("decision_quality", record)
+
+    def test_ai_probability_not_mutated(self):
+        record = self._run_analyze(dq_enabled=True)
+        # ai_probability should still be the LLM's estimate (55), not changed
+        # by decision_quality (audit layer isolation)
+        self.assertEqual(record["probability"]["estimated"], 55)
+
+    def test_actionable_recommendation_direction_not_mutated(self):
+        """no-writeback invariant: actionable_recommendation.direction is
+        byte-equal before and after decision_quality runs."""
+        record = self._run_analyze(dq_enabled=True)
+        # actionable_recommendation.direction should still be YES
+        # (decision_quality may set displayed_direction, but never mutates
+        # the raw recommendation)
+        self.assertEqual(
+            record["actionable_recommendation"]["direction"], "YES"
+        )
+
+    def test_decision_quality_build_failure_does_not_block(self):
+        """When build_decision_quality raises, analyze_event still returns
+        a record with a fallback decision_quality.error block."""
+        analyze = AsyncMock(return_value={
+            "market_question": "Q?",
+            "market_probability": 50,
+            "ai_probability": 55,
+            "signal": "ACT",
+            "signal_direction": "LONG",
+            "signal_strength": "HIGH",
+            "risk_level": "medium",
+            "expected_edge": 0.05,
+            "position_size": 0.02,
+            "evidence_strength": 0.8,
+            "confidence_score": 0.7,
+            "news_quality_score": 0.8,
+            "source_count": 3,
+        })
+        with patch("app.services.ai_analysis_service.analyze_market", new=analyze), \
+                patch("app.services.cross_validation_service.cross_validate",
+                      new=AsyncMock(return_value=None)), \
+                patch.object(eis.settings, "EVIDENCE_BREAKDOWN_ENABLED", True), \
+                patch.object(eis.settings, "DECISION_QUALITY_ENABLED", True), \
+                patch.object(eis.settings, "DECISION_QUALITY_MAX_EVIDENCE_ITEMS", 3), \
+                patch.object(eis.settings, "DECISION_QUALITY_HIGH_CONFLICT_THRESHOLD", 0.40), \
+                patch.object(eis.settings, "DECISION_QUALITY_MEDIUM_CONFLICT_THRESHOLD", 0.20), \
+                patch("app.services.decision_quality_service.build_decision_quality",
+                      side_effect=RuntimeError("boom")):
+            record = _run(eis.analyze_event(
+                "Q?",
+                baseline_probability=50,
+                news_context="direction: support",
+                sentiment_profile=self.SENTIMENT,
+                filtered_articles=self.FILTERED_ARTICLES,
+            ))
+        self.assertIn("decision_quality", record)
+        self.assertEqual(record["decision_quality"]["error"], "build_failed")
+        self.assertEqual(record["decision_quality"]["raw_direction"], "YES")
+        self.assertEqual(record["decision_quality"]["displayed_direction"], "YES")

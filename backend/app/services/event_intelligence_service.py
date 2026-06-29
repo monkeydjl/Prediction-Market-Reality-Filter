@@ -291,6 +291,38 @@ async def analyze_event(
         )
     else:
         record["evidence_breakdown"] = []
+
+    # Phase 1: Decision Quality overlay. Best-effort audit layer — wrapped in
+    # try/except so a build failure never blocks event production. When the
+    # feature flag is off, the record has no `decision_quality` key
+    # (byte-identical to pre-Phase-1 records).
+    try:
+        if settings.DECISION_QUALITY_ENABLED:
+            from app.services.decision_quality_service import build_decision_quality
+            record["decision_quality"] = build_decision_quality(
+                recommendation=record.get("actionable_recommendation"),
+                evidence_breakdown=record.get("evidence_breakdown", []),
+                enabled=True,
+                max_items=settings.DECISION_QUALITY_MAX_EVIDENCE_ITEMS,
+                high_threshold=settings.DECISION_QUALITY_HIGH_CONFLICT_THRESHOLD,
+                medium_threshold=settings.DECISION_QUALITY_MEDIUM_CONFLICT_THRESHOLD,
+            )
+    except Exception as exc:
+        logger.warning("decision_quality build failed: %s", exc)
+        fallback_direction = (record.get("actionable_recommendation") or {}).get("direction", "WAIT")
+        record["decision_quality"] = {
+            "error": "build_failed",
+            "raw_direction": fallback_direction,
+            "displayed_direction": fallback_direction,
+            "downgraded": False,
+            "downgrade_reason": None,
+            "decision_rationale_zh": "决策质量构建失败，使用原始方向。本分析仅供参考，不构成投资建议。",
+            "supporting_evidence": [],
+            "opposing_evidence": [],
+            "conflict_score": 0.0,
+            "consensus_level": "none",
+            "reversal_triggers": [],
+        }
     return record
 
 

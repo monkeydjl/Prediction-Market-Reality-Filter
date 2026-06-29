@@ -928,3 +928,164 @@ class CalculateValueScoreTests(unittest.TestCase):
     def test_rounding(self):
         # 73 * 67 / 100 = 48.91 -> 49
         self.assertEqual(calculate_value_score(73, 67), 49)
+
+
+class EvidenceBreakdownTests(unittest.TestCase):
+    """Locks the evidence_breakdown integration in analyze_event (Stage:
+    evidence decomposition). The field is an audit/explanation layer and
+    MUST NOT affect ai_probability / evidence_profile / actionable_recommendation."""
+
+    SENTIMENT_WITH_EVIDENCE = {
+        "articles": [{
+            "index": 0,
+            "sentiment": "positive",
+            "impact": "high",
+            "key_facts": ["fact"],
+            "relevance_to_question": 0.8,
+            "evidence_direction": "support",
+            "evidence_strength": 0.85,
+            "source_credibility": 0.9,
+            "rationale_zh": "直接支持 YES 的事实。",
+        }],
+        "overall_direction": "support_yes",
+        "overall_strength": 0.85,
+        "conflict_level": 0.1,
+        "summary": "证据整体支持 YES",
+    }
+
+    FILTERED_ARTICLES = [
+        {"source": "Reuters", "title": "Fed signals rate cut", "description": "desc"}
+    ]
+
+    def test_analyze_event_populates_evidence_breakdown_when_enabled(self):
+        analyze = AsyncMock(return_value={
+            "market_question": "Will the bill pass?",
+            "market_probability": 50,
+            "ai_probability": 55,
+        })
+        with patch("app.services.ai_analysis_service.analyze_market", new=analyze), \
+                patch("app.services.cross_validation_service.cross_validate",
+                      new=AsyncMock(return_value=None)), \
+                patch("app.services.event_intelligence_service.settings.EVIDENCE_BREAKDOWN_ENABLED",
+                      True):
+            record = _run(eis.analyze_event(
+                "Will the bill pass?",
+                baseline_probability=50,
+                news_context="direction: support",
+                sentiment_profile=self.SENTIMENT_WITH_EVIDENCE,
+                filtered_articles=self.FILTERED_ARTICLES,
+            ))
+        self.assertIn("evidence_breakdown", record)
+        self.assertEqual(len(record["evidence_breakdown"]), 1)
+        item = record["evidence_breakdown"][0]
+        self.assertEqual(item["source"], "Reuters")
+        self.assertEqual(item["title"], "Fed signals rate cut")
+        self.assertEqual(item["direction"], "support")
+        self.assertEqual(item["strength"], 0.85)
+        self.assertEqual(item["credibility"], 0.9)
+        self.assertEqual(item["rationale_zh"], "直接支持 YES 的事实。")
+
+    def test_analyze_event_evidence_breakdown_empty_when_disabled(self):
+        analyze = AsyncMock(return_value={
+            "market_question": "Will the bill pass?",
+            "market_probability": 50,
+            "ai_probability": 55,
+        })
+        with patch("app.services.ai_analysis_service.analyze_market", new=analyze), \
+                patch("app.services.cross_validation_service.cross_validate",
+                      new=AsyncMock(return_value=None)), \
+                patch("app.services.event_intelligence_service.settings.EVIDENCE_BREAKDOWN_ENABLED",
+                      False):
+            record = _run(eis.analyze_event(
+                "Will the bill pass?",
+                baseline_probability=50,
+                news_context="direction: support",
+                sentiment_profile=self.SENTIMENT_WITH_EVIDENCE,
+                filtered_articles=self.FILTERED_ARTICLES,
+            ))
+        self.assertEqual(record["evidence_breakdown"], [])
+
+    def test_analyze_event_evidence_breakdown_empty_when_no_sentiment(self):
+        analyze = AsyncMock(return_value={
+            "market_question": "Will the bill pass?",
+            "market_probability": 50,
+            "ai_probability": 55,
+        })
+        with patch("app.services.ai_analysis_service.analyze_market", new=analyze), \
+                patch("app.services.cross_validation_service.cross_validate",
+                      new=AsyncMock(return_value=None)):
+            record = _run(eis.analyze_event(
+                "Will the bill pass?",
+                baseline_probability=50,
+                news_context="direction: support",
+                sentiment_profile=None,
+                filtered_articles=self.FILTERED_ARTICLES,
+            ))
+        self.assertEqual(record["evidence_breakdown"], [])
+
+    def test_analyze_event_evidence_breakdown_empty_when_no_filtered_articles(self):
+        analyze = AsyncMock(return_value={
+            "market_question": "Will the bill pass?",
+            "market_probability": 50,
+            "ai_probability": 55,
+        })
+        with patch("app.services.ai_analysis_service.analyze_market", new=analyze), \
+                patch("app.services.cross_validation_service.cross_validate",
+                      new=AsyncMock(return_value=None)):
+            record = _run(eis.analyze_event(
+                "Will the bill pass?",
+                baseline_probability=50,
+                news_context="direction: support",
+                sentiment_profile=self.SENTIMENT_WITH_EVIDENCE,
+                filtered_articles=None,
+            ))
+        self.assertEqual(record["evidence_breakdown"], [])
+
+    def test_analyze_event_evidence_breakdown_filters_neutral_articles(self):
+        # sentiment article with neutral direction -> filtered out by aggregation
+        sentiment = {
+            "articles": [{
+                "index": 0,
+                "evidence_direction": "neutral",
+                "evidence_strength": 0.9,
+            }],
+            "overall_direction": "neutral",
+            "overall_strength": 0.0,
+            "conflict_level": 0.0,
+            "summary": "neutral",
+        }
+        analyze = AsyncMock(return_value={
+            "market_question": "Q?",
+            "market_probability": 50,
+            "ai_probability": 55,
+        })
+        with patch("app.services.ai_analysis_service.analyze_market", new=analyze), \
+                patch("app.services.cross_validation_service.cross_validate",
+                      new=AsyncMock(return_value=None)):
+            record = _run(eis.analyze_event(
+                "Q?",
+                baseline_probability=50,
+                news_context="direction: neutral",
+                sentiment_profile=sentiment,
+                filtered_articles=self.FILTERED_ARTICLES,
+            ))
+        self.assertEqual(record["evidence_breakdown"], [])
+
+    def test_analyze_event_does_not_break_without_filtered_articles_kwarg(self):
+        """Backward compat: old callers that do not pass filtered_articles
+        still get a working record with evidence_breakdown=[]."""
+        analyze = AsyncMock(return_value={
+            "market_question": "Q?",
+            "market_probability": 50,
+            "ai_probability": 55,
+        })
+        with patch("app.services.ai_analysis_service.analyze_market", new=analyze), \
+                patch("app.services.cross_validation_service.cross_validate",
+                      new=AsyncMock(return_value=None)):
+            record = _run(eis.analyze_event(
+                "Q?",
+                baseline_probability=50,
+                news_context="direction: support",
+                # NOTE: no filtered_articles kwarg
+            ))
+        self.assertEqual(record.get("evidence_breakdown", []), [])

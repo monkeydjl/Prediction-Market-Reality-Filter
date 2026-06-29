@@ -229,6 +229,7 @@ async def analyze_event(
     liquidity: float | None = None,
     sentiment_profile: dict[str, Any] | None = None,
     market_quote: dict[str, Any] | None = None,
+    filtered_articles: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     from app.services.ai_analysis_service import analyze_market
     from app.services.cross_validation_service import credibility_delta, cross_validate
@@ -277,6 +278,15 @@ async def analyze_event(
     if market_quote is not None:
         record["market_quote"] = market_quote
     _apply_calibration_feedback(record, analysis, cross)
+    from app.services.evidence_aggregation_service import aggregate_evidence_breakdown
+
+    if settings.EVIDENCE_BREAKDOWN_ENABLED and sentiment_profile and filtered_articles:
+        record["evidence_breakdown"] = aggregate_evidence_breakdown(
+            sentiment_profile.get("articles", []),
+            filtered_articles,
+        )
+    else:
+        record["evidence_breakdown"] = []
     return record
 
 
@@ -357,6 +367,7 @@ async def analyze_event_question(
             volume=volume,
             liquidity=liquidity,
             sentiment_profile=filtered_news.get("sentiment_profile"),
+            filtered_articles=filtered_news.get("articles", []),
         )
         record["news_filter"] = filtered_news["summary"]
         articles = await translate_articles(filtered_news.get("articles") or [])
@@ -654,6 +665,7 @@ async def discover_events(
                     liquidity=candidate.get("liquidity"),
                     sentiment_profile=filtered_news.get("sentiment_profile"),
                     market_quote=market_quote,
+                    filtered_articles=filtered_news.get("articles", []),
                 )
                 record["news_filter"] = filtered_news["summary"]
                 articles = await translate_articles(filtered_news.get("articles") or [])

@@ -1697,7 +1697,7 @@ class DiscoverServiceTests(unittest.TestCase):
 
         async def fake_analyze(event_question, baseline_probability, news_context,
                                source, volume, liquidity, sentiment_profile=None,
-                               market_quote=None):
+                               market_quote=None, filtered_articles=None):
             return {"event_id": event_question, "value_score": {"qA": 30, "qC": 70}[event_question]}
 
         async def run():
@@ -1751,7 +1751,7 @@ class DiscoverServiceTests(unittest.TestCase):
 
         async def fake_analyze(event_question, baseline_probability, news_context,
                                source, volume, liquidity, sentiment_profile=None,
-                               market_quote=None):
+                               market_quote=None, filtered_articles=None):
             self.assertIsNone(volume)
             self.assertIsNone(liquidity)
             return {"event_id": event_question, "value_score": 20}
@@ -1781,7 +1781,7 @@ class DiscoverServiceTests(unittest.TestCase):
 
         async def fake_analyze(event_question, baseline_probability, news_context,
                                source, volume, liquidity, sentiment_profile=None,
-                               market_quote=None):
+                               market_quote=None, filtered_articles=None):
             self.assertEqual(baseline_probability, 50.0)
             return {"event_id": event_question, "value_score": 20}
 
@@ -1811,7 +1811,7 @@ class DiscoverServiceTests(unittest.TestCase):
 
         async def fake_analyze(event_question, baseline_probability, news_context,
                                source, volume, liquidity, sentiment_profile=None,
-                               market_quote=None):
+                               market_quote=None, filtered_articles=None):
             seen.append((event_question, baseline_probability))
             return {"event_id": event_question, "value_score": 20}
 

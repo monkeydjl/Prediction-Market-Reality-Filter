@@ -339,6 +339,7 @@ class Settings:
     # candidate events (forward-looking questions), not just evidence. Disabled
     # unless OPEN_WEB_EXTRACTION_MODEL is set; runs on the primary provider/client.
     OPEN_WEB_EXTRACTION_MODEL: str = os.getenv("OPEN_WEB_EXTRACTION_MODEL", "")
+    OPEN_WEB_ENABLED: bool = _env_bool("OPEN_WEB_ENABLED", "false")
     OPEN_WEB_SOURCE_NAME: str = os.getenv("OPEN_WEB_SOURCE_NAME", "Open Web")
 
     # Semantic news relevance via embeddings. Opt-in: disabled unless
@@ -399,9 +400,11 @@ class Settings:
     # verified link and is eligible to be scored; below it the link is recorded
     # but left unverified (pending human review) and is NOT scored - fail-closed,
     # so a fuzzy match never silently scores an event against the wrong outcome.
-    # Default 1.0 = only exact normalized-question matches auto-verify.
+    # Default 0.90 = high-quality fuzzy matches auto-verify. The FUZZY_THRESHOLD
+    # (0.82) already gates minimum match quality; the verify gate only needs to
+    # reject the lowest-quality fuzzy matches, not demand exact identity.
     AUTO_VERIFY_THRESHOLD: float = float(
-        os.getenv("AUTO_VERIFY_THRESHOLD", "1.0")
+        os.getenv("AUTO_VERIFY_THRESHOLD", "0.90")
     )
 
     # Disagreement Diagnosis (M2). A committed prediction's raw edge (AI - market)
@@ -471,7 +474,22 @@ class Settings:
         os.getenv("EVENT_DISCOVER_ENABLED", "true").strip().lower()
         in {"1", "true", "yes", "on"}
     )
-    EVENT_DISCOVER_LIMIT: int = int(os.getenv("EVENT_DISCOVER_LIMIT", "10"))
+    EVENT_DISCOVER_LIMIT: int = int(os.getenv("EVENT_DISCOVER_LIMIT", "100"))
+    # Per-source weight multipliers for discovery.  Each source is asked for
+    # ``limit * weight`` candidates instead of the flat ``limit``.  Polymarket
+    # is the primary prediction-market source (highest weight), Kalshi is
+    # secondary, Manifold is supplementary.  Open Web (LLM extraction from
+    # news) is kept below market sources so the event mix is dominated by
+    # real market prices, not news-derived speculation.
+    SOURCE_WEIGHTS: dict[str, float] = {
+        "Polymarket": float(os.getenv("SOURCE_WEIGHT_POLYMARKET", "3.0")),
+        "Kalshi": float(os.getenv("SOURCE_WEIGHT_KALSHI", "0.3")),
+        "Manifold": float(os.getenv("SOURCE_WEIGHT_MANIFOLD", "0.3")),
+        "Open Web": float(os.getenv("SOURCE_WEIGHT_OPEN_WEB", "0.5")),
+        "Polymarket Crypto": float(os.getenv("SOURCE_WEIGHT_POLYMARKET_CRYPTO", "1.0")),
+        "World Cup": 0.3,
+        "Metaculus": 0.5,
+    }
     SCHEDULER_ENABLED: bool = _env_bool("SCHEDULER_ENABLED", "true")
     SCHEDULER_LOCK_ENABLED: bool = _env_bool("SCHEDULER_LOCK_ENABLED", "true")
     SCHEDULER_LOCK_FILE: str = os.getenv(

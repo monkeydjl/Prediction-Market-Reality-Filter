@@ -250,6 +250,7 @@ async def analyze_event(
         question=event_question,
         news_context=combined_context,
         primary_probability=record["probability"]["estimated"],
+        market_baseline=baseline_probability,
     )
     if cross is not None:
         record["cross_validation"] = cross
@@ -413,9 +414,20 @@ async def _collect_candidate_events(
     if settings.METACULUS_API_TOKEN:
         candidate_sources.append(("Metaculus", fetch_metaculus_events))
     labels = [name for name, _ in candidate_sources] + ["Open Web"]
+    # Apply per-source weight multipliers: the primary market source (Polymarket)
+    # gets more of the candidate budget, supplementary sources get less.  Keeps
+    # the round-robin interleave balanced under the cap while shifting the event
+    # mix toward real market prices.
+    _weights = settings.SOURCE_WEIGHTS
+
+    def _src_limit(name: str) -> int:
+        return max(1, int(limit * _weights.get(name, 1.0)))
+
     results = await asyncio.gather(
-        *(fetch(limit) for _, fetch in candidate_sources),
-        extract_candidate_events(shared_articles or [], limit),
+        *(fetch(_src_limit(name)) for name, fetch in candidate_sources),
+        extract_candidate_events(
+            shared_articles or [], _src_limit("Open Web"),
+        ) if settings.OPEN_WEB_ENABLED else asyncio.sleep(0, result=[]),
         return_exceptions=True,
     )
     per_source: list[list[dict[str, Any]]] = []
@@ -555,6 +567,7 @@ def _persist_events(records: list[dict[str, Any]]) -> None:
     from app.memory.event_store import save_events
     from app.memory.prediction_store import freeze_prediction
     from app.services.event_audit_service import record_event
+    from app.memory.event_market_link_store import get_verified_link, upsert_link
 
     try:
         saved_entries = save_events(records)
@@ -566,6 +579,34 @@ def _persist_events(records: list[dict[str, Any]]) -> None:
 
     for record in [entry["record"] for entry in saved_entries]:
         event_id = record.get("event_id")
+        # Discovery-time contract linking: for market-derived events, create a
+        # verified link using the source_id (market contract id) immediately.
+        # This enables the contract-id settlement path in auto_resolve from day
+        # one, instead of requiring a text match first. Idempotent — upsert_link
+        # is a no-op when a verified link already exists for this event_id.
+        try:
+            source = record.get("source") or {}
+            source_id = source.get("source_id")
+            platform = source.get("platform", "")
+            if (
+                source_id
+                and source.get("type") == "prediction_market"
+                and not get_verified_link(event_id)
+            ):
+                upsert_link(
+                    event_id,
+                    market_name=platform,
+                    contract_id=str(source_id),
+                    market_question=source.get("question", record.get("event_title", "")),
+                    resolution_criteria=(record.get("semantics") or {}).get(
+                        "resolution_criteria", ""
+                    ),
+                    link_method="discovery",
+                    link_confidence=1.0,
+                    verified=True,
+                )
+        except Exception as exc:
+            logger.warning("Discovery-time link failed for %s: %s", event_id, exc)
         try:
             record_event(record)
         except Exception as exc:
@@ -641,6 +682,20 @@ async def _build_filtered_news(
     filtered["sentiment_profile"] = await analyze_sentiment(
         event_question, enriched_articles
     )
+    # ── Phase 4: Fuse LLM sentiment into the evidence profile ─────────────
+    # The keyword-based evidence profile is computed before sentiment (inside
+    # filter_news_for_market). Now that sentiment is available, blend it in so
+    # the LLM sentiment direction/strength formally participates in the
+    # evidence signal that flows into clamp_probability and confidence scoring.
+    from app.services.evidence_scoring_service import apply_sentiment_fusion
+    from app.services.news_filter_service import build_news_context
+
+    sentiment = filtered.get("sentiment_profile")
+    evidence = filtered.get("evidence_profile")
+    if sentiment and evidence:
+        apply_sentiment_fusion(evidence, sentiment)
+        semantics = filtered.get("market_semantics") or {}
+        filtered["context"] = build_news_context(enriched_articles, evidence, semantics)
     return filtered
 
 

@@ -55,6 +55,7 @@ RISK_KEYWORDS = {
 
 DEFAULT_ANALYSIS: dict[str, Any] = {
     "ai_probability": None,
+    "reasoning_steps": [],
     "title_zh": "",
     "narrative_type": "unknown",
     "narrative_summary": "AI 分析暂不可用。",
@@ -83,11 +84,48 @@ def get_client() -> AsyncOpenAI:
     return _client
 
 
+async def translate_title(question: str) -> str:
+    """Translate a market question into a concise Chinese title.
+
+    Lightweight LLM call used when the main analysis falls back to the
+    deterministic path (which never produces title_zh). Fail-closed: returns
+    empty string on any error so it never blocks the analysis pipeline.
+    """
+    if not question or not question.strip():
+        return ""
+    try:
+        client = get_client()
+        response = await client.chat.completions.create(
+            model=settings.OPENAI_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You translate prediction market questions into concise "
+                        "Simplified Chinese titles. Output ONLY the Chinese title, "
+                        "nothing else. Keep it under 30 characters. No quotes, no "
+                        "explanation."
+                    ),
+                },
+                {"role": "user", "content": question[:500]},
+            ],
+            temperature=0,
+            max_tokens=60,
+        )
+        text = (response.choices[0].message.content or "").strip().strip("\"'""''")
+        return text[:300] if text else ""
+    except Exception as exc:
+        logger.debug("translate_title failed [question=%.60s]: %s", question, exc)
+        return ""
+
+
 async def _ask_ai(
     market_question: str,
     market_probability: float,
     news_context: str,
     sentiment_summary: str = "",
+    base_rate_context: dict[str, Any] | None = None,
+    deadline_info: str | None = None,
 ) -> dict[str, Any]:
     client = get_client()
     response = await client.chat.completions.create(
@@ -101,6 +139,8 @@ async def _ask_ai(
                     market_probability=market_probability,
                     news_context=news_context,
                     sentiment_summary=sentiment_summary,
+                    base_rate_context=base_rate_context,
+                    deadline_info=deadline_info,
                 ),
             },
         ],
@@ -134,23 +174,45 @@ def _build_user_prompt(
     market_probability: float,
     news_context: str,
     sentiment_summary: str = "",
+    base_rate_context: dict[str, Any] | None = None,
+    deadline_info: str | None = None,
 ) -> str:
     safe_question = _sanitize_text(market_question)[:700]
     safe_news = _sanitize_text(news_context)[:9000]
-    prompt = f"""
-Task: structured Prediction Market Narrative Filter analysis.
 
-Market question:
-{safe_question}
-
-Current market probability:
-{market_probability}%
-
-Structured news evidence and filtered news context:
-{safe_news}
-
-Return exactly this JSON shape:
-{{
+    # ── Build prompt with optional base rate + deadline context ────────
+    parts: list[str] = [
+        "Task: structured Prediction Market Narrative Filter analysis.",
+        f"Market question:\n{safe_question}",
+        f"Current market probability:\n{market_probability}%",
+    ]
+    if base_rate_context:
+        br_cat = base_rate_context.get("category", "unknown")
+        br_prior = base_rate_context.get("prior", 50)
+        br_range = base_rate_context.get("historical_range", "20% – 80%")
+        br_note = base_rate_context.get("note", "")
+        parts.append(
+            f"HISTORICAL BASE RATE:\nCategory: {br_cat}\n"
+            f"Prior probability: {br_prior}%\n"
+            f"Historical range: {br_range}\n"
+            f"Note: {br_note}\n"
+            f"Use this as your prior anchor. Deviate only when evidence clearly warrants it."
+        )
+    if deadline_info:
+        parts.append(
+            f"TIME TO DEADLINE: {deadline_info}\n"
+            "Events near deadline → estimate conservatively (less room for surprise).\n"
+            "Events far from deadline → more uncertainty."
+        )
+    parts.append(f"Structured news evidence and filtered news context:\n{safe_news}")
+    parts.append("""Return exactly this JSON shape:
+{
+  "reasoning_steps": [
+    {"step": "Identify the key conditions and their individual probabilities"},
+    {"step": "Assess evidence for each condition"},
+    {"step": "Evaluate condition dependencies"},
+    {"step": "Synthesize joint probability"}
+  ],
   "ai_probability": 0.0,
   "title_zh": "...",
   "narrative_type": "factual|speculative|meme|satire|conspiracy|clickbait|unknown",
@@ -161,7 +223,9 @@ Return exactly this JSON shape:
   "resolution_criteria": "...",
   "time_horizon": "...",
   "entities": ["..."]
-}}
+}
+
+Use reasoning_steps to show your thinking process. Each step should be a brief sentence in Chinese. This helps calibrate the final probability.
 
 Probability guidance:
 - Use MARKET SEMANTICS to understand the exact YES/NO resolution conditions.
@@ -170,17 +234,15 @@ Probability guidance:
 - High CONFLICT means lower confidence and smaller probability deviation.
 - Low STRENGTH means stay close to market probability.
 - Low FRESHNESS means the market may already have priced the news.
-- Your estimate will be anchored to historical base rates after parsing.
+- Consider HISTORICAL BASE RATE as your prior. Adjust by TIME TO DEADLINE.
 
 Structured event fields (always fill these from the question + evidence):
-- title_zh: a concise Simplified-Chinese title for the event - translate /
-  rewrite the Market question into natural Chinese (keep it faithful).
-- resolution_criteria: the specific, checkable condition that determines YES
-  vs NO (e.g. "Bitcoin closes at or above $100,000 on any day in 2026").
-- time_horizon: the deadline or time window (e.g. "by end of 2026", "Q3 2026").
-- entities: the key subjects the event is about - people, organizations,
-  assets, laws, etc. Use the most common surface form of each name.
-""".strip()
+- title_zh: Directly translate the market question into Simplified Chinese (简体中文). Preserve every date, number, percentage, and proper noun from the original question exactly as written. Do NOT add dates, timeframes, or details that are not in the original question.
+- resolution_criteria: the specific, checkable condition for YES vs NO.
+- time_horizon: the deadline or time window.
+- entities: the key subjects (people, organizations, assets, laws).""")
+
+    prompt = "\n\n".join(parts)
     # Sentiment is an additive LLM-judgment signal layered on top of the
     # structured evidence. Only included when non-empty so the neutral
     # fallback (no real LLM call) is a clean no-op.
@@ -217,6 +279,19 @@ def _normalize_ai_analysis(
         if isinstance(value, str) and value.strip():
             result[key] = value.strip()[:500]
     result["entities"] = _clean_entities(data.get("entities"))
+
+    # Chain-of-thought reasoning steps: extract as-is when valid, else [].
+    raw_steps = data.get("reasoning_steps")
+    if isinstance(raw_steps, list):
+        cleaned_steps: list[dict[str, str]] = []
+        for step_item in raw_steps:
+            if isinstance(step_item, dict) and "step" in step_item:
+                step_text = str(step_item["step"]).strip()
+                if step_text:
+                    cleaned_steps.append({"step": step_text[:500]})
+        result["reasoning_steps"] = cleaned_steps
+    else:
+        result["reasoning_steps"] = []
 
     result["has_strong_evidence"] = bool(data.get("has_strong_evidence", False))
     result["reasoning_consistency"] = _clamp(
@@ -289,6 +364,43 @@ def build_deterministic_fallback_analysis(
     }
 
 
+def _smooth_penalty(
+    value: float,
+    good_thresh: float,
+    bad_thresh: float,
+    good_penalty: float,
+    bad_penalty: float,
+    higher_is_better: bool = True,
+) -> float:
+    """Continuous penalty interpolation — replaces 3-tier step functions.
+
+    Maps value smoothly between good_penalty and bad_penalty using Hermite
+    smoothstep (3t² - 2t³) so there are no discontinuities at thresholds.
+
+    For higher_is_better=True (confidence, strength, freshness, relevance):
+      value >= good_thresh → good_penalty
+      value <= bad_thresh  → bad_penalty
+    For higher_is_better=False (conflict, priced_in_risk, ambiguity):
+      value <= good_thresh → good_penalty
+      value >= bad_thresh  → bad_penalty
+    """
+    if higher_is_better:
+        if value >= good_thresh:
+            return good_penalty
+        if value <= bad_thresh:
+            return bad_penalty
+        t = (good_thresh - value) / (good_thresh - bad_thresh)
+    else:
+        if value <= good_thresh:
+            return good_penalty
+        if value >= bad_thresh:
+            return bad_penalty
+        t = (value - good_thresh) / (bad_thresh - good_thresh)
+    # Hermite smoothstep: 3t² - 2t³ (C1 continuous at boundaries)
+    smooth_t = t * t * (3.0 - 2.0 * t)
+    return good_penalty + smooth_t * (bad_penalty - good_penalty)
+
+
 def clamp_probability(
     market_probability: float,
     ai_probability: float,
@@ -315,70 +427,52 @@ def clamp_probability(
     semantics = semantics_profile or default_semantics_profile()
 
     # ── 计算各维度回归强度（越高 = 越不信任 AI，越靠近市场概率）────────
+    # Phase 4: continuous sigmoid interpolation replaces 3-tier step functions.
+    # Smooth penalties eliminate boundary discontinuities (e.g. confidence 0.749
+    # vs 0.751 no longer jumps 0.15 in penalty).
     penalties: list[float] = []
 
-    # 1. 置信度：低置信度时强力回归
-    if confidence >= 0.75:
-        penalties.append(0.15)
-    elif confidence >= 0.60:
-        penalties.append(0.30)
-    else:
-        penalties.append(0.55)
+    # 1. 置信度：低置信度时强力回归 (higher is better)
+    penalties.append(
+        _smooth_penalty(confidence, 0.75, 0.30, 0.15, 0.55, higher_is_better=True)
+    )
 
-    # 2. 证据强度
+    # 2. 证据强度 (higher is better)
     strength = evidence["evidence_strength"]
-    if strength >= 0.5:
-        penalties.append(0.10)
-    elif strength >= 0.25:
-        penalties.append(0.30)
-    else:
-        penalties.append(0.50)
+    penalties.append(
+        _smooth_penalty(strength, 0.5, 0.10, 0.10, 0.50, higher_is_better=True)
+    )
 
-    # 3. 分辨率相关性
+    # 3. 结算相关性 (higher is better)
     relevance = evidence["resolution_relevance_score"]
-    if relevance >= 0.5:
-        penalties.append(0.10)
-    elif relevance >= 0.35:
-        penalties.append(0.25)
-    else:
-        penalties.append(0.45)
+    penalties.append(
+        _smooth_penalty(relevance, 0.5, 0.15, 0.10, 0.45, higher_is_better=True)
+    )
 
-    # 4. 证据冲突
+    # 4. 证据冲突 (lower is better)
     conflict = evidence["conflict_score"]
-    if conflict <= 0.25:
-        penalties.append(0.05)
-    elif conflict <= 0.45:
-        penalties.append(0.20)
-    else:
-        penalties.append(0.40)
+    penalties.append(
+        _smooth_penalty(conflict, 0.25, 0.55, 0.05, 0.40, higher_is_better=False)
+    )
 
-    # 5. 新鲜度
+    # 5. 新鲜度 (higher is better)
     freshness = evidence["freshness_score"]
-    if freshness >= 0.75:
-        penalties.append(0.05)
-    elif freshness >= 0.5:
-        penalties.append(0.20)
-    else:
-        penalties.append(0.35)
+    penalties.append(
+        _smooth_penalty(freshness, 0.75, 0.30, 0.05, 0.35, higher_is_better=True)
+    )
 
-    # 6. 已定价风险
-    if priced_in_risk_score >= 70:
-        penalties.append(0.45)
-    elif priced_in_risk_score >= 50:
-        penalties.append(0.25)
-    else:
-        penalties.append(0.05)
+    # 6. 已定价风险 (lower is better — high priced_in = more regression)
+    penalties.append(
+        _smooth_penalty(priced_in_risk_score, 40, 80, 0.05, 0.45, higher_is_better=False)
+    )
 
-    # 7. 市场问题歧义性
+    # 7. 市场问题歧义性 (lower is better — high ambiguity = more regression)
     ambiguity = semantics["ambiguity_score"]
-    if ambiguity >= 60:
-        penalties.append(0.35)
-    elif ambiguity >= 40:
-        penalties.append(0.20)
-    else:
-        penalties.append(0.05)
+    penalties.append(
+        _smooth_penalty(ambiguity, 30, 70, 0.05, 0.35, higher_is_better=False)
+    )
 
-    # 8. Narrative 类型
+    # 8. Narrative 类型 (categorical — stays discrete)
     if "meme" in narrative or "satire" in narrative or "conspiracy" in narrative:
         penalties.append(0.40)
     elif "speculative" in narrative or "clickbait" in narrative:
@@ -513,6 +607,7 @@ def calculate_priced_in_risk_score(
     evidence_profile: dict[str, Any],
     volume: float | None = None,
     liquidity: float | None = None,
+    market_microstructure: dict[str, Any] | None = None,
 ) -> int:
     score = 10
     direction = evidence_profile["evidence_direction"]
@@ -538,10 +633,33 @@ def calculate_priced_in_risk_score(
 
     volume_value = _clamp(volume or 0, 0, 10_000_000)
     liquidity_value = _clamp(liquidity or 0, 0, 10_000_000)
+    # ── Log-continuous market depth scoring ─────────────────────────────
+    # Replaces binary thresholds (volume≥100k→10, else 0) with a smooth
+    # log-scale so 99k and 101k don't differ by 10 points. Max 10 per signal.
+    import math as _math
     if volume_value >= 100_000:
-        score += 10
+        vol_norm = (_math.log10(volume_value) - 5.0) / 2.0  # 5=log10(100k), 7=log10(10M)
+        score += int(_clamp(vol_norm * 10, 0, 10))
     if liquidity_value >= 50_000:
-        score += 10
+        liq_norm = (_math.log10(liquidity_value) - _math.log10(50_000)) / (_math.log10(10_000_000) - _math.log10(50_000))
+        score += int(_clamp(liq_norm * 10, 0, 10))
+
+    # ── Market microstructure signals ─────────────────────────────────────
+    # Optional point-in-time market microstructure refinements. Each signal
+    # is independent and additive. Only applied when the caller provides the
+    # market_microstructure dict (backward-compatible: None → no adjustment).
+    if market_microstructure is not None and isinstance(market_microstructure, dict):
+        price_change_24h = market_microstructure.get("price_change_24h")
+        if isinstance(price_change_24h, (int, float)) and abs(price_change_24h) > 5:
+            score += 10
+
+        bid_ask_spread = market_microstructure.get("bid_ask_spread")
+        if isinstance(bid_ask_spread, (int, float)) and bid_ask_spread < 2:
+            score += 5
+
+        volume_z_score = market_microstructure.get("volume_z_score")
+        if isinstance(volume_z_score, (int, float)) and volume_z_score > 2:
+            score += 8
 
     return int(_clamp(score, 0, 100))
 

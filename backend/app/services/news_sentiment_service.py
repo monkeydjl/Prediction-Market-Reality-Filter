@@ -22,6 +22,14 @@ Given a market question and a list of news articles, analyze:
 2. Each article's impact on the event probability (high/medium/low)
 3. The overall evidence direction (support_yes / oppose_yes / neutral)
 4. Key quotes or facts that drive the assessment
+5. evidence_direction: does this article's concrete facts support or oppose the YES outcome?
+   (support | oppose | neutral) - based on facts, not tone.
+6. evidence_strength: how strongly does this article move the probability?
+   (0.0-1.0) - consider specificity, directness, freshness, source authority.
+7. source_credibility: how trustworthy is this source for this topic?
+   (0.0-1.0) - official/regulatory > Reuters/AP/Bloomberg > established media > aggregators/blogs.
+8. rationale_zh: one Simplified Chinese sentence explaining your direction+strength assessment.
+   Use event vocabulary (YES/NO/支持/反对). Do NOT use trading terms: long, short, buy, sell, position, kelly, order.
 
 Return ONLY valid JSON (no markdown) with this structure:
 {
@@ -31,7 +39,11 @@ Return ONLY valid JSON (no markdown) with this structure:
       "sentiment": "positive|negative|neutral",
       "impact": "high|medium|low",
       "key_facts": ["fact 1", "fact 2"],
-      "relevance_to_question": 0.0-1.0
+      "relevance_to_question": 0.0-1.0,
+      "evidence_direction": "support|oppose|neutral",
+      "evidence_strength": 0.0-1.0,
+      "source_credibility": 0.0-1.0,
+      "rationale_zh": "一句中文说明"
     }
   ],
   "overall_direction": "support_yes|oppose_yes|neutral",

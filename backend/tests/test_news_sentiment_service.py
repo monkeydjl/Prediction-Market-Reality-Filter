@@ -180,3 +180,100 @@ def test_analyze_sentiment_falls_back_when_llm_returns_malformed_json(monkeypatc
     assert result["overall_direction"] == "neutral"
     assert result["fallback"] is True
     assert "malformed LLM response" in result["summary"]
+
+
+def test_system_prompt_includes_evidence_fields():
+    """The system prompt must instruct the LLM to emit the new per-article
+    evidence fields so aggregation has something to work with."""
+    from app.services.news_sentiment_service import _SYSTEM_PROMPT
+    assert "evidence_direction" in _SYSTEM_PROMPT
+    assert "evidence_strength" in _SYSTEM_PROMPT
+    assert "source_credibility" in _SYSTEM_PROMPT
+    assert "rationale_zh" in _SYSTEM_PROMPT
+    # 禁词约束 must appear so LLM avoids trading terms in rationale
+    assert "long" in _SYSTEM_PROMPT.lower()
+    assert "short" in _SYSTEM_PROMPT.lower()
+    assert "position" in _SYSTEM_PROMPT.lower()
+
+
+def test_analyze_sentiment_preserves_new_evidence_fields(monkeypatch):
+    """When the LLM returns the new evidence fields per article, they are
+    passed through verbatim in result['articles'][i] (the aggregation layer
+    reads them later). This locks the passthrough contract."""
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = json.dumps({
+        "articles": [{
+            "index": 0,
+            "sentiment": "positive",
+            "impact": "high",
+            "key_facts": ["fact"],
+            "relevance_to_question": 0.8,
+            "evidence_direction": "support",
+            "evidence_strength": 0.85,
+            "source_credibility": 0.9,
+            "rationale_zh": "直接支持 YES 的事实。",
+        }],
+        "overall_direction": "support_yes",
+        "overall_strength": 0.85,
+        "conflict_level": 0.1,
+        "summary": "证据整体支持 YES",
+    })
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+    monkeypatch.setattr(
+        "app.services.news_sentiment_service.AsyncOpenAI",
+        MagicMock(return_value=mock_client),
+    )
+    monkeypatch.setattr(
+        "app.services.news_sentiment_service.settings.OPENAI_API_KEY", "fake-key"
+    )
+
+    result = asyncio.run(
+        analyze_sentiment("Question?", [{"title": "T", "description": "D"}])
+    )
+    article = result["articles"][0]
+    assert article["evidence_direction"] == "support"
+    assert article["evidence_strength"] == 0.85
+    assert article["source_credibility"] == 0.9
+    assert article["rationale_zh"] == "直接支持 YES 的事实。"
+
+
+def test_analyze_sentiment_does_not_fallback_when_new_fields_missing(monkeypatch):
+    """When the LLM returns only the old schema (no evidence_direction etc.),
+    analyze_sentiment must NOT整体 fallback. The aggregation layer handles
+    missing fields per-item. This locks the partial-failure contract."""
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = json.dumps({
+        "articles": [{
+            "index": 0,
+            "sentiment": "positive",
+            "impact": "high",
+            "key_facts": ["fact"],
+            "relevance_to_question": 0.8,
+            # NOTE: no evidence_direction/strength/credibility/rationale_zh
+        }],
+        "overall_direction": "support_yes",
+        "overall_strength": 0.7,
+        "conflict_level": 0.1,
+        "summary": "证据整体支持 YES",
+    })
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+    monkeypatch.setattr(
+        "app.services.news_sentiment_service.AsyncOpenAI",
+        MagicMock(return_value=mock_client),
+    )
+    monkeypatch.setattr(
+        "app.services.news_sentiment_service.settings.OPENAI_API_KEY", "fake-key"
+    )
+
+    result = asyncio.run(
+        analyze_sentiment("Question?", [{"title": "T", "description": "D"}])
+    )
+    # No fallback: the response is valid (has articles + overall_direction)
+    assert "fallback" not in result
+    assert result["overall_direction"] == "support_yes"
+    # Old fields preserved
+    assert result["articles"][0]["sentiment"] == "positive"

@@ -458,7 +458,90 @@ async def _collect_candidate_events(
     from app.services.candidate_dedup_service import dedupe_candidates
 
     deduped = dedupe_candidates(merged)
+    # ── Cross-source matching: World Cup → prediction market ───────────
+    # World Cup events are only kept when a prediction-market event covers
+    # the same topic.  Matched World Cup analysis is injected as extra
+    # evidence (sports_context) into the market event; unmatched World Cup
+    # events are dropped.
+    if settings.WORLD_CUP_SOURCE_ENABLED:
+        deduped = _cross_match_world_cup(deduped)
     return deduped[: limit * _CANDIDATE_POOL_FACTOR]
+
+
+_WORLD_CUP_KEYWORDS: set[str] = {
+    "world cup", "fifa", "knockout", "group stage", "final",
+    "semifinal", "quarterfinal", "goal", "champion", "qualify",
+    "world cup 2026", "2026 fifa",
+}
+
+
+def _cross_match_world_cup(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge World Cup candidate evidence into matching prediction-market events.
+
+    For each World Cup candidate, search the prediction-market candidates for
+    a matching event (keyword overlap on the question text).  When a match is
+    found, the World Cup baseline / analysis data is attached as
+    ``sports_context`` on the market candidate and the World Cup entry is
+    dropped.  Unmatched World Cup entries are also dropped.
+    """
+    market: list[dict[str, Any]] = []
+    world_cup: list[dict[str, Any]] = []
+    for c in candidates:
+        src = c.get("source") or {}
+        if src.get("platform") == "World Cup":
+            world_cup.append(c)
+        else:
+            market.append(c)
+
+    if not world_cup or not market:
+        return market  # nothing to match
+
+    # Build keyword sets for market candidates
+    market_tokens: list[set[str]] = []
+    for m in market:
+        q = str(m.get("question", "") or "").lower()
+        market_tokens.append(set(q.split()))
+
+    matched_wc: set[int] = set()
+    for wi, wc in enumerate(world_cup):
+        wc_q = str(wc.get("question", "") or "").lower()
+        wc_tokens = set(wc_q.split())
+
+        best_idx = -1
+        best_overlap = 0
+        for mi, mt in enumerate(market_tokens):
+            overlap = len(wc_tokens & mt)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_idx = mi
+
+        # Require a meaningful overlap: at least 2 keyword tokens in common,
+        # or explicit World Cup keyword presence on both sides.
+        wc_has_kw = any(kw in wc_q for kw in _WORLD_CUP_KEYWORDS)
+        mkt_has_kw = any(kw in str(market[best_idx].get("question", "") or "").lower()
+                         for kw in _WORLD_CUP_KEYWORDS) if best_idx >= 0 else False
+
+        if best_idx >= 0 and (best_overlap >= 2 or (wc_has_kw and mkt_has_kw)):
+            # Attach World Cup analysis as supplementary evidence
+            target = market[best_idx]
+            sports = target.setdefault("sports_context", {})
+            sports["world_cup_signal"] = {
+                "question": wc.get("question"),
+                "baseline_probability": wc.get("baseline_probability"),
+                "volume": wc.get("volume"),
+                "liquidity": wc.get("liquidity"),
+            }
+            matched_wc.add(wi)
+
+    dropped = len(world_cup) - len(matched_wc)
+    if dropped:
+        logger.info(
+            "Cross-match: %d World Cup candidates dropped (no market match), %d merged",
+            dropped, len(matched_wc),
+        )
+    return market
 
 
 async def discover_events(
@@ -505,6 +588,13 @@ async def discover_events(
                 source = candidate.get("source")
                 market_quote = candidate.get("bid_ask")
                 sports_context = _build_sports_analysis_context(question, source)
+                # Merge World Cup cross-matched evidence if present
+                if candidate.get("sports_context", {}).get("world_cup_signal"):
+                    wc = candidate["sports_context"]["world_cup_signal"]
+                    sports_context.setdefault("wc_baseline", wc.get("baseline_probability"))
+                    sports_context.setdefault("wc_question", wc.get("question"))
+                    if not sports_context.get("context"):
+                        sports_context["context"] = f"World Cup analysis: {wc.get('question', '')}"
                 # Prediction-market events carry a real baseline probability from
                 # the market itself.  Require matching news only for open-web
                 # extracted events (where there is no market price anchor).

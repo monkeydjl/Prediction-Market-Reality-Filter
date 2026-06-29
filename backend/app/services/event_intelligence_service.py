@@ -684,10 +684,42 @@ async def discover_events(
                 await status_event(q, success=False, error=str(exc)[:200])
                 return None
 
-    raw = await asyncio.gather(
-        *(process_event(candidate) for candidate in candidate_events)
-    )
-    results = [item for item in raw if item is not None]
+    try:
+        raw = await asyncio.wait_for(
+            asyncio.gather(
+                *(process_event(candidate) for candidate in candidate_events),
+                return_exceptions=True,
+            ),
+            timeout=settings.EVENT_DISCOVER_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.error(
+            "[discover_events] Hard timeout after %ds — partial results lost",
+            settings.EVENT_DISCOVER_TIMEOUT_SECONDS,
+        )
+        await status_fail(
+            f"分析超时 ({settings.EVENT_DISCOVER_TIMEOUT_SECONDS}s)，"
+            f"请降低 EVENT_DISCOVER_LIMIT 或增加 EVENT_DISCOVER_TIMEOUT_SECONDS"
+        )
+        return {
+            "platform": "Event Intelligence Platform",
+            "source": "Multi-source event discovery",
+            "count": 0,
+            "events": [],
+            "status": {
+                "candidates": len(candidate_events),
+                "analyzed": 0,
+                "errors": len(candidate_events),
+                "results": 0,
+                "timeout": True,
+            },
+        }
+    # Exceptions from individual tasks (return_exceptions=True) are treated as
+    # failures — filter them out alongside None results.
+    results = [
+        item for item in raw
+        if item is not None and not isinstance(item, BaseException)
+    ]
     events = [record for record, _ in results]
     events.sort(key=lambda item: item.get("value_score", 0), reverse=True)
     # Persist / audit only freshly-analyzed records. Cached records already
@@ -696,7 +728,9 @@ async def discover_events(
     _persist_events(fresh)
     await status_saved(len(events[:limit]))
 
-    error_count = sum(1 for item in raw if item is None)
+    error_count = sum(
+        1 for item in raw if item is None or isinstance(item, BaseException)
+    )
     await status_done(len(events[:limit]), error_count)
     return {
         "platform": "Event Intelligence Platform",
@@ -801,6 +835,18 @@ def _persist_events(records: list[dict[str, Any]]) -> None:
                     from app.memory.simulated_trade_store import open_trade
                     rec = record.get("actionable_recommendation") or {}
                     direction = rec.get("direction") if rec.get("direction") in ("YES", "NO") else "YES"
+                    ai_prob = pred.get("ai_probability", 50.0)
+                    mkt_prob = pred.get("market_probability", 50.0)
+                    entry_edge = ai_prob - mkt_prob
+                    # Edge-direction consistency: if the system thinks the
+                    # probability is LOWER than the market, the correct trade
+                    # is NO (short the overpriced YES). Conversely, if higher,
+                    # the correct trade is YES. Override the recommendation
+                    # direction when it contradicts the edge sign.
+                    if entry_edge > 0 and direction == "NO":
+                        direction = "YES"
+                    elif entry_edge < 0 and direction == "YES":
+                        direction = "NO"
                     position = rec.get("suggested_allocation_pct", None)
                     if position is None:
                         position = {"act": 4.0, "provisional_act": 2.0, "watch": 1.0}.get(trade_dec, 2.0)
@@ -808,8 +854,8 @@ def _persist_events(records: list[dict[str, Any]]) -> None:
                         event_id,
                         event_title=record.get("event_title_zh") or record.get("event_title", ""),
                         direction=direction,
-                        entry_prob=pred.get("ai_probability", 50.0),
-                        market_prob=pred.get("market_probability", 50.0),
+                        entry_prob=ai_prob,
+                        market_prob=mkt_prob,
                         confidence=round((record.get("credibility") or {}).get("score", 50), 1),
                         trust_weight=pred.get("trust"),
                         decision=trade_dec,

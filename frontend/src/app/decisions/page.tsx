@@ -65,7 +65,7 @@ function FreshEdgesPanel({ edges }: { edges: FreshEdge[] }) {
               >
                 <div className="flex items-start justify-between gap-3">
                   <h3 className="line-clamp-2 text-sm font-medium leading-snug group-hover:text-primary">
-                    {e.event_title || e.event_id}
+                    {e.event_title_zh || e.event_title || e.event_id}
                   </h3>
                   <span className={`inline-flex shrink-0 items-center rounded-md border px-2 py-0.5 text-[11px] font-medium ${meta.cls}`}>
                     {meta.label}

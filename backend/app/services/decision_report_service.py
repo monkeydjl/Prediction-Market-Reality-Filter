@@ -70,6 +70,7 @@ def build_decision_report(
         "event_id": prediction.get("event_id"),
         "event": {
             "title": record.get("event_title", ""),
+            "title_zh": record.get("event_title_zh", ""),
             "summary": record.get("event_summary", ""),
         },
         "probability": {

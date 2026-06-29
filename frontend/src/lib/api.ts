@@ -181,7 +181,7 @@ export interface CalibrationAgg {
 // Mirrors decision_report_service.build_decision_report.
 export interface DecisionReport {
   event_id: string;
-  event: { title: string; summary: string };
+  event: { title: string; title_zh?: string; summary: string };
   probability: {
     estimated: number | null;
     baseline: number | null;
@@ -243,6 +243,7 @@ export interface EdgePoint {
 export interface FreshEdge {
   event_id: string;
   event_title: string;
+  event_title_zh?: string;
   edge: EdgeTrajectory;
   series?: EdgePoint[];
 }
@@ -660,6 +661,12 @@ export const eventsApi = {
     api<{ history: HistorySnapshot[]; trend?: Trend; edge?: EdgeTrajectory; count?: number }>(
       `/events/${encodeURIComponent(id)}/history`
     ),
+
+  batchSparklines: (eventIds: string[]) =>
+    api<{ sparklines: Record<string, number[]> }>("/events/batch-sparklines", {
+      method: "POST",
+      body: JSON.stringify({ event_ids: eventIds }),
+    }),
 
   similar: (id: string) =>
     api<{ similar: SimilarEvent[]; count?: number }>(

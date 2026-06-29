@@ -755,6 +755,39 @@ async def resolve_world_cup_sports_events(
 
 # Dynamic routes declared after the static /discover, /analyze, / and /movers
 # routes so the path parameter does not shadow them.
+@router.post("/batch-sparklines")
+async def batch_sparklines(
+    body: dict = Body(...),
+):
+    """Return compact sparkline series for multiple events in one request.
+
+    Accepts ``{"event_ids": ["abc", "def", ...]}`` and returns
+    ``{"sparklines": {"abc": [45.2, 47.1, ...], "def": []}}``.
+    Each series is just the estimated probability values (no metadata),
+    minimising payload for the frontend sparkline chart.  Reads the audit
+    log once via ``histories_by_event()`` instead of N individual reads.
+    Capped at 200 event IDs.
+    """
+    event_ids = body.get("event_ids") or []
+    if not isinstance(event_ids, list):
+        raise HTTPException(status_code=422, detail="event_ids must be a list")
+    event_ids = [str(eid) for eid in event_ids[:200]]
+
+    all_histories = histories_by_event()
+    sparklines: dict[str, list[float]] = {}
+    for eid in event_ids:
+        snaps = all_histories.get(eid, [])
+        series = [
+            float(snap["estimated"])
+            for snap in snaps
+            if snap.get("kind") != "outcome"
+            and snap.get("estimated") is not None
+            and isinstance(snap.get("estimated"), (int, float))
+        ]
+        sparklines[eid] = series
+    return {"sparklines": sparklines}
+
+
 @router.get("/{event_id}", response_model=EventStoreEntry)
 async def get_event_intelligence(event_id: EventId):
     """Return a stored event intelligence record by event_id (404 if unknown)."""
@@ -997,6 +1030,14 @@ async def get_fresh_edges(
             classification=classification,
             include_series=include_series,
         )
+    # Enrich each edge with the stored Chinese title (history snapshots only
+    # carry event_title, not event_title_zh).
+    events_by_id = {e.get("event_id"): e for e in list_all_events()}
+    for edge in edges:
+        entry = events_by_id.get(edge.get("event_id", ""))
+        title_zh = ((entry or {}).get("record") or {}).get("event_title_zh") or ""
+        if title_zh:
+            edge["event_title_zh"] = title_zh
     body = {"count": len(edges), "edges": edges}
     if classification != "fresh" or include_series:
         body["classification"] = classification

@@ -239,6 +239,44 @@ class DecisionQuality(BaseModel):
     error: str | None = None
 
 
+class MarketQuality(BaseModel):
+    """Phase 2 market-quality overlay block.
+
+    Produced by ``market_quality_service`` for events whose
+    ``source.type == "prediction_market"`` (Polymarket, Kalshi). For other
+    source types (``prediction_question``, ``open_web``, ``sports_event``,
+    ``manual``), the block is omitted entirely — mirroring the
+    ``freeze_prediction`` market-gated convention.
+
+    ``raw_direction`` mirrors the direction passed in from the raw
+    recommendation. ``suggested_direction`` starts equal to
+    ``raw_direction``; it becomes ``WAIT`` when market quality fails a
+    configured threshold. ``downgraded`` is ``true`` when
+    ``suggested_direction != raw_direction``.
+
+    ``applied_to_displayed_direction`` is set by the merge step when this
+    block's ``suggested_direction`` is stricter than
+    ``decision_quality.displayed_direction`` and therefore changes the
+    final user-facing direction. Lets audits distinguish whether market
+    quality changed the final direction or merely recorded a score.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    score: float = 0.0
+    liquidity_score: float | None = None
+    volume_score: float | None = None
+    spread_penalty: float | None = None
+    thin_market_flag: bool = False
+    stale_price_flag: bool | None = None  # None = unknown (no last_updated)
+    downgrade_reason: str | None = None
+    raw_direction: Literal["YES", "NO", "WAIT", "AVOID"] = "WAIT"
+    suggested_direction: Literal["YES", "NO", "WAIT", "AVOID"] = "WAIT"
+    downgraded: bool = False
+    applied_to_displayed_direction: bool = False
+    error: str | None = None
+
+
 class Tracking(BaseModel):
     """Human tracking decision for an event. Defaults are seeded at analysis
     time; a user's explicit choice is preserved across re-scans by the store.
@@ -353,6 +391,9 @@ class EventRecord(BaseModel):
     actionable_recommendation: ActionableRecommendation | None = None
     evidence_breakdown: list[EvidenceBreakdownItem] = Field(default_factory=list)
     decision_quality: dict[str, Any] | None = None
+    market_quality: dict[str, Any] | None = None
+    final_displayed_direction: str | None = None
+    final_downgrade_reason: str | None = None
 
 
 class FlexibleResponse(BaseModel):

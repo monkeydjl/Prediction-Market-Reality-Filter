@@ -74,6 +74,8 @@ class BuildDecisionReportTests(unittest.TestCase):
         # event record (and could surface in future report extensions).
         # Phase 1: also includes decision_quality.decision_rationale_zh and
         # decision_quality.downgrade_reason, which now flow through the report.
+        # Phase 2: also includes market_quality.downgrade_reason and
+        # final_downgrade_reason, which now flow through the report.
         pred = _prediction()
         rec = _record()
         rec["evidence_breakdown"] = [
@@ -106,6 +108,23 @@ class BuildDecisionReportTests(unittest.TestCase):
             "displayed_direction": "YES",
             "downgraded": False,
         }
+        rec["market_quality"] = {
+            "score": 0.3,
+            "liquidity_score": 0.2,
+            "volume_score": 0.4,
+            "spread_penalty": None,
+            "thin_market_flag": True,
+            "stale_price_flag": None,
+            # Phase 2 Chinese template — must not contain banned words
+            # (long/short/buy/sell/position/kelly/order).
+            "downgrade_reason": "市场质量不足（流动性低或价差过大），降级为 WAIT。",
+            "raw_direction": "YES",
+            "suggested_direction": "WAIT",
+            "downgraded": True,
+            "applied_to_displayed_direction": True,
+        }
+        rec["final_displayed_direction"] = "WAIT"
+        rec["final_downgrade_reason"] = "市场质量不足（流动性低或价差过大），降级为 WAIT。"
         report = build_decision_report(pred, rec)
         blob = str(report).lower()
         for banned in ("long", "short", "buy", "sell", "position", "kelly", "order"):
@@ -142,6 +161,53 @@ class BuildDecisionReportTests(unittest.TestCase):
         report = build_decision_report(pred, rec)
         self.assertIn("decision_quality", report)
         self.assertIsNone(report["decision_quality"])
+
+    def test_market_quality_passes_through_report(self):
+        """Phase 2: market_quality overlay passes through build_decision_report
+        so downstream consumers (frontend, API) can read suggested_direction /
+        downgrade_reason. Also covers final_displayed_direction /
+        final_downgrade_reason (the merged user-facing fields)."""
+        pred = _prediction()
+        rec = _record()
+        rec["market_quality"] = {
+            "score": 0.3,
+            "liquidity_score": 0.2,
+            "volume_score": 0.4,
+            "spread_penalty": None,
+            "thin_market_flag": True,
+            "stale_price_flag": None,
+            "downgrade_reason": "市场质量不足（流动性低或价差过大），降级为 WAIT。",
+            "raw_direction": "YES",
+            "suggested_direction": "WAIT",
+            "downgraded": True,
+            "applied_to_displayed_direction": True,
+        }
+        rec["final_displayed_direction"] = "WAIT"
+        rec["final_downgrade_reason"] = "市场质量不足（流动性低或价差过大），降级为 WAIT。"
+        report = build_decision_report(pred, rec)
+        self.assertIn("market_quality", report)
+        self.assertIsNotNone(report["market_quality"])
+        self.assertEqual(report["market_quality"]["suggested_direction"], "WAIT")
+        self.assertTrue(report["market_quality"]["applied_to_displayed_direction"])
+        self.assertIn("市场质量不足", report["market_quality"]["downgrade_reason"])
+        self.assertEqual(report["final_displayed_direction"], "WAIT")
+        self.assertEqual(report["final_downgrade_reason"],
+                         "市场质量不足（流动性低或价差过大），降级为 WAIT。")
+
+    def test_market_quality_none_passes_through(self):
+        """When market_quality is None (feature off or non-prediction-market
+        source), the report field is None — downstream consumers must handle
+        this gracefully. final_* fields are also None."""
+        pred = _prediction()
+        rec = _record()
+        # No market_quality / final_* keys set on rec -> default to None
+        report = build_decision_report(pred, rec)
+        self.assertIn("market_quality", report)
+        self.assertIsNone(report["market_quality"])
+        self.assertIn("final_displayed_direction", report)
+        self.assertIsNone(report["final_displayed_direction"])
+        self.assertIn("final_downgrade_reason", report)
+        self.assertIsNone(report["final_downgrade_reason"])
 
     def test_diagnosis_block_surfaces_frozen_inputs_and_reason(self):
         # The frozen diagnosis inputs explain the verdict. A dormant (not

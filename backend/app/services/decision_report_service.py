@@ -126,4 +126,14 @@ def build_decision_report(
         # and no fallback was attached. Downstream consumers read
         # displayed_direction / downgrade_reason / decision_rationale_zh.
         "decision_quality": record.get("decision_quality"),
+        # Phase 2: pass through market_quality overlay + the merged
+        # final_displayed_direction / final_downgrade_reason (the
+        # user-facing fields, computed by merge_quality_overlays at
+        # analyze_event time). market_quality is None for non-prediction-
+        # market sources or when MARKET_QUALITY_ENABLED=false; the merged
+        # final_* fields are None when both overlays are off (byte-identical
+        # to pre-Phase-2 records).
+        "market_quality": record.get("market_quality"),
+        "final_displayed_direction": record.get("final_displayed_direction"),
+        "final_downgrade_reason": record.get("final_downgrade_reason"),
     }

@@ -1225,3 +1225,270 @@ class DecisionQualityIntegrationTests(unittest.TestCase):
         self.assertEqual(record["decision_quality"]["error"], "build_failed")
         self.assertEqual(record["decision_quality"]["raw_direction"], "YES")
         self.assertEqual(record["decision_quality"]["displayed_direction"], "YES")
+
+
+class MarketQualityIntegrationTests(unittest.TestCase):
+    """Phase 2: locks the analyze_event -> market_quality integration.
+
+    Verifies the same invariants as Phase 1 decision_quality, applied to the
+    market layer:
+    - market_quality attached only when source.type == prediction_market AND
+      MARKET_QUALITY_ENABLED=true
+    - no market_quality key when feature off (byte-identical to pre-Phase-2)
+    - no market_quality key when source is non-prediction-market (Metaculus,
+      manual) even if feature is on — matches the freeze_prediction gate
+    - final_displayed_direction / final_downgrade_reason set when at least one
+      overlay produced a direction
+    - both final_* fields absent when both overlays off (byte-identical)
+    - build failure falls back to error block for prediction_market sources,
+      no error block for non-prediction-market sources
+    - market_quality never mutates ai_probability or
+      actionable_recommendation.direction (no-writeback invariant)
+    - applied_to_displayed_direction flag set when market is stricter than
+      decision_quality
+    """
+
+    SENTIMENT = {
+        "articles": [{
+            "index": 0,
+            "sentiment": "positive",
+            "impact": "high",
+            "key_facts": ["fact"],
+            "relevance_to_question": 0.8,
+            "evidence_direction": "support",
+            "evidence_strength": 0.85,
+            "source_credibility": 0.9,
+            "rationale_zh": "支持 YES 的事实。",
+        }],
+        "overall_direction": "support_yes",
+        "overall_strength": 0.85,
+        "conflict_level": 0.1,
+        "summary": "证据支持 YES",
+    }
+
+    FILTERED_ARTICLES = [
+        {"source": "Reuters", "title": "Fed signals rate cut", "description": "desc"}
+    ]
+
+    def _run_analyze(
+        self,
+        *,
+        mq_enabled: bool,
+        dq_enabled: bool = False,
+        source: dict | None = None,
+        volume: float | None = None,
+        liquidity: float | None = None,
+        market_quote: dict | None = None,
+        build_mq_side_effect=None,
+    ):
+        analyze = AsyncMock(return_value={
+            "market_question": "Will X happen?",
+            "market_probability": 50,
+            "ai_probability": 70,
+            "signal": "ACT",
+            "signal_direction": "LONG",
+            "signal_strength": "HIGH",
+            "risk_level": "medium",
+            "expected_edge": 0.20,
+            "position_size": 0.10,
+            "evidence_strength": 0.8,
+            "confidence_score": 0.7,
+            "news_quality_score": 0.8,
+            "source_count": 3,
+        })
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            stack.enter_context(patch("app.services.ai_analysis_service.analyze_market", new=analyze))
+            stack.enter_context(patch("app.services.cross_validation_service.cross_validate",
+                                      new=AsyncMock(return_value=None)))
+            stack.enter_context(patch.object(eis.settings, "EVIDENCE_BREAKDOWN_ENABLED", False))
+            stack.enter_context(patch.object(eis.settings, "DECISION_QUALITY_ENABLED", dq_enabled))
+            stack.enter_context(patch.object(eis.settings, "MARKET_QUALITY_ENABLED", mq_enabled))
+            stack.enter_context(patch.object(eis.settings, "MARKET_MAX_SPREAD_PCT", 12.0))
+            stack.enter_context(patch.object(eis.settings, "MARKET_MIN_LIQUIDITY", 1000.0))
+            stack.enter_context(patch.object(eis.settings, "MARKET_MIN_VOLUME", 1000.0))
+            stack.enter_context(patch.object(eis.settings, "MARKET_QUALITY_SCORE_THRESHOLD", 0.5))
+            if build_mq_side_effect is not None:
+                stack.enter_context(patch("app.services.market_quality_service.build_market_quality",
+                                          side_effect=build_mq_side_effect))
+            return _run(eis.analyze_event(
+                "Will X happen?",
+                baseline_probability=50,
+                news_context="direction: support",
+                source=source,
+                volume=volume,
+                liquidity=liquidity,
+                market_quote=market_quote,
+                sentiment_profile=self.SENTIMENT,
+                filtered_articles=self.FILTERED_ARTICLES,
+            ))
+
+    # --- Attachment gating ---
+
+    def test_market_quality_attached_for_prediction_market_when_enabled(self):
+        record = self._run_analyze(
+            mq_enabled=True,
+            source={"type": "prediction_market", "platform": "Polymarket"},
+            volume=5000.0,
+            liquidity=5000.0,
+            market_quote={"bid": 48, "ask": 52, "spread": 4},
+        )
+        self.assertIn("market_quality", record)
+        self.assertIsNotNone(record["market_quality"])
+        self.assertEqual(record["market_quality"]["raw_direction"], "YES")
+        # Success path: no 'error' key (mirrors Phase 1 decision_quality
+        # convention — error only surfaces on fallback)
+        self.assertNotIn("error", record["market_quality"])
+
+    def test_market_quality_absent_when_disabled(self):
+        """When MARKET_QUALITY_ENABLED=false, record has NO market_quality
+        key — byte-identical to pre-Phase-2 records."""
+        record = self._run_analyze(
+            mq_enabled=False,
+            source={"type": "prediction_market", "platform": "Polymarket"},
+            volume=5000.0,
+            liquidity=5000.0,
+        )
+        self.assertNotIn("market_quality", record)
+
+    def test_market_quality_absent_for_metaculus_source(self):
+        """Metaculus source.type=prediction_question must NOT produce a
+        market_quality block (mirrors the freeze_prediction gate)."""
+        record = self._run_analyze(
+            mq_enabled=True,
+            source={"type": "prediction_question", "platform": "Metaculus"},
+            volume=0.0,
+            liquidity=0.0,
+        )
+        self.assertNotIn("market_quality", record)
+
+    def test_market_quality_absent_for_manual_source(self):
+        record = self._run_analyze(
+            mq_enabled=True,
+            source={"type": "manual"},
+        )
+        self.assertNotIn("market_quality", record)
+
+    # --- Merge / final_displayed_direction ---
+
+    def test_final_displayed_direction_set_when_market_quality_present(self):
+        """When market_quality is present (and decision_quality is off),
+        final_displayed_direction mirrors market_quality.suggested_direction."""
+        record = self._run_analyze(
+            mq_enabled=True,
+            dq_enabled=False,
+            source={"type": "prediction_market"},
+            volume=5000.0,
+            liquidity=5000.0,
+        )
+        self.assertIn("final_displayed_direction", record)
+        self.assertEqual(
+            record["final_displayed_direction"],
+            record["market_quality"]["suggested_direction"],
+        )
+
+    def test_final_fields_absent_when_both_overlays_off(self):
+        """When both features off, no final_* fields — byte-identical to
+        pre-overlay records."""
+        record = self._run_analyze(
+            mq_enabled=False,
+            dq_enabled=False,
+            source={"type": "prediction_market"},
+            volume=5000.0,
+            liquidity=5000.0,
+        )
+        self.assertNotIn("final_displayed_direction", record)
+        self.assertNotIn("final_downgrade_reason", record)
+
+    def test_market_applied_when_market_stricter_than_decision(self):
+        """When market_quality downgrades YES->WAIT and decision_quality
+        keeps YES, the merge picks market's WAIT and sets
+        market_quality.applied_to_displayed_direction=True."""
+        # decision_quality keeps YES (high consensus, single-supporting evidence)
+        # market_quality downgrades YES->WAIT (score < threshold via thin market)
+        record = self._run_analyze(
+            mq_enabled=True,
+            dq_enabled=True,
+            source={"type": "prediction_market"},
+            volume=100.0,   # below min_volume (1000) -> thin -> low score
+            liquidity=100.0,  # below min_liquidity (1000) -> thin
+        )
+        # market applied: final is WAIT, market_quality flagged
+        self.assertEqual(record["final_displayed_direction"], "WAIT")
+        self.assertTrue(record["market_quality"]["applied_to_displayed_direction"])
+        self.assertEqual(record["market_quality"]["suggested_direction"], "WAIT")
+        self.assertIsNotNone(record["market_quality"]["downgrade_reason"])
+
+    def test_market_not_applied_when_decision_is_stricter(self):
+        """When decision_quality is stricter than market_quality, the merge
+        picks decision's direction and ``applied_to_displayed_direction``
+        stays False. Concretely: EVIDENCE_BREAKDOWN is off (Rule 4 -> WAIT
+        on the decision side) while the market is healthy (market keeps YES).
+        WAIT is stricter than YES, so final = WAIT and market did not change
+        the final direction."""
+        record = self._run_analyze(
+            mq_enabled=True,
+            dq_enabled=True,
+            source={"type": "prediction_market"},
+            volume=5000.0,   # healthy -> market keeps YES
+            liquidity=5000.0,
+        )
+        # decision_quality -> WAIT (Rule 4, empty breakdown), market_quality
+        # -> YES (healthy). WAIT is stricter -> final = WAIT, market not
+        # applied.
+        self.assertEqual(record["decision_quality"]["displayed_direction"], "WAIT")
+        self.assertEqual(record["market_quality"]["suggested_direction"], "YES")
+        self.assertEqual(record["final_displayed_direction"], "WAIT")
+        self.assertFalse(record["market_quality"]["applied_to_displayed_direction"])
+
+    # --- No-writeback invariant ---
+
+    def test_ai_probability_not_mutated_by_market_quality(self):
+        record = self._run_analyze(
+            mq_enabled=True,
+            source={"type": "prediction_market"},
+            volume=5000.0,
+            liquidity=5000.0,
+        )
+        # ai_probability stays at the LLM's 70 (market_quality is overlay only)
+        self.assertEqual(record["probability"]["estimated"], 70)
+
+    def test_actionable_recommendation_direction_not_mutated_by_market(self):
+        record = self._run_analyze(
+            mq_enabled=True,
+            source={"type": "prediction_market"},
+            volume=100.0,  # thin -> market downgrades YES to WAIT
+            liquidity=100.0,
+        )
+        # market_quality may set suggested_direction=WAIT, but actionable_recommendation.direction
+        # stays YES (no-writeback invariant)
+        self.assertEqual(
+            record["actionable_recommendation"]["direction"], "YES"
+        )
+
+    # --- Build failure fallback ---
+
+    def test_market_quality_build_failure_falls_back_for_prediction_market(self):
+        record = self._run_analyze(
+            mq_enabled=True,
+            source={"type": "prediction_market"},
+            volume=5000.0,
+            liquidity=5000.0,
+            build_mq_side_effect=RuntimeError("boom"),
+        )
+        self.assertIn("market_quality", record)
+        self.assertEqual(record["market_quality"]["error"], "build_failed")
+        self.assertEqual(record["market_quality"]["raw_direction"], "YES")
+        self.assertEqual(record["market_quality"]["suggested_direction"], "YES")
+        self.assertFalse(record["market_quality"]["downgraded"])
+
+    def test_market_quality_build_failure_no_block_for_non_prediction_market(self):
+        """When build fails for a non-prediction-market source (which
+        shouldn't have produced a block anyway), no error block is attached —
+        the record stays byte-identical (no market_quality key)."""
+        record = self._run_analyze(
+            mq_enabled=True,
+            source={"type": "manual"},
+            build_mq_side_effect=RuntimeError("boom"),
+        )
+        self.assertNotIn("market_quality", record)

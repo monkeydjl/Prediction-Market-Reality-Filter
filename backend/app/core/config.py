@@ -536,6 +536,29 @@ class Settings:
     DECISION_QUALITY_MEDIUM_CONFLICT_THRESHOLD: float = float(
         os.getenv("DECISION_QUALITY_MEDIUM_CONFLICT_THRESHOLD", "0.20")
     )
+    # Phase 2 — Market Quality Layer (default OFF). When enabled,
+    # market_quality_service scores market feasibility (spread, liquidity,
+    # volume) for prediction_market sources and may downgrade strong
+    # recommendations to WAIT. Only fires for source.type == "prediction_market"
+    # (Polymarket, Kalshi); Metaculus (prediction_question) and manual sources
+    # are excluded. See docs/superpowers/audits/market-quality-field-audit.md
+    # for field availability per adapter.
+    MARKET_QUALITY_ENABLED: bool = _env_bool("MARKET_QUALITY_ENABLED", "false")
+    MARKET_MAX_SPREAD_PCT: float = float(
+        os.getenv("MARKET_MAX_SPREAD_PCT", "12")
+    )
+    MARKET_MIN_LIQUIDITY: float = float(
+        os.getenv("MARKET_MIN_LIQUIDITY", "1000")
+    )
+    MARKET_MIN_VOLUME: float = float(
+        os.getenv("MARKET_MIN_VOLUME", "1000")
+    )
+    MARKET_STALE_AFTER_MINUTES: int = int(
+        os.getenv("MARKET_STALE_AFTER_MINUTES", "180")
+    )
+    MARKET_QUALITY_SCORE_THRESHOLD: float = float(
+        os.getenv("MARKET_QUALITY_SCORE_THRESHOLD", "0.5")
+    )
     SCHEDULER_MISFIRE_GRACE_SECONDS: int = int(
         os.getenv("SCHEDULER_MISFIRE_GRACE_SECONDS", "86400")
     )

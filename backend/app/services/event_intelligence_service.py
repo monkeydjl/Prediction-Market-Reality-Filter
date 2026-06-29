@@ -323,6 +323,71 @@ async def analyze_event(
             "consensus_level": "none",
             "reversal_triggers": [],
         }
+
+    # Phase 2: Market Quality overlay. Best-effort audit layer — only
+    # computed for ``source.type == "prediction_market"`` (Polymarket/Kalshi);
+    # ``build_market_quality`` returns None for other source types
+    # (Metaculus prediction_question, open_web, sports_event, manual), so the
+    # record stays byte-identical to pre-Phase-2 for those sources. When the
+    # feature flag is off, no ``market_quality`` key is attached.
+    try:
+        if settings.MARKET_QUALITY_ENABLED:
+            from app.services.market_quality_service import build_market_quality
+            mq = build_market_quality(
+                recommendation=record.get("actionable_recommendation"),
+                source=record.get("source"),
+                market_quote=record.get("market_quote"),
+                volume=volume,
+                liquidity=liquidity,
+                max_spread_pct=settings.MARKET_MAX_SPREAD_PCT,
+                min_liquidity=settings.MARKET_MIN_LIQUIDITY,
+                min_volume=settings.MARKET_MIN_VOLUME,
+                score_threshold=settings.MARKET_QUALITY_SCORE_THRESHOLD,
+            )
+            if mq is not None:
+                record["market_quality"] = mq
+    except Exception as exc:
+        logger.warning("market_quality build failed: %s", exc)
+        # Fallback only for prediction_market sources (matches the gating
+        # in ``build_market_quality``). Non-prediction-market sources stay
+        # without the block, so the audit layer remains absent on failure
+        # rather than emitting a misleading error block for an unrelated
+        # source type.
+        src = record.get("source")
+        if isinstance(src, dict) and src.get("type") == "prediction_market":
+            fallback_direction = (record.get("actionable_recommendation") or {}).get("direction", "WAIT")
+            record["market_quality"] = {
+                "error": "build_failed",
+                "raw_direction": fallback_direction,
+                "suggested_direction": fallback_direction,
+                "downgraded": False,
+                "applied_to_displayed_direction": False,
+                "downgrade_reason": None,
+                "score": 0.0,
+                "liquidity_score": None,
+                "volume_score": None,
+                "spread_penalty": None,
+                "thin_market_flag": False,
+                "stale_price_flag": None,
+            }
+
+    # Merge overlays: most-strict direction wins. Sets
+    # ``final_displayed_direction`` / ``final_downgrade_reason`` only when at
+    # least one overlay produced a direction; otherwise both stay absent
+    # (byte-identical to pre-overlay records when both features are off).
+    try:
+        from app.services.market_quality_service import merge_quality_overlays
+        final_direction, final_reason, market_applied = merge_quality_overlays(
+            record.get("decision_quality"),
+            record.get("market_quality"),
+        )
+        if final_direction is not None:
+            record["final_displayed_direction"] = final_direction
+            record["final_downgrade_reason"] = final_reason
+            if market_applied and isinstance(record.get("market_quality"), dict):
+                record["market_quality"]["applied_to_displayed_direction"] = True
+    except Exception as exc:
+        logger.warning("merge_quality_overlays failed: %s", exc)
     return record
 
 

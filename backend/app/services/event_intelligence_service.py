@@ -505,8 +505,13 @@ async def discover_events(
                 source = candidate.get("source")
                 market_quote = candidate.get("bid_ask")
                 sports_context = _build_sports_analysis_context(question, source)
+                # Prediction-market events carry a real baseline probability from
+                # the market itself.  Require matching news only for open-web
+                # extracted events (where there is no market price anchor).
+                is_market_event = (source or {}).get("type") == "prediction_market"
                 if (
-                    filtered_news["summary"]["selected_count"] == 0
+                    not is_market_event
+                    and filtered_news["summary"]["selected_count"] == 0
                     and not sports_context.get("context")
                 ):
                     return None

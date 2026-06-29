@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from app.utils.sqlite_db import loop_db_path, get_db
+from app.utils.sqlite_db import loop_db_path
 
 logger = logging.getLogger(__name__)
 
@@ -119,9 +119,11 @@ def close_trade(
     actual_outcome: float,
     exit_prob: float | None = None,
     exit_market: float | None = None,
-    exit_reason: str = "resolved_yes" if actual_outcome >= 99 else "resolved_no",
+    exit_reason: str | None = None,
 ) -> dict[str, Any] | None:
     """Close the open simulated trade for event_id with its resolution outcome."""
+    if exit_reason is None:
+        exit_reason = "resolved_yes" if actual_outcome >= 99 else "resolved_no"
     db_path = loop_db_path()
     conn = sqlite3.connect(db_path)
     try:

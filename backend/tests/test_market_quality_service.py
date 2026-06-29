@@ -326,6 +326,113 @@ class BuildMarketQualityTests(unittest.TestCase):
         self.assertFalse(result["downgraded"])
         self.assertIsNone(result["downgrade_reason"])
 
+    # --- wide_spread_flag (hard cutoff) ---
+
+    def test_wide_spread_downgrades_even_when_liquidity_healthy(self):
+        """Regression: spread=20 > max_spread_pct=12, liquidity/volume healthy.
+        Before fix: score=0.9333 > threshold=0.5, no downgrade (BUG).
+        After fix: wide_spread_flag=True forces downgrade to WAIT."""
+        result = build_market_quality(
+            recommendation=_recommendation("YES"),
+            source=_polymarket_source(),
+            market_quote={"bid": 40, "ask": 60, "spread": 20},
+            volume=5000,
+            liquidity=5000,
+            **DEFAULT_KWARGS,  # max_spread_pct=12, score_threshold=0.5
+        )
+        self.assertTrue(result["wide_spread_flag"])
+        self.assertEqual(result["suggested_direction"], "WAIT")
+        self.assertTrue(result["downgraded"])
+        self.assertIsNotNone(result["downgrade_reason"])
+        self.assertIn("价差过大", result["downgrade_reason"])
+
+    def test_wide_spread_not_triggered_when_within_threshold(self):
+        """spread=8 < max_spread_pct=12 -> wide_spread_flag=False, no forced
+        downgrade from spread."""
+        result = build_market_quality(
+            recommendation=_recommendation("YES"),
+            source=_polymarket_source(),
+            market_quote={"bid": 46, "ask": 54, "spread": 8},
+            volume=5000,
+            liquidity=5000,
+            **DEFAULT_KWARGS,  # max_spread_pct=12
+        )
+        self.assertFalse(result["wide_spread_flag"])
+        self.assertEqual(result["suggested_direction"], "YES")
+        self.assertFalse(result["downgraded"])
+
+    def test_wide_spread_boundary_exact_threshold(self):
+        """spread == max_spread_pct is NOT wide (strict > comparison)."""
+        result = build_market_quality(
+            recommendation=_recommendation("YES"),
+            source=_polymarket_source(),
+            market_quote={"bid": 44, "ask": 56, "spread": 12},
+            volume=5000,
+            liquidity=5000,
+            **DEFAULT_KWARGS,  # max_spread_pct=12
+        )
+        self.assertFalse(result["wide_spread_flag"])
+        self.assertEqual(result["suggested_direction"], "YES")
+
+    def test_wide_spread_downgrades_no_direction(self):
+        """wide_spread_flag also downgrades NO (not just YES)."""
+        result = build_market_quality(
+            recommendation=_recommendation("NO"),
+            source=_polymarket_source(),
+            market_quote={"bid": 30, "ask": 55, "spread": 25},
+            volume=5000,
+            liquidity=5000,
+            **DEFAULT_KWARGS,  # max_spread_pct=12
+        )
+        self.assertTrue(result["wide_spread_flag"])
+        self.assertEqual(result["suggested_direction"], "WAIT")
+        self.assertTrue(result["downgraded"])
+
+    def test_wide_spread_not_downgrade_wait_or_avoid(self):
+        """WAIT/AVOID are never downgraded by market quality (even with
+        wide spread)."""
+        for direction in ("WAIT", "AVOID"):
+            result = build_market_quality(
+                recommendation=_recommendation(direction),
+                source=_polymarket_source(),
+                market_quote={"bid": 30, "ask": 55, "spread": 25},
+                volume=5000,
+                liquidity=5000,
+                **DEFAULT_KWARGS,
+            )
+            self.assertTrue(result["wide_spread_flag"])
+            self.assertEqual(result["suggested_direction"], direction)
+            self.assertFalse(result["downgraded"])
+
+    def test_wide_spread_false_when_no_market_quote(self):
+        """No market_quote -> wide_spread_flag=False (unknown, not wide)."""
+        result = build_market_quality(
+            recommendation=_recommendation("YES"),
+            source=_polymarket_source(),
+            market_quote=None,
+            volume=5000,
+            liquidity=5000,
+            **DEFAULT_KWARGS,
+        )
+        self.assertFalse(result["wide_spread_flag"])
+
+    def test_wide_spread_downgrade_reason_no_forbidden_words(self):
+        """The wide_spread downgrade reason must not contain banned
+        trading vocabulary (long/short/buy/sell/position/kelly/order)."""
+        result = build_market_quality(
+            recommendation=_recommendation("YES"),
+            source=_polymarket_source(),
+            market_quote={"bid": 30, "ask": 55, "spread": 25},
+            volume=5000,
+            liquidity=5000,
+            **DEFAULT_KWARGS,
+        )
+        reason = result["downgrade_reason"]
+        self.assertIsNotNone(reason)
+        forbidden = ("long", "short", "buy", "sell", "position", "kelly", "order")
+        for word in forbidden:
+            self.assertNotIn(word, reason.lower())
+
     def test_applied_to_displayed_direction_defaults_false(self):
         """The service sets this to False; the merge step may override."""
         result = build_market_quality(

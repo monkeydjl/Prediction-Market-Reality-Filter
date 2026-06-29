@@ -72,6 +72,7 @@ def build_market_quality(
     raw_direction = _extract_direction(recommendation)
 
     spread_penalty = _compute_spread_penalty(market_quote, max_spread_pct)
+    wide_spread_flag = _is_wide_spread(market_quote, max_spread_pct)
     liquidity_score = _compute_liquidity_score(liquidity, min_liquidity)
     volume_score = _compute_volume_score(volume, min_volume)
     # stale_price_flag: always None (unknown) in Phase 2 — no adapter
@@ -83,7 +84,7 @@ def build_market_quality(
     score = _aggregate_score(spread_penalty, liquidity_score, volume_score)
 
     suggested_direction, downgrade_reason = _apply_market_downgrade(
-        raw_direction, score, score_threshold
+        raw_direction, score, score_threshold, wide_spread_flag
     )
 
     return {
@@ -91,6 +92,7 @@ def build_market_quality(
         "liquidity_score": _round_or_none(liquidity_score),
         "volume_score": _round_or_none(volume_score),
         "spread_penalty": _round_or_none(spread_penalty),
+        "wide_spread_flag": wide_spread_flag,
         "thin_market_flag": thin_market_flag,
         "stale_price_flag": stale_price_flag,
         "downgrade_reason": downgrade_reason,
@@ -122,8 +124,14 @@ def _compute_spread_penalty(
 ) -> float | None:
     """Spread penalty in [0, 1]. 0 = no penalty (tight spread), 1 = max
     penalty. Returns None when market_quote is missing or spread is 0
-    (placeholder). Penalty = spread / 100, capped at 1.0; downgrades only
-    when spread > max_spread_pct."""
+    (placeholder). Penalty = spread / 100, capped at 1.0.
+
+    Note: ``max_spread_pct`` is NOT used here — the penalty is a continuous
+    signal fed into the aggregate score. The hard cutoff (spread >
+    max_spread_pct -> wide_spread_flag) is handled by ``_is_wide_spread``
+    and forces a downgrade independently of the aggregate score. This
+    prevents healthy liquidity/volume from masking an untradeable spread.
+    """
     if not isinstance(market_quote, dict):
         return None
     spread = market_quote.get("spread")
@@ -132,6 +140,22 @@ def _compute_spread_penalty(
     # spread is in 0-100 scale (same as probability). Penalty proportional.
     penalty = min(float(spread) / 100.0, 1.0)
     return penalty
+
+
+def _is_wide_spread(
+    market_quote: dict[str, Any] | None,
+    max_spread_pct: float,
+) -> bool:
+    """Hard cutoff: True when spread exceeds ``max_spread_pct``. A wide
+    spread means the quoted price is untradeable (bid-ask gap too large),
+    so the market quality MUST downgrade regardless of the aggregate score.
+    Returns False when market_quote is missing or spread is 0 (unknown)."""
+    if not isinstance(market_quote, dict):
+        return False
+    spread = market_quote.get("spread")
+    if not isinstance(spread, (int, float)) or spread <= 0:
+        return False
+    return float(spread) > max_spread_pct
 
 
 def _compute_liquidity_score(
@@ -225,11 +249,20 @@ def _apply_market_downgrade(
     raw_direction: str,
     score: float,
     score_threshold: float,
+    wide_spread_flag: bool = False,
 ) -> tuple[str, str | None]:
     """Downgrade strong directions (YES/NO) to WAIT when market quality is
-    below threshold. WAIT/AVOID are never downgraded by market quality."""
+    below threshold OR when the spread is untradeable (wide_spread_flag).
+    WAIT/AVOID are never downgraded by market quality.
+
+    The wide_spread_flag is a hard cutoff: even when liquidity and volume are
+    healthy (keeping the aggregate score above threshold), an untradeable
+    spread makes the market effectively unusable and MUST trigger a downgrade.
+    """
     if raw_direction not in _STRONG_DIRECTIONS:
         return raw_direction, None
+    if wide_spread_flag:
+        return "WAIT", "价差过大（无法交易），降级为 WAIT。"
     if score < score_threshold:
         return "WAIT", "市场质量不足（流动性低或价差过大），降级为 WAIT。"
     return raw_direction, None

@@ -267,6 +267,7 @@ class MarketQuality(BaseModel):
     liquidity_score: float | None = None
     volume_score: float | None = None
     spread_penalty: float | None = None
+    wide_spread_flag: bool = False
     thin_market_flag: bool = False
     stale_price_flag: bool | None = None  # None = unknown (no last_updated)
     downgrade_reason: str | None = None

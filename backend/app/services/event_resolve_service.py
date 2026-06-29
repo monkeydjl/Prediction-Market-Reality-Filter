@@ -434,6 +434,112 @@ async def auto_resolve_events(
             match_log.pop()
             continue
 
+    # ── Direct-settle fallback ─────────────────────────────────────────────
+    # The search-markets API returns at most ~1000 results sorted by internal
+    # relevance, so low-volume resolved markets are invisible to the main loop.
+    # For every unresolved Manifold event that carries a source_id, fetch that
+    # specific market directly from the Manifold API and settle if resolved.
+    # This decouples settlement from search ranking.
+    direct_resolved = 0
+    manifold_source_ids: list[tuple[str, str]] = []  # (event_id, source_id)
+    for entry in entries:
+        record = entry.get("record") or {}
+        if record.get("outcome") is not None:
+            continue
+        eid = entry.get("event_id")
+        if not eid:
+            continue
+        source = record.get("source") or {}
+        platform = str(source.get("platform", "")).lower()
+        source_id = str(source.get("source_id") or "").strip()
+        if platform != "manifold" or not source_id:
+            continue
+        # Skip events that already have a verified link (the main loop handles
+        # those via the contract-id path; if they survived, the contract is
+        # unsettled or the direct fetch already failed).
+        if get_verified_link(eid):
+            continue
+        manifold_source_ids.append((eid, source_id))
+
+    if manifold_source_ids:
+        from app.services.manifold_event_source import fetch_markets_by_ids
+        ids = [sid for _, sid in manifold_source_ids]
+        try:
+            direct_markets = await fetch_markets_by_ids(ids)
+        except Exception as exc:
+            logger.warning("auto_resolve: direct Manifold fetch failed: %s", exc)
+            direct_markets = []
+        if direct_markets:
+            direct_by_contract = {
+                str(m.get("id")): m for m in direct_markets if m.get("id")
+            }
+            for eid, source_id in manifold_source_ids:
+                settled = direct_by_contract.get(source_id)
+                if settled is None:
+                    continue
+                entry = next(
+                    (e for e in entries if e.get("event_id") == eid), None
+                )
+                if not entry:
+                    continue
+                rec = entry.get("record") or {}
+                if rec.get("outcome") is not None:
+                    continue  # resolved by the main loop already
+                # Create the verified link first so future runs use the
+                # contract-id path.
+                upsert_link(
+                    eid,
+                    market_name="Manifold",
+                    contract_id=source_id,
+                    market_question=settled.get("question", ""),
+                    resolution_criteria=(
+                        rec.get("semantics") or {}
+                    ).get("resolution_criteria", ""),
+                    link_method="auto_direct",
+                    link_confidence=1.0,
+                    verified=True,
+                )
+                if dry_run:
+                    direct_resolved += 1
+                    match_log.append({
+                        "event_id": eid,
+                        "event_title": (rec.get("event_title") or "")[:80],
+                        "matched_to": source_id,
+                        "market_name": "Manifold",
+                        "contract_id": source_id,
+                        "actual_outcome": settled.get("actual_outcome"),
+                        "match_score": 1.0,
+                        "result": "would_resolve_by_direct",
+                    })
+                    continue
+                try:
+                    resolve_with_calibration(
+                        event_id=eid,
+                        actual_outcome=settled.get("actual_outcome"),
+                        confidence=1.0,
+                        source="auto_market",
+                        notes=f"direct Manifold settle: {source_id}",
+                        snapshots=histories.get(eid, []),
+                    )
+                    direct_resolved += 1
+                    match_log.append({
+                        "event_id": eid,
+                        "event_title": (rec.get("event_title") or "")[:80],
+                        "matched_to": source_id,
+                        "market_name": "Manifold",
+                        "contract_id": source_id,
+                        "actual_outcome": settled.get("actual_outcome"),
+                        "match_score": 1.0,
+                        "result": "resolved_by_direct",
+                    })
+                except Exception as exc:
+                    logger.warning(
+                        "auto_resolve: direct settle failed for %s: %s",
+                        eid, exc,
+                    )
+        if direct_resolved:
+            resolved_count += direct_resolved
+
     unresolved_events = sum(
         1 for entry in entries
         if (entry.get("record") or {}).get("outcome") is None

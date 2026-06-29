@@ -2,18 +2,63 @@
 // cover the real backend's category / direction / level vocabularies.
 
 export const CATEGORY_LABELS: Record<string, string> = {
-  monetary: "货币政策",
-  technology: "科技",
-  "supply-chain": "供应链",
-  markets: "市场",
-  geopolitics: "地缘政治",
-  crypto: "加密资产",
-  macro: "宏观",
+  // ── 政治与选举 ──
+  us_presidential: "美国总统大选",
+  primary_election: "初选",
+  congressional: "国会选举",
+  governor_election: "州长选举",
+  state_election: "州级选举",
   politics: "政治",
-  sports_event: "世界杯",
-  general: "综合",
+  geopolitics: "地缘政治",
+
+  // ── 地缘与冲突 ──
+  ceasefire: "停火与和平",
+  conflict_escalation: "冲突升级",
+  trade_policy: "贸易政策",
+
+  // ── 宏观经济 ──
+  fed_hike: "美联储加息",
+  fed_cut: "美联储降息",
+  recession: "经济衰退",
+  inflation_data: "通胀数据",
+  monetary: "货币政策",
+  macro: "宏观",
+  markets: "市场",
+
+  // ── 加密货币 ──
+  crypto: "加密资产",
   crypto_price_btc: "BTC 价格",
   crypto_price_eth: "ETH 价格",
+  crypto_ath: "BTC 历史新高",
+  altcoin_price: "山寨币价格",
+  crypto_etf: "加密 ETF",
+  crypto_general: "加密货币综合",
+
+  // ── 科技与 AI ──
+  ai_release: "AI 产品发布",
+  technology: "科技",
+  science_event: "科学事件",
+
+  // ── 商业与金融 ──
+  stock_price: "股票价格",
+  ipo: "IPO",
+  ma: "并购收购",
+  bankruptcy: "破产违约",
+  executive_change: "高管变动",
+
+  // ── 法律与监管 ──
+  legal: "司法诉讼",
+  regulatory: "监管政策",
+
+  // ── 体育 ──
+  sports_event: "世界杯",
+  sports_championship: "体育冠军",
+  sports_game: "单场比赛",
+
+  // ── 其他 ──
+  natural_disaster: "自然灾害",
+  "supply-chain": "供应链",
+  general: "综合",
   unknown: "未分类",
 };
 

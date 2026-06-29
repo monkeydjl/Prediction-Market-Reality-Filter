@@ -33,6 +33,7 @@ event_intelligence_service.discover_events:
     }
 """
 
+import asyncio
 import logging
 from typing import Any
 
@@ -173,6 +174,64 @@ async def _fetch_raw_resolved(limit: int) -> list[dict[str, Any]]:
         response.raise_for_status()
         data = response.json()
     return data if isinstance(data, list) else []
+
+
+_MANIFOLD_BASE = "https://api.manifold.markets"
+
+
+async def fetch_markets_by_ids(
+    contract_ids: list[str],
+) -> list[dict[str, Any]]:
+    """Fetch specific Manifold markets directly by ID.
+
+    Bypasses the search-markets ranking so low-volume resolved markets are not
+    invisible. Returns the same shape as ``fetch_resolved_markets``
+    (``[{id, question, actual_outcome}]``), including only markets that ARE
+    resolved with a recognized outcome.  Unresolved or cancelled markets are
+    silently skipped.
+
+    Designed for the auto-resolve direct-settle path: given a batch of
+    ``source_id`` values from unresolved local events, check whether those
+    specific markets have settled on Manifold.
+    """
+    if not contract_ids:
+        return []
+    resolved: list[dict[str, Any]] = []
+    sem = asyncio.Semaphore(8)  # cap concurrent requests
+
+    async def _fetch_one(cid: str) -> dict[str, Any] | None:
+        async with sem:
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    resp = await client.get(
+                        f"{_MANIFOLD_BASE}/v0/market/{cid}"
+                    )
+                    if resp.status_code != 200:
+                        return None
+                    return resp.json()
+            except Exception as exc:
+                logger.warning(
+                    "manifold direct-fetch failed for %s: %s", cid, exc
+                )
+                return None
+
+    raw_list = await asyncio.gather(
+        *(_fetch_one(cid) for cid in contract_ids),
+    )
+    for market in raw_list:
+        if not isinstance(market, dict):
+            continue
+        question = str(market.get("question", "") or "").strip()
+        if not question:
+            continue
+        outcome = _resolved_outcome(market)
+        if outcome is not None:
+            resolved.append({
+                "id": str(market.get("id", "") or ""),
+                "question": question,
+                "actual_outcome": outcome,
+            })
+    return resolved
 
 
 def _resolved_outcome(market: dict[str, Any]) -> float | None:

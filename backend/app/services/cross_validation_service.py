@@ -44,6 +44,7 @@ async def cross_validate(
     question: str,
     news_context: str,
     primary_probability: float,
+    market_baseline: float | None = None,
 ) -> dict[str, Any] | None:
     """Re-estimate the probability with an independent second model.
 
@@ -51,13 +52,23 @@ async def cross_validate(
     second model is unavailable. Otherwise returns:
         {model, probability, primary_probability, divergence, agreement}
     where agreement is high / medium / low by absolute divergence (points).
+
+    ``market_baseline`` is the real market price (e.g. 90% from Polymarket).
+    The second model receives this as its anchor, NOT ``primary_probability``
+    (which is the primary AI's output). Passing the primary's output would make
+    the second model anchor to our own estimate, defeating independent
+    cross-validation.
     """
     if not settings.CROSS_VALIDATION_MODEL:
         return None
+    # Use the real market baseline as the anchor for the second model. Fall back
+    # to primary_probability only when no baseline is available (e.g. news-only
+    # events without a linked market).
+    anchor = market_baseline if market_baseline is not None else primary_probability
     try:
         raw = await _ask_second_model(
             market_question=question,
-            market_probability=primary_probability,
+            market_probability=anchor,
             news_context=news_context,
         )
     except Exception as exc:

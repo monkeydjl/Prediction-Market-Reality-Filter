@@ -826,9 +826,10 @@ async def resolve_world_cup_sports_events(
 
 # Dynamic routes declared after the static /discover, /analyze, / and /movers
 # routes so the path parameter does not shadow them.
-@router.post("/batch-sparklines")
+@router.post("/batch-sparklines", response_model=FlexibleResponse)
 async def batch_sparklines(
     body: dict = Body(...),
+    _auth: None = Depends(require_write_key),
 ):
     """Return compact sparkline series for multiple events in one request.
 

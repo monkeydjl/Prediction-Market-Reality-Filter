@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, Download, Search, Trophy } from "lucide-react";
+import { ChevronRight, ChevronUp, Download, Search, Trophy } from "lucide-react";
 import type { EventView } from "@/lib/adapt";
 import { categoryLabel, fmtPct, STATUS_LABELS } from "@/lib/format";
 import {
@@ -46,6 +46,7 @@ export function EventTable({
   const [category, setCategory] = useState("all");
   const [status, setStatus] = useState<StatusFilter>("active");
   const [sort, setSort] = useState<SortKey>("delta");
+  const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
   const [query, setQuery] = useState("");
   const [urlReady, setUrlReady] = useState(false);
   const firstUrlSync = useRef(true);
@@ -62,6 +63,10 @@ export function EventTable({
       }
       if (nextSort && SORT_VALUES.has(nextSort as SortKey)) {
         setSort(nextSort as SortKey);
+      }
+      const nextDir = params.get("dir");
+      if (nextDir === "asc" || nextDir === "desc") {
+        setSortDir(nextDir);
       }
       setUrlReady(true);
     }, 0);
@@ -82,6 +87,8 @@ export function EventTable({
     else params.delete("status");
     if (sort !== "delta") params.set("sort", sort);
     else params.delete("sort");
+    if (sortDir !== "desc") params.set("dir", sortDir);
+    else params.delete("dir");
     if (!preservePage) params.delete("page");
     const search = params.toString();
     const nextUrl = `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`;
@@ -91,13 +98,28 @@ export function EventTable({
         window.dispatchEvent(new Event(TABLE_FILTER_EVENT));
       }
     }
-  }, [category, query, sort, status, urlReady]);
+  }, [category, query, sort, sortDir, status, urlReady]);
 
-  const categoryOptions = useMemo(
-    () => Array.from(new Set([WORLD_CUP_CATEGORY, ...events.map((e) => e.category)])),
-    [events],
-  );
+  const categoryOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const e of events) {
+      counts.set(e.category, (counts.get(e.category) ?? 0) + 1);
+    }
+    // Ensure World Cup category is always present
+    if (!counts.has(WORLD_CUP_CATEGORY)) counts.set(WORLD_CUP_CATEGORY, 0);
+    return Array.from(counts.entries())
+      .sort((a, b) => categoryLabel(a[0]).localeCompare(categoryLabel(b[0]), "zh-CN"));
+  }, [events]);
   const isWorldCupFilter = category === WORLD_CUP_CATEGORY;
+
+  function toggleSort(key: SortKey) {
+    if (sort === key) {
+      setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    } else {
+      setSort(key);
+      setSortDir("desc");
+    }
+  }
 
   const rows = useMemo(() => {
     let r = events;
@@ -113,18 +135,19 @@ export function EventTable({
     else if (status !== "all") r = r.filter((e) => e.trackingStatus === status);
     if (category !== "all") r = r.filter((e) => e.category === category);
     return [...r].sort((a, b) => {
+      const dir = sortDir === "desc" ? 1 : -1;
       switch (sort) {
         case "delta":
-          return Math.abs(b.delta) - Math.abs(a.delta);
+          return dir * (Math.abs(b.delta) - Math.abs(a.delta));
         case "probability":
-          return b.currentProbability - a.currentProbability;
+          return dir * (b.currentProbability - a.currentProbability);
         case "support":
-          return b.evidenceSupport - a.evidenceSupport;
+          return dir * (b.evidenceSupport - a.evidenceSupport);
         case "value":
-          return b.valueScore - a.valueScore;
+          return dir * (b.valueScore - a.valueScore);
       }
     });
-  }, [events, category, status, sort, query]);
+  }, [events, category, status, sort, sortDir, query]);
 
   function exportRows() {
     downloadCsv(
@@ -198,9 +221,9 @@ export function EventTable({
               aria-label="按领域筛选"
             >
               <option value="all">全部领域</option>
-              {categoryOptions.map((c) => (
+              {categoryOptions.map(([c, count]) => (
                 <option key={c} value={c}>
-                  {categoryLabel(c)}
+                  {categoryLabel(c)}{count > 0 ? ` (${count})` : ""}
                 </option>
               ))}
             </select>
@@ -241,9 +264,45 @@ export function EventTable({
         <div className="hidden grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-4 border-b border-border px-4 py-2.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground md:grid">
           <div>事件</div>
           <div className="w-[88px] text-right">趋势</div>
-          <div className="w-[64px] text-right">概率</div>
-          <div className="w-[80px] text-right">变动</div>
-          <div className="w-[110px]">证据支持</div>
+          <button
+            type="button"
+            onClick={() => toggleSort("probability")}
+            className={cn(
+              "flex w-[64px] items-center justify-end gap-1 transition-colors hover:text-foreground",
+              sort === "probability" && "text-foreground",
+            )}
+          >
+            概率
+            {sort === "probability" && (
+              <ChevronUp className={cn("size-3", sortDir === "asc" && "rotate-180")} aria-hidden="true" />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => toggleSort("delta")}
+            className={cn(
+              "flex w-[80px] items-center justify-end gap-1 transition-colors hover:text-foreground",
+              sort === "delta" && "text-foreground",
+            )}
+          >
+            变动
+            {sort === "delta" && (
+              <ChevronUp className={cn("size-3", sortDir === "asc" && "rotate-180")} aria-hidden="true" />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => toggleSort("support")}
+            className={cn(
+              "flex w-[110px] items-center gap-1 transition-colors hover:text-foreground",
+              sort === "support" && "text-foreground",
+            )}
+          >
+            证据支持
+            {sort === "support" && (
+              <ChevronUp className={cn("size-3", sortDir === "asc" && "rotate-180")} aria-hidden="true" />
+            )}
+          </button>
           <div className="w-[56px] text-right">优先级</div>
         </div>
 

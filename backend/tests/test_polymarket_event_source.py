@@ -6,10 +6,12 @@ from unittest.mock import AsyncMock, patch
 from app.services import polymarket_event_source as source
 
 
-def _market(question, id, yes_price, volume, liquidity, slug="x-slug"):
+def _market(question, id, yes_price, volume, liquidity, slug="x-slug",
+            event_slug="", closed=False, end_date=""):
     return SimpleNamespace(
         question=question, id=id, yes_price=yes_price,
         volume=volume, liquidity=liquidity, slug=slug,
+        event_slug=event_slug, closed=closed, end_date=end_date,
     )
 
 
@@ -36,6 +38,8 @@ class PolymarketEventSourceTests(unittest.TestCase):
                 "liquidity": 500.0,
                 "volume": 1000.0,
                 "url": "https://polymarket.com/event/x-slug",
+                "closed": False,
+                "end_date": "",
             },
         })
 

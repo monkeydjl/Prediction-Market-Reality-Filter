@@ -19,14 +19,14 @@ from app.utils.market_utils import safe_float
 
 
 # 最低流动性门槛（美元）
-MIN_LIQUIDITY = 5_000
+MIN_LIQUIDITY = 500
 
 # 最低交易量门槛（美元）
-MIN_VOLUME = 2_000
+MIN_VOLUME = 100
 
-# 过滤掉极端确定性市场（>92% 或 <8%）
-CERTAINTY_HIGH = 92.0
-CERTAINTY_LOW = 8.0
+# 过滤掉极端确定性市场（>98% 或 <2%）
+CERTAINTY_HIGH = 98.0
+CERTAINTY_LOW = 2.0
 
 # 高优先级市场类型关键词
 HIGH_PRIORITY_KEYWORDS = [

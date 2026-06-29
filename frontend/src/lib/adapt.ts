@@ -50,9 +50,12 @@ function priorityOf(record: EventRecord): "high" | "medium" | "low" {
 
 // Human tracking status (tracking | watching | archived). Defaults to
 // "watching" when the user has not made an explicit decision (tracking=None).
+// Events with a resolved outcome are always treated as archived so they leave
+// the active list and enter the calibration/review database.
 function trackingStatusOf(
   record: EventRecord,
 ): "tracking" | "watching" | "archived" {
+  if (record.outcome?.status) return "archived";
   const s = record.tracking?.status;
   if (s === "tracking" || s === "archived") return s;
   return "watching";

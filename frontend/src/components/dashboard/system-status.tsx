@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Activity, AlertTriangle, RefreshCw } from "lucide-react";
+import { Activity, AlertTriangle, ChevronDown, RefreshCw } from "lucide-react";
 import { eventsApi, type ApiHealth, type ApiOverview, type LoopStatus } from "@/lib/api";
 import { fmtDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -123,6 +123,7 @@ export function SystemStatus() {
   const [overview, setOverview] = useState<ApiOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -165,30 +166,42 @@ export function SystemStatus() {
       <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
           <div className="flex items-center gap-2">
-            <span
-              className={cn(
-                "flex size-8 items-center justify-center rounded-md",
-                degraded ? "bg-neg/10 text-neg" : "bg-pos/10 text-pos",
-              )}
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="flex items-center gap-2 rounded-md px-1 -mx-1 transition-colors hover:bg-secondary"
+              aria-expanded={expanded}
+              aria-label={expanded ? "折叠系统状态" : "展开系统状态"}
             >
-              {degraded ? (
-                <AlertTriangle className="size-4" aria-hidden="true" />
-              ) : (
-                <Activity className="size-4" aria-hidden="true" />
-              )}
-            </span>
-            <div className="flex flex-col">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium">系统状态</span>
-                <span className={cn("rounded-md border px-2 py-0.5 text-[11px] font-medium", apiMeta.cls)}>
-                  API {apiMeta.label}
+              <span
+                className={cn(
+                  "flex size-8 items-center justify-center rounded-md",
+                  degraded ? "bg-neg/10 text-neg" : "bg-pos/10 text-pos",
+                )}
+              >
+                {degraded ? (
+                  <AlertTriangle className="size-4" aria-hidden="true" />
+                ) : (
+                  <Activity className="size-4" aria-hidden="true" />
+                )}
+              </span>
+              <div className="flex flex-col">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium">系统状态</span>
+                  <span className={cn("rounded-md border px-2 py-0.5 text-[11px] font-medium", apiMeta.cls)}>
+                    API {apiMeta.label}
+                  </span>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  调度器 {running === false ? "已停止" : "运行中"}
+                  {run ? ` · 最近任务 ${fmtDateTime(run.finished_at ?? run.started_at)}` : ""}
                 </span>
               </div>
-              <span className="text-xs text-muted-foreground">
-                调度器 {running === false ? "已停止" : "运行中"}
-                {run ? ` · 最近任务 ${fmtDateTime(run.finished_at ?? run.started_at)}` : ""}
-              </span>
-            </div>
+              <ChevronDown
+                className={cn("size-4 text-muted-foreground transition-transform", !expanded && "-rotate-90")}
+                aria-hidden="true"
+              />
+            </button>
           </div>
           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
             <span className="rounded bg-secondary px-2 py-1">事件 {status?.counts?.events ?? "—"}</span>
@@ -230,13 +243,15 @@ export function SystemStatus() {
         </div>
       </div>
 
-      <div className="border-t border-border pt-3">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs font-medium text-foreground">循环任务</span>
-          {failedWithoutDetails && (
-            <span className="text-[11px] text-muted-foreground">输入写入 key 后刷新，可查看失败详情。</span>
-          )}
-        </div>
+      {expanded && (
+        <>
+          <div className="border-t border-border pt-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-foreground">循环任务</span>
+              {failedWithoutDetails && (
+                <span className="text-[11px] text-muted-foreground">输入写入 key 后刷新，可查看失败详情。</span>
+              )}
+            </div>
         {runs.length === 0 ? (
           <p className="py-2 text-xs text-muted-foreground">暂无任务运行记录。</p>
         ) : (
@@ -337,6 +352,8 @@ export function SystemStatus() {
             })}
           </div>
         </div>
+      )}
+        </>
       )}
     </section>
   );

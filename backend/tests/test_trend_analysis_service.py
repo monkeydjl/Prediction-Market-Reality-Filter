@@ -305,9 +305,9 @@ class AnalyzeEdgeTrajectoryTests(unittest.TestCase):
         self.assertEqual(out["classification"], "decaying")  # 6 < 0.7*30
 
     def test_closed_edge_below_materiality(self):
-        snaps = [_esnap(60, 50), _esnap(52, 50)]  # edges 10, 2
+        snaps = [_esnap(60, 50), _esnap(51, 50)]  # edges 10, 1
         out = analyze_edge_trajectory(snaps, now=_dt(NOW_FRESH))
-        self.assertEqual(out["classification"], "closed")  # latest 2 < watch 3
+        self.assertEqual(out["classification"], "closed")  # latest 1 < watch_edge 2.0
 
     def test_stale_when_last_snapshot_old(self):
         snaps = [_esnap(70, 50), _esnap(90, 50)]  # big edge, but old

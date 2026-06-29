@@ -87,10 +87,9 @@ def get_client() -> AsyncOpenAI:
 async def translate_title(question: str) -> str:
     """Translate a market question into a concise Chinese title.
 
-    Lightweight LLM call used when the main analysis falls back to the
-    deterministic path (which never produces title_zh). On LLM failure,
-    returns the original English question so events always have a visible
-    title rather than an empty field.
+    Uses a minimal, fail-safe prompt designed to work even with small / fast
+    models. On any error, returns the original English question so events
+    always have a visible title.
     """
     if not question or not question.strip():
         return ""
@@ -100,18 +99,15 @@ async def translate_title(question: str) -> str:
             model=settings.OPENAI_MODEL,
             messages=[
                 {
-                    "role": "system",
+                    "role": "user",
                     "content": (
-                        "You translate prediction market questions into concise "
-                        "Simplified Chinese titles. Output ONLY the Chinese title, "
-                        "nothing else. Keep it under 30 characters. No quotes, no "
-                        "explanation."
+                        "Translate to Simplified Chinese. Output ONLY the "
+                        f"translation, nothing else:\n\n{question[:500]}"
                     ),
                 },
-                {"role": "user", "content": question[:500]},
             ],
             temperature=0,
-            max_tokens=60,
+            max_tokens=80,
         )
         text = (response.choices[0].message.content or "").strip().strip("\"'""''")
         return text[:300] if text else question[:120]

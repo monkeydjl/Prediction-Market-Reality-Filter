@@ -1205,3 +1205,80 @@ async def manual_close_trade(
     if result is None:
         raise HTTPException(status_code=404, detail="No open trade for this event")
     return result
+
+
+# ── Event title translation ────────────────────────────────────────
+
+
+@router.post("/{event_id}/translate", response_model=FlexibleResponse)
+async def translate_event_title(
+    event_id: str,
+    force: bool = Query(default=False),
+    _auth: None = Depends(require_write_key),
+):
+    """Translate a single event's title to Chinese.
+
+    Reads the English title from the event store, calls the LLM for a concise
+    Chinese translation, and writes it back.  Use ``force=true`` to re-translate
+    even when a Chinese title already exists.
+    """
+    from app.memory.event_store import get_event, save_events
+    from app.services.probability_engine_service import translate_title
+
+    event = get_event(event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    en_title = str(event.get("event_title") or "").strip()
+    if not en_title:
+        raise HTTPException(status_code=400, detail="Event has no English title")
+
+    current_zh = str(event.get("event_title_zh") or "").strip()
+    if current_zh and not force:
+        return {
+            "event_id": event_id,
+            "event_title_zh": current_zh,
+            "message": "Already translated",
+        }
+
+    zh_title = await translate_title(en_title)
+    if not zh_title or zh_title == en_title:
+        return {
+            "event_id": event_id,
+            "event_title_zh": en_title[:120],
+            "message": "Translation unavailable, kept original",
+        }
+
+    event["event_title_zh"] = zh_title[:300]
+    save_events([event])
+    return {"event_id": event_id, "event_title_zh": zh_title[:300], "message": "Translated"}
+
+
+@router.post("/translate-all", response_model=FlexibleResponse)
+async def translate_all_events(_auth: None = Depends(require_write_key)):
+    """Translate all events whose Chinese title is empty."""
+    from app.memory.event_store import list_all_events, save_events
+    from app.services.probability_engine_service import translate_title
+
+    events = list_all_events()
+    translated = 0
+    for event in events:
+        zh = str(event.get("event_title_zh") or "").strip()
+        if zh:
+            continue
+        en = str(event.get("event_title") or "").strip()
+        if not en:
+            continue
+        result = await translate_title(en)
+        if result and result != en:
+            event["event_title_zh"] = result[:300]
+            translated += 1
+
+    if translated:
+        save_events(events)
+
+    return {
+        "total": len(events),
+        "translated": translated,
+        "message": f"Translated {translated} event titles",
+    }

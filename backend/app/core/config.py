@@ -93,6 +93,13 @@ class Settings:
     NEWS_FULL_TEXT_MAX_ARTICLES: int = int(
         os.getenv("NEWS_FULL_TEXT_MAX_ARTICLES", "5")
     )
+    # Per-article evidence breakdown (Stage: evidence decomposition). Emits
+    # structured direction/strength/credibility/rationale per article from the
+    # existing news sentiment LLM call. Explanation/audit layer only; does NOT
+    # participate in evidence_profile or ai_probability.
+    EVIDENCE_BREAKDOWN_ENABLED: bool = _env_bool(
+        "EVIDENCE_BREAKDOWN_ENABLED", "true"
+    )
 
     EVENT_STORE_FILE: str = os.getenv(
         "EVENT_STORE_FILE",
@@ -507,6 +514,13 @@ class Settings:
         LOOP_DB_FILE + ".scheduler.lock",
     )
     LLM_CONCURRENCY: int = int(os.getenv("LLM_CONCURRENCY", "4"))
+    # Hard timeout for a single discover_events scan (seconds). Prevents the
+    # scheduler from hanging indefinitely when the LLM provider is slow or
+    # unresponsive under load. Default 10 minutes — generous enough for a full
+    # limit=100 scan at 4 concurrency, strict enough to unblock the scheduler.
+    EVENT_DISCOVER_TIMEOUT_SECONDS: int = int(
+        os.getenv("EVENT_DISCOVER_TIMEOUT_SECONDS", "600")
+    )
     SCHEDULER_MISFIRE_GRACE_SECONDS: int = int(
         os.getenv("SCHEDULER_MISFIRE_GRACE_SECONDS", "86400")
     )

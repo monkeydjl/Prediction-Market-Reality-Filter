@@ -161,6 +161,25 @@ class EvidenceItem(BaseModel):
     relevance: float = 0.0
 
 
+class EvidenceBreakdownItem(BaseModel):
+    """One article's contribution to the event-level YES/NO evidence (Stage:
+    evidence decomposition).
+
+    Produced by aggregating the per-article fields emitted by the
+    ``analyze_sentiment`` LLM call. Unlike ``EvidenceItem`` (which carries
+    quality/relevance for the UI), this model carries the LLM's directional
+    judgment (support/oppose) and is purely an audit/explanation layer: it
+    MUST NOT feed back into ``evidence_profile`` or ``ai_probability``.
+    """
+
+    source: str = ""
+    title: str = ""
+    direction: str  # support | oppose
+    strength: float = 0.0  # 0-1
+    credibility: float = 0.0  # 0-1
+    rationale_zh: str = ""
+
+
 class Tracking(BaseModel):
     """Human tracking decision for an event. Defaults are seeded at analysis
     time; a user's explicit choice is preserved across re-scans by the store.
@@ -273,6 +292,7 @@ class EventRecord(BaseModel):
     calibration: Calibration | None = None
     semantics: EventSemantics | None = None
     actionable_recommendation: ActionableRecommendation | None = None
+    evidence_breakdown: list[EvidenceBreakdownItem] = Field(default_factory=list)
 
 
 class FlexibleResponse(BaseModel):

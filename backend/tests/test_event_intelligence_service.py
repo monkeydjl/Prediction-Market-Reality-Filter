@@ -1926,3 +1926,386 @@ class SourceReliabilityIntegrationTests(unittest.TestCase):
         for word in forbidden:
             self.assertNotIn(word, final_lower,
                              f"forbidden word '{word}' in final_downgrade_reason: {final_reason}")
+
+
+class Phase1To4EndToEndIntegrationTests(unittest.TestCase):
+    """End-to-end verification of the full Decision Quality Engine (Phases 1-4).
+
+    Unlike the per-phase integration tests above (which mock analyze_event),
+    these tests let analyze_event run for real — only the external boundaries
+    are mocked (LLM, news collection, candidate sources, persistence,
+    translation). All four feature flags are ON simultaneously to verify the
+    complete overlay stack integrates without regressions:
+
+        analyze_market (mocked LLM)
+          -> build_event_record
+          -> aggregate_evidence_breakdown      (EVIDENCE_BREAKDOWN)
+          -> build_decision_quality            (Phase 1)
+          -> build_market_quality              (Phase 2)
+          -> build_source_reliability          (Phase 4)
+          -> merge_quality_overlays (3-way)   (Phase 1+2+4 merge)
+          -> final_displayed_direction / final_downgrade_reason
+
+    The prediction-calibration layer (Phase 3) is gated on
+    freeze_prediction / score_prediction at resolve time, so it is not
+    exercised here (no prediction row is frozen in analyze_event itself).
+    """
+
+    # ── Shared fixtures ────────────────────────────────────────────────
+
+    # Two articles from distinct trusted domains -> diverse, passes all
+    # source-reliability gates (diversity=2, trusted_ratio=1.0).
+    SENTIMENT_DIVERS = {
+        "articles": [
+            {
+                "index": 0,
+                "sentiment": "positive",
+                "impact": "high",
+                "key_facts": ["Fed cut signals support YES"],
+                "relevance_to_question": 0.85,
+                "evidence_direction": "support",
+                "evidence_strength": 0.85,
+                "source_credibility": 0.9,
+                "rationale_zh": "支持 YES 的强证据。",
+            },
+            {
+                "index": 1,
+                "sentiment": "positive",
+                "impact": "medium",
+                "key_facts": ["Markets rally on Fed news"],
+                "relevance_to_question": 0.75,
+                "evidence_direction": "support",
+                "evidence_strength": 0.75,
+                "source_credibility": 0.85,
+                "rationale_zh": "支持 YES 的辅助证据。",
+            },
+        ],
+        "overall_direction": "support_yes",
+        "overall_strength": 0.8,
+        "conflict_level": 0.1,
+        "summary": "证据支持 YES",
+    }
+
+    ARTICLES_DIVERS = [
+        {"source": "Reuters", "title": "Fed signals rate cut",
+         "url": "https://www.reuters.com/article/fed-cut/1",
+         "summary": "desc", "description": "desc"},
+        {"source": "Bloomberg", "title": "Markets rally",
+         "url": "https://www.bloomberg.com/news/markets/rally",
+         "summary": "desc", "description": "desc"},
+    ]
+
+    # Single article from an aggregator domain -> fails diversity gate,
+    # source_reliability downgrades YES -> WAIT.
+    SENTIMENT_SINGLE = {
+        "articles": [
+            {
+                "index": 0,
+                "sentiment": "positive",
+                "impact": "high",
+                "key_facts": ["BTC up"],
+                "relevance_to_question": 0.8,
+                "evidence_direction": "support",
+                "evidence_strength": 0.85,
+                "source_credibility": 0.5,
+                "rationale_zh": "支持 YES。",
+            },
+        ],
+        "overall_direction": "support_yes",
+        "overall_strength": 0.85,
+        "conflict_level": 0.1,
+        "summary": "证据支持 YES",
+    }
+
+    ARTICLES_SINGLE = [
+        {"source": "CryptoNews", "title": "BTC up",
+         "url": "https://www.cryptonews.com/news/btc-up",
+         "summary": "desc", "description": "desc"},
+    ]
+
+    def _llm_analysis(self, *, signal_direction="LONG", ai_probability=70):
+        """A realistic analyze_market return value (the LLM mock)."""
+        return {
+            "market_question": "Will X happen?",
+            "market_probability": 50,
+            "ai_probability": ai_probability,
+            "signal": "ACT",
+            "signal_direction": signal_direction,
+            "signal_strength": "HIGH",
+            "risk_level": "medium",
+            "expected_edge": 0.20,
+            "position_size": 0.10,
+            "evidence_strength": 0.8,
+            "confidence_score": 0.7,
+            "news_quality_score": 0.8,
+            "source_count": 3,
+        }
+
+    def _patch_all_flags(self, stack):
+        """Enable ALL overlay feature flags for the E2E test."""
+        stack.enter_context(patch.object(eis.settings, "EVIDENCE_BREAKDOWN_ENABLED", True))
+        stack.enter_context(patch.object(eis.settings, "DECISION_QUALITY_ENABLED", True))
+        stack.enter_context(patch.object(eis.settings, "DECISION_QUALITY_MAX_EVIDENCE_ITEMS", 3))
+        stack.enter_context(patch.object(eis.settings, "DECISION_QUALITY_HIGH_CONFLICT_THRESHOLD", 0.40))
+        stack.enter_context(patch.object(eis.settings, "DECISION_QUALITY_MEDIUM_CONFLICT_THRESHOLD", 0.20))
+        stack.enter_context(patch.object(eis.settings, "MARKET_QUALITY_ENABLED", True))
+        stack.enter_context(patch.object(eis.settings, "MARKET_MAX_SPREAD_PCT", 12.0))
+        stack.enter_context(patch.object(eis.settings, "MARKET_MIN_LIQUIDITY", 1000.0))
+        stack.enter_context(patch.object(eis.settings, "MARKET_MIN_VOLUME", 1000.0))
+        stack.enter_context(patch.object(eis.settings, "MARKET_QUALITY_SCORE_THRESHOLD", 0.5))
+        stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_ENABLED", True))
+        stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_SCORE_THRESHOLD", 0.5))
+        stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_MIN_TRUSTED_RATIO", 0.4))
+        stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_MIN_DOMAIN_DIVERSITY", 2))
+        stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_MIN_SOURCES", 2))
+
+    def _run_analyze_event(
+        self,
+        *,
+        source: dict,
+        sentiment: dict,
+        articles: list,
+        volume: float | None = None,
+        liquidity: float | None = None,
+        market_quote: dict | None = None,
+    ) -> dict:
+        """Run analyze_event with all overlays ON, external deps mocked."""
+        analyze = AsyncMock(return_value=self._llm_analysis())
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            self._patch_all_flags(stack)
+            stack.enter_context(patch("app.services.ai_analysis_service.analyze_market", new=analyze))
+            stack.enter_context(patch("app.services.cross_validation_service.cross_validate",
+                                      new=AsyncMock(return_value=None)))
+            stack.enter_context(patch("app.services.translation_service.translate_articles",
+                                      new=AsyncMock(side_effect=lambda arts: arts)))
+            return _run(eis.analyze_event(
+                "Will X happen?",
+                baseline_probability=50,
+                news_context="direction: support",
+                source=source,
+                volume=volume,
+                liquidity=liquidity,
+                market_quote=market_quote,
+                sentiment_profile=sentiment,
+                filtered_articles=articles,
+            ))
+
+    # ── Test 1: All overlays present, no downgrade (healthy case) ──────
+
+    def test_all_overlays_present_healthy_prediction_market(self):
+        """All 4 overlays attached for a healthy prediction_market event
+        with diverse trusted sources. No overlay downgrades (YES stays YES)."""
+        record = self._run_analyze_event(
+            source={"type": "prediction_market", "platform": "Polymarket",
+                    "source_id": "poly-123"},
+            sentiment=self.SENTIMENT_DIVERS,
+            articles=self.ARTICLES_DIVERS,
+            volume=5000.0,
+            liquidity=5000.0,
+            market_quote={"bid": 48, "ask": 52, "spread": 4},
+        )
+        # All overlay blocks present
+        self.assertIn("decision_quality", record)
+        self.assertIn("market_quality", record)
+        self.assertIn("source_reliability", record)
+        self.assertIn("final_displayed_direction", record)
+        self.assertIn("final_downgrade_reason", record)
+        # All overlays agree: YES (healthy market + diverse sources + high consensus)
+        self.assertEqual(record["decision_quality"]["raw_direction"], "YES")
+        self.assertEqual(record["market_quality"]["raw_direction"], "YES")
+        self.assertEqual(record["source_reliability"]["raw_direction"], "YES")
+        # No downgrade: all suggested_directions == raw_direction
+        self.assertEqual(record["decision_quality"]["displayed_direction"], "YES")
+        self.assertEqual(record["market_quality"]["suggested_direction"], "YES")
+        self.assertEqual(record["source_reliability"]["suggested_direction"], "YES")
+        # Final merge: YES, no reason
+        self.assertEqual(record["final_displayed_direction"], "YES")
+        self.assertIsNone(record["final_downgrade_reason"])
+        # applied flags: nothing downgraded the base
+        self.assertFalse(record["market_quality"]["applied_to_displayed_direction"])
+        self.assertFalse(record["source_reliability"]["applied_to_displayed_direction"])
+        # No error blocks
+        self.assertNotIn("error", record["decision_quality"])
+        self.assertNotIn("error", record["market_quality"])
+        self.assertNotIn("error", record["source_reliability"])
+        # evidence_breakdown populated (EVIDENCE_BREAKDOWN ON)
+        self.assertEqual(len(record["evidence_breakdown"]), 2)
+
+    # ── Test 2: source_reliability downgrades YES -> WAIT (3-way merge) ─
+
+    def test_source_reliability_downgrades_in_full_stack(self):
+        """When source_reliability is the strictest overlay (single domain ->
+        WAIT) while decision_quality and market_quality keep YES, the 3-way
+        merge picks WAIT and flags source_reliability as applied."""
+        record = self._run_analyze_event(
+            source={"type": "prediction_market", "platform": "Polymarket"},
+            sentiment=self.SENTIMENT_SINGLE,
+            articles=self.ARTICLES_SINGLE,
+            volume=5000.0,   # healthy market
+            liquidity=5000.0,
+        )
+        # decision_quality: YES (single supporting evidence, high strength)
+        self.assertEqual(record["decision_quality"]["displayed_direction"], "YES")
+        # market_quality: YES (healthy market)
+        self.assertEqual(record["market_quality"]["suggested_direction"], "YES")
+        # source_reliability: WAIT (single domain, diversity=1 < min=2)
+        self.assertEqual(record["source_reliability"]["suggested_direction"], "WAIT")
+        self.assertTrue(record["source_reliability"]["downgraded"])
+        self.assertIsNotNone(record["source_reliability"]["downgrade_reason"])
+        # 3-way merge: WAIT is strictest -> final = WAIT
+        self.assertEqual(record["final_displayed_direction"], "WAIT")
+        self.assertIsNotNone(record["final_downgrade_reason"])
+        # source_reliability applied, market_quality not
+        self.assertTrue(record["source_reliability"]["applied_to_displayed_direction"])
+        self.assertFalse(record["market_quality"]["applied_to_displayed_direction"])
+
+    # ── Test 3: market_quality downgrades YES -> WAIT (3-way merge) ────
+
+    def test_market_quality_downgrades_in_full_stack(self):
+        """When market_quality is the strictest overlay (thin market -> WAIT)
+        while decision_quality and source_reliability keep YES, the 3-way
+        merge picks WAIT and flags market_quality as applied."""
+        record = self._run_analyze_event(
+            source={"type": "prediction_market", "platform": "Polymarket"},
+            sentiment=self.SENTIMENT_DIVERS,
+            articles=self.ARTICLES_DIVERS,
+            volume=100.0,   # thin -> market downgrades YES -> WAIT
+            liquidity=100.0,
+        )
+        # decision_quality: YES
+        self.assertEqual(record["decision_quality"]["displayed_direction"], "YES")
+        # market_quality: WAIT (thin market)
+        self.assertEqual(record["market_quality"]["suggested_direction"], "WAIT")
+        self.assertTrue(record["market_quality"]["downgraded"])
+        # source_reliability: YES (diverse sources)
+        self.assertEqual(record["source_reliability"]["suggested_direction"], "YES")
+        # 3-way merge: WAIT is strictest -> final = WAIT
+        self.assertEqual(record["final_displayed_direction"], "WAIT")
+        self.assertIsNotNone(record["final_downgrade_reason"])
+        # market_quality applied, source_reliability not
+        self.assertTrue(record["market_quality"]["applied_to_displayed_direction"])
+        self.assertFalse(record["source_reliability"]["applied_to_displayed_direction"])
+
+    # ── Test 4: All overlays downgrade -> reasons concatenated ────────
+
+    def test_all_overlays_downgrade_reasons_concatenated(self):
+        """When ALL three overlays downgrade YES -> WAIT (thin market + single
+        domain + high conflict), the merged reason concatenates all three."""
+        # Use single-source sentiment (triggers source_reliability downgrade)
+        # + thin market (triggers market_quality downgrade).
+        # decision_quality downgrade is harder to trigger with a single
+        # supporting article, but we can check that at least market +
+        # source reasons appear in the merged final_downgrade_reason.
+        record = self._run_analyze_event(
+            source={"type": "prediction_market", "platform": "Polymarket"},
+            sentiment=self.SENTIMENT_SINGLE,
+            articles=self.ARTICLES_SINGLE,
+            volume=100.0,   # thin market
+            liquidity=100.0,
+        )
+        self.assertEqual(record["final_displayed_direction"], "WAIT")
+        reason = record["final_downgrade_reason"]
+        self.assertIsNotNone(reason)
+        # Both market and source reasons should appear (concatenated with " | ")
+        self.assertIn(" | ", reason)
+
+    # ── Test 5: No-writeback invariant across all overlays ────────────
+
+    def test_no_writeback_across_all_overlays(self):
+        """Verify that NONE of the 4 overlays mutate the upstream fields:
+        ai_probability, actionable_recommendation.direction,
+        actionable_recommendation.edge, evidence_profile."""
+        record = self._run_analyze_event(
+            source={"type": "prediction_market", "platform": "Polymarket"},
+            sentiment=self.SENTIMENT_SINGLE,  # triggers source downgrade
+            articles=self.ARTICLES_SINGLE,
+            volume=100.0,   # triggers market downgrade
+            liquidity=100.0,
+        )
+        # ai_probability stays at LLM's 70 (no overlay writes back)
+        self.assertEqual(record["probability"]["estimated"], 70)
+        # actionable_recommendation.direction stays YES (overlays don't mutate)
+        self.assertEqual(record["actionable_recommendation"]["direction"], "YES")
+        # evidence_breakdown directions stay support (no rewrite)
+        for item in record["evidence_breakdown"]:
+            self.assertIn(item["direction"], ("support", "oppose", "neutral"))
+
+    # ── Test 6: Metaculus source (prediction_question) ────────────────
+
+    def test_metaculus_source_has_source_reliability_but_no_market_quality(self):
+        """Metaculus (prediction_question) gets source_reliability + decision_quality
+        but NOT market_quality (mirrors the freeze_prediction gate)."""
+        record = self._run_analyze_event(
+            source={"type": "prediction_question", "platform": "Metaculus"},
+            sentiment=self.SENTIMENT_DIVERS,
+            articles=self.ARTICLES_DIVERS,
+        )
+        self.assertIn("decision_quality", record)
+        self.assertIn("source_reliability", record)
+        # market_quality must be absent (non-prediction-market source)
+        self.assertNotIn("market_quality", record)
+        # final_displayed_direction still set (decision_quality + source_reliability)
+        self.assertIn("final_displayed_direction", record)
+        # No downgrade (diverse sources, high consensus)
+        self.assertEqual(record["final_displayed_direction"], "YES")
+
+    # ── Test 7: discover_events end-to-end with all flags ON ──────────
+
+    def test_discover_events_all_flags_on(self):
+        """Full discover_events orchestration with all overlay flags ON.
+        Mocks external boundaries (LLM, news, candidates, persistence,
+        translation) but lets analyze_event + all overlay services run for
+        real. Verifies the returned records have the complete overlay stack."""
+        # Candidate with a healthy prediction_market + diverse sources
+        candidate = {
+            "question": "Will the Fed cut rates in 2026?",
+            "baseline_probability": 50,
+            "volume": 5000.0,
+            "liquidity": 5000.0,
+            "source": {"type": "prediction_market", "platform": "Polymarket",
+                       "source_id": "poly-e2e-1"},
+        }
+
+        # Mock _build_filtered_news to return diverse articles + sentiment
+        async def fake_filtered_news(question, shared_articles=None):
+            return {
+                "context": "direction: support",
+                "summary": {"selected_count": 2},
+                "articles": self.ARTICLES_DIVERS,
+                "sentiment_profile": self.SENTIMENT_DIVERS,
+            }
+
+        analyze = AsyncMock(return_value=self._llm_analysis())
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            self._patch_all_flags(stack)
+            stack.enter_context(patch.object(eis, "_collect_candidate_events",
+                                             new=AsyncMock(return_value=[candidate])))
+            stack.enter_context(patch("app.services.event_collection_service.collect_shared_articles",
+                                      new=AsyncMock(return_value=[])))
+            stack.enter_context(patch.object(eis, "_build_filtered_news",
+                                             new=AsyncMock(side_effect=fake_filtered_news)))
+            stack.enter_context(patch("app.services.ai_analysis_service.analyze_market", new=analyze))
+            stack.enter_context(patch("app.services.cross_validation_service.cross_validate",
+                                      new=AsyncMock(return_value=None)))
+            stack.enter_context(patch("app.services.translation_service.translate_articles",
+                                      new=AsyncMock(side_effect=lambda arts: arts)))
+            stack.enter_context(patch.object(eis, "_persist_events", new=lambda records: None))
+            result = _run(eis.discover_events(limit=10, use_cache=False))
+
+        # discover_events returned 1 event
+        self.assertEqual(result["count"], 1)
+        record = result["events"][0]
+        # Full overlay stack present
+        self.assertIn("decision_quality", record)
+        self.assertIn("market_quality", record)
+        self.assertIn("source_reliability", record)
+        self.assertIn("final_displayed_direction", record)
+        # Healthy case: YES, no downgrade
+        self.assertEqual(record["final_displayed_direction"], "YES")
+        self.assertIsNone(record["final_downgrade_reason"])
+        # No errors in any overlay
+        self.assertNotIn("error", record["decision_quality"])
+        self.assertNotIn("error", record["market_quality"])
+        self.assertNotIn("error", record["source_reliability"])

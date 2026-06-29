@@ -1,4 +1,5 @@
 from typing import Annotated, Any
+import logging
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Path, Query
 
@@ -142,6 +143,8 @@ from app.models.event import (
 )
 
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 EVENT_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
@@ -191,7 +194,7 @@ async def reset_all_event_data(_auth: None = Depends(require_write_key)):
     import sqlite3
 
     from app.core.config import settings
-    from app.memory.sqlite_db import loop_db_path
+    from app.utils.sqlite_db import loop_db_path
 
     cleared: dict[str, int | str] = {}
 
@@ -244,6 +247,7 @@ async def reset_all_event_data(_auth: None = Depends(require_write_key)):
         cleared.get("sqlite.event_market_links", 0),
     )
     return {"message": "All event data cleared.", "cleared": cleared}
+
 
 
 @router.get("/", response_model=EventListResponse)

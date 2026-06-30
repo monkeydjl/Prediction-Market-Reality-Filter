@@ -942,8 +942,9 @@ class TestDegradedModeScenarios(unittest.TestCase):
                 {"direction": "oppose", "source": "bloomberg.com",
                  "url": "https://bloomberg.com/1", "summary": "Evidence 2"},
             ],
-            "market_quote": {"bid": 48.0, "ask": 52.0, "spread": 4.0,
-                              "last_updated": "2026-06-30T12:00:00+00:00"},
+            # last_updated intentionally absent → stale_price_flag=None (unknown).
+            # Avoids date-dependence (plan maintenance fix backported from Task 1).
+            "market_quote": {"bid": 48.0, "ask": 52.0, "spread": 4.0},
             "volume": 5000.0,
             "liquidity": 10000.0,
             "category": "politics",

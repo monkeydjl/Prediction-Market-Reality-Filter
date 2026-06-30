@@ -369,6 +369,55 @@ def _build_all_overlays(
                 "stale_price_flag": None,
             }
 
+    # Phase 2b: Execution Quality overlay (Plan 3 §3.5). Best-effort audit
+    # layer — only computed for ``source.type == "prediction_market"``.
+    # ``build_execution_quality`` returns None for other source types, so
+    # the record stays byte-identical to pre-Plan-3 for those sources.
+    # When the feature flag is off, no ``execution_quality`` key is attached.
+    try:
+        if settings.EXECUTION_QUALITY_ENABLED:
+            from app.services.execution_quality_service import build_execution_quality
+            _overlay_t0 = time.perf_counter()
+            eq = build_execution_quality(
+                recommendation=record.get("actionable_recommendation"),
+                source=record.get("source"),
+                market_quote=record.get("market_quote"),
+                volume=volume,
+                liquidity=liquidity,
+                max_spread_pct=settings.EXECUTION_MAX_SPREAD_PCT,
+                stale_price_seconds=settings.EXECUTION_STALE_PRICE_SECONDS,
+                min_liquidity=settings.EXECUTION_MIN_LIQUIDITY,
+                target_order_size=settings.EXECUTION_TARGET_ORDER_SIZE,
+                fee_rate_pct=settings.EXECUTION_FEE_RATE_PCT,
+            )
+            if eq is not None:
+                record["execution_quality"] = eq
+                from app.utils.metrics import record_overlay_latency
+                record_overlay_latency("execution_quality", time.perf_counter() - _overlay_t0)
+                if isinstance(eq, dict) and eq.get("downgraded"):
+                    from app.utils.metrics import RULE_FIRE
+                    RULE_FIRE.labels(rule="execution_quality_downgrade").inc()
+    except Exception as exc:
+        logger.warning("execution_quality build failed: %s", exc)
+        from app.utils.metrics import record_overlay_build_failure
+        record_overlay_build_failure("execution_quality")
+        src = record.get("source")
+        if isinstance(src, dict) and src.get("type") == "prediction_market":
+            fallback_direction = (record.get("actionable_recommendation") or {}).get("direction", "WAIT")
+            record["execution_quality"] = {
+                "error": "build_failed",
+                "executable": False,
+                "effective_entry_price": None,
+                "estimated_slippage_pct": None,
+                "max_safe_position_size": None,
+                "stale_price_flag": None,
+                "platform_constraint_reasons": ["构建失败"],
+                "raw_direction": fallback_direction,
+                "suggested_direction": fallback_direction,
+                "downgraded": False,
+                "applied_to_displayed_direction": False,
+            }
+
     # Phase 4: Source Reliability overlay. Best-effort audit layer — only
     # computed when ``evidence_breakdown`` is non-empty (prediction_market,
     # prediction_question, open_web). ``build_source_reliability`` returns
@@ -526,6 +575,7 @@ def _build_all_overlays(
                 uncalibrated_category_blocks_act=settings.GUARDRAIL_UNCALIBRATED_CATEGORY_BLOCKS_ACT,
                 high_conflict_blocks_act=settings.GUARDRAIL_HIGH_CONFLICT_BLOCKS_ACT,
                 high_conflict_threshold=settings.GUARDRAIL_HIGH_CONFLICT_THRESHOLD,
+                market_not_executable_blocks_act=settings.GUARDRAIL_MARKET_NOT_EXECUTABLE_BLOCKS_ACT,
                 qualified_categories=qualified_cats,
             )
             if fired_rules:

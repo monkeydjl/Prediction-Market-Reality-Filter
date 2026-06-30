@@ -4,8 +4,8 @@ Pre-Phase events were frozen before the overlay pipeline existed, so their
 records lack ``decision_quality`` / ``market_quality`` / ``source_reliability``
 / ``llm_telemetry`` / ``final_displayed_direction`` / ``final_downgrade_reason``.
 
-This script reuses the replay harness (``replay_record`` with
-``preset_all_on()``) to rebuild the overlays from the frozen record's inputs
+This script reuses the replay harness (``replay_record`` with an all-on
+``ReplayConfig``) to rebuild the overlays from the frozen record's inputs
 and writes them back to ``event_store.json``.
 
 Limitation: Phase 5 LLM token usage is unrecoverable (the original LLM call

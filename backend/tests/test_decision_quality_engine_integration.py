@@ -30,6 +30,7 @@ Scope:
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from app.services.decision_quality_service import build_decision_quality
 from app.services.market_quality_service import build_market_quality, merge_quality_overlays
@@ -474,6 +475,270 @@ class TestRoundTripIntegration(unittest.TestCase):
         # regardless of sr's verdict.
         self.assertEqual(final_dir, "WAIT")
         self.assertIsNotNone(final_reason)
+
+
+class TestDegradedModeScenarios(unittest.TestCase):
+    """Spec §4.2: Degraded-mode scenario coverage.
+
+    Verifies the pipeline produces safe output when individual overlays
+    or LLM calls fail. Uses ``_build_all_overlays`` directly (no live LLM).
+    """
+
+    def _base_record(self, **overrides) -> dict:
+        """Minimal record that exercises all 5 overlays + merge + guardrail."""
+        record = {
+            "event_id": "test-001",
+            "question": "Will X happen?",
+            "source": {"type": "prediction_market", "platform": "polymarket"},
+            "actionable_recommendation": {
+                "direction": "YES",
+                "confidence": "high",
+                "ai_probability": 0.72,
+            },
+            "evidence_breakdown": [
+                {"direction": "support", "source": "reuters.com",
+                 "url": "https://reuters.com/1", "summary": "Evidence 1"},
+                {"direction": "oppose", "source": "bloomberg.com",
+                 "url": "https://bloomberg.com/1", "summary": "Evidence 2"},
+            ],
+            # last_updated intentionally absent → stale_price_flag=None (unknown).
+            # Avoids date-dependence (plan maintenance fix backported from Task 1).
+            "market_quote": {"bid": 48.0, "ask": 52.0, "spread": 4.0},
+            "volume": 5000.0,
+            "liquidity": 10000.0,
+            "category": "politics",
+        }
+        record.update(overrides)
+        return record
+
+    def _apply_overlays(self, record, *, analysis=None) -> None:
+        """Call ``_build_all_overlays`` with kwargs derived from the record.
+
+        Plan-bug fix: ``_build_all_overlays`` requires ``analysis``,
+        ``sentiment_profile``, ``news_context``, ``market_quote``,
+        ``filtered_articles``, ``volume``, and ``liquidity`` keyword
+        arguments — not just ``record``. Derive sensible defaults from the
+        record so the tests can exercise the full pipeline. ``filtered_articles``
+        is built from ``evidence_breakdown`` so ``source_reliability`` can
+        extract domains from the evidence URLs (otherwise domain_diversity=0
+        spuriously downgrades to WAIT).
+        """
+        from app.services.event_intelligence_service import _build_all_overlays
+        _build_all_overlays(
+            record,
+            analysis=analysis or {},
+            sentiment_profile=None,
+            news_context="",
+            market_quote=record.get("market_quote"),
+            filtered_articles=[
+                {"source": i.get("source"), "url": i.get("url")}
+                for i in record.get("evidence_breakdown", [])
+                if isinstance(i, dict)
+            ],
+            volume=record.get("volume"),
+            liquidity=record.get("liquidity"),
+        )
+
+    # Plan-bug fix: patch target is ``app.services.event_intelligence_service.settings``
+    # (not ``app.core.config.settings``) because the service module binds
+    # ``settings`` at import time via ``from app.core.config import settings``.
+    @patch("app.services.event_intelligence_service.settings")
+    def test_all_overlays_enabled_merge_correctly(self, mock_settings):
+        """All 5 overlays + execution_quality + guardrail enabled together."""
+        mock_settings.DECISION_QUALITY_ENABLED = True
+        mock_settings.MARKET_QUALITY_ENABLED = True
+        mock_settings.SOURCE_RELIABILITY_ENABLED = True
+        mock_settings.LLM_TELEMETRY_ENABLED = True
+        mock_settings.GUARDRAILS_ENABLED = True
+        mock_settings.EXECUTION_QUALITY_ENABLED = True
+        mock_settings.DECISION_QUALITY_MAX_EVIDENCE_ITEMS = 10
+        mock_settings.DECISION_QUALITY_HIGH_CONFLICT_THRESHOLD = 0.7
+        mock_settings.DECISION_QUALITY_MEDIUM_CONFLICT_THRESHOLD = 0.4
+        mock_settings.MARKET_MAX_SPREAD_PCT = 12.0
+        mock_settings.MARKET_MIN_LIQUIDITY = 1000.0
+        mock_settings.MARKET_MIN_VOLUME = 1000.0
+        mock_settings.MARKET_QUALITY_SCORE_THRESHOLD = 0.5
+        mock_settings.SOURCE_RELIABILITY_SCORE_THRESHOLD = 0.5
+        mock_settings.SOURCE_RELIABILITY_MIN_TRUSTED_RATIO = 0.3
+        mock_settings.SOURCE_RELIABILITY_MIN_DOMAIN_DIVERSITY = 2
+        mock_settings.SOURCE_RELIABILITY_MIN_SOURCES = 2
+        mock_settings.OPENAI_MODEL = "gpt-4"
+        mock_settings.GUARDRAIL_LLM_DEGRADED_BLOCKS_ACT = True
+        mock_settings.GUARDRAIL_UNCALIBRATED_CATEGORY_BLOCKS_ACT = True
+        mock_settings.GUARDRAIL_HIGH_CONFLICT_BLOCKS_ACT = True
+        mock_settings.GUARDRAIL_HIGH_CONFLICT_THRESHOLD = 0.7
+        mock_settings.GUARDRAIL_MARKET_NOT_EXECUTABLE_BLOCKS_ACT = True
+        mock_settings.EXECUTION_MAX_SPREAD_PCT = 12.0
+        mock_settings.EXECUTION_STALE_PRICE_SECONDS = 300
+        mock_settings.EXECUTION_MIN_LIQUIDITY = 1000.0
+        mock_settings.EXECUTION_TARGET_ORDER_SIZE = 100.0
+        mock_settings.EXECUTION_FEE_RATE_PCT = 1.0
+
+        record = self._base_record()
+        self._apply_overlays(record)
+        # All overlays should be present
+        self.assertIn("decision_quality", record)
+        self.assertIn("market_quality", record)
+        self.assertIn("source_reliability", record)
+        self.assertIn("llm_telemetry", record)
+        self.assertIn("execution_quality", record)
+        self.assertIn("final_displayed_direction", record)
+
+    # Plan-bug fix: patch target is ``app.services.event_intelligence_service.settings``
+    # (see test_all_overlays_enabled_merge_correctly for rationale).
+    @patch("app.services.event_intelligence_service.settings")
+    def test_all_phases_disabled_byte_identical(self, mock_settings):
+        """All flags off → record has no overlay keys (pre-Phase-1 compatible)."""
+        mock_settings.DECISION_QUALITY_ENABLED = False
+        mock_settings.MARKET_QUALITY_ENABLED = False
+        mock_settings.SOURCE_RELIABILITY_ENABLED = False
+        mock_settings.LLM_TELEMETRY_ENABLED = False
+        mock_settings.GUARDRAILS_ENABLED = False
+        mock_settings.EXECUTION_QUALITY_ENABLED = False
+
+        record = self._base_record()
+        original_keys = set(record.keys())
+        self._apply_overlays(record)
+        # No new overlay keys added
+        for key in ("decision_quality", "market_quality", "source_reliability",
+                     "llm_telemetry", "execution_quality", "final_displayed_direction",
+                     "final_downgrade_reason", "guardrail_fired"):
+            self.assertNotIn(key, record, f"{key} should be absent when all flags off")
+
+    # Plan-bug fix: patch target is ``app.services.event_intelligence_service.settings``
+    # (see test_all_overlays_enabled_merge_correctly for rationale).
+    @patch("app.services.event_intelligence_service.settings")
+    def test_llm_degraded_still_produces_recommendation(self, mock_settings):
+        """When llm_telemetry.degraded_mode=True, guardrail forces YES → WAIT.
+
+        The pipeline still produces a recommendation (WAIT), not an error.
+        """
+        mock_settings.DECISION_QUALITY_ENABLED = True
+        mock_settings.MARKET_QUALITY_ENABLED = True
+        mock_settings.SOURCE_RELIABILITY_ENABLED = True
+        mock_settings.LLM_TELEMETRY_ENABLED = True
+        mock_settings.GUARDRAILS_ENABLED = True
+        mock_settings.EXECUTION_QUALITY_ENABLED = True
+        mock_settings.DECISION_QUALITY_MAX_EVIDENCE_ITEMS = 10
+        mock_settings.DECISION_QUALITY_HIGH_CONFLICT_THRESHOLD = 0.7
+        mock_settings.DECISION_QUALITY_MEDIUM_CONFLICT_THRESHOLD = 0.4
+        mock_settings.MARKET_MAX_SPREAD_PCT = 12.0
+        mock_settings.MARKET_MIN_LIQUIDITY = 1000.0
+        mock_settings.MARKET_MIN_VOLUME = 1000.0
+        mock_settings.MARKET_QUALITY_SCORE_THRESHOLD = 0.5
+        mock_settings.SOURCE_RELIABILITY_SCORE_THRESHOLD = 0.5
+        mock_settings.SOURCE_RELIABILITY_MIN_TRUSTED_RATIO = 0.3
+        mock_settings.SOURCE_RELIABILITY_MIN_DOMAIN_DIVERSITY = 2
+        mock_settings.SOURCE_RELIABILITY_MIN_SOURCES = 2
+        mock_settings.OPENAI_MODEL = "gpt-4"
+        mock_settings.GUARDRAIL_LLM_DEGRADED_BLOCKS_ACT = True
+        mock_settings.GUARDRAIL_UNCALIBRATED_CATEGORY_BLOCKS_ACT = False
+        mock_settings.GUARDRAIL_HIGH_CONFLICT_BLOCKS_ACT = False
+        mock_settings.GUARDRAIL_HIGH_CONFLICT_THRESHOLD = 0.7
+        mock_settings.GUARDRAIL_MARKET_NOT_EXECUTABLE_BLOCKS_ACT = True
+        mock_settings.EXECUTION_MAX_SPREAD_PCT = 12.0
+        mock_settings.EXECUTION_STALE_PRICE_SECONDS = 300
+        mock_settings.EXECUTION_MIN_LIQUIDITY = 1000.0
+        mock_settings.EXECUTION_TARGET_ORDER_SIZE = 100.0
+        mock_settings.EXECUTION_FEE_RATE_PCT = 1.0
+
+        record = self._base_record()
+        # Plan-bug fix: pass analysis={"analysis_quality": "deterministic_fallback"}
+        # so build_llm_telemetry computes degraded_mode=True. The plan pre-set
+        # record["llm_telemetry"]={"degraded_mode": True}, but LLM_TELEMETRY_ENABLED=True
+        # causes _build_all_overlays to overwrite it via build_llm_telemetry(analysis=...).
+        # Driving degraded_mode through the analysis path exercises the real pipeline.
+        self._apply_overlays(
+            record, analysis={"analysis_quality": "deterministic_fallback"}
+        )
+        # Guardrail should have forced YES → WAIT
+        self.assertEqual(record.get("final_displayed_direction"), "WAIT")
+        self.assertIn("guardrail_fired", record)
+        self.assertIn("llm_degraded_blocks_act", record["guardrail_fired"])
+
+    # Plan-bug fix: patch target is ``app.services.event_intelligence_service.settings``
+    # (see test_all_overlays_enabled_merge_correctly for rationale).
+    @patch("app.services.event_intelligence_service.settings")
+    def test_non_prediction_market_has_no_market_or_execution_quality(self, mock_settings):
+        """open_web / sports_event sources omit market_quality AND execution_quality."""
+        mock_settings.DECISION_QUALITY_ENABLED = True
+        mock_settings.MARKET_QUALITY_ENABLED = True
+        mock_settings.SOURCE_RELIABILITY_ENABLED = True
+        mock_settings.LLM_TELEMETRY_ENABLED = True
+        mock_settings.GUARDRAILS_ENABLED = False  # no qualified_categories needed
+        mock_settings.EXECUTION_QUALITY_ENABLED = True
+        mock_settings.DECISION_QUALITY_MAX_EVIDENCE_ITEMS = 10
+        mock_settings.DECISION_QUALITY_HIGH_CONFLICT_THRESHOLD = 0.7
+        mock_settings.DECISION_QUALITY_MEDIUM_CONFLICT_THRESHOLD = 0.4
+        mock_settings.MARKET_MAX_SPREAD_PCT = 12.0
+        mock_settings.MARKET_MIN_LIQUIDITY = 1000.0
+        mock_settings.MARKET_MIN_VOLUME = 1000.0
+        mock_settings.MARKET_QUALITY_SCORE_THRESHOLD = 0.5
+        mock_settings.SOURCE_RELIABILITY_SCORE_THRESHOLD = 0.5
+        mock_settings.SOURCE_RELIABILITY_MIN_TRUSTED_RATIO = 0.3
+        mock_settings.SOURCE_RELIABILITY_MIN_DOMAIN_DIVERSITY = 2
+        mock_settings.SOURCE_RELIABILITY_MIN_SOURCES = 2
+        mock_settings.OPENAI_MODEL = "gpt-4"
+        mock_settings.EXECUTION_MAX_SPREAD_PCT = 12.0
+        mock_settings.EXECUTION_STALE_PRICE_SECONDS = 300
+        mock_settings.EXECUTION_MIN_LIQUIDITY = 1000.0
+        mock_settings.EXECUTION_TARGET_ORDER_SIZE = 100.0
+        mock_settings.EXECUTION_FEE_RATE_PCT = 1.0
+
+        record = self._base_record()
+        record["source"] = {"type": "open_web"}
+        self._apply_overlays(record)
+        self.assertNotIn("market_quality", record)
+        self.assertNotIn("execution_quality", record)
+
+    # Plan-bug fix: patch target is ``app.services.event_intelligence_service.settings``
+    # (see test_all_overlays_enabled_merge_correctly for rationale).
+    @patch("app.services.event_intelligence_service.settings")
+    def test_market_not_executable_forces_wait(self, mock_settings):
+        """execution_quality.executable=False → guardrail rule 4 → WAIT."""
+        mock_settings.DECISION_QUALITY_ENABLED = True
+        mock_settings.MARKET_QUALITY_ENABLED = True
+        mock_settings.SOURCE_RELIABILITY_ENABLED = True
+        mock_settings.LLM_TELEMETRY_ENABLED = True
+        mock_settings.GUARDRAILS_ENABLED = True
+        mock_settings.EXECUTION_QUALITY_ENABLED = True
+        mock_settings.DECISION_QUALITY_MAX_EVIDENCE_ITEMS = 10
+        mock_settings.DECISION_QUALITY_HIGH_CONFLICT_THRESHOLD = 0.7
+        mock_settings.DECISION_QUALITY_MEDIUM_CONFLICT_THRESHOLD = 0.4
+        # Wide spread → execution_quality.executable=False.
+        # Plan-bug fix: set MARKET_MAX_SPREAD_PCT=25.0 (above the 20.0 spread)
+        # so market_quality's wide_spread_flag does NOT fire and downgrade the
+        # merge to WAIT before the guardrail can run. execution_quality uses a
+        # *relative* spread_pct = (spread/mid)*100 = 40% > EXECUTION_MAX_SPREAD_PCT(12),
+        # so it still reports executable=False. This isolates guardrail rule 4.
+        mock_settings.MARKET_MAX_SPREAD_PCT = 25.0
+        mock_settings.MARKET_MIN_LIQUIDITY = 1000.0
+        mock_settings.MARKET_MIN_VOLUME = 1000.0
+        mock_settings.MARKET_QUALITY_SCORE_THRESHOLD = 0.5
+        mock_settings.SOURCE_RELIABILITY_SCORE_THRESHOLD = 0.5
+        mock_settings.SOURCE_RELIABILITY_MIN_TRUSTED_RATIO = 0.3
+        mock_settings.SOURCE_RELIABILITY_MIN_DOMAIN_DIVERSITY = 2
+        mock_settings.SOURCE_RELIABILITY_MIN_SOURCES = 2
+        mock_settings.OPENAI_MODEL = "gpt-4"
+        mock_settings.GUARDRAIL_LLM_DEGRADED_BLOCKS_ACT = False
+        mock_settings.GUARDRAIL_UNCALIBRATED_CATEGORY_BLOCKS_ACT = False
+        mock_settings.GUARDRAIL_HIGH_CONFLICT_BLOCKS_ACT = False
+        mock_settings.GUARDRAIL_HIGH_CONFLICT_THRESHOLD = 0.7
+        mock_settings.GUARDRAIL_MARKET_NOT_EXECUTABLE_BLOCKS_ACT = True
+        mock_settings.EXECUTION_MAX_SPREAD_PCT = 12.0
+        mock_settings.EXECUTION_STALE_PRICE_SECONDS = 300
+        mock_settings.EXECUTION_MIN_LIQUIDITY = 1000.0
+        mock_settings.EXECUTION_TARGET_ORDER_SIZE = 100.0
+        mock_settings.EXECUTION_FEE_RATE_PCT = 1.0
+
+        record = self._base_record()
+        record["market_quote"] = {"bid": 40.0, "ask": 60.0, "spread": 20.0}  # wide spread
+        self._apply_overlays(record)
+        self.assertIn("execution_quality", record)
+        self.assertFalse(record["execution_quality"]["executable"])
+        self.assertEqual(record.get("final_displayed_direction"), "WAIT")
+        self.assertIn("guardrail_fired", record)
+        self.assertIn("market_not_executable_blocks_act", record["guardrail_fired"])
 
 
 if __name__ == "__main__":

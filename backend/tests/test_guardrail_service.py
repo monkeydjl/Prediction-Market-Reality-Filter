@@ -635,5 +635,120 @@ class TestIntegrationSmoke(unittest.TestCase):
         self.assertEqual(fired, [])
 
 
+# ─── Rule 4: market_not_executable_blocks_act ─────────────────────────────
+
+
+class TestRule4MarketNotExecutable(unittest.TestCase):
+    """Rule 4: execution_quality.executable=False blocks YES/NO → WAIT."""
+
+    def _base_record(self, executable: bool) -> dict:
+        return {
+            "execution_quality": {
+                "executable": executable,
+                "platform_constraint_reasons": [] if executable else ["价差过宽无法成交"],
+            },
+            "llm_telemetry": {"degraded_mode": False},
+            "decision_quality": {"conflict_score": 0.1},
+            "category": "politics",
+        }
+
+    def test_executable_false_forces_yes_to_wait(self):
+        from app.services.guardrail_service import evaluate_guardrails
+        record = self._base_record(executable=False)
+        direction, reason, fired = evaluate_guardrails(
+            final_direction="YES",
+            final_downgrade_reason=None,
+            record=record,
+            enabled=True,
+            llm_degraded_blocks_act=False,
+            uncalibrated_category_blocks_act=False,
+            high_conflict_blocks_act=False,
+            high_conflict_threshold=0.7,
+            market_not_executable_blocks_act=True,
+            qualified_categories=None,
+        )
+        self.assertEqual(direction, "WAIT")
+        self.assertIn("market_not_executable_blocks_act", fired)
+        self.assertIn("不可执行", (reason or ""))
+
+    def test_executable_true_does_not_fire(self):
+        from app.services.guardrail_service import evaluate_guardrails
+        record = self._base_record(executable=True)
+        direction, reason, fired = evaluate_guardrails(
+            final_direction="YES",
+            final_downgrade_reason=None,
+            record=record,
+            enabled=True,
+            llm_degraded_blocks_act=False,
+            uncalibrated_category_blocks_act=False,
+            high_conflict_blocks_act=False,
+            high_conflict_threshold=0.7,
+            market_not_executable_blocks_act=True,
+            qualified_categories=None,
+        )
+        self.assertEqual(direction, "YES")
+        self.assertEqual(fired, [])
+
+    def test_rule4_skipped_when_execution_quality_absent(self):
+        """When execution_quality key is absent (feature off), rule 4 is a no-op."""
+        from app.services.guardrail_service import evaluate_guardrails
+        record = {
+            "llm_telemetry": {"degraded_mode": False},
+            "decision_quality": {"conflict_score": 0.1},
+        }
+        direction, reason, fired = evaluate_guardrails(
+            final_direction="YES",
+            final_downgrade_reason=None,
+            record=record,
+            enabled=True,
+            llm_degraded_blocks_act=False,
+            uncalibrated_category_blocks_act=False,
+            high_conflict_blocks_act=False,
+            high_conflict_threshold=0.7,
+            market_not_executable_blocks_act=True,
+            qualified_categories=None,
+        )
+        self.assertEqual(direction, "YES")
+        self.assertEqual(fired, [])
+
+    def test_rule4_does_not_fire_on_wait(self):
+        """WAIT is already conservative — rule 4 does not escalate."""
+        from app.services.guardrail_service import evaluate_guardrails
+        record = self._base_record(executable=False)
+        direction, reason, fired = evaluate_guardrails(
+            final_direction="WAIT",
+            final_downgrade_reason=None,
+            record=record,
+            enabled=True,
+            llm_degraded_blocks_act=False,
+            uncalibrated_category_blocks_act=False,
+            high_conflict_blocks_act=False,
+            high_conflict_threshold=0.7,
+            market_not_executable_blocks_act=True,
+            qualified_categories=None,
+        )
+        self.assertEqual(direction, "WAIT")
+        self.assertEqual(fired, [])
+
+    def test_rule4_reason_excludes_banned_terms(self):
+        from app.services.guardrail_service import evaluate_guardrails
+        record = self._base_record(executable=False)
+        _, reason, _ = evaluate_guardrails(
+            final_direction="YES",
+            final_downgrade_reason=None,
+            record=record,
+            enabled=True,
+            llm_degraded_blocks_act=False,
+            uncalibrated_category_blocks_act=False,
+            high_conflict_blocks_act=False,
+            high_conflict_threshold=0.7,
+            market_not_executable_blocks_act=True,
+            qualified_categories=None,
+        )
+        banned = ("long", "short", "buy", "sell", "position", "kelly", "order")
+        for term in banned:
+            self.assertNotIn(term, (reason or "").lower())
+
+
 if __name__ == "__main__":
     unittest.main()

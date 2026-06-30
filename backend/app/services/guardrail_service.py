@@ -77,6 +77,7 @@ def evaluate_guardrails(
     uncalibrated_category_blocks_act: bool,
     high_conflict_blocks_act: bool,
     high_conflict_threshold: float,
+    market_not_executable_blocks_act: bool = False,
     qualified_categories: set[str] | None = None,
 ) -> tuple[str | None, str | None, list[str]]:
     """Apply the strategy-layer guardrails to the post-merge final direction.
@@ -142,6 +143,11 @@ def evaluate_guardrails(
         fired.append("high_conflict_blocks_act")
         new_reasons.append("证据冲突过高触发护栏，强方向降级为 WAIT。")
 
+    # Rule 4: Market not executable blocks strong actions.
+    if market_not_executable_blocks_act and _is_market_not_executable(record):
+        fired.append("market_not_executable_blocks_act")
+        new_reasons.append("市场不可执行触发护栏，强方向降级为 WAIT。")
+
     if not fired:
         return final_direction, final_downgrade_reason, []
 
@@ -195,6 +201,20 @@ def _has_high_conflict(record: dict[str, Any], threshold: float) -> bool:
     except (TypeError, ValueError):
         return False
     return conflict >= threshold
+
+
+def _is_market_not_executable(record: dict[str, Any]) -> bool:
+    """Rule 4 helper: True when ``execution_quality.executable`` is False.
+
+    Returns False when ``execution_quality`` key is absent (feature off)
+    or when ``executable`` is True. Only triggers on explicitly False —
+    ``None`` (unknown) does not fire (fail-open for unknown state, since
+    the service only sets True/False, never None).
+    """
+    eq = record.get("execution_quality")
+    if not isinstance(eq, dict):
+        return False
+    return eq.get("executable") is False
 
 
 def _extract_category(record: dict[str, Any]) -> str:

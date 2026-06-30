@@ -5,7 +5,7 @@ Converges spec §4.5 (replay harness), §1.5 (A/B compare), and §4.2
 (degraded-mode tests) into one tool.
 
 Usage:
-    # Default: all events, current-config vs all_off (marginal contribution)
+    # Default: all events, all_off -> current (marginal contribution)
     python -m scripts.replay_decision_pipeline
 
     # Specific events
@@ -79,9 +79,17 @@ def _enrich_with_outcome(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     try:
         from app.memory.prediction_store import list_recent
         # list_recent does not support status filter; fetch all and filter
-        # client-side to resolved predictions only.
+        # client-side to resolved predictions only. prediction_store writes
+        # status="scored" (act) or "observed" (watch/skip) at resolve time —
+        # NOT "resolved" (see prediction_store.score_prediction). Filtering
+        # for "resolved" would silently drop every resolved prediction,
+        # leaving Brier / direction-accuracy metrics permanently empty.
         all_preds = list_recent(limit=10000)
-        preds = {p["event_id"]: p for p in all_preds if p.get("status") == "resolved"}
+        preds = {
+            p["event_id"]: p
+            for p in all_preds
+            if p.get("status") in ("scored", "observed")
+        }
     except Exception as exc:
         logger.debug("prediction_store unavailable, skipping outcome enrichment: %s", exc)
         return records
@@ -96,8 +104,16 @@ def _enrich_with_outcome(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _run_marginal_loop(records: list[dict[str, Any]], metrics: ReplayMetrics) -> None:
     """N+1 replay loop: baseline (all_off) + one-per-phase (only P on) +
-    final (all_on). Feeds metrics.add_phase_result per event per phase."""
-    # 1. Baseline: all_off
+    final (all_on). Feeds metrics.add_phase_result per event per phase.
+
+    Uses ``_effective_direction`` for base/phase/final directions so the
+    all_off baseline (which never sets ``final_displayed_direction``)
+    contributes its raw ``actionable_recommendation.direction`` instead of
+    None. Without this, every base_dir would be None and
+    ``directions_changed`` / ``downgrades_caused`` would stay 0.
+    """
+    from app.replay.metrics import _effective_direction
+    # 1. Baseline: all_off (raw pre-overlay direction)
     base_results = {r["event_id"]: replay_record(r, ReplayConfig.preset_all_off()) for r in records}
     # 2. Final: all_on (use current settings)
     final_results = {r["event_id"]: replay_record(r, ReplayConfig.preset_all_on()) for r in records}
@@ -111,9 +127,9 @@ def _run_marginal_loop(records: list[dict[str, Any]], metrics: ReplayMetrics) ->
             metrics.add_phase_result(
                 event_id=eid,
                 phase=phase_name,
-                base_dir=base_results[eid].get("final_displayed_direction"),
-                phase_dir=phase_replayed.get("final_displayed_direction"),
-                final_dir=final_results[eid].get("final_displayed_direction"),
+                base_dir=_effective_direction(base_results[eid]),
+                phase_dir=_effective_direction(phase_replayed),
+                final_dir=_effective_direction(final_results[eid]),
             )
 
 
@@ -127,9 +143,13 @@ def run_replay(
     """Run the replay loop and write the report. Returns the report.md path."""
     records = _enrich_with_outcome(records)
 
-    # Determine the two configs to compare. Default: current vs all_off.
+    # Determine the two configs to compare. Default: all_off -> current.
+    # Orientation matters: ``add_pair(original=A, replayed=B)`` populates
+    # direction_matrix as ``A_dir -> B_dir``. We want "raw -> with overlays"
+    # so ``YES->WAIT`` reads as "overlays downgraded YES to WAIT" (the
+    # downgrade we want to measure), not the reverse.
     if compare is None:
-        compare = ("current", "all_off")
+        compare = ("all_off", "current")
     cfg_a = _config_by_name(compare[0])
     cfg_b = _config_by_name(compare[1])
 
@@ -137,7 +157,21 @@ def run_replay(
     cases: list[dict[str, Any]] = []
     for r in records:
         replayed_a = replay_record(r, cfg_a)
+        # preset_llm_degraded only enables the telemetry/guardrail flags;
+        # it does NOT flip degraded_mode. simulate_llm_degraded is the
+        # post-step that forces degraded_mode=True and re-runs the guardrail
+        # so llm_degraded_blocks_act actually fires. Without this call,
+        # --compare current llm_degraded would just rebuild the same
+        # overlays as current and never trigger the degradation path.
+        # Pass cfg so simulate_llm_degraded can re-apply the config's
+        # guardrail flags (replay_record's apply_replay_config has exited
+        # by now, so settings are restored to defaults where
+        # GUARDRAIL_LLM_DEGRADED_BLOCKS_ACT=False).
+        if compare[0] == "llm_degraded":
+            simulate_llm_degraded(replayed_a, cfg=cfg_a)
         replayed_b = replay_record(r, cfg_b)
+        if compare[1] == "llm_degraded":
+            simulate_llm_degraded(replayed_b, cfg=cfg_b)
         # Compare B (replayed under alt config) against A (baseline).
         metrics.add_pair(original=replayed_a, replayed=replayed_b)
         cases.append({
@@ -167,7 +201,7 @@ def main() -> int:
     parser.add_argument("--event-ids", nargs="*", default=None, help="Specific event IDs to replay.")
     parser.add_argument("--sample-size", type=int, default=None, help="Random sample N events.")
     parser.add_argument("--compare", nargs=2, default=None, metavar=("CONFIG_A", "CONFIG_B"),
-                        help="Two config names (current/all_off/llm_degraded). Default: current all_off")
+                        help="Two config names (current/all_off/llm_degraded). Default: all_off current")
     parser.add_argument("--skip-marginal", action="store_true", help="Skip the N+1 per-phase loop.")
     parser.add_argument("--output-dir", type=Path, default=None, help="Output directory.")
     args = parser.parse_args()

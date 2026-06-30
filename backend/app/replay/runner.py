@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from contextlib import nullcontext
 from typing import Any
 
 from app.replay.config import ReplayConfig, apply_replay_config
@@ -90,7 +91,10 @@ def _rebuild_overlays(
     )
 
 
-def simulate_llm_degraded(replayed: dict[str, Any]) -> None:
+def simulate_llm_degraded(
+    replayed: dict[str, Any],
+    cfg: ReplayConfig | None = None,
+) -> None:
     """Force llm_telemetry.degraded_mode=True and re-run only the guardrail
     layer. Used by preset_llm_degraded to verify llm_degraded_blocks_act
     fires without requiring a real LLM failure.
@@ -98,6 +102,16 @@ def simulate_llm_degraded(replayed: dict[str, Any]) -> None:
     Mutates ``replayed`` in place. Assumes replay_record has already been
     called (so llm_telemetry / final_displayed_direction / etc. are populated
     or absent per the cfg that was used).
+
+    ``cfg``: when provided, the guardrail re-run is wrapped in
+    ``apply_replay_config(cfg)`` so the config's guardrail flags (e.g.
+    ``guardrail_llm_degraded_blocks_act=True`` from preset_llm_degraded)
+    are active. Without this, the CLI's ``run_replay`` would call this
+    function after ``replay_record`` returns — at which point
+    ``apply_replay_config`` has already exited and restored settings to
+    their defaults (where ``GUARDRAIL_LLM_DEGRADED_BLOCKS_ACT=False``), so
+    the rule would never fire. When ``cfg`` is None (existing unit tests
+    that patch ``settings`` directly), the current settings are used as-is.
     """
     if not isinstance(replayed.get("llm_telemetry"), dict):
         # Nothing to degrade — llm_telemetry wasn't built (flag was off).
@@ -115,33 +129,39 @@ def simulate_llm_degraded(replayed: dict[str, Any]) -> None:
 
     try:
         from app.core.config import settings
-        if not settings.GUARDRAILS_ENABLED:
-            return
-        from app.services.guardrail_service import (
-            evaluate_guardrails,
-            extract_qualified_categories,
-        )
-        qualified_cats: set[str] | None = None
-        try:
-            from app.memory.prediction_store import calibration_summary
-            summary = calibration_summary()
-            qualified_cats = extract_qualified_categories(summary.get("segments"))
-        except Exception as exc:
-            logger.debug("calibration_summary unavailable for degraded replay: %s", exc)
-        fired_dir, fired_reason, fired_rules = evaluate_guardrails(
-            final_direction=pre_guardrail_dir,
-            final_downgrade_reason=pre_guardrail_reason,
-            record=replayed,
-            enabled=True,
-            llm_degraded_blocks_act=settings.GUARDRAIL_LLM_DEGRADED_BLOCKS_ACT,
-            uncalibrated_category_blocks_act=settings.GUARDRAIL_UNCALIBRATED_CATEGORY_BLOCKS_ACT,
-            high_conflict_blocks_act=settings.GUARDRAIL_HIGH_CONFLICT_BLOCKS_ACT,
-            high_conflict_threshold=settings.GUARDRAIL_HIGH_CONFLICT_THRESHOLD,
-            qualified_categories=qualified_cats,
-        )
-        if fired_rules:
-            replayed["final_displayed_direction"] = fired_dir
-            replayed["final_downgrade_reason"] = fired_reason
-            replayed["guardrail_fired"] = fired_rules
+        # Wrap the guardrail re-run in apply_replay_config when a cfg is
+        # provided, so the config's guardrail flags are active. Without
+        # this, the CLI cannot trigger llm_degraded_blocks_act because
+        # replay_record's apply_replay_config has already exited.
+        ctx = apply_replay_config(cfg) if cfg is not None else nullcontext()
+        with ctx:
+            if not settings.GUARDRAILS_ENABLED:
+                return
+            from app.services.guardrail_service import (
+                evaluate_guardrails,
+                extract_qualified_categories,
+            )
+            qualified_cats: set[str] | None = None
+            try:
+                from app.memory.prediction_store import calibration_summary
+                summary = calibration_summary()
+                qualified_cats = extract_qualified_categories(summary.get("segments"))
+            except Exception as exc:
+                logger.debug("calibration_summary unavailable for degraded replay: %s", exc)
+            fired_dir, fired_reason, fired_rules = evaluate_guardrails(
+                final_direction=pre_guardrail_dir,
+                final_downgrade_reason=pre_guardrail_reason,
+                record=replayed,
+                enabled=True,
+                llm_degraded_blocks_act=settings.GUARDRAIL_LLM_DEGRADED_BLOCKS_ACT,
+                uncalibrated_category_blocks_act=settings.GUARDRAIL_UNCALIBRATED_CATEGORY_BLOCKS_ACT,
+                high_conflict_blocks_act=settings.GUARDRAIL_HIGH_CONFLICT_BLOCKS_ACT,
+                high_conflict_threshold=settings.GUARDRAIL_HIGH_CONFLICT_THRESHOLD,
+                qualified_categories=qualified_cats,
+            )
+            if fired_rules:
+                replayed["final_displayed_direction"] = fired_dir
+                replayed["final_downgrade_reason"] = fired_reason
+                replayed["guardrail_fired"] = fired_rules
     except Exception as exc:
         logger.warning("simulate_llm_degraded guardrail re-run failed: %s", exc)

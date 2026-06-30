@@ -31,18 +31,42 @@ class TestDirectionMatrix(unittest.TestCase):
         from app.replay.metrics import ReplayMetrics
         m = ReplayMetrics()
         m.add_pair(
-            original={},  # no final_displayed_direction
+            original={},  # no final_displayed_direction, no actionable_recommendation
             replayed={"final_displayed_direction": "WAIT"},
         )
         d = m.to_dict()
         self.assertEqual(d["total"], 0)
 
-
-class TestBrierAndDirectionCorrect(unittest.TestCase):
-    def test_brier_delta_signed(self):
+    def test_falls_back_to_actionable_recommendation_direction(self):
+        """P1-2 regression: when final_displayed_direction is absent (all_off
+        baseline), fall back to actionable_recommendation.direction so the
+        default A/B comparison reports total>0 and the matrix reads
+        raw->with_overlays (YES->WAIT = overlays downgraded YES to WAIT)."""
         from app.replay.metrics import ReplayMetrics
         m = ReplayMetrics()
-        # original brier 0.25, replayed brier 0.15 — replayed is better.
+        m.add_pair(
+            original={
+                # all_off baseline: no final_displayed_direction, but raw rec direction is YES
+                "actionable_recommendation": {"direction": "YES"},
+            },
+            replayed={
+                # current config: overlays downgraded to WAIT
+                "final_displayed_direction": "WAIT",
+                "actionable_recommendation": {"direction": "YES"},
+            },
+        )
+        d = m.to_dict()
+        self.assertEqual(d["total"], 1)
+        self.assertEqual(d["direction_matrix"]["YES->WAIT"], 1)
+
+
+class TestBrierAndDirectionCorrect(unittest.TestCase):
+    def test_brier_frozen_and_direction_correct_delta(self):
+        """Brier is frozen (single mean, no delta); direction_correct_delta
+        is the real improvement signal. original=YES/outcome=100 -> correct;
+        replayed=NO/outcome=100 -> incorrect. Delta = 0/1 - 1/1 = -1.0."""
+        from app.replay.metrics import ReplayMetrics
+        m = ReplayMetrics()
         m.add_pair(
             original={
                 "final_displayed_direction": "YES",
@@ -52,19 +76,23 @@ class TestBrierAndDirectionCorrect(unittest.TestCase):
             },
             replayed={
                 "final_displayed_direction": "NO",
-                "brier_score": 0.15,
+                "brier_score": 0.25,  # frozen — same as original
                 "actual_outcome": 100.0,
             },
         )
         d = m.to_dict()
         self.assertEqual(d["resolved_count"], 1)
-        self.assertAlmostEqual(d["brier_original_mean"], 0.25)
-        self.assertAlmostEqual(d["brier_replayed_mean"], 0.15)
-        self.assertAlmostEqual(d["brier_delta"], -0.10)  # negative = improved
-        # original direction_correct: YES vs outcome 100 -> correct (1)
+        # Single frozen Brier mean (no original/replayed split, no delta).
+        self.assertAlmostEqual(d["brier_mean"], 0.25)
+        self.assertNotIn("brier_original_mean", d)
+        self.assertNotIn("brier_replayed_mean", d)
+        self.assertNotIn("brier_delta", d)
+        self.assertTrue(d["brier_frozen"])
+        # direction_correct: original 1/1=100%, replayed 0/1=0% -> delta -1.0
         self.assertEqual(d["direction_correct_original"], 1)
-        # replayed direction_correct: NO vs outcome 100 -> incorrect (0)
         self.assertEqual(d["direction_correct_replayed"], 0)
+        self.assertEqual(d["direction_correct_resolved_count"], 1)
+        self.assertAlmostEqual(d["direction_correct_delta"], -1.0)
 
     def test_llm_vs_fallback_split(self):
         from app.replay.metrics import ReplayMetrics

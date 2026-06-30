@@ -46,14 +46,17 @@ def render_markdown(metrics: dict[str, Any]) -> str:
     # Section 3: Brier
     lines.append("## Brier")
     lines.append("")
-    orig_mean = metrics.get("brier_original_mean")
-    replay_mean = metrics.get("brier_replayed_mean")
-    delta = metrics.get("brier_delta")
-    if orig_mean is not None and replay_mean is not None:
-        verdict = "improved" if (delta is not None and delta < 0) else "regressed"
-        lines.append(f"- Original mean Brier: {orig_mean:.4f}")
-        lines.append(f"- Replayed mean Brier: {replay_mean:.4f}")
-        lines.append(f"- Delta: {delta:+.4f} ({verdict})")
+    brier_mean = metrics.get("brier_mean")
+    brier_frozen = metrics.get("brier_frozen", False)
+    if brier_mean is not None:
+        lines.append(f"- Mean Brier (resolved): {brier_mean:.4f}")
+        if brier_frozen:
+            lines.append(
+                "- _Note: Brier is frozen at freeze time. Overlays do not "
+                "recompute ai_probability, so original and replayed share "
+                "the same Brier. See Direction Accuracy below for the real "
+                "improvement signal._"
+            )
     else:
         lines.append("_No resolved samples to compute Brier._")
     lines.append("")
@@ -64,10 +67,14 @@ def render_markdown(metrics: dict[str, Any]) -> str:
     rc = metrics.get("direction_correct_resolved_count", 0)
     orig_correct = metrics.get("direction_correct_original", 0)
     replay_correct = metrics.get("direction_correct_replayed", 0)
+    delta = metrics.get("direction_correct_delta")
     if rc:
         lines.append(f"- Resolved samples: {rc}")
         lines.append(f"- Original correct: {orig_correct} ({orig_correct/rc*100:.1f}%)")
         lines.append(f"- Replayed correct: {replay_correct} ({replay_correct/rc*100:.1f}%)")
+        if delta is not None:
+            verdict = "improved" if delta > 0 else ("regressed" if delta < 0 else "unchanged")
+            lines.append(f"- Delta: {delta*100:+.1f}pp ({verdict})")
     else:
         lines.append("_No resolved samples._")
     lines.append("")

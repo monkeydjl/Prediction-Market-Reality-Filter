@@ -51,12 +51,27 @@ class ReplayConfig:
 
     @classmethod
     def preset_llm_degraded(cls) -> "ReplayConfig":
-        """Simulate full LLM failure. Enables llm_telemetry + guardrails
-        so the runner can post-process degraded_mode=True and verify
-        llm_degraded_blocks_act fires."""
+        """Simulate full LLM failure. Enables llm_telemetry + guardrails +
+        the llm_degraded_blocks_act rule + decision_quality (so a non-None
+        ``final_displayed_direction`` exists for the guardrail to act on),
+        and disables Rule 2/3 for isolation. The CLI's ``run_replay`` calls
+        ``simulate_llm_degraded`` after ``replay_record`` to flip
+        ``degraded_mode=True``; without that post-step this preset alone
+        only builds the telemetry block — it does not force degraded mode.
+        """
         return cls(
+            decision_quality_enabled=True,  # produce final_displayed_direction for guardrail
             llm_telemetry_enabled=True,
             guardrails_enabled=True,
+            guardrail_llm_degraded_blocks_act=True,
+            # Disable Rule 2/3 so the only rule that can fire is
+            # llm_degraded_blocks_act. Rule 2 otherwise fires fail-closed
+            # when calibration_summary returns empty segments (test/empty
+            # store default), which would downgrade direction to WAIT
+            # before simulate_llm_degraded runs and short-circuit the
+            # guardrail on a non-strong direction.
+            guardrail_uncalibrated_category_blocks_act=False,
+            guardrail_high_conflict_blocks_act=False,
         )
 
 

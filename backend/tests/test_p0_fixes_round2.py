@@ -128,6 +128,30 @@ class TestG3RestoreWindowsHealthProbe(unittest.TestCase):
 
         self.assertFalse(result)
 
+    def test_windows_path_returns_true_on_http_503(self):
+        """H2: a 503 (degraded but running) service must NOT be treated as
+        'not running'. ``urllib.request.urlopen`` raises ``HTTPError`` for
+        4xx/5xx responses; without the HTTPError-specific except clause,
+        it would fall through to the URLError handler and (incorrectly)
+        return False — causing restore to clobber a live-but-degraded DB.
+        """
+        from scripts import restore_stores
+        import urllib.error
+
+        http_err = urllib.error.HTTPError(
+            url="http://localhost:8000/api/health",
+            code=503,
+            msg="Service Unavailable",
+            hdrs=None,
+            fp=None,
+        )
+
+        with patch.dict("sys.modules", {"fcntl": None}):
+            with patch("urllib.request.urlopen", side_effect=http_err):
+                result = restore_stores._check_service_running()
+
+        self.assertTrue(result)
+
 
 class TestG5DirectionChangeCounterInSaveEvents(unittest.TestCase):
     """G5: save_events must increment FINAL_DIRECTION_CHANGE when an

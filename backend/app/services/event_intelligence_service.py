@@ -588,15 +588,17 @@ async def analyze_event(
                 # absent key = no guardrail fired (matches the existing
                 # convention of "no key when feature off / no-op").
                 record["guardrail_fired"] = fired_rules
-                # P0-6 metrics: count each guardrail rule fire.
+                # P0-6 metrics: count each guardrail rule fire via RULE_FIRE
+                # (with rule label for finer-grained attribution). We do NOT
+                # also increment FINAL_DIRECTION_CHANGE here — that counter is
+                # the save_events() single source of truth for "an event's
+                # final_displayed_direction changed across an update", and
+                # save_events will catch this guardrail-induced change when
+                # the record is persisted. Double-counting would inflate the
+                # metric by 1 per guardrail-triggered save.
                 from app.utils.metrics import RULE_FIRE
                 for rule_name in fired_rules:
                     RULE_FIRE.labels(rule=rule_name).inc()
-                # When the guardrail changes a strong direction (YES/NO) to
-                # WAIT, surface that as a final-direction-change counter.
-                if pre_guardrail_dir in ("YES", "NO") and fired_dir == "WAIT":
-                    from app.utils.metrics import FINAL_DIRECTION_CHANGE
-                    FINAL_DIRECTION_CHANGE.inc()
     except Exception as exc:
         logger.warning("guardrail evaluation failed: %s", exc)
     return record

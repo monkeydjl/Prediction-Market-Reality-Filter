@@ -636,6 +636,21 @@ class Settings:
         "SENTRY_ATTACH_STACKTRACES", "true"
     )
 
+    # Restore script health-check probe (used by scripts/restore_stores.py on
+    # Windows / non-POSIX systems where fcntl is unavailable). The restore
+    # script probes this URL before overwriting live stores; any HTTP
+    # response (including 503 degraded) is treated as "service running" so
+    # the live DB is never clobbered. Defaults align with the dev server
+    # (FastAPI on :8000, /api/health). Operators running behind a proxy or
+    # on a non-default port must override both in .env, otherwise the probe
+    # falls through to the default and may fail to detect a running service.
+    PMRF_HEALTHCHECK_URL: str = os.getenv(
+        "PMRF_HEALTHCHECK_URL", "http://localhost:8000/api/health"
+    )
+    PMRF_HEALTHCHECK_TIMEOUT_SECONDS: float = float(
+        os.getenv("PMRF_HEALTHCHECK_TIMEOUT_SECONDS", "5")
+    )
+
     # Strategy-layer Guardrails (P0-8 §6.3 minimum set). When enabled, the
     # post-merge final_displayed_direction is gated by global risk controls
     # (LLM degraded mode, uncalibrated category, high evidence conflict).

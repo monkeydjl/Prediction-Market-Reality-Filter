@@ -279,10 +279,22 @@ def _check_service_running() -> bool:
         health_url = getattr(settings, "PMRF_HEALTHCHECK_URL", "") or \
             "http://localhost:8000/api/health"
         timeout = getattr(settings, "PMRF_HEALTHCHECK_TIMEOUT_SECONDS", 5) or 5
+        # Any successful HTTP response — including 503 (degraded but alive),
+        # 502/504 (behind a proxy whose upstream is briefly unavailable) —
+        # means *a* service is bound to the health port and we must NOT
+        # overwrite its DB. Only connection-level failures (refused/reset/
+        # timed out) indicate the service is truly not running and the
+        # restore is safe. Returning ``resp.status == 200`` here previously
+        # caused a degraded-but-running service (503) to be treated as
+        # "not running" and silently overwritten.
         try:
             req = urllib.request.Request(health_url, method="GET")
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.status == 200
+                return True
+        except urllib.error.HTTPError:
+            # 4xx/5xx — the service answered, so it is running (possibly
+            # degraded). Treat as "running" to avoid clobbering a live DB.
+            return True
         except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
             return False
 

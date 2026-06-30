@@ -19,7 +19,13 @@ from fastapi import APIRouter, Query
 
 from app.memory.event_store import list_all_events, list_resolved_events
 from app.memory import loop_run_store
-from app.memory.prediction_store import calibration_bucket_summary, calibration_summary
+from app.memory.prediction_store import (
+    calibration_bucket_summary,
+    calibration_summary,
+    list_scored_samples_for_drift,
+)
+from app.services.calibration_drift_service import build_drift_report, evaluate_drift_alerts
+from app.services.drift_alert_dispatcher import dispatch_drift_alerts, evaluate_scheduler_alerts
 
 logger = logging.getLogger(__name__)
 
@@ -346,6 +352,78 @@ async def quality_metrics_anomalies() -> dict[str, Any]:
     return {
         "count": len(anomalies),
         "anomalies": anomalies,
+    }
+
+
+# ---------------------------------------------------------------------------
+# /api/quality-metrics/drift
+# ---------------------------------------------------------------------------
+
+@router.get("/quality-metrics/drift")
+async def quality_metrics_drift() -> dict[str, Any]:
+    """Calibration drift report + triggered alerts (Plan 2 §1.7).
+
+    Returns:
+        - ``drift`` — recent-vs-baseline Brier delta (positive = recent worse)
+        - ``ece`` — Expected Calibration Error for recent + baseline windows
+        - ``degraded_mixing`` — whether recent window contains LLM-degraded samples
+        - ``buckets`` — per-cell (edge|confidence) recent vs baseline stats
+        - ``alerts`` — list of triggered alert dicts (rules 1-4)
+
+    The drift *computation* always runs (read-only). Alert *dispatch*
+    (webhook/Sentry) is gated by ``DRIFT_ALERTS_ENABLED`` and fires as a
+    side effect of this route being called — so the dashboard's periodic
+    poll acts as the alert heartbeat.
+    """
+    from app.core.config import settings
+
+    recent_n = getattr(settings, "DRIFT_RECENT_WINDOW_N", 50)
+    try:
+        samples = list_scored_samples_for_drift(recent_n=recent_n)
+    except Exception as exc:
+        logger.warning("list_scored_samples_for_drift failed: %s", exc)
+        samples = {"recent": [], "baseline": []}
+
+    # Join recent samples with event_store to set the ``degraded`` flag
+    # (the predictions table does not store LLM degradation state).
+    recent = samples.get("recent", [])
+    if recent:
+        degraded_ids: set[str] = set()
+        for entry in list_all_events():
+            record = entry.get("record") or {}
+            lt = record.get("llm_telemetry")
+            if isinstance(lt, dict) and lt.get("degraded_mode"):
+                eid = record.get("event_id")
+                if isinstance(eid, str):
+                    degraded_ids.add(eid)
+        for s in recent:
+            if s.get("event_id") in degraded_ids:
+                s["degraded"] = True
+
+    report = build_drift_report(recent, samples.get("baseline", []))
+
+    thresholds = {
+        "brier_relative_threshold": getattr(settings, "DRIFT_BRIER_RELATIVE_THRESHOLD", 0.30),
+        "bucket_deviation_pp": getattr(settings, "DRIFT_BUCKET_DEVIATION_PP", 20.0),
+        "bucket_min_samples": getattr(settings, "DRIFT_BUCKET_MIN_SAMPLES", 2),
+    }
+    alerts = evaluate_drift_alerts(report, thresholds)
+    alerts.extend(evaluate_scheduler_alerts())
+
+    # Best-effort dispatch (no-op when DRIFT_ALERTS_ENABLED=false)
+    try:
+        dispatch_drift_alerts(alerts)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("drift alert dispatch failed: %s", exc)
+
+    return {
+        "recent_window_n": recent_n,
+        "drift": report.get("drift"),
+        "ece": report.get("ece"),
+        "degraded_mixing": report.get("degraded_mixing"),
+        "buckets": report.get("buckets"),
+        "alerts": alerts,
+        "alerts_enabled": getattr(settings, "DRIFT_ALERTS_ENABLED", False),
     }
 
 

@@ -700,5 +700,41 @@ class Settings:
         os.getenv("GUARDRAIL_HIGH_CONFLICT_THRESHOLD", "0.40")
     )
 
+    # Calibration drift alerts (Plan 2 §1.7). The drift *computation*
+    # (ECE, drift_score) is always available and read-only; these flags
+    # gate the alert *dispatch* (webhook + Sentry breadcrumb) which has
+    # side effects. Default OFF so a fresh install computes drift silently
+    # without firing webhooks — byte-identical alert silence to pre-Plan-2.
+    DRIFT_ALERTS_ENABLED: bool = _env_bool("DRIFT_ALERTS_ENABLED", "false")
+    # Rule 1: recent Brier mean must exceed baseline by this relative
+    # threshold (0.30 = 30% worse) to fire brier_relative_drift.
+    DRIFT_BRIER_RELATIVE_THRESHOLD: float = float(
+        os.getenv("DRIFT_BRIER_RELATIVE_THRESHOLD", "0.30")
+    )
+    # Rule 2: bucket direction_correct_rate must deviate by more than this
+    # many percentage points from baseline to fire bucket_deviation.
+    DRIFT_BUCKET_DEVIATION_PP: float = float(
+        os.getenv("DRIFT_BUCKET_DEVIATION_PP", "20.0")
+    )
+    DRIFT_BUCKET_MIN_SAMPLES: int = int(
+        os.getenv("DRIFT_BUCKET_MIN_SAMPLES", "2")
+    )
+    # Number of most-recent scored predictions to treat as the "recent"
+    # window for drift comparison.
+    DRIFT_RECENT_WINDOW_N: int = int(os.getenv("DRIFT_RECENT_WINDOW_N", "50"))
+    # Rule 4: fire scheduler_zero_resolved when this many consecutive
+    # successful scheduler runs produce 0 new scored predictions.
+    DRIFT_SCHEDULER_ZERO_RESOLVED_RUNS: int = int(
+        os.getenv("DRIFT_SCHEDULER_ZERO_RESOLVED_RUNS", "3")
+    )
+    # Webhook destination for drift alerts. Empty = no webhook (Sentry +
+    # log only). When set, POSTs a JSON alert payload on each dispatch.
+    DRIFT_ALERT_WEBHOOK_URL: str = os.getenv("DRIFT_ALERT_WEBHOOK_URL", "")
+    # Cooldown (seconds) per alert code — prevents webhook spam when the
+    # drift condition persists across scrapes. 0 = no cooldown.
+    DRIFT_ALERT_COOLDOWN_SECONDS: int = int(
+        os.getenv("DRIFT_ALERT_COOLDOWN_SECONDS", "3600")
+    )
+
 
 settings = Settings()

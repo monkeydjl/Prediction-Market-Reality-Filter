@@ -304,8 +304,29 @@ def _refresh_calibration_gauges() -> None:
         except (TypeError, ValueError):
             CALIBRATION_BRIER.set(float("nan"))
 
-    # Drift score: Phase 1 placeholder — keep at 0 until drift algorithm lands.
-    CALIBRATION_DRIFT.set(0.0)
+    # Drift score: recent-vs-baseline Brier delta. Computed on each scrape
+    # from prediction_store scored samples (read-only, cheap). Best-effort:
+    # any failure leaves the gauge at its previous value. Uses the default
+    # recent-window size (50) directly — DRIFT_RECENT_WINDOW_N is a
+    # best-effort default and the gauge refresh must not import settings
+    # into this hot path; the /quality-metrics/drift route honors the
+    # configured value for the authoritative report.
+    try:
+        from app.memory.prediction_store import list_scored_samples_for_drift
+        from app.services.calibration_drift_service import compute_drift_score
+        samples = list_scored_samples_for_drift(recent_n=50)
+        drift = compute_drift_score(
+            [s["brier_score"] for s in samples.get("recent", []) if s.get("brier_score") is not None],
+            [s["brier_score"] for s in samples.get("baseline", []) if s.get("brier_score") is not None],
+        )
+        score = drift.get("drift_score")
+        if score is None:
+            CALIBRATION_DRIFT.set(float("nan"))
+        else:
+            CALIBRATION_DRIFT.set(float(score))
+    except Exception:  # pragma: no cover - defensive
+        # Keep previous value on failure — do not clobber with 0.0.
+        pass
 
 
 def _to_unix_timestamp(iso_str: str | None) -> float | None:

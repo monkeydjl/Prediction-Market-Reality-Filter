@@ -50,17 +50,21 @@ function priorityOf(record: EventRecord): "high" | "medium" | "low" {
 
 // Human tracking status (tracking | watching | archived). Defaults to
 // "watching" when the user has not made an explicit decision (tracking=None).
+// Events with a resolved outcome are always treated as archived so they leave
+// the active list and enter the calibration/review database.
 function trackingStatusOf(
   record: EventRecord,
 ): "tracking" | "watching" | "archived" {
+  if (record.outcome?.status) return "archived";
   const s = record.tracking?.status;
   if (s === "tracking" || s === "archived") return s;
   return "watching";
 }
 
-// Category lives in legacy_analysis.base_rate_category on real records; fall
-// back to the source type, then "general".
+// Sports events use source type as the dashboard segment; other records use
+// legacy_analysis.base_rate_category, then fall back to the source type.
 function categoryOf(record: EventRecord): string {
+  if (record.source?.type === "sports_event") return "sports_event";
   const legacy = (record as unknown as { legacy_analysis?: Record<string, unknown> })
     .legacy_analysis;
   const cat = legacy?.base_rate_category;
@@ -117,6 +121,6 @@ export function adaptMover(m: Mover): EventView {
 // History snapshots -> a compact numeric series for sparklines / the chart.
 export function sparkSeries(history: HistorySnapshot[]): number[] {
   return history
-    .map((h) => num(h.estimated))
-    .filter((v) => v > 0);
+    .map((h) => Number(h.estimated))
+    .filter((v) => Number.isFinite(v));
 }

@@ -1,0 +1,35 @@
+[Unit]
+Description=PMRF daily store backup
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/prediction-market-reality-filter/backend
+EnvironmentFile=/etc/prediction-market-reality-filter.env
+ExecStart=/opt/prediction-market-reality-filter/.venv/bin/python scripts/backup_stores.py
+User=pmrf
+Group=pmrf
+
+# Hardening: same profile as the API service. The backup script reads the
+# runtime stores and writes pmrf-backup-*.zip into ./backups/, so the RW path
+# must cover the whole backend dir (read + write).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/prediction-market-reality-filter/backend
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RemoveIPC=true
+RestrictNamespaces=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service

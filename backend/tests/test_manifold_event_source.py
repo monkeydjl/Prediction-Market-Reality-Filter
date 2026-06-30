@@ -83,9 +83,13 @@ class ManifoldEventSourceTests(unittest.TestCase):
 
     def test_fetch_error_degrades_to_empty(self):
         with patch.object(source, "_fetch_raw_markets",
-                          new=AsyncMock(side_effect=RuntimeError("network down"))):
+                          new=AsyncMock(side_effect=RuntimeError("network down"))), \
+             self.assertLogs("app.services.manifold_event_source", level="WARNING") as logs:
             events = asyncio.run(source.fetch_candidate_events(limit=5))
         self.assertEqual(events, [])
+        text = "\n".join(logs.output)
+        self.assertIn("source=manifold_candidates", text)
+        self.assertIn("policy=fail_closed_empty_list", text)
 
     def test_fetch_resolved_markets_maps_outcomes(self):
         raw = [
@@ -107,8 +111,12 @@ class ManifoldEventSourceTests(unittest.TestCase):
 
     def test_fetch_resolved_error_degrades_to_empty(self):
         with patch.object(source, "_fetch_raw_resolved",
-                          new=AsyncMock(side_effect=RuntimeError("boom"))):
+                          new=AsyncMock(side_effect=RuntimeError("boom"))), \
+             self.assertLogs("app.services.manifold_event_source", level="WARNING") as logs:
             self.assertEqual(asyncio.run(source.fetch_resolved_markets()), [])
+        text = "\n".join(logs.output)
+        self.assertIn("source=manifold_resolved", text)
+        self.assertIn("policy=fail_closed_empty_list", text)
 
 
 if __name__ == "__main__":

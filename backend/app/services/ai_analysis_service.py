@@ -23,7 +23,8 @@ module directly rather than relying on these re-exports.
 import logging
 from typing import Any
 
-from app.services.base_rate_service import anchor_probability, classify_market
+from app.core.config import settings
+from app.services.base_rate_service import anchor_probability, classify_market, get_base_rate_context
 
 logger = logging.getLogger(__name__)
 from app.services.probability_engine_service import (
@@ -38,6 +39,7 @@ from app.services.probability_engine_service import (
     extract_evidence_profile,
     extract_semantics_profile,
     score_news_quality,
+    translate_title,
 )
 from app.services.analysis_report_service import (
     build_risk_flags,
@@ -57,6 +59,8 @@ async def analyze_market(
     news_context: str,
     volume: float | None = None,
     liquidity: float | None = None,
+    sentiment_summary: str = "",
+    market_microstructure: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     market_probability = _clamp(market_probability, 0, 100)
     news_quality_score = score_news_quality(news_context)
@@ -67,13 +71,24 @@ async def analyze_market(
         evidence_profile=evidence_profile,
         volume=volume,
         liquidity=liquidity,
+        market_microstructure=market_microstructure,
     )
 
+    # ── Compute prompt-enrichment context ─────────────────────────────────
+    # Base rate: give the LLM the historical prior for this market category
+    base_rate_context = get_base_rate_context(market_question)
+    # Deadline: extract time-to-deadline info from the semantics in news_context
+    deadline_info = _extract_deadline_from_context(semantics_profile, news_context)
+
+    used_fallback = False
     try:
         raw_analysis = await _ask_ai(
             market_question=market_question,
             market_probability=market_probability,
             news_context=news_context,
+            sentiment_summary=sentiment_summary,
+            base_rate_context=base_rate_context,
+            deadline_info=deadline_info,
         )
     except Exception as exc:
         # LLM unavailable / invalid output: fall back to the deterministic
@@ -92,8 +107,27 @@ async def analyze_market(
             priced_in_risk_score=priced_in_risk_score,
             semantics_profile=semantics_profile,
         )
+        # The deterministic fallback never produces title_zh. Make a lightweight
+        # LLM call just for the title so new events get Chinese names even when
+        # the full analysis degrades. Fail-closed: empty string on any error.
+        title_zh = await translate_title(market_question)
+        if title_zh:
+            raw_analysis["title_zh"] = title_zh
+        used_fallback = True
 
+    # Phase 5: extract _llm_usage before _normalize_ai_analysis (which copies
+    # only known keys and would drop it). None when fallback was used.
+    llm_usage = raw_analysis.pop("_llm_usage", None) if isinstance(raw_analysis, dict) else None
     normalized = _normalize_ai_analysis(raw_analysis, market_probability)
+    # ── Auto-translate titles ────────────────────────────────────────────
+    # AUTO_TRANSLATE_TITLES=true (default): every event gets a Chinese title.
+    # The LLM is asked to produce title_zh but smaller/faster models sometimes
+    # skip it.  When the field is empty or the env flag is on, run a dedicated
+    # lightweight translation call so the dashboard always has readable titles.
+    if settings.AUTO_TRANSLATE_TITLES and not normalized.get("title_zh"):
+        zh = await translate_title(market_question)
+        if zh:
+            normalized["title_zh"] = zh
     narrative_type = normalized["narrative_type"]
     base_rate = classify_market(market_question)
     narrative_risk_score = calculate_narrative_risk_score(
@@ -197,4 +231,57 @@ async def analyze_market(
         "resolution_criteria": normalized["resolution_criteria"],
         "time_horizon": normalized["time_horizon"],
         "entities": normalized["entities"],
+        "reasoning_steps": normalized["reasoning_steps"],
+        "analysis_quality": "deterministic_fallback" if used_fallback else "llm",
+        # Phase 5: real token usage from _ask_ai's response.usage. None when
+        # the LLM call failed (deterministic fallback path). Consumed by
+        # llm_telemetry_service.build_llm_telemetry.
+        "llm_usage": llm_usage,
     }
+
+
+def _extract_deadline_from_context(
+    semantics_profile: dict[str, Any],
+    news_context: str,
+) -> str | None:
+    """Extract deadline information from the news context for the LLM prompt.
+
+    Looks for a DEADLINE field in the structured news context (emitted by
+    build_semantics_context) and returns a human-readable time-to-deadline
+    string. Returns None when no deadline is found.
+    """
+    import re
+    from datetime import datetime, timezone
+
+    # Try to find DEADLINE in the news context
+    match = re.search(r"DEADLINE:\s*(.+?)(?:\n|$)", news_context or "")
+    if not match:
+        return None
+    deadline_str = match.group(1).strip()
+    if not deadline_str or deadline_str.lower() in ("none", "unknown", ""):
+        return None
+
+    # Try to parse the deadline and compute remaining time
+    now = datetime.now(timezone.utc)
+    for fmt in ("%B %d, %Y", "%B %d %Y", "%b %d, %Y", "%b %d %Y"):
+        try:
+            deadline = datetime.strptime(deadline_str, fmt).replace(tzinfo=timezone.utc)
+            delta = deadline - now
+            days = delta.days
+            if days < 0:
+                return f"{deadline_str} (已过期 {abs(days)} 天)"
+            elif days == 0:
+                return f"{deadline_str} (今天到期)"
+            elif days <= 7:
+                return f"{deadline_str} (还剩 {days} 天)"
+            elif days <= 30:
+                return f"{deadline_str} (还剩约 {days // 7} 周)"
+            elif days <= 365:
+                return f"{deadline_str} (还剩约 {days // 30} 个月)"
+            else:
+                return f"{deadline_str} (还剩约 {days // 365} 年)"
+        except ValueError:
+            continue
+
+    # Could not parse, return raw
+    return deadline_str

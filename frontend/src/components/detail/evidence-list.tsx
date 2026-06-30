@@ -1,6 +1,6 @@
 import { Building2, ExternalLink, Newspaper } from "lucide-react";
 import type { EventRecord, EvidenceItem } from "@/lib/types";
-import { KIND_LABELS, relativeTime } from "@/lib/format";
+import { KIND_LABELS, fmtDateTime } from "@/lib/format";
 
 // Real backend evidence: per-item articles (official / news) plus the market
 // itself as a third "source". The backend scores evidence direction only in
@@ -26,7 +26,7 @@ function EvidenceRow({ item }: { item: EvidenceItem }) {
         </span>
         {item.published && (
           <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-            {relativeTime(item.published)}
+            {fmtDateTime(item.published)}
           </span>
         )}
       </div>
@@ -35,7 +35,7 @@ function EvidenceRow({ item }: { item: EvidenceItem }) {
           <a
             href={item.url}
             target="_blank"
-            rel="noreferrer"
+            rel="noopener noreferrer"
             className="inline-flex items-start gap-1 hover:text-primary"
           >
             {title}
@@ -102,17 +102,4 @@ export function NewsColumn({ record }: { record: EventRecord }) {
     (item) => (item.kind ?? "news") !== "official"
   );
   return <SourceColumn kind="news" items={items} />;
-}
-
-export function EvidenceList({ record }: { record: EventRecord }) {
-  const items = record.evidence_items ?? [];
-  const official = items.filter((item) => (item.kind ?? "news") === "official");
-  const news = items.filter((item) => (item.kind ?? "news") !== "official");
-
-  return (
-    <div className="grid gap-4 md:grid-cols-2">
-      <SourceColumn kind="official" items={official} />
-      <SourceColumn kind="news" items={news} />
-    </div>
-  );
 }

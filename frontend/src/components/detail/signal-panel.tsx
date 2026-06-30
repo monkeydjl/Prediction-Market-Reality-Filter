@@ -46,13 +46,6 @@ export function SignalPanel({ record }: { record: EventRecord }) {
   const ev = record.evidence ?? {};
   const cv = record.cross_validation;
   const report = record.intelligence_report;
-  const evd = ev as {
-    direction?: string;
-    strength?: number;
-    conflict?: number;
-    freshness?: number;
-    resolution_relevance?: number;
-  };
 
   return (
     <div className="grid gap-4 md:grid-cols-3">
@@ -64,13 +57,13 @@ export function SignalPanel({ record }: { record: EventRecord }) {
             证据信号
           </div>
           <span className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-            方向 {DIRECTION_LABELS[String(evd.direction)] ?? evd.direction ?? "—"}
+            方向 {DIRECTION_LABELS[String(ev.direction)] ?? ev.direction ?? "—"}
           </span>
         </div>
         <div className="divide-y divide-border">
-          <Signal label="证据强度" detail="支撑当前判断的证据量" value={evd.strength ?? 0} tone="bg-pos" />
-          <Signal label="证据冲突" detail="来源间的相互矛盾程度" value={evd.conflict ?? 0} tone="bg-neg" />
-          <Signal label="信息新鲜度" detail="证据的时效性" value={evd.freshness ?? 0} tone="bg-primary" />
+          <Signal label="证据强度" detail="支撑当前判断的证据量" value={ev.strength ?? 0} tone="bg-pos" />
+          <Signal label="证据冲突" detail="来源间的相互矛盾程度" value={ev.conflict ?? 0} tone="bg-neg" />
+          <Signal label="信息新鲜度" detail="证据的时效性" value={ev.freshness ?? 0} tone="bg-primary" />
         </div>
       </div>
 

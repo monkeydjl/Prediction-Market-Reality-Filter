@@ -12,10 +12,42 @@ POLYMARKET_API = "https://gamma-api.polymarket.com/markets"
 logger = logging.getLogger(__name__)
 
 ALLOWED_KEYWORDS = (
-    "trump", "election", "president", "bitcoin", "btc", "crypto",
-    "fed", "china", "war", "ukraine", "russia", "ai", "openai",
-    "tesla", "recession", "tariff", "etf", "ethereum", "eth",
-    "solana", "inflation", "rate", "nasdaq", "spy", "sp500",
+    # Politics & government
+    "trump", "election", "president", "congress", "senate", "house",
+    "governor", "democrat", "republican", "biden", "harris", "desantis",
+    "impeach", "vote", "ballot", "primary", "nominee", "cabinet",
+    "supreme court", "justice", "gop",
+    # Geopolitics & conflict
+    "war", "ukraine", "russia", "china", "taiwan", "iran", "israel",
+    "nato", "sanctions", "treaty", "nuclear", "military", "invasion",
+    "peace", "ceasefire", "nord korea", "north korea",
+    # Economics & finance
+    "fed", "inflation", "rate", "recession", "tariff", "gdp", "debt",
+    "deficit", "unemployment", "jobs", "cpi", "ppi", "pmi",
+    "nasdaq", "spy", "sp500", "s&p", "dow", "treasury", "yield",
+    "stock", "market crash", "bubble",
+    # Crypto & blockchain
+    "bitcoin", "btc", "crypto", "ethereum", "eth", "solana", "sol",
+    "xrp", "ripple", "dogecoin", "nft", "defi", "stablecoin",
+    "binance", "coinbase", "sec", "etf", "token",
+    # Technology & AI
+    "ai", "openai", "anthropic", "google", "apple", "microsoft",
+    "meta", "amazon", "nvidia", "tesla", "spacex", "robot",
+    "gpt", "agi", "chip", "semiconductor", "quantum",
+    # Energy & environment
+    "oil", "gas", "energy", "climate", "hurricane", "earthquake",
+    "tornado", "wildfire", "temperature", "carbon",
+    # Health & science
+    "covid", "pandemic", "fda", "vaccine", "drug", "pharma",
+    "who", "disease", "cancer", "alzheimer",
+    # Social & culture
+    "abortion", "immigration", "gun", "lgbt", "marijuana", "cannabis",
+    "strike", "union", "protest", "riot",
+    # Sports (major events only)
+    "world cup", "super bowl", "olympics", "nba", "nfl", "mlb",
+    "champions league", "premier league",
+    # Media & entertainment
+    "oscar", "grammy", "emmy", "box office", "netflix", "disney",
 )
 
 # Crypto-only fetch gate (POLYMARKET_CRYPTO_FETCH_ENABLED). The gamma-api `tag_id`
@@ -30,41 +62,53 @@ CRYPTO_KEYWORDS = (
 
 
 async def fetch_markets(limit: int = 10, crypto_only: bool = False) -> list[MarketModel]:
-    params = {
-        "limit": str(max(limit, 1) * 3),
-        "closed": "false",
-        "archived": "false",
-        "order": "volume",
-        "ascending": "false",
-    }
-    # Polymarket files crypto under a "crypto" tag. The tag_id filter is
-    # best-effort: it narrows the ranked set toward crypto markets so they are
-    # not crowded out by geopolitics in the volume ranking. If the tag is wrong
-    # / empty / unsupported, the CRYPTO_KEYWORDS gate below still backstops it.
-    if crypto_only:
-        params["tag_id"] = "crypto"
+    target = max(limit, 1)
+    page_size = 100  # gamma-api caps at ~100 per request
+    markets: list[MarketModel] = []
+    offset = 0
 
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.get(POLYMARKET_API, params=params)
-        response.raise_for_status()
-        data = response.json()
+        while len(markets) < target:
+            params = {
+                "limit": str(page_size),
+                "offset": str(offset),
+                "closed": "false",
+                "archived": "false",
+                "order": "volume",
+                "ascending": "false",
+            }
+            # Polymarket files crypto under a "crypto" tag. The tag_id filter is
+            # best-effort: it narrows the ranked set toward crypto markets so they
+            # are not crowded out by geopolitics in the volume ranking.
+            if crypto_only:
+                params["tag_id"] = "crypto"
 
-    markets = []
-    for item in data:
-        market = parse_market(item)
-        if market is None:
-            continue
-        if crypto_only:
-            # Tag filter is best-effort; re-gate on crypto keywords so a bad tag
-            # never lets non-crypto markets into the crypto pool.
-            if not is_crypto_market(market):
-                continue
-        elif not is_allowed_market(market):
-            continue
+            response = await client.get(POLYMARKET_API, params=params)
+            response.raise_for_status()
+            data = response.json()
+            if not data:
+                break  # no more pages
 
-        markets.append(market)
-        if len(markets) >= limit:
-            break
+            page_count = 0
+            for item in data:
+                market = parse_market(item)
+                if market is None:
+                    continue
+                if crypto_only:
+                    if not is_crypto_market(market):
+                        continue
+                # Default path: no keyword gate. Polymarket orders by volume so
+                # the top markets are already the most active/relevant.
+                markets.append(market)
+                page_count += 1
+                if len(markets) >= target:
+                    break
+
+            if page_count == 0:
+                break  # page had no parseable markets, stop paginating
+            if len(data) < page_size:
+                break  # last page (fewer items than requested)
+            offset += page_size
 
     return markets
 
@@ -75,10 +119,17 @@ def parse_market(item: dict[str, Any]) -> MarketModel | None:
         if not question:
             return None
 
+        # Use the parent event slug (events[0].slug), not the market slug, for
+        # constructing https://polymarket.com/event/{event_slug} links.  The
+        # market slug maps to a different URL path and produces 404s.
+        events = item.get("events") or []
+        event_slug = str((events[0] or {}).get("slug", "") or "") if events else ""
+
         yes_price, no_price = parse_outcome_prices(item.get("outcomePrices"))
         return MarketModel(
             id=str(item.get("id", "") or ""),
             slug=str(item.get("slug", "") or ""),
+            event_slug=event_slug,
             question=question,
             yes_price=yes_price,
             no_price=no_price,

@@ -138,5 +138,42 @@ class CorruptStoreOverwriteRegressionTests(unittest.TestCase):
             self.assertTrue(os.path.exists(path + ".corrupt"))
 
 
+class NestedLockedFileRegressionTests(unittest.TestCase):
+    """Regression: nested locked_file() calls on the same path must not deadlock.
+
+    The cross-process lock (POSIX flock / Windows msvcrt.locking) is NOT
+    reentrant at the OS level — a second acquire on a different fd from the
+    same process blocks against itself. locked_file() must track per-process
+    ownership so a nested call (e.g. save_events -> read_json_strict ->
+    locked_file, then write_json_atomic -> locked_file on the same path)
+    skips re-acquisition and only the outermost call releases.
+    """
+
+    def test_nested_locked_file_does_not_deadlock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "nested.json")
+            # If the cross-process lock isn't reentrant-safe, this hangs.
+            with fs.locked_file(path):
+                with fs.locked_file(path):
+                    Path(path).write_text("{}", encoding="utf-8")
+            # If we got here, no deadlock. Verify the file was written and the
+            # cross-process lock tracking entry was cleaned up on exit.
+            self.assertEqual(Path(path).read_text(encoding="utf-8"), "{}")
+            self.assertNotIn(os.path.abspath(path), fs._HELD_CROSS_PROCESS)
+
+    def test_cross_process_lock_file_is_created(self):
+        # The sidecar .crosslock file is created next to the target on first
+        # acquisition and is NOT removed on release (unlinking would race
+        # with another process trying to acquire on the same path).
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "sidecar.json")
+            self.assertFalse(os.path.exists(path + ".crosslock"))
+            with fs.locked_file(path):
+                self.assertTrue(os.path.exists(path + ".crosslock"))
+            # Still there after release — operators may need to clean up
+            # stale .crosslock files only when no process is running.
+            self.assertTrue(os.path.exists(path + ".crosslock"))
+
+
 if __name__ == "__main__":
     unittest.main()

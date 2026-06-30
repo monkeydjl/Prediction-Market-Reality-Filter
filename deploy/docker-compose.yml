@@ -1,0 +1,48 @@
+services:
+  pmrf:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: pmrf
+    ports:
+      # Bind to loopback only — the container must NOT be exposed directly to
+      # the public internet (no TLS termination here). Put nginx/caddy in
+      # front as the reverse proxy; the proxy owns the public listener and the
+      # TLS cert. To enable TRUSTED_PROXY_HEADER on the app, set it in .env so
+      # rate limiting keys off the proxy-supplied X-Forwarded-For.
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - ../backend/.env
+    environment:
+      # Persist all data files to the mounted /app/data volume
+      - EVENT_STORE_FILE=/app/data/event_store.json
+      - EVENT_AUDIT_FILE=/app/data/event_audit.jsonl
+      - EVENT_CACHE_FILE=/app/data/event_cache.json
+      - LOOP_DB_FILE=/app/data/v2_loop.db
+      - WORLD_CUP_PREDICTION_DB_FILE=/app/data/world_cup_predictions.db
+      - SPORTS_FACT_FILE=/app/data/sports_facts.json
+    volumes:
+      - pmrf_data:/app/backups
+      - pmrf_logs:/app/logs
+      - pmrf_store:/app/data
+    restart: unless-stopped
+    # Resource caps prevent a runaway APScheduler job or LLM batch from
+    # exhausting the host. Tuned to headroom observed during auto-tuning runs
+    # (LLM concurrency spikes transient memory); raise on a beefier host or
+    # lower on a small VPS. cpus is a float; mem_limit accepts k/m/g suffixes.
+    mem_limit: 2g
+    cpus: "2.0"
+    pids_limit: 256
+    healthcheck:
+      # python (not curl) — curl is absent from python:3.11-slim. Exit non-zero on
+      # any non-2xx so the orchestrator sees /api/health degraded states too.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health', timeout=5).status < 400 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  pmrf_data:
+  pmrf_logs:
+  pmrf_store:

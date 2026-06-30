@@ -27,6 +27,14 @@ from typing import Any
 
 from app.utils.market_utils import safe_float
 
+RANDOM_BRIER = 0.25
+GRADE_BANDS = (
+    (0.05, "EXCELLENT"),
+    (0.10, "GOOD"),
+    (0.15, "ACCEPTABLE"),
+    (0.20, "POOR"),
+)
+
 
 def _clamp_pct(value: Any) -> float:
     """Clamp a 0-100 probability (defensive: upstream should already be in range,
@@ -46,19 +54,14 @@ def brier_score(predicted_pct: float, actual_pct: float) -> float:
 
 def skill_score(brier: float) -> float:
     """Rescale Brier so >0 beats random (0.25) and <0 is worse than random."""
-    return 1.0 - brier / 0.25
+    return 1.0 - brier / RANDOM_BRIER
 
 
 def grade(brier: float) -> str:
     """Letter grade for a Brier score, mirroring the market-layer bands."""
-    if brier <= 0.05:
-        return "EXCELLENT"
-    if brier <= 0.10:
-        return "GOOD"
-    if brier <= 0.15:
-        return "ACCEPTABLE"
-    if brier <= 0.20:
-        return "POOR"
+    for threshold, label in GRADE_BANDS:
+        if brier <= threshold:
+            return label
     return "RANDOM_LEVEL"
 
 

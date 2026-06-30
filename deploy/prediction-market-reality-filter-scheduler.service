@@ -1,0 +1,45 @@
+[Unit]
+Description=Prediction Market Reality Filter Scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/prediction-market-reality-filter/backend
+EnvironmentFile=/etc/prediction-market-reality-filter.env
+Environment=SCHEDULER_ENABLED=true
+ExecStart=/opt/prediction-market-reality-filter/.venv/bin/python scripts/run_scheduler.py
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=30
+User=pmrf
+Group=pmrf
+
+# Hardening: drop privileges, sandbox filesystem, restrict kernel surface.
+# Same profile as the API service (see prediction-market-reality-filter.service
+# for rationale). The scheduler also writes the same stores — keep RW paths
+# identical so a relocated data dir applies to both.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/prediction-market-reality-filter/backend
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RemoveIPC=true
+RestrictNamespaces=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

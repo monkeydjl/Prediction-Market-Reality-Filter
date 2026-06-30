@@ -1,0 +1,46 @@
+{
+  "source": "official_injury_feed",
+  "source_url": "https://example.com/injuries",
+  "observed_at": "2026-06-25T00:00:00Z",
+  "response": [
+    {
+      "player": {
+        "name": "Player A"
+      },
+      "team": {
+        "name": "Brazil"
+      },
+      "status": "out",
+      "injury": {
+        "type": "hamstring"
+      },
+      "severity": "high",
+      "fixture": {
+        "id": "group-a-1"
+      }
+    },
+    {
+      "player": {
+        "name": "Player B"
+      },
+      "team": {
+        "name": "Brazil"
+      },
+      "status": "suspended",
+      "reason": "red card ban"
+    },
+    {
+      "player": {
+        "name": "Player C",
+        "type": "Missing Fixture",
+        "reason": "Hamstring injury"
+      },
+      "team": {
+        "name": "Brazil"
+      },
+      "fixture": {
+        "id": "group-a-2"
+      }
+    }
+  ]
+}

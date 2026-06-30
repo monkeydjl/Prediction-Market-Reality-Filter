@@ -5,6 +5,7 @@ from typing import Optional
 class MarketModel(BaseModel):
     id: str
     slug: Optional[str] = None
+    event_slug: Optional[str] = None  # parent event slug for URL (gamma API events[0].slug)
     question: str
     yes_price: Optional[float] = None
     no_price: Optional[float] = None

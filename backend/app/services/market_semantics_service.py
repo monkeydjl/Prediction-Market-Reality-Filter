@@ -164,12 +164,57 @@ def extract_threshold(question: str) -> str | None:
 
 
 def extract_entities(question: str) -> list[str]:
-    tokens = re.findall(r"[a-zA-Z0-9$]{3,}", question.lower())
-    return [
-        token
-        for token in tokens
-        if token not in STOPWORDS and not token.isdigit()
-    ]
+    """Extract meaningful entities from a market question for article matching.
+
+    Uses a multi-pass NER-like approach:
+    1. Capitalized phrases (proper nouns) from the original text
+    2. Dollar amounts and percentages
+    3. Quoted phrases
+    4. Token-based fallback for remaining content words
+
+    Results are deduplicated case-insensitively and capped at 10.
+    """
+    entities: list[str] = []
+    seen_lower: set[str] = set()
+
+    def _add(entity: str) -> None:
+        key = entity.lower().strip()
+        if not key or key in seen_lower or key in STOPWORDS:
+            return
+        # Skip pure digits and very short tokens
+        if key.isdigit() or len(key) < 2:
+            return
+        seen_lower.add(key)
+        entities.append(key)
+
+    # --- Pass 1: Capitalized multi-word phrases (proper nouns) ---
+    # Match sequences of capitalized words, e.g. "Federal Reserve", "Donald Trump"
+    for match in re.finditer(r"\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)\b", question):
+        _add(match.group(1))
+
+    # --- Pass 2: Single capitalized words ---
+    for match in re.finditer(r"\b([A-Z][a-zA-Z]{1,})\b", question):
+        _add(match.group(1))
+
+    # --- Pass 3: Dollar amounts (e.g. $100,000 or $5.2M) ---
+    for match in re.finditer(r"(\$[\d,]+(?:\.\d+)?(?:\s?(?:k|m|b|million|billion|trillion))?)", question, re.IGNORECASE):
+        _add(match.group(1))
+
+    # --- Pass 4: Percentages (e.g. 3%, 5.2%) ---
+    for match in re.finditer(r"(\d+(?:\.\d+)?%)", question):
+        _add(match.group(1))
+
+    # --- Pass 5: Quoted phrases ---
+    for match in re.finditer(r'["\u201c](.*?)["\u201d]', question):
+        _add(match.group(1))
+
+    # --- Pass 6: Token-based fallback for remaining content words ---
+    tokens = re.findall(r"[a-zA-Z0-9]{3,}", question.lower())
+    for token in tokens:
+        if token not in seen_lower and token not in STOPWORDS and not token.isdigit():
+            _add(token)
+
+    return entities[:10]
 
 
 def score_resolution_ambiguity(question: str) -> tuple[int, list[str]]:

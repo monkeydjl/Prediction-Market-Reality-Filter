@@ -1,15 +1,98 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw, Target } from "lucide-react";
+import Link from "next/link";
+import { RefreshCw, Target, Zap } from "lucide-react";
 import { AppNav } from "@/components/app-nav";
 import { DecisionCard } from "@/components/decisions/decision-card";
 import { eventsApi, type DecisionReport, type FreshEdge } from "@/lib/api";
+import { fmtSignedPct } from "@/lib/format";
 
 type Filter = "all" | "act" | "watch";
 
+const FRESH_META: Record<string, { label: string; cls: string }> = {
+  fresh: { label: "新鲜", cls: "border-pos/40 bg-pos/10 text-pos" },
+  decaying: { label: "衰减中", cls: "border-warn/40 bg-warn/10 text-warn" },
+  stale: { label: "已过时", cls: "border-border bg-secondary text-muted-foreground" },
+  closed: { label: "已收敛", cls: "border-border bg-secondary text-muted-foreground" },
+  no_data: { label: "无数据", cls: "border-border bg-secondary text-muted-foreground" },
+};
+
+function fmtEdge(n: number | null | undefined) {
+  if (n == null) return "—";
+  return fmtSignedPct(n, 1);
+}
+
+function fmtAge(hours: number | null | undefined) {
+  if (hours == null) return "—";
+  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))}m`;
+  if (hours < 24) return `${hours.toFixed(1)}h`;
+  return `${(hours / 24).toFixed(1)}d`;
+}
+
+function EdgeMetric({ label, value, tone = "text-foreground" }: { label: string; value: string; tone?: string }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[11px] text-muted-foreground">{label}</span>
+      <span className={`font-mono text-sm font-semibold tabular-nums ${tone}`}>{value}</span>
+    </div>
+  );
+}
+
+function FreshEdgesPanel({ edges }: { edges: FreshEdge[] }) {
+  return (
+    <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Zap className="size-4 text-primary" aria-hidden="true" />
+          <h2 className="text-sm font-semibold">新鲜 edge</h2>
+          <span className="font-mono text-xs text-muted-foreground">{edges.length}</span>
+        </div>
+      </div>
+      {edges.length === 0 ? (
+        <p className="py-4 text-sm text-muted-foreground">当前没有新鲜 edge。</p>
+      ) : (
+        <div className="grid gap-3 lg:grid-cols-2">
+          {edges.map((e) => {
+            const edge = e.edge;
+            const meta = FRESH_META[edge.classification] ?? FRESH_META.no_data;
+            const latest = edge.latest_edge ?? 0;
+            return (
+              <Link
+                key={e.event_id}
+                href={`/events?id=${encodeURIComponent(e.event_id)}`}
+                className="group flex flex-col gap-3 rounded-md border border-border bg-background/40 p-3 transition-colors hover:border-primary/40 hover:bg-secondary/30"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <h3 className="line-clamp-2 text-sm font-medium leading-snug group-hover:text-primary">
+                    {e.event_title_zh || e.event_title || e.event_id}
+                  </h3>
+                  <span className={`inline-flex shrink-0 items-center rounded-md border px-2 py-0.5 text-[11px] font-medium ${meta.cls}`}>
+                    {meta.label}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
+                  <EdgeMetric
+                    label="当前 edge"
+                    value={fmtEdge(edge.latest_edge)}
+                    tone={latest >= 0 ? "text-pos" : "text-neg"}
+                  />
+                  <EdgeMetric label="峰值 edge" value={fmtEdge(edge.peak_edge)} />
+                  <EdgeMetric label="近期变化" value={fmtEdge(edge.recent_edge_change)} />
+                  <EdgeMetric label="年龄" value={fmtAge(edge.age_hours)} />
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function DecisionsPage() {
   const [decisions, setDecisions] = useState<DecisionReport[]>([]);
+  const [freshEdges, setFreshEdges] = useState<FreshEdge[]>([]);
   const [freshById, setFreshById] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState<Filter>("all");
   const [loading, setLoading] = useState(true);
@@ -22,6 +105,7 @@ export default function DecisionsPage() {
       eventsApi.freshEdges(50),
     ]);
     setDecisions(open.decisions ?? []);
+    setFreshEdges((fresh.edges ?? []) as FreshEdge[]);
     // Index edge freshness by event so a decision card can show its band.
     const map: Record<string, string> = {};
     for (const e of (fresh.edges ?? []) as FreshEdge[]) {
@@ -85,7 +169,7 @@ export default function DecisionsPage() {
   return (
     <div className="min-h-screen">
       <AppNav />
-      <main className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
+      <main id="main-content" className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="flex flex-col gap-1">
             <h1 className="text-balance text-xl font-semibold md:text-2xl">决策机会</h1>
@@ -130,21 +214,26 @@ export default function DecisionsPage() {
           <div className="grid h-40 place-items-center rounded-lg border border-border bg-card text-sm text-muted-foreground">
             加载中…
           </div>
-        ) : shown.length === 0 ? (
-          <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border bg-card px-6 py-12 text-center">
-            <Target className="size-8 text-muted-foreground" aria-hidden="true" />
-            <p className="text-sm font-medium text-foreground">当前没有可展示的机会</p>
-            <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
-              反馈闭环需要先积累已结算的预测，才能为各类别建立校准信任度并发现 edge。
-              在系统持续运行、市场事件陆续结算之前，这里通常为空或仅有观察级条目。
-            </p>
-          </div>
         ) : (
-          <div className="grid gap-3 lg:grid-cols-2">
-            {shown.map((d) => (
-              <DecisionCard key={d.event_id} report={d} freshness={freshById[d.event_id]} />
-            ))}
-          </div>
+          <>
+            <FreshEdgesPanel edges={freshEdges} />
+            {shown.length === 0 ? (
+              <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border bg-card px-6 py-12 text-center">
+                <Target className="size-8 text-muted-foreground" aria-hidden="true" />
+                <p className="text-sm font-medium text-foreground">当前没有可展示的机会</p>
+                <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
+                  反馈闭环需要先积累已结算的预测，才能为各类别建立校准信任度并发现 edge。
+                  在系统持续运行、市场事件陆续结算之前，这里通常为空或仅有观察级条目。
+                </p>
+              </div>
+            ) : (
+              <div className="grid gap-3 lg:grid-cols-2">
+                {shown.map((d) => (
+                  <DecisionCard key={d.event_id} report={d} freshness={freshById[d.event_id]} />
+                ))}
+              </div>
+            )}
+          </>
         )}
       </main>
     </div>

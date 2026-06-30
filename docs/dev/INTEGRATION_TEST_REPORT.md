@@ -249,7 +249,7 @@ python tests/test_integration_live.py
 ### Run Simple Live Test
 ```bash
 cd backend
-python test_live_integration.py
+python tests/manual/manual_live_integration.py
 ```
 
 ### Check Test Coverage

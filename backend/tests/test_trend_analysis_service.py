@@ -20,6 +20,7 @@ from app.services import event_audit_service as audit
 from app.services.trend_analysis_service import (
     analyze_edge_trajectory,
     analyze_trend,
+    list_edge_trajectories,
     rank_fresh_edges,
     rank_movers,
 )
@@ -216,6 +217,32 @@ class HistoriesByEventTests(unittest.TestCase):
         self.assertEqual([s["estimated"] for s in grouped["a"]], [40.0, 60.0])
         self.assertEqual(len(grouped["b"]), 1)
 
+    def test_reuses_cached_grouping_when_audit_file_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_audit.jsonl")
+            with patch.object(audit, "_audit_path", return_value=path):
+                audit.record_event(_record("a", 40.0))
+                audit.record_event(_record("a", 60.0))
+                with patch.object(audit, "_read_all", wraps=audit._read_all) as read_all:
+                    first = audit.histories_by_event()
+                    first["a"][0]["estimated"] = 999.0
+                    second = audit.histories_by_event()
+
+        self.assertEqual(read_all.call_count, 1)
+        self.assertEqual([s["estimated"] for s in second["a"]], [40.0, 60.0])
+
+    def test_cache_invalidates_when_audit_file_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_audit.jsonl")
+            with patch.object(audit, "_audit_path", return_value=path):
+                audit.record_event(_record("a", 40.0))
+                first = audit.histories_by_event()
+                audit.record_event(_record("a", 60.0))
+                second = audit.histories_by_event()
+
+        self.assertEqual([s["estimated"] for s in first["a"]], [40.0])
+        self.assertEqual([s["estimated"] for s in second["a"]], [40.0, 60.0])
+
 
 class MoversRouteTests(unittest.TestCase):
     def test_movers_route_ranks_events(self):
@@ -278,9 +305,9 @@ class AnalyzeEdgeTrajectoryTests(unittest.TestCase):
         self.assertEqual(out["classification"], "decaying")  # 6 < 0.7*30
 
     def test_closed_edge_below_materiality(self):
-        snaps = [_esnap(60, 50), _esnap(52, 50)]  # edges 10, 2
+        snaps = [_esnap(60, 50), _esnap(51, 50)]  # edges 10, 1
         out = analyze_edge_trajectory(snaps, now=_dt(NOW_FRESH))
-        self.assertEqual(out["classification"], "closed")  # latest 2 < watch 3
+        self.assertEqual(out["classification"], "closed")  # latest 1 < watch_edge 2.0
 
     def test_stale_when_last_snapshot_old(self):
         snaps = [_esnap(70, 50), _esnap(90, 50)]  # big edge, but old
@@ -310,6 +337,27 @@ class RankFreshEdgesTests(unittest.TestCase):
         histories = {f"e{i}": [_esnap(50, 50), _esnap(50 + 5 * i, 50)] for i in range(1, 6)}
         out = rank_fresh_edges(histories, limit=2, now=_dt(NOW_FRESH))
         self.assertEqual([e["event_id"] for e in out], ["e5", "e4"])
+
+
+class ListEdgeTrajectoriesTests(unittest.TestCase):
+    def test_lists_all_classes_with_series_for_monitoring(self):
+        histories = {
+            "fresh": [_esnap(50, 50), _esnap(70, 50)],
+            "decaying": [_esnap(90, 50), _esnap(56, 50)],
+            "closed": [_esnap(50, 50), _esnap(41, 40)],
+        }
+        out = list_edge_trajectories(
+            histories,
+            limit=10,
+            classification="all",
+            include_series=True,
+            now=_dt(NOW_FRESH),
+        )
+        self.assertEqual([e["event_id"] for e in out], ["fresh", "decaying", "closed"])
+        self.assertEqual(out[0]["edge"]["classification"], "fresh")
+        self.assertEqual(out[1]["edge"]["classification"], "decaying")
+        self.assertEqual(out[2]["edge"]["classification"], "closed")
+        self.assertEqual(out[0]["series"][-1]["edge"], 20.0)
 
 
 class EdgeRouteTests(unittest.TestCase):
@@ -354,6 +402,24 @@ class EdgeRouteTests(unittest.TestCase):
                 resp = client.get("/events/edges/fresh")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json(), {"count": 0, "edges": []})
+
+    def test_edge_monitor_route_can_return_all_classes_with_series(self):
+        app = FastAPI()
+        app.include_router(events_routes.router, prefix="/events")
+        client = TestClient(app)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_audit.jsonl")
+            with patch.object(audit, "_audit_path", return_value=path):
+                audit.record_event(_record("bigedge", 85.0))     # edge 45 -> fresh
+                audit.record_event(_record("closededge", 41.0))  # edge 1 -> closed
+                resp = client.get("/events/edges/fresh?classification=all&include_series=true")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["classification"], "all")
+        by_id = {e["event_id"]: e for e in body["edges"]}
+        self.assertEqual(by_id["bigedge"]["edge"]["classification"], "fresh")
+        self.assertEqual(by_id["closededge"]["edge"]["classification"], "closed")
+        self.assertEqual(by_id["bigedge"]["series"][0]["edge"], 45.0)
 
 
 if __name__ == "__main__":

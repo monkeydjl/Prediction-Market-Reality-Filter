@@ -18,7 +18,7 @@ class SecEdgarServiceTests(unittest.TestCase):
             {"title": "10-Q - OTHER INC (0002) (Filer)",
              "description": "desc only", "published": "2026-06-11"},
         ])
-        with patch.object(sec.feedparser, "parse", return_value=feed) as parse, \
+        with patch.object(sec, "parse_feed", return_value=feed) as parse, \
              patch.object(sec.settings, "SEC_EDGAR_RSS_URL", "http://example/edgar"), \
              patch.object(sec.settings, "SEC_SOURCE_NAME", "SEC EDGAR"), \
              patch.object(sec.settings, "SEC_USER_AGENT", "UA contact@example.com"):
@@ -35,15 +35,16 @@ class SecEdgarServiceTests(unittest.TestCase):
         self.assertEqual(articles[1]["description"], "desc only")
         self.assertEqual(articles[1]["published"], "2026-06-11")
         # SEC requires a declared User-Agent on every request.
-        self.assertEqual(parse.call_args.kwargs.get("agent"), "UA contact@example.com")
+        self.assertEqual(parse.call_args.kwargs.get("user_agent"), "UA contact@example.com")
 
     def test_fetch_returns_empty_when_no_url(self):
         with patch.object(sec.settings, "SEC_EDGAR_RSS_URL", ""):
             articles = asyncio.run(sec.fetch_sec_filings())
         self.assertEqual(articles, [])
 
-    def test_fetch_swallows_parse_errors(self):
-        with patch.object(sec.feedparser, "parse", side_effect=Exception("boom")), \
+    def test_fetch_handles_parse_errors_gracefully(self):
+        empty_feed = _FakeFeed([])
+        with patch.object(sec, "parse_feed", return_value=empty_feed), \
              patch.object(sec.settings, "SEC_EDGAR_RSS_URL", "http://example/edgar"):
             articles = asyncio.run(sec.fetch_sec_filings())
         self.assertEqual(articles, [])

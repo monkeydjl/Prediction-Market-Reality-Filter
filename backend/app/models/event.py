@@ -1,14 +1,16 @@
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class EventAnalysisRequest(BaseModel):
-    event_question: str
-    baseline_probability: float = 50.0
-    news_context: str | None = None
-    volume: float | None = None
-    liquidity: float | None = None
+    # Length caps bound LLM token cost / log size / memory on the analyze path,
+    # which is reachable by any authenticated caller. Generous but not unbounded.
+    event_question: str = Field(min_length=1, max_length=2000)
+    baseline_probability: float = Field(default=50.0, ge=0.0, le=100.0)
+    news_context: str | None = Field(default=None, max_length=20000)
+    volume: float | None = Field(default=None, ge=0.0)
+    liquidity: float | None = Field(default=None, ge=0.0)
 
 
 class Probability(BaseModel):
@@ -51,6 +53,25 @@ class IntelligenceReport(BaseModel):
     why_it_matters: str
     probability_assessment: str
     recommended_action: str
+
+
+class ActionableRecommendation(BaseModel):
+    """Structured actionable conclusion for an event (Stage 3).
+
+    Surfaces the already-computed legacy signal as an event-vocabulary
+    recommendation: direction (YES/NO/AVOID/WAIT) + confidence + suggested
+    allocation. None when evidence quality is insufficient or the feature is
+    disabled. calibration_status distinguishes calibrated (segment has enough
+    resolved samples) from uncalibrated_provisional (dormant but edge is large).
+    """
+
+    direction: str  # YES | NO | AVOID | WAIT
+    confidence: str  # high | medium | low
+    suggested_allocation_pct: float  # 0-25, from legacy position_size * 100
+    edge: float  # expected_edge in percentage points
+    risk_level: str  # low | medium | high
+    rationale: str
+    calibration_status: str  # calibrated | uncalibrated_provisional
 
 
 class EventSource(BaseModel):
@@ -140,6 +161,208 @@ class EvidenceItem(BaseModel):
     relevance: float = 0.0
 
 
+class EvidenceBreakdownItem(BaseModel):
+    """One article's contribution to the event-level YES/NO evidence (Stage:
+    evidence decomposition).
+
+    Produced by aggregating the per-article fields emitted by the
+    ``analyze_sentiment`` LLM call. Unlike ``EvidenceItem`` (which carries
+    quality/relevance for the UI), this model carries the LLM's directional
+    judgment (support/oppose) and is purely an audit/explanation layer: it
+    MUST NOT feed back into ``evidence_profile`` or ``ai_probability``.
+
+    ``direction`` is typed as ``Literal["support", "oppose", "neutral"]`` so
+    that invalid values (e.g., ``"YES"``, ``"LONG"``, ``"buy"``) raise
+    ``ValidationError`` at model construction time, before they ever reach
+    ``decision_quality_service``. This locks the two-vocabulary separation
+    (article stance vs recommendation direction) at the model boundary.
+    """
+
+    source: str = ""
+    title: str = ""
+    direction: Literal["support", "oppose", "neutral"]
+    strength: float = 0.0  # 0-1
+    credibility: float = 0.0  # 0-1
+    rationale_zh: str = ""
+
+
+class DecisionEvidenceItem(BaseModel):
+    """One piece of evidence selected by ``decision_quality_service`` as a
+    top supporting or opposing driver for the current recommendation.
+
+    Distinct from ``EvidenceBreakdownItem``: this is the *selected, ranked,
+    capped* subset (top N by ``strength * credibility``) shown in the
+    "why this direction" panel. ``EvidenceBreakdownItem`` is the full audit
+    list. ``rationale_zh`` on this model is the same string the source
+    ``EvidenceBreakdownItem`` carried.
+    """
+
+    source: str = ""
+    title: str = ""
+    strength: float = 0.0
+    credibility: float = 0.0
+    rationale_zh: str = ""
+
+
+class DecisionQuality(BaseModel):
+    """Phase 1 decision-quality overlay block.
+
+    Pure audit/explanation layer produced by ``decision_quality_service``
+    from ``actionable_recommendation`` + ``evidence_breakdown``. Reads its
+    inputs one-way and produces overlay outputs (``displayed_direction``,
+    ``downgrade_reason``, ``decision_rationale_zh``). MUST NOT feed back
+    into ``ai_probability``, ``evidence_profile``,
+    ``regression_to_market``, or ``actionable_recommendation``.
+
+    ``raw_direction`` mirrors ``actionable_recommendation.direction`` at
+    build time and is never mutated by the downgrade pipeline.
+    ``displayed_direction`` starts equal to ``raw_direction`` and is the
+    only field that may diverge (when a downgrade rule fires).
+    ``downgraded`` is ``true`` iff ``displayed_direction != raw_direction``.
+
+    When ``error`` is non-None, the build failed and the block is the
+    fallback defined in the ``analyze_event`` integration contract.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    supporting_evidence: list[DecisionEvidenceItem] = []
+    opposing_evidence: list[DecisionEvidenceItem] = []
+    conflict_score: float = 0.0
+    consensus_level: Literal["high", "medium", "low", "none"] = "none"
+    decision_rationale_zh: str = ""
+    reversal_triggers: list[str] = []
+    downgrade_reason: str | None = None
+    raw_direction: Literal["YES", "NO", "WAIT", "AVOID"] = "WAIT"
+    displayed_direction: Literal["YES", "NO", "WAIT", "AVOID"] = "WAIT"
+    downgraded: bool = False
+    error: str | None = None
+
+
+class MarketQuality(BaseModel):
+    """Phase 2 market-quality overlay block.
+
+    Produced by ``market_quality_service`` for events whose
+    ``source.type == "prediction_market"`` (Polymarket, Kalshi). For other
+    source types (``prediction_question``, ``open_web``, ``sports_event``,
+    ``manual``), the block is omitted entirely — mirroring the
+    ``freeze_prediction`` market-gated convention.
+
+    ``raw_direction`` mirrors the direction passed in from the raw
+    recommendation. ``suggested_direction`` starts equal to
+    ``raw_direction``; it becomes ``WAIT`` when market quality fails a
+    configured threshold. ``downgraded`` is ``true`` when
+    ``suggested_direction != raw_direction``.
+
+    ``applied_to_displayed_direction`` is set by the merge step when this
+    block's ``suggested_direction`` is stricter than
+    ``decision_quality.displayed_direction`` and therefore changes the
+    final user-facing direction. Lets audits distinguish whether market
+    quality changed the final direction or merely recorded a score.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    score: float = 0.0
+    liquidity_score: float | None = None
+    volume_score: float | None = None
+    spread_penalty: float | None = None
+    wide_spread_flag: bool = False
+    thin_market_flag: bool = False
+    stale_price_flag: bool | None = None  # None = unknown (no last_updated)
+    downgrade_reason: str | None = None
+    raw_direction: Literal["YES", "NO", "WAIT", "AVOID"] = "WAIT"
+    suggested_direction: Literal["YES", "NO", "WAIT", "AVOID"] = "WAIT"
+    downgraded: bool = False
+    applied_to_displayed_direction: bool = False
+    error: str | None = None
+
+
+class SourceReliability(BaseModel):
+    """Phase 4 source-reliability overlay block.
+
+    Produced by ``source_reliability_service`` for events that have a
+    non-empty ``evidence_breakdown`` (prediction_market, prediction_question,
+    open_web). For events without evidence_breakdown (e.g., sports_event with
+    match stats), the block is omitted entirely.
+
+    Assesses the quality and diversity of news sources backing an event's
+    evidence. Can downgrade YES/NO recommendations to WAIT when the source
+    base is too thin or untrustworthy (low domain diversity, low trusted
+    source ratio, too few sources, or overall score below threshold).
+
+    ``raw_direction`` mirrors the direction passed in from
+    ``actionable_recommendation.direction``. ``suggested_direction`` starts
+    equal to ``raw_direction``; it becomes ``WAIT`` when source reliability
+    fails a configured threshold. ``downgraded`` is ``true`` when
+    ``suggested_direction != raw_direction``.
+
+    ``applied_to_displayed_direction`` is set by the merge step when this
+    block's ``suggested_direction`` is stricter than the current
+    ``final_displayed_direction`` (after decision_quality and market_quality
+    have already been merged) and therefore changes the final user-facing
+    direction.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    overall_score: float = 0.0
+    source_count: int = 0
+    domain_diversity: int = 0
+    trusted_source_ratio: float = 0.0
+    official_source_count: int = 0
+    unknown_source_ratio: float = 0.0
+    source_breakdown: list[dict[str, Any]] = []
+    downgrade_reason: str | None = None
+    raw_direction: Literal["YES", "NO", "WAIT", "AVOID"] = "WAIT"
+    suggested_direction: Literal["YES", "NO", "WAIT", "AVOID"] = "WAIT"
+    downgraded: bool = False
+    applied_to_displayed_direction: bool = False
+    error: str | None = None
+
+
+class LLMTelemetry(BaseModel):
+    """Phase 5 LLM telemetry overlay block.
+
+    Produced by ``llm_telemetry_service`` for ALL events (every event makes
+    at least one LLM call or falls back to deterministic). This is an
+    observability layer — unlike Phases 1-4 (decision overlays), it does NOT
+    participate in ``merge_quality_overlays`` and does NOT produce
+    ``suggested_direction`` / ``downgrade_reason``. It only records what
+    happened during the LLM call for audit/monitoring.
+
+    Hybrid implementation: ``_ask_ai`` captures real ``response.usage`` token
+    counts (attached as ``llm_usage`` on the analysis dict); this service
+    reads that + ``analysis_quality`` + ``sentiment_profile.fallback`` to
+    produce the structured block.
+
+    ``degraded_mode`` is True when the analysis used the deterministic
+    fallback (LLM call failed). ``degraded_reason`` is a structured enum
+    value (``"llm_call_failed"``). ``analysis_quality`` mirrors the field
+    already on the analysis dict (``"llm"`` / ``"deterministic_fallback"``).
+
+    ``prompt_tokens`` / ``completion_tokens`` / ``total_tokens`` are real
+    counts from the API when available; None when the LLM call failed or
+    usage data is unavailable. ``estimated_token_cost`` is computed from
+    real tokens when available, or estimated from ``news_context`` length
+    (chars/4 heuristic) when degraded.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    degraded_mode: bool = False
+    degraded_reason: str | None = None
+    analysis_quality: str = "unknown"
+    sentiment_degraded: bool = False
+    llm_call_count: int = 0
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    estimated_token_cost: float = 0.0
+    model: str = ""
+    error: str | None = None
+
+
 class Tracking(BaseModel):
     """Human tracking decision for an event. Defaults are seeded at analysis
     time; a user's explicit choice is preserved across re-scans by the store.
@@ -213,6 +436,7 @@ class Prediction(BaseModel):
     liquidity_factor: float | None = None
     qualified: bool | None = None
     segment_n: int | None = None
+    segment_min_samples: int | None = None
     segment_skill: float | None = None
     created_at: str = ""         # ISO 8601
     status: str = "open"         # open | scored
@@ -228,6 +452,13 @@ class EventRecord(BaseModel):
     Used as a validation gate in the event store and as the schema for event
     read endpoints. ``extra='allow'`` keeps forward-compatible fields (such as
     ``news_filter``) without breaking when build_event_record adds output.
+
+    ``schema_version`` tracks which set of overlay fields the record carries.
+    Pre-Phase-4 records (created before source_reliability was added) carry
+    ``schema_version="v1.0"``; records written after Phase 5 ship with
+    ``schema_version="v2.1"``. ``event_store.normalize_event_record()`` uses
+    this to upgrade old records in place instead of silently passing them
+    through ``extra="allow"`` — see docs/superpowers/specs/2026-06-30-production-readiness-gaps.md §3.2.
     """
 
     model_config = ConfigDict(extra="allow")
@@ -250,3 +481,94 @@ class EventRecord(BaseModel):
     outcome: Outcome | None = None
     calibration: Calibration | None = None
     semantics: EventSemantics | None = None
+    actionable_recommendation: ActionableRecommendation | None = None
+    evidence_breakdown: list[EvidenceBreakdownItem] = Field(default_factory=list)
+    # Phase 1-5 overlay fields. Explicitly declared (not relying on
+    # extra="allow") so that Pydantic catches typos and downstream readers
+    # can introspect the schema. All default to None for backward compat.
+    decision_quality: dict[str, Any] | None = None
+    market_quality: dict[str, Any] | None = None
+    source_reliability: dict[str, Any] | None = None
+    llm_telemetry: dict[str, Any] | None = None
+    final_displayed_direction: str | None = None
+    final_downgrade_reason: str | None = None
+    # Record schema version — see normalize_event_record() in event_store.
+    schema_version: str = "v2.1"
+
+
+class FlexibleResponse(BaseModel):
+    """Permissive response base for endpoints whose nested payloads are dynamic."""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class EventStoreEntry(FlexibleResponse):
+    event_id: str = ""
+    first_seen: str = ""
+    last_updated: str = ""
+    record: dict[str, Any] = Field(default_factory=dict)
+
+
+class EventDiscoveryResponse(FlexibleResponse):
+    platform: str = ""
+    source: str = ""
+    count: int = 0
+    events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class EventListResponse(FlexibleResponse):
+    count: int = 0
+    total: int = 0
+    limit: int = 0
+    offset: int = 0
+    events: list[EventStoreEntry] = Field(default_factory=list)
+
+
+class EventMoversResponse(FlexibleResponse):
+    count: int = 0
+    movers: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class EventHistoryResponse(FlexibleResponse):
+    event_id: str = ""
+    count: int = 0
+    trend: dict[str, Any] = Field(default_factory=dict)
+    edge: dict[str, Any] = Field(default_factory=dict)
+    history: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AutoResolveResponse(FlexibleResponse):
+    status: str = ""
+    dry_run: bool = False
+    resolved_count: int = 0
+    pending_count: int = 0
+    invalid_count: int = 0
+    checked_count: int = 0
+    unresolved_events: int = 0
+    matches: list[dict[str, Any]] = Field(default_factory=list)
+    by_source: dict[str, int] = Field(default_factory=dict)
+
+
+class PendingLinksResponse(FlexibleResponse):
+    pending: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class RecentPredictionsResponse(FlexibleResponse):
+    predictions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class OpenDecisionsResponse(FlexibleResponse):
+    count: int = 0
+    decisions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class FreshEdgesResponse(FlexibleResponse):
+    count: int = 0
+    classification: str | None = None
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SimilarEventsResponse(FlexibleResponse):
+    event_id: str = ""
+    count: int = 0
+    similar: list[dict[str, Any]] = Field(default_factory=list)

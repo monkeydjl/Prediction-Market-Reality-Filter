@@ -1,19 +1,25 @@
+import { memo } from "react";
+
 import type { Trend } from "@/lib/adapt";
 
-// Hand-rolled SVG sparkline — no chart lib, works in static export.
-export function Sparkline({
-  data,
-  trend,
-  width = 88,
-  height = 28,
-}: {
+type SparklineProps = {
   data: number[];
   trend: Trend;
+  label?: string;
   width?: number;
   height?: number;
-}) {
+};
+
+// Hand-rolled SVG sparkline — no chart lib, works in static export.
+function SparklineBase({
+  data,
+  trend,
+  label = "概率趋势",
+  width = 88,
+  height = 28,
+}: SparklineProps) {
   if (!data || data.length < 2) {
-    return <div className="h-7 w-[88px]" aria-hidden="true" />;
+    return <div className="h-7 w-[88px]" role="img" aria-label={`${label}暂无足够数据`} />;
   }
 
   const min = Math.min(...data);
@@ -36,6 +42,12 @@ export function Sparkline({
       : trend === "down"
         ? "var(--color-neg)"
         : "var(--color-muted-foreground)";
+  const desc =
+    trend === "up"
+      ? "整体上行"
+      : trend === "down"
+        ? "整体下行"
+        : "整体平稳";
 
   return (
     <svg
@@ -43,8 +55,11 @@ export function Sparkline({
       height={height}
       viewBox={`0 0 ${width} ${height}`}
       className="overflow-visible"
-      aria-hidden="true"
+      role="img"
+      aria-label={`${label}：${desc}，从 ${data[0].toFixed(0)}% 到 ${data[data.length - 1].toFixed(0)}%`}
     >
+      <title>{label}</title>
+      <desc>{desc}</desc>
       <polygon points={`0,${height} ${line} ${width},${height}`} fill={color} opacity="0.1" />
       <polyline
         points={line}
@@ -63,3 +78,6 @@ export function Sparkline({
     </svg>
   );
 }
+
+export const Sparkline = memo(SparklineBase);
+Sparkline.displayName = "Sparkline";

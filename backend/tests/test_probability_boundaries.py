@@ -23,7 +23,7 @@ from app.services.probability_engine_service import (
     clamp_probability,
     default_evidence_profile,
 )
-from app.services.event_intelligence_service import probability_direction
+from app.services.scoring_service import probability_direction
 
 STRONG_EVIDENCE = {
     "evidence_direction": "support",
@@ -67,11 +67,11 @@ class ClampProbabilityBoundaryTests(unittest.TestCase):
 
     def test_mid_confidence_caps_deviation_near_20(self):
         # confidence 0.60 -> 20 point cap.
-        self.assertEqual(self._clamp_strong(0.60), 28.66)
+        self.assertEqual(self._clamp_strong(0.60), 28.76)
 
     def test_low_confidence_caps_deviation_near_12(self):
         # confidence 0.45 -> 12 point cap.
-        self.assertEqual(self._clamp_strong(0.45), 20.87)
+        self.assertEqual(self._clamp_strong(0.45), 21.0)
 
     def test_weak_low_trust_input_regresses_toward_market(self):
         result = clamp_probability(
@@ -84,7 +84,7 @@ class ClampProbabilityBoundaryTests(unittest.TestCase):
             priced_in_risk_score=70,
             semantics_profile={"condition_type": "unknown", "ambiguity_score": 70},
         )
-        self.assertEqual(result, 57.57)
+        self.assertEqual(result, 57.63)
         # Far closer to the market baseline (50) than to the AI estimate (90).
         self.assertLess(result, 65.0)
 

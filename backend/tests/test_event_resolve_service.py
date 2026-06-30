@@ -59,9 +59,9 @@ class ResolveWithCalibrationTests(unittest.TestCase):
                 store.save_event(_make_record("evtR", estimated=70.0, value_score=30))
                 # Record a probability trajectory: latest estimate 80%.
                 audit.record_event(_make_record("evtR", estimated=80.0))
-                updated = asyncio.run(ers.resolve_with_calibration(
+                updated = ers.resolve_with_calibration(
                     event_id="evtR", actual_outcome=100.0, source="manual",
-                ))
+                )
                 after = store.get_event("evtR")
         self.assertIsNotNone(updated)
         self.assertEqual(updated["record"]["outcome"]["actual_outcome"], 100.0)
@@ -75,9 +75,9 @@ class ResolveWithCalibrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store_path = str(Path(tmp) / "event_store.json")
             with patch.object(store, "_store_path", return_value=store_path):
-                result = asyncio.run(ers.resolve_with_calibration(
+                result = ers.resolve_with_calibration(
                     event_id="missing", actual_outcome=0.0,
-                ))
+                )
         self.assertIsNone(result)
 
     def test_auto_source_is_propagated(self):
@@ -88,10 +88,10 @@ class ResolveWithCalibrationTests(unittest.TestCase):
                     patch.object(audit, "_audit_path", return_value=audit_path), \
                     patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
                 store.save_event(_make_record("evtAuto", value_score=30))
-                asyncio.run(ers.resolve_with_calibration(
+                ers.resolve_with_calibration(
                     event_id="evtAuto", actual_outcome=0.0,
                     source="auto_market", notes="matched: some market",
-                ))
+                )
                 after = store.get_event("evtAuto")
         self.assertEqual(after["record"]["outcome"]["source"], "auto_market")
         self.assertIn("matched", after["record"]["outcome"]["notes"])
@@ -111,12 +111,47 @@ class AutoResolveEventsTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+        # Seal the real stores for the whole class. auto_resolve_events now runs
+        # reconcile_predictions() first, which reads the event store and (for any
+        # resolved event) the loop DB - so even an early-return test must be
+        # isolated or it leaks backend/v2_loop.db. Per-test `with` blocks that set
+        # their own tmp paths still override these (inner patch wins).
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name)
+        for target in (
+            patch.object(store, "_store_path", return_value=str(base / "event_store.json")),
+            patch.object(audit, "_audit_path", return_value=str(base / "event_audit.jsonl")),
+            patch.object(sqlite_db, "loop_db_path", return_value=str(base / "v2_loop.db")),
+        ):
+            target.start()
+            self.addCleanup(target.stop)
+
     def test_no_resolved_markets_returns_no_data(self):
         with patch.object(phs, "fetch_resolved_markets",
                           new=AsyncMock(return_value=[])):
             result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
         self.assertEqual(result["status"], "no_resolved_markets")
         self.assertEqual(result["resolved_count"], 0)
+
+    def test_warns_when_kalshi_open_events_exist_but_resolved_is_empty(self):
+        record = _make_record("evtKalshi", value_score=30)
+        record["source"] = {
+            "type": "prediction_market",
+            "platform": "Kalshi",
+            "source_id": "KALSHI-1",
+        }
+        store.save_event(record)
+
+        with patch.object(phs, "fetch_resolved_markets",
+                          new=AsyncMock(return_value=[])), \
+                self.assertLogs("app.services.event_resolve_service", level="WARNING") as logs:
+            result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
+
+        self.assertEqual(result["status"], "no_resolved_markets")
+        self.assertTrue(
+            any("Kalshi returned 0 resolved markets" in msg for msg in logs.output)
+        )
 
     def test_matches_and_resolves_unresolved_event(self):
         resolved_market = {
@@ -143,6 +178,41 @@ class AutoResolveEventsTests(unittest.TestCase):
         self.assertEqual(after["record"]["outcome"]["source"], "auto_market")
         self.assertIsNotNone(after["record"]["calibration"])
 
+    def test_dry_run_returns_matches_without_writing(self):
+        resolved_market = {
+            "question": "Will Bitcoin reach $100,000 by end of 2026?",
+            "actual_outcome": 100.0,
+            "id": "poly-dry",
+        }
+        record = _make_record("evtDry", value_score=30)
+        record["event_title"] = "Will Bitcoin reach $100,000 by end of 2026?"
+        with tempfile.TemporaryDirectory() as tmp:
+            store_path = str(Path(tmp) / "event_store.json")
+            audit_path = str(Path(tmp) / "event_audit.jsonl")
+            with patch.object(store, "_store_path", return_value=store_path), \
+                    patch.object(audit, "_audit_path", return_value=audit_path), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(phs, "fetch_resolved_markets",
+                                 new=AsyncMock(return_value=[resolved_market])):
+                store.save_event(record)
+                _seed_open_act("evtDry", ai_probability=80.0)
+                result = asyncio.run(ers.auto_resolve_events(
+                    resolved_limit=50,
+                    dry_run=True,
+                ))
+                after = store.get_event("evtDry")
+                prediction = preds.get_prediction("evtDry")
+                pending = links.list_pending()
+
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(result["resolved_count"], 1)
+        self.assertEqual(result["pending_count"], 0)
+        self.assertEqual(result["matches"][0]["result"], "would_resolve")
+        self.assertEqual(result["matches"][0]["contract_id"], "poly-dry")
+        self.assertIsNone(after["record"].get("outcome"))
+        self.assertEqual(prediction["status"], "open")
+        self.assertEqual(pending, [])
+
     def test_skips_already_resolved_events(self):
         resolved_market = {
             "question": "Already resolved question",
@@ -160,9 +230,9 @@ class AutoResolveEventsTests(unittest.TestCase):
                                  new=AsyncMock(return_value=[resolved_market])):
                 store.save_event(record)
                 # Pre-resolve it.
-                asyncio.run(ers.resolve_with_calibration(
+                ers.resolve_with_calibration(
                     event_id="evtDone", actual_outcome=100.0, source="manual",
-                ))
+                )
                 result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
         # The already-resolved event is not matched again.
         self.assertEqual(result["resolved_count"], 0)
@@ -400,30 +470,30 @@ class Milestone1PredictionScoringTests(unittest.TestCase):
                     patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
                 store.save_event(_make_record("evtPS", value_score=30))
                 _seed_open_act("evtPS", ai_probability=80.0)
-                asyncio.run(ers.resolve_with_calibration(
+                ers.resolve_with_calibration(
                     event_id="evtPS", actual_outcome=100.0, source="manual",
-                ))
+                )
                 scored = preds.get_prediction("evtPS")
         self.assertEqual(scored["status"], "scored")
         self.assertEqual(scored["actual_outcome"], 100.0)
         self.assertAlmostEqual(scored["brier_score"], 0.04)  # (80-100)/100 ^2
 
     def test_resolution_observes_watch_prediction(self):
-        # A watch prediction resolves to 'observed': outcome recorded, but it
+        # A non-act prediction resolves to 'observed': outcome recorded, but it
         # stays out of the act-only prediction calibration.
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(store, "_store_path", return_value=str(Path(tmp) / "event_store.json")), \
                     patch.object(audit, "_audit_path", return_value=str(Path(tmp) / "event_audit.jsonl")), \
                     patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
                 store.save_event(_make_record("evtWatch", value_score=30))
-                # Dormant segment + liquidity -> caps at watch.
+                # Dormant segment + large edge -> provisional_act (cold-start bypass).
                 preds.freeze_prediction(self._market_record("evtWatch", estimated=95.0))
-                asyncio.run(ers.resolve_with_calibration(
+                ers.resolve_with_calibration(
                     event_id="evtWatch", actual_outcome=100.0, source="manual",
-                ))
+                )
                 after = preds.get_prediction("evtWatch")
                 calib_n = preds.calibration_summary()["n"]  # inside patch (loop DB)
-        self.assertEqual(after["decision"], "watch")
+        self.assertEqual(after["decision"], "provisional_act")
         self.assertEqual(after["status"], "observed")
         self.assertIsNotNone(after["brier_score"])
         self.assertEqual(calib_n, 0)  # excluded from act-only calibration
@@ -438,10 +508,10 @@ class Milestone1PredictionScoringTests(unittest.TestCase):
                     patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
                 store.save_event(_make_record("evtInv", value_score=30))
                 preds.freeze_prediction(self._market_record("evtInv", estimated=80.0))
-                asyncio.run(ers.resolve_with_calibration(
+                ers.resolve_with_calibration(
                     event_id="evtInv", actual_outcome=100.0,
                     source="auto_market", status="invalid",
-                ))
+                )
                 after = preds.get_prediction("evtInv")
                 open_ids = [o["event_id"] for o in preds.list_open_opportunities()]
         self.assertEqual(after["status"], "voided")      # closed, not scored
@@ -463,9 +533,9 @@ class ResolutionCriteriaPersistenceTests(unittest.TestCase):
                     patch.object(audit, "_audit_path", return_value=str(Path(tmp) / "event_audit.jsonl")), \
                     patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
                 store.save_event(record)
-                asyncio.run(ers.resolve_with_calibration(
+                ers.resolve_with_calibration(
                     event_id="evtRCm", actual_outcome=100.0, source="manual",
-                ))
+                )
                 link = links.get_verified_link("evtRCm")
         self.assertIsNotNone(link)
         self.assertEqual(link["resolution_criteria"], "YES if CPI < 3.0% in June 2026")
@@ -497,12 +567,46 @@ class ResolutionCriteriaPersistenceTests(unittest.TestCase):
                     patch.object(audit, "_audit_path", return_value=str(Path(tmp) / "event_audit.jsonl")), \
                     patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
                 store.save_event(record)
-                asyncio.run(ers.resolve_with_calibration(
+                ers.resolve_with_calibration(
                     event_id="evtRCn", actual_outcome=100.0, source="manual",
-                ))
+                )
                 link = links.get_verified_link("evtRCn")
         self.assertIsNotNone(link)
         self.assertEqual(link["resolution_criteria"], "")
+
+
+class ReconcilePredictionsTests(unittest.TestCase):
+    """reconcile_predictions heals orphans: event resolved but prediction open."""
+
+    def test_heals_orphan_scored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(store, "_store_path", return_value=str(Path(tmp) / "event_store.json")), \
+                    patch.object(audit, "_audit_path", return_value=str(Path(tmp) / "event_audit.jsonl")), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+                # Insert an open act prediction, then resolve ONLY the event
+                # store outcome out-of-band - simulating a crash after the JSON
+                # write but before scoring (a pre-fix orphan).
+                rec = _make_record("evtOrphan", estimated=90.0, value_score=30)
+                store.save_event(rec)
+                _seed_open_act("evtOrphan", ai_probability=90.0, market_probability=50.0)
+                store.resolve_event("evtOrphan", {
+                    "status": "resolved", "actual_outcome": 100.0,
+                    "confidence": 1.0, "resolved_at": "t", "source": "auto_market",
+                })
+                self.assertEqual(preds.get_prediction("evtOrphan")["status"], "open")
+
+                healed = ers.reconcile_predictions()
+
+                self.assertEqual(healed, 1)
+                p = preds.get_prediction("evtOrphan")
+                self.assertEqual(p["status"], "scored")  # act row -> scored
+                self.assertEqual(p["actual_outcome"], 100.0)
+
+    def test_no_orphan_is_noop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(store, "_store_path", return_value=str(Path(tmp) / "event_store.json")), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+                self.assertEqual(ers.reconcile_predictions(), 0)
 
 
 if __name__ == "__main__":

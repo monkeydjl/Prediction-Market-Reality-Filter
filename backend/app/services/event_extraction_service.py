@@ -24,6 +24,7 @@ import logging
 from typing import Any
 
 from app.core.config import settings
+from app.utils.failure_policy import fail_closed_empty_list
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +55,12 @@ async def extract_candidate_events(
     try:
         extracted = await _ask_extractor(articles[:_MAX_ARTICLES], limit)
     except Exception as exc:
-        logger.warning("Open-web event extraction failed: %s", exc)
-        return []
+        return fail_closed_empty_list(
+            logger,
+            "open_web_extraction",
+            exc,
+            context={"limit": limit},
+        )
 
     candidates: list[dict[str, Any]] = []
     for item in extracted:

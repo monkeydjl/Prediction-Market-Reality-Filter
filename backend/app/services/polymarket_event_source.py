@@ -43,11 +43,11 @@ async def fetch_candidate_events(limit: int = 10) -> list[dict[str, Any]]:
     from app.services.market_filter_service import filter_markets
     from app.services.polymarket_service import fetch_markets
 
-    candidate_limit = min(max(limit * 5, limit), 100)
+    candidate_limit = min(max(limit * 5, limit), 500)
     candidate_markets = await fetch_markets(limit=candidate_limit)
     markets = filter_markets(
         candidate_markets,
-        max_markets=min(max(limit * 3, limit), 30),
+        max_markets=min(max(limit * 3, limit), 200),
     )
     return [_to_candidate_event(market) for market in markets]
 
@@ -69,11 +69,11 @@ async def fetch_crypto_candidate_events(limit: int = 10) -> list[dict[str, Any]]
     from app.services.market_filter_service import filter_markets
     from app.services.polymarket_service import fetch_markets
 
-    candidate_limit = min(max(limit * 5, limit), 100)
+    candidate_limit = min(max(limit * 5, limit), 500)
     candidate_markets = await fetch_markets(limit=candidate_limit, crypto_only=True)
     markets = filter_markets(
         candidate_markets,
-        max_markets=min(max(limit * 3, limit), 30),
+        max_markets=min(max(limit * 3, limit), 200),
     )
     return [_to_candidate_event(market) for market in markets]
 
@@ -82,7 +82,10 @@ def _to_candidate_event(market) -> dict[str, Any]:
     baseline = safe_float(market.yes_price, 0.5) * 100
     volume = safe_float(market.volume, 0.0)
     liquidity = safe_float(market.liquidity, 0.0)
-    url = f"https://polymarket.com/event/{market.slug}" if market.slug else ""
+    # Prefer event_slug over market slug for the URL: gamma-api /markets returns
+    # per-market slugs that do not match https://polymarket.com/event/{slug}.
+    ref_slug = market.event_slug or market.slug
+    url = f"https://polymarket.com/event/{ref_slug}" if ref_slug else ""
     return {
         "question": market.question,
         "baseline_probability": baseline,
@@ -97,5 +100,7 @@ def _to_candidate_event(market) -> dict[str, Any]:
             "liquidity": liquidity,
             "volume": volume,
             "url": url,
+            "closed": market.closed,
+            "end_date": market.end_date or "",
         },
     }

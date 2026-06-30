@@ -19,6 +19,8 @@ import asyncio
 import logging
 from typing import Any
 
+from app.utils.failure_policy import fail_closed_empty_list, log_service_failure
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,7 +45,13 @@ async def collect_shared_articles() -> list[dict[str, Any]]:
     cleaned = []
     for label, result in zip(("rss", "official", "sec", "economic"), results):
         if isinstance(result, Exception):
-            logger.warning("Source collection failed [%s]: %s", label, result)
+            log_service_failure(
+                logger,
+                "shared_source",
+                result,
+                policy="fail_closed_empty_list",
+                context={"label": label},
+            )
             result = []
         cleaned.append(result)
     rss_news, official_news, sec_filings, economic_data = cleaned
@@ -77,6 +85,14 @@ async def collect_articles(
     Pass `shared_articles` from `collect_shared_articles()` to avoid re-fetching
     the query-independent feeds; otherwise they are fetched here. Google News is
     query-specific and always fetched.
+
+    Every article is returned with a `full_text` key set to None. Full-text
+    enrichment (the actual trafilatura HTTP fetch) was moved to
+    `event_intelligence_service._build_filtered_news` so the per-event HTTP
+    budget is spent on the articles that survived relevance filtering (the most
+    relevant ones reach the sentiment LLM), not on the source-order top-N that
+    the filter may drop. Setting `full_text=None` here preserves the key's
+    presence for any downstream consumer that still relies on it.
     """
     from app.services.gnews_service import fetch_google_news
 
@@ -85,7 +101,14 @@ async def collect_articles(
     try:
         google_news = await fetch_google_news(event_question)
     except Exception as exc:
-        logger.warning("Source collection failed [gnews]: %s", exc)
-        google_news = []
+        google_news = fail_closed_empty_list(
+            logger,
+            "query_source",
+            exc,
+            context={"label": "gnews"},
+        )
     google_news = [{**article, "kind": "news"} for article in google_news]
-    return shared_articles + google_news
+    articles = shared_articles + google_news
+    for article in articles:
+        article["full_text"] = None
+    return articles

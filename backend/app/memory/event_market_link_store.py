@@ -18,11 +18,11 @@ docs/user/DATABASE_DESIGN.md "Identity and Linkage Integrity".
 
 import threading
 import uuid
-from datetime import datetime, timezone
 from typing import Any
 
 from app.models.event import MarketLink
 from app.utils import sqlite_db
+from app.utils.helpers import utc_now
 from app.utils.sqlite_db import reading, writing
 
 _SCHEMA = """
@@ -45,6 +45,7 @@ CREATE INDEX IF NOT EXISTS idx_eml_contract ON event_market_links(contract_id);
 
 _INITIALIZED: set[str] = set()
 _INIT_GUARD = threading.Lock()
+_SCHEMA_VERSION = 1
 
 
 def _ensure_schema(path: str) -> None:
@@ -56,11 +57,10 @@ def _ensure_schema(path: str) -> None:
             return
         with writing(path) as conn:
             conn.executescript(_SCHEMA)
+            sqlite_db.record_schema_version(
+                conn, "event_market_links", _SCHEMA_VERSION
+            )
         _INITIALIZED.add(path)
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -95,7 +95,7 @@ def upsert_link(
         link_method=link_method,
         link_confidence=link_confidence,
         verified=verified,
-        linked_at=_now(),
+        linked_at=utc_now(),
     )
     path = sqlite_db.loop_db_path()
     _ensure_schema(path)

@@ -24,6 +24,11 @@ event_intelligence_service.discover_events:
         "baseline_probability": float,    # 0-100, before evidence
         "volume": float,
         "liquidity": float,
+        "bid_ask": {                       # Kalshi-only; transparent quote
+            "bid": float,                 # 0-100 (yes bid in pct points)
+            "ask": float,                 # 0-100 (yes ask in pct points)
+            "spread": float,              # ask - bid, 0.0 unless both > 0
+        },                                # threaded to record["market_quote"]
         "source": {
             "type": "prediction_market",
             "platform": "Kalshi",
@@ -42,12 +47,15 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.utils.failure_policy import fail_closed_empty_list
 from app.utils.market_utils import safe_float
 
 
 logger = logging.getLogger(__name__)
 
 _SETTLED_STATUSES = {"settled", "finalized", "closed", "determined"}
+_RESOLVED_FETCH_FACTOR = 5
+_RESOLVED_FETCH_MAX = 200
 
 
 async def fetch_candidate_events(limit: int = 10) -> list[dict[str, Any]]:
@@ -60,8 +68,12 @@ async def fetch_candidate_events(limit: int = 10) -> list[dict[str, Any]]:
     try:
         raw_events = await _fetch_raw_events(limit)
     except Exception as exc:
-        logger.warning("Kalshi event source failed: %s", exc)
-        return []
+        return fail_closed_empty_list(
+            logger,
+            "kalshi_candidates",
+            exc,
+            context={"limit": limit},
+        )
     candidates = [
         _to_candidate_event(event)
         for event in raw_events
@@ -109,16 +121,26 @@ def _is_eligible(event: Any) -> bool:
 def _to_candidate_event(event: dict[str, Any]) -> dict[str, Any]:
     question = str(event.get("title", "") or "").strip()
     market = event["markets"][0]
-    baseline = _baseline_pct(market)
+    baseline, bid, ask = _baseline_and_quote(market)
+    spread = round(ask - bid, 2) if (bid > 0 and ask > 0) else 0.0
     volume = safe_float(market.get("volume_fp"), 0.0)
     liquidity = safe_float(market.get("liquidity_dollars"), 0.0)
     ticker = str(event.get("event_ticker", "") or "")
-    url = f"https://kalshi.com/markets/{ticker.lower()}" if ticker else ""
+    # Kalshi URLs use the series_ticker (e.g. "KXELONMARS"), not the full
+    # event_ticker (e.g. "KXELONMARS-99" with a per-instance suffix). The
+    # event_ticker-based URL 404s.  Fall back to event_ticker when series_ticker
+    # is unavailable (API versions may differ).
+    series = str(event.get("series_ticker", "") or "").strip()
+    url_ticker = series or ticker
+    url = f"https://kalshi.com/markets/{url_ticker.lower()}" if url_ticker else ""
+    close_time = str(market.get("close_time", "") or "")
+    status = str(market.get("status", "") or "").lower()
     return {
         "question": question,
         "baseline_probability": baseline,
         "volume": volume,
         "liquidity": liquidity,
+        "bid_ask": {"bid": bid, "ask": ask, "spread": spread},
         "source": {
             "type": "prediction_market",
             "platform": settings.KALSHI_SOURCE_NAME,
@@ -128,24 +150,28 @@ def _to_candidate_event(event: dict[str, Any]) -> dict[str, Any]:
             "liquidity": liquidity,
             "volume": volume,
             "url": url,
+            "status": status,
+            "close_time": close_time,
         },
     }
 
 
-def _baseline_pct(market: dict[str, Any]) -> float:
-    """Implied YES probability (0-100) from Kalshi dollar prices.
+def _baseline_and_quote(market: dict[str, Any]) -> tuple[float, float, float]:
+    """Return ``(baseline_pct, bid, ask)`` from Kalshi dollar prices.
+
+    All three values are on the 0-100 scale. Bid/ask are 0.0 when not used.
 
     Prefer the last trade price; fall back to the yes bid/ask midpoint; default
     to 50 when the market has no price signal yet.
     """
     last = safe_float(market.get("last_price_dollars"), 0.0)
     if last > 0:
-        return last * 100
+        return last * 100, 0.0, 0.0
     bid = safe_float(market.get("yes_bid_dollars"), 0.0)
     ask = safe_float(market.get("yes_ask_dollars"), 0.0)
     if bid > 0 or ask > 0:
-        return (bid + ask) / 2 * 100
-    return 50.0
+        return (bid + ask) / 2 * 100, bid * 100, ask * 100
+    return 50.0, 0.0, 0.0
 
 
 async def fetch_resolved_markets(limit: int = 200) -> list[dict[str, Any]]:
@@ -161,8 +187,12 @@ async def fetch_resolved_markets(limit: int = 200) -> list[dict[str, Any]]:
     try:
         raw = await _fetch_raw_resolved(limit)
     except Exception as exc:
-        logger.warning("Kalshi resolved fetch failed: %s", exc)
-        return []
+        return fail_closed_empty_list(
+            logger,
+            "kalshi_resolved",
+            exc,
+            context={"limit": limit},
+        )
     resolved: list[dict[str, Any]] = []
     for event in raw:
         if not isinstance(event, dict):
@@ -187,7 +217,9 @@ async def _fetch_raw_resolved(limit: int) -> list[dict[str, Any]]:
     params = {
         "status": "settled",
         "with_nested_markets": "true",
-        "limit": str(min(max(limit, 1), 200)),
+        "limit": str(
+            min(max(limit * _RESOLVED_FETCH_FACTOR, limit, 1), _RESOLVED_FETCH_MAX)
+        ),
     }
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.get(url, params=params)

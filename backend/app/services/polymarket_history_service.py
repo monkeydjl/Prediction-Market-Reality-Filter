@@ -14,6 +14,7 @@ import logging
 import httpx
 from typing import Any
 
+from app.utils.failure_policy import fail_closed_empty_list
 from app.utils.market_utils import safe_float
 
 logger = logging.getLogger(__name__)
@@ -44,11 +45,12 @@ async def fetch_resolved_markets(
             response.raise_for_status()
             data = response.json()
         except Exception as exc:
-            # Log so auto-resolve returning "no_resolved_markets" is
-            # distinguishable from "Polymarket was unreachable". Previously
-            # this swallowed the exception silently, masking network outages.
-            logger.warning("fetch_resolved_markets failed: %s", exc)
-            return []
+            return fail_closed_empty_list(
+                logger,
+                "polymarket_resolved",
+                exc,
+                context={"limit": limit, "offset": offset},
+            )
 
     markets = []
     for item in data:
@@ -85,7 +87,12 @@ async def fetch_resolved_markets(
                 "start_date": item.get("startDate", ""),
                 "end_date": item.get("endDate", ""),
             })
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Skipping malformed Polymarket resolved market [id=%s]: %s",
+                item.get("id", ""),
+                exc,
+            )
             continue
 
     return markets

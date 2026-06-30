@@ -7,15 +7,29 @@ from typing import Any
 from gnews import GNews
 
 from app.core.config import settings
+from app.utils.failure_policy import fail_closed_empty_list, log_service_failure
 
 logger = logging.getLogger(__name__)
 
 
-_gnews_client = GNews(
-    language="en",
-    country="US",
-    max_results=settings.GNEWS_MAX_RESULTS,
-)
+_gnews_client = None
+
+
+def _get_client():
+    """Lazy-init the GNews client so an import-time or network failure
+    at startup doesn't crash the whole app."""
+    global _gnews_client
+    if _gnews_client is None:
+        try:
+            _gnews_client = GNews(
+                language="en",
+                country="US",
+                max_results=settings.GNEWS_MAX_RESULTS,
+            )
+        except Exception as exc:
+            logger.error("GNews client init failed: %s", exc)
+            return None
+    return _gnews_client
 
 STOPWORDS = {
     "will", "this", "that", "with", "from", "about", "market",
@@ -25,13 +39,23 @@ STOPWORDS = {
 
 
 def _sync_fetch(query: str) -> list[dict[str, Any]]:
+    client = _get_client()
+    if client is None:
+        return fail_closed_empty_list(
+            logger,
+            "gnews",
+            RuntimeError("GNews client not available"),
+            context={"query": query[:60]},
+        )
     try:
-        results = _gnews_client.get_news(query)
+        results = client.get_news(query)
     except Exception as exc:
-        # Log so an empty result list is distinguishable from a GNews failure
-        # (rate limit / network / parser). Previously swallowed silently.
-        logger.warning("gnews fetch failed [query=%.60s]: %s", query, exc)
-        return []
+        return fail_closed_empty_list(
+            logger,
+            "gnews",
+            exc,
+            context={"query": query[:60]},
+        )
 
     articles = []
     for item in results:
@@ -52,7 +76,7 @@ def _sync_fetch(query: str) -> list[dict[str, Any]]:
 
 
 async def fetch_google_news(query: str) -> list[dict[str, Any]]:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     queries = build_news_queries(query)
     tasks = [
         loop.run_in_executor(None, partial(_sync_fetch, q))
@@ -61,8 +85,15 @@ async def fetch_google_news(query: str) -> list[dict[str, Any]]:
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     articles = []
-    for result in results:
+    for query_item, result in zip(queries, results):
         if isinstance(result, Exception):
+            log_service_failure(
+                logger,
+                "gnews_task",
+                result,
+                policy="fail_closed_empty_list",
+                context={"query": query_item[:60]},
+            )
             continue
         articles.extend(result)
 

@@ -277,7 +277,7 @@ class LiveIntegrationTests(unittest.TestCase):
                     news_context="Institutional adoption is rising.",
                 )
                 event_id = record["event_id"]
-                updated = await resolve_with_calibration(
+                updated = resolve_with_calibration(
                     event_id=event_id, actual_outcome=100.0, source="manual",
                 )
                 return updated
@@ -305,7 +305,7 @@ class LiveIntegrationTests(unittest.TestCase):
                     baseline_probability=50.0,
                     news_context="Inflation data is mixed.",
                 )
-                await resolve_with_calibration(
+                resolve_with_calibration(
                     event_id=record["event_id"], actual_outcome=0.0,
                 )
                 from app.memory.event_store import list_resolved_events

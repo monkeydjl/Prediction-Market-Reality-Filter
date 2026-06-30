@@ -87,8 +87,13 @@ class ExtractCandidateEventsTests(unittest.TestCase):
     def test_error_returns_empty(self):
         with patch.object(ext.settings, "OPEN_WEB_EXTRACTION_MODEL", "m"), \
                 patch.object(ext, "_ask_extractor",
-                             new=AsyncMock(side_effect=RuntimeError("boom"))):
+                             new=AsyncMock(side_effect=RuntimeError("boom"))), \
+                self.assertLogs("app.services.event_extraction_service",
+                                level="WARNING") as logs:
             self.assertEqual(_run(ext.extract_candidate_events(ARTICLES, 10)), [])
+        text = "\n".join(logs.output)
+        self.assertIn("source=open_web_extraction", text)
+        self.assertIn("policy=fail_closed_empty_list", text)
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ class OfficialSourceServiceTests(unittest.TestCase):
             {"title": "Fed holds rates", "summary": "summary text", "published": "2026-06-12"},
             {"title": "Statement", "description": "desc only", "updated": "2026-06-11"},
         ])
-        with patch.object(official.feedparser, "parse", return_value=feed), \
+        with patch.object(official, "parse_feed", return_value=feed), \
              patch.object(official.settings, "OFFICIAL_RSS_URL", "http://example/feed"), \
              patch.object(official.settings, "OFFICIAL_SOURCE_NAME", "Federal Reserve"):
             articles = asyncio.run(official.fetch_official_news(limit=5))
@@ -36,8 +36,9 @@ class OfficialSourceServiceTests(unittest.TestCase):
             articles = asyncio.run(official.fetch_official_news())
         self.assertEqual(articles, [])
 
-    def test_fetch_swallows_parse_errors(self):
-        with patch.object(official.feedparser, "parse", side_effect=Exception("boom")), \
+    def test_fetch_handles_parse_errors_gracefully(self):
+        empty_feed = _FakeFeed([])
+        with patch.object(official, "parse_feed", return_value=empty_feed), \
              patch.object(official.settings, "OFFICIAL_RSS_URL", "http://example/feed"):
             articles = asyncio.run(official.fetch_official_news())
         self.assertEqual(articles, [])

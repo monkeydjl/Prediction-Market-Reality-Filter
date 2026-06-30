@@ -1,0 +1,14 @@
+{
+  "source": "official_csv",
+  "source_url": "https://example.com/world-cup-official-csv",
+  "observed_at": "2026-07-20T00:00:00Z",
+  "csv": {
+    "matches": "match_id,stage,kickoff_at,venue,referee,home_team,away_team,status,home_score,away_score,winner,extra_time,penalty_shootout,home_red_cards,away_red_cards,home_yellow_cards,away_yellow_cards\nround16-1,round_of_16,2026-07-20T19:00:00+00:00,\"Stadium A, City A\",Referee A,Team A,Team B,finished,1,1,Team A,true,true,1,0,2,1\n",
+    "discipline": "event_id,match_id,stage,team,player,minute,status,red_cards,yellow_cards,reason\ncard-1,round16-1,round_of_16,Team A,Player A,72+1,red_card,1,0,serious foul\n",
+    "qualifications": "team,stage,status,already_qualified,already_eliminated\nMexico,round_of_32,qualified,true,false\n",
+    "player_awards": "award,player,team,goals,rank,status\ngolden_boot,Player C,Team C,7,1,current\n",
+    "player_statuses": "kind,team,player,status,severity,match_id,stage,position,formation,jersey_number,reason,applies_to\nlineup,Team A,Player A,starting,,round16-1,round_of_16,F,4-3-3,10,official starting XI,world-cup-2026:team-a-round16\n",
+    "team_stats": "team,match_id,stage,stat_name,stat_value,stat_unit\nTeam A,round16-1,round_of_16,ball possession,60,%\n",
+    "player_stats": "team,player,match_id,stage,position,jersey_number,stat_name,stat_value,stat_unit\nTeam A,Player A,round16-1,round_of_16,F,10,shots.total,3,\n"
+  }
+}

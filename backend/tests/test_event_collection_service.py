@@ -55,8 +55,14 @@ class EventCollectionServiceTests(unittest.TestCase):
             articles = asyncio.run(
                 collection.collect_articles("will X happen?", shared_articles=shared)
             )
-        # Shared reused as-is; gnews appended, tagged "news".
-        self.assertEqual(articles, shared + [{**gnews[0], "kind": "news"}])
+        # Shared reused as-is; gnews appended, tagged "news". Every article
+        # carries a full_text=None key (enrichment moved to _build_filtered_news,
+        # so collect_articles just seeds the key with None).
+        self.assertEqual(len(articles), 2)
+        self.assertEqual(articles[0]["title"], "shared")
+        self.assertIsNone(articles[0]["full_text"])
+        self.assertEqual(articles[1], {**gnews[0], "kind": "news",
+                                       "full_text": None})
         # Shared sources were not re-fetched because shared_articles was provided.
         rss_mock.assert_not_called()
 
@@ -70,21 +76,51 @@ class EventCollectionServiceTests(unittest.TestCase):
              patch("app.services.sec_edgar_service.fetch_sec_filings",
                    AsyncMock(return_value=[])), \
              patch("app.services.economic_data_service.fetch_economic_data",
-                   AsyncMock(return_value=[])):
+                   AsyncMock(return_value=[])), \
+             self.assertLogs("app.services.event_collection_service",
+                             level="WARNING") as logs:
             articles = asyncio.run(collection.collect_shared_articles())
         # The failing RSS source contributes nothing; the others still collected.
         self.assertEqual(articles, [{**official[0], "kind": "official"}])
+        self.assertIn("policy=fail_closed_empty_list", "\n".join(logs.output))
 
     def test_collect_articles_isolates_failing_gnews(self):
         shared = [{"title": "shared", "description": "d",
                    "source": "s", "published": "p"}]
         with patch("app.services.gnews_service.fetch_google_news",
-                   AsyncMock(side_effect=Exception("gnews down"))):
+                   AsyncMock(side_effect=Exception("gnews down"))), \
+             self.assertLogs("app.services.event_collection_service",
+                             level="WARNING") as logs:
             articles = asyncio.run(
                 collection.collect_articles("will X happen?", shared_articles=shared)
             )
 
-        self.assertEqual(articles, shared)
+        # gnews failed -> [] (fail_closed_empty_list); shared article survives
+        # with full_text=None (enrichment moved to _build_filtered_news).
+        self.assertEqual(len(articles), 1)
+        self.assertEqual(articles[0]["title"], "shared")
+        self.assertIsNone(articles[0]["full_text"])
+        text = "\n".join(logs.output)
+        self.assertIn("source=query_source", text)
+        self.assertIn("policy=fail_closed_empty_list", text)
+
+    def test_collect_articles_sets_full_text_none_for_every_article(self):
+        """Full-text enrichment moved to _build_filtered_news; collect_articles
+        just seeds full_text=None on every article so downstream consumers can
+        rely on the key's presence."""
+        shared = [
+            {"title": f"shared-{i}", "description": "d", "source": "s",
+             "published": "p", "url": f"http://example.com/{i}"}
+            for i in range(3)
+        ]
+        with patch("app.services.gnews_service.fetch_google_news",
+                   AsyncMock(return_value=[])):
+            articles = asyncio.run(
+                collection.collect_articles("will X happen?", shared_articles=shared)
+            )
+        self.assertEqual(len(articles), 3)
+        for article in articles:
+            self.assertIsNone(article["full_text"])
 
 
 if __name__ == "__main__":

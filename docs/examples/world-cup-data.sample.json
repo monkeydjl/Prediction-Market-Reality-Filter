@@ -1,0 +1,91 @@
+{
+  "source": "official_feed",
+  "source_url": "https://example.com/world-cup-feed",
+  "observed_at": "2026-07-20T00:00:00Z",
+  "matches": [
+    {
+      "match_id": "round16-1",
+      "stage": "round_of_16",
+      "kickoff_at": "2026-07-20T19:00:00+00:00",
+      "venue": "Stadium A, City A",
+      "referee": "Referee A",
+      "home_team": "Team A",
+      "away_team": "Team B",
+      "status": "finished",
+      "home_score": 1,
+      "away_score": 1,
+      "winner": "Team A",
+      "extra_time": true,
+      "penalty_shootout": true,
+      "home_red_cards": 1,
+      "away_red_cards": 0
+    }
+  ],
+  "discipline": [
+    {
+      "match_id": "round16-1",
+      "team": "Team A",
+      "player": "Player A",
+      "minute": "72+1",
+      "status": "red_card",
+      "red_cards": 1
+    }
+  ],
+  "qualifications": [
+    {
+      "team": "Mexico",
+      "status": "qualified",
+      "stage": "round_of_32",
+      "already_qualified": true
+    }
+  ],
+  "player_awards": [
+    {
+      "award": "golden_boot",
+      "player": "Player C",
+      "team": "Team C",
+      "goals": 7,
+      "rank": 1,
+      "status": "current"
+    }
+  ],
+  "player_statuses": [
+    {
+      "kind": "lineup",
+      "team": "Team A",
+      "player": "Player A",
+      "status": "starting",
+      "match_id": "round16-1",
+      "stage": "round_of_16",
+      "position": "F",
+      "formation": "4-3-3",
+      "jersey_number": "10"
+    }
+  ],
+  "team_stats": [
+    {
+      "team": "Team A",
+      "match_id": "round16-1",
+      "stage": "round_of_16",
+      "stat_name": "ball possession",
+      "stat_value": 60,
+      "stat_unit": "%"
+    }
+  ],
+  "player_stats": [
+    {
+      "team": "Team A",
+      "player": "Player A",
+      "match_id": "round16-1",
+      "stage": "round_of_16",
+      "position": "F",
+      "jersey_number": "10",
+      "stat_name": "shots.total",
+      "stat_value": 3
+    }
+  ],
+  "tournament_status": {
+    "status": "in_progress",
+    "tournament_complete": false
+  }
+}

@@ -1,5 +1,6 @@
 import json
 import re
+from typing import Any
 
 from openai import AsyncOpenAI
 
@@ -15,6 +16,8 @@ def get_client() -> AsyncOpenAI:
         _client = AsyncOpenAI(
             api_key=settings.OPENAI_API_KEY,
             base_url=settings.DASHSCOPE_BASE_URL,
+            timeout=60.0,
+            max_retries=2,
         )
     return _client
 
@@ -29,7 +32,7 @@ def _extract_float(pattern: str, text: str, fallback: float = 0.0) -> float:
     return fallback
 
 
-async def ask_llm(prompt: str) -> dict:
+async def ask_llm(prompt: str) -> dict[str, Any]:
     """
     Legacy helper used by older agents (contrarian, crowd, etc.).
     Migrated to AsyncOpenAI with JSON mode.

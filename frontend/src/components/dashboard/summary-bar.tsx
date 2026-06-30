@@ -19,7 +19,7 @@ export function summarize(
   const avgValue =
     events.length === 0
       ? 0
-      : events.reduce((a, e) => a + e.valueScore, 0) / events.length;
+      : events.reduce((a, e) => a + (Number.isFinite(e.valueScore) ? e.valueScore : 0), 0) / events.length;
   return { total: events.length, rising, falling, avgValue, tracking, archived };
 }
 
@@ -82,7 +82,7 @@ export function SummaryBar({ summary }: { summary: DashboardSummary }) {
       />
       <Stat
         label="平均情报价值"
-        value={summary.avgValue.toFixed(1)}
+        value={Number.isFinite(summary.avgValue) ? summary.avgValue.toFixed(1) : "—"}
         hint="value_score 越高越值得关注"
         icon={<Gauge className="size-3.5" aria-hidden="true" />}
       />

@@ -30,12 +30,16 @@ network-free and trivially testable.
 Event vocabulary only - no trading terms.
 """
 
+import logging
 import math
 from collections import defaultdict
+from datetime import datetime, timezone
 from statistics import mean
 from typing import Any
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Weighting: weight = 1 / (mean_brier + EPS). A small EPS keeps a perfect
 # (brier 0) component from dividing by zero and bounds how far it can dominate.
@@ -46,6 +50,9 @@ _EPS = 0.01
 _MAX_SHRINK = 0.5
 # Brier of a coin-flip against a binary outcome; the worst we scale shrinkage to.
 _RANDOM_BRIER = 0.25
+# Half-life (in days) for exponential time decay weighting of resolved events.
+# Events resolved 45 days ago contribute half the weight of fresh ones.
+_HALF_LIFE_DAYS = 45
 
 
 def _finite(value: Any) -> bool:
@@ -60,16 +67,37 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
+def _time_weight(resolved_at: str, half_life_days: int = _HALF_LIFE_DAYS) -> float:
+    """Exponential time decay weight for a resolved event.
+
+    Returns 0.5 ** (days_since_resolution / half_life_days).
+    Returns 1.0 if the timestamp is missing or unparseable (fail-safe so that
+    records without resolved_at are weighted equally, preserving old behavior).
+    """
+    if not resolved_at or not isinstance(resolved_at, str):
+        return 1.0
+    try:
+        resolved_dt = datetime.fromisoformat(resolved_at)
+        if resolved_dt.tzinfo is None:
+            resolved_dt = resolved_dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        days = max(0.0, (now - resolved_dt).total_seconds() / 86400.0)
+        return 0.5 ** (days / half_life_days)
+    except (ValueError, TypeError, OverflowError):
+        return 1.0
+
+
 def briers_by_component(resolved_records: list[dict[str, Any]]) -> dict[str, list[float]]:
     """Per-component Brier history across resolved events.
 
     Each record may carry `calibration_components` (what market / llm /
     cross_validation each predicted, 0-100) recorded at analyze time, and an
     `outcome.actual_outcome` (0-100) attached at resolve time. The Brier for a
-    component is ((predicted - actual)/100)^2. Records lacking components (older
-    events) or a finite outcome are skipped, so a component only accumulates
-    samples once it has actually been recorded - this is what keeps the feedback
-    dormant until enough new events resolve.
+    component is ((predicted - actual)/100)^2, weighted by exponential time decay
+    based on `resolved_at` (half-life of 45 days). Records lacking components
+    (older events) or a finite outcome are skipped, so a component only
+    accumulates samples once it has actually been recorded - this is what keeps
+    the feedback dormant until enough new events resolve.
     """
     out: dict[str, list[float]] = defaultdict(list)
     for record in resolved_records:
@@ -81,9 +109,11 @@ def briers_by_component(resolved_records: list[dict[str, Any]]) -> dict[str, lis
         if not _finite(actual):
             continue
         actual_value = float(actual)
+        weight = _time_weight(record.get("resolved_at", ""))
         for key, predicted in components.items():
             if _finite(predicted):
-                out[key].append(((float(predicted) - actual_value) / 100.0) ** 2)
+                brier = ((float(predicted) - actual_value) / 100.0) ** 2
+                out[key].append(brier * weight)
     return dict(out)
 
 
@@ -94,7 +124,8 @@ def category_briers(resolved_records: list[dict[str, Any]], category: str) -> li
     and the event's base_rate_category (stored under legacy_analysis, as the
     /calibration route reads it). Unlike component history this is available on
     all resolved events - old and new - so category shrinkage can activate
-    independently of component recording.
+    independently of component recording. Each brier is weighted by exponential
+    time decay based on `resolved_at` (half-life of 45 days).
     """
     briers: list[float] = []
     for record in resolved_records:
@@ -105,7 +136,8 @@ def category_briers(resolved_records: list[dict[str, Any]], category: str) -> li
         calibration = record.get("calibration") or {}
         brier = calibration.get("brier_score")
         if _finite(brier):
-            briers.append(float(brier))
+            weight = _time_weight(record.get("resolved_at", ""))
+            briers.append(float(brier) * weight)
     return briers
 
 
@@ -223,4 +255,8 @@ def _load_resolved_records() -> list[dict[str, Any]]:
 
         return [(entry.get("record") or {}) for entry in list_resolved_events()]
     except Exception:
+        logger.warning(
+            "Failed to load resolved records for calibration feedback",
+            exc_info=True,
+        )
         return []

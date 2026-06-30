@@ -1,0 +1,79 @@
+# Caddyfile example for PMRF production deployment.
+#
+# Caddy is simpler than nginx: it auto-provisions and auto-renews Let's
+# Encrypt TLS certs, so this single file replaces nginx.conf.example +
+# certbot cron.
+#
+# Usage:
+#   1. Install Caddy: https://caddyserver.com/docs/install
+#   2. Replace pmrf.example.com with your real domain
+#   3. `caddy run --config deploy/Caddyfile`
+#
+# The FastAPI backend listens on 127.0.0.1:8000 (per deploy/docker-compose.yml).
+
+pmrf.example.com {
+    # ─── TLS (automatic via Let's Encrypt) ─────────────────────────────────
+    # Caddy provisions and renews certs by default — no manual certbot.
+
+    # ─── Security headers (defense in depth — backend also sets these) ─────
+    header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "geolocation=(), microphone=(), camera=()"
+        # Remove Server header to hide proxy identity.
+        -Server
+    }
+
+    # ─── Rate limiting ──────────────────────────────────────────────────────
+    # Caddy 2.7+ has built-in rate limiting. For older versions use
+    # caddy-ratelimit plugin. 10 req/s per client IP, burst 20.
+    # rate_limit {
+    #     zone pmrf_limit {
+    #         key {remotehost}
+    #         events 10
+    #         window 1s
+    #     }
+    # }
+
+    # ─── Long-running batch endpoints ──────────────────────────────────────
+    # /api/events/discover can take 3-10 minutes (EVENT_DISCOVER_TIMEOUT_SECONDS=600).
+    @longrunning path /api/events/discover /api/world-cup/*
+    handle @longrunning {
+        reverse_proxy 127.0.0.1:8000 {
+            # 15 min read timeout for batch ops.
+            transport http {
+                read_timeout 900s
+                write_timeout 900s
+            }
+            # Don't buffer SSE — pass through for live progress.
+            flush_interval -1
+        }
+    }
+
+    # ─── Block sensitive paths ─────────────────────────────────────────────
+    # /docs and /openapi.json should be disabled in prod via OPENAPI_ENABLED=false,
+    # but block at proxy too as defense in depth.
+    @sensitive path /docs /redoc /openapi.json
+    handle @sensitive {
+        error 404
+    }
+
+    # ─── Default: proxy everything else to backend ─────────────────────────
+    # The backend serves both /api/* and the static frontend (frontend/out
+    # mounted at / in production).
+    reverse_proxy 127.0.0.1:8000 {
+        # Forward real client IP + scheme so backend audit log + rate limiter
+        # see the original request, not Caddy's loopback IP.
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+    }
+
+    # ─── Body size limit (4MB covers batch imports + 20KB news_context) ────
+    request_body {
+        max_size 4MB
+    }
+}

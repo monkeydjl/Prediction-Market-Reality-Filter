@@ -31,6 +31,17 @@ class _Client:
         return _Response(self._data)
 
 
+class _FailingClient:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def get(self, url, params=None):
+        raise RuntimeError("network down")
+
+
 def _market(**overrides):
     market = {
         "id": "m1",
@@ -62,6 +73,26 @@ class PolymarketHistoryServiceTests(unittest.TestCase):
 
         self.assertEqual(markets, [])
         self.assertTrue(all(math.isfinite(m["final_yes_price"]) for m in markets))
+
+    def test_fetch_resolved_markets_logs_malformed_market_rows(self):
+        data = [_market(outcomePrices="[bad json")]
+
+        with patch.object(source.httpx, "AsyncClient", return_value=_Client(data)), \
+                self.assertLogs("app.services.polymarket_history_service", level="WARNING") as logs:
+            markets = asyncio.run(source.fetch_resolved_markets(limit=1))
+
+        self.assertEqual(markets, [])
+        self.assertIn("Skipping malformed Polymarket resolved market", "\n".join(logs.output))
+
+    def test_fetch_resolved_markets_logs_source_failure_policy(self):
+        with patch.object(source.httpx, "AsyncClient", return_value=_FailingClient()), \
+                self.assertLogs("app.services.polymarket_history_service", level="WARNING") as logs:
+            markets = asyncio.run(source.fetch_resolved_markets(limit=1))
+
+        self.assertEqual(markets, [])
+        text = "\n".join(logs.output)
+        self.assertIn("source=polymarket_resolved", text)
+        self.assertIn("policy=fail_closed_empty_list", text)
 
 
 if __name__ == "__main__":

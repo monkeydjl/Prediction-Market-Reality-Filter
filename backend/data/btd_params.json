@@ -1,0 +1,23 @@
+{
+  "gamma": 0.671856,
+  "home_advantage": 0.834503,
+  "half_life_days": 730.0,
+  "since_year": 2018,
+  "min_team_matches": 5,
+  "sample_count": 8111,
+  "team_count": 284,
+  "ref_date": "2026-06-25",
+  "fitted_at": "2026-06-27T13:10:57.202349+00:00",
+  "optimizer_success": true,
+  "diagnostics": {
+    "empirical_draw_rate": 0.231784,
+    "equal_team_draw_prob": 0.251457,
+    "boosted_draw_prob_neutral_off": 0.191611,
+    "n_home_wins": 3873,
+    "n_draws": 1880,
+    "n_away_wins": 2358,
+    "elo_mean_abs_diff": 88.39,
+    "final_neg_log_likelihood": 2589.4119,
+    "alpha_mapping": "10^(elo/400)"
+  }
+}

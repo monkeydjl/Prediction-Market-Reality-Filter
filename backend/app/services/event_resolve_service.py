@@ -28,7 +28,7 @@ from typing import Any
 from app.core.config import settings
 from app.memory.event_market_link_store import get_verified_link, upsert_link
 from app.memory.event_store import get_event, list_all_events, resolve_event
-from app.memory.prediction_store import score_prediction, void_prediction
+from app.memory.prediction_store import get_prediction, score_prediction, void_prediction
 from app.services.calibration_service_event import score_event
 from app.services.event_audit_service import histories_by_event, history_for_event, record_outcome
 from app.services.trend_analysis_service import analyze_trend
@@ -37,7 +37,7 @@ from app.utils.text_match import build_index, find_match, normalize
 logger = logging.getLogger(__name__)
 
 
-async def resolve_with_calibration(
+def resolve_with_calibration(
     event_id: str,
     actual_outcome: float,
     confidence: float = 1.0,
@@ -127,22 +127,87 @@ async def resolve_with_calibration(
         "source": source,
         "notes": notes,
     }
-    updated = resolve_event(event_id, outcome, calibration=calibration)
-    record = (updated or {}).get("record") or {}
-    record_outcome(event_id, record.get("event_title", ""), outcome)
-    # Score the event's frozen, point-in-time prediction against the outcome.
+
+    # Score the prediction (SQLite) BEFORE writing the event outcome (JSON).
+    # These two stores have no shared transaction, so ordering decides what a
+    # mid-resolve crash leaves behind. event_store.outcome is the "already
+    # resolved -> skip next run" gate (auto_resolve_events), so if we wrote it
+    # first and then crashed before scoring, the prediction would stay `open`
+    # forever (the event is skipped on every future run): a silent, permanent
+    # orphan. By scoring first, a crash before resolve_event leaves the event
+    # UNresolved -> the next run retries the whole resolution. score_prediction /
+    # void_prediction are idempotent (WHERE status='open'), so the retry is safe.
+    #
     # A genuine resolution scores it (act -> scored, watch/skip -> observed); a
     # non-genuine outcome (invalid identity conflict / void) closes the open
-    # prediction as `voided` instead - no Brier, but it leaves the opportunity
-    # surface so an invalidated event stops showing as actionable.
+    # prediction as `voided` - no Brier, but it leaves the opportunity surface so
+    # an invalidated event stops showing as actionable. A None return means the
+    # event has no open prediction (e.g. a news event that was never frozen, or
+    # already resolved) - that is expected, not a failure, so we proceed to write
+    # the outcome. A raised exception (DB failure) aborts BEFORE the outcome is
+    # written, so the next run can retry.
     if status == "resolved":
         score_prediction(event_id, actual_outcome)
     else:
         void_prediction(event_id)
+
+    updated = resolve_event(event_id, outcome, calibration=calibration)
+    record = (updated or {}).get("record") or {}
+    record_outcome(event_id, record.get("event_title", ""), outcome)
     return updated
 
 
-async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
+def reconcile_predictions() -> int:
+    """Heal orphaned predictions left by a crash mid-resolve.
+
+    The resolve path writes the prediction (SQLite) and the event outcome (JSON)
+    without a shared transaction. If the process died after the event outcome was
+    written but before the prediction was scored (the pre-fix ordering, or any
+    future regression), the event is "resolved" yet its prediction is still
+    `open` - and auto_resolve skips resolved events, so that prediction would
+    never be scored. This startup/per-run scan finds those orphans (event has an
+    outcome, prediction still open) and applies the stored outcome: a genuine
+    resolution scores it (act->scored, watch/skip->observed), a non-genuine one
+    voids it. Idempotent (score/void are WHERE status='open'); returns how many
+    it healed. Best-effort: a single failure is logged and skipped, never raises.
+    """
+    healed = 0
+    for entry in list_all_events():
+        record = entry.get("record") or {}
+        outcome = record.get("outcome")
+        if outcome is None:
+            continue
+        event_id = entry.get("event_id")
+        if not event_id:
+            continue
+        pred = get_prediction(event_id)
+        if pred is None or pred.get("status") != "open":
+            continue  # never predicted, or already terminal - nothing to heal
+        try:
+            if outcome.get("status") == "resolved":
+                actual = float(outcome.get("actual_outcome"))
+                score_prediction(event_id, actual)
+            else:
+                void_prediction(event_id)
+            healed += 1
+            logger.warning(
+                "reconcile: healed orphan prediction for resolved event %s "
+                "(outcome status=%s)",
+                event_id, outcome.get("status"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "reconcile: failed to heal orphan prediction %s: %s",
+                event_id, exc,
+            )
+    return healed
+
+
+async def auto_resolve_events(
+    resolved_limit: int = 200,
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
     """Auto-resolve events whose questions match resolved prediction markets
     (Polymarket, Manifold, Kalshi).
 
@@ -154,6 +219,9 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
     degrade to fewer
     resolutions).
     """
+    # Heal any orphans left by a prior mid-resolve crash before doing new work.
+    # A dry-run must be read-only, so it deliberately skips reconciliation too.
+    reconciled = 0 if dry_run else reconcile_predictions()
     from app.services.polymarket_history_service import (
         fetch_resolved_markets as fetch_polymarket_resolved,
     )
@@ -188,10 +256,18 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
             market["_source_platform"] = name  # tag for link provenance
         resolved_markets.extend(result)
 
+    entries = list_all_events()
+    if by_source.get("Kalshi", 0) == 0 and _has_unresolved_source_event(entries, "Kalshi"):
+        logger.warning(
+            "auto_resolve: Kalshi returned 0 resolved markets while unresolved "
+            "Kalshi events exist; verify the Kalshi settled endpoint/status filter"
+        )
+
     if not resolved_markets:
-        return {"status": "no_resolved_markets", "resolved_count": 0,
+        return {"status": "no_resolved_markets", "dry_run": dry_run,
+                "resolved_count": 0,
                 "pending_count": 0, "invalid_count": 0,
-                "checked_count": 0, "unresolved_events": _count_unresolved(),
+                "checked_count": 0, "unresolved_events": _count_unresolved(entries),
                 "matches": [], "by_source": by_source}
 
     index = build_index(resolved_markets)
@@ -214,14 +290,12 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
     }
     resolved_count = 0
     pending_count = 0
-    invalid_count = 0
     match_log: list[dict[str, Any]] = []
 
     # Scan EVERY stored event (unranked, unbounded), not just the top-200 by
     # value_score - otherwise low-value events would never be resolved and the
     # calibration aggregate (which reads all resolved events) would be silently
     # biased toward high-value events.
-    entries = list_all_events()
     # Read the audit log once and group by event_id, instead of calling
     # history_for_event per event (which would re-read the whole file N times).
     histories = histories_by_event()
@@ -241,8 +315,21 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
         if linked and linked.get("contract_id"):
             settled = market_by_contract.get(str(linked["contract_id"]))
             if settled is not None:
+                resolved_count += 1
+                match_log.append({
+                    "event_id": event_id,
+                    "event_title": (record.get("event_title") or "")[:80],
+                    "matched_to": linked["contract_id"],
+                    "market_name": str(settled.get("_source_platform", linked.get("market_name", ""))),
+                    "contract_id": str(linked["contract_id"]),
+                    "actual_outcome": settled.get("actual_outcome"),
+                    "match_score": 1.0,
+                    "result": "would_resolve_by_contract" if dry_run else "resolved_by_contract",
+                })
+                if dry_run:
+                    continue
                 try:
-                    await resolve_with_calibration(
+                    resolve_with_calibration(
                         event_id=event_id,
                         actual_outcome=settled.get("actual_outcome"),
                         confidence=1.0,
@@ -255,14 +342,9 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
                         "auto_resolve: failed to resolve linked event %s: %s",
                         event_id, exc,
                     )
+                    resolved_count -= 1
+                    match_log.pop()
                     continue
-                resolved_count += 1
-                match_log.append({
-                    "event_id": event_id,
-                    "event_title": (record.get("event_title") or "")[:80],
-                    "matched_to": linked["contract_id"],
-                    "result": "resolved_by_contract",
-                })
                 continue
             # Linked but its contract has not settled yet: do NOT fall through to
             # text matching (that could match a DIFFERENT market and trigger a
@@ -289,20 +371,21 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
         # there is no prior link to diverge from, so the old identity-conflict
         # check is unreachable here and has been removed - contract-first
         # settlement now provides the no-wrong-contract guarantee.
-        upsert_link(
-            event_id,
-            market_name=market_name,
-            contract_id=contract_id,
-            market_question=matched_question,
-            # Event-side resolution criteria (as our analysis understood it).
-            # The matched market's OWN criteria is not in fetch_resolved_markets
-            # yet (a source-adapter change); record what we have so the column
-            # is meaningful rather than empty. See V2_ROADMAP M0 exit criteria.
-            resolution_criteria=(record.get("semantics") or {}).get("resolution_criteria", ""),
-            link_method="auto",
-            link_confidence=score,
-            verified=verified,
-        )
+        if not dry_run:
+            upsert_link(
+                event_id,
+                market_name=market_name,
+                contract_id=contract_id,
+                market_question=matched_question,
+                # Event-side resolution criteria (as our analysis understood it).
+                # The matched market's OWN criteria is not in fetch_resolved_markets
+                # yet (a source-adapter change); record what we have so the column
+                # is meaningful rather than empty. See V2_ROADMAP M0 exit criteria.
+                resolution_criteria=(record.get("semantics") or {}).get("resolution_criteria", ""),
+                link_method="auto",
+                link_confidence=score,
+                verified=verified,
+            )
 
         # Fail-closed gate: an unverified (fuzzy) link is recorded for human
         # review but never scored, so a fuzzy match cannot silently resolve an
@@ -313,13 +396,29 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
                 "event_id": event_id,
                 "event_title": question[:80],
                 "matched_to": matched_question[:80],
+                "market_name": market_name,
+                "contract_id": contract_id,
+                "actual_outcome": actual_outcome,
                 "match_score": round(score, 3),
-                "result": "pending",
+                "result": "would_pending" if dry_run else "pending",
             })
             continue
 
+        resolved_count += 1
+        match_log.append({
+            "event_id": event_id,
+            "event_title": question[:80],
+            "matched_to": matched_question[:80],
+            "market_name": market_name,
+            "contract_id": contract_id,
+            "actual_outcome": actual_outcome,
+            "match_score": round(score, 3),
+            "result": "would_resolve" if dry_run else "resolved",
+        })
+        if dry_run:
+            continue
         try:
-            await resolve_with_calibration(
+            resolve_with_calibration(
                 event_id=event_id,
                 actual_outcome=actual_outcome,
                 confidence=1.0,
@@ -331,16 +430,115 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
             logger.warning(
                 "auto_resolve: failed to resolve event %s: %s", event_id, exc
             )
+            resolved_count -= 1
+            match_log.pop()
             continue
-        resolved_count += 1
-        match_log.append({
-            "event_id": event_id,
-            "event_title": question[:80],
-            "matched_to": matched_question[:80],
-            "actual_outcome": actual_outcome,
-            "match_score": round(score, 3),
-            "result": "resolved",
-        })
+
+    # ── Direct-settle fallback ─────────────────────────────────────────────
+    # The search-markets API returns at most ~1000 results sorted by internal
+    # relevance, so low-volume resolved markets are invisible to the main loop.
+    # For every unresolved Manifold event that carries a source_id, fetch that
+    # specific market directly from the Manifold API and settle if resolved.
+    # This decouples settlement from search ranking.
+    direct_resolved = 0
+    manifold_source_ids: list[tuple[str, str]] = []  # (event_id, source_id)
+    for entry in entries:
+        record = entry.get("record") or {}
+        if record.get("outcome") is not None:
+            continue
+        eid = entry.get("event_id")
+        if not eid:
+            continue
+        source = record.get("source") or {}
+        platform = str(source.get("platform", "")).lower()
+        source_id = str(source.get("source_id") or "").strip()
+        if platform != "manifold" or not source_id:
+            continue
+        # Skip events that already have a verified link (the main loop handles
+        # those via the contract-id path; if they survived, the contract is
+        # unsettled or the direct fetch already failed).
+        if get_verified_link(eid):
+            continue
+        manifold_source_ids.append((eid, source_id))
+
+    if manifold_source_ids:
+        from app.services.manifold_event_source import fetch_markets_by_ids
+        ids = [sid for _, sid in manifold_source_ids]
+        try:
+            direct_markets = await fetch_markets_by_ids(ids)
+        except Exception as exc:
+            logger.warning("auto_resolve: direct Manifold fetch failed: %s", exc)
+            direct_markets = []
+        if direct_markets:
+            direct_by_contract = {
+                str(m.get("id")): m for m in direct_markets if m.get("id")
+            }
+            for eid, source_id in manifold_source_ids:
+                settled = direct_by_contract.get(source_id)
+                if settled is None:
+                    continue
+                entry = next(
+                    (e for e in entries if e.get("event_id") == eid), None
+                )
+                if not entry:
+                    continue
+                rec = entry.get("record") or {}
+                if rec.get("outcome") is not None:
+                    continue  # resolved by the main loop already
+                # Create the verified link first so future runs use the
+                # contract-id path.
+                upsert_link(
+                    eid,
+                    market_name="Manifold",
+                    contract_id=source_id,
+                    market_question=settled.get("question", ""),
+                    resolution_criteria=(
+                        rec.get("semantics") or {}
+                    ).get("resolution_criteria", ""),
+                    link_method="auto_direct",
+                    link_confidence=1.0,
+                    verified=True,
+                )
+                if dry_run:
+                    direct_resolved += 1
+                    match_log.append({
+                        "event_id": eid,
+                        "event_title": (rec.get("event_title") or "")[:80],
+                        "matched_to": source_id,
+                        "market_name": "Manifold",
+                        "contract_id": source_id,
+                        "actual_outcome": settled.get("actual_outcome"),
+                        "match_score": 1.0,
+                        "result": "would_resolve_by_direct",
+                    })
+                    continue
+                try:
+                    resolve_with_calibration(
+                        event_id=eid,
+                        actual_outcome=settled.get("actual_outcome"),
+                        confidence=1.0,
+                        source="auto_market",
+                        notes=f"direct Manifold settle: {source_id}",
+                        snapshots=histories.get(eid, []),
+                    )
+                    direct_resolved += 1
+                    match_log.append({
+                        "event_id": eid,
+                        "event_title": (rec.get("event_title") or "")[:80],
+                        "matched_to": source_id,
+                        "market_name": "Manifold",
+                        "contract_id": source_id,
+                        "actual_outcome": settled.get("actual_outcome"),
+                        "match_score": 1.0,
+                        "result": "resolved_by_direct",
+                    })
+                except Exception as exc:
+                    logger.warning(
+                        "auto_resolve: direct settle failed for %s: %s",
+                        eid, exc,
+                    )
+        if direct_resolved:
+            resolved_count += direct_resolved
 
     unresolved_events = sum(
         1 for entry in entries
@@ -348,23 +546,37 @@ async def auto_resolve_events(resolved_limit: int = 200) -> dict[str, Any]:
     )
     return {
         "status": "ok",
+        "dry_run": dry_run,
         "resolved_count": resolved_count,
         "pending_count": pending_count,
-        "invalid_count": invalid_count,
         "checked_count": len(resolved_markets),
         "unresolved_events": unresolved_events,
+        "reconciled_count": reconciled,
         "matches": match_log,
         "by_source": by_source,
     }
 
 
-def _count_unresolved() -> int:
+def _has_unresolved_source_event(entries: list[dict[str, Any]], platform: str) -> bool:
+    platform_l = platform.lower()
+    for entry in entries:
+        record = entry.get("record") or {}
+        if record.get("outcome") is not None:
+            continue
+        source = record.get("source") or {}
+        if str(source.get("platform", "")).lower() == platform_l:
+            return True
+    return False
+
+
+def _count_unresolved(entries: list[dict[str, Any]] | None = None) -> int:
     """Count stored events without an outcome (best-effort, for reporting).
 
     Unranked and unbounded so the count is accurate, not capped at the top-200
     by value_score like list_events.
     """
+    entries = entries if entries is not None else list_all_events()
     return sum(
-        1 for entry in list_all_events()
+        1 for entry in entries
         if (entry.get("record") or {}).get("outcome") is None
     )

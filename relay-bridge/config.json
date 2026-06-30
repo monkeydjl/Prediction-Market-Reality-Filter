@@ -1,0 +1,8 @@
+{
+  "relayWebhookUrl": "在这里粘贴 Relay.app workflow 的 webhook URL",
+  "port": 8787,
+  "modelName": "claude-opus-4-8",
+  "relayTimeoutMs": 55000,
+  "apiKey": "",
+  "verbose": true
+}

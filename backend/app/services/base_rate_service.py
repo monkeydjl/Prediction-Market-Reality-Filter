@@ -9,9 +9,20 @@ base_rate_service.py  — 改进版
 5. 支持短语优先匹配（先长后短，避免误匹配）
 """
 
+import logging
 from dataclasses import dataclass
 
+from app.memory.event_store import list_resolved_events
 from app.utils.text_match import word_in_text
+
+logger = logging.getLogger(__name__)
+
+# Threshold (0-100 scale): outcomes within this distance of 0 or 100 are
+# treated as binary (YES/NO). Outcomes in the middle band are ambiguous
+# (partial / probabilistic resolutions) and excluded from the Beta update.
+_BINARY_MARGIN = 10
+# Minimum resolved binary samples required before a learned prior is trusted.
+_MIN_SAMPLES = 3
 
 
 @dataclass
@@ -214,18 +225,107 @@ def classify_market(question: str) -> BaseRate:
     return _DEFAULT
 
 
+def compute_bayesian_prior(category: str) -> float | None:
+    """Compute a Beta-Bernoulli posterior prior from resolved events in *category*.
+
+    Loads all resolved events from the event store, filters by
+    ``legacy_analysis.base_rate_category == category``, and counts binary
+    outcomes (``actual_outcome`` within *_BINARY_MARGIN* of 0 or 100).
+
+    A Beta(1, 1) uniform prior is updated:
+        alpha = 1 + successes   (actual_outcome near 100 → YES)
+        beta  = 1 + failures    (actual_outcome near   0 → NO)
+
+    Returns the posterior mean ``alpha / (alpha + beta) * 100`` (0–100 scale),
+    or *None* when fewer than *_MIN_SAMPLES* binary resolved events exist or
+    any error occurs (fail-closed).
+    """
+    try:
+        resolved = list_resolved_events()
+    except Exception:
+        logger.debug(
+            "compute_bayesian_prior: failed to load resolved events",
+            exc_info=True,
+        )
+        return None
+
+    successes = 0
+    failures = 0
+
+    for entry in resolved:
+        record = entry.get("record") or {}
+        legacy = record.get("legacy_analysis") or {}
+        if legacy.get("base_rate_category") != category:
+            continue
+
+        outcome = record.get("outcome")
+        if outcome is None:
+            continue
+
+        actual = outcome.get("actual_outcome") if isinstance(outcome, dict) else None
+        if actual is None:
+            continue
+        try:
+            actual = float(actual)
+        except (TypeError, ValueError):
+            continue
+
+        if actual >= (100 - _BINARY_MARGIN):
+            successes += 1
+        elif actual <= _BINARY_MARGIN:
+            failures += 1
+        # Outcomes in the ambiguous middle band are excluded.
+
+    total = successes + failures
+    if total < _MIN_SAMPLES:
+        return None
+
+    alpha = 1 + successes
+    beta = 1 + failures
+    posterior_mean = alpha / (alpha + beta) * 100
+    return round(posterior_mean, 2)
+
+
+def get_effective_prior(question: str) -> tuple[float, str]:
+    """Return ``(prior_value, source)`` for *question*.
+
+    *source* is ``"learned"`` when a Bayesian posterior is available (≥ 3
+    resolved binary events in the category), otherwise ``"static"`` (the
+    hand-tuned :class:`BaseRate` prior).  Fail-closed: any error in the
+    Bayesian path falls back to static.
+    """
+    base_rate = classify_market(question)
+    try:
+        learned = compute_bayesian_prior(base_rate.category)
+        if learned is not None:
+            return (learned, "learned")
+    except Exception:
+        logger.debug(
+            "get_effective_prior: Bayesian computation failed for %s",
+            base_rate.category,
+            exc_info=True,
+        )
+    return (base_rate.prior, "static")
+
+
 def anchor_probability(
     llm_probability: float,
     base_rate: BaseRate,
     confidence: float,
+    effective_prior: float | None = None,
 ) -> float:
     """
     将 LLM 概率向基准利率锚定。
     confidence 高 → 更信任 LLM；confidence 低 → 回归基准。
+
+    When *effective_prior* is provided it replaces ``base_rate.prior`` as the
+    anchor target, allowing callers to inject a learned Bayesian prior.
+    Backward-compatible: omitting the parameter preserves the original static
+    prior behaviour.
     """
     confidence = max(0.0, min(1.0, confidence))
     alpha = confidence ** 1.5  # 低置信时快速衰减
-    prior = base_rate.prior
+    prior = effective_prior if effective_prior is not None else base_rate.prior
     anchored = llm_probability * alpha + prior * (1.0 - alpha)
     # 软限制到历史合理范围
     anchored = max(base_rate.low - 5.0, min(base_rate.high + 5.0, anchored))
@@ -233,11 +333,19 @@ def anchor_probability(
 
 
 def get_base_rate_context(question: str) -> dict:
-    """返回基准利率上下文，供 ProbabilityAgent prompt 使用。"""
+    """返回基准利率上下文，供 ProbabilityAgent prompt 使用。
+
+    The returned dict includes ``effective_prior`` (the best available prior,
+    learned or static) and ``prior_source`` (``"learned"`` or ``"static"``)
+    alongside the original static fields for backward compatibility.
+    """
     br = classify_market(question)
+    effective_prior, prior_source = get_effective_prior(question)
     return {
         "category": br.category,
         "historical_range": f"{br.low}% – {br.high}%",
         "prior": br.prior,
+        "effective_prior": effective_prior,
+        "prior_source": prior_source,
         "note": br.note,
     }

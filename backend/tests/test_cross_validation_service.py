@@ -84,8 +84,13 @@ class CrossValidateTests(unittest.TestCase):
     def test_error_returns_none(self):
         with patch.object(cv.settings, "CROSS_VALIDATION_MODEL", "m"), \
                 patch.object(cv, "_ask_second_model",
-                             new=AsyncMock(side_effect=RuntimeError("down"))):
+                             new=AsyncMock(side_effect=RuntimeError("down"))), \
+                self.assertLogs("app.services.cross_validation_service",
+                                level="WARNING") as logs:
             self.assertIsNone(_run(cv.cross_validate("Q?", "ctx", 60.0)))
+        text = "\n".join(logs.output)
+        self.assertIn("source=cross_validation", text)
+        self.assertIn("policy=fail_closed_none", text)
 
     def test_credibility_delta_mapping(self):
         self.assertEqual(cv.credibility_delta("high"), 5)

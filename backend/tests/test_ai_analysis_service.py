@@ -88,7 +88,7 @@ class ProbabilityMathTests(unittest.TestCase):
                 volume=200000,
                 liquidity=60000,
             ),
-            73,
+            54,
         )
 
     def test_calculate_confidence_score(self):
@@ -118,7 +118,7 @@ class ProbabilityMathTests(unittest.TestCase):
                 priced_in_risk_score=30,
                 semantics_profile=SEMANTICS,
             ),
-            70.53,
+            70.86,
         )
 
     def test_build_deterministic_fallback_analysis(self):
@@ -132,6 +132,7 @@ class ProbabilityMathTests(unittest.TestCase):
             ),
             {
                 "ai_probability": 51.79,
+                "reasoning_steps": [],
                 "title_zh": "",
                 "narrative_type": "evidence_fallback",
                 "narrative_summary": "基于结构化新闻证据的确定性回退分析。",
@@ -162,6 +163,7 @@ class ProbabilityMathTests(unittest.TestCase):
             ),
             {
                 "ai_probability": 80.0,
+                "reasoning_steps": [],
                 "title_zh": "",
                 "narrative_type": "Factual",
                 "narrative_summary": "A summary.",
@@ -304,7 +306,10 @@ class AnalyzeMarketContractTests(unittest.TestCase):
 
     def test_analyze_market_fallback_contract(self):
         async def run():
-            with patch.object(ai, "_ask_ai", new=AsyncMock(side_effect=RuntimeError("no llm"))):
+            with (
+                patch.object(ai, "_ask_ai", new=AsyncMock(side_effect=RuntimeError("no llm"))),
+                patch.object(ai, "translate_title", new=AsyncMock(return_value="")),
+            ):
                 return await ai.analyze_market(
                     market_question="Will the agency approve the policy before the deadline?",
                     market_probability=50,
@@ -319,14 +324,14 @@ class AnalyzeMarketContractTests(unittest.TestCase):
             {
                 "market_question": "Will the agency approve the policy before the deadline?",
                 "market_probability": 50.0,
-                "ai_probability": 50.49,
-                "true_probability": 50.49,
-                "final_probability": 50.49,
-                "divergence": 0.49,
+                "ai_probability": 50.74,
+                "true_probability": 50.74,
+                "final_probability": 50.74,
+                "divergence": 0.74,
                 "signal_strength": "LOW",
                 "signal_direction": "NEUTRAL",
-                "overreaction_score": 0.49,
-                "confidence_score": 0.562,
+                "overreaction_score": 0.74,
+                "confidence_score": 0.584,
                 "narrative_type": "evidence_fallback",
                 "title_zh": "",
                 "narrative_summary": "基于结构化新闻证据的确定性回退分析。",
@@ -344,21 +349,25 @@ class AnalyzeMarketContractTests(unittest.TestCase):
                 "evidence_conflict_score": 0.2,
                 "freshness_score": 0.8,
                 "resolution_relevance_score": 0.5,
-                "priced_in_risk_score": 48,
+                "priced_in_risk_score": 29,
                 "market_ambiguity_score": 30,
                 "condition_type": "threshold",
                 "base_rate_category": "unknown",
                 "base_rate_prior": 50,
                 "base_rate_range": [20, 80],
-                "evidence_constrained_probability": 51.16,
-                "base_rate_probability": 50.49,
-                "expected_edge": 0.0049,
+                "evidence_constrained_probability": 51.66,
+                "base_rate_probability": 50.74,
+                "expected_edge": 0.0074,
                 "risk_level": "LOW",
                 "volume": 200000,
                 "liquidity": 60000,
                 "resolution_criteria": "",
                 "time_horizon": "",
                 "entities": [],
+                "reasoning_steps": [],
+                "analysis_quality": "deterministic_fallback",
+                # Phase 5: llm_usage is None when the LLM call failed (fallback)
+                "llm_usage": None,
             },
         )
 

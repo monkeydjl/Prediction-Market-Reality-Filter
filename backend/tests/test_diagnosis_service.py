@@ -76,14 +76,49 @@ class DecideTests(unittest.TestCase):
         )
 
     def test_dormant_segment_caps_at_watch(self):
-        # Huge edge, but the segment is not qualified -> never "act".
+        # Huge edge, but the segment is not qualified -> never "act". With the
+        # cold-start bypass disabled, a dormant segment still caps at "watch".
         self.assertEqual(
-            diag.decide(50.0, qualified=False, act_edge=10.0, watch_edge=3.0), "watch"
+            diag.decide(
+                50.0, qualified=False, act_edge=10.0, watch_edge=3.0,
+                cold_start_bypass_enabled=False,
+            ),
+            "watch",
         )
 
     def test_negative_edge_uses_magnitude(self):
         self.assertEqual(
             diag.decide(-12.0, qualified=True, act_edge=10.0, watch_edge=3.0), "act"
+        )
+
+    def test_dormant_large_edge_returns_provisional_act_when_bypass_enabled(self):
+        # Cold-start bypass: dormant segment + edge >= act_edge -> provisional_act
+        self.assertEqual(
+            diag.decide(
+                12.0, qualified=False, act_edge=10.0, watch_edge=3.0,
+                cold_start_bypass_enabled=True,
+            ),
+            "provisional_act",
+        )
+
+    def test_dormant_large_edge_returns_watch_when_bypass_disabled(self):
+        # Bypass off -> old behavior (dormant caps at watch)
+        self.assertEqual(
+            diag.decide(
+                12.0, qualified=False, act_edge=10.0, watch_edge=3.0,
+                cold_start_bypass_enabled=False,
+            ),
+            "watch",
+        )
+
+    def test_qualified_large_edge_still_acts_with_bypass_enabled(self):
+        # Bypass does not affect qualified segments
+        self.assertEqual(
+            diag.decide(
+                12.0, qualified=True, act_edge=10.0, watch_edge=3.0,
+                cold_start_bypass_enabled=True,
+            ),
+            "act",
         )
 
 
@@ -95,16 +130,26 @@ class DiagnoseTests(unittest.TestCase):
             CALIBRATION_FEEDBACK_MIN_SAMPLES=8,
             DIAGNOSIS_DORMANT_TRUST=0.5,
             DIAGNOSIS_LIQUIDITY_FLOOR=5000.0,
+            DIAGNOSIS_TRUST_FLOOR=0.1,
             DECISION_ACT_EDGE=10.0,
             DECISION_WATCH_EDGE=3.0,
         )
 
-    def test_dormant_segment_damps_and_caps_watch(self):
+    def test_dormant_segment_returns_provisional_act_with_bypass(self):
+        # With bypass enabled (default), dormant + large edge -> provisional_act
         with self._settings():
             out = diag.diagnose(40.0, {"n": 0, "mean_brier": None}, liquidity=20000.0)
-        # trust 0.5, liq 1.0 -> adjusted 20.0, but dormant -> capped at watch
+        # trust 0.5, liq 1.0 -> adjusted 20.0, dormant -> provisional_act (bypass on)
         self.assertEqual(out["trust"], 0.5)
         self.assertEqual(out["adjusted_edge"], 20.0)
+        self.assertEqual(out["decision"], "provisional_act")
+        self.assertEqual(out["segment_n"], 0)
+        self.assertEqual(out["segment_min_samples"], 8)
+
+    def test_dormant_segment_caps_at_watch_when_bypass_disabled(self):
+        # With bypass disabled, dormant + large edge -> watch (legacy behavior)
+        with self._settings(), patch.object(diag.settings, "COLD_START_BYPASS_ENABLED", False):
+            out = diag.diagnose(40.0, {"n": 0, "mean_brier": None}, liquidity=20000.0)
         self.assertEqual(out["decision"], "watch")
 
     def test_qualified_strong_segment_acts(self):
@@ -115,11 +160,27 @@ class DiagnoseTests(unittest.TestCase):
         self.assertAlmostEqual(out["adjusted_edge"], 33.6)
         self.assertEqual(out["decision"], "act")
 
-    def test_random_segment_collapses_edge(self):
+    def test_random_segment_floored_not_collapsed(self):
+        # A worse-than-or-equal-to-random segment (mean_brier 0.25 -> skill 0)
+        # is NOT clamped to trust 0 (which would be an absorbing state: always
+        # skip -> excluded from segment_skill -> Brier never improves). It is
+        # floored at DIAGNOSIS_TRUST_FLOOR so it still penalizes hard but a large
+        # enough edge can keep the segment sampling.
         with self._settings():
             out = diag.diagnose(40.0, {"n": 10, "mean_brier": 0.25}, liquidity=20000.0)
-        self.assertEqual(out["trust"], 0.0)
-        self.assertEqual(out["adjusted_edge"], 0.0)
+        # trust floored 0.1, liq 1.0 -> adjusted 4.0 -> watch (>=3, below act 10)
+        self.assertEqual(out["trust"], 0.1)
+        self.assertAlmostEqual(out["adjusted_edge"], 4.0)
+        self.assertEqual(out["decision"], "watch")
+
+    def test_floored_segment_small_edge_still_skips(self):
+        # The floor is small enough that an ordinary edge in a poor segment still
+        # skips - the penalty is severe, only a large divergence survives it.
+        with self._settings():
+            out = diag.diagnose(20.0, {"n": 10, "mean_brier": 0.30}, liquidity=20000.0)
+        # skill negative -> floored 0.1; 20 * 0.1 * 1.0 = 2.0 -> below watch 3
+        self.assertEqual(out["trust"], 0.1)
+        self.assertAlmostEqual(out["adjusted_edge"], 2.0)
         self.assertEqual(out["decision"], "skip")
 
     def test_low_liquidity_shrinks_edge(self):

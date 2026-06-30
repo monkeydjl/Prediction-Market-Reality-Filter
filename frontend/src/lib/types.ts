@@ -40,6 +40,9 @@ export interface EventSource {
   volume?: number;
   liquidity?: number;
   url?: string;
+  category?: string;
+  tournament?: string;
+  entities?: string[];
 }
 
 export interface Semantics {
@@ -74,6 +77,15 @@ export interface CrossValidation {
   divergence?: number;
 }
 
+export interface EvidenceAggregate {
+  direction?: string;
+  strength?: number;
+  conflict?: number;
+  freshness?: number;
+  resolution_relevance?: number;
+  source_count?: number;
+}
+
 // One collected piece of source evidence (news article / official release).
 // kind groups it in the detail UI: "official" vs "news".
 export interface EvidenceItem {
@@ -103,7 +115,7 @@ export interface EventRecord {
   probability?: Probability;
   credibility?: Credibility;
   impact?: Impact;
-  evidence?: { direction?: string };
+  evidence?: EvidenceAggregate;
   evidence_items?: EvidenceItem[];
   tracking?: Tracking | null;
   source?: EventSource;
@@ -144,6 +156,7 @@ export interface Mover {
 
 export interface HistorySnapshot {
   timestamp?: string;
+  baseline?: number;
   estimated?: number;
   change?: number;
   direction?: string;

@@ -586,6 +586,37 @@ class Settings:
     MARKET_QUALITY_SCORE_THRESHOLD: float = float(
         os.getenv("MARKET_QUALITY_SCORE_THRESHOLD", "0.5")
     )
+    # ── Execution Quality (Plan 3 §3.5) ────────────────────────────────
+    # Defaults to OFF — byte-identical to pre-Plan-3 when off (no
+    # execution_quality key attached, no guardrail rule 4 firing).
+    EXECUTION_QUALITY_ENABLED: bool = os.getenv(
+        "EXECUTION_QUALITY_ENABLED", "false"
+    ).lower() in ("1", "true", "yes")
+    # Max acceptable bid-ask spread as percentage of mid price (0-100).
+    # Reuses MARKET_MAX_SPREAD_PCT by default but can be overridden.
+    EXECUTION_MAX_SPREAD_PCT: float = float(
+        os.getenv("EXECUTION_MAX_SPREAD_PCT", "12")
+    )
+    # Price considered stale if last_updated is older than this (seconds).
+    EXECUTION_STALE_PRICE_SECONDS: int = int(
+        os.getenv("EXECUTION_STALE_PRICE_SECONDS", "300")
+    )
+    # Minimum liquidity for execution feasibility.
+    EXECUTION_MIN_LIQUIDITY: float = float(
+        os.getenv("EXECUTION_MIN_LIQUIDITY", "1000")
+    )
+    # Target order size (shares) for slippage estimation.
+    EXECUTION_TARGET_ORDER_SIZE: float = float(
+        os.getenv("EXECUTION_TARGET_ORDER_SIZE", "100")
+    )
+    # Platform fee rate as percentage of notional (0-100).
+    EXECUTION_FEE_RATE_PCT: float = float(
+        os.getenv("EXECUTION_FEE_RATE_PCT", "1.0")
+    )
+    # Guardrail rule 4: when True, executable=False forces YES/NO → WAIT.
+    GUARDRAIL_MARKET_NOT_EXECUTABLE_BLOCKS_ACT: bool = os.getenv(
+        "GUARDRAIL_MARKET_NOT_EXECUTABLE_BLOCKS_ACT", "true"
+    ).lower() in ("1", "true", "yes")
     # Phase 3 — Prediction Outcome Calibration (default OFF). When enabled,
     # freeze_prediction captures a richer snapshot (question, recommendation,
     # confidence, evidence_strength, conflict_score, market_quality_score,

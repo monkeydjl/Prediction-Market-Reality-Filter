@@ -1,7 +1,34 @@
 from dotenv import load_dotenv
 import os
 
-load_dotenv()
+
+def _resolve_env_file() -> str:
+    """Return the env file path for the current PMRF_ENV.
+
+    ``development`` (default) -> ``.env``
+    ``staging`` -> ``.env.staging``
+    ``production`` -> ``.env.production``
+
+    The environment-specific file overrides the base ``.env`` (loaded first
+    without override, then the env file with override=True).
+    """
+    pmrf_env = os.getenv("PMRF_ENV", "development").strip().lower()
+    if pmrf_env == "staging":
+        return ".env.staging"
+    if pmrf_env == "production":
+        return ".env.production"
+    return ".env"
+
+
+def _load_env_files() -> None:
+    """Load base .env then environment-specific file (override=True)."""
+    load_dotenv()  # base .env, no override
+    env_file = _resolve_env_file()
+    if env_file != ".env":
+        load_dotenv(env_file, override=True)
+
+
+_load_env_files()
 
 
 def _env_bool(name: str, default: str = "") -> bool:

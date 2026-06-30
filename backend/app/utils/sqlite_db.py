@@ -147,6 +147,42 @@ def schema_versions(path: str | None = None) -> dict[str, int]:
     return {str(row["component"]): int(row["version"]) for row in rows}
 
 
+def apply_migrations(
+    conn: sqlite3.Connection,
+    component: str,
+    target_version: int,
+    migrations: dict[str, str],
+) -> None:
+    """Apply column-level migrations for one SQLite store component.
+
+    Idempotent: skips columns already present in the table (cheap
+    ``PRAGMA table_info`` check, no ALTER attempted). Records the
+    ``target_version`` via ``record_schema_version`` so future runs can
+    detect the on-disk version.
+
+    ``migrations`` maps ``column_name -> column_declaration`` (e.g.
+    ``{"notes": "TEXT DEFAULT ''"}``). The table must already exist
+    (callers create it via ``CREATE TABLE IF NOT EXISTS`` first).
+    """
+    table = _component_table_name(component)
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    for column, decl in migrations.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    record_schema_version(conn, component, target_version)
+
+
+def _component_table_name(component: str) -> str:
+    """Map a component name to its table name.
+
+    Most components use the pluralized form (e.g. 'predictions' -> 'predictions').
+    The four V2 loop stores follow this convention, so we use the component
+    name directly. Prediction_store has its own _migrate() and does not
+    use this helper (it has a special UNIQUE-rebuild path).
+    """
+    return component
+
+
 @contextmanager
 def reading(path: str) -> Iterator[sqlite3.Connection]:
     """Read-only connection scope. No write lock; WAL allows concurrent reads."""

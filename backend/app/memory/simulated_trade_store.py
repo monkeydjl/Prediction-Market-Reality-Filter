@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from app.utils import sqlite_db
 from app.utils.sqlite_db import loop_db_path
 
 logger = logging.getLogger(__name__)
@@ -55,9 +56,16 @@ CREATE INDEX IF NOT EXISTS idx_sim_trades_status  ON simulated_trades(status);
 CREATE INDEX IF NOT EXISTS idx_sim_trades_wins    ON simulated_trades(is_win) WHERE is_win IS NOT NULL;
 """
 
+_SCHEMA_VERSION = 1
+_MIGRATIONS: dict[str, str] = {}
+
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
+    # apply_migrations reads PRAGMA table_info rows by column name; raw
+    # sqlite3.connect() defaults to tuple rows, so switch to Row.
+    conn.row_factory = sqlite3.Row
+    sqlite_db.apply_migrations(conn, "simulated_trades", _SCHEMA_VERSION, _MIGRATIONS)
 
 
 # ── CRUD ────────────────────────────────────────────────────────────

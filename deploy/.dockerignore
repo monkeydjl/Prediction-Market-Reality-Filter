@@ -1,0 +1,39 @@
+# Exclude heavy/local-only artifacts from the Docker build context to
+# keep builds fast and avoid leaking secrets / node_modules into images.
+
+# Git
+.git
+.gitignore
+
+# Python local
+backend/__pycache__
+backend/**/__pycache__
+backend/.pytest_cache
+backend/.mypy_cache
+backend/venv
+backend/.venv
+
+# Node local
+frontend/node_modules
+frontend/.next
+frontend/.git
+
+# Data / logs (never bake into image)
+backend/data
+backend/logs
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/event_store.json
+**/predictions.db
+**/loop_store.db
+
+# Env files with secrets (examples are OK to keep for documentation)
+backend/.env
+backend/.env.staging
+backend/.env.production
+**/.env.local
+
+# SDD / review artifacts
+sdd-reviews
+.git/sdd

@@ -195,5 +195,72 @@ class TestLlmDegradedTriggersSimulate(unittest.TestCase):
         self.assertEqual(cases[0]["direction_b"], "WAIT")
 
 
+class TestGuardrailMarginalAttribution(unittest.TestCase):
+    """P2 regression: guardrails phase must attribute contribution using
+    all_on minus guardrails as base (not all_off). The all_off baseline
+    leaves final_displayed_direction=None, so the guardrail no-ops
+    (guardrail_service returns early on None final_direction) and the
+    phase reports 0 downgrades_caused even when it truly fires under
+    all_on. Fix: base = all_on_minus_guardrails, phase = all_on."""
+
+    def test_guardrail_marginal_records_downgrade_when_fired(self):
+        """When the guardrail fires under all_on (degrades YES->WAIT),
+        the guardrails phase should record downgrades_caused=1. Under
+        the old all_off+guardrails_on baseline, this was always 0
+        because the guardrail had no direction to act on.
+
+        Uses Rule 2 (uncalibrated_category_blocks_act) which fires
+        fail-closed when calibration segments are empty (the test-env
+        default). Rule 1 (llm_degraded) would require simulate_llm_degraded
+        which _run_marginal_loop does not call."""
+        from unittest.mock import patch
+        from app.core.config import settings
+        from scripts.replay_decision_pipeline import _run_marginal_loop
+        from app.replay.metrics import ReplayMetrics
+
+        record = _synthetic_record("guard-marginal-1")
+        # Flags: decision_quality produces a strong YES direction for the
+        # guardrail to gate; Rule 2 fires fail-closed on empty calibration.
+        flags = {
+            "DECISION_QUALITY_ENABLED": True,
+            "GUARDRAILS_ENABLED": True,
+            "GUARDRAIL_LLM_DEGRADED_BLOCKS_ACT": False,  # not triggered (no simulate)
+            "GUARDRAIL_UNCALIBRATED_CATEGORY_BLOCKS_ACT": True,  # fires fail-closed
+            "GUARDRAIL_HIGH_CONFLICT_BLOCKS_ACT": False,
+        }
+        with patch.multiple(settings, **flags):
+            m = ReplayMetrics()
+            _run_marginal_loop([record], m)
+        d = m.to_dict()
+        # Guardrail should have downgraded YES -> WAIT under all_on.
+        guard = d["phase_contributions"].get("guardrails", {})
+        self.assertGreaterEqual(
+            guard.get("downgrades_caused", 0), 1,
+            "guardrail marginal must attribute downgrades when it fires",
+        )
+
+    def test_guardrail_marginal_not_zero_when_other_phases_active(self):
+        """Sanity: guardrails phase appears in phase_contributions (not
+        silently dropped) and has a non-None entry."""
+        from unittest.mock import patch
+        from app.core.config import settings
+        from scripts.replay_decision_pipeline import _run_marginal_loop
+        from app.replay.metrics import ReplayMetrics
+
+        record = _synthetic_record("guard-marginal-2")
+        flags = {
+            "DECISION_QUALITY_ENABLED": True,
+            "GUARDRAILS_ENABLED": True,
+            "GUARDRAIL_UNCALIBRATED_CATEGORY_BLOCKS_ACT": True,
+            "GUARDRAIL_LLM_DEGRADED_BLOCKS_ACT": False,
+            "GUARDRAIL_HIGH_CONFLICT_BLOCKS_ACT": False,
+        }
+        with patch.multiple(settings, **flags):
+            m = ReplayMetrics()
+            _run_marginal_loop([record], m)
+        d = m.to_dict()
+        self.assertIn("guardrails", d["phase_contributions"])
+
+
 if __name__ == "__main__":
     unittest.main()

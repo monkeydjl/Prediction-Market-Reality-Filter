@@ -70,8 +70,13 @@ class ReplayMetrics:
 
         Brier note: ``brier_score`` is frozen at freeze time; replay does
         not recompute ``ai_probability``, so original and replayed share the
-        same Brier. The improvement signal is ``direction_correct_delta``
-        (re-derived from each side's direction vs the settled outcome).
+        same Brier. The improvement signal is ``direction_correct_delta``,
+        which re-derives correctness for BOTH sides from the current replay
+        direction vs ``actual_outcome`` (NOT the frozen ``direction_correct``
+        field, which reflects the freeze-time snapshot direction and would
+        pair incorrectly with the A/B replay's left-side direction).
+        WAIT/AVOID abstentions are excluded from delta; their signal flows
+        through ``direction_matrix`` (e.g. YES->WAIT counts).
         """
         orig_dir = _effective_direction(original)
         replay_dir = _effective_direction(replayed)
@@ -80,24 +85,34 @@ class ReplayMetrics:
             key = (orig_dir, replay_dir)
             self.direction_matrix[key] = self.direction_matrix.get(key, 0) + 1
 
-        # Brier + direction_correct on resolved samples. The record carries
-        # brier_score + direction_correct after score_prediction ran; the
-        # replayed record may have a different direction but the same
-        # actual_outcome, so we re-derive direction_correct for the replay.
+        # Brier on resolved samples. brier_score is frozen at freeze time
+        # (overlays don't recompute ai_probability), so original and replayed
+        # share the same value — we keep a single sum as a calibration
+        # reference, not an improvement signal.
         orig_brier = original.get("brier_score")
         actual = original.get("actual_outcome")
         if actual is not None and orig_brier is not None:
             self.resolved_count += 1
             self.brier_sum += orig_brier
 
-            orig_dc = original.get("direction_correct")
-            if orig_dc is not None:
+            # direction_correct: re-derive for BOTH sides from the current
+            # replay direction vs the settled outcome. The frozen
+            # ``direction_correct`` field on the record reflects the
+            # freeze-time snapshot direction, NOT the A/B replay's left-side
+            # config direction — using it directly caused asymmetry: e.g.
+            # orig_dir=YES (all_off fallback to actionable_recommendation)
+            # but orig_dc read the frozen WAIT snapshot's direction_correct,
+            # pairing a YES direction with a WAIT-derived correctness flag.
+            # Symmetric re-derivation fixes the mismatch. WAIT/AVOID return
+            # None (abstention) and are excluded from delta — direction_correct
+            # measures "explicit YES/NO prediction accuracy"; abstention
+            # signals flow through direction_matrix (YES->WAIT etc.).
+            orig_dc = _derive_direction_correct(orig_dir, actual)
+            replay_dc = _derive_direction_correct(replay_dir, actual)
+            if orig_dc is not None and replay_dc is not None:
                 self.direction_correct_resolved_count += 1
                 if orig_dc:
                     self.direction_correct_original += 1
-            # Re-derive direction_correct for the replayed direction.
-            replay_dc = _derive_direction_correct(replay_dir, actual)
-            if replay_dc is not None:
                 if replay_dc:
                     self.direction_correct_replayed += 1
 
@@ -158,11 +173,14 @@ class ReplayMetrics:
         """Returns replayed_correct_rate - original_correct_rate.
 
         Positive = overlays improved direction accuracy; negative = overlays
-        hurt. None when no resolved samples with direction_correct data.
+        hurt. None when no samples with both sides having explicit YES/NO
+        directions (WAIT/AVOID abstentions are excluded — their signal
+        flows through direction_matrix, e.g. YES->WAIT counts).
 
-        This is the real quality signal (vs the old ``brier_delta`` which was
-        always 0 because ``brier_score`` is frozen at freeze time and replay
-        does not recompute ``ai_probability``).
+        Both sides' correctness is re-derived from the current replay
+        direction vs ``actual_outcome`` (NOT the frozen ``direction_correct``
+        field, which reflects the freeze-time snapshot direction and would
+        pair incorrectly with the A/B replay's left-side direction).
         """
         if self.direction_correct_resolved_count == 0:
             return None

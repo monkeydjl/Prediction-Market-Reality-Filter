@@ -111,14 +111,31 @@ def _run_marginal_loop(records: list[dict[str, Any]], metrics: ReplayMetrics) ->
     contributes its raw ``actionable_recommendation.direction`` instead of
     None. Without this, every base_dir would be None and
     ``directions_changed`` / ``downgrades_caused`` would stay 0.
+
+    Guardrail exception: the guardrail runs *after* all overlays and only
+    acts when ``final_displayed_direction`` is a strong direction (YES/NO).
+    The standard ``all_off + only guardrails on`` baseline produces no
+    direction, so the guardrail no-ops (guardrail_service returns early on
+    ``final_direction is None``) and the phase reports 0 contribution even
+    when it truly fires under ``all_on``. To attribute guardrail
+    contribution, the base for that phase is ``all_on minus guardrails``
+    (other overlays produce a direction; guardrail off) and the phase dir
+    is ``all_on`` (guardrail on, may downgrade). This isolates the
+    guardrail's marginal effect on top of the other overlays.
     """
     from app.replay.metrics import _effective_direction
     # 1. Baseline: all_off (raw pre-overlay direction)
     base_results = {r["event_id"]: replay_record(r, ReplayConfig.preset_all_off()) for r in records}
     # 2. Final: all_on (use current settings)
     final_results = {r["event_id"]: replay_record(r, ReplayConfig.preset_all_on()) for r in records}
-    # 3. Per-phase: only P on
+    # 3. Per-phase: only P on (except guardrails — see below)
     for phase_name, field_name in _PHASE_FIELDS:
+        if phase_name == "guardrails":
+            # Guardrail needs a strong direction to act on. Use all_on minus
+            # guardrails as the base so other overlays produce a direction;
+            # compare against all_on (guardrail on) to isolate its effect.
+            _run_guardrail_marginal(records, metrics, final_results)
+            continue
         phase_cfg = ReplayConfig.preset_all_off()
         setattr(phase_cfg, field_name, True)
         for r in records:
@@ -131,6 +148,33 @@ def _run_marginal_loop(records: list[dict[str, Any]], metrics: ReplayMetrics) ->
                 phase_dir=_effective_direction(phase_replayed),
                 final_dir=_effective_direction(final_results[eid]),
             )
+
+
+def _run_guardrail_marginal(
+    records: list[dict[str, Any]],
+    metrics: ReplayMetrics,
+    final_results: dict[str, dict[str, Any]],
+) -> None:
+    """Attribute guardrail contribution: base = all_on minus guardrails,
+    phase = all_on (guardrail on). Isolates the guardrail's marginal
+    downgrade effect on top of the other overlays' produced direction."""
+    from app.replay.metrics import _effective_direction
+    # Base: all overlays on EXCEPT guardrails (so a direction exists for
+    # the guardrail to gate). Without this, all_off leaves
+    # final_displayed_direction=None and the guardrail no-ops.
+    base_cfg = ReplayConfig.preset_all_on()
+    base_cfg.guardrails_enabled = False
+    for r in records:
+        eid = r["event_id"]
+        base_replayed = replay_record(r, base_cfg)
+        metrics.add_phase_result(
+            event_id=eid,
+            phase="guardrails",
+            base_dir=_effective_direction(base_replayed),
+            # phase_dir = all_on (guardrail on) — same as final_results.
+            phase_dir=_effective_direction(final_results[eid]),
+            final_dir=_effective_direction(final_results[eid]),
+        )
 
 
 def run_replay(

@@ -94,6 +94,92 @@ class TestBrierAndDirectionCorrect(unittest.TestCase):
         self.assertEqual(d["direction_correct_resolved_count"], 1)
         self.assertAlmostEqual(d["direction_correct_delta"], -1.0)
 
+    def test_direction_correct_ignores_frozen_field_uses_replay_dir(self):
+        """P1 regression: orig_dc must be re-derived from orig_dir + actual,
+        NOT read from the frozen ``direction_correct`` field. The frozen
+        field reflects the freeze-time snapshot direction and would pair
+        incorrectly with the A/B replay's left-side direction. Here the
+        frozen field says 0 (incorrect) but orig_dir=YES + outcome=100
+        means the replayed YES is actually correct — the frozen value
+        must be ignored."""
+        from app.replay.metrics import ReplayMetrics
+        m = ReplayMetrics()
+        m.add_pair(
+            original={
+                "final_displayed_direction": "YES",
+                "brier_score": 0.25,
+                "actual_outcome": 100.0,
+                "direction_correct": 0,  # frozen field says WRONG — must be ignored
+            },
+            replayed={
+                "final_displayed_direction": "YES",
+                "brier_score": 0.25,
+                "actual_outcome": 100.0,
+            },
+        )
+        d = m.to_dict()
+        # orig_dc re-derived from YES+100=True, not from frozen field=0.
+        self.assertEqual(d["direction_correct_original"], 1)
+        self.assertEqual(d["direction_correct_replayed"], 1)
+        self.assertEqual(d["direction_correct_resolved_count"], 1)
+        # delta = 1/1 - 1/1 = 0.0 (both sides correct)
+        self.assertAlmostEqual(d["direction_correct_delta"], 0.0)
+
+    def test_abstention_excluded_from_direction_correct_delta(self):
+        """P1 regression: WAIT/AVOID abstentions return None from
+        _derive_direction_correct and are excluded from delta. Both sides
+        abstaining (WAIT->WAIT) must NOT produce delta=-1.0 (the old
+        bug read frozen direction_correct=1 and treated replay WAIT as 0).
+        direction_correct_delta should be None (no eligible samples)."""
+        from app.replay.metrics import ReplayMetrics
+        m = ReplayMetrics()
+        m.add_pair(
+            original={
+                "final_displayed_direction": "WAIT",
+                "brier_score": 0.25,
+                "actual_outcome": 100.0,
+                "direction_correct": 1,  # frozen — would have caused -1.0 under old code
+            },
+            replayed={
+                "final_displayed_direction": "WAIT",
+                "brier_score": 0.25,
+                "actual_outcome": 100.0,
+            },
+        )
+        d = m.to_dict()
+        # Both sides abstain -> no eligible samples for delta.
+        self.assertEqual(d["direction_correct_resolved_count"], 0)
+        self.assertIsNone(d["direction_correct_delta"])
+        # Brier still counted (frozen reference).
+        self.assertEqual(d["resolved_count"], 1)
+
+    def test_one_side_abstention_excluded_from_delta(self):
+        """P1 regression: when one side has YES/NO and the other abstains
+        (WAIT/AVOID), the pair is excluded from direction_correct_delta
+        (asymmetric — cannot compare a prediction to an abstention).
+        The YES->WAIT signal still flows through direction_matrix."""
+        from app.replay.metrics import ReplayMetrics
+        m = ReplayMetrics()
+        m.add_pair(
+            original={
+                "final_displayed_direction": "YES",
+                "brier_score": 0.25,
+                "actual_outcome": 100.0,
+                "direction_correct": 1,
+            },
+            replayed={
+                "final_displayed_direction": "WAIT",  # abstention
+                "brier_score": 0.25,
+                "actual_outcome": 100.0,
+            },
+        )
+        d = m.to_dict()
+        # One side abstains -> not eligible for delta.
+        self.assertEqual(d["direction_correct_resolved_count"], 0)
+        self.assertIsNone(d["direction_correct_delta"])
+        # But direction_matrix still records the YES->WAIT change.
+        self.assertEqual(d["direction_matrix"]["YES->WAIT"], 1)
+
     def test_llm_vs_fallback_split(self):
         from app.replay.metrics import ReplayMetrics
         m = ReplayMetrics()

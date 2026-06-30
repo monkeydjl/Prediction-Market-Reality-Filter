@@ -90,7 +90,10 @@ class TestTargetPathMapping(unittest.TestCase):
             mock_settings.EVENT_STORE_FILE = "/data/event_store.json"
             target_dir = Path("/tmp/restore-test")
             target = _target_path_for_arcname("event_store.json", target_dir)
-            self.assertEqual(target, Path("/tmp/restore-test/event_store.json"))
+            # _target_path_for_arcname returns the resolved path; compare by
+            # name and parent to be platform-agnostic (Windows adds a drive).
+            self.assertEqual(target.name, "event_store.json")
+            self.assertEqual(target.parent.name, "restore-test")
 
 
 class TestListBackupContents(unittest.TestCase):
@@ -327,7 +330,7 @@ class TestReportFormatting(unittest.TestCase):
             "warnings": [],
         }
         out = _format_report(result, verbose=False)
-        self.assertIn("Dry-run preview", out)
+        self.assertIn("[DRY-RUN]", out)
         self.assertIn("event_store.json", out)
         self.assertIn("new", out)
 

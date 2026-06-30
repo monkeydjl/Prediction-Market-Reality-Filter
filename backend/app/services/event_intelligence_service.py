@@ -34,6 +34,31 @@ _CANDIDATE_POOL_FACTOR = 3
 _STRENGTH_TO_CONFIDENCE = {"HIGH": "high", "MEDIUM": "medium", "LOW": "low"}
 
 
+# Short labels for Prometheus metrics — reason strings can be long Chinese
+# sentences; we map them to stable cardinality-bounded labels so the
+# ``reason`` label dimension stays small and meaningful.
+_REASON_LABEL_MAP = {
+    "证据冲突": "high_conflict",
+    "市场过薄": "thin_market",
+    "来源不足": "source_insufficient",
+    "wide_spread": "wide_spread",
+    "spread": "wide_spread",
+    "LLM 降级模式": "llm_degraded",
+    "未校准类别": "uncalibrated_category",
+    "证据冲突过高": "high_conflict",
+}
+
+
+def _short_reason(reason: str) -> str:
+    """Map a long Chinese downgrade_reason to a short stable label for
+    Prometheus. Falls back to 'other' when no known keyword matches —
+    keeps label cardinality bounded."""
+    for keyword, label in _REASON_LABEL_MAP.items():
+        if keyword in reason:
+            return label
+    return "other"
+
+
 def _build_actionable_recommendation(
     analysis: dict[str, Any],
     *,
@@ -299,7 +324,7 @@ async def analyze_event(
     try:
         if settings.DECISION_QUALITY_ENABLED:
             from app.services.decision_quality_service import build_decision_quality
-            record["decision_quality"] = build_decision_quality(
+            dq = build_decision_quality(
                 recommendation=record.get("actionable_recommendation"),
                 evidence_breakdown=record.get("evidence_breakdown", []),
                 enabled=True,
@@ -307,8 +332,17 @@ async def analyze_event(
                 high_threshold=settings.DECISION_QUALITY_HIGH_CONFLICT_THRESHOLD,
                 medium_threshold=settings.DECISION_QUALITY_MEDIUM_CONFLICT_THRESHOLD,
             )
+            record["decision_quality"] = dq
+            # P0-6 metrics: count decision_quality downgrades by reason.
+            if isinstance(dq, dict) and dq.get("downgraded"):
+                from app.utils.metrics import DECISION_QUALITY_DOWNGRADE, RULE_FIRE
+                reason = dq.get("downgrade_reason") or "unknown"
+                DECISION_QUALITY_DOWNGRADE.labels(reason=_short_reason(reason)).inc()
+                RULE_FIRE.labels(rule="decision_quality_downgrade").inc()
     except Exception as exc:
         logger.warning("decision_quality build failed: %s", exc)
+        from app.utils.metrics import record_overlay_build_failure
+        record_overlay_build_failure("decision_quality")
         fallback_direction = (record.get("actionable_recommendation") or {}).get("direction", "WAIT")
         record["decision_quality"] = {
             "error": "build_failed",
@@ -346,8 +380,14 @@ async def analyze_event(
             )
             if mq is not None:
                 record["market_quality"] = mq
+                # P0-6 metrics: count market_quality downgrades (rule fires).
+                if isinstance(mq, dict) and mq.get("downgraded"):
+                    from app.utils.metrics import RULE_FIRE
+                    RULE_FIRE.labels(rule="market_quality_downgrade").inc()
     except Exception as exc:
         logger.warning("market_quality build failed: %s", exc)
+        from app.utils.metrics import record_overlay_build_failure
+        record_overlay_build_failure("market_quality")
         # Fallback only for prediction_market sources (matches the gating
         # in ``build_market_quality``). Non-prediction-market sources stay
         # without the block, so the audit layer remains absent on failure
@@ -393,8 +433,14 @@ async def analyze_event(
             )
             if sr is not None:
                 record["source_reliability"] = sr
+                # P0-6 metrics: count source_reliability downgrades.
+                if isinstance(sr, dict) and sr.get("downgraded"):
+                    from app.utils.metrics import RULE_FIRE
+                    RULE_FIRE.labels(rule="source_reliability_downgrade").inc()
     except Exception as exc:
         logger.warning("source_reliability build failed: %s", exc)
+        from app.utils.metrics import record_overlay_build_failure
+        record_overlay_build_failure("source_reliability")
         # Fallback only when evidence_breakdown is non-empty (matches the
         # gating in ``build_source_reliability``). Events without evidence
         # stay without the block, so the audit layer remains absent rather
@@ -438,6 +484,8 @@ async def analyze_event(
                 record["source_reliability"]["applied_to_displayed_direction"] = True
     except Exception as exc:
         logger.warning("merge_quality_overlays failed: %s", exc)
+        from app.utils.metrics import record_overlay_build_failure
+        record_overlay_build_failure("merge")
 
     # Phase 5: LLM Telemetry overlay. Best-effort observability layer —
     # applies to ALL events (every event makes at least one LLM call or
@@ -457,6 +505,8 @@ async def analyze_event(
             )
     except Exception as exc:
         logger.warning("llm_telemetry build failed: %s", exc)
+        from app.utils.metrics import record_overlay_build_failure
+        record_overlay_build_failure("llm_telemetry")
         record["llm_telemetry"] = {
             "error": "build_failed",
             "degraded_mode": (analysis or {}).get("analysis_quality") == "deterministic_fallback",
@@ -512,6 +562,9 @@ async def analyze_event(
                 qualified_categories=qualified_cats,
             )
             if fired_rules:
+                # Capture pre-guardrail direction BEFORE overwriting so we
+                # can detect a strong->WAIT downgrade below.
+                pre_guardrail_dir = record.get("final_displayed_direction")
                 record["final_displayed_direction"] = fired_dir
                 record["final_downgrade_reason"] = fired_reason
                 # Record which guardrails fired (audit trail for operators /
@@ -519,6 +572,15 @@ async def analyze_event(
                 # absent key = no guardrail fired (matches the existing
                 # convention of "no key when feature off / no-op").
                 record["guardrail_fired"] = fired_rules
+                # P0-6 metrics: count each guardrail rule fire.
+                from app.utils.metrics import RULE_FIRE
+                for rule_name in fired_rules:
+                    RULE_FIRE.labels(rule=rule_name).inc()
+                # When the guardrail changes a strong direction (YES/NO) to
+                # WAIT, surface that as a final-direction-change counter.
+                if pre_guardrail_dir in ("YES", "NO") and fired_dir == "WAIT":
+                    from app.utils.metrics import FINAL_DIRECTION_CHANGE
+                    FINAL_DIRECTION_CHANGE.inc()
     except Exception as exc:
         logger.warning("guardrail evaluation failed: %s", exc)
     return record

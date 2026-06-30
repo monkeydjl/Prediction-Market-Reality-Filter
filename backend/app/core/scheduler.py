@@ -115,10 +115,18 @@ scheduler = AsyncIOScheduler(
     },
 )
 
+# In-memory run_id -> job_name mapping so _finish_run can attribute
+# Prometheus metrics to the correct job label without reverse lookup.
+# Lost on restart, but only needed for the lifetime of the process.
+_RUN_TO_JOB: dict[str, str] = {}
+
 
 def _start_run(job_name: str) -> str | None:
     try:
-        return loop_run_store.start_run(job_name)
+        run_id = loop_run_store.start_run(job_name)
+        if run_id is not None:
+            _RUN_TO_JOB[run_id] = job_name
+        return run_id
     except Exception:
         logger.exception("[Scheduler] Failed to start run ledger for %s", job_name)
         return None
@@ -153,6 +161,45 @@ def _finish_run(
             )
         except Exception:  # pragma: no cover - defensive
             logger.debug("[Scheduler] Sentry capture failed", exc_info=True)
+        # P0-6 metrics: count failed scheduler runs by job_name. The
+        # run_id was started with _start_run(job_name) so we look it up
+        # to attribute the failure. Best-effort: a missing job_name
+        # (e.g. run ledger write failed) is logged but not fatal.
+        try:
+            from app.utils.metrics import SCHEDULER_FAILED_RUNS
+            # The job_name isn't passed to _finish_run; recover it from
+            # the run ledger when possible. We try loop_run_store.last_run
+            # but a simpler approach is to track it via run_id → job_name
+            # map. For now, use a generic label since run_id is opaque.
+            # Phase 1: use a single "unknown" label; Phase 2 will add a
+            # _job_name_for_run(run_id) lookup if more granularity is needed.
+            job_name = _job_name_for_run(run_id) or "unknown"
+            SCHEDULER_FAILED_RUNS.labels(job_name=job_name).inc()
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("[Scheduler] metrics increment failed", exc_info=True)
+    elif status == "success":
+        # P0-6 metrics: update last-success gauge so SCHEDULER_LAST_SUCCESS
+        # reflects the most recent successful run per job.
+        try:
+            from datetime import datetime, timezone
+            from app.utils.metrics import SCHEDULER_LAST_SUCCESS
+            job_name = _job_name_for_run(run_id) or "unknown"
+            SCHEDULER_LAST_SUCCESS.labels(job_name=job_name).set(
+                datetime.now(timezone.utc).timestamp()
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("[Scheduler] last-success gauge update failed", exc_info=True)
+
+
+def _job_name_for_run(run_id: str | None) -> str | None:
+    """Recover the job_name for a given run_id from the in-memory mapping.
+
+    Returns None when the run_id is not in the mapping (e.g. the process
+    restarted and lost the in-memory state, or _start_run failed).
+    """
+    if run_id is None:
+        return None
+    return _RUN_TO_JOB.get(run_id)
 
 
 async def _job_event_auto_resolve():

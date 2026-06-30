@@ -123,6 +123,22 @@ def _build_block(
         total_tokens, news_context, price_per_1k
     )
 
+    # P0-6 metrics: forward real token usage + cost to Prometheus so
+    # /metrics exposes pmrf_llm_token_usage_total and
+    # pmrf_llm_token_cost_total. Best-effort: a metrics import failure
+    # (prometheus_client not installed) silently degrades to no-op.
+    if not degraded_mode:
+        try:
+            from app.utils.metrics import LLM_TOKEN_COST, LLM_TOKEN_USAGE
+            if isinstance(prompt_tokens, int) and prompt_tokens > 0:
+                LLM_TOKEN_USAGE.labels(model=model, kind="input").inc(prompt_tokens)
+            if isinstance(completion_tokens, int) and completion_tokens > 0:
+                LLM_TOKEN_USAGE.labels(model=model, kind="output").inc(completion_tokens)
+            if estimated_cost > 0:
+                LLM_TOKEN_COST.labels(model=model).inc(estimated_cost)
+        except Exception:  # pragma: no cover - defensive
+            pass
+
     return {
         "degraded_mode": degraded_mode,
         "degraded_reason": degraded_reason,

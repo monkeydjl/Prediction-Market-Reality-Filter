@@ -307,18 +307,25 @@ def audit_quality_consistency(
 
 
 def _format_human(conflicts: list[Conflict], *, verbose: bool) -> str:
-    """Render conflicts as human-readable text."""
+    """Render conflicts as human-readable text.
+
+    Uses ASCII tags ([OK]/[FAIL]/[INFO]/[WARN]) instead of emoji so the
+    output is portable across Windows GBK consoles, POSIX locales, and
+    piped-through-cron contexts. Unicode emoji trigger
+    ``UnicodeEncodeError`` on Windows GBK stdout (cp936) when the script
+    is run via ``python -m`` and stdout is not reconfigured to UTF-8.
+    """
     if not conflicts:
-        return "✅ No conflicts found. All overlay fields are consistent.\n"
+        return "[OK] No conflicts found. All overlay fields are consistent.\n"
 
     visible = conflicts if verbose else [c for c in conflicts if c.severity != INFO]
     if not visible:
         return (
-            f"ℹ️  {len(conflicts)} INFO-level conflicts hidden "
+            f"[INFO] {len(conflicts)} INFO-level conflicts hidden "
             f"(use --verbose to see them).\n"
         )
 
-    lines = [f"❌ Found {len(visible)} conflict(s):\n"]
+    lines = [f"[FAIL] Found {len(visible)} conflict(s):\n"]
     by_severity: dict[str, list[Conflict]] = {}
     for c in visible:
         by_severity.setdefault(c.severity, []).append(c)
@@ -326,12 +333,12 @@ def _format_human(conflicts: list[Conflict], *, verbose: bool) -> str:
     for sev in (ERROR, WARN, INFO):
         if sev not in by_severity:
             continue
-        lines.append(f"── {sev} ({len(by_severity[sev])}) ──────────────────")
+        lines.append(f"-- {sev} ({len(by_severity[sev])}) " + "-" * 30)
         for c in by_severity[sev]:
             lines.append(f"[{c.conflict_type}] {c.event_id}")
             lines.append(f"  {c.message}")
             for k, v in c.field_values.items():
-                lines.append(f"  • {k}: {v!r}")
+                lines.append(f"  - {k}: {v!r}")
             lines.append("")
 
     # Summary
@@ -342,6 +349,26 @@ def _format_human(conflicts: list[Conflict], *, verbose: bool) -> str:
         f"Total: {err_count} ERROR, {warn_count} WARN, {info_count} INFO"
     )
     return "\n".join(lines) + "\n"
+
+
+def _print(text: str) -> None:
+    """Print with UTF-8 encoding, tolerating Windows GBK consoles.
+
+    ``print()`` uses ``sys.stdout.encoding`` which defaults to cp936 (GBK)
+    on Windows zh-CN consoles. Writing emoji or non-GBK characters then
+    raises ``UnicodeEncodeError``. This helper reconfigures stdout to
+    UTF-8 on the first call (Python 3.7+ supports
+    ``sys.stdout.reconfigure``), so subsequent prints are safe.
+    """
+    enc = getattr(sys.stdout, "encoding", "") or ""
+    if enc.lower() not in ("utf-8", "utf8"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        except (AttributeError, ValueError):
+            # Older Python or already-closed stream: fall back to
+            # encoding-safe ASCII replacement.
+            text = text.encode("ascii", errors="replace").decode("ascii")
+    print(text)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -360,9 +387,11 @@ def main(argv: list[str] | None = None) -> int:
     conflicts = audit_quality_consistency(event_id_filter=args.event_id)
 
     if args.json:
-        print(json.dumps([c.to_dict() for c in conflicts], indent=2, ensure_ascii=False))
+        # JSON output is always UTF-8 (ensure_ascii=False) — the audit
+        # data contains Chinese rationale text that must round-trip.
+        _print(json.dumps([c.to_dict() for c in conflicts], indent=2, ensure_ascii=False))
     else:
-        print(_format_human(conflicts, verbose=args.verbose))
+        _print(_format_human(conflicts, verbose=args.verbose))
 
     err_count = sum(1 for c in conflicts if c.severity == ERROR)
     if err_count > 0:

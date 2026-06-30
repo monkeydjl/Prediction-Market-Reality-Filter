@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import shutil
 import sys
 import zipfile
@@ -78,24 +79,70 @@ def _target_path_for_arcname(arcname: str, target_dir: Path | None) -> Path:
     resolve back to the configured runtime path so the restore lands in
     the right place. When ``target_dir`` is provided (testing), all files
     go into that directory.
+
+    Path traversal guard: the final resolved path is validated to stay
+    inside the intended target directory (or the configured LOOP_DB
+    parent). A backup archive containing ``../etc/passwd`` or an
+    absolute path would otherwise let a malicious archive escape the
+    restore destination. We reject such arcnames with ``ValueError``.
     """
+    # Reject absolute paths and parent-traversal segments up front. The
+    # backup script only archives basenames, so any arcname containing a
+    # path separator, drive letter, or ``..`` is suspicious.
+    if os.path.isabs(arcname) or "\\" in arcname or "/" in arcname or ".." in arcname:
+        raise ValueError(
+            f"Refusing to restore entry with unsafe path: {arcname!r} "
+            f"(expected a bare basename, no separators or parent traversal)."
+        )
+
     if target_dir is not None:
-        return target_dir / arcname
+        resolved = (target_dir / arcname).resolve()
+        # Validate the resolved path stays inside target_dir.
+        try:
+            resolved.relative_to(target_dir.resolve())
+        except ValueError:
+            raise ValueError(
+                f"Refusing to restore entry outside target dir: "
+                f"{arcname!r} resolves to {resolved}, outside {target_dir}."
+            ) from None
+        return resolved
 
     # Map known basenames back to their configured setting paths.
     for setting_name in _RUNTIME_FILES:
         configured = Path(getattr(settings, setting_name))
         if configured.name == arcname:
-            return configured.resolve()
+            target = configured.resolve()
+            _validate_within_runtime_root(target, configured.parent.resolve())
+            return target
 
     # SQLite sidecars: LOOP_DB_FILE + "-wal" / "-shm".
     loop_db = Path(settings.LOOP_DB_FILE)
     for suffix in _LOOP_DB_SIDECARS:
         if arcname == loop_db.name + suffix:
-            return (loop_db.parent / arcname).resolve()
+            target = (loop_db.parent / arcname).resolve()
+            _validate_within_runtime_root(target, loop_db.parent.resolve())
+            return target
 
     # Unknown file — restore next to the LOOP_DB_FILE directory as a fallback.
-    return (loop_db.parent / arcname).resolve()
+    target = (loop_db.parent / arcname).resolve()
+    _validate_within_runtime_root(target, loop_db.parent.resolve())
+    return target
+
+
+def _validate_within_runtime_root(resolved: Path, root: Path) -> None:
+    """Guard: refuse to restore outside the runtime root directory.
+
+    Even though arcname is already validated to be a bare basename, this
+    defense-in-depth check ensures a symlink or other indirect path cannot
+    escape the configured runtime directory.
+    """
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        raise ValueError(
+            f"Refusing to restore entry outside runtime root: "
+            f"{resolved} is not inside {root}."
+        ) from None
 
 
 def _open_zip_for_read(archive: Path, encryption_key: str | None):
@@ -297,19 +344,25 @@ def restore_from_backup(
 
 
 def _format_report(result: dict[str, Any], *, verbose: bool) -> str:
-    """Render restore result as human-readable text."""
+    """Render restore result as human-readable text.
+
+    Uses ASCII tags ([OK]/[FAIL]/[DRY-RUN]/[WARN]) instead of emoji so
+    the output is portable across Windows GBK consoles (cp936) which
+    cannot encode the original emoji characters and raise
+    ``UnicodeEncodeError`` on stdout.
+    """
     lines: list[str] = []
     if result["applied"]:
-        lines.append(f"✅ Restored from {result['archive']}")
-        lines.append(f"   Pre-restore backup: {result['pre_restore_dir']}")
+        lines.append(f"[OK] Restored from {result['archive']}")
+        lines.append(f"    Pre-restore backup: {result['pre_restore_dir']}")
     else:
-        lines.append(f"📋 Dry-run preview for {result['archive']}")
-        lines.append("   (use --apply to actually restore)\n")
+        lines.append(f"[DRY-RUN] Preview for {result['archive']}")
+        lines.append("    (use --apply to actually restore)\n")
 
     if result["warnings"]:
-        lines.append("⚠️  Warnings:")
+        lines.append("[WARN] Warnings:")
         for w in result["warnings"]:
-            lines.append(f"   • {w}")
+            lines.append(f"    - {w}")
         lines.append("")
 
     entries = result["entries"]
@@ -318,13 +371,13 @@ def _format_report(result: dict[str, Any], *, verbose: bool) -> str:
         return "\n".join(lines) + "\n"
 
     lines.append(f"{'File':<30} {'Status':<14} {'Backup':>12} {'Current':>12}")
-    lines.append("─" * 72)
+    lines.append("-" * 72)
     for e in entries:
         status = "new" if not e["exists_currently"] else (
             "CHANGED" if e.get("would_change") else "unchanged"
         )
         cur_size = e.get("current_size")
-        cur_str = f"{cur_size:>12,}" if cur_size is not None else f"{'—':>12}"
+        cur_str = f"{cur_size:>12,}" if cur_size is not None else f"{'--':>12}"
         lines.append(
             f"{e['arcname']:<30} {status:<14} {e['size']:>12,} {cur_str}"
         )
@@ -334,6 +387,24 @@ def _format_report(result: dict[str, Any], *, verbose: bool) -> str:
                 lines.append(f"  current sha256: {e['current_sha256']}")
 
     return "\n".join(lines) + "\n"
+
+
+def _print(text: str, *, file=None) -> None:
+    """Print with UTF-8 reconfiguration for Windows GBK consoles.
+
+    Mirrors the same helper in audit_quality_consistency.py: stdout on
+    Windows zh-CN defaults to cp936 (GBK), which cannot encode the
+    em-dash or arrow characters used in the report. Reconfigure to UTF-8
+    on first call; fall back to ASCII replacement on older Python.
+    """
+    stream = file or sys.stdout
+    enc = getattr(stream, "encoding", "") or ""
+    if enc.lower() not in ("utf-8", "utf8"):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        except (AttributeError, ValueError):
+            text = text.encode("ascii", errors="replace").decode("ascii")
+    print(text, file=file)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -365,13 +436,13 @@ def main(argv: list[str] | None = None) -> int:
             verbose=args.verbose,
         )
     except FileNotFoundError as e:
-        print(f"❌ {e}", file=sys.stderr)
+        _print(f"[FAIL] {e}", file=sys.stderr)
         return 1
     except RuntimeError as e:
-        print(f"❌ {e}", file=sys.stderr)
+        _print(f"[FAIL] {e}", file=sys.stderr)
         return 1
 
-    print(_format_report(result, verbose=args.verbose))
+    _print(_format_report(result, verbose=args.verbose))
     return 0
 
 

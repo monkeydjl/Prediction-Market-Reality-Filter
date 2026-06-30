@@ -28,14 +28,47 @@ def _store_path() -> str:
 
 def _load_unlocked(path: str) -> dict[str, Any]:
     data = read_json(path, {})
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    # P0-2 §4: normalize every record on read so callers always see the
+    # current schema (overlay fields backfilled via setdefault). This is
+    # an in-memory upgrade only — the on-disk store keeps its original
+    # shape until the next save_events() write persists the upgrade.
+    # Best-effort: a malformed entry is left untouched (callers handle
+    # the missing-record case via .get("record") or {}).
+    for event_id, entry in data.items():
+        if not isinstance(entry, dict):
+            continue
+        record = entry.get("record")
+        if isinstance(record, dict):
+            try:
+                normalize_event_record(record)
+            except Exception:
+                # Defensive: normalize is setdefault-only and should not
+                # raise, but we never want a read path to fail.
+                pass
+    return data
 
 
 def _load_for_write(path: str) -> dict[str, Any]:
     """Strict load for read-modify-write paths: raises on corrupt/IO error so
-    the caller aborts instead of overwriting the durable store with empty data."""
+    the caller aborts instead of overwriting the durable store with empty data.
+
+    Also normalizes every record on read (same as _load_unlocked) so the
+    read-modify-write cycle persists the schema upgrade on the next write."""
     data = read_json_strict(path, {})
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    for event_id, entry in data.items():
+        if not isinstance(entry, dict):
+            continue
+        record = entry.get("record")
+        if isinstance(record, dict):
+            try:
+                normalize_event_record(record)
+            except Exception:
+                pass
+    return data
 
 
 def save_event(record: dict[str, Any]) -> dict[str, Any]:

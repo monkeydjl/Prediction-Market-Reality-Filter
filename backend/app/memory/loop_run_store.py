@@ -10,6 +10,7 @@ from app.utils.helpers import utc_now
 from app.utils.sqlite_db import reading, writing
 
 _SCHEMA_VERSION = 1
+_MIGRATIONS: dict[str, str] = {}
 
 
 def _ensure_schema(path: str) -> None:
@@ -36,6 +37,7 @@ def _ensure_schema(path: str) -> None:
             "CREATE INDEX IF NOT EXISTS idx_loop_runs_status "
             "ON loop_runs(status)"
         )
+        sqlite_db.apply_migrations(conn, "loop_runs", _SCHEMA_VERSION, _MIGRATIONS)
         sqlite_db.record_schema_version(conn, "loop_runs", _SCHEMA_VERSION)
 
 

@@ -46,6 +46,7 @@ CREATE INDEX IF NOT EXISTS idx_eml_contract ON event_market_links(contract_id);
 _INITIALIZED: set[str] = set()
 _INIT_GUARD = threading.Lock()
 _SCHEMA_VERSION = 1
+_MIGRATIONS: dict[str, str] = {}
 
 
 def _ensure_schema(path: str) -> None:
@@ -57,6 +58,9 @@ def _ensure_schema(path: str) -> None:
             return
         with writing(path) as conn:
             conn.executescript(_SCHEMA)
+            sqlite_db.apply_migrations(
+                conn, "event_market_links", _SCHEMA_VERSION, _MIGRATIONS
+            )
             sqlite_db.record_schema_version(
                 conn, "event_market_links", _SCHEMA_VERSION
             )

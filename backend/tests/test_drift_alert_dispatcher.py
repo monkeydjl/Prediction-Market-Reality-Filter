@@ -151,6 +151,60 @@ class TestDispatchDriftAlerts(unittest.TestCase):
                 codes = [a["code"] for a in alerts]
                 self.assertIn("scheduler_zero_resolved", codes)
 
+    def test_rule4_uses_job_name_filter_not_global_recent(self):
+        """Rule 4 queries loop_run_store with job_name='event_auto_resolve'.
+
+        Regression: previously the code took the global recent N+5 runs
+        and filtered client-side. If other jobs (event_discover,
+        maintenance, World Cup) filled the recent window, the auto-resolve
+        runs were never reached and the alert silently failed to fire.
+        Now the query is server-side filtered by job_name, so other jobs
+        cannot crowd out the auto-resolve history.
+        """
+        # Simulate the bug condition: threshold=3, other jobs dominate
+        # the global recent window, but 3 auto-resolve runs with
+        # resolved_count=0 exist and would be returned if job_name
+        # filter is used.
+        auto_resolve_runs = [
+            {"job_name": "event_auto_resolve", "status": "success",
+             "result": {"resolved_count": 0}},
+            {"job_name": "event_auto_resolve", "status": "success",
+             "result": {"resolved_count": 0}},
+            {"job_name": "event_auto_resolve", "status": "success",
+             "result": {"resolved_count": 0}},
+        ]
+        with patch("app.services.drift_alert_dispatcher.settings") as s:
+            s.DRIFT_ALERTS_ENABLED = True
+            s.DRIFT_SCHEDULER_ZERO_RESOLVED_RUNS = 3
+            with patch("app.memory.loop_run_store.recent_runs") as mock_recent:
+                # Configure the mock to honor the job_name argument:
+                # if job_name is set, return the auto-resolve runs;
+                # otherwise (the old buggy global query) return a mix
+                # dominated by other jobs.
+                def side_effect(limit=20, job_name=None):
+                    if job_name == "event_auto_resolve":
+                        return auto_resolve_runs
+                    # Old global-query path: other jobs dominate,
+                    # auto-resolve never reached.
+                    return [
+                        {"job_name": "event_discover", "status": "success"},
+                        {"job_name": "event_discover", "status": "success"},
+                        {"job_name": "event_discover", "status": "success"},
+                        {"job_name": "event_discover", "status": "success"},
+                        {"job_name": "event_discover", "status": "success"},
+                        {"job_name": "loop_db_maintenance", "status": "success"},
+                        {"job_name": "loop_db_maintenance", "status": "success"},
+                        {"job_name": "loop_db_maintenance", "status": "success"},
+                    ]
+                mock_recent.side_effect = side_effect
+                alerts = drift_alert_dispatcher.evaluate_scheduler_alerts()
+                codes = [a["code"] for a in alerts]
+                self.assertIn("scheduler_zero_resolved", codes)
+                # Verify the query actually used the job_name filter.
+                mock_recent.assert_called_with(
+                    limit=3, job_name="event_auto_resolve"
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

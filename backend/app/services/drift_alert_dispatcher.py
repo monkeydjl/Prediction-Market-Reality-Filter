@@ -98,12 +98,13 @@ def evaluate_scheduler_alerts() -> list[dict[str, Any]]:
     from app.memory import loop_run_store
 
     threshold = getattr(settings, "DRIFT_SCHEDULER_ZERO_RESOLVED_RUNS", 3)
-    runs = loop_run_store.recent_runs(limit=threshold + 5)
-    # Take the most recent N runs of the auto-resolve job.
-    resolve_runs = [
-        r for r in runs
-        if r.get("job_name") == "event_auto_resolve"
-    ][:threshold]
+    # Query server-side filtered by job_name so other jobs (event_discover,
+    # maintenance, World Cup) cannot crowd out the auto-resolve history.
+    # The previous global-query + client-side filter approach silently
+    # failed when other jobs filled the recent window.
+    resolve_runs = loop_run_store.recent_runs(
+        limit=threshold, job_name="event_auto_resolve"
+    )
     if len(resolve_runs) < threshold:
         return []
     if not all(r.get("status") == "success" for r in resolve_runs):

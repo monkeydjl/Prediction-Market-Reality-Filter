@@ -250,74 +250,25 @@ def build_event_record(
     }
 
 
-async def analyze_event(
-    event_question: str,
-    baseline_probability: float = 50.0,
-    news_context: str = "",
-    source: dict[str, Any] | None = None,
+def _build_all_overlays(
+    record: dict[str, Any],
+    *,
+    analysis: dict[str, Any],
+    sentiment_profile: dict[str, Any] | None,
+    news_context: str,
+    market_quote: dict[str, Any] | None,
+    filtered_articles: list[dict[str, Any]] | None = None,
     volume: float | None = None,
     liquidity: float | None = None,
-    sentiment_profile: dict[str, Any] | None = None,
-    market_quote: dict[str, Any] | None = None,
-    filtered_articles: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    from app.services.ai_analysis_service import analyze_market
-    from app.services.cross_validation_service import credibility_delta, cross_validate
+) -> None:
+    """Build all 5 overlays + merge + guardrail in-place on ``record``.
 
-    sports_context = _build_sports_analysis_context(event_question, source)
-    combined_context = _append_context(
-        news_context,
-        sports_context.get("context", ""),
-    )
-    # Fold the LLM sentiment summary into the prompt context as a dedicated
-    # signal alongside the structured evidence. Guard with `if sentiment_summary:`
-    # so a missing/empty summary (e.g. the neutral fallback) is a no-op and the
-    # integration stays additive, never blocking.
-    sentiment_summary = ""
-    if isinstance(sentiment_profile, dict):
-        sentiment_summary = str(sentiment_profile.get("summary") or "").strip()
-    analysis = await analyze_market(
-        market_question=event_question,
-        market_probability=baseline_probability,
-        news_context=combined_context,
-        volume=volume,
-        liquidity=liquidity,
-        sentiment_summary=sentiment_summary,
-    )
-    record = build_event_record(analysis, source=source)
-    cross = await cross_validate(
-        question=event_question,
-        news_context=combined_context,
-        primary_probability=record["probability"]["estimated"],
-        market_baseline=baseline_probability,
-    )
-    if cross is not None:
-        record["cross_validation"] = cross
-        credibility = record["credibility"]
-        adjusted = max(0, min(100, credibility["score"] + credibility_delta(cross["agreement"])))
-        credibility["score"] = adjusted
-        credibility["level"] = score_level(adjusted)
-    if sports_context.get("context"):
-        record["sports_context"] = {
-            "fact_count": sports_context.get("fact_count", 0),
-            "signals": sports_context.get("signals", {}),
-            "facts": sports_context.get("facts", []),
-        }
-    if sentiment_profile is not None:
-        record["sentiment_profile"] = sentiment_profile
-    if market_quote is not None:
-        record["market_quote"] = market_quote
-    _apply_calibration_feedback(record, analysis, cross)
-    from app.services.evidence_aggregation_service import aggregate_evidence_breakdown
-
-    if settings.EVIDENCE_BREAKDOWN_ENABLED and sentiment_profile and filtered_articles:
-        record["evidence_breakdown"] = aggregate_evidence_breakdown(
-            sentiment_profile.get("articles", []),
-            filtered_articles,
-        )
-    else:
-        record["evidence_breakdown"] = []
-
+    Shared between ``analyze_event`` (live) and ``replay_record`` (replay)
+    so the overlay build sequence has a single source of truth. Pure
+    pull-out from analyze_event; no behavior change. Best-effort: each
+    overlay is wrapped in try/except and emits an error block on failure
+    (matches live production behavior).
+    """
     # Phase 1: Decision Quality overlay. Best-effort audit layer — wrapped in
     # try/except so a build failure never blocks event production. When the
     # feature flag is off, the record has no `decision_quality` key
@@ -513,7 +464,7 @@ async def analyze_event(
             record["llm_telemetry"] = build_llm_telemetry(
                 analysis=analysis,
                 sentiment_profile=sentiment_profile,
-                news_context=combined_context,
+                news_context=news_context,
                 model=settings.OPENAI_MODEL,
                 enabled=True,
             )
@@ -601,6 +552,86 @@ async def analyze_event(
                     RULE_FIRE.labels(rule=rule_name).inc()
     except Exception as exc:
         logger.warning("guardrail evaluation failed: %s", exc)
+
+
+async def analyze_event(
+    event_question: str,
+    baseline_probability: float = 50.0,
+    news_context: str = "",
+    source: dict[str, Any] | None = None,
+    volume: float | None = None,
+    liquidity: float | None = None,
+    sentiment_profile: dict[str, Any] | None = None,
+    market_quote: dict[str, Any] | None = None,
+    filtered_articles: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    from app.services.ai_analysis_service import analyze_market
+    from app.services.cross_validation_service import credibility_delta, cross_validate
+
+    sports_context = _build_sports_analysis_context(event_question, source)
+    combined_context = _append_context(
+        news_context,
+        sports_context.get("context", ""),
+    )
+    # Fold the LLM sentiment summary into the prompt context as a dedicated
+    # signal alongside the structured evidence. Guard with `if sentiment_summary:`
+    # so a missing/empty summary (e.g. the neutral fallback) is a no-op and the
+    # integration stays additive, never blocking.
+    sentiment_summary = ""
+    if isinstance(sentiment_profile, dict):
+        sentiment_summary = str(sentiment_profile.get("summary") or "").strip()
+    analysis = await analyze_market(
+        market_question=event_question,
+        market_probability=baseline_probability,
+        news_context=combined_context,
+        volume=volume,
+        liquidity=liquidity,
+        sentiment_summary=sentiment_summary,
+    )
+    record = build_event_record(analysis, source=source)
+    cross = await cross_validate(
+        question=event_question,
+        news_context=combined_context,
+        primary_probability=record["probability"]["estimated"],
+        market_baseline=baseline_probability,
+    )
+    if cross is not None:
+        record["cross_validation"] = cross
+        credibility = record["credibility"]
+        adjusted = max(0, min(100, credibility["score"] + credibility_delta(cross["agreement"])))
+        credibility["score"] = adjusted
+        credibility["level"] = score_level(adjusted)
+    if sports_context.get("context"):
+        record["sports_context"] = {
+            "fact_count": sports_context.get("fact_count", 0),
+            "signals": sports_context.get("signals", {}),
+            "facts": sports_context.get("facts", []),
+        }
+    if sentiment_profile is not None:
+        record["sentiment_profile"] = sentiment_profile
+    if market_quote is not None:
+        record["market_quote"] = market_quote
+    _apply_calibration_feedback(record, analysis, cross)
+    from app.services.evidence_aggregation_service import aggregate_evidence_breakdown
+
+    if settings.EVIDENCE_BREAKDOWN_ENABLED and sentiment_profile and filtered_articles:
+        record["evidence_breakdown"] = aggregate_evidence_breakdown(
+            sentiment_profile.get("articles", []),
+            filtered_articles,
+        )
+    else:
+        record["evidence_breakdown"] = []
+
+    _build_all_overlays(
+        record,
+        analysis=analysis,
+        sentiment_profile=sentiment_profile,
+        news_context=combined_context,
+        market_quote=market_quote,
+        filtered_articles=filtered_articles,
+        volume=volume,
+        liquidity=liquidity,
+    )
     return record
 
 

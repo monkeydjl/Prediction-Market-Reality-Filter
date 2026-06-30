@@ -16,10 +16,9 @@ def _rec(
     direction: str = "YES",
     source_type: str = "prediction_market",
     # NOTE (test-side fix beyond plan): spread default corrected from 2.0
-    # to 4.0 to match bid=48, ask=52 (bid-ask=4). The plan's spread=2.0 was
-    # inconsistent with bid/ask, causing the slippage formula (spread/2)/100
-    # to yield 0.01 instead of the expected 0.02. With spread=4.0:
-    # half-spread=2.0 → slippage=0.02 (matches test assertion + comment).
+    # to 4.0 to match bid=48, ask=52 (bid-ask=4). With spread=4.0:
+    # half-spread=2.0, mid=50 → slippage_pct=(2/50)*100=4.0 (matches the
+    # corrected test assertion for relative-to-mid slippage).
     spread: float | None = 4.0,
     bid: float | None = 48.0,
     ask: float | None = 52.0,
@@ -102,8 +101,9 @@ class TestBuildExecutionQuality(unittest.TestCase):
         self.assertEqual(result["suggested_direction"], "YES")
         self.assertFalse(result["downgraded"])
         self.assertIsNone(result["downgrade_reason"])
-        # Slippage estimate is half-spread / 100 (2% half-spread → 0.02)
-        self.assertAlmostEqual(result["estimated_slippage_pct"], 0.02, places=4)
+        # Slippage = (half-spread / mid) * 100, as a true percentage.
+        # spread=4, mid=50 → (2/50)*100 = 4.0 (meaning 4%).
+        self.assertAlmostEqual(result["estimated_slippage_pct"], 4.0, places=4)
         # Effective entry = mid + slippage (for YES buyer)
         self.assertIsNotNone(result["effective_entry_price"])
         self.assertGreater(result["max_safe_position_size"], 0)
@@ -247,8 +247,15 @@ class TestBuildExecutionQuality(unittest.TestCase):
         self.assertEqual(result["suggested_direction"], "WAIT")
         self.assertFalse(result["downgraded"])
 
-    def test_missing_market_quote_still_returns_block(self):
-        """When market_quote is empty/missing, executable=False, slippage=None."""
+    def test_missing_market_quote_defaults_to_executable(self):
+        """When market_quote has no bid/ask (Polymarket/Kalshi last_price only),
+        the service cannot assess spread/slippage but MUST NOT block execution.
+        executable=True (default — unable to assess ≠ not executable),
+        slippage/entry_price None (unknown). Rule 4 does not fire on unknown.
+        Regression for post-merge bug: previously added "行情数据缺失" constraint
+        which forced executable=False → Rule 4 → WAIT on real Polymarket/Kalshi
+        sources that don't provide bid_ask.
+        """
         kwargs = _rec()
         kwargs["market_quote"] = {}
         result = build_execution_quality(
@@ -264,9 +271,38 @@ class TestBuildExecutionQuality(unittest.TestCase):
             fee_rate_pct=kwargs["fee_rate_pct"],
         )
         self.assertIsNotNone(result)
-        self.assertFalse(result["executable"])
+        # No bid/ask → cannot assess spread → no constraint → executable=True
+        # (default open: only explicit evidence blocks execution).
+        self.assertTrue(result["executable"])
         self.assertIsNone(result["estimated_slippage_pct"])
         self.assertIsNone(result["effective_entry_price"])
+        self.assertEqual(result["platform_constraint_reasons"], [])
+        self.assertFalse(result["downgraded"])
+
+    def test_kalshi_zero_bid_ask_placeholder_does_not_block(self):
+        """Kalshi returns {"bid":0,"ask":0,"spread":0} when only last_price is
+        available. mid=None (bid>0 check fails) → spread_pct=None. This MUST
+        NOT add "行情数据缺失" constraint or force executable=False. Regression
+        for post-merge bug.
+        """
+        kwargs = _rec()
+        kwargs["market_quote"] = {"bid": 0.0, "ask": 0.0, "spread": 0.0}
+        result = build_execution_quality(
+            recommendation=kwargs["recommendation"],
+            source=kwargs["source"],
+            market_quote=kwargs["market_quote"],
+            volume=kwargs["volume"],
+            liquidity=kwargs["liquidity"],
+            max_spread_pct=kwargs["max_spread_pct"],
+            stale_price_seconds=kwargs["stale_price_seconds"],
+            min_liquidity=kwargs["min_liquidity"],
+            target_order_size=kwargs["target_order_size"],
+            fee_rate_pct=kwargs["fee_rate_pct"],
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(result["executable"])
+        self.assertIsNone(result["estimated_slippage_pct"])
+        self.assertEqual(result["platform_constraint_reasons"], [])
 
     def test_block_shape_matches_spec(self):
         """Verify all spec-mandated keys are present."""

@@ -31,8 +31,12 @@ Field availability varies per adapter (see market-quality-field-audit.md):
   bid/ask are missing.
 - ``volume`` / ``liquidity``: Polymarket/Kalshi have real values.
 
-When a sub-field is missing, the corresponding output is ``None`` (unknown)
-and ``executable`` degrades to ``False`` (fail-safe: unknown = not executable).
+When a sub-field is missing, the corresponding output is ``None`` (unknown).
+``executable`` defaults to ``True`` and is set to ``False`` only by explicit
+evidence (wide spread, thin liquidity, stale price, high fee). Unknown
+microstructure data (e.g. Polymarket/Kalshi not exposing bid/ask) does NOT
+force ``executable=False`` — the market is still tradeable, we simply lack
+the data to model slippage. Rule 4 fires only on explicit evidence.
 """
 from __future__ import annotations
 
@@ -95,27 +99,29 @@ def build_execution_quality(
 
     if spread_pct is not None and spread_pct > max_spread_pct:
         constraints.append("价差过宽无法成交")
-    elif spread_pct is None:
-        # No spread/bid/ask data available — can't assess executability.
-        # Per spec: "When a sub-field is missing, the corresponding output
-        # is None (unknown) and executable degrades to False (fail-safe)."
-        # IMPLEMENTATION FIX beyond plan: the plan's original code omitted
-        # this branch, so empty market_quote → executable=True (wrong).
-        constraints.append("行情数据缺失")
+    # When spread_pct is None (no bid/ask data — e.g. Polymarket provides
+    # only last_price, Kalshi returns {bid:0,ask:0,spread:0} when only
+    # last_price_dollars is set), we do NOT add a constraint. Unable to
+    # assess spread ≠ not executable — the market is still tradeable, we
+    # simply lack the microstructure data to model slippage. Rule 4 fires
+    # only on explicit evidence (wide spread, thin liquidity, stale price,
+    # high fee), not on unknown state. This prevents forcing WAIT on real
+    # Polymarket/Kalshi sources that don't expose bid/ask.
 
     # ── Sub-signal 2: slippage estimate ────────────────────────────────
-    # Slippage = half-spread / 100 (as a fraction of mid). For a YES buyer,
-    # effective entry = ask; for NO buyer, effective entry = 100 - bid.
-    # We use half-spread as the slippage proxy (conservative).
+    # Slippage = (half-spread / mid) * 100, as a true percentage of mid.
+    # For a YES buyer, effective entry = ask; for NO buyer, effective
+    # entry = 100 - bid. We use half-spread as the slippage proxy
+    # (conservative). None when mid is unknown (no bid/ask).
     estimated_slippage_pct: float | None = None
     effective_entry_price: float | None = None
-    if spread is not None and spread > 0:
-        estimated_slippage_pct = (spread / 2.0) / 100.0
+    if spread is not None and spread > 0 and mid is not None and mid > 0:
+        estimated_slippage_pct = ((spread / 2.0) / mid) * 100.0
         if ask is not None and raw_direction == "YES":
             effective_entry_price = ask
         elif bid is not None and raw_direction == "NO":
             effective_entry_price = 100.0 - bid
-        elif mid is not None:
+        else:
             effective_entry_price = mid
 
     # ── Sub-signal 3: stale price ─────────────────────────────────────

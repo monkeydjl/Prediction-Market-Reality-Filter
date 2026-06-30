@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildApiErrorMessage,
   eventsApi,
   getOperatorApiKey,
   getOperatorId,
+  qualityMetricsApi,
   setOperatorApiKey,
   setOperatorId,
 } from "./api";
@@ -68,5 +69,64 @@ describe("buildApiErrorMessage", () => {
 
   it("keeps plain text details when no JSON body is available", () => {
     expect(buildApiErrorMessage(409, "already resolved")).toBe("already resolved");
+  });
+});
+
+describe("qualityMetricsApi", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  it("summary calls /quality-metrics/summary with timeframe", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ timeframe: "24h", counts: { events: 0 } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const data = await qualityMetricsApi.summary("7d");
+    expect(data.timeframe).toBe("24h");
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/quality-metrics/summary?timeframe=7d"),
+      expect.anything(),
+    );
+  });
+
+  it("drift calls /quality-metrics/drift", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ drift: { drift_score: 0.1 }, alerts: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const data = await qualityMetricsApi.drift();
+    expect(data.drift?.drift_score).toBe(0.1);
+  });
+
+  it("anomalies calls /quality-metrics/anomalies", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ count: 0, anomalies: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const data = await qualityMetricsApi.anomalies();
+    expect(data.count).toBe(0);
+  });
+
+  it("timeseries calls /quality-metrics/timeseries with window", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ window: "7d", points: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const data = await qualityMetricsApi.timeseries("30d");
+    expect(data.window).toBe("7d");
   });
 });

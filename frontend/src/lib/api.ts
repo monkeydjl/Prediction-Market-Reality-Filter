@@ -588,6 +588,102 @@ export interface PredictionCalibration {
   }>;
 }
 
+// ── Quality operations metrics (Plan 2 §1.6) ───────────────────────────────
+// Mirrors backend /api/quality-metrics/{summary,timeseries,anomalies,drift}.
+
+export interface QualityMetricsSummary {
+  timeframe: string;
+  counts: {
+    events: number;
+    resolved_events: number;
+    with_decision_quality: number;
+    with_market_quality: number;
+    with_source_reliability: number;
+    with_llm_telemetry: number;
+  };
+  final_direction: Record<string, number>;
+  consensus: Record<string, number>;
+  downgrade: {
+    final_downgrade_reason_present: number;
+    build_errors: {
+      decision_quality: number;
+      market_quality: number;
+      source_reliability: number;
+    };
+  };
+  market_quality: {
+    count: number;
+    wide_spread_flag_count: number;
+    thin_market_flag_count: number;
+    score_avg: number | null;
+    score_min: number | null;
+    score_max: number | null;
+  };
+  source_reliability: {
+    count: number;
+    overall_score_avg: number | null;
+    source_count_avg: number | null;
+    domain_diversity_avg: number | null;
+  };
+  llm_telemetry: {
+    count: number;
+    degraded_mode_count: number;
+    estimated_token_cost_total: number;
+  };
+  calibration: Record<string, unknown>;
+  calibration_buckets: Record<string, unknown>;
+  scheduler: {
+    last_runs: Record<string, {
+      status: string | null;
+      started_at: string | null;
+      finished_at: string | null;
+      duration_ms: number | null;
+    } | null>;
+    recent_failed_count: number;
+    recent_runs_count: number;
+  };
+}
+
+export interface QualityMetricsAnomaly {
+  code: string;
+  severity: "high" | "medium" | "low" | string;
+  detail: unknown;
+}
+
+export interface SchedulerTimeseriesPoint {
+  job_name: string | null;
+  status: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number | null;
+}
+
+export interface QualityMetricsDrift {
+  recent_window_n: number;
+  drift: {
+    drift_score: number | null;
+    recent_mean: number | null;
+    baseline_mean: number | null;
+    recent_n: number;
+    baseline_n: number;
+  } | null;
+  ece: {
+    recent: number | null;
+    baseline: number | null;
+  };
+  degraded_mixing: {
+    recent_degraded_count: number;
+    recent_n: number;
+    contaminated: boolean;
+  };
+  buckets: Record<string, {
+    recent: { n: number; brier_score: number | null; direction_correct_rate: number | null };
+    baseline: { n: number; brier_score: number | null; direction_correct_rate: number | null };
+  }>;
+  alerts: QualityMetricsAnomaly[];
+  alerts_enabled: boolean;
+}
+
 export interface PredictionRecord {
   id: string;
   event_id: string;
@@ -832,4 +928,22 @@ export const eventsApi = {
       { method: "POST" },
       { timeoutMs: 30_000 },
     ),
+};
+
+export const qualityMetricsApi = {
+  summary: (timeframe: "24h" | "7d" | "all" = "24h") =>
+    api<QualityMetricsSummary>(`/quality-metrics/summary?timeframe=${timeframe}`),
+
+  timeseries: (window: "24h" | "7d" | "30d" = "7d") =>
+    api<{ window: string; points: SchedulerTimeseriesPoint[] }>(
+      `/quality-metrics/timeseries?window=${window}`,
+    ),
+
+  anomalies: () =>
+    api<{ count: number; anomalies: QualityMetricsAnomaly[] }>(
+      "/quality-metrics/anomalies",
+    ),
+
+  drift: () =>
+    api<QualityMetricsDrift>("/quality-metrics/drift"),
 };

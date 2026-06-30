@@ -218,10 +218,18 @@ def run_replay(
             simulate_llm_degraded(replayed_b, cfg=cfg_b)
         # Compare B (replayed under alt config) against A (baseline).
         metrics.add_pair(original=replayed_a, replayed=replayed_b)
+        # Use _effective_direction for cases.jsonl so the all_off baseline
+        # side (which strips final_displayed_direction and never rebuilds it)
+        # still contributes its raw actionable_recommendation.direction.
+        # Without this, direction_a would be null under the default
+        # all_off -> current comparison, breaking per-case traceability
+        # even though the aggregate metrics (which use the same helper)
+        # report the correct direction_matrix.
+        from app.replay.metrics import _effective_direction
         cases.append({
             "event_id": r.get("event_id"),
-            "direction_a": replayed_a.get("final_displayed_direction"),
-            "direction_b": replayed_b.get("final_displayed_direction"),
+            "direction_a": _effective_direction(replayed_a),
+            "direction_b": _effective_direction(replayed_b),
         })
 
     if not skip_marginal:

@@ -130,6 +130,33 @@ class TestDefaultCompareDirection(unittest.TestCase):
             self.assertEqual(orig, "YES",
                              f"all_off baseline should be raw YES, got {orig}")
 
+    def test_cases_jsonl_uses_effective_direction_not_null(self):
+        """P3 regression: cases.jsonl must write effective direction (with
+        actionable_recommendation fallback) for direction_a, not the raw
+        final_displayed_direction which is null under the all_off baseline.
+        Without this fix, per-case traceability breaks even though aggregate
+        metrics report the correct direction_matrix."""
+        from scripts.replay_decision_pipeline import run_replay
+        from pathlib import Path
+        import json
+        import tempfile
+        record = _synthetic_record()
+        tmp = Path(tempfile.mkdtemp())
+        with patch("scripts.replay_decision_pipeline._enrich_with_outcome",
+                   side_effect=lambda recs: recs):
+            run_replay([record], skip_marginal=True, output_dir=tmp)
+        cases = []
+        with (tmp / "cases.jsonl").open(encoding="utf-8") as f:
+            for line in f:
+                cases.append(json.loads(line))
+        self.assertEqual(len(cases), 1)
+        # direction_a is the all_off side — final_displayed_direction is None
+        # there, but _effective_direction falls back to
+        # actionable_recommendation.direction (YES). Must not be null.
+        self.assertEqual(cases[0]["direction_a"], "YES",
+                         "cases.jsonl direction_a must use _effective_direction, "
+                         "not the null final_displayed_direction under all_off")
+
 
 class TestLlmDegradedTriggersSimulate(unittest.TestCase):
     """P1-3 regression: --compare current llm_degraded must call

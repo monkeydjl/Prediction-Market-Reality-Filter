@@ -77,29 +77,76 @@ class TestDispatchDriftAlerts(unittest.TestCase):
             drift_alert_dispatcher._reset_cooldown_state()
 
     def test_rule4_scheduler_zero_resolved_alert(self):
-        """Rule 4: scheduler succeeded N times but 0 new resolved predictions."""
+        """Rule 4: scheduler succeeded N times but 0 new resolved predictions.
+
+        Detection reads each run's ``result.resolved_count`` (stored by
+        ``event_auto_resolve`` in ``loop_runs.result_json``). When the
+        sum across the N recent successful runs is 0, the pipeline is
+        stuck and the alert fires.
+        """
         runs = [
-            {"job_name": "event_auto_resolve", "status": "success"},
-            {"job_name": "event_auto_resolve", "status": "success"},
-            {"job_name": "event_auto_resolve", "status": "success"},
+            {"job_name": "event_auto_resolve", "status": "success",
+             "result": {"resolved_count": 0}},
+            {"job_name": "event_auto_resolve", "status": "success",
+             "result": {"resolved_count": 0}},
+            {"job_name": "event_auto_resolve", "status": "success",
+             "result": {"resolved_count": 0}},
         ]
         with patch("app.services.drift_alert_dispatcher.settings") as s:
             s.DRIFT_ALERTS_ENABLED = True
             s.DRIFT_ALERT_WEBHOOK_URL = ""
             s.DRIFT_ALERT_COOLDOWN_SECONDS = 0
             s.DRIFT_SCHEDULER_ZERO_RESOLVED_RUNS = 3
-            # The dispatcher imports loop_run_store + prediction_store
-            # locally inside evaluate_scheduler_alerts (per the brief's
-            # Step 5 verbatim), so they are NOT module-level attributes
-            # on drift_alert_dispatcher — patching
-            # ``app.services.drift_alert_dispatcher.loop_run_store`` raises
-            # AttributeError. Patch the SOURCE modules instead, mirroring
-            # the pattern in test_drift_gauge_wired_uses_store_not_placeholder
-            # (which patches app.memory.prediction_store.<fn>).
+            # loop_run_store is imported locally inside
+            # evaluate_scheduler_alerts, so patch the SOURCE module —
+            # patching ``app.services.drift_alert_dispatcher.loop_run_store``
+            # raises AttributeError.
             with patch("app.memory.loop_run_store.recent_runs", return_value=runs), \
-                 patch("app.memory.prediction_store.list_scored_samples_for_drift",
-                       return_value={"recent": [], "baseline": []}), \
                  patch("app.services.drift_alert_dispatcher.capture_message") as cap:
+                alerts = drift_alert_dispatcher.evaluate_scheduler_alerts()
+                codes = [a["code"] for a in alerts]
+                self.assertIn("scheduler_zero_resolved", codes)
+
+    def test_rule4_no_alert_when_runs_have_resolved_count_positive(self):
+        """Rule 4 does NOT fire when the recent runs resolved >0 events.
+
+        Previously the detection read the drift recent-window sample
+        count (always >0 once any prediction is scored), so the alert
+        never fired. Now it reads run.result.resolved_count — a positive
+        sum means the pipeline is making progress.
+        """
+        runs = [
+            {"job_name": "event_auto_resolve", "status": "success",
+             "result": {"resolved_count": 5}},
+            {"job_name": "event_auto_resolve", "status": "success",
+             "result": {"resolved_count": 3}},
+            {"job_name": "event_auto_resolve", "status": "success",
+             "result": {"resolved_count": 0}},
+        ]
+        with patch("app.services.drift_alert_dispatcher.settings") as s:
+            s.DRIFT_ALERTS_ENABLED = True
+            s.DRIFT_SCHEDULER_ZERO_RESOLVED_RUNS = 3
+            with patch("app.memory.loop_run_store.recent_runs", return_value=runs):
+                alerts = drift_alert_dispatcher.evaluate_scheduler_alerts()
+                codes = [a["code"] for a in alerts]
+                self.assertNotIn("scheduler_zero_resolved", codes)
+
+    def test_rule4_detection_runs_when_dispatch_disabled(self):
+        """Rule 4 detection is NOT gated by DRIFT_ALERTS_ENABLED.
+
+        Only ``dispatch_drift_alerts()`` is gated — detection always
+        runs so the ``alerts`` list returned by the drift route stays
+        consistent with rules 1-3 (which are pure functions and never
+        gated by the flag).
+        """
+        runs = [
+            {"job_name": "event_auto_resolve", "status": "success",
+             "result": {"resolved_count": 0}},
+        ] * 3
+        with patch("app.services.drift_alert_dispatcher.settings") as s:
+            s.DRIFT_ALERTS_ENABLED = False  # dispatch off, detection still runs
+            s.DRIFT_SCHEDULER_ZERO_RESOLVED_RUNS = 3
+            with patch("app.memory.loop_run_store.recent_runs", return_value=runs):
                 alerts = drift_alert_dispatcher.evaluate_scheduler_alerts()
                 codes = [a["code"] for a in alerts]
                 self.assertIn("scheduler_zero_resolved", codes)

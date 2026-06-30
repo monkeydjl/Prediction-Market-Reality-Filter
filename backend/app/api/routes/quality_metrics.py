@@ -8,15 +8,20 @@ already in-memory JSON / SQLite reads.
 
 Authorization: read-only. No ``X-API-Key`` required (same as
 ``/api/health``). The data is aggregate counts only; no per-event
-detail that would expose operator-grade intelligence.
+detail that would expose operator-grade intelligence. The ``/drift``
+route is read-only for unauthenticated callers — alert *dispatch*
+(webhook/Sentry) requires a valid write key (``optional_write_key``) so
+that a read endpoint cannot be turned into a side-effect surface by any
+visitor.
 """
 from __future__ import annotations
 
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from app.api.security import optional_write_key
 from app.memory.event_store import list_all_events, list_resolved_events
 from app.memory import loop_run_store
 from app.memory.prediction_store import (
@@ -360,7 +365,9 @@ async def quality_metrics_anomalies() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 @router.get("/quality-metrics/drift")
-async def quality_metrics_drift() -> dict[str, Any]:
+async def quality_metrics_drift(
+    can_dispatch: bool = Depends(optional_write_key),
+) -> dict[str, Any]:
     """Calibration drift report + triggered alerts (Plan 2 §1.7).
 
     Returns:
@@ -370,10 +377,13 @@ async def quality_metrics_drift() -> dict[str, Any]:
         - ``buckets`` — per-cell (edge|confidence) recent vs baseline stats
         - ``alerts`` — list of triggered alert dicts (rules 1-4)
 
-    The drift *computation* always runs (read-only). Alert *dispatch*
-    (webhook/Sentry) is gated by ``DRIFT_ALERTS_ENABLED`` and fires as a
-    side effect of this route being called — so the dashboard's periodic
-    poll acts as the alert heartbeat.
+    The drift *computation* and alert *detection* always run (read-only).
+    Alert *dispatch* (webhook/Sentry) is gated by both
+    ``DRIFT_ALERTS_ENABLED`` and a valid write key (``X-API-Key`` header).
+    Unauthenticated callers — including the dashboard's periodic poll —
+    receive the detection result but cannot trigger side effects.
+    Operators can use an authenticated request (``X-API-Key``) as the
+    alert heartbeat.
     """
     from app.core.config import settings
 
@@ -410,11 +420,14 @@ async def quality_metrics_drift() -> dict[str, Any]:
     alerts = evaluate_drift_alerts(report, thresholds)
     alerts.extend(evaluate_scheduler_alerts())
 
-    # Best-effort dispatch (no-op when DRIFT_ALERTS_ENABLED=false)
-    try:
-        dispatch_drift_alerts(alerts)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("drift alert dispatch failed: %s", exc)
+    # Best-effort dispatch. Gated by write key (``can_dispatch``) so that
+    # an unauthenticated GET cannot trigger Sentry/webhook side effects.
+    # Also gated by DRIFT_ALERTS_ENABLED inside dispatch_drift_alerts.
+    if can_dispatch:
+        try:
+            dispatch_drift_alerts(alerts)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("drift alert dispatch failed: %s", exc)
 
     return {
         "recent_window_n": recent_n,

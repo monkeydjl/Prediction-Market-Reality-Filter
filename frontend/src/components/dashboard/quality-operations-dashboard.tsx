@@ -45,9 +45,18 @@ export function QualityOperationsDashboard() {
   }, []);
 
   useEffect(() => {
-    load();
-    const id = setInterval(load, REFRESH_MS);
-    return () => clearInterval(id);
+    // Defer the initial load to the next macrotask — calling load()
+    // synchronously in the effect body triggers cascading renders
+    // (react-hooks/set-state-in-effect). Matches the pattern in
+    // system-status.tsx. setInterval callbacks fire in the macrotask
+    // queue, not during the effect body, so the periodic refresh is
+    // unaffected.
+    const timer = window.setTimeout(() => void load(), 0);
+    const interval = window.setInterval(() => void load(), REFRESH_MS);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearInterval(interval);
+    };
   }, [load]);
 
   if (loading && !summary) {

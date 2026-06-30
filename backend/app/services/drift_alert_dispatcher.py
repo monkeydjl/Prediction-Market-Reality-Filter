@@ -8,14 +8,16 @@ Best-effort alert dispatch for calibration drift. Three outlets:
 Gated by ``DRIFT_ALERTS_ENABLED`` (default false). When disabled, all
 dispatch is a no-op — drift is still computed and exposed via the
 ``/quality-metrics/drift`` route and the ``CALIBRATION_DRIFT`` gauge, but
-no side effects fire.
+no side effects fire. Detection (``evaluate_scheduler_alerts``) always runs
+regardless of the flag, so the ``alerts`` list returned by the drift route
+stays consistent with the pure rules 1-3 in ``calibration_drift_service``.
 
 Cooldown: per-alert-code dedup within ``DRIFT_ALERT_COOLDOWN_SECONDS``
 prevents webhook spam when a drift condition persists across scrapes.
 
 Rule 4 (scheduler_zero_resolved) is evaluated here because it needs
-``loop_run_store`` + ``prediction_store`` access (I/O), unlike the pure
-drift rules in ``calibration_drift_service``.
+``loop_run_store`` access (I/O), unlike the pure drift rules in
+``calibration_drift_service``.
 """
 from __future__ import annotations
 
@@ -85,17 +87,15 @@ def dispatch_drift_alerts(alerts: list[dict[str, Any]], *, force: bool = False) 
 
 
 def evaluate_scheduler_alerts() -> list[dict[str, Any]]:
-    """Rule 4: scheduler succeeded N times but 0 new scored predictions.
+    """Rule 4: scheduler succeeded N times but 0 new resolved predictions.
 
-    Returns a list of alert dicts (empty when the condition is not met or
-    the dispatcher is disabled). Reads ``loop_run_store.recent_runs`` and
-    ``prediction_store`` — called by the drift route on each request.
+    Returns a list of alert dicts (empty when the condition is not met).
+    Reads ``loop_run_store.recent_runs`` — called by the drift route on
+    each request. Detection always runs regardless of
+    ``DRIFT_ALERTS_ENABLED``; only ``dispatch_drift_alerts`` is gated by
+    the flag.
     """
-    if not getattr(settings, "DRIFT_ALERTS_ENABLED", False):
-        return []
-
     from app.memory import loop_run_store
-    from app.memory import prediction_store
 
     threshold = getattr(settings, "DRIFT_SCHEDULER_ZERO_RESOLVED_RUNS", 3)
     runs = loop_run_store.recent_runs(limit=threshold + 5)
@@ -109,18 +109,17 @@ def evaluate_scheduler_alerts() -> list[dict[str, Any]]:
     if not all(r.get("status") == "success" for r in resolve_runs):
         return []
 
-    # Count scored predictions created in the recent window. We approximate
-    # "0 new resolved" by checking if the recent scored count is 0 in the
-    # drift recent window — reuse the store helper.
-    try:
-        samples = prediction_store.list_scored_samples_for_drift(
-            recent_n=getattr(settings, "DRIFT_RECENT_WINDOW_N", 50)
-        )
-        recent_count = len(samples.get("recent", []))
-    except Exception:  # pragma: no cover - defensive
-        return []
+    # Sum resolved_count across the recent N successful event_auto_resolve
+    # runs. The result dict is stored in loop_runs.result_json and parsed
+    # by _row_to_dict into run["result"]. A non-zero sum means the
+    # resolution pipeline is making progress; 0 means it's stuck.
+    total_resolved = 0
+    for r in resolve_runs:
+        result = r.get("result") or {}
+        if isinstance(result, dict):
+            total_resolved += int(result.get("resolved_count", 0))
 
-    if recent_count > 0:
+    if total_resolved > 0:
         return []
 
     return [{
@@ -128,9 +127,10 @@ def evaluate_scheduler_alerts() -> list[dict[str, Any]]:
         "severity": "medium",
         "detail": {
             "consecutive_successes": threshold,
-            "recent_scored_count": 0,
-            "note": "Scheduler succeeded %d times but 0 new scored predictions "
-                    "in the drift recent window — resolution pipeline may be stuck."
+            "total_resolved_count": 0,
+            "note": "Scheduler succeeded %d times but 0 new resolved "
+                    "predictions across those runs — resolution pipeline "
+                    "may be stuck."
                     % threshold,
         },
     }]

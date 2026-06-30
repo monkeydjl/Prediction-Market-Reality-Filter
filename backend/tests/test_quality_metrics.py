@@ -646,6 +646,53 @@ class TestQualityMetricsDriftRoute(unittest.TestCase):
             # placeholder is gone.
             mock_list.assert_called_once_with(recent_n=50)
 
+    def test_drift_route_does_not_dispatch_without_write_key(self):
+        """Unauthenticated GET must NOT trigger dispatch side effects.
+
+        The route is read-only for unauthenticated callers (no X-API-Key
+        required, same as /api/health). Only callers with a valid write
+        key can trigger Sentry/webhook dispatch — otherwise any visitor
+        could turn the read endpoint into a side-effect surface.
+        """
+        from app.api.security import optional_write_key
+        # Override the dependency to simulate "no write key" (False).
+        self.app.dependency_overrides[optional_write_key] = lambda: False
+        try:
+            with patch("app.api.routes.quality_metrics.list_scored_samples_for_drift") as ls, \
+                 patch("app.api.routes.quality_metrics.list_all_events", return_value=[]), \
+                 patch("app.api.routes.quality_metrics.dispatch_drift_alerts") as dispatch, \
+                 patch("app.api.routes.quality_metrics.evaluate_scheduler_alerts", return_value=[]):
+                ls.return_value = {"recent": [], "baseline": []}
+                response = self.client.get("/quality-metrics/drift")
+        finally:
+            self.app.dependency_overrides.pop(optional_write_key, None)
+        self.assertEqual(response.status_code, 200)
+        # Detection result is still returned...
+        self.assertIn("alerts", response.json())
+        # ...but dispatch was not called (no write key).
+        dispatch.assert_not_called()
+
+    def test_drift_route_dispatches_with_valid_write_key(self):
+        """Authenticated GET (valid X-API-Key) triggers dispatch side effects.
+
+        Operators with the write key can use the route as the alert
+        heartbeat — the dashboard's unauthenticated poll cannot.
+        """
+        from app.api.security import optional_write_key
+        # Override the dependency to simulate "valid write key" (True).
+        self.app.dependency_overrides[optional_write_key] = lambda: True
+        try:
+            with patch("app.api.routes.quality_metrics.list_scored_samples_for_drift") as ls, \
+                 patch("app.api.routes.quality_metrics.list_all_events", return_value=[]), \
+                 patch("app.api.routes.quality_metrics.dispatch_drift_alerts") as dispatch, \
+                 patch("app.api.routes.quality_metrics.evaluate_scheduler_alerts", return_value=[]):
+                ls.return_value = {"recent": [], "baseline": []}
+                response = self.client.get("/quality-metrics/drift")
+        finally:
+            self.app.dependency_overrides.pop(optional_write_key, None)
+        self.assertEqual(response.status_code, 200)
+        dispatch.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

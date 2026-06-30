@@ -215,6 +215,17 @@ def _num(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _to_outcome_int(value: Any) -> int | None:
+    """Convert an actual_outcome (0-100) to a 0/1 indicator for ECE."""
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return 1 if v >= 50.0 else 0
+
+
 def _empty_snapshot() -> dict[str, Any]:
     """Phase 3 snapshot defaults — written to the prediction row when
     PREDICTION_CALIBRATION_ENABLED is false (so the columns are NULL /
@@ -765,3 +776,51 @@ def calibration_bucket_summary() -> dict[str, Any]:
         "by_confidence_bucket": {k: _cell(v) for k, v in sorted(by_conf.items())},
         "by_edge_x_confidence": {k: _cell(v) for k, v in sorted(by_cross.items())},
     }
+
+
+def list_scored_samples_for_drift(recent_n: int = 50) -> dict[str, list[dict[str, Any]]]:
+    """Return scored predictions split into recent + baseline for drift.
+
+    Recent = the most recent ``recent_n`` scored predictions by
+    ``resolved_at`` DESC. Baseline = all remaining scored predictions
+    (older than the recent window). Each sample dict carries the fields
+    the drift service needs: ``brier_score``, ``predicted_prob``
+    (ai_probability), ``actual_outcome``, ``edge_bucket``,
+    ``confidence_bucket``, ``direction_correct``, ``event_id``,
+    ``resolved_at``.
+
+    The ``degraded`` flag per sample is left False here — the route
+    handler joins event_store llm_telemetry to set it, because the
+    predictions table does not store LLM degradation state.
+    """
+    path = sqlite_db.loop_db_path()
+    _ensure_schema(path)
+    with reading(path) as conn:
+        rows = conn.execute(
+            """
+            SELECT event_id, ai_probability, actual_outcome, brier_score,
+                   edge_bucket, confidence_bucket, direction_correct,
+                   resolved_at
+            FROM predictions
+            WHERE status='scored' AND decision='act'
+            ORDER BY resolved_at DESC
+            """,
+        ).fetchall()
+
+    samples: list[dict[str, Any]] = []
+    for r in rows:
+        samples.append({
+            "event_id": r["event_id"],
+            "predicted_prob": r["ai_probability"],
+            "actual_outcome": _to_outcome_int(r["actual_outcome"]),
+            "brier_score": r["brier_score"],
+            "edge_bucket": r["edge_bucket"] or "unknown",
+            "confidence_bucket": r["confidence_bucket"] or "unknown",
+            "direction_correct": r["direction_correct"],
+            "resolved_at": r["resolved_at"],
+            "degraded": False,  # set by route handler via event_store join
+        })
+
+    recent = samples[:recent_n]
+    baseline = samples[recent_n:]
+    return {"recent": recent, "baseline": baseline}

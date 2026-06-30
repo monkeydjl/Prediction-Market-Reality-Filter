@@ -589,5 +589,63 @@ class TestQualityMetricsAnomalies(unittest.TestCase):
                     self.assertIn("scheduler_job_failed", codes)
 
 
+class TestQualityMetricsDriftRoute(unittest.TestCase):
+    """Tests for GET /api/quality-metrics/drift (Plan 2 Task 2)."""
+
+    def setUp(self):
+        self.app = FastAPI()
+        self.app.include_router(quality_metrics_routes.router)
+        self.client = TestClient(self.app)
+
+    def test_drift_returns_report_shape(self):
+        with patch("app.api.routes.quality_metrics.list_scored_samples_for_drift") as ls, \
+             patch("app.api.routes.quality_metrics.list_all_events", return_value=[]):
+            ls.return_value = {
+                "recent": [
+                    {"predicted_prob": 0.7, "actual_outcome": 1, "brier_score": 0.09,
+                     "edge_bucket": "5-10", "confidence_bucket": "high",
+                     "direction_correct": 1, "degraded": False, "event_id": "e1",
+                     "resolved_at": "2026-06-29T00:00:00+00:00"},
+                ],
+                "baseline": [
+                    {"predicted_prob": 0.7, "actual_outcome": 1, "brier_score": 0.09,
+                     "edge_bucket": "5-10", "confidence_bucket": "high",
+                     "direction_correct": 1, "degraded": False, "event_id": "e0",
+                     "resolved_at": "2026-06-01T00:00:00+00:00"},
+                ],
+            }
+            response = self.client.get("/quality-metrics/drift")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn("drift", body)
+        self.assertIn("ece", body)
+        self.assertIn("alerts", body)
+        self.assertIn("buckets", body)
+
+    def test_drift_gauge_wired_uses_store_not_placeholder(self):
+        """_refresh_calibration_gauges reads prediction_store for drift
+        (real computation), not the old CALIBRATION_DRIFT.set(0.0) placeholder.
+
+        The import inside _refresh_calibration_gauges is local
+        (``from app.memory.prediction_store import ...``), so we patch the
+        source module ``app.memory.prediction_store`` — NOT
+        ``app.utils.metrics.prediction_store`` (that attribute does not
+        exist on the metrics module).
+        """
+        from app.utils import metrics
+        with patch("app.memory.prediction_store.calibration_summary",
+                   return_value={"brier_score": 0.2}), \
+             patch("app.memory.prediction_store.list_scored_samples_for_drift",
+                   return_value={
+                       "recent": [{"brier_score": 0.3}],
+                       "baseline": [{"brier_score": 0.1}],
+                   }) as mock_list:
+            # Must not raise — best-effort refresh.
+            metrics._refresh_calibration_gauges()
+            # The store was consulted (real path), confirming the 0.0
+            # placeholder is gone.
+            mock_list.assert_called_once_with(recent_n=50)
+
+
 if __name__ == "__main__":
     unittest.main()

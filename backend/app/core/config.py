@@ -605,7 +605,11 @@ class Settings:
     EXECUTION_MIN_LIQUIDITY: float = float(
         os.getenv("EXECUTION_MIN_LIQUIDITY", "1000")
     )
-    # Target order size (shares) for slippage estimation.
+    # Target order size (shares) for slippage estimation. RESERVED: not yet
+    # consumed by execution_quality_service — slippage currently uses the
+    # half-spread proxy. Kept as a config knob for a future depth-aware
+    # slippage model that needs order-book data (currently no source exposes
+    # order book depth). Adjusting this value has NO effect on output today.
     EXECUTION_TARGET_ORDER_SIZE: float = float(
         os.getenv("EXECUTION_TARGET_ORDER_SIZE", "100")
     )

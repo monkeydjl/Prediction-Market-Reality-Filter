@@ -59,12 +59,12 @@ def build_execution_quality(
     recommendation: dict[str, Any] | None,
     source: dict[str, Any] | None,
     market_quote: dict[str, Any] | None,
-    volume: float | None,
+    volume: float | None,  # RESERVED: not yet consumed (liquidity is used for position sizing)
     liquidity: float | None,
     max_spread_pct: float,
     stale_price_seconds: int,
     min_liquidity: float,
-    target_order_size: float,
+    target_order_size: float,  # RESERVED: not yet consumed (see config.py)
     fee_rate_pct: float,
 ) -> dict[str, Any] | None:
     """Build the execution_quality overlay block.
@@ -77,7 +77,10 @@ def build_execution_quality(
     ``applied_to_displayed_direction``.
 
     Pure function: does not mutate inputs. Never raises — missing fields
-    produce ``None`` sub-values and ``executable=False``.
+    produce ``None`` sub-values. ``executable`` defaults to ``True`` and
+    is set to ``False`` only by explicit evidence (wide spread, thin
+    liquidity, stale price, high fee); unknown microstructure data does
+    NOT block execution.
     """
     if not _is_prediction_market(source):
         return None

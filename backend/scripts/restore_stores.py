@@ -236,28 +236,55 @@ def _list_backup_contents(
 def _check_service_running() -> bool:
     """Best-effort check if the PMRF service is still running.
 
-    We avoid importing psutil (not in requirements.txt). Instead, we
-    try to acquire an exclusive lock on the SQLite WAL file — if it
-    fails, the service is likely running. This is a heuristic.
+    Two strategies, platform-dependent:
+
+    - POSIX: try to acquire an exclusive lock on the SQLite WAL file
+      via ``fcntl.flock``. A lock failure means the service has the
+      DB open and is likely running.
+    - Windows: ``fcntl`` is unavailable, so we probe the configured
+      ``PMRF_HEALTHCHECK_URL`` (default ``http://localhost:8000/api/health``)
+      with a short timeout. A responsive health endpoint means the
+      service is up. A connection refused / timeout means it's down.
+      This is preferred over the old ``return False`` conservative
+      fallback, which silently let restore overwrite a live DB.
     """
     loop_db = Path(settings.LOOP_DB_FILE)
     if not loop_db.exists():
-        return False
+        # No DB yet on disk — but the service could still be running with
+        # an in-memory or different-path DB. Fall through to the health
+        # probe on Windows; on POSIX the lock test below would no-op.
+        pass
+
+    # POSIX path: fcntl-based lock test.
     try:
-        # Try opening with exclusive access — fails if SQLite has it open.
         import fcntl  # type: ignore[import-not-found]
-        with open(loop_db, "a") as f:
-            try:
-                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                fcntl.flock(f, fcntl.LOCK_UN)
-                return False
-            except (BlockingIOError, OSError):
-                return True
+
+        if loop_db.exists():
+            with open(loop_db, "a") as f:
+                try:
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(f, fcntl.LOCK_UN)
+                    return False
+                except (BlockingIOError, OSError):
+                    return True
+        return False
     except ImportError:
-        # Windows / non-Unix: fall back to checking the health endpoint.
-        # We don't make HTTP calls here (keep restore offline). Operator
-        # is responsible for stopping the service.
-        return False  # conservative: assume stopped
+        # Windows / non-POSIX: probe the health endpoint instead of the
+        # old conservative ``return False`` (which silently let restore
+        # overwrite a live DB). Best-effort: any connection error means
+        # "service not responding" -> safe to restore.
+        import urllib.request
+        import urllib.error
+
+        health_url = getattr(settings, "PMRF_HEALTHCHECK_URL", "") or \
+            "http://localhost:8000/api/health"
+        timeout = getattr(settings, "PMRF_HEALTHCHECK_TIMEOUT_SECONDS", 5) or 5
+        try:
+            req = urllib.request.Request(health_url, method="GET")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.status == 200
+        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
+            return False
 
 
 def restore_from_backup(

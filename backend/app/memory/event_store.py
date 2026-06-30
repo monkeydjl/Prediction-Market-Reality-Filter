@@ -124,6 +124,23 @@ def save_events(
                 # deterministic path produces an empty event_title_zh. Keep the
                 # previously LLM-generated Chinese title so the UI never regresses
                 # from Chinese back to English.
+                #
+                # P0-6 metrics: detect a change in final_displayed_direction
+                # across the save_events update. We compare the pre-existing
+                # stored direction against the incoming candidate direction
+                # and increment FINAL_DIRECTION_CHANGE when they differ.
+                # This catches BOTH guardrail-induced changes (YES/NO -> WAIT)
+                # AND ordinary re-scan drift (e.g. a re-analysis flips YES to
+                # NO). The guardrail-only counter in event_intelligence_service
+                # is a subset of this — kept for finer-grained attribution.
+                _pre_dir = existing_record.get("final_displayed_direction")
+                _post_dir = candidate.get("final_displayed_direction")
+                if _pre_dir is not None and _post_dir is not None and _pre_dir != _post_dir:
+                    try:
+                        from app.utils.metrics import FINAL_DIRECTION_CHANGE
+                        FINAL_DIRECTION_CHANGE.inc()
+                    except Exception:  # pragma: no cover - defensive
+                        pass
                 if not candidate.get("event_title_zh") and existing_record.get("event_title_zh"):
                     candidate["event_title_zh"] = existing_record["event_title_zh"]
                 # Schema upgrade: backfill any overlay field introduced after the

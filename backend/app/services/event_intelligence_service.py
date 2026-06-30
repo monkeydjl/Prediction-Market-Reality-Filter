@@ -3,6 +3,7 @@ import hashlib
 import itertools
 import logging
 import math
+import time
 from typing import Any
 
 from app.core.config import settings
@@ -324,6 +325,7 @@ async def analyze_event(
     try:
         if settings.DECISION_QUALITY_ENABLED:
             from app.services.decision_quality_service import build_decision_quality
+            _overlay_t0 = time.perf_counter()
             dq = build_decision_quality(
                 recommendation=record.get("actionable_recommendation"),
                 evidence_breakdown=record.get("evidence_breakdown", []),
@@ -333,7 +335,9 @@ async def analyze_event(
                 medium_threshold=settings.DECISION_QUALITY_MEDIUM_CONFLICT_THRESHOLD,
             )
             record["decision_quality"] = dq
-            # P0-6 metrics: count decision_quality downgrades by reason.
+            # P0-6 metrics: overlay latency + downgrade counts.
+            from app.utils.metrics import record_overlay_latency
+            record_overlay_latency("decision_quality", time.perf_counter() - _overlay_t0)
             if isinstance(dq, dict) and dq.get("downgraded"):
                 from app.utils.metrics import DECISION_QUALITY_DOWNGRADE, RULE_FIRE
                 reason = dq.get("downgrade_reason") or "unknown"
@@ -367,6 +371,7 @@ async def analyze_event(
     try:
         if settings.MARKET_QUALITY_ENABLED:
             from app.services.market_quality_service import build_market_quality
+            _overlay_t0 = time.perf_counter()
             mq = build_market_quality(
                 recommendation=record.get("actionable_recommendation"),
                 source=record.get("source"),
@@ -380,7 +385,9 @@ async def analyze_event(
             )
             if mq is not None:
                 record["market_quality"] = mq
-                # P0-6 metrics: count market_quality downgrades (rule fires).
+                # P0-6 metrics: latency + downgrade counts.
+                from app.utils.metrics import record_overlay_latency
+                record_overlay_latency("market_quality", time.perf_counter() - _overlay_t0)
                 if isinstance(mq, dict) and mq.get("downgraded"):
                     from app.utils.metrics import RULE_FIRE
                     RULE_FIRE.labels(rule="market_quality_downgrade").inc()
@@ -421,6 +428,7 @@ async def analyze_event(
         if settings.SOURCE_RELIABILITY_ENABLED:
             from app.services.source_reliability_service import build_source_reliability
             raw_direction = (record.get("actionable_recommendation") or {}).get("direction", "WAIT")
+            _overlay_t0 = time.perf_counter()
             sr = build_source_reliability(
                 evidence_breakdown=record.get("evidence_breakdown", []),
                 evidence_items=filtered_articles or [],
@@ -433,7 +441,9 @@ async def analyze_event(
             )
             if sr is not None:
                 record["source_reliability"] = sr
-                # P0-6 metrics: count source_reliability downgrades.
+                # P0-6 metrics: latency + downgrade counts.
+                from app.utils.metrics import record_overlay_latency
+                record_overlay_latency("source_reliability", time.perf_counter() - _overlay_t0)
                 if isinstance(sr, dict) and sr.get("downgraded"):
                     from app.utils.metrics import RULE_FIRE
                     RULE_FIRE.labels(rule="source_reliability_downgrade").inc()
@@ -470,6 +480,7 @@ async def analyze_event(
     # (byte-identical to pre-overlay records when all features are off).
     try:
         from app.services.market_quality_service import merge_quality_overlays
+        _overlay_t0 = time.perf_counter()
         final_direction, final_reason, market_applied, source_applied = merge_quality_overlays(
             record.get("decision_quality"),
             record.get("market_quality"),
@@ -482,6 +493,8 @@ async def analyze_event(
                 record["market_quality"]["applied_to_displayed_direction"] = True
             if source_applied and isinstance(record.get("source_reliability"), dict):
                 record["source_reliability"]["applied_to_displayed_direction"] = True
+        from app.utils.metrics import record_overlay_latency
+        record_overlay_latency("merge", time.perf_counter() - _overlay_t0)
     except Exception as exc:
         logger.warning("merge_quality_overlays failed: %s", exc)
         from app.utils.metrics import record_overlay_build_failure
@@ -496,6 +509,7 @@ async def analyze_event(
     try:
         if settings.LLM_TELEMETRY_ENABLED:
             from app.services.llm_telemetry_service import build_llm_telemetry
+            _overlay_t0 = time.perf_counter()
             record["llm_telemetry"] = build_llm_telemetry(
                 analysis=analysis,
                 sentiment_profile=sentiment_profile,
@@ -503,6 +517,8 @@ async def analyze_event(
                 model=settings.OPENAI_MODEL,
                 enabled=True,
             )
+            from app.utils.metrics import record_overlay_latency
+            record_overlay_latency("llm_telemetry", time.perf_counter() - _overlay_t0)
     except Exception as exc:
         logger.warning("llm_telemetry build failed: %s", exc)
         from app.utils.metrics import record_overlay_build_failure

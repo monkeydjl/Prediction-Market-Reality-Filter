@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { RefreshCw, Search, Trash2 } from "lucide-react";
 import { AppNav } from "@/components/app-nav";
 import { SummaryBar, summarize } from "@/components/dashboard/summary-bar";
@@ -14,6 +14,21 @@ import { adaptEntry, adaptMover, type EventView } from "@/lib/adapt";
 const PAGE_SIZE = 50;
 const DISCOVER_LIMIT_OPTIONS = [2, 5, 10, 20, 50, 100];
 const TABLE_FILTER_EVENT = "pmrf:event-table-filters-change";
+
+/** Shape of the /events/discover status polling response. Replaces the
+ *  previous `Record<string, unknown>` which made every field access return
+ *  `unknown` and triggered TS2322 (unknown not assignable to ReactNode) in
+ *  JSX. Keeping it as an explicit interface means the JSX render paths get
+ *  proper type narrowing without per-site casts. */
+interface DiscoveryStatus {
+  phase?: string;
+  message?: string;
+  sources?: Record<string, { status: string; candidates: number; error: string | null }>;
+  analyzed?: number;
+  total_to_analyze?: number;
+  elapsed_ms?: number;
+  errors?: Array<{ event: string; error: string }>;
+}
 
 function pageFromSearch(search: string) {
   const value = Number(new URLSearchParams(search).get("page") ?? "1");
@@ -84,6 +99,29 @@ async function fetchDashboardData(limit = PAGE_SIZE, offset = 0, filters: EventL
   };
 }
 
+/**
+ * Render the discovery source-status badges. Now that DiscoveryStatus is a
+ * concrete interface, .sources is properly typed — no runtime type guard
+ * needed. Kept as a helper to keep the JSX below readable.
+ */
+function _renderDiscoverySources(sources: DiscoveryStatus["sources"]): ReactNode {
+  if (!sources || Object.keys(sources).length === 0) return null;
+  return (
+    <div className="mt-1 flex flex-wrap gap-1.5">
+      {Object.entries(sources).map(([name, s]) => (
+        <span
+          key={name}
+          className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
+            s.status === "ok" ? "bg-pos/10 text-pos" : s.status === "failed" ? "bg-neg/10 text-neg" : "bg-secondary text-muted-foreground"
+          }`}
+        >
+          {name}: {s.status === "ok" ? `${s.candidates} 候选` : s.status === "failed" ? "失败" : "获取中…"}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const [events, setEvents] = useState<EventView[]>([]);
   const [movers, setMovers] = useState<EventView[]>([]);
@@ -99,7 +137,7 @@ export default function DashboardPage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [resetting, setResetting] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
-  const [discoveryStatus, setDiscoveryStatus] = useState<Record<string, unknown> | null>(null);
+  const [discoveryStatus, setDiscoveryStatus] = useState<DiscoveryStatus | null>(null);
   const mountedRef = useRef(true);
   const discoverControllerRef = useRef<AbortController | null>(null);
 
@@ -365,38 +403,28 @@ export default function DashboardPage() {
             </div>
             {discoveryStatus && (
               <div className="mt-2 grid gap-1.5 text-xs text-muted-foreground">
-                {/* Phase indicator */}
+                {/* Phase indicator — discoveryStatus is Record<string, unknown>;
+                    cast .phase to string to satisfy TS2322 (unknown not
+                    ReactNode). */}
                 <div>阶段：{String(discoveryStatus.phase ?? "—")}</div>
 
                 {/* Source status */}
-                {discoveryStatus.sources && typeof discoveryStatus.sources === "object" && Object.keys(discoveryStatus.sources as object).length > 0 && (
-                  <div className="mt-1 flex flex-wrap gap-1.5">
-                    {Object.entries(discoveryStatus.sources as Record<string, {status: string; candidates: number; error: string | null}>).map(([name, s]) => (
-                      <span key={name} className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
-                        s.status === "ok" ? "bg-pos/10 text-pos" :
-                        s.status === "failed" ? "bg-neg/10 text-neg" :
-                        "bg-secondary text-muted-foreground"
-                      }`}>
-                        {name}: {s.status === "ok" ? `${s.candidates} 候选` : s.status === "failed" ? "失败" : "获取中…"}
-                      </span>
-                    ))}
-                  </div>
-                )}
+                {_renderDiscoverySources(discoveryStatus.sources)}
 
                 {/* Analysis progress */}
-                {(discoveryStatus.analyzed as number) > 0 && (
+                {(discoveryStatus.analyzed ?? 0) > 0 && (
                   <div>
-                    分析进度：{String(discoveryStatus.analyzed ?? 0)}/{String(discoveryStatus.total_to_analyze ?? 0)}
-                    {discoveryStatus.elapsed_ms ? `（已用 ${Math.round(Number(discoveryStatus.elapsed_ms) / 1000)} 秒）` : ""}
+                    分析进度：{discoveryStatus.analyzed ?? 0}/{discoveryStatus.total_to_analyze ?? 0}
+                    {discoveryStatus.elapsed_ms ? `（已用 ${Math.round(discoveryStatus.elapsed_ms / 1000)} 秒）` : ""}
                   </div>
                 )}
 
                 {/* Errors */}
-                {discoveryStatus.errors && Array.isArray(discoveryStatus.errors) && (discoveryStatus.errors as Array<{event: string; error: string}>).length > 0 && (
+                {discoveryStatus.errors && discoveryStatus.errors.length > 0 && (
                   <details className="mt-1">
-                    <summary className="cursor-pointer text-neg">{(discoveryStatus.errors as unknown[]).length} 个失败（点击展开）</summary>
+                    <summary className="cursor-pointer text-neg">{discoveryStatus.errors.length} 个失败（点击展开）</summary>
                     <ul className="mt-1 list-inside list-disc space-y-0.5">
-                      {(discoveryStatus.errors as Array<{event: string; error: string}>).slice(0, 5).map((e: {event: string; error: string}, i: number) => (
+                      {discoveryStatus.errors.slice(0, 5).map((e, i) => (
                         <li key={i} className="text-neg">
                           {e.event?.slice(0, 60)}: {e.error?.slice(0, 100)}
                         </li>

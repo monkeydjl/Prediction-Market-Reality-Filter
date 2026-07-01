@@ -603,6 +603,44 @@ class TestPredictionCalibrationSemantics(unittest.TestCase):
             data["phases"]["prediction_calibration"]["direction_correct"]
         )
 
+    def test_direction_correct_invalid_outcome_is_none(self):
+        """Non-resolved outcome (e.g. status="invalid") → direction_correct
+        is None, even when actual_outcome is present.
+
+        Mirrors event_store.list_resolved_events / event_resolve_service:
+        a non-resolved status records the outcome marker but is NOT scored,
+        so it never enters the calibration aggregate. The old code passed
+        actual_outcome through unconditionally and returned True for
+        YES + actual_outcome=100; the fix must gate on status.
+        """
+        from diagnose_event_quality import _extract_phase_data
+        record = _sample_record()
+        record["outcome"] = {
+            "status": "invalid", "actual_outcome": 100.0,
+            "confidence": 0.9, "resolved_at": "2026-01-01T00:00:00Z",
+            "source": "auto_resolve_link_divergence",
+        }
+        data = _extract_phase_data(record)
+        self.assertIsNone(
+            data["phases"]["prediction_calibration"]["direction_correct"]
+        )
+
+    def test_direction_correct_missing_status_defaults_resolved(self):
+        """Missing outcome.status defaults to "resolved" → scored normally.
+
+        Mirrors event_store.list_resolved_events, which uses
+        outcome.get("status", "resolved") == "resolved". A bare outcome
+        without status is treated as resolved and enters calibration.
+        """
+        from diagnose_event_quality import _extract_phase_data
+        record = _sample_record()
+        # No status field — defaults to "resolved" per the store convention.
+        record["outcome"] = {"actual_outcome": 100.0}
+        data = _extract_phase_data(record)
+        self.assertEqual(
+            data["phases"]["prediction_calibration"]["direction_correct"], True
+        )
+
     def test_edge_bucket_uses_canonical_buckets(self):
         """edge_bucket matches compute_edge_bucket (abs value, half-open,
         20+ cap), NOT the old edge//10 hand-rolled buckets.

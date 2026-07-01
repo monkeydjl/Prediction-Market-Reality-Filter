@@ -99,11 +99,16 @@ def _extract_phase_data(record: dict[str, Any]) -> dict[str, Any]:
     rec = record.get("actionable_recommendation")
     if isinstance(rec, dict):
         rec_dir = rec.get("direction")
-        outcome = record.get("outcome")
-        actual_outcome = (
-            outcome.get("actual_outcome")
-            if isinstance(outcome, dict) else None
-        )
+        outcome = record.get("outcome") if isinstance(record.get("outcome"), dict) else None
+        # Mirror event_store.list_resolved_events / event_resolve_service:
+        # only status == "resolved" (or missing status, which defaults to
+        # "resolved") enters calibration. Non-resolved statuses (e.g.
+        # "invalid", written when a verified link diverges) record the
+        # outcome marker but are NOT scored, so direction_correct is None.
+        if outcome is not None and outcome.get("status", "resolved") == "resolved":
+            actual_outcome = outcome.get("actual_outcome")
+        else:
+            actual_outcome = None
         phases["prediction_calibration"] = {
             "snapshot_recommendation": rec_dir,
             "calibration_status": rec.get("calibration_status"),

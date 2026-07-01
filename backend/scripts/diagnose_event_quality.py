@@ -158,6 +158,136 @@ def _extract_phase_data(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _render_text(data: dict[str, Any], replay_result: dict[str, Any] | None) -> str:
+    """Render human-readable text output.
+
+    Vocabulary lock (§8.1): CLI-generated labels (the fixed strings here)
+    avoid banned terms. Raw data values (event_title, downgrade_reason,
+    fired_rules contents) flow through as-is and may contain trading terms.
+    """
+    lines: list[str] = []
+    eid = data.get("event_id", "?")
+    title = data.get("event_title", "?")
+    lines.append(f"Event: {eid} ({title})")
+    lines.append("─" * 50)
+    lines.append("")
+
+    phases = data.get("phases", {})
+
+    # Phase 1: Decision Quality
+    lines.append("📊 Phase 1: Decision Quality")
+    dq = phases.get("decision_quality")
+    if dq is None:
+        lines.append("   ⏭️ Skipped (overlay not built)")
+    else:
+        lines.append("   ✅ Enabled")
+        lines.append(f"   evidence_strength: {dq.get('evidence_strength')}")
+        lines.append(f"   conflict_score: {dq.get('conflict_score')}")
+        lines.append(f"   downgrade_reason: {dq.get('downgrade_reason')}")
+    lines.append("")
+
+    # Phase 2: Market Quality
+    lines.append("📊 Phase 2: Market Quality")
+    mq = phases.get("market_quality")
+    if mq is None:
+        lines.append("   ⏭️ Skipped (overlay not built)")
+    else:
+        degraded = mq.get("degraded")
+        if degraded:
+            lines.append(f"   ❌ Degraded ({mq.get('degrade_reason', 'unknown')})")
+        else:
+            lines.append("   ✅ Enabled")
+        lines.append(f"   wide_spread_flag: {mq.get('wide_spread_flag')}")
+        lines.append(f"   low_liquidity_flag: {mq.get('low_liquidity_flag')}")
+    lines.append("")
+
+    # Phase 3: Prediction Calibration
+    lines.append("📊 Phase 3: Prediction Calibration")
+    pc = phases.get("prediction_calibration")
+    if pc is None:
+        lines.append("   ⏭️ Skipped (no actionable_recommendation)")
+    else:
+        lines.append(f"   snapshot_recommendation: {pc.get('snapshot_recommendation')}")
+        lines.append(f"   calibration_status: {pc.get('calibration_status')}")
+        lines.append(f"   edge_bucket: {pc.get('edge_bucket')}")
+        lines.append(f"   direction_correct: {pc.get('direction_correct')}")
+    lines.append("")
+
+    # Phase 4: Source Reliability
+    lines.append("📊 Phase 4: Source Reliability")
+    sr = phases.get("source_reliability")
+    if sr is None:
+        lines.append("   ⏭️ Skipped (overlay not built)")
+    else:
+        lines.append(f"   overall_score: {sr.get('overall_score')}")
+        lines.append(f"   source_count: {sr.get('source_count')}")
+        lines.append(f"   domain_diversity: {sr.get('domain_diversity')}")
+    lines.append("")
+
+    # Phase 5: LLM Telemetry
+    lines.append("📊 Phase 5: LLM Telemetry")
+    lt = phases.get("llm_telemetry")
+    if lt is None:
+        lines.append("   ⏭️ Skipped (overlay not built)")
+    else:
+        lines.append(f"   degraded_mode: {lt.get('degraded_mode')}")
+        lines.append(f"   analysis_quality: {lt.get('analysis_quality')}")
+        lines.append(f"   total_tokens: {lt.get('total_tokens')}")
+        lines.append(f"   estimated_token_cost: ${lt.get('estimated_token_cost')}")
+    lines.append("")
+
+    # Phase 6: Execution Quality
+    lines.append("📊 Phase 6: Execution Quality")
+    eq = phases.get("execution_quality")
+    if eq is None:
+        lines.append("   ⏭️ Skipped (overlay not built)")
+    else:
+        lines.append(f"   executable: {eq.get('executable')}")
+        lines.append(f"   estimated_slippage_pct: {eq.get('estimated_slippage_pct')}")
+        lines.append(f"   stale_price_flag: {eq.get('stale_price_flag')}")
+        lines.append(f"   max_safe_size: {eq.get('max_safe_size')}")
+    lines.append("")
+
+    # Guardrails
+    lines.append("🛡️ Guardrails")
+    fired = data.get("guardrails", {}).get("fired_rules", [])
+    lines.append(f"   fired_rules: {fired}")
+    lines.append("")
+
+    # Final Direction
+    final = data.get("final_direction")
+    lines.append(f"🎯 Final Direction: {final} (displayed)")
+    lines.append("")
+
+    # Replay comparison (only if --replay)
+    if replay_result is not None:
+        lines.append("[Replay Comparison]")
+        lines.append(f"   all_on  direction: {replay_result.get('all_on_direction')}")
+        lines.append(f"   all_off direction: {replay_result.get('all_off_direction')}")
+        lines.append(f"   Delta: {replay_result.get('delta')}")
+
+    return "\n".join(lines)
+
+
+def _render_json(data: dict[str, Any], replay_result: dict[str, Any] | None) -> str:
+    """Render JSON output. replay_comparison is null when no replay run."""
+    output = {
+        "event_id": data.get("event_id"),
+        "event_title": data.get("event_title"),
+        "phases": data.get("phases", {}),
+        "guardrails": data.get("guardrails", {}),
+        "final_direction": data.get("final_direction"),
+        "replay_comparison": replay_result,
+    }
+    return json.dumps(output, indent=2, default=str, ensure_ascii=False)
+
+
+def _run_replay_comparison(record: dict[str, Any]) -> dict[str, Any]:
+    """Run all_on vs all_off replay, return direction delta. (Stub —
+    implemented in Task 3.)"""
+    return {"all_on_direction": None, "all_off_direction": None, "delta": "no_change"}
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns exit code."""
     parser = argparse.ArgumentParser(
@@ -189,9 +319,15 @@ def main(argv: list[str] | None = None) -> int:
 
     data = _extract_phase_data(record)
 
-    # Rendering + replay added in later tasks
-    _print(f"[diagnose_event_quality] event_id={data['event_id']} "
-           f"(rendering not yet implemented)")
+    # Replay comparison (only if --replay flag)
+    replay_result: dict[str, Any] | None = None
+    if args.replay:
+        replay_result = _run_replay_comparison(record)
+
+    if args.json:
+        _print(_render_json(data, replay_result))
+    else:
+        _print(_render_text(data, replay_result))
     return 0
 
 

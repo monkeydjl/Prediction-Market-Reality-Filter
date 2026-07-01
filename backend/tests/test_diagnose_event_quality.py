@@ -212,5 +212,85 @@ class TestExtractPhaseData(unittest.TestCase):
         self.assertEqual(record, snapshot)
 
 
+class TestRenderText(unittest.TestCase):
+    def test_render_text_includes_all_phases(self):
+        """Text output contains all 6 phase headers + guardrail + final direction."""
+        from diagnose_event_quality import _render_text, _extract_phase_data
+        record = _sample_record()
+        data = _extract_phase_data(record)
+        text = _render_text(data, replay_result=None)
+        self.assertIn("Phase 1: Decision Quality", text)
+        self.assertIn("Phase 2: Market Quality", text)
+        self.assertIn("Phase 3: Prediction Calibration", text)
+        self.assertIn("Phase 4: Source Reliability", text)
+        self.assertIn("Phase 5: LLM Telemetry", text)
+        self.assertIn("Phase 6: Execution Quality", text)
+        self.assertIn("Guardrails", text)
+        self.assertIn("Final Direction", text)
+
+    def test_render_text_includes_event_header(self):
+        """Text output starts with Event: <id> (<title>)."""
+        from diagnose_event_quality import _render_text, _extract_phase_data
+        record = _sample_record()
+        data = _extract_phase_data(record)
+        text = _render_text(data, replay_result=None)
+        self.assertIn("Event: test-1", text)
+        self.assertIn("Will X happen?", text)
+
+    def test_render_text_missing_overlay_shows_skipped(self):
+        """Missing overlay shows 'Skipped (overlay not built)'."""
+        from diagnose_event_quality import _render_text, _extract_phase_data
+        record = _sample_record()
+        del record["llm_telemetry"]
+        data = _extract_phase_data(record)
+        text = _render_text(data, replay_result=None)
+        self.assertIn("Skipped (overlay not built)", text)
+
+    def test_render_text_uses_max_safe_size_label(self):
+        """Text output uses 'max_safe_size' label, NOT 'max_safe_position_size'."""
+        from diagnose_event_quality import _render_text, _extract_phase_data
+        record = _sample_record()
+        data = _extract_phase_data(record)
+        text = _render_text(data, replay_result=None)
+        self.assertIn("max_safe_size", text)
+        # The banned term should not appear as a CLI-generated label
+        self.assertNotIn("max_safe_position_size", text)
+
+
+class TestRenderJson(unittest.TestCase):
+    def test_render_json_valid_structure(self):
+        """JSON output parses, has event_id/phases/guardrails/final_direction keys."""
+        from diagnose_event_quality import _render_json, _extract_phase_data
+        record = _sample_record()
+        data = _extract_phase_data(record)
+        json_str = _render_json(data, replay_result=None)
+        parsed = json.loads(json_str)
+        self.assertEqual(parsed["event_id"], "test-1")
+        self.assertEqual(parsed["event_title"], "Will X happen?")
+        self.assertIn("phases", parsed)
+        self.assertIn("decision_quality", parsed["phases"])
+        self.assertIn("execution_quality", parsed["phases"])
+        self.assertEqual(
+            parsed["phases"]["execution_quality"]["max_safe_size"], 1000.0
+        )
+        self.assertNotIn(
+            "max_safe_position_size", parsed["phases"]["execution_quality"]
+        )
+        self.assertIn("guardrails", parsed)
+        self.assertIn("fired_rules", parsed["guardrails"])
+        self.assertEqual(parsed["final_direction"], "YES")
+        # replay_comparison is null when no replay run
+        self.assertIsNone(parsed["replay_comparison"])
+
+    def test_render_json_replay_null_without_flag(self):
+        """replay_comparison is null when replay_result is None."""
+        from diagnose_event_quality import _render_json, _extract_phase_data
+        record = _sample_record()
+        data = _extract_phase_data(record)
+        json_str = _render_json(data, replay_result=None)
+        parsed = json.loads(json_str)
+        self.assertIsNone(parsed["replay_comparison"])
+
+
 if __name__ == "__main__":
     unittest.main()

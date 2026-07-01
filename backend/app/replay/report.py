@@ -350,7 +350,127 @@ def render_html(metrics: dict[str, Any]) -> str:
         parts.append("<p>No resolved samples.</p>")
     parts.append("</section>")
 
-    # Sections 2, 4, 5, 6, 7 added in later tasks.
+    # Section 5: LLM vs Fallback
+    bq = metrics.get("brier_by_quality", {})
+    parts.append('<section id="llm-vs-fallback">')
+    parts.append("<h2>LLM vs Fallback</h2>")
+    if bq:
+        parts.append("<table>")
+        parts.append("<thead><tr><th>Quality</th><th>N</th><th>Brier mean</th></tr></thead>")
+        parts.append("<tbody>")
+        for q, bucket in bq.items():
+            mean = bucket.get("brier_mean")
+            mean_str = f"{mean:.4f}" if mean is not None else "N/A"
+            parts.append(
+                f"<tr><td>{_html_escape(q)}</td>"
+                f'<td data-numeric="true">{bucket.get("n", 0)}</td>'
+                f"<td>{mean_str}</td></tr>"
+            )
+        parts.append("</tbody></table>")
+    else:
+        parts.append("<p>No analysis_quality data.</p>")
+    parts.append("</section>")
+
+    # Section 6: Per-Phase Marginal Contribution
+    pc = metrics.get("phase_contributions", {})
+    parts.append('<section id="per-phase-marginal">')
+    parts.append("<h2>Per-Phase Marginal Contribution</h2>")
+    if pc:
+        max_downgrades = max(
+            (c.get("downgrades_caused", 0) for c in pc.values()),
+            default=0,
+        )
+        parts.append("<table>")
+        parts.append(
+            "<thead><tr><th>Phase</th><th>Downgrades caused</th>"
+            "<th>Directions changed</th><th>Conflicts</th></tr></thead>"
+        )
+        parts.append("<tbody>")
+        for phase, contrib in pc.items():
+            dc = contrib.get("downgrades_caused", 0)
+            bar_width = (dc / max_downgrades * 100) if max_downgrades else 0
+            parts.append(
+                f"<tr><td>{_html_escape(phase)}</td>"
+                f'<td><div class="bar-container" style="height: 16px; width: {bar_width:.1f}%;'
+                f' min-width: 30px;"><div class="bar bar-replayed" style="width: 100%;">'
+                f"{dc}</div></div></td>"
+                f'<td data-numeric="true">{contrib.get("directions_changed", 0)}</td>'
+                f'<td data-numeric="true">{contrib.get("conflicts_with_final", 0)}</td></tr>'
+            )
+        parts.append("</tbody></table>")
+    else:
+        parts.append("<p>No per-phase replay run.</p>")
+    parts.append("</section>")
+
+    # Section 7: Conflict Cases (sortable + filterable)
+    cases = metrics.get("conflict_cases", [])
+    total_cases = metrics.get("conflict_cases_total", 0)
+    parts.append('<section id="conflict-cases">')
+    parts.append("<h2>Conflict Cases</h2>")
+    parts.append(f"<p>Total conflicts: {total_cases} (showing first {len(cases)}).</p>")
+    if cases:
+        # Phase filter dropdown
+        phases = sorted({c.get("phase", "") for c in cases if c.get("phase")})
+        parts.append('<div class="filter-bar">')
+        parts.append('<label for="phase-filter">Filter by phase:</label>')
+        parts.append('<select id="phase-filter" onchange="filterTable(\'conflict-table\', \'phase-filter\')">')
+        parts.append('<option value="">All</option>')
+        for p in phases:
+            parts.append(f'<option value="{_html_escape(p)}">{_html_escape(p)}</option>')
+        parts.append("</select>")
+        parts.append("</div>")
+        # Sortable table
+        parts.append('<table id="conflict-table">')
+        parts.append("<thead><tr>")
+        for i, header in enumerate(("Event", "Phase", "Phase dir", "Final dir", "Base dir")):
+            parts.append(
+                f'<th onclick="sortTable(\'conflict-table\', {i})">'
+                f"{header} <span class=\"sort-icon\">&#9650;&#9660;</span></th>"
+            )
+        parts.append("</tr></thead>")
+        parts.append("<tbody>")
+        for c in cases:
+            evt = _html_escape(c.get("event_id", ""))
+            ph = _html_escape(c.get("phase", ""))
+            parts.append(
+                f'<tr data-phase="{ph}"><td>{evt}</td><td>{ph}</td>'
+                f'<td>{_html_escape(c.get("phase_dir", ""))}</td>'
+                f'<td>{_html_escape(c.get("final_dir", ""))}</td>'
+                f'<td>{_html_escape(c.get("base_dir", ""))}</td></tr>'
+            )
+        parts.append("</tbody></table>")
+    else:
+        parts.append("<p>No conflict cases.</p>")
+    parts.append("</section>")
+
+    # Inline JS (vanilla, no external library)
+    parts.append("<script>")
+    parts.append("""
+function sortTable(tableId, colIdx) {
+  var table = document.getElementById(tableId);
+  var tbody = table.querySelector('tbody');
+  var rows = Array.from(tbody.querySelectorAll('tr'));
+  if (rows.length === 0) return;
+  var isNumeric = rows[0].cells[colIdx] && rows[0].cells[colIdx].dataset.numeric === 'true';
+  var direction = table.dataset.sortDir === 'asc' ? 'desc' : 'asc';
+  table.dataset.sortDir = direction;
+  rows.sort(function(a, b) {
+    var av = a.cells[colIdx].textContent.trim();
+    var bv = b.cells[colIdx].textContent.trim();
+    var cmp = isNumeric ? (parseFloat(av) - parseFloat(bv)) : av.localeCompare(bv);
+    return direction === 'asc' ? cmp : -cmp;
+  });
+  rows.forEach(function(r) { tbody.appendChild(r); });
+}
+function filterTable(tableId, selectId) {
+  var filter = document.getElementById(selectId).value;
+  var rows = document.querySelectorAll('#' + tableId + ' tbody tr');
+  rows.forEach(function(r) {
+    r.style.display = (!filter || r.dataset.phase === filter) ? '' : 'none';
+  });
+}
+""")
+    parts.append("</script>")
     parts.append("</body>")
     parts.append("</html>")
     return "\n".join(parts)

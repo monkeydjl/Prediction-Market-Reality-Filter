@@ -144,6 +144,67 @@ class TestRenderHtml(unittest.TestCase):
         # appears in the inline <style> block as .bar-original)
         self.assertNotIn('class="bar bar-original"', html)
 
+    def test_render_html_includes_llm_vs_fallback_section(self):
+        from app.replay.report import render_html
+        html = render_html(_sample_metrics())
+        self.assertIn('id="llm-vs-fallback"', html)
+        self.assertIn("LLM vs Fallback", html)
+        # Table headers
+        self.assertIn("<th>Quality</th>", html)
+        self.assertIn("<th>N</th>", html)
+        self.assertIn("brier mean", html.lower())
+        # Sample data: llm bucket with n=30
+        self.assertIn("llm", html)
+        self.assertIn("deterministic_fallback", html)
+
+    def test_render_html_includes_per_phase_marginal_section(self):
+        from app.replay.report import render_html
+        html = render_html(_sample_metrics())
+        self.assertIn('id="per-phase-marginal"', html)
+        self.assertIn("Per-Phase Marginal Contribution", html)
+        # Table headers
+        self.assertIn("<th>Phase</th>", html)
+        self.assertIn("Downgrades caused", html)
+        # Sample data: decision_quality with downgrades_caused=12
+        self.assertIn("decision_quality", html)
+        # Inline bar (width style)
+        self.assertIn("width:", html)
+
+    def test_render_html_includes_sortable_conflict_table(self):
+        from app.replay.report import render_html
+        html = render_html(_sample_metrics())
+        self.assertIn('id="conflict-cases"', html)
+        self.assertIn("Conflict Cases", html)
+        # Table id + sortable headers
+        self.assertIn('id="conflict-table"', html)
+        self.assertIn("onclick=\"sortTable('conflict-table'", html)
+        # Sort direction icons
+        self.assertIn("&#9650;", html)  # ▲ up arrow
+        self.assertIn("&#9660;", html)  # ▼ down arrow
+
+    def test_render_html_includes_phase_filter(self):
+        from app.replay.report import render_html
+        html = render_html(_sample_metrics())
+        # Phase filter dropdown
+        self.assertIn('id="phase-filter"', html)
+        self.assertIn("onchange=\"filterTable('conflict-table', 'phase-filter')\"", html)
+        # "All" default option
+        self.assertIn("<option value=\"\">All</option>", html)
+        # phase values from _sample_metrics conflict_cases
+        self.assertIn("source_reliability", html)
+        # data-phase attribute on rows
+        self.assertIn("data-phase=", html)
+
+    def test_render_html_handles_empty_conflict_cases(self):
+        from app.replay.report import render_html
+        m = _sample_metrics()
+        m["conflict_cases"] = []
+        m["conflict_cases_total"] = 0
+        html = render_html(m)
+        self.assertIn("No conflict cases.", html)
+        # Table should NOT be rendered when empty
+        self.assertNotIn('id="conflict-table"', html)
+
 
 if __name__ == "__main__":
     unittest.main()

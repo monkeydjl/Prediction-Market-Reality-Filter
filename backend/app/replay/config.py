@@ -100,11 +100,16 @@ class ReplayConfig:
 
     @classmethod
     def preset_guardrails_only(cls) -> "ReplayConfig":
-        """All overlays off + only guardrails on (requires
-        decision_quality to produce a direction for the guardrail to
-        act on). Isolates the guardrail overlay's impact."""
-        cfg = cls.preset_all_off()
-        cfg.decision_quality_enabled = True  # guardrail needs a direction
+        """DQ baseline + guardrails on. NOT all_off + guardrails, because
+        guardrails need a ``final_displayed_direction`` to gate (only
+        produced by decision_quality), and turning on DQ alone already
+        downgrades empty-evidence YES/NO to WAIT (see
+        decision_quality_service._apply_downgrade_rules rule 4). Comparing
+        all_off vs this preset would conflate DQ's downgrades with
+        guardrail's. The per-phase CLI compares
+        ``preset_decision_quality_only`` vs this preset to isolate the
+        guardrail's marginal impact."""
+        cfg = cls.preset_decision_quality_only()
         cfg.guardrails_enabled = True
         return cfg
 

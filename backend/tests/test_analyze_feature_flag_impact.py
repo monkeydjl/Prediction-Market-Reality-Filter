@@ -45,14 +45,15 @@ class TestAnalyzeFeatureFlagImpact(unittest.TestCase):
         with patch("analyze_feature_flag_impact.replay_record",
                    side_effect=lambda r, cfg: {**r,
                                                "final_displayed_direction":
-                                                   r["probability"]["direction"]}):
-            matrix = _compute_direction_matrix(records,
+                                                   r["actionable_recommendation"]["direction"]}):
+            matrix, counted = _compute_direction_matrix(records,
                                                 ReplayConfig.preset_all_off(),
                                                 ReplayConfig.preset_all_on())
         self.assertEqual(matrix["YES"]["YES"], 1)
         self.assertEqual(matrix["NO"]["NO"], 1)
         self.assertEqual(matrix["YES"]["WAIT"], 0)
         self.assertEqual(matrix["YES"]["NO"], 0)
+        self.assertEqual(counted, 2)
 
     def test_compute_direction_matrix_records_yes_to_wait(self):
         records = [_record("e1", "YES")]
@@ -65,13 +66,14 @@ class TestAnalyzeFeatureFlagImpact(unittest.TestCase):
         with patch("analyze_feature_flag_impact.replay_record",
                    side_effect=fake_replay):
             from app.replay.config import ReplayConfig
-            matrix = _compute_direction_matrix(
+            matrix, counted = _compute_direction_matrix(
                 records,
                 ReplayConfig.preset_all_off(),
                 ReplayConfig.preset_all_on(),
             )
         self.assertEqual(matrix["YES"]["WAIT"], 1)
         self.assertEqual(matrix["YES"]["YES"], 0)
+        self.assertEqual(counted, 1)
 
     def test_format_matrix_renders_ascii_table(self):
         matrix = {"YES": {"YES": 5, "WAIT": 2, "NO": 0, "AVOID": 0},
@@ -102,7 +104,7 @@ class TestAnalyzeFeatureFlagImpact(unittest.TestCase):
              patch("analyze_feature_flag_impact.replay_record",
                    side_effect=lambda r, cfg: {**r,
                                                "final_displayed_direction":
-                                                   r["probability"]["direction"]}):
+                                                   r["actionable_recommendation"]["direction"]}):
             buf = io.StringIO()
             with redirect_stdout(buf):
                 rc = main(["--sample-size", "10"])
@@ -117,7 +119,7 @@ class TestAnalyzeFeatureFlagImpact(unittest.TestCase):
              patch("analyze_feature_flag_impact.replay_record",
                    side_effect=lambda r, cfg: {**r,
                                                "final_displayed_direction":
-                                                   r["probability"]["direction"]}):
+                                                   r["actionable_recommendation"]["direction"]}):
             with tempfile.TemporaryDirectory() as tmp:
                 out_path = Path(tmp) / "report.json"
                 rc = main(["--sample-size", "10", "--json", str(out_path)])
@@ -158,6 +160,22 @@ class TestAnalyzeFeatureFlagImpact(unittest.TestCase):
         # Fallback chain must recover YES from actionable_recommendation
         self.assertEqual(_effective_direction(replayed), "YES")
 
+    def test_effective_direction_excludes_probability_direction(self):
+        """probability.direction holds rising/falling/stable (see
+        scoring_service.probability_direction), NOT a decision direction.
+        _effective_direction must NOT use it as a fallback. Records with
+        no actionable_recommendation and no final_displayed_direction
+        must return None so they are excluded from the matrix."""
+        from analyze_feature_flag_impact import _effective_direction
+
+        record = {
+            "event_id": "e-no-rec",
+            "probability": {"baseline": 50.0, "estimated": 55.0,
+                            "change": 5.0, "direction": "rising"},
+            # no actionable_recommendation, no final_displayed_direction
+        }
+        self.assertIsNone(_effective_direction(record))
+
     def test_direction_matrix_uses_recommendation_fallback(self):
         """End-to-end regression: all_off vs all_off on a YES record must
         report YES->YES (no change), not WAIT->WAIT. Uses real replay_record
@@ -165,7 +183,7 @@ class TestAnalyzeFeatureFlagImpact(unittest.TestCase):
         from app.replay.config import ReplayConfig
 
         records = [_record("e-yes", "YES"), _record("e-no", "NO")]
-        matrix = _compute_direction_matrix(
+        matrix, counted = _compute_direction_matrix(
             records,
             ReplayConfig.preset_all_off(),
             ReplayConfig.preset_all_off(),
@@ -176,6 +194,26 @@ class TestAnalyzeFeatureFlagImpact(unittest.TestCase):
         # No spurious WAIT entries
         self.assertEqual(matrix["WAIT"]["YES"], 0)
         self.assertEqual(matrix["YES"]["WAIT"], 0)
+        self.assertEqual(counted, 2)
+
+    def test_direction_matrix_excludes_records_without_direction(self):
+        """Records lacking actionable_recommendation.direction must be
+        excluded from the matrix AND from the counted total, so the
+        change-rate denominator stays correct."""
+        from app.replay.config import ReplayConfig
+
+        records = [
+            _record("e-yes", "YES"),
+            {"event_id": "e-no-rec", "probability": {"direction": "rising"}},  # no actionable_rec
+        ]
+        matrix, counted = _compute_direction_matrix(
+            records,
+            ReplayConfig.preset_all_off(),
+            ReplayConfig.preset_all_off(),
+        )
+        # Only the YES record is counted
+        self.assertEqual(counted, 1)
+        self.assertEqual(matrix["YES"]["YES"], 1)
 
 
 if __name__ == "__main__":

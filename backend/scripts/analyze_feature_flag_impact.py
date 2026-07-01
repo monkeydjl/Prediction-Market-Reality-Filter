@@ -97,43 +97,53 @@ def _effective_direction(record: dict[str, Any]) -> str | None:
       2. ``actionable_recommendation.direction`` — the pre-overlay direction
          from the LLM analysis. This is what ``raw_direction`` in every
          overlay block mirrors.
-      3. ``probability.direction`` — the raw model direction.
-      4. ``"WAIT"`` — final fallback (matches overlay default).
 
-    Without this chain, an all_off baseline would uniformly report WAIT,
-    miscounting YES->WAIT as WAIT->WAIT and YES->YES (no change) as
-    WAIT->YES.
+    Returns ``None`` when neither field yields a direction in
+    ``_DIRECTIONS`` (YES/NO/WAIT/AVOID). ``probability.direction`` is
+    intentionally NOT used — it holds ``rising``/``falling``/``stable``
+    (see scoring_service.probability_direction), not a decision direction.
+    Records with ``None`` direction are excluded from the matrix AND from
+    the total, so the change-rate denominator stays correct.
     """
     dir_val = record.get("final_displayed_direction")
-    if dir_val:
+    if dir_val in _DIRECTIONS:
         return dir_val
     rec = record.get("actionable_recommendation")
-    if isinstance(rec, dict) and rec.get("direction"):
-        return rec["direction"]
-    prob = record.get("probability")
-    if isinstance(prob, dict) and prob.get("direction"):
-        return prob["direction"]
-    return "WAIT"
+    if isinstance(rec, dict):
+        rec_dir = rec.get("direction")
+        if rec_dir in _DIRECTIONS:
+            return rec_dir
+    return None
 
 
 def _compute_direction_matrix(
     records: list[dict[str, Any]],
     cfg_a: ReplayConfig,
     cfg_b: ReplayConfig,
-) -> dict[str, dict[str, int]]:
+) -> tuple[dict[str, dict[str, int]], int]:
     """Run each record under cfg_a (off) and cfg_b (on), tally direction
-    transitions into a matrix[prev_dir][cur_dir] = count."""
+    transitions into a matrix[prev_dir][cur_dir] = count.
+
+    Returns (matrix, counted) where ``counted`` is the number of records
+    that produced a direction in _DIRECTIONS under BOTH configs. Records
+    lacking ``actionable_recommendation.direction`` (and without a
+    ``final_displayed_direction`` from overlays) are excluded from the
+    matrix AND from ``counted``, so the change-rate denominator stays
+    correct.
+    """
     matrix: dict[str, dict[str, int]] = {
         a: {b: 0 for b in _DIRECTIONS} for a in _DIRECTIONS
     }
+    counted = 0
     for record in records:
         replayed_a = replay_record(record, cfg_a)
         replayed_b = replay_record(record, cfg_b)
         dir_a = _effective_direction(replayed_a)
         dir_b = _effective_direction(replayed_b)
-        if dir_a in matrix and dir_b in matrix[dir_a]:
+        if dir_a is not None and dir_b is not None:
             matrix[dir_a][dir_b] += 1
-    return matrix
+            counted += 1
+    return matrix, counted
 
 
 def _format_matrix(matrix: dict[str, dict[str, int]], total: int) -> str:
@@ -214,18 +224,32 @@ def main(argv: list[str] | None = None) -> int:
     _print(f"[INFO] Loaded {len(records)} records.")
 
     if args.per_phase:
-        # Per-phase mode: run all_off vs each per-phase preset.
+        # Per-phase mode. For each overlay, compare the "without it" baseline
+        # vs the "with it" config to isolate that overlay's marginal impact.
+        # - decision_quality / market_quality / source_reliability: all_off vs <overlay>_only
+        # - guardrails: decision_quality_only vs guardrails_only (guardrails
+        #   need a final_displayed_direction to gate, which only DQ produces;
+        #   comparing all_off vs guardrails_only would conflate DQ's own
+        #   downgrades with guardrail's)
         cfg_off = ReplayConfig.preset_all_off()
+        cfg_dq = ReplayConfig.preset_decision_quality_only()
         json_phases: list[dict[str, Any]] = []
         for phase_name in _PER_PHASE_PRESETS:
             cfg_phase = _config_by_name(phase_name)
-            _print(f"\n[INFO] Comparing all_off vs {phase_name}...")
-            matrix = _compute_direction_matrix(records, cfg_off, cfg_phase)
-            report = _format_matrix(matrix, total=len(records))
+            if phase_name == "guardrails_only":
+                baseline_cfg = cfg_dq
+                baseline_name = "decision_quality_only"
+            else:
+                baseline_cfg = cfg_off
+                baseline_name = "all_off"
+            _print(f"\n[INFO] Comparing {baseline_name} vs {phase_name}...")
+            matrix, counted = _compute_direction_matrix(records, baseline_cfg, cfg_phase)
+            report = _format_matrix(matrix, total=counted)
             _print(report)
             json_phases.append({
-                "compare": ["all_off", phase_name],
-                "total": len(records),
+                "compare": [baseline_name, phase_name],
+                "total": counted,
+                "loaded": len(records),
                 "matrix": matrix,
             })
         if args.json:
@@ -233,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
                 "mode": "per_phase",
-                "total": len(records),
+                "loaded": len(records),
                 "phases": json_phases,
             }
             out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
@@ -250,8 +274,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     _print(f"[INFO] Comparing {args.compare[0]} vs {args.compare[1]}...")
-    matrix = _compute_direction_matrix(records, cfg_a, cfg_b)
-    report = _format_matrix(matrix, total=len(records))
+    matrix, counted = _compute_direction_matrix(records, cfg_a, cfg_b)
+    report = _format_matrix(matrix, total=counted)
     _print(report)
 
     if args.json:
@@ -259,7 +283,8 @@ def main(argv: list[str] | None = None) -> int:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "compare": [args.compare[0], args.compare[1]],
-            "total": len(records),
+            "total": counted,
+            "loaded": len(records),
             "matrix": matrix,
         }
         out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2),

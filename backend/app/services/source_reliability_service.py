@@ -161,6 +161,7 @@ def build_source_reliability(
     min_trusted_ratio: float,
     min_domain_diversity: int,
     min_sources: int,
+    registry_overrides: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Build the ``source_reliability`` overlay block.
 
@@ -170,7 +171,19 @@ def build_source_reliability(
     ``domain_diversity``, ``trusted_source_ratio``, ``official_source_count``,
     ``unknown_source_ratio``, ``source_breakdown``, ``downgrade_reason``,
     ``raw_direction``, ``suggested_direction``, ``downgraded``,
-    ``applied_to_displayed_direction``.
+    ``applied_to_displayed_direction``. When ``registry_overrides`` is not
+    None, an additional key ``source_prior_affected`` is included.
+
+    ``registry_overrides`` is an optional list of source-trust-registry rows
+    (each a dict with ``pattern_type`` in {domain, source_name}, ``pattern``,
+    ``tier``, ``base_trust``). When provided, the longest-prefix domain match
+    or first source_name substring match overrides the source's tier and/or
+    base-trust score. The registry is an OPTIONAL prior — it only adjusts the
+    tier score used in the weighted average; it does NOT override event-level
+    evidence conflicts. ``source_prior_affected`` is True when any override
+    was applied to any source in this record (False otherwise); the key is
+    omitted entirely when ``registry_overrides`` is None to preserve
+    byte-identical shape to pre-Plan-4 when the registry is disabled.
 
     The function never raises — malformed items are skipped (best-effort),
     and missing fields default to empty/zero rather than raising.
@@ -197,6 +210,7 @@ def build_source_reliability(
     # Group by normalized source name to merge "Reuters Politics" and "Reuters".
     source_agg: dict[str, dict[str, Any]] = {}
     total_credibility: list[float] = []
+    source_prior_affected = False
     for item in evidence_breakdown:
         if not isinstance(item, dict):
             continue
@@ -210,6 +224,23 @@ def build_source_reliability(
         url = url_by_source.get(key, "")
         domain = extract_domain(url)
         tier = classify_source_tier(source_name, domain)
+
+        # Apply source-trust-registry override (optional prior). The registry
+        # only adjusts the tier score used as a prior weight; it does NOT
+        # override event-level evidence conflicts.
+        if registry_overrides:
+            override = _match_registry_override(source_name, domain, registry_overrides)
+            if override is not None:
+                tier = override.get("tier") or tier
+                if override.get("base_trust") is not None:
+                    base_trust_override = override["base_trust"]
+                else:
+                    base_trust_override = None
+                source_prior_affected = True
+            else:
+                base_trust_override = None
+        else:
+            base_trust_override = None
 
         try:
             credibility = float(item.get("credibility") or 0.0)
@@ -227,6 +258,7 @@ def build_source_reliability(
                 "source": source_name,
                 "domain": domain,
                 "tier": tier,
+                "base_trust_override": base_trust_override,
                 "article_count": 0,
                 "credibility_sum": 0.0,
                 "strength_sum": 0.0,
@@ -284,10 +316,14 @@ def build_source_reliability(
 
     # Overall score: weighted combination.
     # weighted_avg_tier_score: average tier score weighted by article count.
+    # When a registry override provided base_trust for a source, use that
+    # value INSTEAD of _TIER_SCORES[tier] for that source's contribution.
     if total_articles > 0:
         weighted_tier_sum = sum(
-            _TIER_SCORES.get(s["tier"], 0.20) * s["article_count"]
-            for s in source_breakdown
+            (agg["base_trust_override"]
+             if agg.get("base_trust_override") is not None
+             else _TIER_SCORES.get(agg["tier"], 0.20)) * agg["article_count"]
+            for agg in source_agg.values()
         )
         weighted_avg_tier_score = weighted_tier_sum / total_articles
     else:
@@ -329,7 +365,7 @@ def build_source_reliability(
     else:
         suggested_direction = raw_dir
 
-    return {
+    result: dict[str, Any] = {
         "overall_score": overall_score,
         "source_count": source_count,
         "domain_diversity": domain_diversity,
@@ -343,6 +379,14 @@ def build_source_reliability(
         "downgraded": suggested_direction != raw_dir,
         "applied_to_displayed_direction": False,  # set by merge step
     }
+    # source_prior_affected is only surfaced when the source-trust-registry
+    # prior is in play (registry_overrides provided). When the registry is
+    # disabled (the default), the block stays byte-identical to pre-Plan-4
+    # (12 keys) — satisfying the Global Constraint that all new feature
+    # flags default to OFF.
+    if registry_overrides is not None:
+        result["source_prior_affected"] = source_prior_affected
+    return result
 
 
 def _normalize_source(source: str) -> str:
@@ -409,3 +453,32 @@ def _evaluate_downgrade(
     if overall_score < score_threshold:
         return "来源整体可靠性低于阈值"
     return None
+
+
+def _match_registry_override(
+    source_name: str,
+    domain: str,
+    overrides: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Find the longest-prefix domain match or first source_name substring
+    match in ``overrides``. Returns the override dict or None.
+    """
+    best: dict[str, Any] | None = None
+    best_len = -1
+    domain_lower = (domain or "").lower()
+    name_lower = (source_name or "").lower()
+    for entry in overrides:
+        ptype = entry.get("pattern_type")
+        pattern = (entry.get("pattern") or "").lower()
+        if not pattern:
+            continue
+        if ptype == "domain" and domain_lower:
+            if domain_lower == pattern or domain_lower.endswith("." + pattern):
+                if len(pattern) > best_len:
+                    best = entry
+                    best_len = len(pattern)
+        elif ptype == "source_name" and name_lower:
+            if pattern in name_lower:
+                if best is None:
+                    best = entry
+    return best

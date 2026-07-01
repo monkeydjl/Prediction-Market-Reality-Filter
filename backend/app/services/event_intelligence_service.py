@@ -428,6 +428,20 @@ def _build_all_overlays(
         if settings.SOURCE_RELIABILITY_ENABLED:
             from app.services.source_reliability_service import build_source_reliability
             raw_direction = (record.get("actionable_recommendation") or {}).get("direction", "WAIT")
+            # Plan 4 §6.1: load source-trust-registry overrides (optional
+            # prior). Best-effort — on failure, log and continue without
+            # overrides (byte-identical to SOURCE_TRUST_REGISTRY_ENABLED=false).
+            registry_overrides: list[dict[str, Any]] | None = None
+            if settings.SOURCE_TRUST_REGISTRY_ENABLED:
+                try:
+                    from app.memory import source_trust_registry_store
+                    registry_overrides = source_trust_registry_store.list_entries()
+                except Exception as exc:
+                    logger.warning(
+                        "source_trust_registry load failed, continuing "
+                        "without overrides: %s", exc
+                    )
+                    registry_overrides = None
             _overlay_t0 = time.perf_counter()
             sr = build_source_reliability(
                 evidence_breakdown=record.get("evidence_breakdown", []),
@@ -438,6 +452,7 @@ def _build_all_overlays(
                 min_trusted_ratio=settings.SOURCE_RELIABILITY_MIN_TRUSTED_RATIO,
                 min_domain_diversity=settings.SOURCE_RELIABILITY_MIN_DOMAIN_DIVERSITY,
                 min_sources=settings.SOURCE_RELIABILITY_MIN_SOURCES,
+                registry_overrides=registry_overrides,
             )
             if sr is not None:
                 record["source_reliability"] = sr
@@ -602,6 +617,37 @@ def _build_all_overlays(
                     RULE_FIRE.labels(rule=rule_name).inc()
     except Exception as exc:
         logger.warning("guardrail evaluation failed: %s", exc)
+
+    # Plan 4 §6.2: Review Queue detectors. Best-effort — runs pure-function
+    # detectors after the guardrail + final_displayed_direction is set and
+    # enqueues candidates into review_queue_store. Wrapped in try/except so
+    # a detector or enqueue failure NEVER blocks event production. When
+    # REVIEW_QUEUE_ENABLED=false (default), this block is a no-op —
+    # byte-identical to pre-Plan-4.
+    try:
+        if settings.REVIEW_QUEUE_ENABLED:
+            from app.services.review_queue_detectors import detect_review_candidates
+            from app.memory import review_queue_store
+            event_id = record.get("event_id")
+            if event_id:
+                candidates = detect_review_candidates(record)
+                for candidate in candidates:
+                    try:
+                        review_queue_store.enqueue_item(
+                            event_id=event_id,
+                            trigger=candidate["trigger"],
+                            severity=candidate["severity"],
+                            reason=candidate["reason"],
+                            context=candidate.get("context", {}),
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "review_queue enqueue failed for event %s "
+                            "trigger %s: %s",
+                            event_id, candidate.get("trigger"), exc,
+                        )
+    except Exception as exc:
+        logger.warning("review_queue detector run failed: %s", exc)
 
 
 async def analyze_event(

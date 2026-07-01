@@ -205,11 +205,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="Run a marginal-impact comparison for each "
                              "overlay: all_off vs decision_quality_only / "
                              "market_quality_only / source_reliability_only, "
-                             "and decision_quality_only vs guardrails_only "
-                             "(guardrails need a DQ-produced direction to "
-                             "gate). Prints a matrix per overlay so you "
-                             "can see which overlay causes the most "
-                             "direction flips.")
+                             "and guardrails_baseline (DQ + LLM telemetry + "
+                             "execution_quality, guardrails off) vs "
+                             "guardrails_only (same prerequisites + all 4 "
+                             "guardrail rules on). Prints a matrix per "
+                             "overlay so you can see which overlay causes "
+                             "the most direction flips.")
     parser.add_argument("--json", type=str, default=None,
                         metavar="PATH",
                         help="Write a JSON report to this path.")
@@ -230,18 +231,19 @@ def main(argv: list[str] | None = None) -> int:
         # Per-phase mode. For each overlay, compare the "without it" baseline
         # vs the "with it" config to isolate that overlay's marginal impact.
         # - decision_quality / market_quality / source_reliability: all_off vs <overlay>_only
-        # - guardrails: decision_quality_only vs guardrails_only (guardrails
-        #   need a final_displayed_direction to gate, which only DQ produces;
-        #   comparing all_off vs guardrails_only would conflate DQ's own
-        #   downgrades with guardrail's)
+        # - guardrails: guardrails_baseline (DQ + LLM telemetry + execution_quality,
+        #   guardrails off) vs guardrails_only (same prerequisites + guardrails on
+        #   with all 4 rules). This isolates guardrails' marginal impact: rule 1
+        #   needs llm_telemetry.degraded_mode, rule 4 needs execution_quality, so
+        #   both prerequisites must be present in the baseline too.
         cfg_off = ReplayConfig.preset_all_off()
-        cfg_dq = ReplayConfig.preset_decision_quality_only()
+        cfg_guardrails_base = ReplayConfig.preset_guardrails_baseline()
         json_phases: list[dict[str, Any]] = []
         for phase_name in _PER_PHASE_PRESETS:
             cfg_phase = _config_by_name(phase_name)
             if phase_name == "guardrails_only":
-                baseline_cfg = cfg_dq
-                baseline_name = "decision_quality_only"
+                baseline_cfg = cfg_guardrails_base
+                baseline_name = "guardrails_baseline"
             else:
                 baseline_cfg = cfg_off
                 baseline_name = "all_off"

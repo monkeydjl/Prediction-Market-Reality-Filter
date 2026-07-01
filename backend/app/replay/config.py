@@ -63,7 +63,7 @@ class ReplayConfig:
         """Simulate full LLM failure. Enables llm_telemetry + guardrails +
         the llm_degraded_blocks_act rule + decision_quality (so a non-None
         ``final_displayed_direction`` exists for the guardrail to act on),
-        and disables Rule 2/3 for isolation. The CLI's ``run_replay`` calls
+        and disables Rule 2/3/4 for isolation. The CLI's ``run_replay`` calls
         ``simulate_llm_degraded`` after ``replay_record`` to flip
         ``degraded_mode=True``; without that post-step this preset alone
         only builds the telemetry block — it does not force degraded mode.
@@ -81,6 +81,14 @@ class ReplayConfig:
             # guardrail on a non-strong direction.
             guardrail_uncalibrated_category_blocks_act=False,
             guardrail_high_conflict_blocks_act=False,
+            # Disable Rule 4 (market_not_executable) + execution_quality so
+            # rule 4 can't downgrade direction to WAIT before
+            # simulate_llm_degraded runs. Without this, a live env with
+            # EXECUTION_QUALITY_ENABLED=true could let rule 4 fire first,
+            # short-circuiting the llm_degraded_blocks_act rule on a
+            # non-strong direction.
+            execution_quality_enabled=False,
+            guardrail_market_not_executable_blocks_act=False,
         )
 
     @classmethod
@@ -109,24 +117,49 @@ class ReplayConfig:
 
     @classmethod
     def preset_guardrails_only(cls) -> "ReplayConfig":
-        """DQ baseline + guardrails on (all 4 rules). NOT all_off +
-        guardrails, because guardrails need a ``final_displayed_direction``
-        to gate (only produced by decision_quality), and turning on DQ
-        alone already downgrades empty-evidence YES/NO to WAIT (see
+        """DQ + LLM telemetry + execution_quality baseline, plus guardrails
+        on with all 4 rules enabled. NOT all_off + guardrails, because
+        guardrails need a ``final_displayed_direction`` to gate (only
+        produced by decision_quality), and turning on DQ alone already
+        downgrades empty-evidence YES/NO to WAIT (see
         decision_quality_service._apply_downgrade_rules rule 4). Comparing
         all_off vs this preset would conflate DQ's downgrades with
-        guardrail's. The per-phase CLI compares
-        ``preset_decision_quality_only`` vs this preset to isolate the
-        guardrail's marginal impact.
+        guardrail's.
 
-        Rule 4 (market_not_executable) requires execution_quality to be
-        built, so EXECUTION_QUALITY_ENABLED is on. The DQ-only baseline
-        does NOT enable execution_quality, so a rule-4 firing shows up as
-        a marginal change in this comparison."""
-        cfg = cls.preset_decision_quality_only()
-        cfg.guardrails_enabled = True
+        All 4 guardrail rules need their prerequisites built:
+          - Rule 1 (llm_degraded_blocks_act) reads llm_telemetry.degraded_mode
+          - Rule 2 (uncalibrated_category) reads the calibration store
+          - Rule 3 (high_conflict) reads evidence_breakdown
+          - Rule 4 (market_not_executable) reads execution_quality.executable
+        So this preset enables DQ + llm_telemetry + execution_quality.
+        The per-phase CLI's baseline for guardrails is
+        ``preset_guardrails_baseline`` (same prerequisites, guardrails off)
+        so the marginal comparison isolates guardrails' impact.
+        """
+        cfg = cls.preset_all_off()
+        cfg.decision_quality_enabled = True
+        cfg.llm_telemetry_enabled = True
         cfg.execution_quality_enabled = True
+        cfg.guardrails_enabled = True
+        cfg.guardrail_llm_degraded_blocks_act = True
+        cfg.guardrail_uncalibrated_category_blocks_act = True
+        cfg.guardrail_high_conflict_blocks_act = True
         cfg.guardrail_market_not_executable_blocks_act = True
+        return cfg
+
+    @classmethod
+    def preset_guardrails_baseline(cls) -> "ReplayConfig":
+        """Baseline for the guardrails marginal comparison: same
+        prerequisites as preset_guardrails_only (DQ + LLM telemetry +
+        execution_quality) but with guardrails OFF. The per-phase CLI
+        compares this preset vs preset_guardrails_only so the delta
+        reflects only guardrails' impact, not DQ's or execution_quality's.
+        """
+        cfg = cls.preset_all_off()
+        cfg.decision_quality_enabled = True
+        cfg.llm_telemetry_enabled = True
+        cfg.execution_quality_enabled = True
+        # guardrails_enabled stays False (from preset_all_off)
         return cfg
 
 

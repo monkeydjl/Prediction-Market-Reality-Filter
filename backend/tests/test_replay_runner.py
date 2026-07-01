@@ -179,5 +179,62 @@ class TestSimulateLlmDegraded(unittest.TestCase):
         self.assertNotIn("llm_telemetry", replayed)
 
 
+class TestReplayConfigPresets(unittest.TestCase):
+    """Regression tests for preset field values. Locks down the
+    guardrails_only / guardrails_baseline / llm_degraded preset shapes so
+    future edits can't silently drop a rule or prerequisite."""
+
+    def test_preset_llm_degraded_disables_rule4_and_execution_quality(self):
+        """preset_llm_degraded must disable execution_quality_enabled and
+        guardrail_market_not_executable_blocks_act so rule 4 can't fire
+        before simulate_llm_degraded runs and short-circuit rule 1 on a
+        non-strong direction."""
+        from app.replay.config import ReplayConfig
+        cfg = ReplayConfig.preset_llm_degraded()
+        self.assertFalse(cfg.execution_quality_enabled)
+        self.assertFalse(cfg.guardrail_market_not_executable_blocks_act)
+        # Rule 1 must be on; rules 2/3/4 must be off
+        self.assertTrue(cfg.guardrail_llm_degraded_blocks_act)
+        self.assertFalse(cfg.guardrail_uncalibrated_category_blocks_act)
+        self.assertFalse(cfg.guardrail_high_conflict_blocks_act)
+        # Prerequisites for rule 1
+        self.assertTrue(cfg.decision_quality_enabled)
+        self.assertTrue(cfg.llm_telemetry_enabled)
+        self.assertTrue(cfg.guardrails_enabled)
+
+    def test_preset_guardrails_only_enables_all_4_rules_and_prerequisites(self):
+        """preset_guardrails_only must enable all 4 guardrail rules AND
+        their prerequisites (DQ for final_displayed_direction, llm_telemetry
+        for rule 1, execution_quality for rule 4)."""
+        from app.replay.config import ReplayConfig
+        cfg = ReplayConfig.preset_guardrails_only()
+        # All 4 rules on
+        self.assertTrue(cfg.guardrail_llm_degraded_blocks_act)
+        self.assertTrue(cfg.guardrail_uncalibrated_category_blocks_act)
+        self.assertTrue(cfg.guardrail_high_conflict_blocks_act)
+        self.assertTrue(cfg.guardrail_market_not_executable_blocks_act)
+        # Prerequisites
+        self.assertTrue(cfg.guardrails_enabled)
+        self.assertTrue(cfg.decision_quality_enabled)
+        self.assertTrue(cfg.llm_telemetry_enabled)
+        self.assertTrue(cfg.execution_quality_enabled)
+
+    def test_preset_guardrails_baseline_matches_guardrails_only_minus_guardrails(self):
+        """guardrails_baseline must have the same prerequisites as
+        guardrails_only but with guardrails OFF, so the per-phase CLI's
+        marginal comparison isolates guardrails' impact."""
+        from app.replay.config import ReplayConfig
+        base = ReplayConfig.preset_guardrails_baseline()
+        on = ReplayConfig.preset_guardrails_only()
+        # Same prerequisites
+        self.assertEqual(base.decision_quality_enabled, on.decision_quality_enabled)
+        self.assertEqual(base.llm_telemetry_enabled, on.llm_telemetry_enabled)
+        self.assertEqual(base.execution_quality_enabled, on.execution_quality_enabled)
+        # Guardrails off in baseline, on in guardrails_only
+        self.assertFalse(base.guardrails_enabled)
+        self.assertTrue(on.guardrails_enabled)
+        # Rule flags are None in baseline (irrelevant when guardrails off)
+
+
 if __name__ == "__main__":
     unittest.main()

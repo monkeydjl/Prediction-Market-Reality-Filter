@@ -264,6 +264,41 @@ def render_html(metrics: dict[str, Any]) -> str:
     parts.append("</div>")
     parts.append("</section>")
 
+    # Section 2: Direction Matrix (4x4 heatmap)
+    parts.append('<section id="direction-matrix">')
+    parts.append("<h2>Direction Matrix</h2>")
+    dirs = ("YES", "NO", "WAIT", "AVOID")
+    # Build matrix dict: (orig, replay) -> count
+    cell_counts: dict[tuple[str, str], int] = {}
+    for key, count in (matrix or {}).items():
+        try:
+            orig, replay = key.split("->")
+            cell_counts[(orig, replay)] = count
+        except ValueError:
+            continue
+    max_count = max(cell_counts.values()) if cell_counts else 0
+    if cell_counts:
+        parts.append('<table id="matrix-table">')
+        parts.append("<thead><tr><th>Original \\ Replayed</th>")
+        for d in dirs:
+            parts.append(f"<th>{d}</th>")
+        parts.append("</tr></thead>")
+        parts.append("<tbody>")
+        for orig in dirs:
+            parts.append("<tr>")
+            parts.append(f"<th>{orig}</th>")
+            for replay in dirs:
+                count = cell_counts.get((orig, replay), 0)
+                is_diag = orig == replay
+                color = _heatmap_color(count, max_count, is_diag)
+                style = f' style="{color}"' if color else ""
+                parts.append(f"<td{style}>{count}</td>")
+            parts.append("</tr>")
+        parts.append("</tbody></table>")
+    else:
+        parts.append("<p>No direction changes recorded.</p>")
+    parts.append("</section>")
+
     # Section 3: Brier (rendered before Direction Matrix per Markdown order)
     brier_mean = metrics.get("brier_mean")
     brier_frozen = metrics.get("brier_frozen", False)
@@ -283,6 +318,36 @@ def render_html(metrics: dict[str, Any]) -> str:
             )
     else:
         parts.append("<p>No resolved samples to compute Brier.</p>")
+    parts.append("</section>")
+
+    # Section 4: Direction Accuracy
+    rc = metrics.get("direction_correct_resolved_count", 0)
+    orig_correct = metrics.get("direction_correct_original", 0)
+    replay_correct = metrics.get("direction_correct_replayed", 0)
+    delta = metrics.get("direction_correct_delta")
+    parts.append('<section id="direction-accuracy">')
+    parts.append("<h2>Direction Accuracy</h2>")
+    if rc:
+        orig_pct = orig_correct / rc * 100
+        replay_pct = replay_correct / rc * 100
+        parts.append(f"<p>Resolved samples: {rc}</p>")
+        # Original bar
+        parts.append(
+            f'<div class="bar-container" style="width: {orig_pct:.1f}%;">'
+            f'<div class="bar bar-original" style="width: 100%;">'
+            f'<span class="bar-label">Original: {orig_pct:.1f}% ({orig_correct}/{rc})</span>'
+            f"</div></div>"
+        )
+        # Replayed bar
+        parts.append(
+            f'<div class="bar-container" style="width: {replay_pct:.1f}%;">'
+            f'<div class="bar bar-replayed" style="width: 100%;">'
+            f'<span class="bar-label">Replayed: {replay_pct:.1f}% ({replay_correct}/{rc})</span>'
+            f"</div></div>"
+        )
+        parts.append(f"<p>Delta: {_delta_badge(delta)}</p>")
+    else:
+        parts.append("<p>No resolved samples.</p>")
     parts.append("</section>")
 
     # Sections 2, 4, 5, 6, 7 added in later tasks.

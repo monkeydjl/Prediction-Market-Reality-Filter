@@ -5,7 +5,7 @@ import unittest
 def _sample_metrics() -> dict:
     return {
         "total": 100,
-        "direction_matrix": {"YES->WAIT": 17, "YES->AVOID": 3, "NO->WAIT": 8},
+        "direction_matrix": {"YES->YES": 50, "YES->WAIT": 17, "YES->AVOID": 3, "NO->WAIT": 8},
         "resolved_count": 40,
         "brier_mean": 0.25,
         "brier_frozen": True,
@@ -104,6 +104,45 @@ class TestRenderHtml(unittest.TestCase):
         self.assertEqual(_format_pct(17, 100), "17.0%")
         self.assertEqual(_format_pct(0, 0), "N/A")
         self.assertEqual(_format_pct(3, 10), "30.0%")
+
+    def test_render_html_includes_direction_matrix_heatmap(self):
+        from app.replay.report import render_html
+        html = render_html(_sample_metrics())
+        self.assertIn('id="direction-matrix"', html)
+        self.assertIn("Direction Matrix", html)
+        # 4x4 table headers (YES/NO/WAIT/AVOID as both row and col)
+        self.assertIn("<th>YES</th>", html)
+        self.assertIn("<th>AVOID</th>", html)
+        # Heatmap: at least one cell has inline background-color
+        self.assertIn("background-color: rgba(", html)
+        # Diagonal cells (green) and off-diagonal (crimson) both present
+        self.assertIn("rgba(34, 139, 34", html)  # green diagonal
+        self.assertIn("rgba(220, 20, 60", html)  # crimson off-diagonal
+
+    def test_render_html_includes_direction_accuracy_section(self):
+        from app.replay.report import render_html
+        html = render_html(_sample_metrics())
+        self.assertIn('id="direction-accuracy"', html)
+        self.assertIn("Direction Accuracy", html)
+        # Original and Replayed bars
+        self.assertIn("bar-original", html)
+        self.assertIn("bar-replayed", html)
+        # Delta badge (delta=0.05 in _sample_metrics → improved)
+        self.assertIn("badge-improved", html)
+
+    def test_render_html_direction_accuracy_no_resolved_samples(self):
+        from app.replay.report import render_html
+        m = _sample_metrics()
+        m["direction_correct_resolved_count"] = 0
+        m["direction_correct_original"] = 0
+        m["direction_correct_replayed"] = 0
+        m["direction_correct_delta"] = None
+        html = render_html(m)
+        self.assertIn("No resolved samples.", html)
+        # Bars should NOT be rendered when resolved_count=0
+        # (check the rendered div, not the bare class name which also
+        # appears in the inline <style> block as .bar-original)
+        self.assertNotIn('class="bar bar-original"', html)
 
 
 if __name__ == "__main__":

@@ -184,6 +184,7 @@ def _render_text(data: dict[str, Any], replay_result: dict[str, Any] | None) -> 
         lines.append(f"   evidence_strength: {dq.get('evidence_strength')}")
         lines.append(f"   conflict_score: {dq.get('conflict_score')}")
         lines.append(f"   downgrade_reason: {dq.get('downgrade_reason')}")
+        lines.append(f"   displayed_direction: {dq.get('displayed_direction')}")
     lines.append("")
 
     # Phase 2: Market Quality
@@ -314,10 +315,9 @@ def _run_replay_comparison(record: dict[str, Any]) -> dict[str, Any]:
                 return rec_dir
         return None
 
-    # Deep-copy to avoid mutation (replay_record already deep-copies, but
-    # defensive — the contract says no mutation of input)
-    record_copy = copy.deepcopy(record)
-    replayed_on = replay_record(record_copy, ReplayConfig.preset_all_on())
+    # replay_record deep-copies internally, so passing the original record
+    # to both calls is safe (no mutation of the caller's input).
+    replayed_on = replay_record(record, ReplayConfig.preset_all_on())
     replayed_off = replay_record(record, ReplayConfig.preset_all_off())
 
     dir_on = _effective_direction(replayed_on)

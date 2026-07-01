@@ -389,10 +389,15 @@ def render_html(metrics: dict[str, Any]) -> str:
         for phase, contrib in pc.items():
             dc = contrib.get("downgrades_caused", 0)
             bar_width = (dc / max_downgrades * 100) if max_downgrades else 0
+            # Bar container width = bar_width% (0% when dc=0 or max=0).
+            # No min-width on the container — a zero-contribution phase
+            # must show zero bar width per spec. The numeric label is
+            # always visible because it sits inside the bar div (which
+            # has padding) even when width is 0% (text overflows).
             parts.append(
                 f"<tr><td>{_html_escape(phase)}</td>"
-                f'<td><div class="bar-container" style="height: 16px; width: {bar_width:.1f}%;'
-                f' min-width: 30px;"><div class="bar bar-replayed" style="width: 100%;">'
+                f'<td><div class="bar-container" style="height: 16px; width: {bar_width:.1f}%;">'
+                f'<div class="bar bar-replayed" style="width: 100%;">'
                 f"{dc}</div></div></td>"
                 f'<td data-numeric="true">{contrib.get("directions_changed", 0)}</td>'
                 f'<td data-numeric="true">{contrib.get("conflicts_with_final", 0)}</td></tr>'

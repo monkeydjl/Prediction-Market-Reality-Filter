@@ -171,6 +171,58 @@ class TestRenderHtml(unittest.TestCase):
         # Inline bar (width style)
         self.assertIn("width:", html)
 
+    def test_render_html_per_phase_zero_downgrades_no_min_width(self):
+        """When a phase has downgrades_caused=0, its bar container must
+        have width 0.0% and NO min-width — otherwise a blue bar would
+        render for a zero-contribution phase (spec §6 requires 0% width
+        when max=0 or dc=0). The numeric label (0) must still appear."""
+        from app.replay.report import render_html
+        m = _sample_metrics()
+        # Single phase with downgrades_caused=0
+        m["phase_contributions"] = {
+            "decision_quality": {
+                "downgrades_caused": 0,
+                "directions_changed": 5,
+                "conflicts_with_final": 2,
+            }
+        }
+        html = render_html(m)
+        # Bar container width must be 0.0% (max_downgrades=0 → bar_width=0)
+        self.assertIn("width: 0.0%;", html)
+        # No min-width on bar containers (would force a visible bar)
+        self.assertNotIn("min-width: 30px", html)
+        self.assertNotIn("min-width:30px", html)
+        # The zero value label must still be visible as text
+        self.assertIn(">0</div>", html)
+
+    def test_render_html_per_phase_mixed_zero_and_nonzero(self):
+        """When one phase has downgrades_caused=0 and another has >0,
+        the zero phase must show width 0.0% (not a proportion of the
+        max), and the non-zero phase shows its proportional width."""
+        from app.replay.report import render_html
+        m = _sample_metrics()
+        m["phase_contributions"] = {
+            "decision_quality": {
+                "downgrades_caused": 12,
+                "directions_changed": 15,
+                "conflicts_with_final": 3,
+            },
+            "market_quality": {
+                "downgrades_caused": 0,
+                "directions_changed": 2,
+                "conflicts_with_final": 0,
+            },
+        }
+        html = render_html(m)
+        # max_downgrades=12 → decision_quality width=100.0%, market_quality width=0.0%
+        self.assertIn("width: 100.0%;", html)
+        self.assertIn("width: 0.0%;", html)
+        # Bar containers must NOT have inline min-width (would force a
+        # visible bar for zero-contribution phases). The .card CSS class
+        # uses min-width:160px for summary cards — that's unrelated.
+        self.assertNotIn("min-width: 30px", html)
+        self.assertNotIn("min-width:30px", html)
+
     def test_render_html_includes_sortable_conflict_table(self):
         from app.replay.report import render_html
         html = render_html(_sample_metrics())

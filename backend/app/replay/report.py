@@ -481,15 +481,21 @@ def write_report(
     output_dir: Path,
     cases: list[dict[str, Any]] | None = None,
 ) -> Path:
-    """Write report.md + metrics.json + cases.jsonl to ``output_dir``.
+    """Write report.md + metrics.json + cases.jsonl + report.html to
+    ``output_dir``.
 
-    Returns the path to ``report.md``. Creates ``output_dir`` if missing.
+    Returns the path to ``report.md`` (unchanged for backward compat).
+    Creates ``output_dir`` if missing.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     md_path = output_dir / "report.md"
     md_path.write_text(render_markdown(metrics), encoding="utf-8")
     (output_dir / "metrics.json").write_text(
         render_json(metrics), encoding="utf-8"
+    )
+    # HTML report (spec §4.5: HTML/Markdown/JSON triple format)
+    (output_dir / "report.html").write_text(
+        render_html(metrics), encoding="utf-8"
     )
     if cases is not None:
         cases_path = output_dir / "cases.jsonl"

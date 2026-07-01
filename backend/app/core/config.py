@@ -675,6 +675,15 @@ class Settings:
     SOURCE_TRUST_REGISTRY_ENABLED: bool = _env_bool(
         "SOURCE_TRUST_REGISTRY_ENABLED", "false"
     )
+    # ── Review Queue (Plan 4 §6.2) ───────────────────────────────────
+    # When true, the orchestrator runs pure-function detectors after overlay
+    # build and enqueues candidates into review_queue_store. Defaults false
+    # for byte-identical pre-Plan-4 behavior.
+    REVIEW_QUEUE_ENABLED: bool = _env_bool("REVIEW_QUEUE_ENABLED", "false")
+    # Confidence threshold for outcome_prediction_mismatch detector.
+    REVIEW_QUEUE_MISMATCH_CONFIDENCE: float = float(
+        os.getenv("REVIEW_QUEUE_MISMATCH_CONFIDENCE", "0.75")
+    )
     # Phase 5 — LLM Cost and Stability Telemetry (default OFF). When enabled,
     # analyze_event attaches an llm_telemetry overlay block for ALL events
     # (every event makes at least one LLM call or falls back to deterministic).

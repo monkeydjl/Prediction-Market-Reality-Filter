@@ -299,7 +299,7 @@ def render_html(metrics: dict[str, Any]) -> str:
         parts.append("<p>No direction changes recorded.</p>")
     parts.append("</section>")
 
-    # Section 3: Brier (rendered before Direction Matrix per Markdown order)
+    # Section 3: Brier (rendered after Direction Matrix, matching Markdown order)
     brier_mean = metrics.get("brier_mean")
     brier_frozen = metrics.get("brier_frozen", False)
     parts.append('<section id="brier">')

@@ -215,6 +215,108 @@ class TestAnalyzeFeatureFlagImpact(unittest.TestCase):
         self.assertEqual(counted, 1)
         self.assertEqual(matrix["YES"]["YES"], 1)
 
+    def test_direction_matrix_calls_simulate_llm_degraded_for_llm_degraded_preset(self):
+        """Regression: when name_b='llm_degraded', _compute_direction_matrix
+        must call simulate_llm_degraded after replay_record so
+        degraded_mode=True is forced and llm_degraded_blocks_act actually
+        fires. Without passing the name, the simulate call is skipped and
+        the A/B matrix underestimates the degradation scenario's impact.
+        """
+        from app.replay.config import ReplayConfig
+        records = [_record("e1", "YES")]
+        with patch("analyze_feature_flag_impact.replay_record",
+                   side_effect=lambda r, cfg: {**r,
+                                               "final_displayed_direction":
+                                                   r["actionable_recommendation"]["direction"]}), \
+             patch("analyze_feature_flag_impact.simulate_llm_degraded") as mock_sim:
+            _compute_direction_matrix(
+                records,
+                ReplayConfig.preset_all_off(),
+                ReplayConfig.preset_llm_degraded(),
+                name_a="all_off",
+                name_b="llm_degraded",
+            )
+            mock_sim.assert_called_once()
+            # Called with the llm_degraded side's replayed record + cfg
+            called_args, called_kwargs = mock_sim.call_args
+            self.assertEqual(called_kwargs.get("cfg"), ReplayConfig.preset_llm_degraded())
+
+    def test_direction_matrix_skips_simulate_when_no_llm_degraded_name(self):
+        """When neither name_a nor name_b is 'llm_degraded',
+        simulate_llm_degraded must NOT be called. Guards against
+        accidentally invoking the post-step for non-degraded presets."""
+        from app.replay.config import ReplayConfig
+        records = [_record("e1", "YES")]
+        with patch("analyze_feature_flag_impact.replay_record",
+                   side_effect=lambda r, cfg: {**r,
+                                               "final_displayed_direction":
+                                                   r["actionable_recommendation"]["direction"]}), \
+             patch("analyze_feature_flag_impact.simulate_llm_degraded") as mock_sim:
+            _compute_direction_matrix(
+                records,
+                ReplayConfig.preset_all_off(),
+                ReplayConfig.preset_all_on(),
+                name_a="all_off",
+                name_b="all_on",
+            )
+            mock_sim.assert_not_called()
+
+    def test_compute_direction_matrix_simulates_for_name_a_llm_degraded(self):
+        """The simulate post-step must also apply when name_a (the baseline
+        side) is 'llm_degraded', not just name_b. This mirrors
+        replay_decision_pipeline.run_replay which checks both sides."""
+        from app.replay.config import ReplayConfig
+        records = [_record("e1", "YES")]
+        with patch("analyze_feature_flag_impact.replay_record",
+                   side_effect=lambda r, cfg: {**r,
+                                               "final_displayed_direction":
+                                                   r["actionable_recommendation"]["direction"]}), \
+             patch("analyze_feature_flag_impact.simulate_llm_degraded") as mock_sim:
+            _compute_direction_matrix(
+                records,
+                ReplayConfig.preset_llm_degraded(),
+                ReplayConfig.preset_all_on(),
+                name_a="llm_degraded",
+                name_b="all_on",
+            )
+            mock_sim.assert_called_once()
+            called_args, called_kwargs = mock_sim.call_args
+            self.assertEqual(called_kwargs.get("cfg"), ReplayConfig.preset_llm_degraded())
+
+    def test_config_by_name_supports_guardrails_baseline(self):
+        """--compare guardrails_baseline guardrails_only must be usable to
+        reproduce a single guardrails marginal matrix outside --per-phase.
+        Before this fix, guardrails_baseline was only reachable inside
+        --per-phase's internal branch."""
+        from analyze_feature_flag_impact import _config_by_name
+        from app.replay.config import ReplayConfig
+        cfg = _config_by_name("guardrails_baseline")
+        # Same prerequisites as guardrails_only, guardrails off
+        self.assertTrue(cfg.decision_quality_enabled)
+        self.assertTrue(cfg.llm_telemetry_enabled)
+        self.assertTrue(cfg.execution_quality_enabled)
+        self.assertFalse(cfg.guardrails_enabled)
+
+    def test_main_compare_guardrails_baseline_vs_guardrails_only(self):
+        """End-to-end: ``--compare guardrails_baseline guardrails_only`` must
+        be accepted (not raise 'unknown config preset') and produce a report.
+        """
+        records = [_record("e1", "YES")]
+        with patch("analyze_feature_flag_impact._load_records",
+                   return_value=records), \
+             patch("analyze_feature_flag_impact.replay_record",
+                   side_effect=lambda r, cfg: {**r,
+                                               "final_displayed_direction":
+                                                   r["actionable_recommendation"]["direction"]}), \
+             patch("analyze_feature_flag_impact.simulate_llm_degraded"):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = main(["--compare", "guardrails_baseline", "guardrails_only"])
+            self.assertEqual(rc, 0)
+            self.assertIn("[OK]", buf.getvalue())
+            self.assertIn("guardrails_baseline", buf.getvalue())
+            self.assertIn("guardrails_only", buf.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

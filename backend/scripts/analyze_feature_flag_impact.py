@@ -36,7 +36,7 @@ except (AttributeError, io.UnsupportedOperation):  # pragma: no cover
     pass
 
 from app.replay.config import ReplayConfig
-from app.replay.runner import replay_record
+from app.replay.runner import replay_record, simulate_llm_degraded
 
 _DIRECTIONS = ("YES", "NO", "WAIT", "AVOID")
 
@@ -76,6 +76,8 @@ def _config_by_name(name: str) -> ReplayConfig:
         return ReplayConfig.preset_source_reliability_only()
     if name == "guardrails_only":
         return ReplayConfig.preset_guardrails_only()
+    if name == "guardrails_baseline":
+        return ReplayConfig.preset_guardrails_baseline()
     raise ValueError(f"unknown config preset: {name!r}")
 
 
@@ -120,6 +122,8 @@ def _compute_direction_matrix(
     records: list[dict[str, Any]],
     cfg_a: ReplayConfig,
     cfg_b: ReplayConfig,
+    name_a: str | None = None,
+    name_b: str | None = None,
 ) -> tuple[dict[str, dict[str, int]], int]:
     """Run each record under cfg_a (off) and cfg_b (on), tally direction
     transitions into a matrix[prev_dir][cur_dir] = count.
@@ -130,6 +134,15 @@ def _compute_direction_matrix(
     ``final_displayed_direction`` from overlays) are excluded from the
     matrix AND from ``counted``, so the change-rate denominator stays
     correct.
+
+    ``name_a`` / ``name_b``: preset names corresponding to cfg_a / cfg_b.
+    When a name is ``"llm_degraded"``, ``simulate_llm_degraded`` is called
+    after ``replay_record`` to force ``degraded_mode=True`` and re-run the
+    guardrail so ``llm_degraded_blocks_act`` actually fires. Without this
+    post-step, ``preset_llm_degraded`` only builds the telemetry block —
+    it does not flip degraded mode, so rule 1 would never trigger and the
+    A/B matrix would underestimate the degradation scenario's impact.
+    See ``replay_decision_pipeline.run_replay`` for the same pattern.
     """
     matrix: dict[str, dict[str, int]] = {
         a: {b: 0 for b in _DIRECTIONS} for a in _DIRECTIONS
@@ -137,7 +150,11 @@ def _compute_direction_matrix(
     counted = 0
     for record in records:
         replayed_a = replay_record(record, cfg_a)
+        if name_a == "llm_degraded":
+            simulate_llm_degraded(replayed_a, cfg=cfg_a)
         replayed_b = replay_record(record, cfg_b)
+        if name_b == "llm_degraded":
+            simulate_llm_degraded(replayed_b, cfg=cfg_b)
         dir_a = _effective_direction(replayed_a)
         dir_b = _effective_direction(replayed_b)
         if dir_a is not None and dir_b is not None:
@@ -199,7 +216,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Two config presets to compare "
                              "(all_off / all_on / current / llm_degraded / "
                              "decision_quality_only / market_quality_only / "
-                             "source_reliability_only / guardrails_only). "
+                             "source_reliability_only / guardrails_baseline / "
+                             "guardrails_only). "
                              "Default: all_off all_on.")
     parser.add_argument("--per-phase", action="store_true", default=False,
                         help="Run a marginal-impact comparison for each "
@@ -248,7 +266,9 @@ def main(argv: list[str] | None = None) -> int:
                 baseline_cfg = cfg_off
                 baseline_name = "all_off"
             _print(f"\n[INFO] Comparing {baseline_name} vs {phase_name}...")
-            matrix, counted = _compute_direction_matrix(records, baseline_cfg, cfg_phase)
+            matrix, counted = _compute_direction_matrix(
+                records, baseline_cfg, cfg_phase, baseline_name, phase_name,
+            )
             report = _format_matrix(matrix, total=counted)
             _print(report)
             json_phases.append({
@@ -279,7 +299,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     _print(f"[INFO] Comparing {args.compare[0]} vs {args.compare[1]}...")
-    matrix, counted = _compute_direction_matrix(records, cfg_a, cfg_b)
+    matrix, counted = _compute_direction_matrix(
+        records, cfg_a, cfg_b, args.compare[0], args.compare[1],
+    )
     report = _format_matrix(matrix, total=counted)
     _print(report)
 

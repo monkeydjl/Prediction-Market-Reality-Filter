@@ -140,6 +140,65 @@ class TestReviewQueueStore(unittest.TestCase):
             log = rq.get_audit_log()
             self.assertEqual(len(log), 2)
 
+    def test_enqueue_is_idempotent_for_pending_same_event_trigger(self):
+        """Re-enqueueing the same (event_id, trigger) while pending returns
+        the existing item_id — no duplicate pending rows pile up during
+        periodic orchestrator refresh.
+        """
+        with tempfile.TemporaryDirectory() as tmp, _db(tmp):
+            id1 = rq.enqueue_item(
+                event_id="evt-001", trigger="high_value_downgraded",
+                severity="WARN", reason="r1", context={"v": 1},
+            )
+            id2 = rq.enqueue_item(
+                event_id="evt-001", trigger="high_value_downgraded",
+                severity="WARN", reason="r1-updated", context={"v": 2},
+            )
+            self.assertEqual(id1, id2)
+            self.assertEqual(len(rq.list_pending()), 1)
+            # Context is refreshed on the existing row (latest detector run).
+            item = rq.get_item(id1)
+            self.assertEqual(item["context"], {"v": 2})
+            self.assertEqual(item["reason"], "r1-updated")
+
+    def test_enqueue_allows_re_enqueue_after_resolved(self):
+        """After an item is resolved, a new enqueue for the same
+        (event_id, trigger) creates a NEW pending row (re-review allowed).
+        """
+        with tempfile.TemporaryDirectory() as tmp, _db(tmp):
+            id1 = rq.enqueue_item(
+                event_id="evt-001", trigger="source_market_conflict",
+                severity="WARN", reason="r1", context={},
+            )
+            rq.take_action(item_id=id1, reviewer="alice",
+                           action="confirm", note="")
+            # Resolved — now re-enqueue should create a new row.
+            id2 = rq.enqueue_item(
+                event_id="evt-001", trigger="source_market_conflict",
+                severity="WARN", reason="r2", context={},
+            )
+            self.assertNotEqual(id1, id2)
+            pending = rq.list_pending()
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0]["item_id"], id2)
+            self.assertEqual(len(rq.list_resolved()), 1)
+
+    def test_enqueue_different_triggers_for_same_event_both_pending(self):
+        """Same event_id but different triggers are independent items —
+        both can be pending simultaneously.
+        """
+        with tempfile.TemporaryDirectory() as tmp, _db(tmp):
+            id1 = rq.enqueue_item(
+                event_id="evt-001", trigger="high_value_downgraded",
+                severity="WARN", reason="r1", context={},
+            )
+            id2 = rq.enqueue_item(
+                event_id="evt-001", trigger="source_market_conflict",
+                severity="WARN", reason="r2", context={},
+            )
+            self.assertNotEqual(id1, id2)
+            self.assertEqual(len(rq.list_pending()), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

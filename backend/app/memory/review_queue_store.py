@@ -127,21 +127,49 @@ def enqueue_item(
     reason: str,
     context: dict[str, Any],
 ) -> str:
-    """Insert a new pending review item. Returns the new item_id."""
+    """Insert a pending review item, or refresh the existing pending item
+    for the same ``(event_id, trigger)``. Returns the item_id.
+
+    Idempotent while an item is pending: the orchestrator re-runs detectors
+    on every overlay build, so without dedup the same (event_id, trigger)
+    would pile up duplicate pending rows during periodic refresh. When a
+    pending item already exists, its severity/reason/context are refreshed
+    in place (latest detector run wins) and the existing item_id is
+    returned — no new row, no audit entry.
+
+    After an item is resolved, a new enqueue creates a NEW pending row
+    (re-review is allowed).
+    """
     _check_vocabulary(reason)
     import json
     path = sqlite_db.loop_db_path()
     _ensure_schema(path)
-    item_id = str(uuid.uuid4())
+    context_json = json.dumps(context, ensure_ascii=False)
     with sqlite_db.writing(path) as conn:
+        existing = conn.execute(
+            "SELECT item_id FROM review_queue_items "
+            "WHERE event_id = ? AND trigger = ? AND status = 'pending'",
+            (event_id, trigger),
+        ).fetchone()
+        if existing is not None:
+            item_id = existing["item_id"]
+            conn.execute(
+                """
+                UPDATE review_queue_items SET
+                    severity = ?, reason = ?, context_json = ?
+                WHERE item_id = ?
+                """,
+                (severity, reason, context_json, item_id),
+            )
+            return item_id
+        item_id = str(uuid.uuid4())
         conn.execute(
             """
             INSERT INTO review_queue_items
                 (item_id, event_id, trigger, severity, reason, context_json)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (item_id, event_id, trigger, severity, reason,
-             json.dumps(context, ensure_ascii=False)),
+            (item_id, event_id, trigger, severity, reason, context_json),
         )
     return item_id
 

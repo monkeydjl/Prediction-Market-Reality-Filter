@@ -224,39 +224,19 @@ class TestRenderHtml(unittest.TestCase):
         import re
         from app.replay.report import render_html
         html = render_html(_sample_metrics())
-        # Vocabulary lock: no trading terminology (long/short/buy/sell/
-        # position/kelly) as whole words. CSS property `position` and
-        # `border` (contains substring 'order') are NOT trading terms.
-        # `order` is checked separately as a whole word to catch trading
-        # usage while allowing CSS `border`.
-        for term in ("long", "short", "buy", "sell", "kelly"):
+        # Vocabulary lock (spec Hard Constraint): HTML output must NOT
+        # contain long/short/buy/sell/position/kelly as whole words, and
+        # must NOT contain `order` as a whole word. CSS `border` (substring
+        # `order`) is allowed since `order` is not a whole word within it.
+        for term in ("long", "short", "buy", "sell", "position", "kelly"):
             pattern = r"\b" + re.escape(term) + r"\b"
             self.assertFalse(
                 re.search(pattern, html, re.IGNORECASE),
-                f"banned trading term '{term}' found in HTML",
+                f"banned term '{term}' found in HTML",
             )
-        # `position` as a whole word (not CSS property value)
-        # CSS uses `position: relative` where 'position' is a property name,
-        # not trading vocab. Check for it as a standalone word outside CSS
-        # declarations by verifying it only appears in CSS context.
-        # Simpler: check it does NOT appear as "position:" would be too strict
-        # (it IS in CSS). Instead verify no trading-context usage by checking
-        # it never appears as a whole word NOT immediately followed by ':'.
-        # Even simpler and sufficient: the only allowed occurrence is the CSS
-        # property `position:` — verify count of `position` as standalone word
-        # equals count of `position:` (CSS declarations).
-        pos_all = len(re.findall(r"\bposition\b", html, re.IGNORECASE))
-        pos_css = len(re.findall(r"\bposition\s*:", html, re.IGNORECASE))
-        self.assertEqual(
-            pos_all, pos_css,
-            f"'position' appears {pos_all} times but only {pos_css} are CSS "
-            "property declarations; extra occurrences may be trading vocab",
-        )
-        # `order` as a whole word (not substring of `border`)
-        order_all = len(re.findall(r"\border\b", html, re.IGNORECASE))
-        self.assertEqual(
-            order_all, 0,
-            f"'order' as a whole word found in HTML — may be trading vocab",
+        self.assertFalse(
+            re.search(r"\border\b", html, re.IGNORECASE),
+            "banned term 'order' found as whole word in HTML",
         )
 
     def test_render_html_is_self_contained(self):

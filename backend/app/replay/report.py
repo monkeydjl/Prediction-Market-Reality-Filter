@@ -195,11 +195,11 @@ th { background: #f0f0f0; cursor: pointer; user-select: none; }
 th:hover { background: #e0e0e0; }
 tbody tr:nth-child(even) { background: #fafafa; }
 .callout { background: #fffbe6; border-left: 4px solid #d4a017; padding: 12px 16px; margin: 8px 0; font-size: 0.9em; }
-.bar-container { background: #eee; border-radius: 4px; height: 24px; margin: 4px 0; position: relative; }
-.bar { height: 100%; border-radius: 4px; }
+.bar-container { background: #eee; border-radius: 4px; height: 24px; margin: 4px 0; display: flex; align-items: center; }
+.bar { height: 100%; border-radius: 4px; display: flex; align-items: center; }
 .bar-original { background: #888; }
 .bar-replayed { background: #2563eb; }
-.bar-label { position: absolute; left: 8px; top: 4px; color: white; font-size: 0.8em; font-weight: bold; }
+.bar-label { padding-left: 8px; color: white; font-size: 0.8em; font-weight: bold; }
 .badge { padding: 2px 8px; border-radius: 12px; font-size: 0.85em; font-weight: bold; }
 .badge-improved { background: #dcfce7; color: #166534; }
 .badge-regressed { background: #fee2e2; color: #991b1b; }

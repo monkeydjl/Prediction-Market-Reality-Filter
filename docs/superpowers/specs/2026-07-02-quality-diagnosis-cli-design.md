@@ -248,9 +248,13 @@ Note: `preset_all_on()` inherits current env settings. In production this reflec
 
 ### 8.1 Vocabulary lock
 
-Output (both text and JSON modes) must NOT contain trading terms `long`/`short`/`buy`/`sell`/`position`/`kelly`/`order` as whole words (case-insensitive). Direction vocabulary is `YES`/`NO`/`WAIT`/`AVOID` only.
+**Scope:** The vocabulary lock applies ONLY to CLI-generated labels, section headers, and field names — the strings the CLI itself emits (e.g. `"Phase 1: Decision Quality"`, `"evidence_strength"`, `"max_safe_size"`). It does NOT apply to raw external data values that flow through from the event record (e.g. `event_id`, `event_title`, `downgrade_reason`, `degrade_reason`, `fired_rules` contents), because those are user/operator-authored and may legitimately contain trading terms (e.g. a market titled "Is this a long position bet?").
 
-Note: `max_safe_position_size` field name in the existing `execution_quality_service.py` output contains `position`. To comply with the vocabulary lock, the CLI renames this field to `max_safe_size` in ALL output (both text display label and JSON key). The extraction reads `record["execution_quality"]["max_safe_position_size"]` but emits it as `max_safe_size`. This is a display-only rename; the underlying data model is unchanged.
+**Rule:** CLI-generated labels and field names must NOT contain `long`/`short`/`buy`/`sell`/`position`/`kelly`/`order` as whole words (case-insensitive). Direction vocabulary in CLI-generated text is `YES`/`NO`/`WAIT`/`AVOID` only.
+
+**Field rename:** `max_safe_position_size` field name in the existing `execution_quality_service.py` output contains `position`. To comply with the vocabulary lock, the CLI renames this field to `max_safe_size` in ALL output (both text display label and JSON key). The extraction reads `record["execution_quality"]["max_safe_position_size"]` but emits it as `max_safe_size`. This is a display-only rename; the underlying data model is unchanged.
+
+**Test scope:** `test_vocabulary_lock` extracts CLI-generated labels/field names only (the fixed strings in `_render_text` / `_render_json`), not the dynamic values from the event record. The test uses a synthetic record whose values are clean; the assertion scans only the fixed label strings, not the rendered output with record values substituted in.
 
 ### 8.2 Pure read-only
 
@@ -289,7 +293,7 @@ Test file: `backend/tests/test_diagnose_event_quality.py`
 | `test_replay_comparison_changed` | all_on and all_off produce different directions → delta=changed |
 | `test_exit_code_not_found` | Missing event → exit 1, error to stderr |
 | `test_exit_code_success` | Found event → exit 0 |
-| `test_vocabulary_lock` | Output contains no banned terms (long/short/buy/sell/position/kelly/order as whole words) |
+| `test_vocabulary_lock` | CLI-generated labels/field names (fixed strings in render functions) contain no banned terms (long/short/buy/sell/position/kelly/order as whole words). Raw external data values (event_title, downgrade_reason, etc.) are NOT scanned — see §8.1 scope. |
 | `test_no_mutation_of_input` | `_extract_phase_data` and `_run_replay_comparison` do not mutate the input record |
 
 ## 10. Acceptance criteria
@@ -299,7 +303,7 @@ Test file: `backend/tests/test_diagnose_event_quality.py`
 - [ ] `--json` outputs valid JSON with all keys
 - [ ] `--replay` shows all_on/all_off direction comparison
 - [ ] Missing overlays show `⏭️ Skipped` (text) / `null` (JSON)
-- [ ] No banned trading terms in output
+- [ ] No banned trading terms in CLI-generated labels/field names (raw external data values like event_title are exempt — see §8.1)
 - [ ] No new dependencies in requirements.txt
 - [ ] All 14 unit tests pass
 - [ ] Full backend suite regression-free (excluding pre-existing `test_gbm_engine.py`)

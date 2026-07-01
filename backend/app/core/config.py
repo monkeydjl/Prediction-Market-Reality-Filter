@@ -668,6 +668,13 @@ class Settings:
     SOURCE_RELIABILITY_MIN_SOURCES: int = int(
         os.getenv("SOURCE_RELIABILITY_MIN_SOURCES", "2")
     )
+    # ── Source Trust Registry (Plan 4 §6.1) ──────────────────────────
+    # When true, source_reliability_service consults the SQLite registry for
+    # tier/base-trust overrides. Defaults false for byte-identical pre-Plan-4
+    # behavior.
+    SOURCE_TRUST_REGISTRY_ENABLED: bool = _env_bool(
+        "SOURCE_TRUST_REGISTRY_ENABLED", "false"
+    )
     # Phase 5 — LLM Cost and Stability Telemetry (default OFF). When enabled,
     # analyze_event attaches an llm_telemetry overlay block for ALL events
     # (every event makes at least one LLM call or falls back to deterministic).

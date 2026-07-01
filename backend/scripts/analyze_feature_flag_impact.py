@@ -202,11 +202,14 @@ def main(argv: list[str] | None = None) -> int:
                              "source_reliability_only / guardrails_only). "
                              "Default: all_off all_on.")
     parser.add_argument("--per-phase", action="store_true", default=False,
-                        help="Run all_off vs each per-phase preset "
-                             "(decision_quality_only, market_quality_only, "
-                             "source_reliability_only, guardrails_only) "
-                             "and print a matrix for each, so you can see "
-                             "which overlay causes the most direction flips.")
+                        help="Run a marginal-impact comparison for each "
+                             "overlay: all_off vs decision_quality_only / "
+                             "market_quality_only / source_reliability_only, "
+                             "and decision_quality_only vs guardrails_only "
+                             "(guardrails need a DQ-produced direction to "
+                             "gate). Prints a matrix per overlay so you "
+                             "can see which overlay causes the most "
+                             "direction flips.")
     parser.add_argument("--json", type=str, default=None,
                         metavar="PATH",
                         help="Write a JSON report to this path.")

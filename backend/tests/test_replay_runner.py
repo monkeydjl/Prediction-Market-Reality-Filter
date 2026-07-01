@@ -61,12 +61,14 @@ class TestReplayRecordBasic(unittest.TestCase):
         record = _make_synthetic_record()
         # Pre-populate with overlay fields; all_off should strip them.
         record["decision_quality"] = {"stale": True}
+        record["execution_quality"] = {"stale": True}
         record["final_displayed_direction"] = "YES"
         replayed = replay_record(record, ReplayConfig.preset_all_off())
         self.assertNotIn("decision_quality", replayed)
         self.assertNotIn("market_quality", replayed)
         self.assertNotIn("source_reliability", replayed)
         self.assertNotIn("llm_telemetry", replayed)
+        self.assertNotIn("execution_quality", replayed)
         self.assertNotIn("final_displayed_direction", replayed)
         self.assertNotIn("final_downgrade_reason", replayed)
         self.assertNotIn("guardrail_fired", replayed)

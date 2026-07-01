@@ -37,6 +37,7 @@ def replay_record(record: dict[str, Any], cfg: ReplayConfig) -> dict[str, Any]:
         "market_quality",
         "source_reliability",
         "llm_telemetry",
+        "execution_quality",
         "final_displayed_direction",
         "final_downgrade_reason",
         "guardrail_fired",

@@ -29,6 +29,13 @@ class ReplayConfig:
     guardrail_llm_degraded_blocks_act: bool | None = None
     guardrail_uncalibrated_category_blocks_act: bool | None = None
     guardrail_high_conflict_blocks_act: bool | None = None
+    # Phase 3: execution_quality overlay + guardrail rule 4 (market_not_executable).
+    # Without these, a replay's guardrail phase would read a stale
+    # execution_quality block left on the record by a prior production run,
+    # or depend on the live env's EXECUTION_QUALITY_ENABLED, instead of the
+    # chosen preset.
+    execution_quality_enabled: bool | None = None
+    guardrail_market_not_executable_blocks_act: bool | None = None
 
     @classmethod
     def preset_all_off(cls) -> "ReplayConfig":
@@ -41,6 +48,8 @@ class ReplayConfig:
             prediction_calibration_enabled=False,
             llm_telemetry_enabled=False,
             guardrails_enabled=False,
+            execution_quality_enabled=False,
+            guardrail_market_not_executable_blocks_act=False,
         )
 
     @classmethod
@@ -100,17 +109,24 @@ class ReplayConfig:
 
     @classmethod
     def preset_guardrails_only(cls) -> "ReplayConfig":
-        """DQ baseline + guardrails on. NOT all_off + guardrails, because
-        guardrails need a ``final_displayed_direction`` to gate (only
-        produced by decision_quality), and turning on DQ alone already
-        downgrades empty-evidence YES/NO to WAIT (see
+        """DQ baseline + guardrails on (all 4 rules). NOT all_off +
+        guardrails, because guardrails need a ``final_displayed_direction``
+        to gate (only produced by decision_quality), and turning on DQ
+        alone already downgrades empty-evidence YES/NO to WAIT (see
         decision_quality_service._apply_downgrade_rules rule 4). Comparing
         all_off vs this preset would conflate DQ's downgrades with
         guardrail's. The per-phase CLI compares
         ``preset_decision_quality_only`` vs this preset to isolate the
-        guardrail's marginal impact."""
+        guardrail's marginal impact.
+
+        Rule 4 (market_not_executable) requires execution_quality to be
+        built, so EXECUTION_QUALITY_ENABLED is on. The DQ-only baseline
+        does NOT enable execution_quality, so a rule-4 firing shows up as
+        a marginal change in this comparison."""
         cfg = cls.preset_decision_quality_only()
         cfg.guardrails_enabled = True
+        cfg.execution_quality_enabled = True
+        cfg.guardrail_market_not_executable_blocks_act = True
         return cfg
 
 

@@ -128,6 +128,9 @@ from app.services.trend_analysis_service import (
 )
 from app.models.event import (
     AutoResolveResponse,
+    DecisionTimelineDiff,
+    DecisionTimelineResponse,
+    DecisionTimelineSnapshot,
     EventAnalysisRequest,
     EventDiscoveryResponse,
     EventHistoryResponse,
@@ -920,6 +923,40 @@ async def get_event_probability_history(event_id: EventId):
         "trend": analyze_trend(probability_snapshots),
         "edge": analyze_edge_trajectory(probability_snapshots),
         "history": probability_snapshots,
+    }
+
+
+@router.get("/{event_id}/decision-timeline", response_model=DecisionTimelineResponse)
+async def get_event_decision_timeline(
+    event_id: EventId,
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """Return the decision timeline snapshots + consecutive diffs for an event.
+
+    Each snapshot captures the overlay-bearing record at one save_events
+    call. The diffs array has len(snapshots) - 1 entries; diffs[i] is the
+    diff between snapshots[i] and snapshots[i+1].
+
+    Returns count=0 / empty lists when the event exists but has no
+    snapshots (e.g. DECISION_TIMELINE_ENABLED was off when it was saved).
+    404 when the event_id is unknown.
+    """
+    from app.memory import event_store
+    entry = event_store.get_event(event_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Event '{event_id}' not found")
+    from app.memory import decision_timeline_store
+    from app.services.decision_diff_service import build_decision_diff
+    total = decision_timeline_store.count_snapshots(event_id)
+    snapshots = decision_timeline_store.list_snapshots(event_id, limit=limit)
+    diffs: list[dict[str, Any]] = []
+    for i in range(max(len(snapshots) - 1, 0)):
+        diffs.append(build_decision_diff(snapshots[i], snapshots[i + 1]))
+    return {
+        "event_id": event_id,
+        "count": total,
+        "snapshots": snapshots,
+        "diffs": diffs,
     }
 
 

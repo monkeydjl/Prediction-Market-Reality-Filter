@@ -292,5 +292,231 @@ class TestRenderJson(unittest.TestCase):
         self.assertIsNone(parsed["replay_comparison"])
 
 
+class TestReplayComparison(unittest.TestCase):
+    def test_replay_comparison_no_change(self):
+        """When all_on and all_off produce same direction, delta=no_change.
+        Uses a record with no overlays — both configs fall back to
+        actionable_recommendation.direction = "YES"."""
+        from app.core.config import settings
+        from diagnose_event_quality import _run_replay_comparison
+        record = _sample_record()
+        # Strip all overlays so all_off and all_on both start fresh.
+        # With DECISION_QUALITY_ENABLED=False and GUARDRAILS_ENABLED=False
+        # (test env default), all_on inherits these → no overlay runs →
+        # direction falls back to actionable_recommendation.direction.
+        for key in ("decision_quality", "market_quality", "source_reliability",
+                    "llm_telemetry", "execution_quality",
+                    "final_displayed_direction", "final_downgrade_reason",
+                    "guardrail_fired"):
+            record.pop(key, None)
+        flags = {
+            "DECISION_QUALITY_ENABLED": False,
+            "MARKET_QUALITY_ENABLED": False,
+            "SOURCE_RELIABILITY_ENABLED": False,
+            "LLM_TELEMETRY_ENABLED": False,
+            "GUARDRAILS_ENABLED": False,
+            "EXECUTION_QUALITY_ENABLED": False,
+        }
+        with patch.multiple(settings, **flags):
+            result = _run_replay_comparison(record)
+        self.assertEqual(result["all_off_direction"], "YES")
+        self.assertEqual(result["all_on_direction"], "YES")
+        self.assertEqual(result["delta"], "no_change")
+
+    def test_replay_comparison_changed(self):
+        """When all_on and all_off produce different directions, delta=changed.
+        Enables DQ + guardrails (uncalibrated_category rule) so all_on
+        downgrades YES → WAIT, while all_off leaves direction as YES."""
+        from app.core.config import settings
+        from diagnose_event_quality import _run_replay_comparison
+        record = _sample_record()
+        # Give the record support evidence so DQ keeps YES (not downgraded
+        # to WAIT for empty evidence) — same pattern as test_replay_runner.py
+        record["evidence_breakdown"] = [
+            {
+                "direction": "support",
+                "source": "test",
+                "title": "test evidence",
+                "strength": 0.8,
+                "credibility": 0.8,
+                "rationale_zh": "",
+            }
+        ]
+        # Also need legacy_analysis for DQ to compute consensus_level
+        record["legacy_analysis"] = {
+            "ai_probability": 62.0,
+            "market_probability": 50.0,
+            "signal": "WATCHLIST",
+            "signal_direction": "LONG",
+            "signal_strength": "MEDIUM",
+            "evidence_strength": 0.7,
+            "evidence_conflict_score": 0.2,
+            "risk_flags": [],
+            "analysis_quality": "llm",
+        }
+        record["market_quote"] = {
+            "spread_pct": 1.0, "liquidity": 5000.0, "volume": 1000.0
+        }
+        record["sentiment_profile"] = {"summary": "neutral", "articles": []}
+        record["source"] = {"type": "prediction_market", "platform": "manifold"}
+        # Enable guardrails + DQ + uncalibrated_category rule so all_on
+        # downgrades YES → WAIT (empty calibration store in test env)
+        flags = {
+            "DECISION_QUALITY_ENABLED": True,
+            "GUARDRAILS_ENABLED": True,
+            "GUARDRAIL_UNCALIBRATED_CATEGORY_BLOCKS_ACT": True,
+            "GUARDRAIL_LLM_DEGRADED_BLOCKS_ACT": False,
+            "GUARDRAIL_HIGH_CONFLICT_BLOCKS_ACT": False,
+            "GUARDRAIL_MARKET_NOT_EXECUTABLE_BLOCKS_ACT": False,
+            "EXECUTION_QUALITY_ENABLED": False,
+        }
+        with patch.multiple(settings, **flags):
+            result = _run_replay_comparison(record)
+        # all_off leaves direction as YES (from actionable_recommendation)
+        self.assertEqual(result["all_off_direction"], "YES")
+        # all_on downgrades YES → WAIT (uncalibrated category fires)
+        self.assertEqual(result["all_on_direction"], "WAIT")
+        self.assertEqual(result["delta"], "changed")
+
+    def test_replay_no_mutation_of_input(self):
+        """_run_replay_comparison must not mutate the input record."""
+        from app.core.config import settings
+        from diagnose_event_quality import _run_replay_comparison
+        record = _sample_record()
+        snapshot = copy.deepcopy(record)
+        flags = {"DECISION_QUALITY_ENABLED": False, "GUARDRAILS_ENABLED": False}
+        with patch.multiple(settings, **flags):
+            _run_replay_comparison(record)
+        self.assertEqual(record, snapshot)
+
+
+class TestExitCodes(unittest.TestCase):
+    def test_exit_code_not_found(self):
+        """Missing event → exit 1, error to stderr."""
+        from app.core.config import settings
+        from diagnose_event_quality import main
+        with tempfile.TemporaryDirectory() as tmp:
+            store_path = Path(tmp) / "event_store.json"
+            import io as _io
+            orig_stderr = sys.stderr
+            try:
+                with patch.object(settings, "EVENT_STORE_FILE", str(store_path)):
+                    sys.stderr = _io.StringIO()
+                    rc = main(["nonexistent"])
+                self.assertEqual(rc, 1)
+                self.assertIn("not found", sys.stderr.getvalue())
+            finally:
+                sys.stderr = orig_stderr
+
+    def test_exit_code_success(self):
+        """Found event → exit 0."""
+        from app.core.config import settings
+        from app.memory import event_store
+        from diagnose_event_quality import main
+        record = {
+            "event_id": "test-1",
+            "event_title": "Will X happen?",
+            "event_summary": "summary",
+            "source": {"type": "prediction_market", "platform": "manifold"},
+            "market_quote": {"spread_pct": 1.0, "liquidity": 5000.0, "volume": 1000.0},
+            "probability": {
+                "baseline": 50.0,
+                "estimated": 62.0,
+                "change": 12.0,
+                "direction": "rising",
+            },
+            "credibility": {
+                "score": 60,
+                "level": "MEDIUM",
+                "confidence": 0.6,
+                "news_quality": 0.5,
+                "evidence_strength": 0.4,
+                "source_count": 3,
+            },
+            "impact": {"score": 55, "level": "MEDIUM", "drivers": ["strong_evidence"]},
+            "risk": {"level": "LOW", "flags": []},
+            "evidence": {
+                "direction": "supports",
+                "strength": 0.4,
+                "conflict": 0.1,
+                "freshness": 0.7,
+                "resolution_relevance": 0.5,
+            },
+            "value_score": 50,
+            "intelligence_report": {
+                "headline": "h",
+                "why_it_matters": "w",
+                "probability_assessment": "p",
+                "recommended_action": "a",
+            },
+            "actionable_recommendation": {
+                "direction": "YES",
+                "confidence": "medium",
+                "suggested_allocation_pct": 2.0,
+                "edge": 12.0,
+                "risk_level": "medium",
+                "rationale": "test",
+                "calibration_status": "uncalibrated_provisional",
+            },
+            "legacy_analysis": {
+                "ai_probability": 62.0,
+                "market_probability": 50.0,
+                "signal": "WATCHLIST",
+                "signal_direction": "LONG",
+                "signal_strength": "MEDIUM",
+                "evidence_strength": 0.7,
+                "evidence_conflict_score": 0.2,
+                "risk_flags": [],
+                "analysis_quality": "llm",
+            },
+            "evidence_breakdown": [],
+            "sentiment_profile": {"summary": "neutral", "articles": []},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            store_path = Path(tmp) / "event_store.json"
+            import io as _io
+            orig_stdout = sys.stdout
+            orig_stderr = sys.stderr
+            try:
+                with patch.object(settings, "EVENT_STORE_FILE", str(store_path)):
+                    event_store.save_event(record)
+                    sys.stdout = _io.StringIO()
+                    sys.stderr = _io.StringIO()
+                    rc = main(["test-1", "--json"])
+                self.assertEqual(rc, 0)
+            finally:
+                sys.stdout = orig_stdout
+                sys.stderr = orig_stderr
+
+
+class TestVocabularyLock(unittest.TestCase):
+    def test_vocabulary_lock_cli_labels(self):
+        """CLI-generated labels/field names (fixed strings in render
+        functions) contain no banned terms. Raw external data values
+        (event_title, downgrade_reason, fired_rules) are NOT scanned —
+        they are user-authored and may contain trading terms (§8.1).
+        _sample_record uses clean values (no trading terms), so a full
+        output scan is equivalent to scanning only CLI labels here."""
+        import re
+        from diagnose_event_quality import _render_text, _render_json, _extract_phase_data
+        record = _sample_record()
+        data = _extract_phase_data(record)
+        text = _render_text(data, replay_result=None)
+        json_str = _render_json(data, replay_result=None)
+
+        # Banned terms as whole words (case-insensitive)
+        banned = ("long", "short", "buy", "sell", "position", "kelly", "order")
+        for term in banned:
+            pattern = r"\b" + re.escape(term) + r"\b"
+            self.assertFalse(
+                re.search(pattern, text, re.IGNORECASE),
+                f"banned term '{term}' found in text output",
+            )
+            self.assertFalse(
+                re.search(pattern, json_str, re.IGNORECASE),
+                f"banned term '{term}' found in JSON output",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

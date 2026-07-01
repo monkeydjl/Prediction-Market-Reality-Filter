@@ -283,9 +283,52 @@ def _render_json(data: dict[str, Any], replay_result: dict[str, Any] | None) -> 
 
 
 def _run_replay_comparison(record: dict[str, Any]) -> dict[str, Any]:
-    """Run all_on vs all_off replay, return direction delta. (Stub —
-    implemented in Task 3.)"""
-    return {"all_on_direction": None, "all_off_direction": None, "delta": "no_change"}
+    """Run all_on vs all_off replay, return direction delta.
+
+    Uses replay_record from app.replay.runner (NOT app.replay — __init__.py
+    is empty, same pattern as analyze_feature_flag_impact.py). Deep-copies
+    the record before replay to avoid mutation (replay_record already
+    deep-copies internally, but defensive — the contract says no mutation).
+
+    Returns dict with:
+      - all_on_direction: str | None (YES/NO/WAIT/AVOID or None)
+      - all_off_direction: str | None
+      - delta: "changed" | "no_change"
+    """
+    from app.replay.config import ReplayConfig
+    from app.replay.runner import replay_record
+
+    _DIRECTIONS = ("YES", "NO", "WAIT", "AVOID")
+
+    def _effective_direction(replayed: dict[str, Any]) -> str | None:
+        """Same fallback chain as analyze_feature_flag_impact._effective_direction:
+        final_displayed_direction → actionable_recommendation.direction → None.
+        probability.direction is NOT used (returns rising/falling/stable)."""
+        dir_val = replayed.get("final_displayed_direction")
+        if dir_val in _DIRECTIONS:
+            return dir_val
+        rec = replayed.get("actionable_recommendation")
+        if isinstance(rec, dict):
+            rec_dir = rec.get("direction")
+            if rec_dir in _DIRECTIONS:
+                return rec_dir
+        return None
+
+    # Deep-copy to avoid mutation (replay_record already deep-copies, but
+    # defensive — the contract says no mutation of input)
+    record_copy = copy.deepcopy(record)
+    replayed_on = replay_record(record_copy, ReplayConfig.preset_all_on())
+    replayed_off = replay_record(record, ReplayConfig.preset_all_off())
+
+    dir_on = _effective_direction(replayed_on)
+    dir_off = _effective_direction(replayed_off)
+    delta = "changed" if dir_on != dir_off else "no_change"
+
+    return {
+        "all_on_direction": dir_on,
+        "all_off_direction": dir_off,
+        "delta": delta,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

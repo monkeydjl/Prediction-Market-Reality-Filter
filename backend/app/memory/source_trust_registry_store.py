@@ -42,6 +42,9 @@ _INIT_GUARD = threading.Lock()
 
 _BANNED_TERMS = ("long", "short", "buy", "sell", "position", "kelly", "order")
 
+_VALID_TIERS = frozenset({"official", "trusted", "established", "aggregator", "unknown"})
+_VALID_LIST_CATEGORIES = frozenset({"official", "caution", "denylist"})
+
 
 def _ensure_schema(path: str) -> None:
     if path in _INITIALIZED:
@@ -90,9 +93,31 @@ def upsert_entry(
     list_category: str | None,
     notes: str = "",
 ) -> None:
-    """Insert or update a registry entry. Idempotent on ``pattern``."""
+    """Insert or update a registry entry. Idempotent on ``pattern``.
+
+    Value-domain validated at the store boundary so a bad admin input
+    (e.g. ``--base-trust 85`` instead of ``0.85``) cannot pollute the
+    source-reliability score downstream.
+    """
     if pattern_type not in ("domain", "source_name"):
         raise ValueError(f"invalid pattern_type: {pattern_type!r}")
+    if tier is not None and tier not in _VALID_TIERS:
+        raise ValueError(
+            f"invalid tier {tier!r}; must be one of {sorted(_VALID_TIERS)} or None"
+        )
+    if base_trust is not None:
+        if not isinstance(base_trust, (int, float)):
+            raise ValueError(f"base_trust must be a number or None, got {base_trust!r}")
+        if not (0.0 <= base_trust <= 1.0):
+            raise ValueError(
+                f"base_trust must be in [0.0, 1.0], got {base_trust!r} "
+                "(did you pass 85 instead of 0.85?)"
+            )
+    if list_category is not None and list_category not in _VALID_LIST_CATEGORIES:
+        raise ValueError(
+            f"invalid list_category {list_category!r}; must be one of "
+            f"{sorted(_VALID_LIST_CATEGORIES)} or None"
+        )
     _check_vocabulary(notes)
     path = sqlite_db.loop_db_path()
     _ensure_schema(path)

@@ -123,6 +123,69 @@ class TestSourceTrustRegistryStore(unittest.TestCase):
                         notes=f"this source is {term}",
                     )
 
+    def test_rejects_invalid_tier(self):
+        """tier must be one of the 5 known tiers or None."""
+        with tempfile.TemporaryDirectory() as tmp, _db(tmp):
+            with self.assertRaises(ValueError):
+                registry.upsert_entry(
+                    pattern="bad.com", pattern_type="domain",
+                    tier="bogus_tier", base_trust=0.5, list_category="official",
+                )
+
+    def test_rejects_base_trust_out_of_range(self):
+        """base_trust must be in [0, 1] or None — rejects 85 (common 0.85 typo)."""
+        with tempfile.TemporaryDirectory() as tmp, _db(tmp):
+            with self.assertRaises(ValueError):
+                registry.upsert_entry(
+                    pattern="bad.com", pattern_type="domain",
+                    tier="trusted", base_trust=85.0, list_category="official",
+                )
+            with self.assertRaises(ValueError):
+                registry.upsert_entry(
+                    pattern="bad-neg.com", pattern_type="domain",
+                    tier="trusted", base_trust=-0.1, list_category="official",
+                )
+            with self.assertRaises(ValueError):
+                registry.upsert_entry(
+                    pattern="bad-over.com", pattern_type="domain",
+                    tier="trusted", base_trust=1.1, list_category="official",
+                )
+
+    def test_accepts_base_trust_boundaries(self):
+        """base_trust of 0.0 and 1.0 are valid."""
+        with tempfile.TemporaryDirectory() as tmp, _db(tmp):
+            registry.upsert_entry(
+                pattern="a.com", pattern_type="domain",
+                tier="trusted", base_trust=0.0, list_category="official",
+            )
+            registry.upsert_entry(
+                pattern="b.com", pattern_type="domain",
+                tier="trusted", base_trust=1.0, list_category="official",
+            )
+            self.assertAlmostEqual(registry.get_entry("a.com")["base_trust"], 0.0)
+            self.assertAlmostEqual(registry.get_entry("b.com")["base_trust"], 1.0)
+
+    def test_rejects_invalid_list_category(self):
+        """list_category must be official/caution/denylist or None."""
+        with tempfile.TemporaryDirectory() as tmp, _db(tmp):
+            with self.assertRaises(ValueError):
+                registry.upsert_entry(
+                    pattern="bad.com", pattern_type="domain",
+                    tier="trusted", base_trust=0.5, list_category="bogus",
+                )
+
+    def test_accepts_none_tier_and_category(self):
+        """None tier and list_category are valid (no override applied)."""
+        with tempfile.TemporaryDirectory() as tmp, _db(tmp):
+            registry.upsert_entry(
+                pattern="a.com", pattern_type="domain",
+                tier=None, base_trust=None, list_category=None,
+            )
+            entry = registry.get_entry("a.com")
+            self.assertIsNone(entry["tier"])
+            self.assertIsNone(entry["base_trust"])
+            self.assertIsNone(entry["list_category"])
+
 
 if __name__ == "__main__":
     unittest.main()

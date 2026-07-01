@@ -140,9 +140,12 @@ def main(argv: list[str] | None = None) -> int:
     p_add.add_argument("--pattern", required=True)
     p_add.add_argument("--type", required=True,
                        choices=["domain", "source_name"])
-    p_add.add_argument("--tier", default=None)
+    p_add.add_argument("--tier", default=None,
+                       choices=["official", "trusted", "established",
+                                "aggregator", "unknown", None])
     p_add.add_argument("--base-trust", type=float, default=None)
-    p_add.add_argument("--category", default=None)
+    p_add.add_argument("--category", default=None,
+                       choices=["official", "caution", "denylist", None])
     p_add.add_argument("--notes", default="")
     p_add.set_defaults(func=_cmd_add)
 

@@ -67,5 +67,44 @@ class TestRenderJson(unittest.TestCase):
         self.assertEqual(parsed["direction_matrix"]["YES->WAIT"], 17)
 
 
+class TestRenderHtml(unittest.TestCase):
+    def test_render_html_returns_non_empty_string(self):
+        from app.replay.report import render_html
+        html = render_html(_sample_metrics())
+        self.assertIsInstance(html, str)
+        self.assertTrue(len(html) > 0)
+        self.assertTrue(html.startswith("<!DOCTYPE html>"))
+
+    def test_render_html_includes_summary_section(self):
+        from app.replay.report import render_html
+        html = render_html(_sample_metrics())
+        self.assertIn('id="summary"', html)
+        self.assertIn("Summary", html)
+        # Summary cards: Total events, Direction changed, Resolved
+        self.assertIn("Total events", html)
+        self.assertIn("100", html)  # total value from _sample_metrics
+
+    def test_render_html_includes_brier_section(self):
+        from app.replay.report import render_html
+        html = render_html(_sample_metrics())
+        self.assertIn('id="brier"', html)
+        self.assertIn("Brier", html)
+        self.assertIn("0.25", html)  # brier_mean from _sample_metrics
+        # brier_frozen callout text
+        self.assertIn("frozen", html.lower())
+
+    def test_html_escape_helper(self):
+        from app.replay.report import _html_escape
+        self.assertEqual(_html_escape("<script>"), "&lt;script&gt;")
+        self.assertEqual(_html_escape("a&b"), "a&amp;b")
+        self.assertEqual(_html_escape('"quoted"'), "&quot;quoted&quot;")
+
+    def test_format_pct_helper(self):
+        from app.replay.report import _format_pct
+        self.assertEqual(_format_pct(17, 100), "17.0%")
+        self.assertEqual(_format_pct(0, 0), "N/A")
+        self.assertEqual(_format_pct(3, 10), "30.0%")
+
+
 if __name__ == "__main__":
     unittest.main()

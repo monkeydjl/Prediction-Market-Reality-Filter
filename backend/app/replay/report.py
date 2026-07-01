@@ -1,11 +1,12 @@
-"""Render ReplayMetrics to Markdown + JSON + cases.jsonl.
+"""Render ReplayMetrics to Markdown + JSON + HTML + cases.jsonl.
 
-Pure rendering: no IO except ``write_report`` which writes the three files.
+Pure rendering: no IO except ``write_report`` which writes the four files.
 """
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from html import escape as _stdlib_escape
 from pathlib import Path
 from typing import Any
 
@@ -134,6 +135,160 @@ def render_markdown(metrics: dict[str, Any]) -> str:
 def render_json(metrics: dict[str, Any]) -> str:
     """Render metrics dict to a JSON string."""
     return json.dumps(metrics, indent=2, default=str)
+
+
+def _html_escape(text: str) -> str:
+    """Escape HTML special characters. Defensive XSS protection for
+    event_id / phase strings that flow into the report from metrics."""
+    return _stdlib_escape(str(text), quote=True)
+
+
+def _format_pct(num: int, denom: int) -> str:
+    """Format num/denom as a percentage string. Returns 'N/A' when
+    denom is 0 (avoids ZeroDivisionError in summary cards)."""
+    if denom == 0:
+        return "N/A"
+    return f"{num / denom * 100:.1f}%"
+
+
+def _heatmap_color(count: int, max_count: int, is_diagonal: bool) -> str:
+    """Return inline ``background-color: rgba(...)`` style for a direction
+    matrix cell. Diagonal (unchanged) = green; off-diagonal (changed) =
+    crimson. Intensity scales with count/max_count. Returns empty string
+    when max_count=0 or count=0 (no background)."""
+    if max_count == 0 or count == 0:
+        return ""
+    intensity = count / max_count
+    if is_diagonal:
+        alpha = 0.15 + intensity * 0.35
+        return f"background-color: rgba(34, 139, 34, {alpha:.2f})"
+    alpha = 0.15 + intensity * 0.5
+    return f"background-color: rgba(220, 20, 60, {alpha:.2f})"
+
+
+def _delta_badge(delta: float | None) -> str:
+    """Render direction_correct_delta as a colored badge. Positive =
+    green (improved), negative = red (regressed), zero/None = grey."""
+    if delta is None:
+        return '<span class="badge badge-neutral">N/A</span>'
+    if delta > 0:
+        return f'<span class="badge badge-improved">+{delta*100:.1f}pp (improved)</span>'
+    if delta < 0:
+        return f'<span class="badge badge-regressed">{delta*100:.1f}pp (regressed)</span>'
+    return '<span class="badge badge-neutral">0.0pp (unchanged)</span>'
+
+
+_CSS = """
+* { box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 24px; color: #222; max-width: 1100px; }
+h1 { border-bottom: 2px solid #444; padding-bottom: 8px; }
+h2 { margin-top: 32px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+.generated { color: #666; font-style: italic; font-size: 0.9em; }
+section { margin-bottom: 24px; }
+.cards { display: flex; gap: 16px; flex-wrap: wrap; }
+.card { background: #f5f5f5; border-radius: 8px; padding: 16px 20px; min-width: 160px; border-left: 4px solid #444; }
+.card .label { color: #666; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.5px; }
+.card .value { font-size: 1.8em; font-weight: bold; margin-top: 4px; }
+table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+th { background: #f0f0f0; cursor: pointer; user-select: none; }
+th:hover { background: #e0e0e0; }
+tbody tr:nth-child(even) { background: #fafafa; }
+.callout { background: #fffbe6; border-left: 4px solid #d4a017; padding: 12px 16px; margin: 8px 0; font-size: 0.9em; }
+.bar-container { background: #eee; border-radius: 4px; height: 24px; margin: 4px 0; position: relative; }
+.bar { height: 100%; border-radius: 4px; }
+.bar-original { background: #888; }
+.bar-replayed { background: #2563eb; }
+.bar-label { position: absolute; left: 8px; top: 4px; color: white; font-size: 0.8em; font-weight: bold; }
+.badge { padding: 2px 8px; border-radius: 12px; font-size: 0.85em; font-weight: bold; }
+.badge-improved { background: #dcfce7; color: #166534; }
+.badge-regressed { background: #fee2e2; color: #991b1b; }
+.badge-neutral { background: #e5e7eb; color: #374151; }
+.filter-bar { margin: 8px 0; display: flex; align-items: center; gap: 8px; }
+.filter-bar label { font-size: 0.9em; color: #555; }
+select { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; }
+"""
+
+
+def render_html(metrics: dict[str, Any]) -> str:
+    """Render metrics dict to a self-contained HTML report string.
+
+    Pure function: no IO, no side effects. Output is a single HTML
+    document with inline CSS + JS, no external resources — can be
+    opened directly in a browser without a network connection.
+
+    Mirrors the 7 sections of render_markdown: Summary / Direction
+    Matrix / Brier / Direction Accuracy / LLM vs Fallback /
+    Per-Phase Marginal / Conflict Cases. Conflict cases table is
+    sortable (click headers) and filterable (by phase dropdown).
+    """
+    parts: list[str] = []
+    parts.append("<!DOCTYPE html>")
+    parts.append('<html lang="zh-CN">')
+    parts.append("<head>")
+    parts.append('<meta charset="UTF-8">')
+    parts.append("<title>Replay Report</title>")
+    parts.append(f"<style>{_CSS}</style>")
+    parts.append("</head>")
+    parts.append("<body>")
+    parts.append("<h1>Replay Report</h1>")
+    parts.append(
+        f'<p class="generated">_Generated: '
+        f"{datetime.now(timezone.utc).isoformat()}_</p>"
+    )
+
+    # Section 1: Summary
+    total = metrics.get("total", 0)
+    matrix = metrics.get("direction_matrix", {})
+    changed = sum(
+        v for k, v in matrix.items()
+        if k.split("->")[0] != k.split("->")[1]
+    ) if matrix else 0
+    change_rate = _format_pct(changed, total) if total else "0.0%"
+    resolved = metrics.get("resolved_count", 0)
+    parts.append('<section id="summary">')
+    parts.append("<h2>Summary</h2>")
+    parts.append('<div class="cards">')
+    parts.append(
+        f'<div class="card"><div class="label">Total events</div>'
+        f'<div class="value">{total}</div></div>'
+    )
+    parts.append(
+        f'<div class="card"><div class="label">Direction changed</div>'
+        f'<div class="value">{changed} ({change_rate})</div></div>'
+    )
+    parts.append(
+        f'<div class="card"><div class="label">Resolved (with outcome)</div>'
+        f'<div class="value">{resolved}</div></div>'
+    )
+    parts.append("</div>")
+    parts.append("</section>")
+
+    # Section 3: Brier (rendered before Direction Matrix per Markdown order)
+    brier_mean = metrics.get("brier_mean")
+    brier_frozen = metrics.get("brier_frozen", False)
+    parts.append('<section id="brier">')
+    parts.append("<h2>Brier</h2>")
+    if brier_mean is not None:
+        parts.append(
+            f'<div class="card"><div class="label">Mean Brier (resolved)</div>'
+            f'<div class="value">{brier_mean:.4f}</div></div>'
+        )
+        if brier_frozen:
+            parts.append(
+                '<div class="callout">Brier is frozen at freeze time. '
+                "Overlays do not recompute ai_probability, so original and "
+                "replayed share the same Brier. See Direction Accuracy "
+                "below for the real improvement signal.</div>"
+            )
+    else:
+        parts.append("<p>No resolved samples to compute Brier.</p>")
+    parts.append("</section>")
+
+    # Sections 2, 4, 5, 6, 7 added in later tasks.
+    parts.append("</body>")
+    parts.append("</html>")
+    return "\n".join(parts)
 
 
 def write_report(

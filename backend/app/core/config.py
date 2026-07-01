@@ -684,6 +684,12 @@ class Settings:
     REVIEW_QUEUE_MISMATCH_CONFIDENCE: float = float(
         os.getenv("REVIEW_QUEUE_MISMATCH_CONFIDENCE", "0.75")
     )
+    # Plan 5 §5.4: Decision Timeline / Diff Viewer. When enabled, save_events
+    # appends an overlay-bearing snapshot of each record to
+    # decision_timeline_store so the /decision-timeline route can diff how an
+    # event's final direction evolved. Defaults to false → byte-identical to
+    # pre-Plan-5 (no snapshot written, no store schema created).
+    DECISION_TIMELINE_ENABLED: bool = _env_bool("DECISION_TIMELINE_ENABLED", "false")
     # Phase 5 — LLM Cost and Stability Telemetry (default OFF). When enabled,
     # analyze_event attaches an llm_telemetry overlay block for ALL events
     # (every event makes at least one LLM call or falls back to deterministic).

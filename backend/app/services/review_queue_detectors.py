@@ -25,18 +25,31 @@ _ACT_SIGNALS = frozenset({"act", "provisional_act"})
 _WAIT_LIKE = frozenset({"WAIT", "AVOID"})
 
 
-def detect_review_candidates(record: dict[str, Any]) -> list[dict[str, Any]]:
+def detect_review_candidates(
+    record: dict[str, Any],
+    *,
+    mismatch_confidence_threshold: float = 0.75,
+) -> list[dict[str, Any]]:
     """Scan a record and return review-queue candidate dicts.
 
     Pure, synchronous, deterministic. Returns an empty list when no
     detector fires. Does not crash on missing fields.
+
+    ``mismatch_confidence_threshold`` is the orchestrator-configurable
+    cutoff for the ``outcome_prediction_mismatch`` detector (defaults to
+    0.75 to preserve byte-identical behavior when the flag is off or
+    settings are unset). The orchestrator should pass
+    ``settings.REVIEW_QUEUE_MISMATCH_CONFIDENCE`` so the env var takes
+    effect.
     """
     if not isinstance(record, dict):
         return []
     candidates: list[dict[str, Any]] = []
     candidates.extend(_detect_high_value_downgraded(record))
     candidates.extend(_detect_source_market_conflict(record))
-    candidates.extend(_detect_outcome_prediction_mismatch(record))
+    candidates.extend(_detect_outcome_prediction_mismatch(
+        record, confidence_threshold=mismatch_confidence_threshold,
+    ))
     return candidates
 
 

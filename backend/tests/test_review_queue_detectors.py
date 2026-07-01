@@ -122,6 +122,23 @@ class TestReviewQueueDetectors(unittest.TestCase):
         candidates = detect_review_candidates({"event_id": "x"})
         self.assertEqual(candidates, [])
 
+    def test_mismatch_confidence_threshold_param_controls_firing(self):
+        """``mismatch_confidence_threshold`` parameter overrides the default
+        0.75 — a 0.70-confidence prediction that contradicts the outcome
+        fires only when the threshold is lowered to 0.70.
+        """
+        rec = _base_record(
+            outcome="NO",
+            actionable_recommendation={"direction": "YES", "signal": "act",
+                                        "ai_probability": 0.70},
+        )
+        # Default threshold 0.75 → 0.70 < 0.75 → no fire.
+        self.assertEqual(detect_review_candidates(rec), [])
+        # Lowered threshold 0.70 → 0.70 >= 0.70 → fire.
+        candidates = detect_review_candidates(rec, mismatch_confidence_threshold=0.70)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["trigger"], "outcome_prediction_mismatch")
+
 
 if __name__ == "__main__":
     unittest.main()

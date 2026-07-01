@@ -630,7 +630,10 @@ def _build_all_overlays(
             from app.memory import review_queue_store
             event_id = record.get("event_id")
             if event_id:
-                candidates = detect_review_candidates(record)
+                candidates = detect_review_candidates(
+                    record,
+                    mismatch_confidence_threshold=settings.REVIEW_QUEUE_MISMATCH_CONFIDENCE,
+                )
                 for candidate in candidates:
                     try:
                         review_queue_store.enqueue_item(

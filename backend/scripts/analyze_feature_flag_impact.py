@@ -88,7 +88,32 @@ _PER_PHASE_PRESETS = (
 
 
 def _effective_direction(record: dict[str, Any]) -> str | None:
-    return record.get("final_displayed_direction")
+    """Return the effective direction of a record under a replay config.
+
+    Fallback chain (mirrors how overlays derive the final direction):
+      1. ``final_displayed_direction`` — set by merge_quality_overlays when
+         at least one overlay ran. When ``all_off`` is used, replay_record
+         strips this field and does not regenerate it.
+      2. ``actionable_recommendation.direction`` — the pre-overlay direction
+         from the LLM analysis. This is what ``raw_direction`` in every
+         overlay block mirrors.
+      3. ``probability.direction`` — the raw model direction.
+      4. ``"WAIT"`` — final fallback (matches overlay default).
+
+    Without this chain, an all_off baseline would uniformly report WAIT,
+    miscounting YES->WAIT as WAIT->WAIT and YES->YES (no change) as
+    WAIT->YES.
+    """
+    dir_val = record.get("final_displayed_direction")
+    if dir_val:
+        return dir_val
+    rec = record.get("actionable_recommendation")
+    if isinstance(rec, dict) and rec.get("direction"):
+        return rec["direction"]
+    prob = record.get("probability")
+    if isinstance(prob, dict) and prob.get("direction"):
+        return prob["direction"]
+    return "WAIT"
 
 
 def _compute_direction_matrix(
@@ -104,8 +129,8 @@ def _compute_direction_matrix(
     for record in records:
         replayed_a = replay_record(record, cfg_a)
         replayed_b = replay_record(record, cfg_b)
-        dir_a = _effective_direction(replayed_a) or "WAIT"
-        dir_b = _effective_direction(replayed_b) or "WAIT"
+        dir_a = _effective_direction(replayed_a)
+        dir_b = _effective_direction(replayed_b)
         if dir_a in matrix and dir_b in matrix[dir_a]:
             matrix[dir_a][dir_b] += 1
     return matrix

@@ -136,6 +136,47 @@ class TestAnalyzeFeatureFlagImpact(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertIn("[WARN]", buf.getvalue())
 
+    def test_effective_direction_falls_back_to_recommendation(self):
+        """Regression test: when all_off strips final_displayed_direction,
+        _effective_direction must fall back to actionable_recommendation.direction
+        (not default to WAIT). Without this chain, a YES record under all_off
+        would be counted as WAIT, misreporting YES->YES as WAIT->YES and
+        YES->WAIT as WAIT->WAIT.
+
+        This test does NOT mock replay_record — it exercises the real
+        replay path with all_off (which strips overlays but preserves
+        actionable_recommendation).
+        """
+        from app.replay.config import ReplayConfig
+        from analyze_feature_flag_impact import _effective_direction
+        from app.replay.runner import replay_record
+
+        record = _record("e-fallback", "YES")
+        replayed = replay_record(record, ReplayConfig.preset_all_off())
+        # all_off strips final_displayed_direction
+        self.assertNotIn("final_displayed_direction", replayed)
+        # Fallback chain must recover YES from actionable_recommendation
+        self.assertEqual(_effective_direction(replayed), "YES")
+
+    def test_direction_matrix_uses_recommendation_fallback(self):
+        """End-to-end regression: all_off vs all_off on a YES record must
+        report YES->YES (no change), not WAIT->WAIT. Uses real replay_record
+        (no mock) to verify the fallback chain works through the matrix."""
+        from app.replay.config import ReplayConfig
+
+        records = [_record("e-yes", "YES"), _record("e-no", "NO")]
+        matrix = _compute_direction_matrix(
+            records,
+            ReplayConfig.preset_all_off(),
+            ReplayConfig.preset_all_off(),
+        )
+        # Both configs are all_off → no change → diagonal should be 1 each
+        self.assertEqual(matrix["YES"]["YES"], 1)
+        self.assertEqual(matrix["NO"]["NO"], 1)
+        # No spurious WAIT entries
+        self.assertEqual(matrix["WAIT"]["YES"], 0)
+        self.assertEqual(matrix["YES"]["WAIT"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

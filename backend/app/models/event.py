@@ -537,6 +537,43 @@ class EventHistoryResponse(FlexibleResponse):
     history: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class DecisionTimelineSnapshot(BaseModel):
+    """One overlay-bearing snapshot of an event at a point in time."""
+    snapshot_id: str
+    event_id: str
+    recorded_at: str
+    final_displayed_direction: str | None = None
+    final_downgrade_reason: str | None = None
+    probability: dict[str, Any] | None = None
+    decision_quality: dict[str, Any] | None = None
+    market_quality: dict[str, Any] | None = None
+    source_reliability: dict[str, Any] | None = None
+    execution_quality: dict[str, Any] | None = None
+    llm_degraded_mode: bool | None = None
+    guardrail_fired: list[str] | None = None
+    outcome: str | None = None
+
+
+class DecisionTimelineDiff(BaseModel):
+    """Diff between two consecutive snapshots."""
+    direction_changed: bool
+    prev_direction: str | None = None
+    current_direction: str | None = None
+    probability_delta: dict[str, Any] = {}
+    overlay_deltas: list[dict[str, Any]] = []
+    primary_change_driver: str
+    prev_downgrade_reason: str | None = None
+    current_downgrade_reason: str | None = None
+
+
+class DecisionTimelineResponse(BaseModel):
+    """Response for GET /api/events/{event_id}/decision-timeline."""
+    event_id: str
+    count: int
+    snapshots: list[DecisionTimelineSnapshot]
+    diffs: list[DecisionTimelineDiff]
+
+
 class AutoResolveResponse(FlexibleResponse):
     status: str = ""
     dry_run: bool = False

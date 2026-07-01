@@ -97,6 +97,11 @@ def save_events(
     calibration sample. (tracking is preserved for the same reason - it is a
     user-owned decision.)
     """
+    # Plan 5 §5.4: Decision timeline snapshot. When the flag is on, append
+    # an overlay-bearing snapshot of each record to decision_timeline_store.
+    # Read the flag ONCE here (not per-record) to avoid settings lookups in
+    # the hot loop. Best-effort: a snapshot failure never blocks save_events.
+    timeline_enabled = settings.DECISION_TIMELINE_ENABLED
     path = _store_path()
     stored: list[dict[str, Any]] = []
     with locked_file(path):
@@ -141,6 +146,15 @@ def save_events(
                         FINAL_DIRECTION_CHANGE.inc()
                     except Exception:  # pragma: no cover - defensive
                         pass
+                if timeline_enabled:
+                    try:
+                        from app.memory import decision_timeline_store
+                        decision_timeline_store.record_snapshot(candidate)
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.warning(
+                            "decision_timeline snapshot failed for event %s: %s",
+                            event_id, exc,
+                        )
                 if not candidate.get("event_title_zh") and existing_record.get("event_title_zh"):
                     candidate["event_title_zh"] = existing_record["event_title_zh"]
                 # Schema upgrade: backfill any overlay field introduced after the

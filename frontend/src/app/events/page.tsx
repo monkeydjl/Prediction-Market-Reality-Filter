@@ -12,6 +12,7 @@ import { OfficialColumn, NewsColumn } from "@/components/detail/evidence-list";
 import { TrackingDecision } from "@/components/detail/tracking-decision";
 import { ManualResolvePanel } from "@/components/detail/manual-resolve-panel";
 import { DecisionReportPanel } from "@/components/detail/decision-report-panel";
+import { DecisionTimelinePanel } from "@/components/detail/decision-timeline-panel";
 import { EdgeChart, ProbabilityChart, buildSeries } from "@/components/detail/probability-chart";
 import { DeltaPill, SupportMeter } from "@/components/indicators";
 import { eventsApi, type EdgeTrajectory } from "@/lib/api";
@@ -304,6 +305,7 @@ function DetailInner() {
       </section>
 
       <DecisionReportPanel eventId={record.event_id} />
+      <DecisionTimelinePanel eventId={record.event_id} />
 
       {similar.length > 0 && (
         <section className="flex flex-col gap-3">

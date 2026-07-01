@@ -53,7 +53,9 @@ No new dependencies. Uses argparse (consistent with all 14 existing CLI scripts 
 # backend/scripts/diagnose_event_quality.py
 
 def _load_event(event_id: str) -> dict | None:
-    """Load event from event_store. Returns None if not found."""
+    """Load event from event_store. Returns the store entry (which contains
+    a ``record`` key) or None if not found. Caller must extract
+    ``entry.get("record")`` to get the event record dict."""
 
 def _extract_phase_data(record: dict) -> dict:
     """Extract 6 phases + guardrail + final direction from record."""
@@ -77,7 +79,7 @@ if __name__ == "__main__":
 ### 4.3 Data flow
 
 1. Parse args (argparse)
-2. `_load_event(event_id)` → `event_store.get(event_id)` → None? exit 1
+2. `_load_event(event_id)` → `event_store.get_event(event_id)` → returns store entry `{"event_id": ..., "record": ...}` or None → None? exit 1. Extract `entry.get("record")` as the record dict.
 3. `_extract_phase_data(record)` → dict with 6 phase keys + guardrail + final_direction
 4. If `--replay`: `_run_replay_comparison(record)` → dict with all_on/all_off directions
 5. If `--json`: `_render_json(data, replay_result)` → stdout
@@ -121,6 +123,7 @@ Event: <event_id> (<event_title>)
    executable: True
    estimated_slippage_pct: 0.3
    stale_price_flag: False
+   max_safe_size: 1000.0
 
 🛡️ Guardrails
    fired_rules: []
@@ -170,7 +173,8 @@ Event: <event_id> (<event_title>)
     "execution_quality": {
       "executable": true,
       "estimated_slippage_pct": 0.3,
-      "stale_price_flag": false
+      "stale_price_flag": false,
+      "max_safe_size": 1000.0
     }
   },
   "guardrails": {
@@ -221,7 +225,7 @@ Each phase extracts a fixed set of fields from the record's overlay dict. Missin
 | Prediction Calibration | `prediction_calibration` (from `actionable_recommendation.calibration_status` + `probability`) | `snapshot_recommendation`, `edge_bucket`, `direction_correct` |
 | Source Reliability | `source_reliability` | `overall_score`, `source_count`, `domain_diversity` |
 | LLM Telemetry | `llm_telemetry` | `degraded_mode`, `total_tokens`, `estimated_token_cost`, `analysis_quality` |
-| Execution Quality | `execution_quality` | `executable`, `estimated_slippage_pct`, `stale_price_flag`, `max_safe_position_size` |
+| Execution Quality | `execution_quality` | `executable`, `estimated_slippage_pct`, `stale_price_flag`, `max_safe_size` (renamed from `max_safe_position_size` per §8.1) |
 | Guardrails | `guardrail_fired` | `fired_rules` (list) |
 | Final Direction | `final_displayed_direction` | (single value) |
 
@@ -231,7 +235,7 @@ Note: `prediction_calibration` is not a top-level key in the record. It's derive
 
 When `--replay` is passed:
 
-1. Import `replay_record` and `ReplayConfig` from `app.replay`
+1. Import `replay_record` from `app.replay.runner` and `ReplayConfig` from `app.replay.config` (NOTE: `app.replay.__init__.py` does NOT re-export these — must import from submodules directly, same pattern as `backend/scripts/analyze_feature_flag_impact.py`)
 2. `replayed_on = replay_record(record, ReplayConfig.preset_all_on())`
 3. `replayed_off = replay_record(record, ReplayConfig.preset_all_off())`
 4. Extract `final_displayed_direction` from each (via `_effective_direction` fallback to `actionable_recommendation.direction`)
@@ -244,11 +248,9 @@ Note: `preset_all_on()` inherits current env settings. In production this reflec
 
 ### 8.1 Vocabulary lock
 
-Output must NOT contain trading terms `long`/`short`/`buy`/`sell`/`position`/`kelly`/`order` as whole words (case-insensitive). Direction vocabulary is `YES`/`NO`/`WAIT`/`AVOID` only.
+Output (both text and JSON modes) must NOT contain trading terms `long`/`short`/`buy`/`sell`/`position`/`kelly`/`order` as whole words (case-insensitive). Direction vocabulary is `YES`/`NO`/`WAIT`/`AVOID` only.
 
-Note: `max_safe_position_size` field name in Execution Quality contains `position`. This is a field name in the existing `execution_quality_service.py` output, not trading advice. The CLI will display it as-is for consistency with the data model, but this is a known exception. If strict vocabulary lock is required, rename the display label to `max_safe_size` (but keep the JSON key as `max_safe_position_size` for data fidelity).
-
-**Decision:** Display label uses `max_safe_size` (no `position`); JSON key uses `max_safe_position_size` (data fidelity). This satisfies the vocabulary lock in the human-readable text while preserving the data model.
+Note: `max_safe_position_size` field name in the existing `execution_quality_service.py` output contains `position`. To comply with the vocabulary lock, the CLI renames this field to `max_safe_size` in ALL output (both text display label and JSON key). The extraction reads `record["execution_quality"]["max_safe_position_size"]` but emits it as `max_safe_size`. This is a display-only rename; the underlying data model is unchanged.
 
 ### 8.2 Pure read-only
 

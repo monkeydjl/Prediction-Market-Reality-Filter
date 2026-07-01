@@ -74,6 +74,40 @@ class ReplayConfig:
             guardrail_high_conflict_blocks_act=False,
         )
 
+    @classmethod
+    def preset_decision_quality_only(cls) -> "ReplayConfig":
+        """All overlays off + only decision_quality on. Isolates the
+        decision_quality overlay's impact on final direction."""
+        cfg = cls.preset_all_off()
+        cfg.decision_quality_enabled = True
+        return cfg
+
+    @classmethod
+    def preset_market_quality_only(cls) -> "ReplayConfig":
+        """All overlays off + only market_quality on. Isolates the
+        market_quality overlay's impact on final direction."""
+        cfg = cls.preset_all_off()
+        cfg.market_quality_enabled = True
+        return cfg
+
+    @classmethod
+    def preset_source_reliability_only(cls) -> "ReplayConfig":
+        """All overlays off + only source_reliability on. Isolates the
+        source_reliability overlay's impact on final direction."""
+        cfg = cls.preset_all_off()
+        cfg.source_reliability_enabled = True
+        return cfg
+
+    @classmethod
+    def preset_guardrails_only(cls) -> "ReplayConfig":
+        """All overlays off + only guardrails on (requires
+        decision_quality to produce a direction for the guardrail to
+        act on). Isolates the guardrail overlay's impact."""
+        cfg = cls.preset_all_off()
+        cfg.decision_quality_enabled = True  # guardrail needs a direction
+        cfg.guardrails_enabled = True
+        return cfg
+
 
 @contextmanager
 def apply_replay_config(cfg: ReplayConfig) -> Iterator[None]:

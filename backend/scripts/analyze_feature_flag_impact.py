@@ -68,7 +68,23 @@ def _config_by_name(name: str) -> ReplayConfig:
         return ReplayConfig.preset_all_on()  # all None → use live settings
     if name == "llm_degraded":
         return ReplayConfig.preset_llm_degraded()
+    if name == "decision_quality_only":
+        return ReplayConfig.preset_decision_quality_only()
+    if name == "market_quality_only":
+        return ReplayConfig.preset_market_quality_only()
+    if name == "source_reliability_only":
+        return ReplayConfig.preset_source_reliability_only()
+    if name == "guardrails_only":
+        return ReplayConfig.preset_guardrails_only()
     raise ValueError(f"unknown config preset: {name!r}")
+
+
+_PER_PHASE_PRESETS = (
+    "decision_quality_only",
+    "market_quality_only",
+    "source_reliability_only",
+    "guardrails_only",
+)
 
 
 def _effective_direction(record: dict[str, Any]) -> str | None:
@@ -146,8 +162,16 @@ def main(argv: list[str] | None = None) -> int:
                         default=["all_off", "all_on"],
                         metavar=("CONFIG_A", "CONFIG_B"),
                         help="Two config presets to compare "
-                             "(all_off / all_on / current / llm_degraded). "
+                             "(all_off / all_on / current / llm_degraded / "
+                             "decision_quality_only / market_quality_only / "
+                             "source_reliability_only / guardrails_only). "
                              "Default: all_off all_on.")
+    parser.add_argument("--per-phase", action="store_true", default=False,
+                        help="Run all_off vs each per-phase preset "
+                             "(decision_quality_only, market_quality_only, "
+                             "source_reliability_only, guardrails_only) "
+                             "and print a matrix for each, so you can see "
+                             "which overlay causes the most direction flips.")
     parser.add_argument("--json", type=str, default=None,
                         metavar="PATH",
                         help="Write a JSON report to this path.")
@@ -163,6 +187,36 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     _print(f"[INFO] Loaded {len(records)} records.")
+
+    if args.per_phase:
+        # Per-phase mode: run all_off vs each per-phase preset.
+        cfg_off = ReplayConfig.preset_all_off()
+        json_phases: list[dict[str, Any]] = []
+        for phase_name in _PER_PHASE_PRESETS:
+            cfg_phase = _config_by_name(phase_name)
+            _print(f"\n[INFO] Comparing all_off vs {phase_name}...")
+            matrix = _compute_direction_matrix(records, cfg_off, cfg_phase)
+            report = _format_matrix(matrix, total=len(records))
+            _print(report)
+            json_phases.append({
+                "compare": ["all_off", phase_name],
+                "total": len(records),
+                "matrix": matrix,
+            })
+        if args.json:
+            out_path = Path(args.json)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "mode": "per_phase",
+                "total": len(records),
+                "phases": json_phases,
+            }
+            out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                                encoding="utf-8")
+            _print(f"\n[OK] JSON report written to {out_path}")
+        _print("\n[OK] Done.")
+        return 0
+
     try:
         cfg_a = _config_by_name(args.compare[0])
         cfg_b = _config_by_name(args.compare[1])

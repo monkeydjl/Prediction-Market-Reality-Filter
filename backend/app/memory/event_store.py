@@ -146,15 +146,6 @@ def save_events(
                         FINAL_DIRECTION_CHANGE.inc()
                     except Exception:  # pragma: no cover - defensive
                         pass
-                if timeline_enabled:
-                    try:
-                        from app.memory import decision_timeline_store
-                        decision_timeline_store.record_snapshot(candidate)
-                    except Exception as exc:  # pragma: no cover - defensive
-                        logger.warning(
-                            "decision_timeline snapshot failed for event %s: %s",
-                            event_id, exc,
-                        )
                 if not candidate.get("event_title_zh") and existing_record.get("event_title_zh"):
                     candidate["event_title_zh"] = existing_record["event_title_zh"]
                 # Schema upgrade: backfill any overlay field introduced after the
@@ -171,6 +162,18 @@ def save_events(
                     exc,
                 )
                 continue
+            # Plan 5 §5.4: Decision timeline snapshot — only after the record
+            # passes normalization + validation, so malformed records that are
+            # skipped don't leave "ghost snapshots" in the timeline store.
+            if timeline_enabled:
+                try:
+                    from app.memory import decision_timeline_store
+                    decision_timeline_store.record_snapshot(candidate)
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning(
+                        "decision_timeline snapshot failed for event %s: %s",
+                        event_id, exc,
+                    )
             entry = {
                 "event_id": event_id,
                 "first_seen": existing.get("first_seen", now),

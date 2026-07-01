@@ -35,6 +35,7 @@ export function DecisionTimelinePanel({ eventId }: { eventId: string }) {
         if (cancelled) return;
         setLoading(true);
         setError(null);
+        setData(null);
         try {
           const result = await eventsApi.decisionTimeline(eventId);
           if (!cancelled) setData(result);
@@ -60,6 +61,10 @@ export function DecisionTimelinePanel({ eventId }: { eventId: string }) {
       {loading ? (
         <div className="rounded-lg border border-border bg-card px-4 py-6 text-center text-sm text-muted-foreground">
           加载中…
+        </div>
+      ) : error ? (
+        <div className="rounded-lg border border-border bg-card px-4 py-6 text-sm text-muted-foreground">
+          {error}
         </div>
       ) : data && data.snapshots.length > 0 ? (
         <div className="flex flex-col gap-2">
@@ -103,7 +108,7 @@ export function DecisionTimelinePanel({ eventId }: { eventId: string }) {
         </div>
       ) : (
         <div className="rounded-lg border border-border bg-card px-4 py-6 text-sm text-muted-foreground">
-          {error ?? "暂无决策时间线数据。该事件可能在 DECISION_TIMELINE_ENABLED 关闭期间保存。"}
+          暂无决策时间线数据。该事件可能在 DECISION_TIMELINE_ENABLED 关闭期间保存。
         </div>
       )}
     </section>

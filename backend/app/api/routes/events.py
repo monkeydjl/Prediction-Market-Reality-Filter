@@ -222,11 +222,16 @@ async def reset_all_event_data(_auth: None = Depends(require_write_key)):
     # 4. v2_loop.db tables
     db_path = loop_db_path()
     conn = sqlite3.connect(db_path)
-    tables = ("predictions", "loop_runs", "event_market_links")
+    tables = ("predictions", "loop_runs", "event_market_links", "decision_timeline")
     for table in tables:
-        count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-        conn.execute(f"DELETE FROM {table}")
-        cleared[f"sqlite.{table}"] = count
+        try:
+            count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            conn.execute(f"DELETE FROM {table}")
+            cleared[f"sqlite.{table}"] = count
+        except sqlite3.OperationalError:
+            # Table doesn't exist yet (e.g. decision_timeline is only created
+            # when DECISION_TIMELINE_ENABLED is first used). Nothing to clear.
+            cleared[f"sqlite.{table}"] = 0
     conn.commit()
     conn.close()
 

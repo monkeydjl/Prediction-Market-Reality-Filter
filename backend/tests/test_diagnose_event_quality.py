@@ -518,5 +518,194 @@ class TestVocabularyLock(unittest.TestCase):
             )
 
 
+class TestPredictionCalibrationSemantics(unittest.TestCase):
+    """Regression tests for P1 (direction_correct) + P2 (edge_bucket).
+
+    The CLI must reuse the canonical pure functions from
+    prediction_calibration_service — NOT a hand-rolled approximation — so
+    the CLI's values match the calibration system's semantics.
+    """
+
+    def test_direction_correct_yes_matches_yes_outcome(self):
+        """YES recommendation + outcome=YES (100) → True."""
+        from diagnose_event_quality import _extract_phase_data
+        record = _sample_record()
+        record["outcome"] = {
+            "status": "resolved", "actual_outcome": 100.0,
+            "confidence": 0.9, "resolved_at": "2026-01-01T00:00:00Z",
+            "source": "manual",
+        }
+        data = _extract_phase_data(record)
+        self.assertEqual(
+            data["phases"]["prediction_calibration"]["direction_correct"], True
+        )
+
+    def test_direction_correct_yes_against_no_outcome(self):
+        """YES recommendation + outcome=NO (0) → False.
+
+        This is the P1 bug case: raw YES, final YES, but outcome=NO. The
+        old code returned True (compared rec vs final_displayed); the fix
+        compares rec vs outcome, so this must now be False.
+        """
+        from diagnose_event_quality import _extract_phase_data
+        record = _sample_record()
+        record["outcome"] = {
+            "status": "resolved", "actual_outcome": 0.0,
+            "confidence": 0.9, "resolved_at": "2026-01-01T00:00:00Z",
+            "source": "manual",
+        }
+        data = _extract_phase_data(record)
+        self.assertEqual(
+            data["phases"]["prediction_calibration"]["direction_correct"], False
+        )
+
+    def test_direction_correct_no_against_yes_outcome(self):
+        """NO recommendation + outcome=YES (100) → False."""
+        from diagnose_event_quality import _extract_phase_data
+        record = _sample_record()
+        record["actionable_recommendation"]["direction"] = "NO"
+        record["outcome"] = {
+            "status": "resolved", "actual_outcome": 100.0,
+            "confidence": 0.9, "resolved_at": "2026-01-01T00:00:00Z",
+            "source": "manual",
+        }
+        data = _extract_phase_data(record)
+        self.assertEqual(
+            data["phases"]["prediction_calibration"]["direction_correct"], False
+        )
+
+    def test_direction_correct_unsettled_is_none(self):
+        """No outcome on record → direction_correct is None (unsettled).
+
+        _sample_record has no `outcome` field, so this exercises the
+        not-yet-resolved path. The old code returned True (compared rec
+        vs final_displayed, both YES); the fix must return None.
+        """
+        from diagnose_event_quality import _extract_phase_data
+        record = _sample_record()
+        data = _extract_phase_data(record)
+        self.assertIsNone(
+            data["phases"]["prediction_calibration"]["direction_correct"]
+        )
+
+    def test_direction_correct_wait_recommendation_is_none(self):
+        """WAIT recommendation → direction_correct is None (non-directional)."""
+        from diagnose_event_quality import _extract_phase_data
+        record = _sample_record()
+        record["actionable_recommendation"]["direction"] = "WAIT"
+        record["outcome"] = {
+            "status": "resolved", "actual_outcome": 100.0,
+            "confidence": 0.9, "resolved_at": "2026-01-01T00:00:00Z",
+            "source": "manual",
+        }
+        data = _extract_phase_data(record)
+        self.assertIsNone(
+            data["phases"]["prediction_calibration"]["direction_correct"]
+        )
+
+    def test_edge_bucket_uses_canonical_buckets(self):
+        """edge_bucket matches compute_edge_bucket (abs value, half-open,
+        20+ cap), NOT the old edge//10 hand-rolled buckets.
+
+        Cases: boundary 5.0 → "5-10" (upper bucket, not "0-10");
+        negative -12.0 → "10-20" (abs value, not "-20--10");
+        25.0 → "20+" (cap, not "20-30"); 12.0 → "10-20" (unchanged);
+        None → "" (empty, not None).
+        """
+        from diagnose_event_quality import _extract_phase_data
+        cases = [
+            (5.0, "5-10"),     # boundary → upper bucket
+            (12.0, "10-20"),   # mid bucket (was correct in old code too)
+            (-12.0, "10-20"),  # abs value (old code: "-20--10")
+            (25.0, "20+"),     # cap bucket (old code: "20-30")
+            (3.0, "0-5"),      # low bucket
+        ]
+        for edge, expected_bucket in cases:
+            record = _sample_record()
+            record["actionable_recommendation"]["edge"] = edge
+            data = _extract_phase_data(record)
+            self.assertEqual(
+                data["phases"]["prediction_calibration"]["edge_bucket"],
+                expected_bucket,
+                f"edge={edge} should map to '{expected_bucket}'",
+            )
+
+    def test_edge_bucket_missing_edge_is_empty_string(self):
+        """Missing edge → edge_bucket is '' (the canonical function's
+        sentinel for missing/corrupt data), NOT None."""
+        from diagnose_event_quality import _extract_phase_data
+        record = _sample_record()
+        del record["actionable_recommendation"]["edge"]
+        data = _extract_phase_data(record)
+        self.assertEqual(
+            data["phases"]["prediction_calibration"]["edge_bucket"], ""
+        )
+
+
+class TestExitCode2(unittest.TestCase):
+    """Regression tests for P2: exit code 2 must catch ALL exceptions during
+    load/extract/replay/render, not just the explicit invalid-record case."""
+
+    def test_exit_code_2_on_load_exception(self):
+        """When _load_event raises (e.g. ImportError from missing deps),
+        main() returns 2 and writes the error to stderr — no traceback."""
+        import io as _io
+        import diagnose_event_quality as deq
+        orig_stderr = sys.stderr
+        try:
+            sys.stderr = _io.StringIO()
+            with patch.object(deq, "_load_event", side_effect=RuntimeError("boom")):
+                rc = deq.main(["some-event"])
+            self.assertEqual(rc, 2)
+            self.assertIn("failed to load event", sys.stderr.getvalue())
+            self.assertIn("boom", sys.stderr.getvalue())
+        finally:
+            sys.stderr = orig_stderr
+
+    def test_exit_code_2_on_diagnose_exception(self):
+        """When _extract_phase_data raises, main() returns 2 and writes the
+        error to stderr — no traceback."""
+        import io as _io
+        import diagnose_event_quality as deq
+        orig_stdout = sys.stdout
+        orig_stderr = sys.stderr
+        try:
+            with patch.object(deq, "_load_event", return_value={
+                "event_id": "x", "record": {"event_id": "x"},
+            }):
+                with patch.object(
+                    deq, "_extract_phase_data",
+                    side_effect=RuntimeError("extract blew up"),
+                ):
+                    sys.stdout = _io.StringIO()
+                    sys.stderr = _io.StringIO()
+                    rc = deq.main(["x"])
+            self.assertEqual(rc, 2)
+            self.assertIn("failed to diagnose event", sys.stderr.getvalue())
+            self.assertIn("extract blew up", sys.stderr.getvalue())
+        finally:
+            sys.stdout = orig_stdout
+            sys.stderr = orig_stderr
+
+    def test_exit_code_1_still_returned_for_not_found(self):
+        """The try/except for _load_event must NOT swallow the None return
+        (not-found is exit 1, not exit 2). _load_event returning None is
+        normal control flow, not an exception."""
+        from app.core.config import settings
+        import diagnose_event_quality as deq
+        import io as _io
+        with tempfile.TemporaryDirectory() as tmp:
+            store_path = Path(tmp) / "event_store.json"
+            orig_stderr = sys.stderr
+            try:
+                with patch.object(settings, "EVENT_STORE_FILE", str(store_path)):
+                    sys.stderr = _io.StringIO()
+                    rc = deq.main(["nonexistent"])
+                self.assertEqual(rc, 1)
+                self.assertIn("not found", sys.stderr.getvalue())
+            finally:
+                sys.stderr = orig_stderr
+
+
 if __name__ == "__main__":
     unittest.main()

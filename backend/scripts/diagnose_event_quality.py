@@ -84,26 +84,31 @@ def _extract_phase_data(record: dict[str, Any]) -> dict[str, Any]:
     else:
         phases["market_quality"] = None
 
-    # Phase 3: Prediction Calibration (derived from actionable_recommendation
-    # + probability, not a top-level overlay key)
+    # Phase 3: Prediction Calibration. Reuses the canonical pure functions
+    # from prediction_calibration_service (NOT a hand-rolled approximation)
+    # so the CLI's values match the calibration system's semantics:
+    #   - edge_bucket: abs-value half-open buckets [0,5)/[5,10)/[10,20)/[20,+inf)
+    #     (boundary → upper bucket; sign-agnostic; "" when edge missing)
+    #   - direction_correct: YES/NO recommendation vs settled outcome
+    #     (True/False when resolved & directional; None when WAIT/AVOID or
+    #     event not yet resolved). Reads actual_outcome from record.outcome.
+    from app.services.prediction_calibration_service import (
+        compute_direction_correct,
+        compute_edge_bucket,
+    )
     rec = record.get("actionable_recommendation")
     if isinstance(rec, dict):
-        cal_status = rec.get("calibration_status")
-        edge = rec.get("edge")
-        # edge_bucket derived from edge value (e.g. 12.0 → "10-20")
-        edge_bucket = None
-        if isinstance(edge, (int, float)):
-            edge_bucket = f"{int(edge // 10 * 10)}-{int(edge // 10 * 10 + 10)}"
-        # direction_correct: True if recommendation direction matches
-        # final_displayed_direction, False otherwise. None if no final.
-        final_dir = record.get("final_displayed_direction")
         rec_dir = rec.get("direction")
-        direction_correct = (rec_dir == final_dir) if final_dir else None
+        outcome = record.get("outcome")
+        actual_outcome = (
+            outcome.get("actual_outcome")
+            if isinstance(outcome, dict) else None
+        )
         phases["prediction_calibration"] = {
             "snapshot_recommendation": rec_dir,
-            "calibration_status": cal_status,
-            "edge_bucket": edge_bucket,
-            "direction_correct": direction_correct,
+            "calibration_status": rec.get("calibration_status"),
+            "edge_bucket": compute_edge_bucket(rec.get("edge")),
+            "direction_correct": compute_direction_correct(rec_dir, actual_outcome),
         }
     else:
         phases["prediction_calibration"] = None
@@ -331,7 +336,13 @@ def _run_replay_comparison(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry point. Returns exit code."""
+    """CLI entry point. Returns exit code.
+
+    Exit codes: 0 success, 1 event_id not found, 2 other errors (invalid
+    record, import failures, unexpected exceptions). Any exception during
+    load/extract/replay/render is caught and reported to stderr as exit 2,
+    rather than surfacing as a raw traceback.
+    """
     parser = argparse.ArgumentParser(
         description="Diagnose event quality (Spec §4.3). Single-event "
                     "6-layer decomposition + guardrail + final direction."
@@ -347,7 +358,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    entry = _load_event(args.event_id)
+    # _load_event may raise ImportError (e.g. missing optional deps like
+    # python-dotenv) or store-IO errors — catch and report as exit 2.
+    try:
+        entry = _load_event(args.event_id)
+    except Exception as exc:
+        print(f"Error: failed to load event '{args.event_id}': {exc}",
+              file=sys.stderr)
+        return 2
+
     if entry is None:
         print(f"Error: event '{args.event_id}' not found in event_store",
               file=sys.stderr)
@@ -359,17 +378,24 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
 
-    data = _extract_phase_data(record)
+    # extract / replay / render may raise on corrupt records or missing
+    # modules — catch and report as exit 2.
+    try:
+        data = _extract_phase_data(record)
 
-    # Replay comparison (only if --replay flag)
-    replay_result: dict[str, Any] | None = None
-    if args.replay:
-        replay_result = _run_replay_comparison(record)
+        # Replay comparison (only if --replay flag)
+        replay_result: dict[str, Any] | None = None
+        if args.replay:
+            replay_result = _run_replay_comparison(record)
 
-    if args.json:
-        _print(_render_json(data, replay_result))
-    else:
-        _print(_render_text(data, replay_result))
+        if args.json:
+            _print(_render_json(data, replay_result))
+        else:
+            _print(_render_text(data, replay_result))
+    except Exception as exc:
+        print(f"Error: failed to diagnose event '{args.event_id}': {exc}",
+              file=sys.stderr)
+        return 2
     return 0
 
 

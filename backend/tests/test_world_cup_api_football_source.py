@@ -60,7 +60,8 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics = self._settings(tmp)
             with sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics, \
-                    patch(
+                    patch.object(settings, "WORLD_CUP_DATA_MAX_AGE_HOURS", 0), \
+                    patch(  # disable staleness gate (fixture uses fixed observed_at; covered by test_world_cup_data_source_service.py)
                         "app.services.world_cup_api_football_source.urlopen",
                         side_effect=[_UrlResponse(body) for body in bodies],
                     ) as open_mock:
@@ -113,7 +114,8 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics = self._settings(tmp)
             with sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics, \
-                    patch(
+                    patch.object(settings, "WORLD_CUP_DATA_MAX_AGE_HOURS", 0), \
+                    patch(  # disable staleness gate (fixture uses fixed observed_at; covered by test_world_cup_data_source_service.py)
                         "app.services.world_cup_api_football_source.urlopen",
                         side_effect=[_UrlResponse(body) for body in bodies],
                     ):
@@ -144,7 +146,8 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
             sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics = self._settings(tmp)
             with sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics, \
                     patch.object(settings, "WORLD_CUP_API_FOOTBALL_FETCH_EVENTS", True), \
-                    patch(
+                    patch.object(settings, "WORLD_CUP_DATA_MAX_AGE_HOURS", 0), \
+                    patch(  # disable staleness gate (fixture uses fixed observed_at; covered by test_world_cup_data_source_service.py)
                         "app.services.world_cup_api_football_source.urlopen",
                         side_effect=[_UrlResponse(body) for body in bodies],
                     ) as open_mock:
@@ -176,7 +179,8 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
             sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics = self._settings(tmp)
             with sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics, \
                     patch.object(settings, "WORLD_CUP_API_FOOTBALL_FETCH_LINEUPS", True), \
-                    patch(
+                    patch.object(settings, "WORLD_CUP_DATA_MAX_AGE_HOURS", 0), \
+                    patch(  # disable staleness gate (fixture uses fixed observed_at; covered by test_world_cup_data_source_service.py)
                         "app.services.world_cup_api_football_source.urlopen",
                         side_effect=[_UrlResponse(body) for body in bodies],
                     ) as open_mock:
@@ -211,7 +215,8 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
             sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics = self._settings(tmp)
             with sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics, \
                     patch.object(settings, "WORLD_CUP_API_FOOTBALL_FETCH_STATISTICS", True), \
-                    patch(
+                    patch.object(settings, "WORLD_CUP_DATA_MAX_AGE_HOURS", 0), \
+                    patch(  # disable staleness gate (fixture uses fixed observed_at; covered by test_world_cup_data_source_service.py)
                         "app.services.world_cup_api_football_source.urlopen",
                         side_effect=[_UrlResponse(body) for body in bodies],
                     ) as open_mock:
@@ -251,7 +256,8 @@ class WorldCupApiFootballSourceTests(unittest.TestCase):
             with sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics, \
                     patch.object(settings, "WORLD_CUP_API_FOOTBALL_FETCH_EVENTS", True), \
                     patch.object(settings, "WORLD_CUP_API_FOOTBALL_MAX_DETAIL_CALLS", 0), \
-                    patch(
+                    patch.object(settings, "WORLD_CUP_DATA_MAX_AGE_HOURS", 0), \
+                    patch(  # disable staleness gate (fixture uses fixed observed_at; covered by test_world_cup_data_source_service.py)
                         "app.services.world_cup_api_football_source.urlopen",
                         side_effect=[_UrlResponse(body) for body in bodies],
                     ) as open_mock:

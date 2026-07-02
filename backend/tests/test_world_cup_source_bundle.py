@@ -298,7 +298,8 @@ class WorldCupSourceBundleTests(unittest.TestCase):
             bundle_path.write_text(json.dumps(_bundle_payload()), encoding="utf-8")
 
             with patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_FILE", str(bundle_path)), \
-                    patch.object(settings, "SPORTS_FACT_FILE", str(facts_path)):
+                    patch.object(settings, "SPORTS_FACT_FILE", str(facts_path)), \
+                    patch.object(settings, "WORLD_CUP_DATA_MAX_AGE_HOURS", 0):  # disable staleness gate (fixture uses fixed observed_at; covered by test_world_cup_data_source_service.py)
                 payload = load_world_cup_source_bundle_file()
                 preview = preview_world_cup_source_bundle_file()
                 result = import_world_cup_source_bundle_file(replace=True)
@@ -328,7 +329,8 @@ class WorldCupSourceBundleTests(unittest.TestCase):
                 ), \
                 patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_AUTH_HEADER", "X-Feed-Key"), \
                 patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_AUTH_VALUE", "secret-value"), \
-                patch(
+                patch.object(settings, "WORLD_CUP_DATA_MAX_AGE_HOURS", 0), \
+                patch(  # disable staleness gate (fixture uses fixed observed_at; covered by test_world_cup_data_source_service.py)
                     "app.services.world_cup_source_bundle.urlopen",
                     return_value=_UrlResponse(body),
                 ) as open_mock:
@@ -350,7 +352,8 @@ class WorldCupSourceBundleTests(unittest.TestCase):
             fact_path = str(Path(tmp) / "facts.json")
             with patch.object(settings, "SPORTS_FACT_FILE", fact_path), \
                     patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_URL", "https://example.com/bundle"), \
-                    patch(
+                    patch.object(settings, "WORLD_CUP_DATA_MAX_AGE_HOURS", 0), \
+                    patch(  # disable staleness gate (fixture uses fixed observed_at; covered by test_world_cup_data_source_service.py)
                         "app.services.world_cup_source_bundle.urlopen",
                         return_value=_UrlResponse(body),
                     ):
@@ -388,7 +391,8 @@ class WorldCupSourceBundleTests(unittest.TestCase):
                 patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
                 patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", "https://status.example/injuries"), \
                 patch.object(settings, "WORLD_CUP_STATISTICS_SOURCE_URL", ""), \
-                patch(
+                patch.object(settings, "WORLD_CUP_DATA_MAX_AGE_HOURS", 0), \
+                patch(  # disable staleness gate (fixture uses fixed observed_at; covered by test_world_cup_data_source_service.py)
                     "app.services.world_cup_source_bundle.urlopen",
                     side_effect=[_UrlResponse(match_body), _UrlResponse(status_body)],
                 ) as open_mock:
@@ -431,7 +435,8 @@ class WorldCupSourceBundleTests(unittest.TestCase):
                     patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
                     patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""), \
                     patch.object(settings, "WORLD_CUP_STATISTICS_SOURCE_URL", ""), \
-                    patch(
+                    patch.object(settings, "WORLD_CUP_DATA_MAX_AGE_HOURS", 0), \
+                    patch(  # disable staleness gate (fixture uses fixed observed_at; covered by test_world_cup_data_source_service.py)
                         "app.services.world_cup_source_bundle.urlopen",
                         return_value=_UrlResponse(body),
                     ):

@@ -64,7 +64,8 @@ class WorldCupSportmonksSourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             sports_file, token, fixtures_url, standings_url, scorers_url = self._settings(tmp)
             with sports_file, token, fixtures_url, standings_url, scorers_url, \
-                    patch(
+                    patch.object(settings, "WORLD_CUP_DATA_MAX_AGE_HOURS", 0), \
+                    patch(  # disable staleness gate (fixture uses fixed observed_at; covered by test_world_cup_data_source_service.py)
                         "app.services.world_cup_sportmonks_source.urlopen",
                         side_effect=[_UrlResponse(body) for body in bodies],
                     ) as open_mock:
@@ -114,7 +115,8 @@ class WorldCupSportmonksSourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             sports_file, token, fixtures_url, standings_url, scorers_url = self._settings(tmp)
             with sports_file, token, fixtures_url, standings_url, scorers_url, \
-                    patch(
+                    patch.object(settings, "WORLD_CUP_DATA_MAX_AGE_HOURS", 0), \
+                    patch(  # disable staleness gate (fixture uses fixed observed_at; covered by test_world_cup_data_source_service.py)
                         "app.services.world_cup_sportmonks_source.urlopen",
                         side_effect=[_UrlResponse(body) for body in bodies],
                     ):

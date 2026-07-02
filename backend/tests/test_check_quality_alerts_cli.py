@@ -78,6 +78,29 @@ class TestCheckQualityAlertsCli(unittest.TestCase):
         self.assertIn("Config:", stdout)
         self.assertIn("Summary:", stdout)
 
+    def test_cli_text_output_renders_non_empty_alerts(self):
+        """When alerts are non-empty, text output contains [HIGH] and alert codes."""
+        fake_alert = {
+            "code": "direction_accuracy_low",
+            "severity": "high",
+            "scope": "overview",
+            "dimension": None,
+            "slice": None,
+            "metric": "direction_accuracy",
+            "value": 0.45,
+            "threshold": 0.50,
+            "n": 42,
+        }
+        with patch.object(__import__("check_quality_alerts", fromlist=["_collect_entries"]),
+                          "_collect_entries", return_value=[]), \
+             patch("app.services.quality_alert_service.evaluate_quality_alerts",
+                   return_value=[fake_alert]):
+            rc, stdout, _ = self._run_main([])
+        self.assertEqual(rc, 0)
+        self.assertIn("[HIGH]", stdout)
+        self.assertIn("direction_accuracy_low", stdout)
+        self.assertIn("Summary:", stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

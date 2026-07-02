@@ -272,6 +272,40 @@ class TestSweep(unittest.TestCase):
         self.assertNotIn("aggregate", parsed)
         self.assertIn("anomalies", parsed)
 
+    def test_sweep_anomalies_only_text_does_not_crash(self):
+        """--anomalies-only (text mode) must not crash on non-empty results.
+
+        Regression: previously main() called _render_text({"total_swept": ...},
+        anomalies), but _render_text reads agg["direction_correct"] → KeyError.
+        Fixed by routing --anomalies-only text path to _render_anomalies_text.
+        """
+        from sweep_event_quality import main
+        records = [
+            _make_resolved_record("correct", direction="YES", actual_outcome=100.0),
+            _make_resolved_record("wrong", direction="YES", actual_outcome=0.0),
+            _make_resolved_record("degraded", llm_degraded=True),
+        ]
+        self._seed(records)
+
+        orig_stdout = sys.stdout
+        try:
+            sys.stdout = io.StringIO()
+            rc = main(["--anomalies-only"])
+            output = sys.stdout.getvalue()
+        finally:
+            sys.stdout = orig_stdout
+
+        self.assertEqual(rc, 0)
+        # Should render anomaly list, not crash with KeyError
+        self.assertIn("Anomalies", output)
+        self.assertIn("misjudgments", output)
+        self.assertIn("wrong", output)
+        self.assertIn("llm_degraded", output)
+        self.assertIn("degraded", output)
+        # Should NOT contain aggregate metrics section
+        self.assertNotIn("Aggregate Metrics", output)
+        self.assertNotIn("direction_correct: True=", output)
+
     def test_sweep_excludes_invalid_outcomes(self):
         """list_resolved_events filters status=invalid → sweep never sees them.
 

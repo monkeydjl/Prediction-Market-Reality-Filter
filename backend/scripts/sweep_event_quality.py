@@ -250,8 +250,48 @@ def _anomalies(results: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]
     }
 
 
+def _render_anomalies_text(total: int, anomalies: dict[str, list]) -> str:
+    """Render only the anomaly list (no aggregate metrics).
+
+    Used by ``--anomalies-only`` text path. Must NOT read aggregate fields
+    (``direction_correct`` / ``edge_bucket`` / etc.) because the caller
+    passes only ``total_swept`` — reading other keys would raise KeyError.
+    """
+    lines: list[str] = []
+    lines.append(f"Quality Sweep Anomalies — {total} events swept")
+    lines.append("═" * 60)
+    lines.append("")
+
+    lines.append("🚨 Anomalies")
+    lines.append("─" * 40)
+    lines.append(f"  misjudgments (direction_correct=False): {len(anomalies['misjudgments'])}")
+    for a in anomalies["misjudgments"][:10]:
+        lines.append(
+            f"    {a['event_id']}  rec={a['recommendation']}  "
+            f"edge={a['edge_bucket']}  {a['event_title'][:40]}"
+        )
+    lines.append(f"  llm_degraded: {len(anomalies['llm_degraded'])}")
+    for a in anomalies["llm_degraded"][:5]:
+        lines.append(f"    {a['event_id']}  {a['event_title'][:40]}")
+    lines.append(f"  market_degraded: {len(anomalies['market_degraded'])}")
+    for a in anomalies["market_degraded"][:5]:
+        lines.append(f"    {a['event_id']}  ({a['degrade_reason']})  {a['event_title'][:40]}")
+    lines.append(f"  guardrail_fired: {len(anomalies['guardrail_fired'])}")
+    for a in anomalies["guardrail_fired"][:5]:
+        rules = ", ".join(a["fired_rules"][:3])
+        lines.append(f"    {a['event_id']}  [{rules}]  {a['event_title'][:30]}")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
 def _render_text(agg: dict[str, Any], anomalies: dict[str, list]) -> str:
-    """Render human-readable sweep report."""
+    """Render human-readable sweep report (aggregate + anomalies).
+
+    Reads aggregate fields (``direction_correct`` / ``edge_bucket`` etc.).
+    Callers passing a partial agg (only ``total_swept``) must use
+    ``_render_anomalies_text`` instead.
+    """
     lines: list[str] = []
     total = agg["total_swept"]
     lines.append(f"Quality Sweep Report — {total} events swept")
@@ -374,7 +414,7 @@ def main(argv: list[str] | None = None) -> int:
         _print(json.dumps(output, indent=2, default=str, ensure_ascii=False))
     else:
         if args.anomalies_only:
-            _print(_render_text({"total_swept": agg["total_swept"]}, anomalies))
+            _print(_render_anomalies_text(agg["total_swept"], anomalies))
         else:
             _print(_render_text(agg, anomalies))
 

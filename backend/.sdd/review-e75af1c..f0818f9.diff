@@ -7,7 +7,7 @@ index 0caa16a..84015a3 100644
 --- a/backend/scripts/diagnose_event_quality.py
 +++ b/backend/scripts/diagnose_event_quality.py
 @@ -151,20 +151,150 @@ def _extract_phase_data(record: dict[str, Any]) -> dict[str, Any]:
- 
+
      return {
          "event_id": record.get("event_id"),
          "event_title": record.get("event_title"),
@@ -15,8 +15,8 @@ index 0caa16a..84015a3 100644
          "guardrails": guardrails,
          "final_direction": record.get("final_displayed_direction"),
      }
- 
- 
+
+
 +def _render_text(data: dict[str, Any], replay_result: dict[str, Any] | None) -> str:
 +    """Render human-readable text output.
 +
@@ -159,15 +159,15 @@ index 0caa16a..84015a3 100644
          help="Output JSON instead of human-readable text",
 @@ -182,18 +312,24 @@ def main(argv: list[str] | None = None) -> int:
          return 1
- 
+
      record = entry.get("record")
      if not isinstance(record, dict):
          print(f"Error: event '{args.event_id}' has no valid record",
                file=sys.stderr)
          return 2
- 
+
      data = _extract_phase_data(record)
- 
+
 -    # Rendering + replay added in later tasks
 -    _print(f"[diagnose_event_quality] event_id={data['event_id']} "
 -           f"(rendering not yet implemented)")
@@ -181,8 +181,8 @@ index 0caa16a..84015a3 100644
 +    else:
 +        _print(_render_text(data, replay_result))
      return 0
- 
- 
+
+
  if __name__ == "__main__":
      sys.exit(main())
 diff --git a/backend/tests/test_diagnose_event_quality.py b/backend/tests/test_diagnose_event_quality.py
@@ -190,7 +190,7 @@ index d792c4f..4b40943 100644
 --- a/backend/tests/test_diagnose_event_quality.py
 +++ b/backend/tests/test_diagnose_event_quality.py
 @@ -205,12 +205,92 @@ class TestExtractPhaseData(unittest.TestCase):
- 
+
      def test_extract_phase_data_no_mutation(self):
          """_extract_phase_data must not mutate the input record."""
          from diagnose_event_quality import _extract_phase_data
@@ -198,8 +198,8 @@ index d792c4f..4b40943 100644
          snapshot = copy.deepcopy(record)
          _extract_phase_data(record)
          self.assertEqual(record, snapshot)
- 
- 
+
+
 +class TestRenderText(unittest.TestCase):
 +    def test_render_text_includes_all_phases(self):
 +        """Text output contains all 6 phase headers + guardrail + final direction."""

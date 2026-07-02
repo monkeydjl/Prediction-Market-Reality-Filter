@@ -19,8 +19,8 @@ index 84015a3..0c613f3 100644
          "replay_comparison": replay_result,
      }
      return json.dumps(output, indent=2, default=str, ensure_ascii=False)
- 
- 
+
+
  def _run_replay_comparison(record: dict[str, Any]) -> dict[str, Any]:
 -    """Run all_on vs all_off replay, return direction delta. (Stub —
 -    implemented in Task 3.)"""
@@ -71,8 +71,8 @@ index 84015a3..0c613f3 100644
 +        "all_off_direction": dir_off,
 +        "delta": delta,
 +    }
- 
- 
+
+
  def main(argv: list[str] | None = None) -> int:
      """CLI entry point. Returns exit code."""
      parser = argparse.ArgumentParser(
@@ -94,8 +94,8 @@ index 4b40943..1a890ec 100644
          json_str = _render_json(data, replay_result=None)
          parsed = json.loads(json_str)
          self.assertIsNone(parsed["replay_comparison"])
- 
- 
+
+
 +class TestReplayComparison(unittest.TestCase):
 +    def test_replay_comparison_no_change(self):
 +        """When all_on and all_off produce same direction, delta=no_change.

@@ -718,6 +718,53 @@ export interface QualityMetricsDrift {
   alerts_enabled: boolean;
 }
 
+// ── Sliced quality metrics report (NEXT #3) ──────────────────────────────
+// Mirrors backend /api/quality-metrics/report. See
+// backend/app/services/quality_metrics_report_service.py for the source of
+// truth on field names and semantics.
+
+export interface QualityReportBrier {
+  brier_score: number | null;
+  skill_score: number | null;
+  grade: string;
+  n: number;
+}
+
+export interface QualityReportSlice {
+  n: number;
+  direction_correct_true: number;
+  direction_correct_false: number;
+  direction_correct_none: number;
+  /** true / (true + false). null when no directional events. */
+  direction_accuracy: number | null;
+  brier: QualityReportBrier;
+}
+
+export interface QualityReportOverview {
+  total_resolved: number;
+  with_calibration: number;
+  missing_calibration: number;
+}
+
+export interface CalibrationDeviationRow {
+  bucket: string;
+  n: number;
+  predicted_mean: number | null;
+  actual_mean: number | null;
+  /** predicted - actual. Positive = overconfident. */
+  deviation: number | null;
+}
+
+export interface QualityMetricsReport {
+  overview: QualityReportOverview;
+  by_source_type: Record<string, QualityReportSlice>;
+  by_analysis_quality: Record<string, QualityReportSlice>;
+  by_edge_bucket: Record<string, QualityReportSlice>;
+  by_source_reliability_bucket: Record<string, QualityReportSlice>;
+  calibration_deviation: CalibrationDeviationRow[];
+  report_errors: { event_id: string; error: string }[];
+}
+
 export interface PredictionRecord {
   id: string;
   event_id: string;
@@ -986,4 +1033,14 @@ export const qualityMetricsApi = {
 
   drift: () =>
     api<QualityMetricsDrift>("/quality-metrics/drift"),
+
+  report: (params?: { limit?: number; sample?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.limit != null) qs.set("limit", String(params.limit));
+    if (params?.sample != null) qs.set("sample", String(params.sample));
+    const tail = qs.toString();
+    return api<QualityMetricsReport>(
+      `/quality-metrics/report${tail ? `?${tail}` : ""}`,
+    );
+  },
 };

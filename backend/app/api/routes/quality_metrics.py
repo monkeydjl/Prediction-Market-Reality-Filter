@@ -494,6 +494,78 @@ def _avg_int(values: list[int]) -> float | None:
     return round(sum(values) / len(values), 2)
 
 
+# ---------------------------------------------------------------------------
+# /api/quality-metrics/report
+# ---------------------------------------------------------------------------
+
+@router.get("/quality-metrics/report")
+async def quality_metrics_report(
+    limit: int | None = Query(
+        default=None,
+        description="Report on only the first N resolved events (default: all).",
+    ),
+    sample: int | None = Query(
+        default=None,
+        description="Randomly sample N resolved events (reproducible seed=42).",
+    ),
+) -> dict[str, Any]:
+    """Sliced quality metrics report over resolved events.
+
+    Returns a single JSON object with sections:
+
+    - ``overview`` — totals (resolved, with_calibration, missing_calibration)
+    - ``by_source_type`` — slice by ``record.source.type``
+    - ``by_analysis_quality`` — slice by ``record.llm_telemetry.analysis_quality``
+      (engine proxy: llm vs deterministic_fallback vs unknown)
+    - ``by_edge_bucket`` — slice by ``compute_edge_bucket(edge)``
+    - ``by_source_reliability_bucket`` — slice by bucketed
+      ``source_reliability.overall_score`` (low/medium/high/very_high/missing)
+    - ``calibration_deviation`` — per probability bucket [0,20)/.../[80,100],
+      mean predicted vs mean actual and their deviation
+    - ``report_errors`` — per-event extraction failures (resilient)
+
+    Per slice: ``n``, ``direction_correct_true/false/none`` counts,
+    ``direction_accuracy`` (true/(true+false), None when no directional),
+    ``brier`` block (mean/skill/grade/n aggregated from
+    ``record.calibration.brier_score``).
+
+    Pure read-only: no writes, no LLM calls, no network. Same authorization
+    as ``/summary`` — read-only, no ``X-API-Key`` required.
+    """
+    import random
+
+    from app.services.quality_metrics_report_service import build_report, extract_metrics
+
+    entries = list_resolved_events()
+    if sample is not None and sample < len(entries):
+        # Reproducible sample — seed fixed (same convention as the CLI
+        # script and sweep_event_quality.py).
+        rng = random.Random(42)
+        entries = rng.sample(entries, sample)
+    if limit is not None:
+        entries = entries[:limit]
+
+    items: list[dict[str, Any]] = []
+    report_errors: list[dict[str, str]] = []
+    for entry in entries:
+        record = entry.get("record")
+        if not isinstance(record, dict):
+            report_errors.append({
+                "event_id": entry.get("event_id", "?"),
+                "error": "record missing or not a dict",
+            })
+            continue
+        try:
+            items.append(extract_metrics(record))
+        except Exception as exc:
+            report_errors.append({
+                "event_id": record.get("event_id", "?"),
+                "error": str(exc),
+            })
+
+    return build_report(items, report_errors)
+
+
 # Exposed at import time so test runners can wire it without going through
 # the FastAPI app. Used by tests/test_quality_metrics.py.
 __all__ = ["router"]

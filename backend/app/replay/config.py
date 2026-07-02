@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Any, Iterator
 
 from app.core.config import settings
 
@@ -36,6 +36,13 @@ class ReplayConfig:
     # chosen preset.
     execution_quality_enabled: bool | None = None
     guardrail_market_not_executable_blocks_act: bool | None = None
+
+    # Arbitrary KEY→value overrides applied AFTER the bool fields above.
+    # Used by the diff CLI's --set / --set-a / --set-b flags to override
+    # threshold settings (MARKET_MAX_SPREAD_PCT, DECISION_ACT_EDGE, etc.)
+    # for the duration of a replay. KEY must be UPPERCASE; value is the
+    # already-coerced Python type (bool/int/float/str). None = no overrides.
+    settings_overrides: dict[str, Any] | None = None
 
     @classmethod
     def preset_all_off(cls) -> "ReplayConfig":
@@ -171,13 +178,22 @@ def apply_replay_config(cfg: ReplayConfig) -> Iterator[None]:
 
     Only fields with non-None values are applied; None fields leave the
     current settings value untouched (so preset_all_on is a true no-op).
+
+    ``settings_overrides`` is applied AFTER the bool fields, so if a key
+    appears in both (unlikely but possible), the override wins.
     """
     saved: dict[str, object] = {}
     try:
         for field_name in cfg.__dataclass_fields__:
+            if field_name == "settings_overrides":
+                continue
             val = getattr(cfg, field_name)
             if val is not None:
                 key = field_name.upper()
+                saved[key] = getattr(settings, key)
+                setattr(settings, key, val)
+        if cfg.settings_overrides:
+            for key, val in cfg.settings_overrides.items():
                 saved[key] = getattr(settings, key)
                 setattr(settings, key, val)
         yield

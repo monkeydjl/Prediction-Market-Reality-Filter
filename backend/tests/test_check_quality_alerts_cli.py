@@ -61,14 +61,19 @@ class TestCheckQualityAlertsCli(unittest.TestCase):
 
     def test_cli_include_insufficient_samples(self):
         """--include-insufficient-samples → output includes [INSUFFICIENT]."""
+        fake_insufficient = [
+            {"dimension": "by_source_type", "slice": "sports_event",
+             "n": 2, "min_samples": 10},
+        ]
         with patch.object(__import__("check_quality_alerts", fromlist=["_collect_entries"]),
-                          "_collect_entries", return_value=[]):
+                          "_collect_entries", return_value=[]), \
+             patch("app.services.quality_alert_service.collect_insufficient_samples",
+                   return_value=fake_insufficient):
             rc, stdout, _ = self._run_main(["--include-insufficient-samples"])
         self.assertEqual(rc, 0)
-        # With empty store there are no slices, so [INSUFFICIENT] section
-        # may not appear. This test just confirms the flag is accepted
-        # without error. For a real insufficient-samples test, seed records.
-        # For now, just verify exit 0.
+        self.assertIn("[INSUFFICIENT]", stdout)
+        self.assertIn("by_source_type", stdout)
+        self.assertIn("sports_event", stdout)
 
     def test_cli_text_output_contains_alerts_section(self):
         """Text output has a Config line and Summary line."""

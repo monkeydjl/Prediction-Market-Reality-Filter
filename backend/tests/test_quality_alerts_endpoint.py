@@ -198,18 +198,19 @@ class TestQualityAlertsEndpoint(unittest.TestCase):
     def test_alerts_resilient_to_malformed_record(self):
         """Malformed record → 200, no 500, report_errors counted.
 
-        save_event validates against EventRecord, so we can't directly save
-        a malformed record through the normal path. Instead we seed a valid
-        record and assert the endpoint never 500s (resilience is the service
-        layer's job). With a well-formed record, report_errors is empty, so
-        no report_errors_high alert should fire.
+        save_event validates against EventRecord, so we can't write a bad
+        record through the normal path. Instead we patch list_resolved_events
+        to return an entry whose "record" is not a dict — this triggers the
+        endpoint's not-isinstance(record, dict) branch, producing a
+        report_error. With one error, report_errors_high (>=1) should fire.
         """
-        self._seed([_make_resolved_record("ok", brier_score=0.1)])
-        response = self.client.get("/api/quality-metrics/alerts")
+        with patch("app.api.routes.quality_metrics.list_resolved_events",
+                   return_value=[{"event_id": "bad", "record": "not-a-dict"}]):
+            response = self.client.get("/api/quality-metrics/alerts")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         codes = [a["code"] for a in data["alerts"]]
-        self.assertNotIn("report_errors_high", codes)
+        self.assertIn("report_errors_high", codes)
 
     def test_alerts_default_no_diagnostics(self):
         """Without include_insufficient_samples → no diagnostics field."""

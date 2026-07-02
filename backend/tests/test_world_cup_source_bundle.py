@@ -298,7 +298,12 @@ class WorldCupSourceBundleTests(unittest.TestCase):
             bundle_path.write_text(json.dumps(_bundle_payload()), encoding="utf-8")
 
             with patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_FILE", str(bundle_path)), \
-                    patch.object(settings, "SPORTS_FACT_FILE", str(facts_path)):
+                    patch.object(settings, "SPORTS_FACT_FILE", str(facts_path)), \
+                    patch.object(settings, "WORLD_CUP_DATA_MAX_AGE_HOURS", 0):
+                # _bundle_payload uses fixed observed_at dates; disabling the
+                # staleness gate keeps these bundle-flow tests wall-clock-
+                # independent. Staleness itself is covered by
+                # test_world_cup_data_source_service.py.
                 payload = load_world_cup_source_bundle_file()
                 preview = preview_world_cup_source_bundle_file()
                 result = import_world_cup_source_bundle_file(replace=True)
@@ -328,10 +333,13 @@ class WorldCupSourceBundleTests(unittest.TestCase):
                 ), \
                 patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_AUTH_HEADER", "X-Feed-Key"), \
                 patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_AUTH_VALUE", "secret-value"), \
+                patch.object(settings, "WORLD_CUP_DATA_MAX_AGE_HOURS", 0), \
                 patch(
                     "app.services.world_cup_source_bundle.urlopen",
                     return_value=_UrlResponse(body),
                 ) as open_mock:
+            # _bundle_payload uses fixed observed_at dates; disable staleness
+            # gate (covered by test_world_cup_data_source_service.py).
             result = preview_world_cup_source_bundle_url()
             facts = load_sports_facts(tournament=WORLD_CUP_TOURNAMENT)
 
@@ -350,10 +358,13 @@ class WorldCupSourceBundleTests(unittest.TestCase):
             fact_path = str(Path(tmp) / "facts.json")
             with patch.object(settings, "SPORTS_FACT_FILE", fact_path), \
                     patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_URL", "https://example.com/bundle"), \
+                    patch.object(settings, "WORLD_CUP_DATA_MAX_AGE_HOURS", 0), \
                     patch(
                         "app.services.world_cup_source_bundle.urlopen",
                         return_value=_UrlResponse(body),
                     ):
+                # _bundle_payload uses fixed observed_at dates; disable
+                # staleness gate (covered by test_world_cup_data_source_service.py).
                 result = import_world_cup_source_bundle_url(replace=True)
                 facts = load_sports_facts(tournament=WORLD_CUP_TOURNAMENT)
 

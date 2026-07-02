@@ -137,6 +137,10 @@ def slice_metrics(items: list[dict[str, Any]]) -> dict[str, Any]:
     Brier block uses calibration_service_event._aggregate — the same pure
     aggregator used by summarize() at resolve time — so the report's mean
     Brier / skill / grade match the calibration system's semantics.
+
+    missing_calibration counts events with brier_score is None (no
+    calibration block on the record, e.g. unresolved or never scored).
+    missing_calibration_rate = missing_calibration / n. None when n == 0.
     """
     from app.services.calibration_service_event import _aggregate as aggregate_briers
 
@@ -152,8 +156,13 @@ def slice_metrics(items: list[dict[str, Any]]) -> dict[str, Any]:
         "brier_score": None, "skill_score": None, "grade": "no_data", "n": 0,
     }
 
+    missing_cal = sum(1 for i in items if i["brier_score"] is None)
+    missing_cal_rate = (missing_cal / n) if n > 0 else None
+
     return {
         "n": n,
+        "missing_calibration": missing_cal,
+        "missing_calibration_rate": round(missing_cal_rate, 4) if missing_cal_rate is not None else None,
         "direction_correct_true": dc_true,
         "direction_correct_false": dc_false,
         "direction_correct_none": dc_none,
@@ -206,15 +215,25 @@ def calibration_deviation(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def build_report(items: list[dict[str, Any]], report_errors: list[dict[str, str]]) -> dict[str, Any]:
-    """Assemble the full report dict from extracted per-event metrics."""
+    """Assemble the full report dict from extracted per-event metrics.
+
+    Overview now includes overall direction_accuracy / brier_score /
+    missing_calibration_rate, computed directly from items via
+    slice_metrics(items) to avoid double-counting across slice dimensions.
+    """
     total = len(items)
     with_cal = sum(1 for i in items if i["brier_score"] is not None)
+    overall = slice_metrics(items)
 
     return {
         "overview": {
             "total_resolved": total,
             "with_calibration": with_cal,
             "missing_calibration": total - with_cal,
+            "missing_calibration_rate": overall["missing_calibration_rate"],
+            "direction_accuracy": overall["direction_accuracy"],
+            "brier_score": overall["brier"]["brier_score"],
+            "brier_n": overall["brier"]["n"],
         },
         "by_source_type": group_by(items, "source_type"),
         "by_analysis_quality": group_by(items, "analysis_quality"),

@@ -19,3 +19,8 @@
 *.otf  binary
 *.eot  binary
 *.pdf  binary
+
+# LightGBM text-model files are parsed by the C library, which is sensitive
+# to \r\n line endings — CRLF checkout on Windows corrupts the parser
+# ("Model format error, expect a tree here" → process abort). Keep bytes as-is.
+backend/data/gbm_*.txt binary

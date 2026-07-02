@@ -6,7 +6,7 @@
 **Spec sections covered:** §4.3 (质量诊断 CLI)
 **Initial review HEAD:** `f66caf6` (SDD tasks 1-3 + final whole-branch review)
 **Post-merge fix HEAD:** `e78883b` (Reviews 1-3 below)
-**Current tracked HEAD:** `a2ba2a9` (this ledger update)
+**Current tracked HEAD:** `f2928f3` (ledger-only docs commits `a2ba2a9` → `f2928f3`; no code changes)
 
 ## Tasks
 
@@ -49,7 +49,7 @@ These were discovered while running the full backend suite after the diagnose fi
 
 ### Final HEAD
 
-- `e78883b` (14 commits since MERGE_BASE `6a13b71`); ledger update `a2ba2a9` adds no code changes.
+- `e78883b` (14 commits since MERGE_BASE `6a13b71`); subsequent `a2ba2a9` → `f2928f3` are ledger-only docs commits (no code changes).
 - Both documented runners green, verified locally on Windows / Python 3.14.5 / pytest 9.1.1:
   - `python -m unittest discover -s tests` → 1906 OK (skipped=1)
   - `python -m pytest` → 1923 passed, 11 skipped

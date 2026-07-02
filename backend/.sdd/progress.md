@@ -4,7 +4,9 @@
 **Branch:** `main` (inline execution per established repo pattern)
 **Base commit (MERGE_BASE):** `6a13b71`
 **Spec sections covered:** §4.3 (质量诊断 CLI)
-**Final HEAD:** `f66caf6`
+**Initial review HEAD:** `f66caf6` (SDD tasks 1-3 + final whole-branch review)
+**Post-merge fix HEAD:** `e78883b` (Reviews 1-3 below)
+**Current tracked HEAD:** `a2ba2a9` (this ledger update)
 
 ## Tasks
 
@@ -20,12 +22,12 @@
 - **Post-review fixes (1 fix subagent + 1 controller cleanup):**
   - `05ad7b6` — M1: removed redundant asymmetric deep-copy in `_run_replay_comparison`; M5: added `displayed_direction` to `_render_text` Phase 1.
   - `f66caf6` — chore: removed now-unused `import copy`.
-- **Final HEAD at review:** `f66caf6` (5 commits since MERGE_BASE `6a13b71`)
+- **Branch HEAD at review close:** `f66caf6` (5 commits since MERGE_BASE `6a13b71`; see header for later post-merge fixes)
 - **Minor findings accepted as-is:** M2 (`None` vs `<missing>` — needs sentinel design change, out of scope), M3 (`Delta: no_change` vs spec §5.1 space — spec internally inconsistent, code consistent), M4 (`calibration_status` extra field — additive/harmless), M6 (JSON omits `enabled` — code follows §6 authoritative table over §5.2 example), M7/M8/M9 (test gaps — low risk, nice-to-haves).
 
 ## Post-Merge Fixes (post-review, user-reported)
 
-After branch push to origin/main, user reported 5 additional bugs across 3 separate reviews. All fixed and pushed.
+After branch push to origin/main, user reported 4 diagnose-CLI bugs plus 1 class of test-suite infrastructure issue, across 3 separate reviews. All fixed and pushed.
 
 ### Review 1 — diagnose CLI semantics (3 bugs)
 
@@ -37,9 +39,9 @@ After branch push to origin/main, user reported 5 additional bugs across 3 separ
 
 - **P1 `direction_correct` accepts invalid outcomes** (`7532c94`): CLI passed `actual_outcome` to `compute_direction_correct` unconditionally, without checking `outcome.status == "resolved"`. A `status="invalid"` outcome (written when verified link diverges) with `actual_outcome=100` returned True — but per `event_store.list_resolved_events` / `event_resolve_service`, non-resolved outcomes record the marker but are NOT scored. Fix: gate on `outcome.get("status", "resolved") == "resolved"` (missing status defaults to resolved per store convention). +2 regression tests (`test_direction_correct_invalid_outcome_is_none`, `test_direction_correct_missing_status_defaults_resolved`).
 
-### Review 3 — test suite infrastructure (4 bugs, not diagnose-CLI)
+### Review 3 — test suite infrastructure (1 issue class, not diagnose-CLI)
 
-These were discovered while running the full backend suite after the diagnose fixes. Not part of the diagnose CLI spec, but blocked the "all tests green" verification.
+These were discovered while running the full backend suite after the diagnose fixes. Not part of the diagnose CLI spec, but blocked the "all tests green" verification. Two distinct root causes (gbm CRLF corruption + staleness time-bomb fixtures) required iterative fixes across 4 commits.
 
 - **lightgbm C-abort** (`5fc353b`): `test_gbm_engine.py` crashed the process (exit `0xC0000409` STATUS_STACK_BUFFER_OVERRUN) because `.gitattributes` `* text=auto` converted LF→CRLF on Windows checkout, corrupting `backend/data/gbm_*.txt` model files. LightGBM's C parser (`LGBM_BoosterCreateFromModelfile`) is `\r\n`-sensitive. Fix: mark `backend/data/gbm_*.txt` as `binary` in `.gitattributes`. Root cause was CRLF corruption, NOT Python 3.14 / lightgbm binary incompatibility.
 - **staleness time-bombs (conftest attempt)** (`1f55794` → `f4f6bd1`): 13 tests across 3 files used hardcoded `observed_at` dates (2026-06-25) that exceeded the `WORLD_CUP_DATA_MAX_AGE_HOURS=168` threshold as the wall clock advanced past 2026-07-02. First attempt (`f4f6bd1`) added a `conftest.py` autouse fixture patching `WORLD_CUP_DATA_MAX_AGE_HOURS=0` — but this only works under pytest; the README documents `python -m unittest discover -s tests` which doesn't load conftest.py.
@@ -47,8 +49,10 @@ These were discovered while running the full backend suite after the diagnose fi
 
 ### Final HEAD
 
-- `e78883b` (14 commits since MERGE_BASE `6a13b71`)
-- Both documented runners green: `python -m unittest discover -s tests` (1906 OK, skipped=1) and `python -m pytest` (1923 passed, 11 skipped).
+- `e78883b` (14 commits since MERGE_BASE `6a13b71`); ledger update `a2ba2a9` adds no code changes.
+- Both documented runners green, verified locally on Windows / Python 3.14.5 / pytest 9.1.1:
+  - `python -m unittest discover -s tests` → 1906 OK (skipped=1)
+  - `python -m pytest` → 1923 passed, 11 skipped
 
 ## Lesson Log (post-merge additions)
 

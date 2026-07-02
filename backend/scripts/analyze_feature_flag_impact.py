@@ -81,6 +81,46 @@ def _config_by_name(name: str) -> ReplayConfig:
     raise ValueError(f"unknown config preset: {name!r}")
 
 
+# Sensitive field suffixes that --set must refuse to override.
+_SENSITIVE_SUFFIXES = ("_API_KEY", "_SECRET", "_TOKEN", "_PASSWORD")
+_SENSITIVE_EXACT = {"OPENAI_API_KEY"}
+
+
+def parse_kv(s: str) -> tuple[str, Any]:
+    """Parse a KEY=VALUE string for --set / --set-a / --set-b.
+
+    Type coercion order: bool literal → int → float → str.
+    Exits with code 2 on: missing '=', unknown setting, sensitive field.
+    """
+    from app.core.config import settings
+
+    if "=" not in s:
+        print(f"[FAIL] invalid --set value (expected KEY=VALUE): {s!r}", file=sys.stderr)
+        raise SystemExit(2)
+    key, raw = s.split("=", 1)
+    key = key.strip().upper()
+
+    if not hasattr(settings, key):
+        print(f"[FAIL] unknown setting: {key!r}", file=sys.stderr)
+        raise SystemExit(2)
+
+    if key in _SENSITIVE_EXACT or key.endswith(_SENSITIVE_SUFFIXES):
+        print(f"[FAIL] {key} blocked by sensitive-name policy", file=sys.stderr)
+        raise SystemExit(2)
+
+    if raw.lower() in ("true", "false", "on", "off", "yes", "no"):
+        val = raw.lower() in ("true", "on", "yes")
+    else:
+        try:
+            val = int(raw)
+        except ValueError:
+            try:
+                val = float(raw)
+            except ValueError:
+                val = raw
+    return (key, val)
+
+
 _PER_PHASE_PRESETS = (
     "decision_quality_only",
     "market_quality_only",
@@ -200,6 +240,195 @@ def _print(text: str) -> None:
     print(text, flush=True)
 
 
+def _run_diff_mode(
+    records: list[dict[str, Any]],
+    compare_a: str,
+    compare_b: str,
+    shared_overrides: dict[str, Any],
+    a_overrides: dict[str, Any],
+    b_overrides: dict[str, Any],
+    diff_report: bool,
+    diff_report_path: str | None,
+    diff_json: str | None,
+) -> int:
+    """Run diff mode: replay under A and B, build_diff, render output."""
+    from app.services.quality_diff_service import build_diff
+
+    cfg_a = _config_by_name(compare_a)
+    cfg_b = _config_by_name(compare_b)
+    cfg_a.settings_overrides = {**shared_overrides, **a_overrides} or None
+    cfg_b.settings_overrides = {**shared_overrides, **b_overrides} or None
+
+    _print(f"[INFO] Config A: preset={compare_a}, settings_overrides={cfg_a.settings_overrides or {}}")
+    _print(f"[INFO] Config B: preset={compare_b}, settings_overrides={cfg_b.settings_overrides or {}}")
+
+    records_a: list[dict[str, Any]] = []
+    records_b: list[dict[str, Any]] = []
+    for record in records:
+        replayed_a = replay_record(record, cfg_a)
+        replayed_b = replay_record(record, cfg_b)
+        # Inject outcome back (replay preserves it, but make contract explicit)
+        outcome = record.get("outcome")
+        if outcome is not None:
+            replayed_a["outcome"] = outcome
+            replayed_b["outcome"] = outcome
+        records_a.append(replayed_a)
+        records_b.append(replayed_b)
+
+    config_meta_a = {
+        "preset": compare_a,
+        "settings_overrides": cfg_a.settings_overrides or {},
+        "name": _config_label(compare_a, cfg_a.settings_overrides),
+    }
+    config_meta_b = {
+        "preset": compare_b,
+        "settings_overrides": cfg_b.settings_overrides or {},
+        "name": _config_label(compare_b, cfg_b.settings_overrides),
+    }
+
+    diff = build_diff(records_a, records_b, config_meta_a, config_meta_b)
+
+    # effective_config block for JSON
+    effective_a = {
+        "preset": compare_a,
+        "settings_overrides": cfg_a.settings_overrides or {},
+        "applied_bool_fields": {
+            f.upper(): v for f, v in cfg_a.__dict__.items()
+            if f != "settings_overrides" and v is not None
+        },
+    }
+    effective_b = {
+        "preset": compare_b,
+        "settings_overrides": cfg_b.settings_overrides or {},
+        "applied_bool_fields": {
+            f.upper(): v for f, v in cfg_b.__dict__.items()
+            if f != "settings_overrides" and v is not None
+        },
+    }
+
+    if diff_report or diff_report_path:
+        text = _render_diff_text(diff)
+        if diff_report:
+            _print(text)
+        if diff_report_path:
+            Path(diff_report_path).write_text(text, encoding="utf-8")
+            _print(f"[OK] Text diff report written to {diff_report_path}")
+
+    if diff_json:
+        payload = {**diff, "effective_config_a": effective_a, "effective_config_b": effective_b}
+        out_path = Path(diff_json)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, default=str, ensure_ascii=False), encoding="utf-8")
+        _print(f"[OK] JSON diff report written to {out_path}")
+
+    _print("[OK] Done.")
+    return 0
+
+
+def _config_label(preset: str, overrides: dict[str, Any] | None) -> str:
+    """Build a human-readable label like 'current +MARKET_MAX_SPREAD_PCT=15'."""
+    if not overrides:
+        return preset
+    summary = ",".join(f"+{k}={v}" for k, v in overrides.items())
+    return f"{preset} {summary}"
+
+
+def _render_diff_text(diff: dict[str, Any]) -> str:
+    """Render the diff report as human-readable text."""
+    lines: list[str] = []
+    a = diff["config_a"]
+    b = diff["config_b"]
+    lines.append(f"Config A: preset={a['preset']}, settings_overrides={a['settings_overrides']}")
+    lines.append(f"Config B: preset={b['preset']}, settings_overrides={b['settings_overrides']}")
+    lines.append("")
+
+    ov = diff["overview"]
+    lines.append("Overview")
+    lines.append("─" * 60)
+    lines.append(f"  n_total: {ov['n_total']}")
+    lines.append(
+        f"  n_direction_compared: {ov['n_direction_compared']}  "
+        f"(n_missing_a: {ov['n_missing_a']}, n_missing_b: {ov['n_missing_b']})"
+    )
+    lines.append(f"  n_scored_compared: {ov['n_scored_compared']}")
+    changed = ov["direction_changed"]
+    rate = ov["change_rate"]
+    rate_pct = f"{rate * 100:.1f}%" if rate is not None else "—"
+    lines.append(f"  direction_changed: {changed} ({rate_pct})")
+    lines.append(f"  change_rate: {rate}")
+    lines.append("")
+
+    rs = diff["regression_summary"]
+    lines.append("Regression summary")
+    lines.append("─" * 60)
+    lines.append(f"  accuracy_regressions: {rs['accuracy_regressions']} slices")
+    lines.append(f"  accuracy_improvements: {rs['accuracy_improvements']} slices")
+    lines.append(f"  brier_regressions: {rs['brier_regressions']} slices")
+    lines.append(f"  brier_improvements: {rs['brier_improvements']} slices")
+    lad = rs["largest_accuracy_drop"]
+    if lad:
+        lines.append(f"  largest_accuracy_drop: {lad['slice']}: {lad['delta']:+.4f}")
+    lbd = rs["largest_brier_drop"]
+    if lbd:
+        lines.append(f"  largest_brier_drop: {lbd['slice']}: {lbd['delta']:+.4f}")
+    lines.append("")
+
+    # Direction matrix
+    from app.services.quality_diff_service import DIRECTION_LABELS
+    keys = DIRECTION_LABELS + ("OTHER",)
+    lines.append("Direction matrix (rows=A, cols=B)")
+    lines.append("─" * 60)
+    header = "        " + "  ".join(f"{d:>6}" for d in keys)
+    lines.append(header)
+    for r in keys:
+        row = f"  {r:<4} " + "  ".join(f"{diff['direction_matrix'][r][c]:>6}" for c in keys)
+        lines.append(row)
+    lines.append("")
+
+    # Top transitions
+    if diff["top_transitions"]:
+        lines.append("Top transitions")
+        lines.append("─" * 60)
+        for t in diff["top_transitions"][:10]:
+            lines.append(f"  {t['from']} -> {t['to']}: {t['n']} ({t['pct']:.1f}%)")
+        lines.append("")
+
+    # Slice diffs
+    for dim_name, slices in diff["slice_diff"].items():
+        lines.append(f"Slice diff: {dim_name}")
+        lines.append("─" * 60)
+        if not slices:
+            lines.append("  (no data)")
+            lines.append("")
+            continue
+        lines.append(
+            f"  {'slice':<28} {'n_a':>4} {'n_b':>4} {'acc_a':>6} {'acc_b':>6} {'Δacc':>7} "
+            f"{'brier_a':>7} {'brier_b':>7} {'Δbrier':>7}"
+        )
+        for key in sorted(slices.keys(), key=lambda k: -(slices[k]["a"]["n"] + slices[k]["b"]["n"])):
+            s = slices[key]
+            a, b, d = s["a"], s["b"], s["delta"]
+            acc_a = f"{a['direction_accuracy']:.3f}" if a["direction_accuracy"] is not None else "—"
+            acc_b = f"{b['direction_accuracy']:.3f}" if b["direction_accuracy"] is not None else "—"
+            dacc = f"{d['direction_accuracy']:+.4f}" if d["direction_accuracy"] is not None else "—"
+            br_a = f"{a['brier']['brier_score']:.4f}" if a["brier"]["brier_score"] is not None else "—"
+            br_b = f"{b['brier']['brier_score']:.4f}" if b["brier"]["brier_score"] is not None else "—"
+            dbr = f"{d['brier_score']:+.4f}" if d["brier_score"] is not None else "—"
+            lines.append(
+                f"  {key:<28} {a['n']:>4} {b['n']:>4} {acc_a:>6} {acc_b:>6} {dacc:>7} "
+                f"{br_a:>7} {br_b:>7} {dbr:>7}"
+            )
+        lines.append("")
+
+    if diff["diff_errors"]:
+        lines.append(f"Diff errors: {len(diff['diff_errors'])}")
+        for err in diff["diff_errors"][:10]:
+            lines.append(f"  {err['event_id']} (side={err['side']}, stage={err['stage']}): {err['error']}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="analyze_feature_flag_impact",
@@ -211,14 +440,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--event-ids", type=str, default=None,
                         help="Comma-separated event ids to restrict the run.")
     parser.add_argument("--compare", nargs=2,
-                        default=["all_off", "all_on"],
+                        default=None,
                         metavar=("CONFIG_A", "CONFIG_B"),
                         help="Two config presets to compare "
                              "(all_off / all_on / current / llm_degraded / "
                              "decision_quality_only / market_quality_only / "
                              "source_reliability_only / guardrails_baseline / "
                              "guardrails_only). "
-                             "Default: all_off all_on.")
+                             "Default: all_off all_on (legacy mode) or "
+                             "current current (diff mode).")
     parser.add_argument("--per-phase", action="store_true", default=False,
                         help="Run a marginal-impact comparison for each "
                              "overlay: all_off vs decision_quality_only / "
@@ -232,7 +462,53 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", type=str, default=None,
                         metavar="PATH",
                         help="Write a JSON report to this path.")
+    parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                        help="Override a settings field for BOTH configs (repeatable). "
+                             "Applies after preset. bool: true/false/on/off/yes/no.")
+    parser.add_argument("--set-a", action="append", default=[], metavar="KEY=VALUE",
+                        help="Override a settings field for config A only (repeatable).")
+    parser.add_argument("--set-b", action="append", default=[], metavar="KEY=VALUE",
+                        help="Override a settings field for config B only (repeatable).")
+    parser.add_argument("--diff-report", action="store_true", default=False,
+                        help="Output a diff report (direction matrix + slice deltas + "
+                             "regression summary). Default mode without this flag is "
+                             "the legacy direction-matrix-only output.")
+    parser.add_argument("--diff-report-path", type=str, default=None, metavar="PATH",
+                        help="Write the text diff report to this file (instead of stdout).")
+    parser.add_argument("--diff-json", type=str, default=None, metavar="PATH",
+                        help="Write the JSON diff report to this file.")
     args = parser.parse_args(argv)
+
+    # --- Mode + combo validation ---
+    diff_mode = args.diff_report or args.diff_report_path is not None or args.diff_json is not None
+    has_set_ab = bool(args.set_a or args.set_b)
+
+    if args.per_phase and diff_mode:
+        print("[FAIL] --per-phase and --diff-* are mutually exclusive", file=sys.stderr)
+        return 2
+    if args.json and args.diff_json:
+        print("[FAIL] --json and --diff-json are mutually exclusive", file=sys.stderr)
+        return 2
+    if has_set_ab and not diff_mode:
+        print("[FAIL] --set-a/--set-b require a --diff-* output flag", file=sys.stderr)
+        return 2
+    if args.diff_json and args.diff_report_path:
+        print("[FAIL] --diff-json and --diff-report-path are mutually exclusive (pick one file format)", file=sys.stderr)
+        return 2
+
+    # Parse --set* into override dicts
+    shared_overrides = dict(parse_kv(s) for s in args.set)
+    a_overrides = dict(parse_kv(s) for s in args.set_a)
+    b_overrides = dict(parse_kv(s) for s in args.set_b)
+
+    # Determine preset names
+    if args.compare:
+        compare_a, compare_b = args.compare
+    elif diff_mode:
+        compare_a, compare_b = "current", "current"
+    else:
+        # Legacy mode without --compare: preserve pre-existing default.
+        compare_a, compare_b = "all_off", "all_on"
 
     event_ids = None
     if args.event_ids:
@@ -245,6 +521,14 @@ def main(argv: list[str] | None = None) -> int:
 
     _print(f"[INFO] Loaded {len(records)} records.")
 
+    if diff_mode:
+        return _run_diff_mode(
+            records, compare_a, compare_b,
+            shared_overrides, a_overrides, b_overrides,
+            args.diff_report, args.diff_report_path, args.diff_json,
+        )
+
+    # Legacy mode (--per-phase or --compare + optional --json)
     if args.per_phase:
         # Per-phase mode. For each overlay, compare the "without it" baseline
         # vs the "with it" config to isolate that overlay's marginal impact.
@@ -292,15 +576,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        cfg_a = _config_by_name(args.compare[0])
-        cfg_b = _config_by_name(args.compare[1])
+        cfg_a = _config_by_name(compare_a)
+        cfg_b = _config_by_name(compare_b)
     except ValueError as e:
         _print(f"[FAIL] {e}")
         return 2
 
-    _print(f"[INFO] Comparing {args.compare[0]} vs {args.compare[1]}...")
+    _print(f"[INFO] Comparing {compare_a} vs {compare_b}...")
     matrix, counted = _compute_direction_matrix(
-        records, cfg_a, cfg_b, args.compare[0], args.compare[1],
+        records, cfg_a, cfg_b, compare_a, compare_b,
     )
     report = _format_matrix(matrix, total=counted)
     _print(report)
@@ -309,7 +593,7 @@ def main(argv: list[str] | None = None) -> int:
         out_path = Path(args.json)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "compare": [args.compare[0], args.compare[1]],
+            "compare": [compare_a, compare_b],
             "total": counted,
             "loaded": len(records),
             "matrix": matrix,

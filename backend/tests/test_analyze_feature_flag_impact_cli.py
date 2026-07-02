@@ -110,5 +110,101 @@ class TestDefaultCompare(unittest.TestCase):
         self.assertEqual(rc, 0)
 
 
+class TestSetSplit(unittest.TestCase):
+    def test_set_a_set_b_split(self):
+        """--set-a K=1 --set-b K=2 -> A and B get separate overrides.
+
+        Mocks _run_diff_mode to capture the override dicts passed in,
+        since they are internal to _run_diff_mode and not otherwise
+        observable. _load_records is mocked to return a non-empty list
+        so main() reaches _run_diff_mode instead of early-exiting on
+        the "No records found" branch.
+        """
+        import analyze_feature_flag_impact as afi
+        captured = {}
+
+        def fake_run_diff(records, ca, cb, shared, a_only, b_only, dr, drp, dj):
+            captured["shared"] = shared
+            captured["a_only"] = a_only
+            captured["b_only"] = b_only
+            return 0
+
+        with patch.object(afi, "_load_records", return_value=[{"event_id": "x"}]):
+            with patch.object(afi, "_run_diff_mode", side_effect=fake_run_diff):
+                rc = afi.main(["--set-a", "MARKET_MAX_SPREAD_PCT=10",
+                               "--set-b", "MARKET_MAX_SPREAD_PCT=20",
+                               "--diff-report"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(captured["a_only"], {"MARKET_MAX_SPREAD_PCT": 10})
+        self.assertEqual(captured["b_only"], {"MARKET_MAX_SPREAD_PCT": 20})
+        self.assertEqual(captured["shared"], {})
+
+
+class TestDiffOutput(unittest.TestCase):
+    """End-to-end tests for diff/legacy output rendering.
+
+    Mocks _load_records to return pre-built record dicts (avoids
+    event_store seeding). Records still flow through replay_record +
+    build_diff, so the full render path is exercised.
+    """
+
+    @staticmethod
+    def _two_records():
+        from tests.test_sweep_event_quality import _make_resolved_record
+        return [
+            _make_resolved_record("evt-1", direction="YES", actual_outcome=100.0),
+            _make_resolved_record("evt-2", direction="NO", actual_outcome=0.0),
+        ]
+
+    @staticmethod
+    def _run_main_capture(argv, records):
+        import analyze_feature_flag_impact as afi
+        with patch.object(afi, "_load_records", return_value=records):
+            orig_stdout = sys.stdout
+            try:
+                sys.stdout = io.StringIO()
+                rc = afi.main(argv)
+                output = sys.stdout.getvalue()
+            finally:
+                sys.stdout = orig_stdout
+        return rc, output
+
+    def test_diff_report_text_output(self):
+        """--diff-report stdout contains all 4 required sections."""
+        rc, output = self._run_main_capture(["--diff-report"], self._two_records())
+        self.assertEqual(rc, 0)
+        self.assertIn("Overview", output)
+        self.assertIn("Regression summary", output)
+        self.assertIn("Direction matrix", output)
+        self.assertIn("Slice diff", output)
+
+    def test_diff_json_output_shape(self):
+        """--diff-json PATH JSON contains the required top-level keys."""
+        import os
+        import tempfile
+        records = self._two_records()
+        fd, json_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            rc, _ = self._run_main_capture(["--diff-json", json_path], records)
+            self.assertEqual(rc, 0)
+            with open(json_path, "r", encoding="utf-8") as f:
+                payload = json.loads(f.read())
+            for key in ("overview", "direction_matrix", "slice_diff",
+                        "regression_summary", "effective_config_a",
+                        "effective_config_b"):
+                self.assertIn(key, payload)
+        finally:
+            os.unlink(json_path)
+
+    def test_backward_compat_compare_no_diff(self):
+        """--compare all_off all_on (no --diff-*) -> legacy matrix, no diff sections."""
+        rc, output = self._run_main_capture(
+            ["--compare", "all_off", "all_on"], self._two_records())
+        self.assertEqual(rc, 0)
+        self.assertNotIn("Regression summary", output)
+        self.assertIn("Direction transition matrix", output)
+
+
 if __name__ == "__main__":
     unittest.main()

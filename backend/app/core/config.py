@@ -793,5 +793,15 @@ class Settings:
         os.getenv("DRIFT_ALERT_COOLDOWN_SECONDS", "3600")
     )
 
+    # ── Quality alerts (LATER #3) — slice-threshold alerting on quality report ──
+    QUALITY_ALERT_MIN_SAMPLES: int = int(os.getenv("QUALITY_ALERT_MIN_SAMPLES", "10"))
+    QUALITY_ALERT_DIRECTION_ACCURACY_MEDIUM: float = float(os.getenv("QUALITY_ALERT_DIRECTION_ACCURACY_MEDIUM", "0.60"))
+    QUALITY_ALERT_DIRECTION_ACCURACY_HIGH: float = float(os.getenv("QUALITY_ALERT_DIRECTION_ACCURACY_HIGH", "0.50"))
+    QUALITY_ALERT_BRIER_MEDIUM: float = float(os.getenv("QUALITY_ALERT_BRIER_MEDIUM", "0.25"))
+    QUALITY_ALERT_BRIER_HIGH: float = float(os.getenv("QUALITY_ALERT_BRIER_HIGH", "0.35"))
+    QUALITY_ALERT_MISSING_CALIBRATION_RATE_MEDIUM: float = float(os.getenv("QUALITY_ALERT_MISSING_CALIBRATION_RATE_MEDIUM", "0.20"))
+    QUALITY_ALERT_MISSING_CALIBRATION_RATE_HIGH: float = float(os.getenv("QUALITY_ALERT_MISSING_CALIBRATION_RATE_HIGH", "0.40"))
+    QUALITY_ALERT_REPORT_ERRORS_HIGH: int = int(os.getenv("QUALITY_ALERT_REPORT_ERRORS_HIGH", "1"))
+
 
 settings = Settings()

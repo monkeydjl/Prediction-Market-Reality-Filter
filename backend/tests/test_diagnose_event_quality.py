@@ -745,5 +745,256 @@ class TestExitCode2(unittest.TestCase):
                 sys.stderr = orig_stderr
 
 
+class TestGoldenCases(unittest.TestCase):
+    """End-to-end golden cases: full record → extract → render.
+
+    Unlike TestPredictionCalibrationSemantics (isolated unit tests that
+    mutate one field and assert one value), these cases construct
+    realistic business scenarios and verify the FULL diagnosis output —
+    multiple fields together, text rendering, and cross-phase
+    consistency. They catch interaction bugs that isolated tests miss.
+    """
+
+    def _base_record(self) -> dict:
+        """A realistic record with all 6 overlays + outcome, mirroring
+        production shape. Each golden case tweaks relevant fields."""
+        record = _sample_record()
+        # Add a resolved outcome so calibration scoring is exercised.
+        record["outcome"] = {
+            "status": "resolved",
+            "actual_outcome": 100.0,
+            "confidence": 0.9,
+            "resolved_at": "2026-06-15T00:00:00Z",
+            "source": "manual",
+        }
+        return record
+
+    def _diagnose(self, record: dict) -> tuple[dict, str, str]:
+        """Run full extract + render pipeline. Returns (data, text, json)."""
+        from diagnose_event_quality import (
+            _extract_phase_data, _render_text, _render_json,
+        )
+        data = _extract_phase_data(record)
+        return data, _render_text(data, replay_result=None), _render_json(data, replay_result=None)
+
+    def test_golden_yes_correct_prediction(self):
+        """YES recommendation + outcome=YES (100) → direction_correct=True.
+
+        Happy path: recommendation matched reality. All phases healthy.
+        """
+        record = self._base_record()
+        record["event_id"] = "gold-yes-correct"
+        record["event_title"] = "Will Argentina win the 2026 World Cup?"
+        record["actionable_recommendation"]["direction"] = "YES"
+        record["actionable_recommendation"]["edge"] = 12.0
+        record["outcome"]["actual_outcome"] = 100.0
+
+        data, text, json_str = self._diagnose(record)
+        pc = data["phases"]["prediction_calibration"]
+
+        self.assertEqual(pc["snapshot_recommendation"], "YES")
+        self.assertEqual(pc["edge_bucket"], "10-20")
+        self.assertEqual(pc["direction_correct"], True)
+        self.assertEqual(data["final_direction"], "YES")
+        # Text output reflects the correct prediction
+        self.assertIn("direction_correct: True", text)
+        self.assertIn("edge_bucket: 10-20", text)
+        # JSON is valid and consistent
+        parsed = json.loads(json_str)
+        self.assertTrue(parsed["phases"]["prediction_calibration"]["direction_correct"])
+
+    def test_golden_yes_misjudgment(self):
+        """YES recommendation + outcome=NO (0) → direction_correct=False.
+
+        The canonical misjudgment case: engine said YES, reality said NO.
+        This is the highest-value golden case — it must NOT show True.
+        """
+        record = self._base_record()
+        record["event_id"] = "gold-yes-wrong"
+        record["event_title"] = "Will Team A beat Team B?"
+        record["actionable_recommendation"]["direction"] = "YES"
+        record["actionable_recommendation"]["edge"] = 8.0
+        record["outcome"]["actual_outcome"] = 0.0  # NO happened
+
+        data, text, json_str = self._diagnose(record)
+        pc = data["phases"]["prediction_calibration"]
+
+        self.assertEqual(pc["snapshot_recommendation"], "YES")
+        self.assertEqual(pc["edge_bucket"], "5-10")
+        # CRITICAL: must be False, not True (the P1 bug returned True)
+        self.assertEqual(pc["direction_correct"], False)
+        # Even though recommendation was YES, outcome was NO
+        self.assertIn("direction_correct: False", text)
+        parsed = json.loads(json_str)
+        self.assertFalse(parsed["phases"]["prediction_calibration"]["direction_correct"])
+
+    def test_golden_no_correct_prediction(self):
+        """NO recommendation + outcome=NO (0) → direction_correct=True."""
+        record = self._base_record()
+        record["event_id"] = "gold-no-correct"
+        record["event_title"] = "Will the underdog upset the champion?"
+        record["actionable_recommendation"]["direction"] = "NO"
+        record["actionable_recommendation"]["edge"] = 15.0
+        record["outcome"]["actual_outcome"] = 0.0  # NO (underdog lost)
+
+        data, text, _ = self._diagnose(record)
+        pc = data["phases"]["prediction_calibration"]
+
+        self.assertEqual(pc["snapshot_recommendation"], "NO")
+        self.assertEqual(pc["edge_bucket"], "10-20")
+        self.assertEqual(pc["direction_correct"], True)
+        self.assertIn("direction_correct: True", text)
+
+    def test_golden_no_misjudgment(self):
+        """NO recommendation + outcome=YES (100) → direction_correct=False.
+
+        Engine said NO, but YES happened. Symmetric to the YES misjudgment.
+        """
+        record = self._base_record()
+        record["event_id"] = "gold-no-wrong"
+        record["event_title"] = "Will the market crash this quarter?"
+        record["actionable_recommendation"]["direction"] = "NO"
+        record["actionable_recommendation"]["edge"] = 3.0
+        record["outcome"]["actual_outcome"] = 100.0  # YES (market crashed)
+
+        data, text, _ = self._diagnose(record)
+        pc = data["phases"]["prediction_calibration"]
+
+        self.assertEqual(pc["snapshot_recommendation"], "NO")
+        self.assertEqual(pc["edge_bucket"], "0-5")
+        self.assertEqual(pc["direction_correct"], False)
+        self.assertIn("direction_correct: False", text)
+
+    def test_golden_wait_recommendation_not_scored(self):
+        """WAIT recommendation + resolved outcome → direction_correct=None.
+
+        WAIT is non-directional: it explicitly declines to call YES/NO,
+        so it must not enter calibration scoring regardless of outcome.
+        """
+        record = self._base_record()
+        record["event_id"] = "gold-wait"
+        record["event_title"] = "Will the bill pass congress?"
+        record["actionable_recommendation"]["direction"] = "WAIT"
+        record["actionable_recommendation"]["edge"] = 2.0
+        record["outcome"]["actual_outcome"] = 100.0  # YES happened
+
+        data, text, _ = self._diagnose(record)
+        pc = data["phases"]["prediction_calibration"]
+
+        self.assertEqual(pc["snapshot_recommendation"], "WAIT")
+        self.assertEqual(pc["edge_bucket"], "0-5")
+        # WAIT never scores — None regardless of outcome
+        self.assertIsNone(pc["direction_correct"])
+        self.assertIn("direction_correct: None", text)
+
+    def test_golden_invalid_outcome_excluded_from_scoring(self):
+        """status=invalid outcome → direction_correct=None, even with
+        actual_outcome present.
+
+        Mirrors event_store.list_resolved_events: an invalid outcome
+        records the marker (e.g. auto_resolve_link_divergence) but is
+        excluded from calibration aggregates. The CLI must surface None,
+        not score it as True/False.
+        """
+        record = self._base_record()
+        record["event_id"] = "gold-invalid-outcome"
+        record["event_title"] = "Will the match be postponed?"
+        record["actionable_recommendation"]["direction"] = "YES"
+        record["actionable_recommendation"]["edge"] = 12.0
+        # Outcome marked invalid (link divergence) — has actual_outcome
+        # but must NOT be scored.
+        record["outcome"] = {
+            "status": "invalid",
+            "actual_outcome": 100.0,
+            "confidence": 0.3,
+            "resolved_at": "2026-06-20T00:00:00Z",
+            "source": "auto_resolve_link_divergence",
+        }
+
+        data, text, _ = self._diagnose(record)
+        pc = data["phases"]["prediction_calibration"]
+
+        self.assertEqual(pc["snapshot_recommendation"], "YES")
+        self.assertEqual(pc["edge_bucket"], "10-20")
+        # CRITICAL: None, not True (the P1 bug scored it as True)
+        self.assertIsNone(pc["direction_correct"])
+        self.assertIn("direction_correct: None", text)
+
+    def test_golden_edge_bucket_boundary_values(self):
+        """edge_bucket boundaries: 5.0→5-10, 20.0→20+, -15.0→10-20.
+
+        The canonical compute_edge_bucket uses abs value, half-open
+        intervals [0,5)/[5,10)/[10,20)/[20,+inf), with boundary values
+        going to the UPPER bucket. This golden case verifies the CLI
+        matches that semantics across three boundary conditions.
+        """
+        from diagnose_event_quality import _extract_phase_data
+        cases = [
+            (5.0, "5-10", "lower boundary of 5-10 bucket"),
+            (20.0, "20+", "lower boundary of 20+ cap bucket"),
+            (-15.0, "10-20", "negative edge uses abs value"),
+            (4.999, "0-5", "just below 5.0 boundary"),
+            (19.999, "10-20", "just below 20.0 boundary"),
+        ]
+        for edge, expected_bucket, desc in cases:
+            record = self._base_record()
+            record["actionable_recommendation"]["edge"] = edge
+            data = _extract_phase_data(record)
+            actual = data["phases"]["prediction_calibration"]["edge_bucket"]
+            self.assertEqual(
+                actual, expected_bucket,
+                f"edge={edge} ({desc}): expected '{expected_bucket}', got '{actual}'",
+            )
+
+    def test_golden_degraded_states_surfaced_in_output(self):
+        """LLM degraded + market degraded + guardrail fired → all surfaced.
+
+        When multiple overlays are in degraded/abnormal states, the CLI
+        must surface each one in its phase output so a reviewer can see
+        the full picture, not just the final direction.
+        """
+        record = self._base_record()
+        record["event_id"] = "gold-degraded"
+        record["event_title"] = "Will the merger complete this month?"
+        # LLM degraded mode
+        record["llm_telemetry"] = {
+            "degraded_mode": True,
+            "total_tokens": 0,
+            "estimated_token_cost": 0.0,
+            "analysis_quality": "degraded",
+        }
+        # Market degraded
+        record["market_quality"] = {
+            "degraded": True,
+            "degrade_reason": "wide_spread",
+            "wide_spread_flag": True,
+            "low_liquidity_flag": False,
+        }
+        # Guardrail fired
+        record["guardrail_fired"] = ["llm_degraded_blocks_act", "high_conflict"]
+
+        data, text, _ = self._diagnose(record)
+
+        # Phase 2 surfaces market degradation
+        mq = data["phases"]["market_quality"]
+        self.assertTrue(mq["degraded"])
+        self.assertEqual(mq["degrade_reason"], "wide_spread")
+        self.assertIn("Degraded (wide_spread)", text)
+
+        # Phase 5 surfaces LLM degradation
+        lt = data["phases"]["llm_telemetry"]
+        self.assertTrue(lt["degraded_mode"])
+        self.assertEqual(lt["analysis_quality"], "degraded")
+        self.assertIn("degraded_mode: True", text)
+
+        # Guardrails surfaced
+        self.assertEqual(
+            data["guardrails"]["fired_rules"],
+            ["llm_degraded_blocks_act", "high_conflict"],
+        )
+        self.assertIn("llm_degraded_blocks_act", text)
+        self.assertIn("high_conflict", text)
+
+
 if __name__ == "__main__":
     unittest.main()

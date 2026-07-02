@@ -84,6 +84,12 @@ class TestIllegalCombos(unittest.TestCase):
         rc, _ = self._run_main(["--set-a", "MARKET_MAX_SPREAD_PCT=15"])
         self.assertEqual(rc, 2)
 
+    def test_set_without_diff_report_exits_2(self):
+        """--set (shared overrides) without --diff-* should exit 2,
+        not be silently ignored in legacy mode."""
+        rc, _ = self._run_main(["--set", "MARKET_MAX_SPREAD_PCT=15"])
+        self.assertEqual(rc, 2)
+
     def test_diff_json_plus_diff_report_path_exits_2(self):
         rc, _ = self._run_main(["--diff-json", "a.json", "--diff-report-path", "b.txt"])
         self.assertEqual(rc, 2)

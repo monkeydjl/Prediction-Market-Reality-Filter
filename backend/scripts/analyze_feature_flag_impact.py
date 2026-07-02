@@ -489,8 +489,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.json and args.diff_json:
         print("[FAIL] --json and --diff-json are mutually exclusive", file=sys.stderr)
         return 2
-    if has_set_ab and not diff_mode:
-        print("[FAIL] --set-a/--set-b require a --diff-* output flag", file=sys.stderr)
+    if (has_set_ab or args.set) and not diff_mode:
+        print("[FAIL] --set/--set-a/--set-b require a --diff-* output flag", file=sys.stderr)
         return 2
     if args.diff_json and args.diff_report_path:
         print("[FAIL] --diff-json and --diff-report-path are mutually exclusive (pick one file format)", file=sys.stderr)

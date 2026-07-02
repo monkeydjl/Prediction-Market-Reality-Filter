@@ -60,17 +60,20 @@ backend/docs/工程进度.md
 .claude/
 backend/.claude/
 backend/.agents/
+.agents/
 backend/.impeccable/
 frontend/src/**/.impeccable/
 **/.impeccable/
 backend/CLAUDE.md
 backend/AGENTS.md
 backend/skills-lock.json
+skills-lock.json
 CLAUDE.md
 AGENTS.md
 HANDOFF.md
 .qoder/
 .workbuddy/
+.codegraph/
 hive.yml
 SESSION_MEMORY_*.md
 

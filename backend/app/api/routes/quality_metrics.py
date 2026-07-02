@@ -566,6 +566,91 @@ async def quality_metrics_report(
     return build_report(items, report_errors)
 
 
+# ---------------------------------------------------------------------------
+# /api/quality-metrics/alerts
+# ---------------------------------------------------------------------------
+
+@router.get("/quality-metrics/alerts")
+async def quality_metrics_alerts(
+    limit: int | None = Query(
+        default=None, ge=1,
+        description="Report on only the first N resolved events (default: all).",
+    ),
+    sample: int | None = Query(
+        default=None, ge=1,
+        description="Randomly sample N resolved events (reproducible seed=42).",
+    ),
+    include_insufficient_samples: bool = Query(
+        default=False,
+        description="Include diagnostics for low-sample slices.",
+    ),
+) -> dict[str, Any]:
+    """Evaluate quality alerts on the current resolved-event set.
+
+    Returns a single JSON object with:
+
+    - ``alerts`` — list of triggered alert dicts (codes: direction_accuracy_low,
+      brier_score_high, missing_calibration_rate_high, report_errors_high)
+    - ``alert_count`` — len(alerts)
+    - ``diagnostics`` — present only when ``include_insufficient_samples=true``;
+      contains ``insufficient_samples`` (slices with n < min_samples)
+
+    Pure read-only: no writes, no dispatch, no LLM calls. Same authorization
+    as ``/report`` — read-only, no ``X-API-Key`` required. ``sample`` is
+    applied first (seed=42), then ``limit`` — same semantics as
+    ``/quality-metrics/report``.
+    """
+    import random
+    from app.core.config import settings
+    from app.services.quality_alert_service import (
+        collect_insufficient_samples,
+        evaluate_quality_alerts,
+        thresholds_from_settings,
+    )
+    from app.services.quality_metrics_report_service import (
+        build_report,
+        extract_metrics,
+    )
+
+    entries = list_resolved_events()
+    if sample is not None and sample < len(entries):
+        # Reproducible sample — seed fixed (same convention as the CLI
+        # script and /quality-metrics/report).
+        rng = random.Random(42)
+        entries = rng.sample(entries, sample)
+    if limit is not None:
+        entries = entries[:limit]
+
+    items: list[dict[str, Any]] = []
+    report_errors: list[dict[str, str]] = []
+    for entry in entries:
+        record = entry.get("record")
+        if not isinstance(record, dict):
+            report_errors.append({
+                "event_id": entry.get("event_id", "?"),
+                "error": "record missing or not a dict",
+            })
+            continue
+        try:
+            items.append(extract_metrics(record))
+        except Exception as exc:
+            report_errors.append({
+                "event_id": record.get("event_id", "?"),
+                "error": str(exc),
+            })
+
+    report = build_report(items, report_errors)
+    thresholds = thresholds_from_settings(settings)
+    alerts = evaluate_quality_alerts(report, thresholds)
+
+    result: dict[str, Any] = {"alerts": alerts, "alert_count": len(alerts)}
+    if include_insufficient_samples:
+        result["diagnostics"] = {
+            "insufficient_samples": collect_insufficient_samples(report, thresholds),
+        }
+    return result
+
+
 # Exposed at import time so test runners can wire it without going through
 # the FastAPI app. Used by tests/test_quality_metrics.py.
 __all__ = ["router"]

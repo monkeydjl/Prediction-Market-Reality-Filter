@@ -6,13 +6,6 @@ from unittest.mock import patch
 
 from app.services.domain_reliability_service import attribute_evidence
 
-# NOTE: Tests marked `@unittest.skip("TODO: enable in Task 3")` depend on
-# `settings.DOMAIN_RELIABILITY_CONFIDENCE_MIN_SAMPLES`, which is added to
-# `app/core/config.py` in Task 3 of the plan. The production store code
-# (`_row_to_stat`) references this setting, so any `get_stats()` call that
-# returns >= 1 row raises AttributeError until Task 3 lands. These tests are
-# disabled here and should be re-enabled once Task 3 is complete.
-
 
 def _record(
     event_id: str = "e1",
@@ -64,7 +57,6 @@ class _TempDBMixin:
 
 
 class TestApplyResolution(_TempDBMixin, unittest.TestCase):
-    @unittest.skip("TODO: enable in Task 3")
     def test_apply_resolution_writes_rows(self):
         from app.memory.domain_reliability_store import apply_resolution, get_stats
         apply_resolution(_record())
@@ -74,7 +66,6 @@ class TestApplyResolution(_TempDBMixin, unittest.TestCase):
         self.assertIn(("reuters.com", "prediction_market"), domains)
         self.assertIn(("reuters.com", "_all"), domains)
 
-    @unittest.skip("TODO: enable in Task 3")
     def test_apply_resolution_idempotent(self):
         from app.memory.domain_reliability_store import apply_resolution, get_stats
         rec = _record()
@@ -85,7 +76,6 @@ class TestApplyResolution(_TempDBMixin, unittest.TestCase):
             if s["domain"] == "reuters.com":
                 self.assertEqual(s["sample_count"], 1)
 
-    @unittest.skip("TODO: enable in Task 3")
     def test_all_row_aggregates_across_categories(self):
         from app.memory.domain_reliability_store import apply_resolution, get_stats
         rec1 = _record(event_id="e1", source_type="prediction_market")
@@ -103,7 +93,6 @@ class TestApplyResolution(_TempDBMixin, unittest.TestCase):
         self.assertEqual(len(all_row), 1)
         self.assertEqual(all_row[0]["sample_count"], 2)
 
-    @unittest.skip("TODO: enable in Task 3")
     def test_unknown_category_not_all(self):
         from app.memory.domain_reliability_store import apply_resolution, get_stats
         rec = _record(source_type="",
@@ -123,7 +112,6 @@ class TestApplyResolution(_TempDBMixin, unittest.TestCase):
 
 
 class TestRebuild(_TempDBMixin, unittest.TestCase):
-    @unittest.skip("TODO: enable in Task 3")
     def test_rebuild_clears_and_recomputes(self):
         from app.memory.domain_reliability_store import apply_resolution, rebuild_from_records, get_stats
         apply_resolution(_record(event_id="old"))
@@ -132,7 +120,6 @@ class TestRebuild(_TempDBMixin, unittest.TestCase):
         # Should have data from "new" only
         self.assertTrue(any(s["sample_count"] > 0 for s in stats))
 
-    @unittest.skip("TODO: enable in Task 3")
     def test_rebuild_idempotent(self):
         from app.memory.domain_reliability_store import rebuild_from_records, get_stats
         records = [_record(event_id="e1")]
@@ -147,14 +134,12 @@ class TestRebuild(_TempDBMixin, unittest.TestCase):
 
 
 class TestGetStats(_TempDBMixin, unittest.TestCase):
-    @unittest.skip("TODO: enable in Task 3")
     def test_get_stats_filter_domain(self):
         from app.memory.domain_reliability_store import apply_resolution, get_stats
         apply_resolution(_record())
         stats = get_stats(domain="reuters.com")
         self.assertTrue(all(s["domain"] == "reuters.com" for s in stats))
 
-    @unittest.skip("TODO: enable in Task 3")
     def test_get_stats_filter_category(self):
         from app.memory.domain_reliability_store import apply_resolution, get_stats
         apply_resolution(_record())
@@ -168,7 +153,6 @@ class TestGetStats(_TempDBMixin, unittest.TestCase):
         # Only 1 sample -> filtered out
         self.assertTrue(all(s["sample_count"] >= 10 for s in stats))
 
-    @unittest.skip("TODO: enable in Task 3")
     def test_get_stats_returns_reliability_score(self):
         from app.memory.domain_reliability_store import apply_resolution, get_stats
         apply_resolution(_record())
@@ -181,7 +165,6 @@ class TestGetStats(_TempDBMixin, unittest.TestCase):
         stats = get_stats()
         self.assertEqual(stats, [])
 
-    @unittest.skip("TODO: enable in Task 3")
     def test_get_stats_insufficient_flag(self):
         from app.memory.domain_reliability_store import apply_resolution, get_stats
         from app.core.config import settings

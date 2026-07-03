@@ -803,5 +803,13 @@ class Settings:
     QUALITY_ALERT_MISSING_CALIBRATION_RATE_HIGH: float = float(os.getenv("QUALITY_ALERT_MISSING_CALIBRATION_RATE_HIGH", "0.40"))
     QUALITY_ALERT_REPORT_ERRORS_HIGH: int = int(os.getenv("QUALITY_ALERT_REPORT_ERRORS_HIGH", "1"))
 
+    # ── Domain reliability tracking (LATER #2) — source trust feedback loop ──
+    DOMAIN_RELIABILITY_TRACKING_ENABLED: bool = _env_bool(
+        "DOMAIN_RELIABILITY_TRACKING_ENABLED", "false"
+    )
+    DOMAIN_RELIABILITY_CONFIDENCE_MIN_SAMPLES: int = int(
+        os.getenv("DOMAIN_RELIABILITY_CONFIDENCE_MIN_SAMPLES", "5")
+    )
+
 
 settings = Settings()

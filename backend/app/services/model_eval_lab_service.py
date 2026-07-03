@@ -29,7 +29,7 @@ def extract_model_metrics(record: dict[str, Any]) -> dict[str, Any]:
     Never infer model from current settings (would pollute historical
     attribution).
 
-    cost: safe_float filters None/NaN/inf/bool/non-numeric -> None.
+    cost: _is_real_number rejects None/NaN/inf/bool/strings -> None.
     """
     item = extract_metrics(record)
     llm = record.get("llm_telemetry") or {}

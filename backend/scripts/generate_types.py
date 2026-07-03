@@ -38,6 +38,22 @@ _EXPORT_MODULE = "app.models._frontend_export"
 _FRONTEND_JSON2TS = _REPO_ROOT / "frontend" / "node_modules" / ".bin" / "json2ts"
 
 
+def _ensure_python_userbase_on_path() -> None:
+    """Make pip --user installs visible when Python omits PYTHONUSERBASE."""
+    userbase = os.getenv("PYTHONUSERBASE")
+    if not userbase:
+        return
+    candidate = (
+        Path(userbase)
+        / f"Python{sys.version_info.major}{sys.version_info.minor}"
+        / "site-packages"
+    )
+    if candidate.exists():
+        candidate_str = str(candidate)
+        if candidate_str not in sys.path:
+            sys.path.append(candidate_str)
+
+
 def _find_json2ts_cmd() -> str:
     """Return the json2ts executable path (local frontend install or PATH).
 
@@ -66,6 +82,38 @@ def _find_json2ts_cmd() -> str:
     )
 
 
+def _clean_output_file_utf8(output_filename: str) -> None:
+    """Clean pydantic2ts output using UTF-8, avoiding Windows default GBK."""
+    with open(output_filename, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    start, end = None, None
+    for i, line in enumerate(lines):
+        if line.rstrip("\r\n") == "export interface _Master_ {":
+            start = i
+        elif (start is not None) and line.rstrip("\r\n") == "}":
+            end = i
+            break
+
+    if start is None:
+        raise RuntimeError("Could not find the start of the _Master_ interface.")
+    if end is None:
+        raise RuntimeError("Could not find the end of the _Master_ interface.")
+
+    banner_comment_lines = [
+        "/* tslint:disable */\n",
+        "/* eslint-disable */\n",
+        "/**\n",
+        "/* This file was automatically generated from pydantic models by running pydantic2ts.\n",
+        "/* Do not modify it by hand - just update the pydantic models and then re-run the script\n",
+        "*/\n\n",
+    ]
+
+    new_lines = banner_comment_lines + lines[:start] + lines[(end + 1):]
+    with open(output_filename, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+
+
 def _generate_to_file(output_path: str) -> None:
     """Generate TypeScript types to the given output path.
 
@@ -78,8 +126,8 @@ def _generate_to_file(output_path: str) -> None:
     Instead, we replicate the logic using ``subprocess.run`` with a list of
     arguments, which handles spaces correctly without shell quoting.
     """
+    _ensure_python_userbase_on_path()
     from pydantic2ts.cli.script import (
-        _clean_output_file,
         _extract_pydantic_models,
         _generate_json_schema,
         _import_module,
@@ -118,7 +166,7 @@ def _generate_to_file(output_path: str) -> None:
                 f"stdout: {result.stdout}\nstderr: {result.stderr}"
             )
 
-        _clean_output_file(output_path)
+        _clean_output_file_utf8(output_path)
     finally:
         shutil.rmtree(schema_dir, ignore_errors=True)
 

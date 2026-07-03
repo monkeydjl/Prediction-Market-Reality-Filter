@@ -154,6 +154,13 @@ def resolve_with_calibration(
     updated = resolve_event(event_id, outcome, calibration=calibration)
     record = (updated or {}).get("record") or {}
     record_outcome(event_id, record.get("event_title", ""), outcome)
+    # Domain reliability tracking (LATER #2): best-effort, non-blocking.
+    if settings.DOMAIN_RELIABILITY_TRACKING_ENABLED:
+        try:
+            from app.memory.domain_reliability_store import apply_resolution
+            apply_resolution(record)
+        except Exception:
+            logger.warning("domain reliability tracking failed", exc_info=True)
     return updated
 
 

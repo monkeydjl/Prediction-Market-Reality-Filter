@@ -1,138 +1,42 @@
-// Shapes mirror the FastAPI event-record contract (see app/models/event.py
-// and event_intelligence_service.build_event_record). Permissive on purpose:
-// the backend allows extra keys and many fields are best-effort.
+// Adapter layer for frontend type consumption.
+//
+// generated-types.ts is the source of truth (generated from Pydantic models
+// by `python -m scripts.generate_types`). This file re-exports those types
+// with frontend naming aliases and adds UI-only types that have no backend
+// model.
+//
+// DO NOT hand-write fields that exist in the Pydantic models. If a field is
+// missing, add it to the backend model and re-run the generator.
 
-export interface Probability {
-  baseline?: number;
-  estimated?: number;
-  change?: number;
-  direction?: string;
-}
+// Re-export all generated types
+export type * from "./generated-types";
 
-export interface Credibility {
-  score?: number;
-  level?: string;
-  confidence?: number;
-  news_quality?: number;
-  evidence_strength?: number;
-  source_count?: number;
-}
+// Naming aliases: preserve existing frontend names that differ from backend
+import type {
+  EventRecord as BackendEventRecord,
+  EvidenceProfile as BackendEvidenceProfile,
+  EventSemantics as BackendEventSemantics,
+} from "./generated-types";
 
-export interface Impact {
-  score?: number;
-  level?: string;
-  drivers?: string[];
-}
+export type EventRecord = BackendEventRecord;
+export type EvidenceAggregate = BackendEvidenceProfile;
+export type Semantics = BackendEventSemantics;
 
-export interface IntelligenceReport {
-  headline?: string;
-  why_it_matters?: string;
-  probability_assessment?: string;
-  recommended_action?: string;
-}
-
-export interface EventSource {
-  platform?: string;
-  type?: string;
-  event_type?: string;
-  source_id?: string;
-  baseline_probability?: number;
-  volume?: number;
-  liquidity?: number;
-  url?: string;
-  category?: string;
-  tournament?: string;
-  entities?: string[];
-}
-
-export interface Semantics {
-  resolution_criteria?: string;
-  time_horizon?: string;
-  entities?: string[];
-}
-
-export interface Outcome {
-  status?: string;
-  actual_outcome?: number;
-  confidence?: number;
-  resolved_at?: string;
-  source?: string;
-  notes?: string;
-}
-
-export interface Calibration {
-  brier_score?: number;
-  skill_score?: number;
-  grade?: string;
-  estimated_probability?: number;
-  actual_outcome?: number;
-  trajectory_observations?: number;
-  trajectory_span_hours?: number | null;
-}
-
-export interface CrossValidation {
-  model?: string;
-  probability?: number;
-  agreement?: string;
-  divergence?: number;
-}
-
-export interface EvidenceAggregate {
-  direction?: string;
-  strength?: number;
-  conflict?: number;
-  freshness?: number;
-  resolution_relevance?: number;
-  source_count?: number;
-}
-
-// One collected piece of source evidence (news article / official release).
-// kind groups it in the detail UI: "official" vs "news".
-export interface EvidenceItem {
-  kind?: string;
-  source?: string;
-  title?: string;
-  title_zh?: string;
-  summary?: string;
-  summary_zh?: string;
-  url?: string;
-  published?: string;
-  quality?: number;
-  relevance?: number;
-}
-
-// Human tracking decision for an event.
-export interface Tracking {
-  status?: string; // tracking | watching | archived
-  priority?: string; // high | medium | low
-}
-
-export interface EventRecord {
-  event_id: string;
-  event_title: string;
-  event_title_zh?: string;
-  event_summary?: string;
-  probability?: Probability;
-  credibility?: Credibility;
-  impact?: Impact;
-  evidence?: EvidenceAggregate;
-  evidence_items?: EvidenceItem[];
-  tracking?: Tracking | null;
-  source?: EventSource;
-  value_score?: number;
-  intelligence_report?: IntelligenceReport;
-  semantics?: Semantics | null;
-  outcome?: Outcome | null;
-  calibration?: Calibration | null;
-  cross_validation?: CrossValidation | null;
-}
-
+// TrackedEntry is NOT a pure alias for EventStoreEntry because the generated
+// EventStoreEntry.record is { [k: string]: unknown } (backend dict[str, Any]).
+// We keep record typed as EventRecord for frontend type safety. The backend's
+// EventStoreEntry always includes a record (defaults to empty dict), so
+// required is correct.
 export interface TrackedEntry {
   event_id: string;
   first_seen?: string;
   last_updated?: string;
   record: EventRecord;
+  [k: string]: unknown;
 }
+
+// UI-only types: no backend Pydantic model exists for these. They are
+// derived from API responses or computed in the frontend.
 
 export interface Trend {
   observations?: number;

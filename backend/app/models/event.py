@@ -76,11 +76,21 @@ class ActionableRecommendation(BaseModel):
 
 class EventSource(BaseModel):
     """Where an event came from. Permissive: source adapters add their own
-    fields (platform, source_id, liquidity, volume, ...)."""
+    fields beyond the declared ones below (via ``extra="allow"``)."""
 
     model_config = ConfigDict(extra="allow")
 
     type: str = "unknown"
+    platform: str = ""
+    event_type: str = ""
+    source_id: str = ""
+    baseline_probability: float | None = None
+    volume: float | None = None
+    liquidity: float | None = None
+    url: str = ""
+    category: str = ""
+    tournament: str = ""
+    entities: list[str] = []
 
 
 class Outcome(BaseModel):
@@ -175,7 +185,9 @@ class EvidenceItem(BaseModel):
     kind: str = "news"          # official | news
     source: str = ""
     title: str = ""
+    title_zh: str = ""
     summary: str = ""
+    summary_zh: str = ""
     url: str = ""
     published: str = ""
     quality: float = 0.0

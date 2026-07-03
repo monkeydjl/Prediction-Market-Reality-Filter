@@ -76,8 +76,8 @@ export function MarketPanel({ record }: { record: EventRecord }) {
           <div className="flex flex-col gap-3">
             <MarketRow label="市场基准概率" value={fmtPct(marketBaseline)} />
             <MarketRow label="我们的估计" value={fmtPct(prob.estimated)} />
-            <MarketRow label="成交量" value={fmtCompact(source.volume)} />
-            <MarketRow label="流动性" value={fmtCompact(source.liquidity)} />
+            <MarketRow label="成交量" value={fmtCompact(source.volume ?? undefined)} />
+            <MarketRow label="流动性" value={fmtCompact(source.liquidity ?? undefined)} />
             {source.url && (
               <a
                 href={source.url}

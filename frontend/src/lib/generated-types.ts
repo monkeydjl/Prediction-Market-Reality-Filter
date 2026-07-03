@@ -220,10 +220,20 @@ export interface EvidenceProfile {
 }
 /**
  * Where an event came from. Permissive: source adapters add their own
- * fields (platform, source_id, liquidity, volume, ...).
+ * fields beyond the declared ones below (via ``extra="allow"``).
  */
 export interface EventSource {
   type?: string;
+  platform?: string;
+  event_type?: string;
+  source_id?: string;
+  baseline_probability?: number | null;
+  volume?: number | null;
+  liquidity?: number | null;
+  url?: string;
+  category?: string;
+  tournament?: string;
+  entities?: string[];
   [k: string]: unknown;
 }
 export interface IntelligenceReport {
@@ -246,7 +256,9 @@ export interface EvidenceItem {
   kind?: string;
   source?: string;
   title?: string;
+  title_zh?: string;
   summary?: string;
+  summary_zh?: string;
   url?: string;
   published?: string;
   quality?: number;

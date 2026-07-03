@@ -6,6 +6,13 @@ import type {
   Trend,
   SimilarEvent,
 } from "./types";
+import type {
+  DecisionTimelineResponse as GeneratedDecisionTimelineResponse,
+  AutoResolveResponse as GeneratedAutoResolveResponse,
+  EventListResponse as GeneratedEventListResponse,
+  EventMoversResponse as GeneratedEventMoversResponse,
+  EventHistoryResponse as GeneratedEventHistoryResponse,
+} from "./generated-types";
 import { getApiBase } from "./env";
 
 // Same-origin in production (FastAPI serves the static export at / and the API
@@ -219,39 +226,13 @@ export interface DecisionReport {
   } | null;
 }
 
-export interface DecisionTimelineSnapshot {
-  snapshot_id: string;
-  event_id: string;
-  recorded_at: string;
-  final_displayed_direction: string | null;
-  final_downgrade_reason: string | null;
-  probability: { baseline?: number; estimated?: number; change?: number; direction?: string } | null;
-  decision_quality: { downgraded?: boolean; downgrade_reason?: string | null; [k: string]: unknown } | null;
-  market_quality: { downgraded?: boolean; downgrade_reason?: string | null; [k: string]: unknown } | null;
-  source_reliability: { downgraded?: boolean; downgrade_reason?: string | null; [k: string]: unknown } | null;
-  execution_quality: { downgraded?: boolean; downgrade_reason?: string | null; [k: string]: unknown } | null;
-  llm_degraded_mode: boolean | null;
-  guardrail_fired: string[] | null;
-  outcome: string | null;
-}
-
-export interface DecisionTimelineDiff {
-  direction_changed: boolean;
-  prev_direction: string | null;
-  current_direction: string | null;
-  probability_delta: { baseline?: number | null; estimated?: number | null; change?: number | null };
-  overlay_deltas: { overlay: string; field: string; prev: unknown; current: unknown; prev_reason: string | null; current_reason: string | null; changed: boolean }[];
-  primary_change_driver: string;
-  prev_downgrade_reason: string | null;
-  current_downgrade_reason: string | null;
-}
-
-export interface DecisionTimelineResponse {
-  event_id: string;
-  count: number;
-  snapshots: DecisionTimelineSnapshot[];
-  diffs: DecisionTimelineDiff[];
-}
+// Re-export generated response types (replaces hand-written inline versions).
+// Source of truth: backend/app/models/event.py via generate_types.py.
+export type DecisionTimelineResponse = GeneratedDecisionTimelineResponse;
+export type AutoResolveResponse = GeneratedAutoResolveResponse;
+export type EventListResponse = GeneratedEventListResponse;
+export type EventMoversResponse = GeneratedEventMoversResponse;
+export type EventHistoryResponse = GeneratedEventHistoryResponse;
 
 // An event's edge trajectory + freshness (M5 fresh-edge surface).
 // Mirrors trend_analysis_service.analyze_edge_trajectory.

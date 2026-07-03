@@ -820,6 +820,14 @@ class Settings:
     DOMAIN_RELIABILITY_CONFIDENCE_MIN_SAMPLES: int = int(
         os.getenv("DOMAIN_RELIABILITY_CONFIDENCE_MIN_SAMPLES", "5")
     )
+    # Domain reliability feedback (LATER #2 v2): feed per-domain historical
+    # accuracy back into build_source_reliability as a layered prior.
+    DOMAIN_RELIABILITY_FEEDBACK_ENABLED: bool = _env_bool(
+        "DOMAIN_RELIABILITY_FEEDBACK_ENABLED", "false"
+    )
+    DOMAIN_RELIABILITY_SHRINKAGE_PSEUDOCOUNT: int = int(
+        os.getenv("DOMAIN_RELIABILITY_SHRINKAGE_PSEUDOCOUNT", "5")
+    )
 
 
 settings = Settings()

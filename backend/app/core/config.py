@@ -807,6 +807,12 @@ class Settings:
     DOMAIN_RELIABILITY_TRACKING_ENABLED: bool = _env_bool(
         "DOMAIN_RELIABILITY_TRACKING_ENABLED", "false"
     )
+    DOMAIN_RELIABILITY_DB_PATH: str = os.getenv(
+        "DOMAIN_RELIABILITY_DB_PATH",
+        os.path.join(
+            os.path.dirname(__file__), "..", "..", "domain_reliability.db"
+        ),
+    )
     DOMAIN_RELIABILITY_CONFIDENCE_MIN_SAMPLES: int = int(
         os.getenv("DOMAIN_RELIABILITY_CONFIDENCE_MIN_SAMPLES", "5")
     )

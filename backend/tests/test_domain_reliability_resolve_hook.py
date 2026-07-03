@@ -76,6 +76,7 @@ class TestResolveHook(unittest.TestCase):
             store_path = str(Path(tmpdir.name) / "event_store.json")
             audit_path = str(Path(tmpdir.name) / "event_audit.jsonl")
             with patch.object(sqlite_db, "loop_db_path", return_value=tmp.name), \
+                 patch.object(settings, "DOMAIN_RELIABILITY_DB_PATH", tmp.name), \
                  patch.object(store, "_store_path", return_value=store_path), \
                  patch.object(audit, "_audit_path", return_value=audit_path), \
                  patch.object(settings, "DOMAIN_RELIABILITY_TRACKING_ENABLED", True):
@@ -115,6 +116,7 @@ class TestResolveHook(unittest.TestCase):
             store_path = str(Path(tmpdir.name) / "event_store.json")
             audit_path = str(Path(tmpdir.name) / "event_audit.jsonl")
             with patch.object(sqlite_db, "loop_db_path", return_value=tmp.name), \
+                 patch.object(settings, "DOMAIN_RELIABILITY_DB_PATH", tmp.name), \
                  patch.object(store, "_store_path", return_value=store_path), \
                  patch.object(audit, "_audit_path", return_value=audit_path), \
                  patch.object(settings, "DOMAIN_RELIABILITY_TRACKING_ENABLED", True), \
@@ -145,6 +147,7 @@ class TestResolveHook(unittest.TestCase):
             store_path = str(Path(tmpdir.name) / "event_store.json")
             audit_path = str(Path(tmpdir.name) / "event_audit.jsonl")
             with patch.object(sqlite_db, "loop_db_path", return_value=tmp.name), \
+                 patch.object(settings, "DOMAIN_RELIABILITY_DB_PATH", tmp.name), \
                  patch.object(store, "_store_path", return_value=store_path), \
                  patch.object(audit, "_audit_path", return_value=audit_path), \
                  patch.object(settings, "DOMAIN_RELIABILITY_TRACKING_ENABLED", True):

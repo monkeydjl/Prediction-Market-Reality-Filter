@@ -1,9 +1,9 @@
 """Domain reliability store (LATER #2).
 
 SQLite-backed aggregate statistics for per-domain evidence reliability.
-Tables live in the shared loop DB (v2_loop.db) alongside predictions and
-event_market_links. Uses an idempotency ledger so incremental
-apply_resolution can be called safely on re-resolve.
+Tables live in the configured domain reliability SQLite database. Uses an
+idempotency ledger so incremental apply_resolution can be called safely on
+re-resolve.
 
 Schema follows the source_trust_registry_store pattern: module-level
 functions, lazy schema init, sqlite_db.writing/reading.
@@ -50,6 +50,10 @@ _MIGRATIONS: dict[str, str] = {}
 
 _INITIALIZED: set[str] = set()
 _INIT_GUARD = threading.Lock()
+
+
+def _db_path() -> str:
+    return settings.DOMAIN_RELIABILITY_DB_PATH
 
 
 def _ensure_schema(path: str) -> None:
@@ -100,7 +104,7 @@ def apply_resolution(record: dict[str, Any]) -> None:
     if not attributions:
         return
 
-    path = sqlite_db.loop_db_path()
+    path = _db_path()
     _ensure_schema(path)
     now = utc_now()
 
@@ -160,7 +164,7 @@ def rebuild_from_records(records: list[dict[str, Any]]) -> None:
 
     stats = compute_reliability_stats(all_attributions)
 
-    path = sqlite_db.loop_db_path()
+    path = _db_path()
     _ensure_schema(path)
     now = utc_now()
 
@@ -202,14 +206,13 @@ def rebuild_from_records(records: list[dict[str, Any]]) -> None:
 
         # Rebuild ledger
         for attr in all_attributions:
-            for cat in (attr["category"], "_all"):
-                conn.execute(
-                    "INSERT OR IGNORE INTO domain_reliability_ledger "
-                    "(event_id, domain, category, correct, credibility, first_seen) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (attr["event_id"], attr["domain"], cat,
-                     1 if attr["correct"] else 0, attr.get("credibility"), now),
-                )
+            conn.execute(
+                "INSERT OR IGNORE INTO domain_reliability_ledger "
+                "(event_id, domain, category, correct, credibility, first_seen) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (attr["event_id"], attr["domain"], attr["category"],
+                 1 if attr["correct"] else 0, attr.get("credibility"), now),
+            )
 
 
 def get_stats(
@@ -218,7 +221,7 @@ def get_stats(
     min_samples: int = 0,
 ) -> list[dict[str, Any]]:
     """Query stats with optional filters."""
-    path = sqlite_db.loop_db_path()
+    path = _db_path()
     _ensure_schema(path)
 
     clauses: list[str] = []

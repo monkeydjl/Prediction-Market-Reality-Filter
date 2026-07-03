@@ -1,10 +1,13 @@
 """Tests for domain_reliability_store (LATER #2)."""
 import os
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
 
+from app.core.config import settings
 from app.services.domain_reliability_service import attribute_evidence
+from app.utils import sqlite_db
 
 
 def _record(
@@ -34,14 +37,18 @@ def _record(
 
 
 class _TempDBMixin:
-    """Provides a temp SQLite file and patches loop_db_path."""
+    """Provides a temp SQLite file and patches DOMAIN_RELIABILITY_DB_PATH."""
 
     def setUp(self):
         super().setUp()
         self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         self._tmp.close()
         self._db_path = self._tmp.name
-        self._patcher = patch("app.utils.sqlite_db.loop_db_path", return_value=self._db_path)
+        self._patcher = patch.object(
+            settings,
+            "DOMAIN_RELIABILITY_DB_PATH",
+            self._db_path,
+        )
         self._patcher.start()
         # Also reset the schema init guard
         from app.memory import domain_reliability_store as drs
@@ -57,6 +64,19 @@ class _TempDBMixin:
 
 
 class TestApplyResolution(_TempDBMixin, unittest.TestCase):
+    def test_uses_domain_reliability_db_path(self):
+        from app.memory import domain_reliability_store as drs
+        from app.memory.domain_reliability_store import apply_resolution, get_stats
+
+        drs._INITIALIZED.discard(self._db_path)
+        with patch.object(settings, "DOMAIN_RELIABILITY_DB_PATH", self._db_path, create=True), \
+             patch.object(sqlite_db, "loop_db_path",
+                          side_effect=AssertionError("loop DB must not be used")):
+            apply_resolution(_record())
+            stats = get_stats()
+
+        self.assertTrue(stats)
+
     def test_apply_resolution_writes_rows(self):
         from app.memory.domain_reliability_store import apply_resolution, get_stats
         apply_resolution(_record())
@@ -131,6 +151,20 @@ class TestRebuild(_TempDBMixin, unittest.TestCase):
         for s1, s2 in zip(sorted(stats1, key=lambda x: (x["domain"], x["category"])),
                           sorted(stats2, key=lambda x: (x["domain"], x["category"]))):
             self.assertEqual(s1["sample_count"], s2["sample_count"])
+
+    def test_rebuild_ledger_records_original_attributions_only(self):
+        from app.memory.domain_reliability_store import rebuild_from_records
+
+        rebuild_from_records([_record(event_id="e1")])
+
+        conn = sqlite3.connect(self._db_path)
+        try:
+            rows = conn.execute(
+                "SELECT category FROM domain_reliability_ledger ORDER BY category"
+            ).fetchall()
+        finally:
+            conn.close()
+        self.assertEqual([row[0] for row in rows], ["prediction_market"])
 
 
 class TestGetStats(_TempDBMixin, unittest.TestCase):

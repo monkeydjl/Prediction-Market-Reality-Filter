@@ -61,6 +61,46 @@ def _render_text(stats: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _summarize_records(records: list[dict]) -> dict[str, int]:
+    from app.services.domain_reliability_service import (
+        attribute_evidence,
+        compute_reliability_stats,
+    )
+
+    attributions: list[dict] = []
+    valid_events = 0
+    for record in records:
+        attrs = attribute_evidence(record)
+        if attrs:
+            valid_events += 1
+            attributions.extend(attrs)
+
+    stats = compute_reliability_stats(attributions)
+    domains = {domain for domain, _category in stats}
+    return {
+        "processed_events": len(records),
+        "valid_events": valid_events,
+        "rows": len(stats) + len(domains),
+        "domains": len(domains),
+    }
+
+
+def _render_rebuild_summary(summary: dict[str, int], *, wrote: bool) -> str:
+    action = "Wrote" if wrote else "Would write"
+    return "\n".join([
+        "Rebuilding domain reliability from event_store...",
+        (
+            f"Processed {summary['processed_events']} resolved events, "
+            f"{summary['valid_events']} with valid attribution."
+        ),
+        (
+            f"{action} {summary['rows']} domain/category rows "
+            f"({summary['domains']} domains)."
+        ),
+        "Done." if wrote else "Dry run.",
+    ])
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="domain_reliability")
     subparsers = parser.add_subparsers(dest="command")
@@ -100,19 +140,21 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "rebuild":
         entries = event_store.list_resolved_events()
         records = [e.get("record", {}) for e in entries if isinstance(e.get("record"), dict)]
+        selected_records = records[:args.limit] if args.limit is not None else records
+        summary = _summarize_records(selected_records)
 
         if args.limit is not None:
             records = records[:args.limit]
-            _print(f"Preview: would process {len(records)} records (not writing to DB).")
+            _print(_render_rebuild_summary(summary, wrote=False))
             # Preview only — do NOT write
             return 0
 
         if args.dry_run:
-            _print(f"Dry run: would process {len(records)} records (not writing to DB).")
+            _print(_render_rebuild_summary(summary, wrote=False))
             return 0
 
         rebuild_from_records(records)
-        _print(f"Rebuilt domain reliability from {len(records)} records.")
+        _print(_render_rebuild_summary(summary, wrote=True))
         return 0
 
     else:

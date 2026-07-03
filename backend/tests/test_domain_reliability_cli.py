@@ -58,9 +58,34 @@ class TestDomainReliabilityCli(unittest.TestCase):
 
     def test_cli_rebuild_full(self):
         with patch("app.memory.event_store.list_resolved_events", return_value=[]), \
-             patch("app.services.domain_reliability_service.attribute_evidence", return_value=[]):
+             patch("app.memory.domain_reliability_store.rebuild_from_records") as mock_rb:
             rc, stdout, _ = self._run_main(["rebuild"])
         self.assertEqual(rc, 0)
+        mock_rb.assert_called_once_with([])
+
+    def test_cli_rebuild_full_prints_summary(self):
+        record = {
+            "event_id": "e1",
+            "source": {"type": "prediction_market"},
+            "actionable_recommendation": {"direction": "YES"},
+            "outcome": {"status": "resolved", "actual_outcome": 100.0},
+            "evidence_breakdown": [
+                {
+                    "source": "Reuters",
+                    "url": "https://www.reuters.com/a",
+                    "direction": "supports",
+                    "credibility": 0.8,
+                },
+            ],
+        }
+        entries = [{"event_id": "e1", "record": record}]
+        with patch("app.memory.event_store.list_resolved_events", return_value=entries), \
+             patch("app.memory.domain_reliability_store.rebuild_from_records"):
+            rc, stdout, _ = self._run_main(["rebuild"])
+        self.assertEqual(rc, 0)
+        self.assertIn("Processed 1 resolved events, 1 with valid attribution.", stdout)
+        self.assertIn("Wrote 2 domain/category rows (1 domains).", stdout)
+        self.assertIn("Done.", stdout)
 
     def test_cli_rebuild_limit_does_not_write(self):
         with patch("app.memory.domain_reliability_store.rebuild_from_records") as mock_rb, \

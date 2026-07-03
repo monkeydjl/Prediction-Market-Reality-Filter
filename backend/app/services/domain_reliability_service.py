@@ -4,8 +4,9 @@ Pure functions that compute per-domain reliability statistics from resolved
 event records. No I/O, no settings import. The store module handles
 persistence; this module handles attribution semantics and aggregation.
 
-EvidenceBreakdownItem.direction uses "support" / "oppose" / "neutral"
-(these are the actual field values in the codebase, NOT "supports"/"refutes").
+EvidenceBreakdownItem.direction historically uses "support" / "oppose" /
+"neutral" in this codebase. The public attribution interface normalizes those
+values to the spec vocabulary: "supports" / "refutes".
 """
 from __future__ import annotations
 
@@ -13,7 +14,21 @@ from typing import Any
 from urllib.parse import urlparse
 
 _VALID_DIRECTIONS = {"YES", "NO"}
-_VALID_STANCES = {"support", "oppose"}
+_STANCE_ALIASES = {
+    "support": "supports",
+    "supports": "supports",
+    "oppose": "refutes",
+    "refutes": "refutes",
+}
+
+
+def _normalize_category(value: Any) -> str:
+    if not isinstance(value, str):
+        return "_unknown"
+    category = value.strip()
+    if not category or category == "_all":
+        return "_unknown"
+    return category
 
 
 def extract_domain(url: str) -> str | None:
@@ -53,9 +68,9 @@ def attribute_evidence(record: dict[str, Any]) -> list[dict[str, Any]]:
     Skips:
     - Non-resolved records or direction not in {YES, NO}
     - Non-numeric / None / negative actual_outcome
-    - Evidence with direction=neutral
+    - Evidence with direction=neutral or unknown stance
     - Evidence with missing/invalid URL
-    - Mixed (support + oppose) within same (event, domain, category) group
+    - Mixed (supports + refutes) within same (event, domain, category) group
     """
     outcome = record.get("outcome") or {}
     if outcome.get("status") != "resolved":
@@ -94,20 +109,24 @@ def attribute_evidence(record: dict[str, Any]) -> list[dict[str, Any]]:
     for item in evidence_breakdown:
         if not isinstance(item, dict):
             continue
-        direction = item.get("direction", "")
-        if direction not in _VALID_STANCES:
+        direction = _STANCE_ALIASES.get(item.get("direction", ""))
+        if direction is None:
             continue  # skip neutral
 
         source_name = str(item.get("source") or "").strip()
-        url = url_by_source.get(source_name.lower(), "")
+        url = str(item.get("url") or "").strip()
+        if not url:
+            url = url_by_source.get(source_name.lower(), "")
         domain = extract_domain(url)
         if domain is None:
             continue
 
-        # Category resolution: evidence source_type > record source.type > _unknown
-        category = (
+        # Category resolution: evidence source_type > record source.type
+        # > record.source_type > _unknown.
+        category = _normalize_category(
             item.get("source_type")
             or (record.get("source") or {}).get("type")
+            or record.get("source_type")
             or "_unknown"
         )
 
@@ -134,10 +153,11 @@ def attribute_evidence(record: dict[str, Any]) -> list[dict[str, Any]]:
         cred_values = group["credibilities"]
         credibility = sum(cred_values) / len(cred_values) if cred_values else None
 
-        # Correctness: support + rec_correct -> correct; oppose + rec_correct -> wrong
-        if stance == "support":
+        # Correctness: supports + rec_correct -> correct;
+        # refutes + rec_correct -> wrong.
+        if stance == "supports":
             correct = rec_correct
-        else:  # oppose
+        else:  # refutes
             correct = not rec_correct
 
         result.append({

@@ -62,7 +62,7 @@ class TestAttributeEvidence(unittest.TestCase):
         result = attribute_evidence(_record(direction="YES", actual_outcome=100.0))
         self.assertEqual(len(result), 1)
         self.assertTrue(result[0]["correct"])
-        self.assertEqual(result[0]["stance"], "support")
+        self.assertEqual(result[0]["stance"], "supports")
 
     def test_yes_direction_wrong_support(self):
         result = attribute_evidence(_record(direction="YES", actual_outcome=0.0))
@@ -87,6 +87,47 @@ class TestAttributeEvidence(unittest.TestCase):
         )
         result = attribute_evidence(rec)
         self.assertEqual(len(result), 1)
+        self.assertFalse(result[0]["correct"])
+
+    def test_supports_alias_uses_breakdown_url(self):
+        """Spec input shape: evidence_breakdown carries url + supports."""
+        rec = _record(
+            direction="YES",
+            actual_outcome=100.0,
+            evidence_breakdown=[
+                {
+                    "source": "Reuters",
+                    "url": "https://www.reuters.com/a",
+                    "direction": "supports",
+                    "credibility": 0.8,
+                },
+            ],
+            evidence_items=[],
+        )
+        result = attribute_evidence(rec)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["domain"], "reuters.com")
+        self.assertEqual(result[0]["stance"], "supports")
+        self.assertTrue(result[0]["correct"])
+
+    def test_refutes_alias_flips_correctness(self):
+        """Spec input shape: refutes means source supports the opposite direction."""
+        rec = _record(
+            direction="YES",
+            actual_outcome=100.0,
+            evidence_breakdown=[
+                {
+                    "source": "Reuters",
+                    "url": "https://www.reuters.com/a",
+                    "direction": "refutes",
+                    "credibility": 0.8,
+                },
+            ],
+            evidence_items=[],
+        )
+        result = attribute_evidence(rec)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["stance"], "refutes")
         self.assertFalse(result[0]["correct"])
 
     def test_wait_direction_skipped(self):
@@ -191,6 +232,14 @@ class TestAttributeEvidence(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["category"], "prediction_question")
 
+    def test_category_from_top_level_record_source_type(self):
+        rec = _record(source_type="")
+        rec["source"] = {}
+        rec["source_type"] = "prediction_market"
+        result = attribute_evidence(rec)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["category"], "prediction_market")
+
     def test_category_unknown_fallback(self):
         rec = _record(
             source_type="",
@@ -211,6 +260,23 @@ class TestAttributeEvidence(unittest.TestCase):
         rec["source"] = {}
         result = attribute_evidence(rec)
         self.assertNotEqual(result[0]["category"], "_all")
+
+    def test_all_category_is_reserved_for_synthetic_rollup(self):
+        rec = _record(
+            evidence_breakdown=[
+                {
+                    "source": "X",
+                    "direction": "support",
+                    "credibility": 0.5,
+                    "source_type": "_all",
+                    "url": "https://x.com/a",
+                },
+            ],
+            evidence_items=[],
+        )
+        result = attribute_evidence(rec)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["category"], "_unknown")
 
     def test_two_domains_two_attributions(self):
         rec = _record(

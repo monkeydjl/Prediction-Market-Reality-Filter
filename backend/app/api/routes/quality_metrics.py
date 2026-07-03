@@ -651,6 +651,27 @@ async def quality_metrics_alerts(
     return result
 
 
+# ---------------------------------------------------------------------------
+# /api/quality-metrics/domain-reliability
+# ---------------------------------------------------------------------------
+
+@router.get("/quality-metrics/domain-reliability")
+async def domain_reliability(
+    domain: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    min_samples: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    """Query domain reliability statistics. Read-only."""
+    from app.memory.domain_reliability_store import get_stats
+
+    stats = get_stats(domain=domain, category=category, min_samples=min_samples)
+    return {
+        "domains": stats,
+        "total_domains": len({s["domain"] for s in stats}),
+        "total_rows": len(stats),
+    }
+
+
 # Exposed at import time so test runners can wire it without going through
 # the FastAPI app. Used by tests/test_quality_metrics.py.
 __all__ = ["router"]

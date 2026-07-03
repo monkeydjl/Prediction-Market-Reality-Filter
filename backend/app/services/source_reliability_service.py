@@ -162,6 +162,8 @@ def build_source_reliability(
     min_domain_diversity: int,
     min_sources: int,
     registry_overrides: list[dict[str, Any]] | None = None,
+    domain_stats_overrides: list[dict[str, Any]] | None = None,
+    domain_reliability_shrinkage_pseudocount: int = 5,
 ) -> dict[str, Any] | None:
     """Build the ``source_reliability`` overlay block.
 
@@ -184,6 +186,14 @@ def build_source_reliability(
     was applied to any source in this record (False otherwise); the key is
     omitted entirely when ``registry_overrides`` is None to preserve
     byte-identical shape to pre-Plan-4 when the registry is disabled.
+
+    ``domain_stats_overrides`` is an optional list of projected
+    domain-reliability rows (each a dict with ``domain``, ``sample_count``,
+    ``correct_count``). When provided, sources not covered by the registry use
+    a shrunk historical reliability score as the tier-score prior. The key
+    ``domain_stats_prior_affected`` is emitted only when the parameter is not
+    None; its value is True only when at least one source used a valid shrunk
+    score.
 
     The function never raises — malformed items are skipped (best-effort),
     and missing fields default to empty/zero rather than raising.
@@ -211,6 +221,7 @@ def build_source_reliability(
     source_agg: dict[str, dict[str, Any]] = {}
     total_credibility: list[float] = []
     source_prior_affected = False
+    domain_stats_prior_affected = False
     for item in evidence_breakdown:
         if not isinstance(item, dict):
             continue
@@ -228,9 +239,11 @@ def build_source_reliability(
         # Apply source-trust-registry override (optional prior). The registry
         # only adjusts the tier score used as a prior weight; it does NOT
         # override event-level evidence conflicts.
+        registry_matched = False
         if registry_overrides:
             override = _match_registry_override(source_name, domain, registry_overrides)
             if override is not None:
+                registry_matched = True
                 tier = override.get("tier") or tier
                 if override.get("base_trust") is not None:
                     base_trust_override = override["base_trust"]
@@ -241,6 +254,18 @@ def build_source_reliability(
                 base_trust_override = None
         else:
             base_trust_override = None
+
+        domain_stats_score = None
+        if domain_stats_overrides is not None and not registry_matched:
+            stats_override = _match_domain_stats_override(domain, domain_stats_overrides)
+            if stats_override is not None:
+                domain_stats_score = _shrunk_reliability(
+                    correct=stats_override.get("correct_count"),
+                    sample=stats_override.get("sample_count"),
+                    K=domain_reliability_shrinkage_pseudocount,
+                )
+                if domain_stats_score is not None:
+                    domain_stats_prior_affected = True
 
         try:
             credibility = float(item.get("credibility") or 0.0)
@@ -259,6 +284,7 @@ def build_source_reliability(
                 "domain": domain,
                 "tier": tier,
                 "base_trust_override": base_trust_override,
+                "domain_stats_score": domain_stats_score,
                 "article_count": 0,
                 "credibility_sum": 0.0,
                 "strength_sum": 0.0,
@@ -317,14 +343,17 @@ def build_source_reliability(
     # Overall score: weighted combination.
     # weighted_avg_tier_score: average tier score weighted by article count.
     # When a registry override provided base_trust for a source, use that
-    # value INSTEAD of _TIER_SCORES[tier] for that source's contribution.
+    # value first; otherwise use valid domain stats before tier defaults.
     if total_articles > 0:
-        weighted_tier_sum = sum(
-            (agg["base_trust_override"]
-             if agg.get("base_trust_override") is not None
-             else _TIER_SCORES.get(agg["tier"], 0.20)) * agg["article_count"]
-            for agg in source_agg.values()
-        )
+        weighted_tier_sum = 0.0
+        for agg in source_agg.values():
+            if agg.get("base_trust_override") is not None:
+                prior_score = agg["base_trust_override"]
+            elif agg.get("domain_stats_score") is not None:
+                prior_score = agg["domain_stats_score"]
+            else:
+                prior_score = _TIER_SCORES.get(agg["tier"], 0.20)
+            weighted_tier_sum += prior_score * agg["article_count"]
         weighted_avg_tier_score = weighted_tier_sum / total_articles
     else:
         weighted_avg_tier_score = 0.20
@@ -386,6 +415,8 @@ def build_source_reliability(
     # flags default to OFF.
     if registry_overrides is not None:
         result["source_prior_affected"] = source_prior_affected
+    if domain_stats_overrides is not None:
+        result["domain_stats_prior_affected"] = domain_stats_prior_affected
     return result
 
 
@@ -455,12 +486,55 @@ def _evaluate_downgrade(
     return None
 
 
+def _shrunk_reliability(correct: Any, sample: Any, K: int) -> float | None:
+    """Return Beta(0.5K, 0.5K) posterior mean, or None when unusable."""
+    if isinstance(sample, bool) or not isinstance(sample, int):
+        return None
+    if sample <= 0 or K <= 0:
+        return None
+    if isinstance(correct, bool) or not isinstance(correct, int):
+        correct_int = 0
+    else:
+        correct_int = correct
+    correct_int = max(0, min(correct_int, sample))
+    return (correct_int + 0.5 * K) / (sample + K)
+
+
+def _domain_suffix_matches(domain: str, pattern: str) -> bool:
+    """True when domain equals pattern or is a subdomain of pattern."""
+    domain_lower = (domain or "").strip().lower()
+    pattern_lower = (pattern or "").strip().lower()
+    if not domain_lower or not pattern_lower:
+        return False
+    return domain_lower == pattern_lower or domain_lower.endswith("." + pattern_lower)
+
+
+def _match_domain_stats_override(
+    domain: str,
+    overrides: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Find the longest domain suffix match in domain stats overrides."""
+    best: dict[str, Any] | None = None
+    best_len = -1
+    for entry in overrides:
+        if not isinstance(entry, dict):
+            continue
+        pattern = entry.get("domain")
+        if not isinstance(pattern, str):
+            continue
+        pattern = pattern.strip().lower()
+        if _domain_suffix_matches(domain, pattern) and len(pattern) > best_len:
+            best = entry
+            best_len = len(pattern)
+    return best
+
+
 def _match_registry_override(
     source_name: str,
     domain: str,
     overrides: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    """Find the longest-prefix domain match or first source_name substring
+    """Find the longest domain suffix match or first source_name substring
     match in ``overrides``. Returns the override dict or None.
     """
     best: dict[str, Any] | None = None

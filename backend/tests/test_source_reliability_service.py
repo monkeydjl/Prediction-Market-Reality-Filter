@@ -16,6 +16,7 @@ Locks the spec invariants:
 import unittest
 
 from app.services.source_reliability_service import (
+    _shrunk_reliability,
     build_source_reliability,
     classify_source_tier,
     extract_domain,
@@ -136,6 +137,40 @@ class ClassifySourceTierTests(unittest.TestCase):
         # When domain is empty, "reuters politics" matches the established pattern.
         # But "reuters" substring also matches the trusted pattern first.
         self.assertEqual(classify_source_tier("Reuters Politics", ""), "trusted")
+
+
+class TestDomainReliabilityShrinkage(unittest.TestCase):
+    def test_shrinks_toward_neutral_with_positive_sample(self):
+        self.assertAlmostEqual(
+            _shrunk_reliability(correct=40, sample=50, K=5),
+            (40 + 0.5 * 5) / (50 + 5),
+            places=6,
+        )
+
+    def test_zero_sample_returns_none(self):
+        self.assertIsNone(_shrunk_reliability(correct=0, sample=0, K=5))
+
+    def test_zero_or_negative_k_returns_none(self):
+        self.assertIsNone(_shrunk_reliability(correct=5, sample=10, K=0))
+        self.assertIsNone(_shrunk_reliability(correct=5, sample=10, K=-1))
+
+    def test_correct_count_clamped_low(self):
+        self.assertAlmostEqual(
+            _shrunk_reliability(correct=-3, sample=10, K=5),
+            (0 + 0.5 * 5) / (10 + 5),
+            places=6,
+        )
+
+    def test_correct_count_clamped_high(self):
+        self.assertAlmostEqual(
+            _shrunk_reliability(correct=30, sample=10, K=5),
+            (10 + 0.5 * 5) / (10 + 5),
+            places=6,
+        )
+
+    def test_non_integer_sample_returns_none(self):
+        self.assertIsNone(_shrunk_reliability(correct=5, sample="10", K=5))
+        self.assertIsNone(_shrunk_reliability(correct=5, sample=10.0, K=5))
 
 
 class BuildSourceReliabilityScoreTests(unittest.TestCase):
@@ -476,6 +511,193 @@ class BuildSourceReliabilityOverlayTests(unittest.TestCase):
         ))
         self.assertEqual(breakdown, breakdown_before)
         self.assertEqual(items, items_before)
+
+
+class TestDomainStatsPrior(unittest.TestCase):
+    def test_domain_stats_param_none_omits_new_field(self):
+        result = build_source_reliability(**_build_defaults(
+            evidence_breakdown=[
+                _breakdown_item(source="Random Blog", credibility=0.8, strength=0.7),
+            ],
+            evidence_items=[
+                _evidence_item(source="Random Blog", url="https://random.example/1"),
+            ],
+            min_domain_diversity=1,
+            min_sources=1,
+        ))
+        self.assertNotIn("domain_stats_prior_affected", result)
+
+    def test_empty_domain_stats_list_emits_false_flag(self):
+        result = build_source_reliability(**_build_defaults(
+            evidence_breakdown=[
+                _breakdown_item(source="Random Blog", credibility=0.8, strength=0.7),
+            ],
+            evidence_items=[
+                _evidence_item(source="Random Blog", url="https://random.example/1"),
+            ],
+            domain_stats_overrides=[],
+            min_domain_diversity=1,
+            min_sources=1,
+        ))
+        self.assertFalse(result["domain_stats_prior_affected"])
+
+    def test_stats_hit_uses_shrunk_score_and_sets_flag(self):
+        result = build_source_reliability(**_build_defaults(
+            evidence_breakdown=[
+                _breakdown_item(source="Unknown Blog", credibility=0.8, strength=0.7),
+            ],
+            evidence_items=[
+                _evidence_item(source="Unknown Blog", url="https://example.com/story"),
+            ],
+            domain_stats_overrides=[
+                {"domain": "example.com", "sample_count": 50, "correct_count": 40},
+            ],
+            domain_reliability_shrinkage_pseudocount=5,
+            min_domain_diversity=1,
+            min_sources=1,
+            min_trusted_ratio=0.0,
+            score_threshold=0.0,
+        ))
+        self.assertTrue(result["domain_stats_prior_affected"])
+        self.assertAlmostEqual(result["overall_score"], 0.6791, places=4)
+
+    def test_all_zero_sample_stats_fall_back_to_tier_and_flag_false(self):
+        result = build_source_reliability(**_build_defaults(
+            evidence_breakdown=[
+                _breakdown_item(source="Unknown Blog", credibility=0.8, strength=0.7),
+            ],
+            evidence_items=[
+                _evidence_item(source="Unknown Blog", url="https://example.com/story"),
+            ],
+            domain_stats_overrides=[
+                {"domain": "example.com", "sample_count": 0, "correct_count": 0},
+            ],
+            min_domain_diversity=1,
+            min_sources=1,
+            min_trusted_ratio=0.0,
+            score_threshold=0.0,
+        ))
+        self.assertFalse(result["domain_stats_prior_affected"])
+        self.assertAlmostEqual(result["overall_score"], 0.45, places=4)
+
+    def test_k_zero_falls_back_to_tier_and_flag_false(self):
+        result = build_source_reliability(**_build_defaults(
+            evidence_breakdown=[
+                _breakdown_item(source="Unknown Blog", credibility=0.8, strength=0.7),
+            ],
+            evidence_items=[
+                _evidence_item(source="Unknown Blog", url="https://example.com/story"),
+            ],
+            domain_stats_overrides=[
+                {"domain": "example.com", "sample_count": 50, "correct_count": 40},
+            ],
+            domain_reliability_shrinkage_pseudocount=0,
+            min_domain_diversity=1,
+            min_sources=1,
+            min_trusted_ratio=0.0,
+            score_threshold=0.0,
+        ))
+        self.assertFalse(result["domain_stats_prior_affected"])
+        self.assertAlmostEqual(result["overall_score"], 0.45, places=4)
+
+    def test_registry_base_trust_has_priority_over_domain_stats(self):
+        result = build_source_reliability(**_build_defaults(
+            evidence_breakdown=[
+                _breakdown_item(source="Unknown Blog", credibility=0.8, strength=0.7),
+            ],
+            evidence_items=[
+                _evidence_item(source="Unknown Blog", url="https://example.com/story"),
+            ],
+            registry_overrides=[
+                {
+                    "pattern_type": "domain",
+                    "pattern": "example.com",
+                    "tier": "trusted",
+                    "base_trust": 0.95,
+                },
+            ],
+            domain_stats_overrides=[
+                {"domain": "example.com", "sample_count": 50, "correct_count": 0},
+            ],
+            min_domain_diversity=1,
+            min_sources=1,
+            min_trusted_ratio=0.0,
+            score_threshold=0.0,
+        ))
+        self.assertTrue(result["source_prior_affected"])
+        self.assertFalse(result["domain_stats_prior_affected"])
+        self.assertAlmostEqual(result["overall_score"], 0.95, places=4)
+
+    def test_registry_tier_only_match_blocks_domain_stats(self):
+        result = build_source_reliability(**_build_defaults(
+            evidence_breakdown=[
+                _breakdown_item(source="Unknown Blog", credibility=0.8, strength=0.7),
+            ],
+            evidence_items=[
+                _evidence_item(source="Unknown Blog", url="https://example.com/story"),
+            ],
+            registry_overrides=[
+                {
+                    "pattern_type": "domain",
+                    "pattern": "example.com",
+                    "tier": "trusted",
+                    "base_trust": None,
+                },
+            ],
+            domain_stats_overrides=[
+                {"domain": "example.com", "sample_count": 50, "correct_count": 0},
+            ],
+            min_domain_diversity=1,
+            min_sources=1,
+            min_trusted_ratio=0.0,
+            score_threshold=0.0,
+        ))
+        self.assertTrue(result["source_prior_affected"])
+        self.assertFalse(result["domain_stats_prior_affected"])
+        self.assertAlmostEqual(result["overall_score"], 0.91, places=4)
+
+    def test_longest_suffix_match_wins(self):
+        result = build_source_reliability(**_build_defaults(
+            evidence_breakdown=[
+                _breakdown_item(source="Subdomain Blog", credibility=0.8, strength=0.7),
+            ],
+            evidence_items=[
+                _evidence_item(
+                    source="Subdomain Blog",
+                    url="https://foo.example.com/story",
+                ),
+            ],
+            domain_stats_overrides=[
+                {"domain": "example.com", "sample_count": 50, "correct_count": 0},
+                {"domain": "foo.example.com", "sample_count": 50, "correct_count": 50},
+            ],
+            min_domain_diversity=1,
+            min_sources=1,
+            min_trusted_ratio=0.0,
+            score_threshold=0.0,
+        ))
+        self.assertTrue(result["domain_stats_prior_affected"])
+        self.assertAlmostEqual(result["overall_score"], 0.7518, places=4)
+
+    def test_dirty_override_rows_are_skipped(self):
+        result = build_source_reliability(**_build_defaults(
+            evidence_breakdown=[
+                _breakdown_item(source="Unknown Blog", credibility=0.8, strength=0.7),
+            ],
+            evidence_items=[
+                _evidence_item(source="Unknown Blog", url="https://example.com/story"),
+            ],
+            domain_stats_overrides=[
+                {"sample_count": 50, "correct_count": 50},
+                {"domain": "example.com", "sample_count": "50", "correct_count": 50},
+            ],
+            min_domain_diversity=1,
+            min_sources=1,
+            min_trusted_ratio=0.0,
+            score_threshold=0.0,
+        ))
+        self.assertFalse(result["domain_stats_prior_affected"])
+        self.assertAlmostEqual(result["overall_score"], 0.45, places=4)
 
 
 if __name__ == "__main__":

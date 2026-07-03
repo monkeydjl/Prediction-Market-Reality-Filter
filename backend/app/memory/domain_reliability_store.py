@@ -16,7 +16,6 @@ from typing import Any
 from app.core.config import settings
 from app.services.domain_reliability_service import (
     attribute_evidence,
-    compute_reliability_score,
     compute_reliability_stats,
 )
 from app.utils import sqlite_db
@@ -111,33 +110,35 @@ def apply_resolution(record: dict[str, Any]) -> None:
             domain = attr["domain"]
             category = attr["category"]
             correct = 1 if attr["correct"] else 0
+            wrong = 0 if correct else 1
             credibility = attr.get("credibility")
 
-            # Write both (domain, category) and (domain, "_all")
+            # Idempotency check against the original attribution key only.
+            # If (event_id, domain, category) is already in the ledger, skip
+            # the entire attribution (both the category row and the _all row).
+            existing = conn.execute(
+                "SELECT 1 FROM domain_reliability_ledger "
+                "WHERE event_id = ? AND domain = ? AND category = ?",
+                (event_id, domain, category),
+            ).fetchone()
+            if existing:
+                continue
+
+            # Record the original attribution key in the ledger.
+            conn.execute(
+                "INSERT INTO domain_reliability_ledger "
+                "(event_id, domain, category, correct, credibility, first_seen) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (event_id, domain, category, correct, credibility, now),
+            )
+
+            # Upsert both the (domain, category) row and the (domain, "_all") row.
             for cat in (category, "_all"):
-                # Check ledger for idempotency
-                existing = conn.execute(
-                    "SELECT 1 FROM domain_reliability_ledger "
-                    "WHERE event_id = ? AND domain = ? AND category = ?",
-                    (event_id, domain, cat),
-                ).fetchone()
-                if existing:
-                    continue
-
-                # Write ledger entry
-                conn.execute(
-                    "INSERT INTO domain_reliability_ledger "
-                    "(event_id, domain, category, correct, credibility, first_seen) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (event_id, domain, cat, correct, credibility, now),
-                )
-
-                # Upsert aggregate row
                 conn.execute(
                     "INSERT INTO domain_reliability "
                     "(domain, category, sample_count, correct_count, "
                     "wrong_count, credibility_sum, first_seen, last_updated) "
-                    "VALUES (?, ?, 1, ?, 0, ?, ?, ?) "
+                    "VALUES (?, ?, 1, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(domain, category) DO UPDATE SET "
                     "sample_count = sample_count + 1, "
                     "correct_count = correct_count + ?, "
@@ -145,8 +146,8 @@ def apply_resolution(record: dict[str, Any]) -> None:
                     "credibility_sum = credibility_sum + ?, "
                     "last_updated = ?",
                     (domain, cat, correct,
-                     credibility or 0.0, now, now,
-                     correct, 0 if correct else 1,
+                     wrong, credibility or 0.0, now, now,
+                     correct, wrong,
                      credibility or 0.0, now),
                 )
 

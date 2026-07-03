@@ -139,6 +139,27 @@ class EventSemantics(BaseModel):
     entities: list[str] = []          # key subjects, raw cleaned form
 
 
+class CrossValidation(BaseModel):
+    """Cross-validation of the primary LLM probability by a second model.
+
+    Written by ``event_intelligence_service.analyze_event_complete()`` when
+    a second model is configured. None on EventRecord when cross-validation
+    is disabled or the second model is unavailable.
+
+    ``primary_probability`` is the original estimate; ``probability`` is the
+    second model's estimate; ``divergence`` is their absolute difference;
+    ``agreement`` is a derived label (high/medium/low).
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    model: str | None = None
+    probability: float | None = None
+    primary_probability: float | None = None
+    divergence: float | None = None
+    agreement: str | None = None
+
+
 class EvidenceItem(BaseModel):
     """One piece of source evidence collected for an event (a news article or
     official/regulatory release that passed the news filter).
@@ -480,16 +501,17 @@ class EventRecord(BaseModel):
     legacy_analysis: dict[str, Any] = {}
     outcome: Outcome | None = None
     calibration: Calibration | None = None
+    cross_validation: CrossValidation | None = None
     semantics: EventSemantics | None = None
     actionable_recommendation: ActionableRecommendation | None = None
     evidence_breakdown: list[EvidenceBreakdownItem] = Field(default_factory=list)
     # Phase 1-5 overlay fields. Explicitly declared (not relying on
     # extra="allow") so that Pydantic catches typos and downstream readers
     # can introspect the schema. All default to None for backward compat.
-    decision_quality: dict[str, Any] | None = None
-    market_quality: dict[str, Any] | None = None
-    source_reliability: dict[str, Any] | None = None
-    llm_telemetry: dict[str, Any] | None = None
+    decision_quality: DecisionQuality | None = None
+    market_quality: MarketQuality | None = None
+    source_reliability: SourceReliability | None = None
+    llm_telemetry: LLMTelemetry | None = None
     final_displayed_direction: str | None = None
     final_downgrade_reason: str | None = None
     # Record schema version — see normalize_event_record() in event_store.

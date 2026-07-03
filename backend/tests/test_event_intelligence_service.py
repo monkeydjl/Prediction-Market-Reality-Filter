@@ -1608,6 +1608,10 @@ class SourceReliabilityIntegrationTests(unittest.TestCase):
         sentiment=None,
         filtered_articles=None,
         build_sr_side_effect=None,
+        domain_feedback_enabled: bool = False,
+        domain_stats_rows: list[dict] | None = None,
+        domain_stats_side_effect=None,
+        capture_build_call: bool = False,
     ):
         analyze = AsyncMock(return_value={
             "market_question": "Will X happen?",
@@ -1639,10 +1643,48 @@ class SourceReliabilityIntegrationTests(unittest.TestCase):
             stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_MIN_TRUSTED_RATIO", 0.4))
             stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_MIN_DOMAIN_DIVERSITY", 2))
             stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_MIN_SOURCES", 2))
-            if build_sr_side_effect is not None:
+            stack.enter_context(patch.object(
+                eis.settings,
+                "DOMAIN_RELIABILITY_FEEDBACK_ENABLED",
+                domain_feedback_enabled,
+            ))
+            stack.enter_context(patch.object(
+                eis.settings,
+                "DOMAIN_RELIABILITY_SHRINKAGE_PSEUDOCOUNT",
+                5,
+            ))
+            if domain_stats_rows is not None or domain_stats_side_effect is not None:
+                get_stats = stack.enter_context(patch(
+                    "app.memory.domain_reliability_store.get_stats",
+                    return_value=domain_stats_rows or [],
+                    side_effect=domain_stats_side_effect,
+                ))
+            else:
+                get_stats = None
+            if capture_build_call:
+                build_sr = stack.enter_context(patch(
+                    "app.services.source_reliability_service.build_source_reliability",
+                    return_value={
+                        "overall_score": 0.9,
+                        "source_count": 2,
+                        "domain_diversity": 2,
+                        "trusted_source_ratio": 1.0,
+                        "official_source_count": 0,
+                        "unknown_source_ratio": 0.0,
+                        "source_breakdown": [],
+                        "downgrade_reason": None,
+                        "raw_direction": "YES",
+                        "suggested_direction": "YES",
+                        "downgraded": False,
+                        "applied_to_displayed_direction": False,
+                    },
+                ))
+            else:
+                build_sr = None
+            if build_sr_side_effect is not None and not capture_build_call:
                 stack.enter_context(patch("app.services.source_reliability_service.build_source_reliability",
                                           side_effect=build_sr_side_effect))
-            return _run(eis.analyze_event(
+            record = _run(eis.analyze_event(
                 "Will X happen?",
                 baseline_probability=50,
                 news_context="direction: support",
@@ -1651,6 +1693,9 @@ class SourceReliabilityIntegrationTests(unittest.TestCase):
                 filtered_articles=filtered_articles if filtered_articles is not None
                                   else self.FILTERED_ARTICLES_2SRC,
             ))
+            if capture_build_call:
+                return record, build_sr, get_stats
+            return record
 
     # --- Attachment gating ---
 
@@ -1675,6 +1720,97 @@ class SourceReliabilityIntegrationTests(unittest.TestCase):
             source={"type": "prediction_market", "platform": "Polymarket"},
         )
         self.assertNotIn("source_reliability", record)
+
+    def test_domain_feedback_flag_off_passes_none_and_does_not_load_store(self):
+        record, build_sr, get_stats = self._run_analyze(
+            sr_enabled=True,
+            source={"type": "prediction_market", "platform": "Polymarket"},
+            domain_feedback_enabled=False,
+            domain_stats_rows=[
+                {
+                    "domain": "reuters.com",
+                    "category": "_all",
+                    "sample_count": 10,
+                    "correct_count": 8,
+                },
+            ],
+            capture_build_call=True,
+        )
+        self.assertIn("source_reliability", record)
+        get_stats.assert_not_called()
+        self.assertIsNone(build_sr.call_args.kwargs["domain_stats_overrides"])
+
+    def test_domain_feedback_flag_on_projects_stats_rows(self):
+        record, build_sr, get_stats = self._run_analyze(
+            sr_enabled=True,
+            source={"type": "prediction_market", "platform": "Polymarket"},
+            domain_feedback_enabled=True,
+            domain_stats_rows=[
+                {
+                    "domain": "reuters.com",
+                    "category": "_all",
+                    "sample_count": 10,
+                    "correct_count": 8,
+                    "wrong_count": 2,
+                    "reliability_score": 0.8,
+                    "credibility_sum": 7.5,
+                },
+                {
+                    "domain": "bloomberg.com",
+                    "category": "_all",
+                    "sample_count": 5,
+                    "correct_count": 2,
+                    "wrong_count": 3,
+                },
+            ],
+            capture_build_call=True,
+        )
+        self.assertIn("source_reliability", record)
+        get_stats.assert_called_once_with(category="_all", min_samples=0)
+        self.assertEqual(
+            build_sr.call_args.kwargs["domain_stats_overrides"],
+            [
+                {"domain": "reuters.com", "sample_count": 10, "correct_count": 8},
+                {"domain": "bloomberg.com", "sample_count": 5, "correct_count": 2},
+            ],
+        )
+        self.assertEqual(
+            build_sr.call_args.kwargs["domain_reliability_shrinkage_pseudocount"],
+            5,
+        )
+
+    def test_domain_feedback_store_failure_is_best_effort(self):
+        with self.assertLogs("app.services.event_intelligence_service", level="WARNING") as logs:
+            record, build_sr, get_stats = self._run_analyze(
+                sr_enabled=True,
+                source={"type": "prediction_market", "platform": "Polymarket"},
+                domain_feedback_enabled=True,
+                domain_stats_side_effect=RuntimeError("db unavailable"),
+                capture_build_call=True,
+            )
+        self.assertIn("source_reliability", record)
+        get_stats.assert_called_once_with(category="_all", min_samples=0)
+        self.assertIsNone(build_sr.call_args.kwargs["domain_stats_overrides"])
+        self.assertTrue(any("domain_reliability load failed" in msg for msg in logs.output))
+
+    def test_domain_feedback_does_not_load_when_source_reliability_disabled(self):
+        record, build_sr, get_stats = self._run_analyze(
+            sr_enabled=False,
+            source={"type": "prediction_market", "platform": "Polymarket"},
+            domain_feedback_enabled=True,
+            domain_stats_rows=[
+                {
+                    "domain": "reuters.com",
+                    "category": "_all",
+                    "sample_count": 10,
+                    "correct_count": 8,
+                },
+            ],
+            capture_build_call=True,
+        )
+        self.assertNotIn("source_reliability", record)
+        build_sr.assert_not_called()
+        get_stats.assert_not_called()
 
     def test_source_reliability_absent_when_evidence_breakdown_empty(self):
         """When evidence_breakdown is empty (EVIDENCE_BREAKDOWN off), no

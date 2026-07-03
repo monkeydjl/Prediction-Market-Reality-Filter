@@ -442,6 +442,30 @@ def _build_all_overlays(
                         "without overrides: %s", exc
                     )
                     registry_overrides = None
+            domain_stats_overrides: list[dict[str, Any]] | None = None
+            if settings.DOMAIN_RELIABILITY_FEEDBACK_ENABLED:
+                try:
+                    from app.memory import domain_reliability_store
+                    rows = domain_reliability_store.get_stats(
+                        category="_all",
+                        min_samples=0,
+                    )
+                    domain_stats_overrides = [
+                        {
+                            "domain": r["domain"],
+                            "sample_count": r["sample_count"],
+                            "correct_count": r["correct_count"],
+                        }
+                        for r in rows
+                    ]
+                except Exception as exc:
+                    logger.warning(
+                        "domain_reliability load failed, continuing without "
+                        "stats prior: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                    domain_stats_overrides = None
             _overlay_t0 = time.perf_counter()
             sr = build_source_reliability(
                 evidence_breakdown=record.get("evidence_breakdown", []),
@@ -453,6 +477,10 @@ def _build_all_overlays(
                 min_domain_diversity=settings.SOURCE_RELIABILITY_MIN_DOMAIN_DIVERSITY,
                 min_sources=settings.SOURCE_RELIABILITY_MIN_SOURCES,
                 registry_overrides=registry_overrides,
+                domain_stats_overrides=domain_stats_overrides,
+                domain_reliability_shrinkage_pseudocount=(
+                    settings.DOMAIN_RELIABILITY_SHRINKAGE_PSEUDOCOUNT
+                ),
             )
             if sr is not None:
                 record["source_reliability"] = sr

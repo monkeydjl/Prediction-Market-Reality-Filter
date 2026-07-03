@@ -85,3 +85,111 @@ def _is_real_number(value: Any) -> bool:
     if not isinstance(value, (int, float)):
         return False
     return math.isfinite(float(value))
+
+
+from app.services.quality_metrics_report_service import (
+    calibration_deviation,
+    slice_metrics,
+)
+
+
+def slice_model_metrics(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Extended slice_metrics with ECE, cost, and guardrail aggregations.
+
+    Inherits all fields from slice_metrics (n, direction_correct_*,
+    brier, missing_calibration_rate, direction_accuracy), then adds:
+        ece                  — float | None
+        cost_total           — float (0.0 when no cost data)
+        cost_avg             — float | None (None when cost_n == 0)
+        cost_n               — int (count of non-None costs)
+        guardrail_count      — int
+        guardrail_rate       — float (0.0-1.0)
+        degraded_count       — int
+        degraded_rate        — float (0.0-1.0)
+    """
+    base = slice_metrics(items)  # from quality_metrics_report_service
+    cost_values = [
+        it["estimated_token_cost"]
+        for it in items
+        if it.get("estimated_token_cost") is not None
+    ]
+    cost_total = sum(cost_values) if cost_values else 0.0
+    cost_n = len(cost_values)
+    cost_avg = cost_total / cost_n if cost_n else None
+    guardrail_count = sum(1 for it in items if it.get("guardrail_fired"))
+    guardrail_rate = guardrail_count / len(items) if items else 0.0
+    degraded_count = sum(1 for it in items if it.get("degraded_mode"))
+    degraded_rate = degraded_count / len(items) if items else 0.0
+    return {
+        **base,
+        "ece": compute_ece(items),
+        "cost_total": cost_total,
+        "cost_avg": cost_avg,
+        "cost_n": cost_n,
+        "guardrail_count": guardrail_count,
+        "guardrail_rate": guardrail_rate,
+        "degraded_count": degraded_count,
+        "degraded_rate": degraded_rate,
+    }
+
+
+def _group_by(
+    items: list[dict[str, Any]],
+    key: str,
+) -> dict[str, list[dict[str, Any]]]:
+    """Group items by a flat key on the item dict. Local helper — does
+    not touch quality_metrics_report_service.group_by (which hardcodes
+    slice_metrics and would drop cost/guardrail/ECE)."""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for it in items:
+        k = str(it.get(key, "unknown"))
+        groups.setdefault(k, []).append(it)
+    return groups
+
+
+def group_model_slices(
+    items: list[dict[str, Any]],
+    key: str,
+    *,
+    min_samples: int = 0,
+) -> dict[str, dict[str, Any]]:
+    """Group items by key, slice each group with slice_model_metrics.
+
+    Groups with fewer than min_samples are still computed but flagged
+    ``insufficient_samples: True`` (not dropped — caller decides).
+    """
+    groups = _group_by(items, key)
+    result: dict[str, dict[str, Any]] = {}
+    for k, group_items in groups.items():
+        slice_data = slice_model_metrics(group_items)
+        slice_data["insufficient_samples"] = len(group_items) < min_samples
+        result[k] = slice_data
+    return result
+
+
+def build_model_eval_report(
+    items: list[dict[str, Any]],
+    report_errors: list[dict[str, Any]],
+    *,
+    min_samples: int = 0,
+) -> dict[str, Any]:
+    """Build the full model evaluation report.
+
+    overview always computed from ALL items (min_samples does NOT filter
+    overview). by_model / by_analysis_quality / by_degraded_mode use
+    group_model_slices with min_samples flagging (not filtering).
+    """
+    overview = slice_model_metrics(items)
+    return {
+        "overview": overview,
+        "by_model": group_model_slices(items, "model", min_samples=min_samples),
+        "by_analysis_quality": group_model_slices(
+            items, "analysis_quality", min_samples=min_samples,
+        ),
+        "by_degraded_mode": group_model_slices(
+            items, "degraded_mode_label", min_samples=min_samples,
+        ),
+        "calibration_deviation": calibration_deviation(items),
+        "report_errors": report_errors,
+        "min_samples": min_samples,
+    }

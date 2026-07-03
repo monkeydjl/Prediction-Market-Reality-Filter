@@ -30,6 +30,9 @@ class ConfigDefaultTests(unittest.TestCase):
     def test_sec_user_agent_is_declared(self):
         self.assertTrue(settings.SEC_USER_AGENT.strip())
 
+    def test_review_queue_auto_resolve_confidence_default(self):
+        self.assertEqual(settings.REVIEW_QUEUE_AUTO_RESOLVE_CONFIDENCE, 0.95)
+
 
 if __name__ == "__main__":
     unittest.main()

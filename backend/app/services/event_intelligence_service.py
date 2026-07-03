@@ -633,6 +633,7 @@ def _build_all_overlays(
                 candidates = detect_review_candidates(
                     record,
                     mismatch_confidence_threshold=settings.REVIEW_QUEUE_MISMATCH_CONFIDENCE,
+                    auto_resolve_confidence_threshold=settings.REVIEW_QUEUE_AUTO_RESOLVE_CONFIDENCE,
                 )
                 for candidate in candidates:
                     try:

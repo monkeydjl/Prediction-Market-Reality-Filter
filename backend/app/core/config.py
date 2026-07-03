@@ -684,6 +684,10 @@ class Settings:
     REVIEW_QUEUE_MISMATCH_CONFIDENCE: float = float(
         os.getenv("REVIEW_QUEUE_MISMATCH_CONFIDENCE", "0.75")
     )
+    # Confidence threshold for auto_resolve_low_confidence detector.
+    REVIEW_QUEUE_AUTO_RESOLVE_CONFIDENCE: float = float(
+        os.getenv("REVIEW_QUEUE_AUTO_RESOLVE_CONFIDENCE", "0.95")
+    )
     # Plan 5 §5.4: Decision Timeline / Diff Viewer. When enabled, save_events
     # appends an overlay-bearing snapshot of each record to
     # decision_timeline_store so the /decision-timeline route can diff how an

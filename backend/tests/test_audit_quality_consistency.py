@@ -10,6 +10,8 @@ Tests cover:
 from __future__ import annotations
 
 import json
+import contextlib
+import io
 import sys
 import tempfile
 import unittest
@@ -22,6 +24,9 @@ _SCRIPTS = _BACKEND / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
 from audit_quality_consistency import (  # noqa: E402
+    ERROR,
+    INFO,
+    WARN,
     Conflict,
     audit_quality_consistency,
     main,
@@ -305,6 +310,117 @@ class TestMainExitCodes(unittest.TestCase):
             rc = main(["--strict"])
         # No conflicts at all → still 0
         self.assertEqual(rc, 0)
+
+
+class TestEnqueueFlag(unittest.TestCase):
+    """--enqueue writes ERROR audit findings into the review queue."""
+
+    def test_enqueue_flag_accepts_clean_audit(self):
+        with patch("audit_quality_consistency.audit_quality_consistency", return_value=[]), \
+                patch("app.memory.review_queue_store.enqueue_item") as enqueue:
+            rc = main(["--enqueue"])
+        self.assertEqual(rc, 0)
+        enqueue.assert_not_called()
+
+    def test_enqueue_single_error_conflict(self):
+        conflict = Conflict(
+            event_id="evt1",
+            conflict_type="wide_spread_not_downgraded",
+            severity=ERROR,
+            message="market_quality conflict",
+            field_values={"wide_spread_flag": True},
+        )
+        with patch("audit_quality_consistency.audit_quality_consistency", return_value=[conflict]), \
+                patch("app.memory.review_queue_store.enqueue_item") as enqueue:
+            rc = main(["--enqueue"])
+
+        self.assertEqual(rc, 1)
+        enqueue.assert_called_once()
+        kwargs = enqueue.call_args.kwargs
+        self.assertEqual(kwargs["event_id"], "evt1")
+        self.assertEqual(kwargs["trigger"], "audit_inconsistency")
+        self.assertEqual(kwargs["severity"], ERROR)
+        self.assertEqual(kwargs["reason"], "market_quality conflict")
+        self.assertEqual(len(kwargs["context"]["conflicts"]), 1)
+        self.assertEqual(
+            kwargs["context"]["conflicts"][0]["conflict_type"],
+            "wide_spread_not_downgraded",
+        )
+
+    def test_enqueue_skips_warn_and_info_conflicts(self):
+        conflicts = [
+            Conflict("evt1", "source_reliability_downgrade_dropped", WARN, "warn"),
+            Conflict("evt2", "informational", INFO, "info"),
+        ]
+        with patch("audit_quality_consistency.audit_quality_consistency", return_value=conflicts), \
+                patch("app.memory.review_queue_store.enqueue_item") as enqueue:
+            rc = main(["--enqueue"])
+
+        self.assertEqual(rc, 0)
+        enqueue.assert_not_called()
+
+    def test_enqueue_aggregates_multiple_errors_for_same_event(self):
+        conflicts = [
+            Conflict("evt1", "wide_spread_not_downgraded", ERROR, "first", {"a": 1}),
+            Conflict(
+                "evt1",
+                "market_score_below_threshold_not_downgraded",
+                ERROR,
+                "second",
+                {"b": 2},
+            ),
+        ]
+        with patch("audit_quality_consistency.audit_quality_consistency", return_value=conflicts), \
+                patch("app.memory.review_queue_store.enqueue_item") as enqueue:
+            rc = main(["--enqueue"])
+
+        self.assertEqual(rc, 1)
+        enqueue.assert_called_once()
+        kwargs = enqueue.call_args.kwargs
+        self.assertEqual(kwargs["event_id"], "evt1")
+        self.assertIn("2", kwargs["reason"])
+        self.assertIn("wide_spread_not_downgraded", kwargs["reason"])
+        self.assertEqual(len(kwargs["context"]["conflicts"]), 2)
+        self.assertEqual(
+            [c["conflict_type"] for c in kwargs["context"]["conflicts"]],
+            [
+                "wide_spread_not_downgraded",
+                "market_score_below_threshold_not_downgraded",
+            ],
+        )
+
+    def test_enqueue_writes_one_item_per_event(self):
+        conflicts = [
+            Conflict("evt1", "wide_spread_not_downgraded", ERROR, "first"),
+            Conflict("evt2", "decision_quality_downgrade_lost_in_merge", ERROR, "second"),
+        ]
+        with patch("audit_quality_consistency.audit_quality_consistency", return_value=conflicts), \
+                patch("app.memory.review_queue_store.enqueue_item") as enqueue:
+            rc = main(["--enqueue"])
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(enqueue.call_count, 2)
+        self.assertEqual(
+            [call.kwargs["event_id"] for call in enqueue.call_args_list],
+            ["evt1", "evt2"],
+        )
+
+    def test_enqueue_failure_warns_but_keeps_audit_exit_code(self):
+        conflict = Conflict("evt1", "wide_spread_not_downgraded", ERROR, "first")
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with patch("audit_quality_consistency.audit_quality_consistency", return_value=[conflict]), \
+                patch(
+                    "app.memory.review_queue_store.enqueue_item",
+                    side_effect=RuntimeError("db down"),
+                ), \
+                contextlib.redirect_stdout(stdout), \
+                contextlib.redirect_stderr(stderr):
+            rc = main(["--enqueue"])
+
+        self.assertEqual(rc, 1)
+        self.assertIn("[WARN] enqueue failed for evt1", stderr.getvalue())
+        self.assertIn("Found 1 conflict", stdout.getvalue())
 
 
 class TestJsonOutput(unittest.TestCase):

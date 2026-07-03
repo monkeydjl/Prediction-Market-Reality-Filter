@@ -35,6 +35,7 @@ CLI flags:
     --json          Output JSON instead of human-readable text.
     --verbose       Show INFO-level conflicts too (default: WARN+ only).
     --strict        Exit non-zero on any conflict (incl. INFO).
+    --enqueue       Enqueue ERROR conflicts into the review queue.
 """
 from __future__ import annotations
 
@@ -371,6 +372,46 @@ def _print(text: str) -> None:
     print(text)
 
 
+def _enqueue_error_conflicts(conflicts: list[Conflict]) -> None:
+    """Enqueue ERROR audit conflicts as one review item per event."""
+    errors_by_event: dict[str, list[Conflict]] = {}
+    for conflict in conflicts:
+        if conflict.severity == ERROR:
+            errors_by_event.setdefault(conflict.event_id, []).append(conflict)
+
+    if not errors_by_event:
+        return
+
+    from app.memory import review_queue_store
+
+    for event_id, event_errors in errors_by_event.items():
+        codes = [c.conflict_type for c in event_errors]
+        reason = (
+            event_errors[0].message
+            if len(event_errors) == 1
+            else f"审计发现 {len(event_errors)} 个 ERROR 级一致性冲突：{', '.join(codes)}"
+        )
+        try:
+            review_queue_store.enqueue_item(
+                event_id=event_id,
+                trigger="audit_inconsistency",
+                severity=ERROR,
+                reason=reason,
+                context={
+                    "conflicts": [
+                        {
+                            "conflict_type": c.conflict_type,
+                            "message": c.message,
+                            "field_values": c.field_values,
+                        }
+                        for c in event_errors
+                    ],
+                },
+            )
+        except Exception as exc:
+            print(f"[WARN] enqueue failed for {event_id}: {exc}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Audit overlay field consistency across event_store.",
@@ -382,9 +423,19 @@ def main(argv: list[str] | None = None) -> int:
         "--strict", action="store_true",
         help="Exit non-zero on any conflict (including INFO).",
     )
+    parser.add_argument(
+        "--enqueue",
+        action="store_true",
+        help=(
+            "Enqueue ERROR-severity conflicts into the review queue "
+            "(WARN/INFO are not enqueued)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     conflicts = audit_quality_consistency(event_id_filter=args.event_id)
+    if args.enqueue:
+        _enqueue_error_conflicts(conflicts)
 
     if args.json:
         # JSON output is always UTF-8 (ensure_ascii=False) — the audit

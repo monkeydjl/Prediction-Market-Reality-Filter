@@ -161,6 +161,36 @@ def resolve_with_calibration(
             apply_resolution(record)
         except Exception:
             logger.warning("domain reliability tracking failed", exc_info=True)
+
+    # Plan 4 §6.2: auto-resolve low-confidence review queue detector.
+    # Best-effort: detector/enqueue failures never block resolution. Only this
+    # narrow detector runs here; the other detectors run during overlay builds.
+    if settings.REVIEW_QUEUE_ENABLED and updated is not None:
+        try:
+            from app.memory import review_queue_store
+            from app.services.review_queue_detectors import (
+                detect_auto_resolve_low_confidence,
+            )
+
+            record = (updated or {}).get("record") or {}
+            eid = record.get("event_id")
+            if eid:
+                for cand in detect_auto_resolve_low_confidence(
+                    record,
+                    confidence_threshold=settings.REVIEW_QUEUE_AUTO_RESOLVE_CONFIDENCE,
+                ):
+                    try:
+                        review_queue_store.enqueue_item(
+                            event_id=eid,
+                            trigger=cand["trigger"],
+                            severity=cand["severity"],
+                            reason=cand["reason"],
+                            context=cand["context"],
+                        )
+                    except Exception:
+                        logger.warning("review_queue enqueue failed", exc_info=True)
+        except Exception:
+            logger.warning("review_queue detector run failed", exc_info=True)
     return updated
 
 
@@ -428,7 +458,7 @@ async def auto_resolve_events(
             resolve_with_calibration(
                 event_id=event_id,
                 actual_outcome=actual_outcome,
-                confidence=1.0,
+                confidence=score,
                 source="auto_market",
                 notes=f"matched: {matched_question[:100]}",
                 snapshots=histories.get(event_id, []),

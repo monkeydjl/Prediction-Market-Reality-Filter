@@ -11,11 +11,21 @@ Each candidate is a dict with keys:
     context   — dict of relevant field values for the reviewer
 
 Trigger types (locked):
-    high_value_downgraded     — act signal but final direction is WAIT/AVOID
-    source_market_conflict    — source_reliability says WAIT but market_quality
-                                does not (strong cross-overlay conflict)
-    outcome_prediction_mismatch — resolved outcome contradicts a high-confidence
-                                  prediction
+    high_value_downgraded        — act signal but final direction is WAIT/AVOID
+    source_market_conflict       — source_reliability says WAIT but market_quality
+                                   does not (strong cross-overlay conflict)
+    outcome_prediction_mismatch  — resolved outcome contradicts a high-confidence
+                                   prediction
+    auto_resolve_low_confidence  — auto-resolved event with match confidence
+                                   below threshold (real-time hook in
+                                   resolve_with_calibration; only trigger
+                                   with its own public wrapper
+                                   detect_auto_resolve_low_confidence)
+    audit_inconsistency          — batch audit CLI only
+                                   (audit_quality_consistency --enqueue).
+                                   No _detect_* function here; conflicts come
+                                   from audit_quality_consistency checks and
+                                   are enqueued directly via store.
 """
 from __future__ import annotations
 
@@ -29,6 +39,7 @@ def detect_review_candidates(
     record: dict[str, Any],
     *,
     mismatch_confidence_threshold: float = 0.75,
+    auto_resolve_confidence_threshold: float = 0.95,
 ) -> list[dict[str, Any]]:
     """Scan a record and return review-queue candidate dicts.
 
@@ -41,6 +52,10 @@ def detect_review_candidates(
     settings are unset). The orchestrator should pass
     ``settings.REVIEW_QUEUE_MISMATCH_CONFIDENCE`` so the env var takes
     effect.
+
+    ``auto_resolve_confidence_threshold`` controls the
+    ``auto_resolve_low_confidence`` detector. It defaults to 0.95, which
+    catches fuzzy verified auto-resolves that barely pass the identity gate.
     """
     if not isinstance(record, dict):
         return []
@@ -50,7 +65,21 @@ def detect_review_candidates(
     candidates.extend(_detect_outcome_prediction_mismatch(
         record, confidence_threshold=mismatch_confidence_threshold,
     ))
+    candidates.extend(_detect_auto_resolve_low_confidence(
+        record, confidence_threshold=auto_resolve_confidence_threshold,
+    ))
     return candidates
+
+
+def detect_auto_resolve_low_confidence(
+    record: dict[str, Any],
+    *,
+    confidence_threshold: float = 0.95,
+) -> list[dict[str, Any]]:
+    """Public wrapper for the auto-resolve low-confidence detector."""
+    return _detect_auto_resolve_low_confidence(
+        record, confidence_threshold=confidence_threshold,
+    )
 
 
 def _detect_high_value_downgraded(record: dict[str, Any]) -> list[dict[str, Any]]:
@@ -132,5 +161,39 @@ def _detect_outcome_prediction_mismatch(
             "outcome": outcome,
             "predicted_direction": direction,
             "ai_probability": prob,
+        },
+    }]
+
+
+def _detect_auto_resolve_low_confidence(
+    record: dict[str, Any],
+    *,
+    confidence_threshold: float = 0.95,
+) -> list[dict[str, Any]]:
+    """Flag auto-resolved events whose match confidence is below threshold."""
+    outcome = record.get("outcome")
+    if not isinstance(outcome, dict):
+        return []
+    if outcome.get("status") != "resolved":
+        return []
+    if outcome.get("source") != "auto_market":
+        return []
+    confidence = outcome.get("confidence")
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        return []
+    if confidence >= confidence_threshold:
+        return []
+    return [{
+        "trigger": "auto_resolve_low_confidence",
+        "severity": "WARN",
+        "reason": (
+            f"自动结算置信度 {confidence:.2f} "
+            f"低于阈值 {confidence_threshold:.2f}"
+        ),
+        "context": {
+            "outcome_source": "auto_market",
+            "outcome_confidence": confidence,
+            "confidence_threshold": confidence_threshold,
+            "actual_outcome": outcome.get("actual_outcome"),
         },
     }]

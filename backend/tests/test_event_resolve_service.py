@@ -96,6 +96,65 @@ class ResolveWithCalibrationTests(unittest.TestCase):
         self.assertEqual(after["record"]["outcome"]["source"], "auto_market")
         self.assertIn("matched", after["record"]["outcome"]["notes"])
 
+    def test_auto_resolve_low_confidence_hook_enqueues_review_item(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_path = str(Path(tmp) / "event_store.json")
+            audit_path = str(Path(tmp) / "event_audit.jsonl")
+            with patch.object(store, "_store_path", return_value=store_path), \
+                    patch.object(audit, "_audit_path", return_value=audit_path), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(ers.settings, "REVIEW_QUEUE_ENABLED", True), \
+                    patch.object(ers.settings, "REVIEW_QUEUE_AUTO_RESOLVE_CONFIDENCE", 0.95), \
+                    patch("app.memory.review_queue_store.enqueue_item") as enqueue:
+                store.save_event(_make_record("evtReview", value_score=30))
+                updated = ers.resolve_with_calibration(
+                    event_id="evtReview",
+                    actual_outcome=100.0,
+                    confidence=0.92,
+                    source="auto_market",
+                    notes="matched: fuzzy market",
+                )
+
+        self.assertIsNotNone(updated)
+        enqueue.assert_called_once()
+        self.assertEqual(enqueue.call_args.kwargs["event_id"], "evtReview")
+        self.assertEqual(
+            enqueue.call_args.kwargs["trigger"],
+            "auto_resolve_low_confidence",
+        )
+        self.assertEqual(enqueue.call_args.kwargs["severity"], "WARN")
+        self.assertEqual(
+            enqueue.call_args.kwargs["context"]["outcome_confidence"],
+            0.92,
+        )
+
+    def test_review_queue_hook_failure_does_not_block_resolve(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_path = str(Path(tmp) / "event_store.json")
+            audit_path = str(Path(tmp) / "event_audit.jsonl")
+            with patch.object(store, "_store_path", return_value=store_path), \
+                    patch.object(audit, "_audit_path", return_value=audit_path), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(ers.settings, "REVIEW_QUEUE_ENABLED", True), \
+                    patch.object(ers.settings, "REVIEW_QUEUE_AUTO_RESOLVE_CONFIDENCE", 0.95), \
+                    patch(
+                        "app.services.review_queue_detectors.detect_auto_resolve_low_confidence",
+                        side_effect=RuntimeError("detector boom"),
+                    ), \
+                    self.assertLogs("app.services.event_resolve_service", level="WARNING") as logs:
+                store.save_event(_make_record("evtReviewFail", value_score=30))
+                updated = ers.resolve_with_calibration(
+                    event_id="evtReviewFail",
+                    actual_outcome=0.0,
+                    confidence=0.92,
+                    source="auto_market",
+                )
+
+        self.assertIsNotNone(updated)
+        self.assertTrue(
+            any("review_queue detector run failed" in msg for msg in logs.output)
+        )
+
 
 class AutoResolveEventsTests(unittest.TestCase):
     """auto_resolve_events: fetch resolved markets, match, resolve each."""
@@ -334,6 +393,72 @@ class AutoResolveEventsTests(unittest.TestCase):
         self.assertEqual(after["record"]["outcome"]["actual_outcome"], 0.0)
         self.assertEqual(after["record"]["outcome"]["source"], "auto_market")
 
+    def test_fuzzy_verified_match_uses_match_score_as_confidence(self):
+        market_question = (
+            "Will alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
+        )
+        event_question = (
+            "Will alpha beta gamma delta epsilon zeta eta theta iota kappa lambda"
+        )
+        expected_score = 11 / 12
+        market = {
+            "question": market_question,
+            "actual_outcome": 100.0,
+            "id": "poly-fuzzy-verified",
+        }
+        record = _make_record("evtFuzzyVerified", value_score=30)
+        record["event_title"] = event_question
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(store, "_store_path", return_value=str(Path(tmp) / "event_store.json")), \
+                    patch.object(audit, "_audit_path", return_value=str(Path(tmp) / "event_audit.jsonl")), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(ers.settings, "AUTO_VERIFY_THRESHOLD", 0.90), \
+                    patch.object(phs, "fetch_resolved_markets",
+                                 new=AsyncMock(return_value=[market])):
+                store.save_event(record)
+                result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
+                after = store.get_event("evtFuzzyVerified")
+
+        self.assertEqual(result["resolved_count"], 1)
+        self.assertAlmostEqual(
+            after["record"]["outcome"]["confidence"],
+            expected_score,
+        )
+
+    def test_direct_manifold_settle_keeps_confidence_one(self):
+        record = _make_record("evtDirect", value_score=30)
+        record["event_title"] = "A local Manifold event that search will not match"
+        record["source"] = {
+            "type": "prediction_market",
+            "platform": "Manifold",
+            "source_id": "manifold-direct-1",
+        }
+        unrelated_market = {
+            "question": "Completely unrelated resolved market",
+            "actual_outcome": 100.0,
+            "id": "poly-unrelated",
+        }
+        direct_market = {
+            "question": "Direct Manifold settled market",
+            "actual_outcome": 0.0,
+            "id": "manifold-direct-1",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(store, "_store_path", return_value=str(Path(tmp) / "event_store.json")), \
+                    patch.object(audit, "_audit_path", return_value=str(Path(tmp) / "event_audit.jsonl")), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(phs, "fetch_resolved_markets",
+                                 new=AsyncMock(return_value=[unrelated_market])), \
+                    patch.object(mfs, "fetch_markets_by_ids",
+                                 new=AsyncMock(return_value=[direct_market])):
+                store.save_event(record)
+                result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
+                after = store.get_event("evtDirect")
+
+        self.assertEqual(result["resolved_count"], 1)
+        self.assertEqual(result["matches"][-1]["result"], "resolved_by_direct")
+        self.assertEqual(after["record"]["outcome"]["confidence"], 1.0)
+
 
 class Milestone0LinkGateTests(unittest.TestCase):
     """M0: fail-closed event->market link gating in auto-resolve."""
@@ -449,6 +574,7 @@ class Milestone0LinkGateTests(unittest.TestCase):
         self.assertEqual(result["resolved_count"], 1)        # settled by contract id alone
         self.assertEqual(after["record"]["outcome"]["status"], "resolved")
         self.assertEqual(after["record"]["outcome"]["actual_outcome"], 100.0)
+        self.assertEqual(after["record"]["outcome"]["confidence"], 1.0)
 
 
 class Milestone1PredictionScoringTests(unittest.TestCase):

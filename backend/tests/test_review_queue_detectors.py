@@ -8,7 +8,10 @@ from pathlib import Path
 _BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_BACKEND))
 
-from app.services.review_queue_detectors import detect_review_candidates
+from app.services.review_queue_detectors import (
+    detect_auto_resolve_low_confidence,
+    detect_review_candidates,
+)
 
 
 def _base_record(**overrides):
@@ -138,6 +141,88 @@ class TestReviewQueueDetectors(unittest.TestCase):
         candidates = detect_review_candidates(rec, mismatch_confidence_threshold=0.70)
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["trigger"], "outcome_prediction_mismatch")
+
+    def test_auto_resolve_low_confidence_fires_for_auto_market_below_threshold(self):
+        rec = _base_record(
+            outcome={
+                "status": "resolved",
+                "source": "auto_market",
+                "confidence": 0.92,
+                "actual_outcome": 100.0,
+            },
+        )
+        candidates = detect_auto_resolve_low_confidence(
+            rec, confidence_threshold=0.95,
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["trigger"], "auto_resolve_low_confidence")
+        self.assertEqual(candidates[0]["severity"], "WARN")
+        self.assertEqual(candidates[0]["context"]["outcome_confidence"], 0.92)
+        self.assertEqual(candidates[0]["context"]["confidence_threshold"], 0.95)
+
+    def test_auto_resolve_low_confidence_is_strictly_below_threshold(self):
+        rec = _base_record(
+            outcome={
+                "status": "resolved",
+                "source": "auto_market",
+                "confidence": 0.95,
+                "actual_outcome": 100.0,
+            },
+        )
+        candidates = detect_auto_resolve_low_confidence(
+            rec, confidence_threshold=0.95,
+        )
+        self.assertEqual(candidates, [])
+
+    def test_auto_resolve_low_confidence_skips_manual_and_unresolved_records(self):
+        manual = _base_record(
+            outcome={"status": "resolved", "source": "manual", "confidence": 0.1},
+        )
+        pending = _base_record(
+            outcome={"status": "pending", "source": "auto_market", "confidence": 0.1},
+        )
+        self.assertEqual(detect_auto_resolve_low_confidence(manual), [])
+        self.assertEqual(detect_auto_resolve_low_confidence(pending), [])
+
+    def test_auto_resolve_low_confidence_skips_non_numeric_confidence(self):
+        rec = _base_record(
+            outcome={
+                "status": "resolved",
+                "source": "auto_market",
+                "confidence": "0.92",
+            },
+        )
+        self.assertEqual(detect_auto_resolve_low_confidence(rec), [])
+
+    def test_detect_review_candidates_includes_auto_resolve_detector(self):
+        rec = _base_record(
+            outcome={
+                "status": "resolved",
+                "source": "auto_market",
+                "confidence": 0.92,
+                "actual_outcome": 0.0,
+            },
+        )
+        candidates = detect_review_candidates(
+            rec, auto_resolve_confidence_threshold=0.93,
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["trigger"], "auto_resolve_low_confidence")
+
+    def test_reasons_for_auto_resolve_detector_exclude_banned_terms(self):
+        banned = ("long", "short", "buy", "sell", "position", "kelly", "order")
+        rec = _base_record(
+            outcome={
+                "status": "resolved",
+                "source": "auto_market",
+                "confidence": 0.92,
+                "actual_outcome": 100.0,
+            },
+        )
+        candidates = detect_auto_resolve_low_confidence(rec)
+        self.assertEqual(len(candidates), 1)
+        for term in banned:
+            self.assertNotIn(term, candidates[0]["reason"].lower())
 
 
 if __name__ == "__main__":

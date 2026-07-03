@@ -211,6 +211,51 @@ class EventIntelligenceServiceTests(unittest.TestCase):
         record = build_event_record({"market_question": "Will X happen?"})
         self.assertIsNone(record.get("semantics"))
 
+    def test_review_queue_detector_receives_auto_resolve_threshold(self):
+        record = {
+            "event_id": "evtReviewThreshold",
+            "actionable_recommendation": {
+                "direction": "YES",
+                "signal": "act",
+                "ai_probability": 0.70,
+            },
+            "final_displayed_direction": "YES",
+        }
+        with patch.multiple(
+            eis.settings,
+            DECISION_QUALITY_ENABLED=False,
+            MARKET_QUALITY_ENABLED=False,
+            EXECUTION_QUALITY_ENABLED=False,
+            SOURCE_RELIABILITY_ENABLED=False,
+            LLM_TELEMETRY_ENABLED=False,
+            GUARDRAILS_ENABLED=False,
+            REVIEW_QUEUE_ENABLED=True,
+            REVIEW_QUEUE_MISMATCH_CONFIDENCE=0.66,
+            REVIEW_QUEUE_AUTO_RESOLVE_CONFIDENCE=0.91,
+        ), \
+                patch(
+                    "app.services.review_queue_detectors.detect_review_candidates",
+                    return_value=[],
+                ) as detect, \
+                patch("app.memory.review_queue_store.enqueue_item"):
+            eis._build_all_overlays(
+                record,
+                analysis={},
+                sentiment_profile=None,
+                news_context="",
+                market_quote=None,
+            )
+
+        detect.assert_called_once()
+        self.assertEqual(
+            detect.call_args.kwargs["mismatch_confidence_threshold"],
+            0.66,
+        )
+        self.assertEqual(
+            detect.call_args.kwargs["auto_resolve_confidence_threshold"],
+            0.91,
+        )
+
 
 class BuildFilteredNewsSemanticsTests(unittest.TestCase):
     """The semantics passthrough in _build_filtered_news.

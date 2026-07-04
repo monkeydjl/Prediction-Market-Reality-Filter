@@ -256,8 +256,8 @@ def _run_event_conclusion_challenge(
     attempt_count: int = 0,
 ) -> None:
     if not (
-        settings.CONCLUSION_CHALLENGE_ENABLED
-        and settings.EVENT_CHALLENGE_ENABLED
+        getattr(settings, "CONCLUSION_CHALLENGE_ENABLED", False) is True
+        and getattr(settings, "EVENT_CHALLENGE_ENABLED", False) is True
     ):
         return
     try:

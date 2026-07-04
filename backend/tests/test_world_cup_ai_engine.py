@@ -59,7 +59,7 @@ class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
         mock_response.choices[0].message.content = '{"home_adjustment": 0.2, "away_adjustment": -0.1, "reasoning": "巴西状态更好", "confidence_in_adjustment": 0.8}'
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-        with patch("app.core.config.settings") as mock_settings:
+        with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
             mock_settings.OPENAI_API_KEY = "test-key"
             mock_settings.OPENAI_MODEL = "gpt-4"
             with patch("app.services.openai_service.get_client", return_value=mock_client):
@@ -88,7 +88,7 @@ class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
         mock_response.choices[0].message.content = '{"home_adjustment": 2.0, "away_adjustment": -1.5, "reasoning": "极端调整", "confidence_in_adjustment": 0.9}'
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-        with patch("app.core.config.settings") as mock_settings:
+        with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
             mock_settings.OPENAI_API_KEY = "test-key"
             mock_settings.OPENAI_MODEL = "gpt-4"
             with patch("app.services.openai_service.get_client", return_value=mock_client):
@@ -111,7 +111,7 @@ class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
         mock_response.choices[0].message.content = '{"home_adjustment": 0.4, "away_adjustment": 0.0, "reasoning": "重要调整", "confidence_in_adjustment": 0.85}'
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-        with patch("app.core.config.settings") as mock_settings:
+        with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
             mock_settings.OPENAI_API_KEY = "test-key"
             mock_settings.OPENAI_MODEL = "gpt-4"
             with patch("app.services.openai_service.get_client", return_value=mock_client):
@@ -132,7 +132,7 @@ class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
         mock_response.choices[0].message.content = "Sorry, I cannot provide a prediction."
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-        with patch("app.core.config.settings") as mock_settings:
+        with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
             mock_settings.OPENAI_API_KEY = "test-key"
             mock_settings.OPENAI_MODEL = "gpt-4"
             with patch("app.services.openai_service.get_client", return_value=mock_client):
@@ -148,7 +148,7 @@ class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
         mock_client = MagicMock()
         mock_client.chat.completions.create = AsyncMock(side_effect=Exception("API error"))
 
-        with patch("app.core.config.settings") as mock_settings:
+        with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
             mock_settings.OPENAI_API_KEY = "test-key"
             mock_settings.OPENAI_MODEL = "gpt-4"
             with patch("app.services.openai_service.get_client", return_value=mock_client):

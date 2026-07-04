@@ -76,8 +76,8 @@ def _run_world_cup_conclusion_challenge(
     attempt_count: int = 0,
 ) -> dict[str, Any]:
     if not (
-        settings.CONCLUSION_CHALLENGE_ENABLED
-        and settings.WORLD_CUP_CHALLENGE_ENABLED
+        getattr(settings, "CONCLUSION_CHALLENGE_ENABLED", False) is True
+        and getattr(settings, "WORLD_CUP_CHALLENGE_ENABLED", False) is True
     ):
         return prediction_result
     try:

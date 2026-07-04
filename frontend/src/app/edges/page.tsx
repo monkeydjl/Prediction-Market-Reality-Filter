@@ -1,38 +1,31 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import dynamic from "next/dynamic";
-import { Activity, Clock3, RefreshCw, Zap } from "lucide-react";
-import { AppNav } from "@/components/app-nav";
+import { EdgeTimelineChart } from "@/components/edges/edge-timeline-chart";
 import { eventsApi, type EdgePoint, type FreshEdge } from "@/lib/api";
-import { fmtDateTime, fmtSignedPct } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
-type EdgeClass = "fresh" | "decaying" | "stale" | "closed";
-
-const GROUPS: { key: EdgeClass; label: string; detail: string; tone: string }[] = [
-  { key: "fresh", label: "Fresh", detail: "仍接近峰值", tone: "text-pos" },
-  { key: "decaying", label: "Decaying", detail: "已从峰值回落", tone: "text-warn" },
-  { key: "stale", label: "Stale", detail: "快照已过时", tone: "text-muted-foreground" },
-  { key: "closed", label: "Closed", detail: "分歧已收敛", tone: "text-muted-foreground" },
-];
-
-const EdgeTimelineChart = dynamic(
-  () => import("@/components/edges/edge-timeline-chart").then((mod) => mod.EdgeTimelineChart),
-  {
-    ssr: false,
-    loading: () => (
-      <div
-        className="h-[110px] w-full animate-pulse rounded-md border border-border bg-secondary/50"
-        aria-hidden="true"
-      />
-    ),
-  },
-);
+const CLASS_META: Record<string, { label: string; cls: string; rank: number }> = {
+  fresh: { label: "仍接近峰值", cls: "border-pos/40 bg-pos/10 text-pos", rank: 0 },
+  decaying: { label: "已从峰值回落", cls: "border-warn/40 bg-warn/10 text-warn", rank: 1 },
+  stale: { label: "快照已过时", cls: "border-border bg-secondary text-muted-foreground", rank: 2 },
+  closed: { label: "分歧已收敛", cls: "border-border bg-secondary text-muted-foreground", rank: 3 },
+  no_data: { label: "无数据", cls: "border-border bg-secondary text-muted-foreground", rank: 4 },
+};
 
 function fmtEdge(n: number | null | undefined) {
-  if (n == null) return "—";
-  return fmtSignedPct(n, 1);
+  const v = Number(n ?? 0);
+  if (!Number.isFinite(v)) return "—";
+  const sign = v > 0 ? "+" : "";
+  return `${sign}${v.toFixed(1)}pt`;
+}
+
+function edgeTone(n: number | null | undefined) {
+  const v = Number(n ?? 0);
+  if (!Number.isFinite(v)) return "text-muted-foreground";
+  return v >= 0 ? "text-pos" : "text-neg";
 }
 
 function fmtAge(hours: number | null | undefined) {
@@ -42,21 +35,8 @@ function fmtAge(hours: number | null | undefined) {
   return `${(hours / 24).toFixed(1)}d`;
 }
 
-function edgeTone(n: number | null | undefined) {
-  if (n == null || n === 0) return "text-muted-foreground";
-  return n > 0 ? "text-pos" : "text-neg";
-}
 
-function Metric({ label, value, tone = "text-foreground" }: { label: string; value: string; tone?: string }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[11px] text-muted-foreground">{label}</span>
-      <span className={`font-mono text-sm font-semibold tabular-nums ${tone}`}>{value}</span>
-    </div>
-  );
-}
-
-function EdgeTimeline({ series }: { series?: EdgePoint[] }) {
+function EdgeTimeline({ series, compact }: { series?: EdgePoint[]; compact?: boolean }) {
   const data = (series ?? [])
     .filter((p) => Number.isFinite(p.edge))
     .map((p) => ({
@@ -66,15 +46,19 @@ function EdgeTimeline({ series }: { series?: EdgePoint[] }) {
       market: p.baseline,
     }));
 
+  const h = compact ? 44 : 110;
   if (data.length < 2) {
     return (
-      <div className="grid h-[110px] place-items-center rounded-md border border-dashed border-border text-xs text-muted-foreground">
+      <div
+        className="grid place-items-center rounded-md border border-dashed border-border text-xs text-muted-foreground"
+        style={{ height: h }}
+      >
         时间线不足
       </div>
     );
   }
 
-  return <EdgeTimelineChart data={data} />;
+  return <EdgeTimelineChart data={data} height={h} />;
 }
 
 function EdgeCard({ item }: { item: FreshEdge }) {
@@ -82,23 +66,40 @@ function EdgeCard({ item }: { item: FreshEdge }) {
   return (
     <Link
       href={`/events?id=${encodeURIComponent(item.event_id)}`}
-      className="grid gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/40 hover:bg-secondary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="group flex flex-col gap-2 rounded-lg border border-border bg-card p-3 transition-colors hover:border-primary/40 hover:bg-secondary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <div className="flex items-start justify-between gap-3">
-        <h3 className="line-clamp-2 text-sm font-medium leading-snug">{item.event_title || item.event_id}</h3>
-        <span className="rounded-md border border-border bg-secondary px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
+      <div className="flex items-start justify-between gap-2">
+        <h3 className="line-clamp-2 text-xs font-medium leading-snug">
+          {item.event_title_zh || item.event_title || item.event_id}
+        </h3>
+        <span className="shrink-0 rounded-md border border-border bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
           {edge.observations}
         </span>
       </div>
 
-      <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
-        <Metric label="当前 edge" value={fmtEdge(edge.latest_edge)} tone={edgeTone(edge.latest_edge)} />
-        <Metric label="峰值 edge" value={fmtEdge(edge.peak_edge)} tone={edgeTone(edge.peak_edge)} />
-        <Metric label="近期变化" value={fmtEdge(edge.recent_edge_change)} tone={edgeTone(edge.recent_edge_change)} />
-        <Metric label="年龄" value={fmtAge(edge.age_hours)} />
+      <div className="flex items-center gap-2">
+        <div className="grid w-40 grid-cols-2 gap-x-3 gap-y-1 text-xs">
+          <div>
+            <span className="block text-[10px] text-muted-foreground">当前</span>
+            <span className={`font-mono font-semibold ${edgeTone(edge.latest_edge)}`}>{fmtEdge(edge.latest_edge)}</span>
+          </div>
+          <div>
+            <span className="block text-[10px] text-muted-foreground">峰值</span>
+            <span className={`font-mono font-semibold ${edgeTone(edge.peak_edge)}`}>{fmtEdge(edge.peak_edge)}</span>
+          </div>
+          <div>
+            <span className="block text-[10px] text-muted-foreground">变化</span>
+            <span className={`font-mono font-semibold ${edgeTone(edge.recent_edge_change)}`}>{fmtEdge(edge.recent_edge_change)}</span>
+          </div>
+          <div>
+            <span className="block text-[10px] text-muted-foreground">年龄</span>
+            <span className="font-mono font-semibold">{fmtAge(edge.age_hours)}</span>
+          </div>
+        </div>
+        <div className="flex-1 min-w-0">
+          <EdgeTimeline series={item.series} compact />
+        </div>
       </div>
-
-      <EdgeTimeline series={item.series} />
     </Link>
   );
 }
@@ -107,95 +108,97 @@ export default function EdgesPage() {
   const [edges, setEdges] = useState<FreshEdge[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [active, setActive] = useState<string | "all">("all");
   const mountedRef = useRef(true);
 
   useEffect(() => {
     return () => { mountedRef.current = false; };
   }, []);
 
-  const load = useCallback(async () => {
-    setError(null);
-    const response = await eventsApi.edgeMonitor(50);
-    if (mountedRef.current) setEdges(response.edges ?? []);
-  }, []);
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      await load();
-    } catch (e) {
-      if (mountedRef.current) setError(e instanceof Error ? e.message : "加载失败");
-    } finally {
-      if (mountedRef.current) setLoading(false);
-    }
-  }, [load]);
-
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
+      setError(null);
       try {
-        await load();
+        const data = await eventsApi.edgeMonitor(50);
+        if (!cancelled) setEdges(data.edges ?? []);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "加载失败");
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
-  }, [load]);
+    return () => { cancelled = true; };
+  }, []);
 
-  const grouped = useMemo(() => {
-    const byClass: Record<EdgeClass, FreshEdge[]> = {
-      fresh: [],
-      decaying: [],
-      stale: [],
-      closed: [],
-    };
-    for (const item of edges) {
-      const key = item.edge.classification as EdgeClass;
-      if (key in byClass) byClass[key].push(item);
+  const byClass = useMemo(() => {
+    const map: Record<string, FreshEdge[]> = {};
+    for (const e of edges) {
+      const cls = e.edge.classification || "no_data";
+      if (!map[cls]) map[cls] = [];
+      map[cls].push(e);
     }
-    return byClass;
+    return map;
   }, [edges]);
 
+  const classes = useMemo(() => {
+    return Object.keys(CLASS_META)
+      .filter((k) => (byClass[k] ?? []).length > 0)
+      .sort((a, b) => CLASS_META[a].rank - CLASS_META[b].rank);
+  }, [byClass]);
+
+  const shown = useMemo(() => {
+    if (active === "all") return edges;
+    return byClass[active] ?? [];
+  }, [active, edges, byClass]);
+
+  const total = edges.length;
+
   return (
-    <div className="min-h-screen">
-      <AppNav />
       <main id="main-content" className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-2 text-primary">
-              <Zap className="size-4" aria-hidden="true" />
-              <span className="text-xs font-medium uppercase">Edge Monitor</span>
-            </div>
-            <h1 className="text-balance text-xl font-semibold md:text-2xl">Edge 监测</h1>
-          </div>
-          <button
-            type="button"
-            onClick={refresh}
-            disabled={loading}
-            className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-secondary px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
-          >
-            <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} aria-hidden="true" />
-            刷新
-          </button>
+        <div className="flex flex-col gap-1">
+          <h1 className="text-balance text-xl font-semibold md:text-2xl">Edge 检查</h1>
+          <p className="text-sm text-muted-foreground">
+            监控模型与预测市场价格之间的偏离，按照 edge 的生命周期阶段（新鲜 / 衰减 / 过时 / 收敛）分类。
+          </p>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-4">
-          {GROUPS.map((group) => (
-            <div key={group.key} className="rounded-lg border border-border bg-card p-4">
-              <div className="flex items-center justify-between gap-2">
-                <span className={`text-sm font-semibold ${group.tone}`}>{group.label}</span>
-                <span className="font-mono text-lg font-semibold tabular-nums">
-                  {grouped[group.key].length}
-                </span>
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground">{group.detail}</p>
-            </div>
-          ))}
+        {/* Summary cards */}
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <button
+            type="button"
+            onClick={() => setActive("all")}
+            className={cn(
+              "flex flex-col gap-1 rounded-lg border p-3 text-left transition-colors",
+              active === "all"
+                ? "border-primary/40 bg-primary/10"
+                : "border-border bg-card hover:bg-secondary/30",
+            )}
+          >
+            <span className="text-xs text-muted-foreground">全部</span>
+            <span className="font-mono text-lg font-semibold">{total}</span>
+          </button>
+          {classes.map((cls) => {
+            const meta = CLASS_META[cls];
+            const count = (byClass[cls] ?? []).length;
+            return (
+              <button
+                key={cls}
+                type="button"
+                onClick={() => setActive(cls)}
+                className={cn(
+                  "flex flex-col gap-1 rounded-lg border p-3 text-left transition-colors",
+                  active === cls
+                    ? meta.cls
+                    : "border-border bg-card hover:bg-secondary/30",
+                )}
+              >
+                <span className={cn("text-xs", active === cls ? "opacity-90" : "text-muted-foreground")}>{meta.label}</span>
+                <span className="font-mono text-lg font-semibold">{count}</span>
+              </button>
+            );
+          })}
         </div>
 
         {error && (
@@ -203,44 +206,18 @@ export default function EdgesPage() {
         )}
 
         {loading ? (
-          <div className="grid h-40 place-items-center rounded-lg border border-border bg-card text-sm text-muted-foreground">
-            加载中…
-          </div>
-        ) : edges.length === 0 ? (
-          <div className="grid h-52 place-items-center rounded-lg border border-dashed border-border bg-card px-6 text-center">
-            <div className="flex flex-col items-center gap-2">
-              <Activity className="size-7 text-muted-foreground" aria-hidden="true" />
-              <p className="text-sm font-medium">暂无 edge 轨迹</p>
-            </div>
+          <div className="grid h-40 place-items-center rounded-lg border border-border bg-card text-sm text-muted-foreground">加载中…</div>
+        ) : shown.length === 0 ? (
+          <div className="grid h-40 place-items-center rounded-lg border border-dashed border-border bg-card text-sm text-muted-foreground">
+            当前没有 {active === "all" ? "" : CLASS_META[active]?.label} 的 edge
           </div>
         ) : (
-          <div className="flex flex-col gap-7">
-            {GROUPS.map((group) => (
-              <section key={group.key} className="flex flex-col gap-3">
-                <div className="flex items-center justify-between border-b border-border pb-2">
-                  <div className="flex items-center gap-2">
-                    <Clock3 className={`size-4 ${group.tone}`} aria-hidden="true" />
-                    <h2 className="text-sm font-semibold">{group.label}</h2>
-                    <span className="font-mono text-xs text-muted-foreground">{grouped[group.key].length}</span>
-                  </div>
-                  <span className="text-xs text-muted-foreground">{group.detail}</span>
-                </div>
-                {grouped[group.key].length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
-                    暂无
-                  </div>
-                ) : (
-                  <div className="grid gap-3 lg:grid-cols-2">
-                    {grouped[group.key].map((item) => (
-                      <EdgeCard key={item.event_id} item={item} />
-                    ))}
-                  </div>
-                )}
-              </section>
+          <div className="grid gap-3 lg:grid-cols-2">
+            {shown.map((e) => (
+              <EdgeCard key={e.event_id} item={e} />
             ))}
           </div>
         )}
       </main>
-    </div>
   );
 }

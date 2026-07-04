@@ -1,8 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { RefreshCw, Search, Trash2 } from "lucide-react";
-import { AppNav } from "@/components/app-nav";
+import { RefreshCw, Search, Trash2, CheckCircle } from "lucide-react";
 import { SummaryBar, summarize } from "@/components/dashboard/summary-bar";
 import { MoversBoard } from "@/components/dashboard/movers-board";
 import { EventTable } from "@/components/dashboard/event-table";
@@ -10,8 +9,15 @@ import { SystemStatus } from "@/components/dashboard/system-status";
 import { SectionErrorBoundary } from "@/components/section-error-boundary";
 import { eventsApi, type EventListFilters } from "@/lib/api";
 import { adaptEntry, adaptMover, type EventView } from "@/lib/adapt";
+import {
+  clearDashboardCache,
+  getDashboardCache,
+  makeDashboardCacheKey,
+  setDashboardCache,
+} from "@/lib/dashboard-cache";
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 10;
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 const DISCOVER_LIMIT_OPTIONS = [2, 5, 10, 20, 50, 100];
 const TABLE_FILTER_EVENT = "pmrf:event-table-filters-change";
 
@@ -28,6 +34,10 @@ interface DiscoveryStatus {
   total_to_analyze?: number;
   elapsed_ms?: number;
   errors?: Array<{ event: string; error: string }>;
+}
+
+function isDiscoveryRunning(status: DiscoveryStatus | null | undefined) {
+  return status?.phase === "collecting" || status?.phase === "analyzing" || status?.phase === "saving";
 }
 
 function pageFromSearch(search: string) {
@@ -99,6 +109,8 @@ async function fetchDashboardData(limit = PAGE_SIZE, offset = 0, filters: EventL
   };
 }
 
+type DashboardData = Awaited<ReturnType<typeof fetchDashboardData>>;
+
 /**
  * Render the discovery source-status badges. Now that DiscoveryStatus is a
  * concrete interface, .sources is properly typed — no runtime type guard
@@ -128,6 +140,7 @@ export default function DashboardPage() {
   const [sparklines, setSparklines] = useState<Record<string, number[]>>({});
   const [totalEvents, setTotalEvents] = useState(0);
   const [page, setPage] = useState(initialPage);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
   const [queryVersion, setQueryVersion] = useState(0);
   const [loading, setLoading] = useState(true);
   const [discovering, setDiscovering] = useState(false);
@@ -139,13 +152,79 @@ export default function DashboardPage() {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [discoveryStatus, setDiscoveryStatus] = useState<DiscoveryStatus | null>(null);
   const mountedRef = useRef(true);
-  const discoverControllerRef = useRef<AbortController | null>(null);
+  const discoveryStatusPollerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const discoveryStatusClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearDiscoveryStatusPoller = useCallback(() => {
+    if (discoveryStatusPollerRef.current) {
+      clearInterval(discoveryStatusPollerRef.current);
+      discoveryStatusPollerRef.current = null;
+    }
+  }, []);
+
+  const applyDiscoveryStatus = useCallback((status: DiscoveryStatus) => {
+    if (!mountedRef.current) return;
+    setDiscoveryStatus(status);
+    setDiscovering(isDiscoveryRunning(status));
+  }, []);
+
+  const startDiscoveryStatusPolling = useCallback(() => {
+    if (discoveryStatusPollerRef.current) return;
+    const poller = setInterval(async () => {
+      if (!mountedRef.current) return;
+      try {
+        const data = await eventsApi.discoverStatus();
+        const status = data as DiscoveryStatus;
+        applyDiscoveryStatus(status);
+        if (!isDiscoveryRunning(status)) clearDiscoveryStatusPoller();
+      } catch {
+        // Status polling is best-effort; discovery itself continues server-side.
+      }
+    }, 2000);
+    discoveryStatusPollerRef.current = poller;
+  }, [applyDiscoveryStatus, clearDiscoveryStatusPoller]);
 
   useEffect(() => {
     return () => {
       mountedRef.current = false;
-      discoverControllerRef.current?.abort();
+      clearDiscoveryStatusPoller();
+      if (discoveryStatusClearTimerRef.current) {
+        clearTimeout(discoveryStatusClearTimerRef.current);
+        discoveryStatusClearTimerRef.current = null;
+      }
     };
+  }, [clearDiscoveryStatusPoller]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await eventsApi.discoverStatus();
+        if (cancelled || !mountedRef.current) return;
+        const status = data as DiscoveryStatus;
+        if (!isDiscoveryRunning(status)) return;
+        applyDiscoveryStatus(status);
+        startDiscoveryStatusPolling();
+      } catch {
+        // Ignore status recovery failures; the dashboard data still loads.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyDiscoveryStatus, startDiscoveryStatusPolling]);
+
+  const scheduleDiscoveryStatusClear = useCallback(() => {
+    if (discoveryStatusClearTimerRef.current) {
+      clearTimeout(discoveryStatusClearTimerRef.current);
+    }
+    const clearTimer = setTimeout(() => {
+      if (mountedRef.current) setDiscoveryStatus(null);
+      if (discoveryStatusClearTimerRef.current === clearTimer) {
+        discoveryStatusClearTimerRef.current = null;
+      }
+    }, 3000);
+    discoveryStatusClearTimerRef.current = clearTimer;
   }, []);
 
   const load = useCallback(async ({
@@ -155,20 +234,31 @@ export default function DashboardPage() {
     silent?: boolean;
     pageOverride?: number;
   } = {}) => {
-    if (!silent) setLoading(true);
+    const filters = filtersFromSearch(window.location.search);
+    const offset = (pageOverride - 1) * pageSize;
+    const cacheKey = makeDashboardCacheKey({ limit: pageSize, offset, filters });
+    const cached = !silent ? getDashboardCache<DashboardData>(cacheKey) : null;
+
+    if (cached) {
+      setEvents(cached.data.events);
+      setTotalEvents(cached.data.total);
+      setMovers(cached.data.movers);
+      setSparklines(cached.data.sparklines);
+      setLastUpdated(new Date(cached.cachedAt));
+      setLoading(false);
+    } else if (!silent) {
+      setLoading(true);
+    }
     setError(null);
     try {
-      const data = await fetchDashboardData(
-        PAGE_SIZE,
-        (pageOverride - 1) * PAGE_SIZE,
-        filtersFromSearch(window.location.search),
-      );
+      const data = await fetchDashboardData(pageSize, offset, filters);
       if (data.total > 0 && data.events.length === 0 && pageOverride > 1) {
-        const lastPage = Math.max(1, Math.ceil(data.total / PAGE_SIZE));
+        const lastPage = Math.max(1, Math.ceil(data.total / pageSize));
         setPage(lastPage);
         writePageToUrl(lastPage, "replace");
         return;
       }
+      setDashboardCache(cacheKey, data);
       setEvents(data.events);
       setTotalEvents(data.total);
       setMovers(data.movers);
@@ -177,9 +267,26 @@ export default function DashboardPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载失败");
     } finally {
-      if (!silent) setLoading(false);
+      if (!silent && !cached) setLoading(false);
     }
-  }, [page]);
+  }, [page, pageSize]);
+
+  // Refresh data from server (read-only, no side effects).
+
+  const resolveExpired = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await eventsApi.resolveExpired();
+      clearDashboardCache();
+      setError(`已结算 ${result.resolved} 个过期事件`);
+      await load({ silent: true });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "结算失败");
+    } finally {
+      setLoading(false);
+    }
+  }, [load]);
 
   // Load the current server-backed page. Changing `page` triggers a new offset.
   useEffect(() => {
@@ -211,7 +318,7 @@ export default function DashboardPage() {
   }, [discovering, load, loading]);
 
   function goToPage(nextPage: number) {
-    const totalPages = Math.max(1, Math.ceil(totalEvents / PAGE_SIZE));
+    const totalPages = Math.max(1, Math.ceil(totalEvents / pageSize));
     const clamped = Math.max(1, Math.min(nextPage, totalPages));
     setPage(clamped);
     writePageToUrl(clamped);
@@ -221,41 +328,25 @@ export default function DashboardPage() {
     setDiscovering(true);
     setError(null);
     setDiscoveryStatus(null);
-    const controller = new AbortController();
-    discoverControllerRef.current = controller;
-    const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
-
-    // Poll discovery status every 2 seconds
-    const statusPoller = setInterval(async () => {
-      if (!mountedRef.current) return;
-      try {
-        const data = await eventsApi.discoverStatus();
-        if (mountedRef.current) setDiscoveryStatus(data);
-      } catch { /* ignore poll errors */ }
-    }, 2000);
+    startDiscoveryStatusPolling();
 
     try {
-      await eventsApi.discover(discoverLimit, discoverUseCache, controller.signal);
-      clearInterval(statusPoller);
+      await eventsApi.discover(discoverLimit, discoverUseCache);
+      clearDiscoveryStatusPoller();
       if (!mountedRef.current) return;
+      clearDashboardCache();
       setPage(1);
       writePageToUrl(1, "replace");
       await load({ pageOverride: 1 });
     } catch (e) {
-      clearInterval(statusPoller);
+      clearDiscoveryStatusPoller();
       if (!mountedRef.current) return;
-      if (e instanceof DOMException && e.name === "AbortError") {
-        setError("发现超时（超过 5 分钟）。事件采集仍可能在后台完成，可稍后点刷新查看。");
-      } else {
-        setError(e instanceof Error ? e.message : "发现失败");
-      }
+      setError(e instanceof Error ? e.message : "发现失败");
     } finally {
-      clearTimeout(timer);
-      discoverControllerRef.current = null;
       if (mountedRef.current) {
         setDiscovering(false);
         // Keep final status visible for 3 seconds
-        setTimeout(() => { if (mountedRef.current) setDiscoveryStatus(null); }, 3000);
+        scheduleDiscoveryStatusClear();
       }
     }
   }
@@ -267,6 +358,7 @@ export default function DashboardPage() {
     try {
       const result = await eventsApi.resetData();
       if (!mountedRef.current) return;
+      clearDashboardCache();
       setEvents([]);
       setMovers([]);
       setSparklines({});
@@ -283,13 +375,11 @@ export default function DashboardPage() {
   }
 
   const summary = { ...summarize(events), total: totalEvents };
-  const totalPages = Math.max(1, Math.ceil(totalEvents / PAGE_SIZE));
-  const pageStart = totalEvents === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
-  const pageEnd = totalEvents === 0 ? 0 : Math.min(page * PAGE_SIZE, totalEvents);
+  const totalPages = Math.max(1, Math.ceil(totalEvents / pageSize));
+  const pageStart = totalEvents === 0 ? 0 : (page - 1) * pageSize + 1;
+  const pageEnd = totalEvents === 0 ? 0 : Math.min(page * pageSize, totalEvents);
 
   return (
-    <div className="min-h-screen">
-      <AppNav />
       <main id="main-content" className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="flex flex-col gap-1">
@@ -299,59 +389,73 @@ export default function DashboardPage() {
               {lastUpdated ? ` 最近更新 ${lastUpdated.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : ""}
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void load()}
-              disabled={loading}
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-secondary px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
-            >
-              <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} aria-hidden="true" />
-              刷新
-            </button>
-            <label className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-secondary px-2 text-xs text-muted-foreground">
-              <span>发现数</span>
-              <select
-                value={discoverLimit}
-                onChange={(e) => setDiscoverLimit(Number(e.target.value))}
-                disabled={discovering}
-                className="bg-transparent font-mono text-foreground outline-none disabled:opacity-50"
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void load()}
+                disabled={loading}
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-secondary px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
               >
-                {DISCOVER_LIMIT_OPTIONS.map((n) => (
-                  <option key={n} value={n}>{n}</option>
-                ))}
-              </select>
-            </label>
-            <label className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-secondary px-2 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={discoverUseCache}
-                onChange={(e) => setDiscoverUseCache(e.target.checked)}
+                <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} aria-hidden="true" />
+                刷新
+              </button>
+              <button
+                type="button"
+                onClick={() => void resolveExpired()}
+                disabled={loading}
+                title="结算截止日期已过的事件"
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-secondary px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+              >
+                <CheckCircle className={`size-3.5 ${loading ? "animate-spin" : ""}`} aria-hidden="true" />
+                结算过期
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-secondary px-2 text-xs text-muted-foreground">
+                <span>发现数</span>
+                <select
+                  value={discoverLimit}
+                  onChange={(e) => setDiscoverLimit(Number(e.target.value))}
+                  disabled={discovering}
+                  className="bg-transparent font-mono text-foreground outline-none disabled:opacity-50"
+                >
+                  {DISCOVER_LIMIT_OPTIONS.map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-secondary px-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={discoverUseCache}
+                  onChange={(e) => setDiscoverUseCache(e.target.checked)}
+                  disabled={discovering}
+                  className="size-3.5 accent-primary"
+                />
+                缓存
+              </label>
+              <button
+                type="button"
+                onClick={discover}
                 disabled={discovering}
-                className="size-3.5 accent-primary"
-              />
-              缓存
-            </label>
-            <button
-              type="button"
-              onClick={discover}
-              disabled={discovering}
-              title="发现并采集新事件（写操作，可能耗时数分钟）"
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-primary bg-primary/15 px-3 text-sm font-medium text-primary transition-colors hover:bg-primary/25 disabled:opacity-50"
-            >
-              <Search className={`size-3.5 ${discovering ? "animate-pulse" : ""}`} aria-hidden="true" />
-              {discovering ? "发现中…" : "发现新事件"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowResetConfirm(true)}
-              disabled={resetting || discovering}
-              title="清空所有事件数据（需二次确认）"
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-neg/40 bg-neg/10 px-3 text-sm font-medium text-neg transition-colors hover:bg-neg/20 disabled:opacity-50"
-            >
-              <Trash2 className={`size-3.5 ${resetting ? "animate-spin" : ""}`} aria-hidden="true" />
-              {resetting ? "删除中…" : "删除数据"}
-            </button>
+                title="发现并采集新事件（写操作，可能耗时数分钟）"
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-primary bg-primary/15 px-3 text-sm font-medium text-primary transition-colors hover:bg-primary/25 disabled:opacity-50"
+              >
+                <Search className={`size-3.5 ${discovering ? "animate-pulse" : ""}`} aria-hidden="true" />
+                {discovering ? "发现中…" : "发现新事件"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowResetConfirm(true)}
+                disabled={resetting || discovering}
+                title="清空所有事件数据（需二次确认）"
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-neg/40 bg-neg/10 px-3 text-sm font-medium text-neg transition-colors hover:bg-neg/20 disabled:opacity-50"
+              >
+                <Trash2 className={`size-3.5 ${resetting ? "animate-spin" : ""}`} aria-hidden="true" />
+                {resetting ? "删除中…" : "删除数据"}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -401,11 +505,14 @@ export default function DashboardPage() {
                   : `开始发现最多 ${discoverLimit} 个事件…`}
               </span>
             </div>
+            <div className="mt-1 text-xs text-primary/80">
+              后台任务运行中，切换页面不会中断。
+              {discoveryStatus?.elapsed_ms && !(discoveryStatus.analyzed ?? 0)
+                ? ` 已用 ${Math.round(discoveryStatus.elapsed_ms / 1000)} 秒`
+                : ""}
+            </div>
             {discoveryStatus && (
               <div className="mt-2 grid gap-1.5 text-xs text-muted-foreground">
-                {/* Phase indicator — discoveryStatus is Record<string, unknown>;
-                    cast .phase to string to satisfy TS2322 (unknown not
-                    ReactNode). */}
                 <div>阶段：{String(discoveryStatus.phase ?? "—")}</div>
 
                 {/* Source status */}
@@ -455,7 +562,7 @@ export default function DashboardPage() {
             <SectionErrorBoundary title="事件列表">
               <EventTable events={events} sparklines={sparklines} total={totalEvents} />
             </SectionErrorBoundary>
-            {totalEvents > PAGE_SIZE && (
+            {totalEvents > pageSize && (
               <div className="flex flex-wrap items-center justify-center gap-3">
                 <button
                   type="button"
@@ -468,6 +575,19 @@ export default function DashboardPage() {
                 <span className="font-mono text-xs text-muted-foreground">
                   {pageStart}-{pageEnd} / {totalEvents} · 第 {page}/{totalPages} 页
                 </span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setPage(1);
+                    writePageToUrl(1);
+                  }}
+                  className="h-9 rounded-md border border-border bg-secondary px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {PAGE_SIZE_OPTIONS.map((n) => (
+                    <option key={n} value={n}>每页 {n} 条</option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   onClick={() => goToPage(page + 1)}
@@ -481,6 +601,5 @@ export default function DashboardPage() {
           </>
         )}
       </main>
-    </div>
   );
 }

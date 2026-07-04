@@ -10,9 +10,9 @@ export interface EdgeTimelinePoint {
   market: number;
 }
 
-export function EdgeTimelineChart({ data }: { data: EdgeTimelinePoint[] }) {
+export function EdgeTimelineChart({ data, height = 110 }: { data: EdgeTimelinePoint[]; height?: number }) {
   return (
-    <ChartFrame height={110}>
+    <ChartFrame height={height}>
       <LineChart data={data} margin={{ left: 0, right: 4, top: 8, bottom: 0 }}>
         <CartesianGrid vertical={false} stroke="var(--border)" />
         <XAxis dataKey="label" hide />

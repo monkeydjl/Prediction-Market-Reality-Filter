@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { RefreshCw, Search, Trash2 } from "lucide-react";
+import { Languages, RefreshCw, Search, Trash2 } from "lucide-react";
 import { AppNav } from "@/components/app-nav";
 import { SummaryBar, summarize } from "@/components/dashboard/summary-bar";
 import { MoversBoard } from "@/components/dashboard/movers-board";
@@ -137,6 +137,9 @@ export default function DashboardPage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [resetting, setResetting] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [translatingTitles, setTranslatingTitles] = useState(false);
+  const [showTranslateConfirm, setShowTranslateConfirm] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [discoveryStatus, setDiscoveryStatus] = useState<DiscoveryStatus | null>(null);
   const mountedRef = useRef(true);
   const discoverControllerRef = useRef<AbortController | null>(null);
@@ -263,6 +266,7 @@ export default function DashboardPage() {
   async function resetData() {
     setResetting(true);
     setError(null);
+    setNotice(null);
     setShowResetConfirm(false);
     try {
       const result = await eventsApi.resetData();
@@ -279,6 +283,24 @@ export default function DashboardPage() {
       setError(e instanceof Error ? e.message : "删除失败");
     } finally {
       if (mountedRef.current) setResetting(false);
+    }
+  }
+
+  async function translateAllTitles() {
+    setTranslatingTitles(true);
+    setError(null);
+    setNotice(null);
+    setShowTranslateConfirm(false);
+    try {
+      const result = await eventsApi.translateAll();
+      if (!mountedRef.current) return;
+      setNotice(result.message ?? `Translated ${result.translated} event titles`);
+      await load({ silent: true });
+    } catch (e) {
+      if (!mountedRef.current) return;
+      setError(e instanceof Error ? e.message : "批量翻译失败");
+    } finally {
+      if (mountedRef.current) setTranslatingTitles(false);
     }
   }
 
@@ -344,6 +366,16 @@ export default function DashboardPage() {
             </button>
             <button
               type="button"
+              onClick={() => setShowTranslateConfirm(true)}
+              disabled={translatingTitles || discovering || resetting}
+              title="批量翻译缺失中文标题（写操作，可能耗时数分钟）"
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-secondary px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+            >
+              <Languages className={`size-3.5 ${translatingTitles ? "animate-pulse" : ""}`} aria-hidden="true" />
+              {translatingTitles ? "翻译中…" : "批量翻译"}
+            </button>
+            <button
+              type="button"
               onClick={() => setShowResetConfirm(true)}
               disabled={resetting || discovering}
               title="清空所有事件数据（需二次确认）"
@@ -354,6 +386,36 @@ export default function DashboardPage() {
             </button>
           </div>
         </div>
+
+        {showTranslateConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowTranslateConfirm(false)}>
+            <div
+              className="mx-4 w-full max-w-sm rounded-lg border border-border bg-card p-6 shadow-lg"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-base font-semibold text-foreground">确认批量翻译标题？</h3>
+              <p className="mt-2 text-sm text-muted-foreground">
+                将为缺失中文标题的事件批量生成翻译。已有中文标题不会被覆盖。
+              </p>
+              <div className="mt-5 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowTranslateConfirm(false)}
+                  className="inline-flex h-9 items-center rounded-md border border-border px-4 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={translateAllTitles}
+                  className="inline-flex h-9 items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80"
+                >
+                  确认翻译
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {showResetConfirm && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowResetConfirm(false)}>
@@ -388,6 +450,12 @@ export default function DashboardPage() {
         {error && (
           <div className="rounded-md border border-neg/40 bg-neg/10 px-4 py-3 text-sm text-neg">
             {error}
+          </div>
+        )}
+
+        {notice && (
+          <div className="rounded-md border border-pos/40 bg-pos/10 px-4 py-3 text-sm text-pos">
+            {notice}
           </div>
         )}
 

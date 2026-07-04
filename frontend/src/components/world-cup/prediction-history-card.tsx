@@ -4,11 +4,22 @@ import { useState, useEffect } from "react";
 import { Clock, TrendingUp, Target, AlertCircle, Zap, Brain, GitCompare, type LucideIcon } from "lucide-react";
 import type { MatchFixture, PredictionHistoryEntry } from "@/lib/world-cup-predictions";
 import { fetchPredictionHistory } from "@/lib/world-cup-predictions";
+import { analyticsApi } from "@/lib/analytics-api";
 import { translateTeamName } from "@/lib/team-names-zh";
 import { cn } from "@/lib/utils";
 
 interface PredictionHistoryCardProps {
   match: MatchFixture;
+}
+
+interface PredictionTimelineSnapshot {
+  timestamp: string;
+  predicted_score: { home: number; away: number };
+  outcome_probabilities: { home_win: number; draw: number; away_win: number };
+  confidence: number;
+  trigger?: string | null;
+  match_minute?: number | null;
+  actual_score?: { home: number; away: number } | null;
 }
 
 const HISTORY_TIME_ZONES = [
@@ -70,6 +81,7 @@ function contributionImpact(value: number, unit: string): string {
 
 export function PredictionHistoryCard({ match }: PredictionHistoryCardProps) {
   const [history, setHistory] = useState<PredictionHistoryEntry[]>([]);
+  const [timelineSnapshots, setTimelineSnapshots] = useState<PredictionTimelineSnapshot[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -78,8 +90,15 @@ export function PredictionHistoryCard({ match }: PredictionHistoryCardProps) {
       try {
         setLoading(true);
         setError(null);
-        const data = await fetchPredictionHistory(match.match_id);
+        const [data, timeline] = await Promise.all([
+          fetchPredictionHistory(match.match_id),
+          analyticsApi.predictionTimeline<{
+            match_id: string;
+            snapshots: PredictionTimelineSnapshot[];
+          }>(match.match_id).catch(() => ({ match_id: match.match_id, snapshots: [] })),
+        ]);
         setHistory(data);
+        setTimelineSnapshots(timeline.snapshots ?? []);
       } catch (err) {
         setError(err instanceof Error ? err.message : "加载失败");
       } finally {
@@ -163,6 +182,24 @@ export function PredictionHistoryCard({ match }: PredictionHistoryCardProps) {
           </div>
         )}
       </div>
+
+      {timelineSnapshots.length > 0 && (
+        <div className="border-b bg-background px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <span className="font-medium">Analytics timeline</span>
+            <span className="font-mono text-muted-foreground">
+              {timelineSnapshots.length} snapshots
+            </span>
+          </div>
+          <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+            {timelineSnapshots.slice(-3).map((snapshot, index) => (
+              <span key={`${snapshot.timestamp}-${index}`} className="rounded bg-secondary px-2 py-0.5 font-mono">
+                {snapshot.trigger || "unknown"}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Timeline */}
       <div className={cn(

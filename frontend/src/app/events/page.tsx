@@ -6,11 +6,13 @@ import { useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { AppNav } from "@/components/app-nav";
 import { SignalSummary } from "@/components/detail/signal-summary";
+import { ConclusionChallengePanel } from "@/components/detail/conclusion-challenge-panel";
 import { MarketPanel } from "@/components/detail/market-links";
 import { SignalPanel } from "@/components/detail/signal-panel";
 import { OfficialColumn, NewsColumn } from "@/components/detail/evidence-list";
 import { TrackingDecision } from "@/components/detail/tracking-decision";
 import { ManualResolvePanel } from "@/components/detail/manual-resolve-panel";
+import { TitleTranslationPanel } from "@/components/detail/title-translation-panel";
 import { DecisionReportPanel } from "@/components/detail/decision-report-panel";
 import { DecisionTimelinePanel } from "@/components/detail/decision-timeline-panel";
 import { EdgeChart, ProbabilityChart, buildSeries } from "@/components/detail/probability-chart";
@@ -269,11 +271,20 @@ function DetailInner() {
             crossValidation={record.cross_validation}
             recommendedAction={record.intelligence_report?.recommended_action}
           />
+          <ConclusionChallengePanel challenge={record.conclusion_challenge} />
           <TrackingDecision
             key={`${record.event_id}:${record.tracking?.status ?? ""}:${record.tracking?.priority ?? ""}`}
             id={record.event_id}
             status={record.tracking?.status}
             priority={record.tracking?.priority}
+          />
+          <TitleTranslationPanel
+            record={record}
+            onTranslated={(updated) => {
+              const merged = { ...record, ...updated };
+              setRecord(merged);
+              setView(adaptRecord(merged));
+            }}
           />
           <ManualResolvePanel
             record={record}

@@ -24,6 +24,25 @@ vi.mock("@/lib/api", () => ({
     }),
     timeseries: vi.fn().mockResolvedValue({ window: "7d", points: [] }),
     anomalies: vi.fn().mockResolvedValue({ count: 0, anomalies: [] }),
+    alerts: vi.fn().mockResolvedValue({
+      alert_count: 1,
+      alerts: [{ code: "direction_accuracy_low", severity: "high", detail: { slice: "overview" } }],
+    }),
+    domainReliability: vi.fn().mockResolvedValue({
+      total_domains: 1,
+      total_rows: 1,
+      domains: [{
+        domain: "reuters.com",
+        category: "_all",
+        sample_count: 12,
+        correct_count: 8,
+        wrong_count: 4,
+        credibility_sum: 9.6,
+        reliability_score: 0.667,
+        credibility_avg: 0.8,
+        insufficient_samples: false,
+      }],
+    }),
     drift: vi.fn().mockResolvedValue({
       recent_window_n: 50,
       drift: { drift_score: 0.1, recent_mean: 0.2, baseline_mean: 0.18,
@@ -69,5 +88,16 @@ describe("QualityOperationsDashboard", () => {
       // `${(driftScore * 100).toFixed(1)}%` → "10.0%". Match that format.
       expect(screen.getByText(/10\.0%/)).toBeInTheDocument();
     });
+  });
+
+  it("renders quality alerts and domain reliability entrypoints", async () => {
+    render(<QualityOperationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText("质量告警")).toBeInTheDocument();
+    });
+    expect(screen.getByText("direction_accuracy_low")).toBeInTheDocument();
+    expect(screen.getByText("域名可靠性")).toBeInTheDocument();
+    expect(screen.getByText("reuters.com")).toBeInTheDocument();
   });
 });

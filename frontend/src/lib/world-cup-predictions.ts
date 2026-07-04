@@ -4,6 +4,7 @@
 
 import { getWorldCupApiBase } from "./env";
 import { buildApiErrorMessage, getOperatorApiKey, getOperatorId } from "./api";
+import type { ConclusionChallengeResult } from "./types";
 
 export interface PredictedScore {
   home: number;
@@ -123,6 +124,10 @@ export interface MatchPrediction {
     top_3_correct_scores: { score: string; probability: number }[];
   };
   tactical_analysis?: string;
+  factors?: {
+    challenge_result?: ConclusionChallengeResult | null;
+    [key: string]: unknown;
+  };
 }
 
 export interface MatchWithPrediction {

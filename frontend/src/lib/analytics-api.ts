@@ -216,4 +216,9 @@ export const analyticsApi = {
       `/api/analytics/tournament-simulation${buildQuery({ num_simulations: numSimulations })}`,
       { timeoutMs: LONG_OPERATION_TIMEOUT_MS },
     ),
+
+  predictionTimeline: <T = unknown>(matchId: string): Promise<T> =>
+    analyticsFetch<T>(
+      `/api/analytics/prediction-timeline${buildQuery({ match_id: matchId })}`,
+    ),
 };

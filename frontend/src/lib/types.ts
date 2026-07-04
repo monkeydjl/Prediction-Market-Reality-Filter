@@ -18,7 +18,20 @@ import type {
   EventSemantics as BackendEventSemantics,
 } from "./generated-types";
 
-export type EventRecord = BackendEventRecord;
+export interface ConclusionChallengeResult {
+  verdict?: string | null;
+  required_action?: string | null;
+  failed_checks?: Array<Record<string, unknown>>;
+  warnings?: Array<Record<string, unknown>>;
+  challenge_summary?: string | null;
+  critic_notes?: Record<string, unknown> | null;
+  confidence_adjustment?: Record<string, unknown> | null;
+  attempt_count?: number | null;
+}
+
+export type EventRecord = BackendEventRecord & {
+  conclusion_challenge?: ConclusionChallengeResult | null;
+};
 export type EvidenceAggregate = BackendEvidenceProfile;
 export type Semantics = BackendEventSemantics;
 

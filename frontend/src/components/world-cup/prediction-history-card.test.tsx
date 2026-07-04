@@ -1,8 +1,9 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PredictionHistoryCard } from "./prediction-history-card";
 import type { MatchFixture } from "@/lib/world-cup-predictions";
 import { fetchPredictionHistory } from "@/lib/world-cup-predictions";
+import { analyticsApi } from "@/lib/analytics-api";
 
 vi.mock("@/lib/world-cup-predictions", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/world-cup-predictions")>();
@@ -11,6 +12,12 @@ vi.mock("@/lib/world-cup-predictions", async (importOriginal) => {
     fetchPredictionHistory: vi.fn(),
   };
 });
+
+vi.mock("@/lib/analytics-api", () => ({
+  analyticsApi: {
+    predictionTimeline: vi.fn(),
+  },
+}));
 
 const match: MatchFixture = {
   match_id: "match-1",
@@ -25,6 +32,11 @@ const match: MatchFixture = {
 };
 
 describe("PredictionHistoryCard engine label", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(analyticsApi.predictionTimeline).mockResolvedValue({ match_id: "match-1", snapshots: [] });
+  });
+
   it("shows Elo-only history as the public Elo+赔率 engine", async () => {
     vi.mocked(fetchPredictionHistory).mockResolvedValue([
       {
@@ -60,6 +72,7 @@ describe("PredictionHistoryCard engine label", () => {
   });
 
   it("shows calibration and contribution metadata when history includes it", async () => {
+    vi.mocked(analyticsApi.predictionTimeline).mockResolvedValue({ match_id: "match-1", snapshots: [] });
     vi.mocked(fetchPredictionHistory).mockResolvedValue([
       {
         timestamp: "2026-06-24T12:00:00Z",
@@ -98,5 +111,47 @@ describe("PredictionHistoryCard engine label", () => {
     expect(screen.getByText(/80%.*65%.*n=4/)).toBeInTheDocument();
     expect(screen.getByText("Contrib")).toBeInTheDocument();
     expect(screen.getByText(/Elo \+5\.0pp\/-3\.0pp/)).toBeInTheDocument();
+  });
+
+  it("shows analytics timeline snapshot count when available", async () => {
+    vi.mocked(fetchPredictionHistory).mockResolvedValue([
+      {
+        timestamp: "2026-06-24T12:00:00Z",
+        predicted_score: { home: 2, away: 1 },
+        outcome_probabilities: { home_win: 0.6, draw: 0.25, away_win: 0.15 },
+        confidence: 0.65,
+        trigger: "manual",
+        prediction_method: "elo_only",
+      },
+    ]);
+    vi.mocked(analyticsApi.predictionTimeline).mockResolvedValue({
+      match_id: "match-1",
+      snapshots: [
+        {
+          timestamp: "2026-06-24T12:00:00Z",
+          predicted_score: { home: 2, away: 1 },
+          outcome_probabilities: { home_win: 0.6, draw: 0.25, away_win: 0.15 },
+          confidence: 0.65,
+          trigger: "manual",
+          match_minute: null,
+          actual_score: null,
+        },
+        {
+          timestamp: "2026-06-24T13:00:00Z",
+          predicted_score: { home: 1, away: 1 },
+          outcome_probabilities: { home_win: 0.4, draw: 0.3, away_win: 0.3 },
+          confidence: 0.55,
+          trigger: "odds_update",
+          match_minute: null,
+          actual_score: null,
+        },
+      ],
+    });
+
+    render(<PredictionHistoryCard match={match} />);
+
+    expect(await screen.findByText("Analytics timeline")).toBeInTheDocument();
+    expect(screen.getByText("2 snapshots")).toBeInTheDocument();
+    expect(screen.getByText("odds_update")).toBeInTheDocument();
   });
 });

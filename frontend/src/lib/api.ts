@@ -665,6 +665,46 @@ export interface QualityMetricsAnomaly {
   detail: unknown;
 }
 
+export interface EventTitleTranslationResponse {
+  event_id: string;
+  event_title_zh: string;
+  message?: string;
+}
+
+export interface EventTitleBatchTranslationResponse {
+  translated: number;
+  total: number;
+  message?: string;
+}
+
+export interface QualityMetricsAlertsResponse {
+  alerts: QualityMetricsAnomaly[];
+  alert_count: number;
+  diagnostics?: {
+    insufficient_samples?: unknown[];
+  };
+}
+
+export interface DomainReliabilityRow {
+  domain: string;
+  category: string;
+  sample_count: number;
+  correct_count: number;
+  wrong_count: number;
+  credibility_sum: number;
+  reliability_score: number | null;
+  credibility_avg?: number | null;
+  insufficient_samples?: boolean;
+  first_seen?: string | null;
+  last_updated?: string | null;
+}
+
+export interface DomainReliabilityResponse {
+  domains: DomainReliabilityRow[];
+  total_domains: number;
+  total_rows: number;
+}
+
 export interface SchedulerTimeseriesPoint {
   job_name: string | null;
   status: string | null;
@@ -744,6 +784,38 @@ export interface QualityMetricsReport {
   by_source_reliability_bucket: Record<string, QualityReportSlice>;
   calibration_deviation: CalibrationDeviationRow[];
   report_errors: { event_id: string; error: string }[];
+}
+
+export type ReviewQueueStatus = "pending" | "resolved";
+export type ReviewQueueAction =
+  | "confirm"
+  | "override"
+  | "request_more_evidence"
+  | "mark_bad_source"
+  | "mark_bad_resolution";
+
+export interface ReviewQueueItem {
+  item_id: string;
+  event_id: string;
+  trigger: string;
+  severity: "WARN" | "ERROR" | string;
+  reason: string;
+  context: Record<string, unknown>;
+  status: ReviewQueueStatus;
+  reviewer?: string | null;
+  reviewer_decision?: string | null;
+  reviewer_note?: string | null;
+  created_at?: string | null;
+  resolved_at?: string | null;
+}
+
+export interface ReviewQueueAuditEntry {
+  audit_id: number;
+  item_id: string;
+  reviewer: string;
+  action: ReviewQueueAction | string;
+  note: string;
+  acted_at: string;
 }
 
 export interface PredictionRecord {
@@ -928,6 +1000,20 @@ export const eventsApi = {
   discoverStatus: () =>
     api<Record<string, unknown>>("/events/discover/status"),
 
+  translateEvent: (id: string, params?: { force?: boolean }) =>
+    api<EventTitleTranslationResponse>(
+      `/events/${encodeURIComponent(id)}/translate?force=${params?.force ? "true" : "false"}`,
+      { method: "POST" },
+      { timeoutMs: 180_000 },
+    ),
+
+  translateAll: () =>
+    api<EventTitleBatchTranslationResponse>(
+      "/events/translate-all",
+      { method: "POST" },
+      { timeoutMs: 300_000 },
+    ),
+
   // M6 simulated trades (paper trading)
   tradeStats: () =>
     api<TradeStats>("/events/trades/stats"),
@@ -935,6 +1021,14 @@ export const eventsApi = {
     api<{ count: number; trades: SimTrade[] }>("/events/trades/open"),
   closedTrades: (limit = 50) =>
     api<{ count: number; trades: SimTrade[] }>(`/events/trades/closed?limit=${limit}`),
+  closeTrade: (eventId: string, body: { exit_prob: number; exit_reason?: string }) =>
+    api<SimTrade>(`/events/trades/${encodeURIComponent(eventId)}/close`, {
+      method: "POST",
+      body: JSON.stringify({
+        exit_prob: body.exit_prob,
+        exit_reason: body.exit_reason ?? "manual",
+      }),
+    }),
 
   pendingLinks: () =>
     api<{ pending: PendingLink[] }>("/events/links/pending"),
@@ -1024,4 +1118,70 @@ export const qualityMetricsApi = {
       `/quality-metrics/report${tail ? `?${tail}` : ""}`,
     );
   },
+
+  alerts: (params?: {
+    limit?: number;
+    sample?: number;
+    includeInsufficientSamples?: boolean;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params?.limit != null) qs.set("limit", String(params.limit));
+    if (params?.sample != null) qs.set("sample", String(params.sample));
+    if (params?.includeInsufficientSamples) {
+      qs.set("include_insufficient_samples", "true");
+    }
+    const tail = qs.toString();
+    return api<QualityMetricsAlertsResponse>(
+      `/quality-metrics/alerts${tail ? `?${tail}` : ""}`,
+    );
+  },
+
+  domainReliability: (params?: {
+    domain?: string;
+    category?: string;
+    minSamples?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params?.domain) qs.set("domain", params.domain);
+    if (params?.category) qs.set("category", params.category);
+    if (params?.minSamples != null) qs.set("min_samples", String(params.minSamples));
+    const tail = qs.toString();
+    return api<DomainReliabilityResponse>(
+      `/quality-metrics/domain-reliability${tail ? `?${tail}` : ""}`,
+    );
+  },
+};
+
+export const reviewQueueApi = {
+  list: (params?: {
+    status?: ReviewQueueStatus;
+    trigger?: string;
+    limit?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    qs.set("status", params?.status ?? "pending");
+    if (params?.trigger) qs.set("trigger", params.trigger);
+    if (params?.limit != null) qs.set("limit", String(params.limit));
+    const tail = qs.toString();
+    return api<{ items: ReviewQueueItem[]; count: number; status: ReviewQueueStatus }>(
+      `/review-queue${tail ? `?${tail}` : ""}`,
+    );
+  },
+
+  detail: (itemId: string) =>
+    api<{ item: ReviewQueueItem }>(`/review-queue/${encodeURIComponent(itemId)}`),
+
+  audit: (itemId: string) =>
+    api<{ audit: ReviewQueueAuditEntry[]; count: number; item_id: string }>(
+      `/review-queue/${encodeURIComponent(itemId)}/audit`,
+    ),
+
+  takeAction: (
+    itemId: string,
+    body: { reviewer: string; action: ReviewQueueAction; note?: string },
+  ) =>
+    api<{ item: ReviewQueueItem }>(`/review-queue/${encodeURIComponent(itemId)}/action`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };

@@ -26,6 +26,7 @@ export default function TradesPage() {
   const [openTrades, setOpenTrades] = useState<SimTrade[]>([]);
   const [closedTrades, setClosedTrades] = useState<SimTrade[]>([]);
   const [loading, setLoading] = useState(true);
+  const [closingId, setClosingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -48,6 +49,22 @@ export default function TradesPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  async function closeTrade(trade: SimTrade) {
+    setClosingId(trade.event_id);
+    setError(null);
+    try {
+      await eventsApi.closeTrade(trade.event_id, {
+        exit_prob: trade.entry_prob,
+        exit_reason: "manual",
+      });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "手动平仓失败");
+    } finally {
+      setClosingId(null);
+    }
+  }
 
   const fmtDate = (iso: string | null) => {
     if (!iso) return "—";
@@ -144,6 +161,7 @@ export default function TradesPage() {
                         <th className="px-4 py-2">仓位%</th>
                         <th className="px-4 py-2">决策</th>
                         <th className="px-4 py-2">入场时间</th>
+                        <th className="px-4 py-2">操作</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -162,6 +180,16 @@ export default function TradesPage() {
                             }`}>{t.decision}</span>
                           </td>
                           <td className="px-4 py-2 text-xs text-muted-foreground">{fmtDate(t.entry_time)}</td>
+                          <td className="px-4 py-2">
+                            <button
+                              type="button"
+                              disabled={closingId === t.event_id}
+                              onClick={() => void closeTrade(t)}
+                              className="inline-flex h-7 items-center rounded-md border border-border bg-secondary px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-wait disabled:opacity-60"
+                            >
+                              手动平仓
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>

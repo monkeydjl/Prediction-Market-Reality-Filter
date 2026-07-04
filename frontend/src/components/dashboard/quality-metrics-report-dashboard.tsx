@@ -2,23 +2,37 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
-import { qualityMetricsApi, type QualityMetricsReport } from "@/lib/api";
+import {
+  qualityMetricsApi,
+  type DomainReliabilityRow,
+  type QualityMetricsAlertsResponse,
+  type QualityMetricsReport,
+} from "@/lib/api";
 import { ReportOverviewPanel } from "./report-overview-panel";
 import { ReportSliceTable } from "./report-slice-table";
 import { CalibrationDeviationChart } from "./calibration-deviation-chart";
+import { DomainReliabilityPanel, QualityAlertsPanel } from "./quality-entrypoint-panels";
 
 const REFRESH_MS = 60_000;
 
 export function QualityMetricsReportDashboard() {
   const [report, setReport] = useState<QualityMetricsReport | null>(null);
+  const [alerts, setAlerts] = useState<QualityMetricsAlertsResponse | null>(null);
+  const [domainReliability, setDomainReliability] = useState<DomainReliabilityRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const r = await qualityMetricsApi.report();
+      const [r, qa, dr] = await Promise.all([
+        qualityMetricsApi.report(),
+        qualityMetricsApi.alerts(),
+        qualityMetricsApi.domainReliability({ category: "_all", minSamples: 0 }),
+      ]);
       setReport(r);
+      setAlerts(qa);
+      setDomainReliability(dr.domains);
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载失败");
     } finally {
@@ -64,6 +78,10 @@ export function QualityMetricsReportDashboard() {
           {error}
         </div>
       )}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <QualityAlertsPanel alerts={alerts} />
+        <DomainReliabilityPanel rows={domainReliability} />
+      </div>
       <ReportOverviewPanel report={report} />
       <ReportSliceTable
         title="按来源类型"

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { FlaskConical } from "lucide-react";
 import { AppNav } from "@/components/app-nav";
 import { SignalSummary } from "@/components/detail/signal-summary";
+import { ConclusionChallengePanel } from "@/components/detail/conclusion-challenge-panel";
 import { SignalPanel } from "@/components/detail/signal-panel";
 import { DeltaPill } from "@/components/indicators";
 import { eventsApi } from "@/lib/api";
@@ -197,11 +198,14 @@ export default function AnalyzePage() {
                 <h2 className="text-sm font-semibold">证据与交叉验证</h2>
                 <SignalPanel record={result} />
               </section>
-              <SignalSummary
-                event={view}
-                crossValidation={result.cross_validation}
-                recommendedAction={result.intelligence_report?.recommended_action}
-              />
+              <div className="flex flex-col gap-4">
+                <SignalSummary
+                  event={view}
+                  crossValidation={result.cross_validation}
+                  recommendedAction={result.intelligence_report?.recommended_action}
+                />
+                <ConclusionChallengePanel challenge={result.conclusion_challenge} />
+              </div>
             </div>
           </>
         )}

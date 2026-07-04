@@ -228,4 +228,37 @@ describe("MatchPredictionCard engine label", () => {
     expect(screen.getByText("赔率")).toBeInTheDocument();
     expect(screen.getByText("未参与")).toBeInTheDocument();
   });
+
+  it("shows conclusion challenge result when the prediction was challenged", () => {
+    render(
+      <MatchPredictionCard
+        match={match}
+        prediction={prediction({
+          engine_used: "hybrid",
+          factors: {
+            challenge_result: {
+              verdict: "reject",
+              required_action: "downgrade_to_wait",
+              failed_checks: [
+                {
+                  check: "counterevidence",
+                  severity: "error",
+                  reason: "关键数据与结论相反",
+                },
+              ],
+              warnings: [],
+              challenge_summary: "否定门未通过，已降低置信度。",
+              attempt_count: 1,
+            },
+          },
+        } as Partial<MatchPrediction>)}
+      />,
+    );
+
+    expect(screen.getByText("否定门")).toBeInTheDocument();
+    expect(screen.getByText("已否定")).toBeInTheDocument();
+    expect(screen.getByText("否定门未通过，已降低置信度。")).toBeInTheDocument();
+    expect(screen.getByText("counterevidence")).toBeInTheDocument();
+    expect(screen.getByText("关键数据与结论相反")).toBeInTheDocument();
+  });
 });

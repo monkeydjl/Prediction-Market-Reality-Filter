@@ -8,6 +8,7 @@ import { compareEngines } from "@/lib/world-cup-predictions";
 import { translateTeamName } from "@/lib/team-names-zh";
 import { formatBeijingMatchDateTime } from "@/lib/world-cup-time";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ConclusionChallengePanel } from "@/components/detail/conclusion-challenge-panel";
 import { cn } from "@/lib/utils";
 
 interface MatchPredictionCardProps {
@@ -243,6 +244,7 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
   );
   const contributionWeights = prediction?.explanation_contributions?.engine_weights ?? null;
   const showCalibration = calibration != null && rawConfidence != null;
+  const challengeResult = prediction?.factors?.challenge_result ?? null;
   const hasExplanation =
     keyFactors.length > 0 ||
     reasoning != null ||
@@ -463,6 +465,13 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
             )}
 
           </div>
+        )}
+
+        {isPredicted && challengeResult && (
+          <ConclusionChallengePanel
+            challenge={challengeResult}
+            className="mt-3 bg-secondary/20"
+          />
         )}
 
         {/* Why this prediction — collapsible explanation */}

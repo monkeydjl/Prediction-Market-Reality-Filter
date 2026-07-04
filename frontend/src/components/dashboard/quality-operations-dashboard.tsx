@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import {
   qualityMetricsApi,
+  type DomainReliabilityRow,
+  type QualityMetricsAlertsResponse,
   type QualityMetricsSummary,
   type QualityMetricsAnomaly,
   type QualityMetricsDrift,
@@ -11,6 +13,7 @@ import {
 } from "@/lib/api";
 import { AnomalyBanner } from "./anomaly-banner";
 import { DriftPanel } from "./drift-panel";
+import { DomainReliabilityPanel, QualityAlertsPanel } from "./quality-entrypoint-panels";
 import { QualitySummaryPanel } from "./quality-summary-panel";
 import { SchedulerTimeseries } from "./scheduler-timeseries";
 
@@ -21,22 +24,28 @@ export function QualityOperationsDashboard() {
   const [timeseries, setTimeseries] = useState<SchedulerTimeseriesPoint[]>([]);
   const [anomalies, setAnomalies] = useState<QualityMetricsAnomaly[]>([]);
   const [drift, setDrift] = useState<QualityMetricsDrift | null>(null);
+  const [alerts, setAlerts] = useState<QualityMetricsAlertsResponse | null>(null);
+  const [domainReliability, setDomainReliability] = useState<DomainReliabilityRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [s, t, a, d] = await Promise.all([
+      const [s, t, a, d, qa, dr] = await Promise.all([
         qualityMetricsApi.summary("24h"),
         qualityMetricsApi.timeseries("7d"),
         qualityMetricsApi.anomalies(),
         qualityMetricsApi.drift(),
+        qualityMetricsApi.alerts(),
+        qualityMetricsApi.domainReliability({ category: "_all", minSamples: 0 }),
       ]);
       setSummary(s);
       setTimeseries(t.points);
       setAnomalies(a.anomalies);
       setDrift(d);
+      setAlerts(qa);
+      setDomainReliability(dr.domains);
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载失败");
     } finally {
@@ -86,6 +95,10 @@ export function QualityOperationsDashboard() {
         </div>
       )}
       <AnomalyBanner anomalies={anomalies} />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <QualityAlertsPanel alerts={alerts} />
+        <DomainReliabilityPanel rows={domainReliability} />
+      </div>
       <DriftPanel drift={drift} />
       <QualitySummaryPanel summary={summary} />
       <SchedulerTimeseries points={timeseries} />

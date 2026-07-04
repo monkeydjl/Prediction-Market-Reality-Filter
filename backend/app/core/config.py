@@ -688,6 +688,25 @@ class Settings:
     REVIEW_QUEUE_AUTO_RESOLVE_CONFIDENCE: float = float(
         os.getenv("REVIEW_QUEUE_AUTO_RESOLVE_CONFIDENCE", "0.95")
     )
+    # Conclusion challenge gate. Disabled by default; when enabled, the event
+    # and World Cup orchestrators run a post-conclusion "negative check" before
+    # strong outputs are published.
+    CONCLUSION_CHALLENGE_ENABLED: bool = _env_bool(
+        "CONCLUSION_CHALLENGE_ENABLED", "false"
+    )
+    CONCLUSION_CHALLENGE_LLM_CRITIC_ENABLED: bool = _env_bool(
+        "CONCLUSION_CHALLENGE_LLM_CRITIC_ENABLED", "false"
+    )
+    CONCLUSION_CHALLENGE_STRICTNESS: str = os.getenv(
+        "CONCLUSION_CHALLENGE_STRICTNESS", "normal"
+    )
+    CONCLUSION_CHALLENGE_MAX_RECOMPUTE_ATTEMPTS: int = int(
+        os.getenv("CONCLUSION_CHALLENGE_MAX_RECOMPUTE_ATTEMPTS", "1")
+    )
+    WORLD_CUP_CHALLENGE_ENABLED: bool = _env_bool(
+        "WORLD_CUP_CHALLENGE_ENABLED", "false"
+    )
+    EVENT_CHALLENGE_ENABLED: bool = _env_bool("EVENT_CHALLENGE_ENABLED", "false")
     # Plan 5 §5.4: Decision Timeline / Diff Viewer. When enabled, save_events
     # appends an overlay-bearing snapshot of each record to
     # decision_timeline_store so the /decision-timeline route can diff how an

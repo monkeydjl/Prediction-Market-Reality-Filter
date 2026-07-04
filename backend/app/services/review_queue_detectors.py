@@ -26,6 +26,10 @@ Trigger types (locked):
                                    No _detect_* function here; conflicts come
                                    from audit_quality_consistency checks and
                                    are enqueued directly via store.
+    conclusion_challenge_failed  - conclusion challenge gate rejected or could
+                                   not validate a strong conclusion. Enqueued
+                                   by event/world-cup orchestrators; no
+                                   _detect_* function here.
 """
 from __future__ import annotations
 

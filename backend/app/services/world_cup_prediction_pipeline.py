@@ -120,6 +120,40 @@ def _run_world_cup_conclusion_challenge(
         return updated
 
 
+def _conclusion_challenge_max_recompute_attempts() -> int:
+    try:
+        return max(
+            0,
+            int(getattr(settings, "CONCLUSION_CHALLENGE_MAX_RECOMPUTE_ATTEMPTS", 1)),
+        )
+    except (TypeError, ValueError):
+        return 1
+
+
+def _world_cup_challenge_retry_requested(
+    prediction_result: dict[str, Any],
+    *,
+    attempt_count: int,
+) -> bool:
+    factors = prediction_result.get("factors")
+    if not isinstance(factors, dict):
+        return False
+    challenge = factors.get("challenge_result")
+    if not isinstance(challenge, dict):
+        return False
+    if challenge.get("required_action") != "recalculate_once":
+        return False
+    return attempt_count < _conclusion_challenge_max_recompute_attempts()
+
+
+def _select_world_cup_challenge_retry_engine(current_engine: str) -> str:
+    if current_engine == "high_confidence":
+        return "integrated"
+    if current_engine == "integrated":
+        return "hybrid"
+    return current_engine or "hybrid"
+
+
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         if value is None:
@@ -652,6 +686,7 @@ async def run_prediction_pipeline(
     engine: PredictionEngine = "auto",
     session: Session | None = None,
     compare_only: bool = False,
+    _challenge_attempt_count: int = 0,
 ) -> dict[str, Any]:
     """Run complete prediction pipeline for a match.
 
@@ -1242,8 +1277,20 @@ async def run_prediction_pipeline(
         prediction_result = _run_world_cup_conclusion_challenge(
             match,
             prediction_result,
-            attempt_count=0,
+            attempt_count=_challenge_attempt_count,
         )
+        if _world_cup_challenge_retry_requested(
+            prediction_result,
+            attempt_count=_challenge_attempt_count,
+        ):
+            return await run_prediction_pipeline(
+                match_id=match_id,
+                trigger=trigger,
+                engine=_select_world_cup_challenge_retry_engine(str(selected_engine)),
+                session=session,
+                compare_only=compare_only,
+                _challenge_attempt_count=_challenge_attempt_count + 1,
+            )
 
         # Step 5: Save or update prediction in database (skipped in compare-only mode)
         if compare_only:

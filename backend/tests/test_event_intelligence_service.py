@@ -2768,3 +2768,63 @@ def test_event_conclusion_challenge_reject_downgrades(monkeypatch):
     eis._run_event_conclusion_challenge(record, attempt_count=0)
     assert record["final_displayed_direction"] == "WAIT"
     assert record["conclusion_challenge"]["verdict"] == "reject"
+
+
+def test_analyze_event_recomputes_once_when_challenge_requests_retry(monkeypatch):
+    analysis = {
+        "market_question": "Will X happen?",
+        "market_probability": 40,
+        "ai_probability": 62,
+        "confidence_score": 0.8,
+        "news_quality_score": 0.7,
+        "evidence_strength": 0.8,
+        "signal_direction": "LONG",
+        "signal_strength": "HIGH",
+        "risk_level": "MEDIUM",
+    }
+    overlay_calls = []
+
+    def fake_build_overlays(record, **_kwargs):
+        if not overlay_calls:
+            record["conclusion_challenge"] = {
+                "verdict": "revise",
+                "required_action": "recalculate_once",
+                "failed_checks": [{"check": "confidence_calibration"}],
+                "warnings": [],
+                "challenge_summary": "需要重新计算一次",
+                "attempt_count": 0,
+            }
+        else:
+            record["conclusion_challenge"] = {
+                "verdict": "pass",
+                "required_action": "allow_output",
+                "failed_checks": [],
+                "warnings": [],
+                "challenge_summary": "结论通过否定门检查。",
+                "attempt_count": 1,
+            }
+        overlay_calls.append(record["event_id"])
+
+    monkeypatch.setattr(
+        "app.services.ai_analysis_service.analyze_market",
+        AsyncMock(return_value=analysis),
+    )
+    monkeypatch.setattr(
+        "app.services.cross_validation_service.cross_validate",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(eis, "_build_all_overlays", fake_build_overlays)
+    monkeypatch.setattr(eis.settings, "CONCLUSION_CHALLENGE_MAX_RECOMPUTE_ATTEMPTS", 1)
+
+    record = _run(
+        eis.analyze_event(
+            "Will X happen?",
+            baseline_probability=40,
+            news_context="test context",
+            source={"type": "manual"},
+        )
+    )
+
+    assert len(overlay_calls) == 2
+    assert record["conclusion_challenge"]["verdict"] == "pass"
+    assert record["conclusion_challenge"]["attempt_count"] == 1

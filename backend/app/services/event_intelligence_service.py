@@ -293,6 +293,29 @@ def _run_event_conclusion_challenge(
         }
 
 
+def _conclusion_challenge_max_recompute_attempts() -> int:
+    try:
+        return max(
+            0,
+            int(getattr(settings, "CONCLUSION_CHALLENGE_MAX_RECOMPUTE_ATTEMPTS", 1)),
+        )
+    except (TypeError, ValueError):
+        return 1
+
+
+def _event_challenge_retry_requested(
+    record: dict[str, Any],
+    *,
+    attempt_count: int,
+) -> bool:
+    challenge = record.get("conclusion_challenge")
+    if not isinstance(challenge, dict):
+        return False
+    if challenge.get("required_action") != "recalculate_once":
+        return False
+    return attempt_count < _conclusion_challenge_max_recompute_attempts()
+
+
 def _build_all_overlays(
     record: dict[str, Any],
     *,
@@ -303,6 +326,7 @@ def _build_all_overlays(
     filtered_articles: list[dict[str, Any]] | None = None,
     volume: float | None = None,
     liquidity: float | None = None,
+    challenge_attempt_count: int = 0,
 ) -> None:
     """Build all 5 overlays + merge + guardrail in-place on ``record``.
 
@@ -689,7 +713,12 @@ def _build_all_overlays(
     except Exception as exc:
         logger.warning("guardrail evaluation failed: %s", exc)
 
-    _run_event_conclusion_challenge(record, attempt_count=0)
+    _run_event_conclusion_challenge(record, attempt_count=challenge_attempt_count)
+    if _event_challenge_retry_requested(
+        record,
+        attempt_count=challenge_attempt_count,
+    ):
+        return
 
     # Plan 4 §6.2: Review Queue detectors. Best-effort — runs pure-function
     # detectors after the guardrail + final_displayed_direction is set and
@@ -761,6 +790,7 @@ async def analyze_event(
     sentiment_profile: dict[str, Any] | None = None,
     market_quote: dict[str, Any] | None = None,
     filtered_articles: list[dict[str, Any]] | None = None,
+    _challenge_attempt_count: int = 0,
 ) -> dict[str, Any]:
     from app.services.ai_analysis_service import analyze_market
     from app.services.cross_validation_service import credibility_delta, cross_validate
@@ -828,7 +858,24 @@ async def analyze_event(
         filtered_articles=filtered_articles,
         volume=volume,
         liquidity=liquidity,
+        challenge_attempt_count=_challenge_attempt_count,
     )
+    if _event_challenge_retry_requested(
+        record,
+        attempt_count=_challenge_attempt_count,
+    ):
+        return await analyze_event(
+            event_question=event_question,
+            baseline_probability=baseline_probability,
+            news_context=news_context,
+            source=source,
+            volume=volume,
+            liquidity=liquidity,
+            sentiment_profile=sentiment_profile,
+            market_quote=market_quote,
+            filtered_articles=filtered_articles,
+            _challenge_attempt_count=_challenge_attempt_count + 1,
+        )
     return record
 
 

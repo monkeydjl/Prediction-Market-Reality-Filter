@@ -192,6 +192,147 @@ class WorldCupPredictionPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result["high_confidence_selection"])
         self.assertEqual(result["factors"]["challenge_result"]["verdict"], "reject")
 
+    def test_world_cup_challenge_retry_requested_once(self):
+        prediction = self._challenge_prediction()
+        prediction["factors"]["challenge_result"] = {
+            "required_action": "recalculate_once",
+            "verdict": "revise",
+        }
+        with patch.object(
+            pipeline.settings,
+            "CONCLUSION_CHALLENGE_MAX_RECOMPUTE_ATTEMPTS",
+            1,
+        ):
+            self.assertTrue(
+                pipeline._world_cup_challenge_retry_requested(
+                    prediction,
+                    attempt_count=0,
+                )
+            )
+            self.assertFalse(
+                pipeline._world_cup_challenge_retry_requested(
+                    prediction,
+                    attempt_count=1,
+                )
+            )
+
+    def test_world_cup_challenge_retry_engine_is_conservative(self):
+        self.assertEqual(
+            pipeline._select_world_cup_challenge_retry_engine("high_confidence"),
+            "integrated",
+        )
+        self.assertEqual(
+            pipeline._select_world_cup_challenge_retry_engine("integrated"),
+            "hybrid",
+        )
+
+    async def test_world_cup_challenge_retry_reruns_before_persistence(self):
+        self._add_match(
+            "future_challenge_retry",
+            kickoff_utc=utc_now_naive() + timedelta(hours=1),
+            status="scheduled",
+        )
+        challenge_calls = []
+
+        def fake_elo_engine(**_kwargs):
+            return {
+                "predicted_score": {"home": 1.0, "away": 1.0},
+                "outcome_probabilities": {
+                    "home_win": 0.35,
+                    "draw": 0.35,
+                    "away_win": 0.30,
+                },
+                "confidence": 0.60,
+                "prediction_method": "elo_odds",
+                "elo_ratings": {"home": 1500, "away": 1500},
+                "has_betting_odds": True,
+            }
+
+        async def fake_hybrid_engine(**_kwargs):
+            return {
+                "predicted_score": {"home": 2.0, "away": 1.0},
+                "outcome_probabilities": {
+                    "home_win": 0.60,
+                    "draw": 0.25,
+                    "away_win": 0.15,
+                },
+                "confidence": 0.82,
+                "prediction_method": "hybrid",
+                "rule_score": {"home": 2.0, "away": 1.0},
+                "ai_score": {"home": 2.0, "away": 1.0},
+                "ai_reasoning": "test",
+                "key_factors": ["test"],
+                "factors": {"data_quality": "real"},
+            }
+
+        def fake_get_engine(name):
+            if name == "elo_odds":
+                return fake_elo_engine
+            if name == "hybrid":
+                return fake_hybrid_engine
+            raise AssertionError(f"unexpected engine {name}")
+
+        def fake_challenge(_match, prediction_result, *, attempt_count=0):
+            challenge_calls.append((
+                attempt_count,
+                prediction_result["prediction_method"],
+            ))
+            updated = dict(prediction_result)
+            factors = dict(updated.get("factors") or {})
+            if attempt_count == 0:
+                factors["challenge_result"] = {
+                    "verdict": "revise",
+                    "required_action": "recalculate_once",
+                }
+            else:
+                factors["challenge_result"] = {
+                    "verdict": "pass",
+                    "required_action": "allow_output",
+                    "attempt_count": attempt_count,
+                }
+            updated["factors"] = factors
+            return updated
+
+        with (
+            patch.object(pipeline, "get_elo_rating", new_callable=AsyncMock) as get_elo_rating,
+            patch.object(pipeline, "get_cached_odds", new_callable=AsyncMock) as get_cached_odds,
+            patch.object(pipeline, "fetch_team_stats", return_value={"data_source": "real"}),
+            patch.object(pipeline, "fetch_h2h_data", return_value={"data_source": "real"}),
+            patch.object(pipeline, "get_match_weather", return_value=None),
+            patch.object(pipeline, "calculate_comprehensive_factors", return_value={}),
+            patch.object(pipeline, "build_prediction_factors", return_value={"data_quality": "real"}),
+            patch.object(pipeline, "get_engine", side_effect=fake_get_engine),
+            patch.object(pipeline, "apply_confidence_calibration", side_effect=lambda prediction, engine_name: prediction),
+            patch.object(pipeline, "format_tactical_summary", return_value="test tactical"),
+            patch.object(pipeline, "_run_world_cup_conclusion_challenge", side_effect=fake_challenge),
+            patch.object(pipeline.settings, "CONCLUSION_CHALLENGE_MAX_RECOMPUTE_ATTEMPTS", 1),
+        ):
+            get_elo_rating.return_value = {"elo_rating": 1500.0, "source": "test"}
+            get_cached_odds.return_value = {
+                "home": 2.0,
+                "draw": 3.0,
+                "away": 4.0,
+                "source": "test",
+            }
+
+            result = await pipeline.run_prediction_pipeline(
+                "future_challenge_retry",
+                engine="integrated",
+                session=self.session,
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["engine_used"], "hybrid")
+        self.assertEqual(
+            challenge_calls,
+            [(0, "integrated (elo_odds 70% + hybrid 30%)"), (1, "hybrid")],
+        )
+        self.assertEqual(self.session.query(MatchPrediction).count(), 1)
+        self.assertEqual(self.session.query(PredictionHistory).count(), 1)
+        prediction = self.session.query(MatchPrediction).one()
+        self.assertEqual(prediction.prediction_method, "hybrid")
+        self.assertEqual(prediction.factors["challenge_result"]["verdict"], "pass")
+
     def test_openfootball_context_enriches_stats_and_factors(self):
         stats = {}
         team_context = {

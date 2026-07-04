@@ -69,6 +69,57 @@ PredictionEngine = Literal["elo_odds", "hybrid", "integrated", "high_confidence"
 DEFAULT_ENGINE: PredictionEngine = "auto"  # Auto-select based on data availability
 
 
+def _run_world_cup_conclusion_challenge(
+    match: MatchFixture,
+    prediction_result: dict[str, Any],
+    *,
+    attempt_count: int = 0,
+) -> dict[str, Any]:
+    if not (
+        settings.CONCLUSION_CHALLENGE_ENABLED
+        and settings.WORLD_CUP_CHALLENGE_ENABLED
+    ):
+        return prediction_result
+    try:
+        from app.services.conclusion_challenge_service import challenge_conclusion
+        from app.services.conclusion_challenge_world_cup_adapter import (
+            apply_world_cup_challenge_result,
+            build_world_cup_challenge_input,
+        )
+
+        factors = prediction_result.get("factors")
+        payload = build_world_cup_challenge_input(
+            match,
+            prediction_result,
+            factors if isinstance(factors, dict) else {},
+            attempt_count=attempt_count,
+            allow_llm_critic=settings.CONCLUSION_CHALLENGE_LLM_CRITIC_ENABLED,
+            strictness=settings.CONCLUSION_CHALLENGE_STRICTNESS,
+        )
+        result = challenge_conclusion(payload)
+        return apply_world_cup_challenge_result(prediction_result, result)
+    except Exception as exc:
+        logger.warning("world cup conclusion challenge failed: %s", exc, exc_info=True)
+        updated = dict(prediction_result)
+        factors = dict(updated.get("factors") or {})
+        factors["challenge_result"] = {
+            "verdict": "pass_with_warnings",
+            "required_action": "allow_output",
+            "failed_checks": [],
+            "warnings": [{
+                "check": "challenge_error",
+                "severity": "warning",
+                "reason": "结论否定门执行失败，已保留原预测。",
+                "details": {"error": str(exc)},
+            }],
+            "challenge_summary": "结论否定门执行失败，已保留原预测。",
+            "critic_notes": {},
+            "attempt_count": attempt_count,
+        }
+        updated["factors"] = factors
+        return updated
+
+
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         if value is None:
@@ -1187,6 +1238,12 @@ async def run_prediction_pipeline(
                            elo_comparison['predicted_score'], prediction_result['predicted_score'])
             except Exception as alt_err:
                 logger.warning('Alternative elo_odds engine failed: %s', alt_err)
+
+        prediction_result = _run_world_cup_conclusion_challenge(
+            match,
+            prediction_result,
+            attempt_count=0,
+        )
 
         # Step 5: Save or update prediction in database (skipped in compare-only mode)
         if compare_only:

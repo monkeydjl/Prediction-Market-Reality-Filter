@@ -121,6 +121,77 @@ class WorldCupPredictionPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h2h["data_source"], "github_martj42_international_results")
         self.assertEqual(h2h["matches_played"], 2)
 
+    def _challenge_match(self):
+        return type(
+            "Match",
+            (),
+            {
+                "match_id": "wc-1",
+                "home_team": "A",
+                "away_team": "B",
+                "stage": "group_stage",
+            },
+        )()
+
+    def _challenge_prediction(self):
+        return {
+            "predicted_score": {"home": 2.0, "away": 1.0},
+            "outcome_probabilities": {
+                "home_win": 0.52,
+                "draw": 0.24,
+                "away_win": 0.24,
+            },
+            "confidence": 0.82,
+            "prediction_method": "integrated",
+            "high_confidence_selection": {"selected_engine": "integrated"},
+            "factors": {"data_quality": "real"},
+        }
+
+    def test_world_cup_challenge_flag_off_noops(self):
+        with (
+            patch.object(pipeline.settings, "CONCLUSION_CHALLENGE_ENABLED", False),
+            patch.object(pipeline.settings, "WORLD_CUP_CHALLENGE_ENABLED", False),
+        ):
+            result = pipeline._run_world_cup_conclusion_challenge(
+                self._challenge_match(),
+                self._challenge_prediction(),
+                attempt_count=0,
+            )
+        self.assertNotIn("challenge_result", result["factors"])
+        self.assertEqual(result["confidence"], 0.82)
+
+    def test_world_cup_challenge_reject_caps_confidence(self):
+        def fake_challenge(payload):
+            return {
+                "verdict": "reject",
+                "required_action": "downgrade_to_wait",
+                "failed_checks": [{"check": "counterevidence", "reason": "赔率反向"}],
+                "warnings": [],
+                "confidence_adjustment": {"cap": 0.60, "reason": "否定门未通过"},
+                "challenge_summary": "结论否定门结果：reject。主要原因：赔率反向",
+                "critic_notes": {},
+                "attempt_count": 0,
+            }
+
+        with (
+            patch.object(pipeline.settings, "CONCLUSION_CHALLENGE_ENABLED", True),
+            patch.object(pipeline.settings, "WORLD_CUP_CHALLENGE_ENABLED", True),
+            patch.object(pipeline.settings, "CONCLUSION_CHALLENGE_LLM_CRITIC_ENABLED", False),
+            patch.object(pipeline.settings, "CONCLUSION_CHALLENGE_STRICTNESS", "normal"),
+            patch(
+                "app.services.conclusion_challenge_service.challenge_conclusion",
+                new=fake_challenge,
+            ),
+        ):
+            result = pipeline._run_world_cup_conclusion_challenge(
+                self._challenge_match(),
+                self._challenge_prediction(),
+                attempt_count=0,
+            )
+        self.assertEqual(result["confidence"], 0.60)
+        self.assertIsNone(result["high_confidence_selection"])
+        self.assertEqual(result["factors"]["challenge_result"]["verdict"], "reject")
+
     def test_openfootball_context_enriches_stats_and_factors(self):
         stats = {}
         team_context = {

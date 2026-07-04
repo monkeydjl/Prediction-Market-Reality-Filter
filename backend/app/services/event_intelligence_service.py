@@ -250,6 +250,49 @@ def build_event_record(
     }
 
 
+def _run_event_conclusion_challenge(
+    record: dict[str, Any],
+    *,
+    attempt_count: int = 0,
+) -> None:
+    if not (
+        settings.CONCLUSION_CHALLENGE_ENABLED
+        and settings.EVENT_CHALLENGE_ENABLED
+    ):
+        return
+    try:
+        from app.services.conclusion_challenge_event_adapter import (
+            apply_event_challenge_result,
+            build_event_challenge_input,
+        )
+        from app.services.conclusion_challenge_service import challenge_conclusion
+
+        payload = build_event_challenge_input(
+            record,
+            attempt_count=attempt_count,
+            allow_llm_critic=settings.CONCLUSION_CHALLENGE_LLM_CRITIC_ENABLED,
+            strictness=settings.CONCLUSION_CHALLENGE_STRICTNESS,
+        )
+        result = challenge_conclusion(payload)
+        apply_event_challenge_result(record, result)
+    except Exception as exc:
+        logger.warning("conclusion challenge failed: %s", exc, exc_info=True)
+        record["conclusion_challenge"] = {
+            "verdict": "pass_with_warnings",
+            "required_action": "allow_output",
+            "failed_checks": [],
+            "warnings": [{
+                "check": "challenge_error",
+                "severity": "warning",
+                "reason": "结论否定门执行失败，已保留原结论。",
+                "details": {"error": str(exc)},
+            }],
+            "challenge_summary": "结论否定门执行失败，已保留原结论。",
+            "critic_notes": {},
+            "attempt_count": attempt_count,
+        }
+
+
 def _build_all_overlays(
     record: dict[str, Any],
     *,
@@ -646,6 +689,8 @@ def _build_all_overlays(
     except Exception as exc:
         logger.warning("guardrail evaluation failed: %s", exc)
 
+    _run_event_conclusion_challenge(record, attempt_count=0)
+
     # Plan 4 §6.2: Review Queue detectors. Best-effort — runs pure-function
     # detectors after the guardrail + final_displayed_direction is set and
     # enqueues candidates into review_queue_store. Wrapped in try/except so
@@ -663,6 +708,30 @@ def _build_all_overlays(
                     mismatch_confidence_threshold=settings.REVIEW_QUEUE_MISMATCH_CONFIDENCE,
                     auto_resolve_confidence_threshold=settings.REVIEW_QUEUE_AUTO_RESOLVE_CONFIDENCE,
                 )
+                challenge = record.get("conclusion_challenge")
+                if isinstance(challenge, dict) and challenge.get("verdict") in {
+                    "reject",
+                    "insufficient_evidence",
+                    "revise",
+                }:
+                    candidates.append({
+                        "trigger": "conclusion_challenge_failed",
+                        "severity": (
+                            "ERROR"
+                            if challenge.get("verdict")
+                            in {"reject", "insufficient_evidence"}
+                            else "WARN"
+                        ),
+                        "reason": (
+                            challenge.get("challenge_summary")
+                            or "结论未通过否定门检查"
+                        ),
+                        "context": {
+                            "verdict": challenge.get("verdict"),
+                            "required_action": challenge.get("required_action"),
+                            "failed_checks": challenge.get("failed_checks", []),
+                        },
+                    })
                 for candidate in candidates:
                     try:
                         review_queue_store.enqueue_item(

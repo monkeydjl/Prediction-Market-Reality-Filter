@@ -2714,3 +2714,57 @@ class LLMTelemetryIntegrationTests(unittest.TestCase):
         forbidden = ("long", "short", "buy", "sell", "position", "kelly", "order")
         for word in forbidden:
             self.assertNotIn(word, reason.lower())
+
+
+def _challenge_event_record():
+    return {
+        "event_id": "evt-1",
+        "event_title": "Will X happen?",
+        "probability": {"baseline": 40.0, "estimated": 62.0, "change": 22.0},
+        "actionable_recommendation": {
+            "direction": "YES",
+            "confidence": "high",
+            "risk_level": "medium",
+        },
+        "final_displayed_direction": "YES",
+        "evidence_breakdown": [],
+        "risk": {"level": "medium", "flags": []},
+    }
+
+
+def test_event_conclusion_challenge_flag_off_noops(monkeypatch):
+    record = _challenge_event_record()
+    monkeypatch.setattr(eis.settings, "CONCLUSION_CHALLENGE_ENABLED", False)
+    monkeypatch.setattr(eis.settings, "EVENT_CHALLENGE_ENABLED", False)
+    eis._run_event_conclusion_challenge(record, attempt_count=0)
+    assert "conclusion_challenge" not in record
+    assert record["final_displayed_direction"] == "YES"
+
+
+def test_event_conclusion_challenge_reject_downgrades(monkeypatch):
+    record = _challenge_event_record()
+    monkeypatch.setattr(eis.settings, "CONCLUSION_CHALLENGE_ENABLED", True)
+    monkeypatch.setattr(eis.settings, "EVENT_CHALLENGE_ENABLED", True)
+    monkeypatch.setattr(eis.settings, "CONCLUSION_CHALLENGE_LLM_CRITIC_ENABLED", False)
+    monkeypatch.setattr(eis.settings, "CONCLUSION_CHALLENGE_STRICTNESS", "normal")
+
+    def fake_challenge(payload):
+        return {
+            "verdict": "reject",
+            "required_action": "downgrade_to_wait",
+            "failed_checks": [
+                {"check": "counterevidence", "reason": "存在高可信反证"}
+            ],
+            "warnings": [],
+            "challenge_summary": "结论否定门结果：reject。主要原因：存在高可信反证",
+            "critic_notes": {},
+            "attempt_count": 0,
+        }
+
+    monkeypatch.setattr(
+        "app.services.conclusion_challenge_service.challenge_conclusion",
+        fake_challenge,
+    )
+    eis._run_event_conclusion_challenge(record, attempt_count=0)
+    assert record["final_displayed_direction"] == "WAIT"
+    assert record["conclusion_challenge"]["verdict"] == "reject"

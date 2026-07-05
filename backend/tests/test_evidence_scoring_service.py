@@ -22,6 +22,7 @@ from app.services.evidence_scoring_service import (
     average_evidence_field,
     average_field,
     build_evidence_profile,
+    is_official_source,
     normalize_source_name,
 )
 from app.services.news_filter_service import score_source_quality
@@ -56,6 +57,18 @@ OPPOSE_ARTICLES = [
 ]
 
 
+class OfficialSourceDetectionTests(unittest.TestCase):
+    def test_recognizes_clear_official_source_labels(self):
+        self.assertTrue(is_official_source("SEC"))
+        self.assertTrue(is_official_source("Federal Reserve"))
+        self.assertTrue(is_official_source("Supreme Court"))
+
+    def test_rejects_media_and_substring_matches(self):
+        self.assertFalse(is_official_source("Reuters"))
+        self.assertFalse(is_official_source("FedEx News"))
+        self.assertFalse(is_official_source("Global News Agency"))
+
+
 class BuildEvidenceProfileTests(unittest.TestCase):
     def test_empty_articles_returns_neutral_default_profile(self):
         self.assertEqual(
@@ -70,10 +83,28 @@ class BuildEvidenceProfileTests(unittest.TestCase):
                 "freshness_score": 0.0,
                 "resolution_relevance_score": 0.0,
                 "source_count": 0,
+                "independent_source_count": 0,
+                "official_source_count": 0,
+                "counterevidence_considered": False,
                 "sources": [],
                 "items": [],
             },
         )
+
+    def test_profile_counts_independent_and_official_sources(self):
+        articles = [
+            _article("Agency approves plan", "official regulator approved the plan", "SEC", quality=0.9),
+            _article("Reuters reports approval", "regulator approved and confirms launch", "Reuters Politics"),
+            _article("Reuters business repeats approval", "regulator approved and confirms launch", "Reuters Business"),
+            _article("Court blocks plan", "court rejected and denied the request", "Supreme Court"),
+        ]
+
+        profile = build_evidence_profile(QUESTION, articles)
+
+        self.assertEqual(profile["source_count"], 3)
+        self.assertEqual(profile["independent_source_count"], 3)
+        self.assertEqual(profile["official_source_count"], 2)
+        self.assertTrue(profile["counterevidence_considered"])
 
     def test_one_directional_set_has_no_conflict_and_full_strength(self):
         """2 support articles, 0 oppose -> two-stage formula.

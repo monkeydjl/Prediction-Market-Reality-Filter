@@ -301,6 +301,7 @@ def build_news_context(
     semantics: dict[str, Any],
 ) -> str:
     semantics_header = build_semantics_context(semantics)
+    counterevidence = "true" if evidence_profile.get("counterevidence_considered", False) else "false"
     evidence_header = (
         "EVIDENCE PROFILE\n"
         f"DIRECTION: {evidence_profile['evidence_direction']}\n"
@@ -308,7 +309,10 @@ def build_news_context(
         f"CONFLICT: {evidence_profile['conflict_score']}\n"
         f"FRESHNESS: {evidence_profile['freshness_score']}\n"
         f"RESOLUTION_RELEVANCE: {evidence_profile['resolution_relevance_score']}\n"
-        f"SOURCE_COUNT: {evidence_profile['source_count']}"
+        f"SOURCE_COUNT: {evidence_profile['source_count']}\n"
+        f"INDEPENDENT_SOURCE_COUNT: {evidence_profile.get('independent_source_count', evidence_profile['source_count'])}\n"
+        f"OFFICIAL_SOURCE_COUNT: {evidence_profile.get('official_source_count', 0)}\n"
+        f"COUNTEREVIDENCE_CONSIDERED: {counterevidence}"
     )
     news_items = "\n\n".join(
         "NEWS ITEM\n"

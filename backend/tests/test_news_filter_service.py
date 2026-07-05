@@ -2,6 +2,7 @@ import unittest
 
 from app.services.market_semantics_service import parse_market_semantics
 from app.services.news_filter_service import (
+    build_news_context,
     filter_news_for_market,
     relevance_score,
     score_article,
@@ -56,7 +57,8 @@ class NewsFilterServiceContractTests(unittest.TestCase):
                 "evidence_direction", "evidence_strength", "support_score",
                 "oppose_score", "neutral_score", "conflict_score",
                 "freshness_score", "resolution_relevance_score",
-                "source_count", "sources", "items",
+                "source_count", "independent_source_count", "official_source_count",
+                "counterevidence_considered", "sources", "items",
             },
         )
         # Deterministic filtering: trusted + relevant kept, low-quality short
@@ -72,6 +74,35 @@ class NewsFilterServiceContractTests(unittest.TestCase):
         self.assertIsInstance(result["context"], str)
         self.assertIn("EVIDENCE PROFILE", result["context"])
         self.assertIn("NEWS ITEM", result["context"])
+
+    def test_context_includes_evidence_quality_v2_fields(self):
+        context = build_news_context(
+            articles=[
+                {
+                    "source": "Reuters",
+                    "quality_score": 0.8,
+                    "relevance_score": 0.7,
+                    "title": "Agency approves plan",
+                    "description": "Official filing confirms the plan.",
+                }
+            ],
+            evidence_profile={
+                "evidence_direction": "support",
+                "evidence_strength": 0.6,
+                "conflict_score": 0.1,
+                "freshness_score": 0.8,
+                "resolution_relevance_score": 0.7,
+                "source_count": 3,
+                "independent_source_count": 3,
+                "official_source_count": 1,
+                "counterevidence_considered": True,
+            },
+            semantics=parse_market_semantics("Will the agency approve the plan?"),
+        )
+
+        self.assertIn("INDEPENDENT_SOURCE_COUNT: 3", context)
+        self.assertIn("OFFICIAL_SOURCE_COUNT: 1", context)
+        self.assertIn("COUNTEREVIDENCE_CONSIDERED: true", context)
 
     def test_empty_articles(self):
         result = filter_news_for_market("Will Bitcoin reach $100k in 2026?", [])

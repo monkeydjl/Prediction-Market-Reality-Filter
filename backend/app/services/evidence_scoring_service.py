@@ -13,6 +13,7 @@ deterministic and cheap.  Weighted fusion gives the best of both: LLM leads when
 confident, keywords lead when LLM is uncertain or unavailable.
 """
 
+import re
 from typing import Any
 
 from app.services.evidence_extraction_service import classify_evidence
@@ -21,6 +22,45 @@ from app.services.market_semantics_service import parse_market_semantics
 # Fusion weight: how much the LLM sentiment contributes vs the keyword signal.
 # 0.6 = LLM leads when both agree/disagree; keywords still provide 40% anchor.
 _SENTIMENT_WEIGHT = 0.6
+
+
+_OFFICIAL_SOURCE_TERMS = (
+    "official",
+    "government",
+    "gov",
+    "regulator",
+    "ministry",
+    "department",
+    "court",
+    "supreme court",
+    "white house",
+    "sec",
+    "cftc",
+    "federal reserve",
+    "fed",
+    "ecb",
+    "central bank",
+    "treasury",
+)
+
+
+def is_official_source(source: str) -> bool:
+    """Return True for official/regulatory/government source labels.
+
+    Source names are feed/publisher labels, not guaranteed domains. Keep this
+    conservative: identify clear official institutions and regulatory bodies;
+    do not infer official status for general media outlets reporting official
+    news. Match only complete terms so labels like FedEx are not counted as
+    the Fed, and generic news agencies are not counted as official sources.
+    """
+    source_lower = (source or "").lower().strip()
+    if not source_lower:
+        return False
+
+    return any(
+        re.search(rf"\b{re.escape(term)}\b", source_lower)
+        for term in _OFFICIAL_SOURCE_TERMS
+    )
 
 
 def normalize_source_name(source: str) -> str:
@@ -191,6 +231,12 @@ def build_evidence_profile(
         for item in evidence_items
         if item["source"]
     })
+    official_sources = sorted({
+        normalize_source_name(item["source"])
+        for item in evidence_items
+        if item["source"] and is_official_source(item["source"])
+    })
+    counterevidence_considered = support > 0 and oppose > 0
     freshness = average_field(articles, "age_score")
     resolution_relevance = average_evidence_field(
         evidence_items,
@@ -207,6 +253,9 @@ def build_evidence_profile(
         "freshness_score": round(freshness, 3),
         "resolution_relevance_score": round(resolution_relevance, 3),
         "source_count": len(sources),
+        "independent_source_count": len(sources),
+        "official_source_count": len(official_sources),
+        "counterevidence_considered": counterevidence_considered,
         "sources": sources[:10],
         "items": evidence_items[:10],
     }

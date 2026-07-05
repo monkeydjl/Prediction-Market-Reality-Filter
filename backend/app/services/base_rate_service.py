@@ -327,8 +327,11 @@ def anchor_probability(
     alpha = confidence ** 1.5  # 低置信时快速衰减
     prior = effective_prior if effective_prior is not None else base_rate.prior
     anchored = llm_probability * alpha + prior * (1.0 - alpha)
-    # 软限制到历史合理范围
-    anchored = max(base_rate.low - 5.0, min(base_rate.high + 5.0, anchored))
+    # Soft-limit to the historical range; when effective_prior is supplied,
+    # include that dynamic anchor so unknown markets are not forced toward 50.
+    soft_low = min(base_rate.low, prior) - 5.0
+    soft_high = max(base_rate.high, prior) + 5.0
+    anchored = max(soft_low, min(soft_high, anchored))
     return round(anchored, 2)
 
 

@@ -175,11 +175,13 @@ async def analyze_market(
         base_rate_category=base_rate.category,
     )
     evidence_constrained_probability = probability_constraint["probability"]
-    # base_rate 锚定作为最终步骤，不再第二次 clamp（避免双重压缩）
+    effective_anchor_prior = market_probability if base_rate.category == "unknown" else None
+    # Final base-rate anchoring step; do not clamp a second time.
     ai_probability = anchor_probability(
         llm_probability=evidence_constrained_probability,
         base_rate=base_rate,
         confidence=confidence_score,
+        effective_prior=effective_anchor_prior,
     )
     base_rate_probability = ai_probability  # 保留字段名兼容
     divergence = round(ai_probability - market_probability, 2)
@@ -242,6 +244,9 @@ async def analyze_market(
         "condition_type": semantics_profile["condition_type"],
         "base_rate_category": base_rate.category,
         "base_rate_prior": base_rate.prior,
+        "base_rate_effective_prior": (
+            effective_anchor_prior if effective_anchor_prior is not None else base_rate.prior
+        ),
         "base_rate_range": [base_rate.low, base_rate.high],
         "evidence_constrained_probability": evidence_constrained_probability,
         "evidence_quality_factor": probability_constraint["evidence_quality_factor"],

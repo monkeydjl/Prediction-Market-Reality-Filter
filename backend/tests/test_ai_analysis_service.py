@@ -456,6 +456,48 @@ class AnalyzeMarketContractTests(unittest.TestCase):
         self.assertIn("weak_evidence_cap", result["confidence_cap_reasons"])
         self.assertIn("low_probability_evidence_cap", result["confidence_cap_reasons"])
 
+    def test_analyze_market_unknown_category_anchors_to_market_not_static_fifty(self):
+        weak_context = (
+            "EVIDENCE PROFILE\n"
+            "direction: support\n"
+            "strength: 0.12\n"
+            "conflict: 0.65\n"
+            "freshness: 0.25\n"
+            "resolution_relevance: 0.15\n"
+            "source_count: 1\n"
+            "MARKET SEMANTICS\n"
+            "condition_type: unknown\n"
+            "ambiguity_score: 75\n"
+            "news item: unconfirmed rumor. quality: 0.25 relevance: 0.20\n"
+        )
+
+        async def run():
+            with (
+                patch.object(ai, "_ask_ai", new=AsyncMock(return_value={
+                    "ai_probability": 34,
+                    "narrative_type": "factual",
+                    "narrative_summary": "Weak rumor points upward.",
+                    "reasoning": REASONING,
+                    "has_strong_evidence": False,
+                    "reasoning_consistency": 0.9,
+                })),
+                patch.object(ai, "translate_title", new=AsyncMock(return_value="")),
+            ):
+                return await ai.analyze_market(
+                    market_question="Will an obscure unclassified event happen this week?",
+                    market_probability=4,
+                    news_context=weak_context,
+                    volume=1000,
+                    liquidity=500,
+                )
+
+        result = asyncio.run(run())
+        self.assertEqual(result["base_rate_category"], "unknown")
+        self.assertEqual(result["base_rate_prior"], 50)
+        self.assertEqual(result["base_rate_effective_prior"], 4)
+        self.assertLessEqual(result["evidence_constrained_probability"], 14.0)
+        self.assertLessEqual(result["ai_probability"], 14.0)
+
     def test_analyze_market_fallback_contract(self):
         async def run():
             with (
@@ -507,6 +549,7 @@ class AnalyzeMarketContractTests(unittest.TestCase):
                 "condition_type": "threshold",
                 "base_rate_category": "unknown",
                 "base_rate_prior": 50,
+                "base_rate_effective_prior": 50.0,
                 "base_rate_range": [20, 80],
                 "evidence_constrained_probability": 51.66,
                 "evidence_quality_factor": 0.693,

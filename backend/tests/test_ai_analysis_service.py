@@ -22,6 +22,7 @@ from app.services.ai_analysis_service import (
     apply_longshot_guardrail,
     build_risk_flags,
     calculate_confidence_score,
+    calculate_confidence_breakdown,
     calculate_evidence_quality,
     calculate_narrative_risk_score,
     calculate_position_size,
@@ -115,6 +116,29 @@ class ProbabilityMathTests(unittest.TestCase):
             ),
             0.701,
         )
+
+    def test_calculate_confidence_breakdown_marks_source_structure_used(self):
+        breakdown = calculate_confidence_breakdown(
+            {
+                "source_count": 4,
+                "independent_source_count": 4,
+                "official_source_count": 2,
+                "counterevidence_considered": True,
+            }
+        )
+
+        self.assertEqual(breakdown["source_count"], 4)
+        self.assertEqual(breakdown["independent_source_count"], 4)
+        self.assertEqual(breakdown["official_source_count"], 2)
+        self.assertTrue(breakdown["counterevidence_considered"])
+        self.assertTrue(breakdown["source_structure_used"])
+        self.assertGreater(
+            breakdown["source_structure_score"],
+            breakdown["news_quantity_score"],
+        )
+        self.assertIn("independent_source_support", breakdown["source_quality_reasons"])
+        self.assertIn("official_source_support", breakdown["source_quality_reasons"])
+        self.assertIn("counterevidence_considered", breakdown["source_quality_reasons"])
 
     def test_calculate_confidence_score_rewards_v2_source_quality(self):
         base_evidence = {
@@ -637,6 +661,56 @@ class AnalyzeMarketContractTests(unittest.TestCase):
         self.assertLessEqual(result["evidence_constrained_probability"], 14.0)
         self.assertLessEqual(result["ai_probability"], 14.0)
 
+    def test_analyze_market_returns_confidence_breakdown(self):
+        strong_source_context = (
+            "EVIDENCE PROFILE\n"
+            "direction: support\n"
+            "strength: 0.72\n"
+            "conflict: 0.10\n"
+            "freshness: 0.80\n"
+            "resolution_relevance: 0.74\n"
+            "source_count: 4\n"
+            "independent_source_count: 4\n"
+            "official_source_count: 2\n"
+            "counterevidence_considered: true\n"
+            "MARKET SEMANTICS\n"
+            "condition_type: threshold\n"
+            "ambiguity_score: 20\n"
+            "news item: Reuters reports an official filing. quality: 0.72 relevance: 0.74\n"
+        )
+
+        async def run():
+            with (
+                patch.object(ai, "_ask_ai", new=AsyncMock(return_value={
+                    "ai_probability": 57,
+                    "narrative_type": "factual",
+                    "narrative_summary": "Strong source structure supports the estimate.",
+                    "reasoning": REASONING,
+                    "has_strong_evidence": True,
+                    "reasoning_consistency": 0.7,
+                })),
+                patch.object(ai, "translate_title", new=AsyncMock(return_value="")),
+            ):
+                return await ai.analyze_market(
+                    market_question="Will the agency approve the policy before the deadline?",
+                    market_probability=50,
+                    news_context=strong_source_context,
+                    volume=200000,
+                    liquidity=60000,
+                )
+
+        result = asyncio.run(run())
+        breakdown = result["confidence_breakdown"]
+
+        self.assertEqual(breakdown["source_count"], 4)
+        self.assertEqual(breakdown["independent_source_count"], 4)
+        self.assertEqual(breakdown["official_source_count"], 2)
+        self.assertTrue(breakdown["counterevidence_considered"])
+        self.assertTrue(breakdown["source_structure_used"])
+        self.assertIn("independent_source_support", breakdown["source_quality_reasons"])
+        self.assertIn("official_source_support", breakdown["source_quality_reasons"])
+        self.assertIn("counterevidence_considered", breakdown["source_quality_reasons"])
+
     def test_analyze_market_fallback_contract(self):
         async def run():
             with (
@@ -666,6 +740,21 @@ class AnalyzeMarketContractTests(unittest.TestCase):
                 "overreaction_score": 0.74,
                 "confidence_score": 0.584,
                 "confidence_cap_reasons": [],
+                "confidence_breakdown": {
+                    "source_count": 4,
+                    "independent_source_count": 3,
+                    "official_source_count": 1,
+                    "counterevidence_considered": True,
+                    "news_quantity_score": 0.8,
+                    "source_structure_score": 0.67,
+                    "effective_source_score": 0.8,
+                    "source_structure_used": False,
+                    "source_quality_reasons": [
+                        "independent_source_support",
+                        "official_source_support",
+                        "counterevidence_considered",
+                    ],
+                },
                 "narrative_type": "evidence_fallback",
                 "title_zh": "",
                 "narrative_summary": "基于结构化新闻证据的确定性回退分析。",

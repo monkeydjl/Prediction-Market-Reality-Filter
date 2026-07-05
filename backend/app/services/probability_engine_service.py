@@ -599,6 +599,54 @@ def score_news_quality(news_context: str) -> float:
     return round(_clamp(quality, 0, 1), 3)
 
 
+def calculate_confidence_breakdown(
+    evidence_profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    evidence = evidence_profile or default_evidence_profile()
+    source_count = max(0, int(evidence.get("source_count", 0) or 0))
+    independent_source_count = max(
+        0,
+        int(evidence.get("independent_source_count", 0) or 0),
+    )
+    official_source_count = max(0, int(evidence.get("official_source_count", 0) or 0))
+    counterevidence_considered = bool(evidence.get("counterevidence_considered", False))
+
+    news_quantity_score = _clamp(source_count / 5.0, 0, 1)
+    source_structure_score = _clamp(
+        _clamp(independent_source_count / 5.0, 0, 1) * 0.45
+        + _clamp(official_source_count / 2.0, 0, 1) * 0.30
+        + (1.0 if counterevidence_considered else 0.0) * 0.25,
+        0,
+        1,
+    )
+
+    reasons: list[str] = []
+    if source_count < 2:
+        reasons.append("single_or_missing_source")
+    if source_count >= 3 and independent_source_count < 2:
+        reasons.append("low_source_diversity")
+    if independent_source_count >= 3:
+        reasons.append("independent_source_support")
+    if official_source_count >= 1:
+        reasons.append("official_source_support")
+    if counterevidence_considered:
+        reasons.append("counterevidence_considered")
+    else:
+        reasons.append("counterevidence_not_considered")
+
+    return {
+        "source_count": source_count,
+        "independent_source_count": independent_source_count,
+        "official_source_count": official_source_count,
+        "counterevidence_considered": counterevidence_considered,
+        "news_quantity_score": round(news_quantity_score, 3),
+        "source_structure_score": round(source_structure_score, 3),
+        "effective_source_score": round(max(news_quantity_score, source_structure_score), 3),
+        "source_structure_used": source_structure_score > news_quantity_score,
+        "source_quality_reasons": reasons,
+    }
+
+
 def calculate_confidence_score(
     news_context: str,
     news_quality_score: float,
@@ -611,19 +659,8 @@ def calculate_confidence_score(
 ) -> float:
     # news_quantity: source_count から来る（正則に依存しない）
     evidence = evidence_profile or default_evidence_profile()
-    source_count = evidence.get("source_count", 0)
-    news_quantity_score = _clamp(source_count / 5.0, 0, 1)
-    independent_source_count = max(0, int(evidence.get("independent_source_count", 0) or 0))
-    official_source_count = max(0, int(evidence.get("official_source_count", 0) or 0))
-    counterevidence_score = 1.0 if evidence.get("counterevidence_considered", False) else 0.0
-    source_structure_score = _clamp(
-        _clamp(independent_source_count / 5.0, 0, 1) * 0.45
-        + _clamp(official_source_count / 2.0, 0, 1) * 0.30
-        + counterevidence_score * 0.25,
-        0,
-        1,
-    )
-    news_quantity_score = max(news_quantity_score, source_structure_score)
+    confidence_breakdown = calculate_confidence_breakdown(evidence)
+    news_quantity_score = confidence_breakdown["effective_source_score"]
 
     narrative = (narrative_type or "").lower()
     if narrative in {"factual", "fundamental", "official"}:

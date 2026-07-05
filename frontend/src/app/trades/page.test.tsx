@@ -85,13 +85,37 @@ describe("TradesPage", () => {
     Object.values(apiMocks).forEach((mock) => mock.mockReset());
   });
 
+  it("switches between current holdings and closed trades instead of rendering both", async () => {
+    const user = userEvent.setup();
+    apiMocks.tradeStats.mockResolvedValue({ ...stats, total_closed: 1 });
+    apiMocks.openTrades.mockResolvedValue({ count: 1, total: 1, trades: [openTrade] });
+    apiMocks.closedTrades.mockResolvedValue({ count: 1, total: 1, trades: [closedTrade] });
+
+    render(<TradesPage />);
+
+    expect(await screen.findByText("Open trade event")).toBeInTheDocument();
+    expect(screen.queryByText("Closed trade event")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /\u5df2\u5e73\u4ed3/ }));
+
+    expect(await screen.findByText("Closed trade event")).toBeInTheDocument();
+    expect(screen.queryByText("Open trade event")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /\u5f53\u524d\u6301\u4ed3/ }));
+
+    expect(await screen.findByText("Open trade event")).toBeInTheDocument();
+    expect(screen.queryByText("Closed trade event")).not.toBeInTheDocument();
+  });
+
   it("shows entry time for closed trades", async () => {
+    const user = userEvent.setup();
     apiMocks.tradeStats.mockResolvedValue(stats);
     apiMocks.openTrades.mockResolvedValue({ count: 0, trades: [] });
     apiMocks.closedTrades.mockResolvedValue({ count: 1, trades: [closedTrade] });
 
     render(<TradesPage />);
 
+    await user.click(await screen.findByRole("button", { name: /\u5df2\u5e73\u4ed3/ }));
     const closedSection = await screen.findByRole("heading", { name: "已平仓 (1)" });
     const section = closedSection.closest("section");
     expect(section).not.toBeNull();
@@ -118,12 +142,14 @@ describe("TradesPage", () => {
   });
 
   it("shows market probability instead of system probability for closed entry-to-settlement", async () => {
+    const user = userEvent.setup();
     apiMocks.tradeStats.mockResolvedValue(stats);
     apiMocks.openTrades.mockResolvedValue({ count: 0, trades: [] });
     apiMocks.closedTrades.mockResolvedValue({ count: 1, trades: [closedTrade] });
 
     render(<TradesPage />);
 
+    await user.click(await screen.findByRole("button", { name: /\u5df2\u5e73\u4ed3/ }));
     const eventCell = await screen.findByText("Closed trade event");
     const row = eventCell.closest("tr");
     expect(row).not.toBeNull();
@@ -189,10 +215,13 @@ describe("TradesPage", () => {
     render(<TradesPage />);
 
     const openHeading = await screen.findByRole("heading", { name: "当前持仓 (11)" });
-    const closedHeading = await screen.findByRole("heading", { name: "已平仓 (12)" });
+    expect(openHeading).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "已平仓 (12)" })).not.toBeInTheDocument();
     expect(apiMocks.openTrades).toHaveBeenCalledWith(10, 0);
     expect(apiMocks.closedTrades).toHaveBeenCalledWith(10, 0);
 
+    await user.click(screen.getByRole("button", { name: /\u5df2\u5e73\u4ed3/ }));
+    const closedHeading = await screen.findByRole("heading", { name: "已平仓 (12)" });
     const closedSection = closedHeading.closest("section");
     expect(closedSection).not.toBeNull();
     expect(within(closedSection as HTMLElement).getByText("第 1 / 2 页 · 共 12 条")).toBeInTheDocument();
@@ -200,15 +229,23 @@ describe("TradesPage", () => {
     await user.click(within(closedSection as HTMLElement).getByRole("button", { name: /\u4e0b\u4e00\u9875/ }));
 
     await waitFor(() => expect(apiMocks.closedTrades).toHaveBeenLastCalledWith(10, 10));
-    expect(await within(closedSection as HTMLElement).findByText("Closed trade page 2")).toBeInTheDocument();
-    expect(within(closedSection as HTMLElement).getByText("第 2 / 2 页 · 共 12 条")).toBeInTheDocument();
+    const updatedClosedHeading = await screen.findByRole("heading", { name: "已平仓 (12)" });
+    const updatedClosedSection = updatedClosedHeading.closest("section");
+    expect(updatedClosedSection).not.toBeNull();
+    expect(await within(updatedClosedSection as HTMLElement).findByText("Closed trade page 2")).toBeInTheDocument();
+    expect(within(updatedClosedSection as HTMLElement).getByText("第 2 / 2 页 · 共 12 条")).toBeInTheDocument();
 
-    const openSection = openHeading.closest("section");
+    await user.click(screen.getByRole("button", { name: /\u5f53\u524d\u6301\u4ed3/ }));
+    const updatedOpenHeading = await screen.findByRole("heading", { name: "当前持仓 (11)" });
+    const openSection = updatedOpenHeading.closest("section");
     expect(openSection).not.toBeNull();
     await user.click(within(openSection as HTMLElement).getByRole("button", { name: /\u4e0b\u4e00\u9875/ }));
 
     await waitFor(() => expect(apiMocks.openTrades).toHaveBeenLastCalledWith(10, 10));
-    expect(await within(openSection as HTMLElement).findByText("Open trade page 2")).toBeInTheDocument();
+    const nextOpenHeading = await screen.findByRole("heading", { name: "当前持仓 (11)" });
+    const nextOpenSection = nextOpenHeading.closest("section");
+    expect(nextOpenSection).not.toBeNull();
+    expect(await within(nextOpenSection as HTMLElement).findByText("Open trade page 2")).toBeInTheDocument();
   });
 
 });

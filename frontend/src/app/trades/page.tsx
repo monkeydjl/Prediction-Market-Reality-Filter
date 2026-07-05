@@ -43,6 +43,7 @@ export default function TradesPage() {
   const [closedPage, setClosedPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [tradeView, setTradeView] = useState<"open" | "closed">("open");
 
   const load = useCallback(async () => {
     setError(null);
@@ -197,111 +198,134 @@ export default function TradesPage() {
               </section>
             )}
 
-            {/* Open positions */}
-            <section className="flex flex-col gap-2">
-              <h2 className="text-sm font-semibold">当前持仓 ({openTotal})</h2>
-              {openTrades.length === 0 ? (
-                <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-                  暂无持仓。系统发现事件时会自动建立模拟交易。
-                </p>
-              ) : (
-                <div className="overflow-x-auto rounded-lg border border-border">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-border bg-secondary/50 text-left text-xs text-muted-foreground">
-                        <th className="px-4 py-2">事件</th>
-                        <th className="px-4 py-2">方向</th>
-                        <th className="px-4 py-2">市场概率</th>
-                        <th className="px-4 py-2">入场 edge</th>
-                        <th className="px-4 py-2">仓位%</th>
-                        <th className="px-4 py-2">决策</th>
-                        <th className="px-4 py-2">入场时间</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {openTrades.map((t) => (
-                        <tr key={t.trade_id} className="border-b border-border last:border-0">
-                          <td className="max-w-[280px] truncate px-4 py-2">
-                            <Link href={`/events?id=${encodeURIComponent(t.event_id)}`} className="font-medium hover:text-primary">{t.event_title || t.event_id.slice(0, 12)}</Link>
-                          </td>
-                          <td className={`px-4 py-2 font-mono font-semibold ${t.direction === "YES" ? "text-pos" : "text-neg"}`}>{t.direction}</td>
-                          <td className="px-4 py-2 font-mono tabular-nums">{t.market_prob.toFixed(1)}%</td>
-                          <td className="px-4 py-2">{fmtSignedPct(t.entry_edge, 1)}%</td>
-                          <td className="px-4 py-2 font-mono tabular-nums">{t.position_pct.toFixed(1)}%</td>
-                          <td className="px-4 py-2">
-                            <span className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
-                              t.decision === "act" ? "bg-pos/10 text-pos" :
-                              t.decision === "provisional_act" ? "bg-warn/10 text-warn" :
-                              "bg-secondary text-muted-foreground"
-                            }`}>{t.decision}</span>
-                          </td>
-                          <td className="px-4 py-2 text-xs text-muted-foreground">{fmtDate(t.entry_time)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              {openTotal > PAGE_SIZE && (
-                <PaginationControls
-                  page={openPage}
-                  pageSize={PAGE_SIZE}
-                  total={openTotal}
-                  loading={loading}
-                  onPageChange={setOpenPage}
-                />
-              )}
-            </section>
+            <section className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {([
+                  { key: "open", label: "当前持仓", count: openTotal },
+                  { key: "closed", label: "已平仓", count: closedTotal },
+                ] as const).map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setTradeView(tab.key)}
+                    className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
+                      tradeView === tab.key
+                        ? "bg-secondary font-medium text-foreground"
+                        : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+                    }`}
+                  >
+                    {tab.label}
+                    <span className="ml-1 font-mono text-xs text-muted-foreground">{tab.count}</span>
+                  </button>
+                ))}
+              </div>
 
-            {/* Closed trades */}
-            <section className="flex flex-col gap-2">
-              <h2 className="text-sm font-semibold">已平仓 ({closedTotal})</h2>
-              {closedTrades.length === 0 ? (
-                <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-                  暂无已平仓记录。事件结算后会自动计算盈亏。
-                </p>
+              {tradeView === "open" ? (
+                <section className="flex flex-col gap-2">
+                  <h2 className="text-sm font-semibold">当前持仓 ({openTotal})</h2>
+                  {openTrades.length === 0 ? (
+                    <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+                      暂无持仓。系统发现事件时会自动建立模拟交易。
+                    </p>
+                  ) : (
+                    <div className="overflow-x-auto rounded-lg border border-border">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-border bg-secondary/50 text-left text-xs text-muted-foreground">
+                            <th className="px-4 py-2">事件</th>
+                            <th className="px-4 py-2">方向</th>
+                            <th className="px-4 py-2">市场概率</th>
+                            <th className="px-4 py-2">入场 edge</th>
+                            <th className="px-4 py-2">仓位%</th>
+                            <th className="px-4 py-2">决策</th>
+                            <th className="px-4 py-2">入场时间</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {openTrades.map((t) => (
+                            <tr key={t.trade_id} className="border-b border-border last:border-0">
+                              <td className="max-w-[280px] truncate px-4 py-2">
+                                <Link href={`/events?id=${encodeURIComponent(t.event_id)}`} className="font-medium hover:text-primary">{t.event_title || t.event_id.slice(0, 12)}</Link>
+                              </td>
+                              <td className={`px-4 py-2 font-mono font-semibold ${t.direction === "YES" ? "text-pos" : "text-neg"}`}>{t.direction}</td>
+                              <td className="px-4 py-2 font-mono tabular-nums">{t.market_prob.toFixed(1)}%</td>
+                              <td className="px-4 py-2">{fmtSignedPct(t.entry_edge, 1)}%</td>
+                              <td className="px-4 py-2 font-mono tabular-nums">{t.position_pct.toFixed(1)}%</td>
+                              <td className="px-4 py-2">
+                                <span className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
+                                  t.decision === "act" ? "bg-pos/10 text-pos" :
+                                  t.decision === "provisional_act" ? "bg-warn/10 text-warn" :
+                                  "bg-secondary text-muted-foreground"
+                                }`}>{t.decision}</span>
+                              </td>
+                              <td className="px-4 py-2 text-xs text-muted-foreground">{fmtDate(t.entry_time)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {openTotal > PAGE_SIZE && (
+                    <PaginationControls
+                      page={openPage}
+                      pageSize={PAGE_SIZE}
+                      total={openTotal}
+                      loading={loading}
+                      onPageChange={setOpenPage}
+                    />
+                  )}
+                </section>
               ) : (
-                <div className="overflow-x-auto rounded-lg border border-border">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-border bg-secondary/50 text-left text-xs text-muted-foreground">
-                        <th className="px-4 py-2">事件</th>
-                        <th className="px-4 py-2">方向</th>
-                        <th className="px-4 py-2">市场→结算</th>
-                        <th className="px-4 py-2">结果</th>
-                        <th className="px-4 py-2">PnL</th>
-                        <th className="px-4 py-2">入场时间</th>
-                        <th className="px-4 py-2">原因</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {closedTrades.map((t) => (
-                        <tr key={t.trade_id} className="border-b border-border last:border-0">
-                          <td className="max-w-[280px] truncate px-4 py-2">
-                            <Link href={`/events?id=${encodeURIComponent(t.event_id)}`} className="font-medium hover:text-primary">{t.event_title || t.event_id.slice(0, 12)}</Link>
-                          </td>
-                          <td className={`px-4 py-2 font-mono font-semibold ${t.direction === "YES" ? "text-pos" : "text-neg"}`}>{t.direction}</td>
-                          <td className="px-4 py-2 font-mono text-xs tabular-nums">{t.market_prob.toFixed(0)}% → {t.actual_outcome?.toFixed(0) ?? "?"}%</td>
-                          <td className={`px-4 py-2 font-mono tabular-nums ${t.is_win === 1 ? "text-pos" : "text-neg"}`}>
-                            {t.is_win === 1 ? "赢" : t.is_win === 0 ? "输" : "—"}
-                          </td>
-                          <td className="px-4 py-2"><PnlBadge pnl={t.pnl_pct} /></td>
-                          <td className="px-4 py-2 text-xs text-muted-foreground">{fmtDate(t.entry_time)}</td>
-                          <td className="px-4 py-2 text-xs text-muted-foreground">{t.exit_reason ?? "—"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              {closedTotal > PAGE_SIZE && (
-                <PaginationControls
-                  page={closedPage}
-                  pageSize={PAGE_SIZE}
-                  total={closedTotal}
-                  loading={loading}
-                  onPageChange={setClosedPage}
-                />
+                <section className="flex flex-col gap-2">
+                  <h2 className="text-sm font-semibold">已平仓 ({closedTotal})</h2>
+                  {closedTrades.length === 0 ? (
+                    <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+                      暂无已平仓记录。事件结算后会自动计算盈亏。
+                    </p>
+                  ) : (
+                    <div className="overflow-x-auto rounded-lg border border-border">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-border bg-secondary/50 text-left text-xs text-muted-foreground">
+                            <th className="px-4 py-2">事件</th>
+                            <th className="px-4 py-2">方向</th>
+                            <th className="px-4 py-2">市场→结算</th>
+                            <th className="px-4 py-2">结果</th>
+                            <th className="px-4 py-2">PnL</th>
+                            <th className="px-4 py-2">入场时间</th>
+                            <th className="px-4 py-2">原因</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {closedTrades.map((t) => (
+                            <tr key={t.trade_id} className="border-b border-border last:border-0">
+                              <td className="max-w-[280px] truncate px-4 py-2">
+                                <Link href={`/events?id=${encodeURIComponent(t.event_id)}`} className="font-medium hover:text-primary">{t.event_title || t.event_id.slice(0, 12)}</Link>
+                              </td>
+                              <td className={`px-4 py-2 font-mono font-semibold ${t.direction === "YES" ? "text-pos" : "text-neg"}`}>{t.direction}</td>
+                              <td className="px-4 py-2 font-mono text-xs tabular-nums">{t.market_prob.toFixed(0)}% → {t.actual_outcome?.toFixed(0) ?? "?"}%</td>
+                              <td className={`px-4 py-2 font-mono tabular-nums ${t.is_win === 1 ? "text-pos" : "text-neg"}`}>
+                                {t.is_win === 1 ? "赢" : t.is_win === 0 ? "输" : "—"}
+                              </td>
+                              <td className="px-4 py-2"><PnlBadge pnl={t.pnl_pct} /></td>
+                              <td className="px-4 py-2 text-xs text-muted-foreground">{fmtDate(t.entry_time)}</td>
+                              <td className="px-4 py-2 text-xs text-muted-foreground">{t.exit_reason ?? "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {closedTotal > PAGE_SIZE && (
+                    <PaginationControls
+                      page={closedPage}
+                      pageSize={PAGE_SIZE}
+                      total={closedTotal}
+                      loading={loading}
+                      onPageChange={setClosedPage}
+                    />
+                  )}
+                </section>
               )}
             </section>
           </>

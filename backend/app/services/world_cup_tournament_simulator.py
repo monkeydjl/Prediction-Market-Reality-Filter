@@ -235,13 +235,32 @@ def simulate_tournament(
     semifinal_count = {team: 0 for team in all_teams}
 
     for sim in range(num_simulations):
-        # Simulate group stage
-        qualified = []
+        # Simulate group stage. World Cup 2026 advances the top two from each
+        # group plus the eight best third-place teams, producing a 32-team
+        # knockout field. Keeping the bracket at a power of two avoids the
+        # invalid 24 -> 12 -> 6 -> 3 semifinal state.
+        qualified: list[str] = []
+        third_place_candidates: list[tuple[str, int, int]] = []
         for group_name, teams in groups.items():
             results = _simulate_group(teams, elo_cache, odds_cache)
-            # Top 2 advance
+            if len(results) < 2:
+                continue
             qualified.append(results[0][0])  # Group winner
             qualified.append(results[1][0])  # Runner-up
+            if len(results) >= 3:
+                third_place_candidates.append(results[2])
+
+        available_teams = len(qualified) + len(third_place_candidates)
+        desired_bracket_size = min(32, available_teams)
+        while desired_bracket_size > 4 and desired_bracket_size & (desired_bracket_size - 1):
+            desired_bracket_size -= 1
+
+        if len(qualified) < desired_bracket_size:
+            third_place_candidates.sort(key=lambda x: (x[1], x[2]), reverse=True)
+            needed_thirds = desired_bracket_size - len(qualified)
+            qualified.extend(team for team, _points, _gd in third_place_candidates[:needed_thirds])
+        elif len(qualified) > desired_bracket_size:
+            qualified = qualified[:desired_bracket_size]
 
         # Shuffle to create bracket (in reality, seeding determines bracket)
         random.shuffle(qualified)

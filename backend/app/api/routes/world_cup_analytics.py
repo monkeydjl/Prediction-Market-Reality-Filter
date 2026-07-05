@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import Any
 
@@ -318,7 +319,7 @@ async def get_tournament_simulation(
     from app.models.world_cup_prediction import MatchFixture
     fixtures = session.query(MatchFixture).filter(
         MatchFixture.group.isnot(None),
-        MatchFixture.stage == "group_stage",
+        func.lower(MatchFixture.stage) == "group_stage",
     ).all()
 
     groups: dict[str, list[str]] = {}

@@ -251,6 +251,68 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
         self.assertEqual(simulate.call_count, 2)
         self.assertGreaterEqual(get_elo.await_count, 4)
 
+    def test_tournament_simulation_accepts_uppercase_group_stage_fixtures(self):
+        world_cup_analytics._TOURNAMENT_CACHE = {}
+        world_cup_analytics._TOURNAMENT_CACHE_TIME = {}
+        self.session.add_all(
+            [
+                MatchFixture(
+                    match_id="upper-a1",
+                    fixture_id="upper-a1",
+                    home_team="Team A1",
+                    away_team="Team A2",
+                    kickoff_utc=datetime(2026, 6, 12, 12, 0, 0),
+                    venue="Test Stadium",
+                    stage="GROUP_STAGE",
+                    group="GROUP_A",
+                    status="finished",
+                    home_score=1,
+                    away_score=0,
+                ),
+                MatchFixture(
+                    match_id="upper-b1",
+                    fixture_id="upper-b1",
+                    home_team="Team B1",
+                    away_team="Team B2",
+                    kickoff_utc=datetime(2026, 6, 13, 12, 0, 0),
+                    venue="Test Stadium",
+                    stage="GROUP_STAGE",
+                    group="GROUP_B",
+                    status="finished",
+                    home_score=2,
+                    away_score=1,
+                ),
+            ]
+        )
+        self.session.commit()
+
+        def fake_simulate(*, groups, elo_cache, num_simulations):
+            return {
+                "status": "ok",
+                "groups_seen": groups,
+                "teams_seen": sorted(elo_cache),
+                "num_simulations": num_simulations,
+            }
+
+        with (
+            patch(
+                "app.services.elo_ratings_service.get_elo_rating",
+                return_value={"elo_rating": 1500.0},
+            ),
+            patch(
+                "app.services.world_cup_tournament_simulator.simulate_tournament",
+                side_effect=fake_simulate,
+            ),
+        ):
+            resp = self.client.get("/analytics/tournament-simulation?num_simulations=5000")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertNotIn("error", body)
+        self.assertEqual(set(body["groups_seen"]), {"GROUP_A", "GROUP_B"})
+        self.assertEqual(body["groups_seen"]["GROUP_A"], ["Team A1", "Team A2"])
+        self.assertEqual(body["groups_seen"]["GROUP_B"], ["Team B1", "Team B2"])
+
 
 if __name__ == "__main__":
     unittest.main()

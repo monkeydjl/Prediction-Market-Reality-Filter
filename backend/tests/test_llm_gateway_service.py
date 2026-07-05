@@ -40,6 +40,49 @@ class LLMGatewayRouteTests(unittest.TestCase):
         self.assertEqual([(r.provider, r.models) for r in task_routes], [("deepseek", ["reasoner"])])
         self.assertEqual([(r.provider, r.models) for r in default_routes], [("openai", ["gpt-4o-mini"])])
 
+
+    def test_build_route_uses_indexed_openai_env_when_no_explicit_route_exists(self):
+        env = {
+            "OPENAI_API_KEY_1": "key-1",
+            "OPENAI_MODEL_1_1": "provider1-model1",
+            "OPENAI_MODEL_1_2": "provider1-model2",
+            "OPENAI_BASE_URL_1": "https://provider1.example/v1",
+            "OPENAI_API_KEY_2": "key-2",
+            "OPENAI_MODEL_2_1": "provider2-model1",
+            "OPENAI_BASE_URL_2": "https://provider2.example/v1",
+        }
+        with patch.dict("os.environ", env, clear=True), \
+             patch.object(gateway.settings, "LLM_ROUTE_DEFAULT", ""), \
+             patch.object(gateway.settings, "LLM_ROUTE_PROBABILITY_ANALYSIS", ""), \
+             patch.object(gateway.settings, "OPENAI_MODEL", "legacy-model"):
+            routes = gateway.build_route("default")
+            configs = gateway._provider_configs()
+
+        self.assertEqual(
+            [(route.provider, route.models) for route in routes],
+            [
+                ("openai_1", ["provider1-model1", "provider1-model2"]),
+                ("openai_2", ["provider2-model1"]),
+            ],
+        )
+        self.assertEqual(configs["openai_1"].api_key, "key-1")
+        self.assertEqual(configs["openai_1"].base_url, "https://provider1.example/v1")
+        self.assertEqual(configs["openai_2"].api_key, "key-2")
+        self.assertEqual(configs["openai_2"].base_url, "https://provider2.example/v1")
+
+    def test_build_route_prefers_explicit_task_route_over_indexed_openai_env(self):
+        env = {
+            "OPENAI_API_KEY_1": "key-1",
+            "OPENAI_MODEL_1_1": "indexed-model",
+            "OPENAI_BASE_URL_1": "https://indexed.example/v1",
+        }
+        with patch.dict("os.environ", env, clear=True), \
+             patch.object(gateway.settings, "LLM_ROUTE_PROBABILITY_ANALYSIS", "deepseek:reasoner"), \
+             patch.object(gateway.settings, "LLM_ROUTE_DEFAULT", "openai:gpt-4o-mini"):
+            routes = gateway.build_route("probability_analysis")
+
+        self.assertEqual([(route.provider, route.models) for route in routes], [("deepseek", ["reasoner"])])
+
     def test_build_route_uses_legacy_openai_when_no_new_route_exists(self):
         with patch.object(gateway.settings, "LLM_ROUTE_DEFAULT", ""), \
              patch.object(gateway.settings, "LLM_ROUTE_PROBABILITY_ANALYSIS", ""), \
@@ -137,6 +180,50 @@ class LLMGatewayExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.provider, "p2")
         self.assertEqual(result.model, "p2-a")
         self.assertEqual(calls, ["p1-a", "p1-b", "p2-a"])
+
+    async def test_complete_json_uses_indexed_env_route_and_provider_order(self):
+        calls = []
+        client_configs = []
+        env = {
+            "OPENAI_API_KEY_1": "key-1",
+            "OPENAI_MODEL_1_1": "provider1-model1",
+            "OPENAI_MODEL_1_2": "provider1-model2",
+            "OPENAI_BASE_URL_1": "https://provider1.example/v1",
+            "OPENAI_API_KEY_2": "key-2",
+            "OPENAI_MODEL_2_1": "provider2-model1",
+            "OPENAI_BASE_URL_2": "https://provider2.example/v1",
+        }
+
+        async def fake_create(**kwargs):
+            calls.append(kwargs["model"])
+            if kwargs["model"].startswith("provider1-"):
+                raise TimeoutError("timeout")
+            return _fake_response('{"provider": "openai_2"}')
+
+        def fake_factory(config):
+            client_configs.append((config.provider, config.api_key, config.base_url))
+            return _fake_client(fake_create)
+
+        with patch.dict("os.environ", env, clear=True), \
+             patch.object(gateway.settings, "LLM_ROUTE_DEFAULT", ""), \
+             patch.object(gateway.settings, "LLM_ROUTE_PROBABILITY_ANALYSIS", ""), \
+             patch.object(gateway.settings, "OPENAI_MODEL", "legacy-model"):
+            result = await gateway.complete_json(
+                messages=[{"role": "user", "content": "x"}],
+                client_factory=fake_factory,
+            )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.provider, "openai_2")
+        self.assertEqual(result.model, "provider2-model1")
+        self.assertEqual(calls, ["provider1-model1", "provider1-model2", "provider2-model1"])
+        self.assertEqual(
+            client_configs,
+            [
+                ("openai_1", "key-1", "https://provider1.example/v1"),
+                ("openai_2", "key-2", "https://provider2.example/v1"),
+            ],
+        )
 
     async def test_complete_json_returns_failed_result_when_all_models_fail(self):
         async def fake_create(**kwargs):

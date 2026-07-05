@@ -8,6 +8,8 @@ route/config model so callers can share one routing vocabulary.
 from __future__ import annotations
 
 import json
+import os
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -66,7 +68,7 @@ _TASK_ROUTE_SETTINGS = {
     "startup_check": "LLM_ROUTE_STARTUP_CHECK",
 }
 
-_client_cache: dict[str, Any] = {}
+_client_cache: dict[tuple[str, str, str, float, int], Any] = {}
 
 
 def reset_llm_gateway_clients_for_tests() -> None:
@@ -93,6 +95,71 @@ def parse_route_string(route: str) -> list[LLMModelRoute]:
     return parsed
 
 
+_INDEXED_OPENAI_KEY_RE = re.compile(r"^OPENAI_API_KEY_(\d+)$")
+_INDEXED_OPENAI_MODEL_RE = re.compile(r"^OPENAI_MODEL_(\d+)_(\d+)$")
+
+
+def _indexed_openai_provider_indices() -> list[int]:
+    """Return configured numbered OpenAI-compatible provider indices."""
+    indices: set[int] = set()
+    for name, value in os.environ.items():
+        if not value.strip():
+            continue
+        key_match = _INDEXED_OPENAI_KEY_RE.match(name)
+        if key_match:
+            indices.add(int(key_match.group(1)))
+            continue
+        model_match = _INDEXED_OPENAI_MODEL_RE.match(name)
+        if model_match:
+            indices.add(int(model_match.group(1)))
+    return sorted(indices)
+
+
+def _indexed_openai_models(provider_index: int) -> list[str]:
+    """Return models for ``OPENAI_MODEL_<provider_index>_<model_index>`` in numeric order."""
+    models_by_index: dict[int, str] = {}
+    prefix = f"OPENAI_MODEL_{provider_index}_"
+    for name, value in os.environ.items():
+        if not name.startswith(prefix):
+            continue
+        model_match = _INDEXED_OPENAI_MODEL_RE.match(name)
+        if not model_match:
+            continue
+        model = value.strip()
+        if model:
+            models_by_index[int(model_match.group(2))] = model
+    return [models_by_index[index] for index in sorted(models_by_index)]
+
+
+def _indexed_openai_routes() -> list[LLMModelRoute]:
+    """Build routes from OPENAI_API_KEY_N / OPENAI_MODEL_N_M env variables."""
+    routes: list[LLMModelRoute] = []
+    for provider_index in _indexed_openai_provider_indices():
+        api_key = os.getenv(f"OPENAI_API_KEY_{provider_index}", "").strip()
+        models = _indexed_openai_models(provider_index)
+        if not api_key or not models:
+            continue
+        routes.append(LLMModelRoute(provider=f"openai_{provider_index}", models=models))
+    return routes
+
+
+def _indexed_openai_provider_configs() -> dict[str, LLMProviderConfig]:
+    """Build provider configs from numbered OpenAI-compatible env variables."""
+    configs: dict[str, LLMProviderConfig] = {}
+    for provider_index in _indexed_openai_provider_indices():
+        provider = f"openai_{provider_index}"
+        api_key = os.getenv(f"OPENAI_API_KEY_{provider_index}", "").strip()
+        base_url = os.getenv(f"OPENAI_BASE_URL_{provider_index}", "").strip()
+        if not api_key:
+            continue
+        configs[provider] = LLMProviderConfig(
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+        )
+    return configs
+
+
 def _legacy_route() -> list[LLMModelRoute]:
     model = (settings.OPENAI_MODEL or "").strip()
     if not model:
@@ -115,12 +182,16 @@ def build_route(task: str = "default") -> list[LLMModelRoute]:
         if default_routes:
             return default_routes
 
+    indexed_routes = _indexed_openai_routes()
+    if indexed_routes:
+        return indexed_routes
+
     return _legacy_route()
 
 
 
 def _provider_configs() -> dict[str, LLMProviderConfig]:
-    return {
+    configs = {
         "legacy_openai": LLMProviderConfig(
             provider="legacy_openai",
             api_key=settings.OPENAI_API_KEY,
@@ -147,10 +218,19 @@ def _provider_configs() -> dict[str, LLMProviderConfig]:
             base_url=settings.LLM_PROVIDER_OPENROUTER_BASE_URL,
         ),
     }
+    configs.update(_indexed_openai_provider_configs())
+    return configs
 
 
 def _default_client_factory(config: LLMProviderConfig) -> AsyncOpenAI:
-    cached = _client_cache.get(config.provider)
+    cache_key = (
+        config.provider,
+        config.api_key,
+        config.base_url,
+        settings.LLM_TIMEOUT_SECONDS,
+        settings.LLM_MAX_RETRIES_PER_MODEL,
+    )
+    cached = _client_cache.get(cache_key)
     if cached is not None:
         return cached
 
@@ -162,7 +242,7 @@ def _default_client_factory(config: LLMProviderConfig) -> AsyncOpenAI:
     if config.base_url:
         kwargs["base_url"] = config.base_url
     client = AsyncOpenAI(**kwargs)
-    _client_cache[config.provider] = client
+    _client_cache[cache_key] = client
     return client
 
 
@@ -211,8 +291,16 @@ def _extract_usage(response: Any) -> dict[str, int] | None:
 
 def _redact_error(exc: Exception) -> str:
     message = str(exc)
-    api_key = getattr(settings, "OPENAI_API_KEY", "") or ""
-    if api_key:
+    known_keys = {
+        getattr(settings, "OPENAI_API_KEY", "") or "",
+        settings.LLM_PROVIDER_DEEPSEEK_API_KEY,
+        settings.LLM_PROVIDER_DASHSCOPE_API_KEY,
+        settings.LLM_PROVIDER_OPENAI_API_KEY,
+        settings.LLM_PROVIDER_OPENROUTER_API_KEY,
+    }
+    for provider_index in _indexed_openai_provider_indices():
+        known_keys.add(os.getenv(f"OPENAI_API_KEY_{provider_index}", ""))
+    for api_key in sorted((key for key in known_keys if key), key=len, reverse=True):
         message = message.replace(api_key, "<redacted>")
     if len(message) > 300:
         return message[:300] + "..."

@@ -260,9 +260,43 @@ LLM_PROVIDER_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 LLM_PROVIDER_OPENROUTER_API_KEY=...
 ```
 
-### 兼容旧配置
+### Numbered OpenAI-compatible configuration (Option 1)
 
-如果没有配置任何 `LLM_ROUTE_*`，Gateway 自动从旧配置生成 route：
+When no explicit `LLM_ROUTE_*` is configured, the Gateway can automatically read numbered provider settings from `.env`. Provider indices are executed in ascending numeric order, and model indices inside each provider are also executed in ascending numeric order:
+
+```env
+OPENAI_API_KEY_1=sk-primary
+OPENAI_MODEL_1_1=gpt-4o-mini
+OPENAI_MODEL_1_2=gpt-4.1-mini
+OPENAI_BASE_URL_1=https://api.openai.com/v1
+
+OPENAI_API_KEY_2=sk-secondary
+OPENAI_MODEL_2_1=deepseek-chat
+OPENAI_MODEL_2_2=deepseek-reasoner
+OPENAI_BASE_URL_2=https://api.deepseek.com
+
+OPENAI_API_KEY_3=sk-third
+OPENAI_MODEL_3_1=qwen-plus
+OPENAI_BASE_URL_3=https://dashscope.aliyuncs.com/compatible-mode/v1
+```
+
+The generated route is equivalent to:
+
+```text
+openai_1:gpt-4o-mini,gpt-4.1-mini|openai_2:deepseek-chat,deepseek-reasoner|openai_3:qwen-plus
+```
+
+Configuration priority:
+
+```text
+task-specific LLM_ROUTE_* > LLM_ROUTE_DEFAULT > numbered OPENAI_API_KEY_N / OPENAI_MODEL_N_M > legacy OPENAI_API_KEY / OPENAI_MODEL / OPENAI_BASE_URL
+```
+
+A numbered provider is included only when both `OPENAI_API_KEY_N` and at least one non-empty `OPENAI_MODEL_N_M` are present. `OPENAI_BASE_URL_N` is optional; when omitted, the OpenAI SDK default base URL is used.
+
+### Legacy configuration compatibility
+
+If no `LLM_ROUTE_*` or numbered provider config exists, Gateway automatically builds a route from legacy config:
 
 ```text
 default route:

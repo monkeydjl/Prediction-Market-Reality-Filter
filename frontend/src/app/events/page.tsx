@@ -7,6 +7,7 @@ import { ArrowLeft, Trash2 } from "lucide-react";
 import { SignalSummary } from "@/components/detail/signal-summary";
 import { MarketPanel } from "@/components/detail/market-links";
 import { SignalPanel } from "@/components/detail/signal-panel";
+import { ConfidenceBreakdownPanel } from "@/components/detail/confidence-breakdown-panel";
 import { OfficialColumn, NewsColumn } from "@/components/detail/evidence-list";
 import { TrackingDecision } from "@/components/detail/tracking-decision";
 import { ManualResolvePanel } from "@/components/detail/manual-resolve-panel";
@@ -326,6 +327,7 @@ function DetailInner() {
       <section className="flex flex-col gap-3">
         <h2 className="text-sm font-semibold">证据与交叉验证</h2>
         <SignalPanel record={record} />
+        <ConfidenceBreakdownPanel record={record} />
       </section>
 
       <DecisionReportPanel eventId={record.event_id} />

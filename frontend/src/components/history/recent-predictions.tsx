@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ClipboardList } from "lucide-react";
 import Link from "next/link";
 import { eventsApi, type PredictionRecord } from "@/lib/api";
@@ -11,28 +11,43 @@ function fmtBrier(n: number | null | undefined) {
   return Number.isFinite(v) ? v.toFixed(3) : "—";
 }
 
+const RECENT_PREDICTIONS_PAGE_SIZE = 10;
+
 export function RecentPredictions() {
   const [predictions, setPredictions] = useState<PredictionRecord[]>([]);
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  async function load() {
+  const load = useCallback(async (nextPage = 0) => {
+    if (nextPage < 0) return;
     setLoading(true);
     setError(null);
     try {
-      const resp = await eventsApi.recentPredictions(50);
-      setPredictions(resp.predictions ?? []);
+      const resp = await eventsApi.recentPredictions(
+        RECENT_PREDICTIONS_PAGE_SIZE,
+        nextPage * RECENT_PREDICTIONS_PAGE_SIZE,
+      );
+      const nextPredictions = resp.predictions ?? [];
+      setPredictions(nextPredictions);
+      setTotal(resp.total ?? resp.count ?? nextPredictions.length);
+      setPage(nextPage);
     } catch (e) {
       setError(e instanceof Error ? e.message : "预测记录加载失败");
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0);
+    const timer = window.setTimeout(() => void load(0), 0);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [load]);
+
+  const pageCount = Math.max(1, Math.ceil(total / RECENT_PREDICTIONS_PAGE_SIZE));
+  const canGoPrevious = page > 0 && !loading;
+  const canGoNext = (page + 1) * RECENT_PREDICTIONS_PAGE_SIZE < total && !loading;
 
   return (
     <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5">
@@ -40,7 +55,7 @@ export function RecentPredictions() {
         <div className="flex items-center gap-2">
           <ClipboardList className="size-4 text-primary" aria-hidden="true" />
           <h2 className="text-sm font-semibold">最近预测记录</h2>
-          <span className="font-mono text-xs text-muted-foreground">{predictions.length}</span>
+          <span className="font-mono text-xs text-muted-foreground">{total}</span>
         </div>
         {error && <span className="text-xs text-neg">{error}</span>}
       </div>
@@ -88,6 +103,29 @@ export function RecentPredictions() {
             );
           })}
         </ul>
+      )}
+      {total > 0 && (
+        <div className="flex flex-wrap items-center justify-center gap-2 text-sm text-muted-foreground">
+          <button
+            type="button"
+            onClick={() => void load(page - 1)}
+            disabled={!canGoPrevious}
+            className="inline-flex h-9 items-center rounded-md border border-border bg-secondary px-4 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+          >
+            上一页
+          </button>
+          <span className="font-mono text-xs">
+            第 {page + 1} / {pageCount} 页 · 共 {total} 条
+          </span>
+          <button
+            type="button"
+            onClick={() => void load(page + 1)}
+            disabled={!canGoNext}
+            className="inline-flex h-9 items-center rounded-md border border-border bg-secondary px-4 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+          >
+            {loading ? "加载中…" : "下一页"}
+          </button>
+        </div>
       )}
     </section>
   );

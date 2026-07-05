@@ -1733,6 +1733,41 @@ class RecentPredictionsRouteTests(unittest.TestCase):
         self.assertEqual(predictions[0]["event_title_zh"], "最近事件会以 YES 结算吗？")
 
 
+    def test_recent_predictions_support_offset_and_total(self):
+        records = []
+        timestamps = []
+        for idx in range(1, 12):
+            rec = _make_record(f"evtRecent{idx:02d}", estimated=70.0, value_score=30 + idx)
+            rec["event_title"] = f"Recent page event {idx}"
+            rec["source"] = {
+                "type": "prediction_market",
+                "platform": "Polymarket",
+                "source_id": f"poly-recent-{idx:02d}",
+                "liquidity": 1000.0,
+                "volume": 5000.0,
+            }
+            records.append(rec)
+            timestamps.append(f"2026-07-05T00:00:{idx:02d}Z")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(store, "_store_path", return_value=str(Path(tmp) / "event_store.json")), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(preds, "utc_now", side_effect=timestamps):
+                for rec in records:
+                    store.save_event(rec)
+                    preds.freeze_prediction(rec)
+                client = _events_client()
+                resp = client.get("/events/predictions/recent?limit=10&offset=10")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["total"], 11)
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["limit"], 10)
+        self.assertEqual(body["offset"], 10)
+        self.assertEqual([p["event_title"] for p in body["predictions"]], ["Recent page event 1"])
+
+
 class DiscoverServiceTests(unittest.TestCase):
     """discover_events orchestration, with external boundaries mocked."""
 

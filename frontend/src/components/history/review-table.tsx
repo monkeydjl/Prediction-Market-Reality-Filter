@@ -52,17 +52,22 @@ function OutcomeTag({ correct }: { correct: boolean }) {
 
 export function ReviewTable({
   reviews,
-  loaded,
+  page = 0,
+  pageSize = 10,
   total,
-  loadingMore,
-  onLoadMore,
+  loadingPage,
+  onPageChange,
 }: {
   reviews: ResolvedReview[];
-  loaded?: number;
+  page?: number;
+  pageSize?: number;
   total?: number;
-  loadingMore?: boolean;
-  onLoadMore?: () => void;
+  loadingPage?: boolean;
+  onPageChange?: (page: number) => void;
 }) {
+  const pageCount = total != null ? Math.max(1, Math.ceil(total / pageSize)) : 1;
+  const canGoPrevious = Boolean(onPageChange) && page > 0 && !loadingPage;
+  const canGoNext = Boolean(onPageChange) && total != null && (page + 1) * pageSize < total && !loadingPage;
   function exportRows() {
     downloadCsv(
       "pmrf-resolved-reviews.csv",
@@ -157,15 +162,26 @@ export function ReviewTable({
           </ul>
         )}
       </div>
-      {onLoadMore && loaded != null && total != null && loaded < total && (
-        <div className="flex justify-center">
+      {onPageChange && total != null && (
+        <div className="flex flex-wrap items-center justify-center gap-2 text-sm text-muted-foreground">
           <button
             type="button"
-            onClick={onLoadMore}
-            disabled={loadingMore}
+            onClick={() => onPageChange(page - 1)}
+            disabled={!canGoPrevious}
             className="inline-flex h-9 items-center rounded-md border border-border bg-secondary px-4 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
           >
-            {loadingMore ? "加载中…" : `加载更多事件（${loaded}/${total}）`}
+            上一页
+          </button>
+          <span className="font-mono text-xs">
+            第 {page + 1} / {pageCount} 页 · 共 {total} 条
+          </span>
+          <button
+            type="button"
+            onClick={() => onPageChange(page + 1)}
+            disabled={!canGoNext}
+            className="inline-flex h-9 items-center rounded-md border border-border bg-secondary px-4 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+          >
+            {loadingPage ? "加载中…" : "下一页"}
           </button>
         </div>
       )}

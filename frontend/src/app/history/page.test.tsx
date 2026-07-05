@@ -39,6 +39,18 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 const api = vi.mocked(eventsApi);
 
+function resolvedEntry(index: number) {
+  return {
+    record: {
+      event_id: `resolved-${index}`,
+      event_title: `Resolved event ${index}`,
+      probability: { estimated: 60 },
+      calibration: { estimated_probability: 60, brier_score: 0.16, grade: "good" },
+      outcome: { actual_outcome: 100, resolved_at: "2026-07-05T00:00:00Z" },
+    },
+  };
+}
+
 describe("HistoryPage", () => {
   beforeEach(() => {
     api.calibration.mockReset();
@@ -64,20 +76,10 @@ describe("HistoryPage", () => {
       segments: {},
     });
     api.list.mockResolvedValue({
-      events: [
-        {
-          record: {
-            event_id: "resolved-1",
-            event_title: "Resolved event",
-            probability: { estimated: 60 },
-            calibration: { estimated_probability: 60, brier_score: 0.16, grade: "good" },
-            outcome: { actual_outcome: 100, resolved_at: "2026-07-05T00:00:00Z" },
-          },
-        },
-      ],
+      events: [resolvedEntry(1)],
       count: 1,
       total: 1,
-      limit: 50,
+      limit: 10,
       offset: 0,
     });
     api.recentPredictions.mockResolvedValue({ predictions: [] });
@@ -99,5 +101,30 @@ describe("HistoryPage", () => {
     await user.click(screen.getByRole("button", { name: /已结算判断/ }));
     expect(await screen.findByRole("heading", { name: /已结算判断/ })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /最近预测记录/ })).not.toBeInTheDocument();
+  });
+
+  it("paginates resolved reviews with 10 records per page", async () => {
+    const user = userEvent.setup();
+    api.list.mockImplementation(async (_limit = 10, offset = 0) => ({
+      events: offset === 0
+        ? Array.from({ length: 10 }, (_, i) => resolvedEntry(i + 1))
+        : [resolvedEntry(11)],
+      count: offset === 0 ? 10 : 1,
+      total: 11,
+      limit: 10,
+      offset,
+    }));
+
+    render(<HistoryPage />);
+
+    await waitFor(() => expect(api.list).toHaveBeenCalledWith(10, 0));
+    expect(await screen.findByText("Resolved event 1")).toBeInTheDocument();
+    expect(screen.queryByText("Resolved event 11")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /\u4e0b\u4e00\u9875/ }));
+
+    await waitFor(() => expect(api.list).toHaveBeenLastCalledWith(10, 10));
+    expect(await screen.findByText("Resolved event 11")).toBeInTheDocument();
+    expect(screen.queryByText("Resolved event 1")).not.toBeInTheDocument();
   });
 });

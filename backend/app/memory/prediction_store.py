@@ -524,12 +524,25 @@ def get_prediction(event_id: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-def list_recent(limit: int = 50) -> list[dict[str, Any]]:
+def count_predictions() -> int:
+    path = sqlite_db.loop_db_path()
+    _ensure_schema(path)
+    with reading(path) as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM predictions").fetchone()
+    return int(row["n"] if row else 0)
+
+
+def list_recent(limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
     path = sqlite_db.loop_db_path()
     _ensure_schema(path)
     with reading(path) as conn:
         rows = conn.execute(
-            "SELECT * FROM predictions ORDER BY created_at DESC LIMIT ?", (limit,),
+            """
+            SELECT * FROM predictions
+            ORDER BY created_at DESC, event_id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
         ).fetchall()
     return [dict(row) for row in rows]
 

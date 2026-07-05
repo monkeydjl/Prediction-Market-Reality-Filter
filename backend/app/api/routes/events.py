@@ -24,6 +24,7 @@ from app.api.security import is_write_key_valid, require_write_key
 from app.memory.event_market_link_store import list_pending, set_verified
 from app.memory.prediction_store import (
     calibration_summary,
+    count_predictions,
     get_prediction,
     list_open_opportunities,
     list_recent,
@@ -1082,12 +1083,15 @@ async def get_prediction_calibration():
 
 
 @router.get("/predictions/recent", response_model=RecentPredictionsResponse)
-async def get_recent_predictions(limit: int = Query(default=50, ge=1, le=200)):
+async def get_recent_predictions(
+    limit: int = Query(default=10, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
     """Recent frozen predictions (AI vs market price, raw edge, and - once
     resolved - the scored Brier). Visibility into what the loop has committed."""
     events_by_id = {entry.get("event_id"): entry for entry in list_all_events()}
     predictions = []
-    for prediction in list_recent(limit=limit):
+    for prediction in list_recent(limit=limit, offset=offset):
         entry = events_by_id.get(prediction.get("event_id"))
         record = entry.get("record") if entry else None
         predictions.append({
@@ -1095,7 +1099,13 @@ async def get_recent_predictions(limit: int = Query(default=50, ge=1, le=200)):
             "event_title": (record or {}).get("event_title", ""),
             "event_title_zh": (record or {}).get("event_title_zh", ""),
         })
-    return {"predictions": predictions}
+    return {
+        "predictions": predictions,
+        "count": len(predictions),
+        "total": count_predictions(),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/decisions/open", response_model=OpenDecisionsResponse)

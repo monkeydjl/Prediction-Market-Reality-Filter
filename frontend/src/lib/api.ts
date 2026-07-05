@@ -940,8 +940,10 @@ export const eventsApi = {
   predictionCalibration: () =>
     api<PredictionCalibration>("/events/predictions/calibration"),
 
-  recentPredictions: (limit = 50) =>
-    api<{ predictions: PredictionRecord[] }>(`/events/predictions/recent?limit=${limit}`),
+  recentPredictions: (limit = 10, offset = 0) =>
+    api<{ predictions: PredictionRecord[]; count?: number; total?: number; limit?: number; offset?: number }>(
+      `/events/predictions/recent?limit=${limit}&offset=${offset}`,
+    ),
 
   loopStatus: () =>
     api<LoopStatus>("/events/loop/status"),

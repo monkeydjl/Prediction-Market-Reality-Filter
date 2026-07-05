@@ -16,7 +16,7 @@ const EMPTY_PRED: PredictionCalibration = {
   n: 0, brier_score: null, grade: "no_data", mean_raw_edge: null,
   realized_edge: null, directional_hit_rate: null, segment_min_samples: null, by_category: {}, segments: {},
 };
-const REVIEW_PAGE_SIZE = 50;
+const REVIEW_PAGE_SIZE = 10;
 const RESOLVE_LIMIT_OPTIONS = [50, 200, 500, 1000];
 
 const MATCH_RESULT_LABELS: Record<string, string> = {
@@ -124,7 +124,7 @@ export default function HistoryPage() {
   const [predCal, setPredCal] = useState<PredictionCalibration>(EMPTY_PRED);
   const [categoryData, setCategoryData] = useState<CategoryDatum[]>([]);
   const [reviews, setReviews] = useState<ResolvedReview[]>([]);
-  const [loadedEvents, setLoadedEvents] = useState(0);
+  const [reviewPage, setReviewPage] = useState(0);
   const [totalEvents, setTotalEvents] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadingMoreReviews, setLoadingMoreReviews] = useState(false);
@@ -155,7 +155,7 @@ export default function HistoryPage() {
         ? toCategoryData(segmentSource, predCalibration.segment_min_samples ?? null)
         : toCategoryData(cal.by_base_rate_category ?? {}),
     );
-    setLoadedEvents((list.events ?? []).length);
+    setReviewPage(0);
     setTotalEvents(list.total ?? list.count ?? 0);
     setReviews(
       (list.events ?? [])
@@ -164,25 +164,25 @@ export default function HistoryPage() {
     );
   }, []);
 
-  const loadMoreReviews = useCallback(async () => {
+  const loadReviewPage = useCallback(async (page: number) => {
+    if (page < 0) return;
     setLoadingMoreReviews(true);
     setError(null);
     try {
-      const list = await eventsApi.list(REVIEW_PAGE_SIZE, loadedEvents);
-      setLoadedEvents((current) => current + (list.events ?? []).length);
-      setTotalEvents(list.total ?? totalEvents);
-      setReviews((current) => [
-        ...current,
-        ...(list.events ?? [])
+      const list = await eventsApi.list(REVIEW_PAGE_SIZE, page * REVIEW_PAGE_SIZE);
+      setReviewPage(page);
+      setTotalEvents(list.total ?? list.count ?? 0);
+      setReviews(
+        (list.events ?? [])
           .map((e) => toReview(e.record))
           .filter((r): r is ResolvedReview => r !== null),
-      ]);
+      );
     } catch (e) {
-      setError(e instanceof Error ? e.message : "加载更多复盘失败");
+      setError(e instanceof Error ? e.message : "加载复盘分页失败");
     } finally {
       setLoadingMoreReviews(false);
     }
-  }, [loadedEvents, totalEvents]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -364,10 +364,11 @@ export default function HistoryPage() {
                 <SectionErrorBoundary title="复盘表">
                   <ReviewTable
                     reviews={reviews}
-                    loaded={loadedEvents}
+                    page={reviewPage}
+                    pageSize={REVIEW_PAGE_SIZE}
                     total={totalEvents}
-                    loadingMore={loadingMoreReviews}
-                    onLoadMore={loadMoreReviews}
+                    loadingPage={loadingMoreReviews}
+                    onPageChange={loadReviewPage}
                   />
                 </SectionErrorBoundary>
               )}

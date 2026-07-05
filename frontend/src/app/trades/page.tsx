@@ -6,6 +6,13 @@ import { eventsApi, type SimTrade, type TradeStats } from "@/lib/api";
 import { fmtSignedPct } from "@/lib/format";
 
 const DECISION_ORDER: Record<string, number> = { act: 0, provisional_act: 1, watch: 2 };
+const DECISION_META: Record<string, { label: string }> = {
+  act: { label: "\u6b63\u5f0f\u884c\u52a8" },
+  provisional_act: { label: "\u4e34\u65f6\u884c\u52a8" },
+  watch: { label: "\u63a2\u7d22\u89c2\u5bdf" },
+};
+const DECISION_BREAKDOWN_NOTE =
+  "act \u662f\u6821\u51c6\u540e\u7684\u6b63\u5f0f\u884c\u52a8\uff1bprovisional_act \u662f\u51b7\u542f\u52a8/\u6837\u672c\u4e0d\u8db3\u4e0b\u7684\u4e34\u65f6\u884c\u52a8\uff1bwatch \u662f\u63a2\u7d22\u89c2\u5bdf\u6837\u672c\uff0c\u7528\u4e8e\u6536\u96c6\u6570\u636e\uff0c\u4e0d\u4ee3\u8868\u751f\u4ea7\u7ea7\u80dc\u7387\u3002";
 
 function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
@@ -140,6 +147,7 @@ export default function TradesPage() {
             {decisionBreakdown.length > 0 && (
               <section className="flex flex-col gap-2" data-testid="decision-performance-breakdown">
                 <h2 className="text-sm font-semibold">按决策类型统计</h2>
+                <p className="text-xs leading-relaxed text-muted-foreground">{DECISION_BREAKDOWN_NOTE}</p>
                 <div className="overflow-x-auto rounded-lg border border-border">
                   <table className="w-full text-sm">
                     <thead>
@@ -158,7 +166,14 @@ export default function TradesPage() {
                           className="border-b border-border last:border-0"
                           data-testid={`decision-performance-${decision}`}
                         >
-                          <td className="px-4 py-2 font-medium">{decision}</td>
+                          <td className="px-4 py-2 font-medium">
+                            <div className="flex flex-col gap-0.5">
+                              <span>{decision}</span>
+                              <span className="text-[11px] font-normal text-muted-foreground">
+                                {DECISION_META[decision]?.label ?? "\u672a\u5206\u7c7b"}
+                              </span>
+                            </div>
+                          </td>
                           <td className="px-4 py-2 font-mono tabular-nums">{d.total}</td>
                           <td className="px-4 py-2 font-mono tabular-nums">{d.wins}</td>
                           <td className="px-4 py-2 font-mono tabular-nums">{(d.win_rate * 100).toFixed(1)}%</td>

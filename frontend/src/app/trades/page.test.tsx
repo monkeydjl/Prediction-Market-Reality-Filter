@@ -146,15 +146,18 @@ describe("TradesPage", () => {
     render(<TradesPage />);
 
     const breakdown = await screen.findByTestId("decision-performance-breakdown");
+    expect(within(breakdown).getByText(new RegExp("watch \u662f\u63a2\u7d22\u89c2\u5bdf\u6837\u672c"))).toBeInTheDocument();
 
     const actRow = within(breakdown).getByTestId("decision-performance-act");
     expect(actRow).toHaveTextContent("act");
+    expect(actRow).toHaveTextContent("\u6b63\u5f0f\u884c\u52a8");
     expect(actRow).toHaveTextContent("2");
     expect(actRow).toHaveTextContent("100.0%");
     expect(actRow).toHaveTextContent("+12.50pt%");
 
     const watchRow = within(breakdown).getByTestId("decision-performance-watch");
     expect(watchRow).toHaveTextContent("watch");
+    expect(watchRow).toHaveTextContent("\u63a2\u7d22\u89c2\u5bdf");
     expect(watchRow).toHaveTextContent("3");
     expect(watchRow).toHaveTextContent("33.3%");
     expect(watchRow).toHaveTextContent("-4.25pt%");

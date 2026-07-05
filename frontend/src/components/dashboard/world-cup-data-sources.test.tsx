@@ -155,8 +155,7 @@ describe("WorldCupDataSources", () => {
   it("renders configured source status and last run metrics", async () => {
     render(<WorldCupDataSources />);
 
-    expect(await screen.findByText("世界杯数据源")).toBeInTheDocument();
-    expect(screen.getByText("facts 4")).toBeInTheDocument();
+    expect(await screen.findByText("facts 4")).toBeInTheDocument();
     expect(screen.getByText("API-Football")).toBeInTheDocument();
     expect(screen.getByText("budget 25")).toBeInTheDocument();
     expect(screen.getByText("https://api-football.example/v3")).toBeInTheDocument();

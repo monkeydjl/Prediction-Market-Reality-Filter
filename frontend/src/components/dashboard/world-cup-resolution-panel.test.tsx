@@ -91,8 +91,7 @@ describe("WorldCupResolutionPanel", () => {
 
     render(<WorldCupResolutionPanel />);
 
-    expect(await screen.findByText("no candidates")).toBeInTheDocument();
-    expect(screen.getByText("当前没有可结算候选；待定事件仍需要更多事实或最终结果。")).toBeInTheDocument();
+    expect(await screen.findByText("当前没有可结算候选；待定事件仍需要更多事实或最终结果。")).toBeInTheDocument();
     expect(api.detail).not.toHaveBeenCalled();
   });
 

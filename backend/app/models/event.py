@@ -170,6 +170,27 @@ class CrossValidation(BaseModel):
     agreement: str | None = None
 
 
+class ConfidenceBreakdown(BaseModel):
+    """Diagnostics explaining how source structure affected confidence.
+
+    Emitted by ``ai_analysis_service.analyze_market()`` as a read-only audit
+    block. It helps frontend/reporting distinguish raw source quantity from
+    stronger evidence structures such as independent or official sources.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    source_count: int = 0
+    independent_source_count: int = 0
+    official_source_count: int = 0
+    counterevidence_considered: bool = False
+    news_quantity_score: float = 0.0
+    source_structure_score: float = 0.0
+    effective_source_score: float = 0.0
+    source_structure_used: bool = False
+    source_quality_reasons: list[str] = Field(default_factory=list)
+
+
 class EvidenceItem(BaseModel):
     """One piece of source evidence collected for an event (a news article or
     official/regulatory release that passed the news filter).
@@ -514,6 +535,7 @@ class EventRecord(BaseModel):
     outcome: Outcome | None = None
     calibration: Calibration | None = None
     cross_validation: CrossValidation | None = None
+    confidence_breakdown: ConfidenceBreakdown | None = None
     semantics: EventSemantics | None = None
     actionable_recommendation: ActionableRecommendation | None = None
     evidence_breakdown: list[EvidenceBreakdownItem] = Field(default_factory=list)

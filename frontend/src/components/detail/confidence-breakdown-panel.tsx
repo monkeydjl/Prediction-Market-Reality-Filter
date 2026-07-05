@@ -1,16 +1,19 @@
-﻿import type { EventRecord } from "@/lib/types";
+import type { ConfidenceBreakdown, EventRecord } from "@/lib/types";
 
-type ConfidenceBreakdown = {
-  source_count: number;
-  independent_source_count: number;
-  official_source_count: number;
-  counterevidence_considered: boolean;
-  news_quantity_score: number;
-  source_structure_score: number;
-  effective_source_score: number;
-  source_structure_used: boolean;
-  source_quality_reasons: string[];
-};
+type CompleteConfidenceBreakdown = Required<
+  Pick<
+    ConfidenceBreakdown,
+    | "source_count"
+    | "independent_source_count"
+    | "official_source_count"
+    | "counterevidence_considered"
+    | "news_quantity_score"
+    | "source_structure_score"
+    | "effective_source_score"
+    | "source_structure_used"
+    | "source_quality_reasons"
+  >
+>;
 
 const REASON_LABELS: Record<string, string> = {
   independent_source_support: "independent source support",
@@ -25,9 +28,9 @@ function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function asConfidenceBreakdown(value: unknown): ConfidenceBreakdown | null {
-  if (!value || typeof value !== "object") return null;
-  const raw = value as Record<string, unknown>;
+function asConfidenceBreakdown(value: ConfidenceBreakdown | null | undefined): CompleteConfidenceBreakdown | null {
+  if (!value) return null;
+  const raw = value;
   const sourceCount = asNumber(raw.source_count);
   const independentSourceCount = asNumber(raw.independent_source_count);
   const officialSourceCount = asNumber(raw.official_source_count);
@@ -74,7 +77,7 @@ function ReasonPill({ reason }: { reason: string }) {
   );
 }
 
-export function ConfidenceBreakdownPanel({ record }: { record: Pick<EventRecord, "event_id"> & Record<string, unknown> }) {
+export function ConfidenceBreakdownPanel({ record }: { record: Pick<EventRecord, "confidence_breakdown"> }) {
   const breakdown = asConfidenceBreakdown(record.confidence_breakdown);
   if (!breakdown) return null;
 

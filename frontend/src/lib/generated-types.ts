@@ -171,6 +171,7 @@ export interface EventRecord {
   outcome?: Outcome | null;
   calibration?: Calibration | null;
   cross_validation?: CrossValidation | null;
+  confidence_breakdown?: ConfidenceBreakdown | null;
   semantics?: EventSemantics | null;
   actionable_recommendation?: ActionableRecommendation | null;
   evidence_breakdown?: EvidenceBreakdownItem[];
@@ -333,6 +334,25 @@ export interface CrossValidation {
   primary_probability?: number | null;
   divergence?: number | null;
   agreement?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * Diagnostics explaining how source structure affected confidence.
+ *
+ * Emitted by ``ai_analysis_service.analyze_market()`` as a read-only audit
+ * block. It helps frontend/reporting distinguish raw source quantity from
+ * stronger evidence structures such as independent or official sources.
+ */
+export interface ConfidenceBreakdown {
+  source_count?: number;
+  independent_source_count?: number;
+  official_source_count?: number;
+  counterevidence_considered?: boolean;
+  news_quantity_score?: number;
+  source_structure_score?: number;
+  effective_source_score?: number;
+  source_structure_used?: boolean;
+  source_quality_reasons?: string[];
   [k: string]: unknown;
 }
 /**

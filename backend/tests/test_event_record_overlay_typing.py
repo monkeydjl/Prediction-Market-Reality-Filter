@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.models.event import CrossValidation, EventRecord
+from app.models.event import ConfidenceBreakdown, CrossValidation, EventRecord
 
 
 def _base_record() -> dict:
@@ -100,6 +100,28 @@ class TestEventRecordOverlayTyping(unittest.TestCase):
         self.assertIsNone(ev.source_reliability)
         self.assertIsNone(ev.llm_telemetry)
         self.assertIsNone(ev.cross_validation)
+
+
+    def test_record_with_confidence_breakdown_validates_to_typed_model(self):
+        """Confidence diagnostics emitted by analysis are part of EventRecord schema."""
+        record = _base_record()
+        record["confidence_breakdown"] = {
+            "source_count": 4,
+            "independent_source_count": 3,
+            "official_source_count": 1,
+            "counterevidence_considered": True,
+            "news_quantity_score": 0.8,
+            "source_structure_score": 0.9,
+            "effective_source_score": 0.9,
+            "source_structure_used": True,
+            "source_quality_reasons": ["independent_source_support"],
+        }
+
+        ev = EventRecord.model_validate(record)
+
+        self.assertIsInstance(ev.confidence_breakdown, ConfidenceBreakdown)
+        self.assertEqual(ev.confidence_breakdown.independent_source_count, 3)
+        self.assertTrue(ev.confidence_breakdown.source_structure_used)
 
     def test_record_with_cross_validation_validates(self):
         """Record with cross_validation dict validates to CrossValidation model."""

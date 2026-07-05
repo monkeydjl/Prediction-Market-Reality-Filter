@@ -37,7 +37,7 @@ describe("ConfidenceBreakdownPanel", () => {
   });
 
   it("renders nothing when diagnostics are absent", () => {
-    const { container } = render(<ConfidenceBreakdownPanel record={{ event_id: "evt-2" }} />);
+    const { container } = render(<ConfidenceBreakdownPanel record={{}} />);
 
     expect(container).toBeEmptyDOMElement();
   });

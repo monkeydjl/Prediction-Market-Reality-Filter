@@ -369,6 +369,13 @@ class Settings:
     CROSS_VALIDATION_BASE_URL: str = os.getenv("CROSS_VALIDATION_BASE_URL", "")
     CROSS_VALIDATION_API_KEY: str = os.getenv("CROSS_VALIDATION_API_KEY", "")
 
+    # Title translation: separate provider from the main prediction LLM so
+    # translation is cheap, fast, and never competes with analysis capacity.
+    # Falls back to the primary OPENAI_* settings when unset.
+    TRANSLATION_MODEL: str = os.getenv("TRANSLATION_MODEL", "")
+    TRANSLATION_BASE_URL: str = os.getenv("TRANSLATION_BASE_URL", "")
+    TRANSLATION_API_KEY: str = os.getenv("TRANSLATION_API_KEY", "")
+
     # Open-web structured event extraction: turn collected articles into native
     # candidate events (forward-looking questions), not just evidence. Disabled
     # unless OPEN_WEB_EXTRACTION_MODEL is set; runs on the primary provider/client.

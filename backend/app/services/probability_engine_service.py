@@ -87,32 +87,59 @@ def get_client() -> AsyncOpenAI:
     return _client
 
 
+_translation_client = None
+
+
+def get_translation_client() -> AsyncOpenAI:
+    global _translation_client
+    if _translation_client is None:
+        _translation_client = AsyncOpenAI(
+            api_key=settings.TRANSLATION_API_KEY or settings.OPENAI_API_KEY,
+            base_url=settings.TRANSLATION_BASE_URL or settings.DASHSCOPE_BASE_URL,
+            timeout=60.0,
+            max_retries=1,
+        )
+    return _translation_client
+
+
 async def translate_title(question: str) -> str:
     """Translate a market question into a concise Chinese title.
 
-    Uses a minimal, fail-safe prompt designed to work even with small / fast
-    models. On any error, returns the original English question so events
-    always have a visible title.
+    Uses a dedicated translation provider (TRANSLATION_MODEL / TRANSLATION_API_KEY)
+    when configured, falling back to the primary LLM otherwise. On any error,
+    returns the original English question so events always have a visible title.
     """
     if not question or not question.strip():
         return ""
     try:
-        client = get_client()
+        client = get_translation_client()
+        model = settings.TRANSLATION_MODEL or settings.OPENAI_MODEL
         response = await client.chat.completions.create(
-            model=settings.OPENAI_MODEL,
+            model=model,
             messages=[
                 {
                     "role": "user",
                     "content": (
-                        "Translate to Simplified Chinese. Output ONLY the "
-                        f"translation, nothing else:\n\n{question[:500]}"
+                        "Translate the following into Simplified Chinese for a short event title. "
+                        "Keep proper nouns, brand names, game titles, and product names in English "
+                        "(do not translate Fable, Xbox, etc.). "
+                        "Output ONLY the translation, no explanation:\n\n"
+                        f"{question[:500]}"
                     ),
                 },
             ],
             temperature=0,
-            max_tokens=80,
+            max_tokens=500,
         )
         text = (response.choices[0].message.content or "").strip().strip("\"'""''")
+        # Guard against provider errors that leak into the response body
+        # (e.g. "模型「xxx」的请求负载过高，请稍后再试。").
+        if text and any(
+            keyword in text
+            for keyword in ("负载过高", "rate limit", "too many requests")
+        ):
+            logger.debug("translate_title got provider error in content, ignoring")
+            return question[:120]
         return text[:300] if text else question[:120]
     except Exception as exc:
         logger.debug("translate_title failed [question=%.60s]: %s", question, exc)

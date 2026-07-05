@@ -656,12 +656,20 @@ class RecentPredictionsResponse(FlexibleResponse):
 
 class OpenDecisionsResponse(FlexibleResponse):
     count: int = 0
+    total: int = 0
+    limit: int = 10
+    offset: int = 0
+    decision_totals: dict[str, int] = Field(default_factory=dict)
     decisions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class FreshEdgesResponse(FlexibleResponse):
     count: int = 0
+    total: int = 0
+    limit: int = 10
+    offset: int = 0
     classification: str | None = None
+    classification_totals: dict[str, int] = Field(default_factory=dict)
     edges: list[dict[str, Any]] = Field(default_factory=list)
 
 

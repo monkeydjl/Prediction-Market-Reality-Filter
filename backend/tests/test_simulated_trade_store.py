@@ -1,4 +1,4 @@
-﻿import tempfile
+import tempfile
 import sqlite3
 import unittest
 from pathlib import Path
@@ -106,6 +106,31 @@ class SimulatedTradeStoreTests(unittest.TestCase):
         self.assertEqual(repaired["is_win"], 1)
         self.assertEqual(repaired["pnl_pct"], 230.85)
         self.assertEqual(repaired["exit_reason"], "resolved_partial")
+
+
+    def test_lists_trades_with_limit_offset_and_counts(self):
+        for i in range(12):
+            store.open_trade(
+                f"open-{i}",
+                direction="YES",
+                entry_prob=60.0 + i,
+                market_prob=50.0,
+            )
+        for i in range(11):
+            store.open_trade(
+                f"closed-{i}",
+                direction="NO",
+                entry_prob=40.0,
+                market_prob=60.0 + i,
+            )
+            store.close_trade(f"closed-{i}", actual_outcome=0.0)
+
+        self.assertEqual(store.count_open_trades(), 12)
+        self.assertEqual(store.count_closed_trades(), 11)
+        self.assertEqual(len(store.list_open_trades(limit=10, offset=0)), 10)
+        self.assertEqual(len(store.list_open_trades(limit=10, offset=10)), 2)
+        self.assertEqual(len(store.list_closed_trades(limit=10, offset=0)), 10)
+        self.assertEqual(len(store.list_closed_trades(limit=10, offset=10)), 1)
 
 
 if __name__ == "__main__":

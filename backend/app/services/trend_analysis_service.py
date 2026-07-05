@@ -311,20 +311,13 @@ def edge_series(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return points
 
 
-def list_edge_trajectories(
+def _edge_items(
     histories: dict[str, list[dict[str, Any]]],
-    limit: int = 50,
     *,
     classification: str = "all",
     include_series: bool = False,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """List edge trajectories across freshness classes for monitoring views.
-
-    `classification="all"` skips no-data rows and returns fresh, decaying,
-    stale, and closed edges grouped by a stable sort order. A concrete
-    classification returns only that class.
-    """
     items: list[dict[str, Any]] = []
     for event_id, snapshots in histories.items():
         edge = analyze_edge_trajectory(snapshots, now=now)
@@ -350,7 +343,54 @@ def list_edge_trajectories(
             item["event_id"],
         )
     )
-    return items[:limit]
+    return items
+
+
+def count_edge_trajectories(
+    histories: dict[str, list[dict[str, Any]]],
+    *,
+    classification: str = "all",
+    now: datetime | None = None,
+) -> int:
+    """Count edge trajectories matching a monitoring classification."""
+    return len(_edge_items(histories, classification=classification, now=now))
+
+
+def edge_class_counts(
+    histories: dict[str, list[dict[str, Any]]],
+    *,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Return counts by edge lifecycle class, excluding no-data rows."""
+    counts: dict[str, int] = {}
+    for item in _edge_items(histories, classification="all", now=now):
+        cls = item["edge"].get("classification") or "no_data"
+        counts[cls] = counts.get(cls, 0) + 1
+    return counts
+
+
+def list_edge_trajectories(
+    histories: dict[str, list[dict[str, Any]]],
+    limit: int = 50,
+    *,
+    offset: int = 0,
+    classification: str = "all",
+    include_series: bool = False,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """List edge trajectories across freshness classes for monitoring views.
+
+    `classification="all"` skips no-data rows and returns fresh, decaying,
+    stale, and closed edges grouped by a stable sort order. A concrete
+    classification returns only that class.
+    """
+    items = _edge_items(
+        histories,
+        classification=classification,
+        include_series=include_series,
+        now=now,
+    )
+    return items[offset:offset + limit]
 
 
 def rank_fresh_edges(

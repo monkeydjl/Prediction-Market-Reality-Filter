@@ -569,6 +569,22 @@ class Milestone5OpportunityTests(unittest.TestCase):
                 preds.freeze_prediction(_market_record(f"o{i}", estimated=95.0, contract=f"o{i}"))
             self.assertEqual(len(preds.list_open_opportunities(limit=2)), 2)
 
+
+    def test_list_open_opportunities_respects_offset_and_counts(self):
+        with tempfile.TemporaryDirectory() as tmp, self._db(tmp):
+            for i in range(4):
+                preds.freeze_prediction(_market_record(f"p{i}", estimated=95.0 - i, contract=f"p{i}"))
+
+            self.assertEqual(preds.count_open_opportunities(decisions=("act", "watch", "provisional_act")), 4)
+            page = preds.list_open_opportunities(
+                decisions=("act", "watch", "provisional_act"),
+                limit=2,
+                offset=2,
+            )
+
+        self.assertEqual(len(page), 2)
+        self.assertEqual([p["event_id"] for p in page], ["p2", "p3"])
+
     def test_scored_predictions_excluded_from_opportunities(self):
         with tempfile.TemporaryDirectory() as tmp, self._db(tmp):
             preds.freeze_prediction(_market_record("done", estimated=95.0, contract="done"))

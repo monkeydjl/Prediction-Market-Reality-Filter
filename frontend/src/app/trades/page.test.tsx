@@ -1,4 +1,5 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import TradesPage from "./page";
 import type { SimTrade, TradeStats } from "@/lib/api";
@@ -161,6 +162,53 @@ describe("TradesPage", () => {
     expect(watchRow).toHaveTextContent("3");
     expect(watchRow).toHaveTextContent("33.3%");
     expect(watchRow).toHaveTextContent("-4.25pt%");
+  });
+
+  it("paginates open and closed trade events with ten rows per page", async () => {
+    const user = userEvent.setup();
+    apiMocks.tradeStats.mockResolvedValue({ ...stats, total_closed: 12 });
+    apiMocks.openTrades.mockImplementation(async (limit = 10, offset = 0) => ({
+      count: offset === 0 ? 10 : 1,
+      total: 11,
+      limit,
+      offset,
+      trades: offset === 0
+        ? [{ ...openTrade, trade_id: "open-page-1", event_title: "Open trade page 1" }]
+        : [{ ...openTrade, trade_id: "open-page-2", event_title: "Open trade page 2" }],
+    }));
+    apiMocks.closedTrades.mockImplementation(async (limit = 10, offset = 0) => ({
+      count: offset === 0 ? 10 : 2,
+      total: 12,
+      limit,
+      offset,
+      trades: offset === 0
+        ? [{ ...closedTrade, trade_id: "closed-page-1", event_title: "Closed trade page 1" }]
+        : [{ ...closedTrade, trade_id: "closed-page-2", event_title: "Closed trade page 2" }],
+    }));
+
+    render(<TradesPage />);
+
+    const openHeading = await screen.findByRole("heading", { name: "当前持仓 (11)" });
+    const closedHeading = await screen.findByRole("heading", { name: "已平仓 (12)" });
+    expect(apiMocks.openTrades).toHaveBeenCalledWith(10, 0);
+    expect(apiMocks.closedTrades).toHaveBeenCalledWith(10, 0);
+
+    const closedSection = closedHeading.closest("section");
+    expect(closedSection).not.toBeNull();
+    expect(within(closedSection as HTMLElement).getByText("第 1 / 2 页 · 共 12 条")).toBeInTheDocument();
+
+    await user.click(within(closedSection as HTMLElement).getByRole("button", { name: /\u4e0b\u4e00\u9875/ }));
+
+    await waitFor(() => expect(apiMocks.closedTrades).toHaveBeenLastCalledWith(10, 10));
+    expect(await within(closedSection as HTMLElement).findByText("Closed trade page 2")).toBeInTheDocument();
+    expect(within(closedSection as HTMLElement).getByText("第 2 / 2 页 · 共 12 条")).toBeInTheDocument();
+
+    const openSection = openHeading.closest("section");
+    expect(openSection).not.toBeNull();
+    await user.click(within(openSection as HTMLElement).getByRole("button", { name: /\u4e0b\u4e00\u9875/ }));
+
+    await waitFor(() => expect(apiMocks.openTrades).toHaveBeenLastCalledWith(10, 10));
+    expect(await within(openSection as HTMLElement).findByText("Open trade page 2")).toBeInTheDocument();
   });
 
 });

@@ -2,8 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { PaginationControls } from "@/components/pagination-controls";
 import { eventsApi, type SimTrade, type TradeStats } from "@/lib/api";
 import { fmtSignedPct } from "@/lib/format";
+
+const PAGE_SIZE = 10;
 
 const DECISION_ORDER: Record<string, number> = { act: 0, provisional_act: 1, watch: 2 };
 const DECISION_META: Record<string, { label: string }> = {
@@ -34,6 +37,10 @@ export default function TradesPage() {
   const [stats, setStats] = useState<TradeStats | null>(null);
   const [openTrades, setOpenTrades] = useState<SimTrade[]>([]);
   const [closedTrades, setClosedTrades] = useState<SimTrade[]>([]);
+  const [openTotal, setOpenTotal] = useState(0);
+  const [closedTotal, setClosedTotal] = useState(0);
+  const [openPage, setOpenPage] = useState(0);
+  const [closedPage, setClosedPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,18 +50,22 @@ export default function TradesPage() {
     try {
       const [s, o, c] = await Promise.all([
         eventsApi.tradeStats(),
-        eventsApi.openTrades(),
-        eventsApi.closedTrades(100),
+        eventsApi.openTrades(PAGE_SIZE, openPage * PAGE_SIZE),
+        eventsApi.closedTrades(PAGE_SIZE, closedPage * PAGE_SIZE),
       ]);
+      const openRows = o.trades ?? [];
+      const closedRows = c.trades ?? [];
       setStats(s);
-      setOpenTrades(o.trades ?? []);
-      setClosedTrades(c.trades ?? []);
+      setOpenTrades(openRows);
+      setClosedTrades(closedRows);
+      setOpenTotal(o.total ?? o.count ?? openRows.length);
+      setClosedTotal(c.total ?? c.count ?? closedRows.length);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "加载失败");
+      setError(e instanceof Error ? e.message : "\u52a0\u8f7d\u5931\u8d25");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [closedPage, openPage]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -84,7 +95,7 @@ export default function TradesPage() {
           <div className="rounded-md border border-neg/40 bg-neg/10 px-4 py-3 text-sm text-neg">{error}</div>
         )}
 
-        {loading ? (
+        {loading && stats === null ? (
           <div className="grid h-40 place-items-center rounded-lg border border-border bg-card text-sm text-muted-foreground">加载中…</div>
         ) : (
           <>
@@ -188,7 +199,7 @@ export default function TradesPage() {
 
             {/* Open positions */}
             <section className="flex flex-col gap-2">
-              <h2 className="text-sm font-semibold">当前持仓 ({openTrades.length})</h2>
+              <h2 className="text-sm font-semibold">当前持仓 ({openTotal})</h2>
               {openTrades.length === 0 ? (
                 <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
                   暂无持仓。系统发现事件时会自动建立模拟交易。
@@ -231,11 +242,20 @@ export default function TradesPage() {
                   </table>
                 </div>
               )}
+              {openTotal > PAGE_SIZE && (
+                <PaginationControls
+                  page={openPage}
+                  pageSize={PAGE_SIZE}
+                  total={openTotal}
+                  loading={loading}
+                  onPageChange={setOpenPage}
+                />
+              )}
             </section>
 
             {/* Closed trades */}
             <section className="flex flex-col gap-2">
-              <h2 className="text-sm font-semibold">已平仓 ({closedTrades.length})</h2>
+              <h2 className="text-sm font-semibold">已平仓 ({closedTotal})</h2>
               {closedTrades.length === 0 ? (
                 <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
                   暂无已平仓记录。事件结算后会自动计算盈亏。
@@ -273,6 +293,15 @@ export default function TradesPage() {
                     </tbody>
                   </table>
                 </div>
+              )}
+              {closedTotal > PAGE_SIZE && (
+                <PaginationControls
+                  page={closedPage}
+                  pageSize={PAGE_SIZE}
+                  total={closedTotal}
+                  loading={loading}
+                  onPageChange={setClosedPage}
+                />
               )}
             </section>
           </>

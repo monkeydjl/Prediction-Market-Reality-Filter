@@ -547,9 +547,30 @@ def list_recent(limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def count_open_opportunities(
+    decisions: tuple[str, ...] = ("act", "watch"),
+) -> int:
+    """Count open committed predictions matching the decision filter."""
+    if not decisions:
+        return 0
+    path = sqlite_db.loop_db_path()
+    _ensure_schema(path)
+    placeholders = ",".join("?" for _ in decisions)
+    with reading(path) as conn:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS n FROM predictions
+            WHERE status='open' AND decision IN ({placeholders})
+            """,
+            decisions,
+        ).fetchone()
+    return int(row["n"] if row else 0)
+
+
 def list_open_opportunities(
     decisions: tuple[str, ...] = ("act", "watch"),
     limit: int = 50,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     """Open (unresolved) committed predictions worth a human's attention, ranked
     by absolute adjusted edge. `decisions` filters by the Decision Gate verdict
@@ -564,10 +585,10 @@ def list_open_opportunities(
             f"""
             SELECT * FROM predictions
             WHERE status='open' AND decision IN ({placeholders})
-            ORDER BY ABS(COALESCE(adjusted_edge, 0)) DESC
-            LIMIT ?
+            ORDER BY ABS(COALESCE(adjusted_edge, 0)) DESC, event_id ASC
+            LIMIT ? OFFSET ?
             """,
-            (*decisions, limit),
+            (*decisions, limit, offset),
         ).fetchall()
     return [dict(row) for row in rows]
 

@@ -906,9 +906,16 @@ export const eventsApi = {
     }>("/events/calibration"),
 
   // M5 opportunity surface. Defaults to act + watch + provisional_act; pass "act" to narrow.
-  openDecisions: (decision?: "act" | "watch" | "provisional_act", limit = 50) =>
-    api<{ count: number; decisions: DecisionReport[] }>(
-      `/events/decisions/open?limit=${limit}${decision ? `&decision=${decision}` : ""}`,
+  openDecisions: (decision?: "act" | "watch" | "provisional_act", limit = 10, offset = 0) =>
+    api<{
+      count: number;
+      total?: number;
+      limit?: number;
+      offset?: number;
+      decision_totals?: Record<string, number>;
+      decisions: DecisionReport[];
+    }>(
+      `/events/decisions/open?limit=${limit}&offset=${offset}${decision ? `&decision=${decision}` : ""}`,
     ),
 
   decision: (id: string) =>
@@ -931,9 +938,17 @@ export const eventsApi = {
       { method: "POST" },
     ),
 
-  edgeMonitor: (limit = 50) =>
-    api<{ count: number; classification: string; edges: FreshEdge[] }>(
-      `/events/edges/fresh?limit=${limit}&classification=all&include_series=true`,
+  edgeMonitor: (limit = 10, offset = 0, classification = "all") =>
+    api<{
+      count: number;
+      total?: number;
+      limit?: number;
+      offset?: number;
+      classification: string;
+      classification_totals?: Record<string, number>;
+      edges: FreshEdge[];
+    }>(
+      `/events/edges/fresh?limit=${limit}&offset=${offset}&classification=${classification}&include_series=true`,
     ),
 
   // M2/M5 act-only prediction calibration scorecard.
@@ -954,10 +969,14 @@ export const eventsApi = {
   // M6 simulated trades (paper trading)
   tradeStats: () =>
     api<TradeStats>("/events/trades/stats"),
-  openTrades: () =>
-    api<{ count: number; trades: SimTrade[] }>("/events/trades/open"),
-  closedTrades: (limit = 50) =>
-    api<{ count: number; trades: SimTrade[] }>(`/events/trades/closed?limit=${limit}`),
+  openTrades: (limit = 10, offset = 0) =>
+    api<{ count: number; total?: number; limit?: number; offset?: number; trades: SimTrade[] }>(
+      `/events/trades/open?limit=${limit}&offset=${offset}`,
+    ),
+  closedTrades: (limit = 10, offset = 0) =>
+    api<{ count: number; total?: number; limit?: number; offset?: number; trades: SimTrade[] }>(
+      `/events/trades/closed?limit=${limit}&offset=${offset}`,
+    ),
 
   pendingLinks: () =>
     api<{ pending: PendingLink[] }>("/events/links/pending"),

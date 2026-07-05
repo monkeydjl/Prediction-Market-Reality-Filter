@@ -220,29 +220,60 @@ def _resolution_exit_reason(actual_outcome: float) -> str:
     return "resolved_partial"
 
 
-def list_open_trades() -> list[dict[str, Any]]:
-    """Return all open simulated trades."""
+def _count_trades(status: str) -> int:
+    db_path = loop_db_path()
+    conn = sqlite3.connect(db_path)
+    try:
+        _ensure_schema(conn)
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM simulated_trades WHERE status=?",
+            (status,),
+        ).fetchone()
+        return int(row[0] if row else 0)
+    finally:
+        conn.close()
+
+
+def count_open_trades() -> int:
+    """Return the total number of open simulated trades."""
+    return _count_trades("open")
+
+
+def count_closed_trades() -> int:
+    """Return the total number of closed simulated trades."""
+    return _count_trades("closed")
+
+
+def list_open_trades(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+    """Return open simulated trades, newest first."""
     db_path = loop_db_path()
     conn = sqlite3.connect(db_path)
     try:
         _ensure_schema(conn)
         rows = conn.execute(
-            "SELECT * FROM simulated_trades WHERE status='open' ORDER BY entry_time DESC"
+            """SELECT * FROM simulated_trades
+               WHERE status='open'
+               ORDER BY entry_time DESC, trade_id DESC
+               LIMIT ? OFFSET ?""",
+            (limit, offset),
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
     finally:
         conn.close()
 
 
-def list_closed_trades(limit: int = 100) -> list[dict[str, Any]]:
+def list_closed_trades(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
     """Return recently closed simulated trades."""
     db_path = loop_db_path()
     conn = sqlite3.connect(db_path)
     try:
         _ensure_schema(conn)
         rows = conn.execute(
-            "SELECT * FROM simulated_trades WHERE status='closed' ORDER BY exit_time DESC LIMIT ?",
-            (limit,),
+            """SELECT * FROM simulated_trades
+               WHERE status='closed'
+               ORDER BY exit_time DESC, trade_id DESC
+               LIMIT ? OFFSET ?""",
+            (limit, offset),
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
     finally:

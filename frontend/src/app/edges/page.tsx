@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { EdgeTimelineChart } from "@/components/edges/edge-timeline-chart";
+import { PaginationControls } from "@/components/pagination-controls";
 import { eventsApi, type EdgePoint, type FreshEdge } from "@/lib/api";
 import { fmtDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+
+const PAGE_SIZE = 10;
 
 const CLASS_META: Record<string, { label: string; cls: string; rank: number }> = {
   fresh: { label: "仍接近峰值", cls: "border-pos/40 bg-pos/10 text-pos", rank: 0 },
@@ -106,14 +109,12 @@ function EdgeCard({ item }: { item: FreshEdge }) {
 
 export default function EdgesPage() {
   const [edges, setEdges] = useState<FreshEdge[]>([]);
+  const [total, setTotal] = useState(0);
+  const [classTotals, setClassTotals] = useState<Record<string, number>>({});
+  const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<string | "all">("all");
-  const mountedRef = useRef(true);
-
-  useEffect(() => {
-    return () => { mountedRef.current = false; };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -121,8 +122,13 @@ export default function EdgesPage() {
       setLoading(true);
       setError(null);
       try {
-        const data = await eventsApi.edgeMonitor(50);
-        if (!cancelled) setEdges(data.edges ?? []);
+        const data = await eventsApi.edgeMonitor(PAGE_SIZE, page * PAGE_SIZE, active);
+        if (!cancelled) {
+          const rows = data.edges ?? [];
+          setEdges(rows);
+          setTotal(data.total ?? data.count ?? rows.length);
+          setClassTotals(data.classification_totals ?? {});
+        }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "加载失败");
       } finally {
@@ -130,30 +136,20 @@ export default function EdgesPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, []);
-
-  const byClass = useMemo(() => {
-    const map: Record<string, FreshEdge[]> = {};
-    for (const e of edges) {
-      const cls = e.edge.classification || "no_data";
-      if (!map[cls]) map[cls] = [];
-      map[cls].push(e);
-    }
-    return map;
-  }, [edges]);
+  }, [active, page]);
 
   const classes = useMemo(() => {
     return Object.keys(CLASS_META)
-      .filter((k) => (byClass[k] ?? []).length > 0)
+      .filter((k) => (classTotals[k] ?? 0) > 0)
       .sort((a, b) => CLASS_META[a].rank - CLASS_META[b].rank);
-  }, [byClass]);
+  }, [classTotals]);
 
-  const shown = useMemo(() => {
-    if (active === "all") return edges;
-    return byClass[active] ?? [];
-  }, [active, edges, byClass]);
+  const allTotal = useMemo(() => {
+    const fromClasses = Object.values(classTotals).reduce((sum, count) => sum + count, 0);
+    return fromClasses || (active === "all" ? total : edges.length);
+  }, [active, classTotals, edges.length, total]);
 
-  const total = edges.length;
+  const showInitialLoading = loading && edges.length === 0 && total === 0;
 
   return (
       <main id="main-content" className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
@@ -168,7 +164,10 @@ export default function EdgesPage() {
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <button
             type="button"
-            onClick={() => setActive("all")}
+            onClick={() => {
+              setActive("all");
+              setPage(0);
+            }}
             className={cn(
               "flex flex-col gap-1 rounded-lg border p-3 text-left transition-colors",
               active === "all"
@@ -177,16 +176,19 @@ export default function EdgesPage() {
             )}
           >
             <span className="text-xs text-muted-foreground">全部</span>
-            <span className="font-mono text-lg font-semibold">{total}</span>
+            <span className="font-mono text-lg font-semibold">{allTotal}</span>
           </button>
           {classes.map((cls) => {
             const meta = CLASS_META[cls];
-            const count = (byClass[cls] ?? []).length;
+            const count = classTotals[cls] ?? 0;
             return (
               <button
                 key={cls}
                 type="button"
-                onClick={() => setActive(cls)}
+                onClick={() => {
+                  setActive(cls);
+                  setPage(0);
+                }}
                 className={cn(
                   "flex flex-col gap-1 rounded-lg border p-3 text-left transition-colors",
                   active === cls
@@ -205,18 +207,29 @@ export default function EdgesPage() {
           <div className="rounded-md border border-neg/40 bg-neg/10 px-4 py-3 text-sm text-neg">{error}</div>
         )}
 
-        {loading ? (
+        {showInitialLoading ? (
           <div className="grid h-40 place-items-center rounded-lg border border-border bg-card text-sm text-muted-foreground">加载中…</div>
-        ) : shown.length === 0 ? (
+        ) : edges.length === 0 ? (
           <div className="grid h-40 place-items-center rounded-lg border border-dashed border-border bg-card text-sm text-muted-foreground">
             当前没有 {active === "all" ? "" : CLASS_META[active]?.label} 的 edge
           </div>
         ) : (
-          <div className="grid gap-3 lg:grid-cols-2">
-            {shown.map((e) => (
-              <EdgeCard key={e.event_id} item={e} />
-            ))}
-          </div>
+          <>
+            <div className="grid gap-3 lg:grid-cols-2">
+              {edges.map((e) => (
+                <EdgeCard key={e.event_id} item={e} />
+              ))}
+            </div>
+            {total > PAGE_SIZE && (
+              <PaginationControls
+                page={page}
+                pageSize={PAGE_SIZE}
+                total={total}
+                loading={loading}
+                onPageChange={setPage}
+              />
+            )}
+          </>
         )}
       </main>
   );

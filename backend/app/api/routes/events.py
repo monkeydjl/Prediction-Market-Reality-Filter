@@ -24,6 +24,7 @@ from app.api.security import is_write_key_valid, require_write_key
 from app.memory.event_market_link_store import list_pending, set_verified
 from app.memory.prediction_store import (
     calibration_summary,
+    count_open_opportunities,
     count_predictions,
     get_prediction,
     list_open_opportunities,
@@ -123,6 +124,8 @@ from app.services.world_cup_statistics_source import (
 from app.services.trend_analysis_service import (
     analyze_edge_trajectory,
     analyze_trend,
+    count_edge_trajectories,
+    edge_class_counts,
     list_edge_trajectories,
     rank_fresh_edges,
     rank_movers,
@@ -1110,7 +1113,8 @@ async def get_recent_predictions(
 
 @router.get("/decisions/open", response_model=OpenDecisionsResponse)
 async def get_open_decisions(
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=10, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     decision: str | None = Query(default=None, pattern="^(act|watch|provisional_act)$"),
 ):
     """Open opportunities: unresolved committed predictions worth a human's
@@ -1124,11 +1128,23 @@ async def get_open_decisions(
     decisions = (decision,) if decision else ("act", "watch", "provisional_act")
     reports = []
     events_by_id = {entry.get("event_id"): entry for entry in list_all_events()}
-    for prediction in list_open_opportunities(decisions=decisions, limit=limit):
+    for prediction in list_open_opportunities(decisions=decisions, limit=limit, offset=offset):
         entry = events_by_id.get(prediction["event_id"])
         record = entry.get("record") if entry else None
         reports.append(build_decision_report(prediction, record))
-    return {"count": len(reports), "decisions": reports}
+    decision_totals = {
+        "act": count_open_opportunities(decisions=("act",)),
+        "provisional_act": count_open_opportunities(decisions=("provisional_act",)),
+        "watch": count_open_opportunities(decisions=("watch",)),
+    }
+    return {
+        "count": len(reports),
+        "total": count_open_opportunities(decisions=decisions),
+        "limit": limit,
+        "offset": offset,
+        "decision_totals": decision_totals,
+        "decisions": reports,
+    }
 
 
 @router.get(
@@ -1138,6 +1154,7 @@ async def get_open_decisions(
 )
 async def get_fresh_edges(
     limit: int = Query(default=10, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
     classification: str = Query(
         default="fresh",
         pattern="^(all|fresh|decaying|stale|closed|no_data)$",
@@ -1150,12 +1167,13 @@ async def get_fresh_edges(
     closed edges; default behavior deliberately excludes decayed or stale edges.
     """
     histories = histories_by_event()
-    if classification == "fresh" and not include_series:
+    if classification == "fresh" and not include_series and offset == 0:
         edges = rank_fresh_edges(histories, limit=limit)
     else:
         edges = list_edge_trajectories(
             histories,
             limit=limit,
+            offset=offset,
             classification=classification,
             include_series=include_series,
         )
@@ -1167,9 +1185,15 @@ async def get_fresh_edges(
         title_zh = ((entry or {}).get("record") or {}).get("event_title_zh") or ""
         if title_zh:
             edge["event_title_zh"] = title_zh
-    body = {"count": len(edges), "edges": edges}
-    if classification != "fresh" or include_series:
-        body["classification"] = classification
+    body = {
+        "count": len(edges),
+        "total": count_edge_trajectories(histories, classification=classification),
+        "limit": limit,
+        "offset": offset,
+        "classification": classification,
+        "classification_totals": edge_class_counts(histories),
+        "edges": edges,
+    }
     return body
 
 
@@ -1228,21 +1252,37 @@ async def get_trade_stats():
 
 
 @router.get("/trades/open", response_model=FlexibleResponse)
-async def get_open_trades():
-    """Return all open simulated trades."""
-    from app.memory.simulated_trade_store import list_open_trades
-    trades = list_open_trades()
-    return {"count": len(trades), "trades": trades}
+async def get_open_trades(
+    limit: int = Query(default=10, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """Return paginated open simulated trades."""
+    from app.memory.simulated_trade_store import count_open_trades, list_open_trades
+    trades = list_open_trades(limit=limit, offset=offset)
+    return {
+        "count": len(trades),
+        "total": count_open_trades(),
+        "limit": limit,
+        "offset": offset,
+        "trades": trades,
+    }
 
 
 @router.get("/trades/closed", response_model=FlexibleResponse)
 async def get_closed_trades(
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=10, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ):
-    """Return recently closed simulated trades."""
-    from app.memory.simulated_trade_store import list_closed_trades
-    trades = list_closed_trades(limit=limit)
-    return {"count": len(trades), "trades": trades}
+    """Return paginated recently closed simulated trades."""
+    from app.memory.simulated_trade_store import count_closed_trades, list_closed_trades
+    trades = list_closed_trades(limit=limit, offset=offset)
+    return {
+        "count": len(trades),
+        "total": count_closed_trades(),
+        "limit": limit,
+        "offset": offset,
+        "trades": trades,
+    }
 
 
 @router.post("/trades/{event_id}/close", response_model=FlexibleResponse)

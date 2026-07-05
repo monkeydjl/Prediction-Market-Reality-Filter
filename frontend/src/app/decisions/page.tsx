@@ -3,34 +3,46 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw, Target } from "lucide-react";
 import { DecisionCard } from "@/components/decisions/decision-card";
+import { PaginationControls } from "@/components/pagination-controls";
 import { eventsApi, type DecisionReport, type FreshEdge } from "@/lib/api";
 
-const SECTION_META: { key: string; label: string; cls: string }[] = [
+const PAGE_SIZE = 10;
+
+const SECTION_META: { key: "act" | "provisional_act" | "watch"; label: string; cls: string }[] = [
   { key: "act", label: "建议行动", cls: "border-pos/40 bg-pos/10 text-pos" },
   { key: "provisional_act", label: "临时行动", cls: "border-blue-400/40 bg-blue-50/10 text-blue-600 dark:text-blue-400" },
   { key: "watch", label: "持续观察", cls: "border-warn/40 bg-warn/10 text-warn" },
 ];
 
+type DecisionFilter = "all" | "act" | "provisional_act" | "watch";
+
 export default function DecisionsPage() {
   const [decisions, setDecisions] = useState<DecisionReport[]>([]);
   const [freshById, setFreshById] = useState<Record<string, string>>({});
+  const [total, setTotal] = useState(0);
+  const [decisionTotals, setDecisionTotals] = useState<Record<string, number>>({});
+  const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<"all" | "act" | "provisional_act" | "watch">("all");
+  const [filter, setFilter] = useState<DecisionFilter>("all");
 
   const load = useCallback(async () => {
     setError(null);
+    const decisionFilter = filter === "all" ? undefined : filter;
     const [open, fresh] = await Promise.all([
-      eventsApi.openDecisions(undefined, 100),
+      eventsApi.openDecisions(decisionFilter, PAGE_SIZE, page * PAGE_SIZE),
       eventsApi.freshEdges(50),
     ]);
-    setDecisions(open.decisions ?? []);
+    const rows = open.decisions ?? [];
+    setDecisions(rows);
+    setTotal(open.total ?? open.count ?? rows.length);
+    setDecisionTotals(open.decision_totals ?? {});
     const map: Record<string, string> = {};
     for (const e of (fresh.edges ?? []) as FreshEdge[]) {
       map[e.event_id] = e.edge.classification;
     }
     setFreshById(map);
-  }, []);
+  }, [filter, page]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -58,7 +70,6 @@ export default function DecisionsPage() {
     return () => { cancelled = true; };
   }, [load]);
 
-  // Group decisions by type
   const grouped = useMemo(() => {
     const map: Record<string, DecisionReport[]> = {};
     for (const d of decisions) {
@@ -69,16 +80,18 @@ export default function DecisionsPage() {
     return map;
   }, [decisions]);
 
-  const counts = useMemo(
-    () => ({
-      total: decisions.length,
-      act: (grouped.act ?? []).length,
-      provisional_act: (grouped.provisional_act ?? []).length,
-      watch: (grouped.watch ?? []).length,
-    }),
-    [grouped, decisions],
-  );
+  const counts = useMemo(() => {
+    const summedTotal = SECTION_META.reduce((sum, sec) => sum + (decisionTotals[sec.key] ?? 0), 0);
+    return {
+      total: filter === "all" ? (total || summedTotal || decisions.length) : (summedTotal || total || decisions.length),
+      act: decisionTotals.act ?? (grouped.act ?? []).length,
+      provisional_act: decisionTotals.provisional_act ?? (grouped.provisional_act ?? []).length,
+      watch: decisionTotals.watch ?? (grouped.watch ?? []).length,
+    };
+  }, [decisionTotals, grouped, decisions.length, filter, total]);
 
+  const visibleTotal = total || decisions.length;
+  const showInitialLoading = loading && decisions.length === 0 && visibleTotal === 0;
 
   return (
       <main id="main-content" className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
@@ -110,7 +123,10 @@ export default function DecisionsPage() {
             <button
               key={f.key}
               type="button"
-              onClick={() => setFilter(f.key)}
+              onClick={() => {
+                setFilter(f.key);
+                setPage(0);
+              }}
               className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
                 filter === f.key
                   ? "bg-secondary font-medium text-foreground"
@@ -126,9 +142,9 @@ export default function DecisionsPage() {
           <div className="rounded-md border border-neg/40 bg-neg/10 px-4 py-3 text-sm text-neg">{error}</div>
         )}
 
-        {loading ? (
+        {showInitialLoading ? (
           <div className="grid h-40 place-items-center rounded-lg border border-border bg-card text-sm text-muted-foreground">加载中…</div>
-        ) : counts.total === 0 ? (
+        ) : visibleTotal === 0 ? (
           <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border bg-card px-6 py-12 text-center">
             <Target className="size-8 text-muted-foreground" aria-hidden="true" />
             <p className="text-sm font-medium text-foreground">当前没有可展示的机会</p>
@@ -138,7 +154,6 @@ export default function DecisionsPage() {
           </div>
         ) : (
           <>
-            {/* Sections filtered by selected type */}
             {SECTION_META
               .filter((sec) => filter === "all" || filter === sec.key)
               .map((sec) => {
@@ -158,6 +173,15 @@ export default function DecisionsPage() {
                   </section>
                 );
               })}
+            {visibleTotal > PAGE_SIZE && (
+              <PaginationControls
+                page={page}
+                pageSize={PAGE_SIZE}
+                total={visibleTotal}
+                loading={loading}
+                onPageChange={setPage}
+              />
+            )}
           </>
         )}
       </main>

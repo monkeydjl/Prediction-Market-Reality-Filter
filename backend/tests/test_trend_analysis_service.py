@@ -20,6 +20,8 @@ from app.services import event_audit_service as audit
 from app.services.trend_analysis_service import (
     analyze_edge_trajectory,
     analyze_trend,
+    count_edge_trajectories,
+    edge_class_counts,
     list_edge_trajectories,
     rank_fresh_edges,
     rank_movers,
@@ -360,6 +362,32 @@ class ListEdgeTrajectoriesTests(unittest.TestCase):
         self.assertEqual(out[0]["series"][-1]["edge"], 20.0)
 
 
+    def test_lists_edges_with_offset_and_counts_by_class(self):
+        histories = {
+            "fresh1": [_esnap(50, 50), _esnap(80, 50)],
+            "fresh2": [_esnap(50, 50), _esnap(70, 50)],
+            "decaying": [_esnap(90, 50), _esnap(56, 50)],
+            "closed": [_esnap(50, 50), _esnap(41, 40)],
+        }
+
+        out = list_edge_trajectories(
+            histories,
+            limit=2,
+            offset=1,
+            classification="all",
+            include_series=True,
+            now=_dt(NOW_FRESH),
+        )
+
+        self.assertEqual([e["event_id"] for e in out], ["fresh2", "decaying"])
+        self.assertEqual(count_edge_trajectories(histories, classification="all", now=_dt(NOW_FRESH)), 4)
+        self.assertEqual(edge_class_counts(histories, now=_dt(NOW_FRESH)), {
+            "fresh": 2,
+            "decaying": 1,
+            "closed": 1,
+        })
+
+
 class EdgeRouteTests(unittest.TestCase):
     def test_history_route_includes_edge_block(self):
         app = FastAPI()
@@ -420,6 +448,29 @@ class EdgeRouteTests(unittest.TestCase):
         self.assertEqual(by_id["bigedge"]["edge"]["classification"], "fresh")
         self.assertEqual(by_id["closededge"]["edge"]["classification"], "closed")
         self.assertEqual(by_id["bigedge"]["series"][0]["edge"], 45.0)
+
+
+    def test_edge_monitor_route_paginates_and_reports_totals(self):
+        app = FastAPI()
+        app.include_router(events_routes.router, prefix="/events")
+        client = TestClient(app)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_audit.jsonl")
+            with patch.object(audit, "_audit_path", return_value=path):
+                audit.record_event(_record("bigedge", 85.0))
+                audit.record_event(_record("midedge", 65.0))
+                audit.record_event(_record("closededge", 41.0))
+                resp = client.get("/events/edges/fresh?classification=all&include_series=true&limit=1&offset=1")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["total"], 3)
+        self.assertEqual(body["limit"], 1)
+        self.assertEqual(body["offset"], 1)
+        self.assertEqual(body["edges"][0]["event_id"], "midedge")
+        self.assertEqual(body["classification_totals"]["fresh"], 2)
+        self.assertEqual(body["classification_totals"]["closed"], 1)
 
 
 if __name__ == "__main__":

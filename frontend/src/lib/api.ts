@@ -192,6 +192,13 @@ export interface CalibrationAgg {
   n: number;
 }
 
+export interface CategoryCoverage {
+  total: number;
+  classified: number;
+  unknown: number;
+  unknown_rate: number | null;
+}
+
 // A committed prediction rendered for human review (M5 decision report).
 // Mirrors decision_report_service.build_decision_report.
 export interface DecisionReport {
@@ -905,6 +912,7 @@ export const eventsApi = {
       overall: CalibrationAgg;
       by_source: Record<string, CalibrationAgg>;
       by_base_rate_category: Record<string, CalibrationAgg>;
+      category_coverage: CategoryCoverage;
     }>("/events/calibration"),
 
   // M5 opportunity surface. Defaults to act + watch + provisional_act; pass "act" to narrow.

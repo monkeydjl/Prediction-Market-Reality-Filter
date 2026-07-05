@@ -201,11 +201,64 @@ _RULES: list[tuple[list[str], BaseRate]] = [
 
 _DEFAULT = BaseRate("unknown", 20, 80, 50, "无法分类，使用最大熵先验")
 
+
+# Broad domain fallbacks. These run only after the specific rules above, so they
+# reduce unknown/uncalibrated buckets without stealing precise matches such as
+# BTC price, Fed decisions, or US elections.
+_COARSE_RULES: list[tuple[list[str], BaseRate]] = [
+    (["temperature", "degrees", "weather", "rain", "snow", "heatwave",
+      "cold snap", "forecast", "precipitation"],
+     BaseRate("weather_event", 20, 80, 50,
+              "Weather event: use broad climatology/model prior when no precise category exists")),
+
+    (["oscar", "oscars", "academy award", "grammy", "emmy",
+      "golden globe", "best picture", "best actor", "best actress"],
+     BaseRate("entertainment_awards", 10, 70, 35,
+              "Entertainment awards: nominee fields are broad; favorites often still overbet")),
+
+    (["earnings", "revenue", "eps", "profit", "quarterly results",
+      "guidance", "earnings call"],
+     BaseRate("company_earnings", 25, 75, 50,
+              "Company earnings: analyst expectations anchor the prior, surprises remain common")),
+
+    (["bill pass", "pass the bill", "congress pass", "legislation",
+      "executive order", "government shutdown", "budget deal"],
+     BaseRate("policy_general", 15, 70, 40,
+              "General policy: political process risk makes headline timelines uncertain")),
+
+    (["vaccine", "fda approve", "fda approval", "drug approval",
+      "clinical trial", "pandemic", "disease", "who declare"],
+     BaseRate("health_event", 15, 75, 42,
+              "Health event: regulatory/scientific evidence is useful but timing is uncertain")),
+
+    (["world cup", "fifa", "nba", "nfl", "mlb", "uefa",
+      "champions league", "olympics", "semifinals", "quarterfinals"],
+     BaseRate("sports_general", 20, 80, 45,
+              "General sports: odds markets are usually informative; tournament paths add variance")),
+
+    (["iphone", "apple event", "product launch", "release date",
+      "app store", "robotaxi", "software update"],
+     BaseRate("tech_product", 20, 75, 45,
+              "Tech product launch: company roadmaps leak partly but dates/features slip")),
+
+    (["election", "referendum", "prime minister", "parliament",
+      "ballot", "polls", "vote share"],
+     BaseRate("politics_general", 20, 80, 50,
+              "General politics: use polling/institutional baseline when no specific race category exists")),
+
+    (["nato", "un vote", "eu summit", "treaty", "diplomatic talks"],
+     BaseRate("geopolitics_general", 10, 60, 30,
+              "General geopolitics: negotiation and escalation timing is hard to forecast")),
+]
+
 # Pre-sort rules once by longest keyword descending (most specific first) so
 # classify_market does not re-sort on every call. "同等长度的规则，靠前的优先"
 # still holds because Python's sort is stable.
 _RULES_SORTED: list[tuple[list[str], BaseRate]] = sorted(
     _RULES, key=lambda r: max(len(k) for k in r[0]), reverse=True
+)
+_COARSE_RULES_SORTED: list[tuple[list[str], BaseRate]] = sorted(
+    _COARSE_RULES, key=lambda r: max(len(k) for k in r[0]), reverse=True
 )
 
 
@@ -220,6 +273,9 @@ def classify_market(question: str) -> BaseRate:
     """
     text = question.lower()
     for keywords, base_rate in _RULES_SORTED:
+        if any(word_in_text(kw, text) for kw in keywords):
+            return base_rate
+    for keywords, base_rate in _COARSE_RULES_SORTED:
         if any(word_in_text(kw, text) for kw in keywords):
             return base_rate
     return _DEFAULT

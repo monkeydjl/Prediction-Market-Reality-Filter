@@ -130,8 +130,15 @@ def summarize(
         category = str(event.get("base_rate_category") or "unknown")
         rows.append((brier_value, str(platform), category))
 
+    coverage = _category_coverage([category for _, _, category in rows])
+
     if not rows:
-        return {"overall": _empty_overall(), "by_source": {}, "by_base_rate_category": {}}
+        return {
+            "overall": _empty_overall(),
+            "by_source": {},
+            "by_base_rate_category": {},
+            "category_coverage": coverage,
+        }
 
     all_briers = [b for b, _, _ in rows]
     overall = _aggregate(all_briers)
@@ -149,6 +156,19 @@ def summarize(
         "by_base_rate_category": {
             category: _aggregate(briers) for category, briers in by_category.items()
         },
+        "category_coverage": coverage,
+    }
+
+
+def _category_coverage(categories: list[str]) -> dict[str, Any]:
+    total = len(categories)
+    unknown = sum(1 for category in categories if not category or category == "unknown")
+    classified = total - unknown
+    return {
+        "total": total,
+        "classified": classified,
+        "unknown": unknown,
+        "unknown_rate": round(unknown / total, 4) if total else None,
     }
 
 

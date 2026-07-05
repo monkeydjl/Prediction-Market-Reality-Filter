@@ -115,6 +115,36 @@ class SummarizeTests(unittest.TestCase):
         self.assertIsNone(result["overall"]["brier_score"])
         self.assertEqual(result["by_source"], {})
 
+    def test_empty_reports_zero_category_coverage(self):
+        result = summarize([])
+        self.assertEqual(
+            result["category_coverage"],
+            {"total": 0, "classified": 0, "unknown": 0, "unknown_rate": None},
+        )
+
+    def test_reports_category_coverage_unknown_rate(self):
+        events = [
+            {
+                "calibration": {"brier_score": 0.1},
+                "source": {"platform": "Polymarket"},
+                "base_rate_category": "weather_event",
+            },
+            {
+                "calibration": {"brier_score": 0.2},
+                "source": {"platform": "Polymarket"},
+                "base_rate_category": "unknown",
+            },
+            {
+                "calibration": {"brier_score": 0.3},
+                "source": {"platform": "Polymarket"},
+            },
+        ]
+        result = summarize(events)
+        self.assertEqual(result["category_coverage"]["total"], 3)
+        self.assertEqual(result["category_coverage"]["classified"], 1)
+        self.assertEqual(result["category_coverage"]["unknown"], 2)
+        self.assertAlmostEqual(result["category_coverage"]["unknown_rate"], 2 / 3, places=4)
+
     def test_overall_aggregates_brier(self):
         events = [
             {"calibration": {"brier_score": 0.0}, "source": {"platform": "Polymarket"}},

@@ -38,6 +38,34 @@ class ClassifyMarketPositiveTests(unittest.TestCase):
         result = classify_market("Will SpaceX go public via IPO?")
         self.assertEqual(result.category, "ipo")
 
+    def test_weather_temperature_event(self):
+        result = classify_market(
+            "Will the highest temperature in Jeddah be 40 degrees or higher on July 7?"
+        )
+        self.assertEqual(result.category, "weather_event")
+
+    def test_entertainment_awards(self):
+        result = classify_market("Will a film win Best Picture at the Oscars?")
+        self.assertEqual(result.category, "entertainment_awards")
+
+    def test_company_earnings(self):
+        result = classify_market(
+            "Will Nvidia report revenue above guidance this quarter?"
+        )
+        self.assertEqual(result.category, "company_earnings")
+
+    def test_policy_general(self):
+        result = classify_market("Will Congress pass the stablecoin bill in 2026?")
+        self.assertEqual(result.category, "policy_general")
+
+    def test_health_event(self):
+        result = classify_market("Will the FDA approve the new obesity drug this year?")
+        self.assertEqual(result.category, "health_event")
+
+    def test_sports_general_world_cup(self):
+        result = classify_market("Will Brazil reach the FIFA World Cup semifinals?")
+        self.assertEqual(result.category, "sports_general")
+
     def test_unknown_fallback(self):
         """A completely unrelated question falls back to unknown."""
         result = classify_market("Will aliens land on the White House?")

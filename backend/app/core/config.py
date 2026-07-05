@@ -396,6 +396,10 @@ class Settings:
     # Free tier: 500 requests/month
     # Register at: https://the-odds-api.com/
     ODDS_API_KEY: str = os.getenv("ODDS_API_KEY", "")
+    ODDS_API_BASE_URL: str = os.getenv(
+        "ODDS_API_BASE_URL",
+        "https://api.the-odds-api.com/v4",
+    )
     ODDS_API_ENABLED: bool = _env_bool("ODDS_API_ENABLED", "false")
 
     # Multi-model cross-validation: an independent second model re-estimates the

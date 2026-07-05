@@ -16,7 +16,11 @@ logger = logging.getLogger(__name__)
 
 # API Configuration
 ODDS_API_KEY = settings.ODDS_API_KEY if hasattr(settings, 'ODDS_API_KEY') else None
-ODDS_API_BASE = "https://api.the-odds-api.com/v4"
+ODDS_API_BASE = getattr(
+    settings,
+    "ODDS_API_BASE_URL",
+    "https://api.the-odds-api.com/v4",
+)
 SPORT = "soccer_fifa_world_cup"  # Sport key for World Cup
 REGIONS = "us,eu"  # US and European bookmakers
 MARKETS = "h2h"  # Head-to-head (1x2: home/draw/away)

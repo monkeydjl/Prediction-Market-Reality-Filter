@@ -1,3 +1,4 @@
+import importlib
 import os
 import unittest
 from unittest.mock import patch
@@ -21,6 +22,31 @@ class ConfigHelperTests(unittest.TestCase):
                 config._env_csv("CSV_UNDER_TEST", ""),
                 ["GET", "POST", "OPTIONS"],
             )
+
+
+class OddsApiConfigTests(unittest.TestCase):
+    def test_odds_api_base_url_can_be_configured_from_env(self):
+        from app.core import config as config_module
+        from app.services import odds_api_service
+
+        custom_base_url = "https://odds-proxy.example/v4"
+        with patch.dict(
+            os.environ,
+            {"ODDS_API_BASE_URL": custom_base_url},
+            clear=False,
+        ):
+            reloaded_config = importlib.reload(config_module)
+            try:
+                reloaded_odds_service = importlib.reload(odds_api_service)
+
+                self.assertEqual(
+                    reloaded_config.settings.ODDS_API_BASE_URL,
+                    custom_base_url,
+                )
+                self.assertEqual(reloaded_odds_service.ODDS_API_BASE, custom_base_url)
+            finally:
+                importlib.reload(config_module)
+                importlib.reload(odds_api_service)
 
 
 class ConfigDefaultTests(unittest.TestCase):

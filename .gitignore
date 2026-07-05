@@ -3,6 +3,7 @@
 backend/.env
 backend/.env.staging
 backend/.env.production
+backend/.env_*
 *.key
 
 # ── Python ───────────────────────────────────────────────────────────────────

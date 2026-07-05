@@ -4,11 +4,11 @@ This module uses LLM to provide tactical, psychological, and contextual
 insights that complement the statistical rule-based predictions.
 """
 
-import json
 import logging
 from typing import Any
 
 from app.core.config import settings
+from app.services.llm_gateway_service import complete_json
 from app.services.world_cup_tactical_profiles import format_tactical_summary
 
 logger = logging.getLogger(__name__)
@@ -130,43 +130,51 @@ async def predict_score_ai(
         or None if AI prediction fails
     """
 
-    # Check if AI is configured
-    api_key = settings.OPENAI_API_KEY
-    if not api_key:
+    # Check if at least one legacy or Gateway provider key is configured.
+    # Gateway still performs authoritative provider/model skipping; this keeps
+    # the existing cheap no-key fallback behavior for callers.
+    has_llm_key = any(
+        str(getattr(settings, name, "") or "").strip()
+        for name in (
+            "OPENAI_API_KEY",
+            "LLM_PROVIDER_DEEPSEEK_API_KEY",
+            "LLM_PROVIDER_DASHSCOPE_API_KEY",
+            "LLM_PROVIDER_OPENAI_API_KEY",
+            "LLM_PROVIDER_OPENROUTER_API_KEY",
+        )
+    )
+    if not has_llm_key:
         return None
 
     try:
-        # Call OpenAI directly (ask_llm returns a fixed-format dict, not raw text)
-        from app.services.openai_service import get_client
         from app.services.world_cup_engines.world_cup_rule_engine import calculate_outcome_probabilities
 
         prompt = build_ai_prediction_prompt(
             home_team, away_team, kickoff_utc, stage, factors, rule_prediction
         )
 
-        client = get_client()
-        ai_response = await client.chat.completions.create(
-            model=settings.OPENAI_MODEL,
+        gateway_result = await complete_json(
+            task="world_cup",
             messages=[
-                {"role": "system", "content": "你是足球预测校准专家。只返回有效的JSON。"},
+                {
+                    "role": "system",
+                    "content": "You are a football prediction calibration expert. Return only valid JSON.",
+                },
                 {"role": "user", "content": prompt},
             ],
             temperature=0.2,
-            response_format={"type": "json_object"},
         )
 
-        response_text = ai_response.choices[0].message.content or ""
-
-        # Find JSON object in response
-        start_idx = response_text.find('{')
-        end_idx = response_text.rfind('}')
-
-        if start_idx == -1 or end_idx == -1:
-            logger.warning("AI response contained no JSON for %s vs %s", home_team, away_team)
+        if not gateway_result.ok or gateway_result.json_data is None:
+            logger.warning(
+                "AI gateway failed for %s vs %s: %s",
+                home_team,
+                away_team,
+                gateway_result.degraded_reason,
+            )
             return None
 
-        json_str = response_text[start_idx:end_idx + 1]
-        result = json.loads(json_str)
+        result = gateway_result.json_data
 
         # Extract adjustment deltas
         home_adjustment = float(result.get("home_adjustment", 0.0))

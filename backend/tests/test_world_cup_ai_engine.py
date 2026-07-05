@@ -4,8 +4,24 @@ Lock AI engine behavior with mocked LLM responses.
 """
 
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
-from app.services.world_cup_engines.world_cup_ai_engine import predict_score_ai, build_ai_prediction_prompt
+from unittest.mock import AsyncMock, patch
+
+from app.services.llm_gateway_service import LLMAttempt, LLMResult
+from app.services.world_cup_engines.world_cup_ai_engine import (
+    build_ai_prediction_prompt,
+    predict_score_ai,
+)
+
+
+def _gateway_json_result(data: dict) -> LLMResult:
+    return LLMResult(
+        ok=True,
+        content="{}",
+        json_data=data,
+        provider="p1",
+        model="m1",
+        attempts=[LLMAttempt("p1", "m1", "success")],
+    )
 
 
 class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
@@ -42,7 +58,11 @@ class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
     async def test_predict_score_ai_no_api_key(self):
         """Lock behavior when OPENAI_API_KEY is not set."""
         with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
-            mock_settings.OPENAI_API_KEY = None
+            mock_settings.OPENAI_API_KEY = ""
+            mock_settings.LLM_PROVIDER_DEEPSEEK_API_KEY = ""
+            mock_settings.LLM_PROVIDER_DASHSCOPE_API_KEY = ""
+            mock_settings.LLM_PROVIDER_OPENAI_API_KEY = ""
+            mock_settings.LLM_PROVIDER_OPENROUTER_API_KEY = ""
 
             result = await predict_score_ai(
                 "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
@@ -53,89 +73,79 @@ class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_predict_score_ai_valid_json(self):
         """Lock AI adjustment when LLM returns valid JSON."""
-        mock_client = MagicMock()
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = '{"home_adjustment": 0.2, "away_adjustment": -0.1, "reasoning": "巴西状态更好", "confidence_in_adjustment": 0.8}'
-        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+        gateway_result = _gateway_json_result({
+            "home_adjustment": 0.2,
+            "away_adjustment": -0.1,
+            "reasoning": "Brazil form is better",
+            "confidence_in_adjustment": 0.8,
+        })
 
         with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
             mock_settings.OPENAI_API_KEY = "test-key"
-            mock_settings.OPENAI_MODEL = "gpt-4"
-            with patch("app.services.openai_service.get_client", return_value=mock_client):
+            with patch("app.services.world_cup_engines.world_cup_ai_engine.complete_json", new=AsyncMock(return_value=gateway_result)) as mock_complete:
                 result = await predict_score_ai(
                     "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
                     self.factors, self.rule_prediction
                 )
 
         self.assertIsNotNone(result)
-        # Adjusted scores: rule + adjustment
-        # home = 1.8 + 0.2 = 2.0, away = 1.3 - 0.1 = 1.2
+        self.assertEqual(mock_complete.await_args.kwargs["task"], "world_cup")
         self.assertAlmostEqual(result["predicted_score"]["home"], 2.0, places=2)
         self.assertAlmostEqual(result["predicted_score"]["away"], 1.2, places=2)
-        # confidence_in_adjustment = 0.8 > 0.7, adjustment_magnitude = 0.2 > 0.3 is False
-        # So final_confidence = rule_confidence - 0.05 = 0.75 - 0.05 = 0.70
         self.assertAlmostEqual(result["confidence"], 0.70, places=2)
-        self.assertEqual(result["reasoning"], "巴西状态更好")
+        self.assertEqual(result["reasoning"], "Brazil form is better")
         self.assertAlmostEqual(result["confidence_in_adjustment"], 0.8, places=2)
 
     async def test_predict_score_ai_adjustment_clamped(self):
         """Lock that AI adjustments are clamped to [-1.0, +1.0]."""
-        mock_client = MagicMock()
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        # LLM tries to adjust by +2.0 and -1.5, should be clamped
-        mock_response.choices[0].message.content = '{"home_adjustment": 2.0, "away_adjustment": -1.5, "reasoning": "极端调整", "confidence_in_adjustment": 0.9}'
-        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+        gateway_result = _gateway_json_result({
+            "home_adjustment": 2.0,
+            "away_adjustment": -1.5,
+            "reasoning": "Extreme adjustment",
+            "confidence_in_adjustment": 0.9,
+        })
 
         with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
             mock_settings.OPENAI_API_KEY = "test-key"
-            mock_settings.OPENAI_MODEL = "gpt-4"
-            with patch("app.services.openai_service.get_client", return_value=mock_client):
+            with patch("app.services.world_cup_engines.world_cup_ai_engine.complete_json", new=AsyncMock(return_value=gateway_result)):
                 result = await predict_score_ai(
                     "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
                     self.factors, self.rule_prediction
                 )
 
-        # Adjustments clamped to +1.0 and -1.0
-        # home = 1.8 + 1.0 = 2.8, away = max(0, 1.3 - 1.0) = 0.3
         self.assertAlmostEqual(result["predicted_score"]["home"], 2.8, places=2)
         self.assertAlmostEqual(result["predicted_score"]["away"], 0.3, places=2)
 
     async def test_predict_score_ai_high_confidence_boost(self):
         """Lock confidence boost when AI is confident and adjustment is meaningful."""
-        mock_client = MagicMock()
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        # confidence_in_adjustment > 0.7 AND adjustment_magnitude > 0.3 -> +0.05
-        mock_response.choices[0].message.content = '{"home_adjustment": 0.4, "away_adjustment": 0.0, "reasoning": "重要调整", "confidence_in_adjustment": 0.85}'
-        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+        gateway_result = _gateway_json_result({
+            "home_adjustment": 0.4,
+            "away_adjustment": 0.0,
+            "reasoning": "Important adjustment",
+            "confidence_in_adjustment": 0.85,
+        })
 
         with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
             mock_settings.OPENAI_API_KEY = "test-key"
-            mock_settings.OPENAI_MODEL = "gpt-4"
-            with patch("app.services.openai_service.get_client", return_value=mock_client):
+            with patch("app.services.world_cup_engines.world_cup_ai_engine.complete_json", new=AsyncMock(return_value=gateway_result)):
                 result = await predict_score_ai(
                     "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
                     self.factors, self.rule_prediction
                 )
 
-        # rule_confidence = 0.75, adjustment_magnitude = 0.4 > 0.3, confidence_in_adjustment = 0.85 > 0.7
-        # final_confidence = min(0.95, 0.75 + 0.05) = 0.80
         self.assertAlmostEqual(result["confidence"], 0.80, places=2)
 
-    async def test_predict_score_ai_no_json_in_response(self):
-        """Lock behavior when LLM response contains no JSON."""
-        mock_client = MagicMock()
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "Sorry, I cannot provide a prediction."
-        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+    async def test_predict_score_ai_failed_gateway_result(self):
+        """Lock behavior when Gateway cannot produce valid JSON."""
+        gateway_result = LLMResult(
+            ok=False,
+            attempts=[LLMAttempt("p1", "m1", "failed", "invalid_json")],
+            degraded_reason="all_routes_failed",
+        )
 
         with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
             mock_settings.OPENAI_API_KEY = "test-key"
-            mock_settings.OPENAI_MODEL = "gpt-4"
-            with patch("app.services.openai_service.get_client", return_value=mock_client):
+            with patch("app.services.world_cup_engines.world_cup_ai_engine.complete_json", new=AsyncMock(return_value=gateway_result)):
                 result = await predict_score_ai(
                     "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
                     self.factors, self.rule_prediction
@@ -145,19 +155,14 @@ class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_predict_score_ai_llm_exception(self):
         """Lock behavior when LLM call raises exception."""
-        mock_client = MagicMock()
-        mock_client.chat.completions.create = AsyncMock(side_effect=Exception("API error"))
-
         with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
             mock_settings.OPENAI_API_KEY = "test-key"
-            mock_settings.OPENAI_MODEL = "gpt-4"
-            with patch("app.services.openai_service.get_client", return_value=mock_client):
+            with patch("app.services.world_cup_engines.world_cup_ai_engine.complete_json", new=AsyncMock(side_effect=Exception("API error"))):
                 result = await predict_score_ai(
                     "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
                     self.factors, self.rule_prediction
                 )
 
-        # Exception caught, returns None
         self.assertIsNone(result)
 
     def test_build_ai_prediction_prompt_structure(self):
@@ -167,13 +172,10 @@ class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
             self.factors, self.rule_prediction
         )
 
-        # Check prompt contains team names
         self.assertIn("Brazil", prompt)
         self.assertIn("Argentina", prompt)
-        # Check it includes rule prediction
         self.assertIn("1.8", prompt)
         self.assertIn("1.3", prompt)
-        # Check it asks for JSON
         self.assertIn("JSON", prompt)
         self.assertIn("home_adjustment", prompt)
 

@@ -190,6 +190,30 @@ def build_route(task: str = "default") -> list[LLMModelRoute]:
 
 
 
+def has_configured_llm_route(
+    task: str = "default",
+    *,
+    route: list[LLMModelRoute] | None = None,
+    provider_configs: dict[str, LLMProviderConfig] | None = None,
+) -> bool:
+    """Return True when a task has at least one model backed by an API key.
+
+    This mirrors the Gateway's route/config resolution, including numbered
+    OpenAI-compatible providers (OPENAI_API_KEY_N / OPENAI_MODEL_N_M). Callers
+    use it only for cheap feature availability checks; complete_chat/json remain
+    the authoritative fallback executor.
+    """
+    routes = route if route is not None else build_route(task)
+    configs = provider_configs if provider_configs is not None else _provider_configs()
+    for model_route in routes:
+        if not model_route.models:
+            continue
+        config = configs.get(model_route.provider)
+        if config is not None and config.api_key.strip():
+            return True
+    return False
+
+
 def _provider_configs() -> dict[str, LLMProviderConfig]:
     configs = {
         "legacy_openai": LLMProviderConfig(

@@ -84,13 +84,35 @@ class LLMGatewayRouteTests(unittest.TestCase):
         self.assertEqual([(route.provider, route.models) for route in routes], [("deepseek", ["reasoner"])])
 
     def test_build_route_uses_legacy_openai_when_no_new_route_exists(self):
-        with patch.object(gateway.settings, "LLM_ROUTE_DEFAULT", ""), \
+        with patch.dict("os.environ", {}, clear=True), \
+             patch.object(gateway.settings, "LLM_ROUTE_DEFAULT", ""), \
              patch.object(gateway.settings, "LLM_ROUTE_PROBABILITY_ANALYSIS", ""), \
              patch.object(gateway.settings, "OPENAI_MODEL", "deepseek-chat"):
             routes = gateway.build_route("default")
 
         self.assertEqual(routes[0].provider, "legacy_openai")
         self.assertEqual(routes[0].models, ["deepseek-chat"])
+
+
+    def test_has_configured_llm_route_detects_indexed_openai_env(self):
+        env = {
+            "OPENAI_API_KEY_1": "key-1",
+            "OPENAI_MODEL_1_1": "provider1-model1",
+            "OPENAI_BASE_URL_1": "https://provider1.example/v1",
+        }
+        with patch.dict("os.environ", env, clear=True), \
+             patch.object(gateway.settings, "LLM_ROUTE_WORLD_CUP", ""), \
+             patch.object(gateway.settings, "LLM_ROUTE_DEFAULT", ""), \
+             patch.object(gateway.settings, "OPENAI_MODEL", ""):
+            self.assertTrue(gateway.has_configured_llm_route("world_cup"))
+
+    def test_has_configured_llm_route_rejects_route_without_api_key(self):
+        with patch.object(gateway.settings, "LLM_ROUTE_WORLD_CUP", "openai:gpt-4o-mini"), \
+             patch.object(gateway.settings, "LLM_ROUTE_DEFAULT", ""), \
+             patch.object(gateway.settings, "LLM_PROVIDER_OPENAI_API_KEY", ""), \
+             patch.object(gateway.settings, "OPENAI_API_KEY", ""):
+            self.assertFalse(gateway.has_configured_llm_route("world_cup"))
+
 
 
 if __name__ == "__main__":

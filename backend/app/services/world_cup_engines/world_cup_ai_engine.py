@@ -7,8 +7,7 @@ insights that complement the statistical rule-based predictions.
 import logging
 from typing import Any
 
-from app.core.config import settings
-from app.services.llm_gateway_service import complete_json
+from app.services.llm_gateway_service import complete_json, has_configured_llm_route
 from app.services.world_cup_tactical_profiles import format_tactical_summary
 
 logger = logging.getLogger(__name__)
@@ -130,20 +129,11 @@ async def predict_score_ai(
         or None if AI prediction fails
     """
 
-    # Check if at least one legacy or Gateway provider key is configured.
-    # Gateway still performs authoritative provider/model skipping; this keeps
-    # the existing cheap no-key fallback behavior for callers.
-    has_llm_key = any(
-        str(getattr(settings, name, "") or "").strip()
-        for name in (
-            "OPENAI_API_KEY",
-            "LLM_PROVIDER_DEEPSEEK_API_KEY",
-            "LLM_PROVIDER_DASHSCOPE_API_KEY",
-            "LLM_PROVIDER_OPENAI_API_KEY",
-            "LLM_PROVIDER_OPENROUTER_API_KEY",
-        )
-    )
-    if not has_llm_key:
+    # Check if at least one Gateway route/provider is configured. This supports
+    # LLM_ROUTE_WORLD_CUP, LLM_ROUTE_DEFAULT, numbered OPENAI_API_KEY_N
+    # providers, and legacy OPENAI_* config. Gateway execution remains the
+    # authoritative fallback path for provider/model failures.
+    if not has_configured_llm_route("world_cup"):
         return None
 
     try:

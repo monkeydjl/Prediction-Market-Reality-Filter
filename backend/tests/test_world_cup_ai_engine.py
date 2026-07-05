@@ -56,20 +56,17 @@ class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
         }
 
     async def test_predict_score_ai_no_api_key(self):
-        """Lock behavior when OPENAI_API_KEY is not set."""
-        with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
-            mock_settings.OPENAI_API_KEY = ""
-            mock_settings.LLM_PROVIDER_DEEPSEEK_API_KEY = ""
-            mock_settings.LLM_PROVIDER_DASHSCOPE_API_KEY = ""
-            mock_settings.LLM_PROVIDER_OPENAI_API_KEY = ""
-            mock_settings.LLM_PROVIDER_OPENROUTER_API_KEY = ""
-
+        """Lock behavior when no Gateway route/provider is configured."""
+        with patch(
+            "app.services.world_cup_engines.world_cup_ai_engine.has_configured_llm_route",
+            return_value=False,
+        ):
             result = await predict_score_ai(
                 "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
-                self.factors, self.rule_prediction
+                self.factors, self.rule_prediction,
             )
 
-            self.assertIsNone(result)
+        self.assertIsNone(result)
 
     async def test_predict_score_ai_valid_json(self):
         """Lock AI adjustment when LLM returns valid JSON."""
@@ -80,13 +77,17 @@ class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
             "confidence_in_adjustment": 0.8,
         })
 
-        with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
-            mock_settings.OPENAI_API_KEY = "test-key"
-            with patch("app.services.world_cup_engines.world_cup_ai_engine.complete_json", new=AsyncMock(return_value=gateway_result)) as mock_complete:
-                result = await predict_score_ai(
-                    "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
-                    self.factors, self.rule_prediction
-                )
+        with patch(
+            "app.services.world_cup_engines.world_cup_ai_engine.has_configured_llm_route",
+            return_value=True,
+        ), patch(
+            "app.services.world_cup_engines.world_cup_ai_engine.complete_json",
+            new=AsyncMock(return_value=gateway_result),
+        ) as mock_complete:
+            result = await predict_score_ai(
+                "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
+                self.factors, self.rule_prediction,
+            )
 
         self.assertIsNotNone(result)
         self.assertEqual(mock_complete.await_args.kwargs["task"], "world_cup")
@@ -105,13 +106,17 @@ class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
             "confidence_in_adjustment": 0.9,
         })
 
-        with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
-            mock_settings.OPENAI_API_KEY = "test-key"
-            with patch("app.services.world_cup_engines.world_cup_ai_engine.complete_json", new=AsyncMock(return_value=gateway_result)):
-                result = await predict_score_ai(
-                    "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
-                    self.factors, self.rule_prediction
-                )
+        with patch(
+            "app.services.world_cup_engines.world_cup_ai_engine.has_configured_llm_route",
+            return_value=True,
+        ), patch(
+            "app.services.world_cup_engines.world_cup_ai_engine.complete_json",
+            new=AsyncMock(return_value=gateway_result),
+        ):
+            result = await predict_score_ai(
+                "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
+                self.factors, self.rule_prediction,
+            )
 
         self.assertAlmostEqual(result["predicted_score"]["home"], 2.8, places=2)
         self.assertAlmostEqual(result["predicted_score"]["away"], 0.3, places=2)
@@ -125,15 +130,51 @@ class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
             "confidence_in_adjustment": 0.85,
         })
 
-        with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
-            mock_settings.OPENAI_API_KEY = "test-key"
-            with patch("app.services.world_cup_engines.world_cup_ai_engine.complete_json", new=AsyncMock(return_value=gateway_result)):
-                result = await predict_score_ai(
-                    "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
-                    self.factors, self.rule_prediction
-                )
+        with patch(
+            "app.services.world_cup_engines.world_cup_ai_engine.has_configured_llm_route",
+            return_value=True,
+        ), patch(
+            "app.services.world_cup_engines.world_cup_ai_engine.complete_json",
+            new=AsyncMock(return_value=gateway_result),
+        ):
+            result = await predict_score_ai(
+                "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
+                self.factors, self.rule_prediction,
+            )
 
         self.assertAlmostEqual(result["confidence"], 0.80, places=2)
+
+    async def test_predict_score_ai_uses_gateway_with_numbered_openai_config(self):
+        """Numbered OPENAI_API_KEY_N providers must not be skipped by the World Cup AI engine."""
+        gateway_result = _gateway_json_result({
+            "home_adjustment": 0.1,
+            "away_adjustment": 0.0,
+            "reasoning": "Numbered provider route works",
+            "confidence_in_adjustment": 0.7,
+        })
+
+        env = {
+            "OPENAI_API_KEY_1": "numbered-key",
+            "OPENAI_MODEL_1_1": "numbered-model",
+            "OPENAI_BASE_URL_1": "https://numbered.example/v1",
+        }
+        with patch.dict("os.environ", env, clear=True), patch(
+            "app.services.llm_gateway_service.settings.LLM_ROUTE_WORLD_CUP", "",
+        ), patch(
+            "app.services.llm_gateway_service.settings.LLM_ROUTE_DEFAULT", "",
+        ), patch(
+            "app.services.llm_gateway_service.settings.OPENAI_MODEL", "",
+        ), patch(
+            "app.services.world_cup_engines.world_cup_ai_engine.complete_json",
+            new=AsyncMock(return_value=gateway_result),
+        ) as mock_complete:
+            result = await predict_score_ai(
+                "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
+                self.factors, self.rule_prediction,
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(mock_complete.await_args.kwargs["task"], "world_cup")
 
     async def test_predict_score_ai_failed_gateway_result(self):
         """Lock behavior when Gateway cannot produce valid JSON."""
@@ -143,25 +184,33 @@ class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
             degraded_reason="all_routes_failed",
         )
 
-        with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
-            mock_settings.OPENAI_API_KEY = "test-key"
-            with patch("app.services.world_cup_engines.world_cup_ai_engine.complete_json", new=AsyncMock(return_value=gateway_result)):
-                result = await predict_score_ai(
-                    "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
-                    self.factors, self.rule_prediction
-                )
+        with patch(
+            "app.services.world_cup_engines.world_cup_ai_engine.has_configured_llm_route",
+            return_value=True,
+        ), patch(
+            "app.services.world_cup_engines.world_cup_ai_engine.complete_json",
+            new=AsyncMock(return_value=gateway_result),
+        ):
+            result = await predict_score_ai(
+                "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
+                self.factors, self.rule_prediction,
+            )
 
         self.assertIsNone(result)
 
     async def test_predict_score_ai_llm_exception(self):
         """Lock behavior when LLM call raises exception."""
-        with patch("app.services.world_cup_engines.world_cup_ai_engine.settings") as mock_settings:
-            mock_settings.OPENAI_API_KEY = "test-key"
-            with patch("app.services.world_cup_engines.world_cup_ai_engine.complete_json", new=AsyncMock(side_effect=Exception("API error"))):
-                result = await predict_score_ai(
-                    "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
-                    self.factors, self.rule_prediction
-                )
+        with patch(
+            "app.services.world_cup_engines.world_cup_ai_engine.has_configured_llm_route",
+            return_value=True,
+        ), patch(
+            "app.services.world_cup_engines.world_cup_ai_engine.complete_json",
+            new=AsyncMock(side_effect=Exception("API error")),
+        ):
+            result = await predict_score_ai(
+                "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
+                self.factors, self.rule_prediction,
+            )
 
         self.assertIsNone(result)
 
@@ -169,7 +218,7 @@ class AIEngineGoldenTests(unittest.IsolatedAsyncioTestCase):
         """Lock that prompt includes key context."""
         prompt = build_ai_prediction_prompt(
             "Brazil", "Argentina", "2026-06-15T18:00:00", "group_stage",
-            self.factors, self.rule_prediction
+            self.factors, self.rule_prediction,
         )
 
         self.assertIn("Brazil", prompt)

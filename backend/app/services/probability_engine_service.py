@@ -384,6 +384,16 @@ def build_deterministic_fallback_analysis(
         * (1 - priced_in_risk_score / 100)
         * (1 - semantics_profile["ambiguity_score"] / 100)
     )
+    evidence_quality = calculate_evidence_quality(
+        evidence_profile=evidence_profile,
+        news_quality_score=news_quality_score,
+        semantics_profile=semantics_profile,
+        priced_in_risk_score=priced_in_risk_score,
+    )
+    strong_quality = evidence_quality["bucket"] == "strong"
+    reasoning_consistency = min(0.75, max(0.3, evidence_multiplier))
+    if strong_quality:
+        reasoning_consistency = min(0.75, max(reasoning_consistency, evidence_quality["factor"]))
     max_move = 22.0
     probability = market_probability + (direction_sign * max_move * evidence_multiplier)
 
@@ -396,8 +406,8 @@ def build_deterministic_fallback_analysis(
             "LLM 不可用或返回无效；概率根据证据方向、强度、结算相关性、新鲜度、"
             "冲突度、新闻质量、已定价风险与结算歧义度综合估算得出。"
         ),
-        "has_strong_evidence": evidence_multiplier >= 0.35,
-        "reasoning_consistency": min(0.75, max(0.3, evidence_multiplier)),
+        "has_strong_evidence": strong_quality or evidence_multiplier >= 0.35,
+        "reasoning_consistency": reasoning_consistency,
     }
 
 

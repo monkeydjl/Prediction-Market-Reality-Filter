@@ -335,6 +335,28 @@ class ProbabilityMathTests(unittest.TestCase):
             },
         )
 
+    def test_build_deterministic_fallback_marks_quality_bucket_strong_evidence(self):
+        result = build_deterministic_fallback_analysis(
+            market_probability=12,
+            evidence_profile={
+                "evidence_direction": "support",
+                "evidence_strength": 0.82,
+                "conflict_score": 0.10,
+                "freshness_score": 0.90,
+                "resolution_relevance_score": 0.84,
+                "source_count": 6,
+                "independent_source_count": 5,
+                "official_source_count": 1,
+                "counterevidence_considered": True,
+            },
+            news_quality_score=0.86,
+            priced_in_risk_score=20,
+            semantics_profile={"condition_type": "threshold", "ambiguity_score": 18},
+        )
+
+        self.assertTrue(result["has_strong_evidence"])
+        self.assertEqual(result["reasoning_consistency"], 0.75)
+
     def test_normalize_ai_analysis_trims_and_clamps(self):
         self.assertEqual(
             _normalize_ai_analysis(

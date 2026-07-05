@@ -112,6 +112,21 @@ class EngineAccuracyComparisonTests(unittest.TestCase):
         )
         self.assertEqual(svc._bucket_engine("elo_only"), "elo_odds")
 
+    def test_buckets_gbm_separately_from_hybrid(self):
+        self.assertEqual(svc._bucket_engine("gbm"), "gbm")
+        self.assertEqual(svc._bucket_engine("gbm_poisson_fallback"), "gbm")
+
+    def test_credits_gbm_as_its_own_engine(self):
+        self._add_finished_match(1, 0)
+        self._add_history("gbm", 1.0, 0.0, 0.65, 0.2, 0.15, naive() - timedelta(hours=4))
+        self.session.commit()
+
+        engines = self._run()["engines"]
+
+        self.assertEqual(set(engines.keys()), {"gbm"})
+        self.assertEqual(engines["gbm"]["total_matches"], 1)
+        self.assertEqual(engines["gbm"]["outcome_accuracy"], 1.0)
+
     def test_excludes_comparison_history_rows(self):
         self._add_finished_match(2, 1)
         timestamp = naive() - timedelta(hours=4)

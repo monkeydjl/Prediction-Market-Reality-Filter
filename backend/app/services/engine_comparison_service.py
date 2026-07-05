@@ -14,6 +14,8 @@ def _bucket_engine(method: str) -> str:
     normalized = (method or "").lower()
     if normalized.startswith("integrated") or "integrated" in normalized:
         return "integrated"
+    if normalized.startswith("gbm") or "gbm" in normalized:
+        return "gbm"
     if normalized.startswith("elo") or "elo_odds" in normalized or ("elo" in normalized and "odds" in normalized):
         return "elo_odds"
     return "hybrid"

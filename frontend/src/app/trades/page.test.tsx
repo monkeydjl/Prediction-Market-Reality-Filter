@@ -130,4 +130,34 @@ describe("TradesPage", () => {
     expect(row).toHaveTextContent("82% → 50%");
     expect(row).not.toHaveTextContent("57% → 50%");
   });
+
+  it("shows closed trade performance split by decision", async () => {
+    apiMocks.tradeStats.mockResolvedValue({
+      ...stats,
+      total_closed: 5,
+      by_decision: {
+        act: { total: 2, wins: 2, win_rate: 1, avg_pnl: 12.5 },
+        watch: { total: 3, wins: 1, win_rate: 0.333, avg_pnl: -4.25 },
+      },
+    });
+    apiMocks.openTrades.mockResolvedValue({ count: 0, trades: [] });
+    apiMocks.closedTrades.mockResolvedValue({ count: 0, trades: [] });
+
+    render(<TradesPage />);
+
+    const breakdown = await screen.findByTestId("decision-performance-breakdown");
+
+    const actRow = within(breakdown).getByTestId("decision-performance-act");
+    expect(actRow).toHaveTextContent("act");
+    expect(actRow).toHaveTextContent("2");
+    expect(actRow).toHaveTextContent("100.0%");
+    expect(actRow).toHaveTextContent("+12.50pt%");
+
+    const watchRow = within(breakdown).getByTestId("decision-performance-watch");
+    expect(watchRow).toHaveTextContent("watch");
+    expect(watchRow).toHaveTextContent("3");
+    expect(watchRow).toHaveTextContent("33.3%");
+    expect(watchRow).toHaveTextContent("-4.25pt%");
+  });
+
 });

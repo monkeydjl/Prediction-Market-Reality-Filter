@@ -5,6 +5,8 @@ import Link from "next/link";
 import { eventsApi, type SimTrade, type TradeStats } from "@/lib/api";
 import { fmtSignedPct } from "@/lib/format";
 
+const DECISION_ORDER: Record<string, number> = { act: 0, provisional_act: 1, watch: 2 };
+
 function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="flex flex-col rounded-lg border border-border bg-card p-4">
@@ -60,6 +62,12 @@ export default function TradesPage() {
     return d.toLocaleDateString("zh-CN", { month: "short", day: "numeric" }) + " " +
            d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
   };
+
+  const decisionBreakdown = stats?.by_decision
+    ? Object.entries(stats.by_decision).sort(([a], [b]) =>
+        (DECISION_ORDER[a] ?? 99) - (DECISION_ORDER[b] ?? 99) || a.localeCompare(b)
+      )
+    : [];
 
   return (
       <main id="main-content" className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
@@ -120,6 +128,41 @@ export default function TradesPage() {
                           <td className="px-4 py-2 font-mono tabular-nums">{(d.win_rate * 100).toFixed(1)}%</td>
                           <td className="px-4 py-2"><PnlBadge pnl={d.avg_pnl} /></td>
                           <td className="px-4 py-2"><PnlBadge pnl={d.total_pnl} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
+
+            {/* Decision breakdown */}
+            {decisionBreakdown.length > 0 && (
+              <section className="flex flex-col gap-2" data-testid="decision-performance-breakdown">
+                <h2 className="text-sm font-semibold">按决策类型统计</h2>
+                <div className="overflow-x-auto rounded-lg border border-border">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border bg-secondary/50 text-left text-xs text-muted-foreground">
+                        <th className="px-4 py-2">决策</th>
+                        <th className="px-4 py-2">交易数</th>
+                        <th className="px-4 py-2">赢</th>
+                        <th className="px-4 py-2">胜率</th>
+                        <th className="px-4 py-2">平均收益</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {decisionBreakdown.map(([decision, d]) => (
+                        <tr
+                          key={decision}
+                          className="border-b border-border last:border-0"
+                          data-testid={`decision-performance-${decision}`}
+                        >
+                          <td className="px-4 py-2 font-medium">{decision}</td>
+                          <td className="px-4 py-2 font-mono tabular-nums">{d.total}</td>
+                          <td className="px-4 py-2 font-mono tabular-nums">{d.wins}</td>
+                          <td className="px-4 py-2 font-mono tabular-nums">{(d.win_rate * 100).toFixed(1)}%</td>
+                          <td className="px-4 py-2"><PnlBadge pnl={d.avg_pnl} /></td>
                         </tr>
                       ))}
                     </tbody>

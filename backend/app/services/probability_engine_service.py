@@ -28,6 +28,7 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from app.core.config import settings
+from app.services.llm_gateway_service import complete_chat, complete_json
 from app.utils.market_utils import safe_float
 
 logger = logging.getLogger(__name__)
@@ -105,17 +106,15 @@ def get_translation_client() -> AsyncOpenAI:
 async def translate_title(question: str) -> str:
     """Translate a market question into a concise Chinese title.
 
-    Uses a dedicated translation provider (TRANSLATION_MODEL / TRANSLATION_API_KEY)
-    when configured, falling back to the primary LLM otherwise. On any error,
-    returns the original English question so events always have a visible title.
+    Uses the unified LLM Gateway translation route. On any error, returns the
+    original English question so events always have a visible title.
     """
     if not question or not question.strip():
         return ""
+
     try:
-        client = get_translation_client()
-        model = settings.TRANSLATION_MODEL or settings.OPENAI_MODEL
-        response = await client.chat.completions.create(
-            model=model,
+        result = await complete_chat(
+            task="translation",
             messages=[
                 {
                     "role": "user",
@@ -131,12 +130,22 @@ async def translate_title(question: str) -> str:
             temperature=0,
             max_tokens=500,
         )
-        text = (response.choices[0].message.content or "").strip().strip("\"'""''")
-        # Guard against provider errors that leak into the response body
-        # (e.g. "模型「xxx」的请求负载过高，请稍后再试。").
+        if not result.ok or not result.content:
+            logger.debug(
+                "translate_title gateway failed [question=%.60s, reason=%s]",
+                question,
+                result.degraded_reason,
+            )
+            return question[:120]
+
+        text = (result.content or "").strip().strip("\"'????")
         if text and any(
-            keyword in text
-            for keyword in ("负载过高", "rate limit", "too many requests")
+            keyword in text.lower()
+            for keyword in (
+                "\u8d1f\u8f7d\u8fc7\u9ad8",
+                "rate limit",
+                "too many requests",
+            )
         ):
             logger.debug("translate_title got provider error in content, ignoring")
             return question[:120]
@@ -154,9 +163,8 @@ async def _ask_ai(
     base_rate_context: dict[str, Any] | None = None,
     deadline_info: str | None = None,
 ) -> dict[str, Any]:
-    client = get_client()
-    response = await client.chat.completions.create(
-        model=settings.OPENAI_MODEL,
+    result = await complete_json(
+        task="probability_analysis",
         messages=[
             {"role": "system", "content": _build_system_prompt()},
             {
@@ -172,22 +180,13 @@ async def _ask_ai(
             },
         ],
         temperature=0,
-        response_format={"type": "json_object"},
     )
-    content = response.choices[0].message.content or "{}"
-    parsed = json.loads(content)
-    if not isinstance(parsed, dict):
-        raise ValueError("AI returned non-object JSON")
-    # Phase 5: capture token usage for telemetry. Attached as a private key
-    # so _normalize_ai_analysis (which copies only known keys) does not
-    # propagate it — analyze_market explicitly extracts it before normalize.
-    usage = getattr(response, "usage", None)
-    if usage is not None:
-        parsed["_llm_usage"] = {
-            "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-            "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
-            "total_tokens": getattr(usage, "total_tokens", 0) or 0,
-        }
+    if not result.ok or result.json_data is None:
+        raise RuntimeError(result.degraded_reason or "LLM unavailable")
+
+    parsed = dict(result.json_data)
+    if result.usage is not None:
+        parsed["_llm_usage"] = result.usage
     return parsed
 
 

@@ -134,6 +134,7 @@ export default function HistoryPage() {
   const [resolveLimit, setResolveLimit] = useState(200);
   const [resolveMsg, setResolveMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [recordView, setRecordView] = useState<"resolved" | "recent">("resolved");
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -311,9 +312,6 @@ export default function HistoryPage() {
             <SectionErrorBoundary title="待审链接">
               <PendingLinks />
             </SectionErrorBoundary>
-            <SectionErrorBoundary title="预测记录">
-              <RecentPredictions />
-            </SectionErrorBoundary>
             <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
               <SectionErrorBoundary title="领域校准">
                 <CategoryAccuracy data={categoryData} />
@@ -336,15 +334,44 @@ export default function HistoryPage() {
                 </ul>
               </div>
             </div>
-            <SectionErrorBoundary title="复盘表">
-              <ReviewTable
-                reviews={reviews}
-                loaded={loadedEvents}
-                total={totalEvents}
-                loadingMore={loadingMoreReviews}
-                onLoadMore={loadMoreReviews}
-              />
-            </SectionErrorBoundary>
+            <section className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {([
+                  { key: "resolved", label: "已结算判断", count: reviews.length },
+                  { key: "recent", label: "最近预测记录", count: null },
+                ] as const).map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setRecordView(tab.key)}
+                    className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
+                      recordView === tab.key
+                        ? "bg-secondary font-medium text-foreground"
+                        : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+                    }`}
+                  >
+                    {tab.label}
+                    {tab.count != null && <span className="ml-2 font-mono text-xs opacity-70">{tab.count}</span>}
+                  </button>
+                ))}
+              </div>
+
+              {recordView === "recent" ? (
+                <SectionErrorBoundary title="预测记录">
+                  <RecentPredictions />
+                </SectionErrorBoundary>
+              ) : (
+                <SectionErrorBoundary title="复盘表">
+                  <ReviewTable
+                    reviews={reviews}
+                    loaded={loadedEvents}
+                    total={totalEvents}
+                    loadingMore={loadingMoreReviews}
+                    onLoadMore={loadMoreReviews}
+                  />
+                </SectionErrorBoundary>
+              )}
+            </section>
           </>
         )}
       </main>

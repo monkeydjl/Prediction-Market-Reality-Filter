@@ -1,12 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { ChevronDown, RefreshCw, Target, Zap } from "lucide-react";
+import { RefreshCw, Target } from "lucide-react";
 import { DecisionCard } from "@/components/decisions/decision-card";
 import { eventsApi, type DecisionReport, type FreshEdge } from "@/lib/api";
-import { fmtSignedPct } from "@/lib/format";
-import { cn } from "@/lib/utils";
 
 const SECTION_META: { key: string; label: string; cls: string }[] = [
   { key: "act", label: "建议行动", cls: "border-pos/40 bg-pos/10 text-pos" },
@@ -14,76 +11,8 @@ const SECTION_META: { key: string; label: string; cls: string }[] = [
   { key: "watch", label: "持续观察", cls: "border-warn/40 bg-warn/10 text-warn" },
 ];
 
-function fmtEdge(n: number | null | undefined) {
-  if (n == null) return "—";
-  return fmtSignedPct(n, 1);
-}
-
-
-function FreshEdgesPanel({ edges, defaultExpanded }: { edges: FreshEdge[]; defaultExpanded?: boolean }) {
-  const [open, setOpen] = useState(defaultExpanded ?? false);
-  const edgeCount = edges.length;
-  const freshCount = edges.filter((e) => e.edge.classification === "fresh").length;
-
-  return (
-    <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex flex-wrap items-center justify-between gap-2 text-left"
-      >
-        <div className="flex items-center gap-2">
-          <Zap className="size-4 text-primary" aria-hidden="true" />
-          <h2 className="text-sm font-semibold">新鲜 Edge</h2>
-          <span className="font-mono text-xs text-muted-foreground">{edgeCount} 条</span>
-          {freshCount > 0 && <span className="text-[11px] text-pos">· {freshCount} 个新鲜</span>}
-        </div>
-        <ChevronDown className={cn("size-4 text-muted-foreground transition-transform", open && "rotate-180")} aria-hidden="true" />
-      </button>
-      {open && (
-        edges.length === 0 ? (
-          <p className="py-4 text-sm text-muted-foreground">当前没有新鲜 edge。</p>
-        ) : (
-          <div className="grid gap-3 lg:grid-cols-2">
-            {edges.map((e) => {
-              const edge = e.edge;
-              const cls = edge.classification === "fresh"
-                ? "border-pos/40 bg-pos/10 text-pos"
-                : "border-border bg-secondary text-muted-foreground";
-              const label = edge.classification === "fresh" ? "新鲜" : edge.classification;
-              const latest = edge.latest_edge ?? 0;
-              return (
-                <Link
-                  key={e.event_id}
-                  href={`/events?id=${encodeURIComponent(e.event_id)}`}
-                  className="group flex flex-col gap-2 rounded-md border border-border bg-background/40 p-3 transition-colors hover:border-primary/40 hover:bg-secondary/30"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <h3 className="line-clamp-2 text-xs font-medium leading-snug group-hover:text-primary">
-                      {e.event_title_zh || e.event_title || e.event_id}
-                    </h3>
-                    <span className={`inline-flex shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${cls}`}>
-                      {label}
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-                    <span>Edge <span className={latest >= 0 ? "font-semibold text-pos" : "font-semibold text-neg"}>{fmtEdge(edge.latest_edge)}</span></span>
-                    <span>峰值 {fmtEdge(edge.peak_edge)}</span>
-                    <span>变化 {fmtEdge(edge.recent_edge_change)}</span>
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
-        )
-      )}
-    </section>
-  );
-}
-
 export default function DecisionsPage() {
   const [decisions, setDecisions] = useState<DecisionReport[]>([]);
-  const [freshEdges, setFreshEdges] = useState<FreshEdge[]>([]);
   const [freshById, setFreshById] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -96,7 +25,6 @@ export default function DecisionsPage() {
       eventsApi.freshEdges(50),
     ]);
     setDecisions(open.decisions ?? []);
-    setFreshEdges((fresh.edges ?? []) as FreshEdge[]);
     const map: Record<string, string> = {};
     for (const e of (fresh.edges ?? []) as FreshEdge[]) {
       map[e.event_id] = e.edge.classification;
@@ -151,7 +79,6 @@ export default function DecisionsPage() {
     [grouped, decisions],
   );
 
-  const hasFreshEdges = freshEdges.length > 0;
 
   return (
       <main id="main-content" className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
@@ -211,10 +138,6 @@ export default function DecisionsPage() {
           </div>
         ) : (
           <>
-            {hasFreshEdges && filter === "all" && (
-              <FreshEdgesPanel edges={freshEdges} defaultExpanded={freshEdges.filter((e) => e.edge.classification === "fresh").length > 0} />
-            )}
-
             {/* Sections filtered by selected type */}
             {SECTION_META
               .filter((sec) => filter === "all" || filter === sec.key)

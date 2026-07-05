@@ -39,6 +39,21 @@ class CalibrationTrustTests(unittest.TestCase):
             diag.calibration_trust(stats, min_samples=8, dormant_trust=0.5), 0.0
         )
 
+    def test_qualified_segment_uses_explicit_market_relative_skill(self):
+        # A segment can beat random (mean_brier 0.04 -> random-relative 0.84)
+        # while losing to the market baseline. When the store provides an
+        # explicit market-relative skill, trust must use that value.
+        stats = {"n": 10, "mean_brier": 0.04, "skill": 0.0}
+        self.assertEqual(
+            diag.calibration_trust(stats, min_samples=8, dormant_trust=0.5), 0.0
+        )
+        self.assertEqual(
+            diag.calibration_trust(
+                stats, min_samples=8, dormant_trust=0.5, qualified_floor=0.1
+            ),
+            0.1,
+        )
+
     def test_worse_than_random_clamps_to_zero(self):
         stats = {"n": 9, "mean_brier": 0.40}  # skill negative
         self.assertEqual(

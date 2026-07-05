@@ -556,38 +556,92 @@ def list_open_opportunities(
     return [dict(row) for row in rows]
 
 
+def _mean_or_none(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return round(sum(values) / len(values), 4)
+
+
+def _market_brier(row: dict[str, Any]) -> float | None:
+    market_probability = row.get("market_probability")
+    actual_outcome = row.get("actual_outcome")
+    if market_probability is None or actual_outcome is None:
+        return None
+    return brier_score(market_probability, actual_outcome)
+
+
+def _market_relative_skill(
+    mean_brier: float | None,
+    mean_market_brier: float | None,
+) -> float | None:
+    """Skill for segment trust: positive only when AI beats the market baseline."""
+    if mean_brier is None:
+        return None
+    if mean_market_brier is None:
+        # Backward-compatible fallback for legacy rows without a market snapshot.
+        return round(skill_score(mean_brier), 4)
+    if mean_market_brier <= 0:
+        return 1.0 if mean_brier <= 0 else 0.0
+    return round(max(0.0, min(1.0, 1.0 - (mean_brier / mean_market_brier))), 4)
+
+
+def _segment_skill_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    n = len(rows)
+    if n == 0:
+        return {
+            "n": 0,
+            "mean_brier": None,
+            "mean_market_brier": None,
+            "skill": None,
+            "market_relative_skill": None,
+        }
+
+    mean_brier = _mean_or_none([
+        r["brier_score"] for r in rows if r.get("brier_score") is not None
+    ])
+    mean_market_brier = _mean_or_none([
+        b for r in rows if (b := _market_brier(r)) is not None
+    ])
+    skill = _market_relative_skill(mean_brier, mean_market_brier)
+    return {
+        "n": n,
+        "mean_brier": mean_brier,
+        "mean_market_brier": mean_market_brier,
+        "skill": skill,
+        "market_relative_skill": skill,
+    }
+
+
 def segment_skill(category: str) -> dict[str, Any]:
     """Conditional calibration for one category - the trust signal the
     Disagreement Diagnosis reads to weight a divergence.
 
-    Returns {n, mean_brier, skill} over the category's resolved
-    act+watch+provisional_act predictions (status in scored/observed, decision in
-    act/watch/provisional_act). skip rows are excluded: a skip means we
-    essentially agreed with the market, an easy forecast whose low Brier would
-    inflate trust. act AND watch AND provisional_act are counted on purpose -
-    this is the qualification gate (n >= min_samples leaves dormancy), and an
-    act-only gate could never bootstrap a fresh category (no act history ->
-    never qualified -> never acts). The headline calibration_summary stays
-    act-only; this trust gate is deliberately broader so the loop can learn.
+    Returns {n, mean_brier, mean_market_brier, skill, market_relative_skill} over
+    the category's resolved act+watch+provisional_act predictions (status in
+    scored/observed, decision in act/watch/provisional_act). skip rows are
+    excluded: a skip means we essentially agreed with the market, an easy
+    forecast whose low Brier would inflate trust. act AND watch AND
+    provisional_act are counted on purpose - this is the qualification gate
+    (n >= min_samples leaves dormancy), and an act-only gate could never
+    bootstrap a fresh category (no act history -> never qualified -> never acts).
+
+    `skill` is market-relative: positive only when the frozen AI probability
+    beats the frozen market_probability baseline for the same resolved rows.
     """
     path = sqlite_db.loop_db_path()
     _ensure_schema(path)
     with reading(path) as conn:
-        row = conn.execute(
+        rows = conn.execute(
             """
-            SELECT COUNT(*) AS n, AVG(brier_score) AS mean_brier
+            SELECT brier_score, market_probability, actual_outcome
             FROM predictions
             WHERE status IN ('scored', 'observed')
               AND decision IN ('act', 'watch', 'provisional_act')
               AND base_rate_category=?
             """,
             (category,),
-        ).fetchone()
-    n = row["n"] or 0
-    if n == 0:
-        return {"n": 0, "mean_brier": None, "skill": None}
-    mean_brier = round(row["mean_brier"], 4)
-    return {"n": n, "mean_brier": mean_brier, "skill": round(skill_score(mean_brier), 4)}
+        ).fetchall()
+    return _segment_skill_from_rows([dict(row) for row in rows])
 
 
 def calibration_summary() -> dict[str, Any]:
@@ -622,12 +676,11 @@ def calibration_summary() -> dict[str, Any]:
         ).fetchall()
         segment_rows = conn.execute(
             """
-            SELECT base_rate_category AS cat, COUNT(*) AS n,
-                   AVG(brier_score) AS mean_brier
+            SELECT base_rate_category AS cat, brier_score,
+                   market_probability, actual_outcome
             FROM predictions
             WHERE status IN ('scored', 'observed')
               AND decision IN ('act', 'watch', 'provisional_act')
-            GROUP BY base_rate_category
             """,
         ).fetchall()
         scored_rows = conn.execute(
@@ -646,17 +699,26 @@ def calibration_summary() -> dict[str, Any]:
         for r in cat_rows
     }
     min_samples = settings.CALIBRATION_FEEDBACK_MIN_SAMPLES
-    segments = {
-        r["cat"]: {
-            "n": r["n"],
-            "brier_score": round(r["mean_brier"], 4),
-            "skill_score": round(skill_score(r["mean_brier"]), 4),
-            "grade": grade(r["mean_brier"]),
+    segment_groups: dict[str, list[dict[str, Any]]] = {}
+    for segment_row in segment_rows:
+        r = dict(segment_row)
+        segment_groups.setdefault(r["cat"], []).append(r)
+    segments = {}
+    for cat, group_rows in segment_groups.items():
+        stats = _segment_skill_from_rows(group_rows)
+        mean_brier = stats["mean_brier"]
+        mean_market_brier = stats["mean_market_brier"]
+        skill = stats["skill"]
+        segments[cat] = {
+            "n": stats["n"],
+            "brier_score": mean_brier,
+            "market_brier_score": mean_market_brier,
+            "skill_score": skill,
+            "market_relative_skill": skill,
+            "grade": grade(mean_brier) if mean_brier is not None else "no_data",
             "segment_min_samples": min_samples,
-            "qualified": (r["n"] or 0) >= min_samples,
+            "qualified": (stats["n"] or 0) >= min_samples,
         }
-        for r in segment_rows
-    }
     # Realized vs predicted edge: did reality move the way we said the market was
     # wrong? realized = sign(raw_edge) * (actual_outcome - market_probability);
     # positive means our divergence beat the market. directional_hit_rate is the

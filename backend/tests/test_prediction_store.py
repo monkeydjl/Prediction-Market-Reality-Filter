@@ -480,6 +480,45 @@ class Milestone2DiagnosisTests(unittest.TestCase):
             self.assertEqual(seg["n"], 2)               # act + watch, skip excluded
             self.assertAlmostEqual(seg["mean_brier"], 0.04)
 
+    def test_segment_skill_is_zero_when_ai_loses_to_market_baseline(self):
+        # AI brier 0.04 beats random, but the market baseline brier is 0.01.
+        # The trust gate must not unlock action merely because AI beats random;
+        # it needs positive skill relative to the market baseline.
+        with tempfile.TemporaryDirectory() as tmp, self._db(tmp):
+            for i in range(3):
+                _seed_resolved(
+                    f"market_better_{i}",
+                    decision="watch",
+                    status="observed",
+                    brier=0.04,
+                    category="cpi",
+                    ai_probability=80.0,
+                    market_probability=90.0,
+                    actual_outcome=100.0,
+                )
+            seg = preds.segment_skill("cpi")
+            self.assertEqual(seg["n"], 3)
+            self.assertAlmostEqual(seg["mean_brier"], 0.04)
+            self.assertAlmostEqual(seg["mean_market_brier"], 0.01)
+            self.assertEqual(seg["skill"], 0.0)
+            self.assertEqual(seg["market_relative_skill"], 0.0)
+
+    def test_calibration_summary_segment_skill_is_market_relative(self):
+        with tempfile.TemporaryDirectory() as tmp, self._db(tmp):
+            _seed_resolved(
+                "market_better_summary",
+                decision="watch",
+                status="observed",
+                brier=0.04,
+                category="cpi",
+                ai_probability=80.0,
+                market_probability=90.0,
+                actual_outcome=100.0,
+            )
+            summary = preds.calibration_summary()
+            self.assertEqual(summary["segments"]["cpi"]["skill_score"], 0.0)
+            self.assertAlmostEqual(summary["segments"]["cpi"]["market_brier_score"], 0.01)
+
     def test_migrate_adds_columns_to_m1_table(self):
         import sqlite3
         m1_schema = """

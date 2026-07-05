@@ -653,15 +653,22 @@ def calculate_evidence_quality(
     freshness = _clamp(float(evidence.get("freshness_score", 0.5)), 0.0, 1.0)
     conflict = _clamp(float(evidence.get("conflict_score", 0.0)), 0.0, 1.0)
     source_count = max(0, int(evidence.get("source_count", 0) or 0))
+    independent_source_count = max(0, int(evidence.get("independent_source_count", 0) or 0))
+    official_source_count = max(0, int(evidence.get("official_source_count", 0) or 0))
+    counterevidence_considered = bool(evidence.get("counterevidence_considered", False))
     news_quality = _clamp(news_quality_score, 0.0, 1.0)
     ambiguity = _clamp(float(semantics.get("ambiguity_score", 50)), 0.0, 100.0) / 100.0
     priced_in = _clamp(float(priced_in_risk_score), 0.0, 100.0) / 100.0
     source_score = _clamp(source_count / 5.0, 0.0, 1.0)
+    independent_source_score = _clamp(independent_source_count / 5.0, 0.0, 1.0)
+    official_source_score = _clamp(official_source_count / 2.0, 0.0, 1.0)
+    counterevidence_score = 1.0 if counterevidence_considered else 0.0
     factor = round(_clamp(
-        strength * 0.24 + relevance * 0.20 + freshness * 0.14
-        + (1.0 - conflict) * 0.14 + source_score * 0.12
-        + news_quality * 0.10 + (1.0 - ambiguity) * 0.04
-        + (1.0 - priced_in) * 0.02,
+        strength * 0.23 + relevance * 0.19 + freshness * 0.13
+        + (1.0 - conflict) * 0.12 + source_score * 0.07
+        + independent_source_score * 0.06 + official_source_score * 0.04
+        + counterevidence_score * 0.04 + news_quality * 0.08
+        + (1.0 - ambiguity) * 0.02 + (1.0 - priced_in) * 0.02,
         0.0,
         1.0,
     ), 3)
@@ -674,6 +681,8 @@ def calculate_evidence_quality(
         reasons.append("stale_evidence")
     if source_count < 2:
         reasons.append("single_or_missing_source")
+    if source_count >= 3 and independent_source_count < 2:
+        reasons.append("low_source_diversity")
     if ambiguity >= 0.70:
         reasons.append("ambiguous_resolution")
     if priced_in >= 0.70:
@@ -682,6 +691,14 @@ def calculate_evidence_quality(
         reasons.append("direct_relevant_evidence")
     if source_count >= 5 and conflict <= 0.20:
         reasons.append("multi_source_support")
+    if independent_source_count >= 3:
+        reasons.append("independent_source_support")
+    if official_source_count >= 1:
+        reasons.append("official_source_support")
+    if counterevidence_considered:
+        reasons.append("counterevidence_considered")
+    elif strength >= 0.70 or relevance >= 0.70 or factor >= 0.70:
+        reasons.append("counterevidence_not_considered")
     if factor < 0.35:
         bucket = "weak"
     elif factor < 0.55:
@@ -690,6 +707,8 @@ def calculate_evidence_quality(
         bucket = "solid"
     else:
         bucket = "strong"
+    if bucket == "strong" and not counterevidence_considered:
+        bucket = "solid"
     return {"factor": factor, "bucket": bucket, "reasons": reasons}
 
 
@@ -756,6 +775,10 @@ def apply_confidence_caps(
         reasons.append("low_probability_evidence_cap")
     elif market < 10.0 and bucket == "weak":
         reasons.append("low_probability_evidence_cap")
+    quality_reasons = set((evidence_quality or {}).get("reasons") or [])
+    if "counterevidence_not_considered" in quality_reasons and capped > 0.70:
+        capped = 0.70
+        reasons.append("counterevidence_not_considered_cap")
     return {"confidence": round(capped, 3), "reasons": list(dict.fromkeys(reasons))}
 
 def constrain_probability(
@@ -898,6 +921,21 @@ def extract_evidence_profile(news_context: str) -> dict[str, Any]:
         text,
         profile["source_count"],
     )
+    profile["independent_source_count"] = _extract_int_value(
+        r"independent_source_count:\s*([0-9]+)",
+        text,
+        profile["independent_source_count"],
+    )
+    profile["official_source_count"] = _extract_int_value(
+        r"official_source_count:\s*([0-9]+)",
+        text,
+        profile["official_source_count"],
+    )
+    profile["counterevidence_considered"] = _extract_bool_value(
+        r"counterevidence_considered:\s*(true|false|yes|no|1|0)",
+        text,
+        profile["counterevidence_considered"],
+    )
     return profile
 
 
@@ -909,6 +947,9 @@ def default_evidence_profile() -> dict[str, Any]:
         "freshness_score": 0.5,
         "resolution_relevance_score": 0.0,
         "source_count": 0,
+        "independent_source_count": 0,
+        "official_source_count": 0,
+        "counterevidence_considered": False,
     }
 
 
@@ -959,6 +1000,18 @@ def _extract_int_value(pattern: str, text: str, fallback: int) -> int:
         return max(0, int(match.group(1)))
     except (TypeError, ValueError):
         return fallback
+
+
+def _extract_bool_value(pattern: str, text: str, fallback: bool) -> bool:
+    match = re.search(pattern, text, flags=re.IGNORECASE)
+    if not match:
+        return fallback
+    value = match.group(1).strip().lower()
+    if value in {"true", "yes", "1"}:
+        return True
+    if value in {"false", "no", "0"}:
+        return False
+    return fallback
 
 
 def _sanitize_text(text: str) -> str:

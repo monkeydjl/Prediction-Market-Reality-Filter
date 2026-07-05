@@ -47,6 +47,9 @@ NEWS_CONTEXT = (
     "freshness: 0.8\n"
     "resolution_relevance: 0.5\n"
     "source_count: 4\n"
+    "independent_source_count: 3\n"
+    "official_source_count: 1\n"
+    "counterevidence_considered: true\n"
     "MARKET SEMANTICS\n"
     "condition_type: threshold\n"
     "ambiguity_score: 30\n"
@@ -64,6 +67,9 @@ EVIDENCE = {
     "freshness_score": 0.8,
     "resolution_relevance_score": 0.5,
     "source_count": 4,
+    "independent_source_count": 3,
+    "official_source_count": 1,
+    "counterevidence_considered": True,
 }
 SEMANTICS = {"condition_type": "threshold", "ambiguity_score": 30}
 REASONING = (
@@ -138,6 +144,9 @@ class ProbabilityMathTests(unittest.TestCase):
                 "freshness_score": 0.92,
                 "resolution_relevance_score": 0.88,
                 "source_count": 6,
+                "independent_source_count": 5,
+                "official_source_count": 1,
+                "counterevidence_considered": True,
             },
             news_quality_score=0.86,
             semantics_profile={"condition_type": "threshold", "ambiguity_score": 18},
@@ -147,6 +156,72 @@ class ProbabilityMathTests(unittest.TestCase):
         self.assertGreaterEqual(quality["factor"], 0.75)
         self.assertIn("direct_relevant_evidence", quality["reasons"])
         self.assertIn("multi_source_support", quality["reasons"])
+        self.assertIn("official_source_support", quality["reasons"])
+        self.assertIn("counterevidence_considered", quality["reasons"])
+
+    def test_calculate_evidence_quality_rewards_independent_sources(self):
+        shared = {
+            "evidence_direction": "support",
+            "evidence_strength": 0.72,
+            "conflict_score": 0.10,
+            "freshness_score": 0.80,
+            "resolution_relevance_score": 0.74,
+            "source_count": 6,
+            "official_source_count": 0,
+            "counterevidence_considered": True,
+        }
+        same_wire_story = calculate_evidence_quality(
+            evidence_profile={**shared, "independent_source_count": 1},
+            news_quality_score=0.72,
+            semantics_profile={"condition_type": "threshold", "ambiguity_score": 20},
+            priced_in_risk_score=20,
+        )
+        independent_sources = calculate_evidence_quality(
+            evidence_profile={**shared, "independent_source_count": 5},
+            news_quality_score=0.72,
+            semantics_profile={"condition_type": "threshold", "ambiguity_score": 20},
+            priced_in_risk_score=20,
+        )
+
+        self.assertGreater(independent_sources["factor"], same_wire_story["factor"])
+        self.assertIn("low_source_diversity", same_wire_story["reasons"])
+        self.assertIn("independent_source_support", independent_sources["reasons"])
+
+    def test_calculate_evidence_quality_requires_counterevidence_for_strong(self):
+        quality = calculate_evidence_quality(
+            evidence_profile={
+                "evidence_direction": "support",
+                "evidence_strength": 0.90,
+                "conflict_score": 0.02,
+                "freshness_score": 0.92,
+                "resolution_relevance_score": 0.90,
+                "source_count": 7,
+                "independent_source_count": 6,
+                "official_source_count": 1,
+                "counterevidence_considered": False,
+            },
+            news_quality_score=0.88,
+            semantics_profile={"condition_type": "threshold", "ambiguity_score": 15},
+            priced_in_risk_score=10,
+        )
+
+        self.assertEqual(quality["bucket"], "solid")
+        self.assertIn("counterevidence_not_considered", quality["reasons"])
+
+    def test_apply_confidence_caps_limits_one_sided_evidence(self):
+        result = apply_confidence_caps(
+            confidence=0.84,
+            market_probability=42.0,
+            base_rate_category="known_policy",
+            evidence_quality={
+                "factor": 0.74,
+                "bucket": "solid",
+                "reasons": ["counterevidence_not_considered"],
+            },
+        )
+
+        self.assertEqual(result["confidence"], 0.70)
+        self.assertIn("counterevidence_not_considered_cap", result["reasons"])
 
     def test_apply_longshot_guardrail_caps_weak_low_probability_lift(self):
         result = apply_longshot_guardrail(
@@ -552,9 +627,13 @@ class AnalyzeMarketContractTests(unittest.TestCase):
                 "base_rate_effective_prior": 50.0,
                 "base_rate_range": [20, 80],
                 "evidence_constrained_probability": 51.66,
-                "evidence_quality_factor": 0.693,
+                "evidence_quality_factor": 0.683,
                 "evidence_quality_bucket": "solid",
-                "evidence_quality_reasons": [],
+                "evidence_quality_reasons": [
+                    "independent_source_support",
+                    "official_source_support",
+                    "counterevidence_considered",
+                ],
                 "probability_guardrail_triggered": False,
                 "probability_guardrail_reason": "",
                 "base_rate_probability": 50.74,

@@ -24,6 +24,34 @@ class ConfigHelperTests(unittest.TestCase):
             )
 
 
+class FootballDataConfigTests(unittest.TestCase):
+    def test_football_data_config_can_be_configured_from_env(self):
+        from app.core import config as config_module
+
+        custom_base_url = "https://football-data-proxy.example/v4"
+        custom_key = "football-data-test-key"
+        with patch.dict(
+            os.environ,
+            {
+                "FOOTBALL_DATA_API_KEY": custom_key,
+                "FOOTBALL_DATA_BASE_URL": custom_base_url,
+            },
+            clear=False,
+        ):
+            reloaded_config = importlib.reload(config_module)
+            try:
+                self.assertEqual(
+                    reloaded_config.settings.FOOTBALL_DATA_API_KEY,
+                    custom_key,
+                )
+                self.assertEqual(
+                    reloaded_config.settings.FOOTBALL_DATA_BASE_URL,
+                    custom_base_url,
+                )
+            finally:
+                importlib.reload(config_module)
+
+
 class OddsApiConfigTests(unittest.TestCase):
     def test_odds_api_base_url_can_be_configured_from_env(self):
         from app.core import config as config_module

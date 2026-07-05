@@ -392,6 +392,13 @@ class Settings:
         ),
     )
 
+    # Football-Data.org - default World Cup fixture sync source
+    FOOTBALL_DATA_API_KEY: str = os.getenv("FOOTBALL_DATA_API_KEY", "")
+    FOOTBALL_DATA_BASE_URL: str = os.getenv(
+        "FOOTBALL_DATA_BASE_URL",
+        "https://api.football-data.org/v4",
+    )
+
     # The Odds API - Betting odds data source
     # Free tier: 500 requests/month
     # Register at: https://the-odds-api.com/

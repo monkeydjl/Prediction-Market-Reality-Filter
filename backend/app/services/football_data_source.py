@@ -4,17 +4,14 @@ Provides free access to World Cup data with 10 requests/minute limit.
 Documentation: https://www.football-data.org/documentation/quickstart
 """
 
-import os
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from dotenv import load_dotenv
+from app.core.config import settings
 
-load_dotenv()
-
-FOOTBALL_DATA_API_KEY = os.getenv('FOOTBALL_DATA_API_KEY', '')
-FOOTBALL_DATA_BASE_URL = os.getenv('FOOTBALL_DATA_BASE_URL', 'https://api.football-data.org/v4')
+FOOTBALL_DATA_API_KEY = settings.FOOTBALL_DATA_API_KEY
+FOOTBALL_DATA_BASE_URL = settings.FOOTBALL_DATA_BASE_URL
 
 
 class FootballDataAPIError(Exception):

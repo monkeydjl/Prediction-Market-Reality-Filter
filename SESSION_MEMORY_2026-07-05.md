@@ -427,5 +427,39 @@ Verification:
 
 Remaining follow-up:
 
-- Segment skill should be made market-relative in a separate focused pass if prediction-store fields are sufficient or after adding explicit market baseline fields.
-- UI/reporting should eventually separate `act`, `provisional_act`, and `watch` simulated-trade performance.
+- Segment skill market-relative trust was completed in `d491d5b`; do not repeat it.
+- UI/reporting separation of `act`, `provisional_act`, and `watch` simulated-trade performance has started in `35dfa9b` and was clarified in `1e69606`; extend it to more reports only if needed.
+
+---
+
+# Session Memory Update - Frontend Diagnostics and Trade Reporting Follow-up
+
+Time: 2026-07-05, Asia/Shanghai.
+
+Completed after the prediction-engine safety work:
+
+- `ebe7fe4 test: wait for world cup async panels`
+  - Stabilized frontend World Cup async panel tests by waiting for loaded async content instead of initial synchronous labels.
+  - Verified with targeted panel tests, full frontend test suite, touched-file lint, and typecheck.
+
+- `1e69606 feat: clarify exploratory trade decisions`
+  - Updated the simulated trades page decision-performance section to explain decision semantics:
+    - `act` = calibrated production-style action sample.
+    - `provisional_act` = cold-start / insufficient-sample provisional action.
+    - `watch` = exploratory observation sample for data collection, not production-grade win-rate evidence.
+  - Added readable labels for decision rows: formal action, provisional action, exploratory observation.
+  - Did not change backend trade creation, `watch` behavior, settlement, or auto-resolve.
+
+Current state:
+
+- Working tree was clean after `1e69606`.
+- `watch` simulated trading remains enabled for exploration data collection.
+- Core Prediction Engine Safety Evidence Boost v1 is complete.
+- Segment skill has already been made market-relative in `d491d5b`; do not repeat that work.
+
+Remaining optional follow-ups:
+
+1. Safe historical diagnostic backfill only if reporting needs it; make a backup first and do not alter settlement semantics.
+2. Extend `act` / `provisional_act` / `watch` separation to additional reports such as calibration dashboards or replay HTML reports if needed.
+3. Add backend API regression coverage for trade stats `by_decision` if stronger contract protection is desired.
+4. Re-run `npm.cmd run build` before release when Windows file locks on `frontend/out` are cleared; previous build attempts were blocked by `EBUSY`, so do not claim build success without a fresh passing run.

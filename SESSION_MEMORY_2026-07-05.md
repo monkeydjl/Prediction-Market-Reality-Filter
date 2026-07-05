@@ -463,3 +463,189 @@ Remaining optional follow-ups:
 2. Extend `act` / `provisional_act` / `watch` separation to additional reports such as calibration dashboards or replay HTML reports if needed.
 3. Add backend API regression coverage for trade stats `by_decision` if stronger contract protection is desired.
 4. Re-run `npm.cmd run build` before release when Windows file locks on `frontend/out` are cleared; previous build attempts were blocked by `EBUSY`, so do not claim build success without a fresh passing run.
+
+
+---
+
+# Session Memory Update - LLM Gateway and Env Configuration Cleanup
+
+Time: 2026-07-05, later session.
+
+This section captures the latest environment/configuration work so the next
+agent can continue without re-reading the whole history.
+
+## User Intent / Decisions
+
+The user wanted LLM API configuration to be flexible and ordered, not locked to
+hard-coded named providers. Desired shape:
+
+```env
+OPENAI_API_KEY_1=...
+OPENAI_MODEL_1_1=...
+OPENAI_MODEL_1_2=...
+OPENAI_BASE_URL_1=...
+
+OPENAI_API_KEY_2=...
+OPENAI_MODEL_2_1=...
+OPENAI_BASE_URL_2=...
+```
+
+Call order should be:
+
+1. try provider/API slot 1;
+2. try that slot's models in numeric order;
+3. if all models fail, move to next provider/API slot;
+4. if all numbered providers fail, use legacy fallback where applicable.
+
+The user also asked whether provider-specific variables such as
+`LLM_PROVIDER_DEEPSEEK_*`, `LLM_PROVIDER_DASHSCOPE_*`, `LLM_PROVIDER_OPENAI_*`,
+and `LLM_PROVIDER_OPENROUTER_*` were still necessary in `.env.example`. Decision:
+remove them from `.env.example` and prefer the indexed `OPENAI_*_N` style.
+
+Important nuance: some legacy `LLM_PROVIDER_*` fields may still exist in
+`backend/app/core/config.py` for backwards compatibility/internal defaults, but
+do not re-add them to `.env.example` unless the user explicitly asks.
+
+## Commits Completed
+
+Recent commits relevant to this memory section:
+
+- `2d40e3f feat: support indexed llm provider config`
+  - Added indexed OpenAI-compatible provider discovery.
+  - Supports `OPENAI_API_KEY_N`, `OPENAI_MODEL_N_M`, `OPENAI_BASE_URL_N`.
+  - Fallback precedence:
+    `task-specific LLM_ROUTE_* > LLM_ROUTE_DEFAULT > numbered OPENAI_*_N > legacy OPENAI_*`.
+
+- `229ebec docs: document indexed llm env config`
+  - Documented indexed LLM provider config in `backend/.env.example`.
+
+- `1027539 docs: simplify llm env example`
+  - Removed provider-specific LLM env examples from `backend/.env.example`.
+
+- `42d6aaa chore: ignore local env copies`
+  - Added `backend/.env_*` to `.gitignore`.
+  - This was done because a local untracked `backend/.env_1` existed and may
+    contain secrets. Do not read or stage local env copies.
+
+- `4ea2cf6 docs: annotate env example parameters`
+  - Added Chinese inline comments to every assignment-style parameter in
+    `backend/.env.example`.
+
+- `444d158 feat: configure odds api base url`
+  - Added `ODDS_API_BASE_URL` to settings and the Odds API service.
+  - Added `ODDS_API_ENABLED` to `.env.example` because code already had the flag
+    and users need to know it must be `true` for external odds fetching.
+
+- `45dc6cb feat: configure football data source env`
+  - Re-added/documented Football-Data.org env parameters because current code
+    still uses them.
+  - Unified `football_data_source.py` to read through `settings` instead of
+    calling `load_dotenv()` directly.
+  - Fixed empty-value examples in `.env.example` to use `=""` so inline Chinese
+    comments are not parsed as values by `python-dotenv`.
+
+## Current Env Example Notes
+
+`backend/.env.example` now includes Chinese comments after each parameter.
+
+For empty values, the safe format is:
+
+```env
+SOME_KEY=""  # Chinese explanation here
+```
+
+Do not use this form for empty values with inline comments:
+
+```env
+SOME_KEY=  # Chinese explanation here
+```
+
+Reason: `python-dotenv` may parse the comment text as the value when there is an
+unquoted empty assignment followed by an inline comment.
+
+Current important World Cup / data-source envs:
+
+```env
+ODDS_API_KEY=""
+ODDS_API_BASE_URL=https://api.the-odds-api.com/v4
+ODDS_API_ENABLED=false
+
+FOOTBALL_DATA_API_KEY=""
+FOOTBALL_DATA_BASE_URL=https://api.football-data.org/v4
+```
+
+`FOOTBALL_DATA_*` is still needed because `sync_world_cup_fixtures(source="football-data")`
+remains supported and is the default source path in `world_cup_match_service`.
+
+`ODDS_API_BASE_URL` is now configurable; before `444d158` it was hard-coded in
+`backend/app/services/odds_api_service.py`.
+
+## Verification Already Run
+
+For `.env.example` annotation work:
+
+```powershell
+git diff --check
+python -c "from dotenv import dotenv_values; vals=dotenv_values('backend/.env.example'); print(vals.get('PMRF_ENV')); print(vals.get('LLM_TIMEOUT_SECONDS')); print(vals.get('WORLD_CUP_SOURCE_BUNDLE_USER_AGENT'))"
+```
+
+For Odds API base URL work:
+
+```powershell
+git diff --check
+$env:PYTHONPATH='backend;E:\tmp\pmrf_pydeps'
+python -m unittest backend.tests.test_config
+python -m compileall backend/app/core/config.py backend/app/services/odds_api_service.py backend/tests/test_config.py
+python -c "from dotenv import dotenv_values; vals=dotenv_values('backend/.env.example'); print(vals.get('ODDS_API_BASE_URL')); print(vals.get('ODDS_API_ENABLED'))"
+```
+
+For Football-Data.org config work:
+
+```powershell
+git diff --check
+$env:PYTHONPATH='backend;E:\tmp\pmrf_pydeps'
+python -m unittest backend.tests.test_config backend.tests.test_world_cup_match_service
+python -m compileall backend/app/core/config.py backend/app/services/football_data_source.py backend/tests/test_config.py
+python -c "from dotenv import dotenv_values; vals=dotenv_values('backend/.env.example'); print(vals.get('FOOTBALL_DATA_API_KEY')); print(vals.get('FOOTBALL_DATA_BASE_URL'))"
+```
+
+All passed before commit.
+
+A Chinese-comment coverage check was also run after the Football-Data.org work:
+
+```powershell
+python -c "from pathlib import Path; import re; missing=[]; lines=Path('backend/.env.example').read_text(encoding='utf-8').splitlines();
+for i,line in enumerate(lines,1):
+    if re.match(r'^(#\\s*)?[A-Z][A-Z0-9_]+=', line) and '# \u4e2d\u6587\uff1a' not in line:
+        missing.append((i,line))
+print('missing_chinese_comments=', len(missing))"
+```
+
+Result: `missing_chinese_comments=0`.
+
+## Safety Notes For Next Agent
+
+- Do not read or modify real secret files such as `backend/.env` or
+  `backend/.env_1`.
+- Do not `git add -A`; stage explicit files only.
+- `.codegraph/` exists. Use CodeGraph before grep/read when locating code.
+- If modifying env examples with Chinese comments, verify with
+  `python-dotenv` because display encoding in PowerShell may show mojibake even
+  when the file is valid UTF-8.
+- If a PowerShell terminal displays Chinese as garbled text, inspect with
+  Python `repr()` using UTF-8 before assuming the file is corrupt.
+
+## Suggested Skills For Next Session
+
+- `using-superpowers` at session start.
+- `test-driven-development` for any behavior/config-loading change.
+- `verification-before-completion` before claiming success or committing.
+- `systematic-debugging` if frontend/backend behavior regresses.
+- CodeGraph before code search because this repo is indexed.
+
+## Current State At Memory Write
+
+- Latest commit: `45dc6cb feat: configure football data source env`.
+- Working tree was clean immediately before writing this memory update.
+- This memory update itself is the only expected new working-tree modification
+  after it is written, unless the user asks to commit it.

@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, patch
 import app.services.ai_analysis_service as ai
 from app.services.ai_analysis_service import (
     build_deterministic_fallback_analysis,
+    apply_confidence_caps,
     apply_longshot_guardrail,
     build_risk_flags,
     calculate_confidence_score,
@@ -194,6 +195,28 @@ class ProbabilityMathTests(unittest.TestCase):
         self.assertTrue(result["guardrail_triggered"])
         self.assertEqual(result["guardrail_reason"], "low_probability_weak_evidence_cap")
         self.assertLessEqual(result["probability"], 15.8)
+
+    def test_apply_confidence_caps_weak_unknown_longshot(self):
+        result = apply_confidence_caps(
+            confidence=0.82,
+            market_probability=4.0,
+            base_rate_category="unknown",
+            evidence_quality={"factor": 0.24, "bucket": "weak", "reasons": []},
+        )
+        self.assertEqual(result["confidence"], 0.55)
+        self.assertIn("weak_evidence_cap", result["reasons"])
+        self.assertIn("unknown_category_cap", result["reasons"])
+        self.assertIn("low_probability_evidence_cap", result["reasons"])
+
+    def test_apply_confidence_caps_solid_known_category_keeps_confidence(self):
+        result = apply_confidence_caps(
+            confidence=0.68,
+            market_probability=42.0,
+            base_rate_category="crypto_price",
+            evidence_quality={"factor": 0.68, "bucket": "solid", "reasons": []},
+        )
+        self.assertEqual(result["confidence"], 0.68)
+        self.assertEqual(result["reasons"], [])
 
     def test_clamp_probability(self):
         self.assertEqual(
@@ -393,6 +416,46 @@ class AnalyzeMarketContractTests(unittest.TestCase):
     and the complete output shape (the legacy contract callers depend on).
     """
 
+    def test_analyze_market_caps_confidence_for_weak_unknown_longshot(self):
+        weak_context = (
+            "EVIDENCE PROFILE\n"
+            "direction: support\n"
+            "strength: 0.12\n"
+            "conflict: 0.65\n"
+            "freshness: 0.25\n"
+            "resolution_relevance: 0.15\n"
+            "source_count: 1\n"
+            "MARKET SEMANTICS\n"
+            "condition_type: unknown\n"
+            "ambiguity_score: 75\n"
+            "news item: unconfirmed rumor. quality: 0.25 relevance: 0.20\n"
+        )
+
+        async def run():
+            with (
+                patch.object(ai, "_ask_ai", new=AsyncMock(return_value={
+                    "ai_probability": 34,
+                    "narrative_type": "factual",
+                    "narrative_summary": "Weak rumor points upward.",
+                    "reasoning": REASONING,
+                    "has_strong_evidence": False,
+                    "reasoning_consistency": 0.9,
+                })),
+                patch.object(ai, "translate_title", new=AsyncMock(return_value="")),
+            ):
+                return await ai.analyze_market(
+                    market_question="Will an obscure unclassified event happen this week?",
+                    market_probability=4,
+                    news_context=weak_context,
+                    volume=1000,
+                    liquidity=500,
+                )
+
+        result = asyncio.run(run())
+        self.assertLessEqual(result["confidence_score"], 0.55)
+        self.assertIn("weak_evidence_cap", result["confidence_cap_reasons"])
+        self.assertIn("low_probability_evidence_cap", result["confidence_cap_reasons"])
+
     def test_analyze_market_fallback_contract(self):
         async def run():
             with (
@@ -421,6 +484,7 @@ class AnalyzeMarketContractTests(unittest.TestCase):
                 "signal_direction": "NEUTRAL",
                 "overreaction_score": 0.74,
                 "confidence_score": 0.584,
+                "confidence_cap_reasons": [],
                 "narrative_type": "evidence_fallback",
                 "title_zh": "",
                 "narrative_summary": "基于结构化新闻证据的确定性回退分析。",

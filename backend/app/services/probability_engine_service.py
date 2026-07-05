@@ -725,6 +725,39 @@ def apply_longshot_guardrail(
     }
 
 
+
+def apply_confidence_caps(
+    confidence: float,
+    market_probability: float,
+    base_rate_category: str,
+    evidence_quality: dict[str, Any],
+) -> dict[str, Any]:
+    """Cap confidence when evidence or category quality cannot justify high certainty."""
+    capped = _clamp(confidence, 0.0, 0.90)
+    market = _clamp(market_probability, 0.0, 100.0)
+    category = (base_rate_category or "unknown").lower()
+    bucket = str((evidence_quality or {}).get("bucket") or "weak")
+    reasons: list[str] = []
+    if bucket == "weak" and capped > 0.55:
+        capped = 0.55
+        reasons.append("weak_evidence_cap")
+    elif bucket == "weak":
+        reasons.append("weak_evidence_cap")
+    elif bucket == "mixed" and capped > 0.65:
+        capped = 0.65
+        reasons.append("mixed_evidence_cap")
+    if category == "unknown" and bucket in {"weak", "mixed"} and capped > 0.60:
+        capped = 0.60
+        reasons.append("unknown_category_cap")
+    elif category == "unknown" and bucket == "weak":
+        reasons.append("unknown_category_cap")
+    if market < 10.0 and bucket != "strong" and capped > 0.62:
+        capped = 0.62
+        reasons.append("low_probability_evidence_cap")
+    elif market < 10.0 and bucket == "weak":
+        reasons.append("low_probability_evidence_cap")
+    return {"confidence": round(capped, 3), "reasons": list(dict.fromkeys(reasons))}
+
 def constrain_probability(
     market_probability: float,
     ai_probability: float,

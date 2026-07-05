@@ -31,6 +31,7 @@ from app.services.probability_engine_service import (
     _ask_ai,
     _clamp,
     _normalize_ai_analysis,
+    apply_confidence_caps,
     apply_longshot_guardrail,
     build_deterministic_fallback_analysis,
     calculate_confidence_score,
@@ -133,6 +134,12 @@ async def analyze_market(
             normalized["title_zh"] = zh
     narrative_type = normalized["narrative_type"]
     base_rate = classify_market(market_question)
+    evidence_quality = calculate_evidence_quality(
+        evidence_profile=evidence_profile,
+        news_quality_score=news_quality_score,
+        semantics_profile=semantics_profile,
+        priced_in_risk_score=priced_in_risk_score,
+    )
     narrative_risk_score = calculate_narrative_risk_score(
         news_context=news_context,
         narrative_type=narrative_type,
@@ -147,6 +154,13 @@ async def analyze_market(
         priced_in_risk_score=priced_in_risk_score,
         semantics_profile=semantics_profile,
     )
+    confidence_cap = apply_confidence_caps(
+        confidence=confidence_score,
+        market_probability=market_probability,
+        base_rate_category=base_rate.category,
+        evidence_quality=evidence_quality,
+    )
+    confidence_score = confidence_cap["confidence"]
 
     probability_constraint = constrain_probability(
         market_probability=market_probability,
@@ -208,6 +222,7 @@ async def analyze_market(
         "signal_direction": signal_direction,
         "overreaction_score": abs(divergence),
         "confidence_score": confidence_score,
+        "confidence_cap_reasons": confidence_cap["reasons"],
         "narrative_type": narrative_type,
         "title_zh": normalized["title_zh"],
         "narrative_summary": normalized["narrative_summary"],

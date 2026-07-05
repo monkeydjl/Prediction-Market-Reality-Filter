@@ -781,6 +781,7 @@ export interface EventListFilters {
   category?: string;
   sort?: "value" | "delta" | "probability" | "support";
   exclude_expired?: boolean;
+  resolved_only?: boolean;
 }
 
 const WORLD_CUP_DATA_SOURCE_ACTION_PATHS: Record<WorldCupDataSourceActionMode, string> = {
@@ -832,6 +833,7 @@ export const eventsApi = {
     if (filters.status && filters.status !== "all") params.set("status", filters.status);
     if (filters.category && filters.category !== "all") params.set("category", filters.category);
     if (filters.sort && filters.sort !== "value") params.set("sort", filters.sort);
+    if (filters.resolved_only) params.set("resolved_only", "true");
     return api<{
       events: TrackedEntry[];
       count?: number;

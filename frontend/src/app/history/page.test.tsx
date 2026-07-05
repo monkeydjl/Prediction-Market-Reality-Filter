@@ -51,6 +51,16 @@ function resolvedEntry(index: number) {
   };
 }
 
+function openEntry(index: number) {
+  return {
+    record: {
+      event_id: `open-${index}`,
+      event_title: `Open event ${index}`,
+      probability: { estimated: 40 },
+    },
+  };
+}
+
 describe("HistoryPage", () => {
   beforeEach(() => {
     api.calibration.mockReset();
@@ -117,14 +127,44 @@ describe("HistoryPage", () => {
 
     render(<HistoryPage />);
 
-    await waitFor(() => expect(api.list).toHaveBeenCalledWith(10, 0));
+    await waitFor(() => expect(api.list).toHaveBeenCalledWith(10, 0, { resolved_only: true, exclude_expired: false }));
     expect(await screen.findByText("Resolved event 1")).toBeInTheDocument();
     expect(screen.queryByText("Resolved event 11")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /\u4e0b\u4e00\u9875/ }));
 
-    await waitFor(() => expect(api.list).toHaveBeenLastCalledWith(10, 10));
+    await waitFor(() => expect(api.list).toHaveBeenLastCalledWith(10, 10, { resolved_only: true, exclude_expired: false }));
     expect(await screen.findByText("Resolved event 11")).toBeInTheDocument();
     expect(screen.queryByText("Resolved event 1")).not.toBeInTheDocument();
+  });
+
+  it("requests resolved reviews from the server before paginating", async () => {
+    api.list.mockImplementation(async (_limit = 10, offset = 0, filters = {}) => {
+      if (filters.resolved_only) {
+        return {
+          events: Array.from({ length: 10 }, (_, i) => resolvedEntry(offset + i + 1)),
+          count: 10,
+          total: 24,
+          limit: 10,
+          offset,
+        };
+      }
+      return {
+        events: [
+          ...Array.from({ length: 6 }, (_, i) => resolvedEntry(i + 1)),
+          ...Array.from({ length: 4 }, (_, i) => openEntry(i + 1)),
+        ],
+        count: 10,
+        total: 24,
+        limit: 10,
+        offset,
+      };
+    });
+
+    render(<HistoryPage />);
+
+    await waitFor(() => expect(api.list).toHaveBeenCalledWith(10, 0, { resolved_only: true, exclude_expired: false }));
+    expect(await screen.findByText("Resolved event 10")).toBeInTheDocument();
+    expect(screen.queryByText("Open event 1")).not.toBeInTheDocument();
   });
 });

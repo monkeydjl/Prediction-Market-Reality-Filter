@@ -104,6 +104,36 @@ class EventStoreTests(unittest.TestCase):
                 listed = store.list_events(limit=2, offset=1)
         self.assertEqual([e["event_id"] for e in listed], ["mid", "low"])
 
+    def test_list_events_resolved_only_filters_before_pagination(self):
+        outcome = {
+            "status": "resolved",
+            "actual_outcome": 100.0,
+            "confidence": 1.0,
+            "resolved_at": "2026-07-05T00:00:00+00:00",
+            "source": "manual",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                records = []
+                for index in range(15):
+                    records.append(_make_record(f"resolved-{index:02d}", value_score=100 - index))
+                for index in range(5):
+                    records.append(_make_record(f"open-{index:02d}", value_score=200 - index))
+                store.save_events(records)
+                for index in range(15):
+                    store.resolve_event(f"resolved-{index:02d}", outcome)
+
+                first_page = store.list_events(limit=10, offset=0, resolved_only=True, exclude_expired=False)
+                second_page = store.list_events(limit=10, offset=10, resolved_only=True, exclude_expired=False)
+                total = store.count_events(resolved_only=True, exclude_expired=False)
+
+        self.assertEqual(len(first_page), 10)
+        self.assertEqual(len(second_page), 5)
+        self.assertEqual(total, 15)
+        self.assertTrue(all((entry["record"].get("outcome") or {}).get("actual_outcome") is not None for entry in first_page))
+        self.assertNotIn("open-00", [entry["event_id"] for entry in first_page])
+
     def test_list_events_filters_and_counts_same_scope(self):
         fed = _make_record("fed", value_score=70, estimated=65)
         fed["event_title"] = "Federal Reserve rate cut"
@@ -487,6 +517,32 @@ class EventReadRouteTests(unittest.TestCase):
         body = resp.json()
         self.assertEqual(body["count"], 2)
         self.assertEqual(body["events"][0]["event_id"], "e-hi")
+
+    def test_list_events_route_resolved_only_counts_filtered_rows(self):
+        app = FastAPI()
+        app.include_router(events_routes.router, prefix="/events")
+        client = TestClient(app)
+        outcome = {
+            "status": "resolved",
+            "actual_outcome": 100.0,
+            "confidence": 1.0,
+            "resolved_at": "2026-07-05T00:00:00+00:00",
+            "source": "manual",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                store.save_event(_make_record("open-high", value_score=500))
+                for index in range(12):
+                    event_id = f"resolved-route-{index:02d}"
+                    store.save_event(_make_record(event_id, value_score=100 - index))
+                    store.resolve_event(event_id, outcome)
+                resp = client.get("/events/?limit=10&offset=0&resolved_only=true&exclude_expired=false")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["count"], 10)
+        self.assertEqual(body["total"], 12)
+        self.assertTrue(all(e["event_id"].startswith("resolved-route-") for e in body["events"]))
 
     def test_event_history_route(self):
         app = FastAPI()

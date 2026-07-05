@@ -271,6 +271,7 @@ async def list_event_intelligence(
     category: str = Query(default="all", max_length=80),
     sort: str = Query(default="value", pattern="^(value|delta|probability|support)$"),
     exclude_expired: bool = Query(default=True),
+    resolved_only: bool = Query(default=False),
 ):
     """List stored event intelligence records for the dashboard table."""
     entries = list_events(
@@ -281,8 +282,16 @@ async def list_event_intelligence(
         category=category,
         sort=sort,
         exclude_expired=exclude_expired,
+        resolved_only=resolved_only,
     )
-    total = count_events(query=q, status=status, category=category, sort=sort, exclude_expired=exclude_expired)
+    total = count_events(
+        query=q,
+        status=status,
+        category=category,
+        sort=sort,
+        exclude_expired=exclude_expired,
+        resolved_only=resolved_only,
+    )
     return {"count": len(entries), "total": total, "limit": limit, "offset": offset, "events": entries}
 
 

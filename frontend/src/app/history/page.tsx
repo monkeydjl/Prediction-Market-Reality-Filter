@@ -17,6 +17,7 @@ const EMPTY_PRED: PredictionCalibration = {
   realized_edge: null, directional_hit_rate: null, segment_min_samples: null, by_category: {}, segments: {},
 };
 const REVIEW_PAGE_SIZE = 10;
+const RESOLVED_REVIEW_FILTERS = { resolved_only: true, exclude_expired: false } as const;
 const RESOLVE_LIMIT_OPTIONS = [50, 200, 500, 1000];
 
 const MATCH_RESULT_LABELS: Record<string, string> = {
@@ -145,7 +146,7 @@ export default function HistoryPage() {
     const [cal, predCalibration, list] = await Promise.all([
       eventsApi.calibration(),
       eventsApi.predictionCalibration(),
-      eventsApi.list(REVIEW_PAGE_SIZE, 0),
+      eventsApi.list(REVIEW_PAGE_SIZE, 0, RESOLVED_REVIEW_FILTERS),
     ]);
     setOverall(cal.overall ?? EMPTY_OVERALL);
     setPredCal(predCalibration ?? EMPTY_PRED);
@@ -169,7 +170,7 @@ export default function HistoryPage() {
     setLoadingMoreReviews(true);
     setError(null);
     try {
-      const list = await eventsApi.list(REVIEW_PAGE_SIZE, page * REVIEW_PAGE_SIZE);
+      const list = await eventsApi.list(REVIEW_PAGE_SIZE, page * REVIEW_PAGE_SIZE, RESOLVED_REVIEW_FILTERS);
       setReviewPage(page);
       setTotalEvents(list.total ?? list.count ?? 0);
       setReviews(

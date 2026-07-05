@@ -131,6 +131,36 @@ describe("qualityMetricsApi", () => {
   });
 });
 
+describe("eventsApi.list", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  it("sends resolved-only list filters to the event endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ events: [], total: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await eventsApi.list(10, 0, {
+      q: "history-resolved-filter",
+      resolved_only: true,
+      exclude_expired: false,
+    });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("/events/?");
+    expect(url).toContain("limit=10");
+    expect(url).toContain("offset=0");
+    expect(url).toContain("q=history-resolved-filter");
+    expect(url).toContain("exclude_expired=false");
+    expect(url).toContain("resolved_only=true");
+  });
+});
+
 describe("eventsApi caching", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn());

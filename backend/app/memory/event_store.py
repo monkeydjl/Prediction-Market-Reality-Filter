@@ -401,6 +401,13 @@ def _event_query_text(entry: dict[str, Any]) -> str:
     ).lower()
 
 
+def _is_resolved_record(record: dict[str, Any]) -> bool:
+    outcome = (record or {}).get("outcome") or {}
+    if outcome.get("actual_outcome") is None:
+        return False
+    return outcome.get("status", "resolved") == "resolved"
+
+
 def _is_source_expired(record: dict[str, Any]) -> bool:
     """Return True when the source market is clearly closed or past its close date.
 
@@ -441,6 +448,7 @@ def _filtered_ranked_events(
     category: str = "all",
     sort: str = "value",
     exclude_expired: bool = True,
+    resolved_only: bool = False,
 ) -> list[dict[str, Any]]:
     entries = list(_load_unlocked(_store_path()).values())
     q = query.strip().lower()
@@ -461,7 +469,12 @@ def _filtered_ranked_events(
             entry for entry in entries
             if _category(entry.get("record") or {}) == category
         ]
-    if exclude_expired:
+    if resolved_only:
+        entries = [
+            entry for entry in entries
+            if _is_resolved_record(entry.get("record") or {})
+        ]
+    if exclude_expired and not resolved_only:
         entries = [
             entry for entry in entries
             if not _is_source_expired(entry.get("record") or {})
@@ -487,6 +500,7 @@ def count_events(
     category: str = "all",
     sort: str = "value",
     exclude_expired: bool = True,
+    resolved_only: bool = False,
 ) -> int:
     """Count stored entries after the same filters used by list_events."""
     return len(_filtered_ranked_events(
@@ -495,6 +509,7 @@ def count_events(
         category=category,
         sort=sort,
         exclude_expired=exclude_expired,
+        resolved_only=resolved_only,
     ))
 
 
@@ -507,6 +522,7 @@ def list_events(
     category: str = "all",
     sort: str = "value",
     exclude_expired: bool = True,
+    resolved_only: bool = False,
 ) -> list[dict[str, Any]]:
     """Return stored entries filtered and sorted for the dashboard table."""
     ranked = _filtered_ranked_events(
@@ -515,5 +531,6 @@ def list_events(
         category=category,
         sort=sort,
         exclude_expired=exclude_expired,
+        resolved_only=resolved_only,
     )
     return ranked[offset:offset + limit]

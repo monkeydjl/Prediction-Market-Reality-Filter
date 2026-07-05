@@ -692,6 +692,84 @@ def calculate_evidence_quality(
         bucket = "strong"
     return {"factor": factor, "bucket": bucket, "reasons": reasons}
 
+
+def apply_longshot_guardrail(
+    market_probability: float,
+    ai_probability: float,
+    evidence_quality: dict[str, Any],
+    has_strong_evidence: bool = False,
+    base_rate_category: str = "unknown",
+) -> dict[str, Any]:
+    """Cap large upward moves on low-probability markets unless evidence is strong."""
+    market = _clamp(market_probability, 0.0, 100.0)
+    ai = _clamp(ai_probability, 0.0, 100.0)
+    bucket = str((evidence_quality or {}).get("bucket") or "weak")
+    category = (base_rate_category or "unknown").lower()
+    if market >= 10.0 or ai <= market:
+        return {"probability": round(ai, 2), "triggered": False, "reason": ""}
+    if has_strong_evidence or bucket == "strong":
+        return {"probability": round(ai, 2), "triggered": False, "reason": ""}
+    if market < 5.0:
+        max_lift = 12.0 if bucket == "solid" else 10.0
+    else:
+        max_lift = 18.0 if bucket == "solid" else 14.0
+    if category == "unknown":
+        max_lift -= 2.0
+    cap = market + max_lift
+    if ai <= cap:
+        return {"probability": round(ai, 2), "triggered": False, "reason": ""}
+    return {
+        "probability": round(_clamp(cap, 0.0, 100.0), 2),
+        "triggered": True,
+        "reason": "low_probability_weak_evidence_cap",
+    }
+
+
+def constrain_probability(
+    market_probability: float,
+    ai_probability: float,
+    confidence: float = 0.0,
+    narrative_type: str = "",
+    has_strong_evidence: bool = False,
+    evidence_profile: dict[str, Any] | None = None,
+    priced_in_risk_score: int = 0,
+    semantics_profile: dict[str, Any] | None = None,
+    news_quality_score: float = 0.0,
+    base_rate_category: str = "unknown",
+) -> dict[str, Any]:
+    """Constrain probability and return diagnostics without changing clamp_probability."""
+    evidence_quality = calculate_evidence_quality(
+        evidence_profile=evidence_profile,
+        news_quality_score=news_quality_score,
+        semantics_profile=semantics_profile,
+        priced_in_risk_score=priced_in_risk_score,
+    )
+    constrained = clamp_probability(
+        market_probability=market_probability,
+        ai_probability=ai_probability,
+        confidence=confidence,
+        narrative_type=narrative_type,
+        has_strong_evidence=has_strong_evidence,
+        evidence_profile=evidence_profile,
+        priced_in_risk_score=priced_in_risk_score,
+        semantics_profile=semantics_profile,
+    )
+    guardrail = apply_longshot_guardrail(
+        market_probability=market_probability,
+        ai_probability=constrained,
+        evidence_quality=evidence_quality,
+        has_strong_evidence=has_strong_evidence,
+        base_rate_category=base_rate_category,
+    )
+    return {
+        "probability": guardrail["probability"],
+        "evidence_quality_factor": evidence_quality["factor"],
+        "evidence_quality_bucket": evidence_quality["bucket"],
+        "evidence_quality_reasons": evidence_quality["reasons"],
+        "guardrail_triggered": guardrail["triggered"],
+        "guardrail_reason": guardrail["reason"],
+    }
+
 def calculate_priced_in_risk_score(
     market_probability: float,
     evidence_profile: dict[str, Any],

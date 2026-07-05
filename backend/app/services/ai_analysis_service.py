@@ -31,11 +31,13 @@ from app.services.probability_engine_service import (
     _ask_ai,
     _clamp,
     _normalize_ai_analysis,
+    apply_longshot_guardrail,
     build_deterministic_fallback_analysis,
     calculate_confidence_score,
     calculate_evidence_quality,
     calculate_priced_in_risk_score,
     clamp_probability,
+    constrain_probability,
     default_evidence_profile,
     extract_evidence_profile,
     extract_semantics_profile,
@@ -146,7 +148,7 @@ async def analyze_market(
         semantics_profile=semantics_profile,
     )
 
-    evidence_constrained_probability = clamp_probability(
+    probability_constraint = constrain_probability(
         market_probability=market_probability,
         ai_probability=normalized["ai_probability"],
         confidence=confidence_score,
@@ -155,7 +157,10 @@ async def analyze_market(
         evidence_profile=evidence_profile,
         priced_in_risk_score=priced_in_risk_score,
         semantics_profile=semantics_profile,
+        news_quality_score=news_quality_score,
+        base_rate_category=base_rate.category,
     )
+    evidence_constrained_probability = probability_constraint["probability"]
     # base_rate 锚定作为最终步骤，不再第二次 clamp（避免双重压缩）
     ai_probability = anchor_probability(
         llm_probability=evidence_constrained_probability,
@@ -224,6 +229,11 @@ async def analyze_market(
         "base_rate_prior": base_rate.prior,
         "base_rate_range": [base_rate.low, base_rate.high],
         "evidence_constrained_probability": evidence_constrained_probability,
+        "evidence_quality_factor": probability_constraint["evidence_quality_factor"],
+        "evidence_quality_bucket": probability_constraint["evidence_quality_bucket"],
+        "evidence_quality_reasons": probability_constraint["evidence_quality_reasons"],
+        "probability_guardrail_triggered": probability_constraint["guardrail_triggered"],
+        "probability_guardrail_reason": probability_constraint["guardrail_reason"],
         "base_rate_probability": base_rate_probability,
         "expected_edge": expected_edge,
         "risk_level": risk_level,

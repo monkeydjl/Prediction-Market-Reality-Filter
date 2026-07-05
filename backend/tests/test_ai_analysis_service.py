@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, patch
 import app.services.ai_analysis_service as ai
 from app.services.ai_analysis_service import (
     build_deterministic_fallback_analysis,
+    apply_longshot_guardrail,
     build_risk_flags,
     calculate_confidence_score,
     calculate_evidence_quality,
@@ -29,6 +30,7 @@ from app.services.ai_analysis_service import (
     calculate_signal_direction,
     calculate_signal_strength,
     clamp_probability,
+    constrain_probability,
     extract_evidence_profile,
     extract_semantics_profile,
     passes_analysis_quality_gate,
@@ -144,6 +146,54 @@ class ProbabilityMathTests(unittest.TestCase):
         self.assertGreaterEqual(quality["factor"], 0.75)
         self.assertIn("direct_relevant_evidence", quality["reasons"])
         self.assertIn("multi_source_support", quality["reasons"])
+
+    def test_apply_longshot_guardrail_caps_weak_low_probability_lift(self):
+        result = apply_longshot_guardrail(
+            market_probability=3.8,
+            ai_probability=30.7,
+            evidence_quality={"factor": 0.24, "bucket": "weak", "reasons": []},
+            has_strong_evidence=False,
+            base_rate_category="unknown",
+        )
+        self.assertTrue(result["triggered"])
+        self.assertEqual(result["reason"], "low_probability_weak_evidence_cap")
+        self.assertLessEqual(result["probability"], 15.8)
+
+    def test_apply_longshot_guardrail_allows_strong_evidence_more_room(self):
+        result = apply_longshot_guardrail(
+            market_probability=4.0,
+            ai_probability=31.0,
+            evidence_quality={"factor": 0.82, "bucket": "strong", "reasons": []},
+            has_strong_evidence=True,
+            base_rate_category="unknown",
+        )
+        self.assertFalse(result["triggered"])
+        self.assertEqual(result["probability"], 31.0)
+
+    def test_constrain_probability_returns_diagnostics(self):
+        result = constrain_probability(
+            market_probability=3.8,
+            ai_probability=30.7,
+            confidence=0.58,
+            narrative_type="factual",
+            has_strong_evidence=False,
+            evidence_profile={
+                "evidence_direction": "support",
+                "evidence_strength": 0.12,
+                "conflict_score": 0.65,
+                "freshness_score": 0.25,
+                "resolution_relevance_score": 0.15,
+                "source_count": 1,
+            },
+            priced_in_risk_score=80,
+            semantics_profile={"condition_type": "unknown", "ambiguity_score": 75},
+            news_quality_score=0.25,
+            base_rate_category="unknown",
+        )
+        self.assertEqual(result["evidence_quality_bucket"], "weak")
+        self.assertTrue(result["guardrail_triggered"])
+        self.assertEqual(result["guardrail_reason"], "low_probability_weak_evidence_cap")
+        self.assertLessEqual(result["probability"], 15.8)
 
     def test_clamp_probability(self):
         self.assertEqual(
@@ -395,6 +445,11 @@ class AnalyzeMarketContractTests(unittest.TestCase):
                 "base_rate_prior": 50,
                 "base_rate_range": [20, 80],
                 "evidence_constrained_probability": 51.66,
+                "evidence_quality_factor": 0.693,
+                "evidence_quality_bucket": "solid",
+                "evidence_quality_reasons": [],
+                "probability_guardrail_triggered": False,
+                "probability_guardrail_reason": "",
                 "base_rate_probability": 50.74,
                 "expected_edge": 0.0074,
                 "risk_level": "LOW",

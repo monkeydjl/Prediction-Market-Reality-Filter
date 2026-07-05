@@ -1183,10 +1183,14 @@ class DecisionQualityIntegrationTests(unittest.TestCase):
             "news_quality_score": 0.8,
             "source_count": 3,
         })
+        # These tests isolate overlay behavior; calibration feedback is a
+        # separate writeback layer with dedicated tests below. Keep it off so
+        # local .env/history cannot change the raw LLM estimate.
         with patch("app.services.ai_analysis_service.analyze_market", new=analyze), \
                 patch("app.services.cross_validation_service.cross_validate",
                       new=AsyncMock(return_value=None)), \
                 patch.object(eis.settings, "EVIDENCE_BREAKDOWN_ENABLED", evidence_enabled), \
+                patch.object(eis.settings, "CALIBRATION_FEEDBACK_ENABLED", False), \
                 patch.object(eis.settings, "DECISION_QUALITY_ENABLED", dq_enabled), \
                 patch.object(eis.settings, "DECISION_QUALITY_MAX_EVIDENCE_ITEMS", 3), \
                 patch.object(eis.settings, "DECISION_QUALITY_HIGH_CONFLICT_THRESHOLD", 0.40), \
@@ -1347,6 +1351,8 @@ class MarketQualityIntegrationTests(unittest.TestCase):
             stack.enter_context(patch("app.services.cross_validation_service.cross_validate",
                                       new=AsyncMock(return_value=None)))
             stack.enter_context(patch.object(eis.settings, "EVIDENCE_BREAKDOWN_ENABLED", False))
+            # Overlay tests must be independent of local calibration history.
+            stack.enter_context(patch.object(eis.settings, "CALIBRATION_FEEDBACK_ENABLED", False))
             stack.enter_context(patch.object(eis.settings, "DECISION_QUALITY_ENABLED", dq_enabled))
             stack.enter_context(patch.object(eis.settings, "MARKET_QUALITY_ENABLED", mq_enabled))
             stack.enter_context(patch.object(eis.settings, "MARKET_MAX_SPREAD_PCT", 12.0))
@@ -1636,6 +1642,8 @@ class SourceReliabilityIntegrationTests(unittest.TestCase):
             # EVIDENCE_BREAKDOWN must be ON so evidence_breakdown is populated
             # (source_reliability requires a non-empty evidence_breakdown).
             stack.enter_context(patch.object(eis.settings, "EVIDENCE_BREAKDOWN_ENABLED", True))
+            # Overlay tests must be independent of local calibration history.
+            stack.enter_context(patch.object(eis.settings, "CALIBRATION_FEEDBACK_ENABLED", False))
             stack.enter_context(patch.object(eis.settings, "DECISION_QUALITY_ENABLED", dq_enabled))
             stack.enter_context(patch.object(eis.settings, "MARKET_QUALITY_ENABLED", mq_enabled))
             stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_ENABLED", sr_enabled))
@@ -1836,6 +1844,7 @@ class SourceReliabilityIntegrationTests(unittest.TestCase):
             stack.enter_context(patch("app.services.cross_validation_service.cross_validate",
                                       new=AsyncMock(return_value=None)))
             stack.enter_context(patch.object(eis.settings, "EVIDENCE_BREAKDOWN_ENABLED", False))
+            stack.enter_context(patch.object(eis.settings, "CALIBRATION_FEEDBACK_ENABLED", False))
             stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_ENABLED", True))
             stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_SCORE_THRESHOLD", 0.5))
             stack.enter_context(patch.object(eis.settings, "SOURCE_RELIABILITY_MIN_TRUSTED_RATIO", 0.4))
@@ -2225,6 +2234,9 @@ class Phase1To4EndToEndIntegrationTests(unittest.TestCase):
     def _patch_all_flags(self, stack):
         """Enable ALL overlay feature flags for the E2E test."""
         stack.enter_context(patch.object(eis.settings, "EVIDENCE_BREAKDOWN_ENABLED", True))
+        # E2E overlay assertions are about audit-layer isolation, not the
+        # calibration feedback writeback layer.
+        stack.enter_context(patch.object(eis.settings, "CALIBRATION_FEEDBACK_ENABLED", False))
         stack.enter_context(patch.object(eis.settings, "DECISION_QUALITY_ENABLED", True))
         stack.enter_context(patch.object(eis.settings, "DECISION_QUALITY_MAX_EVIDENCE_ITEMS", 3))
         stack.enter_context(patch.object(eis.settings, "DECISION_QUALITY_HIGH_CONFLICT_THRESHOLD", 0.40))

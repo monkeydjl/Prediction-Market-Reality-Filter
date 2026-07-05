@@ -55,7 +55,6 @@ function priorityOf(record: EventRecord): "high" | "medium" | "low" {
 function trackingStatusOf(
   record: EventRecord,
 ): "tracking" | "watching" | "archived" {
-  if (record.outcome?.status) return "archived";
   const s = record.tracking?.status;
   if (s === "tracking" || s === "archived") return s;
   return "watching";

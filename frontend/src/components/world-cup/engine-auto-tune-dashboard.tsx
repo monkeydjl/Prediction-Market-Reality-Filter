@@ -159,6 +159,7 @@ export function EngineAutoTuneDashboard() {
     stopPolling();
 
     const interval = setInterval(async () => {
+      if (document.hidden) return;
       try {
         const response = await fetch(
           `${getWorldCupApiBase()}/api/world-cup/predictions/auto-tune/status/${taskId}`,

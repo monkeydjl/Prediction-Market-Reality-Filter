@@ -53,22 +53,26 @@ if /i "%MODE%"=="build" (
     echo       out\ exists - skipping build. Use "start.bat build" to force a rebuild.
 )
 if "!DO_BUILD!"=="1" (
+    echo       build requested - freeing ports that may lock frontend\out...
+    call :killport 3000 || goto :fail
+    call :killport 8000 || goto :fail
     pushd "%FRONTEND%" & set "NEXT_PUBLIC_API_BASE=http://localhost:8000/api" & call npm run build || (popd & goto :fail)
     popd
 )
 
 echo [4/4] Starting backend (:8000) + frontend (:3000) ...
-call :killport 8000
-call :killport 3000
+call :killport 8000 || goto :fail
+call :killport 3000 || goto :fail
 echo.
 echo   Frontend      : http://localhost:3000
 echo   Backend API   : http://localhost:8000
 echo   API docs      : http://localhost:8000/docs
 echo.
-REM Launch the server processes directly. A cmd /k parent would keep its
-REM working directory open after the server is killed, which can lock out\.
-start "PMRF backend :8000" /D "%BACKEND%" python run.py
-start "PMRF frontend :3000" /D "%FRONTEND%\out" python -m http.server 3000 --bind localhost
+REM Keep the child windows open on startup errors so the traceback is visible.
+REM Use cmd /c rather than cmd /k so successful long-running servers do not
+REM leave an extra shell behind after they are stopped.
+start "PMRF backend :8000" /D "%BACKEND%" cmd /c "python run.py || (echo. & echo [FAILED] Backend exited with error. & pause)"
+start "PMRF frontend :3000" /D "%FRONTEND%\out" cmd /c "python -m http.server 3000 --bind localhost || (echo. & echo [FAILED] Frontend static server exited with error. & pause)"
 REM open the browser once both servers are up
 start "" /b powershell -NoProfile -Command "Start-Sleep -Seconds 6; Start-Process 'http://localhost:3000'"
 goto :eof
@@ -83,17 +87,17 @@ if not exist "%FRONTEND%\node_modules" (
     popd
 )
 echo [dev] Freeing ports and launching backend (:8000) + Next dev (:3000)...
-call :killport 8000
-call :killport 3000
+call :killport 8000 || goto :fail
+call :killport 3000 || goto :fail
 echo.
 echo   Frontend (dev) : http://localhost:3000
 echo   Backend / API  : http://localhost:8000
 echo.
 REM Keep dev launches direct for the same reason: no persistent cmd /k shell.
 set "SERVER_RELOAD=true"
-start "PMRF backend :8000" /D "%BACKEND%" python run.py
+start "PMRF backend :8000" /D "%BACKEND%" cmd /c "python run.py || (echo. & echo [FAILED] Backend exited with error. & pause)"
 set "SERVER_RELOAD="
-start "PMRF frontend :3000" /D "%FRONTEND%" npm.cmd run dev
+start "PMRF frontend :3000" /D "%FRONTEND%" cmd /c "npm.cmd run dev || (echo. & echo [FAILED] Frontend dev server exited with error. & pause)"
 REM Next dev needs a few seconds to compile before the page is ready
 start "" /b powershell -NoProfile -Command "Start-Sleep -Seconds 8; Start-Process 'http://localhost:3000'"
 goto :eof
@@ -118,13 +122,27 @@ exit /b 0
 :killport
 REM Kill any process currently LISTENING on the given TCP port (and its tree),
 REM so a stale server can never collide with the one we are about to start.
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":%~1 " ^| findstr "LISTENING"') do (
-    echo       port %~1 busy - stopping old process PID %%P ...
+set "PORT=%~1"
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":!PORT! " ^| findstr "LISTENING"') do (
+    echo       port !PORT! busy - stopping old process PID %%P ...
     taskkill /F /T /PID %%P >nul 2>&1
+    if errorlevel 1 (
+        echo [ERROR] Could not stop process PID %%P on port !PORT!.
+        echo         Close that process manually or run this launcher as Administrator.
+        exit /b 1
+    )
 )
+for /l %%I in (1,1,10) do (
+    netstat -ano | findstr ":!PORT! " | findstr "LISTENING" >nul 2>&1
+    if errorlevel 1 exit /b 0
+    timeout /t 1 /nobreak >nul
+)
+echo [ERROR] Port !PORT! is still busy after stop attempt.
+exit /b 1
 exit /b 0
 
 :fail
 echo.
 echo [FAILED] Startup aborted. See the error above.
+if not "%PMRF_NO_PAUSE_ON_FAIL%"=="1" pause
 exit /b 1

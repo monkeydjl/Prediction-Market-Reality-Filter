@@ -261,9 +261,11 @@ async def auto_resolve_events(
     reconciled = 0 if dry_run else reconcile_predictions()
     from app.services.polymarket_history_service import (
         fetch_resolved_markets as fetch_polymarket_resolved,
+        fetch_markets_by_ids as fetch_polymarket_by_ids,
     )
     from app.services.manifold_event_source import (
         fetch_resolved_markets as fetch_manifold_resolved,
+        fetch_markets_by_ids as fetch_manifold_by_ids,
     )
     from app.services.kalshi_event_source import (
         fetch_resolved_markets as fetch_kalshi_resolved,
@@ -299,6 +301,58 @@ async def auto_resolve_events(
             "auto_resolve: Kalshi returned 0 resolved markets while unresolved "
             "Kalshi events exist; verify the Kalshi settled endpoint/status filter"
         )
+
+    # Direct-settle linked markets by contract id before the main matching loop.
+    # Bulk resolved feeds are capped/sorted and can miss older or low-volume
+    # markets. A verified event->market link is stronger than text matching, so
+    # ask platforms that support direct lookup for those specific ids and merge
+    # the actually resolved results into the contract index below.
+    existing_contracts = {
+        str(m.get("id") or m.get("contract_id"))
+        for m in resolved_markets
+        if (m.get("id") or m.get("contract_id"))
+    }
+    direct_fetchers = {
+        "polymarket": ("Polymarket", fetch_polymarket_by_ids),
+        "manifold": ("Manifold", fetch_manifold_by_ids),
+    }
+    direct_ids: dict[str, set[str]] = {key: set() for key in direct_fetchers}
+    for entry in entries:
+        record = entry.get("record") or {}
+        if record.get("outcome") is not None:
+            continue
+        event_id = entry.get("event_id")
+        if not event_id:
+            continue
+        linked = get_verified_link(event_id)
+        if not linked or not linked.get("contract_id"):
+            continue
+        platform = str(linked.get("market_name", "")).lower()
+        contract_id = str(linked.get("contract_id") or "").strip()
+        if platform in direct_ids and contract_id and contract_id not in existing_contracts:
+            direct_ids[platform].add(contract_id)
+
+    for platform_key, ids in direct_ids.items():
+        if not ids:
+            continue
+        platform_name, fetch_by_ids = direct_fetchers[platform_key]
+        try:
+            direct_markets = await fetch_by_ids(sorted(ids))
+        except Exception as exc:
+            logger.warning(
+                "auto_resolve: direct %s fetch failed: %s",
+                platform_name,
+                exc,
+            )
+            continue
+        if not direct_markets:
+            continue
+        by_source[platform_name] = by_source.get(platform_name, 0) + len(direct_markets)
+        for market in direct_markets:
+            market["_source_platform"] = platform_name
+            resolved_markets.append(market)
+            if market.get("id") or market.get("contract_id"):
+                existing_contracts.add(str(market.get("id") or market.get("contract_id")))
 
     if not resolved_markets:
         return {"status": "no_resolved_markets", "dry_run": dry_run,

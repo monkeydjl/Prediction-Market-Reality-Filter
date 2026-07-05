@@ -1,0 +1,133 @@
+import { render, screen, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import TradesPage from "./page";
+import type { SimTrade, TradeStats } from "@/lib/api";
+
+const apiMocks = vi.hoisted(() => ({
+  tradeStats: vi.fn(),
+  openTrades: vi.fn(),
+  closedTrades: vi.fn(),
+}));
+
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  eventsApi: apiMocks,
+}));
+
+vi.mock("next/link", () => ({
+  default: ({ href, children, className }: {
+    href: string;
+    children: React.ReactNode;
+    className?: string;
+  }) => <a href={href} className={className}>{children}</a>,
+}));
+
+const stats: TradeStats = {
+  total_closed: 1,
+  win_rate: 1,
+  total_pnl_pct: 9.14,
+  avg_pnl_pct: 9.14,
+  avg_edge_at_entry: 25.18,
+  by_direction: {},
+  by_decision: {},
+};
+
+const closedTrade: SimTrade = {
+  trade_id: "sim-1",
+  event_id: "evt-1",
+  event_title: "Closed trade event",
+  direction: "NO",
+  entry_prob: 57.14,
+  market_prob: 82.32,
+  entry_edge: -25.18,
+  entry_time: "2026-07-05T02:41:27.000Z",
+  position_pct: 5,
+  confidence: null,
+  trust_weight: null,
+  decision: "watch",
+  exit_prob: null,
+  exit_market: null,
+  exit_time: "2026-07-05T03:00:00.000Z",
+  exit_reason: "resolved_partial",
+  actual_outcome: 50,
+  pnl_pct: 9.14,
+  is_win: 1,
+  status: "closed",
+};
+
+const openTrade: SimTrade = {
+  ...closedTrade,
+  trade_id: "sim-open",
+  event_id: "evt-open",
+  event_title: "Open trade event",
+  direction: "NO",
+  entry_prob: 28.5,
+  market_prob: 37.6,
+  entry_edge: -9.1,
+  entry_time: "2026-07-05T02:25:00.000Z",
+  exit_time: null,
+  exit_reason: null,
+  actual_outcome: null,
+  pnl_pct: null,
+  is_win: null,
+  status: "open",
+};
+
+function formattedEntryTime() {
+  const d = new Date(closedTrade.entry_time);
+  return d.toLocaleDateString("zh-CN", { month: "short", day: "numeric" }) + " " +
+    d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+describe("TradesPage", () => {
+  beforeEach(() => {
+    Object.values(apiMocks).forEach((mock) => mock.mockReset());
+  });
+
+  it("shows entry time for closed trades", async () => {
+    apiMocks.tradeStats.mockResolvedValue(stats);
+    apiMocks.openTrades.mockResolvedValue({ count: 0, trades: [] });
+    apiMocks.closedTrades.mockResolvedValue({ count: 1, trades: [closedTrade] });
+
+    render(<TradesPage />);
+
+    const closedSection = await screen.findByRole("heading", { name: "已平仓 (1)" });
+    const section = closedSection.closest("section");
+    expect(section).not.toBeNull();
+
+    expect(within(section as HTMLElement).getByRole("columnheader", { name: "入场时间" }))
+      .toBeInTheDocument();
+    expect(within(section as HTMLElement).getByText(formattedEntryTime()))
+      .toBeInTheDocument();
+  });
+
+  it("shows market probability as the entry probability for open trades", async () => {
+    apiMocks.tradeStats.mockResolvedValue(stats);
+    apiMocks.openTrades.mockResolvedValue({ count: 1, trades: [openTrade] });
+    apiMocks.closedTrades.mockResolvedValue({ count: 0, trades: [] });
+
+    render(<TradesPage />);
+
+    const eventCell = await screen.findByText("Open trade event");
+    const row = eventCell.closest("tr");
+    expect(row).not.toBeNull();
+
+    expect(row).toHaveTextContent("37.6%");
+    expect(row).not.toHaveTextContent("28.5%");
+  });
+
+  it("shows market probability instead of system probability for closed entry-to-settlement", async () => {
+    apiMocks.tradeStats.mockResolvedValue(stats);
+    apiMocks.openTrades.mockResolvedValue({ count: 0, trades: [] });
+    apiMocks.closedTrades.mockResolvedValue({ count: 1, trades: [closedTrade] });
+
+    render(<TradesPage />);
+
+    const eventCell = await screen.findByText("Closed trade event");
+    const row = eventCell.closest("tr");
+    expect(row).not.toBeNull();
+
+    expect(row).toHaveTextContent("82% → 50%");
+    expect(row).not.toHaveTextContent("57% → 50%");
+  });
+});

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ClipboardList } from "lucide-react";
+import Link from "next/link";
 import { eventsApi, type PredictionRecord } from "@/lib/api";
 import { fmtDateTime, fmtPct, fmtSignedPct } from "@/lib/format";
 
@@ -57,7 +58,13 @@ export function RecentPredictions() {
                 className="grid grid-cols-2 gap-x-4 gap-y-2 py-3 text-sm md:grid-cols-[1fr_auto_auto_auto_auto]"
               >
                 <div className="col-span-2 min-w-0 md:col-span-1">
-                  <p className="truncate text-sm font-medium" title={title}>{title}</p>
+                  <Link
+                    href={`/events?id=${encodeURIComponent(p.event_id)}`}
+                    className="truncate text-sm font-medium text-foreground hover:text-primary"
+                    title={title}
+                  >
+                    {title}
+                  </Link>
                   <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
                     {p.event_id}
                   </p>

@@ -46,6 +46,7 @@ def _market(**overrides):
     market = {
         "id": "m1",
         "question": "Will Bitcoin close above $100k?",
+        "closed": True,
         "outcomePrices": "[0.75, 0.25]",
         "volume": 1000.0,
         "liquidity": 500.0,
@@ -73,6 +74,24 @@ class PolymarketHistoryServiceTests(unittest.TestCase):
 
         self.assertEqual(markets, [])
         self.assertTrue(all(math.isfinite(m["final_yes_price"]) for m in markets))
+
+    def test_fetch_resolved_markets_skips_unclosed_markets(self):
+        data = [_market(closed=False, outcomePrices="[1, 0]")]
+
+        with patch.object(source.httpx, "AsyncClient", return_value=_Client(data)):
+            markets = asyncio.run(source.fetch_resolved_markets(limit=1))
+
+        self.assertEqual(markets, [])
+
+    def test_fetch_markets_by_ids_returns_only_closed_direct_markets(self):
+        data = _market(id="poly-direct", closed=True, outcomePrices="[0, 1]")
+
+        with patch.object(source.httpx, "AsyncClient", return_value=_Client(data)):
+            markets = asyncio.run(source.fetch_markets_by_ids(["poly-direct"]))
+
+        self.assertEqual(len(markets), 1)
+        self.assertEqual(markets[0]["id"], "poly-direct")
+        self.assertEqual(markets[0]["actual_outcome"], 0.0)
 
     def test_fetch_resolved_markets_logs_malformed_market_rows(self):
         data = [_market(outcomePrices="[bad json")]

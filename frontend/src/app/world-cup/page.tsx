@@ -14,7 +14,6 @@ import {
   X,
   Layers,
 } from "lucide-react";
-import { AppNav } from "@/components/app-nav";
 import { MatchPredictionCard } from "@/components/world-cup/match-prediction-card";
 import { SectionErrorBoundary } from "@/components/section-error-boundary";
 import { syncFixtures, type MatchWithPrediction } from "@/lib/world-cup-predictions";
@@ -78,7 +77,10 @@ function WorldCupClocks() {
   useEffect(() => {
     const update = () => setNow(new Date());
     const initialTimer = window.setTimeout(update, 0);
-    const intervalTimer = window.setInterval(update, 1000);
+    const intervalTimer = window.setInterval(() => {
+      if (document.hidden) return;
+      update();
+    }, 1000);
     return () => {
       window.clearTimeout(initialTimer);
       window.clearInterval(intervalTimer);
@@ -367,8 +369,7 @@ export default function WorldCupPage() {
 
   return (
     <>
-      <AppNav />
-      <div className="mx-auto max-w-6xl px-4 py-8">
+      <main id="main-content" className="mx-auto max-w-6xl px-4 py-8">
         {/* Header */}
         <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
@@ -791,7 +792,7 @@ export default function WorldCupPage() {
             前往事件监控页面 →
           </Link>
         </div>
-      </div>
+      </main>
     </>
   );
 }

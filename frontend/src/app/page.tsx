@@ -279,10 +279,10 @@ export default function DashboardPage() {
     try {
       const result = await eventsApi.resolveExpired();
       clearDashboardCache();
-      setError(`已结算 ${result.resolved} 个过期事件`);
+      setError(`已归档 ${result.archived ?? result.resolved} 个过期事件`);
       await load({ silent: true });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "结算失败");
+      setError(e instanceof Error ? e.message : "归档失败");
     } finally {
       setLoading(false);
     }
@@ -404,11 +404,11 @@ export default function DashboardPage() {
                 type="button"
                 onClick={() => void resolveExpired()}
                 disabled={loading}
-                title="结算截止日期已过的事件"
+                title="归档截止日期已过但未结算的事件"
                 className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-secondary px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
               >
                 <CheckCircle className={`size-3.5 ${loading ? "animate-spin" : ""}`} aria-hidden="true" />
-                结算过期
+                归档过期
               </button>
             </div>
             <div className="flex flex-wrap items-center gap-2">

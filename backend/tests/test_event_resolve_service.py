@@ -169,6 +169,11 @@ class AutoResolveEventsTests(unittest.TestCase):
             )
             patcher.start()
             self.addCleanup(patcher.stop)
+        direct_patcher = patch.object(
+            phs, "fetch_markets_by_ids", new=AsyncMock(return_value=[])
+        )
+        direct_patcher.start()
+        self.addCleanup(direct_patcher.stop)
 
         # Seal the real stores for the whole class. auto_resolve_events now runs
         # reconcile_predictions() first, which reads the event store and (for any
@@ -459,6 +464,44 @@ class AutoResolveEventsTests(unittest.TestCase):
         self.assertEqual(result["matches"][-1]["result"], "resolved_by_direct")
         self.assertEqual(after["record"]["outcome"]["confidence"], 1.0)
 
+    def test_direct_polymarket_linked_settles_when_resolved_list_misses_contract(self):
+        record = _make_record("evtPolyDirect", value_score=30)
+        record["event_title"] = "A Polymarket event missing from top resolved list"
+        record["source"] = {
+            "type": "prediction_market",
+            "platform": "Polymarket",
+            "source_id": "poly-direct-1",
+        }
+        unrelated_market = {
+            "question": "Completely unrelated resolved market",
+            "actual_outcome": 100.0,
+            "id": "poly-unrelated",
+        }
+        direct_market = {
+            "question": "Direct Polymarket settled market",
+            "actual_outcome": 0.0,
+            "id": "poly-direct-1",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(store, "_store_path", return_value=str(Path(tmp) / "event_store.json")), \
+                    patch.object(audit, "_audit_path", return_value=str(Path(tmp) / "event_audit.jsonl")), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(phs, "fetch_resolved_markets",
+                                 new=AsyncMock(return_value=[unrelated_market])), \
+                    patch.object(phs, "fetch_markets_by_ids",
+                                 new=AsyncMock(return_value=[direct_market]), create=True) as direct_fetch:
+                store.save_event(record)
+                links.upsert_link("evtPolyDirect", contract_id="poly-direct-1",
+                                  market_name="Polymarket", verified=True)
+                result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
+                after = store.get_event("evtPolyDirect")
+
+        direct_fetch.assert_awaited_once_with(["poly-direct-1"])
+        self.assertEqual(result["resolved_count"], 1)
+        self.assertEqual(result["matches"][-1]["result"], "resolved_by_contract")
+        self.assertEqual(after["record"]["outcome"]["actual_outcome"], 0.0)
+        self.assertEqual(after["record"]["outcome"]["source"], "auto_market")
+
 
 class Milestone0LinkGateTests(unittest.TestCase):
     """M0: fail-closed event->market link gating in auto-resolve."""
@@ -470,6 +513,11 @@ class Milestone0LinkGateTests(unittest.TestCase):
             )
             patcher.start()
             self.addCleanup(patcher.stop)
+        direct_patcher = patch.object(
+            phs, "fetch_markets_by_ids", new=AsyncMock(return_value=[])
+        )
+        direct_patcher.start()
+        self.addCleanup(direct_patcher.stop)
 
     def test_fuzzy_match_is_pending_not_scored(self):
         """A non-exact (fuzzy) match is below the default auto-verify threshold

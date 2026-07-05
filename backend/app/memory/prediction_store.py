@@ -391,7 +391,11 @@ def freeze_prediction(record: dict[str, Any]) -> dict[str, Any] | None:
 # Hooked into score_prediction so every resolved event automatically
 # closes its paper trade.
 
-def _maybe_close_trade(event_id: str, actual_outcome: float, reason: str) -> None:
+def _maybe_close_trade(
+    event_id: str,
+    actual_outcome: float,
+    reason: str | None = None,
+) -> None:
     """Close the simulated trade for event_id if one exists.  Best-effort;
     failures are silently ignored so trade logging never blocks resolution."""
     try:
@@ -479,8 +483,7 @@ def score_prediction(event_id: str, actual_outcome: float) -> dict[str, Any] | N
                 # records the Brier + outcome (the core scoring path).
                 pass
         conn.execute(update_sql, tuple(update_params))
-    _maybe_close_trade(event_id, actual_outcome,
-                       "resolved_yes" if actual_outcome >= 99 else "resolved_no")
+    _maybe_close_trade(event_id, actual_outcome)
     return get_prediction(event_id)
 
 

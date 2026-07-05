@@ -52,7 +52,10 @@ export function QualityOperationsDashboard() {
     // queue, not during the effect body, so the periodic refresh is
     // unaffected.
     const timer = window.setTimeout(() => void load(), 0);
-    const interval = window.setInterval(() => void load(), REFRESH_MS);
+    const interval = window.setInterval(() => {
+      if (document.hidden) return;
+      void load();
+    }, REFRESH_MS);
     return () => {
       window.clearTimeout(timer);
       window.clearInterval(interval);

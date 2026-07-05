@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { AppNav } from "@/components/app-nav";
 import { SWRProvider } from "@/components/providers/swr-provider";
 import { ScrollToTop } from "@/components/scroll-to-top";
 
@@ -39,7 +40,10 @@ export default function RootLayout({
       </head>
       <body className="min-h-full">
         <SWRProvider>
-          {children}
+          <div className="min-h-screen">
+            <AppNav />
+            {children}
+          </div>
           <ScrollToTop />
         </SWRProvider>
       </body>

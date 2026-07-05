@@ -130,3 +130,58 @@ describe("qualityMetricsApi", () => {
     expect(data.window).toBe("7d");
   });
 });
+
+describe("eventsApi caching", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  it("keeps GET cache when fetching read-only dashboard sparklines", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/events/batch-sparklines")) {
+        expect(init?.method).toBe("POST");
+        return new Response(JSON.stringify({ sparklines: {} }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ events: [], total: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await eventsApi.list(10, 0, { status: "active" });
+    await eventsApi.batchSparklines(["event-1"]);
+    await eventsApi.list(10, 0, { status: "active" });
+
+    const listCalls = fetchMock.mock.calls.filter(([url]) =>
+      String(url).includes("/events/?"),
+    );
+    expect(listCalls).toHaveLength(1);
+  });
+
+  it("does not cache discovery status polling", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ phase: "idle" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ phase: "analyzing" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(eventsApi.discoverStatus()).resolves.toMatchObject({ phase: "idle" });
+    await expect(eventsApi.discoverStatus()).resolves.toMatchObject({ phase: "analyzing" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});

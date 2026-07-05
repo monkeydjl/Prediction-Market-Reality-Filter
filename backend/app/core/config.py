@@ -61,7 +61,7 @@ class Settings:
     CORS_ALLOW_CREDENTIALS: bool = _env_bool("CORS_ALLOW_CREDENTIALS", "false")
     CORS_ALLOWED_METHODS: list[str] = _env_csv(
         "CORS_ALLOWED_METHODS",
-        "GET,POST,PATCH,OPTIONS",
+        "GET,POST,PATCH,DELETE,OPTIONS",
     )
     CORS_ALLOWED_HEADERS: list[str] = _env_csv(
         "CORS_ALLOWED_HEADERS",

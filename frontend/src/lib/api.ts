@@ -108,13 +108,19 @@ export function buildApiErrorMessage(status: number, bodyText: string): string {
 async function api<T>(
   path: string,
   init?: RequestInit,
-  options: { timeoutMs?: number; acceptStatuses?: number[] } = {},
+  options: {
+    timeoutMs?: number;
+    acceptStatuses?: number[];
+    invalidateGetCache?: boolean;
+    cacheGet?: boolean;
+  } = {},
 ): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const isGet = method === "GET";
+  const shouldCacheGet = isGet && options.cacheGet !== false;
   const cacheKey = `${BASE}${path}`;
 
-  if (isGet) {
+  if (shouldCacheGet) {
     pruneExpiredGetCache();
     const cached = getCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.value as T;
@@ -151,14 +157,16 @@ async function api<T>(
     }
     const data = await res.json() as T;
     if (isGet) {
-      getCache.set(cacheKey, { expiresAt: Date.now() + GET_CACHE_TTL_MS, value: data });
-    } else {
+      if (shouldCacheGet) {
+        getCache.set(cacheKey, { expiresAt: Date.now() + GET_CACHE_TTL_MS, value: data });
+      }
+    } else if (options.invalidateGetCache !== false) {
       getCache.clear();
     }
     return data;
   })();
 
-  if (isGet) inflightGets.set(cacheKey, request as Promise<unknown>);
+  if (shouldCacheGet) inflightGets.set(cacheKey, request as Promise<unknown>);
 
   try {
     return await request;
@@ -171,7 +179,7 @@ async function api<T>(
     }
     throw error;
   } finally {
-    if (isGet) inflightGets.delete(cacheKey);
+    if (shouldCacheGet) inflightGets.delete(cacheKey);
     globalThis.clearTimeout(timeout);
     init?.signal?.removeEventListener("abort", abort);
   }
@@ -867,12 +875,25 @@ export const eventsApi = {
     api<{ sparklines: Record<string, number[]> }>("/events/batch-sparklines", {
       method: "POST",
       body: JSON.stringify({ event_ids: eventIds }),
-    }),
+    }, { invalidateGetCache: false }),
 
   similar: (id: string) =>
     api<{ similar: SimilarEvent[]; count?: number }>(
       `/events/${encodeURIComponent(id)}/similar`
     ),
+
+  delete: (id: string) =>
+    api<void>(`/events/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  resolveExpired: () =>
+    api<{ total: number; resolved: number; archived: number; parsed_dates: number; message: string }>("/events/resolve-expired", {
+      method: "POST",
+    }, { timeoutMs: 300_000 }),
+
+  translateAll: (force = false) =>
+    api<{ total: number; translated: number; message: string }>(`/events/translate-all?force=${force}`, {
+      method: "POST",
+    }, { timeoutMs: 300_000 }),
 
   movers: (limit = 10) =>
     api<{ movers: Mover[]; count?: number }>(`/events/movers?limit=${limit}`),
@@ -926,7 +947,7 @@ export const eventsApi = {
     api<LoopStatus>("/events/loop/status"),
 
   discoverStatus: () =>
-    api<Record<string, unknown>>("/events/discover/status"),
+    api<Record<string, unknown>>("/events/discover/status", undefined, { cacheGet: false }),
 
   // M6 simulated trades (paper trading)
   tradeStats: () =>

@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Gavel, Loader2 } from "lucide-react";
-import { AppNav } from "@/components/app-nav";
 import { AccuracySummary } from "@/components/history/accuracy-summary";
 import { PredictionCalibrationCard } from "@/components/history/prediction-calibration";
 import { CategoryAccuracy, toCategoryData, type CategoryDatum } from "@/components/history/category-accuracy";
@@ -239,8 +238,6 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="min-h-screen">
-      <AppNav />
       <main id="main-content" className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="flex flex-col gap-1">
@@ -351,6 +348,5 @@ export default function HistoryPage() {
           </>
         )}
       </main>
-    </div>
   );
 }

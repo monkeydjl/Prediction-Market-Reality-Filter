@@ -292,12 +292,17 @@ async def get_event_movers(limit: int = Query(default=10, ge=1, le=50)):
     movers = rank_movers(histories_by_event(), limit=limit)
     # Batch-load events once to avoid N+1 reads
     events_by_id = {e.get("event_id"): e for e in list_all_events()}
+    kept = []
     for mover in movers:
         entry = events_by_id.get(mover.get("event_id", ""))
+        if not entry:
+            # Event was deleted; drop stale mover history.
+            continue
         title_zh = ((entry or {}).get("record") or {}).get("event_title_zh") or ""
         if title_zh:
             mover["event_title_zh"] = title_zh
-    return {"count": len(movers), "movers": movers}
+        kept.append(mover)
+    return {"count": len(kept), "movers": kept}
 
 
 @router.get("/calibration", response_model=FlexibleResponse)
@@ -1260,6 +1265,25 @@ async def get_discovery_status():
     return snapshot()
 
 
+@router.delete("/{event_id}", response_model=FlexibleResponse)
+async def delete_event(
+    event_id: str,
+    _auth: None = Depends(require_write_key),
+):
+    """Delete a single event from the store by its event_id."""
+    from app.memory.event_store import _store_path, _load_for_write
+    from app.utils.file_store import locked_file, write_json_atomic
+
+    path = _store_path()
+    with locked_file(path):
+        store = _load_for_write(path)
+        if event_id not in store:
+            raise HTTPException(status_code=404, detail="Event not found")
+        store.pop(event_id)
+        write_json_atomic(path, store, indent=2)
+    return {"event_id": event_id, "message": "Deleted"}
+
+
 # ── Event title translation ────────────────────────────────────────
 
 
@@ -1282,11 +1306,12 @@ async def translate_event_title(
     if event is None:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    en_title = str(event.get("event_title") or "").strip()
+    record = event.get("record") or event
+    en_title = str(record.get("event_title") or "").strip()
     if not en_title:
         raise HTTPException(status_code=400, detail="Event has no English title")
 
-    current_zh = str(event.get("event_title_zh") or "").strip()
+    current_zh = str(record.get("event_title_zh") or "").strip()
     if current_zh and not force:
         return {
             "event_id": event_id,
@@ -1296,42 +1321,162 @@ async def translate_event_title(
 
     zh_title = await translate_title(en_title)
     if not zh_title or zh_title == en_title:
+        # Translation failed — if forcing, clear the stale title so UI
+        # shows English instead of a misleading copy.
+        if force and current_zh == en_title:
+            record["event_title_zh"] = ""
+            save_events([record])
         return {
             "event_id": event_id,
             "event_title_zh": en_title[:120],
             "message": "Translation unavailable, kept original",
         }
 
-    event["event_title_zh"] = zh_title[:300]
-    save_events([event])
+    record["event_title_zh"] = zh_title[:300]
+    save_events([record])
     return {"event_id": event_id, "event_title_zh": zh_title[:300], "message": "Translated"}
 
 
 @router.post("/translate-all", response_model=FlexibleResponse)
-async def translate_all_events(_auth: None = Depends(require_write_key)):
-    """Translate all events whose Chinese title is empty."""
+async def translate_all_events(
+    force: bool = Query(default=False),
+    _auth: None = Depends(require_write_key),
+):
+    """Translate all events whose Chinese title is empty.
+
+    Set ``force=true`` to re-translate every event even when a Chinese title
+    already exists (useful for recovering from failed LLM translations)."""
     from app.memory.event_store import list_all_events, save_events
     from app.services.probability_engine_service import translate_title
+    import asyncio
 
     events = list_all_events()
     translated = 0
+    modified: list[dict[str, Any]] = []
     for event in events:
-        zh = str(event.get("event_title_zh") or "").strip()
-        if zh:
+        record = event.get("record") or event
+        zh = str(record.get("event_title_zh") or "").strip()
+        if zh and not force:
             continue
-        en = str(event.get("event_title") or "").strip()
+        en = str(record.get("event_title") or "").strip()
         if not en:
             continue
         result = await translate_title(en)
         if result and result != en:
-            event["event_title_zh"] = result[:300]
+            record["event_title_zh"] = result[:300]
             translated += 1
+        elif force and zh == en:
+            # Translation failed — clear stale English copy so UI can fall back.
+            record["event_title_zh"] = ""
+        modified.append(record)
+        await asyncio.sleep(0.2)  # Respect API rate limits
 
-    if translated:
-        save_events(events)
+    if modified:
+        save_events(modified)
 
     return {
         "total": len(events),
         "translated": translated,
         "message": f"Translated {translated} event titles",
+    }
+
+
+@router.post("/resolve-expired", response_model=FlexibleResponse)
+async def resolve_expired_events(_auth: None = Depends(require_write_key)):
+    """Archive unresolved events whose deadline is in the past.
+
+    Uses source end_date/close_time when available; otherwise parses the most
+    recent date from the event title. Expiry is not settlement: this endpoint
+    must not write outcome/calibration or invent actual_outcome=50. It only
+    marks unresolved expired events as archived so they leave the active
+    dashboard while remaining unscored until the market actually resolves.
+    """
+    import re
+    from datetime import datetime, timezone
+    from app.memory.event_store import list_all_events, set_tracking
+
+    now = datetime.now(timezone.utc)
+    events = list_all_events()
+    archived = 0
+    parsed = 0
+
+    # Chinese date patterns: 6月30日, 7月1日, 6月, 2026年6月30日
+    # English date patterns: July 3, 2026, July 3, 2026-07-03, 2026/07/03
+    title_date_patterns = [
+        re.compile(r"(\d{4})年(\d{1,2})月(\d{1,2})日"),  # 2026年6月30日
+        re.compile(r"(\d{1,2})月(\d{1,2})日"),            # 6月30日
+        re.compile(r"(\d{1,2})月"),                       # 6月
+        re.compile(r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})"),
+        re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})"),
+        re.compile(r"(\d{4})/(\d{1,2})/(\d{1,2})"),
+    ]
+
+    for event in events:
+        record = event.get("record") or event
+        outcome = record.get("outcome") or {}
+        if outcome.get("status"):
+            continue
+        event_id = event.get("event_id") or record.get("event_id")
+        if not event_id:
+            continue
+        tracking = record.get("tracking") or {}
+        if tracking.get("status") == "archived":
+            continue
+
+        source = record.get("source") or {}
+        close_str = str(source.get("close_time") or source.get("end_date") or "").strip()
+
+        deadline: datetime | None = None
+        if close_str:
+            try:
+                deadline = datetime.fromisoformat(close_str.replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                deadline = None
+        else:
+            # Parse dates from title
+            titles = [
+                record.get("event_title_zh", ""),
+                record.get("event_title", ""),
+            ]
+            latest = None
+            for text in titles:
+                if not text:
+                    continue
+                text = str(text)
+                for pat in title_date_patterns:
+                    for m in pat.finditer(text):
+                        groups = m.groups()
+                        try:
+                            if len(groups) == 3:
+                                y, mo, d = int(groups[0]), int(groups[1]), int(groups[2])
+                                if y < 100:
+                                    y += 2000
+                                dt = datetime(y, mo, d, tzinfo=timezone.utc)
+                            elif len(groups) == 2:
+                                mo, d = int(groups[0]), int(groups[1])
+                                dt = datetime(2026, mo, d, tzinfo=timezone.utc)
+                            elif len(groups) == 1:
+                                mo = int(groups[0])
+                                dt = datetime(2026, mo, 1, tzinfo=timezone.utc)
+                            else:
+                                continue
+                            if latest is None or dt > latest:
+                                latest = dt
+                        except (ValueError, TypeError):
+                            continue
+            if latest is not None:
+                deadline = latest
+                parsed += 1
+
+        if deadline is not None and deadline < now:
+            if set_tracking(str(event_id), status="archived") is not None:
+                archived += 1
+
+    return {
+        "total": len(events),
+        # Backwards compatibility for older clients that only read `resolved`.
+        "resolved": 0,
+        "archived": archived,
+        "parsed_dates": parsed,
+        "message": f"Archived {archived} expired events without resolving outcomes",
     }

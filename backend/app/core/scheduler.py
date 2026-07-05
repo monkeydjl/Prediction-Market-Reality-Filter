@@ -202,6 +202,38 @@ def _job_name_for_run(run_id: str | None) -> str | None:
     return _RUN_TO_JOB.get(run_id)
 
 
+async def _job_translate_titles():
+    """Translate events whose Chinese title is empty."""
+    from app.services.probability_engine_service import translate_title
+    from app.memory.event_store import list_all_events, save_events
+
+    logger.info("[Scheduler] Title translation starting...")
+    run_id = _start_run("translate_titles")
+    events = list_all_events()
+    translated = 0
+    try:
+        records_to_save = []
+        for event in events:
+            record = event.get("record") or event
+            zh = str(record.get("event_title_zh") or "").strip()
+            if zh:
+                continue
+            en = str(record.get("event_title") or "").strip()
+            if not en:
+                continue
+            result = await translate_title(en)
+            if result and result != en:
+                record["event_title_zh"] = result[:300]
+                records_to_save.append(record)
+                translated += 1
+        if records_to_save:
+            save_events(records_to_save)
+        _finish_run(run_id, "success", result={"translated": translated})
+    except Exception as exc:
+        logger.exception("[Scheduler] Title translation failed")
+        _finish_run(run_id, "failed", error=str(exc))
+
+
 async def _job_event_auto_resolve():
     """每天 22:30 UTC 自动裁定事件层（匹配已结算预测市场），同时归档已过期源市场事件。"""
     logger.info("[Scheduler] Event auto-resolve starting...")
@@ -239,6 +271,12 @@ async def _job_event_discover():
     logger.info("[Scheduler] Event discover starting...")
     run_id = _start_run("event_discover")
     try:
+        # Archive expired events before discovery so closed sources don't
+        # get re-scanned with stale tracking status.
+        from app.memory.event_store import auto_archive_expired
+        archived = auto_archive_expired()
+        if archived:
+            logger.info("[Scheduler] Auto-archived %d expired events", archived)
         from app.services.event_intelligence_service import discover_events
 
         result = await discover_events(
@@ -612,6 +650,22 @@ def start_scheduler():
             replace_existing=True,
             max_instances=1,
         )
+        if settings.AUTO_TRANSLATE_TITLES:
+            scheduler.add_job(
+                _job_translate_titles,
+                IntervalTrigger(hours=6),
+                id="translate_titles",
+                replace_existing=True,
+                max_instances=1,
+            )
+            # Fire once 120 seconds after startup (after discover finishes).
+            scheduler.add_job(
+                _job_translate_titles,
+                "date",
+                run_date=datetime.now(timezone.utc) + timedelta(seconds=120),
+                id="translate_titles_startup",
+                replace_existing=True,
+            )
         scheduler.add_job(
             _job_loop_db_maintenance,
             CronTrigger(hour=6, minute=45),

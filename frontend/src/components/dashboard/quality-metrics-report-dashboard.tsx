@@ -31,7 +31,10 @@ export function QualityMetricsReportDashboard() {
     // quality-operations-dashboard.tsx / system-status.tsx (avoids cascading
     // renders from set-state-in-effect).
     const timer = window.setTimeout(() => void load(), 0);
-    const interval = window.setInterval(() => void load(), REFRESH_MS);
+    const interval = window.setInterval(() => {
+      if (document.hidden) return;
+      void load();
+    }, REFRESH_MS);
     return () => {
       window.clearTimeout(timer);
       window.clearInterval(interval);
@@ -67,22 +70,22 @@ export function QualityMetricsReportDashboard() {
       <ReportOverviewPanel report={report} />
       <ReportSliceTable
         title="按来源类型"
-        subtitle="record.source.type"
+        subtitle="事件来源类型"
         slices={report?.by_source_type ?? {}}
       />
       <ReportSliceTable
         title="按分析质量（引擎代理）"
-        subtitle="llm_telemetry.analysis_quality — llm vs deterministic_fallback"
+        subtitle="LLM vs 确定性回退分析质量"
         slices={report?.by_analysis_quality ?? {}}
       />
       <ReportSliceTable
         title="按 Edge 桶"
-        subtitle="compute_edge_bucket(actionable_recommendation.edge)"
+        subtitle="可执行建议 Edge 分桶"
         slices={report?.by_edge_bucket ?? {}}
       />
       <ReportSliceTable
         title="按来源可信度"
-        subtitle="source_reliability.overall_score 分桶"
+        subtitle="来源可信度评分分桶"
         slices={report?.by_source_reliability_bucket ?? {}}
       />
       <CalibrationDeviationChart rows={report?.calibration_deviation ?? []} />

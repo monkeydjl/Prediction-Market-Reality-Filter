@@ -10,6 +10,8 @@ const JOB_LABELS: Record<string, string> = {
   event_discover: "事件发现",
   event_auto_resolve: "自动结算",
   loop_db_maintenance: "数据库维护",
+  world_cup_scoring_reconcile: "世界杯积分对账",
+  translate_titles: "标题翻译",
 };
 
 const RUN_STATUS_META: Record<string, { label: string; cls: string }> = {
@@ -123,7 +125,7 @@ export function SystemStatus() {
   const [overview, setOverview] = useState<ApiOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -215,22 +217,6 @@ export function SystemStatus() {
         </div>
         <div className="flex items-center justify-between gap-3 md:justify-end">
           {error && <span className="text-xs text-neg">{error}</span>}
-          <a
-            href="/api"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex h-8 items-center rounded-md border border-border bg-secondary px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            API 目录
-          </a>
-          <a
-            href={overview?.docs ?? "/docs"}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex h-8 items-center rounded-md border border-border bg-secondary px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            Docs
-          </a>
           <button
             type="button"
             onClick={load}

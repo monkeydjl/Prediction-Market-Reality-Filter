@@ -2,9 +2,8 @@
 
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
-import { AppNav } from "@/components/app-nav";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ArrowLeft, Trash2 } from "lucide-react";
 import { SignalSummary } from "@/components/detail/signal-summary";
 import { MarketPanel } from "@/components/detail/market-links";
 import { SignalPanel } from "@/components/detail/signal-panel";
@@ -123,6 +122,7 @@ function TrendEdgeSummary({
 
 function DetailInner() {
   const params = useSearchParams();
+  const router = useRouter();
   const id = params.get("id");
 
   const [record, setRecord] = useState<EventRecord | null>(null);
@@ -133,6 +133,21 @@ function DetailInner() {
   const [similar, setSimilar] = useState<SimilarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    if (!id) return;
+    if (!window.confirm("确定删除此事件？")) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await eventsApi.delete(id);
+      router.push("/");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "删除失败");
+      setDeleting(false);
+    }
+  };
 
   useEffect(() => {
     if (!id) {
@@ -210,10 +225,19 @@ function DetailInner() {
       </Link>
 
       <div className="flex flex-col gap-4 rounded-lg border border-border bg-card p-5">
-        <div className="flex flex-wrap items-center gap-2 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
           <span className="rounded bg-secondary px-2 py-0.5 font-mono text-muted-foreground">
             {categoryLabel(view.category)}
           </span>
+          <button
+            type="button"
+            onClick={handleDelete}
+            disabled={deleting}
+            className="inline-flex items-center gap-1.5 rounded border border-neg/40 bg-neg/10 px-2 py-1 text-xs font-medium text-neg transition-colors hover:bg-neg/20 disabled:opacity-50"
+          >
+            <Trash2 className="size-3" aria-hidden="true" />
+            {deleting ? "删除中…" : "删除事件"}
+          </button>
         </div>
         <h1 className="text-balance text-xl font-semibold md:text-2xl">
           {record.event_title_zh || view.title}
@@ -339,13 +363,10 @@ function DetailInner() {
 
 export default function EventDetailPage() {
   return (
-    <div className="min-h-screen">
-      <AppNav />
       <main id="main-content" className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
         <Suspense fallback={<div className="grid h-40 place-items-center text-sm text-muted-foreground">加载中…</div>}>
           <DetailInner />
         </Suspense>
       </main>
-    </div>
   );
 }

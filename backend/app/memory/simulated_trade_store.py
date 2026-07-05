@@ -131,7 +131,7 @@ def close_trade(
 ) -> dict[str, Any] | None:
     """Close the open simulated trade for event_id with its resolution outcome."""
     if exit_reason is None:
-        exit_reason = "resolved_yes" if actual_outcome >= 99 else "resolved_no"
+        exit_reason = _resolution_exit_reason(actual_outcome)
     db_path = loop_db_path()
     conn = sqlite3.connect(db_path)
     try:
@@ -145,31 +145,16 @@ def close_trade(
 
         trade = _row_to_dict(row)
         direction = trade["direction"]
-        entry_prob = trade["entry_prob"]
         market_prob = trade["market_prob"]
         position_pct = trade["position_pct"]
 
-        # Determine win/loss
-        if direction == "YES":
-            is_win = 1 if actual_outcome >= 99 else 0
-        else:  # NO
-            is_win = 1 if actual_outcome <= 1 else 0
-
-        # PnL: directional hit scaled by position
-        # YES win: gain proportional to (100 - entry_price) / entry_price
-        # YES loss: -position_pct
-        if direction == "YES":
-            if is_win:
-                # Bought at P, settled YES=100. Return = (100-P)/P * position
-                pnl = round(((100.0 - entry_prob) / max(entry_prob, 1.0)) * position_pct, 2)
-            else:
-                pnl = round(-position_pct, 2)
-        else:  # NO
-            if is_win:
-                # Sold at (100-P), settled NO=0. Return = P/(100-P) * position
-                pnl = round((entry_prob / max(100.0 - entry_prob, 1.0)) * position_pct, 2)
-            else:
-                pnl = round(-position_pct, 2)
+        pnl = _settlement_pnl_pct(
+            direction=direction,
+            market_prob=market_prob,
+            actual_outcome=actual_outcome,
+            position_pct=position_pct,
+        )
+        is_win = 1 if pnl > 0 else 0
 
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
@@ -197,6 +182,44 @@ def close_trade(
         conn.close()
 
 
+def _settlement_pnl_pct(
+    *,
+    direction: str,
+    market_prob: float,
+    actual_outcome: float,
+    position_pct: float,
+) -> float:
+    """Return paper-trade PnL for a 0-100 settlement value.
+
+    ``market_prob`` is the tradable YES price at entry. ``entry_prob`` is the
+    system's estimate and is useful for edge sizing, but it is not the fill
+    price. Manifold MKT/partial resolutions can settle anywhere in [0, 100],
+    so win/loss must be based on payout minus entry price, not binary
+    YES>=99/NO<=1 thresholds.
+    """
+    actual = max(0.0, min(100.0, float(actual_outcome)))
+    yes_price = max(0.0, min(100.0, float(market_prob)))
+    position = float(position_pct)
+
+    if direction == "YES":
+        cost = max(yes_price, 1.0)
+        return round(((actual - yes_price) / cost) * position, 2)
+
+    no_price = max(100.0 - yes_price, 1.0)
+    no_payout = 100.0 - actual
+    return round(((no_payout - no_price) / no_price) * position, 2)
+
+
+def _resolution_exit_reason(actual_outcome: float) -> str:
+    """Classify a 0-100 settlement for display/audit metadata."""
+    actual = max(0.0, min(100.0, float(actual_outcome)))
+    if actual >= 99:
+        return "resolved_yes"
+    if actual <= 1:
+        return "resolved_no"
+    return "resolved_partial"
+
+
 def list_open_trades() -> list[dict[str, Any]]:
     """Return all open simulated trades."""
     db_path = loop_db_path()
@@ -222,6 +245,61 @@ def list_closed_trades(limit: int = 100) -> list[dict[str, Any]]:
             (limit,),
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def recompute_closed_trades() -> dict[str, Any]:
+    """Recalculate settlement PnL/win flags for already closed trades.
+
+    This is primarily a repair path for legacy rows that were closed with the
+    old binary-only settlement logic.  It is safe to run repeatedly because the
+    recalculated values are deterministic from direction, entry market price,
+    position size, and actual_outcome.
+    """
+    db_path = loop_db_path()
+    conn = sqlite3.connect(db_path)
+    try:
+        _ensure_schema(conn)
+        rows = conn.execute(
+            "SELECT * FROM simulated_trades "
+            "WHERE status='closed' AND actual_outcome IS NOT NULL"
+        ).fetchall()
+        now = datetime.now(timezone.utc).isoformat()
+        total_pnl = 0.0
+        wins = 0
+
+        for row in rows:
+            trade = _row_to_dict(row)
+            pnl = _settlement_pnl_pct(
+                direction=trade["direction"],
+                market_prob=trade["market_prob"],
+                actual_outcome=trade["actual_outcome"],
+                position_pct=trade["position_pct"],
+            )
+            is_win = 1 if pnl > 0 else 0
+            exit_reason = trade.get("exit_reason")
+            if exit_reason in (None, "", "resolved_yes", "resolved_no"):
+                exit_reason = _resolution_exit_reason(trade["actual_outcome"])
+
+            conn.execute(
+                """UPDATE simulated_trades
+                   SET pnl_pct=?, is_win=?, exit_reason=?, updated_at=?
+                   WHERE trade_id=?""",
+                (pnl, is_win, exit_reason, now, trade["trade_id"]),
+            )
+            total_pnl += pnl
+            wins += is_win
+
+        conn.commit()
+        updated = len(rows)
+        return {
+            "updated": updated,
+            "wins": wins,
+            "win_rate": round(wins / updated, 3) if updated else None,
+            "total_pnl_pct": round(total_pnl, 2),
+            "avg_pnl_pct": round(total_pnl / updated, 2) if updated else None,
+        }
     finally:
         conn.close()
 

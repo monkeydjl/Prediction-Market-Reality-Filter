@@ -1,4 +1,5 @@
 import { Check, Download, X } from "lucide-react";
+import Link from "next/link";
 import type { EventRecord } from "@/lib/types";
 import { fmtDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -119,7 +120,12 @@ export function ReviewTable({
                     <span className="rounded bg-secondary px-1.5 py-0.5 font-mono">{r.grade}</span>
                     <span className="font-mono">{fmtDateTime(r.resolvedAt)} 结算</span>
                   </span>
-                  <span className="truncate text-sm font-medium">{r.title}</span>
+                  <Link
+                    href={`/events?id=${encodeURIComponent(r.id)}`}
+                    className="truncate text-sm font-medium hover:text-primary"
+                  >
+                    {r.title}
+                  </Link>
                 </div>
                 <div className="flex items-center justify-between gap-3 md:block md:w-[88px] md:text-right">
                   <span className="text-[11px] text-muted-foreground md:hidden">预测概率</span>

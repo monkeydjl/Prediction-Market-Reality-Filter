@@ -1531,6 +1531,60 @@ class AutoResolveRouteTests(unittest.TestCase):
         mock_resolve.assert_awaited_once_with(resolved_limit=50, dry_run=True)
 
 
+class ResolveExpiredRouteTests(unittest.TestCase):
+    def test_expired_unsettled_market_is_archived_without_outcome_or_trade_close(self):
+        """Past close_time is not a market resolution."""
+        from app.memory import simulated_trade_store as trades
+        from app.services.event_resolve_service import reconcile_predictions
+
+        rec = _make_record("evtExpired", estimated=70.0, value_score=50)
+        rec["event_title"] = "Will X happen by July 1, 2026?"
+        rec["source"] = {
+            "type": "prediction_market",
+            "platform": "Polymarket",
+            "source_id": "poly-expired",
+            "close_time": "2026-07-01T00:00:00Z",
+            "baseline_probability": 40.0,
+            "liquidity": 100.0,
+            "volume": 200.0,
+        }
+        rec["final_displayed_direction"] = "YES"
+        rec["final_recommendation"] = "YES"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            with patch.object(store, "_store_path", return_value=str(base / "event_store.json")), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(base / "v2_loop.db")), \
+                    patch.object(trades, "loop_db_path", return_value=str(base / "v2_loop.db")), \
+                    patch.object(settings, "API_WRITE_KEY", "secret"):
+                store.save_event(rec)
+                preds.freeze_prediction(rec)
+                trades.open_trade(
+                    "evtExpired",
+                    "Will X happen by July 1, 2026?",
+                    direction="YES",
+                    entry_prob=70.0,
+                    market_prob=40.0,
+                    decision="provisional_act",
+                )
+
+                client = _events_client()
+                resp = client.post("/events/resolve-expired", headers=AUTH_HEADERS)
+                self.assertEqual(resp.status_code, 200)
+
+                saved = store.get_event("evtExpired")
+                saved_record = saved["record"]
+                self.assertEqual((saved_record.get("tracking") or {}).get("status"), "archived")
+                self.assertNotIn("outcome", saved_record)
+                self.assertNotIn("calibration", saved_record)
+
+                healed = reconcile_predictions()
+                self.assertEqual(healed, 0)
+                self.assertEqual(preds.get_prediction("evtExpired")["status"], "open")
+                self.assertEqual(len(trades.list_open_trades()), 1)
+                self.assertEqual(trades.list_closed_trades(), [])
+
+
 class PendingLinksRouteTests(unittest.TestCase):
     def test_pending_links_are_enriched_with_event_context(self):
         record = _make_record("evtLinkCtx", value_score=30)

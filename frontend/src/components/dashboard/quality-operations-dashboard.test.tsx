@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { QualityOperationsDashboard } from "./quality-operations-dashboard";
+import { qualityMetricsApi } from "@/lib/api";
 
 // Mock the API client so the dashboard renders with deterministic data.
 vi.mock("@/lib/api", () => ({
@@ -40,6 +41,10 @@ vi.mock("@/lib/api", () => ({
 describe("QualityOperationsDashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: false,
+    });
   });
 
   it("renders the summary panel with event count", async () => {
@@ -69,5 +74,34 @@ describe("QualityOperationsDashboard", () => {
       // `${(driftScore * 100).toFixed(1)}%` → "10.0%". Match that format.
       expect(screen.getByText(/10\.0%/)).toBeInTheDocument();
     });
+  });
+
+  it("does not auto-refresh while the tab is hidden", async () => {
+    vi.useFakeTimers();
+    try {
+      render(<QualityOperationsDashboard />);
+      await act(async () => {
+        vi.runOnlyPendingTimers();
+        await Promise.resolve();
+      });
+
+      vi.clearAllMocks();
+      Object.defineProperty(document, "hidden", {
+        configurable: true,
+        value: true,
+      });
+
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+        await Promise.resolve();
+      });
+
+      expect(qualityMetricsApi.summary).not.toHaveBeenCalled();
+      expect(qualityMetricsApi.timeseries).not.toHaveBeenCalled();
+      expect(qualityMetricsApi.anomalies).not.toHaveBeenCalled();
+      expect(qualityMetricsApi.drift).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

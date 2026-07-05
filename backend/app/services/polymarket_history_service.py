@@ -10,6 +10,7 @@ polymarket_history_service.py
 """
 
 import logging
+import json
 
 import httpx
 from typing import Any
@@ -21,6 +22,48 @@ logger = logging.getLogger(__name__)
 
 
 POLYMARKET_API = "https://gamma-api.polymarket.com/markets"
+
+
+def _parse_json_array(value: Any) -> list[Any]:
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except Exception as exc:
+            raise ValueError("invalid JSON array") from exc
+        return parsed if isinstance(parsed, list) else []
+    return value if isinstance(value, list) else []
+
+
+def _to_resolved_market(item: dict[str, Any]) -> dict[str, Any] | None:
+    question = item.get("question", "")
+    if not question:
+        return None
+    if item.get("closed") is not True:
+        return None
+
+    prices = _parse_json_array(item.get("outcomePrices", "[]"))
+    if not prices or len(prices) < 2:
+        return None
+
+    yes_price = safe_float(prices[0], -1.0)
+    if yes_price < 0.0 or yes_price > 1.0:
+        return None
+
+    # For Polymarket's binary/2-outcome markets, source_id tracks the first
+    # outcome/YES-side price. If that final price is >= 0.5, the tracked side
+    # resolved true; otherwise false.
+    actual_outcome = 100.0 if yes_price >= 0.5 else 0.0
+
+    return {
+        "id": str(item.get("id", "")),
+        "question": question,
+        "actual_outcome": actual_outcome,
+        "final_yes_price": yes_price,
+        "volume": safe_float(item.get("volume"), 0.0),
+        "liquidity": safe_float(item.get("liquidity"), 0.0),
+        "start_date": item.get("startDate", ""),
+        "end_date": item.get("endDate", ""),
+    }
 
 
 async def fetch_resolved_markets(
@@ -55,38 +98,9 @@ async def fetch_resolved_markets(
     markets = []
     for item in data:
         try:
-            question = item.get("question", "")
-            if not question:
-                continue
-
-            # 解析 outcome prices
-            outcome_prices = item.get("outcomePrices", "[]")
-            if isinstance(outcome_prices, str):
-                import json
-                prices = json.loads(outcome_prices)
-            else:
-                prices = outcome_prices
-
-            if not prices or len(prices) < 2:
-                continue
-
-            yes_price = safe_float(prices[0], -1.0)
-            if yes_price < 0.0 or yes_price > 1.0:
-                continue
-
-            # 已关闭市场：YES 价格接近 1 = YES 解决，接近 0 = NO 解决
-            actual_outcome = 100.0 if yes_price >= 0.5 else 0.0
-
-            markets.append({
-                "id": str(item.get("id", "")),
-                "question": question,
-                "actual_outcome": actual_outcome,
-                "final_yes_price": yes_price,
-                "volume": safe_float(item.get("volume"), 0.0),
-                "liquidity": safe_float(item.get("liquidity"), 0.0),
-                "start_date": item.get("startDate", ""),
-                "end_date": item.get("endDate", ""),
-            })
+            market = _to_resolved_market(item)
+            if market is not None:
+                markets.append(market)
         except Exception as exc:
             logger.warning(
                 "Skipping malformed Polymarket resolved market [id=%s]: %s",
@@ -96,6 +110,40 @@ async def fetch_resolved_markets(
             continue
 
     return markets
+
+
+async def fetch_markets_by_ids(ids: list[str]) -> list[dict[str, Any]]:
+    """Fetch specific Polymarket markets by Gamma market id.
+
+    The bulk resolved endpoint is sorted/capped and can miss low-volume or
+    older markets. This direct path is used only for known event->market links
+    and returns entries only when the market is actually closed/resolved.
+    """
+    unique_ids = [str(mid).strip() for mid in dict.fromkeys(ids) if str(mid).strip()]
+    if not unique_ids:
+        return []
+
+    resolved: list[dict[str, Any]] = []
+    headers = {"User-Agent": "Mozilla/5.0"}
+    async with httpx.AsyncClient(timeout=30, headers=headers) as client:
+        for market_id in unique_ids:
+            try:
+                response = await client.get(f"{POLYMARKET_API}/{market_id}")
+                response.raise_for_status()
+                item = response.json()
+                if not isinstance(item, dict):
+                    continue
+                market = _to_resolved_market(item)
+                if market is not None:
+                    resolved.append(market)
+            except Exception as exc:
+                logger.warning(
+                    "Skipping Polymarket direct fetch [id=%s]: %s",
+                    market_id,
+                    exc,
+                )
+                continue
+    return resolved
 
 
 async def get_backtest_baseline() -> dict[str, Any]:

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AppNav } from "@/components/app-nav";
+import Link from "next/link";
 import { eventsApi, type SimTrade, type TradeStats } from "@/lib/api";
 import { fmtSignedPct } from "@/lib/format";
 
@@ -47,7 +47,12 @@ export default function TradesPage() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
 
   const fmtDate = (iso: string | null) => {
     if (!iso) return "—";
@@ -57,9 +62,7 @@ export default function TradesPage() {
   };
 
   return (
-    <div className="min-h-screen">
-      <AppNav />
-      <main className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
+      <main id="main-content" className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
         <h1 className="text-xl font-semibold md:text-2xl">模拟交易</h1>
 
         {error && (
@@ -139,7 +142,7 @@ export default function TradesPage() {
                       <tr className="border-b border-border bg-secondary/50 text-left text-xs text-muted-foreground">
                         <th className="px-4 py-2">事件</th>
                         <th className="px-4 py-2">方向</th>
-                        <th className="px-4 py-2">入场概率</th>
+                        <th className="px-4 py-2">市场概率</th>
                         <th className="px-4 py-2">入场 edge</th>
                         <th className="px-4 py-2">仓位%</th>
                         <th className="px-4 py-2">决策</th>
@@ -149,9 +152,11 @@ export default function TradesPage() {
                     <tbody>
                       {openTrades.map((t) => (
                         <tr key={t.trade_id} className="border-b border-border last:border-0">
-                          <td className="max-w-[280px] truncate px-4 py-2 font-medium">{t.event_title || t.event_id.slice(0, 12)}</td>
+                          <td className="max-w-[280px] truncate px-4 py-2">
+                            <Link href={`/events?id=${encodeURIComponent(t.event_id)}`} className="font-medium hover:text-primary">{t.event_title || t.event_id.slice(0, 12)}</Link>
+                          </td>
                           <td className={`px-4 py-2 font-mono font-semibold ${t.direction === "YES" ? "text-pos" : "text-neg"}`}>{t.direction}</td>
-                          <td className="px-4 py-2 font-mono tabular-nums">{t.entry_prob.toFixed(1)}%</td>
+                          <td className="px-4 py-2 font-mono tabular-nums">{t.market_prob.toFixed(1)}%</td>
                           <td className="px-4 py-2">{fmtSignedPct(t.entry_edge, 1)}%</td>
                           <td className="px-4 py-2 font-mono tabular-nums">{t.position_pct.toFixed(1)}%</td>
                           <td className="px-4 py-2">
@@ -184,22 +189,26 @@ export default function TradesPage() {
                       <tr className="border-b border-border bg-secondary/50 text-left text-xs text-muted-foreground">
                         <th className="px-4 py-2">事件</th>
                         <th className="px-4 py-2">方向</th>
-                        <th className="px-4 py-2">入场→结算</th>
+                        <th className="px-4 py-2">市场→结算</th>
                         <th className="px-4 py-2">结果</th>
                         <th className="px-4 py-2">PnL</th>
+                        <th className="px-4 py-2">入场时间</th>
                         <th className="px-4 py-2">原因</th>
                       </tr>
                     </thead>
                     <tbody>
                       {closedTrades.map((t) => (
                         <tr key={t.trade_id} className="border-b border-border last:border-0">
-                          <td className="max-w-[280px] truncate px-4 py-2 font-medium">{t.event_title || t.event_id.slice(0, 12)}</td>
+                          <td className="max-w-[280px] truncate px-4 py-2">
+                            <Link href={`/events?id=${encodeURIComponent(t.event_id)}`} className="font-medium hover:text-primary">{t.event_title || t.event_id.slice(0, 12)}</Link>
+                          </td>
                           <td className={`px-4 py-2 font-mono font-semibold ${t.direction === "YES" ? "text-pos" : "text-neg"}`}>{t.direction}</td>
-                          <td className="px-4 py-2 font-mono text-xs tabular-nums">{t.entry_prob.toFixed(0)}% → {t.actual_outcome?.toFixed(0) ?? "?"}%</td>
+                          <td className="px-4 py-2 font-mono text-xs tabular-nums">{t.market_prob.toFixed(0)}% → {t.actual_outcome?.toFixed(0) ?? "?"}%</td>
                           <td className={`px-4 py-2 font-mono tabular-nums ${t.is_win === 1 ? "text-pos" : "text-neg"}`}>
                             {t.is_win === 1 ? "赢" : t.is_win === 0 ? "输" : "—"}
                           </td>
                           <td className="px-4 py-2"><PnlBadge pnl={t.pnl_pct} /></td>
+                          <td className="px-4 py-2 text-xs text-muted-foreground">{fmtDate(t.entry_time)}</td>
                           <td className="px-4 py-2 text-xs text-muted-foreground">{t.exit_reason ?? "—"}</td>
                         </tr>
                       ))}
@@ -211,6 +220,5 @@ export default function TradesPage() {
           </>
         )}
       </main>
-    </div>
   );
 }

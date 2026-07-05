@@ -31,9 +31,9 @@ export function QualitySummaryPanel({ summary }: { summary: QualityMetricsSummar
           <h3 className="mb-1 text-xs font-medium text-muted-foreground">事件计数</h3>
           <Row label="在库事件" value={summary.counts.events} />
           <Row label="已结算" value={summary.counts.resolved_events} />
-          <Row label="含 decision_quality" value={summary.counts.with_decision_quality} />
-          <Row label="含 market_quality" value={summary.counts.with_market_quality} />
-          <Row label="含 llm_telemetry" value={summary.counts.with_llm_telemetry} />
+          <Row label="含决策质量" value={summary.counts.with_decision_quality} />
+          <Row label="含市场质量" value={summary.counts.with_market_quality} />
+          <Row label="含LLM遥测" value={summary.counts.with_llm_telemetry} />
         </div>
         <div>
           <h3 className="mb-1 text-xs font-medium text-muted-foreground">最终方向分布</h3>

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, FlaskConical, History, Radar, Target, Trophy, TrendingUp, Zap, Gauge } from "lucide-react";
+import { Activity, FlaskConical, Gauge, History, Newspaper, Radar, Target, Trophy, TrendingUp, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { OperatorKeyControl } from "@/components/operator-key-control";
 import { ThemeControl } from "@/components/theme-control";
@@ -18,6 +18,63 @@ const NAV = [
   { href: "/world-cup", label: "世界杯", icon: Trophy, match: ["/world-cup"] },
 ];
 
+const HOT_NEWS = [
+  "美联储降息预期升温，预测市场重新定价 9 月会议概率",
+  "AI 基建订单继续上修，芯片与电力板块波动扩大",
+  "原油库存意外下降，能源合约短线成交放大",
+  "世界杯资格赛伤病名单更新，热门球队盘口出现分歧",
+  "加密市场资金费率回落，宏观风险偏好等待 CPI 数据",
+];
+
+function BrandLink() {
+  return (
+    <Link
+      href="/"
+      className="flex shrink-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <span className="flex size-7 items-center justify-center rounded-md bg-primary/15 text-primary">
+        <Activity className="size-4" aria-hidden="true" />
+      </span>
+      <span className="font-mono text-sm font-semibold tracking-tight">
+        PROBABILITY<span className="text-primary">·</span>WATCH
+      </span>
+    </Link>
+  );
+}
+
+function HotNewsTicker() {
+  const items = [...HOT_NEWS, ...HOT_NEWS];
+
+  return (
+    <section aria-label="热点新闻" className="border-b border-border/70 bg-background/90">
+      <style>{`
+        @keyframes pmrf-hot-news-scroll {
+          from { transform: translateX(0); }
+          to { transform: translateX(-50%); }
+        }
+      `}</style>
+      <div className="mx-auto flex h-10 max-w-7xl items-center gap-3 px-4 md:px-6">
+        <BrandLink />
+        <span className="h-5 w-px shrink-0 bg-border" aria-hidden="true" />
+        <div className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-foreground">
+          <Newspaper className="size-3.5 text-primary" aria-hidden="true" />
+          热点新闻
+        </div>
+        <div className="min-w-0 flex-1 overflow-hidden">
+          <div className="flex w-max items-center gap-6 whitespace-nowrap text-xs text-muted-foreground motion-safe:animate-[pmrf-hot-news-scroll_42s_linear_infinite] hover:[animation-play-state:paused]">
+            {items.map((item, index) => (
+              <span key={`${item}-${index}`} className="inline-flex items-center gap-2">
+                <span className="size-1 rounded-full bg-primary/70" aria-hidden="true" />
+                {item}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function AppNav() {
   const pathname = usePathname();
   // Static export uses trailing slashes; normalize for active route matching.
@@ -31,20 +88,9 @@ export function AppNav() {
       >
         跳到主要内容
       </a>
-      <div className="mx-auto flex min-h-14 max-w-7xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 md:flex-nowrap md:gap-6 md:px-6 md:py-0">
-        <Link
-          href="/"
-          className="flex shrink-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <span className="flex size-7 items-center justify-center rounded-md bg-primary/15 text-primary">
-            <Activity className="size-4" aria-hidden="true" />
-          </span>
-          <span className="font-mono text-sm font-semibold tracking-tight">
-            PROBABILITY<span className="text-primary">·</span>WATCH
-          </span>
-        </Link>
-
-        <nav className="order-3 -mx-1 flex w-full items-center gap-1 overflow-x-auto px-1 pb-1 md:order-none md:mx-0 md:w-auto md:overflow-visible md:px-0 md:pb-0">
+      <HotNewsTicker />
+      <div className="mx-auto flex min-h-11 max-w-7xl items-center gap-3 px-4 md:gap-6 md:px-6">
+        <nav aria-label="主导航" className="order-3 -mx-1 flex w-full items-center gap-1 overflow-x-auto px-1 pb-1 md:order-none md:mx-0 md:min-w-0 md:flex-1 md:px-0 md:pb-0">
           {NAV.map((item) => {
             const active =
               item.href === "/"
@@ -57,7 +103,7 @@ export function AppNav() {
                 href={item.href}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                   active
                     ? "bg-secondary text-foreground"
                     : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",

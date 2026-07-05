@@ -20,6 +20,7 @@ from app.services.ai_analysis_service import (
     build_deterministic_fallback_analysis,
     build_risk_flags,
     calculate_confidence_score,
+    calculate_evidence_quality,
     calculate_narrative_risk_score,
     calculate_position_size,
     calculate_priced_in_risk_score,
@@ -105,6 +106,44 @@ class ProbabilityMathTests(unittest.TestCase):
             ),
             0.701,
         )
+
+    def test_calculate_evidence_quality_weak(self):
+        quality = calculate_evidence_quality(
+            evidence_profile={
+                "evidence_direction": "support",
+                "evidence_strength": 0.12,
+                "conflict_score": 0.65,
+                "freshness_score": 0.25,
+                "resolution_relevance_score": 0.15,
+                "source_count": 1,
+            },
+            news_quality_score=0.25,
+            semantics_profile={"condition_type": "unknown", "ambiguity_score": 75},
+            priced_in_risk_score=80,
+        )
+        self.assertEqual(quality["bucket"], "weak")
+        self.assertLessEqual(quality["factor"], 0.35)
+        self.assertIn("thin_or_indirect_evidence", quality["reasons"])
+        self.assertIn("high_conflict", quality["reasons"])
+
+    def test_calculate_evidence_quality_strong(self):
+        quality = calculate_evidence_quality(
+            evidence_profile={
+                "evidence_direction": "support",
+                "evidence_strength": 0.85,
+                "conflict_score": 0.05,
+                "freshness_score": 0.92,
+                "resolution_relevance_score": 0.88,
+                "source_count": 6,
+            },
+            news_quality_score=0.86,
+            semantics_profile={"condition_type": "threshold", "ambiguity_score": 18},
+            priced_in_risk_score=20,
+        )
+        self.assertEqual(quality["bucket"], "strong")
+        self.assertGreaterEqual(quality["factor"], 0.75)
+        self.assertIn("direct_relevant_evidence", quality["reasons"])
+        self.assertIn("multi_source_support", quality["reasons"])
 
     def test_clamp_probability(self):
         self.assertEqual(

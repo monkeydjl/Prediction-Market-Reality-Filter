@@ -612,6 +612,59 @@ def calculate_confidence_score(
     return round(_clamp(confidence, 0.0, 0.90), 3)
 
 
+def calculate_evidence_quality(
+    evidence_profile: dict[str, Any] | None,
+    news_quality_score: float,
+    semantics_profile: dict[str, Any] | None = None,
+    priced_in_risk_score: int = 0,
+) -> dict[str, Any]:
+    """Return a deterministic evidence-quality factor and bucket."""
+    evidence = evidence_profile or default_evidence_profile()
+    semantics = semantics_profile or default_semantics_profile()
+    strength = _clamp(float(evidence.get("evidence_strength", 0.0)), 0.0, 1.0)
+    relevance = _clamp(float(evidence.get("resolution_relevance_score", 0.0)), 0.0, 1.0)
+    freshness = _clamp(float(evidence.get("freshness_score", 0.5)), 0.0, 1.0)
+    conflict = _clamp(float(evidence.get("conflict_score", 0.0)), 0.0, 1.0)
+    source_count = max(0, int(evidence.get("source_count", 0) or 0))
+    news_quality = _clamp(news_quality_score, 0.0, 1.0)
+    ambiguity = _clamp(float(semantics.get("ambiguity_score", 50)), 0.0, 100.0) / 100.0
+    priced_in = _clamp(float(priced_in_risk_score), 0.0, 100.0) / 100.0
+    source_score = _clamp(source_count / 5.0, 0.0, 1.0)
+    factor = round(_clamp(
+        strength * 0.24 + relevance * 0.20 + freshness * 0.14
+        + (1.0 - conflict) * 0.14 + source_score * 0.12
+        + news_quality * 0.10 + (1.0 - ambiguity) * 0.04
+        + (1.0 - priced_in) * 0.02,
+        0.0,
+        1.0,
+    ), 3)
+    reasons: list[str] = []
+    if strength < 0.25 or relevance < 0.25:
+        reasons.append("thin_or_indirect_evidence")
+    if conflict >= 0.55:
+        reasons.append("high_conflict")
+    if freshness < 0.35:
+        reasons.append("stale_evidence")
+    if source_count < 2:
+        reasons.append("single_or_missing_source")
+    if ambiguity >= 0.70:
+        reasons.append("ambiguous_resolution")
+    if priced_in >= 0.70:
+        reasons.append("likely_priced_in")
+    if strength >= 0.70 and relevance >= 0.70:
+        reasons.append("direct_relevant_evidence")
+    if source_count >= 5 and conflict <= 0.20:
+        reasons.append("multi_source_support")
+    if factor < 0.35:
+        bucket = "weak"
+    elif factor < 0.55:
+        bucket = "mixed"
+    elif factor < 0.75:
+        bucket = "solid"
+    else:
+        bucket = "strong"
+    return {"factor": factor, "bucket": bucket, "reasons": reasons}
+
 def calculate_priced_in_risk_score(
     market_probability: float,
     evidence_profile: dict[str, Any],

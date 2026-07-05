@@ -33,6 +33,7 @@ from app.services.probability_engine_service import (
     _normalize_ai_analysis,
     build_deterministic_fallback_analysis,
     calculate_confidence_score,
+    calculate_evidence_quality,
     calculate_priced_in_risk_score,
     clamp_probability,
     default_evidence_profile,

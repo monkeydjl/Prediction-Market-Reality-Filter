@@ -116,6 +116,48 @@ class ProbabilityMathTests(unittest.TestCase):
             0.701,
         )
 
+    def test_calculate_confidence_score_rewards_v2_source_quality(self):
+        base_evidence = {
+            "evidence_direction": "support",
+            "evidence_strength": 0.72,
+            "conflict_score": 0.10,
+            "freshness_score": 0.80,
+            "resolution_relevance_score": 0.74,
+            "source_count": 4,
+        }
+        same_wire = calculate_confidence_score(
+            news_context=NEWS_CONTEXT,
+            news_quality_score=0.72,
+            narrative_type="factual",
+            reasoning=REASONING,
+            reasoning_consistency=0.7,
+            evidence_profile={
+                **base_evidence,
+                "independent_source_count": 1,
+                "official_source_count": 0,
+                "counterevidence_considered": False,
+            },
+            priced_in_risk_score=20,
+            semantics_profile={"condition_type": "threshold", "ambiguity_score": 20},
+        )
+        strong_source_mix = calculate_confidence_score(
+            news_context=NEWS_CONTEXT,
+            news_quality_score=0.72,
+            narrative_type="factual",
+            reasoning=REASONING,
+            reasoning_consistency=0.7,
+            evidence_profile={
+                **base_evidence,
+                "independent_source_count": 4,
+                "official_source_count": 2,
+                "counterevidence_considered": True,
+            },
+            priced_in_risk_score=20,
+            semantics_profile={"condition_type": "threshold", "ambiguity_score": 20},
+        )
+
+        self.assertGreater(strong_source_mix, same_wire)
+
     def test_calculate_evidence_quality_weak(self):
         quality = calculate_evidence_quality(
             evidence_profile={

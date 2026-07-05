@@ -613,6 +613,17 @@ def calculate_confidence_score(
     evidence = evidence_profile or default_evidence_profile()
     source_count = evidence.get("source_count", 0)
     news_quantity_score = _clamp(source_count / 5.0, 0, 1)
+    independent_source_count = max(0, int(evidence.get("independent_source_count", 0) or 0))
+    official_source_count = max(0, int(evidence.get("official_source_count", 0) or 0))
+    counterevidence_score = 1.0 if evidence.get("counterevidence_considered", False) else 0.0
+    source_structure_score = _clamp(
+        _clamp(independent_source_count / 5.0, 0, 1) * 0.45
+        + _clamp(official_source_count / 2.0, 0, 1) * 0.30
+        + counterevidence_score * 0.25,
+        0,
+        1,
+    )
+    news_quantity_score = max(news_quantity_score, source_structure_score)
 
     narrative = (narrative_type or "").lower()
     if narrative in {"factual", "fundamental", "official"}:

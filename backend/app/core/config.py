@@ -53,6 +53,44 @@ class Settings:
         os.getenv("LLM_STARTUP_CHECK_TIMEOUT_SECONDS", "5.0")
     )
 
+    # Unified LLM Gateway routes. Format:
+    # provider:model1,model2|provider2:model3
+    # Empty task routes fall back to LLM_ROUTE_DEFAULT, then legacy OPENAI_*.
+    LLM_ROUTE_DEFAULT: str = os.getenv("LLM_ROUTE_DEFAULT", "")
+    LLM_ROUTE_PROBABILITY_ANALYSIS: str = os.getenv(
+        "LLM_ROUTE_PROBABILITY_ANALYSIS", ""
+    )
+    LLM_ROUTE_TRANSLATION: str = os.getenv("LLM_ROUTE_TRANSLATION", "")
+    LLM_ROUTE_CROSS_VALIDATION: str = os.getenv("LLM_ROUTE_CROSS_VALIDATION", "")
+    LLM_ROUTE_WORLD_CUP: str = os.getenv("LLM_ROUTE_WORLD_CUP", "")
+    LLM_ROUTE_STARTUP_CHECK: str = os.getenv("LLM_ROUTE_STARTUP_CHECK", "")
+    LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "45"))
+    LLM_MAX_RETRIES_PER_MODEL: int = int(
+        os.getenv("LLM_MAX_RETRIES_PER_MODEL", "1")
+    )
+
+    LLM_PROVIDER_DEEPSEEK_BASE_URL: str = os.getenv(
+        "LLM_PROVIDER_DEEPSEEK_BASE_URL", "https://api.deepseek.com"
+    )
+    LLM_PROVIDER_DEEPSEEK_API_KEY: str = os.getenv(
+        "LLM_PROVIDER_DEEPSEEK_API_KEY", ""
+    )
+    LLM_PROVIDER_DASHSCOPE_BASE_URL: str = os.getenv(
+        "LLM_PROVIDER_DASHSCOPE_BASE_URL",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
+    LLM_PROVIDER_DASHSCOPE_API_KEY: str = os.getenv(
+        "LLM_PROVIDER_DASHSCOPE_API_KEY", ""
+    )
+    LLM_PROVIDER_OPENAI_BASE_URL: str = os.getenv("LLM_PROVIDER_OPENAI_BASE_URL", "")
+    LLM_PROVIDER_OPENAI_API_KEY: str = os.getenv("LLM_PROVIDER_OPENAI_API_KEY", "")
+    LLM_PROVIDER_OPENROUTER_BASE_URL: str = os.getenv(
+        "LLM_PROVIDER_OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+    )
+    LLM_PROVIDER_OPENROUTER_API_KEY: str = os.getenv(
+        "LLM_PROVIDER_OPENROUTER_API_KEY", ""
+    )
+
     CORS_ALLOWED_ORIGINS: list[str] = _env_csv(
         "CORS_ALLOWED_ORIGINS",
         "http://localhost:3000,http://127.0.0.1:3000,"

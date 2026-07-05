@@ -5,6 +5,8 @@
 import type { MatchFixture } from "./world-cup-predictions";
 import type { TeamStanding } from "./group-standings";
 
+export type QualificationStatus = "qualified" | "eliminated" | "pending";
+
 export interface QualificationProbability {
   team: string;
   group: string;
@@ -14,6 +16,7 @@ export interface QualificationProbability {
   gamesRemaining: number;
   qualificationProbability: number;
   projectedPoints: number;
+  qualificationStatus: QualificationStatus;
 }
 
 /**
@@ -39,6 +42,8 @@ export function calculateQualificationProbabilities(
         m.away_score == null
     );
 
+    const groupComplete = remainingMatches.length === 0;
+
     // Calculate probabilities for each team
     for (let i = 0; i < groupStanding.teams.length; i++) {
       const team = groupStanding.teams[i];
@@ -48,10 +53,16 @@ export function calculateQualificationProbabilities(
         (m) => m.home_team === team.team || m.away_team === team.team
       );
 
+      const qualificationStatus = groupComplete
+        ? i < 2 ? "qualified" : "eliminated"
+        : "pending";
+
       // Simple heuristic: probability based on current position and games remaining
       let qualProb = 0;
 
-      if (i === 0) {
+      if (groupComplete) {
+        qualProb = i < 2 ? 1 : 0;
+      } else if (i === 0) {
         // 1st place
         qualProb = 0.95 - (teamRemainingMatches.length * 0.05);
       } else if (i === 1) {
@@ -68,13 +79,13 @@ export function calculateQualificationProbabilities(
       }
 
       // Adjust for games played vs remaining
-      if (team.played === 0) {
+      if (!groupComplete && team.played === 0) {
         // No games played yet - more uncertainty
         qualProb = i < 2 ? 0.50 : 0.25;
       }
 
-      // Cap between 0.01 and 0.99
-      qualProb = Math.max(0.01, Math.min(0.99, qualProb));
+      // Cap between 0 and 1
+      qualProb = Math.max(0, Math.min(1, qualProb));
 
       // Projected points (simple: current + 1.5 per remaining game for top 2)
       const projectedPoints = team.points + (i < 2 ? teamRemainingMatches.length * 1.5 : teamRemainingMatches.length * 1.0);
@@ -88,6 +99,7 @@ export function calculateQualificationProbabilities(
         gamesRemaining: teamRemainingMatches.length,
         qualificationProbability: qualProb,
         projectedPoints: Math.round(projectedPoints * 10) / 10,
+        qualificationStatus,
       });
     }
   }

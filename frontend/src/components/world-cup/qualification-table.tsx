@@ -22,6 +22,18 @@ function probabilityBg(prob: number): string {
   return "bg-neg/10";
 }
 
+function statusLabel(status: QualificationProbability["qualificationStatus"]): string | null {
+  if (status === "qualified") return "已出线";
+  if (status === "eliminated") return "已淘汰";
+  return null;
+}
+
+function statusClass(status: QualificationProbability["qualificationStatus"]): string {
+  if (status === "qualified") return "border-pos/40 bg-pos/15 text-pos";
+  if (status === "eliminated") return "border-neg/40 bg-neg/10 text-neg";
+  return "border-border bg-secondary text-muted-foreground";
+}
+
 export function QualificationTable({ probabilities, onTeamClick }: QualificationTableProps) {
   if (probabilities.length === 0) {
     return (
@@ -59,6 +71,7 @@ export function QualificationTable({ probabilities, onTeamClick }: Qualification
           <div className="divide-y">
             {byGroup[group].map((prob) => {
               const qualProb = prob.qualificationProbability;
+              const status = statusLabel(prob.qualificationStatus);
               return (
                 <div
                   key={prob.team}
@@ -69,18 +82,25 @@ export function QualificationTable({ probabilities, onTeamClick }: Qualification
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
-                      {onTeamClick ? (
-                        <button
-                          onClick={() => onTeamClick(prob.team)}
-                          className="font-semibold hover:text-primary hover:underline transition-colors text-left truncate block w-full"
-                        >
-                          {translateTeamName(prob.team)}
-                        </button>
-                      ) : (
-                        <div className="font-semibold truncate">
-                          {translateTeamName(prob.team)}
-                        </div>
-                      )}
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        {onTeamClick ? (
+                          <button
+                            onClick={() => onTeamClick(prob.team)}
+                            className="font-semibold hover:text-primary hover:underline transition-colors text-left truncate"
+                          >
+                            {translateTeamName(prob.team)}
+                          </button>
+                        ) : (
+                          <div className="font-semibold truncate">
+                            {translateTeamName(prob.team)}
+                          </div>
+                        )}
+                        {status && (
+                          <span className={cn("shrink-0 rounded-md border px-1.5 py-0.5 text-[11px] font-medium", statusClass(prob.qualificationStatus))}>
+                            {status}
+                          </span>
+                        )}
+                      </div>
                       <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
                         <span>当前排名: #{prob.currentPosition}</span>
                         <span>积分: {prob.currentPoints}</span>

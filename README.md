@@ -6,7 +6,9 @@ AI 驱动的**事件情报与概率变化分析平台**。采集公开信息，�
 公开信息 → 候选事件 → 证据评分 → 概率变化 → 情报报告 → 人工审阅
 ```
 
-它**不是**新闻聚合器、自动交易机器人，也不是只围绕某个预测市场的扫描器。Polymarket / Manifold / Kalshi 只是事件来源与概率基线之一。
+它**不是**新闻聚合器、自动交易机器人，也不是只围绕某个预测市场的扫描器。Polymarket / Kalshi 只是事件来源与概率基线之一。
+
+当前主动发现的预测市场来源是 Polymarket 和 Kalshi。Opinion（BNB Chain）、Predict.fun（BNB Chain）、Probable（BNB Chain）和 Limitless（Base）会先作为计划接入的链上平台显示在 UI 中；在官方 API / indexer / 合约事件接口验证并实现 adapter 之前，它们不会贡献新事件。
 
 ## 架构
 

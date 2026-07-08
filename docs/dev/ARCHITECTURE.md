@@ -27,7 +27,7 @@
 │  External APIs                                       │
 │  ┌──────────┐ ┌──────────┐ ┌──────┐ ┌──────────────┐│
 │  │DeepSeek  │ │Polymarket│ │GNews │ │Fed/SEC/BLS   ││
-│  │(LLM)     │ │Manifold  │ │(News)│ │(Official)    ││
+│  │(LLM)     │ │Kalshi    │ │(News)│ │(Official)    ││
 │  │          │ │Kalshi    │ │      │ │              ││
 │  └──────────┘ └──────────┘ └──────┘ └──────────────┘│
 └──────────────────────────────────────────────────────┘
@@ -50,7 +50,7 @@
 │  │  Service Layer (services/)  36 modules              ││
 │  │  ┌─────────────────┐  ┌────────────────────────┐   ││
 │  │  │ Event Discovery │  │ Reality Feedback Loop  │   ││
-│  │  │ - 3 market src  │  │ - auto_resolve         │   ││
+│  │  │ - 2 market src  │  │ - auto_resolve         │   ││
 │  │  │ - 5 news src    │  │ - calibration          │   ││
 │  │  │ - dedup/cache   │  │ - diagnosis (M2)       │   ││
 │  │  └─────────────────┘  │ - trend analysis (M3)  │   ││
@@ -80,6 +80,8 @@
 
 ## Data Flow: Event Discovery Pipeline
 
+Active prediction-market discovery currently uses Polymarket and Kalshi. Opinion (BNB Chain), Predict.fun (BNB Chain), Probable (BNB Chain), and Limitless (Base) are shown as planned on-chain platforms in the UI, but they do not contribute events until their official APIs/indexers are verified and adapters are added.
+
 ```
 News Sources (RSS/GNews/SEC/Fed/BLS)
               │
@@ -87,7 +89,7 @@ News Sources (RSS/GNews/SEC/Fed/BLS)
      collect_shared_articles()
               │
               ▼
-     Market Sources (Poly/Manifold/Kalshi) ──┐
+     Market Sources (Poly/Kalshi) ──┐
      Open Web Extraction (opt-in)           ──┤
               │                                │
               ▼                                │
@@ -117,7 +119,7 @@ News Sources (RSS/GNews/SEC/Fed/BLS)
 ```
 Daily 22:30 UTC: auto_resolve_events()
 ├─ reconcile_predictions()    ← heal crash orphans
-├─ fetch_resolved_markets()   ← Poly + Manifold + Kalshi (parallel)
+├─ fetch_resolved_markets()   ← Poly + Kalshi (parallel)
 ├─ contract_id match          ← primary: verified link
 ├─ text_match fallback        ← secondary: fuzzy match
 └─ resolve_with_calibration()

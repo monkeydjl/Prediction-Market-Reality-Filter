@@ -94,6 +94,8 @@ curl -X POST http://localhost:8000/api/events/analyze \
 curl http://localhost:8000/api/events/discover?limit=5
 ```
 
+Active prediction-market discovery currently uses Polymarket and Kalshi. Opinion (BNB Chain), Predict.fun (BNB Chain), Probable (BNB Chain), and Limitless (Base) are shown as planned on-chain platforms in the UI, but they do not contribute events until their official APIs/indexers are verified and adapters are added.
+
 ---
 
 ## 🧪 Testing
@@ -310,7 +312,7 @@ sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
 
 ### No Events Discovered
 
-- Event sources such as Polymarket, Manifold, Kalshi, or Open Web extraction may be disabled, rate-limited, or unavailable
+- Active event sources such as Polymarket, Kalshi, or Open Web extraction may be disabled, rate-limited, or unavailable
 - Try with `use_cache=False`
 - Check network connectivity
 - Open Web extraction requires `OPEN_WEB_EXTRACTION_MODEL`

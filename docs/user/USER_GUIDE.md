@@ -56,6 +56,8 @@ Dashboard / API 人工查看
 - 公开信息和预测市场的概率分析工具
 - 人工审查前的筛选、排序和记录系统
 
+当前主动发现的预测市场来源是 Polymarket 和 Kalshi。Opinion（BNB Chain）、Predict.fun（BNB Chain）、Probable（BNB Chain）和 Limitless（Base）会先作为计划接入的链上平台显示在 UI 中；在官方 API / indexer / 合约事件接口验证并实现 adapter 之前，它们不会贡献新事件。
+
 ---
 
 ## 2. 快速上手
@@ -275,8 +277,6 @@ ECONOMIC_RSS_URL=https://www.bls.gov/feed/bls_latest.rss
 ECONOMIC_SOURCE_NAME=U.S. Bureau of Labor Statistics
 ECONOMIC_USER_AGENT=Event Intelligence Platform your-email@example.com
 
-MANIFOLD_API_URL=https://api.manifold.markets/v0/search-markets
-MANIFOLD_SOURCE_NAME=Manifold
 
 KALSHI_API_URL=https://api.elections.kalshi.com/trade-api/v2/events
 KALSHI_SOURCE_NAME=Kalshi
@@ -286,7 +286,7 @@ KALSHI_SOURCE_NAME=Kalshi
 
 - `GNEWS_MAX_RESULTS` 控制 Google News 返回数量。
 - `SEC_USER_AGENT` 和 `ECONOMIC_USER_AGENT` 建议改成真实联系人；SEC/BLS 这类站点可能拒绝默认或空 User-Agent。
-- 将 `MANIFOLD_API_URL` 或 `KALSHI_API_URL` 设为空可以禁用对应来源。
+- `KALSHI_API_URL` 配置 Kalshi 事件 API；它是当前主动发现的预测市场来源之一。
 
 ### 4.5 数据文件位置
 

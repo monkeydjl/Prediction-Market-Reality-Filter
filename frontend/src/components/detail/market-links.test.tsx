@@ -80,6 +80,9 @@ describe("MarketPanel", () => {
 
     expect(screen.getAllByText("BNB Chain")).toHaveLength(3);
     expect(screen.getByText("Base")).toBeInTheDocument();
+    expect(screen.getAllByText("active")).toHaveLength(3);
+    expect(screen.getAllByText("API key required")).toHaveLength(2);
+    expect(screen.getByText("planned")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Manifold/i })).toBeNull();
   });
 

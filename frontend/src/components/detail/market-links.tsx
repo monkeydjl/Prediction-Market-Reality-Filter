@@ -109,7 +109,8 @@ export function MarketPanel({ record }: { record: EventRecord }) {
                       <span className="text-xs font-medium">{p.name}</span>
                       <span className="text-[10px] text-muted-foreground">
                         <span>{p.chain}</span>
-                        {!p.activeDiscovery ? <span> · planned</span> : null}
+                        <span className="mx-1">·</span>
+                        <span>{p.statusLabel}</span>
                       </span>
                     </span>
                     <ExternalLink className="size-3 text-muted-foreground transition-colors group-hover:text-foreground" />

@@ -6,6 +6,7 @@ export interface PredictionMarketPlatform {
   homepageUrl: string;
   searchUrl?: (question: string) => string;
   activeDiscovery: boolean;
+  statusLabel: string;
 }
 
 export const PREDICTION_MARKET_PLATFORMS: PredictionMarketPlatform[] = [
@@ -17,6 +18,7 @@ export const PREDICTION_MARKET_PLATFORMS: PredictionMarketPlatform[] = [
     homepageUrl: "https://polymarket.com/markets",
     searchUrl: (question) => `https://polymarket.com/markets?_q=${encodeURIComponent(question)}`,
     activeDiscovery: true,
+    statusLabel: "active",
   },
   {
     key: "kalshi",
@@ -26,6 +28,7 @@ export const PREDICTION_MARKET_PLATFORMS: PredictionMarketPlatform[] = [
     homepageUrl: "https://kalshi.com/markets",
     searchUrl: (question) => `https://kalshi.com/markets?search=${encodeURIComponent(question)}`,
     activeDiscovery: true,
+    statusLabel: "active",
   },
   {
     key: "opinion",
@@ -34,6 +37,7 @@ export const PREDICTION_MARKET_PLATFORMS: PredictionMarketPlatform[] = [
     colorClass: "bg-[#F0B90B]",
     homepageUrl: "https://app.opinion.trade/trending",
     activeDiscovery: false,
+    statusLabel: "API key required",
   },
   {
     key: "limitless",
@@ -41,7 +45,8 @@ export const PREDICTION_MARKET_PLATFORMS: PredictionMarketPlatform[] = [
     chain: "Base",
     colorClass: "bg-[#0052FF]",
     homepageUrl: "https://limitless.exchange/",
-    activeDiscovery: false,
+    activeDiscovery: true,
+    statusLabel: "active",
   },
   {
     key: "predict_fun",
@@ -50,6 +55,7 @@ export const PREDICTION_MARKET_PLATFORMS: PredictionMarketPlatform[] = [
     colorClass: "bg-[#7C3AED]",
     homepageUrl: "https://predict.fun/",
     activeDiscovery: false,
+    statusLabel: "API key required",
   },
   {
     key: "probable",
@@ -58,6 +64,7 @@ export const PREDICTION_MARKET_PLATFORMS: PredictionMarketPlatform[] = [
     colorClass: "bg-[#10B981]",
     homepageUrl: "https://probable.finance/",
     activeDiscovery: false,
+    statusLabel: "planned",
   },
 ];
 

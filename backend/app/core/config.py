@@ -362,6 +362,13 @@ class Settings:
     )
     KALSHI_SOURCE_NAME: str = os.getenv("KALSHI_SOURCE_NAME", "Kalshi")
 
+    LIMITLESS_SOURCE_ENABLED: bool = _env_bool("LIMITLESS_SOURCE_ENABLED", "true")
+    LIMITLESS_API_URL: str = os.getenv(
+        "LIMITLESS_API_URL",
+        "https://api.limitless.exchange/markets/active",
+    )
+    LIMITLESS_SOURCE_NAME: str = os.getenv("LIMITLESS_SOURCE_NAME", "Limitless")
+
     # Metaculus is a fourth prediction-question event source (community forecasts
     # on long-horizon science/tech/AI/policy questions). Unlike the market
     # sources, it requires an API token — register at metaculus.com, copy the
@@ -578,13 +585,14 @@ class Settings:
     # Per-source weight multipliers for discovery.  Each source is asked for
     # ``limit * weight`` candidates instead of the flat ``limit``.  Polymarket
     # is the primary prediction-market source (highest weight), Kalshi is
-    # secondary, Manifold is supplementary.  Open Web (LLM extraction from
-    # news) is kept below market sources so the event mix is dominated by
-    # real market prices, not news-derived speculation.
+    # secondary, and verified on-chain sources are lower-priority discovery
+    # inputs. Open Web (LLM extraction from news) is kept below market sources
+    # so the event mix is dominated by real market prices, not news-derived
+    # speculation.
     SOURCE_WEIGHTS: dict[str, float] = {
         "Polymarket": float(os.getenv("SOURCE_WEIGHT_POLYMARKET", "3.0")),
         "Kalshi": float(os.getenv("SOURCE_WEIGHT_KALSHI", "1.0")),
-        "Manifold": float(os.getenv("SOURCE_WEIGHT_MANIFOLD", "0.3")),
+        "Limitless": float(os.getenv("SOURCE_WEIGHT_LIMITLESS", "0.8")),
         "Open Web": float(os.getenv("SOURCE_WEIGHT_OPEN_WEB", "0.5")),
         "Polymarket Crypto": float(os.getenv("SOURCE_WEIGHT_POLYMARKET_CRYPTO", "1.0")),
         "World Cup": 0.3,

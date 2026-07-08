@@ -858,6 +858,111 @@ class CollectCandidateEventsCryptoOptInTests(unittest.TestCase):
         questions = [c.get("question") for c in candidates]
         self.assertIn("Will Bitcoin reach $100k?", questions)
 
+    def test_onchain_sources_are_collected_with_key_gating(self):
+        limitless = AsyncMock(return_value=[
+            {"question": "Limitless q", "baseline_probability": 50,
+             "volume": 1, "liquidity": 1,
+             "source": {"type": "prediction_market", "platform": "Limitless"}},
+        ])
+        opinion = AsyncMock(return_value=[
+            {"question": "Opinion q", "baseline_probability": 50,
+             "volume": 1, "liquidity": 1,
+             "source": {"type": "prediction_market", "platform": "Opinion"}},
+        ])
+        predict_fun = AsyncMock(return_value=[
+            {"question": "Predict.fun q", "baseline_probability": 50,
+             "volume": 1, "liquidity": 1,
+             "source": {"type": "prediction_market", "platform": "Predict.fun"}},
+        ])
+        with patch("app.services.polymarket_event_source.fetch_candidate_events",
+                   new=AsyncMock(return_value=[])), \
+                patch("app.services.kalshi_event_source.fetch_candidate_events",
+                      new=AsyncMock(return_value=[])), \
+                patch("app.services.world_cup_event_source.fetch_candidate_events",
+                      new=AsyncMock(return_value=[])), \
+                patch("app.services.polymarket_event_source.fetch_crypto_candidate_events",
+                      new=AsyncMock(return_value=[])), \
+                patch("app.services.event_extraction_service.extract_candidate_events",
+                      new=AsyncMock(return_value=[])), \
+                patch("app.services.limitless_event_source.fetch_candidate_events",
+                      new=limitless), \
+                patch("app.services.opinion_event_source.fetch_candidate_events",
+                      new=opinion), \
+                patch("app.services.predict_fun_event_source.fetch_candidate_events",
+                      new=predict_fun), \
+                patch.object(eis.settings, "LIMITLESS_SOURCE_ENABLED", True), \
+                patch.object(eis.settings, "OPINION_API_KEY", "op-key"), \
+                patch.object(eis.settings, "PREDICT_FUN_API_KEY", "pf-key"), \
+                patch.object(eis.settings, "POLYMARKET_CRYPTO_FETCH_ENABLED", False), \
+                patch.object(eis.settings, "WORLD_CUP_SOURCE_ENABLED", False), \
+                patch.object(eis.settings, "METACULUS_API_TOKEN", ""), \
+                patch.object(eis.settings, "OPEN_WEB_ENABLED", False):
+            candidates = _run(eis._collect_candidate_events(limit=10))
+
+        platforms = [c["source"]["platform"] for c in candidates]
+        self.assertEqual(platforms, ["Limitless", "Opinion", "Predict.fun"])
+
+    def test_credential_gated_onchain_sources_are_not_called_without_keys(self):
+        limitless = AsyncMock(return_value=[])
+        opinion = AsyncMock(return_value=[])
+        predict_fun = AsyncMock(return_value=[])
+        with patch("app.services.polymarket_event_source.fetch_candidate_events",
+                   new=AsyncMock(return_value=[])), \
+                patch("app.services.kalshi_event_source.fetch_candidate_events",
+                      new=AsyncMock(return_value=[])), \
+                patch("app.services.world_cup_event_source.fetch_candidate_events",
+                      new=AsyncMock(return_value=[])), \
+                patch("app.services.polymarket_event_source.fetch_crypto_candidate_events",
+                      new=AsyncMock(return_value=[])), \
+                patch("app.services.event_extraction_service.extract_candidate_events",
+                      new=AsyncMock(return_value=[])), \
+                patch("app.services.limitless_event_source.fetch_candidate_events",
+                      new=limitless), \
+                patch("app.services.opinion_event_source.fetch_candidate_events",
+                      new=opinion), \
+                patch("app.services.predict_fun_event_source.fetch_candidate_events",
+                      new=predict_fun), \
+                patch.object(eis.settings, "LIMITLESS_SOURCE_ENABLED", True), \
+                patch.object(eis.settings, "OPINION_API_KEY", ""), \
+                patch.object(eis.settings, "PREDICT_FUN_API_KEY", ""), \
+                patch.object(eis.settings, "POLYMARKET_CRYPTO_FETCH_ENABLED", False), \
+                patch.object(eis.settings, "WORLD_CUP_SOURCE_ENABLED", False), \
+                patch.object(eis.settings, "METACULUS_API_TOKEN", ""), \
+                patch.object(eis.settings, "OPEN_WEB_ENABLED", False):
+            _run(eis._collect_candidate_events(limit=5))
+
+        limitless.assert_awaited_once()
+        opinion.assert_not_awaited()
+        predict_fun.assert_not_awaited()
+
+    def test_probable_fetch_not_called(self):
+        import sys
+        import types
+
+        probable_fetch = AsyncMock(return_value=[])
+        probable_module = types.SimpleNamespace(fetch_candidate_events=probable_fetch)
+        with patch.dict(sys.modules, {"app.services.probable_event_source": probable_module}), \
+                patch("app.services.polymarket_event_source.fetch_candidate_events",
+                      new=AsyncMock(return_value=[])), \
+                patch("app.services.kalshi_event_source.fetch_candidate_events",
+                      new=AsyncMock(return_value=[])), \
+                patch("app.services.world_cup_event_source.fetch_candidate_events",
+                      new=AsyncMock(return_value=[])), \
+                patch("app.services.polymarket_event_source.fetch_crypto_candidate_events",
+                      new=AsyncMock(return_value=[])), \
+                patch("app.services.event_extraction_service.extract_candidate_events",
+                      new=AsyncMock(return_value=[])), \
+                patch.object(eis.settings, "LIMITLESS_SOURCE_ENABLED", False), \
+                patch.object(eis.settings, "OPINION_API_KEY", ""), \
+                patch.object(eis.settings, "PREDICT_FUN_API_KEY", ""), \
+                patch.object(eis.settings, "POLYMARKET_CRYPTO_FETCH_ENABLED", False), \
+                patch.object(eis.settings, "WORLD_CUP_SOURCE_ENABLED", False), \
+                patch.object(eis.settings, "METACULUS_API_TOKEN", ""), \
+                patch.object(eis.settings, "OPEN_WEB_ENABLED", False):
+            _run(eis._collect_candidate_events(limit=5))
+
+        probable_fetch.assert_not_called()
+
 
 class ActionableRecommendationTests(unittest.TestCase):
     """Tests for the actionable_recommendation field on EventRecord (Stage 3)."""

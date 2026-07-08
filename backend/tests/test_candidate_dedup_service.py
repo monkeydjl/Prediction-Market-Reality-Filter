@@ -79,6 +79,32 @@ class ExactDuplicateTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["source"]["platform"], "Polymarket")
 
+    def test_onchain_market_priority_order(self):
+        question = "Will BTC close above 150000 in 2026?"
+        candidates = [
+            _candidate(question, "Predict.fun"),
+            _candidate(question, "Opinion"),
+            _candidate(question, "Limitless"),
+            _candidate(question, "Kalshi"),
+            _candidate(question, "Polymarket"),
+        ]
+        self.assertEqual(
+            dedupe_candidates(candidates)[0]["source"]["platform"],
+            "Polymarket",
+        )
+
+    def test_probable_and_manifold_do_not_outrank_active_onchain_sources(self):
+        question = "Will ETH close above 5000 in 2026?"
+        candidates = [
+            _candidate(question, "Probable"),
+            _candidate(question, "Manifold"),
+            _candidate(question, "Predict.fun"),
+        ]
+        self.assertEqual(
+            dedupe_candidates(candidates)[0]["source"]["platform"],
+            "Predict.fun",
+        )
+
     def test_same_question_cross_source_keeps_higher_priority(self):
         # Same question from Polymarket and Manifold -> keep Polymarket.
         candidates = [

@@ -74,6 +74,7 @@ AGENTS.md
 HANDOFF.md
 .qoder/
 .workbuddy/
+.worktrees/
 .codegraph/
 hive.yml
 SESSION_MEMORY_*.md

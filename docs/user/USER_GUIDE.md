@@ -56,7 +56,7 @@ Dashboard / API 人工查看
 - 公开信息和预测市场的概率分析工具
 - 人工审查前的筛选、排序和记录系统
 
-当前主动发现的预测市场来源是 Polymarket 和 Kalshi。Opinion（BNB Chain）、Predict.fun（BNB Chain）、Probable（BNB Chain）和 Limitless（Base）会先作为计划接入的链上平台显示在 UI 中；在官方 API / indexer / 合约事件接口验证并实现 adapter 之前，它们不会贡献新事件。
+当前预测市场发现默认包括 Polymarket、Kalshi 和公共 Limitless adapter。Opinion 和 Predict.fun 已具备真实 adapter 接入路径，但分别需要 `OPINION_API_KEY` 和 `PREDICT_FUN_API_KEY`；没有密钥时会 fail closed，不贡献事件。Probable 仍保持计划接入状态，直到官方 API、indexer 或合约事件接口被验证。新增链上 adapter 暂不参与自动结算。
 
 ---
 
@@ -287,6 +287,9 @@ KALSHI_SOURCE_NAME=Kalshi
 - `GNEWS_MAX_RESULTS` 控制 Google News 返回数量。
 - `SEC_USER_AGENT` 和 `ECONOMIC_USER_AGENT` 建议改成真实联系人；SEC/BLS 这类站点可能拒绝默认或空 User-Agent。
 - `KALSHI_API_URL` 配置 Kalshi 事件 API；它是当前主动发现的预测市场来源之一。
+- `LIMITLESS_SOURCE_ENABLED` / `LIMITLESS_API_URL`: public Limitless market discovery.
+- `OPINION_API_KEY`: enables Opinion Open API market discovery.
+- `PREDICT_FUN_API_KEY`: enables Predict.fun beta API market discovery.
 
 ### 4.5 数据文件位置
 

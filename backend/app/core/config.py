@@ -369,6 +369,14 @@ class Settings:
     )
     LIMITLESS_SOURCE_NAME: str = os.getenv("LIMITLESS_SOURCE_NAME", "Limitless")
 
+    OPINION_SOURCE_ENABLED: bool = _env_bool("OPINION_SOURCE_ENABLED", "true")
+    OPINION_API_URL: str = os.getenv(
+        "OPINION_API_URL",
+        "https://openapi.opinion.trade/openapi/market",
+    )
+    OPINION_API_KEY: str = os.getenv("OPINION_API_KEY", "")
+    OPINION_SOURCE_NAME: str = os.getenv("OPINION_SOURCE_NAME", "Opinion")
+
     # Metaculus is a fourth prediction-question event source (community forecasts
     # on long-horizon science/tech/AI/policy questions). Unlike the market
     # sources, it requires an API token — register at metaculus.com, copy the
@@ -593,6 +601,7 @@ class Settings:
         "Polymarket": float(os.getenv("SOURCE_WEIGHT_POLYMARKET", "3.0")),
         "Kalshi": float(os.getenv("SOURCE_WEIGHT_KALSHI", "1.0")),
         "Limitless": float(os.getenv("SOURCE_WEIGHT_LIMITLESS", "0.8")),
+        "Opinion": float(os.getenv("SOURCE_WEIGHT_OPINION", "0.6")),
         "Open Web": float(os.getenv("SOURCE_WEIGHT_OPEN_WEB", "0.5")),
         "Polymarket Crypto": float(os.getenv("SOURCE_WEIGHT_POLYMARKET_CRYPTO", "1.0")),
         "World Cup": 0.3,

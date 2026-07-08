@@ -26,3 +26,13 @@ class OnChainSourceConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(settings.OPINION_API_KEY, "")
         self.assertEqual(settings.OPINION_SOURCE_NAME, "Opinion")
         self.assertIn("Opinion", settings.SOURCE_WEIGHTS)
+
+    def test_predict_fun_defaults_to_key_gated_endpoint(self):
+        self.assertTrue(settings.PREDICT_FUN_SOURCE_ENABLED)
+        self.assertEqual(
+            settings.PREDICT_FUN_API_URL,
+            "https://api.predict.fun/v1/markets",
+        )
+        self.assertEqual(settings.PREDICT_FUN_API_KEY, "")
+        self.assertEqual(settings.PREDICT_FUN_SOURCE_NAME, "Predict.fun")
+        self.assertIn("Predict.fun", settings.SOURCE_WEIGHTS)

@@ -1,35 +1,18 @@
 import { ExternalLink, LineChart } from "lucide-react";
 import type { EventRecord } from "@/lib/types";
 import { fmtPct, KIND_LABELS } from "@/lib/format";
+import {
+  PREDICTION_MARKET_PLATFORMS,
+  marketPlatformUrl,
+} from "@/lib/prediction-market-platforms";
 
 /**
  * Unified Market Panel: shows source market info (baseline, volume, liquidity)
- * plus search links to Polymarket, Kalshi, and Manifold.
+ * plus search links to Polymarket and Kalshi.
  *
  * This replaces the old MarketColumn (in evidence-list.tsx) and the standalone
  * MarketLinks component. Now there's one place for all market-related info.
  */
-
-const PLATFORMS = [
-  {
-    name: "Polymarket",
-    color: "bg-[#555EEF]",
-    search: (q: string) =>
-      `https://polymarket.com/markets?_q=${encodeURIComponent(q)}`,
-  },
-  {
-    name: "Kalshi",
-    color: "bg-[#1ABAFF]",
-    search: (q: string) =>
-      `https://kalshi.com/markets?search=${encodeURIComponent(q)}`,
-  },
-  {
-    name: "Manifold",
-    color: "bg-[#6366F1]",
-    search: (q: string) =>
-      `https://manifold.markets/search?q=${encodeURIComponent(q)}`,
-  },
-] as const;
 
 function fmtCompact(value: number | undefined) {
   const v = Number(value ?? 0);
@@ -100,7 +83,7 @@ export function MarketPanel({ record }: { record: EventRecord }) {
           </div>
         )}
 
-        {/* Platform search links - always shown */}
+        {/* Platform links: active sources plus planned on-chain sources */}
         {question && (
           <>
             <div className="border-t border-border pt-3">
@@ -108,21 +91,27 @@ export function MarketPanel({ record }: { record: EventRecord }) {
                 在所有平台搜索
               </h4>
               <div className="flex flex-col gap-2">
-                {PLATFORMS.map((p) => (
+                {PREDICTION_MARKET_PLATFORMS.map((p) => (
                   <a
-                    key={p.name}
-                    href={p.search(question)}
+                    key={p.key}
+                    href={marketPlatformUrl(p, question)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="group flex items-center gap-3 rounded-md border border-border px-3 py-2 transition-colors hover:bg-secondary/60"
                   >
                     <span
-                      className={`flex size-6 shrink-0 items-center justify-center rounded text-[10px] font-bold text-white ${p.color}`}
+                      className={`flex size-6 shrink-0 items-center justify-center rounded text-[10px] font-bold text-white ${p.colorClass}`}
                       aria-hidden="true"
                     >
                       {p.name[0]}
                     </span>
-                    <span className="flex-1 text-xs font-medium">{p.name}</span>
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="text-xs font-medium">{p.name}</span>
+                      <span className="text-[10px] text-muted-foreground">
+                        <span>{p.chain}</span>
+                        {!p.activeDiscovery ? <span> · planned</span> : null}
+                      </span>
+                    </span>
                     <ExternalLink className="size-3 text-muted-foreground transition-colors group-hover:text-foreground" />
                   </a>
                 ))}

@@ -223,7 +223,8 @@ async def _run_async_optimization_impl(engine_name: str, task_id: str) -> dict[s
                     engine_name=engine_name,
                     calibration_params=pattern_analysis["calibration_params"],
                     based_on_matches=pattern_analysis["samples"],
-                    description=f"Auto-tuned from {pattern_analysis['samples']} AI optimizations"
+                    description=f"Auto-tuned from {pattern_analysis['samples']} verified AI optimizations",
+                    avg_improvement=pattern_analysis.get("avg_improvement"),
                 )
 
                 final_result = {

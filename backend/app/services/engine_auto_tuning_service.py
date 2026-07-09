@@ -173,13 +173,38 @@ def calculate_optimization_patterns(engine_name: str) -> dict[str, Any]:
     """
     session = get_prediction_session()
     try:
-        # Get all optimizations for this engine
-        optimizations = session.query(AIOptimizedPrediction).filter(
+        # Get all optimizations for this engine. Only completed post-match
+        # comparisons can drive calibration; pre-match AI suggestions are
+        # useful as review notes but are not evidence that the adjustment works.
+        all_optimizations = session.query(AIOptimizedPrediction).filter(
             engine_method_filter(AIOptimizedPrediction.original_engine, engine_name)
         ).all()
+        optimizations = [
+            opt for opt in all_optimizations
+            if (
+                opt.actual_home_score is not None
+                and opt.actual_away_score is not None
+                and opt.original_error is not None
+                and opt.optimized_error is not None
+                and opt.optimization_improved is not None
+            )
+        ]
+        unverified_count = len(all_optimizations) - len(optimizations)
+
+        if not all_optimizations:
+            return {"status": "no_data", "message": f"No optimizations found for engine '{engine_name}'"}
 
         if not optimizations:
-            return {"status": "no_data", "message": f"No optimizations found for engine '{engine_name}'"}
+            return {
+                "status": "unverified",
+                "engine": engine_name,
+                "samples": 0,
+                "unverified_samples": unverified_count,
+                "message": (
+                    f"AI optimizations for engine '{engine_name}' have not been verified "
+                    "against finished match results; calibration was not generated."
+                ),
+            }
 
         # Analyze systematic biases
         home_score_diffs = []
@@ -230,6 +255,12 @@ def calculate_optimization_patterns(engine_name: str) -> dict[str, Any]:
             "status": "ok",
             "engine": engine_name,
             "samples": len(optimizations),
+            "unverified_samples": unverified_count,
+            "avg_improvement": round(
+                sum(1 for opt in optimizations if opt.optimization_improved == 1)
+                / len(optimizations),
+                3,
+            ),
             "calibration_params": calibration_params,
             "top_blind_spots": sorted(blind_spot_counts.items(), key=lambda x: x[1], reverse=True)[:5],
             "top_calibration_issues": sorted(calibration_issue_counts.items(), key=lambda x: x[1], reverse=True)[:5],
@@ -357,6 +388,8 @@ def get_active_calibration(engine_name: str) -> dict[str, Any] | None:
             "version": calibration.version,
             "params": calibration.calibration_params,
             "based_on_matches": calibration.based_on_matches,
+            "avg_improvement": calibration.avg_improvement,
+            "is_verified": calibration.avg_improvement is not None,
             "created_at": calibration.created_at.isoformat()
         }
 
@@ -380,6 +413,8 @@ def apply_calibration_to_prediction(
     calibration = get_active_calibration(engine_name)
     if not calibration:
         return prediction  # No calibration, return original
+    if not calibration.get("is_verified"):
+        return prediction
 
     params = calibration["params"]
     calibrated = prediction.copy()
@@ -450,7 +485,8 @@ async def run_full_auto_tuning_cycle(engine_name: str) -> dict[str, Any]:
         engine_name=engine_name,
         calibration_params=pattern_analysis["calibration_params"],
         based_on_matches=pattern_analysis["samples"],
-        description=f"Auto-tuned from {pattern_analysis['samples']} AI optimizations"
+        description=f"Auto-tuned from {pattern_analysis['samples']} verified AI optimizations",
+        avg_improvement=pattern_analysis.get("avg_improvement"),
     )
 
     return {

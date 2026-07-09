@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Activity, AlertTriangle, ChevronDown, RefreshCw } from "lucide-react";
-import { eventsApi, type ApiHealth, type ApiOverview, type LoopStatus } from "@/lib/api";
+import { eventsApi, type ApiHealth, type ApiOverview, type LlmDiagnostics, type LoopStatus } from "@/lib/api";
 import { fmtDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -23,6 +23,26 @@ const RUN_STATUS_META: Record<string, { label: string; cls: string }> = {
 const API_STATUS_META: Record<string, { label: string; cls: string; degraded: boolean }> = {
   ok: { label: "正常", cls: "border-pos/40 bg-pos/10 text-pos", degraded: false },
   degraded: { label: "降级", cls: "border-neg/40 bg-neg/10 text-neg", degraded: true },
+};
+
+const LLM_TASK_LABELS: Record<string, string> = {
+  default: "默认",
+  probability_analysis: "概率分析",
+  translation: "标题翻译",
+  open_web_extraction: "网页提取",
+  cross_validation: "交叉验证",
+  world_cup: "世界杯",
+  startup_check: "启动检查",
+  embedding: "向量嵌入",
+};
+
+const LLM_ROUTE_SOURCE_LABELS: Record<string, string> = {
+  task: "专用路由",
+  default: "默认路由",
+  indexed_openai: "编号 OpenAI",
+  legacy_openai: "旧 OpenAI",
+  legacy_embedding: "旧 Embedding",
+  none: "未配置",
 };
 
 function latestRun(status: LoopStatus) {
@@ -119,10 +139,26 @@ function historyTone(status: string) {
   return "bg-muted-foreground";
 }
 
+function llmTaskLabel(task: string) {
+  return LLM_TASK_LABELS[task] ?? task;
+}
+
+function llmRouteSourceLabel(source: string) {
+  return LLM_ROUTE_SOURCE_LABELS[source] ?? source;
+}
+
+function llmRouteMeta(configured: boolean) {
+  return configured
+    ? { label: "已配置", cls: "border-pos/40 bg-pos/10 text-pos" }
+    : { label: "未配置", cls: "border-neg/40 bg-neg/10 text-neg" };
+}
+
 export function SystemStatus() {
   const [status, setStatus] = useState<LoopStatus | null>(null);
   const [health, setHealth] = useState<ApiHealth | null>(null);
   const [overview, setOverview] = useState<ApiOverview | null>(null);
+  const [llmDiagnostics, setLlmDiagnostics] = useState<LlmDiagnostics | null>(null);
+  const [llmDiagnosticsError, setLlmDiagnosticsError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
@@ -131,12 +167,18 @@ export function SystemStatus() {
     setLoading(true);
     setError(null);
     try {
-      const [healthResp, overviewResp] = await Promise.all([
+      const [healthResp, overviewResp, llmDiagnosticsResp] = await Promise.all([
         eventsApi.health(),
         eventsApi.overview().catch(() => null),
+        eventsApi.llmDiagnostics().catch((e) => {
+          setLlmDiagnosticsError(e instanceof Error ? e.message : "LLM 诊断加载失败");
+          return null;
+        }),
       ]);
       setHealth(healthResp);
       setOverview(overviewResp);
+      setLlmDiagnostics(llmDiagnosticsResp);
+      if (llmDiagnosticsResp) setLlmDiagnosticsError(null);
       setStatus(healthResp.loop);
     } catch (e) {
       setError(e instanceof Error ? e.message : "状态加载失败");
@@ -157,7 +199,10 @@ export function SystemStatus() {
   const failed = runs.some(([, r]) => r.status === "failed");
   const running = status?.scheduler?.running;
   const apiMeta = apiStatusMeta(health?.status);
-  const degraded = apiMeta.degraded || failed || running === false;
+  const llmTaskCount = llmDiagnostics?.tasks.length ?? 0;
+  const llmConfiguredTaskCount = llmDiagnostics?.configured_task_count ?? 0;
+  const llmUnconfigured = (llmDiagnostics?.unconfigured_task_count ?? 0) > 0;
+  const degraded = apiMeta.degraded || failed || running === false || llmUnconfigured;
   const failedWithoutDetails = runs.some(([, r]) => r.status === "failed" && !r.error);
   const endpointCount = overview?.endpoints ? Object.keys(overview.endpoints).length : null;
   const danglingRefs =
@@ -213,6 +258,9 @@ export function SystemStatus() {
             <span className="rounded bg-secondary px-2 py-1">校准样本 {status?.counts?.calibration_n ?? "—"}</span>
             <span className="rounded bg-secondary px-2 py-1">版本 {overview?.version ?? health?.version ?? "—"}</span>
             <span className="rounded bg-secondary px-2 py-1">接口 {endpointCount ?? "—"}</span>
+            <span className="rounded bg-secondary px-2 py-1">
+              LLM 路由 {llmDiagnostics ? `${llmConfiguredTaskCount}/${llmTaskCount}` : "—"}
+            </span>
           </div>
         </div>
         <div className="flex items-center justify-between gap-3 md:justify-end">
@@ -231,6 +279,65 @@ export function SystemStatus() {
 
       {expanded && (
         <>
+          <div className="border-t border-border pt-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-foreground">LLM 网关路由</span>
+              {llmDiagnostics && (
+                <span className="text-[11px] text-muted-foreground">
+                  已配置 {llmConfiguredTaskCount}/{llmTaskCount} 个任务
+                </span>
+              )}
+            </div>
+            {llmDiagnosticsError ? (
+              <p className="rounded-md border border-neg/40 bg-neg/10 px-3 py-2 text-xs leading-relaxed text-neg">
+                {llmDiagnosticsError}
+              </p>
+            ) : !llmDiagnostics ? (
+              <p className="py-2 text-xs text-muted-foreground">暂无 LLM 诊断数据。</p>
+            ) : (
+              <div className="grid gap-2 md:grid-cols-2">
+                {llmDiagnostics.tasks.map((task) => {
+                  const meta = llmRouteMeta(task.configured);
+                  return (
+                    <div key={task.task} className="rounded-md border border-border bg-background/40 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium">{llmTaskLabel(task.task)}</span>
+                            <span className={cn("rounded-md border px-2 py-0.5 text-[11px] font-medium", meta.cls)}>
+                              {meta.label}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            {task.setting} · {llmRouteSourceLabel(task.route_source)}
+                          </div>
+                        </div>
+                      </div>
+                      {task.routes.length === 0 ? (
+                        <p className="mt-2 text-xs text-muted-foreground">未解析到 provider/model 路由。</p>
+                      ) : (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {task.routes.map((route, index) => (
+                            <span
+                              key={`${task.task}:${route.provider}:${index}`}
+                              className={cn(
+                                "rounded bg-secondary px-2 py-1 font-mono text-[11px]",
+                                route.api_key_configured ? "text-foreground" : "text-muted-foreground",
+                              )}
+                              title={`models=${route.models.join(", ") || "none"}; key=${route.api_key_configured ? "yes" : "no"}; base_url=${route.base_url_configured ? "yes" : "no"}`}
+                            >
+                              {route.provider} · {route.models.length} models · key {route.api_key_configured ? "yes" : "no"}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           <div className="border-t border-border pt-3">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-medium text-foreground">循环任务</span>

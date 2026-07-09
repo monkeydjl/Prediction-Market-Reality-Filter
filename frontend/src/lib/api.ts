@@ -313,6 +313,28 @@ export interface LoopStatus {
   calibration?: PredictionCalibration;
 }
 
+export interface LlmDiagnosticRoute {
+  provider: string;
+  models: string[];
+  provider_configured: boolean;
+  api_key_configured: boolean;
+  base_url_configured: boolean;
+}
+
+export interface LlmDiagnosticTask {
+  task: string;
+  setting: string;
+  route_source: string;
+  configured: boolean;
+  routes: LlmDiagnosticRoute[];
+}
+
+export interface LlmDiagnostics {
+  tasks: LlmDiagnosticTask[];
+  configured_task_count: number;
+  unconfigured_task_count: number;
+}
+
 // ── M6 Simulated trades ────────────────────────────────────────────
 
 export interface SimTrade {
@@ -1013,6 +1035,9 @@ export const eventsApi = {
 
   loopStatus: () =>
     api<LoopStatus>("/events/loop/status"),
+
+  llmDiagnostics: () =>
+    api<LlmDiagnostics>("/llm/diagnostics"),
 
   discoverStatus: () =>
     api<Record<string, unknown>>("/events/discover/status", undefined, { cacheGet: false }),

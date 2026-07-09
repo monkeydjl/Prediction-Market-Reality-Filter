@@ -46,7 +46,7 @@ function deriveVerdict(event: EventView): { level: "follow" | "watch" | "drop"; 
   if (strongMove || event.evidenceSupport >= 0.45)
     return {
       level: "watch",
-      text: "存在一定异动或证据支持，但尚未充分印证，建议保持观察并等待更多确认。",
+      text: "存在一定异动或证据支持，但尚未充分印证，建议继续观察事件进展并等待更多确认。",
     };
   return {
     level: "drop",
@@ -71,13 +71,14 @@ export function SignalSummary({
         ? "border-warn/40 bg-warn/10 text-warn"
         : "border-border bg-secondary text-muted-foreground";
   const verdictLabel =
-    verdict.level === "follow" ? "建议继续跟踪" : verdict.level === "watch" ? "保持观察" : "可降低关注";
+    verdict.level === "follow" ? "建议继续跟踪" : verdict.level === "watch" ? "继续观察事件进展" : "可降低关注";
 
   const divergence = crossValidation?.divergence;
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
-      <h3 className="text-sm font-semibold">判断概要</h3>
+      <h3 className="text-sm font-semibold">事件跟踪概要</h3>
+      <p className="text-xs text-muted-foreground">此处评估是否继续跟踪事件，不代表交易行动建议。</p>
 
       <div className={cn("rounded-md border px-3 py-2.5", verdictStyle)}>
         <div className="text-sm font-semibold">{verdictLabel}</div>

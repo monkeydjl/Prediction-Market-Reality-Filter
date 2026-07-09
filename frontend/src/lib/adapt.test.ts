@@ -50,6 +50,36 @@ describe("adaptRecord", () => {
 
     expect(view.category).toBe("sports_event");
   });
+
+  it("falls back from unknown base-rate category to source event type", () => {
+    const record = {
+      event_id: "evt-4",
+      event_title: "Will Congress pass the budget bill?",
+      source: { type: "open_web", platform: "news", event_type: "policy" },
+      legacy_analysis: { base_rate_category: "unknown" },
+    } as EventRecord & { legacy_analysis: { base_rate_category: string } };
+
+    const view = adaptRecord(record);
+
+    expect(view.category).toBe("policy");
+  });
+
+  it("uses source category before generic source type", () => {
+    const record = {
+      event_id: "evt-5",
+      event_title: "Will a player win the Golden Boot?",
+      source: {
+        type: "prediction_market",
+        platform: "Polymarket",
+        category: "player_awards",
+      },
+      legacy_analysis: {},
+    } as EventRecord & { legacy_analysis: Record<string, unknown> };
+
+    const view = adaptRecord(record);
+
+    expect(view.category).toBe("player_awards");
+  });
 });
 
 describe("trendOf", () => {

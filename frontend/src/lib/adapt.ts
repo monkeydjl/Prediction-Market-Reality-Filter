@@ -67,8 +67,17 @@ function categoryOf(record: EventRecord): string {
   const legacy = (record as unknown as { legacy_analysis?: Record<string, unknown> })
     .legacy_analysis;
   const cat = legacy?.base_rate_category;
-  if (typeof cat === "string" && cat) return cat;
-  return record.source?.type || record.source?.platform || "general";
+  if (typeof cat === "string" && cat && cat !== "unknown") return cat;
+  const source = record.source as
+    | (EventRecord["source"] & { category?: string; event_type?: string })
+    | undefined;
+  return (
+    source?.category ||
+    source?.event_type ||
+    source?.type ||
+    source?.platform ||
+    "general"
+  );
 }
 
 export function adaptRecord(record: EventRecord): EventView {

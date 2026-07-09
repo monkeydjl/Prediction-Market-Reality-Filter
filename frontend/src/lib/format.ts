@@ -9,6 +9,8 @@ export const CATEGORY_LABELS: Record<string, string> = {
   governor_election: "州长选举",
   state_election: "州级选举",
   politics: "政治",
+  politics_general: "政治综合",
+  geopolitics_general: "地缘政治综合",
   geopolitics: "地缘政治",
 
   // ── 地缘与冲突 ──
@@ -23,6 +25,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   inflation_data: "通胀数据",
   monetary: "货币政策",
   macro: "宏观",
+  policy_general: "Policy",
   markets: "市场",
 
   // ── 加密货币 ──
@@ -36,6 +39,8 @@ export const CATEGORY_LABELS: Record<string, string> = {
 
   // ── 科技与 AI ──
   ai_release: "AI 产品发布",
+  tech_product: "Tech product",
+  company_earnings: "Company earnings",
   technology: "科技",
   science_event: "科学事件",
 
@@ -52,11 +57,17 @@ export const CATEGORY_LABELS: Record<string, string> = {
 
   // ── 体育 ──
   sports_event: "世界杯",
+  sports_general: "Sports",
   sports_championship: "体育冠军",
   sports_game: "单场比赛",
 
   // ── 其他 ──
+  player_awards: "Player awards",
+
   natural_disaster: "自然灾害",
+  weather_event: "Weather",
+  entertainment_awards: "Entertainment awards",
+  health_event: "Health",
   "supply-chain": "供应链",
   general: "综合",
   unknown: "未分类",

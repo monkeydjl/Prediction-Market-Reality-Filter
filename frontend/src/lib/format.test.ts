@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fmtPct, fmtSignedPct } from "./format";
+import { categoryLabel, fmtPct, fmtSignedPct } from "./format";
 
 describe("formatters", () => {
   it("formats finite percentage and edge values", () => {
@@ -13,5 +13,21 @@ describe("formatters", () => {
     expect(fmtPct(Number.POSITIVE_INFINITY)).toBe("—");
     expect(fmtSignedPct(Number.NaN)).toBe("—");
     expect(fmtSignedPct(Number.NEGATIVE_INFINITY)).toBe("—");
+  });
+});
+
+describe("category labels", () => {
+  it("translates broad politics categories to Chinese", () => {
+    expect(categoryLabel("politics_general")).toBe("政治综合");
+    expect(categoryLabel("geopolitics_general")).toBe("地缘政治综合");
+  });
+
+  it("labels broad event categories instead of showing raw keys", () => {
+    expect(categoryLabel("politics_general")).not.toBe("politics_general");
+    expect(categoryLabel("geopolitics_general")).not.toBe("geopolitics_general");
+    expect(categoryLabel("sports_general")).not.toBe("sports_general");
+    expect(categoryLabel("policy_general")).not.toBe("policy_general");
+    expect(categoryLabel("tech_product")).not.toBe("tech_product");
+    expect(categoryLabel("entertainment_awards")).not.toBe("entertainment_awards");
   });
 });

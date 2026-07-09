@@ -19,7 +19,7 @@ It calls the source adapters directly (the SAME fetch_*_events the discovery
 pipeline uses), so the numbers reflect exactly what discover_events sees as
 candidates BEFORE dedupe / reality filter / LLM analysis.
 
-Needs network to reach Polymarket / Manifold / Kalshi. Read-only: does not
+Needs network to reach Polymarket / Kalshi. Read-only: does not
 write to the store, cache, or audit. Safe to run anytime.
 
 Usage (from the backend/ directory):
@@ -42,26 +42,6 @@ CRYPTO_KEYWORDS = (
 def _is_crypto(question: str) -> bool:
     q = (question or "").lower()
     return any(kw in q for kw in CRYPTO_KEYWORDS)
-
-
-async def _probe_manifold(limit: int) -> None:
-    from app.services.manifold_event_source import (
-        fetch_candidate_events,
-        _fetch_raw_markets,
-        _is_eligible,
-    )
-
-    print("\n[Manifold]  (sort=score, filter=open BINARY)")
-    try:
-        raw = await _fetch_raw_markets(limit)
-    except Exception as exc:  # noqa: BLE001 - diagnostic
-        print(f"  RAW FETCH FAILED: {exc}")
-        return
-    eligible = [m for m in raw if _is_eligible(m)]
-    candidates = await fetch_candidate_events(limit)
-    _print_block("raw", raw, key=lambda m: m.get("question", ""))
-    _print_block("eligible", eligible, key=lambda m: m.get("question", ""))
-    _print_crypto(candidates, key=lambda c: c.get("question", ""))
 
 
 async def _probe_kalshi(limit: int) -> None:
@@ -123,7 +103,6 @@ async def _main(limit: int) -> None:
     print(f"Candidate-source probe  (limit per source = {limit})")
     print("Each source's raw fetch -> its own eligibility filter -> crypto count.")
     await _probe_polymarket(limit)
-    await _probe_manifold(limit)
     await _probe_kalshi(limit)
     print("\nDone. If crypto survivors are 0 across sources, the shortage is")
     print("upstream in ranking (volume/score), not in the evidence layer.")

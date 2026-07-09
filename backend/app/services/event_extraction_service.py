@@ -3,7 +3,7 @@
 Structured event extraction: turn collected open-web articles into native
 candidate events, not just evidence.
 
-Where the market event sources (polymarket / manifold / kalshi) produce candidate
+Where the market event sources (polymarket / kalshi) produce candidate
 events from market prices, this produces them from the news the collector already
 fetches: an LLM reads a batch of articles and extracts forward-looking, resolvable
 yes/no event questions (with entities and a coarse event_type). Each becomes a

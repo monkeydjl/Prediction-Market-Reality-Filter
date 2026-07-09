@@ -193,7 +193,7 @@ def _settlement_pnl_pct(
 
     ``market_prob`` is the tradable YES price at entry. ``entry_prob`` is the
     system's estimate and is useful for edge sizing, but it is not the fill
-    price. Manifold MKT/partial resolutions can settle anywhere in [0, 100],
+    price. Partial market resolutions can settle anywhere in [0, 100],
     so win/loss must be based on payout minus entry price, not binary
     YES>=99/NO<=1 thresholds.
     """

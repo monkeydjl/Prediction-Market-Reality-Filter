@@ -5,7 +5,6 @@ forward-only changes in the event sources + discovery flow:
 
 1. Market URL (source.url) for prediction_market events that lack it:
    - Kalshi:     built offline from the event_ticker (source_id).
-   - Manifold:   fetched live from the Manifold API by market id.
    - Polymarket: fetched live from the gamma API by market id (slug -> URL).
    Best-effort: a source whose URL can't be obtained is left unchanged (a future
    discovery scan captures it natively).
@@ -24,7 +23,7 @@ Usage (from the backend/ directory):
     python scripts/backfill_market_zh.py --no-translate  # URLs only
     python scripts/backfill_market_zh.py --limit 10      # only the first N events
 Needs OPENAI_API_KEY (in backend/.env) for translation; network for
-Manifold/Polymarket URLs. Both degrade gracefully when unavailable.
+Polymarket URLs. URL lookups degrade gracefully when unavailable.
 """
 
 import argparse
@@ -50,21 +49,6 @@ from app.services.translation_service import translate_articles  # noqa: E402
 
 def _kalshi_url(ticker: str) -> str:
     return f"https://kalshi.com/markets/{ticker.lower()}" if ticker else ""
-
-
-async def _manifold_url(client: httpx.AsyncClient, market_id: str) -> str:
-    if not market_id:
-        return ""
-    try:
-        resp = await client.get(
-            f"https://api.manifold.markets/v0/market/{market_id}"
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:  # noqa: BLE001 - best effort, skip on failure
-        print(f"    ! manifold {market_id}: {exc}")
-        return ""
-    return str((data or {}).get("url") or "")
 
 
 async def _polymarket_url(client: httpx.AsyncClient, market_id: str) -> str:
@@ -98,8 +82,6 @@ async def _resolve_url(
         return _kalshi_url(source_id)
     if not use_network:
         return ""
-    if "manifold" in platform:
-        return await _manifold_url(client, source_id)
     if "polymarket" in platform:
         return await _polymarket_url(client, source_id)
     return ""
@@ -110,7 +92,7 @@ async def main() -> None:
         description="Backfill market URLs + Chinese news on stored events."
     )
     parser.add_argument("--no-network", action="store_true",
-                        help="Skip Manifold/Polymarket API lookups (Kalshi URLs only)")
+                        help="Skip Polymarket API lookups (Kalshi URLs only)")
     parser.add_argument("--no-translate", action="store_true",
                         help="Skip news translation (URLs only)")
     parser.add_argument("--limit", type=int, default=0, help="Only the first N events")

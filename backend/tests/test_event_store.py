@@ -186,6 +186,46 @@ class EventStoreTests(unittest.TestCase):
         self.assertEqual([e["event_id"] for e in listed], ["world-cup"])
         self.assertEqual(count, 1)
 
+    def test_unknown_base_rate_falls_back_to_source_event_type(self):
+        open_web = _make_record("open-web-policy", value_score=70, estimated=62)
+        open_web["event_title"] = "Will Congress pass the budget bill?"
+        open_web["source"] = {
+            "type": "open_web",
+            "platform": "news",
+            "event_type": "policy",
+        }
+        open_web["legacy_analysis"] = {"base_rate_category": "unknown"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                store.save_event(open_web)
+                listed = store.list_events(category="policy")
+                count = store.count_events(category="policy")
+
+        self.assertEqual([e["event_id"] for e in listed], ["open-web-policy"])
+        self.assertEqual(count, 1)
+
+    def test_missing_base_rate_falls_back_to_source_category_before_type(self):
+        sourced = _make_record("source-category", value_score=70, estimated=62)
+        sourced["event_title"] = "Will a player win the Golden Boot?"
+        sourced["source"] = {
+            "type": "prediction_market",
+            "platform": "Polymarket",
+            "category": "player_awards",
+        }
+        sourced["legacy_analysis"] = {}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                store.save_event(sourced)
+                listed = store.list_events(category="player_awards")
+                count = store.count_events(category="player_awards")
+
+        self.assertEqual([e["event_id"] for e in listed], ["source-category"])
+        self.assertEqual(count, 1)
+
     def test_save_event_rejects_missing_event_id(self):
         bad = _make_record()
         del bad["event_id"]

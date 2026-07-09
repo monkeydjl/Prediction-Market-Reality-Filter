@@ -365,8 +365,12 @@ def _category(record: dict[str, Any]) -> str:
     source = record.get("source") or {}
     if source.get("type") == "sports_event":
         return "sports_event"
+    legacy_category = str(legacy.get("base_rate_category") or "").strip()
+    if legacy_category and legacy_category != "unknown":
+        return legacy_category
     return str(
-        legacy.get("base_rate_category")
+        source.get("category")
+        or source.get("event_type")
         or source.get("type")
         or source.get("platform")
         or "general"

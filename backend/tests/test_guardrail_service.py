@@ -346,6 +346,26 @@ class TestRule2UncalibratedCategory(unittest.TestCase):
         self.assertIn("未校准类别", reason)
         self.assertEqual(fired, ["uncalibrated_category_blocks_act"])
 
+    def test_unknown_base_rate_uses_source_event_type(self):
+        record = _record(category="unknown", source_type="open_web")
+        record["source"]["event_type"] = "policy"
+
+        direction, reason, fired = evaluate_guardrails(
+            final_direction="YES",
+            final_downgrade_reason=None,
+            record=record,
+            enabled=True,
+            llm_degraded_blocks_act=False,
+            uncalibrated_category_blocks_act=True,
+            high_conflict_blocks_act=False,
+            high_conflict_threshold=0.40,
+            qualified_categories={"policy"},
+        )
+
+        self.assertEqual(direction, "YES")
+        self.assertIsNone(reason)
+        self.assertEqual(fired, [])
+
     def test_does_not_fire_when_rule_disabled(self):
         record = _record(category="politics")
         direction, reason, fired = evaluate_guardrails(

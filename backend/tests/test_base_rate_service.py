@@ -66,6 +66,55 @@ class ClassifyMarketPositiveTests(unittest.TestCase):
         result = classify_market("Will Brazil reach the FIFA World Cup semifinals?")
         self.assertEqual(result.category, "sports_general")
 
+    def test_sports_general_tour_de_france(self):
+        result = classify_market(
+            "Will Decathlon CMA CGM Team bring this exact team to the 2026 Tour de France?"
+        )
+        self.assertEqual(result.category, "sports_general")
+
+    def test_sports_game_win_against(self):
+        result = classify_market("Will Portugal win against Croatia?")
+        self.assertEqual(result.category, "sports_game")
+
+    def test_geopolitics_regime_fall(self):
+        result = classify_market("Will Iran's regime fall in 2026?")
+        self.assertEqual(result.category, "geopolitics_general")
+
+    def test_geopolitics_strait_of_hormuz(self):
+        result = classify_market(
+            "Strait of Hormuz traffic returns to normal by July 7? [Polymarket]"
+        )
+        self.assertEqual(result.category, "geopolitics_general")
+
+    def test_btc_price_price_of_bitcoin(self):
+        result = classify_market("Will the price of Bitcoin be above $58,000 on July 4?")
+        self.assertEqual(result.category, "crypto_price_btc")
+
+    def test_congressional_house_seat(self):
+        result = classify_market("Will the Republican Party win the TX-31 House seat?")
+        self.assertEqual(result.category, "congressional")
+
+    def test_policy_department_abolished(self):
+        result = classify_market("Department of Education abolished by July 4, 2026")
+        self.assertEqual(result.category, "policy_general")
+
+    def test_remaining_unknown_sample_patterns(self):
+        examples = {
+            "Will Pete Hegseth leave the Trump administration before 2027?": "politics_general",
+            "Fable reenabled for Europeans before July 1?": "tech_product",
+            "Will Elon Musk visit Mars in his lifetime?": "science_event",
+            "Tampa Bay Rays vs. Boston Red Sox": "sports_game",
+            "Will Dan Sullivan win the Alaska Senate race in 2026?": "congressional",
+            "Will Ukraine win the Russo-Ukrainian War?": "geopolitics_general",
+            "Will the WTI Crude Oil Spot Price be above $76 on June 29, 2026?": "markets",
+            "Will the Bank of Russia make no change to the key rate after the July Meeting?": "monetary",
+            "Next Pirates of the Caribbean film: Will Johnny Depp be cast?": "entertainment_awards",
+        }
+
+        for question, expected in examples.items():
+            with self.subTest(question=question):
+                self.assertEqual(classify_market(question).category, expected)
+
     def test_unknown_fallback(self):
         """A completely unrelated question falls back to unknown."""
         result = classify_market("Will aliens land on the White House?")

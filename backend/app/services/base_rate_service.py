@@ -50,7 +50,8 @@ _RULES: list[tuple[list[str], BaseRate]] = [
 
     (["win senate seat", "win the senate race", "win senate election",
       "hold exactly", "senate seats after", "control the senate",
-      "win senate", "win house seat", "win the house race"],
+      "win senate", "win house seat", "win the house race", "house seat",
+      "senate race", "senate seat"],
      BaseRate("congressional", 20, 80, 48,
               "国会选举：中期执政党往往失利，约-5%优势")),
 
@@ -90,7 +91,8 @@ _RULES: list[tuple[list[str], BaseRate]] = [
      BaseRate("crypto_ath", 10, 55, 28,
               "ATH 需要牛市条件，年度概率约20-40%")),
 
-    (["bitcoin above", "bitcoin reach", "bitcoin price", "bitcoin hit",
+    (["bitcoin above", "bitcoin be above", "price of bitcoin",
+      "bitcoin reach", "bitcoin price", "bitcoin hit",
       "btc above", "btc reach", "btc price", "btc hit",
       "will bitcoin"],
      BaseRate("crypto_price_btc", 20, 80, 50,
@@ -163,7 +165,9 @@ _RULES: list[tuple[list[str], BaseRate]] = [
      BaseRate("sports_championship", 3, 50, 18,
               "体育冠军：赛前赔率通常有效，关注受伤信息")),
 
-    (["win the game", "win the match", "beat the", "defeat the"],
+    (["win the game", "win the match", "win against", "beat the", "defeat the",
+      " vs. ", "spread:", "exact score", "both teams to score", "o/u",
+      "total corners", "ufc", "wimbledon"],
      BaseRate("sports_game", 30, 70, 50,
               "单场比赛：赔率市场非常有效")),
 
@@ -212,7 +216,8 @@ _COARSE_RULES: list[tuple[list[str], BaseRate]] = [
               "Weather event: use broad climatology/model prior when no precise category exists")),
 
     (["oscar", "oscars", "academy award", "grammy", "emmy",
-      "golden globe", "best picture", "best actor", "best actress"],
+      "golden globe", "best picture", "best actor", "best actress",
+      "box office", "film:", "movie", "be cast"],
      BaseRate("entertainment_awards", 10, 70, 35,
               "Entertainment awards: nominee fields are broad; favorites often still overbet")),
 
@@ -222,7 +227,10 @@ _COARSE_RULES: list[tuple[list[str], BaseRate]] = [
               "Company earnings: analyst expectations anchor the prior, surprises remain common")),
 
     (["bill pass", "pass the bill", "congress pass", "legislation",
-      "executive order", "government shutdown", "budget deal"],
+      "executive order", "government shutdown", "budget deal",
+      "department of education", "abolished",
+      "presidential nomination", "win a seat", "win the most seats",
+      "premier of", "presidency member", "parliamentary elections"],
      BaseRate("policy_general", 15, 70, 40,
               "General policy: political process risk makes headline timelines uncertain")),
 
@@ -232,23 +240,43 @@ _COARSE_RULES: list[tuple[list[str], BaseRate]] = [
               "Health event: regulatory/scientific evidence is useful but timing is uncertain")),
 
     (["world cup", "fifa", "nba", "nfl", "mlb", "uefa",
-      "champions league", "olympics", "semifinals", "quarterfinals"],
+      "champions league", "olympics", "semifinals", "quarterfinals",
+      "tour de france", "lck", "playoffs", "win on 2026-"],
      BaseRate("sports_general", 20, 80, 45,
               "General sports: odds markets are usually informative; tournament paths add variance")),
 
     (["iphone", "apple event", "product launch", "release date",
-      "app store", "robotaxi", "software update"],
+      "app store", "robotaxi", "software update", "reenabled",
+      "released today"],
      BaseRate("tech_product", 20, 75, 45,
               "Tech product launch: company roadmaps leak partly but dates/features slip")),
 
     (["election", "referendum", "prime minister", "parliament",
-      "ballot", "polls", "vote share"],
+      "ballot", "polls", "vote share", "leave the trump administration",
+      "trump out as president", "out as president", "fbi director"],
      BaseRate("politics_general", 20, 80, 50,
               "General politics: use polling/institutional baseline when no specific race category exists")),
 
-    (["nato", "un vote", "eu summit", "treaty", "diplomatic talks"],
+    (["nato", "un vote", "eu summit", "treaty", "diplomatic talks",
+      "regime fall", "regime collapse", "strait of hormuz",
+      "russo-ukrainian war", "russian attacks", "invades finland",
+      "russia capture", "diplomatic meeting"],
      BaseRate("geopolitics_general", 10, 60, 30,
               "General geopolitics: negotiation and escalation timing is hard to forecast")),
+
+    (["crude oil", "spot price", "gas prices", "stock index"],
+     BaseRate("markets", 20, 80, 50,
+              "General markets: broad market prices are noisy but liquid markets anchor priors")),
+
+    (["key rate", "official cash rate", "central bank", "bank of russia",
+      "reserve bank"],
+     BaseRate("monetary", 20, 80, 50,
+              "Monetary policy: central-bank decisions are anchored by macro data and market pricing")),
+
+    (["land on mars", "visit mars", "colonize mars", "walk on mars",
+      "supervolcano"],
+     BaseRate("science_event", 15, 70, 35,
+              "Science and extreme events: timelines are uncertain and base rates are low")),
 ]
 
 # Pre-sort rules once by longest keyword descending (most specific first) so

@@ -429,7 +429,14 @@ class EdgeRouteTests(unittest.TestCase):
             with patch.object(audit, "_audit_path", return_value=path):
                 resp = client.get("/events/edges/fresh")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), {"count": 0, "edges": []})
+        body = resp.json()
+        self.assertEqual(body["count"], 0)
+        self.assertEqual(body["total"], 0)
+        self.assertEqual(body["limit"], 10)
+        self.assertEqual(body["offset"], 0)
+        self.assertEqual(body["classification"], "fresh")
+        self.assertEqual(body["classification_totals"], {})
+        self.assertEqual(body["edges"], [])
 
     def test_edge_monitor_route_can_return_all_classes_with_series(self):
         app = FastAPI()

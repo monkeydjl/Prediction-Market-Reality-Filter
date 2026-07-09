@@ -589,7 +589,13 @@ export interface LLMTelemetry {
 }
 export interface FreshEdgesResponse {
   count?: number;
+  total?: number;
+  limit?: number;
+  offset?: number;
   classification?: string | null;
+  classification_totals?: {
+    [k: string]: number;
+  };
   edges?: {
     [k: string]: unknown;
   }[];
@@ -597,6 +603,12 @@ export interface FreshEdgesResponse {
 }
 export interface OpenDecisionsResponse {
   count?: number;
+  total?: number;
+  limit?: number;
+  offset?: number;
+  decision_totals?: {
+    [k: string]: number;
+  };
   decisions?: {
     [k: string]: unknown;
   }[];
@@ -609,6 +621,10 @@ export interface PendingLinksResponse {
   [k: string]: unknown;
 }
 export interface RecentPredictionsResponse {
+  count?: number;
+  total?: number;
+  limit?: number;
+  offset?: number;
   predictions?: {
     [k: string]: unknown;
   }[];

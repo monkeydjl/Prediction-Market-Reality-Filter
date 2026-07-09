@@ -53,6 +53,7 @@ from app.services.world_cup_data_quality import (
     SCORE_VERSION,
     age_days_from_source,
     age_minutes_from_source,
+    all_sources_look_real,
     calculate_data_quality_score,
     source_looks_real,
 )
@@ -66,7 +67,7 @@ logger = logging.getLogger(__name__)
 
 # Prediction engine selection
 PredictionEngine = Literal["elo_odds", "hybrid", "integrated", "high_confidence", "auto"]
-DEFAULT_ENGINE: PredictionEngine = "auto"  # Auto-select based on data availability
+DEFAULT_ENGINE: PredictionEngine = "auto"  # Auto-select the official default engine.
 
 
 def _run_world_cup_conclusion_challenge(
@@ -109,10 +110,10 @@ def _run_world_cup_conclusion_challenge(
             "warnings": [{
                 "check": "challenge_error",
                 "severity": "warning",
-                "reason": "结论否定门执行失败，已保留原预测。",
+                "reason": "challenge execution failed; original prediction kept",
                 "details": {"error": str(exc)},
             }],
-            "challenge_summary": "结论否定门执行失败，已保留原预测。",
+            "challenge_summary": "challenge execution failed; original prediction kept",
             "critic_notes": {},
             "attempt_count": attempt_count,
         }
@@ -242,7 +243,7 @@ def build_explanation_contributions(
             "pp",
             elo_home_impact,
             elo_away_impact,
-            f"Elo差 {home_elo - away_elo:+.0f} 点，反映长期球队强度。",
+            f"Elo gap {home_elo - away_elo:+.0f} points reflects long-term team strength.",
         )
     ]
 
@@ -262,20 +263,20 @@ def build_explanation_contributions(
         )
         items.append(_impact_item(
             "odds",
-            "赔率",
+            "Market odds",
             "pp",
             (market_probs["home_win"] - elo_probs["home_win"]) * 100,
             (market_probs["away_win"] - elo_probs["away_win"]) * 100,
-            "赔率隐含概率相对 Elo 的修正，代表盘口吸收的临场信息。",
+            "Market odds adjust the Elo baseline using current pricing.",
         ))
     else:
         items.append(_impact_item(
             "odds",
-            "赔率",
+            "Market odds",
             "pp",
             0.0,
             0.0,
-            "没有可用真实赔率，赔率贡献未参与。",
+            "No trusted market odds were available for this prediction.",
             available=False,
         ))
 
@@ -285,11 +286,11 @@ def build_explanation_contributions(
     away_schedule = 0.96 if away_density == "high" else (0.98 if away_density == "medium" else 1.0)
     items.append(_impact_item(
         "schedule",
-        "赛程",
+        "Schedule",
         "%xg",
         (home_schedule - 1.0) * 100,
         (away_schedule - 1.0) * 100,
-        "赛程密度对预期进球的疲劳修正。",
+        "Fixture congestion can reduce expected performance.",
         available=bool(home_factor or away_factor),
     ))
 
@@ -297,11 +298,11 @@ def build_explanation_contributions(
     away_injury = _safe_float(away_factor.get("injury_impact"), 0.0)
     items.append(_impact_item(
         "injury",
-        "伤停",
+        "Injury",
         "xg",
         home_injury,
         away_injury,
-        "伤停对本队预期进球的直接修正。",
+        "Injury impact adjusts expected goals when team news is available.",
         available=bool(home_factor or away_factor),
     ))
 
@@ -319,11 +320,11 @@ def build_explanation_contributions(
         away_motivation -= 20.0
     items.append(_impact_item(
         "motivation",
-        "动机",
+        "Motivation",
         "%xg",
         home_motivation,
         away_motivation,
-        "出线形势、必须取胜或已出线/出局状态带来的动机修正。",
+        "Group stakes and qualification status adjust motivation.",
         available=bool(context_factor or group_status),
     ))
 
@@ -333,11 +334,11 @@ def build_explanation_contributions(
     away_sentiment = 0.90 + _safe_float(away_factor.get("sentiment_rating"), 0.5) * 0.20
     items.append(_impact_item(
         "market_signal",
-        "市场信号",
+        "Market signal",
         "%xg",
         ((home_market_value - 1.0) + (home_sentiment - 1.0)) * 100,
         ((away_market_value - 1.0) + (away_sentiment - 1.0)) * 100,
-        "身价代理和情绪/舆情信号合并后的预期进球修正。",
+        "Squad value and sentiment provide secondary team-strength context.",
         available=bool(home_factor or away_factor),
     ))
 
@@ -349,7 +350,6 @@ def build_explanation_contributions(
         "engine_weights": prediction_result.get("integrated_weights"),
         "prediction_method": prediction_result.get("prediction_method"),
     }
-
 
 def _utc_naive(value: datetime) -> datetime:
     if value.tzinfo is None:
@@ -365,12 +365,63 @@ def _has_match_started(match: MatchFixture, now: datetime | None = None) -> bool
     return _utc_naive(kickoff) <= current
 
 
+def _degrade_quality(current: str) -> str:
+    return "partial"
+
+
+def _normalize_new_prediction_quality(
+    quality: str,
+    notes: list[str],
+) -> tuple[str, list[str]]:
+    normalized_quality = str(quality or "").strip().lower()
+    if normalized_quality in {"real", "partial"}:
+        return normalized_quality, notes
+    if 'non_real_quality_normalized' not in notes:
+        notes.append('non_real_quality_normalized')
+    return _degrade_quality(normalized_quality), notes
+
+
+def unavailable_team_stats(team_name: str) -> dict[str, Any]:
+    """Return neutral stats when no trusted source has team statistics."""
+
+    return {
+        "goals_per_game": 1.5,
+        "goals_conceded_per_game": 1.5,
+        "wins": 0,
+        "draws": 0,
+        "losses": 0,
+        "played": 0,
+        "form": 0.5,
+        "recent_form": 0.5,
+        "data_source": "unavailable",
+        "available": False,
+        "team_name": team_name,
+    }
+
+
+def unavailable_h2h_data(home_team: str, away_team: str) -> dict[str, Any]:
+    """Return neutral H2H stats when no trusted source has matchup history."""
+
+    return {
+        "matches_played": 0,
+        "home_wins": 0,
+        "draws": 0,
+        "away_wins": 0,
+        "avg_goals_home": 1.5,
+        "avg_goals_away": 1.5,
+        "data_source": "unavailable",
+        "available": False,
+        "home_team": home_team,
+        "away_team": away_team,
+    }
+
+
 def fetch_team_stats(
     team_name: str,
     team_id: int | None = None,
     before_date: datetime | None = None,
 ) -> dict[str, Any]:
-    """Fetch team statistics from API-Football or fallback to mock data.
+    """Fetch team statistics from API-Football or trusted historical data.
 
     Args:
         team_name: Team name
@@ -398,10 +449,7 @@ def fetch_team_stats(
     if historical_stats:
         return historical_stats
 
-    # Fallback to mock data
-    stats = generate_mock_team_stats(team_name)
-    stats["data_source"] = "mock"  # Mark as mock for transparency
-    return stats
+    return unavailable_team_stats(team_name)
 
 
 def fetch_h2h_data(
@@ -411,7 +459,7 @@ def fetch_h2h_data(
     away_team_id: int | None = None,
     before_date: datetime | None = None,
 ) -> dict[str, Any]:
-    """Fetch head-to-head data from API-Football or fallback to mock data.
+    """Fetch head-to-head data from API-Football or trusted historical data.
 
     Args:
         home_team: Home team name
@@ -448,96 +496,7 @@ def fetch_h2h_data(
     if historical_h2h:
         return historical_h2h
 
-    # Fallback to mock data
-    h2h = generate_mock_h2h_data(home_team, away_team)
-    h2h["data_source"] = "mock"  # Mark as mock for transparency
-    return h2h
-
-
-def generate_mock_team_stats(team_name: str) -> dict[str, Any]:
-    """Generate mock team statistics for testing.
-
-    Used as fallback when API-Football data is unavailable.
-
-    Args:
-        team_name: Team name
-
-    Returns:
-        Mock team statistics
-    """
-
-    base_stats = {
-        "goals_per_game": 1.8,
-        "goals_conceded_per_game": 1.1,
-        "wins": 3,
-        "draws": 1,
-        "losses": 1,
-        "played": 5,
-        "form": 0.6,
-    }
-
-    # Tier-based stats for 2026 World Cup participants
-    _ELITE = {
-        "Brazil", "Argentina", "France", "Germany", "Spain", "England",
-    }
-    _STRONG = {
-        "Portugal", "Netherlands", "Belgium", "Croatia", "Italy",
-        "Uruguay", "USA", "Mexico",
-    }
-    _COMPETITIVE = {
-        "Japan", "South Korea", "Denmark", "Switzerland", "Austria",
-        "Senegal", "Morocco", "Colombia", "Ecuador", "Canada",
-        "Serbia", "Turkey", "Poland", "Australia", "Ghana",
-    }
-    _EMERGING = {
-        "Iran", "Saudi Arabia", "Tunisia", "Cameroon", "Costa Rica",
-        "Panama", "Wales", "Scotland", "Jamaica", "Honduras",
-        "Qatar", "Paraguay", "Nigeria", "Algeria", "Egypt",
-    }
-
-    if team_name in _ELITE:
-        base_stats.update(goals_per_game=2.1, goals_conceded_per_game=0.9,
-                          wins=4, losses=0, form=0.9)
-    elif team_name in _STRONG:
-        base_stats.update(goals_per_game=1.9, goals_conceded_per_game=1.0,
-                          wins=3, form=0.7)
-    elif team_name in _COMPETITIVE:
-        base_stats.update(goals_per_game=1.7, goals_conceded_per_game=1.1,
-                          wins=2, draws=2, form=0.55)
-    elif team_name in _EMERGING:
-        base_stats.update(goals_per_game=1.5, goals_conceded_per_game=1.3,
-                          wins=2, draws=1, losses=2, form=0.45)
-    else:
-        # Hash-based micro-variation so unrecognized teams aren't identical
-        h = hash(team_name) % 100
-        base_stats["goals_per_game"] = round(1.5 + (h % 7) * 0.05, 2)
-        base_stats["goals_conceded_per_game"] = round(1.0 + (h % 5) * 0.06, 2)
-        base_stats["form"] = round(0.4 + (h % 4) * 0.05, 2)
-
-    return base_stats
-
-
-def generate_mock_h2h_data(home_team: str, away_team: str) -> dict[str, Any]:
-    """Generate mock head-to-head data.
-
-    Used as fallback when API-Football data is unavailable.
-
-    Args:
-        home_team: Home team name
-        away_team: Away team name
-
-    Returns:
-        Mock h2h statistics
-    """
-
-    return {
-        "matches_played": 10,
-        "home_wins": 4,
-        "draws": 3,
-        "away_wins": 3,
-        "avg_goals_home": 1.7,
-        "avg_goals_away": 1.4
-    }
+    return unavailable_h2h_data(home_team, away_team)
 
 
 def _apply_openfootball_team_context(
@@ -698,7 +657,7 @@ async def run_prediction_pipeline(
                - "hybrid": Current Rule+AI engine (interpretable, 2-3s)
             - "integrated": Fuse elo_odds and hybrid engine results
             - "high_confidence": Run all public engines and use the highest-confidence result
-            - "auto": Auto-select based on data availability (default)
+            - "auto": Use the official default engine (currently "elo_odds")
         session: Database session (creates one if None)
         compare_only: Read-only mode for engine comparison UI. Bypasses the
             kickoff-freeze guard and skips all persistence (MatchPrediction and
@@ -755,11 +714,11 @@ async def run_prediction_pipeline(
         # Step 3: Choose prediction engine
         selected_engine = engine
         if engine == "auto":
-            # Auto-select: use integrated mode if odds available, else hybrid
-            if odds and odds.get("source") != "fallback":
-                selected_engine = "integrated"
-            else:
-                selected_engine = "hybrid"
+            # Official default: current quality-loop evidence favours elo_odds
+            # for probabilistic accuracy. Integrated/hybrid remain explicit
+            # comparison engines, but should not silently dominate scheduled
+            # match predictions.
+            selected_engine = "elo_odds"
         elif engine not in {"elo_odds", "hybrid", "integrated", "high_confidence", "gbm"}:
             return {"status": "error", "match_id": match_id, "error": f"Unsupported engine: {engine}"}
 
@@ -780,25 +739,32 @@ async def run_prediction_pipeline(
                 match.kickoff_utc,
             )
 
-            # Track data quality with enhanced metrics
-            data_quality = "real"
-            if home_stats.get("data_source") == "mock" or away_stats.get("data_source") == "mock":
-                data_quality = "mock"
-            if h2h_data.get("data_source") == "mock":
-                data_quality = "mock" if data_quality != "real" else "partial"
-            
             # Enhanced data quality metrics
             elo_source = f"{home_elo_data.get('source', 'unknown')}/{away_elo_data.get('source', 'unknown')}"
             odds_source = odds.get("source") if odds else "none"
             stats_source = f"{home_stats.get('data_source', 'unknown')}/{away_stats.get('data_source', 'unknown')}"
+            has_real_elo = bool(home_elo_data and away_elo_data and all_sources_look_real(elo_source))
+            has_real_stats = all_sources_look_real(stats_source)
+            has_real_h2h = bool(h2h_data and source_looks_real(h2h_data.get("data_source")))
+            data_quality_notes: list[str] = []
+            data_quality = "real"
+            if not has_real_elo:
+                data_quality = "partial"
+                data_quality_notes.append("elo_unavailable")
+            if not has_real_stats:
+                data_quality = "partial"
+                data_quality_notes.append("team_stats_unavailable")
+            if not has_real_h2h:
+                data_quality = "partial"
+                data_quality_notes.append("h2h_unavailable")
             data_quality_metrics = {
                 "quality": data_quality,
                 "score_version": SCORE_VERSION,
-                "has_elo": bool(home_elo_data and away_elo_data and source_looks_real(elo_source)),
+                "has_elo": has_real_elo,
                 "has_odds": bool(odds and source_looks_real(odds_source)),
                 "odds_stale": bool(odds and odds.get("stale")),
-                "has_h2h": bool(h2h_data and source_looks_real(h2h_data.get("data_source"))),
-                "has_stats": source_looks_real(stats_source),
+                "has_h2h": has_real_h2h,
+                "has_stats": has_real_stats,
                 "has_weather": False,  # Will be set after weather fetch
                 "has_schedule_context": False,
                 "has_group_context": False,
@@ -889,6 +855,8 @@ async def run_prediction_pipeline(
             )
             factors["enhanced"] = enhanced_factors
             factors["data_quality"] = data_quality
+            if data_quality_notes:
+                factors["data_quality_notes"] = data_quality_notes
             factors["data_quality_metrics"] = data_quality_metrics
             _apply_openfootball_factor_context(factors, openfootball_context)
             factors["schedule_context"] = schedule_factors
@@ -983,11 +951,16 @@ async def run_prediction_pipeline(
             # Fuse: elo_odds + hybrid with dynamic weights based on data quality
             # Default: trust market signals (elo_odds) more when all data is real
             elo_weight = 0.70
-            if data_quality == "mock":
-                # Team stats are fake - reduce reliance on elo_odds
+            factor_metrics = factors.get("data_quality_metrics", {}) if isinstance(factors, dict) else {}
+            if isinstance(factor_metrics, dict) and (
+                not factor_metrics.get("has_elo")
+                or not factor_metrics.get("has_stats")
+                or not factor_metrics.get("has_h2h")
+            ):
+                # Missing real inputs means this fused prediction has less evidence.
                 elo_weight = min(elo_weight, 0.40)
             if odds and odds.get("source") and ("fallback" in odds.get("source") or "default" in odds.get("source")):
-                # Odds are fake - reduce reliance on elo_odds
+                # Non-real odds should not dominate the fused probability.
                 elo_weight = min(elo_weight, 0.35)
             if odds and odds.get("stale"):
                 # Stale market data is still useful, but should not dominate.
@@ -1118,7 +1091,7 @@ async def run_prediction_pipeline(
             }
 
         elif selected_engine == "gbm":
-            # GBM (Gradient Boosting Machine) engine — trained model that uses
+            # GBM (Gradient Boosting Machine) engine 鈥?trained model that uses
             # Elo-derived xG + team stats features.  Falls back to elo_odds if
             # model files are missing (the GBM engine handles this internally).
             elo_data_home = home_elo_data or {}
@@ -1167,11 +1140,38 @@ async def run_prediction_pipeline(
         except Exception as cal_err:
             logger.warning("Calibration application skipped: %s", cal_err)
 
-        # Add data quality flag to prediction result
-        if "factors" in prediction_result and isinstance(prediction_result["factors"], dict):
-            prediction_result["data_quality"] = prediction_result["factors"].get("data_quality", "real")
-        else:
-            prediction_result["data_quality"] = "real"
+        # Add data quality flag to prediction result. Elo-only predictions can be
+        # based on real ratings while still missing real market odds; mark that as
+        # partial instead of presenting the whole prediction as fully real.
+        factor_payload = prediction_result.get("factors")
+        if not isinstance(factor_payload, dict):
+            factor_payload = {}
+        raw_quality = factor_payload.get("data_quality")
+        quality = str(raw_quality) if raw_quality else "partial"
+        notes = factor_payload.get("data_quality_notes")
+        data_quality_notes = list(notes) if isinstance(notes, list) else []
+        if not raw_quality and "data_quality_missing" not in data_quality_notes:
+            data_quality_notes.append("data_quality_missing")
+        method = str(prediction_result.get("prediction_method") or "")
+        uses_elo_market_surface = selected_engine in {"elo_odds", "integrated"} or method.startswith("elo")
+        if uses_elo_market_surface and prediction_result.get("has_betting_odds") is False:
+            if "betting_odds_unavailable" not in data_quality_notes:
+                data_quality_notes.append("betting_odds_unavailable")
+            quality = _degrade_quality(quality)
+        if odds and not source_looks_real(str(odds.get("source") or "")):
+            if "betting_odds_not_real" not in data_quality_notes:
+                data_quality_notes.append("betting_odds_not_real")
+            quality = _degrade_quality(quality)
+        quality, data_quality_notes = _normalize_new_prediction_quality(
+            quality,
+            data_quality_notes,
+        )
+        prediction_result["data_quality"] = quality
+        prediction_result["data_quality_notes"] = data_quality_notes
+        factor_payload["data_quality"] = quality
+        if data_quality_notes:
+            factor_payload["data_quality_notes"] = data_quality_notes
+        prediction_result["factors"] = factor_payload
 
         # Step 4d.5: Build explanation contributions for UI/debugging
         try:
@@ -1317,6 +1317,7 @@ async def run_prediction_pipeline(
                 "engine_used": selected_engine,
                 "has_betting_odds": prediction_result.get("has_betting_odds", False),
                 "data_quality": prediction_result.get("data_quality"),
+                "data_quality_notes": prediction_result.get("data_quality_notes", []),
                 "data_quality_score": compare_quality_metrics.get("quality_score"),
                 "elo_ratings": prediction_result.get("elo_ratings"),
                 "raw_confidence": prediction_result.get("raw_confidence"),
@@ -1429,6 +1430,7 @@ async def run_prediction_pipeline(
             "engine_used": selected_engine,
             "has_betting_odds": prediction_result.get("has_betting_odds", False),
             "data_quality": prediction_result.get("data_quality"),
+            "data_quality_notes": prediction_result.get("data_quality_notes", []),
             "data_quality_score": (
                 prediction_result.get("factors", {})
                 .get("data_quality_metrics", {})
@@ -1475,7 +1477,7 @@ async def batch_predict_matches(
 
     # Resolve the match list with a short-lived session, then close it before
     # dispatching the per-match pipelines. Each parallel pipeline call passes
-    # session=None so it creates (and closes) its OWN session — sharing a single
+    # session=None so it creates (and closes) its OWN session 鈥?sharing a single
     # SQLAlchemy session across asyncio.gather tasks is unsafe (sessions are not
     # thread- or task-safe; concurrent commits on one session would corrupt
     # state). The match list is plain ORM rows already loaded into memory by
@@ -1515,7 +1517,7 @@ async def batch_predict_matches(
     # the embeddings API (semantic news), the odds API, and the fixture API.
     # Running them unbounded would (a) blow past LLM provider rate limits and
     # (b) open dozens of SQLAlchemy sessions at once, pressuring the SQLite
-    # WAL. LLM_CONCURRENCY is the existing knob (default 4) — reuse it as the
+    # WAL. LLM_CONCURRENCY is the existing knob (default 4) 鈥?reuse it as the
     # cap for in-flight pipeline calls.
     semaphore = asyncio.Semaphore(max(1, settings.LLM_CONCURRENCY))
 
@@ -1532,7 +1534,7 @@ async def batch_predict_matches(
             )
 
     # return_exceptions=True so one match failing doesn't cancel the whole
-    # batch — we surface it as a "failed" entry instead of raising.
+    # batch 鈥?we surface it as a "failed" entry instead of raising.
     raw_results = await asyncio.gather(
         *(_run_one(mid) for mid in match_ids_to_run),
         return_exceptions=True,

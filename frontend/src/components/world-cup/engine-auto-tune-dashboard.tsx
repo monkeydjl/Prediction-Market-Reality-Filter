@@ -256,6 +256,9 @@ export function EngineAutoTuneDashboard() {
             <p className="mt-1 text-sm text-muted-foreground">
               基于 AI 优化反馈自动校准预测引擎参数
             </p>
+            <p className="mt-2 text-xs text-warn">
+              实验功能：只有完成赛后验证的 AI 优化才会写入正式校准；未验证结果不会影响正式概率。
+            </p>
           </div>
           <Brain className="size-8 text-primary opacity-50" />
         </div>
@@ -337,7 +340,7 @@ export function EngineAutoTuneDashboard() {
           <button
             onClick={handleAutoTune}
             disabled={tuning}
-            title="基于 AI 优化反馈校准引擎参数（会写入新校准版本）"
+            title="基于 AI 优化反馈校准引擎参数（只有赛后验证后才会写入正式校准）"
             className="mt-4 w-full rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
           >
             {tuning ? (

@@ -429,7 +429,8 @@ class WorldCupApiFootballConnectionTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertIsNone(result["error"])
-        self.assertEqual(result["account"]["firstname"], "John")
+        self.assertNotIn("account", result)
+        self.assertNotIn("john@example.com", json.dumps(result))
         self.assertEqual(result["subscription"]["plan"], "Pro")
         self.assertTrue(result["subscription"]["active"])
         self.assertEqual(result["requests_today"], 42)
@@ -478,6 +479,29 @@ class WorldCupApiFootballConnectionTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertIn("Connection failed", result["error"])
+
+    def test_provider_errors_are_sanitized_in_fetch_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics = (
+                WorldCupApiFootballSourceTests()._settings(tmp)
+            )
+            with sports_file, base_url, api_key, league_id, season, fetch_events, fetch_lineups, fetch_statistics, \
+                    patch(
+                        "app.services.world_cup_api_football_source.urlopen",
+                        return_value=_UrlResponse(_body({
+                            "errors": {
+                                "requests": "Your daily request limit has been reached",
+                                "token": "secret-key should not leak",
+                            },
+                            "response": [],
+                        })),
+                    ):
+                with self.assertRaises(ValueError) as cm:
+                    preview_world_cup_api_football_bundle()
+
+        message = str(cm.exception)
+        self.assertIn("requests", message)
+        self.assertNotIn("secret-key", message)
 
 
 class WorldCupApiFootballValidateTests(unittest.TestCase):
@@ -532,6 +556,32 @@ class WorldCupApiFootballValidateTests(unittest.TestCase):
         self.assertEqual(result["coverage"]["covered"], 1)
         self.assertEqual(result["coverage"]["missing_from_store"], 1)
         self.assertIn("1002", result["coverage"]["missing_ids_sample"])
+
+    def test_validate_fails_when_configured_provider_returns_zero_fixtures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fact_file = str(Path(tmp) / "facts.json")
+            Path(fact_file).write_text(json.dumps({"facts": []}))
+
+            with patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", "key"), \
+                    patch.object(settings, "WORLD_CUP_API_FOOTBALL_BASE_URL", "https://api.example/v3"), \
+                    patch.object(settings, "WORLD_CUP_API_FOOTBALL_LEAGUE_ID", "1"), \
+                    patch.object(settings, "WORLD_CUP_API_FOOTBALL_SEASON", "2026"), \
+                    patch.object(settings, "SPORTS_FACT_FILE", fact_file), \
+                    patch(
+                        "app.services.world_cup_api_football_source.urlopen",
+                        side_effect=[
+                            _UrlResponse(self._status_body()),
+                            _UrlResponse(self._fixtures_body([])),
+                        ],
+                    ):
+                result = validate_world_cup_api_football_pipeline()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["steps"][1]["name"], "fixture_fetch")
+        self.assertFalse(result["steps"][1]["ok"])
+        self.assertEqual(result["steps"][1]["fixture_count"], 0)
+        self.assertIn("returned 0 fixtures", result["steps"][1]["error"])
+        self.assertIn("returned 0 fixtures", result["error"])
 
     def test_validate_fails_on_bad_connection(self):
         with patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", ""):

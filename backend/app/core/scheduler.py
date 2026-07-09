@@ -341,6 +341,9 @@ def _run_world_cup_bundle_import(mode: str, replace: bool):
     from app.services.world_cup_api_football_source import (
         import_world_cup_api_football_bundle,
     )
+    from app.services.football_data_source import (
+        import_world_cup_football_data_standings,
+    )
     from app.services.world_cup_sportmonks_source import (
         import_world_cup_sportmonks_bundle,
     )
@@ -358,12 +361,14 @@ def _run_world_cup_bundle_import(mode: str, replace: bool):
         return import_world_cup_source_bundle_feeds(replace=replace)
     elif mode == "api_football":
         return import_world_cup_api_football_bundle(replace=replace)
+    elif mode == "football_data":
+        return import_world_cup_football_data_standings(replace=replace)
     elif mode == "sportmonks":
         return import_world_cup_sportmonks_bundle(replace=replace)
     else:
         raise ValueError(
             "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE must be 'url', 'file', 'feeds', "
-            "'api_football', or 'sportmonks'"
+            "'api_football', 'football_data', or 'sportmonks'"
         )
 
 
@@ -389,7 +394,7 @@ async def _job_world_cup_source_bundle_import():
             mode,
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", result={"mode": mode}, error=str(exc), exc=exc)
         logger.exception("[Scheduler] World Cup source bundle import failed")
 
 
@@ -436,13 +441,20 @@ async def _job_world_cup_matchday_refresh():
     try:
         mode = settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE.strip().lower()
         result = _run_world_cup_bundle_import(mode, replace=True)
+        from app.services.world_cup_post_match_backfill_service import run_post_match_backfill
+
+        post_match_result = run_post_match_backfill(dry_run=False, sync_first=False)
 
         summary = _world_cup_bundle_import_summary(result, mode)
+        summary["post_match_backfill"] = _world_cup_post_match_backfill_summary(
+            post_match_result
+        )
         _finish_run(run_id, "success", result=summary)
         logger.info(
-            "[Scheduler] Matchday refresh: facts=%d mode=%s",
+            "[Scheduler] Matchday refresh: facts=%d mode=%s scored=%d",
             summary.get("converted_fact_count", 0),
             mode,
+            summary["post_match_backfill"].get("scored", 0),
         )
     except Exception as exc:
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
@@ -613,6 +625,19 @@ def _world_cup_bundle_import_summary(result: dict[str, Any], mode: str) -> dict[
     if result.get("source_metadata"):
         summary["source_metadata"] = result["source_metadata"]
     return summary
+
+
+def _world_cup_post_match_backfill_summary(result: dict[str, Any]) -> dict[str, Any]:
+    scoring = result.get("scoring") or {}
+    result_fact_backfill = result.get("result_fact_backfill") or {}
+    return {
+        "status": result.get("status"),
+        "candidate_count": result.get("candidate_count", 0),
+        "scored": scoring.get("scored", 0),
+        "skipped": scoring.get("skipped", 0),
+        "errors": scoring.get("errors", 0),
+        "result_facts_imported": result_fact_backfill.get("imported", 0),
+    }
 
 
 def start_scheduler():

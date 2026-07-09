@@ -113,7 +113,8 @@ export interface MatchPrediction {
   };
   has_betting_odds?: boolean;
   engine_used?: "elo_odds" | "hybrid" | "integrated" | "gbm" | "high_confidence" | "auto";
-  data_quality?: "real" | "partial" | "mock";
+  data_quality?: "real" | "partial";
+  data_quality_notes?: string[];
   data_quality_score?: number;
   betting_analysis?: {
     "1x2": { home_win: number; draw: number; away_win: number; implied_odds: Record<string, number> };
@@ -142,6 +143,8 @@ export interface PredictionHistoryEntry {
   trigger: string;
   prediction_method?: string;
   engine_used?: MatchPrediction["engine_used"];
+  data_quality?: MatchPrediction["data_quality"];
+  data_quality_notes?: string[];
 }
 
 export interface PredictionTriggerResult {

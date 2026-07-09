@@ -21,6 +21,7 @@ DictPayload = dict[str, Any]
 FactsPayload = list[dict[str, Any]] | dict[str, Any]
 
 from app.api.security import is_write_key_valid, require_write_key
+from app.memory import loop_run_store
 from app.memory.event_market_link_store import list_pending, set_verified
 from app.memory.prediction_store import (
     calibration_summary,
@@ -63,6 +64,11 @@ from app.services.world_cup_api_football_source import (
     preview_world_cup_api_football_bundle,
     test_world_cup_api_football_connection,
     validate_world_cup_api_football_pipeline,
+)
+from app.services.football_data_source import (
+    FootballDataAPIError,
+    import_world_cup_football_data_standings,
+    preview_world_cup_football_data_standings,
 )
 from app.services.world_cup_data_source_service import (
     import_world_cup_data,
@@ -548,10 +554,28 @@ async def import_api_football_world_cup_source_bundle_route(
     _auth: None = Depends(require_write_key),
 ):
     """Import facts from configured API-Football World Cup feeds."""
+    _require_successful_api_football_validation_before_import()
     try:
         return import_world_cup_api_football_bundle(replace=replace)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _require_successful_api_football_validation_before_import() -> None:
+    run = loop_run_store.last_run("world_cup_api_football_validate")
+    if not isinstance(run, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="Run API-Football pipeline validation before import.",
+        )
+    result = run.get("result") if isinstance(run.get("result"), dict) else {}
+    if run.get("status") != "success" or result.get("ok") is not True:
+        error = str(run.get("error") or result.get("error") or "").strip()
+        suffix = f": {error}" if error else "."
+        raise HTTPException(
+            status_code=409,
+            detail=f"Latest API-Football pipeline validation failed{suffix}",
+        )
 
 
 @router.post("/sports/world-cup/data/bundle/api-football/test", response_model=FlexibleResponse)
@@ -567,7 +591,80 @@ async def validate_api_football_pipeline_route(
     _auth: None = Depends(require_write_key),
 ):
     """Validate pipeline: connection + sample fetch + compare with stored facts."""
-    return validate_world_cup_api_football_pipeline()
+    run_id = loop_run_store.start_run("world_cup_api_football_validate")
+    try:
+        result = validate_world_cup_api_football_pipeline()
+    except Exception as exc:
+        loop_run_store.finish_run(run_id, "failed", error=str(exc))
+        raise
+
+    summary = _api_football_validation_run_summary(result)
+    status = "success" if result.get("ok") else "failed"
+    loop_run_store.finish_run(
+        run_id,
+        status,
+        result=summary,
+        error=str(result.get("error") or "") if status == "failed" else None,
+    )
+    return result
+
+
+def _api_football_validation_run_summary(result: dict[str, Any]) -> dict[str, Any]:
+    steps = result.get("steps") if isinstance(result.get("steps"), list) else []
+    failed_step = next(
+        (
+            step.get("name")
+            for step in steps
+            if isinstance(step, dict) and step.get("ok") is False
+        ),
+        None,
+    )
+    fixture_step = next(
+        (
+            step
+            for step in steps
+            if isinstance(step, dict) and step.get("name") == "fixture_fetch"
+        ),
+        {},
+    )
+    coverage = result.get("coverage") if isinstance(result.get("coverage"), dict) else {}
+    return {
+        "provider": "api_football",
+        "ok": bool(result.get("ok")),
+        "error": str(result.get("error") or "")[:500],
+        "step_count": len(steps),
+        "failed_step": failed_step,
+        "fixture_count": fixture_step.get("fixture_count"),
+        "covered": coverage.get("covered"),
+        "missing_from_store": coverage.get("missing_from_store"),
+    }
+
+
+@router.post("/sports/world-cup/data/bundle/football-data/preview", response_model=FlexibleResponse)
+async def preview_football_data_world_cup_standings_route(
+    _auth: None = Depends(require_write_key),
+):
+    """Preview qualification facts from configured Football-Data.org standings."""
+    try:
+        return preview_world_cup_football_data_standings()
+    except FootballDataAPIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sports/world-cup/data/bundle/football-data/import", response_model=FlexibleResponse)
+async def import_football_data_world_cup_standings_route(
+    replace: bool = Query(default=False),
+    _auth: None = Depends(require_write_key),
+):
+    """Import qualification facts from configured Football-Data.org standings."""
+    try:
+        return import_world_cup_football_data_standings(replace=replace)
+    except FootballDataAPIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/sports/world-cup/data/bundle/sportmonks/preview", response_model=FlexibleResponse)

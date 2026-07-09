@@ -56,6 +56,114 @@ class WorldCupStandingsSourceTests(unittest.TestCase):
         self.assertEqual(team_b["status"], "eliminated")
         self.assertTrue(team_b["already_eliminated"])
 
+    def test_normalizes_completed_football_data_group_tables(self):
+        payload = {
+            "source": "football_data",
+            "source_url": "https://api.football-data.org/v4/competitions/WC/standings",
+            "observed_at": "2026-07-07T12:00:00Z",
+            "standings": [{
+                "stage": "ALL",
+                "type": "TOTAL",
+                "group": "Group A",
+                "table": [{
+                    "position": 1,
+                    "team": {"name": "Mexico", "shortName": "Mexico", "tla": "MEX"},
+                    "playedGames": 3,
+                    "won": 3,
+                    "draw": 0,
+                    "lost": 0,
+                    "points": 9,
+                    "goalsFor": 6,
+                    "goalsAgainst": 0,
+                    "goalDifference": 6,
+                }, {
+                    "position": 2,
+                    "team": {"name": "Germany", "shortName": "Germany", "tla": "GER"},
+                    "playedGames": 3,
+                    "won": 2,
+                    "draw": 0,
+                    "lost": 1,
+                    "points": 6,
+                    "goalsFor": 5,
+                    "goalsAgainst": 3,
+                    "goalDifference": 2,
+                }, {
+                    "position": 3,
+                    "team": {"name": "Japan", "shortName": "Japan", "tla": "JPN"},
+                    "playedGames": 3,
+                    "won": 1,
+                    "draw": 0,
+                    "lost": 2,
+                    "points": 3,
+                    "goalsFor": 3,
+                    "goalsAgainst": 5,
+                    "goalDifference": -2,
+                }, {
+                    "position": 4,
+                    "team": {"name": "Wales", "shortName": "Wales", "tla": "WAL"},
+                    "playedGames": 3,
+                    "won": 0,
+                    "draw": 0,
+                    "lost": 3,
+                    "points": 0,
+                    "goalsFor": 0,
+                    "goalsAgainst": 6,
+                    "goalDifference": -6,
+                }],
+            }],
+        }
+
+        data = world_cup_standings_source_to_data(payload)
+
+        self.assertEqual(data["source"], "football_data")
+        self.assertEqual(len(data["qualifications"]), 4)
+        mexico = data["qualifications"][0]
+        self.assertEqual(mexico["team"], "Mexico")
+        self.assertEqual(mexico["group"], "Group A")
+        self.assertEqual(mexico["stage"], "Group A")
+        self.assertEqual(mexico["rank"], 1)
+        self.assertEqual(mexico["played"], 3)
+        self.assertEqual(mexico["drawn"], 0)
+        self.assertEqual(mexico["goals_for"], 6)
+        self.assertEqual(mexico["goals_against"], 0)
+        self.assertEqual(mexico["goal_diff"], 6)
+        self.assertEqual(mexico["status"], "qualified")
+        self.assertTrue(mexico["already_qualified"])
+        germany = data["qualifications"][1]
+        self.assertEqual(germany["status"], "qualified")
+        self.assertTrue(germany["already_qualified"])
+        japan = data["qualifications"][2]
+        self.assertEqual(japan["status"], "eliminated")
+        self.assertTrue(japan["already_eliminated"])
+
+    def test_does_not_infer_football_data_status_for_incomplete_groups(self):
+        payload = {
+            "source": "football_data",
+            "source_url": "https://api.football-data.org/v4/competitions/WC/standings",
+            "observed_at": "2026-07-07T12:00:00Z",
+            "standings": [{
+                "group": "Group B",
+                "table": [{
+                    "position": 1,
+                    "team": {"name": "Brazil"},
+                    "playedGames": 2,
+                    "points": 6,
+                }, {
+                    "position": 2,
+                    "team": {"name": "Spain"},
+                    "playedGames": 2,
+                    "points": 4,
+                }],
+            }],
+        }
+
+        data = world_cup_standings_source_to_data(payload)
+
+        self.assertEqual(len(data["qualifications"]), 2)
+        self.assertEqual(data["qualifications"][0]["team"], "Brazil")
+        self.assertNotIn("already_qualified", data["qualifications"][0])
+        self.assertNotIn("already_eliminated", data["qualifications"][0])
+
     def test_group_map_applies_group_name_as_stage(self):
         data = world_cup_standings_source_to_data({
             "source": "manual_table",
@@ -117,6 +225,27 @@ class WorldCupStandingsSourceTests(unittest.TestCase):
         decision = resolver.evaluate_world_cup_resolution(record, facts)
         self.assertEqual(result["converted_fact_count"], 2)
         self.assertEqual(decision["actual_outcome"], 100.0)
+
+    def test_import_rejects_standings_without_source_url(self):
+        payload = _raw_standings_payload()
+        payload.pop("source_url")
+
+        with self.assertRaisesRegex(ValueError, "source_url"):
+            import_world_cup_standings_source(payload, replace=True)
+
+    def test_import_rejects_standings_without_observed_at(self):
+        payload = _raw_standings_payload()
+        payload.pop("observed_at")
+
+        with self.assertRaisesRegex(ValueError, "observed_at"):
+            import_world_cup_standings_source(payload, replace=True)
+
+    def test_import_rejects_standings_with_non_http_source_url(self):
+        payload = _raw_standings_payload()
+        payload["source_url"] = "local-table"
+
+        with self.assertRaisesRegex(ValueError, "source_url"):
+            import_world_cup_standings_source(payload, replace=True)
 
     def test_rejects_payload_without_standings(self):
         with self.assertRaisesRegex(ValueError, "did not contain standings"):

@@ -43,8 +43,14 @@ def _env_csv(name: str, default: str) -> list[str]:
     ]
 
 
-class Settings:
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+def _world_cup_import_enabled_default() -> str:
+    return "true" if os.getenv("FOOTBALL_DATA_API_KEY", "").strip() else "false"
+
+
+def _world_cup_import_mode_default() -> str:
+    return "football_data" if os.getenv("FOOTBALL_DATA_API_KEY", "").strip() else "url"
+
+class Settings:    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "deepseek-chat")
     LLM_STARTUP_CHECK_ENABLED: bool = _env_bool(
         "LLM_STARTUP_CHECK_ENABLED", "false"
@@ -277,10 +283,10 @@ class Settings:
         "WORLD_CUP_SOURCE_BUNDLE_AUTH_VALUE", ""
     )
     WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED: bool = _env_bool(
-        "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED", "false"
+        "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED", _world_cup_import_enabled_default()
     )
     WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE: str = os.getenv(
-        "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE", "url"
+        "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE", _world_cup_import_mode_default()
     )
     WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE: bool = _env_bool(
         "WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE", "false"

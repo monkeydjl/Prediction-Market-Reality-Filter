@@ -34,13 +34,20 @@ describe("EngineAutoTuneDashboard", () => {
     expect(screen.getByText("集成引擎")).toBeInTheDocument();
   });
 
+  it("marks AI tuning as experimental and not official until verified", () => {
+    render(<EngineAutoTuneDashboard />);
+
+    expect(screen.getByText(/实验功能/)).toBeInTheDocument();
+    expect(screen.getByText(/未验证结果不会影响正式概率/)).toBeInTheDocument();
+  });
+
   it("does not poll auto-tune status while the tab is hidden", async () => {
     vi.useFakeTimers();
     try {
       render(<EngineAutoTuneDashboard />);
 
       await act(async () => {
-        fireEvent.click(screen.getByTitle("基于 AI 优化反馈校准引擎参数（会写入新校准版本）"));
+        fireEvent.click(screen.getByTitle("基于 AI 优化反馈校准引擎参数（只有赛后验证后才会写入正式校准）"));
         await Promise.resolve();
         await Promise.resolve();
       });

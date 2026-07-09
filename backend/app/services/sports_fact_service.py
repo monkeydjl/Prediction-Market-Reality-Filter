@@ -218,6 +218,8 @@ def normalize_sports_fact(
 
     if isinstance(raw.get("score"), dict):
         fact["score"] = raw["score"]
+    if isinstance(raw.get("penalty_score"), dict):
+        fact["penalty_score"] = raw["penalty_score"]
     if raw.get("extra_time") is not None:
         fact["extra_time"] = bool(raw.get("extra_time"))
     if raw.get("penalty_shootout") is not None:

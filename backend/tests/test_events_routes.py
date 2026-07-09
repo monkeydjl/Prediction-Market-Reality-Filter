@@ -222,6 +222,99 @@ class WorldCupFactRouteTests(unittest.TestCase):
         )
         self.assertNotIn("secret", json.dumps(body))
 
+    def test_api_football_validate_records_failed_run(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch(
+                    "app.api.routes.events.validate_world_cup_api_football_pipeline",
+                    return_value={
+                        "ok": False,
+                        "error": "API-Football returned 0 fixtures for league=1 season=2026",
+                        "steps": [
+                            {"name": "connection", "ok": True},
+                            {"name": "fixture_fetch", "ok": False, "fixture_count": 0},
+                        ],
+                    },
+                ):
+            client = _events_client()
+            resp = client.post(
+                "/events/sports/world-cup/data/bundle/api-football/validate",
+                headers=AUTH_HEADERS,
+            )
+            run = loop_run_store.last_run("world_cup_api_football_validate")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.json()["ok"])
+        self.assertIsNotNone(run)
+        self.assertEqual(run["status"], "failed")
+        self.assertEqual(
+            run["error"],
+            "API-Football returned 0 fixtures for league=1 season=2026",
+        )
+        self.assertEqual(run["result"]["fixture_count"], 0)
+        self.assertEqual(run["result"]["failed_step"], "fixture_fetch")
+
+    def test_api_football_import_requires_successful_pipeline_validation(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch(
+                    "app.api.routes.events.import_world_cup_api_football_bundle",
+                    return_value={"imported": 1},
+                ) as mock_import:
+            run_id = loop_run_store.start_run("world_cup_api_football_validate")
+            loop_run_store.finish_run(
+                run_id,
+                "failed",
+                result={
+                    "provider": "api_football",
+                    "ok": False,
+                    "fixture_count": 0,
+                    "failed_step": "fixture_fetch",
+                },
+                error="API-Football returned 0 fixtures for league=1 season=2026",
+            )
+
+            client = _events_client()
+            resp = client.post(
+                "/events/sports/world-cup/data/bundle/api-football/import?replace=true",
+                headers=AUTH_HEADERS,
+            )
+
+        self.assertEqual(resp.status_code, 409)
+        self.assertIn("Latest API-Football pipeline validation failed", resp.json()["detail"])
+        mock_import.assert_not_called()
+
+    def test_api_football_import_runs_after_successful_pipeline_validation(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch(
+                    "app.api.routes.events.import_world_cup_api_football_bundle",
+                    return_value={"imported": 1, "provider": "api_football"},
+                ) as mock_import:
+            run_id = loop_run_store.start_run("world_cup_api_football_validate")
+            loop_run_store.finish_run(
+                run_id,
+                "success",
+                result={
+                    "provider": "api_football",
+                    "ok": True,
+                    "fixture_count": 48,
+                },
+            )
+
+            client = _events_client()
+            resp = client.post(
+                "/events/sports/world-cup/data/bundle/api-football/import?replace=true",
+                headers=AUTH_HEADERS,
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["imported"], 1)
+        mock_import.assert_called_once_with(replace=True)
+
     def test_world_cup_data_import_converts_match_payload(self):
         with tempfile.TemporaryDirectory() as tmp, \
                 patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \
@@ -791,6 +884,48 @@ class WorldCupFactRouteTests(unittest.TestCase):
         self.assertEqual(facts_resp.json()["count"], 0)
         self.assertNotIn("provider-secret", json.dumps(preview_resp.json()))
 
+    def test_world_cup_football_data_preview_uses_configured_provider(self):
+        with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch(
+                    "app.api.routes.events.preview_world_cup_football_data_standings",
+                    return_value={
+                        "provider": "football_data",
+                        "normalized_qualification_count": 48,
+                        "source_url": "https://api.football-data.org/v4/competitions/WC/standings",
+                    },
+                ) as mock_preview:
+            client = _events_client()
+            resp = client.post(
+                "/events/sports/world-cup/data/bundle/football-data/preview",
+                headers=AUTH_HEADERS,
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["provider"], "football_data")
+        self.assertEqual(resp.json()["normalized_qualification_count"], 48)
+        mock_preview.assert_called_once_with()
+
+    def test_world_cup_football_data_import_uses_configured_provider(self):
+        with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch(
+                    "app.api.routes.events.import_world_cup_football_data_standings",
+                    return_value={
+                        "provider": "football_data",
+                        "normalized_qualification_count": 48,
+                        "imported": 48,
+                    },
+                ) as mock_import:
+            client = _events_client()
+            resp = client.post(
+                "/events/sports/world-cup/data/bundle/football-data/import?replace=true",
+                headers=AUTH_HEADERS,
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["provider"], "football_data")
+        self.assertEqual(resp.json()["imported"], 48)
+        mock_import.assert_called_once_with(replace=True)
+
     def test_world_cup_sportmonks_bundle_preview_does_not_write_facts(self):
         fixture_body = json.dumps({
             "data": [{
@@ -1159,6 +1294,7 @@ class WorldCupFactRouteTests(unittest.TestCase):
     def test_world_cup_standings_source_import_writes_facts(self):
         payload = {
             "source": "api_football",
+            "source_url": "https://example.com/standings",
             "observed_at": "2026-06-28T00:00:00Z",
             "standings": [{
                 "team": {"name": "Mexico"},
@@ -1181,6 +1317,31 @@ class WorldCupFactRouteTests(unittest.TestCase):
         self.assertEqual(import_resp.json()["converted_fact_count"], 1)
         self.assertEqual(facts_resp.json()["count"], 1)
         self.assertEqual(facts_resp.json()["facts"][0]["team"], "Mexico")
+
+    def test_world_cup_standings_source_import_requires_source_metadata(self):
+        payload = {
+            "source": "api_football",
+            "observed_at": "2026-06-28T00:00:00Z",
+            "standings": [{
+                "team": {"name": "Mexico"},
+                "group": "Group A",
+                "description": "Qualified for knockout stage",
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(settings, "SPORTS_FACT_FILE", str(Path(tmp) / "facts.json")), \
+                patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            import_resp = client.post(
+                "/events/sports/world-cup/standings/import?replace=true",
+                headers=AUTH_HEADERS,
+                json=payload,
+            )
+            facts_resp = client.get("/events/sports/world-cup/facts?kind=qualification")
+
+        self.assertEqual(import_resp.status_code, 422)
+        self.assertIn("source_url", import_resp.json()["detail"])
+        self.assertEqual(facts_resp.json()["count"], 0)
 
     def test_world_cup_standings_source_invalid_payload_returns_422(self):
         with patch.object(settings, "API_WRITE_KEY", "secret"):

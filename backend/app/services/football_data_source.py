@@ -1,4 +1,4 @@
-"""Football-Data.org integration for World Cup fixtures.
+"""Football-Data.org integration for World Cup fixtures and standings.
 
 Provides free access to World Cup data with 10 requests/minute limit.
 Documentation: https://www.football-data.org/documentation/quickstart
@@ -9,6 +9,10 @@ from typing import Any
 
 import httpx
 from app.core.config import settings
+from app.services.world_cup_standings_source import (
+    import_world_cup_standings_source,
+    preview_world_cup_standings_source,
+)
 
 FOOTBALL_DATA_API_KEY = settings.FOOTBALL_DATA_API_KEY
 FOOTBALL_DATA_BASE_URL = settings.FOOTBALL_DATA_BASE_URL
@@ -17,6 +21,37 @@ FOOTBALL_DATA_BASE_URL = settings.FOOTBALL_DATA_BASE_URL
 class FootballDataAPIError(Exception):
     """Football-Data.org API error."""
     pass
+
+
+def preview_world_cup_football_data_standings() -> dict[str, Any]:
+    """Fetch Football-Data.org World Cup standings and preview qualification facts."""
+
+    payload = _football_data_standings_payload()
+    result = preview_world_cup_standings_source(payload)
+    result["provider"] = "football_data"
+    result["source_url"] = payload["source_url"]
+    return result
+
+
+def import_world_cup_football_data_standings(*, replace: bool = False) -> dict[str, Any]:
+    """Fetch Football-Data.org World Cup standings and import trusted qualification facts."""
+
+    payload = _football_data_standings_payload()
+    result = import_world_cup_standings_source(payload, replace=replace)
+    result["provider"] = "football_data"
+    result["source_url"] = payload["source_url"]
+    return result
+
+
+def _football_data_standings_payload() -> dict[str, Any]:
+    source_url = f"{_football_data_base_url()}/competitions/WC/standings"
+    data = _football_data_get(source_url)
+    return {
+        "source": "football_data",
+        "source_url": source_url,
+        "observed_at": _utc_now(),
+        **data,
+    }
 
 
 def fetch_world_cup_fixtures(season: int = 2026) -> list[dict[str, Any]]:
@@ -59,6 +94,46 @@ def fetch_world_cup_fixtures(season: int = 2026) -> list[dict[str, Any]]:
         raise FootballDataAPIError("Request timeout")
     except httpx.RequestError as e:
         raise FootballDataAPIError(f"Request failed: {e}")
+
+
+def _football_data_get(url: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    api_key = settings.FOOTBALL_DATA_API_KEY
+    if not api_key:
+        raise FootballDataAPIError("FOOTBALL_DATA_API_KEY not configured")
+
+    try:
+        response = httpx.get(
+            url,
+            headers={"X-Auth-Token": api_key},
+            params=params,
+            timeout=30.0,
+        )
+
+        if response.status_code == 403:
+            raise FootballDataAPIError("API key invalid or access forbidden")
+        if response.status_code == 429:
+            raise FootballDataAPIError("Rate limit exceeded (10 requests/minute)")
+        if response.status_code != 200:
+            raise FootballDataAPIError(
+                f"API error: {response.status_code} - {response.text[:200]}"
+            )
+
+        data = response.json()
+        if not isinstance(data, dict):
+            raise FootballDataAPIError("Football-Data.org returned non-object JSON")
+        return data
+    except httpx.TimeoutException as exc:
+        raise FootballDataAPIError("Request timeout") from exc
+    except httpx.RequestError as exc:
+        raise FootballDataAPIError(f"Request failed: {exc}") from exc
+
+
+def _football_data_base_url() -> str:
+    return str(settings.FOOTBALL_DATA_BASE_URL or "").rstrip("/")
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def parse_fixture(match_data: dict[str, Any]) -> dict[str, Any] | None:

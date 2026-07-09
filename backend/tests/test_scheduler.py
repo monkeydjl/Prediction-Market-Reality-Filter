@@ -13,6 +13,7 @@ is hit.
 import asyncio
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -312,12 +313,56 @@ class WorldCupBundleImportJobTests(unittest.TestCase):
 
         self.assertEqual(run["status"], "failed")
         self.assertIn("feed down", run["error"])
+        self.assertEqual(run["result"]["mode"], "url")
 
     def test_job_skips_when_disabled(self):
         with patch("app.services.world_cup_source_bundle.import_world_cup_source_bundle_url") as import_url, \
                 patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED", False):
             asyncio.run(scheduler._job_world_cup_source_bundle_import())
         import_url.assert_not_called()
+
+    def test_matchday_refresh_runs_post_match_backfill_after_import(self):
+        import_result = {
+            "provider": "football_data",
+            "source_count": 1,
+            "converted_fact_count": 1,
+            "imported": 1,
+            "replace": True,
+        }
+        post_match_result = {
+            "status": "ok",
+            "candidate_count": 1,
+            "scoring": {"scored": 1, "skipped": 0, "errors": 0},
+            "result_fact_backfill": {"imported": 1},
+        }
+        facts = [
+            {
+                "kind": "match_result",
+                "status": "SCHEDULED",
+                "kickoff_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(scheduler.settings, "WORLD_CUP_MATCHDAY_REFRESH_ENABLED", True), \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED", True), \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE", "football_data"), \
+                    patch.object(scheduler.settings, "WORLD_CUP_MATCHDAY_REFRESH_WINDOW_HOURS", 4), \
+                    patch("app.services.sports_fact_service.load_sports_facts", return_value=facts), \
+                    patch.object(scheduler, "_run_world_cup_bundle_import", return_value=import_result) as import_bundle, \
+                    patch(
+                        "app.services.world_cup_post_match_backfill_service.run_post_match_backfill",
+                        return_value=post_match_result,
+                    ) as backfill:
+                asyncio.run(scheduler._job_world_cup_matchday_refresh())
+                run = loop_run_store.last_run("world_cup_matchday_refresh")
+
+        import_bundle.assert_called_once_with("football_data", replace=True)
+        backfill.assert_called_once_with(dry_run=False, sync_first=False)
+        self.assertEqual(run["status"], "success")
+        self.assertEqual(run["result"]["post_match_backfill"]["candidate_count"], 1)
+        self.assertEqual(run["result"]["post_match_backfill"]["result_facts_imported"], 1)
 
 
 class EventDiscoverRegistrationTests(unittest.TestCase):

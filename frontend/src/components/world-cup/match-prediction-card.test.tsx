@@ -65,6 +65,26 @@ describe("MatchPredictionCard engine label", () => {
     expect(screen.getByText("Elo+赔率")).toBeInTheDocument();
   });
 
+  it("shows Elo-only and odds-unavailable status when no betting odds were used", () => {
+    render(
+      <MatchPredictionCard
+        match={match}
+        prediction={prediction({
+          engine_used: "elo_odds",
+          prediction_method: "elo_only",
+          has_betting_odds: false,
+          data_quality: "partial",
+          data_quality_notes: ["betting_odds_unavailable"],
+        })}
+      />
+    );
+
+    expect(screen.getByText("Elo only")).toBeInTheDocument();
+    expect(screen.getByText("Odds unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Data quality")).toBeInTheDocument();
+    expect(screen.getByText("Partial")).toBeInTheDocument();
+  });
+
   it("shows 混合引擎 when the applied engine is hybrid", () => {
     render(
       <MatchPredictionCard
@@ -143,6 +163,22 @@ describe("MatchPredictionCard engine label", () => {
     expect(screen.getByText("置信校准")).toBeInTheDocument();
     expect(screen.getByText(/72%.*72%.*n=2\/6/)).toBeInTheDocument();
     expect(screen.getByText("校准样本不足，仅作参考")).toBeInTheDocument();
+  });
+
+  it("shows normalized historical non-real predictions as partial", () => {
+    render(
+      <MatchPredictionCard
+        match={match}
+        prediction={prediction({
+          engine_used: "hybrid",
+          data_quality: "partial",
+          data_quality_notes: ["historical_non_real_quality_normalized"],
+        })}
+      />
+    );
+
+    expect(screen.getByText("Partial")).toBeInTheDocument();
+    expect(screen.getByText("历史非真实记录已降级")).toBeInTheDocument();
   });
 
   it("shows high-confidence engine selection details in the explanation panel", () => {

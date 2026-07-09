@@ -25,6 +25,17 @@ function qualitySummary(samples = 2) {
 }
 
 function responseFor(url: string) {
+  if (url.includes("/verified-result-correction")) {
+    return {
+      status: "ok",
+      fixture: { status: "finished", score: { home: 0, away: 0 } },
+      fact: {
+        winner: "Switzerland",
+        penalty_score: { home: 4, away: 3 },
+      },
+      fact_import: { imported: 1 },
+    };
+  }
   if (url.includes("/result-fact-backfill/runs")) {
     return {
       status: "ok",
@@ -212,6 +223,19 @@ function responseFor(url: string) {
           source: "football-data",
           sync_status: "error",
           candidate_count: 0,
+          stale_unfinished_count: 1,
+          stale_unfinished_fixtures: [
+            {
+              match_id: "stale-r16",
+              home_team: "Switzerland",
+              away_team: "Colombia",
+              stage: "ROUND_OF_16",
+              kickoff_utc: "2026-07-07T20:00:00",
+              status: "scheduled",
+              home_score: null,
+              away_score: null,
+            },
+          ],
           scored: 0,
           skipped: 0,
           errors: 1,
@@ -617,6 +641,8 @@ describe("AnalyticsDashboard", () => {
     expect(screen.getByText("audit-dry-run-prev")).toBeInTheDocument();
     expect(screen.getByText("audit-failed-prev")).toBeInTheDocument();
     expect(screen.getByText("source unavailable")).toBeInTheDocument();
+    expect(screen.getByText("未完成赛果 1")).toBeInTheDocument();
+    expect(screen.getAllByText("Switzerland vs Colombia").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("耗时 123ms")).toBeInTheDocument();
     expect(screen.getByText("跳过 45")).toBeInTheDocument();
     expect(screen.getByText("via scheduled-worker")).toBeInTheDocument();
@@ -676,5 +702,71 @@ describe("AnalyticsDashboard", () => {
         }),
       );
     });
+  });
+
+  it("submits a verified stale knockout result correction with penalty winner provenance", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => ({
+      ok: true,
+      json: async () => responseFor(String(input)),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    window.sessionStorage.setItem("pmrf.operatorApiKey", "secret");
+
+    render(<AnalyticsDashboard />);
+
+    expect((await screen.findAllByText("Switzerland vs Colombia")).length).toBeGreaterThanOrEqual(1);
+
+    fireEvent.change(screen.getByLabelText("Verified home score for stale-r16"), { target: { value: "0" } });
+    fireEvent.change(screen.getByLabelText("Verified away score for stale-r16"), { target: { value: "0" } });
+    fireEvent.change(screen.getByLabelText("Penalty home score for stale-r16"), { target: { value: "4" } });
+    fireEvent.change(screen.getByLabelText("Penalty away score for stale-r16"), { target: { value: "3" } });
+    fireEvent.change(screen.getByLabelText("Verified winner for stale-r16"), { target: { value: "Switzerland" } });
+    fireEvent.change(screen.getByLabelText("Result source for stale-r16"), { target: { value: "Sky Sports" } });
+    fireEvent.change(screen.getByLabelText("Result source URL for stale-r16"), {
+      target: { value: "https://www.skysports.com/world-cup/switzerland-colombia" },
+    });
+    fireEvent.change(screen.getByLabelText("Result notes for stale-r16"), {
+      target: { value: "0-0 after extra time; Switzerland won 4-3 on penalties." },
+    });
+    fireEvent.click(screen.getByLabelText("Confirm verified correction for stale-r16"));
+    fireEvent.click(screen.getByRole("button", { name: "Submit verified correction for stale-r16" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/analytics/verified-result-correction"),
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            "Content-Type": "application/json",
+            "X-API-Key": "secret",
+            "X-Client-Source": "world-cup-dashboard",
+          }),
+        }),
+      );
+    });
+
+    const correctionCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/verified-result-correction"));
+    expect(correctionCall).toBeTruthy();
+    const body = JSON.parse(String(correctionCall?.[1]?.body));
+    expect(body).toEqual({
+      match_id: "stale-r16",
+      home_score: 0,
+      away_score: 0,
+      winner: "Switzerland",
+      penalty_score: { home: 4, away: 3 },
+      source: "Sky Sports",
+      source_url: "https://www.skysports.com/world-cup/switzerland-colombia",
+      notes: "0-0 after extra time; Switzerland won 4-3 on penalties.",
+      confirmed: true,
+    });
+    expect(await screen.findByText("Verified correction saved for stale-r16")).toBeInTheDocument();
   });
 });

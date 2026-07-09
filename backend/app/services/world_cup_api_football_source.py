@@ -216,17 +216,11 @@ def test_world_cup_api_football_connection() -> dict[str, Any]:
     except (UnicodeDecodeError, json.JSONDecodeError):
         return {"ok": False, "error": "Invalid JSON response"}
 
-    account = data.get("response", {}).get("account", {})
     subscription = data.get("response", {}).get("subscription", {})
     requests_info = data.get("response", {}).get("requests", {})
 
     return {
         "ok": True,
-        "account": {
-            "firstname": account.get("firstname", ""),
-            "lastname": account.get("lastname", ""),
-            "email": account.get("email", ""),
-        },
         "subscription": {
             "plan": subscription.get("plan", ""),
             "active": subscription.get("active", False),
@@ -274,12 +268,27 @@ def validate_world_cup_api_football_pipeline() -> dict[str, Any]:
                 fid = str(fixture.get("id", "")) if isinstance(fixture, dict) else ""
                 if fid:
                     api_fixture_ids.add(fid)
+        fixture_count = len(api_fixtures)
+        fixture_ok = fixture_count > 0
+        fixture_error = (
+            ""
+            if fixture_ok
+            else (
+                f"API-Football returned 0 fixtures for league={league_id} "
+                f"season={season}; check provider coverage/config before import."
+            )
+        )
         result["steps"].append({
             "name": "fixture_fetch",
-            "ok": True,
-            "fixture_count": len(api_fixtures),
+            "ok": fixture_ok,
+            "fixture_count": fixture_count,
             "fixture_ids_sample": sorted(api_fixture_ids)[:10],
+            **({"error": fixture_error} if fixture_error else {}),
         })
+        if not fixture_ok:
+            result["ok"] = False
+            result["error"] = fixture_error
+            return result
     except Exception as exc:
         result["steps"].append({
             "name": "fixture_fetch",
@@ -422,15 +431,16 @@ def _fetch_api_football_json(
         raise ValueError("API-Football response must be a JSON object")
     errors = payload.get("errors")
     if errors:
+        error_summary = _provider_error_summary(errors)
         _record_fetch(
             source_fetches,
             source_kind,
             source_url,
             started,
             "failed",
-            "provider returned errors",
+            error_summary,
         )
-        raise ValueError("API-Football returned errors")
+        raise ValueError(f"API-Football {error_summary}")
     _record_fetch(source_fetches, source_kind, source_url, started, "success")
     return payload
 
@@ -660,6 +670,18 @@ def _utc_timestamp(now: datetime | None = None) -> str:
 
 def _clean(value: Any) -> str:
     return " ".join(str(value or "").strip().split())
+
+
+def _provider_error_summary(errors: Any) -> str:
+    if isinstance(errors, dict):
+        keys = [_clean(key) for key in errors.keys()]
+        visible = [key for key in keys if key][:5]
+        return "provider returned errors" + (f": {', '.join(visible)}" if visible else "")
+    if isinstance(errors, list):
+        return f"provider returned {len(errors)} error(s)"
+    if isinstance(errors, str):
+        return "provider returned errors"
+    return "provider returned errors"
 
 
 def _detail_call_budget_summary(fixture_payload: dict[str, Any] | None) -> dict[str, Any]:

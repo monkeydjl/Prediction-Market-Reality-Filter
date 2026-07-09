@@ -59,6 +59,18 @@ export interface AnalyticsFetchOptions {
   headers?: HeadersInit;
 }
 
+export interface VerifiedResultCorrectionRequest {
+  match_id: string;
+  home_score: number;
+  away_score: number;
+  winner?: string;
+  penalty_score?: { home: number; away: number };
+  source: string;
+  source_url?: string;
+  notes?: string;
+  confirmed: boolean;
+}
+
 /**
  * Low-level fetch wrapper for analytics endpoints. Most callers should use the
  * named methods on `analyticsApi` below; this is exposed for one-off calls
@@ -152,6 +164,9 @@ export const analyticsApi = {
   qualityLoop: <T = unknown>(): Promise<T> =>
     analyticsFetch<T>("/api/analytics/quality-loop"),
 
+  predictionCoverage: <T = unknown>(staleAfterHours = 24): Promise<T> =>
+    analyticsFetch<T>(`/api/analytics/prediction-coverage${buildQuery({ stale_after_hours: staleAfterHours })}`),
+
   resultConsistency: <T = unknown>(limit = 25): Promise<T> =>
     analyticsFetch<T>(`/api/analytics/result-consistency${buildQuery({ limit })}`),
 
@@ -211,9 +226,22 @@ export const analyticsApi = {
       { method: "POST", timeoutMs: LONG_OPERATION_TIMEOUT_MS },
     ),
 
-  tournamentSimulation: <T = unknown>(numSimulations = 5000): Promise<T> =>
+  verifiedResultCorrection: <T = unknown>(payload: VerifiedResultCorrectionRequest): Promise<T> =>
     analyticsFetch<T>(
-      `/api/analytics/tournament-simulation${buildQuery({ num_simulations: numSimulations })}`,
+      "/api/analytics/verified-result-correction",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+        timeoutMs: LONG_OPERATION_TIMEOUT_MS,
+      },
+    ),
+
+  tournamentSimulation: <T = unknown>(numSimulations = 1000, forceRefresh = false): Promise<T> =>
+    analyticsFetch<T>(
+      `/api/analytics/tournament-simulation${buildQuery({
+        num_simulations: numSimulations,
+        force_refresh: forceRefresh ? "true" : undefined,
+      })}`,
       { timeoutMs: LONG_OPERATION_TIMEOUT_MS },
     ),
 };

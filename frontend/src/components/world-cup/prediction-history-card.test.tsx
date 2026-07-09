@@ -99,4 +99,23 @@ describe("PredictionHistoryCard engine label", () => {
     expect(screen.getByText("Contrib")).toBeInTheDocument();
     expect(screen.getByText(/Elo \+5\.0pp\/-3\.0pp/)).toBeInTheDocument();
   });
+
+  it("labels prediction history rows with missing or degraded data quality", async () => {
+    vi.mocked(fetchPredictionHistory).mockResolvedValue([
+      {
+        timestamp: "2026-06-24T12:00:00Z",
+        predicted_score: { home: 1, away: 1 },
+        outcome_probabilities: { home_win: 0.34, draw: 0.33, away_win: 0.33 },
+        confidence: 0.52,
+        trigger: "daily_update",
+        prediction_method: "hybrid",
+        data_quality: "partial",
+        data_quality_notes: ["data_quality_missing"],
+      },
+    ]);
+
+    render(<PredictionHistoryCard match={match} />);
+
+    expect(await screen.findByText("历史质量未标记")).toBeInTheDocument();
+  });
 });

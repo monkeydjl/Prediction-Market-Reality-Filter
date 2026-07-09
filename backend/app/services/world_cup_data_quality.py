@@ -8,7 +8,15 @@ from typing import Any
 
 SCORE_VERSION = 2
 
-_NON_REAL_SOURCE_TOKENS = ("mock", "fallback", "default", "unknown", "none", "estimated")
+_NON_REAL_SOURCE_TOKENS = (
+    "mock",
+    "fallback",
+    "default",
+    "unknown",
+    "none",
+    "estimated",
+    "unavailable",
+)
 
 
 def source_looks_real(source: Any) -> bool:
@@ -21,6 +29,42 @@ def source_looks_real(source: Any) -> bool:
         part and not any(token in part for token in _NON_REAL_SOURCE_TOKENS)
         for part in parts
     )
+
+
+def all_sources_look_real(source: Any) -> bool:
+    """Return true only when every source segment is a real data source."""
+
+    if not source:
+        return False
+    parts = [part for part in str(source).lower().replace("\\", "/").split("/") if part]
+    return bool(parts) and all(
+        not any(token in part for token in _NON_REAL_SOURCE_TOKENS)
+        for part in parts
+    )
+
+
+def normalize_prediction_data_quality(
+    quality: Any,
+    notes: list[str] | tuple[str, ...] | None = None,
+) -> tuple[str, list[str]]:
+    """Normalize persisted prediction quality before exposing it to clients.
+
+    Old rows may contain ``mock``/``fallback`` labels from earlier fixture sets.
+    New trusted outputs should only expose ``real`` or ``partial``; non-real or
+    missing historical labels are downgraded to ``partial`` with an audit note.
+    """
+
+    normalized_notes = list(notes or [])
+    value = str(quality or "").strip().lower()
+    if value == "real":
+        return "real", normalized_notes
+    if value == "partial":
+        return "partial", normalized_notes
+
+    note = "data_quality_missing" if not value else "historical_non_real_quality_normalized"
+    if note not in normalized_notes:
+        normalized_notes.append(note)
+    return "partial", normalized_notes
 
 
 def parse_source_time(value: Any) -> datetime | None:
@@ -74,7 +118,7 @@ def enrich_data_quality_metrics(
     factor_payload = factors if isinstance(factors, dict) else {}
 
     if "has_stats" not in enriched:
-        enriched["has_stats"] = source_looks_real(enriched.get("stats_source"))
+        enriched["has_stats"] = all_sources_look_real(enriched.get("stats_source"))
     if "has_schedule_context" not in enriched:
         home_factor = factor_payload.get("home_team") or {}
         away_factor = factor_payload.get("away_team") or {}
@@ -129,7 +173,7 @@ def calculate_data_quality_score(metrics: dict[str, Any] | None) -> float:
     elo_age_days = _safe_float_or_none(data.get("elo_age_days"))
     if elo_age_days is not None:
         freshness_score += _freshness_points(elo_age_days, fresh=7, stale=30, max_points=10)
-    elif data.get("has_elo") and source_looks_real(data.get("elo_source")):
+    elif data.get("has_elo") and all_sources_look_real(data.get("elo_source")):
         freshness_score += 8
 
     odds_age_minutes = _safe_float_or_none(data.get("odds_age_minutes"))

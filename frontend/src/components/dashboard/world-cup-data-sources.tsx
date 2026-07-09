@@ -28,6 +28,7 @@ import {
   type WorldCupSportmonksConnectionResult,
   type WorldCupSourceFetch,
 } from "@/lib/api";
+import { analyticsApi } from "@/lib/analytics-api";
 import { fmtDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -58,7 +59,32 @@ interface SourceReference {
   value: string;
 }
 
+interface PredictionCoverageMatch {
+  match_id: string;
+  home_team: string;
+  away_team: string;
+  kickoff_utc?: string | null;
+  stage?: string | null;
+  status?: string | null;
+  prediction_method?: string | null;
+  last_updated?: string | null;
+  age_hours?: number | null;
+}
+
+interface PredictionCoverage {
+  status: string;
+  coverage_ok: boolean;
+  scheduled_count: number;
+  predicted_count: number;
+  missing_count: number;
+  stale_count: number;
+  stale_after_hours: number;
+  missing_predictions: PredictionCoverageMatch[];
+  stale_predictions: PredictionCoverageMatch[];
+}
+
 const RESOLVE_DRY_RUN_LIMIT = 200;
+const PREDICTION_COVERAGE_STALE_HOURS = 24;
 
 const SOURCE_LABELS: Record<WorldCupDataSourceActionMode, string> = {
   data_file: "Data file",
@@ -66,6 +92,7 @@ const SOURCE_LABELS: Record<WorldCupDataSourceActionMode, string> = {
   bundle_url: "Bundle URL",
   feeds: "Raw feeds",
   api_football: "API-Football",
+  football_data: "Football-Data.org",
   sportmonks: "Sportmonks",
 };
 
@@ -126,6 +153,21 @@ function configuredFeeds(feeds: WorldCupFeedConfig[] | undefined) {
   return (feeds ?? []).filter((feed) => feed.configured);
 }
 
+function hasConfiguredFeedKind(feeds: WorldCupFeedConfig[] | undefined, kind: string) {
+  return configuredFeeds(feeds).some((feed) => feed.kind === kind);
+}
+
+function hasQualificationSource(status: WorldCupDataSourceStatus | null) {
+  const sources = status?.configured_sources;
+  if (!sources) return false;
+  return Boolean(
+    sources.api_football?.configured
+      || sources.football_data?.configured
+      || hasConfiguredFeedKind(sources.feeds, "standings")
+      || hasConfiguredFeedKind(sources.sportmonks?.feeds, "standings")
+  );
+}
+
 function feedReferences(feeds: WorldCupFeedConfig[] | undefined): SourceReference[] {
   return (feeds ?? [])
     .map((feed) => ({
@@ -140,6 +182,7 @@ function sourceRows(status: WorldCupDataSourceStatus | null): SourceRow[] {
   const feeds = configuredFeeds(sources.feeds);
   const sportmonksFeeds = configuredFeeds(sources.sportmonks?.feeds);
   const api = sources.api_football;
+  const footballData = sources.football_data;
   const sportmonks = sources.sportmonks;
 
   return [
@@ -198,6 +241,17 @@ function sourceRows(status: WorldCupDataSourceStatus | null): SourceRow[] {
         api?.max_detail_calls != null ? `budget ${api.max_detail_calls}` : "",
       ].filter(Boolean),
       references: api?.base_url ? [{ label: "base", value: api.base_url }] : [],
+    },
+    {
+      mode: "football_data",
+      label: SOURCE_LABELS.football_data,
+      configured: Boolean(footballData?.configured),
+      ready: Boolean(footballData?.configured),
+      detail: footballData?.configured
+        ? `competition ${footballData.competition || "WC"}`
+        : "未配置",
+      meta: [],
+      references: footballData?.base_url ? [{ label: "base", value: footballData.base_url }] : [],
     },
     {
       mode: "sportmonks",
@@ -274,6 +328,12 @@ function callBudgetEntries(budget: WorldCupCallBudget | undefined) {
   ].filter(([, value]) => value != null);
 }
 
+function coverageMatchLabel(match: PredictionCoverageMatch) {
+  const home = match.home_team || "home";
+  const away = match.away_team || "away";
+  return `${home} vs ${away}`;
+}
+
 function RunPills({ result }: { result: Record<string, unknown> }) {
   const pills = resultPills(result);
   if (pills.length === 0) return null;
@@ -284,6 +344,77 @@ function RunPills({ result }: { result: Record<string, unknown> }) {
           <span className="text-foreground">{key}</span> {formatValue(value)}
         </span>
       ))}
+    </div>
+  );
+}
+
+function PredictionCoveragePanel({
+  coverage,
+  error,
+}: {
+  coverage: PredictionCoverage | null;
+  error: string | null;
+}) {
+  if (error) {
+    return (
+      <div className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
+        Prediction coverage unavailable: {error}
+      </div>
+    );
+  }
+  if (!coverage) return null;
+
+  const issueMatches = [
+    ...coverage.missing_predictions.map((match) => ({ match, kind: "missing" })),
+    ...coverage.stale_predictions.map((match) => ({ match, kind: "stale" })),
+  ];
+
+  return (
+    <div className={cn(
+      "grid gap-2 rounded-md border px-3 py-3 text-xs",
+      coverage.coverage_ok
+        ? "border-pos/40 bg-pos/10 text-pos"
+        : "border-warn/40 bg-warn/10 text-warn",
+    )}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 font-medium">
+          {coverage.coverage_ok ? (
+            <CheckCircle2 className="size-3.5" aria-hidden="true" />
+          ) : (
+            <AlertTriangle className="size-3.5" aria-hidden="true" />
+          )}
+          <span>Prediction coverage</span>
+        </div>
+        <span className="text-[11px] text-muted-foreground">
+          stale after {coverage.stale_after_hours}h
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {[
+          ["scheduled", coverage.scheduled_count],
+          ["predicted", coverage.predicted_count],
+          ["missing", coverage.missing_count],
+          ["stale", coverage.stale_count],
+        ].map(([label, value]) => (
+          <span key={label} className="rounded bg-card/70 px-2 py-1 font-mono text-[11px] text-muted-foreground">
+            {label} {formatValue(value)}
+          </span>
+        ))}
+      </div>
+      {issueMatches.length > 0 && (
+        <div className="divide-y divide-border/60 overflow-hidden border-y border-border/60">
+          {issueMatches.slice(0, 4).map(({ match, kind }) => (
+            <div key={`${kind}:${match.match_id}`} className="flex flex-wrap items-center justify-between gap-2 py-2">
+              <span className="font-medium text-foreground">{coverageMatchLabel(match)}</span>
+              <span className="font-mono text-[11px] text-muted-foreground">
+                {kind}
+                {match.prediction_method ? ` · ${match.prediction_method}` : ""}
+                {match.age_hours != null ? ` · ${Number(match.age_hours).toFixed(1)}h` : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -444,6 +575,164 @@ function FactKindPills({ byKind }: { byKind: Record<string, number> | undefined 
   );
 }
 
+function QualificationFactsPanel({ byKind }: { byKind: Record<string, number> | undefined }) {
+  const count = byKind?.qualification ?? 0;
+  const ok = count > 0;
+  return (
+    <div className={cn(
+      "flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs",
+      ok
+        ? "border-pos/40 bg-pos/10 text-pos"
+        : "border-warn/40 bg-warn/10 text-warn",
+    )}>
+      <div className="flex items-center gap-2 font-medium">
+        {ok ? (
+          <CheckCircle2 className="size-3.5" aria-hidden="true" />
+        ) : (
+          <AlertTriangle className="size-3.5" aria-hidden="true" />
+        )}
+        <span>Qualification facts</span>
+      </div>
+      <span className="font-mono text-[11px] text-muted-foreground">
+        {count.toLocaleString("zh-CN")} imported
+      </span>
+    </div>
+  );
+}
+
+function recommendedImportGuidance(mode: string) {
+  if (mode === "api_football") {
+    return "Run pipeline validation first; import only after it passes.";
+  }
+  if (mode === "football_data") {
+    return "直接导入 Football-Data.org 真实积分榜。";
+  }
+  if (mode) {
+    return "运行推荐来源的 Import，导入真实 qualification facts。";
+  }
+  return "";
+}
+
+function QualificationSourcePanel({ status }: { status: WorldCupDataSourceStatus | null }) {
+  const readiness = status?.real_data_readiness;
+  const sourceConfigured = readiness?.qualification_source_configured ?? hasQualificationSource(status);
+  const factCount = readiness?.qualification_fact_count ?? status?.facts?.by_kind?.qualification ?? 0;
+  const untrustedFactCount = readiness?.untrusted_qualification_fact_count ?? 0;
+  const ok = sourceConfigured && factCount > 0;
+  const issues = readiness?.issues ?? [];
+  const issueDetails = readiness?.issue_details ?? [];
+  const recommendedLabel = readiness?.recommended_qualification_import_label || "";
+  const recommendedMode = readiness?.recommended_qualification_import_mode || "";
+  const lastValidationRun = recommendedMode === "api_football"
+    ? status?.runs?.world_cup_api_football_validate ?? null
+    : null;
+  const lastValidationResult = asRecord(lastValidationRun?.result);
+  const lastValidationEntries = ([
+    ["provider", lastValidationResult.provider],
+    ["ok", lastValidationResult.ok],
+    ["fixture_count", lastValidationResult.fixture_count],
+    ["failed_step", lastValidationResult.failed_step],
+    ["covered", lastValidationResult.covered],
+    ["missing_from_store", lastValidationResult.missing_from_store],
+  ] as [string, unknown][]).filter(([, value]) => value != null && value !== "");
+  const importGuidance = recommendedImportGuidance(recommendedMode);
+  const statusText = ok
+    ? "Ready"
+    : readiness?.qualification_source_state === "validation_failed"
+      ? "Validation failed"
+      : sourceConfigured
+        ? "Configured, import required"
+        : "Not configured: standings/API provider required";
+  return (
+    <div className={cn(
+      "grid gap-2 rounded-md border px-3 py-2 text-xs",
+      ok
+        ? "border-pos/40 bg-pos/10 text-pos"
+        : sourceConfigured
+          ? "border-warn/40 bg-warn/10 text-warn"
+          : "border-neg/40 bg-neg/10 text-neg",
+    )}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 font-medium">
+          {ok ? (
+            <CheckCircle2 className="size-3.5" aria-hidden="true" />
+          ) : (
+            <AlertTriangle className="size-3.5" aria-hidden="true" />
+          )}
+          <span>Real qualification source</span>
+        </div>
+        <span className="text-[11px] text-muted-foreground">
+          {statusText}
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        <span className="rounded bg-card/70 px-2 py-1 font-mono text-[11px] text-muted-foreground">
+          trusted {formatValue(factCount)}
+        </span>
+        {untrustedFactCount > 0 && (
+          <span className="rounded bg-card/70 px-2 py-1 font-mono text-[11px] text-warn">
+            untrusted {formatValue(untrustedFactCount)}
+          </span>
+        )}
+      </div>
+      {recommendedLabel && (
+        <div className="grid gap-1 rounded bg-card/70 px-2 py-1.5 text-[11px] text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-medium text-foreground">Recommended import</span>
+            <span>{recommendedLabel}</span>
+            {recommendedMode && <span className="font-mono">{recommendedMode}</span>}
+          </div>
+          {!ok && importGuidance && (
+            <div>{importGuidance}</div>
+          )}
+        </div>
+      )}
+      {lastValidationRun && (
+        <div className="grid gap-1.5 rounded bg-card/70 px-2 py-1.5 text-[11px] text-muted-foreground">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-medium text-foreground">Last provider validation</span>
+            <span className="font-mono">{lastValidationRun.status}</span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {lastValidationEntries.map(([key, value]) => (
+              <span key={key} className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px]">
+                <span className="text-foreground">{key}</span> {formatValue(value)}
+              </span>
+            ))}
+          </div>
+          {lastValidationRun.finished_at || lastValidationRun.started_at ? (
+            <div>
+              {fmtDateTime(lastValidationRun.finished_at ?? lastValidationRun.started_at)}
+              {lastValidationRun.duration_ms != null ? ` · ${formatDurationMs(lastValidationRun.duration_ms)}` : ""}
+            </div>
+          ) : null}
+          {lastValidationRun.error && (
+            <div className="text-neg">{lastValidationRun.error}</div>
+          )}
+        </div>
+      )}
+      {issueDetails.length > 0 ? (
+        <div className="grid gap-1.5">
+          {issueDetails.map((issue) => (
+            <div key={issue.code ?? issue.message} className="rounded bg-card/70 px-2 py-1.5 text-[11px] text-muted-foreground">
+              <div className="font-medium text-foreground">{issue.message || issue.code}</div>
+              {issue.action && <div className="mt-0.5">{issue.action}</div>}
+            </div>
+          ))}
+        </div>
+      ) : issues.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {issues.map((issue) => (
+            <span key={issue} className="rounded bg-card/70 px-2 py-1 font-mono text-[11px] text-muted-foreground">
+              {issue}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ResolveMatches({ matches }: { matches: WorldCupResolveMatch[] }) {
   if (matches.length === 0) {
     return (
@@ -511,8 +800,10 @@ function ResolveDryRun({ result }: { result: WorldCupResolveResult }) {
 
 export function WorldCupDataSources() {
   const [status, setStatus] = useState<WorldCupDataSourceStatus | null>(null);
+  const [coverage, setCoverage] = useState<PredictionCoverage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [coverageError, setCoverageError] = useState<string | null>(null);
   const [replace, setReplace] = useState(false);
   const [running, setRunning] = useState<ActionState | null>(null);
   const [completed, setCompleted] = useState<CompletedAction | null>(null);
@@ -540,8 +831,27 @@ export function WorldCupDataSources() {
   async function load(silent = false) {
     if (!silent) setLoading(true);
     setError(null);
+    setCoverageError(null);
     try {
-      setStatus(await eventsApi.worldCupDataSourcesStatus());
+      const [statusResult, coverageResult] = await Promise.allSettled([
+        eventsApi.worldCupDataSourcesStatus(),
+        analyticsApi.predictionCoverage<PredictionCoverage>(PREDICTION_COVERAGE_STALE_HOURS),
+      ]);
+      if (statusResult.status === "fulfilled") {
+        setStatus(statusResult.value);
+      } else {
+        throw statusResult.reason;
+      }
+      if (coverageResult.status === "fulfilled") {
+        setCoverage(coverageResult.value);
+      } else {
+        setCoverage(null);
+        setCoverageError(
+          coverageResult.reason instanceof Error
+            ? coverageResult.reason.message
+            : String(coverageResult.reason)
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "世界杯数据源状态加载失败");
     } finally {
@@ -596,6 +906,7 @@ export function WorldCupDataSources() {
     setError(null);
     try {
       setValidateResult(await eventsApi.worldCupApiFootballValidate());
+      await load(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Pipeline验证失败");
     } finally {
@@ -754,6 +1065,9 @@ export function WorldCupDataSources() {
           {validateResult.summary && (
             <p className="mt-2 text-muted-foreground">{validateResult.summary}</p>
           )}
+          {validateResult.error && (
+            <p className="mt-2 rounded bg-card/70 px-2 py-1.5 text-neg">{validateResult.error}</p>
+          )}
           {validateResult.steps && validateResult.steps.length > 0 && (
             <div className="mt-3 space-y-2">
               {validateResult.steps.map((step, idx) => (
@@ -766,6 +1080,11 @@ export function WorldCupDataSources() {
                   <div className="min-w-0 flex-1">
                     <div className="font-medium capitalize">{step.name}</div>
                     {step.error && <div className="mt-0.5 text-neg">{step.error}</div>}
+                    {step.fixture_count != null && (
+                      <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                        fixture_count: {step.fixture_count}
+                      </div>
+                    )}
                     {step.detail && typeof step.detail === "object" && (
                       <div className="mt-1 flex flex-wrap gap-1.5">
                         {Object.entries(step.detail as Record<string, unknown>).map(([key, value]) => (
@@ -808,6 +1127,9 @@ export function WorldCupDataSources() {
       )}
 
       <FactKindPills byKind={status?.facts?.by_kind} />
+      <QualificationFactsPanel byKind={status?.facts?.by_kind} />
+      <QualificationSourcePanel status={status} />
+      <PredictionCoveragePanel coverage={coverage} error={coverageError} />
 
       <div className="divide-y divide-border border-y border-border">
         {rows.map((row) => {

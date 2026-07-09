@@ -5,7 +5,7 @@ import { BarChart3, Target, Database, Activity, TrendingUp, AlertCircle, Gauge, 
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { cn } from "@/lib/utils";
 import { fmtPct } from "@/lib/format";
-import { analyticsApi } from "@/lib/analytics-api";
+import { analyticsApi, type VerifiedResultCorrectionRequest } from "@/lib/analytics-api";
 import { ChartFrame, DarkTooltip } from "@/components/ui/chart-lite";
 
 interface EngineStats {
@@ -193,6 +193,17 @@ interface ConsistencyRepairApplyResult extends ConsistencyRepairPreview {
   run_id?: string;
 }
 
+interface StaleUnfinishedFixture {
+  match_id: string;
+  home_team: string;
+  away_team: string;
+  stage?: string | null;
+  kickoff_utc?: string | null;
+  status?: string | null;
+  home_score?: number | null;
+  away_score?: number | null;
+}
+
 interface PostMatchBackfillResult {
   status: string;
   run_id?: string;
@@ -219,6 +230,8 @@ interface PostMatchBackfillResult {
     trend_days: number;
     consistency_issues: number;
   };
+  stale_unfinished_count?: number;
+  stale_unfinished_fixtures?: StaleUnfinishedFixture[];
   error?: string;
 }
 
@@ -237,6 +250,8 @@ interface PostMatchBackfillRun {
   skipped: number;
   errors: number;
   quality_samples: number | null;
+  stale_unfinished_count?: number;
+  stale_unfinished_fixtures?: StaleUnfinishedFixture[];
   audit_metadata?: AuditMetadata | null;
 }
 
@@ -245,6 +260,19 @@ interface PostMatchBackfillRunsResponse {
   job_name: string;
   count: number;
   runs: PostMatchBackfillRun[];
+}
+
+interface VerifiedResultCorrectionResponse {
+  status: string;
+  fixture?: {
+    status?: string;
+    score?: { home: number | null; away: number | null } | null;
+  };
+  fact?: {
+    winner?: string;
+    penalty_score?: { home: number; away: number } | null;
+  };
+  fact_import?: { imported?: number };
 }
 
 interface ResultConsistencyScore {
@@ -902,7 +930,30 @@ function PostMatchBackfillPanel({ onQualityRefresh }: { onQualityRefresh: (quali
     }
   }
 
+  async function submitVerifiedCorrection(payload: VerifiedResultCorrectionRequest): Promise<VerifiedResultCorrectionResponse> {
+    const data = await analyticsApi.verifiedResultCorrection<VerifiedResultCorrectionResponse>(payload);
+    await loadAuditRuns();
+    try {
+      onQualityRefresh(await analyticsApi.qualityLoop<QualityLoopReport>());
+    } catch {
+      // Best-effort refresh; the correction itself already succeeded.
+    }
+    return data;
+  }
+
   const canWrite = confirmed && isRunning == null;
+  const staleFixturesById = new Map<string, StaleUnfinishedFixture>();
+  for (const fixture of result?.stale_unfinished_fixtures ?? []) {
+    staleFixturesById.set(fixture.match_id, fixture);
+  }
+  for (const run of auditRuns) {
+    for (const fixture of run.stale_unfinished_fixtures ?? []) {
+      if (!staleFixturesById.has(fixture.match_id)) {
+        staleFixturesById.set(fixture.match_id, fixture);
+      }
+    }
+  }
+  const staleFixtures = Array.from(staleFixturesById.values()).slice(0, 5);
 
   return (
     <div className="mt-4 rounded-md border bg-background p-3">
@@ -991,6 +1042,32 @@ function PostMatchBackfillPanel({ onQualityRefresh }: { onQualityRefresh: (quali
               ))}
             </div>
           )}
+          {(result.stale_unfinished_count ?? 0) > 0 && (
+            <div className="border-l-2 border-warn/50 pl-3 text-xs text-warn">
+              <div className="font-medium">未完成赛果 {result.stale_unfinished_count}</div>
+              <div className="mt-1 space-y-0.5 text-[11px]">
+                {(result.stale_unfinished_fixtures ?? []).slice(0, 5).map((fixture) => (
+                  <div key={fixture.match_id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <span>{fixture.home_team} vs {fixture.away_team}</span>
+                    {fixture.stage && <span className="text-muted-foreground">{fixture.stage}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {staleFixtures.length > 0 && (
+        <div className="mt-3 space-y-2 rounded-md border border-warn/30 bg-warn/5 px-3 py-2">
+          <div className="text-xs font-medium text-warn">人工核验赛果修正</div>
+          {staleFixtures.map((fixture) => (
+            <PostMatchCorrectionForm
+              key={fixture.match_id}
+              fixture={fixture}
+              onSubmit={submitVerifiedCorrection}
+            />
+          ))}
         </div>
       )}
 
@@ -1022,6 +1099,19 @@ function PostMatchBackfillPanel({ onQualityRefresh }: { onQualityRefresh: (quali
                     via {auditMetadataLabel(run.audit_metadata)}
                   </div>
                   {run.error && <div className="mt-1 break-all text-neg">{run.error}</div>}
+                  {(run.stale_unfinished_count ?? 0) > 0 && (
+                    <div className="mt-1 border-l-2 border-warn/50 pl-2 text-[11px] text-warn">
+                      <div className="font-medium">未完成赛果 {run.stale_unfinished_count}</div>
+                      <div className="mt-0.5 space-y-0.5">
+                        {(run.stale_unfinished_fixtures ?? []).slice(0, 3).map((fixture) => (
+                          <div key={fixture.match_id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                            <span>{fixture.home_team} vs {fixture.away_team}</span>
+                            {fixture.stage && <span className="text-muted-foreground">{fixture.stage}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-2 font-mono text-[11px] text-muted-foreground tabular-nums md:grid-cols-4 md:text-right">
                   <span>候选 {run.candidate_count}</span>
@@ -1036,6 +1126,194 @@ function PostMatchBackfillPanel({ onQualityRefresh }: { onQualityRefresh: (quali
       </div>
     </div>
   );
+}
+
+function PostMatchCorrectionForm({
+  fixture,
+  onSubmit,
+}: {
+  fixture: StaleUnfinishedFixture;
+  onSubmit: (payload: VerifiedResultCorrectionRequest) => Promise<VerifiedResultCorrectionResponse>;
+}) {
+  const [homeScore, setHomeScore] = useState(fixture.home_score == null ? "" : String(fixture.home_score));
+  const [awayScore, setAwayScore] = useState(fixture.away_score == null ? "" : String(fixture.away_score));
+  const [winner, setWinner] = useState(fixture.home_team);
+  const [penaltyHome, setPenaltyHome] = useState("");
+  const [penaltyAway, setPenaltyAway] = useState("");
+  const [source, setSource] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [notes, setNotes] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const homeScoreNumber = parseIntegerInput(homeScore);
+  const awayScoreNumber = parseIntegerInput(awayScore);
+  const penaltyHomeNumber = parseIntegerInput(penaltyHome);
+  const penaltyAwayNumber = parseIntegerInput(penaltyAway);
+  const needsPenaltyScore = homeScoreNumber != null && awayScoreNumber != null && homeScoreNumber === awayScoreNumber;
+  const hasPenaltyScore = penaltyHomeNumber != null && penaltyAwayNumber != null;
+  const canSubmit = Boolean(
+    confirmed
+      && !isSubmitting
+      && homeScoreNumber != null
+      && awayScoreNumber != null
+      && winner
+      && source.trim()
+      && (!needsPenaltyScore || hasPenaltyScore),
+  );
+
+  async function handleSubmit() {
+    if (!canSubmit || homeScoreNumber == null || awayScoreNumber == null) return;
+    setIsSubmitting(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const payload: VerifiedResultCorrectionRequest = {
+        match_id: fixture.match_id,
+        home_score: homeScoreNumber,
+        away_score: awayScoreNumber,
+        winner,
+        source: source.trim(),
+        confirmed: true,
+      };
+      if (needsPenaltyScore && hasPenaltyScore) {
+        payload.penalty_score = { home: penaltyHomeNumber, away: penaltyAwayNumber };
+      }
+      if (sourceUrl.trim()) payload.source_url = sourceUrl.trim();
+      if (notes.trim()) payload.notes = notes.trim();
+      await onSubmit(payload);
+      setSaved(true);
+      setConfirmed(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="rounded-md bg-background/80 px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="font-medium text-foreground">{fixture.home_team} vs {fixture.away_team}</div>
+          <div className="mt-0.5 flex flex-wrap gap-2 font-mono text-[11px] text-muted-foreground tabular-nums">
+            <span>{fixture.match_id}</span>
+            {fixture.stage && <span>{fixture.stage}</span>}
+            {fixture.kickoff_utc && <span>{compactDateTime(fixture.kickoff_utc)}</span>}
+          </div>
+        </div>
+        {saved && <span className="text-[11px] text-pos">Verified correction saved for {fixture.match_id}</span>}
+      </div>
+
+      <div className="mt-2 grid gap-2 md:grid-cols-6">
+        <input
+          aria-label={`Verified home score for ${fixture.match_id}`}
+          type="number"
+          min="0"
+          value={homeScore}
+          onChange={(event) => setHomeScore(event.currentTarget.value)}
+          placeholder={`${fixture.home_team} score`}
+          className="min-w-0 rounded-md border bg-background px-2 py-1 text-xs"
+        />
+        <input
+          aria-label={`Verified away score for ${fixture.match_id}`}
+          type="number"
+          min="0"
+          value={awayScore}
+          onChange={(event) => setAwayScore(event.currentTarget.value)}
+          placeholder={`${fixture.away_team} score`}
+          className="min-w-0 rounded-md border bg-background px-2 py-1 text-xs"
+        />
+        <select
+          aria-label={`Verified winner for ${fixture.match_id}`}
+          value={winner}
+          onChange={(event) => setWinner(event.currentTarget.value)}
+          className="min-w-0 rounded-md border bg-background px-2 py-1 text-xs"
+        >
+          <option value={fixture.home_team}>{fixture.home_team}</option>
+          <option value={fixture.away_team}>{fixture.away_team}</option>
+        </select>
+        <input
+          aria-label={`Penalty home score for ${fixture.match_id}`}
+          type="number"
+          min="0"
+          value={penaltyHome}
+          onChange={(event) => setPenaltyHome(event.currentTarget.value)}
+          placeholder="PK home"
+          className="min-w-0 rounded-md border bg-background px-2 py-1 text-xs"
+        />
+        <input
+          aria-label={`Penalty away score for ${fixture.match_id}`}
+          type="number"
+          min="0"
+          value={penaltyAway}
+          onChange={(event) => setPenaltyAway(event.currentTarget.value)}
+          placeholder="PK away"
+          className="min-w-0 rounded-md border bg-background px-2 py-1 text-xs"
+        />
+        <input
+          aria-label={`Result source for ${fixture.match_id}`}
+          value={source}
+          onChange={(event) => setSource(event.currentTarget.value)}
+          placeholder="Source"
+          className="min-w-0 rounded-md border bg-background px-2 py-1 text-xs"
+        />
+      </div>
+
+      <div className="mt-2 grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <input
+          aria-label={`Result source URL for ${fixture.match_id}`}
+          value={sourceUrl}
+          onChange={(event) => setSourceUrl(event.currentTarget.value)}
+          placeholder="Source URL"
+          className="min-w-0 rounded-md border bg-background px-2 py-1 text-xs"
+        />
+        <input
+          aria-label={`Result notes for ${fixture.match_id}`}
+          value={notes}
+          onChange={(event) => setNotes(event.currentTarget.value)}
+          placeholder="Notes"
+          className="min-w-0 rounded-md border bg-background px-2 py-1 text-xs"
+        />
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <label className="inline-flex items-center gap-1.5 rounded-md border bg-secondary/50 px-2.5 py-1.5 text-xs text-muted-foreground">
+          <input
+            aria-label={`Confirm verified correction for ${fixture.match_id}`}
+            type="checkbox"
+            checked={confirmed}
+            onChange={(event) => setConfirmed(event.currentTarget.checked)}
+            className="size-3.5 accent-current"
+          />
+          已核验来源
+        </label>
+        <button
+          aria-label={`Submit verified correction for ${fixture.match_id}`}
+          type="button"
+          onClick={handleSubmit}
+          disabled={!canSubmit}
+          className="inline-flex items-center gap-1.5 rounded-md border border-warn/40 bg-warn/10 px-2.5 py-1.5 text-xs font-medium text-warn transition-colors hover:bg-warn/20 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <ShieldCheck className={cn("size-3.5", isSubmitting && "animate-pulse")} />
+          提交核验赛果
+        </button>
+        {needsPenaltyScore && !hasPenaltyScore && (
+          <span className="text-[11px] text-warn">平局淘汰赛必须填写点球比分</span>
+        )}
+        {error && <span className="text-[11px] text-neg">{error}</span>}
+      </div>
+    </div>
+  );
+}
+
+function parseIntegerInput(value: string): number | null {
+  if (value.trim() === "") return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) return null;
+  return parsed;
 }
 
 function ReconcileScoringPanel({ onQualityRefresh }: { onQualityRefresh: (quality: QualityLoopReport) => void }) {

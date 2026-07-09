@@ -51,6 +51,35 @@ function qualityScoreLabel(score: number): string {
   return "数据有限";
 }
 
+function dataQualityLabel(quality?: MatchPrediction["data_quality"]): string {
+  if (quality === "real") return "Real";
+  if (quality === "partial") return "Partial";
+  return "--";
+}
+
+function dataQualityTone(quality?: MatchPrediction["data_quality"]): string {
+  if (quality === "real") return "text-pos";
+  if (quality === "partial") return "text-warn";
+  return "text-muted-foreground";
+}
+
+function dataQualityNoteLabel(notes?: string[]): string | null {
+  if (!notes?.length) return null;
+  if (notes.includes("historical_non_real_quality_normalized")) {
+    return "历史非真实记录已降级";
+  }
+  if (notes.includes("data_quality_missing")) {
+    return "缺少质量标记";
+  }
+  if (notes.includes("betting_odds_unavailable")) {
+    return "赔率数据缺失";
+  }
+  if (notes.includes("betting_odds_not_real")) {
+    return "赔率来源非真实";
+  }
+  return null;
+}
+
 function engineDisplayName(engine?: string): string {
   if (engine === "elo_odds") return "Elo+赔率";
   if (engine === "hybrid") return "混合引擎";
@@ -83,6 +112,7 @@ function getEngineLabel(prediction?: MatchPrediction): { icon: LucideIcon; label
   const method = prediction.prediction_method || "";
   const engine = prediction.engine_used;
   const hasOdds = prediction.has_betting_odds;
+  const isEloOnly = method === "elo_only" || (method.startsWith("elo") && hasOdds === false);
 
   if (engine === "integrated" || method.includes("integrated")) {
     return { icon: GitCompare, label: "集成引擎", color: "text-primary" };
@@ -90,6 +120,10 @@ function getEngineLabel(prediction?: MatchPrediction): { icon: LucideIcon; label
 
   if (engine === "hybrid" || method === "rule_only" || method === "rule_dominant" || method.includes("hybrid")) {
     return { icon: Brain, label: "混合引擎", color: "text-muted-foreground" };
+  }
+
+  if ((engine === "elo_odds" || method.includes("elo")) && isEloOnly && hasOdds === false) {
+    return { icon: Zap, label: "Elo only", color: "text-warn" };
   }
 
   if (engine === "elo_odds" || method.includes("elo_odds") || (hasOdds && method.includes("elo"))) {
@@ -192,6 +226,7 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
   );
   const reasoning = prediction?.ai_reasoning?.trim() || null;
   const qualityScore = prediction?.data_quality_score ?? null;
+  const dataQualityNote = dataQualityNoteLabel(prediction?.data_quality_notes);
   const calibration = prediction?.confidence_calibration ?? null;
   const rawConfidence = calibration?.raw ?? prediction?.raw_confidence ?? null;
   const calibrationReferenceOnly =
@@ -242,6 +277,13 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
     [prediction]
   );
   const contributionWeights = prediction?.explanation_contributions?.engine_weights ?? null;
+  const oddsUnavailable =
+    prediction != null &&
+    prediction.has_betting_odds === false &&
+    (
+      prediction.engine_used === "elo_odds" ||
+      (prediction.prediction_method ?? "").startsWith("elo")
+    );
   const showCalibration = calibration != null && rawConfidence != null;
   const hasExplanation =
     keyFactors.length > 0 ||
@@ -458,6 +500,38 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
                     <span className="text-muted-foreground">vs</span>
                     <span>{Math.round(prediction.elo_ratings.away)}</span>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {oddsUnavailable && (
+              <div className="flex items-center justify-between rounded-md border border-warn/30 bg-warn/10 px-3 py-2">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <AlertCircle className="size-3.5" />
+                  <span>Market odds</span>
+                </div>
+                <span className="text-xs font-medium text-warn">Odds unavailable</span>
+              </div>
+            )}
+
+            {prediction.data_quality && (
+              <div className={cn(
+                "flex items-center justify-between rounded-md border px-3 py-2",
+                "bg-secondary/30"
+              )}>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Gauge className="size-3.5" />
+                  <span>Data quality</span>
+                </div>
+                <div className="text-right">
+                  <div className={cn("text-xs font-medium", dataQualityTone(prediction.data_quality))}>
+                    {dataQualityLabel(prediction.data_quality)}
+                  </div>
+                  {dataQualityNote && (
+                    <div className="mt-0.5 text-[11px] font-medium text-warn">
+                      {dataQualityNote}
+                    </div>
+                  )}
                 </div>
               </div>
             )}

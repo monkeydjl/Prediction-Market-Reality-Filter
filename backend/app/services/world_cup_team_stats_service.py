@@ -1,7 +1,8 @@
 """Fetch team statistics and head-to-head data from API-Football.
 
-This service provides real team performance data for the prediction engine,
-replacing mock data with actual statistics from API-Football.
+This service provides real team performance data for the prediction engine.
+Unknown teams return None so callers can mark statistics unavailable instead
+of inventing data.
 """
 
 import json
@@ -321,8 +322,9 @@ def calculate_form_rating(wins: int, draws: int, losses: int) -> float:
 def get_team_id_from_name(team_name: str) -> int | None:
     """Get API-Football team ID from team name.
 
-    Uses a curated mapping of 2026 World Cup team names to API-Football IDs.
-    Falls back to None for unknown teams (triggers mock data fallback).
+    Resolves through the local cache, API-Football lookup, then a curated
+    national-team mapping. Unknown teams return None so callers can mark
+    statistics unavailable instead of inventing data.
 
     Args:
         team_name: Team name (e.g., "Brazil", "Argentina")

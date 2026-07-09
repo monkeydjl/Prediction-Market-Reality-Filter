@@ -759,7 +759,7 @@ export default function WorldCupPage() {
 
         {/* Tournament Simulation */}
         {activeTab === "tournament" && (
-          <TournamentSimulation />
+          <TournamentSimulation onOpenAnalytics={() => handleTabChange("analytics")} />
         )}
 
         {/* Engine Comparison Stats */}

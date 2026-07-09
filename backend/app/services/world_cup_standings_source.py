@@ -16,7 +16,12 @@ def world_cup_standings_source_to_data(payload: Any) -> dict[str, Any]:
     """Convert raw standings/group-table data into normalized qualifications."""
 
     envelope = payload if isinstance(payload, dict) else {}
-    rows = _standing_rows(payload)
+    source = (
+        _clean(envelope.get("source"))
+        or _clean(envelope.get("provider"))
+        or "world_cup_standings_source"
+    )
+    rows = _standing_rows(payload, source=source)
     qualifications = [
         _normalize_standing(row, index)
         for index, row in enumerate(rows)
@@ -25,11 +30,7 @@ def world_cup_standings_source_to_data(payload: Any) -> dict[str, Any]:
         raise ValueError("standings-source payload did not contain standings")
     return {
         "tournament": _clean(envelope.get("tournament")) or WORLD_CUP_TOURNAMENT,
-        "source": (
-            _clean(envelope.get("source"))
-            or _clean(envelope.get("provider"))
-            or "world_cup_standings_source"
-        ),
+        "source": source,
         "source_url": _clean(envelope.get("source_url") or envelope.get("url")),
         "observed_at": _clean(envelope.get("observed_at")) or _utc_now(),
         "qualifications": qualifications,
@@ -56,6 +57,7 @@ def import_world_cup_standings_source(
 ) -> dict[str, Any]:
     """Import qualification facts produced from raw standings data."""
 
+    _require_trusted_import_metadata(payload)
     data = world_cup_standings_source_to_data(payload)
     result = import_world_cup_data(data, replace=replace)
     result["normalized_qualification_count"] = len(data["qualifications"])
@@ -63,11 +65,24 @@ def import_world_cup_standings_source(
     return result
 
 
-def _standing_rows(payload: Any, stage: str = "") -> list[dict[str, Any]]:
+def _require_trusted_import_metadata(payload: Any) -> None:
+    if not isinstance(payload, dict):
+        raise ValueError("standings-source import requires source_url and observed_at metadata")
+    source_url = _clean(payload.get("source_url") or payload.get("url"))
+    observed_at = _clean(payload.get("observed_at"))
+    if not source_url:
+        raise ValueError("standings-source import requires source_url")
+    if not source_url.lower().startswith(("https://", "http://")):
+        raise ValueError("standings-source import source_url must be an http(s) URL")
+    if not observed_at:
+        raise ValueError("standings-source import requires observed_at")
+
+
+def _standing_rows(payload: Any, stage: str = "", source: str = "") -> list[dict[str, Any]]:
     if isinstance(payload, list):
         rows: list[dict[str, Any]] = []
         for item in payload:
-            rows.extend(_standing_rows(item, stage))
+            rows.extend(_standing_rows(item, stage, source))
         return rows
     if not isinstance(payload, dict):
         raise ValueError("standings-source payload must be an object or list")
@@ -78,24 +93,73 @@ def _standing_rows(payload: Any, stage: str = "") -> list[dict[str, Any]]:
             row["stage"] = stage
         return [row]
 
+    table = payload.get("table")
+    if isinstance(table, list):
+        return _table_rows(table, payload, stage, source)
+
     rows: list[dict[str, Any]] = []
     group_map = payload.get("groups")
     if isinstance(group_map, dict):
         for group_name, group_rows in group_map.items():
-            rows.extend(_standing_rows(group_rows, _clean(group_name)))
+            rows.extend(_standing_rows(group_rows, _clean(group_name), source))
     elif isinstance(group_map, list):
-        rows.extend(_standing_rows(group_map, stage))
+        rows.extend(_standing_rows(group_map, stage, source))
 
     league_standings = _dig(payload, ("league", "standings"))
     if isinstance(league_standings, list):
-        rows.extend(_standing_rows(league_standings, stage))
+        rows.extend(_standing_rows(league_standings, stage, source))
 
     for key in ("standings", "tables", "response", "data"):
         value = payload.get(key)
         if value is None:
             continue
-        rows.extend(_standing_rows(value, stage))
+        rows.extend(_standing_rows(value, stage, source))
     return rows
+
+
+def _table_rows(
+    table: list[Any],
+    parent: dict[str, Any],
+    stage: str,
+    source: str,
+) -> list[dict[str, Any]]:
+    group = _text(_first(parent, ("group",), ("group_name",))) or stage
+    completed_football_data_group = (
+        source == "football_data"
+        and len(table) >= 4
+        and all(_first_number(row, "played") == 3 for row in table if isinstance(row, dict))
+        and all(isinstance(row, dict) for row in table)
+    )
+
+    rows: list[dict[str, Any]] = []
+    for item in table:
+        rows.extend(_standing_rows(
+            _table_row(item, group, completed_football_data_group),
+            group,
+            source,
+        ))
+    return rows
+
+
+def _table_row(
+    item: Any,
+    group: str,
+    completed_football_data_group: bool,
+) -> Any:
+    if not isinstance(item, dict):
+        return item
+
+    row = dict(item)
+    if group and not _first(row, ("group",), ("stage",)):
+        row["group"] = group
+        row["stage"] = group
+    if completed_football_data_group:
+        rank = _first_number(row, "rank")
+        if rank is not None and rank <= 2:
+            row["already_qualified"] = True
+        elif rank is not None:
+            row["already_eliminated"] = True
+    return row
 
 
 def _looks_like_standing(raw: dict[str, Any]) -> bool:
@@ -229,16 +293,20 @@ def _first_number(raw: dict[str, Any], field: str) -> float | None:
     short = {
         "goals_for": ("gf",),
         "goals_against": ("ga",),
-        "goal_diff": ("gd", "difference"),
-        "played": ("p", "mp", "matches", "games"),
+        "goal_diff": ("gd", "difference", "goaldifference"),
+        "played": ("p", "mp", "matches", "games", "playedgames"),
         "won": ("w", "wins"),
-        "drawn": ("d", "draws"),
+        "drawn": ("d", "draw", "draws"),
         "lost": ("l", "losses"),
         "points": ("pts",),
         "rank": ("pos", "position", "ranking"),
     }.get(field, ())
+    camel = {
+        "goals_for": ("goalsfor",),
+        "goals_against": ("goalsagainst",),
+    }.get(field, ())
     lowered = {str(k).lower(): v for k, v in raw.items()}
-    for alias in aliases + short:
+    for alias in aliases + short + camel:
         if alias in lowered:
             return _number(lowered[alias])
     return None

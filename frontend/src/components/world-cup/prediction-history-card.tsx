@@ -68,6 +68,14 @@ function contributionImpact(value: number, unit: string): string {
   return `${sign}${value.toFixed(2)} ${unit}`;
 }
 
+function historyDataQualityLabel(notes: string[] | undefined): string {
+  if (notes?.includes("historical_non_real_quality_normalized")) return "历史非真实记录已降级";
+  if (notes?.includes("data_quality_missing")) return "历史质量未标记";
+  if (notes?.includes("betting_odds_unavailable")) return "赔率数据缺失";
+  if (notes?.includes("betting_odds_not_real")) return "赔率来源非真实";
+  return "历史记录已降级";
+}
+
 export function PredictionHistoryCard({ match }: PredictionHistoryCardProps) {
   const [history, setHistory] = useState<PredictionHistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -183,6 +191,9 @@ export function PredictionHistoryCard({ match }: PredictionHistoryCardProps) {
           const contributionItems = (entry.explanation_contributions?.items ?? [])
             .filter((item) => item && item.label)
             .slice(0, 2);
+          const dataQualityLabel = entry.data_quality === "partial"
+            ? historyDataQualityLabel(entry.data_quality_notes)
+            : null;
 
           let accuracy: "exact" | "close" | "wrong" | null = null;
           let scoreDiff: number | null = null;
@@ -267,6 +278,12 @@ export function PredictionHistoryCard({ match }: PredictionHistoryCardProps) {
                       </div>
                     );
                   })()}
+
+                  {dataQualityLabel && (
+                    <div className="rounded-md border border-warn/30 bg-warn/10 px-2 py-1 text-[11px] font-medium text-warn">
+                      {dataQualityLabel}
+                    </div>
+                  )}
 
                   {/* Accuracy Badge (if finished) */}
                   {accuracy && (

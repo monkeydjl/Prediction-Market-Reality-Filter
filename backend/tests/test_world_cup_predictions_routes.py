@@ -66,6 +66,8 @@ class WorldCupPredictionRoutesTests(unittest.TestCase):
 
     def test_history_entry_includes_current_prediction_metadata_when_snapshot_matches(self):
         factors = {
+            "data_quality": "mock",
+            "data_quality_notes": ["legacy_fixture"],
             "confidence_calibration": {
                 "raw": 0.80,
                 "calibrated": 0.65,
@@ -116,6 +118,28 @@ class WorldCupPredictionRoutesTests(unittest.TestCase):
         self.assertEqual(payload["raw_confidence"], 0.80)
         self.assertEqual(payload["confidence_calibration"]["calibrated"], 0.65)
         self.assertEqual(payload["explanation_contributions"]["items"][0]["label"], "Elo")
+        self.assertEqual(payload["data_quality"], "partial")
+        self.assertIn("legacy_fixture", payload["data_quality_notes"])
+        self.assertIn("historical_non_real_quality_normalized", payload["data_quality_notes"])
+
+    def test_history_entry_marks_unmatched_snapshots_as_missing_quality(self):
+        history = PredictionHistory(
+            match_id="m-old",
+            timestamp=naive(),
+            predicted_home_score=1.0,
+            predicted_away_score=0.0,
+            home_win_prob=0.50,
+            draw_prob=0.30,
+            away_win_prob=0.20,
+            confidence=0.55,
+            trigger="daily_update",
+            prediction_method="hybrid",
+        )
+
+        payload = _serialize_history_entry(history)
+
+        self.assertEqual(payload["data_quality"], "partial")
+        self.assertIn("data_quality_missing", payload["data_quality_notes"])
 
     def test_history_entry_omits_current_prediction_metadata_when_snapshot_differs(self):
         prediction = MatchPrediction(
@@ -180,6 +204,29 @@ class WorldCupPredictionRoutesTests(unittest.TestCase):
 
         self.assertEqual(_serialize_prediction(prediction)["engine_used"], "gbm")
         self.assertEqual(_serialize_history_entry(history)["engine_used"], "gbm")
+
+    def test_serialize_prediction_normalizes_historical_mock_quality(self):
+        prediction = MatchPrediction(
+            match_id="m-mock",
+            predicted_home_score=1.8,
+            predicted_away_score=1.1,
+            home_win_prob=0.56,
+            draw_prob=0.25,
+            away_win_prob=0.19,
+            confidence=0.62,
+            prediction_method="hybrid",
+            factors={
+                "data_quality": "mock",
+                "data_quality_notes": ["legacy_fixture"],
+                "data_quality_metrics": {"quality": "mock"},
+            },
+        )
+
+        payload = _serialize_prediction(prediction)
+
+        self.assertEqual(payload["data_quality"], "partial")
+        self.assertIn("legacy_fixture", payload["data_quality_notes"])
+        self.assertIn("historical_non_real_quality_normalized", payload["data_quality_notes"])
 
 
 if __name__ == "__main__":

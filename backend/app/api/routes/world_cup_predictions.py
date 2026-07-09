@@ -14,7 +14,10 @@ from app.api.security import optional_write_key, require_write_key
 from app.models.world_cup_prediction import MatchFixture, MatchPrediction, PredictionHistory, AIAnalysisHistory
 from app.services.world_cup_match_service import sync_world_cup_fixtures, get_remaining_matches
 from app.services.world_cup_factor_service import build_prediction_factors
-from app.services.world_cup_data_quality import enrich_data_quality_metrics
+from app.services.world_cup_data_quality import (
+    enrich_data_quality_metrics,
+    normalize_prediction_data_quality,
+)
 from app.utils.prediction_db import get_prediction_session, close_prediction_session, init_prediction_db
 
 
@@ -55,6 +58,10 @@ def _serialize_prediction(prediction: MatchPrediction) -> dict[str, Any]:
     confidence_calibration = factors.get("confidence_calibration") or None
     high_confidence_selection = factors.get("high_confidence_selection") or None
     explanation_contributions = factors.get("explanation_contributions") or None
+    data_quality, data_quality_notes = normalize_prediction_data_quality(
+        factors.get("data_quality"),
+        factors.get("data_quality_notes") if isinstance(factors.get("data_quality_notes"), list) else None,
+    )
     return {
         "predicted_score": {
             "home": prediction.predicted_home_score,
@@ -72,7 +79,8 @@ def _serialize_prediction(prediction: MatchPrediction) -> dict[str, Any]:
         "key_factors": prediction.key_factors,
         "last_updated": prediction.last_updated.isoformat() if prediction.last_updated else None,
         "has_betting_odds": bool(quality_metrics.get("has_odds") or (method and "elo_odds" in method)),
-        "data_quality": factors.get("data_quality"),
+        "data_quality": data_quality,
+        "data_quality_notes": data_quality_notes,
         "data_quality_score": quality_metrics.get("quality_score"),
         "raw_confidence": (
             confidence_calibration.get("raw")
@@ -104,6 +112,7 @@ def _serialize_history_entry(
     current_prediction: MatchPrediction | None = None,
     current_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    data_quality, data_quality_notes = normalize_prediction_data_quality(None, None)
     payload: dict[str, Any] = {
         "timestamp": history.timestamp.isoformat() if history.timestamp else None,
         "predicted_score": {
@@ -119,6 +128,8 @@ def _serialize_history_entry(
         "trigger": history.trigger,
         "prediction_method": history.prediction_method,
         "engine_used": _engine_used_from_method(history.prediction_method),
+        "data_quality": data_quality,
+        "data_quality_notes": data_quality_notes,
     }
 
     if (
@@ -127,6 +138,8 @@ def _serialize_history_entry(
         and _history_matches_current_prediction(history, current_prediction)
     ):
         for key in (
+            "data_quality",
+            "data_quality_notes",
             "raw_confidence",
             "confidence_calibration",
             "high_confidence_selection",

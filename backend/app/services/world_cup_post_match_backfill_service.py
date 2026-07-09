@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.memory import loop_run_store
 from app.models.world_cup_prediction import MatchFixture, MatchResult
 from app.services.audit_metadata import normalize_audit_metadata
+from app.services.world_cup_result_fact_backfill_service import run_world_cup_result_fact_backfill
 from app.services.world_cup_match_service import sync_world_cup_fixtures
 from app.services.world_cup_quality_service import build_quality_loop_report
 from app.services.world_cup_scoring_service import score_finished_match
@@ -18,6 +19,7 @@ from app.utils.prediction_db import get_prediction_session, close_prediction_ses
 
 logger = logging.getLogger(__name__)
 AUDIT_JOB_NAME = "world_cup_post_match_backfill"
+STALE_UNFINISHED_GRACE_HOURS = 4
 
 
 def _start_audit_run(enabled: bool) -> str | None:
@@ -43,6 +45,9 @@ def _audit_summary(result: dict[str, Any]) -> dict[str, Any]:
         "scored": scoring.get("scored", 0),
         "skipped": scoring.get("skipped", 0),
         "errors": scoring.get("errors", 0),
+        "result_facts_imported": (result.get("result_fact_backfill") or {}).get("imported", 0),
+        "stale_unfinished_count": result.get("stale_unfinished_count", 0),
+        "stale_unfinished_fixtures": result.get("stale_unfinished_fixtures", []),
         "quality_samples": quality.get("samples"),
         "audit_metadata": normalize_audit_metadata(result.get("audit_metadata")),
     }
@@ -79,6 +84,9 @@ def _audit_run_payload(run: dict[str, Any]) -> dict[str, Any]:
         "scored": result.get("scored", 0),
         "skipped": result.get("skipped", 0),
         "errors": result.get("errors", 0),
+        "result_facts_imported": result.get("result_facts_imported", 0),
+        "stale_unfinished_count": result.get("stale_unfinished_count", 0),
+        "stale_unfinished_fixtures": result.get("stale_unfinished_fixtures", []),
         "quality_samples": result.get("quality_samples"),
         "audit_metadata": normalize_audit_metadata(result.get("audit_metadata")),
     }
@@ -118,6 +126,34 @@ def _candidate_payload(match: MatchFixture) -> dict[str, Any]:
         "kickoff_utc": match.kickoff_utc.isoformat() if match.kickoff_utc else None,
         "actual_score": {"home": match.home_score, "away": match.away_score},
     }
+
+
+def _stale_unfinished_payload(match: MatchFixture) -> dict[str, Any]:
+    return {
+        "match_id": match.match_id,
+        "home_team": match.home_team,
+        "away_team": match.away_team,
+        "stage": match.stage,
+        "kickoff_utc": match.kickoff_utc.isoformat() if match.kickoff_utc else None,
+        "status": match.status,
+        "home_score": match.home_score,
+        "away_score": match.away_score,
+    }
+
+
+def _stale_started_unfinished_matches(
+    session: Session,
+    now: datetime | None = None,
+) -> list[MatchFixture]:
+    current = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    if current.tzinfo is not None:
+        current = current.astimezone(timezone.utc).replace(tzinfo=None)
+    cutoff = current - timedelta(hours=STALE_UNFINISHED_GRACE_HOURS)
+    return session.query(MatchFixture).filter(
+        MatchFixture.kickoff_utc.isnot(None),
+        MatchFixture.kickoff_utc <= cutoff,
+        MatchFixture.status.notin_(["finished", "cancelled", "postponed"]),
+    ).order_by(MatchFixture.kickoff_utc, MatchFixture.match_id).all()
 
 
 def _quality_snapshot(session: Session) -> dict[str, Any]:
@@ -179,6 +215,10 @@ def run_post_match_backfill(
             session.expire_all()
 
         candidates = _finished_unscored_matches(session)
+        stale_unfinished = _stale_started_unfinished_matches(session)
+        stale_unfinished_fixtures = [
+            _stale_unfinished_payload(match) for match in stale_unfinished
+        ]
 
         if dry_run:
             return finish({
@@ -188,6 +228,8 @@ def run_post_match_backfill(
                 "sync": sync_result,
                 "candidate_count": len(candidates),
                 "candidates": [_candidate_payload(match) for match in candidates],
+                "stale_unfinished_count": len(stale_unfinished_fixtures),
+                "stale_unfinished_fixtures": stale_unfinished_fixtures,
                 "scoring": {"scored": 0, "skipped": 0, "errors": 0},
                 "quality": _quality_snapshot(session),
                 "audit_metadata": audit_meta,
@@ -205,25 +247,41 @@ def run_post_match_backfill(
             else:
                 errors += 1
 
+        result_fact_backfill = run_world_cup_result_fact_backfill(
+            session=session,
+            dry_run=False,
+            confirm=True,
+            audit=False,
+            audit_metadata=audit_meta,
+        )
+
         logger.info(
-            "Post-match backfill: source=%s candidates=%d scored=%d skipped=%d errors=%d",
+            "Post-match backfill: source=%s candidates=%d scored=%d skipped=%d errors=%d result_facts_imported=%d",
             source,
             len(candidates),
             scored,
             skipped,
             errors,
+            result_fact_backfill.get("imported", 0),
         )
 
+        status = "degraded" if stale_unfinished_fixtures else "ok"
+        error = "stale_unfinished_fixture_after_sync" if stale_unfinished_fixtures else None
+
         return finish({
-            "status": "ok",
+            "status": status,
+            "error": error,
             "dry_run": False,
             "source": source,
             "ran_at": datetime.now(timezone.utc).isoformat(),
             "sync": sync_result,
             "candidate_count": len(candidates),
             "candidates": [_candidate_payload(match) for match in candidates],
+            "stale_unfinished_count": len(stale_unfinished_fixtures),
+            "stale_unfinished_fixtures": stale_unfinished_fixtures,
             "scoring": {"scored": scored, "skipped": skipped, "errors": errors},
             "results": results,
+            "result_fact_backfill": result_fact_backfill,
             "quality": _quality_snapshot(session),
             "audit_metadata": audit_meta,
         })

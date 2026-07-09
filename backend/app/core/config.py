@@ -122,6 +122,7 @@ class Settings:
     # headers are ignored because anyone can spoof them, so rate limiting keys
     # off request.client.host only. When true the proxy headers are honored.
     TRUSTED_PROXY_HEADER: bool = _env_bool("TRUSTED_PROXY_HEADER", "false")
+    BACKEND_SERVE_FRONTEND: bool = _env_bool("BACKEND_SERVE_FRONTEND", "true")
 
     LOG_FILE: str = os.getenv(
         "LOG_FILE",

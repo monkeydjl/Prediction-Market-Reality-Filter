@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Header, Request, Response, status as http_status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.router import api_router
@@ -288,5 +289,9 @@ async def prometheus_metrics():
 # the frontend's own pages and assets. Mounted only if present so the API still
 # boots before the first frontend build.
 _FRONTEND_OUT = Path(__file__).parent.parent.parent / "frontend" / "out"
-if _FRONTEND_OUT.is_dir():
+if settings.BACKEND_SERVE_FRONTEND and _FRONTEND_OUT.is_dir():
     app.mount("/", StaticFiles(directory=str(_FRONTEND_OUT), html=True), name="frontend")
+else:
+    @app.get("/", include_in_schema=False)
+    async def backend_root():
+        return RedirectResponse(url="/docs")

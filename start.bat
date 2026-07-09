@@ -6,10 +6,10 @@ REM
 REM    start.bat          Production (default): install deps, make sure
 REM                       backend\.env exists (prompt for the API key the
 REM                       first time), build the frontend if needed, free
-REM                       port 8000, run the backend and open the browser.
-REM                       Everything on one origin:
-REM                         http://localhost:8000           (app)
-REM                         http://localhost:8000/dashboard (classic UI)
+REM                       ports 8000 and 3000, run the backend + static
+REM                       frontend, and open the browser.
+REM                         http://localhost:3000           (frontend)
+REM                         http://localhost:8000           (backend API)
 REM                         http://localhost:8000/docs      (API docs)
 REM    start.bat build    Same, but force-rebuild the frontend first.
 REM    start.bat dev      Development: backend :8000 + Next dev :3000 in
@@ -71,8 +71,8 @@ echo.
 REM Keep the child windows open on startup errors so the traceback is visible.
 REM Use cmd /c rather than cmd /k so successful long-running servers do not
 REM leave an extra shell behind after they are stopped.
-start "PMRF backend :8000" /D "%BACKEND%" cmd /c "python run.py || (echo. & echo [FAILED] Backend exited with error. & pause)"
-start "PMRF frontend :3000" /D "%FRONTEND%\out" cmd /c "python -m http.server 3000 --bind localhost || (echo. & echo [FAILED] Frontend static server exited with error. & pause)"
+start "PMRF backend :8000" /D "%BACKEND%" cmd /c "set BACKEND_SERVE_FRONTEND=false&& python run.py || (echo. & echo [FAILED] Backend exited with error. & pause)"
+start "PMRF frontend :3000" /D "%ROOT%" cmd /c "python -m http.server 3000 --directory frontend\out --bind localhost || (echo. & echo [FAILED] Frontend static server exited with error. & pause)"
 REM open the browser once both servers are up
 start "" /b powershell -NoProfile -Command "Start-Sleep -Seconds 6; Start-Process 'http://localhost:3000'"
 goto :eof
@@ -95,7 +95,7 @@ echo   Backend / API  : http://localhost:8000
 echo.
 REM Keep dev launches direct for the same reason: no persistent cmd /k shell.
 set "SERVER_RELOAD=true"
-start "PMRF backend :8000" /D "%BACKEND%" cmd /c "python run.py || (echo. & echo [FAILED] Backend exited with error. & pause)"
+start "PMRF backend :8000" /D "%BACKEND%" cmd /c "set BACKEND_SERVE_FRONTEND=false&& python run.py || (echo. & echo [FAILED] Backend exited with error. & pause)"
 set "SERVER_RELOAD="
 start "PMRF frontend :3000" /D "%FRONTEND%" cmd /c "npm.cmd run dev || (echo. & echo [FAILED] Frontend dev server exited with error. & pause)"
 REM Next dev needs a few seconds to compile before the page is ready

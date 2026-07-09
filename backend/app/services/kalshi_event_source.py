@@ -1,7 +1,7 @@
 """kalshi_event_source.py
 ======================
-Event-source adapter that wraps Kalshi as a third source of candidate events for
-discovery, alongside polymarket_event_source and manifold_event_source.
+Event-source adapter that wraps Kalshi as an active source of candidate events
+for discovery, alongside polymarket_event_source.
 
 Kalshi organizes markets under multi-value "events"; the clean, human-readable
 question lives on the event (e.g. "Will the world pass 2 degrees Celsius..."),

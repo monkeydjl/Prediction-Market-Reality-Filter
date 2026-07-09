@@ -834,6 +834,39 @@ class CollectCandidateEventsCryptoOptInTests(unittest.TestCase):
             p.start()
         self.addCleanup(lambda: [p.stop() for p in patches])
 
+    def test_manifold_fetch_not_called(self):
+        manifold_fetch = AsyncMock(return_value=[{
+            "question": "Manifold candidate should be ignored",
+            "baseline_probability": 55.0,
+            "source": {"type": "prediction_market", "platform": "Manifold"},
+        }])
+        with patch.object(eis.settings, "POLYMARKET_CRYPTO_FETCH_ENABLED", False), \
+                patch.object(eis.settings, "WORLD_CUP_SOURCE_ENABLED", False), \
+                patch.object(eis.settings, "METACULUS_API_TOKEN", ""), \
+                patch.object(eis.settings, "OPEN_WEB_ENABLED", False):
+            patches = [
+                patch("app.services.polymarket_event_source.fetch_candidate_events",
+                      new=AsyncMock(return_value=[])),
+                patch("app.services.manifold_event_source.fetch_candidate_events",
+                      new=manifold_fetch),
+                patch("app.services.kalshi_event_source.fetch_candidate_events",
+                      new=AsyncMock(return_value=[])),
+                patch("app.services.world_cup_event_source.fetch_candidate_events",
+                      new=AsyncMock(return_value=[])),
+                patch("app.services.polymarket_event_source.fetch_crypto_candidate_events",
+                      new=AsyncMock(return_value=[])),
+                patch("app.services.event_extraction_service.extract_candidate_events",
+                      new=AsyncMock(return_value=[])),
+            ]
+            for p in patches:
+                p.start()
+            self.addCleanup(lambda: [p.stop() for p in patches])
+
+            candidates = _run(eis._collect_candidate_events(limit=5))
+
+        manifold_fetch.assert_not_awaited()
+        self.assertEqual(candidates, [])
+
     def test_crypto_fetch_not_called_when_disabled(self):
         crypto_fetch = AsyncMock(return_value=[])
         with patch.object(eis.settings, "POLYMARKET_CRYPTO_FETCH_ENABLED", False):

@@ -50,7 +50,9 @@ def _world_cup_import_enabled_default() -> str:
 def _world_cup_import_mode_default() -> str:
     return "football_data" if os.getenv("FOOTBALL_DATA_API_KEY", "").strip() else "url"
 
-class Settings:    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+
+class Settings:
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "deepseek-chat")
     LLM_STARTUP_CHECK_ENABLED: bool = _env_bool(
         "LLM_STARTUP_CHECK_ENABLED", "false"
@@ -352,8 +354,9 @@ class Settings:    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
         "Event Intelligence Platform research-contact@example.com",
     )
 
-    # Manifold Markets: a second prediction-market event source (open public
-    # API, no key). Set MANIFOLD_API_URL empty to disable the source.
+    # Legacy Manifold settings are kept only so existing .env files do not break
+    # startup. Manifold is no longer an active discovery or auto-resolution
+    # source.
     MANIFOLD_API_URL: str = os.getenv(
         "MANIFOLD_API_URL",
         "https://api.manifold.markets/v0/search-markets",
@@ -582,16 +585,15 @@ class Settings:    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
         in {"1", "true", "yes", "on"}
     )
     EVENT_DISCOVER_LIMIT: int = int(os.getenv("EVENT_DISCOVER_LIMIT", "100"))
-    # Per-source weight multipliers for discovery.  Each source is asked for
-    # ``limit * weight`` candidates instead of the flat ``limit``.  Polymarket
-    # is the primary prediction-market source (highest weight), Kalshi is
-    # secondary, Manifold is supplementary.  Open Web (LLM extraction from
-    # news) is kept below market sources so the event mix is dominated by
-    # real market prices, not news-derived speculation.
+    # Per-source weight multipliers for discovery.  Each active source is asked
+    # for ``limit * weight`` candidates instead of the flat ``limit``.
+    # Polymarket is the primary prediction-market source (highest weight),
+    # Kalshi is secondary. Open Web (LLM extraction from news) is kept below
+    # market sources so the event mix is dominated by real market prices, not
+    # news-derived speculation.
     SOURCE_WEIGHTS: dict[str, float] = {
         "Polymarket": float(os.getenv("SOURCE_WEIGHT_POLYMARKET", "3.0")),
         "Kalshi": float(os.getenv("SOURCE_WEIGHT_KALSHI", "1.0")),
-        "Manifold": float(os.getenv("SOURCE_WEIGHT_MANIFOLD", "0.3")),
         "Open Web": float(os.getenv("SOURCE_WEIGHT_OPEN_WEB", "0.5")),
         "Polymarket Crypto": float(os.getenv("SOURCE_WEIGHT_POLYMARKET_CRYPTO", "1.0")),
         "World Cup": 0.3,

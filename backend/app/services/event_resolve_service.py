@@ -10,8 +10,8 @@ the record, and appends an outcome snapshot to the audit log. Centralizing it
 here keeps the calibration computation in one place (no duplication between
 manual and auto paths).
 
-`auto_resolve_events` fetches resolved prediction markets from all sources
-(Polymarket, Manifold, Kalshi), matches each
+`auto_resolve_events` fetches resolved prediction markets from active sources
+(Polymarket, Kalshi), matches each
 unresolved local event by question similarity (shared text_match utilities),
 and resolves each match with a calibration snapshot. It mirrors the
 market-layer auto_resolve_service but writes to the event store / event audit
@@ -246,7 +246,7 @@ async def auto_resolve_events(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Auto-resolve events whose questions match resolved prediction markets
-    (Polymarket, Manifold, Kalshi).
+    (Polymarket, Kalshi).
 
     Fetches resolved markets from all sources concurrently, builds a question
     index, and for each unresolved local event whose question matches (exact
@@ -263,21 +263,15 @@ async def auto_resolve_events(
         fetch_resolved_markets as fetch_polymarket_resolved,
         fetch_markets_by_ids as fetch_polymarket_by_ids,
     )
-    from app.services.manifold_event_source import (
-        fetch_resolved_markets as fetch_manifold_resolved,
-        fetch_markets_by_ids as fetch_manifold_by_ids,
-    )
     from app.services.kalshi_event_source import (
         fetch_resolved_markets as fetch_kalshi_resolved,
     )
 
     # Pull resolved markets from every prediction-market source concurrently and
     # isolate a failing source, so the same real event can be auto-resolved by
-    # whichever platform it came from (Polymarket-only missed Manifold/Kalshi
-    # events entirely).
+    # whichever active platform it came from.
     sources = (
         ("Polymarket", fetch_polymarket_resolved),
-        ("Manifold", fetch_manifold_resolved),
         ("Kalshi", fetch_kalshi_resolved),
     )
     fetched = await asyncio.gather(
@@ -314,7 +308,6 @@ async def auto_resolve_events(
     }
     direct_fetchers = {
         "polymarket": ("Polymarket", fetch_polymarket_by_ids),
-        "manifold": ("Manifold", fetch_manifold_by_ids),
     }
     direct_ids: dict[str, set[str]] = {key: set() for key in direct_fetchers}
     for entry in entries:
@@ -524,112 +517,6 @@ async def auto_resolve_events(
             resolved_count -= 1
             match_log.pop()
             continue
-
-    # ── Direct-settle fallback ─────────────────────────────────────────────
-    # The search-markets API returns at most ~1000 results sorted by internal
-    # relevance, so low-volume resolved markets are invisible to the main loop.
-    # For every unresolved Manifold event that carries a source_id, fetch that
-    # specific market directly from the Manifold API and settle if resolved.
-    # This decouples settlement from search ranking.
-    direct_resolved = 0
-    manifold_source_ids: list[tuple[str, str]] = []  # (event_id, source_id)
-    for entry in entries:
-        record = entry.get("record") or {}
-        if record.get("outcome") is not None:
-            continue
-        eid = entry.get("event_id")
-        if not eid:
-            continue
-        source = record.get("source") or {}
-        platform = str(source.get("platform", "")).lower()
-        source_id = str(source.get("source_id") or "").strip()
-        if platform != "manifold" or not source_id:
-            continue
-        # Skip events that already have a verified link (the main loop handles
-        # those via the contract-id path; if they survived, the contract is
-        # unsettled or the direct fetch already failed).
-        if get_verified_link(eid):
-            continue
-        manifold_source_ids.append((eid, source_id))
-
-    if manifold_source_ids:
-        from app.services.manifold_event_source import fetch_markets_by_ids
-        ids = [sid for _, sid in manifold_source_ids]
-        try:
-            direct_markets = await fetch_markets_by_ids(ids)
-        except Exception as exc:
-            logger.warning("auto_resolve: direct Manifold fetch failed: %s", exc)
-            direct_markets = []
-        if direct_markets:
-            direct_by_contract = {
-                str(m.get("id")): m for m in direct_markets if m.get("id")
-            }
-            for eid, source_id in manifold_source_ids:
-                settled = direct_by_contract.get(source_id)
-                if settled is None:
-                    continue
-                entry = next(
-                    (e for e in entries if e.get("event_id") == eid), None
-                )
-                if not entry:
-                    continue
-                rec = entry.get("record") or {}
-                if rec.get("outcome") is not None:
-                    continue  # resolved by the main loop already
-                # Create the verified link first so future runs use the
-                # contract-id path.
-                upsert_link(
-                    eid,
-                    market_name="Manifold",
-                    contract_id=source_id,
-                    market_question=settled.get("question", ""),
-                    resolution_criteria=(
-                        rec.get("semantics") or {}
-                    ).get("resolution_criteria", ""),
-                    link_method="auto_direct",
-                    link_confidence=1.0,
-                    verified=True,
-                )
-                if dry_run:
-                    direct_resolved += 1
-                    match_log.append({
-                        "event_id": eid,
-                        "event_title": (rec.get("event_title") or "")[:80],
-                        "matched_to": source_id,
-                        "market_name": "Manifold",
-                        "contract_id": source_id,
-                        "actual_outcome": settled.get("actual_outcome"),
-                        "match_score": 1.0,
-                        "result": "would_resolve_by_direct",
-                    })
-                    continue
-                try:
-                    resolve_with_calibration(
-                        event_id=eid,
-                        actual_outcome=settled.get("actual_outcome"),
-                        confidence=1.0,
-                        source="auto_market",
-                        notes=f"direct Manifold settle: {source_id}",
-                        snapshots=histories.get(eid, []),
-                    )
-                    direct_resolved += 1
-                    match_log.append({
-                        "event_id": eid,
-                        "event_title": (rec.get("event_title") or "")[:80],
-                        "matched_to": source_id,
-                        "market_name": "Manifold",
-                        "contract_id": source_id,
-                        "actual_outcome": settled.get("actual_outcome"),
-                        "match_score": 1.0,
-                        "result": "resolved_by_direct",
-                    })
-                except Exception as exc:
-                    logger.warning(
-                        "auto_resolve: direct settle failed for %s: %s",
-                        eid, exc,
-                    )
-        if direct_resolved:
-            resolved_count += direct_resolved
 
     unresolved_events = sum(
         1 for entry in entries

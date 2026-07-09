@@ -1,7 +1,7 @@
 """metacus_event_source.py
 ========================
-Event-source adapter that wraps Metaculus as a fourth source of candidate
-events for discovery, alongside polymarket / manifold / kalshi.
+Event-source adapter that wraps Metaculus as an optional source of candidate
+events for discovery, alongside polymarket / kalshi / open-web sources.
 
 Metaculus is a community-forecasting platform (long-horizon science / tech /
 AI / policy questions). Unlike the prediction-market sources it has no prices

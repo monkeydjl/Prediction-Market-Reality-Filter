@@ -191,6 +191,53 @@ class AutoResolveEventsTests(unittest.TestCase):
             target.start()
             self.addCleanup(target.stop)
 
+    def test_auto_resolve_does_not_fetch_manifold_resolved_markets(self):
+        with patch.object(phs, "fetch_resolved_markets",
+                          new=AsyncMock(return_value=[])), \
+                patch.object(kes, "fetch_resolved_markets",
+                             new=AsyncMock(return_value=[])), \
+                patch.object(mfs, "fetch_resolved_markets",
+                             new=AsyncMock(return_value=[{
+                                 "question": "Manifold resolved market",
+                                 "actual_outcome": 100.0,
+                                 "id": "m1",
+                             }])) as manifold_fetch:
+            result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
+
+        manifold_fetch.assert_not_awaited()
+        self.assertNotIn("Manifold", result["by_source"])
+
+    def test_manifold_verified_link_is_not_direct_fetched(self):
+        record = _make_record("evtOldManifold", value_score=30)
+        record["source"] = {
+            "type": "prediction_market",
+            "platform": "Manifold",
+            "source_id": "old-manifold-1",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(store, "_store_path", return_value=str(Path(tmp) / "event_store.json")), \
+                    patch.object(audit, "_audit_path", return_value=str(Path(tmp) / "event_audit.jsonl")), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(phs, "fetch_resolved_markets",
+                                 new=AsyncMock(return_value=[])), \
+                    patch.object(kes, "fetch_resolved_markets",
+                                 new=AsyncMock(return_value=[])), \
+                    patch.object(mfs, "fetch_markets_by_ids",
+                                 new=AsyncMock(return_value=[{
+                                     "question": "Should not be used",
+                                     "actual_outcome": 100.0,
+                                     "id": "old-manifold-1",
+                                 }])) as direct_fetch:
+                store.save_event(record)
+                links.upsert_link("evtOldManifold", contract_id="old-manifold-1",
+                                  market_name="Manifold", verified=True)
+                result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
+                after = store.get_event("evtOldManifold")
+
+        direct_fetch.assert_not_awaited()
+        self.assertEqual(result["resolved_count"], 0)
+        self.assertIsNone(after["record"].get("outcome"))
+
     def test_no_resolved_markets_returns_no_data(self):
         with patch.object(phs, "fetch_resolved_markets",
                           new=AsyncMock(return_value=[])):
@@ -430,7 +477,7 @@ class AutoResolveEventsTests(unittest.TestCase):
             expected_score,
         )
 
-    def test_direct_manifold_settle_keeps_confidence_one(self):
+    def test_legacy_manifold_source_id_is_not_direct_settled(self):
         record = _make_record("evtDirect", value_score=30)
         record["event_title"] = "A local Manifold event that search will not match"
         record["source"] = {
@@ -455,14 +502,14 @@ class AutoResolveEventsTests(unittest.TestCase):
                     patch.object(phs, "fetch_resolved_markets",
                                  new=AsyncMock(return_value=[unrelated_market])), \
                     patch.object(mfs, "fetch_markets_by_ids",
-                                 new=AsyncMock(return_value=[direct_market])):
+                                 new=AsyncMock(return_value=[direct_market])) as direct_fetch:
                 store.save_event(record)
                 result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
                 after = store.get_event("evtDirect")
 
-        self.assertEqual(result["resolved_count"], 1)
-        self.assertEqual(result["matches"][-1]["result"], "resolved_by_direct")
-        self.assertEqual(after["record"]["outcome"]["confidence"], 1.0)
+        direct_fetch.assert_not_awaited()
+        self.assertEqual(result["resolved_count"], 0)
+        self.assertIsNone(after["record"].get("outcome"))
 
     def test_direct_polymarket_linked_settles_when_resolved_list_misses_contract(self):
         record = _make_record("evtPolyDirect", value_score=30)

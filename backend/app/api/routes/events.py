@@ -1122,7 +1122,7 @@ async def auto_resolve_event_intelligence(
     _auth: None = Depends(require_write_key),
 ):
     """Auto-resolve events whose questions match resolved prediction markets
-    (Polymarket, Manifold, Kalshi).
+    (Polymarket, Kalshi).
 
     Fetches resolved markets from all sources, matches each unresolved local
     event by question similarity, and resolves each match with a calibration

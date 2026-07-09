@@ -194,5 +194,16 @@ class ThresholdConstantsTests(unittest.TestCase):
         self.assertEqual(CROSS_THRESHOLD, 0.6)
 
 
+class ActiveSourcePriorityTests(unittest.TestCase):
+    def test_kalshi_outranks_legacy_manifold_candidate(self):
+        candidates = [
+            _candidate("Will Bitcoin reach 100k?", "Manifold"),
+            _candidate("Will Bitcoin reach 100k?", "Kalshi"),
+        ]
+        result = dedupe_candidates(candidates)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["source"]["platform"], "Kalshi")
+
+
 if __name__ == "__main__":
     unittest.main()

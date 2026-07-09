@@ -2251,12 +2251,10 @@ class CollectCandidateEventsTests(unittest.TestCase):
             for i in range(n)
         ]
 
-    def _collect(self, poly, manifold, kalshi, limit=10):
+    def _collect(self, poly, kalshi, limit=10):
         async def run():
             with patch("app.services.polymarket_event_source.fetch_candidate_events",
                        new=AsyncMock(return_value=poly)), \
-                    patch("app.services.manifold_event_source.fetch_candidate_events",
-                          new=AsyncMock(return_value=manifold)), \
                     patch("app.services.kalshi_event_source.fetch_candidate_events",
                           new=AsyncMock(return_value=kalshi)), \
                     patch("app.services.world_cup_event_source.fetch_candidate_events",
@@ -2264,24 +2262,23 @@ class CollectCandidateEventsTests(unittest.TestCase):
                 return await eis._collect_candidate_events(limit)
         return asyncio.run(run())
 
-    def test_pool_capped_and_all_sources_represented(self):
+    def test_pool_capped_and_active_sources_represented(self):
         from collections import Counter
         out = self._collect(self._cands("Polymarket", 30),
-                            self._cands("Manifold", 10, offset=30),
                             self._cands("Kalshi", 10, offset=40), limit=10)
         self.assertEqual(len(out), 30)  # limit(10) * _CANDIDATE_POOL_FACTOR(3)
         counts = Counter(c["source"]["platform"] for c in out)
         # Round-robin keeps each source represented rather than letting
-        # Polymarket's 30 fill the whole budget.
-        self.assertEqual(counts["Polymarket"], 10)
-        self.assertEqual(counts["Manifold"], 10)
+        # Polymarket's 30 fill the whole budget. Polymarket is intentionally
+        # weighted higher, while Manifold is no longer an active source.
+        self.assertEqual(counts["Polymarket"], 20)
         self.assertEqual(counts["Kalshi"], 10)
+        self.assertNotIn("Manifold", counts)
 
     def test_small_pools_returned_whole(self):
         out = self._collect(self._cands("Polymarket", 2),
-                            self._cands("Manifold", 2, offset=10),
                             self._cands("Kalshi", 2, offset=20), limit=10)
-        self.assertEqual(len(out), 6)
+        self.assertEqual(len(out), 4)
 
     def test_failing_source_is_isolated(self):
         from collections import Counter
@@ -2289,10 +2286,8 @@ class CollectCandidateEventsTests(unittest.TestCase):
         async def run():
             with patch("app.services.polymarket_event_source.fetch_candidate_events",
                        new=AsyncMock(return_value=self._cands("Polymarket", 5))), \
-                    patch("app.services.manifold_event_source.fetch_candidate_events",
-                          new=AsyncMock(side_effect=RuntimeError("down"))), \
                     patch("app.services.kalshi_event_source.fetch_candidate_events",
-                          new=AsyncMock(return_value=self._cands("Kalshi", 5, offset=10))), \
+                          new=AsyncMock(side_effect=RuntimeError("down"))), \
                     patch("app.services.world_cup_event_source.fetch_candidate_events",
                           new=AsyncMock(return_value=[])):
                 return await eis._collect_candidate_events(10)
@@ -2301,7 +2296,7 @@ class CollectCandidateEventsTests(unittest.TestCase):
         counts = Counter(c["source"]["platform"] for c in out)
         self.assertNotIn("Manifold", counts)
         self.assertEqual(counts["Polymarket"], 5)
-        self.assertEqual(counts["Kalshi"], 5)
+        self.assertNotIn("Kalshi", counts)
 
     def test_open_web_source_is_interleaved(self):
         from collections import Counter
@@ -2309,8 +2304,6 @@ class CollectCandidateEventsTests(unittest.TestCase):
         async def run():
             with patch("app.services.polymarket_event_source.fetch_candidate_events",
                        new=AsyncMock(return_value=self._cands("Polymarket", 4))), \
-                    patch("app.services.manifold_event_source.fetch_candidate_events",
-                          new=AsyncMock(return_value=[])), \
                     patch("app.services.kalshi_event_source.fetch_candidate_events",
                           new=AsyncMock(return_value=[])), \
                     patch("app.services.world_cup_event_source.fetch_candidate_events",
@@ -2332,8 +2325,6 @@ class CollectCandidateEventsTests(unittest.TestCase):
         async def run():
             with patch("app.services.polymarket_event_source.fetch_candidate_events",
                        new=AsyncMock(return_value=self._cands("Polymarket", 3))), \
-                    patch("app.services.manifold_event_source.fetch_candidate_events",
-                          new=AsyncMock(return_value=[])), \
                     patch("app.services.kalshi_event_source.fetch_candidate_events",
                           new=AsyncMock(return_value=[])), \
                     patch("app.services.world_cup_event_source.fetch_candidate_events",

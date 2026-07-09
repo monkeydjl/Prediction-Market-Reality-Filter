@@ -1,10 +1,9 @@
 """manifold_event_source.py
 ========================
-Event-source adapter that wraps Manifold Markets as a second source of candidate
-events for discovery, alongside polymarket_event_source. Where the evidence
-adapters (rss / official / sec / economic) produce articles, an event source
-produces candidate events: the questions to analyze, each with a baseline
-probability and the source descriptor to attach to the resulting event record.
+Legacy event-source adapter for historical Manifold compatibility. Manifold is
+no longer wired into active discovery or auto-resolution. This module is retained
+so old records/tests that reference Manifold can still be inspected without
+deleting historical code in the same change.
 
 Thin by design: fetch open binary markets from the Manifold public API
 (no key required), filter to eligible markets, and normalize each into the
@@ -14,8 +13,7 @@ Graceful by design: a missing URL or an unreachable / malformed API yields an
 empty list rather than raising, so a down source never breaks discovery (the
 multi-source composition in event_intelligence_service also isolates failures).
 
-Candidate-event shape (identical to polymarket_event_source) consumed by
-event_intelligence_service.discover_events:
+Candidate-event shape formerly consumed by active discovery:
     {
         "question": str,
         "baseline_probability": float,    # 0-100, before evidence
@@ -48,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 
 async def fetch_candidate_events(limit: int = 10) -> list[dict[str, Any]]:
-    """Fetch and normalize candidate events from Manifold.
+    """Fetch and normalize candidate events from legacy Manifold.
 
     Returns at most `limit` candidates. Returns an empty list when Manifold is
     not configured or unreachable, so a failing source degrades gracefully
@@ -124,7 +122,7 @@ def _to_candidate_event(market: dict[str, Any]) -> dict[str, Any]:
 
 
 async def fetch_resolved_markets(limit: int = 200) -> list[dict[str, Any]]:
-    """Fetch settled Manifold markets for event auto-resolution.
+    """Fetch settled legacy Manifold markets.
 
     Returns [{id, question, actual_outcome}] (0-100): YES->100, NO->0, MKT (a
     probabilistic resolution) -> resolutionProbability*100. CANCEL / unresolved
@@ -190,9 +188,8 @@ async def fetch_markets_by_ids(
     resolved with a recognized outcome.  Unresolved or cancelled markets are
     silently skipped.
 
-    Designed for the auto-resolve direct-settle path: given a batch of
-    ``source_id`` values from unresolved local events, check whether those
-    specific markets have settled on Manifold.
+    Legacy helper retained for historical inspection. Active auto-resolution no
+    longer calls this direct-settle path.
     """
     if not contract_ids:
         return []

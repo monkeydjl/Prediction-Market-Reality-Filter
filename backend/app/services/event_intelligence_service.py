@@ -987,9 +987,6 @@ async def _collect_candidate_events(
     from app.services.kalshi_event_source import (
         fetch_candidate_events as fetch_kalshi_events,
     )
-    from app.services.manifold_event_source import (
-        fetch_candidate_events as fetch_manifold_events,
-    )
     from app.services.metacus_event_source import (
         fetch_candidate_events as fetch_metaculus_events,
     )
@@ -1003,7 +1000,6 @@ async def _collect_candidate_events(
 
     candidate_sources: list[tuple[str, Any]] = [
         ("Polymarket", fetch_polymarket_events),
-        ("Manifold", fetch_manifold_events),
         ("Kalshi", fetch_kalshi_events),
     ]
     # Opt-in crypto-only Polymarket fetch. The default Polymarket fetch ranks by
@@ -1186,7 +1182,7 @@ async def discover_events(
         raise
 
     if not candidate_events:
-        await status_fail("未获取到任何候选事件 — 检查数据源（Polymarket/Kalshi/Manifold）是否可达")
+        await status_fail("未获取到任何候选事件 — 检查数据源（Polymarket/Kalshi/Open Web）是否可达")
         return {"platform": "Event Intelligence Platform",
                 "source": "Multi-source event discovery",
                 "count": 0, "events": [],

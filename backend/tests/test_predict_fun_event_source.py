@@ -9,11 +9,15 @@ def _market(**overrides):
     market = {
         "id": "pf-1",
         "title": "Will BTC close above $150,000 in 2026?",
-        "probability": 58.0,
-        "volume": 900.0,
-        "liquidity": 150.0,
-        "url": "https://predict.fun/markets/pf-1",
-        "status": "active",
+        "resolution": {
+            "bestBid": {"price": 0.57},
+            "bestAsk": {"price": 0.59},
+        },
+        "volume": "900.0",
+        "liquidity": "150.0",
+        "tradingStatus": "OPEN",
+        "status": "REGISTERED",
+        "isVisible": True,
     }
     market.update(overrides)
     return market
@@ -43,10 +47,10 @@ class PredictFunEventSourceTests(unittest.TestCase):
             self.assertEqual(asyncio.run(source.fetch_candidate_events(limit=5)), [])
             fetch.assert_not_called()
 
-    def test_fetch_raw_markets_sends_api_key_header(self):
+    def test_fetch_raw_markets_sends_api_key_header_and_first_param(self):
         response = Mock()
         response.raise_for_status = Mock()
-        response.json.return_value = {"markets": [_market()]}
+        response.json.return_value = {"data": [_market()]}
         client = _FakeAsyncClient(response)
 
         with patch.object(
@@ -66,13 +70,13 @@ class PredictFunEventSourceTests(unittest.TestCase):
                     "https://api.predict.fun/v1/markets",
                     {
                         "headers": {"x-api-key": "secret"},
-                        "params": {"limit": "30"},
+                        "params": {"first": "30"},
                     },
                 )
             ],
         )
 
-    def test_fetch_candidate_events_normalizes_market(self):
+    def test_fetch_candidate_events_normalizes_documented_market(self):
         with patch.object(source.settings, "PREDICT_FUN_API_KEY", "secret"), patch.object(
             source, "_fetch_raw_markets", new=AsyncMock(return_value=[_market()])
         ):
@@ -81,15 +85,18 @@ class PredictFunEventSourceTests(unittest.TestCase):
         self.assertEqual(events[0]["baseline_probability"], 58.0)
         self.assertEqual(events[0]["source"]["platform"], "Predict.fun")
         self.assertEqual(events[0]["source"]["chain"], "BNB Chain")
+        self.assertEqual(events[0]["source"]["source_id"], "pf-1")
 
-    def test_filters_resolved_closed_blank_missing_and_negative_probability(self):
+    def test_filters_unsupported_and_malformed_markets(self):
         raw = [
             _market(id="ok"),
-            _market(id="resolved", status="resolved"),
-            _market(id="closed", closed=True),
+            _market(id="halted", tradingStatus="HALTED"),
+            _market(id="not-registered", status="DRAFT"),
+            _market(id="hidden", isVisible=False),
+            _market(id=""),
             _market(id="blank", title="   "),
-            _market(id="missing-probability", probability=None),
-            _market(id="negative", probability=-1),
+            _market(id="missing-resolution", resolution=None),
+            _market(id="negative", resolution={"bestBid": {"price": -1}, "bestAsk": {"price": 0.5}}),
         ]
         with patch.object(source.settings, "PREDICT_FUN_API_KEY", "secret"), patch.object(
             source, "_fetch_raw_markets", new=AsyncMock(return_value=raw)

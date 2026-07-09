@@ -7,13 +7,15 @@ from app.services import limitless_event_source as source
 
 def _market(**overrides):
     market = {
-        "id": "lim-1",
+        "id": 7495,
         "title": "Will ETH close above $5,000 in 2026?",
-        "yesProbability": 0.62,
-        "volume": 1200.5,
-        "liquidity": 450.25,
-        "url": "https://limitless.exchange/markets/lim-1",
-        "status": "active",
+        "prices": [38.0, 62.0],
+        "volumeFormatted": "1200.5",
+        "liquidityFormatted": "450.25",
+        "status": "FUNDED",
+        "expired": False,
+        "marketType": "single",
+        "slug": "will-eth-close-above-5000-in-2026",
     }
     market.update(overrides)
     return market
@@ -36,22 +38,32 @@ class _FakeAsyncClient:
 
 
 class LimitlessEventSourceTests(unittest.TestCase):
-    def test_fetch_candidate_events_normalizes_market(self):
+    def test_fetch_candidate_events_normalizes_documented_market(self):
         with patch.object(
             source, "_fetch_raw_markets", new=AsyncMock(return_value=[_market()])
         ):
             events = asyncio.run(source.fetch_candidate_events(limit=5))
         self.assertEqual(events[0]["question"], "Will ETH close above $5,000 in 2026?")
         self.assertEqual(events[0]["baseline_probability"], 62.0)
+        self.assertEqual(events[0]["volume"], 1200.5)
         self.assertEqual(events[0]["source"]["platform"], "Limitless")
         self.assertEqual(events[0]["source"]["chain"], "Base")
+        self.assertEqual(events[0]["source"]["source_id"], "will-eth-close-above-5000-in-2026")
+        self.assertEqual(
+            events[0]["source"]["url"],
+            "https://limitless.exchange/markets/will-eth-close-above-5000-in-2026",
+        )
 
-    def test_filters_malformed_closed_and_ambiguous_markets(self):
+    def test_filters_unsupported_and_malformed_markets(self):
         raw = [
-            _market(id="ok"),
-            _market(id="closed", status="closed"),
-            _market(id="blank", title="   "),
-            _market(id="missing-probability", yesProbability=None),
+            _market(slug="ok"),
+            _market(slug="closed", status="closed"),
+            _market(slug="expired", expired=True),
+            _market(slug="group", marketType="group"),
+            _market(id="", address="", slug=""),
+            _market(slug="unknown-status", status=""),
+            _market(slug="blank", title="   "),
+            _market(slug="missing-probability", prices=None),
             "not a dict",
         ]
         with patch.object(source, "_fetch_raw_markets", new=AsyncMock(return_value=raw)):
@@ -75,10 +87,10 @@ class LimitlessEventSourceTests(unittest.TestCase):
         self.assertEqual(events, [])
         self.assertIn("source=limitless_candidates", "\n".join(logs.output))
 
-    def test_fetch_raw_markets_uses_public_endpoint_without_headers(self):
+    def test_fetch_raw_markets_uses_documented_data_shape(self):
         response = Mock()
         response.raise_for_status = Mock()
-        response.json.return_value = {"markets": [_market()]}
+        response.json.return_value = {"data": [_market()], "totalMarketsCount": 1}
         client = _FakeAsyncClient(response)
 
         with patch.object(

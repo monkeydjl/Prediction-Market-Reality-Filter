@@ -16,29 +16,11 @@ from app.utils.market_utils import safe_float
 
 logger = logging.getLogger(__name__)
 
-_CLOSED_STATUSES = {
-    "closed",
-    "resolved",
-    "settled",
-    "finalized",
-    "cancelled",
-    "canceled",
-}
+_ACTIVE_TRADING_STATUSES = {"open", "trading"}
+_ACTIVE_MARKET_STATUSES = {"registered", "active", "open"}
 _QUESTION_FIELDS = ("title", "question", "name")
-_PROBABILITY_FIELDS = (
-    "probability",
-    "yesProbability",
-    "yes_probability",
-    "probabilityYes",
-    "lastPrice",
-)
 _VOLUME_FIELDS = ("volume", "volumeUsd", "volume_usd", "totalVolume")
-_LIQUIDITY_FIELDS = (
-    "liquidity",
-    "liquidityUsd",
-    "liquidity_usd",
-    "totalLiquidity",
-)
+_LIQUIDITY_FIELDS = ("liquidity", "liquidityUsd", "liquidity_usd", "totalLiquidity")
 _ID_FIELDS = ("id", "marketId", "market_id", "slug")
 
 
@@ -67,7 +49,7 @@ async def fetch_candidate_events(limit: int = 10) -> list[dict[str, Any]]:
 
 
 async def _fetch_raw_markets(limit: int) -> list[dict[str, Any]]:
-    params = {"limit": str(min(max(limit * 5, limit, 1), 100))}
+    params = {"first": str(min(max(limit * 5, limit, 1), 100))}
     headers = {"x-api-key": settings.PREDICT_FUN_API_KEY}
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.get(
@@ -85,10 +67,9 @@ def _extract_market_list(data: Any) -> list[dict[str, Any]]:
         return data
     if not isinstance(data, dict):
         return []
-    for key in ("markets", "data", "results", "items"):
-        value = data.get(key)
-        if isinstance(value, list):
-            return value
+    value = data.get("data")
+    if isinstance(value, list):
+        return value
     return []
 
 
@@ -97,14 +78,13 @@ def _is_eligible(market: Any) -> bool:
         return False
     if not _extract_text(market, _QUESTION_FIELDS):
         return False
-    if _extract_probability(market) is None:
+    if not _extract_text(market, _ID_FIELDS):
         return False
-    status = str(market.get("status", "") or "").strip().lower()
-    if status in _CLOSED_STATUSES:
+    if market.get("isVisible") is False:
         return False
-    if market.get("resolved") is True or market.get("closed") is True:
+    if not _has_supported_status(market):
         return False
-    return True
+    return _extract_probability(market) is not None
 
 
 def _to_candidate_event(market: dict[str, Any]) -> dict[str, Any]:
@@ -114,7 +94,7 @@ def _to_candidate_event(market: dict[str, Any]) -> dict[str, Any]:
     liquidity = _extract_number(market, _LIQUIDITY_FIELDS)
     source_id = _extract_text(market, _ID_FIELDS)
     url = str(market.get("url", "") or "").strip()
-    if not url and source_id:
+    if not url:
         url = f"https://predict.fun/markets/{source_id}"
     status = str(market.get("status", "") or "").strip().lower()
     return {
@@ -137,6 +117,15 @@ def _to_candidate_event(market: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _has_supported_status(market: dict[str, Any]) -> bool:
+    trading_status = str(market.get("tradingStatus", "") or "").strip().lower()
+    market_status = str(market.get("status", "") or "").strip().lower()
+    return (
+        trading_status in _ACTIVE_TRADING_STATUSES
+        and market_status in _ACTIVE_MARKET_STATUSES
+    )
+
+
 def _extract_text(market: dict[str, Any], fields: tuple[str, ...]) -> str:
     for field in fields:
         value = str(market.get(field, "") or "").strip()
@@ -148,18 +137,37 @@ def _extract_text(market: dict[str, Any], fields: tuple[str, ...]) -> str:
 def _extract_number(market: dict[str, Any], fields: tuple[str, ...]) -> float:
     for field in fields:
         if market.get(field) is not None:
-            return safe_float(market.get(field), 0.0)
+            return safe_float(_clean_number(market.get(field)), 0.0)
     return 0.0
 
 
 def _extract_probability(market: dict[str, Any]) -> float | None:
-    for field in _PROBABILITY_FIELDS:
-        if market.get(field) is None:
-            continue
-        value = safe_float(market.get(field), -1.0)
-        if 0.0 <= value <= 1.0:
-            return value * 100
-        if 0.0 <= value <= 100.0:
-            return value
+    resolution = market.get("resolution")
+    if not isinstance(resolution, dict):
         return None
+    bid = _extract_price(resolution.get("bestBid"))
+    ask = _extract_price(resolution.get("bestAsk"))
+    if bid is None or ask is None:
+        return None
+    return round((bid + ask) / 2, 6)
+
+
+def _extract_price(raw: Any) -> float | None:
+    if isinstance(raw, dict):
+        raw = raw.get("price")
+    return _normalize_probability(raw)
+
+
+def _normalize_probability(raw: Any) -> float | None:
+    value = safe_float(_clean_number(raw), -1.0)
+    if 0.0 <= value <= 1.0:
+        return value * 100
+    if 0.0 <= value <= 100.0:
+        return value
     return None
+
+
+def _clean_number(raw: Any) -> Any:
+    if isinstance(raw, str):
+        return raw.replace("$", "").replace(",", "").replace("%", "").strip()
+    return raw

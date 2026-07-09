@@ -129,6 +129,7 @@ export interface EventStoreEntry {
   event_id?: string;
   first_seen?: string;
   last_updated?: string;
+  category?: string;
   record?: {
     [k: string]: unknown;
   };

@@ -31,6 +31,7 @@ export interface TrackedEntry {
   event_id: string;
   first_seen?: string;
   last_updated?: string;
+  category?: string;
   record: EventRecord;
   [k: string]: unknown;
 }

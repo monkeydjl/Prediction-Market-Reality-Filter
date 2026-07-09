@@ -16,7 +16,7 @@ import { DecisionTimelinePanel } from "@/components/detail/decision-timeline-pan
 import { EdgeChart, ProbabilityChart, buildSeries } from "@/components/detail/probability-chart";
 import { DeltaPill, SupportMeter } from "@/components/indicators";
 import { eventsApi, type EdgeTrajectory } from "@/lib/api";
-import { adaptRecord, type EventView } from "@/lib/adapt";
+import { adaptEntry, adaptRecord, type EventView } from "@/lib/adapt";
 import { categoryLabel, fmtPct, fmtSignedPct } from "@/lib/format";
 import type { EventRecord, HistorySnapshot, SimilarEvent, Trend } from "@/lib/types";
 
@@ -163,7 +163,7 @@ function DetailInner() {
         if (cancelled) return;
         const rec = entry.record;
         setRecord(rec);
-        setView(adaptRecord(rec));
+        setView(adaptEntry(entry));
         // History + similar are best-effort; 404 just means none yet.
         const [h, s] = await Promise.all([
           eventsApi.history(id).catch(() => ({
@@ -304,7 +304,7 @@ function DetailInner() {
             record={record}
             onResolved={(entry) => {
               setRecord(entry.record);
-              setView(adaptRecord(entry.record));
+              setView(adaptEntry(entry));
             }}
           />
         </div>

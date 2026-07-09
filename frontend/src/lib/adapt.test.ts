@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adaptRecord, sparkSeries, trendOf } from "./adapt";
+import { adaptEntry, adaptRecord, sparkSeries, trendOf } from "./adapt";
 import type { EventRecord } from "./types";
 
 describe("adaptRecord", () => {
@@ -129,29 +129,29 @@ describe("adaptRecord", () => {
     expect(view.category).toBe("general");
   });
 
-  it.each([
-    ["boe-rates", "No change in Bank of England's interest rates after July 2026 meeting?", "monetary"],
-    ["trump-russia", "Will Donald Trump visit Russia in 2026?", "geopolitics_general"],
-    ["ufc-tko", "Will Conor McGregor win by KO or TKO?", "sports_game"],
-    ["boe-rates-zh", "\u82f1\u56fd\u592e\u884c\u5229\u7387\u4e0d\u53d8\uff1f", "monetary"],
-    ["epstein-storage", "Epstein storage units raided in 2026?", "legal"],
-    [
-      "israel-litani",
-      "Will Israeli forces withdraw from beyond the Litani River by December 31?",
-      "geopolitics_general",
-    ],
-    [
-      "lebron-cavaliers",
-      "Will LeBron James play for the Cleveland Cavaliers in the 2026-27 season?",
-      "sports_general",
-    ],
-    ["israel-airspace", "Israel closes its airspace by July 31?", "geopolitics_general"],
-    ["saibari-shots", "Ismael Saibari: 1+ shots", "sports_game"],
-    ["hype-hourly", "HYPE Up or Down - Hourly", "crypto"],
-  ])("infers %s from title when prediction-market metadata is generic", (eventId, title, expected) => {
+  it("uses the backend-derived entry category as the single source of truth", () => {
+    const view = adaptEntry({
+      event_id: "evt-entry-category",
+      category: "monetary",
+      record: {
+        event_id: "evt-entry-category",
+        event_title: "A title that should not be reclassified in the frontend",
+        source: {
+          type: "prediction_market",
+          platform: "Polymarket",
+          category: "Prediction",
+        },
+        legacy_analysis: {},
+      } as EventRecord & { legacy_analysis: Record<string, unknown> },
+    });
+
+    expect(view.category).toBe("monetary");
+  });
+
+  it("does not infer source-of-truth categories from event text in the frontend", () => {
     const record = {
-      event_id: eventId,
-      event_title: title,
+      event_id: "boe-rates",
+      event_title: "No change in Bank of England's interest rates after July 2026 meeting?",
       source: {
         type: "prediction_market",
         platform: "Polymarket",
@@ -162,7 +162,7 @@ describe("adaptRecord", () => {
 
     const view = adaptRecord(record);
 
-    expect(view.category).toBe(expected);
+    expect(view.category).toBe("general");
   });
 
   it("does not use Limitless source platform as a domain category", () => {

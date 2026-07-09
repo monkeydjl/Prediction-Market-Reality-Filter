@@ -72,179 +72,6 @@ const GENERIC_SOURCE_CATEGORIES = new Set([
   "unknown",
 ]);
 
-const TEXT_CATEGORY_RULES: Array<[string, string[]]> = [
-  [
-    "monetary",
-    [
-      "central bank",
-      "bank of england",
-      "boe",
-      "interest rate",
-      "interest rates",
-      "key rate",
-      "official cash rate",
-      "reserve bank",
-      "rate cut",
-      "rate hike",
-      "\u592e\u884c",
-      "\u5229\u7387",
-      "\u964d\u606f",
-      "\u52a0\u606f",
-    ],
-  ],
-  [
-    "sports_game",
-    [
-      "ufc",
-      "mma",
-      "knockout",
-      "ko or tko",
-      "tko",
-      "main card",
-      "heavyweight",
-      "1+ shots",
-      "shots",
-      "\u7ec8\u7ed3",
-      "\u62f3\u51fb",
-      "\u683c\u6597",
-    ],
-  ],
-  [
-    "sports_general",
-    [
-      "lebron james",
-      "cleveland cavaliers",
-      "nba",
-      "basketball",
-      "\u52d2\u5e03\u6717",
-      "\u8a79\u59c6\u65af",
-      "\u9a91\u58eb\u961f",
-      "\u7bee\u7403",
-    ],
-  ],
-  [
-    "crypto",
-    [
-      "bitcoin",
-      "btc",
-      "ethereum",
-      "eth",
-      "crypto",
-      "opensea",
-      "fdv",
-      "token",
-      "hype up or down",
-      "hype \u6da8\u8dcc",
-      "\u6bd4\u7279\u5e01",
-      "\u4ee5\u592a\u574a",
-      "\u52a0\u5bc6",
-    ],
-  ],
-  [
-    "tech_product",
-    [
-      "gta vi",
-      "grand theft auto",
-      "trailer",
-      "iphone",
-      "apple event",
-      "product launch",
-      "software update",
-      "app store",
-      "robotaxi",
-      "\u9884\u544a\u7247",
-      "\u79d1\u6280\u4ea7\u54c1",
-    ],
-  ],
-  [
-    "geopolitics_general",
-    [
-      "visit russia",
-      "russia",
-      "ukraine",
-      "nato",
-      "un vote",
-      "diplomatic",
-      "treaty",
-      "ceasefire",
-      "war",
-      "invade",
-      "israel",
-      "israeli",
-      "litani river",
-      "airspace",
-      "\u4fc4\u7f57\u65af",
-      "\u4e4c\u514b\u5170",
-      "\u5317\u7ea6",
-      "\u5916\u4ea4",
-      "\u505c\u706b",
-      "\u6218\u4e89",
-      "\u4ee5\u8272\u5217",
-      "\u5229\u5854\u5c3c\u6cb3",
-      "\u9886\u7a7a",
-    ],
-  ],
-  [
-    "legal",
-    [
-      "epstein",
-      "fbi",
-      "raid",
-      "raided",
-      "storage units",
-      "court",
-      "lawsuit",
-      "trial",
-      "indictment",
-      "subpoena",
-      "\u7231\u6cfc\u65af\u5766",
-      "\u641c\u67e5",
-      "\u50a8\u7269\u67dc",
-      "\u6cd5\u9662",
-      "\u8bc9\u8bbc",
-      "\u5ba1\u5224",
-    ],
-  ],
-  [
-    "politics_general",
-    [
-      "election",
-      "candidate",
-      "nomination",
-      "senate",
-      "governor",
-      "president",
-      "prime minister",
-      "parliament",
-      "referendum",
-      "trump administration",
-      "population decrease",
-      "population decline",
-      "\u9009\u4e3e",
-      "\u5019\u9009\u4eba",
-      "\u63d0\u540d",
-      "\u53c2\u8bae\u9662",
-      "\u603b\u7edf",
-      "\u5dde\u957f",
-      "\u4eba\u53e3\u51cf\u5c11",
-      "\u4eba\u53e3\u4e0b\u964d",
-    ],
-  ],
-  [
-    "weather_event",
-    ["weather", "hurricane", "storm", "rainfall", "temperature", "\u5929\u6c14", "\u98d3\u98ce", "\u964d\u96e8", "\u6c14\u6e29"],
-  ],
-  [
-    "health_event",
-    ["vaccine", "fda approval", "clinical trial", "pandemic", "disease", "\u75ab\u82d7", "\u4e34\u5e8a\u8bd5\u9a8c", "\u75be\u75c5"],
-  ],
-  [
-    "company_earnings",
-    ["earnings", "revenue", "profit", "quarterly results", "\u8d22\u62a5", "\u8425\u6536", "\u5229\u6da6"],
-  ],
-  ["ipo", ["ipo", "initial public offering", "\u4e0a\u5e02"]],
-];
-
 function specificCategory(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const cleaned = value.trim();
@@ -253,25 +80,8 @@ function specificCategory(value: unknown): string | undefined {
   return GENERIC_SOURCE_CATEGORIES.has(normalized) ? undefined : cleaned;
 }
 
-function inferCategoryFromText(values: unknown[]): string | undefined {
-  const text = values.map((value) => String(value ?? "")).join(" ").toLowerCase();
-  if (!text.trim()) return undefined;
-  for (const [category, needles] of TEXT_CATEGORY_RULES) {
-    if (needles.some((needle) => textMatches(needle, text))) return category;
-  }
-  return undefined;
-}
-
-function textMatches(needle: string, text: string): boolean {
-  if (/^[\x00-\x7F]+$/.test(needle) && /[a-z0-9]/i.test(needle)) {
-    const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`).test(text);
-  }
-  return text.includes(needle);
-}
-
 // Sports events use source type as the dashboard segment; other records use
-// the most specific non-generic category available.
+// only explicit non-generic metadata. Text inference belongs to the backend.
 function categoryOf(record: EventRecord): string {
   if (record.source?.type === "sports_event") return "sports_event";
   const legacy = (record as unknown as { legacy_analysis?: Record<string, unknown> })
@@ -286,16 +96,19 @@ function categoryOf(record: EventRecord): string {
     specificCategory(source?.event_type) ||
     specificCategory(source?.type) ||
     specificCategory(source?.platform) ||
-    inferCategoryFromText([
-      record.event_title,
-      record.event_title_zh,
-      record.event_summary,
-      source?.question,
-      source?.title,
-      source?.name,
-    ]) ||
     "general"
   );
+}
+
+function categoryOverride(record: EventRecord, category: string | undefined): EventRecord {
+  if (!category) return record;
+  return {
+    ...record,
+    legacy_analysis: {
+      ...((record as unknown as { legacy_analysis?: Record<string, unknown> }).legacy_analysis ?? {}),
+      base_rate_category: category,
+    },
+  } as EventRecord;
 }
 
 export function adaptRecord(record: EventRecord): EventView {
@@ -319,7 +132,7 @@ export function adaptRecord(record: EventRecord): EventView {
 }
 
 export function adaptEntry(entry: TrackedEntry): EventView {
-  return adaptRecord(entry.record);
+  return adaptRecord(categoryOverride(entry.record, entry.category));
 }
 
 // Movers carry a trend block (from trend_analysis_service.rank_movers) rather

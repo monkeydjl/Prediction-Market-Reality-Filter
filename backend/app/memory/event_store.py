@@ -190,7 +190,8 @@ def save_events(
 
 def get_event(event_id: str) -> dict[str, Any] | None:
     """Return the stored entry for event_id, or None if not stored."""
-    return _load_unlocked(_store_path()).get(event_id)
+    entry = _load_unlocked(_store_path()).get(event_id)
+    return _with_category(entry) if entry is not None else None
 
 
 def resolve_event(
@@ -382,6 +383,12 @@ def _category(record: dict[str, Any]) -> str:
         )
         or "general"
     )
+
+
+def _with_category(entry: dict[str, Any]) -> dict[str, Any]:
+    projected = dict(entry)
+    projected["category"] = _category(projected.get("record") or {})
+    return projected
 
 
 _GENERIC_SOURCE_CATEGORIES = {
@@ -597,4 +604,4 @@ def list_events(
         exclude_expired=exclude_expired,
         resolved_only=resolved_only,
     )
-    return ranked[offset:offset + limit]
+    return [_with_category(entry) for entry in ranked[offset:offset + limit]]

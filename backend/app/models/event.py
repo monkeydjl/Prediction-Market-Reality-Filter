@@ -562,6 +562,7 @@ class EventStoreEntry(FlexibleResponse):
     event_id: str = ""
     first_seen: str = ""
     last_updated: str = ""
+    category: str = "general"
     record: dict[str, Any] = Field(default_factory=dict)
 
 

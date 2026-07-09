@@ -334,7 +334,28 @@ class EventStoreTests(unittest.TestCase):
                         counts = store.count_events_by_category(status="active")
 
                 self.assertEqual([e["event_id"] for e in listed], [event_id])
+                self.assertEqual(listed[0]["category"], expected)
                 self.assertEqual(counts, {expected: 1})
+
+    def test_get_event_returns_backend_derived_category(self):
+        record = _make_record("derived-category", value_score=70, estimated=62)
+        record["event_title"] = "No change in Bank of England's interest rates after July 2026 meeting?"
+        record["source"] = {
+            "type": "prediction_market",
+            "platform": "Polymarket",
+            "category": "Prediction",
+        }
+        record["legacy_analysis"] = {}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                store.save_event(record)
+                entry = store.get_event("derived-category")
+
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["category"], "monetary")
+        self.assertNotIn("category", entry["record"])
 
     def test_limitless_source_platform_is_not_a_domain_category(self):
         record = _make_record("limitless", value_score=70, estimated=62)

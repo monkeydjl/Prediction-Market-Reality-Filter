@@ -8,7 +8,7 @@ AI 驱动的**事件情报与概率变化分析平台**。采集公开信息，�
 
 它**不是**新闻聚合器、自动交易机器人，也不是只围绕某个预测市场的扫描器。Polymarket / Kalshi 只是事件来源与概率基线之一。
 
-当前主动发现的预测市场来源是 Polymarket 和 Kalshi。Opinion（BNB Chain）、Predict.fun（BNB Chain）、Probable（BNB Chain）和 Limitless（Base）会先作为计划接入的链上平台显示在 UI 中；在官方 API / indexer / 合约事件接口验证并实现 adapter 之前，它们不会贡献新事件。
+当前预测市场发现默认包括 Polymarket、Kalshi 和公共 Limitless adapter。Opinion 和 Predict.fun 已具备真实 adapter 接入路径，但分别需要 `OPINION_API_KEY` 和 `PREDICT_FUN_API_KEY`；没有密钥时会 fail closed，不贡献事件。Probable 仍保持计划接入状态，直到官方 API、indexer 或合约事件接口被验证。新增链上 adapter 暂不参与自动结算。
 
 ## 架构
 
@@ -59,6 +59,9 @@ npm run build
 - `SCHEDULER_ENABLED`：本地默认 `true`；systemd 部署时 API unit 会覆盖为 `false`，由独立 scheduler unit 运行定时任务。
 - `PMRF_DEADMAN_URL`：生产可配置外部 dead-man ping；systemd healthcheck 会先确认本地 `/api/health` 为 ok，再 ping 该 URL。
 - `CROSS_VALIDATION_MODEL` / `OPEN_WEB_EXTRACTION_MODEL`：可选能力的模型，留空则关闭。
+- `LIMITLESS_SOURCE_ENABLED` / `LIMITLESS_API_URL`: public Limitless market discovery.
+- `OPINION_API_KEY`: enables Opinion Open API market discovery.
+- `PREDICT_FUN_API_KEY`: enables Predict.fun beta API market discovery.
 - `WORLD_CUP_SOURCE_ENABLED`：启用 2026 世界杯策划事件源，丰富发现流的体育候选事件。
 - `SPORTS_FACT_FILE`：结构化世界杯事实 JSON 文件，用于 sports signals 和自动结算。
 - `WORLD_CUP_DATA_FILE`：可信世界杯数据源快照 JSON 文件，可通过 source preview/import 转换为 facts。

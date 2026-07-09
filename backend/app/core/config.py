@@ -372,6 +372,32 @@ class Settings:
     )
     KALSHI_SOURCE_NAME: str = os.getenv("KALSHI_SOURCE_NAME", "Kalshi")
 
+    LIMITLESS_SOURCE_ENABLED: bool = _env_bool("LIMITLESS_SOURCE_ENABLED", "true")
+    LIMITLESS_API_URL: str = os.getenv(
+        "LIMITLESS_API_URL",
+        "https://api.limitless.exchange/markets/active",
+    )
+    LIMITLESS_SOURCE_NAME: str = os.getenv("LIMITLESS_SOURCE_NAME", "Limitless")
+
+    OPINION_SOURCE_ENABLED: bool = _env_bool("OPINION_SOURCE_ENABLED", "true")
+    OPINION_API_URL: str = os.getenv(
+        "OPINION_API_URL",
+        "https://openapi.opinion.trade/openapi/market",
+    )
+    OPINION_API_KEY: str = os.getenv("OPINION_API_KEY", "")
+    OPINION_SOURCE_NAME: str = os.getenv("OPINION_SOURCE_NAME", "Opinion")
+
+    PREDICT_FUN_SOURCE_ENABLED: bool = _env_bool("PREDICT_FUN_SOURCE_ENABLED", "true")
+    PREDICT_FUN_API_URL: str = os.getenv(
+        "PREDICT_FUN_API_URL",
+        "https://api.predict.fun/v1/markets",
+    )
+    PREDICT_FUN_API_KEY: str = os.getenv("PREDICT_FUN_API_KEY", "")
+    PREDICT_FUN_SOURCE_NAME: str = os.getenv(
+        "PREDICT_FUN_SOURCE_NAME",
+        "Predict.fun",
+    )
+
     # Metaculus is a fourth prediction-question event source (community forecasts
     # on long-horizon science/tech/AI/policy questions). Unlike the market
     # sources, it requires an API token — register at metaculus.com, copy the
@@ -588,12 +614,16 @@ class Settings:
     # Per-source weight multipliers for discovery.  Each active source is asked
     # for ``limit * weight`` candidates instead of the flat ``limit``.
     # Polymarket is the primary prediction-market source (highest weight),
-    # Kalshi is secondary. Open Web (LLM extraction from news) is kept below
-    # market sources so the event mix is dominated by real market prices, not
+    # Kalshi is secondary, and verified on-chain sources are lower-priority
+    # discovery inputs. Open Web (LLM extraction from news) is kept below market
+    # sources so the event mix is dominated by real market prices, not
     # news-derived speculation.
     SOURCE_WEIGHTS: dict[str, float] = {
         "Polymarket": float(os.getenv("SOURCE_WEIGHT_POLYMARKET", "3.0")),
         "Kalshi": float(os.getenv("SOURCE_WEIGHT_KALSHI", "1.0")),
+        "Limitless": float(os.getenv("SOURCE_WEIGHT_LIMITLESS", "0.8")),
+        "Opinion": float(os.getenv("SOURCE_WEIGHT_OPINION", "0.6")),
+        "Predict.fun": float(os.getenv("SOURCE_WEIGHT_PREDICT_FUN", "0.5")),
         "Open Web": float(os.getenv("SOURCE_WEIGHT_OPEN_WEB", "0.5")),
         "Polymarket Crypto": float(os.getenv("SOURCE_WEIGHT_POLYMARKET_CRYPTO", "1.0")),
         "World Cup": 0.3,

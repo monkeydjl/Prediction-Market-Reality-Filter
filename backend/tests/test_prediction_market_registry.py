@@ -14,28 +14,30 @@ class PredictionMarketRegistryTests(unittest.TestCase):
         self.assertEqual(platforms["opinion"].chain, "BNB Chain")
         self.assertEqual(platforms["opinion"].homepage_url, "https://app.opinion.trade/trending")
         self.assertFalse(platforms["opinion"].active_discovery)
+        self.assertIn("API key", platforms["opinion"].status_note)
 
         self.assertEqual(platforms["limitless"].name, "Limitless")
         self.assertEqual(platforms["limitless"].chain, "Base")
         self.assertEqual(platforms["limitless"].homepage_url, "https://limitless.exchange/")
-        self.assertFalse(platforms["limitless"].active_discovery)
+        self.assertTrue(platforms["limitless"].active_discovery)
 
         self.assertEqual(platforms["predict_fun"].name, "Predict.fun")
         self.assertEqual(platforms["predict_fun"].chain, "BNB Chain")
         self.assertEqual(platforms["predict_fun"].homepage_url, "https://predict.fun/")
         self.assertFalse(platforms["predict_fun"].active_discovery)
+        self.assertIn("API key", platforms["predict_fun"].status_note)
 
         self.assertEqual(platforms["probable"].name, "Probable")
         self.assertEqual(platforms["probable"].chain, "BNB Chain")
         self.assertEqual(platforms["probable"].homepage_url, "https://probable.finance/")
         self.assertFalse(platforms["probable"].active_discovery)
+        self.assertIn("requires verification", platforms["probable"].status_note)
 
-    def test_active_discovery_platforms_exclude_planned_onchain_sources_and_manifold(self):
+    def test_active_discovery_platforms_include_default_live_sources_only(self):
         active = active_discovery_platform_names()
 
-        self.assertEqual(active, ["Polymarket", "Kalshi"])
+        self.assertEqual(active, ["Polymarket", "Kalshi", "Limitless"])
         self.assertNotIn("Opinion", active)
-        self.assertNotIn("Limitless", active)
         self.assertNotIn("Predict.fun", active)
         self.assertNotIn("Probable", active)
         self.assertNotIn("Manifold", active)

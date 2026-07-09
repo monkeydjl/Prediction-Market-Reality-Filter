@@ -11,9 +11,10 @@ keeps the top-N list clean.
 
 Strategy: priority-aware incremental build.
 
-  1. Sort candidates by source priority (Polymarket > Kalshi > Open
-     Web), stable so same-priority candidates keep their round-robin order.
-  2. Walk the sorted list, keeping a candidate unless it duplicates one already
+  1. Compare candidates by source priority (Polymarket > Kalshi > Limitless >
+     Opinion > Predict.fun > Open Web), preserving the caller's round-robin
+     order for non-duplicates.
+  2. Walk the candidate list, keeping a candidate unless it duplicates one already
      accepted. Because higher-priority candidates are seen first, "keep the
      higher-priority one" falls out for free - no replacement logic needed.
 
@@ -42,7 +43,13 @@ from app.utils.text_match import normalize, tokenize, token_overlap
 # and volume/liquidity, so they win on duplicates. Curated sports events are
 # structured and human-authored, so they outrank open-web LLM extractions while
 # still staying below markets.
-_SOURCE_PRIORITY: dict[str, int] = {"Polymarket": 0, "Kalshi": 1}
+_SOURCE_PRIORITY: dict[str, int] = {
+    "Polymarket": 0,
+    "Kalshi": 1,
+    "Limitless": 2,
+    "Opinion": 3,
+    "Predict.fun": 4,
+}
 _SPORTS_EVENT_TYPE = "sports_event"
 _OPEN_WEB_TYPE = "open_web"
 

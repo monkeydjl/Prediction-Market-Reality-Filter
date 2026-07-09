@@ -80,7 +80,13 @@
 
 ## Data Flow: Event Discovery Pipeline
 
-Active prediction-market discovery currently uses Polymarket and Kalshi. Opinion (BNB Chain), Predict.fun (BNB Chain), Probable (BNB Chain), and Limitless (Base) are shown as planned on-chain platforms in the UI, but they do not contribute events until their official APIs/indexers are verified and adapters are added.
+Prediction-market discovery currently includes Polymarket, Kalshi, and the public Limitless adapter by default. Opinion and Predict.fun are live adapter-capable but require `OPINION_API_KEY` and `PREDICT_FUN_API_KEY`; without keys they fail closed and contribute no events. Probable remains planned-only until an official API, indexer, or contract-event interface is verified. The new on-chain adapters do not participate in auto-resolution yet.
+
+Config:
+
+- `LIMITLESS_SOURCE_ENABLED` / `LIMITLESS_API_URL`: public Limitless market discovery.
+- `OPINION_API_KEY`: enables Opinion Open API market discovery.
+- `PREDICT_FUN_API_KEY`: enables Predict.fun beta API market discovery.
 
 ```
 News Sources (RSS/GNews/SEC/Fed/BLS)

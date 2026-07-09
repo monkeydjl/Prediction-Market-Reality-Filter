@@ -987,8 +987,17 @@ async def _collect_candidate_events(
     from app.services.kalshi_event_source import (
         fetch_candidate_events as fetch_kalshi_events,
     )
+    from app.services.limitless_event_source import (
+        fetch_candidate_events as fetch_limitless_events,
+    )
+    from app.services.opinion_event_source import (
+        fetch_candidate_events as fetch_opinion_events,
+    )
     from app.services.metacus_event_source import (
         fetch_candidate_events as fetch_metaculus_events,
+    )
+    from app.services.predict_fun_event_source import (
+        fetch_candidate_events as fetch_predict_fun_events,
     )
     from app.services.polymarket_event_source import (
         fetch_candidate_events as fetch_polymarket_events,
@@ -1002,6 +1011,12 @@ async def _collect_candidate_events(
         ("Polymarket", fetch_polymarket_events),
         ("Kalshi", fetch_kalshi_events),
     ]
+    if settings.LIMITLESS_SOURCE_ENABLED:
+        candidate_sources.append(("Limitless", fetch_limitless_events))
+    if settings.OPINION_SOURCE_ENABLED and settings.OPINION_API_KEY:
+        candidate_sources.append(("Opinion", fetch_opinion_events))
+    if settings.PREDICT_FUN_SOURCE_ENABLED and settings.PREDICT_FUN_API_KEY:
+        candidate_sources.append(("Predict.fun", fetch_predict_fun_events))
     # Opt-in crypto-only Polymarket fetch. The default Polymarket fetch ranks by
     # volume, so geopolitics crowds crypto out of the top-N; this adds a
     # crypto-only fetch as an extra candidate source so crypto markets reach the
@@ -1182,7 +1197,7 @@ async def discover_events(
         raise
 
     if not candidate_events:
-        await status_fail("未获取到任何候选事件 — 检查数据源（Polymarket/Kalshi/Open Web）是否可达")
+        await status_fail("未获取到任何候选事件 — 检查数据源（Polymarket/Kalshi/Limitless/Open Web）是否可达")
         return {"platform": "Event Intelligence Platform",
                 "source": "Multi-source event discovery",
                 "count": 0, "events": [],

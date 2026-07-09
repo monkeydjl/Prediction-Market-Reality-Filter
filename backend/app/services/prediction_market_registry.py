@@ -47,7 +47,7 @@ _PLATFORMS: tuple[PredictionMarketPlatform, ...] = (
         homepage_url="https://app.opinion.trade/trending",
         search_url_template=None,
         active_discovery=False,
-        status_note="Planned source; adapter pending official interface verification.",
+        status_note="API key source; adapter active when OPINION_API_KEY is configured.",
     ),
     PredictionMarketPlatform(
         key="limitless",
@@ -55,8 +55,8 @@ _PLATFORMS: tuple[PredictionMarketPlatform, ...] = (
         chain="Base",
         homepage_url="https://limitless.exchange/",
         search_url_template=None,
-        active_discovery=False,
-        status_note="Planned source; adapter pending official interface verification.",
+        active_discovery=True,
+        status_note="Active public discovery source.",
     ),
     PredictionMarketPlatform(
         key="predict_fun",
@@ -65,7 +65,7 @@ _PLATFORMS: tuple[PredictionMarketPlatform, ...] = (
         homepage_url="https://predict.fun/",
         search_url_template=None,
         active_discovery=False,
-        status_note="Planned source; adapter pending official interface verification.",
+        status_note="API key source; adapter active when PREDICT_FUN_API_KEY is configured.",
     ),
     PredictionMarketPlatform(
         key="probable",
@@ -74,7 +74,7 @@ _PLATFORMS: tuple[PredictionMarketPlatform, ...] = (
         homepage_url="https://probable.finance/",
         search_url_template=None,
         active_discovery=False,
-        status_note="Planned source; homepage shown in UI, adapter requires verification.",
+        status_note="Planned source; official adapter interface requires verification.",
     ),
 )
 

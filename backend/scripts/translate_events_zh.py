@@ -28,7 +28,7 @@ Usage (from the backend/ directory):
     python scripts/translate_events_zh.py
     python scripts/translate_events_zh.py --limit 20      # only the first N
     python scripts/translate_events_zh.py --keep-cache    # don't clear cache
-Needs OPENAI_API_KEY in backend/.env for the translation step; without it the
+Uses the configured LLM Gateway for the translation step; if no route works, the
 templated fields are still regenerated in Chinese and text is left as-is.
 """
 
@@ -55,12 +55,7 @@ from app.services.event_intelligence_service import (  # noqa: E402
     build_probability_assessment,
     recommended_action,
 )
-from app.services.probability_engine_service import get_client  # noqa: E402
-from app.services.translation_service import translate_fields  # noqa: E402
-
-
-def _looks_chinese(text: str) -> bool:
-    return any("一" <= ch <= "鿿" for ch in (text or ""))
+from app.services.translation_service import looks_chinese, translate_fields  # noqa: E402
 
 
 def _num(value, fallback=0.0) -> float:
@@ -91,22 +86,22 @@ def _regen_templates(record: dict) -> None:
     record["intelligence_report"] = report
 
 
-async def _process(client, record: dict) -> None:
+async def _process(record: dict) -> None:
     title = record.get("event_title", "") or ""
     summary = record.get("event_summary", "") or ""
     report = record.get("intelligence_report") or {}
     why = report.get("why_it_matters", "") or ""
 
     payload: dict[str, str] = {}
-    if not (record.get("event_title_zh") or "").strip() and title and not _looks_chinese(title):
+    if not (record.get("event_title_zh") or "").strip() and title and not looks_chinese(title):
         payload["title_zh"] = title
-    if summary and not _looks_chinese(summary):
+    if summary and not looks_chinese(summary):
         payload["summary"] = summary
-    if why and not _looks_chinese(why):
+    if why and not looks_chinese(why):
         payload["why"] = why
 
-    if payload and client is not None:
-        translated = await translate_fields(payload, client=client)
+    if payload:
+        translated = await translate_fields(payload)
         if translated.get("title_zh"):
             record["event_title_zh"] = translated["title_zh"][:300]
         if translated.get("summary"):
@@ -142,12 +137,6 @@ async def main() -> None:
         print("No stored events to translate.")
         return
 
-    client = None
-    if settings.OPENAI_API_KEY:
-        client = get_client()
-    else:
-        print("! OPENAI_API_KEY not set - regenerating templates only, text kept as-is.")
-
     semaphore = asyncio.Semaphore(4)
     updated: list[dict] = []
 
@@ -156,7 +145,7 @@ async def main() -> None:
         if not record.get("event_id"):
             return
         async with semaphore:
-            await _process(client, record)
+            await _process(record)
         updated.append(record)
         print(f"  done: {record.get('event_id')}  {record.get('event_title','')[:60]}")
 

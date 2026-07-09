@@ -33,6 +33,7 @@ from app.memory.prediction_store import (
 )
 from app.memory.event_store import (
     count_events,
+    count_events_by_category,
     get_event,
     list_all_events,
     list_events,
@@ -138,6 +139,7 @@ from app.services.trend_analysis_service import (
 )
 from app.models.event import (
     AutoResolveResponse,
+    CategoryCountsResponse,
     DecisionTimelineDiff,
     DecisionTimelineResponse,
     DecisionTimelineSnapshot,
@@ -299,6 +301,29 @@ async def list_event_intelligence(
         resolved_only=resolved_only,
     )
     return {"count": len(entries), "total": total, "limit": limit, "offset": offset, "events": entries}
+
+
+@router.get("/category-counts", response_model=CategoryCountsResponse)
+async def list_event_category_counts(
+    q: str = Query(default="", max_length=200),
+    status: str = Query(default="all", pattern="^(active|tracking|watching|archived|all)$"),
+    sort: str = Query(default="value", pattern="^(value|delta|probability|support)$"),
+    exclude_expired: bool = Query(default=True),
+    resolved_only: bool = Query(default=False),
+):
+    """Return per-category event totals for the current non-category filters.
+
+    Used by the dashboard category dropdown so counts stay stable when the
+    user switches categories, instead of recomputing from the paginated list.
+    """
+    counts = count_events_by_category(
+        query=q,
+        status=status,
+        sort=sort,
+        exclude_expired=exclude_expired,
+        resolved_only=resolved_only,
+    )
+    return {"counts": counts}
 
 
 @router.get("/movers", response_model=EventMoversResponse)
@@ -1457,6 +1482,7 @@ async def translate_event_title(
     """
     from app.memory.event_store import get_event, save_events
     from app.services.probability_engine_service import translate_title
+    from app.services.translation_service import looks_chinese
 
     event = get_event(event_id)
     if event is None:
@@ -1468,7 +1494,7 @@ async def translate_event_title(
         raise HTTPException(status_code=400, detail="Event has no English title")
 
     current_zh = str(record.get("event_title_zh") or "").strip()
-    if current_zh and not force:
+    if current_zh and looks_chinese(current_zh) and not force:
         return {
             "event_id": event_id,
             "event_title_zh": current_zh,
@@ -1504,6 +1530,7 @@ async def translate_all_events(
     already exists (useful for recovering from failed LLM translations)."""
     from app.memory.event_store import list_all_events, save_events
     from app.services.probability_engine_service import translate_title
+    from app.services.translation_service import looks_chinese
     import asyncio
 
     events = list_all_events()
@@ -1512,7 +1539,7 @@ async def translate_all_events(
     for event in events:
         record = event.get("record") or event
         zh = str(record.get("event_title_zh") or "").strip()
-        if zh and not force:
+        if zh and looks_chinese(zh) and not force:
             continue
         en = str(record.get("event_title") or "").strip()
         if not en:

@@ -55,6 +55,17 @@ class LLMResult:
     degraded_reason: str | None = None
 
 
+@dataclass(frozen=True)
+class LLMEmbeddingResult:
+    ok: bool
+    vectors: list[list[float]] | None = None
+    provider: str | None = None
+    model: str | None = None
+    attempts: list[LLMAttempt] | None = None
+    usage: dict[str, int] | None = None
+    degraded_reason: str | None = None
+
+
 class LLMGatewayError(RuntimeError):
     """Raised when the Gateway cannot produce a usable LLM response."""
 
@@ -63,9 +74,11 @@ _TASK_ROUTE_SETTINGS = {
     "default": "LLM_ROUTE_DEFAULT",
     "probability_analysis": "LLM_ROUTE_PROBABILITY_ANALYSIS",
     "translation": "LLM_ROUTE_TRANSLATION",
+    "open_web_extraction": "LLM_ROUTE_OPEN_WEB_EXTRACTION",
     "cross_validation": "LLM_ROUTE_CROSS_VALIDATION",
     "world_cup": "LLM_ROUTE_WORLD_CUP",
     "startup_check": "LLM_ROUTE_STARTUP_CHECK",
+    "embedding": "LLM_ROUTE_EMBEDDING",
 }
 
 _client_cache: dict[tuple[str, str, str, float, int], Any] = {}
@@ -167,6 +180,13 @@ def _legacy_route() -> list[LLMModelRoute]:
     return [LLMModelRoute(provider="legacy_openai", models=[model])]
 
 
+def _legacy_embedding_route() -> list[LLMModelRoute]:
+    model = (settings.EMBEDDING_MODEL or "").strip()
+    if not model:
+        return []
+    return [LLMModelRoute(provider="legacy_embedding", models=[model])]
+
+
 def build_route(task: str = "default") -> list[LLMModelRoute]:
     """Build the route for a task, falling back to default then legacy config."""
     normalized_task = (task or "default").strip().lower()
@@ -181,6 +201,11 @@ def build_route(task: str = "default") -> list[LLMModelRoute]:
         default_routes = parse_route_string(settings.LLM_ROUTE_DEFAULT)
         if default_routes:
             return default_routes
+
+    if normalized_task == "embedding":
+        legacy_embedding_routes = _legacy_embedding_route()
+        if legacy_embedding_routes:
+            return legacy_embedding_routes
 
     indexed_routes = _indexed_openai_routes()
     if indexed_routes:
@@ -216,6 +241,11 @@ def has_configured_llm_route(
 
 def _provider_configs() -> dict[str, LLMProviderConfig]:
     configs = {
+        "legacy_embedding": LLMProviderConfig(
+            provider="legacy_embedding",
+            api_key=settings.EMBEDDING_API_KEY or settings.OPENAI_API_KEY,
+            base_url=settings.EMBEDDING_BASE_URL,
+        ),
         "legacy_openai": LLMProviderConfig(
             provider="legacy_openai",
             api_key=settings.OPENAI_API_KEY,
@@ -533,5 +563,101 @@ async def complete_json(
         provider_configs=provider_configs,
         client_factory=client_factory,
         expect_json=True,
+    )
+
+
+async def complete_embeddings(
+    *,
+    input: list[str],
+    task: str = "embedding",
+    route: list[LLMModelRoute] | None = None,
+    provider_configs: dict[str, LLMProviderConfig] | None = None,
+    client_factory: Callable[[LLMProviderConfig], Any] | None = None,
+) -> LLMEmbeddingResult:
+    attempts: list[LLMAttempt] = []
+    if not input:
+        return LLMEmbeddingResult(ok=True, vectors=[], attempts=[])
+
+    routes = route if route is not None else build_route(task)
+    configs = provider_configs if provider_configs is not None else _provider_configs()
+    factory = client_factory or _default_client_factory
+
+    for model_route in routes:
+        config = configs.get(model_route.provider)
+        if config is None:
+            for model in model_route.models:
+                attempts.append(
+                    LLMAttempt(
+                        provider=model_route.provider,
+                        model=model,
+                        status="skipped",
+                        error_type="missing_provider_config",
+                        error_message="Provider config is not available.",
+                    )
+                )
+            continue
+        if not config.api_key:
+            for model in model_route.models:
+                attempts.append(
+                    LLMAttempt(
+                        provider=model_route.provider,
+                        model=model,
+                        status="skipped",
+                        error_type="missing_api_key",
+                        error_message="Provider API key is empty.",
+                    )
+                )
+            continue
+
+        client = factory(config)
+        for model in model_route.models:
+            started = time.perf_counter()
+            try:
+                response = await client.embeddings.create(model=model, input=input)
+                latency_ms = int((time.perf_counter() - started) * 1000)
+                vectors = [list(item.embedding) for item in response.data]
+                if len(vectors) != len(input):
+                    attempts.append(
+                        LLMAttempt(
+                            provider=model_route.provider,
+                            model=model,
+                            status="failed",
+                            error_type="invalid_embedding_shape",
+                            error_message="Embedding count did not match input count.",
+                            latency_ms=latency_ms,
+                        )
+                    )
+                    continue
+                success_attempt = LLMAttempt(
+                    provider=model_route.provider,
+                    model=model,
+                    status="success",
+                    latency_ms=latency_ms,
+                )
+                return LLMEmbeddingResult(
+                    ok=True,
+                    vectors=vectors,
+                    provider=model_route.provider,
+                    model=model,
+                    attempts=[*attempts, success_attempt],
+                    usage=_extract_usage(response),
+                )
+            except Exception as exc:
+                latency_ms = int((time.perf_counter() - started) * 1000)
+                attempts.append(
+                    LLMAttempt(
+                        provider=model_route.provider,
+                        model=model,
+                        status="failed",
+                        error_type=_classify_exception(exc),
+                        error_message=_redact_error(exc),
+                        latency_ms=latency_ms,
+                    )
+                )
+
+    return LLMEmbeddingResult(
+        ok=False,
+        attempts=attempts,
+        degraded_reason="all_routes_failed",
     )
 

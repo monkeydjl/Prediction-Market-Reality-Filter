@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, ChevronUp, Download, Search, Trophy } from "lucide-react";
+import { ChevronRight, ChevronUp, Download, Search } from "lucide-react";
 import type { EventView } from "@/lib/adapt";
-import { categoryLabel, fmtPct, STATUS_LABELS } from "@/lib/format";
+import { categoryBucket, categoryLabel, fmtPct, STATUS_LABELS } from "@/lib/format";
 import {
   DeltaPill,
   PriorityBadge,
@@ -29,7 +29,6 @@ const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
 const STATUS_VALUES = new Set(STATUS_FILTERS.map((s) => s.value));
 const SORT_VALUES = new Set<SortKey>(["delta", "probability", "support", "value"]);
 const TABLE_FILTER_EVENT = "pmrf:event-table-filters-change";
-const WORLD_CUP_CATEGORY = "sports_event";
 
 const selectCls =
   "h-8 rounded-md border border-border bg-secondary px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -38,10 +37,12 @@ export function EventTable({
   events,
   sparklines = {},
   total,
+  categoryCounts,
 }: {
   events: EventView[];
   sparklines?: Record<string, number[]>;
   total?: number;
+  categoryCounts?: Record<string, number>;
 }) {
   const [category, setCategory] = useState("all");
   const [status, setStatus] = useState<StatusFilter>("active");
@@ -57,7 +58,8 @@ export function EventTable({
       const nextStatus = params.get("status");
       const nextSort = params.get("sort");
       setQuery(params.get("q") ?? "");
-      setCategory(params.get("category") ?? "all");
+      const nextCategory = params.get("category");
+      setCategory(nextCategory && nextCategory !== "all" ? categoryBucket(nextCategory) : "all");
       if (nextStatus && STATUS_VALUES.has(nextStatus as StatusFilter)) {
         setStatus(nextStatus as StatusFilter);
       }
@@ -102,15 +104,20 @@ export function EventTable({
 
   const categoryOptions = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const e of events) {
-      counts.set(e.category, (counts.get(e.category) ?? 0) + 1);
+    if (categoryCounts && Object.keys(categoryCounts).length > 0) {
+      for (const [cat, n] of Object.entries(categoryCounts)) {
+        const bucket = categoryBucket(cat);
+        counts.set(bucket, (counts.get(bucket) ?? 0) + n);
+      }
+    } else {
+      for (const e of events) {
+        const bucket = categoryBucket(e.category);
+        counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
+      }
     }
-    // Ensure World Cup category is always present
-    if (!counts.has(WORLD_CUP_CATEGORY)) counts.set(WORLD_CUP_CATEGORY, 0);
     return Array.from(counts.entries())
       .sort((a, b) => categoryLabel(a[0]).localeCompare(categoryLabel(b[0]), "zh-CN"));
-  }, [events]);
-  const isWorldCupFilter = category === WORLD_CUP_CATEGORY;
+  }, [events, categoryCounts]);
 
   function toggleSort(key: SortKey) {
     if (sort === key) {
@@ -133,7 +140,7 @@ export function EventTable({
     }
     if (status === "active") r = r.filter((e) => e.trackingStatus !== "archived");
     else if (status !== "all") r = r.filter((e) => e.trackingStatus === status);
-    if (category !== "all") r = r.filter((e) => e.category === category);
+    if (category !== "all") r = r.filter((e) => categoryBucket(e.category) === category);
     return [...r].sort((a, b) => {
       const dir = sortDir === "desc" ? 1 : -1;
       switch (sort) {
@@ -176,20 +183,6 @@ export function EventTable({
           </span>
         </h2>
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setCategory(isWorldCupFilter ? "all" : WORLD_CUP_CATEGORY)}
-            aria-pressed={isWorldCupFilter}
-            className={cn(
-              "inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs transition-colors",
-              isWorldCupFilter
-                ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90"
-                : "border-border bg-secondary text-foreground hover:bg-accent",
-            )}
-          >
-            <Trophy className="size-3.5" aria-hidden="true" />
-            世界杯
-          </button>
           <button
             type="button"
             onClick={exportRows}

@@ -116,6 +116,62 @@ class EventDiscoverJobTests(unittest.TestCase):
         mock_discover.assert_not_called()
 
 
+class TranslateTitlesJobTests(unittest.TestCase):
+    def test_job_retries_english_placeholder_titles(self):
+        records = [
+            {
+                "event_id": "english-placeholder",
+                "record": {
+                    "event_id": "english-placeholder",
+                    "event_title": "Will it rain?",
+                    "event_title_zh": "Will it rain?",
+                },
+            },
+            {
+                "event_id": "already-zh",
+                "record": {
+                    "event_id": "already-zh",
+                    "event_title": "Will it snow?",
+                    "event_title_zh": "会下雪吗？",
+                },
+            },
+            {
+                "event_id": "empty-zh",
+                "record": {
+                    "event_id": "empty-zh",
+                    "event_title": "Will it pass?",
+                    "event_title_zh": "",
+                },
+            },
+        ]
+
+        async def fake_translate(title):
+            return {
+                "Will it rain?": "会下雨吗？",
+                "Will it pass?": "会通过吗？",
+            }[title]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch("app.memory.event_store.list_all_events", return_value=records), \
+                    patch("app.memory.event_store.save_events") as save_events, \
+                    patch("app.services.probability_engine_service.translate_title",
+                          new=AsyncMock(side_effect=fake_translate)):
+                asyncio.run(scheduler._job_translate_titles())
+                run = loop_run_store.last_run("translate_titles")
+
+        self.assertEqual(run["status"], "success")
+        self.assertEqual(run["result"]["translated"], 2)
+        saved = save_events.call_args.args[0]
+        self.assertEqual(
+            {record["event_id"]: record["event_title_zh"] for record in saved},
+            {
+                "english-placeholder": "会下雨吗？",
+                "empty-zh": "会通过吗？",
+            },
+        )
+
+
 class LoopDbMaintenanceJobTests(unittest.TestCase):
     def test_job_runs_sqlite_maintenance_and_records_success(self):
         with tempfile.TemporaryDirectory() as tmp:

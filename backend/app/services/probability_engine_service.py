@@ -17,7 +17,7 @@ Responsibilities:
 This module owns the shared low-level helpers and the risk-keyword table because
 both this module and analysis_report_service build on them. It is the leaf of
 the analysis dependency chain - it imports nothing from the report or the legacy
-adapter modules, only base settings and the OpenAI client.
+adapter modules, only base settings and the LLM Gateway.
 """
 
 import json
@@ -25,9 +25,6 @@ import logging
 import re
 from typing import Any
 
-from openai import AsyncOpenAI
-
-from app.core.config import settings
 from app.services.llm_gateway_service import complete_chat, complete_json
 from app.utils.market_utils import safe_float
 
@@ -46,8 +43,6 @@ Low-quality news should reduce confidence.
 If evidence is weak, stay near market probability.
 Default toward uncertainty.
 """.strip()
-
-_client: AsyncOpenAI | None = None
 
 RISK_KEYWORDS = {
     "meme": ("meme", "viral", "shitpost", "reddit", "tiktok", "twitter rumor", "x rumor"),
@@ -70,37 +65,6 @@ DEFAULT_ANALYSIS: dict[str, Any] = {
     "time_horizon": "",
     "entities": [],
 }
-
-
-def get_client() -> AsyncOpenAI:
-    global _client
-    if _client is None:
-        _client = AsyncOpenAI(
-            api_key=settings.OPENAI_API_KEY,
-            base_url=settings.DASHSCOPE_BASE_URL,
-            # Bound LLM calls so a stuck/over-limit provider cannot hang a scan
-            # indefinitely. max_retries lets the SDK ride transient 429/5xx
-            # (DashScope rate-limits) without the caller treating every blip
-            # as a hard failure that drops to the deterministic fallback.
-            timeout=60.0,
-            max_retries=2,
-        )
-    return _client
-
-
-_translation_client = None
-
-
-def get_translation_client() -> AsyncOpenAI:
-    global _translation_client
-    if _translation_client is None:
-        _translation_client = AsyncOpenAI(
-            api_key=settings.TRANSLATION_API_KEY or settings.OPENAI_API_KEY,
-            base_url=settings.TRANSLATION_BASE_URL or settings.DASHSCOPE_BASE_URL,
-            timeout=60.0,
-            max_retries=1,
-        )
-    return _translation_client
 
 
 async def translate_title(question: str) -> str:

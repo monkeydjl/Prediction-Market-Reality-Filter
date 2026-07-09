@@ -83,7 +83,13 @@ describe("MarketPanel", () => {
     expect(screen.getAllByText("active")).toHaveLength(3);
     expect(screen.getAllByText("API key required")).toHaveLength(2);
     expect(screen.getByText("planned")).toBeInTheDocument();
+    expect(screen.getByLabelText("预测市场搜索平台")).toHaveClass("grid-cols-2");
     expect(screen.queryByRole("link", { name: /Manifold/i })).toBeNull();
+    expect(
+      screen
+        .getAllByRole("link")
+        .some((link) => link.getAttribute("href")?.includes("manifold.markets")),
+    ).toBe(false);
   });
 
   it("still displays historical Manifold platform text", () => {

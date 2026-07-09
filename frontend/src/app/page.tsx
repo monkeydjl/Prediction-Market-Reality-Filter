@@ -109,7 +109,9 @@ async function fetchDashboardData(limit = PAGE_SIZE, offset = 0, filters: EventL
   };
 }
 
-type DashboardData = Awaited<ReturnType<typeof fetchDashboardData>>;
+type DashboardData = Awaited<ReturnType<typeof fetchDashboardData>> & {
+  categoryCounts: Record<string, number>;
+};
 
 /**
  * Render the discovery source-status badges. Now that DiscoveryStatus is a
@@ -139,6 +141,7 @@ export default function DashboardPage() {
   const [movers, setMovers] = useState<EventView[]>([]);
   const [sparklines, setSparklines] = useState<Record<string, number[]>>({});
   const [totalEvents, setTotalEvents] = useState(0);
+  const [categoryCounts, setCategoryCounts] = useState<Record<string, number>>({});
   const [page, setPage] = useState(initialPage);
   const [pageSize, setPageSize] = useState(PAGE_SIZE);
   const [queryVersion, setQueryVersion] = useState(0);
@@ -242,6 +245,7 @@ export default function DashboardPage() {
     if (cached) {
       setEvents(cached.data.events);
       setTotalEvents(cached.data.total);
+      setCategoryCounts(cached.data.categoryCounts ?? {});
       setMovers(cached.data.movers);
       setSparklines(cached.data.sparklines);
       setLastUpdated(new Date(cached.cachedAt));
@@ -251,7 +255,17 @@ export default function DashboardPage() {
     }
     setError(null);
     try {
-      const data = await fetchDashboardData(pageSize, offset, filters);
+      const [{ events: rawEvents, total, movers, sparklines }, countsRes] = await Promise.all([
+        fetchDashboardData(pageSize, offset, filters),
+        eventsApi.categoryCounts({
+          q: filters.q,
+          status: filters.status,
+          sort: filters.sort,
+          exclude_expired: filters.exclude_expired,
+          resolved_only: filters.resolved_only,
+        }),
+      ]);
+      const data = { events: rawEvents, total, movers, sparklines, categoryCounts: countsRes.counts ?? {} };
       if (data.total > 0 && data.events.length === 0 && pageOverride > 1) {
         const lastPage = Math.max(1, Math.ceil(data.total / pageSize));
         setPage(lastPage);
@@ -261,6 +275,7 @@ export default function DashboardPage() {
       setDashboardCache(cacheKey, data);
       setEvents(data.events);
       setTotalEvents(data.total);
+      setCategoryCounts(data.categoryCounts);
       setMovers(data.movers);
       setSparklines(data.sparklines);
       setLastUpdated(new Date());
@@ -560,7 +575,7 @@ export default function DashboardPage() {
               <MoversBoard movers={movers} sparklines={sparklines} />
             </SectionErrorBoundary>
             <SectionErrorBoundary title="事件列表">
-              <EventTable events={events} sparklines={sparklines} total={totalEvents} />
+              <EventTable events={events} sparklines={sparklines} total={totalEvents} categoryCounts={categoryCounts} />
             </SectionErrorBoundary>
             {totalEvents > pageSize && (
               <div className="flex flex-wrap items-center justify-center gap-3">

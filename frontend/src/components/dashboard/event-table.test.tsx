@@ -37,25 +37,6 @@ const events: EventView[] = [
   },
 ];
 
-const eventsWithSports: EventView[] = [
-  ...events,
-  {
-    id: "evt-3",
-    title: "Brazil World Cup semifinal",
-    description: "2026 FIFA World Cup",
-    category: "sports_event",
-    currentProbability: 38,
-    baselineProbability: 35,
-    delta: 3,
-    direction: "up",
-    evidenceSupport: 0.7,
-    priority: "medium",
-    trackingStatus: "watching",
-    trend: "up",
-    valueScore: 75,
-  },
-];
-
 describe("EventTable", () => {
   beforeEach(() => {
     window.history.replaceState(null, "", "/");
@@ -85,22 +66,34 @@ describe("EventTable", () => {
     expect(window.location.search).toContain("sort=probability");
   });
 
-  it("offers a World Cup shortcut that filters sports events and updates the URL", async () => {
-    render(<EventTable events={eventsWithSports} total={3} />);
+  it("renders backend English category count keys as Chinese domain options", () => {
+    render(
+      <EventTable
+        events={events}
+        total={2}
+        categoryCounts={{
+          "Entertainment awards": 1,
+          Policy: 2,
+          Sports: 3,
+          weather: 4,
+          Prediction: 5,
+        }}
+      />,
+    );
 
-    await waitFor(() => expect(screen.getByLabelText("按领域筛选")).toHaveValue("all"));
+    const domainSelect = screen.getByRole("combobox", { name: "\u6309\u9886\u57df\u7b5b\u9009" });
+    const optionText = Array.from(domainSelect.querySelectorAll("option")).map((option) => option.textContent);
+    const allOptions = optionText.join(" ");
 
-    await userEvent.click(screen.getByRole("button", { name: /世界杯/ }));
-
-    expect(screen.getByText("Brazil World Cup semifinal")).toBeInTheDocument();
-    expect(screen.queryByText("Federal Reserve rate cut")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("按领域筛选")).toHaveValue("sports_event");
-    expect(screen.getByRole("button", { name: /世界杯/ })).toHaveAttribute("aria-pressed", "true");
-    await waitFor(() => expect(window.location.search).toContain("category=sports_event"));
-
-    await userEvent.click(screen.getByRole("button", { name: /世界杯/ }));
-
-    await waitFor(() => expect(window.location.search).not.toContain("category="));
-    expect(screen.getByLabelText("按领域筛选")).toHaveValue("all");
+    expect(optionText).toContain("\u5a31\u4e50\u5956\u9879 (1)");
+    expect(optionText).toContain("\u653f\u7b56 (2)");
+    expect(optionText).toContain("\u4f53\u80b2 (3)");
+    expect(optionText).toContain("\u5929\u6c14 (4)");
+    expect(optionText).toContain("\u7efc\u5408 (5)");
+    expect(allOptions).not.toContain("Entertainment awards");
+    expect(allOptions).not.toContain("Policy");
+    expect(allOptions).not.toContain("Sports");
+    expect(allOptions).not.toContain("weather");
+    expect(allOptions).not.toContain("Prediction");
   });
 });

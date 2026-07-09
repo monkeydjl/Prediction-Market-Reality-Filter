@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import app.services.event_extraction_service as ext
+from app.services.llm_gateway_service import LLMResult
 
 ARTICLES = [
     {"title": "Senate to vote on bill", "description": "A vote is scheduled.",
@@ -27,12 +28,22 @@ def _run(coro):
 
 class ExtractCandidateEventsTests(unittest.TestCase):
     def test_disabled_when_no_model(self):
-        with patch.object(ext.settings, "OPEN_WEB_EXTRACTION_MODEL", ""):
+        with patch.object(ext.settings, "OPEN_WEB_EXTRACTION_MODEL", ""), \
+                patch.object(ext.settings, "LLM_ROUTE_OPEN_WEB_EXTRACTION", ""):
             self.assertEqual(_run(ext.extract_candidate_events(ARTICLES, 10)), [])
 
     def test_no_articles_returns_empty(self):
         with patch.object(ext.settings, "OPEN_WEB_EXTRACTION_MODEL", "m"):
             self.assertEqual(_run(ext.extract_candidate_events([], 10)), [])
+
+    def test_enabled_by_gateway_route_when_legacy_model_is_empty(self):
+        extracted = [{"question": "Will the bill pass by July?", "article_index": 0}]
+        with patch.object(ext.settings, "OPEN_WEB_EXTRACTION_MODEL", ""), \
+                patch.object(ext.settings, "LLM_ROUTE_OPEN_WEB_EXTRACTION", "openai:extractor"), \
+                patch.object(ext, "_ask_extractor", new=AsyncMock(return_value=extracted)):
+            events = _run(ext.extract_candidate_events(ARTICLES, 10))
+
+        self.assertEqual([event["question"] for event in events], ["Will the bill pass by July?"])
 
     def test_normalizes_extracted_events(self):
         extracted = [{
@@ -94,6 +105,41 @@ class ExtractCandidateEventsTests(unittest.TestCase):
         text = "\n".join(logs.output)
         self.assertIn("source=open_web_extraction", text)
         self.assertIn("policy=fail_closed_empty_list", text)
+
+    def test_ask_extractor_uses_gateway(self):
+        gateway = AsyncMock(return_value=LLMResult(ok=True, json_data={
+            "events": [{
+                "question": "Will the bill pass by July?",
+                "entities": ["Senate"],
+                "event_type": "policy",
+                "article_index": 0,
+            }]
+        }))
+        with patch.object(ext.settings, "OPEN_WEB_EXTRACTION_MODEL", "m"), \
+                patch.object(ext, "complete_json", gateway, create=True):
+            events = _run(ext._ask_extractor(ARTICLES, 5))
+
+        self.assertEqual(events[0]["question"], "Will the bill pass by July?")
+        gateway.assert_awaited_once()
+        self.assertEqual(gateway.await_args.kwargs["task"], "open_web_extraction")
+
+    def test_legacy_open_web_model_supplies_gateway_route(self):
+        gateway = AsyncMock(return_value=LLMResult(ok=True, json_data={"events": []}))
+        with patch.object(ext.settings, "LLM_ROUTE_OPEN_WEB_EXTRACTION", ""), \
+                patch.object(ext.settings, "OPEN_WEB_EXTRACTION_MODEL", "legacy-extractor"), \
+                patch.object(ext.settings, "OPENAI_API_KEY", "open-web-key"), \
+                patch.object(ext.settings, "DASHSCOPE_BASE_URL", "https://open-web.example/v1"), \
+                patch.object(ext, "complete_json", gateway, create=True):
+            events = _run(ext._ask_extractor(ARTICLES, 5))
+
+        self.assertEqual(events, [])
+        route = gateway.await_args.kwargs["route"]
+        configs = gateway.await_args.kwargs["provider_configs"]
+        self.assertEqual([(item.provider, item.models) for item in route], [
+            ("legacy_open_web_extraction", ["legacy-extractor"]),
+        ])
+        self.assertEqual(configs["legacy_open_web_extraction"].api_key, "open-web-key")
+        self.assertEqual(configs["legacy_open_web_extraction"].base_url, "https://open-web.example/v1")
 
 
 if __name__ == "__main__":

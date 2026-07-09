@@ -25,7 +25,8 @@ export const CATEGORY_LABELS: Record<string, string> = {
   inflation_data: "通胀数据",
   monetary: "货币政策",
   macro: "宏观",
-  policy_general: "Policy",
+  policy: "政策",
+  policy_general: "政策",
   markets: "市场",
 
   // ── 加密货币 ──
@@ -39,8 +40,8 @@ export const CATEGORY_LABELS: Record<string, string> = {
 
   // ── 科技与 AI ──
   ai_release: "AI 产品发布",
-  tech_product: "Tech product",
-  company_earnings: "Company earnings",
+  tech_product: "科技产品",
+  company_earnings: "公司财报",
   technology: "科技",
   science_event: "科学事件",
 
@@ -57,18 +58,24 @@ export const CATEGORY_LABELS: Record<string, string> = {
 
   // ── 体育 ──
   sports_event: "世界杯",
-  sports_general: "Sports",
+  sports: "体育",
+  sports_general: "体育",
   sports_championship: "体育冠军",
   sports_game: "单场比赛",
 
   // ── 其他 ──
-  player_awards: "Player awards",
+  player_awards: "球员奖项",
 
   natural_disaster: "自然灾害",
-  weather_event: "Weather",
-  entertainment_awards: "Entertainment awards",
-  health_event: "Health",
+  weather: "天气",
+  weather_event: "天气",
+  entertainment_awards: "娱乐奖项",
+  health_event: "健康医疗",
   "supply-chain": "供应链",
+  prediction: "综合",
+  predictions: "综合",
+  prediction_market: "综合",
+  prediction_question: "综合",
   general: "综合",
   unknown: "未分类",
 };
@@ -117,9 +124,34 @@ const DATE_TIME_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
   minute: "2-digit",
 });
 
+const GENERIC_CATEGORY_KEYS = new Set([
+  "prediction",
+  "predictions",
+  "prediction_market",
+  "prediction_question",
+  "polymarket",
+  "kalshi",
+  "limitless",
+  "market",
+]);
+
+export function normalizeCategoryKey(c: string): string {
+  return c.trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+export function categoryBucket(c: string | undefined) {
+  const raw = c?.trim();
+  if (!raw) return "unknown";
+  const normalized = normalizeCategoryKey(raw);
+  if (GENERIC_CATEGORY_KEYS.has(normalized)) return "general";
+  if (CATEGORY_LABELS[raw]) return raw;
+  if (CATEGORY_LABELS[normalized]) return normalized;
+  return raw;
+}
+
 export function categoryLabel(c: string | undefined) {
-  if (!c) return "未分类";
-  return CATEGORY_LABELS[c] ?? c;
+  const bucket = categoryBucket(c);
+  return CATEGORY_LABELS[bucket] ?? bucket;
 }
 
 export function fmtPct(n: number | null | undefined, digits = 0) {

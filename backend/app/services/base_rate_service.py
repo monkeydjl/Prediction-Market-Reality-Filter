@@ -211,20 +211,20 @@ _DEFAULT = BaseRate("unknown", 20, 80, 50, "无法分类，使用最大熵先验
 # BTC price, Fed decisions, or US elections.
 _COARSE_RULES: list[tuple[list[str], BaseRate]] = [
     (["temperature", "degrees", "weather", "rain", "snow", "heatwave",
-      "cold snap", "forecast", "precipitation"],
+     "cold snap", "forecast", "precipitation"],
      BaseRate("weather_event", 20, 80, 50,
-              "Weather event: use broad climatology/model prior when no precise category exists")),
+              "天气事件：没有更精确分类时，使用气候统计和天气模型作为宽基准")),
 
     (["oscar", "oscars", "academy award", "grammy", "emmy",
       "golden globe", "best picture", "best actor", "best actress",
       "box office", "film:", "movie", "be cast"],
      BaseRate("entertainment_awards", 10, 70, 35,
-              "Entertainment awards: nominee fields are broad; favorites often still overbet")),
+              "娱乐奖项：提名范围较宽，热门候选经常被市场高估")),
 
     (["earnings", "revenue", "eps", "profit", "quarterly results",
       "guidance", "earnings call"],
      BaseRate("company_earnings", 25, 75, 50,
-              "Company earnings: analyst expectations anchor the prior, surprises remain common")),
+              "公司财报：分析师预期可锚定基准，但业绩意外仍然常见")),
 
     (["bill pass", "pass the bill", "congress pass", "legislation",
       "executive order", "government shutdown", "budget deal",
@@ -232,51 +232,51 @@ _COARSE_RULES: list[tuple[list[str], BaseRate]] = [
       "presidential nomination", "win a seat", "win the most seats",
       "premier of", "presidency member", "parliamentary elections"],
      BaseRate("policy_general", 15, 70, 40,
-              "General policy: political process risk makes headline timelines uncertain")),
+              "政策综合：政治流程风险较高，新闻标题里的时间线通常不稳定")),
 
     (["vaccine", "fda approve", "fda approval", "drug approval",
-      "clinical trial", "pandemic", "disease", "who declare"],
+     "clinical trial", "pandemic", "disease", "who declare"],
      BaseRate("health_event", 15, 75, 42,
-              "Health event: regulatory/scientific evidence is useful but timing is uncertain")),
+              "健康医疗：监管和科学证据有参考价值，但时间点不确定")),
 
     (["world cup", "fifa", "nba", "nfl", "mlb", "uefa",
       "champions league", "olympics", "semifinals", "quarterfinals",
       "tour de france", "lck", "playoffs", "win on 2026-"],
      BaseRate("sports_general", 20, 80, 45,
-              "General sports: odds markets are usually informative; tournament paths add variance")),
+              "体育综合：赔率市场通常有信息量，锦标赛路径会增加波动")),
 
     (["iphone", "apple event", "product launch", "release date",
-      "app store", "robotaxi", "software update", "reenabled",
-      "released today"],
+     "app store", "robotaxi", "software update", "reenabled",
+     "released today"],
      BaseRate("tech_product", 20, 75, 45,
-              "Tech product launch: company roadmaps leak partly but dates/features slip")),
+              "科技产品：公司路线图会部分泄露，但日期和功能容易延期或变动")),
 
     (["election", "referendum", "prime minister", "parliament",
       "ballot", "polls", "vote share", "leave the trump administration",
       "trump out as president", "out as president", "fbi director"],
      BaseRate("politics_general", 20, 80, 50,
-              "General politics: use polling/institutional baseline when no specific race category exists")),
+              "政治综合：没有具体选举类别时，使用民调和制度性基准")),
 
     (["nato", "un vote", "eu summit", "treaty", "diplomatic talks",
       "regime fall", "regime collapse", "strait of hormuz",
       "russo-ukrainian war", "russian attacks", "invades finland",
       "russia capture", "diplomatic meeting"],
      BaseRate("geopolitics_general", 10, 60, 30,
-              "General geopolitics: negotiation and escalation timing is hard to forecast")),
+              "地缘政治综合：谈判和冲突升级的时间点很难预测")),
 
     (["crude oil", "spot price", "gas prices", "stock index"],
      BaseRate("markets", 20, 80, 50,
-              "General markets: broad market prices are noisy but liquid markets anchor priors")),
+              "市场综合：大类资产价格噪声很高，但流动性市场可锚定基准")),
 
     (["key rate", "official cash rate", "central bank", "bank of russia",
-      "reserve bank"],
+     "reserve bank"],
      BaseRate("monetary", 20, 80, 50,
-              "Monetary policy: central-bank decisions are anchored by macro data and market pricing")),
+              "货币政策：央行决策受宏观数据和市场定价锚定")),
 
     (["land on mars", "visit mars", "colonize mars", "walk on mars",
-      "supervolcano"],
+     "supervolcano"],
      BaseRate("science_event", 15, 70, 35,
-              "Science and extreme events: timelines are uncertain and base rates are low")),
+              "科学与极端事件：时间线不确定，基础发生率偏低")),
 ]
 
 # Pre-sort rules once by longest keyword descending (most specific first) so

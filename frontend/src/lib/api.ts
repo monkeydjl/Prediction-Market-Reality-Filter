@@ -880,6 +880,17 @@ export const eventsApi = {
     }>(`/events/?${params.toString()}`);
   },
 
+  categoryCounts: (filters: Omit<EventListFilters, "category"> = {}) => {
+    const params = new URLSearchParams({
+      exclude_expired: String(filters.exclude_expired ?? true),
+    });
+    if (filters.q) params.set("q", filters.q);
+    if (filters.status && filters.status !== "all") params.set("status", filters.status);
+    if (filters.sort && filters.sort !== "value") params.set("sort", filters.sort);
+    if (filters.resolved_only) params.set("resolved_only", "true");
+    return api<{ counts: Record<string, number> }>(`/events/category-counts?${params.toString()}`);
+  },
+
   detail: (id: string) =>
     api<TrackedEntry>(`/events/${encodeURIComponent(id)}`),
 

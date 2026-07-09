@@ -8,6 +8,7 @@ const apiMocks = vi.hoisted(() => ({
   list: vi.fn(),
   movers: vi.fn(),
   batchSparklines: vi.fn(),
+  categoryCounts: vi.fn(),
   resolveExpired: vi.fn(),
   discoverStatus: vi.fn(),
   discover: vi.fn(),
@@ -71,6 +72,7 @@ describe("DashboardPage cache", () => {
     Object.values(apiMocks).forEach((mock) => mock.mockReset());
     apiMocks.batchSparklines.mockResolvedValue({ sparklines: {} });
     apiMocks.discoverStatus.mockResolvedValue({ phase: "idle", message: "等待开始" });
+    apiMocks.categoryCounts.mockResolvedValue({ counts: {} });
   });
 
   afterEach(() => {

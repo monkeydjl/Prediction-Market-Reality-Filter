@@ -120,6 +120,18 @@ class ClassifyMarketPositiveTests(unittest.TestCase):
         result = classify_market("Will aliens land on the White House?")
         self.assertEqual(result.category, "unknown")
 
+    def test_coarse_category_notes_are_localized(self):
+        examples = {
+            "Will the highest temperature in Jeddah be 40 degrees or higher on July 7?": "Weather event:",
+            "Will a film win Best Picture at the Oscars?": "Entertainment awards:",
+            "Will Congress pass the stablecoin bill in 2026?": "General policy:",
+            "Will Brazil reach the FIFA World Cup semifinals?": "General sports:",
+        }
+
+        for question, english_prefix in examples.items():
+            with self.subTest(question=question):
+                self.assertNotIn(english_prefix, classify_market(question).note)
+
 
 class ClassifyMarketWordBoundaryRegressionTests(unittest.TestCase):
     """Substring false positives that the old `kw in text` would fire.

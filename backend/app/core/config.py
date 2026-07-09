@@ -69,9 +69,13 @@ class Settings:
         "LLM_ROUTE_PROBABILITY_ANALYSIS", ""
     )
     LLM_ROUTE_TRANSLATION: str = os.getenv("LLM_ROUTE_TRANSLATION", "")
+    LLM_ROUTE_OPEN_WEB_EXTRACTION: str = os.getenv(
+        "LLM_ROUTE_OPEN_WEB_EXTRACTION", ""
+    )
     LLM_ROUTE_CROSS_VALIDATION: str = os.getenv("LLM_ROUTE_CROSS_VALIDATION", "")
     LLM_ROUTE_WORLD_CUP: str = os.getenv("LLM_ROUTE_WORLD_CUP", "")
     LLM_ROUTE_STARTUP_CHECK: str = os.getenv("LLM_ROUTE_STARTUP_CHECK", "")
+    LLM_ROUTE_EMBEDDING: str = os.getenv("LLM_ROUTE_EMBEDDING", "")
     LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "45"))
     LLM_MAX_RETRIES_PER_MODEL: int = int(
         os.getenv("LLM_MAX_RETRIES_PER_MODEL", "1")
@@ -447,31 +451,31 @@ class Settings:
 
     # Multi-model cross-validation: an independent second model re-estimates the
     # probability for the same question + evidence, surfaced as agreement /
-    # divergence. Disabled unless CROSS_VALIDATION_MODEL is set. Base URL / key
-    # fall back to the primary model's when left empty (so the common case is
-    # cross-validating with a different model on the same provider).
+    # divergence. Prefer LLM_ROUTE_CROSS_VALIDATION; legacy CROSS_VALIDATION_*
+    # fields remain as compatibility/enablement flags.
     CROSS_VALIDATION_MODEL: str = os.getenv("CROSS_VALIDATION_MODEL", "")
     CROSS_VALIDATION_BASE_URL: str = os.getenv("CROSS_VALIDATION_BASE_URL", "")
     CROSS_VALIDATION_API_KEY: str = os.getenv("CROSS_VALIDATION_API_KEY", "")
 
-    # Title translation: separate provider from the main prediction LLM so
-    # translation is cheap, fast, and never competes with analysis capacity.
-    # Falls back to the primary OPENAI_* settings when unset.
+    # Legacy translation fields are retained for explicit client injection paths;
+    # the default translation path uses LLM_ROUTE_TRANSLATION / Gateway fallback.
     TRANSLATION_MODEL: str = os.getenv("TRANSLATION_MODEL", "")
     TRANSLATION_BASE_URL: str = os.getenv("TRANSLATION_BASE_URL", "")
     TRANSLATION_API_KEY: str = os.getenv("TRANSLATION_API_KEY", "")
 
     # Open-web structured event extraction: turn collected articles into native
-    # candidate events (forward-looking questions), not just evidence. Disabled
-    # unless OPEN_WEB_EXTRACTION_MODEL is set; runs on the primary provider/client.
+    # candidate events (forward-looking questions), not just evidence. Prefer
+    # LLM_ROUTE_OPEN_WEB_EXTRACTION; OPEN_WEB_EXTRACTION_MODEL remains as the
+    # legacy enablement flag.
     OPEN_WEB_EXTRACTION_MODEL: str = os.getenv("OPEN_WEB_EXTRACTION_MODEL", "")
     OPEN_WEB_ENABLED: bool = _env_bool("OPEN_WEB_ENABLED", "false")
     OPEN_WEB_SOURCE_NAME: str = os.getenv("OPEN_WEB_SOURCE_NAME", "Open Web")
 
-    # Semantic news relevance via embeddings. Opt-in: disabled unless
-    # EMBEDDING_MODEL is set. The default chat provider (DeepSeek) has NO
-    # embeddings endpoint, so point EMBEDDING_BASE_URL / EMBEDDING_API_KEY at a
-    # provider that does (DashScope, OpenAI, ...). When base_url is empty the
+    # Semantic news relevance via embeddings. Prefer LLM_ROUTE_EMBEDDING for
+    # multi-provider/model fallback. Legacy EMBEDDING_MODEL remains as an
+    # explicit single-provider route. The default chat provider (DeepSeek) has
+    # NO embeddings endpoint, so point EMBEDDING_BASE_URL / EMBEDDING_API_KEY at
+    # a provider that does (DashScope, OpenAI, ...). When base_url is empty the
     # OpenAI default endpoint is used; when api_key is empty OPENAI_API_KEY is
     # reused. When disabled, news relevance uses the keyword signal only.
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "")

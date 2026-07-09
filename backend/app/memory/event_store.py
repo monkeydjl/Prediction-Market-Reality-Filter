@@ -14,6 +14,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.models.event import EventRecord
+from app.services.category_inference import infer_category_from_text
 from app.services.event_schema import normalize_event_record
 from app.utils.file_store import locked_file, read_json, read_json_strict, write_json_atomic
 from app.utils.helpers import utc_now
@@ -365,16 +366,45 @@ def _category(record: dict[str, Any]) -> str:
     source = record.get("source") or {}
     if source.get("type") == "sports_event":
         return "sports_event"
-    legacy_category = str(legacy.get("base_rate_category") or "").strip()
-    if legacy_category and legacy_category != "unknown":
-        return legacy_category
-    return str(
-        source.get("category")
-        or source.get("event_type")
-        or source.get("type")
-        or source.get("platform")
+    return (
+        _specific_category(legacy.get("base_rate_category"))
+        or _specific_category(source.get("category"))
+        or _specific_category(source.get("event_type"))
+        or _specific_category(source.get("type"))
+        or _specific_category(source.get("platform"))
+        or infer_category_from_text(
+            record.get("event_title"),
+            record.get("event_title_zh"),
+            record.get("event_summary"),
+            source.get("question"),
+            source.get("title"),
+            source.get("name"),
+        )
         or "general"
     )
+
+
+_GENERIC_SOURCE_CATEGORIES = {
+    "prediction",
+    "predictions",
+    "prediction_market",
+    "prediction_question",
+    "polymarket",
+    "kalshi",
+    "limitless",
+    "market",
+    "unknown",
+}
+
+
+def _specific_category(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    normalized = cleaned.lower().replace("-", "_").replace(" ", "_")
+    return None if normalized in _GENERIC_SOURCE_CATEGORIES else cleaned
 
 
 def _tracking_status(record: dict[str, Any]) -> str:
@@ -515,6 +545,36 @@ def count_events(
         exclude_expired=exclude_expired,
         resolved_only=resolved_only,
     ))
+
+
+def count_events_by_category(
+    *,
+    query: str = "",
+    status: str = "all",
+    sort: str = "value",
+    exclude_expired: bool = True,
+    resolved_only: bool = False,
+) -> dict[str, int]:
+    """Return per-category event counts after non-category filters.
+
+    The result is independent of the active category filter, so a dashboard
+    category dropdown can show stable counts that do not jump when the user
+    switches between categories.
+    """
+    entries = _filtered_ranked_events(
+        query=query,
+        status=status,
+        category="all",
+        sort=sort,
+        exclude_expired=exclude_expired,
+        resolved_only=resolved_only,
+    )
+    counts: dict[str, int] = {}
+    for entry in entries:
+        record = entry.get("record") or {}
+        cat = _category(record)
+        counts[cat] = counts.get(cat, 0) + 1
+    return counts
 
 
 def list_events(

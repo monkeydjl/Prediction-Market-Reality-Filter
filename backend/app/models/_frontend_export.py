@@ -17,6 +17,7 @@ Do NOT import models that should not leak to the frontend:
 """
 from app.models.event import (
     AutoResolveResponse,
+    CategoryCountsResponse,
     DecisionTimelineResponse,
     EventAnalysisRequest,
     EventDiscoveryResponse,
@@ -34,6 +35,7 @@ from app.models.event import (
 
 __all__ = [
     "AutoResolveResponse",
+    "CategoryCountsResponse",
     "DecisionTimelineResponse",
     "EventAnalysisRequest",
     "EventDiscoveryResponse",

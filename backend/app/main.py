@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.rate_limit import InMemoryRateLimitMiddleware
 from app.core.scheduler import start_scheduler, stop_scheduler
+from app.services.llm_gateway_service import has_configured_llm_route
 from app.services.llm_startup_check_service import validate_primary_llm_startup
 from app.utils import sqlite_db
 
@@ -24,8 +25,10 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("EIP v0.3.0 starting - app: /")
-    if not settings.OPENAI_API_KEY:
-        logger.critical("OPENAI_API_KEY is empty — LLM calls will fail at runtime")
+    if has_configured_llm_route("default"):
+        logger.info("LLM Gateway route is configured")
+    elif not settings.OPENAI_API_KEY:
+        logger.critical("No configured LLM route/API key — LLM calls will fail at runtime")
     else:
         logger.info("OPENAI_API_KEY is configured (len=%d)", len(settings.OPENAI_API_KEY))
     # Initialize Sentry before any route / scheduler runs so failures during

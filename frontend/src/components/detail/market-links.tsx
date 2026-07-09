@@ -6,6 +6,8 @@ import {
   marketPlatformUrl,
 } from "@/lib/prediction-market-platforms";
 
+const RETIRED_SOURCE_PLATFORMS = new Set(["Manifold"]);
+
 /**
  * Unified Market Panel: shows source market info (baseline, volume, liquidity)
  * plus search links to Polymarket and Kalshi.
@@ -40,6 +42,8 @@ export function MarketPanel({ record }: { record: EventRecord }) {
   const platform = source.platform || "预测市场";
   const marketBaseline = source.baseline_probability ?? prob.baseline;
   const question = record.event_title;
+  const showSourceMarketLink =
+    Boolean(source.url) && !RETIRED_SOURCE_PLATFORMS.has(source.platform || "");
 
   return (
     <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-card">
@@ -61,7 +65,7 @@ export function MarketPanel({ record }: { record: EventRecord }) {
             <MarketRow label="我们的估计" value={fmtPct(prob.estimated)} />
             <MarketRow label="成交量" value={fmtCompact(source.volume ?? undefined)} />
             <MarketRow label="流动性" value={fmtCompact(source.liquidity ?? undefined)} />
-            {source.url && (
+            {showSourceMarketLink && (
               <a
                 href={source.url}
                 target="_blank"
@@ -90,7 +94,10 @@ export function MarketPanel({ record }: { record: EventRecord }) {
               <h4 className="mb-2 text-xs font-medium text-muted-foreground">
                 在所有平台搜索
               </h4>
-              <div className="flex flex-col gap-2">
+              <div
+                aria-label="预测市场搜索平台"
+                className="grid grid-cols-2 gap-2"
+              >
                 {PREDICTION_MARKET_PLATFORMS.map((p) => (
                   <a
                     key={p.key}

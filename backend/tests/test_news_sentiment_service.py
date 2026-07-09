@@ -1,6 +1,6 @@
 """Tests for app.services.news_sentiment_service.
 
-Network-free: the AsyncOpenAI client and settings are mocked so no real LLM
+Network-free: the LLM Gateway call and settings are mocked so no real LLM
 call is made. Verifies the fail-closed neutral fallback, prompt building
 (including full_text truncation), and the happy path that parses a valid
 LLM response.
@@ -10,9 +10,9 @@ pytest-asyncio (see tests/test_full_text_fetcher.py for the established
 convention). The async tests below follow the same asyncio.run() pattern.
 """
 import asyncio
-import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
+from app.services.llm_gateway_service import LLMResult
 from app.services.news_sentiment_service import (
     _build_user_prompt,
     _neutral_fallback,
@@ -72,6 +72,33 @@ def test_analyze_sentiment_returns_neutral_without_api_key(monkeypatch):
     assert result["fallback"] is True
 
 
+def test_analyze_sentiment_uses_gateway_when_legacy_key_is_empty(monkeypatch):
+    gateway = AsyncMock(return_value=LLMResult(ok=True, json_data={
+        "articles": [{
+            "index": 0,
+            "sentiment": "positive",
+            "impact": "high",
+            "key_facts": ["fact"],
+            "relevance_to_question": 0.8,
+        }],
+        "overall_direction": "support_yes",
+        "overall_strength": 0.7,
+        "conflict_level": 0.1,
+        "summary": "证据支持 YES",
+    }))
+    monkeypatch.setattr("app.services.news_sentiment_service.settings.OPENAI_API_KEY", "")
+    monkeypatch.setattr("app.services.news_sentiment_service.complete_json", gateway, raising=False)
+
+    result = asyncio.run(
+        analyze_sentiment("Question?", [{"title": "T", "description": "D"}])
+    )
+
+    assert result["overall_direction"] == "support_yes"
+    assert "fallback" not in result
+    gateway.assert_awaited_once()
+    assert gateway.await_args.kwargs["task"] == "probability_analysis"
+
+
 def test_analyze_sentiment_returns_neutral_when_disabled(monkeypatch):
     """When NEWS_SENTIMENT_ENABLED is false, the LLM is never called and the
     neutral fallback is returned immediately (short-circuits even before the
@@ -80,19 +107,8 @@ def test_analyze_sentiment_returns_neutral_when_disabled(monkeypatch):
     monkeypatch.setattr(
         "app.services.news_sentiment_service.settings.NEWS_SENTIMENT_ENABLED", False
     )
-    # A real-looking client mock is set up so the test FAILS if the disabled
-    # flag doesn't short-circuit (the LLM call would actually be attempted).
-    mock_client = MagicMock()
-    mock_client.chat.completions.create = AsyncMock(
-        return_value=MagicMock()
-    )
-    monkeypatch.setattr(
-        "app.services.news_sentiment_service.AsyncOpenAI",
-        MagicMock(return_value=mock_client),
-    )
-    monkeypatch.setattr(
-        "app.services.news_sentiment_service.settings.OPENAI_API_KEY", "fake-key"
-    )
+    gateway = AsyncMock(return_value=LLMResult(ok=True, json_data={}))
+    monkeypatch.setattr("app.services.news_sentiment_service.complete_json", gateway)
 
     result = asyncio.run(
         analyze_sentiment("Question?", [{"title": "T", "description": "D"}])
@@ -100,7 +116,7 @@ def test_analyze_sentiment_returns_neutral_when_disabled(monkeypatch):
     assert result["overall_direction"] == "neutral"
     assert result["fallback"] is True
     assert "NEWS_SENTIMENT_ENABLED" in result["summary"]
-    mock_client.chat.completions.create.assert_not_called()
+    gateway.assert_not_awaited()
 
 
 def test_build_user_prompt_respects_max_articles_setting(monkeypatch):
@@ -124,9 +140,7 @@ def test_build_user_prompt_respects_max_articles_setting(monkeypatch):
 
 
 def test_analyze_sentiment_parses_valid_llm_response(monkeypatch):
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock()]
-    mock_response.choices[0].message.content = json.dumps({
+    gateway = AsyncMock(return_value=LLMResult(ok=True, json_data={
         "articles": [{
             "index": 0,
             "sentiment": "positive",
@@ -138,16 +152,8 @@ def test_analyze_sentiment_parses_valid_llm_response(monkeypatch):
         "overall_strength": 0.7,
         "conflict_level": 0.1,
         "summary": "证据整体支持 YES 结果",
-    })
-    mock_client = MagicMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
-    monkeypatch.setattr(
-        "app.services.news_sentiment_service.AsyncOpenAI",
-        MagicMock(return_value=mock_client),
-    )
-    monkeypatch.setattr(
-        "app.services.news_sentiment_service.settings.OPENAI_API_KEY", "fake-key"
-    )
+    }))
+    monkeypatch.setattr("app.services.news_sentiment_service.complete_json", gateway)
 
     result = asyncio.run(
         analyze_sentiment("Question?", [{"title": "T", "description": "D"}])
@@ -161,18 +167,8 @@ def test_analyze_sentiment_falls_back_when_llm_returns_malformed_json(monkeypatc
     """Valid JSON missing the required keys (articles / overall_direction) is
     treated as malformed and the neutral fallback is returned (with
     fallback=True)."""
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock()]
-    mock_response.choices[0].message.content = json.dumps({"foo": "bar"})
-    mock_client = MagicMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
-    monkeypatch.setattr(
-        "app.services.news_sentiment_service.AsyncOpenAI",
-        MagicMock(return_value=mock_client),
-    )
-    monkeypatch.setattr(
-        "app.services.news_sentiment_service.settings.OPENAI_API_KEY", "fake-key"
-    )
+    gateway = AsyncMock(return_value=LLMResult(ok=True, json_data={"foo": "bar"}))
+    monkeypatch.setattr("app.services.news_sentiment_service.complete_json", gateway)
 
     result = asyncio.run(
         analyze_sentiment("Question?", [{"title": "T", "description": "D"}])
@@ -200,9 +196,7 @@ def test_analyze_sentiment_preserves_new_evidence_fields(monkeypatch):
     """When the LLM returns the new evidence fields per article, they are
     passed through verbatim in result['articles'][i] (the aggregation layer
     reads them later). This locks the passthrough contract."""
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock()]
-    mock_response.choices[0].message.content = json.dumps({
+    gateway = AsyncMock(return_value=LLMResult(ok=True, json_data={
         "articles": [{
             "index": 0,
             "sentiment": "positive",
@@ -218,16 +212,8 @@ def test_analyze_sentiment_preserves_new_evidence_fields(monkeypatch):
         "overall_strength": 0.85,
         "conflict_level": 0.1,
         "summary": "证据整体支持 YES",
-    })
-    mock_client = MagicMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
-    monkeypatch.setattr(
-        "app.services.news_sentiment_service.AsyncOpenAI",
-        MagicMock(return_value=mock_client),
-    )
-    monkeypatch.setattr(
-        "app.services.news_sentiment_service.settings.OPENAI_API_KEY", "fake-key"
-    )
+    }))
+    monkeypatch.setattr("app.services.news_sentiment_service.complete_json", gateway)
 
     result = asyncio.run(
         analyze_sentiment("Question?", [{"title": "T", "description": "D"}])
@@ -243,9 +229,7 @@ def test_analyze_sentiment_does_not_fallback_when_new_fields_missing(monkeypatch
     """When the LLM returns only the old schema (no evidence_direction etc.),
     analyze_sentiment must NOT整体 fallback. The aggregation layer handles
     missing fields per-item. This locks the partial-failure contract."""
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock()]
-    mock_response.choices[0].message.content = json.dumps({
+    gateway = AsyncMock(return_value=LLMResult(ok=True, json_data={
         "articles": [{
             "index": 0,
             "sentiment": "positive",
@@ -258,16 +242,8 @@ def test_analyze_sentiment_does_not_fallback_when_new_fields_missing(monkeypatch
         "overall_strength": 0.7,
         "conflict_level": 0.1,
         "summary": "证据整体支持 YES",
-    })
-    mock_client = MagicMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
-    monkeypatch.setattr(
-        "app.services.news_sentiment_service.AsyncOpenAI",
-        MagicMock(return_value=mock_client),
-    )
-    monkeypatch.setattr(
-        "app.services.news_sentiment_service.settings.OPENAI_API_KEY", "fake-key"
-    )
+    }))
+    monkeypatch.setattr("app.services.news_sentiment_service.complete_json", gateway)
 
     result = asyncio.run(
         analyze_sentiment("Question?", [{"title": "T", "description": "D"}])

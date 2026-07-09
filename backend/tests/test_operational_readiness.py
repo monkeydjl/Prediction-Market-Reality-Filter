@@ -250,29 +250,37 @@ class StartupGuardTests(unittest.TestCase):
 
 
 class LLMStartupCheckTests(unittest.TestCase):
-    def test_llm_startup_check_rejects_empty_key(self):
+    def test_llm_startup_check_rejects_failed_gateway_result(self):
+        from app.services.llm_gateway_service import LLMResult
         from app.services.llm_startup_check_service import validate_primary_llm_startup
 
-        with patch.object(settings, "OPENAI_API_KEY", ""):
-            with self.assertRaisesRegex(RuntimeError, "OPENAI_API_KEY is empty"):
+        gateway = AsyncMock(return_value=LLMResult(ok=False, degraded_reason="no route"))
+        with patch.object(settings, "OPENAI_API_KEY", ""), \
+                patch("app.services.llm_startup_check_service.complete_chat", gateway, create=True):
+            with self.assertRaisesRegex(RuntimeError, "Primary LLM startup check failed: no route"):
                 asyncio.run(validate_primary_llm_startup())
+
+    def test_llm_startup_check_uses_gateway_without_legacy_key(self):
+        from app.services.llm_gateway_service import LLMResult
+        from app.services.llm_startup_check_service import validate_primary_llm_startup
+
+        gateway = AsyncMock(return_value=LLMResult(ok=True, content="ok"))
+        with patch.object(settings, "OPENAI_API_KEY", ""), \
+                patch("app.services.llm_startup_check_service.complete_chat", gateway, create=True):
+            asyncio.run(validate_primary_llm_startup())
+
+        gateway.assert_awaited_once()
+        self.assertEqual(gateway.await_args.kwargs["task"], "startup_check")
 
     def test_llm_startup_check_redacts_key_from_failure(self):
         from app.services.llm_startup_check_service import validate_primary_llm_startup
 
-        class _Completions:
-            async def create(self, **kwargs):
-                raise RuntimeError("bad secret-key")
-
-        class _Chat:
-            completions = _Completions()
-
-        class _Client:
-            def __init__(self, **kwargs):
-                self.chat = _Chat()
-
         with patch.object(settings, "OPENAI_API_KEY", "secret-key"), \
-                patch("app.services.llm_startup_check_service.AsyncOpenAI", _Client):
+                patch(
+                    "app.services.llm_startup_check_service.complete_chat",
+                    AsyncMock(side_effect=RuntimeError("bad secret-key")),
+                    create=True,
+                ):
             with self.assertRaises(RuntimeError) as ctx:
                 asyncio.run(validate_primary_llm_startup())
 

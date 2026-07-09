@@ -8,14 +8,10 @@ clamping, and best-effort fallback on embedding failure.
 
 import asyncio
 import unittest
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from app.services.llm_gateway_service import LLMEmbeddingResult
 from app.services import semantic_relevance_service as srs
-
-
-def _embed_response(vectors):
-    return SimpleNamespace(data=[SimpleNamespace(embedding=v) for v in vectors])
 
 
 class CosineTests(unittest.TestCase):
@@ -49,28 +45,24 @@ class AnnotateTests(unittest.TestCase):
             {"title": "relevant", "description": ""},
             {"title": "opposite", "description": ""},
         ]
-        client = SimpleNamespace(
-            embeddings=SimpleNamespace(
-                create=AsyncMock(
-                    return_value=_embed_response([[1.0, 0.0], [1.0, 0.0], [-1.0, 0.0]])
-                )
+        gateway = AsyncMock(
+            return_value=LLMEmbeddingResult(
+                ok=True,
+                vectors=[[1.0, 0.0], [1.0, 0.0], [-1.0, 0.0]],
             )
         )
         with patch.object(srs.settings, "EMBEDDING_MODEL", "m"), \
-                patch.object(srs, "_embed_client", return_value=client):
+                patch.object(srs, "complete_embeddings", gateway):
             out = asyncio.run(srs.annotate_semantic_relevance("q", articles))
         self.assertEqual(out[0]["semantic_relevance"], 1.0)
         self.assertEqual(out[1]["semantic_relevance"], 0.0)
+        gateway.assert_awaited_once()
 
     def test_failure_is_noop(self):
         articles = [{"title": "x", "description": ""}]
-        client = SimpleNamespace(
-            embeddings=SimpleNamespace(
-                create=AsyncMock(side_effect=RuntimeError("boom"))
-            )
-        )
+        gateway = AsyncMock(side_effect=RuntimeError("boom"))
         with patch.object(srs.settings, "EMBEDDING_MODEL", "m"), \
-                patch.object(srs, "_embed_client", return_value=client):
+                patch.object(srs, "complete_embeddings", gateway):
             out = asyncio.run(srs.annotate_semantic_relevance("q", articles))
         self.assertNotIn("semantic_relevance", out[0])
 

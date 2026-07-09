@@ -22,7 +22,7 @@ Usage (from the backend/ directory):
     python scripts/backfill_market_zh.py --no-network    # Kalshi URLs + translation only
     python scripts/backfill_market_zh.py --no-translate  # URLs only
     python scripts/backfill_market_zh.py --limit 10      # only the first N events
-Needs OPENAI_API_KEY (in backend/.env) for translation; network for
+Uses the configured LLM Gateway for translation; network is needed only for
 Polymarket URLs. URL lookups degrade gracefully when unavailable.
 """
 
@@ -44,6 +44,7 @@ import httpx  # noqa: E402
 
 from app.core.config import settings  # noqa: E402
 from app.memory.event_store import list_all_events, save_events  # noqa: E402
+from app.services.llm_gateway_service import has_configured_llm_route  # noqa: E402
 from app.services.translation_service import translate_articles  # noqa: E402
 
 
@@ -107,8 +108,8 @@ async def main() -> None:
 
     if args.no_translate:
         print("Translation disabled (--no-translate).")
-    elif not settings.OPENAI_API_KEY:
-        print("! OPENAI_API_KEY not set - skipping translation, URLs only.")
+    elif not has_configured_llm_route("translation"):
+        print("! No configured LLM Gateway translation route - skipping translation, URLs only.")
         args.no_translate = True
 
     updated: list[dict] = []

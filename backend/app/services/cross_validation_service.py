@@ -8,11 +8,9 @@ agreement / divergence against the system's published estimate. This is a
 human-review signal: when an independent model sharply disagrees with the
 system, that is worth a closer look.
 
-Opt-in: disabled unless `settings.CROSS_VALIDATION_MODEL` is set. The base URL
-and API key fall back to the primary model's when left empty, so the common case
-is cross-validating with a different model on the same provider. A missing
-config or any call failure yields None (cross-validation is skipped), so it never
-breaks analysis.
+Opt-in: disabled unless the legacy cross-validation model or the explicit
+Gateway cross-validation route is configured. A missing config or any call
+failure yields None (cross-validation is skipped), so it never breaks analysis.
 
 The second model is asked with the exact same prompts as the primary (reused
 from probability_engine_service) for an apples-to-apples comparison. The live
@@ -21,13 +19,11 @@ call lives behind `_ask_second_model` so tests stay network-free.
 Event vocabulary only - no trading terms.
 """
 
-import json
 import logging
 from typing import Any
 
-from openai import AsyncOpenAI
-
 from app.core.config import settings
+from app.services.llm_gateway_service import LLMModelRoute, LLMProviderConfig, complete_json
 from app.services.probability_engine_service import (
     _build_system_prompt,
     _build_user_prompt,
@@ -36,8 +32,6 @@ from app.utils.failure_policy import fail_closed_none
 from app.utils.market_utils import safe_float
 
 logger = logging.getLogger(__name__)
-
-_second_client: AsyncOpenAI | None = None
 
 
 async def cross_validate(
@@ -59,7 +53,7 @@ async def cross_validate(
     the second model anchor to our own estimate, defeating independent
     cross-validation.
     """
-    if not settings.CROSS_VALIDATION_MODEL:
+    if not settings.CROSS_VALIDATION_MODEL and not settings.LLM_ROUTE_CROSS_VALIDATION:
         return None
     # Use the real market baseline as the anchor for the second model. Fall back
     # to primary_probability only when no baseline is available (e.g. news-only
@@ -82,7 +76,7 @@ async def cross_validate(
     second = _clamp_pct(raw.get("ai_probability"), primary_probability)
     divergence = round(abs(second - primary_probability), 2)
     return {
-        "model": settings.CROSS_VALIDATION_MODEL,
+        "model": raw.get("_llm_model") or settings.CROSS_VALIDATION_MODEL,
         "probability": round(second, 2),
         "primary_probability": round(primary_probability, 2),
         "divergence": divergence,
@@ -90,26 +84,29 @@ async def cross_validate(
     }
 
 
-def _get_second_client() -> AsyncOpenAI:
-    global _second_client
-    if _second_client is None:
-        _second_client = AsyncOpenAI(
-            api_key=settings.CROSS_VALIDATION_API_KEY or settings.OPENAI_API_KEY,
-            base_url=settings.CROSS_VALIDATION_BASE_URL or settings.DASHSCOPE_BASE_URL,
-            timeout=60.0,
-            max_retries=2,
-        )
-    return _second_client
-
-
 async def _ask_second_model(
     market_question: str,
     market_probability: float,
     news_context: str,
 ) -> dict[str, Any]:
-    client = _get_second_client()
-    response = await client.chat.completions.create(
-        model=settings.CROSS_VALIDATION_MODEL,
+    route = None
+    provider_configs = None
+    if settings.CROSS_VALIDATION_MODEL and not settings.LLM_ROUTE_CROSS_VALIDATION:
+        route = [
+            LLMModelRoute(
+                provider="legacy_cross_validation",
+                models=[settings.CROSS_VALIDATION_MODEL],
+            )
+        ]
+        provider_configs = {
+            "legacy_cross_validation": LLMProviderConfig(
+                provider="legacy_cross_validation",
+                api_key=settings.CROSS_VALIDATION_API_KEY or settings.OPENAI_API_KEY,
+                base_url=settings.CROSS_VALIDATION_BASE_URL or settings.DASHSCOPE_BASE_URL,
+            )
+        }
+    result = await complete_json(
+        task="cross_validation",
         messages=[
             {"role": "system", "content": _build_system_prompt()},
             {
@@ -122,12 +119,16 @@ async def _ask_second_model(
             },
         ],
         temperature=0,
-        response_format={"type": "json_object"},
+        route=route,
+        provider_configs=provider_configs,
     )
-    content = response.choices[0].message.content or "{}"
-    parsed = json.loads(content)
+    if not result.ok or result.json_data is None:
+        raise RuntimeError(result.degraded_reason or "cross-validation LLM unavailable")
+    parsed = dict(result.json_data)
     if not isinstance(parsed, dict):
         raise ValueError("second model returned non-object JSON")
+    if result.model:
+        parsed["_llm_model"] = result.model
     return parsed
 
 

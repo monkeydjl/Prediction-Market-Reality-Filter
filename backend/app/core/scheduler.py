@@ -203,8 +203,9 @@ def _job_name_for_run(run_id: str | None) -> str | None:
 
 
 async def _job_translate_titles():
-    """Translate events whose Chinese title is empty."""
+    """Translate events whose Chinese title is empty or still English."""
     from app.services.probability_engine_service import translate_title
+    from app.services.translation_service import looks_chinese
     from app.memory.event_store import list_all_events, save_events
 
     logger.info("[Scheduler] Title translation starting...")
@@ -216,7 +217,7 @@ async def _job_translate_titles():
         for event in events:
             record = event.get("record") or event
             zh = str(record.get("event_title_zh") or "").strip()
-            if zh:
+            if zh and looks_chinese(zh):
                 continue
             en = str(record.get("event_title") or "").strip()
             if not en:

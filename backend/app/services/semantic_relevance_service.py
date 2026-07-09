@@ -19,25 +19,10 @@ import logging
 import math
 from typing import Any
 
-from openai import AsyncOpenAI
-
 from app.core.config import settings
+from app.services.llm_gateway_service import complete_embeddings
 
 logger = logging.getLogger(__name__)
-
-_client: AsyncOpenAI | None = None
-
-
-def _embed_client() -> AsyncOpenAI:
-    global _client
-    if _client is None:
-        _client = AsyncOpenAI(
-            api_key=settings.EMBEDDING_API_KEY or settings.OPENAI_API_KEY,
-            base_url=settings.EMBEDDING_BASE_URL or None,
-            timeout=60.0,
-            max_retries=2,
-        )
-    return _client
 
 
 def _article_text(article: dict[str, Any]) -> str:
@@ -85,7 +70,7 @@ async def annotate_semantic_relevance(
     no articles, the query is empty, or the embedding call fails. One batched
     embeddings request covers the query plus every article.
     """
-    if not settings.EMBEDDING_MODEL or not articles:
+    if not (settings.LLM_ROUTE_EMBEDDING or settings.EMBEDDING_MODEL) or not articles:
         return articles
     query = _query_text(question, semantics)
     if not query:
@@ -93,14 +78,13 @@ async def annotate_semantic_relevance(
 
     inputs = [query] + [_article_text(article) for article in articles]
     try:
-        response = await _embed_client().embeddings.create(
-            model=settings.EMBEDDING_MODEL,
-            input=inputs,
-        )
-        vectors = [item.embedding for item in response.data]
+        result = await complete_embeddings(input=inputs)
     except Exception as exc:  # noqa: BLE001 - best effort, keep keyword fallback
         logger.warning("Semantic relevance embedding failed: %s", exc)
         return articles
+    if not result.ok or result.vectors is None:
+        return articles
+    vectors = result.vectors
     if len(vectors) != len(inputs):
         return articles
 

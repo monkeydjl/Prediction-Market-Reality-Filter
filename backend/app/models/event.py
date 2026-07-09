@@ -580,6 +580,10 @@ class EventListResponse(FlexibleResponse):
     events: list[EventStoreEntry] = Field(default_factory=list)
 
 
+class CategoryCountsResponse(FlexibleResponse):
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
 class EventMoversResponse(FlexibleResponse):
     count: int = 0
     movers: list[dict[str, Any]] = Field(default_factory=list)

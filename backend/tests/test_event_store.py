@@ -166,6 +166,23 @@ class EventStoreTests(unittest.TestCase):
         self.assertEqual([e["event_id"] for e in listed], ["eth"])
         self.assertEqual(count, 1)
 
+    def test_count_events_by_category_ignores_category_filter(self):
+        fed = _make_record("fed", value_score=70, estimated=65)
+        fed["legacy_analysis"] = {"base_rate_category": "monetary"}
+        eth = _make_record("eth", value_score=40, estimated=85)
+        eth["legacy_analysis"] = {"base_rate_category": "crypto"}
+        old = _make_record("old", value_score=95, estimated=90)
+        old["legacy_analysis"] = {"base_rate_category": "crypto"}
+        old["tracking"] = {"status": "archived"}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                store.save_events([fed, eth, old])
+                counts = store.count_events_by_category(status="active")
+        self.assertEqual(counts.get("monetary"), 1)
+        self.assertEqual(counts.get("crypto"), 1)
+        self.assertNotIn("crypto", [c for c, n in counts.items() if n == 2])
+
     def test_sports_events_filter_by_source_type_over_base_rate_category(self):
         sports = _make_record("world-cup", value_score=70, estimated=62)
         sports["event_title"] = "Will Brazil reach the World Cup semifinals?"
@@ -185,6 +202,159 @@ class EventStoreTests(unittest.TestCase):
 
         self.assertEqual([e["event_id"] for e in listed], ["world-cup"])
         self.assertEqual(count, 1)
+
+    def test_generic_prediction_source_category_uses_precise_event_type(self):
+        weather = _make_record("weather", value_score=70, estimated=62)
+        weather["source"] = {
+            "type": "prediction_market",
+            "platform": "Polymarket",
+            "category": "Prediction",
+            "event_type": "weather_event",
+        }
+        weather["legacy_analysis"] = {}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                store.save_events([weather])
+                listed = store.list_events(category="weather_event")
+                counts = store.count_events_by_category(status="active")
+
+        self.assertEqual([e["event_id"] for e in listed], ["weather"])
+        self.assertEqual(counts, {"weather_event": 1})
+
+    def test_generic_legacy_prediction_category_uses_precise_event_type(self):
+        policy = _make_record("policy", value_score=70, estimated=62)
+        policy["source"] = {
+            "type": "prediction_market",
+            "platform": "Polymarket",
+            "event_type": "policy_general",
+        }
+        policy["legacy_analysis"] = {"base_rate_category": "Prediction"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                store.save_events([policy])
+                listed = store.list_events(category="policy_general")
+                counts = store.count_events_by_category(status="active")
+
+        self.assertEqual([e["event_id"] for e in listed], ["policy"])
+        self.assertEqual(counts, {"policy_general": 1})
+
+    def test_generic_prediction_market_without_precise_category_is_general(self):
+        generic = _make_record("generic", value_score=70, estimated=62)
+        generic["source"] = {
+            "type": "prediction_market",
+            "platform": "Polymarket",
+            "category": "Prediction",
+        }
+        generic["legacy_analysis"] = {}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                self.assertEqual(store._category(generic), "general")
+                store.save_events([generic])
+                listed = store.list_events(category="general")
+                counts = store.count_events_by_category(status="active")
+
+        self.assertEqual([e["event_id"] for e in listed], ["generic"])
+        self.assertEqual(counts, {"general": 1})
+
+    def test_generic_prediction_market_infers_category_from_title(self):
+        cases = [
+            (
+                "boe-rates",
+                "No change in Bank of England's interest rates after July 2026 meeting?",
+                "monetary",
+            ),
+            (
+                "trump-russia",
+                "Will Donald Trump visit Russia in 2026?",
+                "geopolitics_general",
+            ),
+            (
+                "ufc-tko",
+                "Will Conor McGregor win by KO or TKO?",
+                "sports_game",
+            ),
+            (
+                "boe-rates-zh",
+                "\u82f1\u56fd\u592e\u884c\u5229\u7387\u4e0d\u53d8\uff1f",
+                "monetary",
+            ),
+            (
+                "epstein-storage",
+                "Epstein storage units raided in 2026?",
+                "legal",
+            ),
+            (
+                "israel-litani",
+                "Will Israeli forces withdraw from beyond the Litani River by December 31?",
+                "geopolitics_general",
+            ),
+            (
+                "lebron-cavaliers",
+                "Will LeBron James play for the Cleveland Cavaliers in the 2026-27 season?",
+                "sports_general",
+            ),
+            (
+                "israel-airspace",
+                "Israel closes its airspace by July 31?",
+                "geopolitics_general",
+            ),
+            (
+                "saibari-shots",
+                "Ismael Saibari: 1+ shots",
+                "sports_game",
+            ),
+            (
+                "hype-hourly",
+                "HYPE Up or Down - Hourly",
+                "crypto",
+            ),
+        ]
+        for event_id, title, expected in cases:
+            with self.subTest(event_id=event_id):
+                record = _make_record(event_id, value_score=70, estimated=62)
+                record["event_title"] = title
+                record["source"] = {
+                    "type": "prediction_market",
+                    "platform": "Polymarket",
+                    "category": "Prediction",
+                }
+                record["legacy_analysis"] = {}
+
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = str(Path(tmp) / "event_store.json")
+                    with patch.object(store, "_store_path", return_value=path):
+                        store.save_events([record])
+                        listed = store.list_events(category=expected)
+                        counts = store.count_events_by_category(status="active")
+
+                self.assertEqual([e["event_id"] for e in listed], [event_id])
+                self.assertEqual(counts, {expected: 1})
+
+    def test_limitless_source_platform_is_not_a_domain_category(self):
+        record = _make_record("limitless", value_score=70, estimated=62)
+        record["event_title"] = "Will a generic market resolve yes?"
+        record["source"] = {
+            "type": "prediction_market",
+            "platform": "Limitless",
+            "category": "Prediction",
+        }
+        record["legacy_analysis"] = {}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                store.save_events([record])
+                listed = store.list_events(category="general")
+                counts = store.count_events_by_category(status="active")
+
+        self.assertEqual([e["event_id"] for e in listed], ["limitless"])
+        self.assertEqual(counts, {"general": 1})
 
     def test_unknown_base_rate_falls_back_to_source_event_type(self):
         open_web = _make_record("open-web-policy", value_score=70, estimated=62)
@@ -557,6 +727,24 @@ class EventReadRouteTests(unittest.TestCase):
         body = resp.json()
         self.assertEqual(body["count"], 2)
         self.assertEqual(body["events"][0]["event_id"], "e-hi")
+
+    def test_category_counts_route(self):
+        app = FastAPI()
+        app.include_router(events_routes.router, prefix="/events")
+        client = TestClient(app)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "event_store.json")
+            with patch.object(store, "_store_path", return_value=path):
+                fed = _make_record("fed", value_score=70)
+                fed["legacy_analysis"] = {"base_rate_category": "monetary"}
+                eth = _make_record("eth", value_score=40)
+                eth["legacy_analysis"] = {"base_rate_category": "crypto"}
+                store.save_events([fed, eth])
+                resp = client.get("/events/category-counts")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["counts"]["monetary"], 1)
+        self.assertEqual(body["counts"]["crypto"], 1)
 
     def test_list_events_route_resolved_only_counts_filtered_rows(self):
         app = FastAPI()

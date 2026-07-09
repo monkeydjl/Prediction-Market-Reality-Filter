@@ -40,6 +40,13 @@ class LLMGatewayRouteTests(unittest.TestCase):
         self.assertEqual([(r.provider, r.models) for r in task_routes], [("deepseek", ["reasoner"])])
         self.assertEqual([(r.provider, r.models) for r in default_routes], [("openai", ["gpt-4o-mini"])])
 
+    def test_build_route_supports_open_web_extraction_route(self):
+        with patch.object(gateway.settings, "LLM_ROUTE_OPEN_WEB_EXTRACTION", "openai:extractor"), \
+             patch.object(gateway.settings, "LLM_ROUTE_DEFAULT", "deepseek:default"):
+            routes = gateway.build_route("open_web_extraction")
+
+        self.assertEqual([(r.provider, r.models) for r in routes], [("openai", ["extractor"])])
+
 
     def test_build_route_uses_indexed_openai_env_when_no_explicit_route_exists(self):
         env = {
@@ -126,18 +133,31 @@ class _FakeCompletions:
         self.create = AsyncMock(side_effect=create)
 
 
+class _FakeEmbeddings:
+    def __init__(self, create):
+        self.create = AsyncMock(side_effect=create)
+
+
 class _FakeChat:
     def __init__(self, create):
         self.completions = _FakeCompletions(create)
 
 
 class _FakeClient:
-    def __init__(self, create):
+    def __init__(self, create, embedding_create=None):
         self.chat = _FakeChat(create)
+        self.embeddings = _FakeEmbeddings(embedding_create or create)
 
 
 def _fake_client(create):
     return _FakeClient(create)
+
+
+def _fake_embedding_client(create):
+    async def unused_chat_create(**kwargs):
+        raise AssertionError("chat completions should not be used for embeddings")
+
+    return _FakeClient(unused_chat_create, create)
 
 
 def _fake_response(content, prompt_tokens=3, completion_tokens=5):
@@ -151,7 +171,41 @@ def _fake_response(content, prompt_tokens=3, completion_tokens=5):
     )
 
 
+def _fake_embedding_response(vectors, prompt_tokens=3):
+    return SimpleNamespace(
+        data=[SimpleNamespace(embedding=vector) for vector in vectors],
+        usage=SimpleNamespace(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=0,
+            total_tokens=prompt_tokens,
+        ),
+    )
+
+
 class LLMGatewayExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_complete_embeddings_falls_back_to_next_model(self):
+        calls = []
+
+        async def fake_create(**kwargs):
+            calls.append(kwargs["model"])
+            if kwargs["model"] == "bad-embedding":
+                raise RuntimeError("rate limit")
+            return _fake_embedding_response([[1.0, 0.0], [0.0, 1.0]])
+
+        result = await gateway.complete_embeddings(
+            input=["query", "article"],
+            route=[gateway.LLMModelRoute("p1", ["bad-embedding", "good-embedding"])],
+            provider_configs={"p1": gateway.LLMProviderConfig("p1", "key", "http://example")},
+            client_factory=lambda provider: _fake_embedding_client(fake_create),
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.model, "good-embedding")
+        self.assertEqual(result.vectors, [[1.0, 0.0], [0.0, 1.0]])
+        self.assertEqual(calls, ["bad-embedding", "good-embedding"])
+        self.assertEqual([a.status for a in result.attempts], ["failed", "success"])
+        self.assertEqual(result.usage, {"prompt_tokens": 3, "completion_tokens": 0, "total_tokens": 3})
+
     async def test_complete_json_falls_back_to_next_model_same_provider(self):
         calls = []
 

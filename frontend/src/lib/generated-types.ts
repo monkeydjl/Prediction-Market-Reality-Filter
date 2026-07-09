@@ -25,6 +25,12 @@ export interface AutoResolveResponse {
   };
   [k: string]: unknown;
 }
+export interface CategoryCountsResponse {
+  counts?: {
+    [k: string]: number;
+  };
+  [k: string]: unknown;
+}
 /**
  * Response for GET /api/events/{event_id}/decision-timeline.
  */

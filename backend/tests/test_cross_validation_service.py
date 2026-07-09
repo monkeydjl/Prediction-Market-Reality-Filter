@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 import app.services.ai_analysis_service as ai
 import app.services.cross_validation_service as cv
 import app.services.event_intelligence_service as eis
+from app.services.llm_gateway_service import LLMResult
 
 
 def _run(coro):
@@ -22,8 +23,26 @@ def _run(coro):
 
 class CrossValidateTests(unittest.TestCase):
     def test_disabled_when_no_model_configured(self):
-        with patch.object(cv.settings, "CROSS_VALIDATION_MODEL", ""):
+        with patch.object(cv.settings, "CROSS_VALIDATION_MODEL", ""), \
+                patch.object(cv.settings, "LLM_ROUTE_CROSS_VALIDATION", ""):
             self.assertIsNone(_run(cv.cross_validate("Q?", "ctx", 60.0)))
+
+    def test_default_gateway_route_does_not_enable_cross_validation(self):
+        with patch.object(cv.settings, "CROSS_VALIDATION_MODEL", ""), \
+                patch.object(cv.settings, "LLM_ROUTE_CROSS_VALIDATION", ""), \
+                patch.object(cv, "_ask_second_model", new=AsyncMock()) as ask:
+            self.assertIsNone(_run(cv.cross_validate("Q?", "ctx", 60.0)))
+
+        ask.assert_not_awaited()
+
+    def test_explicit_gateway_route_enables_cross_validation_without_legacy_model(self):
+        with patch.object(cv.settings, "CROSS_VALIDATION_MODEL", ""), \
+                patch.object(cv.settings, "LLM_ROUTE_CROSS_VALIDATION", "openai:validator"), \
+                patch.object(cv, "_ask_second_model", new=AsyncMock(return_value={"ai_probability": 64})):
+            result = _run(cv.cross_validate("Q?", "ctx", 60.0))
+
+        self.assertEqual(result["model"], "")
+        self.assertEqual(result["probability"], 64.0)
 
     def test_high_agreement(self):
         with patch.object(cv.settings, "CROSS_VALIDATION_MODEL", "second-model"), \
@@ -97,6 +116,39 @@ class CrossValidateTests(unittest.TestCase):
         self.assertEqual(cv.credibility_delta("medium"), 0)
         self.assertEqual(cv.credibility_delta("low"), -15)
         self.assertEqual(cv.credibility_delta("unknown"), 0)
+
+    def test_ask_second_model_uses_gateway(self):
+        gateway = AsyncMock(return_value=LLMResult(
+            ok=True,
+            json_data={"ai_probability": 64},
+        ))
+        with patch.object(cv.settings, "OPENAI_API_KEY", ""), \
+                patch.object(cv, "complete_json", gateway, create=True):
+            result = _run(cv._ask_second_model("Q?", 50.0, "ctx"))
+
+        self.assertEqual(result, {"ai_probability": 64})
+        gateway.assert_awaited_once()
+        self.assertEqual(gateway.await_args.kwargs["task"], "cross_validation")
+
+    def test_legacy_cross_validation_model_supplies_gateway_route(self):
+        gateway = AsyncMock(return_value=LLMResult(
+            ok=True,
+            json_data={"ai_probability": 64},
+        ))
+        with patch.object(cv.settings, "LLM_ROUTE_CROSS_VALIDATION", ""), \
+                patch.object(cv.settings, "CROSS_VALIDATION_MODEL", "legacy-validator"), \
+                patch.object(cv.settings, "CROSS_VALIDATION_API_KEY", "cv-key"), \
+                patch.object(cv.settings, "CROSS_VALIDATION_BASE_URL", "https://cv.example/v1"), \
+                patch.object(cv, "complete_json", gateway, create=True):
+            _run(cv._ask_second_model("Q?", 50.0, "ctx"))
+
+        route = gateway.await_args.kwargs["route"]
+        configs = gateway.await_args.kwargs["provider_configs"]
+        self.assertEqual([(item.provider, item.models) for item in route], [
+            ("legacy_cross_validation", ["legacy-validator"]),
+        ])
+        self.assertEqual(configs["legacy_cross_validation"].api_key, "cv-key")
+        self.assertEqual(configs["legacy_cross_validation"].base_url, "https://cv.example/v1")
 
 
 class AnalyzeEventCrossValidationTests(unittest.TestCase):

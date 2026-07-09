@@ -11,19 +11,21 @@ candidate event in the same shape the market sources emit, so it flows through t
 identical evidence -> analysis -> trend pipeline. The baseline probability is 50
 (no market prior); the source descriptor carries type "open_web".
 
-Opt-in: disabled unless `settings.OPEN_WEB_EXTRACTION_MODEL` is set. No articles,
-no config, or any failure yields an empty list, so it never breaks discovery. The
-live LLM call lives behind `_ask_extractor` so tests stay network-free. It runs on
-the primary provider/client with the configured extraction model.
+Opt-in: disabled unless the legacy `settings.OPEN_WEB_EXTRACTION_MODEL` flag or
+the explicit `settings.LLM_ROUTE_OPEN_WEB_EXTRACTION` route is set. No articles,
+no config, or any failure yields an empty list, so it never breaks discovery.
+The live LLM call lives behind `_ask_extractor` so tests stay network-free. It
+uses the Gateway open-web extraction route, falling back through the normal route
+chain at execution time when no task-specific route is configured.
 
 Event vocabulary only - no trading terms.
 """
 
-import json
 import logging
 from typing import Any
 
 from app.core.config import settings
+from app.services.llm_gateway_service import LLMModelRoute, LLMProviderConfig, complete_json
 from app.utils.failure_policy import fail_closed_empty_list
 
 logger = logging.getLogger(__name__)
@@ -48,7 +50,10 @@ async def extract_candidate_events(
     Returns an empty list when extraction is disabled (no model configured),
     there are no articles, or the extractor is unavailable.
     """
-    if not settings.OPEN_WEB_EXTRACTION_MODEL:
+    if (
+        not settings.OPEN_WEB_EXTRACTION_MODEL
+        and not settings.LLM_ROUTE_OPEN_WEB_EXTRACTION
+    ):
         return []
     if not articles:
         return []
@@ -74,20 +79,35 @@ async def extract_candidate_events(
 
 
 async def _ask_extractor(articles: list[dict[str, Any]], limit: int) -> list[Any]:
-    from app.services.probability_engine_service import get_client
-
-    client = get_client()
-    response = await client.chat.completions.create(
-        model=settings.OPEN_WEB_EXTRACTION_MODEL,
+    route = None
+    provider_configs = None
+    if settings.OPEN_WEB_EXTRACTION_MODEL and not settings.LLM_ROUTE_OPEN_WEB_EXTRACTION:
+        route = [
+            LLMModelRoute(
+                provider="legacy_open_web_extraction",
+                models=[settings.OPEN_WEB_EXTRACTION_MODEL],
+            )
+        ]
+        provider_configs = {
+            "legacy_open_web_extraction": LLMProviderConfig(
+                provider="legacy_open_web_extraction",
+                api_key=settings.OPENAI_API_KEY,
+                base_url=settings.DASHSCOPE_BASE_URL,
+            )
+        }
+    result = await complete_json(
+        task="open_web_extraction",
         messages=[
             {"role": "system", "content": _EXTRACTION_SYSTEM},
             {"role": "user", "content": _build_extraction_prompt(articles, limit)},
         ],
         temperature=0,
-        response_format={"type": "json_object"},
+        route=route,
+        provider_configs=provider_configs,
     )
-    content = response.choices[0].message.content or "{}"
-    parsed = json.loads(content)
+    if not result.ok or result.json_data is None:
+        raise RuntimeError(result.degraded_reason or "open web extraction LLM unavailable")
+    parsed = result.json_data
     events = parsed.get("events") if isinstance(parsed, dict) else None
     return events if isinstance(events, list) else []
 

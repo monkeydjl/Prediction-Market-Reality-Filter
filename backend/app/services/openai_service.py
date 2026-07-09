@@ -1,25 +1,7 @@
-import json
 import re
 from typing import Any
 
-from openai import AsyncOpenAI
-
-from app.core.config import settings
-
-
-_client: AsyncOpenAI | None = None
-
-
-def get_client() -> AsyncOpenAI:
-    global _client
-    if _client is None:
-        _client = AsyncOpenAI(
-            api_key=settings.OPENAI_API_KEY,
-            base_url=settings.DASHSCOPE_BASE_URL,
-            timeout=60.0,
-            max_retries=2,
-        )
-    return _client
+from app.services.llm_gateway_service import complete_json
 
 
 def _extract_float(pattern: str, text: str, fallback: float = 0.0) -> float:
@@ -35,10 +17,8 @@ def _extract_float(pattern: str, text: str, fallback: float = 0.0) -> float:
 async def ask_llm(prompt: str) -> dict[str, Any]:
     """
     Legacy helper used by older agents (contrarian, crowd, etc.).
-    Migrated to AsyncOpenAI with JSON mode.
+    Uses the unified LLM Gateway with JSON mode.
     """
-    client = get_client()
-
     system = (
         "You are a professional prediction market analyst. "
         "Return only valid JSON with keys: "
@@ -47,18 +27,17 @@ async def ask_llm(prompt: str) -> dict[str, Any]:
     )
 
     try:
-        response = await client.chat.completions.create(
-            model=settings.OPENAI_MODEL,
+        result = await complete_json(
+            task="probability_analysis",
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.2,
-            response_format={"type": "json_object"},
         )
-
-        content = response.choices[0].message.content or "{}"
-        data = json.loads(content)
+        if not result.ok or result.json_data is None:
+            raise RuntimeError(result.degraded_reason or "LLM unavailable")
+        data = result.json_data
 
         probability = float(data.get("true_probability", 50))
         confidence = float(data.get("confidence", 0.5))

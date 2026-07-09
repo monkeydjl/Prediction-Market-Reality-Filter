@@ -3,13 +3,11 @@
 Replaces the keyword-based evidence_direction heuristic with LLM judgment.
 Batch-analyzes up to 6 articles per event in a single LLM call to control cost.
 """
-import json
 import logging
 from typing import Any
 
-from openai import AsyncOpenAI
-
 from app.core.config import settings
+from app.services.llm_gateway_service import complete_json
 
 logger = logging.getLogger(__name__)
 
@@ -96,27 +94,19 @@ async def analyze_sentiment(
         return _neutral_fallback("NEWS_SENTIMENT_ENABLED is false")
     if not articles:
         return _neutral_fallback("no articles")
-    if not settings.OPENAI_API_KEY:
-        return _neutral_fallback("no OPENAI_API_KEY configured")
 
     try:
-        client = AsyncOpenAI(
-            api_key=settings.OPENAI_API_KEY,
-            base_url=settings.DASHSCOPE_BASE_URL,
-            timeout=30.0,
-            max_retries=1,
-        )
-        response = await client.chat.completions.create(
-            model=settings.OPENAI_MODEL,
+        result = await complete_json(
+            task="probability_analysis",
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": _build_user_prompt(market_question, articles)},
             ],
             temperature=0,
-            response_format={"type": "json_object"},
         )
-        content = response.choices[0].message.content or "{}"
-        parsed = json.loads(content)
+        parsed = result.json_data if result.ok else None
+        if not isinstance(parsed, dict):
+            return _neutral_fallback(result.degraded_reason or "LLM unavailable")
         # Validate minimum structure
         if "articles" not in parsed or "overall_direction" not in parsed:
             return _neutral_fallback("malformed LLM response")

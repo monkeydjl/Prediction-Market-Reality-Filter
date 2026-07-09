@@ -30,4 +30,17 @@ describe("category labels", () => {
     expect(categoryLabel("tech_product")).not.toBe("tech_product");
     expect(categoryLabel("entertainment_awards")).not.toBe("entertainment_awards");
   });
+
+  it("translates English category names from source feeds", () => {
+    expect(categoryLabel("Entertainment awards")).toBe("\u5a31\u4e50\u5956\u9879");
+    expect(categoryLabel("Policy")).toBe("\u653f\u7b56");
+    expect(categoryLabel("Sports")).toBe("\u4f53\u80b2");
+    expect(categoryLabel("weather")).toBe("\u5929\u6c14");
+  });
+
+  it("does not expose generic prediction categories as English labels", () => {
+    expect(categoryLabel("Prediction")).toBe("\u7efc\u5408");
+    expect(categoryLabel("prediction_market")).toBe("\u7efc\u5408");
+    expect(categoryLabel("Limitless")).toBe("\u7efc\u5408");
+  });
 });

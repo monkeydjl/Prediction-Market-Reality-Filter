@@ -12,7 +12,7 @@ import json
 import logging
 from typing import Any
 
-from app.core.config import settings
+from app.services.llm_gateway_service import complete_json
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,6 @@ def looks_chinese(text: str) -> bool:
 
 async def translate_fields(
     payload: dict[str, str],
-    client: Any = None,
 ) -> dict[str, str]:
     """Translate each English value in ``payload`` to Simplified Chinese.
 
@@ -45,15 +44,9 @@ async def translate_fields(
     """
     if not payload:
         return {}
-    if client is None:
-        if not settings.OPENAI_API_KEY:
-            return {}
-        from app.services.probability_engine_service import get_client
-
-        client = get_client()
     try:
-        resp = await client.chat.completions.create(
-            model=settings.OPENAI_MODEL,
+        result = await complete_json(
+            task="translation",
             messages=[
                 {"role": "system", "content": _SYSTEM},
                 {
@@ -64,13 +57,11 @@ async def translate_fields(
                 },
             ],
             temperature=0,
-            response_format={"type": "json_object"},
         )
-        content = resp.choices[0].message.content or "{}"
-        data = json.loads(content)
     except Exception as exc:  # noqa: BLE001 - best effort, keep originals on failure
         logger.warning("Translation failed: %s", exc)
         return {}
+    data = result.json_data if result.ok else None
     if not isinstance(data, dict):
         return {}
     return {

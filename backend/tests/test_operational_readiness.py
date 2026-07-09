@@ -78,6 +78,18 @@ class WriteAuthTests(unittest.TestCase):
         self.assertEqual(missing_auth, [])
         self.assertEqual(found_sensitive_gets, self.SENSITIVE_GET_ROUTES)
 
+    def test_llm_diagnostics_route_is_registered_as_read_only(self):
+        routes = {
+            path: route
+            for path, route in self._iter_api_routes(api_router)
+            if isinstance(route, APIRoute)
+        }
+        route = routes.get("/llm/diagnostics")
+
+        self.assertIsNotNone(route)
+        self.assertIn("GET", route.methods)
+        self.assertFalse(self._route_requires_write_key(route))
+
     def test_write_key_blocks_mutating_and_costly_routes_when_configured(self):
         with patch.object(settings, "API_WRITE_KEY", "secret"):
             resp = self._client().post("/events/analyze", json={})

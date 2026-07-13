@@ -121,6 +121,25 @@ class TestPredictionKernel:
         assert len(results) == 1
         assert results[0].engine_name == "elo_odds"
 
+    def test_batch_predict_resilient_to_failure(self, kernel):
+        """batch_predict continues when one match fails and silently drops it."""
+        # Override adapter to raise for one match while the other succeeds.
+        original_get = kernel._adapter.get_match_identity
+
+        def fail_for_m2(match_id):
+            if match_id == "m2":
+                raise ValueError("Simulated data fetch failure")
+            return original_get(match_id)
+
+        kernel._adapter.get_match_identity = fail_for_m2
+
+        results = kernel.batch_predict(["m1", "m2"], engine="auto")
+        # Exactly one entry: the failed match is dropped, not 0 and not 2.
+        assert len(results) == 1
+        # The surviving entry is a real PredictionResult.
+        assert isinstance(results[0], PredictionResult)
+        assert results[0] is not None
+
     def test_process_outcome_triggers_learning(self, kernel):
         from app.kernel.domain import MatchOutcome
         # First predict

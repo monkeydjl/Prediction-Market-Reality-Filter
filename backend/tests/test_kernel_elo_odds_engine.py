@@ -45,7 +45,8 @@ def _make_features(
         match=match,
         general=GeneralFeatures(None, None, None, None),
         team=TeamFeatures(
-            elo_rating_home=float(elo_home), elo_rating_away=float(elo_away),
+            elo_rating_home=float(elo_home) if elo_home is not None else None,
+            elo_rating_away=float(elo_away) if elo_away is not None else None,
             form_home=None, form_away=None,
             h2h_home_win_rate=None, h2h_draw_rate=None,
             market_value_home=None, market_value_away=None,
@@ -234,3 +235,55 @@ class TestEloOddsEquivalence:
             assert abs(new_probs[key] - old_probs[key]) < self._TOL, (
                 f"{key}: new={new_probs[key]} old={old_probs[key]}"
             )
+
+    def test_none_elo_fallback_is_new_behavior(self):
+        """Scenario (d): both Elo ratings are None.
+
+        The legacy ``world_cup_elo_odds_engine`` has **no** fallback for
+        missing Elo ratings: it forwards ``elo_home``/``elo_away`` straight
+        into the BTD model, where ``_alpha_from_elo`` computes
+        ``math.pow(10.0, elo / 400.0)`` and raises ``TypeError`` on None.
+
+        The migrated kernel engine instead degrades gracefully to a hardcoded
+        neutral prior of ``{"home_win": 0.4, "draw": 0.3, "away_win": 0.3}``
+        and flags the Elo contribution as unavailable. This is a deliberate
+        new behaviour introduced by the migration, not a faithful port, so it
+        cannot be checked with a value-equality assertion against the legacy
+        engine. Instead this test:
+
+        1. Asserts the legacy engine raises ``TypeError`` for None Elo,
+           pinning the documented divergence.
+        2. Asserts the new engine returns the documented fallback prior and
+           marks the Elo contribution as unavailable.
+        """
+        features = _make_features(
+            elo_home=None, elo_away=None,
+            odds_home=None, odds_draw=None, odds_away=None,
+            is_knockout=False,
+        )
+
+        # 1) Legacy engine: no None-Elo fallback -> TypeError inside BTD
+        #    (``elo / 400.0`` where elo is None).
+        with pytest.raises(TypeError):
+            old_predict_match_elo_odds(
+                home_team=features.match.home.name,
+                away_team=features.match.away.name,
+                elo_home=features.team.elo_rating_home,
+                elo_away=features.team.elo_rating_away,
+                odds_home=features.market.odds_home,
+                odds_draw=features.market.odds_draw,
+                odds_away=features.market.odds_away,
+                is_knockout=False,
+            )
+
+        # 2) New kernel engine: graceful fallback to the hardcoded prior.
+        engine = EloOddsEngine()
+        new_result = engine.predict(features, features.match)
+        new_probs = new_result.outcome_probabilities
+        assert new_probs == {"home_win": 0.4, "draw": 0.3, "away_win": 0.3}
+        # Probabilities still sum to 1 (sanity check on the fallback).
+        assert abs(sum(new_probs.values()) - 1.0) < self._TOL
+        # The Elo contribution must be reported as unavailable.
+        elo_items = [e for e in new_result.explanation if e.factor == "elo"]
+        assert len(elo_items) == 1
+        assert elo_items[0].available is False

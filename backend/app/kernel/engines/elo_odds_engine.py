@@ -53,7 +53,11 @@ def _fuse_elo_and_odds(
 ) -> dict[str, float]:
     """Fuse Elo and market probabilities. Falls back to Elo-only if no market."""
     if market_probs is None:
-        return elo_probs
+        # Return a fresh dict with rounded values rather than aliasing the
+        # caller's ``elo_probs``. ``round(v, 4)`` mirrors the with-odds path
+        # so the no-odds output is consistently rounded to 4 decimals even if
+        # the upstream BTD result ever changes its rounding behaviour.
+        return {k: round(v, 4) for k, v in elo_probs.items()}
     total_w = elo_weight + odds_weight
     ew = elo_weight / total_w
     ow = odds_weight / total_w

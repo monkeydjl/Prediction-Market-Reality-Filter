@@ -57,6 +57,7 @@ class TestFactorRegistry:
         factor = reg._factors[("elo", "world_cup")]
         assert factor.source == "auto_tune"
         assert factor.weight == 0.50
+        assert factor.category == "team"
 
     def test_list_active(self):
         reg = FactorRegistry()
@@ -77,14 +78,16 @@ class TestFactorRegistry:
     def test_list_active_prefers_competition_specific(self):
         """Competition-specific factor should override global in list_active."""
         reg = FactorRegistry()
-        reg.register_factor(FactorConfig(
-            factor_id="elo", category="team", version="1.0",
-            weight=0.30, competition=None, enabled=True,
-            source="manual", updated_at=datetime.now(timezone.utc),
-        ))
+        # Register competition-specific FIRST
         reg.register_factor(FactorConfig(
             factor_id="elo", category="team", version="1.0",
             weight=0.45, competition="epl", enabled=True,
+            source="manual", updated_at=datetime.now(timezone.utc),
+        ))
+        # Then register global — must NOT overwrite the epl-specific entry
+        reg.register_factor(FactorConfig(
+            factor_id="elo", category="team", version="1.0",
+            weight=0.30, competition=None, enabled=True,
             source="manual", updated_at=datetime.now(timezone.utc),
         ))
         active = reg.list_active("epl")

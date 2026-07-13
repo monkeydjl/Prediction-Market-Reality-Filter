@@ -18,8 +18,8 @@ from app.kernel.domain import (
     FeatureSet,
 )
 from app.kernel.protocols import DataAdapter, FeatureBuilder
-from app.kernel.adapters.world_cup_adapter import WorldCupAdapter
-from app.kernel.adapters.football_feature_builder import FootballFeatureBuilder
+from app.sports.football.adapters.world_cup_adapter import WorldCupAdapter
+from app.sports.football.feature_builder import FootballFeatureBuilder
 
 
 # ---------------------------------------------------------------------------

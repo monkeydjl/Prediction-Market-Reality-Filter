@@ -37,8 +37,8 @@ def _get_kernel():
     from app.kernel.engines.elo_odds_engine import EloOddsEngine
     from app.kernel.kernel_db import init_kernel_db
     from app.kernel.learning_service import KernelLearningService
-    from app.kernel.adapters.world_cup_adapter import WorldCupAdapter
-    from app.kernel.adapters.football_feature_builder import FootballFeatureBuilder
+    from app.sports.football.adapters.world_cup_adapter import WorldCupAdapter
+    from app.sports.football.feature_builder import FootballFeatureBuilder
 
     if not hasattr(_get_kernel, "_instance"):
         init_kernel_db()

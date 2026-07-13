@@ -21,13 +21,20 @@ model, whereas the legacy engine returns a plain dict with extra fields
 """
 from __future__ import annotations
 
-import math
 from datetime import datetime, timezone
 
 from app.kernel.domain import (
     FeatureSet, MatchIdentity, PredictionResult, ContributionItem,
 )
 from app.kernel.engines.btd_model import calculate_btd_probabilities
+
+# Whitelist of known knockout stage names. Matches the legacy pipeline's
+# ``_KNOCKOUT_STAGES`` set. Unknown/empty stages default to False
+# (non-knockout), which is the safe default for group-stage-heavy tournaments.
+_KNOCKOUT_STAGES = frozenset({
+    "round_of_16", "quarterfinal", "quarter_final",
+    "semifinal", "semi_final", "final",
+})
 
 
 def _odds_to_probabilities(
@@ -100,7 +107,7 @@ class EloOddsEngine:
     def predict(self, features: FeatureSet, match: MatchIdentity) -> PredictionResult:
         elo_home = features.team.elo_rating_home
         elo_away = features.team.elo_rating_away
-        is_knockout = match.stage not in ("group_stage", "regular_season")
+        is_knockout = (match.stage or "").lower().strip() in _KNOCKOUT_STAGES
 
         # Elo probabilities via BTD
         if elo_home is not None and elo_away is not None:

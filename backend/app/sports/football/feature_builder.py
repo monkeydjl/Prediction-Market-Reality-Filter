@@ -1,4 +1,4 @@
-# backend/app/kernel/adapters/football_feature_builder.py
+# backend/app/sports/football/feature_builder.py
 """FootballFeatureBuilder — computes FeatureSet from raw data.
 
 Computes:

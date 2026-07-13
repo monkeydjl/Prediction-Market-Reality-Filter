@@ -166,9 +166,11 @@ class TestEloOddsEquivalence:
         new_result = engine.predict(features, features.match)
         new_probs = dict(new_result.outcome_probabilities)
 
-        is_knockout = features.match.stage not in (
-            "group_stage", "regular_season",
-        )
+        _KNOCKOUT_STAGES = frozenset({
+            "round_of_16", "quarterfinal", "quarter_final",
+            "semifinal", "semi_final", "final",
+        })
+        is_knockout = (features.match.stage or "").lower().strip() in _KNOCKOUT_STAGES
         old_result = old_predict_match_elo_odds(
             home_team=features.match.home.name,
             away_team=features.match.away.name,

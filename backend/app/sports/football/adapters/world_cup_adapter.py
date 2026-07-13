@@ -1,4 +1,4 @@
-# backend/app/kernel/adapters/world_cup_adapter.py
+# backend/app/sports/football/adapters/world_cup_adapter.py
 """WorldCupAdapter — bridges existing world_cup_* services to DataAdapter Protocol.
 
 This adapter calls existing ``world_cup_*`` services internally but exposes them
@@ -293,6 +293,8 @@ class WorldCupAdapter:
             raw["market"]["odds_draw"] = odds.get("draw")
             raw["market"]["odds_away"] = odds.get("away")
             raw["market"]["odds_source"] = odds.get("source")
+            # ``stale`` defaults to True when the key is missing, meaning
+            # the cache entry is considered old unless explicitly marked fresh.
             raw["market"]["odds_fresh"] = not odds.get("stale", True)
         elif isinstance(odds, BaseException):
             logger.warning("Failed to fetch odds: %s", odds)

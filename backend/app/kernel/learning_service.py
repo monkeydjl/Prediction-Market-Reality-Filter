@@ -72,6 +72,13 @@ class KernelLearningService:
                 existing.away_score = outcome.away_score
                 existing.outcome = outcome.outcome
                 existing.finished_at = outcome.finished_at
+                # Reset error columns — they will be recomputed by compute_error().
+                # Without this, stale error data from a previous prediction
+                # would persist after the outcome is updated.
+                existing.engine = None
+                existing.score_mae = None
+                existing.outcome_correct = None
+                existing.brier_score = None
             else:
                 record = KernelMatchOutcome(
                     match_id=outcome.match_id,

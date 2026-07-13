@@ -71,13 +71,18 @@ class FactorRegistry:
             )
 
     def list_active(self, competition: str) -> list[FactorConfig]:
-        """List active factors for a competition (global + competition-specific)."""
+        """List active factors for a competition (global + competition-specific).
+
+        Competition-specific entries take priority over global ones so a
+        global factor registered after a competition-specific one does not
+        overwrite the more specific weight.
+        """
         result: dict[str, FactorConfig] = {}
         for (fid, comp), factor in self._factors.items():
             if not factor.enabled:
                 continue
-            if comp is None:
-                result[fid] = factor
-            elif comp == competition:
-                result[fid] = factor
+            if comp == competition:
+                result[fid] = factor  # competition-specific always wins
+            elif comp is None and fid not in result:
+                result[fid] = factor  # global only if no competition-specific yet
         return list(result.values())

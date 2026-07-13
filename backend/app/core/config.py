@@ -947,5 +947,13 @@ class Settings:
         os.getenv("DOMAIN_RELIABILITY_SHRINKAGE_PSEUDOCOUNT", "5")
     )
 
+    # Prediction Kernel feature flag (default OFF). When false, the
+    # /api/predictions/* routes return 503 Service Unavailable (except
+    # /engines which returns a static list). Set KERNEL_PREDICTION_ENABLED=true
+    # to enable the full prediction pipeline through the PredictionKernel.
+    KERNEL_PREDICTION_ENABLED: bool = _env_bool(
+        "KERNEL_PREDICTION_ENABLED", "false"
+    )
+
 
 settings = Settings()

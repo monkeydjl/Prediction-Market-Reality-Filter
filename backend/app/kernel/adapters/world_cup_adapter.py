@@ -69,15 +69,17 @@ class WorldCupAdapter:
         from app.models.world_cup_prediction import MatchFixture
 
         fixture = None
-        session = get_prediction_session()
+        session = None
         try:
+            session = get_prediction_session()
             fixture = session.get(MatchFixture, match_id)
         except Exception as exc:  # noqa: BLE001 — table may not exist yet
             logger.warning(
                 "Failed to query match_fixtures for %s: %s", match_id, exc
             )
         finally:
-            session.close()
+            if session is not None:
+                session.close()
 
         season = SeasonIdentity(
             competition=_COMPETITION, season_key=_DEFAULT_SEASON_KEY
@@ -127,8 +129,9 @@ class WorldCupAdapter:
         from app.models.world_cup_prediction import MatchFixture
         from sqlalchemy import select
 
-        session = get_prediction_session()
+        session = None
         try:
+            session = get_prediction_session()
             query = select(MatchFixture)
             if filters.status:
                 query = query.where(MatchFixture.status == filters.status)
@@ -148,7 +151,8 @@ class WorldCupAdapter:
             logger.warning("Failed to fetch schedule: %s", exc)
             return []
         finally:
-            session.close()
+            if session is not None:
+                session.close()
 
     def sync_schedule(self) -> int:
         """Sync fixtures from external sources.
@@ -190,15 +194,17 @@ class WorldCupAdapter:
         from app.models.world_cup_prediction import MatchResult
 
         result = None
-        session = get_prediction_session()
+        session = None
         try:
+            session = get_prediction_session()
             result = session.get(MatchResult, match_id)
         except Exception as exc:  # noqa: BLE001 — table may not exist yet
             logger.warning(
                 "Failed to query match_results for %s: %s", match_id, exc
             )
         finally:
-            session.close()
+            if session is not None:
+                session.close()
 
         if result is None:
             return None
@@ -240,34 +246,56 @@ class WorldCupAdapter:
             "general": {},
         }
 
-        # --- Elo ratings (async service) ---
+        # --- Fetch Elo ratings + odds in a single event loop ---
+        # Both ``get_elo_rating`` and ``get_cached_odds`` are async. They are
+        # bridged into the synchronous DataAdapter Protocol via a single
+        # :func:`asyncio.run` call that runs them concurrently with
+        # :func:`asyncio.gather`. ``return_exceptions=True`` keeps an
+        # individual service failure from aborting the whole batch, preserving
+        # the per-service graceful degradation of the previous implementation.
         try:
             from app.services.elo_ratings_service import get_elo_rating
-
-            elo_home_raw = asyncio.run(get_elo_rating(match.home.name))
-            elo_away_raw = asyncio.run(get_elo_rating(match.away.name))
-            if isinstance(elo_home_raw, dict):
-                raw["team"]["elo_home"] = elo_home_raw.get("elo_rating")
-            if isinstance(elo_away_raw, dict):
-                raw["team"]["elo_away"] = elo_away_raw.get("elo_rating")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to fetch Elo ratings: %s", exc)
-
-        # --- Odds (async service) ---
-        try:
             from app.services.odds_cache_service import get_cached_odds
 
-            odds = asyncio.run(
-                get_cached_odds(match.home.name, match.away.name)
-            )
-            if odds:
-                raw["market"]["odds_home"] = odds.get("home")
-                raw["market"]["odds_draw"] = odds.get("draw")
-                raw["market"]["odds_away"] = odds.get("away")
-                raw["market"]["odds_source"] = odds.get("source")
-                raw["market"]["odds_fresh"] = not odds.get("stale", True)
+            async def _gather():
+                return await asyncio.gather(
+                    get_elo_rating(match.home.name),
+                    get_elo_rating(match.away.name),
+                    get_cached_odds(match.home.name, match.away.name),
+                    return_exceptions=True,
+                )
+
+            elo_home_raw, elo_away_raw, odds = asyncio.run(_gather())
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to fetch odds: %s", exc)
+            logger.warning("Failed to fetch raw match data: %s", exc)
+            return raw
+
+        # --- Elo ratings ---
+        if isinstance(elo_home_raw, dict):
+            raw["team"]["elo_home"] = elo_home_raw.get("elo_rating")
+        elif isinstance(elo_home_raw, BaseException):
+            logger.warning(
+                "Failed to fetch Elo rating for %s: %s",
+                match.home.name, elo_home_raw,
+            )
+
+        if isinstance(elo_away_raw, dict):
+            raw["team"]["elo_away"] = elo_away_raw.get("elo_rating")
+        elif isinstance(elo_away_raw, BaseException):
+            logger.warning(
+                "Failed to fetch Elo rating for %s: %s",
+                match.away.name, elo_away_raw,
+            )
+
+        # --- Odds ---
+        if isinstance(odds, dict) and odds:
+            raw["market"]["odds_home"] = odds.get("home")
+            raw["market"]["odds_draw"] = odds.get("draw")
+            raw["market"]["odds_away"] = odds.get("away")
+            raw["market"]["odds_source"] = odds.get("source")
+            raw["market"]["odds_fresh"] = not odds.get("stale", True)
+        elif isinstance(odds, BaseException):
+            logger.warning("Failed to fetch odds: %s", odds)
 
         return raw
 

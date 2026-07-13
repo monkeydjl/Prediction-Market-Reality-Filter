@@ -71,6 +71,72 @@ class TestWorldCupAdapter:
         result = adapter.sync_schedule()
         assert isinstance(result, int)
 
+    def test_fetch_all_data_extracts_elo_and_odds(self):
+        """fetch_all_data correctly extracts elo ratings and odds from services."""
+        from unittest.mock import patch
+
+        adapter = WorldCupAdapter()
+        match = _make_match()
+
+        async def mock_elo(team_name):
+            return {"elo_rating": 1850.0}
+
+        async def mock_odds(home, away):
+            return {"home": 2.0, "draw": 3.5, "away": 3.0, "stale": False}
+
+        with patch(
+            "app.services.elo_ratings_service.get_elo_rating",
+            side_effect=mock_elo,
+        ), patch(
+            "app.services.odds_cache_service.get_cached_odds",
+            side_effect=mock_odds,
+        ):
+            data = adapter.fetch_all_data(match)
+
+        # Elo ratings extracted into the "team" sub-dict (matches the
+        # documented return shape of fetch_all_data).
+        assert data["team"]["elo_home"] == 1850.0
+        assert data["team"]["elo_away"] == 1850.0
+        # Odds extracted into the "market" sub-dict.
+        assert data["market"]["odds_home"] == 2.0
+        assert data["market"]["odds_draw"] == 3.5
+        assert data["market"]["odds_away"] == 3.0
+        # ``stale=False`` -> ``odds_fresh=True``.
+        assert data["market"]["odds_fresh"] is True
+
+    def test_fetch_all_data_degrades_when_odds_service_fails(self):
+        """fetch_all_data still returns elo when the odds service raises.
+
+        Verifies the consolidated ``asyncio.gather(..., return_exceptions=True)``
+        preserves the per-service graceful degradation: a failure in the odds
+        service does not abort the Elo lookups.
+        """
+        from unittest.mock import patch
+
+        adapter = WorldCupAdapter()
+        match = _make_match()
+
+        async def mock_elo(team_name):
+            return {"elo_rating": 1850.0}
+
+        async def mock_odds(home, away):
+            raise RuntimeError("odds service down")
+
+        with patch(
+            "app.services.elo_ratings_service.get_elo_rating",
+            side_effect=mock_elo,
+        ), patch(
+            "app.services.odds_cache_service.get_cached_odds",
+            side_effect=mock_odds,
+        ):
+            data = adapter.fetch_all_data(match)
+
+        # Elo still present despite the odds failure.
+        assert data["team"]["elo_home"] == 1850.0
+        assert data["team"]["elo_away"] == 1850.0
+        # Odds market left empty (graceful degradation).
+        assert data["market"] == {}
+
 
 # ===========================================================================
 # FootballFeatureBuilder tests

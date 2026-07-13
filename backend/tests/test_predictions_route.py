@@ -39,16 +39,22 @@ class TestPredictionsRoutes:
         assert "elo_odds" in data
 
     def test_predict_match_not_found(self, client):
-        # Flag is enabled by fixture. The WorldCupAdapter gracefully degrades
-        # to a stub MatchIdentity for unknown match IDs and the EloOddsEngine
-        # falls back to default probabilities, so 200 is also valid.
+        # Flag is enabled by fixture; adapter degrades gracefully to 200 or 404.
+        # 500 would indicate an unhandled crash and must not pass.
         resp = client.post("/api/predictions/matches/nonexistent/predict")
-        assert resp.status_code in (200, 404, 500)
+        assert resp.status_code in (200, 404)
 
     def test_process_outcome_not_found(self, client):
-        # Flag is enabled by fixture
+        # Flag is enabled by fixture. fetch_outcome returns None for unknown
+        # matches, so the kernel returns early and the route responds 200.
+        # 500 would indicate an unhandled crash and must not pass.
         resp = client.post("/api/predictions/outcomes/nonexistent/process")
-        assert resp.status_code in (404, 200, 500)
+        assert resp.status_code in (200, 404)
+
+    def test_engine_score_not_found(self, client):
+        """Engine score returns 404 when no outcome data exists."""
+        resp = client.get("/api/predictions/engines/elo_odds/score")
+        assert resp.status_code == 404
 
     def test_predict_returns_503_when_disabled(self, client):
         """When KERNEL_PREDICTION_ENABLED is False, predict returns 503."""

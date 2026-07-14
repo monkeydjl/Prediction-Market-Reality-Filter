@@ -154,3 +154,41 @@ class TestPredictionKernel:
         score = kernel._learning.engine_score("elo_odds", "world_cup")
         assert score is not None
         assert score.sample_count == 1
+
+
+class TestPhase4KernelRegistration:
+    """Phase 4: NBA components are registered when PHASE4_NBA_ENABLED is true."""
+
+    def test_nba_engine_registered_when_enabled(self, tmp_path, monkeypatch):
+        """When PHASE4_NBA_ENABLED=true, BasketballEngine is in EngineRegistry."""
+        import app.core.config as config_module
+        from app.kernel.kernel_db import init_kernel_db, close_kernel_session
+
+        db_path = str(tmp_path / "kernel_api_test.db")
+        init_kernel_db(db_path)
+        try:
+            monkeypatch.setattr(
+                config_module.settings, "KERNEL_PREDICTION_ENABLED", True
+            )
+            monkeypatch.setattr(
+                config_module.settings, "PHASE4_NBA_ENABLED", True
+            )
+            monkeypatch.setattr(
+                config_module.settings, "BALLDONTLIE_API_KEY", ""
+            )
+
+            # Clear cached kernel
+            from app.api.routes import predictions
+            if hasattr(predictions._get_kernel, "_instance"):
+                delattr(predictions._get_kernel, "_instance")
+
+            kernel = predictions._get_kernel()
+            engines = kernel._engine_registry.list_engines()
+            assert "basketball" in engines
+            assert "elo_odds" in engines
+        finally:
+            close_kernel_session()
+            # Clean up cached kernel
+            from app.api.routes import predictions
+            if hasattr(predictions._get_kernel, "_instance"):
+                delattr(predictions._get_kernel, "_instance")

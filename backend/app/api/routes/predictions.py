@@ -65,12 +65,37 @@ def _get_kernel():
             for prefix, cfg in LEAGUE_REGISTRY.items():
                 adapters[prefix] = LeagueAdapter(cfg)
 
+        # Phase 4: register NBA adapter + engine when enabled
+        fb = FootballFeatureBuilder()
+
+        if config.settings.PHASE4_NBA_ENABLED:
+            from app.sports.basketball.nba_adapter import NBAAdapter
+            from app.sports.basketball.feature_builder import BasketballFeatureBuilder
+            from app.sports.basketball.engines.basketball_engine import BasketballEngine
+            from app.kernel.multi_feature_builder import MultiFeatureBuilder
+
+            adapters["nba-"] = NBAAdapter()
+            nba_engine = BasketballEngine(factor_registry=factor_registry)
+            reg.register(nba_engine)
+
+            factor_registry.ensure_competition_factors("nba")
+
+            # All football prefixes share the same FootballFeatureBuilder instance
+            builders = {
+                "wc-": fb, "ucl-": fb, "epl-": fb,
+                "laliga-": fb, "bundesliga-": fb, "seriea-": fb, "ligue1-": fb,
+                "nba-": BasketballFeatureBuilder(),
+            }
+            feature_builder = MultiFeatureBuilder(builders)
+        else:
+            feature_builder = fb
+
         from app.sports.football.adapters.multi_adapter import MultiAdapter
         multi = MultiAdapter(adapters)
 
         _get_kernel._instance = PredictionKernel(
             adapter=multi,
-            feature_builder=FootballFeatureBuilder(),
+            feature_builder=feature_builder,
             engine_registry=reg,
             factor_registry=factor_registry,
             feature_registry=FeatureRegistry(),

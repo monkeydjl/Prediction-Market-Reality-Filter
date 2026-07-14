@@ -81,11 +81,10 @@ class PredictionKernel:
         if error is None:
             return
 
-        match = self._adapter.get_match_identity(match_id)
-        competition = match.season.competition.code
-        engine = error.engine
-
         if config.settings.PHASE3_LEARNING_ENABLED:
+            match = self._adapter.get_match_identity(match_id)
+            competition = match.season.competition.code
+            engine = error.engine
             self._learning.update_calibration(competition, engine)
             self._learning.update_weights(competition)
             self._learning.engine_score(engine, competition)

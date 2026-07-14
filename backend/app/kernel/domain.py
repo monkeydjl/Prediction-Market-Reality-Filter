@@ -134,6 +134,7 @@ class ContributionItem:
     weight: float
     available: bool
     detail: str | None
+    predicted_outcome: str | None = None
 
 
 @dataclass(frozen=True)

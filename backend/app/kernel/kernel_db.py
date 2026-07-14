@@ -23,7 +23,7 @@ class KernelBase(DeclarativeBase):
 
 
 # Define tables as SQLAlchemy models
-from sqlalchemy import Column, String, Float, Integer, Text, DateTime, JSON
+from sqlalchemy import Column, String, Float, Integer, Text, DateTime, JSON, UniqueConstraint
 
 
 class KernelPrediction(KernelBase):
@@ -52,6 +52,7 @@ class KernelPredictionHistory(KernelBase):
     predicted_scores = Column(JSON)
     outcome_probabilities = Column(JSON)
     confidence = Column(Float)
+    feature_version = Column(String)
     trigger = Column(String)
     created_at = Column(DateTime)
 
@@ -81,13 +82,15 @@ class KernelEngineScore(KernelBase):
     avg_mae = Column(Float)
     brier_score = Column(Float)
     sample_count = Column(Integer, default=0)
+    confidence_calibration = Column(Float, default=0.0)
     last_updated = Column(DateTime)
 
 
 class KernelFactor(KernelBase):
     __tablename__ = "kernel_factors"
 
-    factor_id = Column(String, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    factor_id = Column(String, nullable=False)
     category = Column(String, nullable=False)
     version = Column(String, nullable=False)
     weight = Column(Float, default=1.0)
@@ -95,6 +98,28 @@ class KernelFactor(KernelBase):
     enabled = Column(Integer, default=1)
     source = Column(String, default="manual")
     updated_at = Column(DateTime)
+
+    __table_args__ = (
+        UniqueConstraint("factor_id", "competition", name="uq_factor_id_competition"),
+    )
+
+
+class KernelCalibration(KernelBase):
+    __tablename__ = "kernel_calibration"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    engine = Column(String(50), nullable=False)
+    competition = Column(String(50), nullable=False)
+    slope = Column(Float, nullable=False)
+    intercept = Column(Float, nullable=False)
+    sample_count = Column(Integer, nullable=False, default=0)
+    avg_confidence = Column(Float, nullable=False, default=0.0)
+    avg_accuracy = Column(Float, nullable=False, default=0.0)
+    last_updated = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("engine", "competition", name="uq_calibration_engine_competition"),
+    )
 
 
 class KernelMatchFixture(KernelBase):
@@ -162,9 +187,47 @@ def init_kernel_db(db_path: str | None = None) -> None:
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 
+    # Phase 3 migration: drop dormant tables with old schema so create_all
+    # recreates them with the new columns. Safe because these tables were
+    # never written to in Phase 1/2.
+    _migrate_dormant_tables(_engine)
+
     KernelBase.metadata.create_all(_engine)
     _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
     logger.info("Kernel DB initialized at %s", db_path)
+
+
+def _migrate_dormant_tables(engine) -> None:
+    """Drop dormant tables that have old schema so they get recreated.
+
+    Detects old schema by checking if kernel_factors has factor_id as its
+    primary key (old) instead of id (new). If old schema detected, drops
+    kernel_factors, kernel_engine_scores, kernel_prediction_history so
+    create_all recreates them with the new schema.
+    """
+    from sqlalchemy import inspect as sqlinspect
+    from sqlalchemy import text
+
+    inspector = sqlinspect(engine)
+    table_names = inspector.get_table_names()
+
+    if "kernel_factors" not in table_names:
+        return  # Fresh DB — create_all will build everything correctly
+
+    # Check if kernel_factors has old schema (factor_id as PK, no id column)
+    factors_pk = inspector.get_pk_constraint("kernel_factors")
+    pk_cols = factors_pk.get("constrained_columns", [])
+
+    if "id" in pk_cols:
+        return  # Already has new schema
+
+    # Old schema detected — drop the three dormant tables
+    logger.info("Phase 3 migration: dropping dormant tables with old schema")
+    with engine.connect() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS kernel_factors"))
+        conn.execute(text("DROP TABLE IF EXISTS kernel_engine_scores"))
+        conn.execute(text("DROP TABLE IF EXISTS kernel_prediction_history"))
+        conn.commit()
 
 
 def get_kernel_session() -> Session:

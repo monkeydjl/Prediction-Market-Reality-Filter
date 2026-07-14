@@ -22,11 +22,15 @@ model, whereas the legacy engine returns a plain dict with extra fields
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from app.kernel.domain import (
     FeatureSet, MatchIdentity, PredictionResult, ContributionItem,
 )
 from app.kernel.engines.btd_model import calculate_btd_probabilities
+
+if TYPE_CHECKING:
+    from app.kernel.factor_registry import FactorRegistry
 
 # Whitelist of known knockout stage names. Matches the legacy pipeline's
 # ``_KNOCKOUT_STAGES`` set. Unknown/empty stages default to False
@@ -98,6 +102,9 @@ def _calculate_confidence(probs: dict[str, float]) -> float:
 class EloOddsEngine:
     """Elo + Odds fusion engine. Implements PredictionEngine Protocol."""
 
+    def __init__(self, factor_registry: FactorRegistry | None = None) -> None:
+        self._factor_registry = factor_registry
+
     def name(self) -> str:
         return "elo_odds"
 
@@ -108,6 +115,13 @@ class EloOddsEngine:
         elo_home = features.team.elo_rating_home
         elo_away = features.team.elo_rating_away
         is_knockout = (match.stage or "").lower().strip() in _KNOCKOUT_STAGES
+
+        # Get weights from FactorRegistry or fall back to defaults
+        if self._factor_registry:
+            elo_w = self._factor_registry.get_weight("elo", match.season.competition.code)
+            odds_w = self._factor_registry.get_weight("odds", match.season.competition.code)
+        else:
+            elo_w, odds_w = 0.30, 0.70
 
         # Elo probabilities via BTD
         if elo_home is not None and elo_away is not None:
@@ -131,21 +145,26 @@ class EloOddsEngine:
             odds_available = False
 
         # Fuse
-        fused = _fuse_elo_and_odds(elo_probs, market_probs)
+        fused = _fuse_elo_and_odds(elo_probs, market_probs, elo_w, odds_w)
         scores = _probabilities_to_scores(fused)
         confidence = _calculate_confidence(fused)
 
-        # Explanation
+        # Explanation with predicted_outcome
+        elo_predicted = max(elo_probs, key=elo_probs.get) if elo_available else None
+        odds_predicted = max(market_probs, key=market_probs.get) if odds_available else None
+
         explanation = [
             ContributionItem(
                 factor="elo", direction="support" if elo_available else "neutral",
-                weight=0.30, available=elo_available,
+                weight=elo_w, available=elo_available,
                 detail=f"Elo {elo_home} vs {elo_away}" if elo_available else "Elo unavailable",
+                predicted_outcome=elo_predicted,
             ),
             ContributionItem(
                 factor="odds", direction="support" if odds_available else "neutral",
-                weight=0.70, available=odds_available,
+                weight=odds_w, available=odds_available,
                 detail=f"Odds {odds_h}/{odds_d}/{odds_a}" if odds_available else "Odds unavailable",
+                predicted_outcome=odds_predicted,
             ),
         ]
 

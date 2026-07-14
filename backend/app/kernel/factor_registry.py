@@ -169,3 +169,50 @@ class FactorRegistry:
             elif comp is None and fid not in result:
                 result[fid] = factor  # global only if no competition-specific yet
         return list(result.values())
+
+    def ensure_competition_factors(self, competition: str) -> None:
+        """Seed default factors for a competition if none exist.
+
+        For "nba": seeds elo(0.45), home_court(0.15), rest(0.15), form(0.25).
+        For unknown competitions: no-op (returns immediately).
+        Football global defaults (elo=0.30, odds=0.70) are never modified.
+        """
+        # Check if competition already has factors
+        existing = [comp for (fid, comp) in self._factors if comp == competition]
+        if existing:
+            return  # Already seeded
+
+        if competition == "nba":
+            defaults = [
+                ("elo", "elo_rating", 0.45),
+                ("home_court", "home_advantage", 0.15),
+                ("rest", "rest_days", 0.15),
+                ("form", "recent_form", 0.25),
+            ]
+        else:
+            return  # Unknown competition — no defaults
+
+        now = datetime.now(timezone.utc)
+        session = self._session_factory()
+        try:
+            for factor_id, category, weight in defaults:
+                fc = FactorConfig(
+                    factor_id=factor_id, category=category,
+                    version="1.0", weight=weight,
+                    competition=competition, enabled=True,
+                    source="default", updated_at=now,
+                )
+                self._factors[(factor_id, competition)] = fc
+                row = KernelFactor(
+                    factor_id=fc.factor_id, category=fc.category,
+                    version=fc.version, weight=fc.weight,
+                    competition=fc.competition, enabled=1,
+                    source=fc.source, updated_at=now,
+                )
+                session.add(row)
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()

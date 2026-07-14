@@ -116,3 +116,54 @@ class TestFactorRegistry:
     def test_get_unknown_factor_returns_default(self):
         reg = FactorRegistry()
         assert reg.get_weight("nonexistent", "world_cup") == 1.0  # default weight
+
+
+class TestEnsureCompetitionFactors:
+    """Phase 4: ensure_competition_factors for NBA factor seeding."""
+
+    def test_seeds_nba_factors_when_empty(self):
+        """NBA factors are seeded when none exist for 'nba' competition."""
+        from app.kernel.factor_registry import FactorRegistry
+
+        reg = FactorRegistry()
+        # Before: no NBA-specific factors; falls back to global elo=0.30
+        assert reg.get_weight("elo", "nba") == 0.30
+
+        reg.ensure_competition_factors("nba")
+
+        # After: NBA factors seeded with correct weights
+        assert reg.get_weight("elo", "nba") == 0.45
+        assert reg.get_weight("home_court", "nba") == 0.15
+        assert reg.get_weight("rest", "nba") == 0.15
+        assert reg.get_weight("form", "nba") == 0.25
+
+    def test_idempotent_when_already_seeded(self):
+        """Calling twice doesn't duplicate or overwrite factors."""
+        from app.kernel.factor_registry import FactorRegistry
+
+        reg = FactorRegistry()
+        reg.ensure_competition_factors("nba")
+        reg.ensure_competition_factors("nba")  # Second call
+
+        # Weights still correct
+        assert reg.get_weight("elo", "nba") == 0.45
+
+    def test_football_defaults_unchanged(self):
+        """NBA seeding doesn't affect football global defaults."""
+        from app.kernel.factor_registry import FactorRegistry
+
+        reg = FactorRegistry()
+        reg.ensure_competition_factors("nba")
+
+        # Football globals unchanged
+        assert reg.get_weight("elo", "world_cup") == 0.30
+        assert reg.get_weight("odds", "world_cup") == 0.70
+
+    def test_unknown_competition_noop(self):
+        """Unknown competition returns without seeding."""
+        from app.kernel.factor_registry import FactorRegistry
+
+        reg = FactorRegistry()
+        reg.ensure_competition_factors("unknown_sport")
+        # No NBA factors seeded; falls back to global elo=0.30
+        assert reg.get_weight("elo", "unknown_sport") == 0.30

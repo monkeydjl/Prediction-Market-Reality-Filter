@@ -2,16 +2,24 @@
 """Engine registration and selection."""
 from __future__ import annotations
 
-from app.kernel.domain import FeatureSet
+from typing import TYPE_CHECKING
+
 from app.kernel.protocols import PredictionEngine
+
+if TYPE_CHECKING:
+    from app.kernel.protocols import LearningService
+
+# Minimum samples for dynamic engine selection (hardcoded — see spec Section 3.4)
+_MIN_SAMPLES_FOR_ENGINE_SELECT = 5
 
 
 class EngineRegistry:
     """Registers engines and selects them by name or strategy."""
 
-    def __init__(self) -> None:
+    def __init__(self, learning_service: LearningService | None = None) -> None:
         self._engines: dict[str, PredictionEngine] = {}
         self._default_name: str | None = None
+        self._learning_service = learning_service
 
     def register(self, engine: PredictionEngine) -> None:
         name = engine.name()
@@ -28,9 +36,32 @@ class EngineRegistry:
     def list_engines(self) -> list[str]:
         return list(self._engines.keys())
 
-    def select(self, strategy: str, features: FeatureSet) -> PredictionEngine:
-        if strategy == "auto":
-            if self._default_name is None:
-                raise KeyError("No engines registered")
-            return self._engines[self._default_name]
-        return self.get(strategy)
+    def select(self, engine_name: str,
+               competition: str | None = None) -> PredictionEngine:
+        """Select an engine by name or 'auto' for dynamic selection.
+
+        When engine_name is 'auto' and a LearningService is available,
+        selects the engine with the highest accuracy that has at least
+        _MIN_SAMPLES_FOR_ENGINE_SELECT samples. Falls back to default
+        engine if no engine has enough samples.
+        """
+        if engine_name != "auto":
+            return self.get(engine_name)
+
+        if self._default_name is None:
+            raise KeyError("No engines registered")
+
+        # Dynamic selection via LearningService
+        if self._learning_service is not None:
+            best_engine = None
+            best_accuracy = -1.0
+            for name, engine in self._engines.items():
+                score = self._learning_service.engine_score(name, competition)
+                if score and score.sample_count >= _MIN_SAMPLES_FOR_ENGINE_SELECT:
+                    if score.accuracy > best_accuracy:
+                        best_accuracy = score.accuracy
+                        best_engine = engine
+            if best_engine is not None:
+                return best_engine
+
+        return self._engines[self._default_name]

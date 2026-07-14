@@ -42,8 +42,11 @@ def _get_kernel():
 
     if not hasattr(_get_kernel, "_instance"):
         init_kernel_db()
-        reg = EngineRegistry()
-        reg.register(EloOddsEngine())
+        factor_registry = FactorRegistry()
+        engine = EloOddsEngine(factor_registry=factor_registry)
+        learning = KernelLearningService(factor_registry=factor_registry)
+        reg = EngineRegistry(learning_service=learning)
+        reg.register(engine)
 
         # Build adapter registry — always includes WorldCupAdapter
         adapters: dict[str, object] = {
@@ -69,9 +72,9 @@ def _get_kernel():
             adapter=multi,
             feature_builder=FootballFeatureBuilder(),
             engine_registry=reg,
-            factor_registry=FactorRegistry(),
+            factor_registry=factor_registry,
             feature_registry=FeatureRegistry(),
-            learning=KernelLearningService(),
+            learning=learning,
         )
     return _get_kernel._instance
 

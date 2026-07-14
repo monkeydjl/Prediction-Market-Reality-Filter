@@ -962,6 +962,32 @@ class Settings:
         "PHASE2_LEAGUES_ENABLED", "false"
     )
 
+    # Phase 3 — Unified learning loop (default OFF). When false,
+    # process_outcome only records outcomes and computes errors
+    # (existing Phase 1 behavior). Set to true to enable calibration,
+    # weight updates, and engine score persistence.
+    PHASE3_LEARNING_ENABLED: bool = _env_bool(
+        "PHASE3_LEARNING_ENABLED", "false"
+    )
+    LEARNING_WINDOW_SIZE: int = int(
+        os.getenv("LEARNING_WINDOW_SIZE", "30")
+    )
+    EWMA_ALPHA: float = float(
+        os.getenv("EWMA_ALPHA", "0.1")
+    )
+    MIN_SAMPLES_FOR_CALIBRATION: int = int(
+        os.getenv("MIN_SAMPLES_FOR_CALIBRATION", "10")
+    )
+    MIN_SAMPLES_FOR_ENGINE_SELECT: int = int(
+        os.getenv("MIN_SAMPLES_FOR_ENGINE_SELECT", "5")
+    )
+    WEIGHT_FLOOR: float = float(
+        os.getenv("WEIGHT_FLOOR", "0.05")
+    )
+    WEIGHT_CEILING: float = float(
+        os.getenv("WEIGHT_CEILING", "0.95")
+    )
+
     # ClubElo.com service configuration
     CLUB_ELO_CACHE_TTL_DAYS: int = int(
         os.getenv("CLUB_ELO_CACHE_TTL_DAYS", "7")

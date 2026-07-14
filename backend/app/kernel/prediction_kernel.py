@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 
+from app.core import config
 from app.kernel.domain import (
     MatchIdentity, FeatureSet, PredictionResult, MatchOutcome,
 )
@@ -48,7 +49,7 @@ class PredictionKernel:
         # 3. Build features
         features = self._feature_builder.build(match, raw)
         # 4. Select engine
-        engine_impl = self._engine_registry.select(engine, features)
+        engine_impl = self._engine_registry.select(engine, competition=match.season.competition.code)
         # 5. Run prediction
         prediction = engine_impl.predict(features, match)
         # 6. Record for learning
@@ -76,7 +77,15 @@ class PredictionKernel:
             logger.warning("No outcome found for match %s", match_id)
             return
         self._learning.record_outcome(outcome)
-        self._learning.compute_error(match_id)
-        # Calibration and weight updates deferred to Phase 3
-        # self._learning.update_calibration(competition, engine)
-        # self._learning.update_weights(competition)
+        error = self._learning.compute_error(match_id)
+        if error is None:
+            return
+
+        match = self._adapter.get_match_identity(match_id)
+        competition = match.season.competition.code
+        engine = error.engine
+
+        if config.settings.PHASE3_LEARNING_ENABLED:
+            self._learning.update_calibration(competition, engine)
+            self._learning.update_weights(competition)
+            self._learning.engine_score(engine, competition)

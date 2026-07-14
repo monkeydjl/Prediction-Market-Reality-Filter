@@ -17,6 +17,15 @@ from typing import Any
 import httpx
 from app.core.config import settings
 
+# Module-level import so that _check_cache / _save_cache can be unit-tested
+# via patch("app.services.club_elo_service.get_kernel_session").  The local
+# import inside the function body would bypass such patches.
+try:
+    from app.kernel.kernel_db import get_kernel_session, KernelClubEloCache
+except ImportError:  # pragma: no cover - kernel_db optional in some envs
+    get_kernel_session = None  # type: ignore[assignment]
+    KernelClubEloCache = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 _CLUB_ELO_API = "http://api.clubelo.com"
@@ -138,9 +147,7 @@ def _check_cache(team_name: str) -> dict[str, Any] | None:
     Returns {"elo_rating": float, "source": "clubelo"} if cache is fresh,
     or None if cache is missing/expired.
     """
-    try:
-        from app.kernel.kernel_db import get_kernel_session, KernelClubEloCache
-    except ImportError:
+    if get_kernel_session is None:
         return None
 
     normalized = _normalize_team_name(team_name)
@@ -151,7 +158,10 @@ def _check_cache(team_name: str) -> dict[str, Any] | None:
             return None
         ttl_days = getattr(settings, "CLUB_ELO_CACHE_TTL_DAYS", 7)
         max_age = timedelta(days=ttl_days)
-        if datetime.now(timezone.utc) - entry.fetched_at > max_age:
+        fetched = entry.fetched_at
+        if fetched.tzinfo is None:
+            fetched = fetched.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) - fetched > max_age:
             return None
         return {"elo_rating": entry.elo_rating, "source": "clubelo"}
     except Exception as exc:  # noqa: BLE001
@@ -165,9 +175,7 @@ def _save_cache(
     team_name: str, elo: float, country: str = "", level: int = 0,
 ) -> None:
     """Save club Elo to KernelClubEloCache."""
-    try:
-        from app.kernel.kernel_db import get_kernel_session, KernelClubEloCache
-    except ImportError:
+    if get_kernel_session is None:
         return
 
     normalized = _normalize_team_name(team_name)

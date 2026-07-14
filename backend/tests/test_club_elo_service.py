@@ -124,3 +124,22 @@ class TestGetClubElo:
 
         result = get_club_elo("Arsenal")
         assert result is None
+
+
+class TestCacheTimezoneHandling:
+    def test_check_cache_handles_naive_datetime(self):
+        """Cache should work when fetched_at is naive (SQLAlchemy round-trip)."""
+        from app.services.club_elo_service import _check_cache
+        from unittest.mock import patch, MagicMock
+        from datetime import datetime, timezone, timedelta
+
+        mock_entry = MagicMock()
+        mock_entry.elo_rating = 1900.0
+        # Simulate naive datetime from SQLAlchemy (no tzinfo)
+        mock_entry.fetched_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        with patch("app.services.club_elo_service.get_kernel_session") as mock_session:
+            mock_session.return_value.get.return_value = mock_entry
+            result = _check_cache("Arsenal")
+            assert result is not None
+            assert result["elo_rating"] == 1900.0

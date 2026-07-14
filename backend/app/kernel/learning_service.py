@@ -20,6 +20,7 @@ from app.kernel.kernel_db import (
     KernelPrediction, KernelMatchOutcome, KernelEngineScore,
     KernelCalibration,
 )
+from app.kernel.factor_registry import FactorRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +34,17 @@ _CALIBRATION_INTERCEPT_MAX = 0.5
 _DEFAULT_LEARNING_WINDOW_SIZE = 30
 _DEFAULT_MIN_SAMPLES_FOR_CALIBRATION = 10
 
+# EWMA weight-update constants (Phase 3 — see spec Section 3.4)
+_DEFAULT_EWMA_ALPHA = 0.1
+_WEIGHT_FLOOR = 0.05
+_WEIGHT_CEILING = 0.95
+
 
 class KernelLearningService:
     """Implements LearningService Protocol for Phase 1."""
+
+    def __init__(self, factor_registry: FactorRegistry | None = None) -> None:
+        self._factor_registry = factor_registry or FactorRegistry()
 
     def record_prediction(self, match: MatchIdentity,
                           prediction: PredictionResult) -> None:
@@ -232,8 +241,80 @@ class KernelLearningService:
             session.close()
 
     def update_weights(self, competition: str) -> None:
-        """Deferred to Phase 3."""
-        logger.info("update_weights deferred to Phase 3")
+        """EWMA weight adjustment per competition using per-factor accuracy."""
+        if self._factor_registry is None:
+            return
+
+        session = get_kernel_session()
+        try:
+            # Query recent outcomes with predictions for this competition
+            query = (
+                select(KernelPrediction, KernelMatchOutcome)
+                .join(KernelMatchOutcome, KernelPrediction.match_id == KernelMatchOutcome.match_id)
+                .where(
+                    KernelPrediction.competition == competition,
+                    KernelMatchOutcome.outcome.isnot(None),
+                )
+                .order_by(KernelMatchOutcome.finished_at.desc())
+                .limit(_DEFAULT_LEARNING_WINDOW_SIZE)
+            )
+            results = session.execute(query).all()
+            if len(results) < _DEFAULT_MIN_SAMPLES_FOR_CALIBRATION:
+                return
+
+            elo_correct = 0
+            elo_total = 0
+            odds_correct = 0
+            odds_total = 0
+
+            for pred, outcome in results:
+                actual = outcome.outcome
+                explanation = pred.explanation or []
+                for item in explanation:
+                    if not isinstance(item, dict):
+                        continue
+                    factor = item.get("factor")
+                    predicted = item.get("predicted_outcome")
+                    if not predicted:
+                        continue
+                    if factor == "elo":
+                        elo_total += 1
+                        if predicted == actual:
+                            elo_correct += 1
+                    elif factor == "odds":
+                        odds_total += 1
+                        if predicted == actual:
+                            odds_correct += 1
+
+            if elo_total == 0 or odds_total == 0:
+                return
+
+            elo_acc = elo_correct / elo_total
+            odds_acc = odds_correct / odds_total
+
+            total_acc = elo_acc + odds_acc
+            if total_acc == 0:
+                return
+
+            w_elo_target = elo_acc / total_acc
+            w_odds_target = odds_acc / total_acc
+
+            w_elo_old = self._factor_registry.get_weight("elo", competition)
+            w_odds_old = self._factor_registry.get_weight("odds", competition)
+
+            alpha = _DEFAULT_EWMA_ALPHA
+            w_elo_new = max(_WEIGHT_FLOOR, min(_WEIGHT_CEILING,
+                          alpha * w_elo_target + (1 - alpha) * w_elo_old))
+            w_odds_new = max(_WEIGHT_FLOOR, min(_WEIGHT_CEILING,
+                           1.0 - w_elo_new))
+
+            self._factor_registry.update_weight("elo", competition, w_elo_new, source="ewma")
+            self._factor_registry.update_weight("odds", competition, w_odds_new, source="ewma")
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
     def engine_score(self, engine: str,
                      competition: str | None = None) -> EngineScore | None:

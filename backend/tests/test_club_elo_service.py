@@ -33,6 +33,9 @@ class TestNormalizeTeamName:
         assert _normalize_team_name("Real Madrid CF") == "realmadrid"
         assert _normalize_team_name("FC Bayern München") == "bayernmünchen"
 
+    def test_removes_afc_suffix(self):
+        assert _normalize_team_name("Sunderland AFC") == "sunderland"
+
     def test_handles_none(self):
         assert _normalize_team_name("") == ""
 

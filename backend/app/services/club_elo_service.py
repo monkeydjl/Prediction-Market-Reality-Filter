@@ -24,8 +24,13 @@ _CLUB_ELO_API = "http://api.clubelo.com"
 # Common suffixes/prefixes to strip when normalizing team names.
 # NOTE: spaces are removed before matching, so tokens carry no leading space
 # (the brief's original " fc" form could never match after .replace(" ", "")).
-_SUFFIXES = ("fc", "cf", "ac", "afc", "sc", "fc.", "cf.", "ac.")
-_PREFIXES = ("fc", "cf", "ac", "afc", "sc", "fc.", "cf.", "ac.")
+# IMPORTANT: tokens MUST be ordered longest-first. The normalization loop
+# `break`s on the first match, so a shorter token listed before a longer one
+# would win incorrectly — e.g. "fc" before "afc" would turn "sunderlandafc"
+# into "sunderlanda" instead of "sunderland". Keep 3-char tokens ahead of
+# 2-char tokens.
+_SUFFIXES = ("afc", "fc.", "cf.", "ac.", "fc", "cf", "ac", "sc")
+_PREFIXES = ("afc", "fc.", "cf.", "ac.", "fc", "cf", "ac", "sc")
 
 
 def _normalize_team_name(name: str) -> str:

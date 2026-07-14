@@ -44,8 +44,24 @@ def _get_kernel():
         init_kernel_db()
         reg = EngineRegistry()
         reg.register(EloOddsEngine())
+
+        # Build adapter registry — always includes WorldCupAdapter
+        adapters: dict[str, object] = {
+            "wc-": WorldCupAdapter(),
+        }
+
+        # Phase 2: register UCL and EPL adapters when enabled
+        if config.settings.PHASE2_LEAGUES_ENABLED:
+            from app.sports.football.adapters.ucl_adapter import UCLAdapter
+            from app.sports.football.adapters.epl_adapter import EPLAdapter
+            adapters["ucl-"] = UCLAdapter()
+            adapters["epl-"] = EPLAdapter()
+
+        from app.sports.football.adapters.multi_adapter import MultiAdapter
+        multi = MultiAdapter(adapters)
+
         _get_kernel._instance = PredictionKernel(
-            adapter=WorldCupAdapter(),
+            adapter=multi,
             feature_builder=FootballFeatureBuilder(),
             engine_registry=reg,
             factor_registry=FactorRegistry(),

@@ -955,5 +955,20 @@ class Settings:
         "KERNEL_PREDICTION_ENABLED", "false"
     )
 
+    # Phase 2 — Multi-league support (default OFF). When false, only
+    # World Cup (wc- prefix) adapters are registered. Set to true to
+    # enable UCL and EPL adapters.
+    PHASE2_LEAGUES_ENABLED: bool = _env_bool(
+        "PHASE2_LEAGUES_ENABLED", "false"
+    )
+
+    # ClubElo.com service configuration
+    CLUB_ELO_CACHE_TTL_DAYS: int = int(
+        os.getenv("CLUB_ELO_CACHE_TTL_DAYS", "7")
+    )
+    CLUB_ELO_REQUEST_INTERVAL: float = float(
+        os.getenv("CLUB_ELO_REQUEST_INTERVAL", "1.0")
+    )
+
 
 settings = Settings()

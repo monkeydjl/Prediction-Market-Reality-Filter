@@ -221,3 +221,57 @@ class TestEnsureMLBFactors:
         # NBA factors unchanged
         assert reg.get_weight("elo", "nba") == 0.45
         assert reg.get_weight("home_court", "nba") == 0.15
+
+
+class TestEnsureNHLFactors:
+    """Phase 5: ensure_competition_factors for NHL factor seeding."""
+
+    def test_seeds_nhl_factors_when_empty(self):
+        """NHL factors are seeded when none exist for 'nhl' competition."""
+        from app.kernel.factor_registry import FactorRegistry
+
+        reg = FactorRegistry()
+        # Before: no NHL-specific factors; falls back to global elo=0.30
+        assert reg.get_weight("elo", "nhl") == 0.30
+
+        reg.ensure_competition_factors("nhl")
+
+        # After: NHL factors seeded with correct weights
+        assert reg.get_weight("elo", "nhl") == 0.35
+        assert reg.get_weight("home_court", "nhl") == 0.15
+        assert reg.get_weight("rest", "nhl") == 0.15
+        assert reg.get_weight("form", "nhl") == 0.20
+        assert reg.get_weight("goalie", "nhl") == 0.15
+
+    def test_idempotent_when_already_seeded(self):
+        """Calling twice doesn't duplicate or overwrite factors."""
+        from app.kernel.factor_registry import FactorRegistry
+
+        reg = FactorRegistry()
+        reg.ensure_competition_factors("nhl")
+        reg.ensure_competition_factors("nhl")  # Second call
+
+        assert reg.get_weight("elo", "nhl") == 0.35
+        assert reg.get_weight("goalie", "nhl") == 0.15
+
+    def test_football_defaults_unchanged(self):
+        """NHL seeding doesn't affect football global defaults."""
+        from app.kernel.factor_registry import FactorRegistry
+
+        reg = FactorRegistry()
+        reg.ensure_competition_factors("nhl")
+
+        assert reg.get_weight("elo", "world_cup") == 0.30
+        assert reg.get_weight("odds", "world_cup") == 0.70
+
+    def test_mlb_factors_unchanged(self):
+        """NHL seeding doesn't affect MLB factors."""
+        from app.kernel.factor_registry import FactorRegistry
+
+        reg = FactorRegistry()
+        reg.ensure_competition_factors("mlb")
+        reg.ensure_competition_factors("nhl")
+
+        # MLB factors unchanged
+        assert reg.get_weight("elo", "mlb") == 0.30
+        assert reg.get_weight("starting_pitcher", "mlb") == 0.25

@@ -226,3 +226,37 @@ class TestPhase5MLBRegistration:
             from app.api.routes import predictions
             if hasattr(predictions._get_kernel, "_instance"):
                 delattr(predictions._get_kernel, "_instance")
+
+
+class TestPhase5NHLRegistration:
+    """Phase 5: NHL components are registered when PHASE5_NHL_ENABLED is true."""
+
+    def test_nhl_engine_registered_when_enabled(self, tmp_path, monkeypatch):
+        """When PHASE5_NHL_ENABLED=true, HockeyEngine is in EngineRegistry."""
+        import app.core.config as config_module
+        from app.kernel.kernel_db import init_kernel_db, close_kernel_session
+
+        db_path = str(tmp_path / "kernel_api_test_nhl.db")
+        init_kernel_db(db_path)
+        try:
+            monkeypatch.setattr(
+                config_module.settings, "KERNEL_PREDICTION_ENABLED", True
+            )
+            monkeypatch.setattr(
+                config_module.settings, "PHASE5_NHL_ENABLED", True
+            )
+
+            # Clear cached kernel
+            from app.api.routes import predictions
+            if hasattr(predictions._get_kernel, "_instance"):
+                delattr(predictions._get_kernel, "_instance")
+
+            kernel = predictions._get_kernel()
+            engines = kernel._engine_registry.list_engines()
+            assert "hockey" in engines
+            assert "elo_odds" in engines
+        finally:
+            close_kernel_session()
+            from app.api.routes import predictions
+            if hasattr(predictions._get_kernel, "_instance"):
+                delattr(predictions._get_kernel, "_instance")

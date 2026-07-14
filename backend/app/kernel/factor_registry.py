@@ -197,6 +197,14 @@ class FactorRegistry:
                 ("form", "recent_form", 0.20),
                 ("starting_pitcher", "pitcher_matchup", 0.25),
             ]
+        elif competition == "nhl":
+            defaults = [
+                ("elo", "elo_rating", 0.35),
+                ("home_court", "home_advantage", 0.15),
+                ("rest", "rest_days", 0.15),
+                ("form", "recent_form", 0.20),
+                ("goalie", "goalie_matchup", 0.15),
+            ]
         else:
             return  # Unknown competition — no defaults
 

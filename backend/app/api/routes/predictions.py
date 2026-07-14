@@ -99,8 +99,22 @@ def _get_kernel():
             factor_registry.ensure_competition_factors("mlb")
             builders["mlb-"] = BaseballFeatureBuilder()
 
+        if config.settings.PHASE5_NHL_ENABLED:
+            from app.sports.hockey.nhl_adapter import NHLAdapter
+            from app.sports.hockey.feature_builder import HockeyFeatureBuilder
+            from app.sports.hockey.engines.hockey_engine import HockeyEngine
+
+            adapters["nhl-"] = NHLAdapter()
+            nhl_engine = HockeyEngine(factor_registry=factor_registry)
+            reg.register(nhl_engine)
+
+            factor_registry.ensure_competition_factors("nhl")
+            builders["nhl-"] = HockeyFeatureBuilder()
+
         # If any non-football sport is enabled, wrap builders in MultiFeatureBuilder
-        if config.settings.PHASE4_NBA_ENABLED or config.settings.PHASE5_MLB_ENABLED:
+        if (config.settings.PHASE4_NBA_ENABLED
+                or config.settings.PHASE5_MLB_ENABLED
+                or config.settings.PHASE5_NHL_ENABLED):
             from app.kernel.multi_feature_builder import MultiFeatureBuilder
             feature_builder = MultiFeatureBuilder(builders)
 

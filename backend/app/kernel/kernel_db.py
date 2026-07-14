@@ -97,6 +97,49 @@ class KernelFactor(KernelBase):
     updated_at = Column(DateTime)
 
 
+class KernelMatchFixture(KernelBase):
+    """Fixture table for UCL/EPL matches (kernel_ prefixed)."""
+    __tablename__ = "kernel_match_fixtures"
+
+    match_id = Column(String, primary_key=True)
+    competition = Column(String, nullable=False)
+    season = Column(String, nullable=False)
+    home_team = Column(String, nullable=False)
+    away_team = Column(String, nullable=False)
+    kickoff_utc = Column(DateTime)
+    stage = Column(String)
+    status = Column(String, default="scheduled")
+    home_score = Column(Integer)
+    away_score = Column(Integer)
+    venue = Column(String)
+    created_at = Column(DateTime)
+    updated_at = Column(DateTime)
+
+
+class KernelMatchResult(KernelBase):
+    """Match result table for UCL/EPL matches."""
+    __tablename__ = "kernel_match_results"
+
+    match_id = Column(String, primary_key=True)
+    home_score = Column(Integer)
+    away_score = Column(Integer)
+    outcome = Column(String)
+    finished_at = Column(DateTime)
+    created_at = Column(DateTime)
+
+
+class KernelClubEloCache(KernelBase):
+    """Cache for club Elo ratings from ClubElo.com."""
+    __tablename__ = "kernel_club_elo_cache"
+
+    team_name = Column(String, primary_key=True)
+    elo_rating = Column(Float, nullable=False)
+    source = Column(String, default="clubelo")
+    fetched_at = Column(DateTime, nullable=False)
+    country = Column(String)
+    level = Column(Integer)
+
+
 def init_kernel_db(db_path: str | None = None) -> None:
     """Initialize the kernel database. Creates tables if they don't exist."""
     global _engine, _SessionLocal

@@ -2,7 +2,6 @@
 """Tests for NBAAdapter — DataAdapter Protocol implementation."""
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
-import pytest
 
 from app.kernel.domain import (
     SportIdentity, CompetitionIdentity, SeasonIdentity,
@@ -141,12 +140,17 @@ class TestNBAAdapterFetchAllData:
         mock_query.return_value = _make_fixture()
 
         adapter = NBAAdapter()
-        # Mock the internal elo lookup to avoid real DB
-        with patch.object(adapter, "_fetch_elo_ratings", return_value={"Boston Celtics": 1650.0, "Los Angeles Lakers": 1520.0}):
+        # Mock the internal DB-touching methods to isolate from real DB
+        # (avoids creating backend/kernel_predictions.db as a side effect)
+        with patch.object(adapter, "_fetch_elo_ratings", return_value={"Boston Celtics": 1650.0, "Los Angeles Lakers": 1520.0}), \
+             patch.object(adapter, "_compute_form", return_value=0.6), \
+             patch.object(adapter, "_compute_rest_days", return_value=2):
             match = _make_match()
             raw = adapter.fetch_all_data(match)
             assert raw["team"]["elo_home"] == 1650.0
             assert raw["team"]["elo_away"] == 1520.0
+            assert raw["team"]["form_home"] == 0.6
+            assert raw["general"]["rest_days_home"] == 2
             assert raw["environment"]["is_home_advantage"] is True
 
 

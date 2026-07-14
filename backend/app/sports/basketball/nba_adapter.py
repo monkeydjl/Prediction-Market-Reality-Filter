@@ -26,7 +26,6 @@ from app.kernel.kernel_db import (
     get_kernel_session, KernelMatchFixture, KernelMatchResult, KernelEloRating,
 )
 from app.sports.basketball.balldontlie_client import fetch_nba_games
-from app.sports.basketball.elo_calculator import seed_elo_from_games
 
 logger = logging.getLogger(__name__)
 
@@ -274,7 +273,7 @@ class NBAAdapter:
         return raw
 
     def _compute_form(self, team_name: str) -> float:
-        """Compute last-10 win rate from kernel_match_results.
+        """Compute last-10 win rate from kernel_match_fixtures.
 
         Returns 0.5 if no data available.
         """

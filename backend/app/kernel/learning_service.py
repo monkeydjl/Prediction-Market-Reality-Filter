@@ -18,9 +18,20 @@ from app.kernel.domain import (
 from app.kernel.kernel_db import (
     get_kernel_session,
     KernelPrediction, KernelMatchOutcome, KernelEngineScore,
+    KernelCalibration,
 )
 
 logger = logging.getLogger(__name__)
+
+# Phase 3 hardcoded constants (not configurable — see spec Section 3.4)
+_CALIBRATION_SLOPE_MIN = 0.0
+_CALIBRATION_SLOPE_MAX = 2.0
+_CALIBRATION_INTERCEPT_MIN = -0.5
+_CALIBRATION_INTERCEPT_MAX = 0.5
+
+# Defaults used until config.py has the Phase 3 settings (added in Task 7)
+_DEFAULT_LEARNING_WINDOW_SIZE = 30
+_DEFAULT_MIN_SAMPLES_FOR_CALIBRATION = 10
 
 
 class KernelLearningService:
@@ -153,8 +164,72 @@ class KernelLearningService:
             session.close()
 
     def update_calibration(self, competition: str, engine: str) -> None:
-        """Deferred to Phase 3."""
-        logger.info("update_calibration deferred to Phase 3")
+        """Fit linear regression calibration model and persist to DB."""
+        session = get_kernel_session()
+        try:
+            # Query recent predictions with outcomes for this competition+engine
+            query = (
+                select(KernelPrediction, KernelMatchOutcome)
+                .join(KernelMatchOutcome, KernelPrediction.match_id == KernelMatchOutcome.match_id)
+                .where(
+                    KernelPrediction.competition == competition,
+                    KernelPrediction.engine == engine,
+                    KernelMatchOutcome.outcome.isnot(None),
+                )
+                .order_by(KernelMatchOutcome.finished_at.desc())
+                .limit(_DEFAULT_LEARNING_WINDOW_SIZE)
+            )
+            results = session.execute(query).all()
+            if len(results) < _DEFAULT_MIN_SAMPLES_FOR_CALIBRATION:
+                return
+
+            x = [r[0].outcome_probabilities.get("home_win", 0) for r in results]
+            y = [1.0 if r[1].outcome == "home_win" else 0.0 for r in results]
+
+            n = len(x)
+            sum_x = sum(x)
+            sum_y = sum(y)
+            sum_xx = sum(xi * xi for xi in x)
+            sum_xy = sum(xi * yi for xi, yi in zip(x, y))
+            denominator = n * sum_xx - sum_x * sum_x
+            if abs(denominator) < 1e-10:
+                return
+
+            slope = (n * sum_xy - sum_x * sum_y) / denominator
+            intercept = (sum_y - slope * sum_x) / n
+
+            slope = max(_CALIBRATION_SLOPE_MIN, min(_CALIBRATION_SLOPE_MAX, slope))
+            intercept = max(_CALIBRATION_INTERCEPT_MIN, min(_CALIBRATION_INTERCEPT_MAX, intercept))
+
+            avg_confidence = sum_x / n
+            avg_accuracy = sum_y / n
+
+            # Upsert calibration
+            existing = session.query(KernelCalibration).filter_by(
+                engine=engine, competition=competition,
+            ).first()
+            now = datetime.now(timezone.utc)
+            if existing:
+                existing.slope = slope
+                existing.intercept = intercept
+                existing.sample_count = n
+                existing.avg_confidence = avg_confidence
+                existing.avg_accuracy = avg_accuracy
+                existing.last_updated = now
+            else:
+                cal = KernelCalibration(
+                    engine=engine, competition=competition,
+                    slope=slope, intercept=intercept,
+                    sample_count=n, avg_confidence=avg_confidence,
+                    avg_accuracy=avg_accuracy, last_updated=now,
+                )
+                session.add(cal)
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
     def update_weights(self, competition: str) -> None:
         """Deferred to Phase 3."""

@@ -68,27 +68,41 @@ def _get_kernel():
         # Phase 4: register NBA adapter + engine when enabled
         fb = FootballFeatureBuilder()
 
+        # Start with football-only builders dict; sport flags below extend it
+        builders: dict[str, object] = {
+            "wc-": fb, "ucl-": fb, "epl-": fb,
+            "laliga-": fb, "bundesliga-": fb, "seriea-": fb, "ligue1-": fb,
+        }
+        feature_builder: object = fb  # default — replaced by MultiFeatureBuilder if any sport enabled
+
         if config.settings.PHASE4_NBA_ENABLED:
             from app.sports.basketball.nba_adapter import NBAAdapter
             from app.sports.basketball.feature_builder import BasketballFeatureBuilder
             from app.sports.basketball.engines.basketball_engine import BasketballEngine
-            from app.kernel.multi_feature_builder import MultiFeatureBuilder
 
             adapters["nba-"] = NBAAdapter()
             nba_engine = BasketballEngine(factor_registry=factor_registry)
             reg.register(nba_engine)
 
             factor_registry.ensure_competition_factors("nba")
+            builders["nba-"] = BasketballFeatureBuilder()
 
-            # All football prefixes share the same FootballFeatureBuilder instance
-            builders = {
-                "wc-": fb, "ucl-": fb, "epl-": fb,
-                "laliga-": fb, "bundesliga-": fb, "seriea-": fb, "ligue1-": fb,
-                "nba-": BasketballFeatureBuilder(),
-            }
+        if config.settings.PHASE5_MLB_ENABLED:
+            from app.sports.baseball.mlb_adapter import MLBAdapter
+            from app.sports.baseball.feature_builder import BaseballFeatureBuilder
+            from app.sports.baseball.engines.baseball_engine import BaseballEngine
+
+            adapters["mlb-"] = MLBAdapter()
+            mlb_engine = BaseballEngine(factor_registry=factor_registry)
+            reg.register(mlb_engine)
+
+            factor_registry.ensure_competition_factors("mlb")
+            builders["mlb-"] = BaseballFeatureBuilder()
+
+        # If any non-football sport is enabled, wrap builders in MultiFeatureBuilder
+        if config.settings.PHASE4_NBA_ENABLED or config.settings.PHASE5_MLB_ENABLED:
+            from app.kernel.multi_feature_builder import MultiFeatureBuilder
             feature_builder = MultiFeatureBuilder(builders)
-        else:
-            feature_builder = fb
 
         from app.sports.football.adapters.multi_adapter import MultiAdapter
         multi = MultiAdapter(adapters)

@@ -57,6 +57,11 @@ def _get_kernel():
             adapters["ucl-"] = UCLAdapter()
             adapters["epl-"] = EPLAdapter()
 
+            # Phase 2b: register league-format adapters from LEAGUE_REGISTRY
+            from app.sports.football.adapters.league_adapter import LEAGUE_REGISTRY, LeagueAdapter
+            for prefix, cfg in LEAGUE_REGISTRY.items():
+                adapters[prefix] = LeagueAdapter(cfg)
+
         from app.sports.football.adapters.multi_adapter import MultiAdapter
         multi = MultiAdapter(adapters)
 

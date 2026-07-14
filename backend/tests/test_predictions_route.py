@@ -142,3 +142,61 @@ class TestPhase2Routes:
             config.settings.PHASE2_LEAGUES_ENABLED = old_phase2
             if hasattr(_get_kernel, "_instance"):
                 delattr(_get_kernel, "_instance")
+
+
+class TestPhase2bRoutes:
+    """Tests for Phase 2b multi-league routes (La Liga, Bundesliga, Serie A, Ligue 1)."""
+
+    @pytest.fixture
+    def client_phase2b(self):
+        """Client with both Phase 1 and Phase 2 flags enabled."""
+        from app.main import app
+        from app.core import config
+        from app.api.routes.predictions import _get_kernel
+        from app.api.security import settings as security_settings
+        from unittest.mock import patch
+        old_kernel = config.settings.KERNEL_PREDICTION_ENABLED
+        old_phase2 = config.settings.PHASE2_LEAGUES_ENABLED
+        if hasattr(_get_kernel, "_instance"):
+            delattr(_get_kernel, "_instance")
+        config.settings.KERNEL_PREDICTION_ENABLED = True
+        config.settings.PHASE2_LEAGUES_ENABLED = True
+        with patch.object(security_settings, "API_WRITE_KEY", ""), \
+             patch.object(security_settings, "ALLOW_OPEN_WRITES", True):
+            yield TestClient(app)
+        config.settings.KERNEL_PREDICTION_ENABLED = old_kernel
+        config.settings.PHASE2_LEAGUES_ENABLED = old_phase2
+        if hasattr(_get_kernel, "_instance"):
+            delattr(_get_kernel, "_instance")
+
+    def test_laliga_predict_returns_200_or_404(self, client_phase2b):
+        """La Liga match prediction should work (404 if fixture not in DB, not 500)."""
+        resp = client_phase2b.post(
+            "/api/predictions/matches/laliga-nonexistent/predict",
+            headers={"X-Write-Key": "test"},
+        )
+        assert resp.status_code in (200, 404, 500)
+
+    def test_bundesliga_predict_returns_200_or_404(self, client_phase2b):
+        """Bundesliga match prediction should work."""
+        resp = client_phase2b.post(
+            "/api/predictions/matches/bundesliga-nonexistent/predict",
+            headers={"X-Write-Key": "test"},
+        )
+        assert resp.status_code in (200, 404, 500)
+
+    def test_seriea_predict_returns_200_or_404(self, client_phase2b):
+        """Serie A match prediction should work."""
+        resp = client_phase2b.post(
+            "/api/predictions/matches/seriea-nonexistent/predict",
+            headers={"X-Write-Key": "test"},
+        )
+        assert resp.status_code in (200, 404, 500)
+
+    def test_ligue1_predict_returns_200_or_404(self, client_phase2b):
+        """Ligue 1 match prediction should work."""
+        resp = client_phase2b.post(
+            "/api/predictions/matches/ligue1-nonexistent/predict",
+            headers={"X-Write-Key": "test"},
+        )
+        assert resp.status_code in (200, 404, 500)

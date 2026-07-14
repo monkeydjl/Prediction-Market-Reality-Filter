@@ -18,7 +18,7 @@ from app.kernel.domain import (
 from app.kernel.kernel_db import (
     get_kernel_session,
     KernelPrediction, KernelMatchOutcome, KernelEngineScore,
-    KernelCalibration,
+    KernelCalibration, KernelPredictionHistory,
 )
 from app.kernel.factor_registry import FactorRegistry
 
@@ -76,6 +76,20 @@ class KernelLearningService:
                     updated_at=now,
                 )
                 session.add(record)
+            session.commit()
+
+            # Write to KernelPredictionHistory (Phase 3)
+            history = KernelPredictionHistory(
+                match_id=match.match_id,
+                engine=prediction.engine_name,
+                predicted_scores=prediction.predicted_scores,
+                outcome_probabilities=prediction.outcome_probabilities,
+                confidence=prediction.confidence,
+                feature_version=prediction.feature_version,
+                trigger="initial",
+                created_at=now,
+            )
+            session.add(history)
             session.commit()
         except Exception:
             session.rollback()
@@ -343,14 +357,51 @@ class KernelLearningService:
             avg_mae = sum(r.score_mae or 0 for r in results) / count
             avg_brier = sum(r.brier_score or 0 for r in results) / count
 
-            return EngineScore(
+            # Read confidence_calibration from KernelCalibration
+            confidence_calibration = 0.0
+            if competition is not None:
+                cal = session.query(KernelCalibration).filter_by(
+                    engine=engine, competition=competition,
+                ).first()
+                if cal:
+                    confidence_calibration = cal.avg_accuracy / max(cal.avg_confidence, 1e-6)
+
+            score = EngineScore(
                 engine=engine, competition=competition,
                 accuracy=round(accuracy, 4),
                 avg_mae=round(avg_mae, 4),
                 brier_score=round(avg_brier, 4),
                 sample_count=count,
-                confidence_calibration=0.0,  # Phase 3
+                confidence_calibration=round(confidence_calibration, 4),
                 last_updated=datetime.now(timezone.utc),
             )
+
+            # Persist to KernelEngineScore table
+            existing = session.query(KernelEngineScore).filter_by(
+                engine=engine, competition=competition,
+            ).first()
+            now = datetime.now(timezone.utc)
+            if existing:
+                existing.accuracy = score.accuracy
+                existing.avg_mae = score.avg_mae
+                existing.brier_score = score.brier_score
+                existing.sample_count = count
+                existing.confidence_calibration = score.confidence_calibration
+                existing.last_updated = now
+            else:
+                row = KernelEngineScore(
+                    engine=engine, competition=competition,
+                    accuracy=score.accuracy, avg_mae=score.avg_mae,
+                    brier_score=score.brier_score, sample_count=count,
+                    confidence_calibration=score.confidence_calibration,
+                    last_updated=now,
+                )
+                session.add(row)
+            session.commit()
+
+            return score
+        except Exception:
+            session.rollback()
+            raise
         finally:
             session.close()

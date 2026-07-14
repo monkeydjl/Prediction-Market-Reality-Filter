@@ -20,6 +20,7 @@ from app.kernel.kernel_db import (
     KernelPrediction, KernelMatchOutcome, KernelEngineScore,
     KernelCalibration, KernelPredictionHistory,
 )
+from app.core import config
 from app.kernel.factor_registry import FactorRegistry
 
 logger = logging.getLogger(__name__)
@@ -29,15 +30,6 @@ _CALIBRATION_SLOPE_MIN = 0.0
 _CALIBRATION_SLOPE_MAX = 2.0
 _CALIBRATION_INTERCEPT_MIN = -0.5
 _CALIBRATION_INTERCEPT_MAX = 0.5
-
-# Defaults used until config.py has the Phase 3 settings (added in Task 7)
-_DEFAULT_LEARNING_WINDOW_SIZE = 30
-_DEFAULT_MIN_SAMPLES_FOR_CALIBRATION = 10
-
-# EWMA weight-update constants (Phase 3 — see spec Section 3.4)
-_DEFAULT_EWMA_ALPHA = 0.1
-_WEIGHT_FLOOR = 0.05
-_WEIGHT_CEILING = 0.95
 
 
 class KernelLearningService:
@@ -200,10 +192,10 @@ class KernelLearningService:
                     KernelMatchOutcome.outcome.isnot(None),
                 )
                 .order_by(KernelMatchOutcome.finished_at.desc())
-                .limit(_DEFAULT_LEARNING_WINDOW_SIZE)
+                .limit(config.settings.LEARNING_WINDOW_SIZE)
             )
             results = session.execute(query).all()
-            if len(results) < _DEFAULT_MIN_SAMPLES_FOR_CALIBRATION:
+            if len(results) < config.settings.MIN_SAMPLES_FOR_CALIBRATION:
                 return
 
             x = [r[0].outcome_probabilities.get("home_win", 0) for r in results]
@@ -270,10 +262,10 @@ class KernelLearningService:
                     KernelMatchOutcome.outcome.isnot(None),
                 )
                 .order_by(KernelMatchOutcome.finished_at.desc())
-                .limit(_DEFAULT_LEARNING_WINDOW_SIZE)
+                .limit(config.settings.LEARNING_WINDOW_SIZE)
             )
             results = session.execute(query).all()
-            if len(results) < _DEFAULT_MIN_SAMPLES_FOR_CALIBRATION:
+            if len(results) < config.settings.MIN_SAMPLES_FOR_CALIBRATION:
                 return
 
             elo_correct = 0
@@ -316,10 +308,10 @@ class KernelLearningService:
             w_elo_old = self._factor_registry.get_weight("elo", competition)
             w_odds_old = self._factor_registry.get_weight("odds", competition)
 
-            alpha = _DEFAULT_EWMA_ALPHA
-            w_elo_new = max(_WEIGHT_FLOOR, min(_WEIGHT_CEILING,
+            alpha = config.settings.EWMA_ALPHA
+            w_elo_new = max(config.settings.WEIGHT_FLOOR, min(config.settings.WEIGHT_CEILING,
                           alpha * w_elo_target + (1 - alpha) * w_elo_old))
-            w_odds_new = max(_WEIGHT_FLOOR, min(_WEIGHT_CEILING,
+            w_odds_new = max(config.settings.WEIGHT_FLOOR, min(config.settings.WEIGHT_CEILING,
                            1.0 - w_elo_new))
 
             self._factor_registry.update_weight("elo", competition, w_elo_new, source="ewma")

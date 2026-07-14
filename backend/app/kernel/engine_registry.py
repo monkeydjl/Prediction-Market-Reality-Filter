@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from app.core import config
 from app.kernel.protocols import PredictionEngine
 
 if TYPE_CHECKING:
     from app.kernel.protocols import LearningService
-
-# Minimum samples for dynamic engine selection (hardcoded — see spec Section 3.4)
-_MIN_SAMPLES_FOR_ENGINE_SELECT = 5
 
 
 class EngineRegistry:
@@ -42,8 +40,8 @@ class EngineRegistry:
 
         When engine_name is 'auto' and a LearningService is available,
         selects the engine with the highest accuracy that has at least
-        _MIN_SAMPLES_FOR_ENGINE_SELECT samples. Falls back to default
-        engine if no engine has enough samples.
+        config.settings.MIN_SAMPLES_FOR_ENGINE_SELECT samples. Falls back
+        to default engine if no engine has enough samples.
         """
         if engine_name != "auto":
             return self.get(engine_name)
@@ -55,9 +53,10 @@ class EngineRegistry:
         if self._learning_service is not None:
             best_engine = None
             best_accuracy = -1.0
+            min_samples = config.settings.MIN_SAMPLES_FOR_ENGINE_SELECT
             for name, engine in self._engines.items():
                 score = self._learning_service.engine_score(name, competition)
-                if score and score.sample_count >= _MIN_SAMPLES_FOR_ENGINE_SELECT:
+                if score and score.sample_count >= min_samples:
                     if score.accuracy > best_accuracy:
                         best_accuracy = score.accuracy
                         best_engine = engine

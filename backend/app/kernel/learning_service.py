@@ -143,11 +143,13 @@ class KernelLearningService:
             ) if pred.outcome_probabilities else None
             outcome_correct = (predicted_outcome == outcome.outcome)
 
-            # Brier score
+            # Brier score — dynamically iterate outcome keys
+            # (supports both football 3-way and basketball binary)
             probs = pred.outcome_probabilities
+            outcome_keys = list(probs.keys())
             brier = sum(
                 (probs.get(k, 0) - (1.0 if k == outcome.outcome else 0.0)) ** 2
-                for k in ["home_win", "draw", "away_win"]
+                for k in outcome_keys
             )
 
             # Confidence calibrated
@@ -268,54 +270,51 @@ class KernelLearningService:
             if len(results) < config.settings.MIN_SAMPLES_FOR_CALIBRATION:
                 return
 
-            elo_correct = 0
-            elo_total = 0
-            odds_correct = 0
-            odds_total = 0
-
+            # Dynamic factor collection — supports any number of factors
+            # (football: elo+odds, basketball: elo+home_court+rest+form)
+            factor_stats: dict[str, dict[str, int]] = {}  # {factor_id: {correct, total}}
             for pred, outcome in results:
                 actual = outcome.outcome
-                explanation = pred.explanation or []
-                for item in explanation:
+                for item in pred.explanation or []:
                     if not isinstance(item, dict):
                         continue
                     factor = item.get("factor")
                     predicted = item.get("predicted_outcome")
-                    if not predicted:
+                    if not factor or not predicted:
                         continue
-                    if factor == "elo":
-                        elo_total += 1
-                        if predicted == actual:
-                            elo_correct += 1
-                    elif factor == "odds":
-                        odds_total += 1
-                        if predicted == actual:
-                            odds_correct += 1
+                    if factor not in factor_stats:
+                        factor_stats[factor] = {"correct": 0, "total": 0}
+                    factor_stats[factor]["total"] += 1
+                    if predicted == actual:
+                        factor_stats[factor]["correct"] += 1
 
-            if elo_total == 0 or odds_total == 0:
+            # Skip if any factor has 0 samples
+            if not factor_stats or any(s["total"] == 0 for s in factor_stats.values()):
                 return
 
-            elo_acc = elo_correct / elo_total
-            odds_acc = odds_correct / odds_total
-
-            total_acc = elo_acc + odds_acc
+            # Compute accuracy per factor, normalize to target weights
+            accuracies = {f: s["correct"] / s["total"] for f, s in factor_stats.items()}
+            total_acc = sum(accuracies.values())
             if total_acc == 0:
                 return
+            target_weights = {f: acc / total_acc for f, acc in accuracies.items()}
 
-            w_elo_target = elo_acc / total_acc
-            w_odds_target = odds_acc / total_acc
-
-            w_elo_old = self._factor_registry.get_weight("elo", competition)
-            w_odds_old = self._factor_registry.get_weight("odds", competition)
-
+            # EWMA update for each factor
             alpha = config.settings.EWMA_ALPHA
-            w_elo_new = max(config.settings.WEIGHT_FLOOR, min(config.settings.WEIGHT_CEILING,
-                          alpha * w_elo_target + (1 - alpha) * w_elo_old))
-            w_odds_new = max(config.settings.WEIGHT_FLOOR, min(config.settings.WEIGHT_CEILING,
-                           1.0 - w_elo_new))
+            for factor_id, target_w in target_weights.items():
+                old_w = self._factor_registry.get_weight(factor_id, competition)
+                new_w = max(config.settings.WEIGHT_FLOOR, min(config.settings.WEIGHT_CEILING,
+                           alpha * target_w + (1 - alpha) * old_w))
+                self._factor_registry.update_weight(factor_id, competition, new_w, source="ewma")
 
-            self._factor_registry.update_weight("elo", competition, w_elo_new, source="ewma")
-            self._factor_registry.update_weight("odds", competition, w_odds_new, source="ewma")
+            # Normalize last factor to ensure weights sum to 1.0
+            # (handles clamp rounding drift — same pattern as old code's
+            # w_odds = 1.0 - w_elo for football's 2-factor case)
+            factors = list(target_weights.keys())
+            if len(factors) > 1:
+                sum_w = sum(self._factor_registry.get_weight(f, competition) for f in factors[:-1])
+                last_w = max(config.settings.WEIGHT_FLOOR, min(config.settings.WEIGHT_CEILING, 1.0 - sum_w))
+                self._factor_registry.update_weight(factors[-1], competition, last_w, source="ewma")
         except Exception:
             session.rollback()
             raise

@@ -996,5 +996,15 @@ class Settings:
         os.getenv("CLUB_ELO_REQUEST_INTERVAL", "1.0")
     )
 
+    # Phase 4 — NBA Integration (default OFF). When false, nba- prefix
+    # match_ids return 404 and NBAAdapter/BasketballEngine are not
+    # instantiated.
+    PHASE4_NBA_ENABLED: bool = _env_bool("PHASE4_NBA_ENABLED", "false")
+    BALLDONTLIE_API_KEY: str = os.getenv("BALLDONTLIE_API_KEY", "")
+    NBA_ELO_HFA: int = int(os.getenv("NBA_ELO_HFA", "100"))
+    NBA_ELO_K_REGULAR: int = int(os.getenv("NBA_ELO_K_REGULAR", "20"))
+    NBA_ELO_K_PLAYOFF: int = int(os.getenv("NBA_ELO_K_PLAYOFF", "30"))
+    NBA_LEAGUE_AVG_TOTAL: float = float(os.getenv("NBA_LEAGUE_AVG_TOTAL", "220.0"))
+
 
 settings = Settings()

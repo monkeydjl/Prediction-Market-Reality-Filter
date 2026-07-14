@@ -88,5 +88,33 @@ class ConfigDefaultTests(unittest.TestCase):
         self.assertEqual(settings.REVIEW_QUEUE_AUTO_RESOLVE_CONFIDENCE, 0.95)
 
 
+class TestPhase4Config:
+    """Phase 4 NBA configuration fields."""
+
+    def test_phase4_nba_enabled_defaults_false(self):
+        from app.core import config
+        assert config.settings.PHASE4_NBA_ENABLED is False
+
+    def test_balldontlie_api_key_defaults_empty(self):
+        from app.core import config
+        assert config.settings.BALLDONTLIE_API_KEY == ""
+
+    def test_nba_elo_hfa_default(self):
+        from app.core import config
+        assert config.settings.NBA_ELO_HFA == 100
+
+    def test_nba_elo_k_regular_default(self):
+        from app.core import config
+        assert config.settings.NBA_ELO_K_REGULAR == 20
+
+    def test_nba_elo_k_playoff_default(self):
+        from app.core import config
+        assert config.settings.NBA_ELO_K_PLAYOFF == 30
+
+    def test_nba_league_avg_total_default(self):
+        from app.core import config
+        assert config.settings.NBA_LEAGUE_AVG_TOTAL == 220.0
+
+
 if __name__ == "__main__":
     unittest.main()

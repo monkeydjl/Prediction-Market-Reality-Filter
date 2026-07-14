@@ -1006,5 +1006,26 @@ class Settings:
     NBA_ELO_K_PLAYOFF: int = int(os.getenv("NBA_ELO_K_PLAYOFF", "30"))
     NBA_LEAGUE_AVG_TOTAL: float = float(os.getenv("NBA_LEAGUE_AVG_TOTAL", "220.0"))
 
+    # Phase 5 — MLB/NHL Integration (default OFF). When false, mlb-/nhl-
+    # prefix match_ids return 404 and MLB/NHL components are not
+    # instantiated. MLB/NHL stats APIs require no API key (graceful
+    # degradation when unreachable: sync_schedule returns 0).
+    PHASE5_MLB_ENABLED: bool = _env_bool("PHASE5_MLB_ENABLED", "false")
+    PHASE5_NHL_ENABLED: bool = _env_bool("PHASE5_NHL_ENABLED", "false")
+
+    # MLB Elo parameters (self-computed from historical games)
+    MLB_ELO_HFA: int = int(os.getenv("MLB_ELO_HFA", "50"))
+    MLB_ELO_K_REGULAR: int = int(os.getenv("MLB_ELO_K_REGULAR", "20"))
+    MLB_ELO_K_PLAYOFF: int = int(os.getenv("MLB_ELO_K_PLAYOFF", "30"))
+    MLB_ELO_SEASON_CARRY: float = float(os.getenv("MLB_ELO_SEASON_CARRY", "0.7"))
+    MLB_LEAGUE_AVG_TOTAL: float = float(os.getenv("MLB_LEAGUE_AVG_TOTAL", "8.5"))
+
+    # NHL Elo parameters
+    NHL_ELO_HFA: int = int(os.getenv("NHL_ELO_HFA", "55"))
+    NHL_ELO_K_REGULAR: int = int(os.getenv("NHL_ELO_K_REGULAR", "20"))
+    NHL_ELO_K_PLAYOFF: int = int(os.getenv("NHL_ELO_K_PLAYOFF", "30"))
+    NHL_ELO_SEASON_CARRY: float = float(os.getenv("NHL_ELO_SEASON_CARRY", "0.75"))
+    NHL_LEAGUE_AVG_TOTAL: float = float(os.getenv("NHL_LEAGUE_AVG_TOTAL", "5.5"))
+
 
 settings = Settings()

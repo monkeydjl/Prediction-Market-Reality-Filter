@@ -116,5 +116,57 @@ class TestPhase4Config:
         assert config.settings.NBA_LEAGUE_AVG_TOTAL == 220.0
 
 
+class TestPhase5Config:
+    """Phase 5 MLB/NHL configuration fields."""
+
+    def test_phase5_mlb_enabled_defaults_false(self):
+        from app.core import config
+        assert config.settings.PHASE5_MLB_ENABLED is False
+
+    def test_phase5_nhl_enabled_defaults_false(self):
+        from app.core import config
+        assert config.settings.PHASE5_NHL_ENABLED is False
+
+    def test_mlb_elo_hfa_default(self):
+        from app.core import config
+        assert config.settings.MLB_ELO_HFA == 50
+
+    def test_mlb_elo_k_regular_default(self):
+        from app.core import config
+        assert config.settings.MLB_ELO_K_REGULAR == 20
+
+    def test_mlb_elo_k_playoff_default(self):
+        from app.core import config
+        assert config.settings.MLB_ELO_K_PLAYOFF == 30
+
+    def test_mlb_elo_season_carry_default(self):
+        from app.core import config
+        assert config.settings.MLB_ELO_SEASON_CARRY == 0.7
+
+    def test_mlb_league_avg_total_default(self):
+        from app.core import config
+        assert config.settings.MLB_LEAGUE_AVG_TOTAL == 8.5
+
+    def test_nhl_elo_hfa_default(self):
+        from app.core import config
+        assert config.settings.NHL_ELO_HFA == 55
+
+    def test_nhl_elo_k_regular_default(self):
+        from app.core import config
+        assert config.settings.NHL_ELO_K_REGULAR == 20
+
+    def test_nhl_elo_k_playoff_default(self):
+        from app.core import config
+        assert config.settings.NHL_ELO_K_PLAYOFF == 30
+
+    def test_nhl_elo_season_carry_default(self):
+        from app.core import config
+        assert config.settings.NHL_ELO_SEASON_CARRY == 0.75
+
+    def test_nhl_league_avg_total_default(self):
+        from app.core import config
+        assert config.settings.NHL_LEAGUE_AVG_TOTAL == 5.5
+
+
 if __name__ == "__main__":
     unittest.main()

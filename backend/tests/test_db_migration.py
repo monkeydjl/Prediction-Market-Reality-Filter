@@ -73,3 +73,37 @@ class TestDBMigration:
             assert result.sample_count == 15
         finally:
             session.close()
+
+
+class TestKernelEloRatingTable:
+    """Phase 4: kernel_elo_ratings table for self-computed NBA Elo."""
+
+    def test_elo_ratings_table_created(self, tmp_path):
+        """KernelEloRating table is created by init_kernel_db()."""
+        from app.kernel.kernel_db import (
+            init_kernel_db, close_kernel_session, get_kernel_session,
+            KernelEloRating,
+        )
+        db_path = str(tmp_path / "kernel_elo_test.db")
+        init_kernel_db(db_path)
+        try:
+            session = get_kernel_session()
+            # Verify table exists by inserting and querying a row
+            from datetime import datetime, timezone
+            row = KernelEloRating(
+                team_name="Boston Celtics",
+                sport="basketball",
+                competition="nba",
+                elo_rating=1650.0,
+                source="self_computed",
+                updated_at=datetime.now(timezone.utc),
+            )
+            session.add(row)
+            session.commit()
+            fetched = session.get(KernelEloRating, "Boston Celtics")
+            assert fetched is not None
+            assert fetched.elo_rating == 1650.0
+            assert fetched.competition == "nba"
+            session.close()
+        finally:
+            close_kernel_session()

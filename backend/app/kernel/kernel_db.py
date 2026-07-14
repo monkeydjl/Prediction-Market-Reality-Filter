@@ -165,6 +165,23 @@ class KernelClubEloCache(KernelBase):
     level = Column(Integer)
 
 
+class KernelEloRating(KernelBase):
+    """Self-computed Elo ratings for sports without external Elo sources.
+
+    Used by NBA (basketball) where no external Elo API exists. Follows
+    the kernel_ prefix convention. Can be reused for future self-computed
+    Elo in other sports.
+    """
+    __tablename__ = "kernel_elo_ratings"
+
+    team_name = Column(String, primary_key=True)
+    sport = Column(String, nullable=False)
+    competition = Column(String, nullable=False)
+    elo_rating = Column(Float, nullable=False)
+    source = Column(String, default="self_computed")
+    updated_at = Column(DateTime, nullable=False)
+
+
 def init_kernel_db(db_path: str | None = None) -> None:
     """Initialize the kernel database. Creates tables if they don't exist."""
     global _engine, _SessionLocal

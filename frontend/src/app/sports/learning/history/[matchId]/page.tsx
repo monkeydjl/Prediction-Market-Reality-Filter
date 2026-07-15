@@ -1,7 +1,6 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import Link from "next/link";
 import { PredictionTrajectory } from "@/components/sports/learning/prediction-trajectory";
 
 export default function MatchTrajectoryPage() {

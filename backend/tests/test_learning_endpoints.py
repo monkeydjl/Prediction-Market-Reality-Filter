@@ -310,6 +310,34 @@ class TestComputeReliabilityBins:
         assert abs(bin_50_60["avg_predicted"] - 0.565) < 0.01
         assert abs(bin_50_60["actual_frequency"] - 0.5) < 0.01
 
+    def test_reliability_bins_boundary_precision(self, db):
+        # Regression: int(predicted_prob / bin_width) suffered float truncation,
+        # mis-binning 0.3 -> bin 2, 0.6 -> bin 5, 0.7 -> bin 6. With bins=10
+        # the correct indices are 3, 6, 7 (each prob * 10 is an exact integer).
+        # 0.3 must be the max prob, so spread the remaining mass across outcomes.
+        _insert_prediction(db, match_id="m03",
+                           probs={"a": 0.3, "b": 0.3, "c": 0.3, "d": 0.1})
+        _insert_outcome(db, match_id="m03", correct=1)
+        _insert_prediction(db, match_id="m06",
+                           probs={"home_win": 0.6, "away_win": 0.4})
+        _insert_outcome(db, match_id="m06", correct=1)
+        _insert_prediction(db, match_id="m07",
+                           probs={"home_win": 0.7, "away_win": 0.3})
+        _insert_outcome(db, match_id="m07", correct=0)
+        result = compute_reliability_bins(bins=10)
+        bins = result["bins"]
+        # Correct bins after the fix
+        assert bins[3]["count"] == 1  # 0.3 -> bin [0.3, 0.4)
+        assert bins[6]["count"] == 1  # 0.6 -> bin [0.6, 0.7)
+        assert bins[7]["count"] == 1  # 0.7 -> bin [0.7, 0.8)
+        # The previously-mis-binned indices must be empty
+        assert bins[2]["count"] == 0
+        assert bins[5]["count"] == 0
+        # bin 6 was the old wrong home for 0.7; only 0.6 should be there now
+        assert bins[6]["count"] == 1
+        assert abs(bins[6]["avg_predicted"] - 0.6) < 0.01
+        assert abs(bins[7]["avg_predicted"] - 0.7) < 0.01
+
 
 # --- Endpoint tests ---
 

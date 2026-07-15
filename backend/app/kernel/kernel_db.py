@@ -522,8 +522,10 @@ def compute_reliability_bins(engine: str | None = None,
             predicted_prob = max(probs.values())
             actual = outcome.outcome_correct  # 1 or 0
 
-            # Determine bin index (clamp to last bin for prob=1.0)
-            bin_idx = min(int(predicted_prob / bin_width), bins - 1)
+            # Determine bin index (clamp to last bin for prob=1.0).
+            # Use multiplication instead of division by bin_width to avoid
+            # float truncation bugs (e.g. 0.3 / 0.1 = 2.9999... -> bin 2).
+            bin_idx = min(int(predicted_prob * bins), bins - 1)
             bin_sums[bin_idx]["predicted_sum"] += predicted_prob
             bin_sums[bin_idx]["actual_sum"] += actual
             bin_sums[bin_idx]["count"] += 1

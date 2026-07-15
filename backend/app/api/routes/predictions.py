@@ -154,6 +154,8 @@ def predict_match(match_id: str, engine: str = "auto", _auth: None = Depends(req
             "outcome_probabilities": result.outcome_probabilities,
             "confidence": result.confidence,
             "explanation": [c.__dict__ for c in result.explanation],
+            "feature_version": result.feature_version,
+            "prediction_timestamp": result.prediction_timestamp.isoformat(),
         }
     except Exception as e:
         logger.error("Prediction failed for %s: %s", match_id, e)
@@ -186,4 +188,108 @@ def engine_score(name: str, competition: str | None = None):
         "avg_mae": score.avg_mae,
         "brier_score": score.brier_score,
         "sample_count": score.sample_count,
+    }
+
+
+@router.get("/matches")
+def list_matches(sport: str | None = None):
+    """List today's matches across all sports."""
+    if not config.settings.KERNEL_PREDICTION_ENABLED:
+        raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")
+    kernel = _get_kernel()
+    from app.kernel.protocols import ScheduleFilter
+    raw_matches = kernel._adapter.fetch_schedule(ScheduleFilter())
+
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).date()
+    today_matches = []
+    for m in raw_matches:
+        kickoff = m.match.kickoff_utc
+        if kickoff is not None and kickoff.date() == today:
+            today_matches.append(m)
+
+    if sport:
+        today_matches = [m for m in today_matches
+                         if m.match.season.competition.sport.code == sport]
+
+    from app.kernel.kernel_db import get_match_ids_with_predictions
+    predicted_ids = get_match_ids_with_predictions([m.match.match_id for m in today_matches])
+
+    return [_match_summary(m, predicted_ids) for m in today_matches]
+
+
+@router.get("/matches/{match_id}")
+def get_match(match_id: str):
+    """Get match detail and latest prediction (if any)."""
+    if not config.settings.KERNEL_PREDICTION_ENABLED:
+        raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")
+    kernel = _get_kernel()
+    match = kernel._adapter.get_match_identity(match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+
+    from app.kernel.kernel_db import get_latest_prediction
+    latest = get_latest_prediction(match_id)
+
+    return {
+        "match": _match_detail(match),
+        "prediction": _prediction_to_dict(latest) if latest else None,
+    }
+
+
+def _match_summary(raw, predicted_ids: set[str]) -> dict:
+    """Compact match summary for list endpoint."""
+    m = raw.match
+    return {
+        "match_id": m.match_id,
+        "sport": m.season.competition.sport.code,
+        "competition": m.season.competition.code,
+        "home_team": m.home.name,
+        "away_team": m.away.name,
+        "home_code": m.home.code,
+        "away_code": m.away.code,
+        "kickoff_utc": m.kickoff_utc.isoformat() if m.kickoff_utc else None,
+        "stage": m.stage,
+        "has_prediction": m.match_id in predicted_ids,
+    }
+
+
+def _match_detail(match) -> dict:
+    """Full match detail for detail endpoint."""
+    return {
+        "match_id": match.match_id,
+        "sport": match.season.competition.sport.code,
+        "competition": match.season.competition.code,
+        "season_key": match.season.season_key,
+        "home_team": match.home.name,
+        "away_team": match.away.name,
+        "home_code": match.home.code,
+        "away_code": match.away.code,
+        "kickoff_utc": match.kickoff_utc.isoformat() if match.kickoff_utc else None,
+        "stage": match.stage,
+        "round": match.round,
+    }
+
+
+def _prediction_to_dict(pred) -> dict:
+    """Convert PredictionResult (dataclass) or KernelPrediction (ORM) to dict."""
+    import json
+    from datetime import datetime
+
+    explanation = pred.explanation
+    if isinstance(explanation, str):
+        explanation = json.loads(explanation)
+
+    timestamp = pred.prediction_timestamp if hasattr(pred, "prediction_timestamp") else pred.created_at
+    if isinstance(timestamp, datetime):
+        timestamp = timestamp.isoformat()
+
+    return {
+        "engine": pred.engine,
+        "predicted_scores": pred.predicted_scores,
+        "outcome_probabilities": pred.outcome_probabilities,
+        "confidence": pred.confidence,
+        "explanation": explanation,
+        "feature_version": pred.feature_version,
+        "prediction_timestamp": timestamp,
     }

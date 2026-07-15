@@ -1027,5 +1027,32 @@ class Settings:
     NHL_ELO_SEASON_CARRY: float = float(os.getenv("NHL_ELO_SEASON_CARRY", "0.75"))
     NHL_LEAGUE_AVG_TOTAL: float = float(os.getenv("NHL_LEAGUE_AVG_TOTAL", "5.5"))
 
+    # Phase 7 — Sport Market Bridge (default OFF). Connects the Sports
+    # Prediction Kernel with Polymarket + The Odds API to produce verified
+    # market-implied probabilities per match outcome. When the master flag is
+    # false, all new endpoints return 503 and collection tasks are not
+    # scheduled.
+    PHASE7_SPORT_MARKET_BRIDGE_ENABLED: bool = _env_bool(
+        "PHASE7_SPORT_MARKET_BRIDGE_ENABLED", "false"
+    )
+    PHASE7_POLYMARKET_SPORTS_SOURCE_ENABLED: bool = _env_bool(
+        "PHASE7_POLYMARKET_SPORTS_SOURCE_ENABLED", "false"
+    )
+    PHASE7_ODDS_API_MULTI_LEAGUE_ENABLED: bool = _env_bool(
+        "PHASE7_ODDS_API_MULTI_LEAGUE_ENABLED", "false"
+    )
+    PHASE7_SPORT_MARKET_BRIDGE_SCHEDULER_ENABLED: bool = _env_bool(
+        "PHASE7_SPORT_MARKET_BRIDGE_SCHEDULER_ENABLED", "false"
+    )
+    PHASE7_SPORT_MARKET_SNAPSHOT_INTERVAL_SECONDS: int = int(
+        os.getenv("PHASE7_SPORT_MARKET_SNAPSHOT_INTERVAL_SECONDS", "300")
+    )
+    PHASE7_POLYMARKET_SPORTS_FETCH_INTERVAL_SECONDS: int = int(
+        os.getenv("PHASE7_POLYMARKET_SPORTS_FETCH_INTERVAL_SECONDS", "600")
+    )
+    PHASE7_SPORT_MARKET_LINK_PENDING_THRESHOLD: float = float(
+        os.getenv("PHASE7_SPORT_MARKET_LINK_PENDING_THRESHOLD", "0.6")
+    )
+
 
 settings = Settings()

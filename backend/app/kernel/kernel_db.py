@@ -289,3 +289,264 @@ def get_match_ids_with_predictions(match_ids: list[str]) -> set[str]:
         return {row[0] for row in rows}
     except Exception:
         return set()
+
+
+# --- Learning Dashboard query functions ---
+
+
+def get_engine_scores(engine: str | None = None,
+                      competition: str | None = None,
+                      sport: str | None = None) -> list[KernelEngineScore]:
+    """Get engine performance scores, optionally filtered.
+
+    Args:
+        engine: Filter by engine name.
+        competition: Filter by competition code.
+        sport: Filter by sport code — reverse-lookup via COMPETITION_SPORT
+               mapping (defined in predictions.py to avoid circular import).
+               Here we accept sport and convert to competition list.
+
+    Note: COMPETITION_SPORT is imported lazily to avoid circular dependency.
+    """
+    session = get_kernel_session()
+    try:
+        query = session.query(KernelEngineScore)
+        if engine is not None:
+            query = query.filter(KernelEngineScore.engine == engine)
+        if competition is not None:
+            query = query.filter(KernelEngineScore.competition == competition)
+        if sport is not None:
+            # Reverse-lookup: sport → competition list
+            from app.api.routes.predictions import COMPETITION_SPORT
+            competitions = [c for c, s in COMPETITION_SPORT.items() if s == sport]
+            if competitions:
+                query = query.filter(KernelEngineScore.competition.in_(competitions))
+            else:
+                return []  # No matching competitions
+        return query.all()
+    except Exception:
+        return []
+    finally:
+        session.close()
+
+
+def get_prediction_history(sport: str | None = None,
+                           competition: str | None = None,
+                           limit: int = 50,
+                           offset: int = 0) -> tuple[list[dict], int]:
+    """Get prediction history with optional filters, paginated.
+
+    Returns (items, total) where items is a list of dicts with history +
+    outcome data, and total is the unpaginated count.
+    """
+    session = get_kernel_session()
+    try:
+        # Build base query with JOINs
+        query = (
+            session.query(KernelPredictionHistory, KernelMatchOutcome, KernelPrediction)
+            .outerjoin(KernelMatchOutcome,
+                       KernelPredictionHistory.match_id == KernelMatchOutcome.match_id)
+            .outerjoin(KernelPrediction,
+                       KernelPredictionHistory.match_id == KernelPrediction.match_id)
+        )
+
+        # Apply filters on KernelPrediction
+        if sport is not None:
+            query = query.filter(KernelPrediction.sport == sport)
+        if competition is not None:
+            query = query.filter(KernelPrediction.competition == competition)
+
+        # Get total count (before pagination)
+        total = query.count()
+
+        # Apply pagination + ordering
+        rows = (
+            query
+            .order_by(KernelPredictionHistory.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .all()
+        )
+
+        items = []
+        for hist, outcome, pred in rows:
+            item = {
+                "id": hist.id,
+                "match_id": hist.match_id,
+                "sport": pred.sport if pred else None,
+                "competition": pred.competition if pred else None,
+                "engine": hist.engine,
+                "predicted_scores": hist.predicted_scores,
+                "outcome_probabilities": hist.outcome_probabilities,
+                "confidence": hist.confidence,
+                "feature_version": hist.feature_version,
+                "trigger": hist.trigger,
+                "created_at": hist.created_at.isoformat() if hist.created_at else None,
+                "outcome": None,
+            }
+            if outcome is not None:
+                item["outcome"] = {
+                    "home_score": outcome.home_score,
+                    "away_score": outcome.away_score,
+                    "outcome": outcome.outcome,
+                    "outcome_correct": outcome.outcome_correct,
+                    "score_mae": outcome.score_mae,
+                    "brier_score": outcome.brier_score,
+                    "finished_at": outcome.finished_at.isoformat() if outcome.finished_at else None,
+                }
+            items.append(item)
+
+        return items, total
+    except Exception:
+        return [], 0
+    finally:
+        session.close()
+
+
+def get_prediction_history_by_match(match_id: str) -> dict:
+    """Get all prediction history records for a single match, time-sorted ASC.
+
+    Returns {match_id, sport, competition, items, count}.
+    Returns empty items (NOT 404) when match_id has no history.
+    """
+    session = get_kernel_session()
+    try:
+        rows = (
+            session.query(KernelPredictionHistory, KernelPrediction)
+            .outerjoin(KernelPrediction,
+                       KernelPredictionHistory.match_id == KernelPrediction.match_id)
+            .filter(KernelPredictionHistory.match_id == match_id)
+            .order_by(KernelPredictionHistory.created_at.asc())
+            .all()
+        )
+
+        sport = None
+        competition = None
+        items = []
+        for hist, pred in rows:
+            if pred is not None and sport is None:
+                sport = pred.sport
+                competition = pred.competition
+            items.append({
+                "id": hist.id,
+                "match_id": hist.match_id,
+                "sport": pred.sport if pred else None,
+                "competition": pred.competition if pred else None,
+                "engine": hist.engine,
+                "predicted_scores": hist.predicted_scores,
+                "outcome_probabilities": hist.outcome_probabilities,
+                "confidence": hist.confidence,
+                "feature_version": hist.feature_version,
+                "trigger": hist.trigger,
+                "created_at": hist.created_at.isoformat() if hist.created_at else None,
+                "outcome": None,  # trajectory doesn't need outcome per record
+            })
+
+        return {
+            "match_id": match_id,
+            "sport": sport,
+            "competition": competition,
+            "items": items,
+            "count": len(items),
+        }
+    except Exception:
+        return {"match_id": match_id, "sport": None, "competition": None, "items": [], "count": 0}
+    finally:
+        session.close()
+
+
+def get_calibrations(engine: str | None = None,
+                     competition: str | None = None) -> list[KernelCalibration]:
+    """Get calibration parameters, optionally filtered."""
+    session = get_kernel_session()
+    try:
+        query = session.query(KernelCalibration)
+        if engine is not None:
+            query = query.filter(KernelCalibration.engine == engine)
+        if competition is not None:
+            query = query.filter(KernelCalibration.competition == competition)
+        return query.all()
+    except Exception:
+        return []
+    finally:
+        session.close()
+
+
+def compute_reliability_bins(engine: str | None = None,
+                             competition: str | None = None,
+                             bins: int = 10) -> dict:
+    """Compute binned reliability data on-the-fly.
+
+    Bins predictions by max(outcome_probabilities) and compares to actual
+    outcome_correct frequency. Returns bins with avg_predicted,
+    actual_frequency, and count per bin.
+
+    Empty bins (count=0) return avg_predicted=null, actual_frequency=null.
+    """
+    session = get_kernel_session()
+    try:
+        query = (
+            session.query(KernelPrediction, KernelMatchOutcome)
+            .join(KernelMatchOutcome,
+                  KernelPrediction.match_id == KernelMatchOutcome.match_id)
+            .filter(KernelMatchOutcome.outcome_correct.isnot(None))
+        )
+        if engine is not None:
+            query = query.filter(KernelPrediction.engine == engine)
+        if competition is not None:
+            query = query.filter(KernelPrediction.competition == competition)
+
+        rows = query.all()
+
+        # Initialize bins
+        bin_width = 1.0 / bins
+        bin_list = []
+        for i in range(bins):
+            lower = i * bin_width
+            upper = (i + 1) * bin_width
+            bin_list.append({
+                "lower": round(lower, 4),
+                "upper": round(upper, 4),
+                "center": round((lower + upper) / 2, 4),
+                "avg_predicted": None,
+                "actual_frequency": None,
+                "count": 0,
+            })
+
+        # Accumulate per bin
+        bin_sums = [{"predicted_sum": 0.0, "actual_sum": 0.0, "count": 0} for _ in range(bins)]
+        for pred, outcome in rows:
+            probs = pred.outcome_probabilities or {}
+            if not probs:
+                continue
+            predicted_prob = max(probs.values())
+            actual = outcome.outcome_correct  # 1 or 0
+
+            # Determine bin index (clamp to last bin for prob=1.0)
+            bin_idx = min(int(predicted_prob / bin_width), bins - 1)
+            bin_sums[bin_idx]["predicted_sum"] += predicted_prob
+            bin_sums[bin_idx]["actual_sum"] += actual
+            bin_sums[bin_idx]["count"] += 1
+
+        # Finalize bin values
+        for i, bs in enumerate(bin_sums):
+            if bs["count"] > 0:
+                bin_list[i]["avg_predicted"] = round(bs["predicted_sum"] / bs["count"], 4)
+                bin_list[i]["actual_frequency"] = round(bs["actual_sum"] / bs["count"], 4)
+                bin_list[i]["count"] = bs["count"]
+
+        return {
+            "engine": engine,
+            "competition": competition,
+            "bins": bin_list,
+            "total_samples": len(rows),
+        }
+    except Exception:
+        return {
+            "engine": engine,
+            "competition": competition,
+            "bins": [],
+            "total_samples": 0,
+        }
+    finally:
+        session.close()

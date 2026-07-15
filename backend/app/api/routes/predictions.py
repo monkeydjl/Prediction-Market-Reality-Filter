@@ -22,6 +22,13 @@ from app.core import config
 router = APIRouter(prefix="/predictions", tags=["Predictions"])
 logger = logging.getLogger(__name__)
 
+COMPETITION_SPORT = {
+    "wc": "football", "ucl": "football", "epl": "football",
+    "laliga": "football", "bundesliga": "football",
+    "seriea": "football", "ligue1": "football",
+    "nba": "basketball", "mlb": "baseball", "nhl": "hockey",
+}
+
 
 def _get_kernel():
     """Lazy-initialize the PredictionKernel singleton."""

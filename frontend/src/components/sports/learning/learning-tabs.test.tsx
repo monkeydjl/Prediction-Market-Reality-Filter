@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { LearningTabs } from "./learning-tabs";
 
@@ -14,6 +14,10 @@ vi.mock("./calibration-panel", () => ({
 }));
 
 describe("LearningTabs", () => {
+  afterEach(() => {
+    window.history.replaceState({}, "", "/");
+  });
+
   it("renders 3 tab buttons", () => {
     render(<LearningTabs />);
     expect(screen.getByText("性能对比")).toBeInTheDocument();

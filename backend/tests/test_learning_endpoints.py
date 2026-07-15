@@ -309,3 +309,245 @@ class TestComputeReliabilityBins:
         assert bin_50_60["count"] == 2
         assert abs(bin_50_60["avg_predicted"] - 0.565) < 0.01
         assert abs(bin_50_60["actual_frequency"] - 0.5) < 0.01
+
+
+# --- Endpoint tests ---
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from app.api.routes.predictions import router
+from app.core import config
+
+
+def _create_app():
+    app = FastAPI()
+    app.include_router(router)
+    return app
+
+
+def _enable_kernel():
+    """Enable KERNEL_PREDICTION_ENABLED for endpoint tests."""
+    original = config.settings.KERNEL_PREDICTION_ENABLED
+    config.settings.KERNEL_PREDICTION_ENABLED = True
+    return original
+
+
+def _restore_kernel(original):
+    config.settings.KERNEL_PREDICTION_ENABLED = original
+
+
+class TestEngineScoresEndpoint:
+    def test_200_returns_list(self, db):
+        _insert_engine_score(db, engine="basketball", competition="nba")
+        original = _enable_kernel()
+        try:
+            app = _create_app()
+            client = TestClient(app)
+            resp = client.get("/predictions/engines/scores")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert len(data) == 1
+            assert data[0]["engine"] == "basketball"
+            assert "accuracy" in data[0]
+            assert "confidence_calibration" in data[0]
+        finally:
+            _restore_kernel(original)
+
+    def test_sport_filter_passthrough(self, db):
+        _insert_engine_score(db, engine="basketball", competition="nba")
+        _insert_engine_score(db, engine="elo_odds", competition="wc")
+        original = _enable_kernel()
+        try:
+            app = _create_app()
+            client = TestClient(app)
+            resp = client.get("/predictions/engines/scores?sport=basketball")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert len(data) == 1
+            assert data[0]["competition"] == "nba"
+        finally:
+            _restore_kernel(original)
+
+    def test_503_when_disabled(self):
+        original = config.settings.KERNEL_PREDICTION_ENABLED
+        config.settings.KERNEL_PREDICTION_ENABLED = False
+        try:
+            app = _create_app()
+            client = TestClient(app)
+            resp = client.get("/predictions/engines/scores")
+            assert resp.status_code == 503
+        finally:
+            config.settings.KERNEL_PREDICTION_ENABLED = original
+
+
+class TestHistoryListEndpoint:
+    def test_200_returns_paginated_structure(self, db):
+        _insert_prediction(db, match_id="nba-1")
+        _insert_history(db, match_id="nba-1")
+        original = _enable_kernel()
+        try:
+            app = _create_app()
+            client = TestClient(app)
+            resp = client.get("/predictions/history")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "items" in data
+            assert "total" in data
+            assert "limit" in data
+            assert "offset" in data
+            assert len(data["items"]) == 1
+        finally:
+            _restore_kernel(original)
+
+    def test_limit_offset_passthrough(self, db):
+        _insert_prediction(db, match_id="nba-1")
+        for i in range(3):
+            _insert_history(db, match_id="nba-1", created_at=datetime(2026, 7, 14, 18 + i, tzinfo=timezone.utc))
+        original = _enable_kernel()
+        try:
+            app = _create_app()
+            client = TestClient(app)
+            resp = client.get("/predictions/history?limit=2&offset=0")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["limit"] == 2
+            assert data["offset"] == 0
+            assert len(data["items"]) == 2
+            assert data["total"] == 3
+        finally:
+            _restore_kernel(original)
+
+    def test_503_when_disabled(self):
+        original = config.settings.KERNEL_PREDICTION_ENABLED
+        config.settings.KERNEL_PREDICTION_ENABLED = False
+        try:
+            app = _create_app()
+            client = TestClient(app)
+            resp = client.get("/predictions/history")
+            assert resp.status_code == 503
+        finally:
+            config.settings.KERNEL_PREDICTION_ENABLED = original
+
+
+class TestHistoryByMatchEndpoint:
+    def test_200_returns_trajectory(self, db):
+        _insert_prediction(db, match_id="nba-1")
+        _insert_history(db, match_id="nba-1")
+        original = _enable_kernel()
+        try:
+            app = _create_app()
+            client = TestClient(app)
+            resp = client.get("/predictions/history/nba-1")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["match_id"] == "nba-1"
+            assert data["count"] == 1
+            assert len(data["items"]) == 1
+        finally:
+            _restore_kernel(original)
+
+    def test_nonexistent_returns_empty_not_404(self, db):
+        original = _enable_kernel()
+        try:
+            app = _create_app()
+            client = TestClient(app)
+            resp = client.get("/predictions/history/nonexistent")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["count"] == 0
+            assert data["items"] == []
+        finally:
+            _restore_kernel(original)
+
+    def test_503_when_disabled(self):
+        original = config.settings.KERNEL_PREDICTION_ENABLED
+        config.settings.KERNEL_PREDICTION_ENABLED = False
+        try:
+            app = _create_app()
+            client = TestClient(app)
+            resp = client.get("/predictions/history/nba-1")
+            assert resp.status_code == 503
+        finally:
+            config.settings.KERNEL_PREDICTION_ENABLED = original
+
+
+class TestCalibrationEndpoint:
+    def test_200_returns_list(self, db):
+        _insert_calibration(db, engine="basketball", competition="nba")
+        original = _enable_kernel()
+        try:
+            app = _create_app()
+            client = TestClient(app)
+            resp = client.get("/predictions/calibration")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert len(data) == 1
+            assert data[0]["engine"] == "basketball"
+            assert "slope" in data[0]
+            assert "intercept" in data[0]
+        finally:
+            _restore_kernel(original)
+
+    def test_503_when_disabled(self):
+        original = config.settings.KERNEL_PREDICTION_ENABLED
+        config.settings.KERNEL_PREDICTION_ENABLED = False
+        try:
+            app = _create_app()
+            client = TestClient(app)
+            resp = client.get("/predictions/calibration")
+            assert resp.status_code == 503
+        finally:
+            config.settings.KERNEL_PREDICTION_ENABLED = original
+
+
+class TestReliabilityEndpoint:
+    def test_200_returns_binned_data(self, db):
+        _insert_prediction(db, match_id="m1", probs={"home_win": 0.9, "away_win": 0.1})
+        _insert_outcome(db, match_id="m1", correct=1)
+        original = _enable_kernel()
+        try:
+            app = _create_app()
+            client = TestClient(app)
+            resp = client.get("/predictions/calibration/reliability")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "bins" in data
+            assert "total_samples" in data
+            assert len(data["bins"]) == 10
+        finally:
+            _restore_kernel(original)
+
+    def test_bins_param_passthrough(self, db):
+        _insert_prediction(db, match_id="m1", probs={"home_win": 0.9, "away_win": 0.1})
+        _insert_outcome(db, match_id="m1", correct=1)
+        original = _enable_kernel()
+        try:
+            app = _create_app()
+            client = TestClient(app)
+            resp = client.get("/predictions/calibration/reliability?bins=5")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert len(data["bins"]) == 5
+        finally:
+            _restore_kernel(original)
+
+    def test_bins_out_of_range_422(self):
+        original = _enable_kernel()
+        try:
+            app = _create_app()
+            client = TestClient(app)
+            resp = client.get("/predictions/calibration/reliability?bins=3")
+            assert resp.status_code == 422
+        finally:
+            _restore_kernel(original)
+
+    def test_503_when_disabled(self):
+        original = config.settings.KERNEL_PREDICTION_ENABLED
+        config.settings.KERNEL_PREDICTION_ENABLED = False
+        try:
+            app = _create_app()
+            client = TestClient(app)
+            resp = client.get("/predictions/calibration/reliability")
+            assert resp.status_code == 503
+        finally:
+            config.settings.KERNEL_PREDICTION_ENABLED = original

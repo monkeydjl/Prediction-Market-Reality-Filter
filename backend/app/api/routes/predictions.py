@@ -305,3 +305,97 @@ def _prediction_to_dict(pred) -> dict:
         "feature_version": pred.feature_version,
         "prediction_timestamp": timestamp,
     }
+
+
+# --- Learning Dashboard endpoints ---
+
+
+def _engine_score_to_dict(score) -> dict:
+    """Serialize KernelEngineScore to dict."""
+    return {
+        "engine": score.engine,
+        "competition": score.competition,
+        "accuracy": score.accuracy,
+        "avg_mae": score.avg_mae,
+        "brier_score": score.brier_score,
+        "sample_count": score.sample_count,
+        "confidence_calibration": score.confidence_calibration,
+        "last_updated": score.last_updated.isoformat() if score.last_updated else None,
+    }
+
+
+def _calibration_to_dict(cal) -> dict:
+    """Serialize KernelCalibration to dict."""
+    return {
+        "engine": cal.engine,
+        "competition": cal.competition,
+        "slope": cal.slope,
+        "intercept": cal.intercept,
+        "sample_count": cal.sample_count,
+        "avg_confidence": cal.avg_confidence,
+        "avg_accuracy": cal.avg_accuracy,
+        "last_updated": cal.last_updated.isoformat() if cal.last_updated else None,
+    }
+
+
+@router.get("/engines/scores")
+def list_engine_scores(engine: str | None = None,
+                       competition: str | None = None,
+                       sport: str | None = None):
+    """List engine performance scores with optional filters."""
+    if not config.settings.KERNEL_PREDICTION_ENABLED:
+        raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")
+    from app.kernel.kernel_db import get_engine_scores
+    scores = get_engine_scores(engine=engine, competition=competition, sport=sport)
+    return [_engine_score_to_dict(s) for s in scores]
+
+
+@router.get("/history")
+def list_prediction_history(sport: str | None = None,
+                            competition: str | None = None,
+                            limit: int = 50,
+                            offset: int = 0):
+    """List prediction history, paginated."""
+    if not config.settings.KERNEL_PREDICTION_ENABLED:
+        raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=422, detail="limit must be 1-200")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must be >= 0")
+    from app.kernel.kernel_db import get_prediction_history
+    items, total = get_prediction_history(sport=sport, competition=competition,
+                                           limit=limit, offset=offset)
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/history/{match_id}")
+def get_match_history(match_id: str):
+    """Get single-match prediction trajectory (all history records)."""
+    if not config.settings.KERNEL_PREDICTION_ENABLED:
+        raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")
+    from app.kernel.kernel_db import get_prediction_history_by_match
+    return get_prediction_history_by_match(match_id)
+
+
+@router.get("/calibration")
+def list_calibrations(engine: str | None = None,
+                      competition: str | None = None):
+    """List calibration parameters."""
+    if not config.settings.KERNEL_PREDICTION_ENABLED:
+        raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")
+    from app.kernel.kernel_db import get_calibrations
+    cals = get_calibrations(engine=engine, competition=competition)
+    return [_calibration_to_dict(c) for c in cals]
+
+
+@router.get("/calibration/reliability")
+def get_reliability(engine: str | None = None,
+                    competition: str | None = None,
+                    bins: int = 10):
+    """Get binned reliability data for calibration chart."""
+    if not config.settings.KERNEL_PREDICTION_ENABLED:
+        raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")
+    if bins < 5 or bins > 20:
+        raise HTTPException(status_code=422, detail="bins must be 5-20")
+    from app.kernel.kernel_db import compute_reliability_bins
+    return compute_reliability_bins(engine=engine, competition=competition, bins=bins)

@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from app.api.security import require_write_key
 from app.core import config
 
 router = APIRouter(prefix="/sport-markets", tags=["Sport Markets"])
@@ -89,7 +90,12 @@ class VerifyBody(BaseModel):
 
 
 @router.post("/links/{match_id}/{contract_id}/verify")
-def verify_link(match_id: str, contract_id: str, body: VerifyBody) -> dict[str, Any]:
+def verify_link(
+    match_id: str,
+    contract_id: str,
+    body: VerifyBody,
+    _auth: None = Depends(require_write_key),
+) -> dict[str, Any]:
     _ensure_enabled()
     store = _link_store()
     links = store.get_links(match_id=match_id)

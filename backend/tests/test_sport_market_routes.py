@@ -23,6 +23,12 @@ def kernel_db(tmp_path):
 @pytest.fixture
 def client(kernel_db, monkeypatch):
     monkeypatch.setattr(config.settings, "PHASE7_SPORT_MARKET_BRIDGE_ENABLED", True)
+    # Disable write-key auth so POST /verify is reachable without an API key.
+    # Patches security.settings directly because require_write_key binds
+    # ``settings`` at import time (matches test_predictions_route.py pattern).
+    from app.api.security import settings as security_settings
+    monkeypatch.setattr(security_settings, "API_WRITE_KEY", "")
+    monkeypatch.setattr(security_settings, "ALLOW_OPEN_WRITES", True)
     from app.api.routes import sport_markets
     app = FastAPI()
     app.include_router(sport_markets.router, prefix="/api")

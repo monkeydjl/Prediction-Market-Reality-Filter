@@ -259,3 +259,33 @@ def close_kernel_session() -> None:
         _engine.dispose()
     _engine = None
     _SessionLocal = None
+
+
+def get_latest_prediction(match_id: str) -> KernelPrediction | None:
+    """Get the latest prediction for a match from the kernel_predictions table.
+
+    The table uses match_id as primary key, so each match has at most one row
+    (updated on each prediction).
+    """
+    session = get_kernel_session()
+    try:
+        return session.query(KernelPrediction).filter_by(match_id=match_id).one_or_none()
+    except Exception:
+        return None
+
+
+def get_match_ids_with_predictions(match_ids: list[str]) -> set[str]:
+    """Batch query: return the subset of match_ids that have a prediction row.
+
+    Used by the list endpoint to populate has_prediction without N+1 queries.
+    """
+    if not match_ids:
+        return set()
+    session = get_kernel_session()
+    try:
+        rows = session.query(KernelPrediction.match_id).filter(
+            KernelPrediction.match_id.in_(match_ids)
+        ).all()
+        return {row[0] for row in rows}
+    except Exception:
+        return set()

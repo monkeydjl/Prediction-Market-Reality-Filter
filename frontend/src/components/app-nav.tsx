@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, FlaskConical, Gauge, History, Newspaper, Radar, Target, Trophy, TrendingUp, Zap } from "lucide-react";
+import { Activity, FlaskConical, Gauge, History, Medal, Newspaper, Radar, Target, Trophy, TrendingUp, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { OperatorKeyControl } from "@/components/operator-key-control";
 import { ThemeControl } from "@/components/theme-control";
+import { LiveStatusIndicator } from "@/components/live-status-indicator";
 
 const NAV = [
   { href: "/", label: "监控面板", icon: Radar, match: ["/", "/events"] },
@@ -15,6 +16,7 @@ const NAV = [
   { href: "/history", label: "历史复盘", icon: History, match: ["/history"] },
   { href: "/quality-metrics", label: "质量切片", icon: Gauge, match: ["/quality-metrics"] },
   { href: "/trades", label: "模拟交易", icon: TrendingUp, match: ["/trades"] },
+  { href: "/sports", label: "体育预测", icon: Medal, match: ["/sports"] },
   { href: "/world-cup", label: "世界杯", icon: Trophy, match: ["/world-cup"] },
 ];
 
@@ -46,7 +48,7 @@ function HotNewsTicker() {
   const items = [...HOT_NEWS, ...HOT_NEWS];
 
   return (
-    <section aria-label="热点新闻" className="border-b border-border/70 bg-background/90">
+    <section aria-label="示例新闻" className="border-b border-border/70 bg-background/90">
       <style>{`
         @keyframes pmrf-hot-news-scroll {
           from { transform: translateX(0); }
@@ -58,7 +60,7 @@ function HotNewsTicker() {
         <span className="h-5 w-px shrink-0 bg-border" aria-hidden="true" />
         <div className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-foreground">
           <Newspaper className="size-3.5 text-primary" aria-hidden="true" />
-          热点新闻
+          示例新闻
         </div>
         <div className="min-w-0 flex-1 overflow-hidden">
           <div className="flex w-max items-center gap-6 whitespace-nowrap text-xs text-muted-foreground motion-safe:animate-[pmrf-hot-news-scroll_42s_linear_infinite] hover:[animation-play-state:paused]">
@@ -101,6 +103,7 @@ export function AppNav() {
               <Link
                 key={item.href}
                 href={item.href}
+                prefetch={false}
                 aria-current={active ? "page" : undefined}
                 className={cn(
                   "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -117,10 +120,7 @@ export function AppNav() {
         </nav>
 
         <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground md:gap-3">
-          <span className="hidden items-center gap-1.5 font-mono sm:flex">
-            <span className="size-1.5 animate-pulse rounded-full bg-pos" aria-hidden="true" />
-            实时情报通道
-          </span>
+          <LiveStatusIndicator />
           <ThemeControl />
           <OperatorKeyControl />
         </div>

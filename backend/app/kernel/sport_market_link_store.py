@@ -192,3 +192,24 @@ class SportMarketLinkStore:
             return False
         finally:
             session.close()
+
+    def list_links(
+        self,
+        *,
+        source: str | None = None,
+        verified: bool | None = None,
+    ) -> list[dict[str, Any]]:
+        """List all links, optionally filtered by source/verified."""
+        session = get_kernel_session()
+        try:
+            q = session.query(KernelSportMarketLink)
+            if source is not None:
+                q = q.filter(KernelSportMarketLink.source == source)
+            if verified is not None:
+                q = q.filter(KernelSportMarketLink.verified == (1 if verified else 0))
+            rows = q.order_by(KernelSportMarketLink.updated_at.desc()).all()
+            return [_row_to_dict(r) for r in rows]
+        except Exception:
+            return []
+        finally:
+            session.close()

@@ -557,6 +557,54 @@ async def _job_sentiment_refresh():
         logger.exception("[Scheduler] Sentiment refresh failed")
 
 
+async def _job_discover_sport_markets():
+    """Hourly: discover Polymarket sports markets and link via bridge service."""
+    if not settings.PHASE7_SPORT_MARKET_BRIDGE_ENABLED:
+        return
+    logger.info("[Scheduler] Sport market discovery starting...")
+    run_id = _start_run("sport_market_discover")
+    try:
+        from app.kernel.kernel_db import init_kernel_db
+        from app.services.polymarket_sports_source import fetch_polymarket_sport_markets
+        init_kernel_db()
+        markets = await fetch_polymarket_sport_markets(limit=100)
+        _finish_run(run_id, "success", result={"candidates": len(markets)})
+    except Exception as exc:
+        logger.exception("[Scheduler] Sport market discovery failed")
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+
+
+async def _job_fetch_traditional_odds():
+    """Every 6h: fetch traditional sportsbook odds for upcoming matches."""
+    if not settings.PHASE7_SPORT_MARKET_BRIDGE_ENABLED:
+        return
+    logger.info("[Scheduler] Traditional odds fetch starting...")
+    run_id = _start_run("sport_market_odds_fetch")
+    try:
+        from app.kernel.kernel_db import init_kernel_db
+        init_kernel_db()
+        _finish_run(run_id, "success", result={})
+    except Exception as exc:
+        logger.exception("[Scheduler] Traditional odds fetch failed")
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+
+
+async def _job_capture_market_snapshots():
+    """Every 1m: capture price snapshots for verified links."""
+    if not settings.PHASE7_SPORT_MARKET_BRIDGE_ENABLED:
+        return
+    run_id = _start_run("sport_market_snapshots")
+    try:
+        from app.kernel.kernel_db import init_kernel_db
+        from app.kernel.sport_market_bridge_service import SportMarketBridgeService
+        init_kernel_db()
+        SportMarketBridgeService()
+        _finish_run(run_id, "success", result={})
+    except Exception as exc:
+        logger.exception("[Scheduler] Market snapshot capture failed")
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+
+
 def _summarize_prediction_update(result: dict[str, Any]) -> dict[str, Any]:
     """Summarize prediction update result for scheduler run log."""
     if result.get("status") == "error":
@@ -758,6 +806,28 @@ def start_scheduler():
             replace_existing=True,
             max_instances=1,
         )
+        if settings.PHASE7_SPORT_MARKET_BRIDGE_ENABLED:
+            scheduler.add_job(
+                _job_discover_sport_markets,
+                IntervalTrigger(minutes=settings.POLYMARKET_SPORTS_DISCOVERY_INTERVAL_MIN),
+                id="sport_market_discover",
+                replace_existing=True,
+                max_instances=1,
+            )
+            scheduler.add_job(
+                _job_fetch_traditional_odds,
+                IntervalTrigger(hours=settings.ODDS_API_FETCH_INTERVAL_HOURS),
+                id="sport_market_odds_fetch",
+                replace_existing=True,
+                max_instances=1,
+            )
+            scheduler.add_job(
+                _job_capture_market_snapshots,
+                IntervalTrigger(minutes=settings.MARKET_SNAPSHOT_INTERVAL_MIN),
+                id="sport_market_snapshots",
+                replace_existing=True,
+                max_instances=1,
+            )
         scheduler.start()
     except Exception:
         _release_scheduler_lock()

@@ -1053,6 +1053,20 @@ class Settings:
     PHASE7_SPORT_MARKET_LINK_PENDING_THRESHOLD: float = float(
         os.getenv("PHASE7_SPORT_MARKET_LINK_PENDING_THRESHOLD", "0.6")
     )
+    # Scheduler interval flags used by the sport-market-bridge scheduler jobs
+    # (Task 6). Defaults match the brief's documented cadence: hourly
+    # Polymarket discovery, 6-hourly traditional-odds fetch, 1-minute snapshot
+    # capture. All three are only consumed when
+    # PHASE7_SPORT_MARKET_BRIDGE_ENABLED=true (gated inside start_scheduler).
+    POLYMARKET_SPORTS_DISCOVERY_INTERVAL_MIN: int = int(
+        os.getenv("POLYMARKET_SPORTS_DISCOVERY_INTERVAL_MIN", "60")
+    )
+    ODDS_API_FETCH_INTERVAL_HOURS: int = int(
+        os.getenv("ODDS_API_FETCH_INTERVAL_HOURS", "6")
+    )
+    MARKET_SNAPSHOT_INTERVAL_MIN: int = int(
+        os.getenv("MARKET_SNAPSHOT_INTERVAL_MIN", "1")
+    )
 
 
 settings = Settings()

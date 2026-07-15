@@ -182,6 +182,46 @@ class KernelEloRating(KernelBase):
     updated_at = Column(DateTime, nullable=False)
 
 
+class KernelSportMarketLink(KernelBase):
+    """Link between a sports match (match_id) and a prediction-market contract.
+
+    Fail-closed: downstream consumers must use get_verified_links which
+    returns only verified=True rows. Unique on (match_id, contract_id,
+    outcome_label) so one match can carry multiple outcome rows without dupes.
+    """
+    __tablename__ = "kernel_sport_market_links"
+    __table_args__ = (
+        UniqueConstraint("match_id", "contract_id", "outcome_label", name="uq_sport_market_link"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(String, nullable=False, index=True)
+    contract_id = Column(String, nullable=False, index=True)
+    source = Column(String, nullable=False)  # "polymarket" | "odds_api"
+    outcome_label = Column(String, nullable=False)  # "YES" | "NO" | "home" | "away" | "draw"
+    mapped_outcome = Column(String, nullable=False)  # "home_win" | "away_win" | "draw"
+    link_method = Column(String, nullable=False)  # "rule" | "llm" | "odds_api" | "manual"
+    link_confidence = Column(Float, nullable=False, default=0.0)
+    verified = Column(Integer, nullable=False, default=0, index=True)
+    market_question = Column(String)
+    implied_prob = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime)
+    updated_at = Column(DateTime)
+
+
+class KernelMarketSnapshot(KernelBase):
+    """Price time-series for a sport market link (append-only)."""
+    __tablename__ = "kernel_market_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    link_id = Column(Integer, nullable=False, index=True)
+    implied_prob = Column(Float, nullable=False)
+    price = Column(Float)
+    liquidity = Column(Float)
+    volume = Column(Float)
+    captured_at = Column(DateTime)
+
+
 def init_kernel_db(db_path: str | None = None) -> None:
     """Initialize the kernel database. Creates tables if they don't exist."""
     global _engine, _SessionLocal
@@ -259,6 +299,12 @@ def close_kernel_session() -> None:
         _engine.dispose()
     _engine = None
     _SessionLocal = None
+
+
+# Alias: disposes the engine + resets module state so the next init_kernel_db
+# call rebuilds the schema. Used by tests that point the kernel DB at a fresh
+# tmp_path SQLite file per test (mirrors the kernel_db fixture pattern).
+close_kernel_db = close_kernel_session
 
 
 def get_latest_prediction(match_id: str) -> KernelPrediction | None:

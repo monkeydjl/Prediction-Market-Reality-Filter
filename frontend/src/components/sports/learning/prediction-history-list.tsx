@@ -66,7 +66,7 @@ export function PredictionHistoryList() {
         setTotal(data.total);
       })
       .catch(() => setError(true));
-  }, [sport, offset]);
+  }, [sport, competition, offset]);
 
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));

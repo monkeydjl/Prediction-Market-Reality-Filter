@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { PredictionHistoryList } from "./prediction-history-list";
 
 // Mock next/link
@@ -111,6 +111,30 @@ describe("PredictionHistoryList", () => {
     render(<PredictionHistoryList />);
     await waitFor(() => {
       expect(screen.getByText("暂无预测历史记录")).toBeInTheDocument();
+    });
+  });
+
+  it("refetches with competition filter when changed on page 1", async () => {
+    // Regression: previously the fetch effect's deps were [sport, offset].
+    // When on page 1 (offset=0) and competition changes, setOffset(0) bails
+    // out (no ref change) so the fetch effect never re-fired and the new
+    // competition value was never sent to fetchPredictionHistory.
+    vi.mocked(fetchPredictionHistory).mockResolvedValue({
+      items: [mockItem], total: 1, limit: 50, offset: 0,
+    });
+    render(<PredictionHistoryList />);
+    await waitFor(() => {
+      expect(screen.getByText("nba-20250101-LAL-BOS")).toBeInTheDocument();
+    });
+
+    // Change competition dropdown from "全部" (value "") to "nba"
+    const competitionSelect = screen.getByLabelText("赛事");
+    fireEvent.change(competitionSelect, { target: { value: "nba" } });
+
+    await waitFor(() => {
+      const calls = vi.mocked(fetchPredictionHistory).mock.calls;
+      const lastCall = calls[calls.length - 1][0];
+      expect(lastCall).toMatchObject({ competition: "nba" });
     });
   });
 });

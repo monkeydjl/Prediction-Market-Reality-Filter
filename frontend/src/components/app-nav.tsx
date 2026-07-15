@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, FlaskConical, Gauge, History, Medal, Newspaper, Radar, Target, Trophy, TrendingUp, Zap } from "lucide-react";
+import { Activity, FlaskConical, Gauge, GraduationCap, History, Medal, Newspaper, Radar, Target, Trophy, TrendingUp, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { OperatorKeyControl } from "@/components/operator-key-control";
 import { ThemeControl } from "@/components/theme-control";
@@ -17,6 +17,7 @@ const NAV = [
   { href: "/quality-metrics", label: "质量切片", icon: Gauge, match: ["/quality-metrics"] },
   { href: "/trades", label: "模拟交易", icon: TrendingUp, match: ["/trades"] },
   { href: "/sports", label: "体育预测", icon: Medal, match: ["/sports"] },
+  { href: "/sports/learning", label: "学习仪表盘", icon: GraduationCap, match: ["/sports/learning"] },
   { href: "/world-cup", label: "世界杯", icon: Trophy, match: ["/world-cup"] },
 ];
 

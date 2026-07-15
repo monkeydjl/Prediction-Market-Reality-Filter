@@ -1,3 +1,4 @@
+"use client";
 import { CartesianGrid, ReferenceLine, Scatter, ScatterChart, XAxis, YAxis } from "recharts";
 import { ChartFrame, DarkTooltip } from "@/components/ui/chart-lite";
 import type { ReliabilityBin } from "@/lib/learning-api";

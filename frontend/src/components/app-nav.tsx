@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, FlaskConical, Gauge, GraduationCap, History, Medal, Newspaper, Radar, Target, Trophy, TrendingUp, Zap } from "lucide-react";
+import { Activity, FlaskConical, Gauge, GraduationCap, History, LineChart, Medal, Newspaper, Radar, Target, Trophy, TrendingUp, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { OperatorKeyControl } from "@/components/operator-key-control";
 import { ThemeControl } from "@/components/theme-control";
@@ -18,6 +18,7 @@ const NAV = [
   { href: "/trades", label: "模拟交易", icon: TrendingUp, match: ["/trades"] },
   { href: "/sports", label: "体育预测", icon: Medal, match: ["/sports"] },
   { href: "/sports/learning", label: "学习仪表盘", icon: GraduationCap, match: ["/sports/learning"] },
+  { href: "/sports/markets", label: "体育市场", icon: LineChart, match: ["/sports/markets"] },
   { href: "/world-cup", label: "世界杯", icon: Trophy, match: ["/world-cup"] },
 ];
 

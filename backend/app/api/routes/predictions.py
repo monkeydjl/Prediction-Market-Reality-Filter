@@ -272,7 +272,12 @@ def _match_detail(match) -> dict:
 
 
 def _prediction_to_dict(pred) -> dict:
-    """Convert PredictionResult (dataclass) or KernelPrediction (ORM) to dict."""
+    """Convert a KernelPrediction (ORM row) to a dict for the API response.
+
+    Note: Only KernelPrediction (ORM) is supported. The PredictionResult
+    dataclass uses ``engine_name`` (not ``engine``), so it cannot be passed
+    here — callers must persist the prediction first and pass the ORM row.
+    """
     import json
     from datetime import datetime
 
@@ -280,7 +285,7 @@ def _prediction_to_dict(pred) -> dict:
     if isinstance(explanation, str):
         explanation = json.loads(explanation)
 
-    timestamp = pred.prediction_timestamp if hasattr(pred, "prediction_timestamp") else pred.created_at
+    timestamp = pred.created_at
     if isinstance(timestamp, datetime):
         timestamp = timestamp.isoformat()
 

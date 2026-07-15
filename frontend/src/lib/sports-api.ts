@@ -41,6 +41,8 @@ export interface ContributionItem {
 }
 
 export interface PredictionResult {
+  // Optional: present in POST /predict response, absent in GET /matches/{id} prediction
+  match_id?: string;
   engine: string;
   predicted_scores: Record<string, number>;
   outcome_probabilities: Record<string, number>;

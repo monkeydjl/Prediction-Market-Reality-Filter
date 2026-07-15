@@ -26,6 +26,22 @@ REGIONS = "us,eu"  # US and European bookmakers
 MARKETS = "h2h"  # Head-to-head (1x2: home/draw/away)
 ODDS_FORMAT = "decimal"  # Decimal odds (e.g., 2.10)
 
+# Multi-league mapping (Phase 7). Each competition code maps to the
+# sport_key used by The Odds API. The World Cup entry matches the legacy
+# SPORT constant so existing behavior is byte-identical when competition="wc".
+COMPETITION_TO_ODDS_API_SPORT = {
+    "wc": "soccer_fifa_world_cup",
+    "ucl": "soccer_uefa_champs_league",
+    "epl": "soccer_epl",
+    "laliga": "soccer_spain_la_liga",
+    "bundesliga": "soccer_germany_bundesliga",
+    "seriea": "soccer_italy_serie_a",
+    "ligue1": "soccer_france_ligue_one",
+    "nba": "basketball_nba",
+    "mlb": "baseball_mlb",
+    "nhl": "icehockey_nhl",
+}
+
 # In-memory quota tracker (updated from API response headers)
 _quota_remaining: int | None = None
 _quota_last_checked: datetime | None = None
@@ -54,7 +70,8 @@ def _update_quota_from_headers(headers: httpx.Headers) -> None:
 async def fetch_match_odds(
     home_team: str,
     away_team: str,
-    commence_time: str | datetime | None = None
+    commence_time: str | datetime | None = None,
+    competition: str = "wc",
 ) -> dict[str, Any] | None:
     """Fetch betting odds for a specific match from The Odds API.
 
@@ -62,6 +79,8 @@ async def fetch_match_odds(
         home_team: Home team name
         away_team: Away team name
         commence_time: Match kickoff time (used to find the right fixture)
+        competition: Competition code (default "wc" = World Cup). See
+            COMPETITION_TO_ODDS_API_SPORT for supported codes.
 
     Returns:
         {
@@ -74,6 +93,8 @@ async def fetch_match_odds(
         }
         None if odds not available or API error
     """
+    sport_key = COMPETITION_TO_ODDS_API_SPORT.get(competition, SPORT)
+
     if not ODDS_API_KEY:
         logger.debug("Odds API key not configured, skipping fetch")
         return None
@@ -90,9 +111,9 @@ async def fetch_match_odds(
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # Fetch all upcoming World Cup matches with odds
+            # Fetch all upcoming matches with odds for the requested sport
             response = await client.get(
-                f"{ODDS_API_BASE}/sports/{SPORT}/odds",
+                f"{ODDS_API_BASE}/sports/{sport_key}/odds",
                 params={
                     "apiKey": ODDS_API_KEY,
                     "regions": REGIONS,

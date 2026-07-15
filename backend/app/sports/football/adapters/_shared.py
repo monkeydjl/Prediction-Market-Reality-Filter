@@ -49,14 +49,16 @@ async def fetch_team_elo(
         return await get_elo_rating(lookup_name)  # async function, needs await
 
 
-async def fetch_match_odds(home: str, away: str) -> dict[str, Any] | None:
+async def fetch_match_odds(home: str, away: str, competition: str = "wc") -> dict[str, Any] | None:
     """Fetch cached odds for a match.
 
-    Delegates to odds_cache_service.get_cached_odds() (async).
+    Delegates to odds_cache_service.get_cached_odds() (async). Forwards the
+    competition so the cache key is namespaced per league and the correct
+    The Odds API sport_key is used on a cache miss.
     Returns the odds dict or None on failure.
     """
     from app.services.odds_cache_service import get_cached_odds
-    return await get_cached_odds(home, away)
+    return await get_cached_odds(home, away, competition=competition)
 
 
 def fetch_elo_and_odds(

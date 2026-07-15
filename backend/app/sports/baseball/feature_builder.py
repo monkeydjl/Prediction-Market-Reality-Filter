@@ -78,11 +78,11 @@ class BaseballFeatureBuilder:
                 market_value_away=None,
             ),
             market=MarketFeatures(
-                odds_home=None,  # No odds source
-                odds_draw=None,
-                odds_away=None,
-                odds_source=None,
-                odds_fresh=False,
+                odds_home=market_raw.get("odds_home"),
+                odds_draw=market_raw.get("odds_draw"),
+                odds_away=market_raw.get("odds_away"),
+                odds_source=market_raw.get("odds_source"),
+                odds_fresh=bool(market_raw.get("odds_fresh", False)),
             ),
             player=PlayerFeatures(
                 key_players_available_home=pitcher_home_available,

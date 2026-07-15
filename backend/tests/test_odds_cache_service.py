@@ -23,7 +23,7 @@ class OddsCacheServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_stale_cache_is_returned_when_fresh_fetch_fails(self):
         self.session.add(
             OddsCache(
-                match_key="norway_vs_france",
+                match_key="wc_norway_vs_france",  # Phase 7: namespaced by competition
                 home_odds=2.5,
                 draw_odds=3.1,
                 away_odds=2.8,

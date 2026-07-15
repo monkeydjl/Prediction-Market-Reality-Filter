@@ -27,9 +27,9 @@ class OddsCache(Base):
     last_updated_api = Column(DateTime, nullable=True)  # From API response
 
 
-def get_match_key(home_team: str, away_team: str) -> str:
-    """Generate cache key for a match."""
-    return f"{home_team.lower().replace(' ', '_')}_vs_{away_team.lower().replace(' ', '_')}"
+def get_match_key(home_team: str, away_team: str, competition: str = "wc") -> str:
+    """Generate cache key for a match, namespaced by competition."""
+    return f"{competition}_{home_team.lower().replace(' ', '_')}_vs_{away_team.lower().replace(' ', '_')}"
 
 
 async def get_cached_odds(
@@ -39,6 +39,7 @@ async def get_cached_odds(
     commence_time: str | None = None,
     allow_stale: bool = True,
     max_stale_hours: int = 168,
+    competition: str = "wc",
 ) -> dict[str, Any] | None:
     """Get cached odds or fetch fresh if expired.
 
@@ -47,12 +48,14 @@ async def get_cached_odds(
         away_team: Away team name
         ttl_seconds: Cache TTL in seconds (default 1 hour)
         commence_time: Match kickoff time for API fetch
+        competition: Competition code (default "wc" = World Cup). Forwarded
+            to ``fetch_match_odds`` and used to namespace the cache key.
 
     Returns:
         Odds dict or None if unavailable
     """
     session = get_prediction_session()
-    match_key = get_match_key(home_team, away_team)
+    match_key = get_match_key(home_team, away_team, competition=competition)
 
     try:
         # Check cache
@@ -81,7 +84,7 @@ async def get_cached_odds(
                 }
 
         # Cache miss or expired - fetch fresh
-        fresh_odds = await fetch_match_odds(home_team, away_team, commence_time)
+        fresh_odds = await fetch_match_odds(home_team, away_team, commence_time, competition=competition)
 
         if fresh_odds:
             # Update cache

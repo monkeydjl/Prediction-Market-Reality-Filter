@@ -32,9 +32,15 @@ class ConnectionManager:
 
         Silently drops disconnected clients.
         """
-        conns = self._connections.get(match_id, set())
+        # Snapshot the set before iterating: await below yields the event loop,
+        # and another coroutine calling disconnect() could mutate the live set
+        # mid-iteration, raising RuntimeError: Set changed size during iteration.
+        conns = self._connections.get(match_id)
+        if not conns:
+            return
+        snapshot = list(conns)
         dead: list[WebSocket] = []
-        for ws in conns:
+        for ws in snapshot:
             try:
                 await ws.send_json(message)
             except Exception:

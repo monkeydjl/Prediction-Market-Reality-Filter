@@ -298,8 +298,8 @@ class NHLAdapter:
                 "is_home_advantage": True,
             },
             "custom": {
-                "goalie_save_pct_home": home_g.get("save_pct", 0.910),
-                "goalie_save_pct_away": away_g.get("save_pct", 0.910),
+                "goalie_save_pct_home": home_g.get("save_pct"),
+                "goalie_save_pct_away": away_g.get("save_pct"),
                 "team_gf_home": 3.20, "team_gf_away": 3.00,
                 "team_ga_home": 2.90, "team_ga_away": 3.10,
                 "corsi_pct_home": None, "corsi_pct_away": None,

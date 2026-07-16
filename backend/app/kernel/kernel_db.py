@@ -498,6 +498,8 @@ def get_latest_prediction(match_id: str) -> KernelPrediction | None:
         return session.query(KernelPrediction).filter_by(match_id=match_id).one_or_none()
     except Exception:
         return None
+    finally:
+        session.close()
 
 
 def get_calibration(engine_name: str, competition: str) -> KernelCalibration | None:
@@ -516,6 +518,8 @@ def get_calibration(engine_name: str, competition: str) -> KernelCalibration | N
         )
     except Exception:
         return None
+    finally:
+        session.close()
 
 
 def get_match_ids_with_predictions(match_ids: list[str]) -> set[str]:
@@ -533,6 +537,8 @@ def get_match_ids_with_predictions(match_ids: list[str]) -> set[str]:
         return {row[0] for row in rows}
     except Exception:
         return set()
+    finally:
+        session.close()
 
 
 # --- Learning Dashboard query functions ---

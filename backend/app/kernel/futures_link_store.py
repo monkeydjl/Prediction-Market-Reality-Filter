@@ -182,8 +182,9 @@ class FuturesLinkStore:
     def get_latest_snapshots(self, competition: str, season: str) -> list[dict[str, Any]]:
         """Return the most recent snapshot per link for a competition+season.
 
-        Uses a correlated subquery to pick the row with max captured_at per
-        link_id. Fail-closed: [] on error.
+        Uses a single query with a max(captured_at) subquery to pick the
+        latest snapshot per link_id in one round-trip (avoids N+1).
+        Fail-closed: [] on error.
         """
         session = get_kernel_session()
         try:
@@ -198,18 +199,34 @@ class FuturesLinkStore:
             link_ids = [l.id for l in links]
             team_by_id = {l.id: l.team for l in links}
 
-            # For each link, get the latest snapshot
-            result: list[dict[str, Any]] = []
-            for link_id in link_ids:
-                row = (
-                    session.query(KernelFuturesSnapshot)
-                    .filter_by(link_id=link_id)
-                    .order_by(KernelFuturesSnapshot.captured_at.desc())
-                    .first()
+            # Single query: latest snapshot per link_id via subquery
+            from sqlalchemy import func
+
+            # Subquery: max captured_at per link_id
+            max_dates = (
+                session.query(
+                    KernelFuturesSnapshot.link_id,
+                    func.max(KernelFuturesSnapshot.captured_at).label("max_date"),
                 )
-                if row is not None:
-                    result.append(_snapshot_row_to_dict(row, team=team_by_id.get(link_id)))
-            return result
+                .filter(KernelFuturesSnapshot.link_id.in_(link_ids))
+                .group_by(KernelFuturesSnapshot.link_id)
+                .subquery()
+            )
+
+            # Join back to get full rows
+            rows = (
+                session.query(KernelFuturesSnapshot)
+                .join(
+                    max_dates,
+                    (KernelFuturesSnapshot.link_id == max_dates.c.link_id)
+                    & (KernelFuturesSnapshot.captured_at == max_dates.c.max_date),
+                )
+                .all()
+            )
+            return [
+                _snapshot_row_to_dict(row, team=team_by_id.get(row.link_id))
+                for row in rows
+            ]
         except Exception:
             return []
         finally:

@@ -19,8 +19,11 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.core.config import settings
+from app.kernel.sport_market_bridge_service import SportMarketBridgeService
 from app.memory import loop_run_store
 from app.realtime.connection_manager import get_connection_manager
+from app.services.kalshi_sports_source import fetch_kalshi_sport_markets
+from app.services.polymarket_sports_source import fetch_polymarket_sport_markets
 from app.utils import sqlite_db
 from datetime import datetime, timedelta, timezone
 
@@ -559,17 +562,38 @@ async def _job_sentiment_refresh():
 
 
 async def _job_discover_sport_markets():
-    """Hourly: discover Polymarket sports markets and link via bridge service."""
+    """Hourly: discover Polymarket and Kalshi sports markets and link via bridge service."""
     if not settings.PHASE7_SPORT_MARKET_BRIDGE_ENABLED:
         return
     logger.info("[Scheduler] Sport market discovery starting...")
     run_id = _start_run("sport_market_discover")
     try:
         from app.kernel.kernel_db import init_kernel_db
-        from app.services.polymarket_sports_source import fetch_polymarket_sport_markets
         init_kernel_db()
-        markets = await fetch_polymarket_sport_markets(limit=100)
-        _finish_run(run_id, "success", result={"candidates": len(markets)})
+        bridge = SportMarketBridgeService()
+
+        polymarket_count = 0
+        if settings.PHASE7_POLYMARKET_SPORTS_SOURCE_ENABLED:
+            polymarket_candidates = await fetch_polymarket_sport_markets(limit=100)
+            polymarket_count = len(polymarket_candidates)
+
+        kalshi_count = 0
+        if settings.PHASE11_KALSHI_SPORTS_ENABLED:
+            try:
+                kalshi_candidates = await fetch_kalshi_sport_markets(limit=100)
+                kalshi_count = len(kalshi_candidates)
+                for candidate in kalshi_candidates:
+                    try:
+                        await bridge.link_kalshi_market(candidate)
+                    except Exception:
+                        logger.warning("Failed to link Kalshi market", exc_info=True)
+            except Exception:
+                logger.warning("Kalshi sports discovery failed", exc_info=True)
+
+        _finish_run(run_id, "success", result={
+            "polymarket_candidates": polymarket_count,
+            "kalshi_candidates": kalshi_count,
+        })
     except Exception as exc:
         logger.exception("[Scheduler] Sport market discovery failed")
         _finish_run(run_id, "failed", error=str(exc), exc=exc)

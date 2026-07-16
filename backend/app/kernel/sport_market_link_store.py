@@ -213,3 +213,23 @@ class SportMarketLinkStore:
             return []
         finally:
             session.close()
+
+    def get_matches_with_verified_links(self) -> list[str]:
+        """Return distinct match_ids that have at least one verified=True link.
+
+        Used by the edge detector scheduler job to enumerate matches that
+        need edge recomputation. Additive — does not modify existing methods.
+        """
+        session = get_kernel_session()
+        try:
+            rows = (
+                session.query(KernelSportMarketLink.match_id)
+                .filter(KernelSportMarketLink.verified == 1)
+                .distinct()
+                .all()
+            )
+            return [r[0] for r in rows]
+        except Exception:
+            return []
+        finally:
+            session.close()

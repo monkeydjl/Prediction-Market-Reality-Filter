@@ -18,6 +18,8 @@ import {
   fetchMarketSnapshots,
   type SnapshotSeries,
 } from "@/lib/sport-markets-api";
+import { usePriceStream } from "@/lib/use-price-stream";
+import { RealtimePriceIndicator } from "@/components/sports/realtime/RealtimePriceIndicator";
 
 interface TraditionalOddsChartProps {
   matchId: string;
@@ -81,6 +83,8 @@ export function TraditionalOddsChart({ matchId }: TraditionalOddsChartProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const { isConnected } = usePriceStream(matchId);
+
   useEffect(() => {
     setLoading(true);
     setError(null);
@@ -117,7 +121,10 @@ export function TraditionalOddsChart({ matchId }: TraditionalOddsChartProps) {
 
   return (
     <div data-testid="odds-chart" className="w-full space-y-4">
-      <h3 className="text-lg font-semibold">传统赔率 vs Polymarket</h3>
+      <h3 className="text-lg font-semibold">
+        传统赔率 vs Polymarket
+        <RealtimePriceIndicator isConnected={isConnected} matchId={matchId} />
+      </h3>
       {Object.entries(merged).map(([outcome, points]) => (
         <div key={outcome} data-testid={`series-${outcome}`}>
           <p className="font-medium mb-1">{outcome}</p>

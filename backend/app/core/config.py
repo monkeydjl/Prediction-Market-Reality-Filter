@@ -1085,5 +1085,27 @@ class Settings:
         "PHASE7_SPORT_RECOMMENDATION_ENABLED", "false"
     )
 
+    # Phase 7 Subproject D — Market Settlement Feedback (default OFF).
+    # When false, all /api/sport-settlements/* endpoints return 503 and the
+    # scheduler job is not registered.
+    PHASE7_MARKET_SETTLEMENT_FEEDBACK_ENABLED: bool = _env_bool(
+        "PHASE7_MARKET_SETTLEMENT_FEEDBACK_ENABLED", "false"
+    )
+    PHASE7_MARKET_SETTLEMENT_SCHEDULER_ENABLED: bool = _env_bool(
+        "PHASE7_MARKET_SETTLEMENT_SCHEDULER_ENABLED", "false"
+    )
+    MARKET_SETTLEMENT_INTERVAL_MIN: int = int(
+        os.getenv("MARKET_SETTLEMENT_INTERVAL_MIN", "10")
+    )
+    MARKET_SETTLEMENT_BATCH_LIMIT: int = int(
+        os.getenv("MARKET_SETTLEMENT_BATCH_LIMIT", "50")
+    )
+    MIN_SAMPLES_FOR_MARKET_CALIBRATION: int = int(
+        os.getenv("MIN_SAMPLES_FOR_MARKET_CALIBRATION", "10")
+    )
+    MARKET_CALIBRATION_WINDOW_SIZE: int = int(
+        os.getenv("MARKET_CALIBRATION_WINDOW_SIZE", "30")
+    )
+
 
 settings = Settings()

@@ -251,6 +251,62 @@ class KernelSportEdge(KernelBase):
     )
 
 
+class KernelMarketSettlement(KernelBase):
+    """One settlement record per (match_id, mapped_outcome).
+
+    Records the market's settlement price (last snapshot before match finished)
+    and the error against B's persisted model_prob. Idempotent via unique
+    constraint on (match_id, mapped_outcome).
+    """
+    __tablename__ = "kernel_market_settlements"
+    __table_args__ = (
+        UniqueConstraint("match_id", "mapped_outcome", name="uq_market_settlement_match_outcome"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(String, nullable=False, index=True)
+    mapped_outcome = Column(String, nullable=False)
+    engine = Column(String, nullable=False)
+    competition = Column(String, nullable=False)
+    settlement_implied_prob = Column(Float)
+    settlement_captured_at = Column(DateTime)
+    link_id = Column(Integer)
+    model_prob = Column(Float)
+    market_prob_at_detection = Column(Float)
+    raw_edge = Column(Float)
+    adjusted_edge = Column(Float)
+    brier_score = Column(Float)
+    signed_error = Column(Float)
+    direction_correct = Column(Integer)
+    status = Column(String, nullable=False, default="processed")
+    skip_reason = Column(String)
+    match_finished_at = Column(DateTime, nullable=False)
+    processed_at = Column(DateTime, nullable=False)
+
+
+class KernelMarketCalibration(KernelBase):
+    """Market-settlement-based calibration per (engine, competition).
+
+    Parallel to KernelCalibration (which uses match-outcome-based learning).
+    Fitted by linear regression: settlement_implied_prob ~ slope * model_prob + intercept.
+    """
+    __tablename__ = "kernel_market_calibrations"
+    __table_args__ = (
+        UniqueConstraint("engine", "competition", name="uq_market_calibration_engine_competition"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    engine = Column(String(50), nullable=False)
+    competition = Column(String(50), nullable=False)
+    slope = Column(Float, nullable=False, default=1.0)
+    intercept = Column(Float, nullable=False, default=0.0)
+    sample_count = Column(Integer, nullable=False, default=0)
+    avg_brier = Column(Float, nullable=False, default=0.0)
+    avg_signed_error = Column(Float, nullable=False, default=0.0)
+    direction_accuracy = Column(Float, nullable=False, default=0.0)
+    last_updated = Column(DateTime, nullable=False)
+
+
 def init_kernel_db(db_path: str | None = None) -> None:
     """Initialize the kernel database. Creates tables if they don't exist."""
     global _engine, _SessionLocal

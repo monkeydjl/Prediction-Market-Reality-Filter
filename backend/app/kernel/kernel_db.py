@@ -354,6 +354,49 @@ class KernelOptimizedParams(KernelBase):
     applied_at = Column(DateTime, nullable=True)
 
 
+class KernelFuturesLink(KernelBase):
+    """Futures/championship market link (competition+season+team -> contract).
+
+    Distinct from KernelSportMarketLink which is match-level (match_id).
+    Futures markets are season-level: one event -> N contracts (one per team).
+    """
+    __tablename__ = "kernel_futures_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "competition", "season", "team", "source",
+            name="uq_futures_links_comp_season_team_source"
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    competition = Column(String, nullable=False, index=True)
+    season = Column(String, nullable=False, index=True)
+    team = Column(String, nullable=False)
+    contract_id = Column(String, nullable=False)
+    source = Column(String, nullable=False)
+    market_question = Column(String, nullable=True)
+    implied_prob = Column(Float, nullable=True)
+    verified = Column(Integer, default=0)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class KernelFuturesSnapshot(KernelBase):
+    """Price snapshot for a futures link (one row per capture)."""
+    __tablename__ = "kernel_futures_snapshots"
+    __table_args__ = (
+        Index("ix_futures_snapshots_link_id", "link_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    link_id = Column(Integer, nullable=False)
+    implied_prob = Column(Float, nullable=False)
+    price = Column(Float, nullable=True)
+    liquidity = Column(Float, nullable=True)
+    volume = Column(Float, nullable=True)
+    captured_at = Column(DateTime, nullable=False)
+
+
 def _get_engine(db_path: str):
     """Create a SQLAlchemy engine for an isolated SQLite DB (used by tests)."""
     return create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})

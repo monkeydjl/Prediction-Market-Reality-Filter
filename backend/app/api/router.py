@@ -1,6 +1,6 @@
 # app/api/router.py — v0.3.0
 from fastapi import APIRouter
-from app.api.routes import events, llm, quality_metrics, world_cup_predictions, world_cup_analytics, predictions, sport_markets, sport_edges, sport_recommendations
+from app.api.routes import events, llm, quality_metrics, world_cup_predictions, world_cup_analytics, predictions, sport_markets, sport_edges, sport_recommendations, sport_settlements
 
 api_router = APIRouter()
 
@@ -13,3 +13,4 @@ api_router.include_router(predictions.router, tags=["Predictions"])
 api_router.include_router(sport_markets.router, tags=["Sport Markets"])
 api_router.include_router(sport_edges.router, tags=["Sport Edges"])
 api_router.include_router(sport_recommendations.router, tags=["Sport Recommendations"])
+api_router.include_router(sport_settlements.router, tags=["Sport Settlements"])

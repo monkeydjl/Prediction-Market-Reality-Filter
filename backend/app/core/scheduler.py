@@ -635,6 +635,34 @@ async def _job_detect_sport_edges():
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
 
 
+async def _job_process_market_settlements():
+    """Scan for finished matches without settlements, process them."""
+    if not settings.PHASE7_MARKET_SETTLEMENT_SCHEDULER_ENABLED:
+        return
+    run_id = _start_run("market_settlement_feedback")
+    try:
+        from app.kernel.kernel_db import init_kernel_db
+        from app.kernel.market_settlement_service import MarketSettlementService
+        init_kernel_db()
+        svc = MarketSettlementService()
+        result = svc.scan_and_process(limit=settings.MARKET_SETTLEMENT_BATCH_LIMIT)
+        logger.info(
+            f"[Scheduler] Market settlements: scanned={result.scanned} "
+            f"processed={result.processed} skipped={result.skipped} "
+            f"already={result.already_processed} errors={result.errors}"
+        )
+        _finish_run(run_id, "success", result={
+            "scanned": result.scanned,
+            "processed": result.processed,
+            "skipped": result.skipped,
+            "already_processed": result.already_processed,
+            "errors": result.errors,
+        })
+    except Exception as exc:
+        logger.exception("[Scheduler] Market settlement job failed")
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+
+
 def _summarize_prediction_update(result: dict[str, Any]) -> dict[str, Any]:
     """Summarize prediction update result for scheduler run log."""
     if result.get("status") == "error":
@@ -863,6 +891,14 @@ def start_scheduler():
                 _job_detect_sport_edges,
                 IntervalTrigger(minutes=settings.EDGE_DETECTION_INTERVAL_MIN),
                 id="sport_edge_detect",
+                replace_existing=True,
+                max_instances=1,
+            )
+        if settings.PHASE7_MARKET_SETTLEMENT_SCHEDULER_ENABLED:
+            scheduler.add_job(
+                _job_process_market_settlements,
+                IntervalTrigger(minutes=settings.MARKET_SETTLEMENT_INTERVAL_MIN),
+                id="market_settlement_feedback",
                 replace_existing=True,
                 max_instances=1,
             )

@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { SportFilter } from "@/components/sports/sport-filter";
-import { MatchListCard } from "@/components/sports/match-list-card";
+import { SportFilter } from "@/components/sports/common/sport-filter";
+import { MatchListCard } from "@/components/sports/common/match-list-card";
 import { useMatches } from "@/lib/sports-api";
 
 export default function SportsPage() {

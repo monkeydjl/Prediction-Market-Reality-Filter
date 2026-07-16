@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { MatchDetailPanel } from "@/components/sports/match-detail-panel";
+import { MatchDetailPanel } from "@/components/sports/common/match-detail-panel";
 import { TraditionalOddsChart } from "@/components/sports/markets/TraditionalOddsChart";
 import {
   useMatchDetail,

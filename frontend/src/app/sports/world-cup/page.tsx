@@ -14,7 +14,7 @@ import {
   X,
   Layers,
 } from "lucide-react";
-import { MatchPredictionCard } from "@/components/world-cup/match-prediction-card";
+import { MatchPredictionCard } from "@/components/sports/world-cup/match-prediction-card";
 import { SectionErrorBoundary } from "@/components/section-error-boundary";
 import { syncFixtures, type MatchWithPrediction } from "@/lib/world-cup/predictions-api";
 import { useWorldCupMatches } from "@/lib/world-cup/swr-hooks";
@@ -24,7 +24,7 @@ import { translateTeamName } from "@/lib/world-cup/team-names-zh";
 import { formatBeijingMatchDate, getWorldCupKickoffTime, parseWorldCupUtcDate } from "@/lib/world-cup/time";
 import { cn } from "@/lib/utils";
 
-type TabView = "matches" | "groups" | "qualification" | "knockout" | "tournament" | "engine-stats" | "auto-tune" | "analytics";
+type TabView = "matches" | "groups" | "qualification" | "knockout" | "tournament" | "engine-stats" | "analytics";
 
 type StageFilter = "all" | "GROUP_STAGE" | "KNOCKOUT";
 type TimeFilter = "all" | "today" | "upcoming";
@@ -119,31 +119,23 @@ function WorldCupClocks() {
 }
 
 const QualificationTable = dynamic(
-  () => import("@/components/world-cup/qualification-table").then((mod) => mod.QualificationTable),
+  () => import("@/components/sports/world-cup/qualification-table").then((mod) => mod.QualificationTable),
   { loading: () => <BlockLoading label="加载出线概率..." /> }
 );
 const KnockoutView = dynamic(
-  () => import("@/components/world-cup/knockout-view").then((mod) => mod.KnockoutView),
+  () => import("@/components/sports/world-cup/knockout-view").then((mod) => mod.KnockoutView),
   { loading: () => <BlockLoading label="加载淘汰赛视图..." /> }
 );
 const EngineComparisonView = dynamic(
-  () => import("@/components/world-cup/engine-comparison-view").then((mod) => mod.EngineComparisonView),
+  () => import("@/components/sports/world-cup/engine-comparison-view").then((mod) => mod.EngineComparisonView),
   { loading: () => <BlockLoading label="加载引擎对比..." /> }
 );
-const EngineAutoTuneDashboard = dynamic(
-  () => import("@/components/world-cup/engine-auto-tune-dashboard").then((mod) => mod.EngineAutoTuneDashboard),
-  { loading: () => <BlockLoading label="加载自动调教..." /> }
-);
-const BatchEngineSwitcher = dynamic(
-  () => import("@/components/world-cup/batch-engine-switcher").then((mod) => mod.BatchEngineSwitcher),
-  { loading: () => <BlockLoading label="加载批量切换..." /> }
-);
 const TournamentSimulation = dynamic(
-  () => import("@/components/world-cup/tournament-simulation"),
+  () => import("@/components/sports/world-cup/tournament-simulation"),
   { loading: () => <BlockLoading label="加载锦标赛模拟..." /> }
 );
 const AnalyticsDashboard = dynamic(
-  () => import("@/components/world-cup/analytics-dashboard").then((mod) => mod.AnalyticsDashboard),
+  () => import("@/components/sports/world-cup/analytics-dashboard").then((mod) => mod.AnalyticsDashboard),
   { loading: () => <BlockLoading label="加载系统监控..." /> }
 );
 
@@ -472,17 +464,6 @@ export default function WorldCupPage() {
             引擎对比
           </button>
           <button
-            onClick={() => handleTabChange("auto-tune")}
-            className={cn(
-              "flex-1 min-w-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors",
-              activeTab === "auto-tune"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            自动调教
-          </button>
-          <button
             onClick={() => handleTabChange("analytics")}
             className={cn(
               "flex-1 min-w-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors",
@@ -765,14 +746,6 @@ export default function WorldCupPage() {
         {/* Engine Comparison Stats */}
         {activeTab === "engine-stats" && (
           <EngineComparisonView />
-        )}
-
-        {/* Auto-Tune Dashboard */}
-        {activeTab === "auto-tune" && (
-          <div className="space-y-6">
-            <BatchEngineSwitcher onCompleted={handlePredictionUpdated} />
-            <EngineAutoTuneDashboard />
-          </div>
         )}
 
         {/* System Analytics */}

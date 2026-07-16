@@ -21,7 +21,7 @@ const NAV = [
   { href: "/sports/markets", label: "体育市场", icon: LineChart, match: ["/sports/markets"] },
   { href: "/sports/recommendations", label: "体育推荐", icon: Target, match: ["/sports/recommendations"] },
   { href: "/sports/settlements", label: "体育结算", icon: Target, match: ["/sports/settlements"] },
-  { href: "/world-cup", label: "世界杯", icon: Trophy, match: ["/world-cup"] },
+  { href: "/sports/world-cup", label: "世界杯", icon: Trophy, match: ["/sports/world-cup"] },
 ];
 
 const HOT_NEWS = [

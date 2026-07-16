@@ -25,7 +25,13 @@ describe("navigation shell", () => {
       "quality/page.tsx",
       "quality-metrics/page.tsx",
       "trades/page.tsx",
-      "world-cup/page.tsx",
+      "sports/world-cup/page.tsx",
+      "sports/futures/page.tsx",
+      "sports/learning/page.tsx",
+      "sports/markets/page.tsx",
+      "sports/optimization/page.tsx",
+      "sports/recommendations/page.tsx",
+      "sports/settlements/page.tsx",
     ]) {
       expect(readAppFile(file), file).not.toContain("<AppNav />");
     }

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { MatchDetailPanel } from "@/components/sports/match-detail-panel";
+import { TraditionalOddsChart } from "@/components/sports/markets/TraditionalOddsChart";
 import {
   fetchMatchDetail,
   triggerPrediction,
@@ -11,6 +12,8 @@ import {
   type MatchDetail,
   type PredictionResult,
 } from "@/lib/sports-api";
+
+type TabId = "details" | "odds";
 
 export default function MatchDetailPage() {
   const params = useParams();
@@ -22,6 +25,7 @@ export default function MatchDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [isPredicting, setIsPredicting] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabId>("details");
 
   useEffect(() => {
     setLoading(true);
@@ -90,12 +94,40 @@ export default function MatchDetailPage() {
       <Link href="/sports" className="text-sm text-muted-foreground hover:underline">
         ← 返回列表
       </Link>
-      <MatchDetailPanel
-        match={match}
-        prediction={prediction}
-        onPredict={handlePredict}
-        isPredicting={isPredicting}
-      />
+      <div className="flex gap-2 border-b">
+        <button
+          type="button"
+          onClick={() => setActiveTab("details")}
+          className={`px-4 py-2 text-sm font-medium border-b-2 ${
+            activeTab === "details"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          比赛详情
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("odds")}
+          className={`px-4 py-2 text-sm font-medium border-b-2 ${
+            activeTab === "odds"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          赔率对比
+        </button>
+      </div>
+      {activeTab === "details" ? (
+        <MatchDetailPanel
+          match={match}
+          prediction={prediction}
+          onPredict={handlePredict}
+          isPredicting={isPredicting}
+        />
+      ) : (
+        <TraditionalOddsChart matchId={matchId} />
+      )}
     </main>
   );
 }

@@ -67,10 +67,16 @@ class ParameterOptimizer:
         """Run optimization synchronously. Returns best params + score.
 
         For production async usage, wrap this in optimization_task_manager.
+        Persists the best candidate via OptimizedParamsStore.save_candidate()
+        so the monthly re-optimization job (spec §8.2) produces a durable row.
         """
         config = _SPORT_CONFIG.get(sport)
         if config is None:
             raise ValueError(f"Unsupported sport: {sport}")
+
+        # Map trial.number -> structured params + BacktestResult so we can
+        # reconstruct the structured dicts for the best trial after search.
+        trial_records: dict[int, dict[str, Any]] = {}
 
         def objective(trial: optuna.Trial) -> float:
             factor_weights = self._sample_factor_weights(trial, sport)
@@ -82,17 +88,59 @@ class ParameterOptimizer:
                 test_matches=test_matches,
                 params=params,
             )
+            trial_records[trial.number] = {
+                "factor_weights": factor_weights,
+                "elo_params": elo_params,
+                "result": result,
+            }
             return result.score
 
         study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=42))
         study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
 
         best_trial = study.best_trial
+        best_record = trial_records.get(best_trial.number, {})
+        best_result = best_record.get("result")
+        factor_weights = best_record.get("factor_weights", {})
+        elo_params = best_record.get("elo_params", {})
+
+        # Persist best candidate (Fix 7 / spec §8.2). Best-effort: a persistence
+        # failure must not invalidate the optimization result itself.
+        saved: dict | None = None
+        if best_result is not None and factor_weights:
+            try:
+                from app.kernel.optimized_params_store import OptimizedParamsStore
+                store = OptimizedParamsStore()
+                saved = store.save_candidate(
+                    sport=sport,
+                    competition=sport,
+                    factor_weights=factor_weights,
+                    elo_params=elo_params,
+                    score=best_result.score,
+                    accuracy=best_result.accuracy,
+                    brier_score=best_result.brier_score,
+                    mae=best_result.mae,
+                    sample_count=best_result.sample_count,
+                    trial_number=best_trial.number,
+                )
+                logger.info(
+                    "[Optimizer] Saved best candidate for %s (id=%s, score=%.4f)",
+                    sport,
+                    saved.get("id"),
+                    best_result.score,
+                )
+            except Exception:
+                logger.exception(
+                    "[Optimizer] Failed to persist best candidate for %s",
+                    sport,
+                )
+
         return {
             "best_score": best_trial.value,
             "best_params": best_trial.params,
             "trials": len(study.trials),
             "sport": sport,
+            "saved_candidate": saved,
         }
 
     def _sample_factor_weights(self, trial: optuna.Trial, sport: str) -> dict[str, float]:

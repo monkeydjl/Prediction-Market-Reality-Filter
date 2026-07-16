@@ -26,27 +26,73 @@ async def fetch_nba_season_games(season: str) -> list[dict[str, Any]]:
     Returns:
         List of game dicts with home_team, away_team, home_score, away_score, season, date.
     """
-    # Delegates to existing NBA adapter's fetch logic.
-    # This is a thin wrapper that the ingestor calls.
-    from app.sports.basketball.nba_adapter import NBAAdapter
-    adapter = NBAAdapter()
-    games = await adapter.fetch_historical_games(season)
+    from app.sports.basketball.balldontlie_client import fetch_nba_games
+    from app.sports.basketball.nba_adapter import parse_nba_game
+
+    season_year = int(season.split("-")[0])
+    raw_games = fetch_nba_games(season_year)
+    games: list[dict[str, Any]] = []
+    for raw in raw_games:
+        parsed = parse_nba_game(raw)
+        if parsed:
+            games.append({
+                "game_id": raw.get("id"),
+                "home_team": parsed["home_team"],
+                "away_team": parsed["away_team"],
+                "home_score": parsed["home_score"],
+                "away_score": parsed["away_score"],
+                "date": parsed["kickoff_utc"].isoformat() if parsed.get("kickoff_utc") else None,
+            })
     return games
 
 
 async def fetch_mlb_season_games(season: str) -> list[dict[str, Any]]:
     """Fetch MLB games for a season from statsapi.mlb.com."""
-    from app.sports.baseball.mlb_adapter import MLBDataAdapter
-    adapter = MLBDataAdapter()
-    games = await adapter.fetch_historical_games(season)
+    from app.sports.baseball.mlb_stats_client import fetch_mlb_schedule
+    from app.sports.baseball.mlb_adapter import parse_mlb_game
+
+    start = f"{season}-01-01"
+    end = f"{season}-12-31"
+    raw_games = fetch_mlb_schedule(start, end)
+    games: list[dict[str, Any]] = []
+    for raw in raw_games:
+        parsed = parse_mlb_game(raw)
+        if parsed:
+            games.append({
+                "game_id": raw.get("gamePk"),
+                "home_team": parsed["home_team"],
+                "away_team": parsed["away_team"],
+                "home_score": parsed["home_score"],
+                "away_score": parsed["away_score"],
+                "date": parsed["kickoff_utc"].isoformat() if parsed.get("kickoff_utc") else None,
+            })
     return games
 
 
 async def fetch_nhl_season_games(season: str) -> list[dict[str, Any]]:
     """Fetch NHL games for a season from api-web.nhle.com."""
-    from app.sports.hockey.nhl_adapter import NHLDataAdapter
-    adapter = NHLDataAdapter()
-    games = await adapter.fetch_historical_games(season)
+    from app.sports.hockey.nhl_stats_client import fetch_nhl_schedule
+    from app.sports.hockey.nhl_adapter import parse_nhl_game
+
+    # Convert "2023-24" to NHL season key "20232024"
+    parts = season.split("-")
+    if len(parts) == 2:
+        nhl_season = f"{parts[0]}{parts[1][-2:]}"
+    else:
+        nhl_season = season
+    raw_games = fetch_nhl_schedule(nhl_season)
+    games: list[dict[str, Any]] = []
+    for raw in raw_games:
+        parsed = parse_nhl_game(raw)
+        if parsed:
+            games.append({
+                "game_id": raw.get("id"),
+                "home_team": parsed["home_team"],
+                "away_team": parsed["away_team"],
+                "home_score": parsed["home_score"],
+                "away_score": parsed["away_score"],
+                "date": parsed["kickoff_utc"].isoformat() if parsed.get("kickoff_utc") else None,
+            })
     return games
 
 

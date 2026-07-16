@@ -337,9 +337,6 @@ class KernelTraditionalOddsSnapshot(KernelBase):
 class KernelOptimizedParams(KernelBase):
     """Stores optimized parameter sets from Phase 9 backtesting."""
     __tablename__ = "kernel_optimized_params"
-    __table_args__ = (
-        UniqueConstraint("sport", "competition", "status", name="uq_optimized_params_active"),
-    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     sport = Column(String, nullable=False, index=True)

@@ -21,13 +21,25 @@ def test_optimize_converges_with_mock_backtest():
             sample_count=10, score=score, predictions=[],
         )
 
-    with patch("app.kernel.parameter_optimizer.BacktestRunner.run", side_effect=mock_run):
+    # Mock OptimizedParamsStore so the test doesn't write to the real kernel DB.
+    with patch("app.kernel.parameter_optimizer.BacktestRunner.run", side_effect=mock_run), \
+         patch("app.kernel.optimized_params_store.OptimizedParamsStore") as MockStore:
+        mock_store_instance = MockStore.return_value
+        mock_store_instance.save_candidate.return_value = {"id": 42, "status": "candidate"}
         result = optimizer.optimize_sync("nba", n_trials=10, train_matches=[], test_matches=[])
 
     assert "best_score" in result
     assert "best_params" in result
     assert result["trials"] == 10
     assert result["best_score"] > 0.5  # Should find higher elo weight
+    # Fix 7: best candidate should be persisted via save_candidate
+    assert mock_store_instance.save_candidate.called
+    saved_kwargs = mock_store_instance.save_candidate.call_args.kwargs
+    assert saved_kwargs["sport"] == "nba"
+    assert saved_kwargs["competition"] == "nba"
+    assert "elo" in saved_kwargs["factor_weights"]
+    assert saved_kwargs["trial_number"] is not None
+    assert result["saved_candidate"] == {"id": 42, "status": "candidate"}
 
 
 def test_search_space_weights_sum_to_one():

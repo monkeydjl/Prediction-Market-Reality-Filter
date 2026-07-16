@@ -98,3 +98,28 @@ def test_apply_is_idempotent(store):
     # Applying again should not error
     result = store.apply(saved["id"])
     assert result["status"] == "applied"
+
+
+def test_apply_updates_factor_registry(store):
+    """Verify apply() calls FactorRegistry.update_weight for each factor (spec §7.5)."""
+    from unittest.mock import patch
+    saved = store.save_candidate(
+        sport="nba", competition="nba",
+        factor_weights={"elo": 0.45, "home_court": 0.15, "rest": 0.15, "form": 0.25},
+        elo_params={"hfa": 100},
+        score=0.72, accuracy=0.68, brier_score=0.21, mae=0.32, sample_count=100,
+    )
+    # FactorRegistry is imported inside apply(); patch at the source module so
+    # the in-function `from ... import FactorRegistry` picks up the mock.
+    with patch("app.kernel.factor_registry.FactorRegistry") as MockRegistry:
+        instance = MockRegistry.return_value
+        store.apply(saved["id"])
+
+    # update_weight should be called once per factor weight entry
+    assert instance.update_weight.call_count == 4
+    # Spot-check the first call: factor_id, competition, weight, source kwarg
+    first_call = instance.update_weight.call_args_list[0]
+    assert first_call.args[0] == "elo"
+    assert first_call.args[1] == "nba"
+    assert first_call.args[2] == 0.45
+    assert first_call.kwargs.get("source") == "optimized"

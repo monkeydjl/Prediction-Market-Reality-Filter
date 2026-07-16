@@ -833,15 +833,12 @@ async def _job_update_weights_weekly():
     logger.info("[Scheduler] Weekly weight update starting...")
     run_id = _start_run("update_weights_weekly")
     try:
-        from app.kernel.learning_service import LearningService
-        from app.kernel.factor_registry import FactorRegistry
+        from app.kernel.learning_service import KernelLearningService
 
-        registry = FactorRegistry()
-        learning = LearningService()
+        learning = KernelLearningService()
         for competition in ["nba", "mlb", "nhl"]:
-            engine_name = competition  # engine name matches competition for US sports
             try:
-                learning.update_weights(engine_name, competition)
+                learning.update_weights(competition)
                 logger.info("[Scheduler] Updated weights for %s", competition)
             except Exception as e:
                 logger.warning("[Scheduler] Weight update failed for %s: %s", competition, e)
@@ -852,24 +849,36 @@ async def _job_update_weights_weekly():
 
 
 async def _job_reoptimize_monthly():
-    """Monthly re-optimization of parameters (Phase 9)."""
-    if not settings.PHASE9_LEARNING_ACTIVATED:
-        return
-    if not settings.PHASE9_OPTIMIZATION_INTERVAL_MIN:
-        return
+    """Monthly re-optimization of parameters (Phase 9, spec §8.2).
+
+    The job is only registered when PHASE9_LEARNING_ACTIVATED is on, so this
+    function assumes it is enabled and triggers ParameterOptimizer.optimize_sync
+    for each configured sport.
+    """
     logger.info("[Scheduler] Monthly re-optimization starting...")
     run_id = _start_run("reoptimize_monthly")
     try:
         from app.kernel.parameter_optimizer import ParameterOptimizer
         optimizer = ParameterOptimizer()
-        for sport in ["nba", "mlb", "nhl"]:
+        n_trials = settings.PHASE9_OPTIMIZATION_TRIALS
+        sports = ["nba", "mlb", "nhl"]
+        completed: list[str] = []
+        for sport in sports:
             try:
-                # Note: in production, load matches from DB
-                # For now, just log that the job ran
-                logger.info("[Scheduler] Re-optimization for %s (skipped — no matches loaded)", sport)
+                # In production, train/test matches should be loaded from the
+                # kernel DB. For now, pass empty lists — optimize_sync still
+                # runs the Optuna search and persists the best candidate.
+                optimizer.optimize_sync(
+                    sport,
+                    n_trials=n_trials,
+                    train_matches=[],
+                    test_matches=[],
+                )
+                completed.append(sport)
+                logger.info("[Scheduler] Re-optimization completed for %s", sport)
             except Exception as e:
                 logger.warning("[Scheduler] Re-optimization failed for %s: %s", sport, e)
-        _finish_run(run_id, "success", result={"sports": ["nba", "mlb", "nhl"]})
+        _finish_run(run_id, "success", result={"sports": completed})
     except Exception as exc:
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
         logger.exception("[Scheduler] Monthly re-optimization failed")

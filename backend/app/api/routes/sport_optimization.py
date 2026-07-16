@@ -34,7 +34,7 @@ def _check_enabled() -> None:
 
 
 @router.post("/ingest")
-async def ingest_historical_data(request: IngestRequest):
+async def ingest_historical_data(request: IngestRequest, _auth: None = Depends(require_write_key)):
     """Trigger historical data ingestion."""
     _check_enabled()
     ingestor = HistoricalDataIngestor()
@@ -48,7 +48,7 @@ async def ingest_historical_data(request: IngestRequest):
 
 
 @router.post("/run")
-async def run_optimization(request: OptimizationRequest):
+async def run_optimization(request: OptimizationRequest, _auth: None = Depends(require_write_key)):
     """Trigger parameter optimization (async)."""
     _check_enabled()
     from app.services.optimization_task_manager import get_task_manager

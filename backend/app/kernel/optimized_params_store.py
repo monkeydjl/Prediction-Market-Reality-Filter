@@ -94,6 +94,7 @@ class OptimizedParamsStore:
             row = (
                 session.query(KernelOptimizedParams)
                 .filter_by(sport=sport, competition=competition, status="applied")
+                .order_by(KernelOptimizedParams.id.desc())
                 .first()
             )
             return self._row_to_dict(row) if row else None
@@ -134,6 +135,16 @@ class OptimizedParamsStore:
             target.applied_at = datetime.now(timezone.utc)
             session.commit()
             session.refresh(target)
+
+            # Update KernelFactor weights via FactorRegistry (spec §7.5 step 3)
+            factor_weights = json.loads(target.factor_weights)
+            from app.kernel.factor_registry import FactorRegistry
+            registry = FactorRegistry()
+            for factor_id, weight in factor_weights.items():
+                registry.update_weight(
+                    factor_id, target.competition, weight, source="optimized",
+                )
+
             return self._row_to_dict(target)
         except Exception:
             session.rollback()

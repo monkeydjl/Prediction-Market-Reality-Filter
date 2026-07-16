@@ -1077,6 +1077,13 @@ class Settings:
     EDGE_DETECTION_INTERVAL_MIN: int = int(
         os.getenv("EDGE_DETECTION_INTERVAL_MIN", "5")
     )
+    # Phase 7 Subproject C — Sport Recommendation Engine (default OFF).
+    # Stateless service that computes SportActionableRecommendation from B's
+    # persisted edges. When false, all /api/sport-recommendations/* endpoints
+    # return 503.
+    PHASE7_SPORT_RECOMMENDATION_ENABLED: bool = _env_bool(
+        "PHASE7_SPORT_RECOMMENDATION_ENABLED", "false"
+    )
 
 
 settings = Settings()

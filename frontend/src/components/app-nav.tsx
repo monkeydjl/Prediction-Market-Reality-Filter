@@ -20,6 +20,7 @@ const NAV = [
   { href: "/sports/learning", label: "学习仪表盘", icon: GraduationCap, match: ["/sports/learning"] },
   { href: "/sports/markets", label: "体育市场", icon: LineChart, match: ["/sports/markets"] },
   { href: "/sports/recommendations", label: "体育推荐", icon: Target, match: ["/sports/recommendations"] },
+  { href: "/sports/settlements", label: "体育结算", icon: Target, match: ["/sports/settlements"] },
   { href: "/world-cup", label: "世界杯", icon: Trophy, match: ["/world-cup"] },
 ];
 

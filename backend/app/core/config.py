@@ -1044,9 +1044,6 @@ class Settings:
     PHASE7_SPORT_MARKET_BRIDGE_SCHEDULER_ENABLED: bool = _env_bool(
         "PHASE7_SPORT_MARKET_BRIDGE_SCHEDULER_ENABLED", "false"
     )
-    PHASE7_SPORT_MARKET_SNAPSHOT_INTERVAL_SECONDS: int = int(
-        os.getenv("PHASE7_SPORT_MARKET_SNAPSHOT_INTERVAL_SECONDS", "300")
-    )
     PHASE7_POLYMARKET_SPORTS_FETCH_INTERVAL_SECONDS: int = int(
         os.getenv("PHASE7_POLYMARKET_SPORTS_FETCH_INTERVAL_SECONDS", "600")
     )
@@ -1061,8 +1058,8 @@ class Settings:
     POLYMARKET_SPORTS_DISCOVERY_INTERVAL_MIN: int = int(
         os.getenv("POLYMARKET_SPORTS_DISCOVERY_INTERVAL_MIN", "60")
     )
-    ODDS_API_FETCH_INTERVAL_HOURS: int = int(
-        os.getenv("ODDS_API_FETCH_INTERVAL_HOURS", "6")
+    ODDS_FETCH_INTERVAL_MIN: int = int(
+        os.getenv("ODDS_FETCH_INTERVAL_MIN", "10")
     )
     MARKET_SNAPSHOT_INTERVAL_MIN: int = int(
         os.getenv("MARKET_SNAPSHOT_INTERVAL_MIN", "1")
@@ -1105,6 +1102,17 @@ class Settings:
     )
     MARKET_CALIBRATION_WINDOW_SIZE: int = int(
         os.getenv("MARKET_CALIBRATION_WINDOW_SIZE", "30")
+    )
+
+    # Phase 8 — Calibration Fusion (default OFF). When true,
+    # EdgeDetectorService._compute_trust delegates to
+    # CalibrationFusionService which reads both Phase 3's
+    # KernelCalibration and Phase 7 D's KernelMarketCalibration to
+    # compute a sample-count-weighted composite trust. When false
+    # (default), _compute_trust falls back to Phase 7 Phase-3-only
+    # behavior — zero-invasion.
+    PHASE8_CALIBRATION_FUSION_ENABLED: bool = _env_bool(
+        "PHASE8_CALIBRATION_FUSION_ENABLED", "false"
     )
 
 

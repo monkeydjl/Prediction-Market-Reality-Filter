@@ -307,6 +307,33 @@ class KernelMarketCalibration(KernelBase):
     last_updated = Column(DateTime, nullable=False)
 
 
+class KernelTraditionalOddsSnapshot(KernelBase):
+    """Traditional sportsbook odds snapshot (separate from Polymarket snapshots).
+
+    No link_id — traditional odds bypass the three-layer matching engine.
+    Unique constraint on (match_id, mapped_outcome, captured_at) for idempotent
+    scheduler retries.
+    """
+    __tablename__ = "kernel_traditional_odds_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "match_id", "mapped_outcome", "captured_at",
+            name="uq_traditional_odds_match_outcome_time"
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(String, nullable=False, index=True)
+    mapped_outcome = Column(String, nullable=False)
+    competition = Column(String, nullable=False)
+    implied_prob = Column(Float, nullable=False)
+    decimal_odds = Column(Float, nullable=False)
+    bookmaker = Column(String, nullable=True)
+    bookmakers_count = Column(Integer, default=0)
+    captured_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 def init_kernel_db(db_path: str | None = None) -> None:
     """Initialize the kernel database. Creates tables if they don't exist."""
     global _engine, _SessionLocal

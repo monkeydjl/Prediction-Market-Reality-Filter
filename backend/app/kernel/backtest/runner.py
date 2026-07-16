@@ -46,12 +46,6 @@ _HOME_COURT_PROB = {
     "nhl": 0.55,
 }
 
-_FACTOR_NAMES = {
-    "nba": ["elo", "home_court", "rest", "form"],
-    "mlb": ["elo", "home_court", "rest", "form", "starting_pitcher"],
-    "nhl": ["elo", "home_court", "rest", "form", "goalie"],
-}
-
 
 class BacktestRunner:
     """Runs backtest with given parameters over historical matches."""

@@ -39,13 +39,18 @@ def _extract_team_from_ticker(ticker: str) -> str:
     return ticker.rsplit("-", 1)[-1].strip()
 
 
-def _parse_kalshi_price(last_price: float, yes_bid: float, yes_ask: float) -> float:
-    """Parse Kalshi market price: last_price > midpoint > 0.5 fallback."""
+def _parse_kalshi_price(last_price: float, yes_bid: float, yes_ask: float) -> float | None:
+    """Parse Kalshi market price: last_price > midpoint > None.
+
+    Returns None when no price data is available — callers should skip such
+    contracts instead of injecting a synthetic 0.5 probability that would
+    pollute downstream edge calculations.
+    """
     if last_price and last_price > 0:
         return float(last_price)
     if yes_bid > 0 and yes_ask > 0:
         return float((yes_bid + yes_ask) / 2)
-    return 0.5
+    return None
 
 
 async def fetch_kalshi_futures_markets(limit: int = 200) -> list[dict[str, Any]]:
@@ -99,6 +104,8 @@ async def fetch_kalshi_futures_markets(limit: int = 200) -> list[dict[str, Any]]
                     market.get("yes_bid_dollars", 0) or 0,
                     market.get("yes_ask_dollars", 0) or 0,
                 )
+                if price is None:
+                    continue  # Skip contracts with no price data
                 contracts.append({
                     "ticker": ticker,
                     "team": team,

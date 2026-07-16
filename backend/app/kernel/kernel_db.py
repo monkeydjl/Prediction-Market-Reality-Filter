@@ -496,7 +496,8 @@ def get_latest_prediction(match_id: str) -> KernelPrediction | None:
     session = get_kernel_session()
     try:
         return session.query(KernelPrediction).filter_by(match_id=match_id).one_or_none()
-    except Exception:
+    except Exception as e:
+        logger.warning("kernel_db query failed: %s", e, exc_info=True)
         return None
     finally:
         session.close()
@@ -516,7 +517,8 @@ def get_calibration(engine_name: str, competition: str) -> KernelCalibration | N
             .filter_by(engine=engine_name, competition=competition)
             .one_or_none()
         )
-    except Exception:
+    except Exception as e:
+        logger.warning("kernel_db query failed: %s", e, exc_info=True)
         return None
     finally:
         session.close()
@@ -535,7 +537,8 @@ def get_match_ids_with_predictions(match_ids: list[str]) -> set[str]:
             KernelPrediction.match_id.in_(match_ids)
         ).all()
         return {row[0] for row in rows}
-    except Exception:
+    except Exception as e:
+        logger.warning("kernel_db query failed: %s", e, exc_info=True)
         return set()
     finally:
         session.close()
@@ -574,7 +577,8 @@ def get_engine_scores(engine: str | None = None,
             else:
                 return []  # No matching competitions
         return query.all()
-    except Exception:
+    except Exception as e:
+        logger.warning("kernel_db query failed: %s", e, exc_info=True)
         return []
     finally:
         session.close()
@@ -647,7 +651,8 @@ def get_prediction_history(sport: str | None = None,
             items.append(item)
 
         return items, total
-    except Exception:
+    except Exception as e:
+        logger.warning("kernel_db query failed: %s", e, exc_info=True)
         return [], 0
     finally:
         session.close()
@@ -699,7 +704,8 @@ def get_prediction_history_by_match(match_id: str) -> dict:
             "items": items,
             "count": len(items),
         }
-    except Exception:
+    except Exception as e:
+        logger.warning("kernel_db query failed: %s", e, exc_info=True)
         return {"match_id": match_id, "sport": None, "competition": None, "items": [], "count": 0}
     finally:
         session.close()
@@ -716,7 +722,8 @@ def get_calibrations(engine: str | None = None,
         if competition is not None:
             query = query.filter(KernelCalibration.competition == competition)
         return query.all()
-    except Exception:
+    except Exception as e:
+        logger.warning("kernel_db query failed: %s", e, exc_info=True)
         return []
     finally:
         session.close()
@@ -793,7 +800,8 @@ def compute_reliability_bins(engine: str | None = None,
             "bins": bin_list,
             "total_samples": len(rows),
         }
-    except Exception:
+    except Exception as e:
+        logger.warning("kernel_db query failed: %s", e, exc_info=True)
         return {
             "engine": engine,
             "competition": competition,

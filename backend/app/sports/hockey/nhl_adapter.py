@@ -28,9 +28,8 @@ from app.kernel.kernel_db import (
     get_kernel_session, KernelMatchFixture, KernelMatchResult, KernelEloRating,
 )
 from app.sports.hockey.nhl_stats_client import (
-    fetch_nhl_schedule, fetch_nhl_team_roster, NHLStatsClientError,
+    fetch_nhl_schedule, NHLStatsClientError,
 )
-from app.sports._shared.elo_calculator import seed_elo_from_games
 
 logger = logging.getLogger(__name__)
 

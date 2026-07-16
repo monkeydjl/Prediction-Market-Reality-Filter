@@ -29,7 +29,6 @@ from app.kernel.kernel_db import (
 from app.sports.baseball.mlb_stats_client import (
     fetch_mlb_schedule, fetch_mlb_pitcher, MLBStatsClientError,
 )
-from app.sports._shared.elo_calculator import seed_elo_from_games
 
 logger = logging.getLogger(__name__)
 

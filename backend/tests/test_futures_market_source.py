@@ -105,8 +105,8 @@ def test_parse_kalshi_price_prefers_last_price():
     assert _parse_kalshi_price(0.18, 0.17, 0.19) == 0.18
     # Fall back to midpoint when last_price is 0/None
     assert _parse_kalshi_price(0, 0.30, 0.34) == 0.32
-    # Fall back to 0.5 when all missing
-    assert _parse_kalshi_price(0, 0, 0) == 0.5
+    # Return None when all missing (callers should skip, not inject 0.5)
+    assert _parse_kalshi_price(0, 0, 0) is None
 
 
 def test_kalshi_futures_series_prefixes_covers_sports():

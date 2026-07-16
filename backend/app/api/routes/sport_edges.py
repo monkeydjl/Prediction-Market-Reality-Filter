@@ -89,12 +89,14 @@ def get_latest_edges(match_id: str) -> dict[str, Any]:
             "skipped": True, "skip_reason": "no_verified_links",
         }
     # Use the first edge's match-level metadata (trust is per-match)
+    from app.kernel.kernel_db import get_latest_prediction
+    pred = get_latest_prediction(match_id)
     return {
         "match_id": match_id,
         "outcomes": [_edge_to_dict(e) for e in edges],
-        "engine_name": None,  # not persisted per-edge; populated only on detect
-        "competition": None,
-        "prediction_timestamp": None,
+        "engine_name": pred.engine if pred else None,
+        "competition": pred.competition if pred else None,
+        "prediction_timestamp": pred.created_at.isoformat() if pred and pred.created_at else None,
         "skipped": False,
         "skip_reason": None,
     }

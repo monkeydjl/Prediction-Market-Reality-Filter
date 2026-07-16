@@ -22,7 +22,7 @@ def _ensure_enabled() -> None:
         )
 
 
-def _service():
+def _service() -> "MarketSettlementService":
     from app.kernel.market_settlement_service import MarketSettlementService
     return MarketSettlementService()
 

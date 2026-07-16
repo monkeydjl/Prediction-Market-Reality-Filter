@@ -7,7 +7,7 @@ tables. Does NOT touch the existing world_cup_predictions.db.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import create_engine, event
@@ -244,7 +244,7 @@ class KernelSportEdge(KernelBase):
     spread = Column(Float, nullable=True)             # Polymarket YES+NO-1; None for traditional odds
     sources_count = Column(Integer, nullable=False)
     stale = Column(Boolean, nullable=False, default=False)
-    captured_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    captured_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         Index("ix_kernel_sport_edges_match_outcome_captured", "match_id", "mapped_outcome", "captured_at"),

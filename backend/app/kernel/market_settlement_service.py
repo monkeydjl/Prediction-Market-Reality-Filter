@@ -13,13 +13,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import select
+
 from app.core import config
 from app.kernel.kernel_db import (
     KernelMatchOutcome,
     KernelSportMarketLink,
     KernelMarketSnapshot,
     KernelMarketSettlement,
-    KernelPrediction,
     get_kernel_session,
     get_latest_prediction,
 )
@@ -186,14 +187,12 @@ def _find_finished_matches_without_settlements(limit: int) -> list[dict[str, Any
     """Find finished matches that don't have settlement rows yet."""
     session = get_kernel_session()
     try:
-        processed_subquery = (
-            session.query(KernelMarketSettlement.match_id).distinct().subquery()
-        )
+        processed_select = select(KernelMarketSettlement.match_id).distinct()
         rows = (
             session.query(KernelMatchOutcome)
             .filter(
                 KernelMatchOutcome.finished_at.isnot(None),
-                ~KernelMatchOutcome.match_id.in_(processed_subquery),
+                ~KernelMatchOutcome.match_id.in_(processed_select),
             )
             .order_by(KernelMatchOutcome.finished_at.desc())
             .limit(limit)

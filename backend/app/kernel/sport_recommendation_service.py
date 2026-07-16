@@ -99,7 +99,7 @@ def _compute_confidence(adjusted_edge_pct: float, trust: float) -> str:
 def _compute_allocation(adjusted_edge_pct: float, risk_level: str, decision: str) -> float:
     """Kelly-inspired fractional allocation, capped at 2% of bankroll.
 
-    Returns value in 0-25 scale (realistically 0-2).
+    Returns value in 0-2 scale (capped at 2% of bankroll).
     Zero when decision is skip or risk is high.
     """
     if decision == "skip" or risk_level == "high":
@@ -301,7 +301,7 @@ class SportRecommendationService:
 
         captured_at = edge.get("captured_at")
         if captured_at is None:
-            captured_at = datetime.utcnow()
+            captured_at = datetime.now(timezone.utc)
 
         return SportActionableRecommendation(
             match_id=match_id,

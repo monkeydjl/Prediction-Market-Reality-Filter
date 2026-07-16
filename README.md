@@ -1,20 +1,71 @@
 # Prediction Market Reality Filter
 
-AI 驱动的**事件情报与概率变化分析平台**。采集公开信息，抽取证据、评估可信度，估计未来事件的发生概率如何变化，并辅助人工判断是否值得持续跟踪。
+AI 驱动的**事件情报与概率变化分析平台**，并内置 **Sports Prediction OS** — 一个基于 Protocol 接口的多体育预测内核。
 
 ```text
 公开信息 → 候选事件 → 证据评分 → 概率变化 → 情报报告 → 人工审阅
+                                        ↓
+                      Sports Prediction OS（Phase 1-13）
 ```
 
 它**不是**新闻聚合器、自动交易机器人，也不是只围绕某个预测市场的扫描器。Polymarket / Kalshi 只是事件来源与概率基线之一。
 
 当前预测市场发现默认包括 Polymarket、Kalshi 和公共 Limitless adapter。Opinion 和 Predict.fun 已具备真实 adapter 接入路径，但分别需要 `OPINION_API_KEY` 和 `PREDICT_FUN_API_KEY`；没有密钥时会 fail closed，不贡献事件。Probable 仍保持计划接入状态，直到官方 API、indexer 或合约事件接口被验证。新增链上 adapter 暂不参与自动结算。
 
+## Sports Prediction OS
+
+Phase 1-13 构建的多体育预测内核，覆盖 10 个赛事（世界杯 + 6 大足球联赛 + NBA + MLB + NHL），约 6,872 场/年。详见 [CHANGELOG.md](CHANGELOG.md#v040-2026-07-16)。
+
+### 架构分层
+
+| 层级 | 目录 | 职责 |
+|------|------|------|
+| **Kernel** | `backend/app/kernel/` | Protocol-based 核心：`prediction_kernel.py`、`domain.py`（frozen dataclass）、`protocols.py`（DataAdapter / FeatureBuilder / PredictionEngine / LearningService）、`factor_registry.py`、`learning_service.py` |
+| **Sports** | `backend/app/sports/` | 体育专用实现：`football/`（adapters + feature_builder）、`basketball/`（NBA + BasketballEngine）、`baseball/`（MLB + BaseballEngine）、`hockey/`（NHL + HockeyEngine）、`_shared/`（Elo 计算器等） |
+| **Market Bridge** | `backend/app/kernel/sport_market_bridge_service.py` 等 | 三层匹配引擎（rule ≥0.9 → LLM ≥0.85 → 人工门禁），Edge Detector，Recommendation Engine，Market Settlement Feedback |
+| **Realtime** | `backend/app/realtime/` | WebSocket 实时价格推送（Phase 10） |
+| **Backtest** | `backend/app/kernel/backtest/` | 回测框架 + Bayesian 参数优化（Phase 9） |
+
+### 赛事 ID 前缀路由
+
+`match_id` 前缀决定 MultiAdapter / MultiFeatureBuilder 派发到具体体育实现：
+
+| 前缀 | 赛事 | 引擎 |
+|------|------|------|
+| `wc-` | FIFA World Cup | EloOddsEngine (football) |
+| `ucl-` / `epl-` / `laliga-` / `bundesliga-` / `seriea-` / `ligue1-` | 6 大足球联赛 | EloOddsEngine (football) |
+| `nba-` | NBA | BasketballEngine (Bradley-Terry, 4 factors) |
+| `mlb-` | MLB | BaseballEngine (Bradley-Terry, 5 factors) |
+| `nhl-` | NHL | HockeyEngine (Bradley-Terry, 5 factors) |
+
+### Feature Flag
+
+所有 Phase 默认 OFF，关闭时回退到既有行为：
+
+- `KERNEL_PREDICTION_ENABLED` — Sports Prediction OS 主开关（关闭时 `/api/predictions/*` 返回 503）
+- `PHASE2_LEAGUES_ENABLED` — 6 大足球联赛
+- `PHASE3_LEARNING_ENABLED` — 学习闭环
+- `PHASE4_NBA_ENABLED` / `PHASE5_MLB_ENABLED` / `PHASE5_NHL_ENABLED` — NBA / MLB / NHL
+- `PHASE7_SPORT_MARKET_BRIDGE_ENABLED` / `PHASE7_SPORT_RECOMMENDATION_ENABLED` / `PHASE7_MARKET_SETTLEMENT_FEEDBACK_ENABLED` — 市场桥接 / 推荐 / 结算反馈
+- `PHASE8_CALIBRATION_FUSION_ENABLED` — 校准融合
+- `PHASE9_ACCURACY_SPRINT_ENABLED` — 精度冲刺（回测 + 调参）
+- `PHASE10_REALTIME_PUSH_ENABLED` — WebSocket 实时推送
+- `PHASE11_KALSHI_SPORTS_ENABLED` — Kalshi 体育市场
+- `PHASE12_FUTURES_MARKETS_ENABLED` — 期货/冠军市场
+
+### 零侵入约束
+
+`prediction_kernel.py`、`domain.py`、`learning_service.py`、`engines/*.py` 在 Phase 1-13 全周期均未修改 — 所有体育差异通过 Protocol 接口注入。新 DB 表使用 `kernel_` 前缀，既有 `world_cup_predictions.db` 表结构不变。
+
+### 设计文档
+
+Phase 1-13 的完整 spec 和 plan 位于 [docs/superpowers/specs/](docs/superpowers/specs/) 和 [docs/superpowers/plans/](docs/superpowers/plans/)。
+
 ## 架构
 
 | 部分 | 技术 | 说明 |
 |------|------|------|
-| `backend/` | FastAPI + Python | 事件发现 / 分析 / 存储 / 校准 API，多源采集，多模型交叉验证 |
+| `backend/` | FastAPI + Python | 事件发现 / 分析 / 存储 / 校准 API，多源采集，多模型交叉验证；内置 Sports Prediction OS |
 | `frontend/` | Next.js 16 (静态导出) | 仪表盘 UI，构建后由后端在 `/` 路径一并服务 |
 
 生产模式下前端构建到 `frontend/out/`，由 FastAPI 同源服务，整个系统跑在一个端口（`:8000`）。

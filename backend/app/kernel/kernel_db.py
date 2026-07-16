@@ -7,6 +7,7 @@ tables. Does NOT touch the existing world_cup_predictions.db.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import create_engine, event
@@ -23,7 +24,7 @@ class KernelBase(DeclarativeBase):
 
 
 # Define tables as SQLAlchemy models
-from sqlalchemy import Column, String, Float, Integer, Text, DateTime, JSON, UniqueConstraint
+from sqlalchemy import Column, String, Float, Integer, Text, DateTime, JSON, UniqueConstraint, Boolean, Index
 
 
 class KernelPrediction(KernelBase):
@@ -222,6 +223,34 @@ class KernelMarketSnapshot(KernelBase):
     captured_at = Column(DateTime)
 
 
+class KernelSportEdge(KernelBase):
+    """Edge snapshot time-series for sports matches (append-only).
+
+    One row per (match_id, mapped_outcome, captured_at). raw_edge can be
+    negative (model predicts lower than market). spread is None for now
+    (known limitation: requires both YES and NO prices on separate links).
+    """
+    __tablename__ = "kernel_sport_edges"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(String, nullable=False, index=True)
+    mapped_outcome = Column(String, nullable=False)  # "home_win" | "draw" | "away_win"
+    model_prob = Column(Float, nullable=False)        # 0-1
+    market_prob = Column(Float, nullable=False)       # 0-1, liquidity-weighted
+    raw_edge = Column(Float, nullable=False)          # model_prob - market_prob, -1.0 to +1.0
+    trust = Column(Float, nullable=False)             # 0-1, from KernelCalibration
+    liquidity_factor = Column(Float, nullable=False)  # 0-1
+    adjusted_edge = Column(Float, nullable=False)     # raw_edge * trust * liquidity_factor
+    spread = Column(Float, nullable=True)             # Polymarket YES+NO-1; None for traditional odds
+    sources_count = Column(Integer, nullable=False)
+    stale = Column(Boolean, nullable=False, default=False)
+    captured_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_kernel_sport_edges_match_outcome_captured", "match_id", "mapped_outcome", "captured_at"),
+    )
+
+
 def init_kernel_db(db_path: str | None = None) -> None:
     """Initialize the kernel database. Creates tables if they don't exist."""
     global _engine, _SessionLocal
@@ -316,6 +345,24 @@ def get_latest_prediction(match_id: str) -> KernelPrediction | None:
     session = get_kernel_session()
     try:
         return session.query(KernelPrediction).filter_by(match_id=match_id).one_or_none()
+    except Exception:
+        return None
+
+
+def get_calibration(engine_name: str, competition: str) -> KernelCalibration | None:
+    """Read sports calibration for trust computation.
+
+    Returns None if no row exists (cold start). Used by EdgeDetectorService
+    to compute trust from KernelCalibration.avg_accuracy. Does NOT modify
+    the KernelCalibration table.
+    """
+    session = get_kernel_session()
+    try:
+        return (
+            session.query(KernelCalibration)
+            .filter_by(engine=engine_name, competition=competition)
+            .one_or_none()
+        )
     except Exception:
         return None
 

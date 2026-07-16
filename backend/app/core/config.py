@@ -1067,6 +1067,16 @@ class Settings:
     MARKET_SNAPSHOT_INTERVAL_MIN: int = int(
         os.getenv("MARKET_SNAPSHOT_INTERVAL_MIN", "1")
     )
+    # Phase 7 Subproject B — Edge Detector (default OFF). Computes
+    # model-vs-market divergence per outcome for sports matches. When false,
+    # all /api/sport-edges/* endpoints return 503 and the scheduler job is
+    # not registered.
+    PHASE7_EDGE_DETECTOR_ENABLED: bool = _env_bool(
+        "PHASE7_EDGE_DETECTOR_ENABLED", "false"
+    )
+    EDGE_DETECTION_INTERVAL_MIN: int = int(
+        os.getenv("EDGE_DETECTION_INTERVAL_MIN", "5")
+    )
 
 
 settings = Settings()

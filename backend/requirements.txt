@@ -28,3 +28,6 @@ openai==1.109.1
 sentry-sdk==2.63.0
 prometheus_client==0.25.0
 pyzipper==0.4.0
+
+# === Phase 9 — Accuracy Sprint ===
+optuna==4.0.0

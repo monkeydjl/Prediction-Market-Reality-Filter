@@ -23,6 +23,7 @@ from app.kernel.sport_market_bridge_service import SportMarketBridgeService
 from app.memory import loop_run_store
 from app.realtime.connection_manager import get_connection_manager
 from app.services.kalshi_sports_source import fetch_kalshi_sport_markets
+from app.kernel.futures_market_service import FuturesMarketService
 from app.services.polymarket_sports_source import fetch_polymarket_sport_markets
 from app.utils import sqlite_db
 from datetime import datetime, timedelta, timezone
@@ -943,6 +944,51 @@ async def _job_reoptimize_monthly():
         logger.exception("[Scheduler] Monthly re-optimization failed")
 
 
+async def _job_discover_futures_markets():
+    """Every FUTURES_DISCOVERY_INTERVAL_MIN: discover and link Kalshi futures markets."""
+    if not settings.PHASE12_FUTURES_MARKETS_ENABLED:
+        return
+    logger.info("[Scheduler] Futures market discovery starting...")
+    run_id = _start_run("futures_market_discover")
+    try:
+        from app.kernel.kernel_db import init_kernel_db
+        init_kernel_db()
+        service = FuturesMarketService()
+        result = await service.discover_and_link()
+        _finish_run(run_id, "success", result=result)
+        logger.info(
+            "[Scheduler] Futures market discovery: discovered=%d linked=%d errors=%d",
+            result.get("discovered", 0),
+            result.get("linked", 0),
+            result.get("errors", 0),
+        )
+    except Exception as exc:
+        logger.exception("[Scheduler] Futures market discovery failed")
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+
+
+async def _job_capture_futures_snapshots():
+    """Every FUTURES_SNAPSHOT_INTERVAL_MIN: capture price snapshots for verified futures links."""
+    if not settings.PHASE12_FUTURES_MARKETS_ENABLED:
+        return
+    logger.info("[Scheduler] Futures snapshot capture starting...")
+    run_id = _start_run("futures_snapshots_capture")
+    try:
+        from app.kernel.kernel_db import init_kernel_db
+        init_kernel_db()
+        service = FuturesMarketService()
+        result = await service.capture_snapshots()
+        _finish_run(run_id, "success", result=result)
+        logger.info(
+            "[Scheduler] Futures snapshot capture: captured=%d errors=%d",
+            result.get("captured", 0),
+            result.get("errors", 0),
+        )
+    except Exception as exc:
+        logger.exception("[Scheduler] Futures snapshot capture failed")
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+
+
 def _summarize_prediction_update(result: dict[str, Any]) -> dict[str, Any]:
     """Summarize prediction update result for scheduler run log."""
     if result.get("status") == "error":
@@ -1201,6 +1247,26 @@ def start_scheduler():
                 max_instances=1,
             )
             logger.info("[Scheduler] Registered monthly re-optimization job (interval=%d min)", settings.PHASE9_OPTIMIZATION_INTERVAL_MIN)
+        if settings.PHASE12_FUTURES_MARKETS_ENABLED:
+            scheduler.add_job(
+                _job_discover_futures_markets,
+                IntervalTrigger(minutes=settings.FUTURES_DISCOVERY_INTERVAL_MIN),
+                id="futures_market_discover",
+                replace_existing=True,
+                max_instances=1,
+            )
+            scheduler.add_job(
+                _job_capture_futures_snapshots,
+                IntervalTrigger(minutes=settings.FUTURES_SNAPSHOT_INTERVAL_MIN),
+                id="futures_snapshots_capture",
+                replace_existing=True,
+                max_instances=1,
+            )
+            logger.info(
+                "[Scheduler] Registered futures jobs (discover@%dmin, snapshots@%dmin)",
+                settings.FUTURES_DISCOVERY_INTERVAL_MIN,
+                settings.FUTURES_SNAPSHOT_INTERVAL_MIN,
+            )
         scheduler.start()
     except Exception:
         _release_scheduler_lock()

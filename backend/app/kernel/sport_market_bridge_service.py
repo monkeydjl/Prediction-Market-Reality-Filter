@@ -208,6 +208,119 @@ class SportMarketBridgeService:
             implied_prob=implied_prob,
         )
 
+    async def link_kalshi_market(self, candidate: dict) -> dict:
+        """Link a Kalshi sports market to a match via the three-layer matching engine.
+
+        Parallel to ``link_polymarket_market`` but reads its inputs from a
+        candidate dict (produced by ``fetch_kalshi_sport_markets``) and stores
+        the link with ``source='kalshi'``. The candidate dict must include a
+        ``match_id`` field identifying the match to link to (mirroring the
+        ``match_id`` kwarg that ``link_polymarket_market`` requires).
+        """
+        match_id = candidate["match_id"]
+        market_question = candidate.get("question", "")
+        detected_teams = candidate.get("detected_teams", [])
+        detected_competition = candidate.get("detected_competition")
+
+        rule_result = self._rule_match(
+            match_id=match_id,
+            market_question=market_question,
+            detected_teams=detected_teams,
+            detected_competition=detected_competition,
+        )
+
+        if rule_result is not None and rule_result.confidence >= RULE_CONFIDENCE_THRESHOLD:
+            return self._store_kalshi_link(
+                candidate, match_id, rule_result, link_method="rule", verified=True
+            )
+
+        llm_result = await self._llm_match(
+            match_id=match_id,
+            market_question=market_question,
+            detected_competition=detected_competition,
+            detected_teams=detected_teams,
+        )
+
+        if llm_result is None or llm_result.confidence < LLM_PENDING_THRESHOLD:
+            return {"linked": False, "verified": False, "source": "kalshi"}
+        if llm_result.mapped_outcome == "none":
+            return {"linked": False, "verified": False, "source": "kalshi"}
+
+        verified = llm_result.confidence >= LLM_CONFIDENCE_THRESHOLD
+        return self._store_kalshi_link(
+            candidate, match_id, llm_result, link_method="llm", verified=verified
+        )
+
+    def _store_kalshi_link(
+        self,
+        candidate: dict,
+        match_id: str,
+        match_result: MatchResult,
+        *,
+        link_method: str,
+        verified: bool,
+    ) -> dict:
+        """Persist a Kalshi market link and return a summary dict."""
+        self._links.upsert_link(
+            match_id=match_id,
+            contract_id=candidate["contract_id"],
+            source="kalshi",
+            outcome_label="yes",
+            mapped_outcome=match_result.mapped_outcome,
+            link_method=link_method,
+            link_confidence=match_result.confidence,
+            verified=verified,
+            market_question=candidate.get("question", ""),
+            implied_prob=candidate.get("price", 0.5),
+        )
+        return {
+            "linked": True,
+            "verified": verified,
+            "source": "kalshi",
+            "match_id": match_id,
+            "contract_id": candidate["contract_id"],
+        }
+
+    async def _fetch_kalshi_price(self, contract_id: str) -> dict:
+        """Fetch the current price for a Kalshi market by ticker.
+
+        Returns:
+            {"implied_prob": float, "price": float, "liquidity": float, "volume": float}
+        """
+        import httpx
+        from app.core.config import settings
+
+        base_url = settings.KALSHI_API_URL.replace("/events", "/markets")
+        url = f"{base_url}/{contract_id}"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            data = response.json()
+
+        markets = data.get("markets", [])
+        if not markets:
+            raise ValueError(f"No market found for ticker {contract_id}")
+
+        market = markets[0]
+        last_price = market.get("last_price_dollars", 0) or 0
+        yes_bid = market.get("yes_bid_dollars", 0) or 0
+        yes_ask = market.get("yes_ask_dollars", 0) or 0
+
+        if last_price > 0:
+            price = last_price
+        elif yes_bid > 0 and yes_ask > 0:
+            price = (yes_bid + yes_ask) / 2
+        else:
+            price = 0.5
+
+        return {
+            "implied_prob": price,
+            "price": price,
+            "liquidity": float(market.get("liquidity_dollars", 0) or 0),
+            "volume": float(market.get("volume_fp", 0) or 0),
+        }
+
     async def link_traditional_odds(
         self,
         *,
@@ -270,7 +383,21 @@ class SportMarketBridgeService:
         links = self._links.get_verified_links(match_id=match_id)
         count = 0
         for link in links:
-            price = await self._fetch_latest_price(link)
+            if link.get("source") == "kalshi":
+                # Additive dispatch: Kalshi links fetch by ticker via the
+                # Kalshi markets endpoint. Failures are skipped (None).
+                try:
+                    kalshi_data = await self._fetch_kalshi_price(link["contract_id"])
+                except Exception:
+                    logger.debug(
+                        "Kalshi price fetch failed for %s",
+                        link.get("contract_id"),
+                        exc_info=True,
+                    )
+                    kalshi_data = None
+                price = kalshi_data.get("implied_prob") if kalshi_data else None
+            else:
+                price = await self._fetch_latest_price(link)
             if price is None:
                 continue
             self._snapshots.append_snapshot(

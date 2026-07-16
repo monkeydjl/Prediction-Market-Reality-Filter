@@ -1133,5 +1133,10 @@ class Settings:
     KALSHI_SPORTS_FETCH_INTERVAL_SECONDS: int = int(os.getenv("KALSHI_SPORTS_FETCH_INTERVAL_SECONDS", "600"))
     KALSHI_SPORTS_REQUEST_INTERVAL_SECONDS: float = float(os.getenv("KALSHI_SPORTS_REQUEST_INTERVAL_SECONDS", "1.0"))
 
+    # === Phase 12 — Futures/Championship Markets ===
+    PHASE12_FUTURES_MARKETS_ENABLED: bool = _env_bool("PHASE12_FUTURES_MARKETS_ENABLED", "false")
+    FUTURES_DISCOVERY_INTERVAL_MIN: int = int(os.getenv("FUTURES_DISCOVERY_INTERVAL_MIN", "60"))
+    FUTURES_SNAPSHOT_INTERVAL_MIN: int = int(os.getenv("FUTURES_SNAPSHOT_INTERVAL_MIN", "5"))
+
 
 settings = Settings()

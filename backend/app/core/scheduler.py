@@ -605,6 +605,36 @@ async def _job_capture_market_snapshots():
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
 
 
+async def _job_detect_sport_edges():
+    """Every EDGE_DETECTION_INTERVAL_MIN: compute edges for matches with verified links."""
+    if not settings.PHASE7_EDGE_DETECTOR_ENABLED:
+        return
+    run_id = _start_run("sport_edge_detect")
+    try:
+        from app.kernel.kernel_db import init_kernel_db
+        from app.kernel.edge_detector_service import EdgeDetectorService
+        from app.kernel.sport_market_link_store import SportMarketLinkStore
+        init_kernel_db()
+        store = SportMarketLinkStore()
+        matches = store.get_matches_with_verified_links()
+        service = EdgeDetectorService()
+        processed = 0
+        for match_id in matches:
+            try:
+                summary = service.detect_edges(match_id)
+                if not summary.skipped:
+                    processed += 1
+            except Exception as exc:
+                logger.warning(f"[Scheduler] Edge detection failed for {match_id}: {exc}")
+        _finish_run(run_id, "success", result={
+            "matches_total": len(matches),
+            "matches_processed": processed,
+        })
+    except Exception as exc:
+        logger.exception("[Scheduler] Sport edge detection failed")
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+
+
 def _summarize_prediction_update(result: dict[str, Any]) -> dict[str, Any]:
     """Summarize prediction update result for scheduler run log."""
     if result.get("status") == "error":
@@ -825,6 +855,14 @@ def start_scheduler():
                 _job_capture_market_snapshots,
                 IntervalTrigger(minutes=settings.MARKET_SNAPSHOT_INTERVAL_MIN),
                 id="sport_market_snapshots",
+                replace_existing=True,
+                max_instances=1,
+            )
+        if settings.PHASE7_EDGE_DETECTOR_ENABLED:
+            scheduler.add_job(
+                _job_detect_sport_edges,
+                IntervalTrigger(minutes=settings.EDGE_DETECTION_INTERVAL_MIN),
+                id="sport_edge_detect",
                 replace_existing=True,
                 max_instances=1,
             )

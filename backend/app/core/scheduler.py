@@ -20,6 +20,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from app.core.config import settings
 from app.memory import loop_run_store
+from app.realtime.connection_manager import get_connection_manager
 from app.utils import sqlite_db
 from datetime import datetime, timedelta, timezone
 
@@ -623,6 +624,23 @@ async def _job_fetch_traditional_odds():
                             captured_at=now,
                         )
                         captured += 1
+                        if settings.PHASE10_REALTIME_PUSH_ENABLED:
+                            try:
+                                _manager = get_connection_manager()
+                                await _manager.broadcast_to_match(match_id, {
+                                    "type": "odds_snapshot",
+                                    "match_id": match_id,
+                                    "outcome": outcome,
+                                    "implied_prob": implied_prob,
+                                    "decimal_odds": decimal_odds,
+                                    "bookmaker": bookmaker,
+                                    "captured_at": now.isoformat(),
+                                })
+                            except Exception:
+                                logger.warning(
+                                    "Failed to broadcast odds snapshot via WebSocket",
+                                    exc_info=True,
+                                )
             except Exception as exc:
                 errors += 1
                 logger.warning(f"Odds fetch failed for {match_id}: {exc}")
@@ -741,15 +759,32 @@ async def _job_capture_market_snapshots():
                 for link in links:
                     price = await bridge.fetch_current_price(link["contract_id"])
                     if price is not None:
+                        captured_at = datetime.now(timezone.utc)
                         snap_store.append_snapshot(
                             link_id=link["id"],
                             implied_prob=price["implied_prob"],
                             price=price["price"],
                             liquidity=price.get("liquidity"),
                             volume=price.get("volume"),
-                            captured_at=datetime.now(timezone.utc),
+                            captured_at=captured_at,
                         )
                         captured += 1
+                        if settings.PHASE10_REALTIME_PUSH_ENABLED:
+                            try:
+                                _manager = get_connection_manager()
+                                await _manager.broadcast_to_match(match_id, {
+                                    "type": "market_snapshot",
+                                    "match_id": match_id,
+                                    "link_id": link["id"],
+                                    "implied_prob": price["implied_prob"],
+                                    "price": price["price"],
+                                    "captured_at": captured_at.isoformat(),
+                                })
+                            except Exception:
+                                logger.warning(
+                                    "Failed to broadcast market snapshot via WebSocket",
+                                    exc_info=True,
+                                )
             except Exception as exc:
                 errors += 1
                 logger.warning(

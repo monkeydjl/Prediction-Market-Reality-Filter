@@ -334,6 +334,34 @@ class KernelTraditionalOddsSnapshot(KernelBase):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class KernelOptimizedParams(KernelBase):
+    """Stores optimized parameter sets from Phase 9 backtesting."""
+    __tablename__ = "kernel_optimized_params"
+    __table_args__ = (
+        UniqueConstraint("sport", "competition", "status", name="uq_optimized_params_active"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sport = Column(String, nullable=False, index=True)
+    competition = Column(String, nullable=False, index=True)
+    factor_weights = Column(Text, nullable=False)  # JSON
+    elo_params = Column(Text, nullable=False)  # JSON
+    score = Column(Float, nullable=False)
+    accuracy = Column(Float, nullable=False)
+    brier_score = Column(Float, nullable=False)
+    mae = Column(Float, nullable=False)
+    sample_count = Column(Integer, nullable=False)
+    trial_number = Column(Integer, nullable=True)
+    status = Column(String, default="candidate")  # candidate / applied / archived
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    applied_at = Column(DateTime, nullable=True)
+
+
+def _get_engine(db_path: str):
+    """Create a SQLAlchemy engine for an isolated SQLite DB (used by tests)."""
+    return create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+
+
 def init_kernel_db(db_path: str | None = None) -> None:
     """Initialize the kernel database. Creates tables if they don't exist."""
     global _engine, _SessionLocal

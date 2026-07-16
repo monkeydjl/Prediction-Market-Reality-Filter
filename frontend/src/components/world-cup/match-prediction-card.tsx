@@ -626,7 +626,10 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
                               {item.label}
                             </span>
                             {item.available === false ? (
-                              <span className="text-xs text-muted-foreground">未参与</span>
+                              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                                <span>未参与</span>
+                                <span className="text-[10px] text-muted-foreground/60">·混合引擎可启用</span>
+                              </span>
                             ) : (
                               <span className="flex flex-wrap justify-end gap-x-1 font-mono text-[11px] font-medium tabular-nums">
                                 <span className={contributionTone(item.home_impact)}>

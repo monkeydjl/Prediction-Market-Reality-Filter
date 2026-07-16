@@ -14,18 +14,22 @@ vi.mock("@/components/theme-control", () => ({
   ThemeControl: () => <button type="button">Theme</button>,
 }));
 
+vi.mock("@/components/live-status-indicator", () => ({
+  LiveStatusIndicator: () => <span>LiveStatus</span>,
+}));
+
 describe("AppNav", () => {
   it("renders the brand and hot news ticker above the main navigation", () => {
     render(<AppNav />);
 
-    const ticker = screen.getByRole("region", { name: "热点新闻" });
+    const ticker = screen.getByRole("region", { name: "示例新闻" });
     const nav = screen.getByRole("navigation", { name: "主导航" });
 
     expect(within(ticker).getByRole("link", { name: /PROBABILITY/ })).toHaveAttribute(
       "href",
       "/",
     );
-    expect(ticker).toHaveTextContent("热点新闻");
+    expect(ticker).toHaveTextContent("示例新闻");
     expect(ticker).toHaveTextContent("美联储");
     expect(within(nav).queryByText(/PROBABILITY/)).not.toBeInTheDocument();
     expect(

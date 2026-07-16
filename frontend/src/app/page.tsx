@@ -536,7 +536,10 @@ export default function DashboardPage() {
                 {/* Analysis progress */}
                 {(discoveryStatus.analyzed ?? 0) > 0 && (
                   <div>
-                    分析进度：{discoveryStatus.analyzed ?? 0}/{discoveryStatus.total_to_analyze ?? 0}
+                    分析进度：{discoveryStatus.analyzed ?? 0}
+                    {(discoveryStatus.total_to_analyze ?? 0) > 0
+                      ? `/${discoveryStatus.total_to_analyze}`
+                      : " 条（总数待定）"}
                     {discoveryStatus.elapsed_ms ? `（已用 ${Math.round(discoveryStatus.elapsed_ms / 1000)} 秒）` : ""}
                   </div>
                 )}

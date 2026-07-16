@@ -1,10 +1,10 @@
-﻿import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { analyticsApi } from "@/lib/analytics-api";
+import { analyticsApi } from "@/lib/world-cup/analytics-api";
 import TournamentSimulation from "./tournament-simulation";
 
-vi.mock("@/lib/analytics-api", () => ({
+vi.mock("@/lib/world-cup/analytics-api", () => ({
   analyticsApi: {
     tournamentSimulation: vi.fn(),
   },

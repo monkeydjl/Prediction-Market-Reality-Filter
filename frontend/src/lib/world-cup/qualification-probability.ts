@@ -2,7 +2,7 @@
  * Calculate qualification probabilities for World Cup teams
  */
 
-import type { MatchFixture } from "./world-cup-predictions";
+import type { MatchFixture } from "./predictions-api";
 import type { TeamStanding } from "./group-standings";
 
 export type QualificationStatus = "qualified" | "eliminated" | "pending";

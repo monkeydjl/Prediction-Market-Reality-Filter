@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { Zap, Brain, AlertCircle, Check, GitCompare, BarChart3, type LucideIcon } from "lucide-react";
-import type { MatchFixture, MatchPrediction } from "@/lib/world-cup-predictions";
-import { triggerPrediction } from "@/lib/world-cup-predictions";
+import type { MatchFixture, MatchPrediction } from "@/lib/world-cup/predictions-api";
+import { triggerPrediction } from "@/lib/world-cup/predictions-api";
 import { cn } from "@/lib/utils";
 
 interface EngineComparisonCardProps {

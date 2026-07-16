@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Zap, Brain, GitCompare, Target, Loader2, CheckCircle2, AlertCircle, BarChart3 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getWorldCupApiBase } from "@/lib/env";
-import { postHeaders } from "@/lib/world-cup-predictions";
+import { postHeaders } from "@/lib/world-cup/predictions-api";
 
 interface SwitchResult {
   status: string;

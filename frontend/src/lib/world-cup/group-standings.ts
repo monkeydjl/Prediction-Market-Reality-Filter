@@ -2,7 +2,7 @@
  * Calculate group standings from match results
  */
 
-import type { MatchFixture } from "./world-cup-predictions";
+import type { MatchFixture } from "./predictions-api";
 
 export interface TeamStanding {
   team: string;

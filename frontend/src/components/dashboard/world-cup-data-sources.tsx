@@ -28,7 +28,7 @@ import {
   type WorldCupSportmonksConnectionResult,
   type WorldCupSourceFetch,
 } from "@/lib/api";
-import { analyticsApi } from "@/lib/analytics-api";
+import { analyticsApi } from "@/lib/world-cup/analytics-api";
 import { fmtDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 

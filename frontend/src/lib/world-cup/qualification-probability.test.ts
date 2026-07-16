@@ -1,7 +1,7 @@
-﻿import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { calculateQualificationProbabilities } from "./qualification-probability";
 import type { TeamStanding } from "./group-standings";
-import type { MatchFixture } from "./world-cup-predictions";
+import type { MatchFixture } from "./predictions-api";
 
 function standing(team: string, points: number, played = 3): TeamStanding {
   return {

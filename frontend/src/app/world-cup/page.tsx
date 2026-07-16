@@ -16,12 +16,12 @@ import {
 } from "lucide-react";
 import { MatchPredictionCard } from "@/components/world-cup/match-prediction-card";
 import { SectionErrorBoundary } from "@/components/section-error-boundary";
-import { syncFixtures, type MatchWithPrediction } from "@/lib/world-cup-predictions";
-import { useWorldCupMatches } from "@/lib/swr-hooks";
-import { calculateGroupStandings } from "@/lib/group-standings";
-import { calculateQualificationProbabilities } from "@/lib/qualification-probability";
-import { translateTeamName } from "@/lib/team-names-zh";
-import { formatBeijingMatchDate, getWorldCupKickoffTime, parseWorldCupUtcDate } from "@/lib/world-cup-time";
+import { syncFixtures, type MatchWithPrediction } from "@/lib/world-cup/predictions-api";
+import { useWorldCupMatches } from "@/lib/world-cup/swr-hooks";
+import { calculateGroupStandings } from "@/lib/world-cup/group-standings";
+import { calculateQualificationProbabilities } from "@/lib/world-cup/qualification-probability";
+import { translateTeamName } from "@/lib/world-cup/team-names-zh";
+import { formatBeijingMatchDate, getWorldCupKickoffTime, parseWorldCupUtcDate } from "@/lib/world-cup/time";
 import { cn } from "@/lib/utils";
 
 type TabView = "matches" | "groups" | "qualification" | "knockout" | "tournament" | "engine-stats" | "auto-tune" | "analytics";

@@ -1,8 +1,8 @@
 "use client";
 
 import { Trophy } from "lucide-react";
-import type { GroupStanding } from "@/lib/group-standings";
-import { translateTeamName } from "@/lib/team-names-zh";
+import type { GroupStanding } from "@/lib/world-cup/group-standings";
+import { translateTeamName } from "@/lib/world-cup/team-names-zh";
 import { cn } from "@/lib/utils";
 
 interface GroupStandingsTableProps {

@@ -2,9 +2,9 @@
 
 import { useState, useEffect } from "react";
 import { Clock, TrendingUp, Target, AlertCircle, Zap, Brain, GitCompare, type LucideIcon } from "lucide-react";
-import type { MatchFixture, PredictionHistoryEntry } from "@/lib/world-cup-predictions";
-import { fetchPredictionHistory } from "@/lib/world-cup-predictions";
-import { translateTeamName } from "@/lib/team-names-zh";
+import type { MatchFixture, PredictionHistoryEntry } from "@/lib/world-cup/predictions-api";
+import { fetchPredictionHistory } from "@/lib/world-cup/predictions-api";
+import { translateTeamName } from "@/lib/world-cup/team-names-zh";
 import { cn } from "@/lib/utils";
 
 interface PredictionHistoryCardProps {

@@ -3,10 +3,10 @@
 import { useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { Trophy, TrendingUp, Clock, AlertCircle, Zap, Brain, GitCompare, History, Sparkles, Loader2, ChevronDown, Lightbulb, Gauge, BarChart3, type LucideIcon } from "lucide-react";
-import type { MatchFixture, MatchPrediction } from "@/lib/world-cup-predictions";
-import { compareEngines } from "@/lib/world-cup-predictions";
-import { translateTeamName } from "@/lib/team-names-zh";
-import { formatBeijingMatchDateTime } from "@/lib/world-cup-time";
+import type { MatchFixture, MatchPrediction } from "@/lib/world-cup/predictions-api";
+import { compareEngines } from "@/lib/world-cup/predictions-api";
+import { translateTeamName } from "@/lib/world-cup/team-names-zh";
+import { formatBeijingMatchDateTime } from "@/lib/world-cup/time";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 

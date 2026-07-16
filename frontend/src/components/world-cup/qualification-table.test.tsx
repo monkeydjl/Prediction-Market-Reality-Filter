@@ -1,7 +1,7 @@
-﻿import { render, screen, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { QualificationTable } from "./qualification-table";
-import type { QualificationProbability } from "@/lib/qualification-probability";
+import type { QualificationProbability } from "@/lib/world-cup/qualification-probability";
 
 function probability(
   team: string,

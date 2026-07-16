@@ -5,7 +5,7 @@ import { BarChart3, Target, Database, Activity, TrendingUp, AlertCircle, Gauge, 
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { cn } from "@/lib/utils";
 import { fmtPct } from "@/lib/format";
-import { analyticsApi, type VerifiedResultCorrectionRequest } from "@/lib/analytics-api";
+import { analyticsApi, type VerifiedResultCorrectionRequest } from "@/lib/world-cup/analytics-api";
 import { ChartFrame, DarkTooltip } from "@/components/ui/chart-lite";
 
 interface EngineStats {

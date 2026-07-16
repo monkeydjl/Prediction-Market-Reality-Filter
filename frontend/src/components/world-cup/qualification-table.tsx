@@ -1,8 +1,8 @@
 "use client";
 
 import { TrendingUp, Trophy } from "lucide-react";
-import type { QualificationProbability } from "@/lib/qualification-probability";
-import { translateTeamName } from "@/lib/team-names-zh";
+import type { QualificationProbability } from "@/lib/world-cup/qualification-probability";
+import { translateTeamName } from "@/lib/world-cup/team-names-zh";
 import { cn } from "@/lib/utils";
 
 interface QualificationTableProps {

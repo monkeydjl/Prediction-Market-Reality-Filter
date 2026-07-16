@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { MatchPredictionCard } from "./match-prediction-card";
-import type { MatchFixture, MatchPrediction } from "@/lib/world-cup-predictions";
+import type { MatchFixture, MatchPrediction } from "@/lib/world-cup/predictions-api";
 
 const match: MatchFixture = {
   match_id: "match-1",

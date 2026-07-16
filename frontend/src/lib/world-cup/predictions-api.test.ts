@@ -11,7 +11,7 @@ describe("fetchPredictionHistory", () => {
     window.sessionStorage.setItem("pmrf.operatorApiKey", "secret");
     window.sessionStorage.setItem("pmrf.operatorId", "alice");
 
-    const { postHeaders } = await import("./world-cup-predictions");
+    const { postHeaders } = await import("./predictions-api");
 
     expect(postHeaders()).toEqual({
       "Content-Type": "application/json",
@@ -28,7 +28,7 @@ describe("fetchPredictionHistory", () => {
       }),
     ));
 
-    const { syncFixtures } = await import("./world-cup-predictions");
+    const { syncFixtures } = await import("./predictions-api");
 
     await expect(syncFixtures()).rejects.toThrow("API_WRITE_KEY");
   });
@@ -43,7 +43,7 @@ describe("fetchPredictionHistory", () => {
       ),
     ));
 
-    const { syncFixtures } = await import("./world-cup-predictions");
+    const { syncFixtures } = await import("./predictions-api");
 
     await expect(syncFixtures()).rejects.toThrow("FOOTBALL_DATA_API_KEY not configured");
   });
@@ -76,7 +76,7 @@ describe("fetchPredictionHistory", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const { fetchPredictionHistory } = await import("./world-cup-predictions");
+    const { fetchPredictionHistory } = await import("./predictions-api");
     const history = await fetchPredictionHistory("match-1");
 
     expect(history).toHaveLength(1);

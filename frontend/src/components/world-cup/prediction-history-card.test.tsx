@@ -1,11 +1,11 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { PredictionHistoryCard } from "./prediction-history-card";
-import type { MatchFixture } from "@/lib/world-cup-predictions";
-import { fetchPredictionHistory } from "@/lib/world-cup-predictions";
+import type { MatchFixture } from "@/lib/world-cup/predictions-api";
+import { fetchPredictionHistory } from "@/lib/world-cup/predictions-api";
 
-vi.mock("@/lib/world-cup-predictions", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/world-cup-predictions")>();
+vi.mock("@/lib/world-cup/predictions-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/world-cup/predictions-api")>();
   return {
     ...actual,
     fetchPredictionHistory: vi.fn(),

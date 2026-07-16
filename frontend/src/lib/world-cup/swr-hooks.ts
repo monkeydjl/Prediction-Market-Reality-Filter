@@ -1,11 +1,11 @@
 "use client";
 
 import useSWR from "swr";
-import { buildApiErrorMessage, getOperatorApiKey, getOperatorId } from "./api";
-import { getWorldCupApiBase } from "./env";
-import type { MatchWithPrediction } from "./world-cup-predictions";
+import { buildApiErrorMessage, getOperatorApiKey, getOperatorId } from "@/lib/api";
+import { getApiBase } from "@/lib/env";
+import type { MatchWithPrediction } from "./predictions-api";
 
-const API_BASE = getWorldCupApiBase();
+const API_BASE = getApiBase();
 
 // Bounded fetcher for SWR. Mirrors the auth/timeout behavior of the central
 // `api()` client in lib/api.ts so the World Cup matches endpoint receives the
@@ -69,7 +69,7 @@ export function useWorldCupMatches(params?: {
   if (params?.limit) query.set("limit", params.limit.toString());
 
   // Stable key (no _t cache-buster) so SWR can deduplicate properly.
-  const url = `${API_BASE}/api/world-cup/predictions/matches?${query}`;
+  const url = `${API_BASE}/world-cup/predictions/matches?${query}`;
 
   return useSWR<MatchWithPrediction[]>(url, matchesFetcher, {
     revalidateOnFocus: false,

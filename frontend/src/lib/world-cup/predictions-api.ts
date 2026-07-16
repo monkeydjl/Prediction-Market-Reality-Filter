@@ -2,8 +2,8 @@
  * API client for World Cup match predictions
  */
 
-import { getWorldCupApiBase } from "./env";
-import { buildApiErrorMessage, getOperatorApiKey, getOperatorId } from "./api";
+import { getApiBase } from "@/lib/env";
+import { buildApiErrorMessage, getOperatorApiKey, getOperatorId } from "@/lib/api";
 
 export interface PredictedScore {
   home: number;
@@ -165,7 +165,7 @@ export interface PredictionTriggerResult {
   reason?: string;
 }
 
-const API_BASE = getWorldCupApiBase();
+const API_BASE = getApiBase();
 
 /**
  * Build headers for POST requests, including the operator API key if set.
@@ -219,7 +219,7 @@ export async function fetchMatches(params?: {
   query.set('_t', Date.now().toString());
 
   const response = await fetch(
-    `${API_BASE}/api/world-cup/predictions/matches?${query}`,
+    `${API_BASE}/world-cup/predictions/matches?${query}`,
     { cache: 'no-store' }
   );
 
@@ -236,7 +236,7 @@ export async function fetchMatches(params?: {
  */
 export async function fetchMatchWithPrediction(matchId: string): Promise<MatchWithPrediction> {
   const response = await fetch(
-    `${API_BASE}/api/world-cup/predictions/matches/${matchId}`,
+    `${API_BASE}/world-cup/predictions/matches/${matchId}`,
     { cache: 'no-store' }
   );
 
@@ -252,7 +252,7 @@ export async function fetchMatchWithPrediction(matchId: string): Promise<MatchWi
  */
 export async function fetchPredictionHistory(matchId: string): Promise<PredictionHistoryEntry[]> {
   const response = await fetch(
-    `${API_BASE}/api/world-cup/predictions/matches/${matchId}/prediction-history`,
+    `${API_BASE}/world-cup/predictions/matches/${matchId}/prediction-history`,
     { cache: 'no-store' }
   );
 
@@ -271,7 +271,7 @@ export async function fetchPredictionHistory(matchId: string): Promise<Predictio
  */
 export async function fetchTodayMatches(): Promise<MatchWithPrediction[]> {
   const response = await fetch(
-    `${API_BASE}/api/world-cup/predictions/today?_t=${Date.now()}`,
+    `${API_BASE}/world-cup/predictions/today?_t=${Date.now()}`,
     { cache: 'no-store' }
   );
 
@@ -293,7 +293,7 @@ export async function triggerPrediction(
 ): Promise<PredictionTriggerResult> {
   const query = options?.compareOnly ? "?compare_only=true" : "";
   const response = await fetch(
-    `${API_BASE}/api/world-cup/predictions/matches/${matchId}/predict${query}`,
+    `${API_BASE}/world-cup/predictions/matches/${matchId}/predict${query}`,
     {
       method: 'POST',
       headers: postHeaders(),
@@ -385,7 +385,7 @@ export async function compareEngines(matchId: string): Promise<{
  */
 export async function analyzePrediction(matchId: string): Promise<string> {
   const response = await fetch(
-    `${API_BASE}/api/world-cup/predictions/matches/${matchId}/analyze`,
+    `${API_BASE}/world-cup/predictions/matches/${matchId}/analyze`,
     {
       method: 'POST',
       headers: postHeaders(),
@@ -405,7 +405,7 @@ export async function analyzePrediction(matchId: string): Promise<string> {
  */
 export async function syncFixtures(): Promise<void> {
   const response = await fetch(
-    `${API_BASE}/api/world-cup/predictions/sync-fixtures`,
+    `${API_BASE}/world-cup/predictions/sync-fixtures`,
     {
       method: 'POST',
       headers: postHeaders(),

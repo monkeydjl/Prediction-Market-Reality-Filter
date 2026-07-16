@@ -21,10 +21,10 @@
  * they are; callers pass the expected return type as the generic `T`.
  */
 
-import { getWorldCupApiBase } from "./env";
-import { buildApiErrorMessage, getOperatorApiKey, getOperatorId } from "./api";
+import { getApiBase } from "@/lib/env";
+import { buildApiErrorMessage, getOperatorApiKey, getOperatorId } from "@/lib/api";
 
-const API_BASE = getWorldCupApiBase();
+const API_BASE = getApiBase();
 const ANALYTICS_CLIENT_SOURCE = "world-cup-dashboard";
 const DEFAULT_TIMEOUT_MS = 60_000;
 const LONG_OPERATION_TIMEOUT_MS = 180_000;
@@ -150,40 +150,40 @@ function buildQuery(params: Record<string, string | number | boolean | undefined
 export const analyticsApi = {
   // ---- Read-only stats (60s timeout) ----
   engineStats: <T = unknown>(): Promise<T> =>
-    analyticsFetch<T>("/api/analytics/engine-stats"),
+    analyticsFetch<T>("/analytics/engine-stats"),
 
   accuracyStats: <T = unknown>(): Promise<T> =>
-    analyticsFetch<T>("/api/analytics/accuracy-stats"),
+    analyticsFetch<T>("/analytics/accuracy-stats"),
 
   oddsCacheStats: <T = unknown>(): Promise<T> =>
-    analyticsFetch<T>("/api/analytics/odds-cache-stats"),
+    analyticsFetch<T>("/analytics/odds-cache-stats"),
 
   systemHealth: <T = unknown>(): Promise<T> =>
-    analyticsFetch<T>("/api/analytics/system-health"),
+    analyticsFetch<T>("/analytics/system-health"),
 
   qualityLoop: <T = unknown>(): Promise<T> =>
-    analyticsFetch<T>("/api/analytics/quality-loop"),
+    analyticsFetch<T>("/analytics/quality-loop"),
 
   predictionCoverage: <T = unknown>(staleAfterHours = 24): Promise<T> =>
-    analyticsFetch<T>(`/api/analytics/prediction-coverage${buildQuery({ stale_after_hours: staleAfterHours })}`),
+    analyticsFetch<T>(`/analytics/prediction-coverage${buildQuery({ stale_after_hours: staleAfterHours })}`),
 
   resultConsistency: <T = unknown>(limit = 25): Promise<T> =>
-    analyticsFetch<T>(`/api/analytics/result-consistency${buildQuery({ limit })}`),
+    analyticsFetch<T>(`/analytics/result-consistency${buildQuery({ limit })}`),
 
   consistencyRepairPlan: <T = unknown>(limit = 25): Promise<T> =>
-    analyticsFetch<T>(`/api/analytics/consistency-repair-plan${buildQuery({ limit })}`),
+    analyticsFetch<T>(`/analytics/consistency-repair-plan${buildQuery({ limit })}`),
 
   consistencyRepairPreview: <T = unknown>(historyIds: Array<number | string>): Promise<T> =>
-    analyticsFetch<T>(`/api/analytics/consistency-repair-preview${buildQuery({ history_ids: historyIds })}`),
+    analyticsFetch<T>(`/analytics/consistency-repair-preview${buildQuery({ history_ids: historyIds })}`),
 
   postMatchBackfillRuns: <T = unknown>(limit = 5): Promise<T> =>
-    analyticsFetch<T>(`/api/analytics/post-match-backfill/runs${buildQuery({ limit })}`),
+    analyticsFetch<T>(`/analytics/post-match-backfill/runs${buildQuery({ limit })}`),
 
   resultFactBackfillRuns: <T = unknown>(limit = 5): Promise<T> =>
-    analyticsFetch<T>(`/api/analytics/result-fact-backfill/runs${buildQuery({ limit })}`),
+    analyticsFetch<T>(`/analytics/result-fact-backfill/runs${buildQuery({ limit })}`),
 
   reconcileScoringRuns: <T = unknown>(limit = 5): Promise<T> =>
-    analyticsFetch<T>(`/api/analytics/reconcile-scoring/runs${buildQuery({ limit })}`),
+    analyticsFetch<T>(`/analytics/reconcile-scoring/runs${buildQuery({ limit })}`),
 
   // ---- Mutating / long operations (180s timeout) ----
   runConsistencyRepair: <T = unknown>(
@@ -192,7 +192,7 @@ export const analyticsApi = {
     confirm: boolean,
   ): Promise<T> =>
     analyticsFetch<T>(
-      `/api/analytics/consistency-repair${buildQuery({
+      `/analytics/consistency-repair${buildQuery({
         history_ids: historyIds,
         dry_run: dryRun ? "true" : "false",
         confirm: confirm ? "true" : "false",
@@ -202,7 +202,7 @@ export const analyticsApi = {
 
   runPostMatchBackfill: <T = unknown>(dryRun: boolean): Promise<T> =>
     analyticsFetch<T>(
-      `/api/analytics/post-match-backfill${buildQuery({ dry_run: dryRun ? "true" : "false" })}`,
+      `/analytics/post-match-backfill${buildQuery({ dry_run: dryRun ? "true" : "false" })}`,
       { method: "POST", timeoutMs: LONG_OPERATION_TIMEOUT_MS },
     ),
 
@@ -212,7 +212,7 @@ export const analyticsApi = {
     confirm: boolean,
   ): Promise<T> =>
     analyticsFetch<T>(
-      `/api/analytics/result-fact-backfill${buildQuery({
+      `/analytics/result-fact-backfill${buildQuery({
         limit,
         dry_run: dryRun ? "true" : "false",
         confirm: confirm ? "true" : "false",
@@ -222,13 +222,13 @@ export const analyticsApi = {
 
   runReconcileScoring: <T = unknown>(): Promise<T> =>
     analyticsFetch<T>(
-      "/api/analytics/reconcile-scoring",
+      "/analytics/reconcile-scoring",
       { method: "POST", timeoutMs: LONG_OPERATION_TIMEOUT_MS },
     ),
 
   verifiedResultCorrection: <T = unknown>(payload: VerifiedResultCorrectionRequest): Promise<T> =>
     analyticsFetch<T>(
-      "/api/analytics/verified-result-correction",
+      "/analytics/verified-result-correction",
       {
         method: "POST",
         body: JSON.stringify(payload),
@@ -238,7 +238,7 @@ export const analyticsApi = {
 
   tournamentSimulation: <T = unknown>(numSimulations = 1000, forceRefresh = false): Promise<T> =>
     analyticsFetch<T>(
-      `/api/analytics/tournament-simulation${buildQuery({
+      `/analytics/tournament-simulation${buildQuery({
         num_simulations: numSimulations,
         force_refresh: forceRefresh ? "true" : undefined,
       })}`,

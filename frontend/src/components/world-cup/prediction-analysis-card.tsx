@@ -2,9 +2,9 @@
 
 import { useState, useEffect } from "react";
 import { Brain, Loader2, AlertCircle, TrendingUp, Clock, Sparkles } from "lucide-react";
-import type { MatchFixture, MatchPrediction } from "@/lib/world-cup-predictions";
-import { analyzePrediction, postHeaders } from "@/lib/world-cup-predictions";
-import { translateTeamName } from "@/lib/team-names-zh";
+import type { MatchFixture, MatchPrediction } from "@/lib/world-cup/predictions-api";
+import { analyzePrediction, postHeaders } from "@/lib/world-cup/predictions-api";
+import { translateTeamName } from "@/lib/world-cup/team-names-zh";
 import { cn } from "@/lib/utils";
 import { getWorldCupApiBase } from "@/lib/env";
 

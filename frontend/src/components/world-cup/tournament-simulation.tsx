@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { Trophy, Medal, TrendingUp, Loader2, AlertTriangle, ClipboardCheck } from "lucide-react";
-import { analyticsApi } from "@/lib/analytics-api";
+import { analyticsApi } from "@/lib/world-cup/analytics-api";
 import { cn } from "@/lib/utils";
-import { translateTeamName } from "@/lib/team-names-zh";
+import { translateTeamName } from "@/lib/world-cup/team-names-zh";
 
 interface QualificationState {
   eliminated_teams: string[];

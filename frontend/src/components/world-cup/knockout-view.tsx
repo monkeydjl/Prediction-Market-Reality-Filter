@@ -1,9 +1,9 @@
 "use client";
 
 import { Trophy, Calendar } from "lucide-react";
-import type { MatchFixture } from "@/lib/world-cup-predictions";
-import { translateTeamName } from "@/lib/team-names-zh";
-import { formatBeijingMatchDateTime, getWorldCupKickoffTime } from "@/lib/world-cup-time";
+import type { MatchFixture } from "@/lib/world-cup/predictions-api";
+import { translateTeamName } from "@/lib/world-cup/team-names-zh";
+import { formatBeijingMatchDateTime, getWorldCupKickoffTime } from "@/lib/world-cup/time";
 import { cn } from "@/lib/utils";
 
 interface KnockoutStage {

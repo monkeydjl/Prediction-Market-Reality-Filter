@@ -1,5 +1,4 @@
 "use client";
-import { useEffect, useState } from "react";
 import {
   CartesianGrid,
   Line,
@@ -9,20 +8,19 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { fetchMarketSnapshots, type SnapshotSeries } from "@/lib/sport-markets-api";
+import { useMarketSnapshots, type SnapshotSeries } from "@/lib/sports-api";
 
 export function MarketSnapshotChart({ matchId }: { matchId: string }) {
-  const [series, setSeries] = useState<SnapshotSeries[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, error, isLoading } = useMarketSnapshots(matchId);
+  const series: SnapshotSeries[] = data?.series ?? [];
+  const errorMessage = error
+    ? error instanceof Error
+      ? error.message
+      : "加载失败"
+    : null;
 
-  useEffect(() => {
-    setLoading(true);
-    fetchMarketSnapshots(matchId)
-      .then((data) => setSeries(data.series))
-      .finally(() => setLoading(false));
-  }, [matchId]);
-
-  if (loading) return <div data-testid="loading">加载中...</div>;
+  if (isLoading) return <div data-testid="loading">加载中...</div>;
+  if (errorMessage) return <div data-testid="error">{errorMessage}</div>;
   if (series.length === 0) return <div data-testid="empty">暂无价格快照</div>;
 
   return (

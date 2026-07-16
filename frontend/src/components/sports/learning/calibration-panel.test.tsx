@@ -1,8 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import { CalibrationPanel } from "./calibration-panel";
 
-// Mock recharts (needed because ReliabilityChart is rendered)
 vi.mock("recharts", () => ({
   ResponsiveContainer: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="responsive-container">{children}</div>
@@ -27,17 +25,17 @@ vi.mock("@/components/ui/chart-lite", () => ({
   DarkTooltip: () => <div data-testid="dark-tooltip" />,
 }));
 
-vi.mock("@/lib/learning-api", () => ({
-  fetchCalibration: vi.fn(),
-  fetchReliability: vi.fn(),
+const apiMocks = vi.hoisted(() => ({
+  useCalibration: vi.fn(),
+  useReliability: vi.fn(),
+}));
+vi.mock("@/lib/sports-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sports-api")>()),
+  useCalibration: apiMocks.useCalibration,
+  useReliability: apiMocks.useReliability,
 }));
 
-import { fetchCalibration, fetchReliability } from "@/lib/learning-api";
-
-afterEach(() => {
-  vi.mocked(fetchCalibration).mockReset();
-  vi.mocked(fetchReliability).mockReset();
-});
+import { CalibrationPanel } from "./calibration-panel";
 
 const mockCal = {
   engine: "basketball",
@@ -60,9 +58,22 @@ const mockReliability = {
 };
 
 describe("CalibrationPanel", () => {
+  beforeEach(() => {
+    apiMocks.useCalibration.mockReset();
+    apiMocks.useReliability.mockReset();
+  });
+
   it("renders parameter table with calibration data", async () => {
-    vi.mocked(fetchCalibration).mockResolvedValueOnce([mockCal]);
-    vi.mocked(fetchReliability).mockResolvedValueOnce(mockReliability);
+    apiMocks.useCalibration.mockReturnValue({
+      data: [mockCal],
+      error: undefined,
+      isLoading: false,
+    });
+    apiMocks.useReliability.mockReturnValue({
+      data: mockReliability,
+      error: undefined,
+      isLoading: false,
+    });
     render(<CalibrationPanel />);
     await waitFor(() => {
       // Use getByRole("cell") to disambiguate from <option> elements with same text
@@ -72,8 +83,16 @@ describe("CalibrationPanel", () => {
   });
 
   it("renders reliability chart", async () => {
-    vi.mocked(fetchCalibration).mockResolvedValueOnce([mockCal]);
-    vi.mocked(fetchReliability).mockResolvedValueOnce(mockReliability);
+    apiMocks.useCalibration.mockReturnValue({
+      data: [mockCal],
+      error: undefined,
+      isLoading: false,
+    });
+    apiMocks.useReliability.mockReturnValue({
+      data: mockReliability,
+      error: undefined,
+      isLoading: false,
+    });
     render(<CalibrationPanel />);
     await waitFor(() => {
       expect(screen.getByTestId("scatter")).toBeInTheDocument();
@@ -81,8 +100,16 @@ describe("CalibrationPanel", () => {
   });
 
   it("renders empty state for calibration when no data", async () => {
-    vi.mocked(fetchCalibration).mockResolvedValueOnce([]);
-    vi.mocked(fetchReliability).mockResolvedValueOnce({ ...mockReliability, total_samples: 0, bins: [] });
+    apiMocks.useCalibration.mockReturnValue({
+      data: [],
+      error: undefined,
+      isLoading: false,
+    });
+    apiMocks.useReliability.mockReturnValue({
+      data: { ...mockReliability, total_samples: 0, bins: [] },
+      error: undefined,
+      isLoading: false,
+    });
     render(<CalibrationPanel />);
     await waitFor(() => {
       expect(screen.getByText("暂无校准数据，需 ≥ MIN_SAMPLES_FOR_CALIBRATION 条记录")).toBeInTheDocument();
@@ -90,8 +117,16 @@ describe("CalibrationPanel", () => {
   });
 
   it("renders filter dropdowns", async () => {
-    vi.mocked(fetchCalibration).mockResolvedValueOnce([]);
-    vi.mocked(fetchReliability).mockResolvedValueOnce({ ...mockReliability, total_samples: 0, bins: [] });
+    apiMocks.useCalibration.mockReturnValue({
+      data: [],
+      error: undefined,
+      isLoading: false,
+    });
+    apiMocks.useReliability.mockReturnValue({
+      data: { ...mockReliability, total_samples: 0, bins: [] },
+      error: undefined,
+      isLoading: false,
+    });
     render(<CalibrationPanel />);
     await waitFor(() => {
       expect(screen.getByText("引擎")).toBeInTheDocument();

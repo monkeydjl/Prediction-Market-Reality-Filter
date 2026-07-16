@@ -1,23 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import { SettlementHistoryTable } from "./SettlementHistoryTable";
-import type { SettlementList } from "@/lib/sport-settlements-api";
-
-vi.mock("next/link", () => ({
-  default: ({ href, children }: { href: string; children: React.ReactNode }) => (
-    <a href={href}>{children}</a>
-  ),
-}));
 
 const apiMocks = vi.hoisted(() => ({
-  fetchSettlementHistory: vi.fn(),
+  useSettlementHistory: vi.fn(),
 }));
-vi.mock("@/lib/sport-settlements-api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/sport-settlements-api")>()),
-  fetchSettlementHistory: apiMocks.fetchSettlementHistory,
+vi.mock("@/lib/sports-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sports-api")>()),
+  useSettlementHistory: apiMocks.useSettlementHistory,
 }));
 
-const historyData: SettlementList = {
+import { SettlementHistoryTable } from "./SettlementHistoryTable";
+
+const historyData = {
   items: [
     {
       id: 1, match_id: "m1", mapped_outcome: "home_win", engine: "BasketballEngine",
@@ -32,8 +26,16 @@ const historyData: SettlementList = {
 };
 
 describe("SettlementHistoryTable", () => {
+  beforeEach(() => {
+    apiMocks.useSettlementHistory.mockReset();
+  });
+
   it("renders rows after load", async () => {
-    apiMocks.fetchSettlementHistory.mockResolvedValue(historyData);
+    apiMocks.useSettlementHistory.mockReturnValue({
+      data: historyData,
+      error: undefined,
+      isLoading: false,
+    });
     render(<SettlementHistoryTable />);
     await waitFor(() =>
       expect(screen.getByTestId("settlements-table")).toBeInTheDocument(),
@@ -43,19 +45,31 @@ describe("SettlementHistoryTable", () => {
   });
 
   it("renders empty state", async () => {
-    apiMocks.fetchSettlementHistory.mockResolvedValue({ items: [], total: 0 });
+    apiMocks.useSettlementHistory.mockReturnValue({
+      data: { items: [], total: 0 },
+      error: undefined,
+      isLoading: false,
+    });
     render(<SettlementHistoryTable />);
     await waitFor(() => expect(screen.getByTestId("empty")).toBeInTheDocument());
   });
 
   it("renders error state", async () => {
-    apiMocks.fetchSettlementHistory.mockRejectedValue(new Error("boom"));
+    apiMocks.useSettlementHistory.mockReturnValue({
+      data: undefined,
+      error: new Error("boom"),
+      isLoading: false,
+    });
     render(<SettlementHistoryTable />);
     await waitFor(() => expect(screen.getByTestId("error")).toBeInTheDocument());
   });
 
   it("renders direction correct checkmark", async () => {
-    apiMocks.fetchSettlementHistory.mockResolvedValue(historyData);
+    apiMocks.useSettlementHistory.mockReturnValue({
+      data: historyData,
+      error: undefined,
+      isLoading: false,
+    });
     render(<SettlementHistoryTable />);
     await waitFor(() => expect(screen.getByTestId("dir-1")).toBeInTheDocument());
     expect(screen.getByTestId("dir-1").textContent).toBe("✓");

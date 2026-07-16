@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ReliabilityChart } from "./reliability-chart";
-import type { ReliabilityBin } from "@/lib/learning-api";
+import type { ReliabilityBin } from "@/lib/sports-api";
 
 // Mock recharts
 vi.mock("recharts", () => ({

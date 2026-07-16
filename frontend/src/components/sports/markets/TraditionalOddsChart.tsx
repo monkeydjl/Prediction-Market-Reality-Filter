@@ -1,5 +1,4 @@
 "use client";
-import { useEffect, useState } from "react";
 import {
   CartesianGrid,
   Legend,
@@ -11,13 +10,13 @@ import {
   YAxis,
 } from "recharts";
 import {
-  fetchTraditionalOddsHistory,
-  type TraditionalOddsHistory,
-} from "@/lib/sport-odds-api";
-import {
-  fetchMarketSnapshots,
-  type SnapshotSeries,
-} from "@/lib/sport-markets-api";
+  useTraditionalOddsHistory,
+  useMarketSnapshots,
+} from "@/lib/sports-api";
+import type {
+  TraditionalOddsHistory,
+  SnapshotSeries,
+} from "@/lib/sports-api";
 import { usePriceStream } from "@/lib/use-price-stream";
 import { RealtimePriceIndicator } from "@/components/sports/realtime/RealtimePriceIndicator";
 
@@ -76,47 +75,44 @@ function mergeSeries(
   return result;
 }
 
+const EMPTY_TRADITIONAL: TraditionalOddsHistory = {
+  match_id: "",
+  series: [],
+  skipped: true,
+  skip_reason: "no_data",
+};
+
+const EMPTY_POLY: { series: SnapshotSeries[] } = { series: [] };
+
 export function TraditionalOddsChart({ matchId }: TraditionalOddsChartProps) {
-  const [merged, setMerged] = useState<Record<string, MergedPoint[]> | null>(
-    null,
-  );
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    data: tradData,
+    error: tradError,
+    isLoading: tradLoading,
+  } = useTraditionalOddsHistory(matchId);
+  const {
+    data: polyData,
+    error: polyError,
+    isLoading: polyLoading,
+  } = useMarketSnapshots(matchId);
 
   const { isConnected } = usePriceStream(matchId);
 
-  useEffect(() => {
-    setLoading(true);
-    setError(null);
-    Promise.all([
-      fetchTraditionalOddsHistory(matchId).catch(() => null),
-      fetchMarketSnapshots(matchId).catch(() => null),
-    ])
-      .then(([trad, poly]) => {
-        if (!trad && !poly) {
-          setError("Failed to fetch odds data");
-          setLoading(false);
-          return;
-        }
-        const tradData: TraditionalOddsHistory = trad ?? {
-          match_id: matchId,
-          series: [],
-          skipped: true,
-          skip_reason: "no_data",
-        };
-        const polyData = poly ?? { series: [] as SnapshotSeries[] };
-        setMerged(mergeSeries(tradData, polyData));
-        setLoading(false);
-      })
-      .catch((err) => {
-        setError(err.message);
-        setLoading(false);
-      });
-  }, [matchId]);
+  const loading = tradLoading || polyLoading;
+  const trad = tradData ?? EMPTY_TRADITIONAL;
+  const poly = polyData ?? EMPTY_POLY;
+
+  // Mirror the original `.catch(() => null)` graceful fallback: only show
+  // an error if BOTH sources errored (and neither has data yet).
+  const bothErrored =
+    tradError && polyError && !tradData && !polyData;
 
   if (loading) return <div data-testid="loading">加载中...</div>;
-  if (error) return <div data-testid="error">错误: {error}</div>;
-  if (!merged || Object.keys(merged).length === 0)
+  if (bothErrored)
+    return <div data-testid="error">错误: Failed to fetch odds data</div>;
+
+  const merged = mergeSeries(trad, poly);
+  if (Object.keys(merged).length === 0)
     return <div data-testid="empty">暂无赔率数据</div>;
 
   return (

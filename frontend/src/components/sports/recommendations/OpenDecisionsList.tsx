@@ -1,36 +1,26 @@
 "use client";
-import { useEffect, useState } from "react";
-import { fetchOpenDecisions, type SportRecommendation } from "@/lib/sport-recommendations-api";
+import { useState } from "react";
+import { useOpenDecisions, type SportRecommendation } from "@/lib/sports-api";
 import { RecommendationCard } from "./RecommendationCard";
 
 type DecisionFilter = "all" | "act" | "provisional_act" | "watch";
 
 export function OpenDecisionsList() {
-  const [recs, setRecs] = useState<SportRecommendation[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<DecisionFilter>("all");
+  const decision = filter === "all" ? undefined : filter;
+  const { data, error, isLoading } = useOpenDecisions({ limit: 50, decision });
+  const recs: SportRecommendation[] = data?.items ?? [];
+  const errorMessage = error
+    ? error instanceof Error
+      ? error.message
+      : "加载失败"
+    : null;
 
-  useEffect(() => {
-    setLoading(true);
-    setError(null);
-    const decision = filter === "all" ? undefined : filter;
-    fetchOpenDecisions({ limit: 50, decision })
-      .then((data) => {
-        setRecs(data.items);
-        setLoading(false);
-      })
-      .catch((err) => {
-        setError(err.message);
-        setLoading(false);
-      });
-  }, [filter]);
-
-  if (loading) {
+  if (isLoading) {
     return <div data-testid="loading">加载中...</div>;
   }
-  if (error) {
-    return <div data-testid="error">错误: {error}</div>;
+  if (errorMessage) {
+    return <div data-testid="error">错误: {errorMessage}</div>;
   }
   if (recs.length === 0) {
     return <div data-testid="empty">暂无开放决策</div>;

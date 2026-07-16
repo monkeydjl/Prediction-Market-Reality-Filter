@@ -1,21 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+
+const apiMocks = vi.hoisted(() => ({
+  useMarketLinks: vi.fn(),
+}));
+vi.mock("@/lib/sports-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sports-api")>()),
+  useMarketLinks: apiMocks.useMarketLinks,
+}));
+
 import { MarketLinksTable } from "./MarketLinksTable";
-import type { MarketLinkList } from "@/lib/sport-markets-api";
 
-vi.mock("next/link", () => ({
-  default: ({ href, children }: { href: string; children: React.ReactNode }) => (
-    <a href={href}>{children}</a>
-  ),
-}));
-
-const apiMocks = vi.hoisted(() => ({ fetchMarketLinks: vi.fn() }));
-vi.mock("@/lib/sport-markets-api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/sport-markets-api")>()),
-  fetchMarketLinks: apiMocks.fetchMarketLinks,
-}));
-
-const linksData: MarketLinkList = {
+const linksData = {
   items: [
     {
       id: 1, match_id: "m1", contract_id: "c1", source: "polymarket",
@@ -28,9 +24,16 @@ const linksData: MarketLinkList = {
 };
 
 describe("MarketLinksTable", () => {
+  beforeEach(() => {
+    apiMocks.useMarketLinks.mockReset();
+  });
 
   it("renders rows after load", async () => {
-    apiMocks.fetchMarketLinks.mockResolvedValue(linksData);
+    apiMocks.useMarketLinks.mockReturnValue({
+      data: linksData,
+      error: undefined,
+      isLoading: false,
+    });
     render(<MarketLinksTable />);
     await waitFor(() =>
       expect(screen.getByTestId("market-links-table")).toBeInTheDocument(),
@@ -39,20 +42,32 @@ describe("MarketLinksTable", () => {
   });
 
   it("shows verified badge text", async () => {
-    apiMocks.fetchMarketLinks.mockResolvedValue(linksData);
+    apiMocks.useMarketLinks.mockReturnValue({
+      data: linksData,
+      error: undefined,
+      isLoading: false,
+    });
     render(<MarketLinksTable />);
     await waitFor(() => expect(screen.getByTestId("badge-1")).toBeInTheDocument());
     expect(screen.getByTestId("badge-1").textContent).toBe("已验证");
   });
 
   it("renders empty state", async () => {
-    apiMocks.fetchMarketLinks.mockResolvedValue({ items: [], total: 0 });
+    apiMocks.useMarketLinks.mockReturnValue({
+      data: { items: [], total: 0 },
+      error: undefined,
+      isLoading: false,
+    });
     render(<MarketLinksTable />);
     await waitFor(() => expect(screen.getByTestId("empty")).toBeInTheDocument());
   });
 
   it("renders error state", async () => {
-    apiMocks.fetchMarketLinks.mockRejectedValue(new Error("boom"));
+    apiMocks.useMarketLinks.mockReturnValue({
+      data: undefined,
+      error: new Error("boom"),
+      isLoading: false,
+    });
     render(<MarketLinksTable />);
     await waitFor(() => expect(screen.getByTestId("error")).toBeInTheDocument());
   });

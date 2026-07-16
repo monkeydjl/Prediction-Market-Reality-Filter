@@ -1,26 +1,20 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { PendingReviewQueue } from "./PendingReviewQueue";
-import type { MarketLinkList } from "@/lib/sport-markets-api";
-
-vi.mock("next/link", () => ({
-  default: ({ href, children }: { href: string; children: React.ReactNode }) => (
-    <a href={href}>{children}</a>
-  ),
-}));
 
 const apiMocks = vi.hoisted(() => ({
-  fetchPendingLinks: vi.fn(),
+  usePendingLinks: vi.fn(),
   verifyLink: vi.fn(),
 }));
-vi.mock("@/lib/sport-markets-api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/sport-markets-api")>()),
-  fetchPendingLinks: apiMocks.fetchPendingLinks,
+vi.mock("@/lib/sports-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sports-api")>()),
+  usePendingLinks: apiMocks.usePendingLinks,
   verifyLink: apiMocks.verifyLink,
 }));
 
-const pendingData: MarketLinkList = {
+import { PendingReviewQueue } from "./PendingReviewQueue";
+
+const pendingData = {
   items: [
     {
       id: 1, match_id: "m1", contract_id: "c1", source: "polymarket",
@@ -32,31 +26,40 @@ const pendingData: MarketLinkList = {
   total: 1,
 };
 
+const makePendingResult = (overrides: Partial<typeof pendingData> = {}) => ({
+  data: { ...pendingData, ...overrides },
+  error: undefined,
+  isLoading: false,
+  mutate: vi.fn().mockResolvedValue(undefined),
+});
+
 describe("PendingReviewQueue", () => {
   beforeEach(() => {
-    apiMocks.fetchPendingLinks.mockReset();
+    apiMocks.usePendingLinks.mockReset();
     apiMocks.verifyLink.mockReset();
   });
 
   it("renders pending cards", async () => {
-    apiMocks.fetchPendingLinks.mockResolvedValue(pendingData);
+    apiMocks.usePendingLinks.mockReturnValue(makePendingResult());
     render(<PendingReviewQueue />);
     await waitFor(() => expect(screen.getByTestId("card-1")).toBeInTheDocument());
     expect(screen.getByText("Will Lakers win?")).toBeInTheDocument();
   });
 
   it("renders empty state", async () => {
-    apiMocks.fetchPendingLinks.mockResolvedValue({ items: [], total: 0 });
+    apiMocks.usePendingLinks.mockReturnValue({
+      data: { items: [], total: 0 },
+      error: undefined,
+      isLoading: false,
+      mutate: vi.fn(),
+    });
     render(<PendingReviewQueue />);
     await waitFor(() => expect(screen.getByTestId("empty")).toBeInTheDocument());
   });
 
   it("confirm button calls verifyLink with true", async () => {
-    apiMocks.fetchPendingLinks.mockResolvedValue(pendingData);
+    apiMocks.usePendingLinks.mockReturnValue(makePendingResult());
     apiMocks.verifyLink.mockResolvedValue(undefined);
-    apiMocks.fetchPendingLinks
-      .mockResolvedValueOnce(pendingData)
-      .mockResolvedValueOnce({ items: [], total: 0 });
     render(<PendingReviewQueue />);
     await waitFor(() => expect(screen.getByTestId("confirm-1")).toBeInTheDocument());
     await userEvent.click(screen.getByTestId("confirm-1"));
@@ -66,11 +69,8 @@ describe("PendingReviewQueue", () => {
   });
 
   it("reject button calls verifyLink with false", async () => {
-    apiMocks.fetchPendingLinks.mockResolvedValue(pendingData);
+    apiMocks.usePendingLinks.mockReturnValue(makePendingResult());
     apiMocks.verifyLink.mockResolvedValue(undefined);
-    apiMocks.fetchPendingLinks
-      .mockResolvedValueOnce(pendingData)
-      .mockResolvedValueOnce({ items: [], total: 0 });
     render(<PendingReviewQueue />);
     await waitFor(() => expect(screen.getByTestId("reject-1")).toBeInTheDocument());
     await userEvent.click(screen.getByTestId("reject-1"));

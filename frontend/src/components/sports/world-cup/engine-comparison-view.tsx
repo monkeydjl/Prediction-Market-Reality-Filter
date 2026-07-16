@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Zap, Brain, GitCompare, Target, Award, AlertCircle, Loader2, BarChart3, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getWorldCupApiBase } from "@/lib/env";
+import { getApiBase } from "@/lib/env";
 
 type EngineKey = "elo_odds" | "hybrid" | "integrated" | "gbm";
 
@@ -168,7 +168,7 @@ export function EngineComparisonView() {
         setError(null);
 
         const response = await fetch(
-          `${getWorldCupApiBase()}/api/world-cup/predictions/engine-comparison`,
+          `${getApiBase()}/world-cup/predictions/engine-comparison`,
           { cache: "no-store" }
         );
 

@@ -1,8 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { PredictionHistoryList } from "./prediction-history-list";
 
-// Mock next/link
 vi.mock("next/link", () => ({
   default: ({ href, children, className }: {
     href: string;
@@ -11,16 +9,15 @@ vi.mock("next/link", () => ({
   }) => <a href={href} className={className}>{children}</a>,
 }));
 
-// Mock learning-api
-vi.mock("@/lib/learning-api", () => ({
-  fetchPredictionHistory: vi.fn(),
+const apiMocks = vi.hoisted(() => ({
+  usePredictionHistory: vi.fn(),
+}));
+vi.mock("@/lib/sports-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sports-api")>()),
+  usePredictionHistory: apiMocks.usePredictionHistory,
 }));
 
-import { fetchPredictionHistory } from "@/lib/learning-api";
-
-afterEach(() => {
-  vi.mocked(fetchPredictionHistory).mockReset();
-});
+import { PredictionHistoryList } from "./prediction-history-list";
 
 const mockItem = {
   id: 1,
@@ -46,9 +43,15 @@ const mockItem = {
 };
 
 describe("PredictionHistoryList", () => {
+  beforeEach(() => {
+    apiMocks.usePredictionHistory.mockReset();
+  });
+
   it("renders table rows with history data", async () => {
-    vi.mocked(fetchPredictionHistory).mockResolvedValueOnce({
-      items: [mockItem], total: 1, limit: 50, offset: 0,
+    apiMocks.usePredictionHistory.mockReturnValue({
+      data: { items: [mockItem], total: 1, limit: 50, offset: 0 },
+      error: undefined,
+      isLoading: false,
     });
     render(<PredictionHistoryList />);
     await waitFor(() => {
@@ -57,25 +60,37 @@ describe("PredictionHistoryList", () => {
   });
 
   it("shows — for outcome=null (unfinished)", async () => {
-    vi.mocked(fetchPredictionHistory).mockResolvedValueOnce({
-      items: [{ ...mockItem, outcome: null }], total: 1, limit: 50, offset: 0,
+    apiMocks.usePredictionHistory.mockReturnValue({
+      data: {
+        items: [{ ...mockItem, outcome: null }],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      },
+      error: undefined,
+      isLoading: false,
     });
     render(<PredictionHistoryList />);
     await waitFor(() => {
       // Deviation: outcome=null causes BOTH the result cell (resultBadge returns "—")
       // AND the MAE cell (`outcome?.score_mae?.toFixed(2) ?? "—"`) to render "—".
-      // getByText would throw "multiple elements"; use getAllByText to disambiguate.
       expect(screen.getAllByText("—").length).toBeGreaterThan(0);
     });
   });
 
   it("shows 待算 for outcome_correct=null", async () => {
-    vi.mocked(fetchPredictionHistory).mockResolvedValueOnce({
-      items: [{
-        ...mockItem,
-        outcome: { ...mockItem.outcome!, outcome_correct: null },
-      }],
-      total: 1, limit: 50, offset: 0,
+    apiMocks.usePredictionHistory.mockReturnValue({
+      data: {
+        items: [{
+          ...mockItem,
+          outcome: { ...mockItem.outcome!, outcome_correct: null },
+        }],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      },
+      error: undefined,
+      isLoading: false,
     });
     render(<PredictionHistoryList />);
     await waitFor(() => {
@@ -84,8 +99,10 @@ describe("PredictionHistoryList", () => {
   });
 
   it("renders row as link to trajectory page", async () => {
-    vi.mocked(fetchPredictionHistory).mockResolvedValueOnce({
-      items: [mockItem], total: 1, limit: 50, offset: 0,
+    apiMocks.usePredictionHistory.mockReturnValue({
+      data: { items: [mockItem], total: 1, limit: 50, offset: 0 },
+      error: undefined,
+      isLoading: false,
     });
     render(<PredictionHistoryList />);
     await waitFor(() => {
@@ -95,8 +112,10 @@ describe("PredictionHistoryList", () => {
   });
 
   it("renders pagination controls", async () => {
-    vi.mocked(fetchPredictionHistory).mockResolvedValueOnce({
-      items: [mockItem], total: 100, limit: 50, offset: 0,
+    apiMocks.usePredictionHistory.mockReturnValue({
+      data: { items: [mockItem], total: 100, limit: 50, offset: 0 },
+      error: undefined,
+      isLoading: false,
     });
     render(<PredictionHistoryList />);
     await waitFor(() => {
@@ -105,8 +124,10 @@ describe("PredictionHistoryList", () => {
   });
 
   it("renders empty state", async () => {
-    vi.mocked(fetchPredictionHistory).mockResolvedValueOnce({
-      items: [], total: 0, limit: 50, offset: 0,
+    apiMocks.usePredictionHistory.mockReturnValue({
+      data: { items: [], total: 0, limit: 50, offset: 0 },
+      error: undefined,
+      isLoading: false,
     });
     render(<PredictionHistoryList />);
     await waitFor(() => {
@@ -119,8 +140,10 @@ describe("PredictionHistoryList", () => {
     // When on page 1 (offset=0) and competition changes, setOffset(0) bails
     // out (no ref change) so the fetch effect never re-fired and the new
     // competition value was never sent to fetchPredictionHistory.
-    vi.mocked(fetchPredictionHistory).mockResolvedValue({
-      items: [mockItem], total: 1, limit: 50, offset: 0,
+    apiMocks.usePredictionHistory.mockReturnValue({
+      data: { items: [mockItem], total: 1, limit: 50, offset: 0 },
+      error: undefined,
+      isLoading: false,
     });
     render(<PredictionHistoryList />);
     await waitFor(() => {
@@ -132,8 +155,9 @@ describe("PredictionHistoryList", () => {
     fireEvent.change(competitionSelect, { target: { value: "nba" } });
 
     await waitFor(() => {
-      const calls = vi.mocked(fetchPredictionHistory).mock.calls;
-      const lastCall = calls[calls.length - 1][0];
+      const lastCall = apiMocks.usePredictionHistory.mock.calls[
+        apiMocks.usePredictionHistory.mock.calls.length - 1
+      ][0];
       expect(lastCall).toMatchObject({ competition: "nba" });
     });
   });

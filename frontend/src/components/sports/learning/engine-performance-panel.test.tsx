@@ -1,17 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import { EnginePerformancePanel } from "./engine-performance-panel";
 
-// Mock learning-api
-vi.mock("@/lib/learning-api", () => ({
-  fetchEngineScores: vi.fn(),
+const apiMocks = vi.hoisted(() => ({
+  useEngineScores: vi.fn(),
+}));
+vi.mock("@/lib/sports-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sports-api")>()),
+  useEngineScores: apiMocks.useEngineScores,
 }));
 
-import { fetchEngineScores } from "@/lib/learning-api";
-
-afterEach(() => {
-  vi.mocked(fetchEngineScores).mockReset();
-});
+import { EnginePerformancePanel } from "./engine-performance-panel";
 
 const mockScore = {
   engine: "basketball",
@@ -25,8 +23,16 @@ const mockScore = {
 };
 
 describe("EnginePerformancePanel", () => {
+  beforeEach(() => {
+    apiMocks.useEngineScores.mockReset();
+  });
+
   it("renders filter dropdowns", async () => {
-    vi.mocked(fetchEngineScores).mockResolvedValueOnce([]);
+    apiMocks.useEngineScores.mockReturnValue({
+      data: [],
+      error: undefined,
+      isLoading: false,
+    });
     render(<EnginePerformancePanel />);
     await waitFor(() => {
       expect(screen.getByText("引擎")).toBeInTheDocument();
@@ -36,7 +42,11 @@ describe("EnginePerformancePanel", () => {
   });
 
   it("renders data table with scores", async () => {
-    vi.mocked(fetchEngineScores).mockResolvedValueOnce([mockScore]);
+    apiMocks.useEngineScores.mockReturnValue({
+      data: [mockScore],
+      error: undefined,
+      isLoading: false,
+    });
     render(<EnginePerformancePanel />);
     await waitFor(() => {
       // Use cell role to disambiguate from <option> elements in filter dropdowns
@@ -47,7 +57,11 @@ describe("EnginePerformancePanel", () => {
   });
 
   it("renders empty state when no data", async () => {
-    vi.mocked(fetchEngineScores).mockResolvedValueOnce([]);
+    apiMocks.useEngineScores.mockReturnValue({
+      data: [],
+      error: undefined,
+      isLoading: false,
+    });
     render(<EnginePerformancePanel />);
     await waitFor(() => {
       expect(screen.getByText("暂无性能数据，等待比赛结果录入")).toBeInTheDocument();
@@ -55,13 +69,21 @@ describe("EnginePerformancePanel", () => {
   });
 
   it("renders loading state", async () => {
-    vi.mocked(fetchEngineScores).mockReturnValueOnce(new Promise(() => {})); // never resolves
+    apiMocks.useEngineScores.mockReturnValue({
+      data: undefined,
+      error: undefined,
+      isLoading: true,
+    });
     render(<EnginePerformancePanel />);
     expect(screen.getByText("加载中...")).toBeInTheDocument();
   });
 
   it("renders error state on fetch failure", async () => {
-    vi.mocked(fetchEngineScores).mockRejectedValueOnce(new Error("Network error"));
+    apiMocks.useEngineScores.mockReturnValue({
+      data: undefined,
+      error: new Error("Network error"),
+      isLoading: false,
+    });
     render(<EnginePerformancePanel />);
     await waitFor(() => {
       expect(screen.getByText("加载失败")).toBeInTheDocument();
@@ -69,7 +91,11 @@ describe("EnginePerformancePanel", () => {
   });
 
   it("applies green color class for high accuracy", async () => {
-    vi.mocked(fetchEngineScores).mockResolvedValueOnce([{ ...mockScore, accuracy: 0.85 }]);
+    apiMocks.useEngineScores.mockReturnValue({
+      data: [{ ...mockScore, accuracy: 0.85 }],
+      error: undefined,
+      isLoading: false,
+    });
     render(<EnginePerformancePanel />);
     await waitFor(() => {
       const accuracyCell = screen.getByText("85.0%");

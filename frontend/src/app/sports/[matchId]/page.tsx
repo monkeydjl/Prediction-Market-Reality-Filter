@@ -1,17 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { MatchDetailPanel } from "@/components/sports/match-detail-panel";
 import { TraditionalOddsChart } from "@/components/sports/markets/TraditionalOddsChart";
 import {
-  fetchMatchDetail,
+  useMatchDetail,
   triggerPrediction,
-  NotFoundError,
-  type MatchDetail,
-  type PredictionResult,
 } from "@/lib/sports-api";
+import type { MatchDetail, PredictionResult } from "@/lib/sports-api";
+
+// The global swrFetcher localizes HTTP 404 to this message via
+// buildApiErrorMessage. We match on it to preserve the original
+// "比赛不存在" UX that used to rely on `instanceof NotFoundError`.
+const NOT_FOUND_MESSAGE = "请求的资源不存在";
 
 type TabId = "details" | "odds";
 
@@ -19,47 +22,38 @@ export default function MatchDetailPage() {
   const params = useParams();
   const matchId = params.matchId as string;
 
-  const [match, setMatch] = useState<MatchDetail | null>(null);
+  const { data, error, isLoading } = useMatchDetail(matchId);
   const [prediction, setPrediction] = useState<PredictionResult | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [notFound, setNotFound] = useState(false);
   const [isPredicting, setIsPredicting] = useState(false);
+  const [predictError, setPredictError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>("details");
 
-  useEffect(() => {
-    setLoading(true);
-    setError(null);
-    fetchMatchDetail(matchId)
-      .then((data) => {
-        setMatch(data.match);
-        setPrediction(data.prediction);
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (err instanceof NotFoundError) {
-          setNotFound(true);
-        } else {
-          setError(err.message);
-        }
-        setLoading(false);
-      });
-  }, [matchId]);
+  const match: MatchDetail | null = data?.match ?? null;
+  const currentPrediction = prediction ?? data?.prediction ?? null;
+
+  const notFound =
+    error instanceof Error && error.message === NOT_FOUND_MESSAGE;
+  const errorMessage = error
+    ? error instanceof Error
+      ? error.message
+      : "加载失败"
+    : predictError;
 
   const handlePredict = () => {
     setIsPredicting(true);
+    setPredictError(null);
     triggerPrediction(matchId)
       .then((result) => {
         setPrediction(result);
         setIsPredicting(false);
       })
       .catch((err) => {
-        setError(err.message);
+        setPredictError(err instanceof Error ? err.message : "预测失败");
         setIsPredicting(false);
       });
   };
 
-  if (loading) {
+  if (isLoading) {
     return (
       <main className="mx-auto max-w-4xl px-4 py-6 md:px-6">
         <p className="text-muted-foreground">加载中...</p>
@@ -78,10 +72,10 @@ export default function MatchDetailPage() {
     );
   }
 
-  if (error || !match) {
+  if (errorMessage || !match) {
     return (
       <main className="mx-auto max-w-4xl space-y-4 px-4 py-6 md:px-6">
-        <p className="text-destructive">加载失败: {error}</p>
+        <p className="text-destructive">加载失败: {errorMessage}</p>
         <Link href="/sports" className="text-primary hover:underline">
           返回列表
         </Link>
@@ -121,7 +115,7 @@ export default function MatchDetailPage() {
       {activeTab === "details" ? (
         <MatchDetailPanel
           match={match}
-          prediction={prediction}
+          prediction={currentPrediction}
           onPredict={handlePredict}
           isPredicting={isPredicting}
         />

@@ -1,28 +1,17 @@
 "use client";
-import { useEffect, useState } from "react";
-import { fetchCalibrations, type MarketCalibration } from "@/lib/sport-settlements-api";
+import { useCalibrations, type MarketCalibration } from "@/lib/sports-api";
 
 export function MarketCalibrationPanel() {
-  const [items, setItems] = useState<MarketCalibration[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data, error, isLoading } = useCalibrations();
+  const items: MarketCalibration[] = data?.items ?? [];
+  const errorMessage = error
+    ? error instanceof Error
+      ? error.message
+      : "加载失败"
+    : null;
 
-  useEffect(() => {
-    setLoading(true);
-    setError(null);
-    fetchCalibrations()
-      .then((data) => {
-        setItems(data.items);
-        setLoading(false);
-      })
-      .catch((err) => {
-        setError(err.message);
-        setLoading(false);
-      });
-  }, []);
-
-  if (loading) return <div data-testid="loading">加载中...</div>;
-  if (error) return <div data-testid="error">错误: {error}</div>;
+  if (isLoading) return <div data-testid="loading">加载中...</div>;
+  if (errorMessage) return <div data-testid="error">错误: {errorMessage}</div>;
   if (items.length === 0) return <div data-testid="empty">暂无市场校准数据</div>;
 
   return (

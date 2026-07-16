@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { ChartFrame, DarkTooltip } from "@/components/ui/chart-lite";
-import { fetchPredictionTrajectory, type PredictionTrajectory as TrajectoryData } from "@/lib/learning-api";
+import { usePredictionTrajectory, type PredictionTrajectory as TrajectoryData } from "@/lib/sports-api";
 
 interface PredictionTrajectoryProps {
   matchId: string;
@@ -15,18 +14,10 @@ const SPORT_ICONS: Record<string, string> = {
 };
 
 export function PredictionTrajectory({ matchId }: PredictionTrajectoryProps) {
-  const [data, setData] = useState<TrajectoryData | null>(null);
-  const [error, setError] = useState(false);
+  const { data, error, isLoading } = usePredictionTrajectory(matchId);
+  const trajectory: TrajectoryData | null = data ?? null;
 
-  useEffect(() => {
-    setError(false);
-    setData(null);
-    fetchPredictionTrajectory(matchId)
-      .then(setData)
-      .catch(() => setError(true));
-  }, [matchId]);
-
-  if (data === null && !error) {
+  if (isLoading) {
     return <div className="p-4 text-sm text-muted-foreground">加载中...</div>;
   }
 
@@ -34,7 +25,7 @@ export function PredictionTrajectory({ matchId }: PredictionTrajectoryProps) {
     return <div className="p-4 text-sm text-red-500">加载失败</div>;
   }
 
-  if (data!.count === 0) {
+  if (!trajectory || trajectory.count === 0) {
     return (
       <div className="space-y-4">
         <Link href="/sports/learning?tab=history" className="text-sm text-primary hover:underline">
@@ -46,18 +37,18 @@ export function PredictionTrajectory({ matchId }: PredictionTrajectoryProps) {
   }
 
   // Dynamic outcome keys from first item's probabilities
-  const outcomeKeys = data!.items.length > 0
-    ? Object.keys(data!.items[0].outcome_probabilities)
+  const outcomeKeys = trajectory.items.length > 0
+    ? Object.keys(trajectory.items[0].outcome_probabilities)
     : [];
 
   // Prepare chart data: [{ created_at, home_win: 0.62, away_win: 0.38, confidence: 0.59 }, ...]
-  const chartData = data!.items.map((item) => ({
+  const chartData = trajectory.items.map((item) => ({
     created_at: new Date(item.created_at).toLocaleString("zh-CN"),
     ...item.outcome_probabilities,
     confidence: item.confidence,
   }));
 
-  const sportIcon = data!.sport ? (SPORT_ICONS[data!.sport] ?? "❓") : "❓";
+  const sportIcon = trajectory.sport ? (SPORT_ICONS[trajectory.sport] ?? "❓") : "❓";
 
   return (
     <div className="space-y-6">
@@ -68,9 +59,9 @@ export function PredictionTrajectory({ matchId }: PredictionTrajectoryProps) {
       <div className="flex items-center gap-3">
         <span className="text-2xl">{sportIcon}</span>
         <div>
-          <h1 className="text-lg font-semibold font-mono">{data!.match_id}</h1>
-          {data!.sport && (
-            <p className="text-sm text-muted-foreground">{data!.sport} · {data!.competition}</p>
+          <h1 className="text-lg font-semibold font-mono">{trajectory.match_id}</h1>
+          {trajectory.sport && (
+            <p className="text-sm text-muted-foreground">{trajectory.sport} · {trajectory.competition}</p>
           )}
         </div>
       </div>
@@ -121,7 +112,7 @@ export function PredictionTrajectory({ matchId }: PredictionTrajectoryProps) {
               </tr>
             </thead>
             <tbody>
-              {data!.items.map((item) => (
+              {trajectory.items.map((item) => (
                 <tr key={item.id} className="border-b border-border/50">
                   <td className="py-2 pr-4 text-muted-foreground">
                     {new Date(item.created_at).toLocaleString("zh-CN")}

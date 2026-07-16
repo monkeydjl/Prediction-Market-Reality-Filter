@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { RecommendationCard } from "./RecommendationCard";
-import type { SportRecommendation } from "@/lib/sport-recommendations-api";
+import type { SportRecommendation } from "@/lib/sports-api";
 
 const baseRec: SportRecommendation = {
   match_id: "m1",

@@ -1,4 +1,4 @@
-import type { SportRecommendation } from "@/lib/sport-recommendations-api";
+import type { SportRecommendation } from "@/lib/sports-api";
 
 const DIRECTION_STYLES: Record<string, string> = {
   YES: "bg-green-100 text-green-800",

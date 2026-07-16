@@ -1,21 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+
+const apiMocks = vi.hoisted(() => ({
+  useOpenDecisions: vi.fn(),
+}));
+vi.mock("@/lib/sports-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sports-api")>()),
+  useOpenDecisions: apiMocks.useOpenDecisions,
+}));
+
 import { OpenDecisionsList } from "./OpenDecisionsList";
-import type { RecommendationList } from "@/lib/sport-recommendations-api";
 
-vi.mock("next/link", () => ({
-  default: ({ href, children }: { href: string; children: React.ReactNode }) => (
-    <a href={href}>{children}</a>
-  ),
-}));
-
-const apiMocks = vi.hoisted(() => ({ fetchOpenDecisions: vi.fn() }));
-vi.mock("@/lib/sport-recommendations-api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/sport-recommendations-api")>()),
-  fetchOpenDecisions: apiMocks.fetchOpenDecisions,
-}));
-
-const mockData: RecommendationList = {
+const mockData = {
   items: [
     {
       match_id: "m1",
@@ -45,8 +41,16 @@ const mockData: RecommendationList = {
 };
 
 describe("OpenDecisionsList", () => {
+  beforeEach(() => {
+    apiMocks.useOpenDecisions.mockReset();
+  });
+
   it("renders list after load", async () => {
-    apiMocks.fetchOpenDecisions.mockResolvedValue(mockData);
+    apiMocks.useOpenDecisions.mockReturnValue({
+      data: mockData,
+      error: undefined,
+      isLoading: false,
+    });
     render(<OpenDecisionsList />);
     await waitFor(() =>
       expect(screen.getByTestId("open-decisions-list")).toBeInTheDocument(),
@@ -55,19 +59,31 @@ describe("OpenDecisionsList", () => {
   });
 
   it("renders empty state", async () => {
-    apiMocks.fetchOpenDecisions.mockResolvedValue({ items: [], total: 0 });
+    apiMocks.useOpenDecisions.mockReturnValue({
+      data: { items: [], total: 0 },
+      error: undefined,
+      isLoading: false,
+    });
     render(<OpenDecisionsList />);
     await waitFor(() => expect(screen.getByTestId("empty")).toBeInTheDocument());
   });
 
   it("renders error state", async () => {
-    apiMocks.fetchOpenDecisions.mockRejectedValue(new Error("boom"));
+    apiMocks.useOpenDecisions.mockReturnValue({
+      data: undefined,
+      error: new Error("boom"),
+      isLoading: false,
+    });
     render(<OpenDecisionsList />);
     await waitFor(() => expect(screen.getByTestId("error")).toBeInTheDocument());
   });
 
   it("renders filter buttons", async () => {
-    apiMocks.fetchOpenDecisions.mockResolvedValue(mockData);
+    apiMocks.useOpenDecisions.mockReturnValue({
+      data: mockData,
+      error: undefined,
+      isLoading: false,
+    });
     render(<OpenDecisionsList />);
     await waitFor(() =>
       expect(screen.getByTestId("open-decisions-list")).toBeInTheDocument(),

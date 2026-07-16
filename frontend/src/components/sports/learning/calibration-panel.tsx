@@ -1,7 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { fetchCalibration, fetchReliability, type CalibrationItem, type ReliabilityData } from "@/lib/learning-api";
+import { useState } from "react";
+import {
+  useCalibration,
+  useReliability,
+  type CalibrationItem,
+  type ReliabilityData,
+} from "@/lib/sports-api";
 import { ReliabilityChart } from "./reliability-chart";
 
 const ENGINE_OPTIONS = [
@@ -23,38 +28,22 @@ const COMPETITION_OPTIONS = [
 ];
 
 export function CalibrationPanel() {
-  const [calibrations, setCalibrations] = useState<CalibrationItem[] | null>(null);
-  const [reliability, setReliability] = useState<ReliabilityData | null>(null);
-  const [calError, setCalError] = useState(false);
-  const [relError, setRelError] = useState(false);
   const [engine, setEngine] = useState("");
   const [competition, setCompetition] = useState("");
 
-  useEffect(() => {
-    setCalError(false);
-    setCalibrations(null);
-    setRelError(false);
-    setReliability(null);
+  const params = { engine: engine || undefined, competition: competition || undefined };
 
-    const params = { engine: engine || undefined, competition: competition || undefined };
+  // Each hook fetches independently — one failure doesn't block the other,
+  // matching the previous Promise.allSettled behavior.
+  const cal = useCalibration(params);
+  const rel = useReliability(params);
 
-    // Parallel requests with allSettled — one failure doesn't block the other
-    Promise.allSettled([
-      fetchCalibration(params),
-      fetchReliability(params),
-    ]).then(([calResult, relResult]) => {
-      if (calResult.status === "fulfilled") {
-        setCalibrations(calResult.value);
-      } else {
-        setCalError(true);
-      }
-      if (relResult.status === "fulfilled") {
-        setReliability(relResult.value);
-      } else {
-        setRelError(true);
-      }
-    });
-  }, [engine, competition]);
+  const calibrations: CalibrationItem[] | null = cal.data ?? null;
+  const calError = cal.error !== undefined;
+  const calLoading = cal.isLoading;
+  const reliability: ReliabilityData | null = rel.data ?? null;
+  const relError = rel.error !== undefined;
+  const relLoading = rel.isLoading;
 
   return (
     <div className="space-y-6">
@@ -90,7 +79,7 @@ export function CalibrationPanel() {
         <h2 className="mb-2 text-sm font-medium text-muted-foreground">校准参数</h2>
         {calError ? (
           <div className="p-4 text-sm text-red-500">校准数据加载失败</div>
-        ) : calibrations === null ? (
+        ) : calLoading || calibrations === null ? (
           <div className="p-4 text-sm text-muted-foreground">加载中...</div>
         ) : calibrations.length === 0 ? (
           <div className="p-4 text-sm text-muted-foreground">暂无校准数据，需 ≥ MIN_SAMPLES_FOR_CALIBRATION 条记录</div>
@@ -110,17 +99,17 @@ export function CalibrationPanel() {
                 </tr>
               </thead>
               <tbody>
-                {calibrations.map((cal, i) => (
-                  <tr key={`${cal.engine}-${cal.competition}-${i}`} className="border-b border-border/50">
-                    <td className="py-2 pr-4 font-mono">{cal.engine}</td>
-                    <td className="py-2 pr-4 font-mono">{cal.competition}</td>
-                    <td className="py-2 pr-4 font-mono">{cal.slope.toFixed(2)}</td>
-                    <td className="py-2 pr-4 font-mono">{cal.intercept.toFixed(3)}</td>
-                    <td className="py-2 pr-4 font-mono">{cal.sample_count}</td>
-                    <td className="py-2 pr-4 font-mono">{(cal.avg_confidence * 100).toFixed(1)}%</td>
-                    <td className="py-2 pr-4 font-mono">{(cal.avg_accuracy * 100).toFixed(1)}%</td>
+                {calibrations.map((calItem, i) => (
+                  <tr key={`${calItem.engine}-${calItem.competition}-${i}`} className="border-b border-border/50">
+                    <td className="py-2 pr-4 font-mono">{calItem.engine}</td>
+                    <td className="py-2 pr-4 font-mono">{calItem.competition}</td>
+                    <td className="py-2 pr-4 font-mono">{calItem.slope.toFixed(2)}</td>
+                    <td className="py-2 pr-4 font-mono">{calItem.intercept.toFixed(3)}</td>
+                    <td className="py-2 pr-4 font-mono">{calItem.sample_count}</td>
+                    <td className="py-2 pr-4 font-mono">{(calItem.avg_confidence * 100).toFixed(1)}%</td>
+                    <td className="py-2 pr-4 font-mono">{(calItem.avg_accuracy * 100).toFixed(1)}%</td>
                     <td className="py-2 pr-4 text-muted-foreground">
-                      {cal.last_updated ? new Date(cal.last_updated).toLocaleString("zh-CN") : "—"}
+                      {calItem.last_updated ? new Date(calItem.last_updated).toLocaleString("zh-CN") : "—"}
                     </td>
                   </tr>
                 ))}
@@ -135,7 +124,7 @@ export function CalibrationPanel() {
         <h2 className="mb-2 text-sm font-medium text-muted-foreground">可靠性图</h2>
         {relError ? (
           <div className="p-4 text-sm text-red-500">可靠性数据加载失败</div>
-        ) : reliability === null ? (
+        ) : relLoading || reliability === null ? (
           <div className="p-4 text-sm text-muted-foreground">加载中...</div>
         ) : (
           <ReliabilityChart bins={reliability.bins} />

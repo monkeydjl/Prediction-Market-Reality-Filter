@@ -6,7 +6,7 @@ import type { MatchFixture, MatchPrediction } from "@/lib/world-cup/predictions-
 import { analyzePrediction, postHeaders } from "@/lib/world-cup/predictions-api";
 import { translateTeamName } from "@/lib/world-cup/team-names-zh";
 import { cn } from "@/lib/utils";
-import { getWorldCupApiBase } from "@/lib/env";
+import { getApiBase } from "@/lib/env";
 
 interface PredictionAnalysisCardProps {
   match: MatchFixture;
@@ -47,7 +47,7 @@ export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysis
       try {
         setLoadingHistory(true);
         const response = await fetch(
-          `${getWorldCupApiBase()}/api/world-cup/predictions/matches/${match.match_id}/analysis-history`,
+          `${getApiBase()}/world-cup/predictions/matches/${match.match_id}/analysis-history`,
           { cache: "no-store" }
         );
 
@@ -82,7 +82,7 @@ export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysis
 
       // Reload history to include the new analysis
       const response = await fetch(
-        `${getWorldCupApiBase()}/api/world-cup/predictions/matches/${match.match_id}/analysis-history`,
+        `${getApiBase()}/world-cup/predictions/matches/${match.match_id}/analysis-history`,
         { cache: "no-store" }
       );
 
@@ -110,7 +110,7 @@ export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysis
 
     try {
       const response = await fetch(
-        `${getWorldCupApiBase()}/api/world-cup/predictions/matches/${match.match_id}/optimize`,
+        `${getApiBase()}/world-cup/predictions/matches/${match.match_id}/optimize`,
         {
           method: "POST",
           headers: postHeaders(),

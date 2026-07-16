@@ -1,33 +1,27 @@
 "use client";
-import { useEffect, useState } from "react";
-import { fetchPendingLinks, verifyLink, type MarketLink } from "@/lib/sport-markets-api";
+import { usePendingLinks, verifyLink, type MarketLink } from "@/lib/sports-api";
 
 export function PendingReviewQueue() {
-  const [pending, setPending] = useState<MarketLink[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  async function load() {
-    setLoading(true);
-    const data = await fetchPendingLinks();
-    setPending(data.items);
-    setLoading(false);
-  }
-
-  useEffect(() => {
-    load().catch(() => setLoading(false));
-  }, []);
+  const { data, error, isLoading, mutate } = usePendingLinks();
+  const pending: MarketLink[] = data?.items ?? [];
+  const errorMessage = error
+    ? error instanceof Error
+      ? error.message
+      : "加载失败"
+    : null;
 
   async function handleVerify(matchId: string, contractId: string) {
     await verifyLink(matchId, contractId, true);
-    await load();
+    await mutate();
   }
 
   async function handleReject(matchId: string, contractId: string) {
     await verifyLink(matchId, contractId, false);
-    await load();
+    await mutate();
   }
 
-  if (loading) return <div data-testid="loading">加载中...</div>;
+  if (isLoading) return <div data-testid="loading">加载中...</div>;
+  if (errorMessage) return <div data-testid="error">{errorMessage}</div>;
   if (pending.length === 0) return <div data-testid="empty">无待审核链接</div>;
 
   return (

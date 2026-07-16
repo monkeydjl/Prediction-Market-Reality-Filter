@@ -1,29 +1,19 @@
 "use client";
-import { useEffect, useState } from "react";
-import { fetchSettlementHistory, type MarketSettlement } from "@/lib/sport-settlements-api";
+import { useState } from "react";
+import { useSettlementHistory, type MarketSettlement } from "@/lib/sports-api";
 
 export function SettlementHistoryTable() {
-  const [items, setItems] = useState<MarketSettlement[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [engineFilter, setEngineFilter] = useState<string>("");
+  const { data, error, isLoading } = useSettlementHistory(50, engineFilter || undefined);
+  const items: MarketSettlement[] = data?.items ?? [];
+  const errorMessage = error
+    ? error instanceof Error
+      ? error.message
+      : "加载失败"
+    : null;
 
-  useEffect(() => {
-    setLoading(true);
-    setError(null);
-    fetchSettlementHistory(50, engineFilter || undefined)
-      .then((data) => {
-        setItems(data.items);
-        setLoading(false);
-      })
-      .catch((err) => {
-        setError(err.message);
-        setLoading(false);
-      });
-  }, [engineFilter]);
-
-  if (loading) return <div data-testid="loading">加载中...</div>;
-  if (error) return <div data-testid="error">错误: {error}</div>;
+  if (isLoading) return <div data-testid="loading">加载中...</div>;
+  if (errorMessage) return <div data-testid="error">错误: {errorMessage}</div>;
   if (items.length === 0) return <div data-testid="empty">暂无结算记录</div>;
 
   return (

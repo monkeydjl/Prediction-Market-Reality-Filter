@@ -1,54 +1,48 @@
 "use client";
 import { useEffect, useState } from "react";
 import {
-  fetchAvailableFutures,
-  fetchLatestSnapshots,
-  type FuturesPair,
-  type FuturesSnapshot,
-} from "@/lib/futures-api";
+  useAvailableFutures,
+  useLatestSnapshots,
+} from "@/lib/sports-api";
+import type { FuturesPair } from "@/lib/sports-api";
 
 export function FuturesDashboard() {
-  const [pairs, setPairs] = useState<FuturesPair[] | null>(null);
+  const {
+    data: futuresData,
+    error: pairsError,
+    isLoading: pairsLoading,
+  } = useAvailableFutures();
+  const pairs = futuresData?.pairs ?? null;
+
   const [selected, setSelected] = useState<FuturesPair | null>(null);
-  const [snapshots, setSnapshots] = useState<FuturesSnapshot[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  // Load available (competition, season) pairs on mount
+  // Auto-select the first pair once the list loads (mirrors the original
+  // behavior in the mount useEffect).
   useEffect(() => {
-    setLoading(true);
-    setError(null);
-    fetchAvailableFutures()
-      .then((data) => {
-        setPairs(data.pairs);
-        setLoading(false);
-        // Auto-select first pair if available
-        if (data.pairs.length > 0) {
-          setSelected(data.pairs[0]);
-        }
-      })
-      .catch((err) => {
-        setError(err.message);
-        setLoading(false);
-      });
-  }, []);
+    if (pairs && pairs.length > 0 && !selected) {
+      setSelected(pairs[0]);
+    }
+  }, [pairs, selected]);
 
-  // Load snapshots when a pair is selected
-  useEffect(() => {
-    if (!selected) return;
-    setSnapshots(null);
-    setError(null);
-    fetchLatestSnapshots(selected.competition, selected.season)
-      .then((data) => {
-        setSnapshots(data.snapshots);
-      })
-      .catch((err) => {
-        setError(err.message);
-      });
-  }, [selected]);
+  const {
+    data: snapshotsData,
+    error: snapshotsError,
+    isLoading: snapshotsLoading,
+  } = useLatestSnapshots(
+    selected?.competition ?? null,
+    selected?.season ?? null,
+  );
+  const snapshots = snapshotsData?.snapshots ?? null;
 
-  if (loading) return <div data-testid="loading">加载中...</div>;
-  if (error) return <div data-testid="error">错误: {error}</div>;
+  const error = pairsError ?? snapshotsError;
+  const errorMessage = error
+    ? error instanceof Error
+      ? error.message
+      : "加载失败"
+    : null;
+
+  if (pairsLoading) return <div data-testid="loading">加载中...</div>;
+  if (errorMessage) return <div data-testid="error">错误: {errorMessage}</div>;
   if (!pairs || pairs.length === 0)
     return <div data-testid="empty">暂无期货市场数据</div>;
 
@@ -70,7 +64,9 @@ export function FuturesDashboard() {
         ))}
       </div>
 
-      {snapshots === null ? (
+      {snapshotsLoading && snapshots === null ? (
+        <div>加载快照中...</div>
+      ) : snapshots === null ? (
         <div>加载快照中...</div>
       ) : snapshots.length === 0 ? (
         <div>该赛事暂无快照数据</div>

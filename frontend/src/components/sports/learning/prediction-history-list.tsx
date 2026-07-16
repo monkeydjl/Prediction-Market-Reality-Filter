@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
-import { fetchPredictionHistory, type PredictionHistoryItem } from "@/lib/learning-api";
+import { usePredictionHistory, type PredictionHistoryItem } from "@/lib/sports-api";
 
 const SPORT_FILTERS = [
   { value: "", label: "全部" },
@@ -41,37 +41,23 @@ function resultBadge(item: PredictionHistoryItem): string {
 }
 
 export function PredictionHistoryList() {
-  const [items, setItems] = useState<PredictionHistoryItem[] | null>(null);
-  const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [sport, setSport] = useState("");
   const [competition, setCompetition] = useState("");
-  const [error, setError] = useState(false);
 
-  useEffect(() => {
-    setOffset(0);
-  }, [sport, competition]);
-
-  useEffect(() => {
-    setError(false);
-    setItems(null);
-    fetchPredictionHistory({
-      sport: sport || undefined,
-      competition: competition || undefined,
-      limit: PAGE_SIZE,
-      offset,
-    })
-      .then((data) => {
-        setItems(data.items);
-        setTotal(data.total);
-      })
-      .catch(() => setError(true));
-  }, [sport, competition, offset]);
+  const { data, error, isLoading } = usePredictionHistory({
+    sport: sport || undefined,
+    competition: competition || undefined,
+    limit: PAGE_SIZE,
+    offset,
+  });
+  const items: PredictionHistoryItem[] = data?.items ?? [];
+  const total: number = data?.total ?? 0;
 
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  if (items === null && !error) {
+  if (isLoading) {
     return <div className="p-4 text-sm text-muted-foreground">加载中...</div>;
   }
 
@@ -86,7 +72,7 @@ export function PredictionHistoryList() {
           <span>运动</span>
           <select
             value={sport}
-            onChange={(e) => setSport(e.target.value)}
+            onChange={(e) => { setSport(e.target.value); setOffset(0); }}
             className="rounded border border-border bg-background px-2 py-1 text-sm"
           >
             {SPORT_FILTERS.map((o) => (
@@ -98,7 +84,7 @@ export function PredictionHistoryList() {
           <span>赛事</span>
           <select
             value={competition}
-            onChange={(e) => setCompetition(e.target.value)}
+            onChange={(e) => { setCompetition(e.target.value); setOffset(0); }}
             className="rounded border border-border bg-background px-2 py-1 text-sm"
           >
             {COMPETITION_OPTIONS.map((o) => (
@@ -108,7 +94,7 @@ export function PredictionHistoryList() {
         </label>
       </div>
 
-      {items!.length === 0 ? (
+      {items.length === 0 ? (
         <div className="p-4 text-sm text-muted-foreground">暂无预测历史记录</div>
       ) : (
         <>
@@ -126,7 +112,7 @@ export function PredictionHistoryList() {
                 </tr>
               </thead>
               <tbody>
-                {items!.map((item) => (
+                {items.map((item) => (
                   <tr key={item.id} className="border-b border-border/50 hover:bg-muted/30">
                     <td className="py-2 pr-4 text-muted-foreground">
                       {new Date(item.created_at).toLocaleString("zh-CN")}

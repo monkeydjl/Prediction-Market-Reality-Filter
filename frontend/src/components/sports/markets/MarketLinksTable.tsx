@@ -1,25 +1,19 @@
 "use client";
-import { useEffect, useState } from "react";
-import { fetchMarketLinks, type MarketLink } from "@/lib/sport-markets-api";
+import { useMarketLinks, type MarketLink } from "@/lib/sports-api";
 
 export function MarketLinksTable({ matchId }: { matchId?: string }) {
-  const [links, setLinks] = useState<MarketLink[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data, error, isLoading } = useMarketLinks(
+    matchId ? { match_id: matchId } : {},
+  );
+  const links: MarketLink[] = data?.items ?? [];
+  const errorMessage = error
+    ? error instanceof Error
+      ? error.message
+      : "加载失败"
+    : null;
 
-  useEffect(() => {
-    setLoading(true);
-    fetchMarketLinks(matchId ? { match_id: matchId } : {})
-      .then((data) => {
-        setLinks(data.items);
-        setError(null);
-      })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
-  }, [matchId]);
-
-  if (loading) return <div data-testid="loading">加载中...</div>;
-  if (error) return <div data-testid="error">{error}</div>;
+  if (isLoading) return <div data-testid="loading">加载中...</div>;
+  if (errorMessage) return <div data-testid="error">{errorMessage}</div>;
   if (links.length === 0) return <div data-testid="empty">暂无市场链接</div>;
 
   return (

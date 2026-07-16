@@ -1,21 +1,36 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 
-vi.mock("@/lib/futures-api", () => ({
-  fetchAvailableFutures: vi.fn(),
-  fetchLatestSnapshots: vi.fn(),
+const apiMocks = vi.hoisted(() => ({
+  useAvailableFutures: vi.fn(),
+  useLatestSnapshots: vi.fn(),
+}));
+vi.mock("@/lib/sports-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sports-api")>()),
+  useAvailableFutures: apiMocks.useAvailableFutures,
+  useLatestSnapshots: apiMocks.useLatestSnapshots,
 }));
 
 import { FuturesDashboard } from "./FuturesDashboard";
-import { fetchAvailableFutures, fetchLatestSnapshots } from "@/lib/futures-api";
 
 describe("FuturesDashboard", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    apiMocks.useAvailableFutures.mockReset();
+    apiMocks.useLatestSnapshots.mockReset();
+    // Default safe fallback for snapshots hook (not yet selected).
+    apiMocks.useLatestSnapshots.mockReturnValue({
+      data: undefined,
+      error: undefined,
+      isLoading: true,
+    });
   });
 
   it("shows empty state when no futures pairs available", async () => {
-    vi.mocked(fetchAvailableFutures).mockResolvedValue({ pairs: [] });
+    apiMocks.useAvailableFutures.mockReturnValue({
+      data: { pairs: [] },
+      error: undefined,
+      isLoading: false,
+    });
     render(<FuturesDashboard />);
     await waitFor(() => {
       expect(screen.getByTestId("empty")).toBeTruthy();
@@ -23,24 +38,30 @@ describe("FuturesDashboard", () => {
   });
 
   it("renders snapshots table when a pair is selected and data is available", async () => {
-    vi.mocked(fetchAvailableFutures).mockResolvedValue({
-      pairs: [{ competition: "nba", season: "2024-25" }],
+    apiMocks.useAvailableFutures.mockReturnValue({
+      data: { pairs: [{ competition: "nba", season: "2024-25" }] },
+      error: undefined,
+      isLoading: false,
     });
-    vi.mocked(fetchLatestSnapshots).mockResolvedValue({
-      competition: "nba",
-      season: "2024-25",
-      snapshots: [
-        {
-          id: 100,
-          link_id: 1,
-          team: "LAL",
-          implied_prob: 0.22,
-          price: 0.18,
-          liquidity: 51000,
-          volume: 12100,
-          captured_at: "2026-07-16T11:00:00Z",
-        },
-      ],
+    apiMocks.useLatestSnapshots.mockReturnValue({
+      data: {
+        competition: "nba",
+        season: "2024-25",
+        snapshots: [
+          {
+            id: 100,
+            link_id: 1,
+            team: "LAL",
+            implied_prob: 0.22,
+            price: 0.18,
+            liquidity: 51000,
+            volume: 12100,
+            captured_at: "2026-07-16T11:00:00Z",
+          },
+        ],
+      },
+      error: undefined,
+      isLoading: false,
     });
     render(<FuturesDashboard />);
     await waitFor(() => {

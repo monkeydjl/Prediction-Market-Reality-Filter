@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { fetchEngineScores, type EngineScoreItem } from "@/lib/learning-api";
+import { useState } from "react";
+import { useEngineScores, type EngineScoreItem } from "@/lib/sports-api";
 
 const SPORT_OPTIONS = [
   { value: "", label: "全部" },
@@ -50,29 +50,22 @@ function fmtPct(v: number): string {
 }
 
 export function EnginePerformancePanel() {
-  const [data, setData] = useState<EngineScoreItem[] | null>(null);
-  const [error, setError] = useState(false);
   const [engine, setEngine] = useState("");
   const [competition, setCompetition] = useState("");
   const [sport, setSport] = useState("");
+  const { data, error, isLoading } = useEngineScores({
+    engine: engine || undefined,
+    competition: competition || undefined,
+    sport: sport || undefined,
+  });
+  const rows: EngineScoreItem[] = data ?? [];
+  const hasError = error !== undefined;
 
-  useEffect(() => {
-    setError(false);
-    setData(null);
-    fetchEngineScores({
-      engine: engine || undefined,
-      competition: competition || undefined,
-      sport: sport || undefined,
-    })
-      .then(setData)
-      .catch(() => setError(true));
-  }, [engine, competition, sport]);
-
-  if (data === null && !error) {
+  if (isLoading) {
     return <div className="p-4 text-sm text-muted-foreground">加载中...</div>;
   }
 
-  if (error) {
+  if (hasError) {
     return <div className="p-4 text-sm text-red-500">加载失败</div>;
   }
 
@@ -117,7 +110,7 @@ export function EnginePerformancePanel() {
         </label>
       </div>
 
-      {data!.length === 0 ? (
+      {rows.length === 0 ? (
         <div className="p-4 text-sm text-muted-foreground">暂无性能数据，等待比赛结果录入</div>
       ) : (
         <div className="overflow-x-auto">
@@ -135,7 +128,7 @@ export function EnginePerformancePanel() {
               </tr>
             </thead>
             <tbody>
-              {data!.map((row, i) => (
+              {rows.map((row, i) => (
                 <tr key={`${row.engine}-${row.competition ?? "global"}-${i}`} className="border-b border-border/50">
                   <td className="py-2 pr-4 font-mono">{row.engine}</td>
                   <td className="py-2 pr-4 font-mono">{row.competition ?? "全局"}</td>

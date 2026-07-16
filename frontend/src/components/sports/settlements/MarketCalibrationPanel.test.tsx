@@ -1,23 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import { MarketCalibrationPanel } from "./MarketCalibrationPanel";
-import type { CalibrationList } from "@/lib/sport-settlements-api";
-
-vi.mock("next/link", () => ({
-  default: ({ href, children }: { href: string; children: React.ReactNode }) => (
-    <a href={href}>{children}</a>
-  ),
-}));
 
 const apiMocks = vi.hoisted(() => ({
-  fetchCalibrations: vi.fn(),
+  useCalibrations: vi.fn(),
 }));
-vi.mock("@/lib/sport-settlements-api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/sport-settlements-api")>()),
-  fetchCalibrations: apiMocks.fetchCalibrations,
+vi.mock("@/lib/sports-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sports-api")>()),
+  useCalibrations: apiMocks.useCalibrations,
 }));
 
-const calData: CalibrationList = {
+import { MarketCalibrationPanel } from "./MarketCalibrationPanel";
+
+const calData = {
   items: [
     {
       id: 1, engine: "BasketballEngine", competition: "nba",
@@ -31,7 +25,11 @@ const calData: CalibrationList = {
 
 describe("MarketCalibrationPanel", () => {
   it("renders cards after load", async () => {
-    apiMocks.fetchCalibrations.mockResolvedValue(calData);
+    apiMocks.useCalibrations.mockReturnValue({
+      data: calData,
+      error: undefined,
+      isLoading: false,
+    });
     render(<MarketCalibrationPanel />);
     await waitFor(() =>
       expect(screen.getByTestId("calibration-panel")).toBeInTheDocument(),
@@ -40,19 +38,31 @@ describe("MarketCalibrationPanel", () => {
   });
 
   it("renders empty state", async () => {
-    apiMocks.fetchCalibrations.mockResolvedValue({ items: [], total: 0 });
+    apiMocks.useCalibrations.mockReturnValue({
+      data: { items: [], total: 0 },
+      error: undefined,
+      isLoading: false,
+    });
     render(<MarketCalibrationPanel />);
     await waitFor(() => expect(screen.getByTestId("empty")).toBeInTheDocument());
   });
 
   it("renders error state", async () => {
-    apiMocks.fetchCalibrations.mockRejectedValue(new Error("boom"));
+    apiMocks.useCalibrations.mockReturnValue({
+      data: undefined,
+      error: new Error("boom"),
+      isLoading: false,
+    });
     render(<MarketCalibrationPanel />);
     await waitFor(() => expect(screen.getByTestId("error")).toBeInTheDocument());
   });
 
   it("shows calibration metrics", async () => {
-    apiMocks.fetchCalibrations.mockResolvedValue(calData);
+    apiMocks.useCalibrations.mockReturnValue({
+      data: calData,
+      error: undefined,
+      isLoading: false,
+    });
     render(<MarketCalibrationPanel />);
     await waitFor(() => expect(screen.getByTestId("cal-card-1")).toBeInTheDocument());
     const card = screen.getByTestId("cal-card-1");

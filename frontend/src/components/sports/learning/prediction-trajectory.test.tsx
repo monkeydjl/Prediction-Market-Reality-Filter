@@ -1,8 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import { PredictionTrajectory } from "./prediction-trajectory";
 
-// Mock next/link
 vi.mock("next/link", () => ({
   default: ({ href, children, className }: {
     href: string;
@@ -11,7 +9,6 @@ vi.mock("next/link", () => ({
   }) => <a href={href} className={className}>{children}</a>,
 }));
 
-// Mock recharts
 vi.mock("recharts", () => ({
   ResponsiveContainer: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="responsive-container">{children}</div>
@@ -28,7 +25,6 @@ vi.mock("recharts", () => ({
   Tooltip: () => <div data-testid="tooltip" />,
 }));
 
-// Mock chart-lite
 vi.mock("@/components/ui/chart-lite", () => ({
   ChartFrame: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="chart-frame">{children}</div>
@@ -36,16 +32,15 @@ vi.mock("@/components/ui/chart-lite", () => ({
   DarkTooltip: () => <div data-testid="dark-tooltip" />,
 }));
 
-// Mock learning-api
-vi.mock("@/lib/learning-api", () => ({
-  fetchPredictionTrajectory: vi.fn(),
+const apiMocks = vi.hoisted(() => ({
+  usePredictionTrajectory: vi.fn(),
+}));
+vi.mock("@/lib/sports-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sports-api")>()),
+  usePredictionTrajectory: apiMocks.usePredictionTrajectory,
 }));
 
-import { fetchPredictionTrajectory } from "@/lib/learning-api";
-
-afterEach(() => {
-  vi.mocked(fetchPredictionTrajectory).mockReset();
-});
+import { PredictionTrajectory } from "./prediction-trajectory";
 
 const mockTrajectory = {
   match_id: "nba-1",
@@ -73,8 +68,16 @@ const mockTrajectory = {
 };
 
 describe("PredictionTrajectory", () => {
+  beforeEach(() => {
+    apiMocks.usePredictionTrajectory.mockReset();
+  });
+
   it("renders match_id in header", async () => {
-    vi.mocked(fetchPredictionTrajectory).mockResolvedValueOnce(mockTrajectory);
+    apiMocks.usePredictionTrajectory.mockReturnValue({
+      data: mockTrajectory,
+      error: undefined,
+      isLoading: false,
+    });
     render(<PredictionTrajectory matchId="nba-1" />);
     await waitFor(() => {
       expect(screen.getByText("nba-1")).toBeInTheDocument();
@@ -82,7 +85,11 @@ describe("PredictionTrajectory", () => {
   });
 
   it("renders trajectory chart with dynamic lines per outcome", async () => {
-    vi.mocked(fetchPredictionTrajectory).mockResolvedValueOnce(mockTrajectory);
+    apiMocks.usePredictionTrajectory.mockReturnValue({
+      data: mockTrajectory,
+      error: undefined,
+      isLoading: false,
+    });
     render(<PredictionTrajectory matchId="nba-1" />);
     await waitFor(() => {
       const lines = screen.getAllByTestId("line");
@@ -93,7 +100,11 @@ describe("PredictionTrajectory", () => {
   });
 
   it("renders back link", async () => {
-    vi.mocked(fetchPredictionTrajectory).mockResolvedValueOnce(mockTrajectory);
+    apiMocks.usePredictionTrajectory.mockReturnValue({
+      data: mockTrajectory,
+      error: undefined,
+      isLoading: false,
+    });
     render(<PredictionTrajectory matchId="nba-1" />);
     await waitFor(() => {
       const link = screen.getByRole("link");
@@ -102,8 +113,10 @@ describe("PredictionTrajectory", () => {
   });
 
   it("renders empty state when no history", async () => {
-    vi.mocked(fetchPredictionTrajectory).mockResolvedValueOnce({
-      match_id: "empty-1", sport: null, competition: null, items: [], count: 0,
+    apiMocks.usePredictionTrajectory.mockReturnValue({
+      data: { match_id: "empty-1", sport: null, competition: null, items: [], count: 0 },
+      error: undefined,
+      isLoading: false,
     });
     render(<PredictionTrajectory matchId="empty-1" />);
     await waitFor(() => {
@@ -112,7 +125,11 @@ describe("PredictionTrajectory", () => {
   });
 
   it("renders detail table with trigger info", async () => {
-    vi.mocked(fetchPredictionTrajectory).mockResolvedValueOnce(mockTrajectory);
+    apiMocks.usePredictionTrajectory.mockReturnValue({
+      data: mockTrajectory,
+      error: undefined,
+      isLoading: false,
+    });
     render(<PredictionTrajectory matchId="nba-1" />);
     await waitFor(() => {
       expect(screen.getByText("initial")).toBeInTheDocument();

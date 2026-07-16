@@ -178,3 +178,31 @@ def test_compute_trust_fusion_with_one_dormant_source(kernel_db):
     assert result.phase3_trust == pytest.approx(0.72)
     assert result.market_trust == pytest.approx(0.5)  # dormant
     assert result.trust == pytest.approx(0.6913, abs=0.01)
+
+
+def test_edge_detector_delegates_to_fusion_when_enabled(kernel_db, monkeypatch):
+    """When PHASE8_CALIBRATION_FUSION_ENABLED=true, EdgeDetectorService uses fusion."""
+    from app.core import config
+    monkeypatch.setattr(config.settings, "PHASE8_CALIBRATION_FUSION_ENABLED", True)
+    _seed_phase3_calibration(avg_accuracy=0.72, sample_count=20)
+    _seed_market_calibration(direction_accuracy=0.80, sample_count=30)
+    # Expected: 0.4 * 0.72 + 0.6 * 0.80 = 0.768
+    from app.kernel.edge_detector_service import EdgeDetectorService
+    svc = EdgeDetectorService()
+    trust = svc._compute_trust("BasketballEngine", "nba")
+    assert trust == pytest.approx(0.768)
+
+
+def test_edge_detector_falls_back_to_phase3_when_disabled(kernel_db, monkeypatch):
+    """When PHASE8_CALIBRATION_FUSION_ENABLED=false, EdgeDetectorService uses Phase 3 only."""
+    from app.core import config
+    monkeypatch.setattr(config.settings, "PHASE8_CALIBRATION_FUSION_ENABLED", False)
+    _seed_phase3_calibration(avg_accuracy=0.72, sample_count=20)
+    _seed_market_calibration(direction_accuracy=0.80, sample_count=30)
+    from app.kernel.edge_detector_service import EdgeDetectorService
+    svc = EdgeDetectorService()
+    trust = svc._compute_trust("BasketballEngine", "nba")
+    # Phase 3 only: 0.72 (qualified, not dormant)
+    assert trust == pytest.approx(0.72)
+    # Should NOT be the fusion value 0.768
+    assert trust != pytest.approx(0.768)

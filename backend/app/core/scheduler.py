@@ -575,31 +575,192 @@ async def _job_discover_sport_markets():
 
 
 async def _job_fetch_traditional_odds():
-    """Every 6h: fetch traditional sportsbook odds for upcoming matches."""
+    """Every ODDS_FETCH_INTERVAL_MIN: fetch traditional sportsbook odds."""
     if not settings.PHASE7_SPORT_MARKET_BRIDGE_ENABLED:
         return
-    logger.info("[Scheduler] Traditional odds fetch starting...")
+    if not settings.ODDS_API_ENABLED:
+        return
     run_id = _start_run("sport_market_odds_fetch")
     try:
         from app.kernel.kernel_db import init_kernel_db
+        from app.kernel.traditional_odds_store import TraditionalOddsStore
+        from app.kernel.sport_market_link_store import SportMarketLinkStore
+        from app.services.odds_api_service import fetch_all_sports_odds
+
         init_kernel_db()
-        _finish_run(run_id, "success", result={})
+        odds_store = TraditionalOddsStore()
+        link_store = SportMarketLinkStore()
+
+        # Get all matches with verified links (need odds)
+        matches = link_store.get_matches_with_verified_links()
+        if not matches:
+            _finish_run(run_id, "success", result={
+                "matches_total": 0, "captured": 0, "errors": 0,
+            })
+            return
+
+        # Fetch all available sports odds from The Odds API
+        all_odds = await fetch_all_sports_odds()
+
+        # Match odds to matches and store
+        captured = 0
+        errors = 0
+        for match_id in matches:
+            try:
+                odds_list = _match_odds_to_match(match_id, all_odds)
+                if odds_list:
+                    now = datetime.now(timezone.utc)
+                    competition = match_id.split("-")[0]
+                    for outcome, implied_prob, decimal_odds, bookmaker, book_count in odds_list:
+                        odds_store.append_snapshot(
+                            match_id=match_id,
+                            mapped_outcome=outcome,
+                            competition=competition,
+                            implied_prob=implied_prob,
+                            decimal_odds=decimal_odds,
+                            bookmaker=bookmaker,
+                            bookmakers_count=book_count,
+                            captured_at=now,
+                        )
+                        captured += 1
+            except Exception as exc:
+                errors += 1
+                logger.warning(f"Odds fetch failed for {match_id}: {exc}")
+
+        _finish_run(run_id, "success", result={
+            "matches_total": len(matches),
+            "captured": captured,
+            "errors": errors,
+        })
     except Exception as exc:
         logger.exception("[Scheduler] Traditional odds fetch failed")
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
 
 
+def _match_odds_to_match(
+    match_id: str, all_odds: dict[str, list[dict]]
+) -> list[tuple[str, float, float, str, int]]:
+    """Match The Odds API fixtures to a match_id.
+
+    Parses match_id to extract competition, date, and team tokens, then
+    finds the matching fixture in all_odds by team-name normalization.
+
+    Returns:
+        [(mapped_outcome, implied_prob, decimal_odds, bookmaker, bookmakers_count), ...]
+        Empty list if no match found.
+    """
+    from app.services.odds_api_service import (
+        COMPETITION_TO_ODDS_API_SPORT, normalize_team_name, extract_best_odds,
+    )
+    from app.utils.implied_prob import odds_api_to_implied
+    from app.kernel.sport_market_bridge_service import SportMarketBridgeService
+
+    # Parse match_id using the bridge service's parser
+    competition, date_str, team_tokens = SportMarketBridgeService._parse_match_id_static(match_id)
+    if not team_tokens or len(team_tokens) < 2:
+        return []
+
+    sport_key = COMPETITION_TO_ODDS_API_SPORT.get(competition)
+    if not sport_key:
+        return []
+
+    fixtures = all_odds.get(sport_key, [])
+    if not fixtures:
+        return []
+
+    home_token = team_tokens[0]
+    away_token = team_tokens[1]
+    home_normalized = normalize_team_name(home_token)
+    away_normalized = normalize_team_name(away_token)
+
+    # Find matching fixture
+    for fixture in fixtures:
+        fixture_home = normalize_team_name(fixture.get("home_team", ""))
+        fixture_away = normalize_team_name(fixture.get("away_team", ""))
+        if fixture_home == home_normalized and fixture_away == away_normalized:
+            # Extract best odds
+            odds = extract_best_odds(fixture)
+            if not odds:
+                continue
+
+            home_decimal = odds.get("home")
+            away_decimal = odds.get("away")
+            draw_decimal = odds.get("draw")
+            bookmaker = odds.get("source", "average")
+            book_count = odds.get("bookmakers_count", 0)
+
+            # Convert to implied probabilities
+            decimals = []
+            mapping = []
+            if home_decimal is not None:
+                decimals.append(home_decimal)
+                mapping.append("home_win")
+            if draw_decimal is not None:
+                decimals.append(draw_decimal)
+                mapping.append("draw")
+            if away_decimal is not None:
+                decimals.append(away_decimal)
+                mapping.append("away_win")
+
+            if not decimals:
+                continue
+
+            implied = odds_api_to_implied(decimals)
+
+            return [
+                (mapping[i], implied[i], decimals[i], bookmaker, book_count)
+                for i in range(len(mapping))
+            ]
+
+    return []
+
+
 async def _job_capture_market_snapshots():
-    """Every 1m: capture price snapshots for verified links."""
+    """Every MARKET_SNAPSHOT_INTERVAL_MIN: capture Polymarket price snapshots."""
     if not settings.PHASE7_SPORT_MARKET_BRIDGE_ENABLED:
         return
     run_id = _start_run("sport_market_snapshots")
     try:
         from app.kernel.kernel_db import init_kernel_db
         from app.kernel.sport_market_bridge_service import SportMarketBridgeService
+        from app.kernel.sport_market_link_store import SportMarketLinkStore
+        from app.kernel.market_snapshot_store import MarketSnapshotStore
+
         init_kernel_db()
-        SportMarketBridgeService()
-        _finish_run(run_id, "success", result={})
+        bridge = SportMarketBridgeService()
+        link_store = SportMarketLinkStore()
+        snap_store = MarketSnapshotStore()
+
+        # Get all verified links across all matches
+        matches = link_store.get_matches_with_verified_links()
+        captured = 0
+        errors = 0
+        for match_id in matches:
+            try:
+                links = link_store.get_verified_links(match_id=match_id)
+                for link in links:
+                    price = await bridge.fetch_current_price(link["contract_id"])
+                    if price is not None:
+                        snap_store.append_snapshot(
+                            link_id=link["id"],
+                            implied_prob=price["implied_prob"],
+                            price=price["price"],
+                            liquidity=price.get("liquidity"),
+                            volume=price.get("volume"),
+                            captured_at=datetime.now(timezone.utc),
+                        )
+                        captured += 1
+            except Exception as exc:
+                errors += 1
+                logger.warning(
+                    f"Snapshot capture failed for match {match_id}: {exc}"
+                )
+
+        _finish_run(run_id, "success", result={
+            "matches_total": len(matches),
+            "captured": captured,
+            "errors": errors,
+        })
     except Exception as exc:
         logger.exception("[Scheduler] Market snapshot capture failed")
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
@@ -874,7 +1035,7 @@ def start_scheduler():
             )
             scheduler.add_job(
                 _job_fetch_traditional_odds,
-                IntervalTrigger(hours=settings.ODDS_API_FETCH_INTERVAL_HOURS),
+                IntervalTrigger(minutes=settings.ODDS_FETCH_INTERVAL_MIN),
                 id="sport_market_odds_fetch",
                 replace_existing=True,
                 max_instances=1,

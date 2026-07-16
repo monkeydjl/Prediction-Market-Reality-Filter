@@ -280,3 +280,74 @@ class SportMarketBridgeService:
             )
             count += 1
         return count
+
+    async def fetch_current_price(self, contract_id: str) -> dict | None:
+        """Fetch the current price and implied prob for a Polymarket contract.
+
+        Uses the Polymarket gamma API to get the latest market data for a
+        single contract by ID.
+
+        Returns:
+            {"price": float, "implied_prob": float, "liquidity": float | None, "volume": float | None}
+            None if the contract is unavailable or API error.
+        """
+        import httpx
+        from app.utils.implied_prob import polymarket_to_implied
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(
+                    "https://gamma-api.polymarket.com/markets",
+                    params={"id": contract_id, "limit": "1"},
+                )
+                if response.status_code != 200:
+                    logger.warning(
+                        "Polymarket price fetch got %d for contract %s",
+                        response.status_code, contract_id,
+                    )
+                    return None
+
+                data = response.json()
+                if not data:
+                    return None
+
+                item = data[0]
+                # Parse outcomePrices JSON string
+                import json
+                prices_field = item.get("outcomePrices")
+                if not prices_field:
+                    return None
+
+                try:
+                    prices = json.loads(prices_field)
+                except (ValueError, TypeError):
+                    return None
+
+                if not isinstance(prices, list) or len(prices) < 2:
+                    return None
+
+                yes_price = float(prices[0])
+                no_price = float(prices[1])
+                yes_implied, _, _ = polymarket_to_implied(yes_price, no_price)
+
+                liquidity = item.get("liquidity")
+                volume = item.get("volume")
+
+                return {
+                    "price": yes_price,
+                    "implied_prob": yes_implied,
+                    "liquidity": float(liquidity) if liquidity is not None else None,
+                    "volume": float(volume) if volume is not None else None,
+                }
+
+        except Exception as exc:
+            logger.debug(
+                "Polymarket price fetch error for contract %s: %s",
+                contract_id, exc,
+            )
+            return None
+
+    @staticmethod
+    def _parse_match_id_static(match_id: str) -> tuple[str | None, str | None, list[str]]:
+        """Static wrapper for _parse_match_id (used by scheduler helper)."""
+        return _parse_match_id(match_id)

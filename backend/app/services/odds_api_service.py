@@ -398,3 +398,101 @@ def map_team_name(api_name: str) -> str:
     """
     normalized = normalize_team_name(api_name)
     return TEAM_NAME_MAPPING.get(normalized, api_name)
+
+
+async def fetch_all_sports_odds() -> dict[str, list[dict]]:
+    """Fetch odds for all available sports from The Odds API.
+
+    1. GET /sports to discover all active sport keys.
+    2. For each sport key, GET /sports/{key}/odds.
+    3. Respect quota: stop early if x-requests-remaining <= 0.
+    4. Skip sports with no upcoming fixtures.
+
+    Returns:
+        {sport_key: [fixture_dict, ...], ...}
+        Each fixture_dict has: home_team, away_team, commence_time, bookmakers.
+    """
+    if not ODDS_API_KEY:
+        logger.debug("Odds API key not configured, skipping fetch_all_sports_odds")
+        return {}
+
+    if hasattr(settings, 'ODDS_API_ENABLED') and not settings.ODDS_API_ENABLED:
+        logger.debug("Odds API disabled in config, skipping fetch_all_sports_odds")
+        return {}
+
+    if _quota_remaining is not None and _quota_remaining <= 0:
+        logger.debug("Odds API quota exhausted, skipping fetch_all_sports_odds")
+        return {}
+
+    result: dict[str, list[dict]] = {}
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Step 1: discover all active sport keys
+            sports_response = await client.get(
+                f"{ODDS_API_BASE}/sports",
+                params={"apiKey": ODDS_API_KEY},
+            )
+            _update_quota_from_headers(sports_response.headers)
+
+            if sports_response.status_code != 200:
+                logger.warning(
+                    "Odds API /sports returned %d: %s",
+                    sports_response.status_code, sports_response.text[:200],
+                )
+                return result
+
+            sports = sports_response.json()
+            active_sport_keys = [
+                s["key"] for s in sports
+                if s.get("active") and not s.get("has_outright", False)
+            ]
+
+            # Step 2: fetch odds for each sport key
+            for sport_key in active_sport_keys:
+                # Check quota before each request
+                if _quota_remaining is not None and _quota_remaining <= 0:
+                    logger.warning(
+                        "Odds API quota exhausted, stopping at sport_key=%s",
+                        sport_key,
+                    )
+                    break
+
+                try:
+                    odds_response = await client.get(
+                        f"{ODDS_API_BASE}/sports/{sport_key}/odds",
+                        params={
+                            "apiKey": ODDS_API_KEY,
+                            "regions": REGIONS,
+                            "markets": MARKETS,
+                            "oddsFormat": ODDS_FORMAT,
+                        },
+                    )
+                    _update_quota_from_headers(odds_response.headers)
+
+                    if odds_response.status_code == 422:
+                        # Sport key invalid or no upcoming events
+                        continue
+
+                    if odds_response.status_code != 200:
+                        logger.debug(
+                            "Odds API /sports/%s/odds returned %d",
+                            sport_key, odds_response.status_code,
+                        )
+                        continue
+
+                    fixtures = odds_response.json()
+                    if fixtures:
+                        result[sport_key] = fixtures
+
+                except Exception as exc:
+                    logger.debug(
+                        "Odds API fetch error for sport_key=%s: %s",
+                        sport_key, exc,
+                    )
+                    continue
+
+    except Exception as e:
+        logger.debug("Odds API fetch_all_sports_odds error: %s", e)
+
+    return result

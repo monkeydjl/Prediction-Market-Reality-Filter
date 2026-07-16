@@ -279,8 +279,25 @@ class EdgeDetectorService:
         return market_prob, spread, sources
 
     def _compute_trust(self, engine_name: str, competition: str) -> float:
-        """Trust from KernelCalibration (sports), mirroring
-        diagnosis_service.calibration_trust.
+        """Trust computation — Phase 8 adds calibration fusion.
+
+        When PHASE8_CALIBRATION_FUSION_ENABLED is true, delegates to
+        CalibrationFusionService which reads both Phase 3's
+        KernelCalibration and Phase 7 D's KernelMarketCalibration to
+        compute a sample-count-weighted composite trust. When false
+        (default), falls back to Phase 7 Phase-3-only behavior —
+        zero-invasion.
+        """
+        if not config.settings.PHASE8_CALIBRATION_FUSION_ENABLED:
+            return self._compute_trust_phase3(engine_name, competition)
+
+        from app.kernel.calibration_fusion_service import CalibrationFusionService
+        fusion = CalibrationFusionService()
+        composite = fusion.compute_trust(engine_name, competition)
+        return composite.trust
+
+    def _compute_trust_phase3(self, engine_name: str, competition: str) -> float:
+        """Phase 7 behavior — Phase 3 KernelCalibration only.
 
         - No calibration row (cold start) -> DIAGNOSIS_DORMANT_TRUST (0.5)
         - sample_count < CALIBRATION_FEEDBACK_MIN_SAMPLES (dormant) -> 0.5

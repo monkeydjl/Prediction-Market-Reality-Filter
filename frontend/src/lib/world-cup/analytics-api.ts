@@ -22,7 +22,7 @@
  */
 
 import { getApiBase } from "@/lib/env";
-import { buildApiErrorMessage, getOperatorApiKey, getOperatorId } from "@/lib/api";
+import { ApiError, buildApiErrorMessage, getOperatorApiKey, getOperatorId, handleFetchError } from "@/lib/api";
 
 const API_BASE = getApiBase();
 const ANALYTICS_CLIENT_SOURCE = "world-cup-dashboard";
@@ -106,18 +106,11 @@ export async function analyticsFetch<T>(
     });
     if (!res.ok && !options.acceptStatuses?.includes(res.status)) {
       const bodyText = await res.text();
-      throw new Error(buildApiErrorMessage(res.status, bodyText));
+      throw new ApiError(res.status, buildApiErrorMessage(res.status, bodyText));
     }
     return (await res.json()) as T;
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error("请求超时，请稍后重试");
-    }
-    if (error instanceof TypeError) {
-      // Network-level failure (DNS, connection refused, CORS preflight fail).
-      throw new Error("无法连接到服务器，请检查网络或后端服务状态");
-    }
-    throw error;
+    handleFetchError(error);
   } finally {
     globalThis.clearTimeout(timeout);
   }

@@ -1,7 +1,7 @@
 "use client";
 
 import { SWRConfig } from "swr";
-import { buildApiErrorMessage, getOperatorApiKey, getOperatorId } from "@/lib/api";
+import { ApiError, buildApiErrorMessage, getOperatorApiKey, getOperatorId, handleFetchError } from "@/lib/api";
 
 // Default SWR fetcher. Mirrors the auth/timeout behavior of the central
 // `api()` client in lib/api.ts so any `useSWR(key)` call (which falls back to
@@ -36,18 +36,11 @@ async function swrFetcher(url: string): Promise<unknown> {
     });
     if (!response.ok) {
       const bodyText = await response.text();
-      throw new Error(buildApiErrorMessage(response.status, bodyText));
+      throw new ApiError(response.status, buildApiErrorMessage(response.status, bodyText));
     }
     return await response.json();
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error("请求超时，请稍后重试");
-    }
-    if (error instanceof TypeError) {
-      // Network-level failure (DNS, connection refused, CORS preflight fail).
-      throw new Error("无法连接到服务器，请检查网络或后端服务状态");
-    }
-    throw error;
+    handleFetchError(error);
   } finally {
     globalThis.clearTimeout(timeout);
   }

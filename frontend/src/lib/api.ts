@@ -105,6 +105,27 @@ export function buildApiErrorMessage(status: number, bodyText: string): string {
   return text || `请求失败（HTTP ${status}）`;
 }
 
+/** Error thrown by all fetch wrappers for non-2xx HTTP responses. */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+/** Shared catch-block handler for fetch wrappers. Never returns. */
+export function handleFetchError(error: unknown): never {
+  if (error instanceof Error && error.name === "AbortError") {
+    throw new Error("请求超时，请稍后重试");
+  }
+  if (error instanceof TypeError) {
+    throw new Error("无法连接到服务器，请检查网络或后端服务状态");
+  }
+  throw error;
+}
+
 async function api<T>(
   path: string,
   init?: RequestInit,
@@ -153,7 +174,7 @@ async function api<T>(
     });
     if (!res.ok && !options.acceptStatuses?.includes(res.status)) {
       const bodyText = await res.text();
-      throw new Error(buildApiErrorMessage(res.status, bodyText));
+      throw new ApiError(res.status, buildApiErrorMessage(res.status, bodyText));
     }
     const data = await res.json() as T;
     if (isGet) {
@@ -171,13 +192,7 @@ async function api<T>(
   try {
     return await request;
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error("请求超时，请稍后重试");
-    }
-    if (error instanceof TypeError) {
-      throw new Error("无法连接到服务器，请检查网络或后端服务状态");
-    }
-    throw error;
+    return handleFetchError(error);
   } finally {
     if (shouldCacheGet) inflightGets.delete(cacheKey);
     globalThis.clearTimeout(timeout);

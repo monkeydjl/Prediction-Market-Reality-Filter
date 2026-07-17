@@ -10,11 +10,7 @@ import {
   triggerPrediction,
 } from "@/lib/sports-api";
 import type { MatchDetail, PredictionResult } from "@/lib/sports-api";
-
-// The global swrFetcher localizes HTTP 404 to this message via
-// buildApiErrorMessage. We match on it to preserve the original
-// "比赛不存在" UX that used to rely on `instanceof NotFoundError`.
-const NOT_FOUND_MESSAGE = "请求的资源不存在";
+import { ApiError } from "@/lib/api";
 
 type TabId = "details" | "odds";
 
@@ -31,8 +27,7 @@ export default function MatchDetailPage() {
   const match: MatchDetail | null = data?.match ?? null;
   const currentPrediction = prediction ?? data?.prediction ?? null;
 
-  const notFound =
-    error instanceof Error && error.message === NOT_FOUND_MESSAGE;
+  const notFound = error instanceof ApiError && error.status === 404;
   const errorMessage = error
     ? error instanceof Error
       ? error.message

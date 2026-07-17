@@ -1,5 +1,6 @@
 export * from "./types";
-export { sportPost } from "./client";
+export { sportPost, buildQuery } from "./client";
+export { ApiError } from "@/lib/api";
 export {
   useMatches,
   useMatchDetail,

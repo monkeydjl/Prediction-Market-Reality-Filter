@@ -9,6 +9,23 @@ vi.mock("@/lib/api", () => ({
     `localized error ${status}: ${body}`,
   getOperatorApiKey: () => "test-key",
   getOperatorId: () => "test-operator",
+  ApiError: class ApiError extends Error {
+    status: number;
+    constructor(status: number, message: string) {
+      super(message);
+      this.name = "ApiError";
+      this.status = status;
+    }
+  },
+  handleFetchError: (error: unknown) => {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("请求超时，请稍后重试");
+    }
+    if (error instanceof TypeError) {
+      throw new Error("无法连接到服务器，请检查网络或后端服务状态");
+    }
+    throw error;
+  },
 }));
 
 const fetchMock = vi.fn();

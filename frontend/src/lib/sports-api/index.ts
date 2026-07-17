@@ -4,7 +4,6 @@ export {
   useMatches,
   useMatchDetail,
   triggerPrediction,
-  NotFoundError,
 } from "./hooks/use-matches";
 export {
   useEngineScores,

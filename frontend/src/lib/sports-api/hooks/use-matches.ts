@@ -5,7 +5,6 @@ import { mutate } from "swr";
 import { getApiBase } from "@/lib/env";
 import { sportPost } from "../client";
 import type { MatchSummary, MatchDetail, PredictionResult } from "../types";
-import { NotFoundError } from "../types";
 
 type MatchDetailResponse = { match: MatchDetail; prediction: PredictionResult | null };
 
@@ -27,5 +26,3 @@ export async function triggerPrediction(matchId: string): Promise<PredictionResu
   await mutate(`${getApiBase()}/predictions/matches/${matchId}`);
   return result;
 }
-
-export { NotFoundError };

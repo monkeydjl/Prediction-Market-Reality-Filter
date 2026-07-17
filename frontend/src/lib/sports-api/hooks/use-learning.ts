@@ -2,6 +2,7 @@
 
 import useSWR from "swr";
 import { getApiBase } from "@/lib/env";
+import { buildQuery } from "../client";
 import type {
   EngineScoreItem,
   PredictionHistoryList,
@@ -9,12 +10,6 @@ import type {
   CalibrationItem,
   ReliabilityData,
 } from "../types";
-
-function buildQuery(params: Record<string, string | number | undefined>): string {
-  const entries = Object.entries(params).filter(([, v]) => v !== undefined);
-  if (entries.length === 0) return "";
-  return "?" + entries.map(([k, v]) => `${k}=${v}`).join("&");
-}
 
 export function useEngineScores(params?: {
   engine?: string;

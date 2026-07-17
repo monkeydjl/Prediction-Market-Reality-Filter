@@ -3,18 +3,12 @@
 import useSWR from "swr";
 import { mutate } from "swr";
 import { getApiBase } from "@/lib/env";
-import { sportPost } from "../client";
+import { sportPost, buildQuery } from "../client";
 import type {
   MarketLinkList,
   LatestLink,
   SnapshotSeries,
 } from "../types";
-
-function buildQuery(params: Record<string, string | number | undefined | boolean>): string {
-  const entries = Object.entries(params).filter(([, v]) => v !== undefined);
-  if (entries.length === 0) return "";
-  return "?" + entries.map(([k, v]) => `${k}=${v}`).join("&");
-}
 
 type LatestLinksResponse = { items: LatestLink[]; total: number };
 type SnapshotsResponse = { series: SnapshotSeries[] };

@@ -4,6 +4,22 @@ import { buildApiErrorMessage, getOperatorApiKey, getOperatorId } from "@/lib/ap
 const POST_TIMEOUT_MS = 60_000;
 
 /**
+ * Build a query string from a params object, omitting undefined/empty values.
+ * Uses URLSearchParams for proper encoding.
+ */
+export function buildQuery(
+  params: Record<string, string | number | undefined | boolean>,
+): string {
+  const entries = Object.entries(params).filter(
+    ([, v]) => v !== undefined && v !== "",
+  );
+  if (entries.length === 0) return "";
+  const usp = new URLSearchParams();
+  for (const [k, v] of entries) usp.set(k, String(v));
+  return `?${usp.toString()}`;
+}
+
+/**
  * POST wrapper for sport mutations. Mirrors the global `swrFetcher`'s
  * auth + timeout + error-localization behavior but uses `method: "POST"`.
  * Use this for mutations that invalidate SWR cache keys via the global

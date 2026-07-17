@@ -2,15 +2,8 @@
 
 import useSWR from "swr";
 import { getApiBase } from "@/lib/env";
+import { buildQuery } from "../client";
 import type { SettlementList, CalibrationList } from "../types";
-
-function buildQuery(params: Record<string, string | number | undefined>): string {
-  const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== "");
-  if (entries.length === 0) return "";
-  const usp = new URLSearchParams();
-  for (const [k, v] of entries) usp.set(k, String(v));
-  return `?${usp.toString()}`;
-}
 
 export function useSettlement(matchId: string | null) {
   const key = matchId ? `${getApiBase()}/sport-settlements/${matchId}` : null;

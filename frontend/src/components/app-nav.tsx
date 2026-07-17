@@ -7,6 +7,7 @@ import {
   CircleDollarSign,
   FlaskConical,
   Gauge,
+  Globe,
   GraduationCap,
   History,
   Lightbulb,
@@ -61,7 +62,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/sports/optimization", label: "参数优化", icon: Wrench, match: ["/sports/optimization"] },
       { href: "/sports/recommendations", label: "体育推荐", icon: Lightbulb, match: ["/sports/recommendations"] },
       { href: "/sports/settlements", label: "体育结算", icon: CircleDollarSign, match: ["/sports/settlements"] },
-      { href: "/sports/world-cup", label: "世界杯专属", icon: Trophy, match: ["/sports/world-cup"] },
+      { href: "/sports/world-cup", label: "世界杯专属", icon: Globe, match: ["/sports/world-cup"] },
     ],
   },
 ];

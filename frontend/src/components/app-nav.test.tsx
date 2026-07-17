@@ -109,4 +109,17 @@ describe("AppNav", () => {
       expect(link).toHaveClass("shrink-0");
     }
   });
+
+  it("uses a unique icon for each nav item (no duplicates)", () => {
+    render(<AppNav />);
+    const nav = screen.getByRole("navigation", { name: "主导航" });
+    const links = within(nav).getAllByRole("link");
+    const svgStrings = links.map((link) => {
+      const svg = link.querySelector("svg");
+      return svg ? svg.outerHTML : null;
+    });
+    const nonNull = svgStrings.filter((s): s is string => s !== null);
+    expect(nonNull.length).toBe(16);
+    expect(new Set(nonNull).size).toBe(16);
+  });
 });

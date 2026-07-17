@@ -50,8 +50,6 @@ export interface PredictionResult {
   prediction_timestamp: string | null;
 }
 
-export class NotFoundError extends Error {}
-
 // From lib/learning-api.ts
 export interface EngineScoreItem {
   engine: string;

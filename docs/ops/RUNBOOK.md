@@ -28,6 +28,28 @@ These headers are stored in audit run metadata for result fact backfill,
 consistency repair, and post-match backfill. `X-API-Key` is only validated and
 must not be copied into audit metadata, logs, URLs, or committed examples.
 
+## Dashboard operator key (browser)
+
+The static dashboard stores a **session-only** copy of `API_WRITE_KEY` so
+operators can call protected write APIs from the UI (resolve, optimize apply,
+edge detect, etc.).
+
+| Rule | Detail |
+|------|--------|
+| Storage | `sessionStorage` keys `pmrf.operatorApiKey` / `pmrf.operatorId` only |
+| Not used | `localStorage` (must not persist across browser restarts) |
+| Headers | `X-API-Key`, optional `X-Operator` |
+| UI | Nav **授权** / **清除**; hint shows masked key only |
+| Scope | Current browser tab session; closing the tab clears the key |
+| XSS residual risk | Any XSS can still read `sessionStorage` while the tab is open |
+
+**Long-term upgrade (not implemented):** BFF session cookie holding the secret
+server-side so the raw write key never enters JavaScript. Tracked as backlog
+P2-FE9 residual / architecture work.
+
+Never paste `API_WRITE_KEY` into chat logs, screenshots of DevTools Application
+storage, or committed `.env` examples with real production values.
+
 ## Health Check
 
 Use `GET /api/health`. A response status of `degraded` means at least one
@@ -103,6 +125,95 @@ PMRF_DEADMAN_URL=https://<uptime-provider>/<dead-man-token>
 Leave `PMRF_DEADMAN_URL` empty for local-only health checking. With it set,
 missed pings indicate that the service is down, degraded, or unable to reach
 the external monitor.
+
+### Prometheus metrics
+
+Scrape `GET /metrics` (Prometheus text format). Core series include:
+
+| Metric | Meaning |
+|--------|---------|
+| `pmrf_scheduler_failed_runs_total{job_name}` | Counter of failed scheduler jobs |
+| `pmrf_scheduler_last_success_timestamp{job_name}` | Unix time of last successful run |
+| `pmrf_calibration_brier_score` | Current Brier (lower better; ~0.33 ≈ random) |
+| `pmrf_calibration_drift_score` | Relative drift vs baseline (positive = worse) |
+| `pmrf_overlay_latency_ms_*` | Overlay build latency histogram |
+| `pmrf_llm_token_cost_total` / `pmrf_llm_token_usage_total` | LLM cost / tokens |
+| `pmrf_decision_quality_downgrade_total{reason}` | Decision quality demotions |
+
+JSON companions (same data, operator-friendly):
+
+- `GET /api/quality-metrics/summary`
+- `GET /api/quality-metrics/drift` — always computes; dispatch is separate
+- `GET /api/quality-metrics/alerts`
+- `GET /api/quality-metrics/report`
+
+### Grafana dashboard (E8)
+
+Import the provisioned JSON:
+
+```text
+docs/ops/grafana/pmrf-overview.json
+```
+
+Point the dashboard datasource variable `DS_PROMETHEUS` at the scrape target
+that collects `/metrics`. Panels cover scheduler failure rate, seconds since
+last success, Brier/drift, overlay p95, LLM cost, and decision quality
+downgrades.
+
+### Calibration drift alerts (Q6)
+
+Drift **computation** is always available via `/api/quality-metrics/drift`.
+**Dispatch** (webhook + Sentry breadcrumb + structured log) is opt-in:
+
+```bash
+DRIFT_ALERTS_ENABLED=false          # set true only after webhook/Sentry ready
+DRIFT_ALERT_WEBHOOK_URL=""          # empty → Sentry + log only
+DRIFT_ALERT_COOLDOWN_SECONDS=3600   # per alert-code cooldown
+DRIFT_BRIER_RELATIVE_THRESHOLD=0.30
+DRIFT_BUCKET_DEVIATION_PP=20.0
+DRIFT_BUCKET_MIN_SAMPLES=2
+DRIFT_RECENT_WINDOW_N=50
+DRIFT_SCHEDULER_ZERO_RESOLVED_RUNS=3
+```
+
+Leave `DRIFT_ALERTS_ENABLED=false` until you have enough settled samples and a
+trusted webhook endpoint; otherwise you only get noise.
+
+### Scheduler failure alerts (E8)
+
+Every failed job already:
+
+1. Writes the loop-run ledger
+2. Increments `pmrf_scheduler_failed_runs_total`
+3. Forwards the exception to Sentry via `_finish_run`
+
+An **additional** best-effort dispatcher can also POST a webhook and emit a
+Sentry breadcrumb, with per-`job_name` cooldown:
+
+```bash
+SCHEDULER_FAILURE_ALERT_ENABLED=false
+SCHEDULER_FAILURE_ALERT_WEBHOOK_URL=""
+SCHEDULER_FAILURE_ALERT_COOLDOWN_SECONDS=1800
+```
+
+Default OFF keeps installs byte-identical to pre-E8. Enable only when you want
+operator-facing webhook spam control on top of existing Sentry + Prometheus.
+
+### Sport market matching eval (P1-SB1)
+
+Offline precision/recall for the three-layer matcher (rule / LLM / manual):
+
+```bash
+cd backend
+PYTHONPATH=. python -m scripts.eval_sport_market_matching \
+  --dataset data/eval/sport_market_link_eval.sample.jsonl \
+  --matcher rule \
+  --report text
+```
+
+Use `--matcher all` and optional `--manual-overrides path.jsonl` for full
+coverage. The sample JSONL is intentionally small; expand it with real labeled
+links before treating F1 as production-ready.
 
 ## Event ID Migration
 

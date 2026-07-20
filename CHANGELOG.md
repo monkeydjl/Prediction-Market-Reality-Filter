@@ -1,5 +1,283 @@
 # Changelog
 
+## Unreleased
+
+### Ops runbook + local smoke + CI typecheck
+- RUNBOOK: Prometheus series table, Grafana import path, DRIFT_ALERT_* /
+  SCHEDULER_FAILURE_ALERT_* dispatch notes, matching-eval CLI snippet
+- `verify_local_stack.py`: probe `/metrics`, sport-markets pending,
+  quality-metrics summary/drift/alerts; hint lines for bridge + alert flags
+- CI frontend job: run `npm run typecheck` before tests (catches casing/import drift)
+
+
+### Frontend typecheck fixes + alert env docs
+- World Cup page: import missing `SportTrackBanner`
+- FuturesDashboard: import missing `ScrollableTable`
+- predictions-api: import `getOperatorApiKey` / `getOperatorId`
+- match-detail-panel: use `prediction.engine` (not non-existent `engine_name`)
+- app-nav HotNewsTicker: annotate `display`/`loop` as `TickerItem[]` so fallback items keep optional `delta`/`href`
+- Align edge/settlement/realtime imports to on-disk lowercase filenames (TS1261 casing)
+- `.env.example`: document `DRIFT_ALERT_*` and `SCHEDULER_FAILURE_ALERT_*` (default OFF)
+
+
+### Three-layer matching eval set + scheduler failure alerts (P1-SB1 / E8)
+- `scripts/eval_sport_market_matching.py`: rule / LLM / manual matcher eval against labeled JSONL with precision / recall / F1
+- `data/eval/sport_market_link_eval.sample.jsonl`: 6-case sample covering rule hit / partial / LLM hit / reject / pending / manual
+- `app/services/scheduler_failure_alert_dispatcher.py`: webhook + Sentry breadcrumb + log, gated by `SCHEDULER_FAILURE_ALERT_ENABLED` (default OFF), per-job_name cooldown
+- `scheduler.py._finish_run` calls dispatcher on failed status (metrics + Sentry capture unchanged)
+- `docs/ops/grafana/pmrf-overview.json`: Grafana dashboard for scheduler health / drift / overlay latency / LLM cost / decision quality
+- Config: `SCHEDULER_FAILURE_ALERT_ENABLED`, `SCHEDULER_FAILURE_ALERT_WEBHOOK_URL`, `SCHEDULER_FAILURE_ALERT_COOLDOWN_SECONDS`
+- Tests: `test_eval_sport_market_matching.py` (16/16), `test_scheduler_failure_alert_dispatcher.py` (7/7)
+
+
+### Pending auto-verify UI + registry altitude + conditional cal API
+- PendingReviewQueue: dry-run / apply auto-verify buttons
+- Football factor registry seeds `altitude` (soft-only list)
+- `POST /predictions/calibration/conditional` fits conf+stage buckets
+
+
+### PPDA soft + stage calibration + auto-verify (P1-F6 / V5 / V2)
+- MultiFactor possession channel accepts `ppda_home/away` (lower = better press)
+- Stage-bucket calibration keys `{comp}#s_{regular|knockout}`; meta.stage in explanation
+- `POST /sport-markets/pending/auto-verify` + store helper (flag OFF by default)
+
+
+### Edge factor attribution (P1-V3)
+- `extract_factor_drivers` ranks prediction explanation by outcome impact
+- Edge detect/latest attach `factor_drivers` + `factor_attribution`
+- Edge detail FE chips; recommendation rationale may include 主导因子
+
+
+### Reliability ECE + market price audit (P1-X1 / P1-V1)
+- `compute_reliability_bins` returns `ece`, `max_calibration_error`, `sample_count`
+- FE ReliabilityChart shows ECE badge
+- `GET /sport-markets/links/{id}/audit` and `/matches/{id}/audit` price-path summary
+- Match detail `MarketPriceAuditPanel`
+
+
+### Soft totals all sports + rec guardrails + altitude (P1-O1/SB3/F7)
+- Basketball/Hockey/Baseball engines emit soft O/U via `soft_totals_from_scores`
+- Sport recommendations: `guardrail_flags` / `policy_notes` (stale/liquidity/trust demote)
+- Football multi-factor soft `altitude` when `venue_altitude_m` ≥ 1500
+
+
+### Soft totals/BTTS + baseball platoon (P1-O1 / P1-M4)
+- `soft_totals_btts_analysis` (independent Poisson) in multi-factor + EloOdds `betting_analysis`
+- FE `SoftTotalsPanel` on match detail
+- BaseballEngine soft `platoon` from `platoon_ops_*` / `platoon_advantage_home` (weight 0.05)
+
+
+### Model vs market disagreement diagnosis (P1-V3)
+- Sport recommendation rationale appends 分歧诊断 (gap / trust / liquidity / stale)
+- Edge detail FE shows diagnosis line when |Δ| ≥ 3pp (or high priority)
+
+
+### Football rest density + injury custom (P1-F2 / P1-F3)
+- Adapter flags `b2b_*` (rest≤1) and `schedule_congested_*` (rest≤2)
+- MultiFactor rest: extra edge penalty for b2b / midweek congestion asymmetry
+- Injury factor reads `custom.injury_impact_*` when player fields empty
+
+
+### Referee feed + conditional calibration apply (P1-F8 / P1-V5)
+- Football adapter `enrich_referee_features`: pass-through rate/bias + optional static map
+- `KERNEL_CONDITIONAL_CALIBRATION_ENABLED` (default OFF): Kernel applies bucket slope/intercept to home_win then renormalizes
+- Annotation in `betting_analysis.conditional_calibration`
+
+
+### Football referee soft factor (P1-F8)
+- FootballMultiFactorEngine: soft `referee` from `custom.referee_home_win_rate` / `referee_home_bias`
+- Weight 0.02 (profiles rebalanced); unavailable when no referee stats
+- FactorRegistry seed + FE label 裁判倾向
+
+
+### Conditional calibration by confidence (P1-V5)
+- `confidence_bucket` low/mid/high; store rows as `{competition}#c_{bucket}`
+- `KernelLearningService.update_calibration_by_confidence` + `get_conditional_calibration`
+- Global `update_calibration` best-effort refreshes buckets after fit
+
+
+### NBA playoff stage HFA (P1-B5)
+- BasketballEngine: playoff/postseason uses `NBA_ELO_HFA_PLAYOFF` (default 90) and
+  `NBA_HOME_COURT_PLAYOFF` (default 0.55) vs regular 100 / 0.58
+- Config env vars: `NBA_ELO_HFA_PLAYOFF`, `NBA_HOME_COURT_PLAYOFF`
+
+
+### Confidence breakdown API + FE (P1-X3)
+- confidence_breakdown() returns decision_strength / completeness / agreement / market_damp
+- Injected into FootballMultiFactor / EloOdds / Basketball / Baseball / Hockey via betting_analysis
+- FE SportConfidencePanel prefers API breakdown; shows market damp when <1
+
+
+### Odds traditional vs market summary (P1-O4)
+- TraditionalOddsChart: latest implied-prob divergence table (传统−市场, ≥5pp highlight)
+- Chinese outcome labels on series titles
+
+### Football possession form proxy (P1-F6 feed)
+- Adapter soft-fills `possession_*` from form share when true stats missing
+
+
+### FactorRegistry soft seeds + sport confidence UI (P1-E2 / P1-X3)
+- Seed football multi-factor soft factors: travel/xg/market_value/possession (no global elo/odds)
+- NBA/MLB/NHL seeds include travel/injury/net_rating/park/bullpen/weather/attack_share
+- Competition aliases: seriea↔serie_a, ligue1↔ligue_1
+- NHL adapter: form-scaled GF + xg_for proxy for attack_share
+- FE `SportConfidencePanel` on match detail (strength / completeness / agreement)
+
+
+### Football possession soft factor (P1-F6)
+- FootballMultiFactorEngine: soft `possession` from custom possession_* or shots_*
+- Weights/profiles rebalanced to include possession (sum ≈ 1.0)
+
+### Hockey attack share (P1-H1)
+- HockeyEngine: soft `attack_share` factor (corsi% preferred, else xg_for, else GF proxy)
+- Default weights rebalanced; FE label 进攻份额
+
+### Football xG + market value soft factors (P1-F5)
+- FootballMultiFactorEngine: soft `xg` (custom.xg_* attack-rate share) and `market_value` (log squad-value ratio)
+- Default weights + competition profiles include xg/market_value (sum ≈ 1.0)
+- Adapter: cache-only Transfermarkt `get_cached_market_value` → team/custom market_value_*
+- FE FactorBreakdownTable labels for xg / market_value
+- Tests updated for 9-factor explanation + xG/MV soft behaviour
+
+### Edge review priority soft feedback (P1-O5)
+- SportRecommendationService: compute `review_priority` from edge signals; demote act tiers (critical/high); raise risk; rationale prefix
+- API `_rec_to_dict` includes `review_priority`; RecommendationCard shows priority badge when non-normal
+- Tests: `test_recommendation_priority_soft.py`
+
+### Multi-sport soft factors (P1-B1/B3, P1-M1–M3, P1-H3, P1-F7)
+- Shared `app/sports/_shared/team_geo.py`: NBA/NHL/MLB + national football city coords, haversine km, timezone offset, `travel_prob_home`
+- NBA/NHL/MLB/football adapters inject `travel_km_away` / `timezone_offset_hours_away` into FeatureSet custom
+- BasketballEngine: `travel` + soft `injury` factors (weight redistribute when missing)
+- BaseballEngine: wire `park` + `bullpen` (+ soft `weather` temp/wind); MLB adapter bullpen_era proxy from team ERA
+- HockeyEngine: `travel` factor for cross-zone (incl. Canada) fatigue
+- FootballMultiFactorEngine: new `travel` factor + competition profile weights
+- Feature builders pass through `travel_distance_km`; FE factor labels for travel/bullpen/weather
+- Edge discrepancies list API: `review_priority` / trust / liquidity + sort by priority then |edge|
+- FE Edge table priority column; history payload includes review fields
+- Tests: `test_team_geo.py`, `test_sport_factors_travel_park.py`
+
+### Football multi-factor engine (P1-E1)
+- Added `FootballMultiFactorEngine` (`football_multi_factor`): fuses elo, odds, form, rest, injury, h2h with missing-factor weight redistribution
+- Feature flag `FOOTBALL_MULTI_FACTOR_ENGINE_ENABLED` (default OFF); requires `KERNEL_PREDICTION_ENABLED`
+- `FactorRegistry.ensure_competition_factors` seeds form/rest/injury/h2h for football competitions without changing global elo/odds 0.30/0.70
+- New `get_competition_weight()` avoids multi-factor fusion picking up EloOddsEngine global weights
+- Docs: `docs/dev/OPPORTUNITY_BACKLOG_2026-07-17.md` tracks remaining backlog
+
+### Dixon-Coles / GBM / Ensemble into Kernel (P1-E5–E7)
+- `DixonColesEngine` (`dixon_coles`) + `DIXON_COLES_ENGINE_ENABLED`
+- `GbmEngine` (`gbm`) wraps legacy LightGBM path + `GBM_ENGINE_ENABLED`
+- `EnsembleEngine` (`ensemble`) inverse-Brier fusion + `FOOTBALL_ENSEMBLE_ENGINE_ENABLED`
+- All default OFF; register only when Kernel is enabled
+
+### Phase 9 optimization wiring (P1-A3)
+- `POST /api/sport-optimization/run` now loads historical matches from kernel DB,
+  time-series splits, and runs `ParameterOptimizer.optimize_sync` in a background task
+- `app/kernel/backtest/match_loader.py` for DB → backtest match dicts
+- CLI: `backend/scripts/run_phase9_optimize.py`
+
+### Situational feature feed + Phase 15 UX (P1-F* / P1-FE*)
+- Football adapters enrich form / h2h / rest / xG-proxy after Elo+odds fetch
+- Match detail: engine selector, 503 Kernel disabled banner, predict error alert
+- Optimization dashboard: NBA/MLB/NHL/all only; Phase 9 disabled banner on 503
+
+### WebSocket URL + Edge detect + club form
+- `buildWsUrl`: Next dev (:3000) connects WS to backend :8000; prod same-origin
+- RealtimePriceTable: richer columns, disabled/error empty states
+- `POST /api/sport-edges/{match_id}/detect` on-demand edge compute (write key)
+- EdgeDetailPanel: "重新计算 Edge" button
+- Club form fallback from `kernel_match_results` when international CSV misses
+
+### Recommendations / settlements UX + local verify
+- Shared `FeatureDisabledBanner` for Phase7 503 states
+- OpenDecisionsList: act/watch filters, links to match, empty-path guidance
+- SettlementHistoryTable: manual match_id reprocess; row actions
+- Match detail: inline recommendation panel + process settlement
+- `scripts/verify_local_stack.py` smoke-checks health + key Phase endpoints
+
+### Event decision diagnosis UI (P2-FE10)
+- `DecisionReport` types include quality overlays + final_displayed_direction
+- DecisionCard expand: calibration status, decision/market/source quality downgrades
+- verify script also probes `/api/events/decisions/open` and `/api/events/calibration`
+
+### Calibration copy + quality alert deep links (P2-FE11)
+- History AccuracySummary: labels event-layer (EIP) vs Kernel / settlements
+- Learning tabs: Kernel scope banner + link to /history
+- Anomalies API attaches sample `event_ids` + `href`; AnomalyBanner links to events
+- Quality report errors: event_id → /events/{id}
+
+### History segment compare (P2-FE12)
+- `GET /api/events/predictions/calibration/buckets` exposes edge×confidence diagnostics
+- History page: SegmentComparePanel (领域 / act 类目 / Edge 桶 / 置信度桶 + 交叉表)
+- Chart of skill by category remains; table enables sort and side-by-side comparison
+
+### Hot news ticker from real movers (P3-FE13)
+- AppNav ticker fetches `/events/movers` and shows live titles + delta (links to event)
+- Falls back to placeholder copy when empty/unavailable; label 异动快讯 vs 示例新闻
+
+### Event vs Sport Edge IA (P2-FE4)
+- `DomainScopeBanner` cross-links `/edges` ↔ `/sports/edges` with scope copy
+- Nav labels: 事件 Edge / 体育 Edge; page titles clarify EIP vs Kernel
+
+### Apply weight diff + learning weights tab (P2-FE5)
+- `OptimizedParamsStore.apply` returns `previous_applied` + `weight_diff`
+- OptimizationDashboard: last-apply before/after table + per-row weight preview
+- Learning: tab「已应用权重」lists status=applied factor/elo weights
+
+### World Cup vs Kernel track (P2-FE6)
+- `SportTrackBanner` on `/sports` and `/sports/world-cup` (API path + cross-links)
+- Nav: 世界杯 → `/sports/world-cup`; Kernel list active state excludes named hubs
+
+### Trades edge aligned with EIP raw_edge (P2-SB6)
+- Simulated trade rows expose `raw_edge` + `directional_edge` (YES→raw, NO→−raw)
+- `trade_stats` adds directional mean + documented `edge_definition` (legacy `|raw|` key kept)
+- `/trades` UI: definition banner, raw/方向 columns, links to event vs sport edges
+
+### Futures multi-leg coverage (P2-SB5)
+- Expanded Kalshi series prefixes (NFL / EPL / NCAAB / conf); longest-prefix match
+- `multi_leg_integrity` (legs, Σp, dupes) on fetch + store APIs
+- `GET /futures/meta/series` + `/meta/coverage`; FuturesDashboard coverage panel
+
+### A11y + shared form/table styles (P3-FE7)
+- `lib/ui-classes` (`inputCls` / `selectCls`) shared by analyze + manual resolve + optimization
+- `ScrollableTable` for mobile horizontal scroll; factor/edge/futures/optimization tables
+- Sport filter `aria-pressed` / group label; form controls `htmlFor` + `aria-label`
+
+### Backtest results visualization (P3-FE8)
+- `ParameterOptimizer.optimize_sync` returns accuracy/Brier/MAE/sample/train-test + weights
+- `BacktestResultsPanel`: bar chart (recharts) + metrics table from task.result or candidates
+- OptimizationDashboard shows last-run results and candidate comparison
+
+### Operator credentials hardening (P2-FE9 partial)
+- `lib/operator-credentials`: sessionStorage-only key/id, mask, clear, change event
+- OperatorKeyControl: clear button, session-only copy, masked tooltip
+- api/sports client use shared auth header builder; Runbook documents browser key model + BFF residual
+
+### Odds quality weight dampening (P1-E4) + competition profiles (P1-E3 partial)
+- `kernel/engines/odds_quality.py`: multiplier from freshness, overround, `custom.liquidity_factor`
+- Applied in `EloOddsEngine` and `FootballMultiFactorEngine` (odds weight only; redistributes via fusion)
+- Multi-factor competition profiles for epl / laliga / ucl / wc (registry override still wins)
+- `kernel/market_liquidity.py`: injects `liquidity_factor` from sport-market links/snapshots into FeatureSet.custom via MultiFeatureBuilder + football adapter
+- NBA/MLB/NHL FeatureBuilders + adapters also inject (same helper; MultiFeatureBuilder remains the common path)
+
+### Situational engine (P1-E8)
+- `situational_adjust.py`: soft renormalized lifts for knockout / must-win / group pressure (capped)
+- `SituationalEngine`: wraps EloOdds (or other base); explainable `situational` contribution
+- Flag `SITUATIONAL_ENGINE_ENABLED` (default off); registered before ensemble
+- `group_context_bridge`: WorldCupAdapter + football `_shared` inject must_win/pressure into custom
+
+### Confidence + B2B + odds dispersion (P1-X1 / B2 / H2 / O2)
+- `confidence.compute_confidence`: strength + completeness + agreement + market damp
+- Wired into EloOdds, MultiFactor, Basketball, Baseball, Hockey engines
+- NBA/NHL `b2b_*` + rest-factor penalties
+- `odds_dispersion_from_books` + TraditionalOddsStore inject via MultiFeatureBuilder
+- `GET /predictions/engines/meta` + frontend `useEnginesMeta`
+- Multi-factor profiles: serie_a / bundesliga / ligue_1
+- MLB park factor (soft) in BaseballEngine + coarse park map in MLB adapter
+- Edge `review_priority` (low/normal/high/critical) + API field
+- Match detail: engine ZH labels + situational notes banner
+- BasketballEngine: net_rating factor (ORtg/DRtg) + restored b2b rest penalty
+- Edge UI: review_priority column + detail badges
+
 ## v0.4.0 (2026-07-16)
 
 ### Sports Prediction OS — Phase 1-13

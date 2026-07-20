@@ -161,3 +161,69 @@ class TestUpdateCalibration:
         assert cal.avg_confidence > 0
         assert cal.avg_accuracy >= 0
         session.close()
+
+
+class TestConditionalCalibration:
+    def test_confidence_bucket_edges(self):
+        from app.kernel.learning_service import confidence_bucket
+
+        assert confidence_bucket(0.2) == "low"
+        assert confidence_bucket(0.5) == "mid"
+        assert confidence_bucket(0.9) == "high"
+
+    def test_conditional_calibration_buckets(self, svc):
+        """Bucket rows stored under competition#c_* keys when samples allow."""
+        from app.kernel.learning_service import competition_with_bucket
+
+        # Seed with varying confidence via record_prediction
+        for i in range(30):
+            mid = f"wc_cond_{i}"
+            match = _make_match(mid, "world_cup")
+            conf = 0.30 if i < 10 else (0.55 if i < 20 else 0.85)
+            pred = _make_prediction_with_probs(0.4 + (i % 5) * 0.1)
+            # rebuild with specific confidence
+            pred = PredictionResult(
+                predicted_scores=pred.predicted_scores,
+                outcome_probabilities=pred.outcome_probabilities,
+                confidence=conf,
+                engine_name=pred.engine_name,
+                explanation=pred.explanation,
+                betting_analysis=None,
+                feature_version=pred.feature_version,
+                prediction_timestamp=pred.prediction_timestamp,
+            )
+            svc.record_prediction(match, pred)
+            outcome = MatchOutcome(
+                match_id=mid,
+                home_score=2 if i % 2 == 0 else 1,
+                away_score=1 if i % 2 == 0 else 2,
+                outcome="home_win" if i % 2 == 0 else "away_win",
+                finished_at=datetime(2026, 6, 13, 20, 0, tzinfo=timezone.utc),
+            )
+            svc.record_outcome(outcome)
+            svc.compute_error(mid)
+
+        written = svc.update_calibration_by_confidence("world_cup", "elo_odds")
+        assert isinstance(written, dict)
+        # At least one bucket should have been written with min samples
+        assert sum(written.values()) > 0 or any(
+            session_has_bucket(svc, b) for b in ("low", "mid", "high")
+        )
+        cal = svc.get_conditional_calibration("world_cup", "elo_odds", 0.9)
+        assert cal is not None
+        assert "slope" in cal and cal["bucket"] == "high"
+
+
+def session_has_bucket(svc, bucket: str) -> bool:
+    from app.kernel.kernel_db import get_kernel_session, KernelCalibration
+    from app.kernel.learning_service import competition_with_bucket
+
+    s = get_kernel_session()
+    try:
+        key = competition_with_bucket("world_cup", bucket)
+        row = s.query(KernelCalibration).filter_by(
+            engine="elo_odds", competition=key,
+        ).first()
+        return row is not None
+    finally:
+        s.close()

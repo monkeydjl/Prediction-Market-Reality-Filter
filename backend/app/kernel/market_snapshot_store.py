@@ -96,3 +96,82 @@ class MarketSnapshotStore:
             return None
         finally:
             session.close()
+
+    def audit_summary(self, *, link_id: int) -> dict[str, Any]:
+        """Price-path audit for a market link (P1-V1).
+
+        Returns latest/earliest prices, Δpp, max drawdown of YES price,
+        capture span, and quality flags (stale gap, sparse samples).
+        """
+        snaps = self.get_snapshots(link_id=link_id)
+        if not snaps:
+            return {
+                "link_id": link_id,
+                "available": False,
+                "snapshot_count": 0,
+                "flags": ["no_snapshots"],
+            }
+
+        def _price(s: dict) -> float | None:
+            for k in ("implied_prob", "yes_price", "price", "market_prob", "prob"):
+                v = s.get(k)
+                if v is not None:
+                    try:
+                        return float(v)
+                    except (TypeError, ValueError):
+                        continue
+            return None
+
+        def _ts(s: dict):
+            return s.get("captured_at") or s.get("created_at")
+
+        priced = [(s, _price(s)) for s in snaps]
+        priced = [(s, p) for s, p in priced if p is not None]
+        if not priced:
+            return {
+                "link_id": link_id,
+                "available": False,
+                "snapshot_count": len(snaps),
+                "flags": ["no_prices"],
+            }
+
+        # assume snaps ordered by captured_at asc or desc — normalize
+        def sort_key(item):
+            s, _ = item
+            t = _ts(s)
+            return t or ""
+
+        priced_sorted = sorted(priced, key=sort_key)
+        first_s, first_p = priced_sorted[0]
+        last_s, last_p = priced_sorted[-1]
+        prices = [p for _, p in priced_sorted]
+        peak = prices[0]
+        max_dd = 0.0
+        for p in prices:
+            peak = max(peak, p)
+            max_dd = max(max_dd, peak - p)
+
+        delta = last_p - first_p
+        flags: list[str] = []
+        if len(priced_sorted) < 3:
+            flags.append("sparse")
+        if abs(delta) >= 0.10:
+            flags.append("large_move")
+        if max_dd >= 0.15:
+            flags.append("high_drawdown")
+
+        return {
+            "link_id": link_id,
+            "available": True,
+            "snapshot_count": len(priced_sorted),
+            "first_price": round(first_p, 4),
+            "last_price": round(last_p, 4),
+            "delta_pp": round(delta * 100, 2),
+            "max_drawdown_pp": round(max_dd * 100, 2),
+            "min_price": round(min(prices), 4),
+            "max_price": round(max(prices), 4),
+            "first_captured_at": _ts(first_s),
+            "last_captured_at": _ts(last_s),
+            "flags": flags,
+        }
+

@@ -49,13 +49,82 @@ async def ingest_historical_data(request: IngestRequest, _auth: None = Depends(r
 
 @router.post("/run")
 async def run_optimization(request: OptimizationRequest, _auth: None = Depends(require_write_key)):
-    """Trigger parameter optimization (async)."""
+    """Trigger parameter optimization (async).
+
+    Creates a durable task row, then schedules ParameterOptimizer.optimize_sync
+    in a worker thread so the HTTP response returns immediately with task_id.
+    """
     _check_enabled()
+    import asyncio
+
     from app.services.optimization_task_manager import get_task_manager
 
+    sports = ["nba", "mlb", "nhl"] if request.sport == "all" else [request.sport]
+    for sport in sports:
+        if sport not in {"nba", "mlb", "nhl"}:
+            raise HTTPException(status_code=400, detail=f"Unsupported sport: {sport}")
+
     task_manager = get_task_manager()
+    # One task for the whole request; engine_name records the primary sport key.
     task = await task_manager.create_task(engine_name=request.sport)
-    return {"task_id": task.task_id, "status": "pending"}
+    n_trials = max(1, min(int(request.n_trials), 500))
+
+    async def _run() -> None:
+        await task_manager.mark_running(task.task_id)
+        results: dict = {}
+        try:
+            from app.kernel.backtest.match_loader import (
+                load_sport_matches_for_backtest,
+                time_series_split,
+            )
+            from app.kernel.parameter_optimizer import ParameterOptimizer
+
+            optimizer = ParameterOptimizer()
+            total = len(sports)
+            for idx, sport in enumerate(sports):
+                await task_manager.update_progress(
+                    task.task_id,
+                    progress=idx,
+                    total=total,
+                    current_match=sport,
+                    log_message=f"Loading matches for {sport}",
+                )
+                matches = await asyncio.to_thread(load_sport_matches_for_backtest, sport)
+                if len(matches) < 5:
+                    results[sport] = {
+                        "error": f"Not enough matches ({len(matches)}); ingest history first",
+                        "match_count": len(matches),
+                    }
+                    continue
+                train, test = time_series_split(matches, test_ratio=0.2)
+                await task_manager.update_progress(
+                    task.task_id,
+                    progress=idx,
+                    total=total,
+                    current_match=sport,
+                    log_message=(
+                        f"Optimizing {sport}: train={len(train)} test={len(test)} "
+                        f"trials={n_trials}"
+                    ),
+                )
+                opt_result = await asyncio.to_thread(
+                    optimizer.optimize_sync,
+                    sport,
+                    n_trials=n_trials,
+                    train_matches=train,
+                    test_matches=test,
+                )
+                results[sport] = opt_result
+            await task_manager.update_progress(
+                task.task_id, progress=total, total=total, log_message="done",
+            )
+            await task_manager.mark_completed(task.task_id, {"sports": results})
+        except Exception as exc:
+            logger.exception("Optimization task %s failed", task.task_id)
+            await task_manager.mark_failed(task.task_id, str(exc))
+
+    asyncio.create_task(_run())
+    return {"task_id": task.task_id, "status": "pending", "sports": sports, "n_trials": n_trials}
 
 
 @router.get("/status/{task_id}")

@@ -27,6 +27,7 @@ from app.kernel.domain import (
     PlayerFeatures,
     EnvironmentFeatures,
 )
+from app.kernel.market_liquidity import inject_liquidity_into_custom
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,10 @@ class FootballFeatureBuilder:
                 weather_condition=env_raw.get("weather_condition"),
                 is_home_advantage=env_raw.get("is_home_advantage", False),
             ),
-            custom=raw.get("custom", {}),
+            custom=inject_liquidity_into_custom(
+                raw.get("custom", {}),
+                match.match_id,
+            ),
             data_quality=data_quality,
             quality_notes=quality_notes,
             feature_version="1.0",

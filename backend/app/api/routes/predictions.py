@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.security import require_write_key
 from app.core import config
@@ -54,6 +54,44 @@ def _get_kernel():
         learning = KernelLearningService(factor_registry=factor_registry)
         reg = EngineRegistry(learning_service=learning)
         reg.register(engine)
+
+        if config.settings.FOOTBALL_MULTI_FACTOR_ENGINE_ENABLED:
+            from app.sports.football.engines.football_multi_factor_engine import (
+                FootballMultiFactorEngine,
+            )
+            reg.register(FootballMultiFactorEngine(factor_registry=factor_registry))
+            for comp in (
+                "wc", "world_cup", "ucl", "epl", "laliga",
+                "bundesliga", "seriea", "ligue1",
+            ):
+                factor_registry.ensure_competition_factors(comp)
+
+        if config.settings.DIXON_COLES_ENGINE_ENABLED:
+            from app.kernel.engines.dixon_coles_engine import DixonColesEngine
+            reg.register(DixonColesEngine())
+
+        if config.settings.GBM_ENGINE_ENABLED:
+            from app.kernel.engines.gbm_engine import GbmEngine
+            reg.register(GbmEngine())
+
+        if config.settings.SITUATIONAL_ENGINE_ENABLED:
+            from app.kernel.engines.situational_engine import SituationalEngine
+            reg.register(SituationalEngine(factor_registry=factor_registry))
+
+        if config.settings.FOOTBALL_ENSEMBLE_ENGINE_ENABLED:
+            from app.kernel.engines.ensemble_engine import EnsembleEngine
+            football_children = [
+                eng for name, eng in (
+                    (n, reg.get(n)) for n in reg.list_engines()
+                )
+                if "football" in eng.supported_sports() or "*" in eng.supported_sports()
+            ]
+            if football_children:
+                reg.register(EnsembleEngine(
+                    football_children,
+                    learning_service=learning,
+                    min_samples=config.settings.MIN_SAMPLES_FOR_ENGINE_SELECT,
+                ))
 
         # Build adapter registry — always includes WorldCupAdapter
         adapters: dict[str, object] = {
@@ -141,11 +179,42 @@ def _get_kernel():
 
 @router.get("/engines")
 def list_engines():
-    """List available prediction engines."""
+    """List available prediction engines (array; backward compatible)."""
     if not config.settings.KERNEL_PREDICTION_ENABLED:
-        return ["elo_odds"]  # static list when disabled
+        return ["elo_odds"]
     kernel = _get_kernel()
     return kernel._engine_registry.list_engines()
+
+
+@router.get("/engines/meta")
+def list_engines_meta():
+    """Engine names plus feature flags for dashboard/tooling."""
+    if not config.settings.KERNEL_PREDICTION_ENABLED:
+        return {
+            "engines": ["elo_odds"],
+            "kernel_enabled": False,
+            "flags": {
+                "football_multi_factor": False,
+                "dixon_coles": False,
+                "gbm": False,
+                "ensemble": False,
+                "situational": False,
+            },
+        }
+    kernel = _get_kernel()
+    return {
+        "engines": kernel._engine_registry.list_engines(),
+        "kernel_enabled": True,
+        "flags": {
+            "football_multi_factor": bool(
+                config.settings.FOOTBALL_MULTI_FACTOR_ENGINE_ENABLED
+            ),
+            "dixon_coles": bool(config.settings.DIXON_COLES_ENGINE_ENABLED),
+            "gbm": bool(config.settings.GBM_ENGINE_ENABLED),
+            "ensemble": bool(config.settings.FOOTBALL_ENSEMBLE_ENGINE_ENABLED),
+            "situational": bool(config.settings.SITUATIONAL_ENGINE_ENABLED),
+        },
+    }
 
 
 @router.post("/matches/{match_id}/predict")
@@ -387,6 +456,31 @@ def list_calibrations(engine: str | None = None,
     cals = get_calibrations(engine=engine, competition=competition)
     return [_calibration_to_dict(c) for c in cals]
 
+
+
+
+@router.post("/calibration/conditional")
+def refresh_conditional_calibration(
+    competition: str = Query(..., description="Competition code"),
+    engine: str = Query("elo_odds", description="Engine name"),
+) -> dict:
+    """Fit confidence- and stage-bucket calibration rows (P1-V5).
+
+    Safe to call repeatedly; thin buckets write sample_count=0 / skip.
+    Does not enable apply — KERNEL_CONDITIONAL_CALIBRATION_ENABLED remains independent.
+    """
+    from app.kernel.learning_service import KernelLearningService
+    from app.kernel.factor_registry import FactorRegistry
+
+    learning = KernelLearningService(factor_registry=FactorRegistry())
+    by_conf = learning.update_calibration_by_confidence(competition, engine)
+    by_stage = learning.update_calibration_by_stage(competition, engine)
+    return {
+        "competition": competition,
+        "engine": engine,
+        "confidence_buckets": by_conf,
+        "stage_buckets": by_stage,
+    }
 
 @router.get("/calibration/reliability")
 def get_reliability(engine: str | None = None,

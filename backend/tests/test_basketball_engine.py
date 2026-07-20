@@ -137,3 +137,37 @@ class TestBasketballEnginePredict:
         # League avg = 220, so each ≈ 110 (plus HFA adjustment)
         assert 100 < home_score < 130
         assert 100 < away_score < 130
+
+class TestBasketballPlayoffStage:
+    def test_playoff_reduces_home_edge(self):
+        """Playoff HFA/home_court softer than regular-season for equal teams."""
+        engine = BasketballEngine()
+        reg = _make_features(elo_home=1600, elo_away=1600)
+        # clone match as playoff
+        from dataclasses import replace
+        playoff_match = replace(reg.match, stage="playoff")
+        playoff_fs = FeatureSet(
+            match=playoff_match,
+            general=reg.general,
+            team=reg.team,
+            market=reg.market,
+            player=reg.player,
+            environment=reg.environment,
+            custom=reg.custom,
+            data_quality=reg.data_quality,
+            quality_notes=reg.quality_notes,
+            feature_version=reg.feature_version,
+        )
+        r_reg = engine.predict(reg, reg.match)
+        r_po = engine.predict(playoff_fs, playoff_match)
+        # Equal Elo: regular home edge should be >= playoff (softer HFA)
+        assert (
+            r_reg.outcome_probabilities["home_win"]
+            >= r_po.outcome_probabilities["home_win"] - 1e-9
+        )
+        hc_reg = next(i for i in r_reg.explanation if i.factor == "home_court")
+        hc_po = next(i for i in r_po.explanation if i.factor == "home_court")
+        assert hc_reg.weight > 0
+        # p_home_court lower in playoff
+        assert "0.55" in hc_po.detail
+

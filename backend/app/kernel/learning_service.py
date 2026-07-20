@@ -31,6 +31,72 @@ _CALIBRATION_SLOPE_MAX = 2.0
 _CALIBRATION_INTERCEPT_MIN = -0.5
 _CALIBRATION_INTERCEPT_MAX = 0.5
 
+# P1-V5: confidence bins for conditional calibration
+_CONF_BUCKET_LOW = 0.45
+_CONF_BUCKET_HIGH = 0.70
+_CONF_BUCKET_PREFIX = "#c_"
+
+
+def confidence_bucket(confidence: float | None) -> str:
+    """Map confidence to low / mid / high (P1-V5)."""
+    try:
+        c = float(confidence) if confidence is not None else 0.5
+    except (TypeError, ValueError):
+        c = 0.5
+    if c < _CONF_BUCKET_LOW:
+        return "low"
+    if c >= _CONF_BUCKET_HIGH:
+        return "high"
+    return "mid"
+
+
+def competition_with_bucket(competition: str, bucket: str) -> str:
+    return f"{competition}{_CONF_BUCKET_PREFIX}{bucket}"
+
+
+_STAGE_PREFIX = "#s_"
+
+
+def stage_bucket(stage: str | None = None, match_id: str | None = None) -> str:
+    """Map match stage to coarse bucket for conditional calibration (P1-V5)."""
+    text = f"{stage or ''} {match_id or ''}".lower()
+    knockout_tokens = (
+        "playoff", "knockout", "final", "semi", "quarter", "elim",
+        "round_of", "r16", "r8", "wildcard", "postseason",
+    )
+    regular_tokens = (
+        "regular", "group", "season", "rs", "regular_season", "league",
+    )
+    if any(t in text for t in knockout_tokens):
+        return "knockout"
+    if any(t in text for t in regular_tokens):
+        return "regular"
+    return "unknown"
+
+
+def competition_with_stage(competition: str, stage_b: str) -> str:
+    return f"{competition}{_STAGE_PREFIX}{stage_b}"
+
+
+def _explanation_stage(explanation) -> str | None:
+    if not explanation or not isinstance(explanation, list):
+        return None
+    for item in explanation:
+        if not isinstance(item, dict):
+            continue
+        if item.get("factor") == "_meta" and item.get("stage"):
+            return str(item["stage"])
+    return None
+
+
+
+def apply_linear_calibration(
+    prob: float, slope: float, intercept: float,
+) -> float:
+    """Clamp calibrated probability to (0, 1)."""
+    y = slope * float(prob) + float(intercept)
+    return max(1e-4, min(1.0 - 1e-4, y))
+
 
 class KernelLearningService:
     """Implements LearningService Protocol for Phase 1."""
@@ -50,7 +116,14 @@ class KernelLearningService:
                 existing.outcome_probabilities = prediction.outcome_probabilities
                 existing.confidence = prediction.confidence
                 existing.feature_version = prediction.feature_version
-                existing.explanation = [c.__dict__ for c in prediction.explanation]
+                existing.explanation = [
+                    {
+                        "factor": "_meta",
+                        "stage": getattr(match, "stage", None),
+                        "available": False,
+                        "weight": 0.0,
+                    }
+                ] + [c.__dict__ for c in prediction.explanation]
                 existing.updated_at = now
             else:
                 record = KernelPrediction(
@@ -63,7 +136,14 @@ class KernelLearningService:
                     outcome_probabilities=prediction.outcome_probabilities,
                     confidence=prediction.confidence,
                     feature_version=prediction.feature_version,
-                    explanation=[c.__dict__ for c in prediction.explanation],
+                    explanation=[
+                        {
+                            "factor": "_meta",
+                            "stage": getattr(match, "stage", None),
+                            "available": False,
+                            "weight": 0.0,
+                        }
+                    ] + [c.__dict__ for c in prediction.explanation],
                     created_at=now,
                     updated_at=now,
                 )
@@ -245,6 +325,248 @@ class KernelLearningService:
         except Exception:
             session.rollback()
             raise
+        finally:
+            session.close()
+
+
+    def update_calibration_by_confidence(self, competition: str, engine: str) -> dict[str, int]:
+        """Fit per-confidence-bin calibration rows (P1-V5).
+
+        Stores bucket rows as competition key ``{competition}#c_{low|mid|high}``
+        so existing KernelCalibration unique constraint is reused (no migration).
+        Returns sample counts written per bucket.
+        """
+        session = get_kernel_session()
+        written: dict[str, int] = {}
+        try:
+            query = (
+                select(KernelPrediction, KernelMatchOutcome)
+                .join(
+                    KernelMatchOutcome,
+                    KernelPrediction.match_id == KernelMatchOutcome.match_id,
+                )
+                .where(
+                    KernelPrediction.competition == competition,
+                    KernelPrediction.engine == engine,
+                    KernelMatchOutcome.outcome.isnot(None),
+                )
+                .order_by(KernelMatchOutcome.finished_at.desc())
+                .limit(config.settings.LEARNING_WINDOW_SIZE)
+            )
+            results = session.execute(query).all()
+            buckets: dict[str, list] = {"low": [], "mid": [], "high": []}
+            for pred, outcome in results:
+                b = confidence_bucket(pred.confidence)
+                buckets[b].append((pred, outcome))
+
+            now = datetime.now(timezone.utc)
+            min_n = max(5, config.settings.MIN_SAMPLES_FOR_CALIBRATION // 2)
+
+            for bucket, rows in buckets.items():
+                if len(rows) < min_n:
+                    written[bucket] = 0
+                    continue
+                x = [r[0].outcome_probabilities.get("home_win", 0) for r in rows]
+                y = [1.0 if r[1].outcome == "home_win" else 0.0 for r in rows]
+                n = len(x)
+                sum_x = sum(x)
+                sum_y = sum(y)
+                sum_xx = sum(xi * xi for xi in x)
+                sum_xy = sum(xi * yi for xi, yi in zip(x, y))
+                denominator = n * sum_xx - sum_x * sum_x
+                if abs(denominator) < 1e-10:
+                    written[bucket] = 0
+                    continue
+                slope = (n * sum_xy - sum_x * sum_y) / denominator
+                intercept = (sum_y - slope * sum_x) / n
+                slope = max(_CALIBRATION_SLOPE_MIN, min(_CALIBRATION_SLOPE_MAX, slope))
+                intercept = max(
+                    _CALIBRATION_INTERCEPT_MIN,
+                    min(_CALIBRATION_INTERCEPT_MAX, intercept),
+                )
+                avg_confidence = sum_x / n
+                avg_accuracy = sum_y / n
+                key = competition_with_bucket(competition, bucket)
+                existing = session.query(KernelCalibration).filter_by(
+                    engine=engine, competition=key,
+                ).first()
+                if existing:
+                    existing.slope = slope
+                    existing.intercept = intercept
+                    existing.sample_count = n
+                    existing.avg_confidence = avg_confidence
+                    existing.avg_accuracy = avg_accuracy
+                    existing.last_updated = now
+                else:
+                    session.add(KernelCalibration(
+                        engine=engine, competition=key,
+                        slope=slope, intercept=intercept,
+                        sample_count=n, avg_confidence=avg_confidence,
+                        avg_accuracy=avg_accuracy, last_updated=now,
+                    ))
+                written[bucket] = n
+            session.commit()
+            return written
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+
+    def update_calibration_by_stage(self, competition: str, engine: str) -> dict[str, int]:
+        """Fit per-stage-bucket calibration rows (P1-V5 category).
+
+        Keys: ``{competition}#s_{regular|knockout|unknown}``.
+        Stage is read from explanation ``_meta.stage`` or inferred from match_id.
+        """
+        session = get_kernel_session()
+        written: dict[str, int] = {}
+        try:
+            query = (
+                select(KernelPrediction, KernelMatchOutcome)
+                .join(
+                    KernelMatchOutcome,
+                    KernelPrediction.match_id == KernelMatchOutcome.match_id,
+                )
+                .where(
+                    KernelPrediction.competition == competition,
+                    KernelPrediction.engine == engine,
+                    KernelMatchOutcome.outcome.isnot(None),
+                )
+                .order_by(KernelMatchOutcome.finished_at.desc())
+                .limit(config.settings.LEARNING_WINDOW_SIZE)
+            )
+            results = session.execute(query).all()
+            buckets: dict[str, list] = {
+                "regular": [], "knockout": [], "unknown": [],
+            }
+            for pred, outcome in results:
+                st = _explanation_stage(pred.explanation)
+                b = stage_bucket(st, pred.match_id)
+                buckets[b].append((pred, outcome))
+
+            now = datetime.now(timezone.utc)
+            min_n = max(5, config.settings.MIN_SAMPLES_FOR_CALIBRATION // 2)
+
+            for bucket, rows in buckets.items():
+                if len(rows) < min_n:
+                    written[bucket] = 0
+                    continue
+                x = [r[0].outcome_probabilities.get("home_win", 0) for r in rows]
+                y = [1.0 if r[1].outcome == "home_win" else 0.0 for r in rows]
+                n = len(x)
+                sum_x = sum(x)
+                sum_y = sum(y)
+                sum_xx = sum(xi * xi for xi in x)
+                sum_xy = sum(xi * yi for xi, yi in zip(x, y))
+                denominator = n * sum_xx - sum_x * sum_x
+                if abs(denominator) < 1e-10:
+                    written[bucket] = 0
+                    continue
+                slope = (n * sum_xy - sum_x * sum_y) / denominator
+                intercept = (sum_y - slope * sum_x) / n
+                slope = max(_CALIBRATION_SLOPE_MIN, min(_CALIBRATION_SLOPE_MAX, slope))
+                intercept = max(
+                    _CALIBRATION_INTERCEPT_MIN,
+                    min(_CALIBRATION_INTERCEPT_MAX, intercept),
+                )
+                avg_confidence = sum_x / n
+                avg_accuracy = sum_y / n
+                key = competition_with_stage(competition, bucket)
+                existing = session.query(KernelCalibration).filter_by(
+                    engine=engine, competition=key,
+                ).first()
+                if existing:
+                    existing.slope = slope
+                    existing.intercept = intercept
+                    existing.sample_count = n
+                    existing.avg_confidence = avg_confidence
+                    existing.avg_accuracy = avg_accuracy
+                    existing.last_updated = now
+                else:
+                    session.add(KernelCalibration(
+                        engine=engine, competition=key,
+                        slope=slope, intercept=intercept,
+                        sample_count=n, avg_confidence=avg_confidence,
+                        avg_accuracy=avg_accuracy, last_updated=now,
+                    ))
+                written[bucket] = n
+            session.commit()
+            return written
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def get_conditional_calibration(
+        self,
+        competition: str,
+        engine: str,
+        confidence: float | None,
+        *,
+        stage: str | None = None,
+        match_id: str | None = None,
+    ) -> dict | None:
+        """Prefer stage then confidence-bin calibration; fall back to competition.
+
+        Returns dict with slope, intercept, sample_count, source, bucket.
+        """
+        session = get_kernel_session()
+        try:
+            min_n = max(5, config.settings.MIN_SAMPLES_FOR_CALIBRATION // 2)
+            conf_bucket = confidence_bucket(confidence)
+            st_bucket = stage_bucket(stage, match_id)
+
+            # 1) stage bucket
+            if st_bucket != "unknown":
+                skey = competition_with_stage(competition, st_bucket)
+                srow = session.query(KernelCalibration).filter_by(
+                    engine=engine, competition=skey,
+                ).first()
+                if srow is not None and srow.sample_count >= min_n:
+                    return {
+                        "slope": srow.slope,
+                        "intercept": srow.intercept,
+                        "sample_count": srow.sample_count,
+                        "avg_accuracy": srow.avg_accuracy,
+                        "bucket": st_bucket,
+                        "source": "stage_bucket",
+                        "competition_key": skey,
+                    }
+
+            # 2) confidence bucket
+            key = competition_with_bucket(competition, conf_bucket)
+            row = session.query(KernelCalibration).filter_by(
+                engine=engine, competition=key,
+            ).first()
+            if row is not None and row.sample_count >= min_n:
+                return {
+                    "slope": row.slope,
+                    "intercept": row.intercept,
+                    "sample_count": row.sample_count,
+                    "avg_accuracy": row.avg_accuracy,
+                    "bucket": conf_bucket,
+                    "source": "confidence_bucket",
+                    "competition_key": key,
+                }
+
+            # 3) competition baseline
+            base = session.query(KernelCalibration).filter_by(
+                engine=engine, competition=competition,
+            ).first()
+            if base is None:
+                return None
+            return {
+                "slope": base.slope,
+                "intercept": base.intercept,
+                "sample_count": base.sample_count,
+                "avg_accuracy": base.avg_accuracy,
+                "bucket": conf_bucket,
+                "source": "competition",
+                "competition_key": competition,
+            }
         finally:
             session.close()
 

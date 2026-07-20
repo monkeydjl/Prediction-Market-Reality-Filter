@@ -55,6 +55,9 @@ def _rec_to_dict(rec) -> dict[str, Any]:
         "market_prob": rec.market_prob,
         "sources_count": rec.sources_count,
         "captured_at": rec.captured_at.isoformat() if rec.captured_at else None,
+        "review_priority": getattr(rec, "review_priority", "normal"),
+        "guardrail_flags": getattr(rec, "guardrail_flags", None),
+        "policy_notes": getattr(rec, "policy_notes", None),
     }
 
 

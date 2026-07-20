@@ -75,3 +75,44 @@ def test_get_latest_snapshots_returns_data_when_enabled(client, monkeypatch):
     assert len(data["snapshots"]) == 1
     assert data["snapshots"][0]["team"] == "LAL"
     assert data["snapshots"][0]["implied_prob"] == 0.22
+    assert "integrity" in data
+
+
+def test_meta_series_and_coverage_when_enabled(client, monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "PHASE12_FUTURES_MARKETS_ENABLED", True)
+
+    mock_store = MagicMock()
+    mock_store.get_verified_links = MagicMock(return_value=[
+        {
+            "id": 1, "competition": "nba", "season": "2024-25",
+            "team": "LAL", "contract_id": "KXNBACHAMP-LAL",
+            "source": "kalshi", "implied_prob": 0.18, "verified": True,
+        },
+        {
+            "id": 2, "competition": "nba", "season": "2024-25",
+            "team": "BOS", "contract_id": "KXNBACHAMP-BOS",
+            "source": "kalshi", "implied_prob": 0.22, "verified": True,
+        },
+    ])
+    mock_store.get_links = MagicMock(return_value=mock_store.get_verified_links.return_value)
+
+    with patch(
+        "app.api.routes.futures.FuturesLinkStore",
+        return_value=mock_store,
+    ):
+        series_resp = client.get("/api/futures/meta/series")
+        cov_resp = client.get("/api/futures/meta/coverage")
+
+    assert series_resp.status_code == 200
+    series_body = series_resp.json()
+    assert series_body["series_count"] >= 8
+    assert "nba" in series_body["competitions"]
+    assert any(s["series_prefix"] == "KXNFLCHAMP" for s in series_body["series"])
+
+    assert cov_resp.status_code == 200
+    cov = cov_resp.json()
+    assert cov["pair_count"] == 1
+    assert cov["pairs"][0]["competition"] == "nba"
+    assert "integrity" in cov["pairs"][0]
+    assert "series_registry" in cov

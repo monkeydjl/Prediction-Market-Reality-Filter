@@ -70,8 +70,10 @@ class TestFetchEloAndOdds:
         assert raw["market"]["odds_home"] == 1.5
         assert raw["market"]["odds_away"] == 5.5
         assert raw["market"]["odds_fresh"] is False  # stale defaults to True
-        assert raw["player"] == {}
-        assert raw["environment"] == {}
+        # Situational enrichment may leave player empty; environment always sets home adv.
+        assert isinstance(raw["player"], dict)
+        assert "is_home_advantage" in raw["environment"]
+        assert raw["environment"]["is_home_advantage"] is True  # ucl club match
 
     @patch("app.sports.football.adapters._shared.get_club_elo")
     @patch("app.services.odds_cache_service.get_cached_odds", new_callable=AsyncMock)
@@ -87,6 +89,33 @@ class TestFetchEloAndOdds:
         calls = [c.args[0] for c in mock_club.call_args_list]
         assert "RealMadrid" in calls
         assert "BayernMunich" in calls
+
+    @patch("app.sports.football.adapters._shared.get_club_elo")
+    @patch("app.services.odds_cache_service.get_cached_odds", new_callable=AsyncMock)
+    @patch("app.services.world_cup_historical_results.get_historical_team_stats")
+    @patch("app.services.world_cup_historical_results.get_historical_h2h")
+    def test_enrich_form_and_h2h(
+        self, mock_h2h, mock_stats, mock_odds, mock_club,
+    ):
+        mock_club.return_value = {"elo_rating": 1800.0, "source": "clubelo"}
+        mock_odds.return_value = None
+        mock_stats.return_value = {
+            "wins": 6, "draws": 2, "losses": 2, "played": 10,
+            "goals_per_game": 1.8,
+            "last_match_date": "2025-09-01",
+        }
+        mock_h2h.return_value = {
+            "matches_played": 4, "home_wins": 2, "draws": 1, "away_wins": 1,
+        }
+
+        match = _make_match()
+        raw = fetch_elo_and_odds(match, elo_scope="club")
+        assert raw["team"]["form_home"] == 0.6
+        assert raw["team"]["form_away"] == 0.6
+        assert raw["team"]["h2h_home_win_rate"] == 0.5
+        assert raw["team"]["h2h_draw_rate"] == 0.25
+        assert raw["general"]["rest_days_home"] == 15.0
+        assert raw["custom"]["xg_home"] == 1.8
 
 
 class TestBuildMatchIdentity:
@@ -134,3 +163,28 @@ class TestBuildMatchOutcome:
 
     def test_build_from_none_returns_none(self):
         assert build_match_outcome(None) is None
+
+
+class TestEnrichRefereeFeatures:
+    def test_passthrough_rate(self):
+        from app.sports.football.adapters._shared import enrich_referee_features
+
+        raw = {"custom": {"referee_home_win_rate": 0.62}, "environment": {}}
+        enrich_referee_features(raw, _make_match())
+        assert raw["custom"]["referee_home_win_rate"] == 0.62
+
+    def test_environment_name_only(self):
+        from app.sports.football.adapters._shared import enrich_referee_features
+
+        raw = {"custom": {}, "environment": {"referee": "John Smith"}}
+        enrich_referee_features(raw, _make_match())
+        assert raw["custom"]["referee_name"] == "John Smith"
+        assert raw["custom"].get("referee_home_win_rate") is None
+
+    def test_static_map_bias(self, monkeypatch):
+        import app.sports.football.adapters._shared as sh
+        monkeypatch.setitem(sh._REFEREE_HOME_BIAS, "jane doe", 0.08)
+        raw = {"custom": {}, "environment": {"referee": "Jane Doe"}}
+        sh.enrich_referee_features(raw, _make_match())
+        assert raw["custom"]["referee_home_bias"] == 0.08
+        assert raw["custom"]["referee_source"] == "static_map"

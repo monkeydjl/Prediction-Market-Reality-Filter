@@ -132,6 +132,62 @@ class SimulatedTradeStoreTests(unittest.TestCase):
         self.assertEqual(len(store.list_closed_trades(limit=10, offset=0)), 10)
         self.assertEqual(len(store.list_closed_trades(limit=10, offset=10)), 1)
 
+    def test_row_exposes_raw_and_directional_edge(self):
+        store.open_trade(
+            "edge-yes",
+            direction="YES",
+            entry_prob=70.0,
+            market_prob=50.0,
+            position_pct=2.0,
+        )
+        store.open_trade(
+            "edge-no",
+            direction="NO",
+            entry_prob=40.0,
+            market_prob=60.0,
+            position_pct=2.0,
+        )
+        rows = {r["event_id"]: r for r in store.list_open_trades(limit=10)}
+        yes = rows["edge-yes"]
+        no = rows["edge-no"]
+        # raw_edge = AI − market
+        self.assertAlmostEqual(yes["entry_edge"], 20.0, places=2)
+        self.assertEqual(yes["raw_edge"], yes["entry_edge"])
+        self.assertAlmostEqual(yes["directional_edge"], 20.0, places=2)
+        self.assertAlmostEqual(no["entry_edge"], -20.0, places=2)
+        self.assertAlmostEqual(no["directional_edge"], 20.0, places=2)
+        self.assertIn("raw_edge", yes["edge_definition"])
+
+    def test_stats_edge_definition_and_directional_mean(self):
+        store.open_trade(
+            "s-yes",
+            direction="YES",
+            entry_prob=60.0,
+            market_prob=50.0,
+            position_pct=1.0,
+        )
+        store.close_trade("s-yes", actual_outcome=100.0)
+        store.open_trade(
+            "s-no",
+            direction="NO",
+            entry_prob=40.0,
+            market_prob=55.0,
+            position_pct=1.0,
+        )
+        store.close_trade("s-no", actual_outcome=0.0)
+
+        stats = store.trade_stats()
+        self.assertEqual(stats["total_closed"], 2)
+        self.assertIsNotNone(stats["avg_edge_at_entry"])
+        self.assertIsNotNone(stats["avg_directional_edge_at_entry"])
+        self.assertIn("raw_edge", stats["edge_definition"])
+        self.assertIn("0-100", stats["edge_definition"]["scale"])
+        # YES raw=+10, NO raw=-15 → directional +10 and +15 → mean 12.5
+        self.assertAlmostEqual(stats["avg_directional_edge_at_entry"], 12.5, places=2)
+        # |raw| mean = (10+15)/2 = 12.5
+        self.assertAlmostEqual(stats["avg_edge_at_entry"], 12.5, places=2)
+
 
 if __name__ == "__main__":
     unittest.main()
+

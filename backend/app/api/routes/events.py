@@ -1216,6 +1216,18 @@ async def get_prediction_calibration():
     return calibration_summary()
 
 
+@router.get("/predictions/calibration/buckets", response_model=FlexibleResponse)
+async def get_prediction_calibration_buckets():
+    """Edge × confidence bucket diagnostic (Phase 3).
+
+    Includes scored + observed predictions (act/watch/provisional_act).
+    Complements ``/predictions/calibration`` (act-only overall + category).
+    """
+    from app.memory.prediction_store import calibration_bucket_summary
+
+    return calibration_bucket_summary()
+
+
 @router.get("/predictions/recent", response_model=RecentPredictionsResponse)
 async def get_recent_predictions(
     limit: int = Query(default=10, ge=1, le=200),

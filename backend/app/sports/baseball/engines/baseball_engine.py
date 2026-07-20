@@ -28,18 +28,24 @@ from app.core import config
 from app.kernel.domain import (
     FeatureSet, MatchIdentity, PredictionResult, ContributionItem,
 )
+from app.kernel.engines.confidence import compute_confidence, confidence_breakdown
+from app.kernel.engines.elo_odds_engine import soft_totals_from_scores
 from app.sports._shared.elo_calculator import compute_expected_score
 
 if TYPE_CHECKING:
     from app.kernel.factor_registry import FactorRegistry
 
 # Default factor weights (sum to 1.0)
-_DEFAULT_WEIGHTS = {
-    "elo": 0.30,
+_DEFAULT_WEIGHTS: dict[str, float] = {
+    "elo": 0.26,
     "home_court": 0.10,
-    "rest": 0.15,
-    "form": 0.20,
-    "starting_pitcher": 0.25,
+    "rest": 0.08,
+    "form": 0.11,
+    "starting_pitcher": 0.20,
+    "park": 0.07,
+    "bullpen": 0.07,
+    "weather": 0.06,
+    "platoon": 0.05,
 }
 
 # MLB historical home win rate (constant — lower than NBA's 0.58)
@@ -130,6 +136,89 @@ class BaseballEngine:
             pitcher_available = False
         factors.append(("starting_pitcher", p_pitcher, weights["starting_pitcher"], pitcher_available))
 
+        custom = features.custom if isinstance(features.custom, dict) else {}
+
+        # 6. Park factor (P1-M2)
+        park = custom.get("park_factor")
+        if park is not None:
+            try:
+                pf = float(park)
+                p_park = 0.5 + _clamp((pf - 1.0) * 0.25, -0.04, 0.04)
+                park_available = True
+            except (TypeError, ValueError):
+                p_park = 0.5
+                park_available = False
+        else:
+            p_park = 0.5
+            park_available = False
+        factors.append(("park", p_park, weights.get("park", 0.07), park_available))
+
+        # 7. Bullpen ERA differential (P1-M1 soft)
+        bullpen_home = custom.get("bullpen_era_home")
+        bullpen_away = custom.get("bullpen_era_away")
+        if bullpen_home is not None and bullpen_away is not None:
+            try:
+                b_diff = _clamp(float(bullpen_away) - float(bullpen_home), -2.0, 2.0)
+                p_bullpen = 0.5 + b_diff * 0.04
+                bullpen_available = True
+            except (TypeError, ValueError):
+                p_bullpen = 0.5
+                bullpen_available = False
+        else:
+            p_bullpen = 0.5
+            bullpen_available = False
+        factors.append(("bullpen", p_bullpen, weights.get("bullpen", 0.07), bullpen_available))
+
+        # 8. Weather soft (P1-M3 outdoor)
+        wind = custom.get("weather_wind_mph")
+        temp = custom.get("weather_temp_c")
+        if temp is None and features.environment.weather_temp_c is not None:
+            temp = features.environment.weather_temp_c
+        if wind is not None or temp is not None:
+            try:
+                p_weather = 0.5
+                if temp is not None:
+                    t = float(temp)
+                    if t < 5:
+                        p_weather -= 0.01
+                    elif t > 30:
+                        p_weather += 0.01
+                if wind is not None and float(wind) >= 15:
+                    p_weather += 0.01
+                p_weather = _clamp(p_weather, 0.45, 0.55)
+                weather_available = True
+            except (TypeError, ValueError):
+                p_weather = 0.5
+                weather_available = False
+        else:
+            p_weather = 0.5
+            weather_available = False
+        factors.append(("weather", p_weather, weights.get("weather", 0.06), weather_available))
+
+        # 9. Platoon soft (P1-M4) — lineup vs pitcher handedness OPS/wOBA proxy
+        # custom keys: platoon_ops_home, platoon_ops_away (or platoon_advantage_home in [-0.1,0.1])
+        platoon_ok = False
+        try:
+            ops_h = custom.get("platoon_ops_home")
+            ops_a = custom.get("platoon_ops_away")
+            adv = custom.get("platoon_advantage_home")
+            if ops_h is not None and ops_a is not None:
+                d = _clamp(float(ops_h) - float(ops_a), -0.15, 0.15)
+                p_platoon = 0.5 + d * 0.8  # 0.050 OPS ≈ +0.04 win prob
+                platoon_ok = True
+            elif adv is not None:
+                p_platoon = 0.5 + _clamp(float(adv), -0.10, 0.10)
+                platoon_ok = True
+            else:
+                p_platoon = 0.5
+        except (TypeError, ValueError):
+            p_platoon = 0.5
+            platoon_ok = False
+        p_platoon = _clamp(p_platoon, 0.40, 0.60)
+        factors.append(
+            ("platoon", p_platoon, weights.get("platoon", 0.05), platoon_ok),
+        )
+
         # Weighted fusion — redistribute unavailable factor weights
         available_factors = [(f, p, w) for f, p, w, a in factors if a]
         total_w = sum(w for _, _, w in available_factors)
@@ -156,9 +245,6 @@ class BaseballEngine:
             "away": round(away_score, 1),
         }
 
-        # Confidence (same formula as BasketballEngine)
-        confidence = round(min(max(p_home, p_away) * 0.95, 0.95), 4)
-
         # Build explanation with ContributionItems
         explanation: list[ContributionItem] = []
         for fid, p, w, available in factors:
@@ -172,13 +258,39 @@ class BaseballEngine:
                 predicted_outcome=predicted_outcome if available else None,
             ))
 
+        confidence = compute_confidence(
+            outcome_probabilities,
+            available_flags=[a for _, _, _, a in factors],
+            predicted_outcomes=[
+                ("home_win" if p >= 0.5 else "away_win") if a else None
+                for _, p, _, a in factors
+            ],
+            data_quality=features.data_quality,
+            odds_fresh=bool(features.market.odds_fresh) if features.market.odds_home else None,
+            custom=custom,
+        )
+
+        conf_break = confidence_breakdown(
+            outcome_probabilities,
+            available_flags=[a for _, _, _, a in factors],
+            predicted_outcomes=[("home_win" if p >= 0.5 else "away_win") if a else None for _, p, _, a in factors],
+            data_quality=features.data_quality,
+            odds_fresh=bool(features.market.odds_fresh) if features.market.odds_home else None,
+            custom=custom,
+        )
+
         return PredictionResult(
             predicted_scores=predicted_scores,
             outcome_probabilities=outcome_probabilities,
             confidence=confidence,
             engine_name="baseball",
             explanation=explanation,
-            betting_analysis=None,
+            betting_analysis={
+                "confidence_breakdown": conf_break,
+                "soft_totals_btts": soft_totals_from_scores(
+                    predicted_scores, line=league_avg, sport="baseball",
+                ),
+            },
             feature_version=features.feature_version,
             prediction_timestamp=datetime.now(timezone.utc),
         )

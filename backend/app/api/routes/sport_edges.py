@@ -1,15 +1,15 @@
 """Sport edge detector API routes.
 
 When PHASE7_EDGE_DETECTOR_ENABLED is false, all routes return 503.
-All endpoints are GET (read-only) — no require_write_key auth (consistent
-with Subproject A's GET endpoints).
+GET endpoints are read-only. POST /{match_id}/detect requires write key.
 """
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api.security import require_write_key
 from app.core import config
 
 router = APIRouter(prefix="/sport-edges", tags=["Sport Edges"])
@@ -41,6 +41,9 @@ def _edge_to_dict(edge) -> dict[str, Any]:
         "spread": edge.spread,
         "sources_count": edge.sources_count,
         "stale": edge.stale,
+        "review_priority": getattr(edge, "review_priority", "normal"),
+        "factor_drivers": getattr(edge, "factor_drivers", None),
+        "factor_attribution": getattr(edge, "factor_attribution", None),
         "captured_at": edge.captured_at.isoformat() if edge.captured_at else None,
         "sources": [
             {
@@ -58,19 +61,45 @@ def _edge_to_dict(edge) -> dict[str, Any]:
     }
 
 
+@router.post("/{match_id}/detect")
+def detect_edges_now(
+    match_id: str,
+    _auth: None = Depends(require_write_key),
+) -> dict[str, Any]:
+    """Compute and persist edges for a match on demand.
+
+    Requires write key. Returns the same shape as GET .../latest after
+    running EdgeDetectorService.detect_edges.
+    """
+    _ensure_enabled()
+    svc = _service()
+    summary = svc.detect_edges(match_id)
+    return {
+        "match_id": summary.match_id,
+        "outcomes": [_edge_to_dict(e) for e in summary.outcomes],
+        "engine_name": summary.engine_name,
+        "competition": summary.competition,
+        "prediction_timestamp": (
+            summary.prediction_timestamp.isoformat()
+            if summary.prediction_timestamp
+            else None
+        ),
+        "skipped": summary.skipped,
+        "skip_reason": summary.skip_reason,
+    }
+
+
 @router.get("/{match_id}/latest")
 def get_latest_edges(match_id: str) -> dict[str, Any]:
     """Latest edge snapshot per outcome for a match.
 
     If the match has no prediction or no verified links, returns skipped=true.
-    Note: this reads persisted edges. To trigger computation, use the CLI
-    or scheduler — this endpoint does not compute on demand.
+    Use POST /{match_id}/detect to compute edges on demand.
     """
     _ensure_enabled()
     svc = _service()
     edges = svc.get_latest_edges(match_id)
     if not edges:
-        # No persisted edges — check why (no prediction or no verified links)
         from app.kernel.kernel_db import get_latest_prediction
         pred = get_latest_prediction(match_id)
         if pred is None:
@@ -80,15 +109,12 @@ def get_latest_edges(match_id: str) -> dict[str, Any]:
                 "prediction_timestamp": None,
                 "skipped": True, "skip_reason": "no_prediction",
             }
-        # Has prediction but no persisted edges -> either no verified links
-        # or edges not yet computed
         return {
             "match_id": match_id, "outcomes": [],
             "engine_name": pred.engine, "competition": pred.competition,
             "prediction_timestamp": pred.created_at.isoformat() if pred.created_at else None,
             "skipped": True, "skip_reason": "no_verified_links",
         }
-    # Use the first edge's match-level metadata (trust is per-match)
     from app.kernel.kernel_db import get_latest_prediction
     pred = get_latest_prediction(match_id)
     return {
@@ -111,7 +137,6 @@ def get_edge_history(
     _ensure_enabled()
     svc = _service()
     edges = svc.get_edge_history(match_id, mapped_outcome=mapped_outcome)
-    # Group by mapped_outcome
     by_outcome: dict[str, list[dict[str, Any]]] = {}
     for edge in edges:
         by_outcome.setdefault(edge.mapped_outcome, []).append({
@@ -121,6 +146,9 @@ def get_edge_history(
             "raw_edge": edge.raw_edge,
             "adjusted_edge": edge.adjusted_edge,
             "stale": edge.stale,
+            "review_priority": getattr(edge, "review_priority", "normal"),
+            "trust": getattr(edge, "trust", None),
+            "liquidity_factor": getattr(edge, "liquidity_factor", None),
         })
     series = [
         {"mapped_outcome": outcome, "snapshots": snaps}
@@ -138,6 +166,8 @@ def get_discrepancies(
     _ensure_enabled()
     svc = _service()
     edges = svc.get_top_discrepancies(limit=limit, min_abs_edge=min_abs_edge)
+    _PRIORITY_RANK = {"critical": 0, "high": 1, "normal": 2, "low": 3}
+
     items = [
         {
             "match_id": e.match_id,
@@ -147,8 +177,18 @@ def get_discrepancies(
             "raw_edge": e.raw_edge,
             "adjusted_edge": e.adjusted_edge,
             "stale": e.stale,
+            "trust": getattr(e, "trust", None),
+            "liquidity_factor": getattr(e, "liquidity_factor", None),
+            "sources_count": getattr(e, "sources_count", None),
+            "review_priority": getattr(e, "review_priority", None) or "normal",
             "captured_at": e.captured_at.isoformat() if e.captured_at else None,
         }
         for e in edges
     ]
+    items.sort(
+        key=lambda row: (
+            _PRIORITY_RANK.get(str(row.get("review_priority") or "normal"), 2),
+            -abs(float(row.get("adjusted_edge") or 0.0)),
+        )
+    )
     return {"items": items, "total": len(items)}

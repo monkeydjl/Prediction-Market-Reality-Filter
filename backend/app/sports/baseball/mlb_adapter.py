@@ -38,6 +38,39 @@ _DEFAULT_SEASON = "2024"
 _DEFAULT_STAGE = "regular_season"
 _DEFAULT_KICKOFF = datetime(2024, 7, 4, tzinfo=timezone.utc)
 
+# Coarse 3-year-ish park run factors (1.0 = league average). Soft signal only.
+_PARK_FACTORS: dict[str, float] = {
+    "Colorado Rockies": 1.15,
+    "Boston Red Sox": 1.06,
+    "Cincinnati Reds": 1.05,
+    "Texas Rangers": 1.04,
+    "Philadelphia Phillies": 1.03,
+    "Chicago Cubs": 1.02,
+    "New York Yankees": 1.01,
+    "Los Angeles Dodgers": 0.98,
+    "San Diego Padres": 0.96,
+    "San Francisco Giants": 0.94,
+    "Oakland Athletics": 0.95,
+    "Athletics": 0.95,
+    "Seattle Mariners": 0.94,
+    "Miami Marlins": 0.93,
+    "St. Louis Cardinals": 0.97,
+}
+
+
+def _park_factor_for_team(home_team_name: str) -> float:
+    """Return park run factor for home team; default 1.0 (neutral)."""
+    if not home_team_name:
+        return 1.0
+    if home_team_name in _PARK_FACTORS:
+        return _PARK_FACTORS[home_team_name]
+    # Fuzzy tail match (e.g. "Rockies")
+    lower = home_team_name.lower()
+    for name, factor in _PARK_FACTORS.items():
+        if name.lower() in lower or lower in name.lower():
+            return factor
+    return 1.0
+
 
 def parse_mlb_game(game_data: dict) -> dict | None:
     """Parse a raw MLB Stats API game dict into internal fixture format.
@@ -297,8 +330,33 @@ class MLBAdapter:
                 "team_era_away": 4.10,
                 "pythagorean_win_pct_home": 0.500,
                 "pythagorean_win_pct_away": 0.500,
+                # P1-M2: coarse park factors (1.0 = league average runs)
+                "park_factor": _park_factor_for_team(home_name),
+                # P1-M1: bullpen ERA soft proxy from team ERA until roster feed
+                "bullpen_era_home": 4.10,
+                "bullpen_era_away": 4.10,
             },
         }
+        raw["custom"]["bullpen_era_home"] = float(raw["custom"].get("team_era_home") or 4.10)
+        raw["custom"]["bullpen_era_away"] = float(raw["custom"].get("team_era_away") or 4.10)
+        try:
+            from app.sports._shared.team_geo import travel_between_teams
+
+            travel = travel_between_teams(home_name, away_name, "mlb")
+            raw["custom"].update(travel)
+            if travel.get("travel_km_away") is not None:
+                raw["general"]["travel_distance_km"] = travel["travel_km_away"]
+        except Exception:  # noqa: BLE001
+            logger.debug("MLB travel enrich skipped", exc_info=True)
+        try:
+            from app.kernel.market_liquidity import inject_liquidity_into_custom
+
+            raw["custom"] = inject_liquidity_into_custom(
+                raw.get("custom") or {},
+                match.match_id,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("MLB liquidity enrich skipped", exc_info=True)
         return raw
 
     def _compute_form(self, team_name: str) -> float:

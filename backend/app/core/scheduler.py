@@ -182,6 +182,23 @@ def _finish_run(
             SCHEDULER_FAILED_RUNS.labels(job_name=job_name).inc()
         except Exception:  # pragma: no cover - defensive
             logger.debug("[Scheduler] metrics increment failed", exc_info=True)
+        # E8: best-effort operator notification (webhook + Sentry
+        # breadcrumb + structured log) gated by
+        # SCHEDULER_FAILURE_ALERT_ENABLED. No-op when disabled — the
+        # metrics increment and Sentry capture above already cover
+        # observability; this only adds a deduplicated alert channel.
+        try:
+            from app.services.scheduler_failure_alert_dispatcher import (
+                dispatch_scheduler_failure_alert,
+            )
+            dispatch_scheduler_failure_alert(
+                job_name=_job_name_for_run(run_id) or "unknown",
+                run_id=run_id,
+                error=error,
+                exc=exc,
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("[Scheduler] failure alert dispatch failed", exc_info=True)
     elif status == "success":
         # P0-6 metrics: update last-success gauge so SCHEDULER_LAST_SUCCESS
         # reflects the most recent successful run per job.

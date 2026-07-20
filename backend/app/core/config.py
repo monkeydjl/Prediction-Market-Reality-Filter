@@ -568,6 +568,10 @@ class Settings:
     )
     DECISION_ACT_EDGE: float = float(os.getenv("DECISION_ACT_EDGE", "6.0"))
     DECISION_WATCH_EDGE: float = float(os.getenv("DECISION_WATCH_EDGE", "2.0"))
+    # Sports recommendation allocation cap (% of bankroll, P1-SB3)
+    SPORT_REC_MAX_ALLOCATION_PCT: float = float(
+        os.getenv("SPORT_REC_MAX_ALLOCATION_PCT", "2.0")
+    )
     # Paper-trade generation: when true, events with decision in {act,
     # provisional_act, watch} automatically create a simulated trade row.
     # When false (legacy), no paper trades are created. Set
@@ -915,6 +919,23 @@ class Settings:
         os.getenv("DRIFT_ALERT_COOLDOWN_SECONDS", "3600")
     )
 
+    # ── Scheduler failure alerts (E8) ──
+    # The scheduler already records failures in the loop-run ledger,
+    # increments the SCHEDULER_FAILED_RUNS Prometheus counter, and
+    # forwards exceptions to Sentry via _finish_run. These flags gate
+    # an *additional* best-effort notification dispatcher (webhook +
+    # Sentry breadcrumb + structured log) with per-job cooldown. Default
+    # OFF so a fresh install is byte-identical to pre-E8.
+    SCHEDULER_FAILURE_ALERT_ENABLED: bool = _env_bool(
+        "SCHEDULER_FAILURE_ALERT_ENABLED", "false"
+    )
+    SCHEDULER_FAILURE_ALERT_WEBHOOK_URL: str = os.getenv(
+        "SCHEDULER_FAILURE_ALERT_WEBHOOK_URL", ""
+    )
+    SCHEDULER_FAILURE_ALERT_COOLDOWN_SECONDS: int = int(
+        os.getenv("SCHEDULER_FAILURE_ALERT_COOLDOWN_SECONDS", "1800")
+    )
+
     # ── Quality alerts (LATER #3) — slice-threshold alerting on quality report ──
     QUALITY_ALERT_MIN_SAMPLES: int = int(os.getenv("QUALITY_ALERT_MIN_SAMPLES", "10"))
     QUALITY_ALERT_DIRECTION_ACCURACY_MEDIUM: float = float(os.getenv("QUALITY_ALERT_DIRECTION_ACCURACY_MEDIUM", "0.60"))
@@ -955,6 +976,41 @@ class Settings:
         "KERNEL_PREDICTION_ENABLED", "false"
     )
 
+    # Football multi-factor engine (default OFF). When true and Kernel is
+    # enabled, registers FootballMultiFactorEngine (elo/odds/form/rest/
+    # injury/h2h) alongside EloOddsEngine. Call predict with
+    # engine=football_multi_factor, or use engine=auto after enough samples.
+    # Does not change EloOddsEngine behavior.
+    FOOTBALL_MULTI_FACTOR_ENGINE_ENABLED: bool = _env_bool(
+        "FOOTBALL_MULTI_FACTOR_ENGINE_ENABLED", "false"
+    )
+
+    # Kernel Dixon-Coles engine (default OFF). Elo → xG → Poisson + rho.
+    # Requires KERNEL_PREDICTION_ENABLED. Rho from data/dixon_coles_params.json.
+    DIXON_COLES_ENGINE_ENABLED: bool = _env_bool(
+        "DIXON_COLES_ENGINE_ENABLED", "false"
+    )
+
+    # Kernel GBM engine adapter (default OFF). Wraps legacy LightGBM xG
+    # models; falls back to Elo baseline when models are missing.
+    GBM_ENGINE_ENABLED: bool = _env_bool(
+        "GBM_ENGINE_ENABLED", "false"
+    )
+
+    # Inverse-Brier ensemble over registered football engines (default OFF).
+    # When true, registers engine name "ensemble" that fuses children present
+    # in the registry (elo_odds + multi-factor/dc/gbm when enabled).
+    FOOTBALL_ENSEMBLE_ENGINE_ENABLED: bool = _env_bool(
+        "FOOTBALL_ENSEMBLE_ENGINE_ENABLED", "false"
+    )
+
+    # Kernel situational engine (default OFF). Soft post-adjustment for
+    # knockout / must-win / group status on top of EloOdds (or another base).
+    # Register as engine name "situational". Does not hardcode large PP shifts.
+    SITUATIONAL_ENGINE_ENABLED: bool = _env_bool(
+        "SITUATIONAL_ENGINE_ENABLED", "false"
+    )
+
     # Phase 2 — Multi-league support (default OFF). When false, only
     # World Cup (wc- prefix) adapters are registered. Set to true to
     # enable UCL and EPL adapters.
@@ -981,6 +1037,11 @@ class Settings:
     MIN_SAMPLES_FOR_ENGINE_SELECT: int = int(
         os.getenv("MIN_SAMPLES_FOR_ENGINE_SELECT", "5")
     )
+    # P1-V5: apply confidence-bucket linear calibration on Kernel.predict
+    # (default OFF — keep raw engine probs until buckets have real samples).
+    KERNEL_CONDITIONAL_CALIBRATION_ENABLED: bool = _env_bool(
+        "KERNEL_CONDITIONAL_CALIBRATION_ENABLED", "false"
+    )
     WEIGHT_FLOOR: float = float(
         os.getenv("WEIGHT_FLOOR", "0.05")
     )
@@ -1002,6 +1063,9 @@ class Settings:
     PHASE4_NBA_ENABLED: bool = _env_bool("PHASE4_NBA_ENABLED", "false")
     BALLDONTLIE_API_KEY: str = os.getenv("BALLDONTLIE_API_KEY", "")
     NBA_ELO_HFA: int = int(os.getenv("NBA_ELO_HFA", "100"))
+    # Playoff HFA slightly lower (better travel/rest parity) — P1-B5
+    NBA_ELO_HFA_PLAYOFF: int = int(os.getenv("NBA_ELO_HFA_PLAYOFF", "90"))
+    NBA_HOME_COURT_PLAYOFF: float = float(os.getenv("NBA_HOME_COURT_PLAYOFF", "0.55"))
     NBA_ELO_K_REGULAR: int = int(os.getenv("NBA_ELO_K_REGULAR", "20"))
     NBA_ELO_K_PLAYOFF: int = int(os.getenv("NBA_ELO_K_PLAYOFF", "30"))
     NBA_LEAGUE_AVG_TOTAL: float = float(os.getenv("NBA_LEAGUE_AVG_TOTAL", "220.0"))
@@ -1049,6 +1113,13 @@ class Settings:
     )
     PHASE7_SPORT_MARKET_LINK_PENDING_THRESHOLD: float = float(
         os.getenv("PHASE7_SPORT_MARKET_LINK_PENDING_THRESHOLD", "0.6")
+    )
+    # P1-V2: auto-verify pending links above this confidence (default OFF)
+    PHASE7_SPORT_MARKET_LINK_AUTO_VERIFY_ENABLED: bool = _env_bool(
+        "PHASE7_SPORT_MARKET_LINK_AUTO_VERIFY_ENABLED", "false"
+    )
+    PHASE7_SPORT_MARKET_LINK_AUTO_VERIFY_THRESHOLD: float = float(
+        os.getenv("PHASE7_SPORT_MARKET_LINK_AUTO_VERIFY_THRESHOLD", "0.95")
     )
     # Scheduler interval flags used by the sport-market-bridge scheduler jobs
     # (Task 6). Defaults match the brief's documented cadence: hourly

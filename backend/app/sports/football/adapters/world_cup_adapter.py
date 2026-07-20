@@ -299,7 +299,43 @@ class WorldCupAdapter:
         elif isinstance(odds, BaseException):
             logger.warning("Failed to fetch odds: %s", odds)
 
+        # Group-stage motivation → FeatureSet.custom for SituationalEngine (P1-E8)
+        raw["custom"] = self._build_custom(match)
+
         return raw
+
+    def _build_custom(self, match: MatchIdentity) -> dict:
+        """Attach group context + liquidity into raw custom (best-effort)."""
+        custom: dict = {}
+        try:
+            from app.kernel.engines.group_context_bridge import (
+                group_context_to_custom,
+                merge_custom,
+            )
+            from app.kernel.market_liquidity import inject_liquidity_into_custom
+            from app.models.world_cup_prediction import MatchFixture
+            from app.services.world_cup_group_context import build_group_context
+            from app.utils.prediction_db import get_prediction_session
+
+            session = None
+            try:
+                session = get_prediction_session()
+                fixture = session.get(MatchFixture, match.match_id)
+                if fixture is not None:
+                    gc = build_group_context(fixture, session)
+                    custom = merge_custom(custom, group_context_to_custom(gc))
+            finally:
+                if session is not None:
+                    session.close()
+
+            custom = inject_liquidity_into_custom(custom, match.match_id)
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "WorldCup custom enrich failed for %s",
+                match.match_id,
+                exc_info=True,
+            )
+        return custom
 
     def fetch_team_data(self, team: TeamIdentity) -> dict:
         """Fetch team-level data (stub — extend as needed)."""

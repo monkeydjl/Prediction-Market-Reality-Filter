@@ -28,6 +28,11 @@ from app.kernel.domain import (
     FeatureSet, MatchIdentity, PredictionResult, ContributionItem,
 )
 from app.kernel.engines.btd_model import calculate_btd_probabilities
+from app.kernel.engines.confidence import compute_confidence, confidence_breakdown
+from app.kernel.engines.odds_quality import (
+    describe_odds_quality,
+    odds_weight_multiplier,
+)
 
 if TYPE_CHECKING:
     from app.kernel.factor_registry import FactorRegistry
@@ -93,6 +98,95 @@ def _probabilities_to_scores(
     return {"home": round(home_goals, 2), "away": round(away_goals, 2)}
 
 
+
+def soft_totals_btts_analysis(
+    scores: dict[str, float],
+    *,
+    line: float = 2.5,
+) -> dict:
+    """Soft O/U + BTTS from independent Poisson goals (P1-O1 scaffolding).
+
+    Not a full multi-market engine — exposes diagnostic probs for FE/API until
+    dedicated totals/BTTS markets and odds feeds land.
+    """
+    import math
+
+    try:
+        lh = max(0.05, float(scores.get("home", 1.2)))
+        la = max(0.05, float(scores.get("away", 1.2)))
+    except (TypeError, ValueError):
+        return {"available": False}
+
+    # P(total > line) via discrete Poisson sum 0..10 each side
+    def pois_pmf(k: int, lam: float) -> float:
+        return math.exp(-lam) * lam ** k / math.factorial(k)
+
+    max_g = 10
+    p_over = 0.0
+    p_btts = 0.0
+    p_home0 = 0.0
+    p_away0 = 0.0
+    for h in range(0, max_g + 1):
+        ph = pois_pmf(h, lh)
+        if h == 0:
+            p_home0 = ph
+        for a in range(0, max_g + 1):
+            pa = pois_pmf(a, la)
+            if a == 0 and h == 0:
+                p_away0 = pa  # will fix below
+            joint = ph * pa
+            if h + a > line:
+                p_over += joint
+            if h >= 1 and a >= 1:
+                p_btts += joint
+    # recompute zero goals properly
+    p_home0 = pois_pmf(0, lh)
+    p_away0 = pois_pmf(0, la)
+    p_btts = 1.0 - p_home0 - p_away0 + p_home0 * p_away0  # inclusion
+
+    # normalize residual mass from truncation
+    # (sums are slightly < 1 due to max_g cutoff — fine for soft)
+    p_over = max(0.0, min(1.0, p_over))
+    p_under = max(0.0, min(1.0, 1.0 - p_over))
+    p_btts = max(0.0, min(1.0, p_btts))
+    return {
+        "available": True,
+        "line": line,
+        "expected_home_goals": round(lh, 3),
+        "expected_away_goals": round(la, 3),
+        "expected_total": round(lh + la, 3),
+        "p_over": round(p_over, 4),
+        "p_under": round(p_under, 4),
+        "p_btts_yes": round(p_btts, 4),
+        "p_btts_no": round(1.0 - p_btts, 4),
+        "note": "soft independent Poisson; not calibrated multi-market prices",
+    }
+
+
+
+def soft_totals_from_scores(
+    scores: dict[str, float],
+    *,
+    line: float,
+    sport: str = "generic",
+    max_g: int = 30,
+) -> dict:
+    """Independent Poisson O/U (and BTTS only for football-like low totals)."""
+    base = soft_totals_btts_analysis(scores, line=line)
+    if not base.get("available"):
+        return base
+    out = dict(base)
+    out["sport"] = sport
+    # BTTS only meaningful for football-scale scoring
+    if sport not in {"football", "soccer", "hockey"}:
+        out.pop("p_btts_yes", None)
+        out.pop("p_btts_no", None)
+        out["note"] = f"soft independent Poisson O/U for {sport}; not market prices"
+    else:
+        out["note"] = base.get("note", "soft independent Poisson")
+    return out
+
+
 def _calculate_confidence(probs: dict[str, float]) -> float:
     """Confidence = max probability, slightly deflated."""
     max_prob = max(probs.values())
@@ -140,6 +234,15 @@ class EloOddsEngine:
         if odds_h and odds_d and odds_a and odds_h > 1.0 and odds_d > 1.0 and odds_a > 1.0:
             market_probs = _odds_to_probabilities(odds_h, odds_d, odds_a)
             odds_available = True
+            # P1-E4: damp odds weight when book is thin/stale/overrounded
+            odds_mult = odds_weight_multiplier(
+                odds_h,
+                odds_d,
+                odds_a,
+                odds_fresh=bool(features.market.odds_fresh),
+                custom=features.custom,
+            )
+            odds_w = odds_w * odds_mult
         else:
             market_probs = None
             odds_available = False
@@ -147,11 +250,16 @@ class EloOddsEngine:
         # Fuse
         fused = _fuse_elo_and_odds(elo_probs, market_probs, elo_w, odds_w)
         scores = _probabilities_to_scores(fused)
-        confidence = _calculate_confidence(fused)
 
         # Explanation with predicted_outcome
         elo_predicted = max(elo_probs, key=elo_probs.get) if elo_available else None
         odds_predicted = max(market_probs, key=market_probs.get) if odds_available else None
+        odds_detail = (
+            f"Odds {odds_h}/{odds_d}/{odds_a}; "
+            f"{describe_odds_quality(odds_h, odds_d, odds_a, odds_fresh=bool(features.market.odds_fresh), custom=features.custom)}"
+            if odds_available
+            else "Odds unavailable"
+        )
 
         explanation = [
             ContributionItem(
@@ -163,10 +271,20 @@ class EloOddsEngine:
             ContributionItem(
                 factor="odds", direction="support" if odds_available else "neutral",
                 weight=odds_w, available=odds_available,
-                detail=f"Odds {odds_h}/{odds_d}/{odds_a}" if odds_available else "Odds unavailable",
+                detail=odds_detail,
                 predicted_outcome=odds_predicted,
             ),
         ]
+
+        conf_kwargs = dict(
+            available_flags=[elo_available, odds_available],
+            predicted_outcomes=[elo_predicted, odds_predicted],
+            data_quality=features.data_quality,
+            odds_fresh=bool(features.market.odds_fresh) if odds_available else None,
+            custom=features.custom if isinstance(features.custom, dict) else None,
+        )
+        confidence = compute_confidence(fused, **conf_kwargs)
+        conf_break = confidence_breakdown(fused, **conf_kwargs)
 
         return PredictionResult(
             predicted_scores=scores,
@@ -174,7 +292,10 @@ class EloOddsEngine:
             confidence=confidence,
             engine_name="elo_odds",
             explanation=explanation,
-            betting_analysis=None,
+            betting_analysis={
+                "confidence_breakdown": conf_break,
+                "soft_totals_btts": soft_totals_btts_analysis(scores),
+            },
             feature_version=features.feature_version,
             prediction_timestamp=datetime.now(timezone.utc),
         )

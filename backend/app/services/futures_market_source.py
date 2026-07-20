@@ -19,13 +19,114 @@ logger = logging.getLogger(__name__)
 
 # Kalshi futures series ticker prefixes — multi-leg championship events.
 # Maps series prefix -> (competition, championship_type).
+# Matching uses exact series_ticker first, then longest-prefix startswith
+# (Kalshi sometimes appends season tokens to series).
 _KALSHI_FUTURES_SERIES_PREFIXES: dict[str, tuple[str, str]] = {
+    # Core big-4 / soccer cups (Phase 12 baseline)
     "KXNBACHAMP": ("nba", "championship"),
     "KXMLBCHAMP": ("mlb", "world_series"),
     "KXNHLCHAMP": ("nhl", "stanley_cup"),
     "KXSOCCERWCS": ("wc", "world_cup"),
     "KXSOCCERUCL": ("ucl", "champions_league"),
+    # Expanded coverage (P2-SB5)
+    "KXNFLCHAMP": ("nfl", "super_bowl"),
+    "KXSUPERBOWL": ("nfl", "super_bowl"),
+    "KXNFLSUPERBOWL": ("nfl", "super_bowl"),
+    "KXEPLCHAMP": ("epl", "premier_league"),
+    "KXSOCCEREPL": ("epl", "premier_league"),
+    "KXNCAAMBCHAMP": ("ncaab", "ncaa_tournament"),
+    "KXNCAAMB": ("ncaab", "ncaa_tournament"),
+    "KXNBACONF": ("nba", "conference"),
+    "KXNHLCONFW": ("nhl", "conference"),
+    "KXNHLCONFE": ("nhl", "conference"),
 }
+
+
+def list_known_futures_series() -> list[dict[str, str]]:
+    """Return registered series prefixes for coverage dashboards / API."""
+    return [
+        {
+            "series_prefix": prefix,
+            "competition": comp,
+            "championship_type": ctype,
+        }
+        for prefix, (comp, ctype) in sorted(_KALSHI_FUTURES_SERIES_PREFIXES.items())
+    ]
+
+
+def match_futures_series(series_ticker: str) -> tuple[str, str] | None:
+    """Map a Kalshi series_ticker to (competition, championship_type)."""
+    if not series_ticker:
+        return None
+    series = series_ticker.strip().upper()
+    if series in _KALSHI_FUTURES_SERIES_PREFIXES:
+        return _KALSHI_FUTURES_SERIES_PREFIXES[series]
+    for prefix, mapping in sorted(
+        _KALSHI_FUTURES_SERIES_PREFIXES.items(), key=lambda kv: len(kv[0]), reverse=True
+    ):
+        if series.startswith(prefix):
+            return mapping
+    return None
+
+
+def multi_leg_integrity(
+    contracts: list[dict[str, Any]],
+    *,
+    min_legs: int = 2,
+    max_sum_prob: float = 1.45,
+    min_sum_prob: float = 0.85,
+) -> dict[str, Any]:
+    """Assess multi-leg championship book integrity (coverage / vig / dupes)."""
+    teams = [str(c.get("team") or "").strip() for c in contracts if c.get("team")]
+    prices: list[float] = []
+    missing_price = 0
+    for c in contracts:
+        p = c.get("price", c.get("implied_prob"))
+        if p is None:
+            missing_price += 1
+            continue
+        try:
+            prices.append(float(p))
+        except (TypeError, ValueError):
+            missing_price += 1
+    unique_teams = sorted({t for t in teams if t})
+    dupe_teams = sorted({t for t in teams if t and teams.count(t) > 1})
+    sum_prob = round(sum(prices), 4) if prices else None
+    leg_count = len(contracts)
+
+    issues: list[str] = []
+    if leg_count < min_legs:
+        issues.append("too_few_legs")
+    if missing_price:
+        issues.append("missing_prices")
+    if dupe_teams:
+        issues.append("duplicate_teams")
+    if sum_prob is not None and sum_prob > max_sum_prob:
+        issues.append("overround_high")
+    if sum_prob is not None and sum_prob < min_sum_prob and leg_count >= min_legs:
+        issues.append("underround_or_incomplete")
+    if not unique_teams and leg_count:
+        issues.append("no_team_codes")
+
+    if not issues:
+        status = "ok"
+    elif "too_few_legs" in issues or "no_team_codes" in issues:
+        status = "incomplete"
+    elif "underround_or_incomplete" in issues or "missing_prices" in issues:
+        status = "thin"
+    else:
+        status = "warn"
+
+    return {
+        "status": status,
+        "leg_count": leg_count,
+        "unique_team_count": len(unique_teams),
+        "teams": unique_teams,
+        "duplicate_teams": dupe_teams,
+        "missing_price_count": missing_price,
+        "sum_implied_prob": sum_prob,
+        "issues": issues,
+    }
 
 
 def _extract_team_from_ticker(ticker: str) -> str:
@@ -83,7 +184,7 @@ async def fetch_kalshi_futures_markets(limit: int = 200) -> list[dict[str, Any]]
                 continue
 
             series = (event.get("series_ticker") or "").upper()
-            mapping = _KALSHI_FUTURES_SERIES_PREFIXES.get(series)
+            mapping = match_futures_series(series)
             if mapping is None:
                 continue
 
@@ -117,12 +218,15 @@ async def fetch_kalshi_futures_markets(limit: int = 200) -> list[dict[str, Any]]
             if not contracts:
                 continue
 
+            integrity = multi_leg_integrity(contracts)
             candidates.append({
                 "event_ticker": event_ticker,
                 "title": title,
                 "competition": competition,
                 "championship_type": championship_type,
+                "series_ticker": series,
                 "contracts": contracts,
+                "integrity": integrity,
                 "source": "kalshi",
             })
 

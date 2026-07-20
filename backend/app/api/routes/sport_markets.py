@@ -124,3 +124,84 @@ def get_snapshots(match_id: str) -> dict[str, Any]:
             "snapshots": rows,
         })
     return {"match_id": match_id, "series": series}
+
+
+@router.get("/links/{link_id}/audit")
+def link_price_audit(link_id: int) -> dict[str, Any]:
+    """Price-path audit for a linked market (P1-V1)."""
+    _ensure_enabled()
+    store = _snap_store()
+    summary = store.audit_summary(link_id=link_id)
+    # attach link meta when available
+    try:
+        link = _link_store().get_link(link_id=link_id)
+        if link:
+            summary["match_id"] = link.get("match_id")
+            summary["source"] = link.get("source")
+            summary["market_id"] = link.get("market_id")
+            summary["verified"] = link.get("verified")
+    except Exception:  # noqa: BLE001
+        pass
+    return summary
+
+
+@router.get("/matches/{match_id}/audit")
+def match_price_audit(match_id: str) -> dict[str, Any]:
+    """Aggregate price-path audits for all links of a match (P1-V1)."""
+    _ensure_enabled()
+    links = _link_store().get_links(match_id=match_id)
+    snap = _snap_store()
+    audits = []
+    for link in links:
+        lid = link.get("id") or link.get("link_id")
+        if lid is None:
+            continue
+        a = snap.audit_summary(link_id=int(lid))
+        a["source"] = link.get("source")
+        a["market_id"] = link.get("market_id")
+        a["verified"] = link.get("verified")
+        a["mapped_outcome"] = link.get("mapped_outcome")
+        audits.append(a)
+    return {
+        "match_id": match_id,
+        "link_count": len(links),
+        "audits": audits,
+    }
+
+
+@router.post("/pending/auto-verify")
+def auto_verify_pending(
+    dry_run: bool = Query(False, description="If true, only report candidates"),
+    min_confidence: float | None = Query(
+        None, description="Override auto-verify confidence threshold",
+    ),
+) -> dict[str, Any]:
+    """Promote high-confidence pending links to verified (P1-V2).
+
+    Gated by PHASE7_SPORT_MARKET_LINK_AUTO_VERIFY_ENABLED unless dry_run=true.
+    """
+    _ensure_enabled()
+    from app.core import config
+
+    thr = (
+        float(min_confidence)
+        if min_confidence is not None
+        else float(config.settings.PHASE7_SPORT_MARKET_LINK_AUTO_VERIFY_THRESHOLD)
+    )
+    if not dry_run and not config.settings.PHASE7_SPORT_MARKET_LINK_AUTO_VERIFY_ENABLED:
+        # still allow dry_run to inspect queue
+        result = _link_store().auto_verify_high_confidence(
+            min_confidence=thr, dry_run=True,
+        )
+        result["enabled"] = False
+        result["message"] = (
+            "AUTO_VERIFY disabled; set PHASE7_SPORT_MARKET_LINK_AUTO_VERIFY_ENABLED=true"
+        )
+        return result
+
+    result = _link_store().auto_verify_high_confidence(
+        min_confidence=thr, dry_run=dry_run,
+    )
+    result["enabled"] = True
+    return result
+

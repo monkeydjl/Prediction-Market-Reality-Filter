@@ -431,15 +431,44 @@ def has_open_trade(event_id: str) -> bool:
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
+def directional_edge(*, direction: str, entry_edge: float) -> float:
+    """Edge in favor of the trade direction (pp, 0-100 scale).
+
+    ``entry_edge`` is the EIP raw edge: AI% − market% (same as predictions.raw_edge).
+    For YES, positive raw edge favors the position; for NO, negative raw edge does.
+    """
+    raw = float(entry_edge)
+    if direction == "NO":
+        return round(-raw, 2)
+    return round(raw, 2)
+
+
 def _row_to_dict(row: sqlite3.Row | tuple) -> dict[str, Any]:
     if isinstance(row, sqlite3.Row):
-        return dict(row)
-    cols = [
-        "id", "trade_id", "event_id", "event_title", "direction",
-        "entry_prob", "market_prob", "entry_edge", "entry_time", "position_pct",
-        "confidence", "trust_weight", "decision",
-        "exit_prob", "exit_market", "exit_time", "exit_reason",
-        "actual_outcome", "pnl_pct", "is_win",
-        "status", "created_at", "updated_at",
-    ]
-    return dict(zip(cols, row))
+        d = dict(row)
+    else:
+        cols = [
+            "id", "trade_id", "event_id", "event_title", "direction",
+            "entry_prob", "market_prob", "entry_edge", "entry_time", "position_pct",
+            "confidence", "trust_weight", "decision",
+            "exit_prob", "exit_market", "exit_time", "exit_reason",
+            "actual_outcome", "pnl_pct", "is_win",
+            "status", "created_at", "updated_at",
+        ]
+        d = dict(zip(cols, row))
+    # Derived fields for UI / API consumers (not stored columns).
+    try:
+        d["raw_edge"] = d.get("entry_edge")
+        d["directional_edge"] = directional_edge(
+            direction=str(d.get("direction") or "YES"),
+            entry_edge=float(d.get("entry_edge") or 0.0),
+        )
+        d["edge_definition"] = "raw_edge = ai_probability - market_probability (0-100 pp)"
+    except (TypeError, ValueError):
+        d.setdefault("raw_edge", d.get("entry_edge"))
+        d.setdefault("directional_edge", None)
+        d.setdefault(
+            "edge_definition",
+            "raw_edge = ai_probability - market_probability (0-100 pp)",
+        )
+    return d

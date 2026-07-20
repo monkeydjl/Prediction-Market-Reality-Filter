@@ -128,8 +128,11 @@ class OptimizedParamsStore:
                 .filter_by(sport=target.sport, competition=target.competition, status="applied")
                 .all()
             )
+            previous_applied: dict[str, Any] | None = None
             for row in existing:
                 if row.id != params_id:
+                    if previous_applied is None:
+                        previous_applied = self._row_to_dict(row)
                     row.status = "archived"
             target.status = "applied"
             target.applied_at = datetime.now(timezone.utc)
@@ -145,7 +148,27 @@ class OptimizedParamsStore:
                     factor_id, target.competition, weight, source="optimized",
                 )
 
-            return self._row_to_dict(target)
+            applied = self._row_to_dict(target)
+            before_weights: dict[str, Any] = {}
+            if previous_applied and previous_applied.get("factor_weights"):
+                try:
+                    before_weights = json.loads(previous_applied["factor_weights"])
+                except (TypeError, json.JSONDecodeError):
+                    before_weights = {}
+            keys = sorted(set(before_weights) | set(factor_weights))
+            weight_diff = [
+                {
+                    "factor": k,
+                    "before": before_weights.get(k),
+                    "after": factor_weights.get(k),
+                }
+                for k in keys
+            ]
+            return {
+                "applied": applied,
+                "previous_applied": previous_applied,
+                "weight_diff": weight_diff,
+            }
         except Exception:
             session.rollback()
             raise

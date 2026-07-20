@@ -177,3 +177,18 @@ def test_discrepancies_respects_min_abs_edge(client):
     # edge is 0.01 * 0.72 * 1.0 = 0.0072, below 0.05 threshold
     assert data["total"] == 0
     assert data["items"] == []
+
+
+def test_detect_endpoint_computes_and_returns(client, monkeypatch):
+    """POST /detect runs EdgeDetectorService and returns summary."""
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "API_WRITE_KEY", "")
+    monkeypatch.setattr(settings, "ALLOW_OPEN_WRITES", True)
+
+    _seed_prediction_and_link(match_id="m1", implied=0.58)
+    res = client.post("/api/sport-edges/m1/detect")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["match_id"] == "m1"
+    assert data["skipped"] is False
+    assert len(data["outcomes"]) >= 1

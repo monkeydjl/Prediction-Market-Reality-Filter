@@ -25,6 +25,8 @@ from app.kernel.domain import (
 
 logger = logging.getLogger(__name__)
 
+from app.kernel.market_liquidity import inject_liquidity_into_custom
+
 _BASKETBALL = SportIdentity(code="basketball", name="Basketball")
 
 
@@ -57,7 +59,7 @@ class BasketballFeatureBuilder:
             general=GeneralFeatures(
                 rest_days_home=general_raw.get("rest_days_home"),
                 rest_days_away=general_raw.get("rest_days_away"),
-                travel_distance_km=None,  # Not tracked for basketball
+                travel_distance_km=general_raw.get("travel_distance_km"),
                 days_since_last_match=general_raw.get("days_since_last_match"),
             ),
             team=TeamFeatures(
@@ -89,7 +91,10 @@ class BasketballFeatureBuilder:
                 weather_condition=None,
                 is_home_advantage=env_raw.get("is_home_advantage", False),
             ),
-            custom=raw.get("custom", {}),
+            custom=inject_liquidity_into_custom(
+                raw.get("custom", {}),
+                match.match_id,
+            ),
             data_quality=data_quality,
             quality_notes=quality_notes,
             feature_version="nba-1.0",

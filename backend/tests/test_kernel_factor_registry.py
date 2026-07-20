@@ -132,10 +132,13 @@ class TestEnsureCompetitionFactors:
         reg.ensure_competition_factors("nba")
 
         # After: NBA factors seeded with correct weights
-        assert reg.get_weight("elo", "nba") == 0.45
-        assert reg.get_weight("home_court", "nba") == 0.15
-        assert reg.get_weight("rest", "nba") == 0.15
-        assert reg.get_weight("form", "nba") == 0.25
+        assert reg.get_weight("elo", "nba") == 0.35
+        assert reg.get_weight("home_court", "nba") == 0.12
+        assert reg.get_weight("rest", "nba") == 0.12
+        assert reg.get_weight("form", "nba") == 0.18
+        assert reg.get_weight("net_rating", "nba") == 0.10
+        assert reg.get_weight("travel", "nba") == 0.07
+        assert reg.get_weight("injury", "nba") == 0.06
 
     def test_idempotent_when_already_seeded(self):
         """Calling twice doesn't duplicate or overwrite factors."""
@@ -146,7 +149,8 @@ class TestEnsureCompetitionFactors:
         reg.ensure_competition_factors("nba")  # Second call
 
         # Weights still correct
-        assert reg.get_weight("elo", "nba") == 0.45
+        assert reg.get_weight("elo", "nba") == 0.35
+        assert reg.get_weight("travel", "nba") == 0.07
 
     def test_football_defaults_unchanged(self):
         """NBA seeding doesn't affect football global defaults."""
@@ -168,6 +172,48 @@ class TestEnsureCompetitionFactors:
         # No NBA factors seeded; falls back to global elo=0.30
         assert reg.get_weight("elo", "unknown_sport") == 0.30
 
+    def test_seeds_football_multi_factor_extras(self):
+        """Football competitions seed form/rest/injury/h2h only."""
+        from app.kernel.factor_registry import FactorRegistry
+
+        reg = FactorRegistry()
+        reg.ensure_competition_factors("epl")
+        assert reg.get_competition_weight("form", "epl") == 0.09
+        assert reg.get_competition_weight("rest", "epl") == 0.05
+        assert reg.get_competition_weight("injury", "epl") == 0.05
+        assert reg.get_competition_weight("h2h", "epl") == 0.05
+        assert reg.get_competition_weight("travel", "epl") == 0.04
+        assert reg.get_competition_weight("xg", "epl") == 0.06
+        assert reg.get_competition_weight("market_value", "epl") == 0.04
+        assert reg.get_competition_weight("possession", "epl") == 0.04
+        # elo/odds stay global — not competition-overridden
+        assert reg.get_competition_weight("elo", "epl") is None
+        assert reg.get_weight("elo", "epl") == 0.30
+        assert reg.get_weight("odds", "epl") == 0.70
+
+    def test_merges_missing_soft_seeds(self):
+        """Partial existing seeds are filled without overwriting."""
+        from app.kernel.factor_registry import FactorConfig, FactorRegistry
+
+        reg = FactorRegistry()
+        now = datetime.now(timezone.utc)
+        reg._factors[("elo", "nba")] = FactorConfig(
+            factor_id="elo", category="elo_rating", version="1.0",
+            weight=0.45, competition="nba", enabled=True,
+            source="manual", updated_at=now,
+        )
+        reg.ensure_competition_factors("nba")
+        assert reg.get_weight("elo", "nba") == 0.45  # preserved
+        assert reg.get_weight("travel", "nba") == 0.07  # filled
+        assert reg.get_weight("net_rating", "nba") == 0.10
+
+    def test_get_competition_weight_none_when_missing(self):
+
+        from app.kernel.factor_registry import FactorRegistry
+
+        reg = FactorRegistry()
+        assert reg.get_competition_weight("form", "epl") is None
+
 
 class TestEnsureMLBFactors:
     """Phase 5: ensure_competition_factors for MLB factor seeding."""
@@ -183,11 +229,15 @@ class TestEnsureMLBFactors:
         reg.ensure_competition_factors("mlb")
 
         # After: MLB factors seeded with correct weights
-        assert reg.get_weight("elo", "mlb") == 0.30
+        assert reg.get_weight("elo", "mlb") == 0.26
         assert reg.get_weight("home_court", "mlb") == 0.10
-        assert reg.get_weight("rest", "mlb") == 0.15
-        assert reg.get_weight("form", "mlb") == 0.20
-        assert reg.get_weight("starting_pitcher", "mlb") == 0.25
+        assert reg.get_weight("rest", "mlb") == 0.08
+        assert reg.get_weight("form", "mlb") == 0.11
+        assert reg.get_weight("starting_pitcher", "mlb") == 0.20
+        assert reg.get_weight("park", "mlb") == 0.07
+        assert reg.get_weight("bullpen", "mlb") == 0.07
+        assert reg.get_weight("weather", "mlb") == 0.06
+        assert reg.get_weight("platoon", "mlb") == 0.05
 
     def test_idempotent_when_already_seeded(self):
         """Calling twice doesn't duplicate or overwrite factors."""
@@ -197,8 +247,9 @@ class TestEnsureMLBFactors:
         reg.ensure_competition_factors("mlb")
         reg.ensure_competition_factors("mlb")  # Second call
 
-        assert reg.get_weight("elo", "mlb") == 0.30
-        assert reg.get_weight("starting_pitcher", "mlb") == 0.25
+        assert reg.get_weight("elo", "mlb") == 0.26
+        assert reg.get_weight("starting_pitcher", "mlb") == 0.20
+        assert reg.get_weight("park", "mlb") == 0.07
 
     def test_football_defaults_unchanged(self):
         """MLB seeding doesn't affect football global defaults."""
@@ -219,8 +270,8 @@ class TestEnsureMLBFactors:
         reg.ensure_competition_factors("mlb")
 
         # NBA factors unchanged
-        assert reg.get_weight("elo", "nba") == 0.45
-        assert reg.get_weight("home_court", "nba") == 0.15
+        assert reg.get_weight("elo", "nba") == 0.35
+        assert reg.get_weight("home_court", "nba") == 0.12
 
 
 class TestEnsureNHLFactors:
@@ -237,11 +288,13 @@ class TestEnsureNHLFactors:
         reg.ensure_competition_factors("nhl")
 
         # After: NHL factors seeded with correct weights
-        assert reg.get_weight("elo", "nhl") == 0.35
-        assert reg.get_weight("home_court", "nhl") == 0.15
-        assert reg.get_weight("rest", "nhl") == 0.15
-        assert reg.get_weight("form", "nhl") == 0.20
-        assert reg.get_weight("goalie", "nhl") == 0.15
+        assert reg.get_weight("elo", "nhl") == 0.30
+        assert reg.get_weight("home_court", "nhl") == 0.13
+        assert reg.get_weight("rest", "nhl") == 0.12
+        assert reg.get_weight("form", "nhl") == 0.17
+        assert reg.get_weight("goalie", "nhl") == 0.14
+        assert reg.get_weight("travel", "nhl") == 0.07
+        assert reg.get_weight("attack_share", "nhl") == 0.07
 
     def test_idempotent_when_already_seeded(self):
         """Calling twice doesn't duplicate or overwrite factors."""
@@ -251,8 +304,8 @@ class TestEnsureNHLFactors:
         reg.ensure_competition_factors("nhl")
         reg.ensure_competition_factors("nhl")  # Second call
 
-        assert reg.get_weight("elo", "nhl") == 0.35
-        assert reg.get_weight("goalie", "nhl") == 0.15
+        assert reg.get_weight("elo", "nhl") == 0.30
+        assert reg.get_weight("goalie", "nhl") == 0.14
 
     def test_football_defaults_unchanged(self):
         """NHL seeding doesn't affect football global defaults."""
@@ -273,5 +326,6 @@ class TestEnsureNHLFactors:
         reg.ensure_competition_factors("nhl")
 
         # MLB factors unchanged
-        assert reg.get_weight("elo", "mlb") == 0.30
-        assert reg.get_weight("starting_pitcher", "mlb") == 0.25
+        assert reg.get_weight("elo", "mlb") == 0.26
+        assert reg.get_weight("starting_pitcher", "mlb") == 0.20
+        assert reg.get_weight("park", "mlb") == 0.07

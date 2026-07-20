@@ -524,6 +524,39 @@ def get_calibration(engine_name: str, competition: str) -> KernelCalibration | N
         session.close()
 
 
+
+def get_conditional_calibration_row(
+    engine_name: str,
+    competition: str,
+    confidence: float | None,
+) -> KernelCalibration | None:
+    """Prefer ``{competition}#c_{bucket}`` row when samples suffice (P1-V5)."""
+    from app.kernel.learning_service import (
+        confidence_bucket,
+        competition_with_bucket,
+    )
+    from app.core import config
+
+    session = get_kernel_session()
+    try:
+        bucket = confidence_bucket(confidence)
+        key = competition_with_bucket(competition, bucket)
+        min_n = max(5, getattr(config.settings, "MIN_SAMPLES_FOR_CALIBRATION", 20) // 2)
+        row = (
+            session.query(KernelCalibration)
+            .filter_by(engine=engine_name, competition=key)
+            .first()
+        )
+        if row is not None and int(row.sample_count or 0) >= min_n:
+            return row
+        return (
+            session.query(KernelCalibration)
+            .filter_by(engine=engine_name, competition=competition)
+            .first()
+        )
+    finally:
+        session.close()
+
 def get_match_ids_with_predictions(match_ids: list[str]) -> set[str]:
     """Batch query: return the subset of match_ids that have a prediction row.
 
@@ -787,18 +820,36 @@ def compute_reliability_bins(engine: str | None = None,
             bin_sums[bin_idx]["actual_sum"] += actual
             bin_sums[bin_idx]["count"] += 1
 
-        # Finalize bin values
+                # Finalize bin values + Expected Calibration Error (ECE)
+        total_n = 0
+        ece_acc = 0.0
         for i, bs in enumerate(bin_sums):
             if bs["count"] > 0:
-                bin_list[i]["avg_predicted"] = round(bs["predicted_sum"] / bs["count"], 4)
-                bin_list[i]["actual_frequency"] = round(bs["actual_sum"] / bs["count"], 4)
+                avg_p = bs["predicted_sum"] / bs["count"]
+                avg_a = bs["actual_sum"] / bs["count"]
+                bin_list[i]["avg_predicted"] = round(avg_p, 4)
+                bin_list[i]["actual_frequency"] = round(avg_a, 4)
                 bin_list[i]["count"] = bs["count"]
+                total_n += bs["count"]
+                ece_acc += bs["count"] * abs(avg_p - avg_a)
+
+        ece = round(ece_acc / total_n, 4) if total_n > 0 else None
+        # Max calibration error across non-empty bins
+        max_ce = None
+        for b in bin_list:
+            if b["count"] > 0 and b["avg_predicted"] is not None:
+                ce = abs(float(b["avg_predicted"]) - float(b["actual_frequency"]))
+                max_ce = ce if max_ce is None else max(max_ce, ce)
+        if max_ce is not None:
+            max_ce = round(max_ce, 4)
 
         return {
             "engine": engine,
             "competition": competition,
             "bins": bin_list,
-            "total_samples": len(rows),
+            "sample_count": total_n,
+            "ece": ece,
+            "max_calibration_error": max_ce,
         }
     except Exception as e:
         logger.warning("kernel_db query failed: %s", e, exc_info=True)

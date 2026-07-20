@@ -260,3 +260,57 @@ class TestPhase5NHLRegistration:
             from app.api.routes import predictions
             if hasattr(predictions._get_kernel, "_instance"):
                 delattr(predictions._get_kernel, "_instance")
+
+
+class TestConditionalCalibrationApply:
+    def test_apply_helper_renormalizes(self, kernel, monkeypatch):
+        from app.kernel.prediction_kernel import apply_conditional_calibration
+        from app.kernel.domain import ContributionItem
+
+        pred = PredictionResult(
+            predicted_scores={"home": 1.5, "away": 1.0},
+            outcome_probabilities={
+                "home_win": 0.50, "draw": 0.25, "away_win": 0.25,
+            },
+            confidence=0.8,
+            engine_name="elo_odds",
+            explanation=[],
+            betting_analysis=None,
+            feature_version="1.0",
+            prediction_timestamp=datetime(2026, 6, 13, tzinfo=timezone.utc),
+        )
+
+        def fake_cal(comp, eng, conf):
+            return {
+                "slope": 1.0,
+                "intercept": 0.10,
+                "sample_count": 50,
+                "bucket": "high",
+                "source": "confidence_bucket",
+            }
+
+        monkeypatch.setattr(
+            kernel._learning, "get_conditional_calibration", fake_cal,
+        )
+        out = apply_conditional_calibration(pred, "world_cup", kernel._learning)
+        assert abs(sum(out.outcome_probabilities.values()) - 1.0) < 1e-6
+        assert out.outcome_probabilities["home_win"] > pred.outcome_probabilities["home_win"]
+        assert out.betting_analysis["conditional_calibration"]["applied"] is True
+
+    def test_flag_off_by_default(self, kernel, monkeypatch):
+        import app.core.config as config_module
+        monkeypatch.setattr(
+            config_module.settings, "KERNEL_CONDITIONAL_CALIBRATION_ENABLED", False,
+        )
+        called = {"n": 0}
+
+        def boom(*a, **k):
+            called["n"] += 1
+            raise AssertionError("should not apply")
+
+        monkeypatch.setattr(
+            kernel._learning, "get_conditional_calibration", boom,
+        )
+        result = kernel.predict("m1", engine="auto")
+        assert called["n"] == 0
+        assert result.engine_name == "elo_odds"

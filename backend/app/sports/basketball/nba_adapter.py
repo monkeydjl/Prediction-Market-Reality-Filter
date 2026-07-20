@@ -268,8 +268,29 @@ class NBAAdapter:
                 "drtg_away": 110.5,
                 "tpct_home": 0.365,
                 "tpct_away": 0.342,
+                # P1-B2: rest_days <= 1 treated as back-to-back
+                "b2b_home": rest_home is not None and float(rest_home) <= 1.0,
+                "b2b_away": rest_away is not None and float(rest_away) <= 1.0,
             },
         }
+        try:
+            from app.sports._shared.team_geo import travel_between_teams
+
+            travel = travel_between_teams(home_name, away_name, "nba")
+            raw["custom"].update(travel)
+            if travel.get("travel_km_away") is not None:
+                raw["general"]["travel_distance_km"] = travel["travel_km_away"]
+        except Exception:  # noqa: BLE001
+            logger.debug("NBA travel enrich skipped", exc_info=True)
+        try:
+            from app.kernel.market_liquidity import inject_liquidity_into_custom
+
+            raw["custom"] = inject_liquidity_into_custom(
+                raw.get("custom") or {},
+                match.match_id,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("NBA liquidity enrich skipped", exc_info=True)
         return raw
 
     def _compute_form(self, team_name: str) -> float:

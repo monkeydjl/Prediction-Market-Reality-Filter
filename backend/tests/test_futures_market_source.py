@@ -110,14 +110,63 @@ def test_parse_kalshi_price_prefers_last_price():
 
 
 def test_kalshi_futures_series_prefixes_covers_sports():
-    # All 5 sports championships are mapped
+    # Baseline + expanded series (P2-SB5)
     assert "KXNBACHAMP" in _KALSHI_FUTURES_SERIES_PREFIXES
     assert "KXMLBCHAMP" in _KALSHI_FUTURES_SERIES_PREFIXES
     assert "KXNHLCHAMP" in _KALSHI_FUTURES_SERIES_PREFIXES
     assert "KXSOCCERWCS" in _KALSHI_FUTURES_SERIES_PREFIXES
     assert "KXSOCCERUCL" in _KALSHI_FUTURES_SERIES_PREFIXES
+    assert "KXNFLCHAMP" in _KALSHI_FUTURES_SERIES_PREFIXES
+    assert "KXEPLCHAMP" in _KALSHI_FUTURES_SERIES_PREFIXES
+    assert "KXNCAAMBCHAMP" in _KALSHI_FUTURES_SERIES_PREFIXES
     assert _KALSHI_FUTURES_SERIES_PREFIXES["KXNBACHAMP"] == ("nba", "championship")
     assert _KALSHI_FUTURES_SERIES_PREFIXES["KXMLBCHAMP"] == ("mlb", "world_series")
     assert _KALSHI_FUTURES_SERIES_PREFIXES["KXNHLCHAMP"] == ("nhl", "stanley_cup")
     assert _KALSHI_FUTURES_SERIES_PREFIXES["KXSOCCERWCS"] == ("wc", "world_cup")
     assert _KALSHI_FUTURES_SERIES_PREFIXES["KXSOCCERUCL"] == ("ucl", "champions_league")
+    assert _KALSHI_FUTURES_SERIES_PREFIXES["KXNFLCHAMP"] == ("nfl", "super_bowl")
+
+
+def test_match_futures_series_longest_prefix():
+    assert match_futures_series("KXNBACHAMP") == ("nba", "championship")
+    assert match_futures_series("KXNBACHAMP-2025") == ("nba", "championship")
+    assert match_futures_series("KXSUPERBOWL") == ("nfl", "super_bowl")
+    assert match_futures_series("KXPRES") is None
+
+
+def test_list_known_futures_series_nonempty():
+    series = list_known_futures_series()
+    assert len(series) >= 8
+    prefixes = {s["series_prefix"] for s in series}
+    assert "KXNBACHAMP" in prefixes
+    assert "KXNFLCHAMP" in prefixes
+
+
+def test_multi_leg_integrity_ok_book():
+    contracts = [
+        {"team": "LAL", "price": 0.22},
+        {"team": "BOS", "price": 0.20},
+        {"team": "DEN", "price": 0.18},
+        {"team": "OKC", "price": 0.45},
+    ]
+    result = multi_leg_integrity(contracts)
+    assert result["status"] == "ok"
+    assert result["leg_count"] == 4
+    assert result["sum_implied_prob"] == pytest.approx(1.05, abs=0.01)
+    assert result["issues"] == []
+
+
+def test_multi_leg_integrity_flags_incomplete_and_dupes():
+    thin = multi_leg_integrity([{"team": "LAL", "price": 0.2}])
+    assert thin["status"] == "incomplete"
+    assert "too_few_legs" in thin["issues"]
+
+    dupes = multi_leg_integrity(
+        [
+            {"team": "LAL", "price": 0.3},
+            {"team": "LAL", "price": 0.25},
+            {"team": "BOS", "price": 0.4},
+        ]
+    )
+    assert "duplicate_teams" in dupes["issues"]
+    assert "LAL" in dupes["duplicate_teams"]

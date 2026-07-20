@@ -141,6 +141,16 @@ class ParameterOptimizer:
             "trials": len(study.trials),
             "sport": sport,
             "saved_candidate": saved,
+            # Backtest metrics for UI (P3-FE8) — same fields as saved candidate
+            "accuracy": best_result.accuracy if best_result is not None else None,
+            "brier_score": best_result.brier_score if best_result is not None else None,
+            "mae": best_result.mae if best_result is not None else None,
+            "sample_count": best_result.sample_count if best_result is not None else None,
+            "train_count": len(train_matches),
+            "test_count": len(test_matches),
+            "factor_weights": factor_weights,
+            "elo_params": elo_params,
+            "score_formula": "0.5*accuracy + 0.3*(1-brier) + 0.2*(1-mae)",
         }
 
     def _sample_factor_weights(self, trial: optuna.Trial, sport: str) -> dict[str, float]:

@@ -125,7 +125,312 @@ def fetch_elo_and_odds(
     elif isinstance(odds, BaseException):
         logger.warning("Odds fetch failed: %s", odds)
 
+    # Situational factors (form / h2h / rest / xG proxy) — best-effort only.
+    # Enables multi-factor / Dixon-Coles engines without requiring a second
+    # adapter pass. Failures leave fields empty (engines redistribute weights).
+    enrich_situational_features(raw, match)
+    enrich_referee_features(raw, match)
+
+    # Soft possession/shots proxy (P1-F6) when true stats unavailable:
+    # map form share → possession share so multi-factor soft path is non-null.
+    try:
+        custom = raw.setdefault("custom", {})
+        if custom.get("possession_home") is None and custom.get("shots_home") is None:
+            fh = raw.get("team", {}).get("form_home")
+            fa = raw.get("team", {}).get("form_away")
+            if fh is not None and fa is not None:
+                fh_f, fa_f = float(fh), float(fa)
+                total = fh_f + fa_f
+                if total > 0:
+                    share = fh_f / total
+                    custom["possession_home"] = round(100.0 * share, 1)
+                    custom["possession_away"] = round(100.0 * (1.0 - share), 1)
+                    custom["possession_proxy"] = "form_share"
+    except Exception:  # noqa: BLE001
+        logger.debug("possession proxy skipped", exc_info=True)
+
+    # P1-F7: altitude pass-through when present on fixture/environment
+    try:
+        env = raw.setdefault("environment", {})
+        custom = raw.setdefault("custom", {})
+        alt = (
+            custom.get("venue_altitude_m")
+            or custom.get("altitude_m")
+            or env.get("altitude_m")
+            or env.get("venue_altitude_m")
+        )
+        if alt is not None:
+            custom["venue_altitude_m"] = float(alt)
+    except Exception:  # noqa: BLE001
+        logger.debug("altitude enrich skipped", exc_info=True)
+
+    # P1-F7: coarse national-team travel when both sides resolve (clubs stay empty)
+    try:
+        from app.sports._shared.team_geo import travel_between_teams
+
+        travel = travel_between_teams(
+            match.home.name,
+            match.away.name,
+            match.season.competition.code or "football",
+        )
+        if travel.get("travel_known"):
+            raw.setdefault("general", {})
+            raw["general"]["travel_distance_km"] = travel.get("travel_km_away")
+            raw.setdefault("custom", {})
+            raw["custom"].update(travel)
+    except Exception:  # noqa: BLE001
+        logger.debug("football travel enrich skipped", exc_info=True)
+
+    # Prediction-market liquidity + multi-book dispersion (P1-E4 / P1-O2).
+    try:
+        from app.kernel.market_liquidity import (
+            inject_liquidity_into_custom,
+            inject_odds_dispersion_from_store,
+        )
+
+        custom = inject_liquidity_into_custom(
+            raw.get("custom") or {},
+            match.match_id,
+        )
+        raw["custom"] = inject_odds_dispersion_from_store(custom, match.match_id)
+    except Exception:  # noqa: BLE001
+        logger.debug("liquidity/dispersion enrich skipped", exc_info=True)
+
+    # World Cup group motivation when match_id is a WC fixture (best-effort).
+    if match.match_id.startswith("wc-") or match.season.competition.code in {
+        "wc", "world_cup",
+    }:
+        try:
+            from app.kernel.engines.group_context_bridge import (
+                group_context_to_custom,
+                merge_custom,
+            )
+            from app.models.world_cup_prediction import MatchFixture
+            from app.services.world_cup_group_context import build_group_context
+            from app.utils.prediction_db import get_prediction_session
+
+            session = None
+            try:
+                session = get_prediction_session()
+                fixture = session.get(MatchFixture, match.match_id)
+                if fixture is not None:
+                    gc = build_group_context(fixture, session)
+                    raw["custom"] = merge_custom(
+                        raw.get("custom") or {},
+                        group_context_to_custom(gc),
+                    )
+            finally:
+                if session is not None:
+                    session.close()
+        except Exception:  # noqa: BLE001
+            logger.debug("group_context enrich skipped", exc_info=True)
+
     return raw
+
+
+
+
+# Optional static referee home-bias map (name lower → bias in [-0.25, 0.25]).
+# Empty by default; operators / scrapers can populate via custom without code.
+_REFEREE_HOME_BIAS: dict[str, float] = {}
+
+
+def enrich_referee_features(raw: dict, match: MatchIdentity) -> None:
+    """Pass-through / soft-fill referee custom fields for multi-factor (P1-F8).
+
+    Sources (first wins for rate/bias):
+    1. Already-set ``custom.referee_home_win_rate`` / ``referee_home_bias``
+    2. ``environment.referee`` name + optional ``_REFEREE_HOME_BIAS`` map
+    3. ``custom.referee_name`` + same map
+
+    Never invents rates without a name or explicit numeric field.
+    """
+    custom = raw.setdefault("custom", {})
+    env = raw.get("environment") or {}
+    if env.get("referee") and not custom.get("referee_name"):
+        custom["referee_name"] = str(env["referee"]).strip()
+
+    if (
+        custom.get("referee_home_win_rate") is not None
+        or custom.get("referee_home_bias") is not None
+    ):
+        return
+
+    name = custom.get("referee_name") or env.get("referee")
+    if not name:
+        return
+    key = str(name).lower().strip()
+    bias = _REFEREE_HOME_BIAS.get(key)
+    if bias is None:
+        # leave name only — engine treats missing rate as unavailable
+        custom["referee_name"] = str(name).strip()
+        return
+    try:
+        b = max(-0.25, min(0.25, float(bias)))
+    except (TypeError, ValueError):
+        return
+    custom["referee_name"] = str(name).strip()
+    custom["referee_home_bias"] = b
+    custom["referee_source"] = "static_map"
+
+def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
+    """Mutate ``raw`` with form, h2h, rest days, and custom xG proxies.
+
+    Uses international historical CSV when available (best for national teams /
+    World Cup). Club competitions may still get partial data when team names
+    match the dataset; otherwise fields stay unset.
+    """
+    before = match.kickoff_utc
+    home_name = match.home.name
+    away_name = match.away.name
+    competition = (match.season.competition.code or "").lower()
+    is_world_cup = competition in {"wc", "world_cup"}
+
+    try:
+        from app.services.world_cup_historical_results import (
+            get_historical_h2h,
+            get_historical_team_stats,
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("Historical results module unavailable", exc_info=True)
+        get_historical_team_stats = None  # type: ignore[assignment]
+        get_historical_h2h = None  # type: ignore[assignment]
+
+    home_stats = None
+    away_stats = None
+    if get_historical_team_stats is not None:
+        try:
+            home_stats = get_historical_team_stats(home_name, before_date=before)
+            away_stats = get_historical_team_stats(away_name, before_date=before)
+        except Exception:  # noqa: BLE001
+            logger.debug("Team stats enrichment failed", exc_info=True)
+
+    # Club competitions: fall back to kernel fixtures when CSV has no team row
+    if not is_world_cup and (home_stats is None or away_stats is None):
+        try:
+            from app.sports.football.club_form import team_form_from_kernel
+            if home_stats is None:
+                home_stats = team_form_from_kernel(
+                    home_name, competition=competition, before=before,
+                )
+            if away_stats is None:
+                away_stats = team_form_from_kernel(
+                    away_name, competition=competition, before=before,
+                )
+        except Exception:  # noqa: BLE001
+            logger.debug("Club form enrichment failed", exc_info=True)
+
+    if home_stats:
+        played = max(int(home_stats.get("played") or 0), 1)
+        wins = int(home_stats.get("wins") or 0)
+        raw["team"]["form_home"] = round(wins / played, 4)
+        last = home_stats.get("last_match_date")
+        rest = _days_since(last, before)
+        if rest is not None:
+            raw["general"]["rest_days_home"] = rest
+            raw["general"]["days_since_last_match"] = rest
+        gpg = home_stats.get("goals_per_game")
+        if gpg is not None:
+            raw.setdefault("custom", {})["xg_home"] = float(gpg)
+
+    if away_stats:
+        played = max(int(away_stats.get("played") or 0), 1)
+        wins = int(away_stats.get("wins") or 0)
+        raw["team"]["form_away"] = round(wins / played, 4)
+        last = away_stats.get("last_match_date")
+        rest = _days_since(last, before)
+        if rest is not None:
+            raw["general"]["rest_days_away"] = rest
+        gpg = away_stats.get("goals_per_game")
+        if gpg is not None:
+            raw.setdefault("custom", {})["xg_away"] = float(gpg)
+
+    if get_historical_h2h is not None:
+        try:
+            h2h = get_historical_h2h(home_name, away_name, before_date=before)
+        except Exception:  # noqa: BLE001
+            h2h = None
+            logger.debug("H2H enrichment failed", exc_info=True)
+        if h2h:
+            played = max(int(h2h.get("matches_played") or 0), 1)
+            raw["team"]["h2h_home_win_rate"] = round(
+                int(h2h.get("home_wins") or 0) / played, 4,
+            )
+            raw["team"]["h2h_draw_rate"] = round(
+                int(h2h.get("draws") or 0) / played, 4,
+            )
+
+    # Market value: cache-only Transfermarkt (no scrape on predict path)
+    try:
+        from app.services.transfermarkt_scraper import get_cached_market_value
+
+        for side, name in (("home", home_name), ("away", away_name)):
+            cached = get_cached_market_value(name, ttl_days=14)
+            if not cached:
+                continue
+            total = cached.get("total_market_value")
+            if total is None:
+                continue
+            # Store millions EUR on team layer; multi-factor engine reads it.
+            raw["team"][f"market_value_{side}"] = float(total)
+            raw.setdefault("custom", {})[f"market_value_{side}"] = float(total)
+    except Exception:  # noqa: BLE001
+        logger.debug("market value enrich skipped", exc_info=True)
+
+    # P1-F2: schedule density flags (football midweek = rest <= 2 is congested)
+    try:
+        custom = raw.setdefault("custom", {})
+        rh = raw.get("general", {}).get("rest_days_home")
+        ra = raw.get("general", {}).get("rest_days_away")
+        if rh is not None:
+            rh_f = float(rh)
+            custom["b2b_home"] = rh_f <= 1.0
+            custom["schedule_congested_home"] = rh_f <= 2.0
+        if ra is not None:
+            ra_f = float(ra)
+            custom["b2b_away"] = ra_f <= 1.0
+            custom["schedule_congested_away"] = ra_f <= 2.0
+    except Exception:  # noqa: BLE001
+        logger.debug("schedule density flags skipped", exc_info=True)
+
+    # Injury: optional world-cup player status (no-op if unavailable)
+    try:
+        from app.services.world_cup_player_status_source import (
+            get_team_injury_impact,
+        )
+        inj_h = get_team_injury_impact(home_name)
+        inj_a = get_team_injury_impact(away_name)
+        if inj_h is not None:
+            raw["player"]["injury_impact_home"] = float(inj_h)
+        if inj_a is not None:
+            raw["player"]["injury_impact_away"] = float(inj_a)
+    except Exception:  # noqa: BLE001
+        # Function may not exist — leave injury empty
+        pass
+
+    raw["environment"]["is_home_advantage"] = not is_world_cup
+    if is_world_cup:
+        raw["environment"]["venue"] = raw["environment"].get("venue") or "neutral"
+
+
+def _days_since(
+    last_match_date: Any,
+    kickoff: datetime | None,
+) -> float | None:
+    if not last_match_date or kickoff is None:
+        return None
+    try:
+        if isinstance(last_match_date, str):
+            last = datetime.fromisoformat(last_match_date).date()
+        elif hasattr(last_match_date, "date"):
+            last = last_match_date.date()  # type: ignore[union-attr]
+        else:
+            last = last_match_date  # type: ignore[assignment]
+        kd = kickoff.date() if isinstance(kickoff, datetime) else kickoff
+        delta = (kd - last).days  # type: ignore[operator]
+        return float(max(0, min(delta, 60)))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def query_fixture(match_id: str, model_cls) -> Any | None:

@@ -14,6 +14,7 @@ Unknown prefixes fall back to the default builder (first registered).
 from __future__ import annotations
 
 from app.kernel.domain import SportIdentity, MatchIdentity, FeatureSet
+from app.kernel.market_liquidity import enrich_feature_set_liquidity
 
 
 class MultiFeatureBuilder:
@@ -41,4 +42,6 @@ class MultiFeatureBuilder:
         return self._default.sport()
 
     def build(self, match: MatchIdentity, raw: dict) -> FeatureSet:
-        return self._select(match.match_id).build(match, raw)
+        features = self._select(match.match_id).build(match, raw)
+        # P1-E4 feed: attach prediction-market liquidity when linked
+        return enrich_feature_set_liquidity(features)

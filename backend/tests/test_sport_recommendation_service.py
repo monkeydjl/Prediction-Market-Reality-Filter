@@ -323,3 +323,9 @@ def test_get_open_decisions_deduplicates_by_match(service):
     recs = service.get_open_decisions(limit=10)
     match_count = sum(1 for r in recs if r.match_id == "m11")
     assert match_count == 1
+
+
+def test_disagreement_diagnosis_large_gap():
+    from app.kernel.sport_recommendation_service import _build_disagreement_diagnosis
+    d = _build_disagreement_diagnosis(0.7, 0.5, 0.75, 0.8, False)
+    assert d and "模型偏高" in d

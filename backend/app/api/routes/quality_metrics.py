@@ -319,40 +319,57 @@ async def quality_metrics_anomalies() -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("brier anomaly check failed: %s", exc)
 
-    # Per-event overlay anomalies
-    wide_spread_not_downgraded = 0
-    degraded_events = 0
+    # Per-event overlay anomalies (collect sample event_ids for operator jump links)
+    wide_spread_ids: list[str] = []
+    degraded_ids: list[str] = []
     for entry in list_all_events():
         record = entry.get("record") or {}
+        eid = str(entry.get("event_id") or record.get("event_id") or "")
         mq = record.get("market_quality")
         if isinstance(mq, dict) and mq.get("wide_spread_flag"):
             final_dir = record.get("final_displayed_direction")
-            if final_dir in ("YES", "NO"):
-                wide_spread_not_downgraded += 1
+            if final_dir in ("YES", "NO") and eid:
+                wide_spread_ids.append(eid)
         lt = record.get("llm_telemetry")
-        if isinstance(lt, dict) and lt.get("degraded_mode"):
-            degraded_events += 1
+        if isinstance(lt, dict) and lt.get("degraded_mode") and eid:
+            degraded_ids.append(eid)
 
-    if wide_spread_not_downgraded:
+    if wide_spread_ids:
         anomalies.append({
             "code": "wide_spread_not_downgraded",
             "severity": "medium",
+            "event_ids": wide_spread_ids[:8],
+            "href": "/history",
             "detail": {
-                "count": wide_spread_not_downgraded,
+                "count": len(wide_spread_ids),
+                "event_ids": wide_spread_ids[:8],
                 "note": "Events with market_quality.wide_spread_flag=True but "
                         "final_displayed_direction is YES/NO (should be WAIT/AVOID).",
             },
         })
 
-    if degraded_events:
+    if degraded_ids:
         anomalies.append({
             "code": "llm_degraded_mode_events",
             "severity": "low",
+            "event_ids": degraded_ids[:8],
+            "href": "/history",
             "detail": {
-                "count": degraded_events,
+                "count": len(degraded_ids),
+                "event_ids": degraded_ids[:8],
                 "note": "Events whose llm_telemetry.degraded_mode=True.",
             },
         })
+
+    # Navigation hints for aggregate anomalies (no single event)
+    for a in anomalies:
+        if a.get("href"):
+            continue
+        code = a.get("code")
+        if code == "calibration_brier_high":
+            a["href"] = "/history"
+        elif str(code or "").startswith("scheduler"):
+            a["href"] = "/quality"
 
     return {
         "count": len(anomalies),

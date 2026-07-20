@@ -97,7 +97,28 @@ def test_apply_is_idempotent(store):
     store.apply(saved["id"])
     # Applying again should not error
     result = store.apply(saved["id"])
-    assert result["status"] == "applied"
+    assert result["applied"]["status"] == "applied"
+
+
+def test_apply_returns_weight_diff_vs_previous(store):
+    first = store.save_candidate(
+        sport="nba", competition="nba",
+        factor_weights={"elo": 0.40, "form": 0.20}, elo_params={"hfa": 90},
+        score=0.70, accuracy=0.65, brier_score=0.22, mae=0.35, sample_count=100,
+    )
+    store.apply(first["id"])
+    second = store.save_candidate(
+        sport="nba", competition="nba",
+        factor_weights={"elo": 0.50, "form": 0.15}, elo_params={"hfa": 110},
+        score=0.75, accuracy=0.70, brier_score=0.20, mae=0.30, sample_count=100,
+    )
+    result = store.apply(second["id"])
+    assert result["previous_applied"]["id"] == first["id"]
+    by_factor = {d["factor"]: d for d in result["weight_diff"]}
+    assert by_factor["elo"]["before"] == 0.40
+    assert by_factor["elo"]["after"] == 0.50
+    assert by_factor["form"]["before"] == 0.20
+    assert by_factor["form"]["after"] == 0.15
 
 
 def test_apply_updates_factor_registry(store):

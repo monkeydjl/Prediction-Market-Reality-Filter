@@ -63,14 +63,38 @@ def test_run_optimization_returns_task_id(client, monkeypatch, auth_headers):
     from app.core.config import settings
     monkeypatch.setattr(settings, "PHASE9_ACCURACY_SPRINT_ENABLED", True)
 
-    resp = client.post(
-        "/api/sport-optimization/run",
-        json={"sport": "nba", "n_trials": 5},
-        headers=auth_headers,
-    )
+    # Avoid spinning real Optuna / DB work in the background task.
+    import asyncio
+    from unittest.mock import patch
+
+    def _noop_create_task(coro, *args, **kwargs):
+        if asyncio.iscoroutine(coro):
+            coro.close()
+        return None
+
+    with patch("asyncio.create_task", side_effect=_noop_create_task):
+        resp = client.post(
+            "/api/sport-optimization/run",
+            json={"sport": "nba", "n_trials": 5},
+            headers=auth_headers,
+        )
     assert resp.status_code == 200
     data = resp.json()
     assert "task_id" in data
+    assert data["sports"] == ["nba"]
+    assert data["n_trials"] == 5
+
+
+def test_run_optimization_rejects_unknown_sport(client, monkeypatch, auth_headers):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "PHASE9_ACCURACY_SPRINT_ENABLED", True)
+
+    resp = client.post(
+        "/api/sport-optimization/run",
+        json={"sport": "cricket", "n_trials": 5},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
 
 
 def test_get_params_returns_404_when_none(client, monkeypatch):

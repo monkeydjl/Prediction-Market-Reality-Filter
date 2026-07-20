@@ -233,3 +233,50 @@ class SportMarketLinkStore:
             return []
         finally:
             session.close()
+
+    def auto_verify_high_confidence(
+        self,
+        *,
+        min_confidence: float = 0.95,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Auto-verify pending links with confidence >= threshold (P1-V2).
+
+        Fail-closed default: only promotes already-persisted high-confidence
+        pending rows; does not invent links. Returns counts + ids.
+        """
+        pending = self.get_pending_links()
+        candidates: list[dict[str, Any]] = []
+        for link in pending:
+            try:
+                conf = float(link.get("link_confidence") or 0.0)
+            except (TypeError, ValueError):
+                conf = 0.0
+            if conf >= float(min_confidence):
+                candidates.append(link)
+
+        verified_ids: list[int] = []
+        if not dry_run:
+            for link in candidates:
+                lid = link.get("id")
+                if lid is None:
+                    continue
+                ok = self.set_verified(link_id=int(lid), verified=True)
+                if ok:
+                    verified_ids.append(int(lid))
+        else:
+            verified_ids = [
+                int(l["id"]) for l in candidates if l.get("id") is not None
+            ]
+
+        return {
+            "pending_total": len(pending),
+            "candidates": len(candidates),
+            "auto_verified": 0 if dry_run else len(verified_ids),
+            "would_verify": len(verified_ids) if dry_run else len(verified_ids),
+            "threshold": float(min_confidence),
+            "dry_run": dry_run,
+            "link_ids": verified_ids,
+        }
+
+

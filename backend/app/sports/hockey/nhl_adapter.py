@@ -275,6 +275,14 @@ class NHLAdapter:
         home_g = goalies.get("home", {})
         away_g = goalies.get("away", {})
 
+        # Soft attack proxies until true 5v5 xG/corsi feed lands (P1-H1).
+        form_h = form_home if form_home is not None else 0.5
+        form_a = form_away if form_away is not None else 0.5
+        gf_home = round(2.9 + (float(form_h) - 0.5) * 1.2, 3)
+        gf_away = round(2.9 + (float(form_a) - 0.5) * 1.2, 3)
+        ga_home = round(3.1 - (float(form_h) - 0.5) * 0.8, 3)
+        ga_away = round(3.1 - (float(form_a) - 0.5) * 0.8, 3)
+
         raw: dict = {
             "team": {
                 "elo_home": elo_home,
@@ -299,14 +307,40 @@ class NHLAdapter:
             "custom": {
                 "goalie_save_pct_home": home_g.get("save_pct"),
                 "goalie_save_pct_away": away_g.get("save_pct"),
-                "team_gf_home": 3.20, "team_gf_away": 3.00,
-                "team_ga_home": 2.90, "team_ga_away": 3.10,
-                "corsi_pct_home": None, "corsi_pct_away": None,
-                "pdo_home": None, "pdo_away": None,
+                "team_gf_home": gf_home,
+                "team_gf_away": gf_away,
+                "team_ga_home": ga_home,
+                "team_ga_away": ga_away,
+                "xg_for_home": gf_home,
+                "xg_for_away": gf_away,
+                "corsi_pct_home": None,
+                "corsi_pct_away": None,
+                "pdo_home": None,
+                "pdo_away": None,
                 "went_to_overtime": False,
                 "went_to_shootout": False,
+                "b2b_home": rest_home is not None and float(rest_home) <= 1.0,
+                "b2b_away": rest_away is not None and float(rest_away) <= 1.0,
             },
         }
+        try:
+            from app.sports._shared.team_geo import travel_between_teams
+
+            travel = travel_between_teams(home_name, away_name, "nhl")
+            raw["custom"].update(travel)
+            if travel.get("travel_km_away") is not None:
+                raw["general"]["travel_distance_km"] = travel["travel_km_away"]
+        except Exception:  # noqa: BLE001
+            logger.debug("NHL travel enrich skipped", exc_info=True)
+        try:
+            from app.kernel.market_liquidity import inject_liquidity_into_custom
+
+            raw["custom"] = inject_liquidity_into_custom(
+                raw.get("custom") or {},
+                match.match_id,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("NHL liquidity enrich skipped", exc_info=True)
         return raw
 
     def _compute_form(self, team_name: str) -> float:

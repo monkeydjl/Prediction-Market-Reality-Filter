@@ -40,6 +40,16 @@ def test_optimize_converges_with_mock_backtest():
     assert "elo" in saved_kwargs["factor_weights"]
     assert saved_kwargs["trial_number"] is not None
     assert result["saved_candidate"] == {"id": 42, "status": "candidate"}
+    # P3-FE8: metrics for UI visualization
+    assert result["accuracy"] is not None
+    assert result["brier_score"] == pytest.approx(0.25)
+    assert result["mae"] == pytest.approx(0.35)
+    assert result["sample_count"] == 10
+    assert result["train_count"] == 0
+    assert result["test_count"] == 0
+    assert isinstance(result["factor_weights"], dict)
+    assert "elo" in result["factor_weights"]
+    assert "score_formula" in result
 
 
 def test_search_space_weights_sum_to_one():

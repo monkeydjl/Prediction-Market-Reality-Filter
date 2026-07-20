@@ -16,9 +16,15 @@ export default async function BettingCompetitionPage({ params }: PageProps) {
     notFound();
   }
 
-  const kernelListHref = competition.kernelSport
-    ? `/sports?sport=${encodeURIComponent(competition.kernelSport)}`
-    : "/sports";
+  const kernelListHref = (() => {
+    const params = new URLSearchParams();
+    if (competition.kernelSport) params.set("sport", competition.kernelSport);
+    if (competition.competitionCode) {
+      params.set("competition", competition.competitionCode);
+    }
+    const qs = params.toString();
+    return qs ? `/sports?${qs}` : "/sports";
+  })();
 
   return (
     <main className="mx-auto max-w-3xl space-y-6 px-4 py-6 md:px-6">

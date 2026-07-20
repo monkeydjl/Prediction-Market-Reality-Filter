@@ -27,6 +27,7 @@
 
 ## Development
 - [**可做项 / 优化全量清单（2026-07-17）**](dev/OPPORTUNITY_BACKLOG_2026-07-17.md) — 安全、引擎因子、精度、前端、工程债务与路线图
+- [Esports boundary](dev/ESPORTS_BOUNDARY.md) — 电竞赛道占位边界（无假盘口 / 接入前置条件）
 - [V2 Roadmap](user/V2_ROADMAP.md)
 - [V2 Refactor Plan](user/V2_REFACTOR_PLAN.md)
 - [Integration Test Report](dev/INTEGRATION_TEST_REPORT.md)

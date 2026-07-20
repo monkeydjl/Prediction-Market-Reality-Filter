@@ -8,7 +8,15 @@ export {
   useEngines,
   useEnginesMeta,
 } from "./hooks/use-matches";
-export type { EnginesMeta } from "./hooks/use-matches";
+export type { EnginesMeta, MatchListFilters } from "./hooks/use-matches";
+export {
+  useBettingCatalog,
+} from "./hooks/use-betting-catalog";
+export type {
+  BettingCatalog,
+  BettingCatalogCompetition,
+  BettingCatalogTool,
+} from "./hooks/use-betting-catalog";
 export {
   useEngineScores,
   usePredictionHistory,

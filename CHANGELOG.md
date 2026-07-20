@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### 竞猜 competition 过滤 + catalog API
+- `GET /api/predictions/matches?competition=` (+ aliases: pl→epl, wc→world_cup, serie-a→serie_a)
+- `GET /api/betting/catalog` and `/catalog/{id}` from `kernel/betting_catalog.py`
+- FE: `useMatches({ sport, competition })`, Kernel list `?competition=` chip, landing/kernel links
+- `docs/dev/ESPORTS_BOUNDARY.md` — no fake esports markets until data sources exist
+
+
 ### 竞猜模块 IA 起步
 - `lib/betting/competition-catalog.ts`: static catalog (world cup, big-five aliases, NBA/MLB/NHL, esports placeholder, tool links)
 - `/sports/betting` hub: sectioned cards + dual-track note

@@ -22,6 +22,7 @@ CHECKS: list[tuple[str, str, str | None]] = [
     ("/api/health", "GET", None),
     ("/metrics", "GET", None),
     ("/api/predictions/engines", "GET", "KERNEL_PREDICTION_ENABLED"),
+    ("/api/betting/catalog", "GET", None),
     ("/api/sport-edges/discrepancies?limit=5", "GET", "PHASE7_EDGE_DETECTOR_ENABLED"),
     (
         "/api/sport-recommendations/open?limit=5",

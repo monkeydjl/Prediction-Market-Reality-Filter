@@ -8,9 +8,21 @@ import type { MatchSummary, MatchDetail, PredictionResult } from "../types";
 
 type MatchDetailResponse = { match: MatchDetail; prediction: PredictionResult | null };
 
-export function useMatches(sport?: string) {
-  const params = sport ? `?sport=${sport}` : "";
-  const key = `${getApiBase()}/predictions/matches${params}`;
+export type MatchListFilters = {
+  sport?: string | null;
+  competition?: string | null;
+};
+
+export function useMatches(sportOrFilters?: string | MatchListFilters | null) {
+  const filters: MatchListFilters =
+    typeof sportOrFilters === "string" || sportOrFilters == null
+      ? { sport: sportOrFilters ?? undefined }
+      : sportOrFilters;
+  const params = new URLSearchParams();
+  if (filters.sport) params.set("sport", filters.sport);
+  if (filters.competition) params.set("competition", filters.competition);
+  const qs = params.toString() ? `?${params.toString()}` : "";
+  const key = `${getApiBase()}/predictions/matches${qs}`;
   return useSWR<MatchSummary[]>(key);
 }
 

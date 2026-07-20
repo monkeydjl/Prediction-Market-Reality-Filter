@@ -14,20 +14,31 @@ export default function SportsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const sportParam = searchParams.get("sport");
+  const competitionParam = searchParams.get("competition");
   const sport = useMemo(() => {
     if (sportParam && SPORT_CODES.has(sportParam)) return sportParam;
     return null;
   }, [sportParam]);
+  const competition = useMemo(() => {
+    const c = competitionParam?.trim();
+    return c ? c : null;
+  }, [competitionParam]);
 
   const setSport = useCallback(
     (next: string | null) => {
-      const qs = next ? `?sport=${encodeURIComponent(next)}` : "";
+      const params = new URLSearchParams();
+      if (next) params.set("sport", next);
+      // Drop competition when user changes sport filter (avoids empty combo).
+      const qs = params.toString() ? `?${params.toString()}` : "";
       router.replace(`/sports${qs}`, { scroll: false });
     },
     [router],
   );
 
-  const { data, error, isLoading, mutate } = useMatches(sport ?? undefined);
+  const { data, error, isLoading, mutate } = useMatches({
+    sport,
+    competition,
+  });
   const matches = data ?? [];
 
   const errorMessage = error
@@ -54,6 +65,36 @@ export default function SportsPage() {
       </div>
 
       <SportTrackBanner track="kernel" />
+
+      {competition ? (
+        <p
+          className="text-xs text-muted-foreground"
+          data-testid="competition-filter-hint"
+        >
+          联赛过滤：
+          <code className="rounded bg-muted px-1">{competition}</code>
+          {" · "}
+          <button
+            type="button"
+            className="text-primary underline underline-offset-2"
+            onClick={() => {
+              const params = new URLSearchParams();
+              if (sport) params.set("sport", sport);
+              const qs = params.toString() ? `?${params.toString()}` : "";
+              router.replace(`/sports${qs}`, { scroll: false });
+            }}
+          >
+            清除联赛
+          </button>
+          {" · "}
+          <Link
+            href="/sports/betting"
+            className="text-primary underline underline-offset-2"
+          >
+            竞猜中心
+          </Link>
+        </p>
+      ) : null}
 
       <SportFilter value={sport} onChange={setSport} />
 

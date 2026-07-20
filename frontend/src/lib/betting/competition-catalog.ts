@@ -28,6 +28,11 @@ export type BettingCompetition = {
   href: string;
   /** Kernel sport filter code when track === kernel. */
   kernelSport?: string;
+  /**
+   * Kernel competition code for GET /api/predictions/matches?competition=
+   * (aliases like serie-a → serie_a are normalized server-side).
+   */
+  competitionCode?: string;
   track: CompetitionTrack;
   section: CompetitionSection;
 };
@@ -50,6 +55,7 @@ export const BETTING_COMPETITIONS: BettingCompetition[] = [
     description: "赛程、分组出线、淘汰赛树与夺冠概率（专题 API，非 Kernel 流水线）",
     status: "live",
     href: "/sports/world-cup",
+    competitionCode: "world_cup",
     track: "world_cup",
     section: "football",
   },
@@ -72,8 +78,9 @@ export const BETTING_COMPETITIONS: BettingCompetition[] = [
     shortLabel: "英超",
     description: "英格兰足球超级联赛 — 走 Kernel 足球路径；独立数据源完善中",
     status: "kernel",
-    href: "/sports?sport=football",
+    href: "/sports?sport=football&competition=epl",
     kernelSport: "football",
+    competitionCode: "epl",
     track: "kernel",
     section: "football",
   },
@@ -84,8 +91,9 @@ export const BETTING_COMPETITIONS: BettingCompetition[] = [
     shortLabel: "西甲",
     description: "西班牙甲级联赛 — Kernel 足球路径",
     status: "kernel",
-    href: "/sports?sport=football",
+    href: "/sports?sport=football&competition=laliga",
     kernelSport: "football",
+    competitionCode: "laliga",
     track: "kernel",
     section: "football",
   },
@@ -96,8 +104,9 @@ export const BETTING_COMPETITIONS: BettingCompetition[] = [
     shortLabel: "德甲",
     description: "德国足球甲级联赛 — Kernel 足球路径",
     status: "kernel",
-    href: "/sports?sport=football",
+    href: "/sports?sport=football&competition=bundesliga",
     kernelSport: "football",
+    competitionCode: "bundesliga",
     track: "kernel",
     section: "football",
   },
@@ -108,8 +117,9 @@ export const BETTING_COMPETITIONS: BettingCompetition[] = [
     shortLabel: "意甲",
     description: "意大利甲级联赛 — Kernel 足球路径",
     status: "kernel",
-    href: "/sports?sport=football",
+    href: "/sports?sport=football&competition=serie_a",
     kernelSport: "football",
+    competitionCode: "serie_a",
     track: "kernel",
     section: "football",
   },
@@ -120,8 +130,9 @@ export const BETTING_COMPETITIONS: BettingCompetition[] = [
     shortLabel: "法甲",
     description: "法国足球甲级联赛 — Kernel 足球路径",
     status: "kernel",
-    href: "/sports?sport=football",
+    href: "/sports?sport=football&competition=ligue_1",
     kernelSport: "football",
+    competitionCode: "ligue_1",
     track: "kernel",
     section: "football",
   },
@@ -132,8 +143,9 @@ export const BETTING_COMPETITIONS: BettingCompetition[] = [
     shortLabel: "NBA",
     description: "北美职业篮球 — Kernel 篮球引擎与赛程",
     status: "kernel",
-    href: "/sports?sport=basketball",
+    href: "/sports?sport=basketball&competition=nba",
     kernelSport: "basketball",
+    competitionCode: "nba",
     track: "kernel",
     section: "americas",
   },
@@ -144,8 +156,9 @@ export const BETTING_COMPETITIONS: BettingCompetition[] = [
     shortLabel: "MLB",
     description: "美国职业棒球大联盟 — Kernel 棒球引擎",
     status: "kernel",
-    href: "/sports?sport=baseball",
+    href: "/sports?sport=baseball&competition=mlb",
     kernelSport: "baseball",
+    competitionCode: "mlb",
     track: "kernel",
     section: "americas",
   },
@@ -156,8 +169,9 @@ export const BETTING_COMPETITIONS: BettingCompetition[] = [
     shortLabel: "NHL",
     description: "国家冰球联盟 — Kernel 冰球引擎",
     status: "kernel",
-    href: "/sports?sport=hockey",
+    href: "/sports?sport=hockey&competition=nhl",
     kernelSport: "hockey",
+    competitionCode: "nhl",
     track: "kernel",
     section: "americas",
   },

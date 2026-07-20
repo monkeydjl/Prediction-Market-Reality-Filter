@@ -41,9 +41,12 @@ describe("competition-catalog", () => {
     expect(es?.kernelSport).toBeUndefined();
   });
 
-  it("kernel competitions expose kernelSport for list filtering", () => {
+  it("kernel competitions expose kernelSport and competitionCode", () => {
     expect(getCompetitionById("nba")?.kernelSport).toBe("basketball");
+    expect(getCompetitionById("nba")?.competitionCode).toBe("nba");
     expect(getCompetitionById("epl")?.kernelSport).toBe("football");
+    expect(getCompetitionById("epl")?.competitionCode).toBe("epl");
+    expect(getCompetitionById("epl")?.href).toContain("competition=epl");
   });
 
   it("groups football section with world cup + leagues", () => {

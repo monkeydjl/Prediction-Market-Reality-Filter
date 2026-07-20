@@ -23,11 +23,44 @@ router = APIRouter(prefix="/predictions", tags=["Predictions"])
 logger = logging.getLogger(__name__)
 
 COMPETITION_SPORT = {
-    "wc": "football", "ucl": "football", "epl": "football",
-    "laliga": "football", "bundesliga": "football",
-    "seriea": "football", "ligue1": "football",
+    "wc": "football", "world_cup": "football", "ucl": "football",
+    "epl": "football", "laliga": "football", "bundesliga": "football",
+    "seriea": "football", "serie_a": "football",
+    "ligue1": "football", "ligue_1": "football",
     "nba": "basketball", "mlb": "baseball", "nhl": "hockey",
 }
+
+# Canonical competition codes used in MatchIdentity / FactorRegistry.
+# Request aliases (query params, FE catalog) map into these.
+COMPETITION_ALIASES: dict[str, str] = {
+    "wc": "world_cup",
+    "worldcup": "world_cup",
+    "world_cup": "world_cup",
+    "ucl": "ucl",
+    "epl": "epl",
+    "pl": "epl",
+    "premier_league": "epl",
+    "laliga": "laliga",
+    "la_liga": "laliga",
+    "bundesliga": "bundesliga",
+    "seriea": "serie_a",
+    "serie_a": "serie_a",
+    "ligue1": "ligue_1",
+    "ligue_1": "ligue_1",
+    "nba": "nba",
+    "mlb": "mlb",
+    "nhl": "nhl",
+}
+
+
+def normalize_competition_code(raw: str | None) -> str | None:
+    """Map FE/query aliases to the Kernel competition code; None if empty."""
+    if raw is None:
+        return None
+    key = raw.strip().lower().replace("-", "_")
+    if not key:
+        return None
+    return COMPETITION_ALIASES.get(key, key)
 
 
 def _get_kernel():
@@ -268,15 +301,22 @@ def engine_score(name: str, competition: str | None = None):
 
 
 @router.get("/matches")
-def list_matches(sport: str | None = None):
-    """List today's matches across all sports."""
+def list_matches(
+    sport: str | None = Query(None, description="Sport code filter, e.g. football"),
+    competition: str | None = Query(
+        None,
+        description="Competition code or alias (epl, laliga, world_cup, nba, ...)",
+    ),
+):
+    """List today's matches across sports, optionally filtered by sport and/or competition."""
     if not config.settings.KERNEL_PREDICTION_ENABLED:
         raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")
     kernel = _get_kernel()
     from app.kernel.protocols import ScheduleFilter
+    from datetime import datetime, timezone
+
     raw_matches = kernel._adapter.fetch_schedule(ScheduleFilter())
 
-    from datetime import datetime, timezone
     today = datetime.now(timezone.utc).date()
     today_matches = []
     for m in raw_matches:
@@ -285,11 +325,23 @@ def list_matches(sport: str | None = None):
             today_matches.append(m)
 
     if sport:
-        today_matches = [m for m in today_matches
-                         if m.match.season.competition.sport.code == sport]
+        today_matches = [
+            m for m in today_matches
+            if m.match.season.competition.sport.code == sport
+        ]
+
+    comp_code = normalize_competition_code(competition)
+    if comp_code is not None:
+        today_matches = [
+            m for m in today_matches
+            if normalize_competition_code(m.match.season.competition.code) == comp_code
+            or m.match.season.competition.code == comp_code
+        ]
 
     from app.kernel.kernel_db import get_match_ids_with_predictions
-    predicted_ids = get_match_ids_with_predictions([m.match.match_id for m in today_matches])
+    predicted_ids = get_match_ids_with_predictions(
+        [m.match.match_id for m in today_matches]
+    )
 
     return [_match_summary(m, predicted_ids) for m in today_matches]
 

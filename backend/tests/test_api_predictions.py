@@ -184,6 +184,30 @@ class TestListMatches:
         assert len(data) == 1
         assert data[0]["sport"] == "basketball"
 
+    def test_list_matches_competition_filter(self, api_client):
+        """Competition filter (and aliases) works."""
+        adapter = MultiSportFakeAdapter()
+        adapter._matches.append(
+            _make_raw_match("epl-1", "football", "epl"),
+        )
+        _patch_kernel_adapter(api_client, adapter)
+        resp = api_client.get("/api/predictions/matches?competition=epl")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["competition"] == "epl"
+        assert data[0]["match_id"] == "epl-1"
+
+        # Alias: pl → epl
+        resp2 = api_client.get("/api/predictions/matches?competition=pl")
+        assert resp2.status_code == 200
+        assert len(resp2.json()) == 1
+
+        # world_cup via alias wc
+        resp3 = api_client.get("/api/predictions/matches?competition=wc")
+        assert resp3.status_code == 200
+        assert resp3.json()[0]["competition"] == "world_cup"
+
     def test_list_matches_empty_when_no_fixtures(self, api_client):
         """Empty adapter → empty list."""
         from app.kernel.protocols import ScheduleFilter

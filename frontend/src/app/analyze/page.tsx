@@ -9,10 +9,8 @@ import { DeltaPill } from "@/components/indicators";
 import { eventsApi } from "@/lib/api";
 import { adaptRecord } from "@/lib/adapt";
 import { fmtPct } from "@/lib/format";
+import { inputCls } from "@/lib/ui-classes";
 import type { EventRecord } from "@/lib/types";
-
-const inputCls =
-  "h-10 rounded-md border border-border bg-secondary px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring";
 
 export default function AnalyzePage() {
   const [question, setQuestion] = useState("");
@@ -85,61 +83,81 @@ export default function AnalyzePage() {
           className="flex flex-col gap-4 rounded-lg border border-border bg-card p-5"
         >
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs text-muted-foreground">事件问题</label>
+            <label htmlFor="analyze-question" className="text-xs text-muted-foreground">
+              事件问题
+            </label>
             <input
-              className={inputCls}
+              id="analyze-question"
+              className={inputCls()}
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               placeholder="例如：2026 年底前美联储是否会降息？"
+              aria-label="事件问题"
               required
             />
           </div>
           <div className="flex flex-col gap-1.5 sm:max-w-[200px]">
-            <label className="text-xs text-muted-foreground">基准概率（0–100）</label>
+            <label htmlFor="analyze-baseline" className="text-xs text-muted-foreground">
+              基准概率（0–100）
+            </label>
             <input
-              className={inputCls}
+              id="analyze-baseline"
+              className={inputCls()}
               type="number"
               min={0}
               max={100}
               step="any"
               value={baseline}
               onChange={(e) => setBaseline(e.target.value)}
+              aria-label="基准概率（0–100）"
               required
             />
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs text-muted-foreground">成交量（可选）</label>
+              <label htmlFor="analyze-volume" className="text-xs text-muted-foreground">
+                成交量（可选）
+              </label>
               <input
-                className={inputCls}
+                id="analyze-volume"
+                className={inputCls()}
                 type="number"
                 min={0}
                 step="any"
                 value={volume}
                 onChange={(e) => setVolume(e.target.value)}
                 placeholder="用于衡量市场深度"
+                aria-label="成交量（可选）"
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs text-muted-foreground">流动性（可选）</label>
+              <label htmlFor="analyze-liquidity" className="text-xs text-muted-foreground">
+                流动性（可选）
+              </label>
               <input
-                className={inputCls}
+                id="analyze-liquidity"
+                className={inputCls()}
                 type="number"
                 min={0}
                 step="any"
                 value={liquidity}
                 onChange={(e) => setLiquidity(e.target.value)}
                 placeholder="用于 priced-in 风险评分"
+                aria-label="流动性（可选）"
               />
             </div>
           </div>
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs text-muted-foreground">新闻背景（可选）</label>
+            <label htmlFor="analyze-news" className="text-xs text-muted-foreground">
+              新闻背景（可选）
+            </label>
             <textarea
-              className={`${inputCls} h-24 resize-y py-2`}
+              id="analyze-news"
+              className={inputCls("h-24 resize-y py-2")}
               value={news}
               onChange={(e) => setNews(e.target.value)}
               placeholder="粘贴相关新闻、官方声明或背景信息…"
+              aria-label="新闻背景（可选）"
             />
           </div>
           <div className="flex items-center gap-3">

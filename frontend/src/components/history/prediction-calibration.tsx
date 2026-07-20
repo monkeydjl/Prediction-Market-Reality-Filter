@@ -38,8 +38,9 @@ export function PredictionCalibrationCard({ data }: { data: PredictionCalibratio
       <div className="flex flex-col gap-1">
         <h2 className="text-sm font-semibold">预测层校准（仅“建议行动”）</h2>
         <p className="text-xs leading-relaxed text-muted-foreground">
-          只统计系统真正建议行动并已结算的预测，衡量“行动是否跑赢市场共识”。
-          与上方的事件层校准不同——后者衡量所有已结算事件的概率估计是否准确。
+          只统计系统真正建议行动并已结算的<strong className="text-foreground">事件情报</strong>
+          预测，衡量“行动是否跑赢市场共识”。与上方的事件层校准（全量已结算估计）不同；
+          也不同于体育页「学习 → 校准诊断」中的 Kernel 引擎参数。
         </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-3">

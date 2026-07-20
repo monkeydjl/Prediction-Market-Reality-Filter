@@ -47,6 +47,9 @@ export function CalibrationPanel() {
 
   return (
     <div className="space-y-6">
+      <p className="text-xs text-muted-foreground">
+        Kernel 校准参数与可靠性图（按引擎/赛事）。与「历史复盘」里的事件 Brier 统计相互独立。
+      </p>
       <div className="flex flex-wrap gap-4">
         <label className="flex items-center gap-2 text-sm">
           <span>引擎</span>
@@ -127,7 +130,12 @@ export function CalibrationPanel() {
         ) : relLoading || reliability === null ? (
           <div className="p-4 text-sm text-muted-foreground">加载中...</div>
         ) : (
-          <ReliabilityChart bins={reliability.bins} />
+          <ReliabilityChart
+            bins={reliability.bins}
+            ece={reliability.ece}
+            sampleCount={reliability.sample_count}
+            maxCalibrationError={reliability.max_calibration_error}
+          />
         )}
       </div>
     </div>

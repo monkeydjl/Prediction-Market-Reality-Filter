@@ -5,7 +5,10 @@ export {
   useMatches,
   useMatchDetail,
   triggerPrediction,
+  useEngines,
+  useEnginesMeta,
 } from "./hooks/use-matches";
+export type { EnginesMeta } from "./hooks/use-matches";
 export {
   useEngineScores,
   usePredictionHistory,
@@ -20,6 +23,7 @@ export {
   usePendingLinks,
   useMarketSnapshots,
   verifyLink,
+  autoVerifyPending,
 } from "./hooks/use-markets";
 export {
   useTraditionalOddsLatest,
@@ -34,13 +38,46 @@ export {
   useSettlement,
   useSettlementHistory,
   useCalibrations,
+  processSettlement,
 } from "./hooks/use-settlements";
 export {
   useAvailableFutures,
+  useFuturesCoverage,
   useFuturesLinks,
   useLatestSnapshots,
 } from "./hooks/use-futures";
 export {
   useOptimizationParams,
   triggerOptimization,
+  triggerIngest,
+  useTaskStatus,
+  applyParams,
 } from "./hooks/use-optimization";
+export type { TaskStatus } from "./hooks/use-optimization";
+export {
+  parseOptimizationTaskResult,
+  toMetricBarPoints,
+  toCandidateBarPoints,
+} from "./backtest-results";
+export type {
+  SportBacktestMetrics,
+  ParsedOptimizationTaskResult,
+  MetricBarPoint,
+} from "./backtest-results";
+export {
+  useEdgeLatest,
+  useEdgeHistory,
+  useEdgeDiscrepancies,
+  type FactorDriver,
+  detectEdges,
+} from "./hooks/use-edges";
+export type {
+  EdgeSource,
+  EdgeResult,
+  EdgeLatestResponse,
+  EdgeHistoryPoint,
+  EdgeHistoryResponse,
+  EdgeDiscrepancyItem,
+  EdgeDiscrepanciesResponse,
+} from "./hooks/use-edges";
+export type { AutoVerifyResult } from "./hooks/use-markets";

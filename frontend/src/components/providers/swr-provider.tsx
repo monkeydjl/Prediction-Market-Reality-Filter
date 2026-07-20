@@ -1,7 +1,12 @@
 "use client";
 
 import { SWRConfig } from "swr";
-import { ApiError, buildApiErrorMessage, getOperatorApiKey, getOperatorId, handleFetchError } from "@/lib/api";
+import {
+  ApiError,
+  buildApiErrorMessage,
+  buildOperatorAuthHeaders,
+  handleFetchError,
+} from "@/lib/api";
 
 // Default SWR fetcher. Mirrors the auth/timeout behavior of the central
 // `api()` client in lib/api.ts so any `useSWR(key)` call (which falls back to
@@ -19,11 +24,7 @@ import { ApiError, buildApiErrorMessage, getOperatorApiKey, getOperatorId, handl
 const SWR_FETCHER_TIMEOUT_MS = 60_000;
 
 async function swrFetcher(url: string): Promise<unknown> {
-  const headers: Record<string, string> = {};
-  const operatorKey = getOperatorApiKey();
-  if (operatorKey) headers["X-API-Key"] = operatorKey;
-  const operatorId = getOperatorId();
-  if (operatorId) headers["X-Operator"] = operatorId;
+  const headers: Record<string, string> = { ...buildOperatorAuthHeaders() };
 
   const controller = new AbortController();
   const timeout = globalThis.setTimeout(() => controller.abort(), SWR_FETCHER_TIMEOUT_MS);

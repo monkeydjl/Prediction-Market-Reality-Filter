@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { usePriceStream } from "./use-price-stream";
+import { usePriceStream, buildWsUrl } from "./use-price-stream";
 
 // Mock WebSocket
 class MockWebSocket {
@@ -41,6 +41,26 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+});
+
+describe("buildWsUrl", () => {
+  it("targets backend :8000 when on Next dev :3000", () => {
+    const original = global.window;
+    // @ts-expect-error test shim
+    global.window = {
+      location: {
+        hostname: "localhost",
+        port: "3000",
+        protocol: "http:",
+        origin: "http://localhost:3000",
+      },
+    };
+    try {
+      expect(buildWsUrl("m1")).toBe("ws://localhost:8000/ws/matches/m1/prices");
+    } finally {
+      global.window = original;
+    }
+  });
 });
 
 describe("usePriceStream", () => {

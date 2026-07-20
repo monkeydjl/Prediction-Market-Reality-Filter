@@ -55,3 +55,35 @@ export async function verifyLink(
   await mutate(`${getApiBase()}/sport-markets/pending`);
   await mutate(`${getApiBase()}/sport-markets/links/${matchId}`);
 }
+
+export type AutoVerifyResult = {
+  pending_total: number;
+  candidates: number;
+  auto_verified: number;
+  would_verify?: number;
+  threshold: number;
+  dry_run: boolean;
+  link_ids: number[];
+  enabled?: boolean;
+  message?: string;
+};
+
+/** Dry-run or apply high-confidence pending auto-verify (P1-V2). */
+export async function autoVerifyPending(options?: {
+  dry_run?: boolean;
+  min_confidence?: number;
+}): Promise<AutoVerifyResult> {
+  const dry = options?.dry_run ?? true;
+  const qs = buildQuery({
+    dry_run: dry,
+    min_confidence: options?.min_confidence,
+  });
+  const result = await sportPost<AutoVerifyResult>(
+    `/sport-markets/pending/auto-verify${qs}`,
+    {},
+  );
+  if (!dry) {
+    await mutate(`${getApiBase()}/sport-markets/pending`);
+  }
+  return result;
+}

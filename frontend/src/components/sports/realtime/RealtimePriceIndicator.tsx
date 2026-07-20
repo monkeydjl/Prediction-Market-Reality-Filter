@@ -13,21 +13,15 @@ export function RealtimePriceIndicator({
     return null;
   }
 
-  const color = isConnected ? "green" : "gray";
   const label = isConnected ? "LIVE" : "OFFLINE";
+  const colorClass = isConnected
+    ? "border-green-500 text-green-600"
+    : "border-gray-400 text-gray-500";
 
   return (
     <span
-      style={{
-        color,
-        fontSize: "0.75rem",
-        fontWeight: 600,
-        padding: "2px 6px",
-        border: `1px solid ${color}`,
-        borderRadius: "3px",
-        marginLeft: "8px",
-      }}
       data-testid="realtime-indicator"
+      className={`ml-2 rounded border px-1.5 py-0.5 text-xs font-semibold ${colorClass}`}
     >
       {label}
     </span>

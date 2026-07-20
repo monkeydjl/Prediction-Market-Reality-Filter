@@ -3,10 +3,8 @@
 import { useState } from "react";
 import { Gavel, Loader2 } from "lucide-react";
 import { eventsApi } from "@/lib/api";
+import { inputCls } from "@/lib/ui-classes";
 import type { EventRecord, TrackedEntry } from "@/lib/types";
-
-const inputCls =
-  "h-9 rounded-md border border-border bg-secondary px-2 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring";
 
 export function ManualResolvePanel({
   record,
@@ -77,7 +75,7 @@ export function ManualResolvePanel({
         <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
           实际结果（0–100）
           <input
-            className={inputCls}
+            className={inputCls(undefined, "sm")}
             type="number"
             min={0}
             max={100}
@@ -88,13 +86,14 @@ export function ManualResolvePanel({
               setConfirming(false);
             }}
             placeholder="0=未发生，100=发生"
+            aria-label="实际结果（0–100）"
             required
           />
         </label>
         <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
           置信度（0–1）
           <input
-            className={inputCls}
+            className={inputCls(undefined, "sm")}
             type="number"
             min={0}
             max={1}
@@ -104,6 +103,7 @@ export function ManualResolvePanel({
               setConfidence(e.target.value);
               setConfirming(false);
             }}
+            aria-label="置信度（0–1）"
             required
           />
         </label>
@@ -111,13 +111,14 @@ export function ManualResolvePanel({
       <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
         备注
         <textarea
-          className={`${inputCls} h-20 resize-y py-2`}
+          className={inputCls("h-20 resize-y py-2", "sm")}
           value={notes}
           onChange={(e) => {
             setNotes(e.target.value);
             setConfirming(false);
           }}
           placeholder="记录结算依据或来源"
+          aria-label="结算备注"
         />
       </label>
       {confirming && (

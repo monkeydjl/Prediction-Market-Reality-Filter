@@ -2,12 +2,17 @@ import { describe, it, expect, vi } from "vitest";
 
 vi.mock("@/lib/env", () => ({ getApiBase: () => "/api" }));
 
+vi.mock("../client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../client")>()),
+  sportPost: vi.fn(),
+}));
+
 vi.mock("swr", () => {
   const useSWRMock = vi.fn(() => ({ data: undefined, error: undefined, isLoading: true }));
   return { default: useSWRMock, mutate: vi.fn() };
 });
 
-import { useSettlement, useSettlementHistory, useCalibrations } from "./use-settlements";
+import { useSettlement, useSettlementHistory, useCalibrations, processSettlement } from "./use-settlements";
 import useSWR from "swr";
 
 describe("useSettlement", () => {
@@ -38,5 +43,11 @@ describe("useCalibrations", () => {
   it("builds key with params", () => {
     useCalibrations("elo", "nba");
     expect(useSWR).toHaveBeenCalledWith("/api/sport-settlements/calibrations?engine=elo&competition=nba");
+  });
+});
+
+describe("processSettlement", () => {
+  it("is a function", () => {
+    expect(typeof processSettlement).toBe("function");
   });
 });

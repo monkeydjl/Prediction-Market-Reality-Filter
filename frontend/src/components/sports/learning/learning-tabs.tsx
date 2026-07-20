@@ -4,16 +4,18 @@ import { useCallback, useEffect, useReducer, useState } from "react";
 import { EnginePerformancePanel } from "./engine-performance-panel";
 import { PredictionHistoryList } from "./prediction-history-list";
 import { CalibrationPanel } from "./calibration-panel";
+import { AppliedWeightsPanel } from "./applied-weights-panel";
 
-type TabId = "performance" | "history" | "calibration";
+type TabId = "performance" | "history" | "calibration" | "weights";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "performance", label: "性能对比" },
   { id: "history", label: "预测历史" },
   { id: "calibration", label: "校准诊断" },
+  { id: "weights", label: "已应用权重" },
 ];
 
-const VALID_TABS: TabId[] = ["performance", "history", "calibration"];
+const VALID_TABS: TabId[] = ["performance", "history", "calibration", "weights"];
 
 export function LearningTabs() {
   const [activeTab, setActiveTab] = useState<TabId>("performance");
@@ -58,6 +60,22 @@ export function LearningTabs() {
           刷新
         </button>
       </div>
+      <p
+        data-testid="kernel-calibration-scope"
+        className="rounded border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+      >
+        此处为<strong className="font-medium text-foreground">体育 Kernel</strong>
+        引擎表现与校准（NBA/足球等比赛预测）。事件情报（Polymarket 等）的
+        事件层校准请看{" "}
+        <a href="/history" className="text-primary underline">
+          历史复盘
+        </a>
+        ；与市场结算对照请看{" "}
+        <a href="/sports/settlements" className="text-primary underline">
+          市场结算反馈
+        </a>
+        。
+      </p>
 
       <div className="flex gap-1 border-b border-border">
         {TABS.map((tab) => (
@@ -79,6 +97,7 @@ export function LearningTabs() {
         {activeTab === "performance" && <EnginePerformancePanel />}
         {activeTab === "history" && <PredictionHistoryList />}
         {activeTab === "calibration" && <CalibrationPanel />}
+        {activeTab === "weights" && <AppliedWeightsPanel />}
       </div>
     </div>
   );

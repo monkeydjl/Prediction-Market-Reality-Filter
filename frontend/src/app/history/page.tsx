@@ -5,11 +5,19 @@ import { Gavel, Loader2 } from "lucide-react";
 import { AccuracySummary } from "@/components/history/accuracy-summary";
 import { PredictionCalibrationCard } from "@/components/history/prediction-calibration";
 import { CategoryAccuracy, toCategoryData, type CategoryDatum } from "@/components/history/category-accuracy";
+import { SegmentComparePanel } from "@/components/history/segment-compare-panel";
 import { ReviewTable, toReview, type ResolvedReview } from "@/components/history/review-table";
 import { PendingLinks } from "@/components/history/pending-links";
 import { RecentPredictions } from "@/components/history/recent-predictions";
 import { SectionErrorBoundary } from "@/components/section-error-boundary";
-import { eventsApi, type AutoResolveMatch, type AutoResolveResult, type CalibrationAgg, type PredictionCalibration } from "@/lib/api";
+import {
+  eventsApi,
+  type AutoResolveMatch,
+  type AutoResolveResult,
+  type CalibrationAgg,
+  type CalibrationBucketSummary,
+  type PredictionCalibration,
+} from "@/lib/api";
 
 const EMPTY_OVERALL: CalibrationAgg = { brier_score: null, skill_score: null, grade: "no_data", n: 0 };
 const EMPTY_PRED: PredictionCalibration = {
@@ -124,6 +132,9 @@ export default function HistoryPage() {
   const [overall, setOverall] = useState<CalibrationAgg>(EMPTY_OVERALL);
   const [predCal, setPredCal] = useState<PredictionCalibration>(EMPTY_PRED);
   const [categoryData, setCategoryData] = useState<CategoryDatum[]>([]);
+  const [bucketSummary, setBucketSummary] = useState<CalibrationBucketSummary | null>(null);
+  const [bucketError, setBucketError] = useState<string | null>(null);
+  const [bucketLoading, setBucketLoading] = useState(false);
   const [reviews, setReviews] = useState<ResolvedReview[]>([]);
   const [reviewPage, setReviewPage] = useState(0);
   const [totalEvents, setTotalEvents] = useState(0);
@@ -143,10 +154,19 @@ export default function HistoryPage() {
   }, []);
 
   const loadData = useCallback(async () => {
-    const [cal, predCalibration, list] = await Promise.all([
+    setBucketLoading(true);
+    setBucketError(null);
+    const [cal, predCalibration, list, bucketsSettled] = await Promise.all([
       eventsApi.calibration(),
       eventsApi.predictionCalibration(),
       eventsApi.list(REVIEW_PAGE_SIZE, 0, RESOLVED_REVIEW_FILTERS),
+      eventsApi.predictionCalibrationBuckets().then(
+        (b) => ({ ok: true as const, b }),
+        (e: unknown) => ({
+          ok: false as const,
+          err: e instanceof Error ? e.message : "分桶加载失败",
+        }),
+      ),
     ]);
     setOverall(cal.overall ?? EMPTY_OVERALL);
     setPredCal(predCalibration ?? EMPTY_PRED);
@@ -156,6 +176,13 @@ export default function HistoryPage() {
         ? toCategoryData(segmentSource, predCalibration.segment_min_samples ?? null)
         : toCategoryData(cal.by_base_rate_category ?? {}),
     );
+    if (bucketsSettled.ok) {
+      setBucketSummary(bucketsSettled.b);
+    } else {
+      setBucketSummary(null);
+      setBucketError(bucketsSettled.err);
+    }
+    setBucketLoading(false);
     setReviewPage(0);
     setTotalEvents(list.total ?? list.count ?? 0);
     setReviews(
@@ -318,7 +345,7 @@ export default function HistoryPage() {
                 <CategoryAccuracy data={categoryData} />
               </SectionErrorBoundary>
               <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5">
-                <h2 className="text-sm font-semibold">校准提示</h2>
+                <h2 className="text-sm font-semibold">校准提示（事件情报）</h2>
                 <ul className="flex flex-col gap-3 text-sm leading-relaxed text-muted-foreground">
                   <li className="flex gap-2">
                     <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-pos" aria-hidden="true" />
@@ -332,9 +359,24 @@ export default function HistoryPage() {
                     <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-neg" aria-hidden="true" />
                     <span>样本不足时校准结论不稳定，应优先依赖官方信息而非短期情绪。</span>
                   </li>
+                  <li className="flex gap-2">
+                    <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true" />
+                    <span>
+                      体育比赛引擎的校准在「学习」页；勿与本页事件 Brier 混读。
+                    </span>
+                  </li>
                 </ul>
               </div>
             </div>
+            <SectionErrorBoundary title="分面对比">
+              <SegmentComparePanel
+                categoryData={categoryData}
+                predCal={predCal}
+                buckets={bucketSummary}
+                bucketsError={bucketError}
+                bucketsLoading={bucketLoading}
+              />
+            </SectionErrorBoundary>
             <section className="flex flex-col gap-3">
               <div className="flex flex-wrap items-center gap-2">
                 {([

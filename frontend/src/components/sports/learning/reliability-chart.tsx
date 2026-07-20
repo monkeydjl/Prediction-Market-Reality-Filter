@@ -5,9 +5,17 @@ import type { ReliabilityBin } from "@/lib/sports-api";
 
 interface ReliabilityChartProps {
   bins: ReliabilityBin[];
+  ece?: number | null;
+  sampleCount?: number | null;
+  maxCalibrationError?: number | null;
 }
 
-export function ReliabilityChart({ bins }: ReliabilityChartProps) {
+export function ReliabilityChart({
+  bins,
+  ece,
+  sampleCount,
+  maxCalibrationError,
+}: ReliabilityChartProps) {
   // Filter out empty bins (null avg_predicted) for scatter data
   const data = bins
     .filter((b) => b.avg_predicted !== null && b.actual_frequency !== null)
@@ -20,6 +28,26 @@ export function ReliabilityChart({ bins }: ReliabilityChartProps) {
     }));
 
   return (
+    <div data-testid="reliability-chart-wrap">
+      {(ece != null || sampleCount != null) && (
+        <div className="mb-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
+          {ece != null && (
+            <span data-testid="reliability-ece" className="rounded bg-secondary px-2 py-1 font-mono">
+              ECE {(ece * 100).toFixed(1)}%
+            </span>
+          )}
+          {maxCalibrationError != null && (
+            <span className="rounded bg-secondary px-2 py-1 font-mono">
+              Max CE {(maxCalibrationError * 100).toFixed(1)}%
+            </span>
+          )}
+          {sampleCount != null && (
+            <span className="rounded bg-secondary px-2 py-1 font-mono">
+              n={sampleCount}
+            </span>
+          )}
+        </div>
+      )}
     <ChartFrame height={320}>
       <ScatterChart margin={{ top: 16, right: 24, bottom: 24, left: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
@@ -58,5 +86,6 @@ export function ReliabilityChart({ bins }: ReliabilityChartProps) {
         <Scatter data={data} fill="var(--primary)" />
       </ScatterChart>
     </ChartFrame>
+    </div>
   );
 }

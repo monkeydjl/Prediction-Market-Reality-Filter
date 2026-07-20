@@ -30,6 +30,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
       ...actual.eventsApi,
       calibration: vi.fn(),
       predictionCalibration: vi.fn(),
+      predictionCalibrationBuckets: vi.fn(),
       list: vi.fn(),
       resolveAuto: vi.fn(),
       recentPredictions: vi.fn(),
@@ -65,6 +66,7 @@ describe("HistoryPage", () => {
   beforeEach(() => {
     api.calibration.mockReset();
     api.predictionCalibration.mockReset();
+    api.predictionCalibrationBuckets.mockReset();
     api.list.mockReset();
     api.resolveAuto.mockReset();
     api.recentPredictions.mockReset();
@@ -84,6 +86,12 @@ describe("HistoryPage", () => {
       segment_min_samples: null,
       by_category: {},
       segments: {},
+    });
+    api.predictionCalibrationBuckets.mockResolvedValue({
+      n: 0,
+      by_edge_bucket: {},
+      by_confidence_bucket: {},
+      by_edge_x_confidence: {},
     });
     api.list.mockResolvedValue({
       events: [resolvedEntry(1)],

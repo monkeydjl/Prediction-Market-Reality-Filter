@@ -111,11 +111,26 @@ export function DecisionCard({
         </p>
       )}
 
+      {/* Final direction after quality merge (when overlays active) */}
+      {(report.final_displayed_direction || report.final_downgrade_reason) && (
+        <p
+          data-testid="final-direction"
+          className="text-xs text-muted-foreground"
+        >
+          <span className="font-medium text-foreground">展示方向: </span>
+          {report.final_displayed_direction ?? "—"}
+          {report.final_downgrade_reason ? (
+            <span className="text-warn"> · 降级: {report.final_downgrade_reason}</span>
+          ) : null}
+        </p>
+      )}
+
       {/* Expand toggle */}
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
         className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+        data-testid="decision-expand"
       >
         <ChevronDown className={cn("size-3 transition-transform", expanded && "rotate-180")} aria-hidden="true" />
         {expanded ? "收起详情" : "更多详情"}
@@ -123,7 +138,10 @@ export function DecisionCard({
 
       {/* Expanded detail section */}
       {expanded && (
-        <div className="flex flex-col gap-3 border-t border-border pt-3">
+        <div
+          className="flex flex-col gap-3 border-t border-border pt-3"
+          data-testid="decision-diagnosis-detail"
+        >
           <div className="text-[11px] text-muted-foreground">
             <span className="font-medium text-foreground">诊断: </span>
             原始edge {fmtEdge(report.edge.raw)} × 信任 {report.edge.trust?.toFixed(2) ?? "—"} × 流动性 {report.diagnosis.liquidity_factor?.toFixed(2) ?? "—"} = {fmtEdge(adjusted)}
@@ -136,15 +154,58 @@ export function DecisionCard({
             </span>
           </div>
 
+          {report.recommendation.calibration_status && (
+            <p className="text-[11px] text-muted-foreground" data-testid="calibration-status">
+              校准状态:{" "}
+              <span className="font-medium text-foreground">
+                {report.recommendation.calibration_status === "calibrated"
+                  ? "已校准（类别合格）"
+                  : report.recommendation.calibration_status === "uncalibrated_provisional"
+                    ? "未校准 / 临时"
+                    : report.recommendation.calibration_status}
+              </span>
+            </p>
+          )}
+
+          {report.decision_quality?.decision_rationale_zh && (
+            <p className="text-xs text-muted-foreground" data-testid="decision-quality-rationale">
+              <span className="font-medium text-foreground">质量说明: </span>
+              {report.decision_quality.decision_rationale_zh}
+            </p>
+          )}
+          {report.decision_quality?.downgrade_reason && (
+            <p className="text-xs text-warn" data-testid="decision-quality-downgrade">
+              决策质量降级: {report.decision_quality.downgrade_reason}
+            </p>
+          )}
+          {report.market_quality?.downgrade_reason && (
+            <p className="text-xs text-warn" data-testid="market-quality-downgrade">
+              市场质量: {report.market_quality.downgrade_reason}
+            </p>
+          )}
+          {report.source_reliability?.downgrade_reason && (
+            <p className="text-xs text-warn" data-testid="source-reliability-downgrade">
+              来源可靠度: {report.source_reliability.downgrade_reason}
+            </p>
+          )}
+
           {rec && (
-            <div className="text-xs text-muted-foreground">
-              <span className="font-medium">{rec.direction} · 置信度{rec.confidence} · 配置{rec.suggested_allocation_pct?.toFixed(1)}%</span>
+            <div className="text-xs text-muted-foreground" data-testid="actionable-full">
+              <span className="font-medium">
+                {rec.direction} · 置信度{rec.confidence}
+                {rec.suggested_allocation_pct != null
+                  ? ` · 配置${rec.suggested_allocation_pct.toFixed(1)}%`
+                  : ""}
+                {rec.calibration_status
+                  ? ` · ${rec.calibration_status}`
+                  : ""}
+              </span>
               <p className="mt-1">{rec.rationale}</p>
             </div>
           )}
 
           {report.risk.flags.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5" data-testid="risk-flags">
               {report.risk.flags.map((flag) => (
                 <span key={flag} className="rounded bg-warn/10 px-1.5 py-0.5 text-[11px] text-warn">{flag}</span>
               ))}

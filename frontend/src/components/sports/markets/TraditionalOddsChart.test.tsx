@@ -123,7 +123,8 @@ describe("TraditionalOddsChart", () => {
     await waitFor(() => {
       expect(screen.getByTestId("odds-chart")).toBeTruthy();
     });
-    expect(screen.getByText("home_win")).toBeTruthy();
+    expect(screen.getByTestId("odds-divergence-summary")).toBeTruthy();
+    expect(screen.getAllByText("主胜").length).toBeGreaterThan(0);
     expect(screen.getByTestId("series-home_win")).toBeTruthy();
     expect(screen.getByTestId("line-traditional")).toBeTruthy();
     expect(screen.getByTestId("line-polymarket")).toBeTruthy();

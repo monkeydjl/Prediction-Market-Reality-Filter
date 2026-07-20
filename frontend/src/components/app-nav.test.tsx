@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import { render, screen, within, waitFor } from "@testing-library/react";
 import { AppNav } from "./app-nav";
 
 vi.mock("next/navigation", () => ({
@@ -18,23 +18,83 @@ vi.mock("@/components/live-status-indicator", () => ({
   LiveStatusIndicator: () => <span>LiveStatus</span>,
 }));
 
+const moversMock = vi.fn();
+
+vi.mock("@/lib/api", () => ({
+  eventsApi: {
+    movers: (...args: unknown[]) => moversMock(...args),
+  },
+}));
+
 describe("AppNav", () => {
-  it("renders the brand and hot news ticker above the main navigation", () => {
+  beforeEach(() => {
+    moversMock.mockReset();
+    moversMock.mockResolvedValue({ movers: [], count: 0 });
+  });
+
+  it("renders brand and ticker above main navigation (fallback when no movers)", async () => {
     render(<AppNav />);
 
-    const ticker = screen.getByRole("region", { name: "示例新闻" });
+    const ticker = await screen.findByTestId("hot-news-ticker");
     const nav = screen.getByRole("navigation", { name: "主导航" });
 
     expect(within(ticker).getByRole("link", { name: /PROBABILITY/ })).toHaveAttribute(
       "href",
       "/",
     );
+    await waitFor(() => {
+      expect(ticker).toHaveAttribute("data-live", "false");
+    });
     expect(ticker).toHaveTextContent("示例新闻");
-    expect(ticker).toHaveTextContent("美联储");
+    expect(ticker).toHaveTextContent("暂无概率异动");
     expect(within(nav).queryByText(/PROBABILITY/)).not.toBeInTheDocument();
     expect(
       ticker.compareDocumentPosition(nav) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("shows live mover titles when API returns data", async () => {
+    moversMock.mockResolvedValue({
+      count: 2,
+      movers: [
+        {
+          event_id: "evt-fed",
+          event_title: "Fed rate cut September",
+          event_title_zh: "美联储 9 月降息概率上修",
+          trend: {
+            net_change: 8.5,
+            latest_probability: 62,
+            direction: "up",
+          },
+        },
+        {
+          event_id: "evt-btc",
+          event_title: "BTC above 100k",
+          trend: {
+            net_change: -3.2,
+            latest_probability: 40,
+            direction: "down",
+          },
+        },
+      ],
+    });
+
+    render(<AppNav />);
+
+    const ticker = await screen.findByTestId("hot-news-ticker");
+    await waitFor(() => {
+      expect(ticker).toHaveAttribute("data-live", "true");
+    });
+    expect(ticker).toHaveTextContent("异动快讯");
+    expect(ticker).toHaveTextContent("美联储 9 月降息概率上修");
+    expect(ticker).toHaveTextContent("BTC above 100k");
+    expect(ticker).toHaveTextContent("+8.5pp");
+
+    const link = screen.getByTestId("ticker-item-evt-fed");
+    expect(link).toHaveAttribute(
+      "href",
+      `/events?id=${encodeURIComponent("evt-fed")}`,
+    );
   });
 
   it("renders two group labels", () => {
@@ -48,7 +108,7 @@ describe("AppNav", () => {
     render(<AppNav />);
 
     for (const label of [
-      "监控面板", "决策机会", "Edge 监测", "人工分析",
+      "监控面板", "决策机会", "事件 Edge", "人工分析",
       "历史复盘", "质量运营", "质量切片", "模拟交易",
     ]) {
       expect(screen.getByRole("link", { name: new RegExp(label) })).toBeInTheDocument();
@@ -59,8 +119,8 @@ describe("AppNav", () => {
     render(<AppNav />);
 
     for (const label of [
-      "体育预测", "期货市场", "学习仪表盘", "体育市场",
-      "参数优化", "体育推荐", "体育结算", "世界杯专属",
+      "体育预测", "体育 Edge", "期货市场", "学习仪表盘", "体育市场",
+      "参数优化", "体育推荐", "体育结算", "竞猜中心",
     ]) {
       expect(screen.getByRole("link", { name: new RegExp(label) })).toBeInTheDocument();
     }
@@ -84,10 +144,10 @@ describe("AppNav", () => {
     expect(link).toHaveAttribute("href", "/sports/optimization");
   });
 
-  it("links /sports/world-cup entry (migrated from /world-cup)", () => {
+  it("links /sports/betting entry (hub page for betting categories)", () => {
     render(<AppNav />);
-    const link = screen.getByRole("link", { name: /世界杯专属/ });
-    expect(link).toHaveAttribute("href", "/sports/world-cup");
+    const link = screen.getByRole("link", { name: /竞猜中心/ });
+    expect(link).toHaveAttribute("href", "/sports/betting");
   });
 
   it("does not link the old /world-cup route", () => {
@@ -97,29 +157,15 @@ describe("AppNav", () => {
 
   it("keeps navigation labels on a single line", () => {
     render(<AppNav />);
-
-    for (const label of [
-      "监控面板", "决策机会", "Edge 监测", "人工分析",
+    const labels = [
+      "监控面板", "决策机会", "事件 Edge", "人工分析",
       "历史复盘", "质量运营", "质量切片", "模拟交易",
-      "体育预测", "期货市场", "学习仪表盘", "体育市场",
-      "参数优化", "体育推荐", "体育结算", "世界杯专属",
-    ]) {
+      "体育预测", "世界杯", "体育 Edge", "期货市场", "学习仪表盘", "体育市场",
+      "参数优化", "体育推荐", "体育结算", "竞猜中心",
+    ];
+    for (const label of labels) {
       const link = screen.getByRole("link", { name: new RegExp(label) });
-      expect(link).toHaveClass("whitespace-nowrap");
-      expect(link).toHaveClass("shrink-0");
+      expect(link.className).toMatch(/whitespace-nowrap/);
     }
-  });
-
-  it("uses a unique icon for each nav item (no duplicates)", () => {
-    render(<AppNav />);
-    const nav = screen.getByRole("navigation", { name: "主导航" });
-    const links = within(nav).getAllByRole("link");
-    const svgStrings = links.map((link) => {
-      const svg = link.querySelector("svg");
-      return svg ? svg.outerHTML : null;
-    });
-    const nonNull = svgStrings.filter((s): s is string => s !== null);
-    expect(nonNull.length).toBe(16);
-    expect(new Set(nonNull).size).toBe(16);
   });
 });

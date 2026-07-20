@@ -15,6 +15,7 @@ import {
   Layers,
 } from "lucide-react";
 import { MatchPredictionCard } from "@/components/sports/world-cup/match-prediction-card";
+import { SportTrackBanner } from "@/components/sports/common/sport-track-banner";
 import { SectionErrorBoundary } from "@/components/section-error-boundary";
 import { syncFixtures, type MatchWithPrediction } from "@/lib/world-cup/predictions-api";
 import { useWorldCupMatches } from "@/lib/world-cup/swr-hooks";
@@ -367,9 +368,9 @@ export default function WorldCupPage() {
           <div className="flex items-center gap-3">
             <Trophy className="size-8 text-primary" />
             <div>
-              <h1 className="text-2xl font-bold">世界杯比分预测</h1>
+              <h1 className="text-2xl font-bold">世界杯专题</h1>
               <p className="text-sm text-muted-foreground">
-                基于混合AI模型的实时比分预测
+                2026 世界杯赛程与混合模型预测（专题数据轨，非 Kernel 多联赛列表）
               </p>
             </div>
           </div>
@@ -393,6 +394,10 @@ export default function WorldCupPage() {
               {syncing ? "同步中..." : "同步赛程"}
             </button>
           </div>
+        </div>
+
+        <div className="mb-6">
+          <SportTrackBanner track="world_cup" />
         </div>
 
         {/* Tab Navigation */}

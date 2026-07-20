@@ -14,12 +14,23 @@ import type {
   EventHistoryResponse as GeneratedEventHistoryResponse,
 } from "./generated-types";
 import { getApiBase } from "./env";
+import { applyOperatorAuthHeaders } from "./operator-credentials";
+
+export {
+  applyOperatorAuthHeaders,
+  buildOperatorAuthHeaders,
+  clearOperatorCredentials,
+  getOperatorApiKey,
+  getOperatorCredentialsSnapshot,
+  getOperatorId,
+  hasOperatorApiKey,
+  setOperatorApiKey,
+  setOperatorId,
+} from "./operator-credentials";
 
 // Same-origin in production (FastAPI serves the static export at / and the API
 // under /api). In dev, next.config rewrites proxy /api/* to :8000.
 const BASE = getApiBase();
-const OPERATOR_KEY_STORAGE = "pmrf.operatorApiKey";
-const OPERATOR_ID_STORAGE = "pmrf.operatorId";
 const GET_CACHE_TTL_MS = 15_000;
 
 const getCache = new Map<string, { expiresAt: number; value: unknown }>();
@@ -29,30 +40,6 @@ function pruneExpiredGetCache(now = Date.now()): void {
   for (const [key, cached] of getCache.entries()) {
     if (cached.expiresAt <= now) getCache.delete(key);
   }
-}
-
-export function getOperatorApiKey(): string {
-  if (typeof window === "undefined") return "";
-  return window.sessionStorage.getItem(OPERATOR_KEY_STORAGE) ?? "";
-}
-
-export function setOperatorApiKey(value: string): void {
-  if (typeof window === "undefined") return;
-  const key = value.trim();
-  if (key) window.sessionStorage.setItem(OPERATOR_KEY_STORAGE, key);
-  else window.sessionStorage.removeItem(OPERATOR_KEY_STORAGE);
-}
-
-export function getOperatorId(): string {
-  if (typeof window === "undefined") return "";
-  return window.sessionStorage.getItem(OPERATOR_ID_STORAGE) ?? "";
-}
-
-export function setOperatorId(value: string): void {
-  if (typeof window === "undefined") return;
-  const operator = value.trim();
-  if (operator) window.sessionStorage.setItem(OPERATOR_ID_STORAGE, operator);
-  else window.sessionStorage.removeItem(OPERATOR_ID_STORAGE);
 }
 
 function detailToText(detail: unknown): string {
@@ -153,10 +140,7 @@ async function api<T>(
   if (init?.body != null && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const operatorKey = getOperatorApiKey();
-  if (operatorKey && !headers.has("X-API-Key")) headers.set("X-API-Key", operatorKey);
-  const operatorId = getOperatorId();
-  if (operatorId && !headers.has("X-Operator")) headers.set("X-Operator", operatorId);
+  applyOperatorAuthHeaders(headers);
 
   const controller = new AbortController();
   const timeout = globalThis.setTimeout(
@@ -216,6 +200,26 @@ export interface CategoryCoverage {
 
 // A committed prediction rendered for human review (M5 decision report).
 // Mirrors decision_report_service.build_decision_report.
+/** Quality overlays attached by analyze_event (optional / flag-gated). */
+export interface DecisionQualityOverlay {
+  displayed_direction?: string | null;
+  downgrade_reason?: string | null;
+  decision_rationale_zh?: string | null;
+  [key: string]: unknown;
+}
+
+export interface MarketQualityOverlay {
+  score?: number | null;
+  downgrade_reason?: string | null;
+  [key: string]: unknown;
+}
+
+export interface SourceReliabilityOverlay {
+  overall_score?: number | null;
+  downgrade_reason?: string | null;
+  [key: string]: unknown;
+}
+
 export interface DecisionReport {
   event_id: string;
   event: { title: string; title_zh?: string; summary: string };
@@ -254,6 +258,12 @@ export interface DecisionReport {
     rationale: string;
     calibration_status: string;
   } | null;
+  /** Phase quality overlays — present when corresponding flags are on. */
+  decision_quality?: DecisionQualityOverlay | null;
+  market_quality?: MarketQualityOverlay | null;
+  source_reliability?: SourceReliabilityOverlay | null;
+  final_displayed_direction?: string | null;
+  final_downgrade_reason?: string | null;
 }
 
 // Re-export generated response types (replaces hand-written inline versions).
@@ -359,7 +369,13 @@ export interface SimTrade {
   direction: "YES" | "NO";
   entry_prob: number;
   market_prob: number;
+  /** EIP raw edge: AI% − market% (0–100 pp), same as predictions.raw_edge */
   entry_edge: number;
+  /** Alias of entry_edge when returned by API */
+  raw_edge?: number;
+  /** Edge in favor of position: YES→raw, NO→−raw */
+  directional_edge?: number;
+  edge_definition?: string;
   entry_time: string;
   position_pct: number;
   confidence: number | null;
@@ -380,7 +396,11 @@ export interface TradeStats {
   win_rate: number | null;
   total_pnl_pct: number;
   avg_pnl_pct: number | null;
+  /** mean |raw_edge| on closed trades (legacy key) */
   avg_edge_at_entry: number | null;
+  avg_raw_edge_at_entry?: number | null;
+  avg_directional_edge_at_entry?: number | null;
+  edge_definition?: Record<string, string>;
   by_direction: Record<string, {
     total: number; wins: number; win_rate: number;
     avg_pnl: number; total_pnl: number;
@@ -461,12 +481,28 @@ export interface PredictionCalibration {
   by_category: Record<string, { n: number; brier_score: number; skill_score: number; grade: string }>;
   segments?: Record<string, {
     n: number;
-    brier_score: number;
-    skill_score: number;
+    brier_score: number | null;
+    skill_score: number | null;
     grade: string;
+    market_brier_score?: number | null;
+    market_relative_skill?: number | null;
     segment_min_samples?: number | null;
     qualified?: boolean;
   }>;
+}
+
+/** Phase 3 edge × confidence diagnostic (act + watch + provisional). */
+export interface CalibrationBucketCell {
+  n: number;
+  brier_score: number | null;
+  direction_correct_rate: number | null;
+}
+
+export interface CalibrationBucketSummary {
+  n: number;
+  by_edge_bucket: Record<string, CalibrationBucketCell>;
+  by_confidence_bucket: Record<string, CalibrationBucketCell>;
+  by_edge_x_confidence: Record<string, CalibrationBucketCell>;
 }
 
 // ── Quality operations metrics (Plan 2 §1.6) ───────────────────────────────
@@ -529,6 +565,10 @@ export interface QualityMetricsAnomaly {
   code: string;
   severity: "high" | "medium" | "low" | string;
   detail: unknown;
+  /** Sample event ids for operator deep-links (when available). */
+  event_ids?: string[];
+  /** Suggested operator page (e.g. /history, /quality). */
+  href?: string | null;
 }
 
 export interface SchedulerTimeseriesPoint {
@@ -817,6 +857,9 @@ export const eventsApi = {
   // M2/M5 act-only prediction calibration scorecard.
   predictionCalibration: () =>
     api<PredictionCalibration>("/events/predictions/calibration"),
+
+  predictionCalibrationBuckets: () =>
+    api<CalibrationBucketSummary>("/events/predictions/calibration/buckets"),
 
   recentPredictions: (limit = 10, offset = 0) =>
     api<{ predictions: PredictionRecord[]; count?: number; total?: number; limit?: number; offset?: number }>(

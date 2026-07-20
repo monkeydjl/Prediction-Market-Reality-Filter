@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { EdgeTimelineChart } from "@/components/edges/edge-timeline-chart";
+import { DomainScopeBanner } from "@/components/common/domain-scope-banner";
 import { PaginationControls } from "@/components/pagination-controls";
 import { eventsApi, type EdgePoint, type FreshEdge } from "@/lib/api";
 import { fmtDateTime } from "@/lib/format";
@@ -154,11 +155,15 @@ export default function EdgesPage() {
   return (
       <main id="main-content" className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
         <div className="flex flex-col gap-1">
-          <h1 className="text-balance text-xl font-semibold md:text-2xl">Edge 检查</h1>
+          <h1 className="text-balance text-xl font-semibold md:text-2xl">
+            事件 Edge 监测
+          </h1>
           <p className="text-sm text-muted-foreground">
-            监控模型与预测市场价格之间的偏离，按照 edge 的生命周期阶段（新鲜 / 衰减 / 过时 / 收敛）分类。
+            监控事件分析概率与预测市场（Polymarket 等）价格之间的偏离，按生命周期
+            （新鲜 / 衰减 / 过时 / 收敛）分类。与体育 Kernel 比赛 edge 相互独立。
           </p>
         </div>
+        <DomainScopeBanner domain="event" />
 
         {/* Summary cards */}
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">

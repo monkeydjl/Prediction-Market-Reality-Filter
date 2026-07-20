@@ -30,6 +30,45 @@ interface MergedPoint {
   polymarket: number | null;
 }
 
+
+const OUTCOME_ZH: Record<string, string> = {
+  home_win: "主胜",
+  away_win: "客胜",
+  draw: "平局",
+  home: "主胜",
+  away: "客胜",
+};
+
+function latestPair(points: MergedPoint[]): {
+  traditional: number | null;
+  polymarket: number | null;
+  captured_at: string;
+} | null {
+  if (!points.length) return null;
+  // Prefer points that have both; else last non-null traditional or poly
+  for (let i = points.length - 1; i >= 0; i--) {
+    const p = points[i];
+    if (p.traditional != null && p.polymarket != null) {
+      return {
+        traditional: p.traditional,
+        polymarket: p.polymarket,
+        captured_at: p.captured_at,
+      };
+    }
+  }
+  const last = points[points.length - 1];
+  return {
+    traditional: last.traditional,
+    polymarket: last.polymarket,
+    captured_at: last.captured_at,
+  };
+}
+
+function formatPct(v: number | null): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return `${(v * 100).toFixed(1)}%`;
+}
+
 function mergeSeries(
   traditional: TraditionalOddsHistory,
   polymarket: { series: SnapshotSeries[] },
@@ -115,15 +154,73 @@ export function TraditionalOddsChart({ matchId }: TraditionalOddsChartProps) {
   if (Object.keys(merged).length === 0)
     return <div data-testid="empty">暂无赔率数据</div>;
 
+  const summaryRows = Object.entries(merged)
+    .map(([outcome, points]) => {
+      const pair = latestPair(points);
+      if (!pair) return null;
+      const gap =
+        pair.traditional != null && pair.polymarket != null
+          ? pair.traditional - pair.polymarket
+          : null;
+      return { outcome, ...pair, gap };
+    })
+    .filter((r): r is NonNullable<typeof r> => r != null);
+
   return (
     <div data-testid="odds-chart" className="w-full space-y-4">
       <h3 className="text-lg font-semibold">
         传统赔率 vs Polymarket
         <RealtimePriceIndicator isConnected={isConnected} matchId={matchId} />
       </h3>
+      {summaryRows.length > 0 && (
+        <div
+          data-testid="odds-divergence-summary"
+          className="overflow-x-auto rounded-lg border border-border"
+        >
+          <table className="w-full text-left text-sm">
+            <thead className="border-b border-border bg-muted/40 text-xs text-muted-foreground">
+              <tr>
+                <th className="px-3 py-2 font-medium">结果</th>
+                <th className="px-3 py-2 font-medium">传统隐含</th>
+                <th className="px-3 py-2 font-medium">预测市场</th>
+                <th className="px-3 py-2 font-medium">价差 (传统−市场)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summaryRows.map((row) => (
+                <tr key={row.outcome} className="border-b border-border/60 last:border-0">
+                  <td className="px-3 py-2 font-medium">
+                    {OUTCOME_ZH[row.outcome] ?? row.outcome}
+                  </td>
+                  <td className="px-3 py-2 font-mono tabular-nums">
+                    {formatPct(row.traditional)}
+                  </td>
+                  <td className="px-3 py-2 font-mono tabular-nums">
+                    {formatPct(row.polymarket)}
+                  </td>
+                  <td
+                    className={`px-3 py-2 font-mono tabular-nums ${
+                      row.gap != null && Math.abs(row.gap) >= 0.05
+                        ? "font-semibold text-amber-600 dark:text-amber-400"
+                        : ""
+                    }`}
+                  >
+                    {row.gap == null
+                      ? "—"
+                      : `${row.gap >= 0 ? "+" : ""}${(row.gap * 100).toFixed(1)}pp`}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+            价差高亮 ≥5pp：传统庄家与预测市场隐含概率分歧（P1-O4）
+          </p>
+        </div>
+      )}
       {Object.entries(merged).map(([outcome, points]) => (
         <div key={outcome} data-testid={`series-${outcome}`}>
-          <p className="font-medium mb-1">{outcome}</p>
+          <p className="font-medium mb-1">{OUTCOME_ZH[outcome] ?? outcome}</p>
           <ResponsiveContainer width="100%" height={200}>
             <LineChart data={points}>
               <CartesianGrid strokeDasharray="3 3" />

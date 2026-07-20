@@ -141,6 +141,40 @@ describe("TradesPage", () => {
     expect(row).not.toHaveTextContent("28.5%");
   });
 
+  it("explains edge definition and shows raw + directional columns", async () => {
+    apiMocks.tradeStats.mockResolvedValue({
+      ...stats,
+      avg_edge_at_entry: 9.1,
+      avg_directional_edge_at_entry: 8.2,
+    });
+    apiMocks.openTrades.mockResolvedValue({
+      count: 1,
+      trades: [
+        {
+          ...openTrade,
+          entry_edge: -9.1,
+          directional_edge: 9.1,
+        },
+      ],
+    });
+    apiMocks.closedTrades.mockResolvedValue({ count: 0, trades: [] });
+
+    render(<TradesPage />);
+
+    expect(await screen.findByTestId("edge-definition-banner")).toHaveTextContent(
+      "raw_edge",
+    );
+    expect(screen.getByText("|Edge| 均值")).toBeInTheDocument();
+    expect(screen.getByText("方向 edge 均值")).toBeInTheDocument();
+
+    expect(screen.getByRole("columnheader", { name: "raw edge" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "方向 edge" })).toBeInTheDocument();
+    const eventCell = await screen.findByText("Open trade event");
+    const row = eventCell.closest("tr");
+    expect(row).not.toBeNull();
+    expect(row).toHaveTextContent("pp");
+  });
+
   it("shows market probability instead of system probability for closed entry-to-settlement", async () => {
     const user = userEvent.setup();
     apiMocks.tradeStats.mockResolvedValue(stats);

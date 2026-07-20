@@ -1,13 +1,15 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Activity,
   CircleDollarSign,
+  Crosshair,
+  Dices,
   FlaskConical,
   Gauge,
-  Globe,
   GraduationCap,
   History,
   Lightbulb,
@@ -22,6 +24,8 @@ import {
   Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { eventsApi } from "@/lib/api";
+import { adaptMover } from "@/lib/adapt";
 import { OperatorKeyControl } from "@/components/operator-key-control";
 import { ThemeControl } from "@/components/theme-control";
 import { LiveStatusIndicator } from "@/components/live-status-indicator";
@@ -44,7 +48,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/", label: "监控面板", icon: Radar, match: ["/", "/events"] },
       { href: "/decisions", label: "决策机会", icon: Target, match: ["/decisions"] },
-      { href: "/edges", label: "Edge 监测", icon: Zap, match: ["/edges"] },
+      { href: "/edges", label: "事件 Edge", icon: Zap, match: ["/edges"] },
       { href: "/analyze", label: "人工分析", icon: FlaskConical, match: ["/analyze"] },
       { href: "/history", label: "历史复盘", icon: History, match: ["/history"] },
       { href: "/quality", label: "质量运营", icon: Activity, match: ["/quality"] },
@@ -56,24 +60,69 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Sports Prediction OS",
     items: [
       { href: "/sports", label: "体育预测", icon: Medal, match: ["/sports"] },
+      {
+        href: "/sports/world-cup",
+        label: "世界杯",
+        icon: Trophy,
+        match: ["/sports/world-cup"],
+      },
+      { href: "/sports/edges", label: "体育 Edge", icon: Crosshair, match: ["/sports/edges"] },
       { href: "/sports/futures", label: "期货市场", icon: Trophy, match: ["/sports/futures"] },
       { href: "/sports/learning", label: "学习仪表盘", icon: GraduationCap, match: ["/sports/learning"] },
       { href: "/sports/markets", label: "体育市场", icon: LineChart, match: ["/sports/markets"] },
       { href: "/sports/optimization", label: "参数优化", icon: Wrench, match: ["/sports/optimization"] },
       { href: "/sports/recommendations", label: "体育推荐", icon: Lightbulb, match: ["/sports/recommendations"] },
       { href: "/sports/settlements", label: "体育结算", icon: CircleDollarSign, match: ["/sports/settlements"] },
-      { href: "/sports/world-cup", label: "世界杯专属", icon: Globe, match: ["/sports/world-cup"] },
+      { href: "/sports/betting", label: "竞猜中心", icon: Dices, match: ["/sports/betting"] },
     ],
   },
 ];
 
-const HOT_NEWS = [
-  "美联储降息预期升温，预测市场重新定价 9 月会议概率",
-  "AI 基建订单继续上修，芯片与电力板块波动扩大",
-  "原油库存意外下降，能源合约短线成交放大",
-  "世界杯资格赛伤病名单更新，热门球队盘口出现分歧",
-  "加密市场资金费率回落，宏观风险偏好等待 CPI 数据",
+/** Sports OS sub-routes that must not light up the Kernel list item `/sports`. */
+const SPORTS_NAMED_SEGMENTS = new Set([
+  "world-cup",
+  "edges",
+  "futures",
+  "learning",
+  "markets",
+  "optimization",
+  "recommendations",
+  "settlements",
+  "betting",
+]);
+
+function isNavItemActive(norm: string, href: string): boolean {
+  if (href === "/") {
+    return norm === "/" || norm.startsWith("/events");
+  }
+  if (href === "/sports") {
+    if (norm === "/sports") return true;
+    if (!norm.startsWith("/sports/")) return false;
+    const first = norm.slice("/sports/".length).split("/")[0] ?? "";
+    // Match detail pages (/sports/:matchId) stay under Kernel list; named hubs do not.
+    return first.length > 0 && !SPORTS_NAMED_SEGMENTS.has(first);
+  }
+  return norm === href || norm.startsWith(`${href}/`);
+}
+
+/** Fallback copy when movers API is empty / unavailable (not live market data). */
+const FALLBACK_HEADLINES = [
+  "暂无概率异动 — 分析或跟踪事件后将显示真实标题",
+  "可在监控面板刷新，或执行发现/分析以积累历史快照",
 ];
+
+export type TickerItem = {
+  id: string;
+  text: string;
+  href?: string;
+  delta?: number;
+};
+
+function formatDelta(delta: number | undefined): string {
+  if (delta == null || !Number.isFinite(delta)) return "";
+  const sign = delta > 0 ? "+" : "";
+  return `${sign}${delta.toFixed(1)}pp`;
+}
 
 function BrandLink() {
   return (
@@ -92,10 +141,73 @@ function BrandLink() {
 }
 
 function HotNewsTicker() {
-  const items = [...HOT_NEWS, ...HOT_NEWS];
+  const [items, setItems] = useState<TickerItem[]>([]);
+  const [live, setLive] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await eventsApi.movers(12);
+        if (cancelled) return;
+        const movers = (resp.movers ?? [])
+          .map(adaptMover)
+          .filter((m) => m.id && m.title);
+        if (movers.length > 0) {
+          setItems(
+            movers.map((m) => ({
+              id: m.id,
+              text: m.title,
+              href: `/events?id=${encodeURIComponent(m.id)}`,
+              delta: m.delta,
+            })),
+          );
+          setLive(true);
+        } else {
+          setItems(
+            FALLBACK_HEADLINES.map((text, i) => ({
+              id: `fallback-${i}`,
+              text,
+            })),
+          );
+          setLive(false);
+        }
+      } catch {
+        if (cancelled) return;
+        setItems(
+          FALLBACK_HEADLINES.map((text, i) => ({
+            id: `fallback-${i}`,
+            text,
+          })),
+        );
+        setLive(false);
+      } finally {
+        if (!cancelled) setLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const display: TickerItem[] =
+    items.length > 0
+      ? items
+      : FALLBACK_HEADLINES.map((text, i) => ({ id: `fallback-${i}`, text }));
+  // Duplicate for seamless marquee
+  const loop: TickerItem[] = [...display, ...display];
+  const label = live ? "异动快讯" : "示例新闻";
+  const aria = live ? "概率异动快讯" : "示例新闻";
 
   return (
-    <section aria-label="示例新闻" className="border-b border-border/70 bg-background/90">
+    <section
+      aria-label={aria}
+      data-testid="hot-news-ticker"
+      data-live={live ? "true" : "false"}
+      data-loaded={loaded ? "true" : "false"}
+      className="border-b border-border/70 bg-background/90"
+    >
       <style>{`
         @keyframes pmrf-hot-news-scroll {
           from { transform: translateX(0); }
@@ -107,16 +219,62 @@ function HotNewsTicker() {
         <span className="h-5 w-px shrink-0 bg-border" aria-hidden="true" />
         <div className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-foreground">
           <Newspaper className="size-3.5 text-primary" aria-hidden="true" />
-          示例新闻
+          {label}
         </div>
         <div className="min-w-0 flex-1 overflow-hidden">
           <div className="flex w-max items-center gap-6 whitespace-nowrap text-xs text-muted-foreground motion-safe:animate-[pmrf-hot-news-scroll_42s_linear_infinite] hover:[animation-play-state:paused]">
-            {items.map((item, index) => (
-              <span key={`${item}-${index}`} className="inline-flex items-center gap-2">
-                <span className="size-1 rounded-full bg-primary/70" aria-hidden="true" />
-                {item}
-              </span>
-            ))}
+            {loop.map((item, index) => {
+              const deltaText = formatDelta(item.delta);
+              const body = (
+                <>
+                  <span
+                    className={cn(
+                      "size-1 rounded-full",
+                      (item.delta ?? 0) > 0.5
+                        ? "bg-pos"
+                        : (item.delta ?? 0) < -0.5
+                          ? "bg-neg"
+                          : "bg-primary/70",
+                    )}
+                    aria-hidden="true"
+                  />
+                  <span className="max-w-[28rem] truncate">{item.text}</span>
+                  {deltaText && (
+                    <span
+                      className={cn(
+                        "font-mono tabular-nums",
+                        (item.delta ?? 0) > 0
+                          ? "text-pos"
+                          : (item.delta ?? 0) < 0
+                            ? "text-neg"
+                            : "",
+                      )}
+                    >
+                      {deltaText}
+                    </span>
+                  )}
+                </>
+              );
+              return item.href ? (
+                <Link
+                  key={`${item.id}-${index}`}
+                  href={item.href}
+                  prefetch={false}
+                  className="inline-flex items-center gap-2 hover:text-foreground"
+                  data-testid={index < display.length ? `ticker-item-${item.id}` : undefined}
+                >
+                  {body}
+                </Link>
+              ) : (
+                <span
+                  key={`${item.id}-${index}`}
+                  className="inline-flex items-center gap-2"
+                  data-testid={index < display.length ? `ticker-item-${item.id}` : undefined}
+                >
+                  {body}
+                </span>
+              );
+            })}
           </div>
         </div>
       </div>

@@ -48,6 +48,7 @@ export interface PredictionResult {
   explanation: ContributionItem[];
   feature_version: string;
   prediction_timestamp: string | null;
+  betting_analysis?: Record<string, unknown> | null;
 }
 
 // From lib/learning-api.ts
@@ -121,6 +122,9 @@ export interface ReliabilityBin {
 }
 
 export interface ReliabilityData {
+  ece?: number | null;
+  max_calibration_error?: number | null;
+  sample_count?: number;
   engine: string | null;
   competition: string | null;
   bins: ReliabilityBin[];
@@ -221,6 +225,9 @@ export interface SportRecommendation {
   market_prob: number;
   sources_count: number;
   captured_at: string | null;
+  review_priority?: string;
+  guardrail_flags?: string[] | null;
+  policy_notes?: string | null;
 }
 
 export interface RecommendationList {
@@ -275,9 +282,22 @@ export interface CalibrationList {
 }
 
 // From lib/futures-api.ts
+export interface FuturesMultiLegIntegrity {
+  status: "ok" | "thin" | "warn" | "incomplete" | string;
+  leg_count: number;
+  unique_team_count: number;
+  teams: string[];
+  duplicate_teams: string[];
+  missing_price_count: number;
+  sum_implied_prob: number | null;
+  issues: string[];
+}
+
 export interface FuturesPair {
   competition: string;
   season: string;
+  verified_count?: number;
+  integrity?: FuturesMultiLegIntegrity;
 }
 
 export interface FuturesLink {
@@ -311,12 +331,36 @@ export interface FuturesLinksResponse {
   competition: string;
   season: string;
   links: FuturesLink[];
+  integrity?: FuturesMultiLegIntegrity;
 }
 
 export interface FuturesSnapshotsResponse {
   competition: string;
   season: string;
   snapshots: FuturesSnapshot[];
+  integrity?: FuturesMultiLegIntegrity;
+}
+
+export interface FuturesSeriesRegistryEntry {
+  series_prefix: string;
+  competition: string;
+  championship_type: string;
+}
+
+export interface FuturesCoverageResponse {
+  series_registry: FuturesSeriesRegistryEntry[];
+  pairs: Array<{
+    competition: string;
+    season: string;
+    link_count: number;
+    verified_count: number;
+    integrity: FuturesMultiLegIntegrity;
+  }>;
+  pair_count: number;
+  status_counts: Record<string, number>;
+  registered_competitions: string[];
+  linked_competitions: string[];
+  missing_linked_competitions: string[];
 }
 
 // From lib/optimization-api.ts
@@ -335,4 +379,41 @@ export interface OptimizedParams {
   status: string;
   created_at: string | null;
   applied_at: string | null;
+}
+
+/** Response of POST /sport-optimization/apply/{id} */
+export interface ApplyParamsResult {
+  applied: OptimizedParams;
+  previous_applied: OptimizedParams | null;
+  weight_diff: Array<{
+    factor: string;
+    before: number | null;
+    after: number | null;
+  }>;
+}
+
+export interface MarketPriceAudit {
+  link_id: number;
+  available: boolean;
+  snapshot_count: number;
+  first_price?: number;
+  last_price?: number;
+  delta_pp?: number;
+  max_drawdown_pp?: number;
+  min_price?: number;
+  max_price?: number;
+  first_captured_at?: string | null;
+  last_captured_at?: string | null;
+  flags?: string[];
+  source?: string;
+  market_id?: string;
+  verified?: boolean;
+  mapped_outcome?: string;
+  match_id?: string;
+}
+
+export interface MatchMarketAudit {
+  match_id: string;
+  link_count: number;
+  audits: MarketPriceAudit[];
 }

@@ -78,6 +78,18 @@ describe("OpenDecisionsList", () => {
     await waitFor(() => expect(screen.getByTestId("error")).toBeInTheDocument());
   });
 
+  it("renders feature-disabled banner on 503", async () => {
+    apiMocks.useOpenDecisions.mockReturnValue({
+      data: undefined,
+      error: new Error("503 Service Unavailable"),
+      isLoading: false,
+    });
+    render(<OpenDecisionsList />);
+    await waitFor(() =>
+      expect(screen.getByTestId("recs-disabled")).toBeInTheDocument(),
+    );
+  });
+
   it("renders filter buttons", async () => {
     apiMocks.useOpenDecisions.mockReturnValue({
       data: mockData,

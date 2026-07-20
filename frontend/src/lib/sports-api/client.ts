@@ -1,5 +1,10 @@
 import { getApiBase } from "@/lib/env";
-import { ApiError, buildApiErrorMessage, getOperatorApiKey, getOperatorId, handleFetchError } from "@/lib/api";
+import {
+  ApiError,
+  buildApiErrorMessage,
+  buildOperatorAuthHeaders,
+  handleFetchError,
+} from "@/lib/api";
 
 const POST_TIMEOUT_MS = 60_000;
 
@@ -30,11 +35,10 @@ export async function sportPost<T>(
   body?: unknown,
   opts?: { signal?: AbortSignal },
 ): Promise<T> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const operatorKey = getOperatorApiKey();
-  if (operatorKey) headers["X-API-Key"] = operatorKey;
-  const operatorId = getOperatorId();
-  if (operatorId) headers["X-Operator"] = operatorId;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...buildOperatorAuthHeaders(),
+  };
 
   const controller = new AbortController();
   const timeout = globalThis.setTimeout(() => controller.abort(), POST_TIMEOUT_MS);

@@ -1,7 +1,7 @@
 "use client";
 
 import useSWR from "swr";
-import { buildApiErrorMessage, getOperatorApiKey, getOperatorId } from "@/lib/api";
+import { buildApiErrorMessage, buildOperatorAuthHeaders } from "@/lib/api";
 import { getApiBase } from "@/lib/env";
 import type { MatchWithPrediction } from "./predictions-api";
 
@@ -16,11 +16,7 @@ const API_BASE = getApiBase();
 const MATCHES_FETCHER_TIMEOUT_MS = 60_000;
 
 async function matchesFetcher(url: string): Promise<MatchWithPrediction[]> {
-  const headers: Record<string, string> = {};
-  const operatorKey = getOperatorApiKey();
-  if (operatorKey) headers["X-API-Key"] = operatorKey;
-  const operatorId = getOperatorId();
-  if (operatorId) headers["X-Operator"] = operatorId;
+  const headers: Record<string, string> = { ...buildOperatorAuthHeaders() };
 
   const controller = new AbortController();
   const timeout = globalThis.setTimeout(

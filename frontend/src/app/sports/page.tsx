@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { SportFilter } from "@/components/sports/common/sport-filter";
 import { MatchListCard } from "@/components/sports/common/match-list-card";
+import { SportTrackBanner } from "@/components/sports/common/sport-track-banner";
 import { useMatches } from "@/lib/sports-api";
 
 export default function SportsPage() {
@@ -18,7 +20,18 @@ export default function SportsPage() {
 
   return (
     <main className="mx-auto max-w-4xl space-y-6 px-4 py-6 md:px-6">
-      <h1 className="text-2xl font-bold">体育预测</h1>
+      <div className="space-y-1">
+        <h1 className="text-2xl font-bold">体育预测（Kernel）</h1>
+        <p className="text-sm text-muted-foreground">
+          多联赛比赛列表与引擎预测。世界杯小组 / 淘汰赛专题请使用{" "}
+          <Link href="/sports/world-cup" className="text-primary underline">
+            世界杯专题
+          </Link>
+          。
+        </p>
+      </div>
+
+      <SportTrackBanner track="kernel" />
 
       <SportFilter value={sport} onChange={setSport} />
 

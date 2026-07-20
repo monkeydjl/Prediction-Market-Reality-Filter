@@ -26,6 +26,8 @@ describe("navigation shell", () => {
       "quality-metrics/page.tsx",
       "trades/page.tsx",
       "sports/page.tsx",
+      "sports/edges/page.tsx",
+      "sports/betting/page.tsx",
       "sports/[matchId]/page.tsx",
       "sports/world-cup/page.tsx",
       "sports/futures/page.tsx",

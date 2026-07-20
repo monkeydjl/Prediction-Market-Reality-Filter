@@ -71,6 +71,8 @@ describe("EdgesPage", () => {
     render(<EdgesPage />);
 
     await screen.findByText("Edge event 1");
+    expect(screen.getByRole("heading", { name: /事件 Edge 监测/ })).toBeInTheDocument();
+    expect(screen.getByTestId("domain-scope-banner")).toHaveTextContent("事件情报 Edge");
     expect(api.edgeMonitor).toHaveBeenCalledWith(10, 0, "all");
     expect(screen.getByText("\u7b2c 1 / 2 \u9875 \u00b7 \u5171 11 \u6761")).toBeInTheDocument();
 

@@ -1,7 +1,25 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AnomalyBanner } from "./anomaly-banner";
 import type { QualityMetricsAnomaly } from "@/lib/api";
+
+vi.mock("next/link", () => ({
+  default: ({
+    href,
+    children,
+    className,
+    ...rest
+  }: {
+    href: string;
+    children: React.ReactNode;
+    className?: string;
+    [key: string]: unknown;
+  }) => (
+    <a href={href} className={className} {...rest}>
+      {children}
+    </a>
+  ),
+}));
 
 describe("AnomalyBanner", () => {
   it("renders the healthy state when there are no anomalies", () => {
@@ -21,7 +39,6 @@ describe("AnomalyBanner", () => {
     expect(screen.getByText("Brier 分数过高")).toBeInTheDocument();
     expect(screen.getByText("高")).toBeInTheDocument();
     expect(screen.getByText("中")).toBeInTheDocument();
-    // String detail rendered verbatim; object detail JSON-serialized
     expect(screen.getByText("down for 5m")).toBeInTheDocument();
     expect(screen.getByText(/"brier"/)).toBeInTheDocument();
   });
@@ -34,5 +51,24 @@ describe("AnomalyBanner", () => {
     );
     expect(screen.getByText("custom_code")).toBeInTheDocument();
     expect(screen.getByText("critical")).toBeInTheDocument();
+  });
+
+  it("links sample event_ids and page href", () => {
+    const anomalies: QualityMetricsAnomaly[] = [
+      {
+        code: "wide_spread_not_downgraded",
+        severity: "medium",
+        event_ids: ["evt-aaa", "evt-bbb"],
+        href: "/history",
+        detail: { count: 2, event_ids: ["evt-aaa", "evt-bbb"] },
+      },
+    ];
+    render(<AnomalyBanner anomalies={anomalies} />);
+    const linkA = screen.getByTestId("anomaly-event-evt-aaa");
+    expect(linkA).toHaveAttribute("href", "/events/evt-aaa");
+    expect(screen.getByTestId("anomaly-href-wide_spread_not_downgraded")).toHaveAttribute(
+      "href",
+      "/history",
+    );
   });
 });

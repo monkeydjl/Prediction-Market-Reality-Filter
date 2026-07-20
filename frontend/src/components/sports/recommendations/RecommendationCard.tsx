@@ -14,6 +14,20 @@ const DECISION_LABELS: Record<string, string> = {
   skip: "跳过",
 };
 
+const PRIORITY_LABELS: Record<string, string> = {
+  critical: "紧急复核",
+  high: "优先复核",
+  normal: "常规",
+  low: "低优先",
+};
+
+const PRIORITY_STYLES: Record<string, string> = {
+  critical: "bg-red-100 text-red-800",
+  high: "bg-amber-100 text-amber-900",
+  normal: "bg-slate-100 text-slate-700",
+  low: "bg-gray-50 text-gray-500",
+};
+
 const OUTCOME_LABELS: Record<string, string> = {
   home_win: "主胜",
   draw: "平局",
@@ -50,6 +64,14 @@ export function RecommendationCard({
         <span className="text-xs text-muted-foreground">
           {DECISION_LABELS[rec.decision] ?? rec.decision}
         </span>
+        {rec.review_priority && rec.review_priority !== "normal" && (
+          <span
+            data-testid={`priority-${rec.match_id}`}
+            className={`rounded px-2 py-0.5 text-xs font-medium ${PRIORITY_STYLES[rec.review_priority] ?? PRIORITY_STYLES.normal}`}
+          >
+            {PRIORITY_LABELS[rec.review_priority] ?? rec.review_priority}
+          </span>
+        )}
         <span className="ml-auto font-mono text-sm font-semibold" data-testid={`edge-${rec.match_id}`}>
           {rec.edge_pct > 0 ? "+" : ""}{rec.edge_pct.toFixed(2)}pp
         </span>
@@ -65,10 +87,34 @@ export function RecommendationCard({
             </div>
           )}
           <div data-testid={`rationale-${rec.match_id}`} className="text-foreground">
-            {rec.rationale}
+            {rec.rationale.includes("分歧诊断") ? (
+              <>
+                <span>{rec.rationale.split("分歧诊断")[0]}</span>
+                <span
+                  data-testid={`diagnosis-${rec.match_id}`}
+                  className="mt-1 block rounded border border-border/70 bg-muted/40 px-2 py-1 text-muted-foreground"
+                >
+                  分歧诊断{rec.rationale.split("分歧诊断")[1]}
+                </span>
+              </>
+            ) : (
+              rec.rationale
+            )}
           </div>
           {rec.engine_name && (
             <div>引擎: {rec.engine_name} | 赛事: {rec.competition ?? "—"}</div>
+          )}
+          {rec.policy_notes && (
+            <div data-testid={`policy-${rec.match_id}`}>策略: {rec.policy_notes}</div>
+          )}
+          {rec.guardrail_flags && rec.guardrail_flags.length > 0 && (
+            <div data-testid={`guardrails-${rec.match_id}`} className="flex flex-wrap gap-1">
+              {rec.guardrail_flags.map((f) => (
+                <span key={f} className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-800 dark:text-amber-300">
+                  {f}
+                </span>
+              ))}
+            </div>
           )}
         </div>
       )}

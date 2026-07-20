@@ -22,7 +22,12 @@
  */
 
 import { getApiBase } from "@/lib/env";
-import { ApiError, buildApiErrorMessage, getOperatorApiKey, getOperatorId, handleFetchError } from "@/lib/api";
+import {
+  ApiError,
+  buildApiErrorMessage,
+  buildOperatorAuthHeaders,
+  handleFetchError,
+} from "@/lib/api";
 
 const API_BASE = getApiBase();
 const ANALYTICS_CLIENT_SOURCE = "world-cup-dashboard";
@@ -38,11 +43,8 @@ const LONG_OPERATION_TIMEOUT_MS = 180_000;
 export function analyticsHeaders(extra?: HeadersInit): HeadersInit {
   const headers: Record<string, string> = {
     "X-Client-Source": ANALYTICS_CLIENT_SOURCE,
+    ...buildOperatorAuthHeaders(),
   };
-  const key = getOperatorApiKey();
-  if (key) headers["X-API-Key"] = key;
-  const operator = getOperatorId();
-  if (operator) headers["X-Operator"] = operator;
   return extra ? { ...headers, ...Object.fromEntries(new Headers(extra)) } : headers;
 }
 

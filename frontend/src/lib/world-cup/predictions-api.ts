@@ -3,7 +3,12 @@
  */
 
 import { getApiBase } from "@/lib/env";
-import { buildApiErrorMessage, getOperatorApiKey, getOperatorId } from "@/lib/api";
+import {
+  buildApiErrorMessage,
+  buildOperatorAuthHeaders,
+  getOperatorApiKey,
+  getOperatorId,
+} from "@/lib/api";
 
 export interface PredictedScore {
   home: number;

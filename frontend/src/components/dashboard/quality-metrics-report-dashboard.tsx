@@ -105,7 +105,18 @@ export function QualityMetricsReportDashboard() {
               <tbody>
                 {report.report_errors.slice(0, 50).map((e, i) => (
                   <tr key={i} className="border-t border-border">
-                    <td className="py-1 font-mono">{e.event_id}</td>
+                    <td className="py-1 font-mono">
+                      {e.event_id && e.event_id !== "?" ? (
+                        <a
+                          href={`/events/${encodeURIComponent(e.event_id)}`}
+                          className="text-primary underline"
+                        >
+                          {e.event_id}
+                        </a>
+                      ) : (
+                        e.event_id
+                      )}
+                    </td>
                     <td className="py-1 font-mono text-muted-foreground">{e.error}</td>
                   </tr>
                 ))}

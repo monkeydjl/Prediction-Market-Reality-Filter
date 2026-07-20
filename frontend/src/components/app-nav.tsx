@@ -59,13 +59,13 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: "Sports Prediction OS",
     items: [
-      { href: "/sports", label: "体育预测", icon: Medal, match: ["/sports"] },
       {
-        href: "/sports/world-cup",
-        label: "世界杯",
-        icon: Trophy,
-        match: ["/sports/world-cup"],
+        href: "/sports/betting",
+        label: "竞猜中心",
+        icon: Dices,
+        match: ["/sports/betting"],
       },
+      { href: "/sports", label: "体育预测", icon: Medal, match: ["/sports"] },
       { href: "/sports/edges", label: "体育 Edge", icon: Crosshair, match: ["/sports/edges"] },
       { href: "/sports/futures", label: "期货市场", icon: Trophy, match: ["/sports/futures"] },
       { href: "/sports/learning", label: "学习仪表盘", icon: GraduationCap, match: ["/sports/learning"] },
@@ -73,7 +73,6 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/sports/optimization", label: "参数优化", icon: Wrench, match: ["/sports/optimization"] },
       { href: "/sports/recommendations", label: "体育推荐", icon: Lightbulb, match: ["/sports/recommendations"] },
       { href: "/sports/settlements", label: "体育结算", icon: CircleDollarSign, match: ["/sports/settlements"] },
-      { href: "/sports/betting", label: "竞猜中心", icon: Dices, match: ["/sports/betting"] },
     ],
   },
 ];

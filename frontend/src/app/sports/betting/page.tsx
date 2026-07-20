@@ -1,80 +1,128 @@
 import Link from "next/link";
-import { Globe, Trophy, Medal, Crosshair, Lightbulb } from "lucide-react";
+import {
+  BETTING_TOOL_LINKS,
+  SECTION_LABELS,
+  competitionsBySection,
+  statusLabel,
+  type BettingCompetition,
+  type CompetitionSection,
+} from "@/lib/betting/competition-catalog";
 
-const BETTING_CATEGORIES = [
-  {
-    href: "/sports/world-cup",
-    title: "世界杯竞猜",
-    description: "赛程、分组、出线概率、淘汰赛对阵、夺冠概率预测",
-    icon: Trophy,
-    color: "text-amber-600",
-  },
-  {
-    href: "/sports",
-    title: "每日比赛预测",
-    description: "NBA / MLB / NHL 等赛事的 AI 概率预测与因子分解",
-    icon: Medal,
-    color: "text-blue-600",
-  },
-  {
-    href: "/sports/edges",
-    title: "Edge 偏离竞猜",
-    description: "模型预测与市场概率最大偏离的比赛，发现价值投注机会",
-    icon: Crosshair,
-    color: "text-green-600",
-  },
-  {
-    href: "/sports/recommendations",
-    title: "智能推荐",
-    description: "基于决策缺口和市场偏离的智能竞猜推荐",
-    icon: Lightbulb,
-    color: "text-purple-600",
-  },
-  {
-    href: "/sports/futures",
-    title: "期货/冠军竞猜",
-    description: "赛季级别的冠军和期货市场概率预测",
-    icon: Globe,
-    color: "text-cyan-600",
-  },
+const SECTION_ORDER: CompetitionSection[] = [
+  "football",
+  "americas",
+  "esports",
+  "tools",
 ];
+
+function StatusBadge({ status }: { status: BettingCompetition["status"] }) {
+  const tone =
+    status === "live"
+      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+      : status === "kernel"
+        ? "bg-sky-500/15 text-sky-700 dark:text-sky-400"
+        : "bg-muted text-muted-foreground";
+  return (
+    <span
+      className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${tone}`}
+    >
+      {statusLabel(status)}
+    </span>
+  );
+}
+
+function CompetitionCard({ item }: { item: BettingCompetition }) {
+  const href =
+    item.status === "coming_soon"
+      ? `/sports/betting/${item.id}`
+      : item.track === "kernel"
+        ? `/sports/betting/${item.id}`
+        : item.href;
+
+  return (
+    <Link
+      href={href}
+      className="group rounded-lg border border-border p-4 transition-colors hover:bg-secondary/40"
+      data-testid={`betting-comp-${item.id}`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <h3 className="font-semibold group-hover:text-primary">{item.label}</h3>
+        <StatusBadge status={item.status} />
+      </div>
+      <p className="mt-1 text-sm text-muted-foreground">{item.description}</p>
+    </Link>
+  );
+}
 
 export default function BettingHubPage() {
   return (
-    <main className="mx-auto max-w-4xl space-y-6 px-4 py-6 md:px-6">
+    <main className="mx-auto max-w-4xl space-y-8 px-4 py-6 md:px-6">
       <div className="space-y-1">
         <h1 className="text-2xl font-bold">竞猜中心</h1>
         <p className="text-sm text-muted-foreground">
-          选择竞猜类型，查看 AI 预测和市场分析，发现价值机会。
+          统一入口覆盖世界杯专题、五大联赛 / NBA 等 Kernel 赛程，以及 Edge
+          与推荐工具。电竞等赛道先占位，不展示假盘口。
         </p>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        {BETTING_CATEGORIES.map((cat) => {
-          const Icon = cat.icon;
-          return (
-            <Link
-              key={cat.href}
-              href={cat.href}
-              className="group rounded-lg border border-border p-4 transition-colors hover:bg-secondary/40"
-            >
-              <div className="flex items-start gap-3">
-                <span className={`mt-0.5 ${cat.color}`}>
-                  <Icon className="size-6" aria-hidden="true" />
-                </span>
-                <div className="min-w-0 space-y-1">
-                  <h2 className="font-semibold group-hover:text-primary">
-                    {cat.title}
-                  </h2>
-                  <p className="text-sm text-muted-foreground">
-                    {cat.description}
-                  </p>
-                </div>
-              </div>
-            </Link>
-          );
-        })}
+      <div
+        role="note"
+        className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs leading-relaxed text-muted-foreground"
+      >
+        <p>
+          <span className="font-medium text-foreground">双轨说明</span>
+          ：世界杯走{" "}
+          <code className="rounded bg-muted px-1">/api/world-cup/*</code>
+          ；NBA / MLB / NHL / 足球联赛走 Kernel{" "}
+          <code className="rounded bg-muted px-1">/api/sports/*</code>
+          。二者数据与结算路径不同，卡片上会标明状态。
+        </p>
       </div>
+
+      {SECTION_ORDER.map((section) => {
+        if (section === "tools") {
+          return (
+            <section key={section} className="space-y-3" aria-labelledby={`sec-${section}`}>
+              <h2 id={`sec-${section}`} className="text-lg font-semibold">
+                {SECTION_LABELS[section]}
+              </h2>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {BETTING_TOOL_LINKS.map((tool) => (
+                  <Link
+                    key={tool.id}
+                    href={tool.href}
+                    className="group rounded-lg border border-border p-4 transition-colors hover:bg-secondary/40"
+                    data-testid={`betting-tool-${tool.id}`}
+                  >
+                    <h3 className="font-semibold group-hover:text-primary">
+                      {tool.title}
+                    </h3>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {tool.description}
+                    </p>
+                  </Link>
+                ))}
+              </div>
+            </section>
+          );
+        }
+
+        const items = competitionsBySection(section);
+        if (items.length === 0) return null;
+
+        return (
+          <section key={section} className="space-y-3" aria-labelledby={`sec-${section}`}>
+            <h2 id={`sec-${section}`} className="text-lg font-semibold">
+              {SECTION_LABELS[section]}
+            </h2>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {items.map((item) => (
+                <CompetitionCard key={item.id} item={item} />
+              ))}
+            </div>
+          </section>
+        );
+      })}
     </main>
   );
 }

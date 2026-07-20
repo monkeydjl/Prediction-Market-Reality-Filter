@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 竞猜模块 IA 起步
+- `lib/betting/competition-catalog.ts`: static catalog (world cup, big-five aliases, NBA/MLB/NHL, esports placeholder, tool links)
+- `/sports/betting` hub: sectioned cards + dual-track note
+- `/sports/betting/[competitionId]`: competition landing (kernel link / world-cup / coming_soon, no fake odds)
+- Nav: 竞猜中心 first in Sports group; world-cup nav entry removed (route kept)
+- Kernel list: `?sport=` query sync; banners link 竞猜中心
+
+
 ### Ops runbook + local smoke + CI typecheck
 - RUNBOOK: Prometheus series table, Grafana import path, DRIFT_ALERT_* /
   SCHEDULER_FAILURE_ALERT_* dispatch notes, matching-eval CLI snippet

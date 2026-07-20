@@ -1,14 +1,32 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useMemo } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { SportFilter } from "@/components/sports/common/sport-filter";
 import { MatchListCard } from "@/components/sports/common/match-list-card";
 import { SportTrackBanner } from "@/components/sports/common/sport-track-banner";
 import { useMatches } from "@/lib/sports-api";
 
+const SPORT_CODES = new Set(["football", "basketball", "baseball", "hockey"]);
+
 export default function SportsPage() {
-  const [sport, setSport] = useState<string | null>(null);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const sportParam = searchParams.get("sport");
+  const sport = useMemo(() => {
+    if (sportParam && SPORT_CODES.has(sportParam)) return sportParam;
+    return null;
+  }, [sportParam]);
+
+  const setSport = useCallback(
+    (next: string | null) => {
+      const qs = next ? `?sport=${encodeURIComponent(next)}` : "";
+      router.replace(`/sports${qs}`, { scroll: false });
+    },
+    [router],
+  );
+
   const { data, error, isLoading, mutate } = useMatches(sport ?? undefined);
   const matches = data ?? [];
 
@@ -23,9 +41,13 @@ export default function SportsPage() {
       <div className="space-y-1">
         <h1 className="text-2xl font-bold">体育预测（Kernel）</h1>
         <p className="text-sm text-muted-foreground">
-          多联赛比赛列表与引擎预测。世界杯小组 / 淘汰赛专题请使用{" "}
+          多联赛比赛列表与引擎预测。统一入口见{" "}
+          <Link href="/sports/betting" className="text-primary underline">
+            竞猜中心
+          </Link>
+          ；世界杯专题见{" "}
           <Link href="/sports/world-cup" className="text-primary underline">
-            世界杯专题
+            世界杯
           </Link>
           。
         </p>

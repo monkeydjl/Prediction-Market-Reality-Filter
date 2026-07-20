@@ -160,8 +160,8 @@ describe("AppNav", () => {
     const labels = [
       "监控面板", "决策机会", "事件 Edge", "人工分析",
       "历史复盘", "质量运营", "质量切片", "模拟交易",
-      "体育预测", "世界杯", "体育 Edge", "期货市场", "学习仪表盘", "体育市场",
-      "参数优化", "体育推荐", "体育结算", "竞猜中心",
+      "竞猜中心", "体育预测", "体育 Edge", "期货市场", "学习仪表盘", "体育市场",
+      "参数优化", "体育推荐", "体育结算",
     ];
     for (const label of labels) {
       const link = screen.getByRole("link", { name: new RegExp(label) });

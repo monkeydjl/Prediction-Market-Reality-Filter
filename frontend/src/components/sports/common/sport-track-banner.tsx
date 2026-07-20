@@ -34,7 +34,14 @@ export function SportTrackBanner({
           。
         </p>
         <p className="mt-1">
-          世界杯小组赛 / 淘汰赛 / 夺冠概率等专题能力请到{" "}
+          统一赛事入口见{" "}
+          <Link
+            href="/sports/betting"
+            className="text-primary underline underline-offset-2"
+          >
+            竞猜中心
+          </Link>
+          ；世界杯小组赛 / 淘汰赛 / 夺冠概率请到{" "}
           <Link
             href="/sports/world-cup"
             className="text-primary underline underline-offset-2"
@@ -63,9 +70,16 @@ export function SportTrackBanner({
         Kernel 多体育列表里的单场比赛流水线。
       </p>
       <p className="mt-1">
-        NBA 等联赛预测、因子分解与结算请到{" "}
+        其它联赛与工具见{" "}
+        <Link
+          href="/sports/betting"
+          className="text-primary underline underline-offset-2"
+        >
+          竞猜中心
+        </Link>
+        ；NBA 等 Kernel 赛程见{" "}
         <Link href="/sports" className="text-primary underline underline-offset-2">
-          体育预测（Kernel）
+          体育预测
         </Link>
         ；学习校准见{" "}
         <Link

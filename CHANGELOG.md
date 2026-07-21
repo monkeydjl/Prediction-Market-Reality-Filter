@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### 竞猜落地页 match count + RUNBOOK 联赛启用
+- Client `CompetitionLanding`: live catalog adapter status + today's match count via `useMatches`
+- `useMatches(null)` skips fetch (coming_soon / non-kernel)
+- RUNBOOK: Betting / 联赛赛程 flags + smoke curls
+
+
 ### 竞猜 hub live catalog merge + adapter badges
 - Hub is client: merges static catalog with `GET /api/betting/catalog`
 - Cards show adapter_likely badges; flag strip (Kernel / EPL / 五大联赛)

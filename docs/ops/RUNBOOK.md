@@ -215,6 +215,35 @@ Use `--matcher all` and optional `--manual-overrides path.jsonl` for full
 coverage. The sample JSONL is intentionally small; expand it with real labeled
 links before treating F1 as production-ready.
 
+### Betting / 联赛赛程（竞猜模块）
+
+The 竞猜 hub (`/sports/betting`) and competition landings merge a static FE
+catalog with `GET /api/betting/catalog` (flag-free). Cards show `adapter_likely`
+from current data flags — **not** a guarantee of non-empty fixtures.
+
+To populate Kernel league lists (`GET /api/predictions/matches?competition=epl`):
+
+1. In `backend/.env` (defaults stay OFF):
+   ```bash
+   KERNEL_PREDICTION_ENABLED=true
+   EPL_DATA_ENABLED=true              # English Premier League adapter
+   PHASE2_LEAGUES_ENABLED=true        # La Liga / Bundesliga / Serie A / Ligue 1 / UCL
+   # FOOTBALL_DATA_API_KEY=...        # Football-Data.org for EU leagues
+   # BALLDONTLIE_API_KEY=...          # NBA (optional)
+   ```
+2. Restart the API so `_get_kernel()` rebuilds MultiAdapter registrations.
+3. Sync schedules (operator/write path or adapter-level `sync_schedule` via
+   existing scheduler / scripts — see Phase 2 plans). Empty `match` count on
+   landings usually means flags OFF or no ingest yet, not a broken filter.
+4. Smoke:
+   ```bash
+   curl -s "$BASE/api/betting/catalog" | jq '.flags,.competitions[]|{id,adapter_likely}'
+   curl -s "$BASE/api/predictions/matches?competition=epl"
+   ```
+
+World Cup remains on `/api/world-cup/*` (not MultiAdapter football prefixes for
+the thematic UI). Esports stays `coming_soon` — see `docs/dev/ESPORTS_BOUNDARY.md`.
+
 ## Event ID Migration
 
 New events use 16-hex SHA-1 prefixes. To migrate legacy 12-hex event IDs across

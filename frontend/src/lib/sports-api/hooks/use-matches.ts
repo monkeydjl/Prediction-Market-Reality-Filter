@@ -14,15 +14,19 @@ export type MatchListFilters = {
 };
 
 export function useMatches(sportOrFilters?: string | MatchListFilters | null) {
-  const filters: MatchListFilters =
-    typeof sportOrFilters === "string" || sportOrFilters == null
-      ? { sport: sportOrFilters ?? undefined }
-      : sportOrFilters;
-  const params = new URLSearchParams();
-  if (filters.sport) params.set("sport", filters.sport);
-  if (filters.competition) params.set("competition", filters.competition);
-  const qs = params.toString() ? `?${params.toString()}` : "";
-  const key = `${getApiBase()}/predictions/matches${qs}`;
+  // Explicit null disables the request (e.g. coming_soon / world_cup landing).
+  let key: string | null = null;
+  if (sportOrFilters !== null) {
+    const filters: MatchListFilters =
+      typeof sportOrFilters === "string" || sportOrFilters === undefined
+        ? { sport: sportOrFilters ?? undefined }
+        : sportOrFilters;
+    const params = new URLSearchParams();
+    if (filters.sport) params.set("sport", filters.sport);
+    if (filters.competition) params.set("competition", filters.competition);
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    key = `${getApiBase()}/predictions/matches${qs}`;
+  }
   return useSWR<MatchSummary[]>(key);
 }
 

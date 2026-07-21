@@ -23,6 +23,9 @@ class ScheduleFilter:
     status: str | None = None
     stage: str | None = None
     limit: int | None = None
+    # Optional sport code (football / basketball / baseball / hockey).
+    # MultiAdapter uses this to skip unrelated league adapters early.
+    sport: str | None = None
 
 
 @dataclass(frozen=True)

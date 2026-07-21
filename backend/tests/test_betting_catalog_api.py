@@ -44,10 +44,15 @@ def test_betting_catalog_item_404():
 
 
 def test_normalize_competition_code_aliases():
-    from app.api.routes.predictions import normalize_competition_code
+    from app.kernel.competition_codes import (
+        competitions_equivalent,
+        normalize_competition_code,
+    )
 
     assert normalize_competition_code("PL") == "epl"
     assert normalize_competition_code("serie-a") == "serie_a"
     assert normalize_competition_code("wc") == "world_cup"
     assert normalize_competition_code(None) is None
     assert normalize_competition_code("  ") is None
+    assert competitions_equivalent("seriea", "serie_a")
+    assert competitions_equivalent("ligue1", "ligue-1")

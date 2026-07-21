@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### MultiAdapter competition/sport schedule short-circuit
+- Shared `kernel/competition_codes.py` (aliases + prefix maps)
+- `ScheduleFilter.sport` optional field
+- `MultiAdapter.fetch_schedule` only hits matching league adapters
+- Catalog payload: `flags` + per-competition `adapter_likely`
+- list_matches passes sport/competition into ScheduleFilter early
+
+
 ### 竞猜 competition 过滤 + catalog API
 - `GET /api/predictions/matches?competition=` (+ aliases: pl→epl, wc→world_cup, serie-a→serie_a)
 - `GET /api/betting/catalog` and `/catalog/{id}` from `kernel/betting_catalog.py`

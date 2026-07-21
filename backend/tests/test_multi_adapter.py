@@ -110,6 +110,17 @@ class TestSyncSchedule:
         assert multi.sync_schedule() == 10
 
 
+def _tagged_adapter(code: str, sport: str = "football") -> MagicMock:
+    """Mock adapter with _competition metadata for schedule filtering."""
+    adapter = _mock_adapter()
+    football_or = SportIdentity(code=sport, name=sport)
+    adapter._competition = CompetitionIdentity(
+        code=code, name=code, sport=football_or,
+    )
+    adapter.fetch_schedule.return_value = [MagicMock(name=f"{code}-match")]
+    return adapter
+
+
 class TestFetchSchedule:
     def test_aggregates_all_adapters(self):
         wc = _mock_adapter()
@@ -120,6 +131,37 @@ class TestFetchSchedule:
         multi = MultiAdapter({"wc-": wc, "ucl-": ucl})
         results = multi.fetch_schedule(ScheduleFilter())
         assert len(results) == 3
+
+    def test_competition_filter_short_circuits(self):
+        epl = _tagged_adapter("epl")
+        ucl = _tagged_adapter("ucl")
+        nba = _tagged_adapter("nba", sport="basketball")
+        multi = MultiAdapter({"epl-": epl, "ucl-": ucl, "nba-": nba})
+
+        multi.fetch_schedule(ScheduleFilter(competition="epl"))
+        epl.fetch_schedule.assert_called_once()
+        ucl.fetch_schedule.assert_not_called()
+        nba.fetch_schedule.assert_not_called()
+
+        epl.reset_mock()
+        multi.fetch_schedule(ScheduleFilter(competition="pl"))
+        epl.fetch_schedule.assert_called_once()
+
+    def test_sport_filter_skips_other_sports(self):
+        epl = _tagged_adapter("epl")
+        nba = _tagged_adapter("nba", sport="basketball")
+        multi = MultiAdapter({"epl-": epl, "nba-": nba})
+
+        multi.fetch_schedule(ScheduleFilter(sport="basketball"))
+        nba.fetch_schedule.assert_called_once()
+        epl.fetch_schedule.assert_not_called()
+
+    def test_unknown_competition_returns_empty(self):
+        wc = _tagged_adapter("world_cup")
+        multi = MultiAdapter({"wc-": wc})
+        result = multi.fetch_schedule(ScheduleFilter(competition="does-not-exist"))
+        assert result == []
+        wc.fetch_schedule.assert_not_called()
 
 
 class TestStubMethods:

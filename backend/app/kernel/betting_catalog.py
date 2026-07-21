@@ -209,13 +209,64 @@ BETTING_TOOL_LINKS: list[dict[str, Any]] = [
 ]
 
 
+def _kernel_flags() -> dict[str, bool]:
+    """Best-effort flag snapshot for catalog consumers (no secrets)."""
+    try:
+        from app.core.config import settings
+        return {
+            "kernel_prediction_enabled": bool(
+                getattr(settings, "KERNEL_PREDICTION_ENABLED", False)
+            ),
+            "phase2_leagues_enabled": bool(
+                getattr(settings, "PHASE2_LEAGUES_ENABLED", False)
+            ),
+            "epl_data_enabled": bool(getattr(settings, "EPL_DATA_ENABLED", False)),
+            "ucl_data_enabled": bool(getattr(settings, "UCL_DATA_ENABLED", False)),
+        }
+    except Exception:  # pragma: no cover - defensive
+        return {
+            "kernel_prediction_enabled": False,
+            "phase2_leagues_enabled": False,
+            "epl_data_enabled": False,
+            "ucl_data_enabled": False,
+        }
+
+
 def build_catalog_payload() -> dict[str, Any]:
     """Public JSON body for GET /api/betting/catalog."""
+    flags = _kernel_flags()
+    competitions = []
+    for row in BETTING_COMPETITIONS:
+        item = dict(row)
+        code = item.get("competition_code")
+        # Surface whether schedule adapter is likely wired (not a guarantee of
+        # non-empty fixtures — that still depends on ingest).
+        if item.get("track") == "world_cup":
+            item["adapter_likely"] = True
+        elif item.get("track") == "placeholder":
+            item["adapter_likely"] = False
+        elif code in ("epl",) and flags["epl_data_enabled"]:
+            item["adapter_likely"] = True
+        elif code in ("ucl",) and flags["ucl_data_enabled"]:
+            item["adapter_likely"] = True
+        elif code in ("laliga", "bundesliga", "serie_a", "ligue_1") and flags[
+            "phase2_leagues_enabled"
+        ]:
+            item["adapter_likely"] = True
+        elif code in ("nba", "mlb", "nhl") and flags["kernel_prediction_enabled"]:
+            item["adapter_likely"] = True
+        elif item.get("id") == "football" and flags["kernel_prediction_enabled"]:
+            item["adapter_likely"] = True
+        else:
+            item["adapter_likely"] = False
+        competitions.append(item)
+
     return {
         "version": 1,
         "sections": SECTION_LABELS,
-        "competitions": list(BETTING_COMPETITIONS),
+        "competitions": competitions,
         "tools": list(BETTING_TOOL_LINKS),
+        "flags": flags,
         "notes": {
             "tracks": {
                 "world_cup": "Dedicated /api/world-cup/* stack",
@@ -225,6 +276,10 @@ def build_catalog_payload() -> dict[str, Any]:
             "matches_filter": (
                 "Kernel list: GET /api/predictions/matches"
                 "?sport={kernel_sport}&competition={competition_code}"
+            ),
+            "adapter_likely": (
+                "True when the corresponding data flag is ON so MultiAdapter "
+                "registers a league adapter; fixtures may still be empty until ingest."
             ),
         },
     }

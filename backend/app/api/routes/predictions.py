@@ -315,7 +315,23 @@ def list_matches(
     from app.kernel.protocols import ScheduleFilter
     from datetime import datetime, timezone
 
-    raw_matches = kernel._adapter.fetch_schedule(ScheduleFilter())
+    # Infer sport from competition when only competition is supplied so
+    # MultiAdapter can skip unrelated sport adapters early.
+    effective_sport = sport
+    comp_code = normalize_competition_code(competition)
+    if effective_sport is None and comp_code is not None:
+        effective_sport = COMPETITION_SPORT.get(comp_code)
+        if competition and effective_sport is None:
+            effective_sport = COMPETITION_SPORT.get(
+                competition.strip().lower().replace("-", "_")
+            )
+
+    raw_matches = kernel._adapter.fetch_schedule(
+        ScheduleFilter(
+            sport=effective_sport,
+            competition=competition or None,
+        )
+    )
 
     today = datetime.now(timezone.utc).date()
     today_matches = []
@@ -324,13 +340,13 @@ def list_matches(
         if kickoff is not None and kickoff.date() == today:
             today_matches.append(m)
 
+    # Defense-in-depth: re-apply filters in case a child adapter ignores them.
     if sport:
         today_matches = [
             m for m in today_matches
             if m.match.season.competition.sport.code == sport
         ]
 
-    comp_code = normalize_competition_code(competition)
     if comp_code is not None:
         today_matches = [
             m for m in today_matches

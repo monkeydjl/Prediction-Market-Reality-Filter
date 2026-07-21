@@ -35,6 +35,11 @@ export type BettingCompetition = {
   competitionCode?: string;
   track: CompetitionTrack;
   section: CompetitionSection;
+  /**
+   * From live GET /api/betting/catalog when available: whether the matching
+   * data adapter is likely registered (flag ON). Undefined = unknown / static.
+   */
+  adapterLikely?: boolean;
 };
 
 export type BettingToolLink = {
@@ -254,4 +259,54 @@ export function statusLabel(status: CompetitionStatus): string {
     default:
       return status;
   }
+}
+
+export function adapterLikelyLabel(likely: boolean | undefined): string | null {
+  if (likely === true) return "数据源已接线";
+  if (likely === false) return "待开 flag / 无 adapter";
+  return null;
+}
+
+/** Live API competition row (snake_case) used when merging into static catalog. */
+export type LiveCatalogCompetition = {
+  id: string;
+  adapter_likely?: boolean;
+  label?: string;
+  description?: string;
+  status?: string;
+  href?: string;
+  competition_code?: string | null;
+  kernel_sport?: string | null;
+  track?: string;
+  section?: string;
+};
+
+/**
+ * Merge static FE catalog with optional live GET /api/betting/catalog rows.
+ * Static list is source of truth for IA; live only overlays adapter_likely and
+ * optional label/description updates for known ids.
+ */
+export function mergeCompetitionsWithLive(
+  staticList: BettingCompetition[],
+  live: LiveCatalogCompetition[] | null | undefined,
+): BettingCompetition[] {
+  if (!live?.length) {
+    return staticList.map((c) => ({ ...c }));
+  }
+  const byId = new Map(live.map((row) => [row.id, row]));
+  return staticList.map((item) => {
+    const remote = byId.get(item.id);
+    if (!remote) return { ...item };
+    return {
+      ...item,
+      adapterLikely:
+        typeof remote.adapter_likely === "boolean"
+          ? remote.adapter_likely
+          : item.adapterLikely,
+      label: remote.label?.trim() ? remote.label : item.label,
+      description: remote.description?.trim()
+        ? remote.description
+        : item.description,
+    };
+  });
 }

@@ -16,6 +16,7 @@ export type {
   BettingCatalog,
   BettingCatalogCompetition,
   BettingCatalogTool,
+  BettingCatalogFlags,
 } from "./hooks/use-betting-catalog";
 export {
   useEngineScores,

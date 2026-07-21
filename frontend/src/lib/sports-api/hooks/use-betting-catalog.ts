@@ -15,6 +15,7 @@ export type BettingCatalogCompetition = {
   kernel_sport: string | null;
   track: "kernel" | "world_cup" | "placeholder";
   section: string;
+  adapter_likely?: boolean;
 };
 
 export type BettingCatalogTool = {
@@ -25,11 +26,19 @@ export type BettingCatalogTool = {
   section: string;
 };
 
+export type BettingCatalogFlags = {
+  kernel_prediction_enabled?: boolean;
+  phase2_leagues_enabled?: boolean;
+  epl_data_enabled?: boolean;
+  ucl_data_enabled?: boolean;
+};
+
 export type BettingCatalog = {
   version: number;
   sections: Record<string, string>;
   competitions: BettingCatalogCompetition[];
   tools: BettingCatalogTool[];
+  flags?: BettingCatalogFlags;
   notes?: Record<string, unknown>;
 };
 

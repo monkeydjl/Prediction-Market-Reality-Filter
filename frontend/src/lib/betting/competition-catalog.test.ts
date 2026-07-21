@@ -4,6 +4,7 @@ import {
   BETTING_TOOL_LINKS,
   competitionsBySection,
   getCompetitionById,
+  mergeCompetitionsWithLive,
   statusLabel,
 } from "./competition-catalog";
 
@@ -64,5 +65,19 @@ describe("competition-catalog", () => {
   it("statusLabel is Chinese for known statuses", () => {
     expect(statusLabel("live")).toMatch(/上线/);
     expect(statusLabel("coming_soon")).toMatch(/即将/);
+  });
+
+  it("mergeCompetitionsWithLive overlays adapter_likely without inventing ids", () => {
+    const merged = mergeCompetitionsWithLive(BETTING_COMPETITIONS, [
+      { id: "epl", adapter_likely: true, label: "英超（live）" },
+      { id: "ghost-league", adapter_likely: true },
+    ]);
+    const epl = merged.find((c) => c.id === "epl");
+    expect(epl?.adapterLikely).toBe(true);
+    expect(epl?.label).toBe("英超（live）");
+    expect(merged.some((c) => c.id === "ghost-league")).toBe(false);
+    expect(mergeCompetitionsWithLive(BETTING_COMPETITIONS, null)[0].id).toBe(
+      BETTING_COMPETITIONS[0].id,
+    );
   });
 });

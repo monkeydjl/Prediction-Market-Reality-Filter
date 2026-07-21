@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### 竞猜 hub live catalog merge + adapter badges
+- Hub is client: merges static catalog with `GET /api/betting/catalog`
+- Cards show adapter_likely badges; flag strip (Kernel / EPL / 五大联赛)
+- Offline fallback keeps static catalog when API is down
+
+
 ### MultiAdapter competition/sport schedule short-circuit
 - Shared `kernel/competition_codes.py` (aliases + prefix maps)
 - `ScheduleFilter.sport` optional field

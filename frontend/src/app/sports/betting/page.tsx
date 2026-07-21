@@ -1,12 +1,18 @@
+"use client";
+
+import { useMemo } from "react";
 import Link from "next/link";
 import {
+  BETTING_COMPETITIONS,
   BETTING_TOOL_LINKS,
   SECTION_LABELS,
-  competitionsBySection,
+  adapterLikelyLabel,
+  mergeCompetitionsWithLive,
   statusLabel,
   type BettingCompetition,
   type CompetitionSection,
 } from "@/lib/betting/competition-catalog";
+import { useBettingCatalog } from "@/lib/sports-api";
 
 const SECTION_ORDER: CompetitionSection[] = [
   "football",
@@ -31,6 +37,24 @@ function StatusBadge({ status }: { status: BettingCompetition["status"] }) {
   );
 }
 
+function AdapterBadge({ likely }: { likely: boolean | undefined }) {
+  const label = adapterLikelyLabel(likely);
+  if (!label) return null;
+  const tone =
+    likely === true
+      ? "bg-amber-500/15 text-amber-800 dark:text-amber-300"
+      : "bg-muted text-muted-foreground";
+  return (
+    <span
+      className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${tone}`}
+      data-testid="adapter-likely-badge"
+      data-adapter-likely={likely === true ? "true" : "false"}
+    >
+      {label}
+    </span>
+  );
+}
+
 function CompetitionCard({ item }: { item: BettingCompetition }) {
   const href =
     item.status === "coming_soon"
@@ -47,7 +71,10 @@ function CompetitionCard({ item }: { item: BettingCompetition }) {
     >
       <div className="flex items-start justify-between gap-2">
         <h3 className="font-semibold group-hover:text-primary">{item.label}</h3>
-        <StatusBadge status={item.status} />
+        <div className="flex flex-wrap justify-end gap-1">
+          <StatusBadge status={item.status} />
+          <AdapterBadge likely={item.adapterLikely} />
+        </div>
       </div>
       <p className="mt-1 text-sm text-muted-foreground">{item.description}</p>
     </Link>
@@ -55,6 +82,32 @@ function CompetitionCard({ item }: { item: BettingCompetition }) {
 }
 
 export default function BettingHubPage() {
+  const { data: liveCatalog, error, isLoading } = useBettingCatalog();
+
+  const competitions = useMemo(
+    () =>
+      mergeCompetitionsWithLive(
+        BETTING_COMPETITIONS,
+        liveCatalog?.competitions,
+      ),
+    [liveCatalog?.competitions],
+  );
+
+  const bySection = useMemo(() => {
+    const map = new Map<CompetitionSection, BettingCompetition[]>();
+    for (const section of SECTION_ORDER) {
+      if (section === "tools") continue;
+      map.set(
+        section,
+        competitions.filter((c) => c.section === section),
+      );
+    }
+    return map;
+  }, [competitions]);
+
+  const flags = liveCatalog?.flags;
+  const liveReady = Boolean(liveCatalog && !error);
+
   return (
     <main className="mx-auto max-w-4xl space-y-8 px-4 py-6 md:px-6">
       <div className="space-y-1">
@@ -74,15 +127,37 @@ export default function BettingHubPage() {
           ：世界杯走{" "}
           <code className="rounded bg-muted px-1">/api/world-cup/*</code>
           ；NBA / MLB / NHL / 足球联赛走 Kernel{" "}
-          <code className="rounded bg-muted px-1">/api/sports/*</code>
+          <code className="rounded bg-muted px-1">/api/predictions/*</code>
           。二者数据与结算路径不同，卡片上会标明状态。
+        </p>
+        <p className="mt-1.5" data-testid="catalog-source-hint">
+          {isLoading && !liveCatalog
+            ? "正在同步后端 catalog…"
+            : liveReady
+              ? "已合并后端 catalog（含数据源接线提示）。"
+              : "使用本地静态 catalog（后端不可用或未启动时仍可浏览入口）。"}
+          {liveReady && flags ? (
+            <>
+              {" "}
+              Kernel=
+              {flags.kernel_prediction_enabled ? "ON" : "OFF"}
+              {" · "}
+              EPL={flags.epl_data_enabled ? "ON" : "OFF"}
+              {" · "}
+              五大联赛={flags.phase2_leagues_enabled ? "ON" : "OFF"}
+            </>
+          ) : null}
         </p>
       </div>
 
       {SECTION_ORDER.map((section) => {
         if (section === "tools") {
           return (
-            <section key={section} className="space-y-3" aria-labelledby={`sec-${section}`}>
+            <section
+              key={section}
+              className="space-y-3"
+              aria-labelledby={`sec-${section}`}
+            >
               <h2 id={`sec-${section}`} className="text-lg font-semibold">
                 {SECTION_LABELS[section]}
               </h2>
@@ -107,11 +182,15 @@ export default function BettingHubPage() {
           );
         }
 
-        const items = competitionsBySection(section);
+        const items = bySection.get(section) ?? [];
         if (items.length === 0) return null;
 
         return (
-          <section key={section} className="space-y-3" aria-labelledby={`sec-${section}`}>
+          <section
+            key={section}
+            className="space-y-3"
+            aria-labelledby={`sec-${section}`}
+          >
             <h2 id={`sec-${section}`} className="text-lg font-semibold">
               {SECTION_LABELS[section]}
             </h2>

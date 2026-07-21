@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
   adapterLikelyLabel,
@@ -8,7 +8,12 @@ import {
   statusLabel,
   type BettingCompetition,
 } from "@/lib/betting/competition-catalog";
-import { useBettingCatalog, useMatches } from "@/lib/sports-api";
+import { hasOperatorApiKey } from "@/lib/operator-credentials";
+import {
+  syncSchedule,
+  useBettingCatalog,
+  useMatches,
+} from "@/lib/sports-api";
 
 type Props = {
   competition: BettingCompetition;
@@ -44,6 +49,7 @@ export function CompetitionLanding({ competition: staticComp }: Props) {
     data: matches,
     error: matchesError,
     isLoading: matchesLoading,
+    mutate: mutateMatches,
   } = useMatches(
     shouldPollMatches
       ? {

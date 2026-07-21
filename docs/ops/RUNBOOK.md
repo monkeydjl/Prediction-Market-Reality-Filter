@@ -235,14 +235,26 @@ To populate Kernel league lists (`GET /api/predictions/matches?competition=epl`)
 3. Sync schedules (operator/write path or adapter-level `sync_schedule` via
    existing scheduler / scripts — see Phase 2 plans). Empty `match` count on
    landings usually means flags OFF or no ingest yet, not a broken filter.
-4. Smoke:
+4. Operator schedule sync (write key required — never commit real keys):
+   ```bash
+   curl -s -X POST \
+     -H "X-API-Key: $API_WRITE_KEY" \
+     "$BASE/api/predictions/schedule/sync?competition=epl"
+   ```
+   Optional: `sport=football`. Empty `synced` usually means flag OFF, missing
+   Football-Data key, or upstream empty — not a broken short-circuit.
+5. Smoke:
    ```bash
    curl -s "$BASE/api/betting/catalog" | jq '.flags,.competitions[]|{id,adapter_likely}'
    curl -s "$BASE/api/predictions/matches?competition=epl"
    ```
 
 World Cup remains on `/api/world-cup/*` (not MultiAdapter football prefixes for
-the thematic UI). Esports stays `coming_soon` — see `docs/dev/ESPORTS_BOUNDARY.md`.
+the thematic UI). Esports stays `coming_soon` — see `docs/dev/ESPORTS_BOUNDARY.md`
+and ADR-004.
+
+UI: competition landings show a **同步赛程** button when the browser session has
+an operator write key (`sessionStorage` via operator credentials UI).
 
 ## Event ID Migration
 

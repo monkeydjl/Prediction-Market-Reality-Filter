@@ -76,7 +76,7 @@ class TestGetMatchIdsWithPredictions:
         assert result == set()
 
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 from datetime import datetime, timezone
 
@@ -229,6 +229,18 @@ class TestListMatches:
         assert set(item.keys()) == expected_keys
         assert item["match_id"] == "wc-1"
         assert item["has_prediction"] is False
+
+    def test_sync_schedule_returns_count(self, api_client):
+        adapter = MultiSportFakeAdapter()
+        adapter.sync_schedule = MagicMock(return_value=7)
+        _patch_kernel_adapter(api_client, adapter)
+        resp = api_client.post("/api/predictions/schedule/sync?competition=epl")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["synced"] == 7
+        assert body["competition"] == "epl"
+        assert body["competition_normalized"] == "epl"
+        adapter.sync_schedule.assert_called_once()
 
     def test_list_matches_503_when_kernel_disabled(self, tmp_path):
         """KERNEL_PREDICTION_ENABLED=false → 503."""

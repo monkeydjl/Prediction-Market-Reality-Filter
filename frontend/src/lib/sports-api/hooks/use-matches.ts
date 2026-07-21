@@ -68,3 +68,23 @@ export function useEnginesMeta() {
   const key = `${getApiBase()}/predictions/engines/meta`;
   return useSWR<EnginesMeta>(key);
 }
+
+export type ScheduleSyncResult = {
+  synced: number;
+  sport: string | null;
+  competition: string | null;
+  competition_normalized: string | null;
+  registered_prefixes: string[];
+};
+
+/** Operator write: POST /predictions/schedule/sync (X-API-Key). */
+export async function syncSchedule(filters?: {
+  sport?: string | null;
+  competition?: string | null;
+}): Promise<ScheduleSyncResult> {
+  const params = new URLSearchParams();
+  if (filters?.sport) params.set("sport", filters.sport);
+  if (filters?.competition) params.set("competition", filters.competition);
+  const qs = params.toString() ? `?${params.toString()}` : "";
+  return sportPost<ScheduleSyncResult>(`/predictions/schedule/sync${qs}`);
+}

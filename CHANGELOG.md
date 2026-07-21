@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Operator schedule sync + esports ADR-004
+- `POST /api/predictions/schedule/sync` (write key; optional sport/competition)
+- MultiAdapter.sync_schedule accepts ScheduleFilter short-circuit
+- Landing: 同步赛程 button when operator key present
+- Catalog flags aligned to PHASE2 / PHASE4_NBA / PHASE5_*
+- ADR-004 esports data adapter (Proposed)
+
+
 ### 竞猜落地页 match count + RUNBOOK 联赛启用
 - Client `CompetitionLanding`: live catalog adapter status + today's match count via `useMatches`
 - `useMatches(null)` skips fetch (coming_soon / non-kernel)

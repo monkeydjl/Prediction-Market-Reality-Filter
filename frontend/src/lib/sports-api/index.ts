@@ -7,8 +7,13 @@ export {
   triggerPrediction,
   useEngines,
   useEnginesMeta,
+  syncSchedule,
 } from "./hooks/use-matches";
-export type { EnginesMeta, MatchListFilters } from "./hooks/use-matches";
+export type {
+  EnginesMeta,
+  MatchListFilters,
+  ScheduleSyncResult,
+} from "./hooks/use-matches";
 export {
   useBettingCatalog,
 } from "./hooks/use-betting-catalog";

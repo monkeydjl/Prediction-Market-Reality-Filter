@@ -109,6 +109,17 @@ class TestSyncSchedule:
         multi = MultiAdapter({"wc-": wc})
         assert multi.sync_schedule() == 10
 
+    def test_sync_competition_filter_short_circuits(self):
+        epl = _tagged_adapter("epl")
+        epl.sync_schedule.return_value = 5
+        ucl = _tagged_adapter("ucl")
+        ucl.sync_schedule.return_value = 9
+        multi = MultiAdapter({"epl-": epl, "ucl-": ucl})
+        total = multi.sync_schedule(ScheduleFilter(competition="epl"))
+        assert total == 5
+        epl.sync_schedule.assert_called_once()
+        ucl.sync_schedule.assert_not_called()
+
 
 def _tagged_adapter(code: str, sport: str = "football") -> MagicMock:
     """Mock adapter with _competition metadata for schedule filtering."""

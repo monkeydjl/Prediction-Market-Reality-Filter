@@ -112,8 +112,32 @@ class MultiAdapter:
     def fetch_outcome(self, match_id: str) -> MatchOutcome | None:
         return self._select(match_id).fetch_outcome(match_id)
 
-    def sync_schedule(self) -> int:
-        return sum(adapter.sync_schedule() for adapter in self._adapters.values())
+    def sync_schedule(
+        self,
+        filters: ScheduleFilter | None = None,
+    ) -> int:
+        """Sync schedules; optionally only adapters matching *filters*.
+
+        When *filters* is None or empty, every registered adapter is synced
+        (legacy MultiAdapter behaviour). With competition/sport set, only
+        matching adapters run — same selection as ``fetch_schedule``.
+        """
+        if filters is None or not (filters.competition or filters.sport):
+            return sum(
+                int(adapter.sync_schedule()) for adapter in self._adapters.values()
+            )
+        targets = self._iter_schedule_adapters(filters)
+        if not targets:
+            return 0
+        total = 0
+        for prefix, adapter in targets:
+            try:
+                total += int(adapter.sync_schedule())
+            except Exception:  # pragma: no cover - defensive
+                logger.warning(
+                    "sync_schedule failed for prefix=%s", prefix, exc_info=True,
+                )
+        return total
 
     def fetch_schedule(self, filters: ScheduleFilter) -> list[RawMatchData]:
         results: list[RawMatchData] = []

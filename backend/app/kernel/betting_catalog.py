@@ -213,15 +213,24 @@ def _kernel_flags() -> dict[str, bool]:
     """Best-effort flag snapshot for catalog consumers (no secrets)."""
     try:
         from app.core.config import settings
+        phase2 = bool(getattr(settings, "PHASE2_LEAGUES_ENABLED", False))
         return {
             "kernel_prediction_enabled": bool(
                 getattr(settings, "KERNEL_PREDICTION_ENABLED", False)
             ),
-            "phase2_leagues_enabled": bool(
-                getattr(settings, "PHASE2_LEAGUES_ENABLED", False)
+            "phase2_leagues_enabled": phase2,
+            # EPL/UCL register with Phase 2 (no separate EPL_DATA_* settings).
+            "epl_data_enabled": phase2,
+            "ucl_data_enabled": phase2,
+            "phase4_nba_enabled": bool(
+                getattr(settings, "PHASE4_NBA_ENABLED", False)
             ),
-            "epl_data_enabled": bool(getattr(settings, "EPL_DATA_ENABLED", False)),
-            "ucl_data_enabled": bool(getattr(settings, "UCL_DATA_ENABLED", False)),
+            "phase5_mlb_enabled": bool(
+                getattr(settings, "PHASE5_MLB_ENABLED", False)
+            ),
+            "phase5_nhl_enabled": bool(
+                getattr(settings, "PHASE5_NHL_ENABLED", False)
+            ),
         }
     except Exception:  # pragma: no cover - defensive
         return {
@@ -229,6 +238,9 @@ def _kernel_flags() -> dict[str, bool]:
             "phase2_leagues_enabled": False,
             "epl_data_enabled": False,
             "ucl_data_enabled": False,
+            "phase4_nba_enabled": False,
+            "phase5_mlb_enabled": False,
+            "phase5_nhl_enabled": False,
         }
 
 
@@ -245,17 +257,19 @@ def build_catalog_payload() -> dict[str, Any]:
             item["adapter_likely"] = True
         elif item.get("track") == "placeholder":
             item["adapter_likely"] = False
-        elif code in ("epl",) and flags["epl_data_enabled"]:
+        elif code in ("epl", "ucl") and flags.get("phase2_leagues_enabled"):
             item["adapter_likely"] = True
-        elif code in ("ucl",) and flags["ucl_data_enabled"]:
-            item["adapter_likely"] = True
-        elif code in ("laliga", "bundesliga", "serie_a", "ligue_1") and flags[
+        elif code in ("laliga", "bundesliga", "serie_a", "ligue_1") and flags.get(
             "phase2_leagues_enabled"
-        ]:
+        ):
             item["adapter_likely"] = True
-        elif code in ("nba", "mlb", "nhl") and flags["kernel_prediction_enabled"]:
+        elif code == "nba" and flags.get("phase4_nba_enabled"):
             item["adapter_likely"] = True
-        elif item.get("id") == "football" and flags["kernel_prediction_enabled"]:
+        elif code == "mlb" and flags.get("phase5_mlb_enabled"):
+            item["adapter_likely"] = True
+        elif code == "nhl" and flags.get("phase5_nhl_enabled"):
+            item["adapter_likely"] = True
+        elif item.get("id") == "football" and flags.get("kernel_prediction_enabled"):
             item["adapter_likely"] = True
         else:
             item["adapter_likely"] = False

@@ -271,6 +271,67 @@ def predict_match(match_id: str, engine: str = "auto", _auth: None = Depends(req
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/schedule/sync")
+def sync_schedule(
+    sport: str | None = Query(None, description="Optional sport filter"),
+    competition: str | None = Query(
+        None,
+        description="Optional competition or alias (epl, laliga, nba, ...)",
+    ),
+    _auth: None = Depends(require_write_key),
+):
+    """Operator: pull fixtures into Kernel store via MultiAdapter.sync_schedule.
+
+    Requires write key. Optional sport/competition short-circuits to matching
+    league adapters (same rules as GET /matches). Returns rows synced and the
+    filter that was applied.
+    """
+    kernel = _get_kernel()
+    from app.kernel.protocols import ScheduleFilter
+
+    effective_sport = sport
+    comp_code = normalize_competition_code(competition)
+    if effective_sport is None and comp_code is not None:
+        effective_sport = COMPETITION_SPORT.get(comp_code)
+        if competition and effective_sport is None:
+            effective_sport = COMPETITION_SPORT.get(
+                competition.strip().lower().replace("-", "_")
+            )
+
+    filters = ScheduleFilter(
+        sport=effective_sport,
+        competition=competition or None,
+    )
+    adapter = kernel._adapter
+    try:
+        if hasattr(adapter, "sync_schedule"):
+            # MultiAdapter accepts optional filters; Protocol only requires ().
+            try:
+                count = adapter.sync_schedule(filters)  # type: ignore[call-arg]
+            except TypeError:
+                count = adapter.sync_schedule()
+        else:
+            count = 0
+    except Exception as exc:
+        logger.error("schedule sync failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    prefixes: list[str] = []
+    if hasattr(adapter, "registered_prefixes"):
+        try:
+            prefixes = list(adapter.registered_prefixes())  # type: ignore[attr-defined]
+        except Exception:
+            prefixes = []
+
+    return {
+        "synced": int(count or 0),
+        "sport": effective_sport,
+        "competition": competition,
+        "competition_normalized": comp_code,
+        "registered_prefixes": prefixes,
+    }
+
+
 @router.post("/outcomes/{match_id}/process")
 def process_outcome(match_id: str, _auth: None = Depends(require_write_key)):
     """Process a match outcome — triggers the learning loop."""

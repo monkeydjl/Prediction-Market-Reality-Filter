@@ -21,9 +21,14 @@ Status: **coming_soon** placeholder only. Do not invent odds, fixtures, or settl
 2. **Trusted schedule + result feed** (or operator import format)
 3. **Market mapping rules** (best-of series, maps, handicap)
 4. **Settlement truth** source and conflict policy
-5. Optional: ADR under `docs/dev/adr/` for esports data adapter
+5. ADR: [004-esports-data-adapter.md](adr/004-esports-data-adapter.md) (Proposed)
 
 ## Interim UX
 
 - Hub card → `/sports/betting/esports` explains “no fake markets”
 - No schedule list, no Edge detect, no recommendation for esports until prerequisites land
+
+## Operator note
+
+Schedule sync for Kernel leagues is `POST /api/predictions/schedule/sync`
+(write key). Esports is **not** included until a flag + adapter exist.

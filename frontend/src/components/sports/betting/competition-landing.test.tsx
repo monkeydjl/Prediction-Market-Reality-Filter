@@ -55,6 +55,20 @@ const esports: BettingCompetition = {
   section: "esports",
 };
 
+const lol: BettingCompetition = {
+  id: "lol",
+  sport: "lol",
+  label: "英雄联盟",
+  shortLabel: "LoL",
+  description: "Kernel sport=lol",
+  status: "coming_soon",
+  href: "/sports/betting/lol",
+  kernelSport: "lol",
+  competitionCode: "lol",
+  track: "placeholder",
+  section: "esports",
+};
+
 describe("CompetitionLanding", () => {
   beforeEach(() => {
     hasOperatorApiKey.mockReturnValue(false);

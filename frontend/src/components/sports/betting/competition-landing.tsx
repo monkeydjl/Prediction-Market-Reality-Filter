@@ -206,6 +206,48 @@ export function CompetitionLanding({ competition: staticComp }: Props) {
         </div>
       )}
 
+      {competition.id === "lol" ? (
+        <div
+          className="space-y-2 rounded-lg border border-border bg-muted/20 px-4 py-3 text-sm"
+          data-testid="lol-dry-run-ops"
+        >
+          <p className="font-medium text-foreground">LoL dry-run 门禁（操作员）</p>
+          <ul className="list-inside list-disc space-y-1 text-xs text-muted-foreground">
+            <li>
+              PHASE_LOL_ENABLED=
+              {liveCatalog?.flags?.phase_lol_enabled ? "ON" : "OFF"}
+              {" · "}
+              LOL_DRY_RUN_IMPORT=
+              {liveCatalog?.flags?.lol_dry_run_import ? "ON" : "OFF"}
+              {" · "}
+              path_configured=
+              {liveCatalog?.flags?.lol_dry_run_path_configured ? "yes" : "no"}
+            </li>
+            <li>
+              Runtime prefix：
+              {(runtimeStatus?.registered_prefixes ?? []).includes("lol-")
+                ? "lol- 已注册"
+                : "lol- 未注册（需 Kernel + PHASE_LOL）"}
+            </li>
+            <li>
+              生产 HTTP 赛程源在 GATES P2/P3/P6 关闭前禁止合并；本地仅
+              dry-run JSON / Null source。
+            </li>
+            <li>
+              同步：POST /api/predictions/schedule/sync?sport=lol（需写密钥；无假盘）。
+            </li>
+          </ul>
+          <p className="text-xs text-muted-foreground">
+            详见{" "}
+            <code className="rounded bg-muted px-1">docs/dev/lol/GATES.md</code>
+            {" · "}
+            <code className="rounded bg-muted px-1">
+              docs/dev/adr/005-lol-data-vendor-selection.md
+            </code>
+          </p>
+        </div>
+      ) : null}
+
       {competition.track === "world_cup" && (
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">

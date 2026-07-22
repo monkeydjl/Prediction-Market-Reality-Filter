@@ -76,6 +76,9 @@ def test_betting_status_shape():
     data = resp.json()
     assert data["version"] == 1
     assert "flags" in data
+    assert data["flags"]["phase_lol_enabled"] is False
+    assert data["flags"]["lol_dry_run_import"] is False
+    assert data["flags"]["lol_dry_run_path_configured"] is False
     assert "kernel_ready" in data
     assert isinstance(data["registered_prefixes"], list)
     assert "hint" in data
@@ -97,12 +100,47 @@ def test_build_status_payload_kernel_off():
             "phase5_mlb_enabled": False,
             "phase5_nhl_enabled": False,
             "phase_lol_enabled": False,
+            "lol_dry_run_import": False,
+            "lol_dry_run_path_configured": False,
         },
     ):
         body = build_status_payload()
     assert body["kernel_ready"] is False
     assert body["registered_prefixes"] == []
     assert body["kernel_error"] is None
+
+
+def test_build_status_hint_mentions_lol_when_phase_on():
+    from unittest.mock import MagicMock, patch
+
+    from app.kernel.betting_catalog import build_status_payload
+
+    flags_on = {
+        "kernel_prediction_enabled": True,
+        "phase2_leagues_enabled": False,
+        "epl_data_enabled": False,
+        "ucl_data_enabled": False,
+        "phase4_nba_enabled": False,
+        "phase5_mlb_enabled": False,
+        "phase5_nhl_enabled": False,
+        "phase_lol_enabled": True,
+        "lol_dry_run_import": True,
+        "lol_dry_run_path_configured": True,
+    }
+    mock_kernel = MagicMock()
+    mock_adapter = MagicMock()
+    mock_adapter.registered_prefixes.return_value = ["lol-"]
+    mock_kernel._adapter = mock_adapter
+
+    with (
+        patch("app.kernel.betting_catalog._kernel_flags", return_value=flags_on),
+        patch("app.api.routes.predictions._get_kernel", return_value=mock_kernel),
+    ):
+        body = build_status_payload()
+    assert body["kernel_ready"] is True
+    assert "lol-" in body["registered_prefixes"]
+    assert "lol-" in body["hint"]
+    assert "LOL_DRY_RUN_IMPORT" in body["hint"]
 
 
 def test_lol_adapter_likely_when_phase_lol_enabled():
@@ -119,6 +157,8 @@ def test_lol_adapter_likely_when_phase_lol_enabled():
         "phase5_mlb_enabled": False,
         "phase5_nhl_enabled": False,
         "phase_lol_enabled": False,
+        "lol_dry_run_import": False,
+        "lol_dry_run_path_configured": False,
     }
     with patch(
         "app.kernel.betting_catalog._kernel_flags",

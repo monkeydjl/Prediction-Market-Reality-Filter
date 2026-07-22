@@ -137,7 +137,7 @@ export default function BettingHubPage() {
               ? "已合并后端 catalog（含数据源接线提示）。"
               : "使用本地静态 catalog（后端不可用或未启动时仍可浏览入口）。"}
           {liveReady && flags ? (
-            <>
+            <span data-testid="hub-flag-strip">
               {" "}
               Kernel=
               {flags.kernel_prediction_enabled ? "ON" : "OFF"}
@@ -145,7 +145,12 @@ export default function BettingHubPage() {
               EPL={flags.epl_data_enabled ? "ON" : "OFF"}
               {" · "}
               五大联赛={flags.phase2_leagues_enabled ? "ON" : "OFF"}
-            </>
+              {" · "}
+              LoL={flags.phase_lol_enabled ? "ON" : "OFF"}
+              {flags.phase_lol_enabled
+                ? ` · dry-run=${flags.lol_dry_run_import ? "ON" : "OFF"}`
+                : null}
+            </span>
           ) : null}
         </p>
       </div>

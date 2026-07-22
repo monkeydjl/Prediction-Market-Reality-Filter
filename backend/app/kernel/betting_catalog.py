@@ -227,6 +227,9 @@ def _kernel_flags() -> dict[str, bool]:
     try:
         from app.core.config import settings
         phase2 = bool(getattr(settings, "PHASE2_LEAGUES_ENABLED", False))
+        dry_path = str(
+            getattr(settings, "LOL_DRY_RUN_FIXTURES_PATH", "") or ""
+        ).strip()
         return {
             "kernel_prediction_enabled": bool(
                 getattr(settings, "KERNEL_PREDICTION_ENABLED", False)
@@ -247,6 +250,11 @@ def _kernel_flags() -> dict[str, bool]:
             "phase_lol_enabled": bool(
                 getattr(settings, "PHASE_LOL_ENABLED", False)
             ),
+            "lol_dry_run_import": bool(
+                getattr(settings, "LOL_DRY_RUN_IMPORT", False)
+            ),
+            # Path string never exposed — only whether env is non-empty.
+            "lol_dry_run_path_configured": bool(dry_path),
         }
     except Exception:  # pragma: no cover - defensive
         return {
@@ -258,6 +266,8 @@ def _kernel_flags() -> dict[str, bool]:
             "phase5_mlb_enabled": False,
             "phase5_nhl_enabled": False,
             "phase_lol_enabled": False,
+            "lol_dry_run_import": False,
+            "lol_dry_run_path_configured": False,
         }
 
 
@@ -366,17 +376,30 @@ def build_status_payload() -> dict[str, Any]:
         detail = getattr(exc, "detail", None)
         kernel_error = str(detail if detail is not None else exc)[:240]
 
+    if not kernel_ready:
+        hint = "Kernel failed to initialize; check flags and data keys."
+    else:
+        hint = (
+            "registered_prefixes lists MultiAdapter league keys currently "
+            "wired (e.g. epl-, nba-). Empty list with kernel_ready=true means "
+            "only WC default or no league flags."
+        )
+        if flags.get("phase_lol_enabled"):
+            hint += (
+                " LoL: expect prefix lol- when PHASE_LOL_ENABLED is ON; "
+                "dry-run import is LOL_DRY_RUN_IMPORT (path never returned here)."
+            )
+        else:
+            hint += (
+                " LoL adapter not registered (PHASE_LOL_ENABLED OFF); "
+                "catalog entry stays coming_soon without fake markets."
+            )
+
     return {
         "version": 1,
         "flags": flags,
         "kernel_ready": kernel_ready,
         "registered_prefixes": prefixes,
         "kernel_error": kernel_error,
-        "hint": (
-            "registered_prefixes lists MultiAdapter league keys currently "
-            "wired (e.g. epl-, nba-). Empty list with kernel_ready=true means "
-            "only WC default or no league flags."
-            if kernel_ready
-            else "Kernel failed to initialize; check flags and data keys."
-        ),
+        "hint": hint,
     }

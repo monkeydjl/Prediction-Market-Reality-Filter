@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### LoL dry-run observability (status + hub + landing)
+- Catalog/status flags: `lol_dry_run_import`, `lol_dry_run_path_configured` (no path/secrets)
+- Status hint mentions `lol-` when PHASE_LOL on/off
+- Hub flag strip shows LoL + dry-run; `/sports/betting/lol` ops panel (no fake markets)
+
 ### ADR-005 LoL vendor selection + GATES fill
 - Preferred production source: GRID-class official partner (not OA CS2/Dota)
 - PandaScore-class optional for odds enrichment only

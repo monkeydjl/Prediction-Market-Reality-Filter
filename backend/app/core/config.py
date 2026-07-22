@@ -1070,6 +1070,14 @@ class Settings:
     NBA_ELO_K_PLAYOFF: int = int(os.getenv("NBA_ELO_K_PLAYOFF", "30"))
     NBA_LEAGUE_AVG_TOTAL: float = float(os.getenv("NBA_LEAGUE_AVG_TOTAL", "220.0"))
 
+    # LoL esports (ADR-004) — default OFF; no production API until
+    # docs/dev/lol/GATES.md P2/P3/P6.
+    PHASE_LOL_ENABLED: bool = _env_bool("PHASE_LOL_ENABLED", "false")
+    LOL_DRY_RUN_IMPORT: bool = _env_bool("LOL_DRY_RUN_IMPORT", "false")
+    LOL_DRY_RUN_FIXTURES_PATH: str = os.getenv(
+        "LOL_DRY_RUN_FIXTURES_PATH", ""
+    ).strip()
+
     # Phase 5 — MLB/NHL Integration (default OFF). When false, mlb-/nhl-
     # prefix match_ids return 404 and MLB/NHL components are not
     # instantiated. MLB/NHL stats APIs require no API key (graceful

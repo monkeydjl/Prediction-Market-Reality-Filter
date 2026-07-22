@@ -41,6 +41,7 @@ PREFIX_TO_COMPETITION: dict[str, str] = {
     "nba-": "nba",
     "mlb-": "mlb",
     "nhl-": "nhl",
+    "lol-": "lol",
 }
 
 PREFIX_TO_SPORT: dict[str, str] = {
@@ -54,6 +55,7 @@ PREFIX_TO_SPORT: dict[str, str] = {
     "nba-": "basketball",
     "mlb-": "baseball",
     "nhl-": "hockey",
+    "lol-": "lol",
 }
 
 COMPETITION_SPORT: dict[str, str] = {
@@ -70,6 +72,11 @@ COMPETITION_SPORT: dict[str, str] = {
     "nba": "basketball",
     "mlb": "baseball",
     "nhl": "hockey",
+    "lol": "lol",
+    "lol_lck": "lol",
+    "lol_lpl": "lol",
+    "lol_lec": "lol",
+    "lol_worlds": "lol",
 }
 
 

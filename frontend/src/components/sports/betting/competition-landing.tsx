@@ -230,6 +230,18 @@ export function CompetitionLanding({ competition: staticComp }: Props) {
                 : "lol- 未注册（需 Kernel + PHASE_LOL）"}
             </li>
             <li>
+              LOL_SCHEDULE_VENDOR=
+              {runtimeStatus?.lol?.schedule_vendor ?? "null"}
+              {" · "}
+              http_client_ready=
+              {runtimeStatus?.lol?.production_http_client_ready
+                ? "yes"
+                : "no"}
+              {" · "}
+              grace_h=
+              {runtimeStatus?.lol?.settle_grace_hours ?? 6}
+            </li>
+            <li>
               生产 HTTP 赛程源在 GATES P2/P3/P6 关闭前禁止合并；本地仅
               dry-run JSON / Null source。
             </li>

@@ -82,6 +82,36 @@ def test_betting_status_shape():
     assert "kernel_ready" in data
     assert isinstance(data["registered_prefixes"], list)
     assert "hint" in data
+    lol = data["lol"]
+    assert lol["schedule_vendor"] == "null"
+    assert lol["vendor_api_base_configured"] is False
+    assert lol["vendor_api_key_configured"] is False
+    assert lol["settle_grace_hours"] == 6
+    assert lol["production_http_client_ready"] is False
+    assert "api_key" not in lol
+    assert "LOL_VENDOR_API_KEY" not in str(data)
+
+
+def test_lol_status_snapshot_never_leaks_secrets():
+    from unittest.mock import MagicMock, patch
+
+    from app.kernel.betting_catalog import _lol_status_snapshot
+
+    fake = MagicMock()
+    fake.LOL_SCHEDULE_VENDOR = "grid"
+    fake.LOL_VENDOR_API_BASE = "https://example.invalid/v1"
+    fake.LOL_VENDOR_API_KEY = "super-secret-key-do-not-leak"
+    fake.LOL_SETTLE_GRACE_HOURS = 6
+
+    with patch("app.core.config.settings", fake):
+        snap = _lol_status_snapshot()
+    assert snap["schedule_vendor"] == "grid"
+    assert snap["vendor_api_base_configured"] is True
+    assert snap["vendor_api_key_configured"] is True
+    assert snap["production_http_client_ready"] is False
+    dumped = str(snap)
+    assert "super-secret" not in dumped
+    assert "https://example.invalid" not in dumped
 
 
 def test_build_status_payload_kernel_off():

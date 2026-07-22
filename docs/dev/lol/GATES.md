@@ -56,6 +56,7 @@
 | Same as schedule? | **Yes (target)** |
 | Lag SLA | _from contract_ |
 | Conflict policy | ADR-005 D6 |
+| Grace hours config | `LOL_SETTLE_GRACE_HOURS` default **6** (shell only until client) |
 | Operator override | Signed JSON import only; audit log required |
 
 ---

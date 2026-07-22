@@ -11,6 +11,10 @@ from app.kernel.competition_codes import (
 def test_phase_lol_defaults_off():
     assert config.settings.PHASE_LOL_ENABLED is False
     assert config.settings.LOL_DRY_RUN_IMPORT is False
+    assert config.settings.LOL_SCHEDULE_VENDOR == "null"
+    assert config.settings.LOL_VENDOR_API_BASE == ""
+    assert config.settings.LOL_VENDOR_API_KEY == ""
+    assert config.settings.LOL_SETTLE_GRACE_HOURS == 6
 
 def test_lol_prefix_and_aliases():
     assert PREFIX_TO_SPORT["lol-"] == "lol"

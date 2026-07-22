@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### ADR-005 D4 LoL vendor config shell
+- Env: `LOL_SCHEDULE_VENDOR`, `LOL_VENDOR_API_BASE`, `LOL_VENDOR_API_KEY`, `LOL_SETTLE_GRACE_HOURS` (defaults null/empty/6)
+- `GET /api/betting/status` includes `lol` diagnostics (no secrets, `production_http_client_ready=false`)
+- No PartnerHttp client; commercial vendor ids are config-only until GATES
+
 ### LoL dry-run observability (status + hub + landing)
 - Catalog/status flags: `lol_dry_run_import`, `lol_dry_run_path_configured` (no path/secrets)
 - Status hint mentions `lol-` when PHASE_LOL on/off

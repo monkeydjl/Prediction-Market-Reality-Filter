@@ -177,5 +177,55 @@ describe("CompetitionLanding", () => {
     render(<CompetitionLanding competition={esports} />);
     expect(useMatches).toHaveBeenCalledWith(null);
     expect(screen.getByRole("status")).toHaveTextContent(/不会展示占位赔率/);
+    expect(screen.queryByTestId("lol-dry-run-ops")).not.toBeInTheDocument();
+  });
+
+  it("shows LoL dry-run ops panel without polling matches or fake odds", () => {
+    useBettingCatalog.mockReturnValue({
+      data: {
+        version: 1,
+        competitions: [{ id: "lol", adapter_likely: true }],
+        tools: [],
+        sections: {},
+        flags: {
+          phase_lol_enabled: true,
+          lol_dry_run_import: true,
+          lol_dry_run_path_configured: true,
+        },
+      },
+      error: undefined,
+      isLoading: false,
+    });
+    useBettingStatus.mockReturnValue({
+      data: {
+        version: 1,
+        kernel_ready: true,
+        registered_prefixes: ["lol-"],
+        kernel_error: null,
+        lol: {
+          schedule_vendor: "null",
+          production_http_client_ready: false,
+          settle_grace_hours: 6,
+        },
+      },
+    });
+    useMatches.mockReturnValue({
+      data: undefined,
+      error: undefined,
+      isLoading: false,
+      mutate: vi.fn(),
+    });
+    render(<CompetitionLanding competition={lol} />);
+    expect(useMatches).toHaveBeenCalledWith(null);
+    expect(screen.getByRole("status")).toHaveTextContent(/不会展示占位赔率/);
+    const ops = screen.getByTestId("lol-dry-run-ops");
+    expect(ops).toHaveTextContent(/PHASE_LOL_ENABLED=ON/);
+    expect(ops).toHaveTextContent(/LOL_DRY_RUN_IMPORT=ON/);
+    expect(ops).toHaveTextContent(/lol- 已注册/);
+    expect(ops).toHaveTextContent(/LOL_SCHEDULE_VENDOR=null/);
+    expect(ops).toHaveTextContent(/http_client_ready=no/);
+    expect(ops).toHaveTextContent(/GATES/);
+    expect(screen.queryByTestId("landing-sync-schedule")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("landing-match-count")).not.toBeInTheDocument();
   });
 });

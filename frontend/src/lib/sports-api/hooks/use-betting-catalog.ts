@@ -57,9 +57,18 @@ export function useBettingCatalog() {
   });
 }
 
+export type BettingLolStatus = {
+  schedule_vendor?: string;
+  vendor_api_base_configured?: boolean;
+  vendor_api_key_configured?: boolean;
+  settle_grace_hours?: number;
+  production_http_client_ready?: boolean;
+};
+
 export type BettingStatus = {
   version: number;
   flags?: BettingCatalogFlags;
+  lol?: BettingLolStatus;
   kernel_ready: boolean;
   registered_prefixes: string[];
   kernel_error: string | null;

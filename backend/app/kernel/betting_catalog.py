@@ -335,6 +335,41 @@ def get_competition(competition_id: str) -> dict[str, Any] | None:
     return None
 
 
+_ALLOWED_LOL_VENDORS = frozenset({"null", "dry_run", "grid", "pandascore"})
+
+
+def _lol_status_snapshot() -> dict[str, Any]:
+    """Non-secret LoL vendor/config diagnostics (ADR-005 D4). Never returns keys."""
+    try:
+        from app.core.config import settings
+
+        raw = str(getattr(settings, "LOL_SCHEDULE_VENDOR", "null") or "null")
+        vendor = raw.strip().lower() or "null"
+        if vendor not in _ALLOWED_LOL_VENDORS:
+            vendor = "null"
+        base = str(getattr(settings, "LOL_VENDOR_API_BASE", "") or "").strip()
+        key = str(getattr(settings, "LOL_VENDOR_API_KEY", "") or "").strip()
+        grace = int(getattr(settings, "LOL_SETTLE_GRACE_HOURS", 6) or 6)
+        # Production HTTP client is not shipped; any commercial vendor id is
+        # config-only until GATES P2/P3/P6 and PartnerHttp land.
+        http_client_ready = False
+        return {
+            "schedule_vendor": vendor,
+            "vendor_api_base_configured": bool(base),
+            "vendor_api_key_configured": bool(key),
+            "settle_grace_hours": max(0, grace),
+            "production_http_client_ready": http_client_ready,
+        }
+    except Exception:  # pragma: no cover - defensive
+        return {
+            "schedule_vendor": "null",
+            "vendor_api_base_configured": False,
+            "vendor_api_key_configured": False,
+            "settle_grace_hours": 6,
+            "production_http_client_ready": False,
+        }
+
+
 def build_status_payload() -> dict[str, Any]:
     """Runtime diagnostic for 竞猜 operators (no secrets, no fake markets).
 
@@ -343,6 +378,7 @@ def build_status_payload() -> dict[str, Any]:
     as 500 for a simple status probe.
     """
     flags = _kernel_flags()
+    lol = _lol_status_snapshot()
     prefixes: list[str] = []
     kernel_ready = False
     kernel_error: str | None = None
@@ -351,6 +387,7 @@ def build_status_payload() -> dict[str, Any]:
         return {
             "version": 1,
             "flags": flags,
+            "lol": lol,
             "kernel_ready": False,
             "registered_prefixes": [],
             "kernel_error": None,

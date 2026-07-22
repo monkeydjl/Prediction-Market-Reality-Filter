@@ -17,7 +17,8 @@ prerequisites checklist is complete and `PHASE_LOL_ENABLED` is intentionally ON.
 | Flag | `PHASE_LOL_ENABLED` default **OFF** (to be added at implementation) |
 | Engines | Dedicated LoL path — **no** football/NBA engine reuse |
 
-See ADR-004 for full checklist (P1–P8) and implementation order.
+See ADR-004 for full checklist (P1–P8) and implementation order.  
+Implementation plan: [2026-07-22-lol-esports-adapter.md](../superpowers/plans/2026-07-22-lol-esports-adapter.md).
 
 ## What is in scope later
 

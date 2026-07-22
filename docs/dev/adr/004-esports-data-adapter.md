@@ -138,16 +138,15 @@ Hub 电竞卡 → /sports/betting/esports（门禁前）
 | **独立微服务** | 延期；单 title 时 Kernel 足够 |
 | **本次写空骨架 adapter** | 延期；本 ADR 仅 Accepted 决策 + 门禁 |
 
-## Implementation order（后续 plan，非本 commit）
+## Implementation order
 
-1. 记录供应商/官方 API 选型（可另开 ADR-005 若需比选）
-2. `PHASE_LOL_ENABLED` + settings + MultiAdapter 注册点
-3. Fixture schema（series, best-of, start, teams）
-4. `LolAdapter` + contract tests
-5. Engine v0（market-only）+ 空态 UI
-6. Catalog：`esports` / `lol` 状态与 `adapter_likely`
-7. Phase 7 链接与 settlement 样例
-8. 打开 flag 的 ops RUNBOOK 段落
+Canonical plan: [`docs/superpowers/plans/2026-07-22-lol-esports-adapter.md`](../superpowers/plans/2026-07-22-lol-esports-adapter.md)
+
+1. Task 0: `docs/dev/lol/GATES.md` (P1–P8) — blocks production HTTP source  
+2. Config `PHASE_LOL_ENABLED` + competition codes  
+3. Dry-run JSON import + `LolAdapter` + market-only engine  
+4. Kernel registration + catalog/FE + RUNBOOK  
+5. Later plan: vendor `LolScheduleSource` after GATES P2/P3/P6
 
 ## References
 

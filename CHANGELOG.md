@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### LoL esports implementation plan (ADR-004)
+- Plan: `docs/superpowers/plans/2026-07-22-lol-esports-adapter.md`
+- Dry-run stack + market-only engine; production HTTP blocked on GATES
+
+
 ### ADR-004 Esports/LoL Accepted
 - First title: LoL; sport `lol`, prefix `lol-`
 - Production adapter blocked on official/partner API gates

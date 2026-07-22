@@ -1,0 +1,17 @@
+{
+  "label": "SYNTHETIC dry-run only — not real matches",
+  "series": [
+    {
+      "external_id": "dry-lck-001",
+      "competition": "lol_lck",
+      "home_name": "T1",
+      "away_name": "Gen.G",
+      "home_code": "T1",
+      "away_code": "GEN",
+      "kickoff_utc": "2099-01-15T10:00:00Z",
+      "best_of": 3,
+      "stage": "regular",
+      "status": "scheduled"
+    }
+  ]
+}

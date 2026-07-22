@@ -84,6 +84,8 @@ def test_betting_status_shape():
     assert "hint" in data
     lol = data["lol"]
     assert lol["schedule_vendor"] == "null"
+    assert lol["effective_schedule_vendor"] == "null"
+    assert lol["schedule_source_blocked"] is False
     assert lol["vendor_api_base_configured"] is False
     assert lol["vendor_api_key_configured"] is False
     assert lol["settle_grace_hours"] == 6
@@ -106,6 +108,8 @@ def test_lol_status_snapshot_never_leaks_secrets():
     with patch("app.core.config.settings", fake):
         snap = _lol_status_snapshot()
     assert snap["schedule_vendor"] == "grid"
+    assert snap["effective_schedule_vendor"] == "null"
+    assert snap["schedule_source_blocked"] is True
     assert snap["vendor_api_base_configured"] is True
     assert snap["vendor_api_key_configured"] is True
     assert snap["production_http_client_ready"] is False

@@ -59,6 +59,9 @@ export function useBettingCatalog() {
 
 export type BettingLolStatus = {
   schedule_vendor?: string;
+  effective_schedule_vendor?: string;
+  schedule_source_blocked?: boolean;
+  schedule_source_reason?: string | null;
   vendor_api_base_configured?: boolean;
   vendor_api_key_configured?: boolean;
   settle_grace_hours?: number;

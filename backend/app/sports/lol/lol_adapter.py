@@ -29,7 +29,13 @@ from app.kernel.kernel_db import (
 )
 from app.kernel.protocols import RawMatchData, ScheduleFilter
 from app.sports.lol.dry_run_import import import_lol_series_file
-from app.sports.lol.source import LolScheduleSource, LolSeriesRecord, NullLolScheduleSource
+from app.sports.lol.source import (
+    LolScheduleSource,
+    LolSeriesRecord,
+    LolSourceResolution,
+    NullLolScheduleSource,
+    resolve_lol_schedule_source,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +166,13 @@ class LolAdapter:
     """DataAdapter Protocol implementation for League of Legends esports."""
 
     def __init__(self, source: LolScheduleSource | None = None) -> None:
-        self._source: LolScheduleSource = source if source is not None else NullLolScheduleSource()
+        if source is not None:
+            self._source: LolScheduleSource = source
+            self._source_resolution: LolSourceResolution | None = None
+        else:
+            resolution = resolve_lol_schedule_source()
+            self._source = resolution.source
+            self._source_resolution = resolution
         self._competition = _DEFAULT_COMPETITION
         self.competition = "lol"
 

@@ -232,6 +232,11 @@ export function CompetitionLanding({ competition: staticComp }: Props) {
             <li>
               LOL_SCHEDULE_VENDOR=
               {runtimeStatus?.lol?.schedule_vendor ?? "null"}
+              {" → "}
+              {runtimeStatus?.lol?.effective_schedule_vendor ?? "null"}
+              {runtimeStatus?.lol?.schedule_source_blocked
+                ? " (blocked)"
+                : ""}
               {" · "}
               http_client_ready=
               {runtimeStatus?.lol?.production_http_client_ready

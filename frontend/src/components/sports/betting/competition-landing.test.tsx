@@ -204,6 +204,8 @@ describe("CompetitionLanding", () => {
         kernel_error: null,
         lol: {
           schedule_vendor: "null",
+          effective_schedule_vendor: "null",
+          schedule_source_blocked: false,
           production_http_client_ready: false,
           settle_grace_hours: 6,
         },

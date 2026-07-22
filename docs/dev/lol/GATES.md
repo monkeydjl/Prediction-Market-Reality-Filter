@@ -66,6 +66,8 @@
 | Date | Action | Who | Result |
 |------|--------|-----|--------|
 | 2026-07-22 | ADR-005 vendor class selected (GRID primary) | Eng/docs | Accepted |
+| 2026-07-22 | ADR-005 D4 config shell (`LOL_SCHEDULE_VENDOR` etc.) | Eng | Defaults only; `production_http_client_ready=false` |
+| 2026-07-22 | `resolve_lol_schedule_source` guard | Eng | grid/pandascore/unknown → Null + blocked |
 | _TBD_ | Commercial access request | Product | |
 | _TBD_ | Legal ToS sign-off | Legal | → P6 `[x]` |
 

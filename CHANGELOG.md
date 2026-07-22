@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### LoL schedule source resolver guard
+- `resolve_lol_schedule_source()`: only `null`/`dry_run` runtime; `grid`/`pandascore`/unknown → Null + blocked
+- `LolAdapter()` uses resolver by default; status exposes effective vendor + blocked reason
+
 ### ADR-005 D4 LoL vendor config shell
 - Env: `LOL_SCHEDULE_VENDOR`, `LOL_VENDOR_API_BASE`, `LOL_VENDOR_API_KEY`, `LOL_SETTLE_GRACE_HOURS` (defaults null/empty/6)
 - `GET /api/betting/status` includes `lol` diagnostics (no secrets, `production_http_client_ready=false`)

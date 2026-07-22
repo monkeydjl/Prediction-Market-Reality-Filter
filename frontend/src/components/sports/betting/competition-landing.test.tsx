@@ -129,7 +129,7 @@ describe("CompetitionLanding", () => {
     expect(useMatches).toHaveBeenCalledWith({
       sport: "football",
       competition: "epl",
-      daysAhead: 14,
+      daysAhead: 45,
     });
     expect(screen.queryByTestId("landing-sync-schedule")).not.toBeInTheDocument();
   });

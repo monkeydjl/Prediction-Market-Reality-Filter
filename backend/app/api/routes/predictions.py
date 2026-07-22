@@ -189,10 +189,20 @@ def _get_kernel():
             factor_registry.ensure_competition_factors("nhl")
             builders["nhl-"] = HockeyFeatureBuilder()
 
+        if config.settings.PHASE_LOL_ENABLED:
+            from app.sports.lol.lol_adapter import LolAdapter
+            from app.sports.lol.feature_builder import LolFeatureBuilder
+            from app.sports.lol.engines.market_only_engine import LolMarketOnlyEngine
+
+            adapters["lol-"] = LolAdapter()
+            reg.register(LolMarketOnlyEngine())
+            builders["lol-"] = LolFeatureBuilder()
+
         # If any non-football sport is enabled, wrap builders in MultiFeatureBuilder
         if (config.settings.PHASE4_NBA_ENABLED
                 or config.settings.PHASE5_MLB_ENABLED
-                or config.settings.PHASE5_NHL_ENABLED):
+                or config.settings.PHASE5_NHL_ENABLED
+                or config.settings.PHASE_LOL_ENABLED):
             from app.kernel.multi_feature_builder import MultiFeatureBuilder
             feature_builder = MultiFeatureBuilder(builders)
 

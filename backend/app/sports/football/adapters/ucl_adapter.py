@@ -36,9 +36,9 @@ _FOOTBALL = SportIdentity(code="football", name="Football")
 _COMPETITION = CompetitionIdentity(
     code="ucl", name="UEFA Champions League", sport=_FOOTBALL
 )
-_DEFAULT_SEASON = "2025-26"
+_DEFAULT_SEASON = "2026-27"
 _DEFAULT_STAGE = "group_stage"
-_DEFAULT_KICKOFF = datetime(2025, 9, 16, tzinfo=timezone.utc)
+_DEFAULT_KICKOFF = datetime(2026, 9, 15, tzinfo=timezone.utc)
 
 _STAGE_MAP = {
     "GROUP_STAGE": "group_stage",
@@ -50,7 +50,7 @@ _STAGE_MAP = {
 
 _MATCH_ID_PREFIX = "ucl-"
 _FD_COMPETITION = "CL"
-_FD_SEASON = 2025
+_FD_SEASON = 2026
 
 # Football-Data.org name → ClubElo.com URL name (spaces removed)
 _TEAM_ALIASES = {

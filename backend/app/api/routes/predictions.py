@@ -378,13 +378,27 @@ def list_matches(
         None,
         description="Competition code or alias (epl, laliga, world_cup, nba, ...)",
     ),
+    days_ahead: int = Query(
+        0,
+        ge=0,
+        le=60,
+        description=(
+            "Include fixtures from today through N days ahead (UTC). "
+            "0 = today only (default, backward compatible)."
+        ),
+    ),
 ):
-    """List today's matches across sports, optionally filtered by sport and/or competition."""
+    """List matches across sports, optionally filtered by sport and/or competition.
+
+    Default window is **today UTC only**. Pass ``days_ahead`` (1–60) for an
+    inclusive horizon (e.g. 14 = today through +14 days) so landings show
+    upcoming fixtures outside match-day.
+    """
     if not config.settings.KERNEL_PREDICTION_ENABLED:
         raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")
     kernel = _get_kernel()
     from app.kernel.protocols import ScheduleFilter
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
 
     # Infer sport from competition when only competition is supplied so
     # MultiAdapter can skip unrelated sport adapters early.
@@ -405,32 +419,36 @@ def list_matches(
     )
 
     today = datetime.now(timezone.utc).date()
-    today_matches = []
+    end_date = today + timedelta(days=int(days_ahead or 0))
+    window_matches = []
     for m in raw_matches:
         kickoff = m.match.kickoff_utc
-        if kickoff is not None and kickoff.date() == today:
-            today_matches.append(m)
+        if kickoff is None:
+            continue
+        kd = kickoff.date()
+        if today <= kd <= end_date:
+            window_matches.append(m)
 
     # Defense-in-depth: re-apply filters in case a child adapter ignores them.
     if sport:
-        today_matches = [
-            m for m in today_matches
+        window_matches = [
+            m for m in window_matches
             if m.match.season.competition.sport.code == sport
         ]
 
     if comp_code is not None:
-        today_matches = [
-            m for m in today_matches
+        window_matches = [
+            m for m in window_matches
             if normalize_competition_code(m.match.season.competition.code) == comp_code
             or m.match.season.competition.code == comp_code
         ]
 
     from app.kernel.kernel_db import get_match_ids_with_predictions
     predicted_ids = get_match_ids_with_predictions(
-        [m.match.match_id for m in today_matches]
+        [m.match.match_id for m in window_matches]
     )
 
-    return [_match_summary(m, predicted_ids) for m in today_matches]
+    return [_match_summary(m, predicted_ids) for m in window_matches]
 
 
 @router.get("/matches/{match_id}")

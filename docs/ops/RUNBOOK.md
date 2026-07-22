@@ -247,8 +247,13 @@ To populate Kernel league lists (`GET /api/predictions/matches?competition=epl`)
    ```bash
    curl -s "$BASE/api/betting/catalog" | jq '.flags,.competitions[]|{id,adapter_likely}'
    curl -s "$BASE/api/betting/status" | jq '{kernel_ready,registered_prefixes,flags,lol}'
+   # Default list is **today UTC only**. Landings use days_ahead=14.
    curl -s "$BASE/api/predictions/matches?competition=epl"
+   curl -s "$BASE/api/predictions/matches?competition=epl&days_ahead=14"
    ```
+   Football-Data season year is the autumn start (currently **2026** → 2026-27).
+   Empty `matches` with non-zero `synced` usually means no fixtures in the
+   selected date window (off-season / mid-break), not a failed sync.
    `GET /api/betting/status` is read-only (no write key). It lists MultiAdapter
    prefixes currently registered when Kernel is ON, plus a non-secret `lol`
    diagnostics object (see LoL section below).

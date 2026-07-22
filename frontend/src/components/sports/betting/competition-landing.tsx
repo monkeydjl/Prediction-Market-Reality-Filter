@@ -76,6 +76,8 @@ export function CompetitionLanding({ competition: staticComp }: Props) {
       ? {
           sport: competition.kernelSport ?? null,
           competition: competition.competitionCode ?? null,
+          // Season openers may be weeks out; today-only would look empty mid-break.
+          daysAhead: 14,
         }
       : null,
   );

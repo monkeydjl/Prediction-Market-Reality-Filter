@@ -11,6 +11,8 @@ type MatchDetailResponse = { match: MatchDetail; prediction: PredictionResult | 
 export type MatchListFilters = {
   sport?: string | null;
   competition?: string | null;
+  /** Inclusive UTC horizon; 0 = today only. Landing default 14. */
+  daysAhead?: number | null;
 };
 
 export function useMatches(sportOrFilters?: string | MatchListFilters | null) {
@@ -24,6 +26,13 @@ export function useMatches(sportOrFilters?: string | MatchListFilters | null) {
     const params = new URLSearchParams();
     if (filters.sport) params.set("sport", filters.sport);
     if (filters.competition) params.set("competition", filters.competition);
+    if (
+      filters.daysAhead != null &&
+      Number.isFinite(filters.daysAhead) &&
+      filters.daysAhead > 0
+    ) {
+      params.set("days_ahead", String(Math.min(60, Math.floor(filters.daysAhead))));
+    }
     const qs = params.toString() ? `?${params.toString()}` : "";
     key = `${getApiBase()}/predictions/matches${qs}`;
   }

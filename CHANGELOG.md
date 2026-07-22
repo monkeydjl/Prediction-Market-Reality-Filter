@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+### Football season roll + matches days_ahead
+- EPL/UCL/five-league Football-Data season → **2026** (`2026-27`)
+- `GET /api/predictions/matches?days_ahead=0..60` (default 0 = today only)
+- Betting landings poll with `daysAhead: 14` so openers appear mid-break
+
 ### Hub flag strip / runtime status tests
-- Vitest for static fallback, LoL dry-run flags, blocked vendor runtime line
+- Vitest for static catalog fallback, LoL dry-run flags, blocked vendor runtime line
 
 ### Fix betting status `lol` on Kernel ON + hub runtime
 - `build_status_payload` always includes `lol` (was dropped when Kernel ready)

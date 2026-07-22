@@ -45,8 +45,8 @@ class LeagueConfig:
     name: str                    # Display name (e.g., "La Liga")
     match_id_prefix: str         # Prefix for match IDs (e.g., "laliga-")
     fd_competition: str          # Football-Data.org competition code (e.g., "PD")
-    fd_season: int               # Football-Data.org season year (e.g., 2025)
-    default_season: str          # Internal season key (e.g., "2025-26")
+    fd_season: int               # Football-Data.org season year (e.g., 2026)
+    default_season: str          # Internal season key (e.g., "2026-27")
     default_stage: str           # Default stage (e.g., "regular_season")
     default_kickoff: datetime    # Default kickoff for stub identity
     stage_map: dict[str, str]    # Stage mapping (empty for league-format)
@@ -62,10 +62,10 @@ _LALIGA_CONFIG = LeagueConfig(
     name="La Liga",
     match_id_prefix="laliga-",
     fd_competition="PD",
-    fd_season=2025,
-    default_season="2025-26",
+    fd_season=2026,
+    default_season="2026-27",
     default_stage="regular_season",
-    default_kickoff=datetime(2025, 8, 16, 20, 0, tzinfo=timezone.utc),
+    default_kickoff=datetime(2026, 8, 16, 20, 0, tzinfo=timezone.utc),
     stage_map={},
     team_aliases={
         "Real Madrid CF": "RealMadrid",
@@ -128,10 +128,10 @@ _SERIEA_CONFIG = LeagueConfig(
     name="Serie A",
     match_id_prefix="seriea-",
     fd_competition="SA",
-    fd_season=2025,
-    default_season="2025-26",
+    fd_season=2026,
+    default_season="2026-27",
     default_stage="regular_season",
-    default_kickoff=datetime(2025, 8, 17, 18, 0, tzinfo=timezone.utc),
+    default_kickoff=datetime(2026, 8, 17, 18, 0, tzinfo=timezone.utc),
     stage_map={},
     team_aliases={
         "FC Internazionale Milano": "Inter",

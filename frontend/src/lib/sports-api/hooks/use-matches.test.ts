@@ -20,6 +20,13 @@ describe("useMatches", () => {
     useMatches("nba");
     expect(useSWR).toHaveBeenCalledWith("/api/predictions/matches?sport=nba");
   });
+
+  it("builds key with competition and days_ahead", () => {
+    useMatches({ sport: "football", competition: "epl", daysAhead: 14 });
+    expect(useSWR).toHaveBeenCalledWith(
+      "/api/predictions/matches?sport=football&competition=epl&days_ahead=14",
+    );
+  });
 });
 
 describe("useMatchDetail", () => {

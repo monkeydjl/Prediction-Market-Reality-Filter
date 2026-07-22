@@ -94,7 +94,7 @@ class TestSyncSchedule:
         count = adapter.sync_schedule()
         assert count == 1
         # Verify PL competition code was used
-        mock_fetch.assert_called_once_with("PL", season=2025)
+        mock_fetch.assert_called_once_with("PL", season=2026)
 
     @patch("app.sports.football.adapters.epl_adapter.fetch_competition_fixtures")
     def test_sync_failure_returns_zero(self, mock_fetch):

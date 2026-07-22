@@ -38,16 +38,17 @@ _FOOTBALL = SportIdentity(code="football", name="Football")
 _COMPETITION = CompetitionIdentity(
     code="epl", name="English Premier League", sport=_FOOTBALL
 )
-_DEFAULT_SEASON = "2025-26"
+_DEFAULT_SEASON = "2026-27"
 _DEFAULT_STAGE = "regular_season"
-_DEFAULT_KICKOFF = datetime(2025, 8, 16, tzinfo=timezone.utc)
+_DEFAULT_KICKOFF = datetime(2026, 8, 21, tzinfo=timezone.utc)
 
 # EPL has no knockout stages — all fixtures are regular season
 _STAGE_MAP: dict[str, str] = {}
 
 _MATCH_ID_PREFIX = "epl-"
 _FD_COMPETITION = "PL"
-_FD_SEASON = 2025
+# Football-Data.org season year = autumn start year (2026 → 2026-27).
+_FD_SEASON = 2026
 
 # Football-Data.org name → ClubElo.com URL name
 _TEAM_ALIASES = {

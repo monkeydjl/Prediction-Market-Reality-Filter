@@ -218,6 +218,45 @@ class TestListMatches:
         assert resp.status_code == 200
         assert resp.json() == []
 
+    def test_list_matches_days_ahead_includes_future(self, api_client):
+        """days_ahead>0 includes fixtures beyond today; default stays today-only."""
+        from datetime import timedelta
+
+        adapter = MultiSportFakeAdapter()
+        adapter._matches = [
+            _make_raw_match(
+                "epl-today",
+                "football",
+                "epl",
+                kickoff=datetime.now(timezone.utc),
+            ),
+            _make_raw_match(
+                "epl-future",
+                "football",
+                "epl",
+                kickoff=datetime.now(timezone.utc) + timedelta(days=10),
+            ),
+            _make_raw_match(
+                "epl-far",
+                "football",
+                "epl",
+                kickoff=datetime.now(timezone.utc) + timedelta(days=30),
+            ),
+        ]
+        _patch_kernel_adapter(api_client, adapter)
+
+        today_only = api_client.get(
+            "/api/predictions/matches?competition=epl"
+        ).json()
+        assert [m["match_id"] for m in today_only] == ["epl-today"]
+
+        window = api_client.get(
+            "/api/predictions/matches?competition=epl&days_ahead=14"
+        ).json()
+        ids = {m["match_id"] for m in window}
+        assert ids == {"epl-today", "epl-future"}
+        assert "epl-far" not in ids
+
     def test_list_matches_summary_format(self, api_client):
         """Summary fields are complete."""
         _patch_kernel_adapter(api_client)

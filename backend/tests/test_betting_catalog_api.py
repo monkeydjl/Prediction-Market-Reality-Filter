@@ -144,6 +144,31 @@ def test_build_status_payload_kernel_off():
     assert body["kernel_error"] is None
 
 
+def test_build_status_payload_kernel_off_includes_lol():
+    from unittest.mock import patch
+
+    from app.kernel.betting_catalog import build_status_payload
+
+    with patch(
+        "app.kernel.betting_catalog._kernel_flags",
+        return_value={
+            "kernel_prediction_enabled": False,
+            "phase2_leagues_enabled": False,
+            "epl_data_enabled": False,
+            "ucl_data_enabled": False,
+            "phase4_nba_enabled": False,
+            "phase5_mlb_enabled": False,
+            "phase5_nhl_enabled": False,
+            "phase_lol_enabled": False,
+            "lol_dry_run_import": False,
+            "lol_dry_run_path_configured": False,
+        },
+    ):
+        body = build_status_payload()
+    assert "lol" in body
+    assert body["lol"]["production_http_client_ready"] is False
+
+
 def test_build_status_hint_mentions_lol_when_phase_on():
     from unittest.mock import MagicMock, patch
 
@@ -175,6 +200,10 @@ def test_build_status_hint_mentions_lol_when_phase_on():
     assert "lol-" in body["registered_prefixes"]
     assert "lol-" in body["hint"]
     assert "LOL_DRY_RUN_IMPORT" in body["hint"]
+    # Kernel ON path must keep lol diagnostics (regression: previously dropped).
+    assert "lol" in body
+    assert body["lol"]["production_http_client_ready"] is False
+    assert "api_key" not in body["lol"]
 
 
 def test_lol_adapter_likely_when_phase_lol_enabled():

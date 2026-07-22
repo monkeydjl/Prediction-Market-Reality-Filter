@@ -100,6 +100,26 @@ def main() -> int:
                 health_ok = True
                 if isinstance(data, dict):
                     note = f"ok status={data.get('status', data)}"
+            elif path.endswith("/betting/status") and isinstance(data, dict):
+                # Non-secret summary only — never print API keys or fixture paths.
+                prefixes = data.get("registered_prefixes") or []
+                flags = data.get("flags") or {}
+                lol = data.get("lol") or {}
+                note = (
+                    f"ok ready={data.get('kernel_ready')} "
+                    f"prefixes={len(prefixes)} "
+                    f"phase_lol={flags.get('phase_lol_enabled')} "
+                    f"lol_http={lol.get('production_http_client_ready')} "
+                    f"lol_blocked={lol.get('schedule_source_blocked')}"
+                )
+            elif path.endswith("/betting/catalog") and isinstance(data, dict):
+                flags = data.get("flags") or {}
+                comps = data.get("competitions") or []
+                note = (
+                    f"ok comps={len(comps)} "
+                    f"kernel={flags.get('kernel_prediction_enabled')} "
+                    f"phase_lol={flags.get('phase_lol_enabled')}"
+                )
         elif status == 503:
             note = f"disabled → set {flag}=true" if flag else "503"
         elif status == 0:

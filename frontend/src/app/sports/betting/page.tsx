@@ -83,6 +83,7 @@ function CompetitionCard({ item }: { item: BettingCompetition }) {
 
 export default function BettingHubPage() {
   const { data: liveCatalog, error, isLoading } = useBettingCatalog();
+  const { data: runtimeStatus } = useBettingStatus();
 
   const competitions = useMemo(
     () =>
@@ -107,6 +108,11 @@ export default function BettingHubPage() {
 
   const flags = liveCatalog?.flags;
   const liveReady = Boolean(liveCatalog && !error);
+  const prefixes = runtimeStatus?.registered_prefixes ?? [];
+  const prefixPreview =
+    prefixes.length > 0
+      ? prefixes.slice(0, 8).join(", ") + (prefixes.length > 8 ? "…" : "")
+      : null;
 
   return (
     <main className="mx-auto max-w-4xl space-y-8 px-4 py-6 md:px-6">
@@ -153,6 +159,16 @@ export default function BettingHubPage() {
             </span>
           ) : null}
         </p>
+        {runtimeStatus ? (
+          <p className="mt-1.5" data-testid="hub-runtime-status">
+            Runtime：
+            {runtimeStatus.kernel_ready ? "Kernel ready" : "Kernel not ready"}
+            {prefixPreview ? ` · prefixes: ${prefixPreview}` : null}
+            {runtimeStatus.lol
+              ? ` · LoL vendor=${runtimeStatus.lol.schedule_vendor ?? "null"}→${runtimeStatus.lol.effective_schedule_vendor ?? "null"}${runtimeStatus.lol.schedule_source_blocked ? " (blocked)" : ""}`
+              : null}
+          </p>
+        ) : null}
       </div>
 
       {SECTION_ORDER.map((section) => {

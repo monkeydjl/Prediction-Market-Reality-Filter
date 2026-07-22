@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fix betting status `lol` on Kernel ON + hub runtime
+- `build_status_payload` always includes `lol` (was dropped when Kernel ready)
+- Hub wires `useBettingStatus`: prefixes + LoL vendor effective/blocked
+- `verify_local_stack` summarizes catalog/status without secrets
+- ESPORTS_BOUNDARY links ADR-005; RUNBOOK drops fake `EPL_DATA_ENABLED`
+
 ### RUNBOOK: LoL D4 env + status `lol` diagnostics
 - Ops table for PHASE_LOL / dry-run / vendor shell / grace
 - Resolver matrix + smoke curls for catalog flags and status.lol

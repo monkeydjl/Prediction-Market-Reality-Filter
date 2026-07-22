@@ -1,7 +1,9 @@
 # Esports / 电竞 — product boundary (竞猜 module)
 
 **Status**: **coming_soon** placeholder in product UI.  
-**Architecture decision**: [ADR-004](adr/004-esports-data-adapter.md) — **Accepted** (2026-07-22).
+**Architecture decisions**:
+- [ADR-004](adr/004-esports-data-adapter.md) — **Accepted** (title / sport / gates)
+- [ADR-005](adr/005-lol-data-vendor-selection.md) — **Accepted** (GRID-class primary vendor; PandaScore enrichment only)
 
 Do **not** invent odds, fixtures, or settlement rules in code until the ADR
 prerequisites checklist is complete and `PHASE_LOL_ENABLED` is intentionally ON.
@@ -14,11 +16,14 @@ prerequisites checklist is complete and `PHASE_LOL_ENABLED` is intentionally ON.
 | Kernel sport | `lol` |
 | match_id prefix | `lol-` |
 | Data source | **Trusted official/partner API** before production adapter |
+| Vendor class | **GRID-class** commercial series (not GRID OA / not scrapers) |
 | Flag | `PHASE_LOL_ENABLED` exists in config; default **OFF** |
 | Dry-run | `LOL_DRY_RUN_IMPORT` + series JSON path (no production vendor HTTP) |
+| Vendor shell | `LOL_SCHEDULE_VENDOR` (`null`/`dry_run`/`grid`/`pandascore`); commercial ids **blocked** until PartnerHttp + GATES |
+| Diagnostics | `GET /api/betting/status` → `lol` object (no secrets); hub runtime line when status available |
 | Engines | Dedicated LoL path (`lol_market_only`) — **no** football/NBA engine reuse |
 
-See ADR-004 for full checklist (P1–P8) and implementation order.  
+See ADR-004 for checklist (P1–P8) and ADR-005 for vendor procurement.  
 Implementation plan: [2026-07-22-lol-esports-adapter.md](../superpowers/plans/2026-07-22-lol-esports-adapter.md).  
 Gates: [docs/dev/lol/GATES.md](lol/GATES.md).  
 Ops: [RUNBOOK — LoL esports](../ops/RUNBOOK.md).

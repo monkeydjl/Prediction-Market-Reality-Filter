@@ -438,6 +438,7 @@ def build_status_payload() -> dict[str, Any]:
     return {
         "version": 1,
         "flags": flags,
+        "lol": lol,
         "kernel_ready": kernel_ready,
         "registered_prefixes": prefixes,
         "kernel_error": kernel_error,

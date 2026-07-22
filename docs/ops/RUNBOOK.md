@@ -226,8 +226,8 @@ To populate Kernel league lists (`GET /api/predictions/matches?competition=epl`)
 1. In `backend/.env` (defaults stay OFF):
    ```bash
    KERNEL_PREDICTION_ENABLED=true
-   EPL_DATA_ENABLED=true              # English Premier League adapter
-   PHASE2_LEAGUES_ENABLED=true        # La Liga / Bundesliga / Serie A / Ligue 1 / UCL
+   PHASE2_LEAGUES_ENABLED=true        # EPL + La Liga / Bundesliga / Serie A / Ligue 1 / UCL
+   # (catalog flag epl_data_enabled is an alias of PHASE2 — there is no EPL_DATA_ENABLED env)
    # FOOTBALL_DATA_API_KEY=...        # Football-Data.org for EU leagues
    # BALLDONTLIE_API_KEY=...          # NBA (optional)
    ```

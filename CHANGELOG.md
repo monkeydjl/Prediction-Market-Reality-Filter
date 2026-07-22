@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### 竞猜落地页：同步按钮补全 + 今日赛程预览
+- Wire operator 同步赛程 button (was imported but incomplete)
+- Match preview list (up to 5) with deep links
+- Runtime adapter prefix from GET /betting/status
+
+
 ### GET /api/betting/status diagnostic
 - Read-only flags + MultiAdapter `registered_prefixes` (no write key)
 - Hub shows runtime adapter list when status is available

@@ -1,16 +1,26 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { CompetitionLanding } from "./competition-landing";
 import type { BettingCompetition } from "@/lib/betting/competition-catalog";
 
 vi.mock("@/lib/env", () => ({ getApiBase: () => "/api" }));
 
 const useBettingCatalog = vi.fn();
+const useBettingStatus = vi.fn();
 const useMatches = vi.fn();
+const syncSchedule = vi.fn();
+const hasOperatorApiKey = vi.fn();
+
+vi.mock("@/lib/operator-credentials", () => ({
+  hasOperatorApiKey: () => hasOperatorApiKey(),
+}));
 
 vi.mock("@/lib/sports-api", () => ({
   useBettingCatalog: () => useBettingCatalog(),
+  useBettingStatus: () => useBettingStatus(),
   useMatches: (...args: unknown[]) => useMatches(...args),
+  syncSchedule: (...args: unknown[]) => syncSchedule(...args),
 }));
 
 const epl: BettingCompetition = {
@@ -41,6 +51,16 @@ const esports: BettingCompetition = {
 
 describe("CompetitionLanding", () => {
   beforeEach(() => {
+    hasOperatorApiKey.mockReturnValue(false);
+    syncSchedule.mockReset();
+    useBettingStatus.mockReturnValue({
+      data: {
+        version: 1,
+        kernel_ready: true,
+        registered_prefixes: ["epl-", "wc-"],
+        kernel_error: null,
+      },
+    });
     useBettingCatalog.mockReturnValue({
       data: {
         version: 1,
@@ -53,23 +73,73 @@ describe("CompetitionLanding", () => {
       isLoading: false,
     });
     useMatches.mockReturnValue({
-      data: [{ match_id: "epl-1" }, { match_id: "epl-2" }],
+      data: [
+        {
+          match_id: "epl-1",
+          home_team: "Arsenal",
+          away_team: "Chelsea",
+          has_prediction: true,
+        },
+        {
+          match_id: "epl-2",
+          home_team: "Liverpool",
+          away_team: "City",
+          has_prediction: false,
+        },
+      ],
       error: undefined,
       isLoading: false,
+      mutate: vi.fn(),
     });
   });
 
-  it("shows adapter badge overlay and match count for kernel league", () => {
+  it("shows adapter badge, match count, preview, and runtime prefix", () => {
     render(<CompetitionLanding competition={epl} />);
     expect(screen.getByTestId("landing-adapter-status")).toHaveAttribute(
       "data-adapter-likely",
       "true",
     );
     expect(screen.getByTestId("landing-match-count-n")).toHaveTextContent("2");
+    expect(screen.getByTestId("landing-match-preview")).toHaveTextContent(
+      "Arsenal",
+    );
+    expect(screen.getByTestId("landing-runtime-prefix")).toHaveTextContent(
+      "epl-",
+    );
     expect(useMatches).toHaveBeenCalledWith({
       sport: "football",
       competition: "epl",
     });
+    expect(screen.queryByTestId("landing-sync-schedule")).not.toBeInTheDocument();
+  });
+
+  it("shows sync button and calls syncSchedule when operator key present", async () => {
+    hasOperatorApiKey.mockReturnValue(true);
+    syncSchedule.mockResolvedValue({
+      synced: 3,
+      sport: "football",
+      competition: "epl",
+      competition_normalized: "epl",
+      registered_prefixes: ["epl-"],
+    });
+    const mutate = vi.fn();
+    useMatches.mockReturnValue({
+      data: [],
+      error: undefined,
+      isLoading: false,
+      mutate,
+    });
+    render(<CompetitionLanding competition={epl} />);
+    const btn = screen.getByTestId("landing-sync-schedule");
+    await userEvent.click(btn);
+    expect(syncSchedule).toHaveBeenCalledWith({
+      sport: "football",
+      competition: "epl",
+    });
+    expect(await screen.findByTestId("landing-sync-msg")).toHaveTextContent(
+      "3",
+    );
+    expect(mutate).toHaveBeenCalled();
   });
 
   it("does not poll matches for coming_soon esports", () => {
@@ -82,6 +152,7 @@ describe("CompetitionLanding", () => {
       data: undefined,
       error: undefined,
       isLoading: false,
+      mutate: vi.fn(),
     });
     render(<CompetitionLanding competition={esports} />);
     expect(useMatches).toHaveBeenCalledWith(null);

@@ -12,6 +12,7 @@ import { hasOperatorApiKey } from "@/lib/operator-credentials";
 import {
   syncSchedule,
   useBettingCatalog,
+  useBettingStatus,
   useMatches,
 } from "@/lib/sports-api";
 
@@ -29,9 +30,25 @@ function kernelListHref(competition: BettingCompetition): string {
   return qs ? `/sports?${qs}` : "/sports";
 }
 
+/** Prefixes that belong to this competition (epl → epl-, serie_a → seriea-). */
+function prefixesForCompetition(
+  competitionCode: string | undefined,
+  registered: string[],
+): string[] {
+  if (!competitionCode || !registered.length) return [];
+  const norm = competitionCode.toLowerCase().replace(/-/g, "_");
+  // Fixture prefixes use compact codes (seriea-, ligue1-).
+  const compact = norm.replace(/_/g, "");
+  return registered.filter((p) => {
+    const stem = p.replace(/-$/, "").toLowerCase().replace(/_/g, "");
+    return stem === compact || stem === norm.replace(/_/g, "");
+  });
+}
+
 export function CompetitionLanding({ competition: staticComp }: Props) {
   const { data: liveCatalog, error: catalogError, isLoading: catalogLoading } =
     useBettingCatalog();
+  const { data: runtimeStatus } = useBettingStatus();
 
   const competition = useMemo(() => {
     const merged = mergeCompetitionsWithLive(
@@ -60,8 +77,36 @@ export function CompetitionLanding({ competition: staticComp }: Props) {
   );
 
   const matchCount = matches?.length ?? 0;
+  const preview = (matches ?? []).slice(0, 5);
   const liveReady = Boolean(liveCatalog && !catalogError);
   const adapterLabel = adapterLikelyLabel(competition.adapterLikely);
+  const wiredPrefixes = prefixesForCompetition(
+    competition.competitionCode,
+    runtimeStatus?.registered_prefixes ?? [],
+  );
+
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const operatorReady = hasOperatorApiKey();
+  const canSync = shouldPollMatches && operatorReady;
+
+  async function onSyncSchedule() {
+    if (!canSync || syncBusy) return;
+    setSyncBusy(true);
+    setSyncMessage(null);
+    try {
+      const result = await syncSchedule({
+        sport: competition.kernelSport ?? null,
+        competition: competition.competitionCode ?? null,
+      });
+      setSyncMessage(`已同步 ${result.synced} 条（adapter 返回计数）`);
+      await mutateMatches();
+    } catch (err) {
+      setSyncMessage(err instanceof Error ? err.message : "同步失败");
+    } finally {
+      setSyncBusy(false);
+    }
+  }
 
   return (
     <main className="mx-auto max-w-3xl space-y-6 px-4 py-6 md:px-6">
@@ -108,7 +153,10 @@ export function CompetitionLanding({ competition: staticComp }: Props) {
               : null}
           </p>
         ) : (
-          <p className="text-xs text-muted-foreground" data-testid="landing-adapter-status">
+          <p
+            className="text-xs text-muted-foreground"
+            data-testid="landing-adapter-status"
+          >
             {catalogLoading && !liveCatalog
               ? "正在同步后端 catalog…"
               : liveReady
@@ -116,6 +164,20 @@ export function CompetitionLanding({ competition: staticComp }: Props) {
                 : "使用本地静态 catalog"}
           </p>
         )}
+        {shouldPollMatches && runtimeStatus ? (
+          <p
+            className="text-xs text-muted-foreground"
+            data-testid="landing-runtime-prefix"
+          >
+            Runtime：
+            {runtimeStatus.kernel_ready ? "Kernel ready" : "Kernel not ready"}
+            {wiredPrefixes.length
+              ? ` · 本联赛 adapter：${wiredPrefixes.join(", ")}`
+              : competition.competitionCode
+                ? " · 本联赛 adapter 未注册（检查 flag）"
+                : null}
+          </p>
+        ) : null}
       </div>
 
       {competition.status === "coming_soon" && (
@@ -125,7 +187,9 @@ export function CompetitionLanding({ competition: staticComp }: Props) {
         >
           该赛道尚未接入真实赛程与盘口。不会展示占位赔率或模拟结果。数据源与结算规则确定后，将复用与
           Kernel 相同的「比赛 → 预测 → Edge → 结算」工作流。详见{" "}
-          <code className="rounded bg-muted px-1">docs/dev/ESPORTS_BOUNDARY.md</code>
+          <code className="rounded bg-muted px-1">
+            docs/dev/ESPORTS_BOUNDARY.md
+          </code>
           。
         </div>
       )}
@@ -204,6 +268,34 @@ export function CompetitionLanding({ competition: staticComp }: Props) {
             )}
           </div>
 
+          {preview.length > 0 ? (
+            <ul
+              className="divide-y divide-border rounded-lg border border-border"
+              data-testid="landing-match-preview"
+            >
+              {preview.map((m) => (
+                <li key={m.match_id}>
+                  <Link
+                    href={`/sports/${encodeURIComponent(m.match_id)}`}
+                    className="flex items-center justify-between gap-2 px-3 py-2 text-sm hover:bg-secondary/40"
+                  >
+                    <span>
+                      {m.home_team} vs {m.away_team}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {m.has_prediction ? "已预测" : "待预测"}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+              {matchCount > preview.length ? (
+                <li className="px-3 py-2 text-xs text-muted-foreground">
+                  另有 {matchCount - preview.length} 场 — 打开完整列表查看
+                </li>
+              ) : null}
+            </ul>
+          ) : null}
+
           <div className="flex flex-wrap gap-2">
             <Link
               href={listHref}
@@ -217,7 +309,32 @@ export function CompetitionLanding({ competition: staticComp }: Props) {
             >
               查看体育 Edge
             </Link>
+            {canSync ? (
+              <button
+                type="button"
+                data-testid="landing-sync-schedule"
+                disabled={syncBusy}
+                onClick={() => void onSyncSchedule()}
+                className="inline-flex rounded-md border border-border px-4 py-2 text-sm disabled:opacity-50"
+              >
+                {syncBusy ? "同步中…" : "同步赛程"}
+              </button>
+            ) : null}
           </div>
+          {syncMessage ? (
+            <p
+              className="text-xs text-muted-foreground"
+              data-testid="landing-sync-msg"
+            >
+              {syncMessage}
+            </p>
+          ) : null}
+          {!operatorReady && shouldPollMatches ? (
+            <p className="text-xs text-muted-foreground">
+              配置 session 中的 operator API 写密钥后可使用「同步赛程」（POST
+              /api/predictions/schedule/sync）。
+            </p>
+          ) : null}
         </div>
       )}
 

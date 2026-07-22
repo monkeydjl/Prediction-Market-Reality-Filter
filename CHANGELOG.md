@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### GET /api/betting/status diagnostic
+- Read-only flags + MultiAdapter `registered_prefixes` (no write key)
+- Hub shows runtime adapter list when status is available
+- verify_local_stack + RUNBOOK smoke include `/betting/status`
+
+
 ### Operator schedule sync + esports ADR-004
 - `POST /api/predictions/schedule/sync` (write key; optional sport/competition)
 - MultiAdapter.sync_schedule accepts ScheduleFilter short-circuit

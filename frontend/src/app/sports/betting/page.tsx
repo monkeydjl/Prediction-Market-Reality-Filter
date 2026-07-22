@@ -12,7 +12,7 @@ import {
   type BettingCompetition,
   type CompetitionSection,
 } from "@/lib/betting/competition-catalog";
-import { useBettingCatalog } from "@/lib/sports-api";
+import { useBettingCatalog, useBettingStatus } from "@/lib/sports-api";
 
 const SECTION_ORDER: CompetitionSection[] = [
   "football",

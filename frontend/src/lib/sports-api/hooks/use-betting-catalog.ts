@@ -50,3 +50,21 @@ export function useBettingCatalog() {
     shouldRetryOnError: false,
   });
 }
+
+export type BettingStatus = {
+  version: number;
+  flags?: BettingCatalogFlags;
+  kernel_ready: boolean;
+  registered_prefixes: string[];
+  kernel_error: string | null;
+  hint?: string;
+};
+
+/** Read-only operator diagnostic (flags + MultiAdapter prefixes). */
+export function useBettingStatus() {
+  const key = `${getApiBase()}/betting/status`;
+  return useSWR<BettingStatus>(key, {
+    revalidateOnFocus: false,
+    shouldRetryOnError: false,
+  });
+}

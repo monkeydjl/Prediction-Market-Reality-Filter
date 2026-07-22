@@ -56,3 +56,40 @@ def test_normalize_competition_code_aliases():
     assert normalize_competition_code("  ") is None
     assert competitions_equivalent("seriea", "serie_a")
     assert competitions_equivalent("ligue1", "ligue-1")
+
+
+def test_betting_status_shape():
+    from app.main import app
+
+    client = TestClient(app)
+    resp = client.get("/api/betting/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["version"] == 1
+    assert "flags" in data
+    assert "kernel_ready" in data
+    assert isinstance(data["registered_prefixes"], list)
+    assert "hint" in data
+
+
+def test_build_status_payload_kernel_off():
+    from unittest.mock import patch
+
+    from app.kernel.betting_catalog import build_status_payload
+
+    with patch(
+        "app.kernel.betting_catalog._kernel_flags",
+        return_value={
+            "kernel_prediction_enabled": False,
+            "phase2_leagues_enabled": False,
+            "epl_data_enabled": False,
+            "ucl_data_enabled": False,
+            "phase4_nba_enabled": False,
+            "phase5_mlb_enabled": False,
+            "phase5_nhl_enabled": False,
+        },
+    ):
+        body = build_status_payload()
+    assert body["kernel_ready"] is False
+    assert body["registered_prefixes"] == []
+    assert body["kernel_error"] is None

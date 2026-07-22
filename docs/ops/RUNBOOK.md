@@ -246,8 +246,11 @@ To populate Kernel league lists (`GET /api/predictions/matches?competition=epl`)
 5. Smoke:
    ```bash
    curl -s "$BASE/api/betting/catalog" | jq '.flags,.competitions[]|{id,adapter_likely}'
+   curl -s "$BASE/api/betting/status" | jq '{kernel_ready,registered_prefixes,flags}'
    curl -s "$BASE/api/predictions/matches?competition=epl"
    ```
+   `GET /api/betting/status` is read-only (no write key). It lists MultiAdapter
+   prefixes currently registered when Kernel is ON.
 
 World Cup remains on `/api/world-cup/*` (not MultiAdapter football prefixes for
 the thematic UI). Esports stays `coming_soon` — see `docs/dev/ESPORTS_BOUNDARY.md`

@@ -16,12 +16,14 @@ export type {
 } from "./hooks/use-matches";
 export {
   useBettingCatalog,
+  useBettingStatus,
 } from "./hooks/use-betting-catalog";
 export type {
   BettingCatalog,
   BettingCatalogCompetition,
   BettingCatalogTool,
   BettingCatalogFlags,
+  BettingStatus,
 } from "./hooks/use-betting-catalog";
 export {
   useEngineScores,

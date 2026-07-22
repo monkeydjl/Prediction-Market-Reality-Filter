@@ -304,3 +304,60 @@ def get_competition(competition_id: str) -> dict[str, Any] | None:
         if row["id"] == competition_id:
             return dict(row)
     return None
+
+
+def build_status_payload() -> dict[str, Any]:
+    """Runtime diagnostic for 竞猜 operators (no secrets, no fake markets).
+
+    Surfaces catalog flags plus MultiAdapter registered prefixes when Kernel is
+    enabled. Failures are reported as ``kernel_error`` strings, never raised
+    as 500 for a simple status probe.
+    """
+    flags = _kernel_flags()
+    prefixes: list[str] = []
+    kernel_ready = False
+    kernel_error: str | None = None
+
+    if not flags.get("kernel_prediction_enabled"):
+        return {
+            "version": 1,
+            "flags": flags,
+            "kernel_ready": False,
+            "registered_prefixes": [],
+            "kernel_error": None,
+            "hint": (
+                "KERNEL_PREDICTION_ENABLED is OFF — MultiAdapter is not built. "
+                "Catalog and hub still work; match lists return 503."
+            ),
+        }
+
+    try:
+        # Lazy import avoids circular import at module load.
+        from app.api.routes.predictions import _get_kernel
+
+        kernel = _get_kernel()
+        adapter = getattr(kernel, "_adapter", None)
+        if adapter is not None and hasattr(adapter, "registered_prefixes"):
+            prefixes = list(adapter.registered_prefixes())  # type: ignore[attr-defined]
+        elif adapter is not None and hasattr(adapter, "_adapters"):
+            prefixes = list(getattr(adapter, "_adapters", {}).keys())
+        kernel_ready = True
+    except Exception as exc:  # pragma: no cover - defensive
+        # HTTPException.detail or plain Exception — never log secrets.
+        detail = getattr(exc, "detail", None)
+        kernel_error = str(detail if detail is not None else exc)[:240]
+
+    return {
+        "version": 1,
+        "flags": flags,
+        "kernel_ready": kernel_ready,
+        "registered_prefixes": prefixes,
+        "kernel_error": kernel_error,
+        "hint": (
+            "registered_prefixes lists MultiAdapter league keys currently "
+            "wired (e.g. epl-, nba-). Empty list with kernel_ready=true means "
+            "only WC default or no league flags."
+            if kernel_ready
+            else "Kernel failed to initialize; check flags and data keys."
+        ),
+    }

@@ -6,7 +6,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from app.kernel.betting_catalog import build_catalog_payload, get_competition
+from app.kernel.betting_catalog import (
+    build_catalog_payload,
+    build_status_payload,
+    get_competition,
+)
 
 router = APIRouter(prefix="/betting", tags=["Betting"])
 
@@ -24,3 +28,13 @@ def get_betting_competition(competition_id: str):
     if row is None:
         raise HTTPException(status_code=404, detail=f"Unknown competition: {competition_id}")
     return row
+
+
+@router.get("/status")
+def get_betting_status():
+    """Operator diagnostic: flags + registered MultiAdapter prefixes.
+
+    Always 200 when the API is up. Does not require write key. Does not sync
+    or invent fixtures — use POST /predictions/schedule/sync for ingest.
+    """
+    return build_status_payload()

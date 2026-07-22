@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Hub flag strip / runtime status tests
+- Vitest for static fallback, LoL dry-run flags, blocked vendor runtime line
+
 ### Fix betting status `lol` on Kernel ON + hub runtime
 - `build_status_payload` always includes `lol` (was dropped when Kernel ready)
 - Hub wires `useBettingStatus`: prefixes + LoL vendor effective/blocked

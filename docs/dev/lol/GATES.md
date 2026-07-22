@@ -11,6 +11,6 @@ Status legend: `[ ]` open · `[x]` done
 | P5 | Markets v1 = series winner only | [x] | ADR-004 locked |
 | P6 | ToS / license OK for cache+display | [ ] | legal owner sign-off date |
 | P7 | Empty-state UX copy | [ ] | FE strings reviewed |
-| P8 | Contract tests + dry-run settle sample | [ ] | filled when Tasks 3–6 land |
+| P8 | Contract tests + dry-run settle sample | [ ] | Contract tests land with dry-run stack (Tasks 3–6); production settle sample still open |
 
 **Rule:** Do not merge production HTTP schedule client until P2, P3, P6 are `[x]`.

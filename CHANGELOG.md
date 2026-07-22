@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### LoL Kernel dry-run stack (ADR-004 Tasks 0-9)
+- `PHASE_LOL_ENABLED` / `LOL_DRY_RUN_*` flags
+- LolAdapter, market-only engine, catalog entry
+- `docs/dev/lol/GATES.md` + RUNBOOK LoL section
+
 ### LoL esports implementation plan (ADR-004)
 - Plan: `docs/superpowers/plans/2026-07-22-lol-esports-adapter.md`
 - Dry-run stack + market-only engine; production HTTP blocked on GATES

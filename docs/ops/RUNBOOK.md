@@ -259,6 +259,16 @@ and ADR-004.
 UI: competition landings show a **同步赛程** button when the browser session has
 an operator write key (`sessionStorage` via operator credentials UI).
 
+### LoL esports (ADR-004)
+
+- Flag: `PHASE_LOL_ENABLED=false` by default.
+- Dry-run: `LOL_DRY_RUN_IMPORT=true` + path to series JSON; then
+  `POST /api/predictions/schedule/sync?sport=lol` with write key.
+- List: `GET /api/predictions/matches?sport=lol`
+- Do not enable production vendor HTTP until `docs/dev/lol/GATES.md` P2/P3/P6 are checked.
+- Engine: `lol_market_only` (series winner only).
+- Catalog: `GET /api/betting/catalog` includes `lol`; `phase_lol_enabled` flag.
+
 ## Event ID Migration
 
 New events use 16-hex SHA-1 prefixes. To migrate legacy 12-hex event IDs across

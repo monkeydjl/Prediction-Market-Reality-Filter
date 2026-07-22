@@ -168,6 +168,19 @@ BETTING_COMPETITIONS: list[dict[str, Any]] = [
         "track": "placeholder",
         "section": "esports",
     },
+    {
+        "id": "lol",
+        "sport": "lol",
+        "label": "英雄联盟",
+        "short_label": "LoL",
+        "description": "Kernel sport=lol；默认关闭，需 PHASE_LOL_ENABLED 与数据门禁",
+        "status": "coming_soon",
+        "href": "/sports/betting/lol",
+        "competition_code": "lol",
+        "kernel_sport": "lol",
+        "track": "placeholder",
+        "section": "esports",
+    },
 ]
 
 BETTING_TOOL_LINKS: list[dict[str, Any]] = [
@@ -231,6 +244,9 @@ def _kernel_flags() -> dict[str, bool]:
             "phase5_nhl_enabled": bool(
                 getattr(settings, "PHASE5_NHL_ENABLED", False)
             ),
+            "phase_lol_enabled": bool(
+                getattr(settings, "PHASE_LOL_ENABLED", False)
+            ),
         }
     except Exception:  # pragma: no cover - defensive
         return {
@@ -241,6 +257,7 @@ def _kernel_flags() -> dict[str, bool]:
             "phase4_nba_enabled": False,
             "phase5_mlb_enabled": False,
             "phase5_nhl_enabled": False,
+            "phase_lol_enabled": False,
         }
 
 
@@ -254,6 +271,8 @@ def build_catalog_payload() -> dict[str, Any]:
         # Surface whether schedule adapter is likely wired (not a guarantee of
         # non-empty fixtures — that still depends on ingest).
         if item.get("track") == "world_cup":
+            item["adapter_likely"] = True
+        elif code == "lol" and flags.get("phase_lol_enabled"):
             item["adapter_likely"] = True
         elif item.get("track") == "placeholder":
             item["adapter_likely"] = False

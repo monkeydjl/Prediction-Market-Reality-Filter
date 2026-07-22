@@ -19,7 +19,14 @@ export type CompetitionSection =
 
 export type BettingCompetition = {
   id: string;
-  sport: "football" | "basketball" | "baseball" | "hockey" | "esports" | "multi";
+  sport:
+    | "football"
+    | "basketball"
+    | "baseball"
+    | "hockey"
+    | "esports"
+    | "lol"
+    | "multi";
   label: string;
   shortLabel: string;
   description: string;
@@ -188,6 +195,19 @@ export const BETTING_COMPETITIONS: BettingCompetition[] = [
     description: "电竞赛事预测工作流规划中（暂无假数据 / 假盘口）",
     status: "coming_soon",
     href: "/sports/betting/esports",
+    track: "placeholder",
+    section: "esports",
+  },
+  {
+    id: "lol",
+    sport: "lol",
+    label: "英雄联盟",
+    shortLabel: "LoL",
+    description: "Kernel sport=lol；默认关闭，需 PHASE_LOL_ENABLED 与数据门禁",
+    status: "coming_soon",
+    href: "/sports/betting/lol",
+    competitionCode: "lol",
+    kernelSport: "lol",
     track: "placeholder",
     section: "esports",
   },

@@ -13,7 +13,13 @@ import {
 } from "@/lib/betting/competition-catalog";
 import { useMatches } from "@/lib/sports-api";
 
-const SPORT_CODES = new Set(["football", "basketball", "baseball", "hockey"]);
+const SPORT_CODES = new Set([
+  "football",
+  "basketball",
+  "baseball",
+  "hockey",
+  "lol",
+]);
 
 export default function SportsPage() {
   const router = useRouter();

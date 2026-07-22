@@ -27,6 +27,7 @@ describe("competition-catalog", () => {
         "mlb",
         "nhl",
         "esports",
+        "lol",
       ]),
     );
   });
@@ -42,6 +43,17 @@ describe("competition-catalog", () => {
     const es = getCompetitionById("esports");
     expect(es?.status).toBe("coming_soon");
     expect(es?.track).toBe("placeholder");
+  });
+
+  it("getCompetitionById returns lol coming_soon esports track", () => {
+    const lol = getCompetitionById("lol");
+    expect(lol?.status).toBe("coming_soon");
+    expect(lol?.track).toBe("placeholder");
+    expect(lol?.section).toBe("esports");
+    expect(lol?.sport).toBe("lol");
+    expect(lol?.kernelSport).toBe("lol");
+    expect(lol?.competitionCode).toBe("lol");
+    expect(lol?.href).toBe("/sports/betting/lol");
   });
 
   it("kernel competitions expose kernelSport and competitionCode", () => {

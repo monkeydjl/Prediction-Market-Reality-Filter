@@ -31,6 +31,7 @@ export type BettingCatalogFlags = {
   phase2_leagues_enabled?: boolean;
   epl_data_enabled?: boolean;
   ucl_data_enabled?: boolean;
+  phase_lol_enabled?: boolean;
 };
 
 export type BettingCatalog = {

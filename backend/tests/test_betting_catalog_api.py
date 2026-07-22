@@ -18,11 +18,20 @@ def test_betting_catalog_shape():
     assert "epl" in ids
     assert "nba" in ids
     assert "esports" in ids
+    assert "lol" in ids
     tool_ids = {t["id"] for t in data["tools"]}
     assert "edges" in tool_ids
     es = next(c for c in data["competitions"] if c["id"] == "esports")
     assert es["status"] == "coming_soon"
     assert es["track"] == "placeholder"
+    lol = next(c for c in data["competitions"] if c["id"] == "lol")
+    assert lol["status"] == "coming_soon"
+    assert lol["track"] == "placeholder"
+    assert lol["sport"] == "lol"
+    assert lol["competition_code"] == "lol"
+    assert lol["kernel_sport"] == "lol"
+    assert lol["section"] == "esports"
+    assert data["flags"]["phase_lol_enabled"] is False
 
 
 def test_betting_catalog_item_found():
@@ -87,9 +96,42 @@ def test_build_status_payload_kernel_off():
             "phase4_nba_enabled": False,
             "phase5_mlb_enabled": False,
             "phase5_nhl_enabled": False,
+            "phase_lol_enabled": False,
         },
     ):
         body = build_status_payload()
     assert body["kernel_ready"] is False
     assert body["registered_prefixes"] == []
     assert body["kernel_error"] is None
+
+
+def test_lol_adapter_likely_when_phase_lol_enabled():
+    from unittest.mock import patch
+
+    from app.kernel.betting_catalog import build_catalog_payload
+
+    base_flags = {
+        "kernel_prediction_enabled": False,
+        "phase2_leagues_enabled": False,
+        "epl_data_enabled": False,
+        "ucl_data_enabled": False,
+        "phase4_nba_enabled": False,
+        "phase5_mlb_enabled": False,
+        "phase5_nhl_enabled": False,
+        "phase_lol_enabled": False,
+    }
+    with patch(
+        "app.kernel.betting_catalog._kernel_flags",
+        return_value=base_flags,
+    ):
+        off = build_catalog_payload()
+    lol_off = next(c for c in off["competitions"] if c["id"] == "lol")
+    assert lol_off["adapter_likely"] is False
+
+    with patch(
+        "app.kernel.betting_catalog._kernel_flags",
+        return_value={**base_flags, "phase_lol_enabled": True},
+    ):
+        on = build_catalog_payload()
+    lol_on = next(c for c in on["competitions"] if c["id"] == "lol")
+    assert lol_on["adapter_likely"] is True

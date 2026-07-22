@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### RUNBOOK: LoL D4 env + status `lol` diagnostics
+- Ops table for PHASE_LOL / dry-run / vendor shell / grace
+- Resolver matrix + smoke curls for catalog flags and status.lol
+- Document no secrets in status responses
+
 ### LoL schedule source resolver guard
 - `resolve_lol_schedule_source()`: only `null`/`dry_run` runtime; `grid`/`pandascore`/unknown → Null + blocked
 - `LolAdapter()` uses resolver by default; status exposes effective vendor + blocked reason

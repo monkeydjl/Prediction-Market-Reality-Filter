@@ -246,37 +246,102 @@ To populate Kernel league lists (`GET /api/predictions/matches?competition=epl`)
 5. Smoke:
    ```bash
    curl -s "$BASE/api/betting/catalog" | jq '.flags,.competitions[]|{id,adapter_likely}'
-   curl -s "$BASE/api/betting/status" | jq '{kernel_ready,registered_prefixes,flags}'
+   curl -s "$BASE/api/betting/status" | jq '{kernel_ready,registered_prefixes,flags,lol}'
    curl -s "$BASE/api/predictions/matches?competition=epl"
    ```
    `GET /api/betting/status` is read-only (no write key). It lists MultiAdapter
-   prefixes currently registered when Kernel is ON.
+   prefixes currently registered when Kernel is ON, plus a non-secret `lol`
+   diagnostics object (see LoL section below).
 
 World Cup remains on `/api/world-cup/*` (not MultiAdapter football prefixes for
 the thematic UI). Esports stays `coming_soon` — see `docs/dev/ESPORTS_BOUNDARY.md`
 and ADR-004.
 
 UI: competition landings show a **同步赛程** button when the browser session has
-an operator write key (`sessionStorage` via operator credentials UI).
+an operator write key (`sessionStorage` via operator credentials UI). LoL landing
+(`/sports/betting/lol`) stays `coming_soon` and shows a **dry-run ops** panel
+(flags / vendor effective / blocked) without fake markets or auto-poll.
 
 ### LoL esports (ADR-004 / ADR-005)
 
-- Flag: `PHASE_LOL_ENABLED=false` by default.
-- Dry-run: `LOL_DRY_RUN_IMPORT=true` + path to series JSON; then
-  `POST /api/predictions/schedule/sync?sport=lol` with write key.
-- List: `GET /api/predictions/matches?sport=lol`
+#### Flags and env (defaults safe)
+
+| Env | Default | Purpose |
+|-----|---------|---------|
+| `PHASE_LOL_ENABLED` | `false` | Register `lol-` adapter + `lol_market_only` engine |
+| `LOL_DRY_RUN_IMPORT` | `false` | Load series from local JSON on `sync_schedule` |
+| `LOL_DRY_RUN_FIXTURES_PATH` | empty | Optional absolute path; empty → sample fixture if present |
+| `LOL_SCHEDULE_VENDOR` | `null` | Config shell: `null` \| `dry_run` \| `grid` \| `pandascore` |
+| `LOL_VENDOR_API_BASE` | empty | Non-secret base URL placeholder (not used until PartnerHttp) |
+| `LOL_VENDOR_API_KEY` | empty | **Secret store only** — never log, never return from API |
+| `LOL_SETTLE_GRACE_HOURS` | `6` | ADR-005 D6 grace shell (used when settle client lands) |
+
+`PHASE_LOL_ENABLED` alone does **not** open production data. Setting
+`LOL_SCHEDULE_VENDOR=grid` (or `pandascore`) does **not** enable HTTP.
+
+#### Schedule source resolver guard
+
+`resolve_lol_schedule_source()` (used by default `LolAdapter()`):
+
+| Requested vendor | Effective | `schedule_source_blocked` |
+|------------------|-----------|---------------------------|
+| `null` | `null` (Null source) | `false` |
+| `dry_run` | `dry_run` (still Null HTTP; file import via dry-run flag) | `false` |
+| `grid` / `pandascore` | forced `null` | `true` |
+| unknown | forced `null` | `true` |
+
+Production partner HTTP ships only after GATES **P2 + P3 + P6** are fully
+`[x]`. See `docs/dev/lol/GATES.md` and ADR-005.
+
+#### Operator dry-run path
+
+1. Set `KERNEL_PREDICTION_ENABLED=true` and `PHASE_LOL_ENABLED=true` (local/staging only).
+2. Optionally `LOL_DRY_RUN_IMPORT=true` and a fixtures path (or rely on repo sample).
+3. Restart API so MultiAdapter rebuilds (`lol-` in `registered_prefixes`).
+4. Sync (write key required):
+   ```bash
+   curl -s -X POST \
+     -H "X-API-Key: $API_WRITE_KEY" \
+     "$BASE/api/predictions/schedule/sync?sport=lol"
+   ```
+5. List: `GET /api/predictions/matches?sport=lol` (or `competition=lol_lck`).
+
+#### Status / catalog diagnostics (no secrets)
+
+```bash
+curl -s "$BASE/api/betting/catalog" | jq '.flags | {phase_lol_enabled,lol_dry_run_import,lol_dry_run_path_configured}'
+curl -s "$BASE/api/betting/status" | jq '{kernel_ready,registered_prefixes,flags,lol}'
+```
+
+`lol` object fields (booleans / ids only — **never** path strings or API keys):
+
+| Field | Meaning |
+|-------|---------|
+| `schedule_vendor` | Configured / known vendor id (`null` if unknown) |
+| `effective_schedule_vendor` | Runtime after resolver (`null` when blocked) |
+| `schedule_source_blocked` | `true` when commercial/unknown vendor forced to Null |
+| `schedule_source_reason` | Short human reason (no secrets) |
+| `vendor_api_base_configured` | Whether base env is non-empty |
+| `vendor_api_key_configured` | Whether key env is non-empty (**not** the key) |
+| `settle_grace_hours` | From `LOL_SETTLE_GRACE_HOURS` |
+| `production_http_client_ready` | Always `false` until PartnerHttp ships |
+
+Catalog/status `flags` also include `phase_lol_enabled`, `lol_dry_run_import`,
+`lol_dry_run_path_configured` (path presence only).
+
+#### Product facts
+
 - **Vendor (ADR-005):** preferred production schedule+settle = **GRID-class**
   commercial LoL series feed. GRID Open Access is CS2/Dota only — not LoL.
   PandaScore-class APIs are optional **odds enrichment**, not sole settlement.
-- Do not enable production vendor HTTP until GATES **P2, P3, and P6 are fully
-  `[x]`** (legal ToS for cache+display). See `docs/dev/lol/GATES.md`.
 - v1 leagues: `lol_lck` / `lol_lpl` / `lol_lec` / `lol_worlds` / `lol_msi`.
 - Engine: `lol_market_only` (series winner only).
 - Predict: `engine=auto` is **sport-aware** — for `sport=lol` /
   `competition=lol_*` it selects engines with `supported_sports` containing
   `lol` (or `*`), never a higher-accuracy football engine. Explicit
   `engine=lol_market_only` still works.
-- Catalog: `GET /api/betting/catalog` includes `lol`; `phase_lol_enabled` flag.
+- Catalog: `GET /api/betting/catalog` includes `lol`; hub shows `LoL=ON/OFF`.
+- UI: `/sports/betting/lol` — no placeholder odds; ops panel only.
 - Procurement: product/legal own commercial access request; no API keys in git.
 
 ## Event ID Migration

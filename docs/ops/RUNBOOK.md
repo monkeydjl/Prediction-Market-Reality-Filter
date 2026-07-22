@@ -267,6 +267,9 @@ an operator write key (`sessionStorage` via operator credentials UI).
 - List: `GET /api/predictions/matches?sport=lol`
 - Do not enable production vendor HTTP until `docs/dev/lol/GATES.md` P2/P3/P6 are checked.
 - Engine: `lol_market_only` (series winner only).
+- Predict: pass `engine=lol_market_only` for LoL matches. Do not rely on
+  `engine=auto` until EngineRegistry sport-aware selection exists
+  (`supported_sports` is not used by auto today).
 - Catalog: `GET /api/betting/catalog` includes `lol`; `phase_lol_enabled` flag.
 
 ## Event ID Migration

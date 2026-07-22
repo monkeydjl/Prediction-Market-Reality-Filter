@@ -27,6 +27,11 @@ COMPETITION_ALIASES: dict[str, str] = {
     "nba": "nba",
     "mlb": "mlb",
     "nhl": "nhl",
+    "lol": "lol",
+    "lol_lck": "lol_lck",
+    "lol_lpl": "lol_lpl",
+    "lol_lec": "lol_lec",
+    "lol_worlds": "lol_worlds",
 }
 
 # MultiAdapter match_id prefix → competition code as stored on fixtures.
@@ -91,12 +96,24 @@ def normalize_competition_code(raw: str | None) -> str | None:
 
 
 def competitions_equivalent(a: str | None, b: str | None) -> bool:
-    """True if both sides normalize to the same competition."""
+    """True if both sides normalize to the same competition.
+
+    Also true when one side is a bare sport umbrella code (e.g. ``lol``)
+    and the other is a league code under the same ``COMPETITION_SPORT``
+    (e.g. ``lol_lck``), so MultiAdapter can select LolAdapter for
+    league-scoped filters.
+    """
     na = normalize_competition_code(a)
     nb = normalize_competition_code(b)
     if na is None or nb is None:
         return False
-    return na == nb
+    if na == nb:
+        return True
+    sport_a = COMPETITION_SPORT.get(na)
+    sport_b = COMPETITION_SPORT.get(nb)
+    if sport_a and sport_a == sport_b and (na == sport_a or nb == sport_b):
+        return True
+    return False
 
 
 def competition_code_for_prefix(prefix: str) -> str | None:

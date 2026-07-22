@@ -1,10 +1,14 @@
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from app.core import config
 from app.kernel.kernel_db import (
+    KernelMatchResult,
     close_kernel_session,
+    get_kernel_session,
     init_kernel_db,
 )
 from app.kernel.protocols import DataAdapter, ScheduleFilter
@@ -73,3 +77,81 @@ def test_sync_schedule_null_source_dry_run_off_returns_zero(db, restore_lol_sett
     config.settings.LOL_DRY_RUN_IMPORT = False
     adapter = LolAdapter(source=NullLolScheduleSource())
     assert adapter.sync_schedule() == 0
+
+
+def test_sync_schedule_dry_run_import_returns_at_least_one(db, restore_lol_settings):
+    from app.sports.lol.lol_adapter import LolAdapter
+
+    config.settings.LOL_DRY_RUN_IMPORT = True
+    config.settings.LOL_DRY_RUN_FIXTURES_PATH = str(SAMPLE_PATH)
+    n = LolAdapter().sync_schedule()
+    assert n >= 1
+
+
+def test_build_match_outcome_equal_or_missing_scores_returns_none():
+    from app.sports.lol.lol_adapter import build_match_outcome
+
+    tied = MagicMock()
+    tied.match_id = "lol-dry-lck-001"
+    tied.home_score = 0
+    tied.away_score = 0
+    tied.finished_at = None
+    assert build_match_outcome(tied) is None
+
+    unfinished = MagicMock()
+    unfinished.match_id = "lol-dry-lck-001"
+    unfinished.home_score = None
+    unfinished.away_score = None
+    unfinished.finished_at = None
+    assert build_match_outcome(unfinished) is None
+
+
+def test_fetch_outcome_synthetic_settlement_sample(db):
+    """SYNTHETIC dry-run settle sample (ADR-004 P8) — not a real match."""
+    from app.sports.lol.lol_adapter import LolAdapter
+
+    now = datetime.now(timezone.utc)
+    session = get_kernel_session()
+    try:
+        session.add(
+            KernelMatchResult(
+                match_id="lol-dry-lck-001",
+                home_score=2,
+                away_score=1,
+                outcome="home_win",
+                finished_at=now,
+                created_at=now,
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    outcome = LolAdapter().fetch_outcome("lol-dry-lck-001")
+    assert outcome is not None
+    assert outcome.match_id == "lol-dry-lck-001"
+    assert outcome.home_score == 2
+    assert outcome.away_score == 1
+    assert outcome.outcome == "home_win"
+
+    session = get_kernel_session()
+    try:
+        session.merge(
+            KernelMatchResult(
+                match_id="lol-dry-lck-001",
+                home_score=1,
+                away_score=2,
+                outcome="away_win",
+                finished_at=now,
+                created_at=now,
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    away = LolAdapter().fetch_outcome("lol-dry-lck-001")
+    assert away is not None
+    assert away.home_score == 1
+    assert away.away_score == 2
+    assert away.outcome == "away_win"

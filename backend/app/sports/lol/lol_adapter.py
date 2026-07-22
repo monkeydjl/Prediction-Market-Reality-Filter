@@ -98,12 +98,13 @@ def query_result(match_id: str) -> KernelMatchResult | None:
 def build_match_outcome(result: KernelMatchResult | None) -> MatchOutcome | None:
     if result is None:
         return None
-    home_score = result.home_score or 0
-    away_score = result.away_score or 0
-    if home_score > away_score:
-        outcome = "home_win"
-    else:
-        outcome = "away_win"
+    if result.home_score is None or result.away_score is None:
+        return None
+    home_score = int(result.home_score)
+    away_score = int(result.away_score)
+    if home_score == away_score:
+        return None
+    outcome = "home_win" if home_score > away_score else "away_win"
     return MatchOutcome(
         match_id=result.match_id,
         home_score=home_score,

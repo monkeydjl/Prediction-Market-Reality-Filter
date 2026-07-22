@@ -174,6 +174,15 @@ class TestFetchSchedule:
         assert result == []
         wc.fetch_schedule.assert_not_called()
 
+    def test_lol_umbrella_adapter_matches_league_competition_filter(self):
+        lol = _tagged_adapter("lol", sport="lol")
+        epl = _tagged_adapter("epl")
+        multi = MultiAdapter({"lol-": lol, "epl-": epl})
+
+        multi.fetch_schedule(ScheduleFilter(competition="lol_lck"))
+        lol.fetch_schedule.assert_called_once()
+        epl.fetch_schedule.assert_not_called()
+
 
 class TestStubMethods:
     def test_fetch_team_data_delegates_to_default(self):

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### ADR-005 LoL vendor selection + GATES fill
+- Preferred production source: GRID-class official partner (not OA CS2/Dota)
+- PandaScore-class optional for odds enrichment only
+- GATES: P1/P4/P5/P7 closed; P2/P3 partial; P6 legal open
+- competition code `lol_msi` added
+
+
 ### EngineRegistry sport-aware auto select
 - `select("auto", sport=…)` filters by `supported_sports` (and resolves sport from competition)
 - `PredictionKernel.predict` passes match sport into registry

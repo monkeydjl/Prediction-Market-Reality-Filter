@@ -259,19 +259,25 @@ and ADR-004.
 UI: competition landings show a **同步赛程** button when the browser session has
 an operator write key (`sessionStorage` via operator credentials UI).
 
-### LoL esports (ADR-004)
+### LoL esports (ADR-004 / ADR-005)
 
 - Flag: `PHASE_LOL_ENABLED=false` by default.
 - Dry-run: `LOL_DRY_RUN_IMPORT=true` + path to series JSON; then
   `POST /api/predictions/schedule/sync?sport=lol` with write key.
 - List: `GET /api/predictions/matches?sport=lol`
-- Do not enable production vendor HTTP until `docs/dev/lol/GATES.md` P2/P3/P6 are checked.
+- **Vendor (ADR-005):** preferred production schedule+settle = **GRID-class**
+  commercial LoL series feed. GRID Open Access is CS2/Dota only — not LoL.
+  PandaScore-class APIs are optional **odds enrichment**, not sole settlement.
+- Do not enable production vendor HTTP until GATES **P2, P3, and P6 are fully
+  `[x]`** (legal ToS for cache+display). See `docs/dev/lol/GATES.md`.
+- v1 leagues: `lol_lck` / `lol_lpl` / `lol_lec` / `lol_worlds` / `lol_msi`.
 - Engine: `lol_market_only` (series winner only).
 - Predict: `engine=auto` is **sport-aware** — for `sport=lol` /
   `competition=lol_*` it selects engines with `supported_sports` containing
   `lol` (or `*`), never a higher-accuracy football engine. Explicit
   `engine=lol_market_only` still works.
 - Catalog: `GET /api/betting/catalog` includes `lol`; `phase_lol_enabled` flag.
+- Procurement: product/legal own commercial access request; no API keys in git.
 
 ## Event ID Migration
 

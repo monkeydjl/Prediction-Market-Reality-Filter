@@ -32,6 +32,7 @@ COMPETITION_ALIASES: dict[str, str] = {
     "lol_lpl": "lol_lpl",
     "lol_lec": "lol_lec",
     "lol_worlds": "lol_worlds",
+    "lol_msi": "lol_msi",
 }
 
 # MultiAdapter match_id prefix → competition code as stored on fixtures.
@@ -82,6 +83,7 @@ COMPETITION_SPORT: dict[str, str] = {
     "lol_lpl": "lol",
     "lol_lec": "lol",
     "lol_worlds": "lol",
+    "lol_msi": "lol",
 }
 
 

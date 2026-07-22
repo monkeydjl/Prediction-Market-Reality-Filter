@@ -2,7 +2,7 @@
 
 **Status**: Accepted  
 **Date**: 2026-07-21 (Proposed) · **Accepted**: 2026-07-22  
-**Related**: `docs/dev/ESPORTS_BOUNDARY.md`, Kernel MultiAdapter, betting catalog, Phase 7 market bridge
+**Related**: `docs/dev/ESPORTS_BOUNDARY.md`, [ADR-005 vendor selection](005-lol-data-vendor-selection.md), [GATES.md](../lol/GATES.md), Kernel MultiAdapter, betting catalog, Phase 7 market bridge
 
 ## Context
 

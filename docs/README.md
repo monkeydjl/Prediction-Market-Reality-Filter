@@ -29,6 +29,8 @@
 - [**可做项 / 优化全量清单（2026-07-17）**](dev/OPPORTUNITY_BACKLOG_2026-07-17.md) — 安全、引擎因子、精度、前端、工程债务与路线图
 - [Esports boundary](dev/ESPORTS_BOUNDARY.md) — 电竞赛道占位边界（无假盘口 / 接入前置条件）
 - [ADR-004 Esports data adapter](dev/adr/004-esports-data-adapter.md) — 电竞/LoL adapter 决策（**Accepted** 2026-07-22）
+- [ADR-005 LoL data vendor](dev/adr/005-lol-data-vendor-selection.md) — 赛程/结算供应商选型（GRID 主路径；**Accepted** 2026-07-22）
+- [LoL GATES](dev/lol/GATES.md) — P1–P8 门禁清单
 - [V2 Roadmap](user/V2_ROADMAP.md)
 - [V2 Refactor Plan](user/V2_REFACTOR_PLAN.md)
 - [Integration Test Report](dev/INTEGRATION_TEST_REPORT.md)

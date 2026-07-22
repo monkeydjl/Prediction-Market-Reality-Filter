@@ -22,8 +22,11 @@ def test_lol_prefix_and_aliases():
     assert COMPETITION_ALIASES["lol_lpl"] == "lol_lpl"
     assert COMPETITION_ALIASES["lol_lec"] == "lol_lec"
     assert COMPETITION_ALIASES["lol_worlds"] == "lol_worlds"
+    assert COMPETITION_ALIASES["lol_msi"] == "lol_msi"
+    assert COMPETITION_SPORT["lol_msi"] == "lol"
     assert normalize_competition_code("LOL") == "lol"
     assert normalize_competition_code("lol-lck") == "lol_lck"
+    assert normalize_competition_code("lol-msi") == "lol_msi"
 
 
 def test_lol_league_codes_equivalent_to_umbrella_lol():
@@ -31,5 +34,6 @@ def test_lol_league_codes_equivalent_to_umbrella_lol():
     assert competitions_equivalent("lol", "lol_lpl") is True
     assert competitions_equivalent("lol_lec", "lol") is True
     assert competitions_equivalent("lol_worlds", "lol") is True
+    assert competitions_equivalent("lol_msi", "lol") is True
     assert competitions_equivalent("lol_lck", "lol_lpl") is False
     assert competitions_equivalent("epl", "ucl") is False

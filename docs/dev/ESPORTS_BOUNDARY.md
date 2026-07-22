@@ -45,11 +45,11 @@ Ops: [RUNBOOK — LoL esports](../ops/RUNBOOK.md).
 
 ## Prerequisites before production enablement
 
-1. Title / league list for LoL v1 (which regions) — **title chosen: LoL**
-2. Trusted schedule + result feed (or written partner contract)
-3. Market mapping rules (v1: series winner only) — locked in ADR-004 / GATES P5
-4. Settlement truth source and conflict policy
-5. ADR-004 Accepted ✅ — remaining rows in [GATES.md](lol/GATES.md) P1–P8 (esp. P2/P3/P6)
+1. Title / league list — **done** (GATES P1 / ADR-005 D5)
+2. Vendor class selected — **GRID primary** (ADR-005); **license / sandbox still open** (P2/P3/P6)
+3. Market mapping rules (v1: series winner only) — locked (P5)
+4. Settlement conflict policy — locked (ADR-005 D6); live lag numbers after sandbox
+5. Legal ToS for cache+display — **P6 open**
 
 ## Interim UX
 

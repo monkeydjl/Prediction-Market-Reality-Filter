@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CompetitionLanding } from "./competition-landing";
 import type { BettingCompetition } from "@/lib/betting/competition-catalog";
+import { OPERATOR_CREDENTIALS_EVENT } from "@/lib/operator-credentials";
 
 vi.mock("@/lib/env", () => ({ getApiBase: () => "/api" }));
 
@@ -12,9 +13,14 @@ const useMatches = vi.fn();
 const syncSchedule = vi.fn();
 const hasOperatorApiKey = vi.fn();
 
-vi.mock("@/lib/operator-credentials", () => ({
-  hasOperatorApiKey: () => hasOperatorApiKey(),
-}));
+vi.mock("@/lib/operator-credentials", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/operator-credentials")>();
+  return {
+    ...actual,
+    hasOperatorApiKey: () => hasOperatorApiKey(),
+  };
+});
 
 vi.mock("@/lib/sports-api", () => ({
   useBettingCatalog: () => useBettingCatalog(),
@@ -130,7 +136,7 @@ describe("CompetitionLanding", () => {
       mutate,
     });
     render(<CompetitionLanding competition={epl} />);
-    const btn = screen.getByTestId("landing-sync-schedule");
+    const btn = await screen.findByTestId("landing-sync-schedule");
     await userEvent.click(btn);
     expect(syncSchedule).toHaveBeenCalledWith({
       sport: "football",

@@ -18,6 +18,27 @@ export const OPERATOR_ID_STORAGE = "pmrf.operatorId";
 /** Dispatched on window when credentials change (same-tab UI sync). */
 export const OPERATOR_CREDENTIALS_EVENT = "pmrf:operator-credentials";
 
+/**
+ * Dispatched to open the nav OperatorKeyControl edit form (竞猜落地页 deep link).
+ * Prefer this over relying on location.hash alone in tests / SPA navigations.
+ */
+export const OPERATOR_KEY_OPEN_EVENT = "pmrf:open-operator-key";
+
+/** Request the top-bar operator key form to open (and optionally set #operator-key). */
+export function requestOpenOperatorKey(options?: { setHash?: boolean }): void {
+  if (typeof window === "undefined") return;
+  if (options?.setHash !== false) {
+    try {
+      if (window.location.hash !== "#operator-key") {
+        window.location.hash = "operator-key";
+      }
+    } catch {
+      // ignore
+    }
+  }
+  window.dispatchEvent(new Event(OPERATOR_KEY_OPEN_EVENT));
+}
+
 export type OperatorCredentialsSnapshot = {
   hasKey: boolean;
   operatorId: string;

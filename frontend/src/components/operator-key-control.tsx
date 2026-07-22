@@ -10,12 +10,23 @@ import {
   setOperatorApiKey,
   setOperatorId,
   OPERATOR_CREDENTIALS_EVENT,
+  OPERATOR_KEY_OPEN_EVENT,
 } from "@/lib/operator-credentials";
+
+function hashWantsOperatorKey(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.location.hash === "#operator-key";
+  } catch {
+    return false;
+  }
+}
 
 export function OperatorKeyControl() {
   const [value, setValue] = useState("");
   const [operatorId, setOperatorIdValue] = useState("");
-  const [editing, setEditing] = useState(false);
+  // Support deep link / custom event from 竞猜落地页「打开顶部授权」.
+  const [editing, setEditing] = useState(() => hashWantsOperatorKey());
   const [hasKey, setHasKey] = useState(false);
   const [keyHint, setKeyHint] = useState("");
   const [storedOperatorId, setStoredOperatorId] = useState("");
@@ -43,6 +54,29 @@ export function OperatorKeyControl() {
     };
   }, [syncFromStorage]);
 
+  useEffect(() => {
+    function openEditor() {
+      setEditing(true);
+      window.setTimeout(() => {
+        const el = document.getElementById("operator-key");
+        // jsdom lacks scrollIntoView; guard for tests and old browsers.
+        if (el && typeof el.scrollIntoView === "function") {
+          el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        }
+      }, 0);
+    }
+    function openFromHash() {
+      if (hashWantsOperatorKey()) openEditor();
+    }
+    openFromHash();
+    window.addEventListener("hashchange", openFromHash);
+    window.addEventListener(OPERATOR_KEY_OPEN_EVENT, openEditor);
+    return () => {
+      window.removeEventListener("hashchange", openFromHash);
+      window.removeEventListener(OPERATOR_KEY_OPEN_EVENT, openEditor);
+    };
+  }, []);
+
   function save() {
     setOperatorApiKey(value);
     setOperatorId(operatorId);
@@ -60,7 +94,7 @@ export function OperatorKeyControl() {
 
   if (!editing) {
     return (
-      <div className="inline-flex items-center gap-1">
+      <div id="operator-key" className="inline-flex items-center gap-1 scroll-mt-20">
         <button
           type="button"
           onClick={() => setEditing(true)}
@@ -93,7 +127,8 @@ export function OperatorKeyControl() {
 
   return (
     <form
-      className="flex flex-wrap items-center gap-1.5"
+      id="operator-key"
+      className="flex flex-wrap items-center gap-1.5 scroll-mt-20"
       onSubmit={(e) => {
         e.preventDefault();
         save();

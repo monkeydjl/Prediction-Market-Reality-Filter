@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   adapterLikelyLabel,
@@ -8,7 +8,11 @@ import {
   statusLabel,
   type BettingCompetition,
 } from "@/lib/betting/competition-catalog";
-import { hasOperatorApiKey } from "@/lib/operator-credentials";
+import {
+  hasOperatorApiKey,
+  OPERATOR_CREDENTIALS_EVENT,
+  requestOpenOperatorKey,
+} from "@/lib/operator-credentials";
 import {
   syncSchedule,
   useBettingCatalog,
@@ -87,7 +91,15 @@ export function CompetitionLanding({ competition: staticComp }: Props) {
 
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
-  const operatorReady = hasOperatorApiKey();
+  const [operatorReady, setOperatorReady] = useState(false);
+
+  useEffect(() => {
+    const refresh = () => setOperatorReady(hasOperatorApiKey());
+    refresh();
+    window.addEventListener(OPERATOR_CREDENTIALS_EVENT, refresh);
+    return () => window.removeEventListener(OPERATOR_CREDENTIALS_EVENT, refresh);
+  }, []);
+
   const canSync = shouldPollMatches && operatorReady;
 
   async function onSyncSchedule() {
@@ -332,7 +344,18 @@ export function CompetitionLanding({ competition: staticComp }: Props) {
           {!operatorReady && shouldPollMatches ? (
             <p className="text-xs text-muted-foreground">
               配置 session 中的 operator API 写密钥后可使用「同步赛程」（POST
-              /api/predictions/schedule/sync）。
+              /api/predictions/schedule/sync）。{" "}
+              <a
+                href="#operator-key"
+                className="text-primary underline underline-offset-2"
+                data-testid="landing-open-operator-key"
+                onClick={(e) => {
+                  e.preventDefault();
+                  requestOpenOperatorKey({ setHash: true });
+                }}
+              >
+                打开顶部授权
+              </a>
             </p>
           ) : null}
         </div>

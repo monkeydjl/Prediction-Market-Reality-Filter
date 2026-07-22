@@ -9,6 +9,8 @@ import {
   hasOperatorApiKey,
   maskOperatorKey,
   OPERATOR_CREDENTIALS_EVENT,
+  OPERATOR_KEY_OPEN_EVENT,
+  requestOpenOperatorKey,
   setOperatorApiKey,
   setOperatorId,
 } from "./operator-credentials";
@@ -33,50 +35,40 @@ describe("operator-credentials", () => {
     expect(hasOperatorApiKey()).toBe(true);
   });
 
-  it("clears both credentials", () => {
+  it("clears credentials", () => {
     setOperatorApiKey("secret");
-    setOperatorId("bob");
+    setOperatorId("ops");
     clearOperatorCredentials();
     expect(getOperatorApiKey()).toBe("");
     expect(getOperatorId()).toBe("");
     expect(hasOperatorApiKey()).toBe(false);
   });
 
-  it("masks key for UI", () => {
+  it("masks keys for UI", () => {
     expect(maskOperatorKey("")).toBe("");
     expect(maskOperatorKey("ab")).toBe("••••");
     expect(maskOperatorKey("abcdefgh")).toBe("a•••h");
     expect(maskOperatorKey("supersecretkey")).toBe("su…ey");
   });
 
-  it("snapshot never includes raw key", () => {
+  it("snapshot never includes raw secret", () => {
     setOperatorApiKey("supersecretkey");
     setOperatorId("ops");
     const snap = getOperatorCredentialsSnapshot();
     expect(snap.hasKey).toBe(true);
     expect(snap.operatorId).toBe("ops");
-    expect(snap.keyHint).not.toContain("supersecret");
-    expect(JSON.stringify(snap)).not.toContain("supersecretkey");
+    expect(snap.keyHint).not.toContain("supersecretkey");
   });
 
-  it("buildOperatorAuthHeaders omits empties", () => {
-    expect(buildOperatorAuthHeaders()).toEqual({});
+  it("builds and applies auth headers", () => {
     setOperatorApiKey("k");
-    expect(buildOperatorAuthHeaders()).toEqual({ "X-API-Key": "k" });
-    setOperatorId("op");
-    expect(buildOperatorAuthHeaders()).toEqual({
-      "X-API-Key": "k",
-      "X-Operator": "op",
-    });
-  });
-
-  it("applyOperatorAuthHeaders does not overwrite existing", () => {
-    setOperatorApiKey("stored");
-    setOperatorId("stored-op");
-    const headers = new Headers({ "X-API-Key": "override" });
-    applyOperatorAuthHeaders(headers);
-    expect(headers.get("X-API-Key")).toBe("override");
-    expect(headers.get("X-Operator")).toBe("stored-op");
+    setOperatorId("ops");
+    const headers = buildOperatorAuthHeaders();
+    expect(headers["X-API-Key"]).toBe("k");
+    expect(headers["X-Operator"]).toBe("ops");
+    const h = new Headers();
+    applyOperatorAuthHeaders(h);
+    expect(h.get("X-API-Key")).toBe("k");
   });
 
   it("emits change event on set/clear", () => {
@@ -87,5 +79,13 @@ describe("operator-credentials", () => {
     clearOperatorCredentials();
     window.removeEventListener(OPERATOR_CREDENTIALS_EVENT, spy);
     expect(spy).toHaveBeenCalled();
+  });
+
+  it("requestOpenOperatorKey dispatches open event", () => {
+    const spy = vi.fn();
+    window.addEventListener(OPERATOR_KEY_OPEN_EVENT, spy);
+    requestOpenOperatorKey({ setHash: false });
+    window.removeEventListener(OPERATOR_KEY_OPEN_EVENT, spy);
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });

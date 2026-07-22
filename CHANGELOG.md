@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Operator key deep-link for 竞猜落地页
+- `#operator-key` opens nav OperatorKeyControl edit form
+- Landing listens for credentials event so 同步赛程 appears after authorize
+- Link「打开顶部授权」from landing when write key missing
+
+
 ### 竞猜落地页：同步按钮补全 + 今日赛程预览
 - Wire operator 同步赛程 button (was imported but incomplete)
 - Match preview list (up to 5) with deep links

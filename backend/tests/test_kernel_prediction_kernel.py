@@ -280,7 +280,7 @@ class TestConditionalCalibrationApply:
             prediction_timestamp=datetime(2026, 6, 13, tzinfo=timezone.utc),
         )
 
-        def fake_cal(comp, eng, conf):
+        def fake_cal(comp, eng, conf, **_kwargs):
             return {
                 "slope": 1.0,
                 "intercept": 0.10,

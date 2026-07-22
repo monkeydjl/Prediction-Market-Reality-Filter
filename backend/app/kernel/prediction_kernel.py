@@ -129,7 +129,9 @@ class PredictionKernel:
         raw = self._adapter.fetch_all_data(match)
         features = self._feature_builder.build(match, raw)
         engine_impl = self._engine_registry.select(
-            engine, competition=match.season.competition.code,
+            engine,
+            competition=match.season.competition.code,
+            sport=match.season.competition.sport.code,
         )
         prediction = engine_impl.predict(features, match)
 

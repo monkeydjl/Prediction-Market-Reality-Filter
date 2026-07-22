@@ -69,6 +69,33 @@ class TestDynamicEngineSelection:
         engine = reg.select("auto", competition="world_cup")
         assert engine.name() == "engine_b"
 
+    def test_auto_learning_skips_incompatible_sport_engines(self):
+        """High-accuracy football engine must not win auto for sport=lol."""
+        mock_ls = MagicMock()
+
+        def engine_score(name, comp=None):
+            if name == "football_eng":
+                return EngineScore(name, comp, 0.95, 0.1, 0.1, 50, 1.0,
+                                   datetime.now(timezone.utc))
+            return EngineScore(name, comp, 0.50, 0.4, 0.3, 50, 1.0,
+                               datetime.now(timezone.utc))
+
+        mock_ls.engine_score.side_effect = engine_score
+        reg = EngineRegistry(learning_service=mock_ls)
+
+        class FootEng(FakeEngine):
+            def supported_sports(self):
+                return ["football"]
+
+        class LolEng(FakeEngine):
+            def supported_sports(self):
+                return ["lol"]
+
+        reg.register(FootEng("football_eng"))
+        reg.register(LolEng("lol_eng"))
+        engine = reg.select("auto", sport="lol", competition="lol")
+        assert engine.name() == "lol_eng"
+
     def test_select_by_name_ignores_learning(self):
         """select('engine_a') returns that engine regardless of scores."""
         mock_ls = MagicMock()

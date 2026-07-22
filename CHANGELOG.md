@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### EngineRegistry sport-aware auto select
+- `select("auto", sport=…)` filters by `supported_sports` (and resolves sport from competition)
+- `PredictionKernel.predict` passes match sport into registry
+- LoL no longer loses auto to football engines
+
+
 ### LoL Kernel dry-run stack (ADR-004 Tasks 0-9)
 - `PHASE_LOL_ENABLED` / `LOL_DRY_RUN_*` flags
 - LolAdapter, market-only engine, catalog entry

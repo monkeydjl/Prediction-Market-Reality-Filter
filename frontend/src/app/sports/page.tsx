@@ -4,8 +4,13 @@ import { useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { SportFilter } from "@/components/sports/common/sport-filter";
+import { CompetitionChips } from "@/components/sports/common/competition-chips";
 import { MatchListCard } from "@/components/sports/common/match-list-card";
 import { SportTrackBanner } from "@/components/sports/common/sport-track-banner";
+import {
+  getCompetitionByCode,
+  normalizeCompetitionCode,
+} from "@/lib/betting/competition-catalog";
 import { useMatches } from "@/lib/sports-api";
 
 const SPORT_CODES = new Set(["football", "basketball", "baseball", "hockey"]);
@@ -20,9 +25,13 @@ export default function SportsPage() {
     return null;
   }, [sportParam]);
   const competition = useMemo(() => {
-    const c = competitionParam?.trim();
-    return c ? c : null;
+    return normalizeCompetitionCode(competitionParam);
   }, [competitionParam]);
+
+  const competitionMeta = useMemo(
+    () => getCompetitionByCode(competition),
+    [competition],
+  );
 
   const setSport = useCallback(
     (next: string | null) => {
@@ -33,6 +42,17 @@ export default function SportsPage() {
       router.replace(`/sports${qs}`, { scroll: false });
     },
     [router],
+  );
+
+  const setCompetition = useCallback(
+    (next: string | null) => {
+      const params = new URLSearchParams();
+      if (sport) params.set("sport", sport);
+      if (next) params.set("competition", next);
+      const qs = params.toString() ? `?${params.toString()}` : "";
+      router.replace(`/sports${qs}`, { scroll: false });
+    },
+    [router, sport],
   );
 
   const { data, error, isLoading, mutate } = useMatches({
@@ -73,16 +93,23 @@ export default function SportsPage() {
         >
           联赛过滤：
           <code className="rounded bg-muted px-1">{competition}</code>
+          {competitionMeta ? (
+            <>
+              {" · "}
+              <Link
+                href={`/sports/betting/${competitionMeta.id}`}
+                className="text-primary underline underline-offset-2"
+                data-testid="competition-landing-link"
+              >
+                {competitionMeta.shortLabel} 落地页
+              </Link>
+            </>
+          ) : null}
           {" · "}
           <button
             type="button"
             className="text-primary underline underline-offset-2"
-            onClick={() => {
-              const params = new URLSearchParams();
-              if (sport) params.set("sport", sport);
-              const qs = params.toString() ? `?${params.toString()}` : "";
-              router.replace(`/sports${qs}`, { scroll: false });
-            }}
+            onClick={() => setCompetition(null)}
           >
             清除联赛
           </button>
@@ -97,6 +124,11 @@ export default function SportsPage() {
       ) : null}
 
       <SportFilter value={sport} onChange={setSport} />
+      <CompetitionChips
+        sport={sport}
+        value={competition}
+        onChange={setCompetition}
+      />
 
       {isLoading && <p className="text-muted-foreground">加载中...</p>}
 

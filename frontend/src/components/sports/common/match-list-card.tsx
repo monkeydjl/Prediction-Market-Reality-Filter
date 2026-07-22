@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { MatchSummary } from "@/lib/sports-api";
+import { getCompetitionByCode } from "@/lib/betting/competition-catalog";
 
 const SPORT_ICONS: Record<string, string> = {
   football: "⚽",
@@ -23,6 +24,11 @@ export function MatchListCard({ match }: MatchListCardProps) {
       })
     : "时间待定";
 
+  const catalog = getCompetitionByCode(match.competition);
+  const competitionHref = catalog
+    ? `/sports/betting/${catalog.id}`
+    : null;
+
   return (
     <Link
       href={`/sports/${match.match_id}/`}
@@ -30,7 +36,9 @@ export function MatchListCard({ match }: MatchListCardProps) {
     >
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <span className="text-2xl" aria-hidden="true">{icon}</span>
+          <span className="text-2xl" aria-hidden="true">
+            {icon}
+          </span>
           <div>
             <div className="flex items-center gap-2">
               <span className="font-semibold">{match.home_team}</span>
@@ -41,9 +49,37 @@ export function MatchListCard({ match }: MatchListCardProps) {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="rounded bg-secondary px-2 py-1 text-xs font-medium">
-            {match.competition}
-          </span>
+          {competitionHref ? (
+            <span
+              role="link"
+              tabIndex={0}
+              data-testid="match-competition-badge"
+              data-competition-id={catalog!.id}
+              title={`打开 ${catalog!.label} 竞猜落地页`}
+              className="rounded bg-secondary px-2 py-1 text-xs font-medium text-primary underline-offset-2 hover:underline"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                window.location.assign(competitionHref);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  window.location.assign(competitionHref);
+                }
+              }}
+            >
+              {catalog!.shortLabel}
+            </span>
+          ) : (
+            <span
+              className="rounded bg-secondary px-2 py-1 text-xs font-medium"
+              data-testid="match-competition-badge"
+            >
+              {match.competition}
+            </span>
+          )}
           {match.has_prediction ? (
             <span className="rounded bg-primary/15 px-2 py-1 text-xs font-medium text-primary">
               已预测

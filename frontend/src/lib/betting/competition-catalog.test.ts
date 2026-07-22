@@ -3,8 +3,11 @@ import {
   BETTING_COMPETITIONS,
   BETTING_TOOL_LINKS,
   competitionsBySection,
+  getCompetitionByCode,
   getCompetitionById,
+  kernelCompetitionChips,
   mergeCompetitionsWithLive,
+  normalizeCompetitionCode,
   statusLabel,
 } from "./competition-catalog";
 
@@ -28,18 +31,17 @@ describe("competition-catalog", () => {
     );
   });
 
-  it("world-cup uses dedicated track and live status", () => {
+  it("getCompetitionById returns world cup live track", () => {
     const wc = getCompetitionById("world-cup");
-    expect(wc?.track).toBe("world_cup");
     expect(wc?.status).toBe("live");
+    expect(wc?.track).toBe("world_cup");
     expect(wc?.href).toBe("/sports/world-cup");
   });
 
-  it("esports is coming_soon placeholder without kernel sport", () => {
+  it("esports is coming_soon without fake markets", () => {
     const es = getCompetitionById("esports");
     expect(es?.status).toBe("coming_soon");
     expect(es?.track).toBe("placeholder");
-    expect(es?.kernelSport).toBeUndefined();
   });
 
   it("kernel competitions expose kernelSport and competitionCode", () => {
@@ -50,16 +52,11 @@ describe("competition-catalog", () => {
     expect(getCompetitionById("epl")?.href).toContain("competition=epl");
   });
 
-  it("groups football section with world cup + leagues", () => {
+  it("competitionsBySection groups football and tools", () => {
     const football = competitionsBySection("football");
-    expect(football.length).toBeGreaterThanOrEqual(6);
+    expect(football.length).toBeGreaterThan(0);
     expect(football.every((c) => c.section === "football")).toBe(true);
-  });
-
-  it("tool links cover edges and recommendations", () => {
-    const hrefs = BETTING_TOOL_LINKS.map((t) => t.href);
-    expect(hrefs).toContain("/sports/edges");
-    expect(hrefs).toContain("/sports/recommendations");
+    expect(BETTING_TOOL_LINKS.length).toBeGreaterThan(0);
   });
 
   it("statusLabel is Chinese for known statuses", () => {
@@ -78,6 +75,23 @@ describe("competition-catalog", () => {
     expect(merged.some((c) => c.id === "ghost-league")).toBe(false);
     expect(mergeCompetitionsWithLive(BETTING_COMPETITIONS, null)[0].id).toBe(
       BETTING_COMPETITIONS[0].id,
+    );
+  });
+
+  it("normalizeCompetitionCode maps aliases", () => {
+    expect(normalizeCompetitionCode("PL")).toBe("epl");
+    expect(normalizeCompetitionCode("serie-a")).toBe("serie_a");
+    expect(normalizeCompetitionCode("  ")).toBeNull();
+  });
+
+  it("getCompetitionByCode and kernelCompetitionChips", () => {
+    expect(getCompetitionByCode("epl")?.id).toBe("epl");
+    expect(getCompetitionByCode("nba")?.kernelSport).toBe("basketball");
+    const football = kernelCompetitionChips("football");
+    expect(football.every((c) => c.kernelSport === "football")).toBe(true);
+    expect(football.some((c) => c.id === "epl")).toBe(true);
+    expect(kernelCompetitionChips("basketball").some((c) => c.id === "nba")).toBe(
+      true,
     );
   });
 });

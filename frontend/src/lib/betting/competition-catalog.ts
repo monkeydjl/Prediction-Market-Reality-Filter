@@ -242,6 +242,55 @@ export function getCompetitionById(id: string): BettingCompetition | undefined {
   return BETTING_COMPETITIONS.find((c) => c.id === id);
 }
 
+/** Normalize query / API competition codes for lookup (pl → epl, serie-a → serie_a). */
+export function normalizeCompetitionCode(raw: string | null | undefined): string | null {
+  if (raw == null) return null;
+  const key = raw.trim().toLowerCase().replace(/-/g, "_");
+  if (!key) return null;
+  const aliases: Record<string, string> = {
+    pl: "epl",
+    premier_league: "epl",
+    la_liga: "laliga",
+    seriea: "serie_a",
+    ligue1: "ligue_1",
+    wc: "world_cup",
+    worldcup: "world_cup",
+  };
+  return aliases[key] ?? key;
+}
+
+/** Resolve catalog entry by competition code (epl, nba) or hub id (world-cup). */
+export function getCompetitionByCode(
+  code: string | null | undefined,
+): BettingCompetition | undefined {
+  const norm = normalizeCompetitionCode(code);
+  if (!norm) return undefined;
+  const byCode = BETTING_COMPETITIONS.find(
+    (c) =>
+      c.competitionCode != null &&
+      normalizeCompetitionCode(c.competitionCode) === norm,
+  );
+  if (byCode) return byCode;
+  // Also try hub id forms (world-cup, serie-a).
+  return (
+    getCompetitionById(norm.replace(/_/g, "-")) ??
+    getCompetitionById(norm)
+  );
+}
+
+/** Kernel leagues available as quick chips on /sports for a sport filter. */
+export function kernelCompetitionChips(
+  sport: string | null | undefined,
+): BettingCompetition[] {
+  return BETTING_COMPETITIONS.filter(
+    (c) =>
+      c.track === "kernel" &&
+      c.status === "kernel" &&
+      c.competitionCode != null &&
+      (sport == null || c.kernelSport === sport),
+  );
+}
+
 export function competitionsBySection(
   section: CompetitionSection,
 ): BettingCompetition[] {

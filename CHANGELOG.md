@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Kernel list ↔ 竞猜联赛闭环
+- `/sports` CompetitionChips for kernel leagues (sport-scoped)
+- Match list badge deep-links to `/sports/betting/{id}` when catalog known
+- Catalog helpers: normalizeCompetitionCode, getCompetitionByCode, kernelCompetitionChips
+
+
 ### Operator key deep-link for 竞猜落地页
 - `#operator-key` opens nav OperatorKeyControl edit form
 - Landing listens for credentials event so 同步赛程 appears after authorize

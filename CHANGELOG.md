@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### ADR-004 Esports/LoL Accepted
+- First title: LoL; sport `lol`, prefix `lol-`
+- Production adapter blocked on official/partner API gates
+- Design note: `docs/superpowers/specs/2026-07-22-esports-lol-adapter-design.md`
+- ESPORTS_BOUNDARY synced; no adapter code in this change
+
+
 ### Kernel list ↔ 竞猜联赛闭环
 - `/sports` CompetitionChips for kernel leagues (sport-scoped)
 - Match list badge deep-links to `/sports/betting/{id}` when catalog known

@@ -237,6 +237,7 @@ To populate Kernel league lists (`GET /api/predictions/matches?competition=epl`)
    landings usually means flags OFF or no ingest yet, not a broken filter.
 4. Operator schedule sync (write key required — never commit real keys):
    ```bash
+   # One competition at a time (aliases: epl, laliga, bundesliga, seriea, ligue1, ucl)
    curl -s -X POST \
      -H "X-API-Key: $API_WRITE_KEY" \
      "$BASE/api/predictions/schedule/sync?competition=epl"
@@ -257,6 +258,20 @@ To populate Kernel league lists (`GET /api/predictions/matches?competition=epl`)
    `GET /api/betting/status` is read-only (no write key). It lists MultiAdapter
    prefixes currently registered when Kernel is ON, plus a non-secret `lol`
    diagnostics object (see LoL section below).
+
+6. Interpreting multi-league sync (local 2026-07 verification):
+
+   | Result | Meaning |
+   |--------|---------|
+   | `synced>0`, `days_ahead=45` has rows | Preferable: 2026-27 (or next) openers in window |
+   | `synced>0`, `d45=0` / `d60=0` | Fixtures in DB but **outside upcoming window** — typically finished prior campaign, or openers >60d out |
+   | `synced=0` | Flag/key/upstream failure (see logs); UCL preferred year may 404 then **fall back** one season |
+
+   Vendor publish lag (not a local adapter bug): as of mid-summer 2026,
+   **Bundesliga** may still only return finished 2025-26 fixtures for season
+   year 2026, and **UCL** season 2026 may 404 (adapter falls back to 2025,
+   which is finished). Re-sync after Football-Data publishes the next campaign;
+   do not invent openers.
 
 World Cup remains on `/api/world-cup/*` (not MultiAdapter football prefixes for
 the thematic UI). Esports stays `coming_soon` — see `docs/dev/ESPORTS_BOUNDARY.md`

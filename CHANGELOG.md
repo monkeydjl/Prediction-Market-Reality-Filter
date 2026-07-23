@@ -2,10 +2,13 @@
 
 ## Unreleased
 
+### RUNBOOK: multi-league sync interpretation
+- Table for synced vs days_ahead empty; BL1/UCL vendor lag notes
+
 ### Phase2 multi-league real sync fixes
 - Bundesliga + Ligue 1 season roll had stayed on 2025 — fixed to **2026**
 - UCL: preferred 2026 404 → fall back one season (often still finished campaign)
-- Live sync verified for epl/laliga/seriea; BL1/FL1 need restart after fix
+- Live sync verified: epl/laliga/seriea/ligue1 have 2026-27 openers; BL1/UCL finished-only until vendor
 
 ### Football season roll + matches days_ahead
 - EPL/UCL/five-league Football-Data season → **2026** (`2026-27`)

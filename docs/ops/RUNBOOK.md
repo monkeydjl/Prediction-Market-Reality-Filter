@@ -274,6 +274,23 @@ To populate Kernel league lists (`GET /api/predictions/matches?competition=epl`)
    which is finished). Re-sync after Football-Data publishes the next campaign;
    do not invent openers.
 
+### MLB (Phase 5 / statsapi.mlb.com)
+
+1. `PHASE5_MLB_ENABLED=true` in `backend/.env` (no API key — official free Stats API).
+2. Restart API so `mlb-` registers (`GET /api/betting/status` → prefixes).
+3. Sync (write key; one request for Mar–Nov of current year):
+   ```bash
+   curl -s -X POST \
+     -H "X-API-Key: $API_WRITE_KEY" \
+     "$BASE/api/predictions/schedule/sync?competition=mlb"
+   ```
+4. List:
+   ```bash
+   curl -s "$BASE/api/predictions/matches?competition=mlb&days_ahead=45"
+   ```
+   Window is calendar year Mar–Nov. Mid-season should show upcoming games;
+   off-season may be finished-only until spring schedules publish.
+
 ### NBA (Phase 4 / balldontlie)
 
 1. `PHASE4_NBA_ENABLED=true` and non-empty `BALLDONTLIE_API_KEY` in `backend/.env`.

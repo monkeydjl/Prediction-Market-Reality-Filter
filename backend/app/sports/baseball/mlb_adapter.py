@@ -34,9 +34,9 @@ logger = logging.getLogger(__name__)
 
 _BASEBALL = SportIdentity(code="baseball", name="Baseball")
 _MLB = CompetitionIdentity(code="mlb", name="MLB", sport=_BASEBALL)
-_DEFAULT_SEASON = "2024"
+_DEFAULT_SEASON = "2026"
 _DEFAULT_STAGE = "regular_season"
-_DEFAULT_KICKOFF = datetime(2024, 7, 4, tzinfo=timezone.utc)
+_DEFAULT_KICKOFF = datetime(2026, 7, 4, tzinfo=timezone.utc)
 
 # Coarse 3-year-ish park run factors (1.0 = league average). Soft signal only.
 _PARK_FACTORS: dict[str, float] = {

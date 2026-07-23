@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### MLB Phase 5 prep + real sync path
+- Default season label → 2026; sync uses current calendar Mar–Nov window
+- RUNBOOK steps (no vendor key); early-spring empty → prior year fallback
+
 ### NBA real sync verified (local)
 - With key + PHASE4: `synced=1322` (2025-26 fallback); d45 empty mid-summer OK
 - 429 backoff fix required for free-tier full pagination

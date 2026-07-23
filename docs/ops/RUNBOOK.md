@@ -229,7 +229,8 @@ To populate Kernel league lists (`GET /api/predictions/matches?competition=epl`)
    PHASE2_LEAGUES_ENABLED=true        # EPL + La Liga / Bundesliga / Serie A / Ligue 1 / UCL
    # (catalog flag epl_data_enabled is an alias of PHASE2 — there is no EPL_DATA_ENABLED env)
    # FOOTBALL_DATA_API_KEY=...        # Football-Data.org for EU leagues
-   # BALLDONTLIE_API_KEY=...          # NBA (optional)
+   PHASE4_NBA_ENABLED=true            # optional — requires BALLDONTLIE_API_KEY
+   # BALLDONTLIE_API_KEY=...          # balldontlie.io (free tier ~5 req/min)
    ```
 2. Restart the API so `_get_kernel()` rebuilds MultiAdapter registrations.
 3. Sync schedules (operator/write path or adapter-level `sync_schedule` via

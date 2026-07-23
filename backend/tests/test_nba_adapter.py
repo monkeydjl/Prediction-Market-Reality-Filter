@@ -123,6 +123,24 @@ class TestNBAAdapterSyncSchedule:
         adapter = NBAAdapter()
         count = adapter.sync_schedule()
         assert count == 2
+        mock_fetch.assert_called_with(2026)
+
+    @patch("app.sports.basketball.nba_adapter.save_fixture")
+    @patch("app.sports.basketball.nba_adapter.parse_nba_game")
+    @patch("app.sports.basketball.nba_adapter.fetch_nba_games")
+    @patch("app.sports.basketball.nba_adapter.config")
+    def test_sync_falls_back_when_preferred_season_empty(
+        self, mock_config, mock_fetch, mock_parse, mock_save
+    ):
+        mock_config.settings.BALLDONTLIE_API_KEY = "test-key"
+        mock_fetch.side_effect = [[], [{"id": 9}]]
+        mock_parse.return_value = {"match_id": "nba-9"}
+        adapter = NBAAdapter()
+        count = adapter.sync_schedule()
+        assert count == 1
+        assert mock_fetch.call_count == 2
+        # Fallback season key 2025-26
+        assert mock_save.call_args.args[2] == "2025-26"
 
     @patch("app.sports.basketball.nba_adapter.config")
     def test_sync_returns_zero_when_api_key_empty(self, mock_config):

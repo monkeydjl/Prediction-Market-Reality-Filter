@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### NBA season roll + fallback (Phase 4)
+- Preferred balldontlie season **2026** (2026-27); empty → try **2025**
+- RUNBOOK: PHASE4_NBA + BALLDONTLIE sync/list steps
+- Real sync still requires local `BALLDONTLIE_API_KEY`
+
 ### RUNBOOK: multi-league sync interpretation
 - Table for synced vs days_ahead empty; BL1/UCL vendor lag notes
 

@@ -31,9 +31,15 @@ logger = logging.getLogger(__name__)
 
 _BASKETBALL = SportIdentity(code="basketball", name="Basketball")
 _NBA = CompetitionIdentity(code="nba", name="NBA", sport=_BASKETBALL)
-_DEFAULT_SEASON = "2024-25"
+# balldontlie season year = autumn start (2026 → 2026-27 campaign).
+_FD_SEASON = 2026
+_DEFAULT_SEASON = "2026-27"
 _DEFAULT_STAGE = "regular_season"
-_DEFAULT_KICKOFF = datetime(2024, 12, 25, tzinfo=timezone.utc)
+_DEFAULT_KICKOFF = datetime(2026, 10, 21, tzinfo=timezone.utc)
+
+
+def _season_key_for_year(year: int) -> str:
+    return f"{year}-{str(year + 1)[-2:]}"
 
 
 def parse_nba_game(game_data: dict) -> dict | None:
@@ -369,25 +375,64 @@ class NBAAdapter:
     def sync_schedule(self) -> int:
         """Sync NBA schedule from balldontlie.io.
 
-        Returns 0 if API key is not configured or sync fails.
+        Tries preferred season year then previous (schedules often lag mid-summer).
+        Returns 0 if API key is not configured or all seasons fail.
         """
         if not config.settings.BALLDONTLIE_API_KEY:
             return 0
 
-        try:
-            # Fetch current season games
-            season_year = 2024  # 2024-25 season
-            games_raw = fetch_nba_games(season_year)
-            count = 0
-            for raw in games_raw:
-                parsed = parse_nba_game(raw)
-                if parsed:
-                    save_fixture(parsed, "nba", _DEFAULT_SEASON)
-                    count += 1
-            return count
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Failed to sync NBA schedule: %s", exc)
-            return 0
+        seasons_to_try = [_FD_SEASON]
+        if _FD_SEASON > 2000:
+            seasons_to_try.append(_FD_SEASON - 1)
+
+        last_err: Exception | None = None
+        for season_year in seasons_to_try:
+            try:
+                games_raw = fetch_nba_games(season_year)
+                if not games_raw:
+                    logger.info(
+                        "NBA season %s returned 0 games; trying fallback",
+                        season_year,
+                    )
+                    continue
+                season_key = (
+                    _DEFAULT_SEASON
+                    if season_year == _FD_SEASON
+                    else _season_key_for_year(season_year)
+                )
+                if season_year != _FD_SEASON:
+                    logger.warning(
+                        "NBA preferred season %s empty/unavailable; "
+                        "using %s (%s games)",
+                        _FD_SEASON,
+                        season_year,
+                        len(games_raw),
+                    )
+                count = 0
+                for raw in games_raw:
+                    parsed = parse_nba_game(raw)
+                    if parsed:
+                        save_fixture(parsed, "nba", season_key)
+                        count += 1
+                return count
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+                msg = str(exc).lower()
+                if any(
+                    tok in msg
+                    for tok in ("404", "not found", "does not exist", "empty")
+                ):
+                    logger.info(
+                        "NBA season %s not usable (%s); trying fallback",
+                        season_year,
+                        str(exc)[:120],
+                    )
+                    continue
+                logger.error("Failed to sync NBA schedule: %s", exc)
+                return 0
+        if last_err is not None:
+            logger.error("Failed to sync NBA schedule: %s", last_err)
+        return 0
 
     def fetch_schedule(self, filters: ScheduleFilter) -> list[RawMatchData]:
         from sqlalchemy import select

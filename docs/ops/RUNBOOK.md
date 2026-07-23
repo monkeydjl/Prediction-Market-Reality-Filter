@@ -290,8 +290,10 @@ To populate Kernel league lists (`GET /api/predictions/matches?competition=epl`)
    curl -s "$BASE/api/predictions/matches?competition=nba&days_ahead=60"
    ```
    Preferred season year is **2026** (2026-27); if empty/unavailable the adapter
-   falls back to **2025** (2025-26, often finished by mid-summer). `synced=0`
-   with key set → check logs (401/429) or free-tier rate limit.
+   falls back to **2025** (2025-26, often finished by mid-summer). Free tier is
+   ~5 req/min; full-season pagination can take **several minutes**. Client
+   backs off on HTTP 429 and may return a **partial** season rather than zero.
+   `synced=0` with key set → wait ~1–2 min and retry, or check 401 in logs.
 
 World Cup remains on `/api/world-cup/*` (not MultiAdapter football prefixes for
 the thematic UI). Esports stays `coming_soon` — see `docs/dev/ESPORTS_BOUNDARY.md`

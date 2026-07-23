@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### balldontlie 429 resilience for NBA sync
+- Page client: longer interval, 429 backoff retries, partial page return
+- Adapter treats rate-limit as season fallback trigger
+
 ### NBA season roll + fallback (Phase 4)
 - Preferred balldontlie season **2026** (2026-27); empty → try **2025**
 - RUNBOOK: PHASE4_NBA + BALLDONTLIE sync/list steps

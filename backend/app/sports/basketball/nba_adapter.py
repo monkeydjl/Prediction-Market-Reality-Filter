@@ -418,9 +418,16 @@ class NBAAdapter:
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
                 msg = str(exc).lower()
+                # Rate limit / empty preferred season → try previous year.
                 if any(
                     tok in msg
-                    for tok in ("404", "not found", "does not exist", "empty")
+                    for tok in (
+                        "404",
+                        "not found",
+                        "does not exist",
+                        "empty",
+                        "rate limit",
+                    )
                 ):
                     logger.info(
                         "NBA season %s not usable (%s); trying fallback",

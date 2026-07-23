@@ -162,10 +162,10 @@ _LIGUE1_CONFIG = LeagueConfig(
     name="Ligue 1",
     match_id_prefix="ligue1-",
     fd_competition="FL1",
-    fd_season=2025,
-    default_season="2025-26",
+    fd_season=2026,
+    default_season="2026-27",
     default_stage="regular_season",
-    default_kickoff=datetime(2025, 8, 17, 19, 0, tzinfo=timezone.utc),
+    default_kickoff=datetime(2026, 8, 22, 15, 0, tzinfo=timezone.utc),
     stage_map={},
     team_aliases={
         "Paris Saint-Germain": "ParisSG",

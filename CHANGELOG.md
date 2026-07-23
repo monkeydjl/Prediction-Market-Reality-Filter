@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Phase2 multi-league real sync fixes
+- Bundesliga + Ligue 1 season roll had stayed on 2025 — fixed to **2026**
+- UCL: preferred 2026 404 → fall back one season (often still finished campaign)
+- Live sync verified for epl/laliga/seriea; BL1/FL1 need restart after fix
+
 ### Football season roll + matches days_ahead
 - EPL/UCL/five-league Football-Data season → **2026** (`2026-27`)
 - `GET /api/predictions/matches?days_ahead=0..60` (default 0 = today only)

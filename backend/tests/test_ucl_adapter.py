@@ -110,6 +110,35 @@ class TestSyncSchedule:
     @patch("app.sports.football.adapters.ucl_adapter.save_fixture")
     @patch("app.sports.football.adapters.ucl_adapter.parse_fixture")
     @patch("app.sports.football.adapters.ucl_adapter.fetch_competition_fixtures")
+    def test_sync_falls_back_when_preferred_season_404(
+        self, mock_fetch, mock_parse, mock_save
+    ):
+        from app.services.football_data_client import FootballDataClientError
+
+        mock_fetch.side_effect = [
+            FootballDataClientError('API error: 404 - {"message":"does not exist"}'),
+            [{"id": 9}],
+        ]
+        mock_parse.return_value = {
+            "match_id": "ucl-9",
+            "home_team": "A",
+            "away_team": "B",
+            "kickoff_utc": datetime(2025, 9, 16),
+            "stage": "group_stage",
+            "status": "finished",
+            "venue": "X",
+        }
+        adapter = UCLAdapter()
+        count = adapter.sync_schedule()
+        assert count == 1
+        assert mock_fetch.call_count == 2
+        mock_save.assert_called_once()
+        # Fallback season key is prior campaign (preferred-1).
+        assert mock_save.call_args.args[2].endswith("-26") or "2025" in mock_save.call_args.args[2]
+
+    @patch("app.sports.football.adapters.ucl_adapter.save_fixture")
+    @patch("app.sports.football.adapters.ucl_adapter.parse_fixture")
+    @patch("app.sports.football.adapters.ucl_adapter.fetch_competition_fixtures")
     def test_sync_saves_fixtures(self, mock_fetch, mock_parse, mock_save):
         mock_fetch.return_value = [{"id": 1}, {"id": 2}]
         mock_parse.side_effect = [

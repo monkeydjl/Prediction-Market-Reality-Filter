@@ -165,21 +165,57 @@ class UCLAdapter:
         return build_match_outcome(result)
 
     def sync_schedule(self) -> int:
-        try:
-            fixtures_raw = fetch_competition_fixtures(_FD_COMPETITION, season=_FD_SEASON)
-            count = 0
-            for raw in fixtures_raw:
-                parsed = parse_fixture(
-                    raw, stage_mapping=_STAGE_MAP,
-                    match_id_prefix=_MATCH_ID_PREFIX,
+        """Pull UCL fixtures; fall back one season if preferred year is 404.
+
+        Football-Data often publishes the next CL season late — 2026 may 404
+        while 2025 still returns the finished campaign.
+        """
+        seasons_to_try = [_FD_SEASON]
+        if _FD_SEASON > 2000:
+            seasons_to_try.append(_FD_SEASON - 1)
+        last_err: Exception | None = None
+        for season in seasons_to_try:
+            try:
+                fixtures_raw = fetch_competition_fixtures(
+                    _FD_COMPETITION, season=season
                 )
-                if parsed:
-                    save_fixture(parsed, "ucl", _DEFAULT_SEASON)
-                    count += 1
-            return count
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Failed to sync UCL schedule: %s", exc)
-            return 0
+                season_key = (
+                    _DEFAULT_SEASON
+                    if season == _FD_SEASON
+                    else f"{season}-{str(season + 1)[-2:]}"
+                )
+                if season != _FD_SEASON:
+                    logger.warning(
+                        "UCL season %s unavailable; using %s fixtures",
+                        _FD_SEASON,
+                        season,
+                    )
+                count = 0
+                for raw in fixtures_raw or []:
+                    parsed = parse_fixture(
+                        raw,
+                        stage_mapping=_STAGE_MAP,
+                        match_id_prefix=_MATCH_ID_PREFIX,
+                    )
+                    if parsed:
+                        save_fixture(parsed, "ucl", season_key)
+                        count += 1
+                return count
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+                msg = str(exc)
+                if "404" in msg or "does not exist" in msg.lower():
+                    logger.info(
+                        "UCL season %s not found (%s); trying fallback",
+                        season,
+                        msg[:120],
+                    )
+                    continue
+                logger.error("Failed to sync UCL schedule: %s", exc)
+                return 0
+        if last_err is not None:
+            logger.error("Failed to sync UCL schedule: %s", last_err)
+        return 0
 
     def fetch_schedule(self, filters: ScheduleFilter) -> list[RawMatchData]:
         from app.kernel.kernel_db import get_kernel_session

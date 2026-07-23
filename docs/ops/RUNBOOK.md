@@ -274,6 +274,25 @@ To populate Kernel league lists (`GET /api/predictions/matches?competition=epl`)
    which is finished). Re-sync after Football-Data publishes the next campaign;
    do not invent openers.
 
+### NBA (Phase 4 / balldontlie)
+
+1. `PHASE4_NBA_ENABLED=true` and non-empty `BALLDONTLIE_API_KEY` in `backend/.env`.
+2. Restart API so `nba-` registers (check `GET /api/betting/status` → prefixes).
+3. Sync (write key; full-season pagination is slow on free tier — minutes possible):
+   ```bash
+   curl -s -X POST \
+     -H "X-API-Key: $API_WRITE_KEY" \
+     "$BASE/api/predictions/schedule/sync?competition=nba"
+   ```
+4. List (landings use `days_ahead=45`; mid-summer may still be empty until openers):
+   ```bash
+   curl -s "$BASE/api/predictions/matches?competition=nba&days_ahead=45"
+   curl -s "$BASE/api/predictions/matches?competition=nba&days_ahead=60"
+   ```
+   Preferred season year is **2026** (2026-27); if empty/unavailable the adapter
+   falls back to **2025** (2025-26, often finished by mid-summer). `synced=0`
+   with key set → check logs (401/429) or free-tier rate limit.
+
 World Cup remains on `/api/world-cup/*` (not MultiAdapter football prefixes for
 the thematic UI). Esports stays `coming_soon` — see `docs/dev/ESPORTS_BOUNDARY.md`
 and ADR-004.

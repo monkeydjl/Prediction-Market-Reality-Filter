@@ -295,6 +295,10 @@ To populate Kernel league lists (`GET /api/predictions/matches?competition=epl`)
    backs off on HTTP 429 and may return a **partial** season rather than zero.
    `synced=0` with key set → wait ~1–2 min and retry, or check 401 in logs.
 
+   Local verification (2026-07-23): `synced=1322` after ~3 min (2026 empty →
+   **2025-26** full season). All rows `finished` through 2026-06-13 playoffs;
+   `days_ahead=45/60` correctly **0** until 2026-27 openers appear on balldontlie.
+
 World Cup remains on `/api/world-cup/*` (not MultiAdapter football prefixes for
 the thematic UI). Esports stays `coming_soon` — see `docs/dev/ESPORTS_BOUNDARY.md`
 and ADR-004.

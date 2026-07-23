@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### NBA real sync verified (local)
+- With key + PHASE4: `synced=1322` (2025-26 fallback); d45 empty mid-summer OK
+- 429 backoff fix required for free-tier full pagination
+
 ### balldontlie 429 resilience for NBA sync
 - Page client: longer interval, 429 backoff retries, partial page return
 - Adapter treats rate-limit as season fallback trigger

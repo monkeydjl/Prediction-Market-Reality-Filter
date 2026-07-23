@@ -291,6 +291,10 @@ To populate Kernel league lists (`GET /api/predictions/matches?competition=epl`)
    Window is calendar year Mar–Nov. Mid-season should show upcoming games;
    off-season may be finished-only until spring schedules publish.
 
+   Local verification (2026-07-23): after nested-team parse fix,
+   `synced=2814` (~8s). Same day list non-empty; `days_ahead=7` ~100+;
+   `days_ahead=45` ~600+. No vendor API key required.
+
 ### NBA (Phase 4 / balldontlie)
 
 1. `PHASE4_NBA_ENABLED=true` and non-empty `BALLDONTLIE_API_KEY` in `backend/.env`.

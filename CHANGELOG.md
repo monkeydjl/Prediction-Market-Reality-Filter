@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### MLB real sync verified (local)
+- Nested team parse fix → `synced=2814`; d7/d45 show live 2026 games
+
 ### MLB parse fix for official schedule shape
 - Read `teams.{home,away}.team.name` (+ score) from statsapi.mlb.com
 - Flat name shape still works for unit fixtures

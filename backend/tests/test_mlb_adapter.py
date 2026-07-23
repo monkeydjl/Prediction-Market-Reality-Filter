@@ -84,11 +84,42 @@ class TestParseMlbGame:
             "status": {"abstractGameState": "Preview"},
             "linescore": {"home": {"runs": 0}, "away": {"runs": 0}},
             "seriesDescription": "American League Championship Series",
+            "gameType": "L",
         }
         parsed = parse_mlb_game(raw)
         assert parsed["match_id"] == "mlb-781234"
         assert parsed["stage"] == "playoff"
         assert parsed["status"] == "scheduled"
+
+    def test_parses_official_schedule_nested_team_name(self):
+        """statsapi.mlb.com nests name under teams.home.team.name."""
+        raw = {
+            "gamePk": 824410,
+            "season": "2026",
+            "gameDate": "2026-07-20T22:40:00Z",
+            "gameType": "R",
+            "teams": {
+                "away": {
+                    "team": {"id": 142, "name": "Minnesota Twins"},
+                    "score": 4,
+                },
+                "home": {
+                    "team": {"id": 114, "name": "Cleveland Guardians"},
+                    "score": 13,
+                },
+            },
+            "status": {"abstractGameState": "Final"},
+            "venue": {"name": "Progressive Field"},
+        }
+        parsed = parse_mlb_game(raw)
+        assert parsed is not None
+        assert parsed["match_id"] == "mlb-824410"
+        assert parsed["home_team"] == "Cleveland Guardians"
+        assert parsed["away_team"] == "Minnesota Twins"
+        assert parsed["home_score"] == 13
+        assert parsed["away_score"] == 4
+        assert parsed["stage"] == "regular_season"
+        assert parsed["status"] == "finished"
 
 
 class TestMLBAdapterGetMatchIdentity:

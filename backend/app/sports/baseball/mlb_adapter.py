@@ -81,8 +81,20 @@ def parse_mlb_game(game_data: dict) -> dict | None:
     if not game_pk:
         return None
 
-    home_team = game_data.get("teams", {}).get("home", {}).get("name", "")
-    away_team = game_data.get("teams", {}).get("away", {}).get("name", "")
+    # Official schedule payload nests name under teams.{home,away}.team.name
+    # (not teams.home.name). Fall back to flat shape for older fixtures/tests.
+    home_side = game_data.get("teams", {}).get("home") or {}
+    away_side = game_data.get("teams", {}).get("away") or {}
+    home_team = (
+        (home_side.get("team") or {}).get("name")
+        or home_side.get("name")
+        or ""
+    )
+    away_team = (
+        (away_side.get("team") or {}).get("name")
+        or away_side.get("name")
+        or ""
+    )
     if not home_team or not away_team:
         return None
 
@@ -92,20 +104,35 @@ def parse_mlb_game(game_data: dict) -> dict | None:
     except (ValueError, TypeError):
         kickoff_utc = _DEFAULT_KICKOFF
 
-    # Postseason detection: seriesDescription present OR gameType in LCS/DS/WS
-    series_desc = game_data.get("seriesDescription", "")
-    game_type = game_data.get("gameType", "")
-    is_playoff = bool(series_desc) or game_type in ("D", "L", "F", "W")
+    # Postseason: seriesDescription and/or gameType codes (D/L/F/W).
+    # Do not treat any non-empty seriesDescription alone as playoff — regular
+    # season also has series numbers; rely on gameType first.
+    series_desc = (game_data.get("seriesDescription") or "").lower()
+    game_type = game_data.get("gameType", "") or ""
+    playoff_types = {"D", "L", "F", "W", "P"}  # division/LCS/WS/playoff-ish
+    is_playoff = game_type in playoff_types or any(
+        tok in series_desc
+        for tok in ("wild card", "division series", "championship", "world series")
+    )
     stage = "playoff" if is_playoff else "regular_season"
 
-    status_raw = game_data.get("status", {}).get("abstractGameState", "")
+    status_raw = (game_data.get("status") or {}).get("abstractGameState", "")
     status = "finished" if status_raw == "Final" else "scheduled"
 
-    linescore = game_data.get("linescore", {})
-    home_score = linescore.get("home", {}).get("runs")
-    away_score = linescore.get("away", {}).get("runs")
+    # Scores: schedule feed uses teams.{side}.score; live feed uses linescore.
+    linescore = game_data.get("linescore") or {}
+    home_score = home_side.get("score")
+    if home_score is None:
+        home_score = (linescore.get("teams") or {}).get("home", {}).get("runs")
+        if home_score is None:
+            home_score = (linescore.get("home") or {}).get("runs")
+    away_score = away_side.get("score")
+    if away_score is None:
+        away_score = (linescore.get("teams") or {}).get("away", {}).get("runs")
+        if away_score is None:
+            away_score = (linescore.get("away") or {}).get("runs")
 
-    venue = game_data.get("venue", {}).get("name", "Unknown")
+    venue = (game_data.get("venue") or {}).get("name", "Unknown")
 
     return {
         "match_id": f"mlb-{game_pk}",

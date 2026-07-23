@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### MLB parse fix for official schedule shape
+- Read `teams.{home,away}.team.name` (+ score) from statsapi.mlb.com
+- Flat name shape still works for unit fixtures
+
 ### MLB Phase 5 prep + real sync path
 - Default season label → 2026; sync uses current calendar Mar–Nov window
 - RUNBOOK steps (no vendor key); early-spring empty → prior year fallback

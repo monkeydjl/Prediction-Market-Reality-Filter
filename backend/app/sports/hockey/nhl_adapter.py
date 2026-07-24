@@ -35,9 +35,39 @@ logger = logging.getLogger(__name__)
 
 _HOCKEY = SportIdentity(code="hockey", name="Hockey")
 _NHL = CompetitionIdentity(code="nhl", name="NHL", sport=_HOCKEY)
-_DEFAULT_SEASON = "20232024"
+_DEFAULT_SEASON = "20262027"
 _DEFAULT_STAGE = "regular_season"
-_DEFAULT_KICKOFF = datetime(2024, 1, 15, tzinfo=timezone.utc)
+_DEFAULT_KICKOFF = datetime(2026, 10, 7, tzinfo=timezone.utc)
+_FINISHED_STATES = frozenset({"OFF", "FINAL", "OFF FINAL"})
+
+
+def _localized_default(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        return str(value.get("default") or "").strip()
+    return str(value).strip()
+
+
+def _team_display_name(side: dict | None) -> str:
+    """Build full club name from official nested fields.
+
+    Live api-web.nhle.com uses placeName + commonName (localized dicts).
+    Unit fixtures and older payloads may use a flat ``name`` string.
+    """
+    if not side:
+        return ""
+    flat = _localized_default(side.get("name"))
+    if flat:
+        return flat
+    place = _localized_default(side.get("placeName"))
+    common = _localized_default(side.get("commonName"))
+    if place and common:
+        # Normalize French accented place names (Montréal → Montreal) so
+        # geo/alias tables keyed on ASCII full names still resolve.
+        place = place.replace("é", "e").replace("É", "E")
+        return f"{place} {common}"
+    return place or common or _localized_default(side.get("abbrev"))
 
 
 def parse_nhl_game(game_data: dict) -> dict | None:
@@ -51,34 +81,63 @@ def parse_nhl_game(game_data: dict) -> dict | None:
     if not game_id:
         return None
 
-    home_team = game_data.get("homeTeam", {}).get("name", "")
-    away_team = game_data.get("awayTeam", {}).get("name", "")
+    home_side = game_data.get("homeTeam") or {}
+    away_side = game_data.get("awayTeam") or {}
+    home_team = _team_display_name(home_side if isinstance(home_side, dict) else None)
+    away_team = _team_display_name(away_side if isinstance(away_side, dict) else None)
     if not home_team or not away_team:
         return None
 
-    date_str = game_data.get("gameDate", "")
+    date_str = (
+        game_data.get("startTimeUTC")
+        or game_data.get("gameDate")
+        or ""
+    )
     try:
-        kickoff_utc = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        kickoff_utc = datetime.fromisoformat(str(date_str).replace("Z", "+00:00"))
     except (ValueError, TypeError):
         kickoff_utc = _DEFAULT_KICKOFF
 
-    # gameType: 2 = regular season, 3 = playoffs
+    # gameType: 1 = preseason, 2 = regular season, 3 = playoffs
     game_type = game_data.get("gameType", 2)
     stage = "playoff" if game_type == 3 else "regular_season"
 
-    # gameState: "OFF FINAL", "FINAL", "LIVE", "FUT", etc.
-    game_state = game_data.get("gameState", "")
-    status = "finished" if game_state in ("OFF FINAL", "FINAL") else "scheduled"
+    # gameState: "OFF", "FINAL", "OFF FINAL", "LIVE", "FUT", etc.
+    game_state = str(game_data.get("gameState") or "").upper()
+    status = "finished" if game_state in _FINISHED_STATES else "scheduled"
 
-    home_score = game_data.get("homeTeamScore")
-    away_score = game_data.get("awayTeamScore")
+    home_score = None
+    away_score = None
+    if isinstance(home_side, dict):
+        home_score = home_side.get("score")
+    if isinstance(away_side, dict):
+        away_score = away_side.get("score")
+    if home_score is None:
+        home_score = game_data.get("homeTeamScore")
+    if away_score is None:
+        away_score = game_data.get("awayTeamScore")
 
-    # Overtime/shootout detection: period > 3 means OT (4) or shootout (5)
-    period = game_data.get("period", 3)
-    went_to_overtime = period == 4
-    went_to_shootout = period == 5
+    period_desc = game_data.get("periodDescriptor") or {}
+    period_type = str(
+        period_desc.get("periodType")
+        or (game_data.get("gameOutcome") or {}).get("lastPeriodType")
+        or ""
+    ).upper()
+    period = period_desc.get("number")
+    if period is None:
+        period = game_data.get("period", 3)
+    try:
+        period_n = int(period)
+    except (TypeError, ValueError):
+        period_n = 3
+    went_to_overtime = period_type == "OT" or period_n == 4
+    went_to_shootout = period_type == "SO" or period_n == 5
 
-    venue = game_data.get("venue", {}).get("default", "Unknown")
+    venue_raw = game_data.get("venue") or {}
+    if isinstance(venue_raw, dict):
+        venue = _localized_default(venue_raw) or venue_raw.get("default") or "Unknown"
+    else:
+        venue = str(venue_raw or "Unknown")
 
     return {
         "match_id": f"nhl-{game_id}",
@@ -143,7 +202,7 @@ def build_match_outcome(result: object) -> MatchOutcome | None:
 
 
 def save_fixture(parsed: dict, competition: str, season: str) -> None:
-    """Upsert a parsed NHL fixture into kernel_match_fixtures."""
+    """Upsert a parsed NHL fixture into kernel_match_fixtures (+ result when scored)."""
     session = get_kernel_session()
     try:
         now = datetime.now(timezone.utc)
@@ -176,6 +235,34 @@ def save_fixture(parsed: dict, competition: str, season: str) -> None:
                 updated_at=now,
             )
             session.add(fixture)
+        hs = parsed.get("home_score")
+        aws = parsed.get("away_score")
+        if hs is not None and aws is not None:
+            try:
+                hs_i, aws_i = int(hs), int(aws)
+            except (TypeError, ValueError):
+                hs_i = aws_i = None
+            if hs_i is not None and aws_i is not None:
+                outcome = "home_win" if hs_i > aws_i else "away_win"
+                finished_at = parsed.get("kickoff_utc") or now
+                existing_result = session.get(KernelMatchResult, parsed["match_id"])
+                if existing_result is None:
+                    session.add(
+                        KernelMatchResult(
+                            match_id=parsed["match_id"],
+                            home_score=hs_i,
+                            away_score=aws_i,
+                            outcome=outcome,
+                            finished_at=finished_at,
+                            created_at=now,
+                        )
+                    )
+                else:
+                    existing_result.home_score = hs_i
+                    existing_result.away_score = aws_i
+                    existing_result.outcome = outcome
+                    if existing_result.finished_at is None:
+                        existing_result.finished_at = finished_at
         session.commit()
     except Exception as exc:  # noqa: BLE001
         session.rollback()
@@ -343,11 +430,12 @@ class NHLAdapter:
             logger.debug("NHL liquidity enrich skipped", exc_info=True)
         return raw
 
-    def _compute_form(self, team_name: str) -> float:
-        """Compute last-10 win rate from kernel_match_results. Returns 0.5 if none."""
+    def _compute_form(self, team_name: str, as_of: datetime | None = None) -> float:
+        """As-of last-10 win rate from kernel fixtures. Returns 0.5 if none."""
         session = get_kernel_session()
         try:
-            from sqlalchemy import select, or_
+            from sqlalchemy import or_, select
+            from app.sports._shared.rest_form import form_as_of
 
             query = (
                 select(KernelMatchFixture)
@@ -357,84 +445,113 @@ class NHLAdapter:
                         KernelMatchFixture.home_team == team_name,
                         KernelMatchFixture.away_team == team_name,
                     ),
-                    KernelMatchFixture.status == "finished",
                 )
-                .order_by(KernelMatchFixture.kickoff_utc.desc())
-                .limit(10)
             )
             fixtures = session.execute(query).scalars().all()
-            if not fixtures:
-                return 0.5
-            wins = 0
-            for f in fixtures:
-                if f.home_team == team_name:
-                    if (f.home_score or 0) > (f.away_score or 0):
-                        wins += 1
-                else:
-                    if (f.away_score or 0) > (f.home_score or 0):
-                        wins += 1
-            return wins / len(fixtures)
+            history = [
+                {
+                    "match_id": f.match_id,
+                    "home_team": f.home_team,
+                    "away_team": f.away_team,
+                    "home_score": f.home_score,
+                    "away_score": f.away_score,
+                    "kickoff_utc": f.kickoff_utc,
+                }
+                for f in fixtures
+            ]
+            return form_as_of(team_name, as_of, history)
         except Exception:  # noqa: BLE001
             return 0.5
         finally:
             session.close()
 
-    def _compute_rest_days(self, team_name: str, kickoff_utc: datetime) -> int:
-        """Compute days since last match. Returns 0 if unknown."""
+    def _compute_rest_days(self, team_name: str, kickoff_utc: datetime) -> float | None:
+        """Days since last match before kickoff. Returns None if unknown."""
         session = get_kernel_session()
         try:
-            from sqlalchemy import select, or_
+            from sqlalchemy import or_, select
+            from app.sports._shared.rest_form import rest_days_as_of
 
             query = (
-                select(KernelMatchFixture.kickoff_utc)
+                select(KernelMatchFixture)
                 .where(
                     KernelMatchFixture.competition == "nhl",
                     or_(
                         KernelMatchFixture.home_team == team_name,
                         KernelMatchFixture.away_team == team_name,
                     ),
-                    KernelMatchFixture.kickoff_utc < kickoff_utc,
                 )
-                .order_by(KernelMatchFixture.kickoff_utc.desc())
-                .limit(1)
             )
-            result = session.execute(query).scalar_one_or_none()
-            if result is None:
-                return 0
-            delta = kickoff_utc - result
-            return max(0, delta.days)
+            fixtures = session.execute(query).scalars().all()
+            history = [
+                {
+                    "match_id": f.match_id,
+                    "home_team": f.home_team,
+                    "away_team": f.away_team,
+                    "home_score": f.home_score,
+                    "away_score": f.away_score,
+                    "kickoff_utc": f.kickoff_utc,
+                }
+                for f in fixtures
+            ]
+            return rest_days_as_of(team_name, kickoff_utc, history)
         except Exception:  # noqa: BLE001
-            return 0
+            return None
         finally:
             session.close()
-
     def fetch_outcome(self, match_id: str) -> MatchOutcome | None:
         result = query_result(match_id, KernelMatchResult)
         return build_match_outcome(result)
+
+    def _season_candidates(self) -> list[str]:
+        """Preferred then fallback season keys (YYYYYYYY).
+
+        Prefers the campaign that opens this calendar year (e.g. 20262027
+        in mid-2026), then falls back one season if empty.
+        """
+        now = datetime.now(timezone.utc)
+        y = now.year
+        preferred = f"{y}{y + 1}"
+        fallback = f"{y - 1}{y}"
+        if preferred == fallback:
+            return [preferred]
+        return [preferred, fallback]
 
     def sync_schedule(self) -> int:
         """Sync NHL schedule from the NHL Stats API.
 
         Returns 0 if PHASE5_NHL_ENABLED is false or sync fails (graceful
         degradation, no exceptions). NHL season spans two calendar years
-        (e.g., "20232024" for the 2023-24 season).
+        (e.g., "20252026" for the 2025-26 season). Prefers the upcoming
+        campaign when published; falls back one season if empty.
         """
         if not config.settings.PHASE5_NHL_ENABLED:
             return 0
         try:
-            now = datetime.now(timezone.utc)
-            # NHL season key: if month >= August, season starts this year
-            if now.month >= 8:
-                season = f"{now.year}{now.year + 1}"
-            else:
-                season = f"{now.year - 1}{now.year}"
-            games_raw = fetch_nhl_schedule(season)
             count = 0
-            for raw in games_raw:
-                parsed = parse_nhl_game(raw)
-                if parsed:
-                    save_fixture(parsed, "nhl", season)
-                    count += 1
+            used_season: str | None = None
+            for season in self._season_candidates():
+                games_raw = fetch_nhl_schedule(season)
+                if not games_raw:
+                    logger.info("NHL schedule empty for season=%s; trying next", season)
+                    continue
+                used_season = season
+                for raw in games_raw:
+                    parsed = parse_nhl_game(raw)
+                    if parsed:
+                        game_season = raw.get("season")
+                        season_key = (
+                            str(game_season) if game_season is not None else season
+                        )
+                        save_fixture(parsed, "nhl", season_key)
+                        count += 1
+                break
+            if used_season is not None:
+                logger.info(
+                    "NHL sync_schedule season=%s fixtures=%s",
+                    used_season,
+                    count,
+                )
             return count
         except NHLStatsClientError as exc:
             logger.error("NHL API error during sync_schedule: %s", exc)

@@ -72,25 +72,47 @@ def _park_factor_for_team(home_team_name: str) -> float:
     return 1.0
 
 
+# Competitive MLB game types for Elo / backtest (exclude spring/ASG/exhibition).
+_MLB_REGULAR_TYPES = {"R"}
+_MLB_PLAYOFF_TYPES = {"D", "L", "F", "W", "P"}  # division / LCS / WS / playoff-ish
+_MLB_COMPETITIVE_TYPES = _MLB_REGULAR_TYPES | _MLB_PLAYOFF_TYPES
+
+# Franchise renames that must collapse to one Elo key across seasons.
+_MLB_TEAM_CANONICAL: dict[str, str] = {
+    "Oakland Athletics": "Athletics",
+}
+
+
+def _canonical_mlb_team(name: str) -> str:
+    return _MLB_TEAM_CANONICAL.get(name, name)
+
+
 def parse_mlb_game(game_data: dict) -> dict | None:
     """Parse a raw MLB Stats API game dict into internal fixture format.
 
-    Returns None if game_data is malformed.
+    Returns None if game_data is malformed or non-competitive (spring training,
+    All-Star, exhibition, international friendlies, etc.).
     """
     game_pk = game_data.get("gamePk")
     if not game_pk:
+        return None
+
+    game_type = (game_data.get("gameType") or "").strip().upper()
+    # When gameType is present, only keep regular season + postseason.
+    # Missing gameType keeps prior behavior for unit fixtures / partial feeds.
+    if game_type and game_type not in _MLB_COMPETITIVE_TYPES:
         return None
 
     # Official schedule payload nests name under teams.{home,away}.team.name
     # (not teams.home.name). Fall back to flat shape for older fixtures/tests.
     home_side = game_data.get("teams", {}).get("home") or {}
     away_side = game_data.get("teams", {}).get("away") or {}
-    home_team = (
+    home_team = _canonical_mlb_team(
         (home_side.get("team") or {}).get("name")
         or home_side.get("name")
         or ""
     )
-    away_team = (
+    away_team = _canonical_mlb_team(
         (away_side.get("team") or {}).get("name")
         or away_side.get("name")
         or ""
@@ -108,9 +130,7 @@ def parse_mlb_game(game_data: dict) -> dict | None:
     # Do not treat any non-empty seriesDescription alone as playoff — regular
     # season also has series numbers; rely on gameType first.
     series_desc = (game_data.get("seriesDescription") or "").lower()
-    game_type = game_data.get("gameType", "") or ""
-    playoff_types = {"D", "L", "F", "W", "P"}  # division/LCS/WS/playoff-ish
-    is_playoff = game_type in playoff_types or any(
+    is_playoff = game_type in _MLB_PLAYOFF_TYPES or any(
         tok in series_desc
         for tok in ("wild card", "division series", "championship", "world series")
     )
@@ -191,7 +211,7 @@ def build_match_outcome(result: object) -> MatchOutcome | None:
 
 
 def save_fixture(parsed: dict, competition: str, season: str) -> None:
-    """Upsert a parsed MLB fixture into kernel_match_fixtures."""
+    """Upsert a parsed MLB fixture into kernel_match_fixtures (+ result when scored)."""
     session = get_kernel_session()
     try:
         now = datetime.now(timezone.utc)
@@ -224,6 +244,34 @@ def save_fixture(parsed: dict, competition: str, season: str) -> None:
                 updated_at=now,
             )
             session.add(fixture)
+        hs = parsed.get("home_score")
+        aws = parsed.get("away_score")
+        if hs is not None and aws is not None:
+            try:
+                hs_i, aws_i = int(hs), int(aws)
+            except (TypeError, ValueError):
+                hs_i = aws_i = None
+            if hs_i is not None and aws_i is not None:
+                outcome = "home_win" if hs_i > aws_i else "away_win"
+                finished_at = parsed.get("kickoff_utc") or now
+                existing_result = session.get(KernelMatchResult, parsed["match_id"])
+                if existing_result is None:
+                    session.add(
+                        KernelMatchResult(
+                            match_id=parsed["match_id"],
+                            home_score=hs_i,
+                            away_score=aws_i,
+                            outcome=outcome,
+                            finished_at=finished_at,
+                            created_at=now,
+                        )
+                    )
+                else:
+                    existing_result.home_score = hs_i
+                    existing_result.away_score = aws_i
+                    existing_result.outcome = outcome
+                    if existing_result.finished_at is None:
+                        existing_result.finished_at = finished_at
         session.commit()
     except Exception as exc:  # noqa: BLE001
         session.rollback()
@@ -386,11 +434,12 @@ class MLBAdapter:
             logger.debug("MLB liquidity enrich skipped", exc_info=True)
         return raw
 
-    def _compute_form(self, team_name: str) -> float:
-        """Compute last-10 win rate from kernel_match_results. Returns 0.5 if none."""
+    def _compute_form(self, team_name: str, as_of: datetime | None = None) -> float:
+        """As-of last-10 win rate from kernel fixtures. Returns 0.5 if none."""
         session = get_kernel_session()
         try:
-            from sqlalchemy import select, or_
+            from sqlalchemy import or_, select
+            from app.sports._shared.rest_form import form_as_of
 
             query = (
                 select(KernelMatchFixture)
@@ -400,54 +449,58 @@ class MLBAdapter:
                         KernelMatchFixture.home_team == team_name,
                         KernelMatchFixture.away_team == team_name,
                     ),
-                    KernelMatchFixture.status == "finished",
                 )
-                .order_by(KernelMatchFixture.kickoff_utc.desc())
-                .limit(10)
             )
             fixtures = session.execute(query).scalars().all()
-            if not fixtures:
-                return 0.5
-            wins = 0
-            for f in fixtures:
-                if f.home_team == team_name:
-                    if (f.home_score or 0) > (f.away_score or 0):
-                        wins += 1
-                else:
-                    if (f.away_score or 0) > (f.home_score or 0):
-                        wins += 1
-            return wins / len(fixtures)
+            history = [
+                {
+                    "match_id": f.match_id,
+                    "home_team": f.home_team,
+                    "away_team": f.away_team,
+                    "home_score": f.home_score,
+                    "away_score": f.away_score,
+                    "kickoff_utc": f.kickoff_utc,
+                }
+                for f in fixtures
+            ]
+            return form_as_of(team_name, as_of, history)
         except Exception:  # noqa: BLE001
             return 0.5
         finally:
             session.close()
 
-    def _compute_rest_days(self, team_name: str, kickoff_utc: datetime) -> int:
-        """Compute days since last match. Returns 0 if unknown."""
+    def _compute_rest_days(self, team_name: str, kickoff_utc: datetime) -> float | None:
+        """Days since last match before kickoff. Returns None if unknown."""
         session = get_kernel_session()
         try:
-            from sqlalchemy import select, or_
+            from sqlalchemy import or_, select
+            from app.sports._shared.rest_form import rest_days_as_of
 
             query = (
-                select(KernelMatchFixture.kickoff_utc)
+                select(KernelMatchFixture)
                 .where(
                     KernelMatchFixture.competition == "mlb",
                     or_(
                         KernelMatchFixture.home_team == team_name,
                         KernelMatchFixture.away_team == team_name,
                     ),
-                    KernelMatchFixture.kickoff_utc < kickoff_utc,
                 )
-                .order_by(KernelMatchFixture.kickoff_utc.desc())
-                .limit(1)
             )
-            result = session.execute(query).scalar_one_or_none()
-            if result is None:
-                return 0
-            delta = kickoff_utc - result
-            return max(0, delta.days)
+            fixtures = session.execute(query).scalars().all()
+            history = [
+                {
+                    "match_id": f.match_id,
+                    "home_team": f.home_team,
+                    "away_team": f.away_team,
+                    "home_score": f.home_score,
+                    "away_score": f.away_score,
+                    "kickoff_utc": f.kickoff_utc,
+                }
+                for f in fixtures
+            ]
+            return rest_days_as_of(team_name, kickoff_utc, history)
         except Exception:  # noqa: BLE001
-            return 0
+            return None
         finally:
             session.close()
 

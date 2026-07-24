@@ -294,14 +294,6 @@ class NBAAdapter:
                 "is_home_advantage": True,
             },
             "custom": {
-                "pace_home": 99.5,
-                "pace_away": 97.2,
-                "ortg_home": 112.3,
-                "ortg_away": 108.1,
-                "drtg_home": 105.0,
-                "drtg_away": 110.5,
-                "tpct_home": 0.365,
-                "tpct_away": 0.342,
                 # P1-B2: rest_days <= 1 treated as back-to-back
                 "b2b_home": rest_home is not None and float(rest_home) <= 1.0,
                 "b2b_away": rest_away is not None and float(rest_away) <= 1.0,
@@ -338,6 +330,18 @@ class NBAAdapter:
                 raw["custom"]["injury_impact_away"] = float(inj_a)
         except Exception:  # noqa: BLE001
             logger.debug("NBA injury enrich skipped", exc_info=True)
+        try:
+            from app.sports.basketball.nba_team_ratings import ratings_for_team
+
+            home_r = ratings_for_team(home_name)
+            away_r = ratings_for_team(away_name)
+            if home_r is not None and away_r is not None:
+                raw["custom"]["ortg_home"] = float(home_r["ortg"])
+                raw["custom"]["drtg_home"] = float(home_r["drtg"])
+                raw["custom"]["ortg_away"] = float(away_r["ortg"])
+                raw["custom"]["drtg_away"] = float(away_r["drtg"])
+        except Exception:  # noqa: BLE001
+            logger.debug("NBA team ratings enrich skipped", exc_info=True)
         return raw
 
     def _compute_form(self, team_name: str, as_of: datetime | None = None) -> float:

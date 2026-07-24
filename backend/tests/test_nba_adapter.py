@@ -228,3 +228,53 @@ class TestNBAAdapterInjuryImpact:
         assert "injury_impact_away" not in raw["player"]
         assert "injury_impact_home" not in raw["custom"]
         assert "injury_impact_away" not in raw["custom"]
+
+
+class TestNBAAdapterTeamRatings:
+    def test_fetch_all_data_injects_ortg_drtg_for_known_teams(self):
+        adapter = NBAAdapter()
+        with patch.object(adapter, "_fetch_elo_ratings", return_value={}), \
+             patch.object(adapter, "_compute_form", return_value=0.5), \
+             patch.object(adapter, "_compute_rest_days", return_value=2):
+            raw = adapter.fetch_all_data(_make_match())  # BOS vs LAL
+
+        from app.sports.basketball.nba_team_ratings import ratings_for_team
+
+        bos = ratings_for_team("Boston Celtics")
+        lal = ratings_for_team("Los Angeles Lakers")
+        assert bos is not None and lal is not None
+        assert raw["custom"]["ortg_home"] == pytest.approx(bos["ortg"])
+        assert raw["custom"]["drtg_home"] == pytest.approx(bos["drtg"])
+        assert raw["custom"]["ortg_away"] == pytest.approx(lal["ortg"])
+        assert raw["custom"]["drtg_away"] == pytest.approx(lal["drtg"])
+        # Global stubs removed
+        assert "pace_home" not in raw["custom"]
+        assert "tpct_home" not in raw["custom"]
+
+    def test_fetch_all_data_omits_ratings_when_unknown_teams(self):
+        adapter = NBAAdapter()
+        unknown = MatchIdentity(
+            match_id="nba-999",
+            season=SeasonIdentity(competition=_NBA, season_key="2024-25"),
+            stage="regular_season",
+            round=None,
+            home=TeamIdentity(code="XXX", name="Fake Home FC", competition=_NBA),
+            away=TeamIdentity(code="YYY", name="Fake Away FC", competition=_NBA),
+            kickoff_utc=datetime(2024, 12, 25, tzinfo=timezone.utc),
+        )
+        with patch.object(adapter, "_fetch_elo_ratings", return_value={}), \
+             patch.object(adapter, "_compute_form", return_value=0.5), \
+             patch.object(adapter, "_compute_rest_days", return_value=2):
+            raw = adapter.fetch_all_data(unknown)
+
+        for key in (
+            "ortg_home",
+            "drtg_home",
+            "ortg_away",
+            "drtg_away",
+            "pace_home",
+            "pace_away",
+            "tpct_home",
+            "tpct_away",
+        ):
+            assert key not in raw["custom"], key

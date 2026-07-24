@@ -114,3 +114,14 @@ class TestEngineRegistry:
         reg.register(_NamedEngine("football_only", ["football"]))
         with pytest.raises(KeyError, match="No engine supports sport"):
             reg.select("auto", sport="lol")
+
+    def test_select_auto_prefers_specific_over_wildcard(self):
+        """Wildcard elo_odds must not shadow sport-specific engines on auto."""
+        reg = EngineRegistry()
+        reg.register(_NamedEngine("elo_odds", ["*"]))
+        reg.register(_NamedEngine("baseball", ["baseball"]))
+        reg.register(_NamedEngine("basketball", ["basketball"]))
+        assert reg.select("auto", sport="baseball", competition="mlb").name() == "baseball"
+        assert reg.select("auto", sport="basketball", competition="nba").name() == "basketball"
+        # Football with only wildcard still works
+        assert reg.select("auto", sport="football", competition="epl").name() == "elo_odds"

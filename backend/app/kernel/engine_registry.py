@@ -66,12 +66,23 @@ class EngineRegistry:
                 f"(competition={competition!r}). Registered: {available}"
             )
 
+        # Prefer sport-specific engines over wildcard ("*") when both match.
+        # Otherwise elo_odds (registered first, supported_sports=["*"]) always
+        # wins auto for NBA/MLB/NHL even when dedicated engines exist.
+        resolved = self._resolve_sport(sport, competition)
+        specific = {
+            name: eng
+            for name, eng in candidates.items()
+            if self._engine_is_sport_specific(eng, resolved)
+        }
+        pool = specific if specific else candidates
+
         # Dynamic selection via LearningService (sport-filtered)
         if self._learning_service is not None:
             best_engine = None
             best_accuracy = -1.0
             min_samples = config.settings.MIN_SAMPLES_FOR_ENGINE_SELECT
-            for name, engine in candidates.items():
+            for name, engine in pool.items():
                 score = self._learning_service.engine_score(name, competition)
                 if score and score.sample_count >= min_samples:
                     if score.accuracy > best_accuracy:
@@ -80,11 +91,11 @@ class EngineRegistry:
             if best_engine is not None:
                 return best_engine
 
-        # First registered compatible engine (stable order)
+        # First registered engine in preferred pool (stable order)
         for name in self._engines:
-            if name in candidates:
-                return candidates[name]
-        return next(iter(candidates.values()))
+            if name in pool:
+                return pool[name]
+        return next(iter(pool.values()))
 
     def _resolve_sport(
         self,
@@ -113,6 +124,18 @@ class EngineRegistry:
         except Exception:  # pragma: no cover
             sports = ["*"]
         return "*" in sports or sport in sports
+
+    def _engine_is_sport_specific(
+        self, engine: PredictionEngine, sport: str | None,
+    ) -> bool:
+        """True if engine lists *sport* explicitly (not only via wildcard)."""
+        if not sport:
+            return False
+        try:
+            sports = list(engine.supported_sports())
+        except Exception:  # pragma: no cover
+            return False
+        return sport in sports
 
     def _sport_candidates(
         self,

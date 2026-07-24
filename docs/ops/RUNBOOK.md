@@ -295,6 +295,150 @@ To populate Kernel league lists (`GET /api/predictions/matches?competition=epl`)
    `synced=2814` (~8s). Same day list non-empty; `days_ahead=7` ~100+;
    `days_ahead=45` ~600+. No vendor API key required.
 
+### NHL (Phase 5 / api-web.nhle.com)
+
+1. `PHASE5_NHL_ENABLED=true` in `backend/.env` (no API key — official free web API).
+2. Restart API so `nhl-` registers (`GET /api/betting/status` → prefixes).
+3. Sync (write key; one request per club for preferred season, ~30–40s polite 1 req/s):
+   ```bash
+   curl -s -X POST \
+     -H "X-API-Key: $API_WRITE_KEY" \
+     "$BASE/api/predictions/schedule/sync?competition=nhl"
+   ```
+4. List:
+   ```bash
+   curl -s "$BASE/api/predictions/matches?competition=nhl&days_ahead=45"
+   curl -s "$BASE/api/predictions/matches?competition=nhl&days_ahead=60"
+   ```
+
+   Season key is `YYYYYYYY` (e.g. `20262027` for 2026-27). Prefer current
+   calendar preferred key, then fall back one season if club schedules are
+   empty. Bulk path is `/v1/club-schedule-season/{abbrev}/{season}` (not
+   `/v1/schedule/{season}` — that path 404s). Team names come from
+   `placeName` + `commonName`; scores from `homeTeam.score` /
+   `awayTeam.score`; finished states include `OFF` / `FINAL`.
+
+   Local verification (2026-07-23): `synced=1409` (~2.5 min with SSL
+   retries) for **20262027**. Preseason openers from 2026-09-19 through
+   regular season Apr 2027. Mid-July: `days_ahead=45` correctly **0**
+   (openers ~58d out); `days_ahead=60` ~19 preseason rows.
+
+### Phase 9 historical ingest + Elo seed (NBA / MLB / NHL)
+
+Prerequisite: `PHASE9_ACCURACY_SPRINT_ENABLED=true` and write key. Schedule
+sync alone fills `kernel_match_fixtures` (often without results/Elo);
+historical ingest + backfill/seed fill `kernel_match_results` and
+`kernel_elo_ratings` for backtests.
+
+1. **Ingest finished seasons** (API or Python):
+   ```bash
+   # NHL example — two completed seasons (label "YYYY-YY"; client expands to YYYYYYYY)
+   curl -s -X POST -H "Content-Type: application/json" \
+     -H "X-API-Key: $API_WRITE_KEY" \
+     -d '{"sport":"nhl","seasons":["2023-24","2024-25"]}' \
+     "$BASE/api/sport-optimization/ingest"
+   ```
+   ```bash
+   # From backend/
+   python -c "
+   import asyncio
+   from app.kernel.kernel_db import init_kernel_db
+   from app.services.historical_data_ingestor import HistoricalDataIngestor
+   init_kernel_db()
+   ing = HistoricalDataIngestor()
+   async def main():
+       for season in ['2023-24', '2024-25']:
+           print(await ing.ingest_season('nhl', season))
+   asyncio.run(main())
+   "
+   ```
+   Season labels: NBA/NHL `"2023-24"`; MLB calendar year `"2024"`. NHL API
+   season key is eight digits (`20232024`); ingestor converts from `"2023-24"`.
+
+2. **Backfill results + seed Elo** (idempotent; also covers adapter-only scores):
+   ```bash
+   curl -s -X POST -H "Content-Type: application/json" \
+     -H "X-API-Key: $API_WRITE_KEY" \
+     -d '{"sport":"nhl","backfill":true,"seed_elo":true}' \
+     "$BASE/api/sport-optimization/backfill-seed"
+   ```
+   ```bash
+   python scripts/seed_sport_elo.py --sport nhl
+   # or: --sport all | --backfill-only | --seed-only
+   ```
+
+3. **Verify counts** (local SQLite / kernel DB, 2026-07-24):
+
+   | Sport | Historical seasons | Scored/results | Elo teams |
+   |-------|--------------------|----------------|-----------|
+   | NBA | 2023-24, 2024-25 (+ 2025-26 sync) | **3962** | **30** |
+   | MLB | 2024, 2025 (+ 2026 sync) competitive only | **6803** | **30** |
+   | NHL | 2023-24, 2024-25 (+ 20262027 sync) | **3014** | **34** |
+
+   Example MLB seasons labels are calendar years (`"2024"`); NBA/NHL use
+   `"YYYY-YY"`. Top Elo after multi-season replay should look sensible.
+
+Notes:
+- Upcoming-only seasons (e.g. NHL `20262027` mid-summer) contribute
+  fixtures with **no scores** — Elo seed uses finished games only.
+- Re-run ingest is upsert/idempotent; seed replaces Elo rows per competition.
+- MLB ingest/sync **drops** spring training / All-Star / exhibition
+  (`gameType` not in R/D/L/F/W/P). `Oakland Athletics` is stored as
+  `Athletics` so Elo spans the franchise rename.
+
+### Phase 9 Optuna parameter optimization
+
+Prerequisite: historical fixtures+results loaded (see section above).
+`PHASE9_ACCURACY_SPRINT_ENABLED=true` for HTTP API; CLI works without it.
+
+1. **Offline CLI** (from `backend/`):
+   ```bash
+   python scripts/run_phase9_optimize.py --sport nba --n-trials 80
+   python scripts/run_phase9_optimize.py --sport all --n-trials 80
+   ```
+   Chronological 80/20 split; Optuna TPE maximizes
+   `0.5*accuracy + 0.3*(1-brier) + 0.2*(1-mae)`. Best set is upserted as
+   `status=candidate` in `kernel_optimized_params` (same sport/competition
+   re-run updates the existing candidate row in place).
+   Loader fills **as-of rest/form** from fixtures (not flat 2.0/0.5).
+   Unknown rest is `None` (factor unavailable). Re-run Optuna after this
+   change before trusting new weights; do not auto-apply.
+
+2. **HTTP** (write key):
+   ```bash
+   curl -s -X POST -H "Content-Type: application/json" \
+     -H "X-API-Key: $API_WRITE_KEY" \
+     -d '{"sport":"nba","n_trials":80}' \
+     "$BASE/api/sport-optimization/run"
+   # poll: GET /api/sport-optimization/status/{task_id}
+   # list: GET /api/sport-optimization/params
+   ```
+
+3. **Local result snapshot (2026-07-24, 80 trials, re-run confirmed)**:
+
+   | Sport | Train/Test | Baseline acc | Best acc | Best score | Params id | Status |
+   |-------|------------|--------------|----------|------------|-----------|--------|
+   | NBA | 3170 / 792 | 0.684 | **0.700** | 0.693 | 4 | **applied** 2026-07-24 |
+   | NHL | 2411 / 603 | 0.605 | **0.630** | 0.651 | 3 | **applied** 2026-07-24 |
+   | MLB | 5442 / 1361 | 0.525 | **0.533** | 0.592 | 2 | **applied** 2026-07-24 |
+
+4. **Apply** (manual; does not auto-deploy):
+   ```bash
+   # CLI (same process as store.apply)
+   # HTTP (write key + Phase 9 flag):
+   curl -s -X POST -H "X-API-Key: $API_WRITE_KEY" \
+     "$BASE/api/sport-optimization/apply/4"
+   ```
+   - Marks row `status=applied`, archives previous applied for that sport
+   - Updates `KernelFactor` via `FactorRegistry.update_weight(..., source="optimized")`
+   - **Does not** change runtime Elo HFA/K (still settings-driven)
+   - **Restart the API** after apply: `_get_kernel` caches `FactorRegistry` in
+     process memory at first request; apply writes DB only. Restart (or recreate
+     the process) so prediction engines load the new weights.
+   - Applied set (2026-07-24): NBA **4**, NHL **3**, MLB **2**
+   - Verified 2026-07-24 after restart: API `:8000` up, `kernel_ready=true`,
+     14 `KernelFactor` rows with `source=optimized` match applied candidates
+
 ### NBA (Phase 4 / balldontlie)
 
 1. `PHASE4_NBA_ENABLED=true` and non-empty `BALLDONTLIE_API_KEY` in `backend/.env`.

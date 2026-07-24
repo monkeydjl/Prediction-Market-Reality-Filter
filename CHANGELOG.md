@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### Rest/form as-of features (Phase 9 follow-up)
+- `sports/_shared/rest_form.py`: leakage-safe form L10 + rest days
+- `match_loader` uses enrich (no flat defaults)
+- NBA/MLB/NHL adapters: unknown rest → None; form as-of kickoff
+
+### Phase 9 Optuna offline optimize + apply (P1-A3 / P1-A4)
+- Ran 80-trial TPE for NBA/MLB/NHL on chronological 80/20 split
+- Baseline → best accuracy: NBA 68.4%→**69.95%**, NHL 60.5%→**63.02%**, MLB 52.5%→**53.27%**
+- `save_candidate` upserts the existing `candidate` row in place (UNIQUE sport/competition/status)
+- **Applied 2026-07-24** (manual review): NBA id=4, NHL id=3, MLB id=2 → `status=applied`;
+  FactorRegistry competition weights updated (`source=optimized`)
+- Apply writes **factor weights only** (not runtime Elo HFA/K — those stay in settings);
+  engine extra factors (net_rating/injury/park/etc.) keep prior defaults and join fusion
+- CLI: `python scripts/run_phase9_optimize.py --sport all --n-trials 80`
+
+### NBA/MLB historical ingest + MLB competitive filter (Phase 9 / P1-A1)
+- NBA ingest **2023-24** (1319) + **2024-25** (1321); scored/results **3962**; Elo **30** teams
+- MLB ingest **2024** (2473) + **2025** (2477) competitive only; scored/results **6803**; Elo **30** teams
+- `parse_mlb_game`: skip non-competitive `gameType` (S/A/E…); keep R + postseason
+- Canonicalize `Oakland Athletics` → `Athletics` for stable multi-season Elo keys
+
+### NHL historical ingest + Elo seed (Phase 9 / P1-A1)
+- Ingested NHL **2023-24** (1511) + **2024-25** (1504) via club-schedule season keys
+- `kernel_match_results` scored/results **3014**; `kernel_elo_ratings` **34** teams
+- Season label `"YYYY-YY"` → NHL API `YYYYYYYY` in HistoricalDataIngestor
+- RUNBOOK: Phase 9 ingest + `/backfill-seed` + `scripts/seed_sport_elo.py`
+
+### NHL real sync verified (local)
+- Club-season bulk + nested name parse → **1409** fixtures (2026-27)
+- d45 empty mid-summer OK; d60 shows Sep preseason openers
+- Transient SSL/timeout retries on api-web.nhle.com
+
+### NHL real sync path (Phase 5 / api-web.nhle.com)
+- Club-season bulk fetch (`/v1/club-schedule-season/{abbrev}/{season}`) + dedupe
+- Parse official nested `placeName`/`commonName` + `team.score`; `OFF` finished
+- Prefer upcoming season key then fallback; follow redirects; RUNBOOK steps
+
 ### MLB real sync verified (local)
 - Nested team parse fix → `synced=2814`; d7/d45 show live 2026 games
 

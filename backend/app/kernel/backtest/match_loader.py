@@ -9,12 +9,14 @@ def load_sport_matches_for_backtest(sport: str) -> list[dict[str, Any]]:
 
     Joins kernel_match_fixtures with kernel_match_results for the given
     competition/sport code (nba / mlb / nhl). Matches without scores are skipped.
+    Rest/form are leakage-safe as-of features (not flat defaults).
     """
     from app.kernel.kernel_db import (
         KernelMatchFixture,
         KernelMatchResult,
         get_kernel_session,
     )
+    from app.sports._shared.rest_form import enrich_matches_rest_form
 
     session = get_kernel_session()
     try:
@@ -32,7 +34,6 @@ def load_sport_matches_for_backtest(sport: str) -> list[dict[str, Any]]:
             if result.home_score is None or result.away_score is None:
                 continue
             season_raw = fixture.season or "0"
-            # EloTimeMachine expects comparable season keys; int year when possible
             try:
                 season_key: int | str = int(str(season_raw).split("-")[0])
             except (TypeError, ValueError):
@@ -47,13 +48,10 @@ def load_sport_matches_for_backtest(sport: str) -> list[dict[str, Any]]:
                 "is_playoff": (fixture.stage or "").lower() in {
                     "playoff", "playoffs", "postseason",
                 },
-                "rest_days_home": 2.0,
-                "rest_days_away": 2.0,
-                "form_home": 0.5,
-                "form_away": 0.5,
                 "kickoff_utc": fixture.kickoff_utc,
             })
 
+        matches = enrich_matches_rest_form(matches)
         matches.sort(
             key=lambda m: (
                 m["season"],
@@ -61,7 +59,6 @@ def load_sport_matches_for_backtest(sport: str) -> list[dict[str, Any]]:
                 m["match_id"],
             ),
         )
-        # Strip non-serializable helper fields used only for sort
         for m in matches:
             m.pop("kickoff_utc", None)
         return matches

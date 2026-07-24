@@ -3,6 +3,8 @@
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
+import pytest
+
 from app.kernel.domain import (
     SportIdentity, CompetitionIdentity, SeasonIdentity,
     TeamIdentity, MatchIdentity, MatchOutcome,
@@ -188,3 +190,41 @@ class TestNBAAdapterFetchOutcome:
         assert result is not None
         assert result.home_score == 114
         assert result.outcome == "home_win"
+
+
+class TestNBAAdapterInjuryImpact:
+    def test_fetch_all_data_dual_writes_example_teams(self):
+        """Boston/Lakers example static Outs inject player + custom impacts."""
+        adapter = NBAAdapter()
+        with patch.object(adapter, "_fetch_elo_ratings", return_value={}), \
+             patch.object(adapter, "_compute_form", return_value=0.5), \
+             patch.object(adapter, "_compute_rest_days", return_value=2):
+            match = _make_match()  # Boston Celtics vs Los Angeles Lakers
+            raw = adapter.fetch_all_data(match)
+
+        assert raw["player"]["injury_impact_home"] == pytest.approx(0.35)
+        # Lakers: starter 0.18 + rotation 0.08 = 0.26
+        assert raw["player"]["injury_impact_away"] == pytest.approx(0.26)
+        assert raw["custom"]["injury_impact_home"] == pytest.approx(0.35)
+        assert raw["custom"]["injury_impact_away"] == pytest.approx(0.26)
+
+    def test_fetch_all_data_omits_injury_when_unknown_teams(self):
+        adapter = NBAAdapter()
+        unknown = MatchIdentity(
+            match_id="nba-999",
+            season=SeasonIdentity(competition=_NBA, season_key="2024-25"),
+            stage="regular_season",
+            round=None,
+            home=TeamIdentity(code="XXX", name="Fake Home FC", competition=_NBA),
+            away=TeamIdentity(code="YYY", name="Fake Away FC", competition=_NBA),
+            kickoff_utc=datetime(2024, 12, 25, tzinfo=timezone.utc),
+        )
+        with patch.object(adapter, "_fetch_elo_ratings", return_value={}), \
+             patch.object(adapter, "_compute_form", return_value=0.5), \
+             patch.object(adapter, "_compute_rest_days", return_value=2):
+            raw = adapter.fetch_all_data(unknown)
+
+        assert "injury_impact_home" not in raw["player"]
+        assert "injury_impact_away" not in raw["player"]
+        assert "injury_impact_home" not in raw["custom"]
+        assert "injury_impact_away" not in raw["custom"]

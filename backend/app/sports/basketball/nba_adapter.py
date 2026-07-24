@@ -325,6 +325,19 @@ class NBAAdapter:
             )
         except Exception:  # noqa: BLE001
             logger.debug("NBA liquidity enrich skipped", exc_info=True)
+        try:
+            from app.sports.basketball.nba_injury import injury_impact_for_team
+
+            inj_h = injury_impact_for_team(home_name)
+            inj_a = injury_impact_for_team(away_name)
+            if inj_h is not None:
+                raw["player"]["injury_impact_home"] = float(inj_h)
+                raw["custom"]["injury_impact_home"] = float(inj_h)
+            if inj_a is not None:
+                raw["player"]["injury_impact_away"] = float(inj_a)
+                raw["custom"]["injury_impact_away"] = float(inj_a)
+        except Exception:  # noqa: BLE001
+            logger.debug("NBA injury enrich skipped", exc_info=True)
         return raw
 
     def _compute_form(self, team_name: str, as_of: datetime | None = None) -> float:

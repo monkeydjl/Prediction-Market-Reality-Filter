@@ -107,12 +107,15 @@ class TestBasketballEnginePredict:
         assert "form" in factor_ids
 
     def test_contribution_item_predicted_outcome_is_binary(self):
-        """Each ContributionItem.predicted_outcome is home_win or away_win."""
+        """Each available ContributionItem.predicted_outcome is home_win or away_win."""
         engine = BasketballEngine()
         features = _make_features()
         result = engine.predict(features, features.match)
         for item in result.explanation:
-            assert item.predicted_outcome in ("home_win", "away_win")
+            if item.available:
+                assert item.predicted_outcome in ("home_win", "away_win")
+            else:
+                assert item.predicted_outcome is None
 
     def test_no_elo_fallback(self):
         """When Elo is None, engine still produces valid prediction."""
@@ -170,4 +173,58 @@ class TestBasketballPlayoffStage:
         assert hc_reg.weight > 0
         # p_home_court lower in playoff
         assert "0.55" in hc_po.detail
+
+
+class TestBasketballEngineInjury:
+    def test_injury_factor_available_when_both_impacts_set(self):
+        engine = BasketballEngine()
+        base = _make_features()
+        features = FeatureSet(
+            match=base.match,
+            general=base.general,
+            team=base.team,
+            market=base.market,
+            player=PlayerFeatures(None, None, 0.35, 0.10),
+            environment=base.environment,
+            custom=base.custom,
+            data_quality=base.data_quality,
+            quality_notes=base.quality_notes,
+            feature_version=base.feature_version,
+        )
+        result = engine.predict(features, features.match)
+        inj = next(e for e in result.explanation if e.factor == "injury")
+        assert inj.available is True
+        assert 0.0 < result.outcome_probabilities["home_win"] < 1.0
+
+    def test_custom_injury_fallback_shifts_home_win(self):
+        """Higher home injury_impact lowers home_win vs the reverse case."""
+        engine = BasketballEngine()
+        base = _make_features()
+        low_home_inj = FeatureSet(
+            match=base.match,
+            general=base.general,
+            team=base.team,
+            market=base.market,
+            player=PlayerFeatures(None, None, None, None),
+            environment=base.environment,
+            custom={**base.custom, "injury_impact_home": 0.0, "injury_impact_away": 0.4},
+            data_quality=base.data_quality,
+            quality_notes=base.quality_notes,
+            feature_version=base.feature_version,
+        )
+        high_home_inj = FeatureSet(
+            match=base.match,
+            general=base.general,
+            team=base.team,
+            market=base.market,
+            player=PlayerFeatures(None, None, None, None),
+            environment=base.environment,
+            custom={**base.custom, "injury_impact_home": 0.4, "injury_impact_away": 0.0},
+            data_quality=base.data_quality,
+            quality_notes=base.quality_notes,
+            feature_version=base.feature_version,
+        )
+        p_low = engine.predict(low_home_inj, low_home_inj.match).outcome_probabilities["home_win"]
+        p_high = engine.predict(high_home_inj, high_home_inj.match).outcome_probabilities["home_win"]
+        assert p_low > p_high
 

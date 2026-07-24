@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### NBA static injury impact (P1-B1)
+- `nba_injury`: Out-only role weights (star/starter/rotation/bench) → `injury_impact` in [0,1]
+- Adapter dual-writes `player` + `custom` when static table has Out rows; missing → None
+- FeatureBuilder passthrough; BasketballEngine formula/weight unchanged
+
 ### MLB full 30-team static park factors (P1-M2)
 - Expand `_PARK_FACTORS` to all 30 franchises (+ Athletics alias)
 - Runs-only soft signal; engine park formula/weight unchanged

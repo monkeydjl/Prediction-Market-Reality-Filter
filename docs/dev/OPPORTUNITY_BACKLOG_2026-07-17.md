@@ -182,7 +182,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 
 | ID | 项 |
 |----|-----|
-| P1-B1 | ✅ 部分 2026-07-20：BasketballEngine soft `injury`（player/custom impact）；真名单源仍待接 |
+| P1-B1 | ✅ 部分 2026-07-24：静态 Out 名单 + 角色加权 `injury_impact_*`（adapter player/custom 双写 + FeatureBuilder 透传）；真实时名单源仍待 |
 | P1-B2 | ✅ 部分 2026-07-20：`b2b_home/away` + BasketballEngine rest 额外惩罚 |
 | P1-B3 | ✅ 部分 2026-07-20：`team_geo` + adapter 注入 `travel_km_away`/时区 + BasketballEngine `travel` |
 | P1-B4 | ✅ 部分 2026-07-20：BasketballEngine `net_rating`（ORtg/DRtg） |

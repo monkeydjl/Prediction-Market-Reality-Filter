@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Elo HFA/K runtime wiring (Phase 9 follow-up)
+- `kernel/elo_params_resolve.py`: applied Optuna `elo_params` overlay settings
+- Engines (NBA/MLB/NHL) use resolved HFA; NBA playoff split only when no applied
+- `_elo_params_for_sport` / `seed_elo_ratings` use applied K/carry/initial
+- `apply(..., reseed_elo=True)` re-seeds Elo + `reset_kernel_singleton()`
+- Re-seeded ratings for applied NBA **5** / MLB **6** / NHL **7**
+- Holdout: applied Elo beats settings Elo by **+3.0 / +1.2 / +3.3pp** (NBA/MLB/NHL)
+- `scripts/eval_applied_params.py` for applied vs settings Elo comparison
+- Re-applied NBA **5** so registry `elo`/`form` match candidate (were stale 0.50/0.15)
+
 ### Rest/form as-of features (Phase 9 follow-up)
 - `sports/_shared/rest_form.py`: leakage-safe form L10 + rest days
 - `match_loader` uses enrich (no flat defaults)
@@ -14,7 +24,7 @@
 - Ran 80-trial TPE for NBA/MLB/NHL on chronological 80/20 split
 - First pass (flat rest/form): NBA **69.95%**, NHL **63.02%**, MLB **53.27%** → applied 4/3/2
 - `save_candidate` upserts the existing `candidate` row in place (UNIQUE sport/competition/status)
-- Apply writes **factor weights only** (not runtime Elo HFA/K — those stay in settings);
+- Apply writes factor weights + (after Elo wiring) re-seeds HFA/K from applied row;
   engine extra factors (net_rating/injury/park/etc.) keep prior defaults and join fusion
 - CLI: `python scripts/run_phase9_optimize.py --sport all --n-trials 80`
 

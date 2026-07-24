@@ -70,11 +70,9 @@ class BasketballEngine:
     def predict(self, features: FeatureSet, match: MatchIdentity) -> PredictionResult:
         competition = match.season.competition.code
         playoff = _is_playoff_stage(match.stage)
-        hfa = (
-            config.settings.NBA_ELO_HFA_PLAYOFF
-            if playoff
-            else config.settings.NBA_ELO_HFA
-        )
+        from app.kernel.elo_params_resolve import resolve_nba_hfa
+
+        hfa = resolve_nba_hfa(playoff=playoff)
         league_avg = config.settings.NBA_LEAGUE_AVG_TOTAL
         home_court_prob = (
             float(config.settings.NBA_HOME_COURT_PLAYOFF)

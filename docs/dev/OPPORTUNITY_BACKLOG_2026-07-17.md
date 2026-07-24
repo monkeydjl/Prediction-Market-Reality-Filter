@@ -157,10 +157,10 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 | ID | 项 | 现状 | 建议 |
 |----|-----|------|------|
 | P1-A1 | 历史数据 ingest | ✅ 2026-07-24：NBA 2023-24+2024-25（3962）；MLB 2024+2025 正赛/季后赛（6803）；NHL 2023-24+2024-25（3014） | 运营侧可再补更早赛季；校验 `kernel_match_*` |
-| P1-A2 | EloTimeMachine 回放 | ✅ 2026-07-24：三盟 `seed_elo_ratings` 已写（NBA/MLB 30 队、NHL 34 队） | 基线参数回放验收 → 再跑 Phase9 Optuna |
+| P1-A2 | EloTimeMachine 回放 | ✅ 2026-07-24：三盟 `seed_elo_ratings` 已写；applied K/HFA 重播后 basketball 33 / baseball 30 / hockey 34 | holdout 验收见 A4 |
 | P1-A3 | Optuna 批量调参 | ✅ 2026-07-24：flat 特征 80 trials + **as-of rest/form 再 80 trials**；新结果 NBA 70.24% / MLB 54.22% / NHL 62.35%；`save_candidate` upsert 修复 UNIQUE；`rest_form.py` + match_loader + adapters 已落地 | 可加 trials / 赛季；勿自动 apply |
-| P1-A4 | apply 优化参数 | ✅ 2026-07-24：as-of 重跑后 apply NBA **5** / MLB **6** / NHL **7**；旧 4/3/2 已 archive；FactorRegistry `source=optimized` 14 行 + API 重启 | 监控线上准确率；Elo HFA/K 仍走 settings（未接线） |
-| P1-A5 | 打开学习闭环 | `PHASE3_LEARNING_ENABLED` 默认 OFF | 有足够 settled 后再开；监控权重漂移 |
+| P1-A4 | apply 优化参数 | ✅ 2026-07-24：NBA **5**/MLB **6**/NHL **7**；Elo HFA/K 接线 + re-seed；holdout applied vs settings Elo **+3.0/+1.2/+3.3pp**；NBA registry elo/form 已 re-apply 对齐 | 监控线上准确率；`eval_applied_params.py` |
+| P1-A5 | 打开学习闭环 | ⏸ 暂缓：`PHASE3_LEARNING` OFF；kernel 仅 8 predictions / 1 outcome（&lt; MIN_SAMPLES=10） | 先积累 settled 预测样本，再开 EWMA；勿与 Optuna 权重冲突 |
 | P1-A6 | 足球历史回测 | Phase 9 **明确不做**（ClubElo 无历史） | 另立「足球 Elo 时间机」项目：自有 K/HFA 回放 international_results.csv |
 
 ### 3.4 各体育因子增强清单

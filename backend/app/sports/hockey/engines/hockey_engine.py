@@ -71,7 +71,9 @@ class HockeyEngine:
 
     def predict(self, features: FeatureSet, match: MatchIdentity) -> PredictionResult:
         competition = match.season.competition.code
-        hfa = config.settings.NHL_ELO_HFA
+        from app.kernel.elo_params_resolve import resolve_elo_params
+
+        hfa = resolve_elo_params("nhl")["hfa"]
         league_avg = config.settings.NHL_LEAGUE_AVG_TOTAL
 
         # Get weights from FactorRegistry or fall back to defaults

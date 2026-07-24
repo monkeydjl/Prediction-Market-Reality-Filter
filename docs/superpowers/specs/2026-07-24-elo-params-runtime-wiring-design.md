@@ -1,6 +1,6 @@
 # Elo HFA/K Runtime Wiring (Phase 9 follow-up)
 
-> **Status:** Design draft 2026-07-24 (awaiting user review)  
+> **Status:** Implemented 2026-07-24  
 > **Approach:** A — shared `resolve_elo_params` (applied first, settings fallback)  
 > **Predecessor:** Optuna apply NBA5/MLB6/NHL7; rest/form as-of enrichment
 

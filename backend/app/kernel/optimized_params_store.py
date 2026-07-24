@@ -63,22 +63,36 @@ class OptimizedParamsStore:
         sample_count: int,
         trial_number: int | None = None,
     ) -> dict:
+        """Persist a candidate (upsert).
+
+        UniqueConstraint (sport, competition, status) allows at most one
+        ``candidate`` row per sport/competition, so re-runs update in place
+        rather than inserting a second candidate (which would collide when an
+        ``archived`` row already occupies that status slot).
+        """
         session = self._session_factory()
         try:
-            row = KernelOptimizedParams(
-                sport=sport,
-                competition=competition,
-                factor_weights=json.dumps(factor_weights),
-                elo_params=json.dumps(elo_params),
-                score=score,
-                accuracy=accuracy,
-                brier_score=brier_score,
-                mae=mae,
-                sample_count=sample_count,
-                trial_number=trial_number,
-                status="candidate",
+            row = (
+                session.query(KernelOptimizedParams)
+                .filter_by(sport=sport, competition=competition, status="candidate")
+                .first()
             )
-            session.add(row)
+            if row is None:
+                row = KernelOptimizedParams(
+                    sport=sport,
+                    competition=competition,
+                    status="candidate",
+                )
+                session.add(row)
+            row.factor_weights = json.dumps(factor_weights)
+            row.elo_params = json.dumps(elo_params)
+            row.score = score
+            row.accuracy = accuracy
+            row.brier_score = brier_score
+            row.mae = mae
+            row.sample_count = sample_count
+            row.trial_number = trial_number
+            row.created_at = datetime.now(timezone.utc)
             session.commit()
             session.refresh(row)
             return self._row_to_dict(row)
@@ -116,19 +130,28 @@ class OptimizedParamsStore:
         finally:
             session.close()
 
-    def apply(self, params_id: int) -> dict:
+    def apply(self, params_id: int, *, reseed_elo: bool = True) -> dict:
         session = self._session_factory()
         try:
             # Archive any currently-applied params for this sport/competition
             target = session.query(KernelOptimizedParams).filter_by(id=params_id).first()
             if target is None:
                 raise ValueError(f"Params id {params_id} not found")
+            sport = target.sport
             existing = (
                 session.query(KernelOptimizedParams)
                 .filter_by(sport=target.sport, competition=target.competition, status="applied")
                 .all()
             )
             previous_applied: dict[str, Any] | None = None
+            # At most one archived row per (sport, competition) due to UNIQUE.
+            # Free the slot before demoting a previous applied row.
+            if any(row.id != params_id for row in existing):
+                session.query(KernelOptimizedParams).filter_by(
+                    sport=target.sport,
+                    competition=target.competition,
+                    status="archived",
+                ).delete(synchronize_session=False)
             for row in existing:
                 if row.id != params_id:
                     if previous_applied is None:
@@ -141,6 +164,7 @@ class OptimizedParamsStore:
 
             # Update KernelFactor weights via FactorRegistry (spec §7.5 step 3)
             factor_weights = json.loads(target.factor_weights)
+            elo_params_raw = target.elo_params
             from app.kernel.factor_registry import FactorRegistry
             registry = FactorRegistry()
             for factor_id, weight in factor_weights.items():
@@ -164,10 +188,43 @@ class OptimizedParamsStore:
                 }
                 for k in keys
             ]
+
+            elo_params: dict[str, Any] | None = None
+            if elo_params_raw:
+                try:
+                    elo_params = (
+                        json.loads(elo_params_raw)
+                        if isinstance(elo_params_raw, str)
+                        else elo_params_raw
+                    )
+                except (TypeError, json.JSONDecodeError):
+                    elo_params = None
+
+            elo_seed: dict[str, Any]
+            if reseed_elo:
+                try:
+                    from app.services.historical_data_ingestor import HistoricalDataIngestor
+
+                    seed_result = HistoricalDataIngestor().seed_elo_ratings(sport=sport)
+                    elo_seed = {"ok": True, **(seed_result or {})}
+                except Exception as exc:  # noqa: BLE001
+                    elo_seed = {"ok": False, "error": str(exc)}
+            else:
+                elo_seed = {"ok": None, "skipped": True}
+
+            try:
+                from app.api.routes.predictions import reset_kernel_singleton
+
+                reset_kernel_singleton()
+            except Exception:  # noqa: BLE001
+                pass
+
             return {
                 "applied": applied,
                 "previous_applied": previous_applied,
                 "weight_diff": weight_diff,
+                "elo_params": elo_params,
+                "elo_seed": elo_seed,
             }
         except Exception:
             session.rollback()

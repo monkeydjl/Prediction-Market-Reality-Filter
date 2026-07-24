@@ -63,6 +63,12 @@ def normalize_competition_code(raw: str | None) -> str | None:
     return COMPETITION_ALIASES.get(key, key)
 
 
+def reset_kernel_singleton() -> None:
+    """Drop cached PredictionKernel so next request rebuilds FactorRegistry from DB."""
+    if hasattr(_get_kernel, "_instance"):
+        delattr(_get_kernel, "_instance")
+
+
 def _get_kernel():
     """Lazy-initialize the PredictionKernel singleton."""
     if not config.settings.KERNEL_PREDICTION_ENABLED:

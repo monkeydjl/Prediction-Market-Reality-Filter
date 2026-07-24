@@ -70,7 +70,9 @@ class BaseballEngine:
 
     def predict(self, features: FeatureSet, match: MatchIdentity) -> PredictionResult:
         competition = match.season.competition.code
-        hfa = config.settings.MLB_ELO_HFA
+        from app.kernel.elo_params_resolve import resolve_elo_params
+
+        hfa = resolve_elo_params("mlb")["hfa"]
         league_avg = config.settings.MLB_LEAGUE_AVG_TOTAL
 
         # Get weights from FactorRegistry or fall back to defaults

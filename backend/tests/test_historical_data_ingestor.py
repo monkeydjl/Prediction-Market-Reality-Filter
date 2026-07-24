@@ -87,3 +87,157 @@ async def test_mlb_ingest(ingestor):
         result = await ingestor.ingest_season("mlb", "2024")
     assert result["matches"] == 1
     assert result["results"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ingest_match_id_matches_adapter_format(ingestor):
+    """match_id must be sport-game_id (same as NBA/MLB/NHL adapters)."""
+    from app.kernel.kernel_db import KernelMatchFixture, KernelMatchResult, get_kernel_session
+
+    mock_games = [
+        {
+            "game_id": 18446819,
+            "home_team": "Oklahoma City Thunder",
+            "away_team": "Indiana Pacers",
+            "home_score": 125,
+            "away_score": 124,
+            "date": "2025-10-22T00:00:00+00:00",
+            "stage": "regular_season",
+            "status": "finished",
+        },
+    ]
+    with patch(
+        "app.services.historical_data_ingestor.fetch_nba_season_games",
+        new_callable=AsyncMock,
+        return_value=mock_games,
+    ):
+        await ingestor.ingest_season("nba", "2025-26")
+
+    session = get_kernel_session()
+    try:
+        fix = session.get(KernelMatchFixture, "nba-18446819")
+        res = session.get(KernelMatchResult, "nba-18446819")
+        assert fix is not None
+        assert res is not None
+        assert res.outcome == "home_win"
+        assert res.home_score == 125
+    finally:
+        session.close()
+
+
+def test_backfill_results_from_fixtures(ingestor):
+    """Scores on fixtures only → KernelMatchResult rows."""
+    from datetime import datetime, timezone
+
+    from app.kernel.kernel_db import (
+        KernelMatchFixture,
+        KernelMatchResult,
+        get_kernel_session,
+    )
+
+    session = get_kernel_session()
+    try:
+        now = datetime.now(timezone.utc)
+        session.add(
+            KernelMatchFixture(
+                match_id="nba-99",
+                competition="nba",
+                season="2025-26",
+                home_team="Lakers",
+                away_team="Celtics",
+                kickoff_utc=now,
+                stage="regular_season",
+                status="finished",
+                home_score=110,
+                away_score=100,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    out = ingestor.backfill_results_from_fixtures(sport="nba")
+    assert out["results"] == 1
+    assert len(out["errors"]) == 0
+
+    session = get_kernel_session()
+    try:
+        res = session.get(KernelMatchResult, "nba-99")
+        assert res is not None
+        assert res.home_score == 110
+        assert res.outcome == "home_win"
+    finally:
+        session.close()
+
+    # Idempotent
+    out2 = ingestor.backfill_results_from_fixtures(sport="nba")
+    assert out2["results"] == 0
+
+
+def test_seed_elo_ratings(ingestor):
+    """After results exist, seed_elo_ratings populates kernel_elo_ratings."""
+    from datetime import datetime, timezone
+
+    from app.kernel.kernel_db import (
+        KernelEloRating,
+        KernelMatchFixture,
+        KernelMatchResult,
+        get_kernel_session,
+    )
+
+    session = get_kernel_session()
+    try:
+        now = datetime.now(timezone.utc)
+        for mid, home, away, hs, aws in [
+            ("nba-1", "Lakers", "Celtics", 110, 100),
+            ("nba-2", "Celtics", "Lakers", 105, 100),
+        ]:
+            session.add(
+                KernelMatchFixture(
+                    match_id=mid,
+                    competition="nba",
+                    season="2025-26",
+                    home_team=home,
+                    away_team=away,
+                    kickoff_utc=now,
+                    stage="regular_season",
+                    status="finished",
+                    home_score=hs,
+                    away_score=aws,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                KernelMatchResult(
+                    match_id=mid,
+                    home_score=hs,
+                    away_score=aws,
+                    outcome="home_win" if hs > aws else "away_win",
+                    finished_at=now,
+                    created_at=now,
+                )
+            )
+        session.commit()
+    finally:
+        session.close()
+
+    out = ingestor.seed_elo_ratings(sport="nba")
+    assert out["teams"] == 2
+    assert len(out["errors"]) == 0
+    assert out["sports"]["nba"]["matches"] == 2
+
+    session = get_kernel_session()
+    try:
+        lakers = session.get(KernelEloRating, "Lakers")
+        celtics = session.get(KernelEloRating, "Celtics")
+        assert lakers is not None
+        assert celtics is not None
+        assert lakers.competition == "nba"
+        assert lakers.sport == "basketball"
+        assert 1400 < lakers.elo_rating < 1600
+        assert 1400 < celtics.elo_rating < 1600
+    finally:
+        session.close()

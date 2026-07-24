@@ -121,6 +121,47 @@ class TestParseMlbGame:
         assert parsed["stage"] == "regular_season"
         assert parsed["status"] == "finished"
 
+    def test_skips_spring_training_and_all_star(self):
+        """Non-competitive gameType (S/A/E/…) must not enter fixtures/Elo."""
+        spring = {
+            "gamePk": 1,
+            "gameType": "S",
+            "gameDate": "2024-03-01T20:00:00Z",
+            "teams": {
+                "home": {"team": {"name": "New York Yankees"}, "score": 3},
+                "away": {"team": {"name": "Boston Red Sox"}, "score": 2},
+            },
+            "status": {"abstractGameState": "Final"},
+        }
+        asg = {
+            "gamePk": 2,
+            "gameType": "A",
+            "gameDate": "2024-07-16T20:00:00Z",
+            "teams": {
+                "home": {"name": "American League All-Stars"},
+                "away": {"name": "National League All-Stars"},
+            },
+            "status": {"abstractGameState": "Final"},
+        }
+        assert parse_mlb_game(spring) is None
+        assert parse_mlb_game(asg) is None
+
+    def test_canonicalizes_oakland_athletics(self):
+        """Oakland Athletics rename collapses to Athletics for stable Elo keys."""
+        raw = {
+            "gamePk": 3,
+            "gameType": "R",
+            "gameDate": "2024-06-01T20:00:00Z",
+            "teams": {
+                "home": {"team": {"name": "Oakland Athletics"}, "score": 4},
+                "away": {"team": {"name": "Seattle Mariners"}, "score": 2},
+            },
+            "status": {"abstractGameState": "Final"},
+        }
+        parsed = parse_mlb_game(raw)
+        assert parsed is not None
+        assert parsed["home_team"] == "Athletics"
+
 
 class TestMLBAdapterGetMatchIdentity:
     @patch("app.sports.baseball.mlb_adapter.query_fixture")

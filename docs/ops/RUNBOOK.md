@@ -435,13 +435,29 @@ Prerequisite: historical fixtures+results loaded (see section above).
    ```
    - Marks row `status=applied`, archives previous applied for that sport
    - Updates `KernelFactor` via `FactorRegistry.update_weight(..., source="optimized")`
-   - **Does not** change runtime Elo HFA/K (still settings-driven)
-   - **Restart the API** after apply: `_get_kernel` caches `FactorRegistry` in
-     process memory at first request; apply writes DB only. Restart (or recreate
-     the process) so prediction engines load the new weights.
+   - **Also** drives runtime Elo HFA/K: `resolve_elo_params(sport)` overlays
+     applied `elo_params` onto settings; engines use applied HFA; seed uses
+     applied K/carry/initial
+   - Apply path calls `seed_elo_ratings(sport=...)` and `reset_kernel_singleton()`
+     so weights + Elo take effect without a manual restart (restart still fine)
+   - NBA playoff HFA: without applied → `NBA_ELO_HFA_PLAYOFF`; with applied →
+     single applied `hfa` for regular and playoff (Optuna parity)
+   - Manual re-seed (if ratings lag apply):  
+     `python scripts/seed_sport_elo.py --sport all --seed-only`
    - Applied set (as-of rest/form, 2026-07-24): NBA **5**, MLB **6**, NHL **7**
-   - Verified after restart: API `:8000` up; 14 `KernelFactor` rows
-     `source=optimized` match applied candidates
+   - Verified: 14 `KernelFactor` rows `source=optimized`; resolve HFA/K matches
+     applied 5/6/7; Elo re-seeded with applied K/carry
+   - Holdout re-eval (chronological 80/20, same weights; applied Elo vs settings Elo):
+
+     | Sport | Applied acc | Settings Elo acc | Δacc | Applied score |
+     |-------|-------------|------------------|------|---------------|
+     | NBA | **0.702** | 0.672 | **+3.0pp** | 0.695 |
+     | MLB | **0.542** | 0.531 | **+1.2pp** | 0.598 |
+     | NHL | **0.624** | 0.590 | **+3.3pp** | 0.645 |
+
+   - CLI: `python scripts/eval_applied_params.py`
+   - P1-A5 learning loop still **OFF**: only 8 kernel predictions / 1 outcome
+     (need ≥ `MIN_SAMPLES_FOR_CALIBRATION=10` joined samples per competition)
 
 ### NBA (Phase 4 / balldontlie)
 

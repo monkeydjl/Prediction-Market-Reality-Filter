@@ -58,6 +58,13 @@ class FactorRegistry:
         finally:
             session.close()
 
+    def reload_from_db(self) -> None:
+        """Clear in-memory factors and reload from KernelFactor table."""
+        self._factors.clear()
+        self._load_from_db()
+        if not self._factors:
+            self._init_default_factors()
+
     def _init_default_factors(self) -> None:
         """Register elo (0.30) and odds (0.70) as global defaults if DB is empty."""
         now = datetime.now(timezone.utc)

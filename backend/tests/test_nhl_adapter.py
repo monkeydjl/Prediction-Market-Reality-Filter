@@ -69,6 +69,8 @@ class TestParseNhlGame:
         assert parsed["away_team"] == "New York Rangers"
         assert parsed["stage"] == "regular_season"
         assert parsed["status"] == "finished"
+        assert parsed["home_score"] == 3
+        assert parsed["away_score"] == 2
 
     def test_parses_playoff_game_with_overtime(self):
         """Playoff game maps to 'playoff'; overtime/shootout flags captured."""
@@ -90,6 +92,72 @@ class TestParseNhlGame:
         assert parsed["status"] == "finished"
         assert parsed["went_to_overtime"] is True
         assert parsed["went_to_shootout"] is False
+
+    def test_parses_official_nested_place_common_name(self):
+        """api-web.nhle.com uses placeName + commonName + team.score."""
+        raw = {
+            "id": 2025020004,
+            "season": 20252026,
+            "startTimeUTC": "2025-10-08T23:00:00Z",
+            "gameType": 2,
+            "gameState": "OFF",
+            "venue": {"default": "Scotiabank Arena"},
+            "homeTeam": {
+                "id": 10,
+                "commonName": {"default": "Maple Leafs"},
+                "placeName": {"default": "Toronto"},
+                "abbrev": "TOR",
+                "score": 5,
+            },
+            "awayTeam": {
+                "id": 8,
+                "commonName": {"default": "Canadiens"},
+                "placeName": {"default": "Montréal"},
+                "abbrev": "MTL",
+                "score": 2,
+            },
+            "periodDescriptor": {
+                "number": 3,
+                "periodType": "REG",
+                "maxRegulationPeriods": 3,
+            },
+            "gameOutcome": {"lastPeriodType": "REG"},
+        }
+        parsed = parse_nhl_game(raw)
+        assert parsed is not None
+        assert parsed["match_id"] == "nhl-2025020004"
+        assert parsed["home_team"] == "Toronto Maple Leafs"
+        assert parsed["away_team"] == "Montreal Canadiens"
+        assert parsed["home_score"] == 5
+        assert parsed["away_score"] == 2
+        assert parsed["status"] == "finished"
+        assert parsed["stage"] == "regular_season"
+        assert parsed["venue"] == "Scotiabank Arena"
+        assert parsed["went_to_overtime"] is False
+
+    def test_parses_ot_from_period_descriptor(self):
+        raw = {
+            "id": 2025020999,
+            "startTimeUTC": "2025-11-01T00:00:00Z",
+            "gameType": 2,
+            "gameState": "FINAL",
+            "homeTeam": {
+                "placeName": {"default": "Boston"},
+                "commonName": {"default": "Bruins"},
+                "score": 3,
+            },
+            "awayTeam": {
+                "placeName": {"default": "Buffalo"},
+                "commonName": {"default": "Sabres"},
+                "score": 2,
+            },
+            "periodDescriptor": {"number": 4, "periodType": "OT"},
+            "gameOutcome": {"lastPeriodType": "OT"},
+        }
+        parsed = parse_nhl_game(raw)
+        assert parsed["went_to_overtime"] is True
+        assert parsed["went_to_shootout"] is False
+        assert parsed["status"] == "finished"
 
 
 class TestNHLAdapterGetMatchIdentity:
@@ -156,3 +224,51 @@ class TestNHLAdapterFetchOutcome:
         assert result is not None
         assert result.home_score == 3
         assert result.outcome == "home_win"
+
+
+class TestNHLAdapterSyncSchedule:
+    @patch("app.sports.hockey.nhl_adapter.save_fixture")
+    @patch("app.sports.hockey.nhl_adapter.fetch_nhl_schedule")
+    @patch("app.sports.hockey.nhl_adapter.config.settings")
+    def test_sync_uses_preferred_then_fallback_season(
+        self, mock_settings, mock_fetch, mock_save
+    ):
+        mock_settings.PHASE5_NHL_ENABLED = True
+        mock_fetch.side_effect = [
+            [],
+            [
+                {
+                    "id": 2025020001,
+                    "season": 20252026,
+                    "startTimeUTC": "2025-10-08T23:00:00Z",
+                    "gameType": 2,
+                    "gameState": "FUT",
+                    "homeTeam": {
+                        "placeName": {"default": "Toronto"},
+                        "commonName": {"default": "Maple Leafs"},
+                    },
+                    "awayTeam": {
+                        "placeName": {"default": "Montreal"},
+                        "commonName": {"default": "Canadiens"},
+                    },
+                }
+            ],
+        ]
+        adapter = NHLAdapter()
+        with patch.object(
+            adapter,
+            "_season_candidates",
+            return_value=["20262027", "20252026"],
+        ):
+            count = adapter.sync_schedule()
+        assert count == 1
+        assert mock_fetch.call_args_list[0].args[0] == "20262027"
+        assert mock_fetch.call_args_list[1].args[0] == "20252026"
+        mock_save.assert_called_once()
+        assert mock_save.call_args.args[1] == "nhl"
+        assert mock_save.call_args.args[2] == "20252026"
+
+    @patch("app.sports.hockey.nhl_adapter.config.settings")
+    def test_sync_disabled_returns_zero(self, mock_settings):
+        mock_settings.PHASE5_NHL_ENABLED = False
+        assert NHLAdapter().sync_schedule() == 0

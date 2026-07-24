@@ -47,6 +47,35 @@ async def ingest_historical_data(request: IngestRequest, _auth: None = Depends(r
     return results
 
 
+class BackfillSeedRequest(BaseModel):
+    sport: str = "all"  # "nba" / "mlb" / "nhl" / "all"
+    backfill: bool = True
+    seed_elo: bool = True
+
+
+@router.post("/backfill-seed")
+async def backfill_and_seed(
+    request: BackfillSeedRequest,
+    _auth: None = Depends(require_write_key),
+):
+    """Backfill KernelMatchResult from fixtures and/or seed KernelEloRating.
+
+    Use after schedule sync when fixtures have scores but results/Elo tables
+    are empty. Idempotent.
+    """
+    _check_enabled()
+    sport = None if request.sport == "all" else request.sport
+    if sport is not None and sport not in {"nba", "mlb", "nhl"}:
+        raise HTTPException(status_code=400, detail=f"Unsupported sport: {sport}")
+    ingestor = HistoricalDataIngestor()
+    out: dict = {}
+    if request.backfill:
+        out["backfill"] = ingestor.backfill_results_from_fixtures(sport=sport)
+    if request.seed_elo:
+        out["seed"] = ingestor.seed_elo_ratings(sport=sport)
+    return out
+
+
 @router.post("/run")
 async def run_optimization(request: OptimizationRequest, _auth: None = Depends(require_write_key)):
     """Trigger parameter optimization (async).

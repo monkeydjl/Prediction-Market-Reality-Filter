@@ -9,7 +9,13 @@ from app.kernel.domain import (
     TeamIdentity, MatchIdentity, MatchOutcome,
 )
 from app.kernel.protocols import DataAdapter
-from app.sports.baseball.mlb_adapter import MLBAdapter, parse_mlb_game
+from app.sports.baseball.mlb_adapter import (
+    MLBAdapter,
+    _MLB_TEAM_IDS,
+    _PARK_FACTORS,
+    _park_factor_for_team,
+    parse_mlb_game,
+)
 
 
 _BASEBALL = SportIdentity(code="baseball", name="Baseball")
@@ -348,3 +354,49 @@ class TestMLBAdapterFetchOutcome:
         assert result is not None
         assert result.home_score == 5
         assert result.outcome == "home_win"
+
+
+# Primary franchise names: unique team-id keys excluding pure aliases that
+# share an id with another canonical name. Athletics is primary; Oakland is alias.
+_PRIMARY_FRANCHISES = sorted(
+    {name for name, tid in _MLB_TEAM_IDS.items() if name != "Oakland Athletics"},
+    key=str,
+)
+
+
+class TestParkFactors:
+    def test_primary_franchises_are_thirty(self):
+        assert len(_PRIMARY_FRANCHISES) == 30
+
+    def test_every_primary_franchise_has_explicit_park_key(self):
+        missing = [n for n in _PRIMARY_FRANCHISES if n not in _PARK_FACTORS]
+        assert missing == [], f"missing park factors: {missing}"
+
+    def test_athletics_alias_matches_primary(self):
+        assert "Athletics" in _PARK_FACTORS
+        assert "Oakland Athletics" in _PARK_FACTORS
+        assert _PARK_FACTORS["Athletics"] == _PARK_FACTORS["Oakland Athletics"]
+
+    def test_all_primary_values_in_range(self):
+        for name in _PRIMARY_FRANCHISES:
+            pf = _PARK_FACTORS[name]
+            assert 0.90 <= pf <= 1.20, f"{name}={pf} out of range"
+
+    def test_coors_highest_or_tied(self):
+        coors = _PARK_FACTORS["Colorado Rockies"]
+        assert coors == max(_PARK_FACTORS[n] for n in _PRIMARY_FRANCHISES)
+
+    def test_low_run_parks_below_neutral(self):
+        for name in (
+            "Miami Marlins",
+            "Seattle Mariners",
+            "San Francisco Giants",
+            "San Diego Padres",
+        ):
+            assert _PARK_FACTORS[name] < 1.0, name
+
+    def test_lookup_exact_and_empty_default(self):
+        assert _park_factor_for_team("Colorado Rockies") == _PARK_FACTORS["Colorado Rockies"]
+        assert _park_factor_for_team("") == 1.0
+        assert _park_factor_for_team("Totally Fake FC") == 1.0
+

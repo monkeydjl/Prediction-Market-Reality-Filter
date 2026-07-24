@@ -88,23 +88,40 @@ _MLB_TEAM_IDS: dict[str, int] = {
     "Washington Nationals": 120,
 }
 
-# Coarse 3-year-ish park run factors (1.0 = league average). Soft signal only.
+# Static multi-year-ish park run factors (1.0 = league average). Soft signal only.
+# Expanded to all 30 franchises (P1-M2). Alias keys mirror _MLB_TEAM_IDS dual names.
 _PARK_FACTORS: dict[str, float] = {
-    "Colorado Rockies": 1.15,
+    "Arizona Diamondbacks": 1.02,
+    "Athletics": 0.97,
+    "Atlanta Braves": 1.01,
+    "Baltimore Orioles": 1.01,
     "Boston Red Sox": 1.06,
-    "Cincinnati Reds": 1.05,
-    "Texas Rangers": 1.04,
-    "Philadelphia Phillies": 1.03,
     "Chicago Cubs": 1.02,
-    "New York Yankees": 1.01,
+    "Chicago White Sox": 1.00,
+    "Cincinnati Reds": 1.05,
+    "Cleveland Guardians": 0.99,
+    "Colorado Rockies": 1.15,
+    "Detroit Tigers": 0.98,
+    "Houston Astros": 0.99,
+    "Kansas City Royals": 1.01,
+    "Los Angeles Angels": 1.00,
     "Los Angeles Dodgers": 0.98,
+    "Miami Marlins": 0.93,
+    "Milwaukee Brewers": 1.01,
+    "Minnesota Twins": 1.01,
+    "New York Mets": 0.97,
+    "New York Yankees": 1.01,
+    "Oakland Athletics": 0.97,
+    "Philadelphia Phillies": 1.03,
+    "Pittsburgh Pirates": 0.98,
     "San Diego Padres": 0.96,
     "San Francisco Giants": 0.94,
-    "Oakland Athletics": 0.95,
-    "Athletics": 0.95,
     "Seattle Mariners": 0.94,
-    "Miami Marlins": 0.93,
     "St. Louis Cardinals": 0.97,
+    "Tampa Bay Rays": 0.96,
+    "Texas Rangers": 1.04,
+    "Toronto Blue Jays": 1.02,
+    "Washington Nationals": 1.00,
 }
 
 

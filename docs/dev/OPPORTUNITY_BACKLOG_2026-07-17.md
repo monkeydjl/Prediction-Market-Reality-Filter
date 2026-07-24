@@ -192,7 +192,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 
 | ID | 项 |
 |----|-----|
-| P1-M1 | ✅ 部分 2026-07-20：`bullpen` 因子 + team_era 代理；真 bullpen 源仍待 |
+| P1-M1 | ✅ 2026-07-24：probable SP（v1.1 feed / schedule hydrate）ERA/WHIP + relief-only IP 加权 `bullpen_era_*` + team ERA；league-avg 回退 |
 | P1-M2 | ✅ 部分 2026-07-20：adapter `park_factor` + BaseballEngine `park` 融合 |
 | P1-M3 | ✅ 部分 2026-07-20：`weather` 软因子（temp/wind custom）；室外馆真源仍待 |
 | P1-M4 | 打者 vs 投手 platoon | ✅ 部分 2026-07-20：BaseballEngine soft `platoon`（OPS/优势 custom）；真 platoon 源仍待 |

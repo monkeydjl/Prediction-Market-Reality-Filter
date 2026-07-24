@@ -197,7 +197,12 @@ class TestMLBAdapterFetchAllData:
                           return_value={
                               "home": {"name": "Gerrit Cole", "era": 3.15, "whip": 1.02},
                               "away": {"name": "Brayan Bello", "era": 4.10, "whip": 1.30},
-                          }):
+                          }), \
+             patch.object(adapter, "_fetch_team_pitching_side",
+                          side_effect=[
+                              {"team_era": 3.90, "bullpen_era": 3.40},
+                              {"team_era": 4.20, "bullpen_era": 3.80},
+                          ]):
             match = _make_match()
             raw = adapter.fetch_all_data(match)
             assert raw["team"]["elo_home"] == 1520.0
@@ -208,6 +213,73 @@ class TestMLBAdapterFetchAllData:
             assert raw["custom"]["pitcher_era_away"] == 4.10
             assert raw["custom"]["pitcher_whip_home"] == 1.02
             assert raw["custom"]["pitcher_whip_away"] == 1.30
+            assert raw["custom"]["bullpen_era_home"] == 3.40
+            assert raw["custom"]["bullpen_era_away"] == 3.80
+            assert raw["custom"]["team_era_home"] == 3.90
+            assert raw["player"]["starting_pitcher_home"] == "Gerrit Cole"
+
+
+class TestMLBAdapterStartingPitchers:
+    def test_fetch_starting_pitchers_from_feed(self):
+        adapter = MLBAdapter()
+        match = _make_match("mlb-824893")
+        with patch("app.sports.baseball.mlb_adapter.fetch_mlb_game_feed") as mock_feed, \
+             patch("app.sports.baseball.mlb_adapter.fetch_mlb_pitcher") as mock_pitcher:
+            mock_feed.return_value = {
+                "gameData": {
+                    "probablePitchers": {
+                        "home": {"id": 519242, "fullName": "Chris Sale"},
+                        "away": {"id": 606996, "fullName": "Kyle Hart"},
+                    }
+                }
+            }
+
+            def _pitcher_payload(person_id: int):
+                names = {519242: "Chris Sale", 606996: "Kyle Hart"}
+                eras = {519242: 2.19, 606996: 4.50}
+                whips = {519242: 1.05, 606996: 1.35}
+                return {
+                    "people": [{
+                        "id": person_id,
+                        "fullName": names[person_id],
+                        "stats": [{
+                            "group": {"displayName": "pitching"},
+                            "splits": [{"stat": {
+                                "era": eras[person_id],
+                                "whip": whips[person_id],
+                            }}],
+                        }],
+                    }],
+                }
+
+            mock_pitcher.side_effect = _pitcher_payload
+            out = adapter._fetch_starting_pitchers(match)
+            assert out["home"]["name"] == "Chris Sale"
+            assert out["home"]["era"] == pytest.approx(2.19)
+            assert out["away"]["whip"] == pytest.approx(1.35)
+
+    def test_fetch_team_pitching_side_bullpen(self):
+        adapter = MLBAdapter()
+        with patch("app.sports.baseball.mlb_adapter.fetch_mlb_team_pitching_totals",
+                   return_value={"era": "3.68"}), \
+             patch("app.sports.baseball.mlb_adapter.fetch_mlb_team_pitcher_stats",
+                   return_value=[
+                       {"stat": {
+                           "gamesStarted": 0,
+                           "inningsPitched": "18.0",
+                           "earnedRuns": 4,
+                           "era": "2.00",
+                       }},
+                       {"stat": {
+                           "gamesStarted": 10,
+                           "inningsPitched": "60.0",
+                           "earnedRuns": 20,
+                           "era": "3.00",
+                       }},
+                   ]):
+            side = adapter._fetch_team_pitching_side("Atlanta Braves", 2026)
+            assert side["team_era"] == pytest.approx(3.68)
+            assert side["bullpen_era"] == pytest.approx(2.0)
 
 
 class TestMLBAdapterFetchOutcome:

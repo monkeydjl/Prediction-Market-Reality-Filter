@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### MLB real starting pitcher + bullpen ERA (P1-M1)
+- Game feed uses official `/api/v1.1/game/{pk}/feed/live` (v1 404s)
+- Probable pitchers from feed `gameData.probablePitchers` (+ schedule hydrate fallback)
+- `parse_pitcher_person` → starter name/ERA/WHIP into `custom.pitcher_*`
+- Team pitching totals → `team_era_*`; relief-only IP-weighted ERA → `bullpen_era_*`
+- Team-id map for all 30 franchises; graceful fallback to league-avg 4.10
+
 ### NHL club-stats attack rates for attack_share (P1-H1)
 - `summarize_club_rates`: GF/GA/SF/SA per game + shot_share (corsi-like)
 - Adapter one club-stats fetch per side → goalie + rates (no double HTTP)

@@ -223,10 +223,35 @@ def parse_innings_pitched(value: Any) -> float:
         return 0.0
 
 
-def parse_pitcher_person(payload: dict | None) -> dict | None:
-    """Extract name/ERA/WHIP from a ``/people/{id}`` pitching hydrate payload.
+def _pitch_hand_code(person: dict) -> str | None:
+    """Return ``L`` / ``R`` from a people payload ``pitchHand`` field."""
+    hand = person.get("pitchHand")
+    if isinstance(hand, dict):
+        code = (hand.get("code") or "").strip().upper()
+        if code in {"L", "R"}:
+            return code
+        desc = (hand.get("description") or "").strip().lower()
+        if desc.startswith("left"):
+            return "L"
+        if desc.startswith("right"):
+            return "R"
+    elif isinstance(hand, str):
+        text = hand.strip().upper()
+        if text in {"L", "R"}:
+            return text
+        if text.startswith("LEFT"):
+            return "L"
+        if text.startswith("RIGHT"):
+            return "R"
+    return None
 
-    Returns ``{"name": str, "era": float, "whip": float, "person_id": int}``
+
+def parse_pitcher_person(payload: dict | None) -> dict | None:
+    """Extract name/ERA/WHIP/hand from a ``/people/{id}`` pitching hydrate payload.
+
+    Returns
+    ``{"name": str, "era": float, "whip": float, "person_id": int,
+      "pitch_hand": "L"|"R"|None}``
     or None when unusable.
     """
     if not isinstance(payload, dict):
@@ -237,6 +262,7 @@ def parse_pitcher_person(payload: dict | None) -> dict | None:
     person = people[0]
     name = (person.get("fullName") or "").strip()
     person_id = person.get("id")
+    pitch_hand = _pitch_hand_code(person)
     era: float | None = None
     whip: float | None = None
     for block in person.get("stats") or []:
@@ -257,15 +283,91 @@ def parse_pitcher_person(payload: dict | None) -> dict | None:
                 break
         if era is not None or whip is not None:
             break
-    if not name and era is None and whip is None:
+    if not name and era is None and whip is None and pitch_hand is None:
         return None
-    out: dict[str, Any] = {"name": name or None, "era": era, "whip": whip}
+    out: dict[str, Any] = {
+        "name": name or None,
+        "era": era,
+        "whip": whip,
+        "pitch_hand": pitch_hand,
+    }
     if person_id is not None:
         try:
             out["person_id"] = int(person_id)
         except (TypeError, ValueError):
             pass
     return out
+
+
+def fetch_mlb_team_hitting_platoon_splits(
+    team_id: int,
+    season: int | str,
+) -> dict[str, float | None]:
+    """Fetch team season OPS vs LHP (vl) and RHP (vr).
+
+    Returns ``{"ops_vs_l": float|None, "ops_vs_r": float|None}``.
+    """
+    data = _request(
+        f"/teams/{int(team_id)}/stats",
+        params={
+            "stats": "statSplits",
+            "group": "hitting",
+            "season": int(season),
+            "sitCodes": "vl,vr",
+        },
+    )
+    return parse_team_platoon_ops(data)
+
+
+def parse_team_platoon_ops(payload: dict | None) -> dict[str, float | None]:
+    """Parse team hitting split payload into OPS vs L/R pitchers."""
+    out: dict[str, float | None] = {"ops_vs_l": None, "ops_vs_r": None}
+    if not isinstance(payload, dict):
+        return out
+    stats = payload.get("stats") or []
+    if not stats:
+        return out
+    for split in stats[0].get("splits") or []:
+        if not isinstance(split, dict):
+            continue
+        code = ((split.get("split") or {}).get("code") or "").strip().lower()
+        ops = _safe_float((split.get("stat") or {}).get("ops"))
+        if code in {"vl", "vsl", "vslhp"}:
+            out["ops_vs_l"] = ops
+        elif code in {"vr", "vsr", "vsrhp"}:
+            out["ops_vs_r"] = ops
+    return out
+
+
+def platoon_ops_vs_hand(
+    ops_vs_l: float | None,
+    ops_vs_r: float | None,
+    pitch_hand: str | None,
+) -> float | None:
+    """Select team OPS against the opposing pitcher's hand."""
+    if not pitch_hand:
+        return None
+    hand = str(pitch_hand).strip().upper()
+    if hand.startswith("L"):
+        return ops_vs_l
+    if hand.startswith("R"):
+        return ops_vs_r
+    return None
+
+
+def platoon_advantage_home(
+    platoon_ops_home: float | None,
+    platoon_ops_away: float | None,
+) -> float | None:
+    """Home-side platoon edge in [-0.10, 0.10] from OPS differential."""
+    if platoon_ops_home is None or platoon_ops_away is None:
+        return None
+    d = float(platoon_ops_home) - float(platoon_ops_away)
+    if d > 0.10:
+        d = 0.10
+    elif d < -0.10:
+        d = -0.10
+    return round(d, 4)
 
 
 def extract_probable_pitchers(feed: dict | None) -> dict[str, dict]:

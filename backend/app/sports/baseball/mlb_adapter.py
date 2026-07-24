@@ -32,10 +32,13 @@ from app.sports.baseball.mlb_stats_client import (
     fetch_mlb_game_feed,
     fetch_mlb_pitcher,
     fetch_mlb_schedule,
+    fetch_mlb_team_hitting_platoon_splits,
     fetch_mlb_team_pitcher_stats,
     fetch_mlb_team_pitching_totals,
     parse_mlb_weather,
     parse_pitcher_person,
+    platoon_advantage_home,
+    platoon_ops_vs_hand,
     summarize_bullpen_era,
     summarize_team_era,
     MLBStatsClientError,
@@ -493,6 +496,7 @@ class MLBAdapter:
                 "name": parsed.get("name"),
                 "era": parsed.get("era"),
                 "whip": parsed.get("whip"),
+                "pitch_hand": parsed.get("pitch_hand"),
                 "person_id": parsed.get("person_id") or int(person_id),
             }
         except MLBStatsClientError as exc:
@@ -512,8 +516,8 @@ class MLBAdapter:
         fallback), then ``/people/{id}`` season pitching stats.
 
         Returns dict with 'home' and 'away' keys, each containing
-        {'name': str, 'era': float, 'whip': float} or empty dict if
-        unavailable (graceful degradation).
+        {'name': str, 'era': float, 'whip': float, 'pitch_hand': str} or empty
+        dict if unavailable (graceful degradation).
         """
         if probable is None:
             probable = self._resolve_probable_pitcher_ids(match)
@@ -524,6 +528,29 @@ class MLBAdapter:
             name = row.get("name")
             out[side] = self._pitcher_stats_for_person(pid, fallback_name=name)
         return out
+
+    def _fetch_platoon_ops(
+        self,
+        team_name: str,
+        season: int,
+        opposing_pitch_hand: str | None,
+    ) -> float | None:
+        """Team season OPS vs the opposing starter's hand (L/R)."""
+        team_id = _team_id_for_name(team_name)
+        if team_id is None or not opposing_pitch_hand:
+            return None
+        try:
+            splits = fetch_mlb_team_hitting_platoon_splits(team_id, season)
+            return platoon_ops_vs_hand(
+                splits.get("ops_vs_l"),
+                splits.get("ops_vs_r"),
+                opposing_pitch_hand,
+            )
+        except MLBStatsClientError as exc:
+            logger.debug("MLB platoon splits %s failed: %s", team_name, exc)
+        except Exception:  # noqa: BLE001
+            logger.debug("MLB platoon splits %s skipped", team_name, exc_info=True)
+        return None
 
     def _fetch_team_pitching_side(self, team_name: str, season: int) -> dict:
         """Fetch team ERA + bullpen ERA for one franchise.
@@ -606,6 +633,16 @@ class MLBAdapter:
         if bullpen_away is None:
             bullpen_away = team_era_away if team_era_away is not None else _LEAGUE_AVG_ERA
 
+        # P1-M4: offense OPS vs opposing starter hand (team season splits).
+        # Home hitters face away SP; away hitters face home SP.
+        platoon_ops_home = self._fetch_platoon_ops(
+            home_name, season, away_p.get("pitch_hand"),
+        )
+        platoon_ops_away = self._fetch_platoon_ops(
+            away_name, season, home_p.get("pitch_hand"),
+        )
+        platoon_adv = platoon_advantage_home(platoon_ops_home, platoon_ops_away)
+
         raw: dict = {
             "team": {
                 "elo_home": elo_home,
@@ -634,6 +671,8 @@ class MLBAdapter:
                 "pitcher_era_away": away_p.get("era"),
                 "pitcher_whip_home": home_p.get("whip"),
                 "pitcher_whip_away": away_p.get("whip"),
+                "pitcher_hand_home": home_p.get("pitch_hand"),
+                "pitcher_hand_away": away_p.get("pitch_hand"),
                 "team_batting_avg_home": 0.250,
                 "team_batting_avg_away": 0.250,
                 "team_era_home": team_era_home if team_era_home is not None else _LEAGUE_AVG_ERA,
@@ -651,6 +690,10 @@ class MLBAdapter:
                 "weather_wind_mph": weather_wind_mph,
                 "weather_condition": weather_condition,
                 "roof_type": roof_type,
+                # P1-M4: team OPS vs opposing starter hand
+                "platoon_ops_home": platoon_ops_home,
+                "platoon_ops_away": platoon_ops_away,
+                "platoon_advantage_home": platoon_adv,
             },
         }
         try:

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### MLB platoon splits vs starter hand (P1-M4)
+- Team hitting `statSplits` sitCodes `vl,vr` → season OPS vs LHP/RHP
+- Probable SP `pitchHand` from `/people` → `custom.pitcher_hand_*`
+- Home hitters use away SP hand; away hitters use home SP hand
+- Inject `platoon_ops_*` + clamped `platoon_advantage_home` for BaseballEngine soft factor
+- Spot check 2026-07-24 COL@MIL: Sugano(R)/Drohan(L) → OPS 0.753 vs 0.706, adv +0.047
+
 ### MLB outdoor weather from game feed (P1-M3)
 - `parse_mlb_weather` / `parse_wind_mph` / F→C from v1.1 `gameData.weather`
 - Single `_fetch_game_context` call reuses feed for SP + weather + venue

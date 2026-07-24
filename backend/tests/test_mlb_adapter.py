@@ -211,14 +211,26 @@ class TestMLBAdapterFetchAllData:
                           }), \
              patch.object(adapter, "_fetch_starting_pitchers",
                           return_value={
-                              "home": {"name": "Gerrit Cole", "era": 3.15, "whip": 1.02},
-                              "away": {"name": "Brayan Bello", "era": 4.10, "whip": 1.30},
+                              "home": {
+                                  "name": "Gerrit Cole",
+                                  "era": 3.15,
+                                  "whip": 1.02,
+                                  "pitch_hand": "R",
+                              },
+                              "away": {
+                                  "name": "Brayan Bello",
+                                  "era": 4.10,
+                                  "whip": 1.30,
+                                  "pitch_hand": "R",
+                              },
                           }), \
              patch.object(adapter, "_fetch_team_pitching_side",
                           side_effect=[
                               {"team_era": 3.90, "bullpen_era": 3.40},
                               {"team_era": 4.20, "bullpen_era": 3.80},
-                          ]):
+                          ]), \
+             patch.object(adapter, "_fetch_platoon_ops",
+                          side_effect=[0.780, 0.720]):
             match = _make_match()
             raw = adapter.fetch_all_data(match)
             assert raw["team"]["elo_home"] == 1520.0
@@ -231,11 +243,16 @@ class TestMLBAdapterFetchAllData:
             assert raw["custom"]["pitcher_era_away"] == 4.10
             assert raw["custom"]["pitcher_whip_home"] == 1.02
             assert raw["custom"]["pitcher_whip_away"] == 1.30
+            assert raw["custom"]["pitcher_hand_home"] == "R"
+            assert raw["custom"]["pitcher_hand_away"] == "R"
             assert raw["custom"]["bullpen_era_home"] == 3.40
             assert raw["custom"]["bullpen_era_away"] == 3.80
             assert raw["custom"]["team_era_home"] == 3.90
             assert raw["custom"]["weather_wind_mph"] == pytest.approx(6.0)
             assert raw["custom"]["weather_condition"] == "Cloudy"
+            assert raw["custom"]["platoon_ops_home"] == pytest.approx(0.780)
+            assert raw["custom"]["platoon_ops_away"] == pytest.approx(0.720)
+            assert raw["custom"]["platoon_advantage_home"] == pytest.approx(0.06)
             assert raw["player"]["starting_pitcher_home"] == "Gerrit Cole"
 
 
@@ -300,6 +317,19 @@ class TestMLBAdapterStartingPitchers:
             side = adapter._fetch_team_pitching_side("Atlanta Braves", 2026)
             assert side["team_era"] == pytest.approx(3.68)
             assert side["bullpen_era"] == pytest.approx(2.0)
+
+    def test_fetch_platoon_ops_selects_hand(self):
+        adapter = MLBAdapter()
+        with patch(
+            "app.sports.baseball.mlb_adapter.fetch_mlb_team_hitting_platoon_splits",
+            return_value={"ops_vs_l": 0.705, "ops_vs_r": 0.765},
+        ) as mock_splits:
+            ops_vs_r = adapter._fetch_platoon_ops("New York Yankees", 2026, "R")
+            ops_vs_l = adapter._fetch_platoon_ops("New York Yankees", 2026, "L")
+            assert ops_vs_r == pytest.approx(0.765)
+            assert ops_vs_l == pytest.approx(0.705)
+            assert mock_splits.call_count == 2
+            assert adapter._fetch_platoon_ops("New York Yankees", 2026, None) is None
 
 
 class TestMLBAdapterFetchOutcome:

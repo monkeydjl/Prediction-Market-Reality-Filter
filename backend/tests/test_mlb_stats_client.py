@@ -11,11 +11,15 @@ from app.sports.baseball.mlb_stats_client import (
     fetch_mlb_schedule,
     fetch_mlb_game_feed,
     fetch_mlb_pitcher,
+    fetch_mlb_team_hitting_platoon_splits,
     fetch_mlb_team_pitcher_stats,
     parse_innings_pitched,
     parse_mlb_weather,
     parse_pitcher_person,
+    parse_team_platoon_ops,
     parse_wind_mph,
+    platoon_advantage_home,
+    platoon_ops_vs_hand,
     summarize_bullpen_era,
     summarize_team_era,
     MLBStatsClientError,
@@ -109,6 +113,7 @@ class TestParseHelpers:
             "people": [{
                 "id": 519242,
                 "fullName": "Chris Sale",
+                "pitchHand": {"code": "L", "description": "Left"},
                 "stats": [{
                     "group": {"displayName": "pitching"},
                     "splits": [{"stat": {"era": "2.19", "whip": "1.05"}}],
@@ -120,6 +125,29 @@ class TestParseHelpers:
         assert parsed["era"] == pytest.approx(2.19)
         assert parsed["whip"] == pytest.approx(1.05)
         assert parsed["person_id"] == 519242
+        assert parsed["pitch_hand"] == "L"
+
+    def test_parse_team_platoon_ops(self):
+        payload = {
+            "stats": [{
+                "splits": [
+                    {"split": {"code": "vl"}, "stat": {"ops": ".720"}},
+                    {"split": {"code": "vr"}, "stat": {"ops": ".780"}},
+                ],
+            }],
+        }
+        out = parse_team_platoon_ops(payload)
+        assert out["ops_vs_l"] == pytest.approx(0.720)
+        assert out["ops_vs_r"] == pytest.approx(0.780)
+
+    def test_platoon_ops_vs_hand_and_advantage(self):
+        assert platoon_ops_vs_hand(0.72, 0.78, "L") == pytest.approx(0.72)
+        assert platoon_ops_vs_hand(0.72, 0.78, "R") == pytest.approx(0.78)
+        assert platoon_ops_vs_hand(0.72, 0.78, None) is None
+        assert platoon_advantage_home(0.80, 0.72) == pytest.approx(0.08)
+        assert platoon_advantage_home(0.90, 0.70) == pytest.approx(0.10)
+        assert platoon_advantage_home(0.60, 0.80) == pytest.approx(-0.10)
+        assert platoon_advantage_home(None, 0.72) is None
 
     def test_extract_probable_pitchers_from_feed(self):
         feed = {

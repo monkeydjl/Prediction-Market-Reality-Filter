@@ -107,3 +107,20 @@ class TestBasketballFeatureBuilderBuild:
         raw["team"]["elo_away"] = None
         features = builder.build(_make_match(), raw)
         assert features.data_quality == "partial"
+
+    def test_injury_impact_passthrough_from_player_raw(self):
+        builder = BasketballFeatureBuilder()
+        raw = _make_raw_with_elo()
+        raw["player"] = {
+            "injury_impact_home": 0.35,
+            "injury_impact_away": 0.26,
+        }
+        features = builder.build(_make_match(), raw)
+        assert features.player.injury_impact_home == pytest.approx(0.35)
+        assert features.player.injury_impact_away == pytest.approx(0.26)
+
+    def test_injury_impact_defaults_none_when_absent(self):
+        builder = BasketballFeatureBuilder()
+        features = builder.build(_make_match(), _make_raw_with_elo())
+        assert features.player.injury_impact_home is None
+        assert features.player.injury_impact_away is None

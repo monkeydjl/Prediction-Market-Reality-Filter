@@ -80,10 +80,10 @@ class BasketballFeatureBuilder:
                 odds_fresh=bool(market_raw.get("odds_fresh", False)),
             ),
             player=PlayerFeatures(
-                key_players_available_home=None,  # Free tier has no injuries
-                key_players_available_away=None,
-                injury_impact_home=None,
-                injury_impact_away=None,
+                key_players_available_home=player_raw.get("key_players_available_home"),
+                key_players_available_away=player_raw.get("key_players_available_away"),
+                injury_impact_home=player_raw.get("injury_impact_home"),
+                injury_impact_away=player_raw.get("injury_impact_away"),
             ),
             environment=EnvironmentFeatures(
                 venue=env_raw.get("venue"),

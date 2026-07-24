@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### MLB outdoor weather from game feed (P1-M3)
+- `parse_mlb_weather` / `parse_wind_mph` / F→C from v1.1 `gameData.weather`
+- Single `_fetch_game_context` call reuses feed for SP + weather + venue
+- Inject `weather_temp_c` / `weather_wind_mph` / condition into custom + environment
+- Open-roof only for engine soft factor; dome/closed drops temp/wind
+
 ### MLB real starting pitcher + bullpen ERA (P1-M1)
 - Game feed uses official `/api/v1.1/game/{pk}/feed/live` (v1 404s)
 - Probable pitchers from feed `gameData.probablePitchers` (+ schedule hydrate fallback)

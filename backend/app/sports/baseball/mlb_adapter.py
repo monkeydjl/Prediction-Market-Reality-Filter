@@ -34,6 +34,7 @@ from app.sports.baseball.mlb_stats_client import (
     fetch_mlb_schedule,
     fetch_mlb_team_pitcher_stats,
     fetch_mlb_team_pitching_totals,
+    parse_mlb_weather,
     parse_pitcher_person,
     summarize_bullpen_era,
     summarize_team_era,
@@ -421,39 +422,55 @@ class MLBAdapter:
         finally:
             session.close()
 
-    def _resolve_probable_pitcher_ids(self, match: MatchIdentity) -> dict[str, dict]:
-        """Resolve home/away probable pitchers via feed, then schedule hydrate."""
-        empty = {"home": {}, "away": {}}
+    def _fetch_game_context(self, match: MatchIdentity) -> dict:
+        """Fetch game feed once for probable pitchers + weather + venue.
+
+        Returns
+        ``{"probable": {home,away}, "weather": dict|None, "venue": str|None}``.
+        On total failure returns empty probable and None weather.
+        """
+        empty_probable = {"home": {}, "away": {}}
         game_pk = _game_pk_from_match_id(match.match_id)
         if game_pk is None:
-            return empty
+            return {"probable": empty_probable, "weather": None, "venue": None}
 
+        feed: dict | None = None
         try:
             feed = fetch_mlb_game_feed(game_pk)
-            probable = extract_probable_pitchers(feed)
-            if probable.get("home") or probable.get("away"):
-                return probable
         except MLBStatsClientError as exc:
-            logger.debug("MLB game feed probable pitchers failed: %s", exc)
+            logger.debug("MLB game feed failed for %s: %s", match.match_id, exc)
         except Exception:  # noqa: BLE001
-            logger.debug("MLB game feed probable pitchers skipped", exc_info=True)
+            logger.debug("MLB game feed skipped for %s", match.match_id, exc_info=True)
 
-        # Fallback: schedule hydrate for the kickoff date window.
-        try:
-            kickoff = match.kickoff_utc or _DEFAULT_KICKOFF
-            day = kickoff.date().isoformat()
-            games = fetch_mlb_schedule(day, day, hydrate="probablePitcher")
-            for game in games:
-                if int(game.get("gamePk") or 0) != game_pk:
-                    continue
-                probable = extract_probable_pitchers_from_schedule_game(game)
-                if probable.get("home") or probable.get("away"):
-                    return probable
-        except MLBStatsClientError as exc:
-            logger.debug("MLB schedule probable pitchers failed: %s", exc)
-        except Exception:  # noqa: BLE001
-            logger.debug("MLB schedule probable pitchers skipped", exc_info=True)
-        return empty
+        probable = extract_probable_pitchers(feed) if feed else empty_probable
+        weather = parse_mlb_weather(feed) if feed else None
+        venue = (weather or {}).get("venue") if weather else None
+
+        if not (probable.get("home") or probable.get("away")):
+            try:
+                kickoff = match.kickoff_utc or _DEFAULT_KICKOFF
+                day = kickoff.date().isoformat()
+                games = fetch_mlb_schedule(day, day, hydrate="probablePitcher")
+                for game in games:
+                    if int(game.get("gamePk") or 0) != game_pk:
+                        continue
+                    probable = extract_probable_pitchers_from_schedule_game(game)
+                    break
+            except MLBStatsClientError as exc:
+                logger.debug("MLB schedule probable pitchers failed: %s", exc)
+            except Exception:  # noqa: BLE001
+                logger.debug("MLB schedule probable pitchers skipped", exc_info=True)
+
+        return {
+            "probable": probable or empty_probable,
+            "weather": weather,
+            "venue": venue,
+        }
+
+    def _resolve_probable_pitcher_ids(self, match: MatchIdentity) -> dict[str, dict]:
+        """Resolve home/away probable pitchers via feed, then schedule hydrate."""
+        ctx = self._fetch_game_context(match)
+        return ctx.get("probable") or {"home": {}, "away": {}}
 
     def _pitcher_stats_for_person(
         self,
@@ -484,7 +501,11 @@ class MLBAdapter:
             logger.debug("MLB pitcher %s fetch skipped", person_id, exc_info=True)
         return {"name": fallback_name} if fallback_name else {}
 
-    def _fetch_starting_pitchers(self, match: MatchIdentity) -> dict:
+    def _fetch_starting_pitchers(
+        self,
+        match: MatchIdentity,
+        probable: dict | None = None,
+    ) -> dict:
         """Fetch starting pitcher ERA/WHIP for both teams.
 
         Uses probable pitcher IDs from the v1.1 game feed (schedule hydrate
@@ -494,10 +515,11 @@ class MLBAdapter:
         {'name': str, 'era': float, 'whip': float} or empty dict if
         unavailable (graceful degradation).
         """
-        probable = self._resolve_probable_pitcher_ids(match)
+        if probable is None:
+            probable = self._resolve_probable_pitcher_ids(match)
         out: dict[str, dict] = {"home": {}, "away": {}}
         for side in ("home", "away"):
-            row = probable.get(side) or {}
+            row = (probable or {}).get(side) or {}
             pid = row.get("id")
             name = row.get("name")
             out[side] = self._pitcher_stats_for_person(pid, fallback_name=name)
@@ -538,7 +560,7 @@ class MLBAdapter:
         """Fetch all raw data for an MLB match.
 
         Local DB supplies Elo/form/rest; MLB Stats API supplies probable
-        starter ERA/WHIP, team ERA, and relief-only bullpen ERA.
+        starter ERA/WHIP, team ERA, relief-only bullpen ERA, and outdoor weather.
         """
         home_name = match.home.name
         away_name = match.away.name
@@ -554,9 +576,24 @@ class MLBAdapter:
         rest_home = self._compute_rest_days(home_name, match.kickoff_utc)
         rest_away = self._compute_rest_days(away_name, match.kickoff_utc)
 
-        pitchers = self._fetch_starting_pitchers(match)
+        game_ctx = self._fetch_game_context(match)
+        pitchers = self._fetch_starting_pitchers(
+            match,
+            probable=game_ctx.get("probable"),
+        )
         home_p = pitchers.get("home", {})
         away_p = pitchers.get("away", {})
+        weather = game_ctx.get("weather") or {}
+        venue_name = game_ctx.get("venue") or weather.get("venue") or "Home Ballpark"
+        roof_type = weather.get("roof_type")
+        outdoor = True
+        if isinstance(roof_type, str):
+            rt = roof_type.strip().lower()
+            outdoor = rt in {"", "open", "none"} or "open" in rt
+        weather_temp_c = weather.get("temp_c") if outdoor else None
+        weather_temp_f = weather.get("temp_f") if outdoor else None
+        weather_wind_mph = weather.get("wind_mph") if outdoor else None
+        weather_condition = weather.get("condition")
 
         home_side = self._fetch_team_pitching_side(home_name, season)
         away_side = self._fetch_team_pitching_side(away_name, season)
@@ -587,8 +624,10 @@ class MLBAdapter:
                 "starting_pitcher_away": away_p.get("name"),
             },
             "environment": {
-                "venue": "Home Ballpark",
+                "venue": venue_name,
                 "is_home_advantage": True,
+                "weather_temp_c": weather_temp_c,
+                "weather_condition": weather_condition,
             },
             "custom": {
                 "pitcher_era_home": home_p.get("era"),
@@ -606,6 +645,12 @@ class MLBAdapter:
                 # P1-M1: relief-only IP-weighted ERA (team ERA fallback)
                 "bullpen_era_home": float(bullpen_home),
                 "bullpen_era_away": float(bullpen_away),
+                # P1-M3: outdoor weather from game feed (F→C, wind mph)
+                "weather_temp_c": weather_temp_c,
+                "weather_temp_f": weather_temp_f,
+                "weather_wind_mph": weather_wind_mph,
+                "weather_condition": weather_condition,
+                "roof_type": roof_type,
             },
         }
         try:

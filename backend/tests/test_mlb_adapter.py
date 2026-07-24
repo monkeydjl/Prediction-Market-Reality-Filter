@@ -193,6 +193,22 @@ class TestMLBAdapterFetchAllData:
         # Mock internal helpers to avoid real DB / API calls
         with patch.object(adapter, "_fetch_elo_ratings",
                           return_value={"New York Yankees": 1520.0, "Boston Red Sox": 1490.0}), \
+             patch.object(adapter, "_fetch_game_context",
+                          return_value={
+                              "probable": {
+                                  "home": {"id": 1, "name": "Gerrit Cole"},
+                                  "away": {"id": 2, "name": "Brayan Bello"},
+                              },
+                              "weather": {
+                                  "temp_c": 27.78,
+                                  "temp_f": 82.0,
+                                  "wind_mph": 6.0,
+                                  "condition": "Cloudy",
+                                  "roof_type": "Open",
+                                  "venue": "Yankee Stadium",
+                              },
+                              "venue": "Yankee Stadium",
+                          }), \
              patch.object(adapter, "_fetch_starting_pitchers",
                           return_value={
                               "home": {"name": "Gerrit Cole", "era": 3.15, "whip": 1.02},
@@ -208,6 +224,8 @@ class TestMLBAdapterFetchAllData:
             assert raw["team"]["elo_home"] == 1520.0
             assert raw["team"]["elo_away"] == 1490.0
             assert raw["environment"]["is_home_advantage"] is True
+            assert raw["environment"]["venue"] == "Yankee Stadium"
+            assert raw["environment"]["weather_temp_c"] == pytest.approx(27.78)
             # Pitcher stats in custom dict
             assert raw["custom"]["pitcher_era_home"] == 3.15
             assert raw["custom"]["pitcher_era_away"] == 4.10
@@ -216,6 +234,8 @@ class TestMLBAdapterFetchAllData:
             assert raw["custom"]["bullpen_era_home"] == 3.40
             assert raw["custom"]["bullpen_era_away"] == 3.80
             assert raw["custom"]["team_era_home"] == 3.90
+            assert raw["custom"]["weather_wind_mph"] == pytest.approx(6.0)
+            assert raw["custom"]["weather_condition"] == "Cloudy"
             assert raw["player"]["starting_pitcher_home"] == "Gerrit Cole"
 
 

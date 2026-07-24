@@ -15,6 +15,7 @@ Endpoints used:
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -366,3 +367,86 @@ def summarize_team_era(team_stat: dict | None) -> float | None:
     if not isinstance(team_stat, dict):
         return None
     return _safe_float(team_stat.get("era"))
+
+
+def parse_wind_mph(wind_text: Any) -> float | None:
+    """Parse wind speed (mph) from MLB strings like ``6 mph, Out To LF``."""
+    if wind_text is None:
+        return None
+    if isinstance(wind_text, (int, float)):
+        return float(wind_text)
+    text = str(wind_text).strip()
+    if not text:
+        return None
+    # Leading number: "6 mph, Out To LF" / "15mph In From CF" / "Calm"
+    if text.lower() in {"calm", "none", "n/a", "na", "-"}:
+        return 0.0
+    match = re.search(r"(-?\d+(?:\.\d+)?)\s*mph", text, flags=re.IGNORECASE)
+    if match:
+        return _safe_float(match.group(1))
+    match = re.match(r"(-?\d+(?:\.\d+)?)", text)
+    if match:
+        return _safe_float(match.group(1))
+    return None
+
+
+def fahrenheit_to_celsius(temp_f: Any) -> float | None:
+    """Convert Fahrenheit temperature to Celsius."""
+    f = _safe_float(temp_f)
+    if f is None:
+        return None
+    return round((f - 32.0) * 5.0 / 9.0, 2)
+
+
+def parse_mlb_weather(feed: dict | None) -> dict | None:
+    """Extract weather from a v1.1 game feed ``gameData.weather``.
+
+    Returns
+    ``{"temp_c": float|None, "temp_f": float|None, "wind_mph": float|None,
+       "condition": str|None, "roof_type": str|None, "venue": str|None}``
+    or None when no usable weather block exists.
+    """
+    if not isinstance(feed, dict):
+        return None
+    game_data = feed.get("gameData") or {}
+    weather = game_data.get("weather")
+    venue = game_data.get("venue") or {}
+    field_info = venue.get("fieldInfo") or {}
+    roof_type = field_info.get("roofType")
+    venue_name = venue.get("name")
+
+    if not isinstance(weather, dict) or not weather:
+        # Still return venue/roof when weather missing (indoor parks).
+        if venue_name or roof_type:
+            return {
+                "temp_c": None,
+                "temp_f": None,
+                "wind_mph": None,
+                "condition": None,
+                "roof_type": roof_type,
+                "venue": venue_name,
+            }
+        return None
+
+    temp_f = _safe_float(weather.get("temp"))
+    temp_c = fahrenheit_to_celsius(temp_f) if temp_f is not None else None
+    wind_mph = parse_wind_mph(weather.get("wind"))
+    condition = weather.get("condition")
+    if isinstance(condition, str):
+        condition = condition.strip() or None
+    else:
+        condition = None
+
+    if temp_c is None and wind_mph is None and not condition and not venue_name:
+        return None
+
+    # Closed domes: keep condition/venue but weather has little outdoor effect.
+    # Callers may still store values for display; engine soft-uses temp/wind.
+    return {
+        "temp_c": temp_c,
+        "temp_f": temp_f,
+        "wind_mph": wind_mph,
+        "condition": condition,
+        "roof_type": roof_type if isinstance(roof_type, str) else None,
+        "venue": venue_name if isinstance(venue_name, str) else None,
+    }

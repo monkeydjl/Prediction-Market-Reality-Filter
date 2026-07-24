@@ -94,8 +94,8 @@ class BaseballFeatureBuilder:
             ),
             environment=EnvironmentFeatures(
                 venue=env_raw.get("venue"),
-                weather_temp_c=None,  # Outdoor but not modeled
-                weather_condition=None,
+                weather_temp_c=env_raw.get("weather_temp_c"),
+                weather_condition=env_raw.get("weather_condition"),
                 is_home_advantage=env_raw.get("is_home_advantage", False),
             ),
             custom=inject_liquidity_into_custom(

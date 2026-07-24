@@ -6,13 +6,14 @@
 - `sports/_shared/rest_form.py`: leakage-safe form L10 + rest days
 - `match_loader` uses enrich (no flat defaults)
 - NBA/MLB/NHL adapters: unknown rest → None; form as-of kickoff
+- Re-ran Optuna 80 trials on real rest/form; **applied** NBA **5** / MLB **6** / NHL **7**
+  (acc 70.24% / 54.22% / 62.35%); prior flat-feature applied rows archived
+- API restarted so FactorRegistry loads new `source=optimized` weights
 
 ### Phase 9 Optuna offline optimize + apply (P1-A3 / P1-A4)
 - Ran 80-trial TPE for NBA/MLB/NHL on chronological 80/20 split
-- Baseline → best accuracy: NBA 68.4%→**69.95%**, NHL 60.5%→**63.02%**, MLB 52.5%→**53.27%**
+- First pass (flat rest/form): NBA **69.95%**, NHL **63.02%**, MLB **53.27%** → applied 4/3/2
 - `save_candidate` upserts the existing `candidate` row in place (UNIQUE sport/competition/status)
-- **Applied 2026-07-24** (manual review): NBA id=4, NHL id=3, MLB id=2 → `status=applied`;
-  FactorRegistry competition weights updated (`source=optimized`)
 - Apply writes **factor weights only** (not runtime Elo HFA/K — those stay in settings);
   engine extra factors (net_rating/injury/park/etc.) keep prior defaults and join fusion
 - CLI: `python scripts/run_phase9_optimize.py --sport all --n-trials 80`

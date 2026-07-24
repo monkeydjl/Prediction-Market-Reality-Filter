@@ -185,7 +185,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 | P1-B1 | ✅ 部分 2026-07-24：静态 Out 名单 + 角色加权 `injury_impact_*`（adapter player/custom 双写 + FeatureBuilder 透传）；真实时名单源仍待 |
 | P1-B2 | ✅ 部分 2026-07-20：`b2b_home/away` + BasketballEngine rest 额外惩罚 |
 | P1-B3 | ✅ 部分 2026-07-20：`team_geo` + adapter 注入 `travel_km_away`/时区 + BasketballEngine `travel` |
-| P1-B4 | ✅ 部分 2026-07-20：BasketballEngine `net_rating`（ORtg/DRtg） |
+| P1-B4 | ✅ 部分 2026-07-24：30 队静态 ORtg/DRtg → `custom` + BasketballEngine `net_rating` soft；真 possessions / 赛季动态源仍待 |
 | P1-B5 | ✅ 部分 2026-07-20：季后赛 `NBA_ELO_HFA_PLAYOFF` + 主场 0.55；回测验证最优 K/HFA 仍待 Phase9 |
 
 #### 棒球（MLB）

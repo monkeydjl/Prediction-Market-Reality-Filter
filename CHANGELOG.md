@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### NBA static team ORtg/DRtg for net_rating (P1-B4)
+- `nba_team_ratings`: 30-franchise static ORtg/DRtg (+ Clippers alias)
+- Adapter injects four custom fields only when both sides resolve; omits otherwise
+- Removes match-invariant ortg/drtg/pace/tpct stubs; BasketballEngine formula/weight unchanged
+
 ### NBA static injury impact (P1-B1)
 - `nba_injury`: Out-only role weights (star/starter/rotation/bench) → `injury_impact` in [0,1]
 - Adapter dual-writes `player` + `custom` when static table has Out rows; missing → None

@@ -9,7 +9,11 @@ from app.kernel.domain import (
     TeamIdentity, MatchIdentity, MatchOutcome,
 )
 from app.kernel.protocols import DataAdapter
-from app.sports.hockey.nhl_adapter import NHLAdapter, parse_nhl_game
+from app.sports.hockey.nhl_adapter import (
+    NHLAdapter,
+    parse_nhl_game,
+    _nhl_team_abbrev,
+)
 
 
 _HOCKEY = SportIdentity(code="hockey", name="Hockey")
@@ -159,6 +163,177 @@ class TestParseNhlGame:
         assert parsed["went_to_shootout"] is False
         assert parsed["status"] == "finished"
 
+    def test_canonicalizes_utah_hockey_club_variants(self):
+        """Utah franchise renames / bad concatenations collapse to Utah Mammoth."""
+        nested = {
+            "id": 2024020115,
+            "season": 20242025,
+            "startTimeUTC": "2024-11-01T02:00:00Z",
+            "gameType": 2,
+            "gameState": "OFF",
+            "homeTeam": {
+                "placeName": {"default": "Utah"},
+                "commonName": {"default": "Utah Hockey Club"},
+                "abbrev": "UTA",
+                "score": 2,
+            },
+            "awayTeam": {
+                "placeName": {"default": "Colorado"},
+                "commonName": {"default": "Avalanche"},
+                "abbrev": "COL",
+                "score": 1,
+            },
+        }
+        parsed = parse_nhl_game(nested)
+        assert parsed is not None
+        assert parsed["home_team"] == "Utah Mammoth"
+        assert parsed["away_team"] == "Colorado Avalanche"
+
+        flat = {
+            "id": 2024020116,
+            "season": 20242025,
+            "gameDate": "2024-11-02T00:00:00Z",
+            "gameType": 2,
+            "gameState": "FINAL",
+            "homeTeam": {"name": "Utah Hockey Club", "abbrev": "UTA"},
+            "awayTeam": {"name": "Dallas Stars", "abbrev": "DAL"},
+            "homeTeamScore": 3,
+            "awayTeamScore": 4,
+        }
+        parsed_flat = parse_nhl_game(flat)
+        assert parsed_flat is not None
+        assert parsed_flat["home_team"] == "Utah Mammoth"
+
+        mammoth = {
+            "id": 2026020001,
+            "season": 20262027,
+            "startTimeUTC": "2026-10-10T01:00:00Z",
+            "gameType": 2,
+            "gameState": "FUT",
+            "homeTeam": {
+                "placeName": {"default": "Utah"},
+                "commonName": {"default": "Mammoth"},
+                "abbrev": "UTA",
+            },
+            "awayTeam": {
+                "placeName": {"default": "Vegas"},
+                "commonName": {"default": "Golden Knights"},
+                "abbrev": "VGK",
+            },
+        }
+        parsed_m = parse_nhl_game(mammoth)
+        assert parsed_m is not None
+        assert parsed_m["home_team"] == "Utah Mammoth"
+
+        coyotes = {
+            "id": 2023020500,
+            "season": 20232024,
+            "gameDate": "2024-03-01T00:00:00Z",
+            "gameType": 2,
+            "gameState": "FINAL",
+            "homeTeam": {"name": "Arizona Coyotes", "abbrev": "ARI"},
+            "awayTeam": {"name": "Colorado Avalanche", "abbrev": "COL"},
+            "homeTeamScore": 2,
+            "awayTeamScore": 3,
+        }
+        parsed_c = parse_nhl_game(coyotes)
+        assert parsed_c is not None
+        assert parsed_c["home_team"] == "Utah Mammoth"
+
+
+class TestNhlTeamAbbrev:
+    def test_maps_utah_and_coyotes_to_uta(self):
+        assert _nhl_team_abbrev("Utah Mammoth") == "UTA"
+        assert _nhl_team_abbrev("Utah Hockey Club") == "UTA"
+        assert _nhl_team_abbrev("Arizona Coyotes") == "UTA"
+        assert _nhl_team_abbrev("Colorado Avalanche") == "COL"
+
+
+class TestNHLAdapterStartingGoalies:
+    @patch("app.sports.hockey.nhl_adapter.fetch_nhl_club_stats")
+    def test_fetch_starting_goalies_from_club_stats(self, mock_stats):
+        mock_stats.side_effect = [
+            {
+                "goalies": [
+                    {
+                        "playerId": 1,
+                        "firstName": {"default": "Scott"},
+                        "lastName": {"default": "Wedgewood"},
+                        "gamesStarted": 43,
+                        "gamesPlayed": 45,
+                        "savePercentage": 0.921317,
+                    }
+                ]
+            },
+            {
+                "goalies": [
+                    {
+                        "playerId": 2,
+                        "firstName": {"default": "Karel"},
+                        "lastName": {"default": "Vejmelka"},
+                        "gamesStarted": 63,
+                        "gamesPlayed": 64,
+                        "savePercentage": 0.896679,
+                    }
+                ]
+            },
+        ]
+        adapter = NHLAdapter()
+        match = MatchIdentity(
+            match_id="nhl-2026010012",
+            season=SeasonIdentity(competition=_NHL, season_key="20262027"),
+            stage="regular_season",
+            round=None,
+            home=TeamIdentity(code="COL", name="Colorado Avalanche", competition=_NHL),
+            away=TeamIdentity(code="UTA", name="Utah Mammoth", competition=_NHL),
+            kickoff_utc=datetime(2026, 9, 20, 23, 0, tzinfo=timezone.utc),
+        )
+        goalies = adapter._fetch_starting_goalies(match)
+        assert goalies["home"]["name"] == "Scott Wedgewood"
+        assert abs(goalies["home"]["save_pct"] - 0.921317) < 1e-6
+        assert goalies["away"]["name"] == "Karel Vejmelka"
+        assert abs(goalies["away"]["save_pct"] - 0.896679) < 1e-6
+        assert mock_stats.call_args_list[0].args[0] == "COL"
+        assert mock_stats.call_args_list[1].args[0] == "UTA"
+
+    @patch("app.sports.hockey.nhl_adapter.fetch_nhl_club_stats")
+    def test_fetch_all_data_writes_goalie_save_pct_from_live_path(self, mock_stats):
+        mock_stats.return_value = {
+            "goalies": [
+                {
+                    "firstName": {"default": "Igor"},
+                    "lastName": {"default": "Shesterkin"},
+                    "gamesStarted": 50,
+                    "gamesPlayed": 50,
+                    "savePercentage": 0.915,
+                    "goalsAgainst": 100,
+                    "shotsAgainst": 1200,
+                }
+            ],
+            "skaters": [
+                {"goals": 200, "shots": 2400, "gamesPlayed": 80},
+            ],
+        }
+        adapter = NHLAdapter()
+        with patch.object(
+            adapter,
+            "_fetch_elo_ratings",
+            return_value={"New Jersey Devils": 1510.0, "New York Rangers": 1495.0},
+        ), patch.object(adapter, "_compute_form", return_value=0.5), patch.object(
+            adapter, "_compute_rest_days", return_value=2.0
+        ):
+            match = _make_match()
+            raw = adapter.fetch_all_data(match)
+            assert raw["custom"]["goalie_save_pct_home"] == 0.915
+            assert raw["custom"]["goalie_save_pct_away"] == 0.915
+            assert raw["player"]["starting_goalie_home"] == "Igor Shesterkin"
+            # Real club rates (not form soft proxy 2.9/3.1)
+            assert abs(raw["custom"]["team_gf_home"] - 200 / 80) < 1e-4
+            assert abs(raw["custom"]["team_ga_home"] - 100 / 80) < 1e-4
+            assert raw["custom"]["corsi_pct_home"] is not None
+            assert raw["custom"]["corsi_pct_away"] is not None
+            assert abs(raw["custom"]["xg_for_home"] - (2400 / 80) * 0.09) < 1e-4
+
 
 class TestNHLAdapterGetMatchIdentity:
     @patch("app.sports.hockey.nhl_adapter.query_fixture")
@@ -187,13 +362,36 @@ class TestNHLAdapterFetchAllData:
         mock_query.return_value = _make_fixture()
 
         adapter = NHLAdapter()
+        side_home = {
+            "name": "Igor Shesterkin",
+            "save_pct": 0.912,
+            "rates": {
+                "games": 80,
+                "gf_per_game": 3.1,
+                "ga_per_game": 2.8,
+                "sf_per_game": 30.0,
+                "sa_per_game": 28.0,
+                "shot_share": 0.517,
+            },
+        }
+        side_away = {
+            "name": "Juuse Saros",
+            "save_pct": 0.920,
+            "rates": {
+                "games": 80,
+                "gf_per_game": 2.9,
+                "ga_per_game": 2.7,
+                "sf_per_game": 29.0,
+                "sa_per_game": 29.5,
+                "shot_share": 0.496,
+            },
+        }
         with patch.object(adapter, "_fetch_elo_ratings",
                           return_value={"New Jersey Devils": 1510.0, "New York Rangers": 1495.0}), \
-             patch.object(adapter, "_fetch_starting_goalies",
-                          return_value={
-                              "home": {"name": "Igor Shesterkin", "save_pct": 0.912},
-                              "away": {"name": "Juuse Saros", "save_pct": 0.920},
-                          }):
+             patch.object(adapter, "_fetch_club_side",
+                          side_effect=[side_home, side_away]), \
+             patch.object(adapter, "_compute_form", return_value=0.5), \
+             patch.object(adapter, "_compute_rest_days", return_value=2.0):
             match = _make_match()
             raw = adapter.fetch_all_data(match)
             assert raw["team"]["elo_home"] == 1510.0
@@ -202,6 +400,8 @@ class TestNHLAdapterFetchAllData:
             # Goalie stats in custom dict
             assert raw["custom"]["goalie_save_pct_home"] == 0.912
             assert raw["custom"]["goalie_save_pct_away"] == 0.920
+            assert raw["custom"]["team_gf_home"] == 3.1
+            assert raw["custom"]["corsi_pct_home"] == 0.517
             # Overtime defaults (False for fresh game)
             assert raw["custom"]["went_to_overtime"] is False
             assert raw["custom"]["went_to_shootout"] is False

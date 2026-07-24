@@ -36,6 +36,17 @@ def test_resolve_nhl_team():
     assert resolve_team("波士顿棕熊", "nhl") == "boston_bruins"
 
 
+def test_resolve_nhl_utah_mammoth_variants():
+    from app.sports._shared.team_aliases import resolve_team
+    assert resolve_team("Utah Mammoth", "nhl") == "utah_mammoth"
+    assert resolve_team("Utah Hockey Club", "nhl") == "utah_mammoth"
+    assert resolve_team("Utah Utah Hockey Club", "nhl") == "utah_mammoth"
+    assert resolve_team("UTA", "nhl") == "utah_mammoth"
+    assert resolve_team("犹他猛犸", "nhl") == "utah_mammoth"
+    assert resolve_team("Arizona Coyotes", "nhl") == "utah_mammoth"
+    assert resolve_team("ARI", "nhl") == "utah_mammoth"
+
+
 def test_resolve_epl_team():
     from app.sports._shared.team_aliases import resolve_team
     assert resolve_team("MCI", "epl") == "manchester_city"

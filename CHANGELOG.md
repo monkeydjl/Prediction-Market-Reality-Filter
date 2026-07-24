@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### NHL club-stats attack rates for attack_share (P1-H1)
+- `summarize_club_rates`: GF/GA/SF/SA per game + shot_share (corsi-like)
+- Adapter one club-stats fetch per side → goalie + rates (no double HTTP)
+- `team_gf_*` / `team_ga_*` / soft `xg_for_*` (0.09×SF) / `corsi_pct_*` from live stats
+- Form-shaped GF/GA remains fallback when club-stats empty
+
+### NHL primary goalie save% from club-stats
+- `fetch_nhl_club_stats` + `pick_primary_goalie` (most `gamesStarted`)
+- `NHLAdapter._fetch_starting_goalies` no longer stubbed; maps team → abbrev
+- Roster path prefers abbrev (`/v1/roster/UTA/current`); HTTP `trust_env=False`
+- Goalie factor now receives real save% when club-stats available
+
+### NHL Utah franchise team-name canonicalization
+- Collapse `Arizona Coyotes` / `Utah Hockey Club` / `Utah Utah Hockey Club` → `Utah Mammoth`
+- Fix placeName+commonName double-prefix (`Utah` + `Utah Hockey Club`)
+- Aliases + geo for Mammoth variants; re-seeded NHL Elo (**33** teams, continuous franchise key)
+- Spot-check: Utah fixtures resolve Elo both sides; hockey engine quality `real`
+
 ### Elo HFA/K runtime wiring (Phase 9 follow-up)
 - `kernel/elo_params_resolve.py`: applied Optuna `elo_params` overlay settings
 - Engines (NBA/MLB/NHL) use resolved HFA; NBA playoff split only when no applied

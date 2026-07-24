@@ -10,7 +10,8 @@ Endpoints used:
     /v1/club-schedule-season/{abbrev}/{season} — full club schedule
     /v1/schedule/{YYYY-MM-DD}                 — week schedule (fallback walk)
     /v1/game/{id}/feed/live                   — full game feed (scoring, lines)
-    /v1/roster/{teamId}/current               — current team roster (goalies + sv%)
+    /v1/roster/{abbrev}/current               — current team roster (goalies + sv%)
+    /v1/club-stats/{abbrev}/now               — season skater/goalie stats (save%)
 
 Note: /v1/schedule/{seasonKey} (e.g. 20252026) is NOT a valid path on the
 public web API — season bulk fetch goes through club-schedule-season.
@@ -66,6 +67,7 @@ def _request(path: str, params: dict[str, Any] | None = None) -> dict:
                 params=params,
                 timeout=30.0,
                 follow_redirects=True,
+                trust_env=False,
             )
         except httpx.TimeoutException as exc:
             last_exc = exc
@@ -254,14 +256,159 @@ def fetch_nhl_game_feed(game_id: int) -> dict:
     return _request(f"/v1/game/{game_id}/feed/live")
 
 
-def fetch_nhl_team_roster(team_id: int) -> dict:
+def fetch_nhl_team_roster(team_id: int | str) -> dict:
     """Fetch the current roster for an NHL team.
 
     Args:
-        team_id: NHL team ID (e.g., 1 for New Jersey Devils).
+        team_id: NHL team id or three-letter abbrev (e.g. ``"NYR"``).
+            Official web API prefers abbrev paths: ``/v1/roster/NYR/current``.
 
     Returns:
         Roster dict containing ``forwards``, ``defensemen``, and
         ``goalies`` arrays. Each goalie has ``svPct`` (save percentage).
     """
-    return _request(f"/v1/roster/{team_id}/current")
+    token = str(team_id).strip().upper() if team_id is not None else ""
+    if not token:
+        raise NHLStatsClientError("team_id is required for roster")
+    return _request(f"/v1/roster/{token}/current")
+
+
+def fetch_nhl_club_stats(team_abbrev: str, season: str | None = None) -> dict:
+    """Fetch club skater/goalie season stats.
+
+    Args:
+        team_abbrev: Three-letter club code (e.g. ``"UTA"``).
+        season: Optional eight-digit season key (e.g. ``"20252026"``).
+            When omitted, uses ``/now`` (current campaign stats).
+
+    Returns:
+        Payload with ``skaters`` / ``goalies`` arrays. Goalie rows include
+        ``savePercentage``, ``gamesStarted``, ``gamesPlayed``.
+    """
+    ab = (team_abbrev or "").strip().upper()
+    if not ab:
+        raise NHLStatsClientError("team_abbrev is required for club stats")
+    if season:
+        # gameType 2 = regular season
+        return _request(f"/v1/club-stats/{ab}/{season}/2")
+    return _request(f"/v1/club-stats/{ab}/now")
+
+
+def pick_primary_goalie(club_stats: dict | None) -> dict | None:
+    """Pick the workhorse starter from club-stats goalie rows.
+
+    Prefers most ``gamesStarted``, then ``gamesPlayed``, then save%.
+    Returns ``{"name": str, "save_pct": float, "player_id": int|None}``
+    or None when no usable goalie row exists.
+    """
+    if not isinstance(club_stats, dict):
+        return None
+    goalies = club_stats.get("goalies") or []
+    usable: list[dict] = [g for g in goalies if isinstance(g, dict)]
+    if not usable:
+        return None
+
+    def _rank(g: dict) -> tuple[int, int, float]:
+        try:
+            gs = int(g.get("gamesStarted") or 0)
+        except (TypeError, ValueError):
+            gs = 0
+        try:
+            gp = int(g.get("gamesPlayed") or 0)
+        except (TypeError, ValueError):
+            gp = 0
+        try:
+            sv = float(
+                g.get("savePercentage")
+                if g.get("savePercentage") is not None
+                else g.get("svPct")
+                if g.get("svPct") is not None
+                else 0.0
+            )
+        except (TypeError, ValueError):
+            sv = 0.0
+        return (gs, gp, sv)
+
+    best = max(usable, key=_rank)
+    first = _localized_default(best.get("firstName"))
+    last = _localized_default(best.get("lastName"))
+    name = " ".join(p for p in (first, last) if p).strip()
+    raw_sv = best.get("savePercentage")
+    if raw_sv is None:
+        raw_sv = best.get("svPct")
+    try:
+        save_pct = float(raw_sv) if raw_sv is not None else None
+    except (TypeError, ValueError):
+        save_pct = None
+    if save_pct is None:
+        return None
+    # Normalize rare 88.3-style percentages into 0-1.
+    if save_pct > 1.5:
+        save_pct = save_pct / 100.0
+    if not (0.7 <= save_pct <= 1.0):
+        return None
+    player_id = best.get("playerId") or best.get("id")
+    try:
+        player_id_i = int(player_id) if player_id is not None else None
+    except (TypeError, ValueError):
+        player_id_i = None
+    return {
+        "name": name or "Unknown Goalie",
+        "save_pct": save_pct,
+        "player_id": player_id_i,
+    }
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def summarize_club_rates(club_stats: dict | None) -> dict | None:
+    """Aggregate per-game attack/defense rates from club-stats rows.
+
+    Official club-stats has no team-level corsi/xG; we derive soft rates:
+    - GF/G from skater ``goals`` / team games
+    - GA/G from goalie ``goalsAgainst`` / team games
+    - SF/G, SA/G from skater ``shots`` / goalie ``shotsAgainst``
+    - ``shot_share`` = SF / (SF+SA) as a corsi-like possession proxy
+
+    Team games ≈ max skater/goalie ``gamesPlayed`` (or goalie starts).
+    Returns None when no usable rows or team games is zero.
+    """
+    if not isinstance(club_stats, dict):
+        return None
+    skaters = [s for s in (club_stats.get("skaters") or []) if isinstance(s, dict)]
+    goalies = [g for g in (club_stats.get("goalies") or []) if isinstance(g, dict)]
+    if not skaters and not goalies:
+        return None
+
+    goals = sum(_safe_int(s.get("goals")) for s in skaters)
+    shots_for = sum(_safe_int(s.get("shots")) for s in skaters)
+    goals_against = sum(_safe_int(g.get("goalsAgainst")) for g in goalies)
+    shots_against = sum(_safe_int(g.get("shotsAgainst")) for g in goalies)
+
+    gp_candidates = [_safe_int(s.get("gamesPlayed")) for s in skaters]
+    for g in goalies:
+        gp_candidates.append(_safe_int(g.get("gamesPlayed")))
+        gp_candidates.append(_safe_int(g.get("gamesStarted")))
+    team_gp = max(gp_candidates) if gp_candidates else 0
+    if team_gp <= 0:
+        return None
+
+    gf_pg = goals / team_gp
+    ga_pg = goals_against / team_gp
+    sf_pg = shots_for / team_gp
+    sa_pg = shots_against / team_gp
+    denom = sf_pg + sa_pg
+    shot_share = (sf_pg / denom) if denom > 0 else None
+    return {
+        "games": team_gp,
+        "gf_per_game": round(gf_pg, 4),
+        "ga_per_game": round(ga_pg, 4),
+        "sf_per_game": round(sf_pg, 4),
+        "sa_per_game": round(sa_pg, 4),
+        "shot_share": round(shot_share, 6) if shot_share is not None else None,
+    }

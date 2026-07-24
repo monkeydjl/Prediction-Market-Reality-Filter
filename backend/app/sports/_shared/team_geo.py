@@ -50,6 +50,8 @@ _NHL_CITIES: dict[str, tuple[float, float, int]] = {
     "Anaheim Ducks": (33.808, -117.876, -8),
     "Arizona Coyotes": (33.532, -112.261, -7),
     "Utah Hockey Club": (40.768, -111.901, -7),
+    "Utah Utah Hockey Club": (40.768, -111.901, -7),
+    "Utah Mammoth": (40.768, -111.901, -7),
     "Boston Bruins": (42.366, -71.062, -5),
     "Buffalo Sabres": (42.875, -78.876, -5),
     "Calgary Flames": (51.037, -114.052, -7),

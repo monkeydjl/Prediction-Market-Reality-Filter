@@ -27,8 +27,13 @@ from app.kernel.protocols import ScheduleFilter, RawMatchData
 from app.kernel.kernel_db import (
     get_kernel_session, KernelMatchFixture, KernelMatchResult, KernelEloRating,
 )
+from app.sports._shared.team_aliases import resolve_team
 from app.sports.hockey.nhl_stats_client import (
-    fetch_nhl_schedule, NHLStatsClientError,
+    fetch_nhl_schedule,
+    fetch_nhl_club_stats,
+    pick_primary_goalie,
+    summarize_club_rates,
+    NHLStatsClientError,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,6 +44,86 @@ _DEFAULT_SEASON = "20262027"
 _DEFAULT_STAGE = "regular_season"
 _DEFAULT_KICKOFF = datetime(2026, 10, 7, tzinfo=timezone.utc)
 _FINISHED_STATES = frozenset({"OFF", "FINAL", "OFF FINAL"})
+
+# Franchise renames / bad API concatenations that must collapse to one Elo key.
+# Coyotes relocated to Utah (2024) then rebranded Mammoth (2025-26+).
+_NHL_TEAM_CANONICAL: dict[str, str] = {
+    "Arizona Coyotes": "Utah Mammoth",
+    "Utah Utah Hockey Club": "Utah Mammoth",
+    "Utah Hockey Club": "Utah Mammoth",
+}
+
+
+def _canonical_nhl_team(name: str) -> str:
+    """Collapse NHL franchise renames / duplicate place-name concatenations."""
+    cleaned = " ".join((name or "").split())
+    if not cleaned:
+        return cleaned
+    return _NHL_TEAM_CANONICAL.get(cleaned, cleaned)
+
+
+# Display / canonical names → NHL web API team abbrev (club-stats / roster).
+_NHL_TEAM_ABBREV: dict[str, str] = {
+    "Anaheim Ducks": "ANA",
+    "Arizona Coyotes": "UTA",
+    "Boston Bruins": "BOS",
+    "Buffalo Sabres": "BUF",
+    "Calgary Flames": "CGY",
+    "Carolina Hurricanes": "CAR",
+    "Chicago Blackhawks": "CHI",
+    "Colorado Avalanche": "COL",
+    "Columbus Blue Jackets": "CBJ",
+    "Dallas Stars": "DAL",
+    "Detroit Red Wings": "DET",
+    "Edmonton Oilers": "EDM",
+    "Florida Panthers": "FLA",
+    "Los Angeles Kings": "LAK",
+    "Minnesota Wild": "MIN",
+    "Montreal Canadiens": "MTL",
+    "Nashville Predators": "NSH",
+    "New Jersey Devils": "NJD",
+    "New York Islanders": "NYI",
+    "New York Rangers": "NYR",
+    "Ottawa Senators": "OTT",
+    "Philadelphia Flyers": "PHI",
+    "Pittsburgh Penguins": "PIT",
+    "San Jose Sharks": "SJS",
+    "Seattle Kraken": "SEA",
+    "St. Louis Blues": "STL",
+    "Tampa Bay Lightning": "TBL",
+    "Toronto Maple Leafs": "TOR",
+    "Utah Hockey Club": "UTA",
+    "Utah Mammoth": "UTA",
+    "Utah Utah Hockey Club": "UTA",
+    "Vancouver Canucks": "VAN",
+    "Vegas Golden Knights": "VGK",
+    "Washington Capitals": "WSH",
+    "Winnipeg Jets": "WPG",
+}
+
+
+def _nhl_team_abbrev(team_name: str) -> str | None:
+    """Map display name / alias to NHL club abbrev for Stats API paths."""
+    if not team_name:
+        return None
+    cleaned = _canonical_nhl_team(team_name)
+    if cleaned in _NHL_TEAM_ABBREV:
+        return _NHL_TEAM_ABBREV[cleaned]
+    lower = cleaned.lower()
+    for name, ab in _NHL_TEAM_ABBREV.items():
+        if name.lower() == lower:
+            return ab
+    # Alias table snake_case → reverse lookup on known display names.
+    canon = resolve_team(cleaned, "nhl")
+    if canon:
+        for name, ab in _NHL_TEAM_ABBREV.items():
+            if resolve_team(name, "nhl") == canon:
+                return ab
+    # Last resort: 3-letter code already.
+    token = cleaned.strip().upper()
+    if len(token) == 3 and token.isalpha():
+        return token
+    return None
 
 
 def _localized_default(value: object) -> str:
@@ -59,15 +144,20 @@ def _team_display_name(side: dict | None) -> str:
         return ""
     flat = _localized_default(side.get("name"))
     if flat:
-        return flat
+        return _canonical_nhl_team(flat)
     place = _localized_default(side.get("placeName"))
     common = _localized_default(side.get("commonName"))
     if place and common:
         # Normalize French accented place names (Montréal → Montreal) so
         # geo/alias tables keyed on ASCII full names still resolve.
         place = place.replace("é", "e").replace("É", "E")
-        return f"{place} {common}"
-    return place or common or _localized_default(side.get("abbrev"))
+        # Avoid "Utah Utah Hockey Club" when commonName already includes place.
+        if common.lower().startswith(place.lower()):
+            return _canonical_nhl_team(common)
+        return _canonical_nhl_team(f"{place} {common}")
+    return _canonical_nhl_team(
+        place or common or _localized_default(side.get("abbrev"))
+    )
 
 
 def parse_nhl_game(game_data: dict) -> dict | None:
@@ -328,22 +418,85 @@ class NHLAdapter:
         finally:
             session.close()
 
+    def _fetch_club_side(self, team_name: str) -> dict:
+        """One club-stats fetch → primary goalie + per-game rates (graceful empty)."""
+        abbrev = _nhl_team_abbrev(team_name)
+        if not abbrev:
+            logger.debug("NHL club-stats: no abbrev for team=%r", team_name)
+            return {}
+        try:
+            stats = fetch_nhl_club_stats(abbrev)
+        except NHLStatsClientError as exc:
+            logger.warning("NHL club-stats failed for %s: %s", abbrev, exc)
+            return {}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("NHL club-stats error for %s: %s", abbrev, exc)
+            return {}
+        out: dict = {}
+        picked = pick_primary_goalie(stats)
+        if picked:
+            out["name"] = picked["name"]
+            out["save_pct"] = picked["save_pct"]
+        rates = summarize_club_rates(stats)
+        if rates:
+            out["rates"] = rates
+        return out
+
+    def _goalie_for_team(self, team_name: str) -> dict:
+        """Resolve primary starter save% via club-stats (graceful empty)."""
+        side = self._fetch_club_side(team_name)
+        if not side:
+            return {}
+        out: dict = {}
+        if side.get("name") is not None:
+            out["name"] = side["name"]
+        if side.get("save_pct") is not None:
+            out["save_pct"] = side["save_pct"]
+        return out
+
     def _fetch_starting_goalies(self, match: MatchIdentity) -> dict:
-        """Fetch starting goalie save% for both teams.
+        """Fetch primary goalie save% for both teams from NHL club-stats.
 
         Returns dict with 'home' and 'away' keys, each containing
         {'name': str, 'save_pct': float} or empty dict if unavailable.
-        Stubbed in tests; in production this would call
-        fetch_nhl_team_roster() for both teams.
+        Uses season workhorse (most gamesStarted), not confirmed lineup.
         """
-        return {"home": {}, "away": {}}
+        return {
+            "home": self._goalie_for_team(match.home.name),
+            "away": self._goalie_for_team(match.away.name),
+        }
+
+    @staticmethod
+    def _attack_from_side(
+        side: dict,
+        form: float | None,
+    ) -> tuple[float, float, float | None, float | None]:
+        """Return (gf, ga, xg_for, shot_share) preferring club-stats rates.
+
+        Falls back to form-shaped soft GF/GA when rates missing (P1-H1).
+        ``shot_share`` is 0-1 corsi-like proxy or None.
+        """
+        rates = side.get("rates") if isinstance(side, dict) else None
+        if isinstance(rates, dict) and rates.get("gf_per_game") is not None:
+            gf = float(rates["gf_per_game"])
+            ga = float(rates.get("ga_per_game") or 0.0)
+            # Shots-for as soft xG scale (not true xG; better than form GF alone).
+            sf = rates.get("sf_per_game")
+            xg = float(sf) * 0.09 if sf is not None else gf
+            share = rates.get("shot_share")
+            shot_share = float(share) if share is not None else None
+            return gf, ga, xg, shot_share
+        form_v = form if form is not None else 0.5
+        gf = round(2.9 + (float(form_v) - 0.5) * 1.2, 3)
+        ga = round(3.1 - (float(form_v) - 0.5) * 0.8, 3)
+        return gf, ga, gf, None
 
     def fetch_all_data(self, match: MatchIdentity) -> dict:
         """Fetch all raw data for an NHL match.
 
         All data comes from local DB (Elo, form, rest) and the NHL Stats
-        API (goalie save%). Goalie stats and overtime flags are written
-        to raw['custom'].
+        API (goalie save% + club rates). Goalie/attack stats and overtime
+        flags are written to raw['custom'].
         """
         home_name = match.home.name
         away_name = match.away.name
@@ -358,17 +511,25 @@ class NHLAdapter:
         rest_home = self._compute_rest_days(home_name, match.kickoff_utc)
         rest_away = self._compute_rest_days(away_name, match.kickoff_utc)
 
-        goalies = self._fetch_starting_goalies(match)
-        home_g = goalies.get("home", {})
-        away_g = goalies.get("away", {})
+        home_side = self._fetch_club_side(home_name)
+        away_side = self._fetch_club_side(away_name)
+        home_g = {
+            k: home_side[k]
+            for k in ("name", "save_pct")
+            if k in home_side
+        }
+        away_g = {
+            k: away_side[k]
+            for k in ("name", "save_pct")
+            if k in away_side
+        }
 
-        # Soft attack proxies until true 5v5 xG/corsi feed lands (P1-H1).
-        form_h = form_home if form_home is not None else 0.5
-        form_a = form_away if form_away is not None else 0.5
-        gf_home = round(2.9 + (float(form_h) - 0.5) * 1.2, 3)
-        gf_away = round(2.9 + (float(form_a) - 0.5) * 1.2, 3)
-        ga_home = round(3.1 - (float(form_h) - 0.5) * 0.8, 3)
-        ga_away = round(3.1 - (float(form_a) - 0.5) * 0.8, 3)
+        gf_home, ga_home, xg_home, share_home = self._attack_from_side(
+            home_side, form_home
+        )
+        gf_away, ga_away, xg_away, share_away = self._attack_from_side(
+            away_side, form_away
+        )
 
         raw: dict = {
             "team": {
@@ -398,10 +559,10 @@ class NHLAdapter:
                 "team_gf_away": gf_away,
                 "team_ga_home": ga_home,
                 "team_ga_away": ga_away,
-                "xg_for_home": gf_home,
-                "xg_for_away": gf_away,
-                "corsi_pct_home": None,
-                "corsi_pct_away": None,
+                "xg_for_home": xg_home,
+                "xg_for_away": xg_away,
+                "corsi_pct_home": share_home,
+                "corsi_pct_away": share_away,
                 "pdo_home": None,
                 "pdo_away": None,
                 "went_to_overtime": False,

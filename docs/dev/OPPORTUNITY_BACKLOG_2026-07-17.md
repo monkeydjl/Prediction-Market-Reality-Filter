@@ -201,7 +201,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 
 | ID | 项 |
 |----|-----|
-| P1-H1 | OK partial 2026-07-20: HockeyEngine attack_share (corsi > xg_for > GF proxy); true 5v5 xG feed still pending |
+| P1-H1 | ✅ 部分 2026-07-24：club-stats 汇总 GF/GA/SF/SA + shot_share→`corsi_pct_*`；soft xG=0.09×SF；真 5v5 xG/corsi 源仍待 |
 | P1-H2 | ✅ 部分 2026-07-20：NHL `b2b_*` + HockeyEngine rest 额外惩罚 |
 | P1-H3 | ✅ 部分 2026-07-20：`team_geo` NHL 城市 + HockeyEngine `travel`（含跨加跨区） |
 

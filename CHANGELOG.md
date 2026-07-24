@@ -11,6 +11,7 @@
 - Holdout: applied Elo beats settings Elo by **+3.0 / +1.2 / +3.3pp** (NBA/MLB/NHL)
 - `scripts/eval_applied_params.py` for applied vs settings Elo comparison
 - Re-applied NBA **5** so registry `elo`/`form` match candidate (were stale 0.50/0.15)
+- `EngineRegistry.select(auto)` prefers sport-specific engines over `elo_odds` `*`
 
 ### Rest/form as-of features (Phase 9 follow-up)
 - `sports/_shared/rest_form.py`: leakage-safe form L10 + rest days

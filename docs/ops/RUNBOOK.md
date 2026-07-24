@@ -414,20 +414,24 @@ Prerequisite: historical fixtures+results loaded (see section above).
    # list: GET /api/sport-optimization/params
    ```
 
-3. **Local result snapshot (2026-07-24, 80 trials, re-run confirmed)**:
+3. **Local result snapshot**:
 
-   | Sport | Train/Test | Baseline acc | Best acc | Best score | Params id | Status |
-   |-------|------------|--------------|----------|------------|-----------|--------|
-   | NBA | 3170 / 792 | 0.684 | **0.700** | 0.693 | 4 | **applied** 2026-07-24 |
-   | NHL | 2411 / 603 | 0.605 | **0.630** | 0.651 | 3 | **applied** 2026-07-24 |
-   | MLB | 5442 / 1361 | 0.525 | **0.533** | 0.592 | 2 | **applied** 2026-07-24 |
+   Flat rest/form (first apply 2026-07-24): NBA id=4 / NHL id=3 / MLB id=2.
+
+   **As-of rest/form re-tune (80 trials, applied 2026-07-24)**:
+
+   | Sport | Train/Test | Best acc | Best score | Params id | Status |
+   |-------|------------|----------|------------|-----------|--------|
+   | NBA | 3172 / 793 | **0.702** | 0.695 | **5** | **applied** |
+   | MLB | 5442 / 1361 | **0.542** | 0.598 | **6** | **applied** |
+   | NHL | 2411 / 603 | **0.624** | 0.645 | **7** | **applied** |
 
 4. **Apply** (manual; does not auto-deploy):
    ```bash
    # CLI (same process as store.apply)
    # HTTP (write key + Phase 9 flag):
    curl -s -X POST -H "X-API-Key: $API_WRITE_KEY" \
-     "$BASE/api/sport-optimization/apply/4"
+     "$BASE/api/sport-optimization/apply/5"
    ```
    - Marks row `status=applied`, archives previous applied for that sport
    - Updates `KernelFactor` via `FactorRegistry.update_weight(..., source="optimized")`
@@ -435,9 +439,9 @@ Prerequisite: historical fixtures+results loaded (see section above).
    - **Restart the API** after apply: `_get_kernel` caches `FactorRegistry` in
      process memory at first request; apply writes DB only. Restart (or recreate
      the process) so prediction engines load the new weights.
-   - Applied set (2026-07-24): NBA **4**, NHL **3**, MLB **2**
-   - Verified 2026-07-24 after restart: API `:8000` up, `kernel_ready=true`,
-     14 `KernelFactor` rows with `source=optimized` match applied candidates
+   - Applied set (as-of rest/form, 2026-07-24): NBA **5**, MLB **6**, NHL **7**
+   - Verified after restart: API `:8000` up; 14 `KernelFactor` rows
+     `source=optimized` match applied candidates
 
 ### NBA (Phase 4 / balldontlie)
 

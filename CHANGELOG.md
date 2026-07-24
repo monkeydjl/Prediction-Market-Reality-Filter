@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### MLB full 30-team static park factors (P1-M2)
+- Expand `_PARK_FACTORS` to all 30 franchises (+ Athletics alias)
+- Runs-only soft signal; engine park formula/weight unchanged
+- Coverage + range + Coors/low-park direction unit tests
+
 ### MLB platoon splits vs starter hand (P1-M4)
 - Team hitting `statSplits` sitCodes `vl,vr` → season OPS vs LHP/RHP
 - Probable SP `pitchHand` from `/people` → `custom.pitcher_hand_*`

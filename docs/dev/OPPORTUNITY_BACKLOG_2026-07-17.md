@@ -169,7 +169,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 
 | ID | 因子 / 信号 | 数据侧 | 模型侧 |
 |----|-------------|--------|--------|
-| P1-F1 | form（近 N 场） | ✅ 部分：adapter 从 historical CSV 填 form_*（国家队/能匹配到的队名） | 俱乐部联赛需联赛级 form 源 |
+| P1-F1 | form（近 N 场） | ✅ 部分 2026-07-25：`form_*` = 积分率 (3W+D)/(3N)（historical + club_form 经 enrich 统一写入）；加权近 N / 覆盖率与别名仍待 | 引擎 form 差分未改 |
 | P1-F2 | rest / 赛程密度 | ✅ 部分 2026-07-25：`matches_last_7d_*` + congest 由 7 日场次≥2 驱动（rest≤2 仅 fallback）；b2b 仍 rest≤1 | 跨联赛合并赛程 / 更细窗口仍待 |
 | P1-F3 | injury / availability | ✅ 部分 2026-07-25：静态 Out + 角色加权 `injury_impact_*`（player/custom 双写；WC 源仅 static None fallback）；真伤病 API 与分钟/身价加权仍待 |
 | P1-F4 | h2h | ✅ 部分：historical h2h 填入 | 小权重已在 multi-factor |

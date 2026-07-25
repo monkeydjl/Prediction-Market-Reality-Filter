@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Football form points rate (P1-F1)
+- `points_form_rate`: form_* = (3W+D)/(3N) in [0,1] when played > 0
+- Adapter enrich single write site; historical CSV + club kernel both benefit
+- MultiFactor form weight/formula unchanged; US-sport rest_form stays win-rate
+
 ### Football static injury impact (P1-F3)
 - `football_injury`: Out-only role weights (star/starter/rotation/bench) → `injury_impact` in [0,1]
 - Enrich dual-writes `player` + `custom` when static table has Out rows; missing → None

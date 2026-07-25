@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from app.sports._shared.rest_form import (
     enrich_matches_rest_form,
     form_as_of,
+    matches_in_window_as_of,
     rest_days_as_of,
 )
 
@@ -117,3 +118,60 @@ def test_naive_kickoff_treated_as_utc():
     ]
     kickoff = datetime(2024, 1, 3, 12, 0)
     assert rest_days_as_of("A", kickoff, history) == 2.0
+
+
+def test_matches_in_window_none_when_kickoff_or_team_missing():
+    history = [_m("g1", "A", "B", 1, 0, 1)]
+    assert matches_in_window_as_of("", datetime(2024, 1, 10, tzinfo=UTC), history) is None
+    assert matches_in_window_as_of("A", None, history) is None
+
+
+def test_matches_in_window_counts_two_within_seven_days():
+    history = [
+        _m("g1", "A", "B", 1, 0, 1),
+        _m("g2", "C", "A", None, None, 4),  # unfinished still counts
+        _m("g3", "A", "D", 2, 1, 10),
+    ]
+    kickoff = datetime(2024, 1, 10, 19, 0, tzinfo=UTC)
+    # g1: day 1 → 9 days before → outside 7
+    # g2: day 4 → 6 days before → inside
+    # g3 excluded as self
+    assert matches_in_window_as_of(
+        "A", kickoff, history, window_days=7, exclude_match_id="g3",
+    ) == 1
+
+
+def test_matches_in_window_counts_two_when_two_inside():
+    history = [
+        _m("g1", "A", "B", 1, 0, 5),
+        _m("g2", "A", "C", 0, 0, 7),
+        _m("g3", "A", "D", 1, 0, 10),
+    ]
+    kickoff = datetime(2024, 1, 10, 19, 0, tzinfo=UTC)
+    assert matches_in_window_as_of(
+        "A", kickoff, history, window_days=7, exclude_match_id="g3",
+    ) == 2
+
+
+def test_matches_in_window_zero_when_only_outside():
+    history = [_m("g1", "A", "B", 1, 0, 1)]
+    kickoff = datetime(2024, 1, 20, 19, 0, tzinfo=UTC)
+    assert matches_in_window_as_of("A", kickoff, history, window_days=7) == 0
+
+
+def test_matches_in_window_excludes_future():
+    history = [
+        _m("g1", "A", "B", 1, 0, 5),
+        _m("g2", "A", "C", 1, 0, 15),
+    ]
+    kickoff = datetime(2024, 1, 10, 19, 0, tzinfo=UTC)
+    assert matches_in_window_as_of("A", kickoff, history, window_days=7) == 1
+
+
+def test_matches_in_window_boundary_day_included():
+    """Prior match with (as_of - k).days == window_days is included."""
+    history = [_m("g1", "A", "B", 1, 0, 3)]
+    kickoff = datetime(2024, 1, 10, 19, 0, tzinfo=UTC)
+    # days gap = 7
+    assert matches_in_window_as_of("A", kickoff, history, window_days=7) == 1
+

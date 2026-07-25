@@ -111,8 +111,9 @@ class TestFetchEloAndOdds:
 
         match = _make_match()
         raw = fetch_elo_and_odds(match, elo_scope="club")
-        assert raw["team"]["form_home"] == 0.6
-        assert raw["team"]["form_away"] == 0.6
+        # points rate: (3*6 + 2) / (3*10) = 0.6667  (old win rate was 0.6)
+        assert raw["team"]["form_home"] == pytest.approx(0.6667)
+        assert raw["team"]["form_away"] == pytest.approx(0.6667)
         assert raw["team"]["h2h_home_win_rate"] == 0.5
         assert raw["team"]["h2h_draw_rate"] == 0.25
         assert raw["general"]["rest_days_home"] == 15.0

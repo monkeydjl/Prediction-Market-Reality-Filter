@@ -320,10 +320,15 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
         except Exception:  # noqa: BLE001
             logger.debug("Club form enrichment failed", exc_info=True)
 
+    from app.sports.football.club_form import points_form_rate
+
     if home_stats:
-        played = max(int(home_stats.get("played") or 0), 1)
+        played = int(home_stats.get("played") or 0)
         wins = int(home_stats.get("wins") or 0)
-        raw["team"]["form_home"] = round(wins / played, 4)
+        draws = int(home_stats.get("draws") or 0)
+        form_h = points_form_rate(wins, draws, played)
+        if form_h is not None:
+            raw["team"]["form_home"] = form_h
         last = home_stats.get("last_match_date")
         rest = _days_since(last, before)
         if rest is not None:
@@ -334,9 +339,12 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
             raw.setdefault("custom", {})["xg_home"] = float(gpg)
 
     if away_stats:
-        played = max(int(away_stats.get("played") or 0), 1)
+        played = int(away_stats.get("played") or 0)
         wins = int(away_stats.get("wins") or 0)
-        raw["team"]["form_away"] = round(wins / played, 4)
+        draws = int(away_stats.get("draws") or 0)
+        form_a = points_form_rate(wins, draws, played)
+        if form_a is not None:
+            raw["team"]["form_away"] = form_a
         last = away_stats.get("last_match_date")
         rest = _days_since(last, before)
         if rest is not None:

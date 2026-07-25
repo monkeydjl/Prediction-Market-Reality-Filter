@@ -1,6 +1,8 @@
 """Tests for club_form.team_form_from_kernel."""
 from datetime import datetime, timezone
 
+import pytest
+
 from app.kernel.kernel_db import (
     KernelMatchFixture,
     KernelMatchResult,
@@ -8,7 +10,7 @@ from app.kernel.kernel_db import (
     get_kernel_session,
     init_kernel_db,
 )
-from app.sports.football.club_form import team_form_from_kernel
+from app.sports.football.club_form import points_form_rate, team_form_from_kernel
 
 
 def _seed_matches(tmp_path):
@@ -84,3 +86,36 @@ def test_team_form_unknown(tmp_path):
         assert stats is None
     finally:
         close_kernel_session()
+
+
+class TestPointsFormRate:
+    def test_all_wins(self):
+        assert points_form_rate(10, 0, 10) == pytest.approx(1.0)
+
+    def test_all_draws(self):
+        assert points_form_rate(0, 10, 10) == pytest.approx(0.3333)
+
+    def test_all_losses(self):
+        assert points_form_rate(0, 0, 10) == pytest.approx(0.0)
+
+    def test_mixed_w1_d1_n2(self):
+        # (3*1 + 1) / (3*2) = 4/6
+        assert points_form_rate(1, 1, 2) == pytest.approx(0.6667)
+
+    def test_existing_enrich_fixture_shape(self):
+        # wins=6, draws=2, played=10 → 20/30
+        assert points_form_rate(6, 2, 10) == pytest.approx(0.6667)
+
+    def test_n_zero_returns_none(self):
+        assert points_form_rate(0, 0, 0) is None
+
+    def test_negative_n_returns_none(self):
+        assert points_form_rate(1, 0, -1) is None
+
+    def test_none_ish_coercion(self):
+        assert points_form_rate(None, None, 5) == pytest.approx(0.0)
+        assert points_form_rate(2, None, 4) == pytest.approx(0.5)
+
+    def test_dirty_over_points_clamped(self):
+        # W+D > N would exceed 1.0 without clamp
+        assert points_form_rate(10, 10, 5) == pytest.approx(1.0)

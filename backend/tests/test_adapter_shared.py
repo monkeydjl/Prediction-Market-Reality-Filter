@@ -17,6 +17,7 @@ from app.sports.football.adapters._shared import (
     build_match_identity,
     build_match_outcome,
     save_fixture,
+    enrich_situational_features,
 )
 
 
@@ -188,3 +189,130 @@ class TestEnrichRefereeFeatures:
         sh.enrich_referee_features(raw, _make_match())
         assert raw["custom"]["referee_home_bias"] == 0.08
         assert raw["custom"]["referee_source"] == "static_map"
+
+
+class TestScheduleDensityEnrich:
+    def test_matches_last_7d_and_congest_from_count(self):
+        """count>=2 sets congest True even when rest_days > 2."""
+        match = _make_match("ucl-dense")
+        raw = {
+            "team": {},
+            "general": {"rest_days_home": 4.0, "rest_days_away": 4.0},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+        history = [
+            {
+                "match_id": "ucl-1",
+                "home_team": "Real Madrid CF",
+                "away_team": "X",
+                "kickoff_utc": datetime(2025, 9, 10, 20, 0, tzinfo=timezone.utc),
+            },
+            {
+                "match_id": "ucl-2",
+                "home_team": "Y",
+                "away_team": "Real Madrid CF",
+                "kickoff_utc": datetime(2025, 9, 13, 20, 0, tzinfo=timezone.utc),
+            },
+            {
+                "match_id": "ucl-dense",
+                "home_team": "Real Madrid CF",
+                "away_team": "FC Bayern München",
+                "kickoff_utc": match.kickoff_utc,
+            },
+        ]
+        with patch(
+            "app.sports.football.adapters._shared._fixture_history_for_density",
+            return_value=history,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ):
+            # Avoid club_form DB; rest already set on raw
+            with patch(
+                "app.sports.football.club_form.team_form_from_kernel",
+                return_value=None,
+            ):
+                enrich_situational_features(raw, match)
+
+        assert raw["custom"]["matches_last_7d_home"] == 2
+        assert raw["custom"]["schedule_congested_home"] is True
+        assert raw["custom"]["b2b_home"] is False  # rest 4
+
+    def test_count_one_overrides_rest_proxy_congest(self):
+        """Known count < 2 → congest False even if rest_days <= 2."""
+        match = _make_match("ucl-sparse")
+        raw = {
+            "team": {},
+            "general": {"rest_days_home": 2.0, "rest_days_away": 5.0},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+        history = [
+            {
+                "match_id": "ucl-1",
+                "home_team": "Real Madrid CF",
+                "away_team": "X",
+                "kickoff_utc": datetime(2025, 9, 14, 20, 0, tzinfo=timezone.utc),
+            },
+            {
+                "match_id": "ucl-sparse",
+                "home_team": "Real Madrid CF",
+                "away_team": "FC Bayern München",
+                "kickoff_utc": match.kickoff_utc,
+            },
+        ]
+        with patch(
+            "app.sports.football.adapters._shared._fixture_history_for_density",
+            return_value=history,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ):
+            enrich_situational_features(raw, match)
+
+        assert raw["custom"]["matches_last_7d_home"] == 1
+        assert raw["custom"]["schedule_congested_home"] is False
+        assert raw["custom"]["b2b_home"] is False
+
+    def test_no_history_falls_back_to_rest_congest(self):
+        match = _make_match("ucl-fallback")
+        raw = {
+            "team": {},
+            "general": {"rest_days_home": 1.0, "rest_days_away": 5.0},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+        with patch(
+            "app.sports.football.adapters._shared._fixture_history_for_density",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ):
+            enrich_situational_features(raw, match)
+
+        assert "matches_last_7d_home" not in raw["custom"]
+        assert raw["custom"]["schedule_congested_home"] is True
+        assert raw["custom"]["b2b_home"] is True

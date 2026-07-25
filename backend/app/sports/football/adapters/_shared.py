@@ -377,19 +377,49 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
     except Exception:  # noqa: BLE001
         logger.debug("market value enrich skipped", exc_info=True)
 
-    # P1-F2: schedule density flags (football midweek = rest <= 2 is congested)
+    # P1-F2: schedule density — window counts + congest flags
     try:
         custom = raw.setdefault("custom", {})
         rh = raw.get("general", {}).get("rest_days_home")
         ra = raw.get("general", {}).get("rest_days_away")
         if rh is not None:
-            rh_f = float(rh)
-            custom["b2b_home"] = rh_f <= 1.0
-            custom["schedule_congested_home"] = rh_f <= 2.0
+            custom["b2b_home"] = float(rh) <= 1.0
         if ra is not None:
-            ra_f = float(ra)
-            custom["b2b_away"] = ra_f <= 1.0
-            custom["schedule_congested_away"] = ra_f <= 2.0
+            custom["b2b_away"] = float(ra) <= 1.0
+
+        history = _fixture_history_for_density(competition)
+        from app.sports._shared.rest_form import matches_in_window_as_of
+
+        if history is not None:
+            mh = matches_in_window_as_of(
+                home_name,
+                before,
+                history,
+                window_days=7,
+                exclude_match_id=match.match_id,
+            )
+            ma = matches_in_window_as_of(
+                away_name,
+                before,
+                history,
+                window_days=7,
+                exclude_match_id=match.match_id,
+            )
+            if mh is not None:
+                custom["matches_last_7d_home"] = int(mh)
+                custom["schedule_congested_home"] = mh >= 2
+            elif rh is not None:
+                custom["schedule_congested_home"] = float(rh) <= 2.0
+            if ma is not None:
+                custom["matches_last_7d_away"] = int(ma)
+                custom["schedule_congested_away"] = ma >= 2
+            elif ra is not None:
+                custom["schedule_congested_away"] = float(ra) <= 2.0
+        else:
+            if rh is not None:
+                custom["schedule_congested_home"] = float(rh) <= 2.0
+            if ra is not None:
+                custom["schedule_congested_away"] = float(ra) <= 2.0
     except Exception:  # noqa: BLE001
         logger.debug("schedule density flags skipped", exc_info=True)
 
@@ -411,6 +441,37 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
     raw["environment"]["is_home_advantage"] = not is_world_cup
     if is_world_cup:
         raw["environment"]["venue"] = raw["environment"].get("venue") or "neutral"
+
+
+def _fixture_history_for_density(
+    competition: str | None,
+) -> list[dict] | None:
+    """Load kickoff+teams from kernel fixtures for density counts. None on failure."""
+    try:
+        from app.kernel.kernel_db import KernelMatchFixture, get_kernel_session
+
+        session = get_kernel_session()
+        try:
+            q = session.query(KernelMatchFixture)
+            if competition:
+                q = q.filter(KernelMatchFixture.competition == competition)
+            rows = q.all()
+            out: list[dict] = []
+            for f in rows:
+                out.append(
+                    {
+                        "match_id": f.match_id,
+                        "home_team": f.home_team or "",
+                        "away_team": f.away_team or "",
+                        "kickoff_utc": f.kickoff_utc,
+                    }
+                )
+            return out
+        finally:
+            session.close()
+    except Exception:  # noqa: BLE001
+        logger.debug("fixture history for density failed", exc_info=True)
+        return None
 
 
 def _days_since(

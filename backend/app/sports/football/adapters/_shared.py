@@ -423,20 +423,42 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
     except Exception:  # noqa: BLE001
         logger.debug("schedule density flags skipped", exc_info=True)
 
-    # Injury: optional world-cup player status (no-op if unavailable)
+    # P1-F3: injury impact — static role-weighted Out list, WC fallback
     try:
-        from app.services.world_cup_player_status_source import (
-            get_team_injury_impact,
-        )
-        inj_h = get_team_injury_impact(home_name)
-        inj_a = get_team_injury_impact(away_name)
+        from app.sports.football.football_injury import injury_impact_for_team
+
+        inj_h = injury_impact_for_team(home_name)
+        inj_a = injury_impact_for_team(away_name)
+
+        wc_lookup = None
+        if inj_h is None or inj_a is None:
+            try:
+                from app.services.world_cup_player_status_source import (
+                    get_team_injury_impact,
+                )
+                wc_lookup = get_team_injury_impact
+            except Exception:  # noqa: BLE001
+                wc_lookup = None
+
+        if inj_h is None and wc_lookup is not None:
+            try:
+                inj_h = wc_lookup(home_name)
+            except Exception:  # noqa: BLE001
+                inj_h = None
+        if inj_a is None and wc_lookup is not None:
+            try:
+                inj_a = wc_lookup(away_name)
+            except Exception:  # noqa: BLE001
+                inj_a = None
+
         if inj_h is not None:
             raw["player"]["injury_impact_home"] = float(inj_h)
+            raw.setdefault("custom", {})["injury_impact_home"] = float(inj_h)
         if inj_a is not None:
             raw["player"]["injury_impact_away"] = float(inj_a)
+            raw.setdefault("custom", {})["injury_impact_away"] = float(inj_a)
     except Exception:  # noqa: BLE001
-        # Function may not exist — leave injury empty
-        pass
+        logger.debug("injury impact enrich skipped", exc_info=True)
 
     raw["environment"]["is_home_advantage"] = not is_world_cup
     if is_world_cup:

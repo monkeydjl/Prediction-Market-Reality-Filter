@@ -316,3 +316,167 @@ class TestScheduleDensityEnrich:
         assert "matches_last_7d_home" not in raw["custom"]
         assert raw["custom"]["schedule_congested_home"] is True
         assert raw["custom"]["b2b_home"] is True
+
+
+class TestInjuryImpactEnrich:
+    def test_static_dual_writes_sample_teams(self):
+        """Real Madrid / Bayern sample Outs inject player + custom impacts."""
+        match = _make_match("ucl-injury")
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+        with patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ), patch(
+            "app.sports.football.adapters._shared._fixture_history_for_density",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_player_status_source.get_team_injury_impact",
+            return_value=None,
+            create=True,
+        ):
+            enrich_situational_features(raw, match)
+
+        assert raw["player"]["injury_impact_home"] == pytest.approx(0.35)
+        assert raw["player"]["injury_impact_away"] == pytest.approx(0.26)
+        assert raw["custom"]["injury_impact_home"] == pytest.approx(0.35)
+        assert raw["custom"]["injury_impact_away"] == pytest.approx(0.26)
+
+    def test_unknown_teams_omit_injury_keys(self):
+        football = SportIdentity(code="football", name="Football")
+        ucl = CompetitionIdentity(code="ucl", name="UCL", sport=football)
+        match = MatchIdentity(
+            match_id="ucl-unknown-inj",
+            season=SeasonIdentity(competition=ucl, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="XXX", name="Fake Home FC", competition=ucl),
+            away=TeamIdentity(code="YYY", name="Fake Away FC", competition=ucl),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+        with patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ), patch(
+            "app.sports.football.adapters._shared._fixture_history_for_density",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_player_status_source.get_team_injury_impact",
+            return_value=None,
+            create=True,
+        ):
+            enrich_situational_features(raw, match)
+
+        assert "injury_impact_home" not in raw["player"]
+        assert "injury_impact_away" not in raw["player"]
+        assert "injury_impact_home" not in raw["custom"]
+        assert "injury_impact_away" not in raw["custom"]
+
+    def test_wc_fallback_when_static_none(self):
+        """WC source fills a side only when static returns None."""
+        football = SportIdentity(code="football", name="Football")
+        ucl = CompetitionIdentity(code="ucl", name="UCL", sport=football)
+        match = MatchIdentity(
+            match_id="ucl-wc-fallback",
+            season=SeasonIdentity(competition=ucl, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="XXX", name="Fake Home FC", competition=ucl),
+            away=TeamIdentity(code="YYY", name="Fake Away FC", competition=ucl),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+
+        def _wc_side(name: str):
+            if name == "Fake Home FC":
+                return 0.22
+            return None
+
+        with patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ), patch(
+            "app.sports.football.adapters._shared._fixture_history_for_density",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_player_status_source.get_team_injury_impact",
+            side_effect=_wc_side,
+            create=True,
+        ):
+            enrich_situational_features(raw, match)
+
+        assert raw["player"]["injury_impact_home"] == pytest.approx(0.22)
+        assert raw["custom"]["injury_impact_home"] == pytest.approx(0.22)
+        assert "injury_impact_away" not in raw["player"]
+        assert "injury_impact_away" not in raw["custom"]
+
+    def test_static_not_overwritten_by_wc(self):
+        match = _make_match("ucl-static-wins")
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+        with patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ), patch(
+            "app.sports.football.adapters._shared._fixture_history_for_density",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_player_status_source.get_team_injury_impact",
+            return_value=0.99,
+            create=True,
+        ):
+            enrich_situational_features(raw, match)
+
+        assert raw["player"]["injury_impact_home"] == pytest.approx(0.35)
+        assert raw["player"]["injury_impact_away"] == pytest.approx(0.26)

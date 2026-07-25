@@ -266,6 +266,22 @@ class TestFootballMultiFactorPredict:
         rest_item = next(i for i in r1.explanation if i.factor == "rest")
         assert rest_item.available
 
+    def test_custom_schedule_congested_with_long_rest(self):
+        """True density flag should penalize even when rest_days are equal and long."""
+        engine = FootballMultiFactorEngine()
+        base = _make_features(rest_home=5, rest_away=5, custom={})
+        congest = _make_features(
+            rest_home=5,
+            rest_away=5,
+            custom={"schedule_congested_home": True, "schedule_congested_away": False},
+        )
+        r0 = engine.predict(base, base.match)
+        r1 = engine.predict(congest, congest.match)
+        assert (
+            r1.outcome_probabilities["home_win"]
+            < r0.outcome_probabilities["home_win"]
+        )
+
     def test_injury_custom_fallback(self):
         engine = FootballMultiFactorEngine()
         # player injury empty; custom carries impact

@@ -170,7 +170,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 | ID | 因子 / 信号 | 数据侧 | 模型侧 |
 |----|-------------|--------|--------|
 | P1-F1 | form（近 N 场） | ✅ 部分：adapter 从 historical CSV 填 form_*（国家队/能匹配到的队名） | 俱乐部联赛需联赛级 form 源 |
-| P1-F2 | rest / 赛程密度 | ✅ 部分 2026-07-20：rest_days + b2b(≤1)/congest(≤2) 非对称惩罚；完整赛程密度（N 天内场次）仍待 |
+| P1-F2 | rest / 赛程密度 | ✅ 部分 2026-07-25：`matches_last_7d_*` + congest 由 7 日场次≥2 驱动（rest≤2 仅 fallback）；b2b 仍 rest≤1 | 跨联赛合并赛程 / 更细窗口仍待 |
 | P1-F3 | injury / availability | ✅ 部分 2026-07-20：player + custom `injury_impact_*` 透传；真伤病源与重要性加权仍待 |
 | P1-F4 | h2h | ✅ 部分：historical h2h 填入 | 小权重已在 multi-factor |
 | P1-F5 | 真实 xG | OK 2026-07-20: MultiFactor fuses custom.xg_* proxy + market_value soft; true xG API still pending | API-Football statistics |

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Football schedule density window counts (P1-F2)
+- `matches_in_window_as_of`: prior fixtures in 7-day window (includes unfinished)
+- Football enrich injects `matches_last_7d_*`; `schedule_congested_*` from count≥2 when known
+- Rest ≤ 2 remains fallback only when count unknown; b2b still rest ≤ 1; MultiFactor weights unchanged
+
 ### NBA static team ORtg/DRtg for net_rating (P1-B4)
 - `nba_team_ratings`: 30-franchise static ORtg/DRtg (+ Clippers alias)
 - Adapter injects four custom fields only when both sides resolve; omits otherwise

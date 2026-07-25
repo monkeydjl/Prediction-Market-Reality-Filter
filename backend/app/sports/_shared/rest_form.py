@@ -55,6 +55,39 @@ def rest_days_as_of(
     return float(max(0, (as_of - prev).days))
 
 
+def matches_in_window_as_of(
+    team: str,
+    kickoff: datetime | None,
+    history: Sequence[Mapping[str, Any]],
+    *,
+    window_days: int = 7,
+    exclude_match_id: str | None = None,
+) -> int | None:
+    """Count prior matches for team within window_days before kickoff.
+
+    Includes unfinished fixtures (scores may be null). Exact team name match.
+    Returns None when team empty or kickoff missing; otherwise int >= 0.
+    """
+    as_of = _as_utc(kickoff)
+    if as_of is None or not team:
+        return None
+    days = max(0, int(window_days))
+    count = 0
+    for m in history:
+        mid = m.get("match_id")
+        if exclude_match_id is not None and mid == exclude_match_id:
+            continue
+        if not _team_in_match(team, m):
+            continue
+        k = _as_utc(m.get("kickoff_utc"))
+        if k is None or k >= as_of:
+            continue
+        gap = (as_of - k).days
+        if 0 <= gap <= days:
+            count += 1
+    return count
+
+
 def form_as_of(
     team: str,
     kickoff: datetime | None,

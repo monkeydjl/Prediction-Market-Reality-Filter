@@ -10,7 +10,11 @@ from app.kernel.kernel_db import (
     get_kernel_session,
     init_kernel_db,
 )
-from app.sports.football.club_form import points_form_rate, team_form_from_kernel
+from app.sports.football.club_form import (
+    h2h_from_kernel,
+    points_form_rate,
+    team_form_from_kernel,
+)
 
 
 def _seed_matches(tmp_path):
@@ -119,3 +123,172 @@ class TestPointsFormRate:
     def test_dirty_over_points_clamped(self):
         # W+D > N would exceed 1.0 without clamp
         assert points_form_rate(10, 10, 5) == pytest.approx(1.0)
+
+
+def _seed_h2h_matches(tmp_path):
+    """Arsenal vs Chelsea twice: Arsenal home win; Chelsea home (Arsenal away) draw."""
+    close_kernel_session()
+    init_kernel_db(str(tmp_path / "kernel_h2h.db"))
+    session = get_kernel_session()
+    try:
+        fixtures = [
+            KernelMatchFixture(
+                match_id="h2h-1",
+                competition="epl",
+                season="2025",
+                stage="regular",
+                home_team="Arsenal",
+                away_team="Chelsea",
+                kickoff_utc=datetime(2025, 8, 20, tzinfo=timezone.utc),
+            ),
+            KernelMatchFixture(
+                match_id="h2h-2",
+                competition="epl",
+                season="2025",
+                stage="regular",
+                home_team="Chelsea",
+                away_team="Arsenal",
+                kickoff_utc=datetime(2025, 9, 5, tzinfo=timezone.utc),
+            ),
+            KernelMatchFixture(
+                match_id="h2h-other",
+                competition="epl",
+                season="2025",
+                stage="regular",
+                home_team="Arsenal",
+                away_team="Liverpool",
+                kickoff_utc=datetime(2025, 9, 12, tzinfo=timezone.utc),
+            ),
+            KernelMatchFixture(
+                match_id="h2h-future",
+                competition="epl",
+                season="2025",
+                stage="regular",
+                home_team="Arsenal",
+                away_team="Chelsea",
+                kickoff_utc=datetime(2025, 12, 1, tzinfo=timezone.utc),
+            ),
+            KernelMatchFixture(
+                match_id="h2h-ucl",
+                competition="ucl",
+                season="2025",
+                stage="group",
+                home_team="Arsenal",
+                away_team="Chelsea",
+                kickoff_utc=datetime(2025, 9, 1, tzinfo=timezone.utc),
+            ),
+        ]
+        results = [
+            KernelMatchResult(
+                match_id="h2h-1",
+                home_score=2,
+                away_score=0,
+                finished_at=datetime(2025, 8, 20, 22, tzinfo=timezone.utc),
+            ),
+            KernelMatchResult(
+                match_id="h2h-2",
+                home_score=1,
+                away_score=1,
+                finished_at=datetime(2025, 9, 5, 22, tzinfo=timezone.utc),
+            ),
+            KernelMatchResult(
+                match_id="h2h-other",
+                home_score=3,
+                away_score=1,
+                finished_at=datetime(2025, 9, 12, 22, tzinfo=timezone.utc),
+            ),
+            # h2h-future: no result yet
+            KernelMatchResult(
+                match_id="h2h-ucl",
+                home_score=1,
+                away_score=0,
+                finished_at=datetime(2025, 9, 1, 22, tzinfo=timezone.utc),
+            ),
+        ]
+        for row in fixtures + results:
+            session.add(row)
+        session.commit()
+    finally:
+        session.close()
+
+
+class TestH2hFromKernel:
+    def test_current_home_perspective_two_meetings(self, tmp_path):
+        _seed_h2h_matches(tmp_path)
+        try:
+            before = datetime(2025, 10, 1, tzinfo=timezone.utc)
+            h2h = h2h_from_kernel(
+                "Arsenal", "Chelsea", competition="epl", before=before,
+            )
+            assert h2h is not None
+            # h2h-1: Arsenal (current home) won; h2h-2: draw at Chelsea
+            # future excluded; Liverpool match excluded; ucl filtered out by competition
+            assert h2h["matches_played"] == 2
+            assert h2h["home_wins"] == 1
+            assert h2h["draws"] == 1
+            assert h2h["away_wins"] == 0
+            assert h2h["data_source"] == "kernel_match_results"
+        finally:
+            close_kernel_session()
+
+    def test_venue_swap_still_current_home(self, tmp_path):
+        _seed_h2h_matches(tmp_path)
+        try:
+            before = datetime(2025, 10, 1, tzinfo=timezone.utc)
+            # Swap current home/away: Chelsea is current home
+            h2h = h2h_from_kernel(
+                "Chelsea", "Arsenal", competition="epl", before=before,
+            )
+            assert h2h is not None
+            assert h2h["matches_played"] == 2
+            # From Chelsea perspective: loss at Arsenal, draw at home
+            assert h2h["home_wins"] == 0
+            assert h2h["draws"] == 1
+            assert h2h["away_wins"] == 1
+        finally:
+            close_kernel_session()
+
+    def test_unknown_pair_returns_none(self, tmp_path):
+        _seed_h2h_matches(tmp_path)
+        try:
+            h2h = h2h_from_kernel(
+                "Arsenal", "NotATeam", competition="epl",
+                before=datetime(2025, 10, 1, tzinfo=timezone.utc),
+            )
+            assert h2h is None
+        finally:
+            close_kernel_session()
+
+    def test_same_team_returns_none(self, tmp_path):
+        _seed_h2h_matches(tmp_path)
+        try:
+            assert h2h_from_kernel("Arsenal", "Arsenal", competition="epl") is None
+        finally:
+            close_kernel_session()
+
+    def test_before_excludes_future(self, tmp_path):
+        _seed_h2h_matches(tmp_path)
+        try:
+            # Only h2h-1 finished before Aug 25
+            h2h = h2h_from_kernel(
+                "Arsenal", "Chelsea", competition="epl",
+                before=datetime(2025, 8, 25, tzinfo=timezone.utc),
+            )
+            assert h2h is not None
+            assert h2h["matches_played"] == 1
+            assert h2h["home_wins"] == 1
+        finally:
+            close_kernel_session()
+
+    def test_competition_filter(self, tmp_path):
+        _seed_h2h_matches(tmp_path)
+        try:
+            h2h = h2h_from_kernel(
+                "Arsenal", "Chelsea", competition="ucl",
+                before=datetime(2025, 10, 1, tzinfo=timezone.utc),
+            )
+            assert h2h is not None
+            assert h2h["matches_played"] == 1
+            assert h2h["home_wins"] == 1
+        finally:
+            close_kernel_session()

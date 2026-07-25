@@ -172,7 +172,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 | P1-F1 | form（近 N 场） | ✅ 部分 2026-07-25：`form_*` = 积分率 (3W+D)/(3N)（historical + club_form 经 enrich 统一写入）；加权近 N / 覆盖率与别名仍待 | 引擎 form 差分未改 |
 | P1-F2 | rest / 赛程密度 | ✅ 部分 2026-07-25：`matches_last_7d_*` + congest 由 7 日场次≥2 驱动（rest≤2 仅 fallback）；b2b 仍 rest≤1 | 跨联赛合并赛程 / 更细窗口仍待 |
 | P1-F3 | injury / availability | ✅ 部分 2026-07-25：静态 Out + 角色加权 `injury_impact_*`（player/custom 双写；WC 源仅 static None fallback）；真伤病 API 与分钟/身价加权仍待 |
-| P1-F4 | h2h | ✅ 部分：historical h2h 填入 | 小权重已在 multi-factor |
+| P1-F4 | h2h | ✅ 部分 2026-07-25：historical 优先 + kernel 俱乐部交锋回退（当前主队视角）；主客场分拆/别名/合并源仍待 | 小权重已在 multi-factor |
 | P1-F5 | 真实 xG | OK 2026-07-20: MultiFactor fuses custom.xg_* proxy + market_value soft; true xG API still pending | API-Football statistics |
 | P1-F6 | PPDA / possession / shots | ✅ 部分 2026-07-20：possession/shots/ppda soft；真统计 API 仍待 |
 | P1-F7 | 场地 / 旅行 / 海拔 / 天气 | ✅ 部分 2026-07-20：travel + altitude soft（≥1500m）；俱乐部/天气真源仍待 |

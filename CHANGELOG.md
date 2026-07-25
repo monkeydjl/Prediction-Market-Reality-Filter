@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Football club H2H from kernel (P1-F4)
+- `h2h_from_kernel`: pairwise meetings, current-home perspective, as-of + competition filter
+- Enrich: historical CSV first; kernel only when historical empty; same `h2h_*` rate fields
+- MultiFactor h2h formula/weight unchanged
+
 ### Football form points rate (P1-F1)
 - `points_form_rate`: form_* = (3W+D)/(3N) in [0,1] when played > 0
 - Adapter enrich single write site; historical CSV + club kernel both benefit

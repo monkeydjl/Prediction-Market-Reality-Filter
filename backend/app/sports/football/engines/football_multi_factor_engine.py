@@ -263,12 +263,14 @@ class FootballMultiFactorEngine:
         b2b_away = bool(custom.get("b2b_away")) or (
             rest_away is not None and float(rest_away) <= 1.0
         )
-        congest_home = bool(custom.get("schedule_congested_home")) or (
-            rest_home is not None and float(rest_home) <= 2.0
-        )
-        congest_away = bool(custom.get("schedule_congested_away")) or (
-            rest_away is not None and float(rest_away) <= 2.0
-        )
+        if "schedule_congested_home" in custom:
+            congest_home = bool(custom["schedule_congested_home"])
+        else:
+            congest_home = rest_home is not None and float(rest_home) <= 2.0
+        if "schedule_congested_away" in custom:
+            congest_away = bool(custom["schedule_congested_away"])
+        else:
+            congest_away = rest_away is not None and float(rest_away) <= 2.0
         if rest_home is not None and rest_away is not None:
             rest_diff = _clamp(float(rest_home) - float(rest_away), -4.0, 4.0)
             edge = rest_diff * 0.02

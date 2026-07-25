@@ -282,6 +282,25 @@ class TestFootballMultiFactorPredict:
             < r0.outcome_probabilities["home_win"]
         )
 
+    def test_custom_schedule_congested_false_overrides_short_rest(self):
+        """Known density flag False must not apply congest penalty even if rest <= 2."""
+        engine = FootballMultiFactorEngine()
+        # Same rest on both sides so only congest edge differs
+        rest_proxy = _make_features(rest_home=2, rest_away=5, custom={})
+        density_clear = _make_features(
+            rest_home=2,
+            rest_away=5,
+            custom={"schedule_congested_home": False, "schedule_congested_away": False},
+        )
+        r_proxy = engine.predict(rest_proxy, rest_proxy.match)
+        r_clear = engine.predict(density_clear, density_clear.match)
+        # Without custom flags, rest<=2 home triggers congest penalty → lower home_win
+        # With explicit False, that penalty must not apply → home_win strictly higher
+        assert (
+            r_clear.outcome_probabilities["home_win"]
+            > r_proxy.outcome_probabilities["home_win"]
+        )
+
     def test_injury_custom_fallback(self):
         engine = FootballMultiFactorEngine()
         # player injury empty; custom carries impact

@@ -155,3 +155,100 @@ def team_form_from_kernel(
         }
     finally:
         session.close()
+
+
+def h2h_from_kernel(
+    home_team: str,
+    away_team: str,
+    *,
+    competition: str | None = None,
+    before: datetime | None = None,
+    max_matches: int = 20,
+) -> dict[str, Any] | None:
+    """Pairwise H2H from kernel fixtures+results.
+
+    Counts wins/draws/losses from the perspective of ``home_team`` (current
+    match home), regardless of which side hosted historically.
+    Shape compatible with get_historical_h2h enrich write path.
+    """
+    from app.kernel.kernel_db import (
+        KernelMatchFixture,
+        KernelMatchResult,
+        get_kernel_session,
+    )
+
+    if not home_team or not away_team:
+        return None
+    home_key = _normalize(home_team)
+    away_key = _normalize(away_team)
+    if not home_key or not away_key or home_key == away_key:
+        return None
+
+    before = before or datetime.now(timezone.utc)
+    if before.tzinfo is None:
+        before = before.replace(tzinfo=timezone.utc)
+
+    session = get_kernel_session()
+    try:
+        q = (
+            session.query(KernelMatchFixture, KernelMatchResult)
+            .join(
+                KernelMatchResult,
+                KernelMatchFixture.match_id == KernelMatchResult.match_id,
+            )
+        )
+        if competition:
+            q = q.filter(KernelMatchFixture.competition == competition)
+        rows = q.all()
+
+        pair = {home_key, away_key}
+        meetings: list[tuple[datetime | None, int, int]] = []
+        for fixture, result in rows:
+            if result.home_score is None or result.away_score is None:
+                continue
+            kickoff = fixture.kickoff_utc or result.finished_at
+            if kickoff is not None:
+                if kickoff.tzinfo is None:
+                    kickoff = kickoff.replace(tzinfo=timezone.utc)
+                if kickoff >= before:
+                    continue
+            fh = _normalize(fixture.home_team or "")
+            fa = _normalize(fixture.away_team or "")
+            if {fh, fa} != pair:
+                continue
+            hs = int(result.home_score)
+            aws = int(result.away_score)
+            # Map to current-home perspective scores
+            if fh == home_key:
+                cur_home_gf, cur_home_ga = hs, aws
+            else:
+                cur_home_gf, cur_home_ga = aws, hs
+            meetings.append((kickoff, cur_home_gf, cur_home_ga))
+
+        if not meetings:
+            return None
+
+        meetings.sort(
+            key=lambda r: r[0].isoformat() if r[0] else "",
+            reverse=True,
+        )
+        meetings = meetings[: max(1, max_matches)]
+
+        home_wins = draws = away_wins = 0
+        for _, gf, ga in meetings:
+            if gf > ga:
+                home_wins += 1
+            elif gf < ga:
+                away_wins += 1
+            else:
+                draws += 1
+
+        return {
+            "matches_played": len(meetings),
+            "home_wins": home_wins,
+            "draws": draws,
+            "away_wins": away_wins,
+            "data_source": "kernel_match_results",
+        }
+    finally:
+        session.close()

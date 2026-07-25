@@ -319,6 +319,113 @@ class TestScheduleDensityEnrich:
         assert raw["custom"]["b2b_home"] is True
 
 
+class TestH2hKernelFallback:
+    def test_kernel_fills_when_historical_none(self):
+        match = _make_match("ucl-h2h-kernel")
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+        kernel_h2h = {
+            "matches_played": 2,
+            "home_wins": 1,
+            "draws": 1,
+            "away_wins": 0,
+            "data_source": "kernel_match_results",
+        }
+        with patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.h2h_from_kernel",
+            return_value=kernel_h2h,
+        ) as mock_kh:
+            enrich_situational_features(raw, match)
+
+        mock_kh.assert_called()
+        assert raw["team"]["h2h_home_win_rate"] == pytest.approx(0.5)
+        assert raw["team"]["h2h_draw_rate"] == pytest.approx(0.5)
+
+    def test_historical_not_overwritten_by_kernel(self):
+        match = _make_match("ucl-h2h-hist")
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+        hist = {
+            "matches_played": 4,
+            "home_wins": 2,
+            "draws": 1,
+            "away_wins": 1,
+        }
+        with patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=hist,
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.h2h_from_kernel",
+            return_value={
+                "matches_played": 2,
+                "home_wins": 2,
+                "draws": 0,
+                "away_wins": 0,
+                "data_source": "kernel_match_results",
+            },
+        ) as mock_kh:
+            enrich_situational_features(raw, match)
+
+        mock_kh.assert_not_called()
+        assert raw["team"]["h2h_home_win_rate"] == pytest.approx(0.5)
+        assert raw["team"]["h2h_draw_rate"] == pytest.approx(0.25)
+
+    def test_both_empty_omits_h2h(self):
+        match = _make_match("ucl-h2h-empty")
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+        with patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.h2h_from_kernel",
+            return_value=None,
+        ):
+            enrich_situational_features(raw, match)
+
+        assert "h2h_home_win_rate" not in raw["team"]
+        assert "h2h_draw_rate" not in raw["team"]
+
+
 class TestInjuryImpactEnrich:
     def test_static_dual_writes_sample_teams(self):
         """Real Madrid / Bayern sample Outs inject player + custom impacts."""

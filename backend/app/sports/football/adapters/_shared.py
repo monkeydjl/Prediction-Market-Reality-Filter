@@ -353,20 +353,36 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
         if gpg is not None:
             raw.setdefault("custom", {})["xg_away"] = float(gpg)
 
+    h2h = None
     if get_historical_h2h is not None:
         try:
             h2h = get_historical_h2h(home_name, away_name, before_date=before)
         except Exception:  # noqa: BLE001
             h2h = None
             logger.debug("H2H enrichment failed", exc_info=True)
-        if h2h:
-            played = max(int(h2h.get("matches_played") or 0), 1)
-            raw["team"]["h2h_home_win_rate"] = round(
-                int(h2h.get("home_wins") or 0) / played, 4,
+
+    if not h2h:
+        try:
+            from app.sports.football.club_form import h2h_from_kernel
+
+            h2h = h2h_from_kernel(
+                home_name,
+                away_name,
+                competition=competition if not is_world_cup else None,
+                before=before,
             )
-            raw["team"]["h2h_draw_rate"] = round(
-                int(h2h.get("draws") or 0) / played, 4,
-            )
+        except Exception:  # noqa: BLE001
+            h2h = None
+            logger.debug("Club H2H enrichment failed", exc_info=True)
+
+    if h2h:
+        played = max(int(h2h.get("matches_played") or 0), 1)
+        raw["team"]["h2h_home_win_rate"] = round(
+            int(h2h.get("home_wins") or 0) / played, 4,
+        )
+        raw["team"]["h2h_draw_rate"] = round(
+            int(h2h.get("draws") or 0) / played, 4,
+        )
 
     # Market value: cache-only Transfermarkt (no scrape on predict path)
     try:

@@ -9,6 +9,34 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+def points_form_rate(
+    wins: int | float | None,
+    draws: int | float | None,
+    played: int | float | None,
+) -> float | None:
+    """Football points rate in [0, 1]: (3W + D) / (3N). None if N <= 0."""
+    try:
+        n = int(played or 0)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return None
+    try:
+        w = max(0, int(wins or 0))
+    except (TypeError, ValueError):
+        w = 0
+    try:
+        d = max(0, int(draws or 0))
+    except (TypeError, ValueError):
+        d = 0
+    rate = (3 * w + d) / (3 * n)
+    if rate < 0.0:
+        rate = 0.0
+    elif rate > 1.0:
+        rate = 1.0
+    return round(rate, 4)
+
+
 def _normalize(name: str) -> str:
     return " ".join((name or "").lower().split())
 

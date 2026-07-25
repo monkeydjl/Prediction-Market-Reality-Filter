@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Football static injury impact (P1-F3)
+- `football_injury`: Out-only role weights (star/starter/rotation/bench) → `injury_impact` in [0,1]
+- Enrich dual-writes `player` + `custom` when static table has Out rows; missing → None
+- WC player-status source remains fallback only when static is None; MultiFactor formula/weight unchanged
+
 ### Football schedule density window counts (P1-F2)
 - `matches_in_window_as_of`: prior fixtures in 7-day window (includes unfinished)
 - Football enrich injects `matches_last_7d_*`; `schedule_congested_*` from count≥2 when known

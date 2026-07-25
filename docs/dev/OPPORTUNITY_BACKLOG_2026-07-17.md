@@ -171,7 +171,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 |----|-------------|--------|--------|
 | P1-F1 | form（近 N 场） | ✅ 部分：adapter 从 historical CSV 填 form_*（国家队/能匹配到的队名） | 俱乐部联赛需联赛级 form 源 |
 | P1-F2 | rest / 赛程密度 | ✅ 部分 2026-07-25：`matches_last_7d_*` + congest 由 7 日场次≥2 驱动（rest≤2 仅 fallback）；b2b 仍 rest≤1 | 跨联赛合并赛程 / 更细窗口仍待 |
-| P1-F3 | injury / availability | ✅ 部分 2026-07-20：player + custom `injury_impact_*` 透传；真伤病源与重要性加权仍待 |
+| P1-F3 | injury / availability | ✅ 部分 2026-07-25：静态 Out + 角色加权 `injury_impact_*`（player/custom 双写；WC 源仅 static None fallback）；真伤病 API 与分钟/身价加权仍待 |
 | P1-F4 | h2h | ✅ 部分：historical h2h 填入 | 小权重已在 multi-factor |
 | P1-F5 | 真实 xG | OK 2026-07-20: MultiFactor fuses custom.xg_* proxy + market_value soft; true xG API still pending | API-Football statistics |
 | P1-F6 | PPDA / possession / shots | ✅ 部分 2026-07-20：possession/shots/ppda soft；真统计 API 仍待 |

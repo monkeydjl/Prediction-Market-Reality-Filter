@@ -183,21 +183,39 @@ class TestEnrichRefereeFeatures:
         raw = {"custom": {"referee_home_win_rate": 0.62}, "environment": {}}
         enrich_referee_features(raw, _make_match())
         assert raw["custom"]["referee_home_win_rate"] == 0.62
+        assert raw["custom"].get("referee_source") != "static_map"
 
-    def test_environment_name_only(self):
+    def test_passthrough_bias_not_overwritten(self):
         from app.sports.football.adapters._shared import enrich_referee_features
 
-        raw = {"custom": {}, "environment": {"referee": "John Smith"}}
+        raw = {
+            "custom": {"referee_home_bias": 0.11, "referee_name": "Michael Oliver"},
+            "environment": {"referee": "Michael Oliver"},
+        }
         enrich_referee_features(raw, _make_match())
-        assert raw["custom"]["referee_name"] == "John Smith"
-        assert raw["custom"].get("referee_home_win_rate") is None
+        assert raw["custom"]["referee_home_bias"] == pytest.approx(0.11)
+        assert raw["custom"].get("referee_source") != "static_map"
 
-    def test_static_map_bias(self, monkeypatch):
-        import app.sports.football.adapters._shared as sh
-        monkeypatch.setitem(sh._REFEREE_HOME_BIAS, "jane doe", 0.08)
-        raw = {"custom": {}, "environment": {"referee": "Jane Doe"}}
-        sh.enrich_referee_features(raw, _make_match())
-        assert raw["custom"]["referee_home_bias"] == 0.08
+    def test_environment_unknown_name_only(self):
+        from app.sports.football.adapters._shared import enrich_referee_features
+
+        raw = {"custom": {}, "environment": {"referee": "John Smith UnknownXYZ"}}
+        enrich_referee_features(raw, _make_match())
+        assert raw["custom"]["referee_name"] == "John Smith UnknownXYZ"
+        assert raw["custom"].get("referee_home_win_rate") is None
+        assert raw["custom"].get("referee_home_bias") is None
+        assert raw["custom"].get("referee_source") is None
+
+    def test_static_map_bias_known_name(self):
+        from app.sports.football.adapters._shared import enrich_referee_features
+        from app.sports.football.football_referee import bias_for_referee
+
+        raw = {"custom": {}, "environment": {"referee": "Michael Oliver"}}
+        enrich_referee_features(raw, _make_match())
+        expected = bias_for_referee("Michael Oliver")
+        assert expected is not None
+        assert raw["custom"]["referee_name"] == "Michael Oliver"
+        assert raw["custom"]["referee_home_bias"] == pytest.approx(float(expected))
         assert raw["custom"]["referee_source"] == "static_map"
 
 

@@ -218,18 +218,12 @@ def fetch_elo_and_odds(
 
 
 
-# Optional static referee home-bias map (name lower → bias in [-0.25, 0.25]).
-# Empty by default; operators / scrapers can populate via custom without code.
-_REFEREE_HOME_BIAS: dict[str, float] = {}
-
-
 def enrich_referee_features(raw: dict, match: MatchIdentity) -> None:
     """Pass-through / soft-fill referee custom fields for multi-factor (P1-F8).
 
     Sources (first wins for rate/bias):
     1. Already-set ``custom.referee_home_win_rate`` / ``referee_home_bias``
-    2. ``environment.referee`` name + optional ``_REFEREE_HOME_BIAS`` map
-    3. ``custom.referee_name`` + same map
+    2. ``environment.referee`` / ``custom.referee_name`` + ``bias_for_referee`` static table
 
     Never invents rates without a name or explicit numeric field.
     """
@@ -247,18 +241,17 @@ def enrich_referee_features(raw: dict, match: MatchIdentity) -> None:
     name = custom.get("referee_name") or env.get("referee")
     if not name:
         return
-    key = str(name).lower().strip()
-    bias = _REFEREE_HOME_BIAS.get(key)
-    if bias is None:
-        # leave name only — engine treats missing rate as unavailable
-        custom["referee_name"] = str(name).strip()
-        return
-    try:
-        b = max(-0.25, min(0.25, float(bias)))
-    except (TypeError, ValueError):
-        return
     custom["referee_name"] = str(name).strip()
-    custom["referee_home_bias"] = b
+    try:
+        from app.sports.football.football_referee import bias_for_referee
+
+        b = bias_for_referee(str(name))
+    except Exception:  # noqa: BLE001
+        logger.debug("referee static bias lookup skipped", exc_info=True)
+        return
+    if b is None:
+        return
+    custom["referee_home_bias"] = float(b)
     custom["referee_source"] = "static_map"
 
 

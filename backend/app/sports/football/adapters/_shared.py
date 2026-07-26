@@ -276,6 +276,31 @@ def enrich_referee_features(raw: dict, match: MatchIdentity) -> None:
     custom["referee_source"] = "static_map"
 
 
+def enrich_altitude_features(raw: dict, match: MatchIdentity) -> None:
+    """Pass-through altitude, then static fill for home venue when still missing (P1-F7)."""
+    try:
+        env = raw.setdefault("environment", {})
+        custom = raw.setdefault("custom", {})
+        alt = (
+            custom.get("venue_altitude_m")
+            or custom.get("altitude_m")
+            or env.get("altitude_m")
+            or env.get("venue_altitude_m")
+        )
+        if alt is not None:
+            custom["venue_altitude_m"] = float(alt)
+            return
+        from app.sports._shared.team_geo import altitude_m_for_team
+
+        home_name = match.home.name if match.home else ""
+        static_alt = altitude_m_for_team(home_name)
+        if static_alt is not None:
+            custom["venue_altitude_m"] = float(static_alt)
+            custom["altitude_source"] = "static_table"
+    except Exception:  # noqa: BLE001
+        logger.debug("altitude enrich skipped", exc_info=True)
+
+
 def enrich_style_features(raw: dict, match: MatchIdentity) -> None:
     """Static possession/shots/PPDA (P1-F6): overwrite form proxy only when both sides resolve."""
     try:

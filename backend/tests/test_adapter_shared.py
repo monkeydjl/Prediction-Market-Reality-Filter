@@ -824,3 +824,85 @@ class TestStaticStyleOverwrite:
         assert "shots_home" not in raw["custom"]
         assert "ppda_home" not in raw["custom"]
 
+
+class TestStaticAltitudeFill:
+    def test_static_fill_when_missing(self):
+        # Home side must be in altitude table (Toluca)
+        match = MatchIdentity(
+            match_id="ucl-alt-fill",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="TOL", name="Toluca", competition=_UCL),
+            away=TeamIdentity(code="RMA", name="Real Madrid CF", competition=_UCL),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+        from app.sports.football.adapters._shared import enrich_altitude_features
+
+        enrich_altitude_features(raw, match)
+
+        from app.sports._shared.team_geo import altitude_m_for_team
+
+        expected = altitude_m_for_team("Toluca")
+        assert expected is not None
+        assert raw["custom"]["venue_altitude_m"] == pytest.approx(float(expected))
+        assert raw["custom"]["altitude_source"] == "static_table"
+
+    def test_does_not_overwrite_existing(self):
+        match = MatchIdentity(
+            match_id="ucl-alt-keep",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="TOL", name="Toluca", competition=_UCL),
+            away=TeamIdentity(code="RMA", name="Real Madrid CF", competition=_UCL),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {"venue_altitude_m": 1234.0},
+        }
+        from app.sports.football.adapters._shared import enrich_altitude_features
+
+        enrich_altitude_features(raw, match)
+
+        assert raw["custom"]["venue_altitude_m"] == pytest.approx(1234.0)
+        assert raw["custom"].get("altitude_source") != "static_table"
+
+    def test_unknown_home_no_static_altitude(self):
+        match = MatchIdentity(
+            match_id="ucl-alt-none",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="XXX", name="NoSuchHome FC", competition=_UCL),
+            away=TeamIdentity(code="YYY", name="NoSuchAway FC", competition=_UCL),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+        from app.sports.football.adapters._shared import enrich_altitude_features
+
+        enrich_altitude_features(raw, match)
+
+        assert "venue_altitude_m" not in raw["custom"]
+        assert "altitude_source" not in raw["custom"]
+

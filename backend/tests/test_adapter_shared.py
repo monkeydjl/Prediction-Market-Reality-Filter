@@ -117,7 +117,15 @@ class TestFetchEloAndOdds:
         assert raw["team"]["h2h_home_win_rate"] == 0.5
         assert raw["team"]["h2h_draw_rate"] == 0.25
         assert raw["general"]["rest_days_home"] == 15.0
-        assert raw["custom"]["xg_home"] == 1.8
+        from app.sports.football.football_xg import xg_for_team
+
+        assert raw["custom"]["xg_home"] == pytest.approx(
+            float(xg_for_team("Real Madrid CF")),
+        )
+        assert raw["custom"]["xg_away"] == pytest.approx(
+            float(xg_for_team("FC Bayern München")),
+        )
+        assert raw["custom"]["xg_source"] == "static_table"
 
 
 class TestBuildMatchIdentity:
@@ -459,8 +467,7 @@ class TestInjuryImpactEnrich:
 
         assert raw["player"]["injury_impact_home"] == pytest.approx(0.35)
         assert raw["player"]["injury_impact_away"] == pytest.approx(0.26)
-        assert raw["custom"]["injury_impact_home"] == pytest.approx(0.35)
-        assert raw["custom"]["injury_impact_away"] == pytest.approx(0.26)
+
 
     def test_unknown_teams_omit_injury_keys(self):
         football = SportIdentity(code="football", name="Football")
@@ -588,3 +595,134 @@ class TestInjuryImpactEnrich:
 
         assert raw["player"]["injury_impact_home"] == pytest.approx(0.35)
         assert raw["player"]["injury_impact_away"] == pytest.approx(0.26)
+
+
+class TestStaticXgOverwrite:
+    def test_both_static_hits_overwrite_proxy(self):
+        match = _make_match("ucl-xg-static")
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+        # Proxy would write 1.1 / 1.1; static for Real Madrid CF / Bayern must win
+        hist = {
+            "wins": 5,
+            "draws": 2,
+            "losses": 3,
+            "played": 10,
+            "goals_per_game": 1.1,
+            "last_match_date": "2025-09-01",
+        }
+        with patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=hist,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.h2h_from_kernel",
+            return_value=None,
+        ):
+            enrich_situational_features(raw, match)
+
+        from app.sports.football.football_xg import xg_for_team
+
+        assert raw["custom"]["xg_home"] == pytest.approx(
+            float(xg_for_team("Real Madrid CF")),
+        )
+        assert raw["custom"]["xg_away"] == pytest.approx(
+            float(xg_for_team("FC Bayern München")),
+        )
+        assert raw["custom"]["xg_source"] == "static_table"
+        # Must not remain goals proxy
+        assert raw["custom"]["xg_home"] != pytest.approx(1.1)
+
+    def test_one_side_unknown_keeps_proxy(self):
+        match = MatchIdentity(
+            match_id="ucl-xg-partial",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="RMA", name="Real Madrid CF", competition=_UCL),
+            away=TeamIdentity(code="ZZZ", name="Unknown Club XYZ", competition=_UCL),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+        hist = {
+            "wins": 4,
+            "draws": 3,
+            "losses": 3,
+            "played": 10,
+            "goals_per_game": 1.25,
+            "last_match_date": "2025-09-01",
+        }
+        with patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=hist,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.h2h_from_kernel",
+            return_value=None,
+        ):
+            enrich_situational_features(raw, match)
+
+        assert raw["custom"].get("xg_home") == pytest.approx(1.25)
+        assert raw["custom"].get("xg_away") == pytest.approx(1.25)
+        assert "xg_source" not in raw["custom"]
+
+    def test_both_unknown_no_static_source(self):
+        match = MatchIdentity(
+            match_id="ucl-xg-none",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="AAA", name="NoSuchHome FC", competition=_UCL),
+            away=TeamIdentity(code="BBB", name="NoSuchAway FC", competition=_UCL),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+        with patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.h2h_from_kernel",
+            return_value=None,
+        ):
+            enrich_situational_features(raw, match)
+
+        assert "xg_home" not in raw["custom"]
+        assert "xg_away" not in raw["custom"]
+        assert "xg_source" not in raw["custom"]
+

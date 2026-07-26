@@ -353,6 +353,20 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
         if gpg is not None:
             raw.setdefault("custom", {})["xg_away"] = float(gpg)
 
+    # Static xG/90 (P1-F5): overwrite goals proxy only when both sides resolve
+    try:
+        from app.sports.football.football_xg import xg_for_team
+
+        xh = xg_for_team(home_name)
+        xa = xg_for_team(away_name)
+        if xh is not None and xa is not None:
+            custom = raw.setdefault("custom", {})
+            custom["xg_home"] = float(xh)
+            custom["xg_away"] = float(xa)
+            custom["xg_source"] = "static_table"
+    except Exception:  # noqa: BLE001
+        logger.debug("Static xG enrichment failed", exc_info=True)
+
     h2h = None
     if get_historical_h2h is not None:
         try:

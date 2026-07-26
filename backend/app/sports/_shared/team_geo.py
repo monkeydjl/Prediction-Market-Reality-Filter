@@ -1,9 +1,10 @@
 # backend/app/sports/_shared/team_geo.py
-"""Coarse team home-city geo for soft travel / timezone signals.
+"""Coarse team home-city geo for soft travel / timezone / altitude signals.
 
-Used by NBA / NHL (and optionally MLB) adapters. Distances are great-circle
-approximations in km; timezone offsets are integer hours from UTC (winter-ish
-US/Canada defaults — soft signal only, not DST-accurate).
+Used by NBA / NHL / MLB adapters and football clubs + nationals (P1-F7).
+Distances are great-circle approximations in km; timezone offsets are integer
+hours from UTC (winter-ish defaults — soft signal only, not DST-accurate).
+Football also exposes sparse home-venue altitudes via altitude_m_for_team.
 """
 from __future__ import annotations
 
@@ -135,6 +136,154 @@ _FOOTBALL_NATIONAL: dict[str, tuple[float, float, int]] = {
     "Republic of Ireland": (53.350, -6.260, 0),
 }
 
+# Club home cities for football travel soft signal (P1-F7).
+# Keys match common fixture English names; _lookup also fuzzy-matches.
+_FOOTBALL_CLUBS: dict[str, tuple[float, float, int]] = {
+    # EPL / London & England
+    "Arsenal": (51.555, -0.108, 0),
+    "Aston Villa": (52.509, -1.885, 0),
+    "Bournemouth": (50.735, -1.838, 0),
+    "Brentford": (51.491, -0.289, 0),
+    "Brighton": (50.862, -0.083, 0),
+    "Brighton and Hove Albion": (50.862, -0.083, 0),
+    "Chelsea": (51.482, -0.191, 0),
+    "Crystal Palace": (51.398, -0.086, 0),
+    "Everton": (53.439, -2.966, 0),
+    "Fulham": (51.475, -0.222, 0),
+    "Ipswich": (52.055, 1.145, 0),
+    "Ipswich Town": (52.055, 1.145, 0),
+    "Leicester": (52.620, -1.142, 0),
+    "Leicester City": (52.620, -1.142, 0),
+    "Liverpool": (53.431, -2.961, 0),
+    "Manchester City": (53.483, -2.200, 0),
+    "Man City": (53.483, -2.200, 0),
+    "Manchester United": (53.463, -2.291, 0),
+    "Man United": (53.463, -2.291, 0),
+    "Man Utd": (53.463, -2.291, 0),
+    "Newcastle": (54.975, -1.622, 0),
+    "Newcastle United": (54.975, -1.622, 0),
+    "Nottingham Forest": (52.940, -1.133, 0),
+    "Southampton": (50.906, -1.391, 0),
+    "Tottenham": (51.604, -0.066, 0),
+    "Tottenham Hotspur": (51.604, -0.066, 0),
+    "Spurs": (51.604, -0.066, 0),
+    "West Ham": (51.539, -0.017, 0),
+    "West Ham United": (51.539, -0.017, 0),
+    "Wolves": (52.590, -2.130, 0),
+    "Wolverhampton": (52.590, -2.130, 0),
+    "Wolverhampton Wanderers": (52.590, -2.130, 0),
+    # La Liga
+    "Real Madrid": (40.453, -3.688, 1),
+    "Real Madrid CF": (40.453, -3.688, 1),
+    "Barcelona": (41.381, 2.123, 1),
+    "FC Barcelona": (41.381, 2.123, 1),
+    "Atletico Madrid": (40.436, -3.599, 1),
+    "Atlético Madrid": (40.436, -3.599, 1),
+    "Atletico de Madrid": (40.436, -3.599, 1),
+    "Sevilla": (37.384, -5.971, 1),
+    "Real Sociedad": (43.301, -1.974, 1),
+    "Villarreal": (39.944, -0.104, 1),
+    "Athletic Bilbao": (43.264, -2.949, 1),
+    "Athletic Club": (43.264, -2.949, 1),
+    "Real Betis": (37.356, -5.982, 1),
+    "Girona": (41.961, 2.829, 1),
+    # Serie A
+    "Inter": (45.478, 9.124, 1),
+    "Inter Milan": (45.478, 9.124, 1),
+    "Internazionale": (45.478, 9.124, 1),
+    "AC Milan": (45.478, 9.124, 1),
+    "Milan": (45.478, 9.124, 1),
+    "Juventus": (45.110, 7.641, 1),
+    "Napoli": (40.828, 14.193, 1),
+    "Roma": (41.934, 12.455, 1),
+    "AS Roma": (41.934, 12.455, 1),
+    "Lazio": (41.934, 12.455, 1),
+    "Atalanta": (45.709, 9.681, 1),
+    "Fiorentina": (43.781, 11.282, 1),
+    # Bundesliga
+    "Bayern Munich": (48.219, 11.625, 1),
+    "FC Bayern Munich": (48.219, 11.625, 1),
+    "Bayern München": (48.219, 11.625, 1),
+    "FC Bayern München": (48.219, 11.625, 1),
+    "Borussia Dortmund": (51.493, 7.452, 1),
+    "Dortmund": (51.493, 7.452, 1),
+    "BVB": (51.493, 7.452, 1),
+    "RB Leipzig": (51.346, 12.348, 1),
+    "Leipzig": (51.346, 12.348, 1),
+    "Bayer Leverkusen": (51.038, 7.002, 1),
+    "Leverkusen": (51.038, 7.002, 1),
+    "Eintracht Frankfurt": (50.069, 8.645, 1),
+    "Wolfsburg": (52.433, 10.804, 1),
+    "Borussia Monchengladbach": (51.175, 6.385, 1),
+    "Monchengladbach": (51.175, 6.385, 1),
+    # Ligue 1
+    "PSG": (48.841, 2.253, 1),
+    "Paris Saint-Germain": (48.841, 2.253, 1),
+    "Paris Saint Germain": (48.841, 2.253, 1),
+    "Marseille": (43.270, 5.396, 1),
+    "Olympique Marseille": (43.270, 5.396, 1),
+    "Lyon": (45.765, 4.982, 1),
+    "Olympique Lyonnais": (45.765, 4.982, 1),
+    "Monaco": (43.728, 7.415, 1),
+    "AS Monaco": (43.728, 7.415, 1),
+    "Lille": (50.612, 3.130, 1),
+    "Lens": (50.433, 2.815, 1),
+    "Nice": (43.705, 7.193, 1),
+    # Europe / UCL regulars
+    "Ajax": (52.314, 4.942, 1),
+    "Porto": (41.162, -8.584, 0),
+    "FC Porto": (41.162, -8.584, 0),
+    "Benfica": (38.753, -9.184, 0),
+    "Sporting": (38.761, -9.161, 0),
+    "Sporting CP": (38.761, -9.161, 0),
+    "Sporting Lisbon": (38.761, -9.161, 0),
+    "Celtic": (55.850, -4.206, 0),
+    "Rangers": (55.853, -4.309, 0),
+    "Galatasaray": (41.103, 28.991, 3),
+    "Fenerbahce": (40.988, 29.037, 3),
+    "Shakhtar Donetsk": (50.433, 30.522, 2),
+    "Red Star Belgrade": (44.783, 20.465, 1),
+    "Club Brugge": (51.193, 3.180, 1),
+    "PSV": (51.442, 5.467, 1),
+    "PSV Eindhoven": (51.442, 5.467, 1),
+    "Feyenoord": (51.894, 4.523, 1),
+    "Salzburg": (47.816, 13.049, 1),
+    "RB Salzburg": (47.816, 13.049, 1),
+    "Dynamo Kyiv": (50.433, 30.522, 2),
+    "Slavia Prague": (50.068, 14.471, 1),
+    # High-altitude / altitude-table partners (geo for travel if needed)
+    "Toluca": (19.287, -99.667, -6),
+    "Club America": (19.303, -99.151, -6),
+    "Club América": (19.303, -99.151, -6),
+    "Pumas UNAM": (19.333, -99.192, -6),
+    "Bolivar": (-16.499, -68.123, -4),
+    "Bolívar": (-16.499, -68.123, -4),
+    "The Strongest": (-16.499, -68.123, -4),
+    "LDU Quito": (-0.178, -78.476, -5),
+    "Independiente del Valle": (-0.238, -78.527, -5),
+}
+
+# Sparse home-venue altitudes (m). Only useful / high venues required for ≥1500m gate.
+# Keys normalized via _normalize for lookup. Operators update by PR.
+_FOOTBALL_ALTITUDE_M: dict[str, float] = {
+    "toluca": 2667.0,
+    "club america": 2240.0,
+    "club américa": 2240.0,
+    "pumas unam": 2240.0,
+    "mexico": 2240.0,  # national home (Azteca area)
+    "bolivar": 3600.0,
+    "bolívar": 3600.0,
+    "the strongest": 3600.0,
+    "ldu quito": 2850.0,
+    "independiente del valle": 2500.0,
+    "ecuador": 2850.0,
+    "bolivia": 3600.0,
+    "colombia": 2640.0,  # Bogotá
+    "bogota": 2640.0,
+    "addis ababa": 2355.0,
+    "ethiopia": 2355.0,
+}
+
 _MLB_CITIES: dict[str, tuple[float, float, int]] = {
     "Arizona Diamondbacks": (33.445, -112.067, -7),
     "Atlanta Braves": (33.890, -84.468, -5),
@@ -202,6 +351,34 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * r * math.asin(min(1.0, math.sqrt(a)))
 
 
+def altitude_m_for_team(team_name: str) -> float | None:
+    """Home-venue altitude in meters, or None if unknown/empty."""
+    key = _normalize(team_name)
+    if not key:
+        return None
+    # exact normalized key
+    if key in _FOOTBALL_ALTITUDE_M:
+        val = _FOOTBALL_ALTITUDE_M[key]
+    else:
+        # reuse fuzzy spirit: scan table keys
+        val = None
+        for k, v in _FOOTBALL_ALTITUDE_M.items():
+            if key == k or key in k or k in key:
+                val = v
+                break
+        if val is None:
+            return None
+    try:
+        alt = float(val)
+    except (TypeError, ValueError):
+        return None
+    if alt < 0.0:
+        alt = 0.0
+    elif alt > 4500.0:
+        alt = 4500.0
+    return round(alt, 1)
+
+
 def resolve_city(
     team_name: str,
     sport: str,
@@ -213,12 +390,28 @@ def resolve_city(
         return _lookup(team_name, _NHL_CITIES)
     if code in ("baseball", "mlb"):
         return _lookup(team_name, _MLB_CITIES)
-    if code in ("football", "soccer", "wc", "world_cup", "epl", "laliga", "ucl"):
-        return _lookup(team_name, _FOOTBALL_NATIONAL)
+    if code in (
+        "football",
+        "soccer",
+        "wc",
+        "world_cup",
+        "epl",
+        "laliga",
+        "ucl",
+        "bundesliga",
+        "seriea",
+        "serie_a",
+        "ligue1",
+        "ligue_1",
+    ):
+        return _lookup(team_name, _FOOTBALL_CLUBS) or _lookup(
+            team_name, _FOOTBALL_NATIONAL
+        )
     return (
         _lookup(team_name, _NBA_CITIES)
         or _lookup(team_name, _NHL_CITIES)
         or _lookup(team_name, _MLB_CITIES)
+        or _lookup(team_name, _FOOTBALL_CLUBS)
         or _lookup(team_name, _FOOTBALL_NATIONAL)
     )
 

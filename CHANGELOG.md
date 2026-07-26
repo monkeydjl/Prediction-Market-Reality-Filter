@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Football static xG table (P1-F5)
+- `football_xg`: code-local attack xG/90 by normalized club name (big-five + UCL-ish)
+- Enrich: goals_per_game proxy first; both-sides static hit overwrites `xg_*` + `xg_source=static_table`
+- MultiFactor xG formula/weight unchanged; true xG API still pending
+
 ### Football club H2H from kernel (P1-F4)
 - `h2h_from_kernel`: pairwise meetings, current-home perspective, as-of + competition filter
 - Enrich: historical CSV first; kernel only when historical empty; same `h2h_*` rate fields

@@ -149,6 +149,8 @@ def fetch_elo_and_odds(
     except Exception:  # noqa: BLE001
         logger.debug("possession proxy skipped", exc_info=True)
 
+    enrich_style_features(raw, match)
+
     # P1-F7: altitude pass-through when present on fixture/environment
     try:
         env = raw.setdefault("environment", {})
@@ -272,6 +274,31 @@ def enrich_referee_features(raw: dict, match: MatchIdentity) -> None:
     custom["referee_name"] = str(name).strip()
     custom["referee_home_bias"] = b
     custom["referee_source"] = "static_map"
+
+
+def enrich_style_features(raw: dict, match: MatchIdentity) -> None:
+    """Static possession/shots/PPDA (P1-F6): overwrite form proxy only when both sides resolve."""
+    try:
+        from app.sports.football.football_style import stats_for_team
+
+        home_name = match.home.name if match.home else ""
+        away_name = match.away.name if match.away else ""
+        sh = stats_for_team(home_name)
+        sa = stats_for_team(away_name)
+        if sh is None or sa is None:
+            return
+        custom = raw.setdefault("custom", {})
+        custom["possession_home"] = float(sh["possession_pct"])
+        custom["possession_away"] = float(sa["possession_pct"])
+        custom["shots_home"] = float(sh["shots_per90"])
+        custom["shots_away"] = float(sa["shots_per90"])
+        custom["ppda_home"] = float(sh["ppda"])
+        custom["ppda_away"] = float(sa["ppda"])
+        custom["style_source"] = "static_table"
+        custom.pop("possession_proxy", None)
+    except Exception:  # noqa: BLE001
+        logger.debug("Static style enrichment failed", exc_info=True)
+
 
 def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
     """Mutate ``raw`` with form, h2h, rest days, and custom xG proxies.

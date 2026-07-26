@@ -18,6 +18,7 @@ from app.sports.football.adapters._shared import (
     build_match_outcome,
     save_fixture,
     enrich_situational_features,
+    enrich_style_features,
 )
 
 
@@ -726,4 +727,100 @@ class TestStaticXgOverwrite:
         assert "xg_home" not in raw["custom"]
         assert "xg_away" not in raw["custom"]
         assert "xg_source" not in raw["custom"]
+
+
+class TestStaticStyleOverwrite:
+    def test_both_static_hits_overwrite_proxy(self):
+        match = _make_match("ucl-style-static")
+        raw = {
+            "team": {"form_home": 0.4, "form_away": 0.6},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {
+                # Simulate form_share proxy already applied
+                "possession_home": 40.0,
+                "possession_away": 60.0,
+                "possession_proxy": "form_share",
+            },
+        }
+        enrich_style_features(raw, match)
+
+        from app.sports.football.football_style import stats_for_team
+
+        home = stats_for_team("Real Madrid CF")
+        away = stats_for_team("FC Bayern München")
+        assert home is not None and away is not None
+        assert raw["custom"]["possession_home"] == pytest.approx(home["possession_pct"])
+        assert raw["custom"]["possession_away"] == pytest.approx(away["possession_pct"])
+        assert raw["custom"]["shots_home"] == pytest.approx(home["shots_per90"])
+        assert raw["custom"]["shots_away"] == pytest.approx(away["shots_per90"])
+        assert raw["custom"]["ppda_home"] == pytest.approx(home["ppda"])
+        assert raw["custom"]["ppda_away"] == pytest.approx(away["ppda"])
+        assert raw["custom"]["style_source"] == "static_table"
+        assert "possession_proxy" not in raw["custom"]
+        # Must not remain form proxy values
+        assert raw["custom"]["possession_home"] != pytest.approx(40.0)
+
+    def test_one_side_unknown_keeps_proxy(self):
+        match = MatchIdentity(
+            match_id="ucl-style-partial",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="RMA", name="Real Madrid CF", competition=_UCL),
+            away=TeamIdentity(code="ZZZ", name="Unknown Club XYZ", competition=_UCL),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {
+                "possession_home": 55.0,
+                "possession_away": 45.0,
+                "possession_proxy": "form_share",
+            },
+        }
+        enrich_style_features(raw, match)
+
+        assert raw["custom"].get("possession_home") == pytest.approx(55.0)
+        assert raw["custom"].get("possession_away") == pytest.approx(45.0)
+        assert raw["custom"].get("possession_proxy") == "form_share"
+        assert "style_source" not in raw["custom"]
+        assert "shots_home" not in raw["custom"]
+        assert "ppda_home" not in raw["custom"]
+
+    def test_both_unknown_no_static_source(self):
+        match = MatchIdentity(
+            match_id="ucl-style-none",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="AAA", name="NoSuchHome FC", competition=_UCL),
+            away=TeamIdentity(code="BBB", name="NoSuchAway FC", competition=_UCL),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {
+                "possession_home": 50.0,
+                "possession_away": 50.0,
+                "possession_proxy": "form_share",
+            },
+        }
+        enrich_style_features(raw, match)
+
+        assert raw["custom"].get("possession_home") == pytest.approx(50.0)
+        assert raw["custom"].get("possession_proxy") == "form_share"
+        assert "style_source" not in raw["custom"]
+        assert "shots_home" not in raw["custom"]
+        assert "ppda_home" not in raw["custom"]
 

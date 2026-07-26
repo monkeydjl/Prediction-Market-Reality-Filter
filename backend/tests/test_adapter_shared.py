@@ -467,7 +467,8 @@ class TestInjuryImpactEnrich:
 
         assert raw["player"]["injury_impact_home"] == pytest.approx(0.35)
         assert raw["player"]["injury_impact_away"] == pytest.approx(0.26)
-
+        assert raw["custom"]["injury_impact_home"] == pytest.approx(0.35)
+        assert raw["custom"]["injury_impact_away"] == pytest.approx(0.26)
 
     def test_unknown_teams_omit_injury_keys(self):
         football = SportIdentity(code="football", name="Football")

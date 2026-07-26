@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Football static style stats (P1-F6)
+
+- Soft code-local per-club possession / shots / PPDA table (`football_style.stats_for_team`); when **both** sides resolve, overwrite form-share possession proxy and write shots/ppda with `custom.style_source=static_table`. MultiFactor soft possession path unchanged. True stats API still pending.
+
 ### Football static xG table (P1-F5)
 - `football_xg`: code-local attack xG/90 by normalized club name (big-five + UCL-ish)
 - Enrich: goals_per_game proxy first; both-sides static hit overwrites `xg_*` + `xg_source=static_table`

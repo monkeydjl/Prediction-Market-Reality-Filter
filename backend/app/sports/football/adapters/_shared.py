@@ -151,6 +151,7 @@ def fetch_elo_and_odds(
 
     enrich_style_features(raw, match)
     enrich_altitude_features(raw, match)
+    enrich_weather_features(raw, match)
 
     # P1-F7: coarse national-team travel when both sides resolve (clubs stay empty)
     try:

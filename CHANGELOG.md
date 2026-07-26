@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Football club geo travel + venue altitude (P1-F7)
+
+- `team_geo`: club city table first for football leagues, national fallback; sparse `altitude_m_for_team` (≥1500 m venues)
+- Adapter `enrich_altitude_features`: pass-through first, static fill-only when missing (`altitude_source=static_table`); existing travel_between_teams picks up clubs
+- MultiFactor travel/altitude formulas, ≥1500 m gate, weights unchanged; weather still pending
+
 ### Football static style stats (P1-F6)
 
 - Soft code-local per-club possession / shots / PPDA table (`football_style.stats_for_team`); when **both** sides resolve, overwrite form-share possession proxy and write shots/ppda with `custom.style_source=static_table`. MultiFactor soft possession path unchanged. True stats API still pending.

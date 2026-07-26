@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Football static referee home-bias (P1-F8)
+
+- `football_referee.bias_for_referee`: code-local soft home_bias by normalized referee name (top leagues + UCL-common)
+- Adapter `enrich_referee_features`: pass-through rate/bias first; static fill writes `referee_home_bias` + `referee_source=static_map`
+- MultiFactor referee formula/weight unchanged; true referee stats API/DB still pending
+
 ### Football club geo travel + venue altitude (P1-F7)
 
 - `team_geo`: club city table first for football leagues, national fallback; sparse `altitude_m_for_team` (≥1500 m venues)

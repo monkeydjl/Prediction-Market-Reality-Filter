@@ -150,21 +150,7 @@ def fetch_elo_and_odds(
         logger.debug("possession proxy skipped", exc_info=True)
 
     enrich_style_features(raw, match)
-
-    # P1-F7: altitude pass-through when present on fixture/environment
-    try:
-        env = raw.setdefault("environment", {})
-        custom = raw.setdefault("custom", {})
-        alt = (
-            custom.get("venue_altitude_m")
-            or custom.get("altitude_m")
-            or env.get("altitude_m")
-            or env.get("venue_altitude_m")
-        )
-        if alt is not None:
-            custom["venue_altitude_m"] = float(alt)
-    except Exception:  # noqa: BLE001
-        logger.debug("altitude enrich skipped", exc_info=True)
+    enrich_altitude_features(raw, match)
 
     # P1-F7: coarse national-team travel when both sides resolve (clubs stay empty)
     try:

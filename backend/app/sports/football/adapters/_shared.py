@@ -280,6 +280,50 @@ def enrich_altitude_features(raw: dict, match: MatchIdentity) -> None:
         logger.debug("altitude enrich skipped", exc_info=True)
 
 
+def enrich_weather_features(raw: dict, match: MatchIdentity) -> None:
+    """Pass-through weather, then static climate fill when still missing (P1-F7)."""
+    try:
+        env = raw.setdefault("environment", {})
+        custom = raw.setdefault("custom", {})
+        temp = (
+            env.get("weather_temp_c")
+            or custom.get("weather_temp_c")
+            or env.get("temp_c")
+            or custom.get("temp_c")
+        )
+        cond = (
+            env.get("weather_condition")
+            or custom.get("weather_condition")
+            or env.get("condition")
+        )
+        if temp is not None or cond is not None:
+            if temp is not None:
+                env["weather_temp_c"] = float(temp)
+                custom.setdefault("weather_temp_c", float(temp))
+            if cond is not None:
+                env["weather_condition"] = str(cond).strip()
+                custom.setdefault("weather_condition", str(cond).strip())
+            return
+
+        kickoff = getattr(match, "kickoff_utc", None)
+        if kickoff is None:
+            return
+        month = int(kickoff.month)
+        home_name = match.home.name if match.home else ""
+        from app.sports.football.football_weather import climate_for_home
+
+        climate = climate_for_home(home_name, month)
+        if climate is None:
+            return
+        env["weather_temp_c"] = float(climate["temp_c"])
+        env["weather_condition"] = str(climate["condition"])
+        custom["weather_temp_c"] = float(climate["temp_c"])
+        custom["weather_condition"] = str(climate["condition"])
+        custom["weather_source"] = "static_climate"
+    except Exception:  # noqa: BLE001
+        logger.debug("weather enrich skipped", exc_info=True)
+
+
 def enrich_style_features(raw: dict, match: MatchIdentity) -> None:
     """Static possession/shots/PPDA (P1-F6): overwrite form proxy only when both sides resolve."""
     try:

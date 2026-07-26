@@ -924,3 +924,85 @@ class TestStaticAltitudeFill:
         assert "venue_altitude_m" not in raw["custom"]
         assert "altitude_source" not in raw["custom"]
 
+
+class TestStaticWeatherFill:
+    def test_static_fill_when_missing(self):
+        match = MatchIdentity(
+            match_id="ucl-wx-fill",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="ARS", name="Arsenal", competition=_UCL),
+            away=TeamIdentity(code="RMA", name="Real Madrid CF", competition=_UCL),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+        from app.sports.football.adapters._shared import enrich_weather_features
+        from app.sports.football.football_weather import climate_for_home
+
+        enrich_weather_features(raw, match)
+        expected = climate_for_home("Arsenal", 9)
+        assert expected is not None
+        assert raw["environment"]["weather_temp_c"] == pytest.approx(float(expected["temp_c"]))
+        assert raw["environment"]["weather_condition"] == expected["condition"]
+        assert raw["custom"]["weather_source"] == "static_climate"
+        assert raw["custom"]["weather_temp_c"] == pytest.approx(float(expected["temp_c"]))
+        assert raw["custom"]["weather_condition"] == expected["condition"]
+
+    def test_does_not_overwrite_existing_temp(self):
+        match = MatchIdentity(
+            match_id="ucl-wx-keep",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="ARS", name="Arsenal", competition=_UCL),
+            away=TeamIdentity(code="RMA", name="Real Madrid CF", competition=_UCL),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {"weather_temp_c": 21.5, "weather_condition": "clear"},
+            "custom": {},
+        }
+        from app.sports.football.adapters._shared import enrich_weather_features
+
+        enrich_weather_features(raw, match)
+        assert raw["environment"]["weather_temp_c"] == pytest.approx(21.5)
+        assert raw["environment"]["weather_condition"] == "clear"
+        assert raw["custom"].get("weather_source") != "static_climate"
+
+    def test_unknown_home_no_static_weather(self):
+        match = MatchIdentity(
+            match_id="ucl-wx-none",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="XXX", name="NoSuchHome FC", competition=_UCL),
+            away=TeamIdentity(code="YYY", name="NoSuchAway FC", competition=_UCL),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+        from app.sports.football.adapters._shared import enrich_weather_features
+
+        enrich_weather_features(raw, match)
+        assert raw["environment"].get("weather_temp_c") is None
+        assert raw["environment"].get("weather_condition") is None
+        assert "weather_source" not in raw["custom"]
+

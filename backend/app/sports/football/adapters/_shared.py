@@ -230,8 +230,9 @@ def enrich_referee_features(raw: dict, match: MatchIdentity) -> None:
     """
     custom = raw.setdefault("custom", {})
     env = raw.get("environment") or {}
-    if env.get("referee") and not custom.get("referee_name"):
-        custom["referee_name"] = str(env["referee"]).strip()
+    env_referee = str(env.get("referee") or "").strip()
+    if env_referee and not custom.get("referee_name"):
+        custom["referee_name"] = env_referee
 
     if (
         custom.get("referee_home_win_rate") is not None
@@ -239,10 +240,10 @@ def enrich_referee_features(raw: dict, match: MatchIdentity) -> None:
     ):
         return
 
-    name = custom.get("referee_name") or env.get("referee")
+    name = (custom.get("referee_name") or "").strip() or env_referee
     if not name:
         return
-    custom["referee_name"] = str(name).strip()
+    custom["referee_name"] = name
     try:
         from app.sports.football.football_referee import bias_for_referee
 
@@ -261,12 +262,16 @@ def enrich_altitude_features(raw: dict, match: MatchIdentity) -> None:
     try:
         env = raw.setdefault("environment", {})
         custom = raw.setdefault("custom", {})
-        alt = (
-            custom.get("venue_altitude_m")
-            or custom.get("altitude_m")
-            or env.get("altitude_m")
-            or env.get("venue_altitude_m")
-        )
+        alt = None
+        for _src in (
+            custom.get("venue_altitude_m"),
+            custom.get("altitude_m"),
+            env.get("altitude_m"),
+            env.get("venue_altitude_m"),
+        ):
+            if _src is not None:
+                alt = _src
+                break
         if alt is not None:
             custom["venue_altitude_m"] = float(alt)
             return
@@ -286,12 +291,16 @@ def enrich_weather_features(raw: dict, match: MatchIdentity) -> None:
     try:
         env = raw.setdefault("environment", {})
         custom = raw.setdefault("custom", {})
-        temp = (
-            env.get("weather_temp_c")
-            or custom.get("weather_temp_c")
-            or env.get("temp_c")
-            or custom.get("temp_c")
-        )
+        temp = None
+        for _src in (
+            env.get("weather_temp_c"),
+            custom.get("weather_temp_c"),
+            env.get("temp_c"),
+            custom.get("temp_c"),
+        ):
+            if _src is not None:
+                temp = _src
+                break
         cond = (
             env.get("weather_condition")
             or custom.get("weather_condition")

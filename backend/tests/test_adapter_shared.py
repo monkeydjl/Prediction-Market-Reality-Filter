@@ -1006,3 +1006,113 @@ class TestStaticWeatherFill:
         assert raw["environment"].get("weather_condition") is None
         assert "weather_source" not in raw["custom"]
 
+
+class TestZeroAltitudePreserved:
+    """venue_altitude_m=0.0 is a valid sea-level value, not missing."""
+
+    def test_zero_altitude_not_treated_as_missing(self):
+        match = MatchIdentity(
+            match_id="ucl-alt-zero",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="TOL", name="Toluca", competition=_UCL),
+            away=TeamIdentity(code="RMA", name="Real Madrid CF", competition=_UCL),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {"venue_altitude_m": 0.0},
+        }
+        from app.sports.football.adapters._shared import enrich_altitude_features
+
+        enrich_altitude_features(raw, match)
+
+        # Must keep 0.0, NOT overwrite with Toluca static altitude (~2667)
+        assert raw["custom"]["venue_altitude_m"] == pytest.approx(0.0)
+        assert raw["custom"].get("altitude_source") != "static_table"
+
+    def test_zero_altitude_from_env_not_treated_as_missing(self):
+        match = MatchIdentity(
+            match_id="ucl-alt-zero-env",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="TOL", name="Toluca", competition=_UCL),
+            away=TeamIdentity(code="RMA", name="Real Madrid CF", competition=_UCL),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {"altitude_m": 0.0},
+            "custom": {},
+        }
+        from app.sports.football.adapters._shared import enrich_altitude_features
+
+        enrich_altitude_features(raw, match)
+
+        assert raw["custom"]["venue_altitude_m"] == pytest.approx(0.0)
+        assert raw["custom"].get("altitude_source") != "static_table"
+
+
+class TestZeroWeatherTempPreserved:
+    """weather_temp_c=0.0 is a valid temperature, not missing."""
+
+    def test_zero_temp_no_condition_not_overwritten(self):
+        match = MatchIdentity(
+            match_id="ucl-wx-zero",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="ARS", name="Arsenal", competition=_UCL),
+            away=TeamIdentity(code="RMA", name="Real Madrid CF", competition=_UCL),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {"weather_temp_c": 0.0},
+            "custom": {},
+        }
+        from app.sports.football.adapters._shared import enrich_weather_features
+
+        enrich_weather_features(raw, match)
+
+        # Must keep 0.0, NOT overwrite with static climate
+        assert raw["environment"]["weather_temp_c"] == pytest.approx(0.0)
+        assert raw["custom"].get("weather_source") != "static_climate"
+
+
+class TestWhitespaceRefereeCreatesNothing:
+    """Whitespace-only referee input must not create empty referee_name."""
+
+    def test_whitespace_referee_no_fields_created(self):
+        from app.sports.football.adapters._shared import enrich_referee_features
+
+        raw = {"custom": {}, "environment": {"referee": "   "}}
+        enrich_referee_features(raw, _make_match())
+
+        assert "referee_name" not in raw["custom"]
+        assert "referee_home_bias" not in raw["custom"]
+        assert "referee_home_win_rate" not in raw["custom"]
+        assert "referee_source" not in raw["custom"]
+
+    def test_tab_newline_referee_no_fields_created(self):
+        from app.sports.football.adapters._shared import enrich_referee_features
+
+        raw = {"custom": {}, "environment": {"referee": "\t\n  "}}
+        enrich_referee_features(raw, _make_match())
+
+        assert "referee_name" not in raw["custom"]
+        assert "referee_home_bias" not in raw["custom"]
+        assert "referee_source" not in raw["custom"]
+

@@ -105,3 +105,23 @@ def test_altitude_unknown_none():
 def test_altitude_empty_none():
     assert altitude_m_for_team("") is None
     assert altitude_m_for_team("   ") is None
+
+
+# --- Football strict-lookup regression (fail-closed) ---
+
+
+def test_unknown_club_leeds_united_returns_none():
+    """'Leeds United' is NOT in _FOOTBALL_CLUBS; last-token 'united' must not
+    fuzzy-match Manchester United."""
+    assert resolve_city("Leeds United", "epl") is None
+
+
+def test_unknown_club_unknown_city_returns_none():
+    """'Unknown City' must not match Leicester City via last-token 'city'."""
+    assert resolve_city("Unknown City", "epl") is None
+
+
+def test_one_unknown_football_side_travel_not_known():
+    """Arsenal is known, Leeds United is not → travel_known must be False."""
+    t = travel_between_teams("Arsenal", "Leeds United", "epl")
+    assert t["travel_known"] is False

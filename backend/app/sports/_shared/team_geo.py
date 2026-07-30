@@ -342,6 +342,20 @@ def _lookup(
     return None
 
 
+def _football_club_lookup(
+    name: str,
+    table: dict[str, tuple[float, float, int]],
+) -> tuple[float, float, int] | None:
+    """Exact normalized lookup for football clubs — no substring/last-token."""
+    if not name:
+        return None
+    n = _normalize(name)
+    for key, val in table.items():
+        if n == _normalize(key):
+            return val
+    return None
+
+
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)
@@ -404,7 +418,7 @@ def resolve_city(
         "ligue1",
         "ligue_1",
     ):
-        return _lookup(team_name, _FOOTBALL_CLUBS) or _lookup(
+        return _football_club_lookup(team_name, _FOOTBALL_CLUBS) or _lookup(
             team_name, _FOOTBALL_NATIONAL
         )
     return (

@@ -1,7 +1,7 @@
 # Football Static Referee Bias Table (P1-F8) — Design
 
-**Date:** 2026-07-26  
-**Status:** Approved for planning  
+**Date:** 2026-07-26
+**Status:** Approved for planning
 **Backlog:** P1-F8 (partial → populate static referee home_bias when true referee stats API/DB is unavailable)
 
 ## Problem
@@ -96,7 +96,7 @@ def bias_for_referee(name: str) -> float | None:
 
 ### Table entry
 
-- Key: normalized English referee name as commonly seen on fixtures/feeds  
+- Key: normalized English referee name as commonly seen on fixtures/feeds
   (e.g. `"michael oliver"`, `"anthony taylor"`, `"daniele orsato"`).
 - Value: `float` soft home bias in **[-0.15, 0.15]** typical band (hard clamp still `[-0.25, 0.25]`).
 - Aliases: small set only (punctuation / diacritics / common shortenings), e.g. `"cüneyt çakır"` / `"cuneyt cakir"`.

@@ -6,8 +6,8 @@ FastAPI 后端：事件发现、概率分析、存储与校准。完整系统总
 
 ```bash
 cp .env.example .env          # 填入你自己的 API key
-pip install -r requirements.txt
-python -m unittest discover -s tests   # 无网络回归测试
+pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest tests               # 无网络回归测试
 python run.py                          # http://localhost:8000
 ```
 
@@ -43,8 +43,9 @@ tests/                                        无网络回归测试
 ## 验证约定
 
 ```bash
+pip install -r requirements.txt -r requirements-dev.txt
 python -m compileall app tests
-python -m unittest discover -s tests
+python -m pytest tests
 ```
 
 改前端仪表盘时，另需运行 QUICK_START 中覆盖中英文页面的 inline JS 语法检查。

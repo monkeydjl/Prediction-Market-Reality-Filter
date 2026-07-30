@@ -1,7 +1,7 @@
 # Football Club Geo Travel + Venue Altitude (P1-F7) — Design
 
-**Date:** 2026-07-26  
-**Status:** Approved for planning  
+**Date:** 2026-07-26
+**Status:** Approved for planning
 **Backlog:** P1-F7 (partial → club geo travel + static venue altitude; weather still pending)
 
 ## Problem

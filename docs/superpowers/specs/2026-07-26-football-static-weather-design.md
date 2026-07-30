@@ -1,7 +1,7 @@
 # Football Static Climate Weather Fill (P1-F7 residual) — Design
 
-**Date:** 2026-07-26  
-**Status:** Approved for planning  
+**Date:** 2026-07-26
+**Status:** Approved for planning
 **Backlog:** P1-F7 (partial → weather data side after club geo + altitude; true forecast API still pending)
 
 ## Problem

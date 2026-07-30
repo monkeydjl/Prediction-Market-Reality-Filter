@@ -129,8 +129,9 @@ npm run build
 
 ```bash
 cd backend
+pip install -r requirements.txt -r requirements-dev.txt
 python -m compileall app tests
-python -m unittest discover -s tests
+python -m pytest tests
 
 cd ../frontend
 npm run build

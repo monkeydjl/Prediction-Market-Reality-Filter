@@ -4,6 +4,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+# conftest.py patches dotenv.load_dotenv to a no-op before app modules are
+# imported.  Tests that exercise real dotenv behavior must opt-in by patching
+# the real function back into app.core.config's namespace.  We import from
+# dotenv.main (the definition site) which is unaffected by the package-level
+# patch in conftest.
+from dotenv.main import load_dotenv as _real_load_dotenv
+
 
 class TestEnvLoading(unittest.TestCase):
     def test_default_env_is_development(self):
@@ -28,9 +35,12 @@ class TestEnvLoading(unittest.TestCase):
                 os.chdir(tmp)
                 # patch.dict restores os.environ at exit (hermetic).
                 with patch.dict(os.environ, {"PMRF_ENV": "staging"}, clear=False):
-                    _load_env_files()
-                    # Staging file must override base.
-                    self.assertEqual(os.environ.get("OPENAI_MODEL"), "staging-model")
+                    # Opt-in: restore real load_dotenv into config's namespace
+                    # so _load_env_files() actually reads the temp .env files.
+                    with patch("app.core.config.load_dotenv", _real_load_dotenv):
+                        _load_env_files()
+                        # Staging file must override base.
+                        self.assertEqual(os.environ.get("OPENAI_MODEL"), "staging-model")
             finally:
                 os.chdir(old_cwd)
 

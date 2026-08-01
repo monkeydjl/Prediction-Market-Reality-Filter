@@ -38,6 +38,8 @@ def test_compute_returns_none_without_links():
 
 
 def test_compute_uses_max_snapshot_liquidity():
+    from app.core.config import settings as _settings
+
     links = [{"id": 1}, {"id": 2}]
     snaps = {
         1: {"liquidity": 2_000, "implied_prob": 0.5},
@@ -51,6 +53,7 @@ def test_compute_uses_max_snapshot_liquidity():
         patch(
             "app.kernel.market_snapshot_store.MarketSnapshotStore"
         ) as snap_cls,
+        patch.object(_settings, "DIAGNOSIS_LIQUIDITY_FLOOR", 10_000.0),
     ):
         link_cls.return_value.get_verified_links.return_value = links
         snap_cls.return_value.get_latest_snapshot.side_effect = (

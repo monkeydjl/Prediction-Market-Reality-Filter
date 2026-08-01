@@ -175,6 +175,7 @@ def auto_verify_pending(
     min_confidence: float | None = Query(
         None, description="Override auto-verify confidence threshold",
     ),
+    _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
     """Promote high-confidence pending links to verified (P1-V2).
 

@@ -626,6 +626,7 @@ def list_calibrations(engine: str | None = None,
 def refresh_conditional_calibration(
     competition: str = Query(..., description="Competition code"),
     engine: str = Query("elo_odds", description="Engine name"),
+    _auth: None = Depends(require_write_key),
 ) -> dict:
     """Fit confidence- and stage-bucket calibration rows (P1-V5).
 

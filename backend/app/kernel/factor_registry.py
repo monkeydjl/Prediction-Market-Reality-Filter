@@ -189,10 +189,10 @@ class FactorRegistry:
         ("rest", "rest_days", 0.05),
         ("injury", "injury_impact", 0.05),
         ("h2h", "head_to_head", 0.05),
-        ("travel", "travel_timezone", 0.03),
+        ("travel", "travel_timezone", 0.04),
         ("xg", "expected_goals", 0.06),
         ("market_value", "squad_value", 0.04),
-        ("possession", "possession_shots", 0.03),
+        ("possession", "possession_shots", 0.04),
         ("referee", "match_official", 0.02),
         ("altitude", "venue_altitude", 0.02),
     ]

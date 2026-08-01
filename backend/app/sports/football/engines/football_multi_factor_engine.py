@@ -368,10 +368,6 @@ class FootballMultiFactorEngine:
                     alt_ok = True
         except (TypeError, ValueError):
             alt_ok = False
-        if not alt_ok:
-            factors.append(
-                ("altitude", dict(_NEUTRAL_3WAY), weights.get("altitude", 0.02), False),
-            )
 
         # 8. xG soft (P1-F5) — custom.xg_* until true xG feed lands
         xg_h = custom.get("xg_home")
@@ -545,7 +541,9 @@ class FootballMultiFactorEngine:
             )
 
         # Weighted fusion with redistribution
-        available = [(fid, p, w) for fid, p, w, ok in factors if ok]
+        # Altitude is excluded from fusion and applied post-fusion as an
+        # additive edge so it never dilutes other home-favoring factors.
+        available = [(fid, p, w) for fid, p, w, ok in factors if ok and fid != "altitude"]
         total_w = sum(w for _, _, w in available)
         if total_w > 0:
             fused = {
@@ -563,6 +561,15 @@ class FootballMultiFactorEngine:
             }
         else:
             fused = {k: round(v, 4) for k, v in _NEUTRAL_3WAY.items()}
+
+        # Post-fusion altitude additive edge (P1-F7)
+        if alt_ok:
+            for _fid, _probs, _w, _ok in factors:
+                if _fid == "altitude" and _ok:
+                    alt_edge = _probs["home_win"] - _NEUTRAL_3WAY["home_win"]
+                    fused = _normalize_3way(_adjust_home_edge(fused, alt_edge))
+                    fused = {k: round(v, 4) for k, v in fused.items()}
+                    break
 
         scores = _probabilities_to_scores(fused)
 

@@ -83,7 +83,7 @@ def _make_features(
             market_value_away=None,
         ),
         market=MarketFeatures(
-            odds_home, odds_draw, odds_away, "test", True,
+            odds_home, odds_draw, odds_away, "test", odds_fresh,
         ),
         player=PlayerFeatures(None, None, injury_home, injury_away),
         environment=EnvironmentFeatures("Emirates", None, None, True),

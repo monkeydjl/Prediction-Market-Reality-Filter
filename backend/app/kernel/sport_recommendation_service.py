@@ -392,7 +392,8 @@ class SportRecommendationService:
             rec = self._edge_dict_to_recommendation(row, row.get("match_id", ""))
             if rec is None:
                 continue
-            # Filter: open decisions exclude "skip"            if rec.decision == "skip":
+            # Filter: open decisions exclude "skip"
+            if rec.decision == "skip":
                 continue
             # Filter by specific decision if requested
             if decision is not None and rec.decision != decision:

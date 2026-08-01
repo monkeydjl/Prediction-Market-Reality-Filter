@@ -364,6 +364,8 @@ def process_outcome(match_id: str, _auth: None = Depends(require_write_key)):
 def engine_score(name: str, competition: str | None = None):
     """Get the performance score for an engine."""
     kernel = _get_kernel()
+    if name not in kernel._engine_registry.list_engines():
+        raise HTTPException(status_code=404, detail="Engine not found")
     score = kernel._learning.engine_score(name, competition)
     if score is None:
         raise HTTPException(status_code=404, detail="No score data for this engine")
@@ -656,4 +658,9 @@ def get_reliability(engine: str | None = None,
     if bins < 5 or bins > 20:
         raise HTTPException(status_code=422, detail="bins must be 5-20")
     from app.kernel.kernel_db import compute_reliability_bins
-    return compute_reliability_bins(engine=engine, competition=competition, bins=bins)
+    result = compute_reliability_bins(engine=engine, competition=competition, bins=bins)
+    # Normalize: compute_reliability_bins returns 'sample_count' on success
+    # but 'total_samples' on error. Canonical key is 'total_samples'.
+    if "total_samples" not in result:
+        result["total_samples"] = result.pop("sample_count", 0)
+    return result

@@ -52,8 +52,8 @@ class TestPredictionsRoutes:
         assert resp.status_code in (200, 404)
 
     def test_engine_score_not_found(self, client):
-        """Engine score returns 404 when no outcome data exists."""
-        resp = client.get("/api/predictions/engines/elo_odds/score")
+        """Engine score returns 404 when the engine does not exist."""
+        resp = client.get("/api/predictions/engines/no_such_engine/score")
         assert resp.status_code == 404
 
     def test_predict_returns_503_when_disabled(self, client):

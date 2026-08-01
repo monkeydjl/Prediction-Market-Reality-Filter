@@ -251,9 +251,14 @@ class MoversRouteTests(unittest.TestCase):
         app = FastAPI()
         app.include_router(events_routes.router, prefix="/events")
         client = TestClient(app)
+        fake_events = [
+            {"event_id": "big", "record": {"event_title_zh": ""}},
+            {"event_id": "small", "record": {"event_title_zh": ""}},
+        ]
         with tempfile.TemporaryDirectory() as tmp:
             path = str(Path(tmp) / "event_audit.jsonl")
-            with patch.object(audit, "_audit_path", return_value=path):
+            with patch.object(audit, "_audit_path", return_value=path), \
+                 patch.object(events_routes, "list_all_events", return_value=fake_events):
                 audit.record_event(_record("big", 40.0))
                 audit.record_event(_record("big", 80.0))     # +40
                 audit.record_event(_record("small", 50.0))

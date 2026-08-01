@@ -5,6 +5,9 @@ from unittest.mock import AsyncMock, patch
 
 from app.services.futures_market_source import (
     fetch_kalshi_futures_markets,
+    list_known_futures_series,
+    match_futures_series,
+    multi_leg_integrity,
     _KALSHI_FUTURES_SERIES_PREFIXES,
     _extract_team_from_ticker,
     _parse_kalshi_price,

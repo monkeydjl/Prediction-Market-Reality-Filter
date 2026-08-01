@@ -229,7 +229,7 @@ class HockeyEngine:
 
         # Score conversion (NHL: league_avg=5.5, low-scoring)
         if elo_home is not None and elo_away is not None:
-            margin = (elo_home - elo_away + hfa) * 0.03
+            margin = _clamp((elo_home - elo_away + hfa) * 0.015, -2.5, 2.5)
         else:
             margin = 0.0
         home_score = league_avg / 2 + margin / 2

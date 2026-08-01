@@ -552,7 +552,7 @@ class Settings:
         os.getenv("DIAGNOSIS_DORMANT_TRUST", "0.5")
     )
     DIAGNOSIS_LIQUIDITY_FLOOR: float = float(
-        os.getenv("DIAGNOSIS_LIQUIDITY_FLOOR", "5000.0")
+        os.getenv("DIAGNOSIS_LIQUIDITY_FLOOR", "10000.0")
     )
     # Trust floor for a QUALIFIED segment. A category whose mean Brier is worse
     # than random (>0.25) scores negative skill -> clamp(skill,0,1) would be 0 ->

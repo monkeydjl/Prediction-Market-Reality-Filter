@@ -11,22 +11,22 @@ def client():
     return TestClient(app)
 
 
+_TEST_WRITE_KEY = "test-sport-opt-key"
+
+
 @pytest.fixture(autouse=True)
 def disable_phase9(monkeypatch):
-    """Default: Phase 9 disabled → 503."""
+    """Default: Phase 9 disabled → 503.  Also set a write key so the
+    require_write_key guard passes and requests reach the Phase 9 gate."""
     from app.core.config import settings
     monkeypatch.setattr(settings, "PHASE9_ACCURACY_SPRINT_ENABLED", False)
+    monkeypatch.setattr(settings, "API_WRITE_KEY", _TEST_WRITE_KEY)
 
 
 @pytest.fixture
 def auth_headers():
-    """Valid X-API-Key header for write endpoints (/ingest, /run, /apply).
-
-    Reads the configured API_WRITE_KEY so tests work in any environment where
-    the server is allowed to start (key set or ALLOW_OPEN_WRITES=true).
-    """
-    from app.core.config import settings
-    return {"X-API-Key": settings.API_WRITE_KEY}
+    """Valid X-API-Key header for write endpoints (/ingest, /run, /apply)."""
+    return {"X-API-Key": _TEST_WRITE_KEY}
 
 
 def test_endpoints_return_503_when_disabled(client, auth_headers):

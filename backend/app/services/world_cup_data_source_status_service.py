@@ -177,7 +177,9 @@ def _real_data_readiness(
     scheduled_import_enabled = bool(scheduled_import.get("enabled"))
     scheduled_import_mode = _clean(scheduled_import.get("mode")).lower()
     last_import = runs.get("world_cup_source_bundle_import")
-    last_import_failed = _current_import_failed(last_import, scheduled_import_mode)
+    last_import_failed = _current_import_failed(
+        last_import, scheduled_import_mode, scheduled_import_enabled
+    )
     last_provider_validation = _recommended_provider_validation(
         recommended_import["mode"],
         runs,
@@ -246,7 +248,11 @@ def _blocking_readiness_issues(issues: list[str]) -> list[str]:
     ]
 
 
-def _current_import_failed(last_import: Any, scheduled_import_mode: str) -> bool:
+def _current_import_failed(
+    last_import: Any,
+    scheduled_import_mode: str,
+    scheduled_import_enabled: bool,
+) -> bool:
     if not isinstance(last_import, dict) or last_import.get("status") != "failed":
         return False
 
@@ -258,7 +264,11 @@ def _current_import_failed(last_import: Any, scheduled_import_mode: str) -> bool
         return False
 
     error = _clean(last_import.get("error"))
-    if not result_mode and scheduled_import_mode != "url" and "WORLD_CUP_SOURCE_BUNDLE_URL" in error:
+    # A "WORLD_CUP_SOURCE_BUNDLE_URL is not configured" failure is only current
+    # when the import loop is actually running in url mode. Otherwise it is stale
+    # noise (the loop is disabled, or the mode moved to a real provider).
+    url_bundle_active = scheduled_import_enabled and scheduled_import_mode == "url"
+    if not result_mode and "WORLD_CUP_SOURCE_BUNDLE_URL" in error and not url_bundle_active:
         return False
 
     return True

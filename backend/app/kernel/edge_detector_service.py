@@ -29,6 +29,14 @@ from app.kernel.factor_attribution import (
 )
 
 
+# Liquidity ramp floor for edge scoring, deliberately decoupled from the shared
+# settings.DIAGNOSIS_LIQUIDITY_FLOOR (which the diagnosis / market-liquidity
+# pipeline may set to 10k). The edge detector's ramp is calibrated to a 5000
+# floor (2500 -> 0.5, 5000 -> 1.0). Coupling them let a config change in the
+# diagnosis pipeline silently flatten every edge's liquidity factor.
+_EDGE_LIQUIDITY_FLOOR = 5000.0
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -440,8 +448,10 @@ class EdgeDetectorService:
 
         Uses the latest snapshot's liquidity. If all links have None
         liquidity (traditional sportsbook), returns 1.0 (no penalty).
-        Mirrors diagnosis_service.liquidity_factor but uses max (most
-        liquid source dominates).
+        Ramps against the edge detector's own _EDGE_LIQUIDITY_FLOOR (5000),
+        decoupled from settings.DIAGNOSIS_LIQUIDITY_FLOOR so the diagnosis
+        pipeline's floor cannot flatten edge scores. Uses max (most liquid
+        source dominates).
         """
         liquidities = [
             snap["liquidity"]
@@ -452,10 +462,7 @@ class EdgeDetectorService:
             return 1.0
 
         max_liq = max(liquidities)
-        floor = config.settings.DIAGNOSIS_LIQUIDITY_FLOOR
-        if floor <= 0:
-            return 1.0
-        return min(max_liq / floor, 1.0)
+        return min(max_liq / _EDGE_LIQUIDITY_FLOOR, 1.0)
 
     def _is_stale(
         self,

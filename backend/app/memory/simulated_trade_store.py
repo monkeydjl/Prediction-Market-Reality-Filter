@@ -335,6 +335,15 @@ def recompute_closed_trades() -> dict[str, Any]:
         conn.close()
 
 
+# Documents how the edge statistics in trade_stats() are computed, so API
+# consumers know the raw formula and the probability scale (0-100, not 0-1).
+_EDGE_DEFINITION: dict[str, str] = {
+    "raw_edge": "entry_prob - market_prob",
+    "scale": "0-100",
+    "directional": "raw_edge for YES, -raw_edge for NO",
+}
+
+
 def trade_stats() -> dict[str, Any]:
     """Aggregate statistics for all closed simulated trades."""
     db_path = loop_db_path()
@@ -352,6 +361,8 @@ def trade_stats() -> dict[str, Any]:
                 "total_pnl_pct": 0,
                 "avg_pnl_pct": None,
                 "avg_edge_at_entry": None,
+                "avg_directional_edge_at_entry": None,
+                "edge_definition": _EDGE_DEFINITION,
                 "by_direction": {},
                 "by_decision": {},
             }
@@ -366,6 +377,15 @@ def trade_stats() -> dict[str, Any]:
 
         edge_row = conn.execute(
             "SELECT AVG(ABS(entry_edge)) as avg FROM simulated_trades WHERE status='closed'"
+        ).fetchone()
+
+        # Directional edge: positive when the picked direction was right on
+        # average. entry_edge = entry_prob - market_prob, so a NO trade flips
+        # sign (a NO pick wants the market prob to be ABOVE the entry prob).
+        dir_edge_row = conn.execute(
+            """SELECT AVG(CASE WHEN direction='YES' THEN entry_edge
+                               ELSE -entry_edge END) as avg
+               FROM simulated_trades WHERE status='closed'"""
         ).fetchone()
 
         by_dir = {}
@@ -407,6 +427,10 @@ def trade_stats() -> dict[str, Any]:
             "total_pnl_pct": round(pnl_row["total"], 2),
             "avg_pnl_pct": round(pnl_row["avg"], 2),
             "avg_edge_at_entry": round(edge_row["avg"], 2) if edge_row["avg"] else None,
+            "avg_directional_edge_at_entry": (
+                round(dir_edge_row["avg"], 2) if dir_edge_row["avg"] else None
+            ),
+            "edge_definition": _EDGE_DEFINITION,
             "by_direction": by_dir,
             "by_decision": by_decision,
         }

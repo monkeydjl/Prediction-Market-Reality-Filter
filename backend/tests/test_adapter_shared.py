@@ -1,7 +1,7 @@
 # backend/tests/test_adapter_shared.py
 """Tests for _shared.py — shared adapter utility functions."""
 from unittest.mock import patch, MagicMock, AsyncMock
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import asyncio
 import pytest
 
@@ -1005,6 +1005,129 @@ class TestStaticWeatherFill:
         assert raw["environment"].get("weather_temp_c") is None
         assert raw["environment"].get("weather_condition") is None
         assert "weather_source" not in raw["custom"]
+
+
+_NOW = datetime(2025, 9, 16, 12, 0, tzinfo=timezone.utc)
+
+
+def _wx_match(match_id, home_name="Arsenal", kickoff=None):
+    return MatchIdentity(
+        match_id=match_id,
+        season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+        stage="group_stage",
+        round=None,
+        home=TeamIdentity(code="ARS", name=home_name, competition=_UCL),
+        away=TeamIdentity(code="RMA", name="Real Madrid CF", competition=_UCL),
+        kickoff_utc=kickoff if kickoff is not None else (_NOW + timedelta(hours=24)),
+    )
+
+
+def _wx_raw(environment=None):
+    return {
+        "team": {},
+        "general": {},
+        "market": {},
+        "player": {},
+        "environment": environment if environment is not None else {},
+        "custom": {},
+    }
+
+
+class TestLiveWeatherFill:
+    def setup_method(self):
+        from app.sports.football.football_weather import _clear_live_weather_cache
+
+        _clear_live_weather_cache()
+
+    def test_live_forecast_used_when_configured_and_env_absent(self):
+        match = _wx_match("ucl-wx-live")
+        raw = _wx_raw()
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"current_weather": {"temperature": 17.4, "weathercode": 61}}
+        from app.sports.football.adapters._shared import enrich_weather_features
+
+        with (
+            patch("app.sports.football.football_weather.httpx.get", return_value=resp) as mock_get,
+            patch("app.sports.football.football_weather._utcnow", return_value=_NOW),
+            patch("app.sports.football.football_weather.settings.FOOTBALL_LIVE_WEATHER_URL", "https://wx.example/forecast"),
+        ):
+            enrich_weather_features(raw, match)
+        assert mock_get.call_count == 1
+        assert raw["environment"]["weather_temp_c"] == pytest.approx(17.4)
+        assert raw["environment"]["weather_condition"] == "rain"
+        assert raw["custom"]["weather_source"] == "live_forecast"
+        assert raw["custom"]["weather_temp_c"] == pytest.approx(17.4)
+
+    def test_env_zero_temp_beats_live_forecast(self):
+        match = _wx_match("ucl-wx-zero")
+        raw = _wx_raw(environment={"weather_temp_c": 0.0})
+        from app.sports.football.adapters._shared import enrich_weather_features
+
+        with (
+            patch("app.sports.football.football_weather.httpx.get") as mock_get,
+            patch("app.sports.football.football_weather._utcnow", return_value=_NOW),
+            patch("app.sports.football.football_weather.settings.FOOTBALL_LIVE_WEATHER_URL", "https://wx.example/forecast"),
+        ):
+            enrich_weather_features(raw, match)
+        assert raw["environment"]["weather_temp_c"] == pytest.approx(0.0)
+        assert raw["custom"].get("weather_source") != "live_forecast"
+        mock_get.assert_not_called()
+
+    def test_live_failure_falls_back_to_static_climate(self):
+        import httpx as _httpx
+
+        match = _wx_match("ucl-wx-fail")
+        raw = _wx_raw()
+        from app.sports.football.adapters._shared import enrich_weather_features
+        from app.sports.football.football_weather import climate_for_home
+
+        with (
+            patch(
+                "app.sports.football.football_weather.httpx.get",
+                side_effect=_httpx.ConnectError("boom"),
+            ),
+            patch("app.sports.football.football_weather._utcnow", return_value=_NOW),
+            patch("app.sports.football.football_weather.settings.FOOTBALL_LIVE_WEATHER_URL", "https://wx.example/forecast"),
+        ):
+            enrich_weather_features(raw, match)
+        expected = climate_for_home("Arsenal", 9)
+        assert expected is not None
+        assert raw["environment"]["weather_temp_c"] == pytest.approx(float(expected["temp_c"]))
+        assert raw["custom"]["weather_source"] == "static_climate"
+
+    def test_beyond_horizon_skips_live_call(self):
+        match = _wx_match("ucl-wx-far", kickoff=_NOW + timedelta(days=14))
+        raw = _wx_raw()
+        from app.sports.football.adapters._shared import enrich_weather_features
+        from app.sports.football.football_weather import climate_for_home
+
+        with (
+            patch("app.sports.football.football_weather.httpx.get") as mock_get,
+            patch("app.sports.football.football_weather._utcnow", return_value=_NOW),
+            patch("app.sports.football.football_weather.settings.FOOTBALL_LIVE_WEATHER_URL", "https://wx.example/forecast"),
+        ):
+            enrich_weather_features(raw, match)
+        mock_get.assert_not_called()
+        expected = climate_for_home("Arsenal", 9)
+        assert raw["custom"]["weather_source"] == "static_climate"
+        assert raw["environment"]["weather_temp_c"] == pytest.approx(float(expected["temp_c"]))
+
+    def test_missing_config_no_http_static_climate(self):
+        match = _wx_match("ucl-wx-nocfg")
+        raw = _wx_raw()
+        from app.sports.football.adapters._shared import enrich_weather_features
+        from app.sports.football.football_weather import climate_for_home
+
+        with (
+            patch("app.sports.football.football_weather.httpx.get") as mock_get,
+            patch("app.sports.football.football_weather._utcnow", return_value=_NOW),
+            patch("app.sports.football.football_weather.settings.FOOTBALL_LIVE_WEATHER_URL", ""),
+        ):
+            enrich_weather_features(raw, match)
+        mock_get.assert_not_called()
+        expected = climate_for_home("Arsenal", 9)
+        assert raw["custom"]["weather_source"] == "static_climate"
+        assert raw["environment"]["weather_temp_c"] == pytest.approx(float(expected["temp_c"]))
 
 
 class TestZeroAltitudePreserved:

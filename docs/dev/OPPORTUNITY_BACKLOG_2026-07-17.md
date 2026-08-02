@@ -175,7 +175,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 | P1-F4 | h2h | ✅ 部分 2026-07-25：historical 优先 + kernel 俱乐部交锋回退（当前主队视角）；主客场分拆/别名/合并源仍待 | 小权重已在 multi-factor |
 | P1-F5 | 真实 xG | ✅ 部分 2026-07-26：静态 `xg_for_team` 双方命中覆盖 `custom.xg_*`（goals 代理回退）；真 xG API 仍待 | MultiFactor soft xg 已在 |
 | P1-F6 | PPDA / possession / shots | ✅ 部分 2026-07-26：静态 `stats_for_team` 双方命中覆盖 `custom.possession_*`/`shots_*`/`ppda_*`（form_share 代理回退）；真统计 API 仍待 |
-| P1-F7 | 场地 / 旅行 / 海拔 / 天气 | ✅ 部分 2026-07-26：俱乐部城市表 + 稀疏海拔表 fill-only（`altitude_source=static_table`）；travel soft 俱乐部可解析；静态气候 fill 已交付（`football_weather.climate_for_home` + `enrich_weather_features`，`weather_source=static_climate`）；实时天气预报源仍待 |
+| P1-F7 | 场地 / 旅行 / 海拔 / 天气 | ✅ 部分 2026-08-02：俱乐部城市表 + 稀疏海拔表 fill-only（`altitude_source=static_table`）；travel soft 俱乐部可解析；静态气候 fill（`weather_source=static_climate`）+ 实时天气预报源已交付（`live_weather_for_match` → `weather_source=live_forecast`，Open-Meteo 风格无密钥 JSON，horizon/TTL 可配，失败静默回退静态）；真多源气象 API 仍待 |
 | P1-F8 | 裁判 | ✅ 部分 2026-07-26：静态 `bias_for_referee` + enrich fill-only（`referee_source=static_map`）；真裁判统计源与库列仍待 |
 
 #### 篮球（NBA）

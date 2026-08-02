@@ -287,7 +287,7 @@ def enrich_altitude_features(raw: dict, match: MatchIdentity) -> None:
 
 
 def enrich_weather_features(raw: dict, match: MatchIdentity) -> None:
-    """Pass-through weather, then static climate fill when still missing (P1-F7)."""
+    """Weather fill order: env explicit (zero-safe) → live forecast → static climate (P1-F7)."""
     try:
         env = raw.setdefault("environment", {})
         custom = raw.setdefault("custom", {})
@@ -320,7 +320,23 @@ def enrich_weather_features(raw: dict, match: MatchIdentity) -> None:
             return
         month = int(kickoff.month)
         home_name = match.home.name if match.home else ""
-        from app.sports.football.football_weather import climate_for_home
+
+        # Live forecast fill — only when configured and it returns data.
+        # Returns None (no HTTP) when unconfigured, beyond the kickoff horizon,
+        # city unresolved, or on any network/payload failure.
+        from app.sports.football.football_weather import (
+            climate_for_home,
+            live_weather_for_match,
+        )
+
+        live = live_weather_for_match(match)
+        if live is not None and live.get("weather_temp_c") is not None:
+            env["weather_temp_c"] = float(live["weather_temp_c"])
+            env["weather_condition"] = str(live.get("weather_condition") or "mild")
+            custom["weather_temp_c"] = float(live["weather_temp_c"])
+            custom["weather_condition"] = str(live.get("weather_condition") or "mild")
+            custom["weather_source"] = "live_forecast"
+            return
 
         climate = climate_for_home(home_name, month)
         if climate is None:

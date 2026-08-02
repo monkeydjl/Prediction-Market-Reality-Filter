@@ -13,7 +13,9 @@
 - `team_geo`: club city table first for football leagues, national fallback; sparse `altitude_m_for_team` (≥1500 m venues)
 - Adapter `enrich_altitude_features`: pass-through first, static fill-only when missing (`altitude_source=static_table`); existing travel_between_teams picks up clubs
 - Adapter `enrich_weather_features`: pass-through first, static climate fill-only when temp and condition both missing (`weather_source=static_climate`); `football_weather.climate_for_home` city×month soft priors
-- MultiFactor travel/altitude formulas, ≥1500 m gate, weights unchanged; live forecast weather source still pending
+- `football_weather.live_weather_for_match`: Open-Meteo-style keyless JSON forecast; horizon gate (default 72 h), in-memory TTL cache keyed (lat, lon, date), httpx with configurable timeout; returns None on any failure (never raises)
+- Adapter weather selection order: env explicit (zero-safe) → `live_forecast` → `static_climate`; 5 new optional config keys `FOOTBALL_LIVE_WEATHER_*` (off by default — unset == today's behavior)
+- MultiFactor travel/altitude formulas, ≥1500 m gate, weights unchanged
 
 ### Football static style stats (P1-F6)
 

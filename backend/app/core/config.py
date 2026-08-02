@@ -439,6 +439,25 @@ class Settings:
         "https://api.football-data.org/v4",
     )
 
+    # Football live weather forecast fill (P1-F7). Optional: when
+    # FOOTBALL_LIVE_WEATHER_URL is empty (default) the adapter behaves exactly
+    # as before (env override → static climate). The default URL template
+    # targets keyless Open-Meteo; FOOTBALL_LIVE_WEATHER_API_KEY is appended as
+    # `apikey` only when set. Response is normalized to weather_temp_c /
+    # weather_condition. Live fetch is attempted only within the kickoff
+    # horizon and cached in-memory for the TTL. No mandatory config.
+    FOOTBALL_LIVE_WEATHER_URL: str = os.getenv("FOOTBALL_LIVE_WEATHER_URL", "")
+    FOOTBALL_LIVE_WEATHER_API_KEY: str = os.getenv("FOOTBALL_LIVE_WEATHER_API_KEY", "")
+    FOOTBALL_LIVE_WEATHER_TIMEOUT_S: float = float(
+        os.getenv("FOOTBALL_LIVE_WEATHER_TIMEOUT_S", "5.0")
+    )
+    FOOTBALL_LIVE_WEATHER_HORIZON_HOURS: float = float(
+        os.getenv("FOOTBALL_LIVE_WEATHER_HORIZON_HOURS", "72.0")
+    )
+    FOOTBALL_LIVE_WEATHER_CACHE_TTL_HOURS: float = float(
+        os.getenv("FOOTBALL_LIVE_WEATHER_CACHE_TTL_HOURS", "6.0")
+    )
+
     # The Odds API - Betting odds data source
     # Free tier: 500 requests/month
     # Register at: https://the-odds-api.com/

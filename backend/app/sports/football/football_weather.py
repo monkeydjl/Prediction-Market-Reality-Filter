@@ -1,9 +1,27 @@
-"""Static football home-city climate by month (P1-F7 residual weather).
+"""Football home-city weather (P1-F7 residual).
 
-Soft multi-year climate priors (not live forecasts). Missing / empty /
-bad month → None. MultiFactor does not consume weather this round.
+Two layers:
+- ``climate_for_home`` — soft multi-year climate priors by month (not live
+  forecasts). Missing / empty / bad month → None. Final fallback in the
+  adapter, tagged ``static_climate``.
+- ``live_weather_for_match`` — optional live forecast fill (provider behind
+  ``FOOTBALL_LIVE_WEATHER_URL``; disabled until configured). Returns
+  ``{"weather_temp_c", "weather_condition"}`` normalized to the adapter field
+  names, or None on any failure. Never raises into the adapter.
+
+MultiFactor does not consume weather this round.
 """
 from __future__ import annotations
+
+import logging
+import time
+from datetime import datetime, timezone
+
+import httpx
+
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 _CONDITIONS = frozenset({"clear", "mild", "rain", "cold", "hot"})
 
@@ -193,3 +211,115 @@ def climate_for_home(team_name: str, month: int) -> dict[str, float | str] | Non
     if c not in _CONDITIONS:
         c = "mild"
     return {"temp_c": round(t, 1), "condition": c}
+
+
+# --- Live forecast fill (P1-F7) -------------------------------------------
+#
+# Optional, provider-backed current-weather fetch. Disabled until
+# FOOTBALL_LIVE_WEATHER_URL is configured. The default URL template targets
+# Open-Meteo (keyless); the response is normalized to the adapter's existing
+# field names so the provider can be swapped without touching the adapter.
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _condition_from_code(code: int, temp_c: float) -> str:
+    """Map a WMO weathercode (+ temperature) to the shared condition vocab."""
+    if code in (0, 1):
+        cond = "clear"
+    elif code in (2, 3, 45, 48):
+        cond = "mild"
+    elif code in range(51, 68) or code in range(80, 83):
+        cond = "rain"  # drizzle / rain / showers
+    elif code in range(71, 78) or code in (85, 86):
+        cond = "cold"  # snow / freezing
+    else:
+        cond = "mild"  # thunderstorm and anything unknown
+    if temp_c <= 3.0:
+        cond = "cold"
+    elif temp_c >= 26.0 and cond == "clear":
+        cond = "hot"
+    return cond
+
+
+# In-memory TTL cache: key -> (expires_at_monotonic, value). Keyed by
+# (rounded lat, rounded lon, match local date) so repeated enrich calls for
+# the same fixture within the TTL avoid extra HTTP. No persistent storage.
+_LIVE_CACHE: dict[tuple[float, float, str], tuple[float, dict | None]] = {}
+
+
+def _clear_live_weather_cache() -> None:
+    """Empty the in-memory live-weather cache (test isolation)."""
+    _LIVE_CACHE.clear()
+
+
+def live_weather_for_match(match) -> dict[str, float | str | None] | None:
+    """Live current-weather for a match's home city, or None on any failure.
+
+    Selection gates (any miss → None, so the adapter falls through to static
+    climate): provider URL configured; kickoff within the configurable horizon;
+    home city resolves to coordinates; HTTP 200 with a parseable payload.
+    Never raises into the caller.
+    """
+    try:
+        url = str(getattr(settings, "FOOTBALL_LIVE_WEATHER_URL", "") or "").strip()
+        if not url:
+            return None  # not configured → caller uses static climate
+
+        kickoff = getattr(match, "kickoff_utc", None)
+        if kickoff is None:
+            return None
+        now = _utcnow()
+        if kickoff.tzinfo is None:
+            kickoff = kickoff.replace(tzinfo=timezone.utc)
+        horizon_h = float(getattr(settings, "FOOTBALL_LIVE_WEATHER_HORIZON_HOURS", 72.0))
+        hours_to_kickoff = (kickoff - now).total_seconds() / 3600.0
+        if hours_to_kickoff > horizon_h:
+            return None  # too far out for a useful current forecast
+
+        home = getattr(match, "home", None)
+        home_name = getattr(home, "name", "") if home is not None else ""
+        from app.sports._shared.team_geo import resolve_city
+
+        geo = resolve_city(home_name, "football")
+        if geo is None:
+            return None
+        lat, lon, _tz = geo
+
+        cache_key = (round(float(lat), 2), round(float(lon), 2), kickoff.date().isoformat())
+        ttl = float(getattr(settings, "FOOTBALL_LIVE_WEATHER_CACHE_TTL_HOURS", 6.0)) * 3600.0
+        now_mono = time.monotonic()
+        cached = _LIVE_CACHE.get(cache_key)
+        if cached is not None and cached[0] > now_mono:
+            return cached[1]
+
+        params: dict[str, float | str] = {"latitude": lat, "longitude": lon}
+        api_key = str(getattr(settings, "FOOTBALL_LIVE_WEATHER_API_KEY", "") or "").strip()
+        if api_key:
+            params["apikey"] = api_key
+        timeout = float(getattr(settings, "FOOTBALL_LIVE_WEATHER_TIMEOUT_S", 5.0))
+        resp = httpx.get(url, params=params, timeout=timeout)
+        if getattr(resp, "status_code", 0) != 200:
+            _LIVE_CACHE[cache_key] = (now_mono + ttl, None)
+            return None
+        payload = resp.json()
+        current = payload["current_weather"]
+        temp = float(current["temperature"])
+        if temp < -15.0:
+            temp = -15.0
+        elif temp > 45.0:
+            temp = 45.0
+        try:
+            code = int(current.get("weathercode", 0))
+        except (TypeError, ValueError):
+            code = 0
+        result: dict[str, float | str | None] = {
+            "weather_temp_c": round(temp, 1),
+            "weather_condition": _condition_from_code(code, temp),
+        }
+        _LIVE_CACHE[cache_key] = (now_mono + ttl, result)
+        return result
+    except Exception:  # noqa: BLE001 — never raise into the adapter
+        logger.debug("live weather fetch skipped", exc_info=True)
+        return None

@@ -127,15 +127,16 @@ OPENAI_MODEL=gpt-4o-mini
 ### 2.4 运行基础检查
 
 ```bash
+pip install -r requirements.txt -r requirements-dev.txt
 python -m compileall app tests
-python -m unittest discover -s tests
+python -m pytest tests
 ```
 
 当前预期结果：
 
 ```text
 compileall passed
-350 tests, 1 skipped, OK
+3600+ passed, a few skipped (opt-in live tests)
 ```
 
 默认测试是无网络、无真实 LLM 调用的回归测试。
@@ -740,14 +741,15 @@ curl "http://localhost:8000/events/calibration"
 ### 10.1 默认回归测试
 
 ```bash
+pip install -r requirements.txt -r requirements-dev.txt
 python -m compileall app tests
-python -m unittest discover -s tests
+python -m pytest tests
 ```
 
 预期：
 
 ```text
-350 tests, 1 skipped, OK
+3600+ passed, a few skipped (opt-in live tests)
 ```
 
 这些测试默认不访问真实网络、不调用真实 LLM，适合每次改代码后运行。
@@ -760,26 +762,26 @@ python -m unittest discover -s tests
 tests/test_integration_live.py
 ```
 
-它会调用真实 LLM 和外部网络，默认在 `unittest discover` 下跳过。
+它会调用真实 LLM 和外部网络，默认在 pytest 下跳过（测试类在 `setUpClass` 中抛出 `unittest.SkipTest`，除非设置 `RUN_LIVE_TESTS=1`；没有专门的 pytest 开关）。
 
 Windows cmd：
 
 ```bat
-set RUN_LIVE_TESTS=1 && python -m unittest tests.test_integration_live
+set RUN_LIVE_TESTS=1 && python -m pytest tests/test_integration_live.py
 ```
 
 PowerShell：
 
 ```powershell
 $env:RUN_LIVE_TESTS="1"
-python -m unittest tests.test_integration_live
+python -m pytest tests/test_integration_live.py
 Remove-Item Env:RUN_LIVE_TESTS
 ```
 
 Linux/macOS：
 
 ```bash
-RUN_LIVE_TESTS=1 python -m unittest tests.test_integration_live
+RUN_LIVE_TESTS=1 python -m pytest tests/test_integration_live.py
 ```
 
 直接运行文件：
@@ -809,7 +811,7 @@ node -e "const fs=require('fs'); for (const file of ['static/index.html','static
 
 ```bash
 python -m compileall app tests
-python -m unittest discover -s tests
+python -m pytest tests
 ```
 
 如果改过 Dashboard：
@@ -1237,7 +1239,7 @@ ECONOMIC_USER_AGENT=Event Intelligence Platform your-email@example.com
 - `OPENAI_API_KEY` 可用。
 - `OPENAI_MODEL` 和 `OPENAI_BASE_URL` 匹配。
 - `python -m compileall app tests` 通过。
-- `python -m unittest discover -s tests` 通过，当前为 `350 tests, 1 skipped`。
+- `python -m pytest tests` 通过，当前约 `3600+ passed, a few skipped`。
 - `/` 可以访问。
 - `/docs` 可以访问。
 - http://localhost:8000 可以访问。
@@ -1258,8 +1260,8 @@ ECONOMIC_USER_AGENT=Event Intelligence Platform your-email@example.com
 
 ```bash
 cd backend
-pip install -r requirements.txt
-python -m unittest discover -s tests
+pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest tests
 python run.py
 ```
 

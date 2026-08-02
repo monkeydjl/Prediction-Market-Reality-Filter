@@ -32,9 +32,10 @@ GNEWS_MAX_RESULTS=10
 # Check dependencies
 python -c "import feedparser, httpx, fastapi; print('✅ Dependencies OK')"
 
-# Run tests
-python -m unittest discover -s tests
-# Expected: 350 tests, 1 skipped, OK
+# Install test dependencies and run tests
+pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest tests
+# Expected: 3600+ passed, a few skipped (opt-in live tests)
 ```
 
 ---
@@ -109,8 +110,8 @@ Config:
 ### Unit Tests (Fast, No API Calls)
 
 ```bash
-python -m unittest discover -s tests
-# 350 tests, 1 skipped, no external API calls
+python -m pytest tests
+# 3600+ passed, a few skipped, no external API calls
 ```
 
 ### Integration Tests (Real API Calls)
@@ -119,11 +120,12 @@ Live integration tests cover both the core read paths (event analysis,
 discovery, news collection) and the post-handoff write/report paths (manual
 resolve + calibration, auto-resolve, calibration report, semantics,
 cross-validation, open-web extraction). They make real LLM + network calls and
-are opt-in (skipped by default, including under `unittest discover`).
+are opt-in (skipped by default under pytest — the class raises `unittest.SkipTest`
+in `setUpClass` unless `RUN_LIVE_TESTS=1` is set; there is no dedicated pytest flag).
 
 ```bash
 # Full integration suite (Windows cmd)
-set RUN_LIVE_TESTS=1 && python -m unittest tests.test_integration_live
+set RUN_LIVE_TESTS=1 && python -m pytest tests/test_integration_live.py
 # 11 tests, ~1-3 minutes, requires OPENAI_API_KEY in .env
 
 # Or run the file directly (auto-sets RUN_LIVE_TESTS=1)
@@ -145,7 +147,7 @@ in `.env`; otherwise those two tests self-skip while the rest still run.
 python -m compileall app tests
 
 # 2. Unit tests
-python -m unittest discover -s tests
+python -m pytest tests
 
 # 3. Dashboard JS (only if you changed static/index.html or static/index_zh.html)
 node -e "const fs=require('fs'); for (const file of ['static/index.html','static/index_zh.html']) { const html=fs.readFileSync(file,'utf8'); const m=html.match(/<script>([\s\S]*)<\/script>/); new Function(m?m[1]:''); } console.log('✅ dashboard scripts OK');"
@@ -174,7 +176,7 @@ backend/
 │   └── memory/
 │       └── event_store.py         # Event persistence
 ├── tests/
-│   ├── test_*.py                  # Unit tests (350 tests, 1 skipped)
+│   ├── test_*.py                  # Unit tests (3600+ tests)
 │   └── test_integration_live.py   # Integration tests (11 tests)
 ├── static/
 │   ├── index.html                 # English dashboard
@@ -340,7 +342,7 @@ sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
 Before considering the platform ready:
 
 - ✅ Dependencies installed
-- ✅ Unit tests pass (350 tests, 1 skipped)
+- ✅ Unit tests pass (3600+ tests, a few skipped)
 - ✅ Integration tests pass (11 tests)
 - ✅ Server starts successfully
 - ✅ Event analysis works with real LLM

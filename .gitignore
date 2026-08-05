@@ -84,6 +84,7 @@ backend/docs/工程进度.md
 backend/.claude/
 backend/.agents/
 .agents/
+.superpowers/
 backend/.impeccable/
 frontend/src/**/.impeccable/
 **/.impeccable/

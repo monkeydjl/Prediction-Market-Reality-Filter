@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useParams, useSearchParams, useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { MatchDetailPanel } from "@/components/sports/common/match-detail-panel";
 import { TraditionalOddsChart } from "@/components/sports/markets/TraditionalOddsChart";
@@ -17,6 +17,7 @@ import {
 } from "@/lib/sports-api";
 import type { MatchDetail, PredictionResult } from "@/lib/sports-api";
 import { ApiError } from "@/lib/api";
+import { matchDetailHref } from "@/lib/sports-routes";
 
 type TabId = "details" | "edge" | "odds" | "realtime";
 
@@ -34,13 +35,12 @@ function normalizeEngines(data: unknown): string[] | undefined {
   return undefined;
 }
 
-export default function MatchDetailPage() {
-  const params = useParams();
-  const matchId = params.matchId as string;
+function MatchDetailInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const matchId = searchParams.get("id") ?? "";
 
-  const { data, error, isLoading } = useMatchDetail(matchId);
+  const { data, error, isLoading } = useMatchDetail(matchId || null);
   const { data: enginesRaw } = useEngines();
   const engines = normalizeEngines(enginesRaw);
 
@@ -66,7 +66,7 @@ export default function MatchDetailPage() {
     tabParam && VALID_TABS.includes(tabParam) ? tabParam : "details";
 
   const handleTabChange = (tab: TabId) => {
-    router.replace(`/sports/${matchId}?tab=${tab}`);
+    router.replace(matchDetailHref(matchId, tab));
   };
 
   const handlePredict = () => {
@@ -83,28 +83,35 @@ export default function MatchDetailPage() {
       });
   };
 
-  if (isLoading) {
+  if (!matchId) {
     return (
-      <main className="mx-auto max-w-4xl px-4 py-6 md:px-6">
-        <p className="text-muted-foreground">加载中...</p>
-      </main>
+      <div className="space-y-4">
+        <p className="text-muted-foreground">缺少比赛 ID</p>
+        <Link href="/sports" className="text-primary hover:underline">
+          返回列表
+        </Link>
+      </div>
     );
+  }
+
+  if (isLoading) {
+    return <p className="text-muted-foreground">加载中...</p>;
   }
 
   if (notFound) {
     return (
-      <main className="mx-auto max-w-4xl space-y-4 px-4 py-6 md:px-6">
+      <div className="space-y-4">
         <p className="text-muted-foreground">比赛不存在</p>
         <Link href="/sports" className="text-primary hover:underline">
           返回列表
         </Link>
-      </main>
+      </div>
     );
   }
 
   if (serviceUnavailable) {
     return (
-      <main className="mx-auto max-w-4xl space-y-4 px-4 py-6 md:px-6">
+      <div className="space-y-4">
         <p className="text-destructive">
           预测内核未启用（HTTP 503）。请在后端设置{" "}
           <code className="rounded bg-muted px-1">KERNEL_PREDICTION_ENABLED=true</code>
@@ -113,18 +120,18 @@ export default function MatchDetailPage() {
         <Link href="/sports" className="text-primary hover:underline">
           返回列表
         </Link>
-      </main>
+      </div>
     );
   }
 
   if (errorMessage || !match) {
     return (
-      <main className="mx-auto max-w-4xl space-y-4 px-4 py-6 md:px-6">
+      <div className="space-y-4">
         <p className="text-destructive">加载失败: {errorMessage}</p>
         <Link href="/sports" className="text-primary hover:underline">
           返回列表
         </Link>
-      </main>
+      </div>
     );
   }
 
@@ -136,7 +143,7 @@ export default function MatchDetailPage() {
   ];
 
   return (
-    <main className="mx-auto max-w-4xl space-y-6 px-4 py-6 md:px-6">
+    <div className="space-y-6">
       <Link href="/sports" className="text-sm text-muted-foreground hover:underline">
         ← 返回列表
       </Link>
@@ -189,6 +196,22 @@ export default function MatchDetailPage() {
       )}
       {activeTab === "odds" && <TraditionalOddsChart matchId={matchId} />}
       {activeTab === "realtime" && <RealtimePriceTable matchId={matchId} />}
+    </div>
+  );
+}
+
+/**
+ * Match ids come from runtime fixtures, so they cannot be enumerated by
+ * `generateStaticParams()` under `output: "export"`. The id travels as `?id=`
+ * instead, which keeps this a single prerendered HTML file. `useSearchParams`
+ * needs a Suspense boundary to prerender.
+ */
+export default function MatchDetailPage() {
+  return (
+    <main className="mx-auto max-w-4xl px-4 py-6 md:px-6">
+      <Suspense fallback={<p className="text-muted-foreground">加载中...</p>}>
+        <MatchDetailInner />
+      </Suspense>
     </main>
   );
 }

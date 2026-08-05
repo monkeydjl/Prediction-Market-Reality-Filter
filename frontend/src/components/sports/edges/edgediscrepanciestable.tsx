@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEdgeDiscrepancies } from "@/lib/sports-api";
+import { matchDetailHref } from "@/lib/sports-routes";
 import { ScrollableTable } from "@/components/ui/scrollable-table";
 
 function formatPct(value: number): string {
@@ -100,7 +101,7 @@ export function EdgeDiscrepanciesTable() {
               </td>
               <td className="p-2">
                 <Link
-                  href={`/sports/${item.match_id}?tab=edge`}
+                  href={matchDetailHref(item.match_id, "edge")}
                   data-testid={`link-${item.match_id}`}
                   className="text-primary underline-offset-2 hover:underline"
                   aria-label={`查看比赛 ${item.match_id} 的 Edge 详情`}

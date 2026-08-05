@@ -8,6 +8,7 @@ import {
   statusLabel,
   type BettingCompetition,
 } from "@/lib/betting/competition-catalog";
+import { matchDetailHref } from "@/lib/sports-routes";
 import {
   hasOperatorApiKey,
   OPERATOR_CREDENTIALS_EVENT,
@@ -349,7 +350,7 @@ export function CompetitionLanding({ competition: staticComp }: Props) {
               {preview.map((m) => (
                 <li key={m.match_id}>
                   <Link
-                    href={`/sports/${encodeURIComponent(m.match_id)}`}
+                    href={matchDetailHref(m.match_id)}
                     className="flex items-center justify-between gap-2 px-3 py-2 text-sm hover:bg-secondary/40"
                   >
                     <span>

@@ -2,6 +2,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useOpenDecisions, type SportRecommendation } from "@/lib/sports-api";
+import { matchDetailHref } from "@/lib/sports-routes";
 import { RecommendationCard } from "./RecommendationCard";
 import {
   FeatureDisabledBanner,
@@ -78,7 +79,7 @@ export function OpenDecisionsList() {
           {recs.map((rec) => (
             <div key={rec.match_id} className="space-y-1">
               <Link
-                href={`/sports/${encodeURIComponent(rec.match_id)}`}
+                href={matchDetailHref(rec.match_id)}
                 className="text-xs text-primary hover:underline"
               >
                 查看比赛 {rec.match_id} →

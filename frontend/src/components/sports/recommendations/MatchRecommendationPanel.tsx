@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRecommendation } from "@/lib/sports-api";
+import { matchDetailHref } from "@/lib/sports-routes";
 import { RecommendationCard } from "./RecommendationCard";
 import {
   FeatureDisabledBanner,
@@ -39,7 +40,7 @@ export function MatchRecommendationPanel({ matchId }: { matchId: string }) {
       >
         暂无推荐。请先完成预测与 Edge 计算（
         <Link
-          href={`/sports/${encodeURIComponent(matchId)}?tab=edge`}
+          href={matchDetailHref(matchId, "edge")}
           className="text-primary underline"
         >
           Edge 分析

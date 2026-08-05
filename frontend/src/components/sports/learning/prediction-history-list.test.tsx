@@ -107,7 +107,9 @@ describe("PredictionHistoryList", () => {
     render(<PredictionHistoryList />);
     await waitFor(() => {
       const link = screen.getByRole("link");
-      expect(link.getAttribute("href")).toBe("/sports/learning/history/nba-20250101-LAL-BOS");
+      expect(link.getAttribute("href")).toBe(
+        "/sports/learning/history/?matchId=nba-20250101-LAL-BOS",
+      );
     });
   });
 

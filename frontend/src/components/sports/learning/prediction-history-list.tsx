@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePredictionHistory, type PredictionHistoryItem } from "@/lib/sports-api";
+import { learningHistoryHref } from "@/lib/sports-routes";
 
 const SPORT_FILTERS = [
   { value: "", label: "全部" },
@@ -119,7 +120,7 @@ export function PredictionHistoryList() {
                     </td>
                     <td className="py-2 pr-4">
                       <Link
-                        href={`/sports/learning/history/${item.match_id}`}
+                        href={learningHistoryHref(item.match_id)}
                         className="font-mono text-primary hover:underline"
                       >
                         {item.match_id.length > 20 ? `${item.match_id.slice(0, 18)}...` : item.match_id}

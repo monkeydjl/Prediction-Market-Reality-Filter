@@ -6,6 +6,7 @@ import {
   type MarketSettlement,
 } from "@/lib/sports-api";
 import { ProcessSettlementButton } from "./processsettlementbutton";
+import { matchDetailHref } from "@/lib/sports-routes";
 import {
   FeatureDisabledBanner,
   isServiceUnavailable,
@@ -102,7 +103,7 @@ export function SettlementHistoryTable() {
               <tr key={s.id} className="border-b">
                 <td className="p-1">
                   <Link
-                    href={`/sports/${encodeURIComponent(s.match_id)}`}
+                    href={matchDetailHref(s.match_id)}
                     className="text-primary hover:underline"
                   >
                     {s.match_id}

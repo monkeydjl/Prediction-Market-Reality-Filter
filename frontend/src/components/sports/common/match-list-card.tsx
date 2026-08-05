@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { MatchSummary } from "@/lib/sports-api";
 import { getCompetitionByCode } from "@/lib/betting/competition-catalog";
+import { matchDetailHref } from "@/lib/sports-routes";
 
 const SPORT_ICONS: Record<string, string> = {
   football: "⚽",
@@ -31,7 +32,7 @@ export function MatchListCard({ match }: MatchListCardProps) {
 
   return (
     <Link
-      href={`/sports/${match.match_id}/`}
+      href={matchDetailHref(match.match_id)}
       className="block rounded-lg border border-border p-4 transition-colors hover:bg-secondary/40"
     >
       <div className="flex items-center justify-between gap-4">

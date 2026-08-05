@@ -103,7 +103,7 @@ describe("EdgeDiscrepanciesTable", () => {
       expect(screen.getByTestId("link-nba-2026-g1")).toBeTruthy(),
     );
     expect(screen.getByTestId("link-nba-2026-g1").getAttribute("href")).toBe(
-      "/sports/nba-2026-g1?tab=edge",
+      "/sports/match/?id=nba-2026-g1&tab=edge",
     );
   });
 

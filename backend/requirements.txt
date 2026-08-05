@@ -1,5 +1,6 @@
 # Runtime dependencies for backend/app/ and backend/scripts/
-# Pinned to versions verified on Windows / Python 3.14.5
+# Pins must install on Python 3.11 — that is what .github/workflows/ci.yml uses.
+# Verified 2026-08-05 on Windows / Python 3.11.9 (3614 passed, 11 skipped).
 # Generated 2026-07-02 from pip freeze + import audit
 
 # === Web framework / server ===
@@ -9,8 +10,10 @@ uvicorn==0.48.0
 pydantic==2.13.4
 
 # === Data / ML ===
-numpy==2.5.0
-scipy==1.18.0
+# numpy/scipy are held below the latest release: 2.5.0 / 1.18.0 declare
+# Requires-Python >=3.12, but CI (.github/workflows/ci.yml) pins 3.11.
+numpy==2.4.6
+scipy==1.16.3
 lightgbm==4.6.0
 
 # === Scraping / news ===

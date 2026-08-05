@@ -16,6 +16,7 @@ import asyncio
 import json
 import tempfile
 import unittest
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -163,26 +164,35 @@ class WorldCupFactRouteTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             run_db = str(base / "v2_loop.db")
-            with patch.object(sqlite_db, "loop_db_path", return_value=run_db), \
-                    patch.object(settings, "SPORTS_FACT_FILE", str(base / "facts.json")), \
-                    patch.object(settings, "WORLD_CUP_DATA_FILE", str(base / "world_cup_data.json")), \
-                    patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_FILE", str(base / "bundle.json")), \
-                    patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_URL", "https://example.com/bundle?token=secret"), \
-                    patch.object(settings, "WORLD_CUP_MATCH_SOURCE_URL", "https://example.com/matches?token=secret"), \
-                    patch.object(settings, "WORLD_CUP_MATCH_EVENTS_SOURCE_URL", ""), \
-                    patch.object(settings, "WORLD_CUP_LINEUPS_SOURCE_URL", ""), \
-                    patch.object(settings, "WORLD_CUP_STANDINGS_SOURCE_URL", ""), \
-                    patch.object(settings, "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL", ""), \
-                    patch.object(settings, "WORLD_CUP_PLAYER_STATUS_SOURCE_URL", ""), \
-                    patch.object(settings, "WORLD_CUP_STATISTICS_SOURCE_URL", ""), \
-                    patch.object(settings, "WORLD_CUP_API_FOOTBALL_API_KEY", "provider-secret"), \
-                    patch.object(settings, "WORLD_CUP_SPORTMONKS_API_TOKEN", "sportmonks-secret"), \
-                    patch.object(settings, "WORLD_CUP_SPORTMONKS_FIXTURES_URL", "https://sportmonks.example/fixtures?api_token=secret"), \
-                    patch.object(settings, "WORLD_CUP_SPORTMONKS_STANDINGS_URL", ""), \
-                    patch.object(settings, "WORLD_CUP_SPORTMONKS_TOP_SCORERS_URL", ""), \
-                    patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED", True), \
-                    patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE", "feeds"), \
-                    patch.object(settings, "API_WRITE_KEY", "secret"):
+            # ExitStack instead of a 21-item `with`: CPython 3.11 (the version CI
+            # pins) caps statically nested blocks at 20 and refuses to compile.
+            settings_overrides = {
+                "SPORTS_FACT_FILE": str(base / "facts.json"),
+                "WORLD_CUP_DATA_FILE": str(base / "world_cup_data.json"),
+                "WORLD_CUP_SOURCE_BUNDLE_FILE": str(base / "bundle.json"),
+                "WORLD_CUP_SOURCE_BUNDLE_URL": "https://example.com/bundle?token=secret",
+                "WORLD_CUP_MATCH_SOURCE_URL": "https://example.com/matches?token=secret",
+                "WORLD_CUP_MATCH_EVENTS_SOURCE_URL": "",
+                "WORLD_CUP_LINEUPS_SOURCE_URL": "",
+                "WORLD_CUP_STANDINGS_SOURCE_URL": "",
+                "WORLD_CUP_PLAYER_AWARDS_SOURCE_URL": "",
+                "WORLD_CUP_PLAYER_STATUS_SOURCE_URL": "",
+                "WORLD_CUP_STATISTICS_SOURCE_URL": "",
+                "WORLD_CUP_API_FOOTBALL_API_KEY": "provider-secret",
+                "WORLD_CUP_SPORTMONKS_API_TOKEN": "sportmonks-secret",
+                "WORLD_CUP_SPORTMONKS_FIXTURES_URL": "https://sportmonks.example/fixtures?api_token=secret",
+                "WORLD_CUP_SPORTMONKS_STANDINGS_URL": "",
+                "WORLD_CUP_SPORTMONKS_TOP_SCORERS_URL": "",
+                "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED": True,
+                "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE": "feeds",
+                "API_WRITE_KEY": "secret",
+            }
+            with ExitStack() as stack:
+                stack.enter_context(
+                    patch.object(sqlite_db, "loop_db_path", return_value=run_db)
+                )
+                for _name, _value in settings_overrides.items():
+                    stack.enter_context(patch.object(settings, _name, _value))
                 run_id = loop_run_store.start_run("world_cup_source_bundle_import")
                 loop_run_store.finish_run(
                     run_id,

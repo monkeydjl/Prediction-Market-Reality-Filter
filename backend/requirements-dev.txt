@@ -1,6 +1,7 @@
 # Dev / test dependencies (not required to run the server)
 # Install with: pip install -r requirements-dev.txt
-# Pinned to versions verified on Windows / Python 3.14.5
+# Pins must install on Python 3.11 — that is what .github/workflows/ci.yml uses.
+# Verified 2026-08-05 on Windows / Python 3.11.9.
 
 pytest==9.1.1
 pytest-asyncio==1.4.0

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   useAvailableFutures,
   useFuturesCoverage,
@@ -72,13 +72,11 @@ export function FuturesDashboard() {
     isLoading: coverageLoading,
   } = useFuturesCoverage();
 
-  const [selected, setSelected] = useState<FuturesPair | null>(null);
+  const [picked, setPicked] = useState<FuturesPair | null>(null);
 
-  useEffect(() => {
-    if (pairs && pairs.length > 0 && !selected) {
-      setSelected(pairs[0]);
-    }
-  }, [pairs, selected]);
+  // Default to the first pair once it loads. Derived at render rather than
+  // assigned from an effect, which would setState synchronously on mount.
+  const selected = picked ?? pairs?.[0] ?? null;
 
   const {
     data: snapshotsData,
@@ -130,7 +128,7 @@ export function FuturesDashboard() {
             <button
               key={`${p.competition}-${p.season}`}
               type="button"
-              onClick={() => setSelected(p)}
+              onClick={() => setPicked(p)}
               className={`rounded border px-3 py-1 text-sm ${
                 selected?.competition === p.competition &&
                 selected?.season === p.season

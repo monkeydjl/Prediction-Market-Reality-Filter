@@ -59,10 +59,14 @@ export function OptimizationDashboard() {
     }));
   }, [lastApply]);
 
+  // Hoisted so the memo's inferred dependency matches the declared one; with
+  // `taskStatus?.result` inline the compiler infers all of `taskStatus` and
+  // skips optimizing the component.
+  const taskResult = taskStatus?.result;
   const taskBacktest = useMemo(() => {
-    if (!taskStatus?.result) return null;
-    return parseOptimizationTaskResult(taskStatus.result);
-  }, [taskStatus?.result]);
+    if (!taskResult) return null;
+    return parseOptimizationTaskResult(taskResult);
+  }, [taskResult]);
 
   const candidateChartPoints = useMemo(() => {
     if (!params?.length) return [];

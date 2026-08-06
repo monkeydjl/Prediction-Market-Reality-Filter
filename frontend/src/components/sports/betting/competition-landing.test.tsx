@@ -3,7 +3,6 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CompetitionLanding } from "./competition-landing";
 import type { BettingCompetition } from "@/lib/betting/competition-catalog";
-import { OPERATOR_CREDENTIALS_EVENT } from "@/lib/operator-credentials";
 
 vi.mock("@/lib/env", () => ({ getApiBase: () => "/api" }));
 

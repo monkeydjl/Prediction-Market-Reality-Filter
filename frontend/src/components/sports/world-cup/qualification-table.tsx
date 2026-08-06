@@ -1,6 +1,6 @@
 "use client";
 
-import { TrendingUp, Trophy } from "lucide-react";
+import { Trophy } from "lucide-react";
 import type { QualificationProbability } from "@/lib/world-cup/qualification-probability";
 import { translateTeamName } from "@/lib/world-cup/team-names-zh";
 import { cn } from "@/lib/utils";

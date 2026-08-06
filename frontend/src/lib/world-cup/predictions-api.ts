@@ -5,7 +5,6 @@
 import { getApiBase } from "@/lib/env";
 import {
   buildApiErrorMessage,
-  buildOperatorAuthHeaders,
   getOperatorApiKey,
   getOperatorId,
 } from "@/lib/api";

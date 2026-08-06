@@ -904,6 +904,10 @@ function PostMatchBackfillPanel({ onQualityRefresh }: { onQualityRefresh: (quali
   }
 
   useEffect(() => {
+    // loadAuditRuns is async and every setState in it runs after an await, so
+    // nothing is set synchronously here. The rule flags any transitively
+    // reachable setState.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadAuditRuns();
   }, []);
 
@@ -1334,6 +1338,10 @@ function ReconcileScoringPanel({ onQualityRefresh }: { onQualityRefresh: (qualit
   }
 
   useEffect(() => {
+    // loadRuns is async and every setState in it runs after an await, so
+    // nothing is set synchronously here. The rule flags any transitively
+    // reachable setState.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadRuns();
   }, []);
 
@@ -1497,6 +1505,10 @@ function ResultConsistencyPanel({
   }
 
   useEffect(() => {
+    // This loader is async and every setState in it runs after an await, so
+    // nothing is set synchronously here. The rule flags any transitively
+    // reachable setState.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadResultFactBackfillRuns();
   }, []);
 

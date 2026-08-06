@@ -16,7 +16,7 @@ import { DecisionTimelinePanel } from "@/components/detail/decision-timeline-pan
 import { EdgeChart, ProbabilityChart, buildSeries } from "@/components/detail/probability-chart";
 import { DeltaPill, SupportMeter } from "@/components/indicators";
 import { eventsApi, type EdgeTrajectory } from "@/lib/api";
-import { adaptEntry, adaptRecord, type EventView } from "@/lib/adapt";
+import { adaptEntry, type EventView } from "@/lib/adapt";
 import { categoryLabel, fmtPct, fmtSignedPct } from "@/lib/format";
 import type { EventRecord, HistorySnapshot, SimilarEvent, Trend } from "@/lib/types";
 

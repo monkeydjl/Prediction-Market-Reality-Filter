@@ -28,6 +28,11 @@ export function LearningTabs() {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get("tab");
     if (tab && VALID_TABS.includes(tab as TabId)) {
+      // This page is prerendered by the static export, so the URL cannot be
+      // read in a lazy useState initializer without a hydration mismatch
+      // against HTML that always renders the default tab. Reading it after
+      // mount is the correct trade here.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setActiveTab(tab as TabId);
     }
   }, []);

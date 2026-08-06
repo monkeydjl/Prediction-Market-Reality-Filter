@@ -327,10 +327,7 @@ export default function WorldCupPage() {
   const fixtureList = useMemo(() => allMatches.map((m) => m.match), [allMatches]);
 
   useEffect(() => {
-    if (activeTab !== "groups" || groupEntries.length === 0) {
-      setActiveGroup(null);
-      return;
-    }
+    if (activeTab !== "groups" || groupEntries.length === 0) return;
 
     const updateActiveGroup = () => {
       const markerTop = window.innerWidth >= 1024 ? 120 : 64;
@@ -359,6 +356,11 @@ export default function WorldCupPage() {
       window.removeEventListener("resize", updateActiveGroup);
     };
   }, [activeTab, groupEntries]);
+
+  // activeGroup is only meaningful on the groups tab. Derive it here instead
+  // of resetting the state slot from inside the scroll-spy effect above.
+  const displayedActiveGroup =
+    activeTab === "groups" && groupEntries.length > 0 ? activeGroup : null;
 
   return (
     <>
@@ -635,11 +637,11 @@ export default function WorldCupPage() {
                       <a
                         key={group}
                         href={`#${groupSectionId(group)}`}
-                        aria-current={activeGroup === group ? "location" : undefined}
+                        aria-current={displayedActiveGroup === group ? "location" : undefined}
                         onClick={() => setActiveGroup(group)}
                         className={cn(
                           "shrink-0 rounded-md px-3 py-1.5 text-center text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:w-full",
-                          activeGroup === group
+                          displayedActiveGroup === group
                             ? "bg-primary text-primary-foreground shadow-sm"
                             : "text-muted-foreground hover:bg-background hover:text-foreground"
                         )}

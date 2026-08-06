@@ -88,7 +88,6 @@ export function KnockoutView({ matches, onTeamClick }: KnockoutViewProps) {
 
           <div className="grid gap-4 md:grid-cols-2">
             {stageData.matches.map((match) => {
-              const isFinished = match.status === "finished";
               const isLive = match.status === "in_play";
               const hasScore = match.home_score != null && match.away_score != null;
 

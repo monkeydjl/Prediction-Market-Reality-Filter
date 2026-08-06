@@ -4,6 +4,8 @@
 **Status:** Approved for planning
 **Backlog:** P1-F7 (partial → weather data side after club geo + altitude; true forecast API still pending)
 
+> **Follow-up:** the deferred live-forecast layer shipped 2026-08-02 — see `2026-08-02-football-live-weather-design.md`. Static climate remains the fallback whenever the live path is unconfigured or misses.
+
 ## Problem
 
 P1-F7 already delivered:

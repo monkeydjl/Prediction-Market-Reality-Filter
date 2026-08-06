@@ -31,12 +31,13 @@ app/api/routes/events.py                     Event Intelligence API
 app/services/event_intelligence_service.py   发现 / 分析编排
 app/services/cross_validation_service.py     多模型交叉验证（可选）
 app/memory/event_store.py                    事件持久化
-tests/                                        无网络回归测试
+tests/                                        无网络回归测试（见 tests/README.md）
 ```
 
 ## 文档
 
 - 安装与配置：[../docs/user/QUICK_START.md](../docs/user/QUICK_START.md)
+- 测试套件（隔离机制、`clean_env`、manual 脚本）：[tests/README.md](tests/README.md)
 - 产品愿景：[../docs/dev/Event Intelligence Platform.md](../docs/dev/Event%20Intelligence%20Platform.md)
 - 历史进度日志（本地，未纳入版本控制）：`docs/PROJECT_PROGRESS.md`、`docs/工程进度.md`
 

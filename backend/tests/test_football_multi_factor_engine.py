@@ -482,3 +482,88 @@ class TestH2hVenueSplit:
         result = engine.predict(features, features.match)
         h2h = next(i for i in result.explanation if i.factor == "h2h")
         assert h2h.available is False
+
+
+class TestScheduleMergeTiers:
+    """Flag-gated congestion read from the cross-competition merged counts."""
+
+    @staticmethod
+    def _rested(**custom):
+        """Both sides equally rested, so only the congestion tier moves the edge."""
+        return _make_features(rest_home=5.0, rest_away=5.0, custom=custom)
+
+    def test_flag_off_output_matches_no_merged_keys(self, monkeypatch):
+        from app.core import config
+
+        monkeypatch.setattr(config.settings, "FOOTBALL_SCHEDULE_MERGE_ENABLED", False)
+        engine = FootballMultiFactorEngine()
+        plain = self._rested()
+        with_keys = self._rested(matches_merged_7d_home=3, matches_merged_7d_away=0)
+        assert (
+            engine.predict(with_keys, with_keys.match).outcome_probabilities
+            == engine.predict(plain, plain.match).outcome_probabilities
+        )
+
+    def test_flag_on_merged_count_triggers_congest(self, monkeypatch):
+        from app.core import config
+
+        monkeypatch.setattr(config.settings, "FOOTBALL_SCHEDULE_MERGE_ENABLED", True)
+        engine = FootballMultiFactorEngine()
+        plain = self._rested()
+        congested = self._rested(
+            matches_merged_7d_home=2, matches_merged_7d_away=0,
+        )
+        p_plain = engine.predict(plain, plain.match).outcome_probabilities["home_win"]
+        p_cong = engine.predict(
+            congested, congested.match,
+        ).outcome_probabilities["home_win"]
+        assert p_cong < p_plain
+
+    def test_flag_on_three_day_window_penalises_harder(self, monkeypatch):
+        from app.core import config
+
+        monkeypatch.setattr(config.settings, "FOOTBALL_SCHEDULE_MERGE_ENABLED", True)
+        engine = FootballMultiFactorEngine()
+        congested = self._rested(
+            matches_merged_7d_home=2, matches_merged_7d_away=0,
+        )
+        short_turnaround = self._rested(
+            matches_merged_7d_home=2,
+            matches_merged_3d_home=1,
+            matches_merged_7d_away=0,
+            matches_merged_3d_away=0,
+        )
+        p_cong = engine.predict(
+            congested, congested.match,
+        ).outcome_probabilities["home_win"]
+        p_short = engine.predict(
+            short_turnaround, short_turnaround.match,
+        ).outcome_probabilities["home_win"]
+        assert p_short < p_cong
+
+    def test_flag_on_without_merged_keys_uses_existing_congest(self, monkeypatch):
+        from app.core import config
+
+        monkeypatch.setattr(config.settings, "FOOTBALL_SCHEDULE_MERGE_ENABLED", True)
+        engine = FootballMultiFactorEngine()
+        plain = self._rested()
+        legacy = self._rested(
+            schedule_congested_home=True, schedule_congested_away=False,
+        )
+        p_plain = engine.predict(plain, plain.match).outcome_probabilities["home_win"]
+        p_legacy = engine.predict(
+            legacy, legacy.match,
+        ).outcome_probabilities["home_win"]
+        assert p_legacy < p_plain
+
+    def test_flag_on_symmetric_congestion_is_a_noop(self, monkeypatch):
+        from app.core import config
+
+        monkeypatch.setattr(config.settings, "FOOTBALL_SCHEDULE_MERGE_ENABLED", True)
+        engine = FootballMultiFactorEngine()
+        plain = self._rested()
+        both = self._rested(matches_merged_7d_home=2, matches_merged_7d_away=2)
+        assert (
+            engine.predict(both, both.match).outcome_probabilities
+            == engine.predict(plain, plain.match).outcome_probabilities
+        )

@@ -130,6 +130,49 @@ def _normalize_3way(probs: dict[str, float]) -> dict[str, float]:
 
 
 _MIN_VENUE_SAMPLES = 4.0
+_MERGED_CONGEST_MATCHES = 2
+
+
+def _schedule_merge_enabled() -> bool:
+    from app.core import config
+
+    return bool(config.settings.FOOTBALL_SCHEDULE_MERGE_ENABLED)
+
+
+def _merged_count(custom: dict, key: str) -> int | None:
+    value = custom.get(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _merged_congestion(custom: dict) -> tuple[bool | None, bool | None]:
+    """Congestion read from the cross-competition merged 7-day counts (P1-F2).
+
+    Returns None per side when the flag is off or the key is absent, which
+    leaves the caller's existing ``schedule_congested_*`` value in place.
+    """
+    if not _schedule_merge_enabled():
+        return None, None
+    out: list[bool | None] = []
+    for side in ("home", "away"):
+        n = _merged_count(custom, f"matches_merged_7d_{side}")
+        out.append(None if n is None else n >= _MERGED_CONGEST_MATCHES)
+    return out[0], out[1]
+
+
+def _short_turnaround(custom: dict) -> tuple[bool, bool]:
+    """Whether each side already played inside the last 3 days (P1-F2)."""
+    if not _schedule_merge_enabled():
+        return False, False
+    out: list[bool] = []
+    for side in ("home", "away"):
+        n = _merged_count(custom, f"matches_merged_3d_{side}")
+        out.append(n is not None and n >= 1)
+    return out[0], out[1]
 
 
 def _blend_h2h_venue(
@@ -314,11 +357,23 @@ class FootballMultiFactorEngine:
             congest_away = bool(custom["schedule_congested_away"])
         else:
             congest_away = rest_away is not None and float(rest_away) <= 2.0
+        merged_congest_home, merged_congest_away = _merged_congestion(custom)
+        if merged_congest_home is not None:
+            congest_home = merged_congest_home
+        if merged_congest_away is not None:
+            congest_away = merged_congest_away
+        short_home, short_away = _short_turnaround(custom)
         if rest_home is not None and rest_away is not None:
             rest_diff = _clamp(float(rest_home) - float(rest_away), -4.0, 4.0)
             edge = rest_diff * 0.02
+            # A second match inside 3 days is a real short turnaround, so it
+            # takes the back-to-back magnitude rather than the congestion one.
+            if short_home and not short_away:
+                edge -= 0.03
+            elif short_away and not short_home:
+                edge += 0.03
             # Back-to-back (rest <= 1): stronger than midweek congestion (rest <= 2)
-            if b2b_home and not b2b_away:
+            elif b2b_home and not b2b_away:
                 edge -= 0.03
             elif b2b_away and not b2b_home:
                 edge += 0.03

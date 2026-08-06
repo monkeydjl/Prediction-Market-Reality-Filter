@@ -75,39 +75,40 @@ P1-F1/F4 把 `_alias_index` / `_match_key` 写在了 `club_form.py` 里。现在
 
 ### Step 1 — 写失败测试（RED）
 
-- [ ] flag OFF 且带 merged 键 → 输出与不带 merged 键时逐位相同
-- [ ] flag ON 且 `matches_merged_7d_home >= 2` → congest 惩罚生效
-- [ ] flag ON 且 `matches_merged_3d_home >= 1` → 按 b2b 档（0.03）而非 congest 档
-- [ ] flag ON 但 merged 键缺失 → 退回现有 `schedule_congested_*`
+- [x] flag OFF 且带 merged 键 → 输出与不带 merged 键时逐位相同
+- [x] flag ON 且 `matches_merged_7d_home >= 2` → congest 惩罚生效
+- [x] flag ON 且 `matches_merged_3d_home >= 1` → 按 b2b 档（0.03）而非 congest 档
+- [x] flag ON 但 merged 键缺失 → 退回现有 `schedule_congested_*`
+- [x] （追加）flag ON 且两侧同样拥堵 → 无净效应
 
 ### Step 2 — 实现（GREEN）
 
-- [ ] `config.py` 加 `FOOTBALL_SCHEDULE_MERGE_ENABLED: bool = False`
-- [ ] `.env.example` 同步该键（P1-F7 的教训：配置键必须同时进 `.env.example`）
-- [ ] rest 因子的分档链插入 3 天档，与 b2b / congest 互斥
+- [x] `config.py` 加 `FOOTBALL_SCHEDULE_MERGE_ENABLED: bool = False`
+- [x] `.env.example` 同步该键（P1-F7 的教训：配置键必须同时进 `.env.example`）
+- [x] rest 因子的分档链插入 3 天档，与 b2b / congest 互斥
 
 ### Step 3 — 验证
 
-- [ ] 相关测试文件全绿
-- [ ] 后端全量套件对齐基线（3644 + 新增）
-- [ ] `ruff check app/`
-- [ ] `python scripts/generate_types.py --check`（未改 `domain.py`，应无输出）
+- [x] 相关测试文件全绿（engine 33 passed）
+- [x] 后端全量套件对齐基线（3644 + 新增）
+- [x] `ruff check app/`
+- [x] `python -m scripts.generate_types --check`（未改 `domain.py`，输出 up to date）
 
 ---
 
 ## Task 4 — 文档与回写
 
-- [ ] `OPPORTUNITY_BACKLOG_2026-07-17.md` 的 P1-F2 行补 `✅ 2026-08-06` 与残项收敛说明（§14 维护约定要求）
-- [ ] `CHANGELOG.md` 记一条
-- [ ] 本计划勾选完成
+- [x] `OPPORTUNITY_BACKLOG_2026-07-17.md` 的 P1-F2 行补 `✅ 2026-08-06` 与残项收敛说明（§14 维护约定要求）
+- [x] `CHANGELOG.md` 记一条
+- [x] 本计划勾选完成
 
 ---
 
 ## 规范扫描
 
-- [ ] 无占位符 / TODO / `pass  # implement later`
-- [ ] 新配置键同时出现在 `config.py` 与 `.env.example`
-- [ ] 新 flag 默认 OFF
-- [ ] 无新表、无 `domain.py` 契约变更
-- [ ] `rest_form.py` 与 `tests/test_rest_form.py` 零改动
-- [ ] 注释语言与所在文件一致（后端代码英文、backlog 中文）
+- [x] 无占位符 / TODO / `pass  # implement later`
+- [x] 新配置键同时出现在 `config.py` 与 `.env.example`
+- [x] 新 flag 默认 OFF
+- [x] 无新表、无 `domain.py` 契约变更
+- [x] `rest_form.py` 与 `tests/test_rest_form.py` 零改动
+- [x] 注释语言与所在文件一致（后端代码英文、backlog 中文）

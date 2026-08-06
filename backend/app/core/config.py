@@ -1013,6 +1013,16 @@ class Settings:
         "FOOTBALL_H2H_VENUE_SPLIT_ENABLED", "false"
     )
 
+    # P1-F2 residual: read schedule congestion from the cross-competition
+    # merged counts (a club playing midweek European football plus a weekend
+    # league match counts as two, not one) and add a 3-day short-turnaround
+    # tier. OFF reproduces the previous rest factor exactly. The merged keys
+    # under custom are written regardless, so the distribution can be
+    # inspected before enabling.
+    FOOTBALL_SCHEDULE_MERGE_ENABLED: bool = _env_bool(
+        "FOOTBALL_SCHEDULE_MERGE_ENABLED", "false"
+    )
+
     # Kernel Dixon-Coles engine (default OFF). Elo → xG → Poisson + rho.
     # Requires KERNEL_PREDICTION_ENABLED. Rho from data/dixon_coles_params.json.
     DIXON_COLES_ENGINE_ENABLED: bool = _env_bool(

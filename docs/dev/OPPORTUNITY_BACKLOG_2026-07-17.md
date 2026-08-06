@@ -170,7 +170,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 | ID | 因子 / 信号 | 数据侧 | 模型侧 |
 |----|-------------|--------|--------|
 | P1-F1 | form（近 N 场） | ✅ 部分 2026-07-25：`form_*` = 积分率 (3W+D)/(3N)（historical + club_form 经 enrich 统一写入）；✅ 2026-08-06：别名感知匹配（`club_form` 接入 `TEAM_ALIASES`，单赛事内解析、解析失败退回字符串比较）+ 加权近 N（`weighted_points_form_rate`，半衰期 5 场；enrich 优先取 `form_rate_weighted`，CSV 国家队路径无逐场序列自然退回扁平值）；真实覆盖率提升幅度待线上观测 | 引擎 form 差分未改 |
-| P1-F2 | rest / 赛程密度 | ✅ 部分 2026-07-25：`matches_last_7d_*` + congest 由 7 日场次≥2 驱动（rest≤2 仅 fallback）；b2b 仍 rest≤1 | 跨联赛合并赛程 / 更细窗口仍待 |
+| P1-F2 | rest / 赛程密度 | ✅ 部分 2026-07-25：`matches_last_7d_*` + congest 由 7 日场次≥2 驱动（rest≤2 仅 fallback）；b2b 仍 rest≤1；✅ 2026-08-06：跨赛事合并（`_FOOTBALL_COMPETITIONS` 全量 fixture，每行按各自 competition 解析别名 → `custom.matches_merged_7d_*`）+ 3 天短周转窗口（`matches_merged_3d_*`）；引擎拥堵判定改读合并计数、3 天档按 b2b 幅度，`FOOTBALL_SCHEDULE_MERGE_ENABLED` 默认 OFF；真实赛程 API 与国际比赛日征召仍待 | 跨联赛合并赛程 / 更细窗口已交付 |
 | P1-F3 | injury / availability | ✅ 部分 2026-07-25：静态 Out + 角色加权 `injury_impact_*`（player/custom 双写；WC 源仅 static None fallback）；真伤病 API 与分钟/身价加权仍待 |
 | P1-F4 | h2h | ✅ 部分 2026-07-25：historical 优先 + kernel 俱乐部交锋回退（当前主队视角）；✅ 2026-08-06：别名感知配对（自我对阵检查移到解析之后）+ 主客场分拆（`home_venue_*` 四计数 → `custom.h2h_home_venue_*`；引擎按 `alpha = min(1, n/4)` 混合，`FOOTBALL_H2H_VENUE_SPLIT_ENABLED` 默认 OFF）；合并源（跨 CSV + kernel 去重）仍待 | 小权重已在 multi-factor |
 | P1-F5 | 真实 xG | ✅ 部分 2026-07-26：静态 `xg_for_team` 双方命中覆盖 `custom.xg_*`（goals 代理回退）；真 xG API 仍待 | MultiFactor soft xg 已在 |

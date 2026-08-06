@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Football schedule density across competitions (P1-F2)
+
+- `team_aliases.comparison_key(name, competition)`: the alias-resolved comparison key P1-F1/F4 kept private to `club_form` is now shared, so the density path and the form path cannot drift apart. `club_form` delegates; behaviour unchanged
+- `_merged_fixture_history`: fixtures across all of `FactorRegistry._FOOTBALL_COMPETITIONS`, not just the current one. Density counts were previously scoped to a single competition, so a club playing UCL midweek and league at the weekend measured 1 match in 7 days instead of 2 — a directional bias, since the clubs with extra fixtures are the strong ones
+- Each row resolves against **its own** competition, because a few abbreviations collide across tables (`CEL` is laliga's Celta Vigo but ucl's Celtic; likewise `ESP`, `POR`). Names outside the tables fall back to the existing string compare, so coverage never regresses
+- New `custom.matches_merged_7d_{home,away}` and `matches_merged_3d_{home,away}`; `matches_last_7d_*` and `schedule_congested_*` keep their current values
+- MultiFactor rest factor reads congestion from the merged 7-day counts and adds a 3-day short-turnaround tier at the back-to-back magnitude (0.03) rather than the congestion one (0.015); tiers stay mutually exclusive. New `FOOTBALL_SCHEDULE_MERGE_ENABLED` (default OFF) reproduces the previous output bit-for-bit. Data-side keys are written regardless so the distribution can be inspected before enabling
+- `rest_form.py` untouched — it is shared with the nba/mlb/nhl adapters and the backtest loader, so resolution lives on the history side where `matches_in_window_as_of` has exactly one caller
+
 ### Football form / H2H deepening (P1-F1 / P1-F4)
 
 - `club_form`: alias-aware name matching. Both sides resolve through `TEAM_ALIASES` scoped to one competition (`BOS` is nba's Celtics and mlb's Red Sox, so cross-competition resolution is not attempted); either side failing to resolve falls back to the old normalized-string compare, so the change is purely additive. An absent or unregistered competition disables the layer entirely. Previously `Man City` never matched a stored `Manchester City`, and the miss was silent — lookup returned None, enrich skipped the write, and the engine reweighted the absent factor

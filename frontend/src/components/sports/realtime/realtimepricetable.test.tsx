@@ -43,7 +43,7 @@ describe("RealtimePriceTable", () => {
     );
     render(<RealtimePriceTable matchId="m1" />);
     expect(screen.getByText("LIVE")).toBeInTheDocument();
-    expect(screen.getByText("等待实时数据...")).toBeInTheDocument();
+    expect(screen.getByText("已连接，等待价格快照（调度器抓取后会推送）...")).toBeInTheDocument();
   });
 
   it("有数据时渲染价格表格并按倒序显示", () => {

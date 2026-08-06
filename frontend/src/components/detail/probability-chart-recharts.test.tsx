@@ -5,10 +5,14 @@ import { ProbabilityChartRenderer, EdgeChartRenderer } from "./probability-chart
 
 // 概率图用到的 recharts 组件全部 mock 成带 testid 的占位元素，
 // 便于断言渲染次数 / 是否出现。
-vi.mock("recharts", () => {
-  const React = require("react") as typeof import("react");
-  const make = (testId: string) => (props: { children?: React.ReactNode }) =>
-    React.createElement("div", { "data-testid": testId }, props.children);
+vi.mock("recharts", async () => {
+  const React = await import("react");
+  const make = (testId: string) => {
+    const Placeholder = (props: { children?: React.ReactNode }) =>
+      React.createElement("div", { "data-testid": testId }, props.children);
+    Placeholder.displayName = `Mock(${testId})`;
+    return Placeholder;
+  };
   return {
     ResponsiveContainer: ({ children }: { children: React.ReactNode }) =>
       React.createElement("div", { "data-testid": "responsive-container" }, children),

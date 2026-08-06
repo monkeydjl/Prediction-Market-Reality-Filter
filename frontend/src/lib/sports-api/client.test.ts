@@ -7,8 +7,10 @@ vi.mock("@/lib/env", () => ({
 vi.mock("@/lib/api", () => ({
   buildApiErrorMessage: (status: number, body: string) =>
     `localized error ${status}: ${body}`,
-  getOperatorApiKey: () => "test-key",
-  getOperatorId: () => "test-operator",
+  buildOperatorAuthHeaders: () => ({
+    "X-API-Key": "test-key",
+    "X-Operator": "test-operator",
+  }),
   ApiError: class ApiError extends Error {
     status: number;
     constructor(status: number, message: string) {

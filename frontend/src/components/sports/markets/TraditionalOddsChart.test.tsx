@@ -157,7 +157,9 @@ describe("TraditionalOddsChart", () => {
     await waitFor(() => {
       expect(screen.getByTestId("odds-chart")).toBeTruthy();
     });
-    expect(screen.getByText("home_win")).toBeTruthy();
+    // The outcome renders as a localized label ("主胜"), so assert on the
+    // stable testid rather than the raw mapped_outcome key.
+    expect(screen.getByTestId("series-home_win")).toBeTruthy();
   });
 
   it("shows error state when both fetches fail", async () => {

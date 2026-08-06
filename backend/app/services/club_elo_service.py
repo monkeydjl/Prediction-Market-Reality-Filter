@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import csv
 import logging
-import time
 from datetime import datetime, timezone, timedelta
 from io import StringIO
 from typing import Any

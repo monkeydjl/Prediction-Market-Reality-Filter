@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select, func
+from sqlalchemy import select
 
 from app.kernel.domain import (
     MatchIdentity, MatchOutcome, PredictionResult,

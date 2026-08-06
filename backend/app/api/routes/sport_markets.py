@@ -46,9 +46,9 @@ def list_links(
     if match_id:
         links = store.get_links(match_id=match_id)
         if source is not None:
-            links = [l for l in links if l["source"] == source]
+            links = [link for link in links if link["source"] == source]
         if verified is not None:
-            links = [l for l in links if l["verified"] == verified]
+            links = [link for link in links if link["verified"] == verified]
     else:
         links = store.list_links(source=source, verified=verified)
     return {"items": links, "total": len(links)}
@@ -99,7 +99,7 @@ def verify_link(
     _ensure_enabled()
     store = _link_store()
     links = store.get_links(match_id=match_id)
-    target = next((l for l in links if l["contract_id"] == contract_id), None)
+    target = next((link for link in links if link["contract_id"] == contract_id), None)
     if target is None:
         raise HTTPException(status_code=404, detail="Link not found")
     ok = store.set_verified(link_id=target["id"], verified=body.verified)

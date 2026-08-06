@@ -4,8 +4,6 @@ import logging
 import threading
 from datetime import datetime, timedelta, timezone
 
-logger = logging.getLogger(__name__)
-
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -49,6 +47,8 @@ from app.services.world_cup_verified_result_correction_service import (
     apply_verified_result_correction,
 )
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 

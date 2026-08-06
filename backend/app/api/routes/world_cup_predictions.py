@@ -12,8 +12,7 @@ from sqlalchemy import or_
 
 from app.api.security import optional_write_key, require_write_key
 from app.models.world_cup_prediction import MatchFixture, MatchPrediction, PredictionHistory, AIAnalysisHistory
-from app.services.world_cup_match_service import sync_world_cup_fixtures, get_remaining_matches
-from app.services.world_cup_factor_service import build_prediction_factors
+from app.services.world_cup_match_service import sync_world_cup_fixtures
 from app.services.world_cup_data_quality import (
     enrich_data_quality_metrics,
     normalize_prediction_data_quality,

@@ -10,7 +10,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
 
 from app.kernel.kernel_db import (
     KernelFuturesLink,
@@ -196,8 +195,8 @@ class FuturesLinkStore:
             )
             if not links:
                 return []
-            link_ids = [l.id for l in links]
-            team_by_id = {l.id: l.team for l in links}
+            link_ids = [link.id for link in links]
+            team_by_id = {link.id: link.team for link in links}
 
             # Single query: latest snapshot per link_id via subquery
             from sqlalchemy import func

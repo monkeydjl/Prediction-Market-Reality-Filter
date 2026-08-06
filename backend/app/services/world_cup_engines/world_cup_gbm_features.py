@@ -28,7 +28,6 @@ Features (all derivable from pre-match data, no label leakage):
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Any
 
 # Feature names in canonical order. MUST match the order used at training time.

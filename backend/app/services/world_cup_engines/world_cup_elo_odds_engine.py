@@ -14,7 +14,6 @@ References:
 """
 
 from typing import Any
-import math
 
 from app.services.world_cup_engines.world_cup_btd_model import (
     calculate_btd_probabilities,

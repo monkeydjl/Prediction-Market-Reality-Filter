@@ -187,10 +187,6 @@ def build_evidence_profile(
         # Golden values (verified by hand):
         #   2 support, 0 oppose -> strength=0.4, direction=support
         #   2 support, 2 oppose -> strength=0.0, direction=neutral
-        directional_count = sum(
-            1 for it in evidence_items
-            if it["direction"] in ("support", "oppose")
-        )
         direction_signal = (support - oppose) / max(support + oppose, 0.001)
         
         # Use deduplicated source count instead of article count

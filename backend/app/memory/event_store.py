@@ -9,7 +9,6 @@ the same event accumulate updates across scans.
 
 import os
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 from app.core.config import settings

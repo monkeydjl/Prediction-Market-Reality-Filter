@@ -53,7 +53,6 @@ def build_decision_report(
     credibility = record.get("credibility") or {}
     risk = record.get("risk") or {}
     report = record.get("intelligence_report") or {}
-    decision = prediction.get("decision")
     qualified = prediction.get("qualified")
     # calibration_status: calibrated when qualified (segment has enough samples),
     # uncalibrated_provisional otherwise (dormant or provisional_act).

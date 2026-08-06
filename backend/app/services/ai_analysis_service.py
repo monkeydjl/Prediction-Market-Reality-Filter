@@ -25,22 +25,20 @@ from typing import Any
 
 from app.core.config import settings
 from app.services.base_rate_service import anchor_probability, classify_market, get_base_rate_context
-
-logger = logging.getLogger(__name__)
 from app.services.probability_engine_service import (
     _ask_ai,
     _clamp,
     _normalize_ai_analysis,
     apply_confidence_caps,
-    apply_longshot_guardrail,
+    apply_longshot_guardrail,  # noqa: F401  re-exported for tests/callers
     build_deterministic_fallback_analysis,
     calculate_confidence_score,
     calculate_confidence_breakdown,
     calculate_evidence_quality,
     calculate_priced_in_risk_score,
-    clamp_probability,
+    clamp_probability,  # noqa: F401  re-exported for tests/callers
     constrain_probability,
-    default_evidence_profile,
+    default_evidence_profile,  # noqa: F401  re-exported for tests/callers
     extract_evidence_profile,
     extract_semantics_profile,
     score_news_quality,
@@ -54,8 +52,10 @@ from app.services.analysis_report_service import (
     calculate_signal,
     calculate_signal_direction,
     calculate_signal_strength,
-    passes_analysis_quality_gate,
+    passes_analysis_quality_gate,  # noqa: F401  re-exported for tests/callers
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def analyze_market(

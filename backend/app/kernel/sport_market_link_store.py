@@ -266,7 +266,7 @@ class SportMarketLinkStore:
                     verified_ids.append(int(lid))
         else:
             verified_ids = [
-                int(l["id"]) for l in candidates if l.get("id") is not None
+                int(link["id"]) for link in candidates if link.get("id") is not None
             ]
 
         return {

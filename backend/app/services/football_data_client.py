@@ -7,7 +7,7 @@ modules — it is a clean, independent client.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 import httpx

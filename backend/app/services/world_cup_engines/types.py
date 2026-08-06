@@ -3,7 +3,7 @@
 These types document the schema but do NOT enforce runtime validation yet.
 """
 
-from typing import TypedDict, NotRequired
+from typing import TypedDict
 
 
 class PredictedScore(TypedDict):

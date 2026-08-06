@@ -11,7 +11,7 @@ from dataclasses import replace
 
 from app.core import config
 from app.kernel.domain import (
-    MatchIdentity, FeatureSet, PredictionResult, MatchOutcome,
+    PredictionResult,
 )
 from app.kernel.protocols import DataAdapter, FeatureBuilder
 from app.kernel.engine_registry import EngineRegistry

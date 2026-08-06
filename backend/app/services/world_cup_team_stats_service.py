@@ -6,7 +6,6 @@ of inventing data.
 """
 
 import json
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -241,11 +240,9 @@ def fetch_head_to_head(team1_id: int, team2_id: int) -> dict[str, Any] | None:
             continue
 
         teams = match.get("teams", {})
-        goals = match.get("goals", {})
         score = match.get("score", {})
 
         home_id = teams.get("home", {}).get("id")
-        away_id = teams.get("away", {}).get("id")
 
         # Use final score (fulltime or penalties)
         final_score = score.get("fulltime") or score.get("penalty")
@@ -427,7 +424,6 @@ def get_team_id_from_name(team_name: str) -> int | None:
     # Try common name variations
     aliases = {
         "South Korea": "South Korea",
-        "Korea Republic": "South Korea",
         "Korea Republic": "South Korea",
         "USA": "USA",
         "United States": "USA",

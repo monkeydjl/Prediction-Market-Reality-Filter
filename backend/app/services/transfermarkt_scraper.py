@@ -13,7 +13,6 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from bs4 import BeautifulSoup
 
-from app.core.config import settings
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
 
 logger = logging.getLogger(__name__)

@@ -1,6 +1,5 @@
 """AI analysis service for World Cup predictions."""
 
-from typing import Any
 
 from app.services.llm_gateway_service import complete_chat, has_configured_llm_route
 

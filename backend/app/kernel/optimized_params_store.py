@@ -6,10 +6,10 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.kernel.kernel_db import KernelOptimizedParams, KernelBase
+from app.kernel.kernel_db import KernelOptimizedParams
 
 
 def _get_engine(db_path: str):

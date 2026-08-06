@@ -320,10 +320,6 @@ def build_source_reliability(
     source_count = len(source_breakdown)
     domain_diversity = len(domains)
     official_count = tier_counts.get("official", 0)
-    trusted_count = tier_counts.get("trusted", 0)
-    established_count = tier_counts.get("established", 0)
-    aggregator_count = tier_counts.get("aggregator", 0)
-    unknown_count = tier_counts.get("unknown", 0)
     total_articles = sum(tier_counts.values())
 
     # Ratios (by source count, not article count — a source with 10 articles

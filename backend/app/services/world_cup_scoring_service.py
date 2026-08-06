@@ -22,7 +22,6 @@ from app.models.world_cup_prediction import (
     MatchFixture,
     MatchPrediction,
     MatchResult,
-    PredictionHistory,
 )
 from app.services.audit_metadata import normalize_audit_metadata
 from app.utils.prediction_db import get_prediction_session, close_prediction_session

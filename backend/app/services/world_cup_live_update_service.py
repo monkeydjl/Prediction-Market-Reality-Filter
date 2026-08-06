@@ -16,12 +16,11 @@ it:
    scoring service, closing the feedback loop.
 """
 
-import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
-from app.models.world_cup_prediction import MatchFixture, MatchPrediction
+from app.models.world_cup_prediction import MatchFixture
 from app.services.world_cup_prediction_pipeline import run_prediction_pipeline
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
 
@@ -67,7 +66,6 @@ def get_newly_finished_matches() -> list[str]:
     try:
         # Find finished matches that don't have a MatchResult yet
         from app.models.world_cup_prediction import MatchResult
-        from sqlalchemy import select
 
         finished_match_ids = session.query(MatchFixture.match_id).filter(
             MatchFixture.status == "finished",

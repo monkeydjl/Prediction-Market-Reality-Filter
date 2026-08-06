@@ -27,7 +27,6 @@ from app.services.world_cup_engines.world_cup_rule_engine import (
 )
 from app.services.world_cup_engines.world_cup_gbm_features import (
     derive_gbm_features,
-    FEATURE_NAMES,
 )
 from app.services.world_cup_historical_results import (
     get_historical_team_stats,

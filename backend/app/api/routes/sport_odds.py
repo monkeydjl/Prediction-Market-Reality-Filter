@@ -20,7 +20,7 @@ def _ensure_enabled() -> None:
         )
 
 
-def _store() -> "TraditionalOddsStore":
+def _store() -> "TraditionalOddsStore":  # noqa: F821  resolved by the local import below
     from app.kernel.traditional_odds_store import TraditionalOddsStore
     return TraditionalOddsStore()
 

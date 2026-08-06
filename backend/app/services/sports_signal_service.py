@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT

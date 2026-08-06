@@ -15,7 +15,7 @@ from urllib.error import HTTPError, URLError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.world_cup_prediction import MatchFixture, MatchPrediction
+from app.models.world_cup_prediction import MatchFixture
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
 from app.services import football_data_source
 

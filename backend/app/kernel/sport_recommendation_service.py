@@ -13,7 +13,7 @@ ActionableRecommendation, diagnosis_service, or decision_quality_service.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.core import config

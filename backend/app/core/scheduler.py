@@ -428,7 +428,7 @@ async def _job_world_cup_matchday_refresh():
     if not settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED:
         return
 
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timezone
     from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT, load_sports_facts
 
     now = datetime.now(timezone.utc)

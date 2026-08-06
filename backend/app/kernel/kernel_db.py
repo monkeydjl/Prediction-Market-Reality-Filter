@@ -10,7 +10,20 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
+    event,
+)
 from sqlalchemy.orm import Session, sessionmaker, DeclarativeBase
 
 logger = logging.getLogger(__name__)
@@ -21,10 +34,6 @@ _SessionLocal = None
 
 class KernelBase(DeclarativeBase):
     pass
-
-
-# Define tables as SQLAlchemy models
-from sqlalchemy import Column, String, Float, Integer, Text, DateTime, JSON, UniqueConstraint, Boolean, Index
 
 
 class KernelPrediction(KernelBase):

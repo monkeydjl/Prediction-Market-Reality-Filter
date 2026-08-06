@@ -11,7 +11,11 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from app.services.quality_metrics_report_service import extract_metrics
+from app.services.quality_metrics_report_service import (
+    calibration_deviation,
+    extract_metrics,
+    slice_metrics,
+)
 
 # Probability buckets for ECE (0-100 scale). Last upper bound 101.0 so
 # estimated_probability == 100.0 is included with `< hi`.
@@ -85,12 +89,6 @@ def _is_real_number(value: Any) -> bool:
     if not isinstance(value, (int, float)):
         return False
     return math.isfinite(float(value))
-
-
-from app.services.quality_metrics_report_service import (
-    calibration_deviation,
-    slice_metrics,
-)
 
 
 def slice_model_metrics(items: list[dict[str, Any]]) -> dict[str, Any]:

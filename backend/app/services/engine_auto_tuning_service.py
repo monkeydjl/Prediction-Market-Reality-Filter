@@ -1,7 +1,6 @@
 """Automatic engine tuning service based on AI optimization feedback."""
 
 from typing import Any
-from datetime import datetime
 
 from sqlalchemy import and_, or_
 
@@ -11,7 +10,7 @@ from app.models.world_cup_prediction import (
 )
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
 from app.services.world_cup_ai_optimization_service import optimize_prediction_with_ai
-from app.services.optimization_task_manager import get_task_manager, TaskStatus
+from app.services.optimization_task_manager import get_task_manager
 
 
 def engine_method_filter(method_column, engine_name: str):

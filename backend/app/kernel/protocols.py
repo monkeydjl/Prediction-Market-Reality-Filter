@@ -6,7 +6,7 @@ The Kernel never imports concrete implementations — only these Protocols.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from app.kernel.domain import (

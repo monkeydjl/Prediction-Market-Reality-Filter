@@ -1,7 +1,6 @@
 """SQLAlchemy models for World Cup dynamic score predictions."""
 
 from datetime import datetime, timezone
-from typing import Any
 
 from sqlalchemy import Column, DateTime, Float, Integer, String, Text, JSON
 from sqlalchemy.orm import declarative_base

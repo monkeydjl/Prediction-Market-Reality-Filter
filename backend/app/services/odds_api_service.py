@@ -8,7 +8,7 @@ Covers: FIFA World Cup 2026 odds (1x2 markets)
 import httpx
 import logging
 from typing import Any
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from app.core.config import settings
 

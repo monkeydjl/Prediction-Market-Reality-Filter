@@ -3,23 +3,6 @@ import logging
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Path, Query
 
-# ---------------------------------------------------------------------------
-# Request body types
-#
-# Previously these endpoints used ``payload: Any = Body(...)`` which accepts
-# any JSON value (string, number, null, bool, array, object).  Switching to
-# ``dict[str, Any]`` ensures the payload is a JSON object and returns a 422
-# error for malformed requests at the API boundary instead of deep in the
-# service layer.  The facts-import endpoint accepts either a list of fact
-# objects or a ``{"facts": [...]}`` wrapper, so it uses a union type.
-# ---------------------------------------------------------------------------
-
-#: Body type for endpoints that accept a single JSON object payload.
-DictPayload = dict[str, Any]
-
-#: Body type for the facts-import endpoint (list of facts or {"facts": [...]}).
-FactsPayload = list[dict[str, Any]] | dict[str, Any]
-
 from app.api.security import is_write_key_valid, require_write_key
 from app.memory import loop_run_store
 from app.memory.event_market_link_store import list_pending, set_verified
@@ -140,9 +123,7 @@ from app.services.trend_analysis_service import (
 from app.models.event import (
     AutoResolveResponse,
     CategoryCountsResponse,
-    DecisionTimelineDiff,
     DecisionTimelineResponse,
-    DecisionTimelineSnapshot,
     EventAnalysisRequest,
     EventDiscoveryResponse,
     EventHistoryResponse,
@@ -156,6 +137,24 @@ from app.models.event import (
     RecentPredictionsResponse,
     SimilarEventsResponse,
 )
+
+
+# ---------------------------------------------------------------------------
+# Request body types
+#
+# Previously these endpoints used ``payload: Any = Body(...)`` which accepts
+# any JSON value (string, number, null, bool, array, object).  Switching to
+# ``dict[str, Any]`` ensures the payload is a JSON object and returns a 422
+# error for malformed requests at the API boundary instead of deep in the
+# service layer.  The facts-import endpoint accepts either a list of fact
+# objects or a ``{"facts": [...]}`` wrapper, so it uses a union type.
+# ---------------------------------------------------------------------------
+
+#: Body type for endpoints that accept a single JSON object payload.
+DictPayload = dict[str, Any]
+
+#: Body type for the facts-import endpoint (list of facts or {"facts": [...]}).
+FactsPayload = list[dict[str, Any]] | dict[str, Any]
 
 
 logger = logging.getLogger(__name__)
@@ -204,7 +203,6 @@ async def reset_all_event_data(_auth: None = Depends(require_write_key)):
     """Delete all event data: store, predictions, audit log, cache.
 
     Returns a summary of what was cleared.  Requires write-key auth."""
-    import json
     import os
     import sqlite3
 

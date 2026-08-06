@@ -18,7 +18,6 @@ from typing import Any
 
 from app.services.world_cup_engines import get_engine
 from app.services.elo_ratings_service import get_elo_rating
-from app.services.odds_cache_service import get_cached_odds
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,6 @@
 
 import asyncio
 from typing import Any
-from datetime import datetime
 
 from app.models.world_cup_prediction import (
     MatchFixture, MatchPrediction, AIOptimizedPrediction

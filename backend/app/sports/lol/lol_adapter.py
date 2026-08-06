@@ -33,7 +33,6 @@ from app.sports.lol.source import (
     LolScheduleSource,
     LolSeriesRecord,
     LolSourceResolution,
-    NullLolScheduleSource,
     resolve_lol_schedule_source,
 )
 

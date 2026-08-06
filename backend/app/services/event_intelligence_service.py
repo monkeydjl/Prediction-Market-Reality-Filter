@@ -78,7 +78,6 @@ def _build_actionable_recommendation(
     if not settings.ACTIONABLE_RECOMMENDATION_ENABLED:
         return None
 
-    signal = str(analysis.get("signal") or "WATCHLIST")
     signal_direction = str(analysis.get("signal_direction") or "NEUTRAL")
     signal_strength = str(analysis.get("signal_strength") or "LOW")
     confidence = _STRENGTH_TO_CONFIDENCE.get(signal_strength, "low")
@@ -689,9 +688,12 @@ def _build_all_overlays(
                 qualified_categories=qualified_cats,
             )
             if fired_rules:
-                # Capture pre-guardrail direction BEFORE overwriting so we
-                # can detect a strong->WAIT downgrade below.
-                pre_guardrail_dir = record.get("final_displayed_direction")
+                # NOTE: an earlier revision captured the pre-guardrail
+                # direction here intending to detect a strong->WAIT
+                # downgrade, but that detection was never implemented and
+                # the captured value went unused. Removed rather than left
+                # dead; re-capture from record["final_displayed_direction"]
+                # before this line if the downgrade signal is ever built.
                 record["final_displayed_direction"] = fired_dir
                 record["final_downgrade_reason"] = fired_reason
                 # Record which guardrails fired (audit trail for operators /
@@ -1205,8 +1207,6 @@ async def discover_events(
 
     await status_phase("analyzing", f"开始分析 {len(candidate_events)} 个候选事件…")
     semaphore = asyncio.Semaphore(getattr(settings, "LLM_CONCURRENCY", 4))
-
-    total_errors = 0
 
     async def process_event(
         candidate: dict[str, Any],

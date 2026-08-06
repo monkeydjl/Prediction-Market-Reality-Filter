@@ -2,7 +2,6 @@
 
 import logging
 
-from sqlalchemy import func
 from app.models.world_cup_prediction import MatchFixture, PredictionHistory
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
 

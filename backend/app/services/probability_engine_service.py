@@ -20,7 +20,6 @@ the analysis dependency chain - it imports nothing from the report or the legacy
 adapter modules, only base settings and the LLM Gateway.
 """
 
-import json
 import logging
 import re
 from typing import Any

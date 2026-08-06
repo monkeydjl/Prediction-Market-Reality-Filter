@@ -22,7 +22,7 @@ def _ensure_enabled() -> None:
         )
 
 
-def _service() -> "MarketSettlementService":
+def _service() -> "MarketSettlementService":  # noqa: F821  resolved by the local import below
     from app.kernel.market_settlement_service import MarketSettlementService
     return MarketSettlementService()
 

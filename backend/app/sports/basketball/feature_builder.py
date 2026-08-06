@@ -22,10 +22,9 @@ from app.kernel.domain import (
     PlayerFeatures,
     EnvironmentFeatures,
 )
+from app.kernel.market_liquidity import inject_liquidity_into_custom
 
 logger = logging.getLogger(__name__)
-
-from app.kernel.market_liquidity import inject_liquidity_into_custom
 
 _BASKETBALL = SportIdentity(code="basketball", name="Basketball")
 

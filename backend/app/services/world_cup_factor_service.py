@@ -5,7 +5,7 @@ factors used by the prediction engines.
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from app.services.transfermarkt_scraper import get_cached_market_value
@@ -381,7 +381,6 @@ def _extract_key_factors(signals_bundle: dict[str, Any]) -> list[str]:
         signal = signals.get(signal_name)
         if signal and signal.get("summary"):
             level = signal.get("level", "")
-            direction = signal.get("direction", "")
             tag = f"[{level}]" if level else ""
             factors.append(f"{label}{tag}: {signal['summary']}")
 

@@ -7,13 +7,10 @@ Aggregates sentiment signals from:
 """
 
 import asyncio
-import hashlib
 import logging
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import feedparser
 from bs4 import BeautifulSoup
 
 from app.utils.prediction_db import get_prediction_session, close_prediction_session

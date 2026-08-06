@@ -8,6 +8,7 @@ route/config model so callers can share one routing vocabulary.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -18,6 +19,8 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -361,6 +364,73 @@ def _redact_error(exc: Exception) -> str:
     return message
 
 
+def _cost_cap_exceeded() -> tuple[bool, float, float]:
+    """Whether today's LLM spend has reached ``LLM_DAILY_COST_CAP_USD``.
+
+    Returns ``(exceeded, spend_today, cap)``. A cap of 0 (the default) means
+    unlimited and short-circuits before touching SQLite, so deployments that
+    never opt in pay no per-call cost for this check.
+
+    Fail-OPEN on storage errors: if the counter cannot be read we let the call
+    through rather than bricking every LLM path on a disk hiccup. The cap is a
+    spend guard, not a correctness invariant, and a stuck-closed gateway is the
+    more damaging failure.
+    """
+    cap = float(getattr(settings, "LLM_DAILY_COST_CAP_USD", 0) or 0)
+    if cap <= 0:
+        return False, 0.0, 0.0
+    try:
+        from app.memory import llm_daily_spend_store
+
+        spend = llm_daily_spend_store.get_spend_today()
+    except Exception:
+        logger.warning("Daily LLM spend lookup failed; allowing call", exc_info=True)
+        return False, 0.0, cap
+    return spend >= cap, spend, cap
+
+
+def _record_spend(model: str, usage: dict[str, int] | None) -> None:
+    """Add the USD cost of one successful call to today's counter.
+
+    No-op when the cap is disabled or the provider returned no usage block.
+    Pricing reuses the telemetry table so the cap and the ``/metrics`` cost
+    series never disagree about what a model costs.
+    """
+    cap = float(getattr(settings, "LLM_DAILY_COST_CAP_USD", 0) or 0)
+    if cap <= 0 or not usage:
+        return
+    total_tokens = int(usage.get("total_tokens", 0) or 0)
+    if total_tokens <= 0:
+        return
+    try:
+        from app.memory import llm_daily_spend_store
+        from app.services.llm_telemetry_service import _lookup_price
+
+        llm_daily_spend_store.add_spend(total_tokens * _lookup_price(model) / 1000.0)
+    except Exception:
+        logger.warning("Daily LLM spend record failed", exc_info=True)
+
+
+def _cost_cap_attempts(routes: list[LLMModelRoute]) -> list[LLMAttempt]:
+    """Build ``skipped`` attempts for every route the cap blocked.
+
+    Mirrors the shape of the missing-api-key path so telemetry and the
+    diagnostics endpoint render a capped run the same way as any other
+    all-routes-unavailable run.
+    """
+    return [
+        LLMAttempt(
+            provider=model_route.provider,
+            model=model,
+            status="skipped",
+            error_type="daily_cost_cap_exceeded",
+            error_message="Daily LLM cost cap reached.",
+        )
+        for model_route in routes
+        for model in model_route.models
+    ]
+
+
 async def _complete(
     *,
     task: str = "default",
@@ -377,6 +447,20 @@ async def _complete(
     routes = route if route is not None else build_route(task)
     configs = provider_configs if provider_configs is not None else _provider_configs()
     factory = client_factory or _default_client_factory
+
+    capped, spend, cap = _cost_cap_exceeded()
+    if capped:
+        logger.warning(
+            "Daily LLM cost cap reached (%.4f/%.4f USD); refusing task=%s",
+            spend,
+            cap,
+            task,
+        )
+        return LLMResult(
+            ok=False,
+            attempts=_cost_cap_attempts(routes),
+            degraded_reason="daily_cost_cap_exceeded",
+        )
 
     for model_route in routes:
         config = configs.get(model_route.provider)
@@ -489,6 +573,8 @@ async def _complete(
                     status="success",
                     latency_ms=latency_ms,
                 )
+                usage = _extract_usage(response)
+                _record_spend(model, usage)
                 return LLMResult(
                     ok=True,
                     content=content,
@@ -496,7 +582,7 @@ async def _complete(
                     provider=model_route.provider,
                     model=model,
                     attempts=[*attempts, success_attempt],
-                    usage=_extract_usage(response),
+                    usage=usage,
                 )
             except Exception as exc:
                 latency_ms = int((time.perf_counter() - started) * 1000)
@@ -582,6 +668,19 @@ async def complete_embeddings(
     configs = provider_configs if provider_configs is not None else _provider_configs()
     factory = client_factory or _default_client_factory
 
+    capped, spend, cap = _cost_cap_exceeded()
+    if capped:
+        logger.warning(
+            "Daily LLM cost cap reached (%.4f/%.4f USD); refusing embeddings",
+            spend,
+            cap,
+        )
+        return LLMEmbeddingResult(
+            ok=False,
+            attempts=_cost_cap_attempts(routes),
+            degraded_reason="daily_cost_cap_exceeded",
+        )
+
     for model_route in routes:
         config = configs.get(model_route.provider)
         if config is None:
@@ -634,13 +733,15 @@ async def complete_embeddings(
                     status="success",
                     latency_ms=latency_ms,
                 )
+                usage = _extract_usage(response)
+                _record_spend(model, usage)
                 return LLMEmbeddingResult(
                     ok=True,
                     vectors=vectors,
                     provider=model_route.provider,
                     model=model,
                     attempts=[*attempts, success_attempt],
-                    usage=_extract_usage(response),
+                    usage=usage,
                 )
             except Exception as exc:
                 latency_ms = int((time.perf_counter() - started) * 1000)

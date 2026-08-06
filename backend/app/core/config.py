@@ -102,6 +102,7 @@ class Settings:
     LLM_PROVIDER_OPENROUTER_API_KEY: str = os.getenv(
         "LLM_PROVIDER_OPENROUTER_API_KEY", ""
     )
+    LLM_DAILY_COST_CAP_USD: float = float(os.getenv("LLM_DAILY_COST_CAP_USD", "0"))
 
     CORS_ALLOWED_ORIGINS: list[str] = _env_csv(
         "CORS_ALLOWED_ORIGINS",

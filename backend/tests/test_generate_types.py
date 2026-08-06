@@ -24,6 +24,26 @@ _REPO_ROOT = _BACKEND_DIR.parent
 _OUTPUT_PATH = _REPO_ROOT / "frontend" / "src" / "lib" / "generated-types.ts"
 
 
+def _json2ts_available() -> bool:
+    """Whether the json2ts CLI the script shells out to is installed.
+
+    The generator needs ``json2ts`` from ``frontend/node_modules``, so these
+    tests only run where the frontend deps are installed. The CI backend job
+    installs Python only (Node lives in the frontend and type-sync jobs), and
+    without this guard every case here fails on a RuntimeError that says
+    nothing about the code under test. The dedicated ``type-sync-check`` job
+    keeps the generator itself covered in CI.
+    """
+    from scripts.generate_types import _find_json2ts_cmd
+
+    try:
+        _find_json2ts_cmd()
+    except RuntimeError:
+        return False
+    return True
+
+
+@unittest.skipUnless(_json2ts_available(), "json2ts CLI not installed (frontend deps missing)")
 class TestGenerateTypesScript(unittest.TestCase):
     """Tests run the actual generate_types.py script via subprocess."""
 

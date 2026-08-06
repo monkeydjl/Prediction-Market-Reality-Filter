@@ -2,8 +2,10 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, within, waitFor } from "@testing-library/react";
 import { AppNav } from "./app-nav";
 
+const pathnameMock = vi.fn(() => "/");
+
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/",
+  usePathname: () => pathnameMock(),
 }));
 
 vi.mock("@/components/operator-key-control", () => ({
@@ -28,6 +30,7 @@ vi.mock("@/lib/api", () => ({
 
 describe("AppNav", () => {
   beforeEach(() => {
+    pathnameMock.mockReturnValue("/");
     moversMock.mockReset();
     moversMock.mockResolvedValue({ movers: [], count: 0 });
   });
@@ -167,5 +170,29 @@ describe("AppNav", () => {
       const link = screen.getByRole("link", { name: new RegExp(label) });
       expect(link.className).toMatch(/whitespace-nowrap/);
     }
+  });
+
+  it("lights up / for home and /events/:id", () => {
+    pathnameMock.mockReturnValue("/");
+    const { rerender } = render(<AppNav />);
+    expect(screen.getByRole("link", { name: /监控面板/ })).toHaveClass("bg-secondary");
+
+    pathnameMock.mockReturnValue("/events");
+    rerender(<AppNav />);
+    expect(screen.getByRole("link", { name: /监控面板/ })).toHaveClass("bg-secondary");
+  });
+
+  it("does not light up /sports for named sub-routes", () => {
+    pathnameMock.mockReturnValue("/sports/world-cup");
+    render(<AppNav />);
+    const sportsLink = screen.getByRole("link", { name: /体育预测/ });
+    expect(sportsLink).not.toHaveClass("bg-secondary");
+    expect(sportsLink.className).toMatch(/text-muted-foreground/);
+  });
+
+  it("lights up /sports for match detail pages (/sports/:matchId)", () => {
+    pathnameMock.mockReturnValue("/sports/nba-2026-g1");
+    render(<AppNav />);
+    expect(screen.getByRole("link", { name: /体育预测/ })).toHaveClass("bg-secondary");
   });
 });

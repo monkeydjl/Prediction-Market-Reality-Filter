@@ -306,10 +306,7 @@ export function AppNav() {
                 {group.label}
               </span>
               {group.items.map((item) => {
-                const active =
-                  item.href === "/"
-                    ? norm === "/" || norm.startsWith("/events")
-                    : norm.startsWith(item.href);
+                const active = isNavItemActive(norm, item.href);
                 const Icon = item.icon;
                 return (
                   <Link

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export interface PriceUpdate {
   type: "market_snapshot" | "odds_snapshot" | "heartbeat";
@@ -68,71 +68,69 @@ export function usePriceStream(matchId: string | null): UsePriceStreamResult {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmountedRef = useRef(false);
 
-  const connect = useCallback(() => {
-    if (!matchId || unmountedRef.current) return;
-
-    const ws = new WebSocket(buildWsUrl(matchId));
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      if (unmountedRef.current) return;
-      setIsConnected(true);
-      setError(null);
-      setDisabled(false);
-      reconnectDelayRef.current = 1000;
-    };
-
-    ws.onmessage = (event: MessageEvent) => {
-      try {
-        const data = JSON.parse(event.data) as PriceUpdate;
-        if (data.type === "heartbeat") return;
-        setUpdates((prev) => {
-          const next = [...prev, data];
-          return next.length > MAX_UPDATES ? next.slice(-MAX_UPDATES) : next;
-        });
-      } catch {
-        // Ignore malformed messages
-      }
-    };
-
-    ws.onerror = () => {
-      if (unmountedRef.current) return;
-      setError(new Error("WebSocket connection error"));
-    };
-
-    ws.onclose = (ev: CloseEvent) => {
-      if (unmountedRef.current) return;
-      setIsConnected(false);
-      wsRef.current = null;
-
-      // Backend closes with 503 when PHASE10_REALTIME_PUSH_ENABLED is false
-      if (ev.code === 503 || (ev.code === 1000 && /disabled|disabled/i.test(ev.reason || ""))) {
-        setDisabled(true);
-        setError(
-          new Error(
-            "实时推送未启用。请设置 PHASE10_REALTIME_PUSH_ENABLED=true 并重启后端。",
-          ),
-        );
-        return;
-      }
-
-      // Exponential backoff reconnect
-      const delay = Math.min(reconnectDelayRef.current, 30000);
-      reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 30000);
-      reconnectTimerRef.current = setTimeout(() => {
-        connect();
-      }, delay);
-    };
-  }, [matchId]);
-
   useEffect(() => {
     unmountedRef.current = false;
-    if (!matchId) {
-      setUpdates([]);
-      setIsConnected(false);
-      setError(null);
-      setDisabled(false);
-      return;
+    if (!matchId) return;
+    const id = matchId;
+
+    // Declared as a function statement, and inside the effect, so the
+    // backoff timer below can call it recursively. As a `useCallback` const
+    // it referenced its own binding before initialization.
+    function connect() {
+      if (unmountedRef.current) return;
+
+      const ws = new WebSocket(buildWsUrl(id));
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (unmountedRef.current) return;
+        setIsConnected(true);
+        setError(null);
+        setDisabled(false);
+        reconnectDelayRef.current = 1000;
+      };
+
+      ws.onmessage = (event: MessageEvent) => {
+        try {
+          const data = JSON.parse(event.data) as PriceUpdate;
+          if (data.type === "heartbeat") return;
+          setUpdates((prev) => {
+            const next = [...prev, data];
+            return next.length > MAX_UPDATES ? next.slice(-MAX_UPDATES) : next;
+          });
+        } catch {
+          // Ignore malformed messages
+        }
+      };
+
+      ws.onerror = () => {
+        if (unmountedRef.current) return;
+        setError(new Error("WebSocket connection error"));
+      };
+
+      ws.onclose = (ev: CloseEvent) => {
+        if (unmountedRef.current) return;
+        setIsConnected(false);
+        wsRef.current = null;
+
+        // Backend closes with 503 when PHASE10_REALTIME_PUSH_ENABLED is false
+        if (ev.code === 503 || (ev.code === 1000 && /disabled|disabled/i.test(ev.reason || ""))) {
+          setDisabled(true);
+          setError(
+            new Error(
+              "实时推送未启用。请设置 PHASE10_REALTIME_PUSH_ENABLED=true 并重启后端。",
+            ),
+          );
+          return;
+        }
+
+        // Exponential backoff reconnect
+        const delay = Math.min(reconnectDelayRef.current, 30000);
+        reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 30000);
+        reconnectTimerRef.current = setTimeout(() => {
+          connect();
+        }, delay);
+      };
     }
 
     connect();
@@ -147,8 +145,21 @@ export function usePriceStream(matchId: string | null): UsePriceStreamResult {
         wsRef.current.close();
         wsRef.current = null;
       }
+      // Drop this match's buffer so a later reconnect does not replay it.
+      // Previously done in the effect body under `if (!matchId)`, which is a
+      // synchronous setState during the effect.
+      setUpdates([]);
+      setIsConnected(false);
+      setError(null);
+      setDisabled(false);
     };
-  }, [matchId, connect]);
+  }, [matchId]);
+
+  // With no match selected there is no socket, so report the idle state
+  // directly rather than resetting the four state slots from the effect.
+  if (!matchId) {
+    return { updates: [], isConnected: false, error: null, disabled: false };
+  }
 
   return { updates, isConnected, error, disabled };
 }

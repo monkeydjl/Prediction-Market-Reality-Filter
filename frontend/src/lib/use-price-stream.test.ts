@@ -33,7 +33,9 @@ class MockWebSocket {
   }
 }
 
-global.WebSocket = MockWebSocket as any;
+// MockWebSocket only implements the surface use-price-stream touches, so it is
+// not structurally a full WebSocket ctor; cast through unknown rather than any.
+global.WebSocket = MockWebSocket as unknown as typeof WebSocket;
 
 beforeEach(() => {
   MockWebSocket.reset();

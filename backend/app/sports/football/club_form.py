@@ -301,7 +301,7 @@ def h2h_from_kernel(
         rows = q.all()
 
         pair = {home_key, away_key}
-        meetings: list[tuple[datetime | None, int, int]] = []
+        meetings: list[tuple[datetime | None, int, int, bool]] = []
         for fixture, result in rows:
             if result.home_score is None or result.away_score is None:
                 continue
@@ -318,11 +318,12 @@ def h2h_from_kernel(
             hs = int(result.home_score)
             aws = int(result.away_score)
             # Map to current-home perspective scores
-            if fh == home_key:
+            at_home_venue = fh == home_key
+            if at_home_venue:
                 cur_home_gf, cur_home_ga = hs, aws
             else:
                 cur_home_gf, cur_home_ga = aws, hs
-            meetings.append((kickoff, cur_home_gf, cur_home_ga))
+            meetings.append((kickoff, cur_home_gf, cur_home_ga, at_home_venue))
 
         if not meetings:
             return None
@@ -334,19 +335,35 @@ def h2h_from_kernel(
         meetings = meetings[: max(1, max_matches)]
 
         home_wins = draws = away_wins = 0
-        for _, gf, ga in meetings:
+        # Same tallies restricted to meetings the current home team hosted, so
+        # callers can separate home advantage from the pairing itself.
+        venue_matches = venue_home_wins = venue_draws = venue_away_wins = 0
+        for _, gf, ga, at_home_venue in meetings:
             if gf > ga:
                 home_wins += 1
             elif gf < ga:
                 away_wins += 1
             else:
                 draws += 1
+            if not at_home_venue:
+                continue
+            venue_matches += 1
+            if gf > ga:
+                venue_home_wins += 1
+            elif gf < ga:
+                venue_away_wins += 1
+            else:
+                venue_draws += 1
 
         return {
             "matches_played": len(meetings),
             "home_wins": home_wins,
             "draws": draws,
             "away_wins": away_wins,
+            "home_venue_matches": venue_matches,
+            "home_venue_home_wins": venue_home_wins,
+            "home_venue_draws": venue_draws,
+            "home_venue_away_wins": venue_away_wins,
             "data_source": "kernel_match_results",
         }
     finally:

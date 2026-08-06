@@ -129,6 +129,49 @@ def _normalize_3way(probs: dict[str, float]) -> dict[str, float]:
     }
 
 
+_MIN_VENUE_SAMPLES = 4.0
+
+
+def _blend_h2h_venue(
+    h2h_home: float,
+    h2h_draw: float,
+    custom: dict,
+) -> tuple[float, float]:
+    """Blend overall H2H rates toward the current home team's own venue (P1-F4).
+
+    Club pairings meet rarely, so the same-venue subset is often 0-2 matches -
+    too thin to trust on its own. alpha ramps with the sample size and caps at
+    1.0, so a missing or empty subset returns the overall rates unchanged.
+
+    Gated by FOOTBALL_H2H_VENUE_SPLIT_ENABLED (default OFF) because it moves
+    the output of an already-registered engine.
+    """
+    from app.core import config
+
+    if not config.settings.FOOTBALL_H2H_VENUE_SPLIT_ENABLED:
+        return h2h_home, h2h_draw
+
+    matches = custom.get("h2h_home_venue_matches")
+    venue_home = custom.get("h2h_home_venue_win_rate")
+    venue_draw = custom.get("h2h_home_venue_draw_rate")
+    if matches is None or venue_home is None or venue_draw is None:
+        return h2h_home, h2h_draw
+    try:
+        n = float(matches)
+        v_home = float(venue_home)
+        v_draw = float(venue_draw)
+    except (TypeError, ValueError):
+        return h2h_home, h2h_draw
+    if n <= 0:
+        return h2h_home, h2h_draw
+
+    alpha = _clamp(n / _MIN_VENUE_SAMPLES, 0.0, 1.0)
+    return (
+        (1.0 - alpha) * h2h_home + alpha * v_home,
+        (1.0 - alpha) * h2h_draw + alpha * v_draw,
+    )
+
+
 def _adjust_home_edge(
     base: dict[str, float],
     home_delta: float,
@@ -309,6 +352,9 @@ class FootballMultiFactorEngine:
         h2h_home = features.team.h2h_home_win_rate
         h2h_draw = features.team.h2h_draw_rate
         if h2h_home is not None and h2h_draw is not None:
+            h2h_home, h2h_draw = _blend_h2h_venue(
+                float(h2h_home), float(h2h_draw), custom,
+            )
             h2h_away = max(0.0, 1.0 - h2h_home - h2h_draw)
             h2h_probs = _normalize_3way({
                 "home_win": float(h2h_home),

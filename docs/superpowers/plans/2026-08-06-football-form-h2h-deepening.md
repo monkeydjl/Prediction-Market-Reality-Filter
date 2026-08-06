@@ -49,24 +49,24 @@
 
 新增 `TestWeightedPointsFormRate`：
 
-- [ ] `["W"]*5` → 1.0；`["L"]*5` → 0.0；`["D"]*5` → 1/3
-- [ ] `["W","W","L","L"]` 严格大于 `["L","L","W","W"]`（同计数、顺序相反）
-- [ ] 空序列 → None
-- [ ] 未知字符（如 `"?"`）被忽略而不是当成 0 分
-- [ ] `half_life` 越小，近期权重越高（同一序列下差值单调）
+- [x] `["W"]*5` → 1.0；`["L"]*5` → 0.0；`["D"]*5` → 1/3
+- [x] `["W","W","L","L"]` 严格大于 `["L","L","W","W"]`（同计数、顺序相反）
+- [x] 空序列 → None
+- [x] 未知字符（如 `"?"`）被忽略而不是当成 0 分
+- [x] `half_life` 越小，近期权重越高（同一序列下差值单调）
 
 以及 `team_form_from_kernel` 的返回新增两键的断言。
 
 ### Step 2 — 实现（GREEN）
 
-- [ ] `weighted_points_form_rate(results, *, half_life=5.0)`，权重 `0.5 ** (i / half_life)`，单场得分 W=1.0 / D=1/3 / L=0.0
-- [ ] `team_form_from_kernel` 收集倒序 `recent_results` 并算出 `form_rate_weighted`；`wins/draws/losses/played` 不动
-- [ ] `_shared.py` 的 enrich：`form_home` / `form_away` 优先读 `form_rate_weighted`，缺失时退回 `points_form_rate`
+- [x] `weighted_points_form_rate(results, *, half_life=5.0)`，权重 `0.5 ** (i / half_life)`，单场得分 W=1.0 / D=1/3 / L=0.0
+- [x] `team_form_from_kernel` 收集倒序 `recent_results` 并算出 `form_rate_weighted`；`wins/draws/losses/played` 不动
+- [x] `_shared.py` 的 enrich：`form_home` / `form_away` 优先读 `form_rate_weighted`，缺失时退回 `points_form_rate`
 
 ### Step 3 — 验证
 
-- [ ] `pytest tests/test_club_form.py tests/test_adapter_shared.py -q`
-- [ ] 确认 `points_form_rate` 的 9 个原测试一字未改仍通过（验收标准 6）
+- [x] `pytest tests/test_club_form.py tests/test_adapter_shared.py -q`
+- [x] 确认 `points_form_rate` 的 9 个原测试一字未改仍通过（验收标准 6）
 
 ---
 
@@ -76,39 +76,39 @@
 
 ### Step 1 — 写失败测试（RED）
 
-- [ ] `TestH2hVenueSplit`：库里 Arsenal 主场 vs Chelsea 一场、Chelsea 主场一场 → 以 Arsenal 为当前主队时 `home_venue_matches == 1`
-- [ ] 全部历史交锋都在对方主场 → `home_venue_matches == 0`（不是 None）
-- [ ] enrich 写入 `custom.h2h_home_venue_*`
-- [ ] 引擎：flag OFF 时输出与不带 venue 键时逐位相同
-- [ ] 引擎：flag ON 且 `home_venue_matches >= 4` 时，h2h 因子明显偏向同场地记录
+- [x] `TestH2hVenueSplit`：库里 Arsenal 主场 vs Chelsea 一场、Chelsea 主场一场 → 以 Arsenal 为当前主队时 `home_venue_matches == 1`
+- [x] 全部历史交锋都在对方主场 → `home_venue_matches == 0`（不是 None）
+- [x] enrich 写入 `custom.h2h_home_venue_*`
+- [x] 引擎：flag OFF 时输出与不带 venue 键时逐位相同
+- [x] 引擎：flag ON 且 `home_venue_matches >= 4` 时，h2h 因子明显偏向同场地记录
 
 ### Step 2 — 实现（GREEN）
 
-- [ ] `h2h_from_kernel` 的 meetings 元组带上「当前主队是否做东」标志，累加出四个 `home_venue_*`
-- [ ] `_shared.py` 写 `custom.h2h_home_venue_win_rate` / `_draw_rate` / `_matches`
-- [ ] `config.py` 加 `FOOTBALL_H2H_VENUE_SPLIT_ENABLED: bool = False`，`.env.example` 同步（P1-F7 的教训：配置键必须同时进 `.env.example`）
-- [ ] 引擎 h2h 因子按 `alpha = min(1.0, matches / 4)` 混合
+- [x] `h2h_from_kernel` 的 meetings 元组带上「当前主队是否做东」标志，累加出四个 `home_venue_*`
+- [x] `_shared.py` 写 `custom.h2h_home_venue_win_rate` / `_draw_rate` / `_matches`
+- [x] `config.py` 加 `FOOTBALL_H2H_VENUE_SPLIT_ENABLED: bool = False`，`.env.example` 同步（P1-F7 的教训：配置键必须同时进 `.env.example`）
+- [x] 引擎 h2h 因子按 `alpha = min(1.0, matches / 4)` 混合
 
 ### Step 3 — 验证
 
-- [ ] 相关测试文件全绿
-- [ ] 后端全量套件对齐基线
-- [ ] `ruff check app/`
+- [x] 相关测试文件全绿
+- [x] 后端全量套件对齐基线
+- [x] `ruff check app/`
 
 ---
 
 ## Task 4 — 文档与回写
 
-- [ ] `OPPORTUNITY_BACKLOG_2026-07-17.md` 的 P1-F1 / P1-F4 行补 `✅ 2026-08-06` 与残项收敛说明（§14 维护约定要求）
-- [ ] `CHANGELOG.md` 记一条
-- [ ] 本计划勾选完成
+- [x] `OPPORTUNITY_BACKLOG_2026-07-17.md` 的 P1-F1 / P1-F4 行补 `✅ 2026-08-06` 与残项收敛说明（§14 维护约定要求）
+- [x] `CHANGELOG.md` 记一条
+- [x] 本计划勾选完成
 
 ---
 
 ## 规范扫描
 
-- [ ] 无占位符 / TODO / `pass  # implement later`
-- [ ] 新配置键同时出现在 `config.py` 与 `.env.example`
-- [ ] 新 flag 默认 OFF
-- [ ] 无新表、无 `domain.py` 契约变更
-- [ ] 注释语言与所在文件一致（`club_form.py` 英文、backlog 中文）
+- [x] 无占位符 / TODO / `pass  # implement later`
+- [x] 新配置键同时出现在 `config.py` 与 `.env.example`
+- [x] 新 flag 默认 OFF
+- [x] 无新表、无 `domain.py` 契约变更
+- [x] 注释语言与所在文件一致（`club_form.py` 英文、backlog 中文）

@@ -1004,6 +1004,15 @@ class Settings:
         "FOOTBALL_MULTI_FACTOR_ENGINE_ENABLED", "false"
     )
 
+    # H2H venue split (default OFF). When true, FootballMultiFactorEngine
+    # blends the overall head-to-head record with the subset the current home
+    # team also hosted, weighted by that subset's sample size. OFF reproduces
+    # the previous h2h factor exactly. The data-side keys under custom are
+    # written regardless, so the distribution can be inspected before enabling.
+    FOOTBALL_H2H_VENUE_SPLIT_ENABLED: bool = _env_bool(
+        "FOOTBALL_H2H_VENUE_SPLIT_ENABLED", "false"
+    )
+
     # Kernel Dixon-Coles engine (default OFF). Elo → xG → Poisson + rho.
     # Requires KERNEL_PREDICTION_ENABLED. Rho from data/dixon_coles_params.json.
     DIXON_COLES_ENGINE_ENABLED: bool = _env_bool(

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Football form / H2H deepening (P1-F1 / P1-F4)
+
+- `club_form`: alias-aware name matching. Both sides resolve through `TEAM_ALIASES` scoped to one competition (`BOS` is nba's Celtics and mlb's Red Sox, so cross-competition resolution is not attempted); either side failing to resolve falls back to the old normalized-string compare, so the change is purely additive. An absent or unregistered competition disables the layer entirely. Previously `Man City` never matched a stored `Manchester City`, and the miss was silent — lookup returned None, enrich skipped the write, and the engine reweighted the absent factor
+- `h2h_from_kernel`: self-pairing check moved after alias resolution, so `("Spurs", "Tottenham")` is rejected instead of counting one club against itself
+- `weighted_points_form_rate(results, half_life=5.0)`: recency-weighted points rate on the same [0,1] scale as `points_form_rate`; weight `0.5 ** (i / half_life)`, per-match W=1.0 / D=1/3 / L=0.0, non-W/D/L entries dropped rather than scored as losses. `points_form_rate` untouched
+- `team_form_from_kernel` additionally returns `recent_results` + `form_rate_weighted`; enrich prefers the weighted rate and falls back to flat. The world-cup CSV path has no per-match sequence, so it keeps the flat rate
+- `h2h_from_kernel` additionally returns `home_venue_{matches,home_wins,draws,away_wins}` — the subset the current home team also hosted; enrich writes `custom.h2h_home_venue_{matches,win_rate,draw_rate}`
+- MultiFactor h2h factor blends overall with same-venue by `alpha = min(1, n/4)`; new `FOOTBALL_H2H_VENUE_SPLIT_ENABLED` (default OFF) reproduces the previous output bit-for-bit. Data-side keys are written regardless so the distribution can be inspected before enabling
+
 ### Football static referee home-bias (P1-F8)
 
 - `football_referee.bias_for_referee`: code-local soft home_bias by normalized referee name (top leagues + UCL-common)

@@ -405,3 +405,80 @@ class TestFootballMultiFactorCompetitionProfiles:
         )
         # Profiles: epl elo 0.22, ucl elo 0.27 (before any odds mult — elo unchanged)
         assert w_ucl_elo > w_epl_elo
+
+
+class TestH2hVenueSplit:
+    """Flag-gated blend of overall H2H with the current home team's own venue."""
+
+    _VENUE_HOME_STRONG = {
+        "h2h_home_venue_matches": 6.0,
+        "h2h_home_venue_win_rate": 0.90,
+        "h2h_home_venue_draw_rate": 0.05,
+    }
+
+    def test_flag_off_output_matches_no_venue_keys(self, monkeypatch):
+        from app.core import config
+
+        monkeypatch.setattr(config.settings, "FOOTBALL_H2H_VENUE_SPLIT_ENABLED", False)
+        engine = FootballMultiFactorEngine()
+        plain = _make_features(custom={})
+        with_keys = _make_features(custom=dict(self._VENUE_HOME_STRONG))
+        r_plain = engine.predict(plain, plain.match)
+        r_keys = engine.predict(with_keys, with_keys.match)
+        assert r_keys.outcome_probabilities == r_plain.outcome_probabilities
+
+    def test_flag_on_with_samples_shifts_toward_venue_record(self, monkeypatch):
+        from app.core import config
+
+        monkeypatch.setattr(config.settings, "FOOTBALL_H2H_VENUE_SPLIT_ENABLED", True)
+        engine = FootballMultiFactorEngine()
+        plain = _make_features(custom={})
+        with_keys = _make_features(custom=dict(self._VENUE_HOME_STRONG))
+        p_plain = engine.predict(plain, plain.match).outcome_probabilities["home_win"]
+        p_venue = engine.predict(
+            with_keys, with_keys.match,
+        ).outcome_probabilities["home_win"]
+        # Overall h2h_home is 0.45; the venue subset is 0.90 with a full sample
+        assert p_venue > p_plain
+
+    def test_flag_on_zero_samples_is_a_noop(self, monkeypatch):
+        from app.core import config
+
+        monkeypatch.setattr(config.settings, "FOOTBALL_H2H_VENUE_SPLIT_ENABLED", True)
+        engine = FootballMultiFactorEngine()
+        plain = _make_features(custom={})
+        empty = _make_features(custom={"h2h_home_venue_matches": 0.0})
+        assert (
+            engine.predict(empty, empty.match).outcome_probabilities
+            == engine.predict(plain, plain.match).outcome_probabilities
+        )
+
+    def test_flag_on_partial_sample_blends_between(self, monkeypatch):
+        from app.core import config
+
+        monkeypatch.setattr(config.settings, "FOOTBALL_H2H_VENUE_SPLIT_ENABLED", True)
+        engine = FootballMultiFactorEngine()
+        plain = _make_features(custom={})
+        partial = _make_features(custom={
+            "h2h_home_venue_matches": 2.0,
+            "h2h_home_venue_win_rate": 0.90,
+            "h2h_home_venue_draw_rate": 0.05,
+        })
+        full = _make_features(custom=dict(self._VENUE_HOME_STRONG))
+        p_plain = engine.predict(plain, plain.match).outcome_probabilities["home_win"]
+        p_part = engine.predict(partial, partial.match).outcome_probabilities["home_win"]
+        p_full = engine.predict(full, full.match).outcome_probabilities["home_win"]
+        assert p_plain < p_part < p_full
+
+    def test_flag_on_without_overall_h2h_stays_unavailable(self, monkeypatch):
+        """Venue keys alone must not resurrect a factor with no base record."""
+        from app.core import config
+
+        monkeypatch.setattr(config.settings, "FOOTBALL_H2H_VENUE_SPLIT_ENABLED", True)
+        engine = FootballMultiFactorEngine()
+        features = _make_features(
+            h2h_home=None, h2h_draw=None, custom=dict(self._VENUE_HOME_STRONG),
+        )
+        result = engine.predict(features, features.match)
+        h2h = next(i for i in result.explanation if i.factor == "h2h")
+        assert h2h.available is False

@@ -493,3 +493,67 @@ class TestH2hFromKernel:
             assert h2h["home_wins"] == 1
         finally:
             close_kernel_session()
+
+
+class TestH2hVenueSplit:
+    """Counts restricted to meetings the current home team also hosted."""
+
+    def test_only_counts_meetings_the_current_home_hosted(self, tmp_path):
+        _seed_h2h_matches(tmp_path)
+        try:
+            h2h = h2h_from_kernel(
+                "Arsenal", "Chelsea", competition="epl",
+                before=datetime(2025, 10, 1, tzinfo=timezone.utc),
+            )
+            assert h2h is not None
+            assert h2h["matches_played"] == 2
+            # Only h2h-1 was at Arsenal; the 1-1 was hosted by Chelsea
+            assert h2h["home_venue_matches"] == 1
+            assert h2h["home_venue_home_wins"] == 1
+            assert h2h["home_venue_draws"] == 0
+            assert h2h["home_venue_away_wins"] == 0
+        finally:
+            close_kernel_session()
+
+    def test_venue_swap_selects_the_other_meeting(self, tmp_path):
+        _seed_h2h_matches(tmp_path)
+        try:
+            h2h = h2h_from_kernel(
+                "Chelsea", "Arsenal", competition="epl",
+                before=datetime(2025, 10, 1, tzinfo=timezone.utc),
+            )
+            assert h2h is not None
+            assert h2h["home_venue_matches"] == 1
+            assert h2h["home_venue_draws"] == 1  # the 1-1 at Chelsea
+            assert h2h["home_venue_home_wins"] == 0
+        finally:
+            close_kernel_session()
+
+    def test_no_home_venue_meetings_is_zero_not_none(self, tmp_path):
+        _seed_h2h_matches(tmp_path)
+        try:
+            # Before Aug 25 only the Arsenal-hosted meeting exists
+            h2h = h2h_from_kernel(
+                "Chelsea", "Arsenal", competition="epl",
+                before=datetime(2025, 8, 25, tzinfo=timezone.utc),
+            )
+            assert h2h is not None
+            assert h2h["matches_played"] == 1
+            assert h2h["home_venue_matches"] == 0
+            assert h2h["home_venue_home_wins"] == 0
+            assert h2h["home_venue_draws"] == 0
+            assert h2h["home_venue_away_wins"] == 0
+        finally:
+            close_kernel_session()
+
+    def test_venue_counts_survive_alias_resolution(self, tmp_path):
+        _seed_named(tmp_path, "v1.db", "epl", "Manchester City", "Tottenham")
+        try:
+            h2h = h2h_from_kernel(
+                "Man City", "Spurs", competition="epl", before=_BEFORE,
+            )
+            assert h2h is not None
+            assert h2h["home_venue_matches"] == 1
+            assert h2h["home_venue_home_wins"] == 1
+        finally:
+            close_kernel_session()

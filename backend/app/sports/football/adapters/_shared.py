@@ -510,6 +510,22 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
         raw["team"]["h2h_draw_rate"] = round(
             int(h2h.get("draws") or 0) / played, 4,
         )
+        # Same rates over the subset the current home team hosted (P1-F4).
+        # Written to custom rather than TeamFeatures to keep the frozen
+        # domain contract - and its type-sync CI - untouched. Unconditional:
+        # extra custom keys are inert until the engine flag is turned on.
+        venue_matches = h2h.get("home_venue_matches")
+        if venue_matches is not None:
+            venue_played = int(venue_matches)
+            custom = raw.setdefault("custom", {})
+            custom["h2h_home_venue_matches"] = float(venue_played)
+            if venue_played > 0:
+                custom["h2h_home_venue_win_rate"] = round(
+                    int(h2h.get("home_venue_home_wins") or 0) / venue_played, 4,
+                )
+                custom["h2h_home_venue_draw_rate"] = round(
+                    int(h2h.get("home_venue_draws") or 0) / venue_played, 4,
+                )
 
     # Market value: cache-only Transfermarkt (no scrape on predict path)
     try:

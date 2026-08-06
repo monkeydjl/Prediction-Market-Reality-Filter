@@ -125,6 +125,141 @@ class TestPointsFormRate:
         assert points_form_rate(10, 10, 5) == pytest.approx(1.0)
 
 
+def _seed_named(tmp_path, db_name, competition, home, away):
+    """Seed one finished fixture with caller-chosen names and competition."""
+    close_kernel_session()
+    init_kernel_db(str(tmp_path / db_name))
+    session = get_kernel_session()
+    try:
+        session.add(KernelMatchFixture(
+            match_id="m-1",
+            competition=competition,
+            season="2025",
+            stage="regular",
+            home_team=home,
+            away_team=away,
+            kickoff_utc=datetime(2025, 9, 1, tzinfo=timezone.utc),
+        ))
+        session.add(KernelMatchResult(
+            match_id="m-1",
+            home_score=2,
+            away_score=1,
+            finished_at=datetime(2025, 9, 1, 22, tzinfo=timezone.utc),
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+
+_BEFORE = datetime(2025, 10, 1, tzinfo=timezone.utc)
+
+
+class TestAliasMatching:
+    """Team names reach club_form from adapters/market sources, while stored
+    fixture names come from ingest. Exact-string matching silently misses.
+    """
+
+    def test_alias_resolves_to_stored_full_name(self, tmp_path):
+        _seed_named(tmp_path, "a1.db", "epl", "Manchester City", "Chelsea")
+        try:
+            stats = team_form_from_kernel(
+                "Man City", competition="epl", before=_BEFORE,
+            )
+            assert stats is not None
+            assert stats["played"] == 1
+            assert stats["wins"] == 1  # won 2-1 at home
+        finally:
+            close_kernel_session()
+
+    def test_alias_side_assignment_follows_resolved_identity(self, tmp_path):
+        """The away team resolved by alias must be scored as the away side."""
+        _seed_named(tmp_path, "a2.db", "epl", "Manchester City", "Chelsea")
+        try:
+            stats = team_form_from_kernel(
+                "CHE", competition="epl", before=_BEFORE,
+            )
+            assert stats is not None
+            assert stats["losses"] == 1  # lost 1-2 away
+            assert stats["wins"] == 0
+            assert stats["goals_per_game"] == 1.0  # away goals, not home's 2
+        finally:
+            close_kernel_session()
+
+    def test_no_competition_disables_alias_layer(self, tmp_path):
+        _seed_named(tmp_path, "a3.db", "epl", "Manchester City", "Chelsea")
+        try:
+            assert team_form_from_kernel(
+                "Man City", competition=None, before=_BEFORE,
+            ) is None
+        finally:
+            close_kernel_session()
+
+    def test_unknown_competition_disables_alias_layer(self, tmp_path):
+        _seed_named(tmp_path, "a4.db", "not_a_league", "Manchester City", "Chelsea")
+        try:
+            assert team_form_from_kernel(
+                "Man City", competition="not_a_league", before=_BEFORE,
+            ) is None
+        finally:
+            close_kernel_session()
+
+    def test_same_abbreviation_does_not_cross_competitions(self, tmp_path):
+        """BOS is Boston Celtics in nba and Boston Red Sox in mlb."""
+        _seed_named(tmp_path, "a5.db", "nba", "Boston Red Sox", "New York Yankees")
+        try:
+            assert team_form_from_kernel(
+                "BOS", competition="nba", before=_BEFORE,
+            ) is None
+        finally:
+            close_kernel_session()
+
+    def test_same_abbreviation_matches_within_its_own_competition(self, tmp_path):
+        _seed_named(tmp_path, "a6.db", "mlb", "Boston Red Sox", "New York Yankees")
+        try:
+            stats = team_form_from_kernel(
+                "BOS", competition="mlb", before=_BEFORE,
+            )
+            assert stats is not None
+            assert stats["wins"] == 1
+        finally:
+            close_kernel_session()
+
+    def test_unresolvable_names_fall_back_to_string_match(self, tmp_path):
+        """Pre-existing behaviour must survive: names absent from the alias
+        table still match when they are byte-identical.
+        """
+        _seed_named(tmp_path, "a7.db", "epl", "Obscure Town FC", "Chelsea")
+        try:
+            stats = team_form_from_kernel(
+                "obscure town fc", competition="epl", before=_BEFORE,
+            )
+            assert stats is not None
+            assert stats["played"] == 1
+        finally:
+            close_kernel_session()
+
+    def test_h2h_matches_pair_through_aliases(self, tmp_path):
+        _seed_named(tmp_path, "a8.db", "epl", "Manchester City", "Tottenham")
+        try:
+            h2h = h2h_from_kernel(
+                "Man City", "Spurs", competition="epl", before=_BEFORE,
+            )
+            assert h2h is not None
+            assert h2h["matches_played"] == 1
+            assert h2h["home_wins"] == 1
+        finally:
+            close_kernel_session()
+
+    def test_h2h_rejects_same_team_under_different_aliases(self, tmp_path):
+        _seed_named(tmp_path, "a9.db", "epl", "Manchester City", "Tottenham")
+        try:
+            assert h2h_from_kernel(
+                "Spurs", "Tottenham", competition="epl", before=_BEFORE,
+            ) is None
+        finally:
+            close_kernel_session()
+
+
 def _seed_h2h_matches(tmp_path):
     """Arsenal vs Chelsea twice: Arsenal home win; Chelsea home (Arsenal away) draw."""
     close_kernel_session()

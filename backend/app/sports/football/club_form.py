@@ -6,6 +6,7 @@ Best-effort: returns None fields when DB empty or team unmatched.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any
 
 
@@ -41,10 +42,51 @@ def _normalize(name: str) -> str:
     return " ".join((name or "").lower().split())
 
 
-def _points_result(home: str, away: str, home_score: int, away_score: int, team: str) -> str:
-    t = _normalize(team)
-    is_home = _normalize(home) == t
-    is_away = _normalize(away) == t
+@lru_cache(maxsize=32)
+def _alias_index(competition: str | None) -> dict[str, str] | None:
+    """Lowercased alias -> canonical id for one competition, or None.
+
+    Returns None when the competition is empty or absent from the registry,
+    which disables alias matching entirely for that lookup.
+    """
+    if not competition:
+        return None
+    from app.sports._shared.team_aliases import TEAM_ALIASES
+
+    comp_map = TEAM_ALIASES.get(competition)
+    if not comp_map:
+        return None
+    return {alias.lower(): canonical for alias, canonical in comp_map.items()}
+
+
+def _match_key(name: str, alias_index: dict[str, str] | None) -> str:
+    """Comparison key for a team name.
+
+    Resolves through the competition's alias table when possible so that
+    "Man City" and "Manchester City" compare equal; falls back to the plain
+    normalized string when the name is not in the table, which preserves the
+    pre-alias behaviour for teams the registry does not cover.
+
+    The ``canon:`` prefix keeps a canonical id from colliding with a raw name
+    that happens to spell the same thing.
+    """
+    normalized = _normalize(name)
+    if alias_index is None or not normalized:
+        return normalized
+    canonical = alias_index.get(normalized)
+    return f"canon:{canonical}" if canonical else normalized
+
+
+def _points_result(
+    home: str,
+    away: str,
+    home_score: int,
+    away_score: int,
+    team_key: str,
+    alias_index: dict[str, str] | None,
+) -> str:
+    is_home = _match_key(home, alias_index) == team_key
+    is_away = _match_key(away, alias_index) == team_key
     if not is_home and not is_away:
         return "U"
     if is_home:
@@ -95,7 +137,8 @@ def team_form_from_kernel(
             q = q.filter(KernelMatchFixture.competition == competition)
         rows = q.all()
 
-        key = _normalize(team_name)
+        alias_index = _alias_index(competition)
+        key = _match_key(team_name, alias_index)
         played_rows: list[tuple[datetime | None, str, int, int, str, str]] = []
         for fixture, result in rows:
             if result.home_score is None or result.away_score is None:
@@ -108,11 +151,14 @@ def team_form_from_kernel(
                     continue
             h = fixture.home_team or ""
             a = fixture.away_team or ""
-            if _normalize(h) != key and _normalize(a) != key:
+            if _match_key(h, alias_index) != key and _match_key(a, alias_index) != key:
                 continue
             played_rows.append((
                 kickoff,
-                _points_result(h, a, int(result.home_score), int(result.away_score), team_name),
+                _points_result(
+                    h, a, int(result.home_score), int(result.away_score),
+                    key, alias_index,
+                ),
                 int(result.home_score),
                 int(result.away_score),
                 h,
@@ -137,7 +183,7 @@ def team_form_from_kernel(
                 draws += 1
             elif res == "L":
                 losses += 1
-            if _normalize(h) == key:
+            if _match_key(h, alias_index) == key:
                 goals_for += hs
             else:
                 goals_for += aws
@@ -179,8 +225,11 @@ def h2h_from_kernel(
 
     if not home_team or not away_team:
         return None
-    home_key = _normalize(home_team)
-    away_key = _normalize(away_team)
+    alias_index = _alias_index(competition)
+    home_key = _match_key(home_team, alias_index)
+    away_key = _match_key(away_team, alias_index)
+    # Checked after alias resolution so that two spellings of one club - say
+    # "Spurs" and "Tottenham" - are rejected rather than counted as a pairing.
     if not home_key or not away_key or home_key == away_key:
         return None
 
@@ -212,8 +261,8 @@ def h2h_from_kernel(
                     kickoff = kickoff.replace(tzinfo=timezone.utc)
                 if kickoff >= before:
                     continue
-            fh = _normalize(fixture.home_team or "")
-            fa = _normalize(fixture.away_team or "")
+            fh = _match_key(fixture.home_team or "", alias_index)
+            fa = _match_key(fixture.away_team or "", alias_index)
             if {fh, fa} != pair:
                 continue
             hs = int(result.home_score)

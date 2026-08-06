@@ -590,6 +590,30 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
     except Exception:  # noqa: BLE001
         logger.debug("schedule density flags skipped", exc_info=True)
 
+    # P1-F2 residual: cross-competition merge + 3-day window.
+    # Written unconditionally; the engine reads these behind a default-OFF flag.
+    try:
+        from app.sports._shared.rest_form import matches_in_window_as_of
+        from app.sports._shared.team_aliases import comparison_key
+
+        merged = _merged_fixture_history()
+        if merged is not None:
+            custom = raw.setdefault("custom", {})
+            for side, name in (("home", home_name), ("away", away_name)):
+                key = comparison_key(name, competition)
+                for days in (7, 3):
+                    n = matches_in_window_as_of(
+                        key,
+                        before,
+                        merged,
+                        window_days=days,
+                        exclude_match_id=match.match_id,
+                    )
+                    if n is not None:
+                        custom[f"matches_merged_{days}d_{side}"] = int(n)
+    except Exception:  # noqa: BLE001
+        logger.debug("merged schedule density skipped", exc_info=True)
+
     # P1-F3: injury impact — static role-weighted Out list, WC fallback
     try:
         from app.sports.football.football_injury import injury_impact_for_team
@@ -661,6 +685,82 @@ def _fixture_history_for_density(
     except Exception:  # noqa: BLE001
         logger.debug("fixture history for density failed", exc_info=True)
         return None
+
+
+def _merged_history_rows(rows: list[dict]) -> list[dict]:
+    """Keep football rows only, with team names resolved to comparison keys.
+
+    Each row is resolved against **its own** competition: the alias tables are
+    per-competition and a few abbreviations collide across them (``CEL`` is
+    celta_vigo in laliga but celtic in ucl), so flattening them would merge
+    unrelated clubs. Resolving per row makes those cases fall out correctly
+    without special-casing.
+    """
+    from app.kernel.factor_registry import FactorRegistry
+    from app.sports._shared.team_aliases import comparison_key
+
+    football = FactorRegistry._FOOTBALL_COMPETITIONS
+    out: list[dict] = []
+    for r in rows:
+        comp = (r.get("competition") or "").lower()
+        if comp not in football:
+            continue
+        out.append(
+            {
+                "match_id": r.get("match_id"),
+                "home_team": comparison_key(r.get("home_team") or "", comp),
+                "away_team": comparison_key(r.get("away_team") or "", comp),
+                "kickoff_utc": r.get("kickoff_utc"),
+            }
+        )
+    return out
+
+
+def _merged_fixture_rows() -> list[dict] | None:
+    """Raw fixture rows across all football competitions. None on failure."""
+    try:
+        from app.kernel.factor_registry import FactorRegistry
+        from app.kernel.kernel_db import KernelMatchFixture, get_kernel_session
+
+        session = get_kernel_session()
+        try:
+            rows = (
+                session.query(KernelMatchFixture)
+                .filter(
+                    KernelMatchFixture.competition.in_(
+                        sorted(FactorRegistry._FOOTBALL_COMPETITIONS)
+                    )
+                )
+                .all()
+            )
+            return [
+                {
+                    "match_id": f.match_id,
+                    "home_team": f.home_team or "",
+                    "away_team": f.away_team or "",
+                    "kickoff_utc": f.kickoff_utc,
+                    "competition": f.competition,
+                }
+                for f in rows
+            ]
+        finally:
+            session.close()
+    except Exception:  # noqa: BLE001
+        logger.debug("merged fixture rows failed", exc_info=True)
+        return None
+
+
+def _merged_fixture_history() -> list[dict] | None:
+    """Fixtures across all football competitions, name-resolved. None on failure.
+
+    Unlike :func:`_fixture_history_for_density` this is not scoped to one
+    competition, so a club playing midweek European football and a weekend
+    league match counts as two, not one (P1-F2).
+    """
+    rows = _merged_fixture_rows()
+    if rows is None:
+        return None
+    return _merged_history_rows(rows)
 
 
 def _days_since(

@@ -46,26 +46,26 @@ P1-F1/F4 把 `_alias_index` / `_match_key` 写在了 `club_form.py` 里。现在
 
 新增 `TestMergedScheduleDensity`：
 
-- [ ] epl 一场 + ucl 一场（同队、7 天内）→ `matches_merged_7d_home == 2`，同时 `matches_last_7d_home` 仍为 1
-- [ ] 两赛事队名写法不同（`Manchester City` / `Man City`）→ 仍为 2
-- [ ] `CEL`（laliga）与 `CEL`（ucl）→ 不互相计入
-- [ ] nba fixture 在 7 天内 → 不进入合并计数
-- [ ] 别名表外的队名（`Obscure Town FC`）→ 退回字符串匹配，仍能数上
-- [ ] 5 天前的比赛 → 计入 `merged_7d` 但不计入 `merged_3d`
-- [ ] 当前这场比赛自身 → 不计入（`exclude_match_id`）
-- [ ] 现有 `TestScheduleDensityEnrich` 全部原样通过（验收 8）
+- [x] epl 一场 + ucl 一场（同队、7 天内）→ `matches_merged_7d_home == 2`，同时 `matches_last_7d_home` 仍为 1
+- [x] 两赛事队名写法不同（`Manchester City` / `Man City`）→ 仍为 2
+- [x] `CEL`（laliga）与 `CEL`（ucl）→ 不互相计入
+- [x] nba fixture 在 7 天内 → 不进入合并计数
+- [x] 别名表外的队名（`Obscure Town FC`）→ 退回字符串匹配，仍能数上
+- [x] 5 天前的比赛 → 计入 `merged_7d` 但不计入 `merged_3d`
+- [x] 当前这场比赛自身 → 不计入（`exclude_match_id`）
+- [x] 现有 `TestScheduleDensityEnrich` 全部原样通过（验收 8）
 
 ### Step 2 — 实现（GREEN）
 
-- [ ] 加 `_merged_fixture_history(before)`：查 `_FOOTBALL_COMPETITIONS`（从 `app.kernel.factor_registry` 复用，不另建集合）内的 fixture，每行用**该行自己的 competition** 调 `comparison_key` 解析双方队名后写入 `home_team` / `away_team`
-- [ ] enrich 里查询名用**当前比赛的 competition** 解析，再调 `matches_in_window_as_of`（`rest_form.py` 不改）
-- [ ] 写 `custom["matches_merged_7d_home"|"_away"]` 与 `custom["matches_merged_3d_home"|"_away"]`
-- [ ] 现有 `matches_last_7d_*` / `schedule_congested_*` 代码路径一行不动
+- [x] 加 `_merged_fixture_history(before)`：查 `_FOOTBALL_COMPETITIONS`（从 `app.kernel.factor_registry` 复用，不另建集合）内的 fixture，每行用**该行自己的 competition** 调 `comparison_key` 解析双方队名后写入 `home_team` / `away_team`
+- [x] enrich 里查询名用**当前比赛的 competition** 解析，再调 `matches_in_window_as_of`（`rest_form.py` 不改）
+- [x] 写 `custom["matches_merged_7d_home"|"_away"]` 与 `custom["matches_merged_3d_home"|"_away"]`
+- [x] 现有 `matches_last_7d_*` / `schedule_congested_*` 代码路径一行不动
 
 ### Step 3 — 验证
 
-- [ ] `pytest tests/test_adapter_shared.py tests/test_rest_form.py -q`
-- [ ] 确认 `test_rest_form.py` 未被修改（`git diff --stat` 不含该文件）
+- [x] `pytest tests/test_adapter_shared.py tests/test_rest_form.py -q`
+- [x] 确认 `test_rest_form.py` 未被修改（`git diff --stat` 不含该文件）
 
 ---
 

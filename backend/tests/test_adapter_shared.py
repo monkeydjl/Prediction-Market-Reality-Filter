@@ -368,6 +368,192 @@ class TestScheduleDensityEnrich:
         assert raw["custom"]["b2b_home"] is True
 
 
+def _raw_for_density() -> dict:
+    return {
+        "team": {},
+        "general": {"rest_days_home": 4.0, "rest_days_away": 4.0},
+        "market": {},
+        "player": {},
+        "environment": {},
+        "custom": {},
+    }
+
+
+def _row(match_id, home, away, kickoff, competition):
+    return {
+        "match_id": match_id,
+        "home_team": home,
+        "away_team": away,
+        "kickoff_utc": kickoff,
+        "competition": competition,
+    }
+
+
+def _enrich_with_merged(raw, match, single, merged):
+    """Run enrich with both density histories stubbed."""
+    with patch(
+        "app.sports.football.adapters._shared._fixture_history_for_density",
+        return_value=single,
+    ), patch(
+        "app.sports.football.adapters._shared._merged_fixture_rows",
+        return_value=merged,
+    ), patch(
+        "app.services.world_cup_historical_results.get_historical_team_stats",
+        return_value=None,
+    ), patch(
+        "app.services.world_cup_historical_results.get_historical_h2h",
+        return_value=None,
+    ), patch(
+        "app.sports.football.club_form.team_form_from_kernel",
+        return_value=None,
+    ):
+        enrich_situational_features(raw, match)
+
+
+class TestMergedScheduleDensity:
+    """P1-F2 residual: cross-competition merge + 3-day window."""
+
+    def test_merged_counts_other_competition(self):
+        match = _make_match("ucl-merge")
+        raw = _raw_for_density()
+        single = [
+            _row("epl-1", "Real Madrid CF", "X",
+                 datetime(2025, 9, 13, 15, 0, tzinfo=timezone.utc), "epl"),
+        ]
+        merged = single + [
+            _row("ucl-1", "Y", "Real Madrid CF",
+                 datetime(2025, 9, 10, 20, 0, tzinfo=timezone.utc), "ucl"),
+        ]
+        _enrich_with_merged(raw, match, single, merged)
+
+        assert raw["custom"]["matches_merged_7d_home"] == 2
+        assert raw["custom"]["matches_last_7d_home"] == 1
+
+    def test_merged_matches_across_name_spellings(self):
+        match = _make_match("ucl-spelling")
+        raw = _raw_for_density()
+        merged = [
+            _row("epl-1", "Manchester City", "X",
+                 datetime(2025, 9, 13, 15, 0, tzinfo=timezone.utc), "epl"),
+            _row("ucl-1", "Y", "Man City",
+                 datetime(2025, 9, 10, 20, 0, tzinfo=timezone.utc), "ucl"),
+        ]
+        city = MatchIdentity(
+            match_id="ucl-spelling",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="MCI", name="Man City", competition=_UCL),
+            away=TeamIdentity(code="FCB", name="FC Bayern München", competition=_UCL),
+            kickoff_utc=match.kickoff_utc,
+        )
+        _enrich_with_merged(raw, city, [], merged)
+
+        assert raw["custom"]["matches_merged_7d_home"] == 2
+
+    def test_colliding_alias_across_competitions_not_merged(self):
+        """CEL is celta_vigo in laliga but celtic in ucl — must not merge."""
+        match = MatchIdentity(
+            match_id="ucl-cel",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="CEL", name="CEL", competition=_UCL),
+            away=TeamIdentity(code="FCB", name="FC Bayern München", competition=_UCL),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = _raw_for_density()
+        merged = [
+            _row("laliga-1", "CEL", "X",
+                 datetime(2025, 9, 13, 15, 0, tzinfo=timezone.utc), "laliga"),
+        ]
+        _enrich_with_merged(raw, match, [], merged)
+
+        assert raw["custom"]["matches_merged_7d_home"] == 0
+
+    def test_unknown_team_falls_back_to_string_match(self):
+        match = MatchIdentity(
+            match_id="ucl-obscure",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="OBS", name="Obscure Town FC", competition=_UCL),
+            away=TeamIdentity(code="FCB", name="FC Bayern München", competition=_UCL),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = _raw_for_density()
+        merged = [
+            _row("epl-1", "obscure town fc", "X",
+                 datetime(2025, 9, 13, 15, 0, tzinfo=timezone.utc), "epl"),
+        ]
+        _enrich_with_merged(raw, match, [], merged)
+
+        assert raw["custom"]["matches_merged_7d_home"] == 1
+
+    def test_three_day_window_is_narrower(self):
+        match = _make_match("ucl-3d")
+        raw = _raw_for_density()
+        merged = [
+            _row("epl-1", "Real Madrid CF", "X",
+                 datetime(2025, 9, 11, 15, 0, tzinfo=timezone.utc), "epl"),
+            _row("ucl-1", "Y", "Real Madrid CF",
+                 datetime(2025, 9, 14, 20, 0, tzinfo=timezone.utc), "ucl"),
+        ]
+        _enrich_with_merged(raw, match, [], merged)
+
+        assert raw["custom"]["matches_merged_7d_home"] == 2
+        assert raw["custom"]["matches_merged_3d_home"] == 1
+
+    def test_current_match_excluded(self):
+        match = _make_match("ucl-self")
+        raw = _raw_for_density()
+        merged = [
+            _row("ucl-self", "Real Madrid CF", "FC Bayern München",
+                 match.kickoff_utc, "ucl"),
+        ]
+        _enrich_with_merged(raw, match, [], merged)
+
+        assert raw["custom"]["matches_merged_7d_home"] == 0
+
+    def test_away_side_counted_separately(self):
+        match = _make_match("ucl-away")
+        raw = _raw_for_density()
+        merged = [
+            _row("epl-1", "FC Bayern München", "X",
+                 datetime(2025, 9, 13, 15, 0, tzinfo=timezone.utc), "epl"),
+        ]
+        _enrich_with_merged(raw, match, [], merged)
+
+        assert raw["custom"]["matches_merged_7d_away"] == 1
+        assert raw["custom"]["matches_merged_7d_home"] == 0
+
+
+class TestMergedFixtureHistory:
+    def test_non_football_rows_dropped(self):
+        from app.sports.football.adapters._shared import _merged_history_rows
+
+        kickoff = datetime(2025, 9, 13, 15, 0, tzinfo=timezone.utc)
+        rows = [
+            _row("epl-1", "Manchester City", "X", kickoff, "epl"),
+            _row("nba-1", "Manchester City", "X", kickoff, "nba"),
+        ]
+        out = _merged_history_rows(rows)
+
+        assert len(out) == 1
+        assert out[0]["match_id"] == "epl-1"
+
+    def test_rows_resolved_against_own_competition(self):
+        from app.sports._shared.team_aliases import comparison_key
+        from app.sports.football.adapters._shared import _merged_history_rows
+
+        kickoff = datetime(2025, 9, 13, 15, 0, tzinfo=timezone.utc)
+        rows = [_row("ucl-1", "Man City", "CEL", kickoff, "ucl")]
+        out = _merged_history_rows(rows)
+
+        assert out[0]["home_team"] == comparison_key("Manchester City", "epl")
+        assert out[0]["away_team"] == comparison_key("Celtic", "ucl")
+
+
 class TestH2hKernelFallback:
     def test_kernel_fills_when_historical_none(self):
         match = _make_match("ucl-h2h-kernel")

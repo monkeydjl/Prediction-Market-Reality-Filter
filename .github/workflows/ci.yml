@@ -16,11 +16,18 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
       - name: Install backend dependencies
         run: python -m pip install -r requirements.txt
+      # requirements-dev.txt carries the pinned pytest/pytest-asyncio/mypy the
+      # suite is verified against. Installing pytest unpinned here previously
+      # omitted pytest-asyncio, which made every `async def test_` (20 files)
+      # fail with "async def functions are not natively supported".
+      # ruff and pytest-cov are CI-only, so they stay explicit.
       - name: Install dev dependencies
-        run: python -m pip install ruff pytest pytest-cov mypy
+        run: python -m pip install -r requirements-dev.txt ruff==0.16.1 pytest-cov
       - name: Audit backend dependencies
         run: |
           python -m pip install pip-audit

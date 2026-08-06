@@ -6,6 +6,8 @@ engine. All lookups are case-insensitive.
 """
 from __future__ import annotations
 
+from functools import lru_cache
+
 # Competition code -> sport type
 COMPETITION_TO_SPORT: dict[str, str] = {
     "wc": "football", "ucl": "football", "epl": "football",
@@ -520,3 +522,50 @@ def resolve_team(alias: str, competition: str) -> str | None:
         if key.lower() == alias_lower:
             return canonical
     return None
+
+
+def _normalize_name(name: str | None) -> str:
+    """Lowercase and collapse whitespace."""
+    return " ".join((name or "").lower().split())
+
+
+@lru_cache(maxsize=32)
+def _alias_index(competition: str | None) -> dict[str, str] | None:
+    """Lowercased alias -> canonical id for one competition, or None.
+
+    Returns None when the competition is empty or absent from the registry,
+    which disables alias matching entirely for that lookup. Cached because
+    callers resolve one name per stored fixture row.
+    """
+    if not competition:
+        return None
+    comp_map = TEAM_ALIASES.get(competition)
+    if not comp_map:
+        return None
+    return {alias.lower(): canonical for alias, canonical in comp_map.items()}
+
+
+def comparison_key(name: str | None, competition: str | None) -> str:
+    """Key for deciding whether two team names mean the same team.
+
+    Resolves through the competition's alias table when possible so that
+    "Man City" and "Manchester City" compare equal; falls back to the plain
+    normalized string when the name is not in the table, which preserves
+    byte-exact behaviour for teams the registry does not cover.
+
+    Canonical ids are stable across competitions, so a club resolved under
+    "epl" and the same club resolved under "ucl" produce one key -- that is
+    what lets schedule density merge fixtures from different competitions.
+    Colliding abbreviations stay separate because each name is resolved
+    against its own competition: "CEL" is Celta Vigo in laliga and Celtic
+    in ucl.
+
+    The ``canon:`` prefix keeps a canonical id from colliding with a raw name
+    that happens to spell the same thing.
+    """
+    normalized = _normalize_name(name)
+    index = _alias_index(competition)
+    if index is None or not normalized:
+        return normalized
+    canonical = index.get(normalized)
+    return f"canon:{canonical}" if canonical else normalized

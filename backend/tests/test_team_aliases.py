@@ -85,3 +85,49 @@ def test_all_10_competitions_present():
     assert len(TEAM_ALIASES["wc"]) >= 32
     # NBA must have >= 30 canonical teams (count distinct values)
     assert len(set(TEAM_ALIASES["nba"].values())) >= 30
+
+
+class TestComparisonKey:
+    """Shared comparison key used by club_form and the schedule-density path.
+
+    Both need the same notion of "same team", so the key lives here rather than
+    being duplicated per call site.
+    """
+
+    def test_alias_and_full_name_agree(self):
+        from app.sports._shared.team_aliases import comparison_key
+        assert comparison_key("Man City", "epl") == comparison_key(
+            "Manchester City", "epl",
+        )
+
+    def test_canonical_is_stable_across_competitions(self):
+        """Cross-league merging depends on this: the same club resolved under
+        epl and under ucl must produce one key.
+        """
+        from app.sports._shared.team_aliases import comparison_key
+        assert comparison_key("Man City", "ucl") == comparison_key(
+            "Manchester City", "epl",
+        )
+
+    def test_colliding_abbreviation_stays_separate(self):
+        """CEL is Celta Vigo in laliga and Celtic in ucl."""
+        from app.sports._shared.team_aliases import comparison_key
+        assert comparison_key("CEL", "laliga") != comparison_key("CEL", "ucl")
+
+    def test_no_competition_falls_back_to_normalize(self):
+        from app.sports._shared.team_aliases import comparison_key
+        assert comparison_key("Man City", None) == "man city"
+        assert comparison_key("Man City", None) != comparison_key(
+            "Manchester City", "epl",
+        )
+
+    def test_unknown_name_folds_case_and_whitespace(self):
+        from app.sports._shared.team_aliases import comparison_key
+        assert comparison_key("  Obscure   Town FC ", "epl") == comparison_key(
+            "obscure town fc", "epl",
+        )
+
+    def test_empty_name(self):
+        from app.sports._shared.team_aliases import comparison_key
+        assert comparison_key("", "epl") == ""
+        assert comparison_key(None, "epl") == ""

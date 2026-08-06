@@ -128,6 +128,28 @@ class TestFetchEloAndOdds:
         )
         assert raw["custom"]["xg_source"] == "static_table"
 
+    @patch("app.sports.football.adapters._shared.get_club_elo")
+    @patch("app.services.odds_cache_service.get_cached_odds", new_callable=AsyncMock)
+    @patch("app.services.world_cup_historical_results.get_historical_team_stats")
+    @patch("app.services.world_cup_historical_results.get_historical_h2h")
+    def test_weighted_form_preferred_over_flat(
+        self, mock_h2h, mock_stats, mock_odds, mock_club,
+    ):
+        """Kernel stats carry a per-match sequence, so the weighted rate wins."""
+        mock_club.return_value = {"elo_rating": 1800.0, "source": "clubelo"}
+        mock_odds.return_value = None
+        mock_stats.return_value = {
+            "wins": 6, "draws": 2, "losses": 2, "played": 10,
+            "goals_per_game": 1.8,
+            "last_match_date": "2025-09-01",
+            "form_rate_weighted": 0.42,
+        }
+        mock_h2h.return_value = None
+
+        raw = fetch_elo_and_odds(_make_match(), elo_scope="club")
+        assert raw["team"]["form_home"] == pytest.approx(0.42)
+        assert raw["team"]["form_away"] == pytest.approx(0.42)
+
 
 class TestBuildMatchIdentity:
     def test_build_from_fixture(self):

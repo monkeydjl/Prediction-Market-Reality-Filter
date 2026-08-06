@@ -423,11 +423,26 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
 
     from app.sports.football.club_form import points_form_rate
 
+    def _form_rate(stats: dict) -> float | None:
+        """Recency-weighted rate when the source carried a per-match sequence.
+
+        Only the kernel club path produces one; the world-cup CSV path returns
+        aggregate counts only, so it falls back to the flat rate.
+        """
+        weighted = stats.get("form_rate_weighted")
+        if weighted is not None:
+            try:
+                return float(weighted)
+            except (TypeError, ValueError):
+                pass
+        return points_form_rate(
+            int(stats.get("wins") or 0),
+            int(stats.get("draws") or 0),
+            int(stats.get("played") or 0),
+        )
+
     if home_stats:
-        played = int(home_stats.get("played") or 0)
-        wins = int(home_stats.get("wins") or 0)
-        draws = int(home_stats.get("draws") or 0)
-        form_h = points_form_rate(wins, draws, played)
+        form_h = _form_rate(home_stats)
         if form_h is not None:
             raw["team"]["form_home"] = form_h
         last = home_stats.get("last_match_date")
@@ -440,10 +455,7 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
             raw.setdefault("custom", {})["xg_home"] = float(gpg)
 
     if away_stats:
-        played = int(away_stats.get("played") or 0)
-        wins = int(away_stats.get("wins") or 0)
-        draws = int(away_stats.get("draws") or 0)
-        form_a = points_form_rate(wins, draws, played)
+        form_a = _form_rate(away_stats)
         if form_a is not None:
             raw["team"]["form_away"] = form_a
         last = away_stats.get("last_match_date")

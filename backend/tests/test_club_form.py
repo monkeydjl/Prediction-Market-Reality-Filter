@@ -14,6 +14,7 @@ from app.sports.football.club_form import (
     h2h_from_kernel,
     points_form_rate,
     team_form_from_kernel,
+    weighted_points_form_rate,
 )
 
 
@@ -123,6 +124,71 @@ class TestPointsFormRate:
     def test_dirty_over_points_clamped(self):
         # W+D > N would exceed 1.0 without clamp
         assert points_form_rate(10, 10, 5) == pytest.approx(1.0)
+
+
+class TestWeightedPointsFormRate:
+    """Recency weighting. `results[0]` is the most recent match."""
+
+    def test_all_wins(self):
+        assert weighted_points_form_rate(["W"] * 5) == pytest.approx(1.0)
+
+    def test_all_losses(self):
+        assert weighted_points_form_rate(["L"] * 5) == pytest.approx(0.0)
+
+    def test_all_draws(self):
+        assert weighted_points_form_rate(["D"] * 5) == pytest.approx(1 / 3, abs=1e-4)
+
+    def test_recent_wins_beat_recent_losses_at_equal_counts(self):
+        recent_good = weighted_points_form_rate(["W", "W", "L", "L"])
+        recent_bad = weighted_points_form_rate(["L", "L", "W", "W"])
+        assert recent_good > recent_bad
+
+    def test_flat_when_counts_and_order_match(self):
+        """Same result repeated is order-independent, so it equals the flat rate."""
+        assert weighted_points_form_rate(["W", "W"]) == pytest.approx(
+            points_form_rate(2, 0, 2)
+        )
+
+    def test_empty_returns_none(self):
+        assert weighted_points_form_rate([]) is None
+
+    def test_unknown_results_are_ignored_not_scored_zero(self):
+        # "U" comes from _points_result when neither side is the queried team.
+        assert weighted_points_form_rate(["W", "U"]) == pytest.approx(1.0)
+
+    def test_all_unknown_returns_none(self):
+        assert weighted_points_form_rate(["U", "?"]) is None
+
+    def test_shorter_half_life_weights_recency_more(self):
+        seq = ["W", "L"]
+        assert (
+            weighted_points_form_rate(seq, half_life=2.0)
+            > weighted_points_form_rate(seq, half_life=10.0)
+        )
+
+    def test_non_positive_half_life_returns_none(self):
+        assert weighted_points_form_rate(["W", "L"], half_life=0.0) is None
+
+
+class TestFormRateWeightedKeys:
+    def test_kernel_form_exposes_weighted_rate_and_results(self, tmp_path):
+        _seed_matches(tmp_path)
+        try:
+            stats = team_form_from_kernel(
+                "Arsenal",
+                competition="epl",
+                before=datetime(2025, 9, 20, tzinfo=timezone.utc),
+            )
+            assert stats is not None
+            # Most recent first: drew at Liverpool (9-10), beat Chelsea (9-1)
+            assert stats["recent_results"] == ["D", "W"]
+            # The win is the older match, so weighting pulls below the flat 4/6
+            assert stats["form_rate_weighted"] < points_form_rate(1, 1, 2)
+            assert stats["form_rate_weighted"] == pytest.approx(
+                weighted_points_form_rate(["D", "W"])
+            )
+        finally:
+            close_kernel_session()
 
 
 def _seed_named(tmp_path, db_name, competition, home, away):

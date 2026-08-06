@@ -5,6 +5,7 @@ Best-effort: returns None fields when DB empty or team unmatched.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any
@@ -31,6 +32,52 @@ def points_form_rate(
     except (TypeError, ValueError):
         d = 0
     rate = (3 * w + d) / (3 * n)
+    if rate < 0.0:
+        rate = 0.0
+    elif rate > 1.0:
+        rate = 1.0
+    return round(rate, 4)
+
+
+_RESULT_POINTS = {"W": 1.0, "D": 1.0 / 3.0, "L": 0.0}
+
+
+def weighted_points_form_rate(
+    results: Sequence[str],
+    *,
+    half_life: float = 5.0,
+) -> float | None:
+    """Recency-weighted points rate in [0, 1], same scale as points_form_rate.
+
+    ``results`` is ordered most recent first; ``results[i]`` gets weight
+    ``0.5 ** (i / half_life)``, so a match ``half_life`` games back counts half
+    as much as the latest one. Entries outside W/D/L (notably the "U" that
+    _points_result emits for an unmatched row) are dropped rather than scored
+    zero, which would otherwise read as a loss.
+
+    Returns None when nothing scorable is left or half_life is non-positive.
+    """
+    if not results:
+        return None
+    try:
+        hl = float(half_life)
+    except (TypeError, ValueError):
+        return None
+    if hl <= 0.0:
+        return None
+
+    total_weight = 0.0
+    total_score = 0.0
+    for i, res in enumerate(results):
+        points = _RESULT_POINTS.get(res)
+        if points is None:
+            continue
+        weight = 0.5 ** (i / hl)
+        total_weight += weight
+        total_score += weight * points
+    if total_weight <= 0.0:
+        return None
+    rate = total_score / total_weight
     if rate < 0.0:
         rate = 0.0
     elif rate > 1.0:
@@ -190,6 +237,7 @@ def team_form_from_kernel(
 
         played = len(played_rows)
         last = played_rows[0][0]
+        recent_results = [row[1] for row in played_rows]
         return {
             "wins": wins,
             "draws": draws,
@@ -197,6 +245,8 @@ def team_form_from_kernel(
             "played": played,
             "goals_per_game": round(goals_for / played, 2) if played else None,
             "last_match_date": last.date().isoformat() if last else None,
+            "recent_results": recent_results,
+            "form_rate_weighted": weighted_points_form_rate(recent_results),
             "data_source": "kernel_match_results",
         }
     finally:

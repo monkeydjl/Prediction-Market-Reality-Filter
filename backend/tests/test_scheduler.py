@@ -116,6 +116,32 @@ class EventDiscoverJobTests(unittest.TestCase):
         mock_discover.assert_not_called()
 
 
+class EventDiscoverStartupJobTests(unittest.TestCase):
+    """_job_event_discover_startup always uses limit=10 independent of
+    EVENT_DISCOVER_LIMIT, so first-run LLM cost stays bounded."""
+
+    def test_startup_job_uses_fixed_limit(self):
+        captured = {}
+
+        async def fake_discover(**kwargs):
+            captured.update(kwargs)
+            return {"count": 3}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch("app.services.event_intelligence_service.discover_events",
+                          new=AsyncMock(side_effect=fake_discover)), \
+                    patch.object(scheduler.settings, "EVENT_DISCOVER_ENABLED", True), \
+                    patch.object(scheduler.settings, "EVENT_DISCOVER_LIMIT", 100):
+                asyncio.run(scheduler._job_event_discover_startup())
+                run = loop_run_store.last_run("event_discover_startup")
+        # Startup job must ignore EVENT_DISCOVER_LIMIT and always use 10
+        self.assertEqual(captured.get("limit"), 10)
+        self.assertEqual(captured.get("use_cache"), False)
+        self.assertEqual(run["status"], "success")
+        self.assertEqual(run["result"]["count"], 3)
+
+
 class TranslateTitlesJobTests(unittest.TestCase):
     def test_job_retries_english_placeholder_titles(self):
         records = [

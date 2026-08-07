@@ -315,6 +315,39 @@ async def _job_event_discover():
         logger.exception("[Scheduler] Event discover failed")
 
 
+async def _job_event_discover_startup():
+    """One-shot startup discover with a fixed small limit.
+
+    Unlike the recurring job (_job_event_discover), which respects the
+    configuration setting EVENT_DISCOVER_LIMIT, the startup job always scans
+    at most 10 candidates. This keeps the first-run cost bounded regardless
+    of the configured limit — a limit of 100 with _CANDIDATE_POOL_FACTOR=3
+    would spawn ~300 candidates (600+ LLM calls) and time out long before
+    completion, which is wasteful on a fresh deploy where every call counts
+    against the daily cost cap.
+    """
+    if not settings.EVENT_DISCOVER_ENABLED:
+        return
+    logger.info("[Scheduler] Startup event discover starting (limit=10)...")
+    run_id = _start_run("event_discover_startup")
+    try:
+        from app.memory.event_store import auto_archive_expired
+        archived = auto_archive_expired()
+        if archived:
+            logger.info("[Scheduler] Auto-archived %d expired events", archived)
+        from app.services.event_intelligence_service import discover_events
+
+        result = await discover_events(limit=10, use_cache=False)
+        _finish_run(run_id, "success", result=result)
+        logger.info(
+            "[Scheduler] Startup event discover: count=%d",
+            result.get("count", 0),
+        )
+    except Exception as exc:
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        logger.exception("[Scheduler] Startup event discover failed")
+
+
 async def _job_loop_db_maintenance():
     """Daily SQLite loop-store maintenance: WAL truncation + integrity check."""
     logger.info("[Scheduler] Loop DB maintenance starting...")
@@ -1111,8 +1144,10 @@ def start_scheduler():
                 max_instances=1,
             )
             # Also fire once 30 seconds after startup for immediate population.
+            # Uses a fixed limit of 10 independent of EVENT_DISCOVER_LIMIT, so
+            # the first-run cost stays bounded (P0 cost-cap guardrail).
             scheduler.add_job(
-                _job_event_discover,
+                _job_event_discover_startup,
                 "date",
                 run_date=datetime.now(timezone.utc) + timedelta(seconds=30),
                 id="event_discover_startup",

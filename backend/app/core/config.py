@@ -281,7 +281,7 @@ class Settings:
     )
     WORLD_CUP_SOURCE_BUNDLE_USER_AGENT: str = os.getenv(
         "WORLD_CUP_SOURCE_BUNDLE_USER_AGENT",
-        "Event Intelligence Platform research-contact@example.com",
+        "Event Intelligence Platform airdop2474@gmail.com",
     )
     WORLD_CUP_SOURCE_BUNDLE_AUTH_HEADER: str = os.getenv(
         "WORLD_CUP_SOURCE_BUNDLE_AUTH_HEADER", ""
@@ -344,7 +344,7 @@ class Settings:
     # Operators should override SEC_USER_AGENT with a real contact in .env.
     SEC_USER_AGENT: str = os.getenv(
         "SEC_USER_AGENT",
-        "Event Intelligence Platform research-contact@example.com",
+        "Event Intelligence Platform airdop2474@gmail.com",
     )
     ECONOMIC_RSS_URL: str = os.getenv(
         "ECONOMIC_RSS_URL",
@@ -356,7 +356,7 @@ class Settings:
     # BLS (like SEC) returns 403 to requests without a declared User-Agent.
     ECONOMIC_USER_AGENT: str = os.getenv(
         "ECONOMIC_USER_AGENT",
-        "Event Intelligence Platform research-contact@example.com",
+        "Event Intelligence Platform airdop2474@gmail.com",
     )
 
     # Legacy Manifold settings are kept only so existing .env files do not break

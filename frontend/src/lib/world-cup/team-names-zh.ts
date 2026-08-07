@@ -1,7 +1,7 @@
 /**
  * World Cup team name translations (English to Chinese)
  */
-export const teamNamesZh: Record<string, string> = {
+const teamNamesZh: Record<string, string> = {
   "Algeria": "阿尔及利亚",
   "Argentina": "阿根廷",
   "Australia": "澳大利亚",

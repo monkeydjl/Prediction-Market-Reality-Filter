@@ -195,9 +195,14 @@ export interface TraditionalOddsHistory {
   skip_reason: string | null;
 }
 
+/** `sport-odds/{id}/latest` folds the outcome key into each row. */
+export interface TraditionalOddsLatestOutcome extends TraditionalOddsSnapshot {
+  mapped_outcome: string;
+}
+
 export interface TraditionalOddsLatest {
   match_id: string;
-  outcomes: TraditionalOddsSnapshot[];
+  outcomes: TraditionalOddsLatestOutcome[];
   skipped: boolean;
   skip_reason: string | null;
 }

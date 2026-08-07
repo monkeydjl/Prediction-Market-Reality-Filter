@@ -36,6 +36,8 @@ export {
   useMarketLinks,
   useMarketLinksByMatch,
   useLatestLinks,
+  useLinkAudit,
+  useMatchAudit,
   usePendingLinks,
   useMarketSnapshots,
   verifyLink,

@@ -207,51 +207,6 @@ async function worldCupFetchError(response: Response, fallback: string): Promise
 }
 
 /**
- * Fetch all matches with optional filters
- */
-export async function fetchMatches(params?: {
-  stage?: string;
-  status?: string;
-  limit?: number;
-}): Promise<MatchWithPrediction[]> {
-  const query = new URLSearchParams();
-  if (params?.stage) query.set('stage', params.stage);
-  if (params?.status) query.set('status', params.status);
-  if (params?.limit) query.set('limit', params.limit.toString());
-
-  // Add cache-busting timestamp
-  query.set('_t', Date.now().toString());
-
-  const response = await fetch(
-    `${API_BASE}/world-cup/predictions/matches?${query}`,
-    { cache: 'no-store' }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch matches: ${response.statusText}`);
-  }
-
-  const data = await response.json();
-  return data.matches || [];
-}
-
-/**
- * Fetch a single match with its prediction
- */
-export async function fetchMatchWithPrediction(matchId: string): Promise<MatchWithPrediction> {
-  const response = await fetch(
-    `${API_BASE}/world-cup/predictions/matches/${matchId}`,
-    { cache: 'no-store' }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch match: ${response.statusText}`);
-  }
-
-  return await response.json();
-}
-
-/**
  * Fetch prediction history for a match
  */
 export async function fetchPredictionHistory(matchId: string): Promise<PredictionHistoryEntry[]> {
@@ -268,23 +223,6 @@ export async function fetchPredictionHistory(matchId: string): Promise<Predictio
   return (data.history || []).filter(
     (entry: PredictionHistoryEntry) => !entry.trigger?.endsWith("_comparison")
   );
-}
-
-/**
- * Fetch today's matches with predictions
- */
-export async function fetchTodayMatches(): Promise<MatchWithPrediction[]> {
-  const response = await fetch(
-    `${API_BASE}/world-cup/predictions/today?_t=${Date.now()}`,
-    { cache: 'no-store' }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch today's matches: ${response.statusText}`);
-  }
-
-  const data = await response.json();
-  return data.matches || [];
 }
 
 /**

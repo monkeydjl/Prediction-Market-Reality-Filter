@@ -8,6 +8,8 @@ import type {
   MarketLinkList,
   LatestLink,
   SnapshotSeries,
+  MarketPriceAudit,
+  MatchMarketAudit,
 } from "../types";
 
 type LatestLinksResponse = { items: LatestLink[]; total: number };
@@ -28,9 +30,33 @@ export function useMarketLinksByMatch(matchId: string | null) {
   return useSWR<MarketLinkList>(key);
 }
 
-export function useLatestLinks(matchId: string | null) {
+/**
+ * Verified links joined with their newest snapshot.
+ *
+ * `refreshMs` drives the opt-in realtime poll on the markets board; it stays
+ * undefined (no polling) unless the operator turns the toggle on.
+ */
+export function useLatestLinks(matchId: string | null, refreshMs?: number) {
   const key = matchId ? `${getApiBase()}/sport-markets/links/${matchId}/latest` : null;
-  return useSWR<LatestLinksResponse>(key);
+  return useSWR<LatestLinksResponse>(
+    key,
+    refreshMs ? { refreshInterval: refreshMs } : undefined,
+  );
+}
+
+/** Price-path audit for a single linked market (`links/{link_id}/audit`). */
+export function useLinkAudit(linkId: number | null) {
+  const key =
+    linkId != null ? `${getApiBase()}/sport-markets/links/${linkId}/audit` : null;
+  return useSWR<MarketPriceAudit>(key);
+}
+
+/** Aggregate price-path audits for every link of a match. */
+export function useMatchAudit(matchId: string | null) {
+  const key = matchId
+    ? `${getApiBase()}/sport-markets/matches/${encodeURIComponent(matchId)}/audit`
+    : null;
+  return useSWR<MatchMarketAudit>(key);
 }
 
 export function usePendingLinks() {

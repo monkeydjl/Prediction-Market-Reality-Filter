@@ -652,6 +652,57 @@ export interface QualityMetricsReport {
   report_errors: { event_id: string; error: string }[];
 }
 
+// ── Quality alerts / domain reliability ─────────────────────────────────
+// Mirror backend /api/quality-metrics/alerts and /domain-reliability. See
+// backend/app/services/quality_alert_service.py and
+// backend/app/memory/domain_reliability_store.py for the source of truth.
+
+export interface QualityAlert {
+  code: string;
+  severity: "high" | "medium";
+  scope: "overview" | "slice";
+  dimension: string | null;
+  slice: string | null;
+  metric: string;
+  value: number | null;
+  threshold: number | null;
+  n: number;
+}
+
+export interface QualityAlertsResponse {
+  alerts: QualityAlert[];
+  alert_count: number;
+  diagnostics?: {
+    insufficient_samples: {
+      dimension: string;
+      slice: string;
+      n: number;
+      min_samples: number;
+    }[];
+  };
+}
+
+export interface DomainReliabilityRow {
+  domain: string;
+  category: string;
+  sample_count: number;
+  correct_count: number;
+  wrong_count: number;
+  credibility_sum: number;
+  /** correct / sample. null when sample_count is 0. */
+  reliability_score: number | null;
+  credibility_avg: number | null;
+  insufficient_samples: boolean;
+  first_seen: string | null;
+  last_updated: string | null;
+}
+
+export interface DomainReliabilityResponse {
+  domains: DomainReliabilityRow[];
+  total_domains: number;
+  total_rows: number;
+}
+
 export interface PredictionRecord {
   id: string;
   event_id: string;
@@ -921,6 +972,38 @@ export const qualityMetricsApi = {
     const tail = qs.toString();
     return api<QualityMetricsReport>(
       `/quality-metrics/report${tail ? `?${tail}` : ""}`,
+    );
+  },
+
+  alerts: (params?: {
+    limit?: number;
+    sample?: number;
+    includeInsufficientSamples?: boolean;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params?.limit != null) qs.set("limit", String(params.limit));
+    if (params?.sample != null) qs.set("sample", String(params.sample));
+    if (params?.includeInsufficientSamples) {
+      qs.set("include_insufficient_samples", "true");
+    }
+    const tail = qs.toString();
+    return api<QualityAlertsResponse>(
+      `/quality-metrics/alerts${tail ? `?${tail}` : ""}`,
+    );
+  },
+
+  domainReliability: (params?: {
+    domain?: string;
+    category?: string;
+    minSamples?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params?.domain) qs.set("domain", params.domain);
+    if (params?.category) qs.set("category", params.category);
+    if (params?.minSamples != null) qs.set("min_samples", String(params.minSamples));
+    const tail = qs.toString();
+    return api<DomainReliabilityResponse>(
+      `/quality-metrics/domain-reliability${tail ? `?${tail}` : ""}`,
     );
   },
 };

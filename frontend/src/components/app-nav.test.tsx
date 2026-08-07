@@ -100,11 +100,13 @@ describe("AppNav", () => {
     );
   });
 
-  it("renders two group labels", () => {
+  it("renders four group labels", () => {
     render(<AppNav />);
 
     expect(screen.getByText("事件情报平台")).toBeInTheDocument();
     expect(screen.getByText("Sports Prediction OS")).toBeInTheDocument();
+    expect(screen.getByText("体育运营")).toBeInTheDocument();
+    expect(screen.getByText("世界杯运营")).toBeInTheDocument();
   });
 
   it("renders all Event Intelligence entries", () => {
@@ -112,19 +114,37 @@ describe("AppNav", () => {
 
     for (const label of [
       "监控面板", "决策机会", "事件 Edge", "人工分析",
-      "历史复盘", "质量运营", "质量切片", "模拟交易",
+      "历史复盘", "质量运营", "模拟交易",
     ]) {
       expect(screen.getByRole("link", { name: new RegExp(label) })).toBeInTheDocument();
     }
+    expect(screen.queryByRole("link", { name: /质量切片/ })).not.toBeInTheDocument();
   });
 
   it("renders all Sports Prediction OS entries", () => {
     render(<AppNav />);
 
     for (const label of [
-      "体育预测", "体育 Edge", "期货市场", "学习仪表盘", "体育市场",
-      "参数优化", "体育推荐", "体育结算", "竞猜中心",
+      "体育预测", "竞猜中心", "期货市场", "学习仪表盘", "参数优化",
     ]) {
+      expect(screen.getByRole("link", { name: new RegExp(label) })).toBeInTheDocument();
+    }
+  });
+
+  it("renders all 体育运营 entries", () => {
+    render(<AppNav />);
+
+    for (const label of [
+      "体育市场", "体育 Edge", "体育推荐", "体育结算",
+    ]) {
+      expect(screen.getByRole("link", { name: new RegExp(label) })).toBeInTheDocument();
+    }
+  });
+
+  it("renders all 世界杯运营 entries", () => {
+    render(<AppNav />);
+
+    for (const label of ["世界杯", "数据接入", "引擎自助台"]) {
       expect(screen.getByRole("link", { name: new RegExp(label) })).toBeInTheDocument();
     }
   });
@@ -153,23 +173,40 @@ describe("AppNav", () => {
     expect(link).toHaveAttribute("href", "/sports/betting");
   });
 
-  it("does not link the old /world-cup route", () => {
+  it("does not link the old top-level /world-cup route", () => {
     render(<AppNav />);
-    expect(screen.queryByRole("link", { name: /^世界杯$/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^世界杯$/ })).toHaveAttribute(
+      "href",
+      "/sports/world-cup",
+    );
+    const hrefs = screen
+      .getAllByRole("link")
+      .map((el) => el.getAttribute("href"));
+    expect(hrefs).not.toContain("/world-cup");
   });
 
   it("keeps navigation labels on a single line", () => {
     render(<AppNav />);
     const labels = [
       "监控面板", "决策机会", "事件 Edge", "人工分析",
-      "历史复盘", "质量运营", "质量切片", "模拟交易",
-      "竞猜中心", "体育预测", "体育 Edge", "期货市场", "学习仪表盘", "体育市场",
-      "参数优化", "体育推荐", "体育结算",
+      "历史复盘", "质量运营", "模拟交易",
+      "体育预测", "竞猜中心", "期货市场", "学习仪表盘", "参数优化",
+      "体育市场", "体育 Edge", "体育推荐", "体育结算",
+      "世界杯", "数据接入", "引擎自助台",
     ];
     for (const label of labels) {
       const link = screen.getByRole("link", { name: new RegExp(label) });
       expect(link.className).toMatch(/whitespace-nowrap/);
     }
+  });
+
+  it("lights up /sports/world-cup only on the World Cup entry, not sub-routes", () => {
+    pathnameMock.mockReturnValue("/sports/world-cup/engine");
+    render(<AppNav />);
+    expect(screen.getByRole("link", { name: /引擎自助台/ })).toHaveClass("bg-secondary");
+    const worldCupLink = screen.getByRole("link", { name: /^世界杯$/ });
+    expect(worldCupLink).not.toHaveClass("bg-secondary");
+    expect(worldCupLink.className).toMatch(/text-muted-foreground/);
   });
 
   it("lights up / for home and /events/:id", () => {

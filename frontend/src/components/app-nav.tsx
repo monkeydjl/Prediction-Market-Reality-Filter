@@ -6,10 +6,12 @@ import { usePathname } from "next/navigation";
 import {
   Activity,
   CircleDollarSign,
+  Cpu,
   Crosshair,
+  Database,
   Dices,
   FlaskConical,
-  Gauge,
+  Globe,
   GraduationCap,
   History,
   Lightbulb,
@@ -27,7 +29,6 @@ import { cn } from "@/lib/utils";
 import { eventsApi } from "@/lib/api";
 import { adaptMover } from "@/lib/adapt";
 import { OperatorKeyControl } from "@/components/operator-key-control";
-import { ThemeControl } from "@/components/theme-control";
 import { LiveStatusIndicator } from "@/components/live-status-indicator";
 
 type NavItem = {
@@ -35,6 +36,8 @@ type NavItem = {
   label: string;
   icon: typeof Radar;
   match: string[];
+  /** Match only the exact path; sub-routes have their own nav items. */
+  exact?: boolean;
 };
 
 type NavGroup = {
@@ -52,32 +55,39 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/analyze", label: "人工分析", icon: FlaskConical, match: ["/analyze"] },
       { href: "/history", label: "历史复盘", icon: History, match: ["/history"] },
       { href: "/quality", label: "质量运营", icon: Activity, match: ["/quality"] },
-      { href: "/quality-metrics", label: "质量切片", icon: Gauge, match: ["/quality-metrics"] },
       { href: "/trades", label: "模拟交易", icon: TrendingUp, match: ["/trades"] },
     ],
   },
   {
     label: "Sports Prediction OS",
     items: [
-      {
-        href: "/sports/betting",
-        label: "竞猜中心",
-        icon: Dices,
-        match: ["/sports/betting"],
-      },
       { href: "/sports", label: "体育预测", icon: Medal, match: ["/sports"] },
-      { href: "/sports/edges", label: "体育 Edge", icon: Crosshair, match: ["/sports/edges"] },
+      { href: "/sports/betting", label: "竞猜中心", icon: Dices, match: ["/sports/betting"] },
       { href: "/sports/futures", label: "期货市场", icon: Trophy, match: ["/sports/futures"] },
       { href: "/sports/learning", label: "学习仪表盘", icon: GraduationCap, match: ["/sports/learning"] },
-      { href: "/sports/markets", label: "体育市场", icon: LineChart, match: ["/sports/markets"] },
       { href: "/sports/optimization", label: "参数优化", icon: Wrench, match: ["/sports/optimization"] },
+    ],
+  },
+  {
+    label: "体育运营",
+    items: [
+      { href: "/sports/markets", label: "体育市场", icon: LineChart, match: ["/sports/markets"] },
+      { href: "/sports/edges", label: "体育 Edge", icon: Crosshair, match: ["/sports/edges"] },
       { href: "/sports/recommendations", label: "体育推荐", icon: Lightbulb, match: ["/sports/recommendations"] },
       { href: "/sports/settlements", label: "体育结算", icon: CircleDollarSign, match: ["/sports/settlements"] },
     ],
   },
+  {
+    label: "世界杯运营",
+    items: [
+      { href: "/sports/world-cup", label: "世界杯", icon: Globe, match: ["/sports/world-cup"], exact: true },
+      { href: "/sports/world-cup/ingest", label: "数据接入", icon: Database, match: ["/sports/world-cup/ingest"] },
+      { href: "/sports/world-cup/engine", label: "引擎自助台", icon: Cpu, match: ["/sports/world-cup/engine"] },
+    ],
+  },
 ];
 
-/** Sports OS sub-routes that must not light up the Kernel list item `/sports`. */
+/** Sports OS sub-routes that must not light up the hub list item `/sports`. */
 const SPORTS_NAMED_SEGMENTS = new Set([
   "world-cup",
   "edges",
@@ -90,7 +100,7 @@ const SPORTS_NAMED_SEGMENTS = new Set([
   "betting",
 ]);
 
-function isNavItemActive(norm: string, href: string): boolean {
+function isNavItemActive(norm: string, href: string, exact = false): boolean {
   if (href === "/") {
     return norm === "/" || norm.startsWith("/events");
   }
@@ -98,10 +108,10 @@ function isNavItemActive(norm: string, href: string): boolean {
     if (norm === "/sports") return true;
     if (!norm.startsWith("/sports/")) return false;
     const first = norm.slice("/sports/".length).split("/")[0] ?? "";
-    // Match detail pages (/sports/:matchId) stay under Kernel list; named hubs do not.
+    // Match detail pages (/sports/:matchId) stay under the hub list item; named hubs do not.
     return first.length > 0 && !SPORTS_NAMED_SEGMENTS.has(first);
   }
-  return norm === href || norm.startsWith(`${href}/`);
+  return norm === href || (!exact && norm.startsWith(`${href}/`));
 }
 
 /** Fallback copy when movers API is empty / unavailable (not live market data). */
@@ -306,7 +316,7 @@ export function AppNav() {
                 {group.label}
               </span>
               {group.items.map((item) => {
-                const active = isNavItemActive(norm, item.href);
+                const active = isNavItemActive(norm, item.href, item.exact);
                 const Icon = item.icon;
                 return (
                   <Link
@@ -332,7 +342,6 @@ export function AppNav() {
 
         <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground md:gap-3">
           <LiveStatusIndicator />
-          <ThemeControl />
           <OperatorKeyControl />
         </div>
       </div>

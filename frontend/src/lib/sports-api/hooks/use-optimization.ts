@@ -11,6 +11,35 @@ export function useOptimizationParams() {
   return useSWR<OptimizedParams[]>(key);
 }
 
+/** Applied params for one sport. Returns 404 until a candidate is applied. */
+export function useAppliedParams(sport: string | null) {
+  const key = sport
+    ? `${getApiBase()}/sport-optimization/params/${encodeURIComponent(sport)}`
+    : null;
+  return useSWR<OptimizedParams>(key);
+}
+
+export interface BackfillSeedResult {
+  backfill?: Record<string, unknown>;
+  seed?: Record<string, unknown>;
+}
+
+/**
+ * Backfill match results from synced fixtures and/or seed Elo ratings. Run
+ * after a schedule sync when fixtures have scores but the result and Elo
+ * tables are still empty. Idempotent on the backend.
+ */
+export async function backfillAndSeed(
+  sport: string = "all",
+  options: { backfill?: boolean; seedElo?: boolean } = {},
+): Promise<BackfillSeedResult> {
+  return sportPost<BackfillSeedResult>(`/sport-optimization/backfill-seed`, {
+    sport,
+    backfill: options.backfill ?? true,
+    seed_elo: options.seedElo ?? true,
+  });
+}
+
 export async function triggerOptimization(
   sport: string,
   nTrials: number = 150,

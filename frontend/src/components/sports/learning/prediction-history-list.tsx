@@ -2,7 +2,11 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { usePredictionHistory, type PredictionHistoryItem } from "@/lib/sports-api";
+import {
+  processOutcome,
+  usePredictionHistory,
+  type PredictionHistoryItem,
+} from "@/lib/sports-api";
 import { learningHistoryHref } from "@/lib/sports-routes";
 
 const SPORT_FILTERS = [
@@ -41,12 +45,20 @@ function resultBadge(item: PredictionHistoryItem): string {
   return item.outcome.outcome_correct ? "✓" : "✗";
 }
 
+/** A row is gradeable while its outcome has not been scored by the learning loop. */
+function isUngraded(item: PredictionHistoryItem): boolean {
+  return item.outcome === null || item.outcome.outcome_correct === null;
+}
+
 export function PredictionHistoryList() {
   const [offset, setOffset] = useState(0);
   const [sport, setSport] = useState("");
   const [competition, setCompetition] = useState("");
+  const [processing, setProcessing] = useState<string | null>(null);
+  const [processError, setProcessError] = useState<string | null>(null);
+  const [processed, setProcessed] = useState<Set<string>>(new Set());
 
-  const { data, error, isLoading } = usePredictionHistory({
+  const { data, error, isLoading, mutate } = usePredictionHistory({
     sport: sport || undefined,
     competition: competition || undefined,
     limit: PAGE_SIZE,
@@ -57,6 +69,20 @@ export function PredictionHistoryList() {
 
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  async function handleProcess(matchId: string) {
+    setProcessing(matchId);
+    setProcessError(null);
+    try {
+      await processOutcome(matchId);
+      setProcessed((prev) => new Set(prev).add(matchId));
+      await mutate();
+    } catch (e) {
+      setProcessError(e instanceof Error ? e.message : "结果回流失败");
+    } finally {
+      setProcessing(null);
+    }
+  }
 
   if (isLoading) {
     return <div className="p-4 text-sm text-muted-foreground">加载中...</div>;
@@ -95,6 +121,16 @@ export function PredictionHistoryList() {
         </label>
       </div>
 
+      {processError && (
+        <p
+          data-testid="process-outcome-error"
+          role="alert"
+          className="rounded border border-neg/40 bg-neg/10 px-3 py-2 text-sm text-neg"
+        >
+          {processError}
+        </p>
+      )}
+
       {items.length === 0 ? (
         <div className="p-4 text-sm text-muted-foreground">暂无预测历史记录</div>
       ) : (
@@ -110,6 +146,7 @@ export function PredictionHistoryList() {
                   <th className="py-2 pr-4">置信度</th>
                   <th className="py-2 pr-4">结果</th>
                   <th className="py-2 pr-4">MAE</th>
+                  <th className="py-2 pr-4">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -132,6 +169,23 @@ export function PredictionHistoryList() {
                     <td className="py-2 pr-4 font-mono">{resultBadge(item)}</td>
                     <td className="py-2 pr-4 font-mono">
                       {item.outcome?.score_mae?.toFixed(2) ?? "—"}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {isUngraded(item) ? (
+                        <button
+                          type="button"
+                          data-testid={`process-outcome-${item.match_id}`}
+                          onClick={() => handleProcess(item.match_id)}
+                          disabled={processing !== null}
+                          className="rounded border border-border px-2 py-0.5 text-xs hover:bg-muted disabled:opacity-40"
+                        >
+                          {processing === item.match_id ? "回流中…" : "回流结果"}
+                        </button>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">
+                          {processed.has(item.match_id) ? "已回流" : "—"}
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}

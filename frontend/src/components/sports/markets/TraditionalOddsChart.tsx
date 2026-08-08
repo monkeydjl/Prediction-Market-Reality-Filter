@@ -201,7 +201,7 @@ export function TraditionalOddsChart({ matchId }: TraditionalOddsChartProps) {
                   <td
                     className={`px-3 py-2 font-mono tabular-nums ${
                       row.gap != null && Math.abs(row.gap) >= 0.05
-                        ? "font-semibold text-amber-600 dark:text-amber-400"
+                        ? "font-semibold text-amber-400"
                         : ""
                     }`}
                   >

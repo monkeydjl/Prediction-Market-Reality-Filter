@@ -1,6 +1,7 @@
 "use client";
 
 import { usePriceStream, type PriceUpdate } from "@/lib/use-price-stream";
+import { ScrollableTable } from "@/components/ui/scrollable-table";
 import { RealtimePriceIndicator } from "./RealtimePriceIndicator";
 
 interface RealtimePriceTableProps {
@@ -68,32 +69,34 @@ export function RealtimePriceTable({ matchId }: RealtimePriceTableProps) {
               : "未连接到实时数据源"}
         </div>
       ) : (
-        <table data-testid="price-table" className="w-full text-sm">
-          <thead>
-            <tr className="border-b text-left">
-              <th className="py-1 pr-2">时间</th>
-              <th className="py-1 pr-2">类型</th>
-              <th className="py-1 pr-2">结果</th>
-              <th className="py-1 pr-2">隐含概率</th>
-              <th className="py-1 pr-2">价格</th>
-              <th className="py-1 pr-2">赔率</th>
-              <th className="py-1 pr-2">来源</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sortedUpdates.map((u, idx) => (
-              <tr key={`${u.captured_at ?? ""}-${u.type}-${idx}`} className="border-b">
-                <td className="py-1 pr-2 tnum">{formatTime(u.captured_at)}</td>
-                <td className="py-1 pr-2">{u.type ?? "-"}</td>
-                <td className="py-1 pr-2">{u.outcome ?? "-"}</td>
-                <td className="py-1 pr-2 tnum">{formatPercent(u.implied_prob)}</td>
-                <td className="py-1 pr-2 tnum">{formatNumber(u.price)}</td>
-                <td className="py-1 pr-2 tnum">{formatNumber(u.decimal_odds)}</td>
-                <td className="py-1 pr-2">{u.bookmaker ?? "-"}</td>
+        <ScrollableTable aria-label="实时价格快照">
+          <table data-testid="price-table" className="w-full min-w-[44rem] text-sm">
+            <thead>
+              <tr className="border-b text-left">
+                <th className="py-1 pr-2">时间</th>
+                <th className="py-1 pr-2">类型</th>
+                <th className="py-1 pr-2">结果</th>
+                <th className="py-1 pr-2">隐含概率</th>
+                <th className="py-1 pr-2">价格</th>
+                <th className="py-1 pr-2">赔率</th>
+                <th className="py-1 pr-2">来源</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {sortedUpdates.map((u, idx) => (
+                <tr key={`${u.captured_at ?? ""}-${u.type}-${idx}`} className="border-b">
+                  <td className="py-1 pr-2 tnum">{formatTime(u.captured_at)}</td>
+                  <td className="py-1 pr-2">{u.type ?? "-"}</td>
+                  <td className="py-1 pr-2">{u.outcome ?? "-"}</td>
+                  <td className="py-1 pr-2 tnum">{formatPercent(u.implied_prob)}</td>
+                  <td className="py-1 pr-2 tnum">{formatNumber(u.price)}</td>
+                  <td className="py-1 pr-2 tnum">{formatNumber(u.decimal_odds)}</td>
+                  <td className="py-1 pr-2">{u.bookmaker ?? "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </ScrollableTable>
       )}
     </div>
   );

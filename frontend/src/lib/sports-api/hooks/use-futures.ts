@@ -6,6 +6,7 @@ import type {
   AvailableFuturesResponse,
   FuturesCoverageResponse,
   FuturesLinksResponse,
+  FuturesSeriesRegistryResponse,
   FuturesSnapshotsResponse,
 } from "../types";
 
@@ -17,6 +18,12 @@ export function useAvailableFutures() {
 export function useFuturesCoverage() {
   const key = `${getApiBase()}/futures/meta/coverage`;
   return useSWR<FuturesCoverageResponse>(key);
+}
+
+/** Registered Kalshi series prefixes, independent of whether any pair is linked. */
+export function useFuturesSeries() {
+  const key = `${getApiBase()}/futures/meta/series`;
+  return useSWR<FuturesSeriesRegistryResponse>(key);
 }
 
 export function useFuturesLinks(competition: string | null, season: string | null) {

@@ -342,6 +342,124 @@ export async function analyzePrediction(matchId: string): Promise<string> {
   return data.analysis || "分析结果为空";
 }
 
+export interface AIAnalysisHistoryEntry {
+  id: number;
+  analysis: string;
+  predicted_score: PredictedScore;
+  confidence: number;
+  prediction_method?: string;
+  created_at: string;
+}
+
+/**
+ * Fetch the stored AI analysis history for a match, newest first.
+ */
+export async function fetchAnalysisHistory(matchId: string): Promise<AIAnalysisHistoryEntry[]> {
+  const response = await fetch(
+    `${API_BASE}/world-cup/predictions/matches/${matchId}/analysis-history`,
+    { cache: 'no-store' }
+  );
+
+  if (!response.ok) {
+    throw await worldCupFetchError(response, "加载分析历史失败");
+  }
+
+  const data = await response.json();
+  return data.history || [];
+}
+
+export interface OptimizedPrediction {
+  predicted_score: PredictedScore;
+  outcome_probabilities: OutcomeProbabilities;
+  confidence: number;
+  reasoning?: string;
+}
+
+export interface PredictionOptimization {
+  blind_spots?: string[];
+  calibration_issues?: string[];
+  optimized_prediction?: OptimizedPrediction | null;
+  raw_text?: string;
+}
+
+export interface PredictionOptimizeResult {
+  status: string;
+  match_id?: string;
+  message?: string;
+  original_prediction: {
+    predicted_score: PredictedScore;
+    outcome_probabilities: OutcomeProbabilities;
+    confidence: number;
+  };
+  optimization: PredictionOptimization;
+}
+
+/**
+ * Ask the AI optimizer for blind spots / calibration fixes on a match's
+ * current prediction. Write operation — consumes provider quota.
+ */
+export async function optimizePrediction(matchId: string): Promise<PredictionOptimizeResult> {
+  const response = await fetch(
+    `${API_BASE}/world-cup/predictions/matches/${matchId}/optimize`,
+    {
+      method: 'POST',
+      headers: postHeaders(),
+      cache: 'no-store',
+    }
+  );
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
+    throw new Error(data.detail || `HTTP ${response.status}`);
+  }
+
+  return await response.json();
+}
+
+export type EngineComparisonKey = "elo_odds" | "hybrid" | "integrated" | "gbm";
+
+export interface EngineComparisonStat {
+  total_matches: number;
+  exact_score_rate: number;
+  outcome_accuracy: number;
+  goal_diff_accuracy: number;
+  avg_score_error: number;
+  predictions: Array<{
+    match_id: string;
+    home_team: string;
+    away_team: string;
+    predicted_score: PredictedScore;
+    actual_score: PredictedScore;
+    score_error: number;
+    outcome_correct: boolean;
+    confidence: number;
+    outcome_probability: number;
+  }>;
+}
+
+export type EngineComparisonData = Partial<Record<EngineComparisonKey, EngineComparisonStat>>;
+
+/**
+ * Per-engine accuracy roll-up over settled matches. Throws with the backend's
+ * message when no engine has enough graded predictions yet.
+ */
+export async function fetchEngineComparison(): Promise<EngineComparisonData> {
+  const response = await fetch(
+    `${API_BASE}/world-cup/predictions/engine-comparison`,
+    { cache: 'no-store' }
+  );
+
+  if (!response.ok) {
+    throw new Error("Failed to load comparison data");
+  }
+
+  const result = await response.json();
+  if (result.status !== "ok") {
+    throw new Error(result.message || "No data available");
+  }
+  return result.engines ?? {};
+}
+
 /**
  * Sync fixtures from API-Football
  */

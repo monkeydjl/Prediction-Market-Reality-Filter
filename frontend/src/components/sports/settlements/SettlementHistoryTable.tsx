@@ -6,6 +6,7 @@ import {
   type MarketSettlement,
 } from "@/lib/sports-api";
 import { ProcessSettlementButton } from "./processsettlementbutton";
+import { ScrollableTable } from "@/components/ui/scrollable-table";
 import { matchDetailHref } from "@/lib/sports-routes";
 import {
   FeatureDisabledBanner,
@@ -80,67 +81,69 @@ export function SettlementHistoryTable() {
           暂无结算记录。可用上方表单按 match_id 触发，或等待调度自动结算。
         </div>
       ) : (
-        <table
-          data-testid="settlements-table"
-          className="w-full border-collapse text-sm"
-        >
-          <thead>
-            <tr className="border-b">
-              <th className="p-1 text-left">比赛</th>
-              <th className="p-1 text-left">引擎</th>
-              <th className="p-1 text-left">赛事</th>
-              <th className="p-1 text-left">结果</th>
-              <th className="p-1 text-right">模型概率</th>
-              <th className="p-1 text-right">结算概率</th>
-              <th className="p-1 text-right">Brier</th>
-              <th className="p-1 text-center">方向</th>
-              <th className="p-1 text-left">状态</th>
-              <th className="p-1 text-left">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((s) => (
-              <tr key={s.id} className="border-b">
-                <td className="p-1">
-                  <Link
-                    href={matchDetailHref(s.match_id)}
-                    className="text-primary hover:underline"
-                  >
-                    {s.match_id}
-                  </Link>
-                </td>
-                <td className="p-1">{s.engine}</td>
-                <td className="p-1">{s.competition}</td>
-                <td className="p-1">{s.mapped_outcome}</td>
-                <td className="p-1 text-right">
-                  {s.model_prob !== null ? s.model_prob.toFixed(3) : "—"}
-                </td>
-                <td className="p-1 text-right">
-                  {s.settlement_implied_prob !== null
-                    ? s.settlement_implied_prob.toFixed(3)
-                    : "—"}
-                </td>
-                <td className="p-1 text-right">
-                  {s.brier_score !== null ? s.brier_score.toFixed(4) : "—"}
-                </td>
-                <td className="p-1 text-center" data-testid={`dir-${s.id}`}>
-                  {s.direction_correct === 1
-                    ? "✓"
-                    : s.direction_correct === 0
-                      ? "✗"
-                      : "—"}
-                </td>
-                <td className="p-1">{s.status}</td>
-                <td className="p-1">
-                  <ProcessSettlementButton
-                    matchId={s.match_id}
-                    onDone={() => mutate()}
-                  />
-                </td>
+        <ScrollableTable aria-label="结算历史">
+          <table
+            data-testid="settlements-table"
+            className="w-full min-w-[56rem] border-collapse text-sm"
+          >
+            <thead>
+              <tr className="border-b">
+                <th className="p-1 text-left">比赛</th>
+                <th className="p-1 text-left">引擎</th>
+                <th className="p-1 text-left">赛事</th>
+                <th className="p-1 text-left">结果</th>
+                <th className="p-1 text-right">模型概率</th>
+                <th className="p-1 text-right">结算概率</th>
+                <th className="p-1 text-right">Brier</th>
+                <th className="p-1 text-center">方向</th>
+                <th className="p-1 text-left">状态</th>
+                <th className="p-1 text-left">操作</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {items.map((s) => (
+                <tr key={s.id} className="border-b">
+                  <td className="p-1">
+                    <Link
+                      href={matchDetailHref(s.match_id)}
+                      className="text-primary hover:underline"
+                    >
+                      {s.match_id}
+                    </Link>
+                  </td>
+                  <td className="p-1">{s.engine}</td>
+                  <td className="p-1">{s.competition}</td>
+                  <td className="p-1">{s.mapped_outcome}</td>
+                  <td className="p-1 text-right">
+                    {s.model_prob !== null ? s.model_prob.toFixed(3) : "—"}
+                  </td>
+                  <td className="p-1 text-right">
+                    {s.settlement_implied_prob !== null
+                      ? s.settlement_implied_prob.toFixed(3)
+                      : "—"}
+                  </td>
+                  <td className="p-1 text-right">
+                    {s.brier_score !== null ? s.brier_score.toFixed(4) : "—"}
+                  </td>
+                  <td className="p-1 text-center" data-testid={`dir-${s.id}`}>
+                    {s.direction_correct === 1
+                      ? "✓"
+                      : s.direction_correct === 0
+                        ? "✗"
+                        : "—"}
+                  </td>
+                  <td className="p-1">{s.status}</td>
+                  <td className="p-1">
+                    <ProcessSettlementButton
+                      matchId={s.match_id}
+                      onDone={() => mutate()}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </ScrollableTable>
       )}
     </div>
   );

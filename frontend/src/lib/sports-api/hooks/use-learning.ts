@@ -1,8 +1,8 @@
 "use client";
 
-import useSWR from "swr";
+import useSWR, { mutate } from "swr";
 import { getApiBase } from "@/lib/env";
-import { buildQuery } from "../client";
+import { buildQuery, sportPost } from "../client";
 import type {
   EngineScoreItem,
   PredictionHistoryList,
@@ -10,6 +10,15 @@ import type {
   CalibrationItem,
   ReliabilityData,
 } from "../types";
+
+/**
+ * Per-engine score. The single-engine route returns a narrower row than
+ * `/engines/scores` — no calibration or timestamp columns.
+ */
+export type SingleEngineScore = Pick<
+  EngineScoreItem,
+  "engine" | "competition" | "accuracy" | "avg_mae" | "brier_score" | "sample_count"
+>;
 
 export function useEngineScores(params?: {
   engine?: string;
@@ -51,4 +60,31 @@ export function useReliability(params?: {
   const qs = buildQuery(params ?? {});
   const key = `${getApiBase()}/predictions/calibration/reliability${qs}`;
   return useSWR<ReliabilityData>(key);
+}
+
+/** Score for one engine. Returns 404 until that engine has graded samples. */
+export function useEngineScore(engine: string | null, competition?: string) {
+  const qs = buildQuery({ competition });
+  const key = engine
+    ? `${getApiBase()}/predictions/engines/${encodeURIComponent(engine)}/score${qs}`
+    : null;
+  return useSWR<SingleEngineScore>(key);
+}
+
+/**
+ * Feed one finished match's outcome back into the learning loop, then refresh
+ * the score views it updates.
+ */
+export async function processOutcome(
+  matchId: string,
+): Promise<{ match_id: string; status: string }> {
+  const result = await sportPost<{ match_id: string; status: string }>(
+    `/predictions/outcomes/${encodeURIComponent(matchId)}/process`,
+  );
+  await mutate(
+    (key) => typeof key === "string" && key.includes("/predictions/engines/"),
+    undefined,
+    { revalidate: true },
+  );
+  return result;
 }

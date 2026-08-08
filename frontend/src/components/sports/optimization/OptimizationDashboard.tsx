@@ -3,10 +3,13 @@ import { Fragment, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   useOptimizationParams,
+  useAppliedParams,
   triggerOptimization,
   triggerIngest,
   useTaskStatus,
   applyParams,
+  backfillAndSeed,
+  type BackfillSeedResult,
 } from "@/lib/sports-api";
 import type { ApplyParamsResult, OptimizedParams } from "@/lib/sports-api/types";
 import {
@@ -41,8 +44,13 @@ export function OptimizationDashboard() {
   const [busy, setBusy] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [lastApply, setLastApply] = useState<ApplyParamsResult | null>(null);
+  const [backfillResult, setBackfillResult] = useState<BackfillSeedResult | null>(null);
 
   const { data: taskStatus } = useTaskStatus(taskId);
+  // The applied set for the sport being optimized — what a new candidate would replace.
+  const { data: appliedParams } = useAppliedParams(
+    runSport === "all" ? null : runSport,
+  );
 
   const lastApplyRows = useMemo(() => {
     if (!lastApply?.weight_diff?.length) return [];
@@ -142,6 +150,18 @@ export function OptimizationDashboard() {
       await triggerIngest(ingestSport, seasons);
     } catch (e) {
       setMutationError(e instanceof Error ? e.message : "数据导入失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleBackfillSeed() {
+    setMutationError(null);
+    setBusy(true);
+    try {
+      setBackfillResult(await backfillAndSeed(ingestSport));
+    } catch (e) {
+      setMutationError(e instanceof Error ? e.message : "回填与初始化失败");
     } finally {
       setBusy(false);
     }
@@ -252,6 +272,13 @@ export function OptimizationDashboard() {
           >
             运行优化
           </button>
+          <p data-testid="applied-params" className="text-xs text-muted-foreground">
+            {runSport === "all"
+              ? "选择单一运动可查看其当前生效参数。"
+              : appliedParams
+                ? `当前生效：id=${appliedParams.id} · score ${appliedParams.score.toFixed(4)} · 样本 ${appliedParams.sample_count}`
+                : `${runSport} 暂无生效参数，优化后需手动应用。`}
+          </p>
         </div>
 
         <div className="space-y-2 rounded border p-4">
@@ -294,6 +321,27 @@ export function OptimizationDashboard() {
           >
             数据导入
           </button>
+          <button
+            type="button"
+            data-testid="backfill-seed-button"
+            onClick={handleBackfillSeed}
+            disabled={busy}
+            aria-label="回填比赛结果并初始化 Elo"
+            className="ml-2 rounded border border-border px-4 py-2 text-sm disabled:opacity-50"
+          >
+            回填结果 + 初始化 Elo
+          </button>
+          <p className="text-xs text-muted-foreground">
+            赛程已同步但结果表或 Elo 表为空时使用；该操作可重复执行。
+          </p>
+          {backfillResult && (
+            <pre
+              data-testid="backfill-seed-result"
+              className="max-h-40 overflow-auto rounded bg-muted p-2 text-xs"
+            >
+              {JSON.stringify(backfillResult, null, 2)}
+            </pre>
+          )}
         </div>
       </div>
 

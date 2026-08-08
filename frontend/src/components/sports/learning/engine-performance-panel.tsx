@@ -1,7 +1,12 @@
 "use client";
 
-import { useState } from "react";
-import { useEngineScores, type EngineScoreItem } from "@/lib/sports-api";
+import { useMemo, useState } from "react";
+import {
+  useEngineScore,
+  useEngineScores,
+  useEnginesMeta,
+  type EngineScoreItem,
+} from "@/lib/sports-api";
 
 const SPORT_OPTIONS = [
   { value: "", label: "全部" },
@@ -11,13 +16,12 @@ const SPORT_OPTIONS = [
   { value: "hockey", label: "Hockey" },
 ];
 
-const ENGINE_OPTIONS = [
-  { value: "", label: "全部" },
-  { value: "elo_odds", label: "elo_odds" },
-  { value: "basketball", label: "basketball" },
-  { value: "baseball", label: "baseball" },
-  { value: "hockey", label: "hockey" },
-];
+/**
+ * Engine names are read from `/predictions/engines/meta` so the filter tracks
+ * what the kernel actually has registered (the same vocabulary the engine
+ * score table is keyed by). This list only covers the offline case.
+ */
+const FALLBACK_ENGINES = ["elo_odds", "basketball", "baseball", "hockey"];
 
 const COMPETITION_OPTIONS = [
   { value: "", label: "全部" },
@@ -34,14 +38,14 @@ const COMPETITION_OPTIONS = [
 ];
 
 function accuracyClass(acc: number): string {
-  if (acc >= 0.70) return "text-green-600 dark:text-green-400 font-medium";
-  if (acc < 0.50) return "text-red-600 dark:text-red-400";
+  if (acc >= 0.70) return "text-green-400 font-medium";
+  if (acc < 0.50) return "text-red-400";
   return "";
 }
 
 function brierClass(brier: number): string {
-  if (brier <= 0.20) return "text-green-600 dark:text-green-400 font-medium";
-  if (brier > 0.30) return "text-red-600 dark:text-red-400";
+  if (brier <= 0.20) return "text-green-400 font-medium";
+  if (brier > 0.30) return "text-red-400";
   return "";
 }
 
@@ -58,6 +62,22 @@ export function EnginePerformancePanel() {
     competition: competition || undefined,
     sport: sport || undefined,
   });
+  // Aggregate score for a single engine — the list route groups by competition,
+  // so this is the only place the cross-competition roll-up is available.
+  const { data: engineRollup } = useEngineScore(
+    engine || null,
+    competition || undefined,
+  );
+  const { data: enginesMeta } = useEnginesMeta();
+  const engineOptions = useMemo(() => {
+    const names = enginesMeta?.engines?.length
+      ? enginesMeta.engines
+      : FALLBACK_ENGINES;
+    return [
+      { value: "", label: "全部" },
+      ...names.map((name) => ({ value: name, label: name })),
+    ];
+  }, [enginesMeta]);
   const rows: EngineScoreItem[] = data ?? [];
   const hasError = error !== undefined;
 
@@ -79,7 +99,7 @@ export function EnginePerformancePanel() {
             onChange={(e) => setEngine(e.target.value)}
             className="rounded border border-border bg-background px-2 py-1 text-sm"
           >
-            {ENGINE_OPTIONS.map((o) => (
+            {engineOptions.map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>
@@ -109,6 +129,24 @@ export function EnginePerformancePanel() {
           </select>
         </label>
       </div>
+
+      {engine && engineRollup && (
+        <div
+          data-testid="engine-rollup"
+          className="rounded border border-border bg-muted/40 px-3 py-2 text-sm"
+        >
+          <span className="font-mono">{engineRollup.engine}</span> 跨赛事汇总：准确率{" "}
+          <span className={accuracyClass(engineRollup.accuracy)}>
+            {fmtPct(engineRollup.accuracy)}
+          </span>
+          {" · "}Brier{" "}
+          <span className={brierClass(engineRollup.brier_score)}>
+            {engineRollup.brier_score?.toFixed(3) ?? "—"}
+          </span>
+          {" · "}MAE {engineRollup.avg_mae?.toFixed(2) ?? "—"}
+          {" · "}样本 {engineRollup.sample_count}
+        </div>
+      )}
 
       {rows.length === 0 ? (
         <div className="p-4 text-sm text-muted-foreground">暂无性能数据，等待比赛结果录入</div>

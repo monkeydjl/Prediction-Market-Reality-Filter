@@ -352,6 +352,14 @@ export interface FuturesSeriesRegistryEntry {
   championship_type: string;
 }
 
+/** `GET /futures/meta/series` — the registered Kalshi series prefixes. */
+export interface FuturesSeriesRegistryResponse {
+  series: FuturesSeriesRegistryEntry[];
+  competition_count: number;
+  series_count: number;
+  competitions: string[];
+}
+
 export interface FuturesCoverageResponse {
   series_registry: FuturesSeriesRegistryEntry[];
   pairs: Array<{

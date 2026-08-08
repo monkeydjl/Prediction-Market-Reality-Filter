@@ -110,7 +110,7 @@ export function RecommendationCard({
           {rec.guardrail_flags && rec.guardrail_flags.length > 0 && (
             <div data-testid={`guardrails-${rec.match_id}`} className="flex flex-wrap gap-1">
               {rec.guardrail_flags.map((f) => (
-                <span key={f} className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-800 dark:text-amber-300">
+                <span key={f} className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-300">
                   {f}
                 </span>
               ))}

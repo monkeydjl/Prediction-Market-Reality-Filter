@@ -87,7 +87,7 @@ function OutcomeCard({ outcome }: { outcome: EdgeResult }) {
                 priority === "critical"
                   ? "bg-neg/15 text-neg"
                   : priority === "high"
-                    ? "bg-amber-500/15 text-amber-700 dark:text-amber-400"
+                    ? "bg-amber-500/15 text-amber-400"
                     : "bg-muted text-muted-foreground"
               }`}
             >

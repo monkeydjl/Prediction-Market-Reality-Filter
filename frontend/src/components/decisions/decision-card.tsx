@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 
 const DECISION_META: Record<string, { label: string; cls: string }> = {
   act: { label: "建议行动", cls: "border-pos/40 bg-pos/10 text-pos" },
-  provisional_act: { label: "临时行动", cls: "border-blue-400/40 bg-blue-50/10 text-blue-600 dark:text-blue-400" },
+  provisional_act: { label: "临时行动", cls: "border-blue-400/40 bg-blue-50/10 text-blue-400" },
   watch: { label: "持续观察", cls: "border-warn/40 bg-warn/10 text-warn" },
   skip: { label: "暂不参与", cls: "border-border bg-secondary text-muted-foreground" },
 };

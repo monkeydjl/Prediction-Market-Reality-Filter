@@ -17,10 +17,10 @@ const DRIVER_LABELS: Record<string, string> = {
 };
 
 const DIRECTION_COLORS: Record<string, string> = {
-  YES: "text-green-600 dark:text-green-400",
-  NO: "text-red-600 dark:text-red-400",
-  WAIT: "text-yellow-600 dark:text-yellow-400",
-  AVOID: "text-orange-600 dark:text-orange-400",
+  YES: "text-green-400",
+  NO: "text-red-400",
+  WAIT: "text-yellow-400",
+  AVOID: "text-orange-400",
 };
 
 export function DecisionTimelinePanel({ eventId }: { eventId: string }) {
@@ -98,7 +98,7 @@ export function DecisionTimelinePanel({ eventId }: { eventId: string }) {
                   </div>
                 )}
                 {snap.llm_degraded_mode && (
-                  <div className="mt-1 text-xs text-orange-600 dark:text-orange-400">
+                  <div className="mt-1 text-xs text-orange-400">
                     LLM 降级模式
                   </div>
                 )}

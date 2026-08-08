@@ -164,7 +164,9 @@ describe("TradesPage", () => {
     expect(await screen.findByTestId("edge-definition-banner")).toHaveTextContent(
       "raw_edge",
     );
-    expect(screen.getByText("|Edge| 均值")).toBeInTheDocument();
+    // The banner renders outside the loading gate, so awaiting it does not mean
+    // the stat cards have mounted — wait on the first card before querying sync.
+    expect(await screen.findByText("|Edge| 均值")).toBeInTheDocument();
     expect(screen.getByText("方向 edge 均值")).toBeInTheDocument();
 
     expect(screen.getByRole("columnheader", { name: "raw edge" })).toBeInTheDocument();

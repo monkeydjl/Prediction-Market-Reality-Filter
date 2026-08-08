@@ -80,7 +80,7 @@ export function PendingReviewQueue() {
           data-testid="auto-verify-apply"
           disabled={busy}
           onClick={handleAutoApply}
-          className="rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-xs text-amber-900 dark:text-amber-200 hover:bg-amber-500/20 disabled:opacity-50"
+          className="rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-xs text-amber-200 hover:bg-amber-500/20 disabled:opacity-50"
         >
           执行自动核验
         </button>
@@ -132,7 +132,7 @@ export function PendingReviewQueue() {
               <p className="mt-1 font-mono text-xs">
                 confidence: {Number(l.link_confidence).toFixed(2)} ({l.link_method})
                 {Number(l.link_confidence) >= 0.95 && (
-                  <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-800 dark:text-emerald-300">
+                  <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-300">
                     ≥0.95
                   </span>
                 )}

@@ -1,5 +1,6 @@
 "use client";
 import { useMarketLinks, type MarketLink } from "@/lib/sports-api";
+import { ScrollableTable } from "@/components/ui/scrollable-table";
 
 export function MarketLinksTable({ matchId }: { matchId?: string }) {
   const { data, error, isLoading } = useMarketLinks(
@@ -17,29 +18,31 @@ export function MarketLinksTable({ matchId }: { matchId?: string }) {
   if (links.length === 0) return <div data-testid="empty">暂无市场链接</div>;
 
   return (
-    <table data-testid="market-links-table">
-      <thead>
-        <tr>
-          <th>Match</th>
-          <th>Source</th>
-          <th>Question</th>
-          <th>Implied</th>
-          <th>Verified</th>
-        </tr>
-      </thead>
-      <tbody>
-        {links.map((l) => (
-          <tr key={l.id} data-testid={`row-${l.id}`}>
-            <td>{l.match_id}</td>
-            <td>{l.source}</td>
-            <td>{l.market_question}</td>
-            <td>{(l.implied_prob * 100).toFixed(1)}%</td>
-            <td data-testid={`badge-${l.id}`}>
-              {l.verified ? "已验证" : "待验证"}
-            </td>
+    <ScrollableTable aria-label="市场链接列表">
+      <table data-testid="market-links-table" className="w-full min-w-[40rem]">
+        <thead>
+          <tr>
+            <th>Match</th>
+            <th>Source</th>
+            <th>Question</th>
+            <th>Implied</th>
+            <th>Verified</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {links.map((l) => (
+            <tr key={l.id} data-testid={`row-${l.id}`}>
+              <td>{l.match_id}</td>
+              <td>{l.source}</td>
+              <td>{l.market_question}</td>
+              <td>{(l.implied_prob * 100).toFixed(1)}%</td>
+              <td data-testid={`badge-${l.id}`}>
+                {l.verified ? "已验证" : "待验证"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </ScrollableTable>
   );
 }

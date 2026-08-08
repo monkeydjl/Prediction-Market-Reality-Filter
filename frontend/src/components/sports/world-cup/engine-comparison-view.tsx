@@ -3,30 +3,16 @@
 import { useEffect, useState } from "react";
 import { Zap, Brain, GitCompare, Target, Award, AlertCircle, Loader2, BarChart3, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getApiBase } from "@/lib/env";
+import {
+  fetchEngineComparison,
+  type EngineComparisonData,
+  type EngineComparisonKey,
+  type EngineComparisonStat,
+} from "@/lib/world-cup/predictions-api";
 
-type EngineKey = "elo_odds" | "hybrid" | "integrated" | "gbm";
+type EngineKey = EngineComparisonKey;
 
-interface EngineStat {
-  total_matches: number;
-  exact_score_rate: number;
-  outcome_accuracy: number;
-  goal_diff_accuracy: number;
-  avg_score_error: number;
-  predictions: Array<{
-    match_id: string;
-    home_team: string;
-    away_team: string;
-    predicted_score: { home: number; away: number };
-    actual_score: { home: number; away: number };
-    score_error: number;
-    outcome_correct: boolean;
-    confidence: number;
-    outcome_probability: number;
-  }>;
-}
-
-type EngineComparisonData = Partial<Record<EngineKey, EngineStat>>;
+type EngineStat = EngineComparisonStat;
 
 interface EngineConfig {
   key: EngineKey;
@@ -167,22 +153,7 @@ export function EngineComparisonView() {
         setLoading(true);
         setError(null);
 
-        const response = await fetch(
-          `${getApiBase()}/world-cup/predictions/engine-comparison`,
-          { cache: "no-store" }
-        );
-
-        if (!response.ok) {
-          throw new Error("Failed to load comparison data");
-        }
-
-        const result = await response.json();
-
-        if (result.status === "ok") {
-          setData(result.engines);
-        } else {
-          setError(result.message || "No data available");
-        }
+        setData(await fetchEngineComparison());
       } catch (err) {
         setError(err instanceof Error ? err.message : "加载失败");
       } finally {

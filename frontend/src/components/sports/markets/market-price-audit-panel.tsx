@@ -61,7 +61,7 @@ export function MarketPriceAuditPanel({ matchId }: MarketPriceAuditPanelProps) {
                   {a.flags.map((f) => (
                     <span
                       key={f}
-                      className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-800 dark:text-amber-300"
+                      className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-300"
                     >
                       {f}
                     </span>

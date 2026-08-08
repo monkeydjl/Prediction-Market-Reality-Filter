@@ -10,7 +10,7 @@ const PAGE_SIZE = 10;
 
 const SECTION_META: { key: "act" | "provisional_act" | "watch"; label: string; cls: string }[] = [
   { key: "act", label: "建议行动", cls: "border-pos/40 bg-pos/10 text-pos" },
-  { key: "provisional_act", label: "临时行动", cls: "border-blue-400/40 bg-blue-50/10 text-blue-600 dark:text-blue-400" },
+  { key: "provisional_act", label: "临时行动", cls: "border-blue-400/40 bg-blue-50/10 text-blue-400" },
   { key: "watch", label: "持续观察", cls: "border-warn/40 bg-warn/10 text-warn" },
 ];
 

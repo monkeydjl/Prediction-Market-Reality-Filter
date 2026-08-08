@@ -40,7 +40,7 @@ const LONG_OPERATION_TIMEOUT_MS = 180_000;
  * adds the `X-Client-Source` tag so backend audit metadata can attribute
  * dashboard-triggered writes ("via world-cup-dashboard / <operator>").
  */
-export function analyticsHeaders(extra?: HeadersInit): HeadersInit {
+function analyticsHeaders(extra?: HeadersInit): HeadersInit {
   const headers: Record<string, string> = {
     "X-Client-Source": ANALYTICS_CLIENT_SOURCE,
     ...buildOperatorAuthHeaders(),
@@ -74,11 +74,10 @@ export interface VerifiedResultCorrectionRequest {
 }
 
 /**
- * Low-level fetch wrapper for analytics endpoints. Most callers should use the
- * named methods on `analyticsApi` below; this is exposed for one-off calls
- * (e.g. preview with a dynamic query string).
+ * Low-level fetch wrapper for analytics endpoints. Module-private: callers go
+ * through the named methods on `analyticsApi` below.
  */
-export async function analyticsFetch<T>(
+async function analyticsFetch<T>(
   path: string,
   options: AnalyticsFetchOptions = {},
 ): Promise<T> {

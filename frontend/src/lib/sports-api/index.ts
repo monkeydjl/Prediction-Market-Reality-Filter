@@ -27,15 +27,20 @@ export type {
 } from "./hooks/use-betting-catalog";
 export {
   useEngineScores,
+  useEngineScore,
   usePredictionHistory,
   usePredictionTrajectory,
   useCalibration,
   useReliability,
+  processOutcome,
 } from "./hooks/use-learning";
+export type { SingleEngineScore } from "./hooks/use-learning";
 export {
   useMarketLinks,
   useMarketLinksByMatch,
   useLatestLinks,
+  useLinkAudit,
+  useMatchAudit,
   usePendingLinks,
   useMarketSnapshots,
   verifyLink,
@@ -60,16 +65,19 @@ export {
   useAvailableFutures,
   useFuturesCoverage,
   useFuturesLinks,
+  useFuturesSeries,
   useLatestSnapshots,
 } from "./hooks/use-futures";
 export {
   useOptimizationParams,
+  useAppliedParams,
   triggerOptimization,
   triggerIngest,
   useTaskStatus,
   applyParams,
+  backfillAndSeed,
 } from "./hooks/use-optimization";
-export type { TaskStatus } from "./hooks/use-optimization";
+export type { TaskStatus, BackfillSeedResult } from "./hooks/use-optimization";
 export {
   parseOptimizationTaskResult,
   toMetricBarPoints,

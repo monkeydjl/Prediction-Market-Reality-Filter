@@ -23,3 +23,13 @@ export function matchDetailHref(matchId: string, tab?: MatchDetailTab): string {
 export function learningHistoryHref(matchId: string): string {
   return `/sports/learning/history/?matchId=${encodeURIComponent(matchId)}`;
 }
+
+/**
+ * `/sports/futures/?competition=<comp>&season=<season>`
+ *
+ * Futures pairs are registry- and link-driven, so the (competition, season)
+ * key is a runtime value and takes the same query-param shape as match ids.
+ */
+export function futuresPairHref(competition: string, season: string): string {
+  return `/sports/futures/?competition=${encodeURIComponent(competition)}&season=${encodeURIComponent(season)}`;
+}

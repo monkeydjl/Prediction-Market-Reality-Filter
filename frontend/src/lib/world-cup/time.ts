@@ -1,6 +1,6 @@
 const HAS_TIME_ZONE = /(?:Z|[+-]\d{2}:?\d{2})$/;
 
-export const BEIJING_TIME_ZONE = "Asia/Shanghai";
+const BEIJING_TIME_ZONE = "Asia/Shanghai";
 
 export function parseWorldCupUtcDate(isoString: string): Date {
   return new Date(HAS_TIME_ZONE.test(isoString) ? isoString : `${isoString}Z`);

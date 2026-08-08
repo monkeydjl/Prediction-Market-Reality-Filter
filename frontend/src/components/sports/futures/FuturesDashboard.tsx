@@ -7,6 +7,8 @@ import {
 } from "@/lib/sports-api";
 import type { FuturesMultiLegIntegrity, FuturesPair } from "@/lib/sports-api";
 import { ScrollableTable } from "@/components/ui/scrollable-table";
+import { FuturesLegsTable } from "./futures-legs-table";
+import { FuturesSeriesPanel } from "./futures-series-panel";
 
 function integrityBadgeClass(status: string | undefined): string {
   switch (status) {
@@ -58,7 +60,18 @@ function IntegritySummary({
   );
 }
 
-export function FuturesDashboard() {
+/**
+ * @param competition - Deep-linked pair key from `?competition=` (OQ-3). When it
+ *   matches an available pair it wins over local clicks, so the URL stays the
+ *   single source of truth for which pair is on screen.
+ */
+export function FuturesDashboard({
+  competition,
+  season,
+}: {
+  competition?: string | null;
+  season?: string | null;
+} = {}) {
   const {
     data: futuresData,
     error: pairsError,
@@ -74,9 +87,14 @@ export function FuturesDashboard() {
 
   const [picked, setPicked] = useState<FuturesPair | null>(null);
 
-  // Default to the first pair once it loads. Derived at render rather than
-  // assigned from an effect, which would setState synchronously on mount.
-  const selected = picked ?? pairs?.[0] ?? null;
+  // Precedence: URL query param → local click → first pair. Derived at render
+  // rather than assigned from an effect, which would setState synchronously on
+  // mount.
+  const fromQuery =
+    competition && season
+      ? pairs?.find((p) => p.competition === competition && p.season === season) ?? null
+      : null;
+  const selected = fromQuery ?? picked ?? pairs?.[0] ?? null;
 
   const {
     data: snapshotsData,
@@ -106,6 +124,7 @@ export function FuturesDashboard() {
         {!coverageLoading && coverage && (
           <CoveragePanel coverage={coverage} error={coverageError} />
         )}
+        <FuturesSeriesPanel pairs={[]} />
       </div>
     );
 
@@ -121,24 +140,28 @@ export function FuturesDashboard() {
         <CoveragePanel coverage={coverage} error={coverageError} />
       )}
 
+      <FuturesSeriesPanel pairs={pairs} />
+
       <div className="flex flex-wrap gap-2">
         {pairs.map((p) => {
           const st = p.integrity?.status;
+          const isSelected =
+            selected?.competition === p.competition && selected?.season === p.season;
           return (
             <button
               key={`${p.competition}-${p.season}`}
               type="button"
+              aria-pressed={isSelected}
               onClick={() => setPicked(p)}
-              className={`rounded border px-3 py-1 text-sm ${
-                selected?.competition === p.competition &&
-                selected?.season === p.season
-                  ? "bg-blue-600 text-white"
-                  : "bg-white text-black"
+              className={`rounded border px-3 py-1 text-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none ${
+                isSelected
+                  ? "border-primary bg-primary/15 text-primary"
+                  : "border-border bg-card text-foreground hover:bg-muted"
               }`}
             >
               {p.competition} {p.season}
               {p.verified_count != null && (
-                <span className="ml-1 opacity-80">({p.verified_count})</span>
+                <span className="ml-1 tabular-nums opacity-80">({p.verified_count})</span>
               )}
               {st && st !== "ok" && (
                 <span className="ml-1 text-[10px] uppercase opacity-90">{st}</span>
@@ -161,39 +184,44 @@ export function FuturesDashboard() {
         <div>该赛事暂无快照数据</div>
       ) : (
         <div data-testid="snapshots-table" className="space-y-4">
-          <h2 className="text-xl font-bold">
+          <h2 className="text-base font-semibold">
             {selected?.competition} {selected?.season} 最新价格
           </h2>
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse border text-sm">
+          <ScrollableTable aria-label={`${selected?.competition} ${selected?.season} 最新价格`}>
+            <table className="w-full min-w-[40rem] border-collapse text-sm">
               <thead>
-                <tr className="bg-gray-100">
-                  <th className="border p-2 text-left">Team</th>
-                  <th className="border p-2 text-left">Implied Prob</th>
-                  <th className="border p-2 text-left">Price</th>
-                  <th className="border p-2 text-left">Liquidity</th>
-                  <th className="border p-2 text-left">Volume</th>
-                  <th className="border p-2 text-left">Captured At</th>
+                <tr className="border-b border-border text-left text-muted-foreground">
+                  <th scope="col" className="p-2">球队</th>
+                  <th scope="col" className="p-2">隐含概率</th>
+                  <th scope="col" className="p-2">价格</th>
+                  <th scope="col" className="p-2">流动性</th>
+                  <th scope="col" className="p-2">成交量</th>
+                  <th scope="col" className="p-2">采集时间</th>
                 </tr>
               </thead>
               <tbody>
                 {snapshots.map((s) => (
-                  <tr key={s.id}>
-                    <td className="border p-2">{s.team ?? "-"}</td>
-                    <td className="border p-2">{s.implied_prob.toFixed(4)}</td>
-                    <td className="border p-2">
-                      {s.price !== null ? s.price.toFixed(4) : "-"}
+                  <tr key={s.id} className="border-b border-border/50">
+                    <td className="p-2">{s.team ?? "—"}</td>
+                    <td className="p-2 tabular-nums">{s.implied_prob.toFixed(4)}</td>
+                    <td className="p-2 tabular-nums">
+                      {s.price !== null ? s.price.toFixed(4) : "—"}
                     </td>
-                    <td className="border p-2">{s.liquidity ?? "-"}</td>
-                    <td className="border p-2">{s.volume ?? "-"}</td>
-                    <td className="border p-2">{s.captured_at}</td>
+                    <td className="p-2 tabular-nums">{s.liquidity ?? "—"}</td>
+                    <td className="p-2 tabular-nums">{s.volume ?? "—"}</td>
+                    <td className="p-2 tabular-nums">{s.captured_at}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollableTable>
         </div>
       )}
+
+      <FuturesLegsTable
+        competition={selected?.competition ?? null}
+        season={selected?.season ?? null}
+      />
     </div>
   );
 }

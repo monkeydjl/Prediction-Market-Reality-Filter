@@ -156,7 +156,7 @@ export function CompetitionLanding({ competition: staticComp }: Props) {
             <span
               className={
                 competition.adapterLikely === true
-                  ? "text-amber-800 dark:text-amber-300"
+                  ? "text-amber-300"
                   : "text-muted-foreground"
               }
             >

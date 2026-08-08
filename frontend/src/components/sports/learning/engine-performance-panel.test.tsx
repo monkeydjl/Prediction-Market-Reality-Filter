@@ -3,10 +3,12 @@ import { render, screen, waitFor } from "@testing-library/react";
 
 const apiMocks = vi.hoisted(() => ({
   useEngineScores: vi.fn(),
+  useEnginesMeta: vi.fn(),
 }));
 vi.mock("@/lib/sports-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/sports-api")>()),
   useEngineScores: apiMocks.useEngineScores,
+  useEnginesMeta: apiMocks.useEnginesMeta,
 }));
 
 import { EnginePerformancePanel } from "./engine-performance-panel";
@@ -25,6 +27,8 @@ const mockScore = {
 describe("EnginePerformancePanel", () => {
   beforeEach(() => {
     apiMocks.useEngineScores.mockReset();
+    apiMocks.useEnginesMeta.mockReset();
+    apiMocks.useEnginesMeta.mockReturnValue({ data: undefined });
   });
 
   it("renders filter dropdowns", async () => {
@@ -88,6 +92,28 @@ describe("EnginePerformancePanel", () => {
     await waitFor(() => {
       expect(screen.getByText("加载失败")).toBeInTheDocument();
     });
+  });
+
+  it("drives the engine filter from the registered engines", async () => {
+    apiMocks.useEngineScores.mockReturnValue({
+      data: [],
+      error: undefined,
+      isLoading: false,
+    });
+    apiMocks.useEnginesMeta.mockReturnValue({
+      data: {
+        engines: ["elo_odds", "dixon_coles"],
+        kernel_enabled: true,
+        flags: { dixon_coles: true },
+      },
+    });
+    render(<EnginePerformancePanel />);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("option", { name: "dixon_coles" }),
+      ).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("option", { name: "hockey" })).toBeNull();
   });
 
   it("applies green color class for high accuracy", async () => {

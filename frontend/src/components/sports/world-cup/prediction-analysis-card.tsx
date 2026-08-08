@@ -2,25 +2,25 @@
 
 import { useState, useEffect } from "react";
 import { Brain, Loader2, AlertCircle, TrendingUp, Clock, Sparkles } from "lucide-react";
-import type { MatchFixture, MatchPrediction } from "@/lib/world-cup/predictions-api";
-import { analyzePrediction, postHeaders } from "@/lib/world-cup/predictions-api";
+import type {
+  AIAnalysisHistoryEntry,
+  MatchFixture,
+  MatchPrediction,
+} from "@/lib/world-cup/predictions-api";
+import {
+  analyzePrediction,
+  fetchAnalysisHistory,
+  optimizePrediction,
+} from "@/lib/world-cup/predictions-api";
 import { translateTeamName } from "@/lib/world-cup/team-names-zh";
 import { cn } from "@/lib/utils";
-import { getApiBase } from "@/lib/env";
 
 interface PredictionAnalysisCardProps {
   match: MatchFixture;
   prediction: MatchPrediction;
 }
 
-interface AnalysisHistoryEntry {
-  id: number;
-  analysis: string;
-  predicted_score: { home: number; away: number };
-  confidence: number;
-  prediction_method?: string;
-  created_at: string;
-}
+type AnalysisHistoryEntry = AIAnalysisHistoryEntry;
 
 function formatTimestamp(isoString: string): string {
   const date = new Date(isoString);
@@ -46,20 +46,13 @@ export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysis
     async function loadHistory() {
       try {
         setLoadingHistory(true);
-        const response = await fetch(
-          `${getApiBase()}/world-cup/predictions/matches/${match.match_id}/analysis-history`,
-          { cache: "no-store" }
-        );
+        const entries = await fetchAnalysisHistory(match.match_id);
+        setHistory(entries);
 
-        if (response.ok) {
-          const data = await response.json();
-          setHistory(data.history || []);
-
-          // If there's a recent analysis, show it by default
-          if (data.history && data.history.length > 0) {
-            setAnalysis(data.history[0].analysis);
-            setCached(true);
-          }
+        // If there's a recent analysis, show it by default
+        if (entries.length > 0) {
+          setAnalysis(entries[0].analysis);
+          setCached(true);
         }
       } catch (err) {
         console.error("Failed to load analysis history:", err);
@@ -80,15 +73,12 @@ export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysis
       setAnalysis(result);
       setCached(false);
 
-      // Reload history to include the new analysis
-      const response = await fetch(
-        `${getApiBase()}/world-cup/predictions/matches/${match.match_id}/analysis-history`,
-        { cache: "no-store" }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        setHistory(data.history || []);
+      // Reload history to include the new analysis. Failing to refresh the
+      // list must not surface as an analysis failure — the analysis succeeded.
+      try {
+        setHistory(await fetchAnalysisHistory(match.match_id));
+      } catch (err) {
+        console.error("Failed to reload analysis history:", err);
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "分析失败";
@@ -109,21 +99,7 @@ export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysis
     setError(null);
 
     try {
-      const response = await fetch(
-        `${getApiBase()}/world-cup/predictions/matches/${match.match_id}/optimize`,
-        {
-          method: "POST",
-          headers: postHeaders(),
-          cache: "no-store"
-        }
-      );
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
-        throw new Error(data.detail || `HTTP ${response.status}`);
-      }
-
-      const data = await response.json();
+      const data = await optimizePrediction(match.match_id);
       if (data.status === "ok") {
         const opt = data.optimization;
 

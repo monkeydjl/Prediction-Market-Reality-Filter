@@ -195,9 +195,14 @@ export interface TraditionalOddsHistory {
   skip_reason: string | null;
 }
 
+/** `sport-odds/{id}/latest` folds the outcome key into each row. */
+export interface TraditionalOddsLatestOutcome extends TraditionalOddsSnapshot {
+  mapped_outcome: string;
+}
+
 export interface TraditionalOddsLatest {
   match_id: string;
-  outcomes: TraditionalOddsSnapshot[];
+  outcomes: TraditionalOddsLatestOutcome[];
   skipped: boolean;
   skip_reason: string | null;
 }
@@ -345,6 +350,14 @@ export interface FuturesSeriesRegistryEntry {
   series_prefix: string;
   competition: string;
   championship_type: string;
+}
+
+/** `GET /futures/meta/series` — the registered Kalshi series prefixes. */
+export interface FuturesSeriesRegistryResponse {
+  series: FuturesSeriesRegistryEntry[];
+  competition_count: number;
+  series_count: number;
+  competitions: string[];
 }
 
 export interface FuturesCoverageResponse {

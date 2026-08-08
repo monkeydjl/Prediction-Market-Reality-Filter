@@ -37,9 +37,21 @@ describe("useMarketLinksByMatch", () => {
 });
 
 describe("useLatestLinks", () => {
-  it("builds key for a matchId", () => {
+  it("builds key for a matchId and does not poll by default", () => {
     useLatestLinks("m1");
-    expect(useSWR).toHaveBeenCalledWith("/api/sport-markets/links/m1/latest");
+    expect(useSWR).toHaveBeenCalledWith("/api/sport-markets/links/m1/latest", undefined);
+  });
+
+  it("passes a refresh interval when realtime is on", () => {
+    useLatestLinks("m1", 15_000);
+    expect(useSWR).toHaveBeenCalledWith("/api/sport-markets/links/m1/latest", {
+      refreshInterval: 15_000,
+    });
+  });
+
+  it("holds the key null until a match is picked", () => {
+    useLatestLinks(null);
+    expect(useSWR).toHaveBeenCalledWith(null, undefined);
   });
 });
 

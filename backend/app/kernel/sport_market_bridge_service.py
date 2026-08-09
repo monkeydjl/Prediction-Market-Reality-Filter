@@ -208,19 +208,93 @@ class SportMarketBridgeService:
             implied_prob=implied_prob,
         )
 
+    def _resolve_match_id(
+        self,
+        *,
+        competition: str | None,
+        detected_teams: list[str],
+        detected_date: str | None,
+    ) -> str | None:
+        """Find the fixture a market refers to, by canonical team ids.
+
+        The three-layer engine scores a market against a *given* match_id; it
+        cannot answer "which match is this?". Resolution is deliberately
+        deterministic — running the LLM layer once per fixture would multiply
+        cost by the size of the slate. Returns None when the pair is ambiguous
+        or absent, which the caller reports as an unlinked candidate.
+        """
+        if not competition or len(detected_teams) < 2:
+            return None
+
+        from sqlalchemy import select
+
+        from app.kernel.kernel_db import KernelMatchFixture, get_kernel_session
+
+        wanted = set(detected_teams)
+        session = get_kernel_session()
+        try:
+            query = select(KernelMatchFixture).where(
+                KernelMatchFixture.competition == competition
+            )
+            fixtures = session.execute(query).scalars().all()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Fixture lookup failed for %s: %s", competition, exc)
+            return None
+        finally:
+            session.close()
+
+        matches = []
+        for fixture in fixtures:
+            home = resolve_team(fixture.home_team, competition)
+            away = resolve_team(fixture.away_team, competition)
+            if not home or not away:
+                continue
+            if {home, away} != wanted:
+                continue
+            # Same pairing can recur across a season — the date disambiguates.
+            if detected_date and fixture.kickoff_utc is not None:
+                if fixture.kickoff_utc.strftime("%Y-%m-%d") != detected_date:
+                    continue
+            matches.append(fixture.match_id)
+
+        if len(matches) != 1:
+            if matches:
+                logger.info(
+                    "Ambiguous fixture for %s %s (%d candidates); skipping",
+                    competition, sorted(wanted), len(matches),
+                )
+            return None
+        return matches[0]
+
     async def link_kalshi_market(self, candidate: dict) -> dict:
         """Link a Kalshi sports market to a match via the three-layer matching engine.
 
         Parallel to ``link_polymarket_market`` but reads its inputs from a
         candidate dict (produced by ``fetch_kalshi_sport_markets``) and stores
-        the link with ``source='kalshi'``. The candidate dict must include a
-        ``match_id`` field identifying the match to link to (mirroring the
-        ``match_id`` kwarg that ``link_polymarket_market`` requires).
+        the link with ``source='kalshi'``.
+
+        ``match_id`` is optional in the candidate. The Kalshi source only knows
+        the competition, date, and canonical team ids it detected — not which
+        fixture those correspond to — so when the key is absent we resolve it
+        against ``kernel_match_fixtures``. An unresolvable candidate returns
+        ``linked=False`` with a ``reason``; it is not an error.
         """
-        match_id = candidate["match_id"]
         market_question = candidate.get("question", "")
         detected_teams = candidate.get("detected_teams", [])
         detected_competition = candidate.get("detected_competition")
+
+        match_id = candidate.get("match_id") or self._resolve_match_id(
+            competition=detected_competition,
+            detected_teams=detected_teams,
+            detected_date=candidate.get("detected_date"),
+        )
+        if not match_id:
+            return {
+                "linked": False,
+                "verified": False,
+                "source": "kalshi",
+                "reason": "no_matching_fixture",
+            }
 
         rule_result = self._rule_match(
             match_id=match_id,

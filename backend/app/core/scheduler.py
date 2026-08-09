@@ -629,21 +629,35 @@ async def _job_discover_sport_markets():
             polymarket_count = len(polymarket_candidates)
 
         kalshi_count = 0
+        kalshi_linked = 0
+        kalshi_unresolved = 0
+        kalshi_errors = 0
         if settings.PHASE11_KALSHI_SPORTS_ENABLED:
             try:
                 kalshi_candidates = await fetch_kalshi_sport_markets(limit=100)
                 kalshi_count = len(kalshi_candidates)
                 for candidate in kalshi_candidates:
                     try:
-                        await bridge.link_kalshi_market(candidate)
+                        result = await bridge.link_kalshi_market(candidate)
+                        if result.get("linked"):
+                            kalshi_linked += 1
+                        else:
+                            kalshi_unresolved += 1
                     except Exception:
+                        kalshi_errors += 1
                         logger.warning("Failed to link Kalshi market", exc_info=True)
             except Exception:
                 logger.warning("Kalshi sports discovery failed", exc_info=True)
 
+        # Record link outcomes, not just candidate counts: a run that fetched
+        # 100 candidates and linked none is not a healthy run, and the ledger
+        # should say so.
         _finish_run(run_id, "success", result={
             "polymarket_candidates": polymarket_count,
             "kalshi_candidates": kalshi_count,
+            "kalshi_linked": kalshi_linked,
+            "kalshi_unresolved": kalshi_unresolved,
+            "kalshi_errors": kalshi_errors,
         })
     except Exception as exc:
         logger.exception("[Scheduler] Sport market discovery failed")

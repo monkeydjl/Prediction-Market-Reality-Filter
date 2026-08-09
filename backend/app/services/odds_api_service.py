@@ -234,7 +234,7 @@ def normalize_team_name(name: str) -> str:
     return name.lower().replace(" ", "").replace("-", "").replace("'", "")
 
 
-def extract_best_odds(fixture: dict) -> dict[str, Any]:
+def extract_best_odds(fixture: dict) -> dict[str, Any] | None:
     """Extract best available odds from fixture data.
 
     Uses the sharpest bookmaker (Pinnacle preferred) or averages
@@ -246,24 +246,20 @@ def extract_best_odds(fixture: dict) -> dict[str, Any]:
     Returns:
         {
             "home": float,
-            "draw": float,
             "away": float,
+            "draw": float | None,   # absent for two-way sports (nba/mlb/nhl)
             "source": str,
             "last_update": str,
             "bookmakers_count": int
         }
+        or None when no bookmaker quoted a usable h2h line. Callers must treat
+        None as "no odds" — never substitute placeholder prices, which would
+        be stored as if they were real market data.
     """
     bookmakers = fixture.get("bookmakers", [])
 
     if not bookmakers:
-        return {
-            "home": 2.5,
-            "draw": 3.2,
-            "away": 3.0,
-            "source": "default",
-            "last_update": datetime.now(timezone.utc).isoformat(),
-            "bookmakers_count": 0
-        }
+        return None
 
     # Priority: Pinnacle (sharpest) > Average of all
     pinnacle = None
@@ -278,7 +274,8 @@ def extract_best_odds(fixture: dict) -> dict[str, Any]:
                 continue
 
             outcomes = market.get("outcomes", [])
-            if len(outcomes) != 3:
+            # Two-way (nba/mlb/nhl) and three-way (football) h2h both valid.
+            if len(outcomes) not in (2, 3):
                 continue
 
             # Parse odds
@@ -287,6 +284,9 @@ def extract_best_odds(fixture: dict) -> dict[str, Any]:
                 outcome_name = outcome.get("name", "").lower()
                 price = outcome.get("price")
 
+                if price is None or price <= 0:
+                    continue
+
                 if "draw" in outcome_name or outcome_name == "draw":
                     odds_dict["draw"] = price
                 elif outcome_name == fixture.get("home_team", "").lower():
@@ -294,7 +294,7 @@ def extract_best_odds(fixture: dict) -> dict[str, Any]:
                 elif outcome_name == fixture.get("away_team", "").lower():
                     odds_dict["away"] = price
 
-            if len(odds_dict) == 3:
+            if len(odds_dict) == len(outcomes):
                 all_odds.append({
                     "bookmaker": bookmaker.get("title", bookmaker_name),
                     "odds": odds_dict,
@@ -308,7 +308,7 @@ def extract_best_odds(fixture: dict) -> dict[str, Any]:
     if pinnacle:
         return {
             "home": pinnacle["odds"]["home"],
-            "draw": pinnacle["odds"]["draw"],
+            "draw": pinnacle["odds"].get("draw"),
             "away": pinnacle["odds"]["away"],
             "source": "pinnacle",
             "last_update": pinnacle["last_update"],
@@ -318,27 +318,30 @@ def extract_best_odds(fixture: dict) -> dict[str, Any]:
     # Otherwise, average across all bookmakers
     if all_odds:
         avg_home = sum(o["odds"]["home"] for o in all_odds) / len(all_odds)
-        avg_draw = sum(o["odds"]["draw"] for o in all_odds) / len(all_odds)
         avg_away = sum(o["odds"]["away"] for o in all_odds) / len(all_odds)
+        # Draw is absent on two-way sports; average only the books that quoted it.
+        draws = [o["odds"]["draw"] for o in all_odds if o["odds"].get("draw")]
+        avg_draw = round(sum(draws) / len(draws), 2) if draws else None
 
         return {
             "home": round(avg_home, 2),
-            "draw": round(avg_draw, 2),
+            "draw": avg_draw,
             "away": round(avg_away, 2),
             "source": f"average_{len(all_odds)}_bookmakers",
             "last_update": all_odds[0]["last_update"],
             "bookmakers_count": len(all_odds)
         }
 
-    # Fallback
-    return {
-        "home": 2.5,
-        "draw": 3.2,
-        "away": 3.0,
-        "source": "fallback",
-        "last_update": datetime.now(timezone.utc).isoformat(),
-        "bookmakers_count": 0
-    }
+    # No bookmaker quoted a usable h2h line. Return None rather than inventing
+    # prices — a placeholder here is indistinguishable from a real quote once
+    # stored, and every downstream edge would be computed against it.
+    logger.warning(
+        "No usable h2h odds for %s vs %s (%d bookmakers returned)",
+        fixture.get("home_team", "?"),
+        fixture.get("away_team", "?"),
+        len(bookmakers),
+    )
+    return None
 
 
 async def get_available_quota() -> dict[str, int] | None:

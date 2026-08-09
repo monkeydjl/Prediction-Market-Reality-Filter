@@ -375,9 +375,10 @@ FastAPI 生命周期启动时会：
 
 ### 6.1 打开页面
 
-启动服务后访问根路径：
+用 `start.bat` 启动后，Dashboard 在独立端口上：
 
-- http://localhost:8000
+- http://localhost:3000 —— Dashboard
+- http://localhost:8000/docs —— 后端 API 文档
 
 Dashboard 是 Next.js 应用，前端代码在 `frontend/`。
 
@@ -398,13 +399,13 @@ Dashboard 调用的是同一个后端 API，所以如果页面没有数据显示
 
 ### 6.3 修改 Dashboard 后的检查
 
-如果改过 `static/index.html` 或 `static/index_zh.html`，至少运行一次内联脚本语法检查：
+Dashboard 已经是 `frontend/` 下的 Next.js 应用（旧的 `static/index.html` 单页已经不存在）。改过前端代码后，至少跑一遍：
 
 ```bash
-node -e "const fs=require('fs'); for (const file of ['static/index.html','static/index_zh.html']) { const html=fs.readFileSync(file,'utf8'); const m=html.match(/<script>([\s\S]*)<\/script>/); new Function(m?m[1]:''); } console.log('dashboard scripts OK');"
+cd frontend && npm run lint && npm run typecheck && npm test
 ```
 
-如果浏览器打开空白页，先看开发者工具 Console，再用上面命令排除语法错误。
+如果浏览器打开空白页，先看开发者工具 Console，再用 `npm run build` 确认静态导出没有报错。
 
 ---
 

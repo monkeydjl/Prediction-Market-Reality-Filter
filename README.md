@@ -66,16 +66,16 @@ Phase 1-13 的完整 spec 和 plan 位于 [docs/superpowers/specs/](docs/superpo
 | 部分 | 技术 | 说明 |
 |------|------|------|
 | `backend/` | FastAPI + Python | 事件发现 / 分析 / 存储 / 校准 API，多源采集，多模型交叉验证；内置 Sports Prediction OS |
-| `frontend/` | Next.js 16 (静态导出) | 仪表盘 UI，构建后由后端在 `/` 路径一并服务 |
+| `frontend/` | Next.js 16 (静态导出) | 仪表盘 UI，构建到 `frontend/out/` 后由静态服务器托管 |
 
-生产模式下前端构建到 `frontend/out/`，由 FastAPI 同源服务，整个系统跑在一个端口（`:8000`）。
+`start.bat` 的生产模式起两个进程：后端 `:8000`（`BACKEND_SERVE_FRONTEND=false`）+ 静态服务器 `:3000` 托管 `frontend/out/`，浏览器打开 `:3000`。后端也能自己在 `/` 上服务 `frontend/out/`（把 `BACKEND_SERVE_FRONTEND` 留成 true 并手动起后端即可单端口跑），但 `start.bat` 不走这条路。
 
 ## 快速开始
 
 ### 一键启动（Windows）
 
 ```bat
-start.bat          :: 生产：构建前端(按需) + 起后端，全部在 :8000
+start.bat          :: 生产：构建前端(按需) + 后端 :8000 + 静态前端 :3000（两窗口）
 start.bat build    :: 强制重新构建前端后再起
 start.bat dev      :: 开发：后端 :8000 + 前端热重载 :3000（两窗口）
 ```

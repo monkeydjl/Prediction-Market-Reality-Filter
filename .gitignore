@@ -126,6 +126,7 @@ Thumbs.db
 
 # ── Backups (local data snapshots, e.g. event_store.json.bak) ─────────────────
 *.bak
+backend/event_store.json.bak*
 *.db.bak*
 *.db-*
 backend/*.db.bak*

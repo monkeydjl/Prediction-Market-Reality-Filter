@@ -149,8 +149,8 @@ python -m compileall app tests
 # 2. Unit tests
 python -m pytest tests
 
-# 3. Dashboard JS (only if you changed static/index.html or static/index_zh.html)
-node -e "const fs=require('fs'); for (const file of ['static/index.html','static/index_zh.html']) { const html=fs.readFileSync(file,'utf8'); const m=html.match(/<script>([\s\S]*)<\/script>/); new Function(m?m[1]:''); } console.log('✅ dashboard scripts OK');"
+# 3. Dashboard (only if you changed anything under ../frontend)
+cd ../frontend && npm run lint && npm run typecheck && npm test
 ```
 
 ---

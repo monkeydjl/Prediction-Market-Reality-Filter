@@ -846,7 +846,7 @@ async def _job_capture_market_snapshots():
             try:
                 links = link_store.get_verified_links(match_id=match_id)
                 for link in links:
-                    price = await bridge.fetch_current_price(link["contract_id"])
+                    price = await bridge.fetch_link_price(link)
                     if price is not None:
                         captured_at = datetime.now(timezone.utc)
                         snap_store.append_snapshot(

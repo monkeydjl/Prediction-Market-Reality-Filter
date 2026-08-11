@@ -460,15 +460,7 @@ class SportMarketBridgeService:
             if link.get("source") == "kalshi":
                 # Additive dispatch: Kalshi links fetch by ticker via the
                 # Kalshi markets endpoint. Failures are skipped (None).
-                try:
-                    kalshi_data = await self._fetch_kalshi_price(link["contract_id"])
-                except Exception:
-                    logger.debug(
-                        "Kalshi price fetch failed for %s",
-                        link.get("contract_id"),
-                        exc_info=True,
-                    )
-                    kalshi_data = None
+                kalshi_data = await self.fetch_link_price(link)
                 price = kalshi_data.get("implied_prob") if kalshi_data else None
             else:
                 price = await self._fetch_latest_price(link)
@@ -481,6 +473,34 @@ class SportMarketBridgeService:
             )
             count += 1
         return count
+
+    async def fetch_link_price(self, link: dict) -> dict | None:
+        """Fetch the current price for a verified link, dispatching by source.
+
+        ``fetch_current_price`` queries the Polymarket gamma API by contract
+        ``id``. A Kalshi link stores a Kalshi *ticker* in ``contract_id``, so
+        sending it to gamma matches nothing and the link silently never gets a
+        snapshot. Dispatch on ``link["source"]`` so each venue is queried
+        through its own endpoint. Unknown/absent source falls back to
+        Polymarket, which is how every pre-Kalshi link is stored.
+
+        Both venues quote 0-1, so ``implied_prob`` is directly comparable.
+        Returns None when the price is unavailable.
+        """
+        contract_id = link.get("contract_id")
+        if not contract_id:
+            return None
+
+        if link.get("source") == "kalshi":
+            try:
+                return await self._fetch_kalshi_price(contract_id)
+            except Exception:
+                logger.debug(
+                    "Kalshi price fetch failed for %s", contract_id, exc_info=True,
+                )
+                return None
+
+        return await self.fetch_current_price(contract_id)
 
     async def fetch_current_price(self, contract_id: str) -> dict | None:
         """Fetch the current price and implied prob for a Polymarket contract.

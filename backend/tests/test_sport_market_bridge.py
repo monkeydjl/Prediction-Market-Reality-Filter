@@ -230,3 +230,66 @@ async def test_capture_snapshots(stores):
     snaps = snapshot_store.get_snapshots(link_id=links[0]["id"])
     assert len(snaps) == 1
     assert snaps[0]["implied_prob"] == pytest.approx(0.62)
+
+
+# --- Test 8: price fetch dispatches by link source ---
+
+@pytest.mark.asyncio
+async def test_fetch_link_price_routes_kalshi_to_the_kalshi_endpoint(stores):
+    """A Kalshi link must not be priced against the Polymarket gamma API.
+
+    gamma is queried by contract ``id``; a Kalshi link stores a Kalshi ticker
+    there, so routing it to gamma matches nothing and the link silently never
+    gets a snapshot. The scheduler used to call fetch_current_price for EVERY
+    verified link, which is exactly that bug.
+    """
+    from app.kernel.sport_market_bridge_service import SportMarketBridgeService
+    link_store, snapshot_store = stores
+    svc = SportMarketBridgeService(link_store=link_store, snapshot_store=snapshot_store)
+    svc._fetch_kalshi_price = AsyncMock(
+        return_value={"implied_prob": 0.71, "price": 0.71, "liquidity": 5.0, "volume": 9.0}
+    )
+    svc.fetch_current_price = AsyncMock(return_value={"implied_prob": 0.1, "price": 0.1})
+
+    price = await svc.fetch_link_price(
+        {"id": 1, "contract_id": "KXNBA-25JAN01-LAL", "source": "kalshi"}
+    )
+
+    svc._fetch_kalshi_price.assert_awaited_once_with("KXNBA-25JAN01-LAL")
+    svc.fetch_current_price.assert_not_awaited()
+    assert price["implied_prob"] == pytest.approx(0.71)
+
+
+@pytest.mark.asyncio
+async def test_fetch_link_price_routes_polymarket_and_unknown_source_to_gamma(stores):
+    """Polymarket links - and pre-Kalshi links with no source - use gamma."""
+    from app.kernel.sport_market_bridge_service import SportMarketBridgeService
+    link_store, snapshot_store = stores
+    svc = SportMarketBridgeService(link_store=link_store, snapshot_store=snapshot_store)
+    svc._fetch_kalshi_price = AsyncMock()
+    svc.fetch_current_price = AsyncMock(return_value={"implied_prob": 0.42, "price": 0.42})
+
+    for link in (
+        {"id": 1, "contract_id": "poly-1", "source": "polymarket"},
+        {"id": 2, "contract_id": "poly-2"},
+    ):
+        price = await svc.fetch_link_price(link)
+        assert price["implied_prob"] == pytest.approx(0.42)
+
+    svc._fetch_kalshi_price.assert_not_awaited()
+    assert svc.fetch_current_price.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_link_price_swallows_kalshi_failure(stores):
+    """A Kalshi fetch error skips that link instead of aborting the match."""
+    from app.kernel.sport_market_bridge_service import SportMarketBridgeService
+    link_store, snapshot_store = stores
+    svc = SportMarketBridgeService(link_store=link_store, snapshot_store=snapshot_store)
+    svc._fetch_kalshi_price = AsyncMock(side_effect=RuntimeError("kalshi 500"))
+
+    price = await svc.fetch_link_price(
+        {"id": 1, "contract_id": "KXNBA-1", "source": "kalshi"}
+    )
+
+    assert price is None

@@ -39,9 +39,9 @@ async def test_market_snapshot_broadcasts_when_enabled(mock_manager, monkeypatch
         {"id": 42, "contract_id": "c-1"}
     ]
 
-    # Stub bridge: fetch_current_price returns a price dict
+    # Stub bridge: fetch_link_price returns a price dict
     mock_bridge = MagicMock()
-    mock_bridge.fetch_current_price = AsyncMock(
+    mock_bridge.fetch_link_price = AsyncMock(
         return_value={
             "implied_prob": 0.65,
             "price": 0.67,
@@ -155,7 +155,7 @@ async def test_no_broadcast_when_disabled(mock_manager, monkeypatch):
     ]
 
     mock_bridge = MagicMock()
-    mock_bridge.fetch_current_price = AsyncMock(
+    mock_bridge.fetch_link_price = AsyncMock(
         return_value={
             "implied_prob": 0.65,
             "price": 0.67,
@@ -189,3 +189,54 @@ async def test_no_broadcast_when_disabled(mock_manager, monkeypatch):
         await _job_capture_market_snapshots()
 
     mock_manager.broadcast_to_match.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_job_passes_the_whole_link_so_kalshi_is_routed(monkeypatch):
+    """The snapshot job must dispatch by link source, not assume Polymarket.
+
+    It used to call fetch_current_price(link["contract_id"]) for every verified
+    link. That method queries the Polymarket gamma API by contract id, so a
+    Kalshi link - whose contract_id is a Kalshi ticker - matched nothing and
+    silently never got a snapshot. Passing the whole link lets the bridge route
+    each venue to its own endpoint.
+    """
+    monkeypatch.setattr(settings, "PHASE10_REALTIME_PUSH_ENABLED", False)
+    monkeypatch.setattr(settings, "PHASE7_SPORT_MARKET_BRIDGE_ENABLED", True)
+
+    kalshi_link = {"id": 7, "contract_id": "KXNBA-25JAN01-LAL", "source": "kalshi"}
+    mock_link_store = MagicMock()
+    mock_link_store.get_matches_with_verified_links.return_value = ["match-1"]
+    mock_link_store.get_verified_links.return_value = [kalshi_link]
+
+    mock_bridge = MagicMock()
+    mock_bridge.fetch_link_price = AsyncMock(
+        return_value={"implied_prob": 0.71, "price": 0.71, "liquidity": None, "volume": None}
+    )
+    # Present but must stay unused: routing a Kalshi ticker here is the bug.
+    mock_bridge.fetch_current_price = AsyncMock(return_value=None)
+
+    mock_snap_store = MagicMock()
+
+    with patch(
+        "app.core.scheduler._start_run", return_value=None
+    ), patch(
+        "app.core.scheduler._finish_run"
+    ), patch(
+        "app.kernel.kernel_db.init_kernel_db"
+    ), patch(
+        "app.kernel.sport_market_bridge_service.SportMarketBridgeService",
+        return_value=mock_bridge,
+    ), patch(
+        "app.kernel.sport_market_link_store.SportMarketLinkStore",
+        return_value=mock_link_store,
+    ), patch(
+        "app.kernel.market_snapshot_store.MarketSnapshotStore",
+        return_value=mock_snap_store,
+    ):
+        await _job_capture_market_snapshots()
+
+    mock_bridge.fetch_link_price.assert_awaited_once_with(kalshi_link)
+    mock_bridge.fetch_current_price.assert_not_awaited()
+    mock_snap_store.append_snapshot.assert_called_once()
+    assert mock_snap_store.append_snapshot.call_args.kwargs["link_id"] == 7

@@ -113,8 +113,11 @@ export function usePriceStream(matchId: string | null): UsePriceStreamResult {
         setIsConnected(false);
         wsRef.current = null;
 
-        // Backend closes with 503 when PHASE10_REALTIME_PUSH_ENABLED is false
-        if (ev.code === 503 || (ev.code === 1000 && /disabled|disabled/i.test(ev.reason || ""))) {
+        // 4503 is REALTIME_DISABLED_CLOSE_CODE: the backend's "push is switched
+        // off" signal. It cannot be an HTTP status — RFC 6455 reserves codes
+        // below 1000, so a browser would report 1006 and this branch would never
+        // run, leaving the hook to reconnect forever against a disabled endpoint.
+        if (ev.code === 4503 || (ev.code === 1000 && /disabled/i.test(ev.reason || ""))) {
           setDisabled(true);
           setError(
             new Error(

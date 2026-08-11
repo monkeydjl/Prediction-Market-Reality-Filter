@@ -29,13 +29,20 @@ def reset_manager():
     cm_module._connection_manager = None
 
 
-def test_websocket_closes_503_when_disabled(client, monkeypatch):
-    """When PHASE10_REALTIME_PUSH_ENABLED is false, the WS closes with code 503."""
+def test_websocket_close_code_when_disabled_is_wire_legal(client, monkeypatch):
+    """The disabled-push close code must be one a browser can actually deliver.
+
+    RFC 6455 reserves everything below 1000, so closing with an HTTP status
+    (this used to send 503) produces a frame the browser discards: it surfaces
+    1006 with an empty reason, indistinguishable from a dropped connection, and
+    the client reconnects forever against an endpoint that will never accept.
+    """
     monkeypatch.setattr(settings, "PHASE10_REALTIME_PUSH_ENABLED", False)
     with pytest.raises(WebSocketDisconnect) as exc_info:
         with client.websocket_connect("/ws/matches/match-1/prices"):
             pass
-    assert exc_info.value.code == 503
+    assert 1000 <= exc_info.value.code <= 4999
+    assert exc_info.value.code == 4503
 
 
 def test_websocket_accepts_when_enabled(client, monkeypatch):

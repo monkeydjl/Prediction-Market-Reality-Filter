@@ -236,10 +236,13 @@ class TestGuardrailMarginalAttribution(unittest.TestCase):
         the old all_off+guardrails_on baseline, this was always 0
         because the guardrail had no direction to act on.
 
-        Uses Rule 2 (uncalibrated_category_blocks_act) which fires
-        fail-closed when calibration segments are empty (the test-env
-        default). Rule 1 (llm_degraded) would require simulate_llm_degraded
-        which _run_marginal_loop does not call."""
+        Uses Rule 2 (uncalibrated_category_blocks_act), armed by stubbing a
+        calibration store where some *other* category has qualified — the
+        record's own category ("general") then trips the fail-closed check.
+        An empty store no longer fires: the call site passes None on cold
+        start so a fresh install is not blocked wholesale. Rule 1
+        (llm_degraded) would require simulate_llm_degraded which
+        _run_marginal_loop does not call."""
         from unittest.mock import patch
         from app.core.config import settings
         from scripts.replay_decision_pipeline import _run_marginal_loop
@@ -247,7 +250,7 @@ class TestGuardrailMarginalAttribution(unittest.TestCase):
 
         record = _synthetic_record("guard-marginal-1")
         # Flags: decision_quality produces a strong YES direction for the
-        # guardrail to gate; Rule 2 fires fail-closed on empty calibration.
+        # guardrail to gate; Rule 2 fires fail-closed on the stubbed store.
         flags = {
             "DECISION_QUALITY_ENABLED": True,
             "GUARDRAILS_ENABLED": True,
@@ -255,7 +258,14 @@ class TestGuardrailMarginalAttribution(unittest.TestCase):
             "GUARDRAIL_UNCALIBRATED_CATEGORY_BLOCKS_ACT": True,  # fires fail-closed
             "GUARDRAIL_HIGH_CONFLICT_BLOCKS_ACT": False,
         }
-        with patch.multiple(settings, **flags):
+        calibrated = {
+            "n": 20,
+            "segments": {"politics": {"n": 20, "qualified": True}},
+        }
+        with patch.multiple(settings, **flags), patch(
+            "app.memory.prediction_store.calibration_summary",
+            return_value=calibrated,
+        ):
             m = ReplayMetrics()
             _run_marginal_loop([record], m)
         d = m.to_dict()

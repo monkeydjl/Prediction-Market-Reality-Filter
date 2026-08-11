@@ -24,9 +24,16 @@ def odds_api_to_implied(decimal_odds_list: list[float]) -> list[float]:
 
     Each raw implied prob is 1/decimal_odds; the raw sum exceeds 1.0 due to
     overround, so we divide each by the sum to normalize.
+
+    The returned list is always the same length as the input, and index i always
+    corresponds to ``decimal_odds_list[i]``. Callers zip the result against
+    outcome labels by position, so dropping an entry would silently attach a
+    probability to the wrong outcome. Non-positive odds (no price / bad feed
+    value) therefore yield 0.0 at that index rather than being filtered out;
+    the remaining entries still normalize to 1.0.
     """
-    raw = [1.0 / d for d in decimal_odds_list if d > 0]
+    raw = [(1.0 / d if d > 0 else 0.0) for d in decimal_odds_list]
     total = sum(raw)
     if total == 0:
-        return []
+        return [0.0] * len(decimal_odds_list)
     return [r / total for r in raw]

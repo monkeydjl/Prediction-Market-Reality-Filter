@@ -326,7 +326,12 @@ class TestReplayComparison(unittest.TestCase):
     def test_replay_comparison_changed(self):
         """When all_on and all_off produce different directions, delta=changed.
         Enables DQ + guardrails (uncalibrated_category rule) so all_on
-        downgrades YES → WAIT, while all_off leaves direction as YES."""
+        downgrades YES → WAIT, while all_off leaves direction as YES.
+
+        The qualified-category set is stubbed rather than relying on the test
+        env's empty calibration store: an empty store now means "cold start,
+        skip rule 2", so it no longer downgrades anything. Rule 2 fires when
+        some *other* category has qualified and this record's has not."""
         from app.core.config import settings
         from diagnose_event_quality import _run_replay_comparison
         record = _sample_record()
@@ -360,7 +365,9 @@ class TestReplayComparison(unittest.TestCase):
         record["sentiment_profile"] = {"summary": "neutral", "articles": []}
         record["source"] = {"type": "prediction_market", "platform": "manifold"}
         # Enable guardrails + DQ + uncalibrated_category rule so all_on
-        # downgrades YES → WAIT (empty calibration store in test env)
+        # downgrades YES → WAIT. The record's category resolves to
+        # "prediction_market" (no base_rate_category), which is absent from
+        # the stubbed qualified set below.
         flags = {
             "DECISION_QUALITY_ENABLED": True,
             "GUARDRAILS_ENABLED": True,
@@ -370,7 +377,14 @@ class TestReplayComparison(unittest.TestCase):
             "GUARDRAIL_MARKET_NOT_EXECUTABLE_BLOCKS_ACT": False,
             "EXECUTION_QUALITY_ENABLED": False,
         }
-        with patch.multiple(settings, **flags):
+        calibrated = {
+            "n": 20,
+            "segments": {"sports_event": {"n": 20, "qualified": True}},
+        }
+        with patch.multiple(settings, **flags), patch(
+            "app.memory.prediction_store.calibration_summary",
+            return_value=calibrated,
+        ):
             result = _run_replay_comparison(record)
         # all_off leaves direction as YES (from actionable_recommendation)
         self.assertEqual(result["all_off_direction"], "YES")

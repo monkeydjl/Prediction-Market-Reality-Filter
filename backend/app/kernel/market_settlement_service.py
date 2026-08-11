@@ -123,6 +123,11 @@ def _find_settlement_snapshot(link_id: int, finished_at: datetime) -> dict[str, 
     """Find the last market snapshot before the match finished.
 
     Queries kernel_market_snapshots directly (read-only).
+
+    Returns None only when no such snapshot exists. A query failure is raised,
+    NOT swallowed, for the same reason as _find_verified_link_for_outcome: the
+    caller writes a permanent ``skipped_no_snapshot`` settlement row on None,
+    and that row excludes the match from every later scan.
     """
     session = get_kernel_session()
     try:
@@ -142,8 +147,6 @@ def _find_settlement_snapshot(link_id: int, finished_at: datetime) -> dict[str, 
             "price": row.price, "liquidity": row.liquidity, "volume": row.volume,
             "captured_at": row.captured_at,
         }
-    except Exception:
-        return None
     finally:
         session.close()
 
@@ -154,6 +157,14 @@ def _find_verified_link_for_outcome(
     """Find the best verified market link for a match's outcome.
 
     Picks the link with highest link_confidence among verified links.
+
+    Returns None only when no such link exists. A query failure is raised, NOT
+    swallowed: the caller writes a permanent ``skipped_no_links`` settlement
+    row on None, and ``_find_finished_matches_without_settlements`` excludes
+    matches that already have settlement rows — so a transient DB error would
+    be recorded as a final verdict and the match would never be rescanned.
+    Letting it raise leaves no row; ``scan_and_process`` counts the match as an
+    error and the next scan retries it.
     """
     session = get_kernel_session()
     try:
@@ -177,8 +188,6 @@ def _find_verified_link_for_outcome(
             "market_question": row.market_question, "implied_prob": row.implied_prob,
             "created_at": row.created_at, "updated_at": row.updated_at,
         }
-    except Exception:
-        return None
     finally:
         session.close()
 

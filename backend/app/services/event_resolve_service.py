@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.config import settings
-from app.memory.event_market_link_store import get_verified_link, upsert_link
+from app.memory.event_market_link_store import upsert_link, verified_links_by_event
 from app.memory.event_store import get_event, list_all_events, resolve_event
 from app.memory.prediction_store import get_prediction, score_prediction, void_prediction
 from app.services.calibration_service_event import score_event
@@ -258,7 +258,10 @@ async def auto_resolve_events(
     """
     # Heal any orphans left by a prior mid-resolve crash before doing new work.
     # A dry-run must be read-only, so it deliberately skips reconciliation too.
-    reconciled = 0 if dry_run else reconcile_predictions()
+    # Blocking store work in an async job: offload every SQLite/JSON call
+    # below so this scan (which walks the entire event store, unbounded)
+    # cannot hold the event loop while the API serves requests.
+    reconciled = 0 if dry_run else await asyncio.to_thread(reconcile_predictions)
     from app.services.polymarket_history_service import (
         fetch_resolved_markets as fetch_polymarket_resolved,
         fetch_markets_by_ids as fetch_polymarket_by_ids,
@@ -289,7 +292,7 @@ async def auto_resolve_events(
             market["_source_platform"] = name  # tag for link provenance
         resolved_markets.extend(result)
 
-    entries = list_all_events()
+    entries = await asyncio.to_thread(list_all_events)
     if by_source.get("Kalshi", 0) == 0 and _has_unresolved_source_event(entries, "Kalshi"):
         logger.warning(
             "auto_resolve: Kalshi returned 0 resolved markets while unresolved "
@@ -310,6 +313,11 @@ async def auto_resolve_events(
         "polymarket": ("Polymarket", fetch_polymarket_by_ids),
     }
     direct_ids: dict[str, set[str]] = {key: set() for key in direct_fetchers}
+    # get_verified_link() opened a connection and ran a query per event, and
+    # both this loop and the scan below walk every stored event — so the job
+    # issued 2N queries on the event store. Read the verified links once; no
+    # link is written between here and the scan, so one snapshot serves both.
+    verified_links = await asyncio.to_thread(verified_links_by_event)
     for entry in entries:
         record = entry.get("record") or {}
         if record.get("outcome") is not None:
@@ -317,7 +325,7 @@ async def auto_resolve_events(
         event_id = entry.get("event_id")
         if not event_id:
             continue
-        linked = get_verified_link(event_id)
+        linked = verified_links.get(str(event_id))
         if not linked or not linked.get("contract_id"):
             continue
         platform = str(linked.get("market_name", "")).lower()
@@ -382,7 +390,7 @@ async def auto_resolve_events(
     # biased toward high-value events.
     # Read the audit log once and group by event_id, instead of calling
     # history_for_event per event (which would re-read the whole file N times).
-    histories = histories_by_event()
+    histories = await asyncio.to_thread(histories_by_event)
     for entry in entries:
         record = entry.get("record") or {}
         if record.get("outcome") is not None:
@@ -395,7 +403,7 @@ async def auto_resolve_events(
         # that contract is in the resolved set, settle directly by id - no text
         # match needed. This is what keeps a linked event from going stale just
         # because the market's question wording drifted since freeze.
-        linked = get_verified_link(event_id)
+        linked = verified_links.get(str(event_id))
         if linked and linked.get("contract_id"):
             settled = market_by_contract.get(str(linked["contract_id"]))
             if settled is not None:
@@ -413,7 +421,8 @@ async def auto_resolve_events(
                 if dry_run:
                     continue
                 try:
-                    resolve_with_calibration(
+                    await asyncio.to_thread(
+                        resolve_with_calibration,
                         event_id=event_id,
                         actual_outcome=settled.get("actual_outcome"),
                         confidence=1.0,
@@ -456,7 +465,8 @@ async def auto_resolve_events(
         # check is unreachable here and has been removed - contract-first
         # settlement now provides the no-wrong-contract guarantee.
         if not dry_run:
-            upsert_link(
+            await asyncio.to_thread(
+                upsert_link,
                 event_id,
                 market_name=market_name,
                 contract_id=contract_id,
@@ -502,7 +512,8 @@ async def auto_resolve_events(
         if dry_run:
             continue
         try:
-            resolve_with_calibration(
+            await asyncio.to_thread(
+                resolve_with_calibration,
                 event_id=event_id,
                 actual_outcome=actual_outcome,
                 confidence=score,

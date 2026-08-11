@@ -1,8 +1,13 @@
 # ── Secrets ────────────────────────────────────────────────────────────────
+# Catch every .env variant anywhere, then un-ignore the committed templates.
+# Only .env / .env.staging / .env.production are read (see config.py
+# _resolve_env_file), but an un-ignored .env.local is a live footgun.
 .env
-backend/.env
-backend/.env.staging
-backend/.env.production
+.env.*
+**/.env
+**/.env.*
+!.env*.example
+!**/.env*.example
 backend/.env_*
 *.key
 

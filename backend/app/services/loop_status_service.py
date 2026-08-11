@@ -8,7 +8,6 @@ from app.memory.event_market_link_store import list_pending
 from app.memory.event_store import list_all_events, list_resolved_events
 from app.memory.prediction_store import (
     calibration_summary,
-    get_prediction,
     list_open_opportunities,
 )
 from app.utils import sqlite_db
@@ -132,15 +131,33 @@ def _dangling_count(table: str, event_ids: set[str]) -> int:
 
 
 def _orphan_prediction_count(events: list[dict[str, Any]]) -> int:
-    count = 0
-    for entry in events:
-        record = entry.get("record") or {}
-        if record.get("outcome") is None:
-            continue
-        event_id = entry.get("event_id")
-        if not event_id:
-            continue
-        pred = get_prediction(event_id)
-        if pred is not None and pred.get("status") == "open":
-            count += 1
-    return count
+    """Resolved events whose prediction is still marked open.
+
+    Reads every open prediction id in one query rather than calling
+    get_prediction() per event: that opened a fresh connection and ran a
+    lookup for each resolved event, so /api/health scaled linearly with the
+    event store and measured over a second on a modest store.
+    """
+    resolved_ids = {
+        str(entry["event_id"])
+        for entry in events
+        if entry.get("event_id") and (entry.get("record") or {}).get("outcome") is not None
+    }
+    if not resolved_ids:
+        return 0
+
+    path = sqlite_db.loop_db_path()
+    try:
+        with reading(path) as conn:
+            rows = conn.execute(
+                """
+                SELECT event_id
+                FROM predictions
+                WHERE status='open' AND event_id IS NOT NULL AND event_id != ''
+                """
+            ).fetchall()
+    except Exception:
+        logger.warning("orphan prediction count query failed", exc_info=True)
+        return 0
+
+    return sum(1 for row in rows if str(row["event_id"]) in resolved_ids)

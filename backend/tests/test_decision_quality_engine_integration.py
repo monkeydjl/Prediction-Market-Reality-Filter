@@ -741,5 +741,148 @@ class TestDegradedModeScenarios(unittest.TestCase):
         self.assertIn("market_not_executable_blocks_act", record["guardrail_fired"])
 
 
+class TestGuardrailColdStart(unittest.TestCase):
+    """Rule 2 must not block the whole site before any category calibrates.
+
+    ``evaluate_guardrails`` reads ``qualified_categories=None`` as "skip the
+    check" and a non-None set as fail-closed. ``calibration_summary()`` does
+    not raise on a fresh install — it returns ``segments={}`` — so passing the
+    extracted set through unconditionally handed rule 2 an *empty* set, which
+    means "no category is qualified" and forced every YES/NO to WAIT until a
+    category reached CALIBRATION_FEEDBACK_MIN_SAMPLES.
+    """
+
+    def _base_record(self) -> dict:
+        return {
+            "event_id": "cold-start-001",
+            "question": "Will X happen?",
+            "source": {"type": "prediction_market", "platform": "polymarket"},
+            "actionable_recommendation": {
+                "direction": "YES",
+                "confidence": "high",
+                "ai_probability": 0.72,
+            },
+            "evidence_breakdown": [
+                {"direction": "support", "source": "reuters.com",
+                 "url": "https://reuters.com/1", "summary": "Evidence 1"},
+                {"direction": "oppose", "source": "bloomberg.com",
+                 "url": "https://bloomberg.com/1", "summary": "Evidence 2"},
+            ],
+            "market_quote": {"bid": 48.0, "ask": 52.0, "spread": 4.0},
+            "volume": 5000.0,
+            "liquidity": 10000.0,
+            "legacy_analysis": {"base_rate_category": "politics"},
+        }
+
+    def _configure(self, mock_settings):
+        """decision_quality produces the direction; only rule 2 is armed.
+
+        ``final_displayed_direction`` is set by the overlay merge, which needs
+        at least one overlay to produce a direction — with every overlay off
+        the guardrail would have nothing to act on and the test would prove
+        nothing.
+        """
+        mock_settings.DECISION_QUALITY_ENABLED = True
+        mock_settings.DECISION_QUALITY_MAX_EVIDENCE_ITEMS = 10
+        mock_settings.DECISION_QUALITY_HIGH_CONFLICT_THRESHOLD = 0.7
+        mock_settings.DECISION_QUALITY_MEDIUM_CONFLICT_THRESHOLD = 0.4
+        mock_settings.MARKET_QUALITY_ENABLED = False
+        mock_settings.SOURCE_RELIABILITY_ENABLED = False
+        mock_settings.LLM_TELEMETRY_ENABLED = False
+        mock_settings.EXECUTION_QUALITY_ENABLED = False
+        mock_settings.GUARDRAILS_ENABLED = True
+        mock_settings.GUARDRAIL_LLM_DEGRADED_BLOCKS_ACT = False
+        mock_settings.GUARDRAIL_UNCALIBRATED_CATEGORY_BLOCKS_ACT = True
+        mock_settings.GUARDRAIL_HIGH_CONFLICT_BLOCKS_ACT = False
+        mock_settings.GUARDRAIL_HIGH_CONFLICT_THRESHOLD = 0.7
+        mock_settings.GUARDRAIL_MARKET_NOT_EXECUTABLE_BLOCKS_ACT = False
+
+    def _apply(self, record) -> None:
+        from app.services.event_intelligence_service import _build_all_overlays
+        _build_all_overlays(
+            record,
+            analysis={},
+            sentiment_profile=None,
+            news_context="",
+            market_quote=record.get("market_quote"),
+            filtered_articles=[],
+            volume=record.get("volume"),
+            liquidity=record.get("liquidity"),
+        )
+
+    @patch("app.memory.prediction_store.calibration_summary")
+    @patch("app.services.event_intelligence_service.settings")
+    def test_no_segments_yet_does_not_block(self, mock_settings, mock_summary):
+        """Fresh install: segments={} → rule 2 skipped, YES survives."""
+        self._configure(mock_settings)
+        mock_summary.return_value = {"n": 0, "segments": {}}
+
+        record = self._base_record()
+        self._apply(record)
+
+        self.assertEqual(record.get("final_displayed_direction"), "YES")
+        self.assertEqual(record.get("guardrail_fired", []), [])
+
+    @patch("app.memory.prediction_store.calibration_summary")
+    @patch("app.services.event_intelligence_service.settings")
+    def test_segments_present_but_none_qualified_does_not_block(
+        self, mock_settings, mock_summary
+    ):
+        """Data exists but nothing reached min_samples — still cold start."""
+        self._configure(mock_settings)
+        mock_summary.return_value = {
+            "n": 3,
+            "segments": {
+                "politics": {"n": 3, "qualified": False},
+                "crypto": {"n": 1, "qualified": False},
+            },
+        }
+
+        record = self._base_record()
+        self._apply(record)
+
+        self.assertEqual(record.get("final_displayed_direction"), "YES")
+        self.assertEqual(record.get("guardrail_fired", []), [])
+
+    @patch("app.memory.prediction_store.calibration_summary")
+    @patch("app.services.event_intelligence_service.settings")
+    def test_fail_closed_once_another_category_qualifies(
+        self, mock_settings, mock_summary
+    ):
+        """The guardrail keeps its teeth: a qualified set is non-empty, so an
+        unqualified category is blocked exactly as designed."""
+        self._configure(mock_settings)
+        mock_summary.return_value = {
+            "n": 20,
+            "segments": {
+                "crypto": {"n": 20, "qualified": True},
+                "politics": {"n": 2, "qualified": False},
+            },
+        }
+
+        record = self._base_record()  # category politics — not qualified
+        self._apply(record)
+
+        self.assertEqual(record.get("final_displayed_direction"), "WAIT")
+        self.assertIn(
+            "uncalibrated_category_blocks_act", record.get("guardrail_fired", [])
+        )
+
+    @patch("app.memory.prediction_store.calibration_summary")
+    @patch("app.services.event_intelligence_service.settings")
+    def test_qualified_category_passes(self, mock_settings, mock_summary):
+        self._configure(mock_settings)
+        mock_summary.return_value = {
+            "n": 20,
+            "segments": {"politics": {"n": 20, "qualified": True}},
+        }
+
+        record = self._base_record()
+        self._apply(record)
+
+        self.assertEqual(record.get("final_displayed_direction"), "YES")
+        self.assertEqual(record.get("guardrail_fired", []), [])
+
+
 if __name__ == "__main__":
     unittest.main()

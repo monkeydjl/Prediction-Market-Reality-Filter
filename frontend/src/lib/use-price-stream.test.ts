@@ -106,6 +106,36 @@ describe("usePriceStream", () => {
     expect(result.current.updates[0].type).toBe("market_snapshot");
   });
 
+  it("stops reconnecting when the backend says push is disabled", async () => {
+    // 4503 is REALTIME_DISABLED_CLOSE_CODE. The backend used to send 503, which
+    // RFC 6455 reserves, so this branch never matched: the hook left `disabled`
+    // false and kept reconnecting against an endpoint that never accepts.
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() => usePriceStream("match-1"));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10);
+      });
+
+      act(() => {
+        MockWebSocket.instances[0].onclose?.(
+          new CloseEvent("close", { code: 4503, reason: "Realtime push disabled" }),
+        );
+      });
+
+      expect(result.current.disabled).toBe(true);
+      expect(result.current.error?.message).toContain("PHASE10_REALTIME_PUSH_ENABLED");
+
+      // Past every backoff step, so a scheduled reconnect would have fired.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(MockWebSocket.instances).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("sets error on WebSocket close", async () => {
     const { result } = renderHook(() => usePriceStream("match-1"));
     await act(async () => {

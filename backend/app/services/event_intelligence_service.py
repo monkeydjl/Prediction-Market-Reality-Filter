@@ -661,16 +661,31 @@ def _build_all_overlays(
                 extract_qualified_categories,
             )
             # Best-effort fetch of qualified categories from the calibration
-            # store. A read failure (or no calibration data yet) passes None
-            # to evaluate_guardrails, which treats None as "skip the
-            # qualification check" — the cold-start path stays unblocked.
+            # store. evaluate_guardrails distinguishes None ("skip the
+            # qualification check") from a non-None set (fail-closed: every
+            # category outside the set is unqualified). An *empty* set is
+            # therefore "block every category", not "no data" — so only pass
+            # the set once at least one category has actually qualified.
+            #
+            # calibration_summary() does not raise on a fresh install; it
+            # returns segments={} until predictions resolve. Handing that
+            # straight through would force every YES/NO to WAIT for as long
+            # as it takes a category to reach CALIBRATION_FEEDBACK_MIN_SAMPLES
+            # — an outage, not a guardrail. Once one category qualifies, the
+            # set is non-empty and fail-closed applies to the rest as designed.
             qualified_cats: set[str] | None = None
             try:
                 from app.memory.prediction_store import calibration_summary
                 summary = calibration_summary()
-                qualified_cats = extract_qualified_categories(
+                extracted = extract_qualified_categories(
                     summary.get("segments")
                 )
+                qualified_cats = extracted or None
+                if qualified_cats is None:
+                    logger.debug(
+                        "No calibrated category yet; skipping guardrail "
+                        "rule 2 (cold start)"
+                    )
             except Exception as exc:
                 logger.debug(
                     "calibration_summary unavailable for guardrails: %s", exc

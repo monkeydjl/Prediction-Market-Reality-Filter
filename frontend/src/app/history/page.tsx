@@ -156,40 +156,46 @@ export default function HistoryPage() {
   const loadData = useCallback(async () => {
     setBucketLoading(true);
     setBucketError(null);
-    const [cal, predCalibration, list, bucketsSettled] = await Promise.all([
-      eventsApi.calibration(),
-      eventsApi.predictionCalibration(),
-      eventsApi.list(REVIEW_PAGE_SIZE, 0, RESOLVED_REVIEW_FILTERS),
-      eventsApi.predictionCalibrationBuckets().then(
-        (b) => ({ ok: true as const, b }),
-        (e: unknown) => ({
-          ok: false as const,
-          err: e instanceof Error ? e.message : "分桶加载失败",
-        }),
-      ),
-    ]);
-    setOverall(cal.overall ?? EMPTY_OVERALL);
-    setPredCal(predCalibration ?? EMPTY_PRED);
-    const segmentSource = predCalibration?.segments ?? {};
-    setCategoryData(
-      Object.keys(segmentSource).length > 0
-        ? toCategoryData(segmentSource, predCalibration.segment_min_samples ?? null)
-        : toCategoryData(cal.by_base_rate_category ?? {}),
-    );
-    if (bucketsSettled.ok) {
-      setBucketSummary(bucketsSettled.b);
-    } else {
-      setBucketSummary(null);
-      setBucketError(bucketsSettled.err);
+    try {
+      const [cal, predCalibration, list, bucketsSettled] = await Promise.all([
+        eventsApi.calibration(),
+        eventsApi.predictionCalibration(),
+        eventsApi.list(REVIEW_PAGE_SIZE, 0, RESOLVED_REVIEW_FILTERS),
+        eventsApi.predictionCalibrationBuckets().then(
+          (b) => ({ ok: true as const, b }),
+          (e: unknown) => ({
+            ok: false as const,
+            err: e instanceof Error ? e.message : "分桶加载失败",
+          }),
+        ),
+      ]);
+      setOverall(cal.overall ?? EMPTY_OVERALL);
+      setPredCal(predCalibration ?? EMPTY_PRED);
+      const segmentSource = predCalibration?.segments ?? {};
+      setCategoryData(
+        Object.keys(segmentSource).length > 0
+          ? toCategoryData(segmentSource, predCalibration.segment_min_samples ?? null)
+          : toCategoryData(cal.by_base_rate_category ?? {}),
+      );
+      if (bucketsSettled.ok) {
+        setBucketSummary(bucketsSettled.b);
+      } else {
+        setBucketSummary(null);
+        setBucketError(bucketsSettled.err);
+      }
+      setReviewPage(0);
+      setTotalEvents(list.total ?? list.count ?? 0);
+      setReviews(
+        (list.events ?? [])
+          .map((e) => toReview(e.record))
+          .filter((r): r is ResolvedReview => r !== null),
+      );
+    } finally {
+      // The bucket panel has its own loading state and would spin forever if a
+      // fetch above rejects: the catch lives in the caller, but the flag must
+      // reset here.
+      setBucketLoading(false);
     }
-    setBucketLoading(false);
-    setReviewPage(0);
-    setTotalEvents(list.total ?? list.count ?? 0);
-    setReviews(
-      (list.events ?? [])
-        .map((e) => toReview(e.record))
-        .filter((r): r is ResolvedReview => r !== null),
-    );
   }, []);
 
   const loadReviewPage = useCallback(async (page: number) => {

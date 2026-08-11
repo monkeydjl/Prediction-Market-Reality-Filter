@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.memory import simulated_trade_store as store
+from app.utils import sqlite_db
 
 
 class SimulatedTradeStoreTests(unittest.TestCase):
@@ -15,6 +16,7 @@ class SimulatedTradeStoreTests(unittest.TestCase):
         self.patch.start()
 
     def tearDown(self):
+        store._INITIALIZED.discard(self.db_path)
         self.patch.stop()
         self.tmpdir.cleanup()
 
@@ -186,6 +188,64 @@ class SimulatedTradeStoreTests(unittest.TestCase):
         self.assertAlmostEqual(stats["avg_directional_edge_at_entry"], 12.5, places=2)
         # |raw| mean = (10+15)/2 = 12.5
         self.assertAlmostEqual(stats["avg_edge_at_entry"], 12.5, places=2)
+
+    def test_store_opens_the_db_through_the_shared_wrapper(self):
+        """Every path must go through sqlite_db.connect(), not raw sqlite3.
+
+        The wrapper is what supplies timeout=30s, check_same_thread=False and
+        the WAL/foreign_keys pragmas. Raw sqlite3.connect() gets none of them,
+        so a busy writer surfaces as OperationalError after 5s instead of
+        waiting. WAL is recorded in the file header, so its presence after a
+        store write proves the wrapper opened it.
+        """
+        store.open_trade(
+            "wrapper-check",
+            direction="YES",
+            entry_prob=60.0,
+            market_prob=50.0,
+        )
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(mode.lower(), "wal")
+
+    def test_open_trade_serializes_through_the_shared_write_lock(self):
+        """Writes must take sqlite_db._WRITE_LOCK, not just SQLite's file lock.
+
+        open_trade is a SELECT-then-INSERT: without the process-wide lock two
+        threads can both miss the existing open trade and insert one each,
+        breaking the documented "one open trade per event" guarantee. Holding
+        the lock here must block a concurrent open_trade until it is released.
+        """
+        import threading
+
+        # Warm the schema so the blocking below is on the insert path itself.
+        store.open_trade(
+            "warmup", direction="YES", entry_prob=60.0, market_prob=50.0
+        )
+
+        done = threading.Event()
+
+        def _open():
+            store.open_trade(
+                "locked-1", direction="YES", entry_prob=60.0, market_prob=50.0
+            )
+            done.set()
+
+        with sqlite_db._WRITE_LOCK:
+            worker = threading.Thread(target=_open)
+            worker.start()
+            blocked = not done.wait(timeout=0.5)
+        worker.join(timeout=5)
+
+        self.assertTrue(
+            blocked, "open_trade must serialize through sqlite_db._WRITE_LOCK"
+        )
+        self.assertTrue(done.is_set(), "open_trade must proceed once released")
+        self.assertEqual(len(store.list_open_trades()), 2)
 
 
 if __name__ == "__main__":

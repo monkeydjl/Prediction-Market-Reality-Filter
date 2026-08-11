@@ -16,27 +16,45 @@ will see the updated total and refuse if it crosses the cap.
 """
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timezone
 
 from app.utils import sqlite_db
 from app.utils.sqlite_db import reading, writing
 
+_INITIALIZED: set[str] = set()
+_INIT_GUARD = threading.Lock()
 _SCHEMA_VERSION = 1
 _MIGRATIONS: dict[str, str] = {}
 
 
 def _ensure_schema(path: str) -> None:
-    with writing(path) as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS llm_daily_spend (
-                date TEXT PRIMARY KEY,
-                spend_usd REAL NOT NULL DEFAULT 0.0
+    """Create the table on first use of a given DB path (idempotent).
+
+    Memoized per path like every other store here. Without this, each read
+    took a *write* transaction (CREATE TABLE + migrations + version record)
+    before its SELECT, so the gateway's pre-call cap check contended on the
+    write lock on every LLM call.
+    """
+    if path in _INITIALIZED:
+        return
+    with _INIT_GUARD:
+        if path in _INITIALIZED:
+            return
+        with writing(path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS llm_daily_spend (
+                    date TEXT PRIMARY KEY,
+                    spend_usd REAL NOT NULL DEFAULT 0.0
+                )
+                """
             )
-            """
-        )
-        sqlite_db.apply_migrations(conn, "llm_daily_spend", _SCHEMA_VERSION, _MIGRATIONS)
-        sqlite_db.record_schema_version(conn, "llm_daily_spend", _SCHEMA_VERSION)
+            sqlite_db.apply_migrations(
+                conn, "llm_daily_spend", _SCHEMA_VERSION, _MIGRATIONS
+            )
+            sqlite_db.record_schema_version(conn, "llm_daily_spend", _SCHEMA_VERSION)
+        _INITIALIZED.add(path)
 
 
 def get_spend_today() -> float:

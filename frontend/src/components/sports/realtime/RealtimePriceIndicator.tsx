@@ -15,8 +15,8 @@ export function RealtimePriceIndicator({
 
   const label = isConnected ? "LIVE" : "OFFLINE";
   const colorClass = isConnected
-    ? "border-green-500 text-green-600"
-    : "border-gray-400 text-gray-500";
+    ? "border-pos text-pos"
+    : "border-border text-muted-foreground";
 
   return (
     <span

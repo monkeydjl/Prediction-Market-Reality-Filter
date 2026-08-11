@@ -23,6 +23,15 @@ from app.services.market_semantics_service import parse_market_semantics
 # 0.6 = LLM leads when both agree/disagree; keywords still provide 40% anchor.
 _SENTIMENT_WEIGHT = 0.6
 
+# Independent sources needed for full evidence volume. Below this, strength is
+# scaled down: a lone outlet is not corroboration.
+_FULL_VOLUME_SOURCES = 5.0
+
+
+def source_volume(source_count: int) -> float:
+    """Evidence volume factor from independent source count (0..1)."""
+    return min(1.0, source_count / _FULL_VOLUME_SOURCES)
+
 
 _OFFICIAL_SOURCE_TERMS = (
     "official",
@@ -100,6 +109,7 @@ def fuse_sentiment_direction(
     keyword_direction: str,
     keyword_strength: float,
     sentiment_profile: dict[str, Any],
+    evidence_volume: float = 1.0,
 ) -> tuple[str, float, float]:
     """Blend LLM sentiment signal with keyword-based evidence direction.
 
@@ -109,9 +119,18 @@ def fuse_sentiment_direction(
 
     Fusion formula:
       keyword_signal = direction_sign * strength  (-1..+1)
-      sentiment_signal = sentiment_sign * sentiment_strength  (-1..+1)
+      sentiment_signal = sentiment_sign * sentiment_strength * evidence_volume
       fused_signal = w * sentiment + (1-w) * keyword
     Where w = _SENTIMENT_WEIGHT when sentiment is non-fallback, else 0.
+
+    ``evidence_volume`` is the same source-count decay already applied to
+    ``keyword_strength`` (min(1, sources/5)). The LLM reads the SAME articles
+    the keywords do, so its confidence is not independent corroboration - a
+    single-source story where the LLM says "strongly supports" is still a
+    single-source story. Without this factor the fused signal is dominated by
+    an undecayed 0.6-weighted term, so one article can score higher than the
+    decayed keyword path ever allows (0.2 -> 0.62, a 3x inflation of exactly
+    what the decay exists to prevent).
     """
     overall_dir = sentiment_profile.get("overall_direction", "neutral")
     overall_str = float(sentiment_profile.get("overall_strength", 0) or 0)
@@ -138,9 +157,14 @@ def fuse_sentiment_direction(
     else:
         keyword_sign = 0.0
 
-    # Weighted fusion
+    # Weighted fusion. The sentiment term carries the same source-count decay
+    # as the keyword term, so extra LLM confidence cannot manufacture volume
+    # the underlying article set does not have.
     w = _SENTIMENT_WEIGHT
-    fused_signal = w * (sentiment_sign * overall_str) + (1 - w) * (keyword_sign * keyword_strength)
+    fused_signal = (
+        w * (sentiment_sign * overall_str * evidence_volume)
+        + (1 - w) * (keyword_sign * keyword_strength)
+    )
 
     # Convert back to direction + strength
     fused_strength = abs(fused_signal)
@@ -196,7 +220,7 @@ def build_evidence_profile(
             for it in evidence_items
             if it["direction"] in ("support", "oppose") and it["source"]
         }
-        evidence_volume = min(1.0, len(directional_sources) / 5.0)
+        evidence_volume = source_volume(len(directional_sources))
         strength = abs(direction_signal) * evidence_volume
         conflict = min(support, oppose) / max(support, oppose, 0.001)
         if strength < 0.15:
@@ -206,13 +230,22 @@ def build_evidence_profile(
         else:
             direction = "oppose"
 
+    sources = sorted({
+        normalize_source_name(item["source"])
+        for item in evidence_items
+        if item["source"]
+    })
+
     # ── Phase 4: LLM sentiment fusion ─────────────────────────────────────
     # Blend the keyword-based direction with the LLM sentiment signal when
     # available.  The LLM handles negation, context, and nuance that keyword
     # counting misses; keywords provide a deterministic anchor.
+    # Volume is measured over ALL sources, not just the keyword-directional
+    # ones: the LLM reads every article, so a story the keywords scored neutral
+    # still counts toward how corroborated the sentiment read is.
     if sentiment_profile and not sentiment_profile.get("fallback", False):
         fused_dir, fused_str, sent_conflict = fuse_sentiment_direction(
-            direction, strength, sentiment_profile,
+            direction, strength, sentiment_profile, source_volume(len(sources)),
         )
         # Only apply fusion when it produces a meaningful signal
         if fused_str >= 0.05:
@@ -222,11 +255,6 @@ def build_evidence_profile(
             if sent_conflict > 0:
                 conflict = round(conflict * 0.5 + sent_conflict * 0.5, 3)
 
-    sources = sorted({
-        normalize_source_name(item["source"])
-        for item in evidence_items
-        if item["source"]
-    })
     official_sources = sorted({
         normalize_source_name(item["source"])
         for item in evidence_items
@@ -291,6 +319,7 @@ def apply_sentiment_fusion(
         evidence_profile["evidence_direction"],
         evidence_profile["evidence_strength"],
         sentiment_profile,
+        source_volume(int(evidence_profile.get("independent_source_count") or 0)),
     )
     if fused_str >= 0.05:
         evidence_profile["evidence_direction"] = fused_dir

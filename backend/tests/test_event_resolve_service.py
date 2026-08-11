@@ -830,5 +830,149 @@ class ReconcilePredictionsTests(unittest.TestCase):
                 self.assertEqual(ers.reconcile_predictions(), 0)
 
 
+class AutoResolveScanCostTests(unittest.TestCase):
+    """auto_resolve_events must not scale its query count with the event store.
+
+    The scan walks EVERY stored event (deliberately unbounded - see the comment
+    in the service). It called get_verified_link() per event in two separate
+    loops, so a store of N events cost 2N connections and queries, all on the
+    event loop.
+    """
+
+    def setUp(self):
+        for module in (mfs, kes, phs):
+            patcher = patch.object(
+                module, "fetch_resolved_markets", new=AsyncMock(return_value=[])
+            )
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        direct_patcher = patch.object(
+            phs, "fetch_markets_by_ids", new=AsyncMock(return_value=[])
+        )
+        direct_patcher.start()
+        self.addCleanup(direct_patcher.stop)
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name)
+        for target in (
+            patch.object(store, "_store_path", return_value=str(base / "event_store.json")),
+            patch.object(audit, "_audit_path", return_value=str(base / "event_audit.jsonl")),
+            patch.object(sqlite_db, "loop_db_path", return_value=str(base / "v2_loop.db")),
+        ):
+            target.start()
+            self.addCleanup(target.stop)
+
+    def _seed(self, n):
+        """n linked, unresolved events plus one resolved market to match on.
+
+        Without a resolved market auto_resolve_events early-returns
+        "no_resolved_markets" and never reaches the scan, so a test that
+        omitted it would pass vacuously.
+        """
+        for i in range(n):
+            record = _make_record(f"scan-{i}", value_score=30)
+            store.save_event(record)
+            links.upsert_link(
+                f"scan-{i}",
+                contract_id=f"c-{i}",
+                market_name="Polymarket",
+                verified=True,
+            )
+        return AsyncMock(return_value=[
+            {"question": "unmatched market", "actual_outcome": 100.0, "id": "zzz"}
+        ])
+
+    def test_link_lookups_do_not_scale_with_the_event_store(self):
+        """The N+1 regression guard.
+
+        Counting is done at ``sqlite_db.connect`` - the chokepoint every store
+        funnels through - because each module binds its own ``reading``, so
+        patching one module's binding would miss the other's. Counting queries
+        rather than wall-clock keeps this deterministic on a loaded machine.
+        """
+        market = self._seed(10)
+
+        selects = []
+        real_connect = sqlite_db.connect
+
+        class _CountingConn:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def execute(self, sql, *args, **kwargs):
+                if "event_market_links" in sql and sql.strip().upper().startswith("SELECT"):
+                    selects.append(sql)
+                return self._conn.execute(sql, *args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+        with patch.object(
+            sqlite_db, "connect", lambda path: _CountingConn(real_connect(path))
+        ), patch.object(phs, "fetch_resolved_markets", new=market):
+            result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
+
+        self.assertNotEqual(
+            result["status"], "no_resolved_markets",
+            "the scan must actually run for this guard to mean anything",
+        )
+
+        # Two bulk reads at most (one per scan loop); the old code issued one
+        # per event per loop.
+        self.assertLessEqual(
+            len(selects),
+            2,
+            f"auto-resolve issued {len(selects)} link SELECTs for 10 events; "
+            "link lookups must not scale with the event store",
+        )
+
+    def test_scan_does_not_starve_the_event_loop(self):
+        """The store scan runs off-loop.
+
+        The scan body has no awaits at all, so every blocking store call inside
+        it ran on the event loop thread - the API stopped serving requests for
+        the whole job.
+        """
+        import time
+
+        market = self._seed(3)
+
+        async def _exercise():
+            ticks = 0
+
+            async def _heartbeat():
+                nonlocal ticks
+                while True:
+                    await asyncio.sleep(0.005)
+                    ticks += 1
+
+            beat = asyncio.create_task(_heartbeat())
+            real = ers.histories_by_event
+
+            def _slow():
+                time.sleep(0.25)
+                return real()
+
+            with patch.object(ers, "histories_by_event", _slow),                     patch.object(phs, "fetch_resolved_markets", new=market):
+                result = await ers.auto_resolve_events(resolved_limit=50)
+            beat.cancel()
+            return ticks, result
+
+        ticks, result = asyncio.run(_exercise())
+
+        self.assertNotEqual(
+            result["status"], "no_resolved_markets",
+            "the scan must actually run for this guard to mean anything",
+        )
+
+        self.assertGreater(
+            ticks,
+            15,
+            f"the auto-resolve scan blocked the event loop: the heartbeat only "
+            f"got {ticks} ticks during a 0.25s store read",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

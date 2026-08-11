@@ -160,6 +160,32 @@ def get_verified_link(event_id: str) -> dict[str, Any] | None:
     return _row_to_dict(row) if row else None
 
 
+def verified_links_by_event() -> dict[str, dict[str, Any]]:
+    """Return the verified link for every event that has one, keyed by event_id.
+
+    The bulk form of get_verified_link(). The auto-resolve scan checks every
+    stored event, so calling the per-event version there opened a connection
+    and ran a query per event; one query for the whole set keeps that scan flat
+    as the event store grows.
+
+    Ordering matches get_verified_link (newest linked_at wins) so a caller
+    switching to this map sees the same link per event.
+    """
+    path = sqlite_db.loop_db_path()
+    _ensure_schema(path)
+    with reading(path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM event_market_links
+            WHERE verified=1
+            ORDER BY linked_at ASC
+            """,
+        ).fetchall()
+    # Ascending + overwrite leaves the newest link per event, matching the
+    # per-event query's ORDER BY linked_at DESC LIMIT 1.
+    return {str(row["event_id"]): _row_to_dict(row) for row in rows}
+
+
 def get_links(event_id: str) -> list[dict[str, Any]]:
     """Return all links for an event (verified and not), newest first."""
     path = sqlite_db.loop_db_path()

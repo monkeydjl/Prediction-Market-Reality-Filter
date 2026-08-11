@@ -24,7 +24,13 @@ const ACTION_LABELS: Record<SourceAction, string> = {
   validate: "流水线校验",
 };
 
-/** A destructive import needs the operator to confirm once more (OQ-5). */
+/** A destructive import needs the operator to confirm once more (OQ-5).
+ *
+ * ``execute`` closes over the flags as they were when the dialog opened, so the
+ * inputs that feed it (替换模式, 试运行) are disabled while it is open. Without
+ * that, unchecking 替换模式 mid-dialog left the warning gone from the screen but
+ * the destructive replace still queued in the closure.
+ */
 type PendingConfirm = {
   label: string;
   detail: string;
@@ -261,8 +267,9 @@ export function IngestConsole() {
               type="checkbox"
               data-testid="replace-toggle"
               checked={replace}
+              disabled={busy || confirm !== null}
               onChange={(e) => setReplace(e.target.checked)}
-              className="size-3.5 accent-primary"
+              className="size-3.5 accent-primary disabled:cursor-not-allowed disabled:opacity-50"
             />
             替换模式（先清空同类事实）
           </label>
@@ -433,8 +440,9 @@ export function IngestConsole() {
               type="checkbox"
               data-testid="resolve-dry-run"
               checked={dryRun}
+              disabled={busy || confirm !== null}
               onChange={(e) => setDryRun(e.target.checked)}
-              className="size-3.5 accent-primary"
+              className="size-3.5 accent-primary disabled:cursor-not-allowed disabled:opacity-50"
             />
             试运行（不写入）
           </label>

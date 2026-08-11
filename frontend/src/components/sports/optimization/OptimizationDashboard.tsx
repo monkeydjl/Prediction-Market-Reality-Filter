@@ -198,7 +198,7 @@ export function OptimizationDashboard() {
       {phase9Disabled && (
         <div
           data-testid="phase9-disabled"
-          className="rounded border border-amber-400 bg-amber-50 p-3 text-amber-900"
+          className="rounded border border-warn/40 bg-warn/10 p-3 text-warn"
         >
           Phase 9 精度冲刺未启用或接口返回 503。请在后端配置{" "}
           <code className="rounded bg-muted px-1">PHASE9_ACCURACY_SPRINT_ENABLED=true</code>
@@ -209,7 +209,7 @@ export function OptimizationDashboard() {
       {mutationError && (
         <div
           data-testid="mutation-error"
-          className="rounded border border-red-400 bg-red-100 p-3 text-red-700"
+          className="rounded border border-neg/40 bg-neg/10 p-3 text-neg"
         >
           操作错误: {mutationError}
         </div>
@@ -217,7 +217,7 @@ export function OptimizationDashboard() {
       {fetchError && !phase9Disabled && (
         <div
           data-testid="error"
-          className="rounded border border-red-400 bg-red-100 p-3 text-red-700"
+          className="rounded border border-neg/40 bg-neg/10 p-3 text-neg"
         >
           加载错误: {fetchError}
         </div>
@@ -268,7 +268,7 @@ export function OptimizationDashboard() {
             onClick={handleRunOptimization}
             disabled={busy}
             aria-label="运行参数优化"
-            className="rounded bg-blue-500 px-4 py-2 text-white disabled:opacity-50"
+            className="rounded bg-primary px-4 py-2 text-primary-foreground disabled:opacity-50"
           >
             运行优化
           </button>
@@ -317,7 +317,7 @@ export function OptimizationDashboard() {
             onClick={handleIngest}
             disabled={busy}
             aria-label="导入历史赛季数据"
-            className="rounded bg-green-500 px-4 py-2 text-white disabled:opacity-50"
+            className="rounded bg-pos px-4 py-2 text-pos-foreground disabled:opacity-50"
           >
             数据导入
           </button>
@@ -361,9 +361,9 @@ export function OptimizationDashboard() {
               ? ` · ${taskStatus.current_match}`
               : ""}
           </div>
-          <div className="h-2 w-full rounded bg-gray-200">
+          <div className="h-2 w-full rounded bg-muted">
             <div
-              className="h-2 rounded bg-blue-500 transition-all"
+              className="h-2 rounded bg-primary transition-all"
               style={{
                 width: `${
                   taskStatus.total && taskStatus.total > 0
@@ -377,7 +377,7 @@ export function OptimizationDashboard() {
             />
           </div>
           {taskStatus.error && (
-            <div className="text-red-600">错误: {taskStatus.error}</div>
+            <div className="text-neg">错误: {taskStatus.error}</div>
           )}
         </div>
       )}
@@ -407,7 +407,7 @@ export function OptimizationDashboard() {
           <ScrollableTable aria-label="优化参数候选列表">
             <table className="w-full min-w-[48rem] border-collapse border text-sm">
               <thead>
-                <tr className="bg-gray-100">
+                <tr className="bg-muted">
                   <th scope="col" className="border p-2 text-left">
                     Sport
                   </th>
@@ -462,7 +462,7 @@ export function OptimizationDashboard() {
                           onClick={() => handleApply(p.id)}
                           disabled={busy}
                           aria-label={`应用参数集 ${p.id}`}
-                          className="rounded bg-indigo-500 px-3 py-1 text-sm text-white disabled:opacity-50"
+                          className="rounded bg-primary px-3 py-1 text-sm text-primary-foreground disabled:opacity-50"
                         >
                           应用
                         </button>

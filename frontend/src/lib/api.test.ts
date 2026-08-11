@@ -215,3 +215,91 @@ describe("eventsApi caching", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("eventsApi GET dedup", () => {
+  it("gives a joined caller its own timeout budget", async () => {
+    vi.useFakeTimers();
+    try {
+      let release: (() => void) | undefined;
+      const fetchMock = vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((resolve, reject) => {
+            // Reject on abort the way a real fetch does, so a caller that
+            // shares an aborted controller sees the AbortError.
+            init?.signal?.addEventListener("abort", () => {
+              const err = new Error("aborted");
+              err.name = "AbortError";
+              reject(err);
+            }, { once: true });
+            release = () =>
+              resolve(
+                new Response(JSON.stringify({ movers: [] }), {
+                  status: 200,
+                  headers: { "Content-Type": "application/json" },
+                }),
+              );
+          }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      // A starts, burns 59s of its own 60s budget, then B joins and shares the
+      // in-flight request. Before the fix B inherited A's controller and timer,
+      // so B failed with 请求超时 one second later - having waited 1s, not 60s.
+      const a = eventsApi.movers(11).catch((e: Error) => `A:${e.message}`);
+      await vi.advanceTimersByTimeAsync(59_000);
+      const b = eventsApi.movers(11).catch((e: Error) => `B:${e.message}`);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await a).toBe("A:请求超时，请稍后重试");
+
+      release?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await b).toMatchObject({ movers: [] });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the shared request alive for remaining waiters", async () => {
+    vi.useFakeTimers();
+    try {
+      const signals: AbortSignal[] = [];
+      let release: (() => void) | undefined;
+      const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+        if (init?.signal) signals.push(init.signal);
+        return new Promise<Response>((resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            const err = new Error("aborted");
+            err.name = "AbortError";
+            reject(err);
+          }, { once: true });
+          release = () =>
+            resolve(
+              new Response(JSON.stringify({ movers: [{ id: "m1" }] }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              }),
+            );
+        });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const a = eventsApi.movers(12).catch((e: Error) => `A:${e.message}`);
+      await vi.advanceTimersByTimeAsync(59_500);
+      const b = eventsApi.movers(12).catch((e: Error) => `B:${e.message}`);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await a).toBe("A:请求超时，请稍后重试");
+      // A gave up, but B is still waiting - aborting the shared fetch here
+      // would fail B for a deadline that was never B's.
+      expect(signals[0]?.aborted).toBe(false);
+
+      release?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await b).toMatchObject({ movers: [{ id: "m1" }] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

@@ -73,25 +73,36 @@ class CrossValidateTests(unittest.TestCase):
         self.assertEqual(result["divergence"], 40.0)
         self.assertEqual(result["agreement"], "low")
 
-    def test_invalid_probability_falls_back_to_primary(self):
+    def test_invalid_probability_returns_none(self):
+        """A missing ai_probability is a non-answer, not agreement.
+
+        Falling back to the primary estimate would make divergence 0 ->
+        agreement "high" -> credibility_delta +5, i.e. the system would
+        reward itself for a second model that said nothing.
+        """
         with patch.object(cv.settings, "CROSS_VALIDATION_MODEL", "m"), \
                 patch.object(cv, "_ask_second_model",
                              new=AsyncMock(return_value={"ai_probability": None})):
-            result = _run(cv.cross_validate("Q?", "ctx", 55.0))
-        self.assertEqual(result["probability"], 55.0)
-        self.assertEqual(result["divergence"], 0.0)
-        self.assertEqual(result["agreement"], "high")
+            self.assertIsNone(_run(cv.cross_validate("Q?", "ctx", 55.0)))
 
-    def test_non_finite_probability_falls_back_to_primary(self):
+    def test_non_finite_probability_returns_none(self):
         for value in ("NaN", "Infinity", "-Infinity"):
             with self.subTest(value=value), \
                     patch.object(cv.settings, "CROSS_VALIDATION_MODEL", "m"), \
                     patch.object(cv, "_ask_second_model",
                                  new=AsyncMock(return_value={"ai_probability": value})):
-                result = _run(cv.cross_validate("Q?", "ctx", 55.0))
-            self.assertEqual(result["probability"], 55.0)
-            self.assertEqual(result["divergence"], 0.0)
-            self.assertEqual(result["agreement"], "high")
+                self.assertIsNone(_run(cv.cross_validate("Q?", "ctx", 55.0)))
+
+    def test_zero_probability_is_a_real_answer(self):
+        """0% is a genuine estimate and must not be treated as "no answer"."""
+        with patch.object(cv.settings, "CROSS_VALIDATION_MODEL", "m"), \
+                patch.object(cv, "_ask_second_model",
+                             new=AsyncMock(return_value={"ai_probability": 0})):
+            result = _run(cv.cross_validate("Q?", "ctx", 55.0))
+        self.assertIsNotNone(result)
+        self.assertEqual(result["probability"], 0.0)
+        self.assertEqual(result["divergence"], 55.0)
+        self.assertEqual(result["agreement"], "low")
 
     def test_out_of_range_probability_is_clamped(self):
         with patch.object(cv.settings, "CROSS_VALIDATION_MODEL", "m"), \

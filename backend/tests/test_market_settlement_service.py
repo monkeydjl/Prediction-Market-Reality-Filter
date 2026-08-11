@@ -457,3 +457,130 @@ def test_get_history_filtered_by_engine(kernel_db, monkeypatch):
     assert len(history) == 1
     history_other = svc.get_history(limit=10, engine="OtherEngine")
     assert len(history_other) == 0
+
+
+def test_link_lookup_failure_does_not_write_permanent_skip(kernel_db, monkeypatch):
+    """A DB error during link lookup must not settle the match as "no links".
+
+    ``skipped_no_links`` is a final verdict: matches with settlement rows are
+    excluded from the next scan, so recording a transient failure that way
+    would permanently drop the match. The error must propagate instead.
+    """
+    from app.core import config
+    from app.kernel import market_settlement_service as mss
+    monkeypatch.setattr(config.settings, "MIN_SAMPLES_FOR_MARKET_CALIBRATION", 10)
+    _seed_prediction(match_id="m1")
+    _seed_outcome(match_id="m1")
+    _seed_verified_link(match_id="m1", mapped_outcome="home_win", implied_prob=0.7)
+    _seed_edge(match_id="m1", mapped_outcome="home_win")
+
+    def _boom(match_id, mapped_outcome):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(mss, "_find_verified_link_for_outcome", _boom)
+    svc = MarketSettlementService()
+
+    with pytest.raises(RuntimeError, match="database is locked"):
+        svc.process_settlement("m1")
+
+    # No settlement row was written, so the match stays eligible for a retry.
+    assert svc.get_settlement("m1") == []
+
+    # And scan_and_process counts it as an error rather than a skip.
+    monkeypatch.setattr(mss, "_find_verified_link_for_outcome", _boom)
+    result = svc.scan_and_process(limit=10)
+    assert result.errors == 1
+    assert result.skipped == 0
+    assert any("database is locked" in d for d in result.error_details)
+
+
+def test_find_verified_link_raises_instead_of_returning_none(kernel_db, monkeypatch):
+    """The helper itself must not swallow query errors into a None.
+
+    None means "no such link" and is acted on as a final verdict; a failed
+    query must be distinguishable from it.
+    """
+    from app.kernel import market_settlement_service as mss
+
+    class _BrokenSession:
+        def query(self, *a, **k):
+            raise RuntimeError("connection reset")
+
+        def close(self):
+            self.closed = True
+
+    broken = _BrokenSession()
+    monkeypatch.setattr(mss, "get_kernel_session", lambda: broken)
+
+    with pytest.raises(RuntimeError, match="connection reset"):
+        mss._find_verified_link_for_outcome("m1", "home_win")
+
+    # The session is still released on the error path.
+    assert broken.closed is True
+
+
+def test_find_verified_link_returns_none_when_absent(kernel_db):
+    """A genuinely missing link is still None (not an error)."""
+    from app.kernel import market_settlement_service as mss
+    assert mss._find_verified_link_for_outcome("no-such-match", "home_win") is None
+
+
+def test_snapshot_lookup_failure_does_not_write_permanent_skip(kernel_db, monkeypatch):
+    """A DB error during snapshot lookup must not settle the match as "no snapshot".
+
+    Same trap as the link lookup above: ``skipped_no_snapshot`` is a final
+    verdict and excludes the match from later scans, so a transient failure
+    recorded that way permanently drops it.
+    """
+    from app.core import config
+    from app.kernel import market_settlement_service as mss
+    monkeypatch.setattr(config.settings, "MIN_SAMPLES_FOR_MARKET_CALIBRATION", 10)
+    _seed_prediction(match_id="m1")
+    _seed_outcome(match_id="m1")
+    _seed_verified_link(match_id="m1", mapped_outcome="home_win", implied_prob=0.7)
+    _seed_edge(match_id="m1", mapped_outcome="home_win")
+
+    def _boom(link_id, finished_at):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(mss, "_find_settlement_snapshot", _boom)
+    svc = MarketSettlementService()
+
+    with pytest.raises(RuntimeError, match="database is locked"):
+        svc.process_settlement("m1")
+
+    # No settlement row was written, so the match stays eligible for a retry.
+    assert svc.get_settlement("m1") == []
+
+    monkeypatch.setattr(mss, "_find_settlement_snapshot", _boom)
+    result = svc.scan_and_process(limit=10)
+    assert result.errors == 1
+    assert result.skipped == 0
+    assert any("database is locked" in d for d in result.error_details)
+
+
+def test_find_settlement_snapshot_raises_instead_of_returning_none(kernel_db, monkeypatch):
+    """The helper itself must not swallow query errors into a None."""
+    from app.kernel import market_settlement_service as mss
+
+    class _BrokenSession:
+        def query(self, *a, **k):
+            raise RuntimeError("connection reset")
+
+        def close(self):
+            self.closed = True
+
+    broken = _BrokenSession()
+    monkeypatch.setattr(mss, "get_kernel_session", lambda: broken)
+
+    with pytest.raises(RuntimeError, match="connection reset"):
+        mss._find_settlement_snapshot(1, _utcnow())
+
+    # The session is still released on the error path.
+    assert broken.closed is True
+
+
+def test_find_settlement_snapshot_returns_none_when_absent(kernel_db):
+    """A genuinely missing snapshot is still None (not an error)."""
+    from app.kernel import market_settlement_service as mss
+    assert mss._find_settlement_snapshot(99999, _utcnow()) is None

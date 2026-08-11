@@ -19,9 +19,11 @@ from app.services.evidence_extraction_service import (
 )
 from app.services.market_semantics_service import parse_market_semantics
 from app.services.evidence_scoring_service import (
+    apply_sentiment_fusion,
     average_evidence_field,
     average_field,
     build_evidence_profile,
+    fuse_sentiment_direction,
     is_official_source,
     normalize_source_name,
 )
@@ -640,6 +642,93 @@ class SourceDeduplicationTests(unittest.TestCase):
         self.assertEqual(
             average_evidence_field([{"s": 0.1}, {"s": 0.2}], "s"), 0.15
         )
+
+
+def _sentiment(direction="support_yes", strength=0.9, conflict=0.0):
+    return {
+        "overall_direction": direction,
+        "overall_strength": strength,
+        "conflict_level": conflict,
+        "fallback": False,
+    }
+
+
+class SentimentFusionVolumeDecayTests(unittest.TestCase):
+    """LLM sentiment must carry the same source-count decay as keywords.
+
+    The LLM reads the SAME articles the keyword scorer does, so its confidence
+    is not independent corroboration. Without the decay the 0.6-weighted
+    sentiment term is undecayed, and a single-source story fuses to a strength
+    the decayed keyword path can never reach - inflating exactly what the
+    source dedup exists to prevent.
+    """
+
+    def test_single_source_fusion_stays_below_keyword_ceiling(self):
+        # 1 source -> volume 0.2, so the keyword path caps strength at 0.2.
+        # Undecayed fusion gave 0.6*0.9 + 0.4*0.2 = 0.62, a 3.1x inflation.
+        fused_dir, fused_str, _ = fuse_sentiment_direction(
+            "support", 0.2, _sentiment(strength=0.9), 0.2,
+        )
+        self.assertEqual(fused_dir, "support")
+        # 0.6*(0.9*0.2) + 0.4*0.2 = 0.188
+        self.assertAlmostEqual(fused_str, 0.188, places=3)
+        self.assertLessEqual(
+            fused_str, 0.2,
+            "a lone source must not fuse above the volume-decayed ceiling",
+        )
+
+    def test_full_volume_fusion_is_unchanged(self):
+        # 5+ sources -> volume 1.0; the decay is a no-op and the LLM keeps
+        # its full 0.6 weight. This is the case the formula was designed for.
+        _, fused_str, _ = fuse_sentiment_direction(
+            "support", 1.0, _sentiment(strength=0.9), 1.0,
+        )
+        self.assertAlmostEqual(fused_str, 0.94, places=3)
+
+    def test_default_volume_is_backward_compatible(self):
+        """Omitting the volume argument keeps the original undecayed formula."""
+        _, with_default, _ = fuse_sentiment_direction(
+            "support", 0.2, _sentiment(strength=0.9),
+        )
+        _, explicit_one, _ = fuse_sentiment_direction(
+            "support", 0.2, _sentiment(strength=0.9), 1.0,
+        )
+        self.assertAlmostEqual(with_default, explicit_one, places=6)
+
+    def test_build_profile_decays_sentiment_by_source_count(self):
+        """The in-profile fusion path passes the real source volume."""
+        articles = [
+            _article(f"Article {i}", "company wins approval", "Reuters Politics")
+            for i in range(5)
+        ]
+        profile = build_evidence_profile(QUESTION, articles, _sentiment(strength=0.9))
+
+        # 5 articles, all one outlet -> 1 source -> volume 0.2.
+        self.assertEqual(profile["source_count"], 1)
+        self.assertAlmostEqual(profile["evidence_strength"], 0.188, places=3)
+
+    def test_apply_sentiment_fusion_decays_by_independent_source_count(self):
+        """The production path (_build_filtered_news) must decay too.
+
+        apply_sentiment_fusion runs on an already-built profile after the LLM
+        returns, so it has to read the volume back off the profile rather than
+        recompute it from articles.
+        """
+        articles = [
+            _article(f"Article {i}", "company wins approval", "Reuters Politics")
+            for i in range(5)
+        ]
+        profile = build_evidence_profile(QUESTION, articles)
+        self.assertAlmostEqual(profile["evidence_strength"], 0.2, places=3)
+
+        apply_sentiment_fusion(profile, _sentiment(strength=0.9))
+        self.assertAlmostEqual(profile["evidence_strength"], 0.188, places=3)
+
+    def test_fallback_sentiment_still_skips_fusion(self):
+        profile = build_evidence_profile(QUESTION, SUPPORT_ARTICLES)
+        before = profile["evidence_strength"]
+        apply_sentiment_fusion(profile, {"fallback": True, "overall_strength": 0.9})
+        self.assertEqual(profile["evidence_strength"], before)
 
 
 if __name__ == "__main__":

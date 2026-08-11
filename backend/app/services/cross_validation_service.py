@@ -20,6 +20,7 @@ Event vocabulary only - no trading terms.
 """
 
 import logging
+import math
 from typing import Any
 
 from app.core.config import settings
@@ -73,7 +74,19 @@ async def cross_validate(
             context={"model": settings.CROSS_VALIDATION_MODEL},
         )
 
-    second = _clamp_pct(raw.get("ai_probability"), primary_probability)
+    # A response with no usable ai_probability is a non-answer, not agreement.
+    # Falling back to primary_probability here would make divergence 0 ->
+    # agreement "high" -> credibility_delta +5, i.e. the system would reward
+    # itself for a second model that said nothing. Skip instead (same contract
+    # as any other cross-validation failure: return None).
+    second = _parse_pct(raw.get("ai_probability"))
+    if second is None:
+        logger.warning(
+            "cross_validation: second model returned no usable ai_probability "
+            "(%r); skipping",
+            raw.get("ai_probability"),
+        )
+        return None
     divergence = round(abs(second - primary_probability), 2)
     return {
         "model": raw.get("_llm_model") or settings.CROSS_VALIDATION_MODEL,
@@ -140,8 +153,15 @@ def _agreement(divergence: float) -> str:
     return "low"
 
 
-def _clamp_pct(value, fallback: float) -> float:
-    number = safe_float(value, fallback)
+def _parse_pct(value) -> float | None:
+    """Clamp a percentage to 0-100, or None when it is not a usable number.
+
+    Returns None rather than a default so the caller can tell "the second model
+    did not answer" apart from "the second model answered 0%".
+    """
+    number = safe_float(value, float("nan"))
+    if not math.isfinite(number):
+        return None
     return max(0.0, min(100.0, number))
 
 

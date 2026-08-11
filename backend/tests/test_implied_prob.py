@@ -44,8 +44,27 @@ def test_odds_api_to_implied_empty_list():
     assert odds_api_to_implied([]) == []
 
 
-def test_odds_api_to_implied_skips_zero_odds():
+def test_odds_api_to_implied_zero_odds_keeps_position():
     from app.utils.implied_prob import odds_api_to_implied
-    # zero odds are skipped (guarded against division by zero)
+    # Zero odds are guarded against division by zero, but must NOT shorten the
+    # list: callers zip the result against outcome labels by index, so dropping
+    # entry 0 would hand the home probability to the away outcome.
     result = odds_api_to_implied([0.0, 2.0])
-    assert result == [pytest.approx(1.0)]
+    assert len(result) == 2
+    assert result == [pytest.approx(0.0), pytest.approx(1.0)]
+
+
+def test_odds_api_to_implied_length_always_matches_input():
+    from app.utils.implied_prob import odds_api_to_implied
+    # Three-way market where the draw price is missing from the feed.
+    result = odds_api_to_implied([1.8, -1.0, 3.4])
+    assert len(result) == 3
+    assert result[1] == pytest.approx(0.0)
+    assert sum(result) == pytest.approx(1.0)
+    assert result[0] > result[2]
+
+
+def test_odds_api_to_implied_all_invalid_returns_zeros():
+    from app.utils.implied_prob import odds_api_to_implied
+    result = odds_api_to_implied([0.0, 0.0, 0.0])
+    assert result == [0.0, 0.0, 0.0]

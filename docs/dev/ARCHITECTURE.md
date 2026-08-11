@@ -17,8 +17,8 @@
 │  └──────────┘ └──────────┘ └──────────────────────┘ │
 │  ┌──────────────────────────────────────────────────┐│
 │  │              APScheduler (in-process)            ││
-│  │  event_discover @07:15 UTC                     ││
-│  │  event_auto_resolve @22:30 UTC                 ││
+│  │  event_discover every 4h (+ once 30s after boot)  ││
+│  │  event_auto_resolve @22:30 UTC                    ││
 │  └──────────────────────────────────────────────────┘│
 └──────────┬───────────────────────────────────────────┘
            │
@@ -42,12 +42,12 @@
 │  ┌─────────────────────────────────────────────────────┐│
 │  │  API Layer (api/)                                   ││
 │  │  router.py → /api prefix                            ││
-│  │  routes/events.py → 18 endpoints                    ││
+│  │  routes/events.py → 76 endpoints                    ││
 │  │  security.py → require_write_key dependency         ││
 │  └───────────────────────┬─────────────────────────────┘│
 │                          │                               │
 │  ┌───────────────────────┴─────────────────────────────┐│
-│  │  Service Layer (services/)  36 modules              ││
+│  │  Service Layer (services/)  133 modules             ││
 │  │  ┌─────────────────┐  ┌────────────────────────┐   ││
 │  │  │ Event Discovery │  │ Reality Feedback Loop  │   ││
 │  │  │ - 2 market src  │  │ - auto_resolve         │   ││

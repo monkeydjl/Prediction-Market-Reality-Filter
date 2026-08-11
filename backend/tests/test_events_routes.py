@@ -2414,3 +2414,90 @@ class DashboardSmokeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BlockingSourceRouteOffloadTests(unittest.TestCase):
+    """Network-bound World Cup source routes must not block the event loop.
+
+    These handlers are ``async def`` but called synchronous helpers that do a
+    blocking ``urlopen`` against API-Football / Sportmonks / Football-Data.
+    A blocking call inside a coroutine runs ON the event loop thread, so one
+    unresponsive upstream freezes every other in-flight request until its
+    timeout expires (up to 30s), not just the caller's.
+
+    The probe below is the real invariant: while the handler is running, the
+    loop must still be able to schedule other work.
+    """
+
+    ROUTES = (
+        (
+            "/events/sports/world-cup/data/bundle/api-football/test",
+            "test_world_cup_api_football_connection",
+        ),
+        (
+            "/events/sports/world-cup/data/bundle/sportmonks/test",
+            "test_world_cup_sportmonks_connection",
+        ),
+        (
+            "/events/sports/world-cup/data/bundle/url/preview",
+            "preview_world_cup_source_bundle_url",
+        ),
+        (
+            "/events/sports/world-cup/data/bundle/feeds/preview",
+            "preview_world_cup_source_bundle_feeds",
+        ),
+        (
+            "/events/sports/world-cup/data/bundle/football-data/preview",
+            "preview_world_cup_football_data_standings",
+        ),
+        (
+            "/events/sports/world-cup/data/bundle/sportmonks/preview",
+            "preview_world_cup_sportmonks_bundle",
+        ),
+    )
+
+    def test_blocking_upstream_does_not_starve_the_event_loop(self):
+        import time
+
+        from httpx import ASGITransport, AsyncClient
+
+        for route, helper in self.ROUTES:
+            with self.subTest(route=route):
+                app = FastAPI()
+                app.include_router(events_routes.router, prefix="/events")
+
+                async def _exercise():
+                    ticks = 0
+
+                    async def _heartbeat():
+                        nonlocal ticks
+                        # Yields constantly; only a blocked loop stops it.
+                        while True:
+                            await asyncio.sleep(0.005)
+                            ticks += 1
+
+                    beat = asyncio.create_task(_heartbeat())
+                    transport = ASGITransport(app=app)
+                    async with AsyncClient(
+                        transport=transport, base_url="http://test"
+                    ) as client:
+                        resp = await client.post(route, headers=AUTH_HEADERS)
+                    beat.cancel()
+                    return resp, ticks
+
+                with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                        patch(
+                            f"app.api.routes.events.{helper}",
+                            side_effect=lambda *a, **k: (
+                                time.sleep(0.25) or {"ok": True}
+                            ),
+                        ):
+                    resp, ticks = asyncio.run(_exercise())
+
+                self.assertEqual(resp.status_code, 200)
+                self.assertGreater(
+                    ticks,
+                    5,
+                    f"{helper} blocked the event loop: the heartbeat only got "
+                    f"{ticks} ticks during a 0.25s upstream call",
+                )

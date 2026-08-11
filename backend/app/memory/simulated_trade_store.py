@@ -10,12 +10,13 @@ Schema lives in v2_loop.db alongside predictions (same connection).
 
 import logging
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from app.utils import sqlite_db
-from app.utils.sqlite_db import loop_db_path
+from app.utils.sqlite_db import loop_db_path, reading, writing
 
 logger = logging.getLogger(__name__)
 
@@ -59,13 +60,23 @@ CREATE INDEX IF NOT EXISTS idx_sim_trades_wins    ON simulated_trades(is_win) WH
 _SCHEMA_VERSION = 1
 _MIGRATIONS: dict[str, str] = {}
 
+_INITIALIZED: set[str] = set()
+_INIT_GUARD = threading.Lock()
 
-def _ensure_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(SCHEMA_SQL)
-    # apply_migrations reads PRAGMA table_info rows by column name; raw
-    # sqlite3.connect() defaults to tuple rows, so switch to Row.
-    conn.row_factory = sqlite3.Row
-    sqlite_db.apply_migrations(conn, "simulated_trades", _SCHEMA_VERSION, _MIGRATIONS)
+
+def _ensure_schema(path: str) -> None:
+    """Create the table on first use of a given DB path (idempotent)."""
+    if path in _INITIALIZED:
+        return
+    with _INIT_GUARD:
+        if path in _INITIALIZED:
+            return
+        with writing(path) as conn:
+            conn.executescript(SCHEMA_SQL)
+            sqlite_db.apply_migrations(
+                conn, "simulated_trades", _SCHEMA_VERSION, _MIGRATIONS
+            )
+        _INITIALIZED.add(path)
 
 
 # ── CRUD ────────────────────────────────────────────────────────────
@@ -85,11 +96,11 @@ def open_trade(
     """Create a new open simulated trade.  Idempotent: returns existing open
     trade for the same event_id instead of creating a duplicate."""
     db_path = loop_db_path()
-    conn = sqlite3.connect(db_path)
-    try:
-        _ensure_schema(conn)
-
-        # Idempotent: one open trade per event
+    _ensure_schema(db_path)
+    with writing(db_path) as conn:
+        # Idempotent: one open trade per event. The write lock is held for the
+        # whole scope, so the check and the insert cannot interleave with a
+        # concurrent open_trade for the same event.
         existing = conn.execute(
             "SELECT * FROM simulated_trades WHERE event_id=? AND status='open'",
             (event_id,),
@@ -108,7 +119,6 @@ def open_trade(
             (trade_id, event_id, event_title, direction, entry_prob, market_prob,
              edge, now, position_pct, confidence, trust_weight, decision),
         )
-        conn.commit()
         row = conn.execute(
             "SELECT * FROM simulated_trades WHERE trade_id=?", (trade_id,)
         ).fetchone()
@@ -117,8 +127,6 @@ def open_trade(
             trade_id, event_id[:12], direction, entry_prob, edge,
         )
         return _row_to_dict(row)
-    finally:
-        conn.close()
 
 
 def close_trade(
@@ -133,9 +141,8 @@ def close_trade(
     if exit_reason is None:
         exit_reason = _resolution_exit_reason(actual_outcome)
     db_path = loop_db_path()
-    conn = sqlite3.connect(db_path)
-    try:
-        _ensure_schema(conn)
+    _ensure_schema(db_path)
+    with writing(db_path) as conn:
         row = conn.execute(
             "SELECT * FROM simulated_trades WHERE event_id=? AND status='open'",
             (event_id,),
@@ -167,7 +174,6 @@ def close_trade(
              actual_outcome, pnl, is_win,
              now, trade["trade_id"]),
         )
-        conn.commit()
         logger.info(
             "Closed simulated trade %s: %s=%d, pnl=%.1f%%, win=%d",
             trade["trade_id"], direction, int(actual_outcome), pnl, is_win,
@@ -178,8 +184,6 @@ def close_trade(
                 (trade["trade_id"],),
             ).fetchone()
         )
-    finally:
-        conn.close()
 
 
 def _settlement_pnl_pct(
@@ -222,16 +226,13 @@ def _resolution_exit_reason(actual_outcome: float) -> str:
 
 def _count_trades(status: str) -> int:
     db_path = loop_db_path()
-    conn = sqlite3.connect(db_path)
-    try:
-        _ensure_schema(conn)
+    _ensure_schema(db_path)
+    with reading(db_path) as conn:
         row = conn.execute(
             "SELECT COUNT(*) AS n FROM simulated_trades WHERE status=?",
             (status,),
         ).fetchone()
         return int(row[0] if row else 0)
-    finally:
-        conn.close()
 
 
 def count_open_trades() -> int:
@@ -247,9 +248,8 @@ def count_closed_trades() -> int:
 def list_open_trades(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
     """Return open simulated trades, newest first."""
     db_path = loop_db_path()
-    conn = sqlite3.connect(db_path)
-    try:
-        _ensure_schema(conn)
+    _ensure_schema(db_path)
+    with reading(db_path) as conn:
         rows = conn.execute(
             """SELECT * FROM simulated_trades
                WHERE status='open'
@@ -258,16 +258,13 @@ def list_open_trades(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
             (limit, offset),
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
-    finally:
-        conn.close()
 
 
 def list_closed_trades(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
     """Return recently closed simulated trades."""
     db_path = loop_db_path()
-    conn = sqlite3.connect(db_path)
-    try:
-        _ensure_schema(conn)
+    _ensure_schema(db_path)
+    with reading(db_path) as conn:
         rows = conn.execute(
             """SELECT * FROM simulated_trades
                WHERE status='closed'
@@ -276,8 +273,6 @@ def list_closed_trades(limit: int = 100, offset: int = 0) -> list[dict[str, Any]
             (limit, offset),
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
-    finally:
-        conn.close()
 
 
 def recompute_closed_trades() -> dict[str, Any]:
@@ -289,9 +284,8 @@ def recompute_closed_trades() -> dict[str, Any]:
     position size, and actual_outcome.
     """
     db_path = loop_db_path()
-    conn = sqlite3.connect(db_path)
-    try:
-        _ensure_schema(conn)
+    _ensure_schema(db_path)
+    with writing(db_path) as conn:
         rows = conn.execute(
             "SELECT * FROM simulated_trades "
             "WHERE status='closed' AND actual_outcome IS NOT NULL"
@@ -322,7 +316,6 @@ def recompute_closed_trades() -> dict[str, Any]:
             total_pnl += pnl
             wins += is_win
 
-        conn.commit()
         updated = len(rows)
         return {
             "updated": updated,
@@ -331,8 +324,6 @@ def recompute_closed_trades() -> dict[str, Any]:
             "total_pnl_pct": round(total_pnl, 2),
             "avg_pnl_pct": round(total_pnl / updated, 2) if updated else None,
         }
-    finally:
-        conn.close()
 
 
 # Documents how the edge statistics in trade_stats() are computed, so API
@@ -347,10 +338,8 @@ _EDGE_DEFINITION: dict[str, str] = {
 def trade_stats() -> dict[str, Any]:
     """Aggregate statistics for all closed simulated trades."""
     db_path = loop_db_path()
-    conn = sqlite3.connect(db_path)
-    try:
-        _ensure_schema(conn)
-        conn.row_factory = sqlite3.Row
+    _ensure_schema(db_path)
+    with reading(db_path) as conn:
         total = conn.execute(
             "SELECT COUNT(*) as n FROM simulated_trades WHERE status='closed'"
         ).fetchone()["n"]
@@ -434,23 +423,18 @@ def trade_stats() -> dict[str, Any]:
             "by_direction": by_dir,
             "by_decision": by_decision,
         }
-    finally:
-        conn.close()
 
 
 def has_open_trade(event_id: str) -> bool:
     """Check if an event already has an open simulated trade."""
     db_path = loop_db_path()
-    conn = sqlite3.connect(db_path)
-    try:
-        _ensure_schema(conn)
+    _ensure_schema(db_path)
+    with reading(db_path) as conn:
         row = conn.execute(
             "SELECT 1 FROM simulated_trades WHERE event_id=? AND status='open'",
             (event_id,),
         ).fetchone()
         return row is not None
-    finally:
-        conn.close()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────

@@ -180,5 +180,90 @@ class CostCapEnforcementTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, ["gpt-4o-mini"])
 
 
+class SchemaMemoizationTests(unittest.TestCase):
+    """_ensure_schema must run once per DB path, not once per call.
+
+    Every other store in app/memory/ memoizes this behind a double-checked
+    lock; this one did not, so each get_spend_today() took a *write*
+    transaction (CREATE TABLE + migrations + version record) before its
+    SELECT — serializing every LLM call behind the global write lock.
+    """
+
+    def test_schema_is_not_rebuilt_on_every_access(self):
+        with tempfile.TemporaryDirectory() as tmp, _db(tmp):
+            store._INITIALIZED.clear()
+
+            writes = []
+            real_writing = sqlite_db.writing
+
+            def _counting_writing(path):
+                writes.append(path)
+                return real_writing(path)
+
+            with patch.object(store, "writing", _counting_writing):
+                store.get_spend_today()
+                store.get_spend_today()
+                store.get_spend_today()
+
+            # One schema build, and reads take no write transaction at all.
+            self.assertEqual(
+                len(writes),
+                1,
+                f"3 reads opened {len(writes)} write transactions; schema setup "
+                "must be memoized per path",
+            )
+
+    def test_spend_still_accumulates_across_a_fresh_path(self):
+        """Memoization is per path — a new DB must still get its schema."""
+        with tempfile.TemporaryDirectory() as tmp, _db(tmp):
+            store._INITIALIZED.clear()
+            store.add_spend(0.5)
+            self.assertAlmostEqual(store.get_spend_today(), 0.5)
+
+
+class CostCapOffloadTests(unittest.IsolatedAsyncioTestCase):
+    """The cap's SQLite work must not run on the event loop.
+
+    _cost_cap_exceeded() reads and _record_spend() writes, and both were called
+    synchronously from ``async def``. Under the write lock a single slow call
+    froze every other coroutine in the process.
+    """
+
+    async def test_cap_check_does_not_starve_the_event_loop(self):
+        import asyncio
+        import time
+
+        ticks = 0
+
+        async def _heartbeat():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.005)
+                ticks += 1
+
+        async def create(**kwargs):
+            return _fake_response()
+
+        beat = asyncio.create_task(_heartbeat())
+        with patch.object(gateway.settings, "LLM_DAILY_COST_CAP_USD", 1.0),                 patch.object(gateway, "_cost_cap_exceeded",
+                             side_effect=lambda: time.sleep(0.25) or (False, 0.0, 1.0)):
+            result = await gateway.complete_json(
+                task="default",
+                messages=[{"role": "user", "content": "x"}],
+                route=_ROUTE,
+                provider_configs=_CONFIGS,
+                client_factory=lambda provider: _FakeClient(create),
+            )
+        beat.cancel()
+
+        self.assertTrue(result.ok)
+        self.assertGreater(
+            ticks,
+            15,
+            f"the cap check blocked the event loop: the heartbeat only got "
+            f"{ticks} ticks during a 0.25s storage read",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

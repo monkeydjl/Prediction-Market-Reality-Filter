@@ -1,4 +1,5 @@
 from typing import Annotated, Any
+import asyncio
 import logging
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Path, Query
@@ -207,7 +208,7 @@ async def reset_all_event_data(_auth: None = Depends(require_write_key)):
     import sqlite3
 
     from app.core.config import settings
-    from app.utils.sqlite_db import loop_db_path
+    from app.utils.sqlite_db import loop_db_path, writing
 
     cleared: dict[str, int | str] = {}
 
@@ -231,19 +232,17 @@ async def reset_all_event_data(_auth: None = Depends(require_write_key)):
 
     # 4. v2_loop.db tables
     db_path = loop_db_path()
-    conn = sqlite3.connect(db_path)
     tables = ("predictions", "loop_runs", "event_market_links", "decision_timeline")
-    for table in tables:
-        try:
-            count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            conn.execute(f"DELETE FROM {table}")
-            cleared[f"sqlite.{table}"] = count
-        except sqlite3.OperationalError:
-            # Table doesn't exist yet (e.g. decision_timeline is only created
-            # when DECISION_TIMELINE_ENABLED is first used). Nothing to clear.
-            cleared[f"sqlite.{table}"] = 0
-    conn.commit()
-    conn.close()
+    with writing(db_path) as conn:
+        for table in tables:
+            try:
+                count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                conn.execute(f"DELETE FROM {table}")
+                cleared[f"sqlite.{table}"] = count
+            except sqlite3.OperationalError:
+                # Table doesn't exist yet (e.g. decision_timeline is only created
+                # when DECISION_TIMELINE_ENABLED is first used). Nothing to clear.
+                cleared[f"sqlite.{table}"] = 0
 
     # 5. Invalidate in-memory history cache so the next movers / edge
     #    request rebuilds from the (now empty) audit file instead of
@@ -375,7 +374,8 @@ async def get_loop_status(x_api_key: str | None = Header(default=None)):
     """Operational status for the unattended reality feedback loop."""
     from app.core.scheduler import scheduler
 
-    return loop_status(
+    return await asyncio.to_thread(
+        loop_status,
         scheduler_running=scheduler.running,
         include_run_details=is_write_key_valid(x_api_key),
     )
@@ -520,7 +520,7 @@ async def preview_remote_world_cup_source_bundle_route(
 ):
     """Preview facts from the configured WORLD_CUP_SOURCE_BUNDLE_URL."""
     try:
-        return preview_world_cup_source_bundle_url()
+        return await asyncio.to_thread(preview_world_cup_source_bundle_url)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -532,7 +532,9 @@ async def import_remote_world_cup_source_bundle_route(
 ):
     """Import facts from the configured WORLD_CUP_SOURCE_BUNDLE_URL."""
     try:
-        return import_world_cup_source_bundle_url(replace=replace)
+        return await asyncio.to_thread(
+            import_world_cup_source_bundle_url, replace=replace
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -543,7 +545,7 @@ async def preview_configured_world_cup_source_feeds_route(
 ):
     """Preview facts from configured raw World Cup source feed URLs."""
     try:
-        return preview_world_cup_source_bundle_feeds()
+        return await asyncio.to_thread(preview_world_cup_source_bundle_feeds)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -555,7 +557,9 @@ async def import_configured_world_cup_source_feeds_route(
 ):
     """Import facts from configured raw World Cup source feed URLs."""
     try:
-        return import_world_cup_source_bundle_feeds(replace=replace)
+        return await asyncio.to_thread(
+            import_world_cup_source_bundle_feeds, replace=replace
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -566,7 +570,9 @@ async def preview_api_football_world_cup_source_bundle_route(
 ):
     """Preview facts from configured API-Football World Cup feeds."""
     try:
-        return preview_world_cup_api_football_bundle()
+        # Blocking urlopen against API-Football: offload so a slow or
+        # unresponsive upstream stalls this request only, not the whole loop.
+        return await asyncio.to_thread(preview_world_cup_api_football_bundle)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -579,7 +585,9 @@ async def import_api_football_world_cup_source_bundle_route(
     """Import facts from configured API-Football World Cup feeds."""
     _require_successful_api_football_validation_before_import()
     try:
-        return import_world_cup_api_football_bundle(replace=replace)
+        return await asyncio.to_thread(
+            import_world_cup_api_football_bundle, replace=replace
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -606,7 +614,7 @@ async def test_api_football_connection_route(
     _auth: None = Depends(require_write_key),
 ):
     """Test API-Football connectivity and return account status."""
-    return test_world_cup_api_football_connection()
+    return await asyncio.to_thread(test_world_cup_api_football_connection)
 
 
 @router.post("/sports/world-cup/data/bundle/api-football/validate", response_model=FlexibleResponse)
@@ -616,7 +624,7 @@ async def validate_api_football_pipeline_route(
     """Validate pipeline: connection + sample fetch + compare with stored facts."""
     run_id = loop_run_store.start_run("world_cup_api_football_validate")
     try:
-        result = validate_world_cup_api_football_pipeline()
+        result = await asyncio.to_thread(validate_world_cup_api_football_pipeline)
     except Exception as exc:
         loop_run_store.finish_run(run_id, "failed", error=str(exc))
         raise
@@ -669,7 +677,7 @@ async def preview_football_data_world_cup_standings_route(
 ):
     """Preview qualification facts from configured Football-Data.org standings."""
     try:
-        return preview_world_cup_football_data_standings()
+        return await asyncio.to_thread(preview_world_cup_football_data_standings)
     except FootballDataAPIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except ValueError as exc:
@@ -683,7 +691,9 @@ async def import_football_data_world_cup_standings_route(
 ):
     """Import qualification facts from configured Football-Data.org standings."""
     try:
-        return import_world_cup_football_data_standings(replace=replace)
+        return await asyncio.to_thread(
+            import_world_cup_football_data_standings, replace=replace
+        )
     except FootballDataAPIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except ValueError as exc:
@@ -696,7 +706,7 @@ async def preview_sportmonks_world_cup_source_bundle_route(
 ):
     """Preview facts from configured Sportmonks-style World Cup feeds."""
     try:
-        return preview_world_cup_sportmonks_bundle()
+        return await asyncio.to_thread(preview_world_cup_sportmonks_bundle)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -708,7 +718,9 @@ async def import_sportmonks_world_cup_source_bundle_route(
 ):
     """Import facts from configured Sportmonks-style World Cup feeds."""
     try:
-        return import_world_cup_sportmonks_bundle(replace=replace)
+        return await asyncio.to_thread(
+            import_world_cup_sportmonks_bundle, replace=replace
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -718,7 +730,7 @@ async def test_sportmonks_connection_route(
     _auth: None = Depends(require_write_key),
 ):
     """Test Sportmonks connectivity and return connection status."""
-    return test_world_cup_sportmonks_connection()
+    return await asyncio.to_thread(test_world_cup_sportmonks_connection)
 
 
 @router.post("/sports/world-cup/data/bundle/sportmonks/validate", response_model=FlexibleResponse)
@@ -726,7 +738,7 @@ async def validate_sportmonks_pipeline_route(
     _auth: None = Depends(require_write_key),
 ):
     """Run Sportmonks pipeline diagnostic: connection + feed fetch + fact coverage."""
-    return validate_world_cup_sportmonks_pipeline()
+    return await asyncio.to_thread(validate_world_cup_sportmonks_pipeline)
 
 
 @router.post("/sports/world-cup/data/source/preview", response_model=FlexibleResponse)

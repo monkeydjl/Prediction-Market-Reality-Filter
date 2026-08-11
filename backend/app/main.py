@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -235,7 +236,8 @@ async def api_health(
     from app.core.scheduler import scheduler, scheduler_start_skipped_due_to_lock
     from app.services.loop_status_service import loop_status
 
-    status = loop_status(
+    status = await asyncio.to_thread(
+        loop_status,
         scheduler_running=scheduler.running,
         include_run_details=is_write_key_valid(x_api_key),
     )

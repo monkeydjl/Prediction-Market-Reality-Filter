@@ -7,6 +7,7 @@ route/config model so callers can share one routing vocabulary.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -448,7 +449,9 @@ async def _complete(
     configs = provider_configs if provider_configs is not None else _provider_configs()
     factory = client_factory or _default_client_factory
 
-    capped, spend, cap = _cost_cap_exceeded()
+    # Blocking SQLite read on the cap counter: offload so the pre-call check
+    # doesn't freeze the loop for every concurrent LLM caller.
+    capped, spend, cap = await asyncio.to_thread(_cost_cap_exceeded)
     if capped:
         logger.warning(
             "Daily LLM cost cap reached (%.4f/%.4f USD); refusing task=%s",
@@ -574,7 +577,9 @@ async def _complete(
                     latency_ms=latency_ms,
                 )
                 usage = _extract_usage(response)
-                _record_spend(model, usage)
+                # Blocking SQLite write: offload so recording spend doesn't
+                # stall the loop on the write lock after every success.
+                await asyncio.to_thread(_record_spend, model, usage)
                 return LLMResult(
                     ok=True,
                     content=content,
@@ -668,7 +673,9 @@ async def complete_embeddings(
     configs = provider_configs if provider_configs is not None else _provider_configs()
     factory = client_factory or _default_client_factory
 
-    capped, spend, cap = _cost_cap_exceeded()
+    # Blocking SQLite read on the cap counter: offload so the pre-call check
+    # doesn't freeze the loop for every concurrent LLM caller.
+    capped, spend, cap = await asyncio.to_thread(_cost_cap_exceeded)
     if capped:
         logger.warning(
             "Daily LLM cost cap reached (%.4f/%.4f USD); refusing embeddings",
@@ -734,7 +741,9 @@ async def complete_embeddings(
                     latency_ms=latency_ms,
                 )
                 usage = _extract_usage(response)
-                _record_spend(model, usage)
+                # Blocking SQLite write: offload so recording spend doesn't
+                # stall the loop on the write lock after every success.
+                await asyncio.to_thread(_record_spend, model, usage)
                 return LLMEmbeddingResult(
                     ok=True,
                     vectors=vectors,

@@ -121,6 +121,22 @@ describe("HistoryPage", () => {
     expect(screen.queryByRole("heading", { name: /最近预测记录/ })).not.toBeInTheDocument();
   });
 
+  it("stops the bucket spinner when a sibling fetch fails", async () => {
+    const user = userEvent.setup();
+    // The bucket call itself resolves; it is a *different* request in the same
+    // Promise.all that rejects. Before the fix the throw escaped loadData
+    // before setBucketLoading(false), so the panel showed the error banner and
+    // "加载分桶…" together, forever.
+    api.calibration.mockRejectedValue(new Error("calibration 500"));
+
+    render(<HistoryPage />);
+
+    expect(await screen.findByText(/calibration 500/)).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("compare-mode-edge_bucket"));
+    expect(screen.queryByText("加载分桶…")).not.toBeInTheDocument();
+  });
+
   it("paginates resolved reviews with 10 records per page", async () => {
     const user = userEvent.setup();
     api.list.mockImplementation(async (_limit = 10, offset = 0) => ({

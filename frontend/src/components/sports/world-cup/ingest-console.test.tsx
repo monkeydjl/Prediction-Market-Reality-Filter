@@ -129,6 +129,25 @@ describe("IngestConsole", () => {
     expect(ingestMocks.resolve).toHaveBeenLastCalledWith(false, 200);
   });
 
+  it("locks the mode toggles while a confirmation is open", async () => {
+    ingestMocks.runConfigured.mockResolvedValue({ imported: 5, replaced: 12 });
+    render(<IngestConsole />);
+
+    await userEvent.click(screen.getByTestId("replace-toggle"));
+    await userEvent.click(screen.getByTestId("source-data-file-import"));
+
+    // The queued execute() already captured replace=true, so letting the
+    // operator untick it here would hide the "先清空" warning while the
+    // destructive replace still ran.
+    expect(screen.getByTestId("replace-toggle")).toBeDisabled();
+    expect(screen.getByTestId("resolve-dry-run")).toBeDisabled();
+
+    await userEvent.click(screen.getByTestId("ingest-confirm-yes"));
+
+    expect(ingestMocks.runConfigured).toHaveBeenCalledWith("data/source", "import", true);
+    await waitFor(() => expect(screen.getByTestId("replace-toggle")).toBeEnabled());
+  });
+
   it("explains an empty fact query instead of rendering a blank block", async () => {
     ingestMocks.facts.mockResolvedValue({ count: 0, facts: [] });
     render(<IngestConsole />);

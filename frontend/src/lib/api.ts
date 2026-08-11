@@ -34,7 +34,45 @@ const BASE = getApiBase();
 const GET_CACHE_TTL_MS = 15_000;
 
 const getCache = new Map<string, { expiresAt: number; value: unknown }>();
-const inflightGets = new Map<string, Promise<unknown>>();
+
+/** A GET that is currently in flight, shared by every caller that joins it. */
+type Inflight = { promise: Promise<unknown>; waiters: number; abort: () => void };
+
+const inflightGets = new Map<string, Inflight>();
+
+/**
+ * Await a shared in-flight GET under this caller's own deadline.
+ *
+ * Joined callers used to be handed the originator's promise directly, so they
+ * inherited its AbortController and its timer: a caller that joined one second
+ * ago failed with 请求超时 the moment the originator's 60s budget ran out. Each
+ * caller now times its own wait, and the underlying fetch is aborted only once
+ * no caller is waiting on it any more.
+ */
+function awaitInflight<T>(entry: Inflight, timeoutMs: number): Promise<T> {
+  entry.waiters += 1;
+  return new Promise<T>((resolve, reject) => {
+    let done = false;
+    const timer = globalThis.setTimeout(() => {
+      if (done) return;
+      done = true;
+      entry.waiters -= 1;
+      if (entry.waiters === 0) entry.abort();
+      reject(new Error("请求超时，请稍后重试"));
+    }, timeoutMs);
+    const settle = (finish: () => void) => {
+      if (done) return;
+      done = true;
+      globalThis.clearTimeout(timer);
+      entry.waiters -= 1;
+      finish();
+    };
+    entry.promise.then(
+      (value) => settle(() => resolve(value as T)),
+      (error) => settle(() => reject(error)),
+    );
+  });
+}
 
 function pruneExpiredGetCache(now = Date.now()): void {
   for (const [key, cached] of getCache.entries()) {
@@ -127,13 +165,20 @@ async function api<T>(
   const isGet = method === "GET";
   const shouldCacheGet = isGet && options.cacheGet !== false;
   const cacheKey = `${BASE}${path}`;
+  const timeoutMs = options.timeoutMs ?? 60_000;
 
   if (shouldCacheGet) {
     pruneExpiredGetCache();
     const cached = getCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.value as T;
     const pending = inflightGets.get(cacheKey);
-    if (pending) return pending as Promise<T>;
+    if (pending) {
+      try {
+        return await awaitInflight<T>(pending, timeoutMs);
+      } catch (error) {
+        return handleFetchError(error);
+      }
+    }
   }
 
   const headers = new Headers(init?.headers);
@@ -143,10 +188,6 @@ async function api<T>(
   applyOperatorAuthHeaders(headers);
 
   const controller = new AbortController();
-  const timeout = globalThis.setTimeout(
-    () => controller.abort(),
-    options.timeoutMs ?? 60_000,
-  );
   const abort = () => controller.abort();
   init?.signal?.addEventListener("abort", abort, { once: true });
 
@@ -171,14 +212,33 @@ async function api<T>(
     return data;
   })();
 
-  if (shouldCacheGet) inflightGets.set(cacheKey, request as Promise<unknown>);
+  if (shouldCacheGet) {
+    const entry: Inflight = { promise: request, waiters: 0, abort };
+    inflightGets.set(cacheKey, entry);
+    // Deregister when the fetch settles rather than when this caller stops
+    // waiting: a caller that gives up early must not send the next one off to
+    // start a duplicate request. This handler also owns the rejection when no
+    // waiter is left to observe it.
+    void request.then(
+      () => inflightGets.delete(cacheKey),
+      () => inflightGets.delete(cacheKey),
+    );
+    try {
+      return await awaitInflight<T>(entry, timeoutMs);
+    } catch (error) {
+      return handleFetchError(error);
+    } finally {
+      init?.signal?.removeEventListener("abort", abort);
+    }
+  }
+
+  const timeout = globalThis.setTimeout(abort, timeoutMs);
 
   try {
     return await request;
   } catch (error) {
     return handleFetchError(error);
   } finally {
-    if (shouldCacheGet) inflightGets.delete(cacheKey);
     globalThis.clearTimeout(timeout);
     init?.signal?.removeEventListener("abort", abort);
   }

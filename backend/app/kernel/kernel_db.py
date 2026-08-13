@@ -9,11 +9,11 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import (
     JSON,
     Boolean,
-    Column,
     DateTime,
     Float,
     Index,
@@ -24,7 +24,7 @@ from sqlalchemy import (
     create_engine,
     event,
 )
-from sqlalchemy.orm import Session, sessionmaker, DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 logger = logging.getLogger(__name__)
 
@@ -33,81 +33,99 @@ _SessionLocal = None
 
 
 class KernelBase(DeclarativeBase):
-    pass
+    """Declarative base for the ``kernel_`` prefixed tables.
+
+    Typing note: the models below use SQLAlchemy 2.0 ``Mapped[T]`` /
+    ``mapped_column()`` rather than bare ``Column()``. Under ``Column()`` a type
+    checker sees ``row.match_id`` as ``Column[str]`` instead of ``str``, and
+    every write (``row.match_id = "x"``) reads as an incompatible assignment —
+    that pattern accounted for most of this repo's mypy baseline.
+
+    ``nullable=`` is stated explicitly on every column, including where it merely
+    restates the annotation, because the two spellings disagree by default:
+    ``Column(String)`` is nullable, ``mapped_column()`` under a non-Optional
+    ``Mapped[str]`` is not. Being explicit means the emitted DDL cannot silently
+    flip when an annotation is edited. ``tests/test_kernel_db_model_shape.py``
+    freezes the result.
+    """
 
 
 class KernelPrediction(KernelBase):
     __tablename__ = "kernel_predictions"
 
-    match_id = Column(String, primary_key=True)
-    sport = Column(String, nullable=False)
-    competition = Column(String, nullable=False)
-    season = Column(String, nullable=False)
-    engine = Column(String, nullable=False)
-    predicted_scores = Column(JSON, nullable=False)
-    outcome_probabilities = Column(JSON, nullable=False)
-    confidence = Column(Float, nullable=False)
-    feature_version = Column(String, nullable=False)
-    explanation = Column(JSON)
-    created_at = Column(DateTime)
-    updated_at = Column(DateTime)
+    match_id: Mapped[str] = mapped_column(String, primary_key=True)
+    sport: Mapped[str] = mapped_column(String, nullable=False)
+    competition: Mapped[str] = mapped_column(String, nullable=False)
+    season: Mapped[str] = mapped_column(String, nullable=False)
+    engine: Mapped[str] = mapped_column(String, nullable=False)
+    predicted_scores: Mapped[Any] = mapped_column(JSON, nullable=False)
+    outcome_probabilities: Mapped[Any] = mapped_column(JSON, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    feature_version: Mapped[str] = mapped_column(String, nullable=False)
+    explanation: Mapped[Any] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class KernelPredictionHistory(KernelBase):
     __tablename__ = "kernel_prediction_history"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    match_id = Column(String, nullable=False)
-    engine = Column(String, nullable=False)
-    predicted_scores = Column(JSON)
-    outcome_probabilities = Column(JSON)
-    confidence = Column(Float)
-    feature_version = Column(String)
-    trigger = Column(String)
-    created_at = Column(DateTime)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[str] = mapped_column(String, nullable=False)
+    engine: Mapped[str] = mapped_column(String, nullable=False)
+    predicted_scores: Mapped[Any] = mapped_column(JSON, nullable=True)
+    outcome_probabilities: Mapped[Any] = mapped_column(JSON, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    feature_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    trigger: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class KernelMatchOutcome(KernelBase):
     __tablename__ = "kernel_match_outcomes"
 
-    match_id = Column(String, primary_key=True)
-    home_score = Column(Integer)
-    away_score = Column(Integer)
-    outcome = Column(String)
-    engine = Column(String)
-    score_mae = Column(Float)
-    outcome_correct = Column(Integer)
-    brier_score = Column(Float)
-    finished_at = Column(DateTime)
-    created_at = Column(DateTime)
+    match_id: Mapped[str] = mapped_column(String, primary_key=True)
+    home_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    away_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String, nullable=True)
+    engine: Mapped[str | None] = mapped_column(String, nullable=True)
+    score_mae: Mapped[float | None] = mapped_column(Float, nullable=True)
+    outcome_correct: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    brier_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class KernelEngineScore(KernelBase):
     __tablename__ = "kernel_engine_scores"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    engine = Column(String, nullable=False)
-    competition = Column(String)  # NULL = global
-    accuracy = Column(Float)
-    avg_mae = Column(Float)
-    brier_score = Column(Float)
-    sample_count = Column(Integer, default=0)
-    confidence_calibration = Column(Float, default=0.0)
-    last_updated = Column(DateTime)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    engine: Mapped[str] = mapped_column(String, nullable=False)
+    # NULL = global
+    competition: Mapped[str | None] = mapped_column(String, nullable=True)
+    accuracy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    avg_mae: Mapped[float | None] = mapped_column(Float, nullable=True)
+    brier_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sample_count: Mapped[int | None] = mapped_column(Integer, default=0, nullable=True)
+    confidence_calibration: Mapped[float | None] = mapped_column(
+        Float, default=0.0, nullable=True
+    )
+    last_updated: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class KernelFactor(KernelBase):
     __tablename__ = "kernel_factors"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    factor_id = Column(String, nullable=False)
-    category = Column(String, nullable=False)
-    version = Column(String, nullable=False)
-    weight = Column(Float, default=1.0)
-    competition = Column(String)  # NULL = global
-    enabled = Column(Integer, default=1)
-    source = Column(String, default="manual")
-    updated_at = Column(DateTime)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    factor_id: Mapped[str] = mapped_column(String, nullable=False)
+    category: Mapped[str] = mapped_column(String, nullable=False)
+    version: Mapped[str] = mapped_column(String, nullable=False)
+    weight: Mapped[float | None] = mapped_column(Float, default=1.0, nullable=True)
+    # NULL = global
+    competition: Mapped[str | None] = mapped_column(String, nullable=True)
+    enabled: Mapped[int | None] = mapped_column(Integer, default=1, nullable=True)
+    source: Mapped[str | None] = mapped_column(String, default="manual", nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("factor_id", "competition", name="uq_factor_id_competition"),
@@ -117,15 +135,15 @@ class KernelFactor(KernelBase):
 class KernelCalibration(KernelBase):
     __tablename__ = "kernel_calibration"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    engine = Column(String(50), nullable=False)
-    competition = Column(String(50), nullable=False)
-    slope = Column(Float, nullable=False)
-    intercept = Column(Float, nullable=False)
-    sample_count = Column(Integer, nullable=False, default=0)
-    avg_confidence = Column(Float, nullable=False, default=0.0)
-    avg_accuracy = Column(Float, nullable=False, default=0.0)
-    last_updated = Column(DateTime, nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    engine: Mapped[str] = mapped_column(String(50), nullable=False)
+    competition: Mapped[str] = mapped_column(String(50), nullable=False)
+    slope: Mapped[float] = mapped_column(Float, nullable=False)
+    intercept: Mapped[float] = mapped_column(Float, nullable=False)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    avg_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    avg_accuracy: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    last_updated: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     __table_args__ = (
         UniqueConstraint("engine", "competition", name="uq_calibration_engine_competition"),
@@ -136,43 +154,47 @@ class KernelMatchFixture(KernelBase):
     """Fixture table for UCL/EPL matches (kernel_ prefixed)."""
     __tablename__ = "kernel_match_fixtures"
 
-    match_id = Column(String, primary_key=True)
-    competition = Column(String, nullable=False)
-    season = Column(String, nullable=False)
-    home_team = Column(String, nullable=False)
-    away_team = Column(String, nullable=False)
-    kickoff_utc = Column(DateTime)
-    stage = Column(String)
-    status = Column(String, default="scheduled")
-    home_score = Column(Integer)
-    away_score = Column(Integer)
-    venue = Column(String)
-    created_at = Column(DateTime)
-    updated_at = Column(DateTime)
+    match_id: Mapped[str] = mapped_column(String, primary_key=True)
+    competition: Mapped[str] = mapped_column(String, nullable=False)
+    season: Mapped[str] = mapped_column(String, nullable=False)
+    home_team: Mapped[str] = mapped_column(String, nullable=False)
+    away_team: Mapped[str] = mapped_column(String, nullable=False)
+    kickoff_utc: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    stage: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str | None] = mapped_column(
+        String, default="scheduled", nullable=True
+    )
+    home_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    away_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    venue: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class KernelMatchResult(KernelBase):
     """Match result table for UCL/EPL matches."""
     __tablename__ = "kernel_match_results"
 
-    match_id = Column(String, primary_key=True)
-    home_score = Column(Integer)
-    away_score = Column(Integer)
-    outcome = Column(String)
-    finished_at = Column(DateTime)
-    created_at = Column(DateTime)
+    match_id: Mapped[str] = mapped_column(String, primary_key=True)
+    home_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    away_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class KernelClubEloCache(KernelBase):
     """Cache for club Elo ratings from ClubElo.com."""
     __tablename__ = "kernel_club_elo_cache"
 
-    team_name = Column(String, primary_key=True)
-    elo_rating = Column(Float, nullable=False)
-    source = Column(String, default="clubelo")
-    fetched_at = Column(DateTime, nullable=False)
-    country = Column(String)
-    level = Column(Integer)
+    team_name: Mapped[str] = mapped_column(String, primary_key=True)
+    elo_rating: Mapped[float] = mapped_column(Float, nullable=False)
+    source: Mapped[str | None] = mapped_column(
+        String, default="clubelo", nullable=True
+    )
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    country: Mapped[str | None] = mapped_column(String, nullable=True)
+    level: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class KernelEloRating(KernelBase):
@@ -184,12 +206,14 @@ class KernelEloRating(KernelBase):
     """
     __tablename__ = "kernel_elo_ratings"
 
-    team_name = Column(String, primary_key=True)
-    sport = Column(String, nullable=False)
-    competition = Column(String, nullable=False)
-    elo_rating = Column(Float, nullable=False)
-    source = Column(String, default="self_computed")
-    updated_at = Column(DateTime, nullable=False)
+    team_name: Mapped[str] = mapped_column(String, primary_key=True)
+    sport: Mapped[str] = mapped_column(String, nullable=False)
+    competition: Mapped[str] = mapped_column(String, nullable=False)
+    elo_rating: Mapped[float] = mapped_column(Float, nullable=False)
+    source: Mapped[str | None] = mapped_column(
+        String, default="self_computed", nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
 class KernelSportMarketLink(KernelBase):
@@ -204,32 +228,38 @@ class KernelSportMarketLink(KernelBase):
         UniqueConstraint("match_id", "contract_id", "outcome_label", name="uq_sport_market_link"),
     )
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    match_id = Column(String, nullable=False, index=True)
-    contract_id = Column(String, nullable=False, index=True)
-    source = Column(String, nullable=False)  # "polymarket" | "odds_api"
-    outcome_label = Column(String, nullable=False)  # "YES" | "NO" | "home" | "away" | "draw"
-    mapped_outcome = Column(String, nullable=False)  # "home_win" | "away_win" | "draw"
-    link_method = Column(String, nullable=False)  # "rule" | "llm" | "odds_api" | "manual"
-    link_confidence = Column(Float, nullable=False, default=0.0)
-    verified = Column(Integer, nullable=False, default=0, index=True)
-    market_question = Column(String)
-    implied_prob = Column(Float, nullable=False, default=0.0)
-    created_at = Column(DateTime)
-    updated_at = Column(DateTime)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    contract_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    # "polymarket" | "odds_api"
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    # "YES" | "NO" | "home" | "away" | "draw"
+    outcome_label: Mapped[str] = mapped_column(String, nullable=False)
+    # "home_win" | "away_win" | "draw"
+    mapped_outcome: Mapped[str] = mapped_column(String, nullable=False)
+    # "rule" | "llm" | "odds_api" | "manual"
+    link_method: Mapped[str] = mapped_column(String, nullable=False)
+    link_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    verified: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, index=True
+    )
+    market_question: Mapped[str | None] = mapped_column(String, nullable=True)
+    implied_prob: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class KernelMarketSnapshot(KernelBase):
     """Price time-series for a sport market link (append-only)."""
     __tablename__ = "kernel_market_snapshots"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    link_id = Column(Integer, nullable=False, index=True)
-    implied_prob = Column(Float, nullable=False)
-    price = Column(Float)
-    liquidity = Column(Float)
-    volume = Column(Float)
-    captured_at = Column(DateTime)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    link_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    implied_prob: Mapped[float] = mapped_column(Float, nullable=False)
+    price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    liquidity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volume: Mapped[float | None] = mapped_column(Float, nullable=True)
+    captured_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class KernelSportEdge(KernelBase):
@@ -241,19 +271,29 @@ class KernelSportEdge(KernelBase):
     """
     __tablename__ = "kernel_sport_edges"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    match_id = Column(String, nullable=False, index=True)
-    mapped_outcome = Column(String, nullable=False)  # "home_win" | "draw" | "away_win"
-    model_prob = Column(Float, nullable=False)        # 0-1
-    market_prob = Column(Float, nullable=False)       # 0-1, liquidity-weighted
-    raw_edge = Column(Float, nullable=False)          # model_prob - market_prob, -1.0 to +1.0
-    trust = Column(Float, nullable=False)             # 0-1, from KernelCalibration
-    liquidity_factor = Column(Float, nullable=False)  # 0-1
-    adjusted_edge = Column(Float, nullable=False)     # raw_edge * trust * liquidity_factor
-    spread = Column(Float, nullable=True)             # Polymarket YES+NO-1; None for traditional odds
-    sources_count = Column(Integer, nullable=False)
-    stale = Column(Boolean, nullable=False, default=False)
-    captured_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    # "home_win" | "draw" | "away_win"
+    mapped_outcome: Mapped[str] = mapped_column(String, nullable=False)
+    # 0-1
+    model_prob: Mapped[float] = mapped_column(Float, nullable=False)
+    # 0-1, liquidity-weighted
+    market_prob: Mapped[float] = mapped_column(Float, nullable=False)
+    # model_prob - market_prob, -1.0 to +1.0
+    raw_edge: Mapped[float] = mapped_column(Float, nullable=False)
+    # 0-1, from KernelCalibration
+    trust: Mapped[float] = mapped_column(Float, nullable=False)
+    # 0-1
+    liquidity_factor: Mapped[float] = mapped_column(Float, nullable=False)
+    # raw_edge * trust * liquidity_factor
+    adjusted_edge: Mapped[float] = mapped_column(Float, nullable=False)
+    # Polymarket YES+NO-1; None for traditional odds
+    spread: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sources_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
 
     __table_args__ = (
         Index("ix_kernel_sport_edges_match_outcome_captured", "match_id", "mapped_outcome", "captured_at"),
@@ -272,25 +312,27 @@ class KernelMarketSettlement(KernelBase):
         UniqueConstraint("match_id", "mapped_outcome", name="uq_market_settlement_match_outcome"),
     )
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    match_id = Column(String, nullable=False, index=True)
-    mapped_outcome = Column(String, nullable=False)
-    engine = Column(String, nullable=False)
-    competition = Column(String, nullable=False)
-    settlement_implied_prob = Column(Float)
-    settlement_captured_at = Column(DateTime)
-    link_id = Column(Integer)
-    model_prob = Column(Float)
-    market_prob_at_detection = Column(Float)
-    raw_edge = Column(Float)
-    adjusted_edge = Column(Float)
-    brier_score = Column(Float)
-    signed_error = Column(Float)
-    direction_correct = Column(Integer)
-    status = Column(String, nullable=False, default="processed")
-    skip_reason = Column(String)
-    match_finished_at = Column(DateTime, nullable=False)
-    processed_at = Column(DateTime, nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    mapped_outcome: Mapped[str] = mapped_column(String, nullable=False)
+    engine: Mapped[str] = mapped_column(String, nullable=False)
+    competition: Mapped[str] = mapped_column(String, nullable=False)
+    settlement_implied_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    settlement_captured_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    link_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    market_prob_at_detection: Mapped[float | None] = mapped_column(Float, nullable=True)
+    raw_edge: Mapped[float | None] = mapped_column(Float, nullable=True)
+    adjusted_edge: Mapped[float | None] = mapped_column(Float, nullable=True)
+    brier_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    signed_error: Mapped[float | None] = mapped_column(Float, nullable=True)
+    direction_correct: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="processed")
+    skip_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    match_finished_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    processed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
 class KernelMarketCalibration(KernelBase):
@@ -304,16 +346,16 @@ class KernelMarketCalibration(KernelBase):
         UniqueConstraint("engine", "competition", name="uq_market_calibration_engine_competition"),
     )
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    engine = Column(String(50), nullable=False)
-    competition = Column(String(50), nullable=False)
-    slope = Column(Float, nullable=False, default=1.0)
-    intercept = Column(Float, nullable=False, default=0.0)
-    sample_count = Column(Integer, nullable=False, default=0)
-    avg_brier = Column(Float, nullable=False, default=0.0)
-    avg_signed_error = Column(Float, nullable=False, default=0.0)
-    direction_accuracy = Column(Float, nullable=False, default=0.0)
-    last_updated = Column(DateTime, nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    engine: Mapped[str] = mapped_column(String(50), nullable=False)
+    competition: Mapped[str] = mapped_column(String(50), nullable=False)
+    slope: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    intercept: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    avg_brier: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    avg_signed_error: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    direction_accuracy: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    last_updated: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
 class KernelTraditionalOddsSnapshot(KernelBase):
@@ -331,36 +373,47 @@ class KernelTraditionalOddsSnapshot(KernelBase):
         ),
     )
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    match_id = Column(String, nullable=False, index=True)
-    mapped_outcome = Column(String, nullable=False)
-    competition = Column(String, nullable=False)
-    implied_prob = Column(Float, nullable=False)
-    decimal_odds = Column(Float, nullable=False)
-    bookmaker = Column(String, nullable=True)
-    bookmakers_count = Column(Integer, default=0)
-    captured_at = Column(DateTime, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    mapped_outcome: Mapped[str] = mapped_column(String, nullable=False)
+    competition: Mapped[str] = mapped_column(String, nullable=False)
+    implied_prob: Mapped[float] = mapped_column(Float, nullable=False)
+    decimal_odds: Mapped[float] = mapped_column(Float, nullable=False)
+    bookmaker: Mapped[str | None] = mapped_column(String, nullable=True)
+    bookmakers_count: Mapped[int | None] = mapped_column(
+        Integer, default=0, nullable=True
+    )
+    captured_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=True
+    )
 
 
 class KernelOptimizedParams(KernelBase):
     """Stores optimized parameter sets from Phase 9 backtesting."""
     __tablename__ = "kernel_optimized_params"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    sport = Column(String, nullable=False, index=True)
-    competition = Column(String, nullable=False, index=True)
-    factor_weights = Column(Text, nullable=False)  # JSON
-    elo_params = Column(Text, nullable=False)  # JSON
-    score = Column(Float, nullable=False)
-    accuracy = Column(Float, nullable=False)
-    brier_score = Column(Float, nullable=False)
-    mae = Column(Float, nullable=False)
-    sample_count = Column(Integer, nullable=False)
-    trial_number = Column(Integer, nullable=True)
-    status = Column(String, default="candidate")  # candidate / applied / archived
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    applied_at = Column(DateTime, nullable=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    sport: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    competition: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    # JSON
+    factor_weights: Mapped[str] = mapped_column(Text, nullable=False)
+    # JSON
+    elo_params: Mapped[str] = mapped_column(Text, nullable=False)
+    score: Mapped[float] = mapped_column(Float, nullable=False)
+    accuracy: Mapped[float] = mapped_column(Float, nullable=False)
+    brier_score: Mapped[float] = mapped_column(Float, nullable=False)
+    mae: Mapped[float] = mapped_column(Float, nullable=False)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    trial_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # candidate / applied / archived
+    status: Mapped[str | None] = mapped_column(
+        String, default="candidate", nullable=True
+    )
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=True
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class KernelFuturesLink(KernelBase):
@@ -377,17 +430,21 @@ class KernelFuturesLink(KernelBase):
         ),
     )
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    competition = Column(String, nullable=False, index=True)
-    season = Column(String, nullable=False, index=True)
-    team = Column(String, nullable=False)
-    contract_id = Column(String, nullable=False)
-    source = Column(String, nullable=False)
-    market_question = Column(String, nullable=True)
-    implied_prob = Column(Float, nullable=True)
-    verified = Column(Integer, default=0)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    competition: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    season: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    team: Mapped[str] = mapped_column(String, nullable=False)
+    contract_id: Mapped[str] = mapped_column(String, nullable=False)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    market_question: Mapped[str | None] = mapped_column(String, nullable=True)
+    implied_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    verified: Mapped[int | None] = mapped_column(Integer, default=0, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=True
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=True
+    )
 
 
 class KernelFuturesSnapshot(KernelBase):
@@ -397,13 +454,13 @@ class KernelFuturesSnapshot(KernelBase):
         Index("ix_futures_snapshots_link_id", "link_id"),
     )
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    link_id = Column(Integer, nullable=False)
-    implied_prob = Column(Float, nullable=False)
-    price = Column(Float, nullable=True)
-    liquidity = Column(Float, nullable=True)
-    volume = Column(Float, nullable=True)
-    captured_at = Column(DateTime, nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    link_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    implied_prob: Mapped[float] = mapped_column(Float, nullable=False)
+    price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    liquidity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volume: Mapped[float | None] = mapped_column(Float, nullable=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
 def _get_engine(db_path: str):

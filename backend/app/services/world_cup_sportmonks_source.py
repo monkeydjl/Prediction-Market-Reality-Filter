@@ -378,7 +378,7 @@ def _fixture_row(raw: dict[str, Any]) -> dict[str, Any]:
         "status": _fixture_status(raw),
         "winner": _winner_name(raw, home, away),
     }
-    home_score, away_score = _score(raw, home.get("id"), away.get("id"))
+    home_score, away_score = _score(raw, home.get("id", ""), away.get("id", ""))
     if home_score != "":
         row["home_score"] = home_score
     if away_score != "":
@@ -498,8 +498,10 @@ def _participants(raw: dict[str, Any]) -> tuple[dict[str, str], dict[str, str]]:
     if not isinstance(participants, list):
         return {}, {}
 
-    home: dict[str, str] = {}
-    away: dict[str, str] = {}
+    # Not re-annotated: both names are already bound (and so already typed
+    # dict[str, str]) by the participants-dict branch above.
+    home = {}
+    away = {}
     fallback: list[dict[str, str]] = []
     for participant in participants:
         if not isinstance(participant, dict):
@@ -675,7 +677,9 @@ def _provider_result_metadata(
                 "source_url": _clean(entry.get("source_url")),
                 "observed_at": _clean(entry.get("observed_at")),
             }
-            for entry in sources
+            # Same list guard the two fields below already carry: a payload
+            # without a "sources" key would otherwise iterate None.
+            for entry in (sources if isinstance(sources, list) else [])
             if isinstance(entry, dict)
         ],
         "skipped_source_count": len(skipped) if isinstance(skipped, list) else 0,

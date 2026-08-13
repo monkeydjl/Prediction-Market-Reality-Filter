@@ -1068,7 +1068,12 @@ async def _collect_candidate_events(
     )
     per_source: list[list[dict[str, Any]]] = []
     for label, result in zip(labels, results):
-        if isinstance(result, Exception):
+        # BaseException, not Exception: gather(return_exceptions=True) hands back
+        # a cancelled source's CancelledError as a result value, and that is not
+        # an Exception — letting it through made the zip_longest below try to
+        # iterate an exception object, losing the whole scan instead of the one
+        # source.
+        if isinstance(result, BaseException):
             logger.warning("Event source failed [%s]: %s", label, result)
             # Report source failure to status tracker
             try:
@@ -1442,7 +1447,10 @@ def _persist_events(records: list[dict[str, Any]]) -> None:
             # Auto-create a simulated trade for paper-trading evaluation.
             # Gate: PAPER_TRADE_ENABLED must be true; for watch-grade events
             # PAPER_TRADE_WATCH_ENABLED must also be true.
-            trade_dec = pred.get("decision") if pred else None
+            # Coerced to a plain string: it is used as a dict key and passed to
+            # open_trade(decision=...) below, and a missing decision falls
+            # through every gate the same way None did.
+            trade_dec = str(pred.get("decision") or "") if pred else ""
             create_trade = False
             if trade_dec in ("act", "provisional_act"):
                 create_trade = getattr(settings, "PAPER_TRADE_ENABLED", False)
@@ -1452,7 +1460,9 @@ def _persist_events(records: list[dict[str, Any]]) -> None:
                 try:
                     from app.memory.simulated_trade_store import open_trade
                     rec = record.get("actionable_recommendation") or {}
-                    direction = rec.get("direction") if rec.get("direction") in ("YES", "NO") else "YES"
+                    direction = str(rec.get("direction") or "")
+                    if direction not in ("YES", "NO"):
+                        direction = "YES"
                     ai_prob = pred.get("ai_probability", 50.0)
                     mkt_prob = pred.get("market_probability", 50.0)
                     entry_edge = ai_prob - mkt_prob

@@ -18,7 +18,9 @@ from app.services.world_cup_source_bundle import (
 )
 
 _PROVIDER = "api_football"
-_FEEDS = (
+# (feed kind, API path, default query params). Annotated because the two empty
+# param dicts leave the value type unresolvable on their own.
+_FEEDS: tuple[tuple[str, str, dict[str, str]], ...] = (
     ("matches", "fixtures", {}),
     ("standings", "standings", {}),
     ("player_awards", "players/topscorers", {"award": "golden_boot"}),
@@ -634,7 +636,9 @@ def _provider_result_metadata(
                 "source_url": _clean(entry.get("source_url")),
                 "observed_at": _clean(entry.get("observed_at")),
             }
-            for entry in sources
+            # Same list guard the fields below already carry: a payload without
+            # a "sources" key would otherwise iterate None.
+            for entry in (sources if isinstance(sources, list) else [])
             if isinstance(entry, dict)
         ],
         "skipped_source_count": len(skipped) if isinstance(skipped, list) else 0,

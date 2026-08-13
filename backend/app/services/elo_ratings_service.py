@@ -314,7 +314,7 @@ def _save_to_cache(session, team_name: str, data: dict[str, Any]) -> None:
 # For teams outside the top 20, improved estimates based on
 # confederation strength and recent results are used.
 
-WORLD_CUP_2026_ELO_ESTIMATES = [
+WORLD_CUP_2026_ELO_ESTIMATES: list[dict[str, Any]] = [
     # Top 20 from Wikipedia (accurate as of 2026-06-22)
     {"team_name": "Argentina", "elo_rating": 2144, "fifa_rank": 1, "confederation": "CONMEBOL"},
     {"team_name": "Spain", "elo_rating": 2134, "fifa_rank": 2, "confederation": "UEFA"},

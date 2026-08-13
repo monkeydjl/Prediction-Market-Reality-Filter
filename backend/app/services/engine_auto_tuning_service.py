@@ -59,7 +59,7 @@ async def analyze_and_optimize_all_predictions(
 
         matches = query.all()
 
-        results = {
+        results: dict[str, Any] = {
             "total_processed": 0,
             "optimizations_generated": 0,
             "errors": [],
@@ -213,8 +213,8 @@ def calculate_optimization_patterns(engine_name: str) -> dict[str, Any]:
         away_win_prob_diffs = []
         confidence_diffs = []
 
-        blind_spot_counts = {}
-        calibration_issue_counts = {}
+        blind_spot_counts: dict[str, int] = {}
+        calibration_issue_counts: dict[str, int] = {}
 
         for opt in optimizations:
             home_score_diffs.append(opt.optimized_home_score - opt.original_home_score)

@@ -39,7 +39,7 @@ async def get_cached_odds(
     home_team: str,
     away_team: str,
     ttl_seconds: int = 3600,  # 1 hour default
-    commence_time: str | None = None,
+    commence_time: str | datetime | None = None,
     allow_stale: bool = True,
     max_stale_hours: int = 168,
     competition: str = "wc",
@@ -50,7 +50,8 @@ async def get_cached_odds(
         home_team: Home team name
         away_team: Away team name
         ttl_seconds: Cache TTL in seconds (default 1 hour)
-        commence_time: Match kickoff time for API fetch
+        commence_time: Match kickoff time for API fetch. ISO string or
+            ``datetime`` — ``fetch_match_odds`` accepts either.
         competition: Competition code (default "wc" = World Cup). Forwarded
             to ``fetch_match_odds`` and used to namespace the cache key.
 

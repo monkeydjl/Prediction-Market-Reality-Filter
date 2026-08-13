@@ -15,12 +15,13 @@ from __future__ import annotations
 
 from app.kernel.domain import SportIdentity, MatchIdentity, FeatureSet
 from app.kernel.market_liquidity import enrich_feature_set_liquidity
+from app.kernel.protocols import FeatureBuilder
 
 
 class MultiFeatureBuilder:
     """FeatureBuilder Protocol proxy — dispatches by match_id prefix."""
 
-    def __init__(self, builders: dict[str, object]) -> None:
+    def __init__(self, builders: dict[str, FeatureBuilder]) -> None:
         """Initialize with prefix-to-builder mapping.
 
         Args:
@@ -31,7 +32,7 @@ class MultiFeatureBuilder:
         self._builders = builders
         self._default = next(iter(builders.values()))
 
-    def _select(self, match_id: str) -> object:
+    def _select(self, match_id: str) -> FeatureBuilder:
         """Select the builder for a given match_id by prefix."""
         for prefix, builder in self._builders.items():
             if match_id.startswith(prefix):

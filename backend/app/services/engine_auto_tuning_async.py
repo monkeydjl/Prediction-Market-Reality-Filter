@@ -72,7 +72,7 @@ async def _run_async_optimization_impl(engine_name: str, task_id: str) -> dict[s
             log_message=f"开始优化 {total_matches} 场比赛"
         )
 
-        results = {
+        results: dict[str, Any] = {
             "total_processed": 0,
             "optimizations_generated": 0,
             "errors": []

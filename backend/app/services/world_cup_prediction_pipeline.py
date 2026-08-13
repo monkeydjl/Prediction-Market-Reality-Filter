@@ -1498,7 +1498,7 @@ async def batch_predict_matches(
     finally:
         close_prediction_session(session)
 
-    results = {
+    results: dict[str, Any] = {
         "status": "ok",
         "total": len(match_ids_to_run),
         "succeeded": 0,
@@ -1541,7 +1541,11 @@ async def batch_predict_matches(
     )
 
     for result in raw_results:
-        if isinstance(result, Exception):
+        # BaseException, not Exception: gather(return_exceptions=True) hands back
+        # a task's CancelledError as a result value too, and that is not an
+        # Exception — treating it as a dict below would raise AttributeError and
+        # lose the whole batch summary.
+        if isinstance(result, BaseException):
             # An unexpected exception (not a returned {"status": "error"})
             # means the pipeline blew up before its try/except could shape a
             # response. Log it and count as failed so the summary stays

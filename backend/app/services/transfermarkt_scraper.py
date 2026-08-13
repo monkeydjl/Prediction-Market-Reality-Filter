@@ -269,7 +269,7 @@ async def batch_scrape_world_cup_teams(delay_seconds: float = 2.0) -> dict[str, 
     Returns:
         Summary with success/failure counts
     """
-    results = {
+    results: dict[str, Any] = {
         "status": "ok",
         "total": len(TRANSFERMARKT_TEAM_URLS),
         "succeeded": 0,

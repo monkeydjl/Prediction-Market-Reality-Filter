@@ -1,10 +1,10 @@
 import type { SportRecommendation } from "@/lib/sports-api";
 
 const DIRECTION_STYLES: Record<string, string> = {
-  YES: "bg-green-100 text-green-800",
-  NO: "bg-red-100 text-red-800",
-  WAIT: "bg-gray-100 text-gray-800",
-  AVOID: "bg-orange-100 text-orange-800",
+  YES: "bg-pos/10 text-pos",
+  NO: "bg-neg/10 text-neg",
+  WAIT: "bg-muted text-muted-foreground",
+  AVOID: "bg-warn/10 text-warn",
 };
 
 const DECISION_LABELS: Record<string, string> = {
@@ -22,10 +22,10 @@ const PRIORITY_LABELS: Record<string, string> = {
 };
 
 const PRIORITY_STYLES: Record<string, string> = {
-  critical: "bg-red-100 text-red-800",
-  high: "bg-amber-100 text-amber-900",
-  normal: "bg-slate-100 text-slate-700",
-  low: "bg-gray-50 text-gray-500",
+  critical: "bg-neg/10 text-neg",
+  high: "bg-warn/10 text-warn",
+  normal: "bg-secondary text-secondary-foreground",
+  low: "bg-muted/40 text-muted-foreground",
 };
 
 const OUTCOME_LABELS: Record<string, string> = {
@@ -54,7 +54,7 @@ export function RecommendationCard({
       <div className="flex items-center gap-2">
         <span
           data-testid={`direction-${rec.match_id}`}
-          className={`rounded px-2 py-0.5 text-xs font-medium ${DIRECTION_STYLES[rec.direction] ?? "bg-gray-100"}`}
+          className={`rounded px-2 py-0.5 text-xs font-medium ${DIRECTION_STYLES[rec.direction] ?? "bg-muted text-muted-foreground"}`}
         >
           {rec.direction}
         </span>
@@ -110,7 +110,7 @@ export function RecommendationCard({
           {rec.guardrail_flags && rec.guardrail_flags.length > 0 && (
             <div data-testid={`guardrails-${rec.match_id}`} className="flex flex-wrap gap-1">
               {rec.guardrail_flags.map((f) => (
-                <span key={f} className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-300">
+                <span key={f} className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] text-warn">
                   {f}
                 </span>
               ))}

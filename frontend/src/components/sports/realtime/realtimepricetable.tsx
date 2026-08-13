@@ -44,7 +44,7 @@ export function RealtimePriceTable({ matchId }: RealtimePriceTableProps) {
       {disabled && (
         <div
           data-testid="ws-disabled"
-          className="mb-3 rounded border border-amber-400 bg-amber-50 p-3 text-sm text-amber-900"
+          className="mb-3 rounded border border-warn/40 bg-warn/10 p-3 text-sm text-warn"
         >
           {error?.message ||
             "实时推送未启用。请设置 PHASE10_REALTIME_PUSH_ENABLED=true。"}
@@ -54,14 +54,14 @@ export function RealtimePriceTable({ matchId }: RealtimePriceTableProps) {
       {!disabled && error && !isConnected && (
         <div
           data-testid="ws-error"
-          className="mb-3 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800"
+          className="mb-3 rounded border border-neg/40 bg-neg/10 p-3 text-sm text-neg"
         >
           {error.message}
         </div>
       )}
 
       {sortedUpdates.length === 0 ? (
-        <div data-testid="empty" className="text-sm text-gray-500">
+        <div data-testid="empty" className="text-sm text-muted-foreground">
           {disabled
             ? "推送已关闭，无实时数据"
             : isConnected

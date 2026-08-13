@@ -423,10 +423,10 @@ interface ScoringReconcileResult {
 }
 
 const ENGINES: Array<{ key: EngineKey; label: string; barClass: string }> = [
-  { key: "elo_odds", label: "Elo+赔率", barClass: "bg-amber-500" },
-  { key: "hybrid", label: "混合引擎", barClass: "bg-purple-500" },
-  { key: "integrated", label: "集成引擎", barClass: "bg-blue-500" },
-  { key: "gbm", label: "GBM", barClass: "bg-emerald-500" },
+  { key: "elo_odds", label: "Elo+赔率", barClass: "bg-chart-2" },
+  { key: "hybrid", label: "混合引擎", barClass: "bg-chart-5" },
+  { key: "integrated", label: "集成引擎", barClass: "bg-chart-1" },
+  { key: "gbm", label: "GBM", barClass: "bg-chart-3" },
 ];
 
 const EMPTY_QUALITY_SUMMARY: QualitySummary = {

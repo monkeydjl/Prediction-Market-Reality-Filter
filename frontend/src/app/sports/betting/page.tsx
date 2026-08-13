@@ -24,7 +24,7 @@ const SECTION_ORDER: CompetitionSection[] = [
 function StatusBadge({ status }: { status: BettingCompetition["status"] }) {
   const tone =
     status === "live"
-      ? "bg-emerald-500/15 text-emerald-400"
+      ? "bg-pos/15 text-pos"
       : status === "kernel"
         ? "bg-sky-500/15 text-sky-400"
         : "bg-muted text-muted-foreground";
@@ -42,7 +42,7 @@ function AdapterBadge({ likely }: { likely: boolean | undefined }) {
   if (!label) return null;
   const tone =
     likely === true
-      ? "bg-amber-500/15 text-amber-300"
+      ? "bg-warn/15 text-warn"
       : "bg-muted text-muted-foreground";
   return (
     <span

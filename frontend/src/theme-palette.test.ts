@@ -14,37 +14,6 @@ const srcDir = join(process.cwd(), "src");
 const STOCK_PALETTE =
   /\b(?:bg|text|border|ring|divide)-(?:gray|red|amber|blue|green|indigo|yellow|slate|zinc|orange|purple|emerald|rose)-\d{2,3}\b/g;
 
-/**
- * Files that still carry stock-palette classes. This list may shrink, never
- * grow: a new entry means a new light patch on the dark UI. Ported components
- * are removed from it as they are converted to the semantic tokens (pos, neg,
- * warn, primary, muted, …).
- */
-const KNOWN_UNCONVERTED = new Set([
-  "app/decisions/page.tsx",
-  "app/sports/betting/page.tsx",
-  "components/decisions/decision-card.tsx",
-  "components/detail/decision-timeline-panel.tsx",
-  "components/sports/betting/competition-landing.tsx",
-  "components/sports/common/feature-disabled-banner.tsx",
-  "components/sports/common/probability-bar.tsx",
-  "components/sports/edges/edgedetailpanel.tsx",
-  "components/sports/edges/edgediscrepanciestable.tsx",
-  "components/sports/learning/calibration-panel.tsx",
-  "components/sports/learning/engine-performance-panel.tsx",
-  "components/sports/learning/prediction-history-list.tsx",
-  "components/sports/learning/prediction-trajectory.tsx",
-  "components/sports/markets/PendingReviewQueue.tsx",
-  "components/sports/markets/TraditionalOddsChart.tsx",
-  "components/sports/markets/market-price-audit-panel.tsx",
-  "components/sports/realtime/realtimepricetable.tsx",
-  "components/sports/recommendations/RecommendationCard.tsx",
-  "components/sports/settlements/MarketCalibrationPanel.tsx",
-  "components/sports/settlements/processsettlementbutton.tsx",
-  "components/sports/world-cup/analytics-dashboard.tsx",
-  "components/sports/world-cup/tournament-simulation.tsx",
-]);
-
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
     const full = join(dir, entry);
@@ -70,21 +39,18 @@ function paletteHits(): Map<string, string[]> {
 }
 
 describe("dark single theme", () => {
-  it("keeps converted components free of Tailwind's stock light palette", () => {
+  /**
+   * This used to carry a KNOWN_UNCONVERTED allowlist of 22 files (88 stock
+   * classes). They are all converted to the semantic tokens now — pos, neg,
+   * warn, primary, muted, chart-1…5 — so the allowlist is gone rather than
+   * left empty: with nothing to exempt, an exemption hatch is only somewhere
+   * for the next light patch to hide.
+   */
+  it("keeps the UI free of Tailwind's stock light palette", () => {
     const offenders = [...paletteHits()]
-      .filter(([file, hits]) => hits.length > 0 && !KNOWN_UNCONVERTED.has(file))
+      .filter(([, hits]) => hits.length > 0)
       .map(([file, hits]) => `${file}: ${hits.join(" ")}`);
 
     expect(offenders).toEqual([]);
-  });
-
-  it("keeps the allowlist honest as components are converted", () => {
-    const stillOffending = new Set(
-      [...paletteHits()].filter(([, hits]) => hits.length > 0).map(([file]) => file),
-    );
-
-    // A stale entry means the file was converted but the allowlist kept its
-    // exemption, so a regression there would go unnoticed.
-    expect([...KNOWN_UNCONVERTED].filter((f) => !stillOffending.has(f))).toEqual([]);
   });
 });

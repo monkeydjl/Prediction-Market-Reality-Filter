@@ -26,7 +26,7 @@ function priorityClass(priority: string | undefined): string {
     case "critical":
       return "text-neg font-medium";
     case "high":
-      return "text-amber-400 font-medium";
+      return "text-warn font-medium";
     case "low":
       return "text-muted-foreground";
     default:

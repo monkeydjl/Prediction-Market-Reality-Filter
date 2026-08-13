@@ -17,7 +17,7 @@ export function FeatureDisabledBanner({
   return (
     <div
       data-testid={testId}
-      className="rounded border border-amber-400 bg-amber-50 p-3 text-sm text-amber-900"
+      className="rounded border border-warn/40 bg-warn/10 p-3 text-sm text-warn"
       role="status"
     >
       <p className="font-medium">{title}</p>

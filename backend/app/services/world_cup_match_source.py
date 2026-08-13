@@ -116,7 +116,9 @@ def _normalize_match(raw: Any, index: int) -> dict[str, Any]:
         ("status", "long"),
         ("status",),
     ))
-    match = {
+    # Heterogeneous by design: scores/cards (numbers) and the extra_time /
+    # penalty_shootout flags (bools) join the string fields below.
+    match: dict[str, Any] = {
         "match_id": match_id,
         "stage": _text(_first(raw, ("stage",), ("round",), ("group",), ("league", "round"))),
         "home_team": home_team,

@@ -15,7 +15,8 @@ from bs4 import BeautifulSoup
 
 from app.utils.prediction_db import get_prediction_session
 from app.models.world_cup_prediction import Base
-from sqlalchemy import Column, Integer, String, Float, DateTime
+from sqlalchemy import Integer, String, Float, DateTime
+from sqlalchemy.orm import Mapped, mapped_column
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +25,13 @@ class EloRating(Base):
     """Team Elo ratings cache."""
     __tablename__ = "elo_ratings"
 
-    team_name = Column(String, primary_key=True)
-    elo_rating = Column(Float, nullable=False)
-    fifa_rank = Column(Integer, nullable=True)
-    confederation = Column(String, nullable=True)
-    last_updated = Column(DateTime, nullable=False)
-    source = Column(String, nullable=False)  # 'wikipedia', 'eloratings.net', 'estimated'
+    team_name: Mapped[str] = mapped_column(String, primary_key=True)
+    elo_rating: Mapped[float] = mapped_column(Float, nullable=False)
+    fifa_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confederation: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_updated: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # 'wikipedia', 'eloratings.net', 'estimated'
+    source: Mapped[str] = mapped_column(String, nullable=False)
 
 
 # ─── Wikipedia scraper ──────────────────────────────────────────────

@@ -9,7 +9,8 @@ from typing import Any
 
 from app.utils.prediction_db import get_prediction_session
 from app.models.world_cup_prediction import Base
-from sqlalchemy import Column, String, Float, DateTime, Integer
+from sqlalchemy import String, Float, DateTime, Integer
+from sqlalchemy.orm import Mapped, mapped_column
 from app.services.odds_api_service import fetch_match_odds
 
 
@@ -17,14 +18,16 @@ class OddsCache(Base):
     """Cached betting odds."""
     __tablename__ = "odds_cache"
 
-    match_key = Column(String, primary_key=True)  # "home_vs_away"
-    home_odds = Column(Float, nullable=False)
-    draw_odds = Column(Float, nullable=False)
-    away_odds = Column(Float, nullable=False)
-    source = Column(String, nullable=False)
-    bookmakers_count = Column(Integer, nullable=True)
-    cached_at = Column(DateTime, nullable=False)
-    last_updated_api = Column(DateTime, nullable=True)  # From API response
+    # "home_vs_away"
+    match_key: Mapped[str] = mapped_column(String, primary_key=True)
+    home_odds: Mapped[float] = mapped_column(Float, nullable=False)
+    draw_odds: Mapped[float] = mapped_column(Float, nullable=False)
+    away_odds: Mapped[float] = mapped_column(Float, nullable=False)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    bookmakers_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cached_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # From API response
+    last_updated_api: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 def get_match_key(home_team: str, away_team: str, competition: str = "wc") -> str:

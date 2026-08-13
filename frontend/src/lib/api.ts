@@ -908,6 +908,13 @@ export const eventsApi = {
       method: "POST",
     }, { timeoutMs: 300_000 }),
 
+  translateEvent: (id: string, force = false) =>
+    api<{ event_id: string; event_title_zh: string; message: string }>(
+      `/events/${encodeURIComponent(id)}/translate?force=${force}`,
+      { method: "POST" },
+      { timeoutMs: 60_000 },
+    ),
+
   movers: (limit = 10) =>
     api<{ movers: Mover[]; count?: number }>(`/events/movers?limit=${limit}`),
 
@@ -1066,4 +1073,84 @@ export const qualityMetricsApi = {
       `/quality-metrics/domain-reliability${tail ? `?${tail}` : ""}`,
     );
   },
+};
+
+// ── Review queue ────────────────────────────────────────────────────────
+// Mirrors backend /api/review-queue. The action vocabulary is locked by
+// backend/app/memory/review_queue_store.py — keep the union in sync with it.
+
+export type ReviewQueueStatus = "pending" | "resolved";
+
+export type ReviewQueueAction =
+  | "confirm"
+  | "override"
+  | "request_more_evidence"
+  | "mark_bad_source"
+  | "mark_bad_resolution";
+
+export interface ReviewQueueItem {
+  item_id: string;
+  event_id: string;
+  trigger: string;
+  severity: string;
+  reason: string;
+  context: Record<string, unknown>;
+  status: ReviewQueueStatus;
+  reviewer: string | null;
+  reviewer_decision: string | null;
+  reviewer_note: string;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface ReviewQueueAuditEntry {
+  audit_id: number;
+  item_id: string;
+  reviewer: string;
+  action: string;
+  note: string;
+  acted_at: string;
+}
+
+export interface ReviewQueueListResponse {
+  items: ReviewQueueItem[];
+  count: number;
+  status: ReviewQueueStatus;
+}
+
+export interface ReviewQueueAuditResponse {
+  audit: ReviewQueueAuditEntry[];
+  count: number;
+  item_id: string;
+}
+
+export const reviewQueueApi = {
+  list: (params?: {
+    status?: ReviewQueueStatus;
+    trigger?: string;
+    limit?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params?.status) qs.set("status", params.status);
+    if (params?.trigger) qs.set("trigger", params.trigger);
+    if (params?.limit != null) qs.set("limit", String(params.limit));
+    const tail = qs.toString();
+    return api<ReviewQueueListResponse>(
+      `/review-queue${tail ? `?${tail}` : ""}`,
+    );
+  },
+
+  audit: (itemId: string) =>
+    api<ReviewQueueAuditResponse>(
+      `/review-queue/${encodeURIComponent(itemId)}/audit`,
+    ),
+
+  takeAction: (
+    itemId: string,
+    body: { reviewer: string; action: ReviewQueueAction; note?: string },
+  ) =>
+    api<{ item: ReviewQueueItem }>(
+      `/review-queue/${encodeURIComponent(itemId)}/action`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
 };

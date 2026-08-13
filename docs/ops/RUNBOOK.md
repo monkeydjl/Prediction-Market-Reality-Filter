@@ -50,6 +50,46 @@ P2-FE9 residual / architecture work.
 Never paste `API_WRITE_KEY` into chat logs, screenshots of DevTools Application
 storage, or committed `.env` examples with real production values.
 
+## Review queue (human review)
+
+Detectors and orchestrators enqueue review candidates into
+`review_queue_items` (SQLite, `v2_loop.db`); reviewer actions append to the
+INSERT-only `review_queue_audit` table. Two operator paths:
+
+| Path | Use |
+|------|-----|
+| UI | Nav **人工复核** (`/review-queue`) — filter by status/trigger, read the trigger context, submit an action |
+| CLI | `python -m scripts.review_queue_cli list \| action \| audit` |
+
+| Endpoint | Auth |
+|----------|------|
+| `GET /api/review-queue?status=pending&trigger=…&limit=…` | open read |
+| `GET /api/review-queue/{item_id}` | open read |
+| `GET /api/review-queue/{item_id}/audit` | open read |
+| `POST /api/review-queue/{item_id}/action` | `X-API-Key` (write key) |
+
+The action vocabulary is locked to `confirm` / `override` /
+`request_more_evidence` / `mark_bad_source` / `mark_bad_resolution`; anything
+else is a 422. Reviewer notes are vocabulary-checked (no
+long/short/buy/sell/position/kelly/order) and rejected with 400. Audit rows are
+never updated or deleted — a wrong action is corrected by enqueueing a
+re-review, not by editing history.
+
+## Event title translation (repair path)
+
+Titles are normally translated during analysis (`AUTO_TRANSLATE_TITLES=true`).
+When the LLM was unavailable an event keeps its English title, and the detail
+page shows **标题翻译** with 翻译标题 / 重新翻译.
+
+| Endpoint | Auth | Use |
+|----------|------|-----|
+| `POST /api/events/{event_id}/translate?force=false` | `X-API-Key` | one event; skips work if a Chinese title exists |
+| `POST /api/events/{event_id}/translate?force=true` | `X-API-Key` | re-translate, overwriting the current Chinese title |
+| `POST /api/events/translate-all?force=…` | `X-API-Key` | backfill sweep (no UI entry — curl only) |
+
+A failed translation is reported as `Translation unavailable, kept original`
+rather than writing the English title in as if it were Chinese.
+
 ## Health Check
 
 Use `GET /api/health`. A response status of `degraded` means at least one

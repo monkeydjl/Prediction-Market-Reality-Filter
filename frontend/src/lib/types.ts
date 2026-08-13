@@ -18,7 +18,25 @@ import type {
   EventSemantics as BackendEventSemantics,
 } from "./generated-types";
 
-export type EventRecord = BackendEventRecord;
+// conclusion_challenge is written onto the record dict by
+// conclusion_challenge_event_adapter.apply_event_challenge_result, but the
+// Pydantic EventRecord does not declare it (extra="allow"), so the generator
+// cannot emit it. Declared here as an intersection until the backend model
+// gains the field.
+export interface ConclusionChallengeResult {
+  verdict?: string | null;
+  required_action?: string | null;
+  failed_checks?: Array<Record<string, unknown>>;
+  warnings?: Array<Record<string, unknown>>;
+  challenge_summary?: string | null;
+  critic_notes?: Record<string, unknown> | null;
+  confidence_adjustment?: Record<string, unknown> | null;
+  attempt_count?: number | null;
+}
+
+export type EventRecord = BackendEventRecord & {
+  conclusion_challenge?: ConclusionChallengeResult | null;
+};
 export type EvidenceAggregate = BackendEvidenceProfile;
 export type Semantics = BackendEventSemantics;
 

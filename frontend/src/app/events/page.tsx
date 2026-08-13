@@ -8,9 +8,11 @@ import { SignalSummary } from "@/components/detail/signal-summary";
 import { MarketPanel } from "@/components/detail/market-links";
 import { SignalPanel } from "@/components/detail/signal-panel";
 import { ConfidenceBreakdownPanel } from "@/components/detail/confidence-breakdown-panel";
+import { ConclusionChallengePanel } from "@/components/detail/conclusion-challenge-panel";
 import { OfficialColumn, NewsColumn } from "@/components/detail/evidence-list";
 import { TrackingDecision } from "@/components/detail/tracking-decision";
 import { ManualResolvePanel } from "@/components/detail/manual-resolve-panel";
+import { TitleTranslationPanel } from "@/components/detail/title-translation-panel";
 import { DecisionReportPanel } from "@/components/detail/decision-report-panel";
 import { DecisionTimelinePanel } from "@/components/detail/decision-timeline-panel";
 import { EdgeChart, ProbabilityChart, buildSeries } from "@/components/detail/probability-chart";
@@ -307,6 +309,13 @@ function DetailInner() {
               setView(adaptEntry(entry));
             }}
           />
+          <TitleTranslationPanel
+            eventId={record.event_id}
+            titleZh={record.event_title_zh}
+            onTranslated={(titleZh) =>
+              setRecord((prev) => (prev ? { ...prev, event_title_zh: titleZh } : prev))
+            }
+          />
         </div>
       </div>
 
@@ -328,6 +337,7 @@ function DetailInner() {
         <h2 className="text-sm font-semibold">证据与交叉验证</h2>
         <SignalPanel record={record} />
         <ConfidenceBreakdownPanel record={record} />
+        <ConclusionChallengePanel challenge={record.conclusion_challenge} />
       </section>
 
       <DecisionReportPanel eventId={record.event_id} />

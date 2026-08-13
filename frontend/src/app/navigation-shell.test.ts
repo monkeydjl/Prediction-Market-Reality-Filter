@@ -24,6 +24,7 @@ describe("navigation shell", () => {
       "history/page.tsx",
       "quality/page.tsx",
       "quality-metrics/page.tsx",
+      "review-queue/page.tsx",
       "trades/page.tsx",
       "sports/page.tsx",
       "sports/edges/page.tsx",

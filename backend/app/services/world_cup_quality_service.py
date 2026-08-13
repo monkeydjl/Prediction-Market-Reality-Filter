@@ -91,6 +91,8 @@ def _actual_outcome_probability(history: PredictionHistory, outcome: str) -> flo
 
 def _match_date(match: MatchFixture) -> str:
     kickoff = _utc_naive(match.kickoff_utc)
+    if kickoff is None:  # kickoff_utc is NOT NULL — defensive only
+        return "unknown"
     return kickoff.date().isoformat()
 
 
@@ -116,8 +118,15 @@ def _brier_score(history: PredictionHistory, outcome: str) -> float:
 
 
 def _build_sample(match: MatchFixture, history: PredictionHistory) -> dict[str, Any]:
-    actual_home = int(match.home_score)
-    actual_away = int(match.away_score)
+    # collect_quality_samples filters home_score/away_score isnot(None), so a
+    # null here means the contract was broken upstream — fail loudly rather
+    # than score a 0-0 that never happened (same rule as
+    # world_cup_result_fact_backfill_service._score_pair).
+    home_score, away_score = match.home_score, match.away_score
+    if home_score is None or away_score is None:
+        raise ValueError(f"fixture {match.match_id} has no final score")
+    actual_home = int(home_score)
+    actual_away = int(away_score)
     predicted_home = float(history.predicted_home_score)
     predicted_away = float(history.predicted_away_score)
     actual = _actual_outcome(actual_home, actual_away)
@@ -215,7 +224,9 @@ def _confidence_bucket(confidence: float) -> tuple[float, float, str]:
 
 
 def _calibration_buckets(samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    buckets = [
+    # Heterogeneous values (label str, bounds float, counters int) would infer
+    # dict[str, object] and break the `+=` accumulation below.
+    buckets: list[dict[str, Any]] = [
         {
             "label": label,
             "lower": lower,

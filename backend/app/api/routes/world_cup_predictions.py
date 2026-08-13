@@ -17,6 +17,7 @@ from app.services.world_cup_data_quality import (
     enrich_data_quality_metrics,
     normalize_prediction_data_quality,
 )
+from app.services.world_cup_engine_names import PredictionEngine
 from app.utils.prediction_db import get_prediction_session, close_prediction_session, init_prediction_db
 
 
@@ -32,7 +33,7 @@ class FlexibleResponse(BaseModel):
 
 class PredictionRequest(BaseModel):
     """Request body for prediction trigger."""
-    engine: str = "auto"
+    engine: PredictionEngine = "auto"
 
 
 def _engine_used_from_method(method: str | None) -> str:
@@ -207,7 +208,9 @@ async def list_matches(
         ) if match_ids else []
         prediction_map = {p.match_id: p for p in predictions}
 
-        match_list = []
+        # Heterogeneous JSON payload: "match" and "prediction" are both nested
+        # dicts, so the values are not a single scalar union.
+        match_list: list[dict[str, Any]] = []
         for m in matches:
             prediction = prediction_map.get(m.match_id)
 
@@ -341,7 +344,8 @@ async def trigger_prediction(
     Args:
         match_id: Match ID to predict
         request: Prediction request with optional engine selection
-            - engine: "auto" (default), "elo_odds", "hybrid", or "integrated"
+            - engine: "auto" (default), "elo_odds", "hybrid", "integrated",
+              "high_confidence", or "gbm"
         compare_only: When true, runs the chosen engine in read-only mode
             so the engine-comparison card can render even after kickoff.
             Skips persistence and bypasses the kickoff freeze.
@@ -425,7 +429,9 @@ async def analyze_match_prediction(
                 "away_win": prediction.away_win_prob
             },
             confidence=prediction.confidence,
-            prediction_method=prediction.prediction_method,
+            # prediction_method is nullable; the analyzer renders it into an
+            # "Engine: ..." prompt line, so name the gap rather than print None.
+            prediction_method=prediction.prediction_method or "unknown",
             key_factors=prediction.key_factors or []
         )
 
@@ -492,14 +498,15 @@ async def get_analysis_history(match_id: str):
 @router.post("/batch-predict", response_model=FlexibleResponse)
 async def batch_predict(
     match_ids: list[str] | None = None,
-    engine: str = "auto",
+    engine: PredictionEngine = "auto",
     _auth: None = Depends(require_write_key),
 ):
     """Run predictions for multiple matches.
 
     Args:
         match_ids: Optional list of match IDs (None = all remaining matches)
-        engine: Prediction engine to use ("auto", "elo_odds", "hybrid")
+        engine: Prediction engine to use ("auto" default, "elo_odds", "hybrid",
+            "integrated", "high_confidence", "gbm")
     """
     from app.services.world_cup_prediction_pipeline import batch_predict_matches
 
@@ -509,7 +516,7 @@ async def batch_predict(
 
 @router.post("/batch-switch-engine", response_model=FlexibleResponse)
 async def batch_switch_engine(
-    engine: str = Query(..., description='Target engine: "elo_odds", "hybrid", "integrated", or "high_confidence"'),
+    engine: PredictionEngine = Query(..., description='Target engine: "elo_odds", "hybrid", "integrated", "high_confidence", "gbm", or "auto"'),
     status_filter: str = Query("scheduled", description='Match status filter (default: "scheduled")'),
     _auth: None = Depends(require_write_key),
 ):
@@ -569,7 +576,7 @@ async def batch_switch_engine(
 
 @router.get("/batch-switch-engine-stream")
 async def batch_switch_engine_stream(
-    engine: str = Query(..., description='Target engine: "elo_odds", "hybrid", "integrated", or "high_confidence"'),
+    engine: PredictionEngine = Query(..., description='Target engine: "elo_odds", "hybrid", "integrated", "high_confidence", "gbm", or "auto"'),
     status_filter: str = Query("scheduled", description="Match status filter (default: scheduled)"),
     _auth: None = Depends(require_write_key),
 ):
@@ -930,7 +937,7 @@ async def optimize_match_prediction(
                 "confidence": prediction.confidence,
                 "elo_ratings": prediction.factors.get("elo_ratings") if prediction.factors else None
             },
-            prediction_method=prediction.prediction_method,
+            prediction_method=prediction.prediction_method or "unknown",
             match_context={
                 "stage": match.stage if match else None,
                 "group": match.group if match else None,

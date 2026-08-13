@@ -599,7 +599,10 @@ def _require_successful_api_football_validation_before_import() -> None:
             status_code=409,
             detail="Run API-Football pipeline validation before import.",
         )
-    result = run.get("result") if isinstance(run.get("result"), dict) else {}
+    # Bind before the isinstance so the check narrows the value that is used —
+    # calling run.get("result") twice leaves the second call unnarrowed.
+    raw_result = run.get("result")
+    result = raw_result if isinstance(raw_result, dict) else {}
     if run.get("status") != "success" or result.get("ok") is not True:
         error = str(run.get("error") or result.get("error") or "").strip()
         suffix = f": {error}" if error else "."
@@ -641,7 +644,8 @@ async def validate_api_football_pipeline_route(
 
 
 def _api_football_validation_run_summary(result: dict[str, Any]) -> dict[str, Any]:
-    steps = result.get("steps") if isinstance(result.get("steps"), list) else []
+    raw_steps = result.get("steps")
+    steps = raw_steps if isinstance(raw_steps, list) else []
     failed_step = next(
         (
             step.get("name")
@@ -658,7 +662,8 @@ def _api_football_validation_run_summary(result: dict[str, Any]) -> dict[str, An
         ),
         {},
     )
-    coverage = result.get("coverage") if isinstance(result.get("coverage"), dict) else {}
+    raw_coverage = result.get("coverage")
+    coverage = raw_coverage if isinstance(raw_coverage, dict) else {}
     return {
         "provider": "api_football",
         "ok": bool(result.get("ok")),

@@ -88,6 +88,22 @@ def _parse_fixture_kickoff(value: Any) -> datetime | None:
     return kickoff.astimezone(timezone.utc)
 
 
+def _parse_fixture_score(value: Any) -> int | None:
+    """A fixture score field as an int, or None when absent/unparseable.
+
+    Same parse-or-None contract as ``_parse_fixture_kickoff``. Callers used to
+    wrap ``int(fixture.get(...))`` in ``except (TypeError, ValueError)``, which
+    leaned on ``int(None)`` raising — correct at runtime, but it hid the missing
+    case from the reader and from the type checker.
+    """
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _unfinished_past_knockout_issue_details(
     fixtures: list[dict[str, Any]],
     *,
@@ -135,10 +151,9 @@ def _ambiguous_finished_knockout_issue_details(
         away = str(fixture.get("away_team") or "").strip()
         if not home or not away:
             continue
-        try:
-            home_score = int(fixture.get("home_score"))
-            away_score = int(fixture.get("away_score"))
-        except (TypeError, ValueError):
+        home_score = _parse_fixture_score(fixture.get("home_score"))
+        away_score = _parse_fixture_score(fixture.get("away_score"))
+        if home_score is None or away_score is None:
             continue
         if home_score != away_score:
             continue
@@ -170,10 +185,9 @@ def _inconsistent_finished_knockout_issue_details(
         winner = str(fixture.get("winner") or "").strip()
         if not home or not away or not winner:
             continue
-        try:
-            home_score = int(fixture.get("home_score"))
-            away_score = int(fixture.get("away_score"))
-        except (TypeError, ValueError):
+        home_score = _parse_fixture_score(fixture.get("home_score"))
+        away_score = _parse_fixture_score(fixture.get("away_score"))
+        if home_score is None or away_score is None:
             continue
         if home_score == away_score:
             continue
@@ -205,10 +219,9 @@ def _valid_knockout_tiebreaker(fixture: dict[str, Any]) -> bool:
     penalty_score = fixture.get("penalty_score")
     if not isinstance(penalty_score, dict):
         return False
-    try:
-        home_penalties = int(penalty_score.get("home"))
-        away_penalties = int(penalty_score.get("away"))
-    except (TypeError, ValueError):
+    home_penalties = _parse_fixture_score(penalty_score.get("home"))
+    away_penalties = _parse_fixture_score(penalty_score.get("away"))
+    if home_penalties is None or away_penalties is None:
         return False
     if home_penalties < 0 or away_penalties < 0 or home_penalties == away_penalties:
         return False
@@ -818,9 +831,16 @@ async def get_odds_cache_stats(session: Session = Depends(get_prediction_session
         }
 
     now = datetime.now(timezone.utc)
-    # OddsCache has no expires_at column; derive freshness from cached_at + 1h TTL
+    # OddsCache has no expires_at column; derive freshness from cached_at + 1h TTL.
+    # cached_at is NOT NULL, and SQLite hands it back naive — attach UTC before
+    # subtracting or the comparison raises TypeError against an aware `now`
+    # (same treatment as data_freshness_hours below).
     ttl = timedelta(hours=1)
-    fresh = sum(1 for e in cache_entries if e.cached_at and (now - e.cached_at) < ttl)
+    fresh = sum(
+        1
+        for e in cache_entries
+        if now - e.cached_at.replace(tzinfo=timezone.utc) < ttl
+    )
     stale = len(cache_entries) - fresh
 
     # Estimate API calls saved (each cache hit = 1 API call saved)
@@ -909,7 +929,7 @@ async def get_system_health(session: Session = Depends(get_prediction_session_de
         .first()
     )
 
-    data_age_hours = 0
+    data_age_hours = 0.0
     if latest_prediction and latest_prediction.last_updated:
         # SQLite stores naive datetimes; attach UTC tzinfo before subtracting.
         last_updated = latest_prediction.last_updated.replace(tzinfo=timezone.utc)

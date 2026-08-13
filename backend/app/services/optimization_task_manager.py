@@ -41,12 +41,12 @@ class OptimizationTask:
         self.status = TaskStatus.PENDING
         self.progress = 0
         self.total = 0
-        self.current_match = None
-        self.result = None
-        self.error = None
+        self.current_match: str | None = None
+        self.result: dict[str, Any] | None = None
+        self.error: str | None = None
         self.created_at = datetime.now(timezone.utc)
-        self.started_at = None
-        self.completed_at = None
+        self.started_at: datetime | None = None
+        self.completed_at: datetime | None = None
         self.logs: list[dict[str, Any]] = []
 
     def to_dict(self) -> dict[str, Any]:
@@ -232,7 +232,7 @@ class OptimizationTaskManager:
             now = datetime.now(timezone.utc)
             cutoff = now - timedelta(hours=max_age_hours)
             cutoff_iso = cutoff.isoformat()
-            to_remove = []
+            to_remove: list[str] = []
             for task_id, task in self._tasks.items():
                 if task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED]:
                     if task.completed_at and task.completed_at < cutoff:

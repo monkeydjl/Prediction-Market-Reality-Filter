@@ -11,7 +11,7 @@ This module ties together all prediction components:
 """
 
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any
 import asyncio
 import logging
 import time
@@ -57,6 +57,7 @@ from app.services.world_cup_data_quality import (
     calculate_data_quality_score,
     source_looks_real,
 )
+from app.services.world_cup_engine_names import PredictionEngine
 from app.services.world_cup_group_context import build_group_context
 from app.services.world_cup_openfootball_data import build_openfootball_match_context
 from app.services.world_cup_schedule_factors import build_schedule_factors
@@ -65,8 +66,10 @@ from app.utils.prediction_db import get_prediction_session, close_prediction_ses
 logger = logging.getLogger(__name__)
 
 
-# Prediction engine selection
-PredictionEngine = Literal["elo_odds", "hybrid", "integrated", "high_confidence", "auto"]
+# Prediction engine selection. The Literal itself lives in
+# world_cup_engine_names so the API layer can annotate its boundary without
+# importing this module at startup; keep its members in sync with the runtime
+# whitelist in run_prediction_pipeline Step 3.
 DEFAULT_ENGINE: PredictionEngine = "auto"  # Auto-select the official default engine.
 
 
@@ -147,7 +150,9 @@ def _world_cup_challenge_retry_requested(
     return attempt_count < _conclusion_challenge_max_recompute_attempts()
 
 
-def _select_world_cup_challenge_retry_engine(current_engine: str) -> str:
+def _select_world_cup_challenge_retry_engine(
+    current_engine: PredictionEngine,
+) -> PredictionEngine:
     if current_engine == "high_confidence":
         return "integrated"
     if current_engine == "integrated":
@@ -255,7 +260,9 @@ def build_explanation_contributions(
         and "fallback" not in str(odds.get("source", ""))
         and "default" not in str(odds.get("source", ""))
     )
-    if has_real_odds:
+    # `odds is not None` is implied by has_real_odds; restating it is what
+    # narrows the Optional for the .get() calls below.
+    if has_real_odds and odds is not None:
         market_probs = odds_to_probabilities(
             _safe_float(odds.get("home"), 1.0),
             _safe_float(odds.get("draw"), 1.0),
@@ -959,7 +966,8 @@ async def run_prediction_pipeline(
             ):
                 # Missing real inputs means this fused prediction has less evidence.
                 elo_weight = min(elo_weight, 0.40)
-            if odds and odds.get("source") and ("fallback" in odds.get("source") or "default" in odds.get("source")):
+            odds_source = str(odds.get("source") or "") if odds else ""
+            if "fallback" in odds_source or "default" in odds_source:
                 # Non-real odds should not dominate the fused probability.
                 elo_weight = min(elo_weight, 0.35)
             if odds and odds.get("stale"):
@@ -1041,12 +1049,16 @@ async def run_prediction_pipeline(
             # Run all public engines, then persist the highest-confidence real engine.
             elo_prediction = run_elo_prediction()
             hybrid_prediction = await run_hybrid_prediction()
-            candidates = [
+            candidates: list[tuple[PredictionEngine, dict[str, Any]]] = [
                 ("elo_odds", standardize_elo_prediction(elo_prediction)),
                 ("hybrid", hybrid_prediction),
                 ("integrated", build_integrated_prediction(elo_prediction, hybrid_prediction)),
             ]
-            ranked_candidates = []
+            # Annotated so the max() unpacking below keeps `selected_engine` a
+            # PredictionEngine rather than widening it to str.
+            ranked_candidates: list[
+                tuple[PredictionEngine, dict[str, Any], float, dict[str, Any]]
+            ] = []
             for name, result in candidates:
                 selection_calibration = build_confidence_calibration_info(
                     float(result.get("confidence") or 0.0),
@@ -1286,7 +1298,7 @@ async def run_prediction_pipeline(
             return await run_prediction_pipeline(
                 match_id=match_id,
                 trigger=trigger,
-                engine=_select_world_cup_challenge_retry_engine(str(selected_engine)),
+                engine=_select_world_cup_challenge_retry_engine(selected_engine),
                 session=session,
                 compare_only=compare_only,
                 _challenge_attempt_count=_challenge_attempt_count + 1,

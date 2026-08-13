@@ -1,4 +1,11 @@
-"""Tests for Kalshi sports market source — TDD RED phase."""
+"""Tests for Kalshi sports market source — TDD RED phase.
+
+``detect_sport_market`` is deliberately NOT mocked here. It returns a
+``SportMarketInfo`` dataclass, and these tests used to patch it with a plain
+dict — which let the source read ``detected.get("is_sport")`` on a dataclass,
+raise ``AttributeError`` into the blanket ``except``, and silently emit zero
+candidates in production while every test passed.
+"""
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from app.services.kalshi_sports_source import fetch_kalshi_sport_markets
@@ -61,11 +68,7 @@ async def test_filters_to_single_leg_events():
         mock_client.get = AsyncMock(return_value=mock_response)
         mock_client_cls.return_value = mock_client
 
-        with patch("app.services.kalshi_sports_source.detect_sport_market", return_value={
-            "is_sport": True, "sport": "basketball", "competition": "nba",
-            "teams": ["Lakers", "Celtics"], "date": "2025-01-01",
-        }):
-            result = await fetch_kalshi_sport_markets(limit=10)
+        result = await fetch_kalshi_sport_markets(limit=10)
 
     assert len(result) == 1  # Only single-leg event
 
@@ -86,11 +89,7 @@ async def test_parses_last_price_as_implied_prob():
         mock_client.get = AsyncMock(return_value=mock_response)
         mock_client_cls.return_value = mock_client
 
-        with patch("app.services.kalshi_sports_source.detect_sport_market", return_value={
-            "is_sport": True, "sport": "basketball", "competition": "nba",
-            "teams": ["Lakers", "Celtics"], "date": "2025-01-01",
-        }):
-            result = await fetch_kalshi_sport_markets(limit=10)
+        result = await fetch_kalshi_sport_markets(limit=10)
 
     assert len(result) == 1
     assert result[0]["price"] == pytest.approx(0.72)
@@ -113,11 +112,7 @@ async def test_falls_back_to_bid_ask_midpoint():
         mock_client.get = AsyncMock(return_value=mock_response)
         mock_client_cls.return_value = mock_client
 
-        with patch("app.services.kalshi_sports_source.detect_sport_market", return_value={
-            "is_sport": True, "sport": "basketball", "competition": "nba",
-            "teams": ["Lakers", "Celtics"], "date": "2025-01-01",
-        }):
-            result = await fetch_kalshi_sport_markets(limit=10)
+        result = await fetch_kalshi_sport_markets(limit=10)
 
     assert len(result) == 1
     assert result[0]["price"] == pytest.approx(0.62)  # (0.60 + 0.64) / 2
@@ -139,12 +134,60 @@ async def test_output_includes_source_kalshi():
         mock_client.get = AsyncMock(return_value=mock_response)
         mock_client_cls.return_value = mock_client
 
-        with patch("app.services.kalshi_sports_source.detect_sport_market", return_value={
-            "is_sport": True, "sport": "basketball", "competition": "nba",
-            "teams": ["Lakers", "Celtics"], "date": "2025-01-01",
-        }):
-            result = await fetch_kalshi_sport_markets(limit=10)
+        result = await fetch_kalshi_sport_markets(limit=10)
 
     assert len(result) == 1
     assert result[0]["source"] == "kalshi"
     assert result[0]["contract_id"] == "KXNBAGAME-25JAN01-LAL-BOS"
+
+
+@pytest.mark.asyncio
+async def test_carries_detector_fields_from_dataclass():
+    """detected_* keys come off SportMarketInfo attributes, not dict keys.
+
+    Reads the real detector's output, so it fails if the source ever goes back
+    to treating it as a mapping. The date is emitted as an ISO string because
+    SportMarketBridgeService._resolve_match_id compares it against
+    ``kickoff_utc.strftime("%Y-%m-%d")``.
+    """
+    event = _make_kalshi_event(title="Lakers vs Celtics on 2025-01-01")
+
+    with patch("app.services.kalshi_sports_source.httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"events": [event]}
+        mock_response.raise_for_status = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client_cls.return_value = mock_client
+
+        result = await fetch_kalshi_sport_markets(limit=10)
+
+    assert len(result) == 1
+    assert result[0]["detected_sport"] == "basketball"
+    assert result[0]["detected_competition"] == "nba"
+    assert result[0]["detected_teams"] == ["los_angeles_lakers", "boston_celtics"]
+    assert result[0]["detected_date"] == "2025-01-01"
+
+
+@pytest.mark.asyncio
+async def test_skips_non_sport_markets():
+    """detect_sport_market returns None for futures/non-match markets."""
+    event = _make_kalshi_event(title="Who will win the 2026 NBA championship?")
+
+    with patch("app.services.kalshi_sports_source.httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"events": [event]}
+        mock_response.raise_for_status = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client_cls.return_value = mock_client
+
+        result = await fetch_kalshi_sport_markets(limit=10)
+
+    assert result == []

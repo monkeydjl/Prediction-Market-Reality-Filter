@@ -241,6 +241,42 @@ class StartupGuardTests(unittest.TestCase):
                     pass
         check.assert_awaited_once()
 
+    def _boot(self, cap):
+        """Drive one lifespan startup with the given cost cap, capturing logs."""
+        from app.main import app
+
+        with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch.object(settings, "LLM_DAILY_COST_CAP_USD", cap), \
+                patch("app.main.sqlite_db.maintain", return_value={"ok": True}), \
+                patch("app.main.start_scheduler", lambda: None), \
+                patch("app.main.stop_scheduler", lambda: None):
+            with self.assertLogs("app.main", level="INFO") as captured:
+                with TestClient(app):
+                    pass
+        return captured.output
+
+    def test_lifespan_warns_when_cost_cap_disabled(self):
+        """0 is the shipped default and means unlimited, not disabled.
+
+        Without this line the only place that fact is written down is
+        .env.example, so an operator who never opened it gets an uncapped paid
+        key and no signal.
+        """
+        output = self._boot(0.0)
+        unlimited = [
+            line for line in output
+            if "UNLIMITED" in line and line.startswith("WARNING")
+        ]
+        self.assertEqual(len(unlimited), 1, output)
+
+    def test_lifespan_reports_a_configured_cost_cap(self):
+        output = self._boot(25.0)
+        self.assertTrue(
+            any("Daily LLM spend cap: $25.00" in line for line in output),
+            output,
+        )
+        self.assertFalse(any("UNLIMITED" in line for line in output), output)
+
     def test_lifespan_skips_scheduler_when_disabled(self):
         from app.main import app
 

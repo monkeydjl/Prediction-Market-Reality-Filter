@@ -32,6 +32,21 @@ async def lifespan(app: FastAPI):
         logger.critical("No configured LLM route/API key — LLM calls will fail at runtime")
     else:
         logger.info("OPENAI_API_KEY is configured (len=%d)", len(settings.OPENAI_API_KEY))
+    # A cap of 0 disables the guard entirely (see _cost_cap_exceeded), which is
+    # the shipped default. That is fine for a keyless dev box but means a paid
+    # key runs with no ceiling, so say so out loud rather than only in
+    # .env.example. Not fail-closed like API_WRITE_KEY: spend is recoverable,
+    # and refusing to boot would break every existing deployment.
+    if settings.LLM_DAILY_COST_CAP_USD <= 0:
+        logger.warning(
+            "LLM_DAILY_COST_CAP_USD=%s — daily LLM spend is UNLIMITED. Set a "
+            "positive number to cap it.",
+            settings.LLM_DAILY_COST_CAP_USD,
+        )
+    else:
+        logger.info(
+            "Daily LLM spend cap: $%.2f", settings.LLM_DAILY_COST_CAP_USD
+        )
     # Initialize Sentry before any route / scheduler runs so failures during
     # startup (e.g., LLM check) get captured. No-op when SENTRY_DSN is empty.
     from app.utils.sentry import init_sentry

@@ -1,8 +1,21 @@
 name: CI
 
+# An unfiltered `push:` alongside `pull_request:` runs the whole matrix twice
+# for every PR commit — the branch push fires one set and the PR fires an
+# identical set against the same tree, which cost an extra ~7.5 min backend
+# suite per push. Restricting push to main keeps merge-commit coverage while
+# letting pull_request own everything on a topic branch.
 on:
   push:
+    branches: [main]
   pull_request:
+
+# Supersede stale PR runs: force-pushing or stacking commits otherwise leaves
+# obsolete runs racing to completion. Never cancel a main run — every merge
+# commit should get a verdict of its own.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Every job here only reads the checkout. Without this block the workflow
 # inherits the repository's default GITHUB_TOKEN scope, which can be
@@ -42,12 +55,32 @@ jobs:
         run: ruff check app/
       - name: Compile backend
         run: python -m compileall app tests
-      # Non-blocking baseline (P-16): ~256 pre-existing errors, mostly
-      # SQLAlchemy Column friction. Tighten incrementally until this can be
-      # flipped to a blocking gate.
-      - name: Type-check backend (mypy, non-blocking baseline)
-        run: mypy app/ --config-file mypy.ini
-        continue-on-error: true
+      # mypy is not clean yet: 627 errors across 88 files as of 2026-08-13,
+      # mostly SQLAlchemy Column friction and Optional-access noise. This used
+      # to be a bare `continue-on-error: true` step, which meant the count could
+      # grow forever — the failure annotation is easy to ignore and nothing
+      # actually failed. A ratchet instead fails only when the count goes UP, so
+      # new code has to be clean without requiring the backlog to be cleared
+      # first. Lower MYPY_ERROR_CEILING whenever errors get fixed; when it
+      # reaches 0, drop the ceiling logic and let mypy fail on its own.
+      #
+      # The old comment here claimed "~256", so re-derive rather than trust it:
+      #   cd backend && python -m mypy app/ --config-file mypy.ini | tail -1
+      - name: Type-check backend (mypy, ratcheted baseline)
+        env:
+          MYPY_ERROR_CEILING: "627"
+        run: |
+          set +e
+          out=$(mypy app/ --config-file mypy.ini)
+          set -e
+          printf '%s\n' "$out"
+          count=$(printf '%s\n' "$out" | sed -n 's/^Found \([0-9][0-9]*\) error.*/\1/p')
+          count=${count:-0}
+          echo "mypy errors: $count (ceiling $MYPY_ERROR_CEILING)"
+          if [ "$count" -gt "$MYPY_ERROR_CEILING" ]; then
+            echo "::error::mypy errors rose from $MYPY_ERROR_CEILING to $count. Fix the new ones, or raise the ceiling deliberately with a reason."
+            exit 1
+          fi
       - name: Run backend tests with coverage
         run: pytest tests/ --cov=app --cov-report=term-missing --cov-report=xml
 

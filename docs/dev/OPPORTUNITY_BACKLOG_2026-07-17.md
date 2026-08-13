@@ -88,7 +88,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 | Kernel 篮球 | `BasketballEngine` | elo / home_court / rest / form / net_rating / travel / injury | Bradley-Terry 二元；缺因子权重重分配 |
 | Kernel 棒球 | `BaseballEngine` | + starting_pitcher / park / bullpen / weather | 缺因子时权重重分配 |
 | Kernel 冰球 | `HockeyEngine` | + goalie / travel / b2b rest | 同上 |
-| 世界杯 legacy | DC / BTD / GBM / Rule / EloOdds | 更丰富 | **未统一注册进 Kernel EngineRegistry** |
+| 世界杯 legacy | DC / BTD / GBM / Rule / EloOdds | 更丰富 | DC / BTD / GBM / EloOdds 已于 2026-07-17 移植进 Kernel（见 §3.2 P1-E5/E6/E7），但引擎 flag 默认 OFF；仅 Rule（比分预测，非 3-way 概率）仍只在 legacy `world_cup_engines.ENGINES` 内 |
 
 `FootballFeatureBuilder` 已能组装 form、h2h、身价、伤病、天气、xG/PPDA 等；**瓶颈在引擎融合层，不在特征脚手架。**
 

@@ -148,13 +148,26 @@ def _candidate_fixtures(session: Session, *, limit: int) -> dict[str, Any]:
     }
 
 
+def _score_pair(match: MatchFixture) -> dict[str, int]:
+    """Final score as plain ints.
+
+    Only fixtures from ``_candidate_fixtures`` reach here, and that query filters
+    ``home_score`` / ``away_score`` ``isnot(None)``. A null therefore means the
+    contract was broken upstream — fail loudly rather than publish a 0-0 fact.
+    """
+    home, away = match.home_score, match.away_score
+    if home is None or away is None:
+        raise ValueError(f"fixture {match.match_id} has no final score")
+    return {"home": int(home), "away": int(away)}
+
+
 def _candidate_payload(match: MatchFixture) -> dict[str, Any]:
     return {
         "match_id": match.match_id,
         "fixture_id": match.fixture_id,
         "home_team": match.home_team,
         "away_team": match.away_team,
-        "score": {"home": int(match.home_score), "away": int(match.away_score)},
+        "score": _score_pair(match),
         "fact": _fixture_result_fact(match),
     }
 
@@ -169,7 +182,7 @@ def _fixture_result_fact(match: MatchFixture) -> dict[str, Any]:
         "home_team": match.home_team,
         "away_team": match.away_team,
         "status": "finished",
-        "score": {"home": int(match.home_score), "away": int(match.away_score)},
+        "score": _score_pair(match),
         "source": "prediction_fixture_db",
         "confidence": 0.8,
         "observed_at": _observed_at(match),

@@ -68,7 +68,7 @@ jobs:
       #   cd backend && python -m mypy app/ --config-file mypy.ini | tail -1
       - name: Type-check backend (mypy, ratcheted baseline)
         env:
-          MYPY_ERROR_CEILING: "627"
+          MYPY_ERROR_CEILING: "475"
         run: |
           set +e
           out=$(mypy app/ --config-file mypy.ini)

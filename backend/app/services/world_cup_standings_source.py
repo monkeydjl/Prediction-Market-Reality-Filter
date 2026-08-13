@@ -97,7 +97,7 @@ def _standing_rows(payload: Any, stage: str = "", source: str = "") -> list[dict
     if isinstance(table, list):
         return _table_rows(table, payload, stage, source)
 
-    rows: list[dict[str, Any]] = []
+    rows = []  # same list type as the early-return branch above; declared there
     group_map = payload.get("groups")
     if isinstance(group_map, dict):
         for group_name, group_rows in group_map.items():
@@ -190,7 +190,9 @@ def _normalize_standing(raw: dict[str, Any], index: int) -> dict[str, Any]:
         ("eliminated",),
     ))
     status = _normalize_status(status_text, explicit_qualified, explicit_eliminated)
-    qualification = {
+    # Heterogeneous by design: the numeric table columns and the two boolean
+    # flags below join the string fields, so this is not a dict[str, str].
+    qualification: dict[str, Any] = {
         "team": team,
         "stage": _text(_first(raw, ("stage",), ("group",), ("round",))),
         "status": status,

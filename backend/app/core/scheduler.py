@@ -12,6 +12,7 @@ APScheduler 定时任务。随 FastAPI 启动自动运行。
 
 import logging
 import os
+import sys
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -35,7 +36,11 @@ _scheduler_lock_skipped = False
 
 def _acquire_process_lock(handle: Any) -> None:
     handle.seek(0)
-    if os.name == "nt":
+    # `sys.platform` rather than `os.name`: both are equivalent here (Windows is
+    # the only "nt"), but a type checker prunes the branch it is not running on
+    # only for sys.platform, so os.name made every msvcrt/fcntl attribute look
+    # undefined on whichever platform mypy ran.
+    if sys.platform == "win32":
         import msvcrt
 
         msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
@@ -47,7 +52,7 @@ def _acquire_process_lock(handle: Any) -> None:
 
 def _release_process_lock(handle: Any) -> None:
     handle.seek(0)
-    if os.name == "nt":
+    if sys.platform == "win32":
         import msvcrt
 
         msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
@@ -764,7 +769,9 @@ def _match_odds_to_match(
 
     # Parse match_id using the bridge service's parser
     competition, date_str, team_tokens = SportMarketBridgeService._parse_match_id_static(match_id)
-    if not team_tokens or len(team_tokens) < 2:
+    # An unparseable competition could not be in COMPETITION_TO_ODDS_API_SPORT
+    # anyway, so fold it into the existing bail-out instead of looking it up.
+    if not competition or not team_tokens or len(team_tokens) < 2:
         return []
 
     sport_key = COMPETITION_TO_ODDS_API_SPORT.get(competition)

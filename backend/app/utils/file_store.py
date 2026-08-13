@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -49,7 +50,10 @@ def _acquire_cross_process_lock(handle: IO[Any]) -> None:
 
     Same pattern as app/core/scheduler.py:_acquire_process_lock.
     """
-    if os.name == "nt":
+    # `sys.platform` rather than `os.name`: a type checker prunes the branch it
+    # is not running on only for sys.platform, so os.name made every
+    # msvcrt/fcntl attribute look undefined on whichever platform mypy ran.
+    if sys.platform == "win32":
         import msvcrt
 
         while True:
@@ -79,7 +83,7 @@ def _release_cross_process_lock(handle: IO[Any]) -> None:
     releases the lock).
     """
     try:
-        if os.name == "nt":
+        if sys.platform == "win32":
             import msvcrt
 
             handle.seek(0)

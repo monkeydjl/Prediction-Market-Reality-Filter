@@ -42,9 +42,8 @@ def analyze_trend(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
     estimates: list[float] = []
     times: list[Any] = []
     for snap in snapshots:
-        try:
-            value = float(snap.get("estimated"))
-        except (TypeError, ValueError):
+        value = _parse_number(snap.get("estimated"))
+        if value is None:
             continue
         estimates.append(value)
         times.append(snap.get("timestamp"))
@@ -150,6 +149,16 @@ def _parse_timestamp(value: Any) -> datetime | None:
         return None
 
 
+def _parse_number(value: Any) -> float | None:
+    """Parse a snapshot number; None when missing or non-numeric (skip the point)."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def rank_movers(
     histories: dict[str, list[dict[str, Any]]],
     limit: int = 10,
@@ -207,10 +216,9 @@ def analyze_edge_trajectory(
     edges: list[float] = []
     times: list[Any] = []
     for snap in snapshots:
-        try:
-            estimated = float(snap.get("estimated"))
-            baseline = float(snap.get("baseline"))
-        except (TypeError, ValueError):
+        estimated = _parse_number(snap.get("estimated"))
+        baseline = _parse_number(snap.get("baseline"))
+        if estimated is None or baseline is None:
             continue
         edges.append(estimated - baseline)
         times.append(snap.get("timestamp"))
@@ -297,10 +305,9 @@ def edge_series(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return timestamped AI-vs-market edge points for compact frontend charts."""
     points: list[dict[str, Any]] = []
     for snap in snapshots:
-        try:
-            estimated = float(snap.get("estimated"))
-            baseline = float(snap.get("baseline"))
-        except (TypeError, ValueError):
+        estimated = _parse_number(snap.get("estimated"))
+        baseline = _parse_number(snap.get("baseline"))
+        if estimated is None or baseline is None:
             continue
         points.append({
             "timestamp": snap.get("timestamp"),
@@ -327,7 +334,9 @@ def _edge_items(
                 continue
         elif edge_class != classification:
             continue
-        item = {
+        # Heterogeneous by design: the optional "series" value is a list of edge
+        # points, so this is not a dict of strings and edge summaries.
+        item: dict[str, Any] = {
             "event_id": event_id,
             "event_title": _latest_title(snapshots),
             "edge": edge,

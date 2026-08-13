@@ -177,9 +177,11 @@ def build_diff(
     See module docstring for the input contract (each record must contain
     event_id + outcome + the overlay fields extract_metrics reads).
     """
-    # Align by event_id
-    by_id_a = {r.get("event_id"): r for r in records_a if r.get("event_id")}
-    by_id_b = {r.get("event_id"): r for r in records_b if r.get("event_id")}
+    # Align by event_id. The key is stringified so the aligned ids are usable as
+    # dict keys downstream (diff_errors is a dict[str, str]); the guard above
+    # only filters falsy ids, it does not narrow what .get() returns.
+    by_id_a = {str(r["event_id"]): r for r in records_a if r.get("event_id")}
+    by_id_b = {str(r["event_id"]): r for r in records_b if r.get("event_id")}
     common_ids = sorted(set(by_id_a.keys()) & set(by_id_b.keys()))
     n_missing_a = len(by_id_b) - len(common_ids)  # in B but not A
     n_missing_b = len(by_id_a) - len(common_ids)  # in A but not B
@@ -223,8 +225,9 @@ def build_diff(
             if outcome_a and outcome_b:
                 n_scored_compared += 1
 
-    # Top transitions (non-diagonal)
-    transitions = []
+    # Top transitions (non-diagonal). Heterogeneous: "n" is a count and "pct" is
+    # added as a float below, alongside the two string labels.
+    transitions: list[dict[str, Any]] = []
     for a in _MATRIX_KEYS:
         for b in _MATRIX_KEYS:
             if a != b and matrix[a][b] > 0:

@@ -95,8 +95,10 @@ class CalibrationFusionService:
                 source="dormant",
             )
 
-        # Compute per-source trust values
-        if phase3_has_data:
+        # Compute per-source trust values. Tested against the row rather than the
+        # `*_has_data` flag: a bool assigned from `is not None` reads the same but
+        # does not narrow the Optional for the attribute access below.
+        if phase3_cal is not None:
             phase3_trust = _compute_phase3_trust(
                 phase3_cal.avg_accuracy, phase3_cal.sample_count
             )
@@ -105,7 +107,7 @@ class CalibrationFusionService:
             phase3_trust = dormant
             phase3_count = 0
 
-        if market_has_data:
+        if market_cal is not None:
             market_trust = _compute_market_trust(
                 market_cal["direction_accuracy"], market_cal["sample_count"]
             )

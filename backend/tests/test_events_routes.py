@@ -2308,6 +2308,31 @@ class CollectCandidateEventsTests(unittest.TestCase):
         self.assertEqual(counts["Polymarket"], 5)
         self.assertNotIn("Kalshi", counts)
 
+    def test_cancelled_source_is_isolated(self):
+        """A cancelled source must be dropped like any other failure.
+
+        asyncio.CancelledError is a BaseException, not an Exception, so
+        gather(return_exceptions=True) hands it back as a result value that an
+        `isinstance(result, Exception)` guard lets through. Appending it to the
+        per-source lists made zip_longest try to iterate an exception object,
+        which lost the whole scan rather than just the cancelled source.
+        """
+        from collections import Counter
+
+        async def run():
+            with patch("app.services.polymarket_event_source.fetch_candidate_events",
+                       new=AsyncMock(return_value=self._cands("Polymarket", 5))), \
+                    patch("app.services.kalshi_event_source.fetch_candidate_events",
+                          new=AsyncMock(side_effect=asyncio.CancelledError())), \
+                    patch("app.services.world_cup_event_source.fetch_candidate_events",
+                          new=AsyncMock(return_value=[])):
+                return await eis._collect_candidate_events(10)
+
+        out = asyncio.run(run())
+        counts = Counter(c["source"]["platform"] for c in out)
+        self.assertEqual(counts["Polymarket"], 5)
+        self.assertNotIn("Kalshi", counts)
+
     def test_open_web_source_is_interleaved(self):
         from collections import Counter
 

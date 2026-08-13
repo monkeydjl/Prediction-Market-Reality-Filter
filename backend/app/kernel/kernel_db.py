@@ -29,7 +29,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 logger = logging.getLogger(__name__)
 
 _engine = None
-_SessionLocal = None
+_SessionLocal: sessionmaker[Session] | None = None
 
 
 class KernelBase(DeclarativeBase):
@@ -536,6 +536,14 @@ def _migrate_dormant_tables(engine) -> None:
 def get_kernel_session() -> Session:
     if _SessionLocal is None:
         init_kernel_db()
+    if _SessionLocal is None:
+        # init_kernel_db() returns early when _engine is already set, so a first
+        # init that raised after create_engine (e.g. the dormant-table
+        # migration failing) leaves the engine set and the factory None for
+        # good. Say that, instead of "'NoneType' object is not callable".
+        raise RuntimeError(
+            "Kernel DB session factory is unset; init_kernel_db() did not complete"
+        )
     return _SessionLocal()
 
 
@@ -856,7 +864,7 @@ def compute_reliability_bins(engine: str | None = None,
 
         # Initialize bins
         bin_width = 1.0 / bins
-        bin_list = []
+        bin_list: list[dict[str, Any]] = []
         for i in range(bins):
             lower = i * bin_width
             upper = (i + 1) * bin_width
@@ -896,7 +904,9 @@ def compute_reliability_bins(engine: str | None = None,
                 bin_list[i]["avg_predicted"] = round(avg_p, 4)
                 bin_list[i]["actual_frequency"] = round(avg_a, 4)
                 bin_list[i]["count"] = bs["count"]
-                total_n += bs["count"]
+                # bin_sums holds float sums alongside the count, so read it back
+                # as an int to keep the reported sample count an integer.
+                total_n += int(bs["count"])
                 ece_acc += bs["count"] * abs(avg_p - avg_a)
 
         ece = round(ece_acc / total_n, 4) if total_n > 0 else None

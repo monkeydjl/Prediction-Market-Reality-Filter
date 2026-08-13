@@ -104,7 +104,7 @@ def compute_drift_score(
     )
 
     drift = None
-    if recent_mean is not None and baseline_mean not in (None, 0.0):
+    if recent_mean is not None and baseline_mean is not None and baseline_mean != 0.0:
         drift = round((recent_mean - baseline_mean) / baseline_mean, 4)
 
     return {
@@ -126,8 +126,8 @@ def build_drift_report(
     ``brier_score``, ``edge_bucket``, ``confidence_bucket``,
     ``direction_correct`` (1/0/None), ``degraded`` (bool).
     """
-    recent_briers = [s.get("brier_score") for s in recent_samples if s.get("brier_score") is not None]
-    baseline_briers = [s.get("brier_score") for s in baseline_samples if s.get("brier_score") is not None]
+    recent_briers = [b for s in recent_samples if (b := s.get("brier_score")) is not None]
+    baseline_briers = [b for s in baseline_samples if (b := s.get("brier_score")) is not None]
 
     drift = compute_drift_score(recent_briers, baseline_briers)
     recent_ece = compute_ece(recent_samples)

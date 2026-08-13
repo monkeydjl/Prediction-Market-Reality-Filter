@@ -445,6 +445,38 @@ class AutoResolveEventsTests(unittest.TestCase):
         self.assertEqual(after["record"]["outcome"]["actual_outcome"], 0.0)
         self.assertEqual(after["record"]["outcome"]["source"], "auto_market")
 
+    def test_cancelled_source_is_isolated(self):
+        """A cancelled source must be dropped like a failing one.
+
+        asyncio.CancelledError is a BaseException, not an Exception, so
+        gather(return_exceptions=True) hands it back as a result value that an
+        `isinstance(result, Exception)` guard lets through. It then reached
+        len(result) and lost the whole auto-resolve pass rather than just the
+        one source.
+        """
+        record = _make_record("evtCancelled", value_score=30)
+        record["event_title"] = "Will it rain in Seattle tomorrow?"
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(store, "_store_path",
+                              return_value=str(Path(tmp) / "event_store.json")), \
+                    patch.object(audit, "_audit_path",
+                                 return_value=str(Path(tmp) / "event_audit.jsonl")), \
+                    patch.object(sqlite_db, "loop_db_path",
+                                 return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(phs, "fetch_resolved_markets",
+                                 new=AsyncMock(return_value=[
+                                     {"question": "Will it rain in Seattle tomorrow?",
+                                      "actual_outcome": 100.0}])), \
+                    patch.object(kes, "fetch_resolved_markets",
+                                 new=AsyncMock(side_effect=asyncio.CancelledError())):
+                store.save_event(record)
+                result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
+                after = store.get_event("evtCancelled")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["by_source"], {"Polymarket": 1})
+        self.assertEqual(result["resolved_count"], 1)
+        self.assertEqual(after["record"]["outcome"]["actual_outcome"], 100.0)
+
     def test_fuzzy_verified_match_uses_match_score_as_confidence(self):
         market_question = (
             "Will alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"

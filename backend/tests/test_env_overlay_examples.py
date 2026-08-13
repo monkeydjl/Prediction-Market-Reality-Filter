@@ -32,6 +32,18 @@ def _assignments(path: Path) -> set[str]:
     }
 
 
+def _value(path: Path, key: str) -> str | None:
+    """Last assigned value for ``key``, comment suffix stripped."""
+    found = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if "=" not in line or line.lstrip().startswith("#"):
+            continue
+        name, raw = line.split("=", 1)
+        if name.strip() == key:
+            found = raw.split("#", 1)[0].strip()
+    return found
+
+
 class TestEnvOverlayExamples(unittest.TestCase):
     def test_overlays_assign_every_security_key(self):
         for name in OVERLAY_EXAMPLES:
@@ -44,4 +56,23 @@ class TestEnvOverlayExamples(unittest.TestCase):
                     [],
                     f"{name} omits {missing}; the overlay only overrides keys it "
                     f"names, so these silently inherit the development .env value",
+                )
+
+    def test_overlays_ship_a_real_cost_cap(self):
+        """Naming the key is not enough — 0 means unlimited.
+
+        A template that says "set a real number" but assigns 0 hands a
+        copy-paste operator an uncapped paid key, which is the one value in
+        SECURITY_KEYS where the unsafe setting is also the shipped one.
+        """
+        for name in OVERLAY_EXAMPLES:
+            path = BACKEND_DIR / name
+            with self.subTest(overlay=name):
+                raw = _value(path, "LLM_DAILY_COST_CAP_USD")
+                self.assertIsNotNone(raw, f"{name} does not assign the cap")
+                self.assertGreater(
+                    float(raw),
+                    0,
+                    f"{name} ships LLM_DAILY_COST_CAP_USD={raw}; 0 disables the "
+                    f"guard, so the template would deploy an unlimited cap",
                 )

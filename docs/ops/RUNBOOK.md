@@ -14,6 +14,11 @@
   preflight.
 - Keep `RATE_LIMIT_ENABLED=true` unless a trusted reverse proxy provides an
   equivalent limit.
+- Set `LLM_DAILY_COST_CAP_USD` to a positive number. **`0` means unlimited, not
+  disabled** — the guard short-circuits and today's spend is never counted. The
+  overlay templates ship `5` (staging) and `25` (production); the backend logs
+  `daily LLM spend is UNLIMITED` at WARNING on every boot where the cap is off,
+  so grep startup logs for that line after a config change.
 - Keep `LOG_FILE` on persistent storage.
 
 ## Operator Audit Headers

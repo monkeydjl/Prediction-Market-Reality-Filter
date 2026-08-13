@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import {
   Activity,
   CircleDollarSign,
+  ClipboardCheck,
   Cpu,
   Crosshair,
   Database,
@@ -55,6 +56,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/analyze", label: "人工分析", icon: FlaskConical, match: ["/analyze"] },
       { href: "/history", label: "历史复盘", icon: History, match: ["/history"] },
       { href: "/quality", label: "质量运营", icon: Activity, match: ["/quality"] },
+      { href: "/review-queue", label: "人工复核", icon: ClipboardCheck, match: ["/review-queue"] },
       { href: "/trades", label: "模拟交易", icon: TrendingUp, match: ["/trades"] },
     ],
   },

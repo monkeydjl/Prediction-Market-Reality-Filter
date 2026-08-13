@@ -114,7 +114,7 @@ describe("AppNav", () => {
 
     for (const label of [
       "监控面板", "决策机会", "事件 Edge", "人工分析",
-      "历史复盘", "质量运营", "模拟交易",
+      "历史复盘", "质量运营", "人工复核", "模拟交易",
     ]) {
       expect(screen.getByRole("link", { name: new RegExp(label) })).toBeInTheDocument();
     }
@@ -155,6 +155,12 @@ describe("AppNav", () => {
     expect(link).toHaveAttribute("href", "/quality");
   });
 
+  it("links /review-queue entry", () => {
+    render(<AppNav />);
+    const link = screen.getByRole("link", { name: /人工复核/ });
+    expect(link).toHaveAttribute("href", "/review-queue");
+  });
+
   it("links /sports/futures entry", () => {
     render(<AppNav />);
     const link = screen.getByRole("link", { name: /期货市场/ });
@@ -189,7 +195,7 @@ describe("AppNav", () => {
     render(<AppNav />);
     const labels = [
       "监控面板", "决策机会", "事件 Edge", "人工分析",
-      "历史复盘", "质量运营", "模拟交易",
+      "历史复盘", "质量运营", "人工复核", "模拟交易",
       "体育预测", "竞猜中心", "期货市场", "学习仪表盘", "参数优化",
       "体育市场", "体育 Edge", "体育推荐", "体育结算",
       "世界杯", "数据接入", "引擎自助台",

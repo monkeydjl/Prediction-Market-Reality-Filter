@@ -81,3 +81,31 @@ def test_apply_reject_downgrades_to_wait():
     assert record["final_downgrade_reason"].startswith(
         "conclusion_challenge_rejected"
     )
+
+
+def test_challenge_survives_the_read_path_serialization():
+    """conclusion_challenge is an extra field, so pin that it reaches clients.
+
+    EventRecord is the event store's validation gate and EventStoreEntry is the
+    response_model of GET /api/events/{event_id}. Either one dropping extras
+    would leave the UI panel silently empty. (_record() is a partial fixture, so
+    the gate is pinned via its extra policy rather than a full validation pass.)
+    """
+    from app.models.event import EventRecord, EventStoreEntry
+
+    record = _record()
+    apply_event_challenge_result(record, {
+        "verdict": "reject",
+        "required_action": "downgrade_to_wait",
+        "failed_checks": [{"check": "counterevidence", "reason": "存在高可信反证"}],
+        "warnings": [],
+        "challenge_summary": "结论否定门结果：reject。",
+    })
+
+    assert EventRecord.model_config["extra"] == "allow"
+
+    entry = EventStoreEntry(event_id="evt-1", record=record).model_dump()
+    assert entry["record"]["conclusion_challenge"]["verdict"] == "reject"
+    assert entry["record"]["conclusion_challenge"]["required_action"] == (
+        "downgrade_to_wait"
+    )

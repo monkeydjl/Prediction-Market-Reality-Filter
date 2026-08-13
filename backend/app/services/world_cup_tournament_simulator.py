@@ -352,7 +352,10 @@ def simulate_remaining_knockout(
         team: round(count / denominator, 4)
         for team, count in semifinal_count.items()
     }
-    most_likely_winner = max(win_count, key=win_count.get) if any(win_count.values()) else None
+    most_likely_winner = (
+        max(win_count, key=lambda team: win_count[team])
+        if any(win_count.values()) else None
+    )
 
     return {
         "win_probability": win_probability,
@@ -554,7 +557,10 @@ def simulate_tournament(
         for team, count in semifinal_count.items()
     }
 
-    most_likely_winner = max(win_count, key=win_count.get) if any(win_count.values()) else None
+    most_likely_winner = (
+        max(win_count, key=lambda team: win_count[team])
+        if any(win_count.values()) else None
+    )
 
     return {
         "win_probability": win_probability,
@@ -569,6 +575,14 @@ def simulate_tournament(
         "elapsed_ms": round((time.perf_counter() - started_at) * 1000, 2),
         "match_probability_cache_size": len(prediction_cache),
     }
+
+
+def _parse_score(value: Any) -> float | None:
+    """Parse a fixture score; None when missing or non-numeric."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _fixture_winner_loser(fixture: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -588,10 +602,9 @@ def _fixture_winner_loser(fixture: dict[str, Any]) -> tuple[str | None, str | No
         if verified_winner.casefold() == away.casefold():
             return away, home
 
-    try:
-        home_score = float(fixture.get("home_score"))
-        away_score = float(fixture.get("away_score"))
-    except (TypeError, ValueError):
+    home_score = _parse_score(fixture.get("home_score"))
+    away_score = _parse_score(fixture.get("away_score"))
+    if home_score is None or away_score is None:
         return None, None
 
     if home_score > away_score:

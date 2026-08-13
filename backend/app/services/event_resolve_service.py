@@ -284,7 +284,11 @@ async def auto_resolve_events(
     resolved_markets: list[dict[str, Any]] = []
     by_source: dict[str, int] = {}
     for (name, _), result in zip(sources, fetched):
-        if isinstance(result, Exception):
+        # BaseException, not Exception: gather(return_exceptions=True) returns a
+        # cancelled source's CancelledError as a result value, and that is not an
+        # Exception — letting it through reached len(result) below and lost the
+        # whole auto-resolve pass instead of the one source.
+        if isinstance(result, BaseException):
             logger.warning("auto_resolve: %s resolved fetch failed: %s", name, result)
             continue
         by_source[name] = len(result)
@@ -424,7 +428,11 @@ async def auto_resolve_events(
                     await asyncio.to_thread(
                         resolve_with_calibration,
                         event_id=event_id,
-                        actual_outcome=settled.get("actual_outcome"),
+                        # Indexed, not .get(): every source emits actual_outcome
+                        # for a settled market, and a source that stopped doing
+                        # so should degrade through the except below rather than
+                        # resolve the event with a None outcome.
+                        actual_outcome=settled["actual_outcome"],
                         confidence=1.0,
                         source="auto_market",
                         notes=f"contract match: {linked['contract_id']}",

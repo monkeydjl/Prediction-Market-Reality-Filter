@@ -55,7 +55,7 @@ jobs:
         run: ruff check app/
       - name: Compile backend
         run: python -m compileall app tests
-      # mypy is not clean yet: 76 errors across 41 files as of 2026-08-13,
+      # mypy is not clean yet: 56 errors across 36 files as of 2026-08-14,
       # now mostly Optional-access noise and dict/Any looseness (the SQLAlchemy
       # Column, `object`-typed-proxy and worst-offender-file clusters are all
       # closed — see backend/mypy.ini). The count no longer depends on the
@@ -73,7 +73,7 @@ jobs:
       #   cd backend && python -m mypy app/ --config-file mypy.ini | tail -1
       - name: Type-check backend (mypy, ratcheted baseline)
         env:
-          MYPY_ERROR_CEILING: "76"
+          MYPY_ERROR_CEILING: "56"
         run: |
           set +e
           out=$(mypy app/ --config-file mypy.ini)

@@ -8,7 +8,7 @@ and asynchronously via optimization_task_manager in production.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, TypedDict
 
 import optuna
 
@@ -16,8 +16,20 @@ from app.kernel.backtest.runner import BacktestRunner, BacktestParams, BacktestR
 
 logger = logging.getLogger(__name__)
 
+
+class _SportConfig(TypedDict):
+    """Search space for one sport. Typed so the three value shapes stay
+    distinguishable — as a plain literal the dict infers a single value type
+    and neither `config["factors"][-1]` nor `config["elo_params"].items()`
+    type-checks.
+    """
+    factors: list[str]
+    elo_params: dict[str, tuple[float, float]]
+    default_elo: dict[str, float]
+
+
 # Search space per sport: factor names + Elo param bounds
-_SPORT_CONFIG = {
+_SPORT_CONFIG: dict[str, _SportConfig] = {
     "nba": {
         "factors": ["elo", "home_court", "rest", "form"],
         "elo_params": {

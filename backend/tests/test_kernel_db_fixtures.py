@@ -141,3 +141,19 @@ class TestKernelClubEloCache:
         fetched = session.get(KernelClubEloCache, "mancity")
         assert fetched.elo_rating == 1970.85
         session.close()
+
+
+class TestGetKernelSession:
+    def test_missing_factory_raises_named_error(self, monkeypatch):
+        """A half-initialized module says so instead of "NoneType is not callable".
+
+        init_kernel_db() returns early once _engine is set, so if a first init
+        raised after create_engine (a failing dormant-table migration, say) the
+        session factory stays None for the life of the process.
+        """
+        import app.kernel.kernel_db as kdb
+
+        monkeypatch.setattr(kdb, "_engine", object())
+        monkeypatch.setattr(kdb, "_SessionLocal", None)
+        with pytest.raises(RuntimeError, match="session factory is unset"):
+            kdb.get_kernel_session()

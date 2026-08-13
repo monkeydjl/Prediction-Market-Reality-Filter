@@ -40,12 +40,12 @@ export function ProcessSettlementButton({ matchId, onDone }: Props) {
         {loading ? "计算中..." : "重算结算"}
       </button>
       {ok && (
-        <span data-testid={`process-ok-${matchId}`} className="text-xs text-green-700">
+        <span data-testid={`process-ok-${matchId}`} className="text-xs text-pos">
           已触发
         </span>
       )}
       {error && (
-        <span data-testid={`process-error-${matchId}`} className="text-xs text-red-600">
+        <span data-testid={`process-error-${matchId}`} className="text-xs text-neg">
           {error}
         </span>
       )}

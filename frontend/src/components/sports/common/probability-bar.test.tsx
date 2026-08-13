@@ -48,7 +48,7 @@ describe("ProbabilityBar", () => {
       />,
     );
     const homeBar = screen.getByRole("img", { name: /Lakers.*概率/ });
-    expect(homeBar.className).toContain("bg-blue");
+    expect(homeBar).toHaveClass("bg-chart-1");
   });
 
   it("applies away color to away_win", () => {
@@ -60,7 +60,7 @@ describe("ProbabilityBar", () => {
       />,
     );
     const awayBar = screen.getByRole("img", { name: /Celtics.*概率/ });
-    expect(awayBar.className).toContain("bg-red");
+    expect(awayBar).toHaveClass("bg-chart-4");
   });
 
   it("applies neutral color to draw", () => {
@@ -72,6 +72,6 @@ describe("ProbabilityBar", () => {
       />,
     );
     const drawBar = screen.getByRole("img", { name: /平局.*概率/ });
-    expect(drawBar.className).toContain("bg-gray");
+    expect(drawBar).toHaveClass("bg-chart-5");
   });
 });

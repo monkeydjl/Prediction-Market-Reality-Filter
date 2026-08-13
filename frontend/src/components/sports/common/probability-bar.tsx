@@ -6,13 +6,13 @@ interface ProbabilityBarProps {
 
 function getOutcomeStyle(key: string): { color: string; label: (home: string, away: string) => string } {
   if (key === "home_win" || key === "home") {
-    return { color: "bg-blue-500", label: (home) => home };
+    return { color: "bg-chart-1", label: (home) => home };
   }
   if (key === "away_win" || key === "away") {
-    return { color: "bg-red-500", label: (_home, away) => away };
+    return { color: "bg-chart-4", label: (_home, away) => away };
   }
   // draw or any other key
-  return { color: "bg-gray-400", label: () => "平局" };
+  return { color: "bg-chart-5", label: () => "平局" };
 }
 
 export function ProbabilityBar({ probabilities, homeTeam, awayTeam }: ProbabilityBarProps) {

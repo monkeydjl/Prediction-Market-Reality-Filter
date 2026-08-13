@@ -45,7 +45,7 @@ export function MarketCalibrationPanel() {
             key={cal.id}
             data-testid={`cal-card-${cal.id}`}
             className={`rounded border p-3 ${
-              isWellCalibrated ? "border-green-500" : "border-yellow-500"
+              isWellCalibrated ? "border-pos" : "border-warn"
             }`}
           >
             <div className="flex justify-between">

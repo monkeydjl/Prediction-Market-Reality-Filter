@@ -116,7 +116,7 @@ describe("EnginePerformancePanel", () => {
     expect(screen.queryByRole("option", { name: "hockey" })).toBeNull();
   });
 
-  it("applies green color class for high accuracy", async () => {
+  it("applies the positive tone class for high accuracy", async () => {
     apiMocks.useEngineScores.mockReturnValue({
       data: [{ ...mockScore, accuracy: 0.85 }],
       error: undefined,
@@ -125,7 +125,7 @@ describe("EnginePerformancePanel", () => {
     render(<EnginePerformancePanel />);
     await waitFor(() => {
       const accuracyCell = screen.getByText("85.0%");
-      expect(accuracyCell.className).toContain("text-green");
+      expect(accuracyCell).toHaveClass("text-pos");
     });
   });
 });

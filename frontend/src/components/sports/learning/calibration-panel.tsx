@@ -81,7 +81,7 @@ export function CalibrationPanel() {
       <div>
         <h2 className="mb-2 text-sm font-medium text-muted-foreground">校准参数</h2>
         {calError ? (
-          <div className="p-4 text-sm text-red-500">校准数据加载失败</div>
+          <div className="p-4 text-sm text-neg">校准数据加载失败</div>
         ) : calLoading || calibrations === null ? (
           <div className="p-4 text-sm text-muted-foreground">加载中...</div>
         ) : calibrations.length === 0 ? (
@@ -126,7 +126,7 @@ export function CalibrationPanel() {
       <div>
         <h2 className="mb-2 text-sm font-medium text-muted-foreground">可靠性图</h2>
         {relError ? (
-          <div className="p-4 text-sm text-red-500">可靠性数据加载失败</div>
+          <div className="p-4 text-sm text-neg">可靠性数据加载失败</div>
         ) : relLoading || reliability === null ? (
           <div className="p-4 text-sm text-muted-foreground">加载中...</div>
         ) : (

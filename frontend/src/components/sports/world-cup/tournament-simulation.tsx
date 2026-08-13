@@ -66,19 +66,19 @@ interface TournamentResult {
 
 function probColor(p: number): string {
   if (p >= 0.15) return "text-pos";
-  if (p >= 0.05) return "text-blue-400";
+  if (p >= 0.05) return "text-primary";
   return "text-muted-foreground";
 }
 
 function probBg(p: number): string {
   if (p >= 0.15) return "bg-pos/15";
-  if (p >= 0.05) return "bg-blue-400/15";
+  if (p >= 0.05) return "bg-primary/15";
   return "bg-muted/50";
 }
 
 function probBarColor(p: number): string {
   if (p >= 0.15) return "bg-pos";
-  if (p >= 0.05) return "bg-blue-400";
+  if (p >= 0.05) return "bg-primary";
   return "bg-muted-foreground/40";
 }
 
@@ -108,9 +108,11 @@ function fixtureLine(fixture: FixtureTrace) {
 }
 
 function rankIcon(index: number) {
-  if (index === 0) return <Trophy className="h-4 w-4 text-yellow-400" />;
-  if (index === 1) return <Medal className="h-4 w-4 text-gray-300" />;
-  if (index === 2) return <Medal className="h-4 w-4 text-amber-600" />;
+  // Gold / silver / bronze read off the theme: warn is the amber token, and the
+  // dimmed variants keep the podium ordering without a stock-palette colour.
+  if (index === 0) return <Trophy className="h-4 w-4 text-warn" />;
+  if (index === 1) return <Medal className="h-4 w-4 text-foreground/70" />;
+  if (index === 2) return <Medal className="h-4 w-4 text-warn/70" />;
   return <span className="w-4 text-center text-xs text-muted-foreground">{index + 1}</span>;
 }
 
@@ -442,7 +444,7 @@ export default function TournamentSimulation({ onOpenAnalytics }: { onOpenAnalyt
       )}
 
       {realDataReady && eliminatedTeams.length > 0 && (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-muted-foreground">
+        <div className="rounded-lg border border-warn/30 bg-warn/5 p-3 text-xs text-muted-foreground">
           <span className="font-medium text-foreground">淘汰状态已生效：</span>
           {eliminatedTeams.map(team => translateTeamName(team)).join("、")}
           {latestObservedAt && ` · 最新事实时间 ${new Date(latestObservedAt).toLocaleString("zh-CN")}`}
@@ -450,8 +452,8 @@ export default function TournamentSimulation({ onOpenAnalytics }: { onOpenAnalyt
       )}
 
       {realDataReady && mostLikelyWinner && (
-        <div className="flex items-center gap-3 rounded-lg border bg-yellow-400/5 p-4">
-          <Trophy className="h-6 w-6 text-yellow-400" />
+        <div className="flex items-center gap-3 rounded-lg border bg-warn/5 p-4">
+          <Trophy className="h-6 w-6 text-warn" />
           <div>
             <div className="text-sm font-medium">最可能冠军</div>
             <div className="text-lg font-bold">

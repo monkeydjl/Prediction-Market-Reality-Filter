@@ -22,7 +22,7 @@ export function PredictionTrajectory({ matchId }: PredictionTrajectoryProps) {
   }
 
   if (error) {
-    return <div className="p-4 text-sm text-red-500">加载失败</div>;
+    return <div className="p-4 text-sm text-neg">加载失败</div>;
   }
 
   if (!trajectory || trajectory.count === 0) {

@@ -38,14 +38,14 @@ const COMPETITION_OPTIONS = [
 ];
 
 function accuracyClass(acc: number): string {
-  if (acc >= 0.70) return "text-green-400 font-medium";
-  if (acc < 0.50) return "text-red-400";
+  if (acc >= 0.70) return "text-pos font-medium";
+  if (acc < 0.50) return "text-neg";
   return "";
 }
 
 function brierClass(brier: number): string {
-  if (brier <= 0.20) return "text-green-400 font-medium";
-  if (brier > 0.30) return "text-red-400";
+  if (brier <= 0.20) return "text-pos font-medium";
+  if (brier > 0.30) return "text-neg";
   return "";
 }
 
@@ -86,7 +86,7 @@ export function EnginePerformancePanel() {
   }
 
   if (hasError) {
-    return <div className="p-4 text-sm text-red-500">加载失败</div>;
+    return <div className="p-4 text-sm text-neg">加载失败</div>;
   }
 
   return (

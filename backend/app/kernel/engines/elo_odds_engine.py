@@ -22,7 +22,7 @@ model, whereas the legacy engine returns a plain dict with extra fields
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 from app.kernel.domain import (
     FeatureSet, MatchIdentity, PredictionResult, ContributionItem,
@@ -44,6 +44,23 @@ _KNOCKOUT_STAGES = frozenset({
     "round_of_16", "quarterfinal", "quarter_final",
     "semifinal", "semi_final", "final",
 })
+
+
+class _ConfidenceKwargs(TypedDict):
+    """Shared keyword arguments for ``compute_confidence`` /
+    ``confidence_breakdown``.
+
+    Both take the same keywords, so ``predict`` builds them once and unpacks
+    them twice. A plain ``dict(...)`` here infers ``dict[str, object]``, which
+    makes every unpacked argument unverifiable at both call sites; a TypedDict
+    keeps the single-build convenience and still gets checked.
+    """
+
+    available_flags: list[bool]
+    predicted_outcomes: list[str | None]
+    data_quality: str
+    odds_fresh: bool | None
+    custom: dict[str, float] | None
 
 
 def _odds_to_probabilities(
@@ -251,9 +268,17 @@ class EloOddsEngine:
         fused = _fuse_elo_and_odds(elo_probs, market_probs, elo_w, odds_w)
         scores = _probabilities_to_scores(fused)
 
-        # Explanation with predicted_outcome
-        elo_predicted = max(elo_probs, key=elo_probs.get) if elo_available else None
-        odds_predicted = max(market_probs, key=market_probs.get) if odds_available else None
+        # Explanation with predicted_outcome. `key=probs.get` is an overloaded
+        # bound method a checker cannot match against max()'s key callable;
+        # indexing is the same lookup and is checkable.
+        elo_predicted = (
+            max(elo_probs, key=lambda k: elo_probs[k]) if elo_available else None
+        )
+        odds_predicted = (
+            max(market_probs, key=lambda k: market_probs[k])
+            if market_probs is not None
+            else None
+        )
         odds_detail = (
             f"Odds {odds_h}/{odds_d}/{odds_a}; "
             f"{describe_odds_quality(odds_h, odds_d, odds_a, odds_fresh=bool(features.market.odds_fresh), custom=features.custom)}"
@@ -276,13 +301,13 @@ class EloOddsEngine:
             ),
         ]
 
-        conf_kwargs = dict(
-            available_flags=[elo_available, odds_available],
-            predicted_outcomes=[elo_predicted, odds_predicted],
-            data_quality=features.data_quality,
-            odds_fresh=bool(features.market.odds_fresh) if odds_available else None,
-            custom=features.custom if isinstance(features.custom, dict) else None,
-        )
+        conf_kwargs: _ConfidenceKwargs = {
+            "available_flags": [elo_available, odds_available],
+            "predicted_outcomes": [elo_predicted, odds_predicted],
+            "data_quality": features.data_quality,
+            "odds_fresh": bool(features.market.odds_fresh) if odds_available else None,
+            "custom": features.custom if isinstance(features.custom, dict) else None,
+        }
         confidence = compute_confidence(fused, **conf_kwargs)
         conf_break = confidence_breakdown(fused, **conf_kwargs)
 

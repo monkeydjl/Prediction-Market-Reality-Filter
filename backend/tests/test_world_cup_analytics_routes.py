@@ -1,6 +1,6 @@
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +14,7 @@ from app.api.routes import world_cup_analytics
 from app.core.config import settings
 from app.memory import loop_run_store
 from app.models.world_cup_prediction import Base, MatchFixture, MatchPrediction, MatchResult
+from app.services.odds_cache_service import OddsCache
 from app.services.sports_fact_service import (
     WORLD_CUP_TOURNAMENT,
     import_sports_facts,
@@ -83,6 +84,42 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
             )
         )
         self.session.commit()
+
+    def test_odds_cache_stats_handles_naive_cached_at(self):
+        """SQLite hands cached_at back naive; the freshness window subtracts it
+        from an aware ``now``. That combination raised TypeError and 500'd the
+        route as soon as odds_cache had a single row.
+        """
+        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        self.session.add_all([
+            OddsCache(
+                match_key="wc_team_a_vs_team_b",
+                home_odds=2.1,
+                draw_odds=3.2,
+                away_odds=3.4,
+                source="test",
+                bookmakers_count=3,
+                cached_at=now_naive,
+            ),
+            OddsCache(
+                match_key="wc_team_c_vs_team_d",
+                home_odds=1.8,
+                draw_odds=3.5,
+                away_odds=4.2,
+                source="test",
+                bookmakers_count=2,
+                cached_at=now_naive - timedelta(hours=3),
+            ),
+        ])
+        self.session.commit()
+
+        resp = self.client.get("/analytics/odds-cache-stats")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["total_entries"], 2)
+        self.assertEqual(body["fresh_count"], 1)
+        self.assertEqual(body["stale_count"], 1)
 
     def test_analytics_post_routes_require_write_key(self):
         paths = [

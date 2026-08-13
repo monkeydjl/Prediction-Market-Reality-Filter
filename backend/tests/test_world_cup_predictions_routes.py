@@ -1,6 +1,6 @@
 import unittest
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -63,6 +63,71 @@ class WorldCupPredictionRoutesTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["status"], "ok")
         init_mock.assert_called_once_with()
+
+    def test_trigger_prediction_accepts_gbm_engine(self):
+        """The frontend's engine-comparison card posts engine="gbm".
+
+        The pipeline implements gbm (its Step 3 whitelist and `get_engine("gbm")`
+        branch), so the request-model engine type has to permit it — a narrower
+        Literal would reject a working request with 422.
+        """
+        client = _prediction_client()
+        pipeline = AsyncMock(return_value={"status": "ok", "match_id": "m1"})
+
+        with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch(
+                    "app.services.world_cup_prediction_pipeline.run_prediction_pipeline",
+                    pipeline,
+                ):
+            resp = client.post(
+                "/world-cup/predictions/matches/m1/predict",
+                json={"engine": "gbm"},
+                headers=AUTH_HEADERS,
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(pipeline.await_args.kwargs["engine"], "gbm")
+
+    def test_trigger_prediction_rejects_unknown_engine(self):
+        """An unsupported engine is a client error, not a 500.
+
+        The pipeline validates the name at runtime too, but that path surfaces as
+        HTTP 500; validating at the boundary returns 422 and never starts a run.
+        """
+        client = _prediction_client()
+        pipeline = AsyncMock(return_value={"status": "ok", "match_id": "m1"})
+
+        with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch(
+                    "app.services.world_cup_prediction_pipeline.run_prediction_pipeline",
+                    pipeline,
+                ):
+            resp = client.post(
+                "/world-cup/predictions/matches/m1/predict",
+                json={"engine": "not_an_engine"},
+                headers=AUTH_HEADERS,
+            )
+
+        self.assertEqual(resp.status_code, 422)
+        pipeline.assert_not_awaited()
+
+    def test_batch_switch_engine_rejects_unknown_engine(self):
+        """Same boundary validation for the query-parameter batch routes."""
+        client = _prediction_client()
+        batch = AsyncMock(return_value={"status": "ok"})
+
+        with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch(
+                    "app.services.world_cup_prediction_pipeline.batch_predict_matches",
+                    batch,
+                ):
+            resp = client.post(
+                "/world-cup/predictions/batch-switch-engine?engine=not_an_engine",
+                headers=AUTH_HEADERS,
+            )
+
+        self.assertEqual(resp.status_code, 422)
+        batch.assert_not_awaited()
 
     def test_history_entry_includes_current_prediction_metadata_when_snapshot_matches(self):
         factors = {

@@ -55,10 +55,11 @@ jobs:
         run: ruff check app/
       - name: Compile backend
         run: python -m compileall app tests
-      # mypy is not clean yet: 207 errors across 60 files as of 2026-08-13,
+      # mypy is not clean yet: 126 errors across 51 files as of 2026-08-13,
       # now mostly Optional-access noise and dict/Any looseness (the SQLAlchemy
-      # Column and `object`-typed-proxy clusters are closed — see
-      # backend/mypy.ini). This used to be a bare `continue-on-error: true`
+      # Column, `object`-typed-proxy and worst-offender-file clusters are all
+      # closed — see backend/mypy.ini). This used to be a bare
+      # `continue-on-error: true`
       # step, which meant the count could
       # grow forever — the failure annotation is easy to ignore and nothing
       # actually failed. A ratchet instead fails only when the count goes UP, so
@@ -70,7 +71,7 @@ jobs:
       #   cd backend && python -m mypy app/ --config-file mypy.ini | tail -1
       - name: Type-check backend (mypy, ratcheted baseline)
         env:
-          MYPY_ERROR_CEILING: "207"
+          MYPY_ERROR_CEILING: "126"
         run: |
           set +e
           out=$(mypy app/ --config-file mypy.ini)

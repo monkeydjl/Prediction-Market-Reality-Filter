@@ -125,8 +125,15 @@ class MarketSnapshotStore:
         def _ts(s: dict):
             return s.get("captured_at") or s.get("created_at")
 
-        priced = [(s, _price(s)) for s in snaps]
-        priced = [(s, p) for s, p in priced if p is not None]
+        # Build the filtered pairs under one name: rebinding after a
+        # `p is not None` comprehension keeps the element type `float | None`
+        # from the first assignment, and every arithmetic use below (peak,
+        # drawdown, delta, round) needs a real float.
+        priced: list[tuple[dict[str, Any], float]] = []
+        for s in snaps:
+            p = _price(s)
+            if p is not None:
+                priced.append((s, p))
         if not priced:
             return {
                 "link_id": link_id,

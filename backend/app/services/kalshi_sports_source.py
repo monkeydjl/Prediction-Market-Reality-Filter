@@ -73,14 +73,17 @@ async def fetch_kalshi_sport_markets(limit: int = 100) -> list[dict]:
 
             no_price = 1.0 - price
 
-            # Use sport_market_detector to extract sport/competition/teams
+            # Use sport_market_detector to extract sport/competition/teams.
+            # It returns a SportMarketInfo dataclass (or None for
+            # futures/non-sport markets) — read attributes, not dict keys, and
+            # match polymarket_sports_source's candidate shape.
             detected = detect_sport_market(
                 contract_id=ticker,
                 question=market.get("title", "") or event.get("title", ""),
                 source="kalshi",
             )
 
-            if not detected.get("is_sport", False):
+            if detected is None:
                 continue
 
             candidates.append({
@@ -91,10 +94,16 @@ async def fetch_kalshi_sport_markets(limit: int = 100) -> list[dict]:
                 "liquidity": float(market.get("liquidity_dollars", 0) or 0),
                 "volume": float(market.get("volume_fp", 0) or 0),
                 "source": "kalshi",
-                "detected_sport": detected.get("sport", ""),
-                "detected_competition": detected.get("competition", ""),
-                "detected_teams": detected.get("teams", []),
-                "detected_date": detected.get("date"),
+                "detected_sport": detected.detected_sport,
+                "detected_competition": detected.detected_competition,
+                "detected_teams": detected.detected_teams,
+                # _resolve_match_id compares this against
+                # kickoff_utc.strftime("%Y-%m-%d"), so emit an ISO date string.
+                "detected_date": (
+                    detected.detected_date.isoformat()
+                    if detected.detected_date
+                    else None
+                ),
             })
 
             # Polite rate limit

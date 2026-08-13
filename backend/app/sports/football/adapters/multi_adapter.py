@@ -31,7 +31,7 @@ from app.kernel.competition_codes import (
 from app.kernel.domain import (
     MatchIdentity, MatchOutcome, TeamIdentity,
 )
-from app.kernel.protocols import ScheduleFilter, RawMatchData
+from app.kernel.protocols import DataAdapter, ScheduleFilter, RawMatchData
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 class MultiAdapter:
     """DataAdapter Protocol proxy — dispatches by match_id prefix."""
 
-    def __init__(self, adapters: dict[str, object]) -> None:
+    def __init__(self, adapters: dict[str, DataAdapter]) -> None:
         """Initialize with prefix-to-adapter mapping.
 
         Args:
@@ -51,14 +51,14 @@ class MultiAdapter:
         # Default to first adapter for unknown prefixes
         self._default = next(iter(adapters.values()))
 
-    def _select(self, match_id: str) -> object:
+    def _select(self, match_id: str) -> DataAdapter:
         """Select the adapter for a given match_id by prefix."""
         for prefix, adapter in self._adapters.items():
             if match_id.startswith(prefix):
                 return adapter
         return self._default
 
-    def _adapter_competition_code(self, prefix: str, adapter: object) -> str | None:
+    def _adapter_competition_code(self, prefix: str, adapter: DataAdapter) -> str | None:
         # Prefer real instance attrs with str codes (ignore auto MagicMock children).
         cfg = getattr(adapter, "_config", None)
         cfg_code = getattr(cfg, "code", None) if cfg is not None else None
@@ -70,7 +70,7 @@ class MultiAdapter:
             return comp_code
         return competition_code_for_prefix(prefix)
 
-    def _adapter_sport_code(self, prefix: str, adapter: object) -> str | None:
+    def _adapter_sport_code(self, prefix: str, adapter: DataAdapter) -> str | None:
         competition = getattr(adapter, "_competition", None)
         if competition is not None:
             sport = getattr(competition, "sport", None)
@@ -86,11 +86,11 @@ class MultiAdapter:
 
     def _iter_schedule_adapters(
         self, filters: ScheduleFilter,
-    ) -> list[tuple[str, object]]:
+    ) -> list[tuple[str, DataAdapter]]:
         """Adapters that should participate in fetch_schedule for *filters*."""
         wanted_comp = filters.competition
         wanted_sport = filters.sport
-        selected: list[tuple[str, object]] = []
+        selected: list[tuple[str, DataAdapter]] = []
         for prefix, adapter in self._adapters.items():
             if wanted_sport:
                 sport = self._adapter_sport_code(prefix, adapter)

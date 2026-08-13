@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import TypeVar
 
 from app.core import config
 from app.kernel.domain import (
@@ -24,7 +25,8 @@ from app.kernel.domain import (
 )
 from app.kernel.protocols import ScheduleFilter, RawMatchData
 from app.kernel.kernel_db import (
-    get_kernel_session, KernelMatchFixture, KernelMatchResult, KernelEloRating,
+    get_kernel_session, KernelBase, KernelMatchFixture, KernelMatchResult,
+    KernelEloRating,
 )
 from app.sports.baseball.mlb_stats_client import (
     extract_probable_pitchers,
@@ -272,7 +274,13 @@ def parse_mlb_game(game_data: dict) -> dict | None:
     }
 
 
-def query_fixture(match_id: str, model_cls) -> object | None:
+# Both query helpers just forward to Session.get, so the row type is whatever
+# model class the caller asked for. Returning `object` instead made every
+# attribute read on the result unverifiable.
+_RowT = TypeVar("_RowT", bound=KernelBase)
+
+
+def query_fixture(match_id: str, model_cls: type[_RowT]) -> _RowT | None:
     """Query a fixture by match_id from the kernel DB."""
     session = get_kernel_session()
     try:
@@ -284,7 +292,7 @@ def query_fixture(match_id: str, model_cls) -> object | None:
         session.close()
 
 
-def query_result(match_id: str, model_cls) -> object | None:
+def query_result(match_id: str, model_cls: type[_RowT]) -> _RowT | None:
     """Query a match result by match_id from the kernel DB."""
     session = get_kernel_session()
     try:
@@ -296,7 +304,7 @@ def query_result(match_id: str, model_cls) -> object | None:
         session.close()
 
 
-def build_match_outcome(result: object) -> MatchOutcome | None:
+def build_match_outcome(result: KernelMatchResult | None) -> MatchOutcome | None:
     """Build MatchOutcome from a KernelMatchResult row. Binary outcome only."""
     if result is None:
         return None
@@ -352,6 +360,8 @@ def save_fixture(parsed: dict, competition: str, season: str) -> None:
         hs = parsed.get("home_score")
         aws = parsed.get("away_score")
         if hs is not None and aws is not None:
+            hs_i: int | None
+            aws_i: int | None
             try:
                 hs_i, aws_i = int(hs), int(aws)
             except (TypeError, ValueError):
@@ -449,7 +459,7 @@ class MLBAdapter:
         ``{"probable": {home,away}, "weather": dict|None, "venue": str|None}``.
         On total failure returns empty probable and None weather.
         """
-        empty_probable = {"home": {}, "away": {}}
+        empty_probable: dict[str, dict] = {"home": {}, "away": {}}
         game_pk = _game_pk_from_match_id(match.match_id)
         if game_pk is None:
             return {"probable": empty_probable, "weather": None, "venue": None}

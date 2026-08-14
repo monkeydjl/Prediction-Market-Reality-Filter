@@ -47,31 +47,31 @@ except ImportError:  # pragma: no cover - env misconfig
     class _NoOpMetric:
         """Drop-in stand-in for a Prometheus metric. All operations are no-ops."""
 
-        def labels(self, *args, **kwargs):  # noqa: D401 - mirrors prom API
+        def labels(self, *args: Any, **kwargs: Any) -> _NoOpMetric:  # noqa: D401 - mirrors prom API
             return self
 
-        def inc(self, *args, **kwargs) -> None:
+        def inc(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        def observe(self, *args, **kwargs) -> None:
+        def observe(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        def set(self, *args, **kwargs) -> None:
+        def set(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        def info(self, *args, **kwargs) -> None:  # pragma: no cover - Info only
+        def info(self, *args: Any, **kwargs: Any) -> None:  # pragma: no cover - Info only
             pass
 
-    def Counter(*args, **kwargs) -> Any:  # type: ignore[no-redef]
+    def Counter(*args: Any, **kwargs: Any) -> Any:  # type: ignore[no-redef]
         return _NoOpMetric()
 
-    def Gauge(*args, **kwargs) -> Any:  # type: ignore[no-redef]
+    def Gauge(*args: Any, **kwargs: Any) -> Any:  # type: ignore[no-redef]
         return _NoOpMetric()
 
-    def Histogram(*args, **kwargs) -> Any:  # type: ignore[no-redef]
+    def Histogram(*args: Any, **kwargs: Any) -> Any:  # type: ignore[no-redef]
         return _NoOpMetric()
 
-    def Info(*args, **kwargs) -> Any:  # type: ignore[no-redef]
+    def Info(*args: Any, **kwargs: Any) -> Any:  # type: ignore[no-redef]
         return _NoOpMetric()
 
     # *args/**kwargs like the stubs above, so a caller that ever passes a
@@ -80,7 +80,7 @@ except ImportError:  # pragma: no cover - env misconfig
     # identical signatures and reports only that - impossible to satisfy here,
     # since the real one is annotated with a prometheus_client type that does
     # not exist on this branch.
-    def generate_latest(*args, **kwargs) -> bytes:  # type: ignore[misc]
+    def generate_latest(*args: Any, **kwargs: Any) -> bytes:  # type: ignore[misc]
         return b""
 
     CONTENT_TYPE_LATEST = "text/plain; charset=utf-8"

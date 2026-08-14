@@ -87,7 +87,7 @@ class OptimizationTaskManager:
     degraded SQLite file never blocks the optimization pipeline itself.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._tasks: dict[str, OptimizationTask] = {}
         self._lock = asyncio.Lock()
 
@@ -174,7 +174,7 @@ class OptimizationTaskManager:
         total: int,
         current_match: str | None = None,
         log_message: str | None = None
-    ):
+    ) -> None:
         """Update task progress."""
         async with self._lock:
             task = self._tasks.get(task_id)
@@ -190,7 +190,7 @@ class OptimizationTaskManager:
                     })
                 self._persist(task)
 
-    async def mark_running(self, task_id: str):
+    async def mark_running(self, task_id: str) -> None:
         """Mark task as running."""
         async with self._lock:
             task = self._tasks.get(task_id)
@@ -199,7 +199,7 @@ class OptimizationTaskManager:
                 task.started_at = datetime.now(timezone.utc)
                 self._persist(task)
 
-    async def mark_completed(self, task_id: str, result: dict[str, Any]):
+    async def mark_completed(self, task_id: str, result: dict[str, Any]) -> None:
         """Mark task as completed with result."""
         async with self._lock:
             task = self._tasks.get(task_id)
@@ -209,7 +209,7 @@ class OptimizationTaskManager:
                 task.result = result
                 self._persist(task)
 
-    async def mark_failed(self, task_id: str, error: str):
+    async def mark_failed(self, task_id: str, error: str) -> None:
         """Mark task as failed with error."""
         async with self._lock:
             task = self._tasks.get(task_id)
@@ -219,7 +219,7 @@ class OptimizationTaskManager:
                 task.error = error
                 self._persist(task)
 
-    async def cleanup_old_tasks(self, max_age_hours: int = 24):
+    async def cleanup_old_tasks(self, max_age_hours: int = 24) -> None:
         """Remove completed/failed tasks older than max_age_hours.
 
         Prunes both the in-memory cache and the durable store. Memory removal

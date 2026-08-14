@@ -6,6 +6,7 @@ All endpoints gated by PHASE9_ACCURACY_SPRINT_ENABLED (503 when false).
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -34,12 +35,14 @@ def _check_enabled() -> None:
 
 
 @router.post("/ingest")
-async def ingest_historical_data(request: IngestRequest, _auth: None = Depends(require_write_key)):
+async def ingest_historical_data(
+    request: IngestRequest, _auth: None = Depends(require_write_key)
+) -> dict[str, Any]:
     """Trigger historical data ingestion."""
     _check_enabled()
     ingestor = HistoricalDataIngestor()
     sports = ["nba", "mlb", "nhl"] if request.sport == "all" else [request.sport]
-    results = {}
+    results: dict[str, Any] = {}
     for sport in sports:
         for season in request.seasons:
             result = await ingestor.ingest_season(sport, season)
@@ -57,7 +60,7 @@ class BackfillSeedRequest(BaseModel):
 async def backfill_and_seed(
     request: BackfillSeedRequest,
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Backfill KernelMatchResult from fixtures and/or seed KernelEloRating.
 
     Use after schedule sync when fixtures have scores but results/Elo tables
@@ -77,7 +80,9 @@ async def backfill_and_seed(
 
 
 @router.post("/run")
-async def run_optimization(request: OptimizationRequest, _auth: None = Depends(require_write_key)):
+async def run_optimization(
+    request: OptimizationRequest, _auth: None = Depends(require_write_key)
+) -> dict[str, Any]:
     """Trigger parameter optimization (async).
 
     Creates a durable task row, then schedules ParameterOptimizer.optimize_sync
@@ -157,7 +162,7 @@ async def run_optimization(request: OptimizationRequest, _auth: None = Depends(r
 
 
 @router.get("/status/{task_id}")
-async def get_optimization_status(task_id: str):
+async def get_optimization_status(task_id: str) -> dict[str, Any]:
     """Query optimization task status."""
     _check_enabled()
     from app.services.optimization_task_manager import get_task_manager
@@ -170,7 +175,7 @@ async def get_optimization_status(task_id: str):
 
 
 @router.get("/params/{sport}")
-async def get_params(sport: str):
+async def get_params(sport: str) -> dict:
     """Get current optimized params for a sport."""
     _check_enabled()
     from app.kernel.optimized_params_store import OptimizedParamsStore
@@ -183,7 +188,7 @@ async def get_params(sport: str):
 
 
 @router.get("/params")
-async def list_params():
+async def list_params() -> list[dict]:
     """List all sports' optimized params."""
     _check_enabled()
     from app.kernel.optimized_params_store import OptimizedParamsStore
@@ -193,7 +198,7 @@ async def list_params():
 
 
 @router.post("/apply/{params_id}")
-async def apply_params(params_id: int, _auth: None = Depends(require_write_key)):
+async def apply_params(params_id: int, _auth: None = Depends(require_write_key)) -> dict:
     """Apply optimized params to FactorRegistry."""
     _check_enabled()
     from app.kernel.optimized_params_store import OptimizedParamsStore

@@ -6,9 +6,16 @@ Route order: static paths (/history) before dynamic /{match_id}/latest.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from fastapi import APIRouter, HTTPException, Query
 
 from app.core import config
+
+if TYPE_CHECKING:
+    # Import-time only for the checker; the runtime import stays inside _store()
+    # so the store (and its DB engine) is not constructed at module import.
+    from app.kernel.traditional_odds_store import TraditionalOddsStore
 
 router = APIRouter(prefix="/sport-odds", tags=["Sport Odds"])
 
@@ -20,7 +27,7 @@ def _ensure_enabled() -> None:
         )
 
 
-def _store() -> "TraditionalOddsStore":  # noqa: F821  resolved by the local import below
+def _store() -> "TraditionalOddsStore":
     from app.kernel.traditional_odds_store import TraditionalOddsStore
     return TraditionalOddsStore()
 

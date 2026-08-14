@@ -67,12 +67,15 @@ async def cross_validate(
             news_context=news_context,
         )
     except Exception as exc:
-        return fail_closed_none(
+        # `return fail_closed_none(...)` returned the helper's None, which reads
+        # like the helper decides the value; it only logs the policy.
+        fail_closed_none(
             logger,
             "cross_validation",
             exc,
             context={"model": settings.CROSS_VALIDATION_MODEL},
         )
+        return None
 
     # A response with no usable ai_probability is a non-answer, not agreement.
     # Falling back to primary_probability here would make divergence 0 ->

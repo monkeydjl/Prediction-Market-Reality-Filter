@@ -55,38 +55,23 @@ jobs:
         run: ruff check app/
       - name: Compile backend
         run: python -m compileall app tests
-      # mypy is not clean yet: 19 errors across 19 files as of 2026-08-14 — one
-      # error per file, so every remaining fix is its own investigation rather
-      # than part of a cluster (the SQLAlchemy Column, `object`-typed-proxy and
-      # worst-offender-file clusters are all closed — see backend/mypy.ini).
-      # The count no longer depends on the
-      # platform mypy runs on, so a local run matches this job exactly.
-      # This used to be a bare
-      # `continue-on-error: true`
-      # step, which meant the count could
-      # grow forever — the failure annotation is easy to ignore and nothing
-      # actually failed. A ratchet instead fails only when the count goes UP, so
-      # new code has to be clean without requiring the backlog to be cleared
-      # first. Lower MYPY_ERROR_CEILING whenever errors get fixed; when it
-      # reaches 0, drop the ceiling logic and let mypy fail on its own.
+      # mypy is clean and now BLOCKING: `app/` type-checks with zero errors
+      # under backend/mypy.ini as of 2026-08-14, so any new error fails the
+      # build. This replaced a ratchet (`MYPY_ERROR_CEILING`, hand-lowered from
+      # 627 through 19 across PRs #10–#19), which in turn replaced a bare
+      # `continue-on-error: true` that let the count grow forever because a
+      # failure annotation is easy to ignore when nothing actually fails.
       #
-      # The old comment here claimed "~256", so re-derive rather than trust it:
-      #   cd backend && python -m mypy app/ --config-file mypy.ini | tail -1
-      - name: Type-check backend (mypy, ratcheted baseline)
-        env:
-          MYPY_ERROR_CEILING: "19"
-        run: |
-          set +e
-          out=$(mypy app/ --config-file mypy.ini)
-          set -e
-          printf '%s\n' "$out"
-          count=$(printf '%s\n' "$out" | sed -n 's/^Found \([0-9][0-9]*\) error.*/\1/p')
-          count=${count:-0}
-          echo "mypy errors: $count (ceiling $MYPY_ERROR_CEILING)"
-          if [ "$count" -gt "$MYPY_ERROR_CEILING" ]; then
-            echo "::error::mypy errors rose from $MYPY_ERROR_CEILING to $count. Fix the new ones, or raise the ceiling deliberately with a reason."
-            exit 1
-          fi
+      # Do not reintroduce a ceiling to land a red build. A local run
+      # reproduces this job exactly (`cd backend && python -m mypy app/
+      # --config-file mypy.ini`; on Windows prefix `PYTHONUTF8=1`), and the
+      # result no longer depends on the platform.
+      #
+      # mypy.ini is still lenient in three ways, each its own follow-up:
+      # warn_unused_ignores (8 errors in 5 files), check_untyped_defs (7 in 3)
+      # and disallow_untyped_defs (225 in 36).
+      - name: Type-check backend (mypy)
+        run: mypy app/ --config-file mypy.ini
       - name: Run backend tests with coverage
         run: pytest tests/ --cov=app --cov-report=term-missing --cov-report=xml
 

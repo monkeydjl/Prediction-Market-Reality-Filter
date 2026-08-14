@@ -327,13 +327,17 @@ def auto_archive_expired(events: list[dict[str, Any]] | None = None) -> int:
         store = _load_for_write(path)
         now = utc_now()
         for event_id in to_archive:
-            entry = store.get(event_id)
-            if entry is None:
+            # Not `entry`: the scan loop above already bound that name to an
+            # element of `events`, and a name reused in one function keeps the
+            # first binding's type - so the Optional from .get() had nowhere to
+            # go.
+            stored = store.get(event_id)
+            if stored is None:
                 continue
-            record = entry.get("record") or {}
+            record = stored.get("record") or {}
             record.setdefault("tracking", {})["status"] = "archived"
-            entry["last_updated"] = now
-            store[event_id] = entry
+            stored["last_updated"] = now
+            store[event_id] = stored
         write_json_atomic(path, store, indent=2)
 
     logger = __import__("logging").getLogger(__name__)

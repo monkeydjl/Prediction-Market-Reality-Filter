@@ -49,16 +49,21 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
-def _is_valid_index(index: Any, length: int) -> bool:
-    """True only for genuine non-negative ints in range. bool is rejected
-    explicitly because bool is a subclass of int in Python."""
+def _valid_index(index: Any, length: int) -> int | None:
+    """The index itself when it is a genuine in-range int, else None.
+
+    Returns the value rather than a bool: a predicate cannot narrow its
+    argument, so a `_is_valid_index(index, n)` guard left the caller indexing
+    a list with something still typed Any | None. bool is rejected explicitly
+    because bool is a subclass of int in Python.
+    """
     if isinstance(index, bool):
-        return False
+        return None
     if not isinstance(index, int):
-        return False
+        return None
     if index < 0 or index >= length:
-        return False
-    return True
+        return None
+    return index
 
 
 def _filter_banned_words(text: str) -> str:
@@ -116,8 +121,8 @@ def aggregate_evidence_breakdown(
         if not isinstance(item, dict):
             continue
 
-        index = item.get("index")
-        if not _is_valid_index(index, original_len):
+        index = _valid_index(item.get("index"), original_len)
+        if index is None:
             continue
 
         direction = item.get("evidence_direction")

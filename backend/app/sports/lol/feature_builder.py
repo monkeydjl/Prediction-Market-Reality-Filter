@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Any
 
 from app.kernel.domain import (
     SportIdentity,
@@ -29,7 +30,10 @@ _LOL = SportIdentity(code="lol", name="League of Legends")
 _BO_RE = re.compile(r"Bo(\d+)", re.IGNORECASE)
 
 
-def _as_prob(value: object) -> float | None:
+def _as_prob(value: Any) -> float | None:
+    # Any, not object: every caller passes a raw dict value, and float() accepts
+    # str/SupportsFloat rather than object - the TypeError branch below is the
+    # runtime guard for the rest.
     if value is None:
         return None
     try:

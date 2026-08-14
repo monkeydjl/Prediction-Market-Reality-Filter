@@ -24,6 +24,10 @@ def _liquidity_floor() -> float:
     raw = getattr(config.settings, "DIAGNOSIS_LIQUIDITY_FLOOR", None)
     if raw is None:
         raw = getattr(config.settings, "EDGE_LIQUIDITY_FLOOR", 10_000.0)
+    if raw is None:
+        # Both settings can exist and be None, which float() would only reject
+        # via the TypeError below - name the case instead of catching it.
+        return 10_000.0
     try:
         floor = float(raw)
     except (TypeError, ValueError):

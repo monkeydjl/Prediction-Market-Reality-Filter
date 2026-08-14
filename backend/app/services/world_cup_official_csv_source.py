@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from io import StringIO
 from typing import Any
@@ -196,7 +197,9 @@ def _strict_csv_rows(
     return rows
 
 
-def _normalized_headers(fieldnames: list[str] | None) -> list[str]:
+def _normalized_headers(fieldnames: Sequence[str] | None) -> list[str]:
+    # Sequence, not list: the only caller passes csv.DictReader.fieldnames,
+    # which is a Sequence[str] | None, and the body only iterates it.
     if not fieldnames:
         return []
     headers: list[str] = []

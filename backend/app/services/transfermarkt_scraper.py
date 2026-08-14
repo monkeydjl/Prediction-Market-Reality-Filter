@@ -141,8 +141,14 @@ async def scrape_team_market_value(team_name: str, use_cache: bool = True) -> di
             # Find total market value (usually in a box with class "data-header__market-value")
             market_value_elem = soup.find("a", {"class": "data-header__market-value-wrapper"})
             if not market_value_elem:
-                # Try alternative selector
-                market_value_elem = soup.find("div", string=re.compile(r"Total market value", re.IGNORECASE))
+                # Try alternative selector.
+                # bs4 supports name + string together (Tag.find dispatches it to
+                # find_all) but publishes no overload for the combination - see
+                # the "way too much code for a rarely used feature" TODO in
+                # bs4/element.py. Stub gap, not a call error.
+                market_value_elem = soup.find(  # type: ignore[call-overload]
+                    "div", string=re.compile(r"Total market value", re.IGNORECASE)
+                )
 
             total_value = None
             if market_value_elem:

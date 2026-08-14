@@ -116,7 +116,9 @@ def get_match_weather(
     lat, lon = coords
 
     try:
-        params = {
+        # Annotated: the mixed float/str/int values infer dict[str, object],
+        # which httpx's params type rejects wholesale.
+        params: dict[str, str | int | float] = {
             "latitude": lat,
             "longitude": lon,
             "current": "temperature_2m,wind_speed_10m,relative_humidity_2m,weather_code",

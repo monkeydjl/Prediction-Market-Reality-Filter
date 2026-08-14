@@ -43,7 +43,7 @@ def extract_model_metrics(record: dict[str, Any]) -> dict[str, Any]:
     item["degraded_mode"] = bool(llm.get("degraded_mode", False))
     item["degraded_mode_label"] = "degraded" if item["degraded_mode"] else "normal"
     cost_raw = llm.get("estimated_token_cost")
-    item["estimated_token_cost"] = float(cost_raw) if _is_real_number(cost_raw) else None
+    item["estimated_token_cost"] = _real_number(cost_raw)
     guardrails = record.get("guardrail_fired")
     item["guardrail_fired"] = guardrails if isinstance(guardrails, list) else []
     return item
@@ -82,13 +82,24 @@ def compute_ece(items: list[dict[str, Any]]) -> float | None:
     return ece
 
 
+def _real_number(value: Any) -> float | None:
+    """The value as a float when it is a finite non-bool number, else None.
+
+    Returns the number so a caller that wants it does not parse twice: a
+    `_is_real_number(x)` guard cannot narrow x, so `float(x)` after it was
+    still Optional to the checker.
+    """
+    if isinstance(value, bool):
+        return None
+    if not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
 def _is_real_number(value: Any) -> bool:
     """True only for int/float that is not bool and is finite."""
-    if isinstance(value, bool):
-        return False
-    if not isinstance(value, (int, float)):
-        return False
-    return math.isfinite(float(value))
+    return _real_number(value) is not None
 
 
 def slice_model_metrics(items: list[dict[str, Any]]) -> dict[str, Any]:

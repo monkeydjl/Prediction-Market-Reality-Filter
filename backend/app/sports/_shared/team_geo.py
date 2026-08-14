@@ -370,18 +370,18 @@ def altitude_m_for_team(team_name: str) -> float | None:
     key = _normalize(team_name)
     if not key:
         return None
-    # exact normalized key
-    if key in _FOOTBALL_ALTITUDE_M:
-        val = _FOOTBALL_ALTITUDE_M[key]
-    else:
+    # One lookup then one guard: with the None-check inside the else branch the
+    # exact-key and fuzzy-scan arms rejoined as float | None, so float() below
+    # was reading a possible None.
+    val = _FOOTBALL_ALTITUDE_M.get(key)
+    if val is None:
         # reuse fuzzy spirit: scan table keys
-        val = None
         for k, v in _FOOTBALL_ALTITUDE_M.items():
             if key == k or key in k or k in key:
                 val = v
                 break
-        if val is None:
-            return None
+    if val is None:
+        return None
     try:
         alt = float(val)
     except (TypeError, ValueError):

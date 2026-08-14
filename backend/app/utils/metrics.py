@@ -75,12 +75,12 @@ except ImportError:  # pragma: no cover - env misconfig
         return _NoOpMetric()
 
     # *args/**kwargs like the stubs above, so a caller that ever passes a
-    # registry still works. Also [misc]: unlike Counter/Gauge/... (classes, so
-    # only [no-redef]), generate_latest is a function, and mypy demands that
-    # conditional variants have *identical* signatures - impossible here, since
-    # the real one is annotated with a prometheus_client type that does not
-    # exist on this branch.
-    def generate_latest(*args, **kwargs) -> bytes:  # type: ignore[no-redef,misc]
+    # registry still works. [misc] rather than the [no-redef] the class stubs
+    # above need: for a *function*, mypy demands that conditional variants have
+    # identical signatures and reports only that - impossible to satisfy here,
+    # since the real one is annotated with a prometheus_client type that does
+    # not exist on this branch.
+    def generate_latest(*args, **kwargs) -> bytes:  # type: ignore[misc]
         return b""
 
     CONTENT_TYPE_LATEST = "text/plain; charset=utf-8"

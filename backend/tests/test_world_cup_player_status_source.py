@@ -7,10 +7,12 @@ from app.core.config import settings
 from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT, load_sports_facts
 from app.services.sports_signal_service import build_sports_signals
 from app.services.world_cup_player_status_source import (
+    get_team_injury_impact,
     import_world_cup_player_status_source,
     preview_world_cup_player_status_source,
     world_cup_player_status_source_to_data,
 )
+from app.sports.football.football_injury import ROLE_WEIGHTS
 
 
 def _raw_status_payload() -> dict:
@@ -133,6 +135,90 @@ class WorldCupPlayerStatusSourceTests(unittest.TestCase):
                     "status": "out",
                 }]
             })
+
+
+class TeamInjuryImpactTests(unittest.TestCase):
+    """The P1-F3 fallback that adapters/_shared.py reaches for.
+
+    _shared.py imported get_team_injury_impact inside a bare `except Exception`,
+    so while the function did not exist the ImportError was swallowed and the
+    World Cup fallback never ran in production. Every test of that branch
+    patched the name with create=True, which invented the attribute and hid the
+    gap. These tests call the real function.
+    """
+
+    def _import(self, payload, path):
+        with patch.object(settings, "SPORTS_FACT_FILE", path):
+            import_world_cup_player_status_source(payload, replace=True)
+
+    def test_sums_role_weights_for_out_and_suspended(self):
+        payload = _raw_status_payload()
+        payload["response"].append({
+            "player": {"name": "Player C"},
+            "team": {"name": "Brazil"},
+            "kind": "lineup",
+            "status": "starting",
+        })
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "sports_facts.json")
+            self._import(payload, path)
+            with patch.object(settings, "SPORTS_FACT_FILE", path):
+                impact = get_team_injury_impact("Brazil")
+
+        # Player A (out) and Player B (suspended) both count; neither is listed
+        # as starting, so both take the bench weight.
+        self.assertAlmostEqual(impact, 2 * ROLE_WEIGHTS["bench"], places=6)
+
+    def test_starter_lineup_fact_raises_the_weight(self):
+        payload = _raw_status_payload()
+        payload["response"] = [
+            payload["response"][0],
+            {
+                "player": {"name": "Player A"},
+                "team": {"name": "Brazil"},
+                "kind": "lineup",
+                "status": "starting",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "sports_facts.json")
+            self._import(payload, path)
+            with patch.object(settings, "SPORTS_FACT_FILE", path):
+                impact = get_team_injury_impact("Brazil")
+
+        self.assertAlmostEqual(impact, ROLE_WEIGHTS["starter"], places=6)
+
+    def test_none_for_unknown_team_and_blank_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "sports_facts.json")
+            self._import(_raw_status_payload(), path)
+            with patch.object(settings, "SPORTS_FACT_FILE", path):
+                # None rather than 0.0: no facts is not known-healthy.
+                self.assertIsNone(get_team_injury_impact("Nowhere United"))
+                self.assertIsNone(get_team_injury_impact("   "))
+
+    def test_none_when_team_has_only_available_players(self):
+        payload = {
+            "source": "official_injury_feed",
+            "observed_at": "2026-06-25T00:00:00Z",
+            "response": [{
+                "player": {"name": "Player D"},
+                "team": {"name": "Brazil"},
+                "kind": "availability",
+                "status": "fit",
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "sports_facts.json")
+            self._import(payload, path)
+            with patch.object(settings, "SPORTS_FACT_FILE", path):
+                self.assertIsNone(get_team_injury_impact("Brazil"))
+
+    def test_adapter_fallback_reaches_the_real_function(self):
+        """The import in _shared.py must resolve without create=True."""
+        from app.services import world_cup_player_status_source as module
+
+        self.assertTrue(callable(module.get_team_injury_impact))
 
 
 if __name__ == "__main__":

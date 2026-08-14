@@ -37,18 +37,19 @@ def _team_schedule(team: str, match: MatchFixture, session: Session) -> dict[str
     ).order_by(MatchFixture.kickoff_utc.desc()).all()
 
     last_match = previous_matches[0] if previous_matches else None
-    if last_match and last_match.kickoff_utc:
-        last_kickoff = _utc_naive(last_match.kickoff_utc)
+    # Narrow the normalized value, not the column: a truthy `last_match.kickoff_utc`
+    # says nothing about the `_utc_naive(...)` result subtracted below.
+    last_kickoff = _utc_naive(last_match.kickoff_utc) if last_match else None
+    if last_kickoff is not None:
         days_since_last = max(0.0, (kickoff - last_kickoff).total_seconds() / 86400)
     else:
-        last_kickoff = None
         days_since_last = 7.0
 
     matches_last_14 = sum(
         1
         for previous in previous_matches
-        if previous.kickoff_utc
-        and 0 <= (kickoff - _utc_naive(previous.kickoff_utc)).total_seconds() <= 14 * 86400
+        if (previous_kickoff := _utc_naive(previous.kickoff_utc)) is not None
+        and 0 <= (kickoff - previous_kickoff).total_seconds() <= 14 * 86400
     )
     if days_since_last < 3 or matches_last_14 >= 4:
         density = "high"

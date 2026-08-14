@@ -11,12 +11,17 @@ the defaults here match basketball (HFA=100, K=20/30, carry=0.75) but are
 overridden by callers:
     - MLB: HFA=50, K=20/30, carry=0.7
     - NHL: HFA=55, K=20/30, carry=0.75
+
+``hfa`` and ``k`` are annotated ``float`` rather than the NBA original's
+``int``: the formulas are float arithmetic throughout, and the backtest /
+parameter-optimizer paths tune both as continuous values (EloParams.hfa,
+EloParams.k_regular). The bodies are otherwise unchanged.
 """
 from __future__ import annotations
 
 
 def compute_expected_score(
-    elo_home: float, elo_away: float, hfa: int = 100,
+    elo_home: float, elo_away: float, hfa: float = 100,
 ) -> float:
     """Compute expected probability that home team wins.
 
@@ -36,7 +41,7 @@ def compute_expected_score(
 
 
 def update_elo(
-    elo: float, expected: float, actual: float, k: int = 20,
+    elo: float, expected: float, actual: float, k: float = 20,
 ) -> float:
     """Update Elo rating after a single game.
 

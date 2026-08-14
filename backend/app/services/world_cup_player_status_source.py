@@ -68,6 +68,55 @@ def import_world_cup_player_status_source(
     return result
 
 
+def get_team_injury_impact(team_name: str) -> float | None:
+    """Role-weighted Out impact in [0, 1] for a team, from imported facts.
+
+    The P1-F3 fallback in app/sports/football/adapters/_shared.py calls this
+    when the static table in football_injury has no row for the team. Role tier
+    comes from the team's own lineup facts (a player listed as starting counts
+    as "starter", anyone else falls to the bench weight) because player-status
+    facts carry no role of their own. None when the team has no facts or no Out
+    rows — never 0.0, which would claim known-healthy.
+    """
+
+    name = (team_name or "").strip()
+    if not name:
+        return None
+    from app.services.sports_fact_service import load_sports_facts
+    from app.sports.football.football_injury import summarize_injury_impact
+
+    facts = load_sports_facts(tournament=WORLD_CUP_TOURNAMENT)
+    team_norm = _norm(name)
+    team_facts = [fact for fact in facts if _norm(fact.get("team")) == team_norm]
+    if not team_facts:
+        return None
+
+    starters = {
+        _norm(fact.get("player"))
+        for fact in team_facts
+        if fact.get("kind") == "lineup"
+        and _clean(fact.get("status")).lower() in {"starting", "starter"}
+        and fact.get("player")
+    }
+    rows = [
+        {
+            "player": fact.get("player"),
+            "role": "starter" if _norm(fact.get("player")) in starters else "bench",
+            # summarize_injury_impact counts status == "out" only; the fact
+            # store spells the same absence as injured/suspended/banned.
+            "status": "out",
+        }
+        for fact in team_facts
+        if fact.get("kind") in {"injury", "suspension"}
+        and _clean(fact.get("status")).lower() in {"out", "injured", "suspended", "banned"}
+    ]
+    return summarize_injury_impact(rows)
+
+
+def _norm(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
 def _status_rows(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         return _rows_from_list(payload)

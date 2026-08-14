@@ -62,7 +62,9 @@ def _ranked_table(group_matches: list[MatchFixture]) -> list[dict[str, Any]]:
         if match.status == "finished":
             _apply_result(table, match)
 
-    rows = [
+    # Annotated: `{"team": str, **dict[str, int]}` infers dict[str, object],
+    # and the sort key below cannot negate an object.
+    rows: list[dict[str, Any]] = [
         {"team": team, **stats}
         for team, stats in table.items()
     ]

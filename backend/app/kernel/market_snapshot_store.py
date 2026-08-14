@@ -122,7 +122,7 @@ class MarketSnapshotStore:
                         continue
             return None
 
-        def _ts(s: dict):
+        def _ts(s: dict) -> Any:
             return s.get("captured_at") or s.get("created_at")
 
         # Build the filtered pairs under one name: rebinding after a
@@ -143,7 +143,7 @@ class MarketSnapshotStore:
             }
 
         # assume snaps ordered by captured_at asc or desc — normalize
-        def sort_key(item):
+        def sort_key(item: tuple[dict[str, Any], float]) -> Any:
             s, _ = item
             t = _ts(s)
             return t or ""

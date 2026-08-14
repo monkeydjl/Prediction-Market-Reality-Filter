@@ -3,6 +3,8 @@
 from typing import Any
 
 from sqlalchemy import and_, or_
+from sqlalchemy.orm import InstrumentedAttribute
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.world_cup_prediction import (
     MatchFixture, MatchPrediction, AIOptimizedPrediction,
@@ -13,7 +15,11 @@ from app.services.world_cup_ai_optimization_service import optimize_prediction_w
 from app.services.optimization_task_manager import get_task_manager
 
 
-def engine_method_filter(method_column, engine_name: str):
+# InstrumentedAttribute[Any]: callers pass both a Mapped[str] and a
+# Mapped[str | None] column, so the element type has to stay open.
+def engine_method_filter(
+    method_column: InstrumentedAttribute[Any], engine_name: str
+) -> ColumnElement[bool]:
     """Build a SQL filter that keeps public engine buckets separate."""
     if engine_name == "integrated":
         return method_column.like("integrated%")

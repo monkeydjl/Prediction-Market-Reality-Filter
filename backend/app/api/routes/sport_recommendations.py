@@ -9,11 +9,19 @@ persisted edges. No caching, no scheduler.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Query
 
 from app.core import config
+
+if TYPE_CHECKING:
+    # Kernel imports stay inside the helpers at runtime (lazy); these are here
+    # only so the annotations resolve.
+    from app.kernel.sport_recommendation_service import (
+        SportActionableRecommendation,
+        SportRecommendationService,
+    )
 
 router = APIRouter(prefix="/sport-recommendations", tags=["Sport Recommendations"])
 
@@ -26,12 +34,12 @@ def _ensure_enabled() -> None:
         )
 
 
-def _service():
+def _service() -> SportRecommendationService:
     from app.kernel.sport_recommendation_service import SportRecommendationService
     return SportRecommendationService()
 
 
-def _rec_to_dict(rec) -> dict[str, Any]:
+def _rec_to_dict(rec: SportActionableRecommendation) -> dict[str, Any]:
     """Serialize a SportActionableRecommendation to a JSON-friendly dict."""
     return {
         "match_id": rec.match_id,

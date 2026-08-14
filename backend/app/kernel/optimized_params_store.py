@@ -7,12 +7,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
 from app.kernel.kernel_db import KernelOptimizedParams
 
 
-def _get_engine(db_path: str):
+def _get_engine(db_path: str) -> Engine:
     return create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
 
 

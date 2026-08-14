@@ -8,6 +8,7 @@ This module schedules automatic prediction updates:
 import asyncio
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 from app.services.world_cup_match_service import sync_world_cup_fixtures
 from app.services.world_cup_post_match_backfill_service import run_post_match_backfill
@@ -16,7 +17,7 @@ from app.services.world_cup_prediction_pipeline import batch_predict_matches
 logger = logging.getLogger(__name__)
 
 
-async def run_daily_prediction_update():
+async def run_daily_prediction_update() -> dict[str, Any]:
     """Daily job to update all match predictions.
 
     This runs:

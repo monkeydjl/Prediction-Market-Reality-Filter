@@ -127,3 +127,28 @@ def test_snapshots_timeseries(client):
     data = res.json()
     assert len(data["series"]) == 1
     assert len(data["series"][0]["snapshots"]) == 2
+
+
+def test_link_audit_attaches_link_meta(client):
+    """The audit summary carries the link's own metadata, not just prices.
+
+    The route looked the link up through a store method that did not exist, and
+    the AttributeError was swallowed by a bare ``except Exception``, so every
+    audit response silently came back without match_id / source / verified.
+    """
+    from app.kernel.market_snapshot_store import MarketSnapshotStore
+    link = _seed_link(match_id="m1", contract_id="c1", verified=True)
+    MarketSnapshotStore().append_snapshot(link_id=link["id"], implied_prob=0.6, price=0.6)
+    res = client.get(f"/api/sport-markets/links/{link['id']}/audit")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["match_id"] == "m1"
+    assert data["source"] == "polymarket"
+    assert data["verified"] is True
+
+
+def test_link_audit_unknown_link_omits_meta(client):
+    """A link id with no row leaves the meta keys off rather than 500-ing."""
+    res = client.get("/api/sport-markets/links/9999/audit")
+    assert res.status_code == 200
+    assert "match_id" not in res.json()

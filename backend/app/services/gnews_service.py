@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 _gnews_client = None
 
 
-def _get_client():
+def _get_client() -> GNews | None:
     """Lazy-init the GNews client so an import-time or network failure
     at startup doesn't crash the whole app."""
     global _gnews_client

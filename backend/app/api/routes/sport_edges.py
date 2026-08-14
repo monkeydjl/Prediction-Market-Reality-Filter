@@ -5,12 +5,17 @@ GET endpoints are read-only. POST /{match_id}/detect requires write key.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.security import require_write_key
 from app.core import config
+
+if TYPE_CHECKING:
+    # Kernel imports stay inside the helpers at runtime (lazy); these are here
+    # only so the annotations resolve.
+    from app.kernel.edge_detector_service import EdgeDetectorService, EdgeResult
 
 router = APIRouter(prefix="/sport-edges", tags=["Sport Edges"])
 
@@ -23,12 +28,12 @@ def _ensure_enabled() -> None:
         )
 
 
-def _service():
+def _service() -> EdgeDetectorService:
     from app.kernel.edge_detector_service import EdgeDetectorService
     return EdgeDetectorService()
 
 
-def _edge_to_dict(edge) -> dict[str, Any]:
+def _edge_to_dict(edge: EdgeResult) -> dict[str, Any]:
     """Serialize an EdgeResult to a JSON-friendly dict."""
     return {
         "mapped_outcome": edge.mapped_outcome,

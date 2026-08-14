@@ -16,10 +16,14 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 import httpx
 
 from app.core.config import settings
+
+if TYPE_CHECKING:
+    from app.kernel.domain import MatchIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -254,7 +258,7 @@ def _clear_live_weather_cache() -> None:
     _LIVE_CACHE.clear()
 
 
-def live_weather_for_match(match) -> dict[str, float | str | None] | None:
+def live_weather_for_match(match: MatchIdentity) -> dict[str, float | str | None] | None:
     """Live current-weather for a match's home city, or None on any failure.
 
     Selection gates (any miss → None, so the adapter falls through to static

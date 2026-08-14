@@ -90,7 +90,7 @@ def fetch_elo_and_odds(
     # get_event_loop() at call time (before the loop exists), which raises
     # "There is no current event loop" under pytest-asyncio and is fragile in
     # general. Wrapping makes gather bind to the runner's loop.
-    async def _gather_all():
+    async def _gather_all() -> list[Any]:
         return await asyncio.gather(
             fetch_team_elo(match.home.name, scope=elo_scope, alias=home_alias),
             fetch_team_elo(match.away.name, scope=elo_scope, alias=away_alias),
@@ -786,7 +786,7 @@ def _days_since(
         return None
 
 
-def query_fixture(match_id: str, model_cls) -> Any | None:
+def query_fixture(match_id: str, model_cls: type[Any]) -> Any | None:
     """Query a fixture by match_id from the kernel DB.
 
     model_cls: KernelMatchFixture (for UCL/EPL).
@@ -804,7 +804,7 @@ def query_fixture(match_id: str, model_cls) -> Any | None:
         session.close()
 
 
-def query_result(match_id: str, model_cls) -> Any | None:
+def query_result(match_id: str, model_cls: type[Any]) -> Any | None:
     """Query a match result by match_id from the kernel DB."""
     from app.kernel.kernel_db import get_kernel_session
     session = get_kernel_session()

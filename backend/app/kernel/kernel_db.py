@@ -24,6 +24,7 @@ from sqlalchemy import (
     create_engine,
     event,
 )
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 logger = logging.getLogger(__name__)
@@ -463,7 +464,7 @@ class KernelFuturesSnapshot(KernelBase):
     captured_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
-def _get_engine(db_path: str):
+def _get_engine(db_path: str) -> Engine:
     """Create a SQLAlchemy engine for an isolated SQLite DB (used by tests)."""
     return create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
 
@@ -483,7 +484,7 @@ def init_kernel_db(db_path: str | None = None) -> None:
     )
 
     @event.listens_for(_engine, "connect")
-    def _set_sqlite_pragma(dbapi_conn, _record):
+    def _set_sqlite_pragma(dbapi_conn: Any, _record: Any) -> None:
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA synchronous=NORMAL")
@@ -500,7 +501,7 @@ def init_kernel_db(db_path: str | None = None) -> None:
     logger.info("Kernel DB initialized at %s", db_path)
 
 
-def _migrate_dormant_tables(engine) -> None:
+def _migrate_dormant_tables(engine: Engine) -> None:
     """Drop dormant tables that have old schema so they get recreated.
 
     Detects old schema by checking if kernel_factors has factor_id as its

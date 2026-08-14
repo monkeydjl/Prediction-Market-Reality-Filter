@@ -244,11 +244,11 @@ class UCLAdapter:
         finally:
             session.close()
 
-    def fetch_team_data(self, team) -> dict:
+    def fetch_team_data(self, team: TeamIdentity) -> dict:
         return {}
 
-    def fetch_player_data(self, team) -> dict:
+    def fetch_player_data(self, team: TeamIdentity) -> dict:
         return {}
 
-    def fetch_market_data(self, match) -> dict:
+    def fetch_market_data(self, match: MatchIdentity) -> dict:
         return {}

@@ -17,9 +17,14 @@ Why a wrapper module instead of using ``sentry_sdk`` directly?
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
+
+# The only levels sentry_sdk.capture_message accepts. Spelled out here so the
+# wrapper's own signature is the boundary that rejects a bad level, rather than
+# passing it through to the SDK.
+SentryLevel = Literal["fatal", "critical", "error", "warning", "info", "debug"]
 
 try:
     import sentry_sdk
@@ -119,7 +124,7 @@ def capture_exception(exc: BaseException | None = None, **context: Any) -> None:
         logger.debug("Sentry capture_exception failed", exc_info=True)
 
 
-def capture_message(message: str, level: str = "info", **context: Any) -> None:
+def capture_message(message: str, level: SentryLevel = "info", **context: Any) -> None:
     """Forward a free-form message to Sentry. No-op when disabled."""
     if not _SENTRY_AVAILABLE:
         return

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 
 def compute_expected_score(
-    elo_home: float, elo_away: float, hfa: int = 100,
+    elo_home: float, elo_away: float, hfa: float = 100,
 ) -> float:
     """Compute expected probability that home team wins.
 
@@ -26,7 +26,10 @@ def compute_expected_score(
     Args:
         elo_home: Home team Elo rating.
         elo_away: Away team Elo rating.
-        hfa: Home field advantage in Elo points (default 100).
+        hfa: Home field advantage in Elo points (default 100). A float, not an
+            int: resolve_nba_hfa() returns a tuned float, so an int annotation
+            would have to be cast at the callsite and truncate it. Mirrors
+            app/sports/_shared/elo_calculator.py.
 
     Returns:
         Expected probability (0.0 to 1.0) that home team wins.

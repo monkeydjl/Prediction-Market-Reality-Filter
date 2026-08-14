@@ -7,10 +7,18 @@ to avoid FastAPI catch-all routing (lesson from Subproject C).
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.security import require_write_key
 from app.core import config
+
+if TYPE_CHECKING:
+    # Import-time only for the checker; the runtime import stays inside
+    # _service() so the service (and its DB engine) is not constructed at
+    # module import.
+    from app.kernel.market_settlement_service import MarketSettlementService
 
 router = APIRouter(prefix="/sport-settlements", tags=["Sport Settlements"])
 
@@ -22,7 +30,7 @@ def _ensure_enabled() -> None:
         )
 
 
-def _service() -> "MarketSettlementService":  # noqa: F821  resolved by the local import below
+def _service() -> "MarketSettlementService":
     from app.kernel.market_settlement_service import MarketSettlementService
     return MarketSettlementService()
 

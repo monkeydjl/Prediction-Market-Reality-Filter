@@ -167,7 +167,10 @@ def _real_data_readiness(
     scheduled_import: dict[str, Any],
     runs: dict[str, Any],
 ) -> dict[str, Any]:
-    by_kind = facts.get("by_kind") if isinstance(facts.get("by_kind"), dict) else {}
+    # Read once, then test: the two-.get() form narrowed nothing, so by_kind
+    # stayed Any | dict | None and .get() below was an error on the None arm.
+    raw_by_kind = facts.get("by_kind")
+    by_kind = raw_by_kind if isinstance(raw_by_kind, dict) else {}
     qualification_fact_counts = _qualification_fact_counts()
     qualification_fact_count = qualification_fact_counts["trusted"]
     untrusted_qualification_fact_count = qualification_fact_counts["untrusted"]

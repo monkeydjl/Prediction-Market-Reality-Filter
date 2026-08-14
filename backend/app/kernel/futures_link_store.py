@@ -39,7 +39,9 @@ def _link_row_to_dict(row: KernelFuturesLink) -> dict[str, Any]:
 
 
 def _snapshot_row_to_dict(row: KernelFuturesSnapshot, *, team: str | None = None) -> dict[str, Any]:
-    d = {
+    # Annotated: every value here is a number or a datetime, so the literal
+    # infers datetime | float | None and rejects the str "team" added below.
+    d: dict[str, Any] = {
         "id": row.id,
         "link_id": row.link_id,
         "implied_prob": row.implied_prob,

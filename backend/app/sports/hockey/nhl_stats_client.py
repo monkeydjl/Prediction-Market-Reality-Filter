@@ -317,14 +317,13 @@ def pick_primary_goalie(club_stats: dict | None) -> dict | None:
             gp = int(g.get("gamesPlayed") or 0)
         except (TypeError, ValueError):
             gp = 0
+        # Coerce once, then test: the nested conditional called .get() twice per
+        # key, so neither test narrowed the value that reached float().
+        raw_sv = g.get("savePercentage")
+        if raw_sv is None:
+            raw_sv = g.get("svPct")
         try:
-            sv = float(
-                g.get("savePercentage")
-                if g.get("savePercentage") is not None
-                else g.get("svPct")
-                if g.get("svPct") is not None
-                else 0.0
-            )
+            sv = float(raw_sv) if raw_sv is not None else 0.0
         except (TypeError, ValueError):
             sv = 0.0
         return (gs, gp, sv)

@@ -23,7 +23,11 @@ try:
     from app.kernel.kernel_db import get_kernel_session, KernelClubEloCache
 except ImportError:  # pragma: no cover - kernel_db optional in some envs
     get_kernel_session = None  # type: ignore[assignment]
-    KernelClubEloCache = None  # type: ignore[assignment]
+    # Also [misc]: rebinding a *class* name to None is "Cannot assign to a
+    # type", a separate error from the assignment above. Both call sites are
+    # behind `if get_kernel_session is None: return`, so the None never reaches
+    # session.get(KernelClubEloCache, ...).
+    KernelClubEloCache = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 

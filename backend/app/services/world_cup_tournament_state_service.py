@@ -137,9 +137,18 @@ def _match_winner_loser(fact: dict[str, Any]) -> tuple[str | None, str | None]:
     if not isinstance(score, dict):
         return None, None
 
+    # Reject the missing case before float(): TypeError from float(None) was
+    # already being caught, but the guard is not something a reader (or a type
+    # checker) can see, and the two cases are not the same - a null score means
+    # the match has no result yet, not that the feed sent something unparseable.
+    raw_home = score.get("home")
+    raw_away = score.get("away")
+    if raw_home is None or raw_away is None:
+        return None, None
+
     try:
-        home_score = float(score.get("home"))
-        away_score = float(score.get("away"))
+        home_score = float(raw_home)
+        away_score = float(raw_away)
     except (TypeError, ValueError):
         return None, None
 

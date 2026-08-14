@@ -255,9 +255,11 @@ def build_prediction_factors(
     except Exception as e:
         # Sports signals are optional - don't fail prediction if unavailable
         logger.warning("[Factor Service] Sports signals unavailable: %s", e)
-        sports_signals = None
+        sports_signals = {}
 
-    factors = {
+    # Annotated: the literal's values are all dicts, so it infers
+    # dict[str, dict[str, Any]] and rejects the key_factors list added below.
+    factors: dict[str, Any] = {
         "home_team": calculate_team_factors(home_team_name, home_team_stats, is_home=True),
         "away_team": calculate_team_factors(away_team_name, away_team_stats, is_home=False),
         "head_to_head": calculate_head_to_head_factors(h2h_data),

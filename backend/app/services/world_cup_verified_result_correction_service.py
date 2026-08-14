@@ -95,6 +95,8 @@ def apply_verified_result_correction(
         scoring = score_finished_match(clean_match_id, session=session)
         fact = _verified_result_fact(
             fixture,
+            home_score=int(home_score),
+            away_score=int(away_score),
             source=clean_source,
             source_url=source_url,
             notes=notes,
@@ -145,6 +147,8 @@ def _error_result(reason: str, audit_metadata: dict[str, Any]) -> dict[str, Any]
 def _verified_result_fact(
     fixture: MatchFixture,
     *,
+    home_score: int,
+    away_score: int,
     source: str,
     source_url: str | None,
     notes: str | None,
@@ -153,6 +157,13 @@ def _verified_result_fact(
     audit_metadata: dict[str, Any],
     observed_at: datetime,
 ) -> dict[str, Any]:
+    """Build the verified match_result fact.
+
+    Scores are passed in rather than read back off the fixture: the caller has
+    just written these exact validated ints, and MatchFixture.home_score is
+    nullable, so re-reading it would put a null into a persisted fact that every
+    downstream reader parses as a number.
+    """
     fact = {
         "fact_id": f"wc2026:verified-result:{fixture.match_id}",
         "kind": "match_result",
@@ -162,7 +173,7 @@ def _verified_result_fact(
         "home_team": fixture.home_team,
         "away_team": fixture.away_team,
         "status": "finished",
-        "score": {"home": int(fixture.home_score), "away": int(fixture.away_score)},
+        "score": {"home": home_score, "away": away_score},
         "source": source,
         "source_url": str(source_url or "").strip(),
         "confidence": 1.0,
@@ -271,7 +282,9 @@ def _fixture_payload(fixture: MatchFixture) -> dict[str, Any]:
         "away_team": fixture.away_team,
         "stage": fixture.stage,
         "status": fixture.status,
-        "score": {"home": int(fixture.home_score), "away": int(fixture.away_score)},
+        # No int() cast: the columns are Integer, so it was a no-op that only
+        # hid that an unfinished fixture reports a null score here.
+        "score": {"home": fixture.home_score, "away": fixture.away_score},
         "updated_at": fixture.updated_at.isoformat() if fixture.updated_at else None,
     }
 

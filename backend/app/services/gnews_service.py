@@ -84,9 +84,13 @@ async def fetch_google_news(query: str) -> list[dict[str, Any]]:
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    articles = []
+    articles: list[dict[str, Any]] = []
     for query_item, result in zip(queries, results):
-        if isinstance(result, Exception):
+        # BaseException, not Exception: gather(return_exceptions=True) returns a
+        # cancelled task's CancelledError as a result value, and that is not an
+        # Exception — letting it through reached extend() below, which raises
+        # TypeError and cost the caller every query's articles, not just this one.
+        if isinstance(result, BaseException):
             log_service_failure(
                 logger,
                 "gnews_task",

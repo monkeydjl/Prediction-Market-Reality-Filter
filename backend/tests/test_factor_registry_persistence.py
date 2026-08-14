@@ -2,6 +2,7 @@
 """Tests for FactorRegistry DB persistence (Phase 3)."""
 from datetime import datetime, timezone
 import pytest
+from sqlalchemy import text
 
 from app.kernel.kernel_db import init_kernel_db, close_kernel_session, get_kernel_session, KernelFactor
 from app.kernel.factor_registry import FactorRegistry, FactorConfig
@@ -77,3 +78,31 @@ class TestFactorRegistryPersistence:
         assert len(rows) == 1
         assert rows[0].weight == 0.40
         session.close()
+
+    def test_null_weight_and_source_fall_back_to_column_defaults(self, tmp_path):
+        """A row with NULL weight/source loads as 1.0 / "manual", not None.
+
+        KernelFactor.weight and .source are nullable with Python-side defaults,
+        so only an ORM insert fills them; a row written any other way can hold
+        NULL. FactorConfig declares both non-Optional and get_weight is annotated
+        -> float, so a None weight would flow straight into the caller's
+        arithmetic and raise TypeError there instead of here.
+        """
+        db_path = str(tmp_path / "kernel_test.db")
+        init_kernel_db(db_path)
+
+        session = get_kernel_session()
+        session.execute(text(
+            "INSERT INTO kernel_factors "
+            "(factor_id, category, version, weight, competition, enabled, source, updated_at) "
+            "VALUES ('elo', 'elo_rating', '1.0', NULL, 'epl', 1, NULL, NULL)"
+        ))
+        session.commit()
+        session.close()
+
+        registry = FactorRegistry()
+        configs = {fc.factor_id: fc for fc in registry.list_active("epl")}
+        assert configs["elo"].weight == 1.0
+        assert configs["elo"].source == "manual"
+        assert registry.get_weight("elo", "epl") == 1.0
+        close_kernel_session()

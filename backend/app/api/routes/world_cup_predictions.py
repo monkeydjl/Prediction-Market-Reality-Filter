@@ -721,7 +721,9 @@ async def get_today_matches():
             MatchFixture.kickoff_utc <= today_end
         ).order_by(MatchFixture.kickoff_utc).all()
 
-        results = []
+        # Heterogeneous JSON payload, same shape as list_matches above: "match"
+        # and "prediction" are both nested dicts.
+        results: list[dict[str, Any]] = []
         for match in matches:
             prediction = session.query(MatchPrediction).filter_by(match_id=match.match_id).first()
 

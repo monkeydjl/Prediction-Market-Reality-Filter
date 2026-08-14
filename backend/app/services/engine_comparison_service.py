@@ -1,6 +1,7 @@
 """Service for comparing prediction engine performance."""
 
 import logging
+from typing import Any
 
 from app.models.world_cup_prediction import MatchFixture, PredictionHistory
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
@@ -118,7 +119,9 @@ def calculate_engine_accuracy():
                 "engines": {}
             }
 
-        engines_stats = {}
+        # Per-engine accumulator: counters plus a `predictions` list, so the
+        # value type is heterogeneous (see _credit_engine_prediction).
+        engines_stats: dict[str, dict[str, Any]] = {}
 
         for match in finished_matches:
             # Get every prediction recorded for this match (newest first).

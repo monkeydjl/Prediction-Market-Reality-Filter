@@ -7,6 +7,7 @@ No draw; no invented map scores.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from app.kernel.domain import (
     ContributionItem,
@@ -16,7 +17,7 @@ from app.kernel.domain import (
 )
 
 
-def _as_prob(value: object) -> float | None:
+def _as_prob(value: Any) -> float | None:
     if value is None:
         return None
     try:
@@ -42,19 +43,20 @@ class LolMarketOnlyEngine:
         mkt_home = _as_prob(custom.get("mkt_home"))
         mkt_away = _as_prob(custom.get("mkt_away"))
 
-        market_available = mkt_home is not None and mkt_away is not None
-        if market_available:
-            p_h = float(mkt_home)
-            p_a = float(mkt_away)
-            total = p_h + p_a
+        # Branch on the probabilities themselves: a bool flag assigned from
+        # `is not None` reads like a guard but narrows neither Optional.
+        if mkt_home is not None and mkt_away is not None:
+            market_available = True
+            total = mkt_home + mkt_away
             if total <= 0.0:
                 p_h, p_a = 0.5, 0.5
                 market_available = False
             else:
-                p_h = p_h / total
-                p_a = p_a / total
+                p_h = mkt_home / total
+                p_a = mkt_away / total
             confidence = min(0.85, max(0.25, abs(p_h - p_a) + 0.35))
         else:
+            market_available = False
             p_h, p_a = 0.5, 0.5
             confidence = 0.2
 

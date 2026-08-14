@@ -121,7 +121,10 @@ def _resolve_team_id_from_api(team_name: str) -> int | None:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        team = row.get("team") if isinstance(row.get("team"), dict) else {}
+        # Read once: `isinstance(row.get("team"), dict)` narrows that call, not
+        # a second `row.get("team")` in the value position.
+        raw_team = row.get("team")
+        team = raw_team if isinstance(raw_team, dict) else {}
         team_id = team.get("id")
         name = str(team.get("name") or "")
         if not name or team_id is None:

@@ -329,11 +329,14 @@ def enrich_weather_features(raw: dict, match: MatchIdentity) -> None:
             live_weather_for_match,
         )
 
-        live = live_weather_for_match(match)
-        if live is not None and live.get("weather_temp_c") is not None:
-            env["weather_temp_c"] = float(live["weather_temp_c"])
+        # `or {}` + a single read: `live.get(...) is not None` narrows the call,
+        # not a later `live["weather_temp_c"]`, which stays Optional.
+        live = live_weather_for_match(match) or {}
+        live_temp = live.get("weather_temp_c")
+        if live_temp is not None:
+            env["weather_temp_c"] = float(live_temp)
             env["weather_condition"] = str(live.get("weather_condition") or "mild")
-            custom["weather_temp_c"] = float(live["weather_temp_c"])
+            custom["weather_temp_c"] = float(live_temp)
             custom["weather_condition"] = str(live.get("weather_condition") or "mild")
             custom["weather_source"] = "live_forecast"
             return

@@ -688,7 +688,6 @@ class TestInjuryImpactEnrich:
         ), patch(
             "app.services.world_cup_player_status_source.get_team_injury_impact",
             return_value=None,
-            create=True,
         ):
             enrich_situational_features(raw, match)
 
@@ -732,7 +731,6 @@ class TestInjuryImpactEnrich:
         ), patch(
             "app.services.world_cup_player_status_source.get_team_injury_impact",
             return_value=None,
-            create=True,
         ):
             enrich_situational_features(raw, match)
 
@@ -783,7 +781,6 @@ class TestInjuryImpactEnrich:
         ), patch(
             "app.services.world_cup_player_status_source.get_team_injury_impact",
             side_effect=_wc_side,
-            create=True,
         ):
             enrich_situational_features(raw, match)
 
@@ -817,7 +814,6 @@ class TestInjuryImpactEnrich:
         ), patch(
             "app.services.world_cup_player_status_source.get_team_injury_impact",
             return_value=0.99,
-            create=True,
         ):
             enrich_situational_features(raw, match)
 

@@ -13,11 +13,19 @@ time.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.security import require_write_key
 from app.core import config
+
+if TYPE_CHECKING:
+    # Kernel imports stay inside _get_kernel() at runtime (lazy, so a request
+    # that never predicts does not pay for them); these are here only so the
+    # annotations in that body resolve.
+    from app.kernel.prediction_kernel import PredictionKernel
+    from app.kernel.protocols import DataAdapter, FeatureBuilder
 
 router = APIRouter(prefix="/predictions", tags=["Predictions"])
 logger = logging.getLogger(__name__)
@@ -133,7 +141,7 @@ def _get_kernel():
                 ))
 
         # Build adapter registry — always includes WorldCupAdapter
-        adapters: dict[str, object] = {
+        adapters: dict[str, DataAdapter] = {
             "wc-": WorldCupAdapter(),
         }
 
@@ -153,11 +161,11 @@ def _get_kernel():
         fb = FootballFeatureBuilder()
 
         # Start with football-only builders dict; sport flags below extend it
-        builders: dict[str, object] = {
+        builders: dict[str, FeatureBuilder] = {
             "wc-": fb, "ucl-": fb, "epl-": fb,
             "laliga-": fb, "bundesliga-": fb, "seriea-": fb, "ligue1-": fb,
         }
-        feature_builder: object = fb  # default — replaced by MultiFeatureBuilder if any sport enabled
+        feature_builder: FeatureBuilder = fb  # default — replaced by MultiFeatureBuilder if any sport enabled
 
         if config.settings.PHASE4_NBA_ENABLED:
             from app.sports.basketball.nba_adapter import NBAAdapter
@@ -215,7 +223,7 @@ def _get_kernel():
         from app.sports.football.adapters.multi_adapter import MultiAdapter
         multi = MultiAdapter(adapters)
 
-        _get_kernel._instance = PredictionKernel(
+        kernel = PredictionKernel(
             adapter=multi,
             feature_builder=feature_builder,
             engine_registry=reg,
@@ -223,7 +231,13 @@ def _get_kernel():
             feature_registry=FeatureRegistry(),
             learning=learning,
         )
-    return _get_kernel._instance
+        # set/getattr rather than `_get_kernel._instance`: mypy cannot model an
+        # attribute on a function object at all, and the attribute is the
+        # contract reset_kernel_singleton() and four test modules reach for, so
+        # it stays. The annotation below pins the Any that getattr returns.
+        setattr(_get_kernel, "_instance", kernel)
+    instance: PredictionKernel = getattr(_get_kernel, "_instance")
+    return instance
 
 
 @router.get("/engines")

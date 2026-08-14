@@ -407,7 +407,7 @@ def build_status_payload() -> dict[str, Any]:
         kernel = _get_kernel()
         adapter = getattr(kernel, "_adapter", None)
         if adapter is not None and hasattr(adapter, "registered_prefixes"):
-            prefixes = list(adapter.registered_prefixes())  # type: ignore[attr-defined]
+            prefixes = list(adapter.registered_prefixes())
         elif adapter is not None and hasattr(adapter, "_adapters"):
             prefixes = list(getattr(adapter, "_adapters", {}).keys())
         kernel_ready = True

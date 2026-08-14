@@ -776,11 +776,11 @@ def _days_since(
         if isinstance(last_match_date, str):
             last = datetime.fromisoformat(last_match_date).date()
         elif hasattr(last_match_date, "date"):
-            last = last_match_date.date()  # type: ignore[union-attr]
+            last = last_match_date.date()
         else:
-            last = last_match_date  # type: ignore[assignment]
+            last = last_match_date
         kd = kickoff.date() if isinstance(kickoff, datetime) else kickoff
-        delta = (kd - last).days  # type: ignore[operator]
+        delta = (kd - last).days
         return float(max(0, min(delta, 60)))
     except Exception:  # noqa: BLE001
         return None

@@ -322,8 +322,13 @@ def sync_schedule(
     try:
         if hasattr(adapter, "sync_schedule"):
             # MultiAdapter accepts optional filters; Protocol only requires ().
+            # No `type: ignore` on either call or on registered_prefixes below:
+            # _get_kernel() is untyped, so `adapter` is Any and the checker sees
+            # nothing to complain about. Annotating _get_kernel() will make the
+            # call-arg / attr-defined errors real again - widen the Protocol or
+            # keep the hasattr guards, don't reach for an ignore.
             try:
-                count = adapter.sync_schedule(filters)  # type: ignore[call-arg]
+                count = adapter.sync_schedule(filters)
             except TypeError:
                 count = adapter.sync_schedule()
         else:
@@ -335,7 +340,7 @@ def sync_schedule(
     prefixes: list[str] = []
     if hasattr(adapter, "registered_prefixes"):
         try:
-            prefixes = list(adapter.registered_prefixes())  # type: ignore[attr-defined]
+            prefixes = list(adapter.registered_prefixes())
         except Exception:
             prefixes = []
 

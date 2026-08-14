@@ -141,6 +141,10 @@ def is_enabled() -> bool:
     if not _SENTRY_AVAILABLE:
         return False
     try:
-        return sentry_sdk.is_initialized()  # type: ignore[union-attr]
+        # No `type: ignore[union-attr]` here: the `sentry_sdk = None` above is
+        # itself ignored as [assignment], so the module type sticks and there is
+        # no None in what the checker sees. The runtime guard is the
+        # _SENTRY_AVAILABLE early return.
+        return sentry_sdk.is_initialized()
     except Exception:  # pragma: no cover - defensive
         return False

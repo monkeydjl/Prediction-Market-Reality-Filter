@@ -67,9 +67,11 @@ jobs:
       # --config-file mypy.ini`; on Windows prefix `PYTHONUTF8=1`), and the
       # result no longer depends on the platform.
       #
-      # mypy.ini is still lenient in three ways, each its own follow-up:
-      # warn_unused_ignores (8 errors in 5 files), check_untyped_defs (7 in 3)
-      # and disallow_untyped_defs (225 in 36).
+      # mypy.ini is still lenient in two ways, each its own follow-up:
+      # check_untyped_defs (7 errors in 3 files) and disallow_untyped_defs
+      # (225 in 36). warn_unused_ignores went on in PR #21 — a stale
+      # `type: ignore` fails the build now, so delete one rather than
+      # re-adding it "just in case".
       - name: Type-check backend (mypy)
         run: mypy app/ --config-file mypy.ini
       - name: Run backend tests with coverage

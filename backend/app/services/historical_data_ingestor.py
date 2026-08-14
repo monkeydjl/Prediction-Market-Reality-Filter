@@ -315,11 +315,14 @@ class HistoricalDataIngestor:
                     .all()
                 )
                 for fix in fixtures:
-                    try:
-                        hs = int(fix.home_score)
-                        aws = int(fix.away_score)
-                    except (TypeError, ValueError):
+                    # Explicit None checks instead of int() inside try/except:
+                    # the isnot(None) filter above is the real guard but does not
+                    # reach the type checker, and on an Integer column None was
+                    # the only thing int() could have raised on.
+                    if fix.home_score is None or fix.away_score is None:
                         continue
+                    hs = int(fix.home_score)
+                    aws = int(fix.away_score)
                     outcome = _binary_outcome(hs, aws)
                     finished_at = fix.kickoff_utc or now
                     existing = session.get(KernelMatchResult, fix.match_id)

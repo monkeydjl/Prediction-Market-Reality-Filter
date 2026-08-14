@@ -247,11 +247,16 @@ def sync_world_cup_fixtures(source: str = "football-data") -> dict[str, Any]:
         Result summary with stats
     """
 
+    # Reported in the response below. One `season` variable used to serve both
+    # branches, but the two sources' fetchers disagree on the type - so it was
+    # an int for football-data and a str for API-Football, and the str was being
+    # passed to a parameter declared int. Kept as a str for both, converted at
+    # the one call that wants a number.
+    season = "2026"
     try:
         if source == "football-data":
             # Use Football-Data.org (real-time 2026 data)
-            season = 2026
-            raw_fixtures = football_data_source.fetch_world_cup_fixtures(season=season)
+            raw_fixtures = football_data_source.fetch_world_cup_fixtures(season=int(season))
 
             # Parse fixtures
             parsed = []

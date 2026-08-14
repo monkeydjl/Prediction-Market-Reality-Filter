@@ -49,10 +49,14 @@ class FactorRegistry:
                     factor_id=row.factor_id,
                     category=row.category,
                     version=row.version,
-                    weight=row.weight,
+                    # weight and source are nullable columns whose defaults are
+                    # applied Python-side on insert, so a row written any other
+                    # way can hold NULL. Fall back to those same defaults rather
+                    # than putting None into a float/str field of FactorConfig.
+                    weight=row.weight if row.weight is not None else 1.0,
                     competition=row.competition,
                     enabled=bool(row.enabled),
-                    source=row.source,
+                    source=row.source or "manual",
                     updated_at=row.updated_at or datetime.now(timezone.utc),
                 )
         finally:

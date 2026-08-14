@@ -55,12 +55,18 @@ _RANDOM_BRIER = 0.25
 _HALF_LIFE_DAYS = 45
 
 
-def _finite(value: Any) -> bool:
+def _finite_float(value: Any) -> float | None:
+    """Parse to a finite float, or None.
+
+    Returns the number rather than a bool: a `_finite(value) -> bool` predicate
+    cannot narrow its argument, so every caller had to call float() a second
+    time on a value the checker still saw as Optional.
+    """
     try:
         number = float(value)
     except (TypeError, ValueError):
-        return False
-    return math.isfinite(number)
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
@@ -106,13 +112,14 @@ def briers_by_component(resolved_records: list[dict[str, Any]]) -> dict[str, lis
         if not isinstance(components, dict) or not isinstance(outcome, dict):
             continue
         actual = outcome.get("actual_outcome")
-        if not _finite(actual):
+        actual_value = _finite_float(actual)
+        if actual_value is None:
             continue
-        actual_value = float(actual)
         weight = _time_weight(record.get("resolved_at", ""))
         for key, predicted in components.items():
-            if _finite(predicted):
-                brier = ((float(predicted) - actual_value) / 100.0) ** 2
+            predicted_value = _finite_float(predicted)
+            if predicted_value is not None:
+                brier = ((predicted_value - actual_value) / 100.0) ** 2
                 out[key].append(brier * weight)
     return dict(out)
 
@@ -134,10 +141,10 @@ def category_briers(resolved_records: list[dict[str, Any]], category: str) -> li
         if record_category != category:
             continue
         calibration = record.get("calibration") or {}
-        brier = calibration.get("brier_score")
-        if _finite(brier):
+        brier = _finite_float(calibration.get("brier_score"))
+        if brier is not None:
             weight = _time_weight(record.get("resolved_at", ""))
-            briers.append(float(brier) * weight)
+            briers.append(brier * weight)
     return briers
 
 

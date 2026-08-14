@@ -161,15 +161,19 @@ async def fetch_rss_news(
         for feed in NEWS_FEEDS
     ]
     # return_exceptions=True keeps one feed's failure from aborting the others;
-    # _fetch_single_feed already swallows errors and returns [], so the items
-    # here are always lists.
+    # _fetch_single_feed already swallows errors and returns [], so anything
+    # non-list reaching the loop below came from outside that guard.
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     articles: list[dict[str, Any]] = []
     for result in results:
-        if isinstance(result, Exception):
-            # Defensive: _fetch_single_feed catches everything, but keep this
-            # guard so an unexpected error never crashes the aggregator.
+        # BaseException, not Exception: a cancelled feed task comes back as a
+        # CancelledError *value*, which is not an Exception, so it fell through
+        # to extend() and raised TypeError - losing every feed's articles
+        # instead of the one that was cancelled.
+        if isinstance(result, BaseException):
+            # _fetch_single_feed catches everything itself, so reaching here
+            # means the task died outside that guard.
             logger.error("Unexpected error in RSS gather: %s", result, exc_info=True)
             continue
         articles.extend(result)

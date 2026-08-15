@@ -229,7 +229,7 @@ def _job_name_for_run(run_id: str | None) -> str | None:
     return _RUN_TO_JOB.get(run_id)
 
 
-async def _job_translate_titles():
+async def _job_translate_titles() -> None:
     """Translate events whose Chinese title is empty or still English."""
     from app.services.probability_engine_service import translate_title
     from app.services.translation_service import looks_chinese
@@ -262,7 +262,7 @@ async def _job_translate_titles():
         _finish_run(run_id, "failed", error=str(exc))
 
 
-async def _job_event_auto_resolve():
+async def _job_event_auto_resolve() -> None:
     """每天 22:30 UTC 自动裁定事件层（匹配已结算预测市场），同时归档已过期源市场事件。"""
     logger.info("[Scheduler] Event auto-resolve starting...")
     run_id = _start_run("event_auto_resolve")
@@ -285,7 +285,7 @@ async def _job_event_auto_resolve():
         logger.exception("[Scheduler] Event auto-resolve failed")
 
 
-async def _job_event_discover():
+async def _job_event_discover() -> None:
     """每天 07:15 UTC 运行事件层发现（freeze 预测），让闭环持续积累样本。
 
     事件层 discover_events 会为每个市场来源事件冻结一条 point-in-time 预测
@@ -320,7 +320,7 @@ async def _job_event_discover():
         logger.exception("[Scheduler] Event discover failed")
 
 
-async def _job_event_discover_startup():
+async def _job_event_discover_startup() -> None:
     """One-shot startup discover with a fixed small limit.
 
     Unlike the recurring job (_job_event_discover), which respects the
@@ -353,7 +353,7 @@ async def _job_event_discover_startup():
         logger.exception("[Scheduler] Startup event discover failed")
 
 
-async def _job_loop_db_maintenance():
+async def _job_loop_db_maintenance() -> None:
     """Daily SQLite loop-store maintenance: WAL truncation + integrity check."""
     logger.info("[Scheduler] Loop DB maintenance starting...")
     run_id = _start_run("loop_db_maintenance")
@@ -370,7 +370,7 @@ async def _job_loop_db_maintenance():
         logger.exception("[Scheduler] Loop DB maintenance failed")
 
 
-async def _job_optimization_task_cleanup():
+async def _job_optimization_task_cleanup() -> None:
     """Daily cleanup of completed/failed optimization tasks older than 24h.
 
     Auto-tune / batch-optimize tasks are persisted to the loop DB so a restart
@@ -393,7 +393,7 @@ async def _job_optimization_task_cleanup():
         logger.exception("[Scheduler] Optimization task cleanup failed")
 
 
-def _run_world_cup_bundle_import(mode: str, replace: bool):
+def _run_world_cup_bundle_import(mode: str, replace: bool) -> dict[str, Any]:
     """Shared import-mode dispatch for World Cup source bundles.
 
     Used by both the scheduled bundle import and the matchday refresh job
@@ -433,7 +433,7 @@ def _run_world_cup_bundle_import(mode: str, replace: bool):
         )
 
 
-async def _job_world_cup_source_bundle_import():
+async def _job_world_cup_source_bundle_import() -> None:
     """Import the configured World Cup source bundle into sports facts."""
     if not settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED:
         return
@@ -459,7 +459,7 @@ async def _job_world_cup_source_bundle_import():
         logger.exception("[Scheduler] World Cup source bundle import failed")
 
 
-async def _job_world_cup_matchday_refresh():
+async def _job_world_cup_matchday_refresh() -> None:
     """Refresh World Cup data during active match windows."""
     if not settings.WORLD_CUP_MATCHDAY_REFRESH_ENABLED:
         return
@@ -522,7 +522,7 @@ async def _job_world_cup_matchday_refresh():
         logger.exception("[Scheduler] Matchday refresh failed")
 
 
-async def _job_world_cup_prediction_update():
+async def _job_world_cup_prediction_update() -> None:
     """Daily World Cup score prediction update at 06:00 UTC."""
     logger.info("[Scheduler] World Cup prediction update starting...")
     run_id = _start_run("world_cup_prediction_update")
@@ -537,7 +537,7 @@ async def _job_world_cup_prediction_update():
         logger.exception("[Scheduler] World Cup prediction update failed")
 
 
-async def _job_world_cup_live_update():
+async def _job_world_cup_live_update() -> None:
     """Live World Cup prediction updates during active matches (every 2 minutes)."""
     from app.services.world_cup_live_update_service import update_live_predictions
 
@@ -556,7 +556,7 @@ async def _job_world_cup_live_update():
         logger.exception("[Scheduler] Live update failed: %s", exc)
 
 
-async def _job_sentiment_refresh():
+async def _job_sentiment_refresh() -> None:
     """Refresh sentiment cache for World Cup teams with recent/upcoming matches.
 
     Runs every 8 hours so the rule engine's sentiment_factor (mapped from
@@ -617,7 +617,7 @@ async def _job_sentiment_refresh():
         logger.exception("[Scheduler] Sentiment refresh failed")
 
 
-async def _job_discover_sport_markets():
+async def _job_discover_sport_markets() -> None:
     """Hourly: discover Polymarket and Kalshi sports markets and link via bridge service."""
     if not settings.PHASE7_SPORT_MARKET_BRIDGE_ENABLED:
         return
@@ -669,7 +669,7 @@ async def _job_discover_sport_markets():
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
 
 
-async def _job_fetch_traditional_odds():
+async def _job_fetch_traditional_odds() -> None:
     """Every ODDS_FETCH_INTERVAL_MIN: fetch traditional sportsbook odds."""
     if not settings.PHASE7_SPORT_MARKET_BRIDGE_ENABLED:
         return
@@ -829,7 +829,7 @@ def _match_odds_to_match(
     return []
 
 
-async def _job_capture_market_snapshots():
+async def _job_capture_market_snapshots() -> None:
     """Every MARKET_SNAPSHOT_INTERVAL_MIN: capture Polymarket price snapshots."""
     if not settings.PHASE7_SPORT_MARKET_BRIDGE_ENABLED:
         return
@@ -897,7 +897,7 @@ async def _job_capture_market_snapshots():
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
 
 
-async def _job_detect_sport_edges():
+async def _job_detect_sport_edges() -> None:
     """Every EDGE_DETECTION_INTERVAL_MIN: compute edges for matches with verified links."""
     if not settings.PHASE7_EDGE_DETECTOR_ENABLED:
         return
@@ -927,7 +927,7 @@ async def _job_detect_sport_edges():
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
 
 
-async def _job_process_market_settlements():
+async def _job_process_market_settlements() -> None:
     """Scan for finished matches without settlements, process them."""
     if not settings.PHASE7_MARKET_SETTLEMENT_SCHEDULER_ENABLED:
         return
@@ -955,7 +955,7 @@ async def _job_process_market_settlements():
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
 
 
-async def _job_update_weights_weekly():
+async def _job_update_weights_weekly() -> None:
     """Weekly weight update via Phase 3 learning loop (Phase 9)."""
     if not settings.PHASE9_LEARNING_ACTIVATED:
         return
@@ -979,7 +979,7 @@ async def _job_update_weights_weekly():
         logger.exception("[Scheduler] Weekly weight update failed")
 
 
-async def _job_reoptimize_monthly():
+async def _job_reoptimize_monthly() -> None:
     """Monthly re-optimization of parameters (Phase 9, spec §8.2).
 
     The job is only registered when PHASE9_LEARNING_ACTIVATED is on, so this
@@ -1015,7 +1015,7 @@ async def _job_reoptimize_monthly():
         logger.exception("[Scheduler] Monthly re-optimization failed")
 
 
-async def _job_discover_futures_markets():
+async def _job_discover_futures_markets() -> None:
     """Every FUTURES_DISCOVERY_INTERVAL_MIN: discover and link Kalshi futures markets."""
     if not settings.PHASE12_FUTURES_MARKETS_ENABLED:
         return
@@ -1038,7 +1038,7 @@ async def _job_discover_futures_markets():
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
 
 
-async def _job_capture_futures_snapshots():
+async def _job_capture_futures_snapshots() -> None:
     """Every FUTURES_SNAPSHOT_INTERVAL_MIN: capture price snapshots for verified futures links."""
     if not settings.PHASE12_FUTURES_MARKETS_ENABLED:
         return
@@ -1144,7 +1144,7 @@ def _world_cup_post_match_backfill_summary(result: dict[str, Any]) -> dict[str, 
     }
 
 
-def start_scheduler():
+def start_scheduler() -> bool:
     if scheduler.running is True:
         logger.info("[Scheduler] Already running; startup skipped.")
         return True
@@ -1369,7 +1369,7 @@ def start_scheduler():
     return True
 
 
-def stop_scheduler():
+def stop_scheduler() -> None:
     try:
         if scheduler.running:
             scheduler.shutdown(wait=True)

@@ -23,7 +23,7 @@ python -m compileall app tests
 pytest tests/ --cov=app --cov-report=term-missing --cov-report=xml
 ```
 
-alongside `ruff check app/`, `pip-audit -r requirements.txt`, and a non-blocking `mypy app/`.
+alongside `ruff check app/`, `pip-audit -r requirements.txt`, and `mypy app/ --config-file mypy.ini`. mypy is **blocking** as of PR #20 — `app/` type-checks with zero errors and any new error fails the build. On Windows prefix the run with `PYTHONUTF8=1` to reproduce CI exactly.
 
 **Result baseline (2026-08-05):** 3614 passed / 11 skipped / 0 failed, ~13 min on Windows / Python 3.11.9. CI pins Python 3.11.
 

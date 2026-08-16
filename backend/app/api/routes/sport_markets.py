@@ -6,13 +6,19 @@ operation in this sub-project.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.api.security import require_write_key
 from app.core import config
+
+if TYPE_CHECKING:
+    # Kernel imports stay inside the helpers at runtime (lazy); these are here
+    # only so the annotations resolve.
+    from app.kernel.market_snapshot_store import MarketSnapshotStore
+    from app.kernel.sport_market_link_store import SportMarketLinkStore
 
 router = APIRouter(prefix="/sport-markets", tags=["Sport Markets"])
 
@@ -25,12 +31,12 @@ def _ensure_enabled() -> None:
         )
 
 
-def _link_store():
+def _link_store() -> SportMarketLinkStore:
     from app.kernel.sport_market_link_store import SportMarketLinkStore
     return SportMarketLinkStore()
 
 
-def _snap_store():
+def _snap_store() -> MarketSnapshotStore:
     from app.kernel.market_snapshot_store import MarketSnapshotStore
     return MarketSnapshotStore()
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 from app.kernel.domain import (
     SportIdentity,
@@ -257,7 +258,7 @@ class WorldCupAdapter:
             from app.services.elo_ratings_service import get_elo_rating
             from app.services.odds_cache_service import get_cached_odds
 
-            async def _gather():
+            async def _gather() -> list[Any]:
                 return await asyncio.gather(
                     get_elo_rating(match.home.name),
                     get_elo_rating(match.away.name),

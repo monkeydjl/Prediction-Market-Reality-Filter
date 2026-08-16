@@ -26,8 +26,22 @@ def _is_applied_history(history: PredictionHistory) -> bool:
     return not trigger.endswith("_comparison")
 
 
-def _credit_engine_prediction(engines_stats, engine, match, last_prediction):
+def _credit_engine_prediction(
+    engines_stats: dict[str, dict[str, Any]],
+    engine: str,
+    match: MatchFixture,
+    last_prediction: PredictionHistory,
+) -> None:
     """Accumulate one engine's prediction for a finished match into engines_stats."""
+    # home_score/away_score are nullable columns. The caller only selects rows
+    # where both are set, but skip rather than crash if that ever changes —
+    # before total_matches is incremented, so a scoreless match cannot dilute
+    # the rates computed from it.
+    actual_home = match.home_score
+    actual_away = match.away_score
+    if actual_home is None or actual_away is None:
+        return
+
     # Initialize engine stats
     if engine not in engines_stats:
         engines_stats[engine] = {
@@ -48,8 +62,6 @@ def _credit_engine_prediction(engines_stats, engine, match, last_prediction):
     pred_diff = pred_home - pred_away
 
     # Actual values
-    actual_home = match.home_score
-    actual_away = match.away_score
     actual_diff = actual_home - actual_away
 
     # Determine outcomes
@@ -97,7 +109,7 @@ def _credit_engine_prediction(engines_stats, engine, match, last_prediction):
     })
 
 
-def calculate_engine_accuracy():
+def calculate_engine_accuracy() -> dict[str, Any]:
     """Calculate accuracy metrics for each prediction engine.
 
     Returns:

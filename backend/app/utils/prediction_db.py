@@ -2,9 +2,10 @@
 
 import logging
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
@@ -23,7 +24,7 @@ def get_prediction_db_path() -> Path:
     return Path(db_path)
 
 
-def get_prediction_engine():
+def get_prediction_engine() -> Engine:
     """Get SQLAlchemy engine for World Cup predictions (singleton)."""
     global _engine
     if _engine is None:
@@ -39,7 +40,7 @@ def get_prediction_engine():
 
         # Set SQLite PRAGMAs on every new connection (matches sqlite_db.py)
         @event.listens_for(_engine, "connect")
-        def _set_sqlite_pragmas(dbapi_conn, connection_record):
+        def _set_sqlite_pragmas(dbapi_conn: Any, connection_record: Any) -> None:
             cursor = dbapi_conn.cursor()
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA foreign_keys=ON")
@@ -48,7 +49,7 @@ def get_prediction_engine():
     return _engine
 
 
-def init_prediction_db():
+def init_prediction_db() -> None:
     """Initialize the prediction database schema."""
     engine = get_prediction_engine()
     Base.metadata.create_all(engine)
@@ -88,6 +89,6 @@ def get_prediction_session_dep() -> Iterator[Session]:
         close_prediction_session(session)
 
 
-def close_prediction_session(session: Session):
+def close_prediction_session(session: Session) -> None:
     """Close a prediction database session."""
     session.close()

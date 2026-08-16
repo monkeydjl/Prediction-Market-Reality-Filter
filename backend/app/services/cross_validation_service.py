@@ -156,7 +156,7 @@ def _agreement(divergence: float) -> str:
     return "low"
 
 
-def _parse_pct(value) -> float | None:
+def _parse_pct(value: Any) -> float | None:
     """Clamp a percentage to 0-100, or None when it is not a usable number.
 
     Returns None rather than a default so the caller can tell "the second model

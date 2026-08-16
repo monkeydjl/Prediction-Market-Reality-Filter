@@ -16,7 +16,7 @@ from bs4 import BeautifulSoup
 from app.utils.prediction_db import get_prediction_session
 from app.models.world_cup_prediction import Base
 from sqlalchemy import Integer, String, Float, DateTime
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, Session, mapped_column
 
 logger = logging.getLogger(__name__)
 
@@ -282,7 +282,7 @@ async def get_elo_rating(
         session.close()
 
 
-def _save_to_cache(session, team_name: str, data: dict[str, Any]) -> None:
+def _save_to_cache(session: Session, team_name: str, data: dict[str, Any]) -> None:
     """Save Elo rating to cache."""
     cached = session.query(EloRating).filter_by(team_name=team_name).first()
 
@@ -502,7 +502,7 @@ async def refresh_all_elo_ratings() -> dict[str, Any]:
     }
 
 
-async def init_elo_ratings_db():
+async def init_elo_ratings_db() -> dict[str, Any]:
     """Initialize Elo ratings database with estimates."""
     from app.utils.prediction_db import init_prediction_db
 

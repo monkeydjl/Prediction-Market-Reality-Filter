@@ -2,9 +2,10 @@ import time
 from collections import defaultdict, deque
 from typing import Deque
 
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp
 
 from app.core.config import settings
 
@@ -42,11 +43,13 @@ _STATIC_PATH_SEGMENTS = {
 
 
 class InMemoryRateLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app):
+    def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
         self._hits: dict[str, Deque[float]] = defaultdict(deque)
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
         if not settings.RATE_LIMIT_ENABLED:
             return await call_next(request)
 

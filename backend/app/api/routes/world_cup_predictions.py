@@ -152,7 +152,7 @@ def _serialize_history_entry(
 
 
 @router.post("/init-db", response_model=FlexibleResponse)
-async def initialize_prediction_db(_auth: None = Depends(require_write_key)):
+async def initialize_prediction_db(_auth: None = Depends(require_write_key)) -> dict[str, Any]:
     """Initialize the prediction database schema."""
     try:
         init_prediction_db()
@@ -165,7 +165,7 @@ async def initialize_prediction_db(_auth: None = Depends(require_write_key)):
 async def sync_fixtures(
     source: str = Query("football-data", description="Data source: 'football-data' or 'api-football'"),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Sync World Cup fixtures to database.
 
     Args:
@@ -181,8 +181,8 @@ async def sync_fixtures(
 async def list_matches(
     stage: str | None = Query(None, description="Filter by stage"),
     status: str | None = Query(None, description="Filter by status"),
-    limit: int = Query(100, ge=1, le=200)
-):
+    limit: int = Query(100, ge=1, le=200),
+) -> dict[str, Any]:
     """Get all matches with optional filters."""
     session = get_prediction_session()
     try:
@@ -255,7 +255,7 @@ async def list_matches(
 
 
 @router.get("/matches/{match_id}", response_model=FlexibleResponse)
-async def get_match(match_id: str):
+async def get_match(match_id: str) -> dict[str, Any]:
     """Get single match details with prediction."""
     session = get_prediction_session()
     try:
@@ -292,7 +292,7 @@ async def get_match(match_id: str):
 
 
 @router.get("/matches/{match_id}/prediction-history", response_model=FlexibleResponse)
-async def get_prediction_history(match_id: str):
+async def get_prediction_history(match_id: str) -> dict[str, Any]:
     """Get prediction history (time-series) for a match."""
     session = get_prediction_session()
     try:
@@ -338,7 +338,7 @@ async def trigger_prediction(
     request: PredictionRequest = Body(default=PredictionRequest()),
     compare_only: bool = Query(False, description="Read-only mode: run the engine without persisting (bypasses kickoff freeze, skips MatchPrediction/PredictionHistory writes)"),
     _auth: bool = Depends(optional_write_key),
-):
+) -> dict[str, Any]:
     """Manually trigger prediction generation for a match.
 
     Args:
@@ -375,7 +375,7 @@ async def trigger_prediction(
 async def analyze_match_prediction(
     match_id: str,
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Get AI analysis of a match prediction.
 
     Args:
@@ -459,7 +459,7 @@ async def analyze_match_prediction(
 
 
 @router.get("/matches/{match_id}/analysis-history", response_model=FlexibleResponse)
-async def get_analysis_history(match_id: str):
+async def get_analysis_history(match_id: str) -> dict[str, Any]:
     """Get AI analysis history for a match.
 
     Args:
@@ -500,7 +500,7 @@ async def batch_predict(
     match_ids: list[str] | None = None,
     engine: PredictionEngine = "auto",
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Run predictions for multiple matches.
 
     Args:
@@ -519,7 +519,7 @@ async def batch_switch_engine(
     engine: PredictionEngine = Query(..., description='Target engine: "elo_odds", "hybrid", "integrated", "high_confidence", "gbm", or "auto"'),
     status_filter: str = Query("scheduled", description='Match status filter (default: "scheduled")'),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Batch switch all matches to a specific prediction engine.
 
     Args:
@@ -579,7 +579,7 @@ async def batch_switch_engine_stream(
     engine: PredictionEngine = Query(..., description='Target engine: "elo_odds", "hybrid", "integrated", "high_confidence", "gbm", or "auto"'),
     status_filter: str = Query("scheduled", description="Match status filter (default: scheduled)"),
     _auth: None = Depends(require_write_key),
-):
+) -> StreamingResponse:
     """Stream batch engine switch progress as Server-Sent Events.
 
     Emits one ``progress`` event per match processed and a final ``complete``
@@ -705,7 +705,7 @@ async def batch_switch_engine_stream(
 
 
 @router.get("/today", response_model=FlexibleResponse)
-async def get_today_matches():
+async def get_today_matches() -> dict[str, Any]:
     """Get today's matches with predictions."""
     session = get_prediction_session()
     try:
@@ -767,7 +767,7 @@ async def get_today_matches():
 
 
 @router.get("/engine-comparison", response_model=FlexibleResponse)
-async def compare_engine_accuracy():
+async def compare_engine_accuracy() -> dict[str, Any]:
     """Compare accuracy of different prediction engines on finished matches."""
     from app.services.engine_comparison_service import calculate_engine_accuracy
 
@@ -780,7 +780,7 @@ async def auto_tune_engine(
     engine_name: str,
     background: bool = Query(True, description="Run in background"),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Run automatic tuning cycle for an engine: analyze, optimize, learn, calibrate.
 
     Args:
@@ -814,7 +814,7 @@ async def auto_tune_engine(
 
 
 @router.get("/auto-tune/status/{task_id}", response_model=FlexibleResponse)
-async def get_auto_tune_status(task_id: str):
+async def get_auto_tune_status(task_id: str) -> dict[str, Any]:
     """Get status of a background auto-tune task.
 
     Args:
@@ -840,7 +840,7 @@ async def batch_optimize_predictions(
     engine: str | None = Query(None, description="Filter by engine (elo_odds, hybrid)"),
     limit: int = Query(10, ge=1, le=100, description="Max matches to process"),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Run AI optimization on multiple scheduled matches.
 
     Args:
@@ -857,7 +857,7 @@ async def batch_optimize_predictions(
 
 
 @router.get("/calibration/{engine_name}", response_model=FlexibleResponse)
-async def get_engine_calibration(engine_name: str):
+async def get_engine_calibration(engine_name: str) -> dict[str, Any]:
     """Get active calibration parameters for an engine.
 
     Args:
@@ -880,7 +880,7 @@ async def get_engine_calibration(engine_name: str):
 
 
 @router.get("/calibration-patterns/{engine_name}", response_model=FlexibleResponse)
-async def analyze_calibration_patterns(engine_name: str):
+async def analyze_calibration_patterns(engine_name: str) -> dict[str, Any]:
     """Analyze AI optimization patterns for an engine to derive calibration suggestions.
 
     Args:
@@ -896,7 +896,7 @@ async def analyze_calibration_patterns(engine_name: str):
 async def optimize_match_prediction(
     match_id: str,
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Get AI optimization suggestions for a match prediction.
 
     Args:

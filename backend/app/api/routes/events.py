@@ -179,7 +179,7 @@ async def discover_event_intelligence(
     limit: int = Query(default=10, ge=1, le=50),
     use_cache: bool = Query(default=True),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Discover high-value events and return intelligence records."""
     return await discover_events(limit=limit, use_cache=use_cache)
 
@@ -188,7 +188,7 @@ async def discover_event_intelligence(
 async def analyze_event_intelligence(
     payload: EventAnalysisRequest,
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Analyze one event question and estimate probability change."""
     return await analyze_event_question(
         event_question=payload.event_question,
@@ -200,7 +200,7 @@ async def analyze_event_intelligence(
 
 
 @router.post("/reset", response_model=FlexibleResponse)
-async def reset_all_event_data(_auth: None = Depends(require_write_key)):
+async def reset_all_event_data(_auth: None = Depends(require_write_key)) -> dict[str, Any]:
     """Delete all event data: store, predictions, audit log, cache.
 
     Returns a summary of what was cleared.  Requires write-key auth."""
@@ -277,7 +277,7 @@ async def list_event_intelligence(
     sort: str = Query(default="value", pattern="^(value|delta|probability|support)$"),
     exclude_expired: bool = Query(default=True),
     resolved_only: bool = Query(default=False),
-):
+) -> dict[str, Any]:
     """List stored event intelligence records for the dashboard table."""
     entries = list_events(
         limit=limit,
@@ -307,7 +307,7 @@ async def list_event_category_counts(
     sort: str = Query(default="value", pattern="^(value|delta|probability|support)$"),
     exclude_expired: bool = Query(default=True),
     resolved_only: bool = Query(default=False),
-):
+) -> dict[str, Any]:
     """Return per-category event totals for the current non-category filters.
 
     Used by the dashboard category dropdown so counts stay stable when the
@@ -324,7 +324,7 @@ async def list_event_category_counts(
 
 
 @router.get("/movers", response_model=EventMoversResponse)
-async def get_event_movers(limit: int = Query(default=10, ge=1, le=50)):
+async def get_event_movers(limit: int = Query(default=10, ge=1, le=50)) -> dict[str, Any]:
     """Rank tracked events by how much their probability has moved over time.
 
     Movers carry the English event_title from the audit snapshots; enrich each
@@ -347,7 +347,7 @@ async def get_event_movers(limit: int = Query(default=10, ge=1, le=50)):
 
 
 @router.get("/calibration", response_model=FlexibleResponse)
-async def get_event_calibration():
+async def get_event_calibration() -> dict[str, Any]:
     """Cross-event calibration report: how accurate resolved events' latest
     probability estimates were vs their settled outcomes.
 
@@ -370,7 +370,7 @@ async def get_event_calibration():
 
 
 @router.get("/loop/status", response_model=FlexibleResponse)
-async def get_loop_status(x_api_key: str | None = Header(default=None)):
+async def get_loop_status(x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
     """Operational status for the unattended reality feedback loop."""
     from app.core.scheduler import scheduler
 
@@ -382,7 +382,7 @@ async def get_loop_status(x_api_key: str | None = Header(default=None)):
 
 
 @router.get("/sports/world-cup/status", response_model=FlexibleResponse)
-async def get_world_cup_status():
+async def get_world_cup_status() -> dict[str, Any]:
     """Return World Cup fact-store status for the sports vertical."""
     return sports_fact_status(tournament=WORLD_CUP_TOURNAMENT)
 
@@ -390,7 +390,7 @@ async def get_world_cup_status():
 @router.get("/sports/world-cup/data/sources/status", response_model=FlexibleResponse)
 async def get_world_cup_data_source_status(
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Return configured World Cup data-source and import-run status."""
     return world_cup_data_source_status()
 
@@ -399,7 +399,7 @@ async def get_world_cup_data_source_status(
 async def list_world_cup_facts(
     kind: str | None = Query(default=None, max_length=40),
     team: str | None = Query(default=None, max_length=80),
-):
+) -> dict[str, Any]:
     """List imported structured World Cup facts."""
     facts = load_sports_facts(tournament=WORLD_CUP_TOURNAMENT, kind=kind)
     if team:
@@ -418,7 +418,7 @@ async def import_world_cup_facts(
     payload: FactsPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Import structured World Cup facts from a list or {"facts": [...]} body."""
     try:
         result = import_sports_facts(
@@ -438,7 +438,7 @@ async def import_world_cup_data_source(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Convert trusted World Cup data-source payloads into facts and import them."""
     try:
         result = import_world_cup_data(payload, replace=replace)
@@ -453,7 +453,7 @@ async def import_world_cup_data_source(
 async def preview_world_cup_data_source(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Preview facts that would be produced from a trusted World Cup payload."""
     try:
         facts = world_cup_data_to_facts(payload)
@@ -466,7 +466,7 @@ async def preview_world_cup_data_source(
 async def preview_world_cup_source_bundle_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Preview facts from a bundle of World Cup data-source payloads."""
     try:
         return preview_world_cup_source_bundle(payload)
@@ -479,7 +479,7 @@ async def import_world_cup_source_bundle_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Import facts from a bundle of World Cup data-source payloads."""
     try:
         return import_world_cup_source_bundle(payload, replace=replace)
@@ -490,7 +490,7 @@ async def import_world_cup_source_bundle_route(
 @router.post("/sports/world-cup/data/bundle/source/preview", response_model=FlexibleResponse)
 async def preview_configured_world_cup_source_bundle_route(
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Preview facts from the configured WORLD_CUP_SOURCE_BUNDLE_FILE."""
     try:
         return preview_world_cup_source_bundle_file()
@@ -504,7 +504,7 @@ async def preview_configured_world_cup_source_bundle_route(
 async def import_configured_world_cup_source_bundle_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Import facts from the configured WORLD_CUP_SOURCE_BUNDLE_FILE."""
     try:
         return import_world_cup_source_bundle_file(replace=replace)
@@ -517,7 +517,7 @@ async def import_configured_world_cup_source_bundle_route(
 @router.post("/sports/world-cup/data/bundle/url/preview", response_model=FlexibleResponse)
 async def preview_remote_world_cup_source_bundle_route(
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Preview facts from the configured WORLD_CUP_SOURCE_BUNDLE_URL."""
     try:
         return await asyncio.to_thread(preview_world_cup_source_bundle_url)
@@ -529,7 +529,7 @@ async def preview_remote_world_cup_source_bundle_route(
 async def import_remote_world_cup_source_bundle_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Import facts from the configured WORLD_CUP_SOURCE_BUNDLE_URL."""
     try:
         return await asyncio.to_thread(
@@ -542,7 +542,7 @@ async def import_remote_world_cup_source_bundle_route(
 @router.post("/sports/world-cup/data/bundle/feeds/preview", response_model=FlexibleResponse)
 async def preview_configured_world_cup_source_feeds_route(
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Preview facts from configured raw World Cup source feed URLs."""
     try:
         return await asyncio.to_thread(preview_world_cup_source_bundle_feeds)
@@ -554,7 +554,7 @@ async def preview_configured_world_cup_source_feeds_route(
 async def import_configured_world_cup_source_feeds_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Import facts from configured raw World Cup source feed URLs."""
     try:
         return await asyncio.to_thread(
@@ -567,7 +567,7 @@ async def import_configured_world_cup_source_feeds_route(
 @router.post("/sports/world-cup/data/bundle/api-football/preview", response_model=FlexibleResponse)
 async def preview_api_football_world_cup_source_bundle_route(
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Preview facts from configured API-Football World Cup feeds."""
     try:
         # Blocking urlopen against API-Football: offload so a slow or
@@ -581,7 +581,7 @@ async def preview_api_football_world_cup_source_bundle_route(
 async def import_api_football_world_cup_source_bundle_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Import facts from configured API-Football World Cup feeds."""
     _require_successful_api_football_validation_before_import()
     try:
@@ -615,7 +615,7 @@ def _require_successful_api_football_validation_before_import() -> None:
 @router.post("/sports/world-cup/data/bundle/api-football/test", response_model=FlexibleResponse)
 async def test_api_football_connection_route(
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Test API-Football connectivity and return account status."""
     return await asyncio.to_thread(test_world_cup_api_football_connection)
 
@@ -623,7 +623,7 @@ async def test_api_football_connection_route(
 @router.post("/sports/world-cup/data/bundle/api-football/validate", response_model=FlexibleResponse)
 async def validate_api_football_pipeline_route(
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Validate pipeline: connection + sample fetch + compare with stored facts."""
     run_id = loop_run_store.start_run("world_cup_api_football_validate")
     try:
@@ -679,7 +679,7 @@ def _api_football_validation_run_summary(result: dict[str, Any]) -> dict[str, An
 @router.post("/sports/world-cup/data/bundle/football-data/preview", response_model=FlexibleResponse)
 async def preview_football_data_world_cup_standings_route(
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Preview qualification facts from configured Football-Data.org standings."""
     try:
         return await asyncio.to_thread(preview_world_cup_football_data_standings)
@@ -693,7 +693,7 @@ async def preview_football_data_world_cup_standings_route(
 async def import_football_data_world_cup_standings_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Import qualification facts from configured Football-Data.org standings."""
     try:
         return await asyncio.to_thread(
@@ -708,7 +708,7 @@ async def import_football_data_world_cup_standings_route(
 @router.post("/sports/world-cup/data/bundle/sportmonks/preview", response_model=FlexibleResponse)
 async def preview_sportmonks_world_cup_source_bundle_route(
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Preview facts from configured Sportmonks-style World Cup feeds."""
     try:
         return await asyncio.to_thread(preview_world_cup_sportmonks_bundle)
@@ -720,7 +720,7 @@ async def preview_sportmonks_world_cup_source_bundle_route(
 async def import_sportmonks_world_cup_source_bundle_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Import facts from configured Sportmonks-style World Cup feeds."""
     try:
         return await asyncio.to_thread(
@@ -733,7 +733,7 @@ async def import_sportmonks_world_cup_source_bundle_route(
 @router.post("/sports/world-cup/data/bundle/sportmonks/test", response_model=FlexibleResponse)
 async def test_sportmonks_connection_route(
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Test Sportmonks connectivity and return connection status."""
     return await asyncio.to_thread(test_world_cup_sportmonks_connection)
 
@@ -741,7 +741,7 @@ async def test_sportmonks_connection_route(
 @router.post("/sports/world-cup/data/bundle/sportmonks/validate", response_model=FlexibleResponse)
 async def validate_sportmonks_pipeline_route(
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Run Sportmonks pipeline diagnostic: connection + feed fetch + fact coverage."""
     return await asyncio.to_thread(validate_world_cup_sportmonks_pipeline)
 
@@ -749,7 +749,7 @@ async def validate_sportmonks_pipeline_route(
 @router.post("/sports/world-cup/data/source/preview", response_model=FlexibleResponse)
 async def preview_configured_world_cup_data_source(
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Preview facts from the configured WORLD_CUP_DATA_FILE without writing."""
     try:
         return preview_world_cup_data_file()
@@ -763,7 +763,7 @@ async def preview_configured_world_cup_data_source(
 async def import_configured_world_cup_data_source(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Import facts from the configured WORLD_CUP_DATA_FILE."""
     try:
         return import_world_cup_data_file(replace=replace)
@@ -777,7 +777,7 @@ async def import_configured_world_cup_data_source(
 async def preview_world_cup_official_csv_source_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Preview facts from the strict official World Cup CSV profile."""
     try:
         return preview_world_cup_official_csv_source(payload)
@@ -790,7 +790,7 @@ async def import_world_cup_official_csv_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Import facts from the strict official World Cup CSV profile."""
     try:
         return import_world_cup_official_csv_source(payload, replace=replace)
@@ -802,7 +802,7 @@ async def import_world_cup_official_csv_source_route(
 async def preview_world_cup_match_source_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Preview facts from a raw World Cup fixture/result payload."""
     try:
         return preview_world_cup_match_source(payload)
@@ -815,7 +815,7 @@ async def import_world_cup_match_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Import facts from a raw World Cup fixture/result payload."""
     try:
         return import_world_cup_match_source(payload, replace=replace)
@@ -827,7 +827,7 @@ async def import_world_cup_match_source_route(
 async def preview_world_cup_match_events_source_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Preview discipline facts from raw World Cup match event/card data."""
     try:
         return preview_world_cup_match_events_source(payload)
@@ -840,7 +840,7 @@ async def import_world_cup_match_events_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Import discipline facts from raw World Cup match event/card data."""
     try:
         return import_world_cup_match_events_source(payload, replace=replace)
@@ -852,7 +852,7 @@ async def import_world_cup_match_events_source_route(
 async def preview_world_cup_lineups_source_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Preview lineup facts from raw World Cup lineup data."""
     try:
         return preview_world_cup_lineups_source(payload)
@@ -865,7 +865,7 @@ async def import_world_cup_lineups_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Import lineup facts from raw World Cup lineup data."""
     try:
         return import_world_cup_lineups_source(payload, replace=replace)
@@ -877,7 +877,7 @@ async def import_world_cup_lineups_source_route(
 async def preview_world_cup_standings_source_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Preview qualification facts from raw World Cup standings data."""
     try:
         return preview_world_cup_standings_source(payload)
@@ -890,7 +890,7 @@ async def import_world_cup_standings_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Import qualification facts from raw World Cup standings data."""
     try:
         return import_world_cup_standings_source(payload, replace=replace)
@@ -902,7 +902,7 @@ async def import_world_cup_standings_source_route(
 async def preview_world_cup_player_awards_source_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Preview player-award facts from raw World Cup award/scorer data."""
     try:
         return preview_world_cup_player_awards_source(payload)
@@ -915,7 +915,7 @@ async def import_world_cup_player_awards_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Import player-award facts from raw World Cup award/scorer data."""
     try:
         return import_world_cup_player_awards_source(payload, replace=replace)
@@ -927,7 +927,7 @@ async def import_world_cup_player_awards_source_route(
 async def preview_world_cup_player_status_source_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Preview injury/availability/suspension/lineup facts from raw player-status data."""
     try:
         return preview_world_cup_player_status_source(payload)
@@ -940,7 +940,7 @@ async def import_world_cup_player_status_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Import injury/availability/suspension/lineup facts from raw player-status data."""
     try:
         return import_world_cup_player_status_source(payload, replace=replace)
@@ -952,7 +952,7 @@ async def import_world_cup_player_status_source_route(
 async def preview_world_cup_statistics_source_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Preview team/player statistic facts from raw World Cup statistics data."""
     try:
         return preview_world_cup_statistics_source(payload)
@@ -965,7 +965,7 @@ async def import_world_cup_statistics_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Import team/player statistic facts from raw World Cup statistics data."""
     try:
         return import_world_cup_statistics_source(payload, replace=replace)
@@ -978,7 +978,7 @@ async def resolve_world_cup_sports_events(
     dry_run: bool = Query(default=True),
     limit: int = Query(default=200, ge=1, le=1000),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Resolve World Cup sports events from structured facts.
 
     Defaults to dry-run so operators can inspect deterministic matches before
@@ -993,7 +993,7 @@ async def resolve_world_cup_sports_events(
 async def batch_sparklines(
     body: dict = Body(...),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Return compact sparkline series for multiple events in one request.
 
     Accepts ``{"event_ids": ["abc", "def", ...]}`` and returns
@@ -1024,7 +1024,7 @@ async def batch_sparklines(
 
 
 @router.get("/{event_id}", response_model=EventStoreEntry)
-async def get_event_intelligence(event_id: EventId):
+async def get_event_intelligence(event_id: EventId) -> dict[str, Any]:
     """Return a stored event intelligence record by event_id (404 if unknown)."""
     entry = get_event(event_id)
     if entry is None:
@@ -1038,7 +1038,7 @@ async def update_event_tracking(
     status: str | None = Body(default=None, embed=True),
     priority: str | None = Body(default=None, embed=True),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Update the human tracking decision (status / priority) for an event.
 
     status must be one of tracking/watching/archived; priority one of
@@ -1061,7 +1061,7 @@ async def update_event_tracking(
 
 
 @router.get("/{event_id}/history", response_model=EventHistoryResponse)
-async def get_event_probability_history(event_id: EventId):
+async def get_event_probability_history(event_id: EventId) -> dict[str, Any]:
     """Return the probability snapshots recorded for an event over time.
 
     Outcome snapshots (kind="outcome") are excluded from this view: they are
@@ -1090,7 +1090,7 @@ async def get_event_probability_history(event_id: EventId):
 async def get_event_decision_timeline(
     event_id: EventId,
     limit: int = Query(default=100, ge=1, le=500),
-):
+) -> dict[str, Any]:
     """Return the decision timeline snapshots + consecutive diffs for an event.
 
     Each snapshot captures the overlay-bearing record at one save_events
@@ -1127,7 +1127,7 @@ async def resolve_event_intelligence(
     confidence: float = Body(default=1.0, ge=0, le=1, embed=True),
     notes: str = Body(default="", embed=True),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Manually resolve an event with a settled outcome.
 
     `actual_outcome` is 0-100 (0=NO, 100=YES, middle=partial/probabilistic).
@@ -1160,7 +1160,7 @@ async def auto_resolve_event_intelligence(
     limit: int = Query(default=200, ge=1, le=1000),
     dry_run: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Auto-resolve events whose questions match resolved prediction markets
     (Polymarket, Kalshi).
 
@@ -1174,7 +1174,7 @@ async def auto_resolve_event_intelligence(
 
 
 @router.get("/links/pending", response_model=PendingLinksResponse)
-async def list_pending_links():
+async def list_pending_links() -> dict[str, Any]:
     """List event->market links awaiting human verification.
 
     These are fuzzy auto-matches recorded below the auto-verify threshold: they
@@ -1203,7 +1203,7 @@ async def verify_event_link(
     event_id: EventId,
     contract_id: str = Body(default="", embed=True),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Verify (promote) a pending event->market link so it becomes eligible to
     be scored. `contract_id` identifies which of the event's links to verify
     (the value shown in the pending queue). 404 if no such link exists.
@@ -1221,7 +1221,7 @@ async def verify_event_link(
 
 
 @router.get("/predictions/calibration", response_model=FlexibleResponse)
-async def get_prediction_calibration():
+async def get_prediction_calibration() -> dict[str, Any]:
     """Calibration scorecard over committed, point-in-time predictions: an overall
     block (mean Brier, grade, count, mean raw edge) plus `realized_edge` /
     `directional_hit_rate` (did our divergences from the market move toward reality)
@@ -1232,7 +1232,7 @@ async def get_prediction_calibration():
 
 
 @router.get("/predictions/calibration/buckets", response_model=FlexibleResponse)
-async def get_prediction_calibration_buckets():
+async def get_prediction_calibration_buckets() -> dict[str, Any]:
     """Edge × confidence bucket diagnostic (Phase 3).
 
     Includes scored + observed predictions (act/watch/provisional_act).
@@ -1247,7 +1247,7 @@ async def get_prediction_calibration_buckets():
 async def get_recent_predictions(
     limit: int = Query(default=10, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-):
+) -> dict[str, Any]:
     """Recent frozen predictions (AI vs market price, raw edge, and - once
     resolved - the scored Brier). Visibility into what the loop has committed."""
     events_by_id = {entry.get("event_id"): entry for entry in list_all_events()}
@@ -1274,7 +1274,7 @@ async def get_open_decisions(
     limit: int = Query(default=10, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     decision: str | None = Query(default=None, pattern="^(act|watch|provisional_act)$"),
-):
+) -> dict[str, Any]:
     """Open opportunities: unresolved committed predictions worth a human's
     attention, ranked by absolute adjusted edge, each rendered as a decision
     report (event / probability / market view / edge / confidence / recommendation
@@ -1318,7 +1318,7 @@ async def get_fresh_edges(
         pattern="^(all|fresh|decaying|stale|closed|no_data)$",
     ),
     include_series: bool = Query(default=False),
-):
+) -> dict[str, Any]:
     """Events with a live (fresh) edge: a material AI-vs-market divergence that is
     recent and holding near its peak, ranked by edge size. Pass
     classification=all for the monitoring view that groups fresh/decaying/stale/
@@ -1356,7 +1356,7 @@ async def get_fresh_edges(
 
 
 @router.get("/{event_id}/decision", response_model=FlexibleResponse)
-async def get_event_decision(event_id: EventId):
+async def get_event_decision(event_id: EventId) -> dict[str, Any]:
     """The decision report for one event: its committed prediction joined with the
     event intelligence record (event / probability / market view / edge+trust /
     confidence / recommendation / risk). 404 when the event has no committed
@@ -1377,7 +1377,7 @@ async def get_event_decision(event_id: EventId):
 async def get_similar_events(
     event_id: EventId,
     limit: int = Query(default=5, ge=1, le=20),
-):
+) -> dict[str, Any]:
     """Find stored events most similar to this one (precedent context).
 
     Similarity uses both title-token overlap and entity overlap (max of the
@@ -1403,7 +1403,7 @@ async def get_similar_events(
 
 
 @router.get("/trades/stats", response_model=FlexibleResponse)
-async def get_trade_stats():
+async def get_trade_stats() -> dict[str, Any]:
     """Return aggregate statistics for closed simulated trades."""
     from app.memory.simulated_trade_store import trade_stats
     return trade_stats()
@@ -1413,7 +1413,7 @@ async def get_trade_stats():
 async def get_open_trades(
     limit: int = Query(default=10, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-):
+) -> dict[str, Any]:
     """Return paginated open simulated trades."""
     from app.memory.simulated_trade_store import count_open_trades, list_open_trades
     trades = list_open_trades(limit=limit, offset=offset)
@@ -1430,7 +1430,7 @@ async def get_open_trades(
 async def get_closed_trades(
     limit: int = Query(default=10, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-):
+) -> dict[str, Any]:
     """Return paginated recently closed simulated trades."""
     from app.memory.simulated_trade_store import count_closed_trades, list_closed_trades
     trades = list_closed_trades(limit=limit, offset=offset)
@@ -1449,7 +1449,7 @@ async def manual_close_trade(
     exit_prob: float = Body(default=0.0, embed=True),
     exit_reason: str = Body(default="manual", embed=True),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Manually close a simulated trade (中途离场模拟)."""
     from app.memory.simulated_trade_store import close_trade
     result = close_trade(
@@ -1467,7 +1467,7 @@ async def manual_close_trade(
 
 
 @router.get("/discover/status", response_model=FlexibleResponse)
-async def get_discovery_status():
+async def get_discovery_status() -> dict[str, Any]:
     """Real-time progress of the current (or most recent) discovery run."""
     from app.services.discovery_status import snapshot
     return snapshot()
@@ -1477,7 +1477,7 @@ async def get_discovery_status():
 async def delete_event(
     event_id: str,
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Delete a single event from the store by its event_id."""
     from app.memory.event_store import _store_path, _load_for_write
     from app.utils.file_store import locked_file, write_json_atomic
@@ -1500,7 +1500,7 @@ async def translate_event_title(
     event_id: str,
     force: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Translate a single event's title to Chinese.
 
     Reads the English title from the event store, calls the LLM for a concise
@@ -1550,7 +1550,7 @@ async def translate_event_title(
 async def translate_all_events(
     force: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Translate all events whose Chinese title is empty.
 
     Set ``force=true`` to re-translate every event even when a Chinese title
@@ -1592,7 +1592,7 @@ async def translate_all_events(
 
 
 @router.post("/resolve-expired", response_model=FlexibleResponse)
-async def resolve_expired_events(_auth: None = Depends(require_write_key)):
+async def resolve_expired_events(_auth: None = Depends(require_write_key)) -> dict[str, Any]:
     """Archive unresolved events whose deadline is in the past.
 
     Uses source end_date/close_time when available; otherwise parses the most

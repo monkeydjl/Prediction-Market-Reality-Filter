@@ -78,7 +78,7 @@ def competition_with_stage(competition: str, stage_b: str) -> str:
     return f"{competition}{_STAGE_PREFIX}{stage_b}"
 
 
-def _explanation_stage(explanation) -> str | None:
+def _explanation_stage(explanation: object) -> str | None:
     if not explanation or not isinstance(explanation, list):
         return None
     for item in explanation:

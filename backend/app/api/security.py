@@ -12,7 +12,7 @@ def is_write_key_valid(x_api_key: str | None) -> bool:
     )
 
 
-async def require_write_key(x_api_key: str | None = Header(default=None)):
+async def require_write_key(x_api_key: str | None = Header(default=None)) -> None:
     if not settings.API_WRITE_KEY:
         # No key configured. Only allow writes if the operator explicitly opted
         # into public writes via ALLOW_OPEN_WRITES=true. This is a runtime

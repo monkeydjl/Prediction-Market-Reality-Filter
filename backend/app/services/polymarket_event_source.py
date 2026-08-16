@@ -31,6 +31,7 @@ Candidate-event shape consumed by `event_intelligence_service.discover_events`:
 
 from typing import Any
 
+from app.models.market import MarketModel
 from app.utils.market_utils import safe_float
 
 
@@ -78,7 +79,7 @@ async def fetch_crypto_candidate_events(limit: int = 10) -> list[dict[str, Any]]
     return [_to_candidate_event(market) for market in markets]
 
 
-def _to_candidate_event(market) -> dict[str, Any]:
+def _to_candidate_event(market: MarketModel) -> dict[str, Any]:
     baseline = safe_float(market.yes_price, 0.5) * 100
     volume = safe_float(market.volume, 0.0)
     liquidity = safe_float(market.liquidity, 0.0)

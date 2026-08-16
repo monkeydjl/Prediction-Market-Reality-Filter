@@ -5,7 +5,7 @@ from pathlib import Path
 from app.core.config import settings
 
 
-def setup_logging():
+def setup_logging() -> None:
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     if root.handlers:

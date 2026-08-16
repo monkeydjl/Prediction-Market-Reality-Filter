@@ -13,7 +13,7 @@ time.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -21,11 +21,17 @@ from app.api.security import require_write_key
 from app.core import config
 
 if TYPE_CHECKING:
-    # Kernel imports stay inside _get_kernel() at runtime (lazy, so a request
-    # that never predicts does not pay for them); these are here only so the
-    # annotations in that body resolve.
+    # Kernel imports stay inside the route/helper bodies at runtime (lazy, so a
+    # request that never predicts does not pay for them); these are here only so
+    # the annotations resolve.
+    from app.kernel.domain import MatchIdentity
+    from app.kernel.kernel_db import (
+        KernelCalibration,
+        KernelEngineScore,
+        KernelPrediction,
+    )
     from app.kernel.prediction_kernel import PredictionKernel
-    from app.kernel.protocols import DataAdapter, FeatureBuilder
+    from app.kernel.protocols import DataAdapter, FeatureBuilder, RawMatchData
 
 router = APIRouter(prefix="/predictions", tags=["Predictions"])
 logger = logging.getLogger(__name__)
@@ -77,7 +83,7 @@ def reset_kernel_singleton() -> None:
         delattr(_get_kernel, "_instance")
 
 
-def _get_kernel():
+def _get_kernel() -> PredictionKernel:
     """Lazy-initialize the PredictionKernel singleton."""
     if not config.settings.KERNEL_PREDICTION_ENABLED:
         raise HTTPException(
@@ -241,7 +247,7 @@ def _get_kernel():
 
 
 @router.get("/engines")
-def list_engines():
+def list_engines() -> list[str]:
     """List available prediction engines (array; backward compatible)."""
     if not config.settings.KERNEL_PREDICTION_ENABLED:
         return ["elo_odds"]
@@ -250,7 +256,7 @@ def list_engines():
 
 
 @router.get("/engines/meta")
-def list_engines_meta():
+def list_engines_meta() -> dict[str, Any]:
     """Engine names plus feature flags for dashboard/tooling."""
     if not config.settings.KERNEL_PREDICTION_ENABLED:
         return {
@@ -281,7 +287,9 @@ def list_engines_meta():
 
 
 @router.post("/matches/{match_id}/predict")
-def predict_match(match_id: str, engine: str = "auto", _auth: None = Depends(require_write_key)):
+def predict_match(
+    match_id: str, engine: str = "auto", _auth: None = Depends(require_write_key)
+) -> dict[str, Any]:
     """Run a prediction for a single match."""
     kernel = _get_kernel()
     try:
@@ -309,7 +317,7 @@ def sync_schedule(
         description="Optional competition or alias (epl, laliga, nba, ...)",
     ),
     _auth: None = Depends(require_write_key),
-):
+) -> dict[str, Any]:
     """Operator: pull fixtures into Kernel store via MultiAdapter.sync_schedule.
 
     Requires write key. Optional sport/competition short-circuits to matching
@@ -318,6 +326,7 @@ def sync_schedule(
     """
     kernel = _get_kernel()
     from app.kernel.protocols import ScheduleFilter
+    from app.sports.football.adapters.multi_adapter import MultiAdapter
 
     effective_sport = sport
     comp_code = normalize_competition_code(competition)
@@ -334,17 +343,18 @@ def sync_schedule(
     )
     adapter = kernel._adapter
     try:
-        if hasattr(adapter, "sync_schedule"):
-            # MultiAdapter accepts optional filters; Protocol only requires ().
-            # No `type: ignore` on either call or on registered_prefixes below:
-            # _get_kernel() is untyped, so `adapter` is Any and the checker sees
-            # nothing to complain about. Annotating _get_kernel() will make the
-            # call-arg / attr-defined errors real again - widen the Protocol or
-            # keep the hasattr guards, don't reach for an ignore.
-            try:
-                count = adapter.sync_schedule(filters)
-            except TypeError:
-                count = adapter.sync_schedule()
+        # Only MultiAdapter narrows the sync to the requested competition/sport;
+        # the DataAdapter Protocol declares sync_schedule() with no filters and
+        # every leaf adapter syncs the whole competition it owns. Testing for the
+        # concrete dispatcher (which _get_kernel builds above) is what makes the
+        # filtered call type-check — the previous `sync_schedule(filters)` +
+        # `except TypeError` retry only passed because _get_kernel() was untyped,
+        # so `adapter` was Any. Do not paper over it with a `type: ignore`:
+        # warn_unused_ignores is on and an ignore here hid nothing for months.
+        if isinstance(adapter, MultiAdapter):
+            count = adapter.sync_schedule(filters)
+        elif hasattr(adapter, "sync_schedule"):
+            count = adapter.sync_schedule()
         else:
             count = 0
     except Exception as exc:
@@ -352,6 +362,8 @@ def sync_schedule(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     prefixes: list[str] = []
+    # hasattr narrows for mypy too, so registered_prefixes() (MultiAdapter-only,
+    # absent from the Protocol) needs no cast.
     if hasattr(adapter, "registered_prefixes"):
         try:
             prefixes = list(adapter.registered_prefixes())
@@ -368,7 +380,9 @@ def sync_schedule(
 
 
 @router.post("/outcomes/{match_id}/process")
-def process_outcome(match_id: str, _auth: None = Depends(require_write_key)):
+def process_outcome(
+    match_id: str, _auth: None = Depends(require_write_key)
+) -> dict[str, str]:
     """Process a match outcome — triggers the learning loop."""
     kernel = _get_kernel()
     try:
@@ -380,7 +394,7 @@ def process_outcome(match_id: str, _auth: None = Depends(require_write_key)):
 
 
 @router.get("/engines/{name}/score")
-def engine_score(name: str, competition: str | None = None):
+def engine_score(name: str, competition: str | None = None) -> dict[str, Any]:
     """Get the performance score for an engine."""
     kernel = _get_kernel()
     if name not in kernel._engine_registry.list_engines():
@@ -414,7 +428,7 @@ def list_matches(
             "0 = today only (default, backward compatible)."
         ),
     ),
-):
+) -> list[dict]:
     """List matches across sports, optionally filtered by sport and/or competition.
 
     Default window is **today UTC only**. Pass ``days_ahead`` (1–60) for an
@@ -479,7 +493,7 @@ def list_matches(
 
 
 @router.get("/matches/{match_id}")
-def get_match(match_id: str):
+def get_match(match_id: str) -> dict[str, Any]:
     """Get match detail and latest prediction (if any)."""
     if not config.settings.KERNEL_PREDICTION_ENABLED:
         raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")
@@ -497,7 +511,7 @@ def get_match(match_id: str):
     }
 
 
-def _match_summary(raw, predicted_ids: set[str]) -> dict:
+def _match_summary(raw: RawMatchData, predicted_ids: set[str]) -> dict:
     """Compact match summary for list endpoint."""
     m = raw.match
     return {
@@ -514,7 +528,7 @@ def _match_summary(raw, predicted_ids: set[str]) -> dict:
     }
 
 
-def _match_detail(match) -> dict:
+def _match_detail(match: MatchIdentity) -> dict:
     """Full match detail for detail endpoint."""
     return {
         "match_id": match.match_id,
@@ -531,7 +545,7 @@ def _match_detail(match) -> dict:
     }
 
 
-def _prediction_to_dict(pred) -> dict:
+def _prediction_to_dict(pred: KernelPrediction) -> dict:
     """Convert a KernelPrediction (ORM row) to a dict for the API response.
 
     Note: Only KernelPrediction (ORM) is supported. The PredictionResult
@@ -545,7 +559,7 @@ def _prediction_to_dict(pred) -> dict:
     if isinstance(explanation, str):
         explanation = json.loads(explanation)
 
-    timestamp = pred.created_at
+    timestamp: datetime | str | None = pred.created_at
     if isinstance(timestamp, datetime):
         timestamp = timestamp.isoformat()
 
@@ -563,7 +577,7 @@ def _prediction_to_dict(pred) -> dict:
 # --- Learning Dashboard endpoints ---
 
 
-def _engine_score_to_dict(score) -> dict:
+def _engine_score_to_dict(score: KernelEngineScore) -> dict:
     """Serialize KernelEngineScore to dict."""
     return {
         "engine": score.engine,
@@ -577,7 +591,7 @@ def _engine_score_to_dict(score) -> dict:
     }
 
 
-def _calibration_to_dict(cal) -> dict:
+def _calibration_to_dict(cal: KernelCalibration) -> dict:
     """Serialize KernelCalibration to dict."""
     return {
         "engine": cal.engine,
@@ -594,7 +608,7 @@ def _calibration_to_dict(cal) -> dict:
 @router.get("/engines/scores")
 def list_engine_scores(engine: str | None = None,
                        competition: str | None = None,
-                       sport: str | None = None):
+                       sport: str | None = None) -> list[dict]:
     """List engine performance scores with optional filters."""
     if not config.settings.KERNEL_PREDICTION_ENABLED:
         raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")
@@ -607,7 +621,7 @@ def list_engine_scores(engine: str | None = None,
 def list_prediction_history(sport: str | None = None,
                             competition: str | None = None,
                             limit: int = 50,
-                            offset: int = 0):
+                            offset: int = 0) -> dict[str, Any]:
     """List prediction history, paginated."""
     if not config.settings.KERNEL_PREDICTION_ENABLED:
         raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")
@@ -622,7 +636,7 @@ def list_prediction_history(sport: str | None = None,
 
 
 @router.get("/history/{match_id}")
-def get_match_history(match_id: str):
+def get_match_history(match_id: str) -> dict:
     """Get single-match prediction trajectory (all history records)."""
     if not config.settings.KERNEL_PREDICTION_ENABLED:
         raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")
@@ -632,7 +646,7 @@ def get_match_history(match_id: str):
 
 @router.get("/calibration")
 def list_calibrations(engine: str | None = None,
-                      competition: str | None = None):
+                      competition: str | None = None) -> list[dict]:
     """List calibration parameters."""
     if not config.settings.KERNEL_PREDICTION_ENABLED:
         raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")
@@ -670,7 +684,7 @@ def refresh_conditional_calibration(
 @router.get("/calibration/reliability")
 def get_reliability(engine: str | None = None,
                     competition: str | None = None,
-                    bins: int = 10):
+                    bins: int = 10) -> dict:
     """Get binned reliability data for calibration chart."""
     if not config.settings.KERNEL_PREDICTION_ENABLED:
         raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")

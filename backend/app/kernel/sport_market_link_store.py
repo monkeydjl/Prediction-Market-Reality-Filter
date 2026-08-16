@@ -124,6 +124,25 @@ class SportMarketLinkStore:
         finally:
             session.close()
 
+    def get_link(self, *, link_id: int) -> dict[str, Any] | None:
+        """One link by row id, or None when it does not exist.
+
+        Used by the /links/{link_id}/audit route to attach link metadata to the
+        price-path summary. Fail-closed like the other reads.
+        """
+        session = get_kernel_session()
+        try:
+            row = (
+                session.query(KernelSportMarketLink)
+                .filter_by(id=link_id)
+                .one_or_none()
+            )
+            return _row_to_dict(row) if row is not None else None
+        except Exception:
+            return None
+        finally:
+            session.close()
+
     def get_verified_links(self, *, match_id: str) -> list[dict[str, Any]]:
         """Fail-closed: only verified=True links for a match."""
         session = get_kernel_session()

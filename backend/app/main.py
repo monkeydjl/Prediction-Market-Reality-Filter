@@ -1,12 +1,15 @@
 import asyncio
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Header, Request, Response, status as http_status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import RequestResponseEndpoint
 
 from app.api.router import api_router
 from app.api.security import is_write_key_valid
@@ -24,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("EIP v0.3.0 starting - app: /")
     if has_configured_llm_route("default"):
         logger.info("LLM Gateway route is configured")
@@ -176,7 +179,9 @@ _SECURITY_HEADERS = {
 
 
 @app.middleware("http")
-async def add_security_headers(request: Request, call_next):
+async def add_security_headers(
+    request: Request, call_next: RequestResponseEndpoint
+) -> Response:
     response = await call_next(request)
     for name, value in _SECURITY_HEADERS.items():
         if name not in response.headers:
@@ -215,7 +220,7 @@ app.include_router(api_router, prefix="/api")
 
 
 @app.get("/api")
-async def api_overview():
+async def api_overview() -> dict[str, Any]:
     return {
         "system": "Event Intelligence Platform",
         "version": "0.3.0",
@@ -247,7 +252,7 @@ async def api_overview():
 async def api_health(
     response: Response,
     x_api_key: str | None = Header(default=None),
-):
+) -> dict[str, Any]:
     from app.core.scheduler import scheduler, scheduler_start_skipped_due_to_lock
     from app.services.loop_status_service import loop_status
 
@@ -284,7 +289,7 @@ async def api_health(
 
 
 @app.get("/metrics", include_in_schema=False)
-async def prometheus_metrics():
+async def prometheus_metrics() -> Response:
     """Prometheus metrics endpoint (P0-6 §1.1).
 
     Exposes the default ``prometheus_client`` registry in text exposition
@@ -313,5 +318,5 @@ if settings.BACKEND_SERVE_FRONTEND and _FRONTEND_OUT.is_dir():
     app.mount("/", StaticFiles(directory=str(_FRONTEND_OUT), html=True), name="frontend")
 else:
     @app.get("/", include_in_schema=False)
-    async def backend_root():
+    async def backend_root() -> RedirectResponse:
         return RedirectResponse(url="/docs")

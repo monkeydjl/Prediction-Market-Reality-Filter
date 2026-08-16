@@ -84,6 +84,32 @@ class EventCollectionServiceTests(unittest.TestCase):
         self.assertEqual(articles, [{**official[0], "kind": "official"}])
         self.assertIn("policy=fail_closed_empty_list", "\n".join(logs.output))
 
+    def test_collect_shared_survives_a_cancelled_source(self):
+        """A cancelled source must not take the whole shared-feed batch down.
+
+        gather(return_exceptions=True) hands back CancelledError as a *result
+        value*, and CancelledError is a BaseException, not an Exception. With the
+        narrow `isinstance(result, Exception)` guard the exception object reached
+        `cleaned.append` and the four-way unpack below raised
+        "'CancelledError' object is not iterable" — every shared feed lost,
+        not just the cancelled one.
+        """
+        official = [{"title": "Fed", "description": "d",
+                     "source": "Federal Reserve", "published": "2026-06-12"}]
+        with patch("app.services.rss_service.fetch_news",
+                   AsyncMock(side_effect=asyncio.CancelledError())), \
+             patch("app.services.official_source_service.fetch_official_news",
+                   AsyncMock(return_value=official)), \
+             patch("app.services.sec_edgar_service.fetch_sec_filings",
+                   AsyncMock(return_value=[])), \
+             patch("app.services.economic_data_service.fetch_economic_data",
+                   AsyncMock(return_value=[])), \
+             self.assertLogs("app.services.event_collection_service",
+                             level="WARNING") as logs:
+            articles = asyncio.run(collection.collect_shared_articles())
+        self.assertEqual(articles, [{**official[0], "kind": "official"}])
+        self.assertIn("label=rss", "\n".join(logs.output))
+
     def test_collect_articles_isolates_failing_gnews(self):
         shared = [{"title": "shared", "description": "d",
                    "source": "s", "published": "p"}]

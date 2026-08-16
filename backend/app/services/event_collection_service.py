@@ -44,7 +44,12 @@ async def collect_shared_articles() -> list[dict[str, Any]]:
     )
     cleaned = []
     for label, result in zip(("rss", "official", "sec", "economic"), results):
-        if isinstance(result, Exception):
+        # BaseException, not Exception: gather(return_exceptions=True) hands back
+        # a cancelled source's CancelledError as a *result value*, and that is
+        # not an Exception — it fell through to `cleaned.append` and the unpack
+        # below then raised "'CancelledError' object is not iterable", losing
+        # every shared feed instead of the one cancelled source.
+        if isinstance(result, BaseException):
             log_service_failure(
                 logger,
                 "shared_source",

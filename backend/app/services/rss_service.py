@@ -80,7 +80,12 @@ async def fetch_news(limit: int = 5) -> list:
 
     articles = []
     for (name, _, _), result in zip(RSS_FEEDS, results):
-        if isinstance(result, Exception):
+        # BaseException, not Exception: a cancelled executor task's
+        # CancelledError comes back as a result value, and it is not an
+        # Exception. Here the `isinstance(result, list)` guard below already
+        # keeps it out of `articles`, so the narrow guard only cost the warning
+        # log — but it is the same shape that is live elsewhere, so it matches.
+        if isinstance(result, BaseException):
             log_service_failure(
                 logger,
                 "rss_task",

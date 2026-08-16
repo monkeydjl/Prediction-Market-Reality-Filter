@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import tempfile
 import unittest
 from pathlib import Path
@@ -1004,6 +1005,113 @@ class CollectCandidateEventsCryptoOptInTests(unittest.TestCase):
             _run(eis._collect_candidate_events(limit=5))
 
         probable_fetch.assert_not_called()
+
+
+class CollectCandidateEventsStatusReportingTests(unittest.TestCase):
+    """Per-source discovery status must be visible by the time collection returns.
+
+    `source_done` used to be fired with `asyncio.ensure_future(...)` inside
+    `try/except Exception: pass`. Everything between those calls and
+    `_collect_candidate_events`'s return is synchronous (zip_longest, dedupe,
+    cross-match, slice), and `discovery_status`'s lock is uncontended so
+    `async with _lock` does not yield either — so the deferred tasks had not run
+    when the caller resumed. On the all-sources-empty path `discover_events`
+    calls `status_fail` and returns immediately, so the error response reached
+    the frontend with `sources` still `{}`: no indication of which source failed,
+    which is the one thing `source_done(label, 0, error)` exists to report.
+
+    `source_start` had no caller at all, so `sources` was also empty for the
+    whole duration of the collect phase.
+
+    These tests observe through a deep copy taken at the return point. That
+    matters: `snapshot()` used to be a shallow copy aliasing the live `sources`
+    dict, so a test that inspected it after `asyncio.run` finished saw the state
+    the deferred tasks reached during loop teardown and passed vacuously.
+    """
+
+    def _patches(self, poly, kalshi):
+        return [
+            patch("app.services.polymarket_event_source.fetch_candidate_events",
+                  new=poly),
+            patch("app.services.kalshi_event_source.fetch_candidate_events",
+                  new=kalshi),
+            patch("app.services.polymarket_event_source.fetch_crypto_candidate_events",
+                  new=AsyncMock(return_value=[])),
+            patch("app.services.world_cup_event_source.fetch_candidate_events",
+                  new=AsyncMock(return_value=[])),
+            patch("app.services.event_extraction_service.extract_candidate_events",
+                  new=AsyncMock(return_value=[])),
+            patch.object(eis.settings, "LIMITLESS_SOURCE_ENABLED", False),
+            patch.object(eis.settings, "OPINION_API_KEY", ""),
+            patch.object(eis.settings, "PREDICT_FUN_API_KEY", ""),
+            patch.object(eis.settings, "POLYMARKET_CRYPTO_FETCH_ENABLED", False),
+            patch.object(eis.settings, "WORLD_CUP_SOURCE_ENABLED", False),
+            patch.object(eis.settings, "METACULUS_API_TOKEN", ""),
+            patch.object(eis.settings, "OPEN_WEB_ENABLED", False),
+        ]
+
+    def _collect(self, poly, kalshi):
+        from app.services import discovery_status
+
+        async def run():
+            await discovery_status.reset(5)
+            patches = self._patches(poly, kalshi)
+            for p in patches:
+                p.start()
+            try:
+                await eis._collect_candidate_events(limit=5)
+            finally:
+                for p in patches:
+                    p.stop()
+            # Deep copy with no intervening await: exactly what the caller can
+            # see the instant collection returns, and immune to later mutation.
+            return copy.deepcopy(discovery_status.snapshot()["sources"])
+
+        return _run(run())
+
+    def test_failed_source_is_reported_before_collection_returns(self):
+        with self.assertLogs("app.services.event_intelligence_service",
+                             level="WARNING"):
+            sources = self._collect(
+                AsyncMock(side_effect=RuntimeError("poly down")),
+                AsyncMock(side_effect=RuntimeError("kalshi down")),
+            )
+        self.assertEqual(sources["Polymarket"],
+                         {"status": "failed", "candidates": 0, "error": "poly down"})
+        self.assertEqual(sources["Kalshi"],
+                         {"status": "failed", "candidates": 0, "error": "kalshi down"})
+
+    def test_successful_source_candidate_count_is_reported(self):
+        poly = AsyncMock(return_value=[
+            {"question": f"Will q{i} happen?", "baseline_probability": 50,
+             "volume": 1, "liquidity": 1,
+             "source": {"type": "prediction_market", "platform": "Polymarket"}}
+            for i in range(2)
+        ])
+        sources = self._collect(poly, AsyncMock(return_value=[]))
+        self.assertEqual(sources["Polymarket"],
+                         {"status": "ok", "candidates": 2, "error": None})
+        self.assertEqual(sources["Kalshi"],
+                         {"status": "ok", "candidates": 0, "error": None})
+
+    def test_every_label_is_seeded_before_its_fetch_resolves(self):
+        """source_start seeds the label list, so a poll during the collect phase
+        sees the sources instead of an empty dict."""
+        from app.services import discovery_status
+
+        seen: list[dict] = []
+
+        async def slow_poly(*args, **kwargs):
+            # A poll landing while Polymarket is still in flight.
+            seen.append(copy.deepcopy(discovery_status.snapshot()["sources"]))
+            return []
+
+        self._collect(AsyncMock(side_effect=slow_poly), AsyncMock(return_value=[]))
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(
+            {label: entry["status"] for label, entry in seen[0].items()},
+            {"Polymarket": "fetching", "Kalshi": "fetching", "Open Web": "fetching"},
+        )
 
 
 class ActionableRecommendationTests(unittest.TestCase):

@@ -1000,6 +1000,7 @@ async def _collect_candidate_events(
     / LLM calls a scan makes as sources are added. discover_events still ranks the
     pool by value_score and returns the top ``limit``.
     """
+    from app.services.discovery_status import source_done, source_start
     from app.services.event_extraction_service import extract_candidate_events
     from app.services.kalshi_event_source import (
         fetch_candidate_events as fetch_kalshi_events,
@@ -1059,6 +1060,13 @@ async def _collect_candidate_events(
     def _src_limit(name: str) -> int:
         return max(1, int(limit * _weights.get(name, 1.0)))
 
+    # Seed every label as "fetching" before the gather so a poll during the
+    # collect phase sees the source list. Without this the status `sources` dict
+    # stayed empty until each source finished, and `source_start` had no caller
+    # at all.
+    for label in labels:
+        await source_start(label)
+
     results = await asyncio.gather(
         *(fetch(_src_limit(name)) for name, fetch in candidate_sources),
         extract_candidate_events(
@@ -1075,19 +1083,10 @@ async def _collect_candidate_events(
         # source.
         if isinstance(result, BaseException):
             logger.warning("Event source failed [%s]: %s", label, result)
-            # Report source failure to status tracker
-            try:
-                from app.services.discovery_status import source_done
-                asyncio.ensure_future(source_done(label, 0, str(result)[:200]))
-            except Exception:
-                pass
+            await source_done(label, 0, str(result)[:200])
             continue
         per_source.append(result)
-        try:
-            from app.services.discovery_status import source_done
-            asyncio.ensure_future(source_done(label, len(result)))
-        except Exception:
-            pass
+        await source_done(label, len(result))
 
     # Round-robin across sources so the cap keeps every source represented.
     merged = [

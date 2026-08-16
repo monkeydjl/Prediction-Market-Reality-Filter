@@ -205,6 +205,43 @@ def list_recent_tasks(limit: int = 50, status: str | None = None) -> list[dict[s
     return [_row_to_task(row) for row in rows]
 
 
+def fail_interrupted_tasks(error: str) -> int:
+    """Mark every non-terminal row as failed. Returns the number of rows changed.
+
+    Called once at startup. A ``pending`` / ``running`` row can only mean the
+    process that owned it died mid-flight: the task manager's memory starts
+    empty, and nothing re-attaches an `asyncio.Task` to a stored row. Left
+    alone, such a row is permanent — `/auto-tune/status/{task_id}` reports
+    ``running`` forever, and :func:`delete_older_than` only prunes terminal
+    statuses, so the row is never even cleaned up.
+
+    ``completed_at`` is set so the row is prunable, which is what the
+    :func:`delete_older_than` docstring means by surfacing a mid-flight crash as
+    ``failed`` rather than dropping it silently.
+
+    Assumes a single application process owns this database — the documented
+    deployment (uvicorn with no ``--workers``, and an in-process scheduler that
+    already requires it). Under multiple workers a starting process would fail
+    a sibling's genuinely in-flight tasks.
+    """
+    path = sqlite_db.loop_db_path()
+    _ensure_schema(path)
+    now = utc_now()
+    with writing(path) as conn:
+        cur = conn.execute(
+            """
+            UPDATE optimization_tasks
+               SET status='failed',
+                   error=COALESCE(NULLIF(error, ''), ?),
+                   completed_at=COALESCE(completed_at, ?),
+                   updated_at=?
+             WHERE status NOT IN ('completed', 'failed')
+            """,
+            (error, now, now),
+        )
+        return int(cur.rowcount or 0)
+
+
 def delete_older_than(completed_at_cutoff_iso: str, statuses: list[str]) -> int:
     """Delete rows whose status is in ``statuses`` AND completed_at is older
     than (strictly less than) ``completed_at_cutoff_iso``.

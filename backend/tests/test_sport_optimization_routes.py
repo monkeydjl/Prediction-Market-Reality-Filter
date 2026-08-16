@@ -67,12 +67,11 @@ def test_run_optimization_returns_task_id(client, monkeypatch, auth_headers):
     import asyncio
     from unittest.mock import patch
 
-    def _noop_create_task(coro, *args, **kwargs):
+    def _noop_spawn(coro, *args, **kwargs):
         if asyncio.iscoroutine(coro):
             coro.close()
-        return None
 
-    with patch("asyncio.create_task", side_effect=_noop_create_task):
+    with patch("app.utils.background_tasks.spawn", side_effect=_noop_spawn):
         resp = client.post(
             "/api/sport-optimization/run",
             json={"sport": "nba", "n_trials": 5},

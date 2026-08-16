@@ -92,6 +92,7 @@ async def run_optimization(
     import asyncio
 
     from app.services.optimization_task_manager import get_task_manager
+    from app.utils.background_tasks import spawn
 
     sports = ["nba", "mlb", "nhl"] if request.sport == "all" else [request.sport]
     for sport in sports:
@@ -157,7 +158,7 @@ async def run_optimization(
             logger.exception("Optimization task %s failed", task.task_id)
             await task_manager.mark_failed(task.task_id, str(exc))
 
-    asyncio.create_task(_run())
+    spawn(_run(), name=f"sport_optimization:{task.task_id}")
     return {"task_id": task.task_id, "status": "pending", "sports": sports, "n_trials": n_trials}
 
 

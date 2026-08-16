@@ -1051,6 +1051,8 @@ async def _collect_candidate_events(
     if settings.METACULUS_API_TOKEN:
         candidate_sources.append(("Metaculus", fetch_metaculus_events))
     labels = [name for name, _ in candidate_sources] + ["Open Web"]
+    for label in labels:
+        await source_start(label)
     # Apply per-source weight multipliers: the primary market source (Polymarket)
     # gets more of the candidate budget, supplementary sources get less.  Keeps
     # the round-robin interleave balanced under the cap while shifting the event

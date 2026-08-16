@@ -92,6 +92,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.warning("Startup reconciliation skipped: %s", exc, exc_info=True)
 
+    # Same shape for background optimization tasks: a 'pending'/'running' row in
+    # SQLite after a restart has no asyncio.Task behind it, so /auto-tune/status
+    # would report it running forever and cleanup_old_tasks (terminal statuses
+    # only) would never prune it.
+    try:
+        from app.services.optimization_task_manager import get_task_manager
+        interrupted = await get_task_manager().reconcile_interrupted_tasks()
+        if interrupted:
+            logger.info(
+                "Startup reconciliation failed %d interrupted optimization task(s)",
+                interrupted,
+            )
+    except Exception as exc:
+        logger.warning(
+            "Optimization task reconciliation skipped: %s", exc, exc_info=True
+        )
+
     # Initialize World Cup prediction database (creates tables if missing)
     try:
         from app.utils.prediction_db import init_prediction_db

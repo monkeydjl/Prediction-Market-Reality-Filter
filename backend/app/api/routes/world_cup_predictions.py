@@ -791,13 +791,20 @@ async def auto_tune_engine(
         # Create background task
         from app.services.optimization_task_manager import get_task_manager
         from app.services.engine_auto_tuning_async import run_async_optimization
-        import asyncio
+        from app.utils.background_tasks import spawn
 
         task_manager = get_task_manager()
         task = await task_manager.create_task(engine_name)
 
-        # Start background task
-        asyncio.create_task(run_async_optimization(engine_name, task.task_id))
+        # Background: nothing awaits the result, so `spawn` holds the task
+        # reference (an unreferenced task can be GC'd mid-run) and logs whatever
+        # it ends with. run_async_optimization re-raises TimeoutError after
+        # marking the task failed, and that exception previously surfaced only
+        # as a GC-time "Task exception was never retrieved" line on stderr.
+        spawn(
+            run_async_optimization(engine_name, task.task_id),
+            name=f"engine_auto_tune:{engine_name}:{task.task_id}",
+        )
 
         return {
             "status": "accepted",

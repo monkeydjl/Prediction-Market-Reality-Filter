@@ -122,7 +122,19 @@ async def fail(reason: str) -> None:
 
 
 def snapshot() -> dict[str, Any]:
-    return STATUS.copy()
+    """A copy safe to hand to a serializer while a scan is still running.
+
+    `STATUS.copy()` alone is shallow, so the returned dict shared the live
+    `sources` dict and `errors` list. The caller (`GET /discover/status`) hands
+    the result to FastAPI, which awaits during serialization — long enough for
+    the running scan to add a source or append an error and make the serializer
+    iterate a container that changed size. Copy the two mutable nested
+    containers too. This runs without an await, so it cannot be interleaved.
+    """
+    snap = STATUS.copy()
+    snap["sources"] = {k: dict(v) for k, v in STATUS["sources"].items()}
+    snap["errors"] = list(STATUS["errors"])
+    return snap
 
 
 def _elapsed() -> float:

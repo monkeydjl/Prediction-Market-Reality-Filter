@@ -204,5 +204,78 @@ class OptimizationTaskManagerPersistenceTests(unittest.TestCase):
                 self.assertIsNotNone(store.get_task(running.task_id))
 
 
+class InterruptedTaskReconciliationTests(unittest.TestCase):
+    """A restart leaves 'pending'/'running' rows with no asyncio.Task behind
+    them. Nothing re-attaches one, so /auto-tune/status reported them running
+    forever, and cleanup_old_tasks only prunes terminal statuses — so the row
+    was never removed either. Startup reconciliation makes them terminal.
+    """
+
+    def test_non_terminal_rows_become_failed_and_prunable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+                store.upsert_task({"task_id": "run", "engine_name": "e", "status": "running", "progress": 2, "total": 9, "logs": [], "created_at": "2026-06-01T00:00:00+00:00"})
+                store.upsert_task({"task_id": "pend", "engine_name": "e", "status": "pending", "progress": 0, "total": 0, "logs": [], "created_at": "2026-06-01T00:00:00+00:00"})
+
+                changed = store.fail_interrupted_tasks("interrupted")
+
+                self.assertEqual(changed, 2)
+                for task_id in ("run", "pend"):
+                    got = store.get_task(task_id)
+                    self.assertEqual(got["status"], "failed")
+                    self.assertEqual(got["error"], "interrupted")
+                    # completed_at is set, so the daily cleanup can now prune it.
+                    self.assertIsNotNone(got["completed_at"])
+                pruned = store.delete_older_than(
+                    "2999-01-01T00:00:00+00:00", ["completed", "failed"]
+                )
+                self.assertEqual(pruned, 2)
+
+    def test_terminal_rows_are_left_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+                store.upsert_task({"task_id": "ok", "engine_name": "e", "status": "completed", "progress": 5, "total": 5, "logs": [], "result": {"k": "v"}, "completed_at": "2026-06-01T00:00:00+00:00"})
+                store.upsert_task({"task_id": "bad", "engine_name": "e", "status": "failed", "progress": 1, "total": 5, "logs": [], "error": "real failure", "completed_at": "2026-06-01T00:00:00+00:00"})
+
+                self.assertEqual(store.fail_interrupted_tasks("interrupted"), 0)
+
+                self.assertEqual(store.get_task("ok")["status"], "completed")
+                self.assertEqual(store.get_task("ok")["result"], {"k": "v"})
+                # An existing error message is not overwritten.
+                self.assertEqual(store.get_task("bad")["error"], "real failure")
+
+    def test_existing_completed_at_is_preserved(self):
+        """A 'running' row that somehow carries completed_at keeps it, so the
+        reconciliation cannot move a timestamp forward and delay pruning."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+                store.upsert_task({"task_id": "odd", "engine_name": "e", "status": "running", "progress": 1, "total": 2, "logs": [], "completed_at": "2026-06-01T00:00:00+00:00"})
+                store.fail_interrupted_tasks("interrupted")
+                self.assertEqual(
+                    store.get_task("odd")["completed_at"], "2026-06-01T00:00:00+00:00"
+                )
+
+    def test_manager_reconcile_drops_stale_memory_copies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+                m = OptimizationTaskManager()
+                running = _run(m.create_task("integrated"))
+                _run(m.mark_running(running.task_id))
+                done = _run(m.create_task("hybrid"))
+                _run(m.mark_completed(done.task_id, {"x": 1}))
+
+                reconciled = _run(m.reconcile_interrupted_tasks())
+
+                self.assertEqual(reconciled, 1)
+                # The stale in-memory copy is gone, so a poll re-hydrates the
+                # reconciled 'failed' row rather than reading 'running'.
+                self.assertNotIn(running.task_id, m._tasks)
+                rehydrated = _run(m.get_task(running.task_id))
+                self.assertEqual(rehydrated.status, TaskStatus.FAILED)
+                # The completed task is untouched in memory and on disk.
+                self.assertIn(done.task_id, m._tasks)
+                self.assertEqual(store.get_task(done.task_id)["status"], "completed")
+
+
 if __name__ == "__main__":
     unittest.main()

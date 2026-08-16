@@ -219,6 +219,26 @@ class OptimizationTaskManager:
                 task.error = error
                 self._persist(task)
 
+    async def reconcile_interrupted_tasks(self) -> int:
+        """Fail every stored task that a previous process left non-terminal.
+
+        Runs once at startup, before any route can create a task. A stored
+        ``pending`` / ``running`` row has no `asyncio.Task` behind it after a
+        restart — nothing re-attaches one — so the frontend would poll
+        ``/auto-tune/status/{task_id}`` and read ``running`` forever, and
+        `cleanup_old_tasks` would never prune it (it only prunes terminal
+        statuses). Returns the number of rows reconciled.
+        """
+        error = "任务在进程重启时中断（未完成，已标记失败）"
+        reconciled = optimization_task_store.fail_interrupted_tasks(error)
+        # Drop any memory copy so a re-hydration cannot resurrect the stale
+        # non-terminal state. Normally empty at startup; cheap either way.
+        async with self._lock:
+            for task_id, task in list(self._tasks.items()):
+                if task.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
+                    del self._tasks[task_id]
+        return reconciled
+
     async def cleanup_old_tasks(self, max_age_hours: int = 24) -> None:
         """Remove completed/failed tasks older than max_age_hours.
 

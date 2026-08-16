@@ -1000,6 +1000,7 @@ async def _collect_candidate_events(
     / LLM calls a scan makes as sources are added. discover_events still ranks the
     pool by value_score and returns the top ``limit``.
     """
+    from app.services.discovery_status import source_done, source_start
     from app.services.event_extraction_service import extract_candidate_events
     from app.services.kalshi_event_source import (
         fetch_candidate_events as fetch_kalshi_events,
@@ -1050,6 +1051,8 @@ async def _collect_candidate_events(
     if settings.METACULUS_API_TOKEN:
         candidate_sources.append(("Metaculus", fetch_metaculus_events))
     labels = [name for name, _ in candidate_sources] + ["Open Web"]
+    for label in labels:
+        await source_start(label)
     # Apply per-source weight multipliers: the primary market source (Polymarket)
     # gets more of the candidate budget, supplementary sources get less.  Keeps
     # the round-robin interleave balanced under the cap while shifting the event
@@ -1075,19 +1078,10 @@ async def _collect_candidate_events(
         # source.
         if isinstance(result, BaseException):
             logger.warning("Event source failed [%s]: %s", label, result)
-            # Report source failure to status tracker
-            try:
-                from app.services.discovery_status import source_done
-                asyncio.ensure_future(source_done(label, 0, str(result)[:200]))
-            except Exception:
-                pass
+            await source_done(label, 0, str(result)[:200])
             continue
         per_source.append(result)
-        try:
-            from app.services.discovery_status import source_done
-            asyncio.ensure_future(source_done(label, len(result)))
-        except Exception:
-            pass
+        await source_done(label, len(result))
 
     # Round-robin across sources so the cap keeps every source represented.
     merged = [

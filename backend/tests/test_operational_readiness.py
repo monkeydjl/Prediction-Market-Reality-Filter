@@ -296,6 +296,45 @@ class StartupGuardTests(unittest.TestCase):
                 pass
         self.assertEqual(calls, {"start": 0, "stop": 0})
 
+    def test_lifespan_reconciles_interrupted_optimization_tasks(self):
+        """Wiring pin: a 'running' optimization row left by a dead process is
+        terminal again after boot.
+
+        Without this, `/auto-tune/status/{task_id}` reports the task running
+        forever — nothing re-attaches an asyncio.Task to a stored row — and
+        `cleanup_old_tasks` never prunes it because it only prunes terminal
+        statuses.
+        """
+        from app.main import app
+        from app.memory import optimization_task_store as task_store
+        from app.utils import sqlite_db as util_sqlite_db
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "v2_loop.db")
+            with patch.object(util_sqlite_db, "loop_db_path", return_value=db_path):
+                task_store.upsert_task({
+                    "task_id": "stuck", "engine_name": "hybrid",
+                    "status": "running", "progress": 1, "total": 5, "logs": [],
+                })
+                with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                        patch.object(settings, "SCHEDULER_ENABLED", False), \
+                        patch("app.main.sqlite_db.maintain", return_value={"ok": True}), \
+                        patch("app.main.start_scheduler", lambda: None), \
+                        patch("app.main.stop_scheduler", lambda: None), \
+                        patch("app.utils.prediction_db.init_prediction_db",
+                              lambda: None), \
+                        patch(
+                            "app.services.world_cup_scoring_service."
+                            "score_all_finished_matches",
+                            return_value={"status": "ok"},
+                        ):
+                    with TestClient(app):
+                        pass
+                stuck = task_store.get_task("stuck")
+        self.assertEqual(stuck["status"], "failed")
+        self.assertIsNotNone(stuck["completed_at"])
+        self.assertIn("中断", stuck["error"])
+
 
 class LLMStartupCheckTests(unittest.TestCase):
     def test_llm_startup_check_rejects_failed_gateway_result(self):

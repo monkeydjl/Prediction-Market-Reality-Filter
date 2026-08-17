@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 
 const apiMocks = vi.hoisted(() => ({
   useOptimizationParams: vi.fn(),
+  useLiveEvidence: vi.fn(),
   useTaskStatus: vi.fn(),
   triggerOptimization: vi.fn(),
   triggerIngest: vi.fn(),
@@ -12,6 +13,7 @@ const apiMocks = vi.hoisted(() => ({
 vi.mock("@/lib/sports-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/sports-api")>()),
   useOptimizationParams: apiMocks.useOptimizationParams,
+  useLiveEvidence: apiMocks.useLiveEvidence,
   useTaskStatus: apiMocks.useTaskStatus,
   triggerOptimization: apiMocks.triggerOptimization,
   triggerIngest: apiMocks.triggerIngest,
@@ -32,11 +34,17 @@ import { OptimizationDashboard } from "./OptimizationDashboard";
 describe("OptimizationDashboard", () => {
   beforeEach(() => {
     apiMocks.useOptimizationParams.mockReset();
+    apiMocks.useLiveEvidence.mockReset();
     apiMocks.useTaskStatus.mockReset();
     apiMocks.triggerOptimization.mockReset();
     apiMocks.triggerIngest.mockReset();
     apiMocks.applyParams.mockReset();
     apiMocks.useTaskStatus.mockReturnValue({
+      data: undefined,
+      error: undefined,
+      isLoading: false,
+    });
+    apiMocks.useLiveEvidence.mockReturnValue({
       data: undefined,
       error: undefined,
       isLoading: false,
@@ -143,6 +151,66 @@ describe("OptimizationDashboard", () => {
     await waitFor(() => {
       expect(screen.getByTestId("error")).toBeTruthy();
     });
+  });
+
+  it("shows live evidence separately from historical candidates", async () => {
+    apiMocks.useOptimizationParams.mockReturnValue({
+      data: [],
+      error: undefined,
+      isLoading: false,
+    });
+    apiMocks.useLiveEvidence.mockReturnValue({
+      data: {
+        threshold: 10,
+        total_predictions: 11,
+        total_settled: 1,
+        group_count: 10,
+        ready_group_count: 0,
+        learning_ready: false,
+        groups: [
+          {
+            sport: "football",
+            competition: "world_cup",
+            engine: "elo_odds",
+            prediction_count: 2,
+            settled_count: 1,
+            remaining_samples: 9,
+            readiness: "insufficient_samples",
+            accuracy: 1,
+            avg_brier_score: 0.305,
+            latest_settled_at: "2026-06-13T20:00:00",
+          },
+        ],
+      },
+      error: undefined,
+      isLoading: false,
+    });
+    render(<OptimizationDashboard />);
+    await waitFor(() => {
+      expect(screen.getByTestId("live-evidence")).toBeTruthy();
+    });
+    expect(screen.getByTestId("live-evidence-readiness").textContent).toContain("样本不足");
+    expect(screen.getByText("football / world_cup")).toBeTruthy();
+    expect(screen.getByText("1/2")).toBeTruthy();
+    expect(screen.getByText("9")).toBeTruthy();
+  });
+
+  it("does not claim readiness when live evidence fails to load", async () => {
+    apiMocks.useOptimizationParams.mockReturnValue({
+      data: [],
+      error: undefined,
+      isLoading: false,
+    });
+    apiMocks.useLiveEvidence.mockReturnValue({
+      data: undefined,
+      error: new Error("503 Phase 9 accuracy sprint disabled"),
+      isLoading: false,
+    });
+    render(<OptimizationDashboard />);
+    await waitFor(() => {
+      expect(screen.getByTestId("live-evidence-unavailable")).toBeTruthy();
+    });
+    expect(screen.queryByText("可评估")).toBeNull();
   });
 
   it("renders optimization-dashboard wrapper when loaded", async () => {

@@ -6,9 +6,38 @@ import { getApiBase } from "@/lib/env";
 import { sportPost } from "../client";
 import type { ApplyParamsResult, OptimizedParams } from "../types";
 
+export interface LiveEvidenceGroup {
+  sport: string;
+  competition: string;
+  engine: string;
+  prediction_count: number;
+  settled_count: number;
+  remaining_samples: number;
+  readiness: "ready" | "insufficient_samples" | string;
+  accuracy: number | null;
+  avg_brier_score: number | null;
+  latest_settled_at: string | null;
+}
+
+export interface LiveEvidenceReport {
+  threshold: number;
+  total_predictions: number;
+  total_settled: number;
+  group_count: number;
+  ready_group_count: number;
+  learning_ready: boolean;
+  groups: LiveEvidenceGroup[];
+}
+
 export function useOptimizationParams() {
   const key = `${getApiBase()}/sport-optimization/params`;
   return useSWR<OptimizedParams[]>(key);
+}
+
+/** Settled live-prediction coverage for per-group online-learning readiness. */
+export function useLiveEvidence() {
+  const key = `${getApiBase()}/sport-optimization/live-evidence`;
+  return useSWR<LiveEvidenceReport>(key);
 }
 
 /** Applied params for one sport. Returns 404 until a candidate is applied. */

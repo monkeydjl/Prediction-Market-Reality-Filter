@@ -71,13 +71,19 @@ export {
 export {
   useOptimizationParams,
   useAppliedParams,
+  useLiveEvidence,
   triggerOptimization,
   triggerIngest,
   useTaskStatus,
   applyParams,
   backfillAndSeed,
 } from "./hooks/use-optimization";
-export type { TaskStatus, BackfillSeedResult } from "./hooks/use-optimization";
+export type {
+  TaskStatus,
+  BackfillSeedResult,
+  LiveEvidenceGroup,
+  LiveEvidenceReport,
+} from "./hooks/use-optimization";
 export {
   parseOptimizationTaskResult,
   toMetricBarPoints,

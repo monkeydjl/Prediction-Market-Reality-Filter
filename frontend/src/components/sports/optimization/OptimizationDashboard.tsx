@@ -4,12 +4,14 @@ import Link from "next/link";
 import {
   useOptimizationParams,
   useAppliedParams,
+  useLiveEvidence,
   triggerOptimization,
   triggerIngest,
   useTaskStatus,
   applyParams,
   backfillAndSeed,
   type BackfillSeedResult,
+  type LiveEvidenceReport,
 } from "@/lib/sports-api";
 import type { ApplyParamsResult, OptimizedParams } from "@/lib/sports-api/types";
 import {
@@ -33,8 +35,111 @@ function candidateWeightRows(p: OptimizedParams) {
   return buildWeightDiff({}, after);
 }
 
+function fmtMetric(value: number | null) {
+  return value == null ? "—" : value.toFixed(4);
+}
+
+/**
+ * Settled live-prediction coverage, read-only. The candidate table above
+ * reports *historical* holdout metrics; a strong backtest says nothing about
+ * whether enough live predictions have settled for online calibration. The
+ * backend keeps that threshold per sport/competition/engine, so this renders
+ * the backend's own grouping rather than re-deriving a global number.
+ */
+function LiveEvidencePanel({
+  report,
+  error,
+}: {
+  report: LiveEvidenceReport | undefined;
+  error: unknown;
+}) {
+  if (error) {
+    return (
+      <div
+        data-testid="live-evidence-unavailable"
+        className="rounded border border-border bg-card p-4 text-sm text-muted-foreground"
+      >
+        在线证据不可用：{error instanceof Error ? error.message : "接口加载失败"}
+        。未取得证据时不代表学习条件已满足。
+      </div>
+    );
+  }
+  if (!report) return null;
+
+  const ready = report.learning_ready;
+  return (
+    <div data-testid="live-evidence" className="space-y-3 rounded border p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="font-semibold">在线证据（已结算实盘预测）</h3>
+        <span
+          data-testid="live-evidence-readiness"
+          className={`rounded px-2 py-0.5 text-xs font-medium ${
+            ready ? "bg-pos/10 text-pos" : "bg-warn/10 text-warn"
+          }`}
+        >
+          {ready ? "可评估" : "样本不足"}
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        上方候选指标来自历史回测；这里统计线上已结算的预测。校准阈值按
+        运动 / 赛事 / 引擎分组计算，阈值 {report.threshold}，达标分组{" "}
+        {report.ready_group_count}/{report.group_count}，已结算{" "}
+        {report.total_settled}/{report.total_predictions}。只读视图，不会开启学习或改动参数。
+      </p>
+
+      {report.groups.length === 0 ? (
+        <div data-testid="live-evidence-empty" className="text-sm text-muted-foreground">
+          暂无实盘预测记录。
+        </div>
+      ) : (
+        <ScrollableTable aria-label="在线证据分组列表">
+          <table className="w-full min-w-[44rem] border-collapse border text-sm">
+            <thead>
+              <tr className="bg-muted">
+                <th scope="col" className="border p-2 text-left">分组</th>
+                <th scope="col" className="border p-2 text-left">引擎</th>
+                <th scope="col" className="border p-2 text-left">已结算/预测</th>
+                <th scope="col" className="border p-2 text-left">还需</th>
+                <th scope="col" className="border p-2 text-left">准确率</th>
+                <th scope="col" className="border p-2 text-left">Brier</th>
+                <th scope="col" className="border p-2 text-left">状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {report.groups.map((g) => (
+                <tr key={`${g.sport}-${g.competition}-${g.engine}`}>
+                  <td className="border p-2">
+                    {g.sport} / {g.competition}
+                  </td>
+                  <td className="border p-2">{g.engine}</td>
+                  <td className="border p-2 font-mono tabular-nums">
+                    {g.settled_count}/{g.prediction_count}
+                  </td>
+                  <td className="border p-2 font-mono tabular-nums">
+                    {g.remaining_samples}
+                  </td>
+                  <td className="border p-2 font-mono tabular-nums">
+                    {fmtMetric(g.accuracy)}
+                  </td>
+                  <td className="border p-2 font-mono tabular-nums">
+                    {fmtMetric(g.avg_brier_score)}
+                  </td>
+                  <td className="border p-2">
+                    {g.readiness === "ready" ? "可评估" : "样本不足"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </ScrollableTable>
+      )}
+    </div>
+  );
+}
+
 export function OptimizationDashboard() {
   const { data: params, error, isLoading } = useOptimizationParams();
+  const { data: liveEvidence, error: liveEvidenceError } = useLiveEvidence();
 
   const [runSport, setRunSport] = useState("nba");
   const [ingestSport, setIngestSport] = useState("nba");
@@ -398,6 +503,8 @@ export function OptimizationDashboard() {
           testId="candidates-backtest-results"
         />
       )}
+
+      <LiveEvidencePanel report={liveEvidence} error={liveEvidenceError} />
 
       {!params || params.length === 0 ? (
         <div data-testid="empty">暂无优化参数</div>

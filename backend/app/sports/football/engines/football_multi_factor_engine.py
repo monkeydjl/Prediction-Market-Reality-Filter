@@ -6,16 +6,16 @@ market value. Missing factors have their weight redistributed across
 available ones (same pattern as BasketballEngine / BaseballEngine).
 
 Default weights (sum 1.0):
-    elo            0.24  — BTD three-way from Elo ratings
-    odds           0.36  — market-implied 1x2 (overround removed)
-    form           0.10  — recent form differential
+    elo            0.22  — BTD three-way from Elo ratings
+    odds           0.34  — market-implied 1x2 (overround removed)
+    form           0.09  — recent form differential
     rest           0.05  — rest-days differential
     injury         0.05  — injury impact differential
     h2h            0.05  — head-to-head historical rates
-    travel         0.04  — distance / timezone soft home edge
-    xg             0.07  — attack-rate / xG proxy soft share
+    travel         0.03  — distance / timezone soft home edge
+    xg             0.06  — attack-rate / xG proxy soft share
     market_value   0.04  — squad valuation differential
-    possession     0.04  — possession / shots soft share
+    possession     0.03  — possession / shots soft share
     referee        0.02  — referee home-bias soft (custom-gated)
     altitude       0.02  — high-altitude venue soft home edge
 

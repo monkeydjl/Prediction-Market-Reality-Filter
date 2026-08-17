@@ -115,7 +115,35 @@ def test_list_params_returns_array(client, monkeypatch):
     assert isinstance(data, list)
 
 
-def test_apply_params_requires_write_key(client, monkeypatch):
+
+
+def test_live_evidence_returns_503_when_disabled(client):
+    resp = client.get("/api/sport-optimization/live-evidence")
+    assert resp.status_code == 503
+
+
+def test_live_evidence_is_read_only_and_needs_no_write_key(client, monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "PHASE9_ACCURACY_SPRINT_ENABLED", True)
+    expected = {
+        "threshold": 10,
+        "total_predictions": 0,
+        "total_settled": 0,
+        "group_count": 0,
+        "ready_group_count": 0,
+        "learning_ready": False,
+        "groups": [],
+    }
+    monkeypatch.setattr(
+        "app.services.phase9_live_evidence_service.build_live_evidence_report",
+        lambda: expected,
+    )
+    resp = client.get("/api/sport-optimization/live-evidence")
+    assert resp.status_code == 200
+    assert resp.json() == expected
+
+
+
     from app.core.config import settings
     monkeypatch.setattr(settings, "PHASE9_ACCURACY_SPRINT_ENABLED", True)
 

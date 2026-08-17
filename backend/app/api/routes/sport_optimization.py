@@ -162,6 +162,20 @@ async def run_optimization(
     return {"task_id": task.task_id, "status": "pending", "sports": sports, "n_trials": n_trials}
 
 
+@router.get("/live-evidence")
+async def get_live_evidence() -> dict[str, Any]:
+    """Report settled live-prediction evidence without mutating kernel state.
+
+    Read-only, so no write key: it only reads kernel_predictions joined to
+    kernel_match_outcomes. Historical holdout results (eval_applied_params.py)
+    say nothing about online readiness — that is what this reports.
+    """
+    _check_enabled()
+    from app.services import phase9_live_evidence_service
+
+    return phase9_live_evidence_service.build_live_evidence_report()
+
+
 @router.get("/status/{task_id}")
 async def get_optimization_status(task_id: str) -> dict[str, Any]:
     """Query optimization task status."""

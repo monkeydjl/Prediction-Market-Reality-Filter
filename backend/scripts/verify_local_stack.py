@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -48,6 +49,8 @@ CHECKS: list[tuple[str, str, str | None]] = [
     # Event loop (EIP) — should work without sports flags
     ("/api/events/decisions/open?limit=5", "GET", None),
     ("/api/events/calibration", "GET", None),
+    ("/api/events/loop/status", "GET", None),
+    ("/api/events/discover/status", "GET", None),
     # Quality / drift (always readable; alert *dispatch* is flag-gated)
     ("/api/quality-metrics/summary", "GET", None),
     ("/api/quality-metrics/drift", "GET", None),
@@ -74,6 +77,22 @@ def fetch(base: str, path: str, method: str = "GET") -> tuple[int, Any]:
         return e.code, detail
     except Exception as e:
         return 0, str(e)
+
+
+def write_auth_summary() -> str:
+    """Return the write-auth posture without exposing any secret values."""
+    api_write_key_configured = bool(os.getenv("API_WRITE_KEY", "").strip())
+    open_writes = os.getenv("ALLOW_OPEN_WRITES", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    return (
+        "Write auth: "
+        f"API_WRITE_KEY configured={api_write_key_configured}; "
+        f"ALLOW_OPEN_WRITES={open_writes}"
+    )
 
 
 def main() -> int:
@@ -130,6 +149,7 @@ def main() -> int:
         print(f"{path:<48} {status:<8} {note}")
 
     print()
+    print(write_auth_summary())
     if not health_ok:
         print(
             "FAIL: /api/health not reachable. Start backend first, e.g.\n"
@@ -148,6 +168,17 @@ def main() -> int:
         "(dev UI uses ws://localhost:8000)\n"
         "  - Phase 9: PHASE9_ACCURACY_SPRINT_ENABLED + "
         "scripts/run_phase9_optimize.py after ingest\n",
+    )
+    print(
+        "Closed-loop acceptance (manual — this script only reads):\n"
+        "  1. /api/health is ok, or the degraded reason is understood\n"
+        "  2. one discover round completed (scheduled or manual) and "
+        "event_store gained records\n"
+        "  3. a freeze_prediction exists and a later resolve scored it\n"
+        "  4. Kernel path: a prediction POST succeeded for a known match_id\n"
+        "  5. optional: one full market link -> edge -> settlement sample\n"
+        "  If acceptance fails, fix data sources / flags / auth / scheduling "
+        "before tuning engines.\n",
     )
     print("DONE (health ok). Review 503 rows above and enable flags as needed.")
     return 0

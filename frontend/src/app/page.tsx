@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { RefreshCw, Search, Trash2, CheckCircle } from "lucide-react";
+import { RefreshCw, Search, Trash2, CheckCircle, Languages } from "lucide-react";
 import { SummaryBar, summarize } from "@/components/dashboard/summary-bar";
 import { MoversBoard } from "@/components/dashboard/movers-board";
 import { EventTable } from "@/components/dashboard/event-table";
@@ -150,8 +150,10 @@ export default function DashboardPage() {
   const [discoverLimit, setDiscoverLimit] = useState(2);
   const [discoverUseCache, setDiscoverUseCache] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [translationMessage, setTranslationMessage] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [resetting, setResetting] = useState(false);
+  const [translating, setTranslating] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [discoveryStatus, setDiscoveryStatus] = useState<DiscoveryStatus | null>(null);
   const mountedRef = useRef(true);
@@ -303,6 +305,31 @@ export default function DashboardPage() {
     }
   }, [load]);
 
+  // Fill in missing Chinese titles. Deliberately never passes force=true: a
+  // forced run re-invokes the LLM for every event and overwrites titles that
+  // are already good, which is destructive and not undoable from the UI.
+  const translateMissingTitles = useCallback(async () => {
+    setTranslating(true);
+    setError(null);
+    setTranslationMessage(null);
+    try {
+      const result = await eventsApi.translateAll(false);
+      if (!mountedRef.current) return;
+      clearDashboardCache();
+      setTranslationMessage(
+        result.translated > 0
+          ? `已翻译 ${result.translated} 个事件标题（共检查 ${result.total} 个）`
+          : `无需翻译：${result.total} 个事件标题均已就绪`,
+      );
+      await load({ silent: true });
+    } catch (e) {
+      if (!mountedRef.current) return;
+      setError(e instanceof Error ? e.message : "翻译失败");
+    } finally {
+      if (mountedRef.current) setTranslating(false);
+    }
+  }, [load]);
+
   // Load the current server-backed page. Changing `page` triggers a new offset.
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
@@ -432,7 +459,7 @@ export default function DashboardPage() {
                 <select
                   value={discoverLimit}
                   onChange={(e) => setDiscoverLimit(Number(e.target.value))}
-                  disabled={discovering}
+                  disabled={discovering || translating || resetting}
                   className="bg-transparent font-mono text-foreground outline-none disabled:opacity-50"
                 >
                   {DISCOVER_LIMIT_OPTIONS.map((n) => (
@@ -445,7 +472,7 @@ export default function DashboardPage() {
                   type="checkbox"
                   checked={discoverUseCache}
                   onChange={(e) => setDiscoverUseCache(e.target.checked)}
-                  disabled={discovering}
+                  disabled={discovering || translating || resetting}
                   className="size-3.5 accent-primary"
                 />
                 缓存
@@ -462,8 +489,18 @@ export default function DashboardPage() {
               </button>
               <button
                 type="button"
+                onClick={() => void translateMissingTitles()}
+                disabled={translating || discovering || resetting}
+                title="为缺少中文标题的事件补充翻译（写操作，可能耗时数分钟；不会覆盖已有翻译）"
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-secondary px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+              >
+                <Languages className={`size-3.5 ${translating ? "animate-pulse" : ""}`} aria-hidden="true" />
+                {translating ? "翻译中…" : "补全翻译"}
+              </button>
+              <button
+                type="button"
                 onClick={() => setShowResetConfirm(true)}
-                disabled={resetting || discovering}
+                disabled={resetting || discovering || translating}
                 title="清空所有事件数据（需二次确认）"
                 className="inline-flex h-9 items-center gap-2 rounded-md border border-neg/40 bg-neg/10 px-3 text-sm font-medium text-neg transition-colors hover:bg-neg/20 disabled:opacity-50"
               >
@@ -501,6 +538,12 @@ export default function DashboardPage() {
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {translationMessage && (
+          <div className="rounded-md border border-pos/40 bg-pos/10 px-4 py-3 text-sm text-pos">
+            {translationMessage}
           </div>
         )}
 

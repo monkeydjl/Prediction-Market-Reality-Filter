@@ -10,6 +10,7 @@ const apiMocks = vi.hoisted(() => ({
   batchSparklines: vi.fn(),
   categoryCounts: vi.fn(),
   resolveExpired: vi.fn(),
+  translateAll: vi.fn(),
   discoverStatus: vi.fn(),
   discover: vi.fn(),
   resetData: vi.fn(),
@@ -148,5 +149,53 @@ describe("DashboardPage cache", () => {
 
     await waitFor(() => expect(apiMocks.resolveExpired).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole("button", { name: "结算过期" })).not.toBeInTheDocument();
+  });
+
+  it("fills missing Chinese titles without forcing retranslation", async () => {
+    apiMocks.list.mockResolvedValue({ events: [], total: 0 });
+    apiMocks.movers.mockResolvedValue({ movers: [] });
+    apiMocks.translateAll.mockResolvedValue({
+      total: 8,
+      translated: 3,
+      message: "Translated 3 event titles",
+    });
+
+    render(<DashboardPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "补全翻译" }));
+
+    await waitFor(() => expect(apiMocks.translateAll).toHaveBeenCalledTimes(1));
+    expect(apiMocks.translateAll).toHaveBeenCalledWith(false);
+    expect(await screen.findByText(/已翻译 3 个事件标题/)).toBeInTheDocument();
+  });
+
+  it("reports that nothing needed translating when the backend translated none", async () => {
+    apiMocks.list.mockResolvedValue({ events: [], total: 0 });
+    apiMocks.movers.mockResolvedValue({ movers: [] });
+    apiMocks.translateAll.mockResolvedValue({
+      total: 5,
+      translated: 0,
+      message: "Translated 0 event titles",
+    });
+
+    render(<DashboardPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "补全翻译" }));
+
+    expect(await screen.findByText(/无需翻译/)).toBeInTheDocument();
+  });
+
+  it("surfaces a translation write failure instead of failing silently", async () => {
+    apiMocks.list.mockResolvedValue({ events: [], total: 0 });
+    apiMocks.movers.mockResolvedValue({ movers: [] });
+    apiMocks.translateAll.mockRejectedValue(
+      new Error("当前请求未获授权：请先在右上角「授权」中输入 backend/.env 里的 API_WRITE_KEY"),
+    );
+
+    render(<DashboardPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "补全翻译" }));
+
+    expect(await screen.findByText(/当前请求未获授权/)).toBeInTheDocument();
   });
 });

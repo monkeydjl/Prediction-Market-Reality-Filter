@@ -501,8 +501,20 @@ Prerequisite: historical fixtures+results loaded (see section above).
      | NHL | **0.624** | 0.590 | **+3.3pp** | 0.645 |
 
    - CLI: `python scripts/eval_applied_params.py`
-   - P1-A5 learning loop still **OFF**: only 8 kernel predictions / 1 outcome
-     (need ≥ `MIN_SAMPLES_FOR_CALIBRATION=10` joined samples per competition)
+   - Those deltas are **historical holdout only**. Online readiness is a
+     separate question — a large `kernel_match_results` count says nothing
+     about how many *live* predictions have settled.
+   - Live evidence (read-only, never flips a flag or fits calibration):
+     ```bash
+     python scripts/report_phase9_live_evidence.py
+     ```
+     Same data behind `GET /api/sport-optimization/live-evidence` (needs
+     `PHASE9_ACCURACY_SPRINT_ENABLED=true`; no write key, it only reads).
+     Groups by sport/competition/engine because calibration is group-scoped.
+   - P1-A5 learning loop still **OFF** (as-of 2026-08-17): 11 kernel predictions
+     across 10 groups, 1 settled (`football/world_cup` / `elo_odds`, 9 short).
+     Need ≥ `MIN_SAMPLES_FOR_CALIBRATION=10` joined samples **per group**, so
+     `learning_ready=false` until one group fills up.
 
 ### NBA (Phase 4 / balldontlie)
 

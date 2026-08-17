@@ -161,6 +161,39 @@ describe("eventsApi.list", () => {
   });
 });
 
+describe("eventsApi.translateAll", () => {
+  it("posts to /events/translate-all without forcing by default", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ total: 3, translated: 1, message: "ok" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const data = await eventsApi.translateAll();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/events/translate-all?force=false");
+    expect(init?.method).toBe("POST");
+    expect(data.translated).toBe(1);
+  });
+
+  it("passes force=true through when explicitly requested", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ total: 3, translated: 3, message: "ok" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await eventsApi.translateAll(true);
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain("force=true");
+  });
+});
+
 describe("eventsApi caching", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn());

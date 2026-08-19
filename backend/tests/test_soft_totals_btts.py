@@ -1,6 +1,8 @@
 """P1-O1 soft totals/BTTS + P1-M4 platoon smoke."""
 from datetime import datetime, timezone
 
+import pytest
+
 from app.kernel.engines.elo_odds_engine import soft_totals_btts_analysis
 from app.kernel.domain import *
 from app.sports.football.engines.football_multi_factor_engine import FootballMultiFactorEngine
@@ -87,6 +89,12 @@ def test_basketball_soft_totals():
     assert soft and soft["available"]
     assert soft.get("sport") == "basketball"
     assert "p_btts_yes" not in soft
+    # The O/U used to collapse to 0.0/1.0 at basketball scale because the total
+    # was summed over a fixed 0..10-per-side score grid. Both sides of a
+    # ~220-point line must stay live. See tests/test_soft_totals_distribution.py.
+    assert 0.05 < soft["p_over"] < 0.95
+    assert 0.05 < soft["p_under"] < 0.95
+    assert soft["p_over"] + soft["p_under"] == pytest.approx(1.0, abs=1e-9)
 
 
 def test_guardrails_demote_stale():

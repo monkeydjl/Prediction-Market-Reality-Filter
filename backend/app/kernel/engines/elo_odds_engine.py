@@ -116,6 +116,29 @@ def _probabilities_to_scores(
 
 
 
+def _poisson_total_pmf(lam: float) -> list[float]:
+    """Normalized pmf of a Poisson match total over ``0..k_max``.
+
+    The sum of two independent Poisson score counts is itself Poisson, so the
+    over/under needs only this one-dimensional distribution — not a score grid.
+    The bound is scaled to the mean rather than fixed, so a basketball total
+    near 220 keeps the same tail accuracy as a football total near 3; a fixed
+    bound drops essentially all of the mass at basketball scale. Log space
+    keeps ``lam ** k / k!`` from overflowing at that scale.
+    """
+    import math
+
+    k_max = int(math.ceil(lam + 10.0 * math.sqrt(lam))) + 10
+    pmf = [
+        math.exp(-lam + k * math.log(lam) - math.lgamma(k + 1))
+        for k in range(k_max + 1)
+    ]
+    mass = math.fsum(pmf)
+    # Ten standard deviations leaves negligible tail, but normalizing makes
+    # p_over + p_under == 1 exact rather than approximate.
+    return [p / mass for p in pmf] if mass > 0.0 else pmf
+
+
 def soft_totals_btts_analysis(
     scores: dict[str, float],
     *,
@@ -125,6 +148,9 @@ def soft_totals_btts_analysis(
 
     Not a full multi-market engine — exposes diagnostic probs for FE/API until
     dedicated totals/BTTS markets and odds feeds land.
+
+    A total exactly on an integer line counts as under, matching the original
+    behavior; real push handling belongs with real market lines.
     """
     import math
 
@@ -134,35 +160,12 @@ def soft_totals_btts_analysis(
     except (TypeError, ValueError):
         return {"available": False}
 
-    # P(total > line) via discrete Poisson sum 0..10 each side
-    def pois_pmf(k: int, lam: float) -> float:
-        return math.exp(-lam) * lam ** k / math.factorial(k)
+    pmf = _poisson_total_pmf(lh + la)
+    p_over = math.fsum(p for total, p in enumerate(pmf) if total > line)
 
-    max_g = 10
-    p_over = 0.0
-    p_btts = 0.0
-    p_home0 = 0.0
-    p_away0 = 0.0
-    for h in range(0, max_g + 1):
-        ph = pois_pmf(h, lh)
-        if h == 0:
-            p_home0 = ph
-        for a in range(0, max_g + 1):
-            pa = pois_pmf(a, la)
-            if a == 0 and h == 0:
-                p_away0 = pa  # will fix below
-            joint = ph * pa
-            if h + a > line:
-                p_over += joint
-            if h >= 1 and a >= 1:
-                p_btts += joint
-    # recompute zero goals properly
-    p_home0 = pois_pmf(0, lh)
-    p_away0 = pois_pmf(0, la)
-    p_btts = 1.0 - p_home0 - p_away0 + p_home0 * p_away0  # inclusion
+    # Both sides score: closed form, no grid needed.
+    p_btts = 1.0 - math.exp(-lh) - math.exp(-la) + math.exp(-(lh + la))
 
-    # normalize residual mass from truncation
-    # (sums are slightly < 1 due to max_g cutoff — fine for soft)
     p_over = max(0.0, min(1.0, p_over))
     p_under = max(0.0, min(1.0, 1.0 - p_over))
     p_btts = max(0.0, min(1.0, p_btts))
@@ -186,7 +189,6 @@ def soft_totals_from_scores(
     *,
     line: float,
     sport: str = "generic",
-    max_g: int = 30,
 ) -> dict:
     """Independent Poisson O/U (and BTTS only for football-like low totals)."""
     base = soft_totals_btts_analysis(scores, line=line)

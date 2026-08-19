@@ -209,7 +209,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 
 | ID | 项 | 说明 |
 |----|-----|------|
-| P1-O1 | 多玩法 | ✅ 部分 2026-07-20：足球/NBA/NHL/MLB 软 totals（独立泊松）+ FE；真盘口/亚盘仍待 |
+| P1-O1 | 多玩法 | ✅ 部分 2026-08-19：足球/NBA/NHL/MLB 软 totals（独立泊松）+ FE；修复截断缺陷——原实现在固定 `0..10` 每方比分网格上求和，NBA 尺度（每方约 110 分）几乎没有概率质量落在网格内，导致每场篮球赛 `p_over=0.0`／`p_under=1.0` 直接展示给用户；改为「两个独立泊松之和仍是泊松」的一维总分分布（`math.lgamma` 对数空间、按均值缩放的 `lam + 10*sqrt(lam)` 上界，尾部精度不随总分增大而退化），棒球 0.4674→0.4769、冰球 0.4707→0.4711、足球四位小数不变；删除声明却从未传递的 `max_g` 参数；新增 `tests/test_soft_totals_distribution.py`（含与显式二维卷积的交叉验证）并收紧原本空洞的 `test_basketball_soft_totals`，两者对旧实现均失败；输出键、取整、盘口语义、引擎公式与权重均未改动；整数盘口上恰好命中总分仍计为小（220 线约 2.7% 质量），真盘口/亚盘仍待 |
 | P1-O2 | 多庄家离散度 | ✅ 部分 2026-07-20：`odds_dispersion_from_books` + TraditionalOddsStore 注入 + confidence damp |
 | P1-O3 | 赔率时效 | ✅ 部分 2026-07-20：Edge `stale` + `review_priority`；list API/FE 表按优先级排序展示 |
 | P1-O4 | 传统赔率 vs 预测市场 | ✅ 部分 2026-07-20：图表 + 最新价差表（≥5pp 高亮）；全链路样例验收仍待 |

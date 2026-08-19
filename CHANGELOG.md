@@ -1,5 +1,14 @@
 # Changelog
 
+### Fix: soft over/under was wrong at basketball scale (P1-O1)
+
+- `soft_totals_btts_analysis` summed the match total over a fixed `0..10`-per-side score grid. At NBA scale (~110 points per side) essentially none of the probability mass falls inside that grid, so **`p_over` returned `0.0` and `p_under` returned `1.0` on every basketball match** — rendered directly to users by the soft-totals panel as `大 220 → 0.0% / 小 220 → 100.0%`. Hockey and baseball were also truncated, less visibly.
+- The sum of two independent Poisson score counts is itself Poisson, so the over/under needs only a one-dimensional distribution over the total, not a two-dimensional score grid. The new `_poisson_total_pmf` builds that distribution in log space (`math.lgamma`) with a bound scaled to the mean (`lam + 10*sqrt(lam)`), so tail accuracy is constant across sports instead of degrading as the total grows. BTTS keeps its existing closed form.
+- Measured effect: basketball at a 220 line goes from `0.0 / 1.0` to `0.4821 / 0.5179`; baseball moves `0.4674 → 0.4769`; hockey `0.4707 → 0.4711`; football is unchanged to four decimals, since the old grid was already wide enough there. All output keys, rounding, line semantics, engine formulas, and weights are untouched.
+- Removed the `max_g` parameter from `soft_totals_from_scores`: it was declared with a default of `30` but never forwarded, so no caller could ever widen the grid.
+- Regression coverage in `tests/test_soft_totals_distribution.py` pins the distribution properties — including a cross-check against an explicit two-dimensional convolution — and the previously vacuous `test_basketball_soft_totals` now asserts the probabilities instead of only the envelope. Both fail against the old implementation.
+- Known limitation, unchanged and left to the real-market-line work: an exact total on an integer line still counts as under, which at a 220 line is ≈2.7% of the mass. Real push handling belongs with real market lines and an Asian-handicap feed, so `真盘口/亚盘` stays open on P1-O1.
+
 ### MLB measured park-factor provider (P1-M2)
 
 - `mlb_live_park_service`: opt-in configured park snapshots that replace the static 30-team `park_factor` table, with bearer authentication, `http`/`https`-only endpoints, season-year query resolution, bounded responses, strict validation, duplicate-team rejection, per-URL caching of valid snapshots only, and no-request behavior when disabled or unconfigured.

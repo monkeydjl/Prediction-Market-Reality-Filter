@@ -193,7 +193,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 | ID | 项 |
 |----|-----|
 | P1-M1 | ✅ 2026-07-24：probable SP（v1.1 feed / schedule hydrate）ERA/WHIP + relief-only IP 加权 `bullpen_era_*` + team ERA；league-avg 回退 |
-| P1-M2 | ✅ 2026-07-24：30 队静态 runs `park_factor`（+ Athletics 别名）+ BaseballEngine `park` soft；HR/L-R/动态源仍待 |
+| P1-M2 | ✅ 部分 2026-08-19：30 队静态 runs `park_factor`（+ Athletics 别名）+ BaseballEngine `park` soft；新增可选 `mlb_live_park_service` 实测球场系数源（默认关闭），必须提供主/客场次与双方合计得分，`(home_runs/home_games)/(road_runs/road_games)` 本地计算 → 只带预计算 factor 的响应一律拒绝；`[0.70,1.40]` 越界整快照拒绝；结构损坏拒整快照、场次不足（`MLB_LIVE_PARK_MIN_GAMES`，主客双向）仅弃该球场；球场为单一场馆属性故无需 same-source 配对；`custom.park_source` 记录来源；契约见 `docs/dev/mlb-live-park-provider-contract.md`。HR park factor 仍待（需新引擎因子/权重）、L-R 打者左右分野仍待（缺打线打者手别，适配器只有 SP `pitchHand`） |
 | P1-M3 | ✅ 2026-07-24：v1.1 feed weather（F→C + wind mph）→ custom/env；Open roof 才注入引擎 soft；dome 降级 |
 | P1-M4 | ✅ 2026-07-24：team hitting splits vs LHP/RHP（`vl,vr` OPS）+ SP `pitchHand` → `platoon_ops_*` / `platoon_advantage_home`；引擎 soft 已接线 |
 

@@ -1327,6 +1327,25 @@ class Settings:
         os.getenv("NHL_LIVE_XG_MIN_TOI_MINUTES", "500.0")
     )
 
+    # Optional measured MLB park-factor source (P1-M2). Disabled by default:
+    # with it off no request is made and the code-local 30-team static park
+    # table remains the only signal. The provider must publish home/road game
+    # counts and the combined runs scored in those games; the factor is
+    # computed here from those counts, so a pre-computed factor with no game
+    # sample is rejected rather than trusted. MIN_GAMES drops a sample too
+    # noisy to displace the static level. Requires the envelope documented in
+    # docs/dev/mlb-live-park-provider-contract.md.
+    MLB_LIVE_PARK_ENABLED: bool = _env_bool("MLB_LIVE_PARK_ENABLED", "false")
+    MLB_LIVE_PARK_URL: str = os.getenv("MLB_LIVE_PARK_URL", "")
+    MLB_LIVE_PARK_API_KEY: str = os.getenv("MLB_LIVE_PARK_API_KEY", "")
+    MLB_LIVE_PARK_SEASON_PARAM: str = os.getenv("MLB_LIVE_PARK_SEASON_PARAM", "season")
+    MLB_LIVE_PARK_TIMEOUT_S: float = float(os.getenv("MLB_LIVE_PARK_TIMEOUT_S", "5.0"))
+    MLB_LIVE_PARK_CACHE_TTL_HOURS: float = float(
+        os.getenv("MLB_LIVE_PARK_CACHE_TTL_HOURS", "12.0")
+    )
+    MLB_LIVE_PARK_MAX_BYTES: int = int(os.getenv("MLB_LIVE_PARK_MAX_BYTES", "262144"))
+    MLB_LIVE_PARK_MIN_GAMES: float = float(os.getenv("MLB_LIVE_PARK_MIN_GAMES", "81.0"))
+
     # LoL esports (ADR-004/005) — default OFF; no production API until
     # docs/dev/lol/GATES.md P2/P3/P6. Vendor env names are frozen (D4);
     # setting grid/pandascore does NOT enable HTTP without a client + legal.

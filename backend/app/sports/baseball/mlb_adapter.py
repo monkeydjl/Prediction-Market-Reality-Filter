@@ -723,6 +723,22 @@ class MLBAdapter:
                 "platoon_advantage_home": platoon_adv,
             },
         }
+        # Measured park factor (P1-M2) — a factor computed from actual home/road
+        # run rates outranks the frozen static table. Only the home park matters,
+        # so there is no home-vs-away pairing to protect here.
+        park_source = "static_table"
+        try:
+            from app.services.mlb_live_park_service import get_live_park_factor
+
+            live_park = get_live_park_factor(season, home_name)
+            measured = live_park.park if live_park.available else None
+        except Exception:  # noqa: BLE001 — keep the static park table usable
+            logger.debug("MLB live park enrich unavailable", exc_info=True)
+            measured = None
+        if measured and measured.get("park_factor") is not None:
+            raw["custom"]["park_factor"] = float(measured["park_factor"])
+            park_source = "live_provider"
+        raw["custom"]["park_source"] = park_source
         try:
             from app.sports._shared.team_geo import travel_between_teams
 

@@ -1,5 +1,14 @@
 # Changelog
 
+### MLB measured park-factor provider (P1-M2)
+
+- `mlb_live_park_service`: opt-in configured park snapshots that replace the static 30-team `park_factor` table, with bearer authentication, `http`/`https`-only endpoints, season-year query resolution, bounded responses, strict validation, duplicate-team rejection, per-URL caching of valid snapshots only, and no-request behavior when disabled or unconfigured.
+- The provider must publish **home and road game counts with the combined runs scored in those games**; the factor is computed as `(home_runs / home_games) / (road_runs / road_games)` rather than read from the payload, so a pre-computed factor with no game sample is rejected instead of trusted. Dividing each side by its own game count also means unequal home/road windows do not skew the result. A computed factor outside `[0.70, 1.40]` rejects the whole snapshot as a unit mismatch.
+- Sample size and malformed data are handled differently on purpose: a structurally broken row rejects the whole snapshot, while a well-formed row with either game count below `MLB_LIVE_PARK_MIN_GAMES` drops only that park so the static table covers it. The road count is checked too because it is the baseline the home rate divides by.
+- There is deliberately **no pair rule** here, unlike the team-strength providers: a park factor is a property of one venue both teams play in, so only the home team is looked up and no home-vs-away comparison can be distorted by a mixed source. Provenance is recorded as `custom.park_source` (`live_provider` / `static_table`). The `BaseballEngine` `park` formula and weight are unchanged.
+- HR park factors and batter-handedness park splits remain open: the first needs a new engine factor and weight, and the second needs lineup batter handedness the adapter does not have — only the probable starter's `pitchHand`.
+- Production activation requires a licensed provider returning the documented contract; see `docs/dev/mlb-live-park-provider-contract.md`.
+
 ### NHL true 5v5 shot-quality provider (P1-H1)
 
 - `nhl_live_xg_service`: opt-in configured 5v5 snapshots that replace the club-stats shot proxies, with bearer authentication, `http`/`https`-only endpoints, season-year query resolution, bounded responses, strict validation, duplicate-team rejection, per-URL caching of valid snapshots only, and no-request behavior when disabled or unconfigured.

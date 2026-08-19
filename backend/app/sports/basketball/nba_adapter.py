@@ -361,13 +361,35 @@ class NBAAdapter:
         try:
             from app.sports.basketball.nba_team_ratings import ratings_for_team
 
-            home_r = ratings_for_team(home_name)
-            away_r = ratings_for_team(away_name)
+            live_ratings: dict[str, dict[str, float] | None] = {}
+            try:
+                from app.services.nba_live_ratings_service import get_live_team_ratings
+
+                for side, name in (("home", home_name), ("away", away_name)):
+                    rating = get_live_team_ratings(match.season.season_key, name)
+                    live_ratings[side] = rating.ratings if rating.available else None
+            except Exception:  # noqa: BLE001 — keep the static table usable
+                logger.debug("NBA live ratings enrich unavailable", exc_info=True)
+                live_ratings = {}
+
+            # Both sides must come from one source. The engine consumes the
+            # ORtg-DRtg differential, so pairing a live season level against a
+            # static multi-year level would manufacture a spurious edge.
+            if live_ratings.get("home") and live_ratings.get("away"):
+                home_r = live_ratings["home"]
+                away_r = live_ratings["away"]
+                ratings_source = "live_provider"
+            else:
+                home_r = ratings_for_team(home_name)
+                away_r = ratings_for_team(away_name)
+                ratings_source = "static_table"
             if home_r is not None and away_r is not None:
                 raw["custom"]["ortg_home"] = float(home_r["ortg"])
                 raw["custom"]["drtg_home"] = float(home_r["drtg"])
                 raw["custom"]["ortg_away"] = float(away_r["ortg"])
                 raw["custom"]["drtg_away"] = float(away_r["drtg"])
+                # One key, not per side: a mixed-source pair is never written.
+                raw["custom"]["ratings_source"] = ratings_source
         except Exception:  # noqa: BLE001
             logger.debug("NBA team ratings enrich skipped", exc_info=True)
         return raw

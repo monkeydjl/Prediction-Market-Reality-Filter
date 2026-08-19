@@ -1280,6 +1280,31 @@ class Settings:
         os.getenv("NBA_LIVE_INJURIES_MAX_BYTES", "262144")
     )
 
+    # Optional dynamic-season NBA efficiency source (P1-B4). Disabled by default:
+    # with it off no request is made and the code-local static 30-team ORtg/DRtg
+    # table remains the only signal. The provider must publish actual points,
+    # points allowed, and true possession counts; ORtg/DRtg are computed here from
+    # those counts, so a pre-computed rating with no possession sample is rejected
+    # rather than trusted. MIN_POSSESSIONS drops an early-season sample too small
+    # to be meaningful. Requires the envelope documented in
+    # docs/dev/nba-live-ratings-provider-contract.md.
+    NBA_LIVE_RATINGS_ENABLED: bool = _env_bool("NBA_LIVE_RATINGS_ENABLED", "false")
+    NBA_LIVE_RATINGS_URL: str = os.getenv("NBA_LIVE_RATINGS_URL", "")
+    NBA_LIVE_RATINGS_API_KEY: str = os.getenv("NBA_LIVE_RATINGS_API_KEY", "")
+    NBA_LIVE_RATINGS_SEASON_PARAM: str = os.getenv("NBA_LIVE_RATINGS_SEASON_PARAM", "season")
+    NBA_LIVE_RATINGS_TIMEOUT_S: float = float(
+        os.getenv("NBA_LIVE_RATINGS_TIMEOUT_S", "5.0")
+    )
+    NBA_LIVE_RATINGS_CACHE_TTL_HOURS: float = float(
+        os.getenv("NBA_LIVE_RATINGS_CACHE_TTL_HOURS", "6.0")
+    )
+    NBA_LIVE_RATINGS_MAX_BYTES: int = int(
+        os.getenv("NBA_LIVE_RATINGS_MAX_BYTES", "262144")
+    )
+    NBA_LIVE_RATINGS_MIN_POSSESSIONS: float = float(
+        os.getenv("NBA_LIVE_RATINGS_MIN_POSSESSIONS", "500.0")
+    )
+
     # LoL esports (ADR-004/005) — default OFF; no production API until
     # docs/dev/lol/GATES.md P2/P3/P6. Vendor env names are frozen (D4);
     # setting grid/pandascore does NOT enable HTTP without a client + legal.

@@ -185,7 +185,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 | P1-B1 | ✅ 部分 2026-07-24：静态 Out 名单 + 角色加权 `injury_impact_*`（adapter player/custom 双写 + FeatureBuilder 透传）。已交付 2026-08-19：`nba_live_injury_service` 可选实时名单源（默认关闭；bearer 认证、仅 http/https、限长响应、严格校验、重复队名整体拒绝、仅缓存有效快照、按 URL 分键）；仅 out/inactive/suspended 计为缺阵，questionable/probable/day-to-day 不计；角色权重与影响公式仍留在 `nba_injury.py`，未识别档位交回该模块的 bench 默认；adapter 优先采用已连通的实时源并记录 `custom.injury_source_{home,away}`（`live_provider`/`static_table`），禁用/传输失败/快照被拒/服务抛错/该队无数据均退回静态表，两者皆无则不写入任何键；契约见 `docs/dev/nba-live-injury-provider-contract.md`，生产启用仍待授权数据源 |
 | P1-B2 | ✅ 部分 2026-07-20：`b2b_home/away` + BasketballEngine rest 额外惩罚 |
 | P1-B3 | ✅ 部分 2026-07-20：`team_geo` + adapter 注入 `travel_km_away`/时区 + BasketballEngine `travel` |
-| P1-B4 | ✅ 部分 2026-07-24：30 队静态 ORtg/DRtg → `custom` + BasketballEngine `net_rating` soft；真 possessions / 赛季动态源仍待 |
+| P1-B4 | ✅ 部分 2026-07-24：30 队静态 ORtg/DRtg → `custom` + BasketballEngine `net_rating` soft。已交付 2026-08-19：`nba_live_ratings_service` 可选赛季动态效率源（默认关闭；bearer 认证、仅 http/https、赛季起始年份 query 解析、限长响应、严格校验、重复队名整体拒绝、仅缓存有效快照、按解析后 URL 分键）；供应商必须提供 points / points_allowed / **真 possessions**，ORtg/DRtg 由回合数在本地换算，仅带预先算好的评分而无回合样本的载荷直接拒绝；换算值超出 `[80,140]` 视为单位错误整体拒绝；结构性错误整体拒绝，但样本不足 `NBA_LIVE_RATINGS_MIN_POSSESSIONS`（默认 500 回合）只丢该队并退回静态表；两侧必须同源并记录 `custom.ratings_source`（引擎吃 ORtg−DRtg 差值，实时赛季水平与静态多年水平混用会凭空造出优势），单侧命中亦退回静态；`net_rating` 公式与权重未变；契约见 `docs/dev/nba-live-ratings-provider-contract.md`，生产启用仍待授权数据源 |
 | P1-B5 | ✅ 部分 2026-07-20：季后赛 `NBA_ELO_HFA_PLAYOFF` + 主场 0.55；回测验证最优 K/HFA 仍待 Phase9 |
 
 #### 棒球（MLB）

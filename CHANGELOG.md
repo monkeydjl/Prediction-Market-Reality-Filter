@@ -1,5 +1,13 @@
 # Changelog
 
+### NBA dynamic-season efficiency provider (P1-B4)
+
+- `nba_live_ratings_service`: opt-in configured season efficiency snapshots that replace the static 30-team ORtg/DRtg table, with bearer authentication, `http`/`https`-only endpoints, season-year query resolution, bounded responses, strict validation, duplicate-team rejection, per-URL caching of valid snapshots only, and no-request behavior when disabled or unconfigured.
+- The provider must publish points, points allowed, and **true possession counts**; ORtg/DRtg are computed from those counts rather than read from the payload, so a pre-computed rating with no possession sample is rejected instead of trusted. A computed value outside `[80, 140]` points per 100 rejects the whole snapshot as a unit mismatch.
+- Sample size and malformed data are handled differently on purpose: a structurally broken row rejects the whole snapshot, while a well-formed row below `NBA_LIVE_RATINGS_MIN_POSSESSIONS` drops only that team so the static table covers it.
+- Both sides always come from one source, recorded as `custom.ratings_source`. `BasketballEngine` consumes the ORtg−DRtg differential, so pairing a live season level against a static multi-year level would manufacture a spurious edge; one live side therefore falls back to static for both. The `net_rating` formula and weight are unchanged.
+- Production activation requires a licensed provider returning the documented contract; see `docs/dev/nba-live-ratings-provider-contract.md`.
+
 ### NBA live availability provider (P1-B1)
 
 - `nba_live_injury_service`: opt-in configured NBA availability snapshots with bearer authentication, `http`/`https`-only endpoints, bounded responses, strict team/absence validation, duplicate-team rejection, per-URL in-memory caching of valid snapshots only, and no-request behavior when disabled or unconfigured.

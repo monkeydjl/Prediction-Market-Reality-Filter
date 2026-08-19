@@ -581,6 +581,50 @@ class NHLAdapter:
                 "b2b_away": rest_away is not None and float(rest_away) <= 1.0,
             },
         }
+        # True 5v5 shot quality (P1-H1) — measured xG/corsi ahead of the
+        # club-stats proxies. Each metric pair must come from one source: the
+        # engine consumes a home-vs-away share, so pairing a measured 5v5 rate
+        # against a shots-on-goal proxy would manufacture a spurious edge.
+        skating_source = (
+            "club_stats_proxy"
+            if home_side.get("rates") and away_side.get("rates")
+            else "soft_form"
+        )
+        try:
+            from app.services.nhl_live_xg_service import get_live_5v5_metrics
+
+            season_key = match.season.season_key
+            live_home = get_live_5v5_metrics(season_key, home_name)
+            live_away = get_live_5v5_metrics(season_key, away_name)
+            metrics_home = live_home.metrics if live_home.available else None
+            metrics_away = live_away.metrics if live_away.available else None
+        except Exception:  # noqa: BLE001 — keep the club-stats proxies usable
+            logger.debug("NHL live 5v5 enrich unavailable", exc_info=True)
+            metrics_home = metrics_away = None
+        if metrics_home and metrics_away:
+            live_corsi = (
+                metrics_home.get("corsi_pct") is not None
+                and metrics_away.get("corsi_pct") is not None
+            )
+            live_xg = (
+                metrics_home.get("xgf_per_60") is not None
+                and metrics_away.get("xgf_per_60") is not None
+            )
+            if live_corsi:
+                raw["custom"]["corsi_pct_home"] = float(metrics_home["corsi_pct"])
+                raw["custom"]["corsi_pct_away"] = float(metrics_away["corsi_pct"])
+            if live_xg:
+                raw["custom"]["xg_for_home"] = float(metrics_home["xgf_per_60"])
+                raw["custom"]["xg_for_away"] = float(metrics_away["xgf_per_60"])
+                if not live_corsi:
+                    # HockeyEngine prefers corsi over xG, so the shots-on-goal
+                    # proxy would shadow the measured xG. Drop it rather than let
+                    # a proxy outrank real data.
+                    raw["custom"]["corsi_pct_home"] = None
+                    raw["custom"]["corsi_pct_away"] = None
+            if live_corsi or live_xg:
+                skating_source = "live_provider"
+        raw["custom"]["skating_source"] = skating_source
         try:
             from app.sports._shared.team_geo import travel_between_teams
 

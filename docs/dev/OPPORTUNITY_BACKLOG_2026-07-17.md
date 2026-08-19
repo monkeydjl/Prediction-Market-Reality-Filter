@@ -201,7 +201,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 
 | ID | 项 |
 |----|-----|
-| P1-H1 | ✅ 部分 2026-07-24：club-stats 汇总 GF/GA/SF/SA + shot_share→`corsi_pct_*`；soft xG=0.09×SF；真 5v5 xG/corsi 源仍待 |
+| P1-H1 | ✅ 已交付 2026-08-19：club-stats 汇总 GF/GA/SF/SA + shot_share→`corsi_pct_*`（soft xG=0.09×SF）作为回退；新增默认关闭的 `nhl_live_xg_service` 真实 5v5 数据源，要求 5v5 出场时间 + 真 xGF 与/或真 corsi 事件计数，xGF/60 与 CF% 本地计算（仅带预先算好的比率一律拒绝），`[1.0,4.5]` / `[0.30,0.70]` 单位与合理性区间越界即整份拒绝，结构性错误拒整份、样本不足仅弃该队；每个指标必须双方同源，measured-xG-only 时清空 corsi 代理以免代理压过真实数据，`custom.skating_source` 记录来源；HockeyEngine `attack_share` 公式与权重不变；契约见 `docs/dev/nhl-live-5v5-provider-contract.md` |
 | P1-H2 | ✅ 部分 2026-07-20：NHL `b2b_*` + HockeyEngine rest 额外惩罚 |
 | P1-H3 | ✅ 部分 2026-07-20：`team_geo` NHL 城市 + HockeyEngine `travel`（含跨加跨区） |
 

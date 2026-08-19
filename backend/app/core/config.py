@@ -1305,6 +1305,28 @@ class Settings:
         os.getenv("NBA_LIVE_RATINGS_MIN_POSSESSIONS", "500.0")
     )
 
+    # Optional true 5v5 NHL shot-quality source (P1-H1). Disabled by default:
+    # with it off no request is made and the club-stats proxies (shots-on-goal
+    # scaled as soft xG, shots-on-goal share as corsi) remain the only signal.
+    # The provider must publish 5v5 time on ice plus actual expected goals and/or
+    # actual corsi event counts; xGF/60 and CF% are computed here from those
+    # inputs, so a pre-computed rate with no sample is rejected rather than
+    # trusted. MIN_TOI_MINUTES drops an early-season sample too small to be
+    # meaningful. Requires the envelope documented in
+    # docs/dev/nhl-live-5v5-provider-contract.md.
+    NHL_LIVE_XG_ENABLED: bool = _env_bool("NHL_LIVE_XG_ENABLED", "false")
+    NHL_LIVE_XG_URL: str = os.getenv("NHL_LIVE_XG_URL", "")
+    NHL_LIVE_XG_API_KEY: str = os.getenv("NHL_LIVE_XG_API_KEY", "")
+    NHL_LIVE_XG_SEASON_PARAM: str = os.getenv("NHL_LIVE_XG_SEASON_PARAM", "season")
+    NHL_LIVE_XG_TIMEOUT_S: float = float(os.getenv("NHL_LIVE_XG_TIMEOUT_S", "5.0"))
+    NHL_LIVE_XG_CACHE_TTL_HOURS: float = float(
+        os.getenv("NHL_LIVE_XG_CACHE_TTL_HOURS", "6.0")
+    )
+    NHL_LIVE_XG_MAX_BYTES: int = int(os.getenv("NHL_LIVE_XG_MAX_BYTES", "262144"))
+    NHL_LIVE_XG_MIN_TOI_MINUTES: float = float(
+        os.getenv("NHL_LIVE_XG_MIN_TOI_MINUTES", "500.0")
+    )
+
     # LoL esports (ADR-004/005) — default OFF; no production API until
     # docs/dev/lol/GATES.md P2/P3/P6. Vendor env names are frozen (D4);
     # setting grid/pandascore does NOT enable HTTP without a client + legal.

@@ -1,5 +1,13 @@
 # Changelog
 
+### NHL true 5v5 shot-quality provider (P1-H1)
+
+- `nhl_live_xg_service`: opt-in configured 5v5 snapshots that replace the club-stats shot proxies, with bearer authentication, `http`/`https`-only endpoints, season-year query resolution, bounded responses, strict validation, duplicate-team rejection, per-URL caching of valid snapshots only, and no-request behavior when disabled or unconfigured.
+- The provider must publish 5v5 ice time plus **actual expected goals and/or actual corsi event counts**; xGF/60 and CF% are computed from those inputs rather than read from the payload, so a pre-computed rate with no sample is rejected instead of trusted. Each metric group is optional but must arrive complete — a half-supplied corsi pair or a row with no measurement rejects the snapshot. A computed `xgf_per_60` outside `[1.0, 4.5]` or corsi share outside `[0.30, 0.70]` rejects the whole snapshot.
+- Sample size and malformed data are handled differently on purpose: a structurally broken row rejects the whole snapshot, while a well-formed row below `NHL_LIVE_XG_MIN_TOI_MINUTES` drops only that team so the club-stats proxies cover it.
+- The pair rule applies per metric — a metric is written only when both sides carry it live, because `HockeyEngine` consumes a home-vs-away share and pairing a measured 5v5 rate against a shots-on-goal proxy would manufacture a spurious edge. Because the engine prefers corsi over expected goals, a measured-xG-only pair clears `corsi_pct_{home,away}` so the proxy cannot shadow real data; the `attack_share` formula, coefficients, and weight are unchanged. Provenance is recorded as `custom.skating_source` (`live_provider` / `club_stats_proxy` / `soft_form`).
+- Production activation requires a licensed provider returning the documented contract; see `docs/dev/nhl-live-5v5-provider-contract.md`.
+
 ### NBA dynamic-season efficiency provider (P1-B4)
 
 - `nba_live_ratings_service`: opt-in configured season efficiency snapshots that replace the static 30-team ORtg/DRtg table, with bearer authentication, `http`/`https`-only endpoints, season-year query resolution, bounded responses, strict validation, duplicate-team rejection, per-URL caching of valid snapshots only, and no-request behavior when disabled or unconfigured.

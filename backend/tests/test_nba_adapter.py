@@ -230,6 +230,100 @@ class TestNBAAdapterInjuryImpact:
         assert "injury_impact_away" not in raw["custom"]
 
 
+class TestNBAAdapterLiveInjuryProvider:
+    """P1-B1 residual: optional live availability source ahead of the static table."""
+
+    @staticmethod
+    def _run(match, live_by_team):
+        """Enrich with the live provider stubbed per team name.
+
+        ``live_by_team`` maps a team name to its LiveNbaInjuryImpact, or is a
+        callable used as the patch side effect for failure cases.
+        """
+        from app.services.nba_live_injury_service import LiveNbaInjuryImpact
+
+        side_effect = (
+            live_by_team
+            if callable(live_by_team)
+            else lambda name: live_by_team.get(name, LiveNbaInjuryImpact(available=False))
+        )
+        adapter = NBAAdapter()
+        with patch.object(adapter, "_fetch_elo_ratings", return_value={}), \
+             patch.object(adapter, "_compute_form", return_value=0.5), \
+             patch.object(adapter, "_compute_rest_days", return_value=2), \
+             patch(
+                 "app.services.nba_live_injury_service.get_live_injury_impact",
+                 side_effect=side_effect,
+             ):
+            return adapter.fetch_all_data(match)
+
+    def test_live_impact_overrides_static_table(self):
+        from app.services.nba_live_injury_service import LiveNbaInjuryImpact
+
+        raw = self._run(_make_match(), {
+            "Boston Celtics": LiveNbaInjuryImpact(available=True, impact=0.42),
+        })
+
+        # Static Boston value is 0.35; the reached provider wins.
+        assert raw["player"]["injury_impact_home"] == pytest.approx(0.42)
+        assert raw["custom"]["injury_impact_home"] == pytest.approx(0.42)
+        assert raw["custom"]["injury_source_home"] == "live_provider"
+        # The away side had no live answer and keeps its static value.
+        assert raw["player"]["injury_impact_away"] == pytest.approx(0.26)
+        assert raw["custom"]["injury_source_away"] == "static_table"
+
+    def test_unavailable_provider_preserves_static_values(self):
+        raw = self._run(_make_match(), {})
+
+        assert raw["player"]["injury_impact_home"] == pytest.approx(0.35)
+        assert raw["player"]["injury_impact_away"] == pytest.approx(0.26)
+        assert raw["custom"]["injury_source_home"] == "static_table"
+        assert raw["custom"]["injury_source_away"] == "static_table"
+
+    def test_reached_provider_without_absence_preserves_static_values(self):
+        from app.services.nba_live_injury_service import LiveNbaInjuryImpact
+
+        raw = self._run(_make_match(), {
+            "Boston Celtics": LiveNbaInjuryImpact(available=True, impact=None),
+        })
+
+        # available=True with no impact is not a known-healthy 0.0.
+        assert raw["player"]["injury_impact_home"] == pytest.approx(0.35)
+        assert raw["custom"]["injury_source_home"] == "static_table"
+
+    def test_provider_exception_preserves_static_values(self):
+        def _boom(_name):
+            raise RuntimeError("provider blew up")
+
+        raw = self._run(_make_match(), _boom)
+
+        assert raw["player"]["injury_impact_home"] == pytest.approx(0.35)
+        assert raw["player"]["injury_impact_away"] == pytest.approx(0.26)
+        assert raw["custom"]["injury_source_home"] == "static_table"
+
+    def test_live_impact_fills_team_missing_from_static_table(self):
+        from app.services.nba_live_injury_service import LiveNbaInjuryImpact
+
+        unknown = MatchIdentity(
+            match_id="nba-live-1",
+            season=SeasonIdentity(competition=_NBA, season_key="2024-25"),
+            stage="regular_season",
+            round=None,
+            home=TeamIdentity(code="DEN", name="Denver Nuggets", competition=_NBA),
+            away=TeamIdentity(code="MIA", name="Miami Heat", competition=_NBA),
+            kickoff_utc=datetime(2024, 12, 25, tzinfo=timezone.utc),
+        )
+        raw = self._run(unknown, {
+            "Denver Nuggets": LiveNbaInjuryImpact(available=True, impact=0.18),
+        })
+
+        assert raw["player"]["injury_impact_home"] == pytest.approx(0.18)
+        assert raw["custom"]["injury_source_home"] == "live_provider"
+        # Miami has neither a live nor a static answer: nothing is invented.
+        assert "injury_impact_away" not in raw["player"]
+        assert "injury_source_away" not in raw["custom"]
+
+
 class TestNBAAdapterTeamRatings:
     def test_fetch_all_data_injects_ortg_drtg_for_known_teams(self):
         adapter = NBAAdapter()

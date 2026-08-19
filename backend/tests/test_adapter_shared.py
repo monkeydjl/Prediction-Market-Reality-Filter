@@ -1,7 +1,8 @@
 # backend/tests/test_adapter_shared.py
 """Tests for _shared.py — shared adapter utility functions."""
+from contextlib import ExitStack
 from unittest.mock import patch, MagicMock, AsyncMock
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 import asyncio
 import pytest
 
@@ -9,6 +10,10 @@ from app.kernel.domain import (
     SportIdentity, CompetitionIdentity, SeasonIdentity,
     TeamIdentity, MatchIdentity, MatchOutcome,
 )
+from app.services.football_live_referee_service import LiveRefereeResult
+from app.services.football_live_style_service import LiveStyleResult
+from app.services.football_live_xg_service import LiveXgResult
+from app.sports.football.h2h import H2HMeeting
 from app.sports.football.adapters._shared import (
     fetch_team_elo,
     fetch_elo_and_odds,
@@ -240,6 +245,64 @@ class TestEnrichRefereeFeatures:
         assert raw["custom"]["referee_home_bias"] == pytest.approx(float(expected))
         assert raw["custom"]["referee_source"] == "static_map"
 
+    def test_live_provider_overrides_static_map(self):
+        from app.sports.football.adapters._shared import enrich_referee_features
+
+        raw = {"custom": {}, "environment": {"referee": "Michael Oliver"}}
+        with patch(
+            "app.services.football_live_referee_service.get_live_referee",
+            return_value=LiveRefereeResult(True, home_win_rate=0.58, matches=24),
+        ):
+            enrich_referee_features(raw, _make_match())
+
+        assert raw["custom"]["referee_home_win_rate"] == pytest.approx(0.58)
+        assert raw["custom"]["referee_home_bias"] == pytest.approx(0.16)
+        assert raw["custom"]["referee_source"] == "live_provider"
+
+    def test_live_no_row_falls_back_to_static_map(self):
+        from app.sports.football.adapters._shared import enrich_referee_features
+        from app.sports.football.football_referee import bias_for_referee
+
+        raw = {"custom": {}, "environment": {"referee": "Michael Oliver"}}
+        with patch(
+            "app.services.football_live_referee_service.get_live_referee",
+            return_value=LiveRefereeResult(True),
+        ):
+            enrich_referee_features(raw, _make_match())
+
+        assert raw["custom"]["referee_home_bias"] == pytest.approx(
+            float(bias_for_referee("Michael Oliver")),
+        )
+        assert raw["custom"]["referee_source"] == "static_map"
+
+    def test_world_cup_does_not_call_live_referee_provider(self):
+        from app.sports.football.adapters._shared import enrich_referee_features
+
+        world_cup = CompetitionIdentity(
+            code="wc", name="FIFA World Cup", sport=_FOOTBALL,
+        )
+        match = MatchIdentity(
+            match_id="wc-referee-no-live",
+            season=SeasonIdentity(competition=world_cup, season_key="2026"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(
+                code="H", name="Home", competition=world_cup,
+            ),
+            away=TeamIdentity(
+                code="A", name="Away", competition=world_cup,
+            ),
+            kickoff_utc=datetime(2026, 6, 11, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = {"custom": {}, "environment": {"referee": "Michael Oliver"}}
+        with patch(
+            "app.services.football_live_referee_service.get_live_referee",
+        ) as live_referee:
+            enrich_referee_features(raw, match)
+
+        live_referee.assert_not_called()
+        assert raw["custom"]["referee_source"] == "static_map"
+
 
 class TestScheduleDensityEnrich:
     def test_matches_last_7d_and_congest_from_count(self):
@@ -413,6 +476,85 @@ def _enrich_with_merged(raw, match, single, merged):
 class TestMergedScheduleDensity:
     """P1-F2 residual: cross-competition merge + 3-day window."""
 
+    def test_live_history_is_used_when_merged_kernel_rows_are_empty(self):
+        from app.services.football_live_schedule_service import LiveScheduleResult
+        from app.sports.football.adapters._shared import _merged_fixture_history
+
+        fixture = _row(
+            "live-1",
+            "Real Madrid CF",
+            "FC Bayern München",
+            datetime(2025, 9, 13, 15, 0, tzinfo=timezone.utc),
+            "ucl",
+        )
+        with patch(
+            "app.sports.football.adapters._shared._merged_fixture_rows",
+            return_value=[],
+        ), patch(
+            "app.services.football_live_schedule_service.get_live_schedule",
+            return_value=LiveScheduleResult(available=True, fixtures=[fixture]),
+        ) as live_schedule:
+            result = _merged_fixture_history(
+                "2025-26",
+                datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+            )
+
+        assert result is not None
+        assert result[0]["match_id"] == "live-1"
+        assert live_schedule.call_count > 0
+
+    def test_kernel_merged_rows_take_precedence_over_live_schedule(self):
+        from app.services.football_live_schedule_service import LiveScheduleResult
+        from app.sports.football.adapters._shared import _merged_fixture_history
+
+        kernel = _row(
+            "kernel-1",
+            "Real Madrid CF",
+            "FC Bayern München",
+            datetime(2025, 9, 13, 15, 0, tzinfo=timezone.utc),
+            "ucl",
+        )
+        with patch(
+            "app.sports.football.adapters._shared._merged_fixture_rows",
+            return_value=[kernel],
+        ), patch(
+            "app.services.football_live_schedule_service.get_live_schedule",
+            return_value=LiveScheduleResult(available=True, fixtures=[]),
+        ) as live_schedule:
+            result = _merged_fixture_history(
+                "2025-26",
+                datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+            )
+
+        assert result is not None
+        assert result[0]["match_id"] == "kernel-1"
+        live_schedule.assert_not_called()
+
+    def test_live_single_competition_fallback_when_kernel_history_missing(self):
+        from app.sports.football.adapters._shared import _fixture_history_for_density
+
+        fixture = {
+            "match_id": "live-epl-1",
+            "home_team": "Arsenal",
+            "away_team": "Chelsea",
+            "kickoff_utc": datetime(2025, 9, 13, 15, 0, tzinfo=timezone.utc),
+        }
+        with patch(
+            "app.kernel.kernel_db.get_kernel_session",
+            side_effect=RuntimeError("kernel unavailable"),
+        ), patch(
+            "app.sports.football.adapters._shared._live_fixture_history_for_density",
+            return_value=[fixture],
+        ) as live_history:
+            result = _fixture_history_for_density(
+                "epl",
+                "2025-26",
+                datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+            )
+
+        assert result == [fixture]
+        live_history.assert_called_once()
+
     def test_merged_counts_other_competition(self):
         match = _make_match("ucl-merge")
         raw = _raw_for_density()
@@ -528,6 +670,153 @@ class TestMergedScheduleDensity:
         assert raw["custom"]["matches_merged_7d_home"] == 0
 
 
+_WORLD_CUP = CompetitionIdentity(code="wc", name="FIFA World Cup", sport=_FOOTBALL)
+_WC_KICKOFF = datetime(2026, 6, 20, 18, 0, tzinfo=timezone.utc)
+
+
+def _wc_match(match_id="wc-density") -> MatchIdentity:
+    return MatchIdentity(
+        match_id=match_id,
+        season=SeasonIdentity(competition=_WORLD_CUP, season_key="2026"),
+        stage="group_stage",
+        round=None,
+        home=TeamIdentity(code="BRA", name="Brazil", competition=_WORLD_CUP),
+        away=TeamIdentity(code="CRO", name="Croatia", competition=_WORLD_CUP),
+        kickoff_utc=_WC_KICKOFF,
+    )
+
+
+def _enrich_with_international(raw, match, merged, intl_dates, *, history_none=False):
+    """Run enrich with the kernel merge and the international CSV both stubbed.
+
+    ``intl_dates`` maps a team name to the dates its CSV lookup returns; anything
+    callable is used as the patch side effect directly (for failure cases).
+    """
+    side_effect = (
+        intl_dates
+        if callable(intl_dates)
+        else lambda team, **_kw: tuple(intl_dates.get(team, ()))
+    )
+    merged_patch = (
+        patch(
+            "app.sports.football.adapters._shared._merged_fixture_history",
+            return_value=None,
+        )
+        if history_none
+        else patch(
+            "app.sports.football.adapters._shared._merged_fixture_rows",
+            return_value=merged,
+        )
+    )
+    with merged_patch, patch(
+        "app.sports.football.adapters._shared._fixture_history_for_density",
+        return_value=[],
+    ), patch(
+        "app.services.world_cup_historical_results.international_match_dates",
+        side_effect=side_effect,
+    ) as intl, patch(
+        "app.services.world_cup_historical_results.get_historical_team_stats",
+        return_value=None,
+    ), patch(
+        "app.services.world_cup_historical_results.get_historical_h2h",
+        return_value=None,
+    ), patch(
+        "app.services.world_cup_historical_results.historical_h2h_meetings",
+        return_value=[],
+    ):
+        enrich_situational_features(raw, match)
+    return intl
+
+
+class TestInternationalScheduleDensity:
+    """P1-F2 residual: real international match days for national teams."""
+
+    def test_international_days_lift_national_team_counts(self):
+        raw = _raw_for_density()
+        merged = [
+            _row("wc-earlier", "Brazil", "X",
+                 datetime(2026, 6, 14, 18, 0, tzinfo=timezone.utc), "wc"),
+        ]
+        _enrich_with_international(
+            raw, _wc_match(), merged,
+            {"Brazil": [date(2026, 6, 16), date(2026, 6, 18)]},
+        )
+
+        # One kernel tournament fixture plus two qualifier/friendly match days.
+        assert raw["custom"]["matches_merged_7d_home"] == 3
+        assert raw["custom"]["matches_intl_7d_home"] == 2
+        assert raw["custom"]["schedule_intl_source"] == "international_results"
+
+    def test_kernel_and_csv_same_date_counted_once(self):
+        raw = _raw_for_density()
+        merged = [
+            _row("wc-earlier", "Brazil", "X",
+                 datetime(2026, 6, 16, 18, 0, tzinfo=timezone.utc), "wc"),
+        ]
+        _enrich_with_international(
+            raw, _wc_match(), merged,
+            # Brazil's CSV row is the same match already in the kernel; Croatia's
+            # is genuinely absent from it.
+            {"Brazil": [date(2026, 6, 16)], "Croatia": [date(2026, 6, 17)]},
+        )
+
+        assert raw["custom"]["matches_merged_7d_home"] == 1
+        assert raw["custom"]["matches_intl_7d_home"] == 0
+        assert raw["custom"]["matches_merged_7d_away"] == 1
+        assert raw["custom"]["matches_intl_7d_away"] == 1
+
+    def test_three_day_window_sees_international_day(self):
+        raw = _raw_for_density()
+        _enrich_with_international(
+            raw, _wc_match(), [],
+            {"Brazil": [date(2026, 6, 14), date(2026, 6, 18)]},
+        )
+
+        assert raw["custom"]["matches_merged_7d_home"] == 2
+        assert raw["custom"]["matches_merged_3d_home"] == 1
+
+    def test_counts_written_when_kernel_history_unavailable(self):
+        raw = _raw_for_density()
+        _enrich_with_international(
+            raw, _wc_match(), None,
+            {"Brazil": [date(2026, 6, 18)]},
+            history_none=True,
+        )
+
+        assert raw["custom"]["matches_merged_7d_home"] == 1
+        assert raw["custom"]["matches_intl_7d_home"] == 1
+
+    def test_club_fixture_never_consults_international_csv(self):
+        raw = _raw_for_density()
+        merged = [
+            _row("epl-1", "Real Madrid CF", "X",
+                 datetime(2025, 9, 13, 15, 0, tzinfo=timezone.utc), "epl"),
+        ]
+        intl = _enrich_with_international(
+            raw, _make_match("ucl-club"), merged, {"Real Madrid CF": [date(2025, 9, 11)]},
+        )
+
+        intl.assert_not_called()
+        assert raw["custom"]["matches_merged_7d_home"] == 1
+        assert "schedule_intl_source" not in raw["custom"]
+
+    def test_lookup_failure_preserves_kernel_counts(self):
+        raw = _raw_for_density()
+        merged = [
+            _row("wc-earlier", "Brazil", "X",
+                 datetime(2026, 6, 16, 18, 0, tzinfo=timezone.utc), "wc"),
+        ]
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("CSV unreadable")
+
+        _enrich_with_international(raw, _wc_match(), merged, _boom)
+
+        assert raw["custom"]["matches_merged_7d_home"] == 1
+        assert "matches_intl_7d_home" not in raw["custom"]
+        assert "schedule_intl_source" not in raw["custom"]
+
+
 class TestMergedFixtureHistory:
     def test_non_football_rows_dropped(self):
         from app.sports.football.adapters._shared import _merged_history_rows
@@ -579,17 +868,57 @@ class TestH2hKernelFallback:
             "app.services.world_cup_historical_results.get_historical_h2h",
             return_value=None,
         ), patch(
+            "app.services.world_cup_historical_results.historical_h2h_meetings",
+            return_value=[],
+        ), patch(
             "app.sports.football.club_form.team_form_from_kernel",
             return_value=None,
+        ), patch(
+            "app.sports.football.club_form.h2h_meetings_from_kernel",
+            return_value=[
+                H2HMeeting(datetime(2025, 9, 1).date(), 1, 0, True),
+                H2HMeeting(datetime(2025, 8, 1).date(), 0, 0, False),
+            ],
         ), patch(
             "app.sports.football.club_form.h2h_from_kernel",
             return_value=kernel_h2h,
         ) as mock_kh:
             enrich_situational_features(raw, match)
 
-        mock_kh.assert_called()
+        mock_kh.assert_not_called()
         assert raw["team"]["h2h_home_win_rate"] == pytest.approx(0.5)
         assert raw["team"]["h2h_draw_rate"] == pytest.approx(0.5)
+
+    def test_combines_sources_and_deduplicates_overlap(self):
+        match = _make_match("ucl-h2h-combined")
+        raw = {
+            "team": {}, "general": {}, "market": {}, "player": {},
+            "environment": {}, "custom": {},
+        }
+        duplicate = H2HMeeting(datetime(2025, 9, 1).date(), 2, 0, True)
+        with patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_historical_results.historical_h2h_meetings",
+            return_value=[duplicate],
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.h2h_meetings_from_kernel",
+            return_value=[
+                duplicate,
+                H2HMeeting(datetime(2025, 8, 1).date(), 1, 1, False),
+            ],
+        ):
+            enrich_situational_features(raw, match)
+
+        assert raw["team"]["h2h_home_win_rate"] == pytest.approx(0.5)
+        assert raw["team"]["h2h_draw_rate"] == pytest.approx(0.5)
+        assert raw["custom"]["h2h_home_venue_matches"] == 1.0
+        assert raw["custom"]["h2h_home_venue_win_rate"] == pytest.approx(1.0)
+        assert raw["custom"]["h2h_home_venue_draw_rate"] == pytest.approx(0.0)
 
     def test_historical_not_overwritten_by_kernel(self):
         match = _make_match("ucl-h2h-hist")
@@ -695,6 +1024,158 @@ class TestInjuryImpactEnrich:
         assert raw["player"]["injury_impact_away"] == pytest.approx(0.26)
         assert raw["custom"]["injury_impact_home"] == pytest.approx(0.35)
         assert raw["custom"]["injury_impact_away"] == pytest.approx(0.26)
+        assert raw["custom"]["injury_source_home"] == "static_table"
+        assert raw["custom"]["injury_source_away"] == "static_table"
+
+    def test_contextual_availability_overrides_other_injury_sources(self):
+        from app.services.football_live_availability_service import LiveAvailabilityImpact
+
+        match = _make_match("ucl-contextual-availability")
+        raw = {
+            "team": {}, "general": {}, "market": {}, "player": {},
+            "environment": {}, "custom": {},
+        }
+        with patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ), patch(
+            "app.sports.football.adapters._shared._fixture_history_for_density",
+            return_value=None,
+        ), patch(
+            "app.services.football_live_availability_service.get_live_availability_impact",
+            side_effect=[
+                LiveAvailabilityImpact(available=True, impact=0.35),
+                LiveAvailabilityImpact(available=True, impact=0.29),
+            ],
+        ), patch(
+            "app.services.football_live_injury_service.get_live_injury_impact",
+        ) as injury_provider, patch(
+            "app.sports.football.football_injury.injury_impact_for_team",
+        ) as static_mock:
+            enrich_situational_features(raw, match)
+
+        injury_provider.assert_not_called()
+        static_mock.assert_not_called()
+        assert raw["player"]["injury_impact_home"] == pytest.approx(0.35)
+        assert raw["player"]["injury_impact_away"] == pytest.approx(0.29)
+        assert raw["custom"]["injury_source_home"] == "live_availability_provider"
+        assert raw["custom"]["injury_source_away"] == "live_availability_provider"
+
+    def test_missing_contextual_availability_falls_back_to_api_football(self):
+        from app.services.football_live_availability_service import LiveAvailabilityImpact
+        from app.services.football_live_injury_service import LiveInjuryImpact
+
+        match = _make_match("ucl-contextual-fallback")
+        raw = {
+            "team": {}, "general": {}, "market": {}, "player": {},
+            "environment": {}, "custom": {},
+        }
+        with patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ), patch(
+            "app.sports.football.adapters._shared._fixture_history_for_density",
+            return_value=None,
+        ), patch(
+            "app.services.football_live_availability_service.get_live_availability_impact",
+            side_effect=[
+                LiveAvailabilityImpact(available=True, impact=None),
+                LiveAvailabilityImpact(available=False),
+            ],
+        ), patch(
+            "app.services.football_live_injury_service.get_live_injury_impact",
+            side_effect=[
+                LiveInjuryImpact(available=True, impact=0.12),
+                LiveInjuryImpact(available=True, impact=0.27),
+            ],
+        ) as injury_provider:
+            enrich_situational_features(raw, match)
+
+        assert injury_provider.call_count == 2
+        assert raw["custom"]["injury_source_home"] == "api_football"
+        assert raw["custom"]["injury_source_away"] == "api_football"
+
+        from app.services.football_live_injury_service import LiveInjuryImpact
+
+        match = _make_match("ucl-live-injuries")
+        raw = {
+            "team": {}, "general": {}, "market": {}, "player": {},
+            "environment": {}, "custom": {},
+        }
+        with patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ), patch(
+            "app.sports.football.adapters._shared._fixture_history_for_density",
+            return_value=None,
+        ), patch(
+            "app.services.football_live_injury_service.get_live_injury_impact",
+            side_effect=[
+                LiveInjuryImpact(available=True, impact=0.12),
+                LiveInjuryImpact(available=True, impact=0.27),
+            ],
+        ), patch(
+            "app.sports.football.football_injury.injury_impact_for_team",
+        ) as static_mock:
+            enrich_situational_features(raw, match)
+
+        static_mock.assert_not_called()
+        assert raw["player"]["injury_impact_home"] == pytest.approx(0.12)
+        assert raw["player"]["injury_impact_away"] == pytest.approx(0.27)
+        assert raw["custom"]["injury_source_home"] == "api_football"
+        assert raw["custom"]["injury_source_away"] == "api_football"
+
+    def test_successful_live_no_absence_does_not_fall_back_to_static(self):
+        from app.services.football_live_injury_service import LiveInjuryImpact
+
+        match = _make_match("ucl-live-no-absence")
+        raw = {
+            "team": {}, "general": {}, "market": {}, "player": {},
+            "environment": {}, "custom": {},
+        }
+        with patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=None,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ), patch(
+            "app.sports.football.adapters._shared._fixture_history_for_density",
+            return_value=None,
+        ), patch(
+            "app.services.football_live_injury_service.get_live_injury_impact",
+            return_value=LiveInjuryImpact(available=True, impact=None),
+        ), patch(
+            "app.sports.football.football_injury.injury_impact_for_team",
+        ) as static_mock:
+            enrich_situational_features(raw, match)
+
+        static_mock.assert_not_called()
+        assert "injury_impact_home" not in raw["player"]
+        assert "injury_impact_away" not in raw["player"]
+        assert "injury_source_home" not in raw["custom"]
+        assert "injury_source_away" not in raw["custom"]
 
     def test_unknown_teams_omit_injury_keys(self):
         football = SportIdentity(code="football", name="Football")
@@ -949,6 +1430,266 @@ class TestStaticXgOverwrite:
         assert "xg_home" not in raw["custom"]
         assert "xg_away" not in raw["custom"]
         assert "xg_source" not in raw["custom"]
+
+
+class TestLiveXgOverwrite:
+    _HIST = {
+        "wins": 5,
+        "draws": 2,
+        "losses": 3,
+        "played": 10,
+        "goals_per_game": 1.1,
+        "last_match_date": "2025-09-01",
+    }
+
+    @staticmethod
+    def _raw() -> dict:
+        return {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {},
+        }
+
+    def _enrich(
+        self,
+        raw: dict,
+        match: MatchIdentity,
+        live_results: list[LiveXgResult],
+        *,
+        hist: dict | None = None,
+    ):
+        with patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=self._HIST if hist is None else hist,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.team_form_from_kernel",
+            return_value=None,
+        ), patch(
+            "app.sports.football.club_form.h2h_from_kernel",
+            return_value=None,
+        ), patch(
+            "app.services.football_live_xg_service.get_live_xg",
+            side_effect=live_results,
+        ) as live_xg:
+            enrich_situational_features(raw, match)
+        return live_xg
+
+    def test_complete_live_pair_overrides_static_pair(self):
+        raw = self._raw()
+        self._enrich(
+            raw,
+            _make_match("ucl-xg-live"),
+            [
+                LiveXgResult(available=True, xg_per90=2.01),
+                LiveXgResult(available=True, xg_per90=1.34),
+            ],
+        )
+
+        assert raw["custom"]["xg_home"] == pytest.approx(2.01)
+        assert raw["custom"]["xg_away"] == pytest.approx(1.34)
+        assert raw["custom"]["xg_source"] == "live_provider"
+
+    def test_incomplete_live_pair_falls_back_to_static_pair(self):
+        raw = self._raw()
+        self._enrich(
+            raw,
+            _make_match("ucl-xg-live-partial"),
+            [
+                LiveXgResult(available=True, xg_per90=2.01),
+                LiveXgResult(available=True),
+            ],
+        )
+
+        from app.sports.football.football_xg import xg_for_team
+
+        assert raw["custom"]["xg_home"] == pytest.approx(
+            float(xg_for_team("Real Madrid CF")),
+        )
+        assert raw["custom"]["xg_away"] == pytest.approx(
+            float(xg_for_team("FC Bayern München")),
+        )
+        assert raw["custom"]["xg_source"] == "static_table"
+
+    def test_unavailable_live_provider_falls_back_to_static_pair(self):
+        raw = self._raw()
+        self._enrich(
+            raw,
+            _make_match("ucl-xg-live-unavailable"),
+            [LiveXgResult(available=False), LiveXgResult(available=False)],
+        )
+
+        assert raw["custom"]["xg_source"] == "static_table"
+
+    def test_incomplete_live_and_static_data_preserve_gpg_proxy(self):
+        match = MatchIdentity(
+            match_id="ucl-xg-live-proxy",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="RMA", name="Real Madrid CF", competition=_UCL),
+            away=TeamIdentity(code="ZZZ", name="Unknown Club XYZ", competition=_UCL),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = self._raw()
+        hist = {**self._HIST, "goals_per_game": 1.25}
+        self._enrich(
+            raw,
+            match,
+            [
+                LiveXgResult(available=True, xg_per90=2.01),
+                LiveXgResult(available=True),
+            ],
+            hist=hist,
+        )
+
+        assert raw["custom"]["xg_home"] == pytest.approx(1.25)
+        assert raw["custom"]["xg_away"] == pytest.approx(1.25)
+        assert "xg_source" not in raw["custom"]
+
+    def test_world_cup_does_not_call_live_xg_provider(self):
+        world_cup = CompetitionIdentity(
+            code="wc", name="FIFA World Cup", sport=_FOOTBALL,
+        )
+        match = MatchIdentity(
+            match_id="wc-xg-no-live",
+            season=SeasonIdentity(competition=world_cup, season_key="2026"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="RMA", name="Real Madrid CF", competition=world_cup),
+            away=TeamIdentity(code="FCB", name="FC Bayern München", competition=world_cup),
+            kickoff_utc=datetime(2026, 6, 11, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = self._raw()
+        with patch(
+            "app.services.world_cup_historical_results.get_historical_team_stats",
+            return_value=self._HIST,
+        ), patch(
+            "app.services.world_cup_historical_results.get_historical_h2h",
+            return_value=None,
+        ), patch(
+            "app.services.football_live_xg_service.get_live_xg",
+        ) as live_xg:
+            enrich_situational_features(raw, match)
+
+        live_xg.assert_not_called()
+        assert raw["custom"]["xg_source"] == "static_table"
+
+
+class TestLiveStyleOverwrite:
+    @staticmethod
+    def _raw() -> dict:
+        return {
+            "team": {},
+            "general": {},
+            "market": {},
+            "player": {},
+            "environment": {},
+            "custom": {
+                "possession_home": 40.0,
+                "possession_away": 60.0,
+                "possession_proxy": "form_share",
+            },
+        }
+
+    def test_complete_live_pair_overrides_static_pair(self):
+        raw = self._raw()
+        with patch(
+            "app.services.football_live_style_service.get_live_style",
+            side_effect=[
+                LiveStyleResult(
+                    True,
+                    {"possession_pct": 61.2, "shots_per90": 16.4, "ppda": 8.1},
+                ),
+                LiveStyleResult(
+                    True,
+                    {"possession_pct": 48.8, "shots_per90": 11.2, "ppda": 13.6},
+                ),
+            ],
+        ):
+            enrich_style_features(raw, _make_match("ucl-style-live"))
+
+        assert raw["custom"]["possession_home"] == pytest.approx(61.2)
+        assert raw["custom"]["possession_away"] == pytest.approx(48.8)
+        assert raw["custom"]["shots_home"] == pytest.approx(16.4)
+        assert raw["custom"]["ppda_away"] == pytest.approx(13.6)
+        assert raw["custom"]["style_source"] == "live_provider"
+        assert "possession_proxy" not in raw["custom"]
+
+    def test_incomplete_live_pair_falls_back_to_static_pair(self):
+        raw = self._raw()
+        with patch(
+            "app.services.football_live_style_service.get_live_style",
+            side_effect=[
+                LiveStyleResult(
+                    True,
+                    {"possession_pct": 61.2, "shots_per90": 16.4, "ppda": 8.1},
+                ),
+                LiveStyleResult(True),
+            ],
+        ):
+            enrich_style_features(raw, _make_match("ucl-style-live-partial"))
+
+        from app.sports.football.football_style import stats_for_team
+
+        home = stats_for_team("Real Madrid CF")
+        away = stats_for_team("FC Bayern München")
+        assert home is not None and away is not None
+        assert raw["custom"]["possession_home"] == pytest.approx(home["possession_pct"])
+        assert raw["custom"]["possession_away"] == pytest.approx(away["possession_pct"])
+        assert raw["custom"]["style_source"] == "static_table"
+
+    def test_live_and_static_incomplete_preserve_form_proxy(self):
+        raw = self._raw()
+        match = MatchIdentity(
+            match_id="ucl-style-proxy",
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="RMA", name="Real Madrid CF", competition=_UCL),
+            away=TeamIdentity(code="ZZZ", name="Unknown Club XYZ", competition=_UCL),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+        with patch(
+            "app.services.football_live_style_service.get_live_style",
+            side_effect=[LiveStyleResult(False), LiveStyleResult(False)],
+        ):
+            enrich_style_features(raw, match)
+
+        assert raw["custom"]["possession_home"] == pytest.approx(40.0)
+        assert raw["custom"]["possession_away"] == pytest.approx(60.0)
+        assert raw["custom"]["possession_proxy"] == "form_share"
+        assert "style_source" not in raw["custom"]
+        assert "shots_home" not in raw["custom"]
+
+    def test_world_cup_does_not_call_live_style_provider(self):
+        world_cup = CompetitionIdentity(
+            code="wc", name="FIFA World Cup", sport=_FOOTBALL,
+        )
+        match = MatchIdentity(
+            match_id="wc-style-no-live",
+            season=SeasonIdentity(competition=world_cup, season_key="2026"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(
+                code="RMA", name="Real Madrid CF", competition=world_cup,
+            ),
+            away=TeamIdentity(
+                code="FCB", name="FC Bayern München", competition=world_cup,
+            ),
+            kickoff_utc=datetime(2026, 6, 11, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = self._raw()
+        with patch("app.services.football_live_style_service.get_live_style") as live_style:
+            enrich_style_features(raw, match)
+
+        live_style.assert_not_called()
+        assert raw["custom"]["style_source"] == "static_table"
 
 
 class TestStaticStyleOverwrite:
@@ -1332,6 +2073,54 @@ class TestLiveWeatherFill:
         expected = climate_for_home("Arsenal", 9)
         assert raw["custom"]["weather_source"] == "static_climate"
         assert raw["environment"]["weather_temp_c"] == pytest.approx(float(expected["temp_c"]))
+
+    def test_single_live_source_reports_provenance(self):
+        match = _wx_match("ucl-wx-one")
+        raw = _wx_raw()
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"current_weather": {"temperature": 17.4, "weathercode": 61}}
+        from app.sports.football.adapters._shared import enrich_weather_features
+
+        with (
+            patch("app.sports.football.football_weather.httpx.get", return_value=resp),
+            patch("app.sports.football.football_weather._utcnow", return_value=_NOW),
+            patch("app.sports.football.football_weather.settings.FOOTBALL_LIVE_WEATHER_URL", "https://wx.example/forecast"),
+            patch("app.sports.football.football_weather.settings.FOOTBALL_LIVE_WEATHER_SECONDARY_ENABLED", False),
+        ):
+            enrich_weather_features(raw, match)
+        assert raw["custom"]["weather_source"] == "live_forecast"
+        assert raw["custom"]["weather_source_count"] == pytest.approx(1.0)
+        assert raw["custom"]["weather_agreement"] == "single"
+
+    def test_two_live_sources_propagate_consensus_provenance(self):
+        from app.services.football_live_weather_service import LiveWeatherResult
+
+        match = _wx_match("ucl-wx-two")
+        raw = _wx_raw()
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"current_weather": {"temperature": 17.0, "weathercode": 61}}
+        from app.sports.football.adapters._shared import enrich_weather_features
+
+        contexts = (
+            patch("app.sports.football.football_weather.httpx.get", return_value=resp),
+            patch("app.sports.football.football_weather._utcnow", return_value=_NOW),
+            patch("app.sports.football.football_weather.settings.FOOTBALL_LIVE_WEATHER_URL", "https://wx.example/forecast"),
+            patch(
+                "app.services.football_live_weather_service.get_secondary_weather",
+                return_value=LiveWeatherResult(available=True, temp_c=19.0, condition="rain"),
+            ),
+            patch("app.sports.football.football_weather.settings.FOOTBALL_LIVE_WEATHER_SECONDARY_ENABLED", True),
+            patch("app.sports.football.football_weather.settings.FOOTBALL_LIVE_WEATHER_SECONDARY_URL", "https://wx2.example/point"),
+            patch("app.sports.football.football_weather.settings.FOOTBALL_LIVE_WEATHER_SECONDARY_API_KEY", "secret-key"),
+        )
+        with ExitStack() as stack:
+            for ctx in contexts:
+                stack.enter_context(ctx)
+            enrich_weather_features(raw, match)
+        assert raw["environment"]["weather_temp_c"] == pytest.approx(18.0)
+        assert raw["custom"]["weather_source"] == "live_forecast"
+        assert raw["custom"]["weather_source_count"] == pytest.approx(2.0)
+        assert raw["custom"]["weather_agreement"] == "agree"
 
 
 class TestZeroAltitudePreserved:

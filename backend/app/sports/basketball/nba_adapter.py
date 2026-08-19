@@ -330,14 +330,32 @@ class NBAAdapter:
         try:
             from app.sports.basketball.nba_injury import injury_impact_for_team
 
-            inj_h = injury_impact_for_team(home_name)
-            inj_a = injury_impact_for_team(away_name)
-            if inj_h is not None:
-                raw["player"]["injury_impact_home"] = float(inj_h)
-                raw["custom"]["injury_impact_home"] = float(inj_h)
-            if inj_a is not None:
-                raw["player"]["injury_impact_away"] = float(inj_a)
-                raw["custom"]["injury_impact_away"] = float(inj_a)
+            live = {}
+            try:
+                from app.services.nba_live_injury_service import get_live_injury_impact
+
+                live = {
+                    "home": get_live_injury_impact(home_name),
+                    "away": get_live_injury_impact(away_name),
+                }
+            except Exception:  # noqa: BLE001 — keep the static table usable
+                logger.debug("NBA live injury enrich unavailable", exc_info=True)
+
+            for side, name in (("home", home_name), ("away", away_name)):
+                result = live.get(side)
+                # A reached provider wins; unreachable or silent on this team
+                # falls through to the static Out table.
+                if result is not None and result.available and result.impact is not None:
+                    impact: float | None = float(result.impact)
+                    source = "live_provider"
+                else:
+                    impact = injury_impact_for_team(name)
+                    source = "static_table"
+                if impact is None:
+                    continue
+                raw["player"][f"injury_impact_{side}"] = float(impact)
+                raw["custom"][f"injury_impact_{side}"] = float(impact)
+                raw["custom"][f"injury_source_{side}"] = source
         except Exception:  # noqa: BLE001
             logger.debug("NBA injury enrich skipped", exc_info=True)
         try:

@@ -1,6 +1,66 @@
 # Changelog
 
-## Unreleased
+### NBA live availability provider (P1-B1)
+
+- `nba_live_injury_service`: opt-in configured NBA availability snapshots with bearer authentication, `http`/`https`-only endpoints, bounded responses, strict team/absence validation, duplicate-team rejection, per-URL in-memory caching of valid snapshots only, and no-request behavior when disabled or unconfigured.
+- Only `out`, `inactive`, and `suspended` count as absent; `questionable`, `probable`, and `day-to-day` describe a player expected to feature and are ignored. Role tiers and the impact formula stay in `app/sports/basketball/nba_injury.py`, so live and static values come from the same arithmetic, and an unrecognized tier falls through to that module's documented bench default.
+- NBA injury enrichment now prefers a reached provider and records `custom.injury_source_{home,away}` as `live_provider` or `static_table`. A disabled provider, transport failure, rejected snapshot, service exception, or a provider silent on that team all degrade to the static Out table; when neither source has a value no injury key is written.
+- Production activation requires a licensed provider returning the documented contract; see `docs/dev/nba-live-injury-provider-contract.md`.
+
+### Football international match-day schedule density (P1-F2)
+
+- National-team schedule density now folds in the real international match days recorded by the repository's international results CSV — qualifiers, friendlies, and continental fixtures — which the kernel never carries because it holds tournament fixtures only.
+- Cross-source duplicate protection uses the calendar date alone: a national team plays at most once a day, so a date already present in kernel history is the same match and is skipped. No fixture-ID compatibility is assumed between the two sources, and the fixture's own date is never counted as a prior match.
+- The existing `matches_merged_7d_*` / `matches_merged_3d_*` keys are filled, with `custom.matches_intl_7d_*` and `custom.schedule_intl_source` added as provenance only. Club fixtures never consult the CSV, a failed lookup preserves the kernel counts, and MultiFactor formulas plus the default-OFF `FOOTBALL_SCHEDULE_MERGE_ENABLED` gate are unchanged.
+
+### Football multi-source weather consensus (P1-F7)
+
+- `football_live_weather_service`: opt-in second, independently configured weather source with bearer authentication, bounded responses, strict temperature/condition validation against the shared vocabulary, its own in-memory cache, and no-request behavior when disabled or unconfigured.
+- The live weather layer now reads every configured source best-effort and merges them deterministically: a single source is passed through unchanged, two agreeing sources average the temperature, and a temperature gap beyond the tolerance keeps the primary reading. Either source failing degrades to the other; both failing still degrades to static climate.
+- `custom.weather_source_count` and `custom.weather_agreement` are provenance-only additions; the `weather_temp_c` / `weather_condition` feature contract, the fill order, the clamp band, the horizon gate, and MultiFactor formulas/weights are unchanged.
+- Production activation requires a licensed provider returning the documented contract; see `docs/dev/football-live-weather-secondary-provider-contract.md`.
+
+### Football combined H2H sources (P1-F4)
+
+- Historical CSV and kernel H2H now expose current-fixture-home meeting records, merge them before aggregation, and retain valid data when either source is unavailable.
+- Cross-source duplicate protection intentionally uses only the mutually available date, current-home scoreline, and hosting designation; it makes no fixture-ID compatibility assumption. Deduplication runs before the existing 20-match cap.
+- Neutral CSV fixtures do not enter the same-venue H2H subset. Existing rate fields, venue-split flag behavior, and MultiFactor formulas/weights are unchanged.
+
+### Football live availability impact weighting (P1-F3)
+
+- `football_live_availability_service`: opt-in configured player-availability snapshots with strict team/absence validation, actual minutes/value-share inputs, bounded bearer-authenticated requests, in-memory cache, and no-request behavior when disabled or unconfigured.
+- Football injury enrichment now tries a complete contextual availability impact before API-Football, static-table, and World Cup-fact fallbacks. The existing role-based impact remains the baseline and the MultiFactor injury formula/weights are unchanged.
+- Production activation requires a licensed provider returning the documented contract; see `docs/dev/football-live-availability-provider-contract.md`.
+
+### Football live schedule density provider (P1-F2)
+
+- `football_live_schedule_service`: opt-in configured, read-only fixture-history snapshots with bearer authentication, bounded responses, strict fixture validation, historical cutoff filtering, in-memory caching, and no-request behavior when disabled or unconfigured.
+- Schedule density keeps kernel fixtures authoritative and falls back to the live provider only when kernel history is empty or unavailable. Cross-competition fallback preserves competition-scoped alias resolution; no fetched fixtures or predictions are written to the database.
+- Production activation requires a licensed conforming provider URL/key; see `docs/dev/football-live-schedule-provider-contract.md`. Existing 7-day/3-day windows, current-match exclusion, and MultiFactor formulas remain unchanged.
+
+### Football live schedule density provider (P1-F2)
+
+- `football_live_schedule_service`: opt-in configured, read-only fixture-history snapshots with bearer authentication, bounded responses, strict fixture validation, historical cutoff filtering, in-memory caching, and no-request behavior when disabled or unconfigured.
+- Schedule density keeps kernel fixtures authoritative and falls back to the live provider only when kernel history is empty or unavailable. Cross-competition fallback preserves competition-scoped alias resolution; no fetched fixtures or predictions are written to the database.
+- Production activation requires a licensed conforming provider URL/key; see `docs/dev/football-live-schedule-provider-contract.md`. Existing 7-day/3-day windows, current-match exclusion, and MultiFactor formulas remain unchanged.
+
+### Football live referee statistics (P1-F8)
+
+- `football_live_referee_service`: opt-in configured provider for genuine referee season home-win rates, with bounded responses, strict validation, normalized referee matching, in-memory cache, and no-request behavior when disabled or unconfigured.
+- Referee enrichment now preserves explicit fields first, then uses a named live row (`referee_source=live_provider`), then the static bias map. World Cup does not call the configured club provider; MultiFactor formulas and weights remain unchanged.
+- Production activation still requires a licensed conforming provider URL/key; see `docs/dev/football-live-referee-provider-contract.md`.
+
+### Football live style statistics (P1-F6)
+
+- `football_live_style_service`: opt-in configured provider for genuine possession, shots/90, and PPDA season snapshots, with bounded responses, strict validation, normalized club matching, in-memory cache, and no-request behavior when disabled or unconfigured.
+- Football enrichment now uses a complete live pair first (`style_source=live_provider`), then the existing complete static pair, then the form-share possession proxy. World Cup does not call the configured club provider; MultiFactor formulas and weights remain unchanged.
+- Production activation still requires a licensed conforming provider URL/key; see `docs/dev/football-live-style-provider-contract.md`.
+
+### Football live injury and true-xG sources (P1-F3 / P1-F5)
+
+- `football_live_injury_service`: opt-in API-Football league/season injury snapshots with bounded responses, normalized club matching, valid-snapshot cache, and `injury_source_*` provenance. Live unavailability degrades to the existing static table, then World Cup facts; MultiFactor injury formula/weight remains unchanged.
+- `football_live_xg_service`: opt-in, configured true-xG provider with a strict normalized season-snapshot envelope; rejects provider errors, malformed/duplicate teams, non-finite/out-of-range values, and proxy metrics. Both club sides must resolve from one valid live snapshot before enrich writes `xg_source=live_provider`.
+- xG fallback remains live complete pair → static complete pair → goals-per-game proxy. World Cup does not call the configured club xG source. No provider URL/key is enabled by default; production activation requires a licensed conforming endpoint, documented in `docs/dev/football-live-xg-provider-contract.md`.
 
 ### Football schedule density across competitions (P1-F2)
 

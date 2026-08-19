@@ -72,6 +72,40 @@ class TestSummarizeInjuryImpact:
     def test_ignores_non_dict_rows(self):
         rows = ["bad", None, {"player": "A", "role": "bench", "status": "out"}]
         assert summarize_injury_impact(rows) == pytest.approx(0.03)
+    def test_contextual_minutes_and_value_can_raise_role_baseline(self):
+        rows = [
+            {
+                "player": "High-use rotation",
+                "role": "rotation",
+                "status": "out",
+                "minutes_share": 0.11,
+                "market_value_share": 0.07,
+            }
+        ]
+        assert summarize_injury_impact(rows) == pytest.approx(0.29)
+
+    def test_contextual_weight_is_capped_at_star_tier(self):
+        rows = [
+            {
+                "player": "Elite player",
+                "role": "starter",
+                "status": "out",
+                "minutes_share": 0.60,
+                "market_value_share": 0.50,
+            }
+        ]
+        assert summarize_injury_impact(rows) == pytest.approx(0.35)
+
+    def test_incomplete_context_preserves_legacy_role_weight(self):
+        rows = [
+            {
+                "player": "Starter",
+                "role": "starter",
+                "status": "out",
+                "minutes_share": 0.30,
+            }
+        ]
+        assert summarize_injury_impact(rows) == pytest.approx(0.18)
 
 
 class TestInjuryImpactForTeam:

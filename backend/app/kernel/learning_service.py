@@ -7,7 +7,9 @@ engine_score. Calibration and weight updates are deferred to Phase 3.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import select
 
@@ -88,6 +90,45 @@ def _explanation_stage(explanation: object) -> str | None:
             return str(item["stage"])
     return None
 
+
+
+def predicted_outcome(probabilities: object) -> str | None:
+    """The single outcome an engine called: its most likely one.
+
+    One definition, shared by ``compute_error`` and the calibration summary,
+    so the persisted accuracy cannot drift from the per-match
+    ``outcome_correct`` it is supposed to summarize.
+    """
+    if not isinstance(probabilities, dict) or not probabilities:
+        return None
+    return str(max(probabilities, key=lambda key: probabilities[key]))
+
+
+def calibration_summary(rows: Sequence[Any]) -> tuple[float, float]:
+    """Mean engine confidence and observed accuracy over joined rows.
+
+    Both fields feed decisions rather than only diagnostics: ``avg_accuracy``
+    is read as engine trust by ``edge_detector_service._compute_trust_phase3``
+    and ``calibration_fusion_service._compute_phase3_trust``, and
+    ``engine_score`` divides accuracy by confidence to report confidence
+    calibration. So accuracy has to mean "the engine's call was right",
+    counted by the same rule ``compute_error`` applies per match, and
+    confidence has to be the engine's own ``confidence``.
+
+    Neither may be read off the home-win column. The share of matches that
+    ended in a home win is a property of the league, not of the engine: it
+    would score a model that never predicts a home win at the league's home
+    rate, and it moves when the fixtures change while the model stands still.
+    """
+    if not rows:
+        return 0.0, 0.0
+    total = float(len(rows))
+    confidence_sum = sum(float(pred.confidence or 0.0) for pred, _ in rows)
+    correct = sum(
+        1.0 for pred, outcome in rows
+        if predicted_outcome(pred.outcome_probabilities) == outcome.outcome
+    )
+    return confidence_sum / total, correct / total
 
 
 def apply_linear_calibration(
@@ -217,11 +258,8 @@ class KernelLearningService:
                          abs(pred_away - outcome.away_score)) / 2.0
 
             # Outcome correct
-            predicted_outcome = max(
-                pred.outcome_probabilities,
-                key=pred.outcome_probabilities.get,
-            ) if pred.outcome_probabilities else None
-            outcome_correct = (predicted_outcome == outcome.outcome)
+            predicted = predicted_outcome(pred.outcome_probabilities)
+            outcome_correct = (predicted == outcome.outcome)
 
             # Brier score — dynamically iterate outcome keys
             # (supports both football 3-way and basketball binary)
@@ -280,6 +318,10 @@ class KernelLearningService:
             if len(results) < config.settings.MIN_SAMPLES_FOR_CALIBRATION:
                 return
 
+            # Regression variables only. The calibration map corrects the
+            # home-win probability, so x/y are that one column. The summary
+            # fields below answer a different question and must not reuse
+            # these sums — see calibration_summary.
             x = [r[0].outcome_probabilities.get("home_win", 0) for r in results]
             y = [1.0 if r[1].outcome == "home_win" else 0.0 for r in results]
 
@@ -298,8 +340,7 @@ class KernelLearningService:
             slope = max(_CALIBRATION_SLOPE_MIN, min(_CALIBRATION_SLOPE_MAX, slope))
             intercept = max(_CALIBRATION_INTERCEPT_MIN, min(_CALIBRATION_INTERCEPT_MAX, intercept))
 
-            avg_confidence = sum_x / n
-            avg_accuracy = sum_y / n
+            avg_confidence, avg_accuracy = calibration_summary(results)
 
             # Upsert calibration
             existing = session.query(KernelCalibration).filter_by(
@@ -384,8 +425,7 @@ class KernelLearningService:
                     _CALIBRATION_INTERCEPT_MIN,
                     min(_CALIBRATION_INTERCEPT_MAX, intercept),
                 )
-                avg_confidence = sum_x / n
-                avg_accuracy = sum_y / n
+                avg_confidence, avg_accuracy = calibration_summary(rows)
                 key = competition_with_bucket(competition, bucket)
                 existing = session.query(KernelCalibration).filter_by(
                     engine=engine, competition=key,
@@ -471,8 +511,7 @@ class KernelLearningService:
                     _CALIBRATION_INTERCEPT_MIN,
                     min(_CALIBRATION_INTERCEPT_MAX, intercept),
                 )
-                avg_confidence = sum_x / n
-                avg_accuracy = sum_y / n
+                avg_confidence, avg_accuracy = calibration_summary(rows)
                 key = competition_with_stage(competition, bucket)
                 existing = session.query(KernelCalibration).filter_by(
                     engine=engine, competition=key,

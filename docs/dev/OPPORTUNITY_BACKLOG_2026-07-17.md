@@ -219,7 +219,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 
 | ID | 项 |
 |----|-----|
-| P1-X1 | ✅ 部分 2026-07-20：`confidence.compute_confidence`（strength+completeness+agreement+market damp）；全运动引擎接入；ECE 桶校准仍属后续 |
+| P1-X1 | ✅ 部分 2026-07-20：`confidence.compute_confidence`（strength+completeness+agreement+market damp）；全运动引擎接入；ECE 桶校准仍属后续 —— 2026-08-20 勘定：**概率 ECE 其实已经存在**（`kernel_db.compute_reliability_bins` 按 `max(outcome_probabilities)` 分 10 桶算 ECE 与最大校准误差，经 `GET /calibration/reliability` 暴露）。真正仍待的是**置信度 ECE**，而它此前被 `avg_confidence` 的语义错误堵住：该字段存的是平均主胜概率而非引擎置信度，已在 P1-V5 修正，置信度分桶 ECE 现在才有可用的输入 |
 | P1-X2 | ✅ 部分：FactorBreakdownTable 已展示 explanation；2026-07-20 补全 situational/injury/h2h 中文名 |
 | P1-X3 | ✅ 部分 2026-07-20：confidence_breakdown 入 betting_analysis + SportConfidencePanel 优先读 API |
 
@@ -235,7 +235,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 | P1-V2 | 已验证 event↔contract 链接率 | ✅ 部分 2026-07-20：auto-verify API + PendingReviewQueue dry-run/执行；评测集/吞吐仍待 |
 | P1-V3 | 模型/市场谁错 | ✅ 部分 2026-07-20：分歧诊断 + factor_drivers 归因（explanation top impact）；端到端样例仍待 |
 | P1-V4 | Decision Gate | 点时冻结已有；是否需要「修订预测」层（见 BY-DESIGN） |
-| P1-V5 | 条件校准 | ✅ 部分 2026-07-20：confidence+stage 分桶 + POST /predictions/calibration/conditional；apply 默认 OFF |
+| P1-V5 | 条件校准 | ✅ 部分 2026-07-20：confidence+stage 分桶 + POST /predictions/calibration/conditional；apply 默认 OFF ✅ 语义修正 2026-08-20：`KernelCalibration.avg_accuracy` 此前写入的是**主胜基础率**而非模型准确率（`y = 1[outcome == "home_win"]` 的均值，与模型预测了什么完全无关），`avg_confidence` 写入的是平均主胜概率而非 `KernelPrediction.confidence`（该字段一直存在却被忽略）。三处生产端 `update_calibration` / `update_calibration_by_confidence` / `update_calibration_by_stage` 统一改用新增的 `calibration_summary`：准确率按 `argmax(outcome_probabilities) == outcome` 计，与 `compute_error` 共用新增的 `predicted_outcome`，因此汇总值不会与逐场 `outcome_correct` 漂移；置信度取引擎自身值。该字段并非诊断装饰——`edge_detector_service._compute_trust_phase3`（两处）与 `calibration_fusion_service._compute_phase3_trust` 直接把它当 **trust** 读，`engine_score` 用它除以 `avg_confidence` 得出 `confidence_calibration`，`GET /predictions/calibration` 与前端学习面板「平均置信度 / 平均准确率」两列原样呈现。修正前，一个从不预测主胜的引擎在主胜率 46% 的联赛里 trust 仍是 0.46，与完美模型同分；`confidence_calibration` 实际是主胜偏差比率。原有唯一覆盖测试只断言 `> 0` / `>= 0`（空洞），且旧 seeder 的 argmax 恒为 home_win、主胜率又恰好等于准确率（都是 2/3），任何断言都无法区分二者——新增 seeder 令准确率 0.75、主胜率 0.25，6 条语义断言经反向替换验证对旧算术全部失败。仍保持关闭：`PHASE3_LEARNING` 与 conditional apply 均为 OFF，本次只修正既有默认关闭路径的算术，未启用任何学习、调度或写入 |
 | P2-V6 | 证据分解与 source trust | ✅ 部分 2026-07-20：`source_trust_registry_store` + `domain_reliability_store` + resolve-time 反馈钩子 + `domain_reliability_cli`；独立的 `evidence_decomposition` 模块未抽（评分仍在 `evidence_scoring_service` 内） |
 | P2-V7 | 结论挑战门（challenge gate） | ✅ 2026-07-20：`conclusion_challenge_service` + 事件/世界杯适配器 + `review_queue_detectors` 集成 + 测试 |
 

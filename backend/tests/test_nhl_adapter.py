@@ -624,3 +624,43 @@ class TestNHLAdapterSyncSchedule:
     def test_sync_disabled_returns_zero(self, mock_settings):
         mock_settings.PHASE5_NHL_ENABLED = False
         assert NHLAdapter().sync_schedule() == 0
+
+
+class TestNHLAdapterMarketTotalsWiring:
+    """P1-O1 真盘口: the NHL adapter must actually reach the provider."""
+
+    @staticmethod
+    def _run(result=None, **kwargs):
+        adapter = NHLAdapter()
+        with patch.object(adapter, "_fetch_elo_ratings", return_value={}), \
+             patch.object(adapter, "_fetch_club_side", side_effect=[{}, {}]), \
+             patch.object(adapter, "_compute_form", return_value=0.5), \
+             patch.object(adapter, "_compute_rest_days", return_value=2.0), \
+             patch(
+                 "app.services.market_totals_service.get_market_total",
+                 return_value=result,
+                 **kwargs,
+             ) as provider:
+            return adapter.fetch_all_data(_make_match()), provider
+
+    def test_available_line_reaches_custom(self):
+        from app.services.market_totals_service import MarketTotal
+
+        raw, provider = self._run(MarketTotal(
+            available=True, total={"total_line": 6.5, "market_p_over": 0.49},
+        ))
+        assert raw["custom"]["market_total_line"] == pytest.approx(6.5)
+        assert raw["custom"]["market_total_p_over"] == pytest.approx(0.49)
+        assert provider.call_args.args == (
+            "hockey", "2024-01-15", "New Jersey Devils", "New York Rangers",
+        )
+
+    def test_unavailable_provider_writes_nothing(self):
+        from app.services.market_totals_service import MarketTotal
+
+        raw, _ = self._run(MarketTotal(available=False))
+        assert "market_total_line" not in raw["custom"]
+
+    def test_provider_exception_does_not_break_enrichment(self):
+        raw, _ = self._run(side_effect=RuntimeError("provider down"))
+        assert "market_total_line" not in raw["custom"]

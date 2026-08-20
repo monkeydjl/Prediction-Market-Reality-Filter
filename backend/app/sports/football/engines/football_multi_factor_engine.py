@@ -40,6 +40,7 @@ from app.kernel.engines.elo_odds_engine import (
     _KNOCKOUT_STAGES,
     _odds_to_probabilities,
     _probabilities_to_scores,
+    resolve_totals_line,
     soft_totals_btts_analysis,
 )
 from app.kernel.engines.odds_quality import (
@@ -717,6 +718,13 @@ class FootballMultiFactorEngine:
             custom=features.custom if isinstance(features.custom, dict) else None,
         )
 
+        # P1-O1: a real book total outranks the hardcoded 2.5 placeholder.
+        # Absent or malformed → the placeholder, so behaviour is unchanged when
+        # no provider is configured.
+        totals_line, totals_source, market_p_over = resolve_totals_line(
+            features.custom, 2.5,
+        )
+
         return PredictionResult(
             predicted_scores=scores,
             outcome_probabilities=fused,
@@ -725,7 +733,12 @@ class FootballMultiFactorEngine:
             explanation=explanation,
             betting_analysis={
                 "confidence_breakdown": conf_break,
-                "soft_totals_btts": soft_totals_btts_analysis(scores),
+                "soft_totals_btts": soft_totals_btts_analysis(
+                    scores,
+                    line=totals_line,
+                    line_source=totals_source,
+                    market_p_over=market_p_over,
+                ),
             },
             feature_version=features.feature_version,
             prediction_timestamp=datetime.now(timezone.utc),

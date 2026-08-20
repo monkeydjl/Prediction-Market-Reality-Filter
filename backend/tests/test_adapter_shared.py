@@ -2232,3 +2232,71 @@ class TestWhitespaceRefereeCreatesNothing:
         assert "referee_home_bias" not in raw["custom"]
         assert "referee_source" not in raw["custom"]
 
+
+class TestMarketTotalsWiring:
+    """P1-O1 真盘口: the football adapters must actually reach the provider.
+
+    The engine reads the line out of ``custom``, so a provider nobody calls is a
+    capability that exists and is unreachable. ``fetch_elo_and_odds`` is the
+    composition root for the EPL/UCL/league adapters; the World Cup adapter
+    builds ``custom`` itself and is covered separately.
+    """
+
+    @patch("app.sports.football.adapters._shared.get_club_elo")
+    @patch("app.services.odds_cache_service.get_cached_odds", new_callable=AsyncMock)
+    def _fetch(self, mock_odds, mock_club, result=None, **kwargs):
+        mock_club.return_value = {"elo_rating": 1900.0, "source": "clubelo"}
+        mock_odds.return_value = None
+        with patch(
+            "app.services.market_totals_service.get_market_total",
+            return_value=result,
+            **kwargs,
+        ) as provider:
+            raw = fetch_elo_and_odds(_make_match(), elo_scope="club")
+        return raw, provider
+
+    def test_available_line_reaches_custom(self):
+        from app.services.market_totals_service import MarketTotal
+
+        raw, provider = self._fetch(
+            result=MarketTotal(
+                available=True,
+                total={"total_line": 3.5, "market_p_over": 0.51},
+            ),
+        )
+        assert raw["custom"]["market_total_line"] == pytest.approx(3.5)
+        assert raw["custom"]["market_total_p_over"] == pytest.approx(0.51)
+        # The kickoff date and the fixture's own team names identify the row; no
+        # provider fixture ID is assumed to be compatible.
+        assert provider.call_args.args == (
+            "football", "2025-09-16", "Real Madrid CF", "FC Bayern München",
+        )
+
+    def test_unavailable_provider_writes_nothing(self):
+        from app.services.market_totals_service import MarketTotal
+
+        raw, _ = self._fetch(result=MarketTotal(available=False))
+        assert "market_total_line" not in raw["custom"]
+        # The rest of the enrichment still ran.
+        assert raw["team"]["elo_home"] == pytest.approx(1900.0)
+
+    def test_provider_exception_does_not_break_enrichment(self):
+        raw, _ = self._fetch(side_effect=RuntimeError("provider down"))
+        assert "market_total_line" not in raw["custom"]
+        assert raw["team"]["elo_home"] == pytest.approx(1900.0)
+
+    def test_world_cup_adapter_is_wired_too(self):
+        from app.services.market_totals_service import MarketTotal
+        from app.sports.football.adapters.world_cup_adapter import WorldCupAdapter
+
+        match = _make_match(match_id="wc-1")
+        with patch(
+            "app.services.market_totals_service.get_market_total",
+            return_value=MarketTotal(
+                available=True, total={"total_line": 2.75, "market_p_over": 0.49},
+            ),
+        ):
+            custom = WorldCupAdapter()._build_custom(match)
+
+        assert custom["market_total_line"] == pytest.approx(2.75)
+        assert custom["market_total_p_over"] == pytest.approx(0.49)

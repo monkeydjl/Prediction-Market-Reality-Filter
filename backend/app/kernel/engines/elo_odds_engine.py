@@ -22,7 +22,7 @@ model, whereas the legacy engine returns a plain dict with extra fields
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from app.kernel.domain import (
     FeatureSet, MatchIdentity, PredictionResult, ContributionItem,
@@ -139,15 +139,62 @@ def _poisson_total_pmf(lam: float) -> list[float]:
     return [p / mass for p in pmf] if mass > 0.0 else pmf
 
 
+def _finite_in_range(value: Any, low: float, high: float) -> float | None:
+    """Parse a ``custom`` entry, rejecting anything not a real number in range."""
+    import math
+
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric) or not low <= numeric <= high:
+        return None
+    return numeric
+
+
+def resolve_totals_line(
+    custom: dict[str, Any] | None, default: float,
+) -> tuple[float, str, float | None]:
+    """Prefer a real market total over the league-average placeholder (P1-O1).
+
+    Returns ``(line, line_source, market_p_over)``. A malformed or absent market
+    line degrades to ``default`` rather than poisoning the diagnostic, so an
+    unconfigured or failed provider leaves the previous behaviour exactly intact.
+    """
+    import math
+
+    if not isinstance(custom, dict):
+        return default, "league_average", None
+    line = _finite_in_range(custom.get("market_total_line"), 1e-9, math.inf)
+    if line is None:
+        return default, "league_average", None
+    return (
+        line,
+        "market_provider",
+        _finite_in_range(custom.get("market_total_p_over"), 0.0, 1.0),
+    )
+
+
 def soft_totals_btts_analysis(
     scores: dict[str, float],
     *,
     line: float = 2.5,
+    line_source: str = "league_average",
+    market_p_over: float | None = None,
 ) -> dict:
     """Soft O/U + BTTS from independent Poisson goals (P1-O1 scaffolding).
 
     Not a full multi-market engine — exposes diagnostic probs for FE/API until
     dedicated totals/BTTS markets and odds feeds land.
+
+    ``line_source`` records whether the line is a real book total or the
+    league-average placeholder, because the two are not comparable claims: the
+    placeholder equals the expected total by construction, so ``p_over`` is then
+    a per-sport constant. ``market_p_over`` is the book's own de-vigged over
+    probability when a real line was supplied, kept beside the model's so the
+    divergence is visible rather than implied.
 
     A total exactly on an integer line counts as under, matching the original
     behavior; real push handling belongs with real market lines.
@@ -169,9 +216,10 @@ def soft_totals_btts_analysis(
     p_over = max(0.0, min(1.0, p_over))
     p_under = max(0.0, min(1.0, 1.0 - p_over))
     p_btts = max(0.0, min(1.0, p_btts))
-    return {
+    out = {
         "available": True,
         "line": line,
+        "line_source": line_source,
         "expected_home_goals": round(lh, 3),
         "expected_away_goals": round(la, 3),
         "expected_total": round(lh + la, 3),
@@ -181,6 +229,9 @@ def soft_totals_btts_analysis(
         "p_btts_no": round(1.0 - p_btts, 4),
         "note": "soft independent Poisson; not calibrated multi-market prices",
     }
+    if market_p_over is not None:
+        out["market_p_over"] = round(market_p_over, 4)
+    return out
 
 
 
@@ -189,9 +240,13 @@ def soft_totals_from_scores(
     *,
     line: float,
     sport: str = "generic",
+    line_source: str = "league_average",
+    market_p_over: float | None = None,
 ) -> dict:
     """Independent Poisson O/U (and BTTS only for football-like low totals)."""
-    base = soft_totals_btts_analysis(scores, line=line)
+    base = soft_totals_btts_analysis(
+        scores, line=line, line_source=line_source, market_p_over=market_p_over,
+    )
     if not base.get("available"):
         return base
     out = dict(base)
@@ -313,6 +368,10 @@ class EloOddsEngine:
         confidence = compute_confidence(fused, **conf_kwargs)
         conf_break = confidence_breakdown(fused, **conf_kwargs)
 
+        totals_line, totals_source, market_p_over = resolve_totals_line(
+            features.custom, 2.5,
+        )
+
         return PredictionResult(
             predicted_scores=scores,
             outcome_probabilities=fused,
@@ -321,7 +380,12 @@ class EloOddsEngine:
             explanation=explanation,
             betting_analysis={
                 "confidence_breakdown": conf_break,
-                "soft_totals_btts": soft_totals_btts_analysis(scores),
+                "soft_totals_btts": soft_totals_btts_analysis(
+                    scores,
+                    line=totals_line,
+                    line_source=totals_source,
+                    market_p_over=market_p_over,
+                ),
             },
             feature_version=features.feature_version,
             prediction_timestamp=datetime.now(timezone.utc),

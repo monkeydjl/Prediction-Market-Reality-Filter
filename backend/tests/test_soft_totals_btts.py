@@ -97,6 +97,101 @@ def test_basketball_soft_totals():
     assert soft["p_over"] + soft["p_under"] == pytest.approx(1.0, abs=1e-9)
 
 
+def _with_market_line(engine, features, *, market_line, market_p_over=0.52):
+    """Predict with and without a market line; return both soft-totals dicts."""
+    from dataclasses import replace
+
+    baseline = engine.predict(features, features.match)
+    quoted_features = replace(
+        features,
+        custom={
+            **(features.custom or {}),
+            "market_total_line": market_line,
+            "market_total_p_over": market_p_over,
+        },
+    )
+    quoted = engine.predict(quoted_features, quoted_features.match)
+    return (
+        baseline.betting_analysis["soft_totals_btts"],
+        quoted.betting_analysis["soft_totals_btts"],
+    )
+
+
+class TestMarketLineReachesEveryEngine:
+    """P1-O1 真盘口: a provider line in ``custom`` must reach every engine.
+
+    Each engine builds its own soft-totals call, so a provider wired into only
+    one of them would look shipped while the other sports silently kept the
+    league-average placeholder — the placeholder that equals the expected total
+    by construction and so makes ``p_over`` a per-sport constant.
+    """
+
+    @staticmethod
+    def _assert_flipped(base, quoted, line):
+        assert base["line_source"] == "league_average"
+        assert "market_p_over" not in base
+        assert quoted["line_source"] == "market_provider"
+        assert quoted["line"] == pytest.approx(line)
+        assert quoted["market_p_over"] == pytest.approx(0.52)
+        # A line above the model's expected total must shift weight to the under.
+        assert quoted["p_over"] < base["p_over"]
+
+    def test_basketball(self):
+        from app.sports.basketball.engines.basketball_engine import BasketballEngine
+        from tests.test_basketball_engine import _make_features
+
+        base, quoted = _with_market_line(
+            BasketballEngine(), _make_features(), market_line=228.5,
+        )
+        self._assert_flipped(base, quoted, 228.5)
+
+    def test_hockey(self):
+        from app.sports.hockey.engines.hockey_engine import HockeyEngine
+        from tests.test_hockey_engine import _make_features
+
+        base, quoted = _with_market_line(
+            HockeyEngine(), _make_features(), market_line=6.5,
+        )
+        self._assert_flipped(base, quoted, 6.5)
+
+    def test_baseball(self):
+        from tests.test_baseball_engine import _make_features
+
+        base, quoted = _with_market_line(
+            BaseballEngine(), _make_features(), market_line=9.5,
+        )
+        self._assert_flipped(base, quoted, 9.5)
+
+    def test_football(self):
+        from tests.test_football_multi_factor_engine import _make_features
+
+        base, quoted = _with_market_line(
+            FootballMultiFactorEngine(), _make_features(custom={}), market_line=3.5,
+        )
+        self._assert_flipped(base, quoted, 3.5)
+
+    def test_elo_odds(self):
+        from app.kernel.engines.elo_odds_engine import EloOddsEngine
+        from tests.test_football_multi_factor_engine import _make_features
+
+        base, quoted = _with_market_line(
+            EloOddsEngine(), _make_features(custom={}), market_line=3.5,
+        )
+        self._assert_flipped(base, quoted, 3.5)
+
+    def test_malformed_line_leaves_the_placeholder(self):
+        # An unconfigured or failed provider must leave behaviour untouched.
+        from app.sports.basketball.engines.basketball_engine import BasketballEngine
+        from tests.test_basketball_engine import _make_features
+
+        base, quoted = _with_market_line(
+            BasketballEngine(), _make_features(), market_line="not-a-line",
+        )
+        assert quoted["line_source"] == "league_average"
+        assert quoted["line"] == pytest.approx(base["line"])
+        assert "market_p_over" not in quoted
+
+
 def test_guardrails_demote_stale():
     from app.kernel.sport_recommendation_service import _apply_sport_guardrails
 

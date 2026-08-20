@@ -515,3 +515,44 @@ class TestNBAAdapterTeamRatings:
             "tpct_away",
         ):
             assert key not in raw["custom"], key
+
+
+class TestNBAAdapterMarketTotalsWiring:
+    """P1-O1 真盘口: the NBA adapter must actually reach the provider."""
+
+    @staticmethod
+    def _run(result=None, **kwargs):
+        adapter = NBAAdapter()
+        with patch.object(adapter, "_fetch_elo_ratings", return_value={}), \
+             patch.object(adapter, "_compute_form", return_value=0.5), \
+             patch.object(adapter, "_compute_rest_days", return_value=2), \
+             patch(
+                 "app.services.market_totals_service.get_market_total",
+                 return_value=result,
+                 **kwargs,
+             ) as provider:
+            return adapter.fetch_all_data(_make_match()), provider
+
+    def test_available_line_reaches_custom(self):
+        from app.services.market_totals_service import MarketTotal
+
+        raw, provider = self._run(MarketTotal(
+            available=True, total={"total_line": 228.5, "market_p_over": 0.5052},
+        ))
+        assert raw["custom"]["market_total_line"] == pytest.approx(228.5)
+        assert raw["custom"]["market_total_p_over"] == pytest.approx(0.5052)
+        assert provider.call_args.args == (
+            "basketball", "2024-12-25", "Boston Celtics", "Los Angeles Lakers",
+        )
+
+    def test_unavailable_provider_writes_nothing(self):
+        from app.services.market_totals_service import MarketTotal
+
+        raw, _ = self._run(MarketTotal(available=False))
+        assert "market_total_line" not in raw["custom"]
+        assert "ortg_home" in raw["custom"]
+
+    def test_provider_exception_does_not_break_enrichment(self):
+        raw, _ = self._run(side_effect=RuntimeError("provider down"))
+        assert "market_total_line" not in raw["custom"]
+        assert "ortg_home" in raw["custom"]

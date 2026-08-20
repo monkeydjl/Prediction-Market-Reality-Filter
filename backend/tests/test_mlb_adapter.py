@@ -497,3 +497,51 @@ class TestParkFactors:
         assert _park_factor_for_team("") == 1.0
         assert _park_factor_for_team("Totally Fake FC") == 1.0
 
+
+
+class TestMLBAdapterMarketTotalsWiring:
+    """P1-O1 真盘口: the MLB adapter must actually reach the provider."""
+
+    @staticmethod
+    def _run(result=None, **kwargs):
+        adapter = MLBAdapter()
+        with patch.object(adapter, "_fetch_elo_ratings", return_value={}), \
+             patch.object(adapter, "_fetch_game_context", return_value={}), \
+             patch.object(adapter, "_fetch_starting_pitchers",
+                          return_value={"home": {}, "away": {}}), \
+             patch.object(adapter, "_fetch_team_pitching_side",
+                          side_effect=[{}, {}]), \
+             patch.object(adapter, "_fetch_platoon_ops", side_effect=[None, None]), \
+             patch.object(adapter, "_compute_form", return_value=0.5), \
+             patch.object(adapter, "_compute_rest_days", return_value=2.0), \
+             patch(
+                 "app.services.market_totals_service.get_market_total",
+                 return_value=result,
+                 **kwargs,
+             ) as provider:
+            return adapter.fetch_all_data(_make_match()), provider
+
+    def test_available_line_reaches_custom(self):
+        from app.services.market_totals_service import MarketTotal
+
+        raw, provider = self._run(MarketTotal(
+            available=True, total={"total_line": 9.5, "market_p_over": 0.505},
+        ))
+        assert raw["custom"]["market_total_line"] == pytest.approx(9.5)
+        assert raw["custom"]["market_total_p_over"] == pytest.approx(0.505)
+        assert provider.call_args.args == (
+            "baseball", "2024-07-04", "New York Yankees", "Boston Red Sox",
+        )
+
+    def test_unavailable_provider_writes_nothing(self):
+        from app.services.market_totals_service import MarketTotal
+
+        raw, _ = self._run(MarketTotal(available=False))
+        assert "market_total_line" not in raw["custom"]
+        # Unrelated enrichment is untouched.
+        assert raw["custom"]["park_source"] == "static_table"
+
+    def test_provider_exception_does_not_break_enrichment(self):
+        raw, _ = self._run(side_effect=RuntimeError("provider down"))
+        assert "market_total_line" not in raw["custom"]
+        assert raw["custom"]["park_source"] == "static_table"

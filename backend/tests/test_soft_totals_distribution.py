@@ -11,6 +11,7 @@ import math
 import pytest
 
 from app.kernel.engines.elo_odds_engine import (
+    resolve_totals_line,
     soft_totals_btts_analysis,
     soft_totals_from_scores,
 )
@@ -141,3 +142,90 @@ class TestSportWrapper:
             {"home": "nope", "away": 1.0}, line=2.5, sport="basketball",
         )
         assert out == {"available": False}
+
+
+class TestResolveTotalsLine:
+    """Line provenance (P1-O1 真盘口).
+
+    The default line is the sport's league average, which for NBA/NHL/MLB is the
+    same number the expected total is derived from — so ``p_over`` is a per-sport
+    constant carrying nothing about the fixture. A real book line breaks that,
+    and the two cases must stay distinguishable downstream.
+    """
+
+    def test_absent_market_line_uses_the_default(self):
+        assert resolve_totals_line({}, 220.0) == (220.0, "league_average", None)
+
+    @pytest.mark.parametrize("custom", [None, "not-a-dict", 7])
+    def test_non_dict_custom_uses_the_default(self, custom):
+        assert resolve_totals_line(custom, 2.5) == (2.5, "league_average", None)
+
+    def test_market_line_outranks_the_default(self):
+        assert resolve_totals_line(
+            {"market_total_line": 228.5, "market_total_p_over": 0.5052}, 220.0,
+        ) == (228.5, "market_provider", 0.5052)
+
+    def test_numeric_strings_are_accepted(self):
+        line, source, p_over = resolve_totals_line(
+            {"market_total_line": "228.5", "market_total_p_over": "0.5"}, 220.0,
+        )
+        assert (line, source) == (228.5, "market_provider")
+        assert p_over == pytest.approx(0.5)
+
+    @pytest.mark.parametrize("line", [
+        None, "", "lots", True, float("nan"), float("inf"), 0.0, -220.0, [228.5],
+    ])
+    def test_unusable_market_line_degrades_to_the_default(self, line):
+        # Degrading must be silent and total: a malformed provider value cannot
+        # be allowed to poison the diagnostic with a nonsense line.
+        assert resolve_totals_line(
+            {"market_total_line": line}, 220.0,
+        ) == (220.0, "league_average", None)
+
+    @pytest.mark.parametrize("p_over", [
+        None, "even", True, float("nan"), -0.1, 1.5, [0.5],
+    ])
+    def test_unusable_market_probability_keeps_the_market_line(self, p_over):
+        # The line is the substantive datum; a bad companion probability drops
+        # out on its own rather than discarding a usable line.
+        assert resolve_totals_line(
+            {"market_total_line": 228.5, "market_total_p_over": p_over}, 220.0,
+        ) == (228.5, "market_provider", None)
+
+    def test_probability_bounds_are_inclusive(self):
+        for value in (0.0, 1.0):
+            assert resolve_totals_line(
+                {"market_total_line": 228.5, "market_total_p_over": value}, 220.0,
+            )[2] == pytest.approx(value)
+
+
+class TestLineProvenanceOutput:
+    def test_default_output_is_labelled_league_average(self):
+        out = soft_totals_btts_analysis({"home": 1.5, "away": 1.3})
+        assert out["line_source"] == "league_average"
+        assert "market_p_over" not in out
+
+    def test_market_line_is_labelled_and_carries_the_book_probability(self):
+        out = soft_totals_btts_analysis(
+            {"home": 112.0, "away": 108.0},
+            line=228.5,
+            line_source="market_provider",
+            market_p_over=0.5052,
+        )
+        assert out["line"] == pytest.approx(228.5)
+        assert out["line_source"] == "market_provider"
+        assert out["market_p_over"] == pytest.approx(0.5052)
+        # The model's own number stays separate: a 228.5 line against a 220.0
+        # expected total must read as a real lean toward the under.
+        assert out["p_over"] < 0.35
+
+    def test_sport_wrapper_forwards_provenance(self):
+        out = soft_totals_from_scores(
+            {"home": 112.0, "away": 108.0},
+            line=228.5,
+            sport="basketball",
+            line_source="market_provider",
+            market_p_over=0.5052,
+        )
+        assert out["line_source"] == "market_provider"
+        assert out["market_p_over"] == pytest.approx(0.5052)

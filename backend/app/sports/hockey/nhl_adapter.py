@@ -643,6 +643,18 @@ class NHLAdapter:
             )
         except Exception:  # noqa: BLE001
             logger.debug("NHL liquidity enrich skipped", exc_info=True)
+        # Real market over/under line (P1-O1). Default-off; absent it the engine
+        # keeps quoting against the league average, which equals its own expected
+        # total by construction.
+        from app.services.market_totals_service import inject_market_total_into_custom
+
+        raw["custom"] = inject_market_total_into_custom(
+            raw.get("custom") or {},
+            sport="hockey",
+            kickoff_utc=match.kickoff_utc,
+            home_name=home_name,
+            away_name=away_name,
+        )
         return raw
 
     def _compute_form(self, team_name: str, as_of: datetime | None = None) -> float:

@@ -336,7 +336,18 @@ class WorldCupAdapter:
                 match.match_id,
                 exc_info=True,
             )
-        return custom
+        # Real market over/under line (P1-O1). This adapter builds custom itself
+        # rather than going through fetch_elo_and_odds, so it needs its own call
+        # or World Cup fixtures would silently keep the 2.5 placeholder.
+        from app.services.market_totals_service import inject_market_total_into_custom
+
+        return inject_market_total_into_custom(
+            custom,
+            sport="football",
+            kickoff_utc=match.kickoff_utc,
+            home_name=match.home.name,
+            away_name=match.away.name,
+        )
 
     def fetch_team_data(self, team: TeamIdentity) -> dict:
         """Fetch team-level data (stub — extend as needed)."""

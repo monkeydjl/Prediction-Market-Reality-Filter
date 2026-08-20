@@ -189,6 +189,18 @@ def fetch_elo_and_odds(
     except Exception:  # noqa: BLE001
         logger.debug("liquidity/dispersion enrich skipped", exc_info=True)
 
+    # Real market over/under line (P1-O1). Default-off; absent it the engine
+    # keeps quoting its soft O/U against the hardcoded 2.5 placeholder.
+    from app.services.market_totals_service import inject_market_total_into_custom
+
+    raw["custom"] = inject_market_total_into_custom(
+        raw.get("custom") or {},
+        sport="football",
+        kickoff_utc=match.kickoff_utc,
+        home_name=match.home.name,
+        away_name=match.away.name,
+    )
+
     # World Cup group motivation when match_id is a WC fixture (best-effort).
     if match.match_id.startswith("wc-") or match.season.competition.code in {
         "wc", "world_cup",

@@ -1346,6 +1346,30 @@ class Settings:
     MLB_LIVE_PARK_MAX_BYTES: int = int(os.getenv("MLB_LIVE_PARK_MAX_BYTES", "262144"))
     MLB_LIVE_PARK_MIN_GAMES: float = float(os.getenv("MLB_LIVE_PARK_MIN_GAMES", "81.0"))
 
+    # Optional real market over/under totals source (P1-O1). Disabled by
+    # default: with it off no request is made and the soft totals diagnostic
+    # keeps quoting against the sport's league average, which is the same
+    # number the expected total is derived from, so p_over stays a per-sport
+    # constant. The provider must publish the line together with both decimal
+    # prices; the prices are de-vigged and the implied over probability must
+    # sit within MAX_PRICE_SKEW of even, because a posted total is by
+    # definition the level the book balanced. TTL is in minutes because lines
+    # move. Requires the envelope documented in
+    # docs/dev/market-totals-provider-contract.md.
+    MARKET_TOTALS_ENABLED: bool = _env_bool("MARKET_TOTALS_ENABLED", "false")
+    MARKET_TOTALS_URL: str = os.getenv("MARKET_TOTALS_URL", "")
+    MARKET_TOTALS_API_KEY: str = os.getenv("MARKET_TOTALS_API_KEY", "")
+    MARKET_TOTALS_SPORT_PARAM: str = os.getenv("MARKET_TOTALS_SPORT_PARAM", "sport")
+    MARKET_TOTALS_DATE_PARAM: str = os.getenv("MARKET_TOTALS_DATE_PARAM", "date")
+    MARKET_TOTALS_TIMEOUT_S: float = float(os.getenv("MARKET_TOTALS_TIMEOUT_S", "5.0"))
+    MARKET_TOTALS_CACHE_TTL_MINUTES: float = float(
+        os.getenv("MARKET_TOTALS_CACHE_TTL_MINUTES", "15.0")
+    )
+    MARKET_TOTALS_MAX_BYTES: int = int(os.getenv("MARKET_TOTALS_MAX_BYTES", "262144"))
+    MARKET_TOTALS_MAX_PRICE_SKEW: float = float(
+        os.getenv("MARKET_TOTALS_MAX_PRICE_SKEW", "0.15")
+    )
+
     # LoL esports (ADR-004/005) — default OFF; no production API until
     # docs/dev/lol/GATES.md P2/P3/P6. Vendor env names are frozen (D4);
     # setting grid/pandascore does NOT enable HTTP without a client + legal.

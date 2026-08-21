@@ -484,6 +484,16 @@ class SportMarketBridgeService:
         through its own endpoint. Unknown/absent source falls back to
         Polymarket, which is how every pre-Kalshi link is stored.
 
+        ``the_odds_api`` is excluded from that fallback for the same reason
+        Kalshi was: ``link_traditional_odds`` stores a synthetic
+        ``odds_api::<match_id>::<outcome_label>`` in ``contract_id``, which gamma
+        cannot match either, so every poll spent an outbound request to learn
+        nothing. Returning None here does not create the snapshot gap — the gap
+        already existed — it stops querying the wrong venue and names the reason.
+        Traditional books are re-priced by ``_job_fetch_traditional_odds`` into
+        ``TraditionalOddsStore``; wiring that store into the snapshot path is a
+        market write and is deliberately not done here.
+
         Both venues quote 0-1, so ``implied_prob`` is directly comparable.
         Returns None when the price is unavailable.
         """
@@ -491,7 +501,9 @@ class SportMarketBridgeService:
         if not contract_id:
             return None
 
-        if link.get("source") == "kalshi":
+        source = link.get("source")
+
+        if source == "kalshi":
             try:
                 return await self._fetch_kalshi_price(contract_id)
             except Exception:
@@ -499,6 +511,14 @@ class SportMarketBridgeService:
                     "Kalshi price fetch failed for %s", contract_id, exc_info=True,
                 )
                 return None
+
+        if source == "the_odds_api":
+            logger.debug(
+                "No snapshot source for traditional-odds link %s; gamma cannot "
+                "match a synthetic odds_api contract_id",
+                contract_id,
+            )
+            return None
 
         return await self.fetch_current_price(contract_id)
 

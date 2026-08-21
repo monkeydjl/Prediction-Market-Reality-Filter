@@ -293,3 +293,37 @@ async def test_fetch_link_price_swallows_kalshi_failure(stores):
     )
 
     assert price is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_link_price_does_not_send_traditional_odds_to_gamma(stores):
+    """A the_odds_api link must not be priced against the Polymarket gamma API.
+
+    Same failure mode the Kalshi dispatch above was added to fix, left in place
+    for the other source this class creates itself: ``link_traditional_odds``
+    stores a synthetic ``odds_api::<match_id>::<outcome_label>`` in
+    ``contract_id``, which gamma cannot match, so every poll spent an outbound
+    request to learn nothing and the link never got a snapshot.
+
+    Returning None does not create the snapshot gap — it already existed — it
+    stops querying the wrong venue. The consequence downstream is what matters:
+    a traditional-odds link permanently contributes its creation-time
+    ``implied_prob`` with no measured liquidity, which is why the mixed
+    measured/unmeasured case in EdgeDetectorService is the normal case rather
+    than an edge case.
+    """
+    from app.kernel.sport_market_bridge_service import SportMarketBridgeService
+    link_store, snapshot_store = stores
+    svc = SportMarketBridgeService(link_store=link_store, snapshot_store=snapshot_store)
+    svc._fetch_kalshi_price = AsyncMock()
+    svc.fetch_current_price = AsyncMock(return_value={"implied_prob": 0.42, "price": 0.42})
+
+    price = await svc.fetch_link_price({
+        "id": 1,
+        "contract_id": "odds_api::soccer_epl::2026-08-21::ARS::CHE::home",
+        "source": "the_odds_api",
+    })
+
+    assert price is None
+    svc.fetch_current_price.assert_not_awaited()
+    svc._fetch_kalshi_price.assert_not_awaited()

@@ -1,5 +1,25 @@
 # Changelog
 
+### Fix: calibration fusion weighted a dormant source's sentinel as if it were an estimate (P1-V5)
+
+- `calibration_fusion_service.compute_trust` Case 4 fused Phase 3 and market calibration by sample count, but a source below its MIN reports `DIAGNOSIS_DORMANT_TRUST` (0.5) — a **sentinel meaning "no usable estimate"**, not a measurement of 0.5. The old arithmetic weighted that sentinel by the very sample count that carries no estimate, so a row saying "I don't know" pulled the composite toward 0.5 in proportion to how loudly it said it.
+- Measured with defaults (`CALIBRATION_FEEDBACK_MIN_SAMPLES=8`, `MIN_SAMPLES_FOR_MARKET_CALIBRATION=10`), Phase 3 at accuracy 0.72 over 20 samples beside a market channel whose real direction accuracy is 0.95:
+
+  | market samples | state | composite trust |
+  | --- | --- | --- |
+  | 0 | no row | 0.7200 |
+  | 1 | dormant | 0.7095 |
+  | 7 | dormant | 0.6630 |
+  | 9 | dormant | 0.6517 |
+  | 10 | qualified | 0.7967 |
+
+  Trust **fell** as evidence about a *good* channel accumulated, then jumped 0.145 at the threshold. That cannot be read as shrinkage toward a prior: under shrinkage more data means *less* pull to the prior; here it meant more.
+- Two further manifestations. The presence of a dormant row moved the answer while the **absence** of that row did not (Cases 2/3 give a missing source zero weight), even though both carry identical information — none. And the distortion ran upward too, which is the worse half: an engine measured at 0.20 over 20 samples was flattered to **0.2931** by a 9-sample dormant row, a 47% relative inflation of the trust that gates its edges.
+- Only *qualified* sources now carry weight. If neither qualifies the result is `dormant` rather than an average of two sentinels, and `source` reports `phase3_only` / `market_only` when only one channel qualified — labelling that `fusion` would claim corroboration that never happened. The dormant sentinel and sample counts are still reported so a zero weight stays observable. Cases 1–3 are deliberately untouched: with one source there is nothing to fuse and the dormant 0.5 is the correct answer.
+- The threshold rule now lives in one `_source_trust` helper returning `(trust, qualified)`, used by both `_compute_phase3_trust` and `_compute_market_trust`, so the qualification threshold and the trust value cannot drift apart.
+- The single existing test pinned the defect (`test_compute_trust_fusion_with_one_dormant_source` asserted the 0.6913 dilution as correct) and was replaced by six tests: zero weight for a dormant source, dormant-row-equals-no-row, a monotonicity sweep across the threshold, the bad-engine inflation case, both-dormant, and the market-only mirror. All six were confirmed to fail against the previous arithmetic before the fix was restored.
+- `PHASE8_CALIBRATION_FUSION_ENABLED` remains **false** and `EdgeDetectorService._compute_trust` still bypasses the service entirely when off. Correcting the arithmetic of an existing default-off path enables no learning, scheduling, market write, or prediction write.
+
 ### Confidence-reliability curve and signed calibration gap (P1-X1)
 
 - The reliability curve that already existed bins `max(outcome_probabilities)`. `KernelPrediction.confidence` is a **different quantity** — built by `engines/confidence.compute_confidence` from decision strength, data completeness, factor agreement, and a market damper — and nothing had ever compared it to outcomes. So the engine's own stated confidence was rendered in the learning panel, consumed as a trust input, and never once checked against whether matches at that confidence actually resolved that often.

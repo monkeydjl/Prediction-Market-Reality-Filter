@@ -515,22 +515,22 @@ class EdgeDetectorService:
         factor, and arithmetic cannot supply one. 1.0 is a policy choice — the
         one this function already made for the all-unmeasured case — not a
         measurement. It moves adjusted_edge up in the mixed case.
+
+        The rule itself lives in ``market_liquidity.group_liquidity_factor`` so
+        this and the FeatureSet feed cannot drift; only the rendering of "do not
+        penalize" differs, since this factor is multiplied and that one is a key
+        the caller omits. The floor stays local on purpose — see
+        _EDGE_LIQUIDITY_FLOOR above.
         """
-        measured: list[float] = []
-        for _, snap in links_with_snaps:
-            liq = snap.get("liquidity") if snap else None
-            if liq is None or liq <= 0:
-                # Unmeasured venue: by policy not penalized, so it is at or above
-                # the floor and dominates a max. Short-circuit rather than
-                # dropping it and letting a thinner measured venue decide.
-                return 1.0
-            measured.append(float(liq))
+        from app.kernel.market_liquidity import group_liquidity_factor
 
-        if not measured:
-            # No links at all — nothing to penalize.
-            return 1.0
-
-        return min(max(measured) / _EDGE_LIQUIDITY_FLOOR, 1.0)
+        factor = group_liquidity_factor(
+            (snap.get("liquidity") if snap else None for _, snap in links_with_snaps),
+            floor=_EDGE_LIQUIDITY_FLOOR,
+        )
+        # None means "unmeasured, do not penalize"; this factor is multiplied
+        # into adjusted_edge, so that renders as 1.0.
+        return 1.0 if factor is None else factor
 
     def _is_stale(
         self,

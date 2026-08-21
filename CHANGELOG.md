@@ -1,5 +1,24 @@
 # Changelog
 
+### Fix: one liquidity rule instead of two that had drifted (P1-V3)
+
+- `market_liquidity.compute_match_liquidity_factor` carried a **second copy** of the defect fixed in the previous entry, and its docstring said "Semantics mirror `EdgeDetectorService._compute_liquidity_factor`" while nothing checked that claim. Fixing the edge path first therefore *created* a measurable contradiction: the same `[unmeasured, $100]` group scored **1.0** in the edge detector and **0.01** here, a 100× disagreement between two functions documented as mirrors.
+- Three drifts, not one. The mixed case (both took `max` over the *measured* subset, so one unmeasured venue beside a $100 market scored as though the group were a $100 market); a link with **no snapshot at all** (the edge path read that as unmeasured and declined to penalize, this path `continue`d and dropped the link, letting a measured venue decide alone); and after the first fix, the outright disagreement above.
+- This copy matters more than the first: it is **not** behind a default-off flag. Every sport's feature builder injects it — football, basketball, baseball, hockey, LoL, World Cup — and it feeds `compute_confidence`'s `market_quality_damp` and `odds_quality`, so it lands in `KernelPrediction.confidence`. Measured on the damp term, at the 10k floor:
+
+  | group | old factor | old damp | fixed damp | confidence effect |
+  | --- | --- | --- | --- | --- |
+  | unmeasured book + $100 market | 0.0100 | 0.9020 | 1.0000 | +10.86% |
+  | unmeasured book + $1k market | 0.1000 | 0.9200 | 1.0000 | +8.70% |
+  | unmeasured book + $4.9k market | 0.4900 | 0.9980 | 1.0000 | +0.20% |
+  | all measured (regression) | unchanged | — | — | 0.00% |
+
+  Per the previous entry, traditional-odds links never receive a snapshot at all, so the top rows are the common shape rather than a rare one.
+- The rule now lives in one place, `market_liquidity.group_liquidity_factor(liquidities, *, floor)`, called by both. It returns `None` meaning "do not penalize" whenever **any** venue publishes no usable depth, including the all-unmeasured case both functions already treated that way. Callers differ only in how they *render* that verdict: the edge detector multiplies its factor, so it renders as `1.0`; the feed omits the key, so `odds_quality` and `market_quality_damp` skip the term. The `floor` stays a parameter rather than being read from config inside the helper, because the edge detector deliberately keeps its own (5000) decoupled from `DIAGNOSIS_LIQUIDITY_FLOOR` (10000) — coupling them once let a config change in the diagnosis pipeline silently flatten every edge's liquidity factor. The rule is shared; the scale is not.
+- The consistency test took two attempts, and the first one is worth recording as a near-miss. It called the shared helper twice with different floors and asserted the two results agreed — which is close to tautological: it stays green even when a caller stops using the helper altogether, which is exactly the failure it claimed to cover. Verified by re-introducing the real drift and watching it pass. Rewritten to drive the two *entry points*, it now fails on that same injected drift.
+- A second trap in the same test: "declined to penalize" cannot be read off the factor value, because at the edge floor of 5000 a genuinely deep group saturates the ramp at `1.0` — the same number the edge side uses to render "no penalty". The test asks the rule for its verdict and then asserts each caller rendered *that*, instead of comparing numbers.
+- Seven tests added. Reverting the shared helper fails six of them across **both** test files from a single edit, which is the structural guarantee the extraction buys: there is no longer a copy that can be fixed alone.
+
 ### Fix: unmeasured venue depth was spent as a measurement of zero (P1-V3)
 
 - Three defects in the sport-edge path, all one question: what does it mean that a venue publishes no liquidity? Every other liquidity site in this repo answers it the same way — `diagnosis_service.liquidity_factor` says "do not penalize what we cannot measure", `market_liquidity` omits the key rather than defaulting it, and `market_quality_service` excludes a missing sub-score from its average. The edge path answered it two other ways, neither of them that one.

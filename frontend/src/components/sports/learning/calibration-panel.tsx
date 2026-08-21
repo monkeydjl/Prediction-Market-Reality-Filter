@@ -4,8 +4,10 @@ import { useState } from "react";
 import {
   useCalibration,
   useReliability,
+  useConfidenceReliability,
   type CalibrationItem,
   type ReliabilityData,
+  type ConfidenceReliabilityData,
 } from "@/lib/sports-api";
 import { ReliabilityChart } from "./reliability-chart";
 
@@ -37,6 +39,7 @@ export function CalibrationPanel() {
   // matching the previous Promise.allSettled behavior.
   const cal = useCalibration(params);
   const rel = useReliability(params);
+  const conf = useConfidenceReliability(params);
 
   const calibrations: CalibrationItem[] | null = cal.data ?? null;
   const calError = cal.error !== undefined;
@@ -44,6 +47,9 @@ export function CalibrationPanel() {
   const reliability: ReliabilityData | null = rel.data ?? null;
   const relError = rel.error !== undefined;
   const relLoading = rel.isLoading;
+  const confidence: ConfidenceReliabilityData | null = conf.data ?? null;
+  const confError = conf.error !== undefined;
+  const confLoading = conf.isLoading;
 
   return (
     <div className="space-y-6">
@@ -136,6 +142,63 @@ export function CalibrationPanel() {
             sampleCount={reliability.sample_count}
             maxCalibrationError={reliability.max_calibration_error}
           />
+        )}
+      </div>
+
+      {/* Confidence reliability chart (P1-X1) */}
+      <div>
+        <h2 className="mb-2 text-sm font-medium text-muted-foreground">置信度可靠性图</h2>
+        <p className="mb-2 text-xs text-muted-foreground">
+          上图的横轴是最高结果概率，这里是引擎自报的置信度——两者是不同的量。置信度公式的输出范围为
+          0.30–0.95，因此最低与最高分桶为空属预期，并非缺失数据。
+        </p>
+        {confError ? (
+          <div className="p-4 text-sm text-neg">置信度可靠性数据加载失败</div>
+        ) : confLoading || confidence === null ? (
+          <div className="p-4 text-sm text-muted-foreground">加载中...</div>
+        ) : (
+          <>
+            {confidence.signed_gap != null && (
+              <div
+                data-testid="confidence-signed-gap"
+                className="mb-2 flex flex-wrap gap-3 text-xs text-muted-foreground"
+              >
+                <span
+                  className={`rounded bg-secondary px-2 py-1 font-mono ${
+                    confidence.signed_gap > 0
+                      ? "text-neg"
+                      : confidence.signed_gap < 0
+                        ? "text-pos"
+                        : ""
+                  }`}
+                >
+                  {confidence.signed_gap > 0
+                    ? "过度自信"
+                    : confidence.signed_gap < 0
+                      ? "保守"
+                      : "一致"}{" "}
+                  {confidence.signed_gap > 0 ? "+" : ""}
+                  {(confidence.signed_gap * 100).toFixed(1)}pp
+                </span>
+                {confidence.mean_confidence != null && (
+                  <span className="rounded bg-secondary px-2 py-1 font-mono">
+                    平均置信度 {(confidence.mean_confidence * 100).toFixed(1)}%
+                  </span>
+                )}
+                {confidence.mean_accuracy != null && (
+                  <span className="rounded bg-secondary px-2 py-1 font-mono">
+                    平均准确率 {(confidence.mean_accuracy * 100).toFixed(1)}%
+                  </span>
+                )}
+              </div>
+            )}
+            <ReliabilityChart
+              bins={confidence.bins}
+              ece={confidence.ece}
+              sampleCount={confidence.sample_count}
+              maxCalibrationError={confidence.max_calibration_error}
+            />
+          </>
         )}
       </div>
     </div>

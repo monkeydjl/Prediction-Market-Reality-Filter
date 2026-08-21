@@ -697,3 +697,27 @@ def get_reliability(engine: str | None = None,
     if "total_samples" not in result:
         result["total_samples"] = result.pop("sample_count", 0)
     return result
+
+
+@router.get("/calibration/confidence-reliability")
+def get_confidence_reliability(engine: str | None = None,
+                               competition: str | None = None,
+                               bins: int = 10) -> dict:
+    """Binned reliability of the engine's stated confidence (P1-X1).
+
+    Same bin shape as /calibration/reliability so the chart is reused, but the
+    x axis is KernelPrediction.confidence rather than max(outcome_probabilities)
+    — the two answer different questions. Read-only; writes nothing.
+    """
+    if not config.settings.KERNEL_PREDICTION_ENABLED:
+        raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")
+    if bins < 5 or bins > 20:
+        raise HTTPException(status_code=422, detail="bins must be 5-20")
+    from app.kernel.kernel_db import compute_confidence_reliability_bins
+    result = compute_confidence_reliability_bins(
+        engine=engine, competition=competition, bins=bins
+    )
+    # Same normalization as get_reliability: the error path omits sample_count.
+    if "total_samples" not in result:
+        result["total_samples"] = result.pop("sample_count", 0)
+    return result

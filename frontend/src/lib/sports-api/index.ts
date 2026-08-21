@@ -32,6 +32,7 @@ export {
   usePredictionTrajectory,
   useCalibration,
   useReliability,
+  useConfidenceReliability,
   processOutcome,
 } from "./hooks/use-learning";
 export type { SingleEngineScore } from "./hooks/use-learning";

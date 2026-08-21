@@ -9,6 +9,7 @@ import type {
   PredictionTrajectory,
   CalibrationItem,
   ReliabilityData,
+  ConfidenceReliabilityData,
 } from "../types";
 
 /**
@@ -60,6 +61,21 @@ export function useReliability(params?: {
   const qs = buildQuery(params ?? {});
   const key = `${getApiBase()}/predictions/calibration/reliability${qs}`;
   return useSWR<ReliabilityData>(key);
+}
+
+/**
+ * Reliability of the engine's stated confidence (P1-X1). Distinct route from
+ * useReliability: same bin shape, but binned on KernelPrediction.confidence
+ * instead of max(outcome_probabilities), plus a signed over/under-confidence gap.
+ */
+export function useConfidenceReliability(params?: {
+  engine?: string;
+  competition?: string;
+  bins?: number;
+}) {
+  const qs = buildQuery(params ?? {});
+  const key = `${getApiBase()}/predictions/calibration/confidence-reliability${qs}`;
+  return useSWR<ConfidenceReliabilityData>(key);
 }
 
 /** Score for one engine. Returns 404 until that engine has graded samples. */

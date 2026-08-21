@@ -219,7 +219,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 
 | ID | 项 |
 |----|-----|
-| P1-X1 | ✅ 部分 2026-07-20：`confidence.compute_confidence`（strength+completeness+agreement+market damp）；全运动引擎接入；ECE 桶校准仍属后续 —— 2026-08-20 勘定：**概率 ECE 其实已经存在**（`kernel_db.compute_reliability_bins` 按 `max(outcome_probabilities)` 分 10 桶算 ECE 与最大校准误差，经 `GET /calibration/reliability` 暴露）。真正仍待的是**置信度 ECE**，而它此前被 `avg_confidence` 的语义错误堵住：该字段存的是平均主胜概率而非引擎置信度，已在 P1-V5 修正，置信度分桶 ECE 现在才有可用的输入 |
+| P1-X1 | ✅ 部分 2026-07-20：`confidence.compute_confidence`（strength+completeness+agreement+market damp）；全运动引擎接入；ECE 桶校准仍属后续 —— 2026-08-20 勘定：**概率 ECE 其实已经存在**（`kernel_db.compute_reliability_bins` 按 `max(outcome_probabilities)` 分 10 桶算 ECE 与最大校准误差，经 `GET /calibration/reliability` 暴露）。**置信度 ECE 已于 2026-08-21 交付**：`kernel_db.compute_confidence_reliability_bins` 按 `KernelPrediction.confidence` 分桶，经 `GET /predictions/calibration/confidence-reliability` 暴露，前端「置信度可靠性图」复用同一 `ReliabilityChart`。两条曲线共用抽出的 `_reliability_curve`（同一套桶边界、取整与样本加权），因此不会各自漂移。除 ECE 外另发布 `signed_gap = 平均置信度 − 平均准确率`：ECE 无符号，说不出该往哪个方向调公式。置信度值域为 0.30–0.95，故首末桶为空属预期。此前被 `avg_confidence` 的语义错误堵住（该字段存的是平均主胜概率而非引擎置信度，已在 P1-V5 修正）。同时替换了一个空转测试：`test_reliability_source_has_ece` 只 grep 函数源码里有无 "ece" 字样，不钉任何数值，且在无行为变更的重构下即刻失败 |
 | P1-X2 | ✅ 部分：FactorBreakdownTable 已展示 explanation；2026-07-20 补全 situational/injury/h2h 中文名 |
 | P1-X3 | ✅ 部分 2026-07-20：confidence_breakdown 入 betting_analysis + SportConfidencePanel 优先读 API |
 

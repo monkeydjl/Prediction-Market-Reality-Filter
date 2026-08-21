@@ -837,6 +837,76 @@ def get_calibrations(engine: str | None = None,
         session.close()
 
 
+def _reliability_curve(pairs: list[tuple[float, float]], bins: int) -> dict[str, Any]:
+    """Bin (predicted, actual) pairs into a reliability curve with ECE.
+
+    Shared by the probability curve (``compute_reliability_bins``, where
+    predicted is max(outcome_probabilities)) and the confidence curve
+    (``compute_confidence_reliability_bins``, where predicted is the engine's
+    own stated confidence). One binning rule for both, so the two curves cannot
+    drift apart in bin edges, rounding, or ECE weighting.
+
+    Empty bins (count=0) report avg_predicted/actual_frequency as None. ECE is
+    the sample-weighted mean absolute bin gap, accumulated from the unrounded
+    bin means; max_calibration_error is read off the rounded per-bin values the
+    caller sees.
+    """
+    bin_width = 1.0 / bins
+    bin_list: list[dict[str, Any]] = []
+    for i in range(bins):
+        lower = i * bin_width
+        upper = (i + 1) * bin_width
+        bin_list.append({
+            "lower": round(lower, 4),
+            "upper": round(upper, 4),
+            "center": round((lower + upper) / 2, 4),
+            "avg_predicted": None,
+            "actual_frequency": None,
+            "count": 0,
+        })
+
+    predicted_sums = [0.0] * bins
+    actual_sums = [0.0] * bins
+    counts = [0] * bins
+    for predicted, actual in pairs:
+        # Determine bin index (clamp to last bin for predicted=1.0).
+        # Use multiplication instead of division by bin_width to avoid
+        # float truncation bugs (e.g. 0.3 / 0.1 = 2.9999... -> bin 2).
+        bin_idx = min(int(predicted * bins), bins - 1)
+        predicted_sums[bin_idx] += predicted
+        actual_sums[bin_idx] += actual
+        counts[bin_idx] += 1
+
+    # Finalize bin values + Expected Calibration Error (ECE)
+    total_n = 0
+    ece_acc = 0.0
+    for i, count in enumerate(counts):
+        if count == 0:
+            continue
+        avg_p = predicted_sums[i] / count
+        avg_a = actual_sums[i] / count
+        bin_list[i]["avg_predicted"] = round(avg_p, 4)
+        bin_list[i]["actual_frequency"] = round(avg_a, 4)
+        bin_list[i]["count"] = count
+        total_n += count
+        ece_acc += count * abs(avg_p - avg_a)
+
+    # Max calibration error across non-empty bins
+    max_ce = None
+    for b in bin_list:
+        if b["count"] > 0 and b["avg_predicted"] is not None:
+            ce = abs(float(b["avg_predicted"]) - float(b["actual_frequency"]))
+            max_ce = ce if max_ce is None else max(max_ce, ce)
+
+    return {
+        "bins": bin_list,
+        "total_samples": total_n,
+        "sample_count": total_n,
+        "ece": round(ece_acc / total_n, 4) if total_n > 0 else None,
+        "max_calibration_error": round(max_ce, 4) if max_ce is not None else None,
+    }
+
+
 def compute_reliability_bins(engine: str | None = None,
                              competition: str | None = None,
                              bins: int = 10) -> dict:
@@ -861,73 +931,86 @@ def compute_reliability_bins(engine: str | None = None,
         if competition is not None:
             query = query.filter(KernelPrediction.competition == competition)
 
-        rows = query.all()
-
-        # Initialize bins
-        bin_width = 1.0 / bins
-        bin_list: list[dict[str, Any]] = []
-        for i in range(bins):
-            lower = i * bin_width
-            upper = (i + 1) * bin_width
-            bin_list.append({
-                "lower": round(lower, 4),
-                "upper": round(upper, 4),
-                "center": round((lower + upper) / 2, 4),
-                "avg_predicted": None,
-                "actual_frequency": None,
-                "count": 0,
-            })
-
-        # Accumulate per bin
-        bin_sums = [{"predicted_sum": 0.0, "actual_sum": 0.0, "count": 0} for _ in range(bins)]
-        for pred, outcome in rows:
+        pairs: list[tuple[float, float]] = []
+        for pred, outcome in query.all():
             probs = pred.outcome_probabilities or {}
-            if not probs:
+            actual = outcome.outcome_correct  # 1 or 0; SQL already excluded NULL
+            if not probs or actual is None:
                 continue
-            predicted_prob = max(probs.values())
-            actual = outcome.outcome_correct  # 1 or 0
-
-            # Determine bin index (clamp to last bin for prob=1.0).
-            # Use multiplication instead of division by bin_width to avoid
-            # float truncation bugs (e.g. 0.3 / 0.1 = 2.9999... -> bin 2).
-            bin_idx = min(int(predicted_prob * bins), bins - 1)
-            bin_sums[bin_idx]["predicted_sum"] += predicted_prob
-            bin_sums[bin_idx]["actual_sum"] += actual
-            bin_sums[bin_idx]["count"] += 1
-
-                # Finalize bin values + Expected Calibration Error (ECE)
-        total_n = 0
-        ece_acc = 0.0
-        for i, bs in enumerate(bin_sums):
-            if bs["count"] > 0:
-                avg_p = bs["predicted_sum"] / bs["count"]
-                avg_a = bs["actual_sum"] / bs["count"]
-                bin_list[i]["avg_predicted"] = round(avg_p, 4)
-                bin_list[i]["actual_frequency"] = round(avg_a, 4)
-                bin_list[i]["count"] = bs["count"]
-                # bin_sums holds float sums alongside the count, so read it back
-                # as an int to keep the reported sample count an integer.
-                total_n += int(bs["count"])
-                ece_acc += bs["count"] * abs(avg_p - avg_a)
-
-        ece = round(ece_acc / total_n, 4) if total_n > 0 else None
-        # Max calibration error across non-empty bins
-        max_ce = None
-        for b in bin_list:
-            if b["count"] > 0 and b["avg_predicted"] is not None:
-                ce = abs(float(b["avg_predicted"]) - float(b["actual_frequency"]))
-                max_ce = ce if max_ce is None else max(max_ce, ce)
-        if max_ce is not None:
-            max_ce = round(max_ce, 4)
+            pairs.append((float(max(probs.values())), float(actual)))
 
         return {
             "engine": engine,
             "competition": competition,
-            "bins": bin_list,
-            "total_samples": total_n,
-            "sample_count": total_n,
-            "ece": ece,
-            "max_calibration_error": max_ce,
+            **_reliability_curve(pairs, bins),
+        }
+    except Exception as e:
+        logger.warning("kernel_db query failed: %s", e, exc_info=True)
+        return {
+            "engine": engine,
+            "competition": competition,
+            "bins": [],
+            "total_samples": 0,
+        }
+    finally:
+        session.close()
+
+
+def compute_confidence_reliability_bins(engine: str | None = None,
+                                        competition: str | None = None,
+                                        bins: int = 10) -> dict:
+    """Compute binned reliability of the engine's *stated* confidence.
+
+    Answers a question the probability curve cannot: when an engine reports
+    confidence 0.80, is its call actually right 80% of the time?
+    ``compute_reliability_bins`` bins max(outcome_probabilities) — the model's
+    probability for its own pick. ``KernelPrediction.confidence`` is a separate
+    quantity, blended by ``engines.confidence.compute_confidence`` from decision
+    strength, data completeness, factor agreement, and a market damper. Nothing
+    else compares it to outcomes, so the confidence formula has had no
+    empirical check.
+
+    Adds ``mean_confidence`` / ``mean_accuracy`` / ``signed_gap`` (confidence
+    minus accuracy, positive = overconfident) on top of the shared curve. ECE is
+    unsigned and so cannot tell an overconfident engine from an underconfident
+    one; the sign is the part that says which way the formula should move.
+
+    Note the scale: ``compute_confidence`` maps its blend into 0.30..0.95, so
+    the lowest and highest bins are expected to be empty rather than missing.
+    """
+    session = get_kernel_session()
+    try:
+        query = (
+            session.query(KernelPrediction, KernelMatchOutcome)
+            .join(KernelMatchOutcome,
+                  KernelPrediction.match_id == KernelMatchOutcome.match_id)
+            .filter(KernelMatchOutcome.outcome_correct.isnot(None))
+        )
+        if engine is not None:
+            query = query.filter(KernelPrediction.engine == engine)
+        if competition is not None:
+            query = query.filter(KernelPrediction.competition == competition)
+
+        pairs: list[tuple[float, float]] = []
+        for pred, outcome in query.all():
+            actual = outcome.outcome_correct  # 1 or 0; SQL already excluded NULL
+            if actual is None:
+                continue
+            pairs.append((float(pred.confidence), float(actual)))
+
+        mean_confidence = mean_accuracy = signed_gap = None
+        if pairs:
+            mean_confidence = round(sum(p for p, _ in pairs) / len(pairs), 4)
+            mean_accuracy = round(sum(a for _, a in pairs) / len(pairs), 4)
+            signed_gap = round(mean_confidence - mean_accuracy, 4)
+
+        return {
+            "engine": engine,
+            "competition": competition,
+            **_reliability_curve(pairs, bins),
+            "mean_confidence": mean_confidence,
+            "mean_accuracy": mean_accuracy,
+            "signed_gap": signed_gap,
         }
     except Exception as e:
         logger.warning("kernel_db query failed: %s", e, exc_info=True)

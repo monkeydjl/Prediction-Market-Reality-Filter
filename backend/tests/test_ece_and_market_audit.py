@@ -1,4 +1,6 @@
 """P1-X1 ECE + P1-V1 market audit unit tests."""
+import pytest
+
 from app.kernel.market_snapshot_store import MarketSnapshotStore
 
 
@@ -6,14 +8,22 @@ def test_audit_summary_method_exists():
     assert hasattr(MarketSnapshotStore, "audit_summary")
 
 
-def test_reliability_source_has_ece():
-    import inspect
-    from app.kernel.kernel_db import compute_reliability_bins
+def test_reliability_curve_reports_ece():
+    """The reliability contract, asserted on values rather than on source text.
 
-    src = inspect.getsource(compute_reliability_bins)
-    assert "ece" in src
-    assert "max_calibration_error" in src
-    assert "sample_count" in src
+    This used to grep compute_reliability_bins' source for the strings "ece" /
+    "max_calibration_error" / "sample_count", which pinned nothing: the ECE
+    value itself was never checked, and the assertions broke the moment the
+    binning moved into a shared helper without any behavior change. Bin-level
+    and endpoint-level coverage lives in tests/test_confidence_reliability.py.
+    """
+    from app.kernel.kernel_db import _reliability_curve
+
+    # bin 2: avg_p 0.2 vs avg_a 0.5 (2 samples); bin 8: 0.8 vs 1.0 (1 sample)
+    curve = _reliability_curve([(0.2, 0.0), (0.2, 1.0), (0.8, 1.0)], 10)
+    assert curve["ece"] == pytest.approx((2 * 0.3 + 1 * 0.2) / 3, abs=1e-4)
+    assert curve["max_calibration_error"] == pytest.approx(0.3, abs=1e-4)
+    assert curve["sample_count"] == 3
 
 
 def test_audit_summary_empty_shape():

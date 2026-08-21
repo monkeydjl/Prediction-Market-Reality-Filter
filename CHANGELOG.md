@@ -1,5 +1,16 @@
 # Changelog
 
+### Confidence-reliability curve and signed calibration gap (P1-X1)
+
+- The reliability curve that already existed bins `max(outcome_probabilities)`. `KernelPrediction.confidence` is a **different quantity** — built by `engines/confidence.compute_confidence` from decision strength, data completeness, factor agreement, and a market damper — and nothing had ever compared it to outcomes. So the engine's own stated confidence was rendered in the learning panel, consumed as a trust input, and never once checked against whether matches at that confidence actually resolved that often.
+- `compute_confidence_reliability_bins` adds that curve, exposed as `GET /predictions/calibration/confidence-reliability` with the same bin shape as the probability route so the frontend chart is reused unchanged.
+- Alongside ECE it publishes `signed_gap = mean_confidence − mean_accuracy`. ECE is unsigned and therefore cannot say which way to move the formula; the sign can. Positive is overconfident (rendered 过度自信), negative is conservative (保守). Both means are published so the gap can be read rather than trusted.
+- The binning rule was extracted into one shared `_reliability_curve` used by both curves, so they cannot drift apart in bin edges, rounding, or ECE weighting. Two behaviors are preserved exactly: ECE accumulates from the **unrounded** bin means while `max_calibration_error` reads the **rounded** per-bin values the caller sees, and the bin index uses `min(int(predicted * bins), bins - 1)` rather than dividing by `bin_width` — `0.3 / 0.1` is `2.9999...` and put 0.3 in the wrong bin.
+- Note the scale: `compute_confidence` maps its blend into `0.30..0.95`, so the lowest and highest bins are expected to be empty rather than missing. The panel says so, otherwise a correct chart reads as a bug.
+- Every new fixture makes confidence and `max(outcome_probabilities)` different numbers (0.90 versus 0.55), so the two curves land in different bins and report different ECE (0.65 versus 0.30) on identical rows. Substituting the wrong column was confirmed to fail 8 of 17 backend assertions and 3 frontend ones before the correct binding was restored — the pre-existing reliability tests could not have caught it, since they asserted only bin counts and `total_samples`.
+- Replaced a vacuous test in the process: `test_reliability_source_has_ece` asserted `"ece" in inspect.getsource(compute_reliability_bins)`. It pinned no value, and broke the moment the arithmetic moved into a shared helper with no behavior change.
+- Read-only throughout. The endpoint writes nothing, no learning path is enabled, and no engine formula, weight, or output key changes.
+
 ### Fix: calibration trust was the league's home-win rate, not the engine's accuracy (P1-V5)
 
 - `KernelCalibration.avg_accuracy` was written as `mean(1[outcome == "home_win"])` — the share of fixtures that ended in a home win, a property of the league that is **entirely independent of what the engine predicted**. `avg_confidence` was written as the mean predicted home-win probability, while `KernelPrediction.confidence` existed and was ignored. All three producers were affected: `update_calibration`, `update_calibration_by_confidence`, and `update_calibration_by_stage`.

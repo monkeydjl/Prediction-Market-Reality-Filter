@@ -67,16 +67,40 @@ def _compute_signed_error(model_prob: float, settlement_implied_prob: float) -> 
 
 def _compute_direction_correct(
     raw_edge: float, market_prob: float, settlement_implied_prob: float
-) -> int:
-    """Did the edge direction match the market resolution?
+) -> int | None:
+    """Did the edge direction match the market resolution? ``None`` if there was none.
 
     Edge direction: sign(raw_edge). Market resolution direction:
     sign(settlement_implied_prob - market_prob). Correct if both non-zero and match.
+
+    A zero ``raw_edge`` is **no directional call, not a wrong one**: the model
+    landed on the market price, so there is no direction to be right or wrong
+    about. Scoring it 0 said the engine had been mistaken, and since
+    ``_update_market_calibration`` divided by every processed row, each such row
+    pulled ``direction_accuracy`` down — a number
+    ``calibration_fusion_service._compute_market_trust`` reads straight back as
+    engine trust. ``raw_edge`` is ``model_prob - market_prob`` with no threshold
+    (``edge_detector_service.py:170``), so a market-echoing engine produces these
+    rows in bulk.
+
+    ``None`` is what the rest of the repo already means by a non-directional row
+    (``quality_metrics_report_service.slice_metrics``,
+    ``prediction_store.get_calibration_buckets``,
+    ``calibration_drift_service._cell_metrics`` all skip it in the mean),
+    ``kernel_market_settlements.direction_correct`` is already nullable, and
+    ``SettlementHistoryTable`` already renders it as "—" rather than "✗".
+
+    A zero *market* move deliberately stays 0: an unmoved closing line is not a
+    confirmation of the edge, which is the ordinary CLV reading. That is a
+    definition rather than an oversight — do not fold it into the ``None`` branch
+    without settling that question first.
     """
     edge_sign = 1 if raw_edge > 0 else (-1 if raw_edge < 0 else 0)
+    if edge_sign == 0:
+        return None
     market_move = settlement_implied_prob - market_prob
     market_sign = 1 if market_move > 0 else (-1 if market_move < 0 else 0)
-    return 1 if edge_sign == market_sign and edge_sign != 0 else 0
+    return 1 if edge_sign == market_sign else 0
 
 
 def _update_market_calibration(
@@ -86,11 +110,32 @@ def _update_market_calibration(
 
     x = model_prob, y = settlement_implied_prob
     slope clamped to [0.0, 2.0], intercept clamped to [-0.5, 0.5].
+
+    ``direction_accuracy`` is averaged over the rows that actually made a
+    directional call, so ``sample_count`` (the regression's n) can exceed the
+    count behind the accuracy. Publishing both numbers would need a
+    ``directional_count`` column, and kernel tables have no ALTER TABLE path in
+    this repo — so when *no* row is directional the calibration is not written at
+    all rather than reported as 0.0 accuracy, which
+    ``_compute_market_trust`` would read as a measured total failure.
+    ``kernel_market_calibrations.direction_accuracy`` is ``nullable=False``, so
+    there is no in-schema way to say "not measured".
     """
     settlements = store.get_settlements_for_calibration(
         engine, competition, limit=config.settings.MARKET_CALIBRATION_WINDOW_SIZE
     )
     if len(settlements) < config.settings.MIN_SAMPLES_FOR_MARKET_CALIBRATION:
+        return
+
+    directional = [
+        s["direction_correct"] for s in settlements if s["direction_correct"] is not None
+    ]
+    if not directional:
+        logger.info(
+            "Market calibration for %s/%s not written: none of %d settlements made a "
+            "directional call (raw_edge == 0 throughout).",
+            engine, competition, len(settlements),
+        )
         return
 
     xs = [s["model_prob"] for s in settlements]
@@ -108,7 +153,7 @@ def _update_market_calibration(
 
     avg_brier = sum(s["brier_score"] for s in settlements) / n
     avg_signed_error = sum(s["signed_error"] for s in settlements) / n
-    direction_accuracy = sum(s["direction_correct"] for s in settlements) / n
+    direction_accuracy = sum(directional) / len(directional)
 
     store.upsert_calibration(
         engine=engine, competition=competition, slope=round(slope, 4),

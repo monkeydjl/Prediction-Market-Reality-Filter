@@ -256,7 +256,7 @@ Sports Prediction OS（Phase 1–13 已落地代码）
 | P2-W1 | 结构化 facts 定时 bundle import（flag 控制） |
 | P2-W2 | 非市场类体育事件的 commitment / 校准路径（不出 prediction_store 时） |
 | P2-W3 | 出线/晋级/纪律类确定性结算规则覆盖率 |
-| P2-W4 | AI 只解释结构化事实，禁止模型「猜」红黄牌计数 |
+| P2-W4 | **AI 只解释结构化事实，禁止模型「猜」红黄牌计数** — ✅ 2026-08-23：新增 `app/services/llm_fact_grounding.py`，把两条世界杯提示词的「事实边界」集中成一处：`build_fact_grounding_section` 渲染调用方真正给出的事实，并把 11 类最易被凭空生成的事实（红黄牌 / 伤停 / 首发 / 近期战绩 / 历史对战 / 控球射门 / xG / Elo / 赔率盘口 / 天气场地 / 球员数据）中仍缺失的逐条列成「你没有拿到、因此并不知道」，再加三条硬规则（只能引用上文出现过的数字；缺数据必须写「该项数据未提供」而不得估算或由概率反推；不得声称预测用了上文未列出的数据源）。空值（`{}` / `[]` / `""` / `None`）一律算未提供，避免 `gbm_pred.get("elo_ratings", {})` 这类空字典把 Elo 从缺失表里抹掉却又不给数。同时修掉三处「提示词问了自己没有的东西」：分析提示词原本要求「based on probabilities and **Elo/data**」而其唯一调用方从不传 Elo；`/optimize` 的 `match_context` 只被读 `injuries/recent_form/head_to_head` 三个键，而路由实际传的 `stage/group/venue/data_quality/key_factors` 五个键全被丢弃（`context_info` 在所有调用点恒为空）；无路由 / 异常兜底文案无条件宣称预测「包括 Elo 评分、历史对战记录和赔率数据」，而该分支根本读不到 `prediction.factors`。另：旧渲染在 try 之外读 `elo_ratings['difference']`，缺键即 500，改用整字典渲染后消失 |
 
 ---
 

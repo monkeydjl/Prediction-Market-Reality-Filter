@@ -298,3 +298,87 @@ class TestPredictResponseCarriesBettingAnalysis:
         body = self._post(_stub_result(None))
         assert "betting_analysis" in body
         assert body["betting_analysis"] is None
+
+
+class TestConditionalCalibrationRoute:
+    """POST /predictions/calibration/conditional (P1-V5).
+
+    The route had no test at all — and no caller either, which is how it kept a
+    missing kernel-flag guard that every neighbouring route has.
+    """
+
+    def _patched_learning(self, conf=None, stage=None):
+        from unittest.mock import MagicMock, patch
+        instance = MagicMock()
+        instance.update_calibration_by_confidence.return_value = (
+            conf if conf is not None else {"low": 0, "mid": 12, "high": 30}
+        )
+        instance.update_calibration_by_stage.return_value = (
+            stage if stage is not None else {"regular": 25, "knockout": 0, "unknown": 0}
+        )
+        cls = MagicMock(return_value=instance)
+        return patch("app.kernel.learning_service.KernelLearningService", cls), cls, instance
+
+    def test_returns_both_bucket_maps_and_forwards_filters(self, client):
+        patcher, _cls, instance = self._patched_learning()
+        with patcher:
+            resp = client.post(
+                "/api/predictions/calibration/conditional",
+                params={"competition": "epl", "engine": "elo_odds"},
+            )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["competition"] == "epl"
+        assert body["engine"] == "elo_odds"
+        # Both fits must be reported: the confidence buckets alone would hide
+        # whether the stage rows were written.
+        assert body["confidence_buckets"] == {"low": 0, "mid": 12, "high": 30}
+        assert body["stage_buckets"] == {"regular": 25, "knockout": 0, "unknown": 0}
+        instance.update_calibration_by_confidence.assert_called_once_with("epl", "elo_odds")
+        instance.update_calibration_by_stage.assert_called_once_with("epl", "elo_odds")
+
+    def test_competition_is_required(self, client):
+        resp = client.post("/api/predictions/calibration/conditional")
+        assert resp.status_code == 422
+
+    def test_returns_503_when_kernel_disabled_without_writing(self, client):
+        """The guard must refuse *before* the fit runs.
+
+        Writing calibration rows while KERNEL_PREDICTION_ENABLED is off produces
+        rows that GET /calibration then refuses to read back.
+        """
+        from app.core import config
+        from unittest.mock import patch
+        patcher, cls, _instance = self._patched_learning()
+        with patcher, patch.object(config.settings, "KERNEL_PREDICTION_ENABLED", False):
+            resp = client.post(
+                "/api/predictions/calibration/conditional",
+                params={"competition": "epl"},
+            )
+        assert resp.status_code == 503
+        cls.assert_not_called()
+
+    def test_requires_the_operator_write_key(self):
+        """A configured write key must be enforced on this mutation."""
+        from app.main import app
+        from app.core import config
+        from app.api.security import settings as security_settings
+        from unittest.mock import patch
+
+        patcher, _cls, _instance = self._patched_learning()
+        with patcher, \
+             patch.object(config.settings, "KERNEL_PREDICTION_ENABLED", True), \
+             patch.object(security_settings, "API_WRITE_KEY", "secret-key"), \
+             patch.object(security_settings, "ALLOW_OPEN_WRITES", False):
+            client = TestClient(app)
+            denied = client.post(
+                "/api/predictions/calibration/conditional",
+                params={"competition": "epl"},
+            )
+            allowed = client.post(
+                "/api/predictions/calibration/conditional",
+                params={"competition": "epl"},
+                headers={"X-API-Key": "secret-key"},
+            )
+        assert denied.status_code == 401
+        assert allowed.status_code == 200, allowed.text

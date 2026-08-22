@@ -354,6 +354,7 @@ Phase 15 设计曾写「Edge/WS/优化/结算几乎无 UI」；代码侧已出�
 | Q5 | 抖音三模型后续 | DC/GBM/BTD 阶段已完成；下一跳是 xG 与 Kernel 集成（见 §3） |
 | Q6 | 校准漂移告警 | ✅ 2026-07-20：`drift_alert_dispatcher` 三通道（webhook + Sentry breadcrumb + log）+ per-code 冷却 + `DRIFT_ALERTS_ENABLED` flag（默认 OFF）；`/quality-metrics/drift` 路由 |
 | Q7 | 人工 review queue SLA | pending 链接 / 质量告警消化节奏 |
+| Q8 | **空转测试清理** | ✅ 2026-08-22 首批：`tests/test_registry_altitude_and_conditional_api.py` 两条断言（`hasattr` 只证方法名存在；`abs(soft-0.44)<1e-6 or soft>0.3` 的析取式——精确臂在种子涨到 0.46 后早已为假，只靠 `>0.3` 保持绿灯）换成 31 条真断言：`confidence_bucket` 边界、`stage_bucket` 覆盖各 adapter 实际发出的九种 stage 串、`postseason` 必须落 knockout（扫描顺序一翻转即误分类）、match_id 兜底必须回 `unknown`（token 表含两字符 `rs`）、复合键前缀不互撞、薄分桶必须报 0 且不写行。`frontend/.../use-optimization.test.ts` 三条 `typeof x === "function"` 换成 `n_trials` 线上字段名、默认 150、失效键必须等于 `useOptimizationParams` 自己写的键（而非字面量）、ingest 不得失效参数视图、apply 的 id 必须在路径而非 body。五条 FE + 三条后端注入验证逐条转红 |
 
 ---
 
@@ -367,6 +368,8 @@ Phase 15 设计曾写「Edge/WS/优化/结算几乎无 UI」；代码侧已出�
 | 一事件一预测永久冻结 | `ON CONFLICT DO NOTHING` | commitment；大 edge 变化不重冻 |
 | `resolve_event` 覆盖 outcome | 无版本史 | 承诺模型语义 |
 | Phase 9 不做足球回测 | ClubElo 限制 | 需独立项目 |
+| `GET /sports/world-cup/analytics/prediction-timeline` | ❌ 不接前端（2026-08-22 查证） | 与已挂载的 `GET /world-cup/predictions/matches/{id}/prediction-history`（→ `PredictionHistoryCard`）读同一张 `prediction_history` 表、同一 `match_id`。它**少**了 `%_comparison` 过滤——`engine_comparison_service` 与 `world_cup_quality_service` 都用 `_is_applied_history` 排除引擎对比快照，只有这条路由不排除，接上去会把从未采用的对比行当成真实预测展示；它**多**出的 `match_minute` / `actual_score` 三列全仓库无写方（唯一写方 `world_cup_prediction_pipeline.py:1413` 不赋值），永远为 NULL。即「只读不写」的镜像形态 |
+| `GET /world-cup/predictions/today` | ❌ 不接前端（2026-08-22 查证） | 就是 `GET /world-cup/predictions/matches` 加一个 UTC 当日窗口：同一 `_serialize_prediction`、同一 in_play→scheduled→finished 排序。前端 `useWorldCupMatches` 已读 `/matches`（最多 200 条），日期筛选在客户端做即可；另注：`today_start/today_end` 是 naive datetime，与 `kickoff_utc`（timezone-aware）比较，接前端前须先修 |
 | 无 `/v1` API 前缀 | 仅 `/api/*` | 当前规模可接受 |
 
 ---
@@ -432,7 +435,7 @@ P1-SB1 … P1-SB4, P2-SB5, P2-SB6
 P1-FE1 … P1-FE3, P2-FE4 … P2-FE6, P2-FE9 … P2-FE12, P3-FE7, P3-FE8, P3-FE13  
 
 ### 工程 / 运维 / 质量
-E1 … E11, O1 … O6, Q1 … Q7  
+E1 … E11, O1 … O6, Q1 … Q8  
 
 ---
 

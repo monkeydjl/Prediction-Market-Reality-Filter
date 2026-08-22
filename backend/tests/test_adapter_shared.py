@@ -2300,3 +2300,186 @@ class TestMarketTotalsWiring:
 
         assert custom["market_total_line"] == pytest.approx(2.75)
         assert custom["market_total_p_over"] == pytest.approx(0.49)
+
+
+class TestFormIsNotPossession:
+    """P1-F6: form must not be published under the possession keys.
+
+    ``feature_builder`` hands ``team_raw["form_home"]`` straight to the engine's
+    form factor, so a possession value derived from form is the same evidence
+    voting a second time under a different name -- in the fused weight, in
+    ``data_completeness``, and in ``factor_agreement``. These tests drive the
+    real entry points rather than the removed helper, because the defect was a
+    write nobody read the marker of, not a helper anybody called.
+    """
+
+    @staticmethod
+    def _fetch(match, *, form=(0.9, 0.1), **odds_kwargs):
+        """Drive the real composition root with form resolved and style absent.
+
+        Form has to actually be present for this to be a test of anything: the
+        removed proxy read ``raw["team"]["form_home"]`` and skipped silently when
+        it was None, so a fixture whose form never resolves cannot observe the
+        defect at all. The situational enrichment is stubbed to seed form rather
+        than seeded through the database, because form's provenance is not what
+        is under test here.
+        """
+        def _seed_form(raw, _match):
+            if form is not None:
+                raw.setdefault("team", {})
+                raw["team"]["form_home"], raw["team"]["form_away"] = form
+
+        with patch(
+            "app.sports.football.adapters._shared.get_club_elo",
+            return_value={"elo_rating": 1900.0, "source": "clubelo"},
+        ), patch(
+            "app.services.odds_cache_service.get_cached_odds",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
+            "app.services.football_live_style_service.get_live_style",
+            return_value=LiveStyleResult(False),
+        ), patch(
+            "app.sports.football.adapters._shared.enrich_situational_features",
+            side_effect=_seed_form,
+        ):
+            return fetch_elo_and_odds(match, elo_scope="club", **odds_kwargs)
+
+    @staticmethod
+    def _unknown_club_match(match_id: str) -> MatchIdentity:
+        """A fixture both style sources miss, so nothing overwrites possession.
+
+        The default ``_make_match`` uses Real Madrid and Bayern, which the static
+        table does carry -- their possession is a real (if coarse) static reading
+        and ``enrich_style_features`` pops the proxy marker on the way past, so a
+        table-hit fixture destroys the evidence these tests need.
+        """
+        from app.sports.football.football_style import stats_for_team
+
+        assert stats_for_team("Unknown Club XYZ") is None  # premise
+        assert stats_for_team("Another Unknown FC") is None
+        return MatchIdentity(
+            match_id=match_id,
+            season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(
+                code="UNK", name="Unknown Club XYZ", competition=_UCL,
+            ),
+            away=TeamIdentity(
+                code="ANO", name="Another Unknown FC", competition=_UCL,
+            ),
+            kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
+        )
+
+    def test_form_alone_never_produces_a_possession_key(self):
+        """No live style and no static row must leave possession unset."""
+        raw = self._fetch(self._unknown_club_match("ucl-form-only"))
+        assert raw["custom"].get("style_source") is None  # premise: no style data
+        assert "possession_home" not in raw["custom"]
+        assert "possession_away" not in raw["custom"]
+        assert "possession_proxy" not in raw["custom"]
+
+    def test_enrich_style_features_is_the_only_writer_of_possession(self):
+        """Source-level guard: no second producer may reappear.
+
+        The removed proxy was a *write* whose marker nobody read, so no
+        behavioural test could have caught it being added -- the engine happily
+        consumes whatever is under the key. Pinning the set of writers is what
+        makes the next such addition visible.
+        """
+        import ast
+        import pathlib
+
+        source = pathlib.Path("app/sports/football/adapters/_shared.py").read_text(
+            encoding="utf-8",
+        )
+        tree = ast.parse(source)
+        writers: set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for inner in ast.walk(node):
+                if not isinstance(inner, ast.Assign):
+                    continue
+                for target in inner.targets:
+                    if (
+                        isinstance(target, ast.Subscript)
+                        and isinstance(target.slice, ast.Constant)
+                        and target.slice.value
+                        in {"possession_home", "possession_away"}
+                    ):
+                        writers.add(node.name)
+        assert writers == {"enrich_style_features"}, (
+            f"possession is written by {sorted(writers)}; only "
+            "enrich_style_features may produce it, from live or static style "
+            "stats. Deriving it from another factor's input double counts."
+        )
+
+    def test_world_cup_national_teams_get_no_possession(self):
+        """The real World Cup case: no live provider, and no static table row.
+
+        The pre-existing World Cup style test used club names, which hit the
+        static table -- so it asserted ``style_source == "static_table"`` and
+        could not observe the national-team path where the proxy was the only
+        producer of possession.
+        """
+        from app.sports.football.football_style import stats_for_team
+
+        world_cup = CompetitionIdentity(
+            code="wc", name="FIFA World Cup", sport=_FOOTBALL,
+        )
+        assert stats_for_team("Brazil") is None  # premise of this test
+        assert stats_for_team("Argentina") is None
+        match = MatchIdentity(
+            match_id="wc-nat-possession",
+            season=SeasonIdentity(competition=world_cup, season_key="2026"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="BRA", name="Brazil", competition=world_cup),
+            away=TeamIdentity(code="ARG", name="Argentina", competition=world_cup),
+            kickoff_utc=datetime(2026, 6, 11, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = {"team": {"form_home": 0.8, "form_away": 0.2}, "custom": {}}
+        enrich_style_features(raw, match)
+
+        assert "possession_home" not in raw["custom"]
+        assert "possession_away" not in raw["custom"]
+        assert "style_source" not in raw["custom"]
+
+    def test_form_evidence_is_not_counted_twice(self):
+        """Confidence must not rise just because form was copied to possession.
+
+        Pins the structural claim: a possession value derived from form adds an
+        available factor and an agreeing vote without adding information. The
+        assertion is an inequality rather than a fixed number so it survives any
+        future re-weighting of the confidence blend.
+        """
+        from app.kernel.engines.confidence import compute_confidence
+
+        probs = {"home_win": 0.43, "draw": 0.27, "away_win": 0.30}
+        base_flags = [True, True, True, False, False]
+        base_votes = ["home_win", "home_win", "home_win", None, None]
+
+        honest = compute_confidence(
+            probs,
+            available_flags=[*base_flags, False],
+            predicted_outcomes=[*base_votes, None],
+            data_quality="real",
+        )
+        with_proxy = compute_confidence(
+            probs,
+            available_flags=[*base_flags, True],
+            predicted_outcomes=[*base_votes, "home_win"],
+            data_quality="real",
+        )
+        # The proxy inflated confidence; the honest answer is the lower one, and
+        # that is what the adapter now produces for a form-only fixture.
+        assert with_proxy > honest
+
+        # An unknown-club fixture is required here. On a table-hit fixture the
+        # style enrichment pops the marker and overwrites possession, so the
+        # proxy would leave no trace and this assertion could not fail.
+        raw = self._fetch(self._unknown_club_match("ucl-no-double-count"))
+        assert "possession_proxy" not in raw["custom"]
+        assert "possession_home" not in raw["custom"]

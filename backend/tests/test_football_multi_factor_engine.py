@@ -567,3 +567,66 @@ class TestScheduleMergeTiers:
             engine.predict(both, both.match).outcome_probabilities
             == engine.predict(plain, plain.match).outcome_probabilities
         )
+
+
+class TestPossessionRequiresRealPossession:
+    """P1-F6: the possession factor must report itself absent without stats.
+
+    The adapter used to fill ``possession_home``/``_away`` from form share, which
+    the engine cannot distinguish from measured possession -- form then voted
+    twice, once as ``form`` and once as ``possession``. With that write removed
+    the factor must come out unavailable so its weight is redistributed, and it
+    must still switch on for real possession so it is not simply dead.
+    """
+
+    @staticmethod
+    def _possession(result):
+        for item in result.explanation:
+            if item.factor == "possession":
+                return item
+        raise AssertionError("possession missing from the explanation")
+
+    def test_unavailable_without_possession_or_shots_or_ppda(self):
+        engine = FootballMultiFactorEngine()
+        features = _make_features(custom={})
+        item = self._possession(engine.predict(features, features.match))
+        assert item.available is False
+        assert item.predicted_outcome is None
+
+    def test_available_with_real_possession(self):
+        engine = FootballMultiFactorEngine()
+        features = _make_features(
+            custom={"possession_home": 62.0, "possession_away": 38.0},
+        )
+        item = self._possession(engine.predict(features, features.match))
+        assert item.available is True
+        assert item.predicted_outcome == "home_win"
+
+    def test_form_alone_does_not_make_possession_available(self):
+        """Form is set on both sides; possession must stay unavailable.
+
+        This is the invariant the removed proxy violated: the engine already has
+        these two numbers as the ``form`` factor, so a possession reading derived
+        from them adds weight and an agreeing vote without adding information.
+        """
+        engine = FootballMultiFactorEngine()
+        features = _make_features(form_home=0.9, form_away=0.1, custom={})
+        result = engine.predict(features, features.match)
+        assert self._possession(result).available is False
+        form = next(i for i in result.explanation if i.factor == "form")
+        assert form.available is True
+
+    def test_confidence_is_lower_without_the_proxy(self):
+        """More available factors raise confidence, which is why this mattered.
+
+        Asserted as an inequality against a fixture that supplies real
+        possession, so it holds under any future re-weighting of the blend.
+        """
+        engine = FootballMultiFactorEngine()
+        bare = _make_features(custom={})
+        real = _make_features(
+            custom={"possession_home": 62.0, "possession_away": 38.0},
+        )
+        c_bare = engine.predict(bare, bare.match).confidence
+        c_real = engine.predict(real, real.match).confidence
+        assert c_real > c_bare

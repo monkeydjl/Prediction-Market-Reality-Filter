@@ -135,24 +135,17 @@ def fetch_elo_and_odds(
     enrich_situational_features(raw, match)
     enrich_referee_features(raw, match)
 
-    # Soft possession/shots proxy (P1-F6) when true stats unavailable:
-    # map form share → possession share so multi-factor soft path is non-null.
-    try:
-        custom = raw.setdefault("custom", {})
-        if custom.get("possession_home") is None and custom.get("shots_home") is None:
-            fh = raw.get("team", {}).get("form_home")
-            fa = raw.get("team", {}).get("form_away")
-            if fh is not None and fa is not None:
-                fh_f, fa_f = float(fh), float(fa)
-                total = fh_f + fa_f
-                if total > 0:
-                    share = fh_f / total
-                    custom["possession_home"] = round(100.0 * share, 1)
-                    custom["possession_away"] = round(100.0 * (1.0 - share), 1)
-                    custom["possession_proxy"] = "form_share"
-    except Exception:  # noqa: BLE001
-        logger.debug("possession proxy skipped", exc_info=True)
-
+    # No possession proxy here (P1-F6). Form share used to be written under the
+    # possession keys so the multi-factor soft path would be non-null, but the
+    # engine's form factor reads the same two numbers (feature_builder passes
+    # team_raw["form_home"] straight through). Filling possession from form made
+    # one piece of evidence vote twice under two names: it took form's intended
+    # influence from 0.145 to 0.197 of the available weight (1.357x), counted as
+    # a fourth available factor in ``data_completeness``, and cast a vote that
+    # agreed with form by construction in ``factor_agreement`` -- together worth
+    # +2.03pp of confidence on a World Cup fixture. Absent real possession the
+    # engine already marks the factor unavailable and redistributes its weight,
+    # which is the honest answer and the documented path for a missing factor.
     enrich_style_features(raw, match)
     enrich_altitude_features(raw, match)
     enrich_weather_features(raw, match)
@@ -386,7 +379,15 @@ def enrich_weather_features(raw: dict, match: MatchIdentity) -> None:
 
 
 def enrich_style_features(raw: dict, match: MatchIdentity) -> None:
-    """Live/static possession, shots, PPDA; preserve proxies without a full pair."""
+    """Live/static possession, shots, PPDA; writes nothing without a full pair.
+
+    A half-resolved pair leaves ``custom`` untouched on purpose. The engine's
+    possession factor is a share between the two sides, so one side alone cannot
+    produce one, and inventing the missing side would put a guess where a
+    measurement belongs. With neither key set the factor reports itself
+    unavailable and its weight is redistributed across the factors that do have
+    data.
+    """
     try:
         home_name = match.home.name if match.home else ""
         away_name = match.away.name if match.away else ""
@@ -432,6 +433,8 @@ def enrich_style_features(raw: dict, match: MatchIdentity) -> None:
         custom["ppda_home"] = float(home_style["ppda"])
         custom["ppda_away"] = float(away_style["ppda"])
         custom["style_source"] = source
+        # A stale proxy marker from an older snapshot must not outlive real
+        # style data; nothing writes it now, but the key is cheap to clear.
         custom.pop("possession_proxy", None)
     except Exception:  # noqa: BLE001
         logger.debug("Style enrichment failed", exc_info=True)

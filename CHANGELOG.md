@@ -1,5 +1,27 @@
 # Changelog
 
+### Fix: form was voting twice, the second time labelled "possession" (P1-F6)
+
+- `fetch_elo_and_odds` wrote form share into `custom["possession_home"/"possession_away"]`, with a comment saying it was there "so multi-factor soft path is non-null". But the engine's `form` factor reads the *same two numbers* — `feature_builder.py` passes `team_raw["form_home"]` straight through to `TeamFeatures.form_home` — so one piece of evidence was counted twice under two names. The engine cannot tell the difference: it reads `custom.get("possession_home")` and has no way to know the value came from form.
+- The `possession_proxy: "form_share"` marker recorded the substitution and **nothing read it**, in `app/` or in the frontend. A provenance marker no consumer checks does not make a substituted value honest; it just records the substitution where nobody looks.
+- Three separate inflations, measured:
+
+  | channel | mechanism | effect |
+  | --- | --- | --- |
+  | fused weight | `possession` 0.04 added to `form` 0.09 | form-derived share 0.145 → 0.197 (**1.357×**) |
+  | `data_completeness` | counted as a 4th available factor | 3/8 → 4/8 |
+  | `factor_agreement` | cast a vote agreeing with form by construction | +1 agreeing vote |
+  | **net confidence** | all three, World Cup fixture | **+2.03pp (+3.51% relative)** |
+  | `p(home_win)` | opposing signs partly cancel | ≤ 0.71pp |
+
+- The confidence channel is the one that matters, and its sign is backwards. World Cup is the permanently-affected track: `enrich_style_features` skips the live provider for `wc`/`world_cup`, and every national team misses the static style table (`stats_for_team("Brazil") is None`), so it returns early and the proxy was the **only** producer of possession. The track with the least data therefore reported the *highest* completeness. The frontend labels this factor 控球/射门, so a form number was reaching users under a possession heading.
+- Removed the write. The engine already has the right mechanism for a factor with no data — `available=False` plus weight redistribution, the same path every other missing factor takes — and the proxy existed specifically to defeat it. No engine formula, weight, or contract changed; only the input stopped lying. Real possession, live or static, still switches the factor on.
+- **Falsifiability caught four near-vacuous tests before they shipped.** Re-injecting the proxy failed only the source-level AST guard; all four behavioural tests stayed green. Each for a different reason: the unknown-club fixture had no form resolved, so the proxy's own `fh is not None` guard skipped it; the World Cup test drove `enrich_style_features` directly and never ran the proxy block; the double-count test used a fixture that *hits* the static table, where style enrichment pops the marker and overwrites possession, erasing the evidence. The production condition is "form resolved, style missing", and no test reproduced it. Rewritten to seed form explicitly and use a fixture both style sources miss, two behavioural tests now fail on re-injection alongside the guard.
+- The AST guard earns its place because this defect was a *write*: no behavioural test could have caught the proxy being **added**, since the engine consumes whatever is under the key without complaint. Pinning the set of functions allowed to write possession is what makes the next such addition visible.
+- Also worth recording: no test covered the removed writer at all. A behaviour worth 2.03pp of World Cup confidence and a 1.357× weight distortion was held in place by nothing.
+- Audited clean in the same sweep: all 13 live-provider entry points have production call sites, and all five `market_totals` injectors reach a `resolve_totals_line` consumer (World Cup maps to `sport=football`, so it lands in `football_multi_factor_engine`). Four findings left unfixed because they are engine-formula territory: `shots_on_target_home`/`_away` are read at `football_multi_factor_engine.py:557,560` and written nowhere in `app/`; the possession factor is not neutral at `share=0.5`, returning 0.381/0.238/0.381 with a draw mass of 0.238 against ~0.28 for its siblings, so it suppresses draw regardless of input; `style_source` is written and never read; and `test_world_cup_does_not_call_live_style_provider` uses club names for a World Cup fixture, so it hits the static table and cannot observe the national-team path it is named for.
+- 8 tests added (4413 passed, up from 4405).
+
 ### Fix: one liquidity rule instead of two that had drifted (P1-V3)
 
 - `market_liquidity.compute_match_liquidity_factor` carried a **second copy** of the defect fixed in the previous entry, and its docstring said "Semantics mirror `EdgeDetectorService._compute_liquidity_factor`" while nothing checked that claim. Fixing the edge path first therefore *created* a measurable contradiction: the same `[unmeasured, $100]` group scored **1.0** in the edge detector and **0.01** here, a 100× disagreement between two functions documented as mirrors.

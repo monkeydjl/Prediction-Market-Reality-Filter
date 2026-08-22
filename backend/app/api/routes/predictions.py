@@ -290,7 +290,17 @@ def list_engines_meta() -> dict[str, Any]:
 def predict_match(
     match_id: str, engine: str = "auto", _auth: None = Depends(require_write_key)
 ) -> dict[str, Any]:
-    """Run a prediction for a single match."""
+    """Run a prediction for a single match.
+
+    ``betting_analysis`` is included because it is the only place three
+    otherwise-invisible things are recorded: the confidence decomposition, the
+    totals ``line_source`` (a real book line vs the 2.5 placeholder), and
+    ``conditional_calibration`` — which reports that the kernel **rewrote** the
+    probabilities being returned, with the raw value and the sample count behind
+    the adjustment. Dropping it meant a calibrated prediction was indistinguishable
+    from an uncalibrated one. ``kernel_predictions`` still has no column for it,
+    so this response is currently the only way to read it.
+    """
     kernel = _get_kernel()
     try:
         result = kernel.predict(match_id, engine=engine)
@@ -301,6 +311,7 @@ def predict_match(
             "outcome_probabilities": result.outcome_probabilities,
             "confidence": result.confidence,
             "explanation": [c.__dict__ for c in result.explanation],
+            "betting_analysis": result.betting_analysis,
             "feature_version": result.feature_version,
             "prediction_timestamp": result.prediction_timestamp.isoformat(),
         }

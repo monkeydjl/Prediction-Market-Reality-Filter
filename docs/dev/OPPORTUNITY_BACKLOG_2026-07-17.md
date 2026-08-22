@@ -284,7 +284,7 @@ Phase 15 设计曾写「Edge/WS/优化/结算几乎无 UI」；代码侧已出�
 - `use-edges`、Edge 表格/时间线/详情  
 - `RealtimePriceTable`  
 - Optimization 触发 / 状态 / apply  
-- Settlement 重算按钮  
+- Settlement 重算按钮（✅ 2026-08-22 补上读侧：见 P1-FE14）  
 - 导航「Edge 偏离」  
 
 | ID | 项 | 说明 |
@@ -298,6 +298,7 @@ Phase 15 设计曾写「Edge/WS/优化/结算几乎无 UI」；代码侧已出�
 | P3-FE7 | 无障碍与样式复用 | ✅ 2026-07-19：ui-classes + ScrollableTable；analyze/resolve/sports 表单与宽表 |
 | P3-FE8 | 回测结果可视化 | ✅ 2026-07-19：optimize_sync 指标 + BacktestResultsPanel 图表/表 |
 | P2-FE9 | Operator Key 长期方案 | ✅ 部分 2026-07-19：`operator-credentials` + 清除/遮罩/事件同步 + Runbook；BFF 会话仍属架构升级 |
+| P1-FE14 | **结算反馈只有写侧、没有读侧** | ✅ 2026-08-22：`/sports/match` 早已挂了 `ProcessSettlementButton`（写），却没有任何组件读 `GET /sport-settlements/{match_id}`——该路由、`useSettlement` hook、`SettlementList` 类型三者齐全而**全应用无调用方**，本场结算结果只能去 `/sports/settlements` 的全局 50 行历史表里翻，而那张表无法按 match 过滤。新增 `MatchSettlementPanel` 贴在按钮旁，逐 outcome 显示 模型概率 / 结算概率 / Brier / 有向误差 / 方向 / 状态，`skip_reason` 内联展示，使 `skipped_no_links` 行自己说明原因而不是显示为空白。**方向列有意三态**：`direction_correct === null` 表示模型与市场同价、当时没有形成方向判断（见 P1-V5 2026-08-22 那一条），渲染成 `—` 并在 title 里写明不计入 `direction_accuracy`，否则本面板会与校准面板公布的数字自相矛盾。404 视为**常态**而非错误（该路由无记录时抛 404 而不是返回空列表），显示「尚无结算记录」；503（phase flag 默认关闭）只用一行灰字，不用琥珀横幅——否则每个比赛页都会常驻一条告警；其余状态码照常报错。顺带修掉两处：① `processSettlement` 失效的是字面量 `.../sport-settlements/history`，而 `useSettlementHistory` 的 key 永远带 `?limit=`，那个 key 从不在缓存里，这次失效**从来没起作用**（历史表看起来会刷新，只是因为它自己通过 `onDone` 传了本地 `mutate()`），改为按前缀过滤，同时覆盖本场行与同一次调用里 `_update_market_calibration` upsert 的校准行；② `useMatchAudit` 同样无调用方，因为 `MarketPriceAuditPanel` 自己内联重拼了同一个 URL，现改为调 hook，行为不变但键只有一处。已用四次注入验证非空转：把无方向渲染成 `✗` 红三态测试、卸掉挂载红 wiring 测试、恢复字面量 history key 红失效测试、把审计 URL 改回内联红全部 3 条审计面板测试。11 条新测试（3 个新文件）+ 1 条空洞测试（`expect(typeof processSettlement).toBe("function")`）替换为真断言；540 passed（原 529）；后端、schema、flag、类型均未改动，`npm run build` 仍全静态导出 |
 
 ### 6.2 事件情报前端增强
 

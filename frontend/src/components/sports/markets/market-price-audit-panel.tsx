@@ -1,18 +1,15 @@
 "use client";
 
-import useSWR from "swr";
-import { getApiBase } from "@/lib/env";
-import type { MatchMarketAudit } from "@/lib/sports-api";
+import { useMatchAudit } from "@/lib/sports-api";
 
 interface MarketPriceAuditPanelProps {
   matchId: string;
 }
 
 export function MarketPriceAuditPanel({ matchId }: MarketPriceAuditPanelProps) {
-  const key = matchId
-    ? `${getApiBase()}/sport-markets/matches/${encodeURIComponent(matchId)}/audit`
-    : null;
-  const { data, error, isLoading } = useSWR<MatchMarketAudit>(key);
+  // `useMatchAudit` owns this key. The panel used to rebuild it inline, which
+  // left the exported hook without a caller and put the same URL in two files.
+  const { data, error, isLoading } = useMatchAudit(matchId || null);
 
   if (!matchId) return null;
   if (isLoading) {

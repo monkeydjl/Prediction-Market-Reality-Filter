@@ -10,6 +10,7 @@ import { EdgeTimelineChart } from "@/components/sports/edges/edgetimelinechart";
 import { RealtimePriceTable } from "@/components/sports/realtime/realtimepricetable";
 import { MatchRecommendationPanel } from "@/components/sports/recommendations/MatchRecommendationPanel";
 import { ProcessSettlementButton } from "@/components/sports/settlements/processsettlementbutton";
+import { MatchSettlementPanel } from "@/components/sports/settlements/MatchSettlementPanel";
 import {
   useMatchDetail,
   useEngines,
@@ -184,6 +185,7 @@ function MatchDetailInner() {
             <div className="flex flex-wrap items-center gap-3 text-sm">
               <span className="text-muted-foreground">结算反馈：</span>
               <ProcessSettlementButton matchId={matchId} />
+              <MatchSettlementPanel matchId={matchId} />
             </div>
           </div>
         </>

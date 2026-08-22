@@ -24,5 +24,12 @@ export function useCalibrations(engine?: string, competition?: string) {
 
 export async function processSettlement(matchId: string): Promise<void> {
   await sportPost(`/sport-settlements/process/${matchId}`);
-  await mutate(`${getApiBase()}/sport-settlements/history`);
+  // Invalidate by prefix, not by one literal key. The old
+  // `mutate(".../history")` never matched anything: `useSettlementHistory`
+  // always appends `?limit=...`, so the cache key carries a query string. A
+  // prefix filter also covers the two other keys processing changes — this
+  // match's own settlement rows and the engine/competition calibration that
+  // `_update_market_calibration` upserts on the same call.
+  const prefix = `${getApiBase()}/sport-settlements/`;
+  await mutate((key) => typeof key === "string" && key.startsWith(prefix));
 }

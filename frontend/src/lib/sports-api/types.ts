@@ -131,6 +131,18 @@ export interface ReliabilityData {
   total_samples: number;
 }
 
+/**
+ * Same bin shape as ReliabilityData, but the x axis is the engine's *stated*
+ * confidence rather than max(outcome_probabilities) — a different quantity.
+ * `signed_gap` is mean_confidence - mean_accuracy: positive = overconfident.
+ * ECE alone is unsigned and cannot say which way to move the formula.
+ */
+export interface ConfidenceReliabilityData extends ReliabilityData {
+  mean_confidence?: number | null;
+  mean_accuracy?: number | null;
+  signed_gap?: number | null;
+}
+
 // From lib/sport-markets-api.ts
 export interface MarketLink {
   id: number;

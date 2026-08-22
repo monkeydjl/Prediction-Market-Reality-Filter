@@ -13,6 +13,7 @@ import {
   usePredictionTrajectory,
   useCalibration,
   useReliability,
+  useConfidenceReliability,
 } from "./use-learning";
 import useSWR from "swr";
 
@@ -58,5 +59,26 @@ describe("useReliability", () => {
   it("builds key with params", () => {
     useReliability({ bins: 10 });
     expect(useSWR).toHaveBeenCalledWith("/api/predictions/calibration/reliability?bins=10");
+  });
+});
+
+describe("useConfidenceReliability", () => {
+  it("builds key with params", () => {
+    useConfidenceReliability({ engine: "basketball", bins: 10 });
+    expect(useSWR).toHaveBeenCalledWith(
+      "/api/predictions/calibration/confidence-reliability?engine=basketball&bins=10",
+    );
+  });
+
+  it("hits a different route than useReliability", () => {
+    // The two curves answer different questions; a copy-paste that reused the
+    // probability route would silently render the same chart twice.
+    useReliability({});
+    useConfidenceReliability({});
+    const keys = (useSWR as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .slice(-2)
+      .map((c) => c[0]);
+    expect(keys[0]).not.toEqual(keys[1]);
+    expect(keys[1]).toContain("confidence-reliability");
   });
 });

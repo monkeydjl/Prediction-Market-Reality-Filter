@@ -11,6 +11,7 @@ aggregation. Staleness based on EDGE_STALE_HOURS.
 """
 from __future__ import annotations
 
+import statistics
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -322,23 +323,67 @@ class EdgeDetectorService:
         """Returns (market_prob, spread, sources).
 
         market_prob = Σ(implied_prob × weight) / Σ(weight)
-        where weight = max(latest_snapshot.liquidity, 1) if liquidity present else 1
+        where weight = max(liquidity, 1) for a venue that publishes depth, and
+        the *median of the published weights* for one that does not.
+
+        Why the median rather than 1.0, which is what this did before: a venue
+        with no published depth has an **unknown** weight, not a weight of one
+        dollar. Spending the sentinel as a measurement made it the most
+        distrusted venue in the group by a factor of thousands, which is the
+        opposite of the policy stated at every other liquidity site in this repo
+        ("do not penalize what we cannot measure" — diagnosis_service, and
+        market_quality_service excludes a missing sub-score from its average).
+        Measured on the old rule, a sportsbook quoting 0.50 with no published
+        depth beside a $100 market quoting 0.20 produced a consensus of 0.2030 —
+        the book held 0.99% of it. Three such books all quoting 0.50 held 2.91%
+        between them. That inflated raw_edge from 0.30 to 0.4470 (+49%), and the
+        inflation is in the dangerous direction: it manufactures edge.
+
+        The median says "assume this venue is typical of the venues that do
+        publish" — the minimum-assumption reading, and the only one that neither
+        penalizes nor favours the unmeasured venue. It preserves the real depth
+        ordering among published venues, which an unweighted mean would discard.
+        With a single published venue the median is that venue's weight, so the
+        two-venue mixed case becomes an equal-weight average of two prices we
+        have no basis to rank. Note this differs from _compute_liquidity_factor,
+        which maps the same sentinel to "no penalty" — that function has a
+        pre-existing documented all-unmeasured branch fixing the meaning there,
+        and this one has no such prior commitment.
+
+        Reduces exactly to the previous arithmetic when every venue publishes
+        depth (no imputation) and when none does (no published weights to take a
+        median of, so all weights stay 1.0 and this is an unweighted mean). Only
+        the mixed case moves.
 
         spread is always None (known limitation: requires both YES and NO
         prices on separate links).
         """
-        total_weight = 0.0
-        weighted_sum = 0.0
-        sources: list[EdgeSource] = []
-
+        # First pass: read each link's price and its published depth, if any.
+        rows: list[tuple[dict, float, float | None, float | None]] = []
         for link, snap in links_with_snaps:
             implied = snap["implied_prob"] if snap else link["implied_prob"]
             liquidity = snap["liquidity"] if snap else None
             volume = snap["volume"] if snap else None
+            rows.append((link, implied, liquidity, volume))
+
+        published = [
+            max(float(liq), 1.0)
+            for _, _, liq, _ in rows
+            if liq is not None and liq > 0
+        ]
+        # No published depth anywhere -> every weight is 1.0 and the result is an
+        # unweighted mean, which is what the previous code also produced.
+        imputed_weight = statistics.median(published) if published else 1.0
+
+        total_weight = 0.0
+        weighted_sum = 0.0
+        sources: list[EdgeSource] = []
+
+        for link, implied, liquidity, volume in rows:
             if liquidity is not None and liquidity > 0:
-                weight = max(liquidity, 1.0)
+                weight = max(float(liquidity), 1.0)
             else:
-                weight = 1.0
+                weight = imputed_weight
 
             weighted_sum += implied * weight
             total_weight += weight
@@ -446,23 +491,46 @@ class EdgeDetectorService:
     ) -> float:
         """Liquidity factor from the max liquidity among all links.
 
-        Uses the latest snapshot's liquidity. If all links have None
-        liquidity (traditional sportsbook), returns 1.0 (no penalty).
+        Uses the latest snapshot's liquidity. A link whose venue publishes no
+        depth is **not penalized**, so the factor is 1.0 whenever any link is
+        unmeasured — including a mix of measured and unmeasured links.
         Ramps against the edge detector's own _EDGE_LIQUIDITY_FLOOR (5000),
         decoupled from settings.DIAGNOSIS_LIQUIDITY_FLOOR so the diagnosis
         pipeline's floor cannot flatten edge scores. Uses max (most liquid
         source dominates).
-        """
-        liquidities = [
-            snap["liquidity"]
-            for _, snap in links_with_snaps
-            if snap and snap.get("liquidity") is not None and snap["liquidity"] > 0
-        ]
-        if not liquidities:
-            return 1.0
 
-        max_liq = max(liquidities)
-        return min(max_liq / _EDGE_LIQUIDITY_FLOOR, 1.0)
+        The mixed case is the fix. This function's two stated rules are "an
+        unmeasured venue is not penalized" (the all-unmeasured branch returned
+        1.0) and "the most liquid source dominates". Taking the max over only the
+        *measured* subset honoured neither: it penalized a venue precisely
+        because its depth could not be measured, and it let the group's fate be
+        decided by a member that is not the max once the unpenalized member is
+        counted. Measured on the old rule, one unmeasured venue alone gave 1.0
+        while that same venue beside a $100 market gave 0.02 — learning that some
+        *other* venue is thin cut the factor 50x. Nothing was learned about the
+        first venue, and its absence and presence are not interchangeable, so
+        this was not the "unknown row equals no row" case.
+
+        The honest limit: a venue that publishes no depth has an *unknowable*
+        factor, and arithmetic cannot supply one. 1.0 is a policy choice — the
+        one this function already made for the all-unmeasured case — not a
+        measurement. It moves adjusted_edge up in the mixed case.
+
+        The rule itself lives in ``market_liquidity.group_liquidity_factor`` so
+        this and the FeatureSet feed cannot drift; only the rendering of "do not
+        penalize" differs, since this factor is multiplied and that one is a key
+        the caller omits. The floor stays local on purpose — see
+        _EDGE_LIQUIDITY_FLOOR above.
+        """
+        from app.kernel.market_liquidity import group_liquidity_factor
+
+        factor = group_liquidity_factor(
+            (snap.get("liquidity") if snap else None for _, snap in links_with_snaps),
+            floor=_EDGE_LIQUIDITY_FLOOR,
+        )
+        # None means "unmeasured, do not penalize"; this factor is multiplied
+        # into adjusted_edge, so that renders as 1.0.
+        return 1.0 if factor is None else factor
 
     def _is_stale(
         self,

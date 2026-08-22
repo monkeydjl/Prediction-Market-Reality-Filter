@@ -37,8 +37,40 @@ def _clamp01(value: float) -> float:
     return value
 
 
+def _contextual_weight(row: dict[str, Any], role_weight: float) -> float:
+    """Use valid minutes/value context without lowering the role baseline.
+
+    Player shares are expected as fractions of the team's season total. The
+    contextual score intentionally caps at the existing star contribution, so
+    enriched availability cannot introduce a new larger per-player impact.
+    """
+    minutes = row.get("minutes_share")
+    value = row.get("market_value_share")
+    if (
+        isinstance(minutes, bool)
+        or isinstance(value, bool)
+        or not isinstance(minutes, (str, int, float))
+        or not isinstance(value, (str, int, float))
+    ):
+        return role_weight
+    try:
+        minutes_share = float(minutes)
+        value_share = float(value)
+    except (TypeError, ValueError):
+        return role_weight
+    if not 0.0 <= minutes_share <= 1.0 or not 0.0 <= value_share <= 1.0:
+        return role_weight
+    return max(
+        role_weight,
+        min(ROLE_WEIGHTS["star"], 2.0 * minutes_share + value_share),
+    )
+
+
 def summarize_injury_impact(rows: list[dict[str, Any]] | None) -> float | None:
-    """Sum role weights for Out rows; clamp to [0, 1]. None if no Out contribution."""
+    """Sum Out impacts; contextual shares supplement valid role rows.
+
+    Rows without both valid shares keep the legacy role-only contribution.
+    """
     if not rows:
         return None
     total = 0.0
@@ -50,8 +82,8 @@ def summarize_injury_impact(rows: list[dict[str, Any]] | None) -> float | None:
         if status != "out":
             continue
         role = str(row.get("role") or "").strip().lower()
-        weight = ROLE_WEIGHTS.get(role, ROLE_WEIGHTS["bench"])
-        total += float(weight)
+        role_weight = ROLE_WEIGHTS.get(role, ROLE_WEIGHTS["bench"])
+        total += _contextual_weight(row, float(role_weight))
         saw_out = True
     if not saw_out:
         return None

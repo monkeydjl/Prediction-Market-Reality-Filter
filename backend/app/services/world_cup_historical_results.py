@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import csv
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+from app.sports.football.h2h import H2HMeeting, aggregate_h2h_meetings
 
 
 DEFAULT_RESULTS_PATH = Path(__file__).resolve().parents[2] / "data" / "international_results.csv"
@@ -77,6 +79,80 @@ def get_historical_team_stats(
     }
 
 
+def historical_h2h_meetings(
+    home_team: str,
+    away_team: str,
+    *,
+    before_date: datetime | date | str | None = None,
+) -> list[H2HMeeting]:
+    """Return completed CSV meetings from the requested fixture-home view."""
+
+    before = _coerce_date(before_date)
+    home_key = _team_key(home_team)
+    away_key = _team_key(away_team)
+    if not home_key or not away_key or home_key == away_key:
+        return []
+
+    meetings: list[H2HMeeting] = []
+    for row in reversed(_load_results()):
+        if before and row["date"] >= before:
+            continue
+        row_home = _team_key(row["home_team"])
+        row_away = _team_key(row["away_team"])
+        if {row_home, row_away} != {home_key, away_key}:
+            continue
+        current_home_hosted = row_home == home_key and not row["neutral"]
+        if row_home == home_key:
+            h_goals = row["home_score"]
+            a_goals = row["away_score"]
+        else:
+            h_goals = row["away_score"]
+            a_goals = row["home_score"]
+        meetings.append(H2HMeeting(
+            played_on=row["date"],
+            home_goals=h_goals,
+            away_goals=a_goals,
+            current_home_hosted=current_home_hosted,
+        ))
+    return meetings
+
+
+def international_match_dates(
+    team_name: str,
+    *,
+    before_date: datetime | date | str | None,
+    window_days: int,
+) -> tuple[date, ...]:
+    """Distinct real international match days shortly before a fixture.
+
+    Covers the match days a national team's schedule density otherwise misses:
+    qualifiers, friendlies, and continental fixtures are absent from the kernel,
+    which carries tournament fixtures only. Returned ascending.
+
+    Same-day rows are excluded rather than counted: a national team plays at
+    most one match per calendar date, so a row on the fixture's own date is that
+    fixture, not a prior one.
+    """
+
+    before = _coerce_date(before_date)
+    team_key = _team_key(team_name)
+    days = max(0, int(window_days))
+    if before is None or not team_key:
+        return ()
+
+    earliest = before - timedelta(days=days)
+    found: set[date] = set()
+    for row in reversed(_load_results()):
+        played = row["date"]
+        if played >= before:
+            continue
+        if played < earliest:
+            break  # rows are date-sorted, so nothing older can qualify
+        if _team_key(row["home_team"]) == team_key or _team_key(row["away_team"]) == team_key:
+            found.add(played)
+    return tuple(sorted(found))
+
+
 def get_historical_h2h(
     home_team: str,
     away_team: str,
@@ -86,54 +162,15 @@ def get_historical_h2h(
 ) -> dict[str, Any] | None:
     """Build H2H factors from historical international match results."""
 
-    before = _coerce_date(before_date)
-    home_key = _team_key(home_team)
-    away_key = _team_key(away_team)
-    matches: list[dict[str, Any]] = []
-
-    for row in reversed(_load_results()):
-        if before and row["date"] >= before:
-            continue
-        row_home = _team_key(row["home_team"])
-        row_away = _team_key(row["away_team"])
-        if {row_home, row_away} != {home_key, away_key}:
-            continue
-        matches.append(row)
-        if len(matches) >= max_matches:
-            break
-
-    if not matches:
+    h2h = aggregate_h2h_meetings(
+        historical_h2h_meetings(home_team, away_team, before_date=before_date),
+        max_matches=max_matches,
+        data_source=DATA_SOURCE,
+    )
+    if h2h is None:
         return None
-
-    home_wins = away_wins = draws = 0
-    home_goals = away_goals = 0
-    for row in matches:
-        if _team_key(row["home_team"]) == home_key:
-            h_goals = row["home_score"]
-            a_goals = row["away_score"]
-        else:
-            h_goals = row["away_score"]
-            a_goals = row["home_score"]
-        home_goals += h_goals
-        away_goals += a_goals
-        if h_goals > a_goals:
-            home_wins += 1
-        elif h_goals < a_goals:
-            away_wins += 1
-        else:
-            draws += 1
-
-    played = len(matches)
-    return {
-        "matches_played": played,
-        "home_wins": home_wins,
-        "draws": draws,
-        "away_wins": away_wins,
-        "avg_goals_home": round(home_goals / played, 2),
-        "avg_goals_away": round(away_goals / played, 2),
-        "updated_at": _source_updated_at(),
-        "data_source": DATA_SOURCE,
-    }
+    h2h["updated_at"] = _source_updated_at()
+    return h2h
 
 
 def _recent_team_rows(

@@ -194,8 +194,15 @@ def test_detect_edges_multi_source_liquidity_weighted(service):
     assert edge.liquidity_factor == pytest.approx(0.6)
 
 
-def test_detect_edges_traditional_odds_no_liquidity_uses_weight_1(service):
-    """liquidity=None -> weight=1, liquidity_factor=1.0."""
+def test_detect_edges_lone_unmeasured_venue_is_the_consensus(service):
+    """A single unmeasured link is the whole consensus, unpenalized.
+
+    Renamed from ...no_liquidity_uses_weight_1: with one link the weight cancels
+    out of the weighted mean entirely, so the old name claimed to pin a weight
+    the assertions could not see. The mixed measured/unmeasured case, where the
+    weight actually decides the answer, had no coverage at all — see the
+    unmeasured-venue tests below.
+    """
     _seed_prediction(match_id="m1", probs={"home_win": 0.6})
     _seed_link_and_snapshot(
         match_id="m1", contract_id="c1", source="the_odds_api",
@@ -206,6 +213,230 @@ def test_detect_edges_traditional_odds_no_liquidity_uses_weight_1(service):
     edge = result.outcomes[0]
     assert edge.market_prob == pytest.approx(0.58)
     assert edge.liquidity_factor == pytest.approx(1.0)
+
+
+# --- Unmeasured venue depth is not a measurement of zero ---
+#
+# A venue that publishes no liquidity has an *unknown* weight. The previous rule
+# spent that sentinel as a weight of 1.0 — literally "a one-dollar market" — on
+# the same numeric scale as real dollars, making it the most distrusted venue in
+# the group by a factor of thousands. That is the opposite of the policy stated
+# at every other liquidity site in this repo. These tests seed prices and depths
+# that make the right answer and each plausible wrong answer *different numbers*.
+
+
+def test_unmeasured_venue_is_not_weighted_as_a_one_dollar_market(service):
+    """Mixed case: the unmeasured venue gets the median published weight.
+
+    Book quotes 0.50 with no published depth; a $100 market quotes 0.20.
+      old rule:        (0.50*1 + 0.20*100) / 101      = 0.2030  <- book holds 0.99%
+      unweighted mean: (0.50 + 0.20) / 2              = 0.3500
+      median impute:   (0.50*100 + 0.20*100) / 200    = 0.3500
+    The consensus alone cannot separate the last two, so this also asserts the
+    imputed *weight* is 100.0 and not 1.0.
+    """
+    _seed_prediction(match_id="m1", probs={"home_win": 0.65})
+    ts = _utcnow()
+    _seed_link_and_snapshot(
+        match_id="m1", contract_id="book", source="the_odds_api",
+        mapped_outcome="home_win", implied_prob=0.50, liquidity=None, snap_ts=ts,
+    )
+    _seed_link_and_snapshot(
+        match_id="m1", contract_id="thin", source="polymarket",
+        mapped_outcome="home_win", implied_prob=0.20, liquidity=100.0, snap_ts=ts,
+    )
+    _seed_calibration(avg_accuracy=0.72, sample_count=20)
+
+    edge = service.detect_edges("m1").outcomes[0]
+
+    assert edge.market_prob == pytest.approx(0.35, abs=1e-6)
+    assert edge.market_prob != pytest.approx(0.2030, abs=1e-3)
+    by_contract = {s.contract_id: s for s in edge.sources}
+    assert by_contract["book"].liquidity is None
+    assert by_contract["book"].weight == pytest.approx(100.0)
+    assert by_contract["thin"].weight == pytest.approx(100.0)
+    # raw_edge was inflated 0.30 -> 0.4470 (+49%) by the old rule.
+    assert edge.raw_edge == pytest.approx(0.30, abs=1e-6)
+
+
+def test_three_unmeasured_venues_outweigh_one_thin_market(service):
+    """Agreement among unmeasured venues must count for something.
+
+    Three books all quote 0.50 with no published depth; one $100 market quotes
+    0.20. Under the old rule the three books held 2.91% of the consensus between
+    them (0.2087). With the median published weight (100) they hold 300/400.
+      expected: (0.50*300 + 0.20*100) / 400 = 0.4250
+    """
+    _seed_prediction(match_id="m1", probs={"home_win": 0.65})
+    ts = _utcnow()
+    for i in range(3):
+        _seed_link_and_snapshot(
+            match_id="m1", contract_id=f"book{i}", source="the_odds_api",
+            mapped_outcome="home_win", implied_prob=0.50, liquidity=None,
+            snap_ts=ts,
+        )
+    _seed_link_and_snapshot(
+        match_id="m1", contract_id="thin", source="polymarket",
+        mapped_outcome="home_win", implied_prob=0.20, liquidity=100.0, snap_ts=ts,
+    )
+    _seed_calibration(avg_accuracy=0.72, sample_count=20)
+
+    edge = service.detect_edges("m1").outcomes[0]
+
+    assert edge.market_prob == pytest.approx(0.425, abs=1e-6)
+    assert edge.market_prob != pytest.approx(0.2087, abs=1e-3)
+
+
+def test_imputation_preserves_depth_ordering_among_measured_venues(service):
+    """The fix must not collapse into an unweighted mean.
+
+    Unmeasured book 0.50, a $5k market at 0.20, a $50k market at 0.60. The deep
+    market should still dominate the two thinner sources.
+      old rule:        (0.50*1 + 0.20*5e3 + 0.60*5e4) / 55001    = 0.5636
+      unweighted mean: (0.50 + 0.20 + 0.60) / 3                  = 0.4333
+      median impute:   median([5e3, 5e4]) = 27500                = 0.5424
+    Three different numbers, so this test alone rules out both alternatives.
+    Note the correction here moves the consensus *down* (0.5636 -> 0.5424): the
+    fix is not a one-directional thumb on the scale.
+    """
+    _seed_prediction(match_id="m1", probs={"home_win": 0.65})
+    ts = _utcnow()
+    _seed_link_and_snapshot(
+        match_id="m1", contract_id="book", source="the_odds_api",
+        mapped_outcome="home_win", implied_prob=0.50, liquidity=None, snap_ts=ts,
+    )
+    _seed_link_and_snapshot(
+        match_id="m1", contract_id="mid", source="polymarket",
+        mapped_outcome="home_win", implied_prob=0.20, liquidity=5000.0, snap_ts=ts,
+    )
+    _seed_link_and_snapshot(
+        match_id="m1", contract_id="deep", source="kalshi",
+        mapped_outcome="home_win", implied_prob=0.60, liquidity=50000.0, snap_ts=ts,
+    )
+    _seed_calibration(avg_accuracy=0.72, sample_count=20)
+
+    edge = service.detect_edges("m1").outcomes[0]
+
+    assert edge.market_prob == pytest.approx(0.5424, abs=1e-4)
+    assert edge.market_prob != pytest.approx(0.4333, abs=1e-3)
+    assert edge.market_prob != pytest.approx(0.5636, abs=1e-3)
+    by_contract = {s.contract_id: s for s in edge.sources}
+    assert by_contract["book"].weight == pytest.approx(27500.0)
+
+
+def test_all_venues_measured_keeps_the_previous_weighting(service):
+    """Regression: with no unmeasured venue there is nothing to impute.
+
+    Identical to test_detect_edges_multi_source_liquidity_weighted, asserted here
+    beside the new cases so the reduction is visible: only the mixed case moved.
+    """
+    _seed_prediction(match_id="m1", probs={"home_win": 0.65})
+    ts = _utcnow()
+    _seed_link_and_snapshot(
+        match_id="m1", contract_id="c1", mapped_outcome="home_win",
+        implied_prob=0.55, liquidity=1000.0, snap_ts=ts,
+    )
+    _seed_link_and_snapshot(
+        match_id="m1", contract_id="c2", mapped_outcome="home_win",
+        implied_prob=0.60, liquidity=3000.0, snap_ts=ts,
+    )
+    _seed_calibration(avg_accuracy=0.72, sample_count=20)
+
+    edge = service.detect_edges("m1").outcomes[0]
+
+    assert edge.market_prob == pytest.approx(0.5875, abs=1e-4)
+    assert edge.liquidity_factor == pytest.approx(0.6)
+    weights = sorted(s.weight for s in edge.sources)
+    assert weights == pytest.approx([1000.0, 3000.0])
+
+
+def test_all_venues_unmeasured_is_an_unweighted_mean(service):
+    """Regression: no published depth anywhere -> equal weights, as before.
+
+    Two books quote 0.50 and 0.20 with no published depth. There is no median to
+    take, so every weight stays 1.0 and the result is the plain mean.
+    """
+    _seed_prediction(match_id="m1", probs={"home_win": 0.65})
+    ts = _utcnow()
+    _seed_link_and_snapshot(
+        match_id="m1", contract_id="b1", source="the_odds_api",
+        mapped_outcome="home_win", implied_prob=0.50, liquidity=None, snap_ts=ts,
+    )
+    _seed_link_and_snapshot(
+        match_id="m1", contract_id="b2", source="the_odds_api",
+        mapped_outcome="home_win", implied_prob=0.20, liquidity=None, snap_ts=ts,
+    )
+    _seed_calibration(avg_accuracy=0.72, sample_count=20)
+
+    edge = service.detect_edges("m1").outcomes[0]
+
+    assert edge.market_prob == pytest.approx(0.35, abs=1e-6)
+    assert all(s.weight == pytest.approx(1.0) for s in edge.sources)
+
+
+# --- liquidity_factor: an unmeasured venue is not penalized, mixed or not ---
+
+
+def test_unmeasured_venue_is_not_penalized_when_mixed(service):
+    """The factor is 1.0 when any venue publishes no depth.
+
+    The function's own two rules are "an unmeasured venue is not penalized" (its
+    all-unmeasured branch returns 1.0) and "the most liquid source dominates".
+    Taking the max over only the measured subset honoured neither. Old rule gave
+    min(100/5000, 1.0) = 0.02 here, penalizing the book for the market's
+    thinness.
+    """
+    _seed_prediction(match_id="m1", probs={"home_win": 0.65})
+    ts = _utcnow()
+    _seed_link_and_snapshot(
+        match_id="m1", contract_id="book", source="the_odds_api",
+        mapped_outcome="home_win", implied_prob=0.50, liquidity=None, snap_ts=ts,
+    )
+    _seed_link_and_snapshot(
+        match_id="m1", contract_id="thin", source="polymarket",
+        mapped_outcome="home_win", implied_prob=0.20, liquidity=100.0, snap_ts=ts,
+    )
+    _seed_calibration(avg_accuracy=0.72, sample_count=20)
+
+    edge = service.detect_edges("m1").outcomes[0]
+
+    assert edge.liquidity_factor == pytest.approx(1.0)
+    assert edge.liquidity_factor != pytest.approx(0.02, abs=1e-3)
+
+
+def test_adding_an_unmeasured_venue_never_lowers_the_factor(service):
+    """Monotonicity. This is the discriminating case.
+
+    A lone $100 market gives 0.02 — correctly, its depth is measured and thin.
+    Adding a venue whose depth is unknown taught us nothing about that market,
+    so the factor must not fall; under the policy it rises to 1.0. The old rule
+    gave 0.02 for the pair, i.e. the same answer as the thin market alone, which
+    means the unmeasured venue was silently dropped rather than counted.
+    """
+    _seed_prediction(match_id="m1", probs={"home_win": 0.65})
+    _seed_prediction(match_id="m2", probs={"home_win": 0.65})
+    ts = _utcnow()
+    _seed_calibration(avg_accuracy=0.72, sample_count=20)
+
+    _seed_link_and_snapshot(
+        match_id="m1", contract_id="thin1", source="polymarket",
+        mapped_outcome="home_win", implied_prob=0.20, liquidity=100.0, snap_ts=ts,
+    )
+    thin_only = service.detect_edges("m1").outcomes[0].liquidity_factor
+
+    _seed_link_and_snapshot(
+        match_id="m2", contract_id="thin2", source="polymarket",
+        mapped_outcome="home_win", implied_prob=0.20, liquidity=100.0, snap_ts=ts,
+    )
+    _seed_link_and_snapshot(
+        match_id="m2", contract_id="book2", source="the_odds_api",
+        mapped_outcome="home_win", implied_prob=0.50, liquidity=None, snap_ts=ts,
+    )
+    plus_unmeasured = service.detect_edges("m2").outcomes[0].liquidity_factor
+
+    assert thin_only == pytest.approx(0.02)
+    assert plus_unmeasured >= thin_only
+    assert plus_unmeasured == pytest.approx(1.0)
 
 
 def test_detect_edges_trust_cold_start(service):

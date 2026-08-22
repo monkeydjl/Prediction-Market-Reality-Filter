@@ -230,6 +230,243 @@ class TestNBAAdapterInjuryImpact:
         assert "injury_impact_away" not in raw["custom"]
 
 
+class TestNBAAdapterLiveInjuryProvider:
+    """P1-B1 residual: optional live availability source ahead of the static table."""
+
+    @staticmethod
+    def _run(match, live_by_team):
+        """Enrich with the live provider stubbed per team name.
+
+        ``live_by_team`` maps a team name to its LiveNbaInjuryImpact, or is a
+        callable used as the patch side effect for failure cases.
+        """
+        from app.services.nba_live_injury_service import LiveNbaInjuryImpact
+
+        side_effect = (
+            live_by_team
+            if callable(live_by_team)
+            else lambda name: live_by_team.get(name, LiveNbaInjuryImpact(available=False))
+        )
+        adapter = NBAAdapter()
+        with patch.object(adapter, "_fetch_elo_ratings", return_value={}), \
+             patch.object(adapter, "_compute_form", return_value=0.5), \
+             patch.object(adapter, "_compute_rest_days", return_value=2), \
+             patch(
+                 "app.services.nba_live_injury_service.get_live_injury_impact",
+                 side_effect=side_effect,
+             ):
+            return adapter.fetch_all_data(match)
+
+    def test_live_impact_overrides_static_table(self):
+        from app.services.nba_live_injury_service import LiveNbaInjuryImpact
+
+        raw = self._run(_make_match(), {
+            "Boston Celtics": LiveNbaInjuryImpact(available=True, impact=0.42),
+        })
+
+        # Static Boston value is 0.35; the reached provider wins.
+        assert raw["player"]["injury_impact_home"] == pytest.approx(0.42)
+        assert raw["custom"]["injury_impact_home"] == pytest.approx(0.42)
+        assert raw["custom"]["injury_source_home"] == "live_provider"
+        # The away side had no live answer and keeps its static value.
+        assert raw["player"]["injury_impact_away"] == pytest.approx(0.26)
+        assert raw["custom"]["injury_source_away"] == "static_table"
+
+    def test_unavailable_provider_preserves_static_values(self):
+        raw = self._run(_make_match(), {})
+
+        assert raw["player"]["injury_impact_home"] == pytest.approx(0.35)
+        assert raw["player"]["injury_impact_away"] == pytest.approx(0.26)
+        assert raw["custom"]["injury_source_home"] == "static_table"
+        assert raw["custom"]["injury_source_away"] == "static_table"
+
+    def test_reached_provider_without_absence_preserves_static_values(self):
+        from app.services.nba_live_injury_service import LiveNbaInjuryImpact
+
+        raw = self._run(_make_match(), {
+            "Boston Celtics": LiveNbaInjuryImpact(available=True, impact=None),
+        })
+
+        # available=True with no impact is not a known-healthy 0.0.
+        assert raw["player"]["injury_impact_home"] == pytest.approx(0.35)
+        assert raw["custom"]["injury_source_home"] == "static_table"
+
+    def test_provider_exception_preserves_static_values(self):
+        def _boom(_name):
+            raise RuntimeError("provider blew up")
+
+        raw = self._run(_make_match(), _boom)
+
+        assert raw["player"]["injury_impact_home"] == pytest.approx(0.35)
+        assert raw["player"]["injury_impact_away"] == pytest.approx(0.26)
+        assert raw["custom"]["injury_source_home"] == "static_table"
+
+    def test_live_impact_fills_team_missing_from_static_table(self):
+        from app.services.nba_live_injury_service import LiveNbaInjuryImpact
+
+        unknown = MatchIdentity(
+            match_id="nba-live-1",
+            season=SeasonIdentity(competition=_NBA, season_key="2024-25"),
+            stage="regular_season",
+            round=None,
+            home=TeamIdentity(code="DEN", name="Denver Nuggets", competition=_NBA),
+            away=TeamIdentity(code="MIA", name="Miami Heat", competition=_NBA),
+            kickoff_utc=datetime(2024, 12, 25, tzinfo=timezone.utc),
+        )
+        raw = self._run(unknown, {
+            "Denver Nuggets": LiveNbaInjuryImpact(available=True, impact=0.18),
+        })
+
+        assert raw["player"]["injury_impact_home"] == pytest.approx(0.18)
+        assert raw["custom"]["injury_source_home"] == "live_provider"
+        # Miami has neither a live nor a static answer: nothing is invented.
+        assert "injury_impact_away" not in raw["player"]
+        assert "injury_source_away" not in raw["custom"]
+
+
+class TestNBAAdapterLiveRatingsProvider:
+    """P1-B4 residual: dynamic-season efficiency ahead of the static table."""
+
+    @staticmethod
+    def _run(match, live_by_team):
+        """Enrich with the ratings provider stubbed per team name.
+
+        ``live_by_team`` maps a team name to its LiveNbaRatings, or is a callable
+        used as the patch side effect for failure cases.
+        """
+        from app.services.nba_live_ratings_service import LiveNbaRatings
+
+        side_effect = (
+            live_by_team
+            if callable(live_by_team)
+            else lambda _season, name: live_by_team.get(
+                name, LiveNbaRatings(available=False)
+            )
+        )
+        adapter = NBAAdapter()
+        with patch.object(adapter, "_fetch_elo_ratings", return_value={}), \
+             patch.object(adapter, "_compute_form", return_value=0.5), \
+             patch.object(adapter, "_compute_rest_days", return_value=2), \
+             patch(
+                 "app.services.nba_live_ratings_service.get_live_team_ratings",
+                 side_effect=side_effect,
+             ):
+            return adapter.fetch_all_data(match)
+
+    @staticmethod
+    def _live(ortg, drtg):
+        from app.services.nba_live_ratings_service import LiveNbaRatings
+
+        return LiveNbaRatings(
+            available=True, ratings={"ortg": ortg, "drtg": drtg, "possessions": 8000.0},
+        )
+
+    def test_both_sides_live_replace_the_static_table(self):
+        raw = self._run(_make_match(), {
+            "Boston Celtics": self._live(121.0, 108.0),
+            "Los Angeles Lakers": self._live(112.0, 117.0),
+        })
+
+        assert raw["custom"]["ortg_home"] == pytest.approx(121.0)
+        assert raw["custom"]["drtg_home"] == pytest.approx(108.0)
+        assert raw["custom"]["ortg_away"] == pytest.approx(112.0)
+        assert raw["custom"]["drtg_away"] == pytest.approx(117.0)
+        assert raw["custom"]["ratings_source"] == "live_provider"
+
+    def test_one_live_side_falls_back_to_static_for_both(self):
+        # The engine consumes the ORtg-DRtg differential, so a live level must
+        # never be paired against a static one.
+        raw = self._run(_make_match(), {
+            "Boston Celtics": self._live(121.0, 108.0),
+        })
+
+        from app.sports.basketball.nba_team_ratings import ratings_for_team
+
+        bos = ratings_for_team("Boston Celtics")
+        assert bos is not None
+        assert raw["custom"]["ortg_home"] == pytest.approx(bos["ortg"])
+        assert raw["custom"]["ratings_source"] == "static_table"
+
+    def test_reached_provider_without_ratings_falls_back_to_static(self):
+        from app.services.nba_live_ratings_service import LiveNbaRatings
+
+        raw = self._run(_make_match(), {
+            "Boston Celtics": LiveNbaRatings(available=True, ratings=None),
+            "Los Angeles Lakers": self._live(112.0, 117.0),
+        })
+
+        assert raw["custom"]["ratings_source"] == "static_table"
+
+    def test_unavailable_provider_preserves_static_values(self):
+        raw = self._run(_make_match(), {})
+
+        from app.sports.basketball.nba_team_ratings import ratings_for_team
+
+        lal = ratings_for_team("Los Angeles Lakers")
+        assert lal is not None
+        assert raw["custom"]["ortg_away"] == pytest.approx(lal["ortg"])
+        assert raw["custom"]["ratings_source"] == "static_table"
+
+    def test_provider_exception_preserves_static_values(self):
+        def _boom(_season, _name):
+            raise RuntimeError("provider blew up")
+
+        raw = self._run(_make_match(), _boom)
+
+        from app.sports.basketball.nba_team_ratings import ratings_for_team
+
+        bos = ratings_for_team("Boston Celtics")
+        assert bos is not None
+        assert raw["custom"]["ortg_home"] == pytest.approx(bos["ortg"])
+        assert raw["custom"]["ratings_source"] == "static_table"
+
+    def test_live_ratings_cover_teams_missing_from_static_table(self):
+        unknown = MatchIdentity(
+            match_id="nba-live-ratings-1",
+            season=SeasonIdentity(competition=_NBA, season_key="2024-25"),
+            stage="regular_season",
+            round=None,
+            home=TeamIdentity(code="XXX", name="Fake Home FC", competition=_NBA),
+            away=TeamIdentity(code="YYY", name="Fake Away FC", competition=_NBA),
+            kickoff_utc=datetime(2024, 12, 25, tzinfo=timezone.utc),
+        )
+        raw = self._run(unknown, {
+            "Fake Home FC": self._live(118.0, 110.0),
+            "Fake Away FC": self._live(109.0, 116.0),
+        })
+
+        assert raw["custom"]["ortg_home"] == pytest.approx(118.0)
+        assert raw["custom"]["drtg_away"] == pytest.approx(116.0)
+        assert raw["custom"]["ratings_source"] == "live_provider"
+
+    def test_no_source_writes_nothing(self):
+        unknown = MatchIdentity(
+            match_id="nba-live-ratings-2",
+            season=SeasonIdentity(competition=_NBA, season_key="2024-25"),
+            stage="regular_season",
+            round=None,
+            home=TeamIdentity(code="XXX", name="Fake Home FC", competition=_NBA),
+            away=TeamIdentity(code="YYY", name="Fake Away FC", competition=_NBA),
+            kickoff_utc=datetime(2024, 12, 25, tzinfo=timezone.utc),
+        )
+        raw = self._run(unknown, {})
+
+        assert "ortg_home" not in raw["custom"]
+        assert "ratings_source" not in raw["custom"]
+
+    def test_season_key_is_passed_to_the_provider(self):
+        from app.services.nba_live_ratings_service import LiveNbaRatings
+
+        seen = []
+
+        def _record(season, _name):
+            seen.append(season)
+            return LiveNbaRatings(available=False)
+
+        self._run(_make_match(), _record)
+        assert seen == ["2024-25", "2024-25"]
+
+
 class TestNBAAdapterTeamRatings:
     def test_fetch_all_data_injects_ortg_drtg_for_known_teams(self):
         adapter = NBAAdapter()
@@ -278,3 +515,44 @@ class TestNBAAdapterTeamRatings:
             "tpct_away",
         ):
             assert key not in raw["custom"], key
+
+
+class TestNBAAdapterMarketTotalsWiring:
+    """P1-O1 真盘口: the NBA adapter must actually reach the provider."""
+
+    @staticmethod
+    def _run(result=None, **kwargs):
+        adapter = NBAAdapter()
+        with patch.object(adapter, "_fetch_elo_ratings", return_value={}), \
+             patch.object(adapter, "_compute_form", return_value=0.5), \
+             patch.object(adapter, "_compute_rest_days", return_value=2), \
+             patch(
+                 "app.services.market_totals_service.get_market_total",
+                 return_value=result,
+                 **kwargs,
+             ) as provider:
+            return adapter.fetch_all_data(_make_match()), provider
+
+    def test_available_line_reaches_custom(self):
+        from app.services.market_totals_service import MarketTotal
+
+        raw, provider = self._run(MarketTotal(
+            available=True, total={"total_line": 228.5, "market_p_over": 0.5052},
+        ))
+        assert raw["custom"]["market_total_line"] == pytest.approx(228.5)
+        assert raw["custom"]["market_total_p_over"] == pytest.approx(0.5052)
+        assert provider.call_args.args == (
+            "basketball", "2024-12-25", "Boston Celtics", "Los Angeles Lakers",
+        )
+
+    def test_unavailable_provider_writes_nothing(self):
+        from app.services.market_totals_service import MarketTotal
+
+        raw, _ = self._run(MarketTotal(available=False))
+        assert "market_total_line" not in raw["custom"]
+        assert "ortg_home" in raw["custom"]
+
+    def test_provider_exception_does_not_break_enrichment(self):
+        raw, _ = self._run(side_effect=RuntimeError("provider down"))
+        assert "market_total_line" not in raw["custom"]
+        assert "ortg_home" in raw["custom"]

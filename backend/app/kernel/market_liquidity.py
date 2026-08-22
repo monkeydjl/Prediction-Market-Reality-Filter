@@ -12,6 +12,7 @@ Semantics mirror EdgeDetectorService._compute_liquidity_factor:
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from typing import Any
 
 from app.core import config
@@ -45,13 +46,74 @@ def liquidity_factor_from_amount(max_liquidity: float, *, floor: float | None = 
     return min(float(max_liquidity) / thr, 1.0)
 
 
+def group_liquidity_factor(
+    liquidities: Iterable[float | None], *, floor: float
+) -> float | None:
+    """One venue-group's liquidity factor, or None meaning "do not penalize".
+
+    THE single rule for "how deep is this group of venues", shared by
+    ``EdgeDetectorService._compute_liquidity_factor`` and
+    ``compute_match_liquidity_factor``. Those two had drifted three ways while
+    the second one's docstring claimed their semantics mirrored each other:
+
+    - the mixed case. Both took ``max`` over the *measured* subset, so one
+      unmeasured venue beside a $100 market scored as though the group were a
+      $100 market. The edge path returned 0.02 where an unmeasured venue alone
+      returned 1.0, and this path returned 0.01 where an unmeasured venue alone
+      returned None. Learning that some *other* venue is thin cut the factor 50x
+      and 100x respectively, having learned nothing about the first venue.
+    - a link with **no snapshot at all**. The edge path read that as unmeasured
+      (``snap`` is None -> liquidity None -> no penalty); this path ``continue``d
+      and dropped the link, letting a measured venue decide alone.
+    - and after the edge path was fixed, the two disagreed outright: the same
+      ``[unmeasured, $100]`` group scored 1.0 there and 0.01 here.
+
+    Returns None when **any** venue publishes no usable depth — including the
+    all-unmeasured case both functions already treated as "no penalty". A venue
+    whose depth is not published has an *unknowable* factor, and arithmetic
+    cannot supply one; declining to penalize it is the policy stated at every
+    other liquidity site in this repo (``diagnosis_service.liquidity_factor``,
+    and ``market_quality_service`` excluding a missing sub-score from its
+    average). Callers differ only in how they render None: the edge detector
+    multiplies, so it uses 1.0; the FeatureSet feed omits the key so
+    ``odds_quality`` applies no penalty either.
+
+    ``floor`` is a parameter, not read from config here, because the edge
+    detector deliberately keeps its own (5000) decoupled from
+    DIAGNOSIS_LIQUIDITY_FLOOR (10000) — coupling them once let a config change in
+    the diagnosis pipeline silently flatten every edge's liquidity factor. The
+    *rule* is shared; the *scale* is not.
+    """
+    measured: list[float] = []
+    for raw in liquidities:
+        if raw is None:
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if value <= 0:
+            return None
+        measured.append(value)
+
+    if not measured:
+        # No venues at all — nothing to penalize.
+        return None
+
+    if floor <= 0:
+        return 1.0
+    return min(max(measured) / floor, 1.0)
+
+
 def compute_match_liquidity_factor(match_id: str) -> float | None:
     """Return liquidity_factor for a match, or None if unmeasured.
 
-    None means: no verified links or all snapshots lack liquidity —
-    engines should not penalize (same as Edge detector returning 1.0
-    only when *used* for edge; for FeatureSet we omit the key so
-    odds_quality does not apply a zero-liquidity penalty).
+    None means: no verified links, or **any** verified link whose venue publishes
+    no usable depth — engines should not penalize what cannot be measured, so the
+    caller omits the key and odds_quality applies no penalty. Delegates to
+    ``group_liquidity_factor`` so this and the Edge detector cannot drift; a link
+    with no snapshot counts as unmeasured here rather than being dropped, which
+    is what the Edge detector already did.
     """
     if not match_id:
         return None
@@ -64,19 +126,14 @@ def compute_match_liquidity_factor(match_id: str) -> float | None:
             return None
 
         snap_store = MarketSnapshotStore()
-        liquidities: list[float] = []
+        liquidities: list[float | None] = []
         for link in links:
             snap = snap_store.get_latest_snapshot(link_id=link["id"])
-            if not snap:
-                continue
-            liq = snap.get("liquidity")
-            if liq is not None and float(liq) > 0:
-                liquidities.append(float(liq))
+            liquidities.append(snap.get("liquidity") if snap else None)
 
-        if not liquidities:
+        factor = group_liquidity_factor(liquidities, floor=_liquidity_floor())
+        if factor is None:
             return None
-
-        factor = liquidity_factor_from_amount(max(liquidities))
         return round(factor, 4)
     except Exception:  # noqa: BLE001
         logger.debug(

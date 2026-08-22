@@ -250,7 +250,14 @@ def _condition_from_code(code: int, temp_c: float) -> str:
 # In-memory TTL cache: key -> (expires_at_monotonic, value). Keyed by
 # (rounded lat, rounded lon, match local date) so repeated enrich calls for
 # the same fixture within the TTL avoid extra HTTP. No persistent storage.
+# Holds the *primary* reading only; the secondary provider keeps its own cache
+# so the two sources' TTLs stay independent.
 _LIVE_CACHE: dict[tuple[float, float, str], tuple[float, dict | None]] = {}
+
+# Largest primary/secondary temperature gap still treated as agreement. Within
+# this band the two readings are averaged; beyond it the primary provider wins
+# and the divergence is reported for diagnostics.
+_AGREEMENT_TEMP_C = 5.0
 
 
 def _clear_live_weather_cache() -> None:
@@ -258,18 +265,132 @@ def _clear_live_weather_cache() -> None:
     _LIVE_CACHE.clear()
 
 
-def live_weather_for_match(match: MatchIdentity) -> dict[str, float | str | None] | None:
-    """Live current-weather for a match's home city, or None on any failure.
+def _clamp_temp(value: float) -> float:
+    """Clamp a reading to the feature band shared with the static climate table."""
+    if value < -15.0:
+        return -15.0
+    if value > 45.0:
+        return 45.0
+    return value
 
-    Selection gates (any miss → None, so the adapter falls through to static
-    climate): provider URL configured; kickoff within the configurable horizon;
-    home city resolves to coordinates; HTTP 200 with a parseable payload.
-    Never raises into the caller.
+
+def _primary_reading(
+    url: str,
+    lat: float,
+    lon: float,
+    day: str,
+) -> dict[str, float | str] | None:
+    """Fetch (or replay from cache) the keyless Open-Meteo-shaped primary source."""
+    cache_key = (round(float(lat), 2), round(float(lon), 2), day)
+    ttl = float(getattr(settings, "FOOTBALL_LIVE_WEATHER_CACHE_TTL_HOURS", 6.0)) * 3600.0
+    now_mono = time.monotonic()
+    cached = _LIVE_CACHE.get(cache_key)
+    if cached is not None and cached[0] > now_mono:
+        return cached[1]
+
+    params: dict[str, float | str] = {"latitude": lat, "longitude": lon}
+    api_key = str(getattr(settings, "FOOTBALL_LIVE_WEATHER_API_KEY", "") or "").strip()
+    if api_key:
+        params["apikey"] = api_key
+    timeout = float(getattr(settings, "FOOTBALL_LIVE_WEATHER_TIMEOUT_S", 5.0))
+    resp = httpx.get(url, params=params, timeout=timeout)
+    if getattr(resp, "status_code", 0) != 200:
+        _LIVE_CACHE[cache_key] = (now_mono + ttl, None)
+        return None
+    payload = resp.json()
+    current = payload["current_weather"]
+    temp = _clamp_temp(float(current["temperature"]))
+    try:
+        code = int(current.get("weathercode", 0))
+    except (TypeError, ValueError):
+        code = 0
+    reading: dict[str, float | str] = {
+        "weather_temp_c": round(temp, 1),
+        "weather_condition": _condition_from_code(code, temp),
+    }
+    _LIVE_CACHE[cache_key] = (now_mono + ttl, reading)
+    return reading
+
+
+def _secondary_reading(lat: float, lon: float, day: str) -> dict[str, float | str] | None:
+    """Fetch the optional second provider, or None when disabled/unavailable."""
+    try:
+        from app.services.football_live_weather_service import get_secondary_weather
+
+        result = get_secondary_weather(lat, lon, day)
+    except Exception:  # noqa: BLE001 — a second source must never break the first
+        logger.debug("secondary weather fetch skipped", exc_info=True)
+        return None
+    if not result.available or result.temp_c is None or result.condition is None:
+        return None
+    return {
+        "weather_temp_c": round(_clamp_temp(float(result.temp_c)), 1),
+        "weather_condition": str(result.condition),
+    }
+
+
+def _combine_readings(
+    primary: dict[str, float | str] | None,
+    secondary: dict[str, float | str] | None,
+) -> dict[str, float | str | None] | None:
+    """Deterministic consensus over the configured live sources.
+
+    Single source → that reading unchanged. Two sources within
+    ``_AGREEMENT_TEMP_C`` → averaged temperature, plus the shared condition when
+    they match (otherwise the primary's). Beyond that band the primary reading
+    wins outright, so a bad second provider can never move the feature more
+    than the tolerance.
+    """
+    if primary is None and secondary is None:
+        return None
+    if primary is not None and secondary is None:
+        return {**primary, "weather_source_count": 1.0, "weather_agreement": "single"}
+    if primary is None and secondary is not None:
+        return {**secondary, "weather_source_count": 1.0, "weather_agreement": "single"}
+    if primary is None or secondary is None:  # pragma: no cover — narrowing only
+        return None
+
+    primary_temp = float(primary["weather_temp_c"])
+    secondary_temp = float(secondary["weather_temp_c"])
+    primary_cond = str(primary["weather_condition"])
+    secondary_cond = str(secondary["weather_condition"])
+    if abs(primary_temp - secondary_temp) > _AGREEMENT_TEMP_C:
+        return {
+            "weather_temp_c": round(primary_temp, 1),
+            "weather_condition": primary_cond,
+            "weather_source_count": 2.0,
+            "weather_agreement": "diverged",
+        }
+    # Conditions are categorical, so there is no meaningful average: the primary
+    # provider's label is kept either way and disagreement is only reported.
+    return {
+        "weather_temp_c": round((primary_temp + secondary_temp) / 2.0, 1),
+        "weather_condition": primary_cond,
+        "weather_source_count": 2.0,
+        "weather_agreement": "agree" if primary_cond == secondary_cond else "temp_only",
+    }
+
+
+def live_weather_for_match(match: MatchIdentity) -> dict[str, float | str | None] | None:
+    """Live weather consensus for a match's home city, or None on any failure.
+
+    Shared gates (any miss → None, so the adapter falls through to static
+    climate): at least one live source configured; kickoff within the
+    configurable horizon; home city resolves to coordinates. Each source is
+    then fetched best-effort and merged by :func:`_combine_readings`; one
+    provider failing never suppresses the other. Never raises into the caller.
     """
     try:
         url = str(getattr(settings, "FOOTBALL_LIVE_WEATHER_URL", "") or "").strip()
-        if not url:
-            return None  # not configured → caller uses static climate
+        secondary_enabled = bool(
+            getattr(settings, "FOOTBALL_LIVE_WEATHER_SECONDARY_ENABLED", False)
+            and str(getattr(settings, "FOOTBALL_LIVE_WEATHER_SECONDARY_URL", "") or "").strip()
+            and str(
+                getattr(settings, "FOOTBALL_LIVE_WEATHER_SECONDARY_API_KEY", "") or ""
+            ).strip()
+        )
+        if not url and not secondary_enabled:
+            return None  # nothing configured → caller uses static climate
 
         kickoff = getattr(match, "kickoff_utc", None)
         if kickoff is None:
@@ -290,40 +411,17 @@ def live_weather_for_match(match: MatchIdentity) -> dict[str, float | str | None
         if geo is None:
             return None
         lat, lon, _tz = geo
+        day = kickoff.date().isoformat()
 
-        cache_key = (round(float(lat), 2), round(float(lon), 2), kickoff.date().isoformat())
-        ttl = float(getattr(settings, "FOOTBALL_LIVE_WEATHER_CACHE_TTL_HOURS", 6.0)) * 3600.0
-        now_mono = time.monotonic()
-        cached = _LIVE_CACHE.get(cache_key)
-        if cached is not None and cached[0] > now_mono:
-            return cached[1]
-
-        params: dict[str, float | str] = {"latitude": lat, "longitude": lon}
-        api_key = str(getattr(settings, "FOOTBALL_LIVE_WEATHER_API_KEY", "") or "").strip()
-        if api_key:
-            params["apikey"] = api_key
-        timeout = float(getattr(settings, "FOOTBALL_LIVE_WEATHER_TIMEOUT_S", 5.0))
-        resp = httpx.get(url, params=params, timeout=timeout)
-        if getattr(resp, "status_code", 0) != 200:
-            _LIVE_CACHE[cache_key] = (now_mono + ttl, None)
-            return None
-        payload = resp.json()
-        current = payload["current_weather"]
-        temp = float(current["temperature"])
-        if temp < -15.0:
-            temp = -15.0
-        elif temp > 45.0:
-            temp = 45.0
-        try:
-            code = int(current.get("weathercode", 0))
-        except (TypeError, ValueError):
-            code = 0
-        result: dict[str, float | str | None] = {
-            "weather_temp_c": round(temp, 1),
-            "weather_condition": _condition_from_code(code, temp),
-        }
-        _LIVE_CACHE[cache_key] = (now_mono + ttl, result)
-        return result
+        primary: dict[str, float | str] | None = None
+        if url:
+            try:
+                primary = _primary_reading(url, float(lat), float(lon), day)
+            except Exception:  # noqa: BLE001 — keep any secondary reading usable
+                logger.debug("primary weather fetch skipped", exc_info=True)
+                primary = None
+        secondary = _secondary_reading(float(lat), float(lon), day) if secondary_enabled else None
+        return _combine_readings(primary, secondary)
     except Exception:  # noqa: BLE001 — never raise into the adapter
         logger.debug("live weather fetch skipped", exc_info=True)
         return None

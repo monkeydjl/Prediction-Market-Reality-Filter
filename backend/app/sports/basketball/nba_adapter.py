@@ -330,28 +330,80 @@ class NBAAdapter:
         try:
             from app.sports.basketball.nba_injury import injury_impact_for_team
 
-            inj_h = injury_impact_for_team(home_name)
-            inj_a = injury_impact_for_team(away_name)
-            if inj_h is not None:
-                raw["player"]["injury_impact_home"] = float(inj_h)
-                raw["custom"]["injury_impact_home"] = float(inj_h)
-            if inj_a is not None:
-                raw["player"]["injury_impact_away"] = float(inj_a)
-                raw["custom"]["injury_impact_away"] = float(inj_a)
+            live = {}
+            try:
+                from app.services.nba_live_injury_service import get_live_injury_impact
+
+                live = {
+                    "home": get_live_injury_impact(home_name),
+                    "away": get_live_injury_impact(away_name),
+                }
+            except Exception:  # noqa: BLE001 — keep the static table usable
+                logger.debug("NBA live injury enrich unavailable", exc_info=True)
+
+            for side, name in (("home", home_name), ("away", away_name)):
+                result = live.get(side)
+                # A reached provider wins; unreachable or silent on this team
+                # falls through to the static Out table.
+                if result is not None and result.available and result.impact is not None:
+                    impact: float | None = float(result.impact)
+                    source = "live_provider"
+                else:
+                    impact = injury_impact_for_team(name)
+                    source = "static_table"
+                if impact is None:
+                    continue
+                raw["player"][f"injury_impact_{side}"] = float(impact)
+                raw["custom"][f"injury_impact_{side}"] = float(impact)
+                raw["custom"][f"injury_source_{side}"] = source
         except Exception:  # noqa: BLE001
             logger.debug("NBA injury enrich skipped", exc_info=True)
         try:
             from app.sports.basketball.nba_team_ratings import ratings_for_team
 
-            home_r = ratings_for_team(home_name)
-            away_r = ratings_for_team(away_name)
+            live_ratings: dict[str, dict[str, float] | None] = {}
+            try:
+                from app.services.nba_live_ratings_service import get_live_team_ratings
+
+                for side, name in (("home", home_name), ("away", away_name)):
+                    rating = get_live_team_ratings(match.season.season_key, name)
+                    live_ratings[side] = rating.ratings if rating.available else None
+            except Exception:  # noqa: BLE001 — keep the static table usable
+                logger.debug("NBA live ratings enrich unavailable", exc_info=True)
+                live_ratings = {}
+
+            # Both sides must come from one source. The engine consumes the
+            # ORtg-DRtg differential, so pairing a live season level against a
+            # static multi-year level would manufacture a spurious edge.
+            if live_ratings.get("home") and live_ratings.get("away"):
+                home_r = live_ratings["home"]
+                away_r = live_ratings["away"]
+                ratings_source = "live_provider"
+            else:
+                home_r = ratings_for_team(home_name)
+                away_r = ratings_for_team(away_name)
+                ratings_source = "static_table"
             if home_r is not None and away_r is not None:
                 raw["custom"]["ortg_home"] = float(home_r["ortg"])
                 raw["custom"]["drtg_home"] = float(home_r["drtg"])
                 raw["custom"]["ortg_away"] = float(away_r["ortg"])
                 raw["custom"]["drtg_away"] = float(away_r["drtg"])
+                # One key, not per side: a mixed-source pair is never written.
+                raw["custom"]["ratings_source"] = ratings_source
         except Exception:  # noqa: BLE001
             logger.debug("NBA team ratings enrich skipped", exc_info=True)
+        # Real market over/under line (P1-O1). Default-off; absent it the engine
+        # keeps quoting against the league average, which equals its own expected
+        # total by construction.
+        from app.services.market_totals_service import inject_market_total_into_custom
+
+        raw["custom"] = inject_market_total_into_custom(
+            raw.get("custom") or {},
+            sport="basketball",
+            kickoff_utc=match.kickoff_utc,
+            home_name=home_name,
+            away_name=away_name,
+        )
         return raw
 
     def _compute_form(self, team_name: str, as_of: datetime | None = None) -> float:

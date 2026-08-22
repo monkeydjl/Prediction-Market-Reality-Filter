@@ -459,6 +459,158 @@ class Settings:
         os.getenv("FOOTBALL_LIVE_WEATHER_CACHE_TTL_HOURS", "6.0")
     )
 
+    # Optional second, independent weather source (P1-F7 multi-source). Disabled
+    # by default: with it off the live layer behaves exactly as the single
+    # Open-Meteo-shaped path above. When enabled and configured, both sources are
+    # read best-effort and merged by a deterministic consensus rule; either
+    # source failing degrades to the other, and both failing degrades to static
+    # climate. Requires the normalized envelope documented in
+    # docs/dev/football-live-weather-secondary-provider-contract.md.
+    FOOTBALL_LIVE_WEATHER_SECONDARY_ENABLED: bool = _env_bool(
+        "FOOTBALL_LIVE_WEATHER_SECONDARY_ENABLED", "false"
+    )
+    FOOTBALL_LIVE_WEATHER_SECONDARY_URL: str = os.getenv(
+        "FOOTBALL_LIVE_WEATHER_SECONDARY_URL", ""
+    )
+    FOOTBALL_LIVE_WEATHER_SECONDARY_API_KEY: str = os.getenv(
+        "FOOTBALL_LIVE_WEATHER_SECONDARY_API_KEY", ""
+    )
+    FOOTBALL_LIVE_WEATHER_SECONDARY_TIMEOUT_S: float = float(
+        os.getenv("FOOTBALL_LIVE_WEATHER_SECONDARY_TIMEOUT_S", "5.0")
+    )
+    FOOTBALL_LIVE_WEATHER_SECONDARY_CACHE_TTL_HOURS: float = float(
+        os.getenv("FOOTBALL_LIVE_WEATHER_SECONDARY_CACHE_TTL_HOURS", "1.0")
+    )
+    FOOTBALL_LIVE_WEATHER_SECONDARY_MAX_BYTES: int = int(
+        os.getenv("FOOTBALL_LIVE_WEATHER_SECONDARY_MAX_BYTES", "262144")
+    )
+
+    # Optional API-Football league injury feed. Empty/disabled preserves the
+    # static injury table and World Cup fact-store fallback.
+    FOOTBALL_LIVE_INJURIES_ENABLED: bool = _env_bool(
+        "FOOTBALL_LIVE_INJURIES_ENABLED", "false"
+    )
+    FOOTBALL_LIVE_INJURIES_TIMEOUT_S: float = float(
+        os.getenv("FOOTBALL_LIVE_INJURIES_TIMEOUT_S", "5.0")
+    )
+    FOOTBALL_LIVE_INJURIES_CACHE_TTL_HOURS: float = float(
+        os.getenv("FOOTBALL_LIVE_INJURIES_CACHE_TTL_HOURS", "1.0")
+    )
+    FOOTBALL_LIVE_INJURIES_MAX_BYTES: int = int(
+        os.getenv("FOOTBALL_LIVE_INJURIES_MAX_BYTES", "2097152")
+    )
+    FOOTBALL_LIVE_INJURIES_LEAGUE_IDS: str = os.getenv(
+        "FOOTBALL_LIVE_INJURIES_LEAGUE_IDS",
+        "epl:39,ucl:2,laliga:140,bundesliga:78,seriea:135,ligue1:61",
+    )
+
+    # Optional configured true-xG provider. Empty/disabled preserves the
+    # static xG table and goals-per-game proxy fallback.
+    FOOTBALL_LIVE_XG_ENABLED: bool = _env_bool(
+        "FOOTBALL_LIVE_XG_ENABLED", "false"
+    )
+    FOOTBALL_LIVE_XG_URL: str = os.getenv("FOOTBALL_LIVE_XG_URL", "")
+    FOOTBALL_LIVE_XG_API_KEY: str = os.getenv("FOOTBALL_LIVE_XG_API_KEY", "")
+    FOOTBALL_LIVE_XG_TIMEOUT_S: float = float(
+        os.getenv("FOOTBALL_LIVE_XG_TIMEOUT_S", "5.0")
+    )
+    FOOTBALL_LIVE_XG_CACHE_TTL_HOURS: float = float(
+        os.getenv("FOOTBALL_LIVE_XG_CACHE_TTL_HOURS", "1.0")
+    )
+    FOOTBALL_LIVE_XG_MAX_BYTES: int = int(
+        os.getenv("FOOTBALL_LIVE_XG_MAX_BYTES", "1048576")
+    )
+    FOOTBALL_LIVE_XG_SEASON_PARAM: str = os.getenv(
+        "FOOTBALL_LIVE_XG_SEASON_PARAM", "season"
+    )
+
+    # Optional configured true-style provider. Empty/disabled preserves the
+    # static style table and form-share possession proxy fallback.
+    FOOTBALL_LIVE_STYLE_ENABLED: bool = _env_bool(
+        "FOOTBALL_LIVE_STYLE_ENABLED", "false"
+    )
+    FOOTBALL_LIVE_STYLE_URL: str = os.getenv("FOOTBALL_LIVE_STYLE_URL", "")
+    FOOTBALL_LIVE_STYLE_API_KEY: str = os.getenv("FOOTBALL_LIVE_STYLE_API_KEY", "")
+    FOOTBALL_LIVE_STYLE_TIMEOUT_S: float = float(
+        os.getenv("FOOTBALL_LIVE_STYLE_TIMEOUT_S", "5.0")
+    )
+    FOOTBALL_LIVE_STYLE_CACHE_TTL_HOURS: float = float(
+        os.getenv("FOOTBALL_LIVE_STYLE_CACHE_TTL_HOURS", "1.0")
+    )
+    FOOTBALL_LIVE_STYLE_MAX_BYTES: int = int(
+        os.getenv("FOOTBALL_LIVE_STYLE_MAX_BYTES", "1048576")
+    )
+    FOOTBALL_LIVE_STYLE_SEASON_PARAM: str = os.getenv(
+        "FOOTBALL_LIVE_STYLE_SEASON_PARAM", "season"
+    )
+
+    # Optional configured referee-stat provider. Empty/disabled preserves the
+    # static referee bias fallback.
+    FOOTBALL_LIVE_REFEREE_ENABLED: bool = _env_bool(
+        "FOOTBALL_LIVE_REFEREE_ENABLED", "false"
+    )
+    FOOTBALL_LIVE_REFEREE_URL: str = os.getenv("FOOTBALL_LIVE_REFEREE_URL", "")
+    FOOTBALL_LIVE_REFEREE_API_KEY: str = os.getenv("FOOTBALL_LIVE_REFEREE_API_KEY", "")
+    FOOTBALL_LIVE_REFEREE_TIMEOUT_S: float = float(
+        os.getenv("FOOTBALL_LIVE_REFEREE_TIMEOUT_S", "5.0")
+    )
+    FOOTBALL_LIVE_REFEREE_CACHE_TTL_HOURS: float = float(
+        os.getenv("FOOTBALL_LIVE_REFEREE_CACHE_TTL_HOURS", "1.0")
+    )
+    FOOTBALL_LIVE_REFEREE_MAX_BYTES: int = int(
+        os.getenv("FOOTBALL_LIVE_REFEREE_MAX_BYTES", "1048576")
+    )
+    FOOTBALL_LIVE_REFEREE_SEASON_PARAM: str = os.getenv(
+        "FOOTBALL_LIVE_REFEREE_SEASON_PARAM", "season"
+    )
+
+    # Optional configured player-availability provider. Empty/disabled preserves
+    # API-Football, static injury, and World Cup fact-store fallbacks.
+    FOOTBALL_LIVE_AVAILABILITY_ENABLED: bool = _env_bool(
+        "FOOTBALL_LIVE_AVAILABILITY_ENABLED", "false"
+    )
+    FOOTBALL_LIVE_AVAILABILITY_URL: str = os.getenv(
+        "FOOTBALL_LIVE_AVAILABILITY_URL", ""
+    )
+    FOOTBALL_LIVE_AVAILABILITY_API_KEY: str = os.getenv(
+        "FOOTBALL_LIVE_AVAILABILITY_API_KEY", ""
+    )
+    FOOTBALL_LIVE_AVAILABILITY_TIMEOUT_S: float = float(
+        os.getenv("FOOTBALL_LIVE_AVAILABILITY_TIMEOUT_S", "5.0")
+    )
+    FOOTBALL_LIVE_AVAILABILITY_CACHE_TTL_HOURS: float = float(
+        os.getenv("FOOTBALL_LIVE_AVAILABILITY_CACHE_TTL_HOURS", "1.0")
+    )
+    FOOTBALL_LIVE_AVAILABILITY_MAX_BYTES: int = int(
+        os.getenv("FOOTBALL_LIVE_AVAILABILITY_MAX_BYTES", "1048576")
+    )
+    FOOTBALL_LIVE_AVAILABILITY_SEASON_PARAM: str = os.getenv(
+        "FOOTBALL_LIVE_AVAILABILITY_SEASON_PARAM", "season"
+    )
+
+    # Optional configured fixture-history provider. Empty/disabled preserves
+    # kernel-only schedule density.
+    FOOTBALL_LIVE_SCHEDULE_ENABLED: bool = _env_bool(
+        "FOOTBALL_LIVE_SCHEDULE_ENABLED", "false"
+    )
+    FOOTBALL_LIVE_SCHEDULE_URL: str = os.getenv("FOOTBALL_LIVE_SCHEDULE_URL", "")
+    FOOTBALL_LIVE_SCHEDULE_API_KEY: str = os.getenv("FOOTBALL_LIVE_SCHEDULE_API_KEY", "")
+    FOOTBALL_LIVE_SCHEDULE_TIMEOUT_S: float = float(
+        os.getenv("FOOTBALL_LIVE_SCHEDULE_TIMEOUT_S", "5.0")
+    )
+    FOOTBALL_LIVE_SCHEDULE_CACHE_TTL_HOURS: float = float(
+        os.getenv("FOOTBALL_LIVE_SCHEDULE_CACHE_TTL_HOURS", "1.0")
+    )
+    FOOTBALL_LIVE_SCHEDULE_MAX_BYTES: int = int(
+        os.getenv("FOOTBALL_LIVE_SCHEDULE_MAX_BYTES", "2097152")
+    )
+    FOOTBALL_LIVE_SCHEDULE_SEASON_PARAM: str = os.getenv(
+        "FOOTBALL_LIVE_SCHEDULE_SEASON_PARAM", "season"
+    )
+    FOOTBALL_LIVE_SCHEDULE_HISTORY_DAYS: int = int(
+        os.getenv("FOOTBALL_LIVE_SCHEDULE_HISTORY_DAYS", "14")
+    )
+
     # The Odds API - Betting odds data source
     # Free tier: 500 requests/month
     # Register at: https://the-odds-api.com/
@@ -1108,6 +1260,115 @@ class Settings:
     NBA_ELO_K_REGULAR: int = int(os.getenv("NBA_ELO_K_REGULAR", "20"))
     NBA_ELO_K_PLAYOFF: int = int(os.getenv("NBA_ELO_K_PLAYOFF", "30"))
     NBA_LEAGUE_AVG_TOTAL: float = float(os.getenv("NBA_LEAGUE_AVG_TOTAL", "220.0"))
+
+    # Optional real NBA availability source (P1-B1). Disabled by default: with it
+    # off no request is made and the code-local static Out table remains the only
+    # signal. When enabled and configured, a reached provider takes precedence and
+    # any failure degrades to that static table. Role tiers and the impact formula
+    # stay in app/sports/basketball/nba_injury.py. Requires the envelope
+    # documented in docs/dev/nba-live-injury-provider-contract.md.
+    NBA_LIVE_INJURIES_ENABLED: bool = _env_bool("NBA_LIVE_INJURIES_ENABLED", "false")
+    NBA_LIVE_INJURIES_URL: str = os.getenv("NBA_LIVE_INJURIES_URL", "")
+    NBA_LIVE_INJURIES_API_KEY: str = os.getenv("NBA_LIVE_INJURIES_API_KEY", "")
+    NBA_LIVE_INJURIES_TIMEOUT_S: float = float(
+        os.getenv("NBA_LIVE_INJURIES_TIMEOUT_S", "5.0")
+    )
+    NBA_LIVE_INJURIES_CACHE_TTL_HOURS: float = float(
+        os.getenv("NBA_LIVE_INJURIES_CACHE_TTL_HOURS", "1.0")
+    )
+    NBA_LIVE_INJURIES_MAX_BYTES: int = int(
+        os.getenv("NBA_LIVE_INJURIES_MAX_BYTES", "262144")
+    )
+
+    # Optional dynamic-season NBA efficiency source (P1-B4). Disabled by default:
+    # with it off no request is made and the code-local static 30-team ORtg/DRtg
+    # table remains the only signal. The provider must publish actual points,
+    # points allowed, and true possession counts; ORtg/DRtg are computed here from
+    # those counts, so a pre-computed rating with no possession sample is rejected
+    # rather than trusted. MIN_POSSESSIONS drops an early-season sample too small
+    # to be meaningful. Requires the envelope documented in
+    # docs/dev/nba-live-ratings-provider-contract.md.
+    NBA_LIVE_RATINGS_ENABLED: bool = _env_bool("NBA_LIVE_RATINGS_ENABLED", "false")
+    NBA_LIVE_RATINGS_URL: str = os.getenv("NBA_LIVE_RATINGS_URL", "")
+    NBA_LIVE_RATINGS_API_KEY: str = os.getenv("NBA_LIVE_RATINGS_API_KEY", "")
+    NBA_LIVE_RATINGS_SEASON_PARAM: str = os.getenv("NBA_LIVE_RATINGS_SEASON_PARAM", "season")
+    NBA_LIVE_RATINGS_TIMEOUT_S: float = float(
+        os.getenv("NBA_LIVE_RATINGS_TIMEOUT_S", "5.0")
+    )
+    NBA_LIVE_RATINGS_CACHE_TTL_HOURS: float = float(
+        os.getenv("NBA_LIVE_RATINGS_CACHE_TTL_HOURS", "6.0")
+    )
+    NBA_LIVE_RATINGS_MAX_BYTES: int = int(
+        os.getenv("NBA_LIVE_RATINGS_MAX_BYTES", "262144")
+    )
+    NBA_LIVE_RATINGS_MIN_POSSESSIONS: float = float(
+        os.getenv("NBA_LIVE_RATINGS_MIN_POSSESSIONS", "500.0")
+    )
+
+    # Optional true 5v5 NHL shot-quality source (P1-H1). Disabled by default:
+    # with it off no request is made and the club-stats proxies (shots-on-goal
+    # scaled as soft xG, shots-on-goal share as corsi) remain the only signal.
+    # The provider must publish 5v5 time on ice plus actual expected goals and/or
+    # actual corsi event counts; xGF/60 and CF% are computed here from those
+    # inputs, so a pre-computed rate with no sample is rejected rather than
+    # trusted. MIN_TOI_MINUTES drops an early-season sample too small to be
+    # meaningful. Requires the envelope documented in
+    # docs/dev/nhl-live-5v5-provider-contract.md.
+    NHL_LIVE_XG_ENABLED: bool = _env_bool("NHL_LIVE_XG_ENABLED", "false")
+    NHL_LIVE_XG_URL: str = os.getenv("NHL_LIVE_XG_URL", "")
+    NHL_LIVE_XG_API_KEY: str = os.getenv("NHL_LIVE_XG_API_KEY", "")
+    NHL_LIVE_XG_SEASON_PARAM: str = os.getenv("NHL_LIVE_XG_SEASON_PARAM", "season")
+    NHL_LIVE_XG_TIMEOUT_S: float = float(os.getenv("NHL_LIVE_XG_TIMEOUT_S", "5.0"))
+    NHL_LIVE_XG_CACHE_TTL_HOURS: float = float(
+        os.getenv("NHL_LIVE_XG_CACHE_TTL_HOURS", "6.0")
+    )
+    NHL_LIVE_XG_MAX_BYTES: int = int(os.getenv("NHL_LIVE_XG_MAX_BYTES", "262144"))
+    NHL_LIVE_XG_MIN_TOI_MINUTES: float = float(
+        os.getenv("NHL_LIVE_XG_MIN_TOI_MINUTES", "500.0")
+    )
+
+    # Optional measured MLB park-factor source (P1-M2). Disabled by default:
+    # with it off no request is made and the code-local 30-team static park
+    # table remains the only signal. The provider must publish home/road game
+    # counts and the combined runs scored in those games; the factor is
+    # computed here from those counts, so a pre-computed factor with no game
+    # sample is rejected rather than trusted. MIN_GAMES drops a sample too
+    # noisy to displace the static level. Requires the envelope documented in
+    # docs/dev/mlb-live-park-provider-contract.md.
+    MLB_LIVE_PARK_ENABLED: bool = _env_bool("MLB_LIVE_PARK_ENABLED", "false")
+    MLB_LIVE_PARK_URL: str = os.getenv("MLB_LIVE_PARK_URL", "")
+    MLB_LIVE_PARK_API_KEY: str = os.getenv("MLB_LIVE_PARK_API_KEY", "")
+    MLB_LIVE_PARK_SEASON_PARAM: str = os.getenv("MLB_LIVE_PARK_SEASON_PARAM", "season")
+    MLB_LIVE_PARK_TIMEOUT_S: float = float(os.getenv("MLB_LIVE_PARK_TIMEOUT_S", "5.0"))
+    MLB_LIVE_PARK_CACHE_TTL_HOURS: float = float(
+        os.getenv("MLB_LIVE_PARK_CACHE_TTL_HOURS", "12.0")
+    )
+    MLB_LIVE_PARK_MAX_BYTES: int = int(os.getenv("MLB_LIVE_PARK_MAX_BYTES", "262144"))
+    MLB_LIVE_PARK_MIN_GAMES: float = float(os.getenv("MLB_LIVE_PARK_MIN_GAMES", "81.0"))
+
+    # Optional real market over/under totals source (P1-O1). Disabled by
+    # default: with it off no request is made and the soft totals diagnostic
+    # keeps quoting against the sport's league average, which is the same
+    # number the expected total is derived from, so p_over stays a per-sport
+    # constant. The provider must publish the line together with both decimal
+    # prices; the prices are de-vigged and the implied over probability must
+    # sit within MAX_PRICE_SKEW of even, because a posted total is by
+    # definition the level the book balanced. TTL is in minutes because lines
+    # move. Requires the envelope documented in
+    # docs/dev/market-totals-provider-contract.md.
+    MARKET_TOTALS_ENABLED: bool = _env_bool("MARKET_TOTALS_ENABLED", "false")
+    MARKET_TOTALS_URL: str = os.getenv("MARKET_TOTALS_URL", "")
+    MARKET_TOTALS_API_KEY: str = os.getenv("MARKET_TOTALS_API_KEY", "")
+    MARKET_TOTALS_SPORT_PARAM: str = os.getenv("MARKET_TOTALS_SPORT_PARAM", "sport")
+    MARKET_TOTALS_DATE_PARAM: str = os.getenv("MARKET_TOTALS_DATE_PARAM", "date")
+    MARKET_TOTALS_TIMEOUT_S: float = float(os.getenv("MARKET_TOTALS_TIMEOUT_S", "5.0"))
+    MARKET_TOTALS_CACHE_TTL_MINUTES: float = float(
+        os.getenv("MARKET_TOTALS_CACHE_TTL_MINUTES", "15.0")
+    )
+    MARKET_TOTALS_MAX_BYTES: int = int(os.getenv("MARKET_TOTALS_MAX_BYTES", "262144"))
+    MARKET_TOTALS_MAX_PRICE_SKEW: float = float(
+        os.getenv("MARKET_TOTALS_MAX_PRICE_SKEW", "0.15")
+    )
 
     # LoL esports (ADR-004/005) — default OFF; no production API until
     # docs/dev/lol/GATES.md P2/P3/P6. Vendor env names are frozen (D4);

@@ -335,6 +335,158 @@ class TestNHLAdapterStartingGoalies:
             assert abs(raw["custom"]["xg_for_home"] - (2400 / 80) * 0.09) < 1e-4
 
 
+class TestNHLAdapterLive5v5Provider:
+    """P1-H1 residual: measured 5v5 xG/corsi ahead of the club-stats proxies."""
+
+    _SIDE_HOME = {
+        "name": "Igor Shesterkin",
+        "save_pct": 0.912,
+        "rates": {
+            "games": 80, "gf_per_game": 3.1, "ga_per_game": 2.8,
+            "sf_per_game": 30.0, "sa_per_game": 28.0, "shot_share": 0.517,
+        },
+    }
+    _SIDE_AWAY = {
+        "name": "Juuse Saros",
+        "save_pct": 0.920,
+        "rates": {
+            "games": 80, "gf_per_game": 2.9, "ga_per_game": 2.7,
+            "sf_per_game": 29.0, "sa_per_game": 29.5, "shot_share": 0.496,
+        },
+    }
+
+    @classmethod
+    def _run(cls, live_by_team, *, sides=None):
+        """Enrich with the live provider stubbed per team name.
+
+        ``live_by_team`` maps a team name to its LiveNhl5v5, or is a callable
+        used as the patch side effect for failure cases.
+        """
+        from app.services.nhl_live_xg_service import LiveNhl5v5
+
+        side_effect = (
+            live_by_team
+            if callable(live_by_team)
+            else lambda _season, name: live_by_team.get(name, LiveNhl5v5(available=False))
+        )
+        adapter = NHLAdapter()
+        with patch.object(adapter, "_fetch_elo_ratings", return_value={}), \
+             patch.object(adapter, "_fetch_club_side",
+                          side_effect=list(sides or [cls._SIDE_HOME, cls._SIDE_AWAY])), \
+             patch.object(adapter, "_compute_form", return_value=0.5), \
+             patch.object(adapter, "_compute_rest_days", return_value=2.0), \
+             patch(
+                 "app.services.nhl_live_xg_service.get_live_5v5_metrics",
+                 side_effect=side_effect,
+             ):
+            return adapter.fetch_all_data(_make_match())
+
+    @staticmethod
+    def _live(**metrics):
+        from app.services.nhl_live_xg_service import LiveNhl5v5
+
+        return LiveNhl5v5(available=True, metrics={"toi_minutes": 1000.0, **metrics})
+
+    def test_live_corsi_and_xg_replace_the_proxies(self):
+        raw = self._run({
+            "New Jersey Devils": self._live(xgf_per_60=2.85, corsi_pct=0.545),
+            "New York Rangers": self._live(xgf_per_60=2.40, corsi_pct=0.478),
+        })
+        custom = raw["custom"]
+        assert custom["corsi_pct_home"] == pytest.approx(0.545)
+        assert custom["corsi_pct_away"] == pytest.approx(0.478)
+        assert custom["xg_for_home"] == pytest.approx(2.85)
+        assert custom["xg_for_away"] == pytest.approx(2.40)
+        assert custom["skating_source"] == "live_provider"
+
+    def test_live_xg_only_clears_the_shots_on_goal_proxy(self):
+        # HockeyEngine prefers corsi over xG, so leaving the shots-on-goal share
+        # in place would make the measured xG unreachable.
+        raw = self._run({
+            "New Jersey Devils": self._live(xgf_per_60=2.85),
+            "New York Rangers": self._live(xgf_per_60=2.40),
+        })
+        custom = raw["custom"]
+        assert custom["xg_for_home"] == pytest.approx(2.85)
+        assert custom["xg_for_away"] == pytest.approx(2.40)
+        assert custom["corsi_pct_home"] is None
+        assert custom["corsi_pct_away"] is None
+        assert custom["skating_source"] == "live_provider"
+
+    def test_live_corsi_only_keeps_the_shots_derived_xg(self):
+        raw = self._run({
+            "New Jersey Devils": self._live(corsi_pct=0.545),
+            "New York Rangers": self._live(corsi_pct=0.478),
+        })
+        custom = raw["custom"]
+        assert custom["corsi_pct_home"] == pytest.approx(0.545)
+        # The corsi branch wins in the engine, so the SF-derived xG stays as-is.
+        assert custom["xg_for_home"] == pytest.approx(30.0 * 0.09)
+        assert custom["skating_source"] == "live_provider"
+
+    def test_one_live_side_preserves_the_proxies(self):
+        # A measured 5v5 rate against a shots-on-goal proxy is not comparable.
+        raw = self._run({
+            "New Jersey Devils": self._live(xgf_per_60=2.85, corsi_pct=0.545),
+        })
+        custom = raw["custom"]
+        assert custom["corsi_pct_home"] == pytest.approx(0.517)
+        assert custom["corsi_pct_away"] == pytest.approx(0.496)
+        assert custom["xg_for_home"] == pytest.approx(30.0 * 0.09)
+        assert custom["skating_source"] == "club_stats_proxy"
+
+    def test_each_metric_pair_needs_both_sides(self):
+        raw = self._run({
+            "New Jersey Devils": self._live(xgf_per_60=2.85),
+            "New York Rangers": self._live(corsi_pct=0.478),
+        })
+        custom = raw["custom"]
+        assert custom["corsi_pct_home"] == pytest.approx(0.517)
+        assert custom["corsi_pct_away"] == pytest.approx(0.496)
+        assert custom["xg_for_home"] == pytest.approx(30.0 * 0.09)
+        assert custom["skating_source"] == "club_stats_proxy"
+
+    def test_reached_provider_without_metrics_preserves_the_proxies(self):
+        from app.services.nhl_live_xg_service import LiveNhl5v5
+
+        raw = self._run({
+            "New Jersey Devils": LiveNhl5v5(available=True, metrics=None),
+            "New York Rangers": LiveNhl5v5(available=True, metrics=None),
+        })
+        custom = raw["custom"]
+        assert custom["corsi_pct_home"] == pytest.approx(0.517)
+        assert custom["xg_for_away"] == pytest.approx(29.0 * 0.09)
+        assert custom["skating_source"] == "club_stats_proxy"
+
+    def test_provider_exception_preserves_the_proxies(self):
+        def boom(_season, _name):
+            raise RuntimeError("provider down")
+
+        raw = self._run(boom)
+        custom = raw["custom"]
+        assert custom["corsi_pct_home"] == pytest.approx(0.517)
+        assert custom["xg_for_home"] == pytest.approx(30.0 * 0.09)
+        assert custom["skating_source"] == "club_stats_proxy"
+
+    def test_missing_club_rates_report_a_soft_form_source(self):
+        raw = self._run({}, sides=[{}, {}])
+        custom = raw["custom"]
+        assert custom["corsi_pct_home"] is None
+        assert custom["skating_source"] == "soft_form"
+
+    def test_season_key_is_passed_to_the_provider(self):
+        from app.services.nhl_live_xg_service import LiveNhl5v5
+
+        seen: list = []
+
+        def record(season, _name):
+            seen.append(season)
+            return LiveNhl5v5(available=False)
+
+        self._run(record)
+        assert seen == ["20232024", "20232024"]
+
+
 class TestNHLAdapterGetMatchIdentity:
     @patch("app.sports.hockey.nhl_adapter.query_fixture")
     def test_returns_identity_when_fixture_found(self, mock_query):
@@ -472,3 +624,43 @@ class TestNHLAdapterSyncSchedule:
     def test_sync_disabled_returns_zero(self, mock_settings):
         mock_settings.PHASE5_NHL_ENABLED = False
         assert NHLAdapter().sync_schedule() == 0
+
+
+class TestNHLAdapterMarketTotalsWiring:
+    """P1-O1 真盘口: the NHL adapter must actually reach the provider."""
+
+    @staticmethod
+    def _run(result=None, **kwargs):
+        adapter = NHLAdapter()
+        with patch.object(adapter, "_fetch_elo_ratings", return_value={}), \
+             patch.object(adapter, "_fetch_club_side", side_effect=[{}, {}]), \
+             patch.object(adapter, "_compute_form", return_value=0.5), \
+             patch.object(adapter, "_compute_rest_days", return_value=2.0), \
+             patch(
+                 "app.services.market_totals_service.get_market_total",
+                 return_value=result,
+                 **kwargs,
+             ) as provider:
+            return adapter.fetch_all_data(_make_match()), provider
+
+    def test_available_line_reaches_custom(self):
+        from app.services.market_totals_service import MarketTotal
+
+        raw, provider = self._run(MarketTotal(
+            available=True, total={"total_line": 6.5, "market_p_over": 0.49},
+        ))
+        assert raw["custom"]["market_total_line"] == pytest.approx(6.5)
+        assert raw["custom"]["market_total_p_over"] == pytest.approx(0.49)
+        assert provider.call_args.args == (
+            "hockey", "2024-01-15", "New Jersey Devils", "New York Rangers",
+        )
+
+    def test_unavailable_provider_writes_nothing(self):
+        from app.services.market_totals_service import MarketTotal
+
+        raw, _ = self._run(MarketTotal(available=False))
+        assert "market_total_line" not in raw["custom"]
+
+    def test_provider_exception_does_not_break_enrichment(self):
+        raw, _ = self._run(side_effect=RuntimeError("provider down"))
+        assert "market_total_line" not in raw["custom"]

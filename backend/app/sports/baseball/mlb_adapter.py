@@ -723,6 +723,22 @@ class MLBAdapter:
                 "platoon_advantage_home": platoon_adv,
             },
         }
+        # Measured park factor (P1-M2) — a factor computed from actual home/road
+        # run rates outranks the frozen static table. Only the home park matters,
+        # so there is no home-vs-away pairing to protect here.
+        park_source = "static_table"
+        try:
+            from app.services.mlb_live_park_service import get_live_park_factor
+
+            live_park = get_live_park_factor(season, home_name)
+            measured = live_park.park if live_park.available else None
+        except Exception:  # noqa: BLE001 — keep the static park table usable
+            logger.debug("MLB live park enrich unavailable", exc_info=True)
+            measured = None
+        if measured and measured.get("park_factor") is not None:
+            raw["custom"]["park_factor"] = float(measured["park_factor"])
+            park_source = "live_provider"
+        raw["custom"]["park_source"] = park_source
         try:
             from app.sports._shared.team_geo import travel_between_teams
 
@@ -741,6 +757,18 @@ class MLBAdapter:
             )
         except Exception:  # noqa: BLE001
             logger.debug("MLB liquidity enrich skipped", exc_info=True)
+        # Real market over/under line (P1-O1). Default-off; absent it the engine
+        # keeps quoting against the league average, which equals its own expected
+        # total by construction.
+        from app.services.market_totals_service import inject_market_total_into_custom
+
+        raw["custom"] = inject_market_total_into_custom(
+            raw.get("custom") or {},
+            sport="baseball",
+            kickoff_utc=match.kickoff_utc,
+            home_name=home_name,
+            away_name=away_name,
+        )
         return raw
 
     def _compute_form(self, team_name: str, as_of: datetime | None = None) -> float:

@@ -364,6 +364,103 @@ _PRIMARY_FRANCHISES = sorted(
 )
 
 
+class TestMLBAdapterLiveParkProvider:
+    """P1-M2: a measured park factor outranks the static table, or degrades to it."""
+
+    @staticmethod
+    def _run(live, *, match=None):
+        side_effect = live if callable(live) else lambda _season, _name: live
+        adapter = MLBAdapter()
+        with patch.object(adapter, "_fetch_elo_ratings", return_value={}), \
+             patch.object(adapter, "_fetch_game_context", return_value={}), \
+             patch.object(adapter, "_fetch_starting_pitchers",
+                          return_value={"home": {}, "away": {}}), \
+             patch.object(adapter, "_fetch_team_pitching_side",
+                          side_effect=[{}, {}]), \
+             patch.object(adapter, "_fetch_platoon_ops", side_effect=[None, None]), \
+             patch.object(adapter, "_compute_form", return_value=0.5), \
+             patch.object(adapter, "_compute_rest_days", return_value=2.0), \
+             patch(
+                 "app.services.mlb_live_park_service.get_live_park_factor",
+                 side_effect=side_effect,
+             ):
+            return adapter.fetch_all_data(match or _make_match())
+
+    @staticmethod
+    def _live(factor):
+        from app.services.mlb_live_park_service import LiveMlbPark
+
+        return LiveMlbPark(
+            available=True,
+            park={"park_factor": factor, "home_games": 90.0, "road_games": 100.0},
+        )
+
+    def test_measured_factor_replaces_the_static_table(self):
+        raw = self._run(self._live(1.08))
+        assert raw["custom"]["park_factor"] == pytest.approx(1.08)
+        assert raw["custom"]["park_source"] == "live_provider"
+
+    def test_unavailable_provider_keeps_the_static_factor(self):
+        from app.services.mlb_live_park_service import LiveMlbPark
+
+        raw = self._run(LiveMlbPark(available=False))
+        assert raw["custom"]["park_factor"] == pytest.approx(
+            _PARK_FACTORS["New York Yankees"]
+        )
+        assert raw["custom"]["park_source"] == "static_table"
+
+    def test_reached_provider_without_a_row_keeps_the_static_factor(self):
+        from app.services.mlb_live_park_service import LiveMlbPark
+
+        # Reached, but the park's game sample was too small to be usable.
+        raw = self._run(LiveMlbPark(available=True, park=None))
+        assert raw["custom"]["park_factor"] == pytest.approx(
+            _PARK_FACTORS["New York Yankees"]
+        )
+        assert raw["custom"]["park_source"] == "static_table"
+
+    def test_provider_exception_keeps_the_static_factor(self):
+        def boom(_season, _name):
+            raise RuntimeError("provider down")
+
+        raw = self._run(boom)
+        assert raw["custom"]["park_factor"] == pytest.approx(
+            _PARK_FACTORS["New York Yankees"]
+        )
+        assert raw["custom"]["park_source"] == "static_table"
+
+    def test_only_the_home_park_is_looked_up(self):
+        seen = []
+
+        def record(season, name):
+            from app.services.mlb_live_park_service import LiveMlbPark
+
+            seen.append((season, name))
+            return LiveMlbPark(available=False)
+
+        self._run(record)
+        # The away team never bats in its own park, so there is nothing to pair.
+        assert seen == [(2024, "New York Yankees")]
+
+    def test_unknown_home_team_falls_back_to_the_neutral_default(self):
+        from app.services.mlb_live_park_service import LiveMlbPark
+
+        unknown = _make_match()
+        unknown = MatchIdentity(
+            match_id=unknown.match_id,
+            season=unknown.season,
+            stage=unknown.stage,
+            round=unknown.round,
+            home=TeamIdentity(code="FAKE", name="Totally Fake FC", competition=_MLB),
+            away=unknown.away,
+            kickoff_utc=unknown.kickoff_utc,
+        )
+        raw = self._run(LiveMlbPark(available=False), match=unknown)
+        # _park_factor_for_team's own default, not an unset key.
+        assert raw["custom"]["park_factor"] == pytest.approx(1.0)
+        assert raw["custom"]["park_source"] == "static_table"
+
+
 class TestParkFactors:
     def test_primary_franchises_are_thirty(self):
         assert len(_PRIMARY_FRANCHISES) == 30
@@ -400,3 +497,51 @@ class TestParkFactors:
         assert _park_factor_for_team("") == 1.0
         assert _park_factor_for_team("Totally Fake FC") == 1.0
 
+
+
+class TestMLBAdapterMarketTotalsWiring:
+    """P1-O1 真盘口: the MLB adapter must actually reach the provider."""
+
+    @staticmethod
+    def _run(result=None, **kwargs):
+        adapter = MLBAdapter()
+        with patch.object(adapter, "_fetch_elo_ratings", return_value={}), \
+             patch.object(adapter, "_fetch_game_context", return_value={}), \
+             patch.object(adapter, "_fetch_starting_pitchers",
+                          return_value={"home": {}, "away": {}}), \
+             patch.object(adapter, "_fetch_team_pitching_side",
+                          side_effect=[{}, {}]), \
+             patch.object(adapter, "_fetch_platoon_ops", side_effect=[None, None]), \
+             patch.object(adapter, "_compute_form", return_value=0.5), \
+             patch.object(adapter, "_compute_rest_days", return_value=2.0), \
+             patch(
+                 "app.services.market_totals_service.get_market_total",
+                 return_value=result,
+                 **kwargs,
+             ) as provider:
+            return adapter.fetch_all_data(_make_match()), provider
+
+    def test_available_line_reaches_custom(self):
+        from app.services.market_totals_service import MarketTotal
+
+        raw, provider = self._run(MarketTotal(
+            available=True, total={"total_line": 9.5, "market_p_over": 0.505},
+        ))
+        assert raw["custom"]["market_total_line"] == pytest.approx(9.5)
+        assert raw["custom"]["market_total_p_over"] == pytest.approx(0.505)
+        assert provider.call_args.args == (
+            "baseball", "2024-07-04", "New York Yankees", "Boston Red Sox",
+        )
+
+    def test_unavailable_provider_writes_nothing(self):
+        from app.services.market_totals_service import MarketTotal
+
+        raw, _ = self._run(MarketTotal(available=False))
+        assert "market_total_line" not in raw["custom"]
+        # Unrelated enrichment is untouched.
+        assert raw["custom"]["park_source"] == "static_table"
+
+    def test_provider_exception_does_not_break_enrichment(self):
+        raw, _ = self._run(side_effect=RuntimeError("provider down"))
+        assert "market_total_line" not in raw["custom"]
+        assert raw["custom"]["park_source"] == "static_table"

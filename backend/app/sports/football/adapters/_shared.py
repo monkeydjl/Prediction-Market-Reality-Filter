@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import Any
+from datetime import date, datetime, timezone
+from typing import Any, Callable, Mapping, Sequence
 
 from app.kernel.domain import (
     CompetitionIdentity, SeasonIdentity, TeamIdentity,
@@ -25,6 +25,10 @@ from app.kernel.domain import (
 from app.services.club_elo_service import get_club_elo
 
 logger = logging.getLogger(__name__)
+
+# Widest schedule-density window, so one international lookup serves every
+# window the enrichment reports.
+_INTL_DENSITY_WINDOW_DAYS = 7
 
 
 async def fetch_team_elo(
@@ -131,24 +135,21 @@ def fetch_elo_and_odds(
     enrich_situational_features(raw, match)
     enrich_referee_features(raw, match)
 
-    # Soft possession/shots proxy (P1-F6) when true stats unavailable:
-    # map form share → possession share so multi-factor soft path is non-null.
-    try:
-        custom = raw.setdefault("custom", {})
-        if custom.get("possession_home") is None and custom.get("shots_home") is None:
-            fh = raw.get("team", {}).get("form_home")
-            fa = raw.get("team", {}).get("form_away")
-            if fh is not None and fa is not None:
-                fh_f, fa_f = float(fh), float(fa)
-                total = fh_f + fa_f
-                if total > 0:
-                    share = fh_f / total
-                    custom["possession_home"] = round(100.0 * share, 1)
-                    custom["possession_away"] = round(100.0 * (1.0 - share), 1)
-                    custom["possession_proxy"] = "form_share"
-    except Exception:  # noqa: BLE001
-        logger.debug("possession proxy skipped", exc_info=True)
-
+    # No possession proxy here (P1-F6). Form share used to be written under the
+    # possession keys so the multi-factor soft path would be non-null, but the
+    # engine's form factor reads the same two numbers (feature_builder passes
+    # team_raw["form_home"] straight through). Filling possession from form made
+    # one piece of evidence vote twice under two names: it took form's intended
+    # influence from 0.145 to 0.197 of the available weight (1.357x), counted as
+    # an extra available factor in ``data_completeness``, and cast a vote that
+    # agreed with form by construction in ``factor_agreement`` -- together worth
+    # +1.22pp to +2.03pp of confidence depending on how many other factors the
+    # local database resolves. The affected tracks are the callers of this
+    # function -- epl, ucl, laliga, bundesliga, seriea, ligue1 -- not the World
+    # Cup, which builds its own raw dict in WorldCupAdapter.fetch_all_data and
+    # never reaches any enricher here. Absent real possession the engine already
+    # marks the factor unavailable and redistributes its weight, which is the
+    # honest answer and the documented path for a missing factor.
     enrich_style_features(raw, match)
     enrich_altitude_features(raw, match)
     enrich_weather_features(raw, match)
@@ -185,6 +186,18 @@ def fetch_elo_and_odds(
     except Exception:  # noqa: BLE001
         logger.debug("liquidity/dispersion enrich skipped", exc_info=True)
 
+    # Real market over/under line (P1-O1). Default-off; absent it the engine
+    # keeps quoting its soft O/U against the hardcoded 2.5 placeholder.
+    from app.services.market_totals_service import inject_market_total_into_custom
+
+    raw["custom"] = inject_market_total_into_custom(
+        raw.get("custom") or {},
+        sport="football",
+        kickoff_utc=match.kickoff_utc,
+        home_name=match.home.name,
+        away_name=match.away.name,
+    )
+
     # World Cup group motivation when match_id is a WC fixture (best-effort).
     if match.match_id.startswith("wc-") or match.season.competition.code in {
         "wc", "world_cup",
@@ -220,14 +233,7 @@ def fetch_elo_and_odds(
 
 
 def enrich_referee_features(raw: dict, match: MatchIdentity) -> None:
-    """Pass-through / soft-fill referee custom fields for multi-factor (P1-F8).
-
-    Sources (first wins for rate/bias):
-    1. Already-set ``custom.referee_home_win_rate`` / ``referee_home_bias``
-    2. ``environment.referee`` / ``custom.referee_name`` + ``bias_for_referee`` static table
-
-    Never invents rates without a name or explicit numeric field.
-    """
+    """Pass through explicit referee values, then use live or static statistics."""
     custom = raw.setdefault("custom", {})
     env = raw.get("environment") or {}
     env_referee = str(env.get("referee") or "").strip()
@@ -244,16 +250,31 @@ def enrich_referee_features(raw: dict, match: MatchIdentity) -> None:
     if not name:
         return
     custom["referee_name"] = name
+    competition = (match.season.competition.code or "").lower()
+    if competition not in {"wc", "world_cup"}:
+        try:
+            from app.services.football_live_referee_service import get_live_referee
+
+            live = get_live_referee(competition, match.season.season_key, str(name))
+            rate = live.home_win_rate
+            if live.available and rate is not None:
+                custom["referee_home_win_rate"] = float(rate)
+                custom["referee_home_bias"] = round(2.0 * float(rate) - 1.0, 4)
+                custom["referee_source"] = "live_provider"
+                return
+        except Exception:  # noqa: BLE001
+            logger.debug("Live referee enrichment unavailable", exc_info=True)
+
     try:
         from app.sports.football.football_referee import bias_for_referee
 
-        b = bias_for_referee(str(name))
+        bias = bias_for_referee(str(name))
     except Exception:  # noqa: BLE001
         logger.debug("referee static bias lookup skipped", exc_info=True)
         return
-    if b is None:
+    if bias is None:
         return
-    custom["referee_home_bias"] = float(b)
+    custom["referee_home_bias"] = float(bias)
     custom["referee_source"] = "static_map"
 
 
@@ -339,6 +360,14 @@ def enrich_weather_features(raw: dict, match: MatchIdentity) -> None:
             custom["weather_temp_c"] = float(live_temp)
             custom["weather_condition"] = str(live.get("weather_condition") or "mild")
             custom["weather_source"] = "live_forecast"
+            # Multi-source provenance (diagnostics only; the feature contract
+            # stays weather_temp_c / weather_condition).
+            source_count = live.get("weather_source_count")
+            if source_count is not None:
+                custom["weather_source_count"] = float(source_count)
+            agreement = live.get("weather_agreement")
+            if agreement is not None:
+                custom["weather_agreement"] = str(agreement)
             return
 
         climate = climate_for_home(home_name, month)
@@ -354,27 +383,72 @@ def enrich_weather_features(raw: dict, match: MatchIdentity) -> None:
 
 
 def enrich_style_features(raw: dict, match: MatchIdentity) -> None:
-    """Static possession/shots/PPDA (P1-F6): overwrite form proxy only when both sides resolve."""
-    try:
-        from app.sports.football.football_style import stats_for_team
+    """Live/static possession, shots, PPDA; writes nothing without a full pair.
 
+    ``raw`` always arrives fresh from :func:`fetch_elo_and_odds`, and nothing
+    upstream of the call writes the possession keys, so this function is the
+    only producer they ever have.
+
+    A half-resolved pair leaves ``custom`` untouched on purpose. The engine's
+    possession factor is a share between the two sides, so one side alone cannot
+    produce one, and inventing the missing side would put a guess where a
+    measurement belongs. With neither key set the factor reports itself
+    unavailable and its weight is redistributed across the factors that do have
+    data.
+    """
+    try:
         home_name = match.home.name if match.home else ""
         away_name = match.away.name if match.away else ""
-        sh = stats_for_team(home_name)
-        sa = stats_for_team(away_name)
-        if sh is None or sa is None:
+        competition = (match.season.competition.code or "").lower()
+        # Defensive only: the callers of fetch_elo_and_odds are the epl, ucl and
+        # league adapters, whose competition codes are epl/ucl/laliga/
+        # bundesliga/seriea/ligue1. WorldCupAdapter builds its own raw dict and
+        # calls no enricher, so no fixture reaching here has a World Cup code
+        # today. The guard stays because a national team has no club style row
+        # and the provider would spend a request to learn that.
+        is_world_cup = competition in {"wc", "world_cup"}
+        live_values: tuple[dict[str, float], dict[str, float]] | None = None
+        if not is_world_cup:
+            try:
+                from app.services.football_live_style_service import get_live_style
+
+                live_home = get_live_style(competition, match.season.season_key, home_name)
+                live_away = get_live_style(competition, match.season.season_key, away_name)
+                home_live_style = live_home.style
+                away_live_style = live_away.style
+                if (
+                    live_home.available
+                    and live_away.available
+                    and home_live_style is not None
+                    and away_live_style is not None
+                ):
+                    live_values = (home_live_style, away_live_style)
+            except Exception:  # noqa: BLE001
+                logger.debug("Live style enrichment unavailable", exc_info=True)
+
+        home_style: dict[str, float] | None
+        away_style: dict[str, float] | None
+        if live_values is not None:
+            home_style, away_style = live_values
+            source = "live_provider"
+        else:
+            from app.sports.football.football_style import stats_for_team
+
+            home_style = stats_for_team(home_name)
+            away_style = stats_for_team(away_name)
+            source = "static_table"
+        if home_style is None or away_style is None:
             return
         custom = raw.setdefault("custom", {})
-        custom["possession_home"] = float(sh["possession_pct"])
-        custom["possession_away"] = float(sa["possession_pct"])
-        custom["shots_home"] = float(sh["shots_per90"])
-        custom["shots_away"] = float(sa["shots_per90"])
-        custom["ppda_home"] = float(sh["ppda"])
-        custom["ppda_away"] = float(sa["ppda"])
-        custom["style_source"] = "static_table"
-        custom.pop("possession_proxy", None)
+        custom["possession_home"] = float(home_style["possession_pct"])
+        custom["possession_away"] = float(away_style["possession_pct"])
+        custom["shots_home"] = float(home_style["shots_per90"])
+        custom["shots_away"] = float(away_style["shots_per90"])
+        custom["ppda_home"] = float(home_style["ppda"])
+        custom["ppda_away"] = float(away_style["ppda"])
+        custom["style_source"] = source
     except Exception:  # noqa: BLE001
-        logger.debug("Static style enrichment failed", exc_info=True)
+        logger.debug("Style enrichment failed", exc_info=True)
 
 
 def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
@@ -394,11 +468,13 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
         from app.services.world_cup_historical_results import (
             get_historical_h2h,
             get_historical_team_stats,
+            historical_h2h_meetings,
         )
     except Exception:  # noqa: BLE001
         logger.debug("Historical results module unavailable", exc_info=True)
         get_historical_team_stats = None  # type: ignore[assignment]
         get_historical_h2h = None  # type: ignore[assignment]
+        historical_h2h_meetings = None  # type: ignore[assignment]
 
     home_stats = None
     away_stats = None
@@ -469,41 +545,102 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
         if gpg is not None:
             raw.setdefault("custom", {})["xg_away"] = float(gpg)
 
-    # Static xG/90 (P1-F5): overwrite goals proxy only when both sides resolve
+    # xG: live configured pair, then static pair; otherwise preserve GPG proxy.
     try:
+        live_values: tuple[float, float] | None = None
+        if not is_world_cup:
+            try:
+                from app.services.football_live_xg_service import get_live_xg
+
+                live_h = get_live_xg(competition, match.season.season_key, home_name)
+                live_a = get_live_xg(competition, match.season.season_key, away_name)
+                home_xg = live_h.xg_per90
+                away_xg = live_a.xg_per90
+                if (
+                    live_h.available
+                    and live_a.available
+                    and home_xg is not None
+                    and away_xg is not None
+                ):
+                    live_values = (home_xg, away_xg)
+            except Exception:  # noqa: BLE001
+                logger.debug("Live xG enrichment unavailable", exc_info=True)
+
         from app.sports.football.football_xg import xg_for_team
 
-        xh = xg_for_team(home_name)
-        xa = xg_for_team(away_name)
-        if xh is not None and xa is not None:
+        if live_values is not None:
             custom = raw.setdefault("custom", {})
-            custom["xg_home"] = float(xh)
-            custom["xg_away"] = float(xa)
-            custom["xg_source"] = "static_table"
+            custom["xg_home"], custom["xg_away"] = live_values
+            custom["xg_source"] = "live_provider"
+        else:
+            xh = xg_for_team(home_name)
+            xa = xg_for_team(away_name)
+            if xh is not None and xa is not None:
+                custom = raw.setdefault("custom", {})
+                custom["xg_home"] = float(xh)
+                custom["xg_away"] = float(xa)
+                custom["xg_source"] = "static_table"
     except Exception:  # noqa: BLE001
-        logger.debug("Static xG enrichment failed", exc_info=True)
+        logger.debug("xG enrichment failed", exc_info=True)
 
     h2h = None
-    if get_historical_h2h is not None:
+    h2h_source = None
+    historical_meetings = []
+    kernel_meetings = []
+    if historical_h2h_meetings is not None:
         try:
-            h2h = get_historical_h2h(home_name, away_name, before_date=before)
-        except Exception:  # noqa: BLE001
-            h2h = None
-            logger.debug("H2H enrichment failed", exc_info=True)
-
-    if not h2h:
-        try:
-            from app.sports.football.club_form import h2h_from_kernel
-
-            h2h = h2h_from_kernel(
+            historical_meetings = historical_h2h_meetings(
                 home_name,
                 away_name,
-                competition=competition if not is_world_cup else None,
-                before=before,
+                before_date=before,
             )
         except Exception:  # noqa: BLE001
-            h2h = None
-            logger.debug("Club H2H enrichment failed", exc_info=True)
+            logger.debug("Historical H2H meetings failed", exc_info=True)
+
+    try:
+        from app.sports.football.club_form import h2h_meetings_from_kernel
+
+        kernel_meetings = h2h_meetings_from_kernel(
+            home_name,
+            away_name,
+            competition=competition if not is_world_cup else None,
+            before=before,
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("Club H2H meetings failed", exc_info=True)
+
+    if historical_meetings or kernel_meetings:
+        try:
+            from app.sports.football.h2h import (
+                aggregate_h2h_meetings,
+                merge_h2h_meetings,
+            )
+
+            merged_meetings = merge_h2h_meetings(
+                historical_meetings,
+                kernel_meetings,
+            )
+            if historical_meetings and kernel_meetings:
+                h2h_source = "historical+kernel"
+            elif historical_meetings:
+                h2h_source = "historical"
+            else:
+                h2h_source = "kernel"
+            h2h = aggregate_h2h_meetings(
+                merged_meetings,
+                max_matches=20,
+                data_source=h2h_source,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("Combined H2H aggregation failed", exc_info=True)
+    elif get_historical_h2h is not None:
+        # Compatibility fallback for deployments that expose only the legacy
+        # historical aggregate function, not raw meeting extraction.
+        try:
+            h2h = get_historical_h2h(home_name, away_name, before_date=before)
+            h2h_source = "historical"
+        except Exception:  # noqa: BLE001
+            logger.debug("Legacy H2H enrichment failed", exc_info=True)
 
     if h2h:
         played = max(int(h2h.get("matches_played") or 0), 1)
@@ -513,6 +650,9 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
         raw["team"]["h2h_draw_rate"] = round(
             int(h2h.get("draws") or 0) / played, 4,
         )
+        h2h_data_source = h2h.get("data_source")
+        if h2h_data_source is not None:
+            raw.setdefault("custom", {})["h2h_source"] = str(h2h_data_source)
         # Same rates over the subset the current home team hosted (P1-F4).
         # Written to custom rather than TeamFeatures to keep the frozen
         # domain contract - and its type-sync CI - untouched. Unconditional:
@@ -557,7 +697,9 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
         if ra is not None:
             custom["b2b_away"] = float(ra) <= 1.0
 
-        history = _fixture_history_for_density(competition)
+        history = _fixture_history_for_density(
+            competition, match.season.season_key, before,
+        )
         from app.sports._shared.rest_form import matches_in_window_as_of
 
         if history is not None:
@@ -599,60 +741,124 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
         from app.sports._shared.rest_form import matches_in_window_as_of
         from app.sports._shared.team_aliases import comparison_key
 
-        merged = _merged_fixture_history()
-        if merged is not None:
+        merged = _merged_fixture_history(match.season.season_key, before)
+        sides = [
+            (side, name, comparison_key(name, competition))
+            for side, name in (("home", home_name), ("away", away_name))
+        ]
+
+        # Real international match days (qualifiers / friendlies / continental)
+        # for national teams; the kernel carries tournament fixtures only.
+        intl_rows: list[dict] = []
+        if is_world_cup:
+            try:
+                intl_rows = _international_density_rows(
+                    [(name, key) for _side, name, key in sides],
+                    before,
+                    merged or [],
+                )
+            except Exception:  # noqa: BLE001 — keep the kernel counts usable
+                logger.debug("international schedule density skipped", exc_info=True)
+
+        if merged is not None or intl_rows:
             custom = raw.setdefault("custom", {})
-            for side, name in (("home", home_name), ("away", away_name)):
-                key = comparison_key(name, competition)
+            history = list(merged or []) + intl_rows
+            for side, _name, key in sides:
                 for days in (7, 3):
                     n = matches_in_window_as_of(
                         key,
                         before,
-                        merged,
+                        history,
                         window_days=days,
                         exclude_match_id=match.match_id,
                     )
                     if n is not None:
                         custom[f"matches_merged_{days}d_{side}"] = int(n)
+                if intl_rows:
+                    intl = matches_in_window_as_of(
+                        key, before, intl_rows, window_days=_INTL_DENSITY_WINDOW_DAYS,
+                    )
+                    if intl is not None:
+                        custom[f"matches_intl_{_INTL_DENSITY_WINDOW_DAYS}d_{side}"] = int(intl)
+            if intl_rows:
+                custom["schedule_intl_source"] = "international_results"
     except Exception:  # noqa: BLE001
         logger.debug("merged schedule density skipped", exc_info=True)
 
-    # P1-F3: injury impact — static role-weighted Out list, WC fallback
+    # P1-F3: contextual availability provider, then API-Football/static/WC fallbacks.
     try:
         from app.sports.football.football_injury import injury_impact_for_team
 
-        inj_h = injury_impact_for_team(home_name)
-        inj_a = injury_impact_for_team(away_name)
-
-        wc_lookup = None
-        if inj_h is None or inj_a is None:
+        availability_results = {}
+        live_results = {}
+        if not is_world_cup:
             try:
-                from app.services.world_cup_player_status_source import (
-                    get_team_injury_impact,
+                from app.services.football_live_availability_service import (
+                    get_live_availability_impact,
                 )
-                wc_lookup = get_team_injury_impact
-            except Exception:  # noqa: BLE001
-                wc_lookup = None
 
-        if inj_h is None and wc_lookup is not None:
-            try:
-                inj_h = wc_lookup(home_name)
+                season_key = match.season.season_key
+                availability_results = {
+                    side: get_live_availability_impact(competition, season_key, name)
+                    for side, name in (("home", home_name), ("away", away_name))
+                }
             except Exception:  # noqa: BLE001
-                inj_h = None
-        if inj_a is None and wc_lookup is not None:
+                logger.debug("Live availability enrichment unavailable", exc_info=True)
             try:
-                inj_a = wc_lookup(away_name)
-            except Exception:  # noqa: BLE001
-                inj_a = None
+                from app.services.football_live_injury_service import (
+                    get_live_injury_impact,
+                )
 
-        if inj_h is not None:
-            raw["player"]["injury_impact_home"] = float(inj_h)
-            raw.setdefault("custom", {})["injury_impact_home"] = float(inj_h)
-        if inj_a is not None:
-            raw["player"]["injury_impact_away"] = float(inj_a)
-            raw.setdefault("custom", {})["injury_impact_away"] = float(inj_a)
+                season_key = match.season.season_key
+                live_results = {
+                    side: get_live_injury_impact(competition, season_key, name)
+                    for side, name in (("home", home_name), ("away", away_name))
+                    if not (
+                        availability_results.get(side) is not None
+                        and availability_results[side].available
+                        and availability_results[side].impact is not None
+                    )
+                }
+            except Exception:  # noqa: BLE001
+                logger.debug("Live injury enrichment unavailable", exc_info=True)
+
+        wc_lookup: Callable[[str], float | None] | None = None
+        for side, name in (("home", home_name), ("away", away_name)):
+            impact: float | None
+            availability = availability_results.get(side)
+            live = live_results.get(side)
+            if availability is not None and availability.available and availability.impact is not None:
+                impact = availability.impact
+                source: str | None = "live_availability_provider"
+            elif live is not None and live.available:
+                impact = live.impact
+                source = "api_football"
+            else:
+                impact = injury_impact_for_team(name)
+                source = "static_table" if impact is not None else None
+                if impact is None:
+                    if wc_lookup is None:
+                        try:
+                            from app.services.world_cup_player_status_source import (
+                                get_team_injury_impact,
+                            )
+                            wc_lookup = get_team_injury_impact
+                        except Exception:  # noqa: BLE001
+                            wc_lookup = None
+                    if wc_lookup is not None:
+                        try:
+                            impact = wc_lookup(name)
+                            source = "world_cup_facts" if impact is not None else None
+                        except Exception:  # noqa: BLE001
+                            impact = None
+
+            if impact is not None:
+                raw["player"][f"injury_impact_{side}"] = float(impact)
+                custom = raw.setdefault("custom", {})
+                custom[f"injury_impact_{side}"] = float(impact)
+                custom[f"injury_source_{side}"] = source
     except Exception:  # noqa: BLE001
-        logger.debug("injury impact enrich skipped", exc_info=True)
+        logger.debug("Injury impact enrich skipped", exc_info=True)
 
     raw["environment"]["is_home_advantage"] = not is_world_cup
     if is_world_cup:
@@ -661,32 +867,50 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
 
 def _fixture_history_for_density(
     competition: str | None,
+    season: str | None = None,
+    before: datetime | None = None,
 ) -> list[dict] | None:
-    """Load kickoff+teams from kernel fixtures for density counts. None on failure."""
+    """Load kernel fixture history, then use configured live fallback if empty."""
     try:
         from app.kernel.kernel_db import KernelMatchFixture, get_kernel_session
 
         session = get_kernel_session()
         try:
-            q = session.query(KernelMatchFixture)
+            query = session.query(KernelMatchFixture)
             if competition:
-                q = q.filter(KernelMatchFixture.competition == competition)
-            rows = q.all()
-            out: list[dict] = []
-            for f in rows:
-                out.append(
+                query = query.filter(KernelMatchFixture.competition == competition)
+            rows = query.all()
+            if rows:
+                return [
                     {
-                        "match_id": f.match_id,
-                        "home_team": f.home_team or "",
-                        "away_team": f.away_team or "",
-                        "kickoff_utc": f.kickoff_utc,
+                        "match_id": fixture.match_id,
+                        "home_team": fixture.home_team or "",
+                        "away_team": fixture.away_team or "",
+                        "kickoff_utc": fixture.kickoff_utc,
                     }
-                )
-            return out
+                    for fixture in rows
+                ]
         finally:
             session.close()
     except Exception:  # noqa: BLE001
         logger.debug("fixture history for density failed", exc_info=True)
+
+    return _live_fixture_history_for_density(competition, season, before)
+
+
+def _live_fixture_history_for_density(
+    competition: str | None,
+    season: str | None,
+    before: datetime | None,
+) -> list[dict] | None:
+    """Read configured fixture history without writing it to the kernel."""
+    try:
+        from app.services.football_live_schedule_service import get_live_schedule
+
+        live = get_live_schedule(competition, season, before)
+        return live.fixtures if live.available else None
+    except Exception:  # noqa: BLE001
+        logger.debug("live fixture history for density failed", exc_info=True)
         return None
 
 
@@ -753,17 +977,89 @@ def _merged_fixture_rows() -> list[dict] | None:
         return None
 
 
-def _merged_fixture_history() -> list[dict] | None:
-    """Fixtures across all football competitions, name-resolved. None on failure.
-
-    Unlike :func:`_fixture_history_for_density` this is not scoped to one
-    competition, so a club playing midweek European football and a weekend
-    league match counts as two, not one (P1-F2).
-    """
+def _merged_fixture_history(
+    season: str | None = None,
+    before: datetime | None = None,
+) -> list[dict] | None:
+    """Fixtures across football competitions, name-resolved, with live fallback."""
     rows = _merged_fixture_rows()
-    if rows is None:
+    if rows:
+        return _merged_history_rows(rows)
+
+    try:
+        from app.kernel.factor_registry import FactorRegistry
+        from app.services.football_live_schedule_service import get_live_schedule
+
+        live_rows: list[dict] = []
+        for competition in sorted(FactorRegistry._FOOTBALL_COMPETITIONS):
+            result = get_live_schedule(competition, season, before)
+            if not result.available:
+                continue
+            for fixture in result.fixtures or []:
+                live_rows.append({**fixture, "competition": competition})
+        return _merged_history_rows(live_rows) if live_rows else None
+    except Exception:  # noqa: BLE001
+        logger.debug("live merged fixture history failed", exc_info=True)
         return None
-    return _merged_history_rows(rows)
+
+
+def _international_density_rows(
+    sides: Sequence[tuple[str, str]],
+    before: datetime | None,
+    history: Sequence[Mapping[str, Any]],
+) -> list[dict]:
+    """Pseudo-fixture rows for real international match days.
+
+    National-team schedule density otherwise sees kernel tournament fixtures
+    only: qualifiers, friendlies, and continental matches never reach the
+    kernel, so a side arriving on three days' rest looks fully rested. The
+    shipped international results CSV records those match days, so they are
+    folded in here.
+
+    Deduplicated by calendar date per side -- a national team plays at most one
+    match per day, so a date already present in ``history`` for that side is the
+    same match and is skipped. No fixture-ID compatibility is assumed between
+    the two sources.
+    """
+    from app.services.world_cup_historical_results import international_match_dates
+
+    rows: list[dict] = []
+    for name, key in sides:
+        seen = {
+            day
+            for row in history
+            if key in {row.get("home_team"), row.get("away_team")}
+            and (day := _calendar_date(row.get("kickoff_utc"))) is not None
+        }
+        for played in international_match_dates(
+            name, before_date=before, window_days=_INTL_DENSITY_WINDOW_DAYS,
+        ):
+            if played in seen:
+                continue
+            seen.add(played)
+            rows.append({
+                "match_id": None,
+                "home_team": key,
+                "away_team": "",
+                # Midnight UTC: the CSV records calendar dates only, and the
+                # window counter measures whole days elapsed.
+                "kickoff_utc": datetime(
+                    played.year, played.month, played.day, tzinfo=timezone.utc,
+                ),
+            })
+    return rows
+
+
+def _calendar_date(value: Any) -> date | None:
+    """UTC calendar date of a fixture timestamp, or None when unusable."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).date()
+    except (TypeError, ValueError):
+        return None
 
 
 def _days_since(

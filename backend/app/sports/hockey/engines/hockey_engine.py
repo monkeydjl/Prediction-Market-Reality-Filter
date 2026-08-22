@@ -29,7 +29,10 @@ from typing import TYPE_CHECKING
 
 from app.core import config
 from app.kernel.engines.confidence import compute_confidence, confidence_breakdown
-from app.kernel.engines.elo_odds_engine import soft_totals_from_scores
+from app.kernel.engines.elo_odds_engine import (
+    resolve_totals_line,
+    soft_totals_from_scores,
+)
 from app.kernel.domain import (
     FeatureSet, MatchIdentity, PredictionResult, ContributionItem,
 )
@@ -282,6 +285,13 @@ class HockeyEngine:
             custom=custom,
         )
 
+        # P1-O1: a real book total outranks the league-average placeholder,
+        # which equals the expected total by construction and so makes p_over a
+        # per-sport constant. Absent or malformed → the placeholder.
+        totals_line, totals_source, market_p_over = resolve_totals_line(
+            features.custom, league_avg,
+        )
+
         return PredictionResult(
             predicted_scores=predicted_scores,
             outcome_probabilities=outcome_probabilities,
@@ -291,7 +301,8 @@ class HockeyEngine:
             betting_analysis={
                 "confidence_breakdown": conf_break,
                 "soft_totals_btts": soft_totals_from_scores(
-                    predicted_scores, line=league_avg, sport="hockey",
+                    predicted_scores, line=totals_line, sport="hockey",
+                    line_source=totals_source, market_p_over=market_p_over,
                 ),
             },
             feature_version=features.feature_version,

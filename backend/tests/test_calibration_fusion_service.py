@@ -60,6 +60,30 @@ def _seed_market_calibration(
         session.close()
 
 
+def _set_market_sample_count(
+    sample_count, engine="BasketballEngine", competition="nba",
+):
+    """Move an existing market row's sample_count.
+
+    KernelMarketCalibration has UNIQUE(engine, competition), so a monotonicity
+    sweep has to update the row rather than re-seed it.
+    """
+    session = get_kernel_session()
+    try:
+        row = (
+            session.query(KernelMarketCalibration)
+            .filter(
+                KernelMarketCalibration.engine == engine,
+                KernelMarketCalibration.competition == competition,
+            )
+            .one()
+        )
+        row.sample_count = sample_count
+        session.commit()
+    finally:
+        session.close()
+
+
 # --- Pure trust computation tests ---
 
 def test_compute_trust_dormant_when_both_tables_empty(kernel_db):
@@ -160,24 +184,112 @@ def test_compute_trust_clamped_to_floor(kernel_db):
     assert result.trust == pytest.approx(expected_floor)
 
 
-def test_compute_trust_fusion_with_one_dormant_source(kernel_db):
-    """Fusion where one source is dormant (low sample_count).
+def test_dormant_source_gets_zero_weight(kernel_db):
+    """A dormant source must not dilute a qualified one.
 
     phase3: qualified (sample_count=20, accuracy=0.72)
-    market: dormant (sample_count=3, direction_accuracy=0.95)
-    → fusion, but market_trust = 0.5 (dormant)
-    w1 = 20 / (20 + 3) = 0.8696
-    w2 = 3 / (20 + 3) = 0.1304
-    composite = 0.8696 * 0.72 + 0.1304 * 0.5 = 0.6261 + 0.0652 = 0.6913
+    market: dormant (sample_count=3) -> market_trust is the 0.5 sentinel
+
+    The sentinel means "no usable estimate", so it carries no weight and the
+    composite is exactly the qualified source's value. The previous arithmetic
+    weighted the sentinel by its sample count and returned 0.6913.
     """
     _seed_phase3_calibration(avg_accuracy=0.72, sample_count=20)
     _seed_market_calibration(direction_accuracy=0.95, sample_count=3)
     svc = CalibrationFusionService()
     result = svc.compute_trust("BasketballEngine", "nba")
-    assert result.source == "fusion"
+    assert result.trust == pytest.approx(0.72)
+    assert result.phase3_weight == pytest.approx(1.0)
+    assert result.market_weight == pytest.approx(0.0)
     assert result.phase3_trust == pytest.approx(0.72)
-    assert result.market_trust == pytest.approx(0.5)  # dormant
-    assert result.trust == pytest.approx(0.6913, abs=0.01)
+    assert result.market_trust == pytest.approx(0.5)  # sentinel, still reported
+    # Only one channel informed the number, so don't claim corroboration.
+    assert result.source == "phase3_only"
+    # Sample counts stay observable even at zero weight.
+    assert result.market_sample_count == 3
+
+
+def test_a_row_that_says_i_dont_know_does_not_move_the_answer(kernel_db):
+    """Presence of a dormant row must equal absence of the row.
+
+    Both carry the same information — none. Under the previous arithmetic a
+    1-sample dormant market row moved composite trust from 0.7200 to 0.7095.
+    """
+    _seed_phase3_calibration(avg_accuracy=0.72, sample_count=20)
+    svc = CalibrationFusionService()
+    without_row = svc.compute_trust("BasketballEngine", "nba").trust
+
+    _seed_market_calibration(direction_accuracy=0.95, sample_count=1)
+    with_dormant_row = svc.compute_trust("BasketballEngine", "nba").trust
+
+    assert with_dormant_row == pytest.approx(without_row)
+
+
+def test_accumulating_dormant_evidence_never_lowers_trust(kernel_db):
+    """Monotonicity across the qualification threshold.
+
+    This is the discriminating case. With Phase 3 fixed at 0.72 over 20 samples
+    and a market channel whose real direction accuracy is 0.95, the previous
+    arithmetic produced 0.7095 / 0.6630 / 0.6517 as the market row accumulated
+    1 / 7 / 9 dormant samples, then jumped to 0.7967 at sample 10 — trust fell
+    as evidence about a *good* channel accumulated. No shrinkage-toward-prior
+    reading can justify that: under shrinkage more data means less pull toward
+    the prior.
+    """
+    _seed_phase3_calibration(avg_accuracy=0.72, sample_count=20)
+    svc = CalibrationFusionService()
+
+    _seed_market_calibration(direction_accuracy=0.95, sample_count=1)
+    trusts = []
+    for n in (1, 7, 9, 10, 20):
+        _set_market_sample_count(n)
+        trusts.append(svc.compute_trust("BasketballEngine", "nba").trust)
+
+    assert trusts == sorted(trusts), f"trust fell as evidence accumulated: {trusts}"
+    # Below MIN the market channel is silent, so all three equal Phase 3 alone.
+    assert trusts[0] == pytest.approx(0.72)
+    assert trusts[1] == pytest.approx(0.72)
+    assert trusts[2] == pytest.approx(0.72)
+    # At MIN it starts contributing: w2 = 10 / 30.
+    assert trusts[3] == pytest.approx((20 / 30) * 0.72 + (10 / 30) * 0.95)
+
+
+def test_dormant_source_does_not_flatter_a_bad_engine(kernel_db):
+    """The distortion also ran upward, which is the worse half.
+
+    An engine measured at 0.20 over 20 samples was pulled up to 0.2931 by a
+    9-sample dormant market row — a 47% relative inflation of the trust that
+    gates its edges.
+    """
+    _seed_phase3_calibration(avg_accuracy=0.20, sample_count=20)
+    _seed_market_calibration(direction_accuracy=0.95, sample_count=9)
+    svc = CalibrationFusionService()
+    result = svc.compute_trust("BasketballEngine", "nba")
+    assert result.trust == pytest.approx(0.20)
+    assert result.source == "phase3_only"
+
+
+def test_both_sources_dormant_is_dormant_not_an_average_of_sentinels(kernel_db):
+    """Neither source qualifies -> no usable signal, so report dormant."""
+    _seed_phase3_calibration(avg_accuracy=0.90, sample_count=2)
+    _seed_market_calibration(direction_accuracy=0.95, sample_count=2)
+    svc = CalibrationFusionService()
+    result = svc.compute_trust("BasketballEngine", "nba")
+    assert result.source == "dormant"
+    assert result.trust == pytest.approx(0.5)
+    assert result.phase3_weight == pytest.approx(0.0)
+    assert result.market_weight == pytest.approx(0.0)
+
+
+def test_market_only_qualified_reports_market_only(kernel_db):
+    """Mirror of the phase3 case: label follows whichever channel qualified."""
+    _seed_phase3_calibration(avg_accuracy=0.90, sample_count=2)  # dormant
+    _seed_market_calibration(direction_accuracy=0.80, sample_count=30)
+    svc = CalibrationFusionService()
+    result = svc.compute_trust("BasketballEngine", "nba")
+    assert result.source == "market_only"
+    assert result.trust == pytest.approx(0.80)
+    assert result.market_weight == pytest.approx(1.0)
 
 
 def test_edge_detector_delegates_to_fusion_when_enabled(kernel_db, monkeypatch):

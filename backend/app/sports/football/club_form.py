@@ -10,6 +10,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.sports._shared.team_aliases import comparison_key
+from app.sports.football.h2h import (
+    H2HMeeting,
+    aggregate_h2h_meetings,
+    merge_h2h_meetings,
+)
 
 
 def points_form_rate(
@@ -223,20 +228,14 @@ def team_form_from_kernel(
         session.close()
 
 
-def h2h_from_kernel(
+def h2h_meetings_from_kernel(
     home_team: str,
     away_team: str,
     *,
     competition: str | None = None,
     before: datetime | None = None,
-    max_matches: int = 20,
-) -> dict[str, Any] | None:
-    """Pairwise H2H from kernel fixtures+results.
-
-    Counts wins/draws/losses from the perspective of ``home_team`` (current
-    match home), regardless of which side hosted historically.
-    Shape compatible with get_historical_h2h enrich write path.
-    """
+) -> list[H2HMeeting]:
+    """Return completed kernel meetings from the current fixture-home view."""
     from app.kernel.kernel_db import (
         KernelMatchFixture,
         KernelMatchResult,
@@ -244,13 +243,11 @@ def h2h_from_kernel(
     )
 
     if not home_team or not away_team:
-        return None
+        return []
     home_key = _match_key(home_team, competition)
     away_key = _match_key(away_team, competition)
-    # Checked after alias resolution so that two spellings of one club - say
-    # "Spurs" and "Tottenham" - are rejected rather than counted as a pairing.
     if not home_key or not away_key or home_key == away_key:
-        return None
+        return []
 
     before = before or datetime.now(timezone.utc)
     if before.tzinfo is None:
@@ -267,11 +264,10 @@ def h2h_from_kernel(
         )
         if competition:
             q = q.filter(KernelMatchFixture.competition == competition)
-        rows = q.all()
 
         pair = {home_key, away_key}
-        meetings: list[tuple[datetime | None, int, int, bool]] = []
-        for fixture, result in rows:
+        meetings: list[H2HMeeting] = []
+        for fixture, result in q.all():
             if result.home_score is None or result.away_score is None:
                 continue
             kickoff = fixture.kickoff_utc or result.finished_at
@@ -280,60 +276,44 @@ def h2h_from_kernel(
                     kickoff = kickoff.replace(tzinfo=timezone.utc)
                 if kickoff >= before:
                     continue
-            fh = _match_key(fixture.home_team or "", competition)
-            fa = _match_key(fixture.away_team or "", competition)
-            if {fh, fa} != pair:
+            fixture_home = _match_key(fixture.home_team or "", competition)
+            fixture_away = _match_key(fixture.away_team or "", competition)
+            if {fixture_home, fixture_away} != pair:
                 continue
-            hs = int(result.home_score)
-            aws = int(result.away_score)
-            # Map to current-home perspective scores
-            at_home_venue = fh == home_key
+            at_home_venue = fixture_home == home_key
+            home_score = int(result.home_score)
+            away_score = int(result.away_score)
             if at_home_venue:
-                cur_home_gf, cur_home_ga = hs, aws
+                current_home_goals, current_away_goals = home_score, away_score
             else:
-                cur_home_gf, cur_home_ga = aws, hs
-            meetings.append((kickoff, cur_home_gf, cur_home_ga, at_home_venue))
-
-        if not meetings:
-            return None
-
-        meetings.sort(
-            key=lambda r: r[0].isoformat() if r[0] else "",
-            reverse=True,
-        )
-        meetings = meetings[: max(1, max_matches)]
-
-        home_wins = draws = away_wins = 0
-        # Same tallies restricted to meetings the current home team hosted, so
-        # callers can separate home advantage from the pairing itself.
-        venue_matches = venue_home_wins = venue_draws = venue_away_wins = 0
-        for _, gf, ga, at_home_venue in meetings:
-            if gf > ga:
-                home_wins += 1
-            elif gf < ga:
-                away_wins += 1
-            else:
-                draws += 1
-            if not at_home_venue:
-                continue
-            venue_matches += 1
-            if gf > ga:
-                venue_home_wins += 1
-            elif gf < ga:
-                venue_away_wins += 1
-            else:
-                venue_draws += 1
-
-        return {
-            "matches_played": len(meetings),
-            "home_wins": home_wins,
-            "draws": draws,
-            "away_wins": away_wins,
-            "home_venue_matches": venue_matches,
-            "home_venue_home_wins": venue_home_wins,
-            "home_venue_draws": venue_draws,
-            "home_venue_away_wins": venue_away_wins,
-            "data_source": "kernel_match_results",
-        }
+                current_home_goals, current_away_goals = away_score, home_score
+            meetings.append(H2HMeeting(
+                played_on=kickoff.date() if kickoff is not None else None,
+                home_goals=current_home_goals,
+                away_goals=current_away_goals,
+                current_home_hosted=at_home_venue,
+            ))
+        return merge_h2h_meetings(meetings)
     finally:
         session.close()
+
+
+def h2h_from_kernel(
+    home_team: str,
+    away_team: str,
+    *,
+    competition: str | None = None,
+    before: datetime | None = None,
+    max_matches: int = 20,
+) -> dict[str, Any] | None:
+    """Aggregate kernel H2H in the current fixture-home perspective."""
+    return aggregate_h2h_meetings(
+        h2h_meetings_from_kernel(
+            home_team,
+            away_team,
+            competition=competition,
+            before=before,
+        ),
+        max_matches=max_matches,
+        data_source="kernel_match_results",
+    )

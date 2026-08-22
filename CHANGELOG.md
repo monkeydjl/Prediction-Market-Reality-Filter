@@ -1,5 +1,21 @@
 # Changelog
 
+### Fix: the entire `betting_analysis` audit trail reached no caller (P1-X3 / P1-O1 follow-up)
+
+- Nine engines build `betting_analysis` and two deliberately return `None`; `prediction_kernel` then appends `conditional_calibration` to whatever the engine wrote. `POST /predictions/matches/{match_id}/predict` returned eight fields and this was not one of them. The dict was computed on every prediction and read by nobody.
+- **Three frontend panels already read it, from this exact endpoint.** `triggerPrediction` in `use-matches.ts` posts to `/predictions/matches/{id}/predict` and types the reply as `PredictionResult`, whose declared `betting_analysis` was therefore always `undefined`:
+  - `SoftTotalsPanel` opens with `if (!soft || soft.available !== true) return null`, so the soft O/U + BTTS panel has never rendered once — and neither has P1-O1's `真实盘口线` / `联赛均值线` badge, which is the entire consumer of the `line_source` plumbing added for it.
+  - `SportConfidencePanel` is documented "prefers API `confidence_breakdown`" (P1-X3) but fell through to its own re-derivations of decision strength, completeness and agreement on every render. It was not blank, it was quietly showing different numbers, and `market_damp` — which only the kernel computes — had no path to the screen at all.
+  - the situational block in `match-detail-panel.tsx` is gated on `betting_analysis.situational_applied`, so it never opened.
+- **Two probability rewrites were made invisible, which is the serious half.** Both replace the numbers being returned and record the before/after in `betting_analysis`:
+  - `prediction_kernel.py:89-103` swaps in the calibrated probabilities and records `slope`, `intercept`, `sample_count`, `bucket`, `raw_home_win` and `calibrated_home_win`. Without the field a calibrated prediction is indistinguishable in shape from an uncalibrated one — nothing tells a caller its number was adjusted, or how thin the sample behind the adjustment was.
+  - `situational_engine.py:89-95` swaps in `adjusted` and records `base_probs`, `adjusted_probs` and `situational_notes`.
+- **The write was already tested; the readability never was.** `tests/test_kernel_prediction_kernel.py:298` asserts `out.betting_analysis["conditional_calibration"]["applied"] is True` on the kernel's own return value, and passed throughout. A field can be correct on every object inside the process and still not exist for anyone outside it. This is the seventh instance of the unreachable-capability class.
+- **Persistence stays out of scope and is documented as blocked.** `kernel_predictions` (`kernel_db.py:54-68`) has no `betting_analysis` column and this repo has no ALTER TABLE path for kernel tables — the same wall that blocks the `direction_accuracy` fix. So `_prediction_to_dict`, which serializes the ORM row for `GET /predictions/matches/{id}`, still cannot carry it, and the field exists only on the POST response. The route docstring says so, rather than leaving the next reader to rediscover it.
+- Three tests, each pinning something different: the `confidence_breakdown` + `line_source` pair, the calibration record with its raw-vs-calibrated values and sample count, and that `None` arrives as an explicit `null` rather than a missing key (the LoL market-only engine really does return `None`, and a schema tells those apart even where a careless client does not). Verified discriminating — removing the one added line fails all three.
+- Nothing else changed: no engine, no formula, no weight, no schema, no flag, no new dependency. `betting_analysis` was already a free-form dict on `PredictionResult`, and every producer's payload was checked to be plain JSON scalars, so no encoder can be surprised.
+- 3 tests added (4483 passed, up from 4480).
+
 ### Fix: the style table already had the rows; the lookup could not reach them (P1-F6)
 
 - `football_style._normalize` only lowercased and collapsed whitespace, so the static style table — keyed on short club names (`arsenal`, `lazio`, `villarreal`) — could not answer the names the adapters actually pass, which are Football-Data.org spellings (`Arsenal FC`, `SS Lazio`, `Villarreal CF`). This is the root cause behind the previous two entries: the form-derived possession proxy existed to fill a gap that was mostly a **lookup** failure, not a data gap. The rows were already in the table.

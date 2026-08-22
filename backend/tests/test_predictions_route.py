@@ -200,3 +200,101 @@ class TestPhase2bRoutes:
             headers={"X-Write-Key": "test"},
         )
         assert resp.status_code in (200, 404, 500)
+
+
+def _stub_result(betting_analysis):
+    """A minimal PredictionResult carrying a known ``betting_analysis``."""
+    from datetime import datetime, timezone
+
+    from app.kernel.domain import ContributionItem, PredictionResult
+
+    return PredictionResult(
+        predicted_scores={"home": 1.8, "away": 1.1},
+        outcome_probabilities={"home_win": 0.46, "draw": 0.27, "away_win": 0.27},
+        confidence=0.61,
+        engine_name="football_multi_factor",
+        explanation=[
+            ContributionItem(
+                factor="possession", direction="support", weight=0.04,
+                available=True, detail="H=0.371 D=0.238 A=0.391",
+            ),
+        ],
+        betting_analysis=betting_analysis,
+        feature_version="football-1.0",
+        prediction_timestamp=datetime(2026, 8, 22, tzinfo=timezone.utc),
+    )
+
+
+class TestPredictResponseCarriesBettingAnalysis:
+    """The audit trail has to survive the last step, not just be written.
+
+    Every engine builds ``betting_analysis`` and the kernel appends
+    ``conditional_calibration`` to it, but the route used to drop the field and
+    ``kernel_predictions`` has no column for it, so nothing could read any of it.
+    ``test_kernel_prediction_kernel`` already asserts the kernel *writes* the
+    calibration record; these assert a caller can *see* it.
+    """
+
+    def _client_with(self, result):
+        from unittest.mock import MagicMock, patch
+
+        from fastapi.testclient import TestClient
+
+        from app.api.security import settings as security_settings
+        from app.core import config
+        from app.main import app
+
+        kernel = MagicMock()
+        kernel.predict.return_value = result
+        return patch.object(config.settings, "KERNEL_PREDICTION_ENABLED", True), \
+            patch.object(security_settings, "API_WRITE_KEY", ""), \
+            patch.object(security_settings, "ALLOW_OPEN_WRITES", True), \
+            patch("app.api.routes.predictions._get_kernel", return_value=kernel), \
+            TestClient(app)
+
+    def _post(self, result):
+        p1, p2, p3, p4, client = self._client_with(result)
+        with p1, p2, p3, p4:
+            resp = client.post("/api/predictions/matches/epl-1/predict")
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def test_confidence_breakdown_and_line_source_are_readable(self):
+        body = self._post(_stub_result({
+            "confidence_breakdown": {"data_completeness": 0.5, "factor_agreement": 0.6},
+            "soft_totals_btts": {"line": 2.5, "line_source": "placeholder"},
+        }))
+        ba = body["betting_analysis"]
+        assert ba["confidence_breakdown"]["data_completeness"] == 0.5
+        # P1-O1 added line_source to tell a real book line from the placeholder.
+        assert ba["soft_totals_btts"]["line_source"] == "placeholder"
+
+    def test_a_calibrated_prediction_says_so(self):
+        """The serious case: the kernel rewrites the probabilities it returns.
+
+        Without this field a caller cannot tell a calibrated number from a raw
+        one, nor how thin the sample behind the adjustment was.
+        """
+        body = self._post(_stub_result({
+            "conditional_calibration": {
+                "applied": True, "slope": 0.92, "intercept": 0.03,
+                "sample_count": 41, "bucket": "epl:regular_season",
+                "source": "conditional", "raw_home_win": 0.50,
+                "calibrated_home_win": 0.46,
+            },
+        }))
+        cal = body["betting_analysis"]["conditional_calibration"]
+        assert cal["applied"] is True
+        assert cal["raw_home_win"] == 0.50
+        assert cal["calibrated_home_win"] == 0.46
+        assert cal["sample_count"] == 41
+
+    def test_absent_analysis_is_null_not_missing(self):
+        """Engines may legitimately return None; the key must still be present.
+
+        A missing key and a null value read the same to a careless client but not
+        to a schema, and the LoL market-only engine really does return None.
+        """
+        body = self._post(_stub_result(None))
+        assert "betting_analysis" in body
+        assert body["betting_analysis"] is None

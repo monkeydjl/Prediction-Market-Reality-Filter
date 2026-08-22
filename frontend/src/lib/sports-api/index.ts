@@ -34,8 +34,22 @@ export {
   useReliability,
   useConfidenceReliability,
   processOutcome,
+  refreshConditionalCalibration,
 } from "./hooks/use-learning";
-export type { SingleEngineScore } from "./hooks/use-learning";
+export type {
+  SingleEngineScore,
+  ConditionalCalibrationResult,
+} from "./hooks/use-learning";
+export {
+  parseCalibrationKey,
+  matchesCompetition,
+  CONFIDENCE_BUCKET_PREFIX,
+  STAGE_BUCKET_PREFIX,
+} from "./calibration-buckets";
+export type {
+  ParsedCalibrationKey,
+  CalibrationBucketKind,
+} from "./calibration-buckets";
 export {
   useMarketLinks,
   useMarketLinksByMatch,

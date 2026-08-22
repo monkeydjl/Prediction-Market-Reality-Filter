@@ -5,7 +5,11 @@ import {
   useCalibration,
   useReliability,
   useConfidenceReliability,
+  refreshConditionalCalibration,
+  parseCalibrationKey,
+  matchesCompetition,
   type CalibrationItem,
+  type ConditionalCalibrationResult,
   type ReliabilityData,
   type ConfidenceReliabilityData,
 } from "@/lib/sports-api";
@@ -32,16 +36,32 @@ const COMPETITION_OPTIONS = [
 export function CalibrationPanel() {
   const [engine, setEngine] = useState("");
   const [competition, setCompetition] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshResult, setRefreshResult] =
+    useState<ConditionalCalibrationResult | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
 
   const params = { engine: engine || undefined, competition: competition || undefined };
 
   // Each hook fetches independently — one failure doesn't block the other,
   // matching the previous Promise.allSettled behavior.
-  const cal = useCalibration(params);
+  //
+  // The calibration table deliberately drops `competition` from the request and
+  // filters client-side instead: conditional rows are stored under composite
+  // keys (`epl#c_high`), and `GET /predictions/calibration` compares
+  // `competition` for equality, so asking the server for `epl` hid every bucket
+  // row that belongs to `epl`. The two reliability charts keep the server-side
+  // filter — they aggregate predictions, not calibration rows, so no composite
+  // key is involved.
+  const cal = useCalibration({ engine: engine || undefined });
   const rel = useReliability(params);
   const conf = useConfidenceReliability(params);
 
-  const calibrations: CalibrationItem[] | null = cal.data ?? null;
+  const allCalibrations: CalibrationItem[] | null = cal.data ?? null;
+  const calibrations: CalibrationItem[] | null =
+    allCalibrations === null
+      ? null
+      : allCalibrations.filter((c) => matchesCompetition(c.competition, competition));
   const calError = cal.error !== undefined;
   const calLoading = cal.isLoading;
   const reliability: ReliabilityData | null = rel.data ?? null;
@@ -50,6 +70,25 @@ export function CalibrationPanel() {
   const confidence: ConfidenceReliabilityData | null = conf.data ?? null;
   const confError = conf.error !== undefined;
   const confLoading = conf.isLoading;
+
+  // The route takes `competition` as a required query param and fits one engine
+  // at a time, so 全部 cannot be fitted.
+  const canRefresh = Boolean(engine && competition);
+
+  async function handleRefreshConditional() {
+    if (!canRefresh) return;
+    if (!window.confirm(`确认为 ${engine} / ${competition} 重新拟合分桶校准吗？`)) return;
+    setRefreshing(true);
+    setRefreshError(null);
+    setRefreshResult(null);
+    try {
+      setRefreshResult(await refreshConditionalCalibration(competition, engine));
+    } catch (e) {
+      setRefreshError(e instanceof Error ? e.message : "拟合失败");
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -83,7 +122,57 @@ export function CalibrationPanel() {
         </label>
       </div>
 
-      {/* Parameter table */}
+      {/* 条件校准分桶（P1-V5）。edge_detector_service 会优先读这些分桶行，
+          但在此之前唯一的生产者是这条路由，而它没有任何调用方。 */}
+      <div className="rounded border border-border p-3" data-testid="conditional-calibration">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-sm font-medium">条件校准分桶</span>
+          <button
+            type="button"
+            data-testid="refresh-conditional"
+            onClick={handleRefreshConditional}
+            disabled={!canRefresh || refreshing}
+            className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50"
+          >
+            {refreshing ? "拟合中..." : "拟合分桶校准"}
+          </button>
+          {!canRefresh && (
+            <span
+              data-testid="refresh-conditional-hint"
+              className="text-xs text-muted-foreground"
+            >
+              需先选定具体引擎与赛事，「全部」无法拟合
+            </span>
+          )}
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          按置信度（低/中/高）与阶段（常规赛/淘汰赛/未知）分别拟合校准行，可重复执行。
+          此操作只写入分桶参数，是否把它们用于边缘检测由
+          KERNEL_CONDITIONAL_CALIBRATION_ENABLED 独立控制，这里不会打开它。
+        </p>
+        {refreshResult && (
+          <div data-testid="conditional-result" className="mt-2 space-y-1 text-xs">
+            <div className="font-mono">
+              置信度：
+              {Object.entries(refreshResult.confidence_buckets)
+                .map(([b, n]) => `${b}=${n > 0 ? `${n} 条` : "样本不足"}`)
+                .join(" · ") || "—"}
+            </div>
+            <div className="font-mono">
+              阶段：
+              {Object.entries(refreshResult.stage_buckets)
+                .map(([b, n]) => `${b}=${n > 0 ? `${n} 条` : "样本不足"}`)
+                .join(" · ") || "—"}
+            </div>
+          </div>
+        )}
+        {refreshError && (
+          <div data-testid="conditional-error" className="mt-2 text-xs text-neg">
+            {refreshError}
+          </div>
+        )}
+      </div>
+
       <div>
         <h2 className="mb-2 text-sm font-medium text-muted-foreground">校准参数</h2>
         {calError ? (
@@ -99,6 +188,7 @@ export function CalibrationPanel() {
                 <tr className="border-b border-border text-left text-muted-foreground">
                   <th className="py-2 pr-4">引擎</th>
                   <th className="py-2 pr-4">赛事</th>
+                  <th className="py-2 pr-4">分桶</th>
                   <th className="py-2 pr-4">斜率</th>
                   <th className="py-2 pr-4">截距</th>
                   <th className="py-2 pr-4">样本数</th>
@@ -108,10 +198,21 @@ export function CalibrationPanel() {
                 </tr>
               </thead>
               <tbody>
-                {calibrations.map((calItem, i) => (
+                {calibrations.map((calItem, i) => {
+                  // The stored key carries the bucket; splitting it is what
+                  // turns `epl#c_high` from a cryptic string into two columns.
+                  const parsed = parseCalibrationKey(calItem.competition);
+                  return (
                   <tr key={`${calItem.engine}-${calItem.competition}-${i}`} className="border-b border-border/50">
                     <td className="py-2 pr-4 font-mono">{calItem.engine}</td>
-                    <td className="py-2 pr-4 font-mono">{calItem.competition}</td>
+                    <td className="py-2 pr-4 font-mono">{parsed.base}</td>
+                    <td
+                      className="py-2 pr-4"
+                      data-testid={`cal-bucket-${calItem.competition}`}
+                      title={parsed.kind === "base" ? "整体校准行" : calItem.competition}
+                    >
+                      {parsed.label}
+                    </td>
                     <td className="py-2 pr-4 font-mono">{calItem.slope.toFixed(2)}</td>
                     <td className="py-2 pr-4 font-mono">{calItem.intercept.toFixed(3)}</td>
                     <td className="py-2 pr-4 font-mono">{calItem.sample_count}</td>
@@ -121,7 +222,8 @@ export function CalibrationPanel() {
                       {calItem.last_updated ? new Date(calItem.last_updated).toLocaleString("zh-CN") : "—"}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

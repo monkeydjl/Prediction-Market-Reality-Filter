@@ -679,6 +679,11 @@ def refresh_conditional_calibration(
     Safe to call repeatedly; thin buckets write sample_count=0 / skip.
     Does not enable apply — KERNEL_CONDITIONAL_CALIBRATION_ENABLED remains independent.
     """
+    # Gate on the master kernel flag like every other route in this file. This
+    # one wrote KernelCalibration rows even with the kernel switched off, which
+    # `GET /calibration` would then refuse to read back.
+    if not config.settings.KERNEL_PREDICTION_ENABLED:
+        raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")
     from app.kernel.learning_service import KernelLearningService
     from app.kernel.factor_registry import FactorRegistry
 

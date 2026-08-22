@@ -87,6 +87,46 @@ export function useEngineScore(engine: string | null, competition?: string) {
   return useSWR<SingleEngineScore>(key);
 }
 
+/** Per-bucket sample counts written by one conditional-calibration fit (P1-V5). */
+export interface ConditionalCalibrationResult {
+  competition: string;
+  engine: string;
+  /** bucket (low|mid|high) -> samples written; 0 means the bucket was too thin. */
+  confidence_buckets: Record<string, number>;
+  /** bucket (regular|knockout|unknown) -> samples written. */
+  stage_buckets: Record<string, number>;
+}
+
+/**
+ * Fit the confidence- and stage-bucket calibration rows for one
+ * engine/competition (P1-V5).
+ *
+ * `POST /predictions/calibration/conditional` had no caller anywhere — no UI,
+ * no scheduler, no test — while `edge_detector_service` reads exactly those
+ * rows through `get_conditional_calibration_row`. So the read path was live and
+ * the only producer was a hand-written curl.
+ *
+ * Fitting the rows does not switch conditional calibration on: applying them
+ * stays behind `KERNEL_CONDITIONAL_CALIBRATION_ENABLED`, which this call does
+ * not touch. Writes need the operator key like every other mutation.
+ */
+export async function refreshConditionalCalibration(
+  competition: string,
+  engine: string,
+): Promise<ConditionalCalibrationResult> {
+  const result = await sportPost<ConditionalCalibrationResult>(
+    `/predictions/calibration/conditional${buildQuery({ competition, engine })}`,
+  );
+  // The fit rewrites calibration rows, so every /predictions/calibration view
+  // (params table plus both reliability charts) is stale by prefix.
+  await mutate(
+    (key) => typeof key === "string" && key.startsWith(`${getApiBase()}/predictions/calibration`),
+    undefined,
+    { revalidate: true },
+  );
+  return result;
+}
+
 /**
  * Feed one finished match's outcome back into the learning loop, then refresh
  * the score views it updates.

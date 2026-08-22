@@ -5,6 +5,9 @@ Missing / empty name → None. Engine formula lives in MultiFactor (unchanged).
 """
 from __future__ import annotations
 
+import unicodedata
+from functools import lru_cache
+
 # Soft static style. Keys are _normalize()'d English fixture names.
 # Values: (possession_pct, shots_per90, ppda). Lower PPDA = stronger press.
 # Operators update by PR. Not a live season snapshot.
@@ -128,6 +131,95 @@ def _normalize(name: str) -> str:
     return " ".join((name or "").lower().split())
 
 
+# Legal-form tokens that carry no club identity. Every entry was observed as a
+# leading or trailing token in the fixture names the adapters actually pass --
+# the Football-Data.org spellings in the league, UCL and EPL alias tables --
+# which is where the mismatch with this table's short keys comes from
+# ("Arsenal FC" vs "arsenal", "SS Lazio" vs "lazio", "Villarreal CF" vs
+# "villarreal").
+#
+# Identifying tokens are excluded on purpose even when they are short, because
+# stripping them would merge different clubs: "city" and "united" would collapse
+# Manchester City into Manchester United, "real" would collapse Real Madrid and
+# Real Sociedad into Madrid and Sociedad, "sg" would reduce Paris SG to a bare
+# "paris" that Paris FC could later claim, and squad years ("Mainz 05",
+# "Bologna FC 1909") distinguish clubs from their city's other clubs.
+_AFFIX_TOKENS = frozenset({
+    "ac", "acf", "afc", "aj", "as", "bc", "bsc", "ca", "cd", "cf", "cfc",
+    "cp", "fc", "fk", "gnk", "hsc", "kv", "ogc", "osc", "rc", "rcd", "sc",
+    "sco", "sl", "ss", "ssc", "sv", "tsg", "ud", "us", "vfb", "vfl",
+})
+
+
+def _fold_accents(name: str) -> str:
+    """Drop combining marks, so "Mönchengladbach" can find "monchengladbach"."""
+    return "".join(
+        ch
+        for ch in unicodedata.normalize("NFKD", name)
+        if not unicodedata.combining(ch)
+    )
+
+
+def _strip_affixes(name: str) -> str:
+    """Drop leading and trailing legal-form tokens. Never empties the name."""
+    tokens = name.split()
+    while len(tokens) > 1 and tokens[0] in _AFFIX_TOKENS:
+        tokens = tokens[1:]
+    while len(tokens) > 1 and tokens[-1] in _AFFIX_TOKENS:
+        tokens = tokens[:-1]
+    return " ".join(tokens)
+
+
+@lru_cache(maxsize=1)
+def _folded_index() -> dict[str, str]:
+    """Accent-folded table key -> real table key.
+
+    Built once; ``_TEAM_STYLE`` is a static constant that operators update by
+    PR, so there is nothing to invalidate.
+    """
+    return {_fold_accents(key): key for key in _TEAM_STYLE}
+
+
+def _lookup_key(team_name: str) -> str | None:
+    """The table key for a fixture name, or None when the table has no row.
+
+    Both exact spellings are tried before any weakened candidate, so a name the
+    table already spells its own way keeps exactly the answer it had. Only then
+    are the affix-stripped and accent-folded forms tried, and each has to land
+    on a **real key** -- nothing is guessed, no fuzzy scoring is involved, and a
+    club this table does not carry still returns None so the engine marks the
+    style factor unavailable and redistributes its weight.
+
+    Without this, most league fixtures missed rows that were already here: the
+    adapters feed "Arsenal FC" and "Brighton & Hove Albion FC" while the keys
+    are "arsenal" and "brighton and hove albion", so both sides of a possession
+    share resolved on only 1.0% (seriea) to 26.4% (ucl) of fixtures.
+    """
+    base = _normalize(team_name)
+    if not base:
+        return None
+    spellings = [base]
+    ampersand = base.replace("&", "and")
+    if ampersand != base:
+        spellings.append(ampersand)
+    for spelling in spellings:
+        if spelling in _TEAM_STYLE:
+            return spelling
+    folded = _folded_index()
+    for spelling in spellings:
+        for candidate in (
+            _strip_affixes(spelling),
+            _fold_accents(spelling),
+            _strip_affixes(_fold_accents(spelling)),
+        ):
+            if candidate in _TEAM_STYLE:
+                return candidate
+            key = folded.get(candidate)
+            if key is not None:
+                return key
+    return None
+
+
 def _clamp(val: float, lo: float, hi: float) -> float:
     if val < lo:
         return lo
@@ -137,9 +229,13 @@ def _clamp(val: float, lo: float, hi: float) -> float:
 
 
 def stats_for_team(team_name: str) -> dict[str, float] | None:
-    """Return soft style stats for a club name, or None if unknown/empty."""
-    key = _normalize(team_name)
-    if not key:
+    """Return soft style stats for a club name, or None if unknown/empty.
+
+    Accepts the fixture spellings the adapters pass, not just this table's short
+    keys -- see :func:`_lookup_key` for what is and is not allowed to match.
+    """
+    key = _lookup_key(team_name)
+    if key is None:
         return None
     row = _TEAM_STYLE.get(key)
     if row is None:

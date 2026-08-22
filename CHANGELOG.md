@@ -1,5 +1,34 @@
 # Changelog
 
+### Fix: the style table already had the rows; the lookup could not reach them (P1-F6)
+
+- `football_style._normalize` only lowercased and collapsed whitespace, so the static style table — keyed on short club names (`arsenal`, `lazio`, `villarreal`) — could not answer the names the adapters actually pass, which are Football-Data.org spellings (`Arsenal FC`, `SS Lazio`, `Villarreal CF`). This is the root cause behind the previous two entries: the form-derived possession proxy existed to fill a gap that was mostly a **lookup** failure, not a data gap. The rows were already in the table.
+- `stats_for_team` now goes through `_lookup_key`, which tries both exact spellings first, then affix-stripped and accent-folded candidates, and requires every candidate to land on a **real table key**. Nothing is guessed, there is no fuzzy scoring, and a club the table does not carry still returns `None` so the engine marks the factor unavailable and redistributes its weight — the existing contract is unchanged.
+- Measured on each track's own alias table, as the share of team names the table can resolve, and the square of that as a proxy for both sides of a fixture resolving:
+
+  | track | teams | resolved before | resolved after | pair proxy before | pair proxy after |
+  | --- | --- | --- | --- | --- | --- |
+  | epl | 48 | 20 | 40 | 17.4% | 69.4% |
+  | ucl | 72 | 37 | 55 | 26.4% | 58.4% |
+  | laliga | 20 | 5 | 9 | 6.2% | 20.3% |
+  | bundesliga | 18 | 4 | 6 | 4.9% | 11.1% |
+  | seriea | 20 | 2 | 7 | 1.0% | 12.2% |
+  | ligue1 | 18 | 3 | 5 | 2.8% | 7.7% |
+
+  The pair column is `(resolved/teams)²`, which assumes both sides are drawn uniformly from the alias table. Real fixture lists are not uniform — bigger clubs recur — so treat it as table coverage, not an observed per-fixture rate. It is the same estimator the two entries below used, kept for comparability.
+- **A loosened lookup has to be audited for wrong hits, not just for misses**, because a wrong club's possession is worse than no possession: the engine cannot tell it apart from the right club's. Three audits, all run against the real corpus (167 names from the league, UCL and EPL alias tables) and all pinned as tests:
+  - *collision* — group every table key by its fully stripped+folded form, fail if any group holds differing stats. Empty.
+  - *no-invention* — every token of the matched key must be a token of the input, so stripping may drop a legal-form token but never add an identifying one. Zero violations.
+  - *whitelist* — assert `_AFFIX_TOKENS` contains no identifying token, since the future hazard is somebody adding one.
+- All 39 newly-resolved mappings were listed and checked by eye; every one is the same club (`AFC Bournemouth → bournemouth`, `SSC Napoli → napoli`, `Atlético de Madrid → atletico de madrid`, `Borussia Mönchengladbach → borussia monchengladbach`). Residual misses are genuine data gaps — no row for Getafe, Valencia, Burnley, Stuttgart, Bochum, Freiburg, Augsburg — and correctly leave the factor unavailable.
+- `_AFFIX_TOKENS` is grounded in a census of that corpus, not in imagination: it holds exactly the legal-form tokens observed leading or trailing a real fixture name. Deliberate exclusions, with reasons in the source: `sg` (Paris SG → a bare "paris" Paris FC could later claim), `rb` (adds zero resolutions — the table already carries both spellings), and every identifying token (`city`, `united`, `real`, `club`, `town`, squad years like `05` / `1909`).
+- Accent folding was priced before inclusion: exactly three extra resolutions, zero collisions. It is carried by a built-once `lru_cache` index over a static constant operators edit by PR, so there is nothing to invalidate.
+- **Engine effect, measured on Arsenal FC vs Manchester City FC** with elo/form/h2h/odds/injury present. The factor flips from unavailable to available, and confidence goes **down**: 0.6234 → 0.6126 (**−1.08pp**). p(home_win) 0.4648 → 0.4601, p(away_win) 0.2657 → 0.2719. That direction is the point — real possession favours the away side here (65% vs 57%), so it *disagrees* with the elo/form/odds consensus and `factor_agreement` correctly falls. The removed proxy could only ever agree with form, which is why it inflated confidence.
+- Verified discriminating by four injections, each failing the right tests and each restored: adding `"city"` to the whitelist (4 failures), moving the exact-match pass after stripping (1), adding a colliding row (1), and reverting `stats_for_team` to the normalize-only lookup (30).
+- One test was vacuous as first written and is worth recording. `test_exact_key_wins_over_any_weakened_candidate` compared *stats*, and today's table gives `ac milan` and `milan` the same row, so it stayed green with the exact pass moved after stripping. Rewritten to assert `_lookup_key(key) == key` — identity, not equal values — it fails immediately.
+- Not fixed here, still engine-formula territory: the possession factor is not neutral at `share=0.5` (0.381/0.238/0.381, suppressing draw), `shots_on_target_home`/`_away` are read and written nowhere, and `style_source` is written and never read.
+- 65 tests added net (4480 passed, up from 4415). Most of that count is parametrization, not 65 independent behaviours: two tests run across the 29-entry `_FIXTURE_SPELLINGS` list and the no-invention audit runs across the same, so the new *behaviours* are roughly a dozen — the spelling-resolution pair, the three audits, exact-match precedence, and the bare-legal-form / partial-name / unknown-club negatives.
+
 ### Correction: the possession proxy never touched the World Cup (P1-F6 follow-up)
 
 - The entry below claimed the World Cup was the permanently-affected track. **That is wrong.** `WorldCupAdapter.fetch_all_data` builds its own `raw` dict and calls **zero** `enrich_*` functions — it never goes through `fetch_elo_and_odds`, which is the only path to the removed proxy. The reasoning that produced the claim (`is_world_cup` skips the live provider, and `stats_for_team("Brazil") is None`) is true of `enrich_style_features` and irrelevant, because no World Cup fixture reaches that function.

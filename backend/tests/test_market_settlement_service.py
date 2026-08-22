@@ -68,12 +68,17 @@ def test_direction_correct_mismatched():
 
 
 def test_direction_correct_zero_edge():
-    # raw_edge == 0 → edge_sign == 0 → not correct (no directional bet)
-    assert _compute_direction_correct(raw_edge=0.0, market_prob=0.5, settlement_implied_prob=0.9) == 0
+    # raw_edge == 0 → the model agreed with the market, so there was no
+    # directional call to score. None, not 0: a 0 here said "the engine was
+    # wrong" and diluted direction_accuracy, which is read back as engine trust.
+    assert _compute_direction_correct(
+        raw_edge=0.0, market_prob=0.5, settlement_implied_prob=0.9
+    ) is None
 
 
 def test_direction_correct_zero_market_move():
-    # settlement == market → market_sign == 0 → not correct
+    # settlement == market → market_sign == 0 → not correct. Deliberately 0 and
+    # not None: an unmoved closing line is not a confirmation of the edge.
     assert _compute_direction_correct(raw_edge=0.1, market_prob=0.5, settlement_implied_prob=0.5) == 0
 
 
@@ -134,6 +139,77 @@ def test_update_market_calibration_sufficient_samples(tmp_path, monkeypatch):
     assert cal["intercept"] == pytest.approx(0.0, abs=0.01)
     assert cal["avg_brier"] == pytest.approx(0.0, abs=0.001)
     assert cal["direction_accuracy"] == pytest.approx(1.0, abs=0.01)
+    close_kernel_db()
+
+
+def _append_processed(store, i, direction_correct, model_prob=0.65):
+    """One processed settlement row with a chosen direction verdict.
+
+    ``brier_score`` must be non-None or ``get_settlements_for_calibration``
+    filters the row out before the aggregate ever sees it.
+    """
+    store.append_settlement(
+        match_id=f"m{i}", mapped_outcome="home_win", engine="BasketballEngine",
+        competition="nba", settlement_implied_prob=0.7, settlement_captured_at=_utcnow(),
+        link_id=1, model_prob=model_prob, market_prob_at_detection=0.6,
+        raw_edge=model_prob - 0.6, adjusted_edge=(model_prob - 0.6) * 0.8,
+        brier_score=0.0025, signed_error=0.05, direction_correct=direction_correct,
+        status="processed", skip_reason=None, match_finished_at=_utcnow(),
+        processed_at=_utcnow(),
+    )
+
+
+def test_no_call_rows_do_not_dilute_direction_accuracy(tmp_path, monkeypatch):
+    """Five correct calls and five no-calls is 100% accuracy, not 50%.
+
+    A no-call row used to be stored as 0 and averaged in with the rest, so this
+    engine reported 0.5 — a number `_compute_market_trust` hands straight to B as
+    engine trust.
+    """
+    from app.core import config
+    from app.kernel.kernel_db import init_kernel_db, close_kernel_db
+    close_kernel_db()
+    init_kernel_db(str(tmp_path / "test_cal_nocall.db"))
+    monkeypatch.setattr(config.settings, "MIN_SAMPLES_FOR_MARKET_CALIBRATION", 5)
+    monkeypatch.setattr(config.settings, "MARKET_CALIBRATION_WINDOW_SIZE", 30)
+    from app.kernel.market_settlement_store import MarketSettlementStore
+    store = MarketSettlementStore()
+    for i in range(5):
+        _append_processed(store, i, 1, model_prob=0.65)
+    for i in range(5, 10):
+        _append_processed(store, i, None, model_prob=0.6)
+
+    _update_market_calibration(store, "BasketballEngine", "nba")
+    cals = store.get_calibrations(engine="BasketballEngine", competition="nba")
+    assert len(cals) == 1
+    assert cals[0]["direction_accuracy"] == pytest.approx(1.0)
+    # sample_count stays the regression's n. The two counts differ on purpose:
+    # one field cannot carry both without a `directional_count` column.
+    assert cals[0]["sample_count"] == 10
+    close_kernel_db()
+
+
+def test_calibration_not_written_when_no_row_was_directional(tmp_path, monkeypatch):
+    """All no-calls → no calibration row, rather than a fabricated 0.0.
+
+    ``kernel_market_calibrations.direction_accuracy`` is ``nullable=False``, so
+    there is no in-schema way to record "not measured". Writing 0.0 would tell
+    ``_compute_market_trust`` the engine's direction had been measured and had
+    failed every single time, collapsing trust to DIAGNOSIS_TRUST_FLOOR.
+    """
+    from app.core import config
+    from app.kernel.kernel_db import init_kernel_db, close_kernel_db
+    close_kernel_db()
+    init_kernel_db(str(tmp_path / "test_cal_alldark.db"))
+    monkeypatch.setattr(config.settings, "MIN_SAMPLES_FOR_MARKET_CALIBRATION", 5)
+    monkeypatch.setattr(config.settings, "MARKET_CALIBRATION_WINDOW_SIZE", 30)
+    from app.kernel.market_settlement_store import MarketSettlementStore
+    store = MarketSettlementStore()
+    for i in range(10):
+        _append_processed(store, i, None, model_prob=0.6)
+
+    _update_market_calibration(store, "BasketballEngine", "nba")
+    assert store.get_calibrations(engine="BasketballEngine", competition="nba") == []
     close_kernel_db()
 
 
@@ -282,6 +358,34 @@ def test_process_settlement_happy_path(kernel_db, monkeypatch):
     assert s["signed_error"] == pytest.approx(0.65 - 0.9)
     assert s["direction_correct"] == 1  # raw_edge=0.05>0, settlement(0.9)>market(0.6) → both positive
     assert s["status"] == "processed"
+
+
+def test_zero_edge_settlement_records_no_call_not_a_miss(kernel_db, monkeypatch):
+    """model_prob == market_prob → ``direction_correct`` is None, not 0.
+
+    The engine landed on the market price, so there is no direction for the
+    closing line to confirm or contradict. The market then moved 0.30 in this
+    fixture, which under the old rule made the row a *miss* — the engine was
+    scored wrong for a call it never made. ``raw_edge`` has no threshold
+    (``edge_detector_service.py:170``), so nothing stops these rows from
+    existing.
+    """
+    from app.core import config
+    monkeypatch.setattr(config.settings, "MIN_SAMPLES_FOR_MARKET_CALIBRATION", 10)
+    finished = _utcnow()
+    _seed_prediction(match_id="m1")
+    _seed_outcome(match_id="m1", finished_at=finished)
+    _seed_verified_link(match_id="m1", mapped_outcome="home_win", implied_prob=0.9)
+    _seed_edge(match_id="m1", mapped_outcome="home_win", model_prob=0.6, market_prob=0.6)
+
+    svc = MarketSettlementService()
+    assert svc.process_settlement("m1").status == "processed"
+    s = svc.get_settlement("m1")[0]
+    assert s["raw_edge"] == pytest.approx(0.0)
+    assert s["direction_correct"] is None
+    # Still a fully processed row: only the direction verdict is withheld.
+    assert s["status"] == "processed"
+    assert s["brier_score"] == pytest.approx((0.6 - 0.9) ** 2)
 
 
 def test_process_settlement_idempotent(kernel_db):

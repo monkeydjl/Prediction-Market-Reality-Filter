@@ -432,7 +432,12 @@ async def analyze_match_prediction(
             # prediction_method is nullable; the analyzer renders it into an
             # "Engine: ..." prompt line, so name the gap rather than print None.
             prediction_method=prediction.prediction_method or "unknown",
-            key_factors=prediction.key_factors or []
+            key_factors=prediction.key_factors or [],
+            # Both already sit on the stored prediction. Withholding them is
+            # what left the analyst prompt asking about Elo and data quality it
+            # had never been handed.
+            elo_ratings=prediction.factors.get("elo_ratings") if prediction.factors else None,
+            data_quality=prediction.factors.get("data_quality") if prediction.factors else None,
         )
 
         # Save analysis to history

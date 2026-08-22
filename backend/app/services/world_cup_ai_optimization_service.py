@@ -4,6 +4,7 @@ import asyncio
 import logging
 from typing import Any
 
+from app.services.llm_fact_grounding import build_fact_grounding_section
 from app.services.llm_gateway_service import complete_json, has_configured_llm_route
 
 logger = logging.getLogger(__name__)
@@ -45,22 +46,15 @@ async def optimize_prediction_with_ai(
     confidence = current_prediction["confidence"]
     elo_ratings = current_prediction.get("elo_ratings")
 
-    context_info = ""
-    if match_context:
-        context_info = "\n\nExtra context:\n"
-        if match_context.get("injuries"):
-            context_info += f"- Injuries: {match_context['injuries']}\n"
-        if match_context.get("recent_form"):
-            context_info += f"- Recent form: {match_context['recent_form']}\n"
-        if match_context.get("head_to_head"):
-            context_info += f"- Head-to-head: {match_context['head_to_head']}\n"
-
-    elo_info = ""
-    if elo_ratings:
-        elo_info = (
-            f"\n- Elo rating: home {elo_ratings['home']:.0f}, "
-            f"away {elo_ratings['away']:.0f}, diff {elo_ratings['difference']:.1f}"
-        )
+    # `match_context` used to be read for three keys only - injuries,
+    # recent_form, head_to_head - which no caller has ever passed, while the
+    # five keys the /optimize route does pass (stage, group, venue,
+    # data_quality, key_factors) were dropped on the floor. Forward the whole
+    # mapping instead: the grounding section renders whatever is present and
+    # names the rest as facts the model does not hold.
+    facts: dict[str, Any] = dict(match_context or {})
+    facts["elo_ratings"] = elo_ratings
+    grounding = build_fact_grounding_section(facts)
 
     prompt = f"""Optimize this World Cup prediction for {home_team} vs {away_team}.
 
@@ -70,9 +64,13 @@ Current prediction:
 - Draw: {outcome_probs['draw']*100:.0f}%
 - Away win: {outcome_probs['away_win']*100:.0f}%
 - Confidence: {confidence*100:.0f}%
-- Engine: {prediction_method}{elo_info}{context_info}
+- Engine: {prediction_method}
 
-Identify 2 blind spots and 2 calibration issues, then provide an optimized prediction.
+{grounding}
+
+Identify at most 2 blind spots and at most 2 calibration issues that follow from
+the facts above, then provide an optimized prediction. Return a shorter list, or
+an empty one, rather than naming a blind spot you cannot ground in those facts.
 Return concise Chinese reasoning where text is needed.
 
 Return ONLY this JSON object:
@@ -90,7 +88,11 @@ Return ONLY this JSON object:
     messages = [
         {
             "role": "system",
-            "content": "You are a football prediction optimization expert. Return only valid JSON.",
+            "content": (
+                "You are a football prediction optimization expert. Return only "
+                "valid JSON. Ground every blind spot in the facts you are given "
+                "and never assert a statistic that was not provided."
+            ),
         },
         {"role": "user", "content": prompt},
     ]

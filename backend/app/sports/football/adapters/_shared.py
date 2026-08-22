@@ -141,11 +141,15 @@ def fetch_elo_and_odds(
     # team_raw["form_home"] straight through). Filling possession from form made
     # one piece of evidence vote twice under two names: it took form's intended
     # influence from 0.145 to 0.197 of the available weight (1.357x), counted as
-    # a fourth available factor in ``data_completeness``, and cast a vote that
+    # an extra available factor in ``data_completeness``, and cast a vote that
     # agreed with form by construction in ``factor_agreement`` -- together worth
-    # +2.03pp of confidence on a World Cup fixture. Absent real possession the
-    # engine already marks the factor unavailable and redistributes its weight,
-    # which is the honest answer and the documented path for a missing factor.
+    # +1.22pp to +2.03pp of confidence depending on how many other factors the
+    # local database resolves. The affected tracks are the callers of this
+    # function -- epl, ucl, laliga, bundesliga, seriea, ligue1 -- not the World
+    # Cup, which builds its own raw dict in WorldCupAdapter.fetch_all_data and
+    # never reaches any enricher here. Absent real possession the engine already
+    # marks the factor unavailable and redistributes its weight, which is the
+    # honest answer and the documented path for a missing factor.
     enrich_style_features(raw, match)
     enrich_altitude_features(raw, match)
     enrich_weather_features(raw, match)
@@ -381,6 +385,10 @@ def enrich_weather_features(raw: dict, match: MatchIdentity) -> None:
 def enrich_style_features(raw: dict, match: MatchIdentity) -> None:
     """Live/static possession, shots, PPDA; writes nothing without a full pair.
 
+    ``raw`` always arrives fresh from :func:`fetch_elo_and_odds`, and nothing
+    upstream of the call writes the possession keys, so this function is the
+    only producer they ever have.
+
     A half-resolved pair leaves ``custom`` untouched on purpose. The engine's
     possession factor is a share between the two sides, so one side alone cannot
     produce one, and inventing the missing side would put a guess where a
@@ -392,6 +400,12 @@ def enrich_style_features(raw: dict, match: MatchIdentity) -> None:
         home_name = match.home.name if match.home else ""
         away_name = match.away.name if match.away else ""
         competition = (match.season.competition.code or "").lower()
+        # Defensive only: the callers of fetch_elo_and_odds are the epl, ucl and
+        # league adapters, whose competition codes are epl/ucl/laliga/
+        # bundesliga/seriea/ligue1. WorldCupAdapter builds its own raw dict and
+        # calls no enricher, so no fixture reaching here has a World Cup code
+        # today. The guard stays because a national team has no club style row
+        # and the provider would spend a request to learn that.
         is_world_cup = competition in {"wc", "world_cup"}
         live_values: tuple[dict[str, float], dict[str, float]] | None = None
         if not is_world_cup:
@@ -433,9 +447,6 @@ def enrich_style_features(raw: dict, match: MatchIdentity) -> None:
         custom["ppda_home"] = float(home_style["ppda"])
         custom["ppda_away"] = float(away_style["ppda"])
         custom["style_source"] = source
-        # A stale proxy marker from an older snapshot must not outlive real
-        # style data; nothing writes it now, but the key is cheap to clear.
-        custom.pop("possession_proxy", None)
     except Exception:  # noqa: BLE001
         logger.debug("Style enrichment failed", exc_info=True)
 

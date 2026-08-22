@@ -1584,17 +1584,22 @@ class TestLiveXgOverwrite:
 class TestLiveStyleOverwrite:
     @staticmethod
     def _raw() -> dict:
+        """The shape ``fetch_elo_and_odds`` actually hands the enricher.
+
+        ``custom`` carries no possession keys. This fixture used to seed the
+        form-share proxy and a ``possession_proxy`` marker, but that producer
+        was removed in P1-F6 and nothing in ``app/`` writes either key before
+        ``enrich_style_features`` runs, so the seeded state was unreachable in
+        production and the assertions against it could not fail for a
+        production reason.
+        """
         return {
             "team": {},
             "general": {},
             "market": {},
             "player": {},
             "environment": {},
-            "custom": {
-                "possession_home": 40.0,
-                "possession_away": 60.0,
-                "possession_proxy": "form_share",
-            },
+            "custom": {},
         }
 
     def test_complete_live_pair_overrides_static_pair(self):
@@ -1621,6 +1626,41 @@ class TestLiveStyleOverwrite:
         assert raw["custom"]["style_source"] == "live_provider"
         assert "possession_proxy" not in raw["custom"]
 
+    def test_live_pair_wins_over_a_static_pair_that_would_also_resolve(self):
+        """Both sources can answer; the live one must be the one that lands.
+
+        ``_make_match`` uses Real Madrid CF / FC Bayern München, which the static
+        table carries, so a green result here means live took precedence rather
+        than static merely being absent.
+        """
+        from app.sports.football.football_style import stats_for_team
+
+        static_home = stats_for_team("Real Madrid CF")
+        static_away = stats_for_team("FC Bayern München")
+        assert static_home is not None and static_away is not None  # premise
+
+        raw = self._raw()
+        with patch(
+            "app.services.football_live_style_service.get_live_style",
+            side_effect=[
+                LiveStyleResult(
+                    True,
+                    {"possession_pct": 61.2, "shots_per90": 16.4, "ppda": 8.1},
+                ),
+                LiveStyleResult(
+                    True,
+                    {"possession_pct": 48.8, "shots_per90": 11.2, "ppda": 13.6},
+                ),
+            ],
+        ):
+            enrich_style_features(raw, _make_match("ucl-style-live-wins"))
+
+        assert raw["custom"]["style_source"] == "live_provider"
+        assert raw["custom"]["possession_home"] == pytest.approx(61.2)
+        assert raw["custom"]["possession_home"] != pytest.approx(
+            static_home["possession_pct"],
+        )
+
     def test_incomplete_live_pair_falls_back_to_static_pair(self):
         raw = self._raw()
         with patch(
@@ -1644,10 +1684,17 @@ class TestLiveStyleOverwrite:
         assert raw["custom"]["possession_away"] == pytest.approx(away["possession_pct"])
         assert raw["custom"]["style_source"] == "static_table"
 
-    def test_live_and_static_incomplete_preserve_form_proxy(self):
+    def test_live_and_static_incomplete_write_nothing(self):
+        """Neither source resolves a full pair, so ``custom`` stays empty.
+
+        Renamed from ``..._preserve_form_proxy``: the old name and its
+        assertions described the removed form-share producer (P1-F6) as
+        intended behaviour, and read as though possession arriving from
+        somewhere else were a supported input.
+        """
         raw = self._raw()
         match = MatchIdentity(
-            match_id="ucl-style-proxy",
+            match_id="ucl-style-half-pair",
             season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
             stage="group_stage",
             round=None,
@@ -1661,18 +1708,62 @@ class TestLiveStyleOverwrite:
         ):
             enrich_style_features(raw, match)
 
-        assert raw["custom"]["possession_home"] == pytest.approx(40.0)
-        assert raw["custom"]["possession_away"] == pytest.approx(60.0)
-        assert raw["custom"]["possession_proxy"] == "form_share"
+        # Half a pair is not a share. One side alone must not be completed with
+        # a guess; the engine marks the factor unavailable instead.
+        assert "possession_home" not in raw["custom"]
+        assert "possession_away" not in raw["custom"]
+        assert "possession_proxy" not in raw["custom"]
         assert "style_source" not in raw["custom"]
         assert "shots_home" not in raw["custom"]
 
-    def test_world_cup_does_not_call_live_style_provider(self):
+    def test_national_teams_get_no_style_and_no_live_call(self):
+        """The World Cup branch, driven with the names it exists for.
+
+        The previous version of this test used Real Madrid CF / FC Bayern
+        München under a ``wc`` competition code, so the static table answered
+        and it asserted ``style_source == "static_table"`` — it could not
+        observe the national-team path it was named for. National teams have no
+        club style row, which is the whole reason the guard skips the provider.
+
+        Note this branch is defensive rather than live: ``WorldCupAdapter``
+        builds its own raw dict and calls no enricher, so no production fixture
+        reaches here with a World Cup code.
+        """
+        from app.sports.football.football_style import stats_for_team
+
+        assert stats_for_team("Brazil") is None  # premise
+        assert stats_for_team("Argentina") is None
+
         world_cup = CompetitionIdentity(
             code="wc", name="FIFA World Cup", sport=_FOOTBALL,
         )
         match = MatchIdentity(
             match_id="wc-style-no-live",
+            season=SeasonIdentity(competition=world_cup, season_key="2026"),
+            stage="group_stage",
+            round=None,
+            home=TeamIdentity(code="BRA", name="Brazil", competition=world_cup),
+            away=TeamIdentity(code="ARG", name="Argentina", competition=world_cup),
+            kickoff_utc=datetime(2026, 6, 11, 20, 0, tzinfo=timezone.utc),
+        )
+        raw = self._raw()
+        with patch("app.services.football_live_style_service.get_live_style") as live_style:
+            enrich_style_features(raw, match)
+
+        live_style.assert_not_called()
+        assert raw["custom"] == {}
+
+    def test_world_cup_code_skips_the_provider_even_when_style_resolves(self):
+        """Isolate the skip from the miss: club names, World Cup code.
+
+        Keeps the coverage the old test actually had — the provider is not
+        called because of the competition code, not because the lookup failed.
+        """
+        world_cup = CompetitionIdentity(
+            code="wc", name="FIFA World Cup", sport=_FOOTBALL,
+        )
+        match = MatchIdentity(
+            match_id="wc-style-club-names",
             season=SeasonIdentity(competition=world_cup, season_key="2026"),
             stage="group_stage",
             round=None,
@@ -1692,22 +1783,32 @@ class TestLiveStyleOverwrite:
         assert raw["custom"]["style_source"] == "static_table"
 
 
-class TestStaticStyleOverwrite:
-    def test_both_static_hits_overwrite_proxy(self):
-        match = _make_match("ucl-style-static")
-        raw = {
-            "team": {"form_home": 0.4, "form_away": 0.6},
+class TestStaticStyleFill:
+    """Static-table branch, driven from the ``custom`` shape production has.
+
+    Renamed from ``TestStaticStyleOverwrite``: every test here used to seed the
+    removed form-share proxy into ``custom`` and assert what happened to it.
+    Nothing in ``app/`` writes those keys before ``enrich_style_features`` runs,
+    so the "overwrite" and "keeps proxy" framings described a state no
+    production call can produce.
+    """
+
+    @staticmethod
+    def _raw(**sections) -> dict:
+        base = {
+            "team": {},
             "general": {},
             "market": {},
             "player": {},
             "environment": {},
-            "custom": {
-                # Simulate form_share proxy already applied
-                "possession_home": 40.0,
-                "possession_away": 60.0,
-                "possession_proxy": "form_share",
-            },
+            "custom": {},
         }
+        base.update(sections)
+        return base
+
+    def test_both_static_hits_fill_all_six_keys(self):
+        match = _make_match("ucl-style-static")
+        raw = self._raw(team={"form_home": 0.4, "form_away": 0.6})
         enrich_style_features(raw, match)
 
         from app.sports.football.football_style import stats_for_team
@@ -1723,10 +1824,11 @@ class TestStaticStyleOverwrite:
         assert raw["custom"]["ppda_away"] == pytest.approx(away["ppda"])
         assert raw["custom"]["style_source"] == "static_table"
         assert "possession_proxy" not in raw["custom"]
-        # Must not remain form proxy values
+        # Form is present and differs from the static values, so a green result
+        # means the numbers came from the table rather than from form.
         assert raw["custom"]["possession_home"] != pytest.approx(40.0)
 
-    def test_one_side_unknown_keeps_proxy(self):
+    def test_one_side_unknown_writes_nothing(self):
         match = MatchIdentity(
             match_id="ucl-style-partial",
             season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
@@ -1736,28 +1838,19 @@ class TestStaticStyleOverwrite:
             away=TeamIdentity(code="ZZZ", name="Unknown Club XYZ", competition=_UCL),
             kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
         )
-        raw = {
-            "team": {},
-            "general": {},
-            "market": {},
-            "player": {},
-            "environment": {},
-            "custom": {
-                "possession_home": 55.0,
-                "possession_away": 45.0,
-                "possession_proxy": "form_share",
-            },
-        }
+        from app.sports.football.football_style import stats_for_team
+
+        assert stats_for_team("Real Madrid CF") is not None  # premise: home hits
+        assert stats_for_team("Unknown Club XYZ") is None    # premise: away misses
+
+        raw = self._raw()
         enrich_style_features(raw, match)
 
-        assert raw["custom"].get("possession_home") == pytest.approx(55.0)
-        assert raw["custom"].get("possession_away") == pytest.approx(45.0)
-        assert raw["custom"].get("possession_proxy") == "form_share"
-        assert "style_source" not in raw["custom"]
-        assert "shots_home" not in raw["custom"]
-        assert "ppda_home" not in raw["custom"]
+        # A resolved home side must not be published alone: the factor is a
+        # share, and a lone side would need the other one invented.
+        assert raw["custom"] == {}
 
-    def test_both_unknown_no_static_source(self):
+    def test_both_unknown_writes_nothing(self):
         match = MatchIdentity(
             match_id="ucl-style-none",
             season=SeasonIdentity(competition=_UCL, season_key="2025-26"),
@@ -1767,25 +1860,10 @@ class TestStaticStyleOverwrite:
             away=TeamIdentity(code="BBB", name="NoSuchAway FC", competition=_UCL),
             kickoff_utc=datetime(2025, 9, 16, 20, 0, tzinfo=timezone.utc),
         )
-        raw = {
-            "team": {},
-            "general": {},
-            "market": {},
-            "player": {},
-            "environment": {},
-            "custom": {
-                "possession_home": 50.0,
-                "possession_away": 50.0,
-                "possession_proxy": "form_share",
-            },
-        }
+        raw = self._raw()
         enrich_style_features(raw, match)
 
-        assert raw["custom"].get("possession_home") == pytest.approx(50.0)
-        assert raw["custom"].get("possession_proxy") == "form_share"
-        assert "style_source" not in raw["custom"]
-        assert "shots_home" not in raw["custom"]
-        assert "ppda_home" not in raw["custom"]
+        assert raw["custom"] == {}
 
 
 class TestStaticAltitudeFill:
@@ -2416,23 +2494,29 @@ class TestFormIsNotPossession:
             "stats. Deriving it from another factor's input double counts."
         )
 
-    def test_world_cup_national_teams_get_no_possession(self):
-        """The real World Cup case: no live provider, and no static table row.
+    def test_world_cup_adapter_never_reaches_the_style_enricher(self):
+        """Pins the corrected blast radius of the removed proxy.
 
-        The pre-existing World Cup style test used club names, which hit the
-        static table -- so it asserted ``style_source == "static_table"`` and
-        could not observe the national-team path where the proxy was the only
-        producer of possession.
+        The P1-F6 write-up first claimed the World Cup was the permanently
+        affected track, on the reasoning that ``is_world_cup`` skips the live
+        provider and national teams miss the static table. Both halves are true
+        of ``enrich_style_features``, and irrelevant: ``WorldCupAdapter`` builds
+        its own raw dict in ``fetch_all_data`` and calls no enricher at all, so
+        no World Cup fixture ever reached the proxy. The affected tracks are the
+        callers of ``fetch_elo_and_odds`` -- epl, ucl, laliga, bundesliga,
+        seriea, ligue1.
+
+        Asserted against the real adapter rather than by reading the source, so
+        wiring the World Cup through the shared path later would fail here
+        instead of silently re-widening the radius.
         """
-        from app.sports.football.football_style import stats_for_team
+        from app.sports.football.adapters.world_cup_adapter import WorldCupAdapter
 
         world_cup = CompetitionIdentity(
-            code="wc", name="FIFA World Cup", sport=_FOOTBALL,
+            code="world_cup", name="FIFA World Cup", sport=_FOOTBALL,
         )
-        assert stats_for_team("Brazil") is None  # premise of this test
-        assert stats_for_team("Argentina") is None
         match = MatchIdentity(
-            match_id="wc-nat-possession",
+            match_id="wc-reachability",
             season=SeasonIdentity(competition=world_cup, season_key="2026"),
             stage="group_stage",
             round=None,
@@ -2440,12 +2524,27 @@ class TestFormIsNotPossession:
             away=TeamIdentity(code="ARG", name="Argentina", competition=world_cup),
             kickoff_utc=datetime(2026, 6, 11, 20, 0, tzinfo=timezone.utc),
         )
-        raw = {"team": {"form_home": 0.8, "form_away": 0.2}, "custom": {}}
-        enrich_style_features(raw, match)
 
-        assert "possession_home" not in raw["custom"]
-        assert "possession_away" not in raw["custom"]
-        assert "style_source" not in raw["custom"]
+        async def _elo(_team):
+            return {"elo_rating": 1850.0}
+
+        async def _odds(_home, _away):
+            return None
+
+        with patch(
+            "app.services.elo_ratings_service.get_elo_rating", side_effect=_elo,
+        ), patch(
+            "app.services.odds_cache_service.get_cached_odds", side_effect=_odds,
+        ), patch(
+            "app.sports.football.adapters._shared.enrich_style_features",
+        ) as style, patch(
+            "app.sports.football.adapters._shared.enrich_situational_features",
+        ) as situational:
+            raw = WorldCupAdapter().fetch_all_data(match)
+
+        style.assert_not_called()
+        situational.assert_not_called()
+        assert "possession_home" not in raw.get("custom", {})
 
     def test_form_evidence_is_not_counted_twice(self):
         """Confidence must not rise just because form was copied to possession.

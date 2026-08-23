@@ -25,7 +25,7 @@ pytest tests/ --cov=app --cov-report=term-missing --cov-report=xml
 
 alongside `ruff check app/`, `pip-audit -r requirements.txt`, and `mypy app/ --config-file mypy.ini`. mypy is **blocking** as of PR #20 — `app/` type-checks with zero errors and any new error fails the build. On Windows prefix the run with `PYTHONUTF8=1` to reproduce CI exactly.
 
-**Result baseline (2026-08-05):** 3614 passed / 11 skipped / 0 failed, ~13 min on Windows / Python 3.11.9. CI pins Python 3.11.
+**Result baseline (2026-08-24):** 4621 passed / 11 skipped / 0 failed / 69 subtests passed, ~10.5 min on Windows / Python 3.11.9. CI pins Python 3.11.
 
 ## Test Isolation (conftest.py)
 
@@ -37,13 +37,11 @@ Every test runs in a hermetic bubble:
 
 3. **`os.environ` snapshot/restore** — Captured once at session start, restored around every test. Prevents environment pollution between tests.
 
-4. **Module singleton resets** — Every known mutable singleton is cleared before and after each test:
-   - `kernel_db` engine (via `close_kernel_db()`)
-   - `connection_manager._connection_manager`
-   - `prediction_db._engine`
-   - `llm_gateway_service._client_cache`
-   - drift/scheduler alert dedup state
-   - weather cache, GNews client, Odds API quota, scheduler lock, AI semaphore
+4. **Module singleton resets** — Driven by the `_SINGLETON_RESETS` table in `conftest.py`, which lists every module-level mutable global in `app/` together with how to reset it (rebind to `None`, `.clear()`, `.cache_clear()`, or — preferred — the module's own reset helper, so that helper does not go dead). Covered: the two DB engine/sessionmaker pairs, `connection_manager`, the scheduler lock and run→job map, the LLM client cache, drift/scheduler alert dedup state, the Odds API quota pair, the AI semaphore, the GNews client, the event-audit history cache, all thirteen live-provider snapshot caches, the World Cup tournament and weather caches, and the six `lru_cache`s whose value is derived from a settings path or env var a test can rewrite. The `PredictionKernel` cached on `_get_kernel._instance` is reset too; it is a function attribute rather than a module global, so it sits outside the table.
+
+   Anything deliberately left warm is in `_RESET_EXEMPT` with a written reason — the import-time `_MIGRATIONS` registries, the path-keyed `_INITIALIZED` DDL memos, caches over static in-repo constants, and the `file_store` lock/handle registries whose entries must not be swapped underneath a holder.
+
+   The claim that the two tables cover *everything* is enforced, not asserted in prose: `test_singleton_reset_census.py` rebuilds the real set from the source with an AST scan and requires an exact partition in both directions, so a new stateful global in `app/` fails that test instead of silently escaping isolation until a collection-order change surfaces it.
 
 5. **`settings` instance restore** — `app.core.config.settings` and `app.main.app` are canonical singleton objects. Tests that use `importlib.reload` (e.g. `test_config.py`, `test_main_frontend_mount.py`) replace them; the autouse fixture restores the originals so the object graph stays consistent.
 
@@ -60,14 +58,14 @@ def test_something(clean_env):
     # Test code here; os.environ is automatically restored after this test.
 ```
 
-The fixture is defined in `conftest.py:247` and simply returns `monkeypatch` — the name documents its purpose. Note that `os.environ` is snapshotted and restored around *every* test by the autouse fixture, so a plain `monkeypatch` is equally safe; `clean_env` exists to make the intent explicit at the call site.
+The fixture is defined in `conftest.py:359` and simply returns `monkeypatch` — the name documents its purpose. Note that `os.environ` is snapshotted and restored around *every* test by the autouse fixture, so a plain `monkeypatch` is equally safe; `clean_env` exists to make the intent explicit at the call site.
 
 ## Structure
 
 ```
 tests/
 ├── conftest.py              # Test isolation (see above)
-├── test_*.py                # 309 test files, collected by pytest
+├── test_*.py                # 344 test files, collected by pytest
 ├── fixtures/                # Test data (e.g. fixtures/lol/sample_series.json)
 └── manual/                  # Manual runner scripts (NOT pytest tests)
 ```

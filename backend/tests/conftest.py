@@ -5,7 +5,11 @@ This conftest ensures deterministic, hermetic test runs by:
 2. Redirecting all file-path settings (event store, databases, caches) to a
    session-scoped temp directory so no test reads real production data.
 3. Snapshotting os.environ and restoring it after every test.
-4. Resetting ALL known module-level singletons/caches around each test.
+4. Resetting every module-level singleton/cache in ``app/`` around each test,
+   driven by the ``_SINGLETON_RESETS`` table below.  Anything deliberately left
+   alone is listed in ``_RESET_EXEMPT`` with a written reason;
+   ``tests/test_singleton_reset_census.py`` asserts the two tables partition the
+   real set of stateful globals exactly, so a new one cannot escape silently.
 5. Snapshotting and restoring app.core.config.settings instance state.
 
 Tests that explicitly need real dotenv behavior (e.g.
@@ -13,6 +17,7 @@ test_config_env_loading.py) can restore the real load_dotenv via
 ``_real_load_dotenv`` exported from this module.
 """
 import os
+import sys
 import tempfile
 
 # ---------------------------------------------------------------------------
@@ -168,79 +173,187 @@ def _reset_module_singletons():
     _reset_all_singletons()
 
 
+# ---------------------------------------------------------------------------
+# The singleton reset table -- the single source of truth.
+#
+# ``_reset_all_singletons()`` below drives off this table, and
+# ``tests/test_singleton_reset_census.py`` asserts that this table plus
+# ``_RESET_EXEMPT`` accounts for every module-level mutable global in ``app/``,
+# exactly and in both directions.  Adding a stateful global to ``app/`` without
+# touching one of the two tables fails that test instead of quietly escaping
+# isolation and waiting for a collection-order change to surface it.
+#
+# Each row is ``(module path, global name, how to reset)``:
+#   "none"        -> rebind the global to None
+#   "clear"       -> call ``.clear()`` on the container in place
+#   "cache_clear" -> functools cache: call ``.cache_clear()``
+#   anything else -> the name of a zero-arg reset helper on that module to call.
+#                    Prefer this: the module owns what "reset" means, and a
+#                    helper poked from here instead goes dead -- which is why
+#                    reset_llm_gateway_clients_for_tests had zero callers while
+#                    this file re-implemented its body against the private dict.
+# ---------------------------------------------------------------------------
+_SINGLETON_RESETS: tuple[tuple[str, str, str], ...] = (
+    # --- databases --------------------------------------------------------
+    ("app.kernel.kernel_db", "_engine", "close_kernel_db"),
+    ("app.kernel.kernel_db", "_SessionLocal", "close_kernel_db"),
+    ("app.utils.prediction_db", "_engine", "none"),
+    # _SessionLocal used to be left behind while _engine next door was nulled.
+    # get_prediction_session() guards only on _SessionLocal, so the stale
+    # sessionmaker kept handing out sessions bound to the discarded engine.
+    # kernel_db.close_kernel_session() nulls both; match it.
+    ("app.utils.prediction_db", "_SessionLocal", "none"),
+
+    # --- long-lived process objects ---------------------------------------
+    ("app.realtime.connection_manager", "_connection_manager", "none"),
+    ("app.core.scheduler", "_scheduler_lock_handle", "none"),
+    ("app.core.scheduler", "_RUN_TO_JOB", "clear"),
+    ("app.services.world_cup_ai_optimization_service", "_ai_semaphore", "none"),
+    ("app.services.gnews_service", "_gnews_client", "none"),
+    ("app.services.llm_gateway_service", "_client_cache",
+     "reset_llm_gateway_clients_for_tests"),
+
+    # --- alert de-duplication cooldowns -----------------------------------
+    ("app.services.drift_alert_dispatcher", "_last_dispatched",
+     "_reset_cooldown_state"),
+    ("app.services.scheduler_failure_alert_dispatcher", "_last_dispatched",
+     "_reset_cooldown_state"),
+
+    # --- provider quota / response caches ---------------------------------
+    ("app.services.odds_api_service", "_quota_remaining", "none"),
+    ("app.services.odds_api_service", "_quota_last_checked", "none"),
+    ("app.services.event_audit_service", "_HISTORY_CACHE",
+     "invalidate_history_cache"),
+    ("app.services.football_live_availability_service", "_SNAPSHOT_CACHE",
+     "clear_live_availability_cache"),
+    ("app.services.football_live_injury_service", "_SNAPSHOT_CACHE",
+     "clear_live_injury_cache"),
+    ("app.services.football_live_referee_service", "_SNAPSHOT_CACHE",
+     "clear_live_referee_cache"),
+    ("app.services.football_live_schedule_service", "_SNAPSHOT_CACHE",
+     "clear_live_schedule_cache"),
+    ("app.services.football_live_style_service", "_SNAPSHOT_CACHE",
+     "clear_live_style_cache"),
+    ("app.services.football_live_weather_service", "_READING_CACHE",
+     "clear_secondary_weather_cache"),
+    ("app.services.football_live_xg_service", "_SNAPSHOT_CACHE",
+     "clear_live_xg_cache"),
+    ("app.services.market_totals_service", "_SNAPSHOT_CACHE",
+     "clear_market_totals_cache"),
+    ("app.services.mlb_live_park_service", "_SNAPSHOT_CACHE",
+     "clear_live_park_cache"),
+    ("app.services.nba_live_injury_service", "_SNAPSHOT_CACHE",
+     "clear_live_injury_cache"),
+    ("app.services.nba_live_ratings_service", "_SNAPSHOT_CACHE",
+     "clear_live_ratings_cache"),
+    ("app.services.nhl_live_xg_service", "_SNAPSHOT_CACHE",
+     "clear_live_5v5_cache"),
+    ("app.sports.football.football_weather", "_LIVE_CACHE",
+     "_clear_live_weather_cache"),
+    ("app.services.world_cup_weather_service", "_weather_cache", "clear"),
+    ("app.api.routes.world_cup_analytics", "_TOURNAMENT_CACHE", "clear"),
+    ("app.api.routes.world_cup_analytics", "_TOURNAMENT_CACHE_TIME", "clear"),
+
+    # --- caches over files or env vars a test can rewrite ------------------
+    # Each of these memoizes a value derived from a settings path or an env var
+    # that conftest restores per test.  The cache has no key for that input, so
+    # without a clear the restored env is a lie the second time around.
+    ("app.kernel.engines.btd_model", "_load_params", "cache_clear"),
+    ("app.kernel.engines.dixon_coles_engine", "_load_rho", "cache_clear"),
+    ("app.services.world_cup_engines.world_cup_btd_model", "_load_params",
+     "cache_clear"),
+    ("app.services.world_cup_engines.world_cup_rule_engine", "_load_rho",
+     "cache_clear"),
+    ("app.services.world_cup_historical_results", "_load_results",
+     "cache_clear"),
+    ("app.services.world_cup_openfootball_data", "_load_json_file",
+     "clear_openfootball_cache"),
+)
+
+# Module-level state deliberately NOT reset, each with the reason.  The census
+# test requires a non-empty reason here for anything it finds that this file
+# does not reset -- "we forgot" cannot masquerade as "we decided".
+_RESET_EXEMPT: dict[str, str] = {
+    # Import-time registries.  The migration decorators populate these once at
+    # import; clearing one deletes the schema history, and the next store call
+    # would then create a table with no migrations applied.
+    "app.memory.decision_timeline_store._MIGRATIONS": "import-time migration registry",
+    "app.memory.domain_reliability_store._MIGRATIONS": "import-time migration registry",
+    "app.memory.event_market_link_store._MIGRATIONS": "import-time migration registry",
+    "app.memory.llm_daily_spend_store._MIGRATIONS": "import-time migration registry",
+    "app.memory.loop_run_store._MIGRATIONS": "import-time migration registry",
+    "app.memory.optimization_task_store._MIGRATIONS": "import-time migration registry",
+    "app.memory.review_queue_store._MIGRATIONS": "import-time migration registry",
+    "app.memory.simulated_trade_store._MIGRATIONS": "import-time migration registry",
+    "app.memory.source_trust_registry_store._MIGRATIONS": "import-time migration registry",
+
+    # Path-keyed memo of an idempotent CREATE TABLE IF NOT EXISTS.  A test that
+    # wants a fresh schema points the store at a unique tempfile path (see
+    # test_domain_reliability_store._TempDBMixin), so a stale hit cannot occur;
+    # clearing would re-run DDL on every test that touches a store.  It grows
+    # with dead paths within a session, bounded by the test count.
+    "app.memory.decision_timeline_store._INITIALIZED": "path-keyed idempotent-DDL memo",
+    "app.memory.domain_reliability_store._INITIALIZED": "path-keyed idempotent-DDL memo",
+    "app.memory.event_market_link_store._INITIALIZED": "path-keyed idempotent-DDL memo",
+    "app.memory.llm_daily_spend_store._INITIALIZED": "path-keyed idempotent-DDL memo",
+    "app.memory.prediction_store._INITIALIZED": "path-keyed idempotent-DDL memo",
+    "app.memory.review_queue_store._INITIALIZED": "path-keyed idempotent-DDL memo",
+    "app.memory.simulated_trade_store._INITIALIZED": "path-keyed idempotent-DDL memo",
+    "app.memory.source_trust_registry_store._INITIALIZED": "path-keyed idempotent-DDL memo",
+
+    # Caches over static in-repo constants.  Nothing a test can write changes
+    # the answer, so clearing only costs the rebuild.
+    "app.sports.football.football_style._folded_index":
+        "folds the static _TEAM_STYLE constant; operators update it by PR",
+    "app.sports._shared.team_aliases._alias_index":
+        "folds the static alias registry, keyed on competition",
+    "app.services.world_cup_engines.world_cup_gbm_engine._load_models":
+        "loads LightGBM boosters from disk; its own test file clears it when it "
+        "swaps the model files",
+
+    # Deliberately empty constant, not runtime state.
+    "app.sports.football.adapters.epl_adapter._STAGE_MAP":
+        "EPL has no knockout stage, so the map is empty by design",
+
+    # Clearing these would corrupt live resources rather than isolate them.
+    "app.utils.file_store._LOCKS":
+        "path -> RLock registry; dropping an entry hands a DIFFERENT lock for a "
+        "path another thread is already holding",
+    "app.utils.file_store._HELD_CROSS_PROCESS":
+        "tracks open OS file handles; clearing leaks them",
+    "app.utils.background_tasks._PENDING":
+        "strong references that keep in-flight tasks from being garbage "
+        "collected mid-run; never observed dirty at teardown",
+}
+
+
 def _reset_all_singletons():
-    """Reset every known module-level mutable singleton/cache."""
-    # kernel_db engine
-    close_kernel_db()
+    """Reset every module-level mutable singleton/cache listed in the table.
 
-    # connection_manager
-    import app.realtime.connection_manager as cm_mod
-    cm_mod._connection_manager = None
+    Only modules already in ``sys.modules`` are touched: a module that was never
+    imported cannot hold dirty state, and importing all 30-odd of them on every
+    test would drag the whole live-provider surface into every run.
+    """
+    for module_path, attr, action in _SINGLETON_RESETS:
+        module = sys.modules.get(module_path)
+        if module is None:
+            continue
+        if action == "none":
+            setattr(module, attr, None)
+        elif action == "clear":
+            getattr(module, attr).clear()
+        elif action == "cache_clear":
+            getattr(module, attr).cache_clear()
+        else:
+            getattr(module, action)()
 
-    # prediction_db engine
-    try:
-        import app.utils.prediction_db as pdb_mod
-        if getattr(pdb_mod, "_engine", None) is not None:
-            pdb_mod._engine = None
-    except Exception:
-        pass
-
-    # LLM client cache
-    try:
-        import app.services.llm_gateway_service as llm_mod
-        llm_mod._client_cache.clear()
-    except Exception:
-        pass
-
-    # Drift alert dispatcher dedup state
-    try:
-        import app.services.drift_alert_dispatcher as drift_mod
-        drift_mod._last_dispatched.clear()
-    except Exception:
-        pass
-
-    # Scheduler failure alert dispatcher dedup state
-    try:
-        import app.services.scheduler_failure_alert_dispatcher as sfad_mod
-        sfad_mod._last_dispatched.clear()
-    except Exception:
-        pass
-
-    # Weather cache
-    try:
-        import app.services.world_cup_weather_service as weather_mod
-        weather_mod._weather_cache.clear()
-    except Exception:
-        pass
-
-    # GNews client
-    try:
-        import app.services.gnews_service as gnews_mod
-        gnews_mod._gnews_client = None
-    except Exception:
-        pass
-
-    # Odds API quota state
-    try:
-        import app.services.odds_api_service as odds_mod
-        odds_mod._quota_remaining = None
-        odds_mod._quota_last_checked = None
-    except Exception:
-        pass
-
-    # Scheduler lock handle
-    try:
-        import app.core.scheduler as sched_mod
-        sched_mod._scheduler_lock_handle = None
-    except Exception:
-        pass
-
-    # AI semaphore
-    try:
-        import app.services.world_cup_ai_optimization_service as ai_mod
-        ai_mod._ai_semaphore = None
-    except Exception:
-        pass
+    # Not a module-level global, so it cannot live in the table above: the
+    # PredictionKernel singleton is stashed as an attribute ON the _get_kernel
+    # function.  It survived every teardown while conftest closed the kernel DB
+    # out from under the FactorRegistry the cached kernel still held.
+    predictions_mod = sys.modules.get("app.api.routes.predictions")
+    if predictions_mod is not None:
+        predictions_mod.reset_kernel_singleton()
 
 
 @pytest.fixture

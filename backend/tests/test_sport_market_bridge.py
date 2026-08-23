@@ -1,10 +1,12 @@
 """Tests for SportMarketBridgeService — three-layer matching engine.
 
 Covers: rule-layer auto-verify, LLM fallback (auto-verify / pending / no-link),
-traditional odds linking, fail-closed verified filter, snapshot capture.
+traditional odds linking, fail-closed verified filter, price dispatch by source.
 Uses real SQLite via tmp_path (no DB mocks); LLM/rule methods are injected
 via AsyncMock/MagicMock to control the three-layer routing deterministically.
 """
+import inspect
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
@@ -211,25 +213,45 @@ def test_get_verified_links_fail_closed(stores):
     assert all(v["verified"] is True for v in verified)
 
 
-# --- Test 7: capture snapshots ---
+# --- Test 7: the capture loop lives in the scheduler, not on the service ---
 
 @pytest.mark.asyncio
-async def test_capture_snapshots(stores):
+async def test_service_exposes_no_capture_helper_that_bypasses_source_dispatch():
+    """No service-level capture helper may price links outside fetch_link_price.
+
+    `capture_snapshots` used to live here as a stale copy of the scheduler's
+    loop, from before dispatch-by-source existed: it sent Kalshi links through
+    `fetch_link_price` and everything else through a `_fetch_latest_price` stub
+    that returned None forever. Nothing in app/ ever called it, and its test
+    passed only because it assigned `_fetch_latest_price` an AsyncMock - the
+    implementation production never had. Wiring it up on the strength of that
+    green test would have priced Kalshi links and silently written nothing for
+    Polymarket ones, while also dropping the liquidity/volume the real loop
+    captures.
+
+    The live path is `_job_capture_sport_market_snapshots`, which routes EVERY
+    verified link through `fetch_link_price` (covered by the dispatch tests
+    below). This asserts the trap is not reintroduced: a helper here is only
+    safe if it delegates to that dispatcher.
+    """
+    from app.kernel import sport_market_bridge_service as module
     from app.kernel.sport_market_bridge_service import SportMarketBridgeService
-    link_store, snapshot_store = stores
-    link_store.upsert_link(
-        match_id="epl-20250816-LIV-MCI", contract_id="c1", source="polymarket",
-        outcome_label="YES", mapped_outcome="home_win", link_method="rule",
-        link_confidence=0.95, verified=True, market_question="q", implied_prob=0.6,
-    )
-    svc = SportMarketBridgeService(link_store=link_store, snapshot_store=snapshot_store)
-    svc._fetch_latest_price = AsyncMock(return_value=0.62)
-    count = await svc.capture_snapshots(match_id="epl-20250816-LIV-MCI")
-    assert count == 1
-    links = link_store.get_verified_links(match_id="epl-20250816-LIV-MCI")
-    snaps = snapshot_store.get_snapshots(link_id=links[0]["id"])
-    assert len(snaps) == 1
-    assert snaps[0]["implied_prob"] == pytest.approx(0.62)
+
+    assert not hasattr(SportMarketBridgeService, "_fetch_latest_price")
+
+    source = inspect.getsource(module)
+    for name, member in inspect.getmembers(
+        SportMarketBridgeService, predicate=inspect.isfunction
+    ):
+        if "capture" not in name:
+            continue
+        body = inspect.getsource(member)
+        assert "fetch_link_price" in body, (
+            f"{name} prices links without going through fetch_link_price, "
+            "which is how the source-dispatch bug returns"
+        )
+    # The stub's docstring invited exactly the override that hid the gap.
+    assert "tests replace this method with an AsyncMock" not in source
 
 
 # --- Test 8: price fetch dispatches by link source ---

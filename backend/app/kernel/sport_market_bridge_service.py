@@ -444,36 +444,6 @@ class SportMarketBridgeService:
         """Fail-closed: return only verified=True links for a match."""
         return self._links.get_verified_links(match_id=match_id)
 
-    async def _fetch_latest_price(self, link: dict) -> float | None:
-        """Fetch the latest implied-probability price for a link.
-
-        Dispatches by source. Stubbed here (returns None) so production callers
-        can override; tests replace this method with an AsyncMock.
-        """
-        return None
-
-    async def capture_snapshots(self, *, match_id: str) -> int:
-        """Append a price snapshot for each verified link of a match."""
-        links = self._links.get_verified_links(match_id=match_id)
-        count = 0
-        for link in links:
-            if link.get("source") == "kalshi":
-                # Additive dispatch: Kalshi links fetch by ticker via the
-                # Kalshi markets endpoint. Failures are skipped (None).
-                kalshi_data = await self.fetch_link_price(link)
-                price = kalshi_data.get("implied_prob") if kalshi_data else None
-            else:
-                price = await self._fetch_latest_price(link)
-            if price is None:
-                continue
-            self._snapshots.append_snapshot(
-                link_id=link["id"],
-                implied_prob=price,
-                price=price,
-            )
-            count += 1
-        return count
-
     async def fetch_link_price(self, link: dict) -> dict | None:
         """Fetch the current price for a verified link, dispatching by source.
 

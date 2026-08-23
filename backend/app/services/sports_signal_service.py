@@ -6,6 +6,7 @@ import re
 from datetime import datetime
 from typing import Any
 
+from app.services.sports_fact_aggregation import red_card_total
 from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT
 
 
@@ -177,7 +178,10 @@ def _discipline_signal(
     ]
     if not discipline_facts:
         return None
-    red_total = sum(float(fact.get("red_cards", 0.0)) for fact in discipline_facts)
+    # The same card arrives as a per-card `discipline` fact and inside the
+    # per-match total on `match_result`; adding both reported it twice, and this
+    # number is shown to the operator as `threshold_progress`.
+    red_total, _counted = red_card_total(discipline_facts)
     suspensions = sum(1 for fact in discipline_facts if fact.get("kind") == "suspension")
     threshold = _parse_red_card_threshold(event_question)
     progress = round(red_total / threshold, 3) if threshold else None

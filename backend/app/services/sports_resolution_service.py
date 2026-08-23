@@ -7,6 +7,7 @@ from typing import Any
 
 from app.memory.event_store import list_all_events
 from app.services.event_resolve_service import resolve_with_calibration
+from app.services.sports_fact_aggregation import red_card_total, total_goals
 from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT, load_sports_facts
 
 
@@ -401,12 +402,17 @@ def _red_card_resolution(
         fact for fact in facts
         if fact.get("kind") in {"discipline", "match_state", "match_result", "tournament_status"}
     ]
-    red_total = sum(float(fact.get("red_cards", 0.0)) for fact in relevant)
+    # Summing every fact that carries `red_cards` counted the same card once per
+    # grain it was reported at: the per-card `discipline` row and the per-match
+    # total on `match_result` both describe it. `red_card_total` picks a grain
+    # per match instead, and returns only the facts it actually counted so the
+    # decision cites its own evidence.
+    red_total, counted = red_card_total(relevant)
     if red_total >= threshold:
         return _decision(
             100.0,
             f"Official facts record {red_total:g} red cards, meeting the {threshold:g} threshold.",
-            relevant,
+            counted,
         )
     if _tournament_complete(relevant):
         return _decision(
@@ -496,16 +502,15 @@ def _total_goals_resolution(
         if fact.get("kind") in {"match_result", "tournament_status"}
     ]
     match_facts = [fact for fact in relevant if fact.get("kind") == "match_result"]
-    total = 0.0
-    for fact in match_facts:
-        score = fact.get("score") or {}
-        total += float(fact.get("home_goals") or fact.get("home_score") or score.get("home") or 0)
-        total += float(fact.get("away_goals") or fact.get("away_score") or score.get("away") or 0)
+    # One match imported from two sources, or re-imported at a later
+    # `observed_at`, produces two `match_result` facts - the generated fact_id
+    # seeds on both - and adding them counted that match's goals twice.
+    total, counted = total_goals(match_facts)
     if total >= threshold:
         return _decision(
             100.0,
             f"Match results record {total:g} total goals, meeting the {threshold:g} threshold.",
-            match_facts,
+            counted,
         )
     if _tournament_complete(relevant):
         return _decision(

@@ -826,5 +826,146 @@ class GroupStageResolutionTests(unittest.TestCase):
         self.assertIsNone(decision)
 
 
+class RedCardGrainRegressionTests(unittest.TestCase):
+    """A card reported at two grains must not settle the market twice over.
+
+    A data-source bundle carries both the per-card `discipline` rows and the
+    per-match `home_red_cards` + `away_red_cards` total, and their fact_ids
+    differ by construction, so the store's upsert cannot merge them. Summing
+    every fact that carried `red_cards` settled the 8-card market YES, at
+    confidence 100, on four real cards.
+    """
+
+    @staticmethod
+    def _record():
+        return _sports_record(
+            "red-cards",
+            "Will the 2026 FIFA World Cup have at least 8 red cards?",
+            "world-cup-2026:red-cards-eight",
+            "discipline",
+            [WORLD_CUP_TOURNAMENT, "red cards"],
+        )
+
+    @staticmethod
+    def _both_grains(match_count: int):
+        facts = []
+        for i in range(1, match_count + 1):
+            facts.append({
+                "fact_id": f"card-{i}",
+                "kind": "discipline",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "match_id": f"m{i}",
+                "player": f"P{i}",
+                "status": "red_card",
+                "red_cards": 1,
+                "confidence": 1.0,
+            })
+            facts.append({
+                "fact_id": f"wc2026:match:m{i}",
+                "kind": "match_result",
+                "tournament": WORLD_CUP_TOURNAMENT,
+                "match_id": f"m{i}",
+                "status": "finished",
+                "red_cards": 1,
+                "confidence": 1.0,
+            })
+        return facts
+
+    def test_four_real_cards_at_two_grains_stays_pending(self):
+        decision = resolver.evaluate_world_cup_resolution(
+            self._record(), self._both_grains(4)
+        )
+        self.assertIsNone(decision)
+
+    def test_eight_real_cards_at_two_grains_still_resolves_yes(self):
+        decision = resolver.evaluate_world_cup_resolution(
+            self._record(), self._both_grains(8)
+        )
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 100.0)
+        self.assertIn("8 red cards", decision["reason"])
+
+    def test_decision_cites_only_the_facts_it_counted(self):
+        decision = resolver.evaluate_world_cup_resolution(
+            self._record(), self._both_grains(8)
+        )
+        self.assertEqual(len(decision["facts"]), 8)
+        self.assertTrue(all(fid.startswith("card-") for fid in decision["facts"]))
+
+    def test_below_threshold_at_two_grains_resolves_no_when_complete(self):
+        facts = self._both_grains(4) + [{
+            "fact_id": "ts",
+            "kind": "tournament_status",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "status": "completed",
+            "tournament_complete": True,
+            "confidence": 1.0,
+        }]
+        decision = resolver.evaluate_world_cup_resolution(self._record(), facts)
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 0.0)
+        self.assertIn("4 red cards", decision["reason"])
+
+
+class TotalGoalsGrainRegressionTests(unittest.TestCase):
+    """One match must contribute its goals once, however often it was imported.
+
+    The generated fact_id seeds on `source` and `observed_at`, so the same match
+    arriving from two feeds persists as two `match_result` facts.
+    """
+
+    @staticmethod
+    def _record():
+        return _sports_record(
+            "total-goals",
+            "Will the 2026 FIFA World Cup have at least 8 total goals?",
+            "world-cup-2026:total-goals-140",
+            "tournament_totals",
+            [WORLD_CUP_TOURNAMENT, "total goals"],
+        )
+
+    @staticmethod
+    def _match(fact_id: str, match_id: str, home: int, away: int, **extra):
+        fact = {
+            "fact_id": fact_id,
+            "kind": "match_result",
+            "tournament": WORLD_CUP_TOURNAMENT,
+            "match_id": match_id,
+            "status": "finished",
+            "score": {"home": home, "away": away},
+            "confidence": 1.0,
+        }
+        fact.update(extra)
+        return fact
+
+    def test_one_match_from_two_feeds_counts_its_goals_once(self):
+        facts = [
+            self._match("sports:wc:match_result:aaa", "m1", 3, 2, source="official_csv"),
+            self._match("sports:wc:match_result:bbb", "m1", 3, 2, source="api_football"),
+        ]
+        decision = resolver.evaluate_world_cup_resolution(self._record(), facts)
+        self.assertIsNone(decision)
+
+    def test_distinct_matches_still_reach_the_threshold(self):
+        facts = [
+            self._match("m1", "m1", 2, 1),
+            self._match("m2", "m2", 1, 1),
+            self._match("m3", "m3", 2, 1),
+        ]
+        decision = resolver.evaluate_world_cup_resolution(self._record(), facts)
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["actual_outcome"], 100.0)
+        self.assertIn("8 total goals", decision["reason"])
+
+    def test_live_snapshot_does_not_lower_a_finished_score(self):
+        facts = [
+            self._match("live", "m1", 1, 0, status="live"),
+            self._match("final", "m1", 5, 4),
+        ]
+        decision = resolver.evaluate_world_cup_resolution(self._record(), facts)
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["facts"], ["final"])
+
+
 if __name__ == "__main__":
     unittest.main()

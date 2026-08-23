@@ -493,5 +493,73 @@ class GroupStrengthSignalTests(unittest.TestCase):
         self.assertNotIn("group_strength_signal", bundle["signals"])
 
 
+class DisciplineSignalGrainTests(unittest.TestCase):
+    """`threshold_progress` is shown to the operator, so it must not double count.
+
+    The same card arrives as a per-card `discipline` fact and inside the
+    per-match total on `match_result`; adding both put the operator's progress
+    bar at twice the real value.
+    """
+
+    _SOURCE = {
+        "type": "sports_event",
+        "category": "discipline",
+        "tournament": WORLD_CUP_TOURNAMENT,
+        "source_id": "world-cup-2026:red-cards-eight",
+        "entities": [WORLD_CUP_TOURNAMENT, "red cards"],
+    }
+    _QUESTION = "Will the 2026 FIFA World Cup have at least 8 red cards?"
+
+    def _signal(self, facts):
+        bundle = signals.build_sports_signals(self._QUESTION, self._SOURCE, facts)
+        return bundle["signals"]["discipline_signal"]
+
+    def test_both_grains_for_one_match_report_the_real_card_count(self):
+        facts = [
+            {
+                "fact_id": "card-1", "kind": "discipline", "tournament": WORLD_CUP_TOURNAMENT,
+                "match_id": "m1", "player": "P1", "status": "red_card",
+                "red_cards": 1, "confidence": 1.0,
+            },
+            {
+                "fact_id": "card-2", "kind": "discipline", "tournament": WORLD_CUP_TOURNAMENT,
+                "match_id": "m1", "player": "P2", "status": "red_card",
+                "red_cards": 1, "confidence": 1.0,
+            },
+            {
+                "fact_id": "wc2026:match:m1", "kind": "match_result",
+                "tournament": WORLD_CUP_TOURNAMENT, "match_id": "m1",
+                "status": "finished", "red_cards": 2, "confidence": 1.0,
+            },
+        ]
+        signal = self._signal(facts)
+        self.assertEqual(signal["red_card_total"], 2)
+        self.assertEqual(signal["threshold_progress"], 0.25)
+        self.assertEqual(signal["direction"], "neutral")
+
+    def test_a_suspension_that_reaches_the_signal_is_not_counted_as_a_card(self):
+        # `applies_to` carrying the source_id is the one path that admits a
+        # suspension fact past `_is_relevant_fact` for a discipline event; the
+        # category filter alone would drop it before the tally.
+        facts = [
+            {
+                "fact_id": "card-1", "kind": "discipline", "tournament": WORLD_CUP_TOURNAMENT,
+                "match_id": "m1", "player": "P1", "status": "red_card",
+                "red_cards": 1, "confidence": 1.0,
+            },
+            {
+                "fact_id": "susp-1", "kind": "suspension", "tournament": WORLD_CUP_TOURNAMENT,
+                "match_id": "m1", "player": "P1", "status": "suspended",
+                "red_cards": 1, "applies_to": ["world-cup-2026:red-cards-eight"],
+                "confidence": 1.0,
+            },
+        ]
+        signal = self._signal(facts)
+        # The card is counted once, from the fact that reports the card itself.
+        self.assertEqual(signal["red_card_total"], 1)
+        # The suspension still counts as a suspension.
+        self.assertEqual(signal["suspensions"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

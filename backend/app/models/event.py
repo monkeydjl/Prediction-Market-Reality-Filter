@@ -116,20 +116,31 @@ class Calibration(BaseModel):
     outcome. Computed once at resolve time (a snapshot); None on EventRecord
     until the event is resolved.
 
-    Scored on the latest probability estimate against outcome.actual_outcome.
     Brier score is 0 (perfect) / 0.25 (random) / 1 (fully wrong); skill_score
     rescales it so >0 beats random. The trajectory_* fields carry context so a
     reviewer can tell whether the score reflects a long, stable tracking
     history or a single shaky observation.
+
+    Which estimate was scored depends on whether the event has a market, so
+    `estimate_basis` names it: a market-derived event is scored on its latest
+    trajectory point (the trajectory tracks a live price), while a market-less
+    event is scored on its first-sight estimate, because nothing froze its
+    verdict (`freeze_prediction` is market-gated). The number alone cannot say
+    which, since the two can coincide.
     """
 
     brier_score: float                # 0=perfect, 0.25=random, 1=fully wrong
     skill_score: float                # 1 - brier/0.25; >0 beats random
     grade: str                        # EXCELLENT/GOOD/ACCEPTABLE/POOR/RANDOM_LEVEL
-    estimated_probability: float      # the latest estimate that was scored (0-100)
+    estimated_probability: float      # the estimate that was scored (0-100)
     actual_outcome: float             # the outcome it was scored against (0-100)
     trajectory_observations: int      # how many probability snapshots the event had
     trajectory_span_hours: float | None = None  # how long the event was tracked
+    # Which estimate the score was computed from: trajectory_latest (market
+    # events), first_sight (market-less), or a baseline_* fallback naming why
+    # no committed estimate was available. Defaulted so calibration rows
+    # written before this field existed still validate.
+    estimate_basis: str = "trajectory_latest"
 
 
 class EventSemantics(BaseModel):

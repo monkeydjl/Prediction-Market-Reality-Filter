@@ -156,6 +156,134 @@ class ResolveWithCalibrationTests(unittest.TestCase):
         )
 
 
+class MarketlessCommitmentTests(unittest.TestCase):
+    """A market-less event is graded on the estimate it committed to.
+
+    `freeze_prediction` is market-gated, so a `sports_event` never gets a frozen
+    prediction row - nothing pins its verdict. Meanwhile `record_event` appends a
+    fresh snapshot on every re-scan, so grading the *latest* estimate graded
+    whichever number the model produced most recently, and a re-scan late in a
+    tournament runs after the outcome has begun leaking into the news context.
+
+    Every test here needs two snapshots that DISAGREE: with one snapshot the
+    first and the latest coincide and the assertion passes either way.
+    """
+
+    def _sports_record(self, event_id, *, estimated, baseline=40.0):
+        record = _make_record(event_id, estimated=estimated)
+        record["probability"]["baseline"] = baseline
+        record["source"] = {
+            "type": "sports_event",
+            "platform": "world_cup_2026",
+            "source_id": f"world-cup-2026:{event_id}",
+            "tournament": "world_cup_2026",
+        }
+        return record
+
+    def _resolve(self, tmp, record, snapshot_estimates, *, actual_outcome=100.0):
+        store_path = str(Path(tmp) / "event_store.json")
+        audit_path = str(Path(tmp) / "event_audit.jsonl")
+        with patch.object(store, "_store_path", return_value=store_path), \
+                patch.object(audit, "_audit_path", return_value=audit_path), \
+                patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+            store.save_event(record)
+            for estimate in snapshot_estimates:
+                audit.record_event(
+                    self._sports_record(record["event_id"], estimated=estimate)
+                )
+            return ers.resolve_with_calibration(
+                event_id=record["event_id"],
+                actual_outcome=actual_outcome,
+                source="auto_sports",
+            )
+
+    def test_sports_event_is_graded_on_its_first_estimate_not_its_latest(self):
+        # First sight said 30, a later re-scan said 95 once the facts were out.
+        # Grading the latest would score Brier 0.0025 (EXCELLENT) on a number
+        # that already half-knew the answer; the committed 30 scores 0.49.
+        with tempfile.TemporaryDirectory() as tmp:
+            updated = self._resolve(
+                tmp,
+                self._sports_record("wcCommit", estimated=30.0),
+                [30.0, 95.0],
+            )
+        calibration = updated["record"]["calibration"]
+        self.assertEqual(calibration["estimated_probability"], 30.0)
+        self.assertEqual(calibration["estimate_basis"], "first_sight")
+        self.assertAlmostEqual(calibration["brier_score"], 0.49)
+
+    def test_market_event_still_graded_on_its_latest_estimate(self):
+        # Same two snapshots, but a market-derived event: the trajectory tracks a
+        # live price, so the latest point remains the right one. This is the
+        # test that fails if the new branch is applied to every source type.
+        with tempfile.TemporaryDirectory() as tmp:
+            record = _make_record("mktLatest", estimated=30.0)
+            record["probability"]["baseline"] = 40.0
+            record["source"] = {
+                "type": "prediction_market",
+                "platform": "polymarket",
+                "source_id": "0xabc",
+            }
+            store_path = str(Path(tmp) / "event_store.json")
+            audit_path = str(Path(tmp) / "event_audit.jsonl")
+            with patch.object(store, "_store_path", return_value=store_path), \
+                    patch.object(audit, "_audit_path", return_value=audit_path), \
+                    patch.object(sqlite_db, "loop_db_path",
+                                 return_value=str(Path(tmp) / "v2_loop.db")):
+                store.save_event(record)
+                for estimate in (30.0, 95.0):
+                    snap = _make_record("mktLatest", estimated=estimate)
+                    snap["source"] = record["source"]
+                    audit.record_event(snap)
+                updated = ers.resolve_with_calibration(
+                    event_id="mktLatest", actual_outcome=100.0, source="manual",
+                )
+        calibration = updated["record"]["calibration"]
+        self.assertEqual(calibration["estimated_probability"], 95.0)
+        self.assertEqual(calibration["estimate_basis"], "trajectory_latest")
+
+    def test_compacted_trajectory_falls_back_to_baseline_not_latest(self):
+        # The audit log keeps only the most recent EVENT_AUDIT_MAX_PER_EVENT
+        # snapshots, so once that many survive the oldest is no longer the
+        # first-sight estimate. Grading it would grade a drifted number under
+        # the commitment's name; the curated baseline cannot have drifted.
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(ers.settings, "EVENT_AUDIT_MAX_PER_EVENT", 2):
+                updated = self._resolve(
+                    tmp,
+                    self._sports_record("wcCompact", estimated=30.0, baseline=40.0),
+                    [30.0, 95.0],
+                )
+        calibration = updated["record"]["calibration"]
+        self.assertEqual(calibration["estimated_probability"], 40.0)
+        self.assertEqual(calibration["estimate_basis"], "baseline_trajectory_compacted")
+
+    def test_sports_event_with_no_trajectory_uses_baseline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            updated = self._resolve(
+                tmp,
+                self._sports_record("wcNoTraj", estimated=30.0, baseline=40.0),
+                [],
+            )
+        calibration = updated["record"]["calibration"]
+        self.assertEqual(calibration["estimated_probability"], 40.0)
+        self.assertEqual(calibration["estimate_basis"], "baseline_no_trajectory")
+
+    def test_sports_event_writes_no_prediction_row(self):
+        # The commitment is applied at scoring time precisely because there is
+        # no prediction row to freeze. If one ever appears here, the edge would
+        # be computed against a curated baseline rather than a market price.
+        with tempfile.TemporaryDirectory() as tmp:
+            self._resolve(
+                tmp,
+                self._sports_record("wcNoPred", estimated=30.0),
+                [30.0, 95.0],
+            )
+            with patch.object(sqlite_db, "loop_db_path",
+                              return_value=str(Path(tmp) / "v2_loop.db")):
+                self.assertIsNone(preds.get_prediction("wcNoPred"))
+
+
 class AutoResolveEventsTests(unittest.TestCase):
     """auto_resolve_events: fetch resolved markets, match, resolve each."""
 

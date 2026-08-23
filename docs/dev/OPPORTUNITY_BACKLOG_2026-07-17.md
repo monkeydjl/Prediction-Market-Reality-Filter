@@ -325,7 +325,7 @@ Phase 15 设计曾写「Edge/WS/优化/结算几乎无 UI」；代码侧已出�
 | E7 | P3 | 类型注解与中英注释统一 | 长尾整洁 |
 | E8 | P2 | 指标与告警 | ✅ 部分 2026-07-20：`scheduler_failure_alert_dispatcher` + Grafana JSON + RUNBOOK Monitoring 小节（/metrics 系列、drift/scheduler 告警 flag、eval CLI）+ `verify_local_stack` 探测 quality-metrics；生产 webhook 仍需运营配置 |
 | E9 | P3 | 生成类型 CI | ✅ 2026-07-20：`.github/workflows/ci.yml` 含 `type-sync-check` job 跑 `python -m scripts.generate_types --check` |
-| E10 | P2 | 测试数据隔离 | Phase 13 已修 kernel 单例；持续保证并行/逆序稳定 |
+| E10 | P2 | 测试数据隔离 | ✅ 2026-08-24：隔离清单从「手工维护」改为**数据驱动 + 普查断言**。`conftest._SINGLETON_RESETS`（37 条）+ `_RESET_EXEMPT`（24 条带书面理由）必须**精确**覆盖 AST 普查在 `app/` 里找到的模块级可变全局，双向断言（`test_singleton_reset_census.py`）。修两处实证泄漏：`prediction_db._SessionLocal`（同模块 `_engine` 脏 10 次、它脏满 4584 次——`get_prediction_session()` 只判 `_SessionLocal`）与 `_get_kernel._instance`（内核**对象**单例，Phase 13 修的是内核 **DB** 单例）。14 个「只有自己测试文件调用」的 `clear_*_cache` 辅助函数收归 conftest，零调用者的 `reset_llm_gateway_clients_for_tests` 复活。逆序整套 4575 passed / 0 failed 已测 | Phase 13 已修 kernel 单例；并行（`-p xdist`）尚未开启 |
 | E11 | P3 | 文档索引更新 | ✅ 2026-07-20：`docs/README.md` 已链入本 backlog |
 
 ---

@@ -308,11 +308,17 @@ export interface Outcome {
  * outcome. Computed once at resolve time (a snapshot); None on EventRecord
  * until the event is resolved.
  *
- * Scored on the latest probability estimate against outcome.actual_outcome.
  * Brier score is 0 (perfect) / 0.25 (random) / 1 (fully wrong); skill_score
  * rescales it so >0 beats random. The trajectory_* fields carry context so a
  * reviewer can tell whether the score reflects a long, stable tracking
  * history or a single shaky observation.
+ *
+ * Which estimate was scored depends on whether the event has a market, so
+ * `estimate_basis` names it: a market-derived event is scored on its latest
+ * trajectory point (the trajectory tracks a live price), while a market-less
+ * event is scored on its first-sight estimate, because nothing froze its
+ * verdict (`freeze_prediction` is market-gated). The number alone cannot say
+ * which, since the two can coincide.
  */
 export interface Calibration {
   brier_score: number;
@@ -322,6 +328,7 @@ export interface Calibration {
   actual_outcome: number;
   trajectory_observations: number;
   trajectory_span_hours?: number | null;
+  estimate_basis?: string;
   [k: string]: unknown;
 }
 /**

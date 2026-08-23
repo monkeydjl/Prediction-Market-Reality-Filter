@@ -70,15 +70,21 @@ def score_event(
     actual_outcome: float,
     trajectory_observations: int,
     trajectory_span_hours: float | None,
+    estimate_basis: str = "trajectory_latest",
 ) -> dict[str, Any]:
     """Compute the calibration snapshot for one resolved event.
 
-    `estimated` is the latest probability estimate (0-100) that is being
-    scored; `actual_outcome` is the settled outcome (0-100). The trajectory_*
+    `estimated` is the probability estimate (0-100) being scored;
+    `actual_outcome` is the settled outcome (0-100). The trajectory_*
     fields are carried through as context (not used in the score) so a reviewer
     can tell how much tracking history the score rests on. Returns a
     Calibration-shaped dict; it is validated against the Calibration model when
     attached to a record.
+
+    `estimate_basis` names which estimate `estimated` is, because the number
+    alone cannot say: market events are scored on the latest trajectory point,
+    market-less events on their first-sight estimate, and either can fall back
+    to the record baseline. The caller decides; this module only labels.
     """
     # Defensive: estimated comes from the audit trajectory / record baseline,
     # actual_outcome from the resolve request. Both should already be 0-100, but
@@ -94,6 +100,7 @@ def score_event(
         "actual_outcome": round(actual_outcome, 2),
         "trajectory_observations": int(trajectory_observations),
         "trajectory_span_hours": trajectory_span_hours,
+        "estimate_basis": estimate_basis,
     }
 
 

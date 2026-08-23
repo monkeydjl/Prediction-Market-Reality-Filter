@@ -10,6 +10,13 @@ the record, and appends an outcome snapshot to the audit log. Centralizing it
 here keeps the calibration computation in one place (no duplication between
 manual and auto paths).
 
+Which estimate gets graded depends on whether the event has a market. A
+market-derived event is graded on its latest trajectory point, because that
+trajectory tracks a live price. A market-less event (`sports_event`) never
+reaches `freeze_prediction`, so nothing freezes its verdict; it is graded on
+its first-sight estimate instead, which applies the same commitment rule by
+hand. `calibration["estimate_basis"]` names which of the two was used.
+
 `auto_resolve_events` fetches resolved prediction markets from active sources
 (Polymarket, Kalshi), matches each
 unresolved local event by question similarity (shared text_match utilities),
@@ -32,6 +39,7 @@ from app.memory.prediction_store import get_prediction, score_prediction, void_p
 from app.services.calibration_service_event import score_event
 from app.services.event_audit_service import histories_by_event, history_for_event, record_outcome
 from app.services.trend_analysis_service import analyze_trend
+from app.utils.market_utils import safe_float
 from app.utils.text_match import build_index, find_match, normalize
 
 logger = logging.getLogger(__name__)
@@ -100,12 +108,7 @@ def resolve_with_calibration(
         snap for snap in raw_snapshots if snap.get("kind") != "outcome"
     ]
     trend = analyze_trend(probability_snapshots)
-    if trend["latest_probability"] is not None:
-        estimated = trend["latest_probability"]
-    else:
-        # No probability history yet: fall back to the record's baseline so
-        # the event still gets a calibration score rather than None.
-        estimated = (record.get("probability") or {}).get("baseline", 50.0)
+    estimated, estimate_basis = _scored_estimate(record, trend)
 
     # Only a genuine resolution is scored. An invalid/void outcome records the
     # marker but carries no calibration, so it is excluded from Brier.
@@ -115,6 +118,7 @@ def resolve_with_calibration(
             actual_outcome=actual_outcome,
             trajectory_observations=trend["observations"],
             trajectory_span_hours=trend["span_hours"],
+            estimate_basis=estimate_basis,
         )
     else:
         calibration = None
@@ -192,6 +196,52 @@ def resolve_with_calibration(
         except Exception:
             logger.warning("review_queue detector run failed", exc_info=True)
     return updated
+
+
+# Events with no market never reach `freeze_prediction` (it is market-gated:
+# no market price -> no edge -> no committed prediction row). They still get an
+# LLM `probability.estimated`, and `record_event` appends a fresh audit snapshot
+# on every re-scan, so grading `latest_probability` graded whichever estimate
+# happened to be written last. For a market-derived event that trajectory tracks
+# a live price and the latest point is the right one. For a market-less event it
+# is only the model changing its mind, and a re-scan late in a tournament runs
+# after the outcome has started leaking into the news context - so the score
+# could be earned by an estimate that already half-knew the answer.
+_MARKETLESS_SOURCE_TYPES = frozenset({"sports_event"})
+
+
+def _scored_estimate(
+    record: dict[str, Any],
+    trend: dict[str, Any],
+) -> tuple[float, str]:
+    """The estimate to grade, and a label naming which estimate that is.
+
+    Market-derived events keep the latest trajectory point. A market-less event
+    is graded on its first-sight estimate instead, which is the same commitment
+    rule `freeze_prediction` applies to market events: one event, one verdict,
+    fixed when it was first analyzed.
+    """
+    baseline = safe_float((record.get("probability") or {}).get("baseline"), 50.0)
+    source_type = str((record.get("source") or {}).get("type") or "")
+
+    if source_type not in _MARKETLESS_SOURCE_TYPES:
+        if trend["latest_probability"] is not None:
+            return trend["latest_probability"], "trajectory_latest"
+        # No probability history yet: fall back to the record's baseline so
+        # the event still gets a calibration score rather than None.
+        return baseline, "baseline_no_trajectory"
+
+    if trend["first_probability"] is None:
+        return baseline, "baseline_no_trajectory"
+    # The audit log is compacted to EVENT_AUDIT_MAX_PER_EVENT snapshots per
+    # event, keeping the most recent. Once that has happened the oldest
+    # surviving snapshot is not the first-sight estimate, and grading it would
+    # be grading a drifted number under the commitment's name. The curated
+    # baseline is the one estimate that cannot have drifted, so it is the
+    # honest fallback - not the latest snapshot.
+    if trend["observations"] >= settings.EVENT_AUDIT_MAX_PER_EVENT:
+        return baseline, "baseline_trajectory_compacted"
+    return trend["first_probability"], "first_sight"
 
 
 def reconcile_predictions() -> int:

@@ -39,6 +39,7 @@ existing ``EvidenceBreakdownItem.source`` field is a feed display name
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 from urllib.parse import urlparse
 
@@ -164,6 +165,7 @@ def build_source_reliability(
     registry_overrides: list[dict[str, Any]] | None = None,
     domain_stats_overrides: list[dict[str, Any]] | None = None,
     domain_reliability_shrinkage_pseudocount: int = 5,
+    domain_stats_prior_metric: str = "hit_rate",
 ) -> dict[str, Any] | None:
     """Build the ``source_reliability`` overlay block.
 
@@ -189,11 +191,30 @@ def build_source_reliability(
 
     ``domain_stats_overrides`` is an optional list of projected
     domain-reliability rows (each a dict with ``domain``, ``sample_count``,
-    ``correct_count``). When provided, sources not covered by the registry use
+    ``correct_count``, and — for the Brier metric — ``brier_sum`` and
+    ``brier_count``). When provided, sources not covered by the registry use
     a shrunk historical reliability score as the tier-score prior. The key
     ``domain_stats_prior_affected`` is emitted only when the parameter is not
     None; its value is True only when at least one source used a valid shrunk
     score.
+
+    ``domain_stats_prior_metric`` selects which historical loss the prior is
+    built from:
+
+    - ``"hit_rate"`` (default, and the only pre-Q3 behaviour): shrunk
+      ``correct_count / sample_count`` — a 0/1 direction hit rate that cannot
+      tell a confident correct call from a lucky coin flip.
+    - ``"brier"``: shrunk ``1 - mean(brier)`` over the gradeable subset, so a
+      domain that keeps appearing on events the model called confidently and
+      correctly outranks one that appears on knife-edge calls.
+
+    The two live on the same 0-1 scale but NOT the same distribution — a
+    coin-flip estimate is 0.75 under Brier and 0.5 under hit rate — so
+    switching raises every stats-backed prior and is opt-in. Under ``"brier"``
+    a domain with no gradeable sample gets NO stats prior and falls through to
+    its tier default; silently reverting to the hit rate would make the emitted
+    ``domain_stats_prior_metric`` a lie for that source. An unrecognized value
+    is treated as ``"hit_rate"``.
 
     The function never raises — malformed items are skipped (best-effort),
     and missing fields default to empty/zero rather than raising.
@@ -259,9 +280,9 @@ def build_source_reliability(
         if domain_stats_overrides is not None and not registry_matched:
             stats_override = _match_domain_stats_override(domain, domain_stats_overrides)
             if stats_override is not None:
-                domain_stats_score = _shrunk_reliability(
-                    correct=stats_override.get("correct_count"),
-                    sample=stats_override.get("sample_count"),
+                domain_stats_score = _domain_stats_prior(
+                    stats_override,
+                    metric=domain_stats_prior_metric,
                     K=domain_reliability_shrinkage_pseudocount,
                 )
                 if domain_stats_score is not None:
@@ -413,6 +434,12 @@ def build_source_reliability(
         result["source_prior_affected"] = source_prior_affected
     if domain_stats_overrides is not None:
         result["domain_stats_prior_affected"] = domain_stats_prior_affected
+        # Which historical loss produced the prior. Recorded rather than
+        # inferred: two metrics on the same 0-1 scale are indistinguishable
+        # after the fact, so an audit of a stats-backed score needs the label.
+        result["domain_stats_prior_metric"] = (
+            "brier" if domain_stats_prior_metric == "brier" else "hit_rate"
+        )
     return result
 
 
@@ -494,6 +521,51 @@ def _shrunk_reliability(correct: Any, sample: Any, K: int) -> float | None:
         correct_int = correct
     correct_int = max(0, min(correct_int, sample))
     return (correct_int + 0.5 * K) / (sample + K)
+
+
+def _shrunk_brier_skill(brier_sum: Any, brier_count: Any, K: int) -> float | None:
+    """Shrink ``1 - mean(brier)`` toward 0.5, or None when unusable.
+
+    The same estimator shape as ``_shrunk_reliability`` with the count of
+    correct calls replaced by the total skill ``n - brier_sum``: each sample
+    contributes ``1 - brier`` in [0, 1] instead of a 0/1 hit. ``brier_count`` is
+    the *gradeable* subset, which is why it is stored apart from
+    ``sample_count`` — shrinking against the wider count would treat every
+    ungradeable attribution as a coin flip that nobody actually made.
+
+    Returns None rather than a default when the count is missing or zero: an
+    invented prior is worse than falling back to the source's tier.
+    """
+    if isinstance(brier_count, bool) or not isinstance(brier_count, int):
+        return None
+    if brier_count <= 0 or K <= 0:
+        return None
+    if isinstance(brier_sum, bool) or not isinstance(brier_sum, (int, float)):
+        return None
+    if not math.isfinite(brier_sum):
+        # Clamping would send NaN to 0.0 and report a perfect Brier: min/max
+        # both fall through on a NaN comparison. Drop the prior instead.
+        return None
+    # A Brier per sample is in [0, 1], so the total is clamped to that band --
+    # a corrupt row must not push the prior outside the tier-score scale.
+    total = max(0.0, min(float(brier_sum), float(brier_count)))
+    skill = float(brier_count) - total
+    return (skill + 0.5 * K) / (brier_count + K)
+
+
+def _domain_stats_prior(row: dict[str, Any], *, metric: str, K: int) -> float | None:
+    """Prior score for one matched domain-stats row under the selected metric."""
+    if metric == "brier":
+        return _shrunk_brier_skill(
+            brier_sum=row.get("brier_sum"),
+            brier_count=row.get("brier_count"),
+            K=K,
+        )
+    return _shrunk_reliability(
+        correct=row.get("correct_count"),
+        sample=row.get("sample_count"),
+        K=K,
+    )
 
 
 def _domain_suffix_matches(domain: str, pattern: str) -> bool:

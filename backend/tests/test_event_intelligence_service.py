@@ -18,6 +18,7 @@ from app.services.scoring_service import (
     impact_drivers,
     probability_direction,
 )
+from tests.conftest import fake_domain_reliability_stat
 
 
 def _run(coro):
@@ -1990,12 +1991,7 @@ class SourceReliabilityIntegrationTests(unittest.TestCase):
             source={"type": "prediction_market", "platform": "Polymarket"},
             domain_feedback_enabled=False,
             domain_stats_rows=[
-                {
-                    "domain": "reuters.com",
-                    "category": "_all",
-                    "sample_count": 10,
-                    "correct_count": 8,
-                },
+                fake_domain_reliability_stat(sample_count=10, correct_count=8),
             ],
             capture_build_call=True,
         )
@@ -2008,23 +2004,18 @@ class SourceReliabilityIntegrationTests(unittest.TestCase):
             sr_enabled=True,
             source={"type": "prediction_market", "platform": "Polymarket"},
             domain_feedback_enabled=True,
+            # Built by projecting fake columns through the store's own
+            # _row_to_stat, so the shape cannot drift from what get_stats really
+            # returns.  Hand-written literals here failed with a KeyError the
+            # moment the store grew brier_sum / brier_count (Q3).
             domain_stats_rows=[
-                {
-                    "domain": "reuters.com",
-                    "category": "_all",
-                    "sample_count": 10,
-                    "correct_count": 8,
-                    "wrong_count": 2,
-                    "reliability_score": 0.8,
-                    "credibility_sum": 7.5,
-                },
-                {
-                    "domain": "bloomberg.com",
-                    "category": "_all",
-                    "sample_count": 5,
-                    "correct_count": 2,
-                    "wrong_count": 3,
-                },
+                fake_domain_reliability_stat(
+                    domain="reuters.com", sample_count=10, correct_count=8,
+                    credibility_sum=7.5, brier_sum=0.8, brier_count=10,
+                ),
+                fake_domain_reliability_stat(
+                    domain="bloomberg.com", sample_count=5, correct_count=2,
+                ),
             ],
             capture_build_call=True,
         )
@@ -2033,13 +2024,21 @@ class SourceReliabilityIntegrationTests(unittest.TestCase):
         self.assertEqual(
             build_sr.call_args.kwargs["domain_stats_overrides"],
             [
-                {"domain": "reuters.com", "sample_count": 10, "correct_count": 8},
-                {"domain": "bloomberg.com", "sample_count": 5, "correct_count": 2},
+                {"domain": "reuters.com", "sample_count": 10, "correct_count": 8,
+                 "brier_sum": 0.8, "brier_count": 10},
+                {"domain": "bloomberg.com", "sample_count": 5, "correct_count": 2,
+                 "brier_sum": 0.0, "brier_count": 0},
             ],
         )
         self.assertEqual(
             build_sr.call_args.kwargs["domain_reliability_shrinkage_pseudocount"],
             5,
+        )
+        # The prior metric reaches build_source_reliability, and defaults to the
+        # pre-Q3 hit rate rather than to whatever the store happens to carry.
+        self.assertEqual(
+            build_sr.call_args.kwargs["domain_stats_prior_metric"],
+            "hit_rate",
         )
 
     def test_domain_feedback_store_failure_is_best_effort(self):
@@ -2062,12 +2061,7 @@ class SourceReliabilityIntegrationTests(unittest.TestCase):
             source={"type": "prediction_market", "platform": "Polymarket"},
             domain_feedback_enabled=True,
             domain_stats_rows=[
-                {
-                    "domain": "reuters.com",
-                    "category": "_all",
-                    "sample_count": 10,
-                    "correct_count": 8,
-                },
+                fake_domain_reliability_stat(sample_count=10, correct_count=8),
             ],
             capture_build_call=True,
         )

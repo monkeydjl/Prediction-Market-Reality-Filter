@@ -521,6 +521,8 @@ def _build_all_overlays(
                             "domain": r["domain"],
                             "sample_count": r["sample_count"],
                             "correct_count": r["correct_count"],
+                            "brier_sum": r["brier_sum"],
+                            "brier_count": r["brier_count"],
                         }
                         for r in rows
                     ]
@@ -547,6 +549,7 @@ def _build_all_overlays(
                 domain_reliability_shrinkage_pseudocount=(
                     settings.DOMAIN_RELIABILITY_SHRINKAGE_PSEUDOCOUNT
                 ),
+                domain_stats_prior_metric=settings.DOMAIN_RELIABILITY_PRIOR_METRIC,
             )
             if sr is not None:
                 record["source_reliability"] = sr

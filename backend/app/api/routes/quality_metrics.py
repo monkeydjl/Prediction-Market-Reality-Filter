@@ -679,13 +679,25 @@ async def domain_reliability(
     min_samples: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     """Query domain reliability statistics. Read-only."""
+    from app.core.config import settings
     from app.memory.domain_reliability_store import get_stats
 
     stats = get_stats(domain=domain, category=category, min_samples=min_samples)
+    # Sample-weighted over the gradeable subset. brier_count is reported next to
+    # sample_count rather than folded into it: an event that was never frozen
+    # has no committed estimate to score, and averaging it in as 0.0 would read
+    # as a perfect call nobody made.
+    graded = sum(s["brier_count"] for s in stats)
+    brier_total = sum(s["brier_sum"] for s in stats)
     return {
         "domains": stats,
         "total_domains": len({s["domain"] for s in stats}),
         "total_rows": len(stats),
+        "total_samples": sum(s["sample_count"] for s in stats),
+        "graded_samples": graded,
+        "brier_mean": (brier_total / graded) if graded > 0 else None,
+        "brier_skill_score": (1.0 - brier_total / graded) if graded > 0 else None,
+        "prior_metric": settings.DOMAIN_RELIABILITY_PRIOR_METRIC,
     }
 
 

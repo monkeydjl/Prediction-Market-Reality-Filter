@@ -21,6 +21,12 @@ from app.services.quality_metrics_report_service import (
 # estimated_probability == 100.0 is included with `< hi`.
 _PROB_BUCKETS = [(0.0, 20.0), (20.0, 40.0), (40.0, 60.0), (60.0, 80.0), (80.0, 101.0)]
 
+# Version of the report *shape*, so a stored report says which layout it is in.
+# Distinct from an eval set's own name/revision, which say which events were
+# graded (see model_eval_set_service). Bump when a consumer would have to
+# change: 1 -> 2 added the eval_set block.
+REPORT_SCHEMA_VERSION = 2
+
 
 def extract_model_metrics(record: dict[str, Any]) -> dict[str, Any]:
     """Extract model-eval metrics from a record.
@@ -58,12 +64,11 @@ def compute_ece(items: list[dict[str, Any]]) -> float | None:
     Returns None when no eligible records.
 
     Scale: 0-100 probability points (consistent with calibration_deviation).
+
+    The returned float carries no denominator: pair it with ``compute_ece_n``
+    (``slice_model_metrics`` does) before showing or gating on it.
     """
-    eligible = [
-        it for it in items
-        if _is_real_number(it.get("estimated_probability"))
-        and _is_real_number(it.get("actual_outcome"))
-    ]
+    eligible = _ece_eligible(items)
     total = len(eligible)
     if total == 0:
         return None
@@ -80,6 +85,30 @@ def compute_ece(items: list[dict[str, Any]]) -> float | None:
         actual_mean = sum(it["actual_outcome"] for it in bucket) / bucket_n
         ece += (bucket_n / total) * abs(predicted_mean - actual_mean)
     return ece
+
+
+def _ece_eligible(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The items ECE is actually computed over."""
+    return [
+        it for it in items
+        if _is_real_number(it.get("estimated_probability"))
+        and _is_real_number(it.get("actual_outcome"))
+    ]
+
+
+def compute_ece_n(items: list[dict[str, Any]]) -> int:
+    """How many items compute_ece measured.
+
+    Exists because an ECE without its denominator is unreadable and ungateable.
+    On the live store the ``llm`` slice held 45 events of which **6** carried
+    both an estimate and an outcome, so it reported ece=35.00 on a row labelled
+    n=45 — and a release gate comparing that 35.00 to a threshold, having
+    already checked that the slice had 45 samples, would have been ruling on
+    six events while believing it had forty-five. ``direction_accuracy`` in the
+    same table already printed its own ``(48/59)`` denominator; ECE and Brier
+    did not.
+    """
+    return len(_ece_eligible(items))
 
 
 def _real_number(value: Any) -> float | None:
@@ -108,6 +137,7 @@ def slice_model_metrics(items: list[dict[str, Any]]) -> dict[str, Any]:
     Inherits all fields from slice_metrics (n, direction_correct_*,
     brier, missing_calibration_rate, direction_accuracy), then adds:
         ece                  — float | None
+        ece_n                — int (records ECE measured; NOT n)
         cost_total           — float (0.0 when no cost data)
         cost_avg             — float | None (None when cost_n == 0)
         cost_n               — int (count of non-None costs)
@@ -115,6 +145,10 @@ def slice_model_metrics(items: list[dict[str, Any]]) -> dict[str, Any]:
         guardrail_rate       — float (0.0-1.0)
         degraded_count       — int
         degraded_rate        — float (0.0-1.0)
+
+    Every metric that measures a subset ships its own count: ece_n, cost_n,
+    brier["n"], and direction_correct_true+false. ``n`` is the slice size and
+    is not the denominator of any of them.
     """
     base = slice_metrics(items)  # from quality_metrics_report_service
     cost_values = [
@@ -132,6 +166,7 @@ def slice_model_metrics(items: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         **base,
         "ece": compute_ece(items),
+        "ece_n": compute_ece_n(items),
         "cost_total": cost_total,
         "cost_avg": cost_avg,
         "cost_n": cost_n,
@@ -181,15 +216,25 @@ def build_model_eval_report(
     report_errors: list[dict[str, Any]],
     *,
     min_samples: int = 0,
+    eval_set: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the full model evaluation report.
 
     overview always computed from ALL items (min_samples does NOT filter
     overview). by_model / by_analysis_quality / by_degraded_mode use
     group_model_slices with min_samples flagging (not filtering).
+
+    ``eval_set`` is the summary from
+    ``model_eval_set_service.resolve_eval_set`` when the caller restricted
+    ``items`` to a pinned set. It is recorded verbatim and never used to
+    filter here — the caller has already done the restricting, and computing
+    the same restriction twice in two places is how the two drift apart. The
+    key is absent (not None) when the run was unpinned, so a consumer cannot
+    read "no pinned set" as "a pinned set that matched nothing".
     """
     overview = slice_model_metrics(items)
-    return {
+    report: dict[str, Any] = {
+        "report_schema_version": REPORT_SCHEMA_VERSION,
         "overview": overview,
         "by_model": group_model_slices(items, "model", min_samples=min_samples),
         "by_analysis_quality": group_model_slices(
@@ -202,3 +247,6 @@ def build_model_eval_report(
         "report_errors": report_errors,
         "min_samples": min_samples,
     }
+    if eval_set is not None:
+        report["eval_set"] = eval_set
+    return report

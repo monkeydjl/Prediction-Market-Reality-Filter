@@ -260,6 +260,45 @@ Use `--matcher all` and optional `--manual-overrides path.jsonl` for full
 coverage. The sample JSONL is intentionally small; expand it with real labeled
 links before treating F1 as production-ready.
 
+### Model eval routine — pinned set + release gate (Q1)
+
+`scripts/model_eval_lab` grades resolved events. Two flags make it a *routine*
+rather than a one-off, and both are opt-in:
+
+```bash
+cd backend
+# 1. Mint a pinned set ONCE. Commit the manifest; it is the baseline every
+#    later report is measured against.
+PYTHONPATH=. python -m scripts.model_eval_lab \
+  --write-eval-set data/eval/model_eval_core.json --size 50
+
+# 2. Grade exactly that set, and block on the gate.
+PYTHONPATH=. python -m scripts.model_eval_lab \
+  --eval-set data/eval/model_eval_core.json --gate
+```
+
+Exit codes: `0` pass, `1` gate failed, `2` bad arguments or an unusable
+manifest. Thresholds come from `MODEL_EVAL_GATE_*` in `.env` (see
+`.env.example`); `MODEL_EVAL_GATE_REQUIRE_EVAL_SET` defaults to `false`, so an
+unpinned run is still gradeable — just not certifiable as a fixed set.
+
+Three things that bite operators:
+
+- **A missing measurement FAILS the gate.** This is deliberately the opposite of
+  the `QUALITY_ALERT_*` rules above, where a `None` metric does not page anyone.
+  You do not wake someone because a slice has no data; you also do not certify a
+  model because there is no evidence against it.
+- **Each metric is held to `min_samples` on its own denominator**, not on the
+  slice size, so a check can fail while the value printed beside it looks fine —
+  read the `metric_n` column. On the live store a 30-event set carried 20
+  gradeable Brier/ECE events but only 15 directional ones.
+- **A re-graded event is reported, never dropped.** `drifted_event_ids` means the
+  underlying record changed after it was pinned, so the score stopped being
+  comparable; bump `--set-revision` and re-mint deliberately rather than
+  ignoring it. Note that `digest` is a tamper seal covering `created_at`, **not**
+  a membership identity — two mints of the same events differ. Membership
+  identity is `name` + `revision`.
+
 ### Betting / 联赛赛程（竞猜模块）
 
 The 竞猜 hub (`/sports/betting`) and competition landings merge a static FE

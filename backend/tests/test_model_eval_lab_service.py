@@ -159,7 +159,9 @@ class TestComputeEce(unittest.TestCase):
 
 
 from app.services.model_eval_lab_service import (
+    REPORT_SCHEMA_VERSION,
     build_model_eval_report,
+    compute_ece_n,
     group_model_slices,
     slice_model_metrics,
 )
@@ -329,6 +331,87 @@ class TestBuildModelEvalReport(unittest.TestCase):
     def test_empty_items_overview_n_zero(self):
         report = build_model_eval_report([], [])
         self.assertEqual(report["overview"]["n"], 0)
+
+
+class TestComputeEceN(unittest.TestCase):
+    """ECE's own denominator (Q1).
+
+    The live store had a 45-event slice whose ECE came from 6 records, printed
+    as ``ece=35.00`` in a row labelled ``n=45``. A gate that checked the slice
+    size and then compared that ECE was ruling on six events.
+    """
+
+    def test_counts_only_what_compute_ece_measured(self):
+        items = [
+            _item(),                                # both present
+            _item(actual_outcome=None),             # no outcome
+            _item(estimated_probability=None),      # no estimate
+            _item(),                                # both present
+        ]
+        self.assertEqual(compute_ece_n(items), 2)
+        self.assertEqual(len(items), 4)
+
+    def test_zero_when_nothing_is_eligible(self):
+        self.assertEqual(compute_ece_n([]), 0)
+        self.assertEqual(compute_ece_n([_item(actual_outcome=None)]), 0)
+
+    def test_agrees_with_compute_ece_on_eligibility(self):
+        """The two must never disagree about what counts: a None ECE with a
+        non-zero count, or a number with a zero count, is the defect."""
+        for label, items in (
+            ("none eligible", [_item(actual_outcome=None)]),
+            ("bool probability", [_item(estimated_probability=True)]),
+            ("nan outcome", [_item(actual_outcome=float("nan"))]),
+            ("inf estimate", [_item(estimated_probability=float("inf"))]),
+            ("all eligible", [_item(), _item()]),
+            ("mixed", [_item(), _item(actual_outcome=None)]),
+        ):
+            with self.subTest(case=label):
+                n = compute_ece_n(items)
+                value = compute_ece(items)
+                self.assertEqual(n == 0, value is None)
+
+    def test_slice_ships_ece_with_its_count(self):
+        items = [_item(), _item(actual_outcome=None), _item(actual_outcome=None)]
+        s = slice_model_metrics(items)
+        self.assertEqual(s["n"], 3)
+        self.assertEqual(s["ece_n"], 1)
+        self.assertIsNotNone(s["ece"])
+
+    def test_every_subset_metric_carries_a_count(self):
+        """``n`` is the slice size and is the denominator of none of these."""
+        s = slice_model_metrics([_item()])
+        for key in ("ece_n", "cost_n", "direction_correct_true",
+                    "direction_correct_false"):
+            self.assertIn(key, s)
+        self.assertIn("n", s["brier"])
+
+
+class TestReportVersionAndEvalSet(unittest.TestCase):
+    def test_report_carries_its_schema_version(self):
+        report = build_model_eval_report([_item()], [])
+        self.assertEqual(report["report_schema_version"], REPORT_SCHEMA_VERSION)
+        self.assertGreaterEqual(REPORT_SCHEMA_VERSION, 2)
+
+    def test_eval_set_key_is_absent_when_unpinned(self):
+        """Absent, not None: a consumer must not be able to read "no pinned
+        set" as "a pinned set that matched nothing"."""
+        report = build_model_eval_report([_item()], [])
+        self.assertNotIn("eval_set", report)
+
+    def test_eval_set_is_recorded_verbatim(self):
+        block = {"name": "baseline", "revision": "1", "matched": 1,
+                 "event_count": 1, "complete": True}
+        report = build_model_eval_report([_item()], [], eval_set=block)
+        self.assertEqual(report["eval_set"], block)
+
+    def test_eval_set_does_not_filter_items(self):
+        """The caller has already restricted items; filtering again here is how
+        two copies of one restriction drift apart."""
+        block = {"name": "baseline", "event_count": 99, "matched": 0,
+                 "missing_event_ids": ["nope"], "complete": False}
+        report = build_model_eval_report([_item(), _item()], [], eval_set=block)
+        self.assertEqual(report["overview"]["n"], 2)
 
 
 if __name__ == "__main__":

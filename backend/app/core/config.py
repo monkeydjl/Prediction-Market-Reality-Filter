@@ -1118,6 +1118,30 @@ class Settings:
     QUALITY_ALERT_MISSING_CALIBRATION_RATE_HIGH: float = float(os.getenv("QUALITY_ALERT_MISSING_CALIBRATION_RATE_HIGH", "0.40"))
     QUALITY_ALERT_REPORT_ERRORS_HIGH: int = int(os.getenv("QUALITY_ALERT_REPORT_ERRORS_HIGH", "1"))
 
+    # ── Model eval release gate (Q1) — 发布门槛 for scripts/model_eval_lab ──
+    # Read only by model_eval_gate_service, which only runs when the CLI is
+    # given --gate. Nothing here changes prediction, scheduling, or learning
+    # behaviour; the gate's whole output is a report block and an exit code.
+    # A missing measurement fails every threshold below (see that module).
+    MODEL_EVAL_GATE_MIN_SAMPLES: int = int(os.getenv("MODEL_EVAL_GATE_MIN_SAMPLES", "20"))
+    MODEL_EVAL_GATE_BRIER_MAX: float = float(os.getenv("MODEL_EVAL_GATE_BRIER_MAX", "0.25"))
+    # ECE is 0-100 probability points, matching compute_ece / calibration_deviation.
+    MODEL_EVAL_GATE_ECE_MAX: float = float(os.getenv("MODEL_EVAL_GATE_ECE_MAX", "15.0"))
+    MODEL_EVAL_GATE_DIRECTION_ACCURACY_MIN: float = float(
+        os.getenv("MODEL_EVAL_GATE_DIRECTION_ACCURACY_MIN", "0.55")
+    )
+    MODEL_EVAL_GATE_DEGRADED_RATE_MAX: float = float(
+        os.getenv("MODEL_EVAL_GATE_DEGRADED_RATE_MAX", "0.20")
+    )
+    MODEL_EVAL_GATE_REPORT_ERRORS_MAX: int = int(
+        os.getenv("MODEL_EVAL_GATE_REPORT_ERRORS_MAX", "0")
+    )
+    # OFF by default: an unpinned run is still gradeable, just not certifiable
+    # as a fixed set. Turn on where the gate guards a release.
+    MODEL_EVAL_GATE_REQUIRE_EVAL_SET: bool = _env_bool(
+        "MODEL_EVAL_GATE_REQUIRE_EVAL_SET", "false"
+    )
+
     # ── Domain reliability tracking (LATER #2) — source trust feedback loop ──
     DOMAIN_RELIABILITY_TRACKING_ENABLED: bool = _env_bool(
         "DOMAIN_RELIABILITY_TRACKING_ENABLED", "false"

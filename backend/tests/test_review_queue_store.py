@@ -210,25 +210,49 @@ class TestReviewQueueSla(unittest.TestCase):
     """
 
     @staticmethod
-    def _backdate(item_id: str, hours: float) -> None:
-        stamp = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
+    def _backdate(item_id: str, hours: float, base: datetime | None = None) -> None:
+        """Rewrite ``created_at`` to ``base - hours``, truncated to the second.
+
+        ``base`` exists so a whole batch can share one instant. Deriving ``now``
+        per call meant two rows given the *same* age still landed on different
+        timestamps whenever the enqueue loop straddled a second boundary, which
+        left the ordering tests asserting a tie that had silently not been set
+        up -- a real 1-in-7 failure rate, and the assertion was never about the
+        tie-break at all on those runs.
+        """
+        moment = (base if base is not None else datetime.now(timezone.utc))
+        stamp = (moment - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
         with sqlite_db.writing(sqlite_db.loop_db_path()) as conn:
             conn.execute(
                 "UPDATE review_queue_items SET created_at = ? WHERE item_id = ?",
                 (stamp, item_id),
             )
 
+    @staticmethod
+    def _created_at_values() -> list[str]:
+        """The raw stored timestamps, for tests that need to prove a tie exists."""
+        with sqlite_db.reading(sqlite_db.loop_db_path()) as conn:
+            return [
+                str(row[0]) for row in conn.execute(
+                    "SELECT created_at FROM review_queue_items"
+                ).fetchall()
+            ]
+
     def _queue(self, *specs):
-        """Enqueue ``(event_id, severity, age_hours)`` triples; return the ids."""
+        """Enqueue ``(event_id, severity, age_hours)`` triples; return the ids.
+
+        One ``base`` for the batch: two specs with the same age must produce
+        byte-identical ``created_at`` values, or the ties the ordering tests
+        exercise depend on where the wall clock happens to fall.
+        """
+        base = datetime.now(timezone.utc)
         ids = []
         for index, (event_id, severity, age) in enumerate(specs):
             item_id = rq.enqueue_item(
                 event_id=event_id, trigger=f"t{index}", severity=severity,
                 reason=f"r{index}", context={},
             )
-            self._backdate(item_id, age)
+            self._backdate(item_id, age, base)
             ids.append(item_id)
         return ids
 
@@ -262,6 +286,11 @@ class TestReviewQueueSla(unittest.TestCase):
         writes several rows with an identical timestamp."""
         with tempfile.TemporaryDirectory() as tmp, _db(tmp):
             ids = self._queue(*[(f"evt-{i}", "WARN", 5.0) for i in range(6)])
+            # Prove the premise before asserting on it. `created_at` is the
+            # first ORDER BY key, so if the six rows do not genuinely share one
+            # timestamp then nothing below exercises the item_id tie-break --
+            # it just re-checks timestamp ordering under a misleading name.
+            self.assertEqual(len(set(self._created_at_values())), 1)
             first = [item["item_id"] for item in rq.list_pending()]
             second = [item["item_id"] for item in rq.list_pending()]
             self.assertEqual(first, second)

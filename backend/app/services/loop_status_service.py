@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from app.memory import loop_run_store, review_queue_store
+from app.memory import event_ref_census, loop_run_store, review_queue_store
 from app.memory.event_market_link_store import list_pending
 from app.memory.event_store import list_all_events, list_resolved_events, store_bytes
 from app.memory.prediction_store import (
@@ -77,8 +77,18 @@ def loop_status(
             "pending_reviews": review_queue["pending_total"],
             "breached_reviews": review_queue["breached_total"],
             "orphan_predictions": orphan_count,
-            "dangling_predictions": dangling_refs["predictions"],
-            "dangling_links": dangling_refs["links"],
+            # E2: the two published keys are kept because the dashboard badge
+            # reads them by name, but they were never the whole picture --
+            # `simulated_trades`, `review_queue_items` and `decision_timeline`
+            # also carry an event_id and were unwatched, and the one genuinely
+            # stranded row in the live database sat in the first of those, so
+            # the badge read 0. `dangling_refs` is the honest total and
+            # `dangling_by_table` says where they are, since "3 broken
+            # references" is not actionable without knowing which store.
+            "dangling_predictions": dangling_refs.get("predictions", 0),
+            "dangling_links": dangling_refs.get("event_market_links", 0),
+            "dangling_refs": sum(dangling_refs.values()),
+            "dangling_by_table": dangling_refs,
             "calibration_n": calibration.get("n", 0),
         },
         "calibration": calibration,
@@ -155,27 +165,7 @@ def _dangling_event_refs(events: list[dict[str, Any]]) -> dict[str, int]:
         for entry in events
         if entry.get("event_id")
     }
-    return {
-        "predictions": _dangling_count("predictions", event_ids),
-        "links": _dangling_count("event_market_links", event_ids),
-    }
-
-
-def _dangling_count(table: str, event_ids: set[str]) -> int:
-    path = sqlite_db.loop_db_path()
-    try:
-        with reading(path) as conn:
-            rows = conn.execute(
-                f"""
-                SELECT DISTINCT event_id
-                FROM {table}
-                WHERE event_id IS NOT NULL AND event_id != ''
-                """
-            ).fetchall()
-    except Exception:
-        logger.warning("dangling count query failed for table=%s", table, exc_info=True)
-        return 0
-    return sum(1 for row in rows if str(row["event_id"]) not in event_ids)
+    return event_ref_census.dangling_counts(event_ids)
 
 
 def _orphan_prediction_count(events: list[dict[str, Any]]) -> int:

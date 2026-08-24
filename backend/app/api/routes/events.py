@@ -1475,9 +1475,32 @@ async def delete_event(
     event_id: str,
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
-    """Delete a single event from the store by its event_id."""
-    from app.memory.event_store import _store_path, _load_for_write
+    """Delete a single event from the store by its event_id.
+
+    Reports what the deletion strands (E2: no hard FK across JSON/SQLite). Every
+    loop-DB row keyed on this event_id survives -- SQLite cannot constrain a row
+    against a JSON file, and nothing prunes those tables afterwards
+    (``loop_db_maintenance`` is WAL truncation plus an integrity check). So the
+    delete leaves behind an open simulated trade that can never be closed, a
+    pending review item that sends a human to a 404, and a scored prediction that
+    still enters the Brier aggregate with no event to trace it to.
+
+    The rows are deliberately **not** removed. A scored prediction is a
+    calibration sample, and cascading the delete into them would silently shrink
+    the only measurement of whether the engine works -- the same reason E1
+    refused to let a TTL evict resolved records. Whether to keep or purge them is
+    an operator's call, so this route makes the consequence a number the caller
+    gets back and a warning in the log, rather than something that happens
+    invisibly.
+    """
+    from app.memory.event_ref_census import refs_for_event
+    from app.memory.event_store import _load_for_write, _store_path
     from app.utils.file_store import locked_file, write_json_atomic
+
+    # Counted before the delete: afterwards these rows are indistinguishable
+    # from ones stranded by an earlier delete, so the number would no longer be
+    # attributable to this call.
+    stranded = refs_for_event(event_id)
 
     path = _store_path()
     with locked_file(path):
@@ -1486,7 +1509,21 @@ async def delete_event(
             raise HTTPException(status_code=404, detail="Event not found")
         store.pop(event_id)
         write_json_atomic(path, store, indent=2)
-    return {"event_id": event_id, "message": "Deleted"}
+
+    if stranded:
+        logger.warning(
+            "Deleted event %s stranded %d loop-DB rows with no event to resolve "
+            "to: %s",
+            event_id,
+            sum(stranded.values()),
+            stranded,
+        )
+    return {
+        "event_id": event_id,
+        "message": "Deleted",
+        "stranded_refs": stranded,
+        "stranded_total": sum(stranded.values()),
+    }
 
 
 # ── Event title translation ────────────────────────────────────────

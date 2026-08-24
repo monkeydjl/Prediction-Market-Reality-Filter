@@ -16,9 +16,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.core.config import settings
+from app.memory import decision_timeline_store as timeline
+from app.memory import event_market_link_store as links
+from app.memory import event_ref_census
 from app.memory import event_store as store
 from app.memory import prediction_store as preds
 from app.memory import review_queue_store as rq
+from app.memory import simulated_trade_store as trades
 from app.services import loop_status_service
 from app.utils import sqlite_db
 
@@ -330,6 +334,138 @@ class EventStoreSizeTests(unittest.TestCase):
         self.assertEqual(
             loop_status_service.loop_status()["counts"]["resolved_events"], 2,
         )
+
+
+class DanglingRefCountTests(unittest.TestCase):
+    """E2: the ``引用异常`` badge summed two tables while six carried an event_id.
+
+    ``loop_status`` reports how many SQLite rows point at an event that no longer
+    exists in the JSON store — the only thing standing in for a foreign key that
+    cannot span a JSON file and a database. It watched ``predictions`` and
+    ``event_market_links`` only, so the one genuinely stranded row in the live
+    database (in ``simulated_trades``) was invisible and the badge read 0.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        base = Path(self.tmpdir.name)
+        self.db = str(base / "v2_loop.db")
+        self.patches = [
+            patch.object(sqlite_db, "loop_db_path", return_value=self.db),
+            # simulated_trade_store does `from ...sqlite_db import loop_db_path`,
+            # so it holds its own binding and the patch above does not reach it.
+            # Without this second patch its writes land in the real backend/
+            # v2_loop.db -- the per-module-binding trap, and here it would also
+            # make the assertions read zero against an untouched tmp database.
+            patch.object(trades, "loop_db_path", return_value=self.db),
+            patch.object(store, "_store_path", return_value=str(base / "event_store.json")),
+        ]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmpdir.cleanup()
+
+    def _strand(self, table, event_id):
+        """Write a real row referencing ``event_id`` through the owning store.
+
+        Deliberately through each store's public API rather than a hand-made
+        ``CREATE TABLE x (event_id TEXT)``: a stub table shadows the real schema
+        (``CREATE TABLE IF NOT EXISTS`` means the stub wins, and ``loop_status``
+        then cannot read ``predictions.status``), and a test built on stubs would
+        keep passing if a column were renamed under it.
+
+        The event is never saved to the JSON store, which is what makes the row
+        stranded — the same end state ``DELETE /events/{event_id}`` leaves.
+
+        Note ``predictions`` is not isolated: ``freeze_prediction`` seeds a
+        verified ``event_market_links`` row on first freeze, so stranding a
+        prediction strands a link too. That is production behaviour, and the
+        assertions below account for it rather than working around it.
+        """
+        record = _market_record(event_id)
+        if table == "predictions":
+            preds.freeze_prediction(record)
+        elif table == "event_market_links":
+            links.upsert_link(
+                event_id, contract_id=f"c-{event_id}", market_name="m",
+            )
+        elif table == "simulated_trades":
+            trades.open_trade(
+                event_id, "t", direction="YES", entry_prob=70.0, market_prob=50.0,
+            )
+        elif table == "review_queue_items":
+            rq.enqueue_item(
+                event_id=event_id, trigger="high_value_downgraded",
+                severity="WARN", reason="r", context={},
+            )
+        elif table == "decision_timeline":
+            timeline.record_snapshot(record)
+        else:  # pragma: no cover - a new table needs a seeding arm here
+            raise AssertionError(f"no seeding arm for {table}")
+
+    def test_a_stranded_trade_is_now_visible_in_the_total(self):
+        """The live defect, reproduced: the only broken reference in the real
+        database was an open simulated trade, and the badge read 0."""
+        store.save_events([_make_record("evt-live")])
+        self._strand("simulated_trades", "evt-gone")
+        counts = loop_status_service.loop_status()["counts"]
+        # The two published keys still describe their own tables ...
+        self.assertEqual(counts["dangling_predictions"], 0)
+        self.assertEqual(counts["dangling_links"], 0)
+        # ... and the total no longer agrees with them, which is the point.
+        self.assertEqual(counts["dangling_refs"], 1)
+        self.assertEqual(counts["dangling_by_table"]["simulated_trades"], 1)
+
+    def test_every_watched_table_contributes_to_the_total(self):
+        """One stranded reference per table, each pinned individually so a
+        dropped table name cannot be masked by another table's count."""
+        store.save_events([_make_record("evt-live")])
+        for table in event_ref_census.REFERENCING_TABLES:
+            if table == "event_market_links":
+                continue  # the predictions arm already strands one, see _strand
+            self._strand(table, f"gone-{table}")
+        counts = loop_status_service.loop_status()["counts"]
+        for table in event_ref_census.REFERENCING_TABLES:
+            self.assertEqual(counts["dangling_by_table"][table], 1, table)
+        self.assertEqual(
+            counts["dangling_refs"], len(event_ref_census.REFERENCING_TABLES),
+        )
+
+    def test_the_breakdown_names_every_watched_table(self):
+        """A bare total is not actionable — an operator needs the store."""
+        store.save_events([_make_record("evt-live")])
+        counts = loop_status_service.loop_status()["counts"]
+        self.assertEqual(
+            set(counts["dangling_by_table"]),
+            set(event_ref_census.REFERENCING_TABLES),
+        )
+
+    def test_the_two_published_keys_keep_their_meaning(self):
+        """The dashboard reads these by name; keying the census by table name
+        internally must not change what they report."""
+        store.save_events([_make_record("evt-live")])
+        self._strand("predictions", "p-gone")  # strands its own link as well
+        self._strand("event_market_links", "l-gone")
+        counts = loop_status_service.loop_status()["counts"]
+        self.assertEqual(counts["dangling_predictions"], 1)
+        self.assertEqual(counts["dangling_links"], 2)
+        self.assertEqual(counts["dangling_refs"], 3)
+
+    def test_a_store_whose_rows_all_resolve_reports_zero(self):
+        """The guard against a census that counts every row as broken."""
+        record = _market_record("evt-live")
+        store.save_event(record)
+        preds.freeze_prediction(record)
+        timeline.record_snapshot(record)
+        trades.open_trade(
+            "evt-live", "t", direction="YES", entry_prob=70.0, market_prob=50.0,
+        )
+        counts = loop_status_service.loop_status()["counts"]
+        self.assertEqual(counts["dangling_refs"], 0)
+        self.assertEqual(sum(counts["dangling_by_table"].values()), 0)
 
 
 class LoopStatusRouteOffloadTests(unittest.TestCase):

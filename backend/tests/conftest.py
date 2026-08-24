@@ -277,8 +277,12 @@ _RESET_EXEMPT: dict[str, str] = {
     # Import-time registries.  The migration decorators populate these once at
     # import; clearing one deletes the schema history, and the next store call
     # would then create a table with no migrations applied.
+    #
+    # A store whose _MIGRATIONS is written with entries (rather than filled at
+    # import) is a constant table by the census discriminator and leaves the
+    # census population entirely -- so its row here must be DELETED, not kept.
+    # domain_reliability_store left this list that way when Q3 added v1->v2.
     "app.memory.decision_timeline_store._MIGRATIONS": "import-time migration registry",
-    "app.memory.domain_reliability_store._MIGRATIONS": "import-time migration registry",
     "app.memory.event_market_link_store._MIGRATIONS": "import-time migration registry",
     "app.memory.llm_daily_spend_store._MIGRATIONS": "import-time migration registry",
     "app.memory.loop_run_store._MIGRATIONS": "import-time migration registry",
@@ -366,3 +370,35 @@ def clean_env(monkeypatch):
             ...
     """
     return monkeypatch
+
+
+def fake_domain_reliability_stat(**columns) -> dict:
+    """One ``domain_reliability_store.get_stats()`` row, built by projection.
+
+    Lives here rather than in a test module because two files need it and a
+    hand-written copy of this shape has already rotted once: five literals in
+    ``test_domain_reliability_endpoint.py`` plus two in
+    ``test_event_intelligence_service.py`` all went stale the moment the store
+    grew ``brier_sum`` / ``brier_count``, and the consumers failed with a
+    KeyError on data no real caller could produce.
+
+    Callers pass fake **column** values; the store's own ``_row_to_stat`` does
+    the projection, so the returned shape is correct by construction and a
+    column the projector starts reading that this default row does not supply
+    fails loudly instead of yielding a quietly thinner row.
+    """
+    from app.memory.domain_reliability_store import _row_to_stat
+
+    row = {
+        "domain": "reuters.com",
+        "category": "_all",
+        "sample_count": 0,
+        "correct_count": 0,
+        "credibility_sum": 0.0,
+        "brier_sum": 0.0,
+        "brier_count": 0,
+        "first_seen": "2026-01-01T00:00:00Z",
+        "last_updated": "2026-07-01T00:00:00Z",
+    }
+    row.update(columns)
+    return _row_to_stat(row)

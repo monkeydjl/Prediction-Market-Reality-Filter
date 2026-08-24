@@ -10,6 +10,7 @@ functions, lazy schema init, sqlite_db.writing/reading.
 """
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any
 
@@ -21,6 +22,8 @@ from app.services.domain_reliability_service import (
 from app.utils import sqlite_db
 from app.utils.helpers import utc_now
 
+logger = logging.getLogger(__name__)
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS domain_reliability (
     domain           TEXT NOT NULL,
@@ -29,6 +32,8 @@ CREATE TABLE IF NOT EXISTS domain_reliability (
     correct_count    INTEGER NOT NULL DEFAULT 0,
     wrong_count      INTEGER NOT NULL DEFAULT 0,
     credibility_sum  REAL NOT NULL DEFAULT 0.0,
+    brier_sum        REAL NOT NULL DEFAULT 0.0,
+    brier_count      INTEGER NOT NULL DEFAULT 0,
     first_seen       TEXT NOT NULL,
     last_updated     TEXT NOT NULL,
     PRIMARY KEY (domain, category)
@@ -45,8 +50,15 @@ CREATE TABLE IF NOT EXISTS domain_reliability_ledger (
 );
 """
 
-_SCHEMA_VERSION = 1
-_MIGRATIONS: dict[str, str] = {}
+_SCHEMA_VERSION = 2
+# v1 -> v2 (Q3): the aggregate row carried only the 0/1 direction hit rate, so
+# the prior fed into build_source_reliability could not tell a confident correct
+# call from a lucky coin flip. An existing v1 DB gets the columns at 0/0, which
+# reports honestly as "no gradeable sample yet" rather than as a perfect Brier.
+_MIGRATIONS: dict[str, str] = {
+    "brier_sum": "REAL NOT NULL DEFAULT 0.0",
+    "brier_count": "INTEGER NOT NULL DEFAULT 0",
+}
 
 _INITIALIZED: set[str] = set()
 _INIT_GUARD = threading.Lock()
@@ -75,6 +87,8 @@ def _row_to_stat(row: Any) -> dict[str, Any]:
     sample = row["sample_count"]
     correct = row["correct_count"]
     credibility_sum = row["credibility_sum"]
+    brier_sum = row["brier_sum"]
+    brier_count = row["brier_count"]
     wrong = sample - correct
     min_samples = settings.DOMAIN_RELIABILITY_CONFIDENCE_MIN_SAMPLES
     return {
@@ -86,10 +100,49 @@ def _row_to_stat(row: Any) -> dict[str, Any]:
         "credibility_sum": credibility_sum,
         "reliability_score": (correct / sample) if sample > 0 else None,
         "credibility_avg": (credibility_sum / sample) if sample > 0 else None,
+        # Brier is averaged over brier_count, never over sample_count: an
+        # attribution whose event was never frozen has no gradeable estimate,
+        # and dividing by the wider count would report it as a perfect 0.0.
+        "brier_sum": brier_sum,
+        "brier_count": brier_count,
+        "brier_avg": (brier_sum / brier_count) if brier_count > 0 else None,
+        "brier_skill_score": (
+            1.0 - (brier_sum / brier_count) if brier_count > 0 else None
+        ),
         "insufficient_samples": sample < min_samples,
         "first_seen": row["first_seen"],
         "last_updated": row["last_updated"],
     }
+
+
+def _committed_probability(event_id: str) -> float | None:
+    """The 0-100 estimate frozen for this event before its outcome was known.
+
+    Reads ``predictions.ai_probability``, which ``freeze_prediction`` writes once
+    at first sight and never overwrites -- unlike ``record["ai_probability"]``,
+    which every re-scan rewrites. Returns None when the event was never frozen
+    or the stored value is unusable; callers must then leave ``brier`` unset
+    rather than fall back to the record's latest estimate.
+
+    Best-effort: the loop DB is a different file from this store's, and a domain
+    reliability write must not fail because that file is unavailable.
+    """
+    try:
+        from app.memory.prediction_store import get_prediction
+
+        row = get_prediction(event_id)
+    except Exception:
+        logger.warning(
+            "committed probability lookup failed for %s; recording the "
+            "attribution without a Brier", event_id, exc_info=True,
+        )
+        return None
+    if not row:
+        return None
+    value = row.get("ai_probability")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
 
 
 def apply_resolution(record: dict[str, Any]) -> None:
@@ -99,8 +152,14 @@ def apply_resolution(record: dict[str, Any]) -> None:
     the real category row and the domain _all row. Uses
     domain_reliability_ledger to skip already-processed
     event/domain/category attributions.
+
+    The committed probability is looked up ONCE for the whole record, before the
+    attribution loop: one event yields one row per (domain, category) pair, so a
+    lookup inside the loop would re-read the same prediction row for every
+    domain that appeared on the event.
     """
-    attributions = attribute_evidence(record)
+    committed = _committed_probability(str(record.get("event_id") or ""))
+    attributions = attribute_evidence(record, committed_probability=committed)
     if not attributions:
         return
 
@@ -116,6 +175,9 @@ def apply_resolution(record: dict[str, Any]) -> None:
             correct = 1 if attr["correct"] else 0
             wrong = 0 if correct else 1
             credibility = attr.get("credibility")
+            brier = attr.get("brier")
+            brier_add = float(brier) if brier is not None else 0.0
+            brier_n = 1 if brier is not None else 0
 
             # Idempotency check against the original attribution key only.
             # If (event_id, domain, category) is already in the ledger, skip
@@ -141,18 +203,21 @@ def apply_resolution(record: dict[str, Any]) -> None:
                 conn.execute(
                     "INSERT INTO domain_reliability "
                     "(domain, category, sample_count, correct_count, "
-                    "wrong_count, credibility_sum, first_seen, last_updated) "
-                    "VALUES (?, ?, 1, ?, ?, ?, ?, ?) "
+                    "wrong_count, credibility_sum, brier_sum, brier_count, "
+                    "first_seen, last_updated) "
+                    "VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(domain, category) DO UPDATE SET "
                     "sample_count = sample_count + 1, "
                     "correct_count = correct_count + ?, "
                     "wrong_count = wrong_count + ?, "
                     "credibility_sum = credibility_sum + ?, "
+                    "brier_sum = brier_sum + ?, "
+                    "brier_count = brier_count + ?, "
                     "last_updated = ?",
                     (domain, cat, correct,
-                     wrong, credibility or 0.0, now, now,
+                     wrong, credibility or 0.0, brier_add, brier_n, now, now,
                      correct, wrong,
-                     credibility or 0.0, now),
+                     credibility or 0.0, brier_add, brier_n, now),
                 )
 
 
@@ -160,7 +225,14 @@ def rebuild_from_records(records: list[dict[str, Any]]) -> None:
     """Clear and rebuild all aggregate and ledger rows from records."""
     all_attributions: list[dict[str, Any]] = []
     for record in records:
-        all_attributions.extend(attribute_evidence(record))
+        all_attributions.extend(
+            attribute_evidence(
+                record,
+                committed_probability=_committed_probability(
+                    str(record.get("event_id") or "")
+                ),
+            )
+        )
 
     stats = compute_reliability_stats(all_attributions)
 
@@ -189,19 +261,24 @@ def rebuild_from_records(records: list[dict[str, Any]]) -> None:
                         "correct_count = correct_count + ?, "
                         "wrong_count = wrong_count + ?, "
                         "credibility_sum = credibility_sum + ?, "
+                        "brier_sum = brier_sum + ?, "
+                        "brier_count = brier_count + ?, "
                         "last_updated = ? "
                         "WHERE domain = ? AND category = ?",
                         (s["sample_count"], s["correct_count"], s["wrong_count"],
-                         s["credibility_sum"], now, domain, cat),
+                         s["credibility_sum"], s["brier_sum"], s["brier_count"],
+                         now, domain, cat),
                     )
                 else:
                     conn.execute(
                         "INSERT INTO domain_reliability "
                         "(domain, category, sample_count, correct_count, "
-                        "wrong_count, credibility_sum, first_seen, last_updated) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        "wrong_count, credibility_sum, brier_sum, brier_count, "
+                        "first_seen, last_updated) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (domain, cat, s["sample_count"], s["correct_count"],
-                         s["wrong_count"], s["credibility_sum"], now, now),
+                         s["wrong_count"], s["credibility_sum"], s["brier_sum"],
+                         s["brier_count"], now, now),
                     )
 
         # Rebuild ledger

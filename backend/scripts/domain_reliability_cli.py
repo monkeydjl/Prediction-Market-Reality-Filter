@@ -43,14 +43,24 @@ def _render_text(stats: list[dict]) -> str:
     lines.append("")
     lines.append(
         f"{'Domain':<20} {'Category':<20} {'Samples':>7} {'Correct':>7} "
-        f"{'Wrong':>5} {'Reliability':>11} {'Avg Cred':>8}"
+        f"{'Wrong':>5} {'Reliability':>11} {'Avg Cred':>8} {'Graded':>6} "
+        f"{'Brier':>6} {'Skill':>7}"
     )
     for s in sorted(stats, key=lambda x: (x["domain"], x["category"])):
         score = f"{s['reliability_score']:.1%}" if s["reliability_score"] is not None else "N/A"
         cred = f"{s['credibility_avg']:.2f}" if s["credibility_avg"] is not None else "N/A"
+        # "Graded" is brier_count, not sample_count: an event that was never
+        # frozen has no committed estimate to score, so it counts toward
+        # reliability and not toward Brier. Showing both keeps the gap visible.
+        brier = f"{s['brier_avg']:.3f}" if s["brier_avg"] is not None else "N/A"
+        skill = (
+            f"{s['brier_skill_score']:.3f}"
+            if s["brier_skill_score"] is not None else "N/A"
+        )
         lines.append(
             f"{s['domain']:<20} {s['category']:<20} {s['sample_count']:>7} "
-            f"{s['correct_count']:>7} {s['wrong_count']:>5} {score:>11} {cred:>8}"
+            f"{s['correct_count']:>7} {s['wrong_count']:>5} {score:>11} {cred:>8} "
+            f"{s['brier_count']:>6} {brier:>6} {skill:>7}"
         )
     lines.append("")
     total_samples = sum(s["sample_count"] for s in stats)
@@ -58,10 +68,25 @@ def _render_text(stats: list[dict]) -> str:
     n_rel = sum(1 for s in stats if s["reliability_score"] is not None)
     avg_str = f"{avg_rel / n_rel:.1%}" if n_rel > 0 else "N/A"
     lines.append(f"Summary: {len(domains)} domains, {total_samples} total samples, {avg_str} avg reliability.")
+    # Sample-weighted, not row-averaged: a domain with 1 graded sample must not
+    # count as much as one with 200.
+    graded = sum(s["brier_count"] for s in stats)
+    brier_total = sum(s["brier_sum"] for s in stats)
+    if graded > 0:
+        lines.append(
+            f"Brier: {graded} graded samples of {total_samples}, "
+            f"mean {brier_total / graded:.4f}, skill {1 - brier_total / graded:.4f}."
+        )
+    else:
+        lines.append(
+            f"Brier: 0 graded samples of {total_samples} "
+            "(no resolved event had a frozen estimate to score)."
+        )
     return "\n".join(lines)
 
 
 def _summarize_records(records: list[dict]) -> dict[str, int]:
+    from app.memory.domain_reliability_store import _committed_probability
     from app.services.domain_reliability_service import (
         attribute_evidence,
         compute_reliability_stats,
@@ -70,7 +95,15 @@ def _summarize_records(records: list[dict]) -> dict[str, int]:
     attributions: list[dict] = []
     valid_events = 0
     for record in records:
-        attrs = attribute_evidence(record)
+        # Same committed-probability lookup rebuild_from_records does, so a dry
+        # run reports the gradeable share the real rebuild would write rather
+        # than implying every attribution carries a Brier.
+        attrs = attribute_evidence(
+            record,
+            committed_probability=_committed_probability(
+                str(record.get("event_id") or "")
+            ),
+        )
         if attrs:
             valid_events += 1
             attributions.extend(attrs)
@@ -82,6 +115,8 @@ def _summarize_records(records: list[dict]) -> dict[str, int]:
         "valid_events": valid_events,
         "rows": len(stats) + len(domains),
         "domains": len(domains),
+        "attributions": len(attributions),
+        "graded_attributions": sum(s["brier_count"] for s in stats.values()),
     }
 
 
@@ -96,6 +131,10 @@ def _render_rebuild_summary(summary: dict[str, int], *, wrote: bool) -> str:
         (
             f"{action} {summary['rows']} domain/category rows "
             f"({summary['domains']} domains)."
+        ),
+        (
+            f"{summary['graded_attributions']} of {summary['attributions']} "
+            "attributions have a frozen estimate to score (Brier)."
         ),
         "Done." if wrote else "Dry run.",
     ])

@@ -1139,6 +1139,16 @@ class Settings:
     DOMAIN_RELIABILITY_SHRINKAGE_PSEUDOCOUNT: int = int(
         os.getenv("DOMAIN_RELIABILITY_SHRINKAGE_PSEUDOCOUNT", "5")
     )
+    # Q3: which historical loss the per-domain prior is built from.
+    # "hit_rate" (default) keeps the pre-Q3 0/1 direction accuracy; "brier"
+    # uses shrunk 1-mean(brier) over the gradeable subset, so the prior is
+    # confidence-weighted. The two share a 0-1 scale but not a distribution
+    # (a coin flip is 0.75 under Brier, 0.5 under hit rate), so switching
+    # raises every stats-backed prior -- hence opt-in. Anything other than
+    # "brier" is read as "hit_rate".
+    DOMAIN_RELIABILITY_PRIOR_METRIC: str = os.getenv(
+        "DOMAIN_RELIABILITY_PRIOR_METRIC", "hit_rate"
+    ).strip().lower()
 
     # Prediction Kernel feature flag (default OFF). When false, the
     # /api/predictions/* routes return 503 Service Unavailable (except

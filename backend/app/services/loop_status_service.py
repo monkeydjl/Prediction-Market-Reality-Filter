@@ -5,7 +5,7 @@ from typing import Any
 
 from app.memory import loop_run_store, review_queue_store
 from app.memory.event_market_link_store import list_pending
-from app.memory.event_store import list_all_events, list_resolved_events
+from app.memory.event_store import list_all_events, list_resolved_events, store_bytes
 from app.memory.prediction_store import (
     calibration_summary,
     list_open_opportunities,
@@ -23,7 +23,11 @@ def loop_status(
     include_run_details: bool = False,
 ) -> dict[str, Any]:
     events = list_all_events()
-    resolved = list_resolved_events()
+    # Filter the load above rather than re-reading: list_resolved_events()
+    # re-read and re-parsed the entire store file for a number derived from
+    # `events`, so /api/health -- polled constantly by container healthchecks
+    # and uptime monitors -- paid two full whole-file passes per poll (E1).
+    resolved = list_resolved_events(events)
     prediction_counts = _prediction_counts()
     dangling_refs = _dangling_event_refs(events)
     orphan_count = _orphan_prediction_count(events)
@@ -33,6 +37,15 @@ def loop_status(
         "scheduler": {"running": scheduler_running},
         "storage": {
             "loop_db_schema_versions": sqlite_db.schema_versions(),
+            # E1 (scale debt): every mutating event_store call rewrites this
+            # whole file, so one write costs roughly these many bytes of
+            # serialize + replace. Reported next to the record count so an
+            # operator can see the two grow together and judge when the JSON
+            # store has to become a real database -- instead of first noticing
+            # it as a slow dashboard. len(events) reuses the load above rather
+            # than re-reading the file for a number already in hand.
+            "event_store_bytes": store_bytes(),
+            "event_store_records": len(events),
         },
         "runs": {
             "event_discover": _visible_run(

@@ -280,6 +280,72 @@ def set_tracking(
         return updated
 
 
+def set_tracking_bulk(
+    event_ids: list[str],
+    *,
+    status: str | None = None,
+    priority: str | None = None,
+) -> list[str]:
+    """Apply one tracking update to many events in a single locked write.
+
+    Stands to ``set_tracking`` as ``save_events`` stands to ``save_event``: the
+    same read-modify-write, once for the whole batch instead of once per event.
+    That distinction is the whole point (E1, scale debt) — every mutating call
+    rewrites the entire store file, so a caller that loops over ``set_tracking``
+    pays the full file cost per event AND holds the cross-process lock for the
+    duration, blocking the scheduler and every event read behind it.
+
+    Returns the event_ids actually updated, in the order given. An unknown id is
+    skipped (mirroring ``set_tracking`` returning None), and so is a record the
+    update would make invalid — one bad record must not abort the rest of the
+    batch, exactly as in ``save_events``. Callers must count the returned ids
+    rather than the ids they passed in, or they would report skipped work as
+    done.
+
+    Nothing is written when no id matched, so a no-op batch does not rewrite the
+    file for nothing.
+    """
+    if not event_ids:
+        return []
+    if status is None and priority is None:
+        return []
+    path = _store_path()
+    updated_ids: list[str] = []
+    with locked_file(path):
+        store = _load_for_write(path)
+        now = utc_now()
+        for event_id in event_ids:
+            entry = store.get(event_id)
+            if entry is None:
+                continue
+            record = entry.get("record") or {}
+            tracking = dict(record.get("tracking") or {})
+            if status is not None:
+                tracking["status"] = status
+            if priority is not None:
+                tracking["priority"] = priority
+            candidate = dict(record)
+            candidate["tracking"] = tracking
+            try:
+                EventRecord.model_validate(candidate)
+            except Exception as exc:
+                logger.warning(
+                    "Skipping invalid tracking update in batch [event_id=%s]: %s",
+                    event_id, exc,
+                )
+                continue
+            store[event_id] = {
+                "event_id": event_id,
+                "first_seen": entry.get("first_seen", now),
+                "last_updated": now,
+                "record": candidate,
+            }
+            updated_ids.append(event_id)
+        if updated_ids:
+            write_json_atomic(path, store, indent=2)
+    return updated_ids
+
+
 def list_all_events() -> list[dict[str, Any]]:
     """Return every stored entry, unranked and unbounded.
 
@@ -288,6 +354,27 @@ def list_all_events() -> list[dict[str, Any]]:
     low-value-score events. Order is the store's insertion/upsert order.
     """
     return list(_load_unlocked(_store_path()).values())
+
+
+def store_bytes() -> int:
+    """Size of the durable store file on disk, in bytes.
+
+    E1 (scale debt): every mutating call rewrites the whole file, so the cost of
+    one write scales with this number. Exposing it means the point at which the
+    JSON store has to become a real database is a reading an operator can watch,
+    rather than something first felt as a slow dashboard.
+
+    Bytes only, no record count: every caller that wants the count already holds
+    the loaded store (``loop_status`` has ``list_all_events()``, the metrics
+    refresh counts during its own walk), and returning a count here would make
+    each of them re-read and re-parse the whole file for a number they have in
+    hand -- the very amplification this reading exists to expose. A missing file
+    reports 0, since a fresh deploy has no store yet.
+    """
+    try:
+        return os.path.getsize(_store_path())
+    except OSError:
+        return 0
 
 
 def auto_archive_expired(events: list[dict[str, Any]] | None = None) -> int:
@@ -323,6 +410,7 @@ def auto_archive_expired(events: list[dict[str, Any]] | None = None) -> int:
         return 0
 
     path = _store_path()
+    archived: list[str] = []
     with locked_file(path):
         store = _load_for_write(path)
         now = utc_now()
@@ -338,14 +426,21 @@ def auto_archive_expired(events: list[dict[str, Any]] | None = None) -> int:
             record.setdefault("tracking", {})["status"] = "archived"
             stored["last_updated"] = now
             store[event_id] = stored
+            archived.append(event_id)
         write_json_atomic(path, store, indent=2)
 
     logger = __import__("logging").getLogger(__name__)
-    logger.info("Auto-archived %d events with expired source markets", len(to_archive))
-    return len(to_archive)
+    # Count what was written, not what was requested. `events` is scanned before
+    # the lock is taken, so an id deleted in that window (DELETE /events/{id})
+    # hits the `stored is None` skip above; reporting len(to_archive) would
+    # credit the scheduler run with archiving a record that no longer exists.
+    logger.info("Auto-archived %d events with expired source markets", len(archived))
+    return len(archived)
 
 
-def list_resolved_events() -> list[dict[str, Any]]:
+def list_resolved_events(
+    events: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """Return every stored entry that has been genuinely resolved.
 
     Unlike list_events, this is unranked and unbounded: it returns the full set
@@ -356,10 +451,18 @@ def list_resolved_events() -> list[dict[str, Any]]:
     (e.g. "invalid", written when a verified event->market link diverges) records
     that the event was settled but excludes it from calibration, so a wrong-link
     settlement never enters the Brier aggregate.
+
+    Accepts an optional pre-loaded event list (e.g. from list_all_events) to
+    avoid a duplicate whole-file read, the same way auto_archive_expired does.
+    A caller that already holds the store -- loop_status, which backs the
+    /api/health poll -- otherwise pays a second full read and parse of the
+    entire file just to count these (E1: scale debt). The predicate stays here
+    so it cannot drift from the one the calibration aggregate is built on.
     """
-    store = _load_unlocked(_store_path())
+    if events is None:
+        events = list_all_events()
     return [
-        entry for entry in store.values()
+        entry for entry in events
         if (outcome := (entry.get("record") or {}).get("outcome")) is not None
         and outcome.get("status", "resolved") == "resolved"
     ]
@@ -598,7 +701,50 @@ def list_events(
     exclude_expired: bool = True,
     resolved_only: bool = False,
 ) -> list[dict[str, Any]]:
-    """Return stored entries filtered and sorted for the dashboard table."""
+    """Return stored entries filtered and sorted for the dashboard table.
+
+    Delegates to ``list_events_page`` and drops the total, so the page a caller
+    who does not need the count gets is produced by the same one ranking
+    implementation -- rather than a second copy that could drift from it.
+    """
+    page, _total = list_events_page(
+        limit,
+        offset,
+        query=query,
+        status=status,
+        category=category,
+        sort=sort,
+        exclude_expired=exclude_expired,
+        resolved_only=resolved_only,
+    )
+    return page
+
+
+def list_events_page(
+    limit: int = 50,
+    offset: int = 0,
+    *,
+    query: str = "",
+    status: str = "all",
+    category: str = "all",
+    sort: str = "value",
+    exclude_expired: bool = True,
+    resolved_only: bool = False,
+) -> tuple[list[dict[str, Any]], int]:
+    """Return one page of filtered entries AND how many matched, from one read.
+
+    ``list_events`` + ``count_events`` compute the identical filtered ranking
+    twice, from two separate reads of the whole store file. Beyond doubling the
+    cost of the dashboard's busiest endpoint, the two reads happen at two
+    different instants: a write landing between them (the scheduler's
+    save_events, auto_archive_expired, another operator's set_tracking) makes
+    the reported total describe a store the returned page did not come from.
+    The dashboard sizes its pager off that total, so the mismatch can bounce a
+    reader to a "last page" computed from a store it never saw.
+
+    One pass, one instant: the page is a slice of the same ranking the count is
+    the length of.
+    """
     ranked = _filtered_ranked_events(
         query=query,
         status=status,
@@ -607,4 +753,5 @@ def list_events(
         exclude_expired=exclude_expired,
         resolved_only=resolved_only,
     )
-    return [_with_category(entry) for entry in ranked[offset:offset + limit]]
+    page = [_with_category(entry) for entry in ranked[offset:offset + limit]]
+    return page, len(ranked)

@@ -240,6 +240,98 @@ class ReviewQueueCountsTests(unittest.TestCase):
         self.assertEqual(set(fallback), set(real))
 
 
+class EventStoreSizeTests(unittest.TestCase):
+    """E1: the JSON store's size had no reading anywhere.
+
+    Every mutating ``event_store`` call rewrites the whole file — 237 ms for the
+    live 3.455 MB store, with the cross-process lock held throughout — so the
+    day the format stops being viable would first have been felt as a slow
+    dashboard. ``storage`` now carries the file size and the record count so an
+    operator can watch them grow together.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        base = Path(self.tmpdir.name)
+        self.store_path = str(base / "event_store.json")
+        self.patches = [
+            patch.object(sqlite_db, "loop_db_path", return_value=str(base / "v2_loop.db")),
+            patch.object(store, "_store_path", return_value=self.store_path),
+        ]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmpdir.cleanup()
+
+    def test_status_reports_the_event_store_size_on_disk(self):
+        store.save_events([_make_record(f"size-{i}") for i in range(4)])
+        storage = loop_status_service.loop_status()["storage"]
+        self.assertEqual(storage["event_store_bytes"], Path(self.store_path).stat().st_size)
+        self.assertEqual(storage["event_store_records"], 4)
+
+    def test_a_fresh_deploy_with_no_store_file_reports_zero(self):
+        """The status endpoint backs /api/health; raising here would take the
+        container healthcheck down on first boot."""
+        self.assertFalse(Path(self.store_path).exists())
+        storage = loop_status_service.loop_status()["storage"]
+        self.assertEqual(storage["event_store_bytes"], 0)
+        self.assertEqual(storage["event_store_records"], 0)
+
+    def test_the_store_size_reading_adds_no_extra_whole_file_pass(self):
+        """loop_status already loads the store for its counts. A size reading
+        that re-read and re-parsed the file would double the cost of the
+        endpoint container healthchecks poll — the amplification it exists to
+        expose. The same pass now also serves ``resolved``, which used to be a
+        second full read of its own."""
+        store.save_events([_make_record(f"size-{i}") for i in range(3)])
+
+        reads = []
+        real_read = store.read_json
+
+        def counting(path, fallback):
+            reads.append(path)
+            return real_read(path, fallback)
+
+        with patch.object(store, "read_json", counting):
+            payload = loop_status_service.loop_status()
+
+        self.assertEqual(payload["storage"]["event_store_records"], 3)
+        self.assertEqual(
+            len(reads), 1,
+            f"loop_status parsed the event store {len(reads)} times; both the "
+            "size reading and the resolved count must reuse the one load",
+        )
+
+    def test_resolved_count_is_the_same_whether_the_list_is_passed_or_read(self):
+        """The pre-loaded path must not have its own resolved predicate: an
+        "invalid" outcome is settled but uncalibrated, and a copy of the rule
+        that forgot that would quietly change what enters the Brier aggregate."""
+        outcome = {
+            "status": "resolved", "actual_outcome": 100.0, "confidence": 0.9,
+            "resolved_at": "2026-01-01T00:00:00+00:00", "source": "manual",
+        }
+        invalid = dict(outcome, status="invalid")
+        store.save_events([_make_record(f"res-{i}") for i in range(4)])
+        store.resolve_event("res-0", outcome)
+        store.resolve_event("res-1", outcome)
+        store.resolve_event("res-2", invalid)
+
+        read_itself = store.list_resolved_events()
+        passed_in = store.list_resolved_events(store.list_all_events())
+
+        self.assertEqual(
+            [e["event_id"] for e in read_itself],
+            [e["event_id"] for e in passed_in],
+        )
+        self.assertEqual({e["event_id"] for e in passed_in}, {"res-0", "res-1"})
+        self.assertEqual(
+            loop_status_service.loop_status()["counts"]["resolved_events"], 2,
+        )
+
+
 class LoopStatusRouteOffloadTests(unittest.TestCase):
     """/api/health must not run its status scan on the event loop.
 

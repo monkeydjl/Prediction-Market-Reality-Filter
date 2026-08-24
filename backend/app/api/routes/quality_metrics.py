@@ -70,7 +70,9 @@ async def quality_metrics_summary(
     timeframe = timeframe if timeframe in ("24h", "7d", "all") else "24h"
 
     events = list_all_events()
-    resolved = list_resolved_events()
+    # Filter the load above rather than re-reading the whole store file for a
+    # subset of what is already in hand (E1: scale debt).
+    resolved = list_resolved_events(events)
 
     direction_dist: dict[str, int] = {"YES": 0, "NO": 0, "WAIT": 0, "AVOID": 0}
     consensus_dist: dict[str, int] = {"none": 0, "low": 0, "medium": 0, "high": 0}

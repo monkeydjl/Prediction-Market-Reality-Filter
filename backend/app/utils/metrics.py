@@ -197,6 +197,24 @@ FINAL_DIRECTION = Gauge(
 
 
 # ---------------------------------------------------------------------------
+# Event store size (E1: scale debt)
+# ---------------------------------------------------------------------------
+
+EVENT_STORE_BYTES = Gauge(
+    "pmrf_event_store_bytes",
+    "Size of event_store.json on disk. Every mutating call rewrites the whole "
+    "file, so one write costs roughly this many bytes of serialize + fsync; "
+    "watch this to see when the JSON store has to become a real database.",
+)
+
+EVENT_STORE_RECORDS = Gauge(
+    "pmrf_event_store_records",
+    "Number of event records in event_store.json. Nothing removes a record, so "
+    "this only grows.",
+)
+
+
+# ---------------------------------------------------------------------------
 # Build info
 # ---------------------------------------------------------------------------
 
@@ -243,15 +261,24 @@ def refresh_aggregate_gauges() -> None:
 
 
 def _refresh_event_store_gauges() -> None:
-    """Walk event_store and update direction + consensus gauges."""
-    from app.memory.event_store import list_all_events
+    """Walk event_store and update direction + consensus gauges.
+
+    Also reports the store's size on disk (E1: every mutating call rewrites the
+    whole file, so one write costs roughly that many bytes). The record count
+    comes from the one walk below rather than from the store: asking it would
+    re-read and re-parse the whole file for a number this function already has
+    in hand.
+    """
+    from app.memory.event_store import list_all_events, store_bytes
 
     direction_counts: dict[str, int] = {"YES": 0, "NO": 0, "WAIT": 0, "AVOID": 0}
     consensus_counts: dict[str, int] = {"none": 0, "low": 0, "medium": 0, "high": 0}
     other_direction = 0
     other_consensus = 0
 
+    records = 0
     for entry in list_all_events():
+        records += 1
         record = entry.get("record") or {}
         final_dir = record.get("final_displayed_direction")
         if isinstance(final_dir, str) and final_dir in direction_counts:
@@ -276,6 +303,11 @@ def _refresh_event_store_gauges() -> None:
         CONSENSUS_DISTRIBUTION.labels(level=level).set(count)
     if other_consensus:
         CONSENSUS_DISTRIBUTION.labels(level="other").set(other_consensus)
+
+    EVENT_STORE_RECORDS.set(records)
+    # store_bytes() reports 0 for a missing file (fresh deploy). Zero is the
+    # honest reading; leaving the gauge unset would look like the scrape failed.
+    EVENT_STORE_BYTES.set(store_bytes())
 
 
 def _refresh_scheduler_gauges() -> None:

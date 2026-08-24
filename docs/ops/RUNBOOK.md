@@ -238,6 +238,8 @@ Scrape `GET /metrics` (Prometheus text format). Core series include:
 | `pmrf_overlay_latency_ms_*` | Overlay build latency histogram |
 | `pmrf_llm_token_cost_total` / `pmrf_llm_token_usage_total` | LLM cost / tokens |
 | `pmrf_decision_quality_downgrade_total{reason}` | Decision quality demotions |
+| `pmrf_event_store_bytes` | Size of `event_store.json` on disk (E1) |
+| `pmrf_event_store_records` | Record count in `event_store.json` (E1) |
 
 JSON companions (same data, operator-friendly):
 
@@ -245,6 +247,44 @@ JSON companions (same data, operator-friendly):
 - `GET /api/quality-metrics/drift` — always computes; dispatch is separate
 - `GET /api/quality-metrics/alerts`
 - `GET /api/quality-metrics/report`
+
+### Event store size — when to stop using JSON (E1)
+
+`event_store.json` is a single JSON file that **every mutating call rewrites in
+full**, under an exclusive cross-process lock. So its size *is* the write cost.
+Watch it in two places:
+
+- Prometheus: `pmrf_event_store_bytes` and `pmrf_event_store_records`
+- JSON: `storage.event_store_bytes` / `storage.event_store_records` on
+  `GET /api/health` and `GET /api/events/loop/status`
+
+Reference measurement, 2026-08-24, on a 3.455 MB / 235-record store:
+
+| Operation | Whole-file passes | Store I/O |
+|-----------|-------------------|-----------|
+| one full read (`read` + parse + normalize) | 1 read | ~64 ms |
+| one atomic rewrite (serialize + `os.replace`) | 1 write | ~237 ms |
+| one read-modify-write (`set_tracking`, `resolve_event`) | 1 + 1 | ~301 ms |
+| `GET /events/` (page + total) | 1 read | ~64 ms |
+| `POST /events/resolve-expired` (any batch size) | 1 + 1 | ~301 ms |
+
+Cost scales linearly with the file, so at ~10 MB expect a rewrite near 700 ms
+**with every event read blocked behind it**. Two things to know before reacting:
+
+- **A TTL / archive policy will not help much.** By lifecycle, ~31% of the file
+  is resolved calibration samples (they must stay — they are the Brier
+  aggregate), ~31% is active, and only **~3%** is archived-and-never-resolved,
+  i.e. the only slice a TTL may evict.
+- **The size is concentrated in one field.** `evidence_items` is ~20% of the
+  file on its own, then `legacy_analysis` ~12%, `news_filter` ~9%,
+  `sentiment_profile` ~6%. Trimming or externalising `evidence_items` buys far
+  more than archiving, and buys it without touching calibration.
+
+Re-run the census against a live store with:
+
+```bash
+python -c "import json,os,collections; from app.core.config import settings; p=os.path.abspath(settings.EVENT_STORE_FILE); s=json.load(open(p,encoding='utf-8')); b=collections.Counter(); [b.update({k: len(json.dumps(v,ensure_ascii=False))}) for e in s.values() for k,v in (e.get('record') or {}).items()]; print(os.path.getsize(p), len(s)); print(b.most_common(8))"
+```
 
 ### Grafana dashboard (E8)
 

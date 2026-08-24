@@ -16,13 +16,14 @@ from app.memory.prediction_store import (
     list_recent,
 )
 from app.memory.event_store import (
-    count_events,
     count_events_by_category,
     get_event,
     list_all_events,
     list_events,
+    list_events_page,
     list_resolved_events,
     set_tracking,
+    set_tracking_bulk,
 )
 from app.services.calibration_service_event import summarize
 from app.services.decision_report_service import build_decision_report
@@ -278,18 +279,14 @@ async def list_event_intelligence(
     exclude_expired: bool = Query(default=True),
     resolved_only: bool = Query(default=False),
 ) -> dict[str, Any]:
-    """List stored event intelligence records for the dashboard table."""
-    entries = list_events(
+    """List stored event intelligence records for the dashboard table.
+
+    The page and its total come from one store read (list_events_page), so the
+    pager the dashboard draws describes the same store the rows came from.
+    """
+    entries, total = list_events_page(
         limit=limit,
         offset=offset,
-        query=q,
-        status=status,
-        category=category,
-        sort=sort,
-        exclude_expired=exclude_expired,
-        resolved_only=resolved_only,
-    )
-    total = count_events(
         query=q,
         status=status,
         category=category,
@@ -1600,14 +1597,17 @@ async def resolve_expired_events(_auth: None = Depends(require_write_key)) -> di
     must not write outcome/calibration or invent actual_outcome=50. It only
     marks unresolved expired events as archived so they leave the active
     dashboard while remaining unscored until the market actually resolves.
+
+    The archive is one batched write. Looping over set_tracking rewrote the whole
+    store file per expired event and held the cross-process lock for the whole
+    loop; set_tracking_bulk does the same work in one read-modify-write.
     """
     import re
     from datetime import datetime, timezone
-    from app.memory.event_store import list_all_events, set_tracking
 
     now = datetime.now(timezone.utc)
     events = list_all_events()
-    archived = 0
+    to_archive: list[str] = []
     parsed = 0
 
     # Chinese date patterns: 6月30日, 7月1日, 6月, 2026年6月30日
@@ -1679,8 +1679,12 @@ async def resolve_expired_events(_auth: None = Depends(require_write_key)) -> di
                 parsed += 1
 
         if deadline is not None and deadline < now:
-            if set_tracking(str(event_id), status="archived") is not None:
-                archived += 1
+            to_archive.append(str(event_id))
+
+    # Count what the store actually changed, not what we asked it to change: an
+    # id that vanished between the read and the write, or a record the update
+    # would invalidate, is skipped and must not be reported as archived.
+    archived = len(set_tracking_bulk(to_archive, status="archived"))
 
     return {
         "total": len(events),

@@ -936,6 +936,270 @@ class EventReadRouteTests(unittest.TestCase):
         self.assertEqual(set(by_category.keys()), {"fed_hike", "crypto_price_btc"})
 
 
+class WholeFilePassTests(unittest.TestCase):
+    """E1 (scale debt): every event_store call rewrites or re-reads the whole file.
+
+    Measured on the live store (3.455 MB / 235 records): one full load costs
+    64 ms, one atomic rewrite 237 ms, so a read-modify-write is ~301 ms. That
+    makes the number of whole-file passes per operation the thing to pin, and
+    the only honest way to pin it is to count them.
+
+    Counting is done at ``read_json`` / ``read_json_strict`` /
+    ``write_json_atomic`` **on the event_store module** — the chokepoint every
+    store path shares. Counting inside ``file_store`` instead would also pick
+    up the dozen other JSON stores an endpoint touches, and asserting on wall
+    clock would be a coin flip on a loaded machine.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.path = str(Path(self.tmpdir.name) / "event_store.json")
+        self._patch = patch.object(store, "_store_path", return_value=self.path)
+        self._patch.start()
+
+    def tearDown(self):
+        self._patch.stop()
+        self.tmpdir.cleanup()
+
+    def _counting(self):
+        """Context manager yielding a {'reads': n, 'writes': n} tally."""
+        from contextlib import contextmanager
+
+        tally = {"reads": 0, "writes": 0}
+        real_read = store.read_json
+        real_strict = store.read_json_strict
+        real_write = store.write_json_atomic
+
+        def rj(path, fallback):
+            tally["reads"] += 1
+            return real_read(path, fallback)
+
+        def rjs(path, fallback):
+            tally["reads"] += 1
+            return real_strict(path, fallback)
+
+        def wja(path, data, **kwargs):
+            tally["writes"] += 1
+            return real_write(path, data, **kwargs)
+
+        @contextmanager
+        def _cm():
+            with patch.object(store, "read_json", rj), \
+                    patch.object(store, "read_json_strict", rjs), \
+                    patch.object(store, "write_json_atomic", wja):
+                yield tally
+
+        return _cm()
+
+    def _seed(self, n, *, expired=True):
+        """n unresolved events, optionally with a source market already closed."""
+        records = []
+        for index in range(n):
+            record = _make_record(f"bulk-{index:02d}", value_score=100 - index)
+            if expired:
+                record["source"] = {
+                    "type": "prediction_market",
+                    "platform": "Polymarket",
+                    "close_time": "2020-01-01T00:00:00+00:00",
+                }
+            records.append(record)
+        store.save_events(records)
+
+    # ── set_tracking_bulk ────────────────────────────────────────────
+
+    def test_bulk_does_one_write_where_the_loop_did_one_per_event(self):
+        self._seed(8)
+        ids = [f"bulk-{i:02d}" for i in range(8)]
+
+        with self._counting() as looped:
+            for event_id in ids:
+                store.set_tracking(event_id, status="watching")
+
+        with self._counting() as batched:
+            updated = store.set_tracking_bulk(ids, status="archived")
+
+        self.assertEqual(len(updated), 8)
+        self.assertEqual(looped["writes"], 8, "set_tracking is still one write per event")
+        self.assertEqual(batched["writes"], 1)
+        self.assertEqual(batched["reads"], 1)
+
+    def test_bulk_applies_the_update_to_every_named_event(self):
+        self._seed(3)
+        store.set_tracking_bulk(
+            ["bulk-00", "bulk-02"], status="archived", priority="low",
+        )
+        # A record that was never tracked carries no ``tracking`` key at all —
+        # the store reads that absence as "watching" — so the untouched event is
+        # checked through the same status filter the dashboard uses, not by
+        # indexing a key it is not required to have.
+        archived = store.list_events(status="archived", exclude_expired=False)
+        self.assertEqual({e["event_id"] for e in archived}, {"bulk-00", "bulk-02"})
+        watching = store.list_events(status="watching", exclude_expired=False)
+        self.assertEqual({e["event_id"] for e in watching}, {"bulk-01"})
+        self.assertEqual(
+            store.get_event("bulk-00")["record"]["tracking"]["priority"], "low",
+        )
+        self.assertNotIn("tracking", store.get_event("bulk-01")["record"])
+
+    def test_bulk_preserves_first_seen_and_refreshes_last_updated(self):
+        self._seed(1)
+        before = store.get_event("bulk-00")
+        store.set_tracking_bulk(["bulk-00"], status="archived")
+        after = store.get_event("bulk-00")
+        self.assertEqual(after["first_seen"], before["first_seen"])
+        self.assertGreaterEqual(after["last_updated"], before["last_updated"])
+
+    def test_bulk_skips_unknown_ids_without_reporting_them_as_updated(self):
+        """A caller that counts the ids it passed in would report work the store
+        never did — the same defect as counting requested-vs-written archives."""
+        self._seed(2)
+        updated = store.set_tracking_bulk(
+            ["bulk-00", "ghost", "bulk-01"], status="archived",
+        )
+        self.assertEqual(updated, ["bulk-00", "bulk-01"])
+
+    def test_one_invalid_record_does_not_abort_the_rest_of_the_batch(self):
+        """Mirrors save_events: a single bad record must not cost the batch."""
+        self._seed(3)
+        real_validate = store.EventRecord.model_validate
+
+        def picky(candidate, *args, **kwargs):
+            if candidate.get("event_id") == "bulk-01":
+                raise ValueError("synthetic invalid record")
+            return real_validate(candidate, *args, **kwargs)
+
+        with patch.object(store.EventRecord, "model_validate", picky):
+            updated = store.set_tracking_bulk(
+                ["bulk-00", "bulk-01", "bulk-02"], status="archived",
+            )
+
+        self.assertEqual(updated, ["bulk-00", "bulk-02"])
+        # The rejected record must be left exactly as it was — not written with
+        # a partial update, and not gaining a tracking block it never had.
+        self.assertNotIn("tracking", store.get_event("bulk-01")["record"])
+
+    def test_a_batch_that_matches_nothing_does_not_rewrite_the_file(self):
+        self._seed(1)
+        with self._counting() as tally:
+            self.assertEqual(store.set_tracking_bulk(["ghost"], status="archived"), [])
+        self.assertEqual(tally["writes"], 0)
+
+    def test_an_empty_or_fieldless_batch_touches_the_store_at_all(self):
+        self._seed(1)
+        with self._counting() as tally:
+            self.assertEqual(store.set_tracking_bulk([], status="archived"), [])
+            self.assertEqual(store.set_tracking_bulk(["bulk-00"]), [])
+        self.assertEqual(tally["reads"], 0)
+        self.assertEqual(tally["writes"], 0)
+
+    # ── list_events_page ─────────────────────────────────────────────
+
+    def test_page_and_total_come_from_one_read(self):
+        self._seed(12, expired=False)
+
+        with self._counting() as split:
+            store.list_events(limit=5)
+            store.count_events()
+
+        with self._counting() as combined:
+            page, total = store.list_events_page(limit=5)
+
+        self.assertEqual(len(page), 5)
+        self.assertEqual(total, 12)
+        self.assertEqual(split["reads"], 2, "list_events + count_events is still two reads")
+        self.assertEqual(combined["reads"], 1)
+
+    def test_page_is_a_slice_of_the_ranking_the_total_measures(self):
+        """The total must describe the same filtered set the page came from —
+        a total computed over a wider scope sizes the dashboard's pager wrong."""
+        self._seed(6, expired=False)
+        store.set_tracking_bulk(["bulk-00", "bulk-01"], status="archived")
+
+        page, total = store.list_events_page(limit=10, status="archived")
+        self.assertEqual(total, 2)
+        self.assertEqual({e["event_id"] for e in page}, {"bulk-00", "bulk-01"})
+
+        page, total = store.list_events_page(limit=2, offset=0, status="all")
+        self.assertEqual(total, 6)
+        self.assertEqual(len(page), 2)
+
+    def test_page_agrees_with_list_events_and_count_events(self):
+        """The pair it replaces stays the reference: same rows, same total."""
+        self._seed(9, expired=False)
+        store.set_tracking_bulk(["bulk-00"], status="archived")
+        for kwargs in (
+            {"limit": 4, "offset": 0},
+            {"limit": 4, "offset": 4},
+            {"limit": 50, "status": "archived"},
+            {"limit": 50, "sort": "probability"},
+        ):
+            with self.subTest(**kwargs):
+                page, total = store.list_events_page(**kwargs)
+                self.assertEqual(
+                    [e["event_id"] for e in page],
+                    [e["event_id"] for e in store.list_events(**kwargs)],
+                )
+                count_kwargs = {
+                    k: v for k, v in kwargs.items() if k not in ("limit", "offset")
+                }
+                self.assertEqual(total, store.count_events(**count_kwargs))
+
+    def test_offset_past_the_end_returns_no_rows_but_the_real_total(self):
+        """A pager that hands back total=0 here would tell the reader there is
+        nothing to page back to."""
+        self._seed(3, expired=False)
+        page, total = store.list_events_page(limit=10, offset=99)
+        self.assertEqual(page, [])
+        self.assertEqual(total, 3)
+
+    # ── store_bytes ──────────────────────────────────────────────────
+
+    def test_store_bytes_reports_the_file_size_without_parsing_it(self):
+        self._seed(4, expired=False)
+        with self._counting() as tally:
+            size = store.store_bytes()
+        self.assertEqual(size, Path(self.path).stat().st_size)
+        self.assertGreater(size, 0)
+        self.assertEqual(tally["reads"], 0, "the size reading must not re-parse the store")
+
+    def test_store_bytes_is_zero_when_there_is_no_store_yet(self):
+        """A fresh deploy has no file; raising here would break /events/loop/status."""
+        self.assertFalse(Path(self.path).exists())
+        self.assertEqual(store.store_bytes(), 0)
+
+    def test_store_bytes_grows_with_the_store(self):
+        """The whole point of the reading: it has to move when the store does,
+        or an operator watching it learns nothing."""
+        self._seed(2, expired=False)
+        small = store.store_bytes()
+        self._seed(20, expired=False)
+        self.assertGreater(store.store_bytes(), small)
+
+    # ── auto_archive_expired ─────────────────────────────────────────
+
+    def test_auto_archive_counts_what_it_wrote_not_what_it_planned(self):
+        """The scan runs before the lock is taken, so an id deleted in that
+        window is skipped at write time. Reporting the planned count would
+        credit the scheduler run with archiving a record that is gone."""
+        self._seed(3)
+        events = store.list_all_events()
+        # Delete one after the scan list is in hand — exactly the race.
+        from app.utils.file_store import locked_file, write_json_atomic
+        with locked_file(self.path):
+            live = store._load_for_write(self.path)
+            live.pop("bulk-01")
+            write_json_atomic(self.path, live, indent=2)
+
+        archived = store.auto_archive_expired(events)
+
+        self.assertEqual(archived, 2)
+        self.assertIsNone(store.get_event("bulk-01"))
+        for event_id in ("bulk-00", "bulk-02"):
+            self.assertEqual(
+                store.get_event(event_id)["record"]["tracking"]["status"], "archived",
+            )
+
+
 class RewriteLinesAtomicTests(unittest.TestCase):
     """Regression for P0-2: jsonl rewrites (audit compaction, legacy
     resolve_by_question) must be atomic so a crash mid-write cannot truncate

@@ -1756,6 +1756,163 @@ class ResolveExpiredRouteTests(unittest.TestCase):
                 self.assertEqual(trades.list_closed_trades(), [])
 
 
+class WholeFilePassRouteTests(unittest.TestCase):
+    """E1 (scale debt): how many whole-file event_store passes per request.
+
+    The store file is rewritten in full by every mutating call — measured at
+    237 ms for the live 3.455 MB store, on top of a 64 ms read — and the
+    cross-process lock is held for the whole of it. Two endpoints amplified
+    that: ``GET /events/`` read the store twice for one answer, and
+    ``POST /events/resolve-expired`` did a full read-modify-write per expired
+    event.
+
+    Passes are counted at the event_store module's own ``read_json`` /
+    ``read_json_strict`` / ``write_json_atomic`` bindings — the chokepoint every
+    store path shares. Counting in ``file_store`` would also tally the other
+    JSON stores a request touches.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        base = Path(self.tmpdir.name)
+        self.path = str(base / "event_store.json")
+        self.patches = [
+            patch.object(store, "_store_path", return_value=self.path),
+            patch.object(sqlite_db, "loop_db_path", return_value=str(base / "v2_loop.db")),
+            patch.object(settings, "API_WRITE_KEY", "secret"),
+        ]
+        for p in self.patches:
+            p.start()
+        self.client = _events_client()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmpdir.cleanup()
+
+    def _counting(self):
+        from contextlib import contextmanager
+
+        tally = {"reads": 0, "writes": 0}
+        real_read = store.read_json
+        real_strict = store.read_json_strict
+        real_write = store.write_json_atomic
+
+        @contextmanager
+        def _cm():
+            with patch.object(store, "read_json",
+                             lambda p, fb: (tally.__setitem__("reads", tally["reads"] + 1),
+                                            real_read(p, fb))[1]), \
+                    patch.object(store, "read_json_strict",
+                                 lambda p, fb: (tally.__setitem__("reads", tally["reads"] + 1),
+                                                real_strict(p, fb))[1]), \
+                    patch.object(store, "write_json_atomic",
+                                 lambda p, d, **kw: (tally.__setitem__("writes", tally["writes"] + 1),
+                                                     real_write(p, d, **kw))[1]):
+                yield tally
+
+        return _cm()
+
+    def _seed_expired(self, n):
+        records = []
+        for index in range(n):
+            record = _make_record(f"exp-{index:02d}", value_score=100 - index)
+            record["event_title"] = f"Will thing {index} happen by July 1, 2026?"
+            record["source"] = {
+                "type": "prediction_market",
+                "platform": "Polymarket",
+                "source_id": f"poly-{index}",
+                "close_time": "2020-01-01T00:00:00Z",
+            }
+            records.append(record)
+        store.save_events(records)
+
+    def test_list_events_route_serves_page_and_total_from_one_read(self):
+        self._seed_expired(6)
+        with self._counting() as tally:
+            resp = self.client.get("/events/?limit=2&exclude_expired=false")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["count"], 2)
+        self.assertEqual(body["total"], 6)
+        self.assertEqual(
+            tally["reads"], 1,
+            f"GET /events/ read the whole store {tally['reads']} times for one page",
+        )
+        self.assertEqual(tally["writes"], 0)
+
+    def test_list_events_total_still_describes_the_filtered_scope(self):
+        """One read must not be bought by widening the total to the whole store:
+        the pager the dashboard draws is sized off this number."""
+        self._seed_expired(6)
+        store.set_tracking_bulk(["exp-00", "exp-01", "exp-02"], status="archived")
+
+        resp = self.client.get("/events/?limit=1&status=archived&exclude_expired=false")
+        body = resp.json()
+        self.assertEqual(body["total"], 3)
+        self.assertEqual(body["count"], 1)
+        self.assertIn(body["events"][0]["event_id"], {"exp-00", "exp-01", "exp-02"})
+
+    def test_resolve_expired_archives_the_whole_batch_in_one_write(self):
+        self._seed_expired(7)
+        with self._counting() as tally:
+            resp = self.client.post("/events/resolve-expired", headers=AUTH_HEADERS)
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["archived"], 7)
+        self.assertEqual(
+            tally["writes"], 1,
+            f"resolve-expired rewrote the store {tally['writes']} times for 7 events",
+        )
+        archived = store.list_events(status="archived", exclude_expired=False)
+        self.assertEqual(len(archived), 7)
+
+    def test_resolve_expired_reports_only_what_the_store_wrote(self):
+        """An id the store skips must not be counted as archived — the operator
+        reads this number as "this many events left the active dashboard"."""
+        self._seed_expired(3)
+        real_bulk = store.set_tracking_bulk
+
+        def partial(event_ids, **kwargs):
+            # The store archives only the first id (e.g. the others vanished
+            # between the route's read and the store's locked write).
+            return real_bulk(event_ids[:1], **kwargs)
+
+        with patch.object(events_routes, "set_tracking_bulk", partial):
+            resp = self.client.post("/events/resolve-expired", headers=AUTH_HEADERS)
+
+        body = resp.json()
+        self.assertEqual(body["archived"], 1)
+        self.assertIn("Archived 1 expired events", body["message"])
+
+    def test_resolve_expired_still_writes_no_outcome(self):
+        """Expiry is not settlement — the batched path must not have quietly
+        gained the outcome write the per-event path was careful never to do."""
+        self._seed_expired(2)
+        self.client.post("/events/resolve-expired", headers=AUTH_HEADERS)
+        for event_id in ("exp-00", "exp-01"):
+            record = store.get_event(event_id)["record"]
+            self.assertNotIn("outcome", record)
+            self.assertNotIn("calibration", record)
+
+    def test_resolve_expired_writes_nothing_when_nothing_expired(self):
+        record = _make_record("future", value_score=10)
+        record["event_title"] = "Will thing happen by July 1, 2099?"
+        record["source"] = {
+            "type": "prediction_market",
+            "platform": "Polymarket",
+            "close_time": "2099-01-01T00:00:00Z",
+        }
+        store.save_event(record)
+
+        with self._counting() as tally:
+            resp = self.client.post("/events/resolve-expired", headers=AUTH_HEADERS)
+
+        self.assertEqual(resp.json()["archived"], 0)
+        self.assertEqual(tally["writes"], 0)
+
+
 class PendingLinksRouteTests(unittest.TestCase):
     def test_pending_links_are_enriched_with_event_context(self):
         record = _make_record("evtLinkCtx", value_score=30)

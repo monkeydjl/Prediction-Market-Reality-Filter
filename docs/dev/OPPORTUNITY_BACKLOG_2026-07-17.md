@@ -316,7 +316,7 @@ Phase 15 设计曾写「Edge/WS/优化/结算几乎无 UI」；代码侧已出�
 
 | ID | 优先级 | 项 | 说明 |
 |----|--------|-----|------|
-| E1 | P2 | `event_store.json` 全量重写 | 规模债；归档/TTL 或迁 SQLite |
+| E1 | P2 | `event_store.json` 全量重写 | ✅ 部分 2026-08-24：先量后改。实测活库 3.455 MB / 235 条：一次全量读 64 ms、一次原子重写 237 ms，故一轮读-改-写 ≈ 301 ms 且全程持跨进程锁。**普查否掉了「归档/TTL」这条路**——按生命周期切分，30.6% 是已裁定的校准样本（必须留）、30.7% 在跟踪中、只有 **3.4%**（10 条）是「已归档且从未裁定」，即 TTL 唯一有权清出的那部分；迁 SQLite 又远超单次增量。故本次消除的是**放大**而非格式：`GET /events/` 由 2 次全量读降为 1 次（`list_events_page` 同一次排序同时给出页与总数，页与 pager 不再来自两个时刻的库）、`POST /events/resolve-expired` 由每事件一轮读-改-写降为整批 1 次（`set_tracking_bulk`）、`/api/health` 由 2 次全量读降为 1 次（`list_resolved_events(events)` 复用已加载列表）、`/quality-metrics/summary` 同。并把库的大小变成可观测读数：`storage.event_store_bytes/_records` + Prometheus `pmrf_event_store_bytes/_records`，迁库时机今后是运营能看的曲线而非「仪表盘变慢」才发觉。顺手修了 `auto_archive_expired` 数「计划归档数」而非「实际写入数」（扫描在加锁前，窗口内被删的 id 会被算作已归档）。18/18 变异全杀 | 剩余：真正迁 SQLite 仍未做；`evidence_items` 占 20.4% 是最肥字段，压缩它比归档更有收益 |
 | E2 | P2 | 跨 JSON/SQLite 无硬 FK | dangling 监控已有；长期统一存储 |
 | E3 | P2 | 限流多实例 | 进程内计数；可信反代 IP 或 Redis |
 | E4 | P2 | API 与 scheduler 双进程写文件 | 文件锁已部分加固；仍建议关键路径 SQLite 化 |

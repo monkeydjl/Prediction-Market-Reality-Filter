@@ -14,6 +14,15 @@
   preflight.
 - Keep `RATE_LIMIT_ENABLED=true` unless a trusted reverse proxy provides an
   equivalent limit.
+- **If a reverse proxy is in front (the documented deploy), set
+  `TRUSTED_PROXY_HEADER=true` and `RATE_LIMIT_TRUSTED_PROXY_HOPS`.** Leaving them
+  unset is not the cautious half of the choice: the socket peer is then the proxy
+  on every request, so all callers share one bucket and `RATE_LIMIT_MAX_REQUESTS`
+  becomes a global cap — one busy client 429s everybody. The backend logs
+  `every caller shares one bucket` at WARNING once per process when it sees proxy
+  headers while the setting says there is no proxy, so grep startup logs for that
+  line after a config change. Detail:
+  [Reverse-proxy client IP (E3)](#reverse-proxy-client-ip--the-rate-limit-identity-e3).
 - Set `LLM_DAILY_COST_CAP_USD` to a positive number. **`0` means unlimited, not
   disabled** — the guard short-circuits and today's spend is never counted. The
   overlay templates ship `5` (staging) and `25` (production); the backend logs
@@ -337,6 +346,57 @@ Re-run the census against a live store with:
 ```bash
 python -c "import json,os; from app.core.config import settings; from app.memory.event_ref_census import dangling_counts; s=json.load(open(os.path.abspath(settings.EVENT_STORE_FILE),encoding='utf-8')); print(dangling_counts(set(s)))"
 ```
+
+### Reverse-proxy client IP — the rate-limit identity (E3)
+
+The in-process rate limiter buckets by `client:method:route`. What `client`
+resolves to is a deployment question, and **both settings of
+`TRUSTED_PROXY_HEADER` were wrong** before this was fixed. Measured against the
+middleware at `RATE_LIMIT_MAX_REQUESTS=2`:
+
+| Setting | Traffic | Result |
+| --- | --- | --- |
+| `false` (default), proxy in front | 4 different real clients | clients 3 and 4 got **429** — one shared bucket |
+| `true`, nginx from `deploy/` | 1 attacker rotating `X-Forwarded-For` | **8/8 requests allowed** — no limiting at all |
+
+The second one is why the client is now read from the **right** of
+`X-Forwarded-For`. The header grows left to right — each proxy appends the
+address it accepted the connection from — so the trailing entries are the ones
+our infrastructure wrote and the leading entry is whatever the caller sent.
+`deploy/nginx.conf.example` forwards `$proxy_add_x_forwarded_for`, which
+**appends** rather than replaces, so a caller sending `X-Forwarded-For: 10.0.0.1`
+makes the app see `10.0.0.1, <real peer>`. Trusting the leftmost entry handed the
+rate-limit key to the caller.
+
+`RATE_LIMIT_TRUSTED_PROXY_HOPS` declares how many trailing entries are ours:
+
+| Topology | Header the app sees | Hops |
+| --- | --- | --- |
+| nginx only (`$proxy_add_x_forwarded_for`, appends) | `[spoof, ]<client>` | `1` |
+| Caddy only (`header_up`, replaces) | `<client>` | `1` |
+| CDN (Cloudflare) in front of nginx | `<client>, <cdn edge>` | `2` |
+
+Set it wrong and you do **not** get a spoofable key — a chain shorter than the
+declared hop count falls back to `X-Real-IP` (both shipped proxies *replace* that
+header, so it is not caller-controlled) and then to the socket peer. It never
+falls back to the leftmost entry, because a short chain is exactly the shape a
+spoofing caller produces.
+
+Two misconfigurations are logged at WARNING, **once per process** (the setting
+only changes on restart, and a per-request log would be its own denial of
+service):
+
+- `every caller shares one bucket` — proxy headers arrived while
+  `TRUSTED_PROXY_HEADER=false`. You are in row 1 of the first table.
+- `not behind the trusted proxy` — `TRUSTED_PROXY_HEADER=true` but no proxy
+  headers arrived, so every caller is keyed to the socket peer anyway.
+
+Note what this does *not* fix: the counter is still per-process. That is sound
+only because the app is deliberately single-process (`uvicorn` with no
+`--workers` in both `deploy/Dockerfile` and `backend/run.py`, which
+`optimization_task_store.fail_interrupted_tasks` and the in-process scheduler
+already depend on). Adding `--workers N` multiplies every limit by `N` with no
+warning, and would break more than rate limiting.
 
 ### Grafana dashboard (E8)
 

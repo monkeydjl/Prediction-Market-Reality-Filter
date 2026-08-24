@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import io
+import logging
 import tempfile
 import unittest
 from pathlib import Path
@@ -438,8 +439,15 @@ class RateLimitTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 429)
 
     def test_rate_limit_honors_forwarded_header_when_trusted_proxy_enabled(self):
-        # Opt-in (TRUSTED_PROXY_HEADER=true): deployment sits behind a trusted
-        # reverse proxy that overwrites X-Forwarded-For, so we can key off it.
+        # Opt-in (TRUSTED_PROXY_HEADER=true) behind a proxy that *replaces*
+        # X-Forwarded-For with the real peer — deploy/Caddyfile.example does
+        # this (`header_up X-Forwarded-For {remote_host}`), so the header holds
+        # exactly one address and it is not caller-controlled.
+        #
+        # This is the only topology this test covers, which is why it stayed
+        # green through the leftmost-entry bug: with a single-entry chain the
+        # leftmost and rightmost address are the same one. The appending
+        # topology (deploy/nginx.conf.example) is covered below.
         app = FastAPI()
         app.add_middleware(InMemoryRateLimitMiddleware)
 
@@ -460,10 +468,218 @@ class RateLimitTests(unittest.TestCase):
                 client.get("/ping", headers={"X-Forwarded-For": "203.0.113.1"}).status_code,
                 429,
             )
-            # Different spoofed IP -> different rate-limit key -> allowed again.
+            # A different real client -> different rate-limit key -> allowed.
             resp = client.get("/ping", headers={"X-Forwarded-For": "203.0.113.2"})
 
         self.assertEqual(resp.status_code, 200)
+
+    # ── E3: trusting the wrong end of X-Forwarded-For ─────────────────────
+    # deploy/nginx.conf.example forwards `$proxy_add_x_forwarded_for`, which
+    # APPENDS the real peer to whatever the caller sent, so the app receives
+    # "<caller-supplied>, <real peer>". Keying off the leftmost entry handed the
+    # rate-limit key to the caller: measured at limit=2, one attacker rotating
+    # the prefix got 8/8 requests through. The client is read `hops` addresses
+    # from the RIGHT instead.
+
+    def _limited_app(self):
+        app = FastAPI()
+        app.add_middleware(InMemoryRateLimitMiddleware)
+
+        @app.get("/ping")
+        async def ping():
+            return {"ok": True}
+
+        return app
+
+    @staticmethod
+    def _proxy_settings(*, trusted=True, hops=1, limit=1):
+        return (
+            patch.object(settings, "RATE_LIMIT_ENABLED", True),
+            patch.object(settings, "RATE_LIMIT_WINDOW_SECONDS", 60),
+            patch.object(settings, "RATE_LIMIT_MAX_REQUESTS", limit),
+            patch.object(settings, "TRUSTED_PROXY_HEADER", trusted),
+            patch.object(settings, "RATE_LIMIT_TRUSTED_PROXY_HOPS", hops),
+        )
+
+    @contextlib.contextmanager
+    def _proxied(self, **kw):
+        with contextlib.ExitStack() as stack:
+            for p in self._proxy_settings(**kw):
+                stack.enter_context(p)
+            yield
+
+    def test_rotating_the_spoofed_prefix_cannot_buy_a_fresh_bucket(self):
+        client = TestClient(self._limited_app())
+        attacker = "203.0.113.9"
+
+        with self._proxied(limit=1):
+            first = client.get(
+                "/ping", headers={"X-Forwarded-For": f"10.0.0.0, {attacker}"}
+            ).status_code
+            # Every later request rotates the caller-supplied prefix. Under the
+            # leftmost read each of these was a brand-new bucket.
+            rotated = [
+                client.get(
+                    "/ping", headers={"X-Forwarded-For": f"10.0.0.{i}, {attacker}"}
+                ).status_code
+                for i in range(1, 6)
+            ]
+
+        self.assertEqual(first, 200)
+        self.assertEqual(rotated, [429] * 5)
+
+    def test_two_real_clients_behind_an_appending_proxy_keep_separate_buckets(self):
+        # The guard above must not be satisfied by collapsing everyone into one
+        # bucket: distinct real peers still have to be throttled independently.
+        client = TestClient(self._limited_app())
+
+        with self._proxied(limit=1):
+            a_first = client.get(
+                "/ping", headers={"X-Forwarded-For": "10.0.0.1, 203.0.113.1"}
+            ).status_code
+            a_again = client.get(
+                "/ping", headers={"X-Forwarded-For": "10.0.0.1, 203.0.113.1"}
+            ).status_code
+            b_first = client.get(
+                "/ping", headers={"X-Forwarded-For": "10.0.0.1, 203.0.113.2"}
+            ).status_code
+
+        self.assertEqual((a_first, a_again, b_first), (200, 429, 200))
+
+    def test_hop_count_of_two_reads_past_the_cdn_hop(self):
+        # CDN sets XFF to the client, nginx appends the CDN edge: "client, edge".
+        # With two trusted hops the client is the second address from the right.
+        client = TestClient(self._limited_app())
+
+        with self._proxied(hops=2, limit=1):
+            first = client.get(
+                "/ping", headers={"X-Forwarded-For": "203.0.113.1, 198.51.100.7"}
+            ).status_code
+            # Same client, a different CDN edge -> still the same bucket.
+            same_client = client.get(
+                "/ping", headers={"X-Forwarded-For": "203.0.113.1, 198.51.100.8"}
+            ).status_code
+            other_client = client.get(
+                "/ping", headers={"X-Forwarded-For": "203.0.113.2, 198.51.100.7"}
+            ).status_code
+
+        self.assertEqual((first, same_client, other_client), (200, 429, 200))
+
+    def test_short_chain_falls_back_to_real_ip_never_the_leftmost(self):
+        # Two hops declared but only one address arrived: the request did not
+        # traverse the expected proxies. X-Real-IP is replaced by both shipped
+        # proxy configs, so it is trustworthy; the leftmost entry is not.
+        client = TestClient(self._limited_app())
+
+        with self._proxied(hops=2, limit=1):
+            first = client.get(
+                "/ping",
+                headers={"X-Forwarded-For": "10.0.0.1", "X-Real-IP": "203.0.113.9"},
+            ).status_code
+            # Rotating the caller-supplied entry must not buy a new bucket.
+            rotated = client.get(
+                "/ping",
+                headers={"X-Forwarded-For": "10.0.0.2", "X-Real-IP": "203.0.113.9"},
+            ).status_code
+            # ...but a different X-Real-IP is a genuinely different client and
+            # must get its own. This is the arm that pins the key to X-Real-IP
+            # specifically: drop the fallback and both requests collapse onto
+            # the socket peer, making this 429. Asserting only the shared-bucket
+            # arm above would pass either way.
+            other_client = client.get(
+                "/ping",
+                headers={"X-Forwarded-For": "10.0.0.3", "X-Real-IP": "203.0.113.8"},
+            ).status_code
+
+        self.assertEqual((first, rotated, other_client), (200, 429, 200))
+
+    def test_short_chain_without_real_ip_falls_back_to_socket_peer(self):
+        client = TestClient(self._limited_app())
+
+        with self._proxied(hops=3, limit=1):
+            first = client.get(
+                "/ping", headers={"X-Forwarded-For": "10.0.0.1, 10.0.0.2"}
+            ).status_code
+            rotated = client.get(
+                "/ping", headers={"X-Forwarded-For": "10.0.0.3, 10.0.0.4"}
+            ).status_code
+
+        # Both collapse onto the TestClient socket peer rather than onto any
+        # caller-supplied address.
+        self.assertEqual((first, rotated), (200, 429))
+
+    def test_forwarded_header_sent_twice_is_joined_before_slicing(self):
+        # Reading only the first header instance would let a caller push our own
+        # proxy's entry out of the trusted tail by splitting the chain in two.
+        client = TestClient(self._limited_app())
+
+        with self._proxied(limit=1):
+            first = client.get(
+                "/ping",
+                headers=[("X-Forwarded-For", "10.0.0.1"),
+                         ("X-Forwarded-For", "203.0.113.9")],
+            ).status_code
+            rotated = client.get(
+                "/ping",
+                headers=[("X-Forwarded-For", "10.0.0.2"),
+                         ("X-Forwarded-For", "203.0.113.9")],
+            ).status_code
+
+        self.assertEqual((first, rotated), (200, 429))
+
+    def test_hop_count_below_one_is_clamped_to_one(self):
+        # 0 would mean `chain[-0]` == `chain[0]` — the leftmost, caller-supplied
+        # entry — so the clamp is what keeps a stray 0 from reopening the hole.
+        client = TestClient(self._limited_app())
+
+        with self._proxied(hops=0, limit=1):
+            first = client.get(
+                "/ping", headers={"X-Forwarded-For": "10.0.0.1, 203.0.113.9"}
+            ).status_code
+            rotated = client.get(
+                "/ping", headers={"X-Forwarded-For": "10.0.0.2, 203.0.113.9"}
+            ).status_code
+
+        self.assertEqual((first, rotated), (200, 429))
+
+    def test_warns_once_when_proxy_headers_arrive_but_trust_is_off(self):
+        # The documented default: loopback-bound app behind nginx with
+        # TRUSTED_PROXY_HEADER unset. Every caller shares the proxy's bucket.
+        client = TestClient(self._limited_app())
+
+        with self._proxied(trusted=False, limit=50):
+            with self.assertLogs("app.core.rate_limit", level="WARNING") as caught:
+                client.get("/ping", headers={"X-Forwarded-For": "203.0.113.1"})
+                client.get("/ping", headers={"X-Forwarded-For": "203.0.113.2"})
+                client.get("/ping", headers={"X-Forwarded-For": "203.0.113.3"})
+
+        self.assertEqual(len(caught.records), 1, "should warn once per process")
+        self.assertIn("every caller shares one bucket", caught.output[0])
+
+    def test_warns_when_trust_is_on_but_no_proxy_headers_arrive(self):
+        client = TestClient(self._limited_app())
+
+        with self._proxied(trusted=True, limit=50):
+            with self.assertLogs("app.core.rate_limit", level="WARNING") as caught:
+                client.get("/ping")
+
+        self.assertEqual(len(caught.records), 1)
+        self.assertIn("not behind the trusted proxy", caught.output[0])
+
+    def test_no_warning_when_the_configuration_matches_the_traffic(self):
+        logger = logging.getLogger("app.core.rate_limit")
+
+        # Proxy headers present and trusted.
+        with self._proxied(trusted=True, limit=50):
+            client = TestClient(self._limited_app())
+            with self.assertNoLogs(logger, level="WARNING"):
+                client.get("/ping", headers={"X-Forwarded-For": "203.0.113.1"})
+
+        # No proxy headers and no trust configured.
+        with self._proxied(trusted=False, limit=50):
+            client = TestClient(self._limited_app())
+            with self.assertNoLogs(logger, level="WARNING"):
+                client.get("/ping")
 
 
 class _FakeScheduler:

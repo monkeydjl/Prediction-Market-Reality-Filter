@@ -130,11 +130,29 @@ class Settings:
     RATE_LIMIT_WINDOW_SECONDS: int = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
     RATE_LIMIT_MAX_REQUESTS: int = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "120"))
     # Whether the deployment sits behind a trusted reverse proxy (nginx/caddy/
-    # Cloudflare) that overwrites X-Forwarded-For / X-Real-IP with the real
-    # client address. When false (default, direct-to-internet / dev) those
-    # headers are ignored because anyone can spoof them, so rate limiting keys
-    # off request.client.host only. When true the proxy headers are honored.
+    # Cloudflare) that supplies the real client address. When false (default,
+    # direct-to-internet / dev) the proxy headers are ignored because anyone can
+    # spoof them, so rate limiting keys off request.client.host only. When true
+    # they are honored -- see RATE_LIMIT_TRUSTED_PROXY_HOPS for how far into
+    # X-Forwarded-For we are allowed to trust.
+    #
+    # Leaving this false *while behind a proxy* is not the safe default it looks
+    # like: request.client.host is then the proxy's own address on every request,
+    # so all callers share one bucket and RATE_LIMIT_MAX_REQUESTS becomes a
+    # global cap instead of a per-client one.
     TRUSTED_PROXY_HEADER: bool = _env_bool("TRUSTED_PROXY_HEADER", "false")
+    # How many trusted proxies sit between the client and this app -- that is,
+    # how many trailing X-Forwarded-For entries our own infrastructure wrote.
+    # The client address is read that many entries from the RIGHT, because the
+    # header grows left-to-right and the leftmost entry is whatever the caller
+    # sent. 1 (the default) is correct for both shipped examples:
+    # deploy/nginx.conf.example appends the real peer via
+    # $proxy_add_x_forwarded_for, and deploy/Caddyfile.example replaces the
+    # header with the real peer. Raise to 2 when a CDN such as Cloudflare fronts
+    # nginx. Only consulted when TRUSTED_PROXY_HEADER is true.
+    RATE_LIMIT_TRUSTED_PROXY_HOPS: int = int(
+        os.getenv("RATE_LIMIT_TRUSTED_PROXY_HOPS", "1")
+    )
     BACKEND_SERVE_FRONTEND: bool = _env_bool("BACKEND_SERVE_FRONTEND", "true")
 
     LOG_FILE: str = os.getenv(

@@ -9,6 +9,7 @@ import {
   type ReviewQueueAction,
   type ReviewQueueAuditEntry,
   type ReviewQueueItem,
+  type ReviewQueueSlaSummary,
   type ReviewQueueStatus,
 } from "@/lib/api";
 import { inputCls, selectCls } from "@/lib/ui-classes";
@@ -44,6 +45,63 @@ function severityCls(severity: string): string {
   return severity === "ERROR"
     ? "rounded border border-neg/40 bg-neg/10 px-1.5 py-0.5 text-neg"
     : "rounded border border-warn/40 bg-warn/10 px-1.5 py-0.5 text-warn";
+}
+
+/** How long an item has waited. Hours below 48, days above — reviewers read both. */
+function formatAge(hours: number): string {
+  if (hours < 1) return `${Math.round(hours * 60)} 分钟`;
+  if (hours < 48) return `${hours.toFixed(1)} 小时`;
+  return `${(hours / 24).toFixed(1)} 天`;
+}
+
+/**
+ * Whether this item is past its SLA budget.
+ *
+ * Mirrors ``review_queue_store.queue_sla_summary``: strictly past the budget,
+ * and a severity with no budget can never breach (so it renders plain rather
+ * than as a breach).
+ */
+function isBreached(
+  item: ReviewQueueItem,
+  sla: ReviewQueueSlaSummary | null,
+): boolean {
+  const budget = sla?.sla_hours?.[item.severity];
+  return (
+    typeof budget === "number" &&
+    typeof item.age_hours === "number" &&
+    item.age_hours > budget
+  );
+}
+
+function AgeChip({
+  item,
+  sla,
+}: {
+  item: ReviewQueueItem;
+  sla: ReviewQueueSlaSummary | null;
+}) {
+  // Resolved rows carry no age — the store computes it for pending items only.
+  if (typeof item.age_hours !== "number") {
+    return (
+      <span className="font-mono tabular-nums text-muted-foreground">
+        {item.created_at}
+      </span>
+    );
+  }
+  const breached = isBreached(item, sla);
+  return (
+    <span
+      title={item.created_at}
+      className={
+        breached
+          ? "rounded border border-neg/40 bg-neg/10 px-1.5 py-0.5 font-mono tabular-nums text-neg"
+          : "font-mono tabular-nums text-muted-foreground"
+      }
+    >
+      等待 {formatAge(item.age_hours)}
+      {breached ? " · 超时" : ""}
+    </span>
+  );
 }
 
 function ActionForm({
@@ -182,18 +240,29 @@ export function ReviewQueueBoard() {
   const [status, setStatus] = useState<ReviewQueueStatus>("pending");
   const [trigger, setTrigger] = useState("");
   const [items, setItems] = useState<ReviewQueueItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [truncated, setTruncated] = useState(false);
+  const [sla, setSla] = useState<ReviewQueueSlaSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
+    // The SLA summary is a queue-wide reading, not part of the list: a failure
+    // there must not blank the items a reviewer is working through.
+    reviewQueueApi
+      .sla()
+      .then((resp) => setSla(resp.sla))
+      .catch(() => setSla(null));
     try {
       const resp = await reviewQueueApi.list({
         status,
         trigger: trigger || undefined,
       });
       setItems(resp.items);
+      setTotal(resp.total);
+      setTruncated(resp.truncated);
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载失败");
     } finally {
@@ -252,6 +321,54 @@ export function ReviewQueueBoard() {
         </div>
       </div>
 
+      {sla && (
+        <p
+          className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"
+          data-testid="review-queue-sla"
+        >
+          <span>
+            待复核{" "}
+            <span className="font-mono tabular-nums text-foreground">
+              {sla.pending_total}
+            </span>
+          </span>
+          <span>
+            最久等待{" "}
+            <span className="font-mono tabular-nums text-foreground">
+              {sla.oldest_age_hours == null
+                ? "—"
+                : formatAge(sla.oldest_age_hours)}
+            </span>
+          </span>
+          <span
+            className={sla.breached_total > 0 ? "text-neg" : undefined}
+            data-testid="review-queue-breached"
+          >
+            超时{" "}
+            <span className="font-mono tabular-nums">{sla.breached_total}</span>
+          </span>
+          <span>
+            额度{" "}
+            <span className="font-mono tabular-nums">
+              {Object.entries(sla.sla_hours)
+                // Tightest budget first, so the display order never depends on
+                // the order the API happened to serialize the object in.
+                .sort((a, b) => a[1] - b[1])
+                .map(([sev, hours]) => `${sev} ${hours}h`)
+                .join(" · ")}
+            </span>
+          </span>
+          {sla.unknown_severity > 0 && (
+            <span>
+              无额度{" "}
+              <span className="font-mono tabular-nums">
+                {sla.unknown_severity}
+              </span>
+            </span>
+          )}
+        </p>
+      )}
+
       {error && (
         <div className="rounded-md border border-neg/40 bg-neg/10 px-3 py-2 text-xs text-neg">
           {error}
@@ -267,6 +384,12 @@ export function ReviewQueueBoard() {
       {!loading && !error && items.length === 0 && (
         <p className="py-2 text-xs text-muted-foreground">
           {status === "pending" ? "当前没有待复核条目。" : "还没有已处理条目。"}
+        </p>
+      )}
+
+      {truncated && !error && (
+        <p className="mb-2 text-xs text-muted-foreground">
+          仅显示等待最久的 {items.length} / {total} 条，其余较新条目未列出。
         </p>
       )}
 
@@ -287,9 +410,7 @@ export function ReviewQueueBoard() {
               >
                 {item.event_id}
               </Link>
-              <span className="font-mono tabular-nums text-muted-foreground">
-                {item.created_at}
-              </span>
+              <AgeChip item={item} sla={sla} />
               <button
                 type="button"
                 onClick={() =>

@@ -1093,6 +1093,8 @@ export interface ReviewQueueItem {
   event_id: string;
   trigger: string;
   severity: string;
+  /** Urgency order (ERROR > WARN); -1 for a severity the store does not know. */
+  severity_rank: number;
   reason: string;
   context: Record<string, unknown>;
   status: ReviewQueueStatus;
@@ -1100,6 +1102,8 @@ export interface ReviewQueueItem {
   reviewer_decision: string | null;
   reviewer_note: string;
   created_at: string;
+  /** Hours waited. Pending items only — the store omits it for resolved rows. */
+  age_hours?: number | null;
   resolved_at: string | null;
 }
 
@@ -1114,8 +1118,33 @@ export interface ReviewQueueAuditEntry {
 
 export interface ReviewQueueListResponse {
   items: ReviewQueueItem[];
+  /** Items in this response. */
   count: number;
+  /** Items matching the filter before ``limit`` truncated it. */
+  total: number;
+  truncated: boolean;
   status: ReviewQueueStatus;
+}
+
+export interface ReviewQueueSlaSeverity {
+  count: number;
+  oldest_age_hours: number | null;
+  breached: number;
+  /** Budget for this severity; null when the severity has none. */
+  sla_hours: number | null;
+}
+
+/** Counts and ages only — no reasons, no event text. See /api/review-queue/sla. */
+export interface ReviewQueueSlaSummary {
+  pending_total: number;
+  oldest_age_hours: number | null;
+  oldest_item_id: string | null;
+  breached_total: number;
+  /** Pending items whose severity has no budget; they can never breach. */
+  unknown_severity: number;
+  sla_hours: Record<string, number>;
+  by_severity: Record<string, ReviewQueueSlaSeverity>;
+  by_trigger: Record<string, number>;
 }
 
 export interface ReviewQueueAuditResponse {
@@ -1139,6 +1168,8 @@ export const reviewQueueApi = {
       `/review-queue${tail ? `?${tail}` : ""}`,
     );
   },
+
+  sla: () => api<{ sla: ReviewQueueSlaSummary }>("/review-queue/sla"),
 
   audit: (itemId: string) =>
     api<ReviewQueueAuditResponse>(

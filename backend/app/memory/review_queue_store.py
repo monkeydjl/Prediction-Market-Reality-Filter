@@ -10,6 +10,26 @@ Reviewer action vocabulary is locked to:
     confirm / override / request_more_evidence / mark_bad_source /
     mark_bad_resolution
 
+Severity vocabulary is locked to WARN / ERROR with a declared rank
+(``SEVERITY_RANK``, ERROR above WARN) so callers can sort by urgency and a
+detector typo is rejected at the writer instead of persisting silently. The gate
+lives in ``enqueue_item`` rather than as a column CHECK because adding one to an
+existing table means a full rebuild of a live loop DB; ``_VALID_ACTIONS`` in
+``take_action`` is the same pattern.
+
+SLA convention (Q7):
+    ``created_at`` is the first-enqueue time and stays put. ``enqueue_item``
+    refreshes a pending row's severity/reason/context but deliberately does not
+    touch ``created_at`` — the orchestrator re-runs detectors on every overlay
+    build, so refreshing it would reset the clock on every scan and no item could
+    ever age. ``age_hours`` and every breach count are therefore measured from
+    when the item first appeared, which is the only reading an SLA can use.
+
+    ``list_pending`` returns **oldest first**. It used to be
+    ``ORDER BY created_at DESC`` while the route truncated to ``limit``, so the
+    longest-waiting item was both the last one displayed and the first one
+    dropped — an SLA was unachievable by construction.
+
 All reason/note strings are validated against the vocabulary lock
 (banned terms: long/short/buy/sell/position/kelly/order).
 """
@@ -17,6 +37,7 @@ from __future__ import annotations
 
 import threading
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from app.utils import sqlite_db
@@ -65,6 +86,47 @@ _VALID_ACTIONS = frozenset({
     "mark_bad_source", "mark_bad_resolution",
 })
 
+# Higher rank = more urgent. Mirrors merge_quality_overlays' severity dict:
+# an ordering nobody declared cannot be sorted on.
+SEVERITY_RANK: dict[str, int] = {"WARN": 0, "ERROR": 1}
+VALID_SEVERITIES = frozenset(SEVERITY_RANK)
+
+# Hours a pending item may wait before it counts as an SLA breach. Defaults live
+# here as the store-level fallback; callers pass settings.REVIEW_QUEUE_SLA_*_HOURS
+# the same way detector thresholds are passed in.
+DEFAULT_SLA_HOURS: dict[str, float] = {"ERROR": 24.0, "WARN": 72.0}
+
+
+def _parse_sqlite_utc(value: Any) -> datetime | None:
+    """Parse a ``datetime('now')`` timestamp as UTC.
+
+    SQLite writes ``'YYYY-MM-DD HH:MM:SS'`` with no zone suffix, and it is UTC.
+    Reading it back with ``fromisoformat`` yields a *naive* datetime, and
+    subtracting that from an aware ``now`` raises TypeError — so the zone is
+    attached explicitly here rather than assumed.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _age_hours(created_at: Any, now: datetime) -> float | None:
+    """Hours since ``created_at``, or None when it cannot be parsed.
+
+    Clamped at 0: a clock skew between the SQLite writer and the reader must not
+    produce a negative age that sorts ahead of every real item.
+    """
+    created = _parse_sqlite_utc(created_at)
+    if created is None:
+        return None
+    return round(max(0.0, (now - created).total_seconds() / 3600.0), 4)
+
 
 def _ensure_schema(path: str) -> None:
     if path in _INITIALIZED:
@@ -90,13 +152,14 @@ def _check_vocabulary(text: str) -> None:
             )
 
 
-def _item_row_to_dict(row: Any) -> dict[str, Any]:
+def _item_row_to_dict(row: Any, *, now: datetime | None = None) -> dict[str, Any]:
     import json
-    return {
+    item = {
         "item_id": row["item_id"],
         "event_id": row["event_id"],
         "trigger": row["trigger"],
         "severity": row["severity"],
+        "severity_rank": SEVERITY_RANK.get(row["severity"], -1),
         "reason": row["reason"],
         "context": json.loads(row["context_json"] or "{}"),
         "status": row["status"],
@@ -106,6 +169,9 @@ def _item_row_to_dict(row: Any) -> dict[str, Any]:
         "created_at": row["created_at"],
         "resolved_at": row["resolved_at"],
     }
+    if now is not None:
+        item["age_hours"] = _age_hours(row["created_at"], now)
+    return item
 
 
 def _audit_row_to_dict(row: Any) -> dict[str, Any]:
@@ -139,7 +205,16 @@ def enqueue_item(
 
     After an item is resolved, a new enqueue creates a NEW pending row
     (re-review is allowed).
+
+    ``created_at`` is never rewritten on refresh — see the SLA convention in the
+    module docstring. Raises ``ValueError`` for a severity outside
+    ``VALID_SEVERITIES``.
     """
+    if severity not in VALID_SEVERITIES:
+        raise ValueError(
+            f"invalid severity {severity!r}; must be one of "
+            f"{sorted(VALID_SEVERITIES)}"
+        )
     _check_vocabulary(reason)
     import json
     path = sqlite_db.loop_db_path()
@@ -186,21 +261,101 @@ def get_item(item_id: str) -> dict[str, Any] | None:
 
 
 def list_pending(*, trigger: str | None = None) -> list[dict[str, Any]]:
+    """Pending items, **oldest first**, each with ``age_hours``.
+
+    Oldest-first is the SLA ordering: callers truncate (the HTTP route takes
+    ``items[:limit]``), and whatever sorts last is what gets dropped. Sorting by
+    severity here would put a fresh ERROR above a week-old WARN and hide the WARN
+    again, so urgency is exposed as ``severity_rank`` for the caller to sort on
+    instead. ``item_id`` breaks ties because ``datetime('now')`` has one-second
+    granularity and a batch enqueue writes several rows within it.
+    """
     path = sqlite_db.loop_db_path()
     _ensure_schema(path)
+    now = datetime.now(timezone.utc)
     with sqlite_db.reading(path) as conn:
         if trigger is not None:
             rows = conn.execute(
                 "SELECT * FROM review_queue_items WHERE status = 'pending' "
-                "AND trigger = ? ORDER BY created_at DESC",
+                "AND trigger = ? ORDER BY created_at ASC, item_id ASC",
                 (trigger,),
             ).fetchall()
         else:
             rows = conn.execute(
                 "SELECT * FROM review_queue_items WHERE status = 'pending' "
-                "ORDER BY created_at DESC"
+                "ORDER BY created_at ASC, item_id ASC"
             ).fetchall()
-    return [_item_row_to_dict(row) for row in rows]
+    return [_item_row_to_dict(row, now=now) for row in rows]
+
+
+def queue_sla_summary(
+    *,
+    sla_hours: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Pending depth, oldest wait, and SLA breaches — read-only.
+
+    The queue had no number for either depth or age anywhere: ``loop_status``
+    reported ``pending_links`` from ``event_market_link_store``, a different
+    store, and nothing reported the review queue at all. Without a depth and an
+    oldest-age reading there is nothing for an SLA to be measured against.
+
+    An item breaches when its age exceeds the budget for its severity. An
+    unrecognised severity has no budget and is counted under
+    ``unknown_severity`` rather than silently treated as never-breaching.
+
+    Returns counts only — no reasons, no context, no event text — so it is safe
+    to surface next to ``/api/health``.
+    """
+    budgets = dict(DEFAULT_SLA_HOURS if sla_hours is None else sla_hours)
+    items = list_pending()
+
+    by_severity: dict[str, dict[str, Any]] = {}
+    by_trigger: dict[str, int] = {}
+    breached_total = 0
+    unknown_severity = 0
+    oldest_age: float | None = None
+    oldest_item_id: str | None = None
+
+    for item in items:
+        severity = str(item.get("severity") or "")
+        age = item.get("age_hours")
+        trigger = str(item.get("trigger") or "")
+        by_trigger[trigger] = by_trigger.get(trigger, 0) + 1
+
+        bucket = by_severity.setdefault(
+            severity,
+            {"count": 0, "oldest_age_hours": None, "breached": 0,
+             "sla_hours": budgets.get(severity)},
+        )
+        bucket["count"] = int(bucket["count"]) + 1
+
+        if severity not in VALID_SEVERITIES:
+            unknown_severity += 1
+        if not isinstance(age, (int, float)):
+            continue
+
+        current = bucket["oldest_age_hours"]
+        if not isinstance(current, (int, float)) or age > current:
+            bucket["oldest_age_hours"] = age
+        if oldest_age is None or age > oldest_age:
+            oldest_age = age
+            oldest_item_id = str(item.get("item_id") or "")
+
+        budget = budgets.get(severity)
+        if isinstance(budget, (int, float)) and age > budget:
+            bucket["breached"] = int(bucket["breached"]) + 1
+            breached_total += 1
+
+    return {
+        "pending_total": len(items),
+        "oldest_age_hours": oldest_age,
+        "oldest_item_id": oldest_item_id,
+        "breached_total": breached_total,
+        "unknown_severity": unknown_severity,
+        "sla_hours": budgets,
+        "by_severity": by_severity,
+        "by_trigger": by_trigger,
+    }
 
 
 def list_resolved(*, limit: int = 100) -> list[dict[str, Any]]:

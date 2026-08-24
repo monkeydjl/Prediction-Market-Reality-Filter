@@ -4,15 +4,21 @@ Focus is the orphan-prediction count, which used to issue one SELECT per
 resolved event. /api/health is polled by container healthchecks and uptime
 monitors, so a per-event query made the endpoint scale linearly with the event
 store (measured at ~1.2s) while holding the event loop the whole time.
+
+``ReviewQueueCountsTests`` covers the Q7 addition: review-queue depth, oldest
+wait and SLA breach counts, which the payload previously reported nowhere.
 """
 
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from app.core.config import settings
 from app.memory import event_store as store
 from app.memory import prediction_store as preds
+from app.memory import review_queue_store as rq
 from app.services import loop_status_service
 from app.utils import sqlite_db
 
@@ -135,6 +141,103 @@ class OrphanPredictionCountTests(unittest.TestCase):
             f"orphan count issued {len(selects)} SELECTs for 12 events; it must "
             "not scale with the event store",
         )
+
+
+class ReviewQueueCountsTests(unittest.TestCase):
+    """Q7: the review backlog had no number anywhere in the status payload.
+
+    ``counts.pending_links`` reads ``event_market_link_store`` — a different
+    store — and was the only "pending" figure here, so a human review queue of
+    any depth was invisible from /api/health.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        base = Path(self.tmpdir.name)
+        self.patches = [
+            patch.object(sqlite_db, "loop_db_path",
+                         return_value=str(base / "v2_loop.db")),
+            patch.object(store, "_store_path",
+                         return_value=str(base / "event_store.json")),
+        ]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmpdir.cleanup()
+
+    @staticmethod
+    def _enqueue_aged(event_id, severity, age_hours):
+        item_id = rq.enqueue_item(
+            event_id=event_id, trigger="high_value_downgraded",
+            severity=severity, reason="需要人工复核", context={},
+        )
+        stamp = (datetime.now(timezone.utc) - timedelta(hours=age_hours)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        with sqlite_db.writing(sqlite_db.loop_db_path()) as conn:
+            conn.execute(
+                "UPDATE review_queue_items SET created_at = ? WHERE item_id = ?",
+                (stamp, item_id),
+            )
+        return item_id
+
+    def test_counts_report_review_depth_and_breaches(self):
+        with patch.object(settings, "REVIEW_QUEUE_SLA_ERROR_HOURS", 24.0), \
+                patch.object(settings, "REVIEW_QUEUE_SLA_WARN_HOURS", 72.0):
+            overdue = self._enqueue_aged("evt-a", "ERROR", 30.0)
+            self._enqueue_aged("evt-b", "WARN", 5.0)
+            payload = loop_status_service.loop_status()
+
+        self.assertEqual(payload["counts"]["pending_reviews"], 2)
+        self.assertEqual(payload["counts"]["breached_reviews"], 1)
+        self.assertEqual(payload["review_queue"]["oldest_item_id"], overdue)
+        self.assertEqual(payload["review_queue"]["by_severity"]["ERROR"]["breached"], 1)
+
+    def test_pending_reviews_is_not_pending_links(self):
+        """The two numbers count different stores; conflating them is how the
+        review backlog stayed invisible while a "pending" figure was already
+        on screen."""
+        self._enqueue_aged("evt-a", "WARN", 1.0)
+        self._enqueue_aged("evt-b", "WARN", 2.0)
+        counts = loop_status_service.loop_status()["counts"]
+        self.assertEqual(counts["pending_reviews"], 2)
+        self.assertEqual(counts["pending_links"], 0)
+
+    def test_configured_budgets_are_forwarded_to_the_store(self):
+        with patch.object(settings, "REVIEW_QUEUE_SLA_ERROR_HOURS", 1.5), \
+                patch.object(settings, "REVIEW_QUEUE_SLA_WARN_HOURS", 2.5), \
+                patch.object(rq, "queue_sla_summary",
+                             return_value={"pending_total": 0,
+                                           "breached_total": 0}) as spy:
+            loop_status_service._review_queue_counts()
+        self.assertEqual(spy.call_args.kwargs["sla_hours"],
+                         {"ERROR": 1.5, "WARN": 2.5})
+
+    def test_an_unreadable_queue_degrades_instead_of_raising(self):
+        """/api/health answering 500 because the review queue is unreadable is
+        worse than it reporting an empty queue — same posture as
+        ``_prediction_counts``."""
+        with patch.object(rq, "queue_sla_summary",
+                          side_effect=RuntimeError("db gone")):
+            fallback = loop_status_service._review_queue_counts()
+            payload = loop_status_service.loop_status()
+
+        self.assertEqual(fallback["pending_total"], 0)
+        self.assertEqual(fallback["breached_total"], 0)
+        self.assertEqual(payload["counts"]["pending_reviews"], 0)
+        self.assertEqual(payload["counts"]["breached_reviews"], 0)
+
+    def test_the_fallback_shape_matches_the_real_summary(self):
+        """A key the fallback omits becomes a KeyError only on the failure path,
+        i.e. exactly when nothing is left to catch it."""
+        real = rq.queue_sla_summary()
+        with patch.object(rq, "queue_sla_summary",
+                          side_effect=RuntimeError("db gone")):
+            fallback = loop_status_service._review_queue_counts()
+        self.assertEqual(set(fallback), set(real))
 
 
 class LoopStatusRouteOffloadTests(unittest.TestCase):

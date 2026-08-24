@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.api.security import require_write_key
+from app.core.config import settings
 from app.memory import review_queue_store
 
 router = APIRouter(prefix="/review-queue", tags=["Review Queue"])
@@ -51,11 +52,19 @@ async def list_review_queue(
     trigger: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> dict[str, Any]:
-    """List queue items by status, newest first."""
+    """List queue items: pending oldest-first, resolved newest-resolved-first.
+
+    Pending order is deliberate. This route truncates with ``items[:limit]``, so
+    while the store returned newest-first the longest-waiting item was the last
+    one shown and the first one dropped — the opposite of what a review SLA
+    needs. Each pending item carries ``age_hours`` and ``severity_rank`` so a
+    client can sort by urgency without losing sight of the oldest.
+    """
     if status == "pending":
         items = await asyncio.to_thread(
             review_queue_store.list_pending, trigger=trigger
         )
+        total = len(items)
         items = items[:limit]
     else:
         items = await asyncio.to_thread(
@@ -63,7 +72,32 @@ async def list_review_queue(
         )
         if trigger is not None:
             items = [item for item in items if item.get("trigger") == trigger]
-    return {"items": items, "count": len(items), "status": status}
+        total = len(items)
+    return {
+        "items": items,
+        "count": len(items),
+        "total": total,
+        "truncated": total > len(items),
+        "status": status,
+    }
+
+
+@router.get("/sla")
+async def get_review_queue_sla() -> dict[str, Any]:
+    """Pending depth, oldest wait, and SLA breach counts.
+
+    Read-only aggregate: counts and ages only, no reasons or event text. Budgets
+    come from ``REVIEW_QUEUE_SLA_ERROR_HOURS`` / ``REVIEW_QUEUE_SLA_WARN_HOURS``.
+    A breach is reported, never acted on.
+    """
+    summary = await asyncio.to_thread(
+        review_queue_store.queue_sla_summary,
+        sla_hours={
+            "ERROR": settings.REVIEW_QUEUE_SLA_ERROR_HOURS,
+            "WARN": settings.REVIEW_QUEUE_SLA_WARN_HOURS,
+        },
+    )
+    return {"sla": summary}
 
 
 @router.get("/{item_id}")

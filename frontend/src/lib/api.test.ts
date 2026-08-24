@@ -5,6 +5,7 @@ import {
   getOperatorApiKey,
   getOperatorId,
   qualityMetricsApi,
+  reviewQueueApi,
   setOperatorApiKey,
   setOperatorId,
 } from "./api";
@@ -128,6 +129,70 @@ describe("qualityMetricsApi", () => {
     vi.stubGlobal("fetch", fetchMock);
     const data = await qualityMetricsApi.timeseries("30d");
     expect(data.window).toBe("7d");
+  });
+});
+
+describe("reviewQueueApi", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  it("sla calls /review-queue/sla", async () => {
+    // The board mocks reviewQueueApi wholesale, so this is the only place the
+    // SLA URL itself is pinned — /review-queue is a different response shape.
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          sla: {
+            pending_total: 2,
+            oldest_age_hours: 30.5,
+            oldest_item_id: "item-1",
+            breached_total: 1,
+            unknown_severity: 0,
+            sla_hours: { ERROR: 24, WARN: 72 },
+            by_severity: {},
+            by_trigger: {},
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const data = await reviewQueueApi.sla();
+
+    expect(data.sla.breached_total).toBe(1);
+    expect(data.sla.oldest_age_hours).toBe(30.5);
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain("/review-queue/sla");
+    expect(url).not.toMatch(/\/review-queue(\?|$)/);
+  });
+
+  it("list forwards the status, trigger and limit filters", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          items: [],
+          count: 0,
+          total: 0,
+          truncated: false,
+          status: "pending",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await reviewQueueApi.list({
+      status: "pending",
+      trigger: "high_value_downgraded",
+      limit: 20,
+    });
+
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain("status=pending");
+    expect(url).toContain("trigger=high_value_downgraded");
+    expect(url).toContain("limit=20");
   });
 });
 

@@ -6,7 +6,7 @@ no new replay logic.
 
 Usage:
     python -m scripts.analyze_feature_flag_impact [--sample-size N]
-        [--event-ids id1,id2] [--compare all_off all_on]
+        [--sample-seed SEED] [--event-ids id1,id2] [--compare all_off all_on]
         [--json report.json]
 
 Output: an ASCII matrix of direction transitions (e.g. "YES -> WAIT: 17%")
@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import io
 import json
-import random
 import sys
 from pathlib import Path
 from typing import Any
@@ -37,16 +36,29 @@ except (AttributeError, io.UnsupportedOperation):  # pragma: no cover
 
 from app.replay.config import ReplayConfig
 from app.replay.runner import replay_record, simulate_llm_degraded
+from app.utils.stable_sample import SELECTION_STRATEGY, stable_sample
 
 _DIRECTIONS = ("YES", "NO", "WAIT", "AVOID")
+
+_DEFAULT_SAMPLE_SEED = "flag-impact"
 
 
 def _load_records(
     event_ids: list[str] | None,
     sample_size: int | None,
+    *,
+    sample_seed: str = _DEFAULT_SAMPLE_SEED,
 ) -> list[dict[str, Any]]:
     """Load event records from event_store. Unwraps the {event_id, record}
-    envelope that event_store.list_all_events returns."""
+    envelope that event_store.list_all_events returns.
+
+    ``--sample-size`` selects by hash rank rather than by position. The old
+    ``random.seed(42)`` + ``random.sample`` pair picked positions, so the subset
+    changed whenever the store grew or was rewritten -- two runs of the same
+    command compared different events while reporting one matrix. It also
+    reseeded the *process-global* RNG from inside a read-only diagnostic.
+    See ``app.utils.stable_sample`` for the measured churn.
+    """
     from app.memory.event_store import list_all_events
     entries = list_all_events()
     records = [e["record"] for e in entries if isinstance(e.get("record"), dict)]
@@ -54,9 +66,36 @@ def _load_records(
         wanted = set(event_ids)
         records = [r for r in records if r.get("event_id") in wanted]
     if sample_size and len(records) > sample_size:
-        random.seed(42)  # deterministic sampling for reproducibility
-        records = random.sample(records, sample_size)
+        by_id: dict[str, dict[str, Any]] = {}
+        skipped = 0
+        for r in records:
+            eid = r.get("event_id")
+            if not isinstance(eid, str) or not eid:
+                skipped += 1
+                continue
+            # A duplicated id would otherwise let one event occupy two slots.
+            by_id.setdefault(eid, r)
+        if skipped:
+            _print(f"[WARN] {skipped} record(s) have no event_id and cannot be sampled.")
+        keep = stable_sample(list(by_id), seed=sample_seed, size=sample_size)
+        records = [by_id[eid] for eid in keep]
     return records
+
+
+def _sample_block(args: argparse.Namespace) -> dict[str, Any] | None:
+    """Provenance for the selection this run used, or None if it used all of it.
+
+    Every JSON payload this script writes carries the key, so a missing block
+    means "whole population" rather than "we forgot to record it" -- two
+    archived reports were otherwise indistinguishable.
+    """
+    if not args.sample_size:
+        return None
+    return {
+        "size": args.sample_size,
+        "seed": args.sample_seed,
+        "strategy": SELECTION_STRATEGY,
+    }
 
 
 def _config_by_name(name: str) -> ReplayConfig:
@@ -250,6 +289,7 @@ def _run_diff_mode(
     diff_report: bool,
     diff_report_path: str | None,
     diff_json: str | None,
+    sample: dict[str, Any] | None = None,
 ) -> int:
     """Run diff mode: replay under A and B, build_diff, render output."""
     from app.services.quality_diff_service import build_diff
@@ -315,7 +355,12 @@ def _run_diff_mode(
             _print(f"[OK] Text diff report written to {diff_report_path}")
 
     if diff_json:
-        payload = {**diff, "effective_config_a": effective_a, "effective_config_b": effective_b}
+        payload = {
+            **diff,
+            "effective_config_a": effective_a,
+            "effective_config_b": effective_b,
+            "sample": sample,
+        }
         out_path = Path(diff_json)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(payload, indent=2, default=str, ensure_ascii=False), encoding="utf-8")
@@ -436,7 +481,11 @@ def main(argv: list[str] | None = None) -> int:
                     "direction when toggled on (Plan 5 §1.5).",
     )
     parser.add_argument("--sample-size", type=int, default=None,
-                        help="Random sample N records (deterministic seed).")
+                        help="Replay a stable subset of N records (see --sample-seed).")
+    parser.add_argument("--sample-seed", type=str, default=_DEFAULT_SAMPLE_SEED,
+                        help=f"Seed for --sample-size selection. Default: {_DEFAULT_SAMPLE_SEED!r}. "
+                             "Same seed + same ids = same subset, whatever the "
+                             "store's size or order.")
     parser.add_argument("--event-ids", type=str, default=None,
                         help="Comma-separated event ids to restrict the run.")
     parser.add_argument("--compare", nargs=2,
@@ -496,6 +545,15 @@ def main(argv: list[str] | None = None) -> int:
         print("[FAIL] --diff-json and --diff-report-path are mutually exclusive (pick one file format)", file=sys.stderr)
         return 2
 
+    if args.sample_size is not None and args.sample_size <= 0:
+        print("[FAIL] --sample-size must be > 0", file=sys.stderr)
+        return 2
+    if not args.sample_seed.strip():
+        # stable_sample hashes the seed into the rank key, so an empty seed is a
+        # legal-but-meaningless input that silently draws one fixed subset.
+        print("[FAIL] --sample-seed must not be empty", file=sys.stderr)
+        return 2
+
     # Parse --set* into override dicts
     shared_overrides = dict(parse_kv(s) for s in args.set)
     a_overrides = dict(parse_kv(s) for s in args.set_a)
@@ -514,18 +572,25 @@ def main(argv: list[str] | None = None) -> int:
     if args.event_ids:
         event_ids = [s.strip() for s in args.event_ids.split(",") if s.strip()]
 
-    records = _load_records(event_ids, args.sample_size)
+    records = _load_records(event_ids, args.sample_size, sample_seed=args.sample_seed)
     if not records:
         _print("[WARN] No records found. Exiting.")
         return 0
 
     _print(f"[INFO] Loaded {len(records)} records.")
+    if args.sample_size:
+        _print(
+            f"[INFO] Sampled with seed={args.sample_seed!r} "
+            f"strategy={SELECTION_STRATEGY} -- record it beside the matrix, or "
+            "two runs are not comparable."
+        )
 
     if diff_mode:
         return _run_diff_mode(
             records, compare_a, compare_b,
             shared_overrides, a_overrides, b_overrides,
             args.diff_report, args.diff_report_path, args.diff_json,
+            sample=_sample_block(args),
         )
 
     # Legacy mode (--per-phase or --compare + optional --json)
@@ -567,6 +632,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = {
                 "mode": "per_phase",
                 "loaded": len(records),
+                "sample": _sample_block(args),
                 "phases": json_phases,
             }
             out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
@@ -596,6 +662,7 @@ def main(argv: list[str] | None = None) -> int:
             "compare": [compare_a, compare_b],
             "total": counted,
             "loaded": len(records),
+            "sample": _sample_block(args),
             "matrix": matrix,
         }
         out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2),

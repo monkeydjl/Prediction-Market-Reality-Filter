@@ -299,6 +299,66 @@ Three things that bite operators:
   a membership identity — two mints of the same events differ. Membership
   identity is `name` + `revision`.
 
+### Replay harness routine — provenance + stable sample (Q2)
+
+`scripts/replay_decision_pipeline` re-runs the Phase 1–5 overlays over frozen
+event records and writes a four-file report. It reads the event store and
+`prediction_store`; it writes **nothing** back, so it is safe to run against
+production data.
+
+```bash
+cd backend
+# Whole store, all_off -> current, with the per-phase marginal loop.
+PYTHONPATH=. python -m scripts.replay_decision_pipeline \
+  --output-dir docs/reports/replay/2026-w34
+
+# A repeatable weekly subset. Same seed + same ids = same events, whatever
+# the store's size or order. Change the seed only when you mean to.
+PYTHONPATH=. python -m scripts.replay_decision_pipeline \
+  --sample-size 50 --sample-seed 2026-w34 --skip-marginal \
+  --output-dir docs/reports/replay/2026-w34-sample
+```
+
+Output: `report.md`, `report.html`, `metrics.json`, `cases.jsonl`. Exit codes:
+`0` report written, `1` no records to replay, `2` bad arguments.
+
+**Before comparing two reports, diff their `run` blocks.** Every report carries
+one, and it is what makes two runs comparable at all:
+
+| Field | Why it decides whether a comparison is valid |
+|---|---|
+| `compare.a` / `compare.b` | Two reports built from different pairs measure different things. |
+| `population` vs `records_replayed` | `records_replayed: 50` alone reads as "the store holds 50". |
+| `sample.seed` / `sample.strategy` | Different seed = different events. `null` means the whole population — the key is always present, so its absence means the file predates Q2. |
+| `marginal` | `false` means `--skip-marginal`; the Per-Phase section is empty by choice, not because no phase contributed. |
+| `missing_event_ids` | `--event-ids` you asked for that the store does not have. Replaying 48 of 50 silently is a report about a different population. |
+| `duplicate_event_ids` | Kept once each. Left in, a repeated id would be counted twice by `add_pair` and inflate every rate. |
+| `generated_at` | One instant for all three files. Two archived reports with the same stamp are the same run. |
+
+Four things that bite operators:
+
+- **`--sample-size` selects by hash rank, not by position.** Before Q2 it was
+  `random.seed(42)` + `random.sample`, which picks *positions*: measured on the
+  live 235-event store at size 8, merely reversing the store's order left an
+  overlap of **0/8** — and `event_store.json` is rewritten whole. Adding events
+  now displaces an incumbent at most one-for-one, and a widened `--sample-size`
+  is a superset of the narrower run.
+- **Read the two resolved counts as the different numbers they are.** Summary's
+  "Resolved (with outcome)" is Brier's denominator; Direction Accuracy uses
+  "Direction-callable samples", which excludes WAIT/AVOID because an abstention
+  has no direction to be right about. A live 8-event run showed 2 resolved and 0
+  direction-callable, and `direction_correct_delta` was `null` rather than a
+  fake `0.0`.
+- **The per-phase loop runs by default.** There is no `--marginal` flag; passing
+  one gets `unrecognized arguments`. `--skip-marginal` is the fast path — the
+  loop replays every record once per phase.
+- **`--compare` takes exactly `current`, `all_off`, `llm_degraded`.** A typo now
+  exits `2` with the valid names, not `1` with a traceback.
+
+`scripts/analyze_feature_flag_impact` samples the same way and takes the same
+`--sample-seed`; every JSON it writes carries a `sample` block. Use the same
+seed in both when you intend the two reports to describe the same events.
+
 ### Betting / 联赛赛程（竞猜模块）
 
 The 竞猜 hub (`/sports/betting`) and competition landings merge a static FE

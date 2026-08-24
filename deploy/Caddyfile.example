@@ -64,8 +64,14 @@ pmrf.example.com {
     # The backend serves both /api/* and the static frontend (frontend/out
     # mounted at / in production).
     reverse_proxy 127.0.0.1:8000 {
-        # Forward real client IP + scheme so backend audit log + rate limiter
-        # see the original request, not Caddy's loopback IP.
+        # Forward real client IP + scheme so the backend rate limiter sees the
+        # original request, not Caddy's loopback IP.
+        #
+        # header_up REPLACES the header, so X-Forwarded-For holds exactly one
+        # address and a caller cannot prepend a spoofed entry to it. Set both of
+        # these in backend/.env or per-client throttling does not happen:
+        #   TRUSTED_PROXY_HEADER=true
+        #   RATE_LIMIT_TRUSTED_PROXY_HOPS=1
         header_up X-Real-IP {remote_host}
         header_up X-Forwarded-For {remote_host}
         header_up X-Forwarded-Proto {scheme}

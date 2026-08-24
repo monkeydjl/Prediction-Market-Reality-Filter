@@ -8,8 +8,14 @@ services:
       # Bind to loopback only — the container must NOT be exposed directly to
       # the public internet (no TLS termination here). Put nginx/caddy in
       # front as the reverse proxy; the proxy owns the public listener and the
-      # TLS cert. To enable TRUSTED_PROXY_HEADER on the app, set it in .env so
-      # rate limiting keys off the proxy-supplied X-Forwarded-For.
+      # TLS cert.
+      #
+      # Once a proxy is in front, set TRUSTED_PROXY_HEADER=true and
+      # RATE_LIMIT_TRUSTED_PROXY_HOPS in backend/.env. Leaving them unset is not
+      # the cautious choice: the socket peer is then the proxy on every request,
+      # so all callers share one rate-limit bucket and RATE_LIMIT_MAX_REQUESTS
+      # becomes a global cap. The app warns once per process when it sees proxy
+      # headers while the setting says there is no proxy.
       - "127.0.0.1:8000:8000"
     env_file:
       - ../backend/.env

@@ -389,6 +389,10 @@ export interface LoopStatus {
     orphan_predictions?: number;
     dangling_predictions?: number;
     dangling_links?: number;
+    // E2: the two keys above cover two tables; five carry an event_id. Read
+    // `dangling_refs` for the total and `dangling_by_table` for where they are.
+    dangling_refs?: number;
+    dangling_by_table?: Record<string, number>;
     calibration_n?: number;
     predictions?: Record<string, number>;
   };
@@ -896,7 +900,13 @@ export const eventsApi = {
     ),
 
   delete: (id: string) =>
-    api<void>(`/events/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    // `stranded_refs` names the loop-DB tables still pointing at this event
+    // after the JSON record is gone (E2: no FK spans JSON and SQLite, and
+    // nothing prunes those tables). The rows are deliberately kept.
+    api<{ event_id: string; message: string; stranded_refs: Record<string, number>; stranded_total: number }>(
+      `/events/${encodeURIComponent(id)}`,
+      { method: "DELETE" }
+    ),
 
   resolveExpired: () =>
     api<{ total: number; resolved: number; archived: number; parsed_dates: number; message: string }>("/events/resolve-expired", {

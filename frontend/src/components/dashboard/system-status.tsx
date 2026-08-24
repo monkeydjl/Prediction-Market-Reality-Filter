@@ -205,8 +205,25 @@ export function SystemStatus() {
   const degraded = apiMeta.degraded || failed || running === false || llmUnconfigured;
   const failedWithoutDetails = runs.some(([, r]) => r.status === "failed" && !r.error);
   const endpointCount = overview?.endpoints ? Object.keys(overview.endpoints).length : null;
+  // E2: this used to sum `dangling_predictions + dangling_links`, which covered
+  // two of the five tables carrying an event_id. The one genuinely stranded row
+  // in the live database was an open simulated trade, so the badge read 0 while
+  // a broken reference existed. `dangling_refs` is the backend's own total over
+  // every watched table; the two legacy keys remain the fallback for a backend
+  // that predates it, so an older API does not make the badge read "—".
   const danglingRefs =
+    status?.counts?.dangling_refs ??
     (status?.counts?.dangling_predictions ?? 0) + (status?.counts?.dangling_links ?? 0);
+  const danglingByTable = status?.counts?.dangling_by_table ?? {};
+  // "3 broken references" is not actionable without knowing which store, and the
+  // badge has no room for a breakdown.
+  const danglingTitle =
+    danglingRefs > 0
+      ? Object.entries(danglingByTable)
+          .filter(([, n]) => n > 0)
+          .map(([table, n]) => `${table}: ${n}`)
+          .join(" · ")
+      : "没有指向已删除事件的残留行";
 
   return (
     <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
@@ -254,7 +271,9 @@ export function SystemStatus() {
             <span className="rounded bg-secondary px-2 py-1">事件 {status?.counts?.events ?? "—"}</span>
             <span className="rounded bg-secondary px-2 py-1">已结算 {status?.counts?.resolved_events ?? "—"}</span>
             <span className="rounded bg-secondary px-2 py-1">待审链接 {status?.counts?.pending_links ?? "—"}</span>
-            <span className="rounded bg-secondary px-2 py-1">引用异常 {danglingRefs}</span>
+            <span className="rounded bg-secondary px-2 py-1" title={danglingTitle}>
+              引用异常 {danglingRefs}
+            </span>
             <span className="rounded bg-secondary px-2 py-1">校准样本 {status?.counts?.calibration_n ?? "—"}</span>
             <span className="rounded bg-secondary px-2 py-1">版本 {overview?.version ?? health?.version ?? "—"}</span>
             <span className="rounded bg-secondary px-2 py-1">接口 {endpointCount ?? "—"}</span>

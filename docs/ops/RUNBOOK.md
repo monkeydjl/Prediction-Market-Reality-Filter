@@ -286,6 +286,58 @@ Re-run the census against a live store with:
 python -c "import json,os,collections; from app.core.config import settings; p=os.path.abspath(settings.EVENT_STORE_FILE); s=json.load(open(p,encoding='utf-8')); b=collections.Counter(); [b.update({k: len(json.dumps(v,ensure_ascii=False))}) for e in s.values() for k,v in (e.get('record') or {}).items()]; print(os.path.getsize(p), len(s)); print(b.most_common(8))"
 ```
 
+### Dangling event references — the missing foreign key (E2)
+
+Events live in `event_store.json`; the rows about them live in SQLite. **No
+foreign key can span that boundary**, so nothing stops a row from outliving the
+event it names. `DELETE /events/{event_id}` removes only the JSON record, and
+`loop_db_maintenance` is WAL truncation plus an integrity check — it prunes
+nothing — so stranded rows accumulate for the life of the database.
+
+Read the count in one place:
+
+- JSON: `counts.dangling_refs` (total) and `counts.dangling_by_table` (where) on
+  `GET /api/health` and `GET /api/events/loop/status`
+
+`counts.dangling_predictions` / `counts.dangling_links` are still published for
+older consumers, but they cover **two** of the five watched tables. Before
+2026-08-24 they were the *only* reading, and the single dangling reference in the
+live store sat in `simulated_trades`, so the dashboard badge read 0. **Do not
+build an alert on those two keys.**
+
+Watched: `predictions`, `event_market_links`, `simulated_trades`,
+`review_queue_items`, `decision_timeline`. Exempt with a written reason:
+`domain_reliability_ledger` — its `event_id` is the dedup key of a credit already
+earned (`PRIMARY KEY (event_id, domain, category)`), read by domain and never by
+event, so it is not a pointer that has to resolve. The list is declared in
+`app/memory/event_ref_census.py` and `tests/test_event_ref_census.py` asserts it
+exactly partitions every table in `app/` declaring an `event_id` column — adding
+a table with that column and no entry in either list turns the suite red.
+
+**Before deleting an event**, note what the delete will strand. The response
+says so:
+
+```bash
+curl -s -X DELETE -H "X-API-Key: $API_WRITE_KEY" \
+  "$BASE/api/events/<event_id>" | python -m json.tool
+# {"event_id": "...", "message": "Deleted",
+#  "stranded_refs": {"predictions": 1, "simulated_trades": 1},
+#  "stranded_total": 2}
+```
+
+The rows are **deliberately kept**. A scored prediction is a calibration sample
+and cascading the delete would silently shrink the only measurement of whether
+the engine works. Purging is an operator decision — and note the consequence of
+keeping: `calibration_summary` does not check that the event still exists, so a
+stranded scored prediction stays in the Brier aggregate with nothing to trace it
+to. If you decide to purge, do it explicitly and record which event ids.
+
+Re-run the census against a live store with:
+
+```bash
+python -c "import json,os; from app.core.config import settings; from app.memory.event_ref_census import dangling_counts; s=json.load(open(os.path.abspath(settings.EVENT_STORE_FILE),encoding='utf-8')); print(dangling_counts(set(s)))"
+```
+
 ### Grafana dashboard (E8)
 
 Import the provisioned JSON:

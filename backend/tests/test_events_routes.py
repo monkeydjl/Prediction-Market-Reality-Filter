@@ -30,6 +30,8 @@ from app.memory import event_market_link_store as links
 from app.memory import event_store as store
 from app.memory import loop_run_store
 from app.memory import prediction_store as preds
+from app.memory import review_queue_store as rq
+from app.memory import simulated_trade_store as trades
 from app.utils import sqlite_db
 import app.services.ai_analysis_service as ai
 from app.services import event_audit_service as audit
@@ -2683,3 +2685,140 @@ class BlockingSourceRouteOffloadTests(unittest.TestCase):
                     f"{helper} blocked the event loop: the heartbeat only got "
                     f"{ticks} ticks during a 0.25s upstream call",
                 )
+
+
+class DeleteEventStrandedRefsTests(unittest.TestCase):
+    """E2: ``DELETE /events/{event_id}`` removes the JSON record and nothing else.
+
+    No foreign key can span a JSON file and a SQLite database, and nothing prunes
+    the loop-DB tables afterwards (``loop_db_maintenance`` is WAL truncation plus
+    an integrity check), so every row keyed on the deleted event_id survives with
+    nothing to resolve to: an open simulated trade that can never be closed, a
+    pending review item that sends a human to a 404, a scored prediction that
+    still enters the Brier aggregate.
+
+    The rows are deliberately kept — a scored prediction is a calibration sample
+    and cascading the delete would silently shrink the only measurement of
+    whether the engine works. So the route reports the consequence instead of
+    hiding it. Until this class existed the route had no automated coverage at
+    all, while being reachable from the events page delete button.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        base = Path(self.tmpdir.name)
+        self.db = str(base / "v2_loop.db")
+        self.patches = [
+            patch.object(store, "_store_path", return_value=str(base / "event_store.json")),
+            patch.object(sqlite_db, "loop_db_path", return_value=self.db),
+            # simulated_trade_store holds its own `loop_db_path` binding, so the
+            # patch above does not reach it and its writes would land in the real
+            # backend/v2_loop.db.
+            patch.object(trades, "loop_db_path", return_value=self.db),
+            patch.object(settings, "API_WRITE_KEY", "secret"),
+        ]
+        for p in self.patches:
+            p.start()
+        self.client = _events_client()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmpdir.cleanup()
+
+    def _seed(self, event_id, *, with_rows=True):
+        """Save an event, and optionally the loop-DB rows a live event accrues."""
+        record = _make_record(event_id, estimated=70.0)
+        record["probability"]["baseline"] = 50.0
+        record["source"] = {
+            "type": "prediction_market",
+            "platform": "Polymarket",
+            "source_id": f"contract-{event_id}",
+        }
+        store.save_event(record)
+        if not with_rows:
+            return record
+        preds.freeze_prediction(record)  # also seeds the verified market link
+        trades.open_trade(
+            event_id, "t", direction="YES", entry_prob=70.0, market_prob=50.0,
+        )
+        rq.enqueue_item(
+            event_id=event_id, trigger="high_value_downgraded",
+            severity="WARN", reason="r", context={},
+        )
+        return record
+
+    def test_the_response_names_every_table_left_pointing_at_the_event(self):
+        self._seed("evt-del")
+        resp = self.client.delete("/events/evt-del", headers=AUTH_HEADERS)
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(
+            body["stranded_refs"],
+            {
+                "predictions": 1,
+                "event_market_links": 1,
+                "simulated_trades": 1,
+                "review_queue_items": 1,
+            },
+        )
+        self.assertEqual(body["stranded_total"], 4)
+        self.assertIsNone(store.get_event("evt-del"))
+
+    def test_the_stranded_rows_are_deliberately_left_in_place(self):
+        """The route reports; it must not cascade. A scored prediction is a
+        calibration sample, so purging is an operator's decision."""
+        self._seed("evt-del")
+        self.client.delete("/events/evt-del", headers=AUTH_HEADERS)
+
+        self.assertIsNotNone(preds.get_prediction("evt-del"))
+        self.assertEqual(len(trades.list_open_trades()), 1)
+        self.assertEqual(len(links.get_links("evt-del")), 1)
+
+    def test_an_event_with_no_loop_rows_strands_nothing(self):
+        """The guard against a count that is non-zero for every delete."""
+        self._seed("evt-clean", with_rows=False)
+        body = self.client.delete(
+            "/events/evt-clean", headers=AUTH_HEADERS
+        ).json()
+
+        self.assertEqual(body["stranded_refs"], {})
+        self.assertEqual(body["stranded_total"], 0)
+
+    def test_the_count_covers_only_the_event_being_deleted(self):
+        """Rows stranded by an earlier delete must not be re-attributed.
+
+        This is why the count is per-event rather than a store-wide total: after
+        the first delete, its rows are indistinguishable from the second's.
+        """
+        self._seed("evt-first")
+        self._seed("evt-second")
+        self.client.delete("/events/evt-first", headers=AUTH_HEADERS)
+
+        body = self.client.delete("/events/evt-second", headers=AUTH_HEADERS).json()
+        self.assertEqual(body["stranded_total"], 4)
+
+    def test_a_missing_event_still_404s(self):
+        """The census runs before the existence check; it must not swallow it."""
+        resp = self.client.delete("/events/nope", headers=AUTH_HEADERS)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_the_delete_requires_the_write_key(self):
+        self._seed("evt-del", with_rows=False)
+        resp = self.client.delete("/events/evt-del")
+
+        self.assertEqual(resp.status_code, 401)
+        self.assertIsNotNone(store.get_event("evt-del"))
+
+    def test_an_unreadable_loop_db_does_not_block_the_delete(self):
+        """The JSON record must still go. Reporting the consequence is a
+        courtesy; failing the delete because the census could not run would make
+        an unreadable loop DB block event maintenance entirely."""
+        self._seed("evt-del", with_rows=False)
+        with patch.object(sqlite_db, "loop_db_path", return_value="/nope/x.db"):
+            resp = self.client.delete("/events/evt-del", headers=AUTH_HEADERS)
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["stranded_total"], 0)
+        self.assertIsNone(store.get_event("evt-del"))

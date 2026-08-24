@@ -3,13 +3,14 @@
 import logging
 from typing import Any
 
-from app.memory import loop_run_store
+from app.memory import loop_run_store, review_queue_store
 from app.memory.event_market_link_store import list_pending
 from app.memory.event_store import list_all_events, list_resolved_events
 from app.memory.prediction_store import (
     calibration_summary,
     list_open_opportunities,
 )
+from app.core.config import settings
 from app.utils import sqlite_db
 from app.utils.sqlite_db import reading
 
@@ -27,6 +28,7 @@ def loop_status(
     dangling_refs = _dangling_event_refs(events)
     orphan_count = _orphan_prediction_count(events)
     calibration = calibration_summary()
+    review_queue = _review_queue_counts()
     return {
         "scheduler": {"running": scheduler_running},
         "storage": {
@@ -59,13 +61,46 @@ def loop_status(
             "open_opportunities": len(list_open_opportunities(limit=1000)),
             "predictions": prediction_counts,
             "pending_links": len(list_pending()),
+            "pending_reviews": review_queue["pending_total"],
+            "breached_reviews": review_queue["breached_total"],
             "orphan_predictions": orphan_count,
             "dangling_predictions": dangling_refs["predictions"],
             "dangling_links": dangling_refs["links"],
             "calibration_n": calibration.get("n", 0),
         },
         "calibration": calibration,
+        "review_queue": review_queue,
     }
+
+
+def _review_queue_counts() -> dict[str, Any]:
+    """Review-queue depth / oldest wait / SLA breaches for the status payload.
+
+    ``pending_links`` above counts ``event_market_link_store`` — a different
+    store — and used to be the only "pending" number here, so a human review
+    backlog of any size was invisible from the status endpoint.
+
+    Failures degrade to zeros like ``_prediction_counts`` does: a status endpoint
+    that raises because the review queue is unreadable is worse than one
+    reporting an empty queue.
+    """
+    try:
+        return review_queue_store.queue_sla_summary(sla_hours={
+            "ERROR": settings.REVIEW_QUEUE_SLA_ERROR_HOURS,
+            "WARN": settings.REVIEW_QUEUE_SLA_WARN_HOURS,
+        })
+    except Exception:
+        logger.warning("review queue sla summary failed", exc_info=True)
+        return {
+            "pending_total": 0,
+            "oldest_age_hours": None,
+            "oldest_item_id": None,
+            "breached_total": 0,
+            "unknown_severity": 0,
+            "sla_hours": {},
+            "by_severity": {},
+            "by_trigger": {},
+        }
 
 
 def _visible_run(

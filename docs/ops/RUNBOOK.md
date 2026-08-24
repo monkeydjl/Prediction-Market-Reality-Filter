@@ -63,12 +63,13 @@ INSERT-only `review_queue_audit` table. Two operator paths:
 
 | Path | Use |
 |------|-----|
-| UI | Nav **人工复核** (`/review-queue`) — filter by status/trigger, read the trigger context, submit an action |
-| CLI | `python -m scripts.review_queue_cli list \| action \| audit` |
+| UI | Nav **人工复核** (`/review-queue`) — filter by status/trigger, read the trigger context, see how long each item has waited, submit an action |
+| CLI | `python -m scripts.review_queue_cli list \| sla \| action \| audit` |
 
 | Endpoint | Auth |
 |----------|------|
 | `GET /api/review-queue?status=pending&trigger=…&limit=…` | open read |
+| `GET /api/review-queue/sla` | open read |
 | `GET /api/review-queue/{item_id}` | open read |
 | `GET /api/review-queue/{item_id}/audit` | open read |
 | `POST /api/review-queue/{item_id}/action` | `X-API-Key` (write key) |
@@ -79,6 +80,59 @@ else is a 422. Reviewer notes are vocabulary-checked (no
 long/short/buy/sell/position/kelly/order) and rejected with 400. Audit rows are
 never updated or deleted — a wrong action is corrected by enqueueing a
 re-review, not by editing history.
+
+### Review SLA (how fast the queue is being drained)
+
+```bash
+python -m scripts.review_queue_cli sla
+```
+
+Prints pending depth, the oldest wait, and per-severity / per-trigger counts;
+**exits 1 when anything has breached**, so it can be run as a check rather than
+read by eye. `--error-hours` / `--warn-hours` override the budgets for one run.
+
+Budgets are reporting-only — nothing escalates, retries, or auto-resolves:
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `REVIEW_QUEUE_SLA_ERROR_HOURS` | `24` | hours an `ERROR` item may wait |
+| `REVIEW_QUEUE_SLA_WARN_HOURS` | `72` | hours a `WARN` item may wait |
+
+`GET /api/review-queue/sla` returns the same aggregate (counts and ages only —
+no reasons, no context, no event text), and `/api/health` carries
+`counts.pending_reviews`, `counts.breached_reviews` and a `review_queue` block.
+
+On the **人工复核** page the same reading is at the top of the board (depth,
+oldest wait, breach count, budgets in force), each pending row shows
+`等待 <时长>` instead of a raw timestamp — the timestamp is the tooltip — and a
+row past its budget is highlighted. If the SLA line is missing, `/sla` failed;
+the list itself is unaffected and still loads.
+
+Four things to know before reading the numbers:
+
+- **`counts.pending_links` is a different store.** It counts
+  `event_market_link_store`; the review backlog is `pending_reviews`. Before this
+  existed, a review queue of any depth was invisible from `/api/health` while a
+  "pending" figure was already on screen.
+- **The list is oldest-first, and that is what makes `limit` safe.** The route
+  truncates with `items[:limit]`, so whatever sorts last is what gets dropped.
+  Urgency is a field (`severity_rank`, ERROR above WARN) for a client to sort on
+  — sorting by it server-side would put a fresh ERROR above a week-old WARN and
+  hide the WARN again.
+- **`created_at` is the first-enqueue time and is never rewritten.** Detectors
+  re-run on every overlay build and refresh a pending row in place; refreshing
+  the timestamp too would reset the clock on every scan and no item could ever
+  age.
+- **A severity with no budget can never breach**, so it is reported under
+  `unknown_severity` instead of counted as healthy. New rows cannot get there
+  (`enqueue_item` rejects anything outside `WARN`/`ERROR`), but rows written
+  before that gate existed can.
+
+An empty `outcome_prediction_mismatch` history predates 2026-08-24 rather than
+meaning nothing ever mismatched: that detector — the queue's only `ERROR`-severity
+trigger — read a field the event record has never carried and compared a dict
+against a string, so it could not fire. Depth measured before then is a WARN-only
+reading.
 
 ## Event title translation (repair path)
 

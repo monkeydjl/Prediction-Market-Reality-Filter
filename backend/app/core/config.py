@@ -963,6 +963,16 @@ class Settings:
     REVIEW_QUEUE_AUTO_RESOLVE_CONFIDENCE: float = float(
         os.getenv("REVIEW_QUEUE_AUTO_RESOLVE_CONFIDENCE", "0.95")
     )
+    # Q7: hours a pending review item may wait before it counts as an SLA
+    # breach. Reporting-only — nothing escalates, retries, or auto-resolves on
+    # a breach; the counts are exposed via /api/review-queue/sla, the CLI and
+    # loop_status so the backlog is visible instead of merely present.
+    REVIEW_QUEUE_SLA_ERROR_HOURS: float = float(
+        os.getenv("REVIEW_QUEUE_SLA_ERROR_HOURS", "24")
+    )
+    REVIEW_QUEUE_SLA_WARN_HOURS: float = float(
+        os.getenv("REVIEW_QUEUE_SLA_WARN_HOURS", "72")
+    )
     # Conclusion challenge gate. Disabled by default; when enabled, the event
     # and World Cup orchestrators run a post-conclusion "negative check" before
     # strong outputs are published.

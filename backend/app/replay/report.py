@@ -1,6 +1,15 @@
 """Render ReplayMetrics to Markdown + JSON + HTML + cases.jsonl.
 
 Pure rendering: no IO except ``write_report`` which writes the four files.
+
+Every renderer takes an optional ``run`` block — the provenance an archived
+report needs to be interpretable later: which two configs were compared, how
+many records were replayed out of what population, whether the per-phase loop
+ran, and which sample seed drew the subset. Without it two ``metrics.json``
+files are two bags of numbers that cannot be told apart, so "the replay says
+downgrades doubled" was not a statement anyone could check. ``run`` is absent
+on a report written before this existed, which is why every reader treats it as
+optional rather than defaulting it.
 """
 from __future__ import annotations
 
@@ -10,14 +19,113 @@ from html import escape as _stdlib_escape
 from pathlib import Path
 from typing import Any
 
+# Bumped when the *layout* of the written files changes, which is a different
+# question from "were these two reports built from the same events" — that one
+# is answered by the run block's compare/sample/population fields.
+REPLAY_REPORT_SCHEMA_VERSION = 1
 
-def render_markdown(metrics: dict[str, Any]) -> str:
+
+def _generated_at(run: dict[str, Any] | None) -> str:
+    """The one timestamp for this run.
+
+    ``render_markdown`` and ``render_html`` each used to call
+    ``datetime.now()``, so the two human-readable files a single run wrote
+    disagreed about when that run happened -- and ``metrics.json``, the one a
+    script reads, carried no timestamp at all. When a run block is supplied,
+    ``write_report`` stamps it once and all three print or store that.
+    """
+    if run is not None:
+        stamped = run.get("generated_at")
+        if isinstance(stamped, str) and stamped:
+            return stamped
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _run_rows(run: dict[str, Any]) -> list[tuple[str, str]]:
+    """(label, value) pairs for the Run section, shared by both renderers.
+
+    One source for the rows so the Markdown and HTML reports cannot describe
+    the same run differently — they already computed the Summary numbers twice
+    each, which is one copy too many to add a third to.
+    """
+    compare = run.get("compare") or {}
+    rows: list[tuple[str, str]] = [
+        ("Compared", f"{compare.get('a', '?')} -> {compare.get('b', '?')}"),
+        ("Records replayed", str(run.get("records_replayed", 0))),
+    ]
+    population = run.get("population")
+    if population is not None:
+        rows.append(("Population", str(population)))
+    sample = run.get("sample")
+    if isinstance(sample, dict):
+        rows.append((
+            "Sample",
+            f"size={sample.get('size')} seed={sample.get('seed')!r} "
+            f"strategy={sample.get('strategy')}",
+        ))
+    else:
+        rows.append(("Sample", "none (whole population)"))
+    rows.append((
+        "Per-phase marginal",
+        "yes" if run.get("marginal") else "no (--skip-marginal)",
+    ))
+    missing = run.get("missing_event_ids") or []
+    if missing:
+        shown = ", ".join(str(m) for m in missing[:10])
+        suffix = f" (+{len(missing) - 10} more)" if len(missing) > 10 else ""
+        rows.append((
+            "Requested but not found", f"{len(missing)}: {shown}{suffix}",
+        ))
+    dupes = run.get("duplicate_event_ids") or []
+    if dupes:
+        rows.append((
+            "Duplicate event_id (kept once each)",
+            f"{len(dupes)}: {', '.join(str(d) for d in dupes[:10])}",
+        ))
+    skipped = run.get("skipped_no_event_id") or 0
+    if skipped:
+        rows.append(("Skipped (no event_id)", str(skipped)))
+    rows.append(("Report schema", str(run.get("schema_version", "?"))))
+    return rows
+
+
+def _no_direction_samples(metrics: dict[str, Any]) -> str:
+    """Why Direction Accuracy is empty, naming the denominator it actually uses.
+
+    Both renderers used to print "No resolved samples." here while the Summary
+    two sections up said "Resolved (with outcome): 2" — a flat contradiction to
+    anyone reading top to bottom. Nothing was miscounted: Brier's denominator is
+    ``resolved_count`` and this section's is
+    ``direction_correct_resolved_count``, which excludes WAIT/AVOID because an
+    abstention has no direction to be right about. The message named the wrong
+    one.
+    """
+    resolved = metrics.get("resolved_count") or 0
+    if resolved:
+        return (
+            f"_No direction-callable samples: {resolved} event(s) resolved, but "
+            "none carried an explicit YES/NO on both sides (WAIT/AVOID abstain, "
+            "so they score in the Direction Matrix instead)._"
+        )
+    return "_No resolved samples._"
+
+
+def render_markdown(metrics: dict[str, Any], run: dict[str, Any] | None = None) -> str:
     """Render metrics dict to a Markdown report string."""
     lines: list[str] = []
     lines.append("# Replay Report")
     lines.append("")
-    lines.append(f"_Generated: {datetime.now(timezone.utc).isoformat()}_")
+    lines.append(f"_Generated: {_generated_at(run)}_")
     lines.append("")
+
+    # Section 0: Run provenance. Only rendered when supplied, so a caller that
+    # predates the run block still produces the report it always produced.
+    if run is not None:
+        lines.append("## Run")
+        lines.append("")
+        for label, value in _run_rows(run):
+            lines.append(f"- {label}: {value}")
+        lines.append("")
 
     # Section 1: Summary
     total = metrics.get("total", 0)
@@ -70,14 +178,14 @@ def render_markdown(metrics: dict[str, Any]) -> str:
     replay_correct = metrics.get("direction_correct_replayed", 0)
     delta = metrics.get("direction_correct_delta")
     if rc:
-        lines.append(f"- Resolved samples: {rc}")
+        lines.append(f"- Direction-callable samples: {rc}")
         lines.append(f"- Original correct: {orig_correct} ({orig_correct/rc*100:.1f}%)")
         lines.append(f"- Replayed correct: {replay_correct} ({replay_correct/rc*100:.1f}%)")
         if delta is not None:
             verdict = "improved" if delta > 0 else ("regressed" if delta < 0 else "unchanged")
             lines.append(f"- Delta: {delta*100:+.1f}pp ({verdict})")
     else:
-        lines.append("_No resolved samples._")
+        lines.append(_no_direction_samples(metrics))
     lines.append("")
 
     # Section 5: LLM vs Fallback
@@ -109,7 +217,15 @@ def render_markdown(metrics: dict[str, Any]) -> str:
                 f"{contrib.get('conflicts_with_final', 0)} |"
             )
     else:
-        lines.append("_No per-phase replay run (use --marginal to enable)._")
+        # There is no --marginal flag; the loop runs by default and
+        # --skip-marginal turns it off. The old text told an operator staring
+        # at an empty section to pass a flag argparse would reject, so the
+        # obvious next step produced "unrecognized arguments" and read as a
+        # broken tool.
+        lines.append(
+            "_No per-phase replay run (the N+1 loop runs by default; "
+            "--skip-marginal disables it)._"
+        )
     lines.append("")
 
     # Section 7: Conflict Cases
@@ -132,9 +248,18 @@ def render_markdown(metrics: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_json(metrics: dict[str, Any]) -> str:
-    """Render metrics dict to a JSON string."""
-    return json.dumps(metrics, indent=2, default=str)
+def render_json(metrics: dict[str, Any], run: dict[str, Any] | None = None) -> str:
+    """Render metrics dict to a JSON string.
+
+    The run block is merged in under ``"run"`` rather than nesting the metrics
+    one level deeper: a consumer that reads ``total`` off the top level keeps
+    working, and a file with no ``"run"`` key is one written before provenance
+    was recorded.
+    """
+    body = dict(metrics)
+    if run is not None:
+        body["run"] = run
+    return json.dumps(body, indent=2, default=str)
 
 
 def _html_escape(text: str) -> str:
@@ -210,7 +335,7 @@ select { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; }
 """
 
 
-def render_html(metrics: dict[str, Any]) -> str:
+def render_html(metrics: dict[str, Any], run: dict[str, Any] | None = None) -> str:
     """Render metrics dict to a self-contained HTML report string.
 
     Pure function: no IO, no side effects. Output is a single HTML
@@ -219,8 +344,9 @@ def render_html(metrics: dict[str, Any]) -> str:
 
     Mirrors the 7 sections of render_markdown: Summary / Direction
     Matrix / Brier / Direction Accuracy / LLM vs Fallback /
-    Per-Phase Marginal / Conflict Cases. Conflict cases table is
-    sortable (click headers) and filterable (by phase dropdown).
+    Per-Phase Marginal / Conflict Cases, preceded by the Run block when
+    provenance was supplied. Conflict cases table is sortable (click headers)
+    and filterable (by phase dropdown).
     """
     parts: list[str] = []
     parts.append("<!DOCTYPE html>")
@@ -234,8 +360,22 @@ def render_html(metrics: dict[str, Any]) -> str:
     parts.append("<h1>Replay Report</h1>")
     parts.append(
         f'<p class="generated">_Generated: '
-        f"{datetime.now(timezone.utc).isoformat()}_</p>"
+        f"{_generated_at(run)}_</p>"
     )
+
+    # Section 0: Run provenance (same rows as the Markdown report).
+    if run is not None:
+        parts.append('<section id="run">')
+        parts.append("<h2>Run</h2>")
+        parts.append("<table>")
+        parts.append("<tbody>")
+        for label, value in _run_rows(run):
+            parts.append(
+                f"<tr><th>{_html_escape(label)}</th>"
+                f"<td>{_html_escape(value)}</td></tr>"
+            )
+        parts.append("</tbody></table>")
+        parts.append("</section>")
 
     # Section 1: Summary
     total = metrics.get("total", 0)
@@ -330,7 +470,7 @@ def render_html(metrics: dict[str, Any]) -> str:
     if rc:
         orig_pct = orig_correct / rc * 100
         replay_pct = replay_correct / rc * 100
-        parts.append(f"<p>Resolved samples: {rc}</p>")
+        parts.append(f"<p>Direction-callable samples: {rc}</p>")
         # Original bar
         parts.append(
             f'<div class="bar-container" style="width: {orig_pct:.1f}%;">'
@@ -347,7 +487,7 @@ def render_html(metrics: dict[str, Any]) -> str:
         )
         parts.append(f"<p>Delta: {_delta_badge(delta)}</p>")
     else:
-        parts.append("<p>No resolved samples.</p>")
+        parts.append(f"<p>{_html_escape(_no_direction_samples(metrics).strip('_'))}</p>")
     parts.append("</section>")
 
     # Section 5: LLM vs Fallback
@@ -485,22 +625,31 @@ def write_report(
     metrics: dict[str, Any],
     output_dir: Path,
     cases: list[dict[str, Any]] | None = None,
+    run: dict[str, Any] | None = None,
 ) -> Path:
     """Write report.md + metrics.json + cases.jsonl + report.html to
     ``output_dir``.
 
     Returns the path to ``report.md`` (unchanged for backward compat).
     Creates ``output_dir`` if missing.
+
+    When ``run`` is supplied it is stamped with ``generated_at`` and
+    ``schema_version`` here — once, so the three files describe the same
+    instant instead of each calling the clock on its way out.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
+    if run is not None:
+        run = dict(run)
+        run.setdefault("generated_at", datetime.now(timezone.utc).isoformat())
+        run.setdefault("schema_version", REPLAY_REPORT_SCHEMA_VERSION)
     md_path = output_dir / "report.md"
-    md_path.write_text(render_markdown(metrics), encoding="utf-8")
+    md_path.write_text(render_markdown(metrics, run), encoding="utf-8")
     (output_dir / "metrics.json").write_text(
-        render_json(metrics), encoding="utf-8"
+        render_json(metrics, run), encoding="utf-8"
     )
     # HTML report (spec §4.5: HTML/Markdown/JSON triple format)
     (output_dir / "report.html").write_text(
-        render_html(metrics), encoding="utf-8"
+        render_html(metrics, run), encoding="utf-8"
     )
     if cases is not None:
         cases_path = output_dir / "cases.jsonl"

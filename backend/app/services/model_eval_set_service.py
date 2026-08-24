@@ -37,11 +37,28 @@ import hashlib
 import json
 from typing import Any
 
+from app.utils.stable_sample import (
+    SELECTION_STRATEGY,
+    selection_digest,
+    stable_sample,
+)
+
 EVAL_SET_SCHEMA_VERSION = 1
 
-# Ranking strategy recorded in the manifest so a future strategy change is
-# visible in the artifact instead of silently re-minting a different set.
-SELECTION_STRATEGY = "sha256-rank"
+# Re-exported so ``build_manifest`` and its callers keep one import site. The
+# rule itself lives in app.utils.stable_sample -- the replay harness ranks the
+# same way, and one rule with two homes drifts.
+__all__ = [
+    "EVAL_SET_SCHEMA_VERSION",
+    "FINGERPRINT_FIELDS",
+    "SELECTION_STRATEGY",
+    "build_manifest",
+    "manifest_digest",
+    "record_fingerprint",
+    "resolve_eval_set",
+    "select_event_ids",
+    "validate_manifest",
+]
 
 # The fields a fingerprint covers: exactly what build_model_eval_report reads
 # off an item. Deliberately NOT the whole record -- a cosmetic edit elsewhere
@@ -58,10 +75,8 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "estimated_token_cost",
 )
 
-# Separator between seed and id when hashing. Without it, seed "a" + id "bc"
-# and seed "ab" + id "c" hash to the same digest, so two different sets could
-# rank identically.
-_SEP = "\x00"
+# Separator between seed and id lives with the ranking rule it belongs to
+# (app.utils.stable_sample._SEP), not here.
 
 
 def _canonical_json(payload: Any) -> str:
@@ -111,11 +126,15 @@ def record_fingerprint(item: dict[str, Any]) -> str:
 
 
 def _selection_digest(seed: str, event_id: str) -> str:
-    return hashlib.sha256(f"{seed}{_SEP}{event_id}".encode("utf-8")).hexdigest()
+    return selection_digest(seed, event_id)
 
 
 def select_event_ids(event_ids: list[str], *, seed: str, size: int) -> list[str]:
     """The ``size`` event ids a given seed selects, sorted by event id.
+
+    Thin alias for ``app.utils.stable_sample.stable_sample``. The rule lives
+    there because the replay harness needs the same one: two copies of a
+    ranking rule is how the fix drifts back out of one of them.
 
     Order-independent and duplicate-safe: the caller's list order never affects
     membership, and a repeated id cannot occupy two slots. ``size`` larger than
@@ -123,12 +142,7 @@ def select_event_ids(event_ids: list[str], *, seed: str, size: int) -> list[str]
     minted from a small store is legitimate, and the manifest records the
     population it was drawn from.
     """
-    if size < 0:
-        raise ValueError("size must be >= 0")
-    unique = {eid for eid in event_ids if isinstance(eid, str) and eid}
-    # Tie-break on the id so two colliding digests still rank deterministically.
-    ranked = sorted(unique, key=lambda eid: (_selection_digest(seed, eid), eid))
-    return sorted(ranked[:size])
+    return stable_sample(event_ids, seed=seed, size=size)
 
 
 def manifest_digest(manifest: dict[str, Any]) -> str:

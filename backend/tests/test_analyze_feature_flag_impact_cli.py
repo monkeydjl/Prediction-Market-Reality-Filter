@@ -123,10 +123,12 @@ class TestSetSplit(unittest.TestCase):
         import analyze_feature_flag_impact as afi
         captured = {}
 
-        def fake_run_diff(records, ca, cb, shared, a_only, b_only, dr, drp, dj):
+        def fake_run_diff(records, ca, cb, shared, a_only, b_only, dr, drp, dj,
+                          sample=None):
             captured["shared"] = shared
             captured["a_only"] = a_only
             captured["b_only"] = b_only
+            captured["sample"] = sample
             return 0
 
         with patch.object(afi, "_load_records", return_value=[{"event_id": "x"}]):
@@ -204,6 +206,166 @@ class TestDiffOutput(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertNotIn("Regression summary", output)
         self.assertIn("Direction transition matrix", output)
+
+
+class TestStableSampling(unittest.TestCase):
+    """Q2: this script held a byte-identical copy of the replay CLI's defective
+    sampler -- ``random.seed(42)`` + ``random.sample``, which picks positions
+    and reseeds the process-global RNG from inside a read-only diagnostic.
+
+    Both copies had to move together: two sibling tools that sample differently
+    cannot have their reports compared, which is the whole point of running
+    them on the same store.
+    """
+
+    @staticmethod
+    def _entries(ids):
+        return [{"event_id": eid, "record": {"event_id": eid}} for eid in ids]
+
+    def _load(self, ids, **kw):
+        import analyze_feature_flag_impact as afi
+        with patch("app.memory.event_store.list_all_events",
+                   return_value=self._entries(ids)):
+            return [r["event_id"] for r in afi._load_records(None, **kw)]
+
+    def test_sample_is_stable_across_calls(self):
+        ids = [f"e{i:03d}" for i in range(40)]
+        self.assertEqual(
+            self._load(ids, sample_size=6), self._load(ids, sample_size=6),
+        )
+
+    def test_sample_ignores_store_order(self):
+        ids = [f"e{i:03d}" for i in range(40)]
+        self.assertEqual(
+            sorted(self._load(ids, sample_size=6)),
+            sorted(self._load(list(reversed(ids)), sample_size=6)),
+        )
+
+    def test_sample_seed_changes_the_subset(self):
+        ids = [f"e{i:03d}" for i in range(40)]
+        a = set(self._load(ids, sample_size=6, sample_seed="one"))
+        b = set(self._load(ids, sample_size=6, sample_seed="two"))
+        self.assertNotEqual(a, b)
+
+    def test_sample_size_is_respected(self):
+        ids = [f"e{i:03d}" for i in range(40)]
+        self.assertEqual(len(self._load(ids, sample_size=6)), 6)
+
+    def test_sample_size_above_population_loads_everything(self):
+        ids = [f"e{i:03d}" for i in range(4)]
+        self.assertEqual(len(self._load(ids, sample_size=99)), 4)
+
+    def test_duplicate_id_cannot_take_two_slots(self):
+        ids = ["a"] * 10 + [f"e{i}" for i in range(10)]
+        picked = self._load(ids, sample_size=5)
+        self.assertEqual(len(picked), len(set(picked)))
+
+    def test_does_not_touch_the_process_global_rng(self):
+        import random
+        ids = [f"e{i:03d}" for i in range(40)]
+        random.seed(999)
+        expected = [random.random() for _ in range(3)]
+        random.seed(999)
+        self._load(ids, sample_size=6)
+        self.assertEqual([random.random() for _ in range(3)], expected)
+
+    def test_event_ids_filter_still_works(self):
+        import analyze_feature_flag_impact as afi
+        with patch("app.memory.event_store.list_all_events",
+                   return_value=self._entries(["a", "b", "c"])):
+            got = afi._load_records(["a", "c"], None)
+        self.assertEqual({r["event_id"] for r in got}, {"a", "c"})
+
+
+class TestSampleArgumentValidation(unittest.TestCase):
+    def _run_main(self, argv):
+        import analyze_feature_flag_impact as afi
+        orig_stderr = sys.stderr
+        try:
+            sys.stderr = io.StringIO()
+            return afi.main(argv), sys.stderr.getvalue()
+        finally:
+            sys.stderr = orig_stderr
+
+    def test_zero_sample_size_exits_2(self):
+        rc, err = self._run_main(["--sample-size", "0"])
+        self.assertEqual(rc, 2)
+        self.assertIn("--sample-size", err)
+
+    def test_negative_sample_size_exits_2(self):
+        rc, _ = self._run_main(["--sample-size", "-3"])
+        self.assertEqual(rc, 2)
+
+    def test_blank_sample_seed_exits_2(self):
+        rc, err = self._run_main(["--sample-seed", "  "])
+        self.assertEqual(rc, 2)
+        self.assertIn("--sample-seed", err)
+
+
+class TestSampleProvenanceInJson(unittest.TestCase):
+    """Every JSON this script writes carries the key, so its absence is never
+    something an operator has to guess about."""
+
+    @staticmethod
+    def _records():
+        from tests.test_sweep_event_quality import _make_resolved_record
+        return [
+            _make_resolved_record("evt-1", direction="YES", actual_outcome=100.0),
+            _make_resolved_record("evt-2", direction="NO", actual_outcome=0.0),
+        ]
+
+    def _write(self, argv):
+        import os
+        import analyze_feature_flag_impact as afi
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            with patch.object(afi, "_load_records", return_value=self._records()):
+                orig_stdout = sys.stdout
+                try:
+                    sys.stdout = io.StringIO()
+                    rc = afi.main([*argv, path])
+                finally:
+                    sys.stdout = orig_stdout
+            with open(path, encoding="utf-8") as f:
+                return rc, json.loads(f.read())
+        finally:
+            os.unlink(path)
+
+    def test_legacy_json_records_the_sample(self):
+        rc, payload = self._write(
+            ["--sample-size", "2", "--sample-seed", "w34", "--json"],
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(payload["sample"], {
+            "size": 2, "seed": "w34", "strategy": "sha256-rank",
+        })
+
+    def test_legacy_json_records_none_without_the_flag(self):
+        rc, payload = self._write(["--json"])
+        self.assertEqual(rc, 0)
+        self.assertIn("sample", payload)
+        self.assertIsNone(payload["sample"])
+
+    def test_per_phase_json_records_the_sample(self):
+        rc, payload = self._write(
+            ["--per-phase", "--sample-size", "2", "--sample-seed", "w34", "--json"],
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(payload["sample"]["seed"], "w34")
+
+    def test_diff_json_records_the_sample(self):
+        rc, payload = self._write(
+            ["--sample-size", "2", "--sample-seed", "w34", "--diff-json"],
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(payload["sample"]["seed"], "w34")
+
+    def test_diff_json_records_none_without_the_flag(self):
+        rc, payload = self._write(["--diff-json"])
+        self.assertEqual(rc, 0)
+        self.assertIn("sample", payload)
+        self.assertIsNone(payload["sample"])
 
 
 if __name__ == "__main__":

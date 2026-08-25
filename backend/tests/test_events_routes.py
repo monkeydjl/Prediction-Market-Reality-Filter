@@ -14,7 +14,9 @@ Route + dashboard tests for the Event Intelligence surface (Phase 4 items 1-3).
 
 import asyncio
 import json
+import os
 import tempfile
+import threading
 import unittest
 from contextlib import ExitStack
 from datetime import datetime, timezone
@@ -26,12 +28,16 @@ from fastapi.testclient import TestClient
 
 from app.api.routes import events as events_routes
 from app.core.config import settings
+from app.memory import decision_timeline_store as timeline
+from app.memory import event_cache as cache
 from app.memory import event_market_link_store as links
+from app.memory import event_ref_census as census
 from app.memory import event_store as store
 from app.memory import loop_run_store
 from app.memory import prediction_store as preds
 from app.memory import review_queue_store as rq
 from app.memory import simulated_trade_store as trades
+from app.utils import file_store
 from app.utils import sqlite_db
 import app.services.ai_analysis_service as ai
 from app.services import event_audit_service as audit
@@ -2822,3 +2828,275 @@ class DeleteEventStrandedRefsTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["stranded_total"], 0)
         self.assertIsNone(store.get_event("evt-del"))
+
+
+class ResetAllEventDataTests(unittest.TestCase):
+    """E4: ``POST /events/reset`` had to stop losing the reset and stop lying
+    about which tables it clears.
+
+    The route is reachable from the dashboard's 「删除数据」 button
+    (``api.ts:resetData`` -> ``page.tsx``), behind a confirm dialog that promises
+    the operation cannot be undone, and until this class existed it had no
+    automated coverage at all -- the same gap E2 found on
+    ``DELETE /events/{event_id}``, on the more destructive of the two routes.
+
+    Both halves were measured against the live store before the fix: a
+    concurrent read-modify-write left 236 records on disk after a reset that
+    returned "All event data cleared.", and the hand-written table tuple
+    stranded 80 simulated trades by clearing ``loop_runs`` (no ``event_id``)
+    while missing ``simulated_trades`` and ``review_queue_items``.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        base = Path(self.tmpdir.name)
+        self.db = str(base / "v2_loop.db")
+        self.store_file = str(base / "event_store.json")
+        self.audit_file = str(base / "event_audit.jsonl")
+        self.cache_file = str(base / "event_cache.json")
+        self.patches = [
+            # The route reads these three settings directly, and _store_path /
+            # _audit_path / _cache_file all derive from the same attributes at
+            # call time -- so patching the settings (rather than each module's
+            # path helper) keeps the writers and the reset pointed at one place.
+            patch.object(settings, "EVENT_STORE_FILE", self.store_file),
+            patch.object(settings, "EVENT_AUDIT_FILE", self.audit_file),
+            patch.object(settings, "EVENT_CACHE_FILE", self.cache_file),
+            patch.object(sqlite_db, "loop_db_path", return_value=self.db),
+            # simulated_trade_store holds its own `loop_db_path` binding, so the
+            # patch above does not reach it (see DeleteEventStrandedRefsTests).
+            patch.object(trades, "loop_db_path", return_value=self.db),
+            patch.object(settings, "API_WRITE_KEY", "secret"),
+        ]
+        for p in self.patches:
+            p.start()
+        self.client = _events_client()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmpdir.cleanup()
+
+    def _record(self, event_id):
+        record = _make_record(event_id, estimated=70.0)
+        record["probability"]["baseline"] = 50.0
+        record["source"] = {
+            "type": "prediction_market",
+            "platform": "Polymarket",
+            "source_id": f"contract-{event_id}",
+        }
+        return record
+
+    def _seed_everything(self, event_id="evt-reset"):
+        """Put a row in all three files and in every loop-DB table reset clears.
+
+        Uses each store's real writer so the rows have the shape production
+        writes, not a shape invented here.
+        """
+        record = self._record(event_id)
+        store.save_event(record)
+        audit.record_event(record)
+        cache.set_cached_event(record["event_title"], record)
+        preds.freeze_prediction(record)  # predictions + event_market_links
+        trades.open_trade(
+            event_id, "t", direction="YES", entry_prob=70.0, market_prob=50.0,
+        )
+        rq.enqueue_item(
+            event_id=event_id, trigger="high_value_downgraded",
+            severity="WARN", reason="r", context={},
+        )
+        timeline.record_snapshot(record)
+        loop_run_store.start_run("discover")
+        return record
+
+    def _table_counts(self):
+        """Row count per table that exists in the loop DB."""
+        with sqlite_db.reading(self.db) as conn:
+            names = {
+                str(row["name"])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            return {
+                name: int(
+                    conn.execute(f"SELECT COUNT(*) AS n FROM {name}").fetchone()["n"]  # noqa: S608 - from sqlite_master
+                )
+                for name in names
+            }
+
+    # ---- (a) the reset must not be silently undone -------------------------
+
+    def test_a_writer_holding_the_lock_cannot_resurrect_the_store(self):
+        """The regression test for the measured 236 survivors.
+
+        Every durable writer wraps its whole read-modify-write in one outer
+        ``locked_file`` (``event_store.save_events``), so a writer already inside
+        that window holds a pre-reset copy in memory and writes it back on exit.
+        This test *is* that window: the main thread holds the lock across
+        load -> reset attempt -> write-back, exactly as save_events would.
+
+        The bare ``open(path, "w")`` took no lock, so the reset landed inside the
+        window and was overwritten. Asserting the reset thread is still alive is
+        the deterministic form of the 359 ms block that was measured -- with no
+        lock it returns in microseconds, so a sleeping machine cannot make this
+        pass for the wrong reason.
+        """
+        for i in range(3):
+            store.save_event(self._record(f"evt-{i}"))
+        self.assertEqual(len(store.list_all_events()), 3)
+
+        store_path = os.path.abspath(self.store_file)
+        done = threading.Event()
+
+        def run_reset():
+            # A fresh client: this request is issued from another thread.
+            _events_client().post("/events/reset", headers=AUTH_HEADERS)
+            done.set()
+
+        with file_store.locked_file(store_path):
+            pre_reset_copy = file_store.read_json_strict(store_path, {})
+            self.assertEqual(len(pre_reset_copy), 3)
+
+            resetter = threading.Thread(target=run_reset, daemon=True)
+            resetter.start()
+            resetter.join(0.5)
+            self.assertTrue(
+                resetter.is_alive(),
+                "reset returned while another writer held the store lock -- it "
+                "is not going through the atomic writer",
+            )
+
+            # The in-flight writer finishes its own write-modify-write.
+            file_store.write_json_atomic(store_path, pre_reset_copy)
+
+        self.assertTrue(done.wait(10), "reset never completed after the lock was released")
+        self.assertEqual(
+            len(store.list_all_events()), 0,
+            "the concurrent writer's write-back survived the reset",
+        )
+
+    # ---- (b) reset and the census cannot disagree --------------------------
+
+    def test_every_table_the_census_watches_is_emptied(self):
+        """Behavioural, not structural.
+
+        Asserting ``set(REFERENCING_TABLES) - cleared_tables == set()`` would be
+        vacuous: the route builds its DELETE list *from* REFERENCING_TABLES, so
+        that subtraction is empty by construction and would stay empty if every
+        DELETE were removed. This seeds each watched table and reads the rows
+        back, so it fails if a DELETE stops running.
+        """
+        self._seed_everything()
+        before = self._table_counts()
+        for table in census.REFERENCING_TABLES:
+            self.assertGreater(
+                before.get(table, 0), 0,
+                f"{table} was not seeded -- the assertion below cannot fail",
+            )
+
+        resp = self.client.post("/events/reset", headers=AUTH_HEADERS)
+        self.assertEqual(resp.status_code, 200)
+
+        after = self._table_counts()
+        self.assertEqual(
+            {t: after[t] for t in census.REFERENCING_TABLES},
+            dict.fromkeys(census.REFERENCING_TABLES, 0),
+        )
+
+    def test_the_reset_leaves_no_dangling_reference_behind(self):
+        """The consequence the census reports, from the census's own mouth.
+
+        With the store empty, every surviving referencing row is dangling. On the
+        live database the old table list left 80 of them -- manufacturing exactly
+        what E2 built this count to detect.
+        """
+        self._seed_everything()
+        self.assertGreater(sum(census.dangling_counts(set()).values()), 0)
+
+        self.client.post("/events/reset", headers=AUTH_HEADERS)
+
+        self.assertEqual(census.dangling_counts(set()), dict.fromkeys(census.REFERENCING_TABLES, 0))
+
+    def test_loop_runs_is_cleared_although_it_carries_no_event_id(self):
+        """It is not a referencing table -- it has no event_id column at all --
+        but it is per-run discovery bookkeeping that a full reset must clear. So
+        it is named separately from the census tuple, not smuggled into it."""
+        self._seed_everything()
+        with sqlite_db.reading(self.db) as conn:
+            columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(loop_runs)").fetchall()
+            }
+        self.assertNotIn("event_id", columns)
+        self.assertNotIn("loop_runs", census.REFERENCING_TABLES)
+        self.assertGreater(self._table_counts()["loop_runs"], 0)
+
+        self.client.post("/events/reset", headers=AUTH_HEADERS)
+
+        self.assertEqual(self._table_counts()["loop_runs"], 0)
+
+    def test_the_exempt_ledger_survives_the_reset(self):
+        """domain_reliability_ledger is a domain's track record, earned across
+        events and read by domain; deleting an event does not retract the fact
+        that the domain was right that time. The guard against a reset that
+        blanket-deletes every table carrying an event_id."""
+        self._seed_everything()
+        with sqlite_db.writing(self.db) as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS domain_reliability_ledger ("
+                "event_id TEXT, domain TEXT, category TEXT, "
+                "PRIMARY KEY (event_id, domain, category))"
+            )
+            conn.execute(
+                "INSERT INTO domain_reliability_ledger VALUES (?, ?, ?)",
+                ("evt-reset", "reuters.com", "politics"),
+            )
+
+        body = self.client.post("/events/reset", headers=AUTH_HEADERS).json()
+
+        self.assertEqual(self._table_counts()["domain_reliability_ledger"], 1)
+        self.assertEqual(body["cleared"]["sqlite_exempt"], "domain_reliability_ledger")
+
+    # ---- the reported summary ---------------------------------------------
+
+    def test_the_three_files_are_emptied(self):
+        self._seed_everything()
+        self.assertTrue(os.path.getsize(self.audit_file) > 0)
+
+        self.client.post("/events/reset", headers=AUTH_HEADERS)
+
+        self.assertEqual(file_store.read_json(self.store_file, None), {})
+        self.assertEqual(file_store.read_json(self.cache_file, None), {})
+        with open(self.audit_file, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "")
+
+    def test_the_response_reports_a_count_for_every_table_it_cleared(self):
+        self._seed_everything()
+
+        cleared = self.client.post("/events/reset", headers=AUTH_HEADERS).json()["cleared"]
+
+        for table in (*census.REFERENCING_TABLES, "loop_runs"):
+            self.assertEqual(cleared[f"sqlite.{table}"], 1, table)
+        self.assertEqual(cleared["event_store"], os.path.abspath(self.store_file))
+        self.assertEqual(cleared["history_cache"], "invalidated")
+
+    def test_the_reset_requires_the_write_key(self):
+        self._seed_everything()
+
+        resp = self.client.post("/events/reset")
+
+        self.assertEqual(resp.status_code, 401)
+        self.assertEqual(len(store.list_all_events()), 1)
+        self.assertGreater(self._table_counts()["predictions"], 0)
+
+    def test_a_fresh_deploy_with_no_files_or_tables_resets_cleanly(self):
+        """Nothing has been written yet: the files are absent and every store
+        creates its table lazily, so all of them are missing."""
+        resp = self.client.post("/events/reset", headers=AUTH_HEADERS)
+
+        self.assertEqual(resp.status_code, 200)
+        cleared = resp.json()["cleared"]
+        for table in (*census.REFERENCING_TABLES, "loop_runs"):
+            self.assertEqual(cleared[f"sqlite.{table}"], 0, table)
+        self.assertEqual(file_store.read_json(self.store_file, None), {})

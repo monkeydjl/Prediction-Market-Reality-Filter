@@ -204,46 +204,87 @@ async def analyze_event_intelligence(
 async def reset_all_event_data(_auth: None = Depends(require_write_key)) -> dict[str, Any]:
     """Delete all event data: store, predictions, audit log, cache.
 
-    Returns a summary of what was cleared.  Requires write-key auth."""
+    Returns a summary of what was cleared.  Requires write-key auth.
+
+    E4. Two things this route has to get right, both of which it used to get
+    wrong.
+
+    **It goes through the atomic writers, so it takes the lock.** The three
+    files are truncated with ``write_json_atomic`` / ``rewrite_lines_atomic``
+    instead of a bare ``open(path, "w")``. Those helpers acquire ``locked_file``
+    themselves, which is the whole fix -- no outer lock is needed here, because
+    reset writes each file exactly once and has nothing to read first. What the
+    bare open skipped: every durable writer in the repo (``save_events``,
+    ``auto_archive_expired``, ``set_tracking_bulk``) wraps its whole
+    read-modify-write in one outer ``locked_file``, so a writer already inside
+    that window is holding a *pre-reset* copy of the store in memory and will
+    write it back when it finishes. Measured against a concurrent
+    read-modify-write on a 235-record store: the unlocked truncate returned
+    immediately reporting success and **236 records were on disk** once the
+    writer landed. Going through the atomic helper makes the reset wait for the
+    in-flight writer (~359 ms) and then win -- 0 records survive. The
+    dashboard's confirm dialog says the operation cannot be undone; before this
+    that was measurably false.
+
+    **The SQLite tables come from the E2 census, not from a list typed here.**
+    The hand-written tuple had drifted: it cleared ``loop_runs`` (which has no
+    ``event_id`` at all) and missed ``simulated_trades`` and
+    ``review_queue_items`` -- the exact tables ``event_ref_census`` watches. On
+    the live database that meant a full reset stranded **80** simulated trades
+    pointing at events it had just deleted, which the next ``/api/health`` poll
+    would report as broken references the operator never created. Deriving the
+    list from ``REFERENCING_TABLES`` means the route that empties the store and
+    the census that audits it cannot disagree.
+    """
     import os
     import sqlite3
 
     from app.core.config import settings
+    from app.memory.event_ref_census import EXEMPT_TABLES, REFERENCING_TABLES
+    from app.utils.file_store import rewrite_lines_atomic, write_json_atomic
     from app.utils.sqlite_db import loop_db_path, writing
 
     cleared: dict[str, int | str] = {}
 
-    # 1. event_store.json
-    store_path = os.path.abspath(settings.EVENT_STORE_FILE)
-    with open(store_path, "w", encoding="utf-8") as f:
-        f.write("{}")
-    cleared["event_store"] = str(store_path)
+    # 1-2. The two JSON stores. write_json_atomic takes locked_file itself, so
+    #      the write serializes against in-flight read-modify-writes; indent=2
+    #      matches every other writer of these files.
+    def _truncate(path: str) -> str:
+        absolute = os.path.abspath(path)
+        write_json_atomic(absolute, {})
+        return absolute
 
-    # 2. event_audit.jsonl
+    cleared["event_store"] = _truncate(settings.EVENT_STORE_FILE)
+    cleared["event_cache"] = _truncate(settings.EVENT_CACHE_FILE)
+
+    # 3. The audit log is JSONL, not JSON: an empty file, not "{}". Same lock,
+    #    same atomic replace, via the JSONL-shaped helper.
     audit_path = os.path.abspath(settings.EVENT_AUDIT_FILE)
-    with open(audit_path, "w", encoding="utf-8") as f:
-        f.write("")
-    cleared["event_audit"] = str(audit_path)
+    rewrite_lines_atomic(audit_path, [])
+    cleared["event_audit"] = audit_path
 
-    # 3. event_cache.json
-    cache_path = os.path.abspath(settings.EVENT_CACHE_FILE)
-    with open(cache_path, "w", encoding="utf-8") as f:
-        f.write("{}")
-    cleared["event_cache"] = str(cache_path)
-
-    # 4. v2_loop.db tables
+    # 4. Loop-DB tables. Every table the reference census watches, plus
+    #    loop_runs -- which carries no event_id (so the census has no opinion on
+    #    it) but is per-run event-discovery bookkeeping that a reset must clear.
+    #    EXEMPT_TABLES is deliberately not cleared: domain_reliability_ledger is
+    #    a domain's track record, earned across events and read by domain, and
+    #    it lives in a different database.
     db_path = loop_db_path()
-    tables = ("predictions", "loop_runs", "event_market_links", "decision_timeline")
+    tables = (*REFERENCING_TABLES, "loop_runs")
+    row_counts: dict[str, int] = {}
     with writing(db_path) as conn:
         for table in tables:
             try:
-                count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-                conn.execute(f"DELETE FROM {table}")
-                cleared[f"sqlite.{table}"] = count
+                count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]  # noqa: S608 - literal tuple
+                conn.execute(f"DELETE FROM {table}")  # noqa: S608 - literal tuple
+                row_counts[table] = int(count)
             except sqlite3.OperationalError:
-                # Table doesn't exist yet (e.g. decision_timeline is only created
-                # when DECISION_TIMELINE_ENABLED is first used). Nothing to clear.
-                cleared[f"sqlite.{table}"] = 0
+                # Table doesn't exist yet (every store creates its table lazily
+                # on first write, so a fresh deploy is missing most of them).
+                row_counts[table] = 0
+    for table, count in row_counts.items():
+        cleared[f"sqlite.{table}"] = count
+    cleared["sqlite_exempt"] = ",".join(sorted(EXEMPT_TABLES)) or "none"
 
     # 5. Invalidate in-memory history cache so the next movers / edge
     #    request rebuilds from the (now empty) audit file instead of
@@ -255,14 +296,17 @@ async def reset_all_event_data(_auth: None = Depends(require_write_key)) -> dict
     except ImportError:
         cleared["history_cache"] = "skipped"
 
+    # Log every table's count rather than three chosen names: the tuple above is
+    # derived, so a hardcoded "predictions=%d runs=%d links=%d" would go stale
+    # the day a table joins the census -- which is how the DELETE list drifted.
     logger.info(
-        "Event data reset: store=%s audit=%s cache=%s predictions=%d runs=%d links=%d",
+        "Event data reset: store=%s audit=%s cache=%s sqlite_rows=%d [%s] exempt=%s",
         cleared.get("event_store"),
         cleared.get("event_audit"),
         cleared.get("event_cache"),
-        cleared.get("sqlite.predictions", 0),
-        cleared.get("sqlite.loop_runs", 0),
-        cleared.get("sqlite.event_market_links", 0),
+        sum(row_counts.values()),
+        " ".join(f"{table}={count}" for table, count in sorted(row_counts.items())),
+        cleared.get("sqlite_exempt"),
     )
     return {"message": "All event data cleared.", "cleared": cleared}
 

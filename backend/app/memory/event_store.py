@@ -473,12 +473,15 @@ def _category(record: dict[str, Any]) -> str:
     source = record.get("source") or {}
     if source.get("type") == "sports_event":
         return "sports_event"
+    # Derived once per record rather than per field: _category runs for every
+    # entry of every listing, count and search pass.
+    generic = _generic_source_categories()
     return (
-        _specific_category(legacy.get("base_rate_category"))
-        or _specific_category(source.get("category"))
-        or _specific_category(source.get("event_type"))
-        or _specific_category(source.get("type"))
-        or _specific_category(source.get("platform"))
+        _specific_category(legacy.get("base_rate_category"), generic)
+        or _specific_category(source.get("category"), generic)
+        or _specific_category(source.get("event_type"), generic)
+        or _specific_category(source.get("type"), generic)
+        or _specific_category(source.get("platform"), generic)
         or infer_category_from_text(
             record.get("event_title"),
             record.get("event_title_zh"),
@@ -497,27 +500,75 @@ def _with_category(entry: dict[str, Any]) -> dict[str, Any]:
     return projected
 
 
-_GENERIC_SOURCE_CATEGORIES = {
+# Source *type* values the adapters write, plus the placeholders they use when a
+# type is missing. Every one of these says where a record came from, never what
+# it is about, so none may survive into the category dimension.
+_GENERIC_SOURCE_TYPES = frozenset({
     "prediction",
     "predictions",
     "prediction_market",
     "prediction_question",
-    "polymarket",
-    "kalshi",
-    "limitless",
+    "open_web",
+    "manual",
     "market",
     "unknown",
-}
+})
+
+# Settings fields the event-source adapters read for the platform they stamp on
+# each record. Reading the names back out of settings -- rather than repeating
+# the strings here -- means renaming a source through the environment cannot
+# leave a stale spelling behind, and keeps this list to attribute *names*, which
+# `test_event_store_source_names` pins against a scan of the adapter modules so
+# a new source cannot arrive uncovered.
+_PLATFORM_NAME_SETTINGS = (
+    "KALSHI_SOURCE_NAME",
+    "LIMITLESS_SOURCE_NAME",
+    "MANIFOLD_SOURCE_NAME",
+    "METACULUS_SOURCE_NAME",
+    "OPEN_WEB_SOURCE_NAME",
+    "OPINION_SOURCE_NAME",
+    "PREDICT_FUN_SOURCE_NAME",
+    "WORLD_CUP_SOURCE_NAME",
+)
+
+# polymarket_event_source stamps its platform as a literal; it has no setting.
+_LITERAL_PLATFORM_NAMES = ("Polymarket",)
 
 
-def _specific_category(value: Any) -> str | None:
+def _category_token(value: str) -> str:
+    return value.strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _generic_source_categories() -> frozenset[str]:
+    """Provenance labels that must never be read as a subject category.
+
+    A record whose category fields are all absent falls through to
+    ``source.type`` and then ``source.platform``, and if either survives, the
+    event's *provenance* is presented as its subject: 48 of the 235 records in
+    the live store were filed under the category ``manifold``, which was the
+    single largest bucket in the dashboard's category dropdown. Only three
+    platform names used to be listed here -- exactly the three that were live
+    when the set was written -- so the six added since (Opinion, Predict.fun,
+    Metaculus, Manifold, the World Cup source and Open Web) all leaked, as did
+    the ``open_web`` and ``manual`` source types.
+    """
+    names = {_category_token(name) for name in _LITERAL_PLATFORM_NAMES}
+    for attr in _PLATFORM_NAME_SETTINGS:
+        token = _category_token(str(getattr(settings, attr, "") or ""))
+        if token:
+            names.add(token)
+    return _GENERIC_SOURCE_TYPES | names
+
+
+def _specific_category(value: Any, generic: frozenset[str] | None = None) -> str | None:
     if not isinstance(value, str):
         return None
     cleaned = value.strip()
     if not cleaned:
         return None
-    normalized = cleaned.lower().replace("-", "_").replace(" ", "_")
-    return None if normalized in _GENERIC_SOURCE_CATEGORIES else cleaned
+    if generic is None:
+        generic = _generic_source_categories()
+    return None if _category_token(cleaned) in generic else cleaned
 
 
 def _tracking_status(record: dict[str, Any]) -> str:

@@ -1,7 +1,38 @@
 # backend/tests/test_predictions_route.py
 """Tests for /api/predictions routes."""
+import contextlib
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
+
+
+@contextlib.contextmanager
+def _no_upstream_calls():
+    """Keep the adapters off clubelo / The Odds API for the duration of a test.
+
+    A predict for a match id that is not in the fixture table falls back to a
+    stub identity whose teams are named literally "Home" and "Away", and
+    ``fetch_elo_and_odds`` then asks the live upstreams to rate them.  Measured:
+    the six league tests below spent 33.5s each -- 201.7s of this file's 203.9s,
+    about 30% of the whole backend suite -- waiting out the 30s timeout in
+    ``football_data_client``.  It also made them depend on a third-party API
+    being reachable, which is what the ``# 500 acceptable if service
+    unavailable`` comment used to be apologising for.
+
+    The patch targets are the ones ``adapters/_shared.py`` documents in its own
+    header: ``get_club_elo`` is bound at ``_shared`` module scope and must be
+    patched there, while ``get_elo_rating`` / ``get_cached_odds`` are imported
+    lazily inside the function body and so must be patched at their source
+    modules.  Patching the wrong side of that distinction fails silently -- the
+    call goes out over the network and the only symptom is a slow test.
+    """
+    with patch("app.sports.football.adapters._shared.get_club_elo", return_value=None), \
+         patch("app.services.elo_ratings_service.get_elo_rating",
+               new=AsyncMock(return_value=None)), \
+         patch("app.services.odds_cache_service.get_cached_odds",
+               new=AsyncMock(return_value=None)):
+        yield
 
 
 @pytest.fixture
@@ -85,7 +116,8 @@ class TestPhase2Routes:
         config.settings.KERNEL_PREDICTION_ENABLED = True
         config.settings.PHASE2_LEAGUES_ENABLED = True
         with patch.object(security_settings, "API_WRITE_KEY", ""), \
-             patch.object(security_settings, "ALLOW_OPEN_WRITES", True):
+             patch.object(security_settings, "ALLOW_OPEN_WRITES", True), \
+             _no_upstream_calls():
             yield TestClient(app)
         config.settings.KERNEL_PREDICTION_ENABLED = old_kernel
         config.settings.PHASE2_LEAGUES_ENABLED = old_phase2
@@ -104,7 +136,13 @@ class TestPhase2Routes:
             "/api/predictions/matches/ucl-nonexistent/predict",
             headers={"X-Write-Key": "test"},
         )
-        assert resp.status_code in (200, 404, 500)  # 500 acceptable if service unavailable
+        # 500 would be an unhandled crash and must not pass, same as
+        # test_predict_match_not_found above.  It was listed as acceptable "if
+        # service unavailable", but fetch_elo_and_odds gathers with
+        # return_exceptions=True and then swallows the lot, so an unreachable
+        # upstream degrades to empty features and still answers 200 -- the one
+        # thing the wider tuple allowed was the crash it was meant to catch.
+        assert resp.status_code in (200, 404)
 
     def test_epl_predict_returns_200_or_404(self, client_phase2):
         """EPL match prediction should work (404 if fixture not in DB, not 500)."""
@@ -112,7 +150,7 @@ class TestPhase2Routes:
             "/api/predictions/matches/epl-nonexistent/predict",
             headers={"X-Write-Key": "test"},
         )
-        assert resp.status_code in (200, 404, 500)
+        assert resp.status_code in (200, 404)
 
     def test_phase2_disabled_ucl_falls_back(self):
         """When PHASE2_LEAGUES_ENABLED=false, ucl- prefix falls back to WorldCupAdapter."""
@@ -129,14 +167,15 @@ class TestPhase2Routes:
         config.settings.PHASE2_LEAGUES_ENABLED = False
         try:
             with patch.object(security_settings, "API_WRITE_KEY", ""), \
-                 patch.object(security_settings, "ALLOW_OPEN_WRITES", True):
+                 patch.object(security_settings, "ALLOW_OPEN_WRITES", True), \
+                 _no_upstream_calls():
                 client = TestClient(app)
                 resp = client.post(
                     "/api/predictions/matches/ucl-nonexistent/predict",
                     headers={"X-Write-Key": "test"},
                 )
                 # Should still work (falls back to WorldCupAdapter, stub identity)
-                assert resp.status_code in (200, 404, 500)
+                assert resp.status_code in (200, 404)
         finally:
             config.settings.KERNEL_PREDICTION_ENABLED = old_kernel
             config.settings.PHASE2_LEAGUES_ENABLED = old_phase2
@@ -162,7 +201,8 @@ class TestPhase2bRoutes:
         config.settings.KERNEL_PREDICTION_ENABLED = True
         config.settings.PHASE2_LEAGUES_ENABLED = True
         with patch.object(security_settings, "API_WRITE_KEY", ""), \
-             patch.object(security_settings, "ALLOW_OPEN_WRITES", True):
+             patch.object(security_settings, "ALLOW_OPEN_WRITES", True), \
+             _no_upstream_calls():
             yield TestClient(app)
         config.settings.KERNEL_PREDICTION_ENABLED = old_kernel
         config.settings.PHASE2_LEAGUES_ENABLED = old_phase2
@@ -175,7 +215,7 @@ class TestPhase2bRoutes:
             "/api/predictions/matches/laliga-nonexistent/predict",
             headers={"X-Write-Key": "test"},
         )
-        assert resp.status_code in (200, 404, 500)
+        assert resp.status_code in (200, 404)
 
     def test_bundesliga_predict_returns_200_or_404(self, client_phase2b):
         """Bundesliga match prediction should work."""
@@ -183,7 +223,7 @@ class TestPhase2bRoutes:
             "/api/predictions/matches/bundesliga-nonexistent/predict",
             headers={"X-Write-Key": "test"},
         )
-        assert resp.status_code in (200, 404, 500)
+        assert resp.status_code in (200, 404)
 
     def test_seriea_predict_returns_200_or_404(self, client_phase2b):
         """Serie A match prediction should work."""
@@ -191,7 +231,7 @@ class TestPhase2bRoutes:
             "/api/predictions/matches/seriea-nonexistent/predict",
             headers={"X-Write-Key": "test"},
         )
-        assert resp.status_code in (200, 404, 500)
+        assert resp.status_code in (200, 404)
 
     def test_ligue1_predict_returns_200_or_404(self, client_phase2b):
         """Ligue 1 match prediction should work."""
@@ -199,7 +239,7 @@ class TestPhase2bRoutes:
             "/api/predictions/matches/ligue1-nonexistent/predict",
             headers={"X-Write-Key": "test"},
         )
-        assert resp.status_code in (200, 404, 500)
+        assert resp.status_code in (200, 404)
 
 
 def _stub_result(betting_analysis):

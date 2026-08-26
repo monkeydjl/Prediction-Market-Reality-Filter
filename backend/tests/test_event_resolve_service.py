@@ -480,6 +480,40 @@ class AutoResolveEventsTests(unittest.TestCase):
 
         self.assertEqual(result["unresolved_without_resolver"], {"Limitless": 1})
 
+    def test_the_settlement_monitor_follows_a_renamed_kalshi_source(self):
+        """The monitor matches its own labels against `source.platform`.
+
+        kalshi_event_source stamps `settings.KALSHI_SOURCE_NAME`, so an operator
+        who sets it gets that spelling on every record. With "Kalshi" hardcoded
+        in the `sources` tuple, the zero-yield lookup missed (a past-due event
+        counted as 0 past due, so no warning) *and* the platform appeared in
+        `unresolved_without_resolver` as if nothing could ever settle it -- two
+        readings both wrong, on a source that is wired and enabled by default.
+        """
+        renamed = "Kalshi Markets"
+        record = _make_record("evtKalshiRenamed", value_score=30)
+        record["source"] = {
+            "type": "prediction_market",
+            "platform": renamed,
+            "source_id": "KALSHI-4",
+            "close_time": _iso_offset(days=-1),
+        }
+        store.save_event(record)
+
+        with patch.object(ers.settings, "KALSHI_SOURCE_NAME", renamed), \
+                patch.object(phs, "fetch_resolved_markets",
+                             new=AsyncMock(return_value=[])), \
+                self.assertLogs("app.services.event_resolve_service",
+                                level="WARNING") as logs:
+            result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
+
+        self.assertTrue(
+            any(f"{renamed} returned 0 resolved markets" in msg
+                for msg in logs.output),
+            f"no zero-yield warning for the renamed source: {logs.output}",
+        )
+        self.assertEqual(result["unresolved_without_resolver"], {})
+
     def test_matches_and_resolves_unresolved_event(self):
         resolved_market = {
             "question": "Will Bitcoin reach $100,000 by end of 2026?",

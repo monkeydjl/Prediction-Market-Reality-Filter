@@ -329,9 +329,18 @@ async def auto_resolve_events(
     # Pull resolved markets from every prediction-market source concurrently and
     # isolate a failing source, so the same real event can be auto-resolved by
     # whichever active platform it came from.
+    #
+    # The label is the platform name the adapter stamps on its records, read from
+    # the same setting -- not a repeat of the default spelling. Everything below
+    # matches these labels against `record["source"]["platform"]`: the zero-yield
+    # monitor looks up `name.lower()` in _unresolved_by_platform, and `wired` is
+    # built from the same strings. With "Kalshi" hardcoded here, setting
+    # KALSHI_SOURCE_NAME made every record read `platform: "Kalshi Markets"`, so
+    # the monitor's lookup missed (a past-due event counted as 0) and the platform
+    # showed up in unresolved_without_resolver as if it had no resolver at all.
     sources = (
         ("Polymarket", fetch_polymarket_resolved),
-        ("Kalshi", fetch_kalshi_resolved),
+        (settings.KALSHI_SOURCE_NAME, fetch_kalshi_resolved),
     )
     fetched = await asyncio.gather(
         *(fetch(limit=resolved_limit) for _, fetch in sources),

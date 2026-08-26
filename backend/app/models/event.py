@@ -656,6 +656,11 @@ class AutoResolveResponse(FlexibleResponse):
     unresolved_events: int = 0
     matches: list[dict[str, Any]] = Field(default_factory=list)
     by_source: dict[str, int] = Field(default_factory=dict)
+    # Platform -> unresolved event count for platforms no settlement source
+    # covers. Declared rather than left to extra="allow" so the reading reaches
+    # the generated TS types: by_source omits a never-asked platform entirely,
+    # which is indistinguishable from asked-and-got-zero.
+    unresolved_without_resolver: dict[str, int] = Field(default_factory=dict)
 
 
 class PendingLinksResponse(FlexibleResponse):

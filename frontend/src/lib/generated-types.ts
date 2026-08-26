@@ -23,6 +23,9 @@ export interface AutoResolveResponse {
   by_source?: {
     [k: string]: number;
   };
+  unresolved_without_resolver?: {
+    [k: string]: number;
+  };
   [k: string]: unknown;
 }
 export interface CategoryCountsResponse {

@@ -11,6 +11,7 @@ canonical record builder.
 import asyncio
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -26,6 +27,15 @@ from app.services import kalshi_event_source as kes
 
 # Reuse the canonical record builder.
 from tests.test_event_store import _make_record
+
+
+def _iso_offset(*, days: int) -> str:
+    """An ISO-8601 UTC timestamp `days` from now (negative = already past).
+
+    Relative, not a literal date, so these tests cannot start passing or
+    failing for the wrong reason as the calendar moves past a hardcoded year.
+    """
+    return (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
 
 
 def _seed_open_act(event_id, *, ai_probability=80.0, market_probability=50.0):
@@ -379,6 +389,12 @@ class AutoResolveEventsTests(unittest.TestCase):
             "type": "prediction_market",
             "platform": "Kalshi",
             "source_id": "KALSHI-1",
+            # Past due: the market closed yesterday and is still unresolved,
+            # which is the only state that makes a 0-yield feed suspicious.
+            # The original version of this test omitted close_time entirely,
+            # which made the monitor unconditionally true and left it unable to
+            # tell a healthy store from a broken feed.
+            "close_time": _iso_offset(days=-1),
         }
         store.save_event(record)
 
@@ -391,6 +407,78 @@ class AutoResolveEventsTests(unittest.TestCase):
         self.assertTrue(
             any("Kalshi returned 0 resolved markets" in msg for msg in logs.output)
         )
+
+    def test_does_not_warn_when_the_open_kalshi_events_are_not_yet_due(self):
+        """A future close_time means nothing is owed, so 0 resolved is healthy.
+
+        This is the live shape: all 12 Kalshi events in the production store
+        have a close_time in the future (one is 2099-08-01), so the previous
+        due-date-free predicate made the job tell operators to "verify the
+        Kalshi settled endpoint" on a system with nothing wrong with it.
+        """
+        record = _make_record("evtKalshiOpen", value_score=30)
+        record["source"] = {
+            "type": "prediction_market",
+            "platform": "Kalshi",
+            "source_id": "KALSHI-2",
+            "close_time": _iso_offset(days=30),
+        }
+        store.save_event(record)
+
+        with patch.object(phs, "fetch_resolved_markets",
+                          new=AsyncMock(return_value=[])), \
+                patch.object(ers.logger, "warning") as warn:
+            result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
+
+        self.assertEqual(result["status"], "no_resolved_markets")
+        zero_yield = [
+            call for call in warn.call_args_list
+            if "returned 0 resolved markets" in str(call.args[0])
+        ]
+        self.assertEqual(
+            zero_yield, [],
+            f"zero-yield warning fired for an event that is not due: {zero_yield}",
+        )
+
+    def test_reports_unresolved_events_no_settlement_source_can_reach(self):
+        """"Never asked" must be distinguishable from "asked and got zero".
+
+        by_source only ever gains keys for wired platforms, so Limitless's
+        unresolved events -- it has no fetch_resolved_markets at all -- were
+        invisible in this job's output. Kalshi is asked and returns 0, so it
+        must NOT appear in the new reading; and the already-resolved Limitless
+        event must not be counted either, or a reading that ignored `outcome`
+        would pass this just as well.
+        """
+        open_limitless = _make_record("evtLimitless", value_score=30)
+        open_limitless["source"] = {
+            "type": "prediction_market",
+            "platform": "Limitless",
+            "source_id": "LIMITLESS-1",
+        }
+        done_limitless = _make_record("evtLimitlessDone", value_score=30)
+        done_limitless["source"] = {
+            "type": "prediction_market",
+            "platform": "Limitless",
+            "source_id": "LIMITLESS-2",
+        }
+        done_limitless["outcome"] = {"actual_outcome": 100.0, "status": "resolved",
+                                     "source": "manual", "confidence": 1.0,
+                                     "resolved_at": _iso_offset(days=-1)}
+        kalshi = _make_record("evtKalshiWired", value_score=30)
+        kalshi["source"] = {
+            "type": "prediction_market",
+            "platform": "Kalshi",
+            "source_id": "KALSHI-3",
+        }
+        for record in (open_limitless, done_limitless, kalshi):
+            store.save_event(record)
+
+        with patch.object(phs, "fetch_resolved_markets",
+                          new=AsyncMock(return_value=[])):
+            result = asyncio.run(ers.auto_resolve_events(resolved_limit=50))
+
+        self.assertEqual(result["unresolved_without_resolver"], {"Limitless": 1})
 
     def test_matches_and_resolves_unresolved_event(self):
         resolved_market = {

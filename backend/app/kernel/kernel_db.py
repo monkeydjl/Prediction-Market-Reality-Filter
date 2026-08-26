@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import (
@@ -470,12 +469,23 @@ def _get_engine(db_path: str) -> Engine:
 
 
 def init_kernel_db(db_path: str | None = None) -> None:
-    """Initialize the kernel database. Creates tables if they don't exist."""
+    """Initialize the kernel database. Creates tables if they don't exist.
+
+    ``db_path=None`` reads ``settings.KERNEL_DB_FILE``.  It must not hardcode
+    the path: ``tests/conftest.py`` redirects every ``*_DB_FILE`` setting to a
+    temp directory, and a hardcoded default is invisible to that redirect, so
+    the no-arg call sites in ``app/`` wrote into the real production database
+    during test runs.  config is imported here rather than at module scope to
+    keep the import cycle open, matching ``get_conditional_calibration_row``
+    below.
+    """
     global _engine, _SessionLocal
     if _engine is not None:
         return
     if db_path is None:
-        db_path = str(Path(__file__).resolve().parents[2] / "kernel_predictions.db")
+        from app.core import config
+
+        db_path = config.settings.KERNEL_DB_FILE
     _engine = create_engine(
         f"sqlite:///{db_path}",
         connect_args={"check_same_thread": False},

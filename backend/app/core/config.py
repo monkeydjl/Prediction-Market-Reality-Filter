@@ -451,6 +451,23 @@ class Settings:
         ),
     )
 
+    # Prediction Kernel database (SQLite).  This path lives here, next to every
+    # other database path, because init_kernel_db() used to hardcode it -- and a
+    # hardcoded path is one the test harness cannot redirect.  tests/conftest.py
+    # points every *_DB_FILE setting at a temp directory so no test touches real
+    # production data; the kernel DB was the only database that escaped, so the
+    # nine no-arg init_kernel_db() call sites in app/ (the predict route and
+    # seven scheduler jobs among them) wrote into the real file during test runs.
+    # Measured before the fix: one run of tests/test_predictions_route.py added 8
+    # rows to kernel_prediction_history, and 1208 of its 1224 accumulated rows
+    # were predictions for matches that do not exist.
+    KERNEL_DB_FILE: str = os.getenv(
+        "KERNEL_DB_FILE",
+        os.path.join(
+            os.path.dirname(__file__), "..", "..", "kernel_predictions.db"
+        ),
+    )
+
     # Football-Data.org - default World Cup fixture sync source
     FOOTBALL_DATA_API_KEY: str = os.getenv("FOOTBALL_DATA_API_KEY", "")
     FOOTBALL_DATA_BASE_URL: str = os.getenv(

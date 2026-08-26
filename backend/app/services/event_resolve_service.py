@@ -34,7 +34,13 @@ from typing import Any
 
 from app.core.config import settings
 from app.memory.event_market_link_store import upsert_link, verified_links_by_event
-from app.memory.event_store import get_event, list_all_events, resolve_event
+from app.memory.event_store import (
+    get_event,
+    is_source_expired,
+    list_all_events,
+    resolve_event,
+    source_close_time,
+)
 from app.memory.prediction_store import get_prediction, score_prediction, void_prediction
 from app.services.calibration_service_event import score_event
 from app.services.event_audit_service import histories_by_event, history_for_event, record_outcome
@@ -347,11 +353,26 @@ async def auto_resolve_events(
         resolved_markets.extend(result)
 
     entries = await asyncio.to_thread(list_all_events)
-    if by_source.get("Kalshi", 0) == 0 and _has_unresolved_source_event(entries, "Kalshi"):
-        logger.warning(
-            "auto_resolve: Kalshi returned 0 resolved markets while unresolved "
-            "Kalshi events exist; verify the Kalshi settled endpoint/status filter"
-        )
+
+    # Zero-yield monitor, over every wired source rather than a hardcoded one.
+    #
+    # The condition is "a market that has already closed is still unresolved",
+    # not "an unresolved event exists". Those differ: on the live store all 12
+    # unresolved Kalshi events have a close_time in the future (one is
+    # 2099-08-01), so the old predicate -- which had no due-date test -- made
+    # this warning fire on a healthy system and told the operator to "verify the
+    # Kalshi settled endpoint" when nothing was wrong. A feed returning 0 is
+    # only evidence of a broken feed if something was actually owed.
+    unresolved_stats = _unresolved_by_platform(entries)
+    for name, _ in sources:
+        past_due = int(unresolved_stats.get(name.lower(), {}).get("past_due", 0))
+        if by_source.get(name, 0) == 0 and past_due > 0:
+            logger.warning(
+                "auto_resolve: %s returned 0 resolved markets while %d past-due "
+                "%s event(s) remain unresolved; verify the %s settled "
+                "endpoint/status filter",
+                name, past_due, name, name,
+            )
 
     # Direct-settle linked markets by contract id before the main matching loop.
     # Bulk resolved feeds are capped/sorted and can miss older or low-volume
@@ -367,6 +388,26 @@ async def auto_resolve_events(
         "polymarket": ("Polymarket", fetch_polymarket_by_ids),
     }
     direct_ids: dict[str, set[str]] = {key: set() for key in direct_fetchers}
+
+    # An operator reading by_source cannot tell "asked and got nothing" from
+    # "never asked": it only ever gains keys for platforms in `sources` above.
+    # Derive the gap from that same tuple so a platform whose events can never
+    # be settled is visible in this job's own output instead of silently
+    # accumulating. Live example: 5 Limitless events, no resolved-markets
+    # adapter, and no close timestamp for _is_source_expired to retire them by.
+    wired = {name.lower() for name, _ in sources} | set(direct_fetchers)
+    unresolved_without_resolver = {
+        stat["name"]: stat["total"]
+        for key, stat in sorted(unresolved_stats.items())
+        if key not in wired
+    }
+    if unresolved_without_resolver:
+        logger.info(
+            "auto_resolve: no settlement source is wired for %s; "
+            "their unresolved events can only be resolved by hand",
+            unresolved_without_resolver,
+        )
+
     # get_verified_link() opened a connection and ran a query per event, and
     # both this loop and the scan below walk every stored event — so the job
     # issued 2N queries on the event store. Read the verified links once; no
@@ -414,7 +455,8 @@ async def auto_resolve_events(
                 "resolved_count": 0,
                 "pending_count": 0, "invalid_count": 0,
                 "checked_count": 0, "unresolved_events": _count_unresolved(entries),
-                "matches": [], "by_source": by_source}
+                "matches": [], "by_source": by_source,
+                "unresolved_without_resolver": unresolved_without_resolver}
 
     index = build_index(resolved_markets)
     # Map a matched question back to its market record so we can persist the
@@ -601,19 +643,47 @@ async def auto_resolve_events(
         "reconciled_count": reconciled,
         "matches": match_log,
         "by_source": by_source,
+        # Platform -> unresolved count for platforms no settlement source
+        # covers. by_source alone cannot express this: a platform that was
+        # never asked is simply absent from it, which reads identically to a
+        # platform that was asked and returned nothing.
+        "unresolved_without_resolver": unresolved_without_resolver,
     }
 
 
-def _has_unresolved_source_event(entries: list[dict[str, Any]], platform: str) -> bool:
-    platform_l = platform.lower()
+def _unresolved_by_platform(
+    entries: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Group unresolved events by source platform, split by whether they are due.
+
+    ``past_due`` is decided by ``event_store.is_source_expired`` -- the same
+    predicate the store uses to hide markets that have closed -- so the
+    settlement monitor below and the store's notion of "this market is over"
+    cannot drift into disagreeing.
+
+    An event whose source records no close timestamp lands in ``unknown_due``,
+    never ``past_due``: it carries no evidence that anything is late. Counting
+    it as late is exactly what made the Kalshi monitor fire on a healthy store,
+    where all 12 Kalshi events had a close_time still in the future.
+    """
+    stats: dict[str, dict[str, Any]] = {}
     for entry in entries:
         record = entry.get("record") or {}
         if record.get("outcome") is not None:
             continue
-        source = record.get("source") or {}
-        if str(source.get("platform", "")).lower() == platform_l:
-            return True
-    return False
+        platform = str((record.get("source") or {}).get("platform", "") or "").strip()
+        if not platform:
+            continue
+        stat = stats.setdefault(
+            platform.lower(),
+            {"name": platform, "total": 0, "past_due": 0, "unknown_due": 0},
+        )
+        stat["total"] += 1
+        if is_source_expired(record):
+            stat["past_due"] += 1
+        elif not source_close_time(record):
+            stat["unknown_due"] += 1
+    return stats
 
 
 def _count_unresolved(entries: list[dict[str, Any]] | None = None) -> int:

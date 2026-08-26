@@ -555,6 +555,30 @@ def _is_resolved_record(record: dict[str, Any]) -> bool:
     return outcome.get("status", "resolved") == "resolved"
 
 
+def source_close_time(record: dict[str, Any]) -> str:
+    """The source market's close timestamp, or "" when the adapter records none.
+
+    The field name is per-platform -- Polymarket writes ``end_date``, Kalshi
+    writes ``close_time``, and Limitless writes neither -- so the precedence is
+    named here once and read by every caller.  ``_is_source_expired`` below and
+    the settlement monitor in ``event_resolve_service`` both need it, and if
+    each spelled the fallback chain itself they could drift into disagreeing
+    about whether an event is past due.
+    """
+    source = (record or {}).get("source") or {}
+    return str(source.get("end_date") or source.get("close_time") or "").strip()
+
+
+def is_source_expired(record: dict[str, Any]) -> bool:
+    """Public form of :func:`_is_source_expired`, for cross-module reuse.
+
+    ``event_resolve_service`` decides whether a platform's settlement feed is
+    actually late by this predicate rather than its own, so "this market has
+    closed" means one thing across the codebase.
+    """
+    return _is_source_expired(record)
+
+
 def _is_source_expired(record: dict[str, Any]) -> bool:
     """Return True when the source market is clearly closed or past its close date.
 
@@ -577,7 +601,7 @@ def _is_source_expired(record: dict[str, Any]) -> bool:
         return False
 
     # End-date / close-time check
-    end_str = str(source.get("end_date") or source.get("close_time") or "").strip()
+    end_str = source_close_time(record)
     if not end_str:
         return False
     try:

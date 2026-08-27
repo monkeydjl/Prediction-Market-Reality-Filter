@@ -31,6 +31,13 @@ logger = logging.getLogger(__name__)
 # the cap bounds analyze_event / LLM calls per scan as sources are added.
 _CANDIDATE_POOL_FACTOR = 3
 
+# The open-web extractor's discovery label. Deliberately the internal label, not
+# `settings.OPEN_WEB_SOURCE_NAME`: `settings.SOURCE_WEIGHTS` is keyed by these
+# labels, so reading the renameable one here would silently drop the source's
+# weight to the 1.0 default the moment an operator renamed it. The setting names
+# what a *record* carries; this names a slot in the discovery budget.
+_OPEN_WEB_LABEL = "Open Web"
+
 
 _STRENGTH_TO_CONFIDENCE = {"HIGH": "high", "MEDIUM": "medium", "LOW": "low"}
 
@@ -1053,9 +1060,18 @@ async def _collect_candidate_events(
     # interleaved labels and the gather() call entirely.
     if settings.METACULUS_API_TOKEN:
         candidate_sources.append(("Metaculus", fetch_metaculus_events))
-    labels = [name for name, _ in candidate_sources] + ["Open Web"]
-    for label in labels:
-        await source_start(label)
+    labels = [name for name, _ in candidate_sources]
+    # The open-web extractor is a candidate source driven by `shared_articles`
+    # rather than by a fetch function, so it is tracked next to
+    # candidate_sources instead of inside it. It is appended *only when
+    # enabled*, which is how every other optional source already behaves - a
+    # disabled source is simply absent from the panel. Appending it
+    # unconditionally and padding the gather with `asyncio.sleep(0, result=[])`
+    # made a disabled extractor report `status: "ok", candidates: 0`, i.e. a
+    # green "Open Web: 0 候选" badge for a source that was never called, which
+    # reads identically to one that ran and found nothing in the news.
+    if settings.OPEN_WEB_ENABLED:
+        labels.append(_OPEN_WEB_LABEL)
     # Apply per-source weight multipliers: the primary market source (Polymarket)
     # gets more of the candidate budget, supplementary sources get less.  Keeps
     # the round-robin interleave balanced under the cap while shifting the event
@@ -1068,17 +1084,18 @@ async def _collect_candidate_events(
     # Seed every label as "fetching" before the gather so a poll during the
     # collect phase sees the source list. Without this the status `sources` dict
     # stayed empty until each source finished, and `source_start` had no caller
-    # at all.
+    # at all. Exactly once per label: this loop used to appear twice, so every
+    # source was announced twice on every scan.
     for label in labels:
         await source_start(label)
 
-    results = await asyncio.gather(
-        *(fetch(_src_limit(name)) for name, fetch in candidate_sources),
-        extract_candidate_events(
-            shared_articles or [], _src_limit("Open Web"),
-        ) if settings.OPEN_WEB_ENABLED else asyncio.sleep(0, result=[]),
-        return_exceptions=True,
-    )
+    fetches: list[Any] = [fetch(_src_limit(name)) for name, fetch in candidate_sources]
+    if settings.OPEN_WEB_ENABLED:
+        fetches.append(
+            extract_candidate_events(shared_articles or [],
+                                     _src_limit(_OPEN_WEB_LABEL))
+        )
+    results = await asyncio.gather(*fetches, return_exceptions=True)
     per_source: list[list[dict[str, Any]]] = []
     for label, result in zip(labels, results):
         # BaseException, not Exception: gather(return_exceptions=True) hands back

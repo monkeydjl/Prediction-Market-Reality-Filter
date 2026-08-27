@@ -1,5 +1,27 @@
 # Changelog
 
+### Fix: the discovery panel showed a green badge for a source that was never asked
+
+- **`_collect_candidate_events` appended `"Open Web"` to `labels` unconditionally and padded the `gather` with `asyncio.sleep(0, result=[])`.** So with `OPEN_WEB_ENABLED=False` — **the default** — the disabled extractor still went through `source_start` → `source_done(label, 0)` and landed in the status dict as `status: "ok"`.
+- **Measured on the default configuration before anything was changed.** `discovery_status.snapshot()["sources"]` after one collect pass, with every fetch stubbed to return nothing:
+
+  | label | reported | actually asked? |
+  | --- | --- | --- |
+  | Polymarket | `ok`, 0 candidates | yes |
+  | Kalshi | `ok`, 0 candidates | yes |
+  | Limitless | `ok`, 0 candidates | yes |
+  | **Open Web** | **`ok`, 0 candidates** | **no — `extract_candidate_events` await count 0** |
+  | Opinion / Predict.fun / Metaculus / World Cup / Polymarket Crypto | absent | no |
+
+  `page.tsx:_renderDiscoverySources` styles `status === "ok"` with `bg-pos/10 text-pos`, so the dashboard rendered a **green** `Open Web: 0 候选` badge for an extractor that never ran — indistinguishable from one that ran and found nothing in the news, which is the reading an operator would act on by going to audit the LLM extraction path. Every other optional source is simply **absent** when disabled; Open Web was the one exception.
+- **The fix appends the label — and the coroutine — only when the source is enabled**, matching the six other optional sources. The padded `sleep` goes with it; one fewer empty list in `per_source` changes nothing, because the round-robin `zip_longest` already filters `None` and an empty list contributes no candidates either way.
+- **The pre-existing test encoded the defect as intended behaviour.** `test_every_label_is_seeded_before_its_fetch_resolves` sets `OPEN_WEB_ENABLED=False` in its own harness and then asserted `"Open Web": "fetching"` had to appear. Same shape as the P2-D4 test that seeded a Kalshi record with no `close_time`: the test could not tell a disabled source from a working one.
+- **Second defect in the same function: the seeding loop was written twice.** `for label in labels: await source_start(label)` appeared both before and after the `_weights` block, so on the default configuration **4 labels produced 8 `source_start` calls** per scan. `source_start` overwrites its key, so the resulting `sources` dict is byte-identical either way and no assertion about its *contents* can see the duplication — the new test counts calls instead ([`count-each-occurrence-once`]).
+- 4 backend tests added; the full backend suite is **5060 passed / 11 skipped / 219 subtests** (was 5056 / 11 / 219), no test newly skipped, and one pre-existing test corrected. The added ones include the **non-vacuous baseline** (`OPEN_WEB_ENABLED=True` must still report its candidate count) and an enabled-but-raising arm, because the extractor is now a real member of the `gather` rather than a `sleep` that could never fail.
+- Verified by **three defect injections, the source file restored byte-identically each time** (md5 `922ca944d3837a3d19f4c4d307b2acf1`): appending Open Web unconditionally and restoring the padded `sleep` → the disabled-source test and the corrected seeding test, 2 failed; duplicating the seeding loop → the exactly-once test, 1 failed; never appending Open Web at all → 4 failed, including the **pre-existing** `test_open_web_source_is_interleaved`, which is the evidence that the enabled path was already covered and this change did not break it. `backend/event_store.json` and `backend/kernel_predictions.db` byte-identical after the full run (md5 `63f2e040…` / `8b84fea2…`).
+- **Reported, deliberately not fixed** (CLAUDE.md §3): the panel label stays the internal literal `"Open Web"` rather than `settings.OPEN_WEB_SOURCE_NAME`, and that is a deliberate choice with a cost — `settings.SOURCE_WEIGHTS` is keyed by these labels, so reading the renameable name here would silently drop the source's budget weight to the 1.0 default the moment an operator renamed it. The consequence left in place is cosmetic: under a rename the panel says `Open Web` while the event cards say the new name. `_OPEN_WEB_LABEL` now carries that reasoning at its definition.
+- No engine, formula, weight or schema change; no route added or removed; no flag default changed; no model field added, so `generated-types.ts` is unchanged. The candidate pool, the round-robin interleave, the `limit * _CANDIDATE_POOL_FACTOR` cap and every per-source weight are untouched — only which labels are reported and how many times. No learning, scheduler, market write or prediction write enabled.
+
 ### Fix: renaming a market source dropped it below a news-article rewrite, and blinded yesterday's settlement monitor
 
 - **This is the `_SOURCE_PRIORITY` gap the previous increment reported and deliberately left, and measuring it showed it was much wider than reported.** That entry said a Metaculus candidate falls to `_UNKNOWN_PRIORITY = 99`, below Open Web's 6, and was "unreachable today only because Metaculus is auto-disabled without `METACULUS_API_TOKEN`". Wrong on the second half: the same dict of hardcoded platform names drops **any of the four settings-named market sources** to 99 the moment an operator renames one — and `LIMITLESS_SOURCE_ENABLED` / `OPINION_SOURCE_ENABLED` / `PREDICT_FUN_SOURCE_ENABLED` all default to true and Kalshi needs no API key, so the defect is reachable on a stock install.

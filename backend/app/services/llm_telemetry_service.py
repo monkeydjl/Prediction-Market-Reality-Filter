@@ -6,7 +6,8 @@ at least one LLM call (or falls back to deterministic).
 
 This is a **hybrid** implementation:
 - Minimal instrumentation in ``_ask_ai`` captures real ``response.usage``
-  token counts (attached as ``llm_usage`` on the analysis dict).
+  token counts (attached as ``llm_usage`` on the analysis dict) and the model
+  the gateway actually served the call with (``llm_model``).
 - This pure function reads that + ``analysis_quality`` + ``sentiment_profile``
   fallback flag to produce a structured telemetry block.
 
@@ -107,6 +108,14 @@ def _build_block(
     completion_tokens = llm_usage.get("completion_tokens") if llm_usage else None
     total_tokens = llm_usage.get("total_tokens") if llm_usage else None
 
+    # Price and label by the model that actually served the call. The gateway
+    # walks a route list and falls back between providers, so the served model
+    # is only knowable from its result -- and the ``model`` argument is
+    # ``settings.OPENAI_MODEL``, which `.env.example` documents as the *legacy
+    # last-resort* name and tells operators to comment out. It stays as the
+    # fallback for the degraded path and for callers with no served model.
+    served_model = _extract_llm_model(analysis) or model
+
     # llm_call_count: lower bound. 1 when LLM succeeded (the main _ask_ai
     # call). 0 when degraded without title translation. We cannot detect
     # translate_title calls without instrumenting them, so this is a
@@ -118,7 +127,7 @@ def _build_block(
     else:
         llm_call_count = 1
 
-    price_per_1k = _lookup_price(model)
+    price_per_1k = _lookup_price(served_model)
     estimated_cost = _estimate_cost(
         total_tokens, news_context, price_per_1k
     )
@@ -131,11 +140,13 @@ def _build_block(
         try:
             from app.utils.metrics import LLM_TOKEN_COST, LLM_TOKEN_USAGE
             if isinstance(prompt_tokens, int) and prompt_tokens > 0:
-                LLM_TOKEN_USAGE.labels(model=model, kind="input").inc(prompt_tokens)
+                LLM_TOKEN_USAGE.labels(model=served_model, kind="input").inc(prompt_tokens)
             if isinstance(completion_tokens, int) and completion_tokens > 0:
-                LLM_TOKEN_USAGE.labels(model=model, kind="output").inc(completion_tokens)
+                LLM_TOKEN_USAGE.labels(model=served_model, kind="output").inc(
+                    completion_tokens
+                )
             if estimated_cost > 0:
-                LLM_TOKEN_COST.labels(model=model).inc(estimated_cost)
+                LLM_TOKEN_COST.labels(model=served_model).inc(estimated_cost)
         except Exception:  # pragma: no cover - defensive
             pass
 
@@ -149,7 +160,7 @@ def _build_block(
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
         "estimated_token_cost": round(estimated_cost, 6),
-        "model": model,
+        "model": served_model,
     }
 
 
@@ -194,6 +205,22 @@ def _extract_llm_usage(
             if not isinstance(val, int) or val < 0:
                 return None
     return usage
+
+
+def _extract_llm_model(analysis: dict[str, Any] | None) -> str | None:
+    """The model the gateway actually used, or ``None`` when unrecorded.
+
+    Mirrors ``_extract_llm_usage``: never raises, and rejects anything that is
+    not a non-empty string, so a malformed value falls back to the caller's
+    configured model rather than pricing against a bad key.
+    """
+    if not isinstance(analysis, dict):
+        return None
+    model = analysis.get("llm_model")
+    if not isinstance(model, str):
+        return None
+    model = model.strip()
+    return model or None
 
 
 def _lookup_price(model: str) -> float:

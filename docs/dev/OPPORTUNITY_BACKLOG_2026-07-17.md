@@ -339,7 +339,7 @@ Phase 15 设计曾写「Edge/WS/优化/结算几乎无 UI」；代码侧已出�
 | O2 | P1 | 容器资源限制与仅本机绑端口 + 反代 TLS（历史已修部分，部署时确认） |
 | O3 | P1 | systemd 沙箱路径覆盖所有 DB/日志/备份写路径 |
 | O4 | P2 | 多环境 `.env.staging` / `.env.production` 检查清单自动化 |
-| O5 | P2 | LLM 成本与 discover limit 护栏看板 |
+| O5 | P2 | LLM 成本与 discover limit 护栏看板 — ✅ 成本读数部分 2026-08-27：遥测此前按 `settings.OPENAI_MODEL`（`.env.example` 标注的 legacy 兜底名）计价与打标，gpt-4 实际服务的调用低报 214 倍、`pmrf_llm_token_cost_total` 全部塌成单一 `deepseek-chat` 序列；现改为透传 `LLMResult.model`。仍待：`get_spend_today()` 在 gateway 外无任何读者（看不到距 cap 多远）；该 counter 只由 13 个 gateway 调用方中的 1 个递增；discover limit 护栏未做 |
 | O6 | P3 | 依赖审计（pip-audit / npm audit）周期 |
 
 ---

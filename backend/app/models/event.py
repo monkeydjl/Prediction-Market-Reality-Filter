@@ -397,9 +397,11 @@ class LLMTelemetry(BaseModel):
     happened during the LLM call for audit/monitoring.
 
     Hybrid implementation: ``_ask_ai`` captures real ``response.usage`` token
-    counts (attached as ``llm_usage`` on the analysis dict); this service
-    reads that + ``analysis_quality`` + ``sentiment_profile.fallback`` to
-    produce the structured block.
+    counts (attached as ``llm_usage`` on the analysis dict) plus the model the
+    gateway actually served the call with (``llm_model``); this service reads
+    that + ``analysis_quality`` + ``sentiment_profile.fallback`` to produce the
+    structured block. ``model`` is that served model, falling back to
+    ``settings.OPENAI_MODEL`` only when the gateway recorded none.
 
     ``degraded_mode`` is True when the analysis used the deterministic
     fallback (LLM call failed). ``degraded_reason`` is a structured enum

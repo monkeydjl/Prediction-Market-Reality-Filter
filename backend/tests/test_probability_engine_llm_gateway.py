@@ -33,6 +33,51 @@ class ProbabilityEngineLLMGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mock_complete.await_args.kwargs["task"], "probability_analysis")
         self.assertEqual(mock_complete.await_args.kwargs["temperature"], 0)
 
+    async def test_ask_ai_forwards_the_model_that_actually_served_the_call(self):
+        """The gateway falls back between providers, so the served model is only
+        knowable from its result. Cost telemetry prices by this; without it the
+        block falls back to ``settings.OPENAI_MODEL``, the legacy last-resort
+        name, which understated a gpt-4-served call by 214x."""
+        gateway_result = LLMResult(
+            ok=True,
+            content='{"ai_probability": 61}',
+            json_data={"ai_probability": 61},
+            provider="openai",
+            model="gpt-4-turbo",
+            attempts=[LLMAttempt("openai", "gpt-4-turbo", "success")],
+            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        )
+
+        with patch("app.services.probability_engine_service.complete_json", new=AsyncMock(return_value=gateway_result)):
+            result = await pe._ask_ai(
+                market_question="Will X happen?",
+                market_probability=42,
+                news_context="Evidence: official update supports X.",
+            )
+
+        self.assertEqual(result["_llm_model"], "gpt-4-turbo")
+
+    async def test_ask_ai_omits_the_served_model_when_the_gateway_recorded_none(self):
+        """Non-vacuous baseline: the key is absent rather than empty, so the
+        telemetry fallback to the configured model stays reachable."""
+        gateway_result = LLMResult(
+            ok=True,
+            content='{"ai_probability": 61}',
+            json_data={"ai_probability": 61},
+            provider="p1",
+            model="",
+            attempts=[LLMAttempt("p1", "", "success")],
+        )
+
+        with patch("app.services.probability_engine_service.complete_json", new=AsyncMock(return_value=gateway_result)):
+            result = await pe._ask_ai(
+                market_question="Will X happen?",
+                market_probability=42,
+                news_context="Evidence: official update supports X.",
+            )
+
+        self.assertNotIn("_llm_model", result)
+
     async def test_ask_ai_raises_when_gateway_returns_failed_result(self):
         gateway_result = LLMResult(
             ok=False,

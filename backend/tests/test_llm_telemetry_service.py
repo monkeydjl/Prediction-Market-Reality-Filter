@@ -16,11 +16,13 @@ from app.services.llm_telemetry_service import (
 )
 
 
-def _analysis(*, quality="llm", usage=None):
+def _analysis(*, quality="llm", usage=None, llm_model=None):
     """Build a minimal analysis dict for testing."""
     d = {"analysis_quality": quality}
     if usage is not None:
         d["llm_usage"] = usage
+    if llm_model is not None:
+        d["llm_model"] = llm_model
     return d
 
 
@@ -328,6 +330,106 @@ class ModelFieldTests(unittest.TestCase):
             enabled=True,
         )
         self.assertEqual(result["model"], "")
+
+
+class ServedModelPricingTests(unittest.TestCase):
+    """The block must price and label by the model that actually ran.
+
+    The gateway walks a route list and falls back between providers, so the
+    ``model`` argument -- ``settings.OPENAI_MODEL``, which ``.env.example``
+    calls the legacy last-resort name and tells operators to comment out --
+    is not the model that served the call. Pricing by it understated a
+    gpt-4-served call by 214x while the cap counter, which prices by the real
+    model, charged the full amount.
+    """
+
+    def test_cost_is_priced_by_the_served_model_not_the_configured_one(self):
+        result = build_llm_telemetry(
+            analysis=_analysis(usage=_usage(total=100_000), llm_model="gpt-4"),
+            sentiment_profile=None,
+            news_context="",
+            model="deepseek-chat",
+            enabled=True,
+        )
+        # 100_000 * 0.03 / 1000 = 3.0, not 100_000 * 0.00014 / 1000 = 0.014.
+        self.assertAlmostEqual(result["estimated_token_cost"], 3.0, places=6)
+        self.assertEqual(result["model"], "gpt-4")
+
+    def test_the_configured_model_is_still_used_when_none_was_recorded(self):
+        """Non-vacuous baseline: without a served model the old behaviour
+        stands, so "price by the served model" cannot be satisfied by ignoring
+        the argument."""
+        result = build_llm_telemetry(
+            analysis=_analysis(usage=_usage(total=100_000)),
+            sentiment_profile=None,
+            news_context="",
+            model="deepseek-chat",
+            enabled=True,
+        )
+        self.assertAlmostEqual(result["estimated_token_cost"], 0.014, places=6)
+        self.assertEqual(result["model"], "deepseek-chat")
+
+    def test_a_malformed_served_model_falls_back_to_the_configured_one(self):
+        for bad in ("", "   ", 123, None, ["gpt-4"]):
+            with self.subTest(llm_model=bad):
+                analysis = _analysis(usage=_usage(total=1000))
+                analysis["llm_model"] = bad
+                result = build_llm_telemetry(
+                    analysis=analysis,
+                    sentiment_profile=None,
+                    news_context="",
+                    model="gpt-4o",
+                    enabled=True,
+                )
+                self.assertEqual(result["model"], "gpt-4o")
+                self.assertAlmostEqual(
+                    result["estimated_token_cost"], 0.005, places=6
+                )
+
+    def test_prometheus_series_is_labelled_with_the_served_model(self):
+        """The counter is documented as cost "across all calls", so an operator
+        reading it by model needs the model that ran. It used to carry one
+        label -- the configured model -- for every call regardless."""
+        from app.utils.metrics import LLM_TOKEN_COST, LLM_TOKEN_USAGE
+
+        def _cost_for(model: str) -> float:
+            return sum(
+                sample.value
+                for metric in LLM_TOKEN_COST.collect()
+                for sample in metric.samples
+                if sample.labels.get("model") == model
+                and sample.name.endswith("_total")
+            )
+
+        def _tokens_for(model: str, kind: str) -> float:
+            return sum(
+                sample.value
+                for metric in LLM_TOKEN_USAGE.collect()
+                for sample in metric.samples
+                if sample.labels.get("model") == model
+                and sample.labels.get("kind") == kind
+                and sample.name.endswith("_total")
+            )
+
+        served, configured = "gpt-4-turbo", "gpt-3.5-turbo"
+        before_served = _cost_for(served)
+        before_configured = _cost_for(configured)
+        before_input = _tokens_for(served, "input")
+        build_llm_telemetry(
+            analysis=_analysis(
+                usage=_usage(prompt=800, completion=200, total=1000),
+                llm_model=served,
+            ),
+            sentiment_profile=None,
+            news_context="",
+            model=configured,
+            enabled=True,
+        )
+        # 1000 * 0.01 / 1000 = 0.01 charged under the served model...
+        self.assertAlmostEqual(_cost_for(served) - before_served, 0.01, places=6)
+        # ...and nothing at all under the configured one.
+        self.assertAlmostEqual(_cost_for(configured) - before_configured, 0.0, places=9)
+        self.assertAlmostEqual(_tokens_for(served, "input") - before_input, 800, places=6)
 
 
 class LookupPriceTests(unittest.TestCase):

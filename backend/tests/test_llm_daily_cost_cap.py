@@ -180,6 +180,68 @@ class CostCapEnforcementTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, ["gpt-4o-mini"])
 
 
+class CapAndTelemetryAgreementTests(unittest.IsolatedAsyncioTestCase):
+    """The counter that enforces the cap and the cost an operator can see must
+    agree about the same call.
+
+    ``_record_spend`` prices by ``LLMResult.model`` -- the model the route walk
+    actually reached -- while the telemetry block was handed
+    ``settings.OPENAI_MODEL``, the legacy last-resort name that ``.env.example``
+    tells operators to comment out. On the shipped production template both
+    readings are live (``LLM_TELEMETRY_ENABLED=true``, cap 25), and a
+    gpt-4-served call was charged $3.00 against the cap while reporting $0.014
+    under a ``deepseek-chat`` label: a 214x understatement.
+
+    This runs the whole chain once -- real gateway call, real ``_ask_ai``, real
+    ``analyze_market``, real telemetry builder -- so no hand-written
+    intermediate dict can hide a break in it.
+    """
+
+    async def test_the_cap_charge_and_the_visible_cost_agree(self):
+        import app.services.ai_analysis_service as ai
+        from app.services.llm_telemetry_service import build_llm_telemetry
+
+        served, configured = "gpt-4", "deepseek-chat"
+        self.assertNotEqual(served, configured, "the two models must differ or "
+                                               "the test cannot see the defect")
+
+        async def create(**kwargs):
+            return _fake_response(
+                content='{"ai_probability": 61, "narrative_type": "factual", '
+                        '"reasoning": "结构化证据支持。"}',
+                total_tokens=100_000,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp, _db(tmp), \
+                patch.object(gateway.settings, "LLM_DAILY_COST_CAP_USD", 25.0), \
+                patch.object(gateway, "build_route",
+                             return_value=[gateway.LLMModelRoute("p1", [served])]), \
+                patch.object(gateway, "_provider_configs", return_value=_CONFIGS), \
+                patch.object(gateway, "_default_client_factory",
+                             new=lambda config: _FakeClient(create)), \
+                patch.object(ai, "translate_title", new=AsyncMock(return_value="")):
+            before = store.get_spend_today()
+            analysis = await ai.analyze_market(
+                market_question="Will the agency approve the policy?",
+                market_probability=50,
+                news_context="Reuters reports an official filing.",
+            )
+            charged = store.get_spend_today() - before
+
+        self.assertEqual(analysis["llm_model"], served)
+        block = build_llm_telemetry(
+            analysis=analysis,
+            sentiment_profile=None,
+            news_context="Reuters reports an official filing.",
+            model=configured,
+            enabled=True,
+        )
+        # 100_000 tokens of gpt-4 at $0.03/1K.
+        self.assertAlmostEqual(charged, 3.0, places=6)
+        self.assertAlmostEqual(block["estimated_token_cost"], charged, places=6)
+        self.assertEqual(block["model"], served)
+
+
 class SchemaMemoizationTests(unittest.TestCase):
     """_ensure_schema must run once per DB path, not once per call.
 

@@ -199,11 +199,18 @@ class TestF2MetricsIncrementedAtCallSites(unittest.TestCase):
 
     def test_llm_telemetry_increments_token_usage(self):
         """llm_telemetry_service._build_block must increment
-        LLM_TOKEN_USAGE and LLM_TOKEN_COST."""
+        LLM_TOKEN_USAGE and LLM_TOKEN_COST.
+
+        The label is ``served_model`` -- the model the gateway's route walk
+        reached -- not the ``model`` argument, which is ``settings.OPENAI_MODEL``
+        and collapsed every series onto one legacy name. The behavioural guard
+        is ServedModelPricingTests in test_llm_telemetry_service.py; a source
+        grep cannot tell a right label from a wrong one.
+        """
         src = self._read_source("app/services/llm_telemetry_service.py")
-        self.assertIn("LLM_TOKEN_USAGE.labels(model=model, kind=\"input\").inc(", src)
-        self.assertIn("LLM_TOKEN_USAGE.labels(model=model, kind=\"output\").inc(", src)
-        self.assertIn("LLM_TOKEN_COST.labels(model=model).inc(", src)
+        self.assertIn("LLM_TOKEN_USAGE.labels(model=served_model, kind=\"input\").inc(", src)
+        self.assertIn("LLM_TOKEN_USAGE.labels(model=served_model, kind=\"output\").inc(", src)
+        self.assertIn("LLM_TOKEN_COST.labels(model=served_model).inc(", src)
 
     def test_event_intelligence_has_short_reason_helper(self):
         """_short_reason helper must exist to keep label cardinality bounded."""

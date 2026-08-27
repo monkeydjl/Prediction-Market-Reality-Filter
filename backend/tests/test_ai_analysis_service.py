@@ -801,8 +801,46 @@ class AnalyzeMarketContractTests(unittest.TestCase):
                 "analysis_quality": "deterministic_fallback",
                 # Phase 5: llm_usage is None when the LLM call failed (fallback)
                 "llm_usage": None,
+                # ...and so is the served model, so telemetry falls back to the
+                # configured one for the degraded path.
+                "llm_model": None,
             },
         )
+
+    def test_analyze_market_surfaces_the_model_that_served_the_call(self):
+        """``_ask_ai`` records the gateway's served model as ``_llm_model``;
+        ``analyze_market`` must republish it as ``llm_model`` or the cost
+        telemetry silently prices every call with ``settings.OPENAI_MODEL``."""
+        async def run():
+            with (
+                patch.object(ai, "_ask_ai", new=AsyncMock(return_value={
+                    "ai_probability": 57,
+                    "narrative_type": "factual",
+                    "narrative_summary": "Strong source structure supports it.",
+                    "reasoning": REASONING,
+                    "has_strong_evidence": True,
+                    "reasoning_consistency": 0.7,
+                    "_llm_usage": {"prompt_tokens": 10, "completion_tokens": 5,
+                                   "total_tokens": 15},
+                    "_llm_model": "gpt-4-turbo",
+                })),
+                patch.object(ai, "translate_title", new=AsyncMock(return_value="")),
+            ):
+                return await ai.analyze_market(
+                    market_question="Will the agency approve the policy before the deadline?",
+                    market_probability=50,
+                    news_context=NEWS_CONTEXT,
+                )
+
+        result = asyncio.run(run())
+        self.assertEqual(result["llm_model"], "gpt-4-turbo")
+        self.assertEqual(
+            result["llm_usage"],
+            {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        )
+        # The private keys must not leak into the record-shaped output.
+        self.assertNotIn("_llm_model", result)
+        self.assertNotIn("_llm_usage", result)
 
 
 if __name__ == "__main__":

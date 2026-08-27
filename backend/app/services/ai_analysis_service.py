@@ -123,6 +123,7 @@ async def analyze_market(
     # Phase 5: extract _llm_usage before _normalize_ai_analysis (which copies
     # only known keys and would drop it). None when fallback was used.
     llm_usage = raw_analysis.pop("_llm_usage", None) if isinstance(raw_analysis, dict) else None
+    llm_model = raw_analysis.pop("_llm_model", None) if isinstance(raw_analysis, dict) else None
     normalized = _normalize_ai_analysis(raw_analysis, market_probability)
     # ── Auto-translate titles ────────────────────────────────────────────
     # AUTO_TRANSLATE_TITLES=true (default): every event gets a Chinese title.
@@ -270,6 +271,10 @@ async def analyze_market(
         # the LLM call failed (deterministic fallback path). Consumed by
         # llm_telemetry_service.build_llm_telemetry.
         "llm_usage": llm_usage,
+        # The model that actually served the call, straight from the gateway's
+        # route walk. None on the fallback path. Telemetry prices and labels
+        # the cost with this; `settings.OPENAI_MODEL` is only its last resort.
+        "llm_model": llm_model,
     }
 
 

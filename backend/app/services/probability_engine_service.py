@@ -150,6 +150,13 @@ async def _ask_ai(
     parsed = dict(result.json_data)
     if result.usage is not None:
         parsed["_llm_usage"] = result.usage
+    # Which model actually served the call. The gateway walks a route list and
+    # falls back, so this is not knowable from settings: `OPENAI_MODEL` is the
+    # *legacy last-resort* model name (`.env.example` says to comment it out),
+    # yet it was what the cost telemetry priced and labelled every call with.
+    # Carried so `llm_telemetry_service` charges the model that ran.
+    if result.model:
+        parsed["_llm_model"] = result.model
     return parsed
 
 

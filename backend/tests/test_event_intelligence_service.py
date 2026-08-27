@@ -1030,7 +1030,7 @@ class CollectCandidateEventsStatusReportingTests(unittest.TestCase):
     the deferred tasks reached during loop teardown and passed vacuously.
     """
 
-    def _patches(self, poly, kalshi):
+    def _patches(self, poly, kalshi, extract=None, open_web_enabled=False):
         return [
             patch("app.services.polymarket_event_source.fetch_candidate_events",
                   new=poly),
@@ -1041,22 +1041,22 @@ class CollectCandidateEventsStatusReportingTests(unittest.TestCase):
             patch("app.services.world_cup_event_source.fetch_candidate_events",
                   new=AsyncMock(return_value=[])),
             patch("app.services.event_extraction_service.extract_candidate_events",
-                  new=AsyncMock(return_value=[])),
+                  new=extract if extract is not None else AsyncMock(return_value=[])),
             patch.object(eis.settings, "LIMITLESS_SOURCE_ENABLED", False),
             patch.object(eis.settings, "OPINION_API_KEY", ""),
             patch.object(eis.settings, "PREDICT_FUN_API_KEY", ""),
             patch.object(eis.settings, "POLYMARKET_CRYPTO_FETCH_ENABLED", False),
             patch.object(eis.settings, "WORLD_CUP_SOURCE_ENABLED", False),
             patch.object(eis.settings, "METACULUS_API_TOKEN", ""),
-            patch.object(eis.settings, "OPEN_WEB_ENABLED", False),
+            patch.object(eis.settings, "OPEN_WEB_ENABLED", open_web_enabled),
         ]
 
-    def _collect(self, poly, kalshi):
+    def _collect(self, poly, kalshi, extract=None, open_web_enabled=False):
         from app.services import discovery_status
 
         async def run():
             await discovery_status.reset(5)
-            patches = self._patches(poly, kalshi)
+            patches = self._patches(poly, kalshi, extract, open_web_enabled)
             for p in patches:
                 p.start()
             try:
@@ -1097,7 +1097,12 @@ class CollectCandidateEventsStatusReportingTests(unittest.TestCase):
 
     def test_every_label_is_seeded_before_its_fetch_resolves(self):
         """source_start seeds the label list, so a poll during the collect phase
-        sees the sources instead of an empty dict."""
+        sees the sources instead of an empty dict.
+
+        The expected dict used to include ``"Open Web": "fetching"`` even though
+        this harness sets ``OPEN_WEB_ENABLED=False`` — the test encoded the
+        defect below as intended behaviour.
+        """
         from app.services import discovery_status
 
         seen: list[dict] = []
@@ -1111,8 +1116,80 @@ class CollectCandidateEventsStatusReportingTests(unittest.TestCase):
         self.assertEqual(len(seen), 1)
         self.assertEqual(
             {label: entry["status"] for label, entry in seen[0].items()},
-            {"Polymarket": "fetching", "Kalshi": "fetching", "Open Web": "fetching"},
+            {"Polymarket": "fetching", "Kalshi": "fetching"},
         )
+
+    def test_a_disabled_open_web_source_is_absent_from_the_panel(self):
+        """A source that was never asked must not report success.
+
+        `labels` appended "Open Web" unconditionally and the gather was padded
+        with `asyncio.sleep(0, result=[])`, so with `OPEN_WEB_ENABLED=False` the
+        dashboard rendered a green `Open Web: 0 候选` badge for an extractor that
+        was never called — indistinguishable from one that ran and found nothing
+        in the news. Every other optional source is absent when disabled.
+        """
+        extract = AsyncMock(return_value=[])
+        sources = self._collect(AsyncMock(return_value=[]),
+                                AsyncMock(return_value=[]), extract=extract)
+        self.assertNotIn(eis._OPEN_WEB_LABEL, sources, sources)
+        self.assertEqual(extract.await_count, 0)
+        # Guard the guard: the panel is not simply empty.
+        self.assertEqual(set(sources), {"Polymarket", "Kalshi"}, sources)
+
+    def test_an_enabled_open_web_source_reports_its_candidate_count(self):
+        """The non-vacuous baseline: this arm passed before the fix and must keep
+        passing, so "Open Web is absent" cannot be satisfied by dropping the
+        source altogether."""
+        extract = AsyncMock(return_value=[
+            {"question": f"Will q{i} happen?", "baseline_probability": 50,
+             "volume": 0, "liquidity": 0,
+             "source": {"type": "open_web", "platform": "Open Web"}}
+            for i in range(2)
+        ])
+        sources = self._collect(AsyncMock(return_value=[]),
+                                AsyncMock(return_value=[]),
+                                extract=extract, open_web_enabled=True)
+        self.assertEqual(sources[eis._OPEN_WEB_LABEL],
+                         {"status": "ok", "candidates": 2, "error": None})
+        self.assertEqual(extract.await_count, 1)
+
+    def test_an_enabled_open_web_source_that_raises_is_reported_failed(self):
+        """The extractor is now a real member of the gather rather than a padded
+        `sleep`, so its failure has to travel the same `return_exceptions` path
+        every market source uses."""
+        extract = AsyncMock(side_effect=RuntimeError("extractor down"))
+        with self.assertLogs("app.services.event_intelligence_service",
+                             level="WARNING"):
+            sources = self._collect(AsyncMock(return_value=[]),
+                                    AsyncMock(return_value=[]),
+                                    extract=extract, open_web_enabled=True)
+        self.assertEqual(sources[eis._OPEN_WEB_LABEL]["status"], "failed")
+        self.assertIn("extractor down", sources[eis._OPEN_WEB_LABEL]["error"])
+
+    def test_each_label_is_announced_exactly_once(self):
+        """The seeding loop appeared twice, so every source was started twice per
+        scan — 8 `source_start` calls for 4 labels on the default config.
+
+        Counted, not merely present: `source_start` overwrites its key, so the
+        resulting `sources` dict is identical either way and no assertion about
+        its contents can see the duplication.
+        """
+        from app.services import discovery_status
+
+        calls: list[str] = []
+        real_start = discovery_status.source_start
+
+        async def counting_start(name: str) -> None:
+            calls.append(name)
+            await real_start(name)
+
+        with patch.object(discovery_status, "source_start", new=counting_start):
+            sources = self._collect(AsyncMock(return_value=[]),
+                                    AsyncMock(return_value=[]),
+                                    open_web_enabled=True)
+        self.assertEqual(sorted(calls), sorted(set(calls)), calls)
+        self.assertEqual(set(calls), set(sources), (calls, sources))
+        self.assertIn(eis._OPEN_WEB_LABEL, calls)
 
 
 class ActionableRecommendationTests(unittest.TestCase):

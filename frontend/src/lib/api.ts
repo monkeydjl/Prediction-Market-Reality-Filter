@@ -418,10 +418,22 @@ export interface LlmDiagnosticTask {
   routes: LlmDiagnosticRoute[];
 }
 
+export interface LlmCostCapDiagnostics {
+  enabled: boolean;
+  cap_usd: number;
+  /** null whenever the figure was not measured — never read as "nothing spent". */
+  spend_today_usd: number | null;
+  remaining_usd: number | null;
+  used_ratio: number | null;
+  status: "disabled" | "ok" | "warning" | "exceeded" | "unknown";
+  error: string | null;
+}
+
 export interface LlmDiagnostics {
   tasks: LlmDiagnosticTask[];
   configured_task_count: number;
   unconfigured_task_count: number;
+  cost_cap?: LlmCostCapDiagnostics;
 }
 
 // ── M6 Simulated trades ────────────────────────────────────────────

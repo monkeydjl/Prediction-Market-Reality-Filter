@@ -153,6 +153,32 @@ function llmRouteMeta(configured: boolean) {
     : { label: "未配置", cls: "border-neg/40 bg-neg/10 text-neg" };
 }
 
+/**
+ * Badge for the daily LLM cost cap. "disabled" is neutral, not green: no cap is
+ * a deliberate configuration, and painting it as healthy would be the same
+ * mistake as the discovery panel's green badge for a source that was never
+ * asked. "unknown" is a missing measurement, so it is a warning rather than a
+ * pass — the operator has a cap and cannot see their spend against it.
+ */
+function llmCostCapMeta(status: string) {
+  switch (status) {
+    case "ok":
+      return { label: "额度充足", cls: "border-pos/40 bg-pos/10 text-pos" };
+    case "warning":
+      return { label: "接近上限", cls: "border-warn/40 bg-warn/10 text-warn" };
+    case "exceeded":
+      return { label: "已达上限", cls: "border-neg/40 bg-neg/10 text-neg" };
+    case "unknown":
+      return { label: "读数不可用", cls: "border-warn/40 bg-warn/10 text-warn" };
+    default:
+      return { label: "未启用", cls: "border-border bg-secondary text-muted-foreground" };
+  }
+}
+
+function fmtUsd(value: number | null | undefined) {
+  return typeof value === "number" ? `$${value.toFixed(4)}` : "—";
+}
+
 export function SystemStatus() {
   const [status, setStatus] = useState<LoopStatus | null>(null);
   const [health, setHealth] = useState<ApiHealth | null>(null);
@@ -202,6 +228,9 @@ export function SystemStatus() {
   const llmTaskCount = llmDiagnostics?.tasks.length ?? 0;
   const llmConfiguredTaskCount = llmDiagnostics?.configured_task_count ?? 0;
   const llmUnconfigured = (llmDiagnostics?.unconfigured_task_count ?? 0) > 0;
+  // Optional so an older backend (no cost_cap key) renders exactly as before
+  // rather than showing a card full of em dashes.
+  const llmCostCap = llmDiagnostics?.cost_cap;
   const degraded = apiMeta.degraded || failed || running === false || llmUnconfigured;
   const failedWithoutDetails = runs.some(([, r]) => r.status === "failed" && !r.error);
   const endpointCount = overview?.endpoints ? Object.keys(overview.endpoints).length : null;
@@ -307,6 +336,63 @@ export function SystemStatus() {
                 </span>
               )}
             </div>
+            {llmCostCap && (
+              <div
+                data-testid="llm-cost-cap"
+                className="mb-3 rounded-md border border-border bg-background/40 p-3"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium">每日 LLM 成本上限</span>
+                    <span
+                      className={cn(
+                        "rounded-md border px-2 py-0.5 text-[11px] font-medium",
+                        llmCostCapMeta(llmCostCap.status).cls,
+                      )}
+                    >
+                      {llmCostCapMeta(llmCostCap.status).label}
+                    </span>
+                  </div>
+                  {llmCostCap.enabled ? (
+                    <span className="text-[11px] text-muted-foreground">
+                      今日 {fmtUsd(llmCostCap.spend_today_usd)} / 上限{" "}
+                      {fmtUsd(llmCostCap.cap_usd)} · 剩余 {fmtUsd(llmCostCap.remaining_usd)}
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-muted-foreground">
+                      LLM_DAILY_COST_CAP_USD=0，不限额
+                    </span>
+                  )}
+                </div>
+                {llmCostCap.enabled && typeof llmCostCap.used_ratio === "number" && (
+                  <div
+                    className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-secondary"
+                    role="progressbar"
+                    aria-label="今日 LLM 成本占上限比例"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(Math.min(1, llmCostCap.used_ratio) * 100)}
+                  >
+                    <div
+                      className={cn(
+                        "h-full rounded-full",
+                        llmCostCap.status === "exceeded"
+                          ? "bg-neg"
+                          : llmCostCap.status === "warning"
+                            ? "bg-warn"
+                            : "bg-pos",
+                      )}
+                      style={{ width: `${Math.min(100, llmCostCap.used_ratio * 100)}%` }}
+                    />
+                  </div>
+                )}
+                {llmCostCap.error && (
+                  <p className="mt-2 text-[11px] text-warn">
+                    读取今日花费失败（{llmCostCap.error}）；上限仍在生效。
+                  </p>
+                )}
+              </div>
+            )}
             {llmDiagnosticsError ? (
               <p className="rounded-md border border-neg/40 bg-neg/10 px-3 py-2 text-xs leading-relaxed text-neg">
                 {llmDiagnosticsError}

@@ -339,7 +339,7 @@ Phase 15 设计曾写「Edge/WS/优化/结算几乎无 UI」；代码侧已出�
 | O2 | P1 | 容器资源限制与仅本机绑端口 + 反代 TLS（历史已修部分，部署时确认） |
 | O3 | P1 | systemd 沙箱路径覆盖所有 DB/日志/备份写路径 |
 | O4 | P2 | 多环境 `.env.staging` / `.env.production` 检查清单自动化 |
-| O5 | P2 | LLM 成本与 discover limit 护栏看板 — ✅ 成本读数部分 2026-08-27：遥测此前按 `settings.OPENAI_MODEL`（`.env.example` 标注的 legacy 兜底名）计价与打标，gpt-4 实际服务的调用低报 214 倍、`pmrf_llm_token_cost_total` 全部塌成单一 `deepseek-chat` 序列；现改为透传 `LLMResult.model`。✅ 计数覆盖面 2026-08-28：两个 token/成本 counter 原先只在 `llm_telemetry_service` 递增（每事件一次、且在默认关闭的 `LLM_TELEMETRY_ENABLED` 之后），默认安装下 6 次真实调用 6 万 token 只让 counter 走了 $0.00，开启后单事件也只计到 50%；已下移到 gateway 收敛点 `_record_usage`，两条 success 路径各记一次，覆盖全部 13 个调用方。仍待：`get_spend_today()` 在 gateway 外无任何读者（看不到距 cap 多远）；discover limit 护栏未做 |
+| O5 | P2 | LLM 成本与 discover limit 护栏看板 — ✅ 成本读数部分 2026-08-27：遥测此前按 `settings.OPENAI_MODEL`（`.env.example` 标注的 legacy 兜底名）计价与打标，gpt-4 实际服务的调用低报 214 倍、`pmrf_llm_token_cost_total` 全部塌成单一 `deepseek-chat` 序列；现改为透传 `LLMResult.model`。✅ 计数覆盖面 2026-08-28：两个 token/成本 counter 原先只在 `llm_telemetry_service` 递增（每事件一次、且在默认关闭的 `LLM_TELEMETRY_ENABLED` 之后），默认安装下 6 次真实调用 6 万 token 只让 counter 走了 $0.00，开启后单事件也只计到 50%；已下移到 gateway 收敛点 `_record_usage`，两条 success 路径各记一次，覆盖全部 13 个调用方。✅ cap 读数 2026-08-28：`get_spend_today()` 此前在 gateway 外无任何读者（无路由/CLI/看板），带 cap 运行的运营者在调用被拒之前看不到自己距上限多远；现由只读 `/api/llm/diagnostics` 增加 `cost_cap` 块并在已挂载的系统状态 LLM 面板渲染（比例判级、未启用为中性而非绿色、读数失败为 warning 而非 pass、未启用时不读 SQLite 以保持默认零副作用）。仍待：discover limit 护栏未做 |
 | O6 | P3 | 依赖审计（pip-audit / npm audit）周期 |
 
 ---

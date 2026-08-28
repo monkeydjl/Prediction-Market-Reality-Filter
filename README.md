@@ -78,7 +78,15 @@ Phase 1-13 的完整 spec 和 plan 位于 [docs/superpowers/specs/](docs/superpo
 start.bat          :: 生产：构建前端(按需) + 后端 :8000 + 静态前端 :3000（两窗口）
 start.bat build    :: 强制重新构建前端后再起
 start.bat dev      :: 开发：后端 :8000 + 前端热重载 :3000（两窗口）
+start.bat check    :: 只体检：报告解释器与写权限配置，不装依赖、不起服务
 ```
+
+启动器优先用项目自带的 `.venv\Scripts\python.exe`，没有才退回 PATH 上的 `python`。
+
+写接口需要 `API_WRITE_KEY` 或 `ALLOW_OPEN_WRITES=true`，两个都没有时后端会拒绝启动
+（fail-closed）。`start.bat check` 会在起服务之前把这件事说清楚。`ALLOW_OPEN_WRITES=true`
+仅限本机：`run.py` 默认只绑定 `127.0.0.1`（`SERVER_HOST`），并且拒绝「非本机地址 + 无 key」
+这个组合。生产的 Docker / systemd 直接给 uvicorn 传 `--host`，不走 `run.py`。
 
 ### 手动启动
 

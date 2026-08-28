@@ -5,19 +5,44 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.core import runtime_stores
 from app.core.config import settings
 
 
 def _candidate_paths() -> list[Path]:
-    paths = [
-        Path(settings.EVENT_STORE_FILE),
-        Path(settings.EVENT_AUDIT_FILE),
-        Path(settings.EVENT_CACHE_FILE),
-        Path(settings.LOOP_DB_FILE),
-        Path(settings.LOOP_DB_FILE + "-wal"),
-        Path(settings.LOOP_DB_FILE + "-shm"),
-    ]
-    return [path.resolve() for path in paths if path.exists()]
+    """Existing files to archive, derived from the declared store table.
+
+    The membership decision lives in `app.core.runtime_stores`, not here. This
+    list used to be typed out and named four settings while four more held live
+    state (33882 kernel prediction rows among them); a test now asserts an exact
+    partition of every path setting, so a new store cannot quietly miss a
+    backup. See that module's docstring.
+    """
+    paths = runtime_stores.backup_paths()
+    _reject_arcname_collisions(paths)
+    return paths
+
+
+def _reject_arcname_collisions(paths: list[Path]) -> None:
+    """Fail when two stores would claim the same archive member name.
+
+    Members are stored under their basename, and `restore_stores` maps that
+    basename back to a setting. Two stores sharing one would make the archive
+    ambiguous in a way a restore cannot detect, so refuse to write it. Reachable
+    only by pointing two path settings at same-named files in different
+    directories, but silent data loss is the failure it would otherwise cause.
+    """
+    seen: dict[str, Path] = {}
+    for path in paths:
+        clash = seen.get(path.name)
+        if clash is not None:
+            raise ValueError(
+                f"two runtime stores share the archive member name {path.name!r} "
+                f"({clash} and {path}); a restore could not tell them apart. "
+                "Point one of the corresponding *_FILE/*_PATH settings at a "
+                "differently named file."
+            )
+        seen[path.name] = path
 
 
 def _prune_backups(backup_dir: Path, keep: int | None) -> None:
@@ -75,7 +100,12 @@ def create_backup(
     keep: int | None = 30,
     encryption_key: str | None = None,
 ) -> Path:
-    """Create a backup archive of the runtime stores.
+    """Create a backup archive of the runtime **state** stores.
+
+    Contents are the `STATE_STORES` rows of `app.core.runtime_stores` that exist,
+    plus SQLite WAL/SHM sidecars. Derived stores (re-fetchable) and ephemeral
+    ones (logs, the scheduler lock) are excluded on purpose and are declared
+    there with a reason.
 
     When ``encryption_key`` is provided (non-empty), the archive is written as
     a pyzipper AES-256 encrypted zip; when empty, a plaintext zip is produced
@@ -99,7 +129,12 @@ def create_backup(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Back up PMRF runtime stores.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Back up PMRF runtime state stores (events, audit, cache, loop DB, "
+            "kernel DB, World Cup DB, domain reliability, sports facts)."
+        )
+    )
     parser.add_argument("--output-dir", default=None)
     parser.add_argument(
         "--keep",

@@ -11,6 +11,7 @@ Tests cover:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import shutil
 import sys
@@ -25,6 +26,8 @@ sys.path.insert(0, str(_BACKEND))
 _SCRIPTS = _BACKEND / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
+from app.core import runtime_stores  # noqa: E402
+from app.core.config import settings  # noqa: E402
 from restore_stores import (  # noqa: E402
     _format_report,
     _list_backup_contents,
@@ -32,6 +35,40 @@ from restore_stores import (  # noqa: E402
     main,
     restore_from_backup,
 )
+
+
+@contextlib.contextmanager
+def _stores_in(root: Path, *, per_store_dirs: bool = False, **overrides: str):
+    """Point every declared state store inside `root` for the duration.
+
+    These tests used to `patch("restore_stores.settings")` with a MagicMock and
+    set the four attributes that existed when they were written. That mock *was*
+    the four-store assumption: a fifth store would read an auto-created Mock
+    instead of a path, so the tests could never notice one arriving. Patching the
+    real settings object attribute-by-attribute over
+    `runtime_stores.state_setting_names()` means a new row in the store table is
+    covered here the moment it is declared.
+
+    `overrides` maps a setting name to an explicit path when a test needs a
+    specific file (e.g. one it pre-populated); everything else gets
+    ``root/<default basename>``.
+
+    `per_store_dirs` gives each store its own subdirectory. Required by any test
+    that asserts a store does *not* land on the unknown-arcname fallback path:
+    that fallback is ``Path(settings.LOOP_DB_FILE).parent``, so with every store
+    in one directory the wrong answer and the right answer are the same path and
+    the assertion cannot fail. Flat layout stays the default because it matches
+    how a real install is laid out.
+    """
+    with contextlib.ExitStack() as stack:
+        for name in runtime_stores.state_setting_names():
+            value = overrides.get(name)
+            if value is None:
+                basename = Path(getattr(settings, name)).name
+                parent = root / name.lower() if per_store_dirs else root
+                value = str(parent / basename)
+            stack.enter_context(patch.object(settings, name, value))
+        yield
 
 
 def _create_test_backup(
@@ -66,28 +103,78 @@ class TestTargetPathMapping(unittest.TestCase):
     """arcname → target path resolution."""
 
     def test_event_store_json_maps_to_setting(self):
-        with patch("restore_stores.settings") as mock_settings:
-            mock_settings.EVENT_STORE_FILE = "/data/event_store.json"
-            mock_settings.EVENT_AUDIT_FILE = "/data/event_audit.jsonl"
-            mock_settings.EVENT_CACHE_FILE = "/data/event_cache.json"
-            mock_settings.LOOP_DB_FILE = "/data/v2_loop.db"
+        with _stores_in(Path("/data")):
             target = _target_path_for_arcname("event_store.json", None)
             self.assertEqual(target, Path("/data/event_store.json").resolve())
 
     def test_loop_db_sidecars_mapped(self):
-        with patch("restore_stores.settings") as mock_settings:
-            mock_settings.EVENT_STORE_FILE = "/data/event_store.json"
-            mock_settings.EVENT_AUDIT_FILE = "/data/event_audit.jsonl"
-            mock_settings.EVENT_CACHE_FILE = "/data/event_cache.json"
-            mock_settings.LOOP_DB_FILE = "/data/v2_loop.db"
+        with _stores_in(Path("/data")):
             target_wal = _target_path_for_arcname("v2_loop.db-wal", None)
             target_shm = _target_path_for_arcname("v2_loop.db-shm", None)
             self.assertEqual(target_wal.name, "v2_loop.db-wal")
             self.assertEqual(target_shm.name, "v2_loop.db-shm")
 
+    def test_every_state_store_maps_to_its_configured_path(self):
+        """No declared store falls through to the unknown-arcname fallback.
+
+        The fallback drops a member next to the loop DB, so a store missing from
+        the mapping still "restores" — to the wrong path, silently. This is the
+        defect the four-store list actually caused, so it is asserted per store
+        rather than for one representative.
+        """
+        with _stores_in(Path("/data"), per_store_dirs=True):
+            loop_parent = Path(settings.LOOP_DB_FILE).parent.resolve()
+            checked_against_fallback = 0
+            for name in runtime_stores.state_setting_names():
+                configured = Path(getattr(settings, name))
+                with self.subTest(store=name):
+                    target = _target_path_for_arcname(configured.name, None)
+                    self.assertEqual(target, configured.resolve())
+                    # Every store except the loop DB itself lives in its own
+                    # directory here, so the fallback is a *different* path and
+                    # this assertion can actually fail.
+                    if configured.parent.resolve() != loop_parent:
+                        self.assertNotEqual(
+                            target, (loop_parent / configured.name).resolve()
+                        )
+                        checked_against_fallback += 1
+            # Guard the guard: if the layout ever collapses back to one shared
+            # directory, the assertion above silently stops running.
+            self.assertEqual(
+                checked_against_fallback,
+                len(runtime_stores.state_setting_names()) - 1,
+                "the fallback comparison was skipped for some stores, which "
+                "means their configured parent equalled the loop DB's parent",
+            )
+
+    def test_sidecars_mapped_for_every_sqlite_store(self):
+        """WAL/SHM follow their own store, not only the loop DB's.
+
+        Sidecar handling was written for LOOP_DB_FILE alone; the kernel and
+        World Cup DBs are equally WAL-mode SQLite.
+        """
+        # Separate directories on purpose: in a flat layout the unknown-arcname
+        # fallback (`loop_db.parent`) coincides with every store's own parent, so
+        # a sidecar missing from the map would still resolve to the expected path
+        # and this test would pass against a loop-DB-only implementation.
+        with _stores_in(Path("/data"), per_store_dirs=True):
+            sqlite_stores = [
+                Path(getattr(settings, name))
+                for name in runtime_stores.state_setting_names()
+                if Path(getattr(settings, name)).suffix == ".db"
+            ]
+            self.assertGreaterEqual(len(sqlite_stores), 4)
+            for store in sqlite_stores:
+                for suffix in runtime_stores.SQLITE_SIDECAR_SUFFIXES:
+                    arcname = store.name + suffix
+                    with self.subTest(arcname=arcname):
+                        target = _target_path_for_arcname(arcname, None)
+                        self.assertEqual(
+                            target, (store.parent / arcname).resolve()
+                        )
+
     def test_target_dir_override_ignores_settings(self):
-        with patch("restore_stores.settings") as mock_settings:
-            mock_settings.EVENT_STORE_FILE = "/data/event_store.json"
+        with _stores_in(Path("/data")):
             target_dir = Path("/tmp/restore-test")
             target = _target_path_for_arcname("event_store.json", target_dir)
             # _target_path_for_arcname returns the resolved path; compare by
@@ -106,13 +193,8 @@ class TestListBackupContents(unittest.TestCase):
                 "event_store.json": b'{"evt1": {}}',
                 "v2_loop.db": b"sqlite binary",
             })
-            with patch("restore_stores.settings") as mock_settings, \
+            with _stores_in(Path(tmp)), \
                  patch("restore_stores._check_service_running", return_value=False):
-                mock_settings.EVENT_STORE_FILE = str(Path(tmp) / "event_store.json")
-                mock_settings.EVENT_AUDIT_FILE = str(Path(tmp) / "event_audit.jsonl")
-                mock_settings.EVENT_CACHE_FILE = str(Path(tmp) / "event_cache.json")
-                mock_settings.LOOP_DB_FILE = str(Path(tmp) / "v2_loop.db")
-
                 entries = _list_backup_contents(archive, None, None)
             self.assertEqual(len(entries), 2)
             self.assertEqual(entries[0]["arcname"], "event_store.json")
@@ -131,13 +213,8 @@ class TestListBackupContents(unittest.TestCase):
             current_file = Path(tmp) / "event_store.json"
             current_file.write_text('{"old": true}')
 
-            with patch("restore_stores.settings") as mock_settings, \
+            with _stores_in(Path(tmp), EVENT_STORE_FILE=str(current_file)), \
                  patch("restore_stores._check_service_running", return_value=False):
-                mock_settings.EVENT_STORE_FILE = str(current_file)
-                mock_settings.EVENT_AUDIT_FILE = str(Path(tmp) / "audit.jsonl")
-                mock_settings.EVENT_CACHE_FILE = str(Path(tmp) / "cache.json")
-                mock_settings.LOOP_DB_FILE = str(Path(tmp) / "loop.db")
-
                 entries = _list_backup_contents(archive, None, None)
             self.assertTrue(entries[0]["exists_currently"])
             self.assertNotEqual(entries[0]["sha256"], entries[0]["current_sha256"])
@@ -154,13 +231,8 @@ class TestListBackupContents(unittest.TestCase):
             current_file = Path(tmp) / "event_store.json"
             current_file.write_bytes(content)
 
-            with patch("restore_stores.settings") as mock_settings, \
+            with _stores_in(Path(tmp), EVENT_STORE_FILE=str(current_file)), \
                  patch("restore_stores._check_service_running", return_value=False):
-                mock_settings.EVENT_STORE_FILE = str(current_file)
-                mock_settings.EVENT_AUDIT_FILE = str(Path(tmp) / "audit.jsonl")
-                mock_settings.EVENT_CACHE_FILE = str(Path(tmp) / "cache.json")
-                mock_settings.LOOP_DB_FILE = str(Path(tmp) / "loop.db")
-
                 entries = _list_backup_contents(archive, None, None)
             self.assertFalse(entries[0]["would_change"])
 
@@ -177,13 +249,8 @@ class TestDryRunDoesNotWrite(unittest.TestCase):
             current_file.write_bytes(b'{"old": true}')
             original_content = current_file.read_bytes()
 
-            with patch("restore_stores.settings") as mock_settings, \
+            with _stores_in(Path(tmp), EVENT_STORE_FILE=str(current_file)), \
                  patch("restore_stores._check_service_running", return_value=False):
-                mock_settings.EVENT_STORE_FILE = str(current_file)
-                mock_settings.EVENT_AUDIT_FILE = str(Path(tmp) / "audit.jsonl")
-                mock_settings.EVENT_CACHE_FILE = str(Path(tmp) / "cache.json")
-                mock_settings.LOOP_DB_FILE = str(Path(tmp) / "loop.db")
-
                 result = restore_from_backup(archive, apply=False)
             self.assertFalse(result["applied"])
             self.assertEqual(current_file.read_bytes(), original_content)
@@ -200,13 +267,8 @@ class TestApplyMode(unittest.TestCase):
             current_file = Path(tmp) / "event_store.json"
             current_file.write_bytes(b'{"old": true}')
 
-            with patch("restore_stores.settings") as mock_settings, \
+            with _stores_in(Path(tmp), EVENT_STORE_FILE=str(current_file)), \
                  patch("restore_stores._check_service_running", return_value=False):
-                mock_settings.EVENT_STORE_FILE = str(current_file)
-                mock_settings.EVENT_AUDIT_FILE = str(Path(tmp) / "audit.jsonl")
-                mock_settings.EVENT_CACHE_FILE = str(Path(tmp) / "cache.json")
-                mock_settings.LOOP_DB_FILE = str(Path(tmp) / "loop.db")
-
                 result = restore_from_backup(archive, apply=True)
             self.assertTrue(result["applied"])
             self.assertIn("pre_restore_dir", result)
@@ -225,13 +287,8 @@ class TestApplyMode(unittest.TestCase):
             current_file = Path(tmp) / "event_store.json"
             self.assertFalse(current_file.exists())
 
-            with patch("restore_stores.settings") as mock_settings, \
+            with _stores_in(Path(tmp), EVENT_STORE_FILE=str(current_file)), \
                  patch("restore_stores._check_service_running", return_value=False):
-                mock_settings.EVENT_STORE_FILE = str(current_file)
-                mock_settings.EVENT_AUDIT_FILE = str(Path(tmp) / "audit.jsonl")
-                mock_settings.EVENT_CACHE_FILE = str(Path(tmp) / "cache.json")
-                mock_settings.LOOP_DB_FILE = str(Path(tmp) / "loop.db")
-
                 result = restore_from_backup(archive, apply=True)
             self.assertTrue(current_file.exists())
             self.assertEqual(current_file.read_bytes(), b'{"new": true}')
@@ -243,7 +300,8 @@ class TestApplyMode(unittest.TestCase):
             _create_test_backup(archive, {"event_store.json": b'{"new": true}'})
 
             target_dir = Path(tmp) / "restore-target"
-            with patch("restore_stores.settings"), \
+            with _stores_in(Path(tmp)), \
+                 patch.object(settings, "BACKUP_ENCRYPTION_KEY", ""), \
                  patch("restore_stores._check_service_running", return_value=False):
                 result = restore_from_backup(
                     archive, apply=True, target_dir=target_dir,
@@ -267,14 +325,9 @@ class TestEncryptedBackup(unittest.TestCase):
             except unittest.SkipTest:
                 self.skipTest("pyzipper not installed")
 
-            with patch("restore_stores.settings") as mock_settings, \
+            with _stores_in(Path(tmp)), \
+                 patch.object(settings, "BACKUP_ENCRYPTION_KEY", ""), \
                  patch("restore_stores._check_service_running", return_value=False):
-                mock_settings.EVENT_STORE_FILE = str(Path(tmp) / "event_store.json")
-                mock_settings.EVENT_AUDIT_FILE = str(Path(tmp) / "audit.jsonl")
-                mock_settings.EVENT_CACHE_FILE = str(Path(tmp) / "cache.json")
-                mock_settings.LOOP_DB_FILE = str(Path(tmp) / "loop.db")
-                mock_settings.BACKUP_ENCRYPTION_KEY = ""
-
                 # No key provided → RuntimeError.
                 with self.assertRaises(RuntimeError):
                     restore_from_backup(archive, apply=False, encryption_key="")
@@ -291,7 +344,7 @@ class TestEncryptedBackup(unittest.TestCase):
                 self.skipTest("pyzipper not installed")
 
             target_dir = Path(tmp) / "restore-target"
-            with patch("restore_stores.settings"), \
+            with _stores_in(Path(tmp)), \
                  patch("restore_stores._check_service_running", return_value=False):
                 result = restore_from_backup(
                     archive, apply=True,

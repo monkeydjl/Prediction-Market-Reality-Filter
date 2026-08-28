@@ -4,6 +4,7 @@ import io
 import logging
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -15,6 +16,7 @@ from app.api.router import api_router
 from app.api.routes import events as events_routes
 from app.api.security import require_write_key, optional_write_key
 from app.core.rate_limit import InMemoryRateLimitMiddleware
+from app.core import runtime_stores
 from app.core.config import settings
 from scripts import backup_stores, healthcheck
 
@@ -959,29 +961,131 @@ class HealthcheckScriptTests(unittest.TestCase):
         self.assertEqual(calls, ["http://local/api/health"])
 
 
+@contextlib.contextmanager
+def _state_stores_in(root: Path, *, create: bool = True):
+    """Redirect **every** declared state store into `root`, optionally creating them.
+
+    The previous version of these tests patched the four settings it knew about.
+    The other four kept pointing at the operator's real files, so a test whose
+    job was to verify backup coverage archived the live 6 MB
+    `kernel_predictions.db` into a temp directory. An incomplete redirect is not
+    just non-hermetic, it silently reads production data.
+
+    Yields the mapping of setting name -> path so a caller can assert per store.
+    """
+    paths: dict[str, Path] = {}
+    with contextlib.ExitStack() as stack:
+        for name in runtime_stores.state_setting_names():
+            target = root / Path(getattr(settings, name)).name
+            paths[name] = target
+            stack.enter_context(patch.object(settings, name, str(target)))
+        if create:
+            for target in paths.values():
+                target.write_text("x", encoding="utf-8")
+        yield paths
+
+
 class BackupTests(unittest.TestCase):
-    def test_backup_includes_existing_runtime_stores(self):
+    def test_backup_archives_every_declared_state_store(self):
+        """Exact set equality, not membership.
+
+        The original assertion was three `assertIn` calls, which is why four
+        omitted stores could never redden it: a subset assertion cannot express
+        "and nothing is missing". See app/core/runtime_stores.py.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            event_store = base / "event_store.json"
-            event_audit = base / "event_audit.jsonl"
-            loop_db = base / "v2_loop.db"
-            event_store.write_text("{}", encoding="utf-8")
-            event_audit.write_text("", encoding="utf-8")
-            loop_db.write_text("sqlite", encoding="utf-8")
-
-            with patch.object(settings, "EVENT_STORE_FILE", str(event_store)), \
-                    patch.object(settings, "EVENT_AUDIT_FILE", str(event_audit)), \
-                    patch.object(settings, "EVENT_CACHE_FILE", str(base / "missing.json")), \
-                    patch.object(settings, "LOOP_DB_FILE", str(loop_db)):
+            with _state_stores_in(base) as paths:
                 archive = backup_stores.create_backup(str(base / "backups"))
+                self.assertTrue(archive.exists())
+                names = set(zipfile.ZipFile(archive).namelist())
 
-            self.assertTrue(archive.exists())
-            names = set(__import__("zipfile").ZipFile(archive).namelist())
+        expected = {p.name for p in paths.values()}
+        self.assertEqual(
+            names,
+            expected,
+            f"archive contents differ from the declared state stores; "
+            f"missing={sorted(expected - names)} unexpected={sorted(names - expected)}",
+        )
 
-        self.assertIn("event_store.json", names)
-        self.assertIn("event_audit.jsonl", names)
-        self.assertIn("v2_loop.db", names)
+    def test_backup_includes_the_four_stores_it_used_to_omit(self):
+        """Name the regression explicitly, so a reclassification cannot hide it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            with _state_stores_in(base):
+                archive = backup_stores.create_backup(str(base / "backups"))
+                names = set(zipfile.ZipFile(archive).namelist())
+
+        for basename in (
+            "kernel_predictions.db",
+            "world_cup_predictions.db",
+            "domain_reliability.db",
+            "sports_facts.json",
+        ):
+            with self.subTest(store=basename):
+                self.assertIn(basename, names)
+
+    def test_backup_includes_sidecars_for_every_sqlite_store(self):
+        """WAL/SHM travel with their own store, not only the loop DB's.
+
+        A `.db` copied without its `-wal` can be missing committed transactions,
+        so this is data loss, not tidiness.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            with _state_stores_in(base) as paths:
+                dbs = [p for p in paths.values() if p.suffix == ".db"]
+                self.assertGreaterEqual(len(dbs), 4)
+                for db in dbs:
+                    for suffix in runtime_stores.SQLITE_SIDECAR_SUFFIXES:
+                        Path(str(db) + suffix).write_text("s", encoding="utf-8")
+                archive = backup_stores.create_backup(str(base / "backups"))
+                names = set(zipfile.ZipFile(archive).namelist())
+
+        for db in dbs:
+            for suffix in runtime_stores.SQLITE_SIDECAR_SUFFIXES:
+                with self.subTest(sidecar=db.name + suffix):
+                    self.assertIn(db.name + suffix, names)
+
+    def test_backup_skips_stores_that_do_not_exist(self):
+        """A store the operator never populated is not an error."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            with _state_stores_in(base, create=False) as paths:
+                only = paths["EVENT_STORE_FILE"]
+                only.write_text("{}", encoding="utf-8")
+                archive = backup_stores.create_backup(str(base / "backups"))
+                names = set(zipfile.ZipFile(archive).namelist())
+
+        self.assertEqual(names, {"event_store.json"})
+
+    def test_backup_excludes_ephemeral_and_derived_stores(self):
+        """The scheduler lock and the log must never enter an archive."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            with _state_stores_in(base):
+                archive = backup_stores.create_backup(str(base / "backups"))
+                names = set(zipfile.ZipFile(archive).namelist())
+
+        for setting in (*runtime_stores.EPHEMERAL_STORES, *runtime_stores.DERIVED_STORES):
+            value = getattr(settings, setting, "")
+            if not value:
+                continue
+            with self.subTest(setting=setting):
+                self.assertNotIn(Path(value).name, names)
+
+    def test_backup_refuses_colliding_archive_member_names(self):
+        """Two stores sharing a basename would make a restore ambiguous."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            clash = base / "other" / "event_store.json"
+            clash.parent.mkdir(parents=True)
+            with _state_stores_in(base):
+                clash.write_text("{}", encoding="utf-8")
+                with patch.object(settings, "SPORTS_FACT_FILE", str(clash)):
+                    with self.assertRaises(ValueError) as ctx:
+                        backup_stores.create_backup(str(base / "backups"))
+        self.assertIn("event_store.json", str(ctx.exception))
 
     def test_backup_prunes_old_archives_only(self):
         with tempfile.TemporaryDirectory() as tmp:

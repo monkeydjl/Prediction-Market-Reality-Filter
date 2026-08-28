@@ -149,15 +149,24 @@ SCHEDULER_FAILED_RUNS = Counter(
 # LLM cost telemetry
 # ---------------------------------------------------------------------------
 
+# Both counters are incremented in exactly one place:
+# ``llm_gateway_service._record_usage``, on every gateway success path. That is
+# the only point that sees all callers -- 13 modules reach the gateway, so
+# instrumenting a caller counts that caller only. ``model`` is the model that
+# actually served the call (``LLMResult.model``), not a configured default.
+
 LLM_TOKEN_COST = Counter(
     "pmrf_llm_token_cost_total",
-    "Estimated LLM token cost in USD (sum of input+output across all calls).",
+    "Estimated LLM token cost in USD (total_tokens x the model's per-1K price), "
+    "summed over every successful gateway call regardless of caller. Independent "
+    "of LLM_TELEMETRY_ENABLED and of LLM_DAILY_COST_CAP_USD.",
     ["model"],
 )
 
 LLM_TOKEN_USAGE = Counter(
     "pmrf_llm_token_usage_total",
-    "LLM token usage count by token kind (input/output).",
+    "LLM token usage count by token kind (input/output), summed over every "
+    "successful gateway call regardless of caller.",
     ["model", "kind"],
 )
 

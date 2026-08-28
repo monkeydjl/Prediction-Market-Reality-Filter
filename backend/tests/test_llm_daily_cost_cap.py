@@ -184,7 +184,7 @@ class CapAndTelemetryAgreementTests(unittest.IsolatedAsyncioTestCase):
     """The counter that enforces the cap and the cost an operator can see must
     agree about the same call.
 
-    ``_record_spend`` prices by ``LLMResult.model`` -- the model the route walk
+    ``_record_usage`` prices by ``LLMResult.model`` -- the model the route walk
     actually reached -- while the telemetry block was handed
     ``settings.OPENAI_MODEL``, the legacy last-resort name that ``.env.example``
     tells operators to comment out. On the shipped production template both
@@ -194,16 +194,28 @@ class CapAndTelemetryAgreementTests(unittest.IsolatedAsyncioTestCase):
 
     This runs the whole chain once -- real gateway call, real ``_ask_ai``, real
     ``analyze_market``, real telemetry builder -- so no hand-written
-    intermediate dict can hide a break in it.
+    intermediate dict can hide a break in it. All three readings of the same
+    call are compared: the cap counter, the per-event ``estimated_token_cost``,
+    and the ``/metrics`` series.
     """
 
     async def test_the_cap_charge_and_the_visible_cost_agree(self):
         import app.services.ai_analysis_service as ai
         from app.services.llm_telemetry_service import build_llm_telemetry
+        from app.utils.metrics import LLM_TOKEN_COST
 
         served, configured = "gpt-4", "deepseek-chat"
         self.assertNotEqual(served, configured, "the two models must differ or "
                                                "the test cannot see the defect")
+
+        def _metric_cost(model: str) -> float:
+            return sum(
+                sample.value
+                for metric in LLM_TOKEN_COST.collect()
+                for sample in metric.samples
+                if sample.name.endswith("_total")
+                and sample.labels.get("model") == model
+            )
 
         async def create(**kwargs):
             return _fake_response(
@@ -212,6 +224,8 @@ class CapAndTelemetryAgreementTests(unittest.IsolatedAsyncioTestCase):
                 total_tokens=100_000,
             )
 
+        before_metric_served = _metric_cost(served)
+        before_metric_configured = _metric_cost(configured)
         with tempfile.TemporaryDirectory() as tmp, _db(tmp), \
                 patch.object(gateway.settings, "LLM_DAILY_COST_CAP_USD", 25.0), \
                 patch.object(gateway, "build_route",
@@ -240,6 +254,15 @@ class CapAndTelemetryAgreementTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(charged, 3.0, places=6)
         self.assertAlmostEqual(block["estimated_token_cost"], charged, places=6)
         self.assertEqual(block["model"], served)
+        # The /metrics series is the third reading of the same call, and it is
+        # incremented at the gateway rather than by the telemetry block -- so
+        # this also pins that the enrichment path is counted exactly once.
+        self.assertAlmostEqual(
+            _metric_cost(served) - before_metric_served, charged, places=6
+        )
+        self.assertAlmostEqual(
+            _metric_cost(configured) - before_metric_configured, 0.0, places=9
+        )
 
 
 class SchemaMemoizationTests(unittest.TestCase):
@@ -286,7 +309,7 @@ class SchemaMemoizationTests(unittest.TestCase):
 class CostCapOffloadTests(unittest.IsolatedAsyncioTestCase):
     """The cap's SQLite work must not run on the event loop.
 
-    _cost_cap_exceeded() reads and _record_spend() writes, and both were called
+    _cost_cap_exceeded() reads and _record_usage() writes, and both were called
     synchronously from ``async def``. Under the write lock a single slow call
     froze every other coroutine in the process.
     """

@@ -386,50 +386,43 @@ class ServedModelPricingTests(unittest.TestCase):
                     result["estimated_token_cost"], 0.005, places=6
                 )
 
-    def test_prometheus_series_is_labelled_with_the_served_model(self):
-        """The counter is documented as cost "across all calls", so an operator
-        reading it by model needs the model that ran. It used to carry one
-        label -- the configured model -- for every call regardless."""
+    def test_this_service_does_not_touch_the_process_wide_counters(self):
+        """The Prometheus token/cost counters belong to the gateway, not here.
+
+        This function runs once per event, from one call site behind
+        LLM_TELEMETRY_ENABLED (default off), and sees only what ``_ask_ai``
+        recorded -- so as a process-wide counter it read 0 on a default install
+        and ~50% of a single event's tokens with telemetry on. Ownership moved
+        to ``llm_gateway_service._record_usage``; incrementing here again would
+        double-count the enrichment path.
+        """
         from app.utils.metrics import LLM_TOKEN_COST, LLM_TOKEN_USAGE
 
-        def _cost_for(model: str) -> float:
+        def _total(counter) -> float:
             return sum(
                 sample.value
-                for metric in LLM_TOKEN_COST.collect()
+                for metric in counter.collect()
                 for sample in metric.samples
-                if sample.labels.get("model") == model
-                and sample.name.endswith("_total")
+                if sample.name.endswith("_total")
             )
 
-        def _tokens_for(model: str, kind: str) -> float:
-            return sum(
-                sample.value
-                for metric in LLM_TOKEN_USAGE.collect()
-                for sample in metric.samples
-                if sample.labels.get("model") == model
-                and sample.labels.get("kind") == kind
-                and sample.name.endswith("_total")
-            )
-
-        served, configured = "gpt-4-turbo", "gpt-3.5-turbo"
-        before_served = _cost_for(served)
-        before_configured = _cost_for(configured)
-        before_input = _tokens_for(served, "input")
-        build_llm_telemetry(
+        before_cost, before_usage = _total(LLM_TOKEN_COST), _total(LLM_TOKEN_USAGE)
+        block = build_llm_telemetry(
             analysis=_analysis(
                 usage=_usage(prompt=800, completion=200, total=1000),
-                llm_model=served,
+                llm_model="gpt-4-turbo",
             ),
             sentiment_profile=None,
             news_context="",
-            model=configured,
+            model="gpt-3.5-turbo",
             enabled=True,
         )
-        # 1000 * 0.01 / 1000 = 0.01 charged under the served model...
-        self.assertAlmostEqual(_cost_for(served) - before_served, 0.01, places=6)
-        # ...and nothing at all under the configured one.
-        self.assertAlmostEqual(_cost_for(configured) - before_configured, 0.0, places=9)
-        self.assertAlmostEqual(_tokens_for(served, "input") - before_input, 800, places=6)
+
+        # The per-event field is still produced -- only the global counter moved.
+        self.assertAlmostEqual(block["estimated_token_cost"], 0.01, places=6)
+        self.assertEqual(block["model"], "gpt-4-turbo")
+        self.assertAlmostEqual(_total(LLM_TOKEN_COST), before_cost, places=9)
+        self.assertAlmostEqual(_total(LLM_TOKEN_USAGE), before_usage, places=9)
 
 
 class LookupPriceTests(unittest.TestCase):

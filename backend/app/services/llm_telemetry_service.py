@@ -25,6 +25,11 @@ Invariants:
 - MUST NOT raise — malformed inputs produce a best-effort block with error.
 - Returns ``None`` when ``enabled=False`` (no key attached, byte-identical
   to pre-Phase-5 records).
+- MUST NOT touch the Prometheus token/cost counters. Those are process-wide and
+  belong at the gateway chokepoint (``llm_gateway_service._record_usage``),
+  which sees every one of the 13 modules that make LLM calls; this function
+  runs once per event, behind a default-off flag, and sees one of them. The
+  price table below is shared with the gateway via ``_lookup_price``.
 """
 from __future__ import annotations
 
@@ -132,23 +137,17 @@ def _build_block(
         total_tokens, news_context, price_per_1k
     )
 
-    # P0-6 metrics: forward real token usage + cost to Prometheus so
-    # /metrics exposes pmrf_llm_token_usage_total and
-    # pmrf_llm_token_cost_total. Best-effort: a metrics import failure
-    # (prometheus_client not installed) silently degrades to no-op.
-    if not degraded_mode:
-        try:
-            from app.utils.metrics import LLM_TOKEN_COST, LLM_TOKEN_USAGE
-            if isinstance(prompt_tokens, int) and prompt_tokens > 0:
-                LLM_TOKEN_USAGE.labels(model=served_model, kind="input").inc(prompt_tokens)
-            if isinstance(completion_tokens, int) and completion_tokens > 0:
-                LLM_TOKEN_USAGE.labels(model=served_model, kind="output").inc(
-                    completion_tokens
-                )
-            if estimated_cost > 0:
-                LLM_TOKEN_COST.labels(model=served_model).inc(estimated_cost)
-        except Exception:  # pragma: no cover - defensive
-            pass
+    # The Prometheus token/cost counters are NOT incremented here. This
+    # function runs once per *event*, from one call site behind
+    # LLM_TELEMETRY_ENABLED (default off), and sees only the tokens that
+    # ``_ask_ai`` recorded on the analysis dict -- so as a process-wide counter
+    # it read 0 on a default install and ~50% of one event's tokens with
+    # telemetry on (``translate_title`` is a second real gateway call).
+    # ``llm_gateway_service._record_usage`` owns those counters now: it runs on
+    # every success path of every one of the 13 modules that reach the gateway,
+    # with the provider's real usage block. ``estimated_token_cost`` below stays
+    # per-event and keeps its degraded-mode estimate, which is a different
+    # quantity from "what was actually billed" and must not be summed globally.
 
     return {
         "degraded_mode": degraded_mode,

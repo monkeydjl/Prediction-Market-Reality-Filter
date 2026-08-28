@@ -57,19 +57,28 @@ from typing import Any
 _BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_BACKEND))
 
+from app.core import runtime_stores  # noqa: E402
 from app.core.config import settings  # noqa: E402
 
 
-# Files that the backup script archives. Used to map arcname → target path.
-# Must stay in sync with scripts/backup_stores.py::_candidate_paths.
-_RUNTIME_FILES = [
-    "EVENT_STORE_FILE",
-    "EVENT_AUDIT_FILE",
-    "EVENT_CACHE_FILE",
-    "LOOP_DB_FILE",
-]
-# SQLite WAL/SHM sidecar files (also archived by backup_stores).
-_LOOP_DB_SIDECARS = ["-wal", "-shm"]
+def _restore_targets() -> dict[str, Path]:
+    """Map each archive member name to the configured path it restores to.
+
+    Both sides of backup/restore read `app.core.runtime_stores`, so the list
+    cannot drift. It previously lived here as a second copy of the backup
+    script's list, kept in sync by a comment — and had already fallen four
+    stores behind, which meant a "successful" restore silently dropped them into
+    the loop DB's directory via the unknown-arcname fallback instead of their
+    configured paths.
+
+    Sidecars are included for every SQLite state store rather than the loop DB
+    alone. Built per call so a test patching a path setting is honoured.
+    """
+    targets: dict[str, Path] = {}
+    for store in runtime_stores.state_paths():
+        for path in [store, *runtime_stores.sidecar_paths(store)]:
+            targets.setdefault(path.name, path)
+    return targets
 
 
 def _target_path_for_arcname(arcname: str, target_dir: Path | None) -> Path:
@@ -107,23 +116,18 @@ def _target_path_for_arcname(arcname: str, target_dir: Path | None) -> Path:
             ) from None
         return resolved
 
-    # Map known basenames back to their configured setting paths.
-    for setting_name in _RUNTIME_FILES:
-        configured = Path(getattr(settings, setting_name))
-        if configured.name == arcname:
-            target = configured.resolve()
-            _validate_within_runtime_root(target, configured.parent.resolve())
-            return target
+    # Map known basenames (stores and their SQLite sidecars) back to the
+    # configured path for that store.
+    configured = _restore_targets().get(arcname)
+    if configured is not None:
+        target = configured.resolve()
+        _validate_within_runtime_root(target, configured.parent.resolve())
+        return target
 
-    # SQLite sidecars: LOOP_DB_FILE + "-wal" / "-shm".
+    # Unknown file — restore next to the LOOP_DB_FILE directory as a fallback,
+    # so an archive written by a newer backup script still restores somewhere
+    # predictable instead of failing.
     loop_db = Path(settings.LOOP_DB_FILE)
-    for suffix in _LOOP_DB_SIDECARS:
-        if arcname == loop_db.name + suffix:
-            target = (loop_db.parent / arcname).resolve()
-            _validate_within_runtime_root(target, loop_db.parent.resolve())
-            return target
-
-    # Unknown file — restore next to the LOOP_DB_FILE directory as a fallback.
     target = (loop_db.parent / arcname).resolve()
     _validate_within_runtime_root(target, loop_db.parent.resolve())
     return target

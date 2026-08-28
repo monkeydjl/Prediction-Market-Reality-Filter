@@ -173,8 +173,37 @@ cd /opt/prediction-market-reality-filter/backend
 /opt/prediction-market-reality-filter/.venv/bin/python scripts/backup_stores.py
 ```
 
-The archive includes the JSON event store, audit log, cache, SQLite loop DB,
-and SQLite WAL/SHM files when present.
+The archive contains every **state** store — the files whose contents cannot be
+recomputed — plus the SQLite WAL/SHM sidecar of each database when present:
+
+| File | What is lost without it |
+| --- | --- |
+| `event_store.json` | the event records and their frozen estimates |
+| `event_audit.jsonl` | the append-only probability-snapshot audit trail |
+| `event_cache.json` | the analysis cache (not data loss, but re-spends LLM budget) |
+| `v2_loop.db` | loop predictions, runs, market links, calibration history |
+| `kernel_predictions.db` | sports kernel predictions, history, outcomes, engine scores |
+| `world_cup_predictions.db` | World Cup fixtures, predictions, history, results |
+| `domain_reliability.db` | per-domain reliability learned from settled outcomes |
+| `sports_facts.json` | operator-imported sports facts (there is no fetcher to re-import from) |
+
+The list is not maintained here. It is derived from `STATE_STORES` in
+`backend/app/core/runtime_stores.py`, which also records why each store is
+included and why the excluded ones are excluded — logs and the scheduler lock are
+deliberately absent, because restoring a lock file would advertise a scheduler
+that is not running. A test asserts that every path setting is classified, so a
+new store cannot be added without landing in a backup or being explicitly
+declared as not needing one.
+
+> **The bottom four stores were missing from every archive written before
+> 2026-08-28.** The list used to be hand-maintained and had fallen behind the
+> config. Archives produced before that date restore only the top four, so treat
+> them as partial: at the time of discovery the omission covered 33,882 rows in
+> `kernel_predictions.db` and 2,460 in `world_cup_predictions.db`. Take a fresh
+> full backup before relying on restore.
+
+Archives are correspondingly larger — roughly 27 MB rather than 20 MB on the
+install where this was measured, so about 800 MB at the default `--keep 30`.
 
 By default the script keeps the latest 30 `pmrf-backup-*.zip` archives in the
 backup directory. Override this with `--keep N` if the host has a different

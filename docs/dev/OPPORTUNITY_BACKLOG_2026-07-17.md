@@ -335,7 +335,7 @@ Phase 15 设计曾写「Edge/WS/优化/结算几乎无 UI」；代码侧已出�
 
 | ID | 优先级 | 项 |
 |----|--------|-----|
-| O1 | P0 | Runbook 演练：备份 / restore / health / dead-man |
+| O1 | P0 | Runbook 演练：备份 / restore / health / dead-man —— ⚠️ **可自动化的部分已做，需要真机的部分仍待你执行（2026-08-28）**。<br>**已做**：`tests/test_backup_restore_drill.py`（8 个测试）把 backup↔restore 作为一对来跑 —— 真实 `create_backup` → 清空 → 真实 `restore_from_backup` → 逐文件 md5 比对，含加密往返、错口令不得破坏现场、回滚快照必须覆盖它即将覆写的全部文件。此前两个脚本各自只对着对方的手写模型测试：改写 writer 的 arcname 方案后，新 drill 5 红、`BackupTests` 17 红，而 `test_restore_stores.py` + `test_runtime_stores.py` **30 全绿** —— reader 侧对 writer 的格式变更完全失明。health / dead-man 已由 `test_operational_readiness.py` 的 10 个测试覆盖（含「仅在本地 health 通过后才 ping」的顺序性质）。<br>**仍待真机**：在生产机上真跑一次 `scripts/backup_stores.py` → 从产出的归档 restore 到临时目录 → 核对行数；确认 `prediction-market-reality-filter-backup.timer` 已 enable 且 `BACKUP_ENCRYPTION_KEY` 已配；确认 `PMRF_DEADMAN_URL` 端点真的会在漏 ping 时告警。这三项都需要你的环境与真实凭据，测试无法替代。<br>**注意**：#62 之前写出的归档缺 4 个 store，从旧档 restore 仍会丢数据。 |
 | O2 | P1 | 容器资源限制与仅本机绑端口 + 反代 TLS（历史已修部分，部署时确认） |
 | O3 | P1 | systemd 沙箱路径覆盖所有 DB/日志/备份写路径 —— ✅ **前提已被测量推翻，无需改动（2026-08-28）**。`Settings` 上 13 个路径设置全部实测解析在 `backend/` 之内，因为每个默认值都由 `os.path.dirname(__file__)/../..` 构造；四个 unit 文件都已声明 `ReadWritePaths=/opt/prediction-market-reality-filter/backend`，配合 `ProtectSystem=strict` 已完整覆盖，没有可测的缺陷。**但顺着「这次设置扫描看不到什么」审计下去，在同一区域发现了真缺陷并已修复（#62, `79902dd`）**：每日备份只归档 4 个 store，另外 4 个持有实时数据却从未入档（`kernel_predictions.db` 33882 行、`world_cup_predictions.db` 2460 行、`domain_reliability.db` 学习先验、`sports_facts.json`），且 `restore_stores.py` 保存着同一份清单的副本、遇到未列出的成员时静默落到 loop DB 目录。现分类声明在 `app/core/runtime_stores.py`，两个脚本都从它派生，并对 `Settings` 的 AST 扫描断言双向精确划分。 |
 | O4 | P2 | 多环境 `.env.staging` / `.env.production` 检查清单自动化 |

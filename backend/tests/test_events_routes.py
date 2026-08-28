@@ -14,6 +14,7 @@ Route + dashboard tests for the Event Intelligence surface (Phase 4 items 1-3).
 
 import asyncio
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -2541,6 +2542,165 @@ class CollectCandidateEventsTests(unittest.TestCase):
         counts = Counter(c["source"]["platform"] for c in out)
         self.assertEqual(counts["Polymarket"], 3)
         self.assertEqual(counts["2026 FIFA World Cup"], 3)
+
+    def test_pool_cap_is_an_upper_bound_not_a_negative_slice(self):
+        """Guards the shape, not just the value: `deduped[:limit * 3]` is only a
+        cap for positive limits. At limit=-1 the slice becomes `[:-3]`, which
+        means "everything except the last three" — the opposite of a cap. The
+        clamp at the settings/discover boundary is what keeps a negative value
+        from reaching here, so assert the arithmetic that made it dangerous.
+        """
+        cap = 10 * eis._CANDIDATE_POOL_FACTOR
+        self.assertEqual(cap, 30)
+        pool = list(range(100))
+        self.assertEqual(len(pool[:cap]), 30)
+        # The two degenerate shapes, spelled out so a future change to
+        # _CANDIDATE_POOL_FACTOR or to the clamp cannot quietly re-enable them.
+        self.assertEqual(pool[: 0 * eis._CANDIDATE_POOL_FACTOR], [])
+        self.assertEqual(len(pool[: -1 * eis._CANDIDATE_POOL_FACTOR]), 97)
+
+    def test_empty_pool_after_a_successful_fetch_is_logged_as_filtered(self):
+        """An empty pool has two causes the return value cannot distinguish.
+        Blaming unreachable sources for the filter case sent operators to check
+        healthy adapters, so the collector records which one happened."""
+        async def run():
+            with patch("app.services.polymarket_event_source.fetch_candidate_events",
+                       new=AsyncMock(return_value=self._cands("Polymarket", 5))), \
+                    patch("app.services.kalshi_event_source.fetch_candidate_events",
+                          new=AsyncMock(return_value=[])), \
+                    patch("app.services.world_cup_event_source.fetch_candidate_events",
+                          new=AsyncMock(return_value=[])), \
+                    patch("app.services.candidate_dedup_service.dedupe_candidates",
+                          new=lambda cands: []):
+                return await eis._collect_candidate_events(10)
+
+        with self.assertLogs("app.services.event_intelligence_service",
+                             level="WARNING") as captured:
+            out = asyncio.run(run())
+        self.assertEqual(out, [])
+        joined = "\n".join(captured.output)
+        self.assertIn("5 fetched candidates reduced to 0", joined)
+        self.assertIn("the filters emptied the pool", joined)
+
+    def test_no_filtered_warning_when_the_sources_returned_nothing(self):
+        """Non-vacuous counterpart: the warning must not fire for the genuine
+        empty-sources case, or it would misattribute in the other direction."""
+        async def run():
+            with patch("app.services.polymarket_event_source.fetch_candidate_events",
+                       new=AsyncMock(return_value=[])), \
+                    patch("app.services.kalshi_event_source.fetch_candidate_events",
+                          new=AsyncMock(return_value=[])), \
+                    patch("app.services.world_cup_event_source.fetch_candidate_events",
+                          new=AsyncMock(return_value=[])):
+                return await eis._collect_candidate_events(10)
+
+        logger = logging.getLogger("app.services.event_intelligence_service")
+        with patch.object(logger, "warning") as warn:
+            out = asyncio.run(run())
+        self.assertEqual(out, [])
+        filtered_calls = [
+            c for c in warn.call_args_list
+            if "reduced to 0" in str(c.args[0] if c.args else "")
+        ]
+        self.assertEqual(filtered_calls, [])
+
+
+class DiscoverLimitGuardrailTests(unittest.TestCase):
+    """A non-positive limit must not become a silent, source-fetching no-op.
+
+    Measured before the fix: `discover_events(limit=0)` fetched every enabled
+    source (3 outbound calls on the shipped config, 9 with all sources on) and
+    then sliced the candidate pool to empty via `deduped[:0]`, so the scan
+    analyzed nothing, persisted nothing, and reported it as unreachable
+    sources. The scheduler passed EVENT_DISCOVER_LIMIT straight through, and
+    that setting had no validation while the route declared ge=1/le=50 for the
+    same quantity.
+    """
+
+    @staticmethod
+    def _run_discover(limit):
+        """Drive discover_events, recording the limit the collector received."""
+        seen = {}
+
+        async def fake_collect(limit_arg, shared_articles=None):
+            seen["limit"] = limit_arg
+            return [{"question": "qA",
+                     "source": {"type": "prediction_market",
+                                "platform": "Polymarket"}}]
+
+        async def fake_filtered(question, shared_articles=None):
+            return {"context": "ctx", "summary": {"selected_count": 2}}
+
+        async def fake_analyze(event_question, **kwargs):
+            return {"event_id": event_question, "value_score": 10}
+
+        async def run():
+            with patch.object(eis, "_collect_candidate_events",
+                              new=fake_collect), \
+                    patch("app.services.event_collection_service.collect_shared_articles",
+                          new=AsyncMock(return_value=[])), \
+                    patch.object(eis, "_build_filtered_news",
+                                 new=AsyncMock(side_effect=fake_filtered)), \
+                    patch.object(eis, "analyze_event",
+                                 new=AsyncMock(side_effect=fake_analyze)), \
+                    patch.object(eis, "translate_articles",
+                                 new=AsyncMock(return_value=[])), \
+                    patch.object(eis, "_persist_events", new=lambda records: None):
+                return await eis.discover_events(limit=limit, use_cache=False)
+
+        return asyncio.run(run()), seen
+
+    def test_zero_limit_is_lifted_to_the_floor_and_still_analyzes(self):
+        result, seen = self._run_discover(0)
+        self.assertEqual(seen["limit"], settings.EVENT_DISCOVER_LIMIT_MIN)
+        # The defect was a scan that returned 0 having spent the fetches.
+        self.assertEqual(result["count"], 1)
+        self.assertEqual([e["event_id"] for e in result["events"]], ["qA"])
+
+    def test_negative_limit_is_lifted_to_the_floor(self):
+        for limit in (-1, -5, -100):
+            with self.subTest(limit=limit):
+                result, seen = self._run_discover(limit)
+                self.assertEqual(seen["limit"],
+                                 settings.EVENT_DISCOVER_LIMIT_MIN)
+                self.assertEqual(result["count"], 1)
+
+    def test_absurd_limit_is_capped_at_the_ceiling(self):
+        _result, seen = self._run_discover(100000)
+        self.assertEqual(seen["limit"], settings.EVENT_DISCOVER_LIMIT_MAX)
+
+    def test_in_range_limit_is_passed_through_untouched(self):
+        """Non-vacuous baseline: the guard is a bound, not a rewrite. Without
+        this a clamp that always returned the floor would pass every test
+        above."""
+        for limit in (1, 10, 50, 100, 500):
+            with self.subTest(limit=limit):
+                _result, seen = self._run_discover(limit)
+                self.assertEqual(seen["limit"], limit)
+
+    def test_empty_pool_message_does_not_blame_sources_alone(self):
+        """The status message is the operator's only signal here, and it used to
+        assert a cause the branch never tested."""
+        captured = {}
+
+        async def fake_fail(message):
+            captured["message"] = message
+
+        async def run():
+            with patch.object(eis, "_collect_candidate_events",
+                              new=AsyncMock(return_value=[])), \
+                    patch("app.services.event_collection_service.collect_shared_articles",
+                          new=AsyncMock(return_value=[])), \
+                    patch("app.services.discovery_status.fail",
+                          new=fake_fail):
+                return await eis.discover_events(limit=10, use_cache=False)
+
+        result = asyncio.run(run())
+        self.assertEqual(result["count"], 0)
+        message = captured["message"]
+        self.assertIn("不可达", message)      # still offers the source cause
+        self.assertIn("去重", message)        # and now the filter cause too
+        self.assertIn("详见日志", message)
 
 
 class DashboardSmokeTests(unittest.TestCase):

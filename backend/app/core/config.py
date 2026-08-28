@@ -1,4 +1,5 @@
 from dotenv import load_dotenv
+import logging
 import os
 
 
@@ -41,6 +42,41 @@ def _env_csv(name: str, default: str) -> list[str]:
         for item in os.getenv(name, default).split(",")
         if item.strip()
     ]
+
+
+def _clamp_int(value: int, name: str, low: int, high: int) -> int:
+    """Return `value` confined to [low, high], logging when it was out of range.
+
+    Fan-out settings that drive outbound spend are validated on the HTTP path
+    (`/events/discover` declares `limit: int = Query(..., ge=1, le=50)`) but
+    were read raw from the environment on the scheduler path, which is the one
+    that actually spends money unattended. A non-positive EVENT_DISCOVER_LIMIT
+    made every enabled source fetch and then discarded the whole pool
+    (`deduped[:0]`), so a scan reported "no candidates from any source" -- a
+    message naming a cause it never tested -- while the sources were healthy.
+    An unbounded high value asked a single source for `limit * weight`
+    candidates in one call (300000 at limit=100000) and pooled `limit * 3` of
+    them, each driving ~8 outbound calls, with no cost ceiling by default.
+
+    Clamping rather than raising: a fat-fingered digit must not take the whole
+    process down at import time, and silently proceeding with a value that
+    cannot work is worse than proceeding with the nearest one that can. The
+    log line is what makes the correction visible.
+    """
+    if value < low or value > high:
+        clamped = min(max(value, low), high)
+        logging.getLogger(__name__).warning(
+            "%s=%d is outside the supported range [%d, %d]; using %d. "
+            "This setting drives outbound fetch and LLM fan-out.",
+            name, value, low, high, clamped,
+        )
+        return clamped
+    return value
+
+
+def _env_int_bounded(name: str, default: str, low: int, high: int) -> int:
+    """Read an int env var and confine it to [low, high]. See `_clamp_int`."""
+    return _clamp_int(int(os.getenv(name, default)), name, low, high)
 
 
 def _world_cup_import_enabled_default() -> str:
@@ -825,7 +861,22 @@ class Settings:
         os.getenv("EVENT_DISCOVER_ENABLED", "true").strip().lower()
         in {"1", "true", "yes", "on"}
     )
-    EVENT_DISCOVER_LIMIT: int = int(os.getenv("EVENT_DISCOVER_LIMIT", "100"))
+    # Bounds, not tuning. The floor is 1 because the pool cap is
+    # `limit * event_intelligence_service._CANDIDATE_POOL_FACTOR`, so
+    # limit<=0 slices the pool to
+    # empty *after* every source has already been fetched: a scan that spends
+    # the network calls, analyzes nothing, and reports the sources as
+    # unreachable. The route has always declared `ge=1` for the same quantity.
+    # The ceiling is a fat-finger guard set an order of magnitude above the
+    # documented default (100), not a performance limit: at limit=500 the pool
+    # is 1500 candidates at ~8 outbound calls each, already far more than
+    # EVENT_DISCOVER_TIMEOUT_SECONDS can complete, so nothing legitimate lives
+    # above it.
+    EVENT_DISCOVER_LIMIT_MIN: int = 1
+    EVENT_DISCOVER_LIMIT_MAX: int = 500
+    EVENT_DISCOVER_LIMIT: int = _env_int_bounded(
+        "EVENT_DISCOVER_LIMIT", "100", 1, 500
+    )
     # Per-source weight multipliers for discovery.  Each active source is asked
     # for ``limit * weight`` candidates instead of the flat ``limit``.
     # Polymarket is the primary prediction-market source (highest weight),
@@ -850,7 +901,16 @@ class Settings:
         "SCHEDULER_LOCK_FILE",
         LOOP_DB_FILE + ".scheduler.lock",
     )
-    LLM_CONCURRENCY: int = int(os.getenv("LLM_CONCURRENCY", "4"))
+    # Same shape as EVENT_DISCOVER_LIMIT. discover_events builds
+    # `asyncio.Semaphore(LLM_CONCURRENCY)`: 0 constructs fine but every
+    # candidate blocks on acquire() forever, so the scan burns the full
+    # EVENT_DISCOVER_TIMEOUT_SECONDS and reports a timeout rather than the
+    # misconfiguration; -1 raises ValueError inside the scan on the scheduler
+    # thread instead of at startup. The ceiling bounds instantaneous spend and
+    # provider rate-limit exposure.
+    LLM_CONCURRENCY_MIN: int = 1
+    LLM_CONCURRENCY_MAX: int = 64
+    LLM_CONCURRENCY: int = _env_int_bounded("LLM_CONCURRENCY", "4", 1, 64)
     # Hard timeout for a single discover_events scan (seconds). On timeout,
     # already-completed candidates are saved as partial results; still-running
     # tasks are cancelled. Default 10 minutes — generous enough for a full

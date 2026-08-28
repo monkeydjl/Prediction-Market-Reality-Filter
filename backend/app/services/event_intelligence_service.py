@@ -1003,7 +1003,13 @@ async def _collect_candidate_events(
     Market sources produce candidates from prices; the open-web source extracts
     them from `shared_articles` (the same feed articles used for evidence), so an
     article can become an event subject, not just evidence. Each source is asked
-    for `limit` candidates. The per-source lists are round-robin interleaved and
+    for ``limit * settings.SOURCE_WEIGHTS[name]`` candidates (floor 1), not a
+    flat `limit` -- Polymarket's weight of 3.0 means it alone is asked for three
+    times the limit, so the total ask across sources exceeds `limit` severalfold.
+    `limit` is bounded at the settings boundary
+    (``EVENT_DISCOVER_LIMIT_MIN``/``_MAX``); a non-positive value would fetch
+    every source and then slice the pool to empty.
+    The per-source lists are round-robin interleaved and
     the merged pool is capped at ``limit * _CANDIDATE_POOL_FACTOR``. Interleaving
     keeps every source represented under the cap (a plain concatenation would let
     the first source fill the whole budget); the cap bounds how many analyze_event
@@ -1130,7 +1136,20 @@ async def _collect_candidate_events(
     # events are dropped.
     if settings.WORLD_CUP_SOURCE_ENABLED:
         deduped = _cross_match_world_cup(deduped)
-    return deduped[: limit * _CANDIDATE_POOL_FACTOR]
+    pool = deduped[: limit * _CANDIDATE_POOL_FACTOR]
+    # An empty pool has two very different causes and the caller cannot tell
+    # them apart from the return value alone: every source came back empty, or
+    # the sources produced candidates and the filters below removed all of them.
+    # Attributing the second to unreachable sources sent operators to check
+    # healthy adapters, so record which one actually happened.
+    if merged and not pool:
+        logger.warning(
+            "[_collect_candidate_events] %d fetched candidates reduced to 0 "
+            "by dedupe/cross-match/cap (limit=%d, cap=%d) — the sources "
+            "responded; the filters emptied the pool",
+            len(merged), limit, limit * _CANDIDATE_POOL_FACTOR,
+        )
+    return pool
 
 
 _WORLD_CUP_KEYWORDS: set[str] = {
@@ -1224,6 +1243,22 @@ async def discover_events(
         fail as status_fail,
     )
 
+    # Hold the fan-out invariant at this boundary too, not only at the settings
+    # one. A non-positive limit fetches every source and then slices the pool to
+    # empty (`deduped[:0]`), spending the network calls to analyze nothing and
+    # reporting it as unreachable sources; a negative one turns the pool cap
+    # from "first N" into "all but the last N". The route declares ge=1/le=50
+    # for the same quantity, so callers reaching here with 0 are a bug, not a
+    # request for an empty scan.
+    from app.core.config import _clamp_int
+
+    limit = _clamp_int(
+        limit,
+        "discover_events(limit=)",
+        settings.EVENT_DISCOVER_LIMIT_MIN,
+        settings.EVENT_DISCOVER_LIMIT_MAX,
+    )
+
     await status_reset(limit)
 
     # Query-independent feeds are fetched once per scan and reused twice: as
@@ -1240,7 +1275,14 @@ async def discover_events(
         raise
 
     if not candidate_events:
-        await status_fail("未获取到任何候选事件 — 检查数据源（Polymarket/Kalshi/Limitless/Open Web）是否可达")
+        # Do not assert a cause this branch never tested: the pool is also empty
+        # when every source responded and dedupe/cross-match/the cap removed
+        # everything. _collect_candidate_events logs which of the two happened.
+        await status_fail(
+            "未获取到任何候选事件 — 可能是数据源"
+            "（Polymarket/Kalshi/Limitless/Open Web）不可达，"
+            "也可能是去重/交叉匹配后无剩余；详见日志"
+        )
         return {"platform": "Event Intelligence Platform",
                 "source": "Multi-source event discovery",
                 "count": 0, "events": [],

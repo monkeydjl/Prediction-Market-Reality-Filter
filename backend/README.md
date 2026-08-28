@@ -8,8 +8,13 @@ FastAPI 后端：事件发现、概率分析、存储与校准。完整系统总
 cp .env.example .env          # 填入你自己的 API key
 pip install -r requirements.txt -r requirements-dev.txt
 python -m pytest tests               # 无网络回归测试
-python run.py                          # http://localhost:8000
+python run.py                          # http://127.0.0.1:8000
 ```
+
+`run.py` 默认绑定 `127.0.0.1`（`SERVER_HOST`）。写接口没有 `API_WRITE_KEY` 时需要
+`ALLOW_OPEN_WRITES=true`，那是无鉴权的，所以 `run.py` 会拒绝「非本机地址 + 无 key」的组合；
+要给别的机器访问就设 `API_WRITE_KEY`。生产的 Docker / systemd 直接给 uvicorn 传 `--host`，
+不经过这个文件。先体检配置：`python -m scripts.check_write_auth`（0 已授权 / 1 会拒启 / 2 读不到）。
 
 ## 主要 API
 

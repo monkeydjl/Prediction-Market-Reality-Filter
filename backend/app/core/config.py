@@ -1106,6 +1106,17 @@ class Settings:
         os.getenv("SCHEDULER_MISFIRE_GRACE_SECONDS", "86400")
     )
     SERVER_RELOAD: bool = _env_bool("SERVER_RELOAD", "false")
+    # Bind address used by `backend/run.py`, the local-dev entrypoint. Loopback by
+    # default: `run.py` hardcoded 0.0.0.0, which put every write endpoint —
+    # including the ones that spend LLM budget — on every network interface, while
+    # `start.bat` was careful to bind the *frontend* static server to localhost.
+    #
+    # This does not affect production. Both deploy paths pass --host on the uvicorn
+    # command line and never import run.py (`deploy/Dockerfile` CMD and
+    # `deploy/prediction-market-reality-filter.service` ExecStart), so their bind
+    # address is unchanged. Set SERVER_HOST=0.0.0.0 to reach a dev instance from
+    # another device; run.py refuses that combination when writes are unauthenticated.
+    SERVER_HOST: str = os.getenv("SERVER_HOST", "127.0.0.1")
 
     # Sentry error tracking (P0-7 §1.2). When SENTRY_DSN is empty, the
     # sentry_sdk wrapper in app.utils.sentry is a no-op so the app boots

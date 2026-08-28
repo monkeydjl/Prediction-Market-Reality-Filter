@@ -14,6 +14,9 @@ REM                         http://localhost:8000/docs      (API docs)
 REM    start.bat build    Same, but force-rebuild the frontend first.
 REM    start.bat dev      Development: backend :8000 + Next dev :3000 in
 REM                       two windows (hot reload), browser opens :3000.
+REM    start.bat check    Report the interpreter and the write-auth setting, then
+REM                       exit. Installs nothing, starts nothing, opens nothing.
+REM                       Exit code 1 means startup would have failed.
 REM
 REM  %~dp0 = this script's folder, so paths never break if moved.
 REM ============================================================
@@ -24,17 +27,40 @@ set "FRONTEND=%ROOT%frontend"
 set "MODE=%~1"
 
 REM --- locate python / npm ---------------------------------------------------
-where python >nul 2>&1 || (echo [ERROR] python not found on PATH. & goto :fail)
+REM Prefer the project venv over whatever "python" happens to be on PATH.
+REM This launcher used bare "python", so it ran the system interpreter while CI,
+REM the test suite and every gate run use .venv (3.11). On this machine that was
+REM Python 3.14, where "from app.main import app" fails on a missing openai --
+REM so [1/4] would have installed ~38 packages into the system interpreter, on a
+REM version the project has never been tested against, duplicating .venv.
+set "PY=%ROOT%.venv\Scripts\python.exe"
+if exist "%PY%" (
+    echo [env] Using project venv: %PY%
+) else (
+    where python >nul 2>&1 || (echo [ERROR] python not found on PATH and no .venv found. & goto :fail)
+    set "PY=python"
+    echo [env] No .venv found - falling back to "python" on PATH.
+    echo       If startup fails, create the venv first:
+    echo         python -m venv .venv
+    echo         .venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+)
 where npm >nul 2>&1   || (echo [ERROR] npm not found on PATH.    & goto :fail)
 
 REM --- make sure backend\.env exists and the API key is filled in ------------
+REM In check mode the placeholder prompt would open Notepad and block, so skip it.
+if /i "%MODE%"=="check" set "PMRF_ENV_CHECK_ONLY=1"
 call :ensure_env || goto :fail
+
+if /i "%MODE%"=="check" (
+    echo [check] Configuration looks startable. Nothing was installed or started.
+    exit /b 0
+)
 
 if /i "%MODE%"=="dev" goto :dev
 
 REM ===================== PRODUCTION (default) ===============================
 echo [1/4] Installing backend dependencies...
-python -m pip install -q -r "%BACKEND%\requirements.txt" || goto :fail
+"!PY!" -m pip install -q -r "%BACKEND%\requirements.txt" || goto :fail
 
 echo [2/4] Checking frontend dependencies...
 if not exist "%FRONTEND%\node_modules" (
@@ -71,8 +97,8 @@ echo.
 REM Keep the child windows open on startup errors so the traceback is visible.
 REM Use cmd /c rather than cmd /k so successful long-running servers do not
 REM leave an extra shell behind after they are stopped.
-start "PMRF backend :8000" /D "%BACKEND%" cmd /c "set BACKEND_SERVE_FRONTEND=false&& python run.py || (echo. & echo [FAILED] Backend exited with error. & pause)"
-start "PMRF frontend :3000" /D "%ROOT%" cmd /c "python -m http.server 3000 --directory frontend\out --bind localhost || (echo. & echo [FAILED] Frontend static server exited with error. & pause)"
+start "PMRF backend :8000" /D "%BACKEND%" cmd /c "set BACKEND_SERVE_FRONTEND=false&& "!PY!" run.py || (echo. & echo [FAILED] Backend exited with error. & pause)"
+start "PMRF frontend :3000" /D "%ROOT%" cmd /c ""!PY!" -m http.server 3000 --directory frontend\out --bind localhost || (echo. & echo [FAILED] Frontend static server exited with error. & pause)"
 REM open the browser once both servers are up
 start "" /b powershell -NoProfile -Command "Start-Sleep -Seconds 6; Start-Process 'http://localhost:3000'"
 goto :eof
@@ -80,7 +106,7 @@ goto :eof
 REM ===================== DEVELOPMENT =========================================
 :dev
 echo [dev] Installing backend dependencies...
-python -m pip install -q -r "%BACKEND%\requirements.txt" || goto :fail
+"!PY!" -m pip install -q -r "%BACKEND%\requirements.txt" || goto :fail
 if not exist "%FRONTEND%\node_modules" (
     echo [dev] Installing frontend dependencies...
     pushd "%FRONTEND%" & call npm install || (popd & goto :fail)
@@ -95,7 +121,7 @@ echo   Backend / API  : http://localhost:8000
 echo.
 REM Keep dev launches direct for the same reason: no persistent cmd /k shell.
 set "SERVER_RELOAD=true"
-start "PMRF backend :8000" /D "%BACKEND%" cmd /c "set BACKEND_SERVE_FRONTEND=false&& python run.py || (echo. & echo [FAILED] Backend exited with error. & pause)"
+start "PMRF backend :8000" /D "%BACKEND%" cmd /c "set BACKEND_SERVE_FRONTEND=false&& "!PY!" run.py || (echo. & echo [FAILED] Backend exited with error. & pause)"
 set "SERVER_RELOAD="
 start "PMRF frontend :3000" /D "%FRONTEND%" cmd /c "npm.cmd run dev || (echo. & echo [FAILED] Frontend dev server exited with error. & pause)"
 REM Next dev needs a few seconds to compile before the page is ready
@@ -110,12 +136,52 @@ if not exist "%BACKEND%\.env" (
 )
 findstr /c:"sk-your-key-here" "%BACKEND%\.env" >nul 2>&1
 if not errorlevel 1 (
+    if "%PMRF_ENV_CHECK_ONLY%"=="1" (
+        echo   [WARN] backend\.env still has the placeholder OPENAI_API_KEY.
+    ) else (
+        echo.
+        echo   [WARN] backend\.env still has the placeholder OPENAI_API_KEY.
+        echo       Notepad will open now - set your real key, SAVE, then CLOSE
+        echo       Notepad to continue startup.
+        echo.
+        notepad "%BACKEND%\.env"
+    )
+)
+REM --- write auth: ask the app's own guard, do not re-implement it ------------
+REM The check above only greps for a placeholder string, so a .env that never had
+REM an API_WRITE_KEY line at all passed it -- the placeholder is absent precisely
+REM because the line is absent. The backend then fail-closes at startup with
+REM "API_WRITE_KEY is empty", inside a spawned window, which reads as a crash
+REM rather than as missing configuration.
+REM
+REM app/main.py's condition is: API_WRITE_KEY set -> ok; else ALLOW_OPEN_WRITES
+REM true -> ok with a public-writes warning; else refuse to boot. scripts\
+REM check_write_auth.py asks that same settings object, so there is one definition
+REM of "configured". Exit code: 0 authorised, 1 fail-closed, 2 unreadable.
+REM Nothing prints the key itself, only whether one is present.
+pushd "%BACKEND%"
+"!PY!" -m scripts.check_write_auth
+set "WRITE_AUTH=!errorlevel!"
+popd
+if "!WRITE_AUTH!"=="2" (
+    echo [env] Note: write-auth settings are not readable yet ^(dependencies may
+    echo       not be installed^). The backend's own startup guard still applies.
+    exit /b 0
+)
+if "!WRITE_AUTH!"=="1" (
     echo.
-    echo   [!] backend\.env still has the placeholder OPENAI_API_KEY.
-    echo       Notepad will open now - set your real key, SAVE, then CLOSE
-    echo       Notepad to continue startup.
+    echo   [WARN] backend\.env has no usable write-auth setting, so the backend will
+    echo       refuse to start ^(it fail-closes rather than expose every mutating
+    echo       endpoint: manual/auto resolve, discover/analyze LLM spend^).
     echo.
-    notepad "%BACKEND%\.env"
+    echo       Pick one and add it to backend\.env:
+    echo         API_WRITE_KEY=^<a long random string^>   ^(recommended; send it as X-API-Key^)
+    echo         ALLOW_OPEN_WRITES=true                 ^(local dev only, keyless writes^)
+    echo.
+    echo       Generate a key with:
+    echo         "!PY!" -c "import secrets;print(secrets.token_urlsafe(32))"
+    echo.
+    exit /b 1
 )
 exit /b 0
 

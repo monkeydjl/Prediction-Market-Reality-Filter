@@ -197,20 +197,31 @@ class TestF2MetricsIncrementedAtCallSites(unittest.TestCase):
         self.assertIn("_RUN_TO_JOB", src)
         self.assertIn("_RUN_TO_JOB[run_id] = job_name", src)
 
-    def test_llm_telemetry_increments_token_usage(self):
-        """llm_telemetry_service._build_block must increment
-        LLM_TOKEN_USAGE and LLM_TOKEN_COST.
+    def test_llm_token_metrics_are_incremented_at_the_gateway_chokepoint(self):
+        """LLM_TOKEN_USAGE / LLM_TOKEN_COST must be incremented in the gateway.
 
-        The label is ``served_model`` -- the model the gateway's route walk
-        reached -- not the ``model`` argument, which is ``settings.OPENAI_MODEL``
-        and collapsed every series onto one legacy name. The behavioural guard
-        is ServedModelPricingTests in test_llm_telemetry_service.py; a source
-        grep cannot tell a right label from a wrong one.
+        They used to be incremented in ``llm_telemetry_service``, i.e. once per
+        event from one call site behind a default-off flag, so the counters read
+        0 on a default install. ``llm_gateway_service._record_usage`` is the one
+        point every one of the 13 gateway callers passes through.
+
+        This is a source grep, which cannot tell a right label from a wrong one
+        or a reachable increment from a dead one — the behavioural guard is
+        TokenMetricsAtTheChokepointTests in test_llm_gateway_service.py. What a
+        grep *can* pin is that the increment did not drift back to a per-caller
+        site, so it also asserts the old location stays clean.
         """
-        src = self._read_source("app/services/llm_telemetry_service.py")
-        self.assertIn("LLM_TOKEN_USAGE.labels(model=served_model, kind=\"input\").inc(", src)
-        self.assertIn("LLM_TOKEN_USAGE.labels(model=served_model, kind=\"output\").inc(", src)
-        self.assertIn("LLM_TOKEN_COST.labels(model=served_model).inc(", src)
+        gateway_src = self._read_source("app/services/llm_gateway_service.py")
+        self.assertIn("def _record_usage(", gateway_src)
+        self.assertIn("LLM_TOKEN_USAGE.labels(model=model, kind=\"input\").inc(", gateway_src)
+        self.assertIn("LLM_TOKEN_USAGE.labels(model=model, kind=\"output\").inc(", gateway_src)
+        self.assertIn("LLM_TOKEN_COST.labels(model=model).inc(", gateway_src)
+        # Both gateway success paths must record; embeddings is a real caller.
+        self.assertEqual(gateway_src.count("_record_usage, model, usage"), 2)
+
+        telemetry_src = self._read_source("app/services/llm_telemetry_service.py")
+        self.assertNotIn("LLM_TOKEN_USAGE.labels", telemetry_src)
+        self.assertNotIn("LLM_TOKEN_COST.labels", telemetry_src)
 
     def test_event_intelligence_has_short_reason_helper(self):
         """_short_reason helper must exist to keep label cardinality bounded."""

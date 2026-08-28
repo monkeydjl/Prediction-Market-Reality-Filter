@@ -376,3 +376,210 @@ class LLMGatewayExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.model, "ok-model")
         self.assertEqual(result.content, "正常结果")
         self.assertEqual(result.attempts[0].error_type, "provider_error_in_content")
+
+
+def _counter_total(counter, **labels) -> float:
+    """Sum a Prometheus counter's ``_total`` samples, optionally by label."""
+    return sum(
+        sample.value
+        for metric in counter.collect()
+        for sample in metric.samples
+        if sample.name.endswith("_total")
+        and all(sample.labels.get(k) == v for k, v in labels.items())
+    )
+
+
+class TokenMetricsAtTheChokepointTests(unittest.IsolatedAsyncioTestCase):
+    """``pmrf_llm_token_cost_total`` must count every caller, not one of them.
+
+    Both counters used to be incremented from ``llm_telemetry_service``, which
+    runs once per event from a single call site inside the enrichment path,
+    itself behind ``LLM_TELEMETRY_ENABLED`` (default **off**). Measured on the
+    default configuration: 6 successful provider calls across 5 modules moved
+    the counter by **$0.00**, and with telemetry enabled one event's two real
+    gateway calls were counted as one (50% of the tokens actually spent).
+
+    The gateway success path is the one place that sees all 13 modules, so the
+    counters live there now — independent of the telemetry flag and of the cost
+    cap, both of which are off by default.
+    """
+
+    _ROUTE = [gateway.LLMModelRoute("p1", ["gpt-4"])]
+    _CONFIGS = {"p1": gateway.LLMProviderConfig("p1", "key", "http://example")}
+
+    async def _chat(self, *, prompt_tokens=800, completion_tokens=200):
+        async def fake_create(**kwargs):
+            return _fake_response(
+                "ok", prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
+            )
+
+        return await gateway.complete_chat(
+            messages=[{"role": "user", "content": "x"}],
+            route=self._ROUTE,
+            provider_configs=self._CONFIGS,
+            client_factory=lambda provider: _fake_client(fake_create),
+        )
+
+    async def test_a_successful_call_is_counted_with_the_cap_and_telemetry_both_off(self):
+        """The default install. Neither default-off feature may gate /metrics."""
+        from app.utils.metrics import LLM_TOKEN_COST, LLM_TOKEN_USAGE
+
+        before_cost = _counter_total(LLM_TOKEN_COST, model="gpt-4")
+        before_in = _counter_total(LLM_TOKEN_USAGE, model="gpt-4", kind="input")
+        before_out = _counter_total(LLM_TOKEN_USAGE, model="gpt-4", kind="output")
+
+        with patch.object(gateway.settings, "LLM_DAILY_COST_CAP_USD", 0.0), \
+                patch.object(gateway.settings, "LLM_TELEMETRY_ENABLED", False):
+            result = await self._chat()
+
+        self.assertTrue(result.ok)
+        # 1000 total tokens of gpt-4 at $0.03/1K.
+        self.assertAlmostEqual(
+            _counter_total(LLM_TOKEN_COST, model="gpt-4") - before_cost, 0.03, places=6
+        )
+        self.assertAlmostEqual(
+            _counter_total(LLM_TOKEN_USAGE, model="gpt-4", kind="input") - before_in,
+            800, places=6,
+        )
+        self.assertAlmostEqual(
+            _counter_total(LLM_TOKEN_USAGE, model="gpt-4", kind="output") - before_out,
+            200, places=6,
+        )
+
+    async def test_every_caller_is_counted_not_just_the_enrichment_path(self):
+        """Three calls through three different entry points must all land.
+
+        ``complete_chat`` / ``complete_json`` / ``complete_embeddings`` are the
+        gateway's whole public surface; a caller can only reach the provider
+        through one of them.
+        """
+        from app.utils.metrics import LLM_TOKEN_COST
+
+        async def chat_create(**kwargs):
+            return _fake_response("ok", prompt_tokens=500, completion_tokens=500)
+
+        async def json_create(**kwargs):
+            return _fake_response('{"a": 1}', prompt_tokens=500, completion_tokens=500)
+
+        async def embed_create(**kwargs):
+            return _fake_embedding_response([[1.0, 0.0]], prompt_tokens=1000)
+
+        before = _counter_total(LLM_TOKEN_COST, model="gpt-4")
+        with patch.object(gateway.settings, "LLM_DAILY_COST_CAP_USD", 0.0):
+            r1 = await gateway.complete_chat(
+                messages=[{"role": "user", "content": "x"}],
+                route=self._ROUTE, provider_configs=self._CONFIGS,
+                client_factory=lambda provider: _fake_client(chat_create),
+            )
+            r2 = await gateway.complete_json(
+                messages=[{"role": "user", "content": "x"}],
+                route=self._ROUTE, provider_configs=self._CONFIGS,
+                client_factory=lambda provider: _fake_client(json_create),
+            )
+            r3 = await gateway.complete_embeddings(
+                input=["query"],
+                route=self._ROUTE, provider_configs=self._CONFIGS,
+                client_factory=lambda provider: _fake_embedding_client(embed_create),
+            )
+
+        self.assertTrue(r1.ok and r2.ok and r3.ok)
+        # 3 x 1000 tokens of gpt-4 at $0.03/1K = $0.09. A per-caller
+        # instrumentation would show $0.03 here.
+        self.assertAlmostEqual(
+            _counter_total(LLM_TOKEN_COST, model="gpt-4") - before, 0.09, places=6
+        )
+
+    async def test_the_counter_is_labelled_with_the_model_that_served_the_call(self):
+        """Non-vacuous: the first route entry fails, so the label can only be
+        right if it comes from the model that actually answered."""
+        from app.utils.metrics import LLM_TOKEN_COST
+
+        async def fake_create(**kwargs):
+            if kwargs["model"] == "gpt-4":
+                raise RuntimeError("rate limit")
+            return _fake_response("ok", prompt_tokens=500, completion_tokens=500)
+
+        before_failed = _counter_total(LLM_TOKEN_COST, model="gpt-4")
+        before_served = _counter_total(LLM_TOKEN_COST, model="gpt-4o-mini")
+        with patch.object(gateway.settings, "LLM_DAILY_COST_CAP_USD", 0.0):
+            result = await gateway.complete_chat(
+                messages=[{"role": "user", "content": "x"}],
+                route=[gateway.LLMModelRoute("p1", ["gpt-4", "gpt-4o-mini"])],
+                provider_configs=self._CONFIGS,
+                client_factory=lambda provider: _fake_client(fake_create),
+            )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.model, "gpt-4o-mini")
+        # 1000 tokens of gpt-4o-mini at $0.00015/1K.
+        self.assertAlmostEqual(
+            _counter_total(LLM_TOKEN_COST, model="gpt-4o-mini") - before_served,
+            0.00015, places=8,
+        )
+        # The model that raised is not charged at all.
+        self.assertAlmostEqual(
+            _counter_total(LLM_TOKEN_COST, model="gpt-4") - before_failed, 0.0, places=9
+        )
+
+    async def test_a_failed_call_is_not_counted(self):
+        """Non-vacuous baseline: the counter must not move when nothing ran."""
+        from app.utils.metrics import LLM_TOKEN_COST, LLM_TOKEN_USAGE
+
+        async def fake_create(**kwargs):
+            raise RuntimeError("rate limit")
+
+        before_cost = _counter_total(LLM_TOKEN_COST)
+        before_usage = _counter_total(LLM_TOKEN_USAGE)
+        with patch.object(gateway.settings, "LLM_DAILY_COST_CAP_USD", 0.0):
+            result = await gateway.complete_chat(
+                messages=[{"role": "user", "content": "x"}],
+                route=self._ROUTE, provider_configs=self._CONFIGS,
+                client_factory=lambda provider: _fake_client(fake_create),
+            )
+
+        self.assertFalse(result.ok)
+        self.assertAlmostEqual(_counter_total(LLM_TOKEN_COST), before_cost, places=9)
+        self.assertAlmostEqual(_counter_total(LLM_TOKEN_USAGE), before_usage, places=9)
+
+    async def test_a_response_with_no_usage_block_is_not_counted(self):
+        """Some providers omit ``usage``; that must not fabricate a zero-token
+        series or raise inside the success path."""
+        from app.utils.metrics import LLM_TOKEN_COST
+
+        async def fake_create(**kwargs):
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+                usage=None,
+            )
+
+        before = _counter_total(LLM_TOKEN_COST)
+        with patch.object(gateway.settings, "LLM_DAILY_COST_CAP_USD", 0.0):
+            result = await gateway.complete_chat(
+                messages=[{"role": "user", "content": "x"}],
+                route=self._ROUTE, provider_configs=self._CONFIGS,
+                client_factory=lambda provider: _fake_client(fake_create),
+            )
+
+        self.assertTrue(result.ok)
+        self.assertIsNone(result.usage)
+        self.assertAlmostEqual(_counter_total(LLM_TOKEN_COST), before, places=9)
+
+    async def test_metrics_still_record_when_the_spend_store_is_broken(self):
+        """The cap counter and /metrics are independent sinks. A broken loop DB
+        must not silently stop cost observability -- that would hide spend
+        exactly when the guard is already degraded."""
+        from app.memory import llm_daily_spend_store
+        from app.utils.metrics import LLM_TOKEN_COST
+
+        before = _counter_total(LLM_TOKEN_COST, model="gpt-4")
+        with patch.object(gateway.settings, "LLM_DAILY_COST_CAP_USD", 25.0), \
+                patch.object(llm_daily_spend_store, "add_spend",
+                             side_effect=RuntimeError("disk gone")), \
+                patch.object(gateway, "_cost_cap_exceeded",
+                             return_value=(False, 0.0, 25.0)):
+            result = await self._chat()
+
+        self.assertTrue(result.ok)
+        self.assertAlmostEqual(
+            _counter_total(LLM_TOKEN_COST, model="gpt-4") - before, 0.03, places=6
+        )

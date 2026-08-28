@@ -390,24 +390,62 @@ def _cost_cap_exceeded() -> tuple[bool, float, float]:
     return spend >= cap, spend, cap
 
 
-def _record_spend(model: str, usage: dict[str, int] | None) -> None:
-    """Add the USD cost of one successful call to today's counter.
+def _record_usage(model: str, usage: dict[str, int] | None) -> None:
+    """Record one successful call's tokens and cost.
 
-    No-op when the cap is disabled or the provider returned no usage block.
-    Pricing reuses the telemetry table so the cap and the ``/metrics`` cost
-    series never disagree about what a model costs.
+    Called from every gateway success path, which is the only place that sees
+    all of them: 13 modules reach the gateway, and instrumenting a *caller*
+    counts that caller only. ``pmrf_llm_token_cost_total`` was previously
+    incremented from ``llm_telemetry_service`` — one call site inside the event
+    enrichment path, itself behind ``LLM_TELEMETRY_ENABLED`` (default off), so
+    on a default install the counter never moved at all and with telemetry on
+    it saw ~half of one event's tokens (``translate_title`` is a second real
+    gateway call and was invisible).
+
+    Two sinks, deliberately different in scope:
+
+    - Prometheus (``/metrics``) is **always** updated. It is a process-lifetime
+      observability counter with no storage cost and no behavioural effect.
+    - The daily-spend counter that enforces ``LLM_DAILY_COST_CAP_USD`` is only
+      written when the cap is enabled, because it takes a SQLite write lock and
+      the disabled default must stay a pure no-op.
+
+    Both price with ``_lookup_price`` against the model that actually served
+    the call, so the cap and the cost series cannot disagree.
     """
-    cap = float(getattr(settings, "LLM_DAILY_COST_CAP_USD", 0) or 0)
-    if cap <= 0 or not usage:
+    if not usage:
         return
     total_tokens = int(usage.get("total_tokens", 0) or 0)
-    if total_tokens <= 0:
+    prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+    completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+
+    try:
+        from app.services.llm_telemetry_service import _lookup_price
+
+        price_per_1k = _lookup_price(model)
+    except Exception:
+        logger.warning("LLM price lookup failed", exc_info=True)
+        return
+
+    try:
+        from app.utils.metrics import LLM_TOKEN_COST, LLM_TOKEN_USAGE
+
+        if prompt_tokens > 0:
+            LLM_TOKEN_USAGE.labels(model=model, kind="input").inc(prompt_tokens)
+        if completion_tokens > 0:
+            LLM_TOKEN_USAGE.labels(model=model, kind="output").inc(completion_tokens)
+        if total_tokens > 0:
+            LLM_TOKEN_COST.labels(model=model).inc(total_tokens * price_per_1k / 1000.0)
+    except Exception:  # pragma: no cover - defensive, metrics must never break a call
+        logger.warning("LLM token metrics record failed", exc_info=True)
+
+    cap = float(getattr(settings, "LLM_DAILY_COST_CAP_USD", 0) or 0)
+    if cap <= 0 or total_tokens <= 0:
         return
     try:
         from app.memory import llm_daily_spend_store
-        from app.services.llm_telemetry_service import _lookup_price
 
-        llm_daily_spend_store.add_spend(total_tokens * _lookup_price(model) / 1000.0)
+        llm_daily_spend_store.add_spend(total_tokens * price_per_1k / 1000.0)
     except Exception:
         logger.warning("Daily LLM spend record failed", exc_info=True)
 
@@ -579,7 +617,7 @@ async def _complete(
                 usage = _extract_usage(response)
                 # Blocking SQLite write: offload so recording spend doesn't
                 # stall the loop on the write lock after every success.
-                await asyncio.to_thread(_record_spend, model, usage)
+                await asyncio.to_thread(_record_usage, model, usage)
                 return LLMResult(
                     ok=True,
                     content=content,
@@ -743,7 +781,7 @@ async def complete_embeddings(
                 usage = _extract_usage(response)
                 # Blocking SQLite write: offload so recording spend doesn't
                 # stall the loop on the write lock after every success.
-                await asyncio.to_thread(_record_spend, model, usage)
+                await asyncio.to_thread(_record_usage, model, usage)
                 return LLMEmbeddingResult(
                     ok=True,
                     vectors=vectors,

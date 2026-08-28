@@ -1,5 +1,32 @@
 # Changelog
 
+### Fix: the LLM cost counter was documented as "all calls" and observed one caller, behind a default-off flag
+
+- **`pmrf_llm_token_cost_total` was incremented from `llm_telemetry_service._build_block`.** That function runs **once per event**, from a single call site in `event_intelligence_service`, itself behind `if settings.LLM_TELEMETRY_ENABLED:` — **default `false`** (`config.py:1044`). **13 modules** reach the gateway. The counter's own help text said cost "across all calls".
+- **Measured on the default configuration before anything was changed.** Every provider call stubbed locally, one call per entry point:
+
+  | caller driven | reached the provider? |
+  | --- | --- |
+  | `probability_engine_service._ask_ai` | yes |
+  | `probability_engine_service.translate_title` | yes |
+  | `translation_service.translate_fields` | yes |
+  | `news_sentiment_service.analyze_sentiment` | yes |
+  | `openai_service.ask_llm` | yes |
+  | `llm_startup_check_service.validate_primary_llm_startup` | yes |
+  | `semantic_relevance_service` / `cross_validation_service` / `event_extraction_service` | no — each behind its own default-off flag |
+
+  **6 successful provider calls, 60,000 tokens: `pmrf_llm_token_cost_total` moved $0.00 and `pmrf_llm_token_usage_total` moved 0.** An operator scraping `/metrics` on a stock install sees a permanently flat cost series while real money is being spent.
+- **Turning the flag on does not fix it either.** One `analyze_market()` makes **2** gateway calls (`_ask_ai` and `translate_title`); the telemetry block sees only the tokens `_ask_ai` recorded on the analysis dict, so it counted **10,000 of 20,000 tokens — 50%** of what that single event actually spent. `llm_call_count` in the block already admitted this in its comment ("lower bound… we cannot detect `translate_title` calls"), but the *counter* did not.
+- **The fix moves both counters to the gateway chokepoint**, `_record_spend` → `_record_usage`, called from both success paths (`_complete` and `complete_embeddings`). That is the one point every caller passes through — a caller cannot reach a provider except via `complete_chat` / `complete_json` / `complete_embeddings`. Same shape as the fix in [`sqlite-query-count-test-chokepoint`] and [`entrypoint-reachability-gap`]: instrument where the traffic converges, not at one of the sources.
+- **Two sinks with deliberately different scope, stated in the function's docstring.** Prometheus is **always** updated: it is an in-process counter with no storage cost and no behavioural effect. The daily-spend counter that enforces `LLM_DAILY_COST_CAP_USD` is still only written when the cap is enabled, because it takes a SQLite write lock and the disabled default must stay a pure no-op. Both price with `_lookup_price` against `LLMResult.model`, so the cap and the cost series still cannot disagree.
+- **The telemetry service no longer touches the counters, and its docstring now forbids it** — incrementing in both places would double-count the enrichment path. `estimated_token_cost` stays on the event record unchanged, including its degraded-mode estimate from `news_context` length: that is a per-event "what this would have cost" figure and is *not* the same quantity as a process-wide sum of what was billed.
+- After the fix, the same measurement: 6 calls → **$1.80 / 60,000 tokens** counted, and one event's coverage is **100.0%** (was 50.0%).
+- **6 backend tests added** (`TokenMetricsAtTheChokepointTests`), all driving the real gateway: counted with the cap **and** telemetry both off (the default install); three different entry points summing to $0.09 where a per-caller instrumentation would show $0.03; the label taken from the model that served the call after the first route entry raised, with **$0.00 charged to the model that failed**; a failed call and a response with **no `usage` block** both leaving the counters flat (the non-vacuous baselines); and metrics still recording when `add_spend` raises, because a broken loop DB must not silently stop cost observability.
+- The full backend suite is **5074 passed / 11 skipped / 224 subtests** (was 5068 / 11 / 224), no test newly skipped. Two pre-existing tests rewritten rather than deleted: the telemetry test that asserted a Prometheus increment now asserts the **absence** of one plus the presence of the per-event field, and the source-grep test in `test_p0_fixes.py` now greps the gateway, asserts **both** success paths record, and asserts the old location stays clean so the increment cannot drift back.
+- Three defect injections, each restored byte-identically (`llm_gateway_service.py` `08b3999ba7fc65eb29bb6f5296c008fb`, `llm_telemetry_service.py` `6c6326dcc3075c8e1a637a38257927fa`): re-gating the metrics behind the cap reddens 3, dropping the embeddings path reddens 2, and restoring the telemetry increment reddens 3 — including the cap-vs-telemetry agreement test, which is what pins "counted exactly once".
+- `pmrf_llm_token_cost_total` / `pmrf_llm_token_usage_total` help text now states the scope it actually has, and `metrics.py` records that both are incremented in exactly one place.
+- No engine formula, weight, threshold or contract changed; no schema, route, model field or frontend change. Live data untouched: `event_store.json` `63f2e0406ccd57832121faa01d08a444`, `kernel_predictions.db` `8b84fea260e618fd21826e4e8f0096e1`, and `v2_loop.db` gained no `llm_daily_spend` table.
+
 ### Fix: the LLM cost an operator can see was priced by a setting, not by the model that ran
 
 - **`llm_telemetry_service` priced and labelled every call with `settings.OPENAI_MODEL`.** The gateway walks a route list (`LLM_ROUTE_*` → `OPENAI_MODEL_N_M`) and falls back between providers, so the model that served a call is only knowable from `LLMResult.model`. `probability_engine_service._ask_ai` forwarded `result.usage` as `_llm_usage` but **dropped `result.model`**, so `event_intelligence_service` had nothing to pass and handed the telemetry builder the configured name instead.

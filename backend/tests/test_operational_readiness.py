@@ -202,6 +202,86 @@ class StartupGuardTests(unittest.TestCase):
                 with TestClient(app):
                     pass
 
+    def test_lifespan_boots_but_records_a_failure_for_a_non_loop_store(self):
+        """A corrupt kernel/World Cup/reliability DB must not be silent.
+
+        Before this, maintenance ran against `LOOP_DB_FILE` only, because
+        `sqlite_db.maintain()` defaults to `loop_db_path()` and nothing ever
+        passed a path. Measured on temp copies corrupted past
+        `PRAGMA integrity_check`: a corrupt loop DB aborts boot (correct), while
+        the other three each booted clean with `/api/health` answering
+        `200 {"status": "ok"}`.
+
+        Boot deliberately still succeeds — refusing would take away the dashboard
+        the operator needs to see the problem — so the *run ledger row* is what
+        carries the finding into `/api/health`.
+        """
+        from app.main import app
+
+        finished: list[tuple[str, str]] = []
+
+        def _record(run_id, status, **kwargs):
+            finished.append((status, str(kwargs.get("error") or "")))
+
+        with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch("app.main.sqlite_db.maintain", return_value={"ok": True}), \
+                patch("app.main.sqlite_db.maintain_all", return_value={
+                    "ok": False,
+                    "failed": ["KERNEL_DB_FILE"],
+                    "stores": {"KERNEL_DB_FILE": {"ok": False, "error": "malformed"}},
+                }), \
+                patch("app.memory.loop_run_store.start_run", return_value="run-1"), \
+                patch("app.memory.loop_run_store.finish_run", _record), \
+                patch("app.main.start_scheduler", lambda: None), \
+                patch("app.main.stop_scheduler", lambda: None):
+            with TestClient(app):
+                pass
+
+        # Other lifespan jobs (the World Cup scoring reconcile) write their own
+        # success rows through the same store, so filter rather than compare the
+        # whole list — asserting the exact sequence would couple this test to
+        # every future startup job.
+        failures = [error for status, error in finished if status == "failed"]
+        self.assertEqual(len(failures), 1, finished)
+        self.assertIn("KERNEL_DB_FILE", failures[0])
+
+    def test_lifespan_writes_no_failure_row_when_every_store_is_healthy(self):
+        """The negative arm. Without it, a change that always wrote a failed row
+        would satisfy the test above and permanently degrade every install."""
+        from app.main import app
+
+        finished: list[str] = []
+        with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch("app.main.sqlite_db.maintain", return_value={"ok": True}), \
+                patch("app.main.sqlite_db.maintain_all", return_value={
+                    "ok": True, "failed": [], "stores": {"KERNEL_DB_FILE": {"ok": True}},
+                }), \
+                patch("app.memory.loop_run_store.start_run", return_value="run-1"), \
+                patch("app.memory.loop_run_store.finish_run",
+                      lambda run_id, status, **kw: finished.append(status)), \
+                patch("app.main.start_scheduler", lambda: None), \
+                patch("app.main.stop_scheduler", lambda: None):
+            with TestClient(app):
+                pass
+        self.assertEqual(
+            [s for s in finished if s == "failed"],
+            [],
+            f"a healthy install must write no failed row; saw {finished}",
+        )
+
+    def test_lifespan_survives_a_maintain_all_that_raises(self):
+        """Startup must not die because the *reporting* of a store failed."""
+        from app.main import app
+
+        with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch("app.main.sqlite_db.maintain", return_value={"ok": True}), \
+                patch("app.main.sqlite_db.maintain_all",
+                      side_effect=OSError("disk went away")), \
+                patch("app.main.start_scheduler", lambda: None), \
+                patch("app.main.stop_scheduler", lambda: None):
+            with TestClient(app):
+                pass  # must not raise
+
     def test_lifespan_does_not_check_llm_by_default(self):
         from app.main import app
 

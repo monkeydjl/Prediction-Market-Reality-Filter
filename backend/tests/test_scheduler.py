@@ -199,20 +199,82 @@ class TranslateTitlesJobTests(unittest.TestCase):
 
 
 class LoopDbMaintenanceJobTests(unittest.TestCase):
-    def test_job_runs_sqlite_maintenance_and_records_success(self):
+    """The job keeps its name and gained its scope.
+
+    It used to call `sqlite_db.maintain()` with no argument, which maintains
+    `LOOP_DB_FILE` only; the other three SQLite state stores were checked nowhere.
+    These tests patch `maintain_all` because that is what the job calls now —
+    patching `maintain` would leave the job running against the real stores and
+    the success case would pass without the mock being consulted at all.
+    """
+
+    def test_job_maintains_every_store_and_records_success(self):
         with tempfile.TemporaryDirectory() as tmp:
-            result = {"ok": True, "integrity": ["ok"], "checkpoint": {"busy": 0}}
+            result = {
+                "ok": True,
+                "failed": [],
+                "stores": {
+                    "LOOP_DB_FILE": {"ok": True},
+                    "KERNEL_DB_FILE": {"ok": True},
+                    "WORLD_CUP_PREDICTION_DB_FILE": {"ok": True},
+                    "DOMAIN_RELIABILITY_DB_PATH": {"ok": True},
+                },
+            }
             with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
-                    patch.object(scheduler.sqlite_db, "maintain", return_value=result):
+                    patch.object(scheduler.sqlite_db, "maintain_all", return_value=result):
                 asyncio.run(scheduler._job_loop_db_maintenance())
                 run = loop_run_store.last_run("loop_db_maintenance")
         self.assertEqual(run["status"], "success")
         self.assertEqual(run["result"], result)
 
+    def test_job_uses_the_all_store_entrypoint(self):
+        """Pin the call itself: a revert to `maintain()` is silent otherwise.
+
+        The stored row looks the same either way, so nothing above would notice
+        the job going back to covering one store out of four.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(scheduler.sqlite_db, "maintain_all",
+                                 return_value={"ok": True, "failed": [], "stores": {}}) as all_mock, \
+                    patch.object(scheduler.sqlite_db, "maintain") as single_mock:
+                asyncio.run(scheduler._job_loop_db_maintenance())
+        all_mock.assert_called_once_with()
+        single_mock.assert_not_called()
+
+    def test_a_failed_store_fails_the_run_and_is_named(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = {
+                "ok": False,
+                "failed": ["KERNEL_DB_FILE"],
+                "stores": {"KERNEL_DB_FILE": {"ok": False, "error": "malformed"}},
+            }
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(scheduler.sqlite_db, "maintain_all", return_value=result):
+                asyncio.run(scheduler._job_loop_db_maintenance())
+                run = loop_run_store.last_run("loop_db_maintenance")
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("KERNEL_DB_FILE", run["error"])
+
+    def test_every_failed_store_is_named_not_just_the_first(self):
+        """An operator restoring one store and not the other is the failure mode."""
+        with tempfile.TemporaryDirectory() as tmp:
+            result = {
+                "ok": False,
+                "failed": ["KERNEL_DB_FILE", "DOMAIN_RELIABILITY_DB_PATH"],
+                "stores": {},
+            }
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(scheduler.sqlite_db, "maintain_all", return_value=result):
+                asyncio.run(scheduler._job_loop_db_maintenance())
+                run = loop_run_store.last_run("loop_db_maintenance")
+        self.assertIn("KERNEL_DB_FILE", run["error"])
+        self.assertIn("DOMAIN_RELIABILITY_DB_PATH", run["error"])
+
     def test_job_failure_is_isolated(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
-                    patch.object(scheduler.sqlite_db, "maintain",
+                    patch.object(scheduler.sqlite_db, "maintain_all",
                                  side_effect=RuntimeError("bad db")):
                 asyncio.run(scheduler._job_loop_db_maintenance())
                 run = loop_run_store.last_run("loop_db_maintenance")

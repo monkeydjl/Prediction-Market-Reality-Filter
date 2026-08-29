@@ -18,7 +18,7 @@ boundary.
 import sqlite3
 import threading
 from contextlib import contextmanager
-from typing import Iterator
+from typing import Any, Iterator
 
 from app.core.config import settings
 from app.utils.helpers import utc_now
@@ -52,9 +52,18 @@ def connect(path: str) -> sqlite3.Connection:
     (use the `writing` / `reading` context managers below).
     """
     conn = sqlite3.connect(path, timeout=30.0, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+    except Exception:
+        # `PRAGMA journal_mode=WAL` reads page 1, so on a corrupt file it raises
+        # here — *after* the handle exists and *before* it is returned, so no
+        # caller and neither context manager below can close it. It only came
+        # back on GC. Harmless when the raise aborts startup, a leak per call
+        # once `maintain_all()` catches the error and carries on.
+        conn.close()
+        raise
     return conn
 
 
@@ -109,6 +118,42 @@ def maintain(path: str | None = None) -> dict[str, object]:
     if not ok:
         raise RuntimeError(f"SQLite integrity_check failed: {integrity}")
     return {"checkpoint": checkpoint, "integrity": integrity, "ok": ok}
+
+
+def maintain_all() -> dict[str, Any]:
+    """Maintain **every** declared SQLite state store, not just the loop DB.
+
+    `maintain()` takes a path and defaults to `loop_db_path()`; until this
+    existed, no caller ever passed one, so three of the four SQLite state stores
+    got neither WAL truncation nor an integrity check anywhere in the codebase.
+    Measured by corrupting a temp copy of each past `PRAGMA integrity_check` and
+    booting: a corrupt `LOOP_DB_FILE` aborts startup, while `KERNEL_DB_FILE`
+    (33,882 rows of committed predictions), `WORLD_CUP_PREDICTION_DB_FILE` and
+    `DOMAIN_RELIABILITY_DB_PATH` each let the app boot and answer
+    `/api/health` with `200 {"status": "ok"}`.
+
+    Unlike `maintain()` this does **not** raise. It reports every store, because
+    stopping at the first failure would hide the rest — and the caller needs the
+    whole picture to write one run-ledger row. A store whose file does not exist
+    yet is reported as `skipped`, which is not a failure: an install that has
+    never populated the World Cup DB is healthy.
+    """
+    from app.core import runtime_stores
+
+    stores: dict[str, Any] = {}
+    failures: list[str] = []
+    for name, path in runtime_stores.sqlite_state_paths().items():
+        if not path.exists():
+            stores[name] = {"ok": True, "skipped": "file does not exist"}
+            continue
+        try:
+            stores[name] = maintain(str(path))
+        except Exception as exc:
+            # Includes RuntimeError from maintain() and sqlite3.DatabaseError
+            # from a file too damaged for PRAGMA integrity_check to parse.
+            stores[name] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            failures.append(name)
+    return {"ok": not failures, "failed": failures, "stores": stores}
 
 
 def record_schema_version(conn: sqlite3.Connection, component: str, version: int) -> None:

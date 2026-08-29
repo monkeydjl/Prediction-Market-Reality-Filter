@@ -354,20 +354,37 @@ async def _job_event_discover_startup() -> None:
 
 
 async def _job_loop_db_maintenance() -> None:
-    """Daily SQLite loop-store maintenance: WAL truncation + integrity check."""
-    logger.info("[Scheduler] Loop DB maintenance starting...")
+    """Daily SQLite maintenance: WAL truncation + integrity check, every store.
+
+    The job name stays `loop_db_maintenance` because six other sites read it
+    (`quality_metrics`, `metrics`, `loop_status_service`, the events route) and
+    stored history is keyed by it; what changed is the scope. It used to call
+    `sqlite_db.maintain()` with no argument, which maintains `LOOP_DB_FILE` only,
+    so corruption in the kernel, World Cup or domain-reliability DB was reported
+    nowhere.
+
+    A failure in any store fails the run, which is what drives `/api/health` to
+    `degraded` — `maintain_all()` deliberately does not raise, so the message can
+    name every affected store instead of only the first.
+    """
+    logger.info("[Scheduler] SQLite maintenance starting...")
     run_id = _start_run("loop_db_maintenance")
     try:
-        result = sqlite_db.maintain()
-        _finish_run(run_id, "success", result=result)
-        checkpoint = result.get("checkpoint", {})
-        logger.info(
-            "[Scheduler] Loop DB maintenance ok: checkpoint=%s",
-            checkpoint,
-        )
+        result = sqlite_db.maintain_all()
+        if result["ok"]:
+            _finish_run(run_id, "success", result=result)
+            logger.info(
+                "[Scheduler] SQLite maintenance ok: %d store(s)",
+                len(result.get("stores") or {}),
+            )
+        else:
+            failed = result.get("failed") or []
+            error = f"SQLite integrity failed for: {', '.join(failed)}"
+            _finish_run(run_id, "failed", error=error, result=result)
+            logger.error("[Scheduler] SQLite maintenance failed: %s", error)
     except Exception as exc:
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
-        logger.exception("[Scheduler] Loop DB maintenance failed")
+        logger.exception("[Scheduler] SQLite maintenance failed")
 
 
 async def _job_optimization_task_cleanup() -> None:

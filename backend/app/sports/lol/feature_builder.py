@@ -22,6 +22,7 @@ from app.kernel.domain import (
     PlayerFeatures,
     EnvironmentFeatures,
 )
+from app.kernel.feature_provenance import resolve_elo_provenance
 from app.kernel.market_liquidity import inject_liquidity_into_custom
 
 logger = logging.getLogger(__name__)
@@ -105,8 +106,13 @@ class LolFeatureBuilder:
 
         mkt_home, mkt_away = _extract_mkt_probs(raw, market_raw, custom_raw)
         has_mkt = mkt_home is not None and mkt_away is not None
+        # LoL quality is market-driven, not Elo-driven, so the provenance call
+        # only guards the ratings themselves: the LoL adapter reports no Elo
+        # source, so nothing is dropped, and the shared call means a future
+        # source cannot arrive here unchecked.
+        elo = resolve_elo_provenance(team_raw)
         data_quality = "real" if has_mkt else "partial"
-        quality_notes: list[str] = []
+        quality_notes: list[str] = list(elo.notes)
 
         custom: dict = {
             **custom_raw,
@@ -127,14 +133,15 @@ class LolFeatureBuilder:
                 days_since_last_match=general_raw.get("days_since_last_match"),
             ),
             team=TeamFeatures(
-                elo_rating_home=team_raw.get("elo_home"),
-                elo_rating_away=team_raw.get("elo_away"),
+                elo_rating_home=elo.elo_home,
+                elo_rating_away=elo.elo_away,
                 form_home=team_raw.get("form_home"),
                 form_away=team_raw.get("form_away"),
                 h2h_home_win_rate=None,
                 h2h_draw_rate=None,
                 market_value_home=None,
                 market_value_away=None,
+                elo_source=elo.elo_source,
             ),
             market=MarketFeatures(
                 odds_home=market_raw.get("odds_home"),

@@ -289,6 +289,17 @@ class WorldCupAdapter:
                 match.away.name, elo_away_raw,
             )
 
+        # Provenance, in the "<home>/<away>" form all_sources_look_real() splits
+        # on. get_elo_rating never fails: an unknown team yields 1500.0 with
+        # source "default", and a rank-only team a value with source
+        # "estimated". Without the label the engines score either as measured
+        # evidence. "unknown" is itself a non-real token, so a failed fetch on
+        # one side invalidates the pair.
+        raw["team"]["elo_source"] = "{}/{}".format(
+            elo_home_raw.get("source", "unknown") if isinstance(elo_home_raw, dict) else "unknown",
+            elo_away_raw.get("source", "unknown") if isinstance(elo_away_raw, dict) else "unknown",
+        )
+
         # --- Odds ---
         if isinstance(odds, dict) and odds:
             raw["market"]["odds_home"] = odds.get("home")

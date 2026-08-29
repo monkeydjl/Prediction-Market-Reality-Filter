@@ -27,6 +27,7 @@ from app.kernel.domain import (
     PlayerFeatures,
     EnvironmentFeatures,
 )
+from app.kernel.feature_provenance import resolve_elo_provenance
 from app.kernel.market_liquidity import inject_liquidity_into_custom
 
 logger = logging.getLogger(__name__)
@@ -71,10 +72,13 @@ class FootballFeatureBuilder:
         env_raw = raw.get("environment", {})
         general_raw = raw.get("general", {})
 
-        # Determine data quality
-        has_elo = team_raw.get("elo_home") is not None
+        # Determine data quality. An Elo pair whose source is not a real source
+        # is dropped here rather than damped downstream, so the engines see the
+        # same state a team with no rating produces.
+        elo = resolve_elo_provenance(team_raw)
+        has_elo = elo.elo_home is not None
         has_odds = market_raw.get("odds_home") is not None
-        quality_notes: list[str] = []
+        quality_notes: list[str] = list(elo.notes)
         if not has_odds:
             quality_notes.append("betting_odds_unavailable")
         data_quality = "real" if (has_elo and has_odds) else "partial"
@@ -88,14 +92,15 @@ class FootballFeatureBuilder:
                 days_since_last_match=general_raw.get("days_since_last_match"),
             ),
             team=TeamFeatures(
-                elo_rating_home=team_raw.get("elo_home"),
-                elo_rating_away=team_raw.get("elo_away"),
+                elo_rating_home=elo.elo_home,
+                elo_rating_away=elo.elo_away,
                 form_home=team_raw.get("form_home"),
                 form_away=team_raw.get("form_away"),
                 h2h_home_win_rate=team_raw.get("h2h_home_win_rate"),
                 h2h_draw_rate=team_raw.get("h2h_draw_rate"),
                 market_value_home=team_raw.get("market_value_home"),
                 market_value_away=team_raw.get("market_value_away"),
+                elo_source=elo.elo_source,
             ),
             market=MarketFeatures(
                 odds_home=market_raw.get("odds_home"),

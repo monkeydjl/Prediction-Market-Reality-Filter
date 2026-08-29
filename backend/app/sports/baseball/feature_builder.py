@@ -24,6 +24,7 @@ from app.kernel.domain import (
     EnvironmentFeatures,
 )
 
+from app.kernel.feature_provenance import resolve_elo_provenance
 from app.kernel.market_liquidity import inject_liquidity_into_custom
 
 logger = logging.getLogger(__name__)
@@ -51,9 +52,13 @@ class BaseballFeatureBuilder:
 
         # Data quality: "real" if Elo exists, "partial" otherwise.
         # Odds absence does NOT downgrade quality (no odds source for MLB).
-        has_elo = team_raw.get("elo_home") is not None
+        # The MLB adapter reads kernel_elo_ratings, which returns None for an
+        # unknown team, so it reports no provenance and nothing is dropped here;
+        # the call keeps one definition of "usable Elo" across all five sports.
+        elo = resolve_elo_provenance(team_raw)
+        has_elo = elo.elo_home is not None
         data_quality = "real" if has_elo else "partial"
-        quality_notes: list[str] = []
+        quality_notes: list[str] = list(elo.notes)
 
         # Pitcher availability flag for player layer
         pitcher_home = player_raw.get("starting_pitcher_home")
@@ -70,14 +75,15 @@ class BaseballFeatureBuilder:
                 days_since_last_match=general_raw.get("days_since_last_match"),
             ),
             team=TeamFeatures(
-                elo_rating_home=team_raw.get("elo_home"),
-                elo_rating_away=team_raw.get("elo_away"),
+                elo_rating_home=elo.elo_home,
+                elo_rating_away=elo.elo_away,
                 form_home=team_raw.get("form_home"),
                 form_away=team_raw.get("form_away"),
                 h2h_home_win_rate=None,  # Not computed for baseball
                 h2h_draw_rate=None,  # Baseball has no draws
                 market_value_home=None,
                 market_value_away=None,
+                elo_source=elo.elo_source,
             ),
             market=MarketFeatures(
                 odds_home=market_raw.get("odds_home"),

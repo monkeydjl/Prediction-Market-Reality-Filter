@@ -86,7 +86,26 @@ class GeneralFeatures:
 
 @dataclass(frozen=True)
 class TeamFeatures:
-    """Team-level features (cross-sport)."""
+    """Team-level features (cross-sport).
+
+    ``elo_source`` carries the provenance of the two Elo ratings, in the
+    ``"<home>/<away>"`` form that
+    :func:`app.services.world_cup_data_quality.all_sources_look_real` splits on.
+    Without it an engine cannot tell a measured rating from an invented one:
+    ``elo_ratings_service.get_elo_rating`` returns ``1500.0`` with
+    ``source="default"`` for any team it does not know, and both football
+    adapters used to read ``elo_rating`` and discard ``source`` -- so a defaulted
+    pair reached the engine as ``available=True`` with the detail string
+    ``"Elo 1500.0 vs 1500.0"``, and (with odds present) lifted
+    ``data_quality`` from ``partial`` to ``real``.  ``MarketFeatures`` has
+    carried ``odds_source`` and ``odds_fresh`` since P1-E4 for exactly this
+    reason; this is the team-side half.
+
+    ``None`` means "this adapter does not report Elo provenance", not "not
+    real".  The MLB/NBA/NHL/LoL paths read a ratings table that yields ``None``
+    when a team is absent, so they never invent a value and need no label --
+    the same absence convention the optional discovery sources use.
+    """
     elo_rating_home: float | None
     elo_rating_away: float | None
     form_home: float | None
@@ -95,6 +114,7 @@ class TeamFeatures:
     h2h_draw_rate: float | None
     market_value_home: float | None
     market_value_away: float | None
+    elo_source: str | None = None
 
 
 @dataclass(frozen=True)

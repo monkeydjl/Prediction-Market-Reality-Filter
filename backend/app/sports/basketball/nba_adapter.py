@@ -221,6 +221,7 @@ class NBAAdapter:
             home=home,
             away=away,
             kickoff_utc=_DEFAULT_KICKOFF,
+            is_stub=True,
         )
 
     def get_match_identity(self, match_id: str) -> MatchIdentity:

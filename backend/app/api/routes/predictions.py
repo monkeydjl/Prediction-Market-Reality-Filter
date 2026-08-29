@@ -301,6 +301,8 @@ def predict_match(
     from an uncalibrated one. ``kernel_predictions`` still has no column for it,
     so this response is currently the only way to read it.
     """
+    from app.kernel.domain import UnknownMatchError
+
     kernel = _get_kernel()
     try:
         result = kernel.predict(match_id, engine=engine)
@@ -315,6 +317,10 @@ def predict_match(
             "feature_version": result.feature_version,
             "prediction_timestamp": result.prediction_timestamp.isoformat(),
         }
+    except UnknownMatchError:
+        # Ordered before the generic handler, which would otherwise report a
+        # match id with no fixture as a 500 server fault.
+        raise HTTPException(status_code=404, detail="Match not found")
     except Exception as e:
         logger.error("Prediction failed for %s: %s", match_id, e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -510,7 +516,12 @@ def get_match(match_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail="Kernel prediction is disabled.")
     kernel = _get_kernel()
     match = kernel._adapter.get_match_identity(match_id)
-    if match is None:
+    # ``is_stub``, not ``is None``: every adapter's get_match_identity is
+    # declared ``-> MatchIdentity`` and substitutes a placeholder when the
+    # fixture is missing, so the former ``is None`` test could never fire and
+    # this route answered 200 for any string, describing a match named
+    # "Home vs Away" that does not exist.
+    if match.is_stub:
         raise HTTPException(status_code=404, detail="Match not found")
 
     from app.kernel.kernel_db import get_latest_prediction

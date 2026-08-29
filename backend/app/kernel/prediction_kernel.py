@@ -12,6 +12,7 @@ from dataclasses import replace
 from app.core import config
 from app.kernel.domain import (
     PredictionResult,
+    UnknownMatchError,
 )
 from app.kernel.protocols import DataAdapter, FeatureBuilder
 from app.kernel.engine_registry import EngineRegistry
@@ -124,8 +125,22 @@ class PredictionKernel:
         self._learning = learning
 
     def predict(self, match_id: str, engine: str = "auto") -> PredictionResult:
-        """Run a prediction for a single match."""
+        """Run a prediction for a single match.
+
+        Raises :class:`UnknownMatchError` when no fixture backs ``match_id``.
+        The adapters return a placeholder identity rather than ``None`` in that
+        case (see :class:`MatchIdentity`), and without this check the run
+        completed on invented inputs: measured against a copy of the live kernel
+        DB, an id absent from ``kernel_match_fixtures`` produced confidence
+        0.5475 with the Elo factor reported ``available: true`` on the neutral
+        1500 default the Elo service substitutes for an unknown team, and
+        ``record_prediction`` persisted a row to both ``kernel_predictions`` and
+        ``kernel_prediction_history``. The guard is placed before
+        ``fetch_all_data`` so an unknown id also stops costing upstream calls.
+        """
         match = self._adapter.get_match_identity(match_id)
+        if match.is_stub:
+            raise UnknownMatchError(match_id)
         raw = self._adapter.fetch_all_data(match)
         features = self._feature_builder.build(match, raw)
         engine_impl = self._engine_registry.select(
@@ -168,7 +183,20 @@ class PredictionKernel:
         return results
 
     def process_outcome(self, match_id: str) -> None:
-        """Process a match outcome — triggers the learning loop."""
+        """Process a match outcome — triggers the learning loop.
+
+        Unlike :meth:`predict`, a missing fixture does not raise here: the
+        outcome itself is real (``kernel_match_results`` is a separate table
+        from ``kernel_match_fixtures``, so a result can outlive its fixture)
+        and recording it is correct. Only the learning step is skipped, because
+        its inputs are keyed by ``competition`` and a stub identity would supply
+        the adapter's *default* competition code rather than the match's own --
+        attributing calibration, weights, and an engine score to a competition
+        the match may not belong to. Measured on the live kernel DB: 13,782
+        results against 18,717 fixtures with **zero** results lacking a
+        fixture, so this path guards a reachable shape that has not yet
+        occurred rather than one currently mis-attributing.
+        """
         outcome = self._adapter.fetch_outcome(match_id)
         if outcome is None:
             logger.warning("No outcome found for match %s", match_id)
@@ -180,6 +208,14 @@ class PredictionKernel:
 
         if config.settings.PHASE3_LEARNING_ENABLED:
             match = self._adapter.get_match_identity(match_id)
+            if match.is_stub:
+                logger.warning(
+                    "Outcome for %s recorded, but no fixture backs it; skipping "
+                    "the learning step rather than attributing it to the "
+                    "adapter's default competition.",
+                    match_id,
+                )
+                return
             competition = match.season.competition.code
             engine = error.engine
             self._learning.update_calibration(competition, engine)

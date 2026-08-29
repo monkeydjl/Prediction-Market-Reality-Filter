@@ -115,6 +115,7 @@ def _stub_identity(match_id: str) -> MatchIdentity:
         home=home,
         away=away,
         kickoff_utc=_DEFAULT_KICKOFF,
+        is_stub=True,
     )
 
 

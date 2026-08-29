@@ -218,16 +218,81 @@ secrets (e.g. in the same secrets manager that holds `API_WRITE_KEY`). Leave
 `BACKUP_ENCRYPTION_KEY` empty only when the backup volume is already encrypted
 at rest (e.g. an encrypted LVM / EBS volume).
 
-To restore an encrypted archive:
+Encrypted archives are restored by the same script as unencrypted ones — see
+[Restoring from a backup](#restoring-from-a-backup) below. Pass the passphrase
+with `--encryption-key`, or leave it in `BACKUP_ENCRYPTION_KEY` and the script
+picks it up. **Do not unzip the archive by hand.** A raw `extractall` writes every
+member into one flat directory, while the stores live at eight configured paths;
+it also skips the rollback snapshot, the path validation, and the check that the
+service is stopped. Recovering from a hand-unzipped restore is harder than the
+outage that prompted it.
+
+### Restoring from a backup
+
+`backend/scripts/restore_stores.py` is the only supported restore path, for
+encrypted and unencrypted archives alike. It previews before it writes, snapshots
+what it is about to overwrite, maps each archive member back to its configured
+path, refuses to escape the runtime root, and warns if the service still holds
+the database open.
+
+**1. Stop the service.** A restore into a running SQLite database corrupts it.
 
 ```bash
-/opt/prediction-market-reality-filter/.venv/bin/python -c "
-import pyzipper
-with pyzipper.AESZipFile('pmrf-backup-YYYYMMDD-HHMMSSZ.zip') as zf:
-    zf.setpassword(b'YOUR_PASSPHRASE')
-    zf.extractall('/path/to/restore/dir')
-"
+sudo systemctl stop prediction-market-reality-filter
+sudo systemctl stop prediction-market-reality-filter-scheduler
 ```
+
+**2. Count what you have now.** A restore that reports success can still leave
+you short: any archive written before 2026-08-28 contains four of the eight
+stores and restores cleanly. This census is how you find out.
+
+```bash
+cd /opt/prediction-market-reality-filter/backend
+/opt/prediction-market-reality-filter/.venv/bin/python -m scripts.verify_store_counts --save /tmp/pmrf-before.json
+```
+
+**3. Preview the restore.** Without `--apply` nothing is written; the report
+lists every member, its checksum, and the path it would land on.
+
+```bash
+/opt/prediction-market-reality-filter/.venv/bin/python -m scripts.restore_stores \
+    /var/backups/pmrf/pmrf-backup-YYYYMMDD-HHMMSSZ.zip
+```
+
+Read the output before continuing. Fewer entries than you expect means a partial
+archive. A `[WARN]` about the service means step 1 did not take effect.
+
+**4. Apply it.** Add `--encryption-key` if the archive is encrypted and
+`BACKUP_ENCRYPTION_KEY` is not set in the environment.
+
+```bash
+/opt/prediction-market-reality-filter/.venv/bin/python -m scripts.restore_stores \
+    /var/backups/pmrf/pmrf-backup-YYYYMMDD-HHMMSSZ.zip --apply
+```
+
+The pre-restore copies of everything it overwrote are written to
+`.pre_restore_<timestamp>/` beside the archive. That directory is the undo.
+
+**5. Verify the counts moved the way you expected.** Exit code 1 means at least
+one store lost records; the report names each one.
+
+```bash
+/opt/prediction-market-reality-filter/.venv/bin/python -m scripts.verify_store_counts --compare /tmp/pmrf-before.json
+```
+
+A restore from a fresh archive onto a damaged install should show losses only
+where you expect them. Losses you cannot explain mean the wrong archive — restore
+from `.pre_restore_<timestamp>/` and start again.
+
+**6. Start the service, then run one auto-resolve pass** (see the note below).
+
+```bash
+sudo systemctl start prediction-market-reality-filter
+sudo systemctl start prediction-market-reality-filter-scheduler
+```
+
+The same census is worth running on its own at any time; it opens every SQLite
+store read-only and never writes to a store.
 
 Enable the daily backup timer (runs backup_stores.py via systemd):
 

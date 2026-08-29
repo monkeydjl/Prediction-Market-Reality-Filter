@@ -118,6 +118,28 @@ def state_paths() -> list[Path]:
     return out
 
 
+def sqlite_state_settings() -> tuple[str, ...]:
+    """State settings whose file is a SQLite database, in declaration order.
+
+    Maintenance (WAL truncation + `PRAGMA integrity_check`) used to run against
+    `LOOP_DB_FILE` alone, because `sqlite_db.maintain()` defaults to
+    `loop_db_path()` and no caller passed anything else. Measured: with any of the
+    other three corrupted past `integrity_check`, the app boots and `/api/health`
+    answers `200 {"status": "ok"}`. Deriving the set here means a new SQLite store
+    is maintained the day it is declared.
+    """
+    return tuple(
+        name
+        for name in state_setting_names()
+        if str(getattr(settings, name, "")).endswith(".db")
+    )
+
+
+def sqlite_state_paths() -> dict[str, Path]:
+    """Setting name -> configured path, for every SQLite state store."""
+    return {name: Path(getattr(settings, name)) for name in sqlite_state_settings()}
+
+
 def sidecar_paths(store: Path) -> list[Path]:
     """SQLite sidecars for `store`, or nothing for a non-SQLite store."""
     if store.suffix != ".db":

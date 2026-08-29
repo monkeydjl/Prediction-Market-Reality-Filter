@@ -79,8 +79,44 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "or set ALLOW_OPEN_WRITES=true to explicitly run with public writes "
             "(local dev only)."
         )
+    # The loop DB keeps its fail-loud boot semantics: it backs the run ledger and
+    # the calibration history every other job writes through, so starting on a
+    # corrupt one would append to a broken file.
     sqlite_maintenance = sqlite_db.maintain()
     logger.info("Loop DB maintenance passed: %s", sqlite_maintenance)
+
+    # The other SQLite state stores get checked too, but do not block startup: a
+    # corrupt domain-reliability DB degrades source scoring, it does not make the
+    # app unusable, and refusing to boot would take away the dashboard the
+    # operator needs to see the problem. Silence was the actual defect —
+    # measured, a corrupt kernel DB (33,882 prediction rows) booted clean and
+    # /api/health answered 200 "ok". A failed run row is what makes health report
+    # `degraded`, so the finding survives the log scrollback nobody reads.
+    try:
+        other_stores = sqlite_db.maintain_all()
+        if not other_stores["ok"]:
+            failed = other_stores.get("failed") or []
+            logger.error(
+                "SQLite integrity failed at startup for: %s — /api/health will "
+                "report degraded. Restore these stores from a backup.",
+                ", ".join(failed),
+            )
+            from app.memory import loop_run_store
+
+            run_id = loop_run_store.start_run("loop_db_maintenance")
+            loop_run_store.finish_run(
+                run_id,
+                "failed",
+                error=f"SQLite integrity failed for: {', '.join(failed)}",
+                result=other_stores,
+            )
+        else:
+            logger.info(
+                "SQLite maintenance passed for %d store(s)",
+                len(other_stores.get("stores") or {}),
+            )
+    except Exception as exc:
+        logger.warning("SQLite store maintenance skipped: %s", exc, exc_info=True)
 
     # Heal orphan predictions left by crashes during resolve_with_calibration()
     # (event resolved in JSON but prediction still 'open' in SQLite).

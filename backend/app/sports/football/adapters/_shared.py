@@ -120,6 +120,16 @@ def fetch_elo_and_odds(
     elif isinstance(elo_away_raw, BaseException):
         logger.warning("Elo fetch failed for %s: %s", match.away.name, elo_away_raw)
 
+    # Provenance, in the "<home>/<away>" form all_sources_look_real() splits on.
+    # Without it the kernel cannot tell a measured rating from the 1500.0 that
+    # get_elo_rating returns for an unknown team; the odds two lines below have
+    # carried odds_source since P1-E4. "unknown" is a non-real token, so a failed
+    # fetch on either side correctly invalidates the pair.
+    raw["team"]["elo_source"] = "{}/{}".format(
+        elo_home_raw.get("source", "unknown") if isinstance(elo_home_raw, dict) else "unknown",
+        elo_away_raw.get("source", "unknown") if isinstance(elo_away_raw, dict) else "unknown",
+    )
+
     if isinstance(odds, dict) and odds:
         raw["market"]["odds_home"] = odds.get("home")
         raw["market"]["odds_draw"] = odds.get("draw")

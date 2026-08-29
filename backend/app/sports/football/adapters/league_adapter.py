@@ -228,6 +228,7 @@ class LeagueAdapter:
             home=home,
             away=away,
             kickoff_utc=self._config.default_kickoff,
+            is_stub=True,
         )
 
     def get_match_identity(self, match_id: str) -> MatchIdentity:

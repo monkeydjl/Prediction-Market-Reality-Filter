@@ -70,10 +70,12 @@ class TestPredictionsRoutes:
         assert "elo_odds" in data
 
     def test_predict_match_not_found(self, client):
-        # Flag is enabled by fixture; adapter degrades gracefully to 200 or 404.
-        # 500 would indicate an unhandled crash and must not pass.
+        # Flag is enabled by fixture. An id with no fixture row is 404: the
+        # adapter substitutes a placeholder identity rather than returning None,
+        # and predicting from it invented a confident result and wrote it to the
+        # kernel store. 500 would still be an unhandled crash.
         resp = client.post("/api/predictions/matches/nonexistent/predict")
-        assert resp.status_code in (200, 404)
+        assert resp.status_code == 404, resp.text
 
     def test_process_outcome_not_found(self, client):
         # Flag is enabled by fixture. fetch_outcome returns None for unknown
@@ -93,6 +95,39 @@ class TestPredictionsRoutes:
         config.settings.KERNEL_PREDICTION_ENABLED = False
         resp = client.post("/api/predictions/matches/any/predict")
         assert resp.status_code == 503
+
+    def test_get_match_on_an_unknown_id_is_404(self, client):
+        """GET must not describe a match that does not exist.
+
+        The route guarded with ``if match is None``, but every adapter's
+        get_match_identity is declared ``-> MatchIdentity`` and substitutes a
+        placeholder instead, so that branch could never run: measured against a
+        copy of the live kernel DB, this answered 200 with a match whose teams
+        were literally "Home" and "Away".
+        """
+        with _no_upstream_calls():
+            resp = client.get("/api/predictions/matches/definitely-not-a-match")
+        assert resp.status_code == 404, resp.text
+
+    def test_predict_on_an_unknown_id_writes_no_prediction(self, client):
+        """The 404 must come with an empty store, not just an empty body.
+
+        Asserted on ``record_prediction`` -- the only write ``predict``
+        performs -- because a row-count check over the kernel store passes for
+        free in a suite that redirects the store away from production.
+        """
+        from unittest.mock import patch
+
+        from app.api.routes.predictions import _get_kernel
+
+        with _no_upstream_calls():
+            kernel = _get_kernel()
+            with patch.object(kernel._learning, "record_prediction") as record:
+                resp = client.post(
+                    "/api/predictions/matches/definitely-not-a-match/predict"
+                )
+        assert resp.status_code == 404, resp.text
+        record.assert_not_called()
 
 
 # Append to existing test file — these are new test classes
@@ -130,27 +165,30 @@ class TestPhase2Routes:
         data = resp.json()
         assert "elo_odds" in data
 
-    def test_ucl_predict_returns_200_or_404(self, client_phase2):
-        """UCL match prediction should work (404 if fixture not in DB, not 500)."""
+    def test_ucl_predict_on_an_unknown_id_is_404(self, client_phase2):
+        """An id with no fixture is 404 -- exactly, not "200 or 404".
+
+        The tuple this used to allow could not tell the defect from the fix:
+        200 was what the route actually did, inventing a prediction from a
+        placeholder identity (teams named "Home"/"Away", the Elo service's
+        neutral 1500 default reported as ``available: true``) and persisting it
+        to ``kernel_predictions`` and ``kernel_prediction_history``. Both that
+        behaviour and the correct refusal satisfied ``in (200, 404)``, which is
+        why the route kept it. 500 is still excluded, and now so is 200.
+        """
         resp = client_phase2.post(
             "/api/predictions/matches/ucl-nonexistent/predict",
             headers={"X-Write-Key": "test"},
         )
-        # 500 would be an unhandled crash and must not pass, same as
-        # test_predict_match_not_found above.  It was listed as acceptable "if
-        # service unavailable", but fetch_elo_and_odds gathers with
-        # return_exceptions=True and then swallows the lot, so an unreachable
-        # upstream degrades to empty features and still answers 200 -- the one
-        # thing the wider tuple allowed was the crash it was meant to catch.
-        assert resp.status_code in (200, 404)
+        assert resp.status_code == 404, resp.text
 
-    def test_epl_predict_returns_200_or_404(self, client_phase2):
-        """EPL match prediction should work (404 if fixture not in DB, not 500)."""
+    def test_epl_predict_on_an_unknown_id_is_404(self, client_phase2):
+        """See test_ucl_predict_on_an_unknown_id_is_404 for why 200 is excluded."""
         resp = client_phase2.post(
             "/api/predictions/matches/epl-nonexistent/predict",
             headers={"X-Write-Key": "test"},
         )
-        assert resp.status_code in (200, 404)
+        assert resp.status_code == 404, resp.text
 
     def test_phase2_disabled_ucl_falls_back(self):
         """When PHASE2_LEAGUES_ENABLED=false, ucl- prefix falls back to WorldCupAdapter."""
@@ -209,37 +247,37 @@ class TestPhase2bRoutes:
         if hasattr(_get_kernel, "_instance"):
             delattr(_get_kernel, "_instance")
 
-    def test_laliga_predict_returns_200_or_404(self, client_phase2b):
-        """La Liga match prediction should work (404 if fixture not in DB, not 500)."""
+    def test_laliga_predict_on_an_unknown_id_is_404(self, client_phase2b):
+        """See test_ucl_predict_on_an_unknown_id_is_404 for why 200 is excluded."""
         resp = client_phase2b.post(
             "/api/predictions/matches/laliga-nonexistent/predict",
             headers={"X-Write-Key": "test"},
         )
-        assert resp.status_code in (200, 404)
+        assert resp.status_code == 404, resp.text
 
-    def test_bundesliga_predict_returns_200_or_404(self, client_phase2b):
-        """Bundesliga match prediction should work."""
+    def test_bundesliga_predict_on_an_unknown_id_is_404(self, client_phase2b):
+        """See test_ucl_predict_on_an_unknown_id_is_404 for why 200 is excluded."""
         resp = client_phase2b.post(
             "/api/predictions/matches/bundesliga-nonexistent/predict",
             headers={"X-Write-Key": "test"},
         )
-        assert resp.status_code in (200, 404)
+        assert resp.status_code == 404, resp.text
 
-    def test_seriea_predict_returns_200_or_404(self, client_phase2b):
-        """Serie A match prediction should work."""
+    def test_seriea_predict_on_an_unknown_id_is_404(self, client_phase2b):
+        """See test_ucl_predict_on_an_unknown_id_is_404 for why 200 is excluded."""
         resp = client_phase2b.post(
             "/api/predictions/matches/seriea-nonexistent/predict",
             headers={"X-Write-Key": "test"},
         )
-        assert resp.status_code in (200, 404)
+        assert resp.status_code == 404, resp.text
 
-    def test_ligue1_predict_returns_200_or_404(self, client_phase2b):
-        """Ligue 1 match prediction should work."""
+    def test_ligue1_predict_on_an_unknown_id_is_404(self, client_phase2b):
+        """See test_ucl_predict_on_an_unknown_id_is_404 for why 200 is excluded."""
         resp = client_phase2b.post(
             "/api/predictions/matches/ligue1-nonexistent/predict",
             headers={"X-Write-Key": "test"},
         )
-        assert resp.status_code in (200, 404)
+        assert resp.status_code == 404, resp.text
 
 
 def _stub_result(betting_analysis):

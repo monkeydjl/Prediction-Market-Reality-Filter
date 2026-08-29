@@ -41,7 +41,20 @@ class TeamIdentity:
 
 @dataclass(frozen=True)
 class MatchIdentity:
-    """Identifies a single match."""
+    """Identifies a single match.
+
+    ``is_stub`` marks an identity that no fixture backs. Every adapter's
+    ``get_match_identity`` is declared ``-> MatchIdentity`` and returns a
+    placeholder (teams literally named "Home"/"Away") when the fixture is
+    missing, so callers cannot use ``is None`` to detect an unknown match --
+    and one route tried to, leaving a permanently dead 404 branch. The flag is
+    the provenance signal that closes that gap; it mirrors
+    :attr:`MarketFeatures.odds_source`, which already travels beside the odds
+    it describes so consumers can tell a real value from a substituted one.
+
+    Defaulted to ``False`` so that the ~50 existing construction sites, all of
+    which build identities from real fixture rows, keep their meaning.
+    """
     match_id: str
     season: SeasonIdentity
     stage: str
@@ -49,6 +62,7 @@ class MatchIdentity:
     home: TeamIdentity
     away: TeamIdentity
     kickoff_utc: datetime
+    is_stub: bool = False
 
 
 @dataclass(frozen=True)
@@ -148,6 +162,20 @@ class PredictionResult:
     betting_analysis: dict | None
     feature_version: str
     prediction_timestamp: datetime
+
+
+class UnknownMatchError(LookupError):
+    """Raised when an operation needs a fixture the match id has no row for.
+
+    ``LookupError`` so that it sits beside the ``KeyError`` that
+    :meth:`EngineRegistry.select` already raises for an unknown engine, and so
+    ``PredictionKernel.batch_predict`` -- which catches ``Exception`` per match
+    and logs -- keeps degrading one match at a time rather than aborting a run.
+    """
+
+    def __init__(self, match_id: str) -> None:
+        self.match_id = match_id
+        super().__init__(f"No fixture for match_id {match_id!r}")
 
 
 @dataclass(frozen=True)

@@ -96,6 +96,42 @@ def kernel_client():
 
 
 class TestKernelDbHermeticity:
+    @staticmethod
+    def _seed_fixture(match_id: str) -> None:
+        """Insert a real fixture row so the predict below is a real predict.
+
+        Seeded into ``match_fixtures`` in the World Cup prediction database,
+        because that is the table the adapter this id actually routes to will
+        read: ``PHASE2_LEAGUES_ENABLED`` is false in this fixture, so every
+        prefix falls back to ``WorldCupAdapter``.  Both that path and
+        ``init_kernel_db()`` are redirected into the session temp dir by
+        conftest, so the seeding itself stays inside the guarantee this module
+        asserts -- ``_repo_db_state()`` digests ``backend/*.db*``, and a seed
+        that landed in the repo would fail the comparison below rather than
+        being excused by it.
+        """
+        from datetime import datetime, timezone
+
+        from app.models.world_cup_prediction import MatchFixture
+        from app.utils.prediction_db import get_prediction_session
+
+        kernel_db.init_kernel_db()
+        session = get_prediction_session()
+        try:
+            MatchFixture.metadata.create_all(session.get_bind())
+            session.merge(MatchFixture(
+                match_id=match_id,
+                fixture_id=999001,
+                home_team="Brazil",
+                away_team="Morocco",
+                kickoff_utc=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+                stage="group_stage",
+                status="scheduled",
+            ))
+            session.commit()
+        finally:
+            session.close()
+
     def test_no_arg_init_resolves_inside_the_test_temp_dir(self):
         """``init_kernel_db()`` is how all nine app/ call sites open the DB."""
         kernel_db.close_kernel_db()
@@ -133,8 +169,18 @@ class TestKernelDbHermeticity:
         Both halves are load-bearing.  Without the "a row was written"
         assertion the test passes when the route silently does nothing, which is
         the failure mode that would make it useless as a guard.
+
+        The probe id is now **seeded as a real fixture**.  It previously had no
+        fixture row at all, and the write it asserted was an invented one: the
+        adapters substitute a placeholder identity for an unknown id, so predict
+        ran to completion on defaults and persisted the result.  That behaviour
+        is now refused with a 404, which would have left this test asserting a
+        row that no longer gets written -- it was passing *because of* the defect
+        it sits next to.  Seeding the fixture exercises the real write path, so
+        the hermeticity claim is now made about a write that production performs.
         """
         match_id = "hermeticity-probe"
+        self._seed_fixture(match_id)
         before = _repo_db_state()
 
         elo_club, elo_national, odds = _stubbed_upstreams()

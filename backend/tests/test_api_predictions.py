@@ -1,5 +1,7 @@
 # backend/tests/test_api_predictions.py
 """Tests for /api/predictions API routes and DB query functions."""
+from dataclasses import replace
+
 import pytest
 
 from app.kernel.kernel_db import (
@@ -117,10 +119,20 @@ class MultiSportFakeAdapter:
         return list(self._matches)
 
     def get_match_identity(self, match_id):
+        """Return a placeholder for an unknown id, as production adapters do.
+
+        This used to ``return None``, which the DataAdapter Protocol
+        (``-> MatchIdentity``) forbids and which none of the eight real adapters
+        do -- they substitute a placeholder identity. That made the route's
+        ``if match is None`` branch look covered while it was dead against every
+        production adapter: the test was supplying the only implementation that
+        could reach it. ``is_stub=True`` is what the real adapters set.
+        """
         for m in self._matches:
             if m.match.match_id == match_id:
                 return m.match
-        return None
+        stub = _make_raw_match(match_id, "football", "world_cup").match
+        return replace(stub, is_stub=True)
 
     def fetch_all_data(self, match):
         return {"team": {}, "market": {}, "player": {}, "environment": {}, "general": {}}

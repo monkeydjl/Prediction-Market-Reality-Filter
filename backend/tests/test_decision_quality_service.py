@@ -237,7 +237,21 @@ class BuildDecisionQualityTests(unittest.TestCase):
         self.assertTrue(result["downgraded"])
         self.assertIn("证据冲突较高", result["downgrade_reason"])
 
-    def test_rule2_official_opposing_downgrades_to_wait(self):
+    def test_rule1_wins_when_rule2_would_also_fire(self):
+        """Rules 1-3 are first-match-wins, so rule 1 owns the reason string.
+
+        This input satisfies *both* rule 1 (conflict_score 0.4706 -> consensus
+        "low") and rule 2 (opposing evidence from an official source at
+        strength >= 0.7). Both downgrade to WAIT, so ``displayed_direction``
+        cannot tell them apart — only ``downgrade_reason`` can. Pinning the
+        reason is what makes a reordering of the rule chain in
+        ``_apply_downgrade_rules`` fail a test instead of silently changing
+        which explanation the operator reads.
+
+        The companion assertion below removes the official source and shows the
+        output is byte-identical, i.e. rule 2 contributes nothing here. Without
+        it, this test would read as coverage of the official-source term.
+        """
         rec = _recommendation("YES", risk_level="medium")
         evidence = [
             _evidence("support", 0.9, credibility=0.9, source="Reuters"),
@@ -246,16 +260,27 @@ class BuildDecisionQualityTests(unittest.TestCase):
         result = build_decision_quality(
             recommendation=rec, evidence_breakdown=evidence, **self.DEFAULT_KWARGS
         )
-        # Official + strong opposing -> rule 2 (consensus may also be low,
-        # but rule 1 fires first if consensus is low; rule 2 fires if
-        # consensus is not low but official opposing exists). With strong
-        # on both sides, consensus is "low" -> rule 1 fires first.
-        # Adjust: make support weaker so consensus is not low.
-        # Actually with support 0.9*0.9=0.81 and oppose 0.8*0.9=0.72,
-        # conflict = 0.72/1.53 = 0.47 -> low. Rule 1 fires.
-        # To isolate rule 2, we need consensus != low but official opposing
-        # with strength >= 0.7. Make support much stronger.
-        pass  # see test_rule2_isolated below
+        # support 0.9*0.9 = 0.81, oppose 0.8*0.9 = 0.72
+        # conflict = 0.72 / 1.53 = 0.4706 -> >= high_threshold -> "low"
+        self.assertEqual(result["consensus_level"], "low")
+        self.assertEqual(result["displayed_direction"], "WAIT")
+        self.assertTrue(result["downgraded"])
+        # Rule 1's reason, NOT rule 2's ("官方/监管反向证据").
+        self.assertIn("证据冲突较高", result["downgrade_reason"])
+        self.assertNotIn("官方", result["downgrade_reason"])
+
+        # Same weights, non-official opposing source: rule 2's precondition is
+        # gone and nothing about the outcome changes.
+        non_official = [
+            _evidence("support", 0.9, credibility=0.9, source="Reuters"),
+            _evidence("oppose", 0.8, credibility=0.9, source="Some Blog"),
+        ]
+        control = build_decision_quality(
+            recommendation=_recommendation("YES", risk_level="medium"),
+            evidence_breakdown=non_official, **self.DEFAULT_KWARGS
+        )
+        self.assertEqual(control["downgrade_reason"], result["downgrade_reason"])
+        self.assertEqual(control["consensus_level"], result["consensus_level"])
 
     def test_rule2_isolated(self):
         """Rule 2 fires when consensus is NOT low but official opposing

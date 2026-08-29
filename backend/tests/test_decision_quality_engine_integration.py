@@ -599,7 +599,16 @@ class TestDegradedModeScenarios(unittest.TestCase):
         record = self._base_record()
         original_keys = set(record.keys())
         self._apply_overlays(record)
-        # No new overlay keys added
+        # Exact key set, not a hand-listed sample: a *new* overlay key added
+        # later would slip past a fixed list of eight names, which is the whole
+        # failure mode "byte identical" is supposed to rule out.
+        self.assertEqual(
+            set(record.keys()), original_keys,
+            f"overlay keys leaked with all flags off: "
+            f"{sorted(set(record.keys()) - original_keys)}",
+        )
+        # Named keys kept as a readability aid; the set comparison above is the
+        # assertion that cannot go stale.
         for key in ("decision_quality", "market_quality", "source_reliability",
                      "llm_telemetry", "execution_quality", "final_displayed_direction",
                      "final_downgrade_reason", "guardrail_fired"):

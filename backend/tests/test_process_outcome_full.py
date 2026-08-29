@@ -140,12 +140,23 @@ class TestProcessOutcomeFull:
 
     @patch("app.kernel.prediction_kernel.config")
     def test_phase3_on_no_prediction_skips_learning(self, mock_config, kernel_setup):
-        """When no prediction exists, compute_error returns None and learning skips."""
+        """When no prediction exists, compute_error returns None and learning skips.
+
+        The three learning writes are patched and asserted *not* called — the
+        mirror image of ``test_phase3_on_runs_full_loop``. Asserting only that
+        ``process_outcome`` does not raise would pass just as well if all three
+        ran on a None error.
+        """
         mock_config.settings.PHASE3_LEARNING_ENABLED = True
         kernel, adapter, learning = kernel_setup
         # No prediction seeded → compute_error returns None
-        kernel.process_outcome("m1")
-        # Learning methods should not crash
+        with patch.object(learning, "update_calibration") as mock_cal, \
+             patch.object(learning, "update_weights") as mock_weights, \
+             patch.object(learning, "engine_score") as mock_score:
+            kernel.process_outcome("m1")
+            mock_cal.assert_not_called()
+            mock_weights.assert_not_called()
+            mock_score.assert_not_called()
 
     @patch("app.kernel.prediction_kernel.config")
     def test_phase3_on_calls_engine_score_last(self, mock_config, kernel_setup):

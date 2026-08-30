@@ -740,6 +740,29 @@ def get_model_artifact_health() -> dict[str, Any]:
     return collect_model_artifact_health()
 
 
+@router.get("/quality-metrics/prediction-consistency")
+def get_prediction_consistency() -> dict[str, Any]:
+    """Do stored predictions' scorelines name the same winner as their odds?
+
+    Read-only (E18). Every prediction publishes two claims about who wins, and
+    nothing compared them. For ``basketball``/``baseball``/``hockey`` the
+    scoreline is derived from the Elo pair alone while the probabilities fuse
+    every factor, so Elo's 25.5-35.0% share of the vote decides the scoreline and
+    the other 65-75% cannot move it. Measured on 16,090 rated live fixtures, the
+    two can name opposite winners on 71.5% of them.
+
+    Returns per-engine tallies seeded from the declared Elo-only set, so an
+    engine with no stored rows reports ``no_predictions`` instead of vanishing
+    from the report. Match ids and published scorelines only -- no secrets and
+    nothing not already served by the predictions API.
+    """
+    from app.services.prediction_consistency_service import (
+        collect_prediction_consistency,
+    )
+
+    return collect_prediction_consistency()
+
+
 # Exposed at import time so test runners can wire it without going through
 # the FastAPI app. Used by tests/test_quality_metrics.py.
 __all__ = ["router"]

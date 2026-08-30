@@ -28,7 +28,11 @@ from app.core import config
 from app.kernel.domain import (
     FeatureSet, MatchIdentity, PredictionResult, ContributionItem,
 )
-from app.kernel.engines.confidence import compute_confidence, confidence_breakdown
+from app.kernel.engines.confidence import (
+    binary_factor_vote,
+    compute_confidence,
+    confidence_breakdown,
+)
 from app.kernel.engines.elo_odds_engine import (
     resolve_totals_line,
     soft_totals_from_scores,
@@ -250,26 +254,26 @@ class BaseballEngine:
             "away": round(away_score, 1),
         }
 
+        # One vote list, built once: the published explanation row and both
+        # confidence calls must agree on what each factor voted.
+        votes = [binary_factor_vote(p) if a else None for _, p, _, a in factors]
+
         # Build explanation with ContributionItems
         explanation: list[ContributionItem] = []
-        for fid, p, w, available in factors:
-            predicted_outcome = "home_win" if p >= 0.5 else "away_win"
+        for (fid, p, w, available), vote in zip(factors, votes):
             explanation.append(ContributionItem(
                 factor=fid,
                 direction="support" if available else "neutral",
                 weight=w,
                 available=available,
                 detail=f"P(home_win)={round(p, 4)}" if available else f"{fid} unavailable",
-                predicted_outcome=predicted_outcome if available else None,
+                predicted_outcome=vote,
             ))
 
         confidence = compute_confidence(
             outcome_probabilities,
             available_flags=[a for _, _, _, a in factors],
-            predicted_outcomes=[
-                ("home_win" if p >= 0.5 else "away_win") if a else None
-                for _, p, _, a in factors
-            ],
+            predicted_outcomes=votes,
             data_quality=features.data_quality,
             odds_fresh=bool(features.market.odds_fresh) if features.market.odds_home else None,
             custom=custom,
@@ -278,7 +282,7 @@ class BaseballEngine:
         conf_break = confidence_breakdown(
             outcome_probabilities,
             available_flags=[a for _, _, _, a in factors],
-            predicted_outcomes=[("home_win" if p >= 0.5 else "away_win") if a else None for _, p, _, a in factors],
+            predicted_outcomes=votes,
             data_quality=features.data_quality,
             odds_fresh=bool(features.market.odds_fresh) if features.market.odds_home else None,
             custom=custom,

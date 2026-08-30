@@ -69,12 +69,53 @@ def data_completeness(
     return base
 
 
+def factor_vote(probs: dict[str, float]) -> str | None:
+    """The outcome a single factor calls, or ``None`` when it calls nothing.
+
+    A factor whose distribution has no strict maximum has measured its inputs
+    and found them level: it has data, but no opinion about who wins. Resolving
+    that with ``max()`` — which returns the first key at the tie — makes the
+    factor vote for whichever outcome the dict happens to list first, and every
+    engine here lists ``home_win`` first. ``factor_agreement`` then counts that
+    invented vote, and the explanation row published to the UI names an outcome
+    the factor never picked.
+
+    Returns ``None`` on a tie so the vote is absent rather than fabricated;
+    ``factor_agreement`` already drops ``None``.
+    """
+    if not probs:
+        return None
+    ranked = sorted(probs.items(), key=lambda kv: kv[1], reverse=True)
+    if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+        return None
+    return str(ranked[0][0])
+
+
+def binary_factor_vote(p_home: float) -> str | None:
+    """``factor_vote`` for the binary engines, which carry a scalar P(home).
+
+    ``p_home == 0.5`` exactly is the level case and casts no vote. This is
+    reachable on most real fixtures, not a boundary curiosity: equal rest days
+    give ``p_rest = 0.5`` exactly, and that holds on 88.5% of live MLB, 56.9%
+    of NBA and 46.2% of NHL fixtures.
+    """
+    if p_home == 0.5:
+        return None
+    return "home_win" if p_home > 0.5 else "away_win"
+
+
 def factor_agreement(
     predicted_outcomes: Sequence[str | None],
     *,
     final_outcome: str | None = None,
 ) -> float:
-    """Share of available factor heads that match the plurality / final pick."""
+    """Share of *voting* factor heads that match the plurality / final pick.
+
+    A factor that cast no vote (``None`` — either unavailable, or available and
+    exactly level; see ``factor_vote``) is excluded from both the numerator and
+    the denominator. Counting a level factor as agreement would credit the pick
+    with support no measurement produced.
+    """
     votes = [p for p in predicted_outcomes if p]
     if not votes:
         return 0.5

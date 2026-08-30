@@ -21,6 +21,7 @@ from app.kernel.domain import (
     MatchIdentity,
     PredictionResult,
 )
+from app.kernel.engines.confidence import factor_vote
 from app.kernel.engines.elo_odds_engine import _probabilities_to_scores
 
 logger = logging.getLogger(__name__)
@@ -158,7 +159,7 @@ class DixonColesEngine:
             4,
         )
         scores = _probabilities_to_scores(probs)
-        pred = max(probs, key=probs.get)  # type: ignore[arg-type]
+        pred = factor_vote(probs)
 
         explanation = [
             ContributionItem(

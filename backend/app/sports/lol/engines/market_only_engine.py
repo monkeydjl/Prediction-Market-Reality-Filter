@@ -15,6 +15,7 @@ from app.kernel.domain import (
     MatchIdentity,
     PredictionResult,
 )
+from app.kernel.engines.confidence import binary_factor_vote
 
 
 def _as_prob(value: Any) -> float | None:
@@ -60,7 +61,9 @@ class LolMarketOnlyEngine:
             p_h, p_a = 0.5, 0.5
             confidence = 0.2
 
-        predicted_outcome = "home_win" if p_h >= p_a else "away_win"
+        # p_h and p_a are normalised to sum to 1, so p_h == 0.5 is the level
+        # case: a market quoting both sides identically has called nothing.
+        predicted_outcome = binary_factor_vote(p_h)
         explanation = [
             ContributionItem(
                 factor="market",

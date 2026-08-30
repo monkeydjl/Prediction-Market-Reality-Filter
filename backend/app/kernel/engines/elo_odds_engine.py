@@ -28,7 +28,11 @@ from app.kernel.domain import (
     FeatureSet, MatchIdentity, PredictionResult, ContributionItem,
 )
 from app.kernel.engines.btd_model import calculate_btd_probabilities
-from app.kernel.engines.confidence import compute_confidence, confidence_breakdown
+from app.kernel.engines.confidence import (
+    compute_confidence,
+    confidence_breakdown,
+    factor_vote,
+)
 from app.kernel.engines.odds_quality import (
     describe_odds_quality,
     odds_weight_multiplier,
@@ -325,16 +329,13 @@ class EloOddsEngine:
         fused = _fuse_elo_and_odds(elo_probs, market_probs, elo_w, odds_w)
         scores = _probabilities_to_scores(fused)
 
-        # Explanation with predicted_outcome. `key=probs.get` is an overloaded
-        # bound method a checker cannot match against max()'s key callable;
-        # indexing is the same lookup and is checkable.
-        elo_predicted = (
-            max(elo_probs, key=lambda k: elo_probs[k]) if elo_available else None
-        )
+        # Explanation with predicted_outcome. ``factor_vote`` returns None when
+        # the factor's distribution is exactly level, so a tie is an absent vote
+        # rather than whichever outcome the dict lists first. Equal Elo does
+        # reach this: 1500 vs 1500 gives home_win == away_win exactly.
+        elo_predicted = factor_vote(elo_probs) if elo_available else None
         odds_predicted = (
-            max(market_probs, key=lambda k: market_probs[k])
-            if market_probs is not None
-            else None
+            factor_vote(market_probs) if market_probs is not None else None
         )
         odds_detail = (
             f"Odds {odds_h}/{odds_d}/{odds_a}; "

@@ -107,15 +107,33 @@ class TestBasketballEnginePredict:
         assert "form" in factor_ids
 
     def test_contribution_item_predicted_outcome_is_binary(self):
-        """Each available ContributionItem.predicted_outcome is home_win or away_win."""
+        """An available factor votes home_win / away_win, or None when level.
+
+        The ``None`` case is not a loophole: this fixture has no level factor
+        (asserted below), so every available row here must carry a real vote.
+        ``tests/test_factor_vote_engines.py`` covers the level case, where an
+        available factor correctly votes nothing.
+        """
         engine = BasketballEngine()
         features = _make_features()
         result = engine.predict(features, features.match)
         for item in result.explanation:
             if item.available:
+                assert "P(home_win)=0.5;" not in item.detail
+                assert not item.detail.endswith("P(home_win)=0.5")
                 assert item.predicted_outcome in ("home_win", "away_win")
             else:
                 assert item.predicted_outcome is None
+
+    def test_a_level_factor_votes_nothing_while_staying_available(self):
+        """Equal rest → p_rest is exactly 0.5 → no vote, still available."""
+        engine = BasketballEngine()
+        features = _make_features(rest_home=3, rest_away=3)
+        result = engine.predict(features, features.match)
+        rest = next(e for e in result.explanation if e.factor == "rest")
+        assert rest.available is True
+        assert "P(home_win)=0.5" in rest.detail
+        assert rest.predicted_outcome is None
 
     def test_no_elo_fallback(self):
         """When Elo is None, engine still produces valid prediction."""

@@ -14,6 +14,7 @@ from app.kernel.domain import (
     MatchIdentity,
     PredictionResult,
 )
+from app.kernel.engines.confidence import factor_vote
 from app.kernel.engines.elo_odds_engine import _probabilities_to_scores
 
 _NEUTRAL = {"home_win": 0.40, "draw": 0.30, "away_win": 0.30}
@@ -82,7 +83,7 @@ class GbmEngine:
         confidence = round(min(0.95, max(0.3, confidence)), 4)
         model_loaded = bool(raw.get("model_loaded"))
         method = str(raw.get("prediction_method") or "gbm")
-        pred = max(probs, key=probs.get)  # type: ignore[arg-type]
+        pred = factor_vote(probs)
 
         explanation = [
             ContributionItem(

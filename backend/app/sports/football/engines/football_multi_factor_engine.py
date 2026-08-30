@@ -35,7 +35,11 @@ from app.kernel.domain import (
     PredictionResult,
 )
 from app.kernel.engines.btd_model import calculate_btd_probabilities
-from app.kernel.engines.confidence import compute_confidence, confidence_breakdown
+from app.kernel.engines.confidence import (
+    compute_confidence,
+    confidence_breakdown,
+    factor_vote,
+)
 from app.kernel.engines.elo_odds_engine import (
     _KNOCKOUT_STAGES,
     _odds_to_probabilities,
@@ -328,8 +332,13 @@ def _adjust_home_edge(
     })
 
 
-def _predicted_outcome(probs: dict[str, float]) -> str:
-    return max(probs, key=probs.get)  # type: ignore[arg-type]
+def _predicted_outcome(probs: dict[str, float]) -> str | None:
+    """The outcome this factor votes for, or None when it is exactly level.
+
+    Delegates to the shared ``factor_vote`` so a tie is an absent vote rather
+    than whichever key the dict happens to list first.
+    """
+    return factor_vote(probs)
 
 
 class FootballMultiFactorEngine:
@@ -778,8 +787,16 @@ class FootballMultiFactorEngine:
 
         scores = _probabilities_to_scores(fused)
 
+        # One vote list, built once: the published explanation row and both
+        # confidence calls must agree on what each factor voted. Three separate
+        # comprehensions of the same rule can drift, and the drift would be
+        # invisible -- the UI reads the rows while agreement reads the list.
+        votes: list[str | None] = [
+            _predicted_outcome(p) if ok else None for _, p, _, ok in factors
+        ]
+
         explanation: list[ContributionItem] = []
-        for fid, probs, w, ok in factors:
+        for (fid, probs, w, ok), vote in zip(factors, votes):
             if fid == "odds" and ok:
                 detail = (
                     f"H={probs['home_win']:.3f} D={probs['draw']:.3f} "
@@ -807,15 +824,13 @@ class FootballMultiFactorEngine:
                 weight=w,
                 available=ok,
                 detail=detail,
-                predicted_outcome=_predicted_outcome(probs) if ok else None,
+                predicted_outcome=vote,
             ))
 
         confidence = compute_confidence(
             fused,
             available_flags=[ok for _, _, _, ok in factors],
-            predicted_outcomes=[
-                _predicted_outcome(p) if ok else None for _, p, _, ok in factors
-            ],
+            predicted_outcomes=votes,
             data_quality=features.data_quality,
             odds_fresh=bool(features.market.odds_fresh) if odds_h else None,
             custom=features.custom if isinstance(features.custom, dict) else None,
@@ -824,7 +839,7 @@ class FootballMultiFactorEngine:
         conf_break = confidence_breakdown(
             fused,
             available_flags=[ok for _, _, _, ok in factors],
-            predicted_outcomes=[_predicted_outcome(p) if ok else None for _, p, _, ok in factors],
+            predicted_outcomes=votes,
             data_quality=features.data_quality,
             odds_fresh=bool(features.market.odds_fresh) if odds_h else None,
             custom=features.custom if isinstance(features.custom, dict) else None,

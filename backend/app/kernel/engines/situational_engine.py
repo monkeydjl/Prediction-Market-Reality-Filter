@@ -17,6 +17,7 @@ from app.kernel.domain import (
     MatchIdentity,
     PredictionResult,
 )
+from app.kernel.engines.confidence import factor_vote
 from app.kernel.engines.elo_odds_engine import (
     EloOddsEngine,
     _probabilities_to_scores,
@@ -74,7 +75,7 @@ class SituationalEngine:
             confidence = round(max(0.25, min(0.95, confidence * 0.98)), 4)
 
         explanation = list(base_result.explanation)
-        pred = max(adjusted, key=adjusted.get)  # type: ignore[arg-type]
+        pred = factor_vote(adjusted)
         explanation.append(
             ContributionItem(
                 factor="situational",

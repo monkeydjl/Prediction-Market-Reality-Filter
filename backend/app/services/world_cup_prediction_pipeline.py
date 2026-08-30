@@ -1113,6 +1113,11 @@ async def run_prediction_pipeline(
                 away_team=match.away_team,
                 elo_home=float(elo_data_home.get("elo_rating", 1500.0)),
                 elo_away=float(elo_data_away.get("elo_rating", 1500.0)),
+                # Same cutoff the hybrid/integrated branch passes to
+                # fetch_team_stats/fetch_h2h_data above. Without it the GBM
+                # features for an already-played fixture are built from the CSV's
+                # most recent rows, which include that fixture itself.
+                before_date=match.kickoff_utc,
             )
             prediction_result = {
                 "predicted_score": gbm_pred["predicted_score"],

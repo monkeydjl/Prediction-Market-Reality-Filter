@@ -30,6 +30,14 @@ from pathlib import Path
 import numpy as np
 import lightgbm as lgb
 
+# The two windows are imported, not declared here: they are part of the feature
+# definition, and while they lived in this script the serving path could not read
+# them and quietly used get_historical_h2h's own default of 20 instead of 10.
+from app.services.world_cup_engines.world_cup_gbm_features import (
+    H2H_WINDOW,
+    RECENT_WINDOW,
+)
+
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -43,8 +51,6 @@ META_PATH = OUTPUT_DIR / "gbm_features.json"
 # Training config
 SINCE_YEAR = 2010  # Train on more history than BTD/DC (more samples for GBM)
 MIN_TEAM_MATCHES = 3
-RECENT_WINDOW = 10  # Number of recent matches for form/goals stats
-H2H_WINDOW = 10
 
 # Elo computation (must match fit_btd_model.py)
 ELO_INIT = 1500.0

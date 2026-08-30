@@ -18,15 +18,35 @@ def _clamp(x: float, lo: float = 0.20, hi: float = 0.95) -> float:
 
 
 def decision_strength(probs: dict[str, float]) -> float:
-    """0.5 (flat) → ~0.0 useful signal; 1.0 (certain) → full strength."""
+    """Flat → 0.0 useful signal; certain → 1.0. Baseline is read off the arity.
+
+    "Flat" is ``1/n`` for an ``n``-outcome distribution: 1/3 for football's
+    3-way, **1/2 for the binary home/away sports**. The baseline used to be the
+    literal ``1/3``, so a coin-flip binary call scored 0.25 instead of 0.0 --
+    the bottom quarter of the scale was unreachable for
+    ``basketball``/``baseball``/``hockey`` (three of the five engines that call
+    this), which inflated their confidence by up to 0.0813 and never by less
+    than ~0.042 on any real fixture, because the factor clamps cap a binary
+    fused peak at ~0.74/0.65/0.72.
+
+    The divisor is written ``(n - 1) / n`` rather than ``1 - 1/n`` so that
+    ``n == 3`` reproduces the previous ``2.0 / 3.0`` bit-for-bit: football's
+    values are unchanged, verified over the whole 5,151-point simplex grid at
+    a 0.01 step (see ``tests/test_confidence_decision_arity.py``).
+    """
     if not probs:
         return 0.0
     vals = [max(0.0, float(v)) for v in probs.values()]
     total = sum(vals) or 1.0
     norm = [v / total for v in vals]
     peak = max(norm)
-    # Uniform 3-way ≈ 0.333; map peak from 1/3 → 1.0 into 0 → 1
-    return max(0.0, min(1.0, (peak - 1.0 / 3.0) / (2.0 / 3.0)))
+    n = len(norm)
+    if n < 2:
+        # A single-outcome distribution carries no alternative to be unsure
+        # about, and 1 - 1/1 == 0 would divide by zero.
+        return 1.0
+    baseline = 1.0 / n
+    return max(0.0, min(1.0, (peak - baseline) / ((n - 1.0) / n)))
 
 
 def data_completeness(

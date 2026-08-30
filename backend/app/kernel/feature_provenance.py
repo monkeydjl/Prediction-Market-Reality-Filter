@@ -1,7 +1,14 @@
-"""Elo provenance for the prediction FeatureSet.
+"""Feature provenance for the prediction FeatureSet.
 
-One decision point, called by every sport's feature builder: an Elo rating whose
-source is not a real source must not reach an engine.
+One decision point per dimension, so a value's origin survives the trip from an
+adapter to an engine and to the explanation a user reads.  ``resolve_elo_provenance``
+drops an invented Elo rating; ``resolve_xg_provenance`` names what the football
+``xg`` factor actually measured.
+
+Elo
+===
+
+An Elo rating whose source is not a real source must not reach an engine.
 
 Why this exists
 ---------------
@@ -42,6 +49,55 @@ would have had if the service had returned nothing -- exactly what the club Elo
 path (``club_elo_service.get_club_elo``) already produces by returning ``None``.
 Every engine already handles that state.  Two teams with no usable rating now
 look the same whichever service was asked.
+
+xG
+==
+
+``enrich_situational_features`` writes three different quantities under the same
+``custom["xg_home"]`` / ``custom["xg_away"]`` pair:
+
+=================  =============================================  ==============
+written value      origin                                         ``xg_source``
+=================  =============================================  ==============
+goals per game     the club's *actual goals scored* per match      *(was absent)*
+static xG/90       a hand-typed table in ``football_xg.py``       ``static_table``
+true xG/90         the configured live provider                   ``live_provider``
+=================  =============================================  ==============
+
+Only the third is measured expected goals.  The first is not xG at all -- it is
+goals -- and it was written with **no ``xg_source`` key**, so nothing downstream
+could tell the three apart.  ``FootballMultiFactorEngine`` reported the factor as
+``xg``, ``available=True``, ``direction="support"``; the frontend renders that
+label; and ``xg_source`` itself had **zero readers in production** (written at two
+sites, read only by tests and docs).
+
+Measured over the live fixture corpus: **2602 of 2627** club fixtures (99.0%) fall
+to the unlabelled goals proxy, and EPL is **0 of 760** because the static table's
+normalizer does not strip the ``FC`` suffix that Football-Data.org appends.
+Measured on the production path (Arsenal 2.3 vs Everton 0.9 goals per game,
+written under the xG keys):
+
+===================================  ==========  =================  ============
+state                                confidence  data_completeness  home_win
+===================================  ==========  =================  ============
+goals proxy, unlabelled                  0.5879             0.1727     0.5330
+same numbers labelled static_table       0.5879             0.1727     0.5330
+xG absent                                0.5799             0.0818     0.5468
+===================================  ==========  =================  ============
+
+The first two rows are identical in every field, which is the proof that the label
+was inert.  The factor is worth +0.0080 confidence and a 2.11x jump in
+``data_completeness``, and it moves ``home_win`` by -1.38pp when the proxy agrees
+with the other factors and by -4.70pp when it disagrees.
+
+Unlike the Elo case this value is **not invented** -- goals per game is a real
+measurement of a real thing.  So the fix is not to drop it; dropping real evidence
+for 99% of fixtures would be worse than the defect.  The fix is to stop calling it
+expected goals: the proxy path now labels itself, and the engine puts the token in
+the factor's ``detail`` so the explanation states which of the three quantities
+voted.  No weight, formula, or ``factor_id`` changes -- ``factor_id="xg"`` is the
+registry weight key that ``learning_service.update_weights`` looks up from the
+stored explanation, so renaming the reported id would split that key.
 """
 from __future__ import annotations
 
@@ -98,3 +154,43 @@ def resolve_elo_provenance(team_raw: Mapping[str, Any]) -> EloProvenance:
         elo_home, elo_away, source,
     )
     return EloProvenance(None, None, source, (ELO_SOURCE_NOT_REAL_NOTE,))
+
+
+#: The only ``xg_source`` token that means "measured expected goals". A provider
+#: is added here *after* its contract is verified to deliver xG rather than a
+#: goals/shots proxy -- ``football_live_xg_service`` rejects proxy metrics before
+#: it ever writes this token.
+MEASURED_XG_SOURCES: frozenset[str] = frozenset({"live_provider"})
+
+#: Written by the goals-per-game fallback in ``enrich_situational_features``.
+#: Before this token existed the fallback wrote no provenance at all, which is
+#: why absence has to keep meaning "unknown" rather than "measured".
+XG_SOURCE_GOALS_PROXY = "goals_proxy"
+
+#: What the detail string says when no adapter reported a provenance. Absence is
+#: not evidence of measurement, so it must not read as one.
+XG_SOURCE_UNKNOWN = "unknown"
+
+
+class XgProvenance(NamedTuple):
+    """What the football ``xg`` factor actually measured."""
+
+    #: The ``xg_source`` token, or ``XG_SOURCE_UNKNOWN`` when none was reported.
+    source: str
+    #: True only for a token in :data:`MEASURED_XG_SOURCES`.
+    measured: bool
+
+
+def resolve_xg_provenance(custom: Mapping[str, Any] | None) -> XgProvenance:
+    """Classify the provenance of ``custom["xg_home"]`` / ``["xg_away"]``.
+
+    ``custom`` is a ``FeatureSet.custom`` dict.  An absent or empty ``xg_source``
+    is reported as :data:`XG_SOURCE_UNKNOWN` and ``measured=False``: a value with
+    no stated origin is exactly the case this module exists to stop being read as
+    a measured one.
+    """
+    raw_source = custom.get("xg_source") if custom else None
+    source = str(raw_source).strip() if raw_source not in (None, "") else ""
+    if not source:
+        return XgProvenance(XG_SOURCE_UNKNOWN, False)
+    return XgProvenance(source, source in MEASURED_XG_SOURCES)

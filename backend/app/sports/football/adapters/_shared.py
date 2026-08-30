@@ -15,6 +15,7 @@ from app.kernel.domain import (
     CompetitionIdentity, SeasonIdentity, TeamIdentity,
     MatchIdentity, MatchOutcome,
 )
+from app.kernel.feature_provenance import XG_SOURCE_GOALS_PROXY
 
 # Imported at module level (rather than lazily inside fetch_team_elo) so that
 # unit tests can patch it via
@@ -542,6 +543,10 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
         gpg = home_stats.get("goals_per_game")
         if gpg is not None:
             raw.setdefault("custom", {})["xg_home"] = float(gpg)
+            # Goals scored, not expected goals. Labelled here so the engine can
+            # say so; the static/live block below overwrites both the value and
+            # this token when it has something better.
+            raw["custom"]["xg_source"] = XG_SOURCE_GOALS_PROXY
 
     if away_stats:
         form_a = _form_rate(away_stats)
@@ -554,8 +559,12 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
         gpg = away_stats.get("goals_per_game")
         if gpg is not None:
             raw.setdefault("custom", {})["xg_away"] = float(gpg)
+            raw["custom"]["xg_source"] = XG_SOURCE_GOALS_PROXY
 
     # xG: live configured pair, then static pair; otherwise preserve GPG proxy.
+    # Every branch that writes xg_home/xg_away also writes xg_source, so a value
+    # with no stated origin cannot leave this function. The engine reads the token
+    # rather than assuming the pair is measured xG.
     try:
         live_values: tuple[float, float] | None = None
         if not is_world_cup:

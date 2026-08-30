@@ -47,6 +47,7 @@ from app.kernel.engines.odds_quality import (
     describe_odds_quality,
     odds_weight_multiplier,
 )
+from app.kernel.feature_provenance import resolve_xg_provenance
 
 if TYPE_CHECKING:
     from app.kernel.factor_registry import FactorRegistry
@@ -471,7 +472,12 @@ class FootballMultiFactorEngine:
         except (TypeError, ValueError):
             alt_ok = False
 
-        # 8. xG soft (P1-F5) — custom.xg_* until true xG feed lands
+        # 8. xG soft (P1-F5) — custom.xg_* until true xG feed lands.
+        # The pair is measured expected goals only when the provider wrote it;
+        # otherwise it is a static table or the club's goals-per-game. The share
+        # formula is the same for all three, but the detail below names which one
+        # voted so neither an operator nor a user reads goals as xG.
+        xg_provenance = resolve_xg_provenance(custom)
         xg_h = custom.get("xg_home")
         xg_a = custom.get("xg_away")
         if xg_h is not None and xg_a is not None:
@@ -681,6 +687,15 @@ class FootballMultiFactorEngine:
                 detail = (
                     f"H={probs['home_win']:.3f} D={probs['draw']:.3f} "
                     f"A={probs['away_win']:.3f}; {odds_quality_note}"
+                )
+            elif fid == "xg" and ok:
+                # Same shape as HockeyEngine's attack_share "; src=" note. The
+                # factor is named xg for the registry weight key, so the origin
+                # has to be stated here or a goals proxy reads as measured xG.
+                detail = (
+                    f"H={probs['home_win']:.3f} D={probs['draw']:.3f} "
+                    f"A={probs['away_win']:.3f}; src={xg_provenance.source}"
+                    f"{'' if xg_provenance.measured else ' (not measured xG)'}"
                 )
             elif ok:
                 detail = (

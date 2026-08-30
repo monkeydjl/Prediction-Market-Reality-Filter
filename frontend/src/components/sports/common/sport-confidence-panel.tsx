@@ -10,12 +10,23 @@ function pct(v: number): string {
   return `${Math.round(v * 100)}%`;
 }
 
+/**
+ * Mirror of the backend `decision_strength`. The flat baseline is `1/n`, read
+ * off the arity: 1/3 for football's 3-way, 1/2 for the binary sports. This
+ * fallback is reachable in production — `_prediction_to_dict` does not send
+ * `betting_analysis`, so every match-detail page rendered from a *stored*
+ * prediction computes the panel locally rather than reading the API's
+ * `confidence_breakdown`. With the old hardcoded 1/3 it showed 33% for a
+ * binary coin flip that the backend scores at 0%.
+ */
 function decisionStrength(probs: Record<string, number>): number {
   const vals = Object.values(probs).filter((v) => Number.isFinite(v));
   if (vals.length === 0) return 0;
+  if (vals.length < 2) return 1;
   const total = vals.reduce((a, b) => a + b, 0) || 1;
   const peak = Math.max(...vals.map((v) => v / total));
-  return Math.max(0, Math.min(1, (peak - 1 / 3) / (2 / 3)));
+  const n = vals.length;
+  return Math.max(0, Math.min(1, (peak - 1 / n) / ((n - 1) / n)));
 }
 
 function completeness(items: ContributionItem[]): number {

@@ -1,5 +1,6 @@
 # backend/tests/test_lol_market_only_engine.py
 """Tests for LolMarketOnlyEngine — binary series winner from market probs."""
+import unittest
 from datetime import datetime, timezone
 
 from app.kernel.domain import (
@@ -91,3 +92,38 @@ class TestLolMarketOnlyEnginePredict:
         assert "away_win" in result.outcome_probabilities
         assert "draw" not in result.outcome_probabilities
         assert isinstance(result.predicted_scores, dict)
+
+
+class TestLolMarketOnlyEngineVote(unittest.TestCase):
+    """E20: a symmetric book has called nothing and must vote nothing."""
+
+    def test_a_symmetric_book_votes_nothing(self):
+        features = _make_features(custom={"mkt_home": 0.5, "mkt_away": 0.5})
+        result = LolMarketOnlyEngine().predict(features, features.match)
+        row = result.explanation[0]
+        assert row.factor == "market"
+        # available=True: the market was quoted, both sides equally.
+        assert row.available is True
+        assert row.predicted_outcome is None
+
+    def test_unnormalised_but_equal_odds_also_vote_nothing(self):
+        """The tie survives normalisation: 0.9/0.9 → p_h == 0.5 exactly."""
+        features = _make_features(custom={"mkt_home": 0.9, "mkt_away": 0.9})
+        result = LolMarketOnlyEngine().predict(features, features.match)
+        assert result.outcome_probabilities["home_win"] == 0.5
+        assert result.explanation[0].available is True
+        assert result.explanation[0].predicted_outcome is None
+
+    def test_an_asymmetric_book_still_votes(self):
+        for mh, ma, expected in [(0.6, 0.4, "home_win"), (0.4, 0.6, "away_win")]:
+            with self.subTest(mkt_home=mh):
+                features = _make_features(custom={"mkt_home": mh, "mkt_away": ma})
+                result = LolMarketOnlyEngine().predict(features, features.match)
+                assert result.explanation[0].available is True
+                assert result.explanation[0].predicted_outcome == expected
+
+    def test_no_market_is_unavailable_and_votes_nothing(self):
+        features = _make_features()
+        result = LolMarketOnlyEngine().predict(features, features.match)
+        assert result.explanation[0].available is False
+        assert result.explanation[0].predicted_outcome is None

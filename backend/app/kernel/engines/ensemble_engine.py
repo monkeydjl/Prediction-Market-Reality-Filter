@@ -15,6 +15,7 @@ from app.kernel.domain import (
     MatchIdentity,
     PredictionResult,
 )
+from app.kernel.engines.confidence import factor_vote
 from app.kernel.engines.elo_odds_engine import _probabilities_to_scores
 from app.kernel.protocols import PredictionEngine
 
@@ -117,10 +118,7 @@ class EnsembleEngine:
                     f"D={result.outcome_probabilities.get('draw', 0):.3f} "
                     f"A={result.outcome_probabilities.get('away_win', 0):.3f}"
                 ),
-                predicted_outcome=max(
-                    result.outcome_probabilities,
-                    key=result.outcome_probabilities.get,  # type: ignore[arg-type]
-                ),
+                predicted_outcome=factor_vote(result.outcome_probabilities),
             )
             for name, result, w in child_results
         ]

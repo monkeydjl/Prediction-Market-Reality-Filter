@@ -1,5 +1,30 @@
 # Changelog
 
+### Fix: the h2h factor voted "impossible" off two matches, because the sample size was computed and thrown away
+
+- **The count existed and never reached the engine.** `aggregate_h2h_meetings` returns `matches_played`; every producer runs through it; `enrich_situational_features` wrote `h2h_home_win_rate` and `h2h_draw_rate` and dropped the count. So `FootballMultiFactorEngine` could not tell a 2-match club record from a 20-match national one. This became live only with the previous entry — before the result-row backfill, `h2h_meetings_from_kernel` returned 0 meetings for every club pairing.
+- **h2h was the only one of the thirteen factors that fed a raw empirical rate straight into the blend.** Every sibling either goes through `_adjust_home_edge` — a bounded nudge away from neutral, floored — or bounds itself: the xG share cannot leave [0.25, 0.75] and the referee rate is clamped to [0.20, 0.80]. Driving all thirteen to their legal extremes on the real engine, the widest sibling vote was elo at `H=0.590`; h2h reached `H=1.000`.
+- **Measured on the live kernel DB** (read-only copy, backfilled by the real `backfill_results_from_fixtures`): of **1446** upcoming football fixtures, **512** get an h2h vote and every one of them is built on exactly **n=2** — a league pairing meets twice a season, so the rate is quantised to {0, 0.5, 1}. All 512 votes were degenerate and **168 (32.8%) had an arm at exactly 1.0**:
+
+  | rate home/draw | fixtures | vote before | vote after (n=2) |
+  |---|---|---|---|
+  | 0.0 / 0.0 | 71 | 0.000/0.000/**1.000** | 0.200/0.150/0.650 |
+  | 0.0 / 0.5 | 108 | **0.000**/0.500/0.500 | 0.200/0.400/0.400 |
+  | 0.0 / 1.0 | 26 | 0.000/**1.000**/0.000 | 0.200/0.650/0.150 |
+  | 0.5 / 0.0 | 128 | 0.500/**0.000**/0.500 | 0.450/0.150/0.400 |
+  | 0.5 / 0.5 | 108 | 0.500/0.500/**0.000** | 0.450/0.400/0.150 |
+  | 1.0 / 0.0 | 71 | **1.000**/0.000/0.000 | 0.700/0.150/0.150 |
+
+  On a real fixture (Elo 1900/1700, no odds) the factor moved `home_win` by **−0.118 to +0.082** at weight 0.05; after the fix, −0.078 to +0.022.
+- **A ramp, not a clamp, because the sample size genuinely varies.** Over the historical international corpus (49,465 rows, 336 team keys, 7,535 pairings): 26.6% of pairings have one meeting, 43.6% two or fewer — but **23.8% have eight or more and 6.8% have 20+**. A flat bound would treat those the same. `w = n / (n + k)` with `k = 2` states a rule rather than picking a threshold: *one full season of head-to-head is worth as much as the prior, and no more*. A 100%-home record votes 0.700 at n=2 and **0.924 at n=20**, so a real history still speaks.
+- **This is deliberately a different shape from `_blend_h2h_venue`'s `clamp(n / _MIN_VENUE_SAMPLES)`.** That one mixes two *empirical* estimates and should reach the venue subset outright once it is thick enough; here there is one estimate and the question is how far to trust it at all, so it must never fully discard the prior. Both constants and the reason are pinned by a test. Composition order is blend-then-shrink: the blend chooses *which* rate, the shrinkage decides how far to trust it.
+- **The floors are now one declaration.** `(0.01, 0.05, 0.01)` were inline literals inside `_adjust_home_edge`, which is exactly why the h2h vote had no floor — it was the one voter that did not route through that function. Extracted to `_VOTE_FLOORS` + `_floored_3way`, and a test raises the shared table and asserts **both** paths move with it.
+- **An unmeasured sample size is not evidence of a large one.** With the floors alone a 100%-home record still voted `H=0.943`, more extreme than any sibling can reach, so absent/zero/negative/unparseable `h2h_matches` falls to `_UNKNOWN_H2H_MATCHES = 1.0` rather than full trust. `n=0` is the trap worth naming: honouring it would give `w = 0` and vote *exactly neutral*, quietly turning "unknown" into "no opinion".
+- **No existing test pinned any of this.** The engine suite's h2h fixture is `0.45 / 0.28`, an interior point that is never degenerate, and the four venue-split tests all assert *relative* order, which monotone shrinkage preserves. 484 football/adapter tests passed against the defect, and still pass — the venue mechanism is untouched.
+- `backend/tests/test_football_h2h_sample_size.py` — 35 tests / 38 subtests. The census reads each factor's vote out of its own `ContributionItem.detail` (`H=x D=y A=z`), so it needs no mock and no spy: it parses what an operator sees. The production-door class writes no `h2h_matches` itself — it seeds two finished fixtures plus result rows and lets the real `h2h_meetings_from_kernel` → `aggregate_h2h_meetings` → `enrich_situational_features` chain produce the whole payload.
+- **11 defect injections, all verified red for the intended reason**, files restored byte-identically (checked against `git diff --numstat`, not the driver's own claim). Complementarity checked both ways: the engine-side injection reddens 7 of the 8 classes and leaves exactly the enricher-write class green, while the enricher-side injection reddens **only** the write-partition and production-door classes — every other class supplies the key itself and is blind to an enricher regression by construction.
+- Unchanged and reported, not silently fixed: `world_cup_gbm_features` recomputes `h2h_draw_rate` from the same dict with its own hardcoded 0.3/0.4 fallbacks and no sample-size guard. It is a separate engine on a separate path and needs its own measurement.
+
 ### Fix: 1181 finished football matches had real scores and no result row, so nothing could settle
 
 - **Football wrote match scores onto the fixture row and never into `kernel_match_results`.** `save_fixture` set `KernelMatchFixture.home_score`/`away_score` and stopped there. The three binary-sport adapters write **both** tables in their own save paths; football wrote one of the two. Measured on the live kernel DB (read-only URI):

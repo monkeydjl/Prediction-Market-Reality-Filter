@@ -672,6 +672,16 @@ def enrich_situational_features(raw: dict, match: MatchIdentity) -> None:
         h2h_data_source = h2h.get("data_source")
         if h2h_data_source is not None:
             raw.setdefault("custom", {})["h2h_source"] = str(h2h_data_source)
+        # Sample size behind the two rates above (P1-F4). Every producer runs
+        # through aggregate_h2h_meetings and so returns matches_played, but it
+        # was dropped here -- leaving the engine unable to tell a 2-match club
+        # record from a 20-match national one, and voting a 1.0 arm off two
+        # matches on 168 of 512 live fixtures. Written to custom for the same
+        # reason as h2h_home_venue_matches below: the TeamFeatures contract and
+        # its type-sync CI stay untouched.
+        h2h_played = h2h.get("matches_played")
+        if h2h_played is not None:
+            raw.setdefault("custom", {})["h2h_matches"] = float(int(h2h_played))
         # Same rates over the subset the current home team hosted (P1-F4).
         # Written to custom rather than TeamFeatures to keep the frozen
         # domain contract - and its type-sync CI - untouched. Unconditional:

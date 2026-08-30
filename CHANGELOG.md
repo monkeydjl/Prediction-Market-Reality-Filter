@@ -1,5 +1,30 @@
 # Changelog
 
+### Add: 584 fixtures kicked off and never got a result, and nothing reported it
+
+- **A fixture with no `kernel_match_results` row cannot settle a prediction.** `fetch_outcome` joins that table, so no result row means no settlement, no calibration, no `direction_accuracy`, no engine score — silently, forever. The previous entry fixed the **writer** half for football (scores landed on the fixture row and never in the result table). This is the other half: the schedule sync stalls, the feed drops a game, or a fixture reaches `status="finished"` carrying no score at all, and the kickoff simply passes. Nothing anywhere reported that state.
+- **Measured on the live kernel DB before the module existed** — **584** fixtures past kickoff with no result row:
+
+  | competition | past-due, no result | oldest |
+  |---|---|---|
+  | mlb | 511 | 699d |
+  | laliga | 25 | 30d |
+  | ligue1 | 17 | 30d |
+  | epl | 15 | 30d |
+  | seriea | 15 | 30d |
+  | nhl | 1 | 2d |
+
+  **96 were more than 30 days overdue.** The oldest, `mlb-746577` at **699 days**, sits at `status="finished"` with **no score**, which is what makes it permanent: `backfill_results_from_fixtures` filters on scores being present, so it skips that row on every run and always will. **One real prediction (engine `baseball`) is already riding on a stale fixture**, so the cost is not hypothetical.
+- **Two halves that need different operator actions, so they are counted separately.** `scored_but_unsettled` is the backfillable subset — run the backfill and it settles. The rest needs the feed. Collapsing them into one number would send the operator to the wrong command; the 699-day case is precisely the one a single total would hide inside "just run the backfill".
+- **A competition that goes silent stays visible.** Every code in `BACKFILLABLE_COMPETITIONS` is named in the response even when it holds zero fixtures, and an empty one reports `no_data` — never `ok`. A league absent from the response is indistinguishable from a healthy one, and "we never had anything to check" is not "we checked and it was clean" (the same absence convention the optional discovery sources already use). Today that matters: bundesliga and ucl have **no 2026-27 fixtures at all**, which under an `ok` default would read as clean.
+- **Age buckets, because "584 overdue" and "584 overdue by a day" are different situations.** `under_1d / 1_2d / 3_7d / 8_30d / over_30d`, last one open-ended, and `oldest_overdue_days` reported both overall and per competition.
+- `GET /api/quality-metrics/fixture-freshness`, read-only and unauthenticated like the rest of that module, returning **aggregate counts only** — no match ids, no team names, no kickoff timestamps. A test asserts the serialized response contains neither a match id nor a `-home`/`-away` team name, so the footing is pinned rather than intended.
+- **A real resource leak, found by the tests rather than reasoned about.** `kernel_db.get_kernel_session()` hands out a **new** `Session` per call and `close_kernel_db` only disposes the engine, so an unclosed session keeps a connection checked out — on Windows that surfaces as `PermissionError [WinError 32]` at temp-dir cleanup. The queries now sit in `try/finally: session.close()`, matching `kernel_db.get_latest_prediction`.
+- `backend/tests/test_fixture_freshness.py` — 23 tests / 19 subtests. The route class mounts only the `quality_metrics` router on a bare `FastAPI()`: `app.main.app`'s lifespan re-initialises the kernel DB from settings, which would silently move the read off the temp DB the assertions are about. **14 defect injections, all verified red for the intended reason**, restoration checked byte-identically against `git diff --numstat`.
+- **That bare-app mount is also blind to the failure this repo keeps rediscovering** — a working service with no way in. Every other test builds its own `FastAPI()`, so all of them would stay green if the router were never included in `app.main`. One test asserts the path off the production route table (not through a client, so the lifespan never runs), and commenting out the `include_router` line reddens **exactly** that one test while the other 22 pass.
+- **Two of those injections started green and the tests were the thing that needed fixing.** `oldest_overdue_days` is the only aggregate here that is not a count, and nothing distinguished "the oldest" from "whichever row the scan reached first" — every existing case had at most one overdue fixture per competition. The pair of tests added for it seed the same three ages youngest-first and oldest-first, so no fixed-position rule can report the right answer; either test alone leaves one shortcut looking correct.
+- Reported, not fixed, because each needs its own decision: laliga and seriea have **no 2025-26 history ingested** (380 scheduled rows each, only season 2026-27); the static per-team xG table is 92% unreachable against live names (95 of 106 keys match nothing), and widening the lookup by stripping club affixes would move 188 fixtures off a measured proxy onto a hand-typed constant while opening a wrong-hit channel — `Paris FC` canonicalizes to `paris`, harmless today and a silent mis-attribution the moment anyone adds `paris` as a PSG alias.
+
 ### Fix: the h2h factor voted "impossible" off two matches, because the sample size was computed and thrown away
 
 - **The count existed and never reached the engine.** `aggregate_h2h_meetings` returns `matches_played`; every producer runs through it; `enrich_situational_features` wrote `h2h_home_win_rate` and `h2h_draw_rate` and dropped the count. So `FootballMultiFactorEngine` could not tell a 2-match club record from a 20-match national one. This became live only with the previous entry — before the result-row backfill, `h2h_meetings_from_kernel` returned 0 meetings for every club pairing.

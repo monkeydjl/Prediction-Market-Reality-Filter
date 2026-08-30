@@ -24,6 +24,14 @@ from pathlib import Path
 
 import numpy as np
 
+# Imported, not re-declared: a backtest that measures the model on a window the
+# model was not fitted with measures nothing useful, and three separate copies of
+# "10" is how the serving path came to use 20.
+from app.services.world_cup_engines.world_cup_gbm_features import (
+    H2H_WINDOW,
+    RECENT_WINDOW,
+)
+
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -32,8 +40,6 @@ CSV_PATH = Path(__file__).resolve().parents[1] / "data" / "international_results
 
 ELO_INIT = 1500.0
 ELO_K = 30.0
-RECENT_WINDOW = 10
-H2H_WINDOW = 10
 
 
 def _brier(home_p, draw_p, away_p, actual):

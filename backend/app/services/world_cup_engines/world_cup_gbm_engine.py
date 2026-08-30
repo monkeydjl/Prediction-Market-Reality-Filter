@@ -18,6 +18,7 @@ import json
 import logging
 import math
 import os
+from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from app.services.world_cup_engines.world_cup_rule_engine import (
 )
 from app.services.world_cup_engines.world_cup_gbm_features import (
     derive_gbm_features,
+    resolve_windows,
 )
 from app.services.world_cup_historical_results import (
     get_historical_team_stats,
@@ -114,6 +116,7 @@ def predict_match_gbm(
     is_knockout: bool = False,
     is_world_cup: bool = True,
     is_neutral: bool = True,
+    before_date: datetime | date | str | None = None,
 ) -> dict[str, Any]:
     """Predict a match using the GBM engine.
 
@@ -127,6 +130,12 @@ def predict_match_gbm(
                      Dixon-Coles rho knockout factor)
         is_world_cup: If True, set is_world_cup feature to 1.0
         is_neutral: If True, set is_neutral feature to 1.0 (World Cup default)
+        before_date: the fixture's kickoff. Passed to both historical producers
+            so the feature vector is built from matches played *before* the
+            fixture, the way the training set was. Omitting it means "use
+            everything in the CSV", which is right for a fixture that has not
+            been played and wrong for one that has -- so every caller that knows
+            the kickoff must pass it.
 
     Returns:
         Prediction dict with the standard schema:
@@ -140,10 +149,20 @@ def predict_match_gbm(
     """
     home_model, away_model, meta = _load_models()
 
-    # Derive features (uses historical stats from CSV)
-    home_stats = get_historical_team_stats(home_team)
-    away_stats = get_historical_team_stats(away_team)
-    h2h = get_historical_h2h(home_team, away_team)
+    # Derive features (uses historical stats from CSV). The windows come from the
+    # artifact rather than from these functions' own defaults: get_historical_h2h
+    # defaults to 20 meetings for its other consumers, while the model was fitted
+    # on 10, and nothing here used to read the windows the artifact records.
+    recent_window, h2h_window = resolve_windows(meta)
+    home_stats = get_historical_team_stats(
+        home_team, before_date=before_date, max_matches=recent_window,
+    )
+    away_stats = get_historical_team_stats(
+        away_team, before_date=before_date, max_matches=recent_window,
+    )
+    h2h = get_historical_h2h(
+        home_team, away_team, before_date=before_date, max_matches=h2h_window,
+    )
 
     if home_model is not None and away_model is not None:
         features = derive_gbm_features(

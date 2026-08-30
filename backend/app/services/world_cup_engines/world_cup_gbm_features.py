@@ -6,7 +6,19 @@ This module is shared between:
 
 Keeping the feature derivation in one place prevents train/serve skew.
 
-Features (all derivable from pre-match data, no label leakage):
+**The derivation was shared; the windows and the date cutoff were not.** Both
+callers pass ``home_stats`` / ``away_stats`` / ``h2h`` that they built
+themselves, so this module could only guarantee the *order* of the vector.
+Training built h2h over the last 10 meetings before the fixture date; serving
+called ``get_historical_h2h`` with no arguments, which defaults to **20** and to
+"the most recent rows in the CSV" rather than "the rows before this fixture".
+Hence :data:`RECENT_WINDOW`, :data:`H2H_WINDOW` and :func:`resolve_windows`
+below: the windows are declared here, the training scripts import them, and the
+serving path resolves them from the artifact's own metadata so a model trained
+with a different window is still served on its own distribution.
+
+Features (all derivable from pre-match data, no label leakage -- which requires
+the caller to pass the fixture date; see :func:`resolve_windows`):
     0. elo_home
     1. elo_away
     2. elo_diff
@@ -28,7 +40,21 @@ Features (all derivable from pre-match data, no label leakage):
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+#: Number of recent matches behind the form/goals features. Declared here rather
+#: than in the training script so the serving path can reach it: it is part of
+#: the feature definition, not of one caller's configuration.
+RECENT_WINDOW = 10
+
+#: Number of head-to-head meetings behind the h2h features. Deliberately *not*
+#: ``get_historical_h2h``'s own default of 20 -- that default serves the other
+#: consumers of that function, and the GBM vector must use whatever window the
+#: model was fitted with.
+H2H_WINDOW = 10
 
 # Feature names in canonical order. MUST match the order used at training time.
 FEATURE_NAMES: list[str] = [
@@ -50,6 +76,55 @@ FEATURE_NAMES: list[str] = [
     "days_since_last_match_home",
     "days_since_last_match_away",
 ]
+
+
+def resolve_windows(meta: dict[str, Any] | None) -> tuple[int, int]:
+    """Return ``(recent_window, h2h_window)`` for a loaded model artifact.
+
+    The artifact wins. ``train_gbm_model.py`` records both windows under
+    ``training_config``, and the model was fitted with those values, so serving
+    has to honour them even if the constants above have since moved -- otherwise
+    retraining with a different window silently puts the serving path
+    off-distribution, which is the defect this function exists to prevent.
+
+    A missing or unusable value falls back to the module constant, which is what
+    the training script itself imports, so an artifact that declares nothing is
+    served with the windows it was almost certainly built with.
+
+    Args:
+        meta: parsed ``gbm_features.json``, or ``None``/``{}`` when absent.
+
+    Returns:
+        The two window sizes, each a positive int.
+    """
+    config = (meta or {}).get("training_config")
+    if not isinstance(config, dict):
+        return RECENT_WINDOW, H2H_WINDOW
+    return (
+        _positive_int(config.get("recent_window"), RECENT_WINDOW, "recent_window"),
+        _positive_int(config.get("h2h_window"), H2H_WINDOW, "h2h_window"),
+    )
+
+
+def _positive_int(value: Any, fallback: int, label: str) -> int:
+    """Coerce a declared window, falling back loudly rather than silently."""
+    if value is None:
+        return fallback
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            "GBM artifact declares a non-numeric %s (%r); using %d",
+            label, value, fallback,
+        )
+        return fallback
+    if parsed <= 0:
+        logger.warning(
+            "GBM artifact declares %s=%d, which cannot select any match; using %d",
+            label, parsed, fallback,
+        )
+        return fallback
+    return parsed
 
 
 def derive_gbm_features(

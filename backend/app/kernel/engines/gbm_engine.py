@@ -56,6 +56,10 @@ class GbmEngine:
                 is_knockout=is_knockout,
                 is_world_cup=is_world_cup,
                 is_neutral=is_neutral,
+                # The identity already carries the kickoff; not forwarding it
+                # builds the feature vector from matches played after the
+                # fixture whenever a finished match is re-predicted.
+                before_date=match.kickoff_utc,
             )
         except Exception:
             return self._neutral(features)

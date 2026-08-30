@@ -131,6 +131,20 @@ def _normalize_3way(probs: dict[str, float]) -> dict[str, float]:
     }
 
 
+# Per-outcome floors every factor vote is held above before normalising, so no
+# single factor can assert that an outcome is impossible. These used to be
+# inline literals inside ``_adjust_home_edge``; the h2h factor was the one voter
+# that did not route through it and so had no floor at all (P1-F4).
+_VOTE_FLOORS = {"home_win": 0.01, "draw": 0.05, "away_win": 0.01}
+
+
+def _floored_3way(probs: dict[str, float]) -> dict[str, float]:
+    """Apply :data:`_VOTE_FLOORS`, then normalise."""
+    return _normalize_3way({
+        key: max(probs[key], _VOTE_FLOORS[key]) for key in _VOTE_FLOORS
+    })
+
+
 _MIN_VENUE_SAMPLES = 4.0
 _MERGED_CONGEST_MATCHES = 2
 
@@ -217,6 +231,84 @@ def _blend_h2h_venue(
     )
 
 
+# Pseudo-matches the neutral prior is worth when shrinking the h2h rates
+# (P1-F4). A league pairing's complete same-season history is exactly two
+# matches -- home and away -- so 2.0 states "one full season of head-to-head
+# counts as much as the prior, and no more". Measured: of the 512 upcoming club
+# fixtures that get an h2h vote at all, every single one is built on exactly
+# n=2, while national pairings in the historical corpus run 1 to 25+, so the
+# ramp has to discriminate rather than clamp.
+_H2H_PRIOR_MATCHES = 2.0
+
+# Sample size assumed when the rates arrive with no ``h2h_matches`` beside them.
+# The enricher writes both in the same block, so in production this is only
+# reachable from a hand-built feature set -- but an *unmeasured* sample size is
+# not evidence of a large one, so it gets the weakest weight the ramp can
+# express rather than full trust. Without this the floors alone still let a
+# 100%-home record vote H=0.943, more extreme than any other factor can reach.
+_UNKNOWN_H2H_MATCHES = 1.0
+
+
+def _h2h_sample_size(custom: dict) -> float | None:
+    """Total meetings behind the h2h rates, or None when unknown.
+
+    ``aggregate_h2h_meetings`` computes ``matches_played`` and every producer
+    returns it, but the enricher used to drop it -- so the engine could not tell
+    a 2-match record from a 20-match one. Written to ``custom`` rather than
+    ``TeamFeatures`` to keep the frozen domain contract, and its type-sync CI,
+    untouched (same reasoning as ``h2h_home_venue_matches``).
+    """
+    value = custom.get("h2h_matches")
+    if value is None:
+        return None
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def _shrink_h2h(
+    h2h_home: float,
+    h2h_draw: float,
+    custom: dict,
+) -> tuple[float, float, float]:
+    """Shrink the h2h rates toward neutral by their own sample size (P1-F4).
+
+    The h2h factor was the only one of the thirteen that voted a raw empirical
+    rate straight into the blend. Every sibling either goes through
+    ``_adjust_home_edge`` -- a bounded nudge away from neutral, floored -- or
+    bounds itself: the xG share cannot leave [0.25, 0.75] and the referee rate
+    is clamped to [0.20, 0.80]. So h2h alone could vote that an outcome is
+    impossible, and on live data it did: **168 of 512** upcoming club fixtures
+    had an arm at exactly 1.0 off two matches, moving ``home_win`` by up to
+    -0.118 at weight 0.05.
+
+    ``w = n / (n + k)`` is shrinkage toward a prior, not a cliff: it has no
+    threshold to sit just under and no cap that discards a rich sample. A
+    100%-home record votes 0.700 at n=2 and 0.924 at n=20, so a real history
+    still speaks. This differs deliberately from ``_blend_h2h_venue``'s
+    ``clamp(n / _MIN_VENUE_SAMPLES)``, which mixes two *empirical* estimates and
+    should reach the subset outright once it is thick enough; here there is one
+    estimate and the question is how far to trust it at all.
+
+    An absent or unusable ``h2h_matches`` falls to
+    :data:`_UNKNOWN_H2H_MATCHES`, not to full trust: the floors alone would
+    still allow H=0.943.
+    """
+    h2h_away = max(0.0, 1.0 - h2h_home - h2h_draw)
+    raw = {"home_win": h2h_home, "draw": h2h_draw, "away_win": h2h_away}
+    n = _h2h_sample_size(custom)
+    if n is None:
+        n = _UNKNOWN_H2H_MATCHES
+    w = n / (n + _H2H_PRIOR_MATCHES)
+    vote = _floored_3way({
+        key: _NEUTRAL_3WAY[key] + (raw[key] - _NEUTRAL_3WAY[key]) * w
+        for key in raw
+    })
+    return vote["home_win"], vote["draw"], vote["away_win"]
+
+
 def _adjust_home_edge(
     base: dict[str, float],
     home_delta: float,
@@ -229,10 +321,10 @@ def _adjust_home_edge(
     home = base["home_win"] + home_delta
     away = base["away_win"] - home_delta * 0.7
     draw = base["draw"] - abs(home_delta) * 0.3
-    return _normalize_3way({
-        "home_win": max(home, 0.01),
-        "draw": max(draw, 0.05),
-        "away_win": max(away, 0.01),
+    return _floored_3way({
+        "home_win": home,
+        "draw": draw,
+        "away_win": away,
     })
 
 
@@ -409,14 +501,19 @@ class FootballMultiFactorEngine:
         h2h_home = features.team.h2h_home_win_rate
         h2h_draw = features.team.h2h_draw_rate
         if h2h_home is not None and h2h_draw is not None:
+            # Venue blend first -- it chooses *which* empirical rate to vote --
+            # then shrink by the total sample size, which decides how far that
+            # rate is trusted at all (P1-F4).
             h2h_home, h2h_draw = _blend_h2h_venue(
                 float(h2h_home), float(h2h_draw), custom,
             )
-            h2h_away = max(0.0, 1.0 - h2h_home - h2h_draw)
+            h2h_home, h2h_draw, h2h_away = _shrink_h2h(
+                float(h2h_home), float(h2h_draw), custom,
+            )
             h2h_probs = _normalize_3way({
-                "home_win": float(h2h_home),
-                "draw": float(h2h_draw),
-                "away_win": float(h2h_away),
+                "home_win": h2h_home,
+                "draw": h2h_draw,
+                "away_win": h2h_away,
             })
             factors.append(("h2h", h2h_probs, weights["h2h"], True))
         else:

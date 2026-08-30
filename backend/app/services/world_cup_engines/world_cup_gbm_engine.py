@@ -28,6 +28,7 @@ from app.services.world_cup_engines.world_cup_rule_engine import (
 )
 from app.services.world_cup_engines.world_cup_gbm_features import (
     derive_gbm_features,
+    feature_identity_problem,
     resolve_windows,
 )
 from app.services.world_cup_historical_results import (
@@ -77,6 +78,22 @@ def _load_models() -> tuple[Any, Any, dict]:
         meta = {}
         if _META_PATH.exists():
             meta = json.loads(_META_PATH.read_text(encoding="utf-8"))
+
+        problem = feature_identity_problem(meta, home_model, away_model)
+        if problem is not None:
+            # Fail closed onto the Elo baseline. `derive_gbm_features` returns a
+            # bare positional list, so a booster whose columns are not the ones
+            # this code builds does not error -- it returns confident nonsense.
+            # The fallback is labelled `gbm_fallback_elo` with
+            # `model_loaded=False`, which is an honest answer; a wrong-column xG
+            # is not.
+            logger.error(
+                "GBM feature identity check failed (%s); refusing the models and "
+                "falling back to the Elo baseline. Re-run "
+                "`python scripts/train_gbm_model.py` after changing FEATURE_NAMES.",
+                problem,
+            )
+            return None, None, meta
 
         logger.info("Loaded GBM models (home: %s, away: %s)",
                     _HOME_MODEL_PATH.name, _AWAY_MODEL_PATH.name)

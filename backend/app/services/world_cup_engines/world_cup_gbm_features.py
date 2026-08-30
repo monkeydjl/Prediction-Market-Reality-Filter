@@ -78,6 +78,64 @@ FEATURE_NAMES: list[str] = [
 ]
 
 
+def feature_identity_problem(
+    meta: dict[str, Any] | None,
+    *boosters: Any,
+) -> str | None:
+    """Describe why a loaded artifact's features disagree with this module.
+
+    Returns ``None`` when everything agrees. The comment above
+    :data:`FEATURE_NAMES` has always said the order MUST match training, and
+    nothing checked it: :func:`derive_gbm_features` returns a bare positional
+    list, so a booster fitted on a different order does not raise -- it returns
+    a confident number computed from the wrong columns. LightGBM only validates
+    names when handed a DataFrame, and both call sites pass a list.
+
+    Three things are compared, in increasing order of what they can catch:
+
+    * the artifact's ``feature_names`` against :data:`FEATURE_NAMES` -- the only
+      check that can see a **reordering**, which is the silent case;
+    * each booster's ``num_feature()`` against the vector length -- catches an
+      added or removed feature even when the artifact is absent;
+    * nothing about the boosters' *names*: ``train_gbm_model.py`` passed
+      ``feature_name`` only for the home model, so the shipped away booster
+      carries ``Column_0..16``. Names it never stored cannot be evidence, and
+      the column *order* is what matters. See :data:`FEATURE_NAMES`.
+    """
+    expected = list(FEATURE_NAMES)
+
+    declared = (meta or {}).get("feature_names")
+    if isinstance(declared, list) and declared:
+        declared_names = [str(name) for name in declared]
+        if declared_names != expected:
+            missing = [name for name in expected if name not in declared_names]
+            unexpected = [name for name in declared_names if name not in expected]
+            if missing or unexpected:
+                return (
+                    f"artifact declares {len(declared_names)} features, code expects "
+                    f"{len(expected)}; missing={missing} unexpected={unexpected}"
+                )
+            return (
+                "artifact declares the same features in a different order; "
+                f"artifact[:3]={declared_names[:3]} code[:3]={expected[:3]}"
+            )
+
+    for index, booster in enumerate(boosters):
+        if booster is None:
+            continue
+        try:
+            width = int(booster.num_feature())
+        except Exception:  # pragma: no cover - a booster that cannot report its width
+            return f"booster {index} could not report num_feature()"
+        if width != len(expected):
+            return (
+                f"booster {index} expects {width} features, code builds "
+                f"{len(expected)}"
+            )
+
+    return None
+
+
 def resolve_windows(meta: dict[str, Any] | None) -> tuple[int, int]:
     """Return ``(recent_window, h2h_window)`` for a loaded model artifact.
 

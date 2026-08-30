@@ -718,6 +718,28 @@ def get_fixture_freshness() -> dict[str, Any]:
     return fixture_freshness_summary()
 
 
+@router.get("/quality-metrics/model-artifacts")
+def get_model_artifact_health() -> dict[str, Any]:
+    """Health of the three fitted model artifacts. Read-only (E17).
+
+    Five production engines read a coefficient out of one of these files and
+    nothing reported the state of any of them: the shipped Dixon-Coles fit carries
+    ``optimizer_success: false`` while its ``rho`` moves every served draw
+    probability by 1.3-2.1 points. Reports fit age, sample count, convergence,
+    the served coefficients and -- for GBM -- whether the shipped boosters still
+    agree with the feature vector the code builds.
+
+    The coefficients are committed model parameters, not secrets. Per-team
+    attack/defense vectors are deliberately not returned, which keeps this on the
+    same unauthenticated footing as the rest of this module.
+    """
+    from app.services.model_artifact_health_service import (
+        collect_model_artifact_health,
+    )
+
+    return collect_model_artifact_health()
+
+
 # Exposed at import time so test runners can wire it without going through
 # the FastAPI app. Used by tests/test_quality_metrics.py.
 __all__ = ["router"]

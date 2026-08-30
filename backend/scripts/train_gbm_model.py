@@ -23,7 +23,6 @@ import csv
 import json
 import logging
 import math
-import os
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -34,6 +33,7 @@ import lightgbm as lgb
 # definition, and while they lived in this script the serving path could not read
 # them and quietly used get_historical_h2h's own default of 20 instead of 10.
 from app.services.world_cup_engines.world_cup_gbm_features import (
+    FEATURE_NAMES,
     H2H_WINDOW,
     RECENT_WINDOW,
 )
@@ -330,15 +330,12 @@ def train_gbm() -> dict:
 
     # Train home goals model
     logger.info("Training home goals model...")
-    train_data_h = lgb.Dataset(X_train, label=yh_train, feature_name=[
-        "elo_home", "elo_away", "elo_diff", "elo_diff_abs",
-        "home_form_winrate", "away_form_winrate",
-        "home_goals_scored_avg", "away_goals_scored_avg",
-        "home_goals_conceded_avg", "away_goals_conceded_avg",
-        "h2h_home_winrate", "h2h_draw_rate", "h2h_avg_goal_diff",
-        "is_neutral", "is_world_cup",
-        "days_since_last_match_home", "days_since_last_match_away",
-    ])
+    # feature_name comes from the shared constant, not a hand-typed copy: the
+    # names must match the positional order `derive_gbm_features` builds at serve
+    # time, and a third copy of the list is a third chance to reorder one of them.
+    train_data_h = lgb.Dataset(
+        X_train, label=yh_train, feature_name=list(FEATURE_NAMES),
+    )
     val_data_h = lgb.Dataset(X_val, label=yh_val, reference=train_data_h)
     home_model = lgb.train(
         params, train_data_h,
@@ -352,7 +349,13 @@ def train_gbm() -> dict:
 
     # Train away goals model
     logger.info("Training away goals model...")
-    train_data_a = lgb.Dataset(X_train, label=ya_train)
+    # The away set declared no feature_name, so the shipped `gbm_away_model.txt`
+    # carries `Column_0..Column_16`. Harmless only because the column order
+    # happened to match; it also made the away feature-importance log below label
+    # away gains with the *home* set's names. Declaring it closes both.
+    train_data_a = lgb.Dataset(
+        X_train, label=ya_train, feature_name=list(FEATURE_NAMES),
+    )
     val_data_a = lgb.Dataset(X_val, label=ya_val, reference=train_data_a)
     away_model = lgb.train(
         params, train_data_a,
@@ -369,7 +372,7 @@ def train_gbm() -> dict:
                 sorted(zip(train_data_h.feature_name, home_model.feature_importance("gain")),
                        key=lambda x: -x[1])[:5])
     logger.info("Away model top features: %s",
-                sorted(zip(train_data_h.feature_name, away_model.feature_importance("gain")),
+                sorted(zip(train_data_a.feature_name, away_model.feature_importance("gain")),
                        key=lambda x: -x[1])[:5])
 
     # Save models
@@ -381,15 +384,10 @@ def train_gbm() -> dict:
 
     # Save metadata
     meta = {
-        "feature_names": [
-            "elo_home", "elo_away", "elo_diff", "elo_diff_abs",
-            "home_form_winrate", "away_form_winrate",
-            "home_goals_scored_avg", "away_goals_scored_avg",
-            "home_goals_conceded_avg", "away_goals_conceded_avg",
-            "h2h_home_winrate", "h2h_draw_rate", "h2h_avg_goal_diff",
-            "is_neutral", "is_world_cup",
-            "days_since_last_match_home", "days_since_last_match_away",
-        ],
+        # From the shared constant: this list is what the serve-time identity
+        # check compares against, so a hand-typed copy here could certify an
+        # artifact whose columns are not the ones the model was trained on.
+        "feature_names": list(FEATURE_NAMES),
         "lightgbm_version": lgb.__version__,
         "training_config": {
             "since_year": SINCE_YEAR,

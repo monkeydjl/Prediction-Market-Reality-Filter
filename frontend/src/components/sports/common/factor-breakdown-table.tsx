@@ -19,7 +19,10 @@ const FACTOR_NAME_ZH: Record<string, string> = {
   bullpen: "牛棚",
   travel: "旅行/时区",
   weather: "天气",
-  xg: "期望进球 (xG)",
+  // Not always measured xG: the same factor carries the live provider's xG/90, a
+  // static table, or the club's goals-per-game. The row's detail names which one
+  // ("src=..."), so the label must not assert expected goals on its own.
+  xg: "进攻强度 (xG / 进球代理)",
   market_value: "球队身价",
   possession: "控球/射门",
   attack_share: "进攻份额",

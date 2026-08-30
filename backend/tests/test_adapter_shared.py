@@ -1392,7 +1392,10 @@ class TestStaticXgOverwrite:
 
         assert raw["custom"].get("xg_home") == pytest.approx(1.25)
         assert raw["custom"].get("xg_away") == pytest.approx(1.25)
-        assert "xg_source" not in raw["custom"]
+        # These are goals per game, not xG. This assertion used to require the
+        # *absence* of a provenance token, which is what let the engine read the
+        # pair as measured expected goals.
+        assert raw["custom"]["xg_source"] == "goals_proxy"
 
     def test_both_unknown_no_static_source(self):
         match = MatchIdentity(
@@ -1550,7 +1553,9 @@ class TestLiveXgOverwrite:
 
         assert raw["custom"]["xg_home"] == pytest.approx(1.25)
         assert raw["custom"]["xg_away"] == pytest.approx(1.25)
-        assert "xg_source" not in raw["custom"]
+        # A half-available live provider plus a one-sided static hit falls all the
+        # way back to goals per game, which now says so.
+        assert raw["custom"]["xg_source"] == "goals_proxy"
 
     def test_world_cup_does_not_call_live_xg_provider(self):
         world_cup = CompetitionIdentity(

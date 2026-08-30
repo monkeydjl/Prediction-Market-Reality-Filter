@@ -67,9 +67,25 @@ async def backfill_and_seed(
     are empty. Idempotent.
     """
     _check_enabled()
+    from app.services.historical_data_ingestor import (
+        BACKFILLABLE_COMPETITIONS,
+        ELO_SEEDABLE_COMPETITIONS,
+    )
+
     sport = None if request.sport == "all" else request.sport
-    if sport is not None and sport not in {"nba", "mlb", "nhl"}:
-        raise HTTPException(status_code=400, detail=f"Unsupported sport: {sport}")
+    # Two scopes, because P1-E9 widened one of them and not the other: football
+    # results may be copied from fixtures, but football Elo may not be replayed
+    # (draws break the binary replay, and ClubElo already supplies measured
+    # ratings). Validated per requested step so that asking for a football seed
+    # is a 400 rather than a silent no-op.
+    if sport is not None:
+        if request.backfill and sport not in BACKFILLABLE_COMPETITIONS:
+            raise HTTPException(status_code=400, detail=f"Unsupported sport: {sport}")
+        if request.seed_elo and sport not in ELO_SEEDABLE_COMPETITIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Elo seeding is binary-only; unsupported sport: {sport}",
+            )
     ingestor = HistoricalDataIngestor()
     out: dict = {}
     if request.backfill:

@@ -5,8 +5,15 @@ Usage (from backend/):
   python scripts/seed_sport_elo.py --all
   python scripts/seed_sport_elo.py --sport nba --backfill-only
   python scripts/seed_sport_elo.py --sport mlb --seed-only
+  python scripts/seed_sport_elo.py --sport epl --backfill-only
 
 Requires kernel DB with fixtures already synced (schedule sync).
+
+Football competitions (epl / laliga / seriea / bundesliga / ligue1 / ucl) are
+backfill-only: they were added in P1-E9 because their fixtures carried scores
+that no kernel_match_results row ever received. Elo seeding stays binary-only --
+the replay scores a game as home_score > away_score, and football Elo already
+comes from ClubElo as a measured source.
 """
 from __future__ import annotations
 
@@ -24,11 +31,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Backfill match results + seed self-computed Elo",
     )
+    # Choices come from the ingestor's declaration so the CLI cannot drift from
+    # what the backfill actually accepts. Football codes are backfill-only:
+    # --seed-only against one of them is refused by seed_elo_ratings.
+    from app.services.historical_data_ingestor import BACKFILLABLE_COMPETITIONS
+
     parser.add_argument(
         "--sport",
         default="all",
-        choices=["nba", "mlb", "nhl", "all"],
-        help="Sport scope (default: all)",
+        choices=[*sorted(BACKFILLABLE_COMPETITIONS), "all"],
+        help=(
+            "Competition scope (default: all). Football codes support "
+            "--backfill-only; Elo seeding stays binary-only."
+        ),
     )
     parser.add_argument(
         "--backfill-only",

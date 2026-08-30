@@ -1174,11 +1174,25 @@ def build_match_outcome(result: Any) -> MatchOutcome | None:
 
 
 def save_fixture(parsed: dict, competition: str, season: str) -> None:
-    """Upsert a parsed fixture into kernel_match_fixtures.
+    """Upsert a parsed fixture into kernel_match_fixtures, plus its result row.
 
     parsed: dict from football_data_client.parse_fixture()
+
+    The result row is what P1-E9 added. Football wrote scores onto the fixture
+    row only, while ``fetch_outcome``, ``team_form_from_kernel`` and
+    ``h2h_meetings_from_kernel`` all read ``kernel_match_results`` -- so on the
+    live kernel DB 1181 finished club fixtures held real scores against zero
+    result rows, and settlement, club form, rest, the xG goals proxy and h2h
+    were all unreachable. The three binary-sport adapters already write both
+    tables in their own save paths; this is the same write, with the draw token
+    football needs.
     """
-    from app.kernel.kernel_db import get_kernel_session, KernelMatchFixture
+    from app.kernel.kernel_db import (
+        get_kernel_session,
+        KernelMatchFixture,
+        KernelMatchResult,
+    )
+    from app.sports._shared.match_outcome import outcome_from_scores
     session = get_kernel_session()
     try:
         now = datetime.now(timezone.utc)
@@ -1212,6 +1226,36 @@ def save_fixture(parsed: dict, competition: str, season: str) -> None:
                 updated_at=now,
             )
             session.add(fixture)
+
+        # Only a finished fixture becomes a result. parse_fixture reads
+        # score.fullTime, which Football-Data.org also fills during IN_PLAY, so
+        # gating on the score alone would publish a partial score as final and
+        # let a prediction settle against it.
+        hs = parsed.get("home_score")
+        aws = parsed.get("away_score")
+        if parsed.get("status") == "finished" and hs is not None and aws is not None:
+            hs_i = int(hs)
+            aws_i = int(aws)
+            outcome = outcome_from_scores(hs_i, aws_i, allow_draw=True)
+            finished_at = parsed.get("kickoff_utc") or now
+            existing_result = session.get(KernelMatchResult, parsed["match_id"])
+            if existing_result is None:
+                session.add(
+                    KernelMatchResult(
+                        match_id=parsed["match_id"],
+                        home_score=hs_i,
+                        away_score=aws_i,
+                        outcome=outcome,
+                        finished_at=finished_at,
+                        created_at=now,
+                    )
+                )
+            else:
+                existing_result.home_score = hs_i
+                existing_result.away_score = aws_i
+                existing_result.outcome = outcome
+                if existing_result.finished_at is None:
+                    existing_result.finished_at = finished_at
         session.commit()
     except Exception as exc:  # noqa: BLE001
         session.rollback()

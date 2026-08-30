@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -23,19 +24,66 @@ from app.kernel.kernel_db import (
     KernelMatchResult,
     get_kernel_session,
 )
+from app.sports._shared.match_outcome import outcome_from_scores
 
 logger = logging.getLogger(__name__)
 
-_SPORT_META: dict[str, dict[str, str]] = {
-    "nba": {"sport": "basketball", "competition": "nba"},
-    "mlb": {"sport": "baseball", "competition": "mlb"},
-    "nhl": {"sport": "hockey", "competition": "nhl"},
+
+@dataclass(frozen=True)
+class CompetitionMeta:
+    """What the result/Elo backfills need to know about one competition code.
+
+    ``draws`` is the whole reason this is a record rather than a pair of
+    strings: it decides which ``outcome`` token a level score gets, and it
+    decides whether the competition may be replayed into
+    ``kernel_elo_ratings`` at all.
+    """
+
+    sport: str
+    competition: str
+    draws: bool
+
+
+#: Every competition code the result backfill understands, and its draw rule.
+#: The two scopes below are derived from this one table so that adding a
+#: competition cannot leave a hand-maintained list behind.
+_SPORT_META: dict[str, CompetitionMeta] = {
+    "nba": CompetitionMeta("basketball", "nba", draws=False),
+    "mlb": CompetitionMeta("baseball", "mlb", draws=False),
+    "nhl": CompetitionMeta("hockey", "nhl", draws=False),
+    # P1-E9: football fixtures carried scores that no kernel_match_results row
+    # ever received, so fetch_outcome returned None for all 1181 finished club
+    # matches and club form/h2h read an empty join. Codes match
+    # KernelMatchFixture.competition, which the football adapters write
+    # lowercase.
+    "epl": CompetitionMeta("football", "epl", draws=True),
+    "laliga": CompetitionMeta("football", "laliga", draws=True),
+    "seriea": CompetitionMeta("football", "seriea", draws=True),
+    "bundesliga": CompetitionMeta("football", "bundesliga", draws=True),
+    "ligue1": CompetitionMeta("football", "ligue1", draws=True),
+    "ucl": CompetitionMeta("football", "ucl", draws=True),
 }
 
+#: Competitions whose scored fixtures may be copied into kernel_match_results.
+BACKFILLABLE_COMPETITIONS: frozenset[str] = frozenset(_SPORT_META)
 
-def _binary_outcome(home_score: int, away_score: int) -> str:
-    """Binary sports (NBA/MLB/NHL): home_win if home ahead, else away_win."""
-    return "home_win" if home_score > away_score else "away_win"
+#: Competitions that may be replayed into kernel_elo_ratings.
+#:
+#: Draw-capable competitions are excluded, not pending: ``seed_elo_from_games``
+#: scores a game as ``home_score > away_score`` and has no third bucket, so a
+#: level football score would be replayed as an away win. Football Elo comes
+#: from ClubElo through the club Elo cache -- a measured source -- and seeding
+#: self-computed ratings over it would replace measured values with invented
+#: ones.
+ELO_SEEDABLE_COMPETITIONS: frozenset[str] = frozenset(
+    code for code, meta in _SPORT_META.items() if not meta.draws
+)
+
+#: A fixture's score is a *result* only once the fixture is over.
+#: ``football_data_client.parse_fixture`` reads ``score.fullTime``, which
+#: Football-Data.org also populates while a match is IN_PLAY, so a scored row is
+#: not by itself a finished one.
+FINAL_FIXTURE_STATUS = "finished"
 
 
 def _elo_params_for_sport(sport: str) -> dict[str, float | int]:
@@ -250,12 +298,20 @@ class HistoricalDataIngestor:
                         session.query(KernelMatchResult).filter_by(match_id=match_id).first()
                     )
                     finished_at = kickoff_utc or now
+                    # Read the draw rule from the table rather than hardcoding
+                    # False: _FETCHER_NAMES admits only the three binary sports
+                    # today, so the two agree, but a hardcoded rule here would
+                    # not follow the declaration if a fetcher were added.
+                    ingest_meta = _SPORT_META.get(sport)
+                    outcome = outcome_from_scores(
+                        hs, aws, allow_draw=bool(ingest_meta and ingest_meta.draws),
+                    )
                     if existing_result is None:
                         result = KernelMatchResult(
                             match_id=match_id,
                             home_score=hs,
                             away_score=aws,
-                            outcome=_binary_outcome(hs, aws),
+                            outcome=outcome,
                             finished_at=finished_at,
                             created_at=now,
                         )
@@ -264,7 +320,7 @@ class HistoricalDataIngestor:
                     else:
                         existing_result.home_score = hs
                         existing_result.away_score = aws
-                        existing_result.outcome = _binary_outcome(hs, aws)
+                        existing_result.outcome = outcome
                         if existing_result.finished_at is None:
                             existing_result.finished_at = finished_at
 
@@ -279,18 +335,22 @@ class HistoricalDataIngestor:
         return {"matches": matches_stored, "results": results_stored, "errors": errors}
 
     def backfill_results_from_fixtures(self, sport: str | None = None) -> dict[str, Any]:
-        """Copy scored fixtures into kernel_match_results (idempotent).
+        """Copy finished, scored fixtures into kernel_match_results (idempotent).
 
         Adapter sync_schedule historically wrote scores only on fixtures.
         Phase 9 match_loader + learning paths need KernelMatchResult rows.
 
         Args:
-            sport: "nba" / "mlb" / "nhl" or None for all three.
+            sport: any code in :data:`BACKFILLABLE_COMPETITIONS`, or None for
+                all of them. Football competitions are included as of P1-E9:
+                their fixtures carried scores that no result row ever received,
+                so ``fetch_outcome`` returned None for every finished club
+                match.
 
         Returns:
             {"results": N, "updated": N, "sports": {...}, "errors": [...]}
         """
-        sports = ["nba", "mlb", "nhl"] if sport is None else [sport]
+        sports = sorted(BACKFILLABLE_COMPETITIONS) if sport is None else [sport]
         total_new = 0
         total_updated = 0
         per_sport: dict[str, dict[str, int]] = {}
@@ -300,15 +360,24 @@ class HistoricalDataIngestor:
         try:
             now = datetime.now(timezone.utc)
             for sp in sports:
-                if sp not in _SPORT_META:
+                meta = _SPORT_META.get(sp)
+                if meta is None:
                     errors.append(f"Unknown sport: {sp}")
                     continue
                 new_n = 0
                 upd_n = 0
+                # status is part of the filter, not a thing to normalise
+                # afterwards: parse_fixture copies score.fullTime while a match
+                # is IN_PLAY, so a scored row is not yet a final one, and
+                # copying it would let fetch_outcome settle a prediction
+                # against a partial score. Measured on the live kernel DB:
+                # zero scored fixtures in any sport are currently non-finished,
+                # so this narrows a reachable window rather than dropping rows.
                 fixtures = (
                     session.query(KernelMatchFixture)
                     .filter(
                         KernelMatchFixture.competition == sp,
+                        KernelMatchFixture.status == FINAL_FIXTURE_STATUS,
                         KernelMatchFixture.home_score.isnot(None),
                         KernelMatchFixture.away_score.isnot(None),
                     )
@@ -323,7 +392,7 @@ class HistoricalDataIngestor:
                         continue
                     hs = int(fix.home_score)
                     aws = int(fix.away_score)
-                    outcome = _binary_outcome(hs, aws)
+                    outcome = outcome_from_scores(hs, aws, allow_draw=meta.draws)
                     finished_at = fix.kickoff_utc or now
                     existing = session.get(KernelMatchResult, fix.match_id)
                     if existing is None:
@@ -351,9 +420,6 @@ class HistoricalDataIngestor:
                             if existing.finished_at is None:
                                 existing.finished_at = finished_at
                             upd_n += 1
-                    if fix.status != "finished":
-                        fix.status = "finished"
-                        fix.updated_at = now
                 per_sport[sp] = {"results": new_n, "updated": upd_n, "scanned": len(fixtures)}
                 total_new += new_n
                 total_updated += upd_n
@@ -376,7 +442,10 @@ class HistoricalDataIngestor:
         """Replay chronological results into kernel_elo_ratings (overwrite).
 
         Args:
-            sport: "nba" / "mlb" / "nhl" or None for all three.
+            sport: any code in :data:`ELO_SEEDABLE_COMPETITIONS`, or None for
+                all of them. A draw-capable competition is refused rather than
+                replayed: the scope is narrower than
+                :data:`BACKFILLABLE_COMPETITIONS` on purpose.
 
         Returns:
             {"teams": N, "sports": {...}, "errors": [...]}
@@ -384,7 +453,7 @@ class HistoricalDataIngestor:
         from app.kernel.backtest.match_loader import load_sport_matches_for_backtest
         from app.sports._shared.elo_calculator import seed_elo_from_games
 
-        sports = ["nba", "mlb", "nhl"] if sport is None else [sport]
+        sports = sorted(ELO_SEEDABLE_COMPETITIONS) if sport is None else [sport]
         total_teams = 0
         per_sport: dict[str, dict[str, Any]] = {}
         errors: list[str] = []
@@ -396,6 +465,17 @@ class HistoricalDataIngestor:
                 meta = _SPORT_META.get(sp)
                 if meta is None:
                     errors.append(f"Unknown sport: {sp}")
+                    continue
+                # Refused, not skipped silently: seed_elo_from_games treats any
+                # non-home-win as an away win, so replaying football would score
+                # every draw as a loss for the home side -- and it would
+                # overwrite the measured ClubElo ratings with self-computed
+                # ones. An explicit error is what tells the caller the request
+                # was wrong rather than empty.
+                if meta.draws:
+                    errors.append(
+                        f"Elo seeding is binary-only; {sp} allows draws",
+                    )
                     continue
                 matches = load_sport_matches_for_backtest(sp)
                 if not matches:
@@ -466,7 +546,7 @@ class HistoricalDataIngestor:
                 # Replace all rows for this competition
                 existing_rows = (
                     session.query(KernelEloRating)
-                    .filter(KernelEloRating.competition == meta["competition"])
+                    .filter(KernelEloRating.competition == meta.competition)
                     .all()
                 )
                 for row in existing_rows:
@@ -477,8 +557,8 @@ class HistoricalDataIngestor:
                     session.add(
                         KernelEloRating(
                             team_name=team_name,
-                            sport=meta["sport"],
-                            competition=meta["competition"],
+                            sport=meta.sport,
+                            competition=meta.competition,
                             elo_rating=float(elo),
                             source="self_computed",
                             updated_at=now,

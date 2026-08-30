@@ -1,5 +1,54 @@
 # Changelog
 
+### Fix: 1181 finished football matches had real scores and no result row, so nothing could settle
+
+- **Football wrote match scores onto the fixture row and never into `kernel_match_results`.** `save_fixture` set `KernelMatchFixture.home_score`/`away_score` and stopped there. The three binary-sport adapters write **both** tables in their own save paths; football wrote one of the two. Measured on the live kernel DB (read-only URI):
+
+  | competition | fixtures | scored fixtures | `kernel_match_results` rows |
+  |---|---|---|---|
+  | epl | 760 | 380 | **0** |
+  | ligue1 | 612 | 306 | **0** |
+  | bundesliga | 306 | 306 | **0** |
+  | ucl | 189 | 189 | **0** |
+  | laliga | 380 | 0 | 0 |
+  | seriea | 380 | 0 | 0 |
+  | mlb | 7701 | 6803 | 6803 |
+  | nba | 3965 | 3965 | 3965 |
+  | nhl | 4424 | 3014 | 3014 |
+
+- **Three production readers join that table, so all three came back empty for football.** Checked through the production door on six real finished fixtures (`ucl-552096` 5-4, `epl-538155` 2-1, `epl-538156` 0-3, `epl-538157` 1-2, `epl-538158` 1-1, `epl-538159` 2-0):
+  - `fetch_outcome` — `KernelMatchResult=None` and `MatchOutcome=None` for **every one**. No football prediction could settle, which also means no calibration, no `direction_accuracy`, and no engine score for any football engine.
+  - `team_form_from_kernel` — `None` for every club. It is the **only** fallback for `home_stats` on the club tracks, so this also removes `form_home`/`form_away`, `rest_days_*`, and the xG goals-per-game proxy.
+  - `h2h_meetings_from_kernel` — 0 meetings on every pairing.
+- **`enrich_situational_features` run on four real club fixtures produced only schedule-density keys** (`matches_last_7d_*`, `matches_merged_*`, `schedule_congested_*` — those read the fixture table directly). No form, no rest, no xG, no h2h.
+- **Measured cost on the production engine path** (real `FootballFeatureBuilder` + `FootballMultiFactorEngine`, Elo 1900/1700 from a measured source, no odds):
+
+  | state | confidence | `data_completeness` | `home_win` |
+  |---|---|---|---|
+  | Elo only — today's club reality | 0.5878 | **0.0** | 0.5903 |
+  | + form | 0.5840 | 0.0818 | 0.5553 |
+  | + h2h | 0.5971 | 0.0818 | 0.5822 |
+  | + xG goals proxy | 0.5866 | 0.0818 | 0.5607 |
+  | + rest | 0.5903 | 0.0818 | 0.5682 |
+  | all four restored | **0.6182** | **0.3545** | 0.5345 |
+
+  The dead join costs −0.0304 confidence, pins `data_completeness` at **0.0**, and moves `home_win` by 5.58pp.
+- **The copy mechanism already existed.** `backfill_results_from_fixtures` does exactly this job, with its scope hardcoded to `["nba", "mlb", "nhl"]` in four places. This is the thirteenth instance of the same defect class as P1-E4 and P1-F5: a capability that is built, correct, and unreachable.
+- **Two hazards made "add football to the list" wrong on its own.** `_binary_outcome` had no draw branch — `return "home_win" if home_score > away_score else "away_win"` — so reaching it with a level score returns `away_win` rather than raising. **287 of the 1181** finished football fixtures are draws (24.3%: epl 104, bundesliga 75, ligue1 75, ucl 33), so every one would have been stored as the wrong side winning. And the loop copied any *scored* fixture and then forced `status="finished"`, while `football_data_client.parse_fixture` reads `score.fullTime`, which Football-Data.org also fills during `IN_PLAY` — publishing a partial score as final. Zero scored fixtures are non-finished in any sport today, so requiring finality narrows a reachable window rather than dropping live rows; the now-unreachable status write-back was removed with it.
+- **The draw rule is a declared parameter, not a property of the caller.** New `app/sports/_shared/match_outcome.py` holds one keyword-only function, `outcome_from_scores(home, away, *, allow_draw)`. Keyword-only because the two call sites disagree about the rule, and a positional third argument would let one silently inherit the other's. A level score with `allow_draw=False` still returns `away_win`, asserted exactly — `seed_elo_from_games` scores `home_score > away_score` and has no third bucket, so that asymmetry is load-bearing rather than an oversight to tidy away.
+- **One declaration, two derived scopes.** `_SPORT_META` is now `dict[str, CompetitionMeta]` with a `draws` flag, and `BACKFILLABLE_COMPETITIONS` / `ELO_SEEDABLE_COMPETITIONS` are computed from it — so adding a competition cannot leave a hand-maintained list behind. The test asserts the two are an exact partition on the draw rule, with a denominator guard (the table must be non-empty and hold **both** rules, or every partition assertion is vacuous).
+- **Elo seeding stays binary-only, and refuses rather than skipping.** `seed_elo_ratings("epl")` returns an error naming the competition and writes zero rows: the replay would score every draw as a home loss, and football Elo already comes from ClubElo as a measured source — seeding self-computed ratings over it is the P1-E4 defect in reverse. `/backfill-seed` validates **each requested step against its own scope**, so `{"sport": "ucl"}` (both steps default to true) is a 400 with neither step attempted, not a backfill followed by a silent skip.
+- **`save_fixture` now writes the result row at sync time**, gated on `status == "finished"`, so the gap does not reopen on the next schedule sync. This is the same write the three sibling adapters already perform, with the draw token football needs.
+- **New `backend/tests/test_football_result_rows.py` (50 tests, 35 subtests).** The behavioural half asserts the **empty state before** the backfill and the populated state after for each of the three dead readers, so it cannot pass by finding data that was never missing. The structural half scans the football adapters' AST for every `save_fixture` competition literal **and** every `LeagueConfig(code=…)`, and requires the two to equal the declared football half — a seventh league would otherwise get a config and a call site with no one noticing its results are unreachable. A separate test pins that the CLI's `--sport` choices are derived, failing on any hardcoded `choices` list.
+- **Not run against the live kernel DB.** The 1181 historical rows need one operator command; the code change makes it possible and correct, but writing 1181 result rows enables settlement for real predictions, which is the operator's call:
+
+  ```
+  cd backend && python scripts/seed_sport_elo.py --sport epl --backfill-only
+  ```
+
+  repeated for `ligue1`, `bundesliga`, `ucl` (laliga and seriea have no scored fixtures yet), or `--sport all --backfill-only` for every competition at once. Idempotent, and `--backfill-only` is required for football.
+- Verification: 12 defect injections, all red for the intended reason, every file restored byte-identically and confirmed against `git diff --numstat` rather than the driver's own baseline. `ruff check app/` clean, `compileall` clean, `mypy app` clean, full suite green.
+
 ### Fix: the football engine was shown goals scored and reported them as expected goals
 
 - **`enrich_situational_features` writes three different quantities under the same `custom["xg_home"]` / `custom["xg_away"]` pair, and only one of them is xG.** The club's `goals_per_game` is written first; a hand-typed static table may overwrite it with `xg_source="static_table"`; a configured live provider may overwrite that with `xg_source="live_provider"`. The first branch — goals actually scored — wrote **no `xg_source` key at all**, so nothing downstream could tell the three apart. `FootballMultiFactorEngine` read the pair, reported `factor="xg"` with `available=true`, `direction="support"` and weight 0.06–0.07, and the frontend rendered that row as **期望进球 (xG)**.

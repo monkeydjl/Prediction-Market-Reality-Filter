@@ -703,6 +703,21 @@ async def domain_reliability(
     }
 
 
+@router.get("/quality-metrics/fixture-freshness")
+def get_fixture_freshness() -> dict[str, Any]:
+    """Fixtures that kicked off and never got a result row. Read-only (E15).
+
+    A fixture with no ``kernel_match_results`` row cannot settle a prediction,
+    so this is the freshness half of the gap P1-E9 closed on the writer side.
+    Aggregate counts only -- no match ids, no team names, no kickoff times --
+    which is what keeps it on the same unauthenticated footing as the rest of
+    this module.
+    """
+    from app.services.fixture_freshness_service import fixture_freshness_summary
+
+    return fixture_freshness_summary()
+
+
 # Exposed at import time so test runners can wire it without going through
 # the FastAPI app. Used by tests/test_quality_metrics.py.
 __all__ = ["router"]

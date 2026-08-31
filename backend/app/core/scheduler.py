@@ -10,6 +10,8 @@ APScheduler 定时任务。随 FastAPI 启动自动运行。
   22:30 UTC — event auto-resolve（匹配已结算预测市场并打分）
 """
 
+import asyncio
+import functools
 import logging
 import os
 import sys
@@ -1006,27 +1008,75 @@ async def _job_reoptimize_monthly() -> None:
     logger.info("[Scheduler] Monthly re-optimization starting...")
     run_id = _start_run("reoptimize_monthly")
     try:
+        from app.kernel.backtest.match_loader import (
+            load_sport_matches_for_backtest,
+            time_series_split,
+        )
+        from app.kernel.kernel_db import init_kernel_db
         from app.kernel.parameter_optimizer import ParameterOptimizer
+
+        init_kernel_db()
         optimizer = ParameterOptimizer()
         n_trials = settings.PHASE9_OPTIMIZATION_TRIALS
         sports = ["nba", "mlb", "nhl"]
         completed: list[str] = []
+        skipped: dict[str, str] = {}
         for sport in sports:
             try:
-                # In production, train/test matches should be loaded from the
-                # kernel DB. For now, pass empty lists — optimize_sync still
-                # runs the Optuna search and persists the best candidate.
-                optimizer.optimize_sync(
-                    sport,
-                    n_trials=n_trials,
-                    train_matches=[],
-                    test_matches=[],
+                # The matches have to be loaded here. Passing empty lists ran the
+                # full Optuna search against nothing: BacktestRunner returns
+                # sample_count=0 with every metric 0.0, so all n_trials tied and
+                # the "best" candidate was whichever trial happened to run first.
+                # Same loader and same minimum as POST /sport-optimization/run,
+                # so the scheduled path and the manual one measure the same way.
+                matches = await asyncio.to_thread(
+                    load_sport_matches_for_backtest, sport,
                 )
+                if len(matches) < 5:
+                    skipped[sport] = f"insufficient_matches:{len(matches)}"
+                    logger.warning(
+                        "[Scheduler] Re-optimization skipped for %s: only %d "
+                        "matches; ingest history first",
+                        sport, len(matches),
+                    )
+                    continue
+                train, test = time_series_split(matches, test_ratio=0.2)
+                result = await asyncio.to_thread(
+                    functools.partial(
+                        optimizer.optimize_sync,
+                        sport,
+                        n_trials=n_trials,
+                        train_matches=train,
+                        test_matches=test,
+                    )
+                )
+                reason = result.get("not_persisted_reason")
+                if reason:
+                    skipped[sport] = reason
+                    logger.warning(
+                        "[Scheduler] Re-optimization for %s persisted nothing: %s",
+                        sport, reason,
+                    )
+                    continue
                 completed.append(sport)
-                logger.info("[Scheduler] Re-optimization completed for %s", sport)
+                logger.info(
+                    "[Scheduler] Re-optimization completed for %s "
+                    "(train=%d test=%d score=%.4f)",
+                    sport, len(train), len(test), result.get("best_score") or 0.0,
+                )
             except Exception as e:
+                skipped[sport] = f"error:{e}"
                 logger.warning("[Scheduler] Re-optimization failed for %s: %s", sport, e)
-        _finish_run(run_id, "success", result={"sports": completed})
+        # A run that optimized nothing is not a success. Reporting one made an
+        # empty kernel DB indistinguishable from a completed monthly re-optimization
+        # in the run ledger.
+        status = "success" if completed else "failed"
+        _finish_run(
+            run_id,
+            status,
+            result={"sports": completed, "skipped": skipped},
+            error=None if completed else f"no sport optimized: {skipped}",
+        )
     except Exception as exc:
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
         logger.exception("[Scheduler] Monthly re-optimization failed")

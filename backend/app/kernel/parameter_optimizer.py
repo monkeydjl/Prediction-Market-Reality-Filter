@@ -119,7 +119,25 @@ class ParameterOptimizer:
         # Persist best candidate (Fix 7 / spec §8.2). Best-effort: a persistence
         # failure must not invalidate the optimization result itself.
         saved: dict | None = None
-        if best_result is not None and factor_weights:
+        skipped_reason: str | None = None
+        if best_result is None or not factor_weights:
+            skipped_reason = "no_best_trial"
+        elif best_result.sample_count <= 0:
+            # BacktestRunner returns accuracy/brier/mae/score all 0.0 with
+            # sample_count=0 when it is handed no matches. That is a "could not
+            # measure" sentinel, not a score of zero: every trial ties at 0.0, so
+            # study.best_trial is whichever ran first and its weights were never
+            # evaluated against anything. Persisting it would put a candidate in
+            # front of the operator that reads like a measured result -- and
+            # applying it writes those weights into kernel_factors. Refuse, and
+            # say which of the three outcomes this was.
+            skipped_reason = "zero_samples"
+            logger.warning(
+                "[Optimizer] %s produced no measurable trials "
+                "(train=%d test=%d); candidate not persisted",
+                sport, len(train_matches), len(test_matches),
+            )
+        if skipped_reason is None and best_result is not None:
             try:
                 from app.kernel.optimized_params_store import OptimizedParamsStore
                 store = OptimizedParamsStore()
@@ -153,6 +171,10 @@ class ParameterOptimizer:
             "trials": len(study.trials),
             "sport": sport,
             "saved_candidate": saved,
+            # None when a candidate was persisted. "saved_candidate is None"
+            # alone cannot tell a refusal from a persistence error, and the
+            # caller needs that difference to decide whether to report success.
+            "not_persisted_reason": skipped_reason,
             # Backtest metrics for UI (P3-FE8) — same fields as saved candidate
             "accuracy": best_result.accuracy if best_result is not None else None,
             "brier_score": best_result.brier_score if best_result is not None else None,

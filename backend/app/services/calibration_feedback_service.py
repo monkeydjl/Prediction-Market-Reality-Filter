@@ -231,6 +231,12 @@ def adjust_probability(
     Fuses them by component Brier history, then shrinks the result toward the
     category prior by the category's Brier history. Returns (adjusted_pct, info).
 
+    `prior` is the caller's shrinkage target and is echoed back in `info["prior"]`
+    so the published record shows what the estimate was pulled toward, not just
+    how hard. Callers must pass the prior the anchoring stage actually used - see
+    `_apply_calibration_feedback` for why the static table value is the wrong one
+    for the `unknown` category.
+
     When history is insufficient (the dormant default) the weights are empty and
     the shrinkage is 0, so the adjusted value equals components["llm"] - making
     enabling the feature a no-op until enough outcomes accumulate.
@@ -247,6 +253,11 @@ def adjust_probability(
     info = {
         "weights": {key: round(weight, 4) for key, weight in weights.items()},
         "shrinkage": round(shrink, 4),
+        # The target the shrinkage pulled toward. Published because `shrinkage`
+        # alone cannot tell an operator where the estimate was pulled TO, and a
+        # wrong prior is invisible in the output otherwise. The caller records
+        # which field supplied it under "prior_source".
+        "prior": round(prior, 2),
         "fused": round(fused, 2),
         "samples": len(resolved_records),
     }

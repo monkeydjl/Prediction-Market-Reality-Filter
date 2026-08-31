@@ -1,15 +1,25 @@
 """Load historical matches from kernel DB for Phase 9 optimization."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 
-def load_sport_matches_for_backtest(sport: str) -> list[dict[str, Any]]:
+def load_sport_matches_for_backtest(
+    sport: str,
+    *,
+    session_factory: Callable[[], Any] | None = None,
+) -> list[dict[str, Any]]:
     """Return chronological match dicts suitable for BacktestRunner / EloTimeMachine.
 
     Joins kernel_match_fixtures with kernel_match_results for the given
     competition/sport code (nba / mlb / nhl). Matches without scores are skipped.
     Rest/form are leakage-safe as-of features (not flat defaults).
+
+    ``session_factory=None`` reads the global kernel session, which is what all
+    four production callers want. It is a parameter so that a caller already
+    scoped to one specific database -- ``OptimizedParamsStore(db_path=...)``
+    reseeding Elo -- reads the matches it is about to replay out of *its* DB
+    rather than out of ``settings.KERNEL_DB_FILE``.
     """
     from app.kernel.kernel_db import (
         KernelMatchFixture,
@@ -18,7 +28,7 @@ def load_sport_matches_for_backtest(sport: str) -> list[dict[str, Any]]:
     )
     from app.sports._shared.rest_form import enrich_matches_rest_form
 
-    session = get_kernel_session()
+    session = (session_factory or get_kernel_session)()
     try:
         rows = (
             session.query(KernelMatchFixture, KernelMatchResult)

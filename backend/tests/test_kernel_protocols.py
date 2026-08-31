@@ -105,9 +105,17 @@ class TestProtocolCompliance:
             def update_calibration(self, competition, engine):
                 return None
             def update_weights(self, competition):
-                return None
+                # The Protocol declares dict[str, Any]. runtime_checkable only
+                # checks that the attribute exists, so returning None here would
+                # leave the fake green while violating the contract it claims to
+                # satisfy -- and a fake is where a caller's expectations get
+                # written down.
+                return {"updated": False, "reason": "fake"}
             def engine_score(self, engine, competition=None):
                 return None
 
         learning = FakeLearning()
         assert isinstance(learning, LearningService)
+        # isinstance passes on attribute presence alone, so assert the shape the
+        # Protocol promises its callers.
+        assert learning.update_weights("nba")["updated"] is False

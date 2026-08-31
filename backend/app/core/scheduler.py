@@ -986,13 +986,41 @@ async def _job_update_weights_weekly() -> None:
         from app.kernel.learning_service import KernelLearningService
 
         learning = KernelLearningService()
+        updated: list[str] = []
+        skipped: dict[str, str] = {}
         for competition in ["nba", "mlb", "nhl"]:
             try:
-                learning.update_weights(competition)
-                logger.info("[Scheduler] Updated weights for %s", competition)
+                # update_weights has four reachable conditions that decline to
+                # learn (plus a defensive private-state guard): too few samples,
+                # no factor samples, a factor with zero samples, and zero total
+                # accuracy. They all used to be a bare `return`, so this logged
+                # "Updated weights" for each of them and the ledger recorded the
+                # hardcoded input list below as the result -- three failures still
+                # read as a successful weekly update.
+                outcome = learning.update_weights(competition) or {}
+                if outcome.get("updated"):
+                    updated.append(competition)
+                    logger.info(
+                        "[Scheduler] Updated weights for %s (factors=%s samples=%s)",
+                        competition,
+                        outcome.get("factors"),
+                        outcome.get("samples"),
+                    )
+                else:
+                    reason = str(outcome.get("reason") or "unknown")
+                    skipped[competition] = reason
+                    logger.info(
+                        "[Scheduler] Weights unchanged for %s: %s", competition, reason,
+                    )
             except Exception as e:
+                skipped[competition] = f"error:{e}"
                 logger.warning("[Scheduler] Weight update failed for %s: %s", competition, e)
-        _finish_run(run_id, "success", result={"competitions": ["nba", "mlb", "nhl"]})
+        _finish_run(
+            run_id,
+            "success" if updated else "failed",
+            result={"competitions": updated, "skipped": skipped},
+            error=None if updated else f"no competition updated: {skipped}",
+        )
     except Exception as exc:
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
         logger.exception("[Scheduler] Weekly weight update failed")

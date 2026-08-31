@@ -609,10 +609,19 @@ class KernelLearningService:
         finally:
             session.close()
 
-    def update_weights(self, competition: str) -> None:
-        """EWMA weight adjustment per competition using per-factor accuracy."""
+    def update_weights(self, competition: str) -> dict[str, Any]:
+        """EWMA weight adjustment per competition using per-factor accuracy.
+
+        Returns ``{"updated": bool, "reason": str | None, ...}``. Four reachable
+        conditions decline to learn (plus one defensive private-state guard) and
+        used to end in a bare ``return``, so a caller could not tell "weights were
+        rewritten" from "there was nothing to learn from" -- the weekly scheduler
+        job logged "Updated weights for %s" on every one of them and then reported
+        its own hardcoded input list as the run result. The return value is
+        additive: both production callers ignore it today.
+        """
         if self._factor_registry is None:
-            return
+            return {"updated": False, "reason": "no_factor_registry"}
 
         session = get_kernel_session()
         try:
@@ -629,7 +638,12 @@ class KernelLearningService:
             )
             results = session.execute(query).all()
             if len(results) < config.settings.MIN_SAMPLES_FOR_CALIBRATION:
-                return
+                return {
+                    "updated": False,
+                    "reason": "insufficient_samples",
+                    "samples": len(results),
+                    "min_samples": config.settings.MIN_SAMPLES_FOR_CALIBRATION,
+                }
 
             # Dynamic factor collection — supports any number of factors
             # (football: elo+odds, basketball: elo+home_court+rest+form)
@@ -651,13 +665,23 @@ class KernelLearningService:
 
             # Skip if any factor has 0 samples
             if not factor_stats or any(s["total"] == 0 for s in factor_stats.values()):
-                return
+                return {
+                    "updated": False,
+                    "reason": "no_factor_samples" if not factor_stats else "factor_with_zero_samples",
+                    "samples": len(results),
+                    "factors": len(factor_stats),
+                }
 
             # Compute accuracy per factor, normalize to target weights
             accuracies = {f: s["correct"] / s["total"] for f, s in factor_stats.items()}
             total_acc = sum(accuracies.values())
             if total_acc == 0:
-                return
+                return {
+                    "updated": False,
+                    "reason": "zero_total_accuracy",
+                    "samples": len(results),
+                    "factors": len(factor_stats),
+                }
             target_weights = {f: acc / total_acc for f, acc in accuracies.items()}
 
             # EWMA update for each factor
@@ -676,6 +700,12 @@ class KernelLearningService:
                 sum_w = sum(self._factor_registry.get_weight(f, competition) for f in factors[:-1])
                 last_w = max(config.settings.WEIGHT_FLOOR, min(config.settings.WEIGHT_CEILING, 1.0 - sum_w))
                 self._factor_registry.update_weight(factors[-1], competition, last_w, source="ewma")
+            return {
+                "updated": True,
+                "reason": None,
+                "samples": len(results),
+                "factors": len(target_weights),
+            }
         except Exception:
             session.rollback()
             raise

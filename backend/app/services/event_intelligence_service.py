@@ -926,6 +926,22 @@ def _apply_calibration_feedback(
     the published probability. Until enough outcomes have accumulated this is a
     no-op (the adjusted value equals the LLM estimate), so the default-off and
     early-on behavior is identical to today's single-LLM estimate.
+
+    The shrinkage target is `base_rate_effective_prior` - the prior the anchoring
+    stage actually anchored on - NOT the sibling `base_rate_prior`, which is the
+    raw static table value. The two differ only for the `unknown` category, where
+    `analyze_market` deliberately substitutes the market probability because 50
+    is a max-entropy stand-in for ignorance rather than a measured base rate;
+    `anchor_probability`'s own comment gives the reason ("so unknown markets are
+    not forced toward 50"). Shrinking toward the static 50 afterwards undid
+    exactly that, pulling every unknown event back toward maximum uncertainty:
+    measured over the live store, 91 unknown events, 18 of them moved >= 5pp and
+    the worst by 15.59pp (a market quoted at 99.5 was published as 83.82).
+    Reading the effective prior keeps the two stages anchored on the same number,
+    so "regress toward the base rate" means the base rate this event actually
+    has. For every other category the two keys hold the same value and this is a
+    no-op. The resolved value and which key supplied it are both published under
+    `calibration_feedback` so an operator can see what the shrinkage aimed at.
     """
     probability = record["probability"]
     components = {
@@ -942,8 +958,26 @@ def _apply_calibration_feedback(
     from app.services.calibration_feedback_service import adjust_probability
 
     category = str(analysis.get("base_rate_category") or "unknown")
-    prior = safe_float(analysis.get("base_rate_prior"), probability["baseline"])
+    # Prefer the anchoring stage's effective prior; fall back to the static table
+    # value, then to the market baseline. `_looks_numeric` is exactly
+    # `safe_float`'s acceptance predicate, so the recorded source can never
+    # disagree with the value actually used.
+    # The labels name the source FIELD, not a judgment about it: for every
+    # category except `unknown` the effective prior holds the same number as the
+    # static one, so a label like "dynamic" would claim more than is true.
+    prior: float
+    prior_source: str
+    if _looks_numeric(analysis.get("base_rate_effective_prior")):
+        prior = safe_float(analysis.get("base_rate_effective_prior"))
+        prior_source = "base_rate_effective_prior"
+    elif _looks_numeric(analysis.get("base_rate_prior")):
+        prior = safe_float(analysis.get("base_rate_prior"))
+        prior_source = "base_rate_prior"
+    else:
+        prior = safe_float(probability["baseline"])
+        prior_source = "baseline"
     adjusted, info = adjust_probability(components, category, prior)
+    info["prior_source"] = prior_source
 
     baseline = probability["baseline"]
     probability["estimated"] = adjusted

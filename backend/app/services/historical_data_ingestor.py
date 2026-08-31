@@ -16,7 +16,7 @@ import logging
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from app.kernel.kernel_db import (
     KernelEloRating,
@@ -201,7 +201,18 @@ _FETCHER_NAMES = {
 
 
 class HistoricalDataIngestor:
-    """Fetches historical matches + results from existing sports APIs."""
+    """Fetches historical matches + results from existing sports APIs.
+
+    ``session_factory=None`` uses the global kernel session, which is what the
+    four production call sites want. It is injectable because ``seed_elo_ratings``
+    *overwrites* ``kernel_elo_ratings`` for a competition, and one of its callers
+    (``OptimizedParamsStore``) can be scoped to a specific ``db_path``: without
+    the parameter that caller silently overwrote the ratings in
+    ``settings.KERNEL_DB_FILE`` instead of the ones in its own database.
+    """
+
+    def __init__(self, session_factory: Callable[[], Any] | None = None) -> None:
+        self._session_factory = session_factory or get_kernel_session
 
     async def ingest_season(self, sport: str, season: str) -> dict[str, Any]:
         """Fetch + store historical matches + results for one season.
@@ -231,7 +242,7 @@ class HistoricalDataIngestor:
         results_stored = 0
         errors: list[str] = []
 
-        session = get_kernel_session()
+        session = self._session_factory()
         try:
             now = datetime.now(timezone.utc)
             for game in games:
@@ -356,7 +367,7 @@ class HistoricalDataIngestor:
         per_sport: dict[str, dict[str, int]] = {}
         errors: list[str] = []
 
-        session = get_kernel_session()
+        session = self._session_factory()
         try:
             now = datetime.now(timezone.utc)
             for sp in sports:
@@ -458,7 +469,7 @@ class HistoricalDataIngestor:
         per_sport: dict[str, dict[str, Any]] = {}
         errors: list[str] = []
 
-        session = get_kernel_session()
+        session = self._session_factory()
         try:
             now = datetime.now(timezone.utc)
             for sp in sports:
@@ -477,7 +488,17 @@ class HistoricalDataIngestor:
                         f"Elo seeding is binary-only; {sp} allows draws",
                     )
                     continue
-                matches = load_sport_matches_for_backtest(sp)
+                matches = load_sport_matches_for_backtest(
+                    sp, session_factory=self._session_factory,
+                )
+                # Known asymmetry: _elo_params_for_sport -> resolve_elo_params
+                # builds its own bare OptimizedParamsStore, so the *params* are
+                # read from settings.KERNEL_DB_FILE even when the matches above
+                # and the ratings below are this session's. Harmless for the
+                # four production callers, which are all on the global DB; only
+                # a caller that passed session_factory would see the split, and
+                # closing it means giving OptimizedParamsStore a session_factory
+                # of its own rather than just a db_path.
                 if not matches:
                     per_sport[sp] = {"teams": 0, "matches": 0}
                     continue

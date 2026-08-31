@@ -31,6 +31,14 @@ class OptimizedParamsStore:
         else:
             engine = _get_engine(db_path)
             self._session_factory = sessionmaker(bind=engine)
+        # apply() writes three things: the status row, the factor weights, and --
+        # with reseed_elo -- the Elo ratings. Only the first used this factory.
+        # The other two went through collaborators constructed with no arguments,
+        # which default to the *global* kernel session, so a store aimed at
+        # db_path X promoted its row into X while writing the weights and
+        # overwriting the ratings inside settings.KERNEL_DB_FILE. Both now take
+        # this factory, so db_path scopes the whole operation rather than a third
+        # of it.
 
     def _row_to_dict(self, row: KernelOptimizedParams) -> dict[str, Any]:
         return {
@@ -167,7 +175,7 @@ class OptimizedParamsStore:
             factor_weights = json.loads(target.factor_weights)
             elo_params_raw = target.elo_params
             from app.kernel.factor_registry import FactorRegistry
-            registry = FactorRegistry()
+            registry = FactorRegistry(session_factory=self._session_factory)
             for factor_id, weight in factor_weights.items():
                 registry.update_weight(
                     factor_id, target.competition, weight, source="optimized",
@@ -206,7 +214,10 @@ class OptimizedParamsStore:
                 try:
                     from app.services.historical_data_ingestor import HistoricalDataIngestor
 
-                    seed_result = HistoricalDataIngestor().seed_elo_ratings(sport=sport)
+                    ingestor = HistoricalDataIngestor(
+                        session_factory=self._session_factory,
+                    )
+                    seed_result = ingestor.seed_elo_ratings(sport=sport)
                     elo_seed = {"ok": True, **(seed_result or {})}
                 except Exception as exc:  # noqa: BLE001
                     elo_seed = {"ok": False, "error": str(exc)}

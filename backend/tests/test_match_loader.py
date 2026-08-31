@@ -99,3 +99,30 @@ def test_load_sport_matches_real_rest_form(kernel_db):
     forms = [m["form_home"] for m in matches]
     assert not all(f == 0.5 for f in forms)
     assert all("kickoff_utc" not in m for m in matches)
+
+
+def test_load_sport_matches_reads_the_given_session_factory(kernel_db, tmp_path):
+    """``session_factory`` must decide which DB the join runs against.
+
+    The games live in the *global* DB here and the passed factory points at an
+    empty one, so the two answers differ: honouring the parameter returns
+    nothing, ignoring it returns three. The reverse direction is covered by
+    ``test_load_sport_matches_real_rest_form`` above, which passes no factory and
+    expects the global rows -- one test alone could be satisfied by a loader that
+    always read the same file.
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    from app.kernel import kernel_db as kdb
+
+    _seed_three_nba_games(kernel_db)
+    other_db = str(tmp_path / "empty_kernel.db")
+    other_engine = kdb._get_engine(other_db)
+    kdb.KernelBase.metadata.create_all(other_engine)
+
+    assert load_sport_matches_for_backtest(
+        "nba", session_factory=sessionmaker(bind=other_engine),
+    ) == []
+    # Same call, no factory: the rows are still there, so the empty result above
+    # is the parameter taking effect and not an empty fixture.
+    assert len(load_sport_matches_for_backtest("nba")) == 3

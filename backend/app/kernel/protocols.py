@@ -7,7 +7,7 @@ The Kernel never imports concrete implementations — only these Protocols.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from app.kernel.domain import (
     SportIdentity, TeamIdentity, MatchIdentity, MatchOutcome,
@@ -76,6 +76,9 @@ class LearningService(Protocol):
     def compute_error(self, match_id: str) -> PredictionError | None: ...
     def update_calibration(self, competition: str,
                            engine: str) -> None: ...
-    def update_weights(self, competition: str) -> None: ...
+    # Returns {"updated": bool, "reason": str | None, ...}. Declared as the
+    # mapping rather than None because five conditions decline to learn, and a
+    # caller that cannot distinguish them reports "updated" for all of them.
+    def update_weights(self, competition: str) -> dict[str, Any]: ...
     def engine_score(self, engine: str,
                      competition: str | None = None) -> EngineScore | None: ...

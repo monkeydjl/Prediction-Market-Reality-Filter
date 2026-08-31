@@ -175,3 +175,112 @@ class TestUpdateWeights:
         svc.update_weights("world_cup")
         # No per-factor data → no update
         assert reg.get_weight("elo", "world_cup") == old_elo
+
+
+class TestUpdateWeightsReportsWhatItDid:
+    """Five conditions decline to learn; all five used to be a bare ``return``.
+
+    The weekly scheduler job called this and logged "Updated weights for %s"
+    unconditionally, because the value it got back was ``None`` either way.
+    """
+
+    def test_a_real_update_says_updated_with_its_counts(self, svc_with_registry):
+        svc, reg = svc_with_registry
+        _seed_data(svc, 12)
+        result = svc.update_weights("world_cup")
+        assert result["updated"] is True
+        assert result["reason"] is None
+        assert result["factors"] == 2
+        assert result["samples"] == 12
+
+    def test_insufficient_samples_is_distinguishable_from_an_update(
+        self, svc_with_registry,
+    ):
+        svc, reg = svc_with_registry
+        _seed_data(svc, 5)
+        result = svc.update_weights("world_cup")
+        # Not just "falsy": the caller has to be able to name the condition, and
+        # "did not update" must not be reachable by the same value an update gives.
+        assert result["updated"] is False
+        assert result["reason"] == "insufficient_samples"
+        assert result["samples"] == 5
+        assert result["min_samples"] == 10
+
+    def test_zero_total_accuracy_has_its_own_reason(self, svc_with_registry):
+        svc, reg = svc_with_registry
+        _seed_data(svc, 12, elo_correct=False, odds_correct=False)
+        result = svc.update_weights("world_cup")
+        assert result["updated"] is False
+        assert result["reason"] == "zero_total_accuracy"
+
+    def test_no_factor_samples_has_its_own_reason(self, svc_with_registry):
+        """Predictions exist and are numerous, but no factor cast a vote."""
+        svc, reg = svc_with_registry
+        for i in range(12):
+            match = _make_match(f"nv{i}", "world_cup")
+            pred = PredictionResult(
+                predicted_scores={"home": 2.0, "away": 1.0},
+                outcome_probabilities={"home_win": 0.55, "draw": 0.25, "away_win": 0.20},
+                confidence=0.72, engine_name="elo_odds",
+                explanation=[
+                    ContributionItem(factor="elo", direction="support", weight=0.30,
+                                     available=True, detail="Elo",
+                                     predicted_outcome=None),
+                ],
+                betting_analysis=None, feature_version="1.0",
+                prediction_timestamp=datetime(2026, 6, 12, tzinfo=timezone.utc),
+            )
+            svc.record_prediction(match, pred)
+            svc.record_outcome(MatchOutcome(
+                match_id=f"nv{i}", home_score=2, away_score=1, outcome="home_win",
+                finished_at=datetime(2026, 6, 13, 20, 0, tzinfo=timezone.utc),
+            ))
+            svc.compute_error(f"nv{i}")
+        result = svc.update_weights("world_cup")
+        assert result["updated"] is False
+        assert result["reason"] == "no_factor_samples"
+
+    def test_no_registry_says_so_rather_than_looking_like_a_skip(
+        self, svc_with_registry,
+    ):
+        """The one condition that is a wiring fault, not a data shortage.
+
+        Note this branch is **not reachable through the constructor**:
+        ``__init__`` does ``factor_registry or FactorRegistry()``, so passing
+        ``None`` builds a real registry and this returns
+        ``insufficient_samples`` instead. The attribute is set directly here to
+        cover the branch honestly rather than to imply the public API can reach it.
+        """
+        svc, _ = svc_with_registry
+        assert KernelLearningService(factor_registry=None)._factor_registry is not None
+        svc._factor_registry = None
+        result = svc.update_weights("world_cup")
+        assert result["updated"] is False
+        assert result["reason"] == "no_factor_registry"
+
+    def test_every_reason_is_distinct(self, svc_with_registry):
+        """A shared reason string would collapse two conditions for the caller.
+
+        The two competitions need disjoint match ids: ``_seed_data`` names rows
+        ``m{i}`` regardless of competition, so seeding a second competition with
+        the same count *rewrites* the first one's rows rather than adding to them.
+        """
+        svc, reg = svc_with_registry
+        _seed_data(svc, 5, competition="world_cup")
+        few = svc.update_weights("world_cup")["reason"]
+
+        for i in range(12):
+            match = _make_match(f"epl_m{i}", "epl")
+            pred = _make_prediction("away_win", "away_win")
+            svc.record_prediction(match, pred)
+            svc.record_outcome(MatchOutcome(
+                match_id=f"epl_m{i}", home_score=2, away_score=1,
+                outcome="home_win",
+                finished_at=datetime(2026, 6, 13, 20, 0, tzinfo=timezone.utc),
+            ))
+            svc.compute_error(f"epl_m{i}")
+        zero = svc.update_weights("epl")["reason"]
+
+        svc._factor_registry = None
+        none_reg = svc.update_weights("world_cup")["reason"]
+        assert len({few, zero, none_reg}) == 3, (few, zero, none_reg)

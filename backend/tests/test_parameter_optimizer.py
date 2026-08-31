@@ -95,3 +95,59 @@ def test_multi_objective_score_calculation():
     # score = 0.5*0.70 + 0.3*(1-0.20) + 0.2*(1-0.30) = 0.35 + 0.24 + 0.14 = 0.73
     score = optimizer._compute_score(result)
     assert score == pytest.approx(0.73, abs=0.01)
+
+
+class TestZeroSampleCandidateIsRefused:
+    """A trial evaluated against no matches is not a candidate.
+
+    ``BacktestRunner.run`` answers an empty match list with
+    ``sample_count=0`` and accuracy/brier/mae/score all ``0.0``. That is a
+    "could not measure" sentinel, but ``optimize_sync`` used to treat it as a
+    score of 0.0 and persist it: every trial ties, so the stored "best" was
+    whichever trial ran first, and applying it writes those weights into
+    ``kernel_factors``.
+    """
+
+    def _run(self, sample_count):
+        def mock_run(sport, *, train_matches, test_matches, params):
+            from app.kernel.backtest.runner import BacktestResult
+            return BacktestResult(
+                accuracy=0.0 if not sample_count else 0.61,
+                brier_score=0.0 if not sample_count else 0.24,
+                mae=0.0 if not sample_count else 0.33,
+                sample_count=sample_count,
+                score=0.0 if not sample_count else 0.66,
+                predictions=[],
+            )
+
+        optimizer = ParameterOptimizer()
+        with patch(
+            "app.kernel.parameter_optimizer.BacktestRunner.run", side_effect=mock_run,
+        ), patch(
+            "app.kernel.optimized_params_store.OptimizedParamsStore",
+        ) as MockStore:
+            MockStore.return_value.save_candidate.return_value = {"id": 7}
+            result = optimizer.optimize_sync(
+                "nba", n_trials=3, train_matches=[], test_matches=[],
+            )
+        return result, MockStore.return_value
+
+    def test_zero_samples_persists_nothing_and_says_why(self):
+        result, store = self._run(0)
+        store.save_candidate.assert_not_called()
+        assert result["saved_candidate"] is None
+        # "saved_candidate is None" alone cannot tell a refusal from a failed
+        # write, which is what the caller needs to decide whether to report
+        # success.
+        assert result["not_persisted_reason"] == "zero_samples"
+
+    def test_a_measured_run_still_persists(self):
+        """The rival configuration: same code path, one sample, must save.
+
+        Without this, the guard above could pass by refusing everything.
+        """
+        result, store = self._run(120)
+        store.save_candidate.assert_called_once()
+        assert store.save_candidate.call_args.kwargs["sample_count"] == 120
+        assert result["saved_candidate"] == {"id": 7}
+        assert result["not_persisted_reason"] is None

@@ -237,6 +237,12 @@ export function CalibrationPanel() {
           <div className="p-4 text-sm text-neg">可靠性数据加载失败</div>
         ) : relLoading || reliability === null ? (
           <div className="p-4 text-sm text-muted-foreground">加载中...</div>
+        ) : reliability.error ? (
+          // A 200 carrying `error` is not an SWR fetch error, so it would
+          // otherwise fall through to the chart and render as an empty store.
+          <div data-testid="reliability-store-error" className="p-4 text-sm text-neg">
+            无法读取可靠性数据（{reliability.error}）——这不是「暂无样本」
+          </div>
         ) : (
           <ReliabilityChart
             bins={reliability.bins}
@@ -258,6 +264,13 @@ export function CalibrationPanel() {
           <div className="p-4 text-sm text-neg">置信度可靠性数据加载失败</div>
         ) : confLoading || confidence === null ? (
           <div className="p-4 text-sm text-muted-foreground">加载中...</div>
+        ) : confidence.error ? (
+          <div
+            data-testid="confidence-reliability-store-error"
+            className="p-4 text-sm text-neg"
+          >
+            无法读取置信度可靠性数据（{confidence.error}）——这不是「暂无样本」
+          </div>
         ) : (
           <>
             {confidence.signed_gap != null && (

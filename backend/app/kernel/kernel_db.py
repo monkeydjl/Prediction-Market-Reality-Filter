@@ -917,6 +917,56 @@ def _reliability_curve(pairs: list[tuple[float, float]], bins: int) -> dict[str,
     }
 
 
+def _reliability_unreadable(
+    engine: str | None,
+    competition: str | None,
+    bins: int,
+    *,
+    confidence_fields: bool,
+) -> dict[str, Any]:
+    """The result of a reliability query that could not run.
+
+    Two separate problems this fixes, both measured before the change:
+
+    1. **"Could not read" was reported as "nothing to read."** Both exception
+       branches returned ``total_samples: 0`` with an empty bin list, which is
+       what a healthy store with no settled predictions also reports. Nothing in
+       the response said the query had failed, so a broken calibration
+       dashboard read as an idle one. A check has three outcomes — ``ok``,
+       ``empty``, ``could not run`` — and collapsing the last two into the
+       middle one is how a failure stays invisible.
+    2. **The shape differed from the success path.** The error branch omitted
+       ``ece``, ``max_calibration_error`` and ``sample_count`` (plus
+       ``mean_confidence``, ``mean_accuracy`` and ``signed_gap`` on the
+       confidence curve), so a consumer reading them got ``undefined`` rather
+       than ``None``. The frontend's ``ReliabilityData`` marks exactly those six
+       fields optional, which is the mismatch being worked around rather than
+       fixed.
+
+    ``error`` follows the convention already used across
+    ``api/routes/quality_metrics.py``. It carries a stable category, not the
+    exception text: the raw message can name internal paths and tables, and a
+    caller that branches on it needs a value that does not change with the
+    failure mode.
+
+    The bin list is the full empty curve rather than ``[]`` so a chart renders
+    an empty axis instead of collapsing, and ``ece``/``total_samples`` stay
+    ``None``/``0`` — an unreadable store must not produce a number that looks
+    like a measurement.
+    """
+    result: dict[str, Any] = {
+        "engine": engine,
+        "competition": competition,
+        **_reliability_curve([], bins),
+        "error": "query_failed",
+    }
+    if confidence_fields:
+        result["mean_confidence"] = None
+        result["mean_accuracy"] = None
+        result["signed_gap"] = None
+    return result
+
+
 def compute_reliability_bins(engine: str | None = None,
                              competition: str | None = None,
                              bins: int = 10) -> dict:
@@ -928,8 +978,13 @@ def compute_reliability_bins(engine: str | None = None,
 
     Empty bins (count=0) return avg_predicted=null, actual_frequency=null.
     """
-    session = get_kernel_session()
+    # get_kernel_session() is inside the try on purpose: it was outside, so
+    # "cannot open the store" propagated as a 500 while "the query failed"
+    # returned 200 with an empty body. Those are the same operator problem and
+    # must produce the same documented shape.
+    session = None
     try:
+        session = get_kernel_session()
         query = (
             session.query(KernelPrediction, KernelMatchOutcome)
             .join(KernelMatchOutcome,
@@ -956,14 +1011,12 @@ def compute_reliability_bins(engine: str | None = None,
         }
     except Exception as e:
         logger.warning("kernel_db query failed: %s", e, exc_info=True)
-        return {
-            "engine": engine,
-            "competition": competition,
-            "bins": [],
-            "total_samples": 0,
-        }
+        return _reliability_unreadable(
+            engine, competition, bins, confidence_fields=False
+        )
     finally:
-        session.close()
+        if session is not None:
+            session.close()
 
 
 def compute_confidence_reliability_bins(engine: str | None = None,
@@ -988,8 +1041,10 @@ def compute_confidence_reliability_bins(engine: str | None = None,
     Note the scale: ``compute_confidence`` maps its blend into 0.30..0.95, so
     the lowest and highest bins are expected to be empty rather than missing.
     """
-    session = get_kernel_session()
+    # See compute_reliability_bins: the session open belongs inside the try.
+    session = None
     try:
+        session = get_kernel_session()
         query = (
             session.query(KernelPrediction, KernelMatchOutcome)
             .join(KernelMatchOutcome,
@@ -1024,11 +1079,9 @@ def compute_confidence_reliability_bins(engine: str | None = None,
         }
     except Exception as e:
         logger.warning("kernel_db query failed: %s", e, exc_info=True)
-        return {
-            "engine": engine,
-            "competition": competition,
-            "bins": [],
-            "total_samples": 0,
-        }
+        return _reliability_unreadable(
+            engine, competition, bins, confidence_fields=True
+        )
     finally:
-        session.close()
+        if session is not None:
+            session.close()

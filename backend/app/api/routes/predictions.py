@@ -718,12 +718,14 @@ def get_reliability(engine: str | None = None,
     if bins < 5 or bins > 20:
         raise HTTPException(status_code=422, detail="bins must be 5-20")
     from app.kernel.kernel_db import compute_reliability_bins
-    result = compute_reliability_bins(engine=engine, competition=competition, bins=bins)
-    # Normalize: compute_reliability_bins returns 'sample_count' on success
-    # but 'total_samples' on error. Canonical key is 'total_samples'.
-    if "total_samples" not in result:
-        result["total_samples"] = result.pop("sample_count", 0)
-    return result
+    # No key normalization here. The removed block was dead: its comment claimed
+    # the success path returns 'sample_count' but not 'total_samples', while
+    # _reliability_curve has always returned both, so the `not in` guard could
+    # never fire. Both paths now emit the same keys, and a failed query is
+    # marked with `error` rather than being reported as an empty store.
+    return compute_reliability_bins(
+        engine=engine, competition=competition, bins=bins
+    )
 
 
 @router.get("/calibration/confidence-reliability")
@@ -741,10 +743,7 @@ def get_confidence_reliability(engine: str | None = None,
     if bins < 5 or bins > 20:
         raise HTTPException(status_code=422, detail="bins must be 5-20")
     from app.kernel.kernel_db import compute_confidence_reliability_bins
-    result = compute_confidence_reliability_bins(
+    # Same as get_reliability: the normalization it used to carry was dead.
+    return compute_confidence_reliability_bins(
         engine=engine, competition=competition, bins=bins
     )
-    # Same normalization as get_reliability: the error path omits sample_count.
-    if "total_samples" not in result:
-        result["total_samples"] = result.pop("sample_count", 0)
-    return result

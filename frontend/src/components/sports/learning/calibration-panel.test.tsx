@@ -271,6 +271,125 @@ describe("CalibrationPanel", () => {
     });
   });
 
+  describe("unreadable store (E21)", () => {
+    const ok = { data: [mockCal], error: undefined, isLoading: false };
+    // What the backend now sends when the query could not run: a 200, so SWR
+    // reports no error, carrying the full success shape with every measurement
+    // null. Before E21 this was indistinguishable from an idle store.
+    const unreadable = {
+      ...mockReliability,
+      bins: [],
+      total_samples: 0,
+      sample_count: 0,
+      ece: null,
+      max_calibration_error: null,
+      error: "query_failed",
+    };
+    const idle = { ...unreadable, error: undefined };
+
+    function mount(rel: unknown, conf: unknown) {
+      apiMocks.useCalibration.mockReturnValue(ok);
+      apiMocks.useReliability.mockReturnValue({
+        data: rel,
+        error: undefined,
+        isLoading: false,
+      });
+      apiMocks.useConfidenceReliability.mockReturnValue({
+        data: conf,
+        error: undefined,
+        isLoading: false,
+      });
+      render(<CalibrationPanel />);
+    }
+
+    it("marks the probability curve as unreadable rather than empty", async () => {
+      mount(unreadable, undefined);
+      await waitFor(() => {
+        expect(screen.getByTestId("reliability-store-error")).toBeInTheDocument();
+      });
+      expect(screen.getByTestId("reliability-store-error").textContent).toContain(
+        "query_failed",
+      );
+    });
+
+    it("marks the confidence curve as unreadable rather than empty", async () => {
+      mount(mockReliability, { ...unreadable, mean_confidence: null, mean_accuracy: null, signed_gap: null });
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("confidence-reliability-store-error"),
+        ).toBeInTheDocument();
+      });
+    });
+
+    it("an unreadable store draws no chart — an empty axis reads as a result", async () => {
+      mount(unreadable, undefined);
+      await waitFor(() => {
+        expect(screen.getByTestId("reliability-store-error")).toBeInTheDocument();
+      });
+      expect(screen.queryAllByTestId("scatter")).toHaveLength(0);
+    });
+
+    it("a genuinely idle store still charts — the marker, not total_samples, decides", async () => {
+      // Same payload minus `error`. If the branch keyed off total_samples === 0
+      // it would swallow this one too, and both tests would still pass with the
+      // condition inverted only in one direction.
+      mount(idle, undefined);
+      await waitFor(() => {
+        expect(screen.getByTestId("scatter")).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId("reliability-store-error")).toBeNull();
+    });
+
+    it("one unreadable curve does not hide the other", async () => {
+      mount(unreadable, {
+        ...mockReliability,
+        bins: [
+          { lower: 0.8, upper: 0.9, center: 0.85, avg_predicted: 0.9, actual_frequency: 0.25, count: 4 },
+        ],
+        mean_confidence: 0.9,
+        mean_accuracy: 0.25,
+        signed_gap: 0.65,
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId("reliability-store-error")).toBeInTheDocument();
+      });
+      // The confidence chart is the only scatter left, and its gap readout survives.
+      expect(screen.getAllByTestId("scatter")).toHaveLength(1);
+      expect(screen.getByTestId("confidence-signed-gap")).toBeInTheDocument();
+      expect(screen.queryByTestId("confidence-reliability-store-error")).toBeNull();
+    });
+
+    it("an SWR fetch error still wins over the payload marker", async () => {
+      // The two are different failures: no response at all vs a response that
+      // says the store is unreadable. The fetch-error branch must come first.
+      apiMocks.useCalibration.mockReturnValue(ok);
+      apiMocks.useReliability.mockReturnValue({
+        data: unreadable,
+        error: new Error("503"),
+        isLoading: false,
+      });
+      apiMocks.useConfidenceReliability.mockReturnValue({
+        data: undefined,
+        error: undefined,
+        isLoading: true,
+      });
+      render(<CalibrationPanel />);
+      await waitFor(() => {
+        expect(screen.getByText("可靠性数据加载失败")).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId("reliability-store-error")).toBeNull();
+    });
+
+    it("the panel says it is not an idle store", async () => {
+      mount(unreadable, undefined);
+      await waitFor(() => {
+        const msg = screen.getByTestId("reliability-store-error").textContent ?? "";
+        expect(msg).toContain("无法读取");
+        expect(msg).toContain("暂无样本");
+      });
+    });
+  });
+
   describe("conditional calibration buckets (P1-V5)", () => {
     const bucketRows = [
       mockCal,

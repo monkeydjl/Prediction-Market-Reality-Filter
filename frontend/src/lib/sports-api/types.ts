@@ -129,6 +129,16 @@ export interface ReliabilityData {
   competition: string | null;
   bins: ReliabilityBin[];
   total_samples: number;
+  /**
+   * Set to a stable category (currently only `"query_failed"`) when the store
+   * could not be read. Absent on success, including the genuinely-empty case.
+   *
+   * Without it, `total_samples: 0` meant both "nothing has settled yet" and
+   * "the query blew up", so a broken calibration panel rendered as an idle one.
+   * The optional markers on the six fields above are what that mismatch used to
+   * force; the backend now returns the same keys on both paths.
+   */
+  error?: string;
 }
 
 /**

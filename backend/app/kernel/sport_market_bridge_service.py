@@ -118,17 +118,55 @@ class SportMarketBridgeService:
         detected_competition: str | None,
         detected_teams: list[str],
     ) -> MatchResult | None:
-        """Layer 2: LLM semantic matching on rule miss / low confidence."""
+        """Layer 2: LLM semantic matching on rule miss / low confidence.
+
+        Refuses rather than guessing when the match_id yields no team tokens.
+        ``_rule_match`` already returns None in that case, so this is the branch
+        every live match reaches: production ids are ``{sport}-{provider_game_id}``
+        (``nba-21716138``), which carry no team name, so ``team_tokens`` is ``[]``
+        for all 18,717 rows in ``kernel_match_fixtures`` (measured 2026-09-01).
+        The prompt then read ``- Match teams (tokens): []`` and asked the model
+        whether a market question was about "the above match" — identified only by
+        sport and competition, which is true of every fixture in that competition.
+        A confident answer at ``LLM_CONFIDENCE_THRESHOLD`` is stored as a
+        **verified** link, and ``get_matches_with_verified_links()`` feeds the odds
+        capture. So the failure mode was an invented link, not a missing one, paid
+        for with an LLM call that could not be answered correctly.
+
+        Identifying the match without the id would mean reading home_team/away_team
+        out of ``kernel_match_fixtures``. That is a real repair, and it would newly
+        enable automated market linking that is inert today, so it is deliberately
+        not done here: unparseable ids fall through to manual verification, which is
+        layer 3 of the documented rule -> LLM -> manual design.
+        """
         from app.services import llm_gateway_service as llm
 
         competition, _date_str, team_tokens = _parse_match_id(match_id)
+        if not team_tokens:
+            logger.info(
+                "[SportMarketBridge] LLM match refused for %s: match_id yields no "
+                "team tokens, so the model would be asked to match a fixture it "
+                "cannot be told apart from any other in %s",
+                match_id, competition or "unknown",
+            )
+            return None
+
         sport = COMPETITION_TO_SPORT.get(competition or "", "unknown")
 
+        # detected_teams / detected_competition were accepted by both call sites
+        # and never reached the prompt. Include them, labelled as the market side,
+        # so the model is comparing two named sides instead of one side against a
+        # question it has to parse unaided. They are only shown once the guard
+        # above has established that the *match* side is known too -- supplying one
+        # side alone is how a confident wrong answer gets manufactured.
         prompt = (
             f"Given sports match information:\n"
             f"- Sport: {sport}\n"
             f"- Competition: {competition}\n"
             f"- Match teams (tokens): {team_tokens}\n"
+            f"\nPrediction market metadata:\n"
+            f"- Detected competition: {detected_competition}\n"
+            f"- Detected teams: {detected_teams}\n"
             f"\nPrediction market question: \"{market_question}\"\n\n"
             f"Determine whether this market question is about the above match, "
             f"and which outcome the YES result corresponds to.\n"

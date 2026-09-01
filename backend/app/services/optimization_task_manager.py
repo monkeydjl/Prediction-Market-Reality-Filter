@@ -239,7 +239,7 @@ class OptimizationTaskManager:
                     del self._tasks[task_id]
         return reconciled
 
-    async def cleanup_old_tasks(self, max_age_hours: int = 24) -> None:
+    async def cleanup_old_tasks(self, max_age_hours: int = 24) -> dict[str, Any]:
         """Remove completed/failed tasks older than max_age_hours.
 
         Prunes both the in-memory cache and the durable store. Memory removal
@@ -247,6 +247,14 @@ class OptimizationTaskManager:
         the SQLite table from growing without limit. Rows with NULL
         ``completed_at`` are kept (a terminal task with no completion timestamp
         indicates a crash mid-flight and is preserved for diagnosis).
+
+        Returns ``{"memory_removed": int, "store_deleted": int,
+        "store_error": str | None}``. This used to return ``None`` while
+        swallowing any store failure into a log line, so the caller could not
+        tell "pruned nothing because nothing was old" from "the store is
+        degraded and rows are leaking without bound" -- which is the single
+        condition this job exists to prevent. ``delete_older_than`` has always
+        returned its row count; nothing outside a log line read it.
         """
         async with self._lock:
             now = datetime.now(timezone.utc)
@@ -259,7 +267,12 @@ class OptimizationTaskManager:
                         to_remove.append(task_id)
             for task_id in to_remove:
                 del self._tasks[task_id]
-        # Store prune outside the lock; best-effort.
+        # Store prune outside the lock; best-effort, but the failure is reported
+        # rather than only logged. The exception is still caught here so the
+        # in-memory pruning above is not discarded -- re-raising would throw away
+        # memory_removed, which did succeed.
+        deleted = 0
+        store_error: str | None = None
         try:
             deleted = optimization_task_store.delete_older_than(
                 cutoff_iso,
@@ -270,11 +283,17 @@ class OptimizationTaskManager:
                     "[OptimizationTaskManager] Pruned %d old task(s) from store.",
                     deleted,
                 )
-        except Exception:
+        except Exception as exc:
+            store_error = str(exc) or exc.__class__.__name__
             logger.exception(
                 "[OptimizationTaskManager] Store cleanup failed; in-memory "
                 "pruning still completed."
             )
+        return {
+            "memory_removed": len(to_remove),
+            "store_deleted": deleted,
+            "store_error": store_error,
+        }
 
 
 def _parse_dt(value: Any) -> datetime | None:

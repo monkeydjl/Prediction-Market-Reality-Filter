@@ -395,18 +395,46 @@ async def _job_optimization_task_cleanup() -> None:
     Auto-tune / batch-optimize tasks are persisted to the loop DB so a restart
     does not 404 the polling frontend (see optimization_task_store). Without
     this job the table grows without bound; the in-memory cache would also
-    accumulate stale entries across long-lived processes. Cleanup is best-
-    effort — a store failure is logged and re-raised into the run ledger so
-    degraded SQLite surfaces loudly rather than silently leaking rows.
+    accumulate stale entries across long-lived processes. A store failure is
+    reported into the run ledger so degraded SQLite surfaces loudly rather than
+    silently leaking rows.
+
+    This docstring already claimed the store failure was "re-raised into the run
+    ledger". It was not: ``cleanup_old_tasks`` caught it, logged it, and returned
+    ``None``, and this job then recorded the literal ``{"cleaned": True}``. So the
+    one condition the job exists to prevent -- the table growing without bound --
+    was the condition it reported as a clean success.
     """
     logger.info("[Scheduler] Optimization task cleanup starting...")
     run_id = _start_run("optimization_task_cleanup")
     try:
         from app.services.optimization_task_manager import get_task_manager
 
-        await get_task_manager().cleanup_old_tasks(max_age_hours=24)
-        _finish_run(run_id, "success", result={"cleaned": True})
-        logger.info("[Scheduler] Optimization task cleanup completed")
+        outcome = await get_task_manager().cleanup_old_tasks(max_age_hours=24) or {}
+        store_error = outcome.get("store_error")
+        result = {
+            "memory_removed": outcome.get("memory_removed"),
+            "store_deleted": outcome.get("store_deleted"),
+            "store_error": store_error,
+        }
+        if store_error:
+            _finish_run(
+                run_id, "failed",
+                result=result,
+                error=f"store cleanup failed: {store_error}",
+            )
+            logger.warning(
+                "[Scheduler] Optimization task cleanup: store prune failed (%s); "
+                "in-memory pruning removed %s", store_error,
+                outcome.get("memory_removed"),
+            )
+            return
+        _finish_run(run_id, "success", result=result)
+        logger.info(
+            "[Scheduler] Optimization task cleanup completed "
+            "(memory=%s store=%s)",
+            outcome.get("memory_removed"), outcome.get("store_deleted"),
+        )
     except Exception as exc:
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
         logger.exception("[Scheduler] Optimization task cleanup failed")

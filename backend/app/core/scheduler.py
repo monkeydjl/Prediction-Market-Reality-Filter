@@ -741,6 +741,36 @@ async def _job_fetch_traditional_odds() -> None:
             })
             return
 
+        # Don't spend quota on a run that cannot attribute anything.
+        # fetch_all_sports_odds() is a /sports discovery call plus one
+        # /sports/{key}/odds per sport key, all metered against
+        # x-requests-remaining. _match_odds_to_match needs team names parsed out
+        # of the match_id, and no production writer puts them there, so this used
+        # to buy N+1 paid requests and then report captured=0 with "success".
+        attributable = [m for m in matches if _odds_lookup_key(m) is not None]
+        if not attributable:
+            _finish_run(
+                run_id, "failed",
+                result={
+                    "matches_total": len(matches),
+                    "attributable": 0,
+                    "captured": 0,
+                    "errors": 0,
+                    "skipped_reason": "no_match_id_yields_team_tokens",
+                },
+                error=(
+                    f"none of {len(matches)} linked match id(s) can be matched to "
+                    "an Odds API fixture; ids carry no team tokens, so the fetch "
+                    "was skipped rather than spending quota for zero captures"
+                ),
+            )
+            logger.warning(
+                "[Scheduler] Traditional odds fetch skipped: 0 of %d linked "
+                "match id(s) are attributable (ids carry no team tokens)",
+                len(matches),
+            )
+            return
+
         # Fetch all available sports odds from The Odds API
         all_odds = await fetch_all_sports_odds()
 
@@ -788,12 +818,47 @@ async def _job_fetch_traditional_odds() -> None:
 
         _finish_run(run_id, "success", result={
             "matches_total": len(matches),
+            "attributable": len(attributable),
             "captured": captured,
             "errors": errors,
         })
     except Exception as exc:
         logger.exception("[Scheduler] Traditional odds fetch failed")
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
+
+
+def _odds_lookup_key(match_id: str) -> str | None:
+    """The Odds API sport key for ``match_id``, or None if it cannot be attributed.
+
+    ``_match_odds_to_match`` needs **team names parsed out of the match_id**:
+    ``{comp}-{YYYYMMDD}-{HOME}-{AWAY}`` or ``{comp}-{YYYY}-{MM}-{DD}-{HOME}-{AWAY}``.
+    Every production writer builds ids as ``{sport}-{provider_game_id}`` instead
+    (``historical_data_ingestor`` line ~250, and the football adapters), which
+    carries no team name at all — measured 2026-09-01: **all 18,717 rows** in
+    ``kernel_match_fixtures`` bail out here, none yields two team tokens. The
+    dated format exists only in test fixtures.
+
+    This predicate is shared with the caller on purpose. The job uses it to decide
+    whether ``fetch_all_sports_odds()`` — a quota-metered ``/sports`` call plus one
+    ``/sports/{key}/odds`` per sport — is worth spending at all, and a second
+    hand-typed copy of the rule would be free to disagree with the matcher it is
+    supposed to predict.
+    """
+    from app.services.odds_api_service import COMPETITION_TO_ODDS_API_SPORT
+    from app.kernel.sport_market_bridge_service import SportMarketBridgeService
+
+    competition, _date_str, team_tokens = (
+        SportMarketBridgeService._parse_match_id_static(match_id)
+    )
+    # An unparseable competition could not be in COMPETITION_TO_ODDS_API_SPORT
+    # anyway, so fold it into the existing bail-out instead of looking it up.
+    if not competition or not team_tokens or len(team_tokens) < 2:
+        return None
+    # A token that normalizes to "" would compare equal to a fixture missing its
+    # home_team/away_team, attributing another fixture's odds to this match.
+    if not team_tokens[0].strip() or not team_tokens[1].strip():
+        return None
+    return COMPETITION_TO_ODDS_API_SPORT.get(competition)
 
 
 def _match_odds_to_match(
@@ -809,21 +874,18 @@ def _match_odds_to_match(
         Empty list if no match found.
     """
     from app.services.odds_api_service import (
-        COMPETITION_TO_ODDS_API_SPORT, normalize_team_name, extract_best_odds,
+        normalize_team_name, extract_best_odds,
     )
     from app.utils.implied_prob import odds_api_to_implied
     from app.kernel.sport_market_bridge_service import SportMarketBridgeService
 
-    # Parse match_id using the bridge service's parser
-    competition, date_str, team_tokens = SportMarketBridgeService._parse_match_id_static(match_id)
-    # An unparseable competition could not be in COMPETITION_TO_ODDS_API_SPORT
-    # anyway, so fold it into the existing bail-out instead of looking it up.
-    if not competition or not team_tokens or len(team_tokens) < 2:
-        return []
-
-    sport_key = COMPETITION_TO_ODDS_API_SPORT.get(competition)
+    sport_key = _odds_lookup_key(match_id)
     if not sport_key:
         return []
+
+    _competition, _date_str, team_tokens = (
+        SportMarketBridgeService._parse_match_id_static(match_id)
+    )
 
     fixtures = all_odds.get(sport_key, [])
     if not fixtures:

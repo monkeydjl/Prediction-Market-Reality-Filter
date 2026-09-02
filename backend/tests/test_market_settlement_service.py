@@ -257,12 +257,25 @@ def kernel_db(tmp_path):
     close_kernel_db()
 
 
-def _seed_prediction(match_id="m1", engine="BasketballEngine", competition="nba", probs=None):
-    """Seed a KernelPrediction row."""
-    from app.kernel.kernel_db import KernelPrediction, get_kernel_session
+def _seed_prediction(
+    match_id="m1", engine="BasketballEngine", competition="nba", probs=None,
+    created_at=None, with_history=True,
+):
+    """Seed a KernelPrediction row plus its history row.
+
+    ``learning_service.record_prediction`` writes both in one transaction — the
+    ``kernel_predictions`` upsert and an appended ``kernel_prediction_history``
+    row — so a prediction without history is a state production cannot reach.
+    Seeding only the first left ``_resolve_engine_at`` with nothing to read.
+    ``with_history=False`` reproduces the one way production *can* get there:
+    ``_migrate_dormant_tables`` drops ``kernel_prediction_history``.
+    """
+    from app.kernel.kernel_db import (
+        KernelPrediction, KernelPredictionHistory, get_kernel_session,
+    )
     if probs is None:
         probs = {"home_win": 0.65, "away_win": 0.35}
-    now = _utcnow()
+    now = created_at or _utcnow()
     session = get_kernel_session()
     try:
         session.add(KernelPrediction(
@@ -270,6 +283,41 @@ def _seed_prediction(match_id="m1", engine="BasketballEngine", competition="nba"
             season="2025-26", engine=engine, predicted_scores={},
             outcome_probabilities=probs, confidence=0.7, feature_version="nba-1.0",
             explanation={}, created_at=now, updated_at=now,
+        ))
+        if with_history:
+            session.add(KernelPredictionHistory(
+                match_id=match_id, engine=engine, predicted_scores={},
+                outcome_probabilities=probs, confidence=0.7,
+                feature_version="nba-1.0", trigger="initial", created_at=now,
+            ))
+        session.commit()
+    finally:
+        session.close()
+
+
+def _seed_reprediction(match_id="m1", engine="OtherEngine", created_at=None, probs=None):
+    """Re-predict ``match_id`` with a different engine, as record_prediction does.
+
+    Overwrites ``kernel_predictions.engine`` in place (last-writer-wins) and
+    appends a history row. This is what makes the current-read attribution wrong:
+    the overwrite happens after the edge froze its ``model_prob``.
+    """
+    from app.kernel.kernel_db import (
+        KernelPrediction, KernelPredictionHistory, get_kernel_session,
+    )
+    if probs is None:
+        probs = {"home_win": 0.30, "draw": 0.25, "away_win": 0.45}
+    now = created_at or _utcnow()
+    session = get_kernel_session()
+    try:
+        row = session.get(KernelPrediction, match_id)
+        row.engine = engine
+        row.outcome_probabilities = probs
+        row.updated_at = now
+        session.add(KernelPredictionHistory(
+            match_id=match_id, engine=engine, predicted_scores={},
+            outcome_probabilities=probs, confidence=0.7,
+            feature_version="nba-1.0", trigger="initial", created_at=now,
         ))
         session.commit()
     finally:
@@ -317,7 +365,10 @@ def _seed_verified_link(match_id="m1", mapped_outcome="home_win", implied_prob=0
     return link
 
 
-def _seed_edge(match_id="m1", mapped_outcome="home_win", model_prob=0.65, market_prob=0.6):
+def _seed_edge(
+    match_id="m1", mapped_outcome="home_win", model_prob=0.65, market_prob=0.6,
+    captured_at=None,
+):
     """Seed a B edge via EdgeStore.append_edge."""
     from app.kernel.edge_store import EdgeStore
     raw_edge = model_prob - market_prob
@@ -327,7 +378,7 @@ def _seed_edge(match_id="m1", mapped_outcome="home_win", model_prob=0.65, market
         match_id=match_id, mapped_outcome=mapped_outcome,
         model_prob=model_prob, market_prob=market_prob, raw_edge=raw_edge,
         trust=0.8, liquidity_factor=1.0, adjusted_edge=adjusted_edge,
-        spread=None, sources_count=1, stale=False,
+        spread=None, sources_count=1, stale=False, captured_at=captured_at,
     )
 
 
@@ -827,3 +878,226 @@ async def test_settlement_job_reports_the_counts_it_actually_settled(
         "scanned": 1, "processed": 1, "skipped": 0,
         "already_processed": 0, "errors": 0,
     }
+
+
+# ---------------------------------------------------------------------------
+# Engine attribution: the label must name the engine that produced the graded
+# probability, not whichever engine predicted last.
+# ---------------------------------------------------------------------------
+
+def test_settlement_is_attributed_to_the_engine_that_produced_the_graded_prob(
+    kernel_db, monkeypatch
+):
+    """A re-prediction after the edge froze must not move the settlement's label.
+
+    ``process_settlement`` grades ``edge["model_prob"]``, frozen at
+    ``edge["captured_at"]``, but used to read the label from
+    ``get_latest_prediction(match_id).engine`` — and ``kernel_predictions`` is
+    keyed on ``match_id`` alone, with ``record_prediction`` overwriting ``engine``
+    in place. So any re-prediction between detection and settlement moved the
+    grade onto a different engine. Live measurement on the two churned matches in
+    the kernel DB: ~98.7% of each recorded engine span sat under an engine other
+    than today's, and the two engines published opposite-side, differently-shaped
+    probability sets (3-way vs 2-way).
+    """
+    from app.core import config
+    monkeypatch.setattr(config.settings, "MIN_SAMPLES_FOR_MARKET_CALIBRATION", 10)
+    detected = _utcnow() - timedelta(hours=3)
+    repredicted = _utcnow() - timedelta(hours=2)
+    finished = _utcnow()
+
+    _seed_prediction(match_id="m1", engine="BasketballEngine", created_at=detected)
+    _seed_edge(match_id="m1", mapped_outcome="home_win", captured_at=detected)
+    # A later engine overwrites kernel_predictions.engine, exactly as
+    # record_prediction does. The edge's model_prob is untouched. Timed strictly
+    # between detection and the final whistle — that is the production sequence,
+    # and it is also what makes ``captured_at`` the only timestamp that resolves
+    # to the right engine: resolving at ``finished_at`` would pick this row.
+    _seed_reprediction(match_id="m1", engine="EloOddsEngine", created_at=repredicted)
+    _seed_outcome(match_id="m1", finished_at=finished)
+    _seed_verified_link(match_id="m1", mapped_outcome="home_win", implied_prob=0.9)
+
+    from app.kernel.kernel_db import get_latest_prediction
+    assert get_latest_prediction("m1").engine == "EloOddsEngine"  # the wrong answer
+
+    svc = MarketSettlementService()
+    assert svc.process_settlement("m1").status == "processed"
+    s = svc.get_settlement("m1")[0]
+    assert s["engine"] == "BasketballEngine"
+    assert s["model_prob"] == pytest.approx(0.65)
+    assert s["status"] == "processed"
+
+
+def test_market_calibration_is_credited_to_the_attributed_engine(
+    kernel_db, monkeypatch
+):
+    """The calibration tail must follow the resolved engine, not the current read.
+
+    ``_update_market_calibration`` is what feeds
+    ``calibration_fusion_service._compute_market_trust``, so a mislabelled row
+    does not just misreport history — it moves the trust multiplier B applies to
+    a *different* engine's future edges.
+    """
+    from app.core import config
+    monkeypatch.setattr(config.settings, "MIN_SAMPLES_FOR_MARKET_CALIBRATION", 2)
+    monkeypatch.setattr(config.settings, "MARKET_CALIBRATION_WINDOW_SIZE", 30)
+    detected = _utcnow() - timedelta(hours=3)
+    repredicted = _utcnow() - timedelta(hours=2)
+
+    for i in range(2):
+        mid = f"cal_{i}"
+        _seed_prediction(match_id=mid, engine="BasketballEngine", created_at=detected)
+        _seed_edge(match_id=mid, mapped_outcome="home_win", captured_at=detected,
+                   model_prob=0.65, market_prob=0.6)
+        _seed_reprediction(match_id=mid, engine="EloOddsEngine", created_at=repredicted)
+        _seed_outcome(match_id=mid)
+        _seed_verified_link(match_id=mid, mapped_outcome="home_win", implied_prob=0.7)
+
+    svc = MarketSettlementService()
+    svc.scan_and_process(limit=10)
+
+    credited = svc.get_calibrations(engine="BasketballEngine", competition="nba")
+    assert len(credited) == 1
+    assert credited[0]["sample_count"] == 2
+    # The engine that merely predicted last must have no market calibration.
+    assert svc.get_calibrations(engine="EloOddsEngine", competition="nba") == []
+
+
+def test_resolve_engine_at_picks_the_engine_live_at_that_moment(kernel_db):
+    """The resolver reads the newest history row at or before the timestamp."""
+    from app.kernel.market_settlement_service import _resolve_engine_at
+    t0 = _utcnow() - timedelta(hours=5)
+    t1 = _utcnow() - timedelta(hours=3)
+
+    _seed_prediction(match_id="m1", engine="First", created_at=t0)
+    _seed_reprediction(match_id="m1", engine="Second", created_at=t1)
+
+    assert _resolve_engine_at("m1", t0) == "First"
+    assert _resolve_engine_at("m1", t1 - timedelta(seconds=1)) == "First"
+    assert _resolve_engine_at("m1", t1) == "Second"
+    assert _resolve_engine_at("m1", _utcnow()) == "Second"
+    # Before any prediction was published there is no answer to give.
+    assert _resolve_engine_at("m1", t0 - timedelta(seconds=1)) is None
+
+
+def test_resolve_engine_at_accepts_a_tz_aware_timestamp(kernel_db):
+    """A tz-aware ``captured_at`` must still match tz-naive stored rows.
+
+    ``edge_detector_service`` stamps ``datetime.now(timezone.utc)``, so
+    ``edge["captured_at"]`` comes back aware while SQLite stores naive strings.
+    If the offset reached the bound parameter the comparison would silently
+    match nothing and every settlement would land in
+    ``skipped_unknown_engine``.
+    """
+    from app.kernel.market_settlement_service import _resolve_engine_at
+    aware = datetime(2026, 7, 24, 7, 35, 23, 911385, tzinfo=timezone.utc)
+
+    _seed_prediction(match_id="m1", engine="First", created_at=aware)
+
+    assert _resolve_engine_at("m1", aware) == "First"
+    assert _resolve_engine_at("m1", aware.replace(tzinfo=None)) == "First"
+    assert _resolve_engine_at("m1", aware + timedelta(minutes=1)) == "First"
+
+
+def test_resolve_engine_at_breaks_a_timestamp_tie_by_insert_order(kernel_db):
+    """Two history rows on the same ``created_at`` must resolve to the later insert.
+
+    ``record_prediction`` stamps ``created_at`` itself, so two predictions
+    published inside the same clock tick share a timestamp. Without the
+    ``id`` tie-break the winner is whatever the DB returns first — dict/rowid
+    order, not chronology — and the label would silently depend on storage
+    layout rather than on which engine actually published last.
+    """
+    from app.kernel.market_settlement_service import _resolve_engine_at
+    tied = _utcnow() - timedelta(hours=2)
+
+    _seed_prediction(match_id="m1", engine="First", created_at=tied)
+    _seed_reprediction(match_id="m1", engine="Second", created_at=tied)
+
+    assert _resolve_engine_at("m1", tied) == "Second"
+
+
+def test_resolve_engine_at_raises_instead_of_returning_none(kernel_db, monkeypatch):
+    """A query failure must not read as "history does not reach back that far".
+
+    ``None`` makes the caller withhold the grade, so a swallowed error would
+    quietly convert every settlement into ``skipped_unknown_engine`` — a
+    permanent row that excludes the match from every later scan.
+    """
+    from app.kernel import market_settlement_service as mss
+
+    class _BrokenSession:
+        closed = False
+
+        def query(self, *a, **k):
+            raise RuntimeError("database is locked")
+
+        def close(self):
+            self.closed = True
+
+    broken = _BrokenSession()
+    monkeypatch.setattr(mss, "get_kernel_session", lambda: broken)
+
+    with pytest.raises(RuntimeError, match="database is locked"):
+        mss._resolve_engine_at("m1", _utcnow())
+    assert broken.closed is True
+
+
+def test_ungradeable_edge_is_recorded_but_not_graded(kernel_db, monkeypatch):
+    """An edge with no prediction history before it must not be graded at all.
+
+    Labelling it with the current ``kernel_predictions.engine`` would credit or
+    blame an engine on evidence it may not have produced, and that pollutes the
+    innocent engine's market calibration while hiding the responsible one's. The
+    row is still written so the match is not rescanned forever.
+    """
+    from app.core import config
+    monkeypatch.setattr(config.settings, "MIN_SAMPLES_FOR_MARKET_CALIBRATION", 2)
+    monkeypatch.setattr(config.settings, "MARKET_CALIBRATION_WINDOW_SIZE", 30)
+    detected = _utcnow() - timedelta(hours=3)
+
+    # No history row at all: the one state production can reach here is
+    # _migrate_dormant_tables having dropped kernel_prediction_history.
+    _seed_prediction(match_id="m1", engine="BasketballEngine", created_at=detected,
+                     with_history=False)
+    _seed_edge(match_id="m1", mapped_outcome="home_win", captured_at=detected)
+    _seed_outcome(match_id="m1")
+    _seed_verified_link(match_id="m1", mapped_outcome="home_win", implied_prob=0.9)
+
+    svc = MarketSettlementService()
+    assert svc.process_settlement("m1").status == "processed"
+    s = svc.get_settlement("m1")[0]
+    assert s["status"] == "skipped_unknown_engine"
+    assert s["brier_score"] is None
+    assert s["signed_error"] is None
+    assert s["direction_correct"] is None
+    assert s["settlement_implied_prob"] is None
+    # The model's own numbers are kept so the row is still auditable.
+    assert s["model_prob"] == pytest.approx(0.65)
+    assert "not verified for this edge" in s["skip_reason"]
+    # And nothing reached a calibration under any engine name.
+    assert svc.get_calibrations() == []
+
+
+def test_ungradeable_rows_never_reach_the_calibration_window(kernel_db):
+    """``skipped_unknown_engine`` rows are excluded from the regression.
+
+    ``get_settlements_for_calibration`` filters on ``status == "processed"``, so
+    this holds by construction — asserted because the whole point of withholding
+    the grade is that the number never lands on an engine.
+    """
+    from app.kernel.market_settlement_store import MarketSettlementStore
+    store = MarketSettlementStore()
+    for i in range(4):
+        store.append_settlement(
+            match_id=f"u{i}", mapped_outcome="home_win", engine="BasketballEngine",
+            competition="nba", settlement_implied_prob=None,
+            settlement_captured_at=None, link_id=None, model_prob=0.65,
+            market_prob_at_detection=0.6, raw_edge=0.05, adjusted_edge=0.04,
+            brier_score=None, signed_error=None, direction_correct=None,
+            status="skipped_unknown_engine", skip_reason="unverified",
+            match_finished_at=_utcnow(),
+        )
+    assert store.get_settlements_for_calibration(
+        "BasketballEngine", "nba", limit=30
+    ) == []

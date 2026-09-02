@@ -15,6 +15,7 @@ from app.kernel.kernel_db import (
     init_kernel_db,
     close_kernel_db,
     KernelPrediction,
+    KernelPredictionHistory,
     KernelCalibration,
     KernelMatchOutcome,
     get_kernel_session,
@@ -55,7 +56,13 @@ def _seed_prediction(
     probs: dict | None = None,
     ts: datetime | None = None,
 ) -> datetime:
-    """Insert a KernelPrediction row. Returns the prediction timestamp."""
+    """Insert a KernelPrediction row plus its history row. Returns the timestamp.
+
+    ``learning_service.record_prediction`` writes both in one transaction, and D
+    resolves a settlement's engine from ``kernel_prediction_history`` at the
+    edge's ``captured_at`` — a prediction with no history is a state production
+    does not produce.
+    """
     if probs is None:
         probs = {"home_win": 0.65, "away_win": 0.35}
     if ts is None:
@@ -68,6 +75,11 @@ def _seed_prediction(
             outcome_probabilities=probs, confidence=0.7,
             feature_version="nba-1.0", explanation={},
             created_at=ts, updated_at=ts,
+        ))
+        session.add(KernelPredictionHistory(
+            match_id=match_id, engine=engine, predicted_scores={},
+            outcome_probabilities=probs, confidence=0.7,
+            feature_version="nba-1.0", trigger="initial", created_at=ts,
         ))
         session.commit()
     finally:

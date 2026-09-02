@@ -18,6 +18,7 @@ from sqlalchemy import select
 from app.core import config
 from app.kernel.kernel_db import (
     KernelMatchOutcome,
+    KernelPredictionHistory,
     KernelSportMarketLink,
     KernelMarketSnapshot,
     KernelMarketSettlement,
@@ -237,6 +238,50 @@ def _find_verified_link_for_outcome(
         session.close()
 
 
+def _resolve_engine_at(match_id: str, when: datetime) -> str | None:
+    """Which engine was live for ``match_id`` at ``when``.
+
+    Returns the ``engine`` of the newest ``kernel_prediction_history`` row with
+    ``created_at <= when``, or ``None`` when the history does not reach back
+    that far.
+
+    ``kernel_predictions.engine`` cannot answer this. That table is keyed on
+    ``match_id`` alone and ``learning_service.record_prediction`` overwrites the
+    column in place, so it holds whichever engine predicted *last* — read after
+    ``finished_at``, that is not necessarily the engine whose probability the
+    frozen edge froze. ``kernel_prediction_history`` is the record of what was
+    actually published: ``record_prediction`` appends one row per prediction in
+    the same transaction as the overwrite, and nothing in this repo prunes the
+    table. Carrying the label on the edge row instead is not available —
+    ``kernel_sport_edges`` has no engine column and kernel tables have no
+    ALTER TABLE path here.
+
+    Ordered by ``created_at`` then ``id`` so two rows sharing a timestamp
+    resolve to the later insert rather than to whatever the DB returns first.
+
+    A query failure is raised, NOT swallowed, for the same reason as the two
+    helpers above: ``None`` makes the caller skip the match, so a swallowed
+    error would read as "history does not go back that far".
+    """
+    session = get_kernel_session()
+    try:
+        row = (
+            session.query(KernelPredictionHistory)
+            .filter(
+                KernelPredictionHistory.match_id == match_id,
+                KernelPredictionHistory.created_at <= when,
+            )
+            .order_by(
+                KernelPredictionHistory.created_at.desc(),
+                KernelPredictionHistory.id.desc(),
+            )
+            .first()
+        )
+        return None if row is None else row.engine
+    finally:
+        session.close()
+
+
 def _find_finished_matches_without_settlements(limit: int) -> list[dict[str, Any]]:
     """Find finished matches that don't have settlement rows yet.
 
@@ -308,14 +353,16 @@ class MarketSettlementService:
 
         finished_at = outcome_row.finished_at
 
-        # Read prediction for engine/competition metadata
+        # Read prediction for competition metadata. ``engine`` is deliberately
+        # NOT read from here — see _resolve_engine_at. ``competition`` is safe:
+        # nothing in the repo assigns KernelPrediction.competition after the
+        # insert, so it still describes the match this edge was detected on.
         prediction = get_latest_prediction(match_id)
         if prediction is None:
             return SettlementResult(
                 match_id=match_id, status="skipped_no_edges",
                 settlements_count=0, skip_reason="No prediction found for match.",
             )
-        engine = prediction.engine
         competition = prediction.competition
 
         # Read B's edges
@@ -328,8 +375,43 @@ class MarketSettlementService:
 
         # Process each edge's mapped_outcome
         settlements_count = 0
+        engines_touched: set[str] = set()
         for edge in edges:
             mapped_outcome = edge["mapped_outcome"]
+            # Attribute the row to the engine that was live when this edge froze
+            # its model_prob, not to whichever engine predicted last.
+            engine = _resolve_engine_at(match_id, edge["captured_at"])
+            if engine is None:
+                # No published prediction precedes this edge, so the engine
+                # behind ``model_prob`` cannot be established. Grading it under
+                # the current ``kernel_predictions.engine`` would credit or
+                # blame an engine on evidence that it may not have produced, and
+                # a wrong attribution is worse than a missing one: it pollutes
+                # the innocent engine's market calibration *and* hides the
+                # responsible one's. So the row is recorded and not graded —
+                # ``get_settlements_for_calibration`` filters on
+                # ``status == "processed"``, so it never reaches a regression.
+                # ``engine`` is ``nullable=False``, hence the current read is
+                # still stored; ``status``/``skip_reason`` say it is unverified.
+                self._store.append_settlement(
+                    match_id=match_id, mapped_outcome=mapped_outcome,
+                    engine=prediction.engine,
+                    competition=competition, settlement_implied_prob=None,
+                    settlement_captured_at=None, link_id=None,
+                    model_prob=edge["model_prob"], market_prob_at_detection=edge["market_prob"],
+                    raw_edge=edge["raw_edge"], adjusted_edge=edge["adjusted_edge"],
+                    brier_score=None, signed_error=None, direction_correct=None,
+                    status="skipped_unknown_engine",
+                    skip_reason=(
+                        f"No prediction history at or before {edge['captured_at']}; "
+                        f"engine shown is the current kernel_predictions read and is "
+                        f"not verified for this edge."
+                    ),
+                    match_finished_at=finished_at,
+                )
+                settlements_count += 1
+                continue
+            engines_touched.add(engine)
             # Find verified link for this outcome
             link = _find_verified_link_for_outcome(match_id, mapped_outcome)
             if link is None:
@@ -388,8 +470,14 @@ class MarketSettlementService:
             )
             settlements_count += 1
 
-        # Update calibration for this engine/competition
-        _update_market_calibration(self._store, engine, competition)
+        # Update calibration for every engine this match's edges were attributed
+        # to. Edges are one row per outcome and all carry the same ``captured_at``
+        # (``detect_edges`` stamps one ``now`` per match), so in practice this is
+        # one engine — but the set is derived from the rows actually written
+        # rather than assumed, because a re-detection between two scans can leave
+        # ``get_latest_edges`` holding outcomes from two different runs.
+        for touched in sorted(engines_touched):
+            _update_market_calibration(self._store, touched, competition)
 
         return SettlementResult(
             match_id=match_id, status="processed",

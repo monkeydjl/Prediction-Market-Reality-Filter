@@ -1,5 +1,7 @@
 """Tests for sport_settlement_cli."""
 import pytest
+from sqlalchemy.exc import OperationalError
+
 from app.kernel.kernel_db import init_kernel_db, close_kernel_db
 
 
@@ -119,3 +121,56 @@ def test_cli_history_command(kernel_db, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "settlement" in out.lower() or "no settlement" in out.lower()
+
+
+def _drop_settlement_tables():
+    """Drop both D tables through the live ORM session.
+
+    ``_migrate_dormant_tables`` issues DROP TABLE at init, so a missing kernel
+    table is a state this repo already produces.
+    """
+    from sqlalchemy import text
+    from app.kernel.kernel_db import get_kernel_session
+    session = get_kernel_session()
+    try:
+        session.execute(text("DROP TABLE kernel_market_settlements"))
+        session.execute(text("DROP TABLE kernel_market_calibrations"))
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_cli_calibrations_does_not_print_no_data_when_the_table_cannot_be_read(
+    kernel_db, capsys
+):
+    """A degraded kernel DB must not surface as ``[INFO] no market calibrations found``.
+
+    ``get_calibrations`` used to swallow query failures into ``[]``, so this
+    command printed the line an empty table prints and exited 0 — the one
+    outcome an operator reads as "the channel has not fitted anything yet",
+    which is also this table's normal state.
+    """
+    _drop_settlement_tables()
+    from scripts.sport_settlement_cli import main
+
+    with pytest.raises(OperationalError, match="no such table"):
+        main(["calibrations"])
+
+    out = capsys.readouterr().out
+    assert "no market calibrations found" not in out
+    assert "[OK]" not in out
+
+
+def test_cli_history_does_not_print_no_data_when_the_table_cannot_be_read(
+    kernel_db, capsys
+):
+    """Same for ``history``: ``[INFO] no settlements found`` and exit 0."""
+    _drop_settlement_tables()
+    from scripts.sport_settlement_cli import main
+
+    with pytest.raises(OperationalError, match="no such table"):
+        main(["history", "--limit", "5"])
+
+    out = capsys.readouterr().out
+    assert "no settlements found" not in out
+    assert "[OK]" not in out

@@ -7,6 +7,8 @@ process_settlement / scan_and_process / read methods.
 import pytest
 from datetime import datetime, timezone, timedelta
 
+from sqlalchemy.exc import OperationalError
+
 from app.kernel.market_settlement_service import (
     _compute_brier,
     _compute_signed_error,
@@ -1101,3 +1103,221 @@ def test_ungradeable_rows_never_reach_the_calibration_window(kernel_db):
     assert store.get_settlements_for_calibration(
         "BasketballEngine", "nba", limit=30
     ) == []
+
+
+# ---------------------------------------------------------------------------
+# MarketSettlementStore reads: a query failure must not read as "nothing yet"
+# ---------------------------------------------------------------------------
+
+def _drop_kernel_table(table: str) -> None:
+    """Drop a kernel table through the live ORM session.
+
+    ``_migrate_dormant_tables`` issues DROP TABLE at init, so a missing kernel
+    table is a state this repo already produces. Breaking the table with real
+    SQL rather than a fake session means the test cannot pass against an
+    implementation production never had.
+    """
+    from sqlalchemy import text
+    from app.kernel.kernel_db import get_kernel_session
+    session = get_kernel_session()
+    try:
+        session.execute(text(f"DROP TABLE {table}"))
+        session.commit()
+    finally:
+        session.close()
+
+
+def _rename_kernel_column(table: str, column: str, to: str | None = None) -> None:
+    """Partial drift: the table survives, one column the ORM selects does not."""
+    from sqlalchemy import text
+    from app.kernel.kernel_db import get_kernel_session
+    target = to or f"{column}_old"
+    session = get_kernel_session()
+    try:
+        session.execute(
+            text(f"ALTER TABLE {table} RENAME COLUMN {column} TO {target}")
+        )
+        session.commit()
+    finally:
+        session.close()
+
+def test_store_reads_raise_instead_of_returning_empty(kernel_db):
+    """Every read on MarketSettlementStore must propagate a query failure.
+
+    Each of these five reads has an empty result as its *normal* answer — no
+    settlement yet, no calibration yet — so a swallowed failure was
+    indistinguishable from a cold start at every caller. Both tables are
+    dropped, which is the same DDL ``_migrate_dormant_tables`` issues at init.
+    """
+    from app.kernel.market_settlement_store import MarketSettlementStore
+    store = MarketSettlementStore()
+    _append_processed(store, 0, 1)
+    store.upsert_calibration(
+        engine="BasketballEngine", competition="nba", slope=1.0, intercept=0.0,
+        sample_count=12, avg_brier=0.0025, avg_signed_error=0.05,
+        direction_accuracy=1.0, last_updated=_utcnow(),
+    )
+    # Healthy first, so the reads are known to be reading something.
+    assert len(store.get_settlement("m0")) == 1
+    assert len(store.get_calibrations()) == 1
+
+    _drop_kernel_table("kernel_market_settlements")
+    _drop_kernel_table("kernel_market_calibrations")
+
+    reads = {
+        "get_settlement": lambda: store.get_settlement("m0"),
+        "get_settlements_for_calibration": lambda: (
+            store.get_settlements_for_calibration("BasketballEngine", "nba", limit=30)
+        ),
+        "get_calibrations": lambda: store.get_calibrations(),
+        "get_history": lambda: store.get_history(limit=10),
+        "get_processed_match_ids": lambda: store.get_processed_match_ids(),
+    }
+    for name, call in reads.items():
+        with pytest.raises(OperationalError, match="no such table"):
+            call()
+        assert name in reads  # every read above is exercised, none skipped
+    assert len(reads) == 5
+
+
+def test_store_reads_return_empty_only_when_the_tables_are_really_empty(kernel_db):
+    """The empty answer is still available — it just has to be the truth."""
+    from app.kernel.market_settlement_store import MarketSettlementStore
+    store = MarketSettlementStore()
+    assert store.get_settlement("no-such-match") == []
+    assert store.get_settlements_for_calibration("NoEngine", "nba", limit=30) == []
+    assert store.get_calibrations() == []
+    assert store.get_history(limit=10) == []
+    assert store.get_processed_match_ids() == set()
+
+
+def test_partial_drift_does_not_read_as_an_unsettled_match(kernel_db):
+    """One missing column, not a missing table: the same swallow, narrower.
+
+    ``brier_score`` is selected by three of the five reads. Renaming it left
+    ``get_calibrations`` and ``get_processed_match_ids`` returning the truth
+    while the other three returned empty — a mix no caller can detect, which is
+    why the failure has to surface rather than be encoded in the return value.
+    """
+    from app.kernel.market_settlement_store import MarketSettlementStore
+    store = MarketSettlementStore()
+    _append_processed(store, 0, 1)
+    _rename_kernel_column("kernel_market_settlements", "brier_score")
+
+    with pytest.raises(OperationalError, match="no such column"):
+        store.get_settlement("m0")
+    with pytest.raises(OperationalError, match="no such column"):
+        store.get_settlements_for_calibration("BasketballEngine", "nba", limit=30)
+    with pytest.raises(OperationalError, match="no such column"):
+        store.get_history(limit=10)
+    # The two reads that never touch brier_score still work, and still say so.
+    assert store.get_calibrations() == []
+    assert store.get_processed_match_ids() == {"m0"}
+
+
+def test_a_failed_idempotency_read_does_not_reach_the_writer(kernel_db, monkeypatch):
+    """``process_settlement`` must stop at the failed read, not walk past it.
+
+    The read is its idempotency check, so ``[]`` said "never settled" for a
+    match that was already settled. Measured on the swallowed version, the
+    check was bypassed (0 rows read against 1 really present) and the error
+    surfaced from the INSERT instead — a write failure on a match that needed
+    no write.
+    """
+    from app.core import config
+    monkeypatch.setattr(config.settings, "MIN_SAMPLES_FOR_MARKET_CALIBRATION", 10)
+    _seed_prediction(match_id="m1")
+    _seed_outcome(match_id="m1")
+    _seed_verified_link(match_id="m1", mapped_outcome="home_win", implied_prob=0.7)
+    _seed_edge(match_id="m1", mapped_outcome="home_win")
+
+    svc = MarketSettlementService()
+    assert svc.process_settlement("m1").status == "processed"
+    assert svc.process_settlement("m1").status == "already_processed"
+
+    _rename_kernel_column("kernel_market_settlements", "brier_score")
+
+    with pytest.raises(OperationalError) as exc_info:
+        svc.process_settlement("m1")
+
+    # The failure must be attributed to the statement that actually failed.
+    # Swallowed, the read returned ``[]``, ``process_settlement`` walked past
+    # its idempotency check, and the error arrived from the INSERT instead —
+    # a write failure reported on a match that needed no write.
+    message = str(exc_info.value)
+    assert "no such column" in message
+    assert "INSERT INTO" not in message
+
+    # No INSERT was attempted, so restoring the column shows the original row
+    # untouched and the match still settled.
+    _rename_kernel_column(
+        "kernel_market_settlements", "brier_score_old", to="brier_score"
+    )
+    rows = svc.get_settlement("m1")
+    assert len(rows) == 1
+    assert rows[0]["brier_score"] is not None
+    assert svc.process_settlement("m1").status == "already_processed"
+
+
+def test_a_failed_calibration_read_is_not_a_silent_no_op(kernel_db, monkeypatch):
+    """A short window must mean "not enough samples", not "could not count them".
+
+    ``_update_market_calibration`` returns without writing when the read is
+    below MIN, so a swallowed failure left the previous calibration live with
+    its old ``last_updated`` — a stale fit that reads as current.
+    """
+    from app.core import config
+    monkeypatch.setattr(config.settings, "MIN_SAMPLES_FOR_MARKET_CALIBRATION", 10)
+    monkeypatch.setattr(config.settings, "MARKET_CALIBRATION_WINDOW_SIZE", 30)
+    from app.kernel.market_settlement_store import MarketSettlementStore
+    store = MarketSettlementStore()
+    for i in range(12):
+        _append_processed(store, i, 1)
+    _update_market_calibration(store, "BasketballEngine", "nba")
+    before = store.get_calibrations(engine="BasketballEngine", competition="nba")
+    assert len(before) == 1
+
+    _rename_kernel_column("kernel_market_settlements", "brier_score")
+
+    with pytest.raises(OperationalError, match="no such column"):
+        _update_market_calibration(store, "BasketballEngine", "nba")
+
+    # The stale row is still there — that part is unchanged, and it is why the
+    # swallow was invisible. What changed is that the caller now knows.
+    after = store.get_calibrations(engine="BasketballEngine", competition="nba")
+    assert after[0]["last_updated"] == before[0]["last_updated"]
+
+
+def test_a_scan_error_names_the_read_that_failed_not_the_write(kernel_db, monkeypatch):
+    """``scan_and_process`` must attribute the failure to the failed statement.
+
+    The queue read here still succeeds — ``_find_finished_matches_without_settlements``
+    selects only ``match_id``, so this drift does not reach it — and
+    ``scan_and_process`` catches per-match exceptions by design, so ``errors=1``
+    either way. What the swallow changed is *which* statement is blamed: the
+    idempotency read returned ``[]``, processing continued, and the operator's
+    ``ERROR:`` line quoted the INSERT. No mechanism was found that fails the
+    read and then lets the write land (WAL readers do not block on a writer, so
+    drift that breaks the SELECT breaks the INSERT too), which is why the defect
+    is a misattributed error rather than a duplicate row.
+    """
+    from app.core import config
+    monkeypatch.setattr(config.settings, "MIN_SAMPLES_FOR_MARKET_CALIBRATION", 10)
+    _seed_prediction(match_id="m2")
+    _seed_outcome(match_id="m2")
+    _seed_verified_link(match_id="m2", mapped_outcome="home_win", implied_prob=0.7)
+    _seed_edge(match_id="m2", mapped_outcome="home_win")
+
+    _rename_kernel_column("kernel_market_settlements", "brier_score")
+    svc = MarketSettlementService()
+    result = svc.scan_and_process(limit=10)
+
+    assert result.scanned == 1
+    assert result.errors == 1
+    assert result.processed == 0
+    assert result.skipped == 0
+    assert result.already_processed == 0
+    detail = result.error_details[0]
+    assert "no such column" in detail
+    assert "SELECT" in detail
+    assert "INSERT INTO" not in detail

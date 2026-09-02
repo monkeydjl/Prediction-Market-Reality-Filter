@@ -6,6 +6,7 @@ All endpoints gated by PHASE7_MARKET_SETTLEMENT_FEEDBACK_ENABLED (503 when false
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from app.core import config
 from app.kernel.kernel_db import init_kernel_db, close_kernel_db
@@ -190,3 +191,77 @@ def test_process_with_write_key_succeeds(client):
     data = res.json()
     assert data["match_id"] == "m1"
     assert data["status"] == "processed"
+
+
+def _drop_settlement_tables():
+    """Drop both D tables through the live ORM session.
+
+    ``_migrate_dormant_tables`` issues DROP TABLE at init, so a missing kernel
+    table is a state this repo already produces — the failure is a real query
+    error, not a mocked session.
+    """
+    from sqlalchemy import text
+    from app.kernel.kernel_db import get_kernel_session
+    session = get_kernel_session()
+    try:
+        session.execute(text("DROP TABLE kernel_market_settlements"))
+        session.execute(text("DROP TABLE kernel_market_calibrations"))
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_a_degraded_read_is_not_reported_as_no_data(client):
+    """A query failure must not surface as 404 "not found" or a 0-row list.
+
+    ``app/main.py`` registers no exception handler, so an escaping read error is
+    a 500 — which is the correct answer here: these three endpoints all have an
+    empty result as their normal answer, so the swallowed version answered
+    "nothing has been settled yet" on a question the query never resolved. The
+    404 in particular states a fact about the match.
+    """
+    _seed_full_scenario("m1")
+    assert client.post(
+        "/api/sport-settlements/process/m1", headers={"X-Api-Key": "test-key"}
+    ).status_code == 200
+    assert client.get("/api/sport-settlements/m1").status_code == 200
+
+    _drop_settlement_tables()
+
+    for url in (
+        "/api/sport-settlements/m1",
+        "/api/sport-settlements/calibrations",
+        "/api/sport-settlements/history?limit=10",
+    ):
+        with pytest.raises(OperationalError, match="no such table"):
+            client.get(url)
+
+
+def test_a_degraded_read_surfaces_as_500_not_404(kernel_db, monkeypatch):
+    """The same three endpoints, seen the way a caller over HTTP sees them.
+
+    ``raise_server_exceptions=False`` makes TestClient behave like a real
+    server: the unhandled error becomes a 500. Previously the responses were
+    ``404 {"detail": "No settlements found for match."}`` and two
+    ``200 {"total": 0}`` bodies — indistinguishable from a channel that has
+    produced nothing yet.
+    """
+    monkeypatch.setattr(
+        config.settings, "PHASE7_MARKET_SETTLEMENT_FEEDBACK_ENABLED", True
+    )
+    monkeypatch.setattr(config.settings, "API_WRITE_KEY", "test-key")
+    from app.api.routes import sport_settlements
+    app = FastAPI()
+    app.include_router(sport_settlements.router, prefix="/api")
+    client = TestClient(app, raise_server_exceptions=False)
+
+    _drop_settlement_tables()
+
+    for url in (
+        "/api/sport-settlements/m1",
+        "/api/sport-settlements/calibrations",
+        "/api/sport-settlements/history?limit=10",
+    ):
+        res = client.get(url)
+        assert res.status_code == 500, url
+        assert res.status_code != 404

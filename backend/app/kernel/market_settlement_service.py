@@ -238,7 +238,19 @@ def _find_verified_link_for_outcome(
 
 
 def _find_finished_matches_without_settlements(limit: int) -> list[dict[str, Any]]:
-    """Find finished matches that don't have settlement rows yet."""
+    """Find finished matches that don't have settlement rows yet.
+
+    Returns an empty list only when no finished match awaits settlement. A query
+    failure is raised, NOT swallowed, for the same reason as the two helpers
+    above — one level up: this list is the entire work queue, so ``[]`` reads as
+    "there is nothing to settle". ``scan_and_process`` then reports
+    ``scanned=0`` with ``errors=0``, ``_job_process_market_settlements`` records
+    a ``success`` run carrying those counts, and the CLI prints
+    ``[OK] scanned=0`` and exits 0. A degraded kernel DB would therefore stop
+    the entire settlement feedback channel while every entry point kept
+    reporting a clean, idle run — the failure is invisible precisely because
+    "nothing to do" is the normal state of this queue.
+    """
     session = get_kernel_session()
     try:
         processed_select = select(KernelMarketSettlement.match_id).distinct()
@@ -256,8 +268,6 @@ def _find_finished_matches_without_settlements(limit: int) -> list[dict[str, Any
             {"match_id": r.match_id, "outcome": r.outcome, "finished_at": r.finished_at}
             for r in rows
         ]
-    except Exception:
-        return []
     finally:
         session.close()
 

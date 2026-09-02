@@ -50,9 +50,19 @@ def _seed_full_scenario(match_id="m1"):
     Snapshot is backdated 1s so it precedes the match's finished_at (same fix
     as Task 1's _seed_verified_link) to avoid a timing race where
     captured_at > finished_at causes skipped_no_snapshot.
+
+    The ``kernel_prediction_history`` row is seeded alongside the prediction
+    because ``learning_service.record_prediction`` writes both in one
+    transaction, and ``market_settlement_service._resolve_engine_at`` reads the
+    history to attribute the settlement to the engine that was live when the
+    edge froze its ``model_prob``. A prediction with no history is a state
+    production does not produce.
     """
     from datetime import datetime, timezone, timedelta
-    from app.kernel.kernel_db import KernelPrediction, KernelMatchOutcome, get_kernel_session
+    from app.kernel.kernel_db import (
+        KernelPrediction, KernelPredictionHistory, KernelMatchOutcome,
+        get_kernel_session,
+    )
     from app.kernel.sport_market_link_store import SportMarketLinkStore
     from app.kernel.market_snapshot_store import MarketSnapshotStore
     from app.kernel.edge_store import EdgeStore
@@ -65,6 +75,11 @@ def _seed_full_scenario(match_id="m1"):
             season="2025-26", engine="BasketballEngine", predicted_scores={},
             outcome_probabilities={"home_win": 0.65, "away_win": 0.35}, confidence=0.7,
             feature_version="nba-1.0", explanation={}, created_at=now, updated_at=now,
+        ))
+        session.add(KernelPredictionHistory(
+            match_id=match_id, engine="BasketballEngine", predicted_scores={},
+            outcome_probabilities={"home_win": 0.65, "away_win": 0.35}, confidence=0.7,
+            feature_version="nba-1.0", trigger="initial", created_at=now,
         ))
         session.add(KernelMatchOutcome(
             match_id=match_id, home_score=2, away_score=1, outcome="home_win",

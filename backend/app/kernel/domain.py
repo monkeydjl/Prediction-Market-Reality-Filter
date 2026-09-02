@@ -203,7 +203,10 @@ class PredictionError:
     """Prediction error metrics after match completion."""
     match_id: str
     engine: str
-    score_mae: float
+    # None when the engine published no scoreline to grade. ``market_only``
+    # returns ``predicted_scores={}`` on purpose -- a series moneyline carries no
+    # scoreline claim -- and grading that as 0-0 invents a measurement.
+    score_mae: float | None
     outcome_correct: bool
     brier_score: float
     confidence_calibrated: bool
@@ -215,8 +218,13 @@ class EngineScore:
     engine: str
     competition: str | None
     accuracy: float
-    avg_mae: float
+    # None when no row in the window had a scoreline to grade. ``mae_n`` is the
+    # count this average is entitled to, which is not ``sample_count``: rows whose
+    # engine published no scoreline are skipped, so holding MAE to the slice size
+    # would report a mean over a denominator it never used.
+    avg_mae: float | None
     brier_score: float
     sample_count: int
     confidence_calibration: float
     last_updated: datetime
+    mae_n: int = 0

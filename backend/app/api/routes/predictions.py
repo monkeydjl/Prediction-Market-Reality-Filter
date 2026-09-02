@@ -424,6 +424,10 @@ def engine_score(name: str, competition: str | None = None) -> dict[str, Any]:
         "competition": score.competition,
         "accuracy": score.accuracy,
         "avg_mae": score.avg_mae,
+        # The denominator avg_mae actually used. It is not sample_count: rows whose
+        # engine published no scoreline are skipped, so a single number over both
+        # would be a lie by layout.
+        "mae_n": score.mae_n,
         "brier_score": score.brier_score,
         "sample_count": score.sample_count,
     }

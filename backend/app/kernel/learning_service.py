@@ -251,11 +251,24 @@ class KernelLearningService:
             if pred is None or outcome is None:
                 return None
 
-            # Score MAE
-            pred_home = pred.predicted_scores.get("home", 0)
-            pred_away = pred.predicted_scores.get("away", 0)
-            score_mae = (abs(pred_home - outcome.home_score) +
-                         abs(pred_away - outcome.away_score)) / 2.0
+            # Score MAE. ``None`` when the engine published no scoreline: an
+            # absent claim is not a wrong one. ``market_only`` returns
+            # predicted_scores={} deliberately (a series moneyline has no
+            # scoreline), and ``.get("home", 0)`` used to grade that as a
+            # predicted 0-0 -- so a 3-1 series scored MAE 2.00 against a claim the
+            # engine never made. Every other engine emits both keys, which is why
+            # only this one was affected. kernel_match_outcomes.score_mae is
+            # already nullable, so no schema change is needed to say "no
+            # measurement" instead of inventing one.
+            scores = pred.predicted_scores or {}
+            has_scoreline = "home" in scores and "away" in scores
+            score_mae: float | None = None
+            if has_scoreline and outcome.home_score is not None and outcome.away_score is not None:
+                score_mae = round(
+                    (abs(scores["home"] - outcome.home_score)
+                     + abs(scores["away"] - outcome.away_score)) / 2.0,
+                    4,
+                )
 
             # Outcome correct
             predicted = predicted_outcome(pred.outcome_probabilities)
@@ -278,7 +291,7 @@ class KernelLearningService:
 
             error = PredictionError(
                 match_id=match_id, engine=pred.engine,
-                score_mae=round(score_mae, 4),
+                score_mae=score_mae,
                 outcome_correct=outcome_correct,
                 brier_score=round(brier, 4),
                 confidence_calibrated=confidence_calibrated,
@@ -736,7 +749,16 @@ class KernelLearningService:
             count = len(results)
             correct = sum(1 for r in results if r.outcome_correct)
             accuracy = correct / count if count > 0 else 0.0
-            avg_mae = sum(r.score_mae or 0 for r in results) / count
+            # MAE gets its own denominator. ``sum(r.score_mae or 0) / count`` put
+            # every row in the divisor, so a row with no scoreline to grade
+            # (score_mae IS NULL) contributed 0 to the numerator and 1 to the
+            # denominator -- pulling avg_mae *down*, and a lower MAE reads as a
+            # better engine. A metric that skips ineligible rows cannot be held to
+            # the slice size; mae_n is reported beside the value so the count a
+            # reader is entitled to trust is visible.
+            mae_values = [r.score_mae for r in results if r.score_mae is not None]
+            mae_n = len(mae_values)
+            avg_mae = (sum(mae_values) / mae_n) if mae_n else None
             avg_brier = sum(r.brier_score or 0 for r in results) / count
 
             # Read confidence_calibration from KernelCalibration
@@ -751,7 +773,8 @@ class KernelLearningService:
             score = EngineScore(
                 engine=engine, competition=competition,
                 accuracy=round(accuracy, 4),
-                avg_mae=round(avg_mae, 4),
+                avg_mae=round(avg_mae, 4) if avg_mae is not None else None,
+                mae_n=mae_n,
                 brier_score=round(avg_brier, 4),
                 sample_count=count,
                 confidence_calibration=round(confidence_calibration, 4),

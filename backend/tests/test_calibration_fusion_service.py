@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from app.kernel.kernel_db import (
     init_kernel_db, close_kernel_db,
@@ -290,6 +291,40 @@ def test_market_only_qualified_reports_market_only(kernel_db):
     assert result.source == "market_only"
     assert result.trust == pytest.approx(0.80)
     assert result.market_weight == pytest.approx(1.0)
+
+
+def test_an_unreadable_market_row_is_not_reported_as_a_dormant_channel(kernel_db):
+    """A failed calibration read must not become the dormant sentinel.
+
+    ``get_calibrations`` used to swallow query failures into ``[]``, which
+    ``compute_trust`` converts to ``market_has_data = False`` — and the dormant
+    value is a sentinel meaning "no usable estimate", not a measurement. So an
+    estimate that existed and was merely unreadable was reported as one that had
+    never been made, with ``source`` still naming a channel as the basis.
+
+    Measured with Phase 3 below its MIN, so the market channel is the only
+    qualified signal: a channel measured at 1.00/n=12 reported trust 0.50
+    ``phase3_only``, and one measured at 0.167 also reported 0.50 — so
+    ``adjusted_edge = raw_edge * trust * liquidity`` halved for the good engine
+    and tripled for the bad one.
+    """
+    from sqlalchemy import text
+    _seed_phase3_calibration(avg_accuracy=0.72, sample_count=3)  # dormant
+    _seed_market_calibration(direction_accuracy=1.0, sample_count=12)
+    svc = CalibrationFusionService()
+    healthy = svc.compute_trust("BasketballEngine", "nba")
+    assert healthy.trust == pytest.approx(1.0)
+    assert healthy.source == "market_only"
+
+    session = get_kernel_session()
+    try:
+        session.execute(text("DROP TABLE kernel_market_calibrations"))
+        session.commit()
+    finally:
+        session.close()
+
+    with pytest.raises(OperationalError, match="no such table"):
+        svc.compute_trust("BasketballEngine", "nba")
 
 
 def test_edge_detector_delegates_to_fusion_when_enabled(kernel_db, monkeypatch):

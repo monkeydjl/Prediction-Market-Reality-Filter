@@ -26,6 +26,35 @@ from app.kernel.learning_service import (
 logger = logging.getLogger(__name__)
 
 
+#: Engines whose ``predicted_scores`` is *defined* as
+#: ``_probabilities_to_scores(outcome_probabilities)``, so moving the
+#: probabilities without recomputing it leaves the two published claims
+#: disagreeing. ``situational_engine`` already applies this rule to itself: it
+#: recomputes the scoreline when it moves mass and keeps the base one when it
+#: does not. Conditional calibration was the one place that moved the
+#: probabilities and skipped the recompute.
+#:
+#: Declared as data, with the two exclusions spelled out, because "recompute for
+#: everything" is wrong in two different ways:
+#:   * ``basketball``/``baseball``/``hockey`` derive the scoreline from the Elo
+#:     pair (``prediction_consistency_service.ELO_ONLY_SCORE_ENGINES``).
+#:     Recomputing would replace their model, and their probabilities carry no
+#:     ``draw`` key, which ``_probabilities_to_scores`` indexes unconditionally.
+#:   * ``gbm`` may carry a scoreline the model itself predicted
+#:     (``raw.get("predicted_score")``); overwriting that would discard a real
+#:     model output.
+#:   * ``lol_market_only`` publishes no scoreline at all.
+#: ``tests/test_calibration_keeps_claims_together.py`` asserts these buckets
+#: partition every registered engine, so a new engine forces the decision.
+PROBABILITY_DERIVED_SCORE_ENGINES: frozenset[str] = frozenset({
+    "elo_odds",
+    "dixon_coles",
+    "football_multi_factor",
+    "ensemble",
+    "situational",
+})
+
+
 def _normalize_probs(probs: dict[str, float]) -> dict[str, float]:
     cleaned = {
         k: max(0.0, float(v))
@@ -87,6 +116,29 @@ def apply_conditional_calibration(
     probs["home_win"] = cal_home
     probs = _normalize_probs(probs)
 
+    # Keep the two published claims together. The scoreline was derived from the
+    # *pre*-calibration probabilities, so leaving it here publishes a
+    # PredictionResult whose scoreline and probabilities can name opposite sides
+    # -- the shape #78 measured across engines, reintroduced by the pipeline for
+    # engines that were coherent by construction. Measured on the live rows with
+    # a mild in-range calibration (slope 1.15, intercept -0.03): m1's stored
+    # 2.00-1.00 against 1.90-0.77 for the calibrated probabilities.
+    scores = prediction.predicted_scores
+    if prediction.engine_name in PROBABILITY_DERIVED_SCORE_ENGINES:
+        from app.kernel.engines.elo_odds_engine import _probabilities_to_scores
+
+        try:
+            scores = _probabilities_to_scores(probs)
+        except (KeyError, TypeError):
+            # A probability set without the keys that function indexes. Keep the
+            # engine's own scoreline rather than inventing one, and say so.
+            logger.debug(
+                "calibration kept the pre-calibration scoreline for %s: "
+                "probabilities lack the keys the derivation needs",
+                prediction.engine_name,
+            )
+            scores = prediction.predicted_scores
+
     ba = dict(prediction.betting_analysis or {})
     ba["conditional_calibration"] = {
         "applied": True,
@@ -97,10 +149,16 @@ def apply_conditional_calibration(
         "source": cal.get("source"),
         "raw_home_win": raw_home,
         "calibrated_home_win": cal_home,
+        # Whether the scoreline was re-derived to match the calibrated
+        # probabilities. False is the honest answer for an Elo-derived or
+        # model-predicted scoreline, and a reader grading score_mae needs to know
+        # which of the two it is looking at.
+        "scores_recomputed": scores is not prediction.predicted_scores,
     }
     return replace(
         prediction,
         outcome_probabilities=probs,
+        predicted_scores=scores,
         betting_analysis=ba,
     )
 

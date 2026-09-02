@@ -80,6 +80,31 @@ def test_cli_scan_command(kernel_db, capsys):
     assert "scanned" in out or "processed" in out
 
 
+def test_cli_scan_does_not_print_ok_when_the_queue_cannot_be_read(kernel_db, monkeypatch, capsys):
+    """A degraded kernel DB must not surface as ``[OK] scanned=0``.
+
+    ``_find_finished_matches_without_settlements`` used to swallow query errors
+    into ``[]``, so this command printed the same line an idle run prints and
+    exited 0 — the one outcome an operator would read as "nothing to settle".
+    """
+    from app.kernel import market_settlement_service as mss
+
+    class _BrokenSession:
+        def query(self, *a, **k):
+            raise RuntimeError("disk I/O error")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(mss, "get_kernel_session", lambda: _BrokenSession())
+    from scripts.sport_settlement_cli import main
+
+    with pytest.raises(RuntimeError, match="disk I/O error"):
+        main(["scan", "--limit", "10"])
+
+    assert "[OK]" not in capsys.readouterr().out
+
+
 def test_cli_calibrations_command(kernel_db, capsys):
     from scripts.sport_settlement_cli import main
     rc = main(["calibrations"])

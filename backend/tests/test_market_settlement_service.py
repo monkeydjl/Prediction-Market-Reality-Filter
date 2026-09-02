@@ -688,3 +688,142 @@ def test_find_settlement_snapshot_returns_none_when_absent(kernel_db):
     """A genuinely missing snapshot is still None (not an error)."""
     from app.kernel import market_settlement_service as mss
     assert mss._find_settlement_snapshot(99999, _utcnow()) is None
+
+
+def test_find_finished_matches_raises_instead_of_returning_empty(kernel_db, monkeypatch):
+    """The work-queue helper must not swallow query errors into an empty list.
+
+    ``[]`` means "no finished match awaits settlement", which is this queue's
+    normal state — so a swallowed failure is invisible by construction.
+    """
+    from app.kernel import market_settlement_service as mss
+
+    class _BrokenSession:
+        def query(self, *a, **k):
+            raise RuntimeError("disk I/O error")
+
+        def close(self):
+            self.closed = True
+
+    broken = _BrokenSession()
+    monkeypatch.setattr(mss, "get_kernel_session", lambda: broken)
+
+    with pytest.raises(RuntimeError, match="disk I/O error"):
+        mss._find_finished_matches_without_settlements(10)
+
+    # The session is still released on the error path.
+    assert broken.closed is True
+
+
+def test_find_finished_matches_returns_empty_only_when_none_await_settlement(kernel_db):
+    """An empty queue is still ``[]`` (not an error), and a real one is listed."""
+    from app.kernel import market_settlement_service as mss
+    assert mss._find_finished_matches_without_settlements(10) == []
+
+    _seed_outcome(match_id="m1")
+    rows = mss._find_finished_matches_without_settlements(10)
+    assert [r["match_id"] for r in rows] == ["m1"]
+
+
+def test_scan_failure_is_not_reported_as_an_idle_scan(kernel_db, monkeypatch):
+    """A DB failure while enumerating the queue must not read as "nothing to do".
+
+    The swallowed version returned ``[]``, so ``scan_and_process`` reported
+    ``scanned=0`` with ``errors=0`` — the same ScanResult an idle run produces.
+    """
+    from app.kernel import market_settlement_service as mss
+
+    class _BrokenSession:
+        def query(self, *a, **k):
+            raise RuntimeError("connection reset")
+
+        def close(self):
+            self.closed = True
+
+    broken = _BrokenSession()
+    monkeypatch.setattr(mss, "get_kernel_session", lambda: broken)
+    svc = MarketSettlementService()
+
+    with pytest.raises(RuntimeError, match="connection reset"):
+        svc.scan_and_process(limit=10)
+
+
+async def test_settlement_job_records_a_failed_run_when_the_queue_cannot_be_read(
+    kernel_db, monkeypatch
+):
+    """The scheduler job must surface the failure instead of a clean idle run.
+
+    ``_job_process_market_settlements`` had no test. With the queue helper
+    swallowing the error it recorded ``success`` with
+    ``{"scanned": 0, ..., "errors": 0}``, so a degraded kernel DB stopped the
+    whole settlement feedback channel while the run ledger, the log line and
+    the CLI all reported a normal quiet run.
+    """
+    from app.core import config, scheduler
+    from app.kernel import market_settlement_service as mss
+
+    monkeypatch.setattr(
+        config.settings, "PHASE7_MARKET_SETTLEMENT_SCHEDULER_ENABLED", True
+    )
+    monkeypatch.setattr(config.settings, "MARKET_SETTLEMENT_BATCH_LIMIT", 10)
+
+    class _BrokenSession:
+        def query(self, *a, **k):
+            raise RuntimeError("disk I/O error")
+
+        def close(self):
+            self.closed = True
+
+    broken = _BrokenSession()
+    # Patched at the service, not at the service's caller: the job must fail
+    # because the real helper raises, not because a mock said so.
+    monkeypatch.setattr(mss, "get_kernel_session", lambda: broken)
+
+    finished: list[dict] = []
+    monkeypatch.setattr(scheduler, "_start_run", lambda job_name: "run-settlement")
+    monkeypatch.setattr(
+        scheduler, "_finish_run",
+        lambda run_id, status, *, result=None, error=None, exc=None: finished.append(
+            {"status": status, "result": result, "error": error}
+        ),
+    )
+
+    await scheduler._job_process_market_settlements()
+
+    assert finished[-1]["status"] == "failed"
+    assert "disk I/O error" in finished[-1]["error"]
+    assert broken.closed is True
+
+
+async def test_settlement_job_reports_the_counts_it_actually_settled(
+    kernel_db, monkeypatch
+):
+    """The working path still records real counts, derived from real rows."""
+    from app.core import config, scheduler
+
+    monkeypatch.setattr(
+        config.settings, "PHASE7_MARKET_SETTLEMENT_SCHEDULER_ENABLED", True
+    )
+    monkeypatch.setattr(config.settings, "MARKET_SETTLEMENT_BATCH_LIMIT", 10)
+    monkeypatch.setattr(config.settings, "MIN_SAMPLES_FOR_MARKET_CALIBRATION", 10)
+    _seed_prediction(match_id="m1")
+    _seed_outcome(match_id="m1")
+    _seed_verified_link(match_id="m1", mapped_outcome="home_win", implied_prob=0.7)
+    _seed_edge(match_id="m1", mapped_outcome="home_win")
+
+    finished: list[dict] = []
+    monkeypatch.setattr(scheduler, "_start_run", lambda job_name: "run-settlement")
+    monkeypatch.setattr(
+        scheduler, "_finish_run",
+        lambda run_id, status, *, result=None, error=None, exc=None: finished.append(
+            {"status": status, "result": result, "error": error}
+        ),
+    )
+
+    await scheduler._job_process_market_settlements()
+
+    assert finished[-1]["status"] == "success"
+    assert finished[-1]["result"] == {
+        "scanned": 1, "processed": 1, "skipped": 0,
+        "already_processed": 0, "errors": 0,
+    }

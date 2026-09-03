@@ -138,16 +138,16 @@ def link_price_audit(link_id: int) -> dict[str, Any]:
     _ensure_enabled()
     store = _snap_store()
     summary = store.audit_summary(link_id=link_id)
-    # attach link meta when available
-    try:
-        link = _link_store().get_link(link_id=link_id)
-        if link:
-            summary["match_id"] = link.get("match_id")
-            summary["source"] = link.get("source")
-            summary["market_id"] = link.get("market_id")
-            summary["verified"] = link.get("verified")
-    except Exception:  # noqa: BLE001
-        pass
+    # attach link meta when the row exists. A failed lookup is not "no meta":
+    # this door answered 200 with match_id/source/verified silently absent while
+    # /matches/{match_id}/audit reported link_count 0 for the same links, so the
+    # two audit doors disagreed about one fact.
+    link = _link_store().get_link(link_id=link_id)
+    if link:
+        summary["match_id"] = link.get("match_id")
+        summary["source"] = link.get("source")
+        summary["market_id"] = link.get("market_id")
+        summary["verified"] = link.get("verified")
     return summary
 
 

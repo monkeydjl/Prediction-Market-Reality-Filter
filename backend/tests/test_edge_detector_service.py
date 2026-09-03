@@ -595,3 +595,32 @@ def test_get_top_discrepancies_orders_by_abs_adjusted_edge_desc(service):
     # m2 has larger |adjusted_edge|
     assert abs(top[0].adjusted_edge) >= abs(top[1].adjusted_edge)
     assert top[0].match_id == "m2"
+
+
+def test_an_unreadable_links_table_is_not_reported_as_no_verified_links(service):
+    """``skip_reason="no_verified_links"`` is a stated fact about that table.
+
+    ``get_verified_links`` swallowed query failures into ``[]``, which is also
+    its answer for a match nobody has linked, so the summary asserted the links
+    had been checked and none were verified — measured against one verified link
+    with ``implied_prob=0.58``, with only the links table dropped and the
+    prediction and calibration rows intact.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.exc import OperationalError
+
+    _seed_prediction(match_id="m1", probs={"home_win": 0.65})
+    _seed_link_and_snapshot(match_id="m1", mapped_outcome="home_win", implied_prob=0.58)
+    _seed_calibration(avg_accuracy=0.72, sample_count=20)
+    healthy = service.detect_edges("m1")
+    assert healthy.skipped is False
+
+    session = get_kernel_session()
+    try:
+        session.execute(text("DROP TABLE kernel_sport_market_links"))
+        session.commit()
+    finally:
+        session.close()
+
+    with pytest.raises(OperationalError, match="no such table"):
+        service.detect_edges("m1")

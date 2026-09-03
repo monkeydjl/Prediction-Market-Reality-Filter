@@ -152,3 +152,127 @@ def test_link_audit_unknown_link_omits_meta(client):
     res = client.get("/api/sport-markets/links/9999/audit")
     assert res.status_code == 200
     assert "match_id" not in res.json()
+
+
+# --- A degraded links table must not read as an unlinked one ---
+
+def _drop_links_table():
+    """Real DDL through the live ORM session, visible to later ORM reads."""
+    from sqlalchemy import text
+    from app.kernel.kernel_db import get_kernel_session
+    session = get_kernel_session()
+    try:
+        session.execute(text("DROP TABLE kernel_sport_market_links"))
+        session.commit()
+    finally:
+        session.close()
+
+
+@pytest.fixture
+def error_client(kernel_db, monkeypatch):
+    """The same app, seen the way a caller over HTTP sees it.
+
+    ``app/main.py`` registers no exception handler and
+    ``raise_server_exceptions=False`` makes TestClient behave like a real
+    server, so an escaping read error arrives as a 500.
+    """
+    monkeypatch.setattr(config.settings, "PHASE7_SPORT_MARKET_BRIDGE_ENABLED", True)
+    from app.api.security import settings as security_settings
+    monkeypatch.setattr(security_settings, "API_WRITE_KEY", "")
+    monkeypatch.setattr(security_settings, "ALLOW_OPEN_WRITES", True)
+    from app.api.routes import sport_markets
+    app = FastAPI()
+    app.include_router(sport_markets.router, prefix="/api")
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_a_degraded_links_table_surfaces_as_500(error_client, subtests):
+    """Every read door, measured against a table that is gone.
+
+    Pre-fix each one answered 200 with its own cold-start shape:
+    ``{"items": [], "total": 0}`` for the operator's board *and* for the
+    reviewer's pending queue, ``{"series": []}`` for the price history, and
+    ``{"link_count": 0, "audits": []}`` for the match audit — none of them
+    distinguishable from a match nobody had linked.
+    """
+    link = _seed_link(match_id="m1", contract_id="c1", verified=True)
+    _drop_links_table()
+
+    for url in (
+        "/api/sport-markets/links",
+        "/api/sport-markets/links?match_id=m1",
+        "/api/sport-markets/links/m1",
+        "/api/sport-markets/links/m1/latest",
+        "/api/sport-markets/pending",
+        "/api/sport-markets/snapshots/m1",
+        f"/api/sport-markets/links/{link['id']}/audit",
+        "/api/sport-markets/matches/m1/audit",
+    ):
+        with subtests.test(url=url):
+            assert error_client.get(url).status_code == 500
+
+
+def test_a_degraded_links_table_does_not_report_an_empty_review_queue(error_client):
+    """``POST /pending/auto-verify`` is the reviewer's bulk action.
+
+    Pre-fix it answered ``200 {"pending_total": 0, "candidates": 0}`` — an
+    explicit statement that the queue held nothing to promote.
+    """
+    _seed_link(match_id="m1", contract_id="c1", verified=False)
+    _drop_links_table()
+    res = error_client.post("/api/sport-markets/pending/auto-verify?dry_run=true")
+    assert res.status_code == 500
+
+
+def test_verify_does_not_answer_404_for_a_link_that_exists(error_client):
+    """The write door's lookup, under one renamed column.
+
+    ``get_links`` builds a full row dict, so a renamed ``implied_prob`` breaks
+    it while the row is still there. Pre-fix the swallowed ``[]`` made the
+    ``next(...)`` miss and the route answered ``404 "Link not found"`` about a
+    link the operator could see in the DB.
+    """
+    from sqlalchemy import text
+    from app.kernel.kernel_db import get_kernel_session
+    _seed_link(match_id="m1", contract_id="c1", verified=False)
+    session = get_kernel_session()
+    try:
+        session.execute(text(
+            "ALTER TABLE kernel_sport_market_links "
+            "RENAME COLUMN implied_prob TO implied_prob_old"
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    res = error_client.post(
+        "/api/sport-markets/links/m1/c1/verify", json={"verified": True},
+    )
+    assert res.status_code == 500
+
+
+def test_verify_still_404s_for_a_missing_contract_on_a_healthy_table(client):
+    """404 keeps its meaning: the link genuinely is not there."""
+    _seed_link(match_id="m1", contract_id="c1", verified=False)
+    res = client.post(
+        "/api/sport-markets/links/m1/nosuch/verify", json={"verified": True},
+    )
+    assert res.status_code == 404
+
+
+def test_a_readable_empty_table_still_answers_200_and_empty(client, subtests):
+    """Cold start keeps its answers, so "raises when broken" is not "raises"."""
+    for url, expected in (
+        ("/api/sport-markets/links", {"items": [], "total": 0}),
+        ("/api/sport-markets/links/m1", {"match_id": "m1", "items": [], "total": 0}),
+        ("/api/sport-markets/links/m1/latest",
+         {"match_id": "m1", "items": [], "total": 0}),
+        ("/api/sport-markets/pending", {"items": [], "total": 0}),
+        ("/api/sport-markets/snapshots/m1", {"match_id": "m1", "series": []}),
+        ("/api/sport-markets/matches/m1/audit",
+         {"match_id": "m1", "link_count": 0, "audits": []}),
+    ):
+        with subtests.test(url=url):
+            res = client.get(url)
+            assert res.status_code == 200
+            assert res.json() == expected

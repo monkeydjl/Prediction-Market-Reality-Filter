@@ -109,7 +109,14 @@ class SportMarketLinkStore:
             session.close()
 
     def get_links(self, *, match_id: str) -> list[dict[str, Any]]:
-        """All links for a match (verified and unverified), newest first."""
+        """All links for a match (verified and unverified), newest first.
+
+        Lets a query failure escape. ``[]`` is this read's normal answer for an
+        unlinked match, so swallowing into it made an unreadable table report
+        ``200 {"items": [], "total": 0}`` at ``GET /links/{match_id}`` and
+        ``404 "Link not found"`` at ``POST /links/{m}/{c}/verify`` for a link
+        that was there.
+        """
         session = get_kernel_session()
         try:
             rows = (
@@ -119,8 +126,6 @@ class SportMarketLinkStore:
                 .all()
             )
             return [_row_to_dict(r) for r in rows]
-        except Exception:
-            return []
         finally:
             session.close()
 
@@ -128,7 +133,10 @@ class SportMarketLinkStore:
         """One link by row id, or None when it does not exist.
 
         Used by the /links/{link_id}/audit route to attach link metadata to the
-        price-path summary. Fail-closed like the other reads.
+        price-path summary. ``None`` means the row is absent; a query failure
+        escapes instead, because the route cannot tell the two apart -- it
+        answered ``200`` with the snapshot audit and the ``match_id`` /
+        ``source`` / ``verified`` keys silently missing.
         """
         session = get_kernel_session()
         try:
@@ -138,13 +146,17 @@ class SportMarketLinkStore:
                 .one_or_none()
             )
             return _row_to_dict(row) if row is not None else None
-        except Exception:
-            return None
         finally:
             session.close()
 
     def get_verified_links(self, *, match_id: str) -> list[dict[str, Any]]:
-        """Fail-closed: only verified=True links for a match."""
+        """Fail-closed: only verified=True links for a match.
+
+        Fail-closed means unverified rows are excluded, not that a broken query
+        is reported as "no verified links" -- ``EdgeDetectorService.detect_edges``
+        answered ``skipped=true skip_reason="no_verified_links"``, a stated fact
+        about this table on the strength of a query that never reached it.
+        """
         session = get_kernel_session()
         try:
             rows = (
@@ -154,13 +166,17 @@ class SportMarketLinkStore:
                 .all()
             )
             return [_row_to_dict(r) for r in rows]
-        except Exception:
-            return []
         finally:
             session.close()
 
     def get_pending_links(self) -> list[dict[str, Any]]:
-        """All unverified links (the human review queue)."""
+        """All unverified links (the human review queue).
+
+        An empty queue is the reviewer's "nothing to do" signal, so a failed
+        query must not produce it: ``GET /pending`` answered
+        ``200 {"items": [], "total": 0}`` and ``POST /pending/auto-verify``
+        reported ``pending_total: 0 candidates: 0``.
+        """
         session = get_kernel_session()
         try:
             rows = (
@@ -170,8 +186,6 @@ class SportMarketLinkStore:
                 .all()
             )
             return [_row_to_dict(r) for r in rows]
-        except Exception:
-            return []
         finally:
             session.close()
 
@@ -186,13 +200,18 @@ class SportMarketLinkStore:
                 .all()
             )
             return [_row_to_dict(r) for r in rows]
-        except Exception:
-            return []
         finally:
             session.close()
 
     def set_verified(self, *, link_id: int, verified: bool = True) -> bool:
-        """Promote/demote a link. Returns True if a row was updated."""
+        """Promote/demote a link. Returns True if a row was updated.
+
+        ``False`` means "no such row" only. A failed UPDATE re-raises after the
+        rollback, like ``upsert_link``: the route maps ``False`` to
+        ``500 "Verify failed"`` either way, but ``auto_verify_high_confidence``
+        counts on the return value and reported ``candidates: 1
+        auto_verified: 0`` over writes that had all failed.
+        """
         session = get_kernel_session()
         try:
             row = (
@@ -208,7 +227,7 @@ class SportMarketLinkStore:
             return True
         except Exception:
             session.rollback()
-            return False
+            raise
         finally:
             session.close()
 
@@ -218,7 +237,11 @@ class SportMarketLinkStore:
         source: str | None = None,
         verified: bool | None = None,
     ) -> list[dict[str, Any]]:
-        """List all links, optionally filtered by source/verified."""
+        """List all links, optionally filtered by source/verified.
+
+        Backs the operator's whole links board, where ``[]`` reads as "no links
+        exist yet"; a query failure escapes so the panel's error branch runs.
+        """
         session = get_kernel_session()
         try:
             q = session.query(KernelSportMarketLink)
@@ -228,8 +251,6 @@ class SportMarketLinkStore:
                 q = q.filter(KernelSportMarketLink.verified == (1 if verified else 0))
             rows = q.order_by(KernelSportMarketLink.updated_at.desc()).all()
             return [_row_to_dict(r) for r in rows]
-        except Exception:
-            return []
         finally:
             session.close()
 
@@ -238,6 +259,13 @@ class SportMarketLinkStore:
 
         Used by the edge detector scheduler job to enumerate matches that
         need edge recomputation. Additive — does not modify existing methods.
+
+        The three scheduler jobs that enumerate from here treat ``[]`` as "no
+        linked matches" and wrote ``status="success" matches_total=0`` into the
+        run ledger; measured with the table dropped, that even *upgraded*
+        ``sport_market_odds_fetch`` from its healthy ``status="failed"`` (which
+        carried a real diagnostic) to a green run. Each job's outer handler
+        turns an escaping failure into ``status="failed"`` with the error.
         """
         session = get_kernel_session()
         try:
@@ -248,8 +276,6 @@ class SportMarketLinkStore:
                 .all()
             )
             return [r[0] for r in rows]
-        except Exception:
-            return []
         finally:
             session.close()
 

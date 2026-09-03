@@ -1,9 +1,13 @@
 # backend/app/kernel/futures_link_store.py
 """Persistence for futures/championship market links (Phase 12).
 
-Mirrors SportMarketLinkStore pattern: keyword-only args, session-per-call,
-fail-closed reads. Distinct table (kernel_futures_links) because futures
-markets are season-level (competition+season+team), not match-level.
+Mirrors SportMarketLinkStore pattern: keyword-only args, session-per-call.
+Distinct table (kernel_futures_links) because futures markets are season-level
+(competition+season+team), not match-level.
+
+The reads let a query failure escape. ``[]`` is also the answer before Kalshi
+discovery has linked anything, and every door acts on it that way -- see each
+read's docstring for what was measured.
 """
 from __future__ import annotations
 
@@ -120,7 +124,16 @@ class FuturesLinkStore:
             session.close()
 
     def get_links(self, competition: str, season: str) -> list[dict[str, Any]]:
-        """Return all links for a competition+season pair. Fail-closed: [] on error."""
+        """Return all links for a competition+season pair.
+
+        A query failure escapes rather than becoming ``[]``. Measured on a temp
+        kernel DB holding a 5-leg ``KXNBACHAMP-25-*`` book with the links table
+        dropped and with ``implied_prob`` renamed: both produced exactly the
+        "nothing linked yet" answer -- ``GET /futures/nba/2024-25`` answered
+        **200** with ``links: []`` and ``integrity.status="incomplete"``, and
+        ``GET /futures`` / ``/futures/meta/coverage`` answered 200 with zero
+        pairs -- while ``upsert_link`` on the same broken table raised.
+        """
         session = get_kernel_session()
         try:
             rows = (
@@ -129,13 +142,19 @@ class FuturesLinkStore:
                 .all()
             )
             return [_link_row_to_dict(r) for r in rows]
-        except Exception:
-            return []
         finally:
             session.close()
 
     def get_verified_links(self) -> list[dict[str, Any]]:
-        """Return all verified futures links. Fail-closed: [] on error."""
+        """Return all verified futures links.
+
+        A query failure escapes rather than becoming ``[]``. This read gates
+        ``FuturesMarketService.capture_snapshots``, which returns
+        ``{"captured": 0, "errors": 0}`` on an empty list; the scheduler wrote
+        that to the run ledger as ``success``, so an unreadable links table was
+        a green snapshot-capture run indistinguishable from a season nobody has
+        linked yet.
+        """
         session = get_kernel_session()
         try:
             rows = (
@@ -144,8 +163,6 @@ class FuturesLinkStore:
                 .all()
             )
             return [_link_row_to_dict(r) for r in rows]
-        except Exception:
-            return []
         finally:
             session.close()
 
@@ -185,7 +202,17 @@ class FuturesLinkStore:
 
         Uses a single query with a max(captured_at) subquery to pick the
         latest snapshot per link_id in one round-trip (avoids N+1).
-        Fail-closed: [] on error.
+
+        A query failure escapes rather than becoming ``[]``. Measured with the
+        snapshots table dropped and with its ``implied_prob`` renamed -- the
+        asymmetric cases, where the links read still answers five verified legs:
+        ``GET /futures/nba/2024-25/latest`` answered **200** with
+        ``snapshots: []`` and ``integrity.status="incomplete"`` while
+        ``/futures/nba/2024-25`` beside it reported ``status="ok"`` over the same
+        pair, and ``append_snapshot`` on the same broken table raised (surfacing
+        as ``capture_snapshots`` ``errors=5``). The ``if not links`` early
+        return below stays: no snapshot query ran, so ``[]`` is a fact about the
+        pair rather than a swallowed failure.
         """
         session = get_kernel_session()
         try:
@@ -228,7 +255,5 @@ class FuturesLinkStore:
                 _snapshot_row_to_dict(row, team=team_by_id.get(row.link_id))
                 for row in rows
             ]
-        except Exception:
-            return []
         finally:
             session.close()

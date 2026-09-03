@@ -88,8 +88,9 @@ def _make_indexed_db(path: Path, *, rows: int = 200) -> None:
     on the very first read, so `wal_checkpoint` blows up before `integrity_check`
     is ever consulted. To pin the integrity check itself the damage has to be the
     other kind: file opens, checkpoint succeeds, and only the b-tree walk
-    complains. That needs enough pages that a non-header page is corruptible, and
-    an index whose entries can go missing relative to the table.
+    complains. That needs an index of its own — `_corrupt_but_still_openable`
+    below empties `ix_sample_name`'s root page — and enough rows that entries
+    going missing from it is something `integrity_check` can report.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.unlink(missing_ok=True)  # setUp already put a small DB here
@@ -107,40 +108,59 @@ def _make_indexed_db(path: Path, *, rows: int = 200) -> None:
 
 
 def _corrupt_but_still_openable(path: Path) -> list[str]:
-    """Corrupt `path` so it opens and checkpoints but fails integrity_check.
+    """Make `path` open and checkpoint cleanly but fail integrity_check.
 
-    Returns the integrity messages. Raises if no page produces that state, so a
+    Returns the integrity messages. Raises if the state is not reached, so a
     caller can never assert against a file that is merely unopenable — which is
     a different defect, already covered, and one the WAL checkpoint catches on
     its own.
+
+    The damage is *structural, not byte rot*: `ix_sample_name`'s root page is
+    replaced by a **valid but empty index leaf**. Every page in the file stays
+    well-formed, so nothing raises at any layer — the checkpoint succeeds, 200
+    rows still read, an indexed scan still answers — and `integrity_check`
+    reports what `_make_indexed_db` above describes: index entries missing
+    relative to the table, plus the index pages now orphaned.
+
+    Byte rot cannot be used here, and that is measured rather than assumed. The
+    earlier version wrote 0xff over one page and searched for a page whose
+    verdict was "reports, not raises". One frozen damaged image, copied into 30
+    processes, answered `reports` 25 times and `DatabaseError: database disk
+    image is malformed` 5 times — same bytes, md5 identical before and after,
+    the verdict stable *within* each process but not across them. So no amount
+    of pre-verification could hold the precondition for the assertion three
+    lines later, and this test failed 10 of 40 runs. This mechanism is
+    deterministic: 30 of 30 processes, one md5, 88 messages.
     """
-    original = path.read_bytes()
-    pages = max(2, len(original) // 4096)
-    for page in range(1, pages):
-        path.write_bytes(original)
-        with open(path, "r+b") as fh:
-            fh.seek(4096 * page + 8)
-            fh.write(b"\xff" * 300)
-        conn = sqlite3.connect(str(path))
-        try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        except sqlite3.DatabaseError:
-            conn.close()
-            continue  # unopenable: the other failure mode, not this one
-        try:
-            messages = [str(r[0]) for r in conn.execute("PRAGMA integrity_check")]
-        except sqlite3.DatabaseError:
-            continue  # raises rather than reporting: also not this mode
-        finally:
-            conn.close()
-        if messages != ["ok"]:
-            return messages
-    path.write_bytes(original)
-    raise AssertionError(
-        f"no page of {path} produced an openable-but-inconsistent database; "
-        "without one, nothing here exercises PRAGMA integrity_check"
+    page_size = 4096
+    conn = sqlite3.connect(str(path))
+    try:
+        root = conn.execute(
+            "SELECT rootpage FROM sqlite_schema WHERE name = 'ix_sample_name'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    # An index-leaf page (type 0x0a) with no freeblock, zero cells, cell content
+    # starting at the end of the page, and no fragmented free bytes.
+    header = (
+        bytes([0x0A])
+        + (0).to_bytes(2, "big")
+        + (0).to_bytes(2, "big")
+        + page_size.to_bytes(2, "big")
+        + bytes([0])
     )
+    with open(path, "r+b") as fh:
+        fh.seek(page_size * (int(root) - 1))
+        fh.write(header + bytes(page_size - len(header)))
+
+    sqlite_db.wal_checkpoint(str(path), mode="TRUNCATE")
+    messages = sqlite_db.integrity_check(str(path))
+    if messages == ["ok"]:
+        raise AssertionError(
+            f"emptying {path}'s index root left integrity_check reporting ok; "
+            "without a failure, nothing here exercises PRAGMA integrity_check"
+        )
+    return messages
 
 
 class _StoresInTempDir(unittest.TestCase):

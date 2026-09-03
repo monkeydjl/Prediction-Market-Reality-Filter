@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from app.kernel.kernel_db import (
     close_kernel_session,
@@ -579,3 +580,135 @@ class TestReliabilityEndpoint:
             assert resp.status_code == 503
         finally:
             config.settings.KERNEL_PREDICTION_ENABLED = original
+
+
+# --- A degraded read is not a cold store ---
+
+def _drop_table(name):
+    """Drop a kernel table through the live ORM session.
+
+    ``_migrate_dormant_tables`` issues DROP TABLE at init, so a missing kernel
+    table is a state this repo already produces — the failure is a real
+    ``OperationalError``, not a mocked session.
+    """
+    from sqlalchemy import text
+    session = get_kernel_session()
+    try:
+        session.execute(text(f"DROP TABLE {name}"))
+        session.commit()
+    finally:
+        session.close()
+
+
+class TestDegradedReadsAreNotEmptyResults:
+    """Each of these four reads swallowed query failures into its own empty
+    value, and every ``test_empty_*`` / ``test_nonexistent_*`` case above is the
+    proof that empty is also its *normal* answer — so a broken store read as a
+    store nobody had written to yet.
+    """
+
+    def test_engine_scores_raises_when_table_unreadable(self, db):
+        _insert_engine_score(db, engine="basketball", competition="nba")
+        assert len(get_engine_scores()) == 1
+
+        _drop_table("kernel_engine_scores")
+
+        with pytest.raises(OperationalError, match="no such table"):
+            get_engine_scores()
+
+    def test_engine_scores_unknown_sport_still_short_circuits(self, db):
+        """The ``return []`` in the ``sport`` branch is a different statement.
+
+        A sport that maps to no competition cannot be fixed by any query, so it
+        must keep answering ``[]`` even against an unreadable table.
+        """
+        _drop_table("kernel_engine_scores")
+        assert get_engine_scores(sport="quidditch") == []
+
+    def test_prediction_history_raises_when_table_unreadable(self, db):
+        _insert_prediction(db, match_id="nba-1")
+        _insert_history(db, match_id="nba-1")
+        assert get_prediction_history()[1] == 1
+
+        _drop_table("kernel_prediction_history")
+
+        with pytest.raises(OperationalError, match="no such table"):
+            get_prediction_history()
+
+    def test_history_by_match_raises_when_table_unreadable(self, db):
+        _insert_prediction(db, match_id="nba-1")
+        _insert_history(db, match_id="nba-1")
+        assert get_prediction_history_by_match("nba-1")["count"] == 1
+
+        _drop_table("kernel_prediction_history")
+
+        with pytest.raises(OperationalError, match="no such table"):
+            get_prediction_history_by_match("nba-1")
+
+    def test_calibrations_raises_when_table_unreadable(self, db):
+        _insert_calibration(db, engine="basketball", competition="nba")
+        assert len(get_calibrations()) == 1
+
+        _drop_table("kernel_calibration")
+
+        with pytest.raises(OperationalError, match="no such table"):
+            get_calibrations()
+
+
+class TestDegradedReadsSurfaceAs500:
+    """The four endpoints, seen the way a caller over HTTP sees them.
+
+    ``app/main.py`` registers no exception handler and
+    ``raise_server_exceptions=False`` makes TestClient behave like a real
+    server, so the escaping read error is a 500. Measured before the fix, with
+    only the backing table dropped and a real row in the store:
+    ``/predictions/engines/scores`` and ``/predictions/calibration`` answered
+    ``200 []``, ``/predictions/history`` answered
+    ``200 {"items": [], "total": 0}``, and ``/predictions/history/{id}``
+    answered ``200 {"sport": null, "count": 0}`` — describing a match as one
+    with no trajectory *and* no known sport.
+    """
+
+    def _client(self):
+        return TestClient(_create_app(), raise_server_exceptions=False)
+
+    def test_engine_scores_endpoint(self, db):
+        _insert_engine_score(db, engine="basketball", competition="nba")
+        original = _enable_kernel()
+        try:
+            client = self._client()
+            assert client.get("/predictions/engines/scores").json() != []
+            _drop_table("kernel_engine_scores")
+            resp = client.get("/predictions/engines/scores")
+            assert resp.status_code == 500
+        finally:
+            _restore_kernel(original)
+
+    def test_calibration_endpoint(self, db):
+        _insert_calibration(db, engine="basketball", competition="nba")
+        original = _enable_kernel()
+        try:
+            client = self._client()
+            assert client.get("/predictions/calibration").json() != []
+            _drop_table("kernel_calibration")
+            resp = client.get("/predictions/calibration")
+            assert resp.status_code == 500
+        finally:
+            _restore_kernel(original)
+
+    def test_history_endpoints(self, db):
+        _insert_prediction(db, match_id="nba-1")
+        _insert_history(db, match_id="nba-1")
+        original = _enable_kernel()
+        try:
+            client = self._client()
+            assert client.get("/predictions/history").json()["total"] == 1
+            assert client.get("/predictions/history/nba-1").json()["sport"] == "basketball"
+
+            _drop_table("kernel_prediction_history")
+
+            for url in ("/predictions/history", "/predictions/history/nba-1"):
+                resp = client.get(url)
+                assert resp.status_code == 500, url
+        finally:
+            _restore_kernel(original)

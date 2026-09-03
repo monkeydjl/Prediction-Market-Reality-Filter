@@ -3,6 +3,7 @@
 from dataclasses import replace
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from app.kernel.kernel_db import (
     init_kernel_db, close_kernel_session, get_kernel_session,
@@ -76,6 +77,61 @@ class TestGetMatchIdsWithPredictions:
         """Matches exist but no predictions → empty set."""
         result = get_match_ids_with_predictions(["wc-1", "wc-2"])
         assert result == set()
+
+
+def _drop_predictions_table():
+    """Drop kernel_predictions through the live ORM session.
+
+    ``_migrate_dormant_tables`` issues DROP TABLE at init, so a missing kernel
+    table is a state this repo already produces — the failure is a real
+    ``OperationalError``, not a mocked session.
+    """
+    from sqlalchemy import text
+    session = get_kernel_session()
+    try:
+        session.execute(text("DROP TABLE kernel_predictions"))
+        session.commit()
+    finally:
+        session.close()
+
+
+class TestAnUnreadablePredictionIsNotReportedAsNone:
+    """A query failure must not share the two reads' cold-start answer.
+
+    ``test_get_latest_prediction_returns_none`` and
+    ``test_no_predictions_returns_empty_set`` above are the proof that ``None``
+    and ``set()`` are these reads' *normal* answers, so swallowing a failed
+    query into them made a degraded store indistinguishable from a match nobody
+    had predicted.
+    """
+
+    def test_get_latest_prediction_raises_when_table_unreadable(self, db):
+        _insert_prediction("wc-123")
+        assert get_latest_prediction("wc-123") is not None
+
+        _drop_predictions_table()
+
+        with pytest.raises(OperationalError, match="no such table"):
+            get_latest_prediction("wc-123")
+
+    def test_get_match_ids_raises_when_table_unreadable(self, db):
+        _insert_prediction("wc-1")
+        assert get_match_ids_with_predictions(["wc-1"]) == {"wc-1"}
+
+        _drop_predictions_table()
+
+        with pytest.raises(OperationalError, match="no such table"):
+            get_match_ids_with_predictions(["wc-1"])
+
+    def test_empty_input_still_short_circuits_when_table_unreadable(self, db):
+        """The early ``return set()`` is a different statement: no query ran.
+
+        Asking about no ids cannot fail, so it must keep answering ``set()``
+        even against an unreadable table — otherwise the fix would turn a
+        no-op into an error.
+        """
+        _drop_predictions_table()
+        assert get_match_ids_with_predictions([]) == set()
 
 
 from unittest.mock import MagicMock, patch
@@ -346,6 +402,37 @@ class TestGetMatch:
                          "kickoff_utc", "stage", "round"}
         assert set(match.keys()) == expected_keys
         assert match["sport"] == "baseball"
+
+
+class TestUnreadablePredictionsOverHttp:
+    """The same failure seen the way a caller over HTTP sees it.
+
+    ``app/main.py`` registers no exception handler and
+    ``raise_server_exceptions=False`` makes TestClient behave like a real
+    server, so the escaping read error is a 500. Previously the slate answered
+    ``200`` with ``has_prediction: false`` on every row — inviting the operator
+    to predict matches that already had predictions — and the detail route
+    answered ``200 {"prediction": null}`` for a match that had one.
+    """
+
+    def test_slate_and_detail_return_500_not_a_prediction_free_200(self, api_client):
+        from app.main import app
+        _patch_kernel_adapter(api_client)
+        _insert_prediction("wc-1")
+
+        slate = api_client.get("/api/predictions/matches").json()
+        assert [m["has_prediction"] for m in slate if m["match_id"] == "wc-1"] == [True]
+        assert api_client.get(
+            "/api/predictions/matches/wc-1"
+        ).json()["prediction"] is not None
+
+        _drop_predictions_table()
+
+        client = TestClient(app, raise_server_exceptions=False)
+        for url in ("/api/predictions/matches", "/api/predictions/matches/wc-1"):
+            resp = client.get(url)
+            assert resp.status_code == 500, url
+            assert resp.status_code != 200, url
 
 
 class TestPredictEndpointFix:

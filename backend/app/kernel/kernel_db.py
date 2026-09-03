@@ -3,6 +3,16 @@
 
 Uses a separate SQLite database (kernel_predictions.db) with kernel_ prefixed
 tables. Does NOT touch the existing world_cup_predictions.db.
+
+Query failures in the row-returning reads below propagate. Each of them has its
+empty value — ``None``, ``set()``, ``[]``, ``count: 0`` — as its *normal*
+answer, so swallowing a failed query into it made a degraded store
+indistinguishable from a cold one, and every caller reads empty as a fact about
+the world rather than about the query. ``_reliability_unreadable`` takes the
+other route for the two dashboard aggregates because their response dict can
+carry ``error: "query_failed"`` and the frontend types it; a read returning an
+ORM row, a ``set`` or a ``tuple`` has no field to put it in, and the four
+route-facing reads here already have an error branch in their consuming panel.
 """
 from __future__ import annotations
 
@@ -577,13 +587,21 @@ def get_latest_prediction(match_id: str) -> KernelPrediction | None:
 
     The table uses match_id as primary key, so each match has at most one row
     (updated on each prediction).
+
+    ``None`` means *no prediction for this match*, which is the answer four
+    callers act on, so a failed query must not return it. Measured with only
+    ``kernel_predictions`` dropped and the link, snapshot and a real
+    ``adjusted_edge=+0.18`` edge intact: ``detect_edges`` reported
+    ``skipped=true skip_reason="no_prediction"``, ``GET
+    /api/sport-edges/{id}/latest`` answered ``200`` with that same reason and a
+    null ``engine_name``, ``process_settlement`` returned ``skipped_no_edges``
+    with ``"No prediction found for match."``, and ``GET
+    /api/predictions/matches/{id}`` answered ``200 {"prediction": null}`` for a
+    match that had one.
     """
     session = get_kernel_session()
     try:
         return session.query(KernelPrediction).filter_by(match_id=match_id).one_or_none()
-    except Exception as e:
-        logger.warning("kernel_db query failed: %s", e, exc_info=True)
-        return None
     finally:
         session.close()
 
@@ -594,6 +612,22 @@ def get_calibration(engine_name: str, competition: str) -> KernelCalibration | N
     Returns None if no row exists (cold start). Used by EdgeDetectorService
     to compute trust from KernelCalibration.avg_accuracy. Does NOT modify
     the KernelCalibration table.
+
+    Cold start is exactly why the failure must not also be ``None``: every
+    caller maps ``None`` onto a *stated* judgement about the engine. Measured
+    with only ``kernel_calibration`` dropped, against a row reading
+    ``avg_accuracy=0.90 sample_count=20``: the recommendation for a real +0.18
+    edge kept publishing ``trust: 0.9`` from the stored edge while flipping
+    ``calibration_status`` to ``uncalibrated_provisional``, and
+    ``CalibrationFusionService.compute_trust`` returned
+    ``trust=0.5 source="dormant"`` — the dormant *sentinel* presented as a
+    measurement of an engine that had one (see the same finding in
+    ``test_an_unreadable_market_row_is_not_reported_as_a_dormant_channel``).
+    On the edge path the swallow was already shadowed:
+    ``_compute_trust_phase3`` calls ``get_conditional_calibration_row``, which
+    propagates, before reaching here — but only when ``confidence`` is not
+    None, and ``_compute_trust(confidence=None)`` returned 0.5 for that same
+    0.90 engine.
     """
     session = get_kernel_session()
     try:
@@ -602,9 +636,6 @@ def get_calibration(engine_name: str, competition: str) -> KernelCalibration | N
             .filter_by(engine=engine_name, competition=competition)
             .one_or_none()
         )
-    except Exception as e:
-        logger.warning("kernel_db query failed: %s", e, exc_info=True)
-        return None
     finally:
         session.close()
 
@@ -646,6 +677,12 @@ def get_match_ids_with_predictions(match_ids: list[str]) -> set[str]:
     """Batch query: return the subset of match_ids that have a prediction row.
 
     Used by the list endpoint to populate has_prediction without N+1 queries.
+
+    The empty set is the normal answer for a slate nobody has predicted yet, and
+    ``_match_summary`` turns it into ``has_prediction: false`` on **every** row
+    of ``GET /api/predictions/matches`` — a 200 inviting the operator to predict
+    matches that already have predictions. The early ``return set()`` above is a
+    different statement: no ids were asked about, so no query ran.
     """
     if not match_ids:
         return set()
@@ -655,9 +692,6 @@ def get_match_ids_with_predictions(match_ids: list[str]) -> set[str]:
             KernelPrediction.match_id.in_(match_ids)
         ).all()
         return {row[0] for row in rows}
-    except Exception as e:
-        logger.warning("kernel_db query failed: %s", e, exc_info=True)
-        return set()
     finally:
         session.close()
 
@@ -678,6 +712,12 @@ def get_engine_scores(engine: str | None = None,
                Here we accept sport and convert to competition list.
 
     Note: COMPETITION_SPORT is imported lazily to avoid circular dependency.
+
+    The ``return []`` inside the ``sport`` branch stays: it means the sport maps
+    to no competition, which no query can change. A failed query is not that —
+    ``GET /api/predictions/engines/scores`` renders the operator's whole engine
+    league table, and an empty list there reads as "no engine has been scored
+    yet".
     """
     session = get_kernel_session()
     try:
@@ -695,9 +735,6 @@ def get_engine_scores(engine: str | None = None,
             else:
                 return []  # No matching competitions
         return query.all()
-    except Exception as e:
-        logger.warning("kernel_db query failed: %s", e, exc_info=True)
-        return []
     finally:
         session.close()
 
@@ -710,6 +747,13 @@ def get_prediction_history(sport: str | None = None,
 
     Returns (items, total) where items is a list of dicts with history +
     outcome data, and total is the unpaginated count.
+
+    ``([], 0)`` is what an unwritten history table returns, and
+    ``GET /api/predictions/history`` hands it to the frontend as
+    ``{"items": [], "total": 0}``. Unlike the two reliability aggregates below,
+    the tuple has no field for ``error: "query_failed"``, and
+    ``prediction-history-list.tsx`` already branches on the SWR ``error`` a 500
+    produces — so this read propagates rather than growing a third shape.
     """
     session = get_kernel_session()
     try:
@@ -769,9 +813,6 @@ def get_prediction_history(sport: str | None = None,
             items.append(item)
 
         return items, total
-    except Exception as e:
-        logger.warning("kernel_db query failed: %s", e, exc_info=True)
-        return [], 0
     finally:
         session.close()
 
@@ -781,6 +822,13 @@ def get_prediction_history_by_match(match_id: str) -> dict:
 
     Returns {match_id, sport, competition, items, count}.
     Returns empty items (NOT 404) when match_id has no history.
+
+    That documented empty answer is the reason the failure cannot share it: the
+    swallowed dict also carried ``sport: null, competition: null``, so a broken
+    read described the match as one with no trajectory *and* no known sport.
+    ``prediction-trajectory.tsx`` renders its own empty state on ``count === 0``
+    and an error state on the SWR ``error``, so the 500 is the branch it already
+    has.
     """
     session = get_kernel_session()
     try:
@@ -822,16 +870,19 @@ def get_prediction_history_by_match(match_id: str) -> dict:
             "items": items,
             "count": len(items),
         }
-    except Exception as e:
-        logger.warning("kernel_db query failed: %s", e, exc_info=True)
-        return {"match_id": match_id, "sport": None, "competition": None, "items": [], "count": 0}
     finally:
         session.close()
 
 
 def get_calibrations(engine: str | None = None,
                      competition: str | None = None) -> list[KernelCalibration]:
-    """Get calibration parameters, optionally filtered."""
+    """Get calibration parameters, optionally filtered.
+
+    ``[]`` is the pre-learning answer, and ``GET /api/predictions/calibration``
+    is where the operator checks whether calibration has run at all — measured
+    with only ``kernel_calibration`` dropped, it answered ``200 []`` while a
+    ``sample_count=20 avg_accuracy=0.90`` row was sitting in the store.
+    """
     session = get_kernel_session()
     try:
         query = session.query(KernelCalibration)
@@ -840,9 +891,6 @@ def get_calibrations(engine: str | None = None,
         if competition is not None:
             query = query.filter(KernelCalibration.competition == competition)
         return query.all()
-    except Exception as e:
-        logger.warning("kernel_db query failed: %s", e, exc_info=True)
-        return []
     finally:
         session.close()
 

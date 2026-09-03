@@ -20,8 +20,11 @@ def _get_engine(db_path: str) -> Engine:
 class OptimizedParamsStore:
     """Stores and applies optimized parameter sets.
 
-    Follows existing Store pattern: keyword-only args, session-per-call,
-    fail-closed reads (return None / [] on exception).
+    Follows existing Store pattern: keyword-only args, session-per-call.
+    Reads let query failures escape: ``None`` / ``[]`` mean the table was
+    readable and held no matching row, which is also the answer before any
+    optimization has been applied. See ``get_applied`` for what a swallowed
+    failure used to publish.
     """
 
     def __init__(self, *, db_path: str | None = None) -> None:
@@ -112,6 +115,18 @@ class OptimizedParamsStore:
             session.close()
 
     def get_applied(self, sport: str, competition: str) -> dict | None:
+        """The applied row, or ``None`` when the table holds no applied row.
+
+        A query failure escapes rather than becoming ``None``. Measured with
+        the column renamed and with the table dropped: swallowing produced
+        exactly the "nothing applied yet" answer, so every reader silently
+        reverted to the un-tuned settings baseline -- NBA hfa 100 instead of
+        the fitted 57.875, MLB 50 instead of 61.293, NHL 55 instead of 83.230
+        -- ``/params/{sport}`` answered 404 (which the frontend documents as
+        "until a candidate is applied"), and the engines published a different
+        probability with no diagnostic, while ``save_candidate`` on the same
+        broken table raised.
+        """
         session = self._session_factory()
         try:
             row = (
@@ -121,12 +136,15 @@ class OptimizedParamsStore:
                 .first()
             )
             return self._row_to_dict(row) if row else None
-        except Exception:
-            return None
         finally:
             session.close()
 
     def get_candidates(self, sport: str | None = None, limit: int = 50) -> list[dict]:
+        """Candidate/applied/archived rows, newest first.
+
+        A query failure escapes rather than becoming ``[]``; an empty list
+        means the table was readable and held nothing.
+        """
         session = self._session_factory()
         try:
             q = session.query(KernelOptimizedParams)
@@ -134,8 +152,6 @@ class OptimizedParamsStore:
                 q = q.filter_by(sport=sport)
             q = q.order_by(KernelOptimizedParams.created_at.desc()).limit(limit)
             return [self._row_to_dict(r) for r in q.all()]
-        except Exception:
-            return []
         finally:
             session.close()
 

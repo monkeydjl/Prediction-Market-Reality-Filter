@@ -353,3 +353,68 @@ def test_edge_detector_falls_back_to_phase3_when_disabled(kernel_db, monkeypatch
     assert trust == pytest.approx(0.72)
     # Should NOT be the fusion value 0.768
     assert trust != pytest.approx(0.768)
+
+
+def _drop_phase3_calibration_table():
+    from sqlalchemy import text
+    session = get_kernel_session()
+    try:
+        session.execute(text("DROP TABLE kernel_calibration"))
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_an_unreadable_phase3_row_is_not_reported_as_a_dormant_channel(kernel_db):
+    """The Phase 3 twin of the market-row case above.
+
+    ``get_calibration`` used to swallow query failures into ``None``, which is
+    also its cold-start answer, so ``compute_trust`` took case 1 (both channels
+    empty) and published the ``DIAGNOSIS_DORMANT_TRUST`` *sentinel* as a
+    measurement. Measured against a row reading ``avg_accuracy=0.90
+    sample_count=20`` with only ``kernel_calibration`` dropped:
+    ``trust=0.5 source="dormant" phase3_sample_count=0 phase3_weight=0.0`` for
+    an engine whose stored estimate was 0.90 — so
+    ``adjusted_edge = raw_edge * trust * liquidity`` was cut nearly in half.
+    """
+    _seed_phase3_calibration(avg_accuracy=0.90, sample_count=20)
+    svc = CalibrationFusionService()
+    healthy = svc.compute_trust("BasketballEngine", "nba")
+    assert healthy.trust == pytest.approx(0.90)
+    assert healthy.source == "phase3_only"
+
+    _drop_phase3_calibration_table()
+
+    with pytest.raises(OperationalError, match="no such table"):
+        svc.compute_trust("BasketballEngine", "nba")
+
+
+def test_an_unreadable_phase3_row_is_not_a_trust_of_dormant(kernel_db, monkeypatch):
+    """The trust number itself, on the path that reaches ``get_calibration``.
+
+    ``_compute_trust_phase3`` only consults ``get_conditional_calibration_row``
+    (which already propagates) when ``confidence`` is not None, so with no
+    confidence the swallowed read was the whole answer: measured 0.5 for the
+    same 0.90 engine, indistinguishable from cold start.
+    """
+    from app.core import config
+    from app.kernel.edge_detector_service import EdgeDetectorService
+    monkeypatch.setattr(config.settings, "PHASE8_CALIBRATION_FUSION_ENABLED", False)
+    _seed_phase3_calibration(avg_accuracy=0.90, sample_count=20)
+    svc = EdgeDetectorService()
+    assert svc._compute_trust("BasketballEngine", "nba", confidence=None) == pytest.approx(0.90)
+
+    _drop_phase3_calibration_table()
+
+    with pytest.raises(OperationalError, match="no such table"):
+        svc._compute_trust("BasketballEngine", "nba", confidence=None)
+
+
+def test_dormant_trust_still_reported_for_a_readable_empty_table(kernel_db):
+    """Cold start keeps its answer: the fix must not turn "no row" into an error."""
+    svc = CalibrationFusionService()
+    result = svc.compute_trust("BasketballEngine", "nba")
+    assert result.source == "dormant"
+    assert result.trust == pytest.approx(0.5)
+    assert result.phase3_sample_count == 0
+

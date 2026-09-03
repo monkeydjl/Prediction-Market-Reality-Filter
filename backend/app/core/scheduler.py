@@ -1020,16 +1020,23 @@ async def _job_detect_sport_edges() -> None:
         matches = store.get_matches_with_verified_links()
         service = EdgeDetectorService()
         processed = 0
+        errors = 0
         for match_id in matches:
             try:
                 summary = service.detect_edges(match_id)
                 if not summary.skipped:
                     processed += 1
             except Exception as exc:
+                errors += 1
                 logger.warning(f"[Scheduler] Edge detection failed for {match_id}: {exc}")
+        # Count the failures too: a per-match raise used to leave only a log
+        # line, so a run whose every match was unreadable reported
+        # matches_total=1 matches_processed=0 — the same ledger row as a match
+        # deliberately skipped for having no prediction.
         _finish_run(run_id, "success", result={
             "matches_total": len(matches),
             "matches_processed": processed,
+            "errors": errors,
         })
     except Exception as exc:
         logger.exception("[Scheduler] Sport edge detection failed")

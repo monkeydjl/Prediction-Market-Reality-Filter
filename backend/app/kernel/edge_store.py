@@ -3,6 +3,12 @@
 Each detect_edges() call appends one row per outcome. Read methods support
 latest-per-outcome and full history queries. Mirrors the
 sport_market_link_store / market_snapshot_store pattern.
+
+Query failures propagate. Every read here has an empty result as its *normal*
+answer — a match with no edges detected yet — so returning empty on failure made
+a degraded DB indistinguishable from a match nobody had looked at, and each
+caller reads empty as a fact about the world rather than about the query. The
+writer already ``rollback(); raise``.
 """
 from __future__ import annotations
 
@@ -95,6 +101,21 @@ class EdgeStore:
 
         Uses a subquery to find max(captured_at) per (match_id, mapped_outcome),
         then joins back to get the full row.
+
+        A query failure is raised, NOT swallowed: ``[]`` means no edges were
+        detected for this match. Measured on a DB holding two real edges for a
+        finished match — one at ``adjusted_edge = +0.20``, decision
+        ``provisional_act``, ``review_priority = high`` — with the settlement
+        table intact and only ``kernel_sport_edges`` dropped:
+        ``process_settlement`` returned ``skipped_no_edges`` / "No edges found
+        for match.", and ``scan_and_process`` reported ``scanned=1 skipped=1
+        errors=0`` — a clean scan naming a reason the query never established.
+        (No settlement row is written on that branch, so the match does stay in
+        the queue for the next scan; what is lost is the operator's ability to
+        tell a real "nothing to grade" from a broken read.) The same failure made
+        ``get_recommendation`` return ``None`` → ``404 "No edges found for
+        match."`` on a match whose ``+0.20`` edge was still in the table as far
+        as any working query was concerned.
         """
         session = get_kernel_session()
         try:
@@ -118,15 +139,18 @@ class EdgeStore:
                 .all()
             )
             return [_row_to_dict(r) for r in rows]
-        except Exception:
-            return []
         finally:
             session.close()
 
     def get_edge_history(
         self, match_id: str, mapped_outcome: str | None = None
     ) -> list[dict[str, Any]]:
-        """Full time-series, optionally filtered by outcome. Ordered by captured_at ASC."""
+        """Full time-series, optionally filtered by outcome. Ordered by captured_at ASC.
+
+        A query failure is raised, NOT swallowed: the route answers
+        ``{"series": []}`` and the operator reads a flat, empty history for a
+        match that has one.
+        """
         session = get_kernel_session()
         try:
             q = session.query(KernelSportEdge).filter(
@@ -136,8 +160,6 @@ class EdgeStore:
                 q = q.filter(KernelSportEdge.mapped_outcome == mapped_outcome)
             rows = q.order_by(KernelSportEdge.captured_at.asc()).all()
             return [_row_to_dict(r) for r in rows]
-        except Exception:
-            return []
         finally:
             session.close()
 
@@ -148,6 +170,13 @@ class EdgeStore:
 
         Ordered by |adjusted_edge| DESC. Filters out edges where
         |adjusted_edge| < min_abs_edge.
+
+        A query failure is raised, NOT swallowed: this read backs the operator's
+        whole actionable list. Measured against a real ``+0.20`` edge,
+        ``/api/sport-recommendations/open`` and ``/discrepancies`` both answered
+        ``200 {"items": [], "total": 0}`` and the CLI printed ``[INFO] no
+        discrepancies found`` and exited 0 — the exact reading an operator gets
+        on a quiet day with nothing worth acting on.
         """
         session = get_kernel_session()
         try:
@@ -179,7 +208,5 @@ class EdgeStore:
                 .all()
             )
             return [_row_to_dict(r) for r in rows]
-        except Exception:
-            return []
         finally:
             session.close()

@@ -86,3 +86,66 @@ def test_cli_discrepancies(kernel_db, capsys):
     capsys.readouterr()  # clear
     rc = main(["discrepancies"])
     assert rc == 0
+
+
+def _drop_edges_table():
+    """Drop kernel_sport_edges through the live ORM session.
+
+    ``_migrate_dormant_tables`` issues DROP TABLE at init, so a missing kernel
+    table is a state this repo already produces.
+    """
+    from sqlalchemy import text
+    session = get_kernel_session()
+    try:
+        session.execute(text("DROP TABLE kernel_sport_edges"))
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_cli_latest_does_not_print_no_data_when_the_table_cannot_be_read(
+    kernel_db, capsys
+):
+    """A degraded kernel DB must not surface as ``[INFO] no edges found``.
+
+    ``get_latest_edges`` used to swallow query failures into ``[]``, so this
+    command printed the line an un-detected match prints and exited 0.
+    """
+    from sqlalchemy.exc import OperationalError
+    _seed(match_id="m1")
+    from scripts.sport_edge_cli import main
+    main(["detect", "--match-id", "m1"])
+    capsys.readouterr()
+
+    _drop_edges_table()
+
+    with pytest.raises(OperationalError, match="no such table"):
+        main(["latest", "--match-id", "m1"])
+
+    out = capsys.readouterr().out
+    assert "no edges found" not in out
+    assert "[OK]" not in out
+
+
+def test_cli_discrepancies_does_not_print_no_data_when_the_table_cannot_be_read(
+    kernel_db, capsys
+):
+    """Same for ``discrepancies``: ``[INFO] no discrepancies found`` and exit 0.
+
+    This one backs the operator's whole actionable list, so the swallowed
+    version read as "nothing worth acting on today".
+    """
+    from sqlalchemy.exc import OperationalError
+    _seed(match_id="m1")
+    from scripts.sport_edge_cli import main
+    main(["detect", "--match-id", "m1"])
+    capsys.readouterr()
+
+    _drop_edges_table()
+
+    with pytest.raises(OperationalError, match="no such table"):
+        main(["discrepancies"])
+
+    out = capsys.readouterr().out
+    assert "no discrepancies found" not in out
+    assert "[OK]" not in out

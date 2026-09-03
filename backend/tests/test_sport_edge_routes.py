@@ -6,6 +6,7 @@ All are GET (read-only) — no require_write_key auth.
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from app.core import config
 from app.kernel.kernel_db import init_kernel_db, close_kernel_db
@@ -192,3 +193,72 @@ def test_detect_endpoint_computes_and_returns(client, monkeypatch):
     assert data["match_id"] == "m1"
     assert data["skipped"] is False
     assert len(data["outcomes"]) >= 1
+
+
+def _drop_edges_table():
+    """Drop kernel_sport_edges through the live ORM session.
+
+    ``_migrate_dormant_tables`` issues DROP TABLE at init, so a missing kernel
+    table is a state this repo already produces — the failure is a real query
+    error, not a mocked session.
+    """
+    from sqlalchemy import text
+    from app.kernel.kernel_db import get_kernel_session
+    session = get_kernel_session()
+    try:
+        session.execute(text("DROP TABLE kernel_sport_edges"))
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_a_degraded_read_is_not_reported_as_no_edges(client):
+    """A query failure must not surface as skipped=true or a 0-row list.
+
+    All three GETs have an empty result as their normal answer — a match nobody
+    has detected edges for — so the swallowed version answered a question the
+    query never resolved. ``/latest`` is the sharpest: it named
+    ``no_verified_links`` as the reason while the link and its snapshot were
+    both intact.
+    """
+    _seed_prediction_and_link(match_id="m1", implied=0.50)
+    from app.kernel.edge_detector_service import EdgeDetectorService
+    EdgeDetectorService().detect_edges("m1")
+    assert client.get("/api/sport-edges/m1/latest").json()["skipped"] is False
+
+    _drop_edges_table()
+
+    for url in (
+        "/api/sport-edges/m1/latest",
+        "/api/sport-edges/m1/history",
+        "/api/sport-edges/discrepancies",
+    ):
+        with pytest.raises(OperationalError, match="no such table"):
+            client.get(url)
+
+
+def test_a_degraded_read_surfaces_as_500(kernel_db, monkeypatch):
+    """The same three endpoints, seen the way a caller over HTTP sees them.
+
+    ``app/main.py`` registers no exception handler and
+    ``raise_server_exceptions=False`` makes TestClient behave like a real
+    server, so the escaping read error is a 500. Previously the responses were
+    ``200 {"skipped": true, "skip_reason": "no_verified_links"}``,
+    ``200 {"series": []}`` and ``200 {"items": [], "total": 0}`` — every one of
+    them a 200 stating that this match has nothing worth looking at.
+    """
+    monkeypatch.setattr(config.settings, "PHASE7_EDGE_DETECTOR_ENABLED", True)
+    from app.api.routes import sport_edges
+    app = FastAPI()
+    app.include_router(sport_edges.router, prefix="/api")
+    client = TestClient(app, raise_server_exceptions=False)
+
+    _drop_edges_table()
+
+    for url in (
+        "/api/sport-edges/m1/latest",
+        "/api/sport-edges/m1/history",
+        "/api/sport-edges/discrepancies",
+    ):
+        res = client.get(url)
+        assert res.status_code == 500, url

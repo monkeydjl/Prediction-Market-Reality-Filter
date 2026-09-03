@@ -6,6 +6,7 @@ All are GET (read-only) — no require_write_key auth.
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from app.core import config
 from app.kernel.kernel_db import init_kernel_db, close_kernel_db
@@ -139,3 +140,69 @@ def test_discrepancies_respects_min_abs_edge(client):
     data = res.json()
     match_ids = [item["match_id"] for item in data["items"]]
     assert "m2" not in match_ids
+
+
+def _drop_edges_table():
+    """Drop kernel_sport_edges through the live ORM session.
+
+    ``_migrate_dormant_tables`` issues DROP TABLE at init, so a missing kernel
+    table is a state this repo already produces — the failure is a real query
+    error, not a mocked session.
+    """
+    from sqlalchemy import text
+    from app.kernel.kernel_db import get_kernel_session
+    session = get_kernel_session()
+    try:
+        session.execute(text("DROP TABLE kernel_sport_edges"))
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_a_degraded_read_is_not_reported_as_no_edges(client):
+    """A query failure must not surface as 404 or a 0-row list.
+
+    ``test_get_recommendation_returns_404_when_no_edges`` above is the proof
+    that 404 is this endpoint's *normal* answer, so the swallowed read made a
+    broken query indistinguishable from a match nobody had detected edges for.
+    """
+    _seed_prediction_and_edge(match_id="m1", implied=0.50, adjusted_edge=0.20)
+    assert client.get("/api/sport-recommendations/m1").status_code == 200
+
+    _drop_edges_table()
+
+    for url in (
+        "/api/sport-recommendations/m1",
+        "/api/sport-recommendations/open",
+        "/api/sport-recommendations/discrepancies",
+    ):
+        with pytest.raises(OperationalError, match="no such table"):
+            client.get(url)
+
+
+def test_a_degraded_read_surfaces_as_500_not_404(kernel_db, monkeypatch):
+    """The same three endpoints, seen the way a caller over HTTP sees them.
+
+    ``app/main.py`` registers no exception handler and
+    ``raise_server_exceptions=False`` makes TestClient behave like a real
+    server, so the escaping read error is a 500. Previously the responses were
+    ``404 {"detail": "No edges found for match."}`` and two
+    ``200 {"items": [], "total": 0}`` bodies — the second pair being the
+    operator's entire actionable list, reading as a quiet day.
+    """
+    monkeypatch.setattr(config.settings, "PHASE7_SPORT_RECOMMENDATION_ENABLED", True)
+    from app.api.routes import sport_recommendations
+    app = FastAPI()
+    app.include_router(sport_recommendations.router, prefix="/api")
+    client = TestClient(app, raise_server_exceptions=False)
+
+    _drop_edges_table()
+
+    for url in (
+        "/api/sport-recommendations/m1",
+        "/api/sport-recommendations/open",
+        "/api/sport-recommendations/discrepancies",
+    ):
+        res = client.get(url)
+        assert res.status_code == 500, url
+        assert res.status_code != 404, url

@@ -114,34 +114,41 @@ def compute_match_liquidity_factor(match_id: str) -> float | None:
     ``group_liquidity_factor`` so this and the Edge detector cannot drift; a link
     with no snapshot counts as unmeasured here rather than being dropped, which
     is what the Edge detector already did.
+
+    A failed *read* is not one of those cases and escapes. ``None`` is this
+    function's cold-start answer — both live tables hold zero rows — so
+    swallowing a query failure into it asserted "this market's depth is
+    unmeasurable" on the strength of a query that never reached the table. The
+    consequence is an inverted alarm rather than a missing number: an omitted
+    key means ``market_quality_damp`` applies no damp at all, so on a temp
+    kernel DB holding one verified link over a thin $100 market
+    (DIAGNOSIS_LIQUIDITY_FLOOR 5,000 -> factor 0.02) breaking the links table
+    moved ``compute_confidence`` **up**, 0.5174 -> 0.5405, above the value the
+    real thin market earns.
+
+    ``SportMarketLinkStore.get_verified_links`` already raises on an unreadable
+    table; this handler caught that and converted it straight back, so the
+    inner fix was unobservable through every door here.
     """
     if not match_id:
         return None
-    try:
-        from app.kernel.market_snapshot_store import MarketSnapshotStore
-        from app.kernel.sport_market_link_store import SportMarketLinkStore
+    from app.kernel.market_snapshot_store import MarketSnapshotStore
+    from app.kernel.sport_market_link_store import SportMarketLinkStore
 
-        links = SportMarketLinkStore().get_verified_links(match_id=match_id)
-        if not links:
-            return None
-
-        snap_store = MarketSnapshotStore()
-        liquidities: list[float | None] = []
-        for link in links:
-            snap = snap_store.get_latest_snapshot(link_id=link["id"])
-            liquidities.append(snap.get("liquidity") if snap else None)
-
-        factor = group_liquidity_factor(liquidities, floor=_liquidity_floor())
-        if factor is None:
-            return None
-        return round(factor, 4)
-    except Exception:  # noqa: BLE001
-        logger.debug(
-            "liquidity_factor lookup failed for match_id=%s",
-            match_id,
-            exc_info=True,
-        )
+    links = SportMarketLinkStore().get_verified_links(match_id=match_id)
+    if not links:
         return None
+
+    snap_store = MarketSnapshotStore()
+    liquidities: list[float | None] = []
+    for link in links:
+        snap = snap_store.get_latest_snapshot(link_id=link["id"])
+        liquidities.append(snap.get("liquidity") if snap else None)
+
+    factor = group_liquidity_factor(liquidities, floor=_liquidity_floor())
+    if factor is None:
+        return None
+    return round(factor, 4)
 
 
 def inject_liquidity_into_custom(

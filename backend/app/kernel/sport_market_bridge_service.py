@@ -260,6 +260,23 @@ class SportMarketBridgeService:
         deterministic — running the LLM layer once per fixture would multiply
         cost by the size of the slate. Returns None when the pair is ambiguous
         or absent, which the caller reports as an unlinked candidate.
+
+        A failed *read* is not one of those cases and escapes. ``None`` here
+        becomes ``reason="no_matching_fixture"`` — a stated fact about
+        ``kernel_match_fixtures`` — so swallowing a query failure into it made a
+        broken table indistinguishable from a market nobody plays. Measured over
+        a seeded fixture: renaming ``home_team``, dropping the table and deleting
+        every row produced **identical** answers at all four doors
+        (``linked=False reason="no_matching_fixture"``, zero links stored, and a
+        ledger row reading ``success kalshi_unresolved=1 kalshi_errors=0``).
+        Unlike a cold start that is not the live state — the table holds 18,717
+        rows — so every one of those runs would have been a real outage reported
+        as a quiet slate.
+
+        The per-candidate handler in ``_job_discover_sport_markets`` still
+        absorbs the raise, which is correct for one bad market among many; it
+        counts into ``kalshi_errors``, so the ledger now distinguishes
+        "unreadable" from "no such fixture".
         """
         if not competition or len(detected_teams) < 2:
             return None
@@ -275,9 +292,6 @@ class SportMarketBridgeService:
                 KernelMatchFixture.competition == competition
             )
             fixtures = session.execute(query).scalars().all()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Fixture lookup failed for %s: %s", competition, exc)
-            return None
         finally:
             session.close()
 

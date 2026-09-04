@@ -1116,28 +1116,43 @@ def query_fixture(match_id: str, model_cls: type[Any]) -> Any | None:
 
     model_cls: KernelMatchFixture (for UCL/EPL).
 
-    Returns the fixture object or None.
+    Returns the fixture object, or None when no row carries that id. A failed
+    read is not that answer and is no longer swallowed.
+
+    This used to log a warning and return None, and every consumer restates
+    None as a fact: ``get_match_identity`` substitutes a stub identity, so both
+    ``GET /predictions/matches/{id}`` and ``POST .../predict`` answer
+    **404 "Match not found"**, and ``process_outcome`` skips calibration,
+    weights and the engine score under a log line reading "no fixture backs
+    it". Measured over one seeded epl fixture: an empty-but-readable table, a
+    renamed ``home_team`` column and a dropped table gave identical answers at
+    all three doors. ``kernel_match_fixtures`` holds 18,717 rows, so None was
+    never the live answer for a real match id.
     """
     from app.kernel.kernel_db import get_kernel_session
     session = get_kernel_session()
     try:
         return session.get(model_cls, match_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to query fixture %s: %s", match_id, exc)
-        return None
     finally:
         session.close()
 
 
 def query_result(match_id: str, model_cls: type[Any]) -> Any | None:
-    """Query a match result by match_id from the kernel DB."""
+    """Query a match result by match_id from the kernel DB.
+
+    Returns None when no row carries that id; a failed read raises rather than
+    reporting one. The swallow removed here reached the learning loop: None
+    makes ``build_match_outcome`` return None, ``process_outcome`` log "No
+    outcome found" and return, and
+    ``POST /predictions/outcomes/{id}/process`` answer
+    **200 {"status": "processed"}** having processed nothing. Measured: with
+    ``home_score`` renamed that route was byte-identical to a legitimately
+    empty table, down to which learning steps ran (none).
+    """
     from app.kernel.kernel_db import get_kernel_session
     session = get_kernel_session()
     try:
         return session.get(model_cls, match_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to query result %s: %s", match_id, exc)
-        return None
     finally:
         session.close()
 

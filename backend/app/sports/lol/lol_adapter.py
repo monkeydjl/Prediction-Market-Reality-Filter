@@ -79,23 +79,33 @@ def _team_code(name: str | None, fallback: str) -> str:
 
 
 def query_fixture(match_id: str) -> KernelMatchFixture | None:
+    """Return the fixture row for match_id, or None when no row carries that id.
+
+    A failed read raises. The swallow that used to return None here fed three
+    consumers that each restate None as a fact: ``get_match_identity``
+    substitutes a stub (so the match routes answer **404 "Match not found"**),
+    ``fetch_all_data`` reports ``venue=None`` and a default ``best_of``, and
+    ``process_outcome`` skips the learning step. Measured identical to an
+    empty-but-readable table at every door; the numbers are in
+    ``football/adapters/_shared.query_fixture``.
+    """
     session = get_kernel_session()
     try:
         return session.get(KernelMatchFixture, match_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to query LoL fixture %s: %s", match_id, exc)
-        return None
     finally:
         session.close()
 
 
 def query_result(match_id: str) -> KernelMatchResult | None:
+    """Return the result row for match_id, or None when no row carries that id.
+
+    A failed read raises: the swallow made ``process_outcome`` log "No outcome
+    found" and ``POST /predictions/outcomes/{id}/process`` answer
+    **200 {"status": "processed"}** having processed nothing.
+    """
     session = get_kernel_session()
     try:
         return session.get(KernelMatchResult, match_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to query LoL result %s: %s", match_id, exc)
-        return None
     finally:
         session.close()
 

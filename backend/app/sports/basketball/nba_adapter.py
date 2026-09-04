@@ -92,25 +92,33 @@ _RowT = TypeVar("_RowT", bound=KernelBase)
 
 
 def query_fixture(match_id: str, model_cls: type[_RowT]) -> _RowT | None:
-    """Query a fixture by match_id from the kernel DB."""
+    """Query a fixture by match_id from the kernel DB.
+
+    None means no row carries that id. A failed read raises: the swallow that
+    used to return None here made ``get_match_identity`` substitute a stub, so
+    an unreadable ``kernel_match_fixtures`` was reported as
+    **404 "Match not found"** and silently skipped the learning step. Measured
+    identical to an empty-but-readable table at every door; the numbers are in
+    ``football/adapters/_shared.query_fixture``.
+    """
     session = get_kernel_session()
     try:
         return session.get(model_cls, match_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to query fixture %s: %s", match_id, exc)
-        return None
     finally:
         session.close()
 
 
 def query_result(match_id: str, model_cls: type[_RowT]) -> _RowT | None:
-    """Query a match result by match_id from the kernel DB."""
+    """Query a match result by match_id from the kernel DB.
+
+    None means no row carries that id. A failed read raises: the swallow made
+    ``process_outcome`` log "No outcome found" and
+    ``POST /predictions/outcomes/{id}/process`` answer
+    **200 {"status": "processed"}** having processed nothing.
+    """
     session = get_kernel_session()
     try:
         return session.get(model_cls, match_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to query result %s: %s", match_id, exc)
-        return None
     finally:
         session.close()
 

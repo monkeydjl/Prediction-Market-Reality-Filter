@@ -20,13 +20,56 @@ services:
     env_file:
       - ../backend/.env
     environment:
-      # Persist all data files to the mounted /app/data volume
+      # Persist all data files to the mounted /app/data volume. The set must
+      # cover every STATE_STORES row in backend/app/core/runtime_stores.py —
+      # a store left on its in-image default lands on the container's writable
+      # layer and `docker compose down` discards it. Asserted by
+      # backend/tests/test_deploy_units.py.
       - EVENT_STORE_FILE=/app/data/event_store.json
       - EVENT_AUDIT_FILE=/app/data/event_audit.jsonl
       - EVENT_CACHE_FILE=/app/data/event_cache.json
       - LOOP_DB_FILE=/app/data/v2_loop.db
       - WORLD_CUP_PREDICTION_DB_FILE=/app/data/world_cup_predictions.db
       - SPORTS_FACT_FILE=/app/data/sports_facts.json
+      - KERNEL_DB_FILE=/app/data/kernel_predictions.db
+      - DOMAIN_RELIABILITY_DB_PATH=/app/data/domain_reliability.db
+      # A container has no systemd timer, so the backup runs as a scheduler job
+      # (07:00 UTC, after loop_db_maintenance). Off by default precisely so a
+      # systemd install does not get a second writer competing with its timer for
+      # the --keep 30 window. Writes into /app/backups, mounted below.
+      - BACKUP_SCHEDULE_ENABLED=true
+      # BACKUP_ENCRYPTION_KEY has no default here on purpose: it is a secret, so
+      # it belongs in backend/.env (read via env_file above) or your secret store,
+      # never in a committed compose file. With PMRF_ENV=production below, an
+      # empty key makes scripts/backup_stores.py refuse to run rather than write a
+      # plaintext ZIP of every state store — events, committed predictions and the
+      # kernel prediction history — into the pmrf_data volume, which is what this
+      # file used to do daily. Keep the passphrase somewhere other than the backup
+      # volume: an archive whose passphrase is lost is not a backup.
+      #
+      # --- Production posture ------------------------------------------------
+      # This is a production deployment, so it says so: app/core/preflight.py
+      # gates on exactly this value and refuses to start when the configuration
+      # does not meet the production requirements (keyed writes, a positive LLM
+      # spend cap, explicit CORS origins, no interactive docs, an encryptable
+      # backup). Leaving it unset meant "development", which is why none of those
+      # were enforced in the one deployment that schedules a backup.
+      #
+      # Supply these in backend/.env before `docker compose up`, or the container
+      # will exit at startup naming each one it is missing:
+      #   API_WRITE_KEY, CORS_ALLOWED_ORIGINS, LLM_DAILY_COST_CAP_USD,
+      #   BACKUP_ENCRYPTION_KEY
+      - PMRF_ENV=production
+      # .dockerignore keeps .env.* out of the build context, so .env.production
+      # cannot exist in the image. This tells config.py that the absence is by
+      # design and every setting arrives through environment:/env_file: — without
+      # it the loader refuses to boot on a missing overlay, which is the correct
+      # behaviour for a host deploy and wrong for a container.
+      - PMRF_ENV_FILE_REQUIRED=false
+      # No interactive schema in production. The proxy examples block /docs,
+      # /redoc and /openapi.json too, but only this setting stops the app serving
+      # them.
+      - OPENAPI_ENABLED=false
     volumes:
       - pmrf_data:/app/backups
       - pmrf_logs:/app/logs

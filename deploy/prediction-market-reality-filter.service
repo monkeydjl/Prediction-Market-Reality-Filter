@@ -8,7 +8,11 @@ Type=simple
 WorkingDirectory=/opt/prediction-market-reality-filter/backend
 EnvironmentFile=/etc/prediction-market-reality-filter.env
 Environment=SCHEDULER_ENABLED=false
-ExecStart=/opt/prediction-market-reality-filter/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+# Loopback only. This unit terminates no TLS, and /metrics + /api/health need no
+# key, so binding every interface published them in the clear. Both proxy
+# examples in deploy/ already forward to 127.0.0.1:8000. If the proxy runs on
+# another host, widen this AND firewall the port -- see docs/ops/RUNBOOK.md.
+ExecStart=/opt/prediction-market-reality-filter/.venv/bin/uvicorn app.entrypoint:load_application --factory --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=10
 KillSignal=SIGINT

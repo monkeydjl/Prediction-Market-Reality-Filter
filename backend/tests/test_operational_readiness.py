@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import io
 import logging
+import re
 import tempfile
 import unittest
 import zipfile
@@ -11,6 +12,8 @@ from unittest.mock import AsyncMock, patch
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from starlette.requests import Request
+from starlette.routing import Route as StarletteRoute
 
 from app.api.router import api_router
 from app.api.routes import events as events_routes
@@ -494,6 +497,223 @@ class RateLimitTests(unittest.TestCase):
             resp = client.get("/items/b/resolve")
 
         self.assertEqual(resp.status_code, 429)
+
+    # ── P1-2: the bucket was the path's shape, not the endpoint ───────────────
+    # `_route_key` preferred `request.scope["route"]`, but FastAPI sets that key
+    # while *routing*, which happens below the middleware stack -- measured None
+    # on every request, so the first branch never ran and every bucket came from
+    # `_normalize_path`. Two consequences, both measured against the real app:
+    # 138 of 190 route+method pairs shared a bucket with another pair (3 requests
+    # to /api/llm/diagnostics then 429 on /api/quality-metrics/summary), and any
+    # segment containing a dot was kept verbatim, so rotating one bought a fresh
+    # bucket per value (0 of 8 refused while rotating, 5 of 8 without).
+
+    def test_two_endpoints_of_the_same_shape_keep_separate_buckets(self):
+        """One endpoint's traffic must not refuse another's.
+
+        Both paths normalize to ``/{param}/{param}``, which is how 32 of this
+        app's GET endpoints collapsed onto one bucket.
+        """
+        app = FastAPI()
+        app.add_middleware(InMemoryRateLimitMiddleware)
+
+        @app.get("/alpha/first")
+        async def alpha():
+            return {"ok": "alpha"}
+
+        @app.get("/beta/second")
+        async def beta():
+            return {"ok": "beta"}
+
+        with patch.object(settings, "RATE_LIMIT_ENABLED", True), \
+                patch.object(settings, "RATE_LIMIT_WINDOW_SECONDS", 60), \
+                patch.object(settings, "RATE_LIMIT_MAX_REQUESTS", 1):
+            client = TestClient(app)
+            first = client.get("/alpha/first").status_code
+            exhausted = client.get("/alpha/first").status_code
+            other = client.get("/beta/second").status_code
+
+        self.assertEqual((first, exhausted), (200, 429))
+        self.assertEqual(
+            other,
+            200,
+            "a different endpoint was refused because it shares a path shape",
+        )
+
+    def test_rotating_a_dotted_path_parameter_cannot_buy_a_fresh_bucket(self):
+        """A dot in the id used to opt the request out of throttling entirely."""
+        app = FastAPI()
+        app.add_middleware(InMemoryRateLimitMiddleware)
+
+        @app.get("/items/{item_id}/resolve")
+        async def resolve_item(item_id: str):
+            return {"item_id": item_id}
+
+        with patch.object(settings, "RATE_LIMIT_ENABLED", True), \
+                patch.object(settings, "RATE_LIMIT_WINDOW_SECONDS", 60), \
+                patch.object(settings, "RATE_LIMIT_MAX_REQUESTS", 1):
+            client = TestClient(app)
+            first = client.get("/items/a.1/resolve").status_code
+            rotated = [
+                client.get(f"/items/{i}.{i}/resolve").status_code for i in range(5)
+            ]
+
+        self.assertEqual(first, 200)
+        self.assertEqual(rotated, [429] * 5)
+
+    def test_rotating_a_dotted_segment_on_an_unrouted_path_is_also_bounded(self):
+        """The fallback has to hold too, or the evasion just moves.
+
+        Static assets and 404s match no route, so they keep their key from
+        ``_normalize_path``. Every filename has a dot, so leaving the dot escape
+        there would let an unauthenticated caller rotate ``/nope/<n>.js`` for
+        unlimited requests -- the same hole one layer down.
+        """
+        app = FastAPI()
+        app.add_middleware(InMemoryRateLimitMiddleware)
+
+        @app.get("/ping")
+        async def ping():
+            return {"ok": True}
+
+        with patch.object(settings, "RATE_LIMIT_ENABLED", True), \
+                patch.object(settings, "RATE_LIMIT_WINDOW_SECONDS", 60), \
+                patch.object(settings, "RATE_LIMIT_MAX_REQUESTS", 1):
+            client = TestClient(app)
+            first = client.get("/nope/a.js").status_code
+            rotated = [client.get(f"/nope/{i}.js").status_code for i in range(5)]
+
+        self.assertEqual(first, 404, "the path must not be routed for this to test the fallback")
+        self.assertEqual(rotated, [429] * 5)
+
+    def test_a_page_load_of_static_assets_does_not_refuse_itself(self):
+        """The reverse test for collapsing unrouted paths.
+
+        Before the dot escape was closed, every asset filename was its own
+        bucket, so a page load could never throttle itself. Now assets share a
+        bucket by path shape, and the shipped default limit is what has to cover
+        a load. Measured over ``frontend/out``: 253 files fall into 19 buckets,
+        the largest holding 60 (everything under ``_next``); one page's 33
+        subresources fall into 8, the largest holding 13. The bound asserted here
+        is the 60 -- the worst case for a client that warms the whole export --
+        so lowering ``RATE_LIMIT_MAX_REQUESTS``'s default under it goes red.
+        """
+        largest_static_bucket = 60
+        self.assertGreater(
+            settings.RATE_LIMIT_MAX_REQUESTS,
+            largest_static_bucket,
+            f"the default limit ({settings.RATE_LIMIT_MAX_REQUESTS}) no longer "
+            f"covers the {largest_static_bucket} same-shape files under "
+            f"frontend/out/_next, which now share a single bucket",
+        )
+
+        app = FastAPI()
+        app.add_middleware(InMemoryRateLimitMiddleware)
+
+        with patch.object(settings, "RATE_LIMIT_ENABLED", True), \
+                patch.object(settings, "RATE_LIMIT_WINDOW_SECONDS", 60):
+            client = TestClient(app)
+            codes = {
+                client.get(f"/_next/static/chunks/asset{i}.js").status_code
+                for i in range(largest_static_bucket)
+            }
+
+        self.assertEqual(codes, {404}, "no request may be throttled")
+
+    def test_every_endpoint_of_the_real_app_gets_its_own_bucket(self):
+        """The census, run through the production key function.
+
+        Two hand-picked endpoints prove the mechanism; this proves the outcome
+        over the whole route table. Before the fix this app had 190 route+method
+        pairs sharing 75 buckets, with 138 pairs colliding -- 32 GET endpoints on
+        ``/api/{param}/{param}`` alone. The count is not hardcoded: the partition
+        has to be exact, so a future route that keys off something coarser than
+        its own path shows up here without anyone updating a number.
+        """
+        from app.core.rate_limit import _route_key
+        from app.main import app as real_app
+
+        buckets = {}
+        collisions = {}
+        for route in real_app.routes:
+            if not isinstance(route, StarletteRoute):
+                continue
+            # Every convertor in this app is a StringConvertor (checked below),
+            # so one segment per parameter is a faithful concrete URL.
+            path = re.sub(r"\{[^}]+\}", "x", route.path)
+            self.assertEqual(
+                {type(c).__name__ for c in route.param_convertors.values()} - {"StringConvertor"},
+                set(),
+                f"{route.path} uses a convertor that may span segments; the "
+                f"substitution above no longer produces a matching URL",
+            )
+            for method in sorted(route.methods or ()):
+                if method in {"HEAD", "OPTIONS"}:
+                    continue
+                scope = {
+                    "type": "http",
+                    "method": method,
+                    "path": path,
+                    "raw_path": path.encode(),
+                    "root_path": "",
+                    "query_string": b"",
+                    "headers": [],
+                    "app": real_app,
+                    "scheme": "http",
+                    "server": ("testserver", 80),
+                    "client": ("127.0.0.1", 1),
+                }
+                key = f"{method}:{_route_key(Request(scope))}"
+                if key in buckets:
+                    collisions.setdefault(key, [buckets[key]]).append(
+                        f"{method} {route.path}"
+                    )
+                buckets[key] = f"{method} {route.path}"
+
+        self.assertEqual(collisions, {}, "these endpoints share a rate-limit bucket")
+        self.assertGreater(len(buckets), 150, "the census did not find the route table")
+
+    def test_the_frontend_mount_does_not_collapse_every_unrouted_path(self):
+        """A ``Mount`` matches whatever the router did not, so it must not key.
+
+        ``app.mount("/", StaticFiles(...))`` becomes a ``Mount`` whose path is
+        ``""`` and which matches FULL on every otherwise-unrouted request. Using
+        it as the bucket key would put a whole page load -- 60 files under
+        ``frontend/out/_next`` -- plus every 404 probe into one bucket. Only
+        ``Route`` instances are consulted; the mount's paths keep the
+        ``_normalize_path`` fallback, which still separates them by shape.
+        """
+        async def inner(scope, receive, send):
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/plain")],
+            })
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        app = FastAPI()
+        app.add_middleware(InMemoryRateLimitMiddleware)
+
+        @app.get("/ping")
+        async def ping():
+            return {"ok": True}
+
+        app.mount("/", inner)
+
+        with patch.object(settings, "RATE_LIMIT_ENABLED", True), \
+                patch.object(settings, "RATE_LIMIT_WINDOW_SECONDS", 60), \
+                patch.object(settings, "RATE_LIMIT_MAX_REQUESTS", 1):
+            client = TestClient(app)
+            first = client.get("/assets/a.js").status_code
+            same_shape = client.get("/assets/b.js").status_code
+            deeper = client.get("/assets/nested/c.js").status_code
+            routed = client.get("/ping").status_code
+
+        self.assertEqual((first, same_shape), (200, 429))
+        self.assertEqual(
+            deeper, 200, "a differently shaped path shares the mount's bucket"
+        )
+        self.assertEqual(routed, 200, "the route lost its own bucket to the mount")
 
     def test_rate_limit_ignores_forwarded_header_by_default(self):
         # Default (TRUSTED_PROXY_HEADER=false): X-Forwarded-For is attacker-
@@ -980,6 +1200,35 @@ class HealthcheckScriptTests(unittest.TestCase):
                 contextlib.redirect_stderr(io.StringIO()):
             return healthcheck.run_healthcheck(*args, **kwargs)
 
+    def test_healthcheck_hides_fetch_exception_text(self):
+        sensitive = (
+            "SELECT private_value FROM secret_table at "
+            "D:/private/runtime/health.json Authorization=Bearer fake-api-key"
+        )
+        stderr = io.StringIO()
+
+        def fetch(_url, _timeout):
+            raise RuntimeError(sensitive)
+
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(stderr):
+            code = healthcheck.run_healthcheck(
+                {"PMRF_HEALTHCHECK_URL": "http://local/api/health"},
+                fetch=fetch,
+            )
+
+        output = stderr.getvalue()
+        self.assertEqual(code, 1)
+        self.assertIn("PMRF healthcheck failed", output)
+        self.assertIn("RuntimeError", output)
+        for fragment in (
+            "SELECT private_value",
+            "D:/private/runtime/health.json",
+            "fake-api-key",
+            "Traceback",
+        ):
+            self.assertNotIn(fragment, output)
+
     def test_healthcheck_pings_deadman_after_local_health_is_ok(self):
         calls = []
 
@@ -1165,7 +1414,11 @@ class BackupTests(unittest.TestCase):
                 with patch.object(settings, "SPORTS_FACT_FILE", str(clash)):
                     with self.assertRaises(ValueError) as ctx:
                         backup_stores.create_backup(str(base / "backups"))
-        self.assertIn("event_store.json", str(ctx.exception))
+        message = str(ctx.exception)
+        self.assertIn("event_store.json", message)
+        self.assertNotIn(str(base), message)
+        self.assertNotIn(str(base.resolve()), message)
+        self.assertNotIn(str(clash), message)
 
     def test_backup_prunes_old_archives_only(self):
         with tempfile.TemporaryDirectory() as tmp:

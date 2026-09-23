@@ -12,6 +12,7 @@ Tests cover:
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import shutil
 import sys
@@ -364,6 +365,47 @@ class TestErrorCases(unittest.TestCase):
     def test_missing_archive_raises_file_not_found(self):
         with self.assertRaises(FileNotFoundError):
             restore_from_backup("/nonexistent/backup.zip", apply=False)
+
+    def test_main_hides_restore_exception_text(self):
+        import restore_stores
+
+        sensitive = (
+            "SELECT private_value FROM secret_table at "
+            "D:/private/runtime/backup.zip Authorization=Bearer fake-api-key"
+        )
+        stderr = io.StringIO()
+        with patch.object(
+            restore_stores,
+            "restore_from_backup",
+            side_effect=RuntimeError(sensitive),
+        ), patch.object(restore_stores.sys, "stderr", stderr):
+            rc = restore_stores.main(["incoming.zip"])
+
+        output = stderr.getvalue()
+        self.assertEqual(rc, 1)
+        self.assertIn("[FAIL] Restore failed: RuntimeError", output)
+        for fragment in (
+            "SELECT private_value",
+            "D:/private/runtime/backup.zip",
+            "fake-api-key",
+            "Traceback",
+        ):
+            self.assertNotIn(fragment, output)
+
+    def test_main_hides_missing_archive_path(self):
+        import restore_stores
+
+        sensitive_path = "D:/private/runtime/fake-api-key/backup.zip"
+        stderr = io.StringIO()
+        with patch.object(restore_stores.sys, "stderr", stderr):
+            rc = restore_stores.main([sensitive_path])
+
+        output = stderr.getvalue()
+        self.assertEqual(rc, 1)
+        self.assertEqual(output, "[FAIL] Backup archive not found\n")
+        self.assertNotIn(sensitive_path, output)
+        self.assertNotIn("fake-api-key", output)
+        self.assertNotIn("Traceback", output)
 
     def test_main_returns_1_for_missing_archive(self):
         rc = main(["/nonexistent/backup.zip"])

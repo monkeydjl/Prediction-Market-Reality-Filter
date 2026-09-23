@@ -3,6 +3,13 @@ import logging
 import os
 
 
+ENV_OVERLAYS = {
+    "development": ".env",
+    "staging": ".env.staging",
+    "production": ".env.production",
+}
+
+
 def _resolve_env_file() -> str:
     """Return the env file path for the current PMRF_ENV.
 
@@ -12,21 +19,101 @@ def _resolve_env_file() -> str:
 
     The environment-specific file overrides the base ``.env`` (loaded first
     without override, then the env file with override=True).
+
+    An unrecognized value raises instead of resolving to ``.env``: ``prod``,
+    ``prd`` and ``live`` all used to mean development, and the overlay is where
+    ``CORS_ALLOWED_ORIGINS``, ``SERVER_RELOAD`` and the cost cap get their
+    production values. Empty is not unrecognized -- ``PMRF_ENV=`` in a template
+    means "not set".
     """
     pmrf_env = os.getenv("PMRF_ENV", "development").strip().lower()
-    if pmrf_env == "staging":
-        return ".env.staging"
-    if pmrf_env == "production":
-        return ".env.production"
-    return ".env"
+    if not pmrf_env:
+        return ".env"
+    try:
+        return ENV_OVERLAYS[pmrf_env]
+    except KeyError:
+        raise RuntimeError(
+            f"PMRF_ENV={pmrf_env!r} is not one of {sorted(ENV_OVERLAYS)}. "
+            f"An unrecognized value used to select the development .env "
+            f"silently, so a typo shipped development CORS, SERVER_RELOAD and "
+            f"cost-cap values to production."
+        ) from None
+
+
+def _overlay_file_required() -> bool:
+    """Whether a named overlay has to exist on disk.
+
+    True by default, because an absent overlay booting on development values is
+    the measured defect `_load_env_files` refuses over.
+
+    A container is the one deployment where the file is absent *by design*:
+    ``.dockerignore`` keeps ``.env.*`` out of the build context, so
+    ``.env.production`` can never be in the image and compose configures
+    everything through ``environment:``/``env_file:``. That forced compose to leave
+    ``PMRF_ENV`` unset, i.e. to call itself development -- which made
+    `app.core.preflight`'s production gate unreachable in the documented Docker
+    deployment, and with it the refusal to write a plaintext backup that the same
+    compose file schedules.
+
+    ``PMRF_ENV_FILE_REQUIRED=false`` is how such a deployment says "there is no
+    overlay to miss". It excuses a missing *file* only: `_resolve_env_file` has
+    already raised on an unrecognized ``PMRF_ENV`` before this is consulted.
+    """
+    return os.getenv("PMRF_ENV_FILE_REQUIRED", "true").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
 
 
 def _load_env_files() -> None:
-    """Load base .env then environment-specific file (override=True)."""
+    """Load base .env then environment-specific file (override=True).
+
+    A named overlay that is absent raises rather than booting on development
+    defaults. ``load_dotenv`` returns ``False`` for a missing file and logs
+    nothing, so ``PMRF_ENV=production`` with no ``.env.production`` started the
+    process silently -- and because an overlay only overrides the keys it names,
+    what it started was every unnamed key at its development value:
+    ``CORS_ALLOWED_ORIGINS``, ``SERVER_RELOAD``, ``LLM_DAILY_COST_CAP_USD`` and
+    each feature flag. Nothing in the log said the overlay had not been read.
+
+    The refusal names only the overlay filename. It deliberately omits the
+    service working directory and the resolved host path because this exception
+    can occur before application logging is configured. Docker deployments use
+    ``PMRF_ENV_FILE_REQUIRED=false`` because the overlay is absent by design and
+    settings arrive through the process environment.
+
+    Present and empty is not missing: the check asks the filesystem whether the
+    file exists rather than whether it set anything, since ``load_dotenv``
+    reports ``False`` for both.
+    """
     load_dotenv()  # base .env, no override
     env_file = _resolve_env_file()
-    if env_file != ".env":
-        load_dotenv(env_file, override=True)
+    if env_file == ".env":
+        return
+    if not os.path.isfile(env_file):
+        if not _overlay_file_required():
+            # WARNING rather than INFO on purpose: this runs while this module is
+            # being imported, which is before app/main.py calls setup_logging(),
+            # so the root logger has no handler and logging's lastResort prints
+            # WARNING and above only. An INFO line here would never be seen.
+            logging.getLogger(__name__).warning(
+                "PMRF_ENV names the %s overlay and no such file exists, but "
+                "PMRF_ENV_FILE_REQUIRED=false declares that this deployment "
+                "configures the process environment directly (a container has no "
+                "overlay: .dockerignore keeps .env.* out of the image). Every "
+                "setting therefore comes from the environment, and nothing was "
+                "read from %s.",
+                env_file, env_file,
+            )
+            return
+        raise RuntimeError(
+            f"PMRF_ENV names the {env_file} overlay, but no such file exists. "
+            "Booting would have used the development value of every key the "
+            f"overlay was meant to override. Copy {env_file}.example to "
+            f"{env_file} in the service working directory, or set "
+            "PMRF_ENV_FILE_REQUIRED=false if this deployment deliberately "
+            "configures the process environment directly."
+        )
+    load_dotenv(env_file, override=True)
 
 
 _load_env_files()
@@ -88,6 +175,18 @@ def _world_cup_import_mode_default() -> str:
 
 
 class Settings:
+    # Which deployment this process is. `_resolve_env_file` above reads the same
+    # variable to pick the dotenv overlay, but that was its *only* reader: the
+    # overlay decided which values were loaded and nothing then checked what they
+    # were. Exposed as a setting so `app.core.preflight` can gate the
+    # production-only requirements, and so tests can drive them without mutating
+    # os.environ. Normalized on read (`preflight.is_production`), not here, since
+    # `_resolve_env_file` has already rejected any unrecognized value.
+    PMRF_ENV: str = os.getenv("PMRF_ENV", "development")
+    # Surfaced as a setting for visibility only -- `_overlay_file_required` above
+    # reads the environment directly, because it runs before this class is built.
+    PMRF_ENV_FILE_REQUIRED: bool = _env_bool("PMRF_ENV_FILE_REQUIRED", "true")
+
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "deepseek-chat")
     LLM_STARTUP_CHECK_ENABLED: bool = _env_bool(
@@ -190,7 +289,23 @@ class Settings:
         os.getenv("RATE_LIMIT_TRUSTED_PROXY_HOPS", "1")
     )
     BACKEND_SERVE_FRONTEND: bool = _env_bool("BACKEND_SERVE_FRONTEND", "true")
+    # Whether /openapi.json, /docs and /redoc are served. On by default -- the
+    # interactive schema is how the API is explored in development.
+    #
+    # deploy/nginx.conf.example and deploy/Caddyfile.example both already tell
+    # the operator to disable these "in prod via OPENAPI_ENABLED=false" and to
+    # block them at the proxy only as defense in depth, but the name had no
+    # reader: setting it changed nothing and all three paths answered 200. What
+    # they serve is a 189 KB schema over 184 paths, including all 79 write
+    # operations and the X-API-Key / X-Operator header names each one expects.
+    OPENAPI_ENABLED: bool = _env_bool("OPENAPI_ENABLED", "true")
 
+    # Root logger level. Both overlay templates assigned this (staging INFO,
+    # production WARNING) while setup_logging hardcoded INFO, so the production
+    # overlay asked for less log volume than it got and DEBUG had no switch at
+    # all. An unrecognised name falls back to INFO rather than raising -- logging
+    # is configured at import time in app/main.py.
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_FILE: str = os.getenv(
         "LOG_FILE",
         os.path.join(os.path.dirname(__file__), "..", "..", "logs", "app.log"),
@@ -384,6 +499,31 @@ class Settings:
     # legacy plaintext zip is produced. Must be set in any environment where
     # the backup volume is not otherwise protected at rest.
     BACKUP_ENCRYPTION_KEY: str = os.getenv("BACKUP_ENCRYPTION_KEY", "")
+    # Run the daily backup as a scheduler job instead of from outside the
+    # process. Off by default because a systemd install already has
+    # prediction-market-reality-filter-backup.timer, and two writers would halve
+    # the effective retention at --keep 30. Turn it on where nothing external can
+    # run the script - a Docker deployment has no timer, so deploy/
+    # docker-compose.yml sets it to true. See app/core/scheduler.py's
+    # _job_backup_stores.
+    BACKUP_SCHEDULE_ENABLED: bool = _env_bool("BACKUP_SCHEDULE_ENABLED", "false")
+    # Reconcile threshold for `running` rows in the loop_runs ledger. A running
+    # row older than this has no live owner - the process that wrote it died
+    # mid-flight, and nothing re-attaches a job to a stored row. Marked failed
+    # by scheduler.py's daily `loop_run_ledger_maintenance` job. In hours
+    # because the longest scheduled interval is 24h and the default should
+    # read as "a full cycle missed, plus margin", not as a date.
+    LOOP_RUN_STALE_RUNNING_HOURS: float = float(
+        os.getenv("LOOP_RUN_STALE_RUNNING_HOURS", "36")
+    )
+    # Retention for terminal loop_runs rows, in days, enforced by the same
+    # daily job. The latest row of every job name is exempt regardless of age -
+    # /api/health reads it via latest_run_per_job, and a retention rule that
+    # deletes it would turn the health probe blind exactly when the job has
+    # been quiet long enough to look dead.
+    LOOP_RUN_RETENTION_DAYS: int = int(
+        os.getenv("LOOP_RUN_RETENTION_DAYS", "90")
+    )
     OFFICIAL_RSS_URL: str = os.getenv(
         "OFFICIAL_RSS_URL",
         "https://www.federalreserve.gov/feeds/press_all.xml",
@@ -1668,6 +1808,22 @@ class Settings:
     PHASE10_REALTIME_PUSH_ENABLED: bool = _env_bool("PHASE10_REALTIME_PUSH_ENABLED", "false")
     WEBSOCKET_HEARTBEAT_INTERVAL_SECONDS: int = int(os.getenv("WEBSOCKET_HEARTBEAT_INTERVAL_SECONDS", "30"))
     WEBSOCKET_MAX_RECONNECT_DELAY_SECONDS: int = int(os.getenv("WEBSOCKET_MAX_RECONNECT_DELAY_SECONDS", "30"))
+    # Connection caps for /api/ws/matches/{id}/prices. All three must be > 0 for
+    # `preflight.realtime_push_posture()["connection_limited"]` to hold, because a
+    # single unlimited dimension is a bypass for the other two: a per-match cap is
+    # escaped by asking for another match id, and a global cap alone lets one host
+    # fill the budget and lock every other operator out. The HTTP rate limiter
+    # cannot cover this -- `InMemoryRateLimitMiddleware` is a `BaseHTTPMiddleware`
+    # and never sees a WebSocket scope.
+    WEBSOCKET_MAX_CONNECTIONS_TOTAL: int = int(os.getenv("WEBSOCKET_MAX_CONNECTIONS_TOTAL", "200"))
+    WEBSOCKET_MAX_CONNECTIONS_PER_MATCH: int = int(os.getenv("WEBSOCKET_MAX_CONNECTIONS_PER_MATCH", "50"))
+    WEBSOCKET_MAX_CONNECTIONS_PER_CLIENT: int = int(os.getenv("WEBSOCKET_MAX_CONNECTIONS_PER_CLIENT", "5"))
+    # Browser handshake credential. A browser can set `Sec-WebSocket-Protocol` and
+    # no other header, so it buys a short-lived single-use ticket from
+    # POST /api/ws/tickets (write key in a header) and offers it as a subprotocol.
+    # Short by design: it is a bearer token for its whole lifetime.
+    WEBSOCKET_TICKET_TTL_SECONDS: int = int(os.getenv("WEBSOCKET_TICKET_TTL_SECONDS", "60"))
+    WEBSOCKET_MAX_ACTIVE_TICKETS: int = int(os.getenv("WEBSOCKET_MAX_ACTIVE_TICKETS", "500"))
 
     # === Phase 11 — Kalshi Sports Market Integration ===
     PHASE11_KALSHI_SPORTS_ENABLED: bool = _env_bool("PHASE11_KALSHI_SPORTS_ENABLED", "false")

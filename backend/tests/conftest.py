@@ -210,6 +210,10 @@ _SINGLETON_RESETS: tuple[tuple[str, str, str], ...] = (
 
     # --- long-lived process objects ---------------------------------------
     ("app.realtime.connection_manager", "_connection_manager", "none"),
+    # Reset rather than exempted: handshake tickets are single-use, so a store
+    # surviving into the next test could let a ticket issued there redeem against
+    # a leftover entry -- a single-use test that passes for the wrong reason.
+    ("app.realtime.ws_auth", "_ticket_store", "none"),
     ("app.core.scheduler", "_scheduler_lock_handle", "none"),
     ("app.core.scheduler", "_RUN_TO_JOB", "clear"),
     ("app.services.world_cup_ai_optimization_service", "_ai_semaphore", "none"),
@@ -304,6 +308,8 @@ _RESET_EXEMPT: dict[str, str] = {
     "app.memory.domain_reliability_store._INITIALIZED": "path-keyed idempotent-DDL memo",
     "app.memory.event_market_link_store._INITIALIZED": "path-keyed idempotent-DDL memo",
     "app.memory.llm_daily_spend_store._INITIALIZED": "path-keyed idempotent-DDL memo",
+    "app.memory.loop_run_store._INITIALIZED": "path-keyed idempotent-DDL memo",
+    "app.memory.optimization_task_store._INITIALIZED": "path-keyed idempotent-DDL memo",
     "app.memory.prediction_store._INITIALIZED": "path-keyed idempotent-DDL memo",
     "app.memory.review_queue_store._INITIALIZED": "path-keyed idempotent-DDL memo",
     "app.memory.simulated_trade_store._INITIALIZED": "path-keyed idempotent-DDL memo",

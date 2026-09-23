@@ -29,6 +29,248 @@
   `daily LLM spend is UNLIMITED` at WARNING on every boot where the cap is off,
   so grep startup logs for that line after a config change.
 - Keep `LOG_FILE` on persistent storage.
+- **Turn on at least one alert push channel.** All five settings behind the three
+  channels ship off, so the documented production deploy has none live: a failed
+  scheduler job writes a `failed` `loop_runs` row, increments
+  `pmrf_scheduler_failed_runs_total` and makes `/api/health` answer 503 — all
+  three pull-only, so all three need somebody looking. Without a channel the
+  entire trace of a 3am failure is a line in `LOG_FILE`. The backend logs
+  `No alert push channel is configured` at WARNING on every boot where that is
+  the case, and `Alert push channels live: …` when it is not, so grep startup
+  logs for either. The cheapest channel is `SENTRY_DSN` (it also covers request
+  handlers); the job-specific one is `SCHEDULER_FAILURE_ALERT_ENABLED=true` plus
+  `SCHEDULER_FAILURE_ALERT_WEBHOOK_URL`. Each channel needs **both** of its
+  settings — an enabled webhook with no URL, or a DSN with `sentry-sdk` not
+  installed, reaches nothing outside the process, and neither counts in that
+  startup line. Detail:
+  [Scheduler failure alerts (E8)](#scheduler-failure-alerts-e8).
+- **`PMRF_ENV` has to be set in the base `backend/.env` or exported in the
+  process environment — not in the overlay it selects.** `config.py` reads
+  `backend/.env` first, decides which overlay to load from what it found there,
+  and only then reads the overlay, so the `PMRF_ENV=production` line inside
+  `.env.production.example` is read after the decision it was supposed to make.
+  Both templates used to instruct exactly that, and an operator who followed them
+  ran on development values.
+
+  Two misconfigurations now raise at startup instead of running development
+  values: a value that is not `development`/`staging`/`production` (`prod` was
+  silently development), and naming an overlay whose file is absent
+  (`load_dotenv` returns `False` for a missing file and logs nothing). The
+  refusal prints the absolute path and the working directory, because the overlay
+  path is resolved against the process cwd while the base `.env` is found by
+  walking up from `app/core/config.py` — a systemd unit with the wrong
+  `WorkingDirectory` and a genuinely missing file look identical otherwise.
+
+  **Docker does not use these files.** `.dockerignore` excludes `.env.*` from the
+  build context, so `.env.production` can never exist in the image and
+  configuration comes from compose's `environment:` / `env_file:`. That used to
+  force compose to leave `PMRF_ENV` unset — i.e. to call itself *development*,
+  which made the production preflight below unreachable in the one deployment that
+  schedules a backup. `deploy/docker-compose.yml` now sets `PMRF_ENV=production`
+  together with `PMRF_ENV_FILE_REQUIRED=false`, which tells `config.py` that the
+  missing overlay is by design. That flag excuses a missing *file* only; an
+  unrecognized `PMRF_ENV` still raises. It defaults to `true`, so a host deploy is
+  unaffected.
+
+  Only keys the overlay *names* are overridden; anything it omits keeps the base
+  `.env` value. `backend/tests/test_env_overlay_examples.py` asserts both
+  templates assign `API_WRITE_KEY`, `ALLOW_OPEN_WRITES`, `CORS_ALLOWED_ORIGINS`,
+  `SERVER_RELOAD` and a non-zero `LLM_DAILY_COST_CAP_USD` for that reason.
+
+### Production preflight
+
+With `PMRF_ENV=production`, `app/core/preflight.py` checks the settings below
+*before* anything opens a database, spends a token or binds a port, and **refuses
+to start** listing every unmet one at once. Everything above this section is
+advice; this is enforcement.
+
+It runs at **every process entrypoint**, because each one is reachable without the
+others: the API (`app.main.lifespan`), the scheduler worker
+(`scripts/run_scheduler.py` — the process that spends LLM budget unattended, so
+gating only the API would leave it open), and the backup CLI
+(`scripts/backup_stores.py::main`, which is what the backup timer's `ExecStart`
+runs, so it touches neither of the other two). In the backup CLI the gate sits
+after argument parsing, so `--help` and a bad `--keep` still behave normally, and
+before any directory or archive is created, so a refusal leaves nothing behind.
+
+Two layers guard a backup, and they produce different messages:
+`validate_production_config()` gates the **process** on all eight rules below,
+while `_resolve_encryption_key` gates the one irreversible **write** at every call
+site that can reach it — including the scheduler's `backup_stores` job, which calls
+`create_backup` directly in a process whose preflight ran hours earlier. A refusal
+naming `BACKUP_ENCRYPTION_KEY` alone came from the second; one listing numbered
+requirements came from the first.
+
+| Setting | Production requirement | Why it is not just advice |
+| --- | --- | --- |
+| `API_WRITE_KEY` | non-empty | every write endpoint is otherwise unauthenticated |
+| `ALLOW_OPEN_WRITES` | `false` | it is the opt-in that makes the keyless-boot guard skippable |
+| `LLM_DAILY_COST_CAP_USD` | `> 0` | `0` disables the ceiling; unattended spend is unbounded |
+| `OPENAPI_ENABLED` | `false` | `/openapi.json` publishes all write operations and their headers |
+| `SERVER_RELOAD` | `false` | reload re-executes the app and runs a supervising process |
+| `BACKUP_ENCRYPTION_KEY` | non-empty **when** `BACKUP_SCHEDULE_ENABLED=true` | otherwise the daily job writes a plaintext ZIP of every state store |
+| `CORS_ALLOWED_ORIGINS` | non-empty, no `*` | empty blocks every browser client; `*` lets any site read authenticated responses |
+| `PHASE10_REALTIME_PUSH_ENABLED` | `true` allowed **only** with an authenticated handshake and all three `WEBSOCKET_MAX_CONNECTIONS_*` caps `> 0` | an unauthenticated or uncapped socket streams live odds to anyone who reaches the port |
+
+The failure text names the **setting**, never its value — it lands in a crash log
+and gets pasted into issue trackers. Nothing is logged as configured/unconfigured
+beyond that.
+
+### Realtime WebSocket
+
+The endpoint is `/api/ws/matches/{match_id}/prices` — note the `/api` prefix, which
+`app/api/router.py` supplies. It streams live bookmaker odds, implied
+probabilities and Kalshi prices as the scheduler captures them, so it is a
+data-egress surface, not a status page.
+
+**Authenticating a handshake.** Two transports, because a browser has one lever:
+
+* A script or ops tool sends `X-API-Key` on the handshake.
+* A browser cannot set a header on a WebSocket, so it `POST`s `/api/ws/tickets`
+  with the key in a header and offers the returned value as a subprotocol:
+  `new WebSocket(url, [resp.subprotocol])`. The ticket is single-use and expires
+  after `WEBSOCKET_TICKET_TTL_SECONDS` (default 60). The response carries the
+  subprotocol string pre-assembled so no client hardcodes the prefix.
+
+The key is **never** accepted from a query string, and is refused there by an
+explicit test rather than merely unimplemented: a URL reaches proxy access logs,
+browser history and `Referer`. No credential — key or ticket — is written to a log
+line; a refusal logs the shape ("no credential", "invalid ticket") and nothing else.
+
+**What makes it enforce.** A configured `API_WRITE_KEY` is what makes the socket
+refuse anonymous callers — the same boundary the rest of the API uses, not a
+separate toggle. With no key configured there is nothing to check and the socket is
+open, which is correct on a dev box and is why the preflight independently requires
+that key in production: the two rules compose, so production always enforces.
+
+**Caps.** Three, in `ConnectionManager`, each because the others are escapable
+alone: `WEBSOCKET_MAX_CONNECTIONS_TOTAL`, `..._PER_MATCH` (a per-match cap alone is
+bypassed by asking for another match id) and `..._PER_CLIENT` (a global cap alone
+lets one host fill the budget and lock every other operator out). A non-positive
+value means *accept nothing*, never *unlimited*; the preflight reports such a cap as
+no limit at all and refuses to start. `InMemoryRateLimitMiddleware` cannot help
+here — it is a `BaseHTTPMiddleware` and never sees a WebSocket scope — which is why
+the caps live in the manager. The per-client identity is the rate limiter's own
+`_client_host`, so X-Forwarded-For is resolved from the right under
+`TRUSTED_PROXY_HEADER` and a caller cannot rotate a spoofed header into unlimited
+buckets.
+
+The slot is **reserved before `accept()`**, not merely checked. A check-then-await
+left a window where two concurrent handshakes both measured "0 of 1 used" and a
+cap of 1 admitted 2. A reservation that is not converted into a live connection
+(failed `accept()`, cancelled task, registration error) is released; `disconnect`
+is idempotent, so the route's `finally`, a failed broadcast, and a cap refusal can
+all target the same socket without going negative or evicting a sibling. A send
+failure in `broadcast_to_match` goes through the same `disconnect` — discarding
+from the match set alone used to leak the per-client slot forever, so a caller
+whose push failed could never reconnect under a per-client cap of 1. A broadcast
+task cancelled mid-send gets the same treatment: the one socket whose send was
+abandoned is reaped, the `CancelledError` is re-raised (never swallowed), and the
+scheduler's `except Exception` wrappers around both broadcast sites never see a
+stranded socket because the manager has already cleaned its own books.
+
+**Which matches are admitted.** After authentication and before `accept()`, the
+route asks `SportMarketLinkStore.get_verified_links(match_id=...)` — the same store
+both scheduler broadcast sites enumerate. A match with no verified link is never
+pushed to, so a socket on it is a slot held open for traffic that cannot arrive.
+The check is not a format or regex on the id. A broken table is fail-closed
+(`1011`), not reported as "unknown" (`4404`): those are different operational
+pictures. Authentication runs first, so an anonymous caller cannot learn which
+ids exist by comparing close codes.
+
+**Close codes**, all in the range a browser actually delivers (an HTTP status would
+be discarded as 1006): `4503` push disabled, `1008` unauthorized, `4404` unknown
+match, `1013` at capacity, `1011` match lookup unavailable. The disabled check
+runs first, so a valid credential cannot switch the feature on. Close reasons are
+fixed short text (`"Unknown match"`, `"Too many connections"`, `"Match lookup
+unavailable"`); they do not carry SQL, paths, exception text, the write key, a
+ticket, or the numeric cap.
+
+**Heartbeat is not an idle timeout.** The server sends a `heartbeat` frame every
+`WEBSOCKET_HEARTBEAT_INTERVAL_SECONDS` (default 30) so that proxies do not close a
+quiet socket. The socket is server-push only: the server does not read client
+messages and does not disconnect a subscriber for silence. An idle timeout is not
+implemented, and the Phase 10 spec does not require one. A half-open TCP
+connection is reaped when the next heartbeat `send_json` fails, which then goes
+through `disconnect`.
+
+**Posture at startup.** `log_realtime_push_posture` states it on every boot, met or
+not. The two flags it reports are derived from `ws_auth.auth_is_enforced()` and the
+cap settings — they used to be hand-edited constants, which is a claim about the
+code that can be edited without the code changing.
+
+> **Reverse proxy:** no change needed. `deploy/nginx.conf.example`'s `location
+> /api/` already sets `Upgrade`/`Connection`, which covers `/api/ws/`, and Caddy's
+> `reverse_proxy` handles WebSockets natively.
+
+**Browser lifecycle.** `NEXT_PUBLIC_API_BASE` is the complete external HTTP API
+prefix. The default `/api` yields `/api/ws/tickets` and `/api/ws/...`; a custom
+prefix such as `/internal-api` or `https://api.example.com/internal-api` yields
+that same prefix followed directly by `/ws/...`. One or more trailing slashes are
+accepted and normalized away first, so `/internal-api///` cannot produce
+`/internal-api////ws/...`; a root base such as `/` or `///` normalizes to `/`
+and joins as `/ws/...`, never `//ws/...`. API bases must otherwise be either a
+single-slash root-relative path or an `http(s)` URL. Neither form may contain a
+query or fragment, and absolute URLs also may not contain credentials.
+Protocol-relative (`//host/...`), empty, malformed, `ftp`, `ws`, and `wss` values
+are rejected before an authenticated fetch can run.
+`NEXT_PUBLIC_WS_ORIGIN` and the legacy `NEXT_PUBLIC_API_ORIGIN` are different:
+they are pure origin overrides (no path, query, fragment, credentials, or
+unsupported protocol), and sockets through either use the backend's standard
+`/api/ws/...` path. The WS override wins over the legacy alias.
+
+The frontend keeps `API_WRITE_KEY` in its existing
+`sessionStorage` operator-credential store, sends it only as `X-API-Key` on
+`POST /api/ws/tickets`, and opens `/api/ws/matches/{match_id}/prices` with the
+complete returned subprotocol. Every initial connection and retry buys a fresh
+single-use ticket. Changing operator credentials cancels an in-flight ticket request,
+closes the old socket without scheduling from its close callback, and starts a fresh
+attempt. Match changes and unmount do the same cleanup; stale ticket responses and
+socket callbacks cannot update the new match.
+
+The browser treats ticket HTTP `401`/`403`, socket `4503`/`1008`, and `4404` as
+terminal; an operator-credential change resets that state and starts immediately.
+Ticket HTTP `408`/`429`/`5xx`, network errors, malformed ticket responses,
+WebSocket-constructor failures, and socket `1011`/`1013` share one budget of four
+retries with exponential backoff. Every retry performs a new ticket POST. Only a
+successful socket `open` resets this shared budget and the backoff; exhaustion
+changes the message to stopped and creates no further timer. Other ticket `4xx`
+responses are terminal. Ordinary network closes continue exponential backoff up to
+30 seconds without consuming the finite budget, and duplicate close/error callbacks
+cannot create duplicate timers. Aborted, stale, unmounted, or match-replaced attempts
+consume no budget and set no error; `onclose` remains the only scheduler after a
+socket has been constructed.
+
+Heartbeat, malformed JSON, and unknown message types are ignored. Runtime validation
+requires the complete scheduler contract for each discriminant: market snapshots
+require `match_id`, `link_id`, finite `implied_prob`/`price`, and `captured_at`; odds
+snapshots require `match_id`, `outcome`, finite `implied_prob`/`decimal_odds`,
+`bookmaker` (string or null), and `captured_at`. Required strings are non-empty,
+unknown extension fields are ignored, and at most the newest 100 valid snapshots are
+retained.
+
+Ticket records live in the SQLite database selected by `LOOP_DB_FILE`, not in the
+issuing worker's memory. The table stores only SHA-256 lookup digests, never the
+bearer values returned to clients. Redemption is one conditional `DELETE`
+transaction, so a ticket issued by worker A can be redeemed by worker B and
+concurrent redemption attempts still produce exactly one winner. Sticky routing
+between the ticket POST and the WebSocket upgrade is therefore not required for
+workers that open the same database file.
+
+That guarantee stops at the storage boundary. Every worker must resolve
+`LOOP_DB_FILE` to the **same persistent SQLite file**. The Compose deployment does so
+for workers inside its `pmrf` container by placing `/app/data/v2_loop.db` on the
+`pmrf_store` volume; do not move it onto a container's private writable layer. For
+replicas on separate hosts, do not assume that an arbitrary network filesystem is a
+safe SQLite WAL transport: use a deployment whose shared filesystem and locking are
+explicitly supported and tested, or replace this table with an external store that
+provides an atomic consume-once operation.
+
+Development and staging are deliberately ungated: every value above is the correct
+one on a dev box. `backend/tests/test_production_preflight.py` pins both sides, and
+`backend/tests/test_production_deploy_consistency.py` asserts that
+`.env.production.example` names every checked setting and that compose satisfies
+the ones it controls.
 
 ## Operator Audit Headers
 
@@ -162,7 +404,85 @@ rather than writing the English title in as if it were Chinese.
 
 Use `GET /api/health`. A response status of `degraded` means at least one
 recorded scheduler job has failed and should be inspected before trusting new
-calibration output.
+calibration output. `runs` carries the newest run of **every** job name the
+ledger holds, and `failed_runs` lists the names whose newest run failed, so the
+`degraded` reading covers all recorded work — including the jobs that request
+handlers start, which have no scheduler id at all.
+
+The set is derived from the ledger rather than listed here or in the endpoint, so
+a new job is watched the day it first writes a row. `recent_runs` is a timeline
+capped at two rows per job, not a census: read `runs` to answer "did job X last
+succeed".
+
+Three independent signals can put the probe at 503, and it is worth knowing which:
+
+- **A failed scheduled job** — a `failed` row for one of the scheduler's own job ids.
+- **A stopped scheduler** — `SCHEDULER_ENABLED=true` while `scheduler_running` is
+  false and the start was not skipped for the lock.
+- **A core startup component** — `startup_sqlite_integrity` or
+  `startup_prediction_db_init` in `failed_runs`.
+
+The last group is the newest. Startup work is split into *core* and *optional* in
+`app/main.py` (`CORE_STARTUP_COMPONENTS` / `OPTIONAL_STARTUP_COMPONENTS`):
+
+- **Core** maintains or initialises state everything else writes through. The loop
+  DB check (`sqlite_db.maintain()`) aborts the boot outright, because it backs the
+  ledger the others report through. The all-store integrity check and the World Cup
+  prediction DB init instead write a `failed` row, so the process comes up — the
+  operator still needs the dashboard — and `/api/health` answers 503. Both write a
+  `success` row on a clean boot, which is what lets a restore clear the degraded
+  state; nothing else re-checks the prediction DB on a schedule. Retention already
+  exempts each job's newest row, so the ledger cleanup cannot delete the reason
+  health is degraded. **If either row cannot be written to the ledger at all — the
+  failure row or the success row — the process refuses to start.** A failed core
+  component with nowhere to report it is the obvious case. The success case is the
+  one worth understanding: the ledger is the only place any startup or scheduler
+  failure is durably recorded and `/api/health` derives its whole verdict from it,
+  so a boot that cannot write there has proved the health mechanism is dead, and
+  coming up would answer 200 indefinitely with no failure — then or later —
+  recordable. "An earlier failed row still stands" is not a fallback when writing
+  such a row is exactly what is broken. A half-written row is why this is not
+  softened for successes: `start_run` succeeding and `finish_run` failing leaves a
+  `running` row nothing will finish, and the probe degrades only on `failed`, so
+  the residue reads as a job still in progress. **Operationally this means an
+  unwritable or full `LOOP_DB_FILE` volume stops the process at boot with a
+  message naming the job**. When the message says the component *passed*, the
+  fault is the volume, not that component — check free space and permissions on
+  the directory holding `LOOP_DB_FILE` before investigating anything else.
+- **Optional** degrades one feature (orphan-prediction reconcile, interrupted
+  optimization tasks, World Cup match scoring). Logged at WARNING; health stays
+  `ok`. Marking these core would trade a false-healthy for a false-unavailable.
+
+`startup_*` job names are deliberately distinct from the scheduler's daily
+`loop_db_maintenance`, which runs the same integrity check: "the last boot found
+this" and "the last daily check found this" are different facts, and sharing a name
+would let either clear the other without re-testing it.
+
+> **Before this change, a startup failure could read as healthy.** `maintain_all()`
+> reports a corrupt store by *returning* `ok=False`, which was recorded correctly —
+> but it also *raises* (`sqlite3.DatabaseError` on a file too damaged for
+> `PRAGMA integrity_check` to parse, `OSError` on the volume under it), and that
+> path went to the same `logger.warning` as the optional steps. So the more damaged
+> the database, the healthier the app looked: corruption `integrity_check` could
+> describe degraded loudly, corruption it could not parse degraded silently. The
+> World Cup prediction DB init had the same shape. A check has three outcomes, not
+> two — passed, failed, and could-not-run — and the last is not a pass.
+
+The response names the failing component and nothing else: recorded errors carry
+the component name and the exception *type*, never `str(exc)`, because a sqlite3 or
+`OSError` message routinely contains the database path and an authenticated
+`/api/health` returns the `error` column verbatim. Full tracebacks stay in
+`LOG_FILE`.
+
+> **Before 2026-09-05 this section was false as written.** The endpoint watched
+> three job names — `event_discover`, `event_auto_resolve`, `loop_db_maintenance`
+> — out of the fifteen in the live ledger, and the one job whose last run had
+> actually failed (`world_cup_api_football_validate`, 2026-07-07, "API-Football
+> returned 0 fixtures") was among the twelve it did not read. `/api/health`
+> answered 200 `ok`, the container healthcheck passed, and the dead-man switch in
+> `scripts/healthcheck.py` kept reporting in. `recent_runs` had the same blind
+> spot in reverse: it was a plain newest-20 window, and `world_cup_scoring_reconcile`
+> held 1193 of 1706 rows, so the timeline showed that one job alone.
 
 ## Backups
 
@@ -214,9 +534,34 @@ retention policy.
 Set `BACKUP_ENCRYPTION_KEY` in `backend/.env` (or pass `--encryption-key`) to
 write each archive as a pyzipper AES-256 encrypted zip. Without the key the
 archive cannot be restored, so store the passphrase alongside your other
-secrets (e.g. in the same secrets manager that holds `API_WRITE_KEY`). Leave
-`BACKUP_ENCRYPTION_KEY` empty only when the backup volume is already encrypted
-at rest (e.g. an encrypted LVM / EBS volume).
+secrets (e.g. in the same secrets manager that holds `API_WRITE_KEY`) — and
+somewhere other than the backup volume.
+
+**With `PMRF_ENV=production`, an empty key is a refusal, not a downgrade.**
+`create_backup` raises before it creates the output directory, so nothing is left
+in the volume; the scheduled job records a `failed` `loop_runs` row and
+`/api/health` answers 503. This is enforced in the script rather than only in the
+startup preflight, because the systemd backup timer and a manual
+`python scripts/backup_stores.py` both call it in a process that never runs the API
+lifespan. Whitespace is not a passphrase — `" "` would produce an archive that
+reads as encrypted everywhere downstream while being trivially openable.
+
+This is the gap that prompted it: `deploy/docker-compose.yml` sets
+`BACKUP_SCHEDULE_ENABLED=true` and named no key, so the documented Docker
+deployment wrote a daily plaintext ZIP of the event store, the committed
+predictions and the kernel prediction history into `pmrf_data`.
+
+Off production the legacy behaviour stands: an empty key produces a plaintext zip.
+That boundary is deliberate and tested (`test_backup_plaintext_guard.py`) — a dev
+box archiving a temp store onto its own disk is not what needs protecting, and the
+restore drill depends on the plaintext path. On a non-production host, leave the
+key empty only when the backup volume is already encrypted at rest (e.g. an
+encrypted LVM / EBS volume).
+
+Rotating the passphrase does not re-encrypt existing archives, so keep the old one
+as long as you keep archives written under it. Restore decides plaintext vs
+encrypted from the archive's own flag bits, not from whether a key is configured,
+so archives taken before the key existed still restore normally.
 
 Encrypted archives are restored by the same script as unencrypted ones — see
 [Restoring from a backup](#restoring-from-a-backup) below. Pass the passphrase
@@ -443,8 +788,9 @@ python -c "import json,os; from app.core.config import settings; from app.memory
 
 ### Reverse-proxy client IP — the rate-limit identity (E3)
 
-The in-process rate limiter buckets by `client:method:route`. What `client`
-resolves to is a deployment question, and **both settings of
+The in-process rate limiter buckets by `client:method:route` — `route` being the
+matched route's path, which is [not what it used to be](#what-the-route-half-of-the-bucket-key-means).
+What `client` resolves to is a deployment question, and **both settings of
 `TRUSTED_PROXY_HEADER` were wrong** before this was fixed. Measured against the
 middleware at `RATE_LIMIT_MAX_REQUESTS=2`:
 
@@ -492,6 +838,54 @@ only because the app is deliberately single-process (`uvicorn` with no
 already depend on). Adding `--workers N` multiplies every limit by `N` with no
 warning, and would break more than rate limiting.
 
+### What the `route` half of the bucket key means
+
+The other half of `client:method:route` was wrong in both directions until
+2026-09-05, and neither failure was visible from outside the process.
+
+`_route_key` preferred `request.scope["route"]` and fell back to a path-shape
+normalizer. FastAPI writes `scope["route"]` while *routing*, which happens below
+the middleware stack — so the preferred branch measured `None` on every request
+and never ran once. Every bucket came from the fallback, which is much coarser
+than an endpoint:
+
+| | Before | After |
+| --- | --- | --- |
+| Distinct buckets for 190 route+method pairs | 75 | 190 |
+| Pairs sharing a bucket with another pair | 138 | 0 |
+| Largest shared bucket | 32 (`GET /api/{param}/{param}`) | — |
+
+Concretely: three requests to `/api/llm/diagnostics` were enough to return
+**429** on `/api/quality-metrics/summary`. The middleware now matches the request
+against `scope["app"].routes` itself and keys off the matched route's path.
+
+The same normalizer kept any segment containing a `.` verbatim, which handed the
+key to the caller: rotating `/api/events/abc1.1/resolve`, `abc2.1`, … bought a
+fresh bucket per request. Measured at `RATE_LIMIT_MAX_REQUESTS=3`, 8 requests to
+one id were refused 5 times and 8 rotated dotted ids were refused **0** times —
+on all 49 parameterised route+method pairs, 17 of them writes. Routed paths no
+longer reach the normalizer, and it no longer exempts dotted segments.
+
+Two consequences worth knowing when tuning the limit:
+
+- **Static assets share buckets by shape now.** They match no route (the
+  frontend is a `Mount`, deliberately not consulted — it matches *every*
+  otherwise-unrouted path, so keying off it would put a whole page load in one
+  bucket). Measured over `frontend/out`: 253 files fall into 19 buckets, the
+  largest holding 60 (everything under `_next/`). The number that bounds a real
+  client is smaller — one page's 33 subresources fall into 8 buckets, the largest
+  holding **13** — so both shipped limits have room (production
+  `RATE_LIMIT_MAX_REQUESTS=120`, staging `60`). If you lower the limit, 13 per
+  page load is the floor to stay above, and note that staging's 60 is already
+  level with the whole-export figure: a client that fetched every `_next/` file
+  in one window would be refused on the next one.
+  `test_a_page_load_of_static_assets_does_not_refuse_itself` pins the code
+  default above 60; the overlay values are not asserted.
+- **The key costs a route scan per request.** It is the same regex walk the
+  router performs a moment later: ~300µs when nothing matches, ~90µs when
+  something does, against 3ms for an unrouted request and 67ms+ for a routed one
+  — 0.1% to 10% of the request it protects.
+
 ### Grafana dashboard (E8)
 
 Import the provisioned JSON:
@@ -524,6 +918,14 @@ DRIFT_SCHEDULER_ZERO_RESOLVED_RUNS=3
 Leave `DRIFT_ALERTS_ENABLED=false` until you have enough settled samples and a
 trusted webhook endpoint; otherwise you only get noise.
 
+With `DRIFT_ALERTS_ENABLED=true`, the scheduler also runs `drift_alert_check`
+daily at 07:30 UTC: the same rules 1-4 the route evaluates, computed
+server-side and dispatched without anyone having to send an authenticated
+request. Before that job existed, dispatch fired only on the drift route's
+authenticated branch — an alarm you operate by hand is not an alarm channel.
+The job writes a normal `drift_alert_check` ledger row, so a failure of the
+check itself is visible through `/api/health` like every other job.
+
 ### Scheduler failure alerts (E8)
 
 Every failed job already:
@@ -541,8 +943,48 @@ SCHEDULER_FAILURE_ALERT_WEBHOOK_URL=""
 SCHEDULER_FAILURE_ALERT_COOLDOWN_SECONDS=1800
 ```
 
-Default OFF keeps installs byte-identical to pre-E8. Enable only when you want
-operator-facing webhook spam control on top of existing Sentry + Prometheus.
+Default OFF keeps installs byte-identical to pre-E8, but it is not a complete
+posture: those three things a failed job already does are **pull-only**. The
+ledger row, the counter and the 503 all wait for somebody to look. With every
+channel off — the shipped state, and the state
+`.env.production.example` used not to mention at all — the whole trace of an
+overnight failure is a line in `LOG_FILE`, so the app logs
+`No alert push channel is configured` at WARNING on each boot where that holds.
+
+Both halves are required. `SCHEDULER_FAILURE_ALERT_ENABLED=true` with an empty
+URL runs the dispatcher to completion and leaves nothing outside the process: a
+local `[SCHEDULER-FAILURE-ALERT]` WARNING plus a `capture_message` that no-ops
+without a DSN.
+
+### Loop-run ledger maintenance (reconcile + retention)
+
+The `loop_runs` table had two unbounded failure modes before the
+`loop_run_ledger_maintenance` job (daily 06:48 UTC, right after the 06:45
+integrity check): 123 rows stuck in `running` whose owning process died
+mid-flight — nothing re-attaches a job to a stored row, so "running" was
+permanent — and no retention of any kind over a monotonically growing table
+(the ledger writes add ~2.8 MiB/month).
+
+The job does two things, both in one ledger row you can read from the
+dashboard's run timeline:
+
+1. **Reconcile**: any `running` row older than `LOOP_RUN_STALE_RUNNING_HOURS`
+   (default 36, i.e. a full day of scheduled jobs plus margin) is marked
+   `failed` with `error = "run abandoned: owning process exited before
+   finishing"`. It is threshold-based rather than startup-based because the
+   API process and the scheduler share this ledger — an API restart must not
+   fail a job the scheduler is legitimately mid-run on.
+2. **Retention**: terminal rows older than `LOOP_RUN_RETENTION_DAYS`
+   (default 90) are deleted. Each job's newest row is exempt regardless of
+   age, because `/api/health` reads it through `latest_run_per_job` — an
+   age-only rule would delete the only record that a quiet job is healthy,
+   blinding the probe exactly when the job looks dead. `running` rows are
+   never deleted here; that is the reconcile's fact to surface, not a file
+   to trim.
+
+After a crash, expect the next morning's row to report
+`reconciled_running: 1` and the run timeline to show the crashed job's row as
+`failed` with the abandoned-run error rather than as `running` forever.
 
 ### Sport market matching eval (P1-SB1)
 
@@ -1052,14 +1494,45 @@ If the report has no conflicts, take a backup and apply:
 ## Docker Deployment
 
 ```bash
-# Build frontend first
-cd frontend && npm ci && npm run build && cd ..
-
-# Build and start
+# Build and start (the image builds the frontend itself, in stage 1)
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
 The container includes a healthcheck that pings `/api/health` every 30 seconds.
+
+### Backups under Docker
+
+A container has no systemd timer, so the compose file sets
+`BACKUP_SCHEDULE_ENABLED=true` and the scheduler runs the same
+`scripts/backup_stores.py` code in-process at 07:00 UTC — after
+`loop_db_maintenance` (06:45) has truncated every WAL and verified integrity, so
+each archived `.db` is self-contained. Archives land in `/app/backups`, which is
+the `pmrf_data` volume. Leave the setting off on a systemd install: the timer is
+already a writer there, and two of them halve the effective retention at
+`--keep 30`.
+
+Check that it is actually running, and take one on demand:
+
+```bash
+# Did the last scheduled run succeed? (job name: backup_stores)
+curl -s localhost:8000/api/health | python -m json.tool
+
+# On-demand backup — the /opt/... venv path in `## Backups` does not exist here
+docker compose -f deploy/docker-compose.yml exec pmrf python scripts/backup_stores.py
+
+# List what the volume holds
+docker compose -f deploy/docker-compose.yml exec pmrf ls -lh /app/backups
+```
+
+Copy archives off the host — a volume on the same machine does not survive the
+machine:
+
+```bash
+docker compose -f deploy/docker-compose.yml cp pmrf:/app/backups ./pmrf-backups
+```
+
+Set `BACKUP_ENCRYPTION_KEY` in `backend/.env` before the first run if the volume
+is not encrypted at rest; see [Encryption at rest](#encryption-at-rest).
 
 ## Process Supervision
 
@@ -1080,3 +1553,31 @@ The API unit sets `SCHEDULER_ENABLED=false`; the scheduler unit sets
 APScheduler out of the web process while preserving the same job definitions,
 SQLite run ledger, and process lock. If both units accidentally try to own the
 scheduler, the lock file allows only one process to start jobs.
+
+### Bind address
+
+The API unit binds `--host 127.0.0.1`. It terminates no TLS, and `/metrics` and
+`/api/health` take no `X-API-Key` — so a public bind serves them in the clear,
+and unlike the container a systemd install has no network namespace to contain
+it. `deploy/nginx.conf.example` and `deploy/Caddyfile.example` both forward to
+`127.0.0.1:8000`, so the documented deploy needs nothing wider.
+
+Widen it only if the reverse proxy runs on a **different host**, and then firewall
+the port to that host — the bind is the only thing standing in for
+authentication on the two public endpoints:
+
+```bash
+# in the unit: --host 0.0.0.0, then restrict who can reach it
+sudo ufw allow from <proxy-ip> to any port 8000 proto tcp
+sudo ufw deny 8000/tcp
+```
+
+Verify what is actually listening after any change:
+
+```bash
+ss -ltnp | grep :8000
+```
+
+`127.0.0.1:8000` is the expected output. `0.0.0.0:8000` with no firewall rule in
+front means every write endpoint is one missing `API_WRITE_KEY` away from the
+open internet.

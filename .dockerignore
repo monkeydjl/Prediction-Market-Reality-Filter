@@ -23,6 +23,13 @@ backend/__pycache__/
 backend/**/__pycache__/
 backend/**/*.pyc
 backend/logs/
+# Docker matches each pattern per path segment, so the `backend/*.db` and
+# `backend/*.json` lines below stop at `backend/` and do not reach the archives
+# under here: 30.69 MB across 11 files entered the build context, including two
+# 11.9 MB v2_loop.db copies and three event_store.json snapshots from the June
+# and July purges. `COPY backend/ /app/` would bake old production records into
+# an image layer. Asserted by backend/tests/test_deploy_units.py.
+backend/backups/
 backend/*.db
 backend/*.db-wal
 backend/*.db-shm
@@ -32,6 +39,12 @@ backend/*.sqlite
 backend/*.sqlite3
 backend/*.json
 backend/*.jsonl
+# Re-included after the rule above, which is what Docker resolves by: this file
+# is tracked, ships 35 warm entries, and is read on every resolve_team_id call.
+# resolve_team_id tries the cache, then API-Football, and only then the curated
+# 55-entry map -- so losing the file does not fall back for free, it pays a live
+# lookup first on every container start. Asserted by test_deploy_units.py.
+!backend/world_cup_team_ids.json
 *.egg-info/
 .pytest_cache/
 .coverage

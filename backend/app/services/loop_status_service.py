@@ -47,24 +47,22 @@ def loop_status(
             "event_store_bytes": store_bytes(),
             "event_store_records": len(events),
         },
+        # Every job name the ledger holds, not a list typed out here. Three were
+        # named, the live ledger holds fifteen, and the only one whose last run
+        # had failed was among the twelve that nothing watched -- so /api/health
+        # answered 200 "ok" over it. `recent_runs_by_job` caps the window per
+        # job for the same reason in reverse: one job holds 1193 of 1706 rows
+        # and its newest 20 crowded every other name out of the timeline.
         "runs": {
-            "event_discover": _visible_run(
-                loop_run_store.last_run("event_discover"),
-                include_run_details=include_run_details,
-            ),
-            "event_auto_resolve": _visible_run(
-                loop_run_store.last_run("event_auto_resolve"),
-                include_run_details=include_run_details,
-            ),
-            "loop_db_maintenance": _visible_run(
-                loop_run_store.last_run("loop_db_maintenance"),
-                include_run_details=include_run_details,
-            ),
+            str(run["job_name"]): _visible_run(
+                run, include_run_details=include_run_details
+            )
+            for run in loop_run_store.latest_run_per_job()
         },
         "recent_runs": [
             run for run in (
                 _visible_run(item, include_run_details=include_run_details)
-                for item in loop_run_store.recent_runs(limit=20)
+                for item in loop_run_store.recent_runs_by_job(limit=20)
             )
             if run is not None
         ],

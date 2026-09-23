@@ -2,16 +2,13 @@
 
 Best-effort alert dispatch for scheduler job failures. Three outlets:
 1. Webhook HTTP POST (when ``SCHEDULER_FAILURE_ALERT_WEBHOOK_URL`` is set)
-2. Sentry ``capture_exception`` (also forwarded by the scheduler itself —
-   this dispatcher adds a structured ``capture_message`` breadcrumb so
-   the alert is visible even when ``SENTRY_DSN`` is the only channel)
+2. Sentry ``capture_message`` with stable structured context
 3. Structured log line
 
 Gated by ``SCHEDULER_FAILURE_ALERT_ENABLED`` (default false). When
-disabled, dispatch is a no-op — the scheduler still records the failure
-in the loop-run ledger, increments the Prometheus counter, and forwards
-the exception to Sentry via the existing ``_finish_run`` path. This
-dispatcher only adds an explicit notification channel for operators who
+disabled, dispatch is a no-op — the scheduler still records the failure,
+increments the Prometheus counter, and emits a separate stable Sentry event.
+This dispatcher only adds an explicit notification channel for operators who
 want webhook + cooldown-deduplicated alerts.
 
 Cooldown: per-job_name dedup within
@@ -41,7 +38,7 @@ def dispatch_scheduler_failure_alert(
     job_name: str,
     run_id: str | None,
     error: str | None,
-    exc: BaseException | None = None,
+    exc_type: str | None = None,
     force: bool = False,
 ) -> None:
     """Dispatch a scheduler failure alert to configured outlets.
@@ -69,20 +66,19 @@ def dispatch_scheduler_failure_alert(
         "job_name": job_name,
         "run_id": run_id,
         "error": error,
-        "exc_type": type(exc).__name__ if exc is not None else None,
+        "exc_type": exc_type,
     }
 
     # 1. Log
     logger.warning(
         "[SCHEDULER-FAILURE-ALERT] job=%s run=%s error=%s exc=%s",
         job_name, run_id, error,
-        type(exc).__name__ if exc is not None else "n/a",
+        exc_type or "n/a",
     )
 
-    # 2. Sentry breadcrumb-level message. The scheduler already calls
-    # capture_exception(exc, ...) in _finish_run; this adds a structured
-    # breadcrumb so the alert is searchable in Sentry by code/severity
-    # even when the exception capture fails or is sampled.
+    # 2. Stable Sentry message with structured context. The scheduler emits a
+    # separate failure event; this breadcrumb remains searchable by code and
+    # severity even when one event is sampled.
     try:
         from app.utils.sentry import capture_message
         capture_message(

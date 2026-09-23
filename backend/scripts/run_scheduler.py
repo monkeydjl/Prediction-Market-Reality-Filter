@@ -3,13 +3,37 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import sys
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
-from app.core.config import settings
-from app.core.logging import setup_logging
-from app.core.scheduler import start_scheduler, stop_scheduler
-from app.services.llm_startup_check_service import validate_primary_llm_startup
-from app.utils import sqlite_db
+# Make backend importable when run as a script. The scheduler systemd unit's
+# ExecStart is `python scripts/run_scheduler.py`, which puts `backend/scripts`
+# on sys.path[0] rather than `backend`, so without this the worker dies at
+# import with `No module named 'app'` and systemd restarts it into the same
+# failure every RestartSec.
+_BACKEND = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_BACKEND))
+
+try:
+    from app.core.config import settings  # noqa: E402
+except RuntimeError as exc:
+    print(
+        f"Configuration refused startup: {type(exc).__name__}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1) from None
+
+from app.core.logging import setup_logging  # noqa: E402
+from app.core.preflight import (  # noqa: E402
+    log_realtime_push_posture,
+    validate_production_config,
+)
+from app.core.scheduler import start_scheduler, stop_scheduler  # noqa: E402
+from app.services.llm_startup_check_service import (  # noqa: E402
+    validate_primary_llm_startup,
+)
+from app.utils import sqlite_db  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +62,13 @@ async def run_scheduler_worker(
     setup_logging()
     logger.info("PMRF scheduler worker starting")
 
+    # This process, not the API, is the one that spends LLM budget unattended and
+    # writes the backup archives, so it gets the same production gate. Before the
+    # SCHEDULER_ENABLED short-circuit: a misconfigured production deployment is a
+    # fact worth reporting even when this unit is the disabled replica.
+    validate_production_config()
+    log_realtime_push_posture()
+
     if not settings.SCHEDULER_ENABLED:
         logger.warning("Scheduler worker disabled by SCHEDULER_ENABLED=false")
         return 0
@@ -63,7 +94,11 @@ async def run_scheduler_worker(
 
 
 def main() -> int:
-    return asyncio.run(run_scheduler_worker())
+    try:
+        return asyncio.run(run_scheduler_worker())
+    except Exception as exc:
+        print(f"Scheduler worker failed: {type(exc).__name__}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

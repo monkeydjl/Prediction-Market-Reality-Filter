@@ -134,13 +134,24 @@ _RUN_TO_JOB: dict[str, str] = {}
 
 
 def _start_run(job_name: str) -> str | None:
+    """Open a ledger row for this run, or None when the ledger write failed.
+
+    The ledger is best-effort: a job whose `loop_runs` insert fails still runs.
+    `None` therefore means "no row to update", and nothing more -- see
+    `_finish_run`, which used to treat it as "nothing to report" and so silenced
+    every alarm the failing job was supposed to raise.
+    """
     try:
         run_id = loop_run_store.start_run(job_name)
         if run_id is not None:
             _RUN_TO_JOB[run_id] = job_name
         return run_id
-    except Exception:
-        logger.exception("[Scheduler] Failed to start run ledger for %s", job_name)
+    except Exception as exc:
+        logger.error(
+            "[Scheduler] Failed to start run ledger for %s: %s",
+            job_name,
+            type(exc).__name__,
+        )
         return None
 
 
@@ -152,24 +163,52 @@ def _finish_run(
     error: str | None = None,
     exc: BaseException | None = None,
 ) -> None:
-    if run_id is None:
-        return
-    try:
-        loop_run_store.finish_run(run_id, status, result=result, error=error)
-    except Exception:
-        logger.exception("[Scheduler] Failed to finish run ledger for %s", run_id)
-    # Forward scheduler failures to Sentry (P0-7 §1.2). No-op when SENTRY_DSN
-    # is empty (the wrapper handles the disabled case). Called *after* the run
-    # ledger is written so the local SQLite record is authoritative even if
-    # Sentry ingestion is slow / down. Pass ``exc`` explicitly so Sentry gets
-    # the full stack trace even though we are outside the except block.
+    """Close out a run: update the ledger row, then raise the job's alarms.
+
+    ``run_id is None`` means ``_start_run``'s ledger insert failed, so there is
+    no row to update. It does **not** mean nothing happened, and the alarm
+    channels below are about the *job*, not the ledger. Returning here gated all
+    of them on a ledger write: measured with a ``BEFORE INSERT ... RAISE(ABORT)``
+    trigger on ``loop_runs``, a job that ran and failed was identical to a job
+    that never ran at every door -- no ledger row, ``runs.event_auto_resolve:
+    null`` from ``loop_status``, **no ``SCHEDULER_FAILED_RUNS`` increment, no
+    Sentry event and no operator webhook** -- leaving `_start_run`'s log line as
+    the only trace of a failure that is supposed to page someone.
+    """
+    safe_error = error
+    exc_type = type(exc).__name__ if exc is not None else None
+    if status == "failed" and exc_type is not None:
+        safe_error = f"Scheduler job failed: {exc_type}"
+
+    if run_id is not None:
+        try:
+            loop_run_store.finish_run(
+                run_id,
+                status,
+                result=result,
+                error=safe_error,
+            )
+        except Exception as ledger_exc:
+            logger.error(
+                "[Scheduler] Failed to finish run ledger for %s: %s",
+                run_id,
+                type(ledger_exc).__name__,
+            )
+    # Forward a stable failure event to Sentry (P0-7 §1.2). No-op when
+    # SENTRY_DSN is empty (the wrapper handles the disabled case). Called after
+    # the run ledger write so local state remains authoritative if ingestion is
+    # slow or unavailable. Never forward the original exception or traceback.
     if status == "failed":
         try:
-            from app.utils.sentry import capture_exception
-            capture_exception(
-                exc,
-                job_run_id=run_id,
-                job_error=error,
+            from app.utils.sentry import capture_message
+            capture_message(
+                "scheduler job failed",
+                level="error",
+                code="scheduler_job_failed",
+                job_name=_job_name_for_run(run_id) or "unknown",
+                run_id=run_id,
+                error=safe_error,
+                exc_type=exc_type,
             )
         except Exception:  # pragma: no cover - defensive
             logger.debug("[Scheduler] Sentry capture failed", exc_info=True)
@@ -201,12 +240,16 @@ def _finish_run(
             dispatch_scheduler_failure_alert(
                 job_name=_job_name_for_run(run_id) or "unknown",
                 run_id=run_id,
-                error=error,
-                exc=exc,
+                error=safe_error,
+                exc_type=exc_type,
             )
         except Exception:  # pragma: no cover - defensive
             logger.debug("[Scheduler] failure alert dispatch failed", exc_info=True)
-    elif status == "success":
+    elif status == "success" and run_id is not None:
+        # Requires a run_id, unlike the failure path above: a success raises no
+        # alarm, the gauge is keyed by job, and with no ledger row the job name
+        # is unrecoverable -- a `job_name="unknown"` success series would read as
+        # a job that succeeded. The lost row is already reported by _start_run.
         # P0-6 metrics: update last-success gauge so SCHEDULER_LAST_SUCCESS
         # reflects the most recent successful run per job.
         try:
@@ -260,8 +303,11 @@ async def _job_translate_titles() -> None:
             save_events(records_to_save)
         _finish_run(run_id, "success", result={"translated": translated})
     except Exception as exc:
-        logger.exception("[Scheduler] Title translation failed")
-        _finish_run(run_id, "failed", error=str(exc))
+        logger.error(
+            "[Scheduler] Title translation failed: %s",
+            type(exc).__name__,
+        )
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
 
 
 async def _job_event_auto_resolve() -> None:
@@ -284,7 +330,10 @@ async def _job_event_auto_resolve() -> None:
         )
     except Exception as exc:
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
-        logger.exception("[Scheduler] Event auto-resolve failed")
+        logger.error(
+            "[Scheduler] Event auto-resolve failed: %s",
+            type(exc).__name__,
+        )
 
 
 async def _job_event_discover() -> None:
@@ -389,6 +438,133 @@ async def _job_loop_db_maintenance() -> None:
         logger.exception("[Scheduler] SQLite maintenance failed")
 
 
+async def _job_loop_run_ledger_maintenance() -> None:
+    """Daily reconcile + retention for the loop_runs ledger.
+
+    Measured on the live ledger before this job existed: 123 rows stuck in
+    ``running`` (2026-06-29 to 07-23, every owner process long dead), because
+    a ``running`` row has exactly two exits -- the job's ``_finish_run``, or
+    nobody. No process re-attaches to a stored row, so an abandoned row is
+    permanent. The same table had no retention of any kind: 1706 rows over 69
+    days, and P0-5's ledger writes make it grow 2.82 MiB/month.
+
+    Two deliberate differences from ``optimization_task_cleanup`` next door:
+
+    * Reconcile is threshold-based, not startup-based. The API and scheduler
+      processes share this ledger (the systemd units split them on purpose),
+      so "another process started" cannot mean "that row has no owner" -- the
+      scheduler can legitimately be mid-run during an API restart.
+    * Retention exempts each job's newest row regardless of age, because
+      ``/api/health`` reads it through ``latest_run_per_job``. A plain age
+      cutoff would delete the only record that a quiet job is healthy (or
+      failing), blinding the probe exactly when the job has been quiet long
+      enough to look dead.
+    """
+    logger.info("[Scheduler] loop_runs ledger maintenance starting...")
+    run_id = _start_run("loop_run_ledger_maintenance")
+    try:
+        now = datetime.now(timezone.utc)
+        stale_after = (
+            now - timedelta(hours=settings.LOOP_RUN_STALE_RUNNING_HOURS)
+        ).isoformat()
+        cutoff = (now - timedelta(days=settings.LOOP_RUN_RETENTION_DAYS)).isoformat()
+        reconciled = loop_run_store.fail_stale_running_rows(stale_after)
+        deleted = loop_run_store.delete_terminal_runs_before(cutoff)
+        result = {"reconciled_running": reconciled, "deleted_terminal": deleted}
+        _finish_run(run_id, "success", result=result)
+        logger.info(
+            "[Scheduler] loop_runs ledger maintenance: %d stale running row(s) "
+            "failed, %d terminal row(s) deleted",
+            reconciled, deleted,
+        )
+    except Exception as exc:
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        logger.exception("[Scheduler] loop_runs ledger maintenance failed")
+
+
+async def _job_drift_alert_check() -> None:
+    """Daily drift-alert evaluation + dispatch, server-side.
+
+    `dispatch_drift_alerts` had exactly one caller before this job: the
+    `/quality-metrics/drift` handler, and only on its authenticated branch
+    (`can_dispatch` — a valid X-API-Key). Nothing scheduled it, so every
+    webhook/Sentry alert in the drift rulebook fired only when an operator
+    had already exported the write key into something that polls by hand.
+    The route's own docstring called that "the alert heartbeat".
+
+    Runs the same evaluation the route runs — rules 1-3 (samples ->
+    build_drift_report -> evaluate_drift_alerts) plus rule 4
+    (`evaluate_scheduler_alerts`) — then hands the combined list to
+    `dispatch_drift_alerts`, which applies `DRIFT_ALERTS_ENABLED` and the
+    per-code cooldown. That flag is why registration itself is gated on
+    `DRIFT_ALERTS_ENABLED`: with it off, the job would evaluate and dispatch
+    nothing, every day, forever.
+
+    Registered only when `DRIFT_ALERTS_ENABLED` is on. The threshold call
+    into `prediction_store` and `event_store` are the route's reads; here
+    they run once a day at a fixed hour instead of per request.
+    """
+    logger.info("[Scheduler] drift alert check starting...")
+    run_id = _start_run("drift_alert_check")
+    try:
+        from app.memory.prediction_store import list_scored_samples_for_drift
+        from app.memory.event_store import list_all_events
+        from app.services.calibration_drift_service import (
+            build_drift_report,
+            evaluate_drift_alerts,
+        )
+        from app.services.drift_alert_dispatcher import (
+            dispatch_drift_alerts,
+            evaluate_scheduler_alerts,
+        )
+
+        recent_n = getattr(settings, "DRIFT_RECENT_WINDOW_N", 50)
+        try:
+            samples = list_scored_samples_for_drift(recent_n=recent_n)
+        except Exception:
+            logger.warning("[Scheduler] drift samples unavailable", exc_info=True)
+            samples = {"recent": [], "baseline": []}
+        recent = samples.get("recent", [])
+        if recent:
+            degraded_ids: set[str] = set()
+            for entry in list_all_events():
+                record = entry.get("record") or {}
+                lt = record.get("llm_telemetry")
+                if isinstance(lt, dict) and lt.get("degraded_mode"):
+                    eid = record.get("event_id")
+                    if isinstance(eid, str):
+                        degraded_ids.add(eid)
+            for s in recent:
+                if s.get("event_id") in degraded_ids:
+                    s["degraded"] = True
+
+        report = build_drift_report(recent, samples.get("baseline", []))
+        thresholds = {
+            "brier_relative_threshold": getattr(
+                settings, "DRIFT_BRIER_RELATIVE_THRESHOLD", 0.30
+            ),
+            "bucket_deviation_pp": getattr(
+                settings, "DRIFT_BUCKET_DEVIATION_PP", 20.0
+            ),
+            "bucket_min_samples": getattr(settings, "DRIFT_BUCKET_MIN_SAMPLES", 2),
+        }
+        alerts = evaluate_drift_alerts(report, thresholds)
+        alerts.extend(evaluate_scheduler_alerts())
+
+        dispatch_drift_alerts(alerts)
+        result = {
+            "alerts_detected": len(alerts),
+            "recent_window_n": recent_n,
+        }
+        _finish_run(run_id, "success", result=result)
+        logger.info(
+            "[Scheduler] drift alert check done: %d alert(s)", len(alerts)
+        )
+    except Exception as exc:
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        logger.exception("[Scheduler] drift alert check failed")
+
+
 async def _job_optimization_task_cleanup() -> None:
     """Daily cleanup of completed/failed optimization tasks older than 24h.
 
@@ -421,11 +597,11 @@ async def _job_optimization_task_cleanup() -> None:
             _finish_run(
                 run_id, "failed",
                 result=result,
-                error=f"store cleanup failed: {store_error}",
+                error="Optimization task store cleanup failed",
             )
             logger.warning(
-                "[Scheduler] Optimization task cleanup: store prune failed (%s); "
-                "in-memory pruning removed %s", store_error,
+                "[Scheduler] Optimization task cleanup: store prune failed; "
+                "in-memory pruning removed %s",
                 outcome.get("memory_removed"),
             )
             return
@@ -436,8 +612,47 @@ async def _job_optimization_task_cleanup() -> None:
             outcome.get("memory_removed"), outcome.get("store_deleted"),
         )
     except Exception as exc:
+        _finish_run(run_id, "failed", error="Optimization task cleanup failed", exc=exc)
+        logger.error(
+            "[Scheduler] Optimization task cleanup failed: %s",
+            type(exc).__name__,
+        )
+
+
+async def _job_backup_stores() -> None:
+    """Daily state-store backup, for deployments with nothing outside to run it.
+
+    A systemd install has `prediction-market-reality-filter-backup.timer`. A
+    Docker install has no timer, and before this job nothing in the compose path
+    ran `scripts/backup_stores.py` at all -- the volume was mounted at
+    `/app/backups` and stayed empty. `BACKUP_SCHEDULE_ENABLED` is therefore off
+    by default: two writers would halve the effective retention at `--keep 30`.
+
+    `create_backup` is blocking (measured 1.01s over 28.79 MB of real stores, zip
+    deflate on 8 files), so it goes to a worker thread rather than stalling the
+    event loop -- under Docker this job runs inside the API process, which is
+    also serving requests.
+
+    Imported in the body rather than at module scope, matching the other jobs in
+    this file. That import is what puts `scripts/backup_stores.py` into mypy's
+    checked set: a body-scope import does not keep it out (measured), which is
+    why that file's annotations were completed in the same change.
+    """
+    logger.info("[Scheduler] Store backup starting...")
+    run_id = _start_run("backup_stores")
+    try:
+        from scripts.backup_stores import create_backup
+
+        archive = await asyncio.to_thread(create_backup)
+        size = archive.stat().st_size
+        _finish_run(run_id, "success", result={"archive": archive.name, "bytes": size})
+        logger.info(
+            "[Scheduler] Store backup written: %s (%.2f MB)",
+            archive.name, size / 1e6,
+        )
+    except Exception as exc:
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
-        logger.exception("[Scheduler] Optimization task cleanup failed")
+        logger.exception("[Scheduler] Store backup failed")
 
 
 def _run_world_cup_bundle_import(mode: str, replace: bool) -> dict[str, Any]:
@@ -577,7 +792,17 @@ async def _job_world_cup_prediction_update() -> None:
         from app.services.world_cup_prediction_scheduler import run_daily_prediction_update
 
         result = await run_daily_prediction_update()
-        _finish_run(run_id, "success", result=_summarize_prediction_update(result))
+        summary = _summarize_prediction_update(result)
+        if result.get("status") == "error":
+            _finish_run(
+                run_id,
+                "failed",
+                result=summary,
+                error="World Cup prediction update failed",
+            )
+            logger.error("[Scheduler] World Cup prediction update failed")
+            return
+        _finish_run(run_id, "success", result=summary)
         logger.info("[Scheduler] World Cup prediction update completed")
     except Exception as exc:
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
@@ -588,18 +813,28 @@ async def _job_world_cup_live_update() -> None:
     """Live World Cup prediction updates during active matches (every 2 minutes)."""
     from app.services.world_cup_live_update_service import update_live_predictions
 
+    run_id = _start_run("world_cup_live_update")
     try:
         result = await update_live_predictions()
 
-        # Only log if there were matches to update
-        if result.get("matches_checked", 0) > 0:
+        _finish_run(run_id, "success", result=_summarize_live_update(result))
+        # Only log if there were matches to update. The guard used to read
+        # `matches_checked`, which `update_live_predictions` does not return --
+        # nor `live_count` or `updated` -- so it was always 0 and this line never
+        # emitted once. The ledger row above is what covers the quiet runs, which
+        # are 718 of the 720 this job makes a day.
+        if any(
+            result.get(key) for key in
+            ("in_play_count", "pre_match_updated", "newly_finished_scored")
+        ):
             logger.info(
-                "[Scheduler] Live update: checked=%d live=%d updated=%d",
-                result.get("matches_checked", 0),
-                result.get("live_count", 0),
-                result.get("updated", 0),
+                "[Scheduler] Live update: in_play=%d pre_match_updated=%d newly_scored=%d",
+                result.get("in_play_count", 0),
+                result.get("pre_match_updated", 0),
+                result.get("newly_finished_scored", 0),
             )
     except Exception as exc:
+        _finish_run(run_id, "failed", error=str(exc), exc=exc)
         logger.exception("[Scheduler] Live update failed: %s", exc)
 
 
@@ -814,7 +1049,7 @@ async def _job_fetch_traditional_odds() -> None:
                                 )
             except Exception as exc:
                 errors += 1
-                logger.warning(f"Odds fetch failed for {match_id}: {exc}")
+                logger.warning("Odds fetch failed for %s: %s", match_id, exc)
 
         _finish_run(run_id, "success", result={
             "matches_total": len(matches),
@@ -993,7 +1228,9 @@ async def _job_capture_market_snapshots() -> None:
             except Exception as exc:
                 errors += 1
                 logger.warning(
-                    f"Snapshot capture failed for match {match_id}: {exc}"
+                    "Snapshot capture failed for match %s: %s",
+                    match_id,
+                    exc,
                 )
 
         _finish_run(run_id, "success", result={
@@ -1028,7 +1265,9 @@ async def _job_detect_sport_edges() -> None:
                     processed += 1
             except Exception as exc:
                 errors += 1
-                logger.warning(f"[Scheduler] Edge detection failed for {match_id}: {exc}")
+                logger.warning(
+                    "[Scheduler] Edge detection failed for %s: %s", match_id, exc
+                )
         # Count the failures too: a per-match raise used to leave only a log
         # line, so a run whose every match was unreadable reported
         # matches_total=1 matches_processed=0 — the same ledger row as a match
@@ -1109,14 +1348,18 @@ async def _job_update_weights_weekly() -> None:
                     logger.info(
                         "[Scheduler] Weights unchanged for %s: %s", competition, reason,
                     )
-            except Exception as e:
-                skipped[competition] = f"error:{e}"
-                logger.warning("[Scheduler] Weight update failed for %s: %s", competition, e)
+            except Exception as exc:
+                skipped[competition] = f"error:{type(exc).__name__}"
+                logger.warning(
+                    "[Scheduler] Weight update failed for %s: %s",
+                    competition,
+                    type(exc).__name__,
+                )
         _finish_run(
             run_id,
             "success" if updated else "failed",
             result={"competitions": updated, "skipped": skipped},
-            error=None if updated else f"no competition updated: {skipped}",
+            error=None if updated else "No competition weights updated",
         )
     except Exception as exc:
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
@@ -1189,9 +1432,13 @@ async def _job_reoptimize_monthly() -> None:
                     "(train=%d test=%d score=%.4f)",
                     sport, len(train), len(test), result.get("best_score") or 0.0,
                 )
-            except Exception as e:
-                skipped[sport] = f"error:{e}"
-                logger.warning("[Scheduler] Re-optimization failed for %s: %s", sport, e)
+            except Exception as exc:
+                skipped[sport] = f"error:{type(exc).__name__}"
+                logger.warning(
+                    "[Scheduler] Re-optimization failed for %s: %s",
+                    sport,
+                    type(exc).__name__,
+                )
         # A run that optimized nothing is not a success. Reporting one made an
         # empty kernel DB indistinguishable from a completed monthly re-optimization
         # in the run ledger.
@@ -1200,7 +1447,7 @@ async def _job_reoptimize_monthly() -> None:
             run_id,
             status,
             result={"sports": completed, "skipped": skipped},
-            error=None if completed else f"no sport optimized: {skipped}",
+            error=None if completed else "No sport re-optimized",
         )
     except Exception as exc:
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
@@ -1288,6 +1535,22 @@ def _summarize_prediction_update(result: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def _summarize_live_update(result: dict[str, Any]) -> dict[str, Any]:
+    """Summarize a live-update run for the scheduler run log.
+
+    Drops `actions`, which repeats the same three counts under other names, so
+    the stored row stays small: this job runs 720 times a day, more than every
+    other interval job combined.
+    """
+    return {
+        "status": result.get("status"),
+        "timestamp": result.get("timestamp"),
+        "in_play_count": result.get("in_play_count", 0),
+        "pre_match_updated": result.get("pre_match_updated", 0),
+        "newly_finished_scored": result.get("newly_finished_scored", 0),
+    }
+
+
 def _world_cup_bundle_import_summary(result: dict[str, Any], mode: str) -> dict[str, Any]:
     summary = {
         "mode": mode,
@@ -1298,28 +1561,16 @@ def _world_cup_bundle_import_summary(result: dict[str, Any], mode: str) -> dict[
         "total": result.get("total", 0),
         "replace": result.get("replace", False),
     }
-    if result.get("source_file"):
-        summary["source_file"] = result["source_file"]
-    if result.get("source_url"):
-        summary["source_url"] = result["source_url"]
-    if result.get("source_feeds"):
-        summary["source_feeds"] = result["source_feeds"]
     if result.get("provider"):
         summary["provider"] = result["provider"]
     if result.get("skipped_source_count") is not None:
         summary["skipped_source_count"] = result["skipped_source_count"]
-    if result.get("skipped_sources"):
-        summary["skipped_sources"] = result["skipped_sources"]
     if result.get("source_fetch_count") is not None:
         summary["source_fetch_count"] = result["source_fetch_count"]
-    if result.get("source_fetches"):
-        summary["source_fetches"] = result["source_fetches"]
     if result.get("call_budget"):
         summary["call_budget"] = result["call_budget"]
     if result.get("run"):
         summary["run"] = result["run"]
-    if result.get("source_metadata"):
-        summary["source_metadata"] = result["source_metadata"]
     return summary
 
 
@@ -1396,6 +1647,28 @@ def start_scheduler() -> bool:
             replace_existing=True,
             max_instances=1,
         )
+        # Reconcile stale `running` rows and prune terminal rows in the same
+        # ledger this scheduler writes. After loop_db_maintenance (its integrity
+        # check must pass before this job deletes anything) and before the
+        # optimization-task cleanup that shares the DB file.
+        scheduler.add_job(
+            _job_loop_run_ledger_maintenance,
+            CronTrigger(hour=6, minute=48),
+            id="loop_run_ledger_maintenance",
+            replace_existing=True,
+            max_instances=1,
+        )
+        # Server-side drift alert evaluation + dispatch. Gated by the same
+        # flag the dispatcher itself checks: with DRIFT_ALERTS_ENABLED off,
+        # the job would evaluate and dispatch nothing every day.
+        if settings.DRIFT_ALERTS_ENABLED:
+            scheduler.add_job(
+                _job_drift_alert_check,
+                CronTrigger(hour=7, minute=30),
+                id="drift_alert_check",
+                replace_existing=True,
+                max_instances=1,
+            )
         # Prune completed/failed optimization tasks older than 24h so the
         # persisted task table (and the in-memory cache) stay bounded. Runs
         # shortly after loop_db_maintenance so a degraded DB surfaces first.
@@ -1406,6 +1679,18 @@ def start_scheduler() -> bool:
             replace_existing=True,
             max_instances=1,
         )
+        if settings.BACKUP_SCHEDULE_ENABLED:
+            # 07:00 UTC, i.e. after loop_db_maintenance (06:45) has truncated
+            # every WAL and its integrity check has passed, so each .db archived
+            # below is self-contained and known-good; and before event_discover
+            # (07:15) starts writing again.
+            scheduler.add_job(
+                _job_backup_stores,
+                CronTrigger(hour=7, minute=0),
+                id="backup_stores",
+                replace_existing=True,
+                max_instances=1,
+            )
         if settings.WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED:
             scheduler.add_job(
                 _job_world_cup_source_bundle_import,
@@ -1549,6 +1834,7 @@ def start_scheduler() -> bool:
         "world_cup_live_update@2min | "
         "sentiment_refresh@8h | "
         "loop_db_maintenance@06:45UTC | "
+        "loop_run_ledger_maintenance@06:48UTC | "
         "optimization_task_cleanup@06:50UTC | "
         "event_auto_resolve@22:30UTC",
         discover_state,

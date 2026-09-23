@@ -11,7 +11,9 @@ is hit.
 """
 
 import asyncio
+import sqlite3
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from app.core import scheduler
 from app.memory import loop_run_store
 from app.utils import sqlite_db
+from scripts import backup_stores
 
 
 class JobDefaultsTests(unittest.TestCase):
@@ -105,7 +108,7 @@ class EventDiscoverJobTests(unittest.TestCase):
                 asyncio.run(scheduler._job_event_discover())
                 run = loop_run_store.last_run("event_discover")
         self.assertEqual(run["status"], "failed")
-        self.assertIn("boom", run["error"])
+        self.assertEqual(run["error"], "Scheduler job failed: RuntimeError")
 
     def test_job_skips_when_disabled(self):
         mock_discover = AsyncMock(return_value={"count": 1})
@@ -271,6 +274,48 @@ class LoopDbMaintenanceJobTests(unittest.TestCase):
         self.assertIn("KERNEL_DB_FILE", run["error"])
         self.assertIn("DOMAIN_RELIABILITY_DB_PATH", run["error"])
 
+    def test_failed_store_diagnostic_is_safe_in_authenticated_health(self):
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        sensitive = (
+            "Authorization=Bearer fake-api-key ticket=fake-ticket at "
+            "D:/private/runtime/store.db"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "v2_loop.db"
+            store_path = Path(tmp) / "kernel.db"
+            store_path.touch()
+            running_scheduler = MagicMock(running=True)
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(ledger_path)), \
+                    patch("app.core.runtime_stores.sqlite_state_paths",
+                          return_value={"KERNEL_DB_FILE": store_path}), \
+                    patch.object(scheduler.sqlite_db, "maintain",
+                                 side_effect=RuntimeError(sensitive)), \
+                    patch.object(scheduler, "scheduler", running_scheduler), \
+                    patch.object(scheduler.settings, "API_WRITE_KEY", "secret"):
+                asyncio.run(scheduler._job_loop_db_maintenance())
+                response = TestClient(app).get(
+                    "/api/health", headers={"X-API-Key": "secret"}
+                )
+
+        body = response.json()
+        run = body["loop"]["runs"]["loop_db_maintenance"]
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(body["status"], "degraded")
+        self.assertIn("loop_db_maintenance", body["failed_runs"])
+        self.assertEqual(run["status"], "failed")
+        self.assertEqual(run["result"]["failed"], ["KERNEL_DB_FILE"])
+        self.assertEqual(
+            run["result"]["stores"]["KERNEL_DB_FILE"],
+            {"ok": False, "error": "SQLite integrity check failed: RuntimeError"},
+        )
+        for fragment in (
+            "Authorization", "fake-api-key", "fake-ticket", "D:/private/runtime"
+        ):
+            self.assertNotIn(fragment, response.text)
+
     def test_job_failure_is_isolated(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
@@ -279,7 +324,127 @@ class LoopDbMaintenanceJobTests(unittest.TestCase):
                 asyncio.run(scheduler._job_loop_db_maintenance())
                 run = loop_run_store.last_run("loop_db_maintenance")
         self.assertEqual(run["status"], "failed")
-        self.assertIn("bad db", run["error"])
+        self.assertEqual(run["error"], "Scheduler job failed: RuntimeError")
+
+
+class BackupStoresJobTests(unittest.TestCase):
+    """The backup that a Docker deployment had no way to run.
+
+    `deploy/docker-compose.yml` mounted `pmrf_data:/app/backups` and nothing ever
+    wrote there: `grep backup app/core/scheduler.py` was empty, and the backup
+    unit + timer are systemd-only, so a container had the volume and no writer.
+    `BACKUP_SCHEDULE_ENABLED` is off by default — on a systemd host the timer is
+    already the writer, and a second one would halve the effective retention at
+    `--keep 30` — so the *registration* tests below are the ones that decide
+    whether the capability is reachable at all.
+
+    `create_backup` is patched on `scripts.backup_stores`, which is where the job
+    imports it from at call time. Patching a name the job re-imports per call is
+    the only place that works, and it also keeps the real 28.79 MB / 1.01 s zip
+    out of the suite.
+    """
+
+    def _fake_archive(self, tmp, name="pmrf-backup-20260905-070000Z.zip"):
+        archive = Path(tmp) / name
+        archive.write_bytes(b"x" * 1234)
+        return archive
+
+    def test_job_records_the_archive_it_wrote(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = self._fake_archive(tmp)
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(backup_stores, "create_backup", return_value=archive):
+                asyncio.run(scheduler._job_backup_stores())
+                run = loop_run_store.last_run("backup_stores")
+        self.assertEqual(run["status"], "success")
+        self.assertEqual(run["result"]["archive"], archive.name)
+        self.assertEqual(run["result"]["bytes"], 1234)
+
+    def test_job_does_not_block_the_event_loop(self):
+        """Under Docker this job runs inside the API process, serving requests.
+
+        `create_backup` is synchronous — zip-deflating 28.79 MB of stores took
+        1.01 s when measured — so a plain call would stall every in-flight request
+        for that long. Asserted by thread identity rather than by timing, which is
+        the only form that cannot flake: a direct call would run on the loop's own
+        thread.
+        """
+        seen: dict[str, int] = {}
+
+        def _record(*_args, **_kwargs):
+            seen["thread"] = threading.get_ident()
+            return archive
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = self._fake_archive(tmp)
+
+            async def _drive():
+                seen["loop"] = threading.get_ident()
+                await scheduler._job_backup_stores()
+
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(backup_stores, "create_backup", side_effect=_record):
+                asyncio.run(_drive())
+
+        self.assertIn("thread", seen, "create_backup was never called")
+        self.assertNotEqual(
+            seen["thread"], seen["loop"],
+            "create_backup ran on the event loop thread; it blocks for ~1s on a "
+            "real install, which is ~1s of stalled requests",
+        )
+
+    def test_job_failure_is_isolated_and_recorded(self):
+        """A backup that silently stopped happening is the worst version of this."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(backup_stores, "create_backup",
+                                 side_effect=OSError("no space left on device")):
+                asyncio.run(scheduler._job_backup_stores())
+                run = loop_run_store.last_run("backup_stores")
+        self.assertEqual(run["status"], "failed")
+        self.assertEqual(run["error"], "Scheduler job failed: OSError")
+
+    def _registered(self, enabled):
+        fake = MagicMock()
+        with patch.object(scheduler, "scheduler", fake), \
+                patch.object(scheduler.settings, "SCHEDULER_LOCK_ENABLED", False), \
+                patch.object(scheduler.settings, "BACKUP_SCHEDULE_ENABLED", enabled):
+            scheduler.start_scheduler()
+        return {
+            call.kwargs["id"]: call.args[1]
+            for call in fake.add_job.call_args_list
+            if call.kwargs.get("id")
+        }
+
+    def test_registered_when_enabled(self):
+        self.assertIn("backup_stores", self._registered(True))
+
+    def test_not_registered_when_disabled(self):
+        """The default. A systemd install must not get a second writer."""
+        registered = self._registered(False)
+        self.assertNotIn("backup_stores", registered)
+        self.assertIn("loop_db_maintenance", registered)
+
+    def test_the_backup_runs_after_the_integrity_check(self):
+        """Order is the reason the archive is trustworthy, not a preference.
+
+        `loop_db_maintenance` truncates every WAL and runs `PRAGMA
+        integrity_check`. Archiving before it would capture a `.db` whose newest
+        rows are still in a `-wal` the archive may or may not include, and would
+        archive a corrupt store without anything having looked.
+        """
+        triggers = self._registered(True)
+
+        def _minute_of_day(trigger):
+            fields = {name: str(f) for name, f in zip(trigger.FIELD_NAMES, trigger.fields)}
+            return int(fields["hour"]) * 60 + int(fields["minute"])
+
+        self.assertGreater(
+            _minute_of_day(triggers["backup_stores"]),
+            _minute_of_day(triggers["loop_db_maintenance"]),
+            "the backup is scheduled before the integrity check that certifies "
+            "what it archives",
+        )
 
 
 class WorldCupBundleImportJobTests(unittest.TestCase):
@@ -308,8 +473,62 @@ class WorldCupBundleImportJobTests(unittest.TestCase):
         self.assertEqual(run["status"], "success")
         self.assertEqual(run["result"]["mode"], "url")
         self.assertEqual(run["result"]["converted_fact_count"], 4)
-        self.assertEqual(run["result"]["source_url"], "https://example.com/bundle")
+        self.assertNotIn("source_url", run["result"])
         self.assertNotIn("sources", run["result"])
+
+    def test_job_summary_hides_source_locations_from_ledger_and_health(self):
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        sensitive = "https://user:fake-secret@internal.example/private/feed?token=fake-key"
+        result = {
+            "source_count": 1,
+            "converted_fact_count": 1,
+            "imported": 1,
+            "error_count": 0,
+            "total": 1,
+            "replace": True,
+            "source_file": "D:/private/fake-api-key/source-bundle.json",
+            "source_url": sensitive,
+            "source_feeds": [{"kind": "matches", "source_url": sensitive}],
+            "skipped_source_count": 1,
+            "skipped_sources": [{
+                "kind": "matches",
+                "source_url": sensitive,
+                "reason": "empty response",
+            }],
+            "source_fetch_count": 1,
+            "source_fetches": [{"kind": "matches", "source_url": sensitive, "status": "success"}],
+            "source_metadata": [{"source_url": sensitive, "source_name": "matches"}],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch("app.services.world_cup_source_bundle.import_world_cup_source_bundle_url",
+                          return_value=result), \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_ENABLED", True), \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_MODE", "url"), \
+                    patch.object(scheduler.settings, "WORLD_CUP_SOURCE_BUNDLE_IMPORT_REPLACE", True), \
+                    patch.object(scheduler.settings, "API_WRITE_KEY", "secret"):
+                asyncio.run(scheduler._job_world_cup_source_bundle_import())
+                run = loop_run_store.last_run("world_cup_source_bundle_import")
+                response = TestClient(app).get(
+                    "/api/health", headers={"X-API-Key": "secret"}
+                )
+
+        self.assertEqual(run["status"], "success")
+        self.assertEqual(run["result"]["mode"], "url")
+        self.assertEqual(run["result"]["source_count"], 1)
+        self.assertEqual(run["result"]["skipped_source_count"], 1)
+        self.assertEqual(run["result"]["source_fetch_count"], 1)
+        self.assertNotIn("skipped_sources", run["result"])
+        self.assertIn(response.status_code, {200, 503})
+        for fragment in (
+            "fake-secret", "fake-api-key", "internal.example", "/private/feed",
+            "token=fake-key", "D:/private", sensitive,
+        ):
+            self.assertNotIn(fragment, repr(run))
+            self.assertNotIn(fragment, response.text)
 
     def test_job_imports_configured_file_when_mode_is_file(self):
         result = {
@@ -332,7 +551,7 @@ class WorldCupBundleImportJobTests(unittest.TestCase):
         import_file.assert_called_once_with(replace=False)
         self.assertEqual(run["status"], "success")
         self.assertEqual(run["result"]["mode"], "file")
-        self.assertEqual(run["result"]["source_file"], "world_cup_source_bundle.json")
+        self.assertNotIn("source_file", run["result"])
 
     def test_job_imports_configured_feeds_when_mode_is_feeds(self):
         result = {
@@ -359,10 +578,7 @@ class WorldCupBundleImportJobTests(unittest.TestCase):
         import_feeds.assert_called_once_with(replace=False)
         self.assertEqual(run["status"], "success")
         self.assertEqual(run["result"]["mode"], "feeds")
-        self.assertEqual(
-            run["result"]["source_feeds"][0]["source_url"],
-            "https://example.com/matches",
-        )
+        self.assertNotIn("source_feeds", run["result"])
         self.assertNotIn("sources", run["result"])
 
     def test_job_imports_api_football_when_mode_is_api_football(self):
@@ -410,7 +626,8 @@ class WorldCupBundleImportJobTests(unittest.TestCase):
         self.assertEqual(run["result"]["provider"], "api_football")
         self.assertEqual(run["result"]["skipped_source_count"], 3)
         self.assertEqual(run["result"]["source_fetch_count"], 4)
-        self.assertEqual(run["result"]["source_fetches"][0]["status"], "success")
+        self.assertNotIn("source_fetches", run["result"])
+        self.assertNotIn("source_feeds", run["result"])
         self.assertEqual(run["result"]["call_budget"]["max_detail_calls"], 100)
         self.assertNotIn("sources", run["result"])
 
@@ -456,7 +673,7 @@ class WorldCupBundleImportJobTests(unittest.TestCase):
                 run = loop_run_store.last_run("world_cup_source_bundle_import")
 
         self.assertEqual(run["status"], "failed")
-        self.assertIn("feed down", run["error"])
+        self.assertEqual(run["error"], "Scheduler job failed: RuntimeError")
         self.assertEqual(run["result"]["mode"], "url")
 
     def test_job_skips_when_disabled(self):
@@ -562,6 +779,99 @@ class EventDiscoverRegistrationTests(unittest.TestCase):
         self.assertFalse(started)
         fake.add_job.assert_not_called()
         fake.start.assert_not_called()
+
+
+class LoopRunLedgerMaintenanceJobTests(unittest.TestCase):
+    """The reconcile + retention job for the ledger this scheduler writes.
+
+    Measured before this job existed: 123 rows stuck `running` since 2026-07-23
+    or earlier (their owning processes died mid-flight and nothing re-attaches
+    to a stored row), and no retention of any kind over 1706 rows.
+    """
+
+    def _run_job(self, *, stale_hours=36, retention_days=90):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(scheduler.settings, "LOOP_RUN_STALE_RUNNING_HOURS", stale_hours), \
+                    patch.object(scheduler.settings, "LOOP_RUN_RETENTION_DAYS", retention_days):
+                asyncio.run(scheduler._job_loop_run_ledger_maintenance())
+                return loop_run_store.last_run("loop_run_ledger_maintenance")
+
+    def test_it_is_registered_with_a_daily_trigger(self):
+        fake = MagicMock()
+        with patch.object(scheduler, "scheduler", fake), \
+                patch.object(scheduler.settings, "SCHEDULER_LOCK_ENABLED", False):
+            scheduler.start_scheduler()
+        ids = {call.kwargs.get("id") for call in fake.add_job.call_args_list}
+        self.assertIn("loop_run_ledger_maintenance", ids)
+
+    def test_a_clean_ledger_is_a_success_with_zero_counts(self):
+        run = self._run_job()
+        self.assertEqual(run["status"], "success")
+        self.assertEqual(run["result"]["reconciled_running"], 0)
+        self.assertEqual(run["result"]["deleted_terminal"], 0)
+
+    def test_stale_running_rows_are_reconciled_through_the_store(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(scheduler.settings, "LOOP_RUN_STALE_RUNNING_HOURS", 36), \
+                    patch.object(scheduler.settings, "LOOP_RUN_RETENTION_DAYS", 90):
+                loop_run_store.recent_runs(limit=1)  # schema
+                with sqlite_db.writing(sqlite_db.loop_db_path()) as conn:
+                    conn.execute(
+                        "INSERT INTO loop_runs (id, job_name, status, started_at) "
+                        "VALUES ('ghost', 'event_discover', 'running', '2026-07-01T00:00:00+00:00')"
+                    )
+                asyncio.run(scheduler._job_loop_run_ledger_maintenance())
+                run = loop_run_store.last_run("loop_run_ledger_maintenance")
+                ghost = loop_run_store.get_run("ghost")
+        self.assertEqual(run["status"], "success")
+        self.assertEqual(run["result"]["reconciled_running"], 1)
+        self.assertEqual(ghost["status"], "failed")
+
+    def test_the_settings_reach_the_store_calls(self):
+        """Pin the wiring: a job that computes the wrong cutoffs from the
+        settings, or hardcodes them, is wrong only at the horizon."""
+        calls = {}
+        real_fail = loop_run_store.fail_stale_running_rows
+        real_delete = loop_run_store.delete_terminal_runs_before
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(scheduler.settings, "LOOP_RUN_STALE_RUNNING_HOURS", 5.0), \
+                    patch.object(scheduler.settings, "LOOP_RUN_RETENTION_DAYS", 7):
+
+                def spy_fail(cutoff):
+                    calls["fail"] = cutoff
+                    return real_fail(cutoff)
+
+                def spy_delete(cutoff):
+                    calls["delete"] = cutoff
+                    return real_delete(cutoff)
+
+                with patch.object(scheduler.loop_run_store, "fail_stale_running_rows", spy_fail), \
+                        patch.object(scheduler.loop_run_store, "delete_terminal_runs_before", spy_delete):
+                    asyncio.run(scheduler._job_loop_run_ledger_maintenance())
+        now = datetime.now(timezone.utc)
+        fail_cutoff = datetime.fromisoformat(calls["fail"])
+        delete_cutoff = datetime.fromisoformat(calls["delete"])
+        self.assertAlmostEqual(
+            (now - fail_cutoff).total_seconds(), 5 * 3600, delta=120
+        )
+        self.assertAlmostEqual(
+            (now - delete_cutoff).total_seconds(), 7 * 86400, delta=120
+        )
+
+    def test_a_store_failure_fails_the_run(self):
+        """A silent catch here would report the ledger as maintained while
+        the stale rows are still there -- the alarm-gate defect, one file up."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch.object(scheduler.loop_run_store, "fail_stale_running_rows",
+                                 side_effect=sqlite3.OperationalError("database is locked")):
+                asyncio.run(scheduler._job_loop_run_ledger_maintenance())
+                run = loop_run_store.last_run("loop_run_ledger_maintenance")
+        self.assertEqual(run["status"], "failed")
+        self.assertEqual(run["error"], "Scheduler job failed: OperationalError")
 
 
 if __name__ == "__main__":

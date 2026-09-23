@@ -320,19 +320,20 @@ def _refresh_event_store_gauges() -> None:
 
 
 def _refresh_scheduler_gauges() -> None:
-    """Update scheduler last-success gauges from loop_run_store."""
+    """Update scheduler last-success gauges from loop_run_store.
+
+    One series per job name the ledger holds. Three were named here, the live
+    ledger holds fifteen, and this gauge is what a "last success older than N"
+    alert reads -- an alert cannot fire on a series that was never created.
+    """
     from app.memory import loop_run_store
 
-    for job_name in ("event_discover", "event_auto_resolve", "loop_db_maintenance"):
-        run = loop_run_store.last_run(job_name)
-        if not run:
-            continue
+    for run in loop_run_store.latest_run_per_job():
         if run.get("status") != "success":
             continue
-        finished_at = run.get("finished_at")
-        ts = _to_unix_timestamp(finished_at)
+        ts = _to_unix_timestamp(run.get("finished_at"))
         if ts is not None:
-            SCHEDULER_LAST_SUCCESS.labels(job_name=job_name).set(ts)
+            SCHEDULER_LAST_SUCCESS.labels(job_name=str(run["job_name"])).set(ts)
 
 
 def _refresh_calibration_gauges() -> None:

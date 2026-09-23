@@ -1,19 +1,41 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { ApiError, realtimeApi, type WsTicketResponse } from "./api";
+import { buildWsUrl } from "./env";
+import { OPERATOR_CREDENTIALS_EVENT } from "./operator-credentials";
 
-export interface PriceUpdate {
-  type: "market_snapshot" | "odds_snapshot" | "heartbeat";
-  match_id?: string;
-  link_id?: number;
-  implied_prob?: number;
-  price?: number;
-  outcome?: string;
-  decimal_odds?: number;
-  bookmaker?: string | null;
-  captured_at?: string;
-  ts?: string;
+export { buildWsUrl } from "./env";
+
+export interface MarketSnapshot {
+  type: "market_snapshot";
+  match_id: string;
+  link_id: number;
+  implied_prob: number;
+  price: number;
+  captured_at: string;
 }
+
+export interface OddsSnapshot {
+  type: "odds_snapshot";
+  match_id: string;
+  outcome: string;
+  implied_prob: number;
+  decimal_odds: number;
+  bookmaker: string | null;
+  captured_at: string;
+}
+
+export type PriceUpdate =
+  | (MarketSnapshot & {
+      outcome?: undefined;
+      decimal_odds?: undefined;
+      bookmaker?: undefined;
+    })
+  | (OddsSnapshot & {
+      link_id?: undefined;
+      price?: undefined;
+    });
 
 export interface UsePriceStreamResult {
   updates: PriceUpdate[];
@@ -23,39 +45,103 @@ export interface UsePriceStreamResult {
 }
 
 const MAX_UPDATES = 100;
+const INITIAL_RECONNECT_DELAY_MS = 1_000;
+const MAX_RECONNECT_DELAY_MS = 30_000;
+const MAX_TRANSIENT_RETRIES = 4;
 
-/**
- * Resolve WebSocket origin for price push.
- *
- * - NEXT_PUBLIC_WS_ORIGIN / NEXT_PUBLIC_API_ORIGIN when set
- * - Dev (Next :3000): backend :8000 (HTTP rewrite does not cover WS)
- * - Prod static export: same origin (FastAPI hosts UI + WS)
- */
-export function buildWsUrl(matchId: string): string {
-  const path = `/ws/matches/${encodeURIComponent(matchId)}/prices`;
+const CLOSE_PUSH_DISABLED = 4503;
+const CLOSE_UNAUTHORIZED = 1008;
+const CLOSE_UNKNOWN_MATCH = 4404;
+const CLOSE_AT_CAPACITY = 1013;
+const CLOSE_LOOKUP_UNAVAILABLE = 1011;
 
-  const explicit =
-    (typeof process !== "undefined" &&
-      (process.env.NEXT_PUBLIC_WS_ORIGIN || process.env.NEXT_PUBLIC_API_ORIGIN)) ||
-    "";
-  if (explicit) {
-    const base = explicit.replace(/\/$/, "").replace(/^http/, "ws");
-    return `${base}${path}`;
+function isNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+export function isPriceUpdate(value: unknown): value is PriceUpdate {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  if (record.type === "market_snapshot") {
+    return (
+      isNonEmptyString(record.match_id) &&
+      isNumber(record.link_id) &&
+      isNumber(record.implied_prob) &&
+      isNumber(record.price) &&
+      isNonEmptyString(record.captured_at)
+    );
   }
-
-  if (typeof window === "undefined") {
-    return `ws://localhost:8000${path}`;
+  if (record.type === "odds_snapshot") {
+    return (
+      isNonEmptyString(record.match_id) &&
+      isNonEmptyString(record.outcome) &&
+      isNumber(record.implied_prob) &&
+      isNumber(record.decimal_odds) &&
+      (record.bookmaker === null || typeof record.bookmaker === "string") &&
+      isNonEmptyString(record.captured_at)
+    );
   }
+  return false;
+}
 
-  const { hostname, port, protocol, origin } = window.location;
-  const isLocalHost = ["localhost", "127.0.0.1", "::1"].includes(hostname);
-  // Next dev server only rewrites HTTP /api — WebSocket must hit FastAPI.
-  if (port === "3000" || (isLocalHost && port !== "8000" && port !== "")) {
-    const wsProto = protocol === "https:" ? "wss" : "ws";
-    return `${wsProto}://${hostname}:8000${path}`;
+const SUBPROTOCOL_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+function isWsTicketResponse(value: unknown): value is WsTicketResponse {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return (
+    isNonEmptyString(record.ticket) &&
+    isNumber(record.expires_in) &&
+    record.expires_in > 0 &&
+    isNonEmptyString(record.subprotocol) &&
+    SUBPROTOCOL_TOKEN.test(record.subprotocol)
+  );
+}
+
+type InitializationFailure = "terminal-auth" | "terminal-client" | "transient";
+
+function classifyInitializationFailure(error: unknown): InitializationFailure {
+  if (!(error instanceof ApiError)) return "transient";
+  if (error.status === 401 || error.status === 403) return "terminal-auth";
+  if (error.status === 408 || error.status === 429 || error.status >= 500) {
+    return "transient";
   }
+  return "terminal-client";
+}
 
-  return `${origin.replace(/^http/, "ws")}${path}`;
+function initializationError(failure: InitializationFailure): Error {
+  if (failure === "terminal-auth") {
+    return new Error("实时推送需要有效凭证，请在右上角更新操作员凭证。");
+  }
+  if (failure === "terminal-client") {
+    return new Error("实时连接请求被拒绝，请检查配置后重试。");
+  }
+  return new Error("实时连接初始化失败，正在有限重试。");
+}
+
+function exhaustedInitializationError(): Error {
+  return new Error("实时连接初始化失败，已停止自动重连。");
+}
+
+function closeError(code: number): { error: Error; terminal: boolean; disabled: boolean } {
+  switch (code) {
+    case CLOSE_PUSH_DISABLED:
+      return { error: new Error("实时推送未启用。"), terminal: true, disabled: true };
+    case CLOSE_UNAUTHORIZED:
+      return { error: new Error("实时推送需要授权，当前凭证无效。"), terminal: true, disabled: false };
+    case CLOSE_UNKNOWN_MATCH:
+      return { error: new Error("比赛不存在或暂不可广播。"), terminal: true, disabled: false };
+    case CLOSE_AT_CAPACITY:
+      return { error: new Error("实时连接数已达上限，正在有限重试。"), terminal: false, disabled: false };
+    case CLOSE_LOOKUP_UNAVAILABLE:
+      return { error: new Error("实时服务暂时不可用，正在有限重试。"), terminal: false, disabled: false };
+    default:
+      return { error: new Error("实时连接已断开，正在重连。"), terminal: false, disabled: false };
+  }
 }
 
 export function usePriceStream(matchId: string | null): UsePriceStreamResult {
@@ -63,94 +149,159 @@ export function usePriceStream(matchId: string | null): UsePriceStreamResult {
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [disabled, setDisabled] = useState(false);
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectDelayRef = useRef(1000);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const unmountedRef = useRef(false);
+  const generationRef = useRef(0);
 
   useEffect(() => {
-    unmountedRef.current = false;
+    const generation = ++generationRef.current;
     if (!matchId) return;
+
     const id = matchId;
+    let active = true;
+    let socket: WebSocket | null = null;
+    let ticketController: AbortController | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
+    let finiteFailures = 0;
+    let reconnectScheduled = false;
 
-    // Declared as a function statement, and inside the effect, so the
-    // backoff timer below can call it recursively. As a `useCallback` const
-    // it referenced its own binding before initialization.
-    function connect() {
-      if (unmountedRef.current) return;
+    const isCurrent = () => active && generationRef.current === generation;
 
-      const ws = new WebSocket(buildWsUrl(id));
-      wsRef.current = ws;
+    const clearReconnectTimer = () => {
+      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      reconnectScheduled = false;
+    };
 
-      ws.onopen = () => {
-        if (unmountedRef.current) return;
-        setIsConnected(true);
-        setError(null);
-        setDisabled(false);
-        reconnectDelayRef.current = 1000;
-      };
-
-      ws.onmessage = (event: MessageEvent) => {
-        try {
-          const data = JSON.parse(event.data) as PriceUpdate;
-          if (data.type === "heartbeat") return;
-          setUpdates((prev) => {
-            const next = [...prev, data];
-            return next.length > MAX_UPDATES ? next.slice(-MAX_UPDATES) : next;
-          });
-        } catch {
-          // Ignore malformed messages
-        }
-      };
-
-      ws.onerror = () => {
-        if (unmountedRef.current) return;
-        setError(new Error("WebSocket connection error"));
-      };
-
-      ws.onclose = (ev: CloseEvent) => {
-        if (unmountedRef.current) return;
-        setIsConnected(false);
-        wsRef.current = null;
-
-        // 4503 is REALTIME_DISABLED_CLOSE_CODE: the backend's "push is switched
-        // off" signal. It cannot be an HTTP status — RFC 6455 reserves codes
-        // below 1000, so a browser would report 1006 and this branch would never
-        // run, leaving the hook to reconnect forever against a disabled endpoint.
-        if (ev.code === 4503 || (ev.code === 1000 && /disabled/i.test(ev.reason || ""))) {
-          setDisabled(true);
-          setError(
-            new Error(
-              "实时推送未启用。请设置 PHASE10_REALTIME_PUSH_ENABLED=true 并重启后端。",
-            ),
-          );
-          return;
-        }
-
-        // Exponential backoff reconnect
-        const delay = Math.min(reconnectDelayRef.current, 30000);
-        reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 30000);
-        reconnectTimerRef.current = setTimeout(() => {
-          connect();
-        }, delay);
-      };
+    function scheduleReconnect(finite: boolean): boolean {
+      if (!isCurrent() || reconnectScheduled) return false;
+      if (finite) {
+        finiteFailures += 1;
+        if (finiteFailures > MAX_TRANSIENT_RETRIES) return false;
+      }
+      const delay = Math.min(reconnectDelay, MAX_RECONNECT_DELAY_MS);
+      reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY_MS);
+      reconnectScheduled = true;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        reconnectScheduled = false;
+        void connect();
+      }, delay);
+      return true;
     }
 
-    connect();
+    async function connect() {
+      if (!isCurrent() || ticketController !== null) return;
+      clearReconnectTimer();
+      const controller = new AbortController();
+      ticketController = controller;
+      try {
+        const response: unknown = await realtimeApi.issueTicket(controller.signal);
+        if (!isCurrent() || controller.signal.aborted || ticketController !== controller) return;
+        if (!isWsTicketResponse(response)) {
+          throw new TypeError("Invalid realtime ticket response");
+        }
+        const nextSocket = new WebSocket(buildWsUrl(id), [response.subprotocol]);
+        socket = nextSocket;
+
+        nextSocket.onopen = () => {
+          if (!isCurrent() || socket !== nextSocket) return;
+          setIsConnected(true);
+          setError(null);
+          setDisabled(false);
+          reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
+          finiteFailures = 0;
+        };
+
+        nextSocket.onmessage = (event: MessageEvent) => {
+          if (!isCurrent() || socket !== nextSocket) return;
+          try {
+            const parsed: unknown = JSON.parse(String(event.data));
+            if (!isPriceUpdate(parsed)) return;
+            setUpdates((previous) => {
+              const next = [...previous, parsed];
+              return next.length > MAX_UPDATES ? next.slice(-MAX_UPDATES) : next;
+            });
+          } catch {
+            // Malformed server frames are ignored; the transport remains usable.
+          }
+        };
+
+        nextSocket.onerror = () => {
+          if (!isCurrent() || socket !== nextSocket) return;
+          setError(new Error("实时连接发生错误。"));
+        };
+
+        nextSocket.onclose = (event: CloseEvent) => {
+          if (!isCurrent() || socket !== nextSocket) return;
+          socket = null;
+          setIsConnected(false);
+          const outcome = closeError(event.code);
+          setError(outcome.error);
+          setDisabled(outcome.disabled);
+          if (outcome.terminal) return;
+          const finite =
+            event.code === CLOSE_AT_CAPACITY || event.code === CLOSE_LOOKUP_UNAVAILABLE;
+          if (!scheduleReconnect(finite) && finite) {
+            setError(exhaustedInitializationError());
+          }
+        };
+      } catch (caught) {
+        if (!isCurrent() || controller.signal.aborted || ticketController !== controller) return;
+        setIsConnected(false);
+        const failure = classifyInitializationFailure(caught);
+        if (failure !== "transient") {
+          setError(initializationError(failure));
+          return;
+        }
+        setError(initializationError(failure));
+        if (!scheduleReconnect(true)) {
+          setError(exhaustedInitializationError());
+        }
+      } finally {
+        if (ticketController === controller) ticketController = null;
+      }
+    }
+
+    const reconnectForCredentialChange = () => {
+      if (!isCurrent()) return;
+      ticketController?.abort();
+      ticketController = null;
+      clearReconnectTimer();
+      if (socket) {
+        const oldSocket = socket;
+        socket = null;
+        oldSocket.onclose = null;
+        oldSocket.onerror = null;
+        oldSocket.onopen = null;
+        oldSocket.onmessage = null;
+        oldSocket.close();
+      }
+      setIsConnected(false);
+      setError(null);
+      setDisabled(false);
+      reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
+      finiteFailures = 0;
+      void connect();
+    };
+
+    window.addEventListener(OPERATOR_CREDENTIALS_EVENT, reconnectForCredentialChange);
+    void connect();
 
     return () => {
-      unmountedRef.current = true;
-      if (reconnectTimerRef.current) {
-        clearTimeout(reconnectTimerRef.current);
+      active = false;
+      window.removeEventListener(OPERATOR_CREDENTIALS_EVENT, reconnectForCredentialChange);
+      ticketController?.abort();
+      ticketController = null;
+      clearReconnectTimer();
+      if (socket) {
+        const oldSocket = socket;
+        socket = null;
+        oldSocket.onclose = null;
+        oldSocket.onerror = null;
+        oldSocket.onopen = null;
+        oldSocket.onmessage = null;
+        oldSocket.close();
       }
-      if (wsRef.current) {
-        wsRef.current.onclose = null; // Prevent reconnect on unmount
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-      // Drop this match's buffer so a later reconnect does not replay it.
-      // Previously done in the effect body under `if (!matchId)`, which is a
-      // synchronous setState during the effect.
       setUpdates([]);
       setIsConnected(false);
       setError(null);
@@ -158,11 +309,6 @@ export function usePriceStream(matchId: string | null): UsePriceStreamResult {
     };
   }, [matchId]);
 
-  // With no match selected there is no socket, so report the idle state
-  // directly rather than resetting the four state slots from the effect.
-  if (!matchId) {
-    return { updates: [], isConnected: false, error: null, disabled: false };
-  }
-
+  if (!matchId) return { updates: [], isConnected: false, error: null, disabled: false };
   return { updates, isConnected, error, disabled };
 }

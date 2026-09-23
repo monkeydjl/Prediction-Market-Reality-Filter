@@ -191,6 +191,35 @@ class TestQualityMetricsReportEndpoint(unittest.TestCase):
         # report_errors empty (all records well-formed)
         self.assertEqual(data["report_errors"], [])
 
+    def test_report_extraction_failure_does_not_expose_exception_text(self):
+        sensitive_error = (
+            "SELECT secret FROM C:/private/report.db?token=fake-secret"
+        )
+        record = _make_resolved_record("safe-event-id")
+
+        with patch.object(
+            quality_metrics_routes,
+            "list_resolved_events",
+            return_value=[{"record": record}],
+        ), patch(
+            "app.services.quality_metrics_report_service.extract_metrics",
+            side_effect=RuntimeError(sensitive_error),
+        ):
+            response = TestClient(self._app()).get("/quality-metrics/report")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["report_errors"],
+            [{
+                "event_id": "safe-event-id",
+                "error": "quality metric extraction failed",
+            }],
+        )
+        self.assertNotIn("SELECT secret", response.text)
+        self.assertNotIn("C:/private", response.text)
+        self.assertNotIn("fake-secret", response.text)
+        self.assertNotIn("Traceback", response.text)
+
     def test_report_limit_truncates_results(self):
         """?limit=N reports on only the first N events."""
         self._seed([_make_resolved_record(f"e{i}") for i in range(5)])

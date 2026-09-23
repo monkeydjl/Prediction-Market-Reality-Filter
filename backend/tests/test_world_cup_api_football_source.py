@@ -478,7 +478,7 @@ class WorldCupApiFootballConnectionTests(unittest.TestCase):
             result = check_api_football_connection()
 
         self.assertFalse(result["ok"])
-        self.assertIn("Connection failed", result["error"])
+        self.assertEqual(result["error"], "API-Football connection failed")
 
     def test_provider_errors_are_sanitized_in_fetch_status(self):
         with tempfile.TemporaryDirectory() as tmp:

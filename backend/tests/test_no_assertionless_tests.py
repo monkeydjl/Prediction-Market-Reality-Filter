@@ -51,6 +51,10 @@ _ALLOWED_WITHOUT_ASSERTIONS: dict[tuple[str, str], str] = {
         "the property is that metric writes are no-op safe; the shim exposes no state",
     ("test_review_queue_detectors.py", "test_fixtures_validate_against_their_models"):
         "model_validate raises on a bad fixture; a return value would add nothing",
+    ("test_scheduler_live_update_ledger.py", "test_a_failure_does_not_escape_into_the_scheduler"):
+        "the property is that adding _finish_run to the except block did not turn a "
+        "handled job failure into an unhandled one; the row's own state is asserted "
+        "by test_a_failed_run_reaches_all_three_alarm_channels",
     ("test_sentry_integration.py", "test_capture_exception_does_not_raise_without_init"):
         "the property is that capture is a silent no-op with no client configured",
     ("test_sentry_integration.py", "test_capture_message_does_not_raise_without_init"):

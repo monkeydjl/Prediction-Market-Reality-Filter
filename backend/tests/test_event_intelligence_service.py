@@ -1,5 +1,7 @@
 import asyncio
 import copy
+import io
+import logging
 import tempfile
 import unittest
 from pathlib import Path
@@ -3106,6 +3108,44 @@ def test_event_conclusion_challenge_reject_downgrades(monkeypatch):
     eis._run_event_conclusion_challenge(record, attempt_count=0)
     assert record["final_displayed_direction"] == "WAIT"
     assert record["conclusion_challenge"]["verdict"] == "reject"
+
+
+def test_event_conclusion_challenge_failure_hides_exception_text(
+    monkeypatch,
+):
+    from app.core import logging as app_logging
+
+    sensitive = "Authorization=Bearer fake-api-key ticket=fake-ticket"
+    record = _challenge_event_record()
+    monkeypatch.setattr(eis.settings, "CONCLUSION_CHALLENGE_ENABLED", True)
+    monkeypatch.setattr(eis.settings, "EVENT_CHALLENGE_ENABLED", True)
+    monkeypatch.setattr(eis.settings, "CONCLUSION_CHALLENGE_LLM_CRITIC_ENABLED", False)
+    monkeypatch.setattr(eis.settings, "CONCLUSION_CHALLENGE_STRICTNESS", "normal")
+    monkeypatch.setattr(eis.settings, "PMRF_ENV", "production")
+    monkeypatch.setattr(
+        "app.services.conclusion_challenge_service.challenge_conclusion",
+        lambda payload: (_ for _ in ()).throw(RuntimeError(sensitive)),
+    )
+    handler = logging.StreamHandler(io.StringIO())
+    root = logging.getLogger()
+    root.addHandler(handler)
+    try:
+        app_logging.setup_logging()
+        eis._run_event_conclusion_challenge(record, attempt_count=0)
+        output = handler.stream.getvalue()
+    finally:
+        root.removeHandler(handler)
+        handler.close()
+
+    challenge = record["conclusion_challenge"]
+    assert challenge["verdict"] == "pass_with_warnings"
+    assert challenge["required_action"] == "allow_output"
+    assert challenge["warnings"][0]["details"] == {"error": "RuntimeError"}
+    assert "conclusion challenge failed" in output
+    assert "RuntimeError" in output
+    for fragment in ("Authorization", "fake-api-key", "fake-ticket", "Traceback"):
+        assert fragment not in repr(record)
+        assert fragment not in output
 
 
 def test_analyze_event_recomputes_once_when_challenge_requests_retry(monkeypatch):

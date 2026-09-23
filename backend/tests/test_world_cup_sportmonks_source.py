@@ -285,7 +285,7 @@ class WorldCupSportmonksConnectionTests(unittest.TestCase):
         }))
         result = check_sportmonks_connection()
         self.assertFalse(result["ok"])
-        self.assertIn("Provider errors", result["error"])
+        self.assertEqual(result["error"], "Provider returned errors")
 
 
 class WorldCupSportmonksValidateTests(unittest.TestCase):

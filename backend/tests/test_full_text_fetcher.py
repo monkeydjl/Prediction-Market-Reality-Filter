@@ -4,6 +4,7 @@ Verifies fail-closed behaviour (never raises), the 8000-char cap, and that
 httpx + trafilatura are correctly mocked.
 """
 import asyncio
+import logging
 
 import httpx
 
@@ -31,6 +32,24 @@ def test_fetch_full_text_returns_none_on_network_error(monkeypatch):
     assert result is None
     # Verify the mock actually intercepted the call (no real network attempt).
     assert calls["count"] == 1
+
+
+def test_fetch_full_text_does_not_log_url_or_exception_details(monkeypatch, caplog):
+    secret = "article-query-secret"
+    upstream_url = f"https://news.example/private/story?token={secret}"
+
+    async def mock_get(self, url, **kwargs):
+        raise httpx.ConnectError(f"connection refused for {upstream_url}")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
+    with caplog.at_level(logging.WARNING, logger=full_text_fetcher.__name__):
+        result = asyncio.run(fetch_full_text(upstream_url))
+
+    text = "\n".join(record.getMessage() for record in caplog.records)
+    assert result is None
+    assert "ConnectError" in text
+    assert upstream_url not in text
+    assert secret not in text
 
 
 def test_fetch_full_text_returns_extracted_text(monkeypatch):

@@ -517,8 +517,7 @@ class SyncWorldCupFixturesTests(unittest.TestCase):
         result = sync_world_cup_fixtures(source="football-data")
 
         self.assertEqual(result["status"], "error")
-        self.assertIn("Football-Data.org API error", result["error"])
-        self.assertIn("rate limited", result["error"])
+        self.assertEqual(result["error"], "Football-Data.org API request failed")
 
     @patch("app.services.world_cup_match_service.close_prediction_session")
     @patch("app.services.world_cup_match_service.get_prediction_session")

@@ -202,17 +202,34 @@ class TestReviewQueueRoutes(unittest.TestCase):
             self.assertEqual(rq.get_item(item_id)["status"], "pending")
 
     def test_banned_vocabulary_in_note_is_rejected(self):
-        """The store's vocabulary lock must surface as a 400, not a 500."""
+        """The store's vocabulary lock must surface as a safe 400."""
+        sensitive_note = (
+            "open a long position with Authorization=Bearer fake-api-key "
+            "ticket=fake-ticket subprotocol=fake-subprotocol "
+            "C:/private/review.db https://upstream.example/private"
+        )
         with tempfile.TemporaryDirectory() as tmp, _db(tmp), \
                 patch.object(settings, "API_WRITE_KEY", "secret"):
             item_id = _enqueue()
             resp = _client().post(
                 f"/review-queue/{item_id}/action",
                 json={"reviewer": "alice", "action": "confirm",
-                      "note": "open a long position"},
+                      "note": sensitive_note},
                 headers=AUTH_HEADERS,
             )
             self.assertEqual(resp.status_code, 400)
+            self.assertEqual(resp.json(), {
+                "detail": "Review note contains prohibited terminology",
+            })
+            for fragment in (
+                "long position",
+                "fake-api-key",
+                "fake-ticket",
+                "fake-subprotocol",
+                "C:/private",
+                "https://upstream.example/private",
+            ):
+                self.assertNotIn(fragment, resp.text)
             self.assertEqual(rq.get_item(item_id)["status"], "pending")
 
 

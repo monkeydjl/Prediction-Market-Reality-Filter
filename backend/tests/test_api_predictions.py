@@ -1,6 +1,7 @@
 # backend/tests/test_api_predictions.py
 """Tests for /api/predictions API routes and DB query functions."""
 from dataclasses import replace
+import logging
 
 import pytest
 from sqlalchemy.exc import OperationalError
@@ -349,6 +350,55 @@ class TestListMatches:
         assert body["competition_normalized"] == "epl"
         adapter.sync_schedule.assert_called_once()
 
+    def test_sync_failure_does_not_expose_exception_text(self, api_client):
+        from app.api.routes import predictions
+
+        sensitive_error = (
+            "SELECT secret FROM C:/private/schedule.db "
+            "https://upstream.example/private "
+            "Authorization=Bearer fake-api-key ticket=fake-ticket "
+            "subprotocol=fake-subprotocol sensitive-user-input"
+        )
+        sensitive_fragments = (
+            "SELECT secret",
+            "C:/private",
+            "https://upstream.example/private",
+            "fake-api-key",
+            "fake-ticket",
+            "fake-subprotocol",
+            "sensitive-user-input",
+            "Traceback",
+        )
+        rendered_logs = []
+
+        class RenderedLogHandler(logging.Handler):
+            def emit(self, record):
+                rendered_logs.append(self.format(record))
+
+        adapter = MultiSportFakeAdapter()
+        adapter.sync_schedule = MagicMock(
+            side_effect=RuntimeError(sensitive_error)
+        )
+        _patch_kernel_adapter(api_client, adapter)
+        log_handler = RenderedLogHandler()
+        log_handler.setFormatter(logging.Formatter("%(message)s"))
+        predictions.logger.addHandler(log_handler)
+
+        try:
+            response = api_client.post(
+                "/api/predictions/schedule/sync?competition=epl"
+            )
+        finally:
+            predictions.logger.removeHandler(log_handler)
+
+        assert response.status_code == 500
+        assert response.json() == {"detail": "Schedule synchronization failed"}
+        rendered = "\n".join(rendered_logs)
+        assert "RuntimeError" in rendered
+        exported = response.text + "\n" + rendered
+        for fragment in sensitive_fragments:
+            assert fragment not in exported
+
     def test_list_matches_503_when_kernel_disabled(self, tmp_path):
         """KERNEL_PREDICTION_ENABLED=false → 503."""
         from app.main import app
@@ -436,6 +486,112 @@ class TestUnreadablePredictionsOverHttp:
 
 
 class TestPredictEndpointFix:
+    def test_prediction_failure_does_not_expose_exception_text(
+        self,
+        api_client,
+    ):
+        from app.api.routes import predictions
+
+        sensitive_error = (
+            "SELECT secret FROM C:/private/predictions.db "
+            "https://upstream.example/private "
+            "Authorization=Bearer fake-api-key ticket=fake-ticket "
+            "subprotocol=fake-subprotocol sensitive-user-input"
+        )
+        sensitive_fragments = (
+            "SELECT secret",
+            "C:/private",
+            "https://upstream.example/private",
+            "fake-api-key",
+            "fake-ticket",
+            "fake-subprotocol",
+            "sensitive-user-input",
+            "Traceback",
+        )
+        rendered_logs = []
+
+        class RenderedLogHandler(logging.Handler):
+            def emit(self, record):
+                rendered_logs.append(self.format(record))
+
+        log_handler = RenderedLogHandler()
+        log_handler.setFormatter(logging.Formatter("%(message)s"))
+        predictions.logger.addHandler(log_handler)
+        kernel = predictions._get_kernel()
+
+        try:
+            with patch.object(
+                kernel,
+                "predict",
+                side_effect=RuntimeError(sensitive_error),
+            ):
+                response = api_client.post(
+                    "/api/predictions/matches/wc-1/predict"
+                )
+        finally:
+            predictions.logger.removeHandler(log_handler)
+
+        assert response.status_code == 500
+        assert response.json() == {"detail": "Prediction generation failed"}
+        rendered = "\n".join(rendered_logs)
+        assert "RuntimeError" in rendered
+        exported = response.text + "\n" + rendered
+        for fragment in sensitive_fragments:
+            assert fragment not in exported
+
+    def test_outcome_failure_does_not_expose_exception_text(
+        self,
+        api_client,
+    ):
+        from app.api.routes import predictions
+
+        sensitive_error = (
+            "SELECT secret FROM C:/private/outcomes.db "
+            "https://upstream.example/private "
+            "Authorization=Bearer fake-api-key ticket=fake-ticket "
+            "subprotocol=fake-subprotocol sensitive-user-input"
+        )
+        sensitive_fragments = (
+            "SELECT secret",
+            "C:/private",
+            "https://upstream.example/private",
+            "fake-api-key",
+            "fake-ticket",
+            "fake-subprotocol",
+            "sensitive-user-input",
+            "Traceback",
+        )
+        rendered_logs = []
+
+        class RenderedLogHandler(logging.Handler):
+            def emit(self, record):
+                rendered_logs.append(self.format(record))
+
+        log_handler = RenderedLogHandler()
+        log_handler.setFormatter(logging.Formatter("%(message)s"))
+        predictions.logger.addHandler(log_handler)
+        kernel = predictions._get_kernel()
+
+        try:
+            with patch.object(
+                kernel,
+                "process_outcome",
+                side_effect=RuntimeError(sensitive_error),
+            ):
+                response = api_client.post(
+                    "/api/predictions/outcomes/wc-1/process"
+                )
+        finally:
+            predictions.logger.removeHandler(log_handler)
+
+        assert response.status_code == 500
+        assert response.json() == {"detail": "Outcome processing failed"}
+        rendered = "\n".join(rendered_logs)
+        assert "RuntimeError" in rendered
+        exported = response.text + "\n" + rendered
+        for fragment in sensitive_fragments:
+            assert fragment not in exported
+
     def test_predict_returns_feature_version(self, api_client):
         """Fix: predict response includes feature_version."""
         from app.api.routes import predictions

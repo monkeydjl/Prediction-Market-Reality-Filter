@@ -169,6 +169,63 @@ class WorldCupFactRouteTests(unittest.TestCase):
         self.assertEqual(facts_resp.json()["count"], 1)
         self.assertEqual(facts_resp.json()["facts"][0]["player"], "Player A")
 
+    def test_world_cup_status_hides_configured_fact_path(self):
+        sensitive_path = (
+            "C:/private/fake-api-key-ticket-fake-subprotocol-facts.json"
+        )
+        with patch.object(settings, "SPORTS_FACT_FILE", sensitive_path):
+            client = _events_client()
+            response = client.get("/events/sports/world-cup/status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["configured_path"], "redacted")
+        for fragment in (
+            "C:/private",
+            "fake-api-key",
+            "ticket",
+            "fake-subprotocol",
+        ):
+            self.assertNotIn(fragment, response.text)
+
+    def test_world_cup_data_source_status_hides_configured_paths(self):
+        sensitive_path = (
+            "C:/private/fake-api-key-ticket-fake-subprotocol-config.json"
+        )
+        with (
+            patch.object(settings, "API_WRITE_KEY", "secret"),
+            patch.object(settings, "SPORTS_FACT_FILE", sensitive_path),
+            patch.object(settings, "WORLD_CUP_DATA_FILE", sensitive_path),
+            patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_FILE", sensitive_path),
+            patch(
+                "app.services.world_cup_data_source_status_service.loop_run_store.last_run",
+                return_value=None,
+            ),
+        ):
+            client = _events_client()
+            response = client.get(
+                "/events/sports/world-cup/data/sources/status",
+                headers=AUTH_HEADERS,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["facts"]["configured_path"], "redacted")
+        self.assertEqual(
+            body["configured_sources"]["data_file"]["path"],
+            "redacted",
+        )
+        self.assertEqual(
+            body["configured_sources"]["bundle_file"]["path"],
+            "redacted",
+        )
+        for fragment in (
+            "C:/private",
+            "fake-api-key",
+            "ticket",
+            "fake-subprotocol",
+        ):
+            self.assertNotIn(fragment, response.text)
+
     def test_world_cup_data_source_status_requires_key_and_sanitizes_sources(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -273,6 +330,210 @@ class WorldCupFactRouteTests(unittest.TestCase):
         )
         self.assertEqual(run["result"]["fixture_count"], 0)
         self.assertEqual(run["result"]["failed_step"], "fixture_fetch")
+
+    def test_api_football_connection_failure_is_safe_in_response_ledger_and_import(self):
+        from urllib.error import URLError
+
+        sensitive = (
+            "SELECT secret FROM D:/private/provider.db "
+            "Authorization=Bearer fake-api-key ticket=fake-ticket "
+            "subprotocol=fake-subprotocol https://upstream.example/private"
+        )
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(
+                    sqlite_db,
+                    "loop_db_path",
+                    return_value=str(Path(tmp) / "v2_loop.db"),
+                ), \
+                patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch.object(
+                    settings,
+                    "WORLD_CUP_API_FOOTBALL_API_KEY",
+                    "provider-key",
+                ), \
+                patch.object(
+                    settings,
+                    "WORLD_CUP_API_FOOTBALL_BASE_URL",
+                    "https://api.example/v3",
+                ), \
+                patch(
+                    "app.services.world_cup_api_football_source.urlopen",
+                    side_effect=URLError(sensitive),
+                ):
+            client = _events_client()
+            validation = client.post(
+                "/events/sports/world-cup/data/bundle/api-football/validate",
+                headers=AUTH_HEADERS,
+            )
+            run = loop_run_store.last_run("world_cup_api_football_validate")
+            blocked_import = client.post(
+                "/events/sports/world-cup/data/bundle/api-football/import?replace=true",
+                headers=AUTH_HEADERS,
+            )
+
+        self.assertIsNotNone(run)
+        exported = json.dumps({
+            "validation": validation.json(),
+            "run": run,
+            "blocked_import": blocked_import.json(),
+        })
+        for fragment in (
+            "SELECT secret",
+            "D:/private",
+            "fake-api-key",
+            "fake-ticket",
+            "fake-subprotocol",
+            "upstream.example",
+        ):
+            self.assertNotIn(fragment, exported)
+        self.assertEqual(validation.status_code, 200)
+        self.assertEqual(validation.json()["error"], "API-Football connection failed")
+        self.assertEqual(
+            validation.json()["steps"][0]["detail"]["error"],
+            "API-Football connection failed",
+        )
+        self.assertEqual(run["status"], "failed")
+        self.assertEqual(run["error"], "API-Football connection failed")
+        self.assertEqual(run["result"]["error"], "API-Football connection failed")
+        self.assertEqual(blocked_import.status_code, 409)
+        self.assertEqual(
+            blocked_import.json()["detail"],
+            "Latest API-Football pipeline validation failed: "
+            "API-Football connection failed",
+        )
+
+    def test_api_football_fixture_fetch_failure_is_safe_in_response_ledger_and_import(self):
+        from urllib.error import URLError
+
+        sensitive = (
+            "SELECT secret FROM D:/private/provider.db "
+            "Authorization=Bearer fake-api-key ticket=fake-ticket "
+            "subprotocol=fake-subprotocol https://upstream.example/private"
+        )
+        status_body = json.dumps({
+            "response": {
+                "subscription": {"plan": "Pro", "active": True},
+                "requests": {"current": 1, "limit_day": 100},
+            },
+        }).encode("utf-8")
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(
+                    sqlite_db,
+                    "loop_db_path",
+                    return_value=str(Path(tmp) / "v2_loop.db"),
+                ), \
+                patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch.object(
+                    settings,
+                    "WORLD_CUP_API_FOOTBALL_API_KEY",
+                    "provider-key",
+                ), \
+                patch.object(
+                    settings,
+                    "WORLD_CUP_API_FOOTBALL_BASE_URL",
+                    "https://api.example/v3",
+                ), \
+                patch(
+                    "app.services.world_cup_api_football_source.urlopen",
+                    side_effect=[_UrlResponse(status_body), URLError(sensitive)],
+                ):
+            client = _events_client()
+            validation = client.post(
+                "/events/sports/world-cup/data/bundle/api-football/validate",
+                headers=AUTH_HEADERS,
+            )
+            run = loop_run_store.last_run("world_cup_api_football_validate")
+            blocked_import = client.post(
+                "/events/sports/world-cup/data/bundle/api-football/import?replace=true",
+                headers=AUTH_HEADERS,
+            )
+
+        self.assertIsNotNone(run)
+        exported = json.dumps({
+            "validation": validation.json(),
+            "run": run,
+            "blocked_import": blocked_import.json(),
+        })
+        for fragment in (
+            "SELECT secret",
+            "D:/private",
+            "fake-api-key",
+            "fake-ticket",
+            "fake-subprotocol",
+            "upstream.example",
+            "Traceback",
+        ):
+            self.assertNotIn(fragment, exported)
+        safe_error = "Fixture fetch failed: URLError"
+        self.assertEqual(validation.status_code, 200)
+        self.assertFalse(validation.json()["ok"])
+        self.assertEqual(validation.json()["error"], safe_error)
+        self.assertEqual(validation.json()["steps"][1]["error"], safe_error)
+        self.assertEqual(run["status"], "failed")
+        self.assertEqual(run["error"], safe_error)
+        self.assertEqual(run["result"]["error"], safe_error)
+        self.assertEqual(blocked_import.status_code, 409)
+        self.assertEqual(
+            blocked_import.json()["detail"],
+            f"Latest API-Football pipeline validation failed: {safe_error}",
+        )
+
+    def test_api_football_validation_exception_is_safe_in_response_ledger_and_import(self):
+        sensitive = (
+            "SELECT secret FROM D:/private/provider.db "
+            "Authorization=Bearer fake-api-key ticket=fake-ticket "
+            "subprotocol=fake-subprotocol https://upstream.example/private"
+        )
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(
+                    sqlite_db,
+                    "loop_db_path",
+                    return_value=str(Path(tmp) / "v2_loop.db"),
+                ), \
+                patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch(
+                    "app.api.routes.events.validate_world_cup_api_football_pipeline",
+                    side_effect=RuntimeError(sensitive),
+                ):
+            app = FastAPI()
+            app.include_router(events_routes.router, prefix="/events")
+            client = TestClient(app, raise_server_exceptions=False)
+            validation = client.post(
+                "/events/sports/world-cup/data/bundle/api-football/validate",
+                headers=AUTH_HEADERS,
+            )
+            run = loop_run_store.last_run("world_cup_api_football_validate")
+            blocked_import = client.post(
+                "/events/sports/world-cup/data/bundle/api-football/import?replace=true",
+                headers=AUTH_HEADERS,
+            )
+
+        self.assertIsNotNone(run)
+        exported = json.dumps({
+            "validation": validation.text,
+            "run": run,
+            "blocked_import": blocked_import.json(),
+        })
+        for fragment in (
+            "SELECT secret",
+            "D:/private",
+            "fake-api-key",
+            "fake-ticket",
+            "fake-subprotocol",
+            "upstream.example",
+            "Traceback",
+        ):
+            self.assertNotIn(fragment, exported)
+        safe_error = "API-Football pipeline validation failed: RuntimeError"
+        self.assertEqual(validation.status_code, 500)
+        self.assertEqual(validation.json()["detail"], safe_error)
+        self.assertEqual(run["status"], "failed")
+        self.assertEqual(run["error"], safe_error)
+        self.assertEqual(blocked_import.status_code, 409)
+        self.assertEqual(
+            blocked_import.json()["detail"],
+            f"Latest API-Football pipeline validation failed: {safe_error}",
+        )
 
     def test_api_football_import_requires_successful_pipeline_validation(self):
         with tempfile.TemporaryDirectory() as tmp, \
@@ -666,15 +927,56 @@ class WorldCupFactRouteTests(unittest.TestCase):
         self.assertEqual(facts_resp.json()["count"], 1)
 
     def test_world_cup_configured_source_bundle_missing_returns_404(self):
-        with tempfile.TemporaryDirectory() as tmp, \
-                patch.object(settings, "WORLD_CUP_SOURCE_BUNDLE_FILE", str(Path(tmp) / "missing.json")), \
-                patch.object(settings, "API_WRITE_KEY", "secret"):
+        sensitive_path = (
+            "C:/private/fake-api-key-ticket-fake-subprotocol-bundle.json"
+        )
+        with patch.object(
+            settings,
+            "WORLD_CUP_SOURCE_BUNDLE_FILE",
+            sensitive_path,
+        ), patch.object(settings, "API_WRITE_KEY", "secret"):
             client = _events_client()
             resp = client.post(
                 "/events/sports/world-cup/data/bundle/source/preview",
                 headers=AUTH_HEADERS,
             )
         self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.json(), {
+            "detail": "World Cup source bundle file not found",
+        })
+        for fragment in (
+            "C:/private",
+            "fake-api-key",
+            "ticket",
+            "fake-subprotocol",
+        ):
+            self.assertNotIn(fragment, resp.text)
+
+    def test_world_cup_configured_source_bundle_import_missing_returns_safe_404(self):
+        sensitive_path = (
+            "C:/private/fake-api-key-ticket-fake-subprotocol-bundle.json"
+        )
+        with patch.object(
+            settings,
+            "WORLD_CUP_SOURCE_BUNDLE_FILE",
+            sensitive_path,
+        ), patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            resp = client.post(
+                "/events/sports/world-cup/data/bundle/source/import?replace=true",
+                headers=AUTH_HEADERS,
+            )
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.json(), {
+            "detail": "World Cup source bundle file not found",
+        })
+        for fragment in (
+            "C:/private",
+            "fake-api-key",
+            "ticket",
+            "fake-subprotocol",
+        ):
+            self.assertNotIn(fragment, resp.text)
 
     def test_world_cup_configured_source_bundle_missing_metadata_returns_422(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -924,6 +1226,48 @@ class WorldCupFactRouteTests(unittest.TestCase):
         self.assertEqual(resp.json()["normalized_qualification_count"], 48)
         mock_preview.assert_called_once_with()
 
+    def test_world_cup_football_data_preview_hides_provider_error_body(self):
+        sensitive_error = (
+            "SELECT secret C:/private/provider.db Authorization=Bearer fake-api-key "
+            "ticket=fake-ticket subprotocol=fake-subprotocol "
+            "https://upstream.example/private sensitive-input"
+        )
+        response = type(
+            "ProviderResponse",
+            (),
+            {"status_code": 500, "text": sensitive_error},
+        )()
+        with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch.object(settings, "FOOTBALL_DATA_API_KEY", "provider-key"), \
+                patch.object(
+                    settings,
+                    "FOOTBALL_DATA_BASE_URL",
+                    "https://provider.example/v4",
+                ), patch(
+                    "app.services.football_data_source.httpx.get",
+                    return_value=response,
+                ):
+            client = _events_client()
+            resp = client.post(
+                "/events/sports/world-cup/data/bundle/football-data/preview",
+                headers=AUTH_HEADERS,
+            )
+
+        self.assertEqual(resp.status_code, 502)
+        self.assertEqual(resp.json(), {
+            "detail": "Football-Data request failed",
+        })
+        for fragment in (
+            "SELECT secret",
+            "C:/private",
+            "fake-api-key",
+            "fake-ticket",
+            "fake-subprotocol",
+            "https://upstream.example/private",
+            "sensitive-input",
+        ):
+            self.assertNotIn(fragment, resp.text)
+
     def test_world_cup_football_data_import_uses_configured_provider(self):
         with patch.object(settings, "API_WRITE_KEY", "secret"), \
                 patch(
@@ -944,6 +1288,48 @@ class WorldCupFactRouteTests(unittest.TestCase):
         self.assertEqual(resp.json()["provider"], "football_data")
         self.assertEqual(resp.json()["imported"], 48)
         mock_import.assert_called_once_with(replace=True)
+
+    def test_world_cup_football_data_import_hides_provider_error_body(self):
+        sensitive_error = (
+            "SELECT secret C:/private/provider.db Authorization=Bearer fake-api-key "
+            "ticket=fake-ticket subprotocol=fake-subprotocol "
+            "https://upstream.example/private sensitive-input"
+        )
+        response = type(
+            "ProviderResponse",
+            (),
+            {"status_code": 500, "text": sensitive_error},
+        )()
+        with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch.object(settings, "FOOTBALL_DATA_API_KEY", "provider-key"), \
+                patch.object(
+                    settings,
+                    "FOOTBALL_DATA_BASE_URL",
+                    "https://provider.example/v4",
+                ), patch(
+                    "app.services.football_data_source.httpx.get",
+                    return_value=response,
+                ):
+            client = _events_client()
+            resp = client.post(
+                "/events/sports/world-cup/data/bundle/football-data/import?replace=true",
+                headers=AUTH_HEADERS,
+            )
+
+        self.assertEqual(resp.status_code, 502)
+        self.assertEqual(resp.json(), {
+            "detail": "Football-Data request failed",
+        })
+        for fragment in (
+            "SELECT secret",
+            "C:/private",
+            "fake-api-key",
+            "fake-ticket",
+            "fake-subprotocol",
+            "https://upstream.example/private",
+            "sensitive-input",
+        ):
+            self.assertNotIn(fragment, resp.text)
 
     def test_world_cup_sportmonks_bundle_preview_does_not_write_facts(self):
         fixture_body = json.dumps({
@@ -1060,16 +1446,59 @@ class WorldCupFactRouteTests(unittest.TestCase):
         self.assertEqual(facts_resp.json()["count"], 1)
         self.assertEqual(facts_resp.json()["facts"][0]["match_id"], "round16-1")
 
-    def test_world_cup_configured_data_source_missing_returns_404(self):
-        with tempfile.TemporaryDirectory() as tmp, \
-                patch.object(settings, "WORLD_CUP_DATA_FILE", str(Path(tmp) / "missing.json")), \
-                patch.object(settings, "API_WRITE_KEY", "secret"):
+    def test_world_cup_configured_data_source_missing_returns_safe_404(self):
+        sensitive_path = (
+            "C:/private/fake-api-key-ticket-fake-subprotocol-data.json"
+        )
+        with patch.object(
+            settings,
+            "WORLD_CUP_DATA_FILE",
+            sensitive_path,
+        ), patch.object(settings, "API_WRITE_KEY", "secret"):
             client = _events_client()
             resp = client.post(
                 "/events/sports/world-cup/data/source/preview",
                 headers=AUTH_HEADERS,
             )
         self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.json(), {
+            "detail": "World Cup data file not found",
+        })
+        for fragment in (
+            "C:/private",
+            "fake-api-key",
+            "ticket",
+            "fake-subprotocol",
+        ):
+            self.assertNotIn(fragment, resp.text)
+
+    def test_world_cup_configured_data_source_import_missing_returns_safe_404(
+        self,
+    ):
+        sensitive_path = (
+            "C:/private/fake-api-key-ticket-fake-subprotocol-data.json"
+        )
+        with patch.object(
+            settings,
+            "WORLD_CUP_DATA_FILE",
+            sensitive_path,
+        ), patch.object(settings, "API_WRITE_KEY", "secret"):
+            client = _events_client()
+            resp = client.post(
+                "/events/sports/world-cup/data/source/import?replace=true",
+                headers=AUTH_HEADERS,
+            )
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.json(), {
+            "detail": "World Cup data file not found",
+        })
+        for fragment in (
+            "C:/private",
+            "fake-api-key",
+            "ticket",
+            "fake-subprotocol",
+        ):
+            self.assertNotIn(fragment, resp.text)
 
     def test_world_cup_configured_data_source_missing_metadata_returns_422(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2165,6 +2594,84 @@ class DiscoverServiceTests(unittest.TestCase):
         self.assertEqual(result["count"], 2)
         self.assertNotIn("qC", [e["event_id"] for e in result["events"]])
 
+    def test_failed_event_status_hides_raw_exception_text(self):
+        sensitive = (
+            "SELECT secret FROM D:/private/provider.db "
+            "Authorization=Bearer fake-api-key ticket=fake-ticket"
+        )
+
+        async def fake_filtered(question, shared_articles=None):
+            return {"context": "ctx", "summary": {"selected_count": 2}}
+
+        async def run():
+            with patch.object(
+                    eis,
+                    "_collect_candidate_events",
+                    new=AsyncMock(return_value=[self._candidates()[0]]),
+                ), patch(
+                    "app.services.event_collection_service.collect_shared_articles",
+                    new=AsyncMock(return_value=[]),
+                ), patch.object(
+                    eis,
+                    "_build_filtered_news",
+                    new=AsyncMock(side_effect=fake_filtered),
+                ), patch.object(
+                    eis,
+                    "analyze_event",
+                    new=AsyncMock(side_effect=RuntimeError(sensitive)),
+                ), patch.object(eis, "_persist_events", new=lambda records: None):
+                return await eis.discover_events(limit=1, use_cache=False)
+
+        result = asyncio.run(run())
+        response = _events_client().get("/events/discover/status")
+
+        self.assertEqual(result["status"]["errors"], 1)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["errors"],
+            [{"event": "qA", "error": "RuntimeError"}],
+        )
+        for fragment in (
+            "SELECT secret",
+            "D:/private",
+            "Authorization",
+            "fake-api-key",
+            "fake-ticket",
+        ):
+            self.assertNotIn(fragment, response.text)
+
+    def test_collection_failure_status_hides_raw_exception_text(self):
+        sensitive = (
+            "SELECT secret FROM D:/private/provider.db "
+            "Authorization=Bearer fake-api-key ticket=fake-ticket"
+        )
+
+        async def run():
+            with patch(
+                "app.services.event_collection_service.collect_shared_articles",
+                new=AsyncMock(side_effect=RuntimeError(sensitive)),
+            ):
+                with self.assertRaises(RuntimeError):
+                    await eis.discover_events(limit=1, use_cache=False)
+
+        asyncio.run(run())
+        response = _events_client().get("/events/discover/status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["phase"], "failed")
+        self.assertEqual(
+            response.json()["message"],
+            "数据源收集失败: RuntimeError",
+        )
+        for fragment in (
+            "SELECT secret",
+            "D:/private",
+            "Authorization",
+            "fake-api-key",
+            "fake-ticket",
+        ):
+            self.assertNotIn(fragment, response.text)
+
     def test_candidate_missing_optional_market_fields_is_still_analyzed(self):
         candidate = {
             "question": "qOptional",
@@ -2288,8 +2795,6 @@ class DiscoverServiceTests(unittest.TestCase):
         growing event_audit.jsonl without bound. Only freshly-analyzed records
         are passed to _persist_events.
         """
-        from unittest.mock import Mock
-
         cached_record = {"event_id": "qCached", "value_score": 99}
 
         async def fake_filtered(question, shared_articles=None):

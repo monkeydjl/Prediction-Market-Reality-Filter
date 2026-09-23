@@ -94,6 +94,45 @@ def test_betting_status_shape():
     assert "LOL_VENDOR_API_KEY" not in str(data)
 
 
+def test_betting_status_does_not_expose_kernel_initialization_error():
+    from unittest.mock import patch
+
+    from app.main import app
+
+    sensitive_error = (
+        "SELECT secret FROM C:/private/kernel.db "
+        "Authorization=Bearer fake-api-key ticket=fake-ticket "
+        "subprotocol=fake-subprotocol https://upstream.example/private "
+        "sensitive-input"
+    )
+    flags = {
+        "kernel_prediction_enabled": True,
+        "phase_lol_enabled": False,
+    }
+    with patch(
+        "app.kernel.betting_catalog._kernel_flags",
+        return_value=flags,
+    ), patch(
+        "app.api.routes.predictions._get_kernel",
+        side_effect=RuntimeError(sensitive_error),
+    ):
+        response = TestClient(app).get("/api/betting/status")
+
+    assert response.status_code == 200
+    assert response.json()["kernel_ready"] is False
+    assert response.json()["kernel_error"] == "RuntimeError"
+    for fragment in (
+        "SELECT secret",
+        "C:/private",
+        "fake-api-key",
+        "fake-ticket",
+        "fake-subprotocol",
+        "https://upstream.example/private",
+        "sensitive-input",
+    ):
+        assert fragment not in response.text
+
+
 def test_lol_status_snapshot_never_leaks_secrets():
     from unittest.mock import MagicMock, patch
 

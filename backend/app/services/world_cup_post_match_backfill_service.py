@@ -286,6 +286,7 @@ def run_post_match_backfill(
             "audit_metadata": audit_meta,
         })
     except Exception as exc:
+        error = f"Post-match backfill failed: {type(exc).__name__}"
         if run_id:
             error_result = {
                 "status": "error",
@@ -294,10 +295,10 @@ def run_post_match_backfill(
                 "candidate_count": 0,
                 "scoring": {"scored": 0, "skipped": 0, "errors": 1},
                 "audit_metadata": audit_meta,
-                "error": str(exc),
+                "error": error,
             }
             _finish_audit_run(run_id, error_result)
-        raise
+        raise RuntimeError(error) from None
     finally:
         if should_close:
             close_prediction_session(session)

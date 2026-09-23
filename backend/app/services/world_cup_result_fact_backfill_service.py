@@ -99,9 +99,12 @@ def run_world_cup_result_fact_backfill(
             "audit_metadata": audit_meta,
             "items": items,
             "import_result": import_result,
-            "fact_store": sports_fact_status(tournament=WORLD_CUP_TOURNAMENT),
+            "fact_store": {
+                **sports_fact_status(tournament=WORLD_CUP_TOURNAMENT),
+                "configured_path": "redacted",
+            },
         })
-    except Exception as exc:
+    except Exception:
         _finish_audit_run(run_id, {
             "status": "error",
             "dry_run": dry_run,
@@ -110,7 +113,7 @@ def run_world_cup_result_fact_backfill(
             "candidate_count": len(candidates.get("matches", [])),
             "imported": 0,
             "audit_metadata": audit_meta,
-            "error": str(exc),
+            "error": "Result fact backfill failed",
         })
         raise
     finally:

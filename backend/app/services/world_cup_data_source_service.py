@@ -16,6 +16,60 @@ from app.services.sports_fact_service import (
 from app.utils.file_store import read_json_strict
 
 
+class WorldCupDataValidationError(ValueError):
+    """A source-payload validation failure with an enumerated safe message."""
+
+    _MESSAGES = {
+        "payload_not_object": "payload must be an object",
+        "no_convertible_data": "payload did not contain convertible World Cup data",
+        "matches_not_list": "matches must be a list",
+        "match_not_object": "matches[{index}] must be an object",
+        "match_missing_id": "matches[{index}] missing match_id",
+        "discipline_not_list": "discipline must be a list",
+        "qualification_not_list": "qualifications must be a list",
+        "player_awards_not_list": "player_awards must be a list",
+        "player_statuses_not_list": "player_statuses must be a list",
+        "team_stats_not_list": "team_stats must be a list",
+        "player_stats_not_list": "player_stats must be a list",
+        "discipline_not_object": "discipline[{index}] must be an object",
+        "discipline_missing_card_counts": "discipline[{index}] missing card counts",
+        "qualification_not_object": "qualifications[{index}] must be an object",
+        "qualification_missing_team": "qualifications[{index}] missing team",
+        "player_award_not_object": "player_awards[{index}] must be an object",
+        "player_award_missing_award": "player_awards[{index}] missing award",
+        "player_status_not_object": "player_statuses[{index}] must be an object",
+        "player_status_missing_player": "player_statuses[{index}] missing player",
+        "player_status_missing_team": "player_statuses[{index}] missing team",
+        "team_stat_not_object": "team_stats[{index}] must be an object",
+        "team_stat_missing_team": "team_stats[{index}] missing team",
+        "team_stat_missing_name": "team_stats[{index}] missing stat_name",
+        "team_stat_missing_value": "team_stats[{index}] missing stat_value",
+        "player_stat_not_object": "player_stats[{index}] must be an object",
+        "player_stat_missing_player": "player_stats[{index}] missing player",
+        "player_stat_missing_name": "player_stats[{index}] missing stat_name",
+        "player_stat_missing_value": "player_stats[{index}] missing stat_value",
+        "tournament_status_not_object": "tournament_status must be an object",
+        "player_status_kind": (
+            "player_statuses kind must be injury, availability, suspension, or lineup"
+        ),
+    }
+
+    def __init__(self, code: str, *, index: int | None = None) -> None:
+        try:
+            template = self._MESSAGES[code]
+        except KeyError as exc:  # pragma: no cover - programmer error
+            raise ValueError("unknown World Cup data validation code") from exc
+        if "{index}" in template:
+            if index is None:
+                raise ValueError("indexed validation error requires an index")
+            message = template.format(index=index)
+        else:
+            message = template
+        self.code = code
+        self.index = index
+        super().__init__(message)
+
+
 def world_cup_data_to_facts(payload: Any) -> list[dict[str, Any]]:
     """Normalize a match-data snapshot into PMRF sports facts.
 
@@ -25,7 +79,7 @@ def world_cup_data_to_facts(payload: Any) -> list[dict[str, Any]]:
     """
 
     if not isinstance(payload, dict):
-        raise ValueError("payload must be an object")
+        raise WorldCupDataValidationError("payload_not_object")
     payload = _expand_csv_payload(payload)
     tournament = _clean(payload.get("tournament")) or WORLD_CUP_TOURNAMENT
     source = _clean(payload.get("source")) or "structured_data"
@@ -46,7 +100,7 @@ def world_cup_data_to_facts(payload: Any) -> list[dict[str, Any]]:
         facts.append(status_fact)
 
     if not facts:
-        raise ValueError("payload did not contain convertible World Cup data")
+        raise WorldCupDataValidationError("no_convertible_data")
     return facts
 
 
@@ -222,10 +276,10 @@ def _match_facts(
     facts: list[dict[str, Any]] = []
     for index, raw in enumerate(rows):
         if not isinstance(raw, dict):
-            raise ValueError(f"matches[{index}] must be an object")
+            raise WorldCupDataValidationError("match_not_object", index=index)
         match_id = _clean(raw.get("match_id") or raw.get("id"))
         if not match_id:
-            raise ValueError(f"matches[{index}] missing match_id")
+            raise WorldCupDataValidationError("match_missing_id", index=index)
         fact = _base_fact(
             fact_id=f"wc2026:match:{match_id}",
             kind="match_result",
@@ -272,11 +326,11 @@ def _discipline_facts(
     facts: list[dict[str, Any]] = []
     for index, raw in enumerate(rows):
         if not isinstance(raw, dict):
-            raise ValueError(f"discipline[{index}] must be an object")
+            raise WorldCupDataValidationError("discipline_not_object", index=index)
         red_cards = _number(raw.get("red_cards"))
         yellow_cards = _number(raw.get("yellow_cards"))
         if red_cards is None and yellow_cards is None:
-            raise ValueError(f"discipline[{index}] missing card counts")
+            raise WorldCupDataValidationError("discipline_missing_card_counts", index=index)
         match_id = _clean(raw.get("match_id") or raw.get("fixture_id"))
         team = _clean(raw.get("team"))
         player = _clean(raw.get("player"))
@@ -330,10 +384,10 @@ def _qualification_facts(
     facts: list[dict[str, Any]] = []
     for index, raw in enumerate(rows):
         if not isinstance(raw, dict):
-            raise ValueError(f"qualifications[{index}] must be an object")
+            raise WorldCupDataValidationError("qualification_not_object", index=index)
         team = _clean(raw.get("team"))
         if not team:
-            raise ValueError(f"qualifications[{index}] missing team")
+            raise WorldCupDataValidationError("qualification_missing_team", index=index)
         status = _clean(raw.get("status")).lower()
         fact = _base_fact(
             fact_id=f"wc2026:qualification:{_slug(team)}:{status or 'status'}",
@@ -375,11 +429,11 @@ def _player_award_facts(
     facts: list[dict[str, Any]] = []
     for index, raw in enumerate(rows):
         if not isinstance(raw, dict):
-            raise ValueError(f"player_awards[{index}] must be an object")
+            raise WorldCupDataValidationError("player_award_not_object", index=index)
         award = _clean(raw.get("award") or raw.get("name")).lower()
         player = _clean(raw.get("player"))
         if not award:
-            raise ValueError(f"player_awards[{index}] missing award")
+            raise WorldCupDataValidationError("player_award_missing_award", index=index)
         fact = _base_fact(
             fact_id=f"wc2026:award:{_slug(award)}:{_slug(player) or index}",
             kind="player_award",
@@ -412,13 +466,13 @@ def _player_status_facts(
     facts: list[dict[str, Any]] = []
     for index, raw in enumerate(rows):
         if not isinstance(raw, dict):
-            raise ValueError(f"player_statuses[{index}] must be an object")
+            raise WorldCupDataValidationError("player_status_not_object", index=index)
         player = _clean(raw.get("player") or raw.get("name"))
         team = _clean(raw.get("team"))
         if not player:
-            raise ValueError(f"player_statuses[{index}] missing player")
+            raise WorldCupDataValidationError("player_status_missing_player", index=index)
         if not team:
-            raise ValueError(f"player_statuses[{index}] missing team")
+            raise WorldCupDataValidationError("player_status_missing_team", index=index)
         kind = _player_status_kind(raw)
         status = _player_status(raw, kind)
         match_id = _clean(raw.get("match_id") or raw.get("fixture_id"))
@@ -461,17 +515,17 @@ def _team_stat_facts(
     facts: list[dict[str, Any]] = []
     for index, raw in enumerate(rows):
         if not isinstance(raw, dict):
-            raise ValueError(f"team_stats[{index}] must be an object")
+            raise WorldCupDataValidationError("team_stat_not_object", index=index)
         team = _clean(raw.get("team"))
         stat_name = _clean(raw.get("stat_name") or raw.get("name") or raw.get("type")).lower()
         raw_value = raw.get("stat_value") if raw.get("stat_value") is not None else raw.get("value")
         stat_value = _number(raw_value)
         if not team:
-            raise ValueError(f"team_stats[{index}] missing team")
+            raise WorldCupDataValidationError("team_stat_missing_team", index=index)
         if not stat_name:
-            raise ValueError(f"team_stats[{index}] missing stat_name")
+            raise WorldCupDataValidationError("team_stat_missing_name", index=index)
         if stat_value is None:
-            raise ValueError(f"team_stats[{index}] missing stat_value")
+            raise WorldCupDataValidationError("team_stat_missing_value", index=index)
         match_id = _clean(raw.get("match_id") or raw.get("fixture_id"))
         fact = _base_fact(
             fact_id=(
@@ -508,17 +562,17 @@ def _player_stat_facts(
     facts: list[dict[str, Any]] = []
     for index, raw in enumerate(rows):
         if not isinstance(raw, dict):
-            raise ValueError(f"player_stats[{index}] must be an object")
+            raise WorldCupDataValidationError("player_stat_not_object", index=index)
         player = _clean(raw.get("player") or raw.get("name"))
         stat_name = _clean(raw.get("stat_name") or raw.get("name") or raw.get("type")).lower()
         raw_value = raw.get("stat_value") if raw.get("stat_value") is not None else raw.get("value")
         stat_value = _number(raw_value)
         if not player:
-            raise ValueError(f"player_stats[{index}] missing player")
+            raise WorldCupDataValidationError("player_stat_missing_player", index=index)
         if not stat_name:
-            raise ValueError(f"player_stats[{index}] missing stat_name")
+            raise WorldCupDataValidationError("player_stat_missing_name", index=index)
         if stat_value is None:
-            raise ValueError(f"player_stats[{index}] missing stat_value")
+            raise WorldCupDataValidationError("player_stat_missing_value", index=index)
         team = _clean(raw.get("team"))
         match_id = _clean(raw.get("match_id") or raw.get("fixture_id"))
         fact = _base_fact(
@@ -559,7 +613,7 @@ def _tournament_status_fact(
     if raw is None and payload.get("tournament_complete") is None:
         return None
     if raw is not None and not isinstance(raw, dict):
-        raise ValueError("tournament_status must be an object")
+        raise WorldCupDataValidationError("tournament_status_not_object")
     raw = raw or {}
     complete = raw.get("tournament_complete", payload.get("tournament_complete"))
     status = _clean(raw.get("status")).lower()
@@ -604,7 +658,7 @@ def _player_status_kind(raw: dict[str, Any]) -> str:
         return "injury"
     if status:
         return "availability"
-    raise ValueError("player_statuses kind must be injury, availability, suspension, or lineup")
+    raise WorldCupDataValidationError("player_status_kind")
 
 
 def _player_status(raw: dict[str, Any], kind: str) -> str:
@@ -666,7 +720,7 @@ def _require_list(value: Any, name: str) -> list[Any]:
     if value is None:
         return []
     if not isinstance(value, list):
-        raise ValueError(f"{name} must be a list")
+        raise WorldCupDataValidationError(f"{name}_not_list")
     return value
 
 

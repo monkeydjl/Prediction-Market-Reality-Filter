@@ -412,9 +412,7 @@ def build_status_payload() -> dict[str, Any]:
             prefixes = list(getattr(adapter, "_adapters", {}).keys())
         kernel_ready = True
     except Exception as exc:  # pragma: no cover - defensive
-        # HTTPException.detail or plain Exception — never log secrets.
-        detail = getattr(exc, "detail", None)
-        kernel_error = str(detail if detail is not None else exc)[:240]
+        kernel_error = type(exc).__name__
 
     if not kernel_ready:
         hint = "Kernel failed to initialize; check flags and data keys."

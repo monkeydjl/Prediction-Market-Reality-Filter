@@ -80,11 +80,20 @@ async def backfill_and_seed(
     # is a 400 rather than a silent no-op.
     if sport is not None:
         if request.backfill and sport not in BACKFILLABLE_COMPETITIONS:
-            raise HTTPException(status_code=400, detail=f"Unsupported sport: {sport}")
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Unsupported sport for backfill; supported: "
+                    + ", ".join(sorted(BACKFILLABLE_COMPETITIONS))
+                ),
+            )
         if request.seed_elo and sport not in ELO_SEEDABLE_COMPETITIONS:
             raise HTTPException(
                 status_code=400,
-                detail=f"Elo seeding is binary-only; unsupported sport: {sport}",
+                detail=(
+                    "Elo seeding is binary-only; supported: "
+                    + ", ".join(sorted(ELO_SEEDABLE_COMPETITIONS))
+                ),
             )
     ingestor = HistoricalDataIngestor()
     out: dict = {}
@@ -113,7 +122,10 @@ async def run_optimization(
     sports = ["nba", "mlb", "nhl"] if request.sport == "all" else [request.sport]
     for sport in sports:
         if sport not in {"nba", "mlb", "nhl"}:
-            raise HTTPException(status_code=400, detail=f"Unsupported sport: {sport}")
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported sport; supported: mlb, nba, nhl",
+            )
 
     task_manager = get_task_manager()
     # One task for the whole request; engine_name records the primary sport key.
@@ -171,8 +183,12 @@ async def run_optimization(
             )
             await task_manager.mark_completed(task.task_id, {"sports": results})
         except Exception as exc:
-            logger.exception("Optimization task %s failed", task.task_id)
-            await task_manager.mark_failed(task.task_id, str(exc))
+            logger.error(
+                "Optimization task %s failed: %s",
+                task.task_id,
+                type(exc).__name__,
+            )
+            await task_manager.mark_failed(task.task_id, "Optimization task failed")
 
     spawn(_run(), name=f"sport_optimization:{task.task_id}")
     return {"task_id": task.task_id, "status": "pending", "sports": sports, "n_trials": n_trials}
@@ -239,4 +255,7 @@ async def apply_params(params_id: int, _auth: None = Depends(require_write_key))
         result = store.apply(params_id)
         return result
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        logger.warning("apply_params rejected for %s: %s", params_id, type(e).__name__)
+        raise HTTPException(
+            status_code=404, detail="Optimized params not found"
+        ) from e

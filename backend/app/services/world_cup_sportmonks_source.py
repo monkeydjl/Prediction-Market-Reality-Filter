@@ -115,8 +115,8 @@ def test_world_cup_sportmonks_connection() -> dict[str, Any]:
             body = response.read(64 * 1024)
     except HTTPError as exc:
         return {"ok": False, "error": f"HTTP {exc.code}"}
-    except (TimeoutError, URLError) as exc:
-        return {"ok": False, "error": f"Connection failed: {exc}"}
+    except (TimeoutError, URLError):
+        return {"ok": False, "error": "Connection failed"}
 
     try:
         data = json.loads(body.decode("utf-8"))
@@ -126,7 +126,7 @@ def test_world_cup_sportmonks_connection() -> dict[str, Any]:
     if not isinstance(data, dict):
         return {"ok": False, "error": "Unexpected response format"}
     if data.get("errors"):
-        return {"ok": False, "error": f"Provider errors: {data['errors']}"}
+        return {"ok": False, "error": "Provider returned errors"}
 
     items = data.get("data") or data.get("response") or []
     rate_limit = data.get("rate_limit", {})
@@ -134,7 +134,6 @@ def test_world_cup_sportmonks_connection() -> dict[str, Any]:
     return {
         "ok": True,
         "feed_tested": kind,
-        "feed_url": _display_url(source_url),
         "item_count": len(items) if isinstance(items, list) else 0,
         "rate_limit": {
             "remaining": rate_limit.get("remaining"),
@@ -187,10 +186,15 @@ def validate_world_cup_sportmonks_pipeline() -> dict[str, Any]:
             "fixture_count": len(items) if isinstance(items, list) else 0,
             "fixture_ids_sample": sorted(fixture_ids)[:10],
         })
-    except Exception as exc:
-        result["steps"].append({"name": "fixture_fetch", "ok": False, "error": str(exc)})
+    except HTTPError as exc:
+        result["steps"].append({"name": "fixture_fetch", "ok": False, "error": f"HTTP {exc.code}"})
         result["ok"] = False
-        result["error"] = f"Fixture fetch failed: {exc}"
+        result["error"] = f"Fixture fetch failed: HTTP {exc.code}"
+        return result
+    except Exception:
+        result["steps"].append({"name": "fixture_fetch", "ok": False, "error": "Request failed"})
+        result["ok"] = False
+        result["error"] = "Fixture fetch failed"
         return result
 
     # Step 3: compare with stored facts

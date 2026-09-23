@@ -157,8 +157,11 @@ async def initialize_prediction_db(_auth: None = Depends(require_write_key)) -> 
     try:
         init_prediction_db()
         return {"status": "ok", "message": "Database initialized"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Prediction database initialization failed",
+        )
 
 
 @router.post("/sync-fixtures", response_model=FlexibleResponse)
@@ -173,7 +176,10 @@ async def sync_fixtures(
     """
     result = sync_world_cup_fixtures(source=source)
     if result.get("status") == "error":
-        raise HTTPException(status_code=500, detail=result.get("error"))
+        raise HTTPException(
+            status_code=500,
+            detail="Fixture synchronization failed",
+        )
     return result
 
 
@@ -366,7 +372,10 @@ async def trigger_prediction(
     )
 
     if result.get("status") == "error":
-        raise HTTPException(status_code=500, detail=result.get("error"))
+        error = result.get("error")
+        if error == "Match not found":
+            raise HTTPException(status_code=500, detail=error)
+        raise HTTPException(status_code=500, detail="Prediction generation failed")
 
     return result
 
@@ -516,6 +525,9 @@ async def batch_predict(
     from app.services.world_cup_prediction_pipeline import batch_predict_matches
 
     result = await batch_predict_matches(match_ids, trigger="batch_manual", engine=engine)
+    for prediction in result.get("predictions", []):
+        if prediction.get("status") == "error" and "error" in prediction:
+            prediction["error"] = "Prediction generation failed"
     return result
 
 
@@ -569,12 +581,18 @@ async def batch_switch_engine(
             trigger="batch_engine_switch",
             engine=engine
         )
+        for prediction in result.get("predictions", []):
+            if prediction.get("status") == "error" and "error" in prediction:
+                prediction["error"] = "Prediction generation failed"
 
         logger.info(f"batch_predict_matches completed: {result.get('status')}, succeeded={result.get('succeeded')}")
         return result
     except Exception as e:
-        logger.error(f"Error in batch_switch_engine: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"批量切换失败: {str(e)}")
+        logger.error(
+            "Error in batch_switch_engine: %s",
+            type(e).__name__,
+        )
+        raise HTTPException(status_code=500, detail="Batch engine switch failed")
     finally:
         close_prediction_session(session)
 
@@ -669,14 +687,14 @@ async def batch_switch_engine_stream(
                     logger.error(
                         "batch_switch_engine_stream match %s failed: %s",
                         match_id,
-                        exc,
+                        type(exc).__name__,
                     )
                     yield sse("progress", {
                         "current": idx,
                         "total": total,
                         "match_id": match_id,
                         "status": "error",
-                        "error": str(exc),
+                        "error": "Prediction generation failed",
                         "succeeded": succeeded,
                         "failed": failed,
                         "skipped": skipped,
@@ -693,8 +711,11 @@ async def batch_switch_engine_stream(
                 "integrated_count": integrated_count,
             })
         except Exception as exc:  # noqa: BLE001 - surface fatal errors
-            logger.error("batch_switch_engine_stream fatal: %s", exc, exc_info=True)
-            yield sse("error", {"message": str(exc)})
+            logger.error(
+                "batch_switch_engine_stream fatal: %s",
+                type(exc).__name__,
+            )
+            yield sse("error", {"message": "Batch engine switch failed"})
         finally:
             close_prediction_session(session)
 
@@ -962,10 +983,17 @@ async def optimize_match_prediction(
         )
 
         if optimization_result.get("status") == "error":
-            raise HTTPException(status_code=500, detail=optimization_result.get("message"))
+            logger.warning(
+                "AI optimization failed for %s: %s",
+                match_id,
+                optimization_result.get("error_type", "error"),
+            )
+            raise HTTPException(status_code=500, detail="AI optimization failed")
 
         if optimization_result.get("status") == "unavailable":
-            raise HTTPException(status_code=503, detail=optimization_result.get("message"))
+            raise HTTPException(
+                status_code=503, detail="AI optimization unavailable"
+            )
 
         return {
             "status": "ok",

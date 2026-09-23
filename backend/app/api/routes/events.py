@@ -1,4 +1,4 @@
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 import asyncio
 import logging
 
@@ -57,6 +57,7 @@ from app.services.football_data_source import (
     preview_world_cup_football_data_standings,
 )
 from app.services.world_cup_data_source_service import (
+    WorldCupDataValidationError,
     import_world_cup_data,
     import_world_cup_data_file,
     preview_world_cup_data_file,
@@ -160,6 +161,79 @@ FactsPayload = list[dict[str, Any]] | dict[str, Any]
 
 
 logger = logging.getLogger(__name__)
+
+
+_SAFE_WORLD_CUP_PAYLOAD_ERRORS = frozenset(
+    {
+        "World Cup data file missing source",
+        "World Cup data file missing observed_at",
+        "No World Cup source feed URLs are configured",
+        "standings-source import requires source_url",
+    }
+)
+
+
+def _reject_invalid_payload(exc: Exception) -> NoReturn:
+    """Raise a safe 422 while preserving fixed business validation messages."""
+    if isinstance(exc, WorldCupDataValidationError):
+        detail = str(exc)
+    elif str(exc) in _SAFE_WORLD_CUP_PAYLOAD_ERRORS:
+        detail = str(exc)
+    else:
+        logger.warning("World Cup source payload rejected: %s", type(exc).__name__)
+        detail = "Invalid World Cup source payload"
+    raise HTTPException(status_code=422, detail=detail) from exc
+
+
+_SAFE_SOURCE_CONFIGURATION_ERRORS = frozenset(
+    {"WORLD_CUP_SOURCE_BUNDLE_URL is not configured"}
+)
+
+
+def _reject_source_configuration(exc: Exception) -> NoReturn:
+    """Raise a safe source-configuration error without exposing raw details."""
+    detail = str(exc)
+    if detail not in _SAFE_SOURCE_CONFIGURATION_ERRORS:
+        detail = "Invalid source configuration"
+    raise HTTPException(status_code=422, detail=detail) from exc
+
+
+_SAFE_FACT_ERRORS = {
+    "fact must be an object",
+    "missing kind",
+    "unsupported kind",
+    "missing tournament",
+}
+
+
+def _safe_fact_error(value: Any) -> str:
+    """Map service error text to a fixed public fact-validation message."""
+    if not isinstance(value, str):
+        return "Invalid fact"
+    if value in _SAFE_FACT_ERRORS:
+        return value
+    if value.startswith("unsupported kind "):
+        return "unsupported kind"
+    return "Invalid fact"
+
+
+def _reject_import_errors(result: dict[str, Any]) -> NoReturn:
+    """Raise 422 with the historical list shape and sanitized error messages."""
+    raw_errors = result.get("errors")
+    safe_errors: list[dict[str, Any]] = []
+    if isinstance(raw_errors, list):
+        for ordinal, item in enumerate(raw_errors):
+            if isinstance(item, dict):
+                index = item.get("index")
+                if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+                    index = ordinal
+                error = _safe_fact_error(item.get("error"))
+            else:
+                index = ordinal
+                error = "Invalid fact"
+            safe_errors.append({"index": index, "error": error})
+    raise HTTPException(status_code=422, detail=safe_errors)
+
 
 router = APIRouter()
 
@@ -425,7 +499,10 @@ async def get_loop_status(x_api_key: str | None = Header(default=None)) -> dict[
 @router.get("/sports/world-cup/status", response_model=FlexibleResponse)
 async def get_world_cup_status() -> dict[str, Any]:
     """Return World Cup fact-store status for the sports vertical."""
-    return sports_fact_status(tournament=WORLD_CUP_TOURNAMENT)
+    return {
+        **sports_fact_status(tournament=WORLD_CUP_TOURNAMENT),
+        "configured_path": "redacted",
+    }
 
 
 @router.get("/sports/world-cup/data/sources/status", response_model=FlexibleResponse)
@@ -433,7 +510,26 @@ async def get_world_cup_data_source_status(
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
     """Return configured World Cup data-source and import-run status."""
-    return world_cup_data_source_status()
+    status = world_cup_data_source_status()
+    configured_sources = status["configured_sources"]
+    return {
+        **status,
+        "facts": {
+            **status["facts"],
+            "configured_path": "redacted",
+        },
+        "configured_sources": {
+            **configured_sources,
+            "data_file": {
+                **configured_sources["data_file"],
+                "path": "redacted",
+            },
+            "bundle_file": {
+                **configured_sources["bundle_file"],
+                "path": "redacted",
+            },
+        },
+    }
 
 
 @router.get("/sports/world-cup/facts", response_model=FlexibleResponse)
@@ -468,9 +564,9 @@ async def import_world_cup_facts(
             default_tournament=WORLD_CUP_TOURNAMENT,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
     if result["imported"] == 0 and result["error_count"] > 0:
-        raise HTTPException(status_code=422, detail=result["errors"])
+        _reject_import_errors(result)
     return result
 
 
@@ -484,9 +580,9 @@ async def import_world_cup_data_source(
     try:
         result = import_world_cup_data(payload, replace=replace)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
     if result["imported"] == 0 and result["error_count"] > 0:
-        raise HTTPException(status_code=422, detail=result["errors"])
+        _reject_import_errors(result)
     return result
 
 
@@ -499,7 +595,7 @@ async def preview_world_cup_data_source(
     try:
         facts = world_cup_data_to_facts(payload)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
     return {"converted_fact_count": len(facts), "facts": facts}
 
 
@@ -512,7 +608,7 @@ async def preview_world_cup_source_bundle_route(
     try:
         return preview_world_cup_source_bundle(payload)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_source_configuration(exc)
 
 
 @router.post("/sports/world-cup/data/bundle/import", response_model=FlexibleResponse)
@@ -525,7 +621,7 @@ async def import_world_cup_source_bundle_route(
     try:
         return import_world_cup_source_bundle(payload, replace=replace)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_source_configuration(exc)
 
 
 @router.post("/sports/world-cup/data/bundle/source/preview", response_model=FlexibleResponse)
@@ -536,9 +632,12 @@ async def preview_configured_world_cup_source_bundle_route(
     try:
         return preview_world_cup_source_bundle_file()
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=f"World Cup source bundle file not found: {exc}") from exc
+        raise HTTPException(
+            status_code=404,
+            detail="World Cup source bundle file not found",
+        ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_source_configuration(exc)
 
 
 @router.post("/sports/world-cup/data/bundle/source/import", response_model=FlexibleResponse)
@@ -550,9 +649,12 @@ async def import_configured_world_cup_source_bundle_route(
     try:
         return import_world_cup_source_bundle_file(replace=replace)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=f"World Cup source bundle file not found: {exc}") from exc
+        raise HTTPException(
+            status_code=404,
+            detail="World Cup source bundle file not found",
+        ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_source_configuration(exc)
 
 
 @router.post("/sports/world-cup/data/bundle/url/preview", response_model=FlexibleResponse)
@@ -563,7 +665,7 @@ async def preview_remote_world_cup_source_bundle_route(
     try:
         return await asyncio.to_thread(preview_world_cup_source_bundle_url)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_source_configuration(exc)
 
 
 @router.post("/sports/world-cup/data/bundle/url/import", response_model=FlexibleResponse)
@@ -577,7 +679,7 @@ async def import_remote_world_cup_source_bundle_route(
             import_world_cup_source_bundle_url, replace=replace
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_source_configuration(exc)
 
 
 @router.post("/sports/world-cup/data/bundle/feeds/preview", response_model=FlexibleResponse)
@@ -588,7 +690,7 @@ async def preview_configured_world_cup_source_feeds_route(
     try:
         return await asyncio.to_thread(preview_world_cup_source_bundle_feeds)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/data/bundle/feeds/import", response_model=FlexibleResponse)
@@ -602,7 +704,7 @@ async def import_configured_world_cup_source_feeds_route(
             import_world_cup_source_bundle_feeds, replace=replace
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/data/bundle/api-football/preview", response_model=FlexibleResponse)
@@ -615,7 +717,7 @@ async def preview_api_football_world_cup_source_bundle_route(
         # unresponsive upstream stalls this request only, not the whole loop.
         return await asyncio.to_thread(preview_world_cup_api_football_bundle)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/data/bundle/api-football/import", response_model=FlexibleResponse)
@@ -630,7 +732,7 @@ async def import_api_football_world_cup_source_bundle_route(
             import_world_cup_api_football_bundle, replace=replace
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 def _require_successful_api_football_validation_before_import() -> None:
@@ -670,8 +772,9 @@ async def validate_api_football_pipeline_route(
     try:
         result = await asyncio.to_thread(validate_world_cup_api_football_pipeline)
     except Exception as exc:
-        loop_run_store.finish_run(run_id, "failed", error=str(exc))
-        raise
+        error = f"API-Football pipeline validation failed: {type(exc).__name__}"
+        loop_run_store.finish_run(run_id, "failed", error=error)
+        raise HTTPException(status_code=500, detail=error) from exc
 
     summary = _api_football_validation_run_summary(result)
     status = "success" if result.get("ok") else "failed"
@@ -725,9 +828,12 @@ async def preview_football_data_world_cup_standings_route(
     try:
         return await asyncio.to_thread(preview_world_cup_football_data_standings)
     except FootballDataAPIError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=502,
+            detail="Football-Data request failed",
+        ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/data/bundle/football-data/import", response_model=FlexibleResponse)
@@ -741,9 +847,12 @@ async def import_football_data_world_cup_standings_route(
             import_world_cup_football_data_standings, replace=replace
         )
     except FootballDataAPIError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=502,
+            detail="Football-Data request failed",
+        ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/data/bundle/sportmonks/preview", response_model=FlexibleResponse)
@@ -754,7 +863,7 @@ async def preview_sportmonks_world_cup_source_bundle_route(
     try:
         return await asyncio.to_thread(preview_world_cup_sportmonks_bundle)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/data/bundle/sportmonks/import", response_model=FlexibleResponse)
@@ -768,7 +877,7 @@ async def import_sportmonks_world_cup_source_bundle_route(
             import_world_cup_sportmonks_bundle, replace=replace
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/data/bundle/sportmonks/test", response_model=FlexibleResponse)
@@ -795,9 +904,12 @@ async def preview_configured_world_cup_data_source(
     try:
         return preview_world_cup_data_file()
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=f"World Cup data file not found: {exc}") from exc
+        raise HTTPException(
+            status_code=404,
+            detail="World Cup data file not found",
+        ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/data/source/import", response_model=FlexibleResponse)
@@ -809,9 +921,12 @@ async def import_configured_world_cup_data_source(
     try:
         return import_world_cup_data_file(replace=replace)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=f"World Cup data file not found: {exc}") from exc
+        raise HTTPException(
+            status_code=404,
+            detail="World Cup data file not found",
+        ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/official-csv/preview", response_model=FlexibleResponse)
@@ -823,7 +938,7 @@ async def preview_world_cup_official_csv_source_route(
     try:
         return preview_world_cup_official_csv_source(payload)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/official-csv/import", response_model=FlexibleResponse)
@@ -836,7 +951,7 @@ async def import_world_cup_official_csv_source_route(
     try:
         return import_world_cup_official_csv_source(payload, replace=replace)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/matches/preview", response_model=FlexibleResponse)
@@ -848,7 +963,7 @@ async def preview_world_cup_match_source_route(
     try:
         return preview_world_cup_match_source(payload)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/matches/import", response_model=FlexibleResponse)
@@ -861,7 +976,7 @@ async def import_world_cup_match_source_route(
     try:
         return import_world_cup_match_source(payload, replace=replace)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/match-events/preview", response_model=FlexibleResponse)
@@ -873,7 +988,7 @@ async def preview_world_cup_match_events_source_route(
     try:
         return preview_world_cup_match_events_source(payload)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/match-events/import", response_model=FlexibleResponse)
@@ -886,7 +1001,7 @@ async def import_world_cup_match_events_source_route(
     try:
         return import_world_cup_match_events_source(payload, replace=replace)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/lineups/preview", response_model=FlexibleResponse)
@@ -898,7 +1013,7 @@ async def preview_world_cup_lineups_source_route(
     try:
         return preview_world_cup_lineups_source(payload)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/lineups/import", response_model=FlexibleResponse)
@@ -911,7 +1026,7 @@ async def import_world_cup_lineups_source_route(
     try:
         return import_world_cup_lineups_source(payload, replace=replace)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/standings/preview", response_model=FlexibleResponse)
@@ -923,7 +1038,7 @@ async def preview_world_cup_standings_source_route(
     try:
         return preview_world_cup_standings_source(payload)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/standings/import", response_model=FlexibleResponse)
@@ -936,7 +1051,7 @@ async def import_world_cup_standings_source_route(
     try:
         return import_world_cup_standings_source(payload, replace=replace)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/player-awards/preview", response_model=FlexibleResponse)
@@ -948,7 +1063,7 @@ async def preview_world_cup_player_awards_source_route(
     try:
         return preview_world_cup_player_awards_source(payload)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/player-awards/import", response_model=FlexibleResponse)
@@ -961,7 +1076,7 @@ async def import_world_cup_player_awards_source_route(
     try:
         return import_world_cup_player_awards_source(payload, replace=replace)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/player-status/preview", response_model=FlexibleResponse)
@@ -973,7 +1088,7 @@ async def preview_world_cup_player_status_source_route(
     try:
         return preview_world_cup_player_status_source(payload)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/player-status/import", response_model=FlexibleResponse)
@@ -986,7 +1101,7 @@ async def import_world_cup_player_status_source_route(
     try:
         return import_world_cup_player_status_source(payload, replace=replace)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/statistics/preview", response_model=FlexibleResponse)
@@ -998,7 +1113,7 @@ async def preview_world_cup_statistics_source_route(
     try:
         return preview_world_cup_statistics_source(payload)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_source_configuration(exc)
 
 
 @router.post("/sports/world-cup/statistics/import", response_model=FlexibleResponse)
@@ -1011,7 +1126,7 @@ async def import_world_cup_statistics_source_route(
     try:
         return import_world_cup_statistics_source(payload, replace=replace)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _reject_invalid_payload(exc)
 
 
 @router.post("/sports/world-cup/resolve", response_model=FlexibleResponse)

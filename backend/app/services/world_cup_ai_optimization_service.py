@@ -113,19 +113,18 @@ Return ONLY this JSON object:
             }
 
         logger.warning(
-            "AI optimization gateway failed for %s vs %s: %s",
+            "AI optimization gateway failed for %s vs %s: all_routes_failed",
             home_team,
             away_team,
-            result.degraded_reason,
         )
         return {
             "status": "error",
-            "message": f"AI\u4f18\u5316\u5931\u8d25: {result.degraded_reason or 'all_routes_failed'}",
+            "message": "AI\u4f18\u5316\u5931\u8d25: all_routes_failed",
         }
     except Exception as exc:
-        error_text = str(exc)
-        logger.error("[AI Optimization Error] %s", error_text, exc_info=True)
+        error_type = type(exc).__name__
+        logger.error("[AI Optimization Error] %s", error_type)
         return {
             "status": "error",
-            "message": f"AI\u4f18\u5316\u5931\u8d25: {error_text[:200]}",
+            "message": f"AI\u4f18\u5316\u5931\u8d25: {error_type}",
         }

@@ -291,7 +291,7 @@ def _run_event_conclusion_challenge(
                 "check": "challenge_error",
                 "severity": "warning",
                 "reason": "结论否定门执行失败，已保留原结论。",
-                "details": {"error": str(exc)},
+                "details": {"error": type(exc).__name__},
             }],
             "challenge_summary": "结论否定门执行失败，已保留原结论。",
             "critic_notes": {},
@@ -1305,7 +1305,7 @@ async def discover_events(
             limit, shared_articles=shared_articles
         )
     except Exception as exc:
-        await status_fail(f"数据源收集失败: {exc}")
+        await status_fail(f"数据源收集失败: {type(exc).__name__}")
         raise
 
     if not candidate_events:
@@ -1398,7 +1398,11 @@ async def discover_events(
                     exc,
                 )
                 q = str(candidate.get("question", ""))
-                await status_event(q, success=False, error=str(exc)[:200])
+                await status_event(
+                    q,
+                    success=False,
+                    error=type(exc).__name__,
+                )
                 return None
 
     # Use asyncio.wait (not wait_for+gather) so on timeout we keep already-

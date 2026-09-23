@@ -336,9 +336,9 @@ class HistoricalDataIngestor:
                             existing_result.finished_at = finished_at
 
             session.commit()
-        except Exception as exc:
+        except Exception:
             session.rollback()
-            errors.append(str(exc))
+            errors.append("Database operation failed")
             logger.exception("Failed to store %s season %s", sport, season)
         finally:
             session.close()
@@ -435,9 +435,9 @@ class HistoricalDataIngestor:
                 total_new += new_n
                 total_updated += upd_n
             session.commit()
-        except Exception as exc:
+        except Exception:
             session.rollback()
-            errors.append(str(exc))
+            errors.append("Backfill operation failed")
             logger.exception("Failed to backfill results from fixtures")
         finally:
             session.close()
@@ -598,9 +598,9 @@ class HistoricalDataIngestor:
                     },
                 }
             session.commit()
-        except Exception as exc:
+        except Exception:
             session.rollback()
-            errors.append(str(exc))
+            errors.append("Elo seed operation failed")
             logger.exception("Failed to seed Elo ratings")
         finally:
             session.close()

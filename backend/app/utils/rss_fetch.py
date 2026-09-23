@@ -53,15 +53,15 @@ def parse_feed(
         response = httpx.get(url, headers=headers, timeout=timeout, follow_redirects=True)
         response.raise_for_status()
         return feedparser.parse(response.content)
-    except httpx.TimeoutException:
-        logger.warning("RSS feed timed out: %s (timeout=%.1fs)", url, timeout)
+    except httpx.TimeoutException as exc:
+        logger.warning("RSS feed timed out (timeout=%.1fs): %s", timeout, type(exc).__name__)
         return feedparser.parse("")
     except httpx.HTTPStatusError as exc:
-        logger.warning("RSS feed HTTP error %s: %s", exc.response.status_code, url)
+        logger.warning("RSS feed HTTP error %s", exc.response.status_code)
         return feedparser.parse("")
     except httpx.HTTPError as exc:
-        logger.warning("RSS fetch failed for %s: %s", url, exc)
+        logger.warning("RSS fetch failed: %s", type(exc).__name__)
         return feedparser.parse("")
     except Exception as exc:
-        logger.error("Unexpected error parsing RSS feed %s: %s", url, exc)
+        logger.error("Unexpected RSS parse failure: %s", type(exc).__name__)
         return feedparser.parse("")

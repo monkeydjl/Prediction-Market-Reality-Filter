@@ -316,9 +316,12 @@ def score_all_finished_matches(
 
     except Exception as exc:
         duration_ms = int((time.monotonic() - started) * 1000)
-        logger.error("Scoring reconciliation failed: %s", exc, exc_info=True)
+        logger.error(
+            "Scoring reconciliation failed: %s",
+            type(exc).__name__,
+        )
         loop_run_store.finish_run(
-            run_id, "failed", error=str(exc),
+            run_id, "failed", error="Scoring reconciliation failed",
             result={"duration_ms": duration_ms, "audit_metadata": audit_meta},
         )
         raise

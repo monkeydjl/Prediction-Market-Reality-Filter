@@ -284,10 +284,11 @@ class OptimizationTaskManager:
                     deleted,
                 )
         except Exception as exc:
-            store_error = str(exc) or exc.__class__.__name__
-            logger.exception(
-                "[OptimizationTaskManager] Store cleanup failed; in-memory "
-                "pruning still completed."
+            store_error = "Optimization task store cleanup failed"
+            logger.error(
+                "[OptimizationTaskManager] Store cleanup failed: %s; "
+                "in-memory pruning still completed.",
+                type(exc).__name__,
             )
         return {
             "memory_removed": len(to_remove),

@@ -19,6 +19,26 @@ from app.utils.file_store import locked_file, read_json, read_json_strict, write
 
 WORLD_CUP_TOURNAMENT = "2026 FIFA World Cup"
 
+
+class SportsFactValidationError(ValueError):
+    """A fact validation failure with a fixed, client-safe message."""
+
+    _MESSAGES = {
+        "fact_not_object": "fact must be an object",
+        "missing_kind": "missing kind",
+        "unsupported_kind": "unsupported kind",
+        "missing_tournament": "missing tournament",
+    }
+
+    def __init__(self, code: str) -> None:
+        try:
+            message = self._MESSAGES[code]
+        except KeyError as exc:  # pragma: no cover - programmer error
+            raise ValueError("unknown sports fact validation code") from exc
+        self.code = code
+        super().__init__(message)
+
+
 _KNOWN_KINDS = {
     "injury",
     "availability",
@@ -78,8 +98,10 @@ def import_sports_facts(
             normalized.append(
                 normalize_sports_fact(raw, default_tournament=default_tournament)
             )
-        except ValueError as exc:
+        except SportsFactValidationError as exc:
             errors.append({"index": index, "error": str(exc)})
+        except ValueError:
+            errors.append({"index": index, "error": "Invalid fact"})
 
     if errors and not normalized:
         return {
@@ -146,17 +168,17 @@ def normalize_sports_fact(
     default_tournament: str | None = WORLD_CUP_TOURNAMENT,
 ) -> dict[str, Any]:
     if not isinstance(raw, dict):
-        raise ValueError("fact must be an object")
+        raise SportsFactValidationError("fact_not_object")
 
     kind = _clean(raw.get("kind")).lower()
     if not kind:
-        raise ValueError("missing kind")
+        raise SportsFactValidationError("missing_kind")
     if kind not in _KNOWN_KINDS:
-        raise ValueError(f"unsupported kind '{kind}'")
+        raise SportsFactValidationError("unsupported_kind")
 
     tournament = _clean(raw.get("tournament") or default_tournament)
     if not tournament:
-        raise ValueError("missing tournament")
+        raise SportsFactValidationError("missing_tournament")
 
     fact = {
         "fact_id": _clean(raw.get("fact_id")),

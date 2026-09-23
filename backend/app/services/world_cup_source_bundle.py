@@ -380,7 +380,7 @@ def _source_kind(entry: Any, index: int) -> str:
         "player_status",
         "statistics",
     }:
-        raise ValueError(f"sources[{index}] unsupported source kind '{raw}'")
+        raise ValueError(f"sources[{index}] unsupported source kind")
     return kind
 
 

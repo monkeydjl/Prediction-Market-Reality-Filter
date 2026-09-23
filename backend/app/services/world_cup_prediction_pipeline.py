@@ -114,7 +114,7 @@ def _run_world_cup_conclusion_challenge(
                 "check": "challenge_error",
                 "severity": "warning",
                 "reason": "challenge execution failed; original prediction kept",
-                "details": {"error": str(exc)},
+                "details": {"error": type(exc).__name__},
             }],
             "challenge_summary": "challenge execution failed; original prediction kept",
             "critic_notes": {},
@@ -727,7 +727,7 @@ async def run_prediction_pipeline(
             # match predictions.
             selected_engine = "elo_odds"
         elif engine not in {"elo_odds", "hybrid", "integrated", "high_confidence", "gbm"}:
-            return {"status": "error", "match_id": match_id, "error": f"Unsupported engine: {engine}"}
+            return {"status": "error", "match_id": match_id, "error": "Unsupported engine"}
 
         # Step 3b: Calculate prediction factors (needed for hybrid and integrated)
         factors = None
@@ -1468,7 +1468,8 @@ async def run_prediction_pipeline(
         return {
             "status": "error",
             "match_id": match_id,
-            "error": f"Prediction failed: {e}"
+            "error": "Prediction failed",
+            "error_type": type(e).__name__,
         }
 
     finally:

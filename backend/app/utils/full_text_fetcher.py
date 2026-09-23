@@ -37,5 +37,5 @@ async def fetch_full_text(url: str, *, timeout: float = 10.0) -> str | None:
             text = text.strip()[:8000]  # cap at 8000 chars to limit LLM cost
         return text
     except Exception as exc:
-        logger.warning("full_text_fetch failed for %s: %s", url, exc)
+        logger.warning("full_text_fetch failed: %s", type(exc).__name__)
         return None

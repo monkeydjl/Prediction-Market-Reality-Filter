@@ -13,7 +13,7 @@ import type {
   EventMoversResponse as GeneratedEventMoversResponse,
   EventHistoryResponse as GeneratedEventHistoryResponse,
 } from "./generated-types";
-import { getApiBase } from "./env";
+import { getApiBase, joinApiPath } from "./env";
 import { applyOperatorAuthHeaders } from "./operator-credentials";
 
 export {
@@ -192,7 +192,7 @@ async function api<T>(
   init?.signal?.addEventListener("abort", abort, { once: true });
 
   const request = (async () => {
-    const res = await fetch(BASE + path, {
+    const res = await fetch(joinApiPath(BASE, path), {
       ...init,
       headers,
       signal: controller.signal,
@@ -1095,6 +1095,29 @@ export const qualityMetricsApi = {
       `/quality-metrics/domain-reliability${tail ? `?${tail}` : ""}`,
     );
   },
+};
+
+// ── Realtime WebSocket tickets ─────────────────────────────────────────
+// Mirrors backend POST /api/ws/tickets (realtime.py). A browser cannot set a
+// header on a WebSocket handshake, so it exchanges the operator key for a
+// single-use ticket here — over ordinary authenticated HTTP — and offers the
+// returned subprotocol on the socket. The ticket is short-lived and never
+// enters a URL, a query string or a log; each connection attempt buys a fresh
+// one, which is why no GET-cache layer applies.
+
+export interface WsTicketResponse {
+  ticket: string;
+  expires_in: number;
+  subprotocol: string;
+}
+
+export const realtimeApi = {
+  issueTicket: (signal?: AbortSignal) =>
+    api<WsTicketResponse>(
+      "/ws/tickets",
+      { method: "POST", signal },
+      { cacheGet: false, invalidateGetCache: false },
+    ),
 };
 
 // ── Review queue ────────────────────────────────────────────────────────

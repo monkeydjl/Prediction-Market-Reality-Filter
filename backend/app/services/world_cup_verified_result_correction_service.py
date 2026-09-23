@@ -125,8 +125,12 @@ def apply_verified_result_correction(
         return _finish(run_id, result)
     except Exception as exc:
         session.rollback()
-        logger.exception("Verified result correction failed for %s", clean_match_id)
-        result = _error_result(str(exc), audit_meta)
+        logger.error(
+            "Verified result correction failed for %s: %s",
+            clean_match_id,
+            type(exc).__name__,
+        )
+        result = _error_result("Verified result correction failed", audit_meta)
         result["match_id"] = clean_match_id
         return _finish(run_id, result)
     finally:

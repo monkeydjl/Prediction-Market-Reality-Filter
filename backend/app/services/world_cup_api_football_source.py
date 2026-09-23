@@ -210,8 +210,8 @@ def test_world_cup_api_football_connection() -> dict[str, Any]:
             body = response.read(64 * 1024)
     except HTTPError as exc:
         return {"ok": False, "error": f"HTTP {exc.code}"}
-    except (TimeoutError, URLError) as exc:
-        return {"ok": False, "error": f"Connection failed: {exc}"}
+    except (TimeoutError, URLError):
+        return {"ok": False, "error": "API-Football connection failed"}
 
     try:
         data = json.loads(body.decode("utf-8"))
@@ -292,13 +292,14 @@ def validate_world_cup_api_football_pipeline() -> dict[str, Any]:
             result["error"] = fixture_error
             return result
     except Exception as exc:
+        error = f"Fixture fetch failed: {type(exc).__name__}"
         result["steps"].append({
             "name": "fixture_fetch",
             "ok": False,
-            "error": str(exc),
+            "error": error,
         })
         result["ok"] = False
-        result["error"] = f"Fixture fetch failed: {exc}"
+        result["error"] = error
         return result
 
     # Step 3: compare with stored facts

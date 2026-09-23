@@ -800,7 +800,10 @@ async def get_tournament_simulation(
     result["groups"] = {group: teams for group, teams in groups.items()}
     result["knockout_fixtures"] = knockout_fixture_payload
     result["qualification_state"] = qualification_state
-    result["sports_fact_status"] = sports_fact_status(tournament=WORLD_CUP_TOURNAMENT)
+    result["sports_fact_status"] = {
+        **sports_fact_status(tournament=WORLD_CUP_TOURNAMENT),
+        "configured_path": "redacted",
+    }
     result["real_data_readiness"] = real_data_readiness
     result["cache_signature"] = cache_key
     result["cached"] = False

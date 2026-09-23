@@ -189,7 +189,7 @@ async def _run_async_optimization_impl(engine_name: str, task_id: str) -> dict[s
                 )
 
             except Exception as e:
-                error_msg = str(e)
+                error_msg = f"Optimization failed: {type(e).__name__}"
                 results["errors"].append({
                     "match_id": fixture.match_id,
                     "match": match_name,
@@ -256,7 +256,7 @@ async def _run_async_optimization_impl(engine_name: str, task_id: str) -> dict[s
 
     except Exception as e:
         # Mark task as failed
-        error_msg = f"优化任务失败: {str(e)}"
+        error_msg = f"优化任务失败: {type(e).__name__}"
         await task_manager.mark_failed(task_id, error_msg)
         return {
             "status": "error",

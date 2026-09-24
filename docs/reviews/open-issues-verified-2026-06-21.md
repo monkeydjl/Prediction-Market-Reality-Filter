@@ -51,8 +51,10 @@
 
 ## 🔵 P3 — 长尾（体验 / 无障碍 / 整洁）
 
-- 后端：类型注解不全；中英混合注释；懒导入隐藏依赖。
-- 前端（剩余长尾）：图标按钮 aria-label 需继续逐页抽查；按钮/inputCls 样式重复 8+ 处；少量标题 tooltip 需继续补齐；等。
+> ✅ **2026-09-24 复核（Stage 2A 合并后）：** ~~后端类型注解不全~~（已过时——mypy 已是阻塞门禁，328 文件零错误）、~~按钮/inputCls 样式重复 8+ 处~~（已过时——全部经 `@/lib/ui-classes` 共享导入）。~~图标按钮 aria-label 逐页抽查~~ 本批完成：全量启发式扫描确认仅 `sports/world-cup/page.tsx` 小组视图的清除球队筛选按钮缺 `aria-label`/`title`/`aria-hidden`（同页筹码视图兄弟按钮已有），已修复；其余含 lucide 图标的按钮均为图标+文字形态无需 aria-label，`Trash2` 两处图标已带 `aria-hidden`。前端剩余长尾（少量标题 tooltip）未再发现具体实例。
+
+- 后端：中英混合注释；懒导入隐藏依赖。
+- 前端（剩余长尾）：等。
 
 > ✅ **本批已修 P3：** 后端删除 `utcutc_now` 死代码并补 `test_config.py`、`.coveragerc`、完整 analyze→resolve HTTP E2E；前端 recent-predictions 显示事件标题、Link 卡片 focus-visible、AppNav `aria-current` + skip-link、Sparkline memo、`fmtDateTime` 复用 `Intl.DateTimeFormat`、证据时间改绝对时间、外链 `rel="noopener noreferrer"`、recent prediction 截断标题 tooltip、GET cache 过期清理、过滤控件可见 label、删除 `EvidenceList` 死导出。
 

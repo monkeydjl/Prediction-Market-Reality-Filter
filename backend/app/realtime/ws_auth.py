@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import secrets
+import sqlite3
 import time
 from dataclasses import dataclass
 
@@ -87,7 +88,7 @@ class TicketStore:
         return hashlib.sha256(ticket.encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _ensure_schema(conn) -> None:
+    def _ensure_schema(conn: sqlite3.Connection) -> None:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS realtime_ws_tickets (

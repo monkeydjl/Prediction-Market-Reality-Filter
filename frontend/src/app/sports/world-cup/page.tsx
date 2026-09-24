@@ -612,9 +612,11 @@ export default function WorldCupPage() {
                 </span>
                 <button
                   onClick={handleClearTeamFilter}
+                  aria-label="清除球队筛选"
+                  title="清除球队筛选"
                   className="rounded-sm hover:bg-primary/20 transition-colors"
                 >
-                  <X className="size-4 text-primary" />
+                  <X className="size-4 text-primary" aria-hidden="true" />
                 </button>
               </div>
             )}

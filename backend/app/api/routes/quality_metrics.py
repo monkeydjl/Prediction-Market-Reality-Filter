@@ -155,14 +155,20 @@ async def quality_metrics_summary(
     try:
         calibration = calibration_summary()
     except Exception as exc:
-        logger.warning("calibration_summary failed: %s", exc)
-        calibration = {"error": str(exc)}
+        logger.warning(
+            "calibration_summary failed: %s",
+            type(exc).__name__,
+        )
+        calibration = {"error": "calibration unavailable"}
 
     try:
         buckets = calibration_bucket_summary()
     except Exception as exc:
-        logger.warning("calibration_bucket_summary failed: %s", exc)
-        buckets = {"error": str(exc)}
+        logger.warning(
+            "calibration_bucket_summary failed: %s",
+            type(exc).__name__,
+        )
+        buckets = {"error": "calibration unavailable"}
 
     return {
         "timeframe": timeframe,
@@ -288,20 +294,22 @@ async def quality_metrics_anomalies() -> dict[str, Any]:
 
     # Scheduler failed runs (last per job)
     try:
-        for job_name in ("event_discover", "event_auto_resolve", "loop_db_maintenance"):
-            run = loop_run_store.last_run(job_name)
-            if run and run.get("status") == "failed":
+        for run in loop_run_store.latest_run_per_job():
+            if run.get("status") == "failed":
                 anomalies.append({
                     "code": "scheduler_job_failed",
                     "severity": "high",
                     "detail": {
-                        "job_name": job_name,
+                        "job_name": run.get("job_name"),
                         "started_at": run.get("started_at"),
                         "error": run.get("error"),
                     },
                 })
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("failed-run anomaly check failed: %s", exc)
+        logger.warning(
+            "failed-run anomaly check failed: %s",
+            type(exc).__name__,
+        )
 
     # Calibration Brier anomaly
     try:
@@ -319,7 +327,10 @@ async def quality_metrics_anomalies() -> dict[str, Any]:
                 },
             })
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("brier anomaly check failed: %s", exc)
+        logger.warning(
+            "brier anomaly check failed: %s",
+            type(exc).__name__,
+        )
 
     # Per-event overlay anomalies (collect sample event_ids for operator jump links)
     wide_spread_ids: list[str] = []
@@ -466,12 +477,8 @@ async def quality_metrics_drift(
 def _scheduler_summary(recent_limit: int) -> dict[str, Any]:
     """Build the scheduler block for /quality-metrics/summary."""
     last_runs: dict[str, dict[str, Any] | None] = {}
-    for job_name in ("event_discover", "event_auto_resolve", "loop_db_maintenance"):
-        run = loop_run_store.last_run(job_name)
-        if not run:
-            last_runs[job_name] = None
-            continue
-        last_runs[job_name] = {
+    for run in loop_run_store.latest_run_per_job():
+        last_runs[str(run["job_name"])] = {
             "status": run.get("status"),
             "started_at": run.get("started_at"),
             "finished_at": run.get("finished_at"),
@@ -576,10 +583,10 @@ async def quality_metrics_report(
             continue
         try:
             items.append(extract_metrics(record))
-        except Exception as exc:
+        except Exception:
             report_errors.append({
                 "event_id": record.get("event_id", "?"),
-                "error": str(exc),
+                "error": "quality metric extraction failed",
             })
 
     return build_report(items, report_errors)

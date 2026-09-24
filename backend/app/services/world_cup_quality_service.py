@@ -733,6 +733,7 @@ def apply_consistency_history_repair(
     except Exception as exc:
         if not dry_run and confirm:
             session.rollback()
+        error = f"Consistency repair failed: {type(exc).__name__}"
         _finish_consistency_repair_audit_run(run_id, {
             "status": "error",
             "dry_run": dry_run,
@@ -744,9 +745,9 @@ def apply_consistency_history_repair(
             "skipped": 0,
             "manual_review": 0,
             "audit_metadata": audit_meta,
-            "error": str(exc),
+            "error": error,
         })
-        raise
+        raise RuntimeError(error) from None
     finally:
         if should_close:
             close_prediction_session(session)

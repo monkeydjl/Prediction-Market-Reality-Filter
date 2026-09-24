@@ -15,6 +15,10 @@ from app.api.router import api_router
 from app.api.security import is_write_key_valid
 from app.core.config import settings
 from app.core.logging import setup_logging
+from app.core.preflight import (
+    log_realtime_push_posture,
+    validate_production_config,
+)
 from app.core.rate_limit import InMemoryRateLimitMiddleware
 from app.core.scheduler import start_scheduler, stop_scheduler
 from app.services.llm_gateway_service import has_configured_llm_route
@@ -26,9 +30,138 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+# Ledger job names for the two core startup components that report through
+# storage. Deliberately distinct from the scheduler's own `loop_db_maintenance`
+# job, which runs the same integrity check on a daily trigger: "the last boot
+# found this" and "the last daily check found this" are different facts, and
+# collapsing them would let one clear the other without re-testing it.
+STARTUP_SQLITE_INTEGRITY_JOB = "startup_sqlite_integrity"
+STARTUP_PREDICTION_DB_JOB = "startup_prediction_db_init"
+
+# Startup steps split by what a failure *means*, because the original code did
+# not split them at all: all six sat behind `except Exception: logger.warning`,
+# so a database too damaged for PRAGMA integrity_check to parse produced the same
+# outcome as an unreadable World Cup fact file -- a warning nobody reads and a
+# 200 from /api/health.
+#
+# Core: maintains or initialises state the rest of the system writes through. A
+# failure either aborts the boot (the loop DB, which backs the ledger itself) or
+# is persisted as a `failed` run so /api/health answers 503.
+#
+# Optional: degrades one feature. Logged, and the app comes up -- refusing would
+# take away the dashboard the operator needs to see the problem, and a false
+# "unavailable" is its own outage.
+CORE_STARTUP_COMPONENTS = (
+    "loop_db_maintenance",         # sqlite_db.maintain(); fail-loud, see below
+    STARTUP_SQLITE_INTEGRITY_JOB,  # sqlite_db.maintain_all()
+    STARTUP_PREDICTION_DB_JOB,     # init_prediction_db()
+)
+OPTIONAL_STARTUP_COMPONENTS = (
+    "event_prediction_reconcile",   # reconcile_predictions()
+    "optimization_task_reconcile",  # reconcile_interrupted_tasks()
+    "world_cup_match_scoring",      # score_all_finished_matches()
+)
+
+
+def _safe_error(what: str, exc: BaseException) -> str:
+    """A failure description fit for the ledger and for /api/health.
+
+    Names the component and the exception *type*, never `str(exc)`. The row's
+    `error` column is returned verbatim to an authenticated /api/health caller,
+    and a sqlite3 or OSError message routinely carries the database path.
+    Production logging preserves the operation and exception type while its
+    handler filter removes traceback and exception details.
+    """
+    return f"{what}: {type(exc).__name__}"
+
+
+def _record_core_startup_outcome(
+    job: str,
+    error: str | None,
+    result: dict[str, Any] | None = None,
+) -> None:
+    """Persist one core startup component's outcome to the loop_runs ledger.
+
+    This is the only thing that carries a startup finding past the log file:
+    `/api/health` derives `failed_runs` from `latest_run_per_job`, so a `failed`
+    row here is what makes the probe answer 503 -- and it survives the restart an
+    operator reaches for first. Retention already exempts each job's newest row,
+    so the cleanup job cannot delete the reason health is degraded.
+
+    A success row is written on every clean boot too, not only a failure row.
+    Nothing re-checks `init_prediction_db` on a schedule, so without it one bad
+    boot would pin /api/health at 503 for the life of the install and restoring
+    the store could never clear it.
+
+    A ledger write that fails refuses the boot in *both* directions, and the
+    success direction is the less obvious one. The reason is not that the success
+    row is precious: the ledger is the only place any startup or scheduler
+    failure is durably recorded, and `/api/health` derives its whole verdict from
+    it, so a boot that cannot write there has proved the health mechanism is
+    dead. Coming up anyway serves 200 indefinitely -- every later failure is
+    equally unrecordable, and "an earlier failed row still stands" is not a
+    fallback, because writing such a row is precisely what does not work.
+
+    A half-written row is why this cannot be softened to "ignore it if the row is
+    a success". `start_run` succeeding and `finish_run` raising leaves a `running`
+    row nothing will finish, and the probe degrades only on `status == "failed"`
+    -- so the residue is indistinguishable from a job still in progress.
+    """
+    from app.memory import loop_run_store
+
+    try:
+        run_id = loop_run_store.start_run(job)
+        loop_run_store.finish_run(
+            run_id,
+            "failed" if error else "success",
+            error=error,
+            result=result or {},
+        )
+    except Exception as exc:
+        if error is None:
+            raise RuntimeError(
+                f"Core startup component {job!r} passed, but its outcome could "
+                f"not be recorded in the run ledger ({type(exc).__name__}). The "
+                f"ledger is what /api/health reports through, so the probe would "
+                f"answer 200 while no failure -- now or later -- could ever be "
+                f"recorded. Refusing to start."
+            ) from exc
+        raise RuntimeError(
+            f"Core startup component {job!r} failed and the failure could not be "
+            f"recorded in the run ledger ({type(exc).__name__}), so /api/health "
+            f"would answer 200 over a broken core component. Refusing to start."
+        ) from exc
+
+
+def _live_alert_channels(sentry_live: bool) -> list[str]:
+    """Push channels that would actually reach somebody outside this process.
+
+    Each channel needs two things, and counting one of them is what would make
+    the startup line a lie: a DSN with no importable `sentry_sdk` captures
+    nothing (`init_sentry` says so and returns False, which is the `sentry_live`
+    argument), and an enabled webhook with no URL only writes the local WARNING
+    the dispatcher already writes. The loop-run ledger, the Prometheus counter
+    and `/api/health` are all pull-only, so none of them counts here.
+    """
+    channels = []
+    if sentry_live:
+        channels.append("Sentry")
+    if (settings.SCHEDULER_FAILURE_ALERT_ENABLED
+            and settings.SCHEDULER_FAILURE_ALERT_WEBHOOK_URL):
+        channels.append("scheduler-failure webhook")
+    if settings.DRIFT_ALERTS_ENABLED and settings.DRIFT_ALERT_WEBHOOK_URL:
+        channels.append("calibration-drift webhook")
+    return channels
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("EIP v0.3.0 starting - app: /")
+    # Before anything opens a database, spends a token or binds a port: a
+    # production process whose configuration does not meet the production
+    # requirements must not come up at all. No-op outside PMRF_ENV=production.
+    validate_production_config()
+    log_realtime_push_posture()
     if has_configured_llm_route("default"):
         logger.info("LLM Gateway route is configured")
     elif not settings.OPENAI_API_KEY:
@@ -53,13 +186,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Initialize Sentry before any route / scheduler runs so failures during
     # startup (e.g., LLM check) get captured. No-op when SENTRY_DSN is empty.
     from app.utils.sentry import init_sentry
-    init_sentry(
+    sentry_live = init_sentry(
         dsn=settings.SENTRY_DSN,
         environment=settings.SENTRY_ENVIRONMENT,
         release=settings.SENTRY_RELEASE or "pmrf@0.3.0",
         traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
         attach_stacktrace=settings.SENTRY_ATTACH_STACKTRACES,
     )
+    # Every push channel ships off, and none of the five settings behind them is
+    # named in either overlay template, in deploy/docker-compose.yml or in the
+    # systemd unit -- so the documented production deploy has none live and
+    # nothing said so. A failed job is still recorded (ledger row, Prometheus
+    # counter, /api/health 503); what is absent is anything that goes looking for
+    # an operator. Warn like the cost cap rather than refuse to boot: missing
+    # alerting breaks nothing that already works.
+    alert_channels = _live_alert_channels(sentry_live)
+    if alert_channels:
+        logger.info("Alert push channels live: %s", ", ".join(alert_channels))
+    else:
+        logger.warning(
+            "No alert push channel is configured — a failed job is recorded "
+            "(loop_runs ledger, pmrf_scheduler_failed_runs_total, /api/health "
+            "503) but nothing notifies anybody. Set SENTRY_DSN, or "
+            "SCHEDULER_FAILURE_ALERT_ENABLED=true with a webhook URL."
+        )
     if settings.LLM_STARTUP_CHECK_ENABLED:
         await validate_primary_llm_startup()
         logger.info("Primary LLM startup check passed.")
@@ -92,8 +242,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # measured, a corrupt kernel DB (33,882 prediction rows) booted clean and
     # /api/health answered 200 "ok". A failed run row is what makes health report
     # `degraded`, so the finding survives the log scrollback nobody reads.
+    # `maintain_all` has three outcomes, and only two of them used to be handled.
+    # It reports a corrupt store by *returning* ok=False, which was recorded
+    # correctly. It also *raises* -- sqlite3.DatabaseError from a file too damaged
+    # for PRAGMA integrity_check to parse, OSError from the volume underneath it --
+    # and that went to `logger.warning` beside the optional steps, so the app came
+    # up and /api/health answered 200. The more damaged the database, the healthier
+    # it looked. "Could not run" is not a pass.
     try:
         other_stores = sqlite_db.maintain_all()
+    except Exception as exc:
+        logger.error(
+            "SQLite store maintenance could not run at startup — /api/health "
+            "will report degraded. Check the data volume and restore from a "
+            "backup if a store is damaged.",
+            exc_info=True,
+        )
+        _record_core_startup_outcome(
+            STARTUP_SQLITE_INTEGRITY_JOB,
+            _safe_error("SQLite store maintenance could not run", exc),
+        )
+    else:
         if not other_stores["ok"]:
             failed = other_stores.get("failed") or []
             logger.error(
@@ -101,22 +270,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 "report degraded. Restore these stores from a backup.",
                 ", ".join(failed),
             )
-            from app.memory import loop_run_store
-
-            run_id = loop_run_store.start_run("loop_db_maintenance")
-            loop_run_store.finish_run(
-                run_id,
-                "failed",
-                error=f"SQLite integrity failed for: {', '.join(failed)}",
-                result=other_stores,
+            _record_core_startup_outcome(
+                STARTUP_SQLITE_INTEGRITY_JOB,
+                f"SQLite integrity failed for: {', '.join(failed)}",
+                # Setting names and pass/fail only. `maintain_all` puts a full
+                # `f"{type(exc).__name__}: {exc}"` in each store's `error`, and
+                # this dict is returned verbatim to an authenticated /api/health.
+                result={
+                    "failed": failed,
+                    "checked": sorted(other_stores.get("stores") or {}),
+                },
             )
         else:
             logger.info(
                 "SQLite maintenance passed for %d store(s)",
                 len(other_stores.get("stores") or {}),
             )
-    except Exception as exc:
-        logger.warning("SQLite store maintenance skipped: %s", exc, exc_info=True)
+            _record_core_startup_outcome(STARTUP_SQLITE_INTEGRITY_JOB, None)
 
     # Heal orphan predictions left by crashes during resolve_with_calibration()
     # (event resolved in JSON but prediction still 'open' in SQLite).
@@ -145,13 +315,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "Optimization task reconciliation skipped: %s", exc, exc_info=True
         )
 
-    # Initialize World Cup prediction database (creates tables if missing)
+    # Initialize World Cup prediction database (creates tables if missing).
+    # Core: this is the DDL every match prediction and every scoring pass writes
+    # through, so a failure here means later writes fail one at a time inside
+    # scheduler jobs rather than once, visibly, at boot. Nothing re-checks it on a
+    # schedule, which is why the clean path records a success row -- otherwise one
+    # bad boot would pin /api/health at 503 forever.
     try:
         from app.utils.prediction_db import init_prediction_db
         init_prediction_db()
-        logger.info("World Cup prediction DB initialized.")
     except Exception as exc:
-        logger.warning("World Cup prediction DB init skipped: %s", exc, exc_info=True)
+        logger.error(
+            "World Cup prediction DB init failed — /api/health will report "
+            "degraded.",
+            exc_info=True,
+        )
+        _record_core_startup_outcome(
+            STARTUP_PREDICTION_DB_JOB,
+            _safe_error("World Cup prediction DB init failed", exc),
+        )
+    else:
+        logger.info("World Cup prediction DB initialized.")
+        _record_core_startup_outcome(STARTUP_PREDICTION_DB_JOB, None)
 
     # Score finished matches (feedback loop reconciliation)
     try:
@@ -182,6 +367,10 @@ app = FastAPI(
         "and estimates probability change."
     ),
     lifespan=lifespan,
+    # None removes the route entirely, so the schema and both doc pages 404
+    # rather than rendering an empty page. FastAPI gates /docs and /redoc on
+    # openapi_url too, so all three go together.
+    openapi_url="/openapi.json" if settings.OPENAPI_ENABLED else None,
 )
 
 _SECURITY_HEADERS = {
@@ -278,7 +467,11 @@ async def api_overview() -> dict[str, Any]:
         "system": "Event Intelligence Platform",
         "version": "0.3.0",
         "app": "/",
-        "docs": "/docs",
+        # None when OPENAPI_ENABLED is false. `docs_url` keeps its default even
+        # then -- FastAPI gates the route on `openapi_url and docs_url` -- so the
+        # pointer has to ask the same question the router asked, or it advertises
+        # a 404 in exactly the deployment that setting is for.
+        "docs": app.docs_url if app.openapi_url else None,
         "endpoints": {
             # Event discovery & analysis
             "event_discovery": "GET  /api/events/discover",
@@ -353,10 +546,14 @@ async def prometheus_metrics() -> Response:
     Public endpoint — no ``X-API-Key`` required (Prometheus scrapers cannot
     authenticate, and the metrics are aggregate counters only, no per-event
     operator-grade intelligence).
+
+    Offloaded like ``api_health`` above: the refresh reads the whole event store
+    (68 ms of a 78 ms scrape, over a 3.6 MB file) and Prometheus scrapes every
+    15s, so running it inline stalled the loop 5,760 times a day.
     """
     from app.utils.metrics import render_metrics
 
-    body, content_type = render_metrics()
+    body, content_type = await asyncio.to_thread(render_metrics)
     return Response(content=body, media_type=content_type)
 
 
@@ -372,4 +569,7 @@ if settings.BACKEND_SERVE_FRONTEND and _FRONTEND_OUT.is_dir():
 else:
     @app.get("/", include_in_schema=False)
     async def backend_root() -> RedirectResponse:
-        return RedirectResponse(url="/docs")
+        # /docs does not exist when OPENAPI_ENABLED is false, so the fallback is
+        # the machine-readable overview -- which is also the only endpoint that
+        # still describes the API in that deployment.
+        return RedirectResponse(url="/docs" if app.openapi_url else "/api")

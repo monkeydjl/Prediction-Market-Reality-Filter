@@ -17,9 +17,11 @@ Why a wrapper module instead of using ``sentry_sdk`` directly?
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from sentry_sdk.types import Event, Hint
 
 # The only levels sentry_sdk.capture_message accepts. Spelled out here so the
 # wrapper's own signature is the boundary that rejects a bad level, rather than
@@ -33,6 +35,29 @@ try:
 except ImportError:  # pragma: no cover - env misconfig
     sentry_sdk = None  # type: ignore[assignment]
     _SENTRY_AVAILABLE = False
+
+
+def _sanitize_event(event: Event, _hint: Hint) -> Event:
+    exception = event.get("exception")
+    if isinstance(exception, dict):
+        values = exception.get("values")
+        if isinstance(values, list):
+            for value in values:
+                if isinstance(value, dict):
+                    value["value"] = "Application error"
+                    stacktrace = value.get("stacktrace")
+                    if isinstance(stacktrace, dict):
+                        frames = stacktrace.get("frames")
+                        if isinstance(frames, list):
+                            for frame in frames:
+                                if isinstance(frame, dict):
+                                    frame.pop("abs_path", None)
+                                    frame.pop("vars", None)
+    request = event.get("request")
+    if isinstance(request, dict):
+        request.pop("data", None)
+    event.pop("breadcrumbs", None)
+    return event
 
 
 def init_sentry(
@@ -84,6 +109,10 @@ def init_sentry(
         traces_sample_rate=traces_sample_rate,
         attach_stacktrace=attach_stacktrace,
         integrations=integrations,
+        before_send=_sanitize_event,
+        include_local_variables=False,
+        include_source_context=False,
+        max_request_body_size="never",
         # Send default PII off — we never want operator API keys or
         # request bodies (which may contain user-supplied news context)
         # in Sentry. The existing logging already redacts secrets; mirror

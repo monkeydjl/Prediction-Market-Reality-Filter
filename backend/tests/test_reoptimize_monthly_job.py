@@ -8,6 +8,9 @@ trials tied at 0.0, ``study.best_trial`` was whichever ran first, and that trial
 weights were persisted as the sport's best candidate and reported as a completed
 run.
 """
+import json
+import logging
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -120,3 +123,71 @@ async def test_a_sport_that_persisted_nothing_is_not_counted_as_completed(captur
     assert final["result"]["skipped"] == {"mlb": "zero_samples"}
     # Two sports did succeed, so the run as a whole still counts as one.
     assert final["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_partial_failure_is_safe_in_result_error_and_logs(captured):
+    sensitive = (
+        "SELECT secret FROM D:/private/optimizer.db "
+        "Authorization=Bearer fake-api-key ticket=fake-ticket "
+        "subprotocol=fake-subprotocol https://upstream.example/private"
+    )
+    rendered_logs = []
+
+    class RenderedLogHandler(logging.Handler):
+        def emit(self, record):
+            rendered_logs.append(self.format(record))
+
+    def optimize(sport, **_kwargs):
+        if sport == "mlb":
+            raise RuntimeError(sensitive)
+        return {"best_score": 0.7, "saved_candidate": {"id": 2},
+                "not_persisted_reason": None}
+
+    handler = RenderedLogHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logging.getLogger("app.core.scheduler").addHandler(handler)
+    try:
+        with patch(
+            "app.kernel.backtest.match_loader.load_sport_matches_for_backtest",
+            return_value=[_match(i) for i in range(50)],
+        ), patch("app.kernel.parameter_optimizer.ParameterOptimizer") as MockOpt:
+            MockOpt.return_value.optimize_sync = MagicMock(side_effect=optimize)
+            await _job_reoptimize_monthly()
+    finally:
+        logging.getLogger("app.core.scheduler").removeHandler(handler)
+
+    final = captured["finish"][-1]
+    exported = json.dumps({"finish": final, "logs": rendered_logs})
+    assert final["status"] == "success"
+    assert final["result"]["sports"] == ["nba", "nhl"]
+    assert final["result"]["skipped"]["mlb"] == "error:RuntimeError"
+    for fragment in (
+        "SELECT secret", "D:/private", "fake-api-key", "fake-ticket",
+        "fake-subprotocol", "upstream.example", "Traceback",
+    ):
+        assert fragment not in exported
+    assert "RuntimeError" in exported
+
+
+@pytest.mark.asyncio
+async def test_all_failures_use_a_fixed_scheduler_error(captured):
+    sensitive = (
+        "SELECT secret FROM D:/private/optimizer.db "
+        "Authorization=Bearer fake-api-key ticket=fake-ticket"
+    )
+    with patch(
+        "app.kernel.backtest.match_loader.load_sport_matches_for_backtest",
+        return_value=[_match(i) for i in range(50)],
+    ), patch("app.kernel.parameter_optimizer.ParameterOptimizer") as MockOpt:
+        MockOpt.return_value.optimize_sync = MagicMock(
+            side_effect=RuntimeError(sensitive)
+        )
+        await _job_reoptimize_monthly()
+
+    final = captured["finish"][-1]
+    assert final["status"] == "failed"
+    assert final["error"] == "No sport re-optimized"
+    exported = json.dumps(final)
+    assert sensitive not in exported
+    assert set(final["result"]["skipped"].values()) == {"error:RuntimeError"}

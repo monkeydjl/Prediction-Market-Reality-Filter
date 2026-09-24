@@ -13,6 +13,7 @@ Covers:
 """
 from __future__ import annotations
 
+import logging
 import tempfile
 import unittest
 from pathlib import Path
@@ -202,6 +203,35 @@ class TestMetricsModuleDefinitions(unittest.TestCase):
         # The Prometheus registry is global; we can't easily reset between
         # tests, so just assert no exception fired.
 
+    def test_last_success_gauge_covers_every_ledger_job(self):
+        """``SCHEDULER_LAST_SUCCESS`` is labelled by ``job_name`` but was
+        refreshed for three hardcoded names, so twelve of the live ledger's
+        fifteen jobs had no series at all -- and a "last success older than N"
+        alert cannot fire on a series that does not exist."""
+        from app.utils import metrics
+
+        def _gauge(job_name: str) -> float | None:
+            for family in metrics.SCHEDULER_LAST_SUCCESS.collect():
+                for sample in family.samples:
+                    if sample.labels.get("job_name") == job_name:
+                        return float(sample.value)
+            return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with _StoreContext(Path(tmp)):
+                for name in ("event_discover", "backup_stores", "sport_market_discover"):
+                    run_id = loop_run_store.start_run(name)
+                    loop_run_store.finish_run(run_id, "success")
+                stale = loop_run_store.start_run("world_cup_api_football_validate")
+                loop_run_store.finish_run(stale, "failed", error="0 fixtures")
+
+                metrics._refresh_scheduler_gauges()
+
+        self.assertIsNotNone(_gauge("backup_stores"))
+        self.assertIsNotNone(_gauge("sport_market_discover"))
+        # A failed last run must not stamp a success timestamp.
+        self.assertIsNone(_gauge("world_cup_api_football_validate"))
+
 
 # ---------------------------------------------------------------------------
 # /metrics HTTP endpoint tests
@@ -322,6 +352,55 @@ class TestQualityMetricsSummary(unittest.TestCase):
                 self.assertIn("calibration", data)
                 self.assertIn("calibration_buckets", data)
                 self.assertIn("scheduler", data)
+
+    def test_summary_returns_safe_calibration_errors(self):
+        sensitive_error = (
+            "SELECT secret FROM C:/private/loop.db?token=fake-secret"
+        )
+        rendered_logs = []
+
+        class RenderedLogHandler(logging.Handler):
+            def emit(self, record):
+                rendered_logs.append(self.format(record))
+
+        log_handler = RenderedLogHandler()
+        log_handler.setFormatter(logging.Formatter("%(message)s"))
+        quality_metrics_routes.logger.addHandler(log_handler)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with _StoreContext(Path(tmp)), patch.object(
+                quality_metrics_routes,
+                "calibration_summary",
+                side_effect=RuntimeError(sensitive_error),
+            ), patch.object(
+                quality_metrics_routes,
+                "calibration_bucket_summary",
+                side_effect=RuntimeError(sensitive_error),
+            ):
+                try:
+                    response = TestClient(self._app()).get(
+                        "/quality-metrics/summary"
+                    )
+                finally:
+                    quality_metrics_routes.logger.removeHandler(log_handler)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["counts"]["events"], 0)
+        self.assertEqual(
+            data["calibration"],
+            {"error": "calibration unavailable"},
+        )
+        self.assertEqual(
+            data["calibration_buckets"],
+            {"error": "calibration unavailable"},
+        )
+        exported = response.text + "\n" + "\n".join(rendered_logs)
+        self.assertNotIn("SELECT secret", exported)
+        self.assertNotIn("C:/private", exported)
+        self.assertNotIn("fake-secret", exported)
+        self.assertNotIn("Traceback", exported)
+        self.assertIn("RuntimeError", "\n".join(rendered_logs))
 
     def test_summary_aggregates_direction_counts(self):
         events = [
@@ -470,6 +549,28 @@ class TestQualityMetricsSummary(unittest.TestCase):
                 self.assertEqual(sched["last_runs"]["event_discover"]["status"], "success")
                 self.assertEqual(sched["recent_failed_count"], 0)
 
+    def test_summary_last_runs_covers_every_ledger_job(self):
+        """The block named three jobs. On the live ledger that hid twelve names,
+        including the only one whose last run had failed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with _StoreContext(Path(tmp)):
+                for name in ("event_discover", "backup_stores", "world_cup_api_football_validate"):
+                    run_id = loop_run_store.start_run(name)
+                    loop_run_store.finish_run(
+                        run_id,
+                        "failed" if name == "world_cup_api_football_validate" else "success",
+                    )
+
+                client = TestClient(self._app())
+                sched = client.get("/quality-metrics/summary").json()["scheduler"]
+
+        self.assertEqual(
+            set(sched["last_runs"]),
+            {"event_discover", "backup_stores", "world_cup_api_football_validate"},
+        )
+        self.assertEqual(sched["last_runs"]["world_cup_api_football_validate"]["status"], "failed")
+        self.assertEqual(sched["recent_failed_count"], 1)
+
 
 # ---------------------------------------------------------------------------
 # /api/quality-metrics/timeseries
@@ -576,6 +677,49 @@ class TestQualityMetricsAnomalies(unittest.TestCase):
                     codes = [a["code"] for a in data["anomalies"]]
                     self.assertIn("llm_degraded_mode_events", codes)
 
+    def test_anomaly_helper_failures_do_not_log_exception_text(self):
+        sensitive_error = (
+            "SELECT secret FROM C:/private/anomalies.db?token=fake-secret"
+        )
+        rendered_logs = []
+
+        class RenderedLogHandler(logging.Handler):
+            def emit(self, record):
+                rendered_logs.append(self.format(record))
+
+        log_handler = RenderedLogHandler()
+        log_handler.setFormatter(logging.Formatter("%(message)s"))
+        quality_metrics_routes.logger.addHandler(log_handler)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with _StoreContext(Path(tmp)), patch.object(
+                settings,
+                "SCHEDULER_ENABLED",
+                False,
+            ), patch.object(
+                loop_run_store,
+                "latest_run_per_job",
+                side_effect=RuntimeError(sensitive_error),
+            ), patch.object(
+                quality_metrics_routes,
+                "calibration_summary",
+                side_effect=RuntimeError(sensitive_error),
+            ):
+                try:
+                    response = TestClient(self._app()).get(
+                        "/quality-metrics/anomalies"
+                    )
+                finally:
+                    quality_metrics_routes.logger.removeHandler(log_handler)
+
+        self.assertEqual(response.status_code, 200)
+        exported = response.text + "\n" + "\n".join(rendered_logs)
+        self.assertNotIn("SELECT secret", exported)
+        self.assertNotIn("C:/private", exported)
+        self.assertNotIn("fake-secret", exported)
+        self.assertNotIn("Traceback", exported)
+        self.assertIn("RuntimeError", "\n".join(rendered_logs))
+
     def test_anomalies_flags_failed_scheduler_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             with _StoreContext(Path(tmp)):
@@ -587,6 +731,28 @@ class TestQualityMetricsAnomalies(unittest.TestCase):
                     data = client.get("/quality-metrics/anomalies").json()
                     codes = [a["code"] for a in data["anomalies"]]
                     self.assertIn("scheduler_job_failed", codes)
+
+    def test_anomalies_flags_a_failed_job_outside_the_old_three(self):
+        """The anomaly scan named the same three jobs the status payload did.
+        ``world_cup_api_football_validate`` is the live ledger's one failing
+        job and was not among them, so the scan reported nothing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with _StoreContext(Path(tmp)):
+                ok = loop_run_store.start_run("event_discover")
+                loop_run_store.finish_run(ok, "success", result={"n": 1})
+                bad = loop_run_store.start_run("world_cup_api_football_validate")
+                loop_run_store.finish_run(bad, "failed", error="0 fixtures")
+
+                with patch.object(settings, "SCHEDULER_ENABLED", False):
+                    client = TestClient(self._app())
+                    data = client.get("/quality-metrics/anomalies").json()
+
+        failed = [a for a in data["anomalies"] if a["code"] == "scheduler_job_failed"]
+        self.assertEqual(
+            [a["detail"]["job_name"] for a in failed],
+            ["world_cup_api_football_validate"],
+        )
+        self.assertEqual(failed[0]["detail"]["error"], "0 fixtures")
 
 
 class TestQualityMetricsDriftRoute(unittest.TestCase):

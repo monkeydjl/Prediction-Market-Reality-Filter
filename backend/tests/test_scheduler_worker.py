@@ -1,4 +1,6 @@
 import asyncio
+import contextlib
+import io
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -10,6 +12,30 @@ async def _return_immediately():
 
 
 class SchedulerWorkerTests(unittest.TestCase):
+    def test_worker_hides_uncaught_startup_exception_text(self):
+        sensitive = (
+            "SELECT private_value FROM secret_table at "
+            "D:/private/runtime/worker.db Authorization=Bearer fake-api-key"
+        )
+        stderr = io.StringIO()
+        with patch.object(run_scheduler.settings, "SCHEDULER_ENABLED", True), \
+                patch.object(run_scheduler.settings, "LLM_STARTUP_CHECK_ENABLED", False), \
+                patch.object(run_scheduler.sqlite_db, "maintain", side_effect=RuntimeError(sensitive)), \
+                contextlib.redirect_stderr(stderr):
+            code = run_scheduler.main()
+
+        output = stderr.getvalue()
+        self.assertEqual(code, 1)
+        self.assertIn("Scheduler worker failed", output)
+        self.assertIn("RuntimeError", output)
+        for fragment in (
+            "SELECT private_value",
+            "D:/private/runtime/worker.db",
+            "fake-api-key",
+            "Traceback",
+        ):
+            self.assertNotIn(fragment, output)
+
     def test_worker_starts_scheduler_and_stops_on_shutdown(self):
         with patch.object(run_scheduler, "setup_logging"), \
                 patch.object(run_scheduler.settings, "SCHEDULER_ENABLED", True), \

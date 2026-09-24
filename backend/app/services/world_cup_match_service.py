@@ -298,11 +298,11 @@ def sync_world_cup_fixtures(source: str = "football-data") -> dict[str, Any]:
             "season": season
         }
 
-    except football_data_source.FootballDataAPIError as e:
+    except football_data_source.FootballDataAPIError:
         return {
             "status": "error",
             "source": source,
-            "error": f"Football-Data.org API error: {e}"
+            "error": "Football-Data.org API request failed",
         }
     except Exception as e:
         return {

@@ -235,8 +235,8 @@ class OptimizedParamsStore:
                     )
                     seed_result = ingestor.seed_elo_ratings(sport=sport)
                     elo_seed = {"ok": True, **(seed_result or {})}
-                except Exception as exc:  # noqa: BLE001
-                    elo_seed = {"ok": False, "error": str(exc)}
+                except Exception:  # noqa: BLE001
+                    elo_seed = {"ok": False, "error": "Elo reseed failed"}
             else:
                 elo_seed = {"ok": None, "skipped": True}
 

@@ -151,7 +151,10 @@ def maintain_all() -> dict[str, Any]:
         except Exception as exc:
             # Includes RuntimeError from maintain() and sqlite3.DatabaseError
             # from a file too damaged for PRAGMA integrity_check to parse.
-            stores[name] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            error = type(exc).__name__
+            if isinstance(exc, RuntimeError):
+                error = f"SQLite integrity check failed: {error}"
+            stores[name] = {"ok": False, "error": error}
             failures.append(name)
     return {"ok": not failures, "failed": failures, "stores": stores}
 

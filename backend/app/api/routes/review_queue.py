@@ -138,6 +138,9 @@ async def take_review_queue_action(
         raise HTTPException(status_code=404, detail="Review item not found") from None
     except ValueError as exc:
         # Banned vocabulary in the note — the store is the authority on this.
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=400,
+            detail="Review note contains prohibited terminology",
+        ) from exc
     item = await asyncio.to_thread(review_queue_store.get_item, item_id)
     return {"item": item}

@@ -69,7 +69,7 @@ class RunDailyPredictionUpdateTests(unittest.TestCase):
         mock_predict.assert_not_called()
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["step"], "fixture_sync")
-        self.assertEqual(result["error"], "API down")
+        self.assertEqual(result["error"], "World Cup fixture sync failed")
 
     def test_fixture_sync_exception(self):
         """sync_world_cup_fixtures raises; caught by outer try/except."""
@@ -80,7 +80,7 @@ class RunDailyPredictionUpdateTests(unittest.TestCase):
             result = asyncio.run(run_daily_prediction_update())
 
         self.assertEqual(result["status"], "error")
-        self.assertIn("connection refused", result["error"])
+        self.assertEqual(result["error"], "World Cup daily update failed")
 
     # ------------------------------------------------------------------
     # Step 2 - backfill failures
@@ -103,7 +103,7 @@ class RunDailyPredictionUpdateTests(unittest.TestCase):
 
         mock_predict.assert_not_called()
         self.assertEqual(result["status"], "error")
-        self.assertIn("backfill DB timeout", result["error"])
+        self.assertEqual(result["error"], "World Cup daily update failed")
 
     # ------------------------------------------------------------------
     # Step 3 - prediction failures
@@ -126,7 +126,7 @@ class RunDailyPredictionUpdateTests(unittest.TestCase):
             result = asyncio.run(run_daily_prediction_update())
 
         self.assertEqual(result["status"], "error")
-        self.assertIn("LLM quota exceeded", result["error"])
+        self.assertEqual(result["error"], "World Cup daily update failed")
 
 
 if __name__ == "__main__":

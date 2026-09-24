@@ -478,11 +478,11 @@ def main(argv: list[str] | None = None) -> int:
             target_dir=args.target_dir,
             verbose=args.verbose,
         )
-    except FileNotFoundError as e:
-        _print(f"[FAIL] {e}", file=sys.stderr)
+    except FileNotFoundError:
+        _print("[FAIL] Backup archive not found", file=sys.stderr)
         return 1
     except RuntimeError as e:
-        _print(f"[FAIL] {e}", file=sys.stderr)
+        _print(f"[FAIL] Restore failed: {type(e).__name__}", file=sys.stderr)
         return 1
 
     _print(_format_report(result, verbose=args.verbose))

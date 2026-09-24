@@ -506,8 +506,14 @@ class MarketSettlementService:
             except Exception as exc:
                 errors += 1
                 if len(error_details) < 10:
-                    error_details.append(f"{m['match_id']}: {exc}")
-                logger.error(f"Settlement processing failed for {m['match_id']}: {exc}")
+                    error_details.append(
+                        f"{m['match_id']}: {type(exc).__name__}"
+                    )
+                logger.error(
+                    "Settlement processing failed for %s: %s",
+                    m["match_id"],
+                    exc,
+                )
 
         return ScanResult(
             scanned=scanned, processed=processed, skipped=skipped,

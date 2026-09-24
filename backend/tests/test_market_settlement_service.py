@@ -4,6 +4,9 @@ Covers: _compute_brier, _compute_signed_error, _compute_direction_correct,
 _update_market_calibration (regression fitting), and DB-integrated
 process_settlement / scan_and_process / read methods.
 """
+import io
+import logging
+
 import pytest
 from datetime import datetime, timezone, timedelta
 
@@ -15,8 +18,6 @@ from app.kernel.market_settlement_service import (
     _compute_direction_correct,
     _update_market_calibration,
     MarketSettlementService,
-    SettlementResult,
-    ScanResult,
 )
 
 
@@ -648,7 +649,44 @@ def test_link_lookup_failure_does_not_write_permanent_skip(kernel_db, monkeypatc
     result = svc.scan_and_process(limit=10)
     assert result.errors == 1
     assert result.skipped == 0
-    assert any("database is locked" in d for d in result.error_details)
+    assert result.error_details == ["m1: RuntimeError"]
+
+
+def test_scan_failure_hides_exception_text_from_result_and_production_log(
+    kernel_db, monkeypatch,
+):
+    from app.core import logging as app_logging
+    from app.core.config import settings
+    from app.kernel import market_settlement_service as mss
+
+    sensitive = "Authorization=Bearer fake-api-key ticket=fake-ticket"
+    _seed_prediction(match_id="m1")
+    _seed_outcome(match_id="m1")
+
+    def _boom(self, match_id):
+        raise RuntimeError(sensitive)
+
+    monkeypatch.setattr(settings, "PMRF_ENV", "production")
+    monkeypatch.setattr(mss.MarketSettlementService, "process_settlement", _boom)
+    handler = logging.StreamHandler(io.StringIO())
+    root = logging.getLogger()
+    root.addHandler(handler)
+    try:
+        app_logging.setup_logging()
+        result = MarketSettlementService().scan_and_process(limit=10)
+        output = handler.stream.getvalue()
+    finally:
+        root.removeHandler(handler)
+        handler.close()
+
+    assert result.scanned == 1
+    assert result.errors == 1
+    assert result.error_details == ["m1: RuntimeError"]
+    assert "Settlement processing failed for m1" in output
+    assert "RuntimeError" in output
+    for fragment in ("Authorization", "fake-api-key", "fake-ticket"):
+        assert fragment not in repr(result)
+        assert fragment not in output
 
 
 def test_find_verified_link_raises_instead_of_returning_none(kernel_db, monkeypatch):
@@ -713,7 +751,7 @@ def test_snapshot_lookup_failure_does_not_write_permanent_skip(kernel_db, monkey
     result = svc.scan_and_process(limit=10)
     assert result.errors == 1
     assert result.skipped == 0
-    assert any("database is locked" in d for d in result.error_details)
+    assert result.error_details == ["m1: RuntimeError"]
 
 
 def test_find_settlement_snapshot_raises_instead_of_returning_none(kernel_db, monkeypatch):
@@ -1288,19 +1326,8 @@ def test_a_failed_calibration_read_is_not_a_silent_no_op(kernel_db, monkeypatch)
     assert after[0]["last_updated"] == before[0]["last_updated"]
 
 
-def test_a_scan_error_names_the_read_that_failed_not_the_write(kernel_db, monkeypatch):
-    """``scan_and_process`` must attribute the failure to the failed statement.
-
-    The queue read here still succeeds — ``_find_finished_matches_without_settlements``
-    selects only ``match_id``, so this drift does not reach it — and
-    ``scan_and_process`` catches per-match exceptions by design, so ``errors=1``
-    either way. What the swallow changed is *which* statement is blamed: the
-    idempotency read returned ``[]``, processing continued, and the operator's
-    ``ERROR:`` line quoted the INSERT. No mechanism was found that fails the
-    read and then lets the write land (WAL readers do not block on a writer, so
-    drift that breaks the SELECT breaks the INSERT too), which is why the defect
-    is a misattributed error rather than a duplicate row.
-    """
+def test_a_scan_error_reports_safe_exception_type_without_sql(kernel_db, monkeypatch):
+    """Per-match diagnostics keep identity and type, but never SQL text."""
     from app.core import config
     monkeypatch.setattr(config.settings, "MIN_SAMPLES_FOR_MARKET_CALIBRATION", 10)
     _seed_prediction(match_id="m2")
@@ -1318,6 +1345,6 @@ def test_a_scan_error_names_the_read_that_failed_not_the_write(kernel_db, monkey
     assert result.skipped == 0
     assert result.already_processed == 0
     detail = result.error_details[0]
-    assert "no such column" in detail
-    assert "SELECT" in detail
+    assert detail == "m2: OperationalError"
+    assert "SELECT" not in detail
     assert "INSERT INTO" not in detail

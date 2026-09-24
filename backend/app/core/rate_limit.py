@@ -4,8 +4,9 @@ from collections import defaultdict, deque
 from typing import Deque
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.requests import Request
+from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse, Response
+from starlette.routing import Match, Route
 from starlette.types import ASGIApp
 
 from app.core.config import settings
@@ -151,7 +152,7 @@ class InMemoryRateLimitMiddleware(BaseHTTPMiddleware):
             self._hits.pop(key, None)
 
 
-def _forwarded_chain(request: Request) -> list[str]:
+def _forwarded_chain(request: HTTPConnection) -> list[str]:
     """Every X-Forwarded-For address, left to right, blanks dropped.
 
     All instances of the header are joined before splitting: a caller may send
@@ -162,8 +163,15 @@ def _forwarded_chain(request: Request) -> list[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
-def _client_host(request: Request) -> str:
-    """The rate-limit identity for this request.
+def _client_host(request: HTTPConnection) -> str:
+    """The caller identity for this connection.
+
+    Annotated `HTTPConnection`, the base Starlette shares between `Request` and
+    `WebSocket`, because the realtime per-client connection cap keys on the same
+    identity (`app.realtime.ws_auth.client_identity` is this function). Only
+    `.headers` and `.client` are read, so both scopes satisfy it. A second copy
+    for WebSockets would drift from the reasoning below, and the cap would end up
+    keyed on something a caller can rotate at will.
 
     The socket peer, unless the deployment declares itself to be behind trusted
     proxies — in which case the client address is read out of X-Forwarded-For
@@ -206,10 +214,32 @@ def _client_host(request: Request) -> str:
 
 
 def _route_key(request: Request) -> str:
-    route = request.scope.get("route")
-    route_path = getattr(route, "path", None)
-    if isinstance(route_path, str) and route_path:
-        return route_path
+    """The endpoint this request will be routed to, or the path's shape.
+
+    ``request.scope["route"]`` is the obvious source and used to be the first
+    branch here, but FastAPI writes that key while *routing* and
+    ``BaseHTTPMiddleware`` runs above the router: it measured ``None`` on every
+    request, so the branch never executed and every bucket came from
+    ``_normalize_path``. Shape is much coarser than endpoint -- 138 of this
+    app's 190 route+method pairs shared a bucket with another pair, and three
+    requests to ``/api/llm/diagnostics`` were enough to refuse
+    ``/api/quality-metrics/summary``.
+
+    So the route table is read directly. ``scope["app"]`` is populated by the
+    time the middleware runs (measured: 192 routes), and matching is the same
+    regex walk the router performs a moment later -- about 300us on a 3ms
+    request that matches nothing, 90us on a 67ms one that does.
+
+    ``Mount`` is deliberately not consulted. The frontend static mount is at
+    ``""`` and matches every otherwise-unrouted path, so keying off it would put
+    a whole page load of assets in one bucket; they keep the ``_normalize_path``
+    fallback, which still spreads them by shape.
+    """
+    for route in getattr(request.scope.get("app"), "routes", ()):
+        if isinstance(route, Route):
+            match, _ = route.matches(request.scope)
+            if match is Match.FULL:
+                return route.path
     return _normalize_path(request.url.path)
 
 
@@ -219,8 +249,13 @@ def _normalize_path(path: str) -> str:
         return "/"
     normalized = []
     for part in parts:
-        lower = part.lower()
-        if lower in _STATIC_PATH_SEGMENTS or "." in part:
+        # A segment containing "." used to be kept verbatim here, which handed
+        # the bucket key to the caller: every filename has a dot, so rotating
+        # `/nope/1.js`, `/nope/2.js`, ... bought a fresh bucket per request and
+        # the limit stopped applying (measured 0 of 8 refused while rotating, 5
+        # of 8 without). Routed paths no longer reach this function, so nothing
+        # legible is lost -- `/openapi.json` keys off its own route.
+        if part.lower() in _STATIC_PATH_SEGMENTS:
             normalized.append(part)
         else:
             normalized.append("{param}")

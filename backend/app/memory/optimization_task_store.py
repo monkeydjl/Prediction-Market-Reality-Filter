@@ -18,6 +18,7 @@ the background optimization task serialize safely.
 """
 
 import json
+import threading
 from typing import Any
 
 from app.utils import sqlite_db
@@ -27,42 +28,61 @@ from app.utils.sqlite_db import reading, writing
 _SCHEMA_VERSION = 1
 _MIGRATIONS: dict[str, str] = {}
 
+_INITIALIZED: set[str] = set()
+_INIT_GUARD = threading.Lock()
+
 
 def _ensure_schema(path: str) -> None:
-    with writing(path) as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS optimization_tasks (
-                task_id TEXT PRIMARY KEY,
-                engine_name TEXT NOT NULL,
-                status TEXT NOT NULL,
-                progress INTEGER NOT NULL DEFAULT 0,
-                total INTEGER NOT NULL DEFAULT 0,
-                current_match TEXT,
-                result_json TEXT,
-                error TEXT,
-                created_at TEXT NOT NULL,
-                started_at TEXT,
-                completed_at TEXT,
-                logs_json TEXT NOT NULL DEFAULT '[]',
-                updated_at TEXT NOT NULL
+    """Build the table on first use of a given DB path, then migrate (idempotent).
+
+    Memoized per path, like every other store in this package. Without it
+    `get_task` -- which the frontend polls while an auto-tune runs -- opened a
+    write transaction before its SELECT and measured 142 ms over the live 17.5 MB
+    loop DB, because `record_schema_version` always dirties a page and closing
+    the last WAL handle then checkpoints the whole file.
+    """
+    if path in _INITIALIZED:
+        return
+    with _INIT_GUARD:
+        if path in _INITIALIZED:
+            return
+        with writing(path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS optimization_tasks (
+                    task_id TEXT PRIMARY KEY,
+                    engine_name TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    progress INTEGER NOT NULL DEFAULT 0,
+                    total INTEGER NOT NULL DEFAULT 0,
+                    current_match TEXT,
+                    result_json TEXT,
+                    error TEXT,
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    logs_json TEXT NOT NULL DEFAULT '[]',
+                    updated_at TEXT NOT NULL
+                )
+                """
             )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_optimization_tasks_status "
-            "ON optimization_tasks(status)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_optimization_tasks_created "
-            "ON optimization_tasks(created_at)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_optimization_tasks_completed "
-            "ON optimization_tasks(completed_at)"
-        )
-        sqlite_db.apply_migrations(conn, "optimization_tasks", _SCHEMA_VERSION, _MIGRATIONS)
-        sqlite_db.record_schema_version(conn, "optimization_tasks", _SCHEMA_VERSION)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_optimization_tasks_status "
+                "ON optimization_tasks(status)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_optimization_tasks_created "
+                "ON optimization_tasks(created_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_optimization_tasks_completed "
+                "ON optimization_tasks(completed_at)"
+            )
+            sqlite_db.apply_migrations(conn, "optimization_tasks",
+                                       _SCHEMA_VERSION, _MIGRATIONS)
+            sqlite_db.record_schema_version(conn, "optimization_tasks",
+                                            _SCHEMA_VERSION)
+        _INITIALIZED.add(path)
 
 
 def _row_to_task(row: Any) -> dict[str, Any]:

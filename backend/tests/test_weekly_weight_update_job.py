@@ -1,5 +1,8 @@
 # backend/tests/test_weekly_weight_update_job.py
 """The weekly learning job must report a rewrite, a skip, and a failure honestly."""
+import json
+import logging
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -69,7 +72,7 @@ async def test_job_with_no_rewrites_fails_instead_of_claiming_success(captured):
         "mlb": "insufficient_samples",
         "nhl": "insufficient_samples",
     }
-    assert "no competition updated" in final["error"]
+    assert final["error"] == "No competition weights updated"
 
 
 @pytest.mark.asyncio
@@ -91,4 +94,66 @@ async def test_job_records_one_error_without_erasing_an_actual_update(captured):
     assert final["status"] == "success"
     assert final["result"]["competitions"] == ["nba"]
     assert final["result"]["skipped"]["nhl"] == "no_factor_samples"
-    assert final["result"]["skipped"]["mlb"].startswith("error:database unavailable")
+    assert final["result"]["skipped"]["mlb"] == "error:RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_partial_failure_is_safe_in_result_error_and_logs(captured):
+    sensitive = (
+        "SELECT secret FROM D:/private/weights.db "
+        "Authorization=Bearer fake-api-key ticket=fake-ticket "
+        "subprotocol=fake-subprotocol https://upstream.example/private"
+    )
+    rendered_logs = []
+
+    class RenderedLogHandler(logging.Handler):
+        def emit(self, record):
+            rendered_logs.append(self.format(record))
+
+    def update(comp):
+        if comp == "nba":
+            return {"updated": True, "reason": None, "factors": 4, "samples": 20}
+        if comp == "mlb":
+            raise RuntimeError(sensitive)
+        return {"updated": False, "reason": "no_factor_samples", "samples": 20}
+
+    handler = RenderedLogHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logging.getLogger("app.core.scheduler").addHandler(handler)
+    try:
+        with patch("app.kernel.learning_service.KernelLearningService") as MockSvc:
+            MockSvc.return_value.update_weights = MagicMock(side_effect=update)
+            await _job_update_weights_weekly()
+    finally:
+        logging.getLogger("app.core.scheduler").removeHandler(handler)
+
+    final = captured["finish"][-1]
+    exported = json.dumps({"finish": final, "logs": rendered_logs})
+    assert final["status"] == "success"
+    assert final["result"]["skipped"]["mlb"] == "error:RuntimeError"
+    for fragment in (
+        "SELECT secret", "D:/private", "fake-api-key", "fake-ticket",
+        "fake-subprotocol", "upstream.example", "Traceback",
+    ):
+        assert fragment not in exported
+    assert "RuntimeError" in exported
+
+
+@pytest.mark.asyncio
+async def test_all_failures_use_a_fixed_scheduler_error(captured):
+    sensitive = (
+        "SELECT secret FROM D:/private/weights.db "
+        "Authorization=Bearer fake-api-key ticket=fake-ticket"
+    )
+    with patch("app.kernel.learning_service.KernelLearningService") as MockSvc:
+        MockSvc.return_value.update_weights = MagicMock(
+            side_effect=RuntimeError(sensitive)
+        )
+        await _job_update_weights_weekly()
+
+    final = captured["finish"][-1]
+    assert final["status"] == "failed"
+    assert final["error"] == "No competition weights updated"
+    exported = json.dumps(final)
+    assert sensitive not in exported
+    assert set(final["result"]["skipped"].values()) == {"error:RuntimeError"}

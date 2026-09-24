@@ -63,7 +63,10 @@ def audit_world_cup_result_consistency(
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "source": source,
             "fact_store": (
-                sports_fact_status(tournament=WORLD_CUP_TOURNAMENT)
+                {
+                    **sports_fact_status(tournament=WORLD_CUP_TOURNAMENT),
+                    "configured_path": "redacted",
+                }
                 if facts is None else None
             ),
             "fact_count": len(result_facts),

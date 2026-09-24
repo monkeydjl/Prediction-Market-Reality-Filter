@@ -2,7 +2,10 @@ import asyncio
 import unittest
 from unittest.mock import patch
 
+import httpx
+
 from app.services import rss_service as rss
+from app.utils import rss_fetch
 
 
 class _FakeFeed:
@@ -36,6 +39,21 @@ class RssServiceTests(unittest.TestCase):
             articles = asyncio.run(rss.fetch_news(limit=5))
 
         self.assertEqual(articles, [])
+
+    def test_rss_failure_log_does_not_render_url_or_exception_details(self):
+        secret = "rss-query-secret"
+        upstream_url = f"https://feeds.example/private.xml?token={secret}"
+        exc = httpx.ConnectError(f"connection refused for {upstream_url}")
+
+        with patch.object(rss_fetch.httpx, "get", side_effect=exc), \
+                self.assertLogs(rss_fetch.logger.name, level="WARNING") as logs:
+            feed = rss_fetch.parse_feed(upstream_url)
+
+        text = "\n".join(logs.output)
+        self.assertEqual(feed.entries, [])
+        self.assertIn("ConnectError", text)
+        self.assertNotIn(upstream_url, text)
+        self.assertNotIn(secret, text)
 
 
 if __name__ == "__main__":

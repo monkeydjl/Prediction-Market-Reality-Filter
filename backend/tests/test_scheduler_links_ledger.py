@@ -11,12 +11,16 @@ patched store): ``DROP TABLE`` for the whole table, and
 ``ALTER TABLE ... RENAME COLUMN implied_prob`` for the partial drift where the
 match_id-only enumeration survives and every per-match read does not.
 """
+import io
+import logging
+
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import patch
 
 from sqlalchemy import text
 
+from app.core import logging as app_logging
 from app.core.config import settings
 from app.core.scheduler import (
     _job_capture_market_snapshots,
@@ -142,6 +146,106 @@ async def test_a_readable_empty_table_still_reports_a_healthy_idle_run(
     assert final["status"] == "success"
     assert final["result"] == expected
     assert final["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_per_match_odds_failure_hides_exception_text_from_production_log(
+    ledger, monkeypatch,
+):
+    sensitive = "Authorization=Bearer fake-api-key ticket=fake-ticket"
+    _seed_match()
+    monkeypatch.setattr(settings, "PMRF_ENV", "production")
+    handler = logging.StreamHandler(io.StringIO())
+    root = logging.getLogger()
+    root.addHandler(handler)
+    try:
+        app_logging.setup_logging()
+        with patch(
+            "app.services.odds_api_service.fetch_all_sports_odds",
+            return_value={},
+        ), patch(
+            "app.core.scheduler._match_odds_to_match",
+            side_effect=RuntimeError(sensitive),
+        ):
+            await _job_fetch_traditional_odds()
+
+        output = handler.stream.getvalue()
+    finally:
+        root.removeHandler(handler)
+        handler.close()
+
+    assert "Odds fetch failed" in output
+    assert "fake-api-key" not in output
+    assert "fake-ticket" not in output
+    assert "Authorization" not in output
+    assert "RuntimeError" in output
+
+
+@pytest.mark.asyncio
+async def test_per_match_edge_failure_hides_exception_text_from_production_log(
+    ledger, monkeypatch,
+):
+    sensitive = "Authorization=Bearer fake-api-key ticket=fake-ticket"
+    _seed_match()
+    monkeypatch.setattr(settings, "PMRF_ENV", "production")
+    handler = logging.StreamHandler(io.StringIO())
+    root = logging.getLogger()
+    root.addHandler(handler)
+    try:
+        app_logging.setup_logging()
+        with patch(
+            "app.kernel.edge_detector_service.EdgeDetectorService.detect_edges",
+            side_effect=RuntimeError(sensitive),
+        ):
+            await _job_detect_sport_edges()
+
+        output = handler.stream.getvalue()
+    finally:
+        root.removeHandler(handler)
+        handler.close()
+
+    assert ledger[-1]["result"] == {
+        "matches_total": 1, "matches_processed": 0, "errors": 1,
+    }
+    assert "Edge detection failed" in output
+    assert "fake-api-key" not in output
+    assert "fake-ticket" not in output
+    assert "Authorization" not in output
+    assert "RuntimeError" in output
+
+
+@pytest.mark.asyncio
+async def test_per_match_snapshot_failure_hides_exception_text_from_production_log(
+    ledger, monkeypatch,
+):
+    sensitive = "Authorization=Bearer fake-api-key ticket=fake-ticket"
+    _seed_match()
+    monkeypatch.setattr(settings, "PMRF_ENV", "production")
+    handler = logging.StreamHandler(io.StringIO())
+    root = logging.getLogger()
+    root.addHandler(handler)
+    try:
+        app_logging.setup_logging()
+        with patch(
+            "app.kernel.sport_market_bridge_service."
+            "SportMarketBridgeService.fetch_link_price",
+            side_effect=RuntimeError(sensitive),
+        ):
+            await _job_capture_market_snapshots()
+
+        output = handler.stream.getvalue()
+    finally:
+        root.removeHandler(handler)
+        handler.close()
+
+    assert ledger[-1]["result"] == {
+        "matches_total": 1, "captured": 0, "errors": 1,
+    }
+    assert "Snapshot capture failed" in output
+    assert "fake-api-key" not in output
+    assert "fake-ticket" not in output
+    assert "Authorization" not in output
+    assert "RuntimeError" in output
 
 
 @pytest.mark.asyncio

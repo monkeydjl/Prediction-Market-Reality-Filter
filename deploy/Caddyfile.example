@@ -27,11 +27,26 @@ pmrf.example.com {
     }
 
     # ─── Rate limiting ──────────────────────────────────────────────────────
-    # Caddy 2.7+ has built-in rate limiting. For older versions use
-    # caddy-ratelimit plugin. 10 req/s per client IP, burst 20.
+    # READ THIS BEFORE CHOOSING CADDY OVER NGINX.
+    #
+    # nginx.conf.example ships a LIVE 10r/s-per-IP limit (limit_req_zone +
+    # limit_req burst=20). This file does NOT: the block below is inert until you
+    # do both steps. Pick Caddy and skip them, and /api/ has only the
+    # application-layer limiter (backend/app/core/rate_limit.py) in front of it.
+    #
+    # `rate_limit` is NOT built into Caddy at any version -- it is a third-party
+    # module, so stock Caddy answers an uncommented block with
+    # "unrecognized directive: rate_limit" and refuses to start.
+    #
+    #   1. Build a binary that has the directive:
+    #        xcaddy build --with github.com/mholt/caddy-ratelimit
+    #   2. Uncomment the block below and reload.
+    #
+    # 10 req/s per client IP. `{remote_host}` is the per-client key; a literal
+    # string there would share one limiter across all callers.
     # rate_limit {
     #     zone pmrf_limit {
-    #         key {remotehost}
+    #         key {remote_host}
     #         events 10
     #         window 1s
     #     }

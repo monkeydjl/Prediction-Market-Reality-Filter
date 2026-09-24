@@ -321,9 +321,16 @@ def predict_match(
         # Ordered before the generic handler, which would otherwise report a
         # match id with no fixture as a 500 server fault.
         raise HTTPException(status_code=404, detail="Match not found")
-    except Exception as e:
-        logger.error("Prediction failed for %s: %s", match_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        logger.error(
+            "Prediction failed for %s: %s",
+            match_id,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Prediction generation failed",
+        )
 
 
 @router.post("/schedule/sync")
@@ -375,8 +382,14 @@ def sync_schedule(
         else:
             count = 0
     except Exception as exc:
-        logger.error("schedule sync failed: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.error(
+            "schedule sync failed: %s",
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Schedule synchronization failed",
+        ) from exc
 
     prefixes: list[str] = []
     # hasattr narrows for mypy too, so registered_prefixes() (MultiAdapter-only,
@@ -405,9 +418,16 @@ def process_outcome(
     try:
         kernel.process_outcome(match_id)
         return {"match_id": match_id, "status": "processed"}
-    except Exception as e:
-        logger.error("Outcome processing failed for %s: %s", match_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        logger.error(
+            "Outcome processing failed for %s: %s",
+            match_id,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Outcome processing failed",
+        )
 
 
 @router.get("/engines/{name}/score")

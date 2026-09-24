@@ -157,7 +157,7 @@ async def analyze_and_optimize_all_predictions(
             except Exception as e:
                 results["errors"].append({
                     "match_id": fixture.match_id,
-                    "error": str(e)
+                    "error": f"Optimization failed: {type(e).__name__}"
                 })
 
         session.commit()

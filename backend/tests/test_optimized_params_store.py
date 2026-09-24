@@ -305,8 +305,10 @@ def test_apply_reseed_failure_does_not_rollback_applied(store):
                 result = store.apply(saved["id"], reseed_elo=True)
 
     assert result["applied"]["status"] == "applied"
-    assert result["elo_seed"]["ok"] is False
-    assert "seed boom" in result["elo_seed"]["error"]
+    assert result["elo_seed"] == {
+        "ok": False,
+        "error": "Elo reseed failed",
+    }
     assert store.get_applied("mlb", "mlb")["id"] == saved["id"]
 
 

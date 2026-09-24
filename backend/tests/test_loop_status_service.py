@@ -20,6 +20,7 @@ from app.memory import decision_timeline_store as timeline
 from app.memory import event_market_link_store as links
 from app.memory import event_ref_census
 from app.memory import event_store as store
+from app.memory import loop_run_store
 from app.memory import prediction_store as preds
 from app.memory import review_queue_store as rq
 from app.memory import simulated_trade_store as trades
@@ -242,6 +243,163 @@ class ReviewQueueCountsTests(unittest.TestCase):
                           side_effect=RuntimeError("db gone")):
             fallback = loop_status_service._review_queue_counts()
         self.assertEqual(set(fallback), set(real))
+
+
+class WatchedJobSetTests(unittest.TestCase):
+    """The `runs` block named three jobs; the ledger holds fifteen.
+
+    Measured on the live ledger: 15 distinct job names over 1706 rows, and the
+    only one whose last run had failed -- ``world_cup_api_football_validate``,
+    2026-07-07, "API-Football returned 0 fixtures" -- was not one of the three,
+    so ``/api/health`` answered 200 "ok" and ``scripts/healthcheck.py`` kept
+    feeding the dead-man switch. ``recent_runs`` had the mirror problem: one
+    chatty job holds 1193 of those rows and its newest 20 postdate every other
+    job, so the 20-row window carried one distinct name.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        base = Path(self.tmpdir.name)
+        self.patches = [
+            patch.object(sqlite_db, "loop_db_path", return_value=str(base / "v2_loop.db")),
+            patch.object(store, "_store_path", return_value=str(base / "event_store.json")),
+        ]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmpdir.cleanup()
+
+    def _run(self, job_name, status="success", **kw):
+        run_id = loop_run_store.start_run(job_name)
+        loop_run_store.finish_run(run_id, status, **kw)
+        return run_id
+
+    def test_a_failed_job_outside_the_old_three_is_reported(self):
+        self._run("event_discover")
+        self._run("world_cup_api_football_validate", "failed", error="0 fixtures")
+
+        runs = loop_status_service.loop_status()["runs"]
+
+        self.assertEqual(runs["world_cup_api_football_validate"]["status"], "failed")
+        self.assertEqual(runs["event_discover"]["status"], "success")
+
+    def test_health_answers_degraded_for_a_job_outside_the_old_three(self):
+        """The whole point of the derived set: this is the live ledger's one
+        failing job, and the endpoint backing the container healthcheck and the
+        dead-man switch used to answer 200 "ok" while it sat there failed."""
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        self._run("event_discover")
+        self._run("world_cup_api_football_validate", "failed", error="0 fixtures")
+
+        with patch.object(settings, "SCHEDULER_ENABLED", False):
+            resp = TestClient(app).get("/api/health")
+
+        self.assertEqual(resp.status_code, 503)
+        body = resp.json()
+        self.assertEqual(body["status"], "degraded")
+        self.assertEqual(body["failed_runs"], ["world_cup_api_football_validate"])
+
+    def test_every_ledger_job_name_appears_in_the_runs_block(self):
+        """A hand-maintained list is what let twelve names go unwatched, so the
+        assertion is an exact partition against the ledger's own names."""
+        seeded = {
+            "event_discover", "event_auto_resolve", "loop_db_maintenance",
+            "backup_stores", "world_cup_scoring_reconcile", "translate_titles",
+            "sport_market_discover", "world_cup_api_football_validate",
+        }
+        for name in sorted(seeded):
+            self._run(name)
+
+        runs = loop_status_service.loop_status()["runs"]
+
+        self.assertEqual(set(runs), seeded)
+
+    def test_a_chatty_job_no_longer_empties_the_recent_window(self):
+        for name in ("event_discover", "event_auto_resolve", "loop_db_maintenance"):
+            self._run(name)
+        for _ in range(25):
+            self._run("world_cup_scoring_reconcile")
+
+        recent = loop_status_service.loop_status()["recent_runs"]
+
+        self.assertGreater(
+            len({run["job_name"] for run in recent}),
+            1,
+            f"the recent window carried one job name: {recent}",
+        )
+        self.assertEqual(
+            {run["job_name"] for run in recent},
+            {
+                "event_discover", "event_auto_resolve",
+                "loop_db_maintenance", "world_cup_scoring_reconcile",
+            },
+        )
+
+    def test_run_details_stay_behind_the_write_key(self):
+        """The sanitising wrapper applies to every derived name, not just the
+        three that used to be listed."""
+        self._run("world_cup_api_football_validate", "failed", error="0 fixtures")
+
+        sanitized = loop_status_service.loop_status()
+        detailed = loop_status_service.loop_status(include_run_details=True)
+
+        run = sanitized["runs"]["world_cup_api_football_validate"]
+        self.assertEqual(set(run), {"job_name", "status", "started_at", "finished_at", "duration_ms"})
+        self.assertNotIn("error", run)
+        self.assertNotIn("error", sanitized["recent_runs"][0])
+        self.assertEqual(
+            detailed["runs"]["world_cup_api_football_validate"]["error"], "0 fixtures"
+        )
+
+    def test_an_empty_ledger_reports_no_runs_rather_than_raising(self):
+        payload = loop_status_service.loop_status()
+
+        self.assertEqual(payload["runs"], {})
+        self.assertEqual(payload["recent_runs"], [])
+
+    def test_the_run_queries_do_not_open_one_connection_per_job_name(self):
+        """A per-name loop over `last_run` is the shape this replaced: 15 store
+        calls of 533 ms against 4 of 101 ms on the live ledger. Counted at
+        ``sqlite_db.connect``, the chokepoint every module's ``reading`` binding
+        shares. Measured on the two store calls rather than the whole payload,
+        because the payload's other stores create their schemas on first use and
+        that noise is larger than the signal.
+
+        ``recent_runs_by_job`` does issue one indexed query per distinct name --
+        deliberately, and bounded by the job names written in code -- but inside
+        a single connection scope, so neither call scales its connections.
+        """
+        real_connect = sqlite_db.connect
+
+        def _count() -> int:
+            opens: list[str] = []
+            with patch.object(
+                sqlite_db,
+                "connect",
+                lambda path: opens.append(path) or real_connect(path),
+            ):
+                loop_run_store.latest_run_per_job()
+                loop_run_store.recent_runs_by_job(limit=20)
+            return len(opens)
+
+        self._run("probe_job_0")
+        few = _count()
+        for i in range(1, 13):
+            self._run(f"probe_job_{i}")
+        many = _count()
+
+        self.assertEqual(
+            few,
+            many,
+            f"the run queries opened {few} connections for 1 job name and {many} "
+            "for 13; they must not scale with the job count",
+        )
 
 
 class EventStoreSizeTests(unittest.TestCase):

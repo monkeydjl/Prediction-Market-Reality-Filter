@@ -159,10 +159,11 @@ class ParameterOptimizer:
                     saved.get("id"),
                     best_result.score,
                 )
-            except Exception:
-                logger.exception(
-                    "[Optimizer] Failed to persist best candidate for %s",
+            except Exception as exc:
+                logger.error(
+                    "[Optimizer] Failed to persist best candidate for %s: %s",
                     sport,
+                    type(exc).__name__,
                 )
 
         return {

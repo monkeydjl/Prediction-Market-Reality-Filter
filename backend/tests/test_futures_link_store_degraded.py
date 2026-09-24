@@ -10,10 +10,13 @@ run ledger, while ``upsert_link`` / ``append_snapshot`` on the same broken
 tables raised.
 """
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import sentry_sdk
 from fastapi.testclient import TestClient
+from sentry_sdk.transport import Transport
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
@@ -22,12 +25,24 @@ from app.core.scheduler import _job_capture_futures_snapshots
 from app.kernel.futures_link_store import FuturesLinkStore
 from app.kernel.kernel_db import close_kernel_db, get_kernel_session, init_kernel_db
 from app.main import app
+from app.utils import sentry as app_sentry
 
 LINKS = "kernel_futures_links"
 SNAPSHOTS = "kernel_futures_snapshots"
 COMPETITION = "nba"
 SEASON = "2024-25"
 NOW = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
+
+
+class EventTransport(Transport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[dict] = []
+
+    def capture_envelope(self, envelope) -> None:
+        event = envelope.get_event()
+        if event is not None:
+            self.events.append(event)
 
 #: One Kalshi championship book as ``(team, ticker, price, liquidity)``. The
 #: five prices sum to 1.02, inside ``multi_leg_integrity``'s [0.85, 1.45] band,
@@ -265,6 +280,56 @@ def test_an_unreadable_snapshots_table_is_the_asymmetric_case(client, ddl, match
             link_id=1, implied_prob=0.28, price=0.28,
             liquidity=41000.0, volume=120000.0, captured_at=NOW,
         )
+
+
+def test_sentry_event_hides_sensitive_database_failure(client, tmp_path):
+    transport = EventTransport()
+    sensitive_path = tmp_path / (
+        "Authorization=Bearer_fake-api-key_ticket=fake-ticket.db"
+    )
+    with patch("sentry_sdk.init") as sdk_init:
+        assert app_sentry.init_sentry(
+            dsn="https://public@example.invalid/1",
+            environment="test",
+        )
+    init_options = sdk_init.call_args.kwargs
+    sentry_sdk.init(**init_options, transport=transport)
+    try:
+        _seed_book()
+        _sql(f"ALTER TABLE {SNAPSHOTS} RENAME TO {SNAPSHOTS}_old")
+        _sql(
+            f'ATTACH DATABASE \'{sensitive_path.as_posix()}\' '
+            f'AS "Authorization=Bearer_fake-api-key_ticket=fake-ticket"'
+        )
+
+        response = client.get(
+            f"/api/futures/{COMPETITION}/{SEASON}/latest",
+            headers={"Authorization": "Bearer fake-api-key"},
+        )
+
+        assert response.status_code == 500
+        assert transport.events
+        event = transport.events[-1]
+        exception = event["exception"]["values"][-1]
+        assert exception["type"] == "OperationalError"
+        assert exception["value"] == "Application error"
+        assert event["request"]["headers"].get("Authorization") in (None, "[Filtered]")
+        rendered = repr(event)
+        remaining_fragments = {
+            fragment: [key for key, value in event.items() if fragment in repr(value)]
+            for fragment in (
+                "SELECT",
+                "Authorization=Bearer",
+                "fake-api-key",
+                "fake-ticket",
+                str(Path(__file__).resolve().parent),
+                sensitive_path.as_posix(),
+            )
+            if fragment in rendered
+        }
+        assert remaining_fragments == {}
+    finally:
+        sentry_sdk.init(dsn=None)
 
 
 def test_latest_snapshots_returns_empty_for_a_pair_with_no_links(client):

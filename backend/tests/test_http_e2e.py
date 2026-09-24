@@ -76,6 +76,69 @@ class AnalyzeResolveHttpE2ETests(unittest.TestCase):
                 self.assertEqual(calibration.status_code, 200)
                 self.assertEqual(calibration.json()["overall"]["n"], 1)
 
+    def test_challenge_failure_hides_exception_in_response_and_store(self):
+        sensitive = (
+            "Authorization=Bearer fake-api-key ticket=fake-ticket "
+            "C:/private/secret.db"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            with patch.object(store, "_store_path", return_value=str(base / "event_store.json")), \
+                    patch.object(audit, "_audit_path", return_value=str(base / "event_audit.jsonl")), \
+                    patch.object(sqlite_db, "loop_db_path", return_value=str(base / "v2_loop.db")), \
+                    patch.object(settings, "API_WRITE_KEY", "secret"), \
+                    patch.object(settings, "CONCLUSION_CHALLENGE_ENABLED", True), \
+                    patch.object(settings, "EVENT_CHALLENGE_ENABLED", True), \
+                    patch.object(settings, "CONCLUSION_CHALLENGE_LLM_CRITIC_ENABLED", False), \
+                    patch.object(settings, "CONCLUSION_CHALLENGE_STRICTNESS", "normal"), \
+                    patch.object(ai, "_ask_ai", new=AsyncMock(side_effect=RuntimeError("no llm"))), \
+                    patch("app.services.cross_validation_service.cross_validate",
+                          new=AsyncMock(return_value=None)), \
+                    patch(
+                        "app.services.conclusion_challenge_service.challenge_conclusion",
+                        side_effect=RuntimeError(sensitive),
+                    ):
+                client = _client()
+                response = client.post(
+                    "/events/analyze",
+                    headers={"X-API-Key": "secret"},
+                    json={
+                        "event_question": (
+                            "Will the agency approve the policy before the deadline?"
+                        ),
+                        "baseline_probability": 50,
+                        "news_context": (
+                            "Official sources confirmed the review timeline; "
+                            "independent reporting expects a decision before deadline."
+                        ),
+                    },
+                )
+
+                self.assertEqual(response.status_code, 200)
+                body = response.json()
+                stored = store.get_event(body["event_id"])
+
+            self.assertIsNotNone(stored)
+            durable_record = stored["record"]
+            for record in (body, durable_record):
+                challenge = record["conclusion_challenge"]
+                self.assertEqual(challenge["verdict"], "pass_with_warnings")
+                self.assertEqual(challenge["required_action"], "allow_output")
+                self.assertEqual(
+                    challenge["warnings"][0]["details"],
+                    {"error": "RuntimeError"},
+                )
+            for fragment in (
+                "Authorization",
+                "fake-api-key",
+                "fake-ticket",
+                "C:/private",
+                "secret.db",
+                "Traceback",
+            ):
+                self.assertNotIn(fragment, response.text)
+                self.assertNotIn(fragment, repr(durable_record))
+
 
 if __name__ == "__main__":
     unittest.main()

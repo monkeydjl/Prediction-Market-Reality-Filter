@@ -68,7 +68,10 @@ def run_healthcheck(
         if deadman_url:
             _ping_deadman(deadman_url, timeout, fetch)
     except Exception as exc:
-        print(f"PMRF healthcheck failed: {exc}", file=sys.stderr)
+        print(
+            f"PMRF healthcheck failed: {type(exc).__name__}",
+            file=sys.stderr,
+        )
         return 1
 
     print("PMRF healthcheck ok")

@@ -7,6 +7,9 @@ logged it and returned ``None``, so the job recorded the literal ``{"cleaned": T
 The table growing without bound -- the one condition this job exists to prevent -- was
 reported as a clean success.
 """
+import json
+import logging
+
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -54,7 +57,7 @@ async def test_a_degraded_store_is_a_failed_run_not_a_clean_one(captured):
     """The condition the job exists to prevent must not read as success."""
     mgr = _manager({
         "memory_removed": 2, "store_deleted": 0,
-        "store_error": "database is locked",
+        "store_error": "Optimization task store cleanup failed",
     })
     with patch(
         "app.services.optimization_task_manager.get_task_manager", return_value=mgr,
@@ -63,11 +66,13 @@ async def test_a_degraded_store_is_a_failed_run_not_a_clean_one(captured):
 
     final = captured["finish"][-1]
     assert final["status"] == "failed"
-    assert "database is locked" in final["error"]
+    assert final["error"] == "Optimization task store cleanup failed"
     # The in-memory pruning did happen, and saying so is the reason the manager
     # swallows the exception instead of re-raising it.
     assert final["result"]["memory_removed"] == 2
-    assert final["result"]["store_error"] == "database is locked"
+    assert final["result"]["store_error"] == (
+        "Optimization task store cleanup failed"
+    )
 
 
 @pytest.mark.asyncio
@@ -85,6 +90,164 @@ async def test_pruning_nothing_is_distinguishable_from_pruning_rows(captured):
     assert final["result"]["store_deleted"] == 0
 
 
+@pytest.mark.asyncio
+async def test_store_failure_is_safe_in_result_ledger_alerts_and_logs(
+    tmp_path,
+    monkeypatch,
+):
+    from app.core import scheduler
+    from app.core.config import settings
+    from app.memory import loop_run_store
+    from app.services import scheduler_failure_alert_dispatcher as dispatcher
+    from app.services.optimization_task_manager import OptimizationTaskManager
+
+    sensitive_failure = (
+        "SELECT secret FROM D:/private/optimization.db "
+        "Authorization=Bearer fake-api-key ticket=fake-ticket "
+        "subprotocol=fake-subprotocol https://upstream.example/private "
+        "Traceback (most recent call last)"
+    )
+    fragments = (
+        "SELECT secret",
+        "D:/private",
+        "fake-api-key",
+        "fake-ticket",
+        "fake-subprotocol",
+        "upstream.example",
+        "Traceback",
+    )
+    sentry_messages: list[dict] = []
+    alerts: list[dict] = []
+    rendered_logs: list[str] = []
+
+    class RenderedLogHandler(logging.Handler):
+        def emit(self, record):
+            rendered_logs.append(self.format(record))
+
+    handler = RenderedLogHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    manager_logger = logging.getLogger("app.services.optimization_task_manager")
+    scheduler.logger.addHandler(handler)
+    manager_logger.addHandler(handler)
+    monkeypatch.setattr(settings, "LOOP_DB_FILE", str(tmp_path / "cleanup.db"))
+    scheduler._RUN_TO_JOB.clear()
+    manager = OptimizationTaskManager()
+    monkeypatch.setattr(
+        "app.memory.optimization_task_store.delete_older_than",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError(sensitive_failure)
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.optimization_task_manager.get_task_manager",
+        lambda: manager,
+    )
+    monkeypatch.setattr(
+        "app.utils.sentry.capture_message",
+        lambda message, **kw: sentry_messages.append({"message": message, **kw}),
+    )
+    monkeypatch.setattr(
+        dispatcher,
+        "dispatch_scheduler_failure_alert",
+        lambda **kw: alerts.append(kw),
+    )
+
+    try:
+        await scheduler._job_optimization_task_cleanup()
+    finally:
+        scheduler.logger.removeHandler(handler)
+        manager_logger.removeHandler(handler)
+        scheduler._RUN_TO_JOB.clear()
+
+    row = loop_run_store.last_run("optimization_task_cleanup")
+    exported = json.dumps(
+        {"ledger": row, "sentry": sentry_messages, "alerts": alerts,
+         "logs": rendered_logs},
+        default=str,
+    )
+
+    assert row["status"] == "failed"
+    assert row["error"] == "Optimization task store cleanup failed"
+    assert row["result"] == {
+        "memory_removed": 0,
+        "store_deleted": 0,
+        "store_error": "Optimization task store cleanup failed",
+    }
+    assert [item["error"] for item in sentry_messages] == [
+        "Optimization task store cleanup failed"
+    ]
+    assert [item["job_name"] for item in alerts] == [
+        "optimization_task_cleanup"
+    ]
+    for fragment in fragments:
+        assert fragment not in exported
+    assert "RuntimeError" in exported
+
+
+@pytest.mark.asyncio
+async def test_uncaught_cleanup_failure_is_safe_in_ledger_alerts_and_logs(
+    tmp_path, monkeypatch,
+):
+    from app.core import scheduler
+    from app.core.config import settings
+    from app.memory import loop_run_store
+    from app.services import scheduler_failure_alert_dispatcher as dispatcher
+    from app.services import optimization_task_manager
+
+    sensitive = (
+        "SELECT secret FROM D:/private/optimization.db "
+        "Authorization=Bearer fake-api-key ticket=fake-ticket "
+        "subprotocol=fake-subprotocol https://upstream.example/private"
+    )
+    fragments = (
+        "SELECT secret", "D:/private", "fake-api-key", "fake-ticket",
+        "fake-subprotocol", "upstream.example", "Traceback",
+    )
+    sentry_messages, alerts, rendered_logs = [], [], []
+
+    class RenderedLogHandler(logging.Handler):
+        def emit(self, record):
+            rendered_logs.append(self.format(record))
+
+    handler = RenderedLogHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    scheduler.logger.addHandler(handler)
+    monkeypatch.setattr(settings, "LOOP_DB_FILE", str(tmp_path / "cleanup.db"))
+    scheduler._RUN_TO_JOB.clear()
+    monkeypatch.setattr(
+        optimization_task_manager, "get_task_manager",
+        lambda: (_ for _ in ()).throw(RuntimeError(sensitive)),
+    )
+    monkeypatch.setattr(
+        "app.utils.sentry.capture_message", lambda message, **kw:
+        sentry_messages.append({"message": message, **kw}),
+    )
+    monkeypatch.setattr(
+        dispatcher, "dispatch_scheduler_failure_alert",
+        lambda **kw: alerts.append(kw),
+    )
+    try:
+        await scheduler._job_optimization_task_cleanup()
+    finally:
+        scheduler.logger.removeHandler(handler)
+        scheduler._RUN_TO_JOB.clear()
+
+    row = loop_run_store.last_run("optimization_task_cleanup")
+    exported = json.dumps(
+        {"ledger": row, "sentry": sentry_messages, "alerts": alerts,
+         "logs": rendered_logs}, default=str,
+    )
+    assert row["status"] == "failed"
+    assert row["error"] == "Scheduler job failed: RuntimeError"
+    assert [item["error"] for item in sentry_messages] == [row["error"]]
+    assert [item["job_name"] for item in alerts] == [
+        "optimization_task_cleanup"
+    ]
+    for fragment in fragments:
+        assert fragment not in exported
+    assert "RuntimeError" in exported
+
+
 class TestCleanupOldTasksReturnsItsCounts:
     """The manager side: the counts must exist before the job can report them."""
 
@@ -99,7 +262,9 @@ class TestCleanupOldTasksReturnsItsCounts:
         ):
             outcome = asyncio.run(mgr.cleanup_old_tasks(max_age_hours=24))
 
-        assert outcome["store_error"] == "disk I/O error"
+        assert outcome["store_error"] == (
+            "Optimization task store cleanup failed"
+        )
         assert outcome["store_deleted"] == 0
         # In-memory pruning is independent and still reported.
         assert outcome["memory_removed"] == 0

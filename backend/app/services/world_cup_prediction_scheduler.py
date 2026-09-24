@@ -34,11 +34,11 @@ async def run_daily_prediction_update() -> dict[str, Any]:
         sync_result = await asyncio.to_thread(sync_world_cup_fixtures)
 
         if sync_result.get("status") == "error":
-            logger.error("Fixture sync failed: %s", sync_result.get("error"))
+            logger.error("Fixture sync failed")
             return {
                 "status": "error",
                 "step": "fixture_sync",
-                "error": sync_result.get("error")
+                "error": "World Cup fixture sync failed"
             }
 
         logger.info("Synced %s fixtures, remaining matches: %s",
@@ -82,9 +82,12 @@ async def run_daily_prediction_update() -> dict[str, Any]:
             "predictions": predict_result
         }
 
-    except Exception as e:
-        logger.error("World Cup daily update error: %s", e, exc_info=True)
+    except Exception as exc:
+        logger.error(
+            "World Cup daily update failed: %s",
+            type(exc).__name__,
+        )
         return {
             "status": "error",
-            "error": str(e)
+            "error": "World Cup daily update failed",
         }

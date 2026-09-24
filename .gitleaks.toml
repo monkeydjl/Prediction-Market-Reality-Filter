@@ -1,0 +1,14 @@
+# Gitleaks config: keep the default rules, exempt only the known synthetic
+# sentinels used by disclosure-test fixtures. These strings exist to prove that
+# a secret-shaped value does not reach an error message; they are not real
+# credentials. Path allowlists are avoided on purpose -- a real leak in those
+# fixtures should still be caught by any other pattern.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic sentinel credentials in disclosure test fixtures"
+regexes = [
+  '''sk-SECRET_KEY_[0-9]+''',
+  '''REDACTED-TOKEN''',
+]

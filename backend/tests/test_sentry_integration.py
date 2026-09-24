@@ -17,6 +17,23 @@ from app.core.config import settings
 from app.utils import sentry
 
 
+class TestSentryBeforeSendContract(unittest.TestCase):
+    """The sanitizer must satisfy Sentry's EventProcessor callback contract."""
+
+    def test_sanitizer_uses_sentry_event_processor_types(self):
+        import inspect
+
+        signature = inspect.signature(sentry._sanitize_event)
+        self.assertEqual(
+            str(signature.parameters["event"].annotation),
+            "Event",
+        )
+        self.assertEqual(
+            str(signature.parameters["_hint"].annotation),
+            "Hint",
+        )
+        self.assertEqual(str(signature.return_annotation), "Event")
+
 class TestSentryConfigDefaults(unittest.TestCase):
     """Spec §1.2 — Sentry config fields exist with safe defaults."""
 
@@ -141,7 +158,7 @@ class TestSentryInitWithDsn(unittest.TestCase):
 
 
 class TestSchedulerSentryForwarding(unittest.TestCase):
-    """scheduler._finish_run forwards failures to capture_exception."""
+    """scheduler._finish_run emits stable failure events without exceptions."""
 
     def test_finish_run_failed_status_calls_capture_exception(self):
         from app.core import scheduler
@@ -151,7 +168,7 @@ class TestSchedulerSentryForwarding(unittest.TestCase):
         test_exc = ValueError("scheduler boom")
 
         with patch.object(loop_run_store, "finish_run") as mock_finish, \
-             patch("app.utils.sentry.capture_exception") as mock_capture:
+             patch("app.utils.sentry.capture_message") as mock_capture:
             scheduler._finish_run(
                 run_id,
                 "failed",
@@ -161,28 +178,51 @@ class TestSchedulerSentryForwarding(unittest.TestCase):
             mock_finish.assert_called_once()
             mock_capture.assert_called_once()
             call_args = mock_capture.call_args
-            # The exception object must be forwarded
-            self.assertEqual(call_args.args[0], test_exc)
-            # And the context must include run_id + error
-            self.assertEqual(call_args.kwargs.get("job_run_id"), run_id)
-            self.assertEqual(call_args.kwargs.get("job_error"), "scheduler boom")
+            self.assertEqual(call_args.args, ("scheduler job failed",))
+            self.assertEqual(call_args.kwargs.get("level"), "error")
+            self.assertEqual(call_args.kwargs.get("job_name"), "unknown")
+            self.assertEqual(call_args.kwargs.get("run_id"), run_id)
+            self.assertEqual(
+                call_args.kwargs.get("error"),
+                "Scheduler job failed: ValueError",
+            )
+            self.assertEqual(call_args.kwargs.get("exc_type"), "ValueError")
 
     def test_finish_run_success_status_does_not_call_capture_exception(self):
         from app.core import scheduler
         from app.memory import loop_run_store
 
         with patch.object(loop_run_store, "finish_run") as mock_finish, \
-             patch("app.utils.sentry.capture_exception") as mock_capture:
+             patch("app.utils.sentry.capture_message") as mock_capture:
             scheduler._finish_run("test-run-id", "success", result={"n": 1})
             mock_finish.assert_called_once()
             mock_capture.assert_not_called()
 
-    def test_finish_run_none_run_id_is_noop(self):
-        from app.core import scheduler
+    def test_finish_run_none_run_id_still_forwards_a_failure(self):
+        """A missing ledger row is not a missing job.
 
-        with patch("app.utils.sentry.capture_exception") as mock_capture:
-            scheduler._finish_run(None, "failed", error="oops")
-            mock_capture.assert_not_called()
+        `_start_run` returns None when the `loop_runs` insert fails; the job
+        still ran. Gating Sentry on that None used to silence the only remaining
+        alarm channel. The ledger update stays skipped -- there is no row -- but
+        the failure itself still forwards, with `job_run_id=None`.
+        """
+        from app.core import scheduler
+        from app.memory import loop_run_store
+
+        test_exc = ValueError("oops")
+        with patch.object(loop_run_store, "finish_run") as mock_finish, \
+             patch("app.utils.sentry.capture_message") as mock_capture:
+            scheduler._finish_run(None, "failed", error="oops", exc=test_exc)
+            mock_finish.assert_not_called()
+            mock_capture.assert_called_once()
+            call_args = mock_capture.call_args
+            self.assertEqual(call_args.args, ("scheduler job failed",))
+            self.assertIsNone(call_args.kwargs.get("run_id"))
+            self.assertEqual(
+                call_args.kwargs.get("error"),
+                "Scheduler job failed: ValueError",
+            )
+            self.assertEqual(call_args.kwargs.get("exc_type"), "ValueError")
 
 
 class TestSentryLifespanIntegration(unittest.TestCase):

@@ -933,7 +933,7 @@ def test_route_refuses_a_football_elo_seed(route_client, route_headers):
     assert resp.status_code == 400
     body = resp.json()["detail"]
     assert "binary-only" in body
-    assert "epl" in body
+    assert "epl" not in body
 
 
 def test_route_refuses_the_default_both_steps_for_football(route_client, route_headers):
@@ -977,7 +977,9 @@ def test_route_still_rejects_an_undeclared_sport(route_client, route_headers):
         headers=route_headers,
     )
     assert resp.status_code == 400
-    assert "kabaddi" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    assert "Unsupported sport for backfill" in detail
+    assert "kabaddi" not in detail
 
 
 def test_the_cli_offers_every_backfillable_competition():

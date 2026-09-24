@@ -240,7 +240,8 @@ def test_the_match_routes_report_a_server_fault_not_a_missing_match(client, ddl)
     assert client.get(f"/api/predictions/matches/{MID}").status_code == 500
     predict = client.post(f"/api/predictions/matches/{MID}/predict")
     assert predict.status_code == 500
-    assert "kernel_match_fixtures" in predict.text
+    assert predict.json()["detail"] == "Prediction generation failed"
+    assert "kernel_match_fixtures" not in predict.text
 
 
 def test_the_outcome_route_reports_processed_for_a_match_with_no_result(client):
@@ -264,7 +265,8 @@ def test_the_outcome_route_no_longer_reports_processed_over_a_broken_table(clien
     resp = client.post(f"/api/predictions/outcomes/{MID}/process")
 
     assert resp.status_code == 500
-    assert "kernel_match_results" in resp.text
+    assert resp.json()["detail"] == "Outcome processing failed"
+    assert "kernel_match_results" not in resp.text
 
 
 def test_the_learning_loop_is_no_longer_skipped_under_a_quiet_200(client):

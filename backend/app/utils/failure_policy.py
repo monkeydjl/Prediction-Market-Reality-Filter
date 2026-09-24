@@ -30,7 +30,7 @@ def log_service_failure(
         source,
         policy,
         suffix,
-        exc,
+        type(exc).__name__,
     )
 
 

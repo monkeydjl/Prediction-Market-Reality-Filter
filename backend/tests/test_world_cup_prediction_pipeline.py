@@ -1,3 +1,5 @@
+import io
+import logging
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -270,6 +272,75 @@ class WorldCupPredictionPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["confidence"], 0.60)
         self.assertIsNone(result["high_confidence_selection"])
         self.assertEqual(result["factors"]["challenge_result"]["verdict"], "reject")
+
+    async def test_world_cup_challenge_failure_hides_exception_text_from_persisted_prediction(self):
+        from app.core import logging as app_logging
+
+        sensitive = "Authorization=Bearer fake-api-key ticket=fake-ticket C:/private/secret.db"
+        self._add_match(
+            "future_challenge_failure",
+            kickoff_utc=utc_now_naive() + timedelta(hours=1),
+        )
+
+        def fake_elo_engine(**_kwargs):
+            return {
+                "predicted_score": {"home": 1.0, "away": 0.0},
+                "outcome_probabilities": {
+                    "home_win": 0.60,
+                    "draw": 0.25,
+                    "away_win": 0.15,
+                },
+                "confidence": 0.70,
+                "prediction_method": "elo_odds",
+                "elo_ratings": {"home": 1500, "away": 1450},
+                "has_betting_odds": True,
+            }
+
+        handler = logging.StreamHandler(io.StringIO())
+        root = logging.getLogger()
+        root.addHandler(handler)
+        try:
+            with (
+                patch.object(pipeline, "get_elo_rating", new_callable=AsyncMock) as get_elo_rating,
+                patch.object(pipeline, "get_cached_odds", new_callable=AsyncMock) as get_cached_odds,
+                patch.object(pipeline, "get_engine", return_value=fake_elo_engine),
+                patch.object(pipeline, "apply_confidence_calibration", side_effect=lambda prediction, engine_name: prediction),
+                patch.object(pipeline, "format_tactical_summary", return_value="test tactical"),
+                patch.object(pipeline.settings, "CONCLUSION_CHALLENGE_ENABLED", True),
+                patch.object(pipeline.settings, "WORLD_CUP_CHALLENGE_ENABLED", True),
+                patch.object(pipeline.settings, "CONCLUSION_CHALLENGE_LLM_CRITIC_ENABLED", False),
+                patch.object(pipeline.settings, "CONCLUSION_CHALLENGE_STRICTNESS", "normal"),
+                patch.object(pipeline.settings, "PMRF_ENV", "production"),
+                patch(
+                    "app.services.conclusion_challenge_service.challenge_conclusion",
+                    side_effect=RuntimeError(sensitive),
+                ),
+            ):
+                app_logging.setup_logging()
+                get_elo_rating.return_value = {"elo_rating": 1500.0, "source": "test"}
+                get_cached_odds.return_value = None
+                result = await pipeline.run_prediction_pipeline(
+                    "future_challenge_failure",
+                    engine="elo_odds",
+                    session=self.session,
+                )
+                output = handler.stream.getvalue()
+        finally:
+            root.removeHandler(handler)
+            handler.close()
+
+        self.session.expunge_all()
+        prediction = self.session.query(MatchPrediction).one()
+        challenge = prediction.factors["challenge_result"]
+        self.assertEqual(result["action"], "created")
+        self.assertEqual(challenge["verdict"], "pass_with_warnings")
+        self.assertEqual(challenge["required_action"], "allow_output")
+        self.assertEqual(challenge["warnings"][0]["details"], {"error": "RuntimeError"})
+        self.assertIn("world cup conclusion challenge failed", output)
+        self.assertIn("RuntimeError", output)
+        for fragment in ("Authorization", "fake-api-key", "fake-ticket", "C:/private", "Traceback"):
+            self.assertNotIn(fragment, repr(prediction.factors))
+            self.assertNotIn(fragment, output)
 
     def test_world_cup_challenge_retry_requested_once(self):
         prediction = self._challenge_prediction()

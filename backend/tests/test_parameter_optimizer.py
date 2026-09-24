@@ -1,5 +1,7 @@
 # backend/tests/test_parameter_optimizer.py
 """Tests for ParameterOptimizer — TDD RED phase."""
+import logging
+
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -50,6 +52,68 @@ def test_optimize_converges_with_mock_backtest():
     assert isinstance(result["factor_weights"], dict)
     assert "elo" in result["factor_weights"]
     assert "score_formula" in result
+
+
+def test_persistence_failure_log_does_not_expose_exception_text():
+    sensitive_error = (
+        "SELECT secret FROM C:/private/optimizer.db "
+        "Authorization=Bearer fake-api-key ticket=fake-ticket "
+        "subprotocol=fake-subprotocol https://upstream.example/private"
+    )
+    rendered_logs = []
+
+    class RenderedLogHandler(logging.Handler):
+        def emit(self, record):
+            rendered_logs.append(self.format(record))
+
+    def measured_run(sport, *, train_matches, test_matches, params):
+        from app.kernel.backtest.runner import BacktestResult
+
+        return BacktestResult(
+            accuracy=0.7,
+            brier_score=0.2,
+            mae=0.3,
+            sample_count=10,
+            score=0.73,
+            predictions=[],
+        )
+
+    handler = RenderedLogHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    optimizer = ParameterOptimizer()
+    optimizer_logger = logging.getLogger("app.kernel.parameter_optimizer")
+    optimizer_logger.addHandler(handler)
+    try:
+        with patch(
+            "app.kernel.parameter_optimizer.BacktestRunner.run",
+            side_effect=measured_run,
+        ), patch(
+            "app.kernel.optimized_params_store."
+            "OptimizedParamsStore.save_candidate",
+            side_effect=RuntimeError(sensitive_error),
+        ):
+            result = optimizer.optimize_sync(
+                "nba",
+                n_trials=1,
+                train_matches=[],
+                test_matches=[],
+            )
+    finally:
+        optimizer_logger.removeHandler(handler)
+
+    assert result["saved_candidate"] is None
+    rendered = "\n".join(rendered_logs)
+    assert "RuntimeError" in rendered
+    for fragment in (
+        "SELECT secret",
+        "C:/private",
+        "fake-api-key",
+        "fake-ticket",
+        "fake-subprotocol",
+        "https://upstream.example/private",
+        "Traceback",
+    ):
+        assert fragment not in rendered
 
 
 def test_search_space_weights_sum_to_one():

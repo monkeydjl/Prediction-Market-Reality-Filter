@@ -1,5 +1,8 @@
 # backend/tests/test_sport_optimization_routes.py
 """Tests for sport optimization API routes — TDD RED phase."""
+import asyncio
+import logging
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -94,6 +97,134 @@ def test_run_optimization_rejects_unknown_sport(client, monkeypatch, auth_header
         headers=auth_headers,
     )
     assert resp.status_code == 400
+
+
+def test_failed_optimization_task_does_not_persist_or_expose_exception_text(
+    client,
+    monkeypatch,
+    tmp_path,
+    auth_headers,
+):
+    from app.api.routes import sport_optimization
+    from app.core.config import settings
+    from app.services import optimization_task_manager
+    from app.memory import optimization_task_store
+
+    sensitive_error = (
+        "postgresql://user:fake-secret@private-db/optimization "
+        "SELECT private_data"
+    )
+    spawned = []
+    rendered_logs = []
+
+    def capture_spawn(coro, *args, **kwargs):
+        spawned.append(coro)
+
+    class RenderedLogHandler(logging.Handler):
+        def emit(self, record):
+            rendered_logs.append(self.format(record))
+
+    log_handler = RenderedLogHandler()
+    log_handler.setFormatter(logging.Formatter("%(message)s"))
+    sport_optimization.logger.addHandler(log_handler)
+
+    monkeypatch.setattr(settings, "PHASE9_ACCURACY_SPRINT_ENABLED", True)
+    monkeypatch.setattr(settings, "LOOP_DB_FILE", str(tmp_path / "loop.db"))
+    optimization_task_store._INITIALIZED.clear()
+    task_manager = optimization_task_manager.OptimizationTaskManager()
+    monkeypatch.setattr(optimization_task_manager, "_task_manager", task_manager)
+    monkeypatch.setattr("app.utils.background_tasks.spawn", capture_spawn)
+    monkeypatch.setattr(
+        "app.kernel.backtest.match_loader.load_sport_matches_for_backtest",
+        lambda sport: (_ for _ in ()).throw(RuntimeError(sensitive_error)),
+    )
+
+    try:
+        response = client.post(
+            "/api/sport-optimization/run",
+            json={"sport": "nba", "n_trials": 5},
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        assert len(spawned) == 1
+        asyncio.run(spawned[0])
+    finally:
+        sport_optimization.logger.removeHandler(log_handler)
+
+    task_id = response.json()["task_id"]
+    stored = optimization_task_manager.optimization_task_store.get_task(task_id)
+    rehydrated_manager = optimization_task_manager.OptimizationTaskManager()
+    monkeypatch.setattr(optimization_task_manager, "_task_manager", rehydrated_manager)
+    status_response = client.get(f"/api/sport-optimization/status/{task_id}")
+
+    assert stored is not None
+    assert stored["status"] == "failed"
+    assert stored["error"] == "Optimization task failed"
+    assert status_response.status_code == 200
+    assert status_response.json()["status"] == "failed"
+    assert status_response.json()["error"] == "Optimization task failed"
+    exported = str(stored) + status_response.text + "\n".join(rendered_logs)
+    assert "fake-secret" not in exported
+    assert "private-db" not in exported
+    assert "SELECT private_data" not in exported
+    assert "Traceback" not in exported
+    assert "RuntimeError" in "\n".join(rendered_logs)
+
+
+def test_apply_does_not_expose_elo_reseed_exception_text(
+    client,
+    monkeypatch,
+    auth_headers,
+):
+    from app.core.config import settings
+    from app.kernel.optimized_params_store import OptimizedParamsStore
+
+    sensitive_error = (
+        "SELECT secret FROM C:/private/elo.db "
+        "Authorization=Bearer fake-api-key ticket=fake-ticket "
+        "subprotocol=fake-subprotocol https://upstream.example/private"
+    )
+
+    def fail_seed(*args, **kwargs):
+        raise RuntimeError(sensitive_error)
+
+    monkeypatch.setattr(settings, "PHASE9_ACCURACY_SPRINT_ENABLED", True)
+    candidate = OptimizedParamsStore().save_candidate(
+        sport="nba",
+        competition="nba",
+        factor_weights={"elo": 0.5},
+        elo_params={"hfa": 100},
+        score=0.75,
+        accuracy=0.70,
+        brier_score=0.20,
+        mae=0.30,
+        sample_count=100,
+    )
+    monkeypatch.setattr(
+        "app.services.historical_data_ingestor."
+        "HistoricalDataIngestor.seed_elo_ratings",
+        fail_seed,
+    )
+
+    response = client.post(
+        f"/api/sport-optimization/apply/{candidate['id']}",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["elo_seed"] == {
+        "ok": False,
+        "error": "Elo reseed failed",
+    }
+    for fragment in (
+        "SELECT secret",
+        "C:/private",
+        "fake-api-key",
+        "fake-ticket",
+        "fake-subprotocol",
+        "https://upstream.example/private",
+    ):
+        assert fragment not in response.text
 
 
 def test_get_params_returns_404_when_none(client, monkeypatch):

@@ -31,6 +31,21 @@ class FailurePolicyTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIn("policy=fail_closed_none", "\n".join(logs.output))
 
+    def test_failure_log_does_not_render_exception_details(self):
+        logger = logging.getLogger("tests.failure_policy.sensitive")
+        secret = "query-secret"
+        upstream_url = f"https://upstream.example/private?api_key={secret}"
+        exc = RuntimeError(f"request failed for {upstream_url}")
+
+        with self.assertLogs(logger.name, level="WARNING") as logs:
+            result = fail_closed_none(logger, "source_b", exc)
+
+        text = "\n".join(logs.output)
+        self.assertIsNone(result)
+        self.assertIn("RuntimeError", text)
+        self.assertNotIn(upstream_url, text)
+        self.assertNotIn(secret, text)
+
     def test_deterministic_fallback_returns_fallback(self):
         logger = logging.getLogger("tests.failure_policy.fallback")
         fallback = {"analysis_quality": "deterministic_fallback"}

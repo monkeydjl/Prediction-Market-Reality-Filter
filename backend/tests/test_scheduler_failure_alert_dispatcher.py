@@ -14,12 +14,6 @@ from app.services import scheduler_failure_alert_dispatcher
 
 
 class TestDispatchSchedulerFailureAlert(unittest.TestCase):
-    def _exc(self) -> ValueError:
-        try:
-            raise ValueError("boom")
-        except ValueError as exc:
-            return exc
-
     def test_disabled_flag_is_noop(self):
         with patch("app.services.scheduler_failure_alert_dispatcher.settings") as s:
             s.SCHEDULER_FAILURE_ALERT_ENABLED = False
@@ -32,7 +26,7 @@ class TestDispatchSchedulerFailureAlert(unittest.TestCase):
                     job_name="event_discover",
                     run_id="r1",
                     error="boom",
-                    exc=self._exc(),
+                    exc_type="ValueError",
                 )
                 wh.assert_not_called()
                 cap.assert_not_called()
@@ -52,7 +46,7 @@ class TestDispatchSchedulerFailureAlert(unittest.TestCase):
                     job_name="event_discover",
                     run_id="r1",
                     error="boom",
-                    exc=self._exc(),
+                    exc_type="ValueError",
                 )
                 wh.assert_called_once()
                 cap.assert_called_once()
@@ -70,7 +64,7 @@ class TestDispatchSchedulerFailureAlert(unittest.TestCase):
                     job_name="event_discover",
                     run_id="r1",
                     error="boom",
-                    exc=None,
+                    exc_type=None,
                 )
                 wh.assert_not_called()
                 cap.assert_called_once()
@@ -90,7 +84,7 @@ class TestDispatchSchedulerFailureAlert(unittest.TestCase):
                     job_name="event_discover",
                     run_id="r1",
                     error="boom",
-                    exc=None,
+                    exc_type=None,
                 )
         scheduler_failure_alert_dispatcher._reset_cooldown_state()
 
@@ -102,15 +96,15 @@ class TestDispatchSchedulerFailureAlert(unittest.TestCase):
             s.SCHEDULER_FAILURE_ALERT_COOLDOWN_SECONDS = 3600
             with patch("app.utils.sentry.capture_message") as cap:
                 scheduler_failure_alert_dispatcher.dispatch_scheduler_failure_alert(
-                    job_name="event_discover", run_id="r1", error="boom", exc=None,
+                    job_name="event_discover", run_id="r1", error="boom", exc_type=None,
                 )
                 # Same job_name → within cooldown → skipped
                 scheduler_failure_alert_dispatcher.dispatch_scheduler_failure_alert(
-                    job_name="event_discover", run_id="r2", error="boom", exc=None,
+                    job_name="event_discover", run_id="r2", error="boom", exc_type=None,
                 )
                 # Different job_name → outside cooldown window → fires
                 scheduler_failure_alert_dispatcher.dispatch_scheduler_failure_alert(
-                    job_name="event_auto_resolve", run_id="r3", error="boom", exc=None,
+                    job_name="event_auto_resolve", run_id="r3", error="boom", exc_type=None,
                 )
                 # First + third fire; second is deduped
                 self.assertEqual(cap.call_count, 2)
@@ -124,10 +118,10 @@ class TestDispatchSchedulerFailureAlert(unittest.TestCase):
             s.SCHEDULER_FAILURE_ALERT_COOLDOWN_SECONDS = 3600
             with patch("app.utils.sentry.capture_message") as cap:
                 scheduler_failure_alert_dispatcher.dispatch_scheduler_failure_alert(
-                    job_name="event_discover", run_id="r1", error="boom", exc=None,
+                    job_name="event_discover", run_id="r1", error="boom", exc_type=None,
                 )
                 scheduler_failure_alert_dispatcher.dispatch_scheduler_failure_alert(
-                    job_name="event_discover", run_id="r2", error="boom", exc=None,
+                    job_name="event_discover", run_id="r2", error="boom", exc_type=None,
                     force=True,
                 )
                 self.assertEqual(cap.call_count, 2)
@@ -142,7 +136,7 @@ class TestDispatchSchedulerFailureAlert(unittest.TestCase):
             with patch("app.utils.sentry.capture_message") as cap:
                 # Empty job_name should be normalized to "unknown"
                 scheduler_failure_alert_dispatcher.dispatch_scheduler_failure_alert(
-                    job_name="", run_id="r1", error="boom", exc=None,
+                    job_name="", run_id="r1", error="boom", exc_type=None,
                 )
                 cap.assert_called_once()
                 # The job_name kwarg in the capture_message call should be "unknown"

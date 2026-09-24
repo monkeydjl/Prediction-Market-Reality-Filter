@@ -5,6 +5,7 @@ import {
   getOperatorApiKey,
   getOperatorId,
   qualityMetricsApi,
+  realtimeApi,
   reviewQueueApi,
   setOperatorApiKey,
   setOperatorId,
@@ -12,6 +13,8 @@ import {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.resetModules();
+  delete process.env.NEXT_PUBLIC_API_BASE;
   window.sessionStorage.clear();
 });
 
@@ -399,5 +402,199 @@ describe("eventsApi GET dedup", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("realtimeApi.issueTicket", () => {
+  const ticketResponse = () =>
+    new Response(
+      JSON.stringify({
+        ticket: "tk_test_123",
+        expires_in: 60,
+        subprotocol: "pmrf.ticket.tk_test_123",
+      }),
+      { status: 201 },
+    );
+
+  it("POSTs /api/ws/tickets with the operator key in a header, never the URL", async () => {
+    setOperatorApiKey("secret-write-key");
+    const fetchMock = vi.fn().mockResolvedValue(ticketResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await realtimeApi.issueTicket();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/ws/tickets");
+    expect(url).not.toContain("secret-write-key");
+    expect(url).not.toContain("?");
+    expect(init.method).toBe("POST");
+    const headers = init.headers as Headers;
+    expect(headers.get("X-API-Key")).toBe("secret-write-key");
+  });
+
+  it("uses a relative custom API base as the complete ticket prefix", async () => {
+    vi.resetModules();
+    process.env.NEXT_PUBLIC_API_BASE = "/internal-api";
+    const fetchMock = vi.fn().mockResolvedValue(ticketResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const { realtimeApi: freshRealtimeApi } = await import("./api");
+
+    await freshRealtimeApi.issueTicket();
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/internal-api/ws/tickets");
+    delete process.env.NEXT_PUBLIC_API_BASE;
+  });
+
+  it("uses an absolute custom API base as the complete ticket prefix", async () => {
+    vi.resetModules();
+    process.env.NEXT_PUBLIC_API_BASE = "https://api.example.com/internal-api";
+    const fetchMock = vi.fn().mockResolvedValue(ticketResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const { realtimeApi: freshRealtimeApi } = await import("./api");
+
+    await freshRealtimeApi.issueTicket();
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://api.example.com/internal-api/ws/tickets",
+    );
+    delete process.env.NEXT_PUBLIC_API_BASE;
+  });
+
+  it.each([
+    ["/internal-api/", "/internal-api/ws/tickets"],
+    ["/internal-api///", "/internal-api/ws/tickets"],
+    [
+      "https://api.example.com/internal-api/",
+      "https://api.example.com/internal-api/ws/tickets",
+    ],
+    [
+      "https://api.example.com/internal-api///",
+      "https://api.example.com/internal-api/ws/tickets",
+    ],
+  ])("normalizes trailing slashes in ticket base %s", async (base, expected) => {
+    vi.resetModules();
+    process.env.NEXT_PUBLIC_API_BASE = base;
+    const fetchMock = vi.fn().mockResolvedValue(ticketResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const { realtimeApi: freshRealtimeApi } = await import("./api");
+
+    await freshRealtimeApi.issueTicket();
+
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toBe(expected);
+    expect(url.includes("//ws/")).toBe(false);
+  });
+
+  it.each(["/", "///"])("keeps root ticket base %s valid and joins its path once", async (base) => {
+    vi.resetModules();
+    process.env.NEXT_PUBLIC_API_BASE = base;
+    const fetchMock = vi.fn().mockResolvedValue(ticketResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const { realtimeApi: freshRealtimeApi } = await import("./api");
+
+    await freshRealtimeApi.issueTicket();
+
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toBe("/ws/tickets");
+    expect(url.includes("//ws/")).toBe(false);
+  });
+
+  it.each([
+    "/api?x=1",
+    "/api#fragment",
+    "/internal-api?tenant=x",
+    "/internal-api#v1",
+    "//evil.example/api",
+    "https://api.example.com/api?x=1",
+    "https://api.example.com/api#fragment",
+    "https://user:pass@example.com/api",
+    "ws://api.example.com/api",
+    "wss://api.example.com/api",
+    "ftp://api.example.com/api",
+    "",
+    "not a URL",
+  ])("does not fetch a ticket with invalid API base %s", async (base) => {
+    vi.resetModules();
+    process.env.NEXT_PUBLIC_API_BASE = base;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    let caught: unknown;
+    try {
+      const { realtimeApi: unsafeRealtimeApi } = await import("./api");
+      await unsafeRealtimeApi.issueTicket();
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain("NEXT_PUBLIC_API_BASE");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns the ticket payload the WS handshake needs without logging it", async () => {
+    const consoleSpies = [
+      vi.spyOn(console, "log").mockImplementation(() => undefined),
+      vi.spyOn(console, "info").mockImplementation(() => undefined),
+      vi.spyOn(console, "warn").mockImplementation(() => undefined),
+      vi.spyOn(console, "error").mockImplementation(() => undefined),
+    ];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ticketResponse()));
+
+    const res = await realtimeApi.issueTicket();
+
+    expect(res.ticket).toBe("tk_test_123");
+    expect(res.expires_in).toBe(60);
+    expect(res.subprotocol).toBe("pmrf.ticket.tk_test_123");
+    for (const spy of consoleSpies) expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("passes an AbortSignal through to fetch", async () => {
+    const controller = new AbortController();
+    let fetchSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn().mockImplementation((_, init) => {
+      fetchSignal = init.signal;
+      return new Promise((_, reject) => {
+        fetchSignal?.addEventListener("abort", () =>
+          reject(new DOMException("Aborted", "AbortError")),
+        );
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = realtimeApi.issueTicket(controller.signal);
+    controller.abort();
+
+    await expect(pending).rejects.toThrow();
+    // api() bridges the caller's signal through its own controller (so the
+    // 60s timeout can abort too), so identity is not the caller's signal —
+    // but aborting the caller's signal must abort the fetch's signal.
+    expect(fetchSignal?.aborted).toBe(true);
+  });
+
+  it("does not cache tickets: a second call fetches again", async () => {
+    // A factory, not mockResolvedValue: one Response body can be consumed only
+    // once, so sharing a single instance across calls throws on the second
+    // json() — a test artifact, not the property under test.
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(ticketResponse()),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await realtimeApi.issueTicket();
+    await realtimeApi.issueTicket();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces a 401 as the standard operator-auth message", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("unauthorized", { status: 401 })),
+    );
+
+    await expect(realtimeApi.issueTicket()).rejects.toMatchObject({
+      name: "ApiError",
+      status: 401,
+    });
   });
 });

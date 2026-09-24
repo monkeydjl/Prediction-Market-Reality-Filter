@@ -1,5 +1,7 @@
 import tempfile
 import unittest
+import io
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -135,6 +137,112 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
                 with self.subTest(path=path):
                     resp = self.client.post(path, json={})
                     self.assertEqual(resp.status_code, 401)
+
+    def test_consistency_repair_failure_is_safe_in_ledger_and_public_anomalies(self):
+        from app.api.routes import quality_metrics as quality_metrics_routes
+        from app.services import world_cup_quality_service
+
+        sensitive = (
+            "SELECT secret FROM C:/private/repair.db "
+            "Authorization=Bearer fake-api-key ticket=fake-ticket "
+            "subprotocol=fake-subprotocol https://upstream.example/private"
+        )
+        self.client.app.include_router(quality_metrics_routes.router)
+        client = TestClient(self.client.app, raise_server_exceptions=False)
+        try:
+            with (
+                patch.object(settings, "API_WRITE_KEY", "secret"),
+                patch.object(settings, "SCHEDULER_ENABLED", False),
+                patch.object(quality_metrics_routes, "list_all_events", return_value=[]),
+                patch.object(quality_metrics_routes, "calibration_summary", return_value={}),
+                patch.object(
+                    world_cup_quality_service,
+                    "preview_consistency_history_repair",
+                    side_effect=RuntimeError(sensitive),
+                ),
+            ):
+                response = client.post(
+                    "/analytics/consistency-repair?history_ids=1&dry_run=true",
+                    headers=AUTH_HEADERS,
+                )
+                run = loop_run_store.last_run("world_cup_consistency_repair")
+                anomalies = client.get("/quality-metrics/anomalies")
+        finally:
+            client.close()
+
+        self.assertIsNotNone(run)
+        exported = str({"response": response.text, "run": run, "anomalies": anomalies.json()})
+        for fragment in (
+            "SELECT secret", "C:/private", "fake-api-key", "fake-ticket",
+            "fake-subprotocol", "upstream.example", "Traceback",
+        ):
+            self.assertNotIn(fragment, exported)
+        safe_error = "Consistency repair failed: RuntimeError"
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(run["status"], "failed")
+        self.assertEqual(run["error"], safe_error)
+        failed = [a for a in anomalies.json()["anomalies"] if a["code"] == "scheduler_job_failed"]
+        self.assertEqual(failed[0]["detail"]["error"], safe_error)
+
+    def test_verified_result_correction_failure_hides_and_does_not_persist_sql(self):
+        self._add_finished_fixture()
+        sensitive_failure = (
+            "SELECT secret FROM C:/private/correction.db "
+            "Authorization=Bearer fake-api-key ticket=fake-ticket "
+            "subprotocol=fake-subprotocol https://upstream.example/private"
+        )
+        log_output = io.StringIO()
+        log_handler = logging.StreamHandler(log_output)
+        log_handler.setFormatter(logging.Formatter("%(message)s"))
+        correction_logger = logging.getLogger(
+            "app.services.world_cup_verified_result_correction_service"
+        )
+        correction_logger.addHandler(log_handler)
+
+        try:
+            with (
+                patch.object(settings, "API_WRITE_KEY", "secret"),
+                patch(
+                    "app.services.world_cup_verified_result_correction_service.import_sports_facts",
+                    side_effect=RuntimeError(sensitive_failure),
+                ),
+            ):
+                response = self.client.post(
+                    "/analytics/verified-result-correction",
+                    headers=AUTH_HEADERS,
+                    json={
+                        "match_id": "m1",
+                        "home_score": 2,
+                        "away_score": 1,
+                        "source": "FIFA match centre",
+                        "confirmed": True,
+                    },
+                )
+        finally:
+            correction_logger.removeHandler(log_handler)
+            log_handler.close()
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "error")
+        self.assertEqual(body["reason"], "Verified result correction failed")
+        run = loop_run_store.last_run("world_cup_verified_result_correction")
+        self.assertEqual(run["status"], "failed")
+        self.assertEqual(run["error"], "Verified result correction failed")
+        output = log_output.getvalue()
+        self.assertIn("RuntimeError", output)
+        for fragment in (
+            "SELECT secret",
+            "C:/private",
+            "fake-api-key",
+            "fake-ticket",
+            "fake-subprotocol",
+            "https://upstream.example/private",
+            "Traceback",
+        ):
+            self.assertNotIn(fragment, response.text)
+            self.assertNotIn(fragment, output)
+            self.assertNotIn(fragment, str(run))
 
     def test_verified_result_correction_requires_confirmation_and_source(self):
         self.session.add_all([
@@ -756,6 +864,87 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
         self.assertEqual(body["candidate_count"], 1)
         self.assertEqual(body["imported"], 0)
 
+    def test_result_fact_backfill_success_hides_configured_fact_path(self):
+        sensitive_path = (
+            "C:/private/fake-api-key-ticket-fake-subprotocol-facts.json"
+        )
+
+        with (
+            patch.object(settings, "API_WRITE_KEY", "secret"),
+            patch.object(settings, "SPORTS_FACT_FILE", sensitive_path),
+        ):
+            response = self.client.post(
+                "/analytics/result-fact-backfill?dry_run=true&limit=5",
+                headers=AUTH_HEADERS,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["fact_store"]["configured_path"],
+            "redacted",
+        )
+        for fragment in (
+            "C:/private",
+            "fake-api-key",
+            "ticket",
+            "fake-subprotocol",
+        ):
+            self.assertNotIn(fragment, response.text)
+
+    def test_result_consistency_does_not_expose_configured_fact_path(self):
+        sensitive_path = (
+            "C:/private/fake-api-key-ticket-fake-subprotocol-facts.json"
+        )
+        with patch.object(settings, "SPORTS_FACT_FILE", sensitive_path):
+            response = self.client.get("/analytics/result-consistency")
+
+        self.assertEqual(response.status_code, 200)
+        fact_store = response.json()["fact_store"]
+        self.assertEqual(fact_store["configured_path"], "redacted")
+        for fragment in (
+            "C:/private",
+            "fake-api-key",
+            "ticket",
+            "fake-subprotocol",
+        ):
+            self.assertNotIn(fragment, response.text)
+
+    def test_result_fact_backfill_failure_hides_and_does_not_persist_path(self):
+        self._add_finished_fixture()
+        sensitive_failure = (
+            "write failed for C:/private/fake-api-key-ticket-"
+            "fake-subprotocol-facts.json"
+        )
+
+        with (
+            patch.object(settings, "API_WRITE_KEY", "secret"),
+            patch(
+                "app.services.world_cup_result_fact_backfill_service.import_sports_facts",
+                side_effect=OSError(sensitive_failure),
+            ),
+            TestClient(
+                self.client.app,
+                raise_server_exceptions=False,
+            ) as response_client,
+        ):
+            response = response_client.post(
+                "/analytics/result-fact-backfill?dry_run=false&confirm=true&limit=5",
+                headers=AUTH_HEADERS,
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertNotIn(sensitive_failure, response.text)
+        runs = self.client.get("/analytics/result-fact-backfill/runs")
+        self.assertEqual(runs.status_code, 200)
+        self.assertEqual(runs.json()["runs"][0]["error"], "Result fact backfill failed")
+        for fragment in (
+            "C:/private",
+            "fake-api-key",
+            "ticket",
+            "fake-subprotocol",
+        ):
+            self.assertNotIn(fragment, runs.text)
+
     def test_confirmed_result_fact_backfill_records_audit_metadata(self):
         self._add_finished_fixture()
         headers = {
@@ -821,6 +1010,121 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
         self.assertEqual(passed_meta.get("trigger_source"), "world-cup-dashboard")
         self.assertEqual(passed_meta.get("operator"), "charlie")
 
+    def test_scoring_reconcile_failure_hides_and_does_not_persist_sql(self):
+        sensitive_failure = (
+            "SELECT secret FROM C:/private/scoring.db "
+            "Authorization=Bearer fake-api-key ticket=fake-ticket "
+            "subprotocol=fake-subprotocol https://upstream.example/private"
+        )
+        log_output = io.StringIO()
+        log_handler = logging.StreamHandler(log_output)
+        log_handler.setFormatter(logging.Formatter("%(message)s"))
+        scoring_logger = logging.getLogger("app.services.world_cup_scoring_service")
+        scoring_logger.addHandler(log_handler)
+
+        try:
+            with (
+                patch.object(settings, "API_WRITE_KEY", "secret"),
+                patch(
+                    "app.services.world_cup_scoring_service.get_prediction_session",
+                    return_value=self.session,
+                ),
+                patch.object(
+                    self.session,
+                    "query",
+                    side_effect=RuntimeError(sensitive_failure),
+                ),
+                patch(
+                    "app.services.world_cup_scoring_service.close_prediction_session",
+                ),
+                TestClient(
+                    self.client.app,
+                    raise_server_exceptions=False,
+                ) as response_client,
+            ):
+                response = response_client.post(
+                    "/analytics/reconcile-scoring",
+                    headers=AUTH_HEADERS,
+                )
+        finally:
+            scoring_logger.removeHandler(log_handler)
+
+        self.assertEqual(response.status_code, 500)
+        self.assertNotIn(sensitive_failure, response.text)
+        runs = self.client.get("/analytics/reconcile-scoring/runs")
+        self.assertEqual(runs.status_code, 200)
+        self.assertEqual(runs.json()["runs"][0]["error"], "Scoring reconciliation failed")
+        rendered_logs = log_output.getvalue()
+        for fragment in (
+            "SELECT secret",
+            "C:/private",
+            "fake-api-key",
+            "fake-ticket",
+            "fake-subprotocol",
+            "https://upstream.example/private",
+            "Traceback",
+        ):
+            self.assertNotIn(fragment, runs.text)
+            self.assertNotIn(fragment, rendered_logs)
+
+    def test_post_match_backfill_exception_is_safe_in_public_history_and_anomalies(self):
+        from app.api.routes import quality_metrics as quality_metrics_routes
+
+        sensitive = (
+            "SELECT secret FROM C:/private/backfill.db "
+            "Authorization=Bearer fake-api-key ticket=fake-ticket "
+            "subprotocol=fake-subprotocol https://upstream.example/private"
+        )
+        self.client.app.include_router(quality_metrics_routes.router)
+        client = TestClient(self.client.app, raise_server_exceptions=False)
+        try:
+            with (
+                patch.object(settings, "API_WRITE_KEY", "secret"),
+                patch.object(settings, "SCHEDULER_ENABLED", False),
+                patch.object(quality_metrics_routes, "list_all_events", return_value=[]),
+                patch.object(quality_metrics_routes, "calibration_summary", return_value={}),
+                patch(
+                    "app.services.world_cup_post_match_backfill_service.get_prediction_session",
+                    return_value=self.session,
+                ),
+                patch(
+                    "app.services.world_cup_post_match_backfill_service.close_prediction_session",
+                ),
+                patch(
+                    "app.services.world_cup_post_match_backfill_service.sync_world_cup_fixtures",
+                    side_effect=RuntimeError(sensitive),
+                ),
+            ):
+                response = client.post(
+                    "/analytics/post-match-backfill?dry_run=false",
+                    headers=AUTH_HEADERS,
+                )
+                history = client.get("/analytics/post-match-backfill/runs")
+                anomalies = client.get("/quality-metrics/anomalies")
+                run = loop_run_store.last_run("world_cup_post_match_backfill")
+        finally:
+            client.close()
+
+        self.assertIsNotNone(run)
+        exported = str({
+            "response": response.text,
+            "history": history.json(),
+            "anomalies": anomalies.json(),
+            "run": run,
+        })
+        for fragment in (
+            "SELECT secret", "C:/private", "fake-api-key", "fake-ticket",
+            "fake-subprotocol", "upstream.example", "Traceback",
+        ):
+            self.assertNotIn(fragment, exported)
+        safe_error = "Post-match backfill failed: RuntimeError"
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(run["status"], "failed")
+        self.assertEqual(run["error"], safe_error)
+        self.assertEqual(history.json()["runs"][0]["error"], safe_error)
+        failed = [a for a in anomalies.json()["anomalies"] if a["code"] == "scheduler_job_failed"]
+        self.assertEqual(failed[0]["detail"]["error"], safe_error)
+
     def test_post_match_backfill_response_includes_result_fact_backfill(self):
         headers = {
             **AUTH_HEADERS,
@@ -861,7 +1165,75 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
         mock_backfill.assert_called_once()
         self.assertFalse(mock_backfill.call_args.kwargs["dry_run"])
         self.assertTrue(mock_backfill.call_args.kwargs["sync_first"])
-        self.assertEqual(mock_backfill.call_args.kwargs["audit_metadata"]["operator"], "dana")
+        self.assertEqual(
+            mock_backfill.call_args.kwargs["audit_metadata"]["operator"],
+            "dana",
+        )
+
+    def test_post_match_backfill_does_not_expose_or_persist_provider_error_body(self):
+        from app.services import football_data_source
+
+        sensitive_error = (
+            "SELECT secret C:/private/provider.db Authorization=Bearer fake-api-key "
+            "ticket=fake-ticket subprotocol=fake-subprotocol "
+            "https://upstream.example/private sensitive-input"
+        )
+        provider_response = type(
+            "ProviderResponse",
+            (),
+            {"status_code": 500, "text": sensitive_error},
+        )()
+        with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch.object(
+                    football_data_source,
+                    "FOOTBALL_DATA_API_KEY",
+                    "provider-key",
+                ), patch.object(
+                    football_data_source,
+                    "FOOTBALL_DATA_BASE_URL",
+                    "https://provider.example/v4",
+                ), patch(
+                    "app.services.football_data_source.httpx.get",
+                    return_value=provider_response,
+                ), patch(
+                    "app.services.world_cup_post_match_backfill_service."
+                    "get_prediction_session",
+                    return_value=self.session,
+                ), patch(
+                    "app.services.world_cup_post_match_backfill_service."
+                    "close_prediction_session",
+                ):
+            post_response = self.client.post(
+                "/analytics/post-match-backfill?dry_run=false",
+                headers=AUTH_HEADERS,
+            )
+            history_response = self.client.get(
+                "/analytics/post-match-backfill/runs"
+            )
+
+        self.assertEqual(post_response.status_code, 200)
+        self.assertEqual(post_response.json()["status"], "error")
+        self.assertEqual(
+            post_response.json()["error"],
+            "Football-Data.org API request failed",
+        )
+        self.assertEqual(history_response.status_code, 200)
+        self.assertEqual(history_response.json()["runs"][0]["status"], "failed")
+        self.assertEqual(
+            history_response.json()["runs"][0]["error"],
+            "Football-Data.org API request failed",
+        )
+        exported = post_response.text + history_response.text
+        for fragment in (
+            "SELECT secret",
+            "C:/private",
+            "fake-api-key",
+            "fake-ticket",
+            "fake-subprotocol",
+            "https://upstream.example/private",
+            "sensitive-input",
+        ):
+            self.assertNotIn(fragment, exported)
 
     def test_engine_stats_includes_gbm_bucket(self):
         self.session.add(
@@ -985,6 +1357,66 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
         self.assertEqual(second.json()["num_simulations"], 8000)
         self.assertEqual(simulate.call_count, 2)
         self.assertGreaterEqual(get_elo.await_count, 4)
+
+    def test_tournament_simulation_does_not_expose_configured_fact_path(self):
+        world_cup_analytics._TOURNAMENT_CACHE = {}
+        world_cup_analytics._TOURNAMENT_CACHE_TIME = {}
+        self.session.add_all(
+            [
+                MatchFixture(
+                    match_id="path-a1",
+                    fixture_id="path-a1",
+                    home_team="Team A1",
+                    away_team="Team A2",
+                    kickoff_utc=datetime(2026, 6, 12, 12, 0, 0),
+                    venue="Test Stadium",
+                    stage="group_stage",
+                    group="A",
+                    status="scheduled",
+                ),
+                MatchFixture(
+                    match_id="path-b1",
+                    fixture_id="path-b1",
+                    home_team="Team B1",
+                    away_team="Team B2",
+                    kickoff_utc=datetime(2026, 6, 13, 12, 0, 0),
+                    venue="Test Stadium",
+                    stage="group_stage",
+                    group="B",
+                    status="scheduled",
+                ),
+            ]
+        )
+        self.session.commit()
+        sensitive_path = (
+            "C:/private/fake-api-key-ticket-fake-subprotocol-facts.json"
+        )
+
+        with (
+            patch.object(settings, "SPORTS_FACT_FILE", sensitive_path),
+            patch(
+                "app.services.elo_ratings_service.get_elo_rating",
+                return_value={"elo_rating": 1500.0},
+            ),
+            patch(
+                "app.services.world_cup_tournament_simulator.simulate_tournament",
+                return_value={"status": "ok"},
+            ),
+        ):
+            response = self.client.get(
+                "/analytics/tournament-simulation?force_refresh=true"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        fact_status = response.json()["sports_fact_status"]
+        self.assertEqual(fact_status["configured_path"], "redacted")
+        for fragment in (
+            "C:/private",
+            "fake-api-key",
+            "ticket",
+            "fake-subprotocol",
+        ):
+            self.assertNotIn(fragment, response.text)
 
     def test_tournament_simulation_force_refresh_bypasses_cached_result(self):
         world_cup_analytics._TOURNAMENT_CACHE = {}

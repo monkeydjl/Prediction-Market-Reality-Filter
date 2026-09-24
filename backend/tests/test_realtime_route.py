@@ -29,6 +29,28 @@ def reset_manager():
     cm_module._connection_manager = None
 
 
+@pytest.fixture(autouse=True)
+def known_match(monkeypatch):
+    """`match-1` has no verified link in the store, so the route now refuses it.
+
+    The route gained a match-existence check against ``SportMarketLinkStore`` (the
+    store both scheduler broadcast sites enumerate), so a socket is only admitted
+    for a match that can actually receive a broadcast. These tests are about close
+    codes, broadcast delivery and cleanup rather than about which matches exist, so
+    the predicate is stubbed here instead of seeding the kernel DB in each one.
+
+    The predicate itself is measured against the real store in
+    ``tests/test_realtime_connection_lifecycle.py``, and the route's use of it in
+    ``tests/test_realtime_ws_hardening.py::UnknownMatchIsRefusedTests`` -- so
+    deleting the check from the route still reddens the suite.
+    """
+    import app.api.routes.realtime as realtime_module
+
+    monkeypatch.setattr(
+        realtime_module, "match_is_broadcastable", lambda match_id: True
+    )
+
+
 def test_websocket_close_code_when_disabled_is_wire_legal(client, monkeypatch):
     """The disabled-push close code must be one a browser can actually deliver.
 

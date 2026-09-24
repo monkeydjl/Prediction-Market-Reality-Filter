@@ -38,7 +38,7 @@ def test_optimize_prediction_error_type_is_safe():
         with patch(
             "app.services.world_cup_ai_optimization_service.complete_json",
             side_effect=SentinelException(
-                "https://api.openai.com/v1/chat?key=sk-SECRET_KEY_12345"
+                "https://api.openai.com/v1/chat?credential=" + "REDACTED-TOKEN"
             ),
         ):
             result = pytest.importorskip("asyncio").run(
@@ -69,7 +69,7 @@ def test_optimize_prediction_error_type_is_safe():
 
     # Verify exception text is NOT included
     assert "https://api.openai.com" not in message
-    assert "sk-SECRET_KEY" not in message
+    assert "REDACTED-TOKEN" not in message
 
     # Verify the format is as expected (Chinese prefix + type name)
     assert "AI优化失败: " in message

@@ -1500,6 +1500,30 @@ docker compose -f deploy/docker-compose.yml up -d --build
 
 The container includes a healthcheck that pings `/api/health` every 30 seconds.
 
+### Build fails with `error from sender: Access is denied`
+
+BuildKit reads every path under the build context before `.dockerignore`
+rules are evaluated, so one unreadable directory anywhere in the repo — e.g. a
+`.pytest_cache` whose ACL was corrupted by a killed process — breaks
+`docker build` even though the directory is ignored and worthless. Symptom:
+
+```
+failed to solve: error from sender: ... Access is denied
+```
+
+Fix the directory itself (elevated shell: `icacls <dir> /reset /t /q`, then
+delete it), or build from a clean copy:
+
+```bash
+robocopy . C:\temp\pmrf-build /E /XD .pytest_cache .git node_modules .venv \
+  /NFL /NDL /NP
+docker build -f deploy/Dockerfile -t pmrf:local C:\temp\pmrf-build
+```
+
+CI now builds the image on every change (`docker-build` job), so a broken
+Dockerfile or dependency pin is caught there first; this failure mode is
+about the *local* context, not the repo content.
+
 ### Backups under Docker
 
 A container has no systemd timer, so the compose file sets

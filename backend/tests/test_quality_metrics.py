@@ -353,6 +353,51 @@ class TestQualityMetricsSummary(unittest.TestCase):
                 self.assertIn("calibration_buckets", data)
                 self.assertIn("scheduler", data)
 
+    def test_summary_publishes_overlay_flags(self):
+        """The four overlay gates are echoed so their sections' zeros are readable.
+
+        Each overlay section is structurally empty both when its flag is off and
+        when it is on with nothing qualifying, and both cases render as the same
+        zeros. The flags are the only thing that tells them apart.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            with _StoreContext(Path(tmp)):
+                data = TestClient(self._app()).get("/quality-metrics/summary").json()
+
+        flags = data["overlay_flags"]
+        self.assertEqual(
+            set(flags),
+            {"decision_quality", "market_quality", "source_reliability", "llm_telemetry"},
+        )
+        for name, value in flags.items():
+            self.assertIsInstance(
+                value, bool, f"overlay_flags[{name!r}] must be a bool, got {type(value)}"
+            )
+
+    def test_summary_overlay_flags_track_their_settings(self):
+        """Each flag mirrors its own setting rather than a shared default."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with _StoreContext(Path(tmp)), patch.object(
+                settings, "DECISION_QUALITY_ENABLED", False
+            ), patch.object(
+                settings, "MARKET_QUALITY_ENABLED", True
+            ), patch.object(
+                settings, "SOURCE_RELIABILITY_ENABLED", False
+            ), patch.object(
+                settings, "LLM_TELEMETRY_ENABLED", True
+            ):
+                data = TestClient(self._app()).get("/quality-metrics/summary").json()
+
+        self.assertEqual(
+            data["overlay_flags"],
+            {
+                "decision_quality": False,
+                "market_quality": True,
+                "source_reliability": False,
+                "llm_telemetry": True,
+            },
+        )
+
     def test_summary_returns_safe_calibration_errors(self):
         sensitive_error = (
             "SELECT secret FROM C:/private/loop.db?token=fake-secret"

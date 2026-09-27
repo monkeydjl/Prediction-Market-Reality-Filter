@@ -62,12 +62,31 @@ async def quality_metrics_summary(
     - ``llm_telemetry`` — total estimated cost, degraded_mode count
     - ``calibration`` — passthrough of ``calibration_summary()`` (Brier etc.)
     - ``scheduler`` — last-success timestamps + recent failed runs
+    - ``overlay_flags`` — the four feature flags behind the overlay sections
+      above (``decision_quality`` / ``market_quality`` / ``source_reliability``
+      / ``llm_telemetry``). Each of those sections is empty **both** when its
+      flag is off and when it is on with nothing qualifying, and the two cases
+      render as the same zeros; the flags are what lets a reader tell "this
+      layer is off" from "this layer found nothing". Same reasoning as
+      ``alerts_enabled`` on ``/quality-metrics/anomalies``.
 
     The ``timeframe`` parameter only filters the scheduler recent_runs slice;
     event aggregates cover the full store (no per-event timestamp filtering
     to keep the read cheap).
     """
     timeframe = timeframe if timeframe in ("24h", "7d", "all") else "24h"
+
+    # Read once. The four overlay sections below are gated on exactly these, so
+    # when one is off its section is structurally empty and its zeros are
+    # indistinguishable from "on, but nothing qualified".
+    from app.core.config import settings
+
+    overlay_flags = {
+        "decision_quality": bool(settings.DECISION_QUALITY_ENABLED),
+        "market_quality": bool(settings.MARKET_QUALITY_ENABLED),
+        "source_reliability": bool(settings.SOURCE_RELIABILITY_ENABLED),
+        "llm_telemetry": bool(settings.LLM_TELEMETRY_ENABLED),
+    }
 
     events = list_all_events()
     # Filter the load above rather than re-reading the whole store file for a
@@ -172,6 +191,9 @@ async def quality_metrics_summary(
 
     return {
         "timeframe": timeframe,
+        # Published alongside the counts they explain: without these, every
+        # zero in the four overlay sections below is ambiguous.
+        "overlay_flags": overlay_flags,
         "counts": {
             "events": len(events),
             "resolved_events": len(resolved),

@@ -1136,4 +1136,103 @@ grep -rn "detect_review_candidates\|detect_auto_resolve_low_confidence" backend/
 | `decision_timeline = 0` | ✅ 已结案（同上；面板**早已**可读）|
 
 
+---
+
+# 十三、把 §十二 的规律机械化扫一遍：还有哪些 0 说不清自己为什么是 0（2026-09-27）
+
+§十二 处理了两条**同因**的空读数（生产者开关默认关闭）。两条不是巧合 —— 只要"开关关掉 →
+某段载荷结构性地空"这个形状还在，同样的歧义就会在别处复现。所以本轮不问"还有没有别的 bug"，
+只问一个机械问题：**改成"关"之后，界面上会不会出现一个不带任何解释的 0？**
+
+## 13.1 扫描方法
+
+1. 枚举 `config.py` 里所有 `_env_bool(..., "false")` 的开关（默认关闭者）→ **23 个**。
+2. 对每个开关名，在 `frontend/src` 全量搜索 → 只有 **`REVIEW_QUEUE_ENABLED`（3 个文件）** 与
+   **`DECISION_TIMELINE_ENABLED`（2 个文件）** 被前端点名，且二者**已在 §8.5/§12.4 消歧**。
+3. 对**没被点名**的开关，问第二个问题：它门控的数据，在前端是否会**显示为 0**（而不是"缺席"）。
+
+## 13.2 判据：`if (!x) return null` 是"缺席"，不是"假 0"
+
+`ConclusionChallengePanel`（`conclusion-challenge-panel.tsx`）在无数据时 `if (!challenge) return null`
+—— **整块不渲染**。这与"渲染一个 `样本数：0`"有本质区别：**缺席**不会让人把它读成一个测量值，
+**假 0** 才会。**所以这类不改**（改了反而是往界面上贴无用的解释文本）。
+
+## 13.3 真实发现：`quality-summary-panel.tsx` 有 4 处假 0
+
+| 显示项 | 门控开关 |
+|---|---|
+| 事件计数 · 含决策质量 / 含市场质量 / 含LLM遥测（三行值）| `DECISION_QUALITY_ENABLED` / `MARKET_QUALITY_ENABLED` / `LLM_TELEMETRY_ENABLED` |
+| 区块「市场质量」 | `MARKET_QUALITY_ENABLED` |
+| 区块「LLM 遥测」 | `LLM_TELEMETRY_ENABLED` |
+| 区块「来源可信度」 | `SOURCE_RELIABILITY_ENABLED` |
+
+四段载荷在此之前**一律显示数字**。开关关闭时它们全 `0`，面板**没有任何文案**说明这是"层没开"
+还是"层开着但没数据"。这正是 §十二 的形状，只是没被点名。
+
+## 13.4 严重度取证：不是理论问题，staging 就是关的
+
+| 部署文件 | 四个开关的取向 |
+|---|---|
+| `.env.production.example:25-29` | **四个全 `true`**（生产开）|
+| `.env.staging.example:20-24` | **四个全 `false`**（staging 关）|
+| `deploy/docker-compose.yml` | `env_file: ../backend/.env` → **overlay 会被加载** |
+
+→ **staging 环境下这个面板的四个区块恒为 0，且无从解释**，而 staging 恰恰是有人会去看面板的地方。
+**故判为真实缺陷，本轮修。**
+
+## 13.5 修复（回带生产者开关，与既有三处先例同形）
+
+1. **后端** `quality_metrics.py`：端点响应新增 `overlay_flags`（四个 bool），
+   **与它解释的那些计数并列发布** —— 文档串写明"每个区块在'开关关'与'开着但无数据'两种情况下
+   渲染成同样的 0"，并显式指向既有先例 `alerts_enabled`（`/quality-metrics/anomalies`）。
+2. **契约** `lib/api.ts`：`overlay_flags` 为**可选**字段 —— **缺省 = "未知"，绝不当作 `false`**
+   （否则老后端会被误报成"已停用"，且既有不带该字段的 mock 测试会连带破碎）。
+3. **面板** `quality-summary-panel.tsx`：加 `flagOff()`（**只认显式 `false`**）+ `DisabledNote`；
+   三个区块在开关关闭时显示 `该层未启用（<KEY>=false），这里没有可统计的数据。`；
+   三行事件计数改为 `未启用`。
+
+> **注**：`decision_quality` **没有独立区块**，它只门控「含决策质量」这一行 —— 所以它出的是行内
+> `未启用`，**不是** `DisabledNote`。这一点在写测试时被实测纠正（见 §13.7）。
+
+## 13.6 判据边界（本项目"0 必须只说一件事"的适用面）
+
+- **只在同仓存在"在某界面命名该开关"的既有先例时才消歧。** 本轮四个开关的消歧，
+  正是沿用 `alerts_enabled` / `decision-timeline-panel` / 队列 `enabled` 的先例。
+- **不**给 `loop_status_service._review_queue_counts()` 加 `enabled`（批次三已定，见 §8.6）——
+  理由不变：那是**按名读取的已发布载荷**，且前端**完全不显示**这两个字段。**先例判据不可当成"见 0 就加"。**
+- ⚠️ **`source_reliability` 的门控是 `SOURCE_RELIABILITY_ENABLED`，不是 `SOURCE_TRUST_REGISTRY_ENABLED`。**
+  后者只在 `event_intelligence_service.py:501` 的 `if settings.SOURCE_RELIABILITY_ENABLED:` **内部**
+  再套一层、且只管 registry overrides。**我在本轮一度把外层判成后者，差点把"应消歧集合"从 4 个
+  错改成 3 个** —— 是**读了外层代码**才纠正回来的。教训：门控判定要读**调用点外层**，不要只看见
+  一个同域名字就配对。
+
+## 13.7 验证（全部本机，`env -u http_proxy` 剥掉代理）
+
+| 项 | 结果 |
+|---|---|
+| `ruff check app/` | **All checks passed** |
+| 后端 `tests/test_quality_metrics.py` + `tests/test_operational_readiness.py` | **119 tests / 0 failures / 0 errors**（junit 判据）|
+| 前端 `quality-summary-panel` + `quality-operations-dashboard` + `quality-metrics-report-dashboard` | **11 passed** |
+| `npx tsc --noEmit` | **exit 0** |
+| 行尾审计（`scripts/eol_audit.py`）| 三个源文件 TREE 纯 CRLF（符合检出）；测试文件 HEAD/TREE **同为纯 LF** —— **无降级** |
+
+**新增守卫 + 变异验证**（照 §「断言出现过 ≠ 锁住行为」的纪律，不只断言存在）：
+
+- 后端新增 2 用例：`test_summary_publishes_overlay_flags`（四个键齐备且**逐个断言是 `bool`**）、
+  `test_summary_overlay_flags_track_their_settings`（四个开关分别 patch 成 `F/T/F/T`，断言回显**逐一对应**）。
+- 前端新增 4 用例：显式 `false` → 出 `DisabledNote` 且行内 `未启用`；四个全关 → 3 条 note + 3 行 `未启用`；
+  **缺省 → `queryByText(/该层未启用/)` 为 `null`（"缺省不当作已停用"）**；显式全 `true` → 同样不出 note。
+- **变异**：把 `"decision_quality": bool(settings.DECISION_QUALITY_ENABLED)` 硬编码为 `True`
+  → 跟踪用例 **failures=1**（守卫确实锁住了行为）→ **逐字节还原，sha256 前后一致**
+  （`faa6222fa3bf0648…`）。**若只断言"字段存在"，这个变异会全绿通过** —— 所以"存在"与"对应"是两条断言。
+
+## 13.8 状态
+
+| 事项 | 状态 |
+|---|---|
+| 其余"默认关闭的开关"是否有说不清的空读数 | ✅ 已扫描：**23 个开关 → 仅 `quality-summary-panel` 有真实假 0**，已修 |
+| `ConclusionChallengePanel` 的空态 | ✅ **无需改**（`if (!x) return null` 属"缺席"，不是假 0）|
+| 判据边界 | ✅ 已写明（先例驱动；不适用于按名读取的已发布载荷）|
+
+
 

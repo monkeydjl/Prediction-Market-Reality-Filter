@@ -1288,6 +1288,165 @@ immediately**" → **留着是设计选择，不是漏删**。
 | 判据 | ✅ 以**设计文档的应删清单 + Non-goals** 为准，**不是"该不该出现某词"** |
 | 只报告未改 | `backend/docs/工程进度.md:177` 的陈旧复选框（历史文档，按 Non-goals 保留）|
 
+---
+
+# 十五、执行 §8.4 的「作废」——并顺带抓出一个产品级缺陷（2026-09-27）
+
+业务方指令：**「作废 Kalshi」**，随后在三个选项中明确选**「只是 §8.4 那条存量数据」**。
+（另两个选项是"退役事件发现+自动裁定"与"全量退役 Kalshi"，**均未采纳**：
+
+> 取证旁注（供将来参考）：Kalshi 占事件库 **12/257 = 4.7%**（Polymarket 73.9%、manifold 遗留 19.1%、Limitless 1.9%），
+> 但接在 **4 条通路**上（事件发现 / 自动裁定 / 体育调度任务 `kalshi_sports_source` / 期货+体育实时价格 kernel），
+> 被 `app/services` **49 文件**、`backend/tests` **147 文件**引用 —— 全量退役是产品决策，不是顺手删源。)
+
+## 15.1 执行（用**项目自带的** API，不是手写 SQL）
+
+`§8.4` 说"`0.2` 在 `predictions` 表"，**不在事件库**（事件库那条记录的 `market_probability` 是 `None`；
+它带的是 `probability.baseline = 0.2`）。目标行：
+
+```
+predictions.id = aa74e181-c783-4d25-8a0c-8543fce21585
+event_id = 0779bde4dcd63e08   contract_id = KXBRUVSEAT-35   platform = Kalshi
+ai_probability = 30.17   market_probability = 0.2   raw_edge = 29.97   adjusted_edge = 14.98
+decision = provisional_act   status = open   qualified = 0   actual_outcome = NULL   brier_score = NULL
+```
+
+**发现项目里已有第一等的作废 API**：`prediction_store.void_prediction()`（`prediction_store.py:490`），
+docstring 明说它是**"非真实结算"的终态** —— `open → voided`：**无 Brier、不进校准、移出机会面**，且**幂等**。
+
+| 步骤 | 结果 |
+|---|---|
+| 备份 | `v2_loop.db.bak-before-void-scale-outlier-20260927-231253`（SQLite `backup()` API 一致性快照；`integrity_check=ok`；predictions 171 / trades 80 / loop_runs 1759 逐表计数与源一致；目标行在备份里为 `('open', 0.2, 29.97)`）|
+| 执行 | `void_prediction('0779bde4dcd63e08')` |
+| **值是否被改写** | **没有** —— `market_probability` 仍 `0.2`、`raw_edge` 仍 `29.97`；只多了 `status='voided'` 与 `resolved_at` |
+| 幂等复核 | 第二次调用返回 `None`（`WHERE status='open'` 已无匹配）✅ |
+
+> **这正合 §8.4 自己定的原则**："按推断改写历史会让审计轨迹不再反映系统当时实际算出的值" ——
+> 所以作废 = **加一个终态标记**，不是把 `0.2` 改成 `20`。
+
+## 15.2 一个意外：它**本来就没进"机会面"**
+
+`prediction_store.list_open_opportunities()` 在作废**前后都是 27 条、且都不包含该事件**。
+即这条数据从未出现在"可执行机会"列表上。**影响面比 §8.4 预想的小**：
+它真正的暴露点是**镜像交易**（见下），不是机会列表。
+
+## 15.3 🔴 新发现（产品级缺陷）：`void_prediction` **不平仓** → 每次非真实结算留下一笔悬空交易
+
+| 路径 | 是否处理 `simulated_trades` |
+|---|---|
+| **真实结算** `score_prediction()` | ✅ 末行 `_maybe_close_trade(event_id, actual_outcome)`（`prediction_store.py:486`）|
+| **非真实结算** `void_prediction()` | ❌ **函数体只 `UPDATE predictions`**，完全不碰交易 |
+
+`event_resolve_service.py` 的两条路径都据此分支（`:162` 活路径、`:284` 对账/自愈路径），
+所以**每一次"非真实结算"（身份冲突 → invalid，或市场作废）都会留下一笔永远 `open` 的模拟交易**：
+它既不会进 `closed` 统计，也**永远不会被平仓**（该事件不会再产出真实结果）。
+
+**实测存量（本仓 loop DB）**：49 笔 `open` 交易中 —— **47 正常**（prediction 也 `open`）、
+**2 悬空**：`id=42`（本次作废产生的）+ `id=76`（`event_id='evtExpired'`，
+**根本没有对应的 prediction 行** —— 形似测试夹具泄进了真实库，属另一条小疑点）。
+
+## 15.4 为什么**不能**简单地把它改成 `closed`
+
+`simulated_trade_store.trade_stats()` 的**每一条**查询都按 `status='closed'` 过滤，而 `entry_edge` 是 `NOT NULL`
+—— 所以标 `closed` 不是"作废"，是**换一种方式污染**。实测代价（31 笔现状）：
+
+| 指标 | 现状 | 若标 closed |
+|---|---|---|
+| `total_closed` | 31 | 32 |
+| `avg_edge_at_entry` | **10.79** | **11.39** |
+| `win_rate` | **0.419** | **0.406** |
+
+（`SUM/AVG(pnl_pct)` 不受影响，因该行 `pnl_pct IS NULL`；但 `total` 分母 +1 会拉低胜率，
+而 `AVG(ABS(entry_edge))` 会被 `29.97` 这个离群值抬高。）
+并且 `simulated_trades.status` 有 **CHECK 约束** `IN ('open','closed')` —— 加第三个状态需要**表重建迁移**
+（`_MIGRATIONS` 目前是**空字典**、`_SCHEMA_VERSION = 1`）。
+
+## 15.5 建议（**未做，待业务方定** —— 属代码变更 + 更多数据变更）
+
+1. **修缺陷（推荐，代码）**：让 `void_prediction()` 在**同一事务内**把该事件的 `open` 交易也置为终态，
+   使"非真实结算"不再留悬空交易。需要给 `simulated_trades.status` 的 CHECK 增加 `'voided'`
+   （一次表重建迁移），并让 `list_open_trades` / `list_closed_trades` / `trade_stats` 自然忽略它
+   （它们都按显式状态白名单过滤，**无需改动**）。
+2. **清存量**：`id=42`（本次）与 `id=76`（无预测行）两笔悬空交易。
+3. **顺带核**：`evtExpired` 这个 event_id 是怎么进真实库的（疑似测试夹具泄漏）。
+
+| 事项 | 状态 |
+|---|---|
+| §8.4 那行 `predictions` 作废 | ✅ **已完成**（项目自带 `void_prediction`，值未改写，幂等，已备份）|
+| 它"本来就没进机会面" | ✅ 已核实（前后都是 27 条、不含该事件）|
+| `void_prediction` 不平仓 | 🔴 **已发现并取证**，建议修，**未动手**（涉迁移）|
+| 2 笔存量悬空交易 | ⏳ 待定（清理属数据变更）|
+| `evtExpired` 进真实库 | ⏳ 已登记待核 |
+
+---
+
+# 十六、执行 §15.5 建议 ① —— 让「非真实结算」同时平仓（2026-09-27）
+
+业务方在修复方案三选一中选 **A：给 `status` 增加第三个终态 `'voided'`（一次表重建迁移）**；
+「存量数据」一项选 **「先不清理」** —— 即**只修前向行为，不动那 2 笔存量悬空行**。
+
+## 16.1 为什么是表重建，以及为什么选"第三态"而不是"标 closed"
+
+本仓的迁移助手 `sqlite_db.apply_migrations()` **只会 `ALTER TABLE ADD COLUMN`**，
+而这里要改的是 **CHECK 约束**（`IN ('open','closed')` → 增加 `'voided'`）。SQLite 无法 ALTER CHECK，
+只能**重建表**；仓内已有同类先例：`prediction_store._migrate()` 的 UNIQUE 恢复路径。
+
+**选第三态而非"标 closed"**：标 closed 要往 ~8 处统计/列表查询逐一加排除条件
+（`trade_stats` / `list_closed_trades` / `count_closed_trades` / `recompute_closed_trades` …），
+正是"同一条过滤条件写两遍 → 空头断言"的高发地；加第三态后**这些查询一行都不用改** ——
+它们本就按显式状态白名单（`status='open'` / `status='closed'`）过滤。
+
+## 16.2 三个"看起来对、实际会出事"的细节（都有测试守着）
+
+| 细节 | 不这么做会怎样 | 守卫 |
+|---|---|---|
+| 重建时**显式拷贝 `id`** | `id` 是 `INTEGER PRIMARY KEY AUTOINCREMENT`；不带进列清单会按 1,2,3 重编号，运营引用过的行号**静默改变** | `test_migrate_widens_the_status_check_and_preserves_row_ids`（用 `id=42`/`7` 保证抓得到）|
+| 重建前**先 `DROP INDEX`** | 索引名全局唯一，RENAME 后仍挂在 `*_old` 上；`CREATE INDEX IF NOT EXISTS` 会 no-op → 重建后的表**无索引** | 同上 |
+| 探测条件**别用裸子串** | 迁移靠读 `sqlite_master.sql` 判断"是否已加宽"；本文件 schema 注释里含同一个词且会被原样存进 `sqlite_master` → v1 表可能被误判"已迁移"而跳过重建 | 已改为**归一化空白后精确匹配 CHECK 子句** `IN ('open','closed','voided')` |
+
+## 16.3 改动面（6 文件）
+
+| 文件 | 改动 |
+|---|---|
+| `backend/app/memory/simulated_trade_store.py` | CHECK 加 `'voided'`；拆出 `_SCHEMA_STATEMENTS`；新增 `_migrate()`；`_SCHEMA_VERSION` 1→2；新增 `void_trade()` |
+| `backend/app/memory/prediction_store.py` | 新增 `_maybe_void_trade()`；`void_prediction()` 在 `with writing()` **之外**调用它 |
+| `frontend/src/lib/api.ts` | `SimTrade.status` 由 `"open" \| "closed"` 放宽为**三态** |
+| `backend/tests/test_simulated_trade_store.py` | +5 用例 |
+| `backend/tests/test_prediction_store.py` | +2 用例 |
+| 本文档 | 本节 |
+
+> `void_trade` 必须在 `with writing()` **之外**调用：`sqlite_db._WRITE_LOCK` 是**非重入**的普通 `Lock`，
+> 而 `void_trade` 自己会开一个 `writing()` 作用域 —— 持锁时调用会**死锁**。
+> `score_prediction` 调 `_maybe_close_trade` 也是出于同一原因放在 `with` 之外。
+
+## 16.4 验证
+
+| 项 | 结果 |
+|---|---|
+| `ruff check`（改动文件）| ✅ All checks passed |
+| 后端守卫批次（6 文件，181 passed）| ✅ junit `tests=217 failures=0 errors=0 skipped=0`（判据取自 `--junitxml`，**不看 stdout**）|
+| trades 路由/服务/迁移批次（46 passed）| ✅ junit `tests=52 failures=0 errors=0 skipped=0` |
+| 前端 `tsc --noEmit` | ✅ exit 0 |
+| **四阶段变异验证** | ✅ 4/4：变异后守卫变红 → **字节级**还原 → 复绿 → sha256 与原字节一致 |
+
+变异清单（脚本在 `%TEMP%`，**未入库**）：
+
+| 变异 | 守卫 |
+|---|---|
+| `void_prediction` 不再回调 `_maybe_void_trade` | `test_void_prediction_also_voids_the_open_simulated_trade` |
+| 表重建漏拷 `id` | `test_migrate_widens_the_status_check_and_preserves_row_ids` |
+| CHECK 退回两态 | 上述迁移用例 + 各 `void*` 用例 |
+| `void_trade` 只写 `exit_reason`、`status` 仍 `open` | `test_void_trade_*` |
+
+## 16.5 未做（明确保留）
+
+| 事项 | 状态 |
+|---|---|
+| §15.5 建议 ①（修 `void_prediction` 不平仓）| ✅ **已完成**（本节）|
+| §15.5 建议 ②（清 2 笔存量悬空交易 `id=42` / `id=76`）| ⏳ **业务方选"先不清理"，未动** —— 新代码只影响**此后**的非真实结算 |
+| §15.5 建议 ③（核 `evtExpired` 来源）| ⏳ 仍待核 |
+
+
 
 
 

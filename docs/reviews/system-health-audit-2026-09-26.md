@@ -1446,6 +1446,293 @@ docstring 明说它是**"非真实结算"的终态** —— `open → voided`：
 | §15.5 建议 ②（清 2 笔存量悬空交易 `id=42` / `id=76`）| ⏳ **业务方选"先不清理"，未动** —— 新代码只影响**此后**的非真实结算 |
 | §15.5 建议 ③（核 `evtExpired` 来源）| ⏳ 仍待核 |
 
+---
+
+# 十七、批次十二：`voided` 第三态一致性审计 + `baseline_probability` 上游契约调查（2026-09-28）
+
+> 本节承接 §十六。**两条都是只读调查，未改任何源码**（调查前后 `git status` 均为干净）。
+
+## 17.1 先更正 §十六 中两处已被后续工作推翻的陈述
+
+本文档「只追加不改写」，故不回头修改 §十六，在此更正：
+
+| §十六 原文 | 现状（2026-09-28）|
+|---|---|
+| 16.4 末：「变异清单（脚本在 `%TEMP%`，**未入库**）」 | ❌ **已过时** —— 那 4 条变异已在本日**注册进仓内统一 harness** `backend/scripts/mutation_verify.py`（第 4 套 `voided-trade`，V1–V4），并补了 harness 的**首个守护测试** `backend/tests/test_mutation_verify.py`。提交 `cd3459c`。复验：`python scripts/mutation_verify.py verify voided-trade` **4/4 全绿** |
+| 16.5 表：建议 ③（核 `evtExpired` 来源）「⏳ 仍待核」 | ✅ **已结案** —— 见 17.1.1 |
+
+### 17.1.1 建议 ③ 结案：`evtExpired` 是测试夹具泄漏的化石
+
+| 证据 | 内容 |
+|---|---|
+| 夹具身份 | `tests/test_events_routes.py:2149` 的 `_make_record("evtExpired", …)`；真实事件库 **grep 0 命中** |
+| 真实库里的行 | **唯此一行**：`simulated_trades.id=76`、`status='open'`、`entry_time=2026-07-04T19:42:16` |
+| 归因 | `git log --all -S'evtExpired'` → 夹具与 `patch.object(trades, "loop_db_path")` **同在 `7ead138`**（2026-07-05 08:30 +08:00）引入 → 泄漏发生在**提交前那次本地运行**（该行早于提交约 5 小时写入）|
+| 早已被记录 | E2（`c0c5b52`，2026-08-24）**已点名它**："the one genuinely stranded row in the live database" —— 它正是 `simulated_trades` 被加进 `REFERENCING_TABLES` 的理由 |
+| 套件现状 | 跑 `test_events_routes.py` + `test_event_ref_census.py`（146 用例）前后 `simulated_trades` **80→80**、`evtExpired` **1→1** → **已隔离** |
+
+同类先例：E10（`56b9665`）修的是 kernel DB 被测试写了 43 天。**方法**：只用只读连接
+（`file:<abs>?mode=ro` 且 `uri=True`）查询，并做前后计数对比。
+
+## 17.2 审计：`voided` 第三态在读取 / 变更 / 展示各面的一致性 —— **通过**
+
+不新增断言，只做机械核对：凡"对交易状态做分支判断"的位置，逐个看它是否会被第三态绕过。
+
+| 面 | 位置 | 结论 |
+|---|---|---|
+| 读路径 | `list_open_trades` / `list_closed_trades` / `trade_stats`（5 条 SQL）/ `recompute_closed_trades` / `_count_trades` | **全部**按显式 `status='open'` / `'closed'` 过滤 → voided 既不进统计也不进两个列表，**与 §十六 设计一致** |
+| 变更路径 | `open_trade` / `close_trade` / `void_trade` | 三者都以 `WHERE … AND status='open'` 为锚 → **voided 与 closed 互斥、不可互相复活**；`close_trade` 对已 voided 的行返回 `None` |
+| 定向查询 | `has_open_trade` | 在 `app/` 内**无调用方**（仅定义）→ 无影响 |
+| 悬空普查 | `event_ref_census.REFERENCING_TABLES` 含 `simulated_trades`，按 `DISTINCT event_id` 计数 | **与 status 无关** → voided 行照样提供引用完整性；其事件被删时照样计入（正确）|
+| 前端 | 仅 `frontend/src/app/trades/page.tsx` 消费 `SimTrade`，只有 open / closed 两个 tab | **永不收到 voided** → 不存在 TypeScript 穷尽分支漏网 |
+
+### 17.2.1 缺口（**产品决策，未动**）：voided 交易在任何界面都不可见
+
+`void_trade` 的 docstring 承诺 `exit_reason='voided'` 能让这笔交易"无需回连预测即可读懂为何离开开放列表"，
+但该行**既不在「当前持仓」也不在「已平仓」** → 该承诺**只在 DB 层成立**；`/trades` 页也没有任何地方
+显示"N 笔已作废"。这与本仓既定的「**『0』必须只说一件事**」准则同族：`已平仓` 的计数是个
+**不声明自己排除了什么**的读数。
+
+对照：**prediction 层**的 void **是**可见的 —— `recent-predictions.tsx` 渲染 `p.status`，会显示 `voided`。
+
+可选处置（未决）：给 `/trades` 增设「已作废」第三 tab（`count_voided_trades` / `list_voided_trades` + 一个端点），
+或至少让该页显示作废计数。**属产品决策，等待拍板。**
+
+## 17.3 调查：`baseline_probability` 的「上游契约」找到了 —— 但它是三份未测试的启发式副本
+
+既有的「`baseline_probability` 的标度不能靠值本身守卫」结论是"可靠守卫只能来自上游契约"。本次把该契约查实。
+
+**所有活跃 discovery 源都在源头归一化到 0–100**：
+
+| 源 | 归一化方式 |
+|---|---|
+| `polymarket_event_source` | `safe_float(market.yes_price, 0.5) * 100` |
+| `kalshi_event_source` | `last * 100` / `(bid + ask) / 2 * 100` |
+| `metacus_event_source` | `_clamp_pct(safe_float(prob, 0.0) * 100.0)` |
+| `limitless` / `opinion` / `predict_fun` | 各自复制一份 `_normalize_probability` |
+
+🔴 **`_normalize_probability` 有三份逐字相同的副本**（实测 sha256 **全等** `315701473ea6`、各 7 行），
+且 **`tests/` 对它零引用**（`grep _normalize_probability tests/` 无匹配）。其实现是：
+
+```python
+value = safe_float(_clean_number(raw), -1.0)
+if 0.0 <= value <= 1.0:
+    return value * 100
+if 0.0 <= value <= 100.0:
+    return value
+return None
+```
+
+该分支在 `(0, 1]` 上**原理上无法区分**「`0.5` 表示 50%」与「`0.5` 表示 0.5%」：若某源真按**百分数**
+报 `0.5`，系统会静默记成 **50%**（`0.2` → 20%）—— 把低概率市场变成接近抛硬币。
+
+🔴 **它比一般 bug 更隐蔽**：正因为它**在源头就把 0–1 值转成像样的 0–100 值**（`0.5 → 50`），
+下游探针 `report_probability_scale_outliers.py` 的 `0 < market_probability < 1` 规则
+**永远看不到这类泄漏** —— 探针只能抓**绕过归一化**的路径（即 HTTP 请求体 `events.py:274`）。
+即 **"下游守卫被上游启发式掩蔽"**：在此处"再加一条下游守卫"注定无效。
+
+→ 结论修正：真正要动的是**这三个源**（或把它们收敛成一份带测试的共享助手）；
+"要不要在写入侧加阈值"仍是否命题（会误杀真实存在的 0.2% 市场）。
+
+## 17.4 本节未做（明确保留）
+
+| 事项 | 状态 |
+|---|---|
+| 17.1.1 建议 ③ 结案 | ✅ 已完成 |
+| 17.2 审计 | ✅ 已做（结论：通过）|
+| 17.2.1 给 `/trades` 增「已作废」展示 | ⏳ **产品决策，未动** |
+| 17.3 收敛三份 `_normalize_probability` + 补测试 | ⏳ **需先定这三个源的真实标度**，未动 |
+| §15.5 建议 ②（清 2 笔存量悬空交易 `id=42` / `id=76`）| ⏳ 业务方选"先不清理"，仍未动 |
+
+---
+
+# 十八、补充取证：三个源的标度是**夹具可证**的，真正的缺口是**未测试的兜底字段**（2026-09-28）
+
+> 承接 §17.3。§十七 把 `_normalize_probability` 的歧义描述为"在 `(0,1]` 上无法区分 0.5 是 50% 还是 0.5%"。
+> 补做取证后发现：**对已测试的字段该歧义是潜伏的、不是活跃的**；活跃缺口在别处。本节据此收敛 §17.3 的落点。
+
+## 18.1 夹具把三个源的标度钉住了
+
+| 源 | 被测试的原始字段 | 夹具原值 | 期望输出 | 结论 |
+|---|---|---|---|---|
+| `limitless_event_source` | `prices`（数组）| `[38.0, 62.0]` | `62.0` | 上游 **0–100** → 走第二分支（**不**乘 100）|
+| `opinion_event_source` | `latestPrice` | `0.41` | `41.0` | 上游 **0–1** → 乘 100 |
+| `predict_fun_event_source` | `resolution.bestBid/bestAsk.price` | `0.57` / `0.59` | `58.0`（中值）| 上游 **0–1** → 乘 100 |
+
+→ 即：**该启发式在"它被测试到的那些字段"上是正确的**。说"无法区分 0.5 是 50% 还是 0.5%"对一个
+**已知标度**的字段并不致命 —— 夹具恰恰证明作者知道这些字段的标度。
+
+## 18.2 但活跃缺口在**没有被测试的兜底字段**上
+
+`opinion_event_source._PROBABILITY_FIELDS` =
+`("latestPrice", "yesPrice", "yesTokenPrice", "probability")` —— **四个字段共用同一个启发式**，
+而 `test_opinion_event_source.py` **只出现 `latestPrice`**
+（`grep -E 'yesPrice|yesTokenPrice|probability'` → **零命中**）。
+
+| 兜底字段 | 风险 |
+|---|---|
+| `yesPrice` / `yesTokenPrice` | 名字即价格 → 0–1 假设**大概率**成立，但**仍无测试** |
+| 🔴 `probability` | **唯一"名字不暗示 0–1"的字段**。若上游按百分数返回 `probability: 0.41`（=0.41%），启发式返回 **41**（=41%）→ **100× 误读**，且**下游探针看不到**（掩蔽机制见 §17.3）|
+
+## 18.3 缺口的一般形态（可复用判据）
+
+`_normalize_probability` 不是"算错了标度"，而是把一条**未经校验的假设**
+（"本源的每个概率字段要么 0–1、要么 0–100，且 1.0 处无歧义"）**编码成了分支**。
+其契约风险随**被接受的字段个数**增长，而测试只覆盖**每源的第一个字段**：
+
+> **判据：一个"标度嗅探"函数，其被测试的字段数 < 它实际接受的字段数 → 未测试的那些就是缺口。**
+> 修它**不必写新逻辑**，只要**为每个兜底字段补一条夹具**（字段名 + 已知标度）—— 歧义立刻变成可证事实。
+
+## 18.4 对 §17.4 未做项的更新
+
+| 事项 | 状态 |
+|---|---|
+| 17.3 收敛三份 `_normalize_probability` + 补测试 | ⏳ 仍待办，**但前置已解**：不必先"定三个源的真实标度"（§18.1 已用夹具定住），**只需为每个兜底字段补夹具**即可把假设变成受测事实 |
+
+---
+
+# 十九、把 §十八 的规律机械化扫一遍：全仓还有哪些"跨文件逐字重复的函数体"（2026-09-28）
+
+> 承接 §十八 的判据（"逐字重复的副本 = 改一处、漏两处的风险"）。不问"有没有 bug"，只问机械问题：
+> **把每个函数体的 AST 规范化后哈希，哪些哈希跨 ≥2 个文件出现？**
+> 只读：`ast` 解析 + `ast.unparse` 归一化（**丢弃 docstring**、逐语句去空白）+ sha256 前 10 位；函数体 **≥3 行**才计入。
+> 口径：`backend/app/**/*.py`（329 个文件）。
+
+## 十九.1 结果：**40 组**
+
+（扫描器写在仓库**外**的临时目录，**未入库**。）
+
+### 19.1.1 与 §十八 直接同源的一簇：三个事件源适配器共享 **5 个**逐字相同的助手
+
+| 助手 | 出现的文件 |
+|---|---|
+| `_normalize_probability` | `limitless` / `opinion` / `predict_fun`（各 1 份）|
+| `_clean_number` | 同上 |
+| `_extract_text` | 同上 |
+| `_extract_number` | 同上 |
+| `_extract_market_list` | `limitless` / `predict_fun`（2 份）|
+
+→ **§十八 只点出 1 个（`_normalize_probability`），实际是 5 个**；收敛这一簇可一次删掉 **13 份**副本（4×3 + 2）。
+尤其 `_clean_number` 与 `_normalize_probability` **必须同进同退**（后者调用前者），分开写就有"只改了一个"的漂移面。
+
+### 19.1.2 其余按「跨文件数」排序（前 8 组）
+
+| 组 | 文件数 | 助手 / 位置 |
+|---|---|---|
+| `_first` / `_dig` / `_text` | **8** | 8 个 `world_cup_*_source.py` 各一份 |
+| `_season_year` | 6 | 6 个 `football_live_*_service.py` |
+| `_referee_key` ≡ `_team_key` | 6 | 5 个 sports service + `market_totals_service` |
+| `_clean_list` | 4 | `sports_fact_service` + 3 个 world_cup 源 |
+| `_numeric` | 4 | 4 个 `*_live_*_service.py` |
+| `_team_key` | 4 | 4 个 `football_live_*_service.py` |
+| `query_fixture` ≡ `query_result` / `save_fixture` / `build_match_outcome` | 3 | `mlb` / `nba` / `nhl` adapter 各一套 |
+| `_enforce_rate_limit` | 3 | `mlb` / `balldontlie` / `nhl` stats client |
+
+（余下 32 组多为 2 份，含 `_utc_naive`、`_utc_timestamp`、`_load_params`、`_number`、`_is_prediction_market`、
+`normalize_competition_code`、`_extract_market_list` 等。）
+
+## 十九.2 判读：**不是所有重复都该收敛**（无脑收敛会造出另一类风险）
+
+- ✅ **该收敛**：同一语义、同一契约、且**已被 §十八 证明会漂移**的那一簇（19.1.1）。它们在"标度语义"上是
+  **同一件事**，分开写纯属历史；收敛后 §18.4 的"补一条夹具"只需补**一次**。
+- ⚠️ **不该无脑收敛**：`_first` / `_dig` / `_text` 在 8 个 `world_cup_*_source.py` 里各一份，是**每源独立解析自己 provider**
+  的产物，**契约并不共享**（各 provider 的字段形态不同）。抽成公共模块会制造一个"谁用谁都要改"的共享点 ——
+  正是 §十八 那类风险的**镜像**。
+- 📌 **判据：重复要不要收敛，看它们是否共享同一个"会变的契约"。**
+  共享 → 收敛（改一处生效）；不共享 → 保留（差异是特性，不是冗余）。
+
+## 十九.3 附带的工具坑（本次真实踩到，值得记住）
+
+首版扫描器输出 **"0 组"** —— **假阴性**。根因不是"没有重复"，而是这一行：
+
+```python
+path.read_text(encoding="utf-8", newline="")   # ❌ 在项目 venv 上 TypeError
+```
+
+| 解释器 | `Path.read_text` 签名 |
+|---|---|
+| 项目 venv **Python 3.11.9** | `(self, encoding=None, errors=None)` —— **无 `newline`** |
+| 系统 Python 3.13.14 | `(self, encoding=None, errors=None, newline=None)` —— 有 |
+
+`newline=` 是 **Python 3.13** 才加到 `Path.read_text` 的。它**不是"更严格的读法"**，而是**在新解释器上可用、
+在旧解释器上崩**；配 `except: continue` 就变成**静默跳过所有文件**（本次正是如此，输出还"看起来很干净"）。
+
+→ **要字节忠读，用 `path.read_bytes().decode("utf-8")`（全版本安全）**，或 `path.open(encoding=..., newline="").read()`。
+**且不要在 `try/except` 里吞掉这类 `TypeError`** —— 它只在环境不匹配时出现，静默吞掉＝把环境错误伪装成"没有发现"。
+
+## 十九.4 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| 收敛 §19.1.1 的 5 个助手（事件源簇） | ⏳ 未动（属 §18.4 的落地，待拍板）|
+| 其余 39 组逐组定性 | ⏳ 只做了 top-8 排序与"是否共享契约"的判据，未逐组判 |
+
+---
+
+# 二十、近重复「漂移」检测：逐字重复之外，有没有"曾相同、后来走散"的孪生（2026-09-28）
+
+> 承接 §十九。§十九 找的是**逐字相同**的副本 —— 它们本身**不会**产生不一致（"改一处漏两处"的风险在"改"的那一刻才发生）。
+> 真正的缺陷形态是**近重复**：一对函数曾经相同，一处被修、另一处没被修。本节把它机械化。
+
+## 20.1 方法（两级，只读）
+
+1. **近重复对**：**同名**、**跨文件**、函数体规范化后 `difflib` 相似度 ∈ `[0.5, 1)` → **289 对**（体 ≥4 行、丢 docstring）。
+2. **只看漂移点**：对相似度 ≥ **0.90** 的对（96 对）计算**标识符 / 属性名 / 字符串常量的对称差** `Δ`。
+   **Δ 小且非空 = "一条改过、另一条没改"的签名** —— 比肉眼比对可靠，也不受"289 对"这个数量级困扰。
+
+## 20.2 结果：**Δ 的最大值只有 4，且没有任何一对差在"守卫"上**
+
+| Δ | 对数 | 差集内容（抽样）| 判读 |
+|---|---|---|---|
+| 2 | 18 | `'mlb'`/`'nba'`、`'epl'`/`'ucl'`、`'review_queue'`/`'decision_timeline'`、`'drift webhook…'`/`'scheduler failure…'` | **平台名 / 日志串 / 迁移名** —— 正当参数化 |
+| 3 | 16 | `_team_key` 的 `{'fc','cf'}`（见 20.3b）、`_check_vocabulary` 的报错措辞、**`_football_data_get` 的异常类名**（见 20.3a）| 见下 |
+| 4 | 4 | `fetch_schedule` 的 `'Failed to fetch EPL/NBA… schedule: %s'` + 联赛码 | 正当 |
+| ≥5 | **0** | —— | —— |
+
+→ **没有一对孪生函数在"守卫 / 阈值 / 异常类型"上悄悄走散。**
+
+## 20.3 两处**语义**差异：一处潜伏、一处正当
+
+### (a) `_football_data_get`：同一段 fetch 写两遍、各带一个异常类 —— **潜伏，非活缺陷**
+
+`football_data_source.FootballDataAPIError` 与 `football_data_client.FootballDataClientError` 是**两个类**，
+而两个模块里各有一份**逐字相同**的 `_football_data_get`（只差异常类名）。实测捕获面：
+
+| 异常类 | 捕获点 |
+|---|---|
+| `FootballDataAPIError` | **4 处**：`events.py:854` / `events.py:873` / `football_data_source.py:244` / `world_cup_match_service.py:301` |
+| `FootballDataClientError` | **0 处**（整个 `app/` 内无 `except FootballDataClientError`）|
+
+**为什么不是活缺陷**：`football_data_client` 只被三个足球适配器的 `sync_schedule` 使用
+（`epl_adapter.py:144`、`league_adapter.py:253`、`ucl_adapter.py:180`），而它们都是
+`except Exception as exc:  # noqa: BLE001` → log + `return 0/[]`，**宽捕获兜住了**；
+且捕获 `FootballDataAPIError` 的那 4 处都在 **world_cup/football_data_source 路径**上，与 client 路径不相交。
+
+→ **潜伏风险**：任何**窄捕获** `FootballDataAPIError` 的**新**调用点，若误走 client 路径就会漏网。
+判据同 §十八：**"潜伏"与"活跃"必须分开说。**
+
+### (b) `_team_key`：4 处剥掉 `{'fc','cf'}`、5 处不剥 —— **正当**（每处都在自己的模块内自洽）
+
+`_team_key` / `_referee_key` 的**全部**调用点都在**同一模块内**做"调用方给的名字 vs provider 返回的名字"的比对
+（如 `_team_key(_team_name(row)) == team_key`），**不需要跨模块一致**：
+
+- 剥 `fc`/`cf` 的 4 处都是 **club football** provider（行里写 `"Arsenal FC"`、调用方写 `"Arsenal"`，剥后缀正是桥接）；
+- `football_live_referee_service._referee_key` 归一化的是**裁判名**（无俱乐部后缀）→ 本就不该剥；
+- NBA / NHL / MLB 无此后缀 → 剥与不剥等价。
+
+→ **同 §十九 的判据：共享同一个"会变的契约"才需要收敛。** 此处不共享，差异是**特性**。
+
+## 20.4 结论：对"要不要收敛"的定性影响
+
+**40 组逐字重复 + 289 对近重复里，没有发现活的漂移缺陷。**
+
+→ 因此 §19.1.1 那簇的收敛（删 13 份副本）是**可维护性**改进，**不是 bug 修复**。
+这改变了它的立项理由：**不该以"修 bug"的名义做，应以"下次改标度只改一处"的名义做。**
+
+
+
+
+
 
 
 

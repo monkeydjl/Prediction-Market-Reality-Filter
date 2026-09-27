@@ -76,3 +76,70 @@ describe("QualitySummaryPanel", () => {
     expect(screen.getByText("GOOD")).toBeInTheDocument();
   });
 });
+
+describe("QualitySummaryPanel overlay flags", () => {
+  it("says a layer is off only when the server explicitly says so", () => {
+    const mixed: QualityMetricsSummary = {
+      ...summary,
+      overlay_flags: {
+        decision_quality: false,
+        market_quality: false,
+        source_reliability: true,
+        llm_telemetry: false,
+      },
+    };
+    render(<QualitySummaryPanel summary={mixed} />);
+
+    // decision_quality has no section of its own — it only gates the
+    // "含决策质量" event-count row, so it shows 未启用 there rather than a note.
+    expect(screen.getAllByText("未启用")).toHaveLength(3);
+    // market_quality and llm_telemetry each own a gated section with a note.
+    expect(screen.getByText(/该层未启用（MARKET_QUALITY_ENABLED=false）/)).toBeInTheDocument();
+    expect(screen.getByText(/该层未启用（LLM_TELEMETRY_ENABLED=false）/)).toBeInTheDocument();
+    expect(screen.queryByText(/该层未启用（DECISION_QUALITY_ENABLED=false）/)).toBeNull();
+    // source_reliability is on, so it keeps its own numbers and no note.
+    expect(screen.queryByText(/该层未启用（SOURCE_RELIABILITY_ENABLED=false）/)).toBeNull();
+    expect(screen.getByText("平均来源数")).toBeInTheDocument();
+  });
+
+  it("gives every overlay section a note when all four layers are off", () => {
+    const allOff: QualityMetricsSummary = {
+      ...summary,
+      overlay_flags: {
+        decision_quality: false,
+        market_quality: false,
+        source_reliability: false,
+        llm_telemetry: false,
+      },
+    };
+    render(<QualitySummaryPanel summary={allOff} />);
+
+    expect(screen.getAllByText(/该层未启用（/)).toHaveLength(3);
+    // The three event-count rows flip to 未启用 as well.
+    expect(screen.getAllByText("未启用")).toHaveLength(3);
+  });
+
+  it("treats an absent overlay_flags as unknown, never as disabled", () => {
+    // `summary` carries no overlay_flags at all — the shape an older server
+    // returns. The panel must keep its plain numbers rather than claim a layer
+    // is off, otherwise a stale backend looks like a disabled deployment.
+    render(<QualitySummaryPanel summary={summary} />);
+    expect(screen.queryByText(/该层未启用/)).toBeNull();
+    expect(screen.queryByText("未启用")).toBeNull();
+  });
+
+  it("keeps the numbers when every flag is explicitly true", () => {
+    const allOn: QualityMetricsSummary = {
+      ...summary,
+      overlay_flags: {
+        decision_quality: true,
+        market_quality: true,
+        source_reliability: true,
+        llm_telemetry: true,
+      },
+    };
+    render(<QualitySummaryPanel summary={allOn} />);
+    expect(screen.queryByText(/该层未启用/)).toBeNull();
+    expect(screen.queryByText("未启用")).toBeNull();
+  });
+});

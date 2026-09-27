@@ -588,6 +588,21 @@ export interface CalibrationBucketSummary {
 
 export interface QualityMetricsSummary {
   timeframe: string;
+  /**
+   * The four feature flags behind the overlay sections, echoed so their zeros
+   * are readable: each section is empty both when its flag is off and when it
+   * is on with nothing qualifying, and the two look identical without this.
+   *
+   * Optional because an older server does not send it. Absent means "unknown",
+   * never "disabled" — the panel keeps its plain numbers rather than claiming a
+   * layer is off.
+   */
+  overlay_flags?: {
+    decision_quality?: boolean;
+    market_quality?: boolean;
+    source_reliability?: boolean;
+    llm_telemetry?: boolean;
+  };
   counts: {
     events: number;
     resolved_events: number;

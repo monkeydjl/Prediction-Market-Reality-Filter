@@ -2,6 +2,8 @@ from typing import Annotated, Any, NoReturn
 import asyncio
 import logging
 
+from datetime import date as _date
+
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Path, Query
 
 from app.api.security import is_write_key_valid, require_write_key
@@ -26,6 +28,7 @@ from app.memory.event_store import (
     set_tracking_bulk,
 )
 from app.services.calibration_service_event import summarize
+from app.services.daily_digest_service import build_daily_digest
 from app.services.decision_report_service import build_decision_report
 from app.services.event_audit_service import histories_by_event, history_for_event
 from app.services.event_intelligence_service import (
@@ -126,6 +129,7 @@ from app.services.trend_analysis_service import (
 from app.models.event import (
     AutoResolveResponse,
     CategoryCountsResponse,
+    DailyDigestResponse,
     DecisionTimelineResponse,
     EventAnalysisRequest,
     EventDiscoveryResponse,
@@ -459,6 +463,26 @@ async def get_event_movers(limit: int = Query(default=10, ge=1, le=50)) -> dict[
             mover["event_title_zh"] = title_zh
         kept.append(mover)
     return {"count": len(kept), "movers": kept}
+
+
+@router.get("/digest", response_model=DailyDigestResponse)
+async def get_event_digest(
+    date: _date | None = Query(default=None),
+    limit: int = Query(default=8, ge=1, le=50),
+) -> dict[str, Any]:
+    """One-page daily intelligence digest: what actually moved today.
+
+    Answers "since the last digest, which events moved, by how much, and
+    where do they stand now". The day's move is close-vs-previous-digest-close
+    (UTC day window), not the all-time trajectory, so a quiet day on a
+    long-running event never outranks a real intraday move. Read-only; safe
+    to call before any analysis has run (returns an empty payload).
+
+    ``date`` is typed as a real date rather than a regex-checked string so a
+    calendar-invalid value (``2026-02-30``) is rejected with a 422 at the API
+    boundary instead of raising deep inside the service.
+    """
+    return build_daily_digest(limit=limit, date=date)
 
 
 @router.get("/calibration", response_model=FlexibleResponse)

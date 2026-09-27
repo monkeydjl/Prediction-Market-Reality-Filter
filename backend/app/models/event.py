@@ -7,6 +7,15 @@ class EventAnalysisRequest(BaseModel):
     # Length caps bound LLM token cost / log size / memory on the analyze path,
     # which is reachable by any authenticated caller. Generous but not unbounded.
     event_question: str = Field(min_length=1, max_length=2000)
+    # Percentage points, 0-100 -- the same scale `market_probability` uses
+    # everywhere else in the pipeline, not a 0-1 fraction. State it because the
+    # bound alone does not: `ge=0.0, le=100.0` accepts 0.2, which reads as a
+    # legitimate 0.2% and is also what a caller who meant 20% sends by mistake.
+    # One such call is in the store (a 0.2 against a 30.17 model estimate, a
+    # 29.97pp phantom edge and a provisional_act). Nothing here can catch it:
+    # this is the only probability in the request, with no market quote to
+    # compare against, so 0.2 cannot be told from 0.2%. Documenting the scale is
+    # the part that is actually fixable.
     baseline_probability: float = Field(default=50.0, ge=0.0, le=100.0)
     news_context: str | None = Field(default=None, max_length=20000)
     volume: float | None = Field(default=None, ge=0.0)
@@ -601,6 +610,56 @@ class CategoryCountsResponse(FlexibleResponse):
 class EventMoversResponse(FlexibleResponse):
     count: int = 0
     movers: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class DailyDigestHeadline(BaseModel):
+    """The day's single most material move (mirrors the top entry of movers)."""
+
+    event_id: str
+    event_title: str | None = None
+    movement: Literal["rising", "falling", "stable"]
+    day_net: float
+    close: float
+
+
+class DailyDigestMover(BaseModel):
+    """One event whose probability actually moved inside the day window."""
+
+    event_id: str
+    event_title: str | None = None
+    movement: Literal["rising", "falling", "stable"]
+    day_net: float
+    open: float
+    close: float
+    open_source: Literal["previous_close", "first_in_day"]
+    day_observations: int
+    all_time_net_change: float
+    close_ts: str
+
+
+class DailyDigestUnchanged(BaseModel):
+    """Events that did not make the mover cut, split by why they missed."""
+
+    quiet_event_ids: list[str]
+    new_event_ids: list[str]
+
+
+class DailyDigestResponse(BaseModel):
+    """Response for GET /api/events/digest.
+
+    Declared as a strict model rather than a permissive ``FlexibleResponse``
+    so every field reaches ``frontend/src/lib/generated-types.ts`` — the
+    permissive base is deliberately excluded from that allowlist, which would
+    leave the endpoint without a published contract.
+    """
+
+    date: str
+    generated_at: str
+    count: int
+    headline: DailyDigestHeadline | None = None
+    movers: list[DailyDigestMover]
+    unchanged: DailyDigestUnchanged
+    empty: bool
 
 
 class EventHistoryResponse(FlexibleResponse):

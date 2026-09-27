@@ -17,10 +17,15 @@ threshold the correct arithmetic does not. A ``watch`` was recorded as
 
 The current Kalshi **event** adapter cannot produce that value:
 ``kalshi_event_source._baseline_and_quote`` returns ``last * 100`` /
-``(bid + ask) / 2 * 100`` / ``50.0``, all 0-100. The value can only arrive
-through the API's ``baseline_probability`` (``ge=0.0, le=100.0`` -- so a fraction
-is accepted), which reaches the record unchanged via
-``events.py`` -> ``analyze_event`` -> ``event_intelligence_service``.
+``(bid + ask) / 2 * 100`` / ``50.0``, all 0-100. No version of it ever could: the
+multiplication is present in the initial commit and the only later change added
+two return values beside it, so "an older adapter forgot to scale" is a dead end.
+The value can only arrive through the API's ``baseline_probability``
+(``ge=0.0, le=100.0`` -- so a fraction is accepted), which reaches the record
+unchanged via ``events.py`` -> ``analyze_event`` -> ``event_intelligence_service``.
+That also means the true value is **not** recoverable from the stored row: a
+caller who read a dollar price of 0.20 and a caller who meant 0.2% both leave
+exactly ``0.2`` behind, and nothing distinguishes them after the fact.
 
 There is deliberately **no write-time guard** for this, and this script is not a
 step towards one: a value-only threshold cannot tell 0.2% from a 0.2 fraction,

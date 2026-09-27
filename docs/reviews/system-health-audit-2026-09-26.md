@@ -198,6 +198,32 @@ skip             :  92
 
 **修复建议**：(a) 重算或作废这条存量记录；(b) 在写入/读取预测时加标度合理性校验（例如 `0 < mp < 5` 且该市场有成交量时判为可疑并拒绝或重取）；(c) 给 edge 计算加跨标度守卫而不是只 clamp。
 
+> **更正（2026-09-27）：上方「这是旧代码留下的存量」这句归因是错的。** 当时推断"2026-07-01 那条是旧版
+> Kalshi 适配器忘了 `×100`"，**未经 git 核实**。穷举该文件全部历史（`git log --all`）后：
+>
+> ```
+> git log --all -S"last * 100"  -- backend/app/services/kalshi_event_source.py
+>   → 只有 6cc99f3（2026-06-16 Initial commit）一处
+> git log --all -p -- <file> | grep "return last\|last_price"
+>   → 143: last = safe_float(market.get("last_price_dollars"), 0.0)
+>     145:- return last * 100            ← 初始提交就是这样
+>     146:+ return last * 100, 0.0, 0.0   ← 2026-06-29 只改了返回值个数
+> ```
+>
+> **即：该适配器从第一版起就 `×100`，从未存在过不乘 100 的版本**，产不出 0.2。
+> 唯一能到达 `predictions.market_probability` 的路径是 `POST /api/events/analyze` 的
+> `baseline_probability`（`events.py:274` → `analyze_event` → `build_event_record:157`
+> `baseline = safe_float(analysis["market_probability"])`），而它 `ge=0.0` **接受 0.2**。
+> 取证旁证：该行 `snapshot_*` 字段**全为空**（自动发现路径会填），`event_market_links.link_method='freeze'`
+> 发生在预测创建后 0.15 秒 —— 与"先经 API 分析、随后冻结链接"一致。
+>
+> **归因改错的后果**：原措辞会引导后来者去"修 Kalshi 适配器"，而那里没有 bug。
+> **对处置的影响**：原建议 (a)「重算」隐含"真值是 20"，这是**推断而非事实** —— 调用方也可能真的在说 0.2%。
+> 存量数据里没有任何字段能区分两者，**所以第七章 §8.4 的三选项仍未决，且「重算」的依据比原稿更弱**。
+>
+> 另一个细节：`build_event_record` 的护栏是 `abs(change) > 30`（加 `large_deviation_*` 标记），
+> 而这条的 `change = 29.97` —— **差 0.03pp 没触发**。即护栏刚好处在"擦肩而过"的位置，这条记录没被标记出来。
+
 ---
 
 ## §7 配置文件 — ⚠️ 警告
@@ -948,6 +974,12 @@ class EventAnalysisRequest(BaseModel):
   → **已完成**（老板指示「合并」）：三者合并为 `backend/scripts/mutation_verify.py`，
   三个旧脚本已删除，26 个变异全部校验通过。**明细见 §十一。**
 - 上表 §8.4 那行数据（`KXBRUVSEAT-35` / `0.2`）的处置仍待业务方选择。
+  ⚠️ **2026-09-27 追加**：该节的**归因已更正**（不是"旧适配器存量"，而是经 `/analyze` 的
+  `baseline_probability` 传入 —— 见 §8.4 的更正块）。**新证据削弱而非支持「重算为 20」这个选项**，
+  三个选项仍需业务方定，但依据变了。
+- ~~`review_queue_items = 0` 是否符合人工复核流程预期（需业务判断）~~
+  → **已结案**（2026-09-27）：成因是**生产者开关关闭**（`REVIEW_QUEUE_ENABLED` 未配置 → 默认 false），
+  不是路由缺陷；且打开开关**不会回填存量**。**明细见 §十二。**
 
 ---
 
@@ -1033,6 +1065,75 @@ docstring 也是这么写的），但 `_verify_one()` 把它的返回值直接�
 
 - 本合并**不动**被测源码：26 个变异全部是在**临时应用→还原**的原子上跑的，跑完 6 个目标文件字节不变。
 - `docs/reviews/daily-digest-review-2026-09-26.md` 的交付记录同样**不改写**，另加一段后记指向本节。
+
+---
+
+# 十二、结案：`review_queue_items = 0` 到底是什么（2026-09-27）
+
+本节回答正文 §"人工复核队列与决策时间线均为空"与 §10.9 里标注「需业务判断」的那一条。
+**结论：这个 0 是"生产者关闭"，不是"队列已清空"，也不是"路由坏了"。**
+
+## 12.1 证据链（全部只读）
+
+| 环节 | 事实 |
+|---|---|
+| 生产者 | **只有两处**，且都被 `settings.REVIEW_QUEUE_ENABLED` 门控：`event_intelligence_service.py:757`（`analyze_event()` 内，overlay 构建时按事件跑探测器）、`event_resolve_service.py:178`（结算路径）|
+| 代码默认 | `config.py:1192` → `REVIEW_QUEUE_ENABLED: bool = _env_bool("REVIEW_QUEUE_ENABLED", "false")` |
+| 实际配置 | `backend/.env` **没有这个键** → 落回默认 |
+| **生效值** | **`False`**（实测：清空环境变量后 `import settings` 打印）|
+| 存储 | loop DB（`backend/v2_loop.db`）里 `review_queue_items` **0 行**、`review_queue_audit` **0 行** |
+| 部署文件 | `.env.example` 是 `=false`；`.env.production.example` **只写注释行**（`# REVIEW_QUEUE_ENABLED=true`，见 §8.3）；`docker-compose.yml` / `.env.staging.example` 完全不提 |
+
+源码自己把这个姿态写在注释里（`event_intelligence_service.py:753-755`）：
+
+> `When REVIEW_QUEUE_ENABLED=false (default), this block is a no-op — byte-identical to pre-Plan-4.`
+
+**即"默认关闭"是 Plan 4 §6.2 的刻意设计，不是漏接线。**
+
+## 12.2 这不是"缺陷"，所以本轮也不改它
+
+- **不改 `backend/.env`**：那是**部署姿态**，不是代码缺陷。把它打开是运维决定，不是修 bug。
+- **不改默认值**：改了等于推翻 Plan 4 §6.2 的"默认与 Plan 4 之前字节一致"。
+- 本批次真正该做的已经做了 —— 给队列读数**带上 `enabled`**（§8.5/§8.7）。所以这个 0 现在在
+  `/review-queue` 面板上会**明说自己为什么是空的**（前端 `enabled === false` 分支的文案），
+  而在 CLI 上会打 `[WARN]`。**这条"需业务判断"的问题，答案其实是"配置姿态"，且已经可读。**
+
+## 12.3 一个必须同时告诉运维的前提（否则"打开开关"会落空）
+
+探测器**只在下面两个时刻**被调用，**没有任何回填路径**：
+
+```
+grep -rn "detect_review_candidates\|detect_auto_resolve_low_confidence" backend/app backend/scripts
+→ 仅命中 event_intelligence_service.py:758/762 与 event_resolve_service.py:182/188（定义处除外）
+```
+
+没有回填脚本、没有重建端点、调度任务清单里没有队列相关 job（`scheduler.py` 的 22 个 `id=` 无一涉及）。
+**所以把 `REVIEW_QUEUE_ENABLED` 置 true 之后，只有"此后被分析或被结算"的事件会产生复核项；
+存量记录（含那 31 条 `provisional_act`）不会追溯进队列。** 若要队列立刻有内容，
+除置 true 外还需**对存量事件重新触发一次分析**。
+
+> 这一条属**运维操作含义**，不是本次审计的修复项。已同步进 `HANDOFF.md` 与
+> `.workbuddy/memory/MEMORY.md`，避免下一次会话再把同一个 0 当成"路由坏了"重查一遍。
+
+## 12.4 同批结案：`decision_timeline = 0` 同因
+
+| 环节 | 事实 |
+|---|---|
+| 代码默认 | `config.py:1235` → `_env_bool("DECISION_TIMELINE_ENABLED", "false")` |
+| **生效值** | **`False`**（实测）|
+| 存储 | loop DB 里 `decision_timeline` **0 行** |
+| 源码自述 | `decision_timeline_store.py:110`：「`settings.DECISION_TIMELINE_ENABLED` so the store **stays empty**」|
+| 是否已可读 | ✅ **本来就已消歧** —— `decision-timeline-panel.tsx:111` 的空态**点名**了该开关：
+「暂无决策时间线数据。该事件可能在 DECISION_TIMELINE_ENABLED 关闭期间保存。」|
+
+**即：两条"为空"的读数同因（生产者默认关闭），且都不是缺陷。** 复核队列表原本是这三个 0 里
+**唯一一个说不清**的（面板只说"当前没有待复核条目"），本批次给它补 `enabled` 回显正是对症 ——
+而这个先例（时间线面板点名开关）也正是 §「0 必须只说一件事」判据的来源。
+
+| 事项 | 状态 |
+|---|---|
+| `review_queue_items = 0` | ✅ 已结案（生产者关闭；本批次已让它可读）|
+| `decision_timeline = 0` | ✅ 已结案（同上；面板**早已**可读）|
 
 
 

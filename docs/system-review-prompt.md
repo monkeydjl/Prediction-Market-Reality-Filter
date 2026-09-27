@@ -3,10 +3,11 @@
 ## 审查清单
 
 ### 1. 数据源健康
-- 检查 Polymarket / Kalshi / Manifold 是否可达（能否正常拉取候选事件）
+- 检查 Polymarket / Kalshi / Limitless / Opinion / Predict.fun / Metaculus 是否可达（能否正常拉取候选事件）
 - 检查 Polymarket gamma-api 是否被 Cloudflare 拦截（403）
 - 检查各数据源返回的候选事件数量、类型是否正常
 - 检查是否有世界杯或公开网络事件混入预测市场事件列表
+- 注意：Limitless / Opinion / Predict.fun / Polymarket Crypto / World Cup / Metaculus 都是**开关门控**的可选源（见 `event_intelligence_service.py` 的 `candidate_sources` 组装处）。这些源报告 0 条候选，既可能是"源坏了"，也可能是"开关没开"——两者在面板上长得一样，必须先确认开关状态再下结论。Manifold 已于早期版本退役（`config.py` 保留 `MANIFOLD_*` 只为兼容既有 .env，注释写明"no longer an active discovery or auto-resolution source"），**不再需要检查**。
 
 ### 2. LLM 分析链
 - 检查 API key 是否有效（200 正常 / 401 未授权 / 403 被拒 / 429 限流）
@@ -39,8 +40,9 @@
 ### 7. 配置文件
 - 检查 .env 中所有 API key 是否有效
 - 检查 .env 中是否有明显笔误（如 hhttp:// 双 h）
-- 检查 SOURCE_WEIGHTS 是否平衡（Polymarket 3.0 / Kalshi 1.0 / Manifold 0.3）
+- 检查 SOURCE_WEIGHTS 是否平衡（`config.py` 当前值：Polymarket 3.0 / Kalshi 1.0 / Polymarket Crypto 1.0 / Limitless 0.8 / Opinion 0.6 / Predict.fun 0.5 / Open Web 0.5 / Metaculus 0.5 / World Cup 0.3）
 - 检查 WORLD_CUP_SOURCE_ENABLED 和 OPEN_WEB_ENABLED 是否符合预期
+- 注意：编号式 LLM 配置 `OPENAI_API_KEY_N` / `OPENAI_MODEL_N_M` / `OPENAI_BASE_URL_N` 是 `llm_gateway_service` 直接 `os.getenv` 读取的，**不经过 `settings`**，因此既不在生产 preflight 的检查范围内，也不会有任何配置校验。名字写错（例如 `OPENAI_KEY_1`）不会报错，只会静默地少一条 LLM 路由。核对时必须逐字比对变量名。
 
 ### 8. 调度与频率
 - 检查发现频率是否为每 4 小时一次

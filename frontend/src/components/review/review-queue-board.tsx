@@ -246,6 +246,9 @@ export function ReviewQueueBoard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  // null = the server did not say. Only an explicit false claims the producer
+  // is off; an absent field (older server) must keep the neutral empty copy.
+  const [enabled, setEnabled] = useState<boolean | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -263,6 +266,7 @@ export function ReviewQueueBoard() {
       setItems(resp.items);
       setTotal(resp.total);
       setTruncated(resp.truncated);
+      setEnabled(typeof resp.enabled === "boolean" ? resp.enabled : null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载失败");
     } finally {
@@ -383,7 +387,11 @@ export function ReviewQueueBoard() {
 
       {!loading && !error && items.length === 0 && (
         <p className="py-2 text-xs text-muted-foreground">
-          {status === "pending" ? "当前没有待复核条目。" : "还没有已处理条目。"}
+          {enabled === false
+            ? "复核队列未启用（REVIEW_QUEUE_ENABLED=false）。探测器不会写入条目，因此这里是空的。"
+            : status === "pending"
+              ? "当前没有待复核条目。"
+              : "还没有已处理条目。"}
         </p>
       )}
 

@@ -171,6 +171,28 @@ describe("ReviewQueueBoard", () => {
     expect(await screen.findByText("boom")).toBeInTheDocument();
   });
 
+  it("says the queue is switched off rather than merely empty", async () => {
+    // `items: []` reads identically for a clear queue and for a deploy where
+    // REVIEW_QUEUE_ENABLED is off -- which is its default, and which no deploy
+    // file names. The server echoes the flag, so the board can say which empty
+    // this is. The test above covers the other direction: a server that omits
+    // the field must keep the neutral copy, since absent is not "disabled".
+    listMock.mockResolvedValue({
+      items: [],
+      count: 0,
+      total: 0,
+      truncated: false,
+      status: "pending",
+      enabled: false,
+    });
+    render(<ReviewQueueBoard />);
+
+    expect(
+      await screen.findByText(/REVIEW_QUEUE_ENABLED=false/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/当前没有待复核条目/)).not.toBeInTheDocument();
+  });
+
   // ── Review SLA (Q7) ───────────────────────────────────────────────────
   // The queue had no age anywhere: the board printed the raw created_at
   // timestamp, so "how long has this waited" was left to the reviewer to work

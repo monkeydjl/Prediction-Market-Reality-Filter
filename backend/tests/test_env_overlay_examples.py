@@ -6,6 +6,7 @@ omits keeps whatever development put in ``.env``. So a key missing from
 ``.env.staging.example`` is not a documentation gap: an operator who copies the
 template gets the dev value in staging, silently.
 """
+import re
 import unittest
 from pathlib import Path
 
@@ -40,6 +41,21 @@ ALERT_CHANNEL_KEYS = (
 # configured channel, which is the exact failure this section documents.
 MUST_NOT_BLANK = ("SENTRY_DSN", "SCHEDULER_FAILURE_ALERT_WEBHOOK_URL")
 
+# Flags that gate an operator-visible surface, default off, and are assigned in
+# exactly one place: the base ``.env.example``. The production overlay states the
+# six it turns on and used to mention none of these, so a deploy copied from it
+# rendered those surfaces permanently empty with nothing in the deploy files
+# saying why -- and "empty" is also what they look like when there is genuinely
+# nothing to show.
+OVERLAY_FLAGS_LEFT_OFF = (
+    "REVIEW_QUEUE_ENABLED",
+    "DECISION_TIMELINE_ENABLED",
+    "CONCLUSION_CHALLENGE_ENABLED",
+    "EVENT_CHALLENGE_ENABLED",
+    "SOURCE_TRUST_REGISTRY_ENABLED",
+    "WORLD_CUP_CHALLENGE_ENABLED",
+)
+
 
 def _assignments(path: Path) -> set[str]:
     return {
@@ -59,6 +75,26 @@ def _value(path: Path, key: str) -> str | None:
         if name.strip() == key:
             found = raw.split("#", 1)[0].strip()
     return found
+
+
+def _names_in_any_form(path: Path) -> set[str]:
+    """Keys the template names, commented or assigned.
+
+    A substring match is not enough. The production template's prose also
+    mentions ``REVIEW_QUEUE_ENABLED``, so asserting the name appears anywhere
+    stayed green after the commented assignment line was deleted -- the test
+    locked nothing. Requiring a ``KEY=`` shape locks the line an operator
+    actually uncomments.
+    """
+    names: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip().lstrip("#").strip()
+        if "=" not in stripped:
+            continue
+        name = stripped.split("=", 1)[0].strip()
+        if re.fullmatch(r"[A-Z0-9_]+", name):
+            names.add(name)
+    return names
 
 
 class TestEnvOverlayExamples(unittest.TestCase):
@@ -204,6 +240,82 @@ class TestEnvOverlayExamples(unittest.TestCase):
             f".env.production.example never mentions {missing}; every push "
             f"channel defaults off, so a deploy from this template notifies "
             f"nobody and the template does not say so",
+        )
+
+    def test_the_production_overlay_states_its_llm_startup_posture(self):
+        """A production template that omits the check ships silent degradation.
+
+        ``LLM_STARTUP_CHECK_ENABLED`` defaults to false and the production
+        overlay used not to mention it, so an operator who filled
+        ``.env.production`` from this template got a deploy where an unreachable
+        provider or a rejected key did **not** stop the boot: ``app.main`` skips
+        ``validate_primary_llm_startup`` and every LLM-backed answer quietly comes
+        back degraded. The template already ships
+        ``DECISION_QUALITY_ENABLED=true``, so "runs without an LLM" is not the
+        posture it means.
+
+        Asserting the value and not just the mention is the point: a template
+        that names the key and assigns false is green on a mention-only check and
+        still boots a broken deployment.
+        """
+        assigned = _value(
+            BACKEND_DIR / ".env.production.example", "LLM_STARTUP_CHECK_ENABLED"
+        )
+        self.assertIsNotNone(
+            assigned,
+            ".env.production.example does not assign LLM_STARTUP_CHECK_ENABLED; "
+            "production then inherits the development default (off) and boots on "
+            "a bad LLM credential instead of refusing",
+        )
+        self.assertEqual(
+            assigned.lower(),
+            "true",
+            "the production template ships the fail-fast value; a deployment that "
+            "must boot without an LLM sets it false in its own .env.production",
+        )
+
+    def test_the_production_overlay_names_the_flags_it_leaves_off(self):
+        """Naming them is the half of the fix an operator reads before the boot.
+
+        The template asserts "the overlays are the product" and then turns on six
+        flags. Six more gate a product surface and ship off, assigned only in the
+        base ``.env.example`` -- so an operator who filled ``.env.production``
+        from this template had no line anywhere telling them the review queue and
+        the decision timeline would stay empty, or why.
+
+        The name has to arrive as a ``KEY=`` line, not as prose: the surrounding
+        comment block mentions ``REVIEW_QUEUE_ENABLED`` in a sentence, which is
+        enough to satisfy a substring check and not enough to be a line an
+        operator uncomments.
+        """
+        names = _names_in_any_form(BACKEND_DIR / ".env.production.example")
+        missing = [k for k in OVERLAY_FLAGS_LEFT_OFF if k not in names]
+        self.assertEqual(
+            missing,
+            [],
+            f".env.production.example never names {missing}; each one gates a "
+            f"surface an operator will look at, and none of them is named in any "
+            f"other deploy file either",
+        )
+
+    def test_the_production_overlay_does_not_pin_those_flags_off(self):
+        """A commented mention is the fix; an assignment is a new bug.
+
+        Overlays load with ``override=True``, so pinning one of these to false
+        here would silently cancel an operator who enabled it in the base
+        ``backend/.env`` -- the same failure the alert-channel keys above are left
+        commented to avoid. The alert block's reasoning applies unchanged: what
+        the template owes an operator here is the name and the posture, not a
+        value.
+        """
+        assigned = _assignments(BACKEND_DIR / ".env.production.example")
+        pinned = sorted(set(OVERLAY_FLAGS_LEFT_OFF) & assigned)
+        self.assertEqual(
+            pinned,
+            [],
+            f".env.production.example assigns {pinned}; an overlay value wins "
+            f"over the base .env, so this would switch off a flag an operator "
+            f"turned on there",
         )
 
     def test_no_overlay_blanks_a_configured_channel(self):

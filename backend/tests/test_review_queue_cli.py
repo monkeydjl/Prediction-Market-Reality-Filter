@@ -149,6 +149,38 @@ class TestReviewQueueCli(unittest.TestCase):
         self.assertIn("pending=0", out)
         self.assertIn("oldest=n/a", out)
 
+    def test_sla_names_the_producer_flag_when_it_is_off(self):
+        """A zero has to say which zero it is.
+
+        docs/ops/RUNBOOK.md offers ``sla`` as a check, and with
+        ``REVIEW_QUEUE_ENABLED`` off -- its default, unnamed by every deploy file
+        -- the aggregate is all zeros, byte-for-byte what a fully drained queue
+        prints. Naming the flag is what separates them.
+
+        The exit code stays 0 on purpose and is asserted here so nobody "fixes"
+        it: 1 is documented as "something breached", so reusing it for a
+        deliberately disabled queue would fail every wired-up check.
+        """
+        with patch.object(settings, "REVIEW_QUEUE_ENABLED", False):
+            rc, out = self._run(["sla"])
+        self.assertEqual(rc, 0)
+        self.assertIn("REVIEW_QUEUE_ENABLED=false", out)
+        self.assertIn("producer disabled", out)
+
+    def test_sla_says_nothing_extra_when_the_producer_is_on(self):
+        """The note is a statement about the flag, not decoration on every run."""
+        with patch.object(settings, "REVIEW_QUEUE_ENABLED", True):
+            _, out = self._run(["sla"])
+        self.assertNotIn("REVIEW_QUEUE_ENABLED", out)
+
+    def test_list_names_the_producer_flag_when_it_is_empty_and_off(self):
+        """``list`` prints the same 0, so it gets the same note."""
+        with patch.object(settings, "REVIEW_QUEUE_ENABLED", False):
+            rc, out = self._run(["list"])
+        self.assertEqual(rc, 0)
+        self.assertIn("no items found", out)
+        self.assertIn("REVIEW_QUEUE_ENABLED=false", out)
+
     def test_action_then_audit_round_trip(self):
         item_id = self._enqueue_aged("evt-a", "WARN", 1.0)
         rc, _ = self._run(["action", "--item-id", item_id,

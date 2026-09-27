@@ -104,6 +104,18 @@ class PredictFunEventSourceTests(unittest.TestCase):
             events = asyncio.run(source.fetch_candidate_events(limit=10))
         self.assertEqual([e["source"]["source_id"] for e in events], ["ok"])
 
+    def test_id_and_liquidity_fall_back_through_the_field_lists(self):
+        # _ID_FIELDS = ("id", "marketId", ...) and
+        # _LIQUIDITY_FIELDS = ("liquidity", "liquidityUsd", ...) - the later
+        # entries are the fallbacks a provider actually exercises.
+        market = _market(id="", marketId="pf-fallback", liquidity=None, liquidityUsd="88.5")
+        with patch.object(source.settings, "PREDICT_FUN_API_KEY", "secret"), patch.object(
+            source, "_fetch_raw_markets", new=AsyncMock(return_value=[market])
+        ):
+            events = asyncio.run(source.fetch_candidate_events(limit=5))
+        self.assertEqual(events[0]["source"]["source_id"], "pf-fallback")
+        self.assertEqual(events[0]["liquidity"], 88.5)
+
     def test_fetch_error_degrades_to_empty(self):
         with patch.object(source.settings, "PREDICT_FUN_API_KEY", "secret"), patch.object(
             source,

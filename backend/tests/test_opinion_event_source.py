@@ -102,6 +102,29 @@ class OpinionEventSourceTests(unittest.TestCase):
             events = asyncio.run(source.fetch_candidate_events(limit=10))
         self.assertEqual([e["source"]["source_id"] for e in events], ["ok"])
 
+    def test_every_documented_probability_field_is_read(self):
+        # _PROBABILITY_FIELDS = ("latestPrice", "yesPrice", "yesTokenPrice",
+        # "probability"). Only latestPrice was exercised before; the other three
+        # are the fallbacks that run when a provider omits latestPrice.
+        for field in ("yesPrice", "yesTokenPrice", "probability"):
+            with self.subTest(field=field):
+                market = _market(latestPrice=None, **{field: 0.83})
+                with patch.object(
+                    source.settings, "OPINION_API_KEY", "secret"
+                ), patch.object(
+                    source, "_fetch_raw_markets", new=AsyncMock(return_value=[market])
+                ):
+                    events = asyncio.run(source.fetch_candidate_events(limit=5))
+                self.assertEqual(events[0]["baseline_probability"], 83.0)
+
+    def test_latest_price_is_preferred_over_fallbacks(self):
+        market = _market(latestPrice=0.41, yesPrice=0.83)
+        with patch.object(source.settings, "OPINION_API_KEY", "secret"), patch.object(
+            source, "_fetch_raw_markets", new=AsyncMock(return_value=[market])
+        ):
+            events = asyncio.run(source.fetch_candidate_events(limit=5))
+        self.assertEqual(events[0]["baseline_probability"], 41.0)
+
     def test_fetch_error_degrades_to_empty(self):
         with patch.object(source.settings, "OPINION_API_KEY", "secret"), patch.object(
             source,

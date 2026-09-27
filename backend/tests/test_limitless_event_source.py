@@ -70,6 +70,21 @@ class LimitlessEventSourceTests(unittest.TestCase):
             events = asyncio.run(source.fetch_candidate_events(limit=10))
         self.assertEqual([e["source"]["source_id"] for e in events], ["ok"])
 
+    def test_question_and_volume_fall_back_through_the_field_lists(self):
+        # _QUESTION_FIELDS = ("title", "question", "name") and
+        # _VOLUME_FIELDS = ("volumeFormatted", "volume", ...) - the later entries
+        # are the fallbacks a provider actually exercises.
+        market = _market(
+            title="",
+            question="Will SOL flip ETH in 2026?",
+            volumeFormatted=None,
+            volume="321.5",
+        )
+        with patch.object(source, "_fetch_raw_markets", new=AsyncMock(return_value=[market])):
+            events = asyncio.run(source.fetch_candidate_events(limit=5))
+        self.assertEqual(events[0]["question"], "Will SOL flip ETH in 2026?")
+        self.assertEqual(events[0]["volume"], 321.5)
+
     def test_disabled_or_empty_url_returns_empty_without_fetching(self):
         with patch.object(source.settings, "LIMITLESS_SOURCE_ENABLED", False), patch.object(
             source, "_fetch_raw_markets", new=AsyncMock(return_value=[_market()])

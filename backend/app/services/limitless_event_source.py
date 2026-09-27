@@ -11,8 +11,13 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.services.event_source_utils import (
+    extract_market_list as _extract_market_list,
+    extract_number as _extract_number,
+    extract_text as _extract_text,
+    normalize_probability as _normalize_probability,
+)
 from app.utils.failure_policy import fail_closed_empty_list
-from app.utils.market_utils import safe_float
 
 
 logger = logging.getLogger(__name__)
@@ -57,17 +62,6 @@ async def _fetch_raw_markets(limit: int) -> list[dict[str, Any]]:
         response.raise_for_status()
         data = response.json()
     return _extract_market_list(data)
-
-
-def _extract_market_list(data: Any) -> list[dict[str, Any]]:
-    if isinstance(data, list):
-        return data
-    if not isinstance(data, dict):
-        return []
-    value = data.get("data")
-    if isinstance(value, list):
-        return value
-    return []
 
 
 def _is_eligible(market: Any) -> bool:
@@ -132,21 +126,6 @@ def _has_supported_market_shape(market: dict[str, Any]) -> bool:
     return isinstance(prices, (list, dict))
 
 
-def _extract_text(market: dict[str, Any], fields: tuple[str, ...]) -> str:
-    for field in fields:
-        value = str(market.get(field, "") or "").strip()
-        if value:
-            return value
-    return ""
-
-
-def _extract_number(market: dict[str, Any], fields: tuple[str, ...]) -> float:
-    for field in fields:
-        if market.get(field) is not None:
-            return safe_float(_clean_number(market.get(field)), 0.0)
-    return 0.0
-
-
 def _extract_probability(market: dict[str, Any]) -> float | None:
     prices = market.get("prices")
     if isinstance(prices, dict):
@@ -171,18 +150,3 @@ def _extract_probability(market: dict[str, Any]) -> float | None:
                 price.get("price") or price.get("value") or price.get("probability")
             )
     return None
-
-
-def _normalize_probability(raw: Any) -> float | None:
-    value = safe_float(_clean_number(raw), -1.0)
-    if 0.0 <= value <= 1.0:
-        return value * 100
-    if 0.0 <= value <= 100.0:
-        return value
-    return None
-
-
-def _clean_number(raw: Any) -> Any:
-    if isinstance(raw, str):
-        return raw.replace("$", "").replace(",", "").replace("%", "").strip()
-    return raw

@@ -1,6 +1,6 @@
 """Generate TypeScript types from Pydantic models.
 
-Source of truth: backend/app/models/_frontend_export.py (allowlist of 14
+Source of truth: backend/app/models/_frontend_export.py (allowlist of 16
 root models). Output: frontend/src/lib/generated-types.ts.
 
 Usage:

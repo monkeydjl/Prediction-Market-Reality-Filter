@@ -12,7 +12,9 @@ Usage:
 been waiting. ``sla`` prints depth / oldest wait / breach counts and exits 1 when
 anything has breached, so it can be used as a check. ``action`` resolves an item
 and appends to the audit log. ``audit`` shows the audit log (global or per-item).
-Uses ASCII labels for Windows GBK safety.
+Both ``list`` and ``sla`` name ``REVIEW_QUEUE_ENABLED`` when it is off, because
+every count they print collapses to 0 in that state. Uses ASCII labels for
+Windows GBK safety.
 """
 from __future__ import annotations
 
@@ -46,6 +48,27 @@ def _age_label(item: dict) -> str:
     return f"{age:6.1f}"
 
 
+def _flag_note() -> str | None:
+    """A line naming ``REVIEW_QUEUE_ENABLED`` when it is off, else ``None``.
+
+    Every count this CLI prints collapses to 0 while the flag is off: the
+    detectors that enqueue items never run, so there is nothing to count and
+    nothing to breach. 0 is also exactly what a drained queue prints, and
+    docs/ops/RUNBOOK.md offers ``sla`` as a check -- so a reader (human or script)
+    cannot tell "healthy" from "not running" without this fact.
+
+    The exit code is deliberately left alone. ``sla`` returning 1 is documented as
+    "something breached", and reusing it for "the producer is off" would report a
+    deliberately disabled queue as a failure and page whoever wired the check up.
+    """
+    if settings.REVIEW_QUEUE_ENABLED:
+        return None
+    return (
+        "[WARN] REVIEW_QUEUE_ENABLED=false: the detectors are off, so no item is "
+        "ever enqueued. A zero below means 'producer disabled', not 'queue drained'."
+    )
+
+
 def _cmd_list(args: argparse.Namespace) -> int:
     if args.status == "resolved":
         items = rq.list_resolved(limit=200)
@@ -53,6 +76,9 @@ def _cmd_list(args: argparse.Namespace) -> int:
         items = rq.list_pending(trigger=args.trigger)
     if not items:
         _print("[INFO] no items found")
+        note = _flag_note()
+        if note:
+            _print(note)
         return 0
     _print(f"[OK] {len(items)} items:")
     for it in items:
@@ -76,6 +102,9 @@ def _cmd_sla(args: argparse.Namespace) -> int:
         f"oldest={'n/a' if oldest is None else f'{oldest:.1f}h'} "
         f"breached={summary['breached_total']}"
     )
+    note = _flag_note()
+    if note:
+        _print(note)
     for severity in sorted(summary["by_severity"],
                            key=lambda s: -rq.SEVERITY_RANK.get(s, -1)):
         bucket = summary["by_severity"][severity]

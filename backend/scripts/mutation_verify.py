@@ -1,0 +1,656 @@
+"""Byte-level mutation harness for every guard this audit added.
+
+A green test that stays green when its fix is removed locks nothing. This script
+reverts each tracked change one at a time and asserts the matching guard test
+turns RED -- then puts it back and asserts the bytes are identical.
+
+It replaces three near-identical per-batch scripts
+(``mutation_verify_daily_digest.py``, ``mutation_verify_review_queue_flag.py``,
+``mutation_verify_probability_probe.py``). Those all re-implemented the same
+backup/apply/revert machinery, and one of them had grown a stronger check than
+the other two while the other two had a per-index selector the first lacked.
+Merging keeps the union of both: one inventory, one engine, three sets.
+
+Usage
+-----
+    cd backend && python scripts/mutation_verify.py list
+    cd backend && python scripts/mutation_verify.py verify                # all sets
+    cd backend && python scripts/mutation_verify.py verify probability-probe
+    cd backend && python scripts/mutation_verify.py backup review-queue
+    cd backend && python scripts/mutation_verify.py apply  review-queue 5
+    cd backend && python scripts/mutation_verify.py revert review-queue
+
+``verify`` is the mode to use. It drives pytest itself and asserts a full
+three-phase cycle per mutation:
+
+    1. the guard tests PASS on the unmodified tree   (so the selector is real)
+    2. they FAIL with the mutation applied           (the guard is load-bearing)
+    3. they PASS again once it is reverted           (the restore restored
+                                                      behaviour, not just bytes)
+    4. the file's sha256 equals the pre-mutation one (the restore restored bytes)
+
+Phase 1 also catches a selector that matches nothing, which pytest reports as
+"no tests ran" and which would otherwise look exactly like a successful phase 2.
+The older per-batch scripts only ran phases 1, 2 and 4, and only for the
+daily-digest set. ``backup``/``apply``/``revert`` are kept for driving the tests
+by hand, which is what you want when a mutation's red needs inspecting rather
+than asserting.
+
+Groups
+------
+A ``group`` marks mutations that rewrite the same bytes in different directions
+(``C5``/``C6`` on ``_flag_note``, and ``P7``/``P8`` on the listing query's
+``WHERE`` clause). Applying both would fail on the second with "expected 1
+occurrence, found 0". ``verify`` applies one at a time so it is unaffected;
+``apply <set>`` (all) skips the rest of a group and says so.
+
+Byte-level on purpose
+---------------------
+This repo commits LF and checks out CRLF, and ``Path.read_text`` applies
+universal-newline translation -- so a read/modify/write round trip rewrites a
+whole CRLF file to LF while ``git diff`` hides it (``core.autocrlf`` normalises
+before diffing). ``read_bytes``/``write_bytes`` keep the evidence honest, and
+the restore is checked by sha256 rather than by eye. Run
+``scripts/eol_audit.py`` afterwards for an independent read on line endings.
+
+Needles are declared as raw ``bytes`` for the same reason, and **do not share one
+line-ending convention**: the ``review-queue`` needles are line-terminated and
+therefore carry CRLF, while the ``daily-digest`` and ``probability-probe``
+needles sit inside a single line and must not. Building a CRLF needle from LF
+text would not match -- which fails loudly, because every apply asserts the
+needle occurs exactly once.
+
+Adding a mutation
+-----------------
+Append a ``Mutation`` to the set's tuple below. ``verify`` requires the guard
+test names to be exact: a bare substring is fine for ``-k``, but a name that
+matches nothing fails phase 1 rather than passing quietly.
+"""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import hashlib
+import pathlib
+import shutil
+import subprocess
+import sys
+import tempfile
+
+SCRIPTS = pathlib.Path(__file__).resolve().parent
+BACKEND = SCRIPTS.parent
+REPO_ROOT = BACKEND.parent
+PY = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
+BACKUP_ROOT = pathlib.Path(tempfile.gettempdir()) / "pmrf-mutation-bak"
+GUARD_TIMEOUT = 600
+
+CRLF = b"\r\n"
+
+
+@dataclasses.dataclass(frozen=True)
+class Mutation:
+    """One revertible change and the guard that must notice it."""
+
+    label: str
+    path: str
+    old: bytes
+    new: bytes
+    guard_file: str
+    guards: tuple[str, ...]
+    group: str = ""
+    note: str = ""
+
+
+@dataclasses.dataclass(frozen=True)
+class MutationSet:
+    key: str
+    title: str
+    mutations: tuple[Mutation, ...]
+    rationale: str = ""
+
+
+_DIGEST_TESTS = "tests/test_daily_digest_service.py"
+_QUEUE_ENDPOINT_TESTS = "tests/test_review_queue_endpoint.py"
+_QUEUE_CLI_TESTS = "tests/test_review_queue_cli.py"
+_OVERLAY_TESTS = "tests/test_env_overlay_examples.py"
+_PROBE_TESTS = "tests/test_report_probability_scale_outliers.py"
+
+_DIGEST_ROUTES = "backend/app/api/routes/events.py"
+_DIGEST_SERVICE = "backend/app/services/daily_digest_service.py"
+_QUEUE_ROUTES = "backend/app/api/routes/review_queue.py"
+_QUEUE_CLI = "backend/scripts/review_queue_cli.py"
+_PROD_TEMPLATE = "backend/.env.production.example"
+_PROBE = "backend/scripts/report_probability_scale_outliers.py"
+
+# The two lines that decide whether _flag_note() reports the flag. C5 and C6 are
+# opposite rewrites of this same span, hence the group.
+_FLAG_GUARD = b"    if settings.REVIEW_QUEUE_ENABLED:" + CRLF + b"        return None" + CRLF
+
+# The listing query's WHERE clause as one literal, so P7 and P8 rewrite the same
+# bytes. The shorter fragment "AND market_probability < 1" appears twice (the
+# bucket query has it too), which is why the whole string is used.
+_LISTING_FILTER = (
+    b'" FROM predictions WHERE market_probability > 0 AND market_probability < 1"'
+)
+
+
+SETS: tuple[MutationSet, ...] = (
+    MutationSet(
+        key="daily-digest",
+        title="每日情报摘要（F1/F2/F3/F5/F6）",
+        rationale=(
+            "F1 date 用真日期而非正则校验的字符串；F2 response_model 发布契约；"
+            "F3 阈值处取闭区间；F5 empty 表示「完全没有可摘要的东西」；"
+            "F6 没有落在窗口内的事件时不去读 store。"
+        ),
+        mutations=(
+            Mutation(
+                label="F1  日期是真日期类型（不是正则校验的字符串）",
+                path=_DIGEST_ROUTES,
+                old=b"date: _date | None = Query(default=None),",
+                new=b'date: str | None = Query(default=None, '
+                b'pattern=r"^\\d{4}-\\d{2}-\\d{2}$"),',
+                guard_file=_DIGEST_TESTS,
+                guards=("test_digest_route_rejects_calendar_invalid_date",),
+                note="回到 str + 正则（2 月 30 日这类日历非法值会漏过）",
+            ),
+            Mutation(
+                label="F2  response_model 发布字段契约",
+                path=_DIGEST_ROUTES,
+                old=b'@router.get("/digest", response_model=DailyDigestResponse)',
+                new=b'@router.get("/digest", response_model=FlexibleResponse)',
+                guard_file=_DIGEST_TESTS,
+                guards=("test_digest_openapi_schema_declares_fields",),
+                note="换成无字段的基类 FlexibleResponse",
+            ),
+            Mutation(
+                label="F3  移动标签在阈值处取闭区间",
+                path=_DIGEST_SERVICE,
+                old=b"if day_net >= MATERIALITY:",
+                new=b"if day_net > MATERIALITY:",
+                guard_file=_DIGEST_TESTS,
+                guards=("test_move_of_exactly_materiality_is_a_directional_mover",),
+                note=">= 改成 >（恰好等于 MATERIALITY 不再算移动）",
+            ),
+            Mutation(
+                label="F5  empty 表示「完全没有可摘要的东西」",
+                path=_DIGEST_SERVICE,
+                old=b'"empty": total_movers == 0 and not new_event_ids and not quiet_event_ids,',
+                new=b'"empty": total_movers == 0 and not new_event_ids,',
+                guard_file=_DIGEST_TESTS,
+                guards=("test_all_quiet_day_is_not_empty",),
+                note="去掉 quiet_event_ids 条件（全安静的一天会被误报为空）",
+            ),
+            Mutation(
+                label="F6  没有落在窗口内的事件时不读 store",
+                path=_DIGEST_SERVICE,
+                old=b"    if stats:",
+                new=b"    if True:",
+                guard_file=_DIGEST_TESTS,
+                guards=("test_store_is_not_read_when_nothing_is_in_window",),
+                note="无条件读 store（空窗口也去读）",
+            ),
+        ),
+    ),
+    MutationSet(
+        key="review-queue",
+        title="复核队列 enabled 回显 + overlay 开关块 + CLI 提示（C1–C6）",
+        rationale=(
+            "C1/C4 让 /review-queue 与 /review-queue/sla 回显 REVIEW_QUEUE_ENABLED，"
+            "使「0」只表示一件事；C2/C3 让生产模板点名它留空的开关，但不写成赋值"
+            "（overlay override=True，写成 =false 会压掉操作员开的 true）；"
+            "C5/C6 让 CLI 在开关关闭时说明 0 的含义。"
+        ),
+        mutations=(
+            Mutation(
+                label="C1  /review-queue 回显 REVIEW_QUEUE_ENABLED",
+                path=_QUEUE_ROUTES,
+                old=b'        "enabled": settings.REVIEW_QUEUE_ENABLED,' + CRLF,
+                new=b"",
+                guard_file=_QUEUE_ENDPOINT_TESTS,
+                guards=(
+                    "test_list_reports_whether_the_producer_flag_is_on",
+                    "test_list_pending_is_empty_on_fresh_db",
+                ),
+                note="删掉 enabled 键",
+            ),
+            Mutation(
+                label="C2  生产模板点名 REVIEW_QUEUE_ENABLED",
+                path=_PROD_TEMPLATE,
+                old=b"# REVIEW_QUEUE_ENABLED=true" + CRLF,
+                new=b"",
+                guard_file=_OVERLAY_TESTS,
+                guards=("test_the_production_overlay_names_the_flags_it_leaves_off",),
+                note="删掉那行注释",
+            ),
+            Mutation(
+                label="C3  生产模板不把该开关钉成赋值",
+                path=_PROD_TEMPLATE,
+                old=b"# WORLD_CUP_CHALLENGE_ENABLED=true" + CRLF,
+                new=b"WORLD_CUP_CHALLENGE_ENABLED=false" + CRLF,
+                guard_file=_OVERLAY_TESTS,
+                guards=("test_the_production_overlay_does_not_pin_those_flags_off",),
+                note="注释行改成 =false 赋值",
+            ),
+            Mutation(
+                label="C4  /review-queue/sla 回显 REVIEW_QUEUE_ENABLED",
+                path=_QUEUE_ROUTES,
+                old=b', "enabled": settings.REVIEW_QUEUE_ENABLED}',
+                new=b"}",
+                guard_file=_QUEUE_ENDPOINT_TESTS,
+                guards=("test_sla_reports_whether_the_producer_flag_is_on",),
+                note="删掉 enabled 键",
+            ),
+            Mutation(
+                label="C5  CLI 提示受开关约束",
+                path=_QUEUE_CLI,
+                old=_FLAG_GUARD,
+                new=b"",
+                guard_file=_QUEUE_CLI_TESTS,
+                guards=("test_sla_says_nothing_extra_when_the_producer_is_on",),
+                group="cli-flag-guard",
+                note="提示变成无条件打印",
+            ),
+            Mutation(
+                label="C6  CLI 提示可达",
+                path=_QUEUE_CLI,
+                old=_FLAG_GUARD,
+                new=b"    return None" + CRLF,
+                guard_file=_QUEUE_CLI_TESTS,
+                guards=(
+                    "test_sla_names_the_producer_flag_when_it_is_off",
+                    "test_list_names_the_producer_flag_when_it_is_empty_and_off",
+                ),
+                group="cli-flag-guard",
+                note="提示永远不打印",
+            ),
+        ),
+    ),
+    MutationSet(
+        key="probability-probe",
+        title="标度错位探针（P1–P15）",
+        rationale=(
+            "探针是唯一能发现新的 0-1 标度值进入 predictions.market_probability 的东西，"
+            "所以它的分桶、过滤边界、修正算术、只读承诺与 --event-id 输出全部逐条锁住。"
+        ),
+        mutations=(
+            Mutation(
+                label="P1  分桶查询的 suspect 下界排除 mp = 0",
+                path=_PROBE,
+                old=b'"WHERE market_probability > 0 "',
+                new=b'"WHERE market_probability >= 0 "',
+                guard_file=_PROBE_TESTS,
+                guards=("test_distribution_buckets_partition_the_rows",),
+                note="桶查询下界改成 >=（mp=0 被多算一次）",
+            ),
+            Mutation(
+                label="P2  健康桶有上界（mp > 100 单独成桶）",
+                path=_PROBE,
+                old=b'"AND market_probability <= 100"',
+                new=b'""',
+                guard_file=_PROBE_TESTS,
+                guards=(
+                    "test_out_of_range_high_rows_are_not_lumped_into_the_normal_bucket",
+                    "test_distribution_buckets_partition_the_rows",
+                ),
+                note="去掉上界（105 躲进健康计数）",
+            ),
+            Mutation(
+                label="P3  修正值把市场值换算到 0-100",
+                path=_PROBE,
+                old=b"corrected = ai - market * 100",
+                new=b"corrected = ai - market",
+                guard_file=_PROBE_TESTS,
+                guards=("test_the_audited_row_is_reported_with_its_corrected_edge",),
+                note="去掉 ×100（把存着的 29.97 当成修正值）",
+            ),
+            Mutation(
+                label="P4  连接是只读的",
+                path=_PROBE,
+                old=b'?mode=ro"',
+                new=b'?mode=rw"',
+                guard_file=_PROBE_TESTS,
+                guards=("test_the_connection_refuses_to_write",),
+                note="mode=ro → mode=rw",
+            ),
+            Mutation(
+                label="P5  修正受非数值 ai_probability 保护",
+                path=_PROBE,
+                old=b"if isinstance(ai, (int, float)):",
+                new=b"if True:",
+                guard_file=_PROBE_TESTS,
+                guards=(
+                    "test_a_suspect_with_a_non_numeric_ai_probability_skips_the_correction",
+                ),
+                note="去掉 isinstance 守卫（TypeError 会冒到输出里）",
+            ),
+            Mutation(
+                label="P6  --event-id 输出截断长值",
+                path=_PROBE,
+                old=b"if isinstance(value, str) and len(value) > 200:",
+                new=b"if False:",
+                guard_file=_PROBE_TESTS,
+                guards=("test_event_dump_truncates_long_values",),
+                note="关掉 200 字符截断",
+            ),
+            Mutation(
+                label="P7  列表查询的 suspect 下界排除 mp = 0",
+                path=_PROBE,
+                old=_LISTING_FILTER,
+                new=b'" FROM predictions WHERE market_probability >= 0 '
+                b'AND market_probability < 1"',
+                guard_file=_PROBE_TESTS,
+                guards=("test_a_zero_market_probability_is_not_a_suspect",),
+                group="listing-filter",
+                note="列表查询下界改成 >=",
+            ),
+            Mutation(
+                label="P8  列表查询的 suspect 上界排除 mp = 1",
+                path=_PROBE,
+                old=_LISTING_FILTER,
+                new=b'" FROM predictions WHERE market_probability > 0 '
+                b'AND market_probability <= 1"',
+                guard_file=_PROBE_TESTS,
+                guards=("test_a_market_probability_of_exactly_one_is_not_a_suspect",),
+                group="listing-filter",
+                note="列表查询上界改成 <=",
+            ),
+            Mutation(
+                label="P9  min/max 报告两端",
+                path=_PROBE,
+                old=b'"SELECT MIN(market_probability), MAX(market_probability) FROM predictions"',
+                new=b'"SELECT MIN(market_probability), MIN(market_probability) FROM predictions"',
+                guard_file=_PROBE_TESTS,
+                guards=("test_min_max_span_every_row_including_the_suspect",),
+                note="MAX 改成 MIN",
+            ),
+            Mutation(
+                label="P10 NULL 桶统计未设值",
+                path=_PROBE,
+                old=b'"WHERE market_probability IS NULL"',
+                new=b'"WHERE market_probability IS NOT NULL"',
+                guard_file=_PROBE_TESTS,
+                guards=("test_the_null_bucket_is_zero_because_the_column_is_not_null",),
+                note="改查 IS NOT NULL",
+            ),
+            Mutation(
+                label="P11 空的 suspect 集合会明说",
+                path=_PROBE,
+                old=b'        print("  none")',
+                new=b"        pass",
+                guard_file=_PROBE_TESTS,
+                guards=("test_an_empty_suspect_set_says_none",),
+                note="删掉 none 提示",
+            ),
+            Mutation(
+                label="P12 --event-id 覆盖三张表",
+                path=_PROBE,
+                old=b'    for table in ("predictions", "simulated_trades", "event_market_links"):',
+                new=b'    for table in ("predictions",):',
+                guard_file=_PROBE_TESTS,
+                guards=(
+                    "test_event_dump_covers_the_three_tables",
+                    "test_event_dump_marks_a_table_that_has_no_rows",
+                ),
+                note="只遍历一张表",
+            ),
+            Mutation(
+                label="P13 无行的表会明说 (no row)",
+                path=_PROBE,
+                old=b'            print("  (no row)")',
+                new=b"            pass",
+                guard_file=_PROBE_TESTS,
+                guards=("test_event_dump_marks_a_table_that_has_no_rows",),
+                note="删掉 (no row)",
+            ),
+            Mutation(
+                label="P14 --event-id 输出受开关约束",
+                path=_PROBE,
+                old=b"        if args.event_id:",
+                new=b"        if True:",
+                guard_file=_PROBE_TESTS,
+                guards=("test_event_dump_is_skipped_without_the_flag",),
+                note="无条件输出",
+            ),
+            Mutation(
+                label="P15 缺失 DB 时以具名路径退出",
+                path=_PROBE,
+                old=b"    if not path.is_file():",
+                new=b"    if False:",
+                guard_file=_PROBE_TESTS,
+                guards=("test_a_missing_db_exits_naming_the_path",),
+                note="守卫恒不触发（冒 sqlite3 原始错误）",
+            ),
+        ),
+    ),
+)
+
+SETS_BY_KEY = {mutation_set.key: mutation_set for mutation_set in SETS}
+
+
+# --- engine ---------------------------------------------------------------
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _backup_dir(key: str) -> pathlib.Path:
+    return BACKUP_ROOT / key
+
+
+def _backup_name(key: str, rel: str) -> pathlib.Path:
+    return _backup_dir(key) / rel.replace("/", "__")
+
+
+def _paths(mutation_set: MutationSet) -> list[str]:
+    return list(dict.fromkeys(m.path for m in mutation_set.mutations))
+
+
+def _run_guards(mutation: Mutation) -> tuple[bool, str]:
+    """Return (all selected guards passed, last line of output)."""
+    if not PY.is_file():
+        raise SystemExit(f"interpreter not found: {PY}")
+    proc = subprocess.run(
+        [
+            str(PY),
+            "-m",
+            "pytest",
+            mutation.guard_file,
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-k",
+            " or ".join(mutation.guards),
+        ],
+        cwd=BACKEND,
+        capture_output=True,
+        text=True,
+        timeout=GUARD_TIMEOUT,
+    )
+    out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    return proc.returncode == 0, out.splitlines()[-1] if out else ""
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    del args  # the subcommand takes no options
+    for mutation_set in SETS:
+        print(f"{mutation_set.key}  —  {mutation_set.title}")
+        print(f"    {len(mutation_set.mutations)} 个变异")
+        if mutation_set.rationale:
+            print(f"    {mutation_set.rationale}")
+        for index, mutation in enumerate(mutation_set.mutations, 1):
+            grouped = f"  [group: {mutation.group}]" if mutation.group else ""
+            print(f"      {index:>2}. {mutation.label}{grouped}")
+        print()
+    total = sum(len(s.mutations) for s in SETS)
+    print(f"共 {len(SETS)} 套 / {total} 个变异。用 `verify [key]` 自动跑三阶段校验。")
+    return 0
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    mutation_set = SETS_BY_KEY[args.key]
+    directory = _backup_dir(mutation_set.key)
+    directory.mkdir(parents=True, exist_ok=True)
+    for rel in _paths(mutation_set):
+        src = REPO_ROOT / rel
+        shutil.copyfile(src, _backup_name(mutation_set.key, rel))
+        print(f"backed up {rel}  sha256={_sha(src.read_bytes())[:16]}")
+    return 0
+
+
+def cmd_apply(args: argparse.Namespace) -> int:
+    mutation_set = SETS_BY_KEY[args.key]
+    mutations = mutation_set.mutations
+    if args.index is not None and not 1 <= args.index <= len(mutations):
+        raise SystemExit(f"index out of range: {args.index} (有 {len(mutations)} 个)")
+
+    seen_groups: set[str] = set()
+    for index, mutation in enumerate(mutations, 1):
+        if args.index is not None and index != args.index:
+            continue
+        if args.index is None and mutation.group and mutation.group in seen_groups:
+            print(
+                f"skipped {index}: {mutation.label}  "
+                f"[与同组变异互斥，用 `apply {mutation_set.key} {index}` 单独跑]"
+            )
+            continue
+        path = REPO_ROOT / mutation.path
+        data = path.read_bytes()
+        found = data.count(mutation.old)
+        if found != 1:
+            raise SystemExit(
+                f"{mutation.label}: expected 1 occurrence in {mutation.path}, "
+                f"found {found}. If the file's line endings changed, fix the "
+                "needle rather than loosening this check."
+            )
+        path.write_bytes(data.replace(mutation.old, mutation.new, 1))
+        if mutation.group:
+            seen_groups.add(mutation.group)
+        print(f"mutated {index}: {mutation.label}  ({mutation.path})")
+    return 0
+
+
+def cmd_revert(args: argparse.Namespace) -> int:
+    mutation_set = SETS_BY_KEY[args.key]
+    for rel in _paths(mutation_set):
+        src = _backup_name(mutation_set.key, rel)
+        if not src.is_file():
+            raise SystemExit(f"no backup for {rel}; run `backup {mutation_set.key}` first")
+        shutil.copyfile(src, REPO_ROOT / rel)
+        print(f"restored {rel}  sha256={_sha((REPO_ROOT / rel).read_bytes())[:16]}")
+    return 0
+
+
+def _verify_one(mutation_set: MutationSet, index: int, mutation: Mutation) -> list[str]:
+    problems: list[str] = []
+    path = REPO_ROOT / mutation.path
+    original = path.read_bytes()
+
+    hits = original.count(mutation.old)
+    if hits != 1:
+        return [f"needle appears {hits}x (expected 1)"]
+
+    green_before, tail_before = _run_guards(mutation)
+    if not green_before:
+        # Anything after this is unattributable: the guard was already red, so a
+        # red after the mutation would prove nothing. Reported separately from a
+        # needle problem because the two have different fixes.
+        return [f"guard already RED before mutation -> {tail_before}"]
+
+    try:
+        path.write_bytes(original.replace(mutation.old, mutation.new, 1))
+        passed_after, tail_after = _run_guards(mutation)
+    finally:
+        path.write_bytes(original)
+
+    # _run_guards reports a *pass* flag, so a successful mutation shows up as
+    # `passed_after is False`. Inverting here keeps the variable names honest:
+    # red_after means "the guard went red", which is what this phase must prove.
+    red_after = not passed_after
+
+    restored_bytes = _sha(path.read_bytes()) == _sha(original)
+    green_restored, tail_restored = _run_guards(mutation)
+
+    if not red_after:
+        problems.append(f"stayed GREEN with the fix reverted -> {tail_after}")
+    if not restored_bytes:
+        problems.append("file bytes differ from before the mutation")
+    if not green_restored:
+        problems.append(f"still RED after restore -> {tail_restored}")
+
+    status = "OK " if not problems else "BAD"
+    print(f"[{status}] {mutation_set.key} {index:>2}. {mutation.label}")
+    print(f"        green before {green_before} | red after mutation {red_after} | "
+          f"green after restore {green_restored} | bytes restored {restored_bytes}")
+    if red_after:
+        print(f"        mutated run -> {tail_after}")
+    for problem in problems:
+        print(f"        !! {problem}")
+    return problems
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    keys = args.keys or [s.key for s in SETS]
+    unknown = [k for k in keys if k not in SETS_BY_KEY]
+    if unknown:
+        raise SystemExit(
+            f"unknown set(s): {', '.join(unknown)}; known: {', '.join(SETS_BY_KEY)}"
+        )
+
+    failures: list[str] = []
+    checked = 0
+    for key in keys:
+        mutation_set = SETS_BY_KEY[key]
+        print(f"\n=== {key} — {mutation_set.title} ===")
+        for index, mutation in enumerate(mutation_set.mutations, 1):
+            checked += 1
+            problems = _verify_one(mutation_set, index, mutation)
+            failures += [f"{key} {index}: {p}" for p in problems]
+
+    print(f"\n=== {checked} 个变异校验完毕 ===")
+    if failures:
+        print(f"FAILURES ({len(failures)}):")
+        for failure in failures:
+            print(f"  - {failure}")
+        return 1
+    print("全部通过：每个变异在其修复被回退时都会让对应守卫变红，且还原后逐字节一致。")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Byte-level mutation harness for the audit guards.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("list", help="show every set and mutation").set_defaults(
+        func=cmd_list
+    )
+
+    p_verify = sub.add_parser(
+        "verify", help="run each mutation through the three-phase cycle"
+    )
+    p_verify.add_argument("keys", nargs="*", help="set keys (default: all)")
+    p_verify.set_defaults(func=cmd_verify)
+
+    for name, func, help_text in (
+        ("backup", cmd_backup, "snapshot a set's target files"),
+        ("revert", cmd_revert, "restore a set's target files from the snapshot"),
+    ):
+        p = sub.add_parser(name, help=help_text)
+        p.add_argument("key", choices=sorted(SETS_BY_KEY))
+        p.set_defaults(func=func)
+
+    p_apply = sub.add_parser("apply", help="mutate a set (all, or a single index)")
+    p_apply.add_argument("key", choices=sorted(SETS_BY_KEY))
+    p_apply.add_argument("index", nargs="?", type=int, default=None)
+    p_apply.set_defaults(func=cmd_apply)
+
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

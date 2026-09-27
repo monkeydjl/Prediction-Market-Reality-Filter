@@ -1,0 +1,1293 @@
+# 系统健康审计 — Prediction Market Reality Filter
+
+- **审计时间**：2026-09-26 23:30–23:40 (UTC+8)
+- **方法**：按项目自带清单 `docs/system-review-prompt.md` 逐项核查；**实际启动后端**（`127.0.0.1:8000`，`SCHEDULER_ENABLED=false`，`ALLOW_OPEN_WRITES=true` 仅为让 fail-closed 守卫放行）并打真实端点，而非只读代码
+- **数据来源**：`/api/health`、`/api/llm/diagnostics`、`/api/events/calibration`、`/api/events/decisions/open`、`v2_loop.db`（只读）、`event_store.json`、`event_audit.jsonl`、外部数据源直连探测
+- **审计后已停服务**，运行时未做任何写入
+
+> ⚠️ 本清单本身已过期：§7 要求核对 `SOURCE_WEIGHTS` 含 **Manifold 0.3**，但 Manifold 已被 `7b5f0ed chore: remove Manifold from active sources` 移除，当前权重表里没有它。§7 的预期值是陈旧的。
+
+> 🔴 **本报告已发布后二次核实，§2 与 §8 的原始结论被推翻，总分与 TOP 3 已更正。**
+> 更正详情见文末「更正记录」。阅读时请以文末为准，正文 §2/§8 保留原始措辞以便对照。
+
+---
+
+## 总览
+
+| # | 项目 | 结论 | 关键数据 |
+|---|---|---|---|
+| 1 | 数据源健康 | ✅ 正常 | 3/3 直连 200；Polymarket **未被 Cloudflare 拦** |
+| 2 | LLM 分析链 | ⚠️ **环境未配置**（原判 ❌，已更正） | **0/8 任务可用**，api_key 全空 |
+| 3 | 翻译质量 | ⚠️ 警告 | 开关 on、既有标题是中文；但无 key → 新事件无法翻译 |
+| 4 | 模拟交易 | ✅ 正常 | 表结构正确，80 笔（31 closed 有 PnL / 49 open） |
+| 5 | 校准反馈 | ⚠️ 警告 | n=89，**总体 skill 0.20 / POOR** |
+| 6 | 决策阈值 | ⚠️ 警告 | act 2 / provisional 31 / watch 46 / skip 92；1 条标度错位 |
+| 7 | 配置文件 | ⚠️ 警告 | 开关均符合预期；生产模板缺 `LLM_STARTUP_CHECK_ENABLED` |
+| 8 | 调度与频率 | ✅ **正常**（原判 ❌，已更正） | 节奏正确；503 与 running 回收**均为设计行为** |
+
+### 总体健康分：**52 / 100**（原 49，§8 由 6 更正为 9）
+
+| 维度 | 满分 | 得分 | 说明 |
+|---|---|---|---|
+| 数据源健康 | 15 | 14 | 全部可达，仅未验证需认证的 provider |
+| LLM 分析链 | 25 | **0** | 本机无凭据；**属环境状态，非代码缺陷** |
+| 翻译质量 | 5 | 3 | 机制在，凭据缺 |
+| 模拟交易 | 10 | 8 | 逻辑已验证，但 7/24 后无新数据 |
+| 校准反馈 | 15 | 6 | 有样本，但整体不达标 |
+| 决策阈值 | 10 | 6 | 阈值合理，存在 1 条虚假信号 |
+| 配置文件 | 10 | 6 | 生产模板缺启动校验；无花费上限（已改正为生产有 25） |
+| 调度与频率 | 10 | **9** | 节奏正确，回收机制已接线，503 为设计 |
+| **合计** | **100** | **52** | |
+
+> 分数低的**主因是一个环境问题**（本机 `.env` 密钥已按安全要求清空，LLM 链无法工作），而不是代码缺陷。
+> 把凭据配好并重跑，§2（25 分）与 §3（部分）的分数会立刻回来。
+
+---
+
+## §1 数据源健康 — ✅ 正常
+
+直连探测（非经应用）：
+
+| 数据源 | HTTP | 耗时 |
+|---|---|---|
+| `gamma-api.polymarket.com/markets` | **200** | 2.27s |
+| `api.elections.kalshi.com/trade-api/v2/markets` | **200** | 3.95s |
+| `api.manifold.markets/v0/markets` | **200** | 2.95s |
+
+- **清单担心的事项未发生**：Polymarket gamma-api 返回 200，**没有被 Cloudflare 403**。
+- 事件存储内 257 条记录，来源分布正常（Polymarket 190 / Kalshi 12 / Limitless 5，其余无 baseline）。
+- 未验证：需要认证的 provider（Opinion / Predict.fun / API-Football / Sportmonks / The Odds API）——这些 key 在 `.env` 中为空，按设计 fail-closed 不贡献事件。
+- ⚠️ 数据**陈旧**：事件存储最后更新 2026-07-08，审计日志最后一天 2026-09-10，台账最后活动 2026-09-11。
+
+---
+
+## §2 LLM 分析链 — ⚠️ 环境未配置（**首版判 ❌，二次核实后更正**）
+
+> **更正**：首版把这条判为代码缺陷 ❌。二次核实：本机 `.env` 的密钥是被**按安全要求主动清空**的
+> （见 HANDOFF 的"需轮换 key"待办），属**预期的本机状态**，不是代码缺陷。正确的表述是
+> "本机无法评估 §2/§3，且生产部署前必须配置"。**这条仍然是总分的主要拖累项，但归因从"代码坏"改为"环境未配"。**
+
+应用启动即自报：
+
+```
+CRITICAL - No configured LLM route/API key — LLM calls will fail at runtime
+```
+
+`GET /api/llm/diagnostics` 逐任务确认：
+
+```
+configured_task_count   = 0
+unconfigured_task_count = 8
+```
+
+8 个任务（`default` / `probability_analysis` / `translation` / `open_web_extraction` / …）全部：
+
+| 字段 | 值 |
+|---|---|
+| `route_source` | `legacy_openai` |
+| `provider_configured` | True |
+| **`api_key_configured`** | **False** |
+| `base_url_configured` | True |
+
+**根因**：`backend/.env` 里 4 路 provider 的凭据**全为空**：
+
+```
+OPENAI_API_KEY_1..4  = (空)
+OPENAI_BASE_URL_1..4 = (空)
+```
+
+模型名有值（`nvidia/nemotron-3-ultra-550b-a55b:free`、`mistral-medium-3-5`、`deepseek-v4-flash`、`sensenova-6.7-flash-lite`、`agnes-2.0-flash` …），但**没有 key 也没有 base_url**，因此 4 路 fallback 一路都用不了。传统单路 `OPENAI_API_KEY` 在 `.env` 中**完全不存在**（默认 `""`）。进程环境变量里也没有任何 `OPENAI_*`。
+
+> 说明：编号式 `OPENAI_API_KEY_N` / `OPENAI_MODEL_N_M` 是真实的 LLM fallback gateway 功能（spec: `docs/superpowers/specs/2026-07-05-llm-fallback-gateway-design.md`，测试: `test_llm_gateway_service.py`），从 `os.environ` 直读，**不经过 `settings`**——排查时不要在 `config.py` 里找它。
+
+**影响面**：清单 §2 全部子项（key 有效性、中文标题生成、>30pp 偏离 risk_flag）与 §3 全部子项都无法评估；"确定性回退比例" 事实上是 **100%**。附带：`LLM_STARTUP_CHECK_ENABLED=False`，所以这只是 CRITICAL 日志，不会阻止启动。
+
+**修复建议**：填入 `OPENAI_API_KEY_N` + `OPENAI_BASE_URL_N`（至少一路），生产环境同时把 `LLM_STARTUP_CHECK_ENABLED=true`，让缺 key 变成启动失败而不是静默降级。
+
+---
+
+## §3 翻译质量 — ⚠️ 警告
+
+| 检查项 | 结果 |
+|---|---|
+| `AUTO_TRANSLATE_TITLES` | **True** ✅ |
+| 既有中文标题 | 存在且质量正常（例：「安德鲁·塔特的政党会在下一次英国大选中赢得一个席位吗？」） |
+| 定时任务 `translate_titles` | 台账有记录，最后成功 **2026-09-10**，耗时 5.27s |
+| title 翻译是否独立于主分析 | 是（独立 job + 独立 `LLM_ROUTE_TRANSLATION` 路由）✅ |
+
+**问题**：`LLM_ROUTE_TRANSLATION` 的 `api_key_configured=False`。既有标题是 7–9 月间用旧 key 翻译的存量；**重启后新发现的事件将无法获得中文标题**。
+
+---
+
+## §4 模拟交易 — ✅ 正常（但数据陈旧）
+
+- `PAPER_TRADE_ENABLED=True`、`PAPER_TRADE_WATCH_ENABLED=True` ✅
+- `simulated_trades` 表存在，24 列结构完整（`entry_prob` / `market_prob` / `entry_edge` / `exit_*` / `pnl_pct` / `is_win` / `status`）✅
+- **80 笔**：`closed: 31`（`pnl_pct` 与 `exit_time` 均已填充）、`open: 49`
+  → **自动创建 + 自动平仓 + PnL 计算链路均已跑通** ✅
+- 标度健康：`entry_edge` 区间 **(-31.06, 30.0)**，符合 0–100 百分点标度 ✅
+- ⚠️ 最后一笔 `entry_time` = **2026-07-24**，此后无新交易。
+
+---
+
+## §5 校准反馈 — ⚠️ 警告
+
+`CALIBRATION_FEEDBACK_ENABLED=True` ✅，样本在（`n=89`），但**结果不达标**：
+
+| 维度 | Brier | Skill | 评级 | n |
+|---|---|---|---|---|
+| **总体** | 0.1997 | **0.2013** | **POOR** | 89 |
+| Polymarket | 0.2059 | 0.1763 | RANDOM_LEVEL | 83 |
+| manifold | 0.1133 | 0.5467 | ACCEPTABLE | 6 |
+
+按类别（节选）：
+
+| 类别 | Skill | 评级 | n |
+|---|---|---|---|
+| sports_game | 0.0494 | RANDOM_LEVEL | 33 |
+| sports_general | 0.1307 | RANDOM_LEVEL | 20 |
+| crypto_price_btc | 0.2845 | POOR | 6 |
+| geopolitics_general | 0.8604 | EXCELLENT | **2** |
+| monetary | 0.19 | RANDOM_LEVEL | 2 |
+
+**照实说**：系统整体概率技能分 **0.20（POOR）**；占样本 93% 的 Polymarket 基线本身只有 **0.176（RANDOM_LEVEL）**——即当前输出基本没有超出市场基线的预测能力。表里的 `EXCELLENT` 是 n=2 的噪声，**不要**当作好消息。
+
+另外："校准后 trust_weight 是否合理"这一项，样本里 `trust` 稳定为 `0.5`（休眠类别默认值），说明绝大多数类别仍处于休眠、未获得真实校准权重。
+
+---
+
+## §6 决策阈值 — ⚠️ 警告
+
+| 配置 | 值 | 清单预期 |
+|---|---|---|
+| `DECISION_ACT_EDGE` | **6.0** | 6.0 ✅ |
+| `DECISION_WATCH_EDGE` | **2.0** | 2.0 ✅ |
+
+`predictions` 表 171 条的决策分布：
+
+```
+act              :   2
+provisional_act  :  31
+watch            :  46
+skip             :  92
+```
+
+（`/api/events/decisions/open` 只统计未结算子集：`act 0 / provisional_act 21 / watch 27`，共 48。）
+
+- `provisional_act` 有 31 条，冷启动样本积累**在进行** ✅
+- `review_queue_items = 0`、`decision_timeline = 0` —— 人工复核队列与决策时间线**均为空**。若有流程期望 `act` 决策进入人工复核，当前没有任何一条被路由进去。
+- ⚠️ **1 条决策由标度错位的基线驱动**（详见下节）。
+
+### 附带发现：1 条 Kalshi 遗留记录的标度错位
+
+| 项 | 值 |
+|---|---|
+| event | `0779bde4dcd63e08`（"Andrew Tate's party … UK election"） |
+| platform | Kalshi (`KXBRUVSEAT-35`) |
+| `market_probability`（存储） | **0.2** |
+| `ai_probability` | 30.17 |
+| `raw_edge` | **29.97** = 30.17 − 0.2 |
+| `adjusted_edge` | **14.98** = 29.97 × trust(0.5) |
+| `decision` | **provisional_act** |
+
+**定性**（已核实，不是当前适配器的 bug）：现行 `kalshi_event_source._baseline_and_quote` 读 `last_price_dollars` 并 `× 100`，注释明确 "All three values are on the 0-100 scale"，且 12 条 Kalshi 记录中 **11 条标度正常**。只有这 1 条（`first_seen 2026-07-01`、`last_updated 2026-07-08`）是旧代码留下的存量。全库 `market_probability < 1` 的行**有且仅有这 1 条**。
+
+**危害**：若基线按正确的 20 计算，`adjusted_edge = (30.17 − 20) × 0.5 = 5.09`，**低于 ACT 阈值 6.0** → 应为 `watch`。它是 31 条 `provisional_act` 之一，也是决策列表的首条展示样本。系统自己的报告也被带偏，写下「基准概率 **0.2%** 变化至 30.2%」。
+
+**更值得注意的**：`ai_analysis_service.py:70` 只做 `_clamp(market_probability, 0, 100)`——**采信 0.2 而不怀疑**。全链路缺少"两向市场概率不该离 0/100 太近"的合理性守卫，所以同类坏数据只会在下游被放大成假 edge。
+
+**修复建议**：(a) 重算或作废这条存量记录；(b) 在写入/读取预测时加标度合理性校验（例如 `0 < mp < 5` 且该市场有成交量时判为可疑并拒绝或重取）；(c) 给 edge 计算加跨标度守卫而不是只 clamp。
+
+> **更正（2026-09-27）：上方「这是旧代码留下的存量」这句归因是错的。** 当时推断"2026-07-01 那条是旧版
+> Kalshi 适配器忘了 `×100`"，**未经 git 核实**。穷举该文件全部历史（`git log --all`）后：
+>
+> ```
+> git log --all -S"last * 100"  -- backend/app/services/kalshi_event_source.py
+>   → 只有 6cc99f3（2026-06-16 Initial commit）一处
+> git log --all -p -- <file> | grep "return last\|last_price"
+>   → 143: last = safe_float(market.get("last_price_dollars"), 0.0)
+>     145:- return last * 100            ← 初始提交就是这样
+>     146:+ return last * 100, 0.0, 0.0   ← 2026-06-29 只改了返回值个数
+> ```
+>
+> **即：该适配器从第一版起就 `×100`，从未存在过不乘 100 的版本**，产不出 0.2。
+> 唯一能到达 `predictions.market_probability` 的路径是 `POST /api/events/analyze` 的
+> `baseline_probability`（`events.py:274` → `analyze_event` → `build_event_record:157`
+> `baseline = safe_float(analysis["market_probability"])`），而它 `ge=0.0` **接受 0.2**。
+> 取证旁证：该行 `snapshot_*` 字段**全为空**（自动发现路径会填），`event_market_links.link_method='freeze'`
+> 发生在预测创建后 0.15 秒 —— 与"先经 API 分析、随后冻结链接"一致。
+>
+> **归因改错的后果**：原措辞会引导后来者去"修 Kalshi 适配器"，而那里没有 bug。
+> **对处置的影响**：原建议 (a)「重算」隐含"真值是 20"，这是**推断而非事实** —— 调用方也可能真的在说 0.2%。
+> 存量数据里没有任何字段能区分两者，**所以第七章 §8.4 的三选项仍未决，且「重算」的依据比原稿更弱**。
+>
+> 另一个细节：`build_event_record` 的护栏是 `abs(change) > 30`（加 `large_deviation_*` 标记），
+> 而这条的 `change = 29.97` —— **差 0.03pp 没触发**。即护栏刚好处在"擦肩而过"的位置，这条记录没被标记出来。
+
+---
+
+## §7 配置文件 — ⚠️ 警告
+
+| 项 | 值 | 判断 |
+|---|---|---|
+| `SOURCE_WEIGHTS` | `{Polymarket 3.0, Kalshi 1.0, Limitless 0.8, Opinion 0.6, Predict.fun 0.5, Open Web 0.5, Polymarket Crypto 1.0, World Cup 0.3, Metaculus 0.5}` | ✅ 平衡；**清单里的 Manifold 已不存在**（清单过期） |
+| `WORLD_CUP_SOURCE_ENABLED` | False | ✅ 符合预期 |
+| `OPEN_WEB_ENABLED` | False | ✅ 符合预期 |
+| `LIMITLESS_SOURCE_ENABLED` | True | — |
+| `AUTO_TRANSLATE_TITLES` | True | ✅ |
+| `LLM_STARTUP_CHECK_ENABLED` | **False** | ⚠️ 生产应置 True |
+| `LLM_DAILY_COST_CAP_USD` | **0.0** | ⚠️ **0 = 不限额**（代码注释明说），且应用启动时主动告警 `daily LLM spend is UNLIMITED` |
+| 明显笔误（`hhttp://` 双 h） | 未发现 | ✅ |
+| 凭据 | 4 路 key **全空** | ❌ 见 §2 |
+
+**告警出口缺失**（启动日志自报）：
+
+```
+WARNING - No alert push channel is configured — a failed job is recorded
+          (loop_runs ledger, pmrf_scheduler_failed_runs_total, /api/health 503)
+          but nothing notifies anybody.
+INFO    - Sentry disabled: SENTRY_DSN is empty.
+```
+
+→ 任务失败只落台账，**没有任何人会被通知**。
+
+---
+
+## §8 调度与频率 — ✅ 正常（**首版判 ⚠️/❌，二次核实后更正**）
+
+> **更正**：首版把"`/api/health` 永久 503"和"4 条孤立 running 未回收"都判为缺陷，并称生产会
+> "容器无限重启"。**两半都错了**，详见文末「更正记录」。本节的 ❌ 小节保留原始措辞以便对照。
+
+节奏**符合清单预期**：
+
+| 任务 | 触发 | 位置 |
+|---|---|---|
+| `event_discover` | `IntervalTrigger(hours=4)` | `app/core/scheduler.py:1603` ✅ |
+| `event_discover_startup` | 启动后 **30 秒**一次性（limit=10，成本护栏） | `:1613` ✅ |
+| `event_auto_resolve` | `CronTrigger(hour=22, minute=30)` | `:1620` ✅ |
+
+### ❌ `/api/health` 永久返回 503
+
+实测：`GET /api/health` → **HTTP 503**，`status: "degraded"`。
+
+判定逻辑（`app/main.py:510–527`）：`failed_runs` 取自 **`latest_run_per_job`**，只要**每个任务最近一次**运行是 `failed`，就 `degraded` → 返回 503。
+
+而唯一的失败项是一条**不会自行消失**的陈旧记录：
+
+```
+job    : world_cup_api_football_validate
+status : failed
+started: 2026-07-07T17:46:46   finished: 2026-07-07T17:46:48
+error  : API-Football returned 0 fixtures for league=1 season=2026;
+         check provider coverage/config before import.
+```
+
+该任务自 7 月 7 日后再未运行（World Cup 源已关闭），所以这条 `failed` 会**永久**留在 `latest_run_per_job` 里。
+
+**生产后果**：`main.py:520` 的注释说明 503 是给容器/systemd 健康检查用的 → 一个 7 月的、可选 provider 的数据问题会让健康检查**永久失败**，容器编排会**无限重启**，外部监控会**持续告警**。
+
+### ⚠️ 4 条孤立的 `running` 记录从未回收
+
+`event_discover_startup` 有 4 行 `finished_at = NULL`，全部在 2026-09-10：
+
+```
+running  2026-09-10T13:42:13  -> None
+running  2026-09-10T19:45:29  -> None
+running  2026-09-10T19:49:36  -> None
+running  2026-09-10T19:51:22  -> None
+```
+
+根因：`_job_event_discover_startup` 在校验开始即 `_start_run(...)` 落一行，进程被强杀时不会收尾。
+
+> 🔴 **本节两段结论均已推翻 —— 见文末「更正记录」。** 正确结论：
+> (1) `/api/health` 报 503 **是刻意设计且已文档化的修复**，不是缺陷；
+> (2) 遗留 `running` 行**有对账机制且已接线**（`scheduler.py:471`），之所以没回收是因为**我在审计时把调度器关了**。
+
+---
+
+## TOP 3 优先修复（**已按二次核实更正**）
+
+1. **配置 LLM 凭据（部署就绪项，非代码修复）** —— 本机 `.env` 密钥已按安全要求清空，属预期；但**生产部署前必须**填 `OPENAI_API_KEY_N` + `OPENAI_BASE_URL_N`，并**把 `LLM_STARTUP_CHECK_ENABLED=true` 写进 `.env.production.example`**（当前模板没有该项 → 生产默认 False → 坏 key 会静默降级而不是拒绝启动）。
+2. **清掉决策链里的标度异常** —— 作废/重算 `0779bde4dcd63e08`，并给 market_probability 加标度合理性守卫。附带发现：`kalshi_sports_source.py` 与 `kalshi_event_source.py` 对同一数据源用了**两种标度**（0–1 vs 0–100），需一并确认下游是否有混用。
+3. **补齐生产可观测性** —— `.env.production.example` 里 `SENTRY_DSN` 与 `SCHEDULER_FAILURE_ALERT_ENABLED` 均为空/false，等于**任务失败无人被通知**；`LLM_DAILY_COST_CAP_USD=25` 已设（此项正常）。
+
+**已撤销的首版 TOP 项**：~~解掉 `/api/health` 永久 503~~（非缺陷，见更正记录）。
+
+**仍待确认（非缺陷，需业务判断）**：`review_queue_items=0` 是否符合人工复核流程预期；`docs/system-review-prompt.md` 清单过期（Manifold 已移除）。
+
+---
+
+## 更正记录（2026-09-26 二次核实）
+
+首版报告有两处结论错误。原文保留在上方以便对照，此处记录更正依据。
+
+### 更正 1：`/api/health` 的 503 — 不是缺陷，是刻意的修复
+
+**首版主张**：陈旧失败（2026-07-07 的 `world_cup_api_football_validate`）永久锁死健康判定，生产会导致容器无限重启 + 监控疲劳；建议给 `failed_runs` 加时效窗口。
+
+**核实推翻**：
+
+- `app/memory/loop_run_store.py:166-190`（`latest_run_per_job` 的 docstring）明确写道：此前四个调用方各自硬编码任务名，导致 15 个任务里 12 个无人看管，**而"唯一一个最后运行失败的任务"正是 `world_cup_api_football_validate`（2026-07-07，"API-Football returned 0 fixtures"）**，于是 *"`/api/health` answered 200 'ok' and `scripts/healthcheck.py` went on feeding the dead-man switch"*。
+- 并且写明："deriving from the ledger rather than from `scheduler.py`'s `add_job` ids is deliberate: what matters to an operator is which recorded work failed, whoever started it."
+  → `world_cup_api_football_validate` 正是"request-triggered"任务（由 `events.py:795` 触发），台账推导就是为覆盖它。
+
+⇒ **现在的 503 就是那次修复的产物。** 按首版建议加"时效窗口"，等于把这个修复回退，重新让 health 在确有失败任务时报 ok。
+
+**"无限重启"的说法也不成立**：`scripts/healthcheck.py` 是 **systemd timer 驱动的 oneshot**（`deploy/prediction-market-reality-filter-healthcheck.{service,timer}`）。它失败时只 `return 1` 并**跳过 dead-man ping**（`healthcheck.py:63-69`），**不含任何 `Restart=`**。实际后果是外部 dead-man 监控**响一次警报**——这正是 dead-man switch 该有的行为。
+
+### 更正 2：遗留 `running` 行 — 有回收机制且已接线
+
+**首版主张**：4 条 `finished_at=NULL` 的行"启动时从不回收"。
+
+**核实推翻**：`loop_run_store.fail_stale_running_rows()` **存在且已接线** —— `app/core/scheduler.py:471` 在 `loop_runs` 台账维护任务里调用，cutoff 为 `now - LOOP_RUN_STALE_RUNNING_HOURS`。2026-09-10 的行远超该阈值，**下次调度维护即会回收**。
+
+之所以在本次审计中观察到 4 条未回收：**我在审计时用 `SCHEDULER_ENABLED=false` 启动**，维护任务根本没跑。这是我自己的观测条件造成的，不是系统缺陷。
+
+> 该函数的 docstring 还解释了为何用"阈值"而非"启动时"判定：API 与 scheduler 是两个进程共享同一台账，"另一个进程刚启动"不能等同于"那行没有归属"。
+
+### 更正 3：标度异常记录的归因
+
+**首版主张**：该属"旧代码遗留"（现行为 `last_price_dollars × 100`，"修复后"才对）。
+
+**核实推翻**：`git log -S "last_price_dollars"` 显示该转换来自 **`6cc99f3` 初始提交（2026-06-16）**，**从来就是 ×100**。所以那条 `first_seen 2026-07-01` 的记录是在正确代码已就位之后写下的，**"旧代码遗留"的解释站不住**。
+
+**目前能确证的**：症状真实（该记录基线 0.2 驱动出虚假 `provisional_act`），且 `_clamp(market_probability, 0, 100)` **不拦截 0–1 标度**；另发现 `kalshi_sports_source.py:62-74` 用 0–1 标度（`no_price = 1.0 - price`）而 `kalshi_event_source.py` 用 0–100，**同一数据源两条适配器标度不一致**。**注**：该记录是选举市场（非体育路径），因此**具体来源未能确证**——不排除 LLM 把市场价回显为分数（同记录里 `evidence_constrained_probability = 0.02` 也是 0–1 标度）。修法是加写入侧标度守卫，而非猜测来源。
+
+### 教训
+
+三条错误的共同形态：**看到一个异常值就推断成因，而没有先读那一处的 docstring 与调用链**。本仓库大量把"为什么这么设计"写在 docstring 里（且往往正是为了修掉我指控的那个问题）——
+**在本仓库下结论前，先读 docstring 与调用点；只读数据会得出反向结论。**
+
+
+---
+
+*本报告为只读审计结果：未修改任何业务数据，未调用任何写端点。审计期间启动的后端已在结束时停止。*
+
+---
+
+# 六、修复批次二（A/B/C/D/E）
+
+> **本节追加于正文之后，不改写正文。** 它**取代上一行的结束语**：本批次有代码改动，
+> 正文与「更正记录」保持原样以便对照。三件套口径：改动清单、变异验证、回归结果。
+>
+> ⚠️ **本批次最重要的产出是三个"不做"**：A、B、E 在调查后各自被推翻前提，
+> **没有为了交付而改动代码**。每一处都写明了推翻依据。
+
+## A —— 结案：不是缺陷（零改动）
+
+结论已在正文「更正 1」「更正 2」记录（`/api/health` 的 503 是刻意的台账推导设计；
+孤立 `running` 行有 `fail_stale_running_rows()` 且已接线在 `scheduler.py:471`）。
+本批次复核后**无残项**，因此**没有代码改动**——首版建议的"加时效窗口"会回退那次修复。
+
+## B —— 结案：**没有安全的守卫可加，故不改代码**
+
+### 证据（只读打开 `backend/v2_loop.db`，`mode=ro`）
+
+全库统计：`predictions` 共 **171 行**。
+
+| 口径 | 行数 |
+|---|---|
+| `market_probability ∈ (0,1)` | **1** |
+| `market_probability ∈ [1,100]` | 170 |
+| `market_probability > 100` | 0 |
+| `market_probability = 0` | 0 |
+
+→ **一次性个例，非系统性。** 该行（与镜像的 `simulated_trades` id=42）：
+
+| 字段 | 值 |
+|---|---|
+| `event_id` | `0779bde4dcd63e08` |
+| `contract_id` / `platform` | `KXBRUVSEAT-35` / Kalshi |
+| 市场 | "Will Andrew Tate's party win a seat in the next UK election?" |
+| `ai_probability` | 30.17 |
+| `market_probability` | **0.2** |
+| `raw_edge` / `adjusted_edge` | 29.97 / 14.98 |
+| `decision` | `provisional_act` |
+| `created_at` | 2026-07-01T10:17 |
+
+`raw_edge = 30.17 − 0.2 = 29.97` 精确自洽 → 判定链**确实**用了那个 0.2。
+按正确标度重算：`raw_edge = 10.17`，`adjusted_edge = (30.17−20)×0.5 = 5.09 < ACT 6.0` → 应为 **`watch`**。
+
+### 为什么现行为产生不出它
+
+`kalshi_event_source._baseline_and_quote()` 三个分支分别返回
+`last*100` / `(bid+ask)/2*100` / `50.0` —— **全部 0–100**。
+`git log -S "last_price_dollars"` 证明该 ×100 自初始提交 `6cc99f3`（2026-06-16）即在，
+即这条 2026-07-01 的记录**写下时那条路径已经是对的**。
+
+### 唯一能合法写入 0.2 的入口
+
+`EventAnalysisRequest.baseline_probability = Field(default=50.0, ge=0.0, le=100.0)`
+→ **`0.2` 是合法值**，经
+`events.py:274 → analyze_event(baseline_probability=…) → event_intelligence_service.py:839 market_probability=baseline_probability`
+原样落库。`ai_analysis_service.py:70` 只做 `_clamp(mp, 0, 100)`，**不拦 0–1 标度**。
+
+**关于首版"同源不一致"的说法**：`kalshi_sports_source.py` 确实用 0–1
+（`"price": price`、`no_price = 1.0 - price`），但它只喂体育/期货管线（`kernel_predictions.db`），
+与本条 `v2_loop.db` 的**选举**记录**不同源**。所以"两条适配器标度不一致"是真的，
+但**与这条记录无关** —— 首版把它列为"疑似同源"过于宽。
+
+### 为什么**不加**守卫（这是结论，不是遗漏）
+
+值本身无法自证标度：**`0.2` 在 0–100 标度下是一个合法的 0.2%**。
+而请求体里**只有这一个概率字段**，没有任何同请求内的参照值可供交叉校验。
+→ 任何"拒绝 `(0,1)`"的阈值都会**误杀真实存在的 0.2% 市场**。
+可靠守卫只能来自写入侧的上游契约（谁提供了这个数），**不是在决策层猜标度**。
+
+### 留给业务方的三个选项
+
+| 选项 | 代价 | 我的保留意见 |
+|---|---|---|
+| i. 只作废/重算这一行 + 镜像 `simulated_trades` | 小 | **我不能替业务判定 20 就是对的**：7 月的 Kalshi 盘口已不可回溯，`20` 只是"同源 ×100"的推断 |
+| ii. 收紧 `baseline_probability` 写入契约（接受 0–1 并 ×100，或显式 422） | 中 | 改动对外契约，需业务确认；且会挡住真实 0.2% |
+| iii. **不动数据**，仅保留可复用探针 | 零 | 推荐。只读探针已留档（见下），下次出现同类行可立刻识别 |
+
+可复用探针（已按仓库惯例落盘，**只读**）：`backend/scripts/report_probability_scale_outliers.py`
+—— 用 SQLite `mode=ro` 打开 loop DB，打印全量分布与所有 `0 < market_probability < 1` 的行，
+并给出"若按 ×100 修正则 edge 应为多少"。实测输出与上表一致（`min/max = 0.2 / 99.45`）。
+
+## C —— 已修复：让「0」只表示一种意思
+
+### 问题
+
+`review_queue_items=0` **本身是预期的**：`REVIEW_QUEUE_ENABLED` 默认 `false`，且
+`backend/.env`、`.env.staging.example`、`.env.production.example`、`deploy/docker-compose.yml`
+**全都没有提到它**（只有 `backend/.env.example` 赋值）。
+
+但它**不可读**——同一个 `items: []` 同时表示三种情况：
+
+1. 队列确实已清空；
+2. **探测器从未运行**（`REVIEW_QUEUE_ENABLED=false`）；
+3. 读失败（`loop_status_service._review_queue_counts()` 在异常时**降级为 0**）。
+
+看板空态在三种情况下都显示同一句「当前没有待复核条目。」
+
+**决定性对照**：同一仓库的 `frontend/src/components/detail/decision-timeline-panel.tsx:111`
+空态**是**写明开关的 ——
+「暂无决策时间线数据。该事件可能在 `DECISION_TIMELINE_ENABLED` 关闭期间保存。」
+→ 两个同类面板，一个自解释、一个不自解释。**这不是新发明，是把已有先例补齐。**
+
+### 改动
+
+| 文件 | 改动 |
+|---|---|
+| `backend/app/api/routes/review_queue.py` | `GET /review-queue` 响应多回 `"enabled": settings.REVIEW_QUEUE_ENABLED`（+ docstring 说明为何要带上） |
+| `frontend/src/lib/api.ts` | `ReviewQueueListResponse.enabled?: boolean` —— **可选**，缺省视为"未知" |
+| `frontend/src/components/review/review-queue-board.tsx` | 仅在 `enabled === false` 时改说「复核队列未启用（REVIEW_QUEUE_ENABLED=false）。探测器不会写入条目，因此这里是空的。」 |
+
+**为什么前端字段可选、且只在严格 `=== false` 时才改文案**：老后端不带该字段时不能被误报成"已停用"；
+既有测试的 mock 不带该字段，因此空态文案保持中性 → **既有测试一行不用改**。
+
+`/review-queue/sla` 的 `enabled` 未加（该端点是队列读数，不是生产者状态）—— 已知的、有意留下的窄口。
+
+### 附带发现（模板层，同一根因）
+
+`.env.production.example` 里那句
+`# Feature flags ON in production (the overlays are the product).` 只列了 **6 个**开关。
+另外 **6 个**默认全 `false`、**任何部署文件都没提**，却各自关着一个操作员会看的界面：
+
+| 开关 | 关掉后操作员看到什么 |
+|---|---|
+| `REVIEW_QUEUE_ENABLED` | `/review-queue` 永久为空（即本项） |
+| `DECISION_TIMELINE_ENABLED` | 事件页决策时间线永久为空 |
+| `CONCLUSION_CHALLENGE_ENABLED` + `EVENT_CHALLENGE_ENABLED` | 无 `conclusion_challenge` → 复核队列的 `conclusion_challenge_failed` 触发**永不发生**（即使队列开关是开的） |
+| `SOURCE_TRUST_REGISTRY_ENABLED` | 来源信任用内置档位，注册表覆盖不生效 |
+| `WORLD_CUP_CHALLENGE_ENABLED` | 世界杯结算挑战不跑 |
+
+已加**注释块**逐条写明「关掉后什么样」。**故意写成注释而不是赋值**：overlay 以 `override=True` 加载，
+`KEY=false` 会**压掉操作员在 base `.env` 里开的 `true`** —— 与同文件 SENTRY_DSN 那段记录的陷阱同类。
+
+## D —— 已修复：生产模板开启 LLM 启动校验
+
+`.env.production.example` 在 `LLM_DAILY_COST_CAP_USD=25` 之后新增：
+
+```ini
+LLM_STARTUP_CHECK_ENABLED=true
+```
+
+`LLM_STARTUP_CHECK_ENABLED` 默认 `false`；`main.py:213` 用它决定是否
+`await validate_primary_llm_startup()`，失败则 `RuntimeError` 拒绝启动。
+模板此前**没有这一项** → 生产部署带坏 key 会**静默降级**而不是拒绝启动。
+注释里同时写明了代价（provider 启动瞬间抖动也会拒启动，这是有意的取舍）。
+
+## E —— 结案：根目录不是"散落"，`.gitignore` 逐条列明了它们（零改动）
+
+- 根目录**已跟踪**的顶层条目只有 **8 个文件 + 6 个目录**：`.dockerignore` `.gitattributes`
+  `.gitignore` `.gitleaks.toml` `CHANGELOG.md` `LICENSE` `README.md` `start.bat` 与
+  `.github/ backend/ deploy/ docs/ frontend/ relay-bridge/`。**这个表面是干净的。**
+- 所有"散落"物（`HANDOFF.md`、10×`SESSION_MEMORY_*.md`、4×`sdd-*.diff`、`sdd-task-*.md`、
+  `hive.yml`、`check_db.py`、`skills-lock.json`、`code-review-*/`、`.fix-backup/`）
+  在 `.gitignore` 里**逐条有名有姓**，分列于
+  「Internal working logs」「AI tooling / local agent state (not product code)」
+  「Local debug / diff scratch (not source)」三节 → 是**刻意的本地文件**，不是漏归置。
+- 全仓检索：**没有任何已跟踪的代码或运维文档依赖它们**。唯一引用出现在
+  `docs/superpowers/plans/*` 的**历史计划**里，而那些还明写
+  「Do not commit `SESSION_MEMORY_2026-07-08.md`; it is ignored by `.gitignore`」。
+- **确实过期的**（3 个月、已被取代）：4 个 `sdd-*.diff`、2 个 `sdd-task-4-*.md`、`check_db.py`、
+  `hive.yml`、`code-review-2026-06-24/`、`.fix-backup/`；10 个 `SESSION_MEMORY_*.md`
+  已被 `.workbuddy/memory/` 取代。
+- **本批次没有移动任何文件**，理由有二：① 这是用户自己的本地草稿；
+  ② 把它们移进 `docs/` 会让文件**变成新跟踪文件**，与 `.gitignore` 里
+  "kept locally, not published" 的意图相反。归档命令已交给用户，动作留给他决定。
+
+---
+
+# 七、批次二的验证
+
+## 回归
+
+| 命令 | 结果 |
+|---|---|
+| `pytest tests/test_review_queue_endpoint.py test_review_queue_store.py test_review_queue_detectors.py test_env_overlay_examples.py test_production_deploy_consistency.py` | **190 passed / 0 failed / 0 error** |
+| `pytest tests/test_env_overlay_examples.py`（收紧断言后） | 9 passed + 10 subtests |
+| 生产模板组（`test_env_overlay_examples` + `test_production_deploy_consistency` + `test_alert_channel_posture` + `test_backup_plaintext_guard` + `test_log_level_setting`） | **93 passed / 0 failed** |
+| `npx vitest run`（全量） | **125 files / 730 tests 全通过**（原 729，+1） |
+| `npx tsc --noEmit` | exit 0 |
+| 行尾审计（`backend/scripts/eol_audit.py`） | 本次触及的 15 个已跟踪文件**无 CRLF 损坏**（判据：无"CRLF→bare LF"，无混用） |
+| `pytest tests/`（后端全量，**本机代理 env 在场**） | 7235 tests / **1 failure** / 0 error / 11 skipped —— 那 1 项是**本机代理**造成的，见下 |
+| `pytest tests/`（后端全量，`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY`） | **7251 tests / 0 failure / 0 error / 11 skipped** |
+| `pytest tests/test_backup_restore_drill.py`（去掉代理 env 后） | **0 failure** |
+| `ruff check app/`（CI 原样） / `compileall -q app tests` | All checks passed / exit 0 |
+| `npx eslint`（改动的 3 个前端文件） | exit 0 |
+
+> ⚠️ 这两次全量运行的**进程退出码都是 1**，但第二次的 junit 是 `failures=0 errors=0`。
+> 真因是本机拦截器：日志末尾只有
+> `[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":50,...,"targets":[...pytest-of-Alin\garbage-...]}`，
+> 即 safe-delete 拦住了 **pytest 自己的临时目录清理**。
+> **判绿只能看 junit 的 `failures`/`errors` 集合，`rc` 不是判据。**
+
+### 关于后端全量那唯一 1 项失败：是环境，不是改动
+
+失败项：`tests.test_backup_restore_drill.BackupRestoreDrillTests::test_a_real_archive_restores_every_store_to_its_configured_path`
+
+```
+AssertionError: Lists differ: ['PMRF service appears to be running (SQLite DB is locked). ...'] != []
+```
+
+**根因链（已复现，非推断）**：
+
+1. `scripts/restore_stores.py:275-303` 在 Windows 上（无 `fcntl`）走**健康探测**分支，
+   默认 URL `http://localhost:8000/api/health`；
+2. 该分支的注释明说：**任何** HTTP 响应——**包括 503/502/504**——都算"服务在跑"，
+   只有连接级失败（refused/reset/timeout）才算"没跑"；
+3. 本机 `http_proxy = http://127.0.0.1:64584` 会**拦截**对 `localhost:8000` 的请求并回 **502**。
+   直接复现（pytest 之外）：
+
+   ```
+   $ python -c "urllib.request.urlopen('http://localhost:8000/api/health')"
+   http_proxy= http://127.0.0.1:64584
+   RESULT: HTTPError 502 -> _check_service_running() would return True
+   ```
+
+4. 于是脚本认为"服务在跑"并**追加一条 warning**，测试断言 `warnings == []` 失败；
+5. **决定性对照**：同一文件在去掉代理 env 后重跑 → **failures 1 → 0**；
+   整仓全量在去掉代理 env 后重跑 → **failures 0**（7251 passed）。
+
+**与本批次改动的关联：没有。** 本批次没有触碰 `restore_stores.py`、端口、DB 或备份链路。
+（同理，审计期间 `curl` 也必须带 `--noproxy '*'` 才能访问本机端口。）
+
+## 变异验证（`backend/scripts/mutation_verify_review_queue_flag.py`，字节级，已随交付落盘）
+
+三次操作：`backup` → `apply` → 跑守卫测试 → `revert`。复跑记录：`tests=43 failures=5`，
+四条守卫**全部命中**（`failures` 比 `RED` 名单多 1，是 `subTest` 的两次展开）。
+
+| 回退的改动 | 期望变红的测试 | 实测 |
+|---|---|---|
+| 删掉路由的 `"enabled": settings.REVIEW_QUEUE_ENABLED,` | 精确契约测试 + 开关回显测试 | **RED**（43 tests / 4 failures，全部命中预期用例） |
+| 删掉模板的 `# REVIEW_QUEUE_ENABLED=true` 行 | 「模板必须命名它关掉的开关」 | **RED**（`AssertionError: ['REVIEW_QUEUE_ENABLED'] != []`） |
+| 把 `# WORLD_CUP_CHALLENGE_ENABLED=true` 改为赋值 `=false` | 「不得把开关钉死为 false」 | **RED** |
+| 看板空态改回旧文案 | 新增的 vitest 用例 | **RED**（1 failed / 18 passed） |
+
+全部还原后与备份 **sha256 一致**（`review_queue.py` `a189d0f3…`，`.env.production.example` `6c9342b5…`）。
+
+## 一个被变异验证抓出来的自欺（值得单列）
+
+模板「命名」测试**首版用裸子串匹配**（`k not in text`）。删掉 `# REVIEW_QUEUE_ENABLED=true` 那行之后，
+**测试仍然是绿的** —— 因为同一段注释散文里还有一句
+"…so the review queue's `conclusion_challenge_failed` trigger can never fire even with REVIEW_QUEUE_ENABLED=true."
+一个字符串出现在了散文里，就满足了"出现过"的断言。**是变异验证把它抓出来的，不是代码评审。**
+
+→ 已改为要求 `KEY=` **形状**（`test_env_overlay_examples._names_in_any_form()`）。
+**教训：断言"某名字出现过"的测试可以被散文满足；要锁行为就必须锁形状。**
+
+---
+
+# 八、决策批次三：七个待决项，逐条决定并执行
+
+批次二留下七个「需要业务方或用户拍板」的事项。本批次不再逐项征询，**由我按最优方式决定并执行**，
+并在此逐条记录决定、依据与落地物。**其中第 5 项推翻了我自己在批次二里给出的判断。**
+
+| # | 事项 | 决定 | 落地 |
+|---|------|------|------|
+| 1 | E1 根目录过期草稿归档 | **不移动** | 零改动（见 §8.1） |
+| 2 | P `docs/system-review-prompt.md` 陈旧 | **修复** | 2 处事实错误（见 §8.2） |
+| 3 | D1 生产模板未命名 LLM 凭据 | **修复** | 模板 +27 行（见 §8.3） |
+| 4 | B 标度错位记录 | **不改数据、不加守卫，补标度契约** | 2 处注释（见 §8.4） |
+| 5 | C1 `GET /review-queue/sla` 回显 `enabled` | **加**（**推翻批次二的判断**） | 路由 + 测试 + 文档（见 §8.5） |
+| 6 | C2 `loop_status_service._review_queue_counts()` | **不加** | 零改动（见 §8.6） |
+| 7 | C1b CLI `sla` / `list` 命名开关 | **加提示，不改退出码**（决定 5 时新发现） | CLI + 3 测试 + RUNBOOK（见 §8.7） |
+
+## 8.1 E1 —— 经核实无需归置，零改动
+
+核实（只读）：
+
+```
+git ls-files | awk -F/ 'NF==1'        → 恰好 8 个：.dockerignore .gitattributes .gitignore
+                                        .gitleaks.toml CHANGELOG.md LICENSE README.md start.bat
+git ls-files | awk -F/ 'NF>1{print $1}' → 恰好 6 个：.github/ backend/ deploy/ docs/ frontend/ relay-bridge/
+git status --porcelain 过滤出「未跟踪且未忽略」的根目录文件 → 空
+```
+
+批次二称作「散落文件」的那些路径，**全部被 `.gitignore` 逐字点名**，分属三类：
+`内部工作日志`（`backend/docs/PROJECT_PROGRESS.md`）、`AI 工具/本地代理状态`（`HANDOFF.md`、`SESSION_MEMORY_*.md`、
+`hive.yml`、`skills-lock.json`、`.claude/`、`AGENTS.md`）、`本地调试/差异草稿`（`sdd-*.diff`、`sdd-task-*.md`、
+`.fix-backup/`、`check_db.py`、`code-review-*/`）。
+
+**不移动的理由**：① 移进 `docs/` 会让它们变成**新的受控文件**，与 `.gitignore` 那句"留在本地、不发布"的意图
+正相反；② `HANDOFF.md` 是随会话滚动的**现行约定文件**（见 `.workbuddy/memory/MEMORY.md`），移动会破坏工作流；
+③ 移动的收益是目录观感，风险是文件身份变化，不划算。
+
+**本批次自己造成并已清除的污染**：根目录 `.tmp_*.xml` × 8 与 `.tmp_manifest.txt`（junit 与哈希清单的落盘物）。
+这些**不被 `.gitignore` 覆盖**，会出现在 `git status` 里 —— 属本轮自查发现，已用 Python `unlink()` 逐个删除。
+清除后根目录「未跟踪且未忽略」文件为 **0**。
+
+## 8.2 P —— 审计清单指向一个已退役的数据源
+
+`docs/system-review-prompt.md` 是**已受控、已发布**的审计清单。它两处写着 Manifold：
+
+| 行 | 原文 | 问题 |
+|----|------|------|
+| §1 第 6 行 | 检查 Polymarket / Kalshi / **Manifold** 是否可达 | 会让下一次审计去探测一个不存在的源 |
+| §7 第 42 行 | SOURCE_WEIGHTS 是否平衡（Polymarket 3.0 / Kalshi 1.0 / **Manifold 0.3**） | 数字本身也已过期 |
+
+证据（代码自己写明了退役）：
+
+```
+app/core/config.py:556  # Legacy Manifold settings are kept only so existing .env files do not break
+                        # startup. Manifold is no longer an active discovery or auto-resolution source.
+```
+
+且 `SOURCE_WEIGHTS` 已无 `Manifold` 键；`grep` 全仓 `manifold_event_source|fetch_manifold` 的调用方为 **0**。
+
+现行活跃源以代码为准（`event_intelligence_service.py` 组装 `candidate_sources` 处）：
+
+| 源 | 门控 |
+|----|------|
+| Polymarket / Kalshi | 常开 |
+| Limitless | `LIMITLESS_SOURCE_ENABLED` |
+| Opinion | `OPINION_SOURCE_ENABLED` **且** `OPINION_API_KEY` |
+| Predict.fun | `PREDICT_FUN_SOURCE_ENABLED` **且** `PREDICT_FUN_API_KEY` |
+| Polymarket Crypto | `POLYMARKET_CRYPTO_FETCH_ENABLED` |
+| World Cup | `WORLD_CUP_SOURCE_ENABLED` |
+| Metaculus | `METACULUS_API_TOKEN` |
+| Open Web | 独立路径，`OPEN_WEB_ENABLED` |
+
+改法不只换名字。清单里新增了两条**给下一次审计的提醒**：
+① 上述可选源报告 0 条候选时，「源坏了」和「开关没开」在面板上长得一样，**要先确认开关状态再下结论**——
+这与本批次 §8.5/§8.7 要修的是同一个病（**0 不能让读者猜**）；
+② 编号式 LLM 配置 `OPENAI_API_KEY_N` / `OPENAI_MODEL_N_M` / `OPENAI_BASE_URL_N` 是 `llm_gateway_service`
+**直接 `os.getenv`** 读取的，**不经过 `settings`**，因此**不在生产 preflight 的检查范围内、也没有任何名字校验**，
+名字写错只会静默少一条路由 —— 核对时必须逐字比对。
+
+## 8.3 D1 —— 模板命名了模型，却一个凭据都没命名
+
+`.env.production.example` 原先只有 `OPENAI_MODEL=deepseek-chat` 一行。读者很容易据此认为"LLM 已配好"，
+而模板里**没有任何一个 API key 变量名**。
+
+我实测了「照抄模板直接部署」这条路径会撞上什么（探针 `pmrf_probe_llm_creds.py`，把环境里的
+`OPENAI_*` 全部清空后重放模板字面默认值）：
+
+```
+ROUTES: [('legacy_openai', ['deepseek-chat'])]
+HAS_CONFIGURED_ROUTE: False
+RESULT: RuntimeError -> Primary LLM startup check failed: all_routes_failed: missing_api_key
+```
+
+两个结论：
+
+1. **失败字符串是 `all_routes_failed: missing_api_key`** —— 能看出"缺 key"，但**不告诉你变量名**。
+   批次二刚把 `LLM_STARTUP_CHECK_ENABLED=true` 写进模板，于是这个字符串就是照抄模板的部署**一定**会看到的东西。
+2. **「有路由」不等于「配了 LLM」**：`build_route()` 会回退到 legacy 模型名，而 `OPENAI_MODEL` 在
+   `config.py:191` **有非空默认值**，所以零凭据时它**仍然返回一条路由**；说 false 的是另一个函数
+   `has_configured_llm_route()`。两个函数给出相反答案，是运维排查时的陷阱。
+
+→ 模板新增 `# --- LLM credentials ---` 块（27 行），**全部注释**（理由同 C/D 两处：覆盖层 `override=True`，
+写空值会盖掉基座 `.env`）：写明了失败字符串、两种配置形式与解析顺序
+（task route → `LLM_ROUTE_DEFAULT` → 编号式 → legacy）、"编号式走 `os.getenv` 所以无校验"、
+以及"有路由≠配置了 LLM"。
+
+**一个**探针自查：首版探针的注释写着"cwd 在仓库外所以找不到 .env"，实测**错**——python-dotenv 的
+`find_dotenv()` 是从**调用方文件**向上找，`import app.core.config` 就足以加载 `backend/.env`。
+首版因此**并非**无凭据环境（清空前 ROUTES 恰好也是 legacy，结论对得侥幸）。已改为**显式清空 `os.environ`** 后重跑，
+输出同上 —— 结论不变，但现在是**验过**的，不是**碰巧**的。
+
+## 8.4 B —— 不改数据、不加守卫，只补标度契约
+
+批次二已给出只读证据：`predictions` 171 行，`market_probability ∈ (0,1)` **恰好 1 行**（`0.2`），
+160 余行落在 [1,100]，`min/max = 0.2 / 99.45`。那行是 `KXBRUVSEAT-35`（Kalshi），
+`ai=30.17 market=0.2 raw_edge=29.97`，镜像到 `simulated_trades` id=42。
+
+本批次**复核了"能不能加守卫"**，直接读入口契约（`app/models/event.py:6-13`）：
+
+```python
+class EventAnalysisRequest(BaseModel):
+    event_question: str = Field(min_length=1, max_length=2000)
+    baseline_probability: float = Field(default=50.0, ge=0.0, le=100.0)   # ← 调用方自报
+```
+
+`POST /api/events/analyze`（`events.py:269-281`）把 `baseline_probability` **原样**透传给 `analyze_event_question`，
+**不取任何行情报价**。所以：
+
+- 请求体里**只有一个概率字段**，**没有第二个事实**可以交叉核对；
+- `0.2` 在 0–100 标度下是**合法的 0.2%**；
+- 若它本是"20%"被误写成 0.2，**我们无从得知**。
+
+→ **任何 `(0,1)` 阈值都是在猜调用方的意图，而不是在查事实**，还会误杀真实的 0.2% 市场。**不加守卫。**
+→ **数据也不改**：那行的"真值"只能靠"同源 ×100"**推断**（7 月的 Kalshi 盘口不可恢复）。按推断改写历史，
+会让审计轨迹不再反映系统当时**实际算出**的值 —— 这比留一行可疑数据更糟。三个处置选项仍留给业务方（见 §六/B）。
+→ **做了唯一可做的那半**：在入口模型与传参点（`event_intelligence_service.py:837`）各补一段标度契约
+（0–100 百分点、非 0–1 小数），并写明本次误用的证据，**说清为什么这里只能记文档、不能加校验**。
+
+## 8.5 C1 —— 我推翻了批次二自己的判断
+
+批次二我写的是：
+
+> `/review-queue/sla` 的 `enabled` 未加（**该端点是队列读数，不是生产者状态**）—— 已知的、有意留下的窄口。
+
+**这个理由站不住。** 本批次查到两条反证：
+
+1. `docs/ops/RUNBOOK.md:323` 把 `GET /api/review-queue/sla` 列为运维接口，`:352` 说明它与
+   `scripts.review_queue_cli sla` 是**同一个聚合**；而后者在 RUNBOOK 里的定位是
+   **"exits 1 when anything has breached, so it can be run as a check rather than read by eye"**
+   —— 它是**给机器读的**。
+2. `frontend/src/lib/api.ts:1243` 确实在消费它。
+
+于是"队列读数 vs 生产者状态"这个区分**不成立**：`pending_total` 与 `breached_total` 在
+「队列排空」和「生产者关闭」两种状态下**都是 0、且序列化结果完全相同**，
+一个 `pending_total == 0` 的阈值比较会对着**一个根本没在跑的队列**长期保持绿色。
+**歧义的 0 出现在机器判据上，比出现在人读的列表上更危险，而不是更安全。**
+
+→ 已加 `"enabled": settings.REVIEW_QUEUE_ENABLED`（与列表端点同形），更新 docstring 说明它保护的是机器读者，
+新增测试 `test_sla_reports_whether_the_producer_flag_is_on`（两个取值都钉住，硬编码 `false` 会红），
+`api.ts` 的 `sla()` 返回类型补 `enabled?: boolean` 并注明与列表端点同因。
+
+## 8.6 C2 —— 不加，理由与 C1 相反却不矛盾
+
+`loop_status_service._review_queue_counts()` 在 DB 读失败时降级为全 0（`loop_status_service.py:97-119`）。
+**不加 `enabled`/`degraded`**，依据：
+
+- **判据边界是自己立的、并且经 C1 复核后仍然成立**：只有当**同一仓库里存在"在某界面上命名该开关"的既有先例**
+  时才去消歧。`decision-timeline-panel.tsx:111` 是先例，`/sla` 因此可依（§8.5）；`/api/status` 的 `counts`
+  **没有**这样的先例。
+- `/api/status` 是按名读取的**已发布载荷**（`pending_reviews`/`breached_reviews` 有注释说明"因看板按名读取而保留"），
+  为一个**纯诊断**歧义扩键，改的是发布契约。
+- 该降级路径**已经会 `logger.warning(..., exc_info=True)`**，失败并非无声；要如实再报一个 `degraded` 标志，
+  就得先区分"读失败"与"真空"，那是对一条**有意 fail-open** 的路径做重构（其 docstring 明确写了
+  "a status endpoint that raises ... is worse than one reporting an empty queue"），成本大于收益。
+
+## 8.7 C1b —— 决定 C1 时新发现的假绿：CLI 的 SLA 检查
+
+`scripts/review_queue_cli.py` 的 `sla` 子命令在开关关闭时输出
+`[OK] pending=0 oldest=n/a breached=0` 并 `return 0` —— 与"队列干净"**逐字相同**。
+而 RUNBOOK 把它推荐为**巡检检查**。也就是说：**默认配置下（无人命名 `REVIEW_QUEUE_ENABLED`），
+一个被当作检查用的命令会对一个从未运行的队列永远 exit 0。**
+
+→ 新增 `_flag_note()`，在 `sla` 与 `list` 的输出里（开关关闭时）补一行
+`[WARN] REVIEW_QUEUE_ENABLED=false: ... A zero below means 'producer disabled', not 'queue drained'.`
+
+→ **退出码故意不改**（并在测试里钉住）：RUNBOOK 写明 `1` 的含义是"有东西超期了"，
+拿来表示"生产者关闭"会让一个**被有意关闭**的队列在巡检里报故障。RUNBOOK 另加一段说明这个取舍，
+并指出"若你的检查要把生产者关闭当失败，请读端点的 `enabled` 而不是退出码"。
+
+## 8.8 本批次不改健康分
+
+维持 **52/100**。本批次修的是**文档准确性与 0 的歧义**，没有触及拉低分数的那些结论
+（引擎 CLV 为负、扫描器误报、决策阈值分布、校准样本不足）。**不为了让批次看起来有产出而调分。**
+
+---
+
+# 九、批次三的验证
+
+## 回归（全部在本机、**剥掉代理变量** —— 见批次二的代理→502 误报）
+
+| 项目 | 命令 | 结果 |
+|------|------|------|
+| 后端全量 | `pytest tests/ --junitxml=…` | **7257 tests / 0 failures / 0 errors / 11 skipped** |
+| 收集数独立复核 | `pytest tests/ --collect-only` | **6368 collected**（= 6357 passed + 11 skipped，**自洽**） |
+| 前端全量 | `npx vitest run` | **125 files / 730 tests** 全通过 |
+| 前端类型 | `npx tsc --noEmit` | rc=0 |
+| 后端 lint | `ruff check app/` | All checks passed |
+| 后端编译 | `compileall -q app tests scripts` | rc=0 |
+| 行尾 | `scripts/eol_audit.py` | **line-ending damage: none** |
+
+**7257 的解释**（差 6 个不是回归）：批次二同一口径为 7251；本批次新增 4 个测试，其中
+`test_sla_reports_whether_the_producer_flag_is_on` 有 2 个 `subTest`，junit 记 3 个 testcase →
+新增 **6** 个 junit testcase。`7251 + 6 = 7257`，**逐项对齐**。
+
+**「无静默回退」的证明**：长时任务前对 35 个改动文件取 sha256 落盘；
+全量套件跑完后逐条复核 → **34 个逐字节未变**，**恰好 1 个变化**（`backend/app/models/event.py`），
+即我**刻意**在快照之后编辑的那个文件。这排除了机器上出现过的"长时后台任务期间被就地编辑的文件被回退到基线"
+（见 `.workbuddy/memory/MEMORY.md`）。清单与 9 个根目录临时文件已在核验后删除。
+
+## 变异验证（`scripts/mutation_verify_review_queue_flag.py`，本轮扩到 6 个）
+
+本批次新增 3 个变异。**每个变异：应用 → 跑守护测试 → 还原；还原后 sha256 与备份逐字节一致。**
+
+| # | 变异 | 期望的 RED | 实测 |
+|---|------|-----------|------|
+| 4 | 从 `/sla` 返回值删掉 `enabled` | `test_sla_reports_whether_the_producer_flag_is_on` | ✅ 1 RED |
+| 5 | 把 `_flag_note()` 的开关判断删掉（提示变**无条件**） | `test_sla_says_nothing_extra_when_the_producer_is_on` | ✅ 1 RED |
+| 6 | 把 `_flag_note()` 改成恒返回 `None`（提示**不可达**） | `test_sla_names_…` + `test_list_names_…` | ✅ 2 RED |
+
+变异 5 与 6 是**同一段字节的两个相反改写**，因此互斥；为此给 `apply` 加了可选的**单点索引**
+（`apply 5` / `apply 6`），否则第二个会因"期望 1 处匹配、实际 0 处"而中止。
+**变异 5 是必要的**：没有它，"每次运行都打印提示"的实现能通过其余**全部** CLI 断言。
+
+## 本轮自查抓到的两个问题
+
+1. **探针自身说谎**（§8.3）："cwd 在仓库外"并不等于"没有 .env"。是**回读探针自己打印的 `cwd`/`env file found` 与
+   意外出现的 `OPENAI_API_KEY_1..4`** 才发现的 —— 结论对得侥幸，已改成显式清空后重跑。
+2. **我上一批发布的判断是错的**（§8.5）：`/review-queue/sla` 那个"有意留下的窄口"。
+   批次的**测试全绿**并不保护这个判断 —— 它是**判断**，不是断言。**绿只说明代码与既有断言一致，
+   不说明结论正确。**
+
+## 遗留项（批次三留下的，已于批次四处置，见 §十）
+
+1. ~~**`scripts/report_probability_scale_outliers.py` 无测试守护**~~ → **批次四已补**（§十）。
+2. **CLI `sla` 的退出码语义**（§8.7）。我选了"打印提示、不改退出码"。若业务方认为"生产者关闭"应当让巡检失败，
+   那是一次**契约变更**（会让现有巡检开始报警），需要单独决定，我没有替业务方做。→ **维持现状**（见 §十.1）。
+3. **模板里的编号式模型名仍是示例值**（`# OPENAI_MODEL_1_1=deepseek-chat`）。它与基座 `.env.example` 一致，
+   但真实部署该填什么取决于用哪家网关，未替你假设。→ **维持现状**（见 §十.1）。
+4. **§8.4 那行数据的三个处置选项**（作废 / 重算 / 保留）仍待业务方选择。
+   → 我按"保留数据 + 保留探针"落地，并使探针**可被信任**（§十）。
+
+---
+
+# 十、批次四：把「保留探针」这条建议坐实
+
+批次三我给的四个处置里，2 和 3 的建议**就是"维持现状"**（打印不改退出码 / 编号式模型名保持示例值），
+已经是落地状态，无需改动。4 的建议是"保留数据 + 保留探针"。**唯一真正待做的是第 1 项：给探针补测试**——
+而它恰好是第 4 项成立的前提：一个没人守护的探针，静默失效时不会有人知道，
+"保留探针"就退化成"我们以为有个探针"。
+
+## 10.1 探针此前从未用**已知答案**的输入验证过
+
+`report_probability_scale_outliers.py` 是批次二写的常驻探针，当时**只对生产库跑过一次**。
+也就是说它的 6 条桶查询、过滤边界、修正算术**从未在答案已知的输入上被检查**——
+它报出的"171 行 / 1 条 suspect / min-max 0.2 / 99.45"是**它在说**，不是**我验过**。
+
+## 10.2 新增 `tests/test_report_probability_scale_outliers.py`（16 个用例）
+
+用**真实 schema**（`preds._ensure_schema` / `trade_store._ensure_schema` / `link_store._ensure_schema`）
+建临时库，而不是手搓一份建表语句——测的是它会真正遇到的表。锁住的东西：
+
+| 组 | 锁住什么 |
+|----|---------|
+| 分桶 | 5 个桶互斥且完备；`mp>100` **单独成桶**（`1<=mp<=100` 必须有上界，否则 105 会躲在"健康"计数里） |
+| 边界 | `mp=0` 与 `mp=1.0` **都不算** suspect（过滤是严格 `> 0` / `< 1`）；min/max 覆盖全部行 |
+| 修正算术 | 审计那行的真实数字：`ai=30.17 market=0.2` → `if the market value were 20.0: raw_edge=10.17` |
+| 只读承诺 | `mode=ro` 下 INSERT 必须报 readonly；整脚本跑完前后，库文件**字节相同**且行内容相同 |
+| `--event-id` | 三张表都覆盖；无行的表必须明说 `(no row)`；超 200 字符截断；不带 flag 时不输出 |
+
+## 10.3 补测试时发现的两件事
+
+**① 两个"防御性守卫"里，一个可达、一个不可达**，而两者看着一模一样：
+
+| 守卫 | 判定 | 依据 |
+|------|------|------|
+| `_suspects()` 里的 `if isinstance(ai, (int, float)):` | **可达** | SQLite 只做类型**亲和**不做强制：`'abc'` 存进 `REAL NOT NULL` 列会**原样存为 TEXT**（实测 `typeof='text'`），读回来是 `str`，守卫触发 |
+| `_distribution()` 里的 `market_probability NULL` 桶 | **恒为 0** | `prediction_store._SCHEMA` 里该列是 `REAL NOT NULL`，NULL 插不进去 |
+
+首版测试我写的是"把 `ai_probability` 置为 NULL"，跑出来是 `IntegrityError` —— **是我的假设错了，不是代码错了**。
+改成存 `'abc'` 后守卫**确实可达**，测试才有意义。不可达的那个桶则被显式断言为 0，
+**并配一条会抛 `IntegrityError` 的 INSERT 作为"它不可能非 0"的证明** —— 而不是把它当活信号展示。
+
+**② 边界测试最初是"空头"的。** 见 10.5。
+
+## 10.4 变异验证：新增 `scripts/mutation_verify_probability_probe.py`（15 个变异）
+
+**每个变异：应用 → 跑守护测试 → 还原；还原后 sha256 与备份逐字节一致**
+（`report_probability_scale_outliers.py` 15 轮 apply/revert 后仍为 `aeae0d6c…`）。
+
+| # | 变异 | 实测 RED |
+|---|------|---------|
+| P1 | 桶查询下界 `> 0` → `>= 0` | 1（分桶测试） |
+| P2 | `1<=mp<=100` 去掉上界 | 2（分桶 + 上界单测） |
+| P3 | 修正值不再 `×100` | 1 |
+| P4 | `mode=ro` → `mode=rw` | 1（**只**红了只读单测，见 10.6） |
+| P5 | 删掉 `isinstance` 守卫 | 1（失败信息即 `TypeError: unsupported operand type(s) for -: 'str' and 'float'`） |
+| P6 | 关掉 200 字符截断 | 1 |
+| P7 | **列表**查询下界 `> 0` → `>= 0` | 1 |
+| P8 | **列表**查询上界 `< 1` → `<= 1` | 1 |
+| P9 | `MAX` → `MIN` | 1 |
+| P10 | NULL 桶查 `IS NOT NULL` | 1 |
+| P11 | 删掉"none"提示 | 1 |
+| P12 | `--event-id` 只遍历 1 张表 | 2 |
+| P13 | 删掉 `(no row)` | 1 |
+| P14 | `--event-id` 无条件执行 | 1 |
+| P15 | 缺失 DB 守卫恒不触发 | 1 |
+
+**15 个变异覆盖 16 个用例中的 15 个**，唯一未覆盖的在 10.6 说明。
+
+## 10.5 是变异验证（再次）抓出了"空头断言"
+
+- 只有 P1 时，`test_a_zero_market_probability_is_not_a_suspect` **仍然是绿的** ——
+  因为过滤条件在源码里**写了两遍**（分桶查询一份、列表查询一份），P1 只碰了分桶那份，
+  而该测试读的是列表。→ **补 P7**。
+- 补了 P7 之后，`test_a_market_probability_of_exactly_one_is_not_a_suspect` **仍然是绿的** ——
+  P7 改的是**下界**，而 `mp=1.0` 是被**上界**排除的。→ **补 P8**。
+
+也就是说：**两个"边界"用例写下来的时候看着都很像样，实际一个都没锁住**，
+是逐个变异试出来的。这与批次二那次"裸子串匹配被散文满足"是同一个病，只是这次披着"边界测试"的皮。
+
+## 10.6 一个**不**做单变异覆盖的用例，理由写明
+
+`test_running_the_report_leaves_every_stored_value_alone`（比对库文件字节 + 行内容）**无单变异可红**。
+这不是漏测，而是这条守卫的性质：只要 `mode=ro` 成立，它要检测的"写入"就**结构上不可能发生**，
+只有**同时**去掉只读连接**并且**加一处写入（两步改动）才会触发。它是纵深防御，保留；
+真正被 P4 锁住的是它兄弟用例里的 `mode=ro` 断言。**把这条写进 harness 文档串，而不是假装它有覆盖。**
+
+## 10.7 我自己的 harness 文档串也被实测纠正了
+
+首版文档串写"变异 4 会让**两个**只读测试变红"、"变异 1 会让 `test_a_zero…` 变红"。
+**实测都不对**（各只红一个）。已按实测改写，并把"1 只管桶查询 / 7 才管列表"写进去。
+**又一次印证：断言"会怎样"的文字必须拿输出核对，不能凭设计意图写。**
+
+## 10.8 批次四的回归
+
+| 项目 | 结果 |
+|------|------|
+| 后端全量 | **6373 passed / 11 skipped / 889 subtests passed**；junit `7273 tests / 0 failures / 0 errors / 11 skipped` |
+| 收集数独立复核 | **6384 collected** = 6373 + 11（**自洽**）|
+| 增量说明 | 批次三为 6357 passed / junit 7257；本轮 **+16**（新增 16 个用例）→ 6373 / 7273，**逐项对齐** |
+| `tests/test_report_probability_scale_outliers.py` | 16 passed |
+| lint / 编译 | `ruff`（3 个新文件）All checks passed；`compileall` rc=0 |
+| 行尾 | 三个新文件均为 bare LF（工具创建、未被 git 检出过），**非损坏** |
+| 无静默回退 | 长任务前快照 49 个改动文件 → 跑完**逐条复核：49 不变 / 0 变化 / 0 缺失** |
+
+## 10.9 遗留（批次四仍未做）
+
+- ~~**三个变异 harness 高度重复**（`mutation_verify_daily_digest.py` /
+  `mutation_verify_review_queue_flag.py` / `mutation_verify_probability_probe.py`
+  各有一套 backup/apply/revert）。可合并为一个接受 `--set` 的通用 runner。
+  本轮**故意没做**：会改动两个已验证过的工具，收益是去重，风险是动坏在用的东西。**待你决定。**~~
+  → **已完成**（老板指示「合并」）：三者合并为 `backend/scripts/mutation_verify.py`，
+  三个旧脚本已删除，26 个变异全部校验通过。**明细见 §十一。**
+- 上表 §8.4 那行数据（`KXBRUVSEAT-35` / `0.2`）的处置仍待业务方选择。
+  ⚠️ **2026-09-27 追加**：该节的**归因已更正**（不是"旧适配器存量"，而是经 `/analyze` 的
+  `baseline_probability` 传入 —— 见 §8.4 的更正块）。**新证据削弱而非支持「重算为 20」这个选项**，
+  三个选项仍需业务方定，但依据变了。
+- ~~`review_queue_items = 0` 是否符合人工复核流程预期（需业务判断）~~
+  → **已结案**（2026-09-27）：成因是**生产者开关关闭**（`REVIEW_QUEUE_ENABLED` 未配置 → 默认 false），
+  不是路由缺陷；且打开开关**不会回填存量**。**明细见 §十二。**
+
+---
+
+*本节为改动批次的交付记录；正文与「更正记录」保持原样不改写。*
+
+---
+
+# 十一、合并三个变异 harness（2026-09-26，老板指示「合并」）
+
+## 11.1 做了什么
+
+三个 harness 各自实现了一套 backup/apply/revert，其中 `mutation_verify_daily_digest.py`
+还是**自驱动**的（自己跑 pytest 并断言「变异前绿 / 变异后红 / 还原后字节一致」），
+但只覆盖 F1–F6、且**没有单点索引**；另两个是手动模式，有单点索引（`apply 5`）、
+有 `group` 互斥概念，却**不做还原后复验**。合并保留**两者的并集**：
+
+> 一份清单（`Mutation` / `MutationSet`）+ 一个引擎 + 三个 set，共 **26 个变异**。
+
+产物：**`backend/scripts/mutation_verify.py`**（新建、未跟踪、bare LF）。
+
+| set key | 变异数 | 覆盖对象 |
+|---|---|---|
+| `daily-digest` | 5 | `events.py` + `daily_digest_service.py`（原 F1–F6 那套）|
+| `review-queue` | 6 | `review_queue.py` + `review_queue_cli.py` + `.env.production.example` |
+| `probability-probe` | 15 | `report_probability_scale_outliers.py` |
+
+子命令：`list` / `verify [keys…]` / `backup <key>` / `apply <key> [index]` / `revert <key>`。
+
+**`verify` 从三阶段升为四阶段**（旧的自驱动脚本只做 1/2/4，且只对 `daily-digest`）：
+
+1. 未改动的树上守卫**必须全绿**（证明 `-k` 选择器真的选中了东西，而非"没跑测试"）；
+2. 应用变异后守卫**必须变红**（证明这条守卫是承重的）；
+3. 还原后守卫**必须重新变绿**（证明还原的是"行为"，不只是"字节"）；
+4. 还原后 sha256 与原字节**逐字节一致**（证明还原的是"字节"）。
+
+`group` 用于**同一段字节的相反改写**（`C5`/`C6` 改 `_flag_note`；`P7`/`P8` 改列表查询的
+`WHERE` 子句）：`verify` 逐条单跑不受影响；`apply <set>`（全量）会跳过同组后续变异并打印说明。
+
+## 11.2 合并时抓到并修掉的一个真 bug（本轮自查）
+
+新 runner 第一版对 **26 个变异全部报 `[BAD] stayed GREEN with the fix reverted`** ——
+但每条的 tail 明明写着 `1 failed, 15 deselected` / `3 failed, 1 passed, 21 deselected`，
+且 `bytes restored True`、`green after restore True`。**tail 与判定自相矛盾**，说明是判定错，不是变异失效。
+
+根因：`_run_guards()` 的返回是**「选中的守卫是否全部通过」**（`proc.returncode == 0`，
+docstring 也是这么写的），但 `_verify_one()` 把它的返回值直接赋给了名为 `red_after` 的变量 ——
+**变量名与语义相反**。于是"变异生效 → pytest 失败 → 返回 `False`（未通过 = 已变红）"
+被读成了"没变红"，`if not red_after` 成立 → 误报 BAD。
+
+修复：`red_after = not passed_after`（并把局部变量改名为 `passed_after`，附注释说明为什么反转）。
+
+> 教训：**这里没有"测试全绿所以是对的"可依赖** —— 是 tail 里那句 `1 failed` 与布尔量方向不符
+> 暴露了问题。**「我验过」与「我以为」的区别，又一次体现在读原始输出上**，而不是读汇总。
+
+## 11.3 校验结果（26/26）
+
+`cd backend && python scripts/mutation_verify.py verify`，用时 **10 分 21 秒**：
+
+| 项目 | 结果 |
+|------|------|
+| 总数 | **26** |
+| `[OK ]` | **26** |
+| `[BAD]` | **0** |
+| 每条形态 | `green before True \| red after mutation True \| green after restore True \| bytes restored True` |
+| 跑完后 6 个目标文件 | 与跑前快照**逐字节一致**（`d0654dd9…` / `4d6a0810…` / `0ae9bc43…` / `864d6061…` / `4d4bc62d…` / `aeae0d6c…`）|
+| 静态检查 | `ruff` All checks passed；`py_compile` rc=0 |
+
+## 11.4 旧 → 新 索引（正文提到的三个旧脚本名已删除，指向如下）
+
+本报告正文（§"变异验证"、§10.4、§10.9）按「交付记录不改写」保留旧文件名。
+**这三个文件已在本次合并中删除**，对应关系：
+
+| 旧脚本（已删除） | 现在这样跑 | 变异数 |
+|---|---|---|
+| `scripts/mutation_verify_daily_digest.py` | `python scripts/mutation_verify.py verify daily-digest` | 5 |
+| `scripts/mutation_verify_review_queue_flag.py` | `python scripts/mutation_verify.py verify review-queue` | 6 |
+| `scripts/mutation_verify_probability_probe.py` | `python scripts/mutation_verify.py verify probability-probe` | 15 |
+
+引用核查：`grep -rn mutation_verify` 的全部命中**只在文档里**（本报告、`daily-digest-review`）
+与即将删除的三个脚本自身 —— **无 CI / 代码依赖**，删除是安全的。
+
+## 11.5 未改动
+
+- 本合并**不动**被测源码：26 个变异全部是在**临时应用→还原**的原子上跑的，跑完 6 个目标文件字节不变。
+- `docs/reviews/daily-digest-review-2026-09-26.md` 的交付记录同样**不改写**，另加一段后记指向本节。
+
+---
+
+# 十二、结案：`review_queue_items = 0` 到底是什么（2026-09-27）
+
+本节回答正文 §"人工复核队列与决策时间线均为空"与 §10.9 里标注「需业务判断」的那一条。
+**结论：这个 0 是"生产者关闭"，不是"队列已清空"，也不是"路由坏了"。**
+
+## 12.1 证据链（全部只读）
+
+| 环节 | 事实 |
+|---|---|
+| 生产者 | **只有两处**，且都被 `settings.REVIEW_QUEUE_ENABLED` 门控：`event_intelligence_service.py:757`（`analyze_event()` 内，overlay 构建时按事件跑探测器）、`event_resolve_service.py:178`（结算路径）|
+| 代码默认 | `config.py:1192` → `REVIEW_QUEUE_ENABLED: bool = _env_bool("REVIEW_QUEUE_ENABLED", "false")` |
+| 实际配置 | `backend/.env` **没有这个键** → 落回默认 |
+| **生效值** | **`False`**（实测：清空环境变量后 `import settings` 打印）|
+| 存储 | loop DB（`backend/v2_loop.db`）里 `review_queue_items` **0 行**、`review_queue_audit` **0 行** |
+| 部署文件 | `.env.example` 是 `=false`；`.env.production.example` **只写注释行**（`# REVIEW_QUEUE_ENABLED=true`，见 §8.3）；`docker-compose.yml` / `.env.staging.example` 完全不提 |
+
+源码自己把这个姿态写在注释里（`event_intelligence_service.py:753-755`）：
+
+> `When REVIEW_QUEUE_ENABLED=false (default), this block is a no-op — byte-identical to pre-Plan-4.`
+
+**即"默认关闭"是 Plan 4 §6.2 的刻意设计，不是漏接线。**
+
+## 12.2 这不是"缺陷"，所以本轮也不改它
+
+- **不改 `backend/.env`**：那是**部署姿态**，不是代码缺陷。把它打开是运维决定，不是修 bug。
+- **不改默认值**：改了等于推翻 Plan 4 §6.2 的"默认与 Plan 4 之前字节一致"。
+- 本批次真正该做的已经做了 —— 给队列读数**带上 `enabled`**（§8.5/§8.7）。所以这个 0 现在在
+  `/review-queue` 面板上会**明说自己为什么是空的**（前端 `enabled === false` 分支的文案），
+  而在 CLI 上会打 `[WARN]`。**这条"需业务判断"的问题，答案其实是"配置姿态"，且已经可读。**
+
+## 12.3 一个必须同时告诉运维的前提（否则"打开开关"会落空）
+
+探测器**只在下面两个时刻**被调用，**没有任何回填路径**：
+
+```
+grep -rn "detect_review_candidates\|detect_auto_resolve_low_confidence" backend/app backend/scripts
+→ 仅命中 event_intelligence_service.py:758/762 与 event_resolve_service.py:182/188（定义处除外）
+```
+
+没有回填脚本、没有重建端点、调度任务清单里没有队列相关 job（`scheduler.py` 的 22 个 `id=` 无一涉及）。
+**所以把 `REVIEW_QUEUE_ENABLED` 置 true 之后，只有"此后被分析或被结算"的事件会产生复核项；
+存量记录（含那 31 条 `provisional_act`）不会追溯进队列。** 若要队列立刻有内容，
+除置 true 外还需**对存量事件重新触发一次分析**。
+
+> 这一条属**运维操作含义**，不是本次审计的修复项。已同步进 `HANDOFF.md` 与
+> `.workbuddy/memory/MEMORY.md`，避免下一次会话再把同一个 0 当成"路由坏了"重查一遍。
+
+## 12.4 同批结案：`decision_timeline = 0` 同因
+
+| 环节 | 事实 |
+|---|---|
+| 代码默认 | `config.py:1235` → `_env_bool("DECISION_TIMELINE_ENABLED", "false")` |
+| **生效值** | **`False`**（实测）|
+| 存储 | loop DB 里 `decision_timeline` **0 行** |
+| 源码自述 | `decision_timeline_store.py:110`：「`settings.DECISION_TIMELINE_ENABLED` so the store **stays empty**」|
+| 是否已可读 | ✅ **本来就已消歧** —— `decision-timeline-panel.tsx:111` 的空态**点名**了该开关：
+「暂无决策时间线数据。该事件可能在 DECISION_TIMELINE_ENABLED 关闭期间保存。」|
+
+**即：两条"为空"的读数同因（生产者默认关闭），且都不是缺陷。** 复核队列表原本是这三个 0 里
+**唯一一个说不清**的（面板只说"当前没有待复核条目"），本批次给它补 `enabled` 回显正是对症 ——
+而这个先例（时间线面板点名开关）也正是 §「0 必须只说一件事」判据的来源。
+
+| 事项 | 状态 |
+|---|---|
+| `review_queue_items = 0` | ✅ 已结案（生产者关闭；本批次已让它可读）|
+| `decision_timeline = 0` | ✅ 已结案（同上；面板**早已**可读）|
+
+
+---
+
+# 十三、把 §十二 的规律机械化扫一遍：还有哪些 0 说不清自己为什么是 0（2026-09-27）
+
+§十二 处理了两条**同因**的空读数（生产者开关默认关闭）。两条不是巧合 —— 只要"开关关掉 →
+某段载荷结构性地空"这个形状还在，同样的歧义就会在别处复现。所以本轮不问"还有没有别的 bug"，
+只问一个机械问题：**改成"关"之后，界面上会不会出现一个不带任何解释的 0？**
+
+## 13.1 扫描方法
+
+1. 枚举 `config.py` 里所有 `_env_bool(..., "false")` 的开关（默认关闭者）→ **23 个**。
+2. 对每个开关名，在 `frontend/src` 全量搜索 → 只有 **`REVIEW_QUEUE_ENABLED`（3 个文件）** 与
+   **`DECISION_TIMELINE_ENABLED`（2 个文件）** 被前端点名，且二者**已在 §8.5/§12.4 消歧**。
+3. 对**没被点名**的开关，问第二个问题：它门控的数据，在前端是否会**显示为 0**（而不是"缺席"）。
+
+## 13.2 判据：`if (!x) return null` 是"缺席"，不是"假 0"
+
+`ConclusionChallengePanel`（`conclusion-challenge-panel.tsx`）在无数据时 `if (!challenge) return null`
+—— **整块不渲染**。这与"渲染一个 `样本数：0`"有本质区别：**缺席**不会让人把它读成一个测量值，
+**假 0** 才会。**所以这类不改**（改了反而是往界面上贴无用的解释文本）。
+
+## 13.3 真实发现：`quality-summary-panel.tsx` 有 4 处假 0
+
+| 显示项 | 门控开关 |
+|---|---|
+| 事件计数 · 含决策质量 / 含市场质量 / 含LLM遥测（三行值）| `DECISION_QUALITY_ENABLED` / `MARKET_QUALITY_ENABLED` / `LLM_TELEMETRY_ENABLED` |
+| 区块「市场质量」 | `MARKET_QUALITY_ENABLED` |
+| 区块「LLM 遥测」 | `LLM_TELEMETRY_ENABLED` |
+| 区块「来源可信度」 | `SOURCE_RELIABILITY_ENABLED` |
+
+四段载荷在此之前**一律显示数字**。开关关闭时它们全 `0`，面板**没有任何文案**说明这是"层没开"
+还是"层开着但没数据"。这正是 §十二 的形状，只是没被点名。
+
+## 13.4 严重度取证：不是理论问题，staging 就是关的
+
+| 部署文件 | 四个开关的取向 |
+|---|---|
+| `.env.production.example:25-29` | **四个全 `true`**（生产开）|
+| `.env.staging.example:20-24` | **四个全 `false`**（staging 关）|
+| `deploy/docker-compose.yml` | `env_file: ../backend/.env` → **overlay 会被加载** |
+
+→ **staging 环境下这个面板的四个区块恒为 0，且无从解释**，而 staging 恰恰是有人会去看面板的地方。
+**故判为真实缺陷，本轮修。**
+
+## 13.5 修复（回带生产者开关，与既有三处先例同形）
+
+1. **后端** `quality_metrics.py`：端点响应新增 `overlay_flags`（四个 bool），
+   **与它解释的那些计数并列发布** —— 文档串写明"每个区块在'开关关'与'开着但无数据'两种情况下
+   渲染成同样的 0"，并显式指向既有先例 `alerts_enabled`（`/quality-metrics/anomalies`）。
+2. **契约** `lib/api.ts`：`overlay_flags` 为**可选**字段 —— **缺省 = "未知"，绝不当作 `false`**
+   （否则老后端会被误报成"已停用"，且既有不带该字段的 mock 测试会连带破碎）。
+3. **面板** `quality-summary-panel.tsx`：加 `flagOff()`（**只认显式 `false`**）+ `DisabledNote`；
+   三个区块在开关关闭时显示 `该层未启用（<KEY>=false），这里没有可统计的数据。`；
+   三行事件计数改为 `未启用`。
+
+> **注**：`decision_quality` **没有独立区块**，它只门控「含决策质量」这一行 —— 所以它出的是行内
+> `未启用`，**不是** `DisabledNote`。这一点在写测试时被实测纠正（见 §13.7）。
+
+## 13.6 判据边界（本项目"0 必须只说一件事"的适用面）
+
+- **只在同仓存在"在某界面命名该开关"的既有先例时才消歧。** 本轮四个开关的消歧，
+  正是沿用 `alerts_enabled` / `decision-timeline-panel` / 队列 `enabled` 的先例。
+- **不**给 `loop_status_service._review_queue_counts()` 加 `enabled`（批次三已定，见 §8.6）——
+  理由不变：那是**按名读取的已发布载荷**，且前端**完全不显示**这两个字段。**先例判据不可当成"见 0 就加"。**
+- ⚠️ **`source_reliability` 的门控是 `SOURCE_RELIABILITY_ENABLED`，不是 `SOURCE_TRUST_REGISTRY_ENABLED`。**
+  后者只在 `event_intelligence_service.py:501` 的 `if settings.SOURCE_RELIABILITY_ENABLED:` **内部**
+  再套一层、且只管 registry overrides。**我在本轮一度把外层判成后者，差点把"应消歧集合"从 4 个
+  错改成 3 个** —— 是**读了外层代码**才纠正回来的。教训：门控判定要读**调用点外层**，不要只看见
+  一个同域名字就配对。
+
+## 13.7 验证（全部本机，`env -u http_proxy` 剥掉代理）
+
+| 项 | 结果 |
+|---|---|
+| `ruff check app/` | **All checks passed** |
+| 后端 `tests/test_quality_metrics.py` + `tests/test_operational_readiness.py` | **119 tests / 0 failures / 0 errors**（junit 判据）|
+| 前端 `quality-summary-panel` + `quality-operations-dashboard` + `quality-metrics-report-dashboard` | **11 passed** |
+| `npx tsc --noEmit` | **exit 0** |
+| 行尾审计（`scripts/eol_audit.py`）| 三个源文件 TREE 纯 CRLF（符合检出）；测试文件 HEAD/TREE **同为纯 LF** —— **无降级** |
+
+**新增守卫 + 变异验证**（照 §「断言出现过 ≠ 锁住行为」的纪律，不只断言存在）：
+
+- 后端新增 2 用例：`test_summary_publishes_overlay_flags`（四个键齐备且**逐个断言是 `bool`**）、
+  `test_summary_overlay_flags_track_their_settings`（四个开关分别 patch 成 `F/T/F/T`，断言回显**逐一对应**）。
+- 前端新增 4 用例：显式 `false` → 出 `DisabledNote` 且行内 `未启用`；四个全关 → 3 条 note + 3 行 `未启用`；
+  **缺省 → `queryByText(/该层未启用/)` 为 `null`（"缺省不当作已停用"）**；显式全 `true` → 同样不出 note。
+- **变异**：把 `"decision_quality": bool(settings.DECISION_QUALITY_ENABLED)` 硬编码为 `True`
+  → 跟踪用例 **failures=1**（守卫确实锁住了行为）→ **逐字节还原，sha256 前后一致**
+  （`faa6222fa3bf0648…`）。**若只断言"字段存在"，这个变异会全绿通过** —— 所以"存在"与"对应"是两条断言。
+
+## 13.8 状态
+
+| 事项 | 状态 |
+|---|---|
+| 其余"默认关闭的开关"是否有说不清的空读数 | ✅ 已扫描：**23 个开关 → 仅 `quality-summary-panel` 有真实假 0**，已修 |
+| `ConclusionChallengePanel` 的空态 | ✅ **无需改**（`if (!x) return null` 属"缺席"，不是假 0）|
+| 判据边界 | ✅ 已写明（先例驱动；不适用于按名读取的已发布载荷）|
+
+---
+
+# 十四、同一方法的第二个对象：退役源（Manifold）是否还有**可执行**残留（2026-09-27）
+
+§十三 给的是**方法**（不要逐条修，要机械化扫一类）。换个对象再跑一次：
+`grep -ri manifold` 全仓命中 **80+ 处** —— 但**命中数不是结论，判据才是**。
+本轮判据**不是"该不该出现 Manifold"**，而是**退役设计文档自己列的应删清单**。
+
+## 14.1 判据来源：设计文档的「应删 / Non-goals」
+
+`docs/superpowers/specs/2026-07-08-remove-manifold-channel-design.md` 明确写了
+**要删的 5 项**（discovery / auto-resolution / 前端入口 / config 权重与文档 / candidate dedup 优先级），
+以及**刻意不删的**（第 18-23 行 Non-goals）：**不删存量事件、不删历史评审与里程碑文档、
+不为"提到 Manifold"而清洗旧记录**。
+
+> ⚠️ **这一步是本节的承重墙**：不先读 Non-goals，就会把"刻意保留的历史文档"当成"漏删的残留"，
+> 然后去删一堆本该留下的评审记录 —— **把正确的实现改成错的**。
+
+## 14.2 逐条对照（结论：**五项全部已执行**）
+
+| 设计条目 | 现状 | 取证 |
+|---|---|---|
+| 从 discovery 移除 | ✅ | `event_intelligence_service.py` 的候选源清单无 Manifold；`config.py:556` 自述 "no longer an active discovery or auto-resolution source" |
+| 从 auto-resolution 移除 | ✅ | 同上注释；`event_resolve_service.py` 无 Manifold 调用 |
+| **前端入口移除** | ✅ | `market-links.tsx:9` `const RETIRED_SOURCE_PLATFORMS = new Set(["Manifold"])`；第 46 行 `showSourceMarketLink = Boolean(source.url) && !RETIRED_SOURCE_PLATFORMS.has(...)` —— **正是设计要的"保留平台文字、不给搜索链接"** |
+| config 权重 / 文档 | ✅ | `SOURCE_WEIGHTS` 无该键；只剩 `.env` 兼容用的 legacy **no-op**（设计第 66 行明确允许"treat as no-op"）|
+| candidate dedup 优先级 | ✅ | 只在 `candidate_dedup_service.py:87` 的**注释**里出现，作为 `_UNKNOWN_PRIORITY = 99` 的例子（"未排名平台"）—— **不在任何优先级表内** |
+
+**剩余命中分布**：几乎全部落在历史文档（`docs/reviews/**`、`docs/superpowers/specs|plans/**`、
+`backend/docs/工程进度.md`）、**备份**（`backend/backups/manifold-purge-*`）、**日志**与 `event_store.json`
+—— 正是设计 Non-goals 说**刻意保留**的部分。**可执行代码里没有一处把 Manifold 当活跃源。**
+
+补充一条**刻意保留但看起来像遗漏**的：`app/services/manifold_event_source.py` **文件仍在**，
+但 `grep -rn "manifold_event_source" backend/app backend/scripts` **只命中它自己的模块 docstring**
+（**调用方 0**）。设计第 35 行写明产品级移除"**safer than deleting every Manifold module
+immediately**" → **留着是设计选择，不是漏删**。
+
+## 14.3 结果与它的价值
+
+**无需任何改动。** 本轮产出的不是修复，而是**"已验证干净"的取证记录** ——
+它的价值与 §10.5 同源：**让下一次审计不必把同一条重查一遍**，也让它不至于被"命中 80 处"这个数字误导。
+
+**只报告、不改**（按 §8「发现但未修的同类项不自扩范围」的纪律）：
+
+- `backend/docs/工程进度.md:177` 有 `- [ ] Kalshi / Manifold 支持` 这个**未勾选复选框**，读起来像两项都还没做
+  （Kalshi **早已支持**、Manifold **已退役**）。它是历史进度日志，设计 Non-goals 明确**不清洗**，
+  **故不动**；仅在此登记，供将来整理进度文档时一并处理。
+
+| 事项 | 状态 |
+|---|---|
+| 退役源是否有可执行残留 | ✅ 已扫描：**五项设计条目全部已执行**，无可执行残留，**零改动** |
+| 判据 | ✅ 以**设计文档的应删清单 + Non-goals** 为准，**不是"该不该出现某词"** |
+| 只报告未改 | `backend/docs/工程进度.md:177` 的陈旧复选框（历史文档，按 Non-goals 保留）|
+
+
+
+

@@ -94,7 +94,25 @@ class TestReviewQueueRoutes(unittest.TestCase):
             self.assertEqual(resp.json(), {
                 "items": [], "count": 0, "total": 0,
                 "truncated": False, "status": "pending",
+                "enabled": settings.REVIEW_QUEUE_ENABLED,
             })
+
+    def test_list_reports_whether_the_producer_flag_is_on(self):
+        """An empty list has to say which empty it is.
+
+        ``items: []`` was the same response for a clear queue and for a deploy
+        where ``REVIEW_QUEUE_ENABLED`` is off (its default, and no deploy file
+        names it), so the reviewer could not tell "nothing to review" from "the
+        detectors never ran". The flag is echoed instead of inferred, and both
+        values are pinned so a hardcoded ``false`` fails here.
+        """
+        for flag in (False, True):
+            with self.subTest(enabled=flag):
+                with tempfile.TemporaryDirectory() as tmp, _db(tmp), \
+                        patch.object(settings, "REVIEW_QUEUE_ENABLED", flag):
+                    body = _client().get("/review-queue").json()
+                self.assertIs(body["enabled"], flag)
+                self.assertEqual(body["items"], [])
 
     def test_list_pending_returns_enqueued_item(self):
         with tempfile.TemporaryDirectory() as tmp, _db(tmp):
@@ -249,6 +267,24 @@ class TestReviewQueueSlaEndpoint(unittest.TestCase):
             self.assertAlmostEqual(sla["oldest_age_hours"], 30.0, delta=0.05)
             self.assertEqual(sla["by_severity"]["ERROR"]["breached"], 1)
             self.assertEqual(sla["by_severity"]["WARN"]["breached"], 0)
+
+    def test_sla_reports_whether_the_producer_flag_is_on(self):
+        """The CLI prints this aggregate and the RUNBOOK offers it as a check.
+
+        Every count here is 0 both when the queue is drained and when
+        ``REVIEW_QUEUE_ENABLED`` is off, and the two serialize identically, so a
+        script comparing ``pending_total`` to a threshold cannot tell "healthy"
+        from "not running" without the flag. Both values are pinned, so a
+        hardcoded ``false`` fails here.
+        """
+        for flag in (False, True):
+            with self.subTest(enabled=flag):
+                with tempfile.TemporaryDirectory() as tmp, _db(tmp), \
+                        patch.object(settings, "REVIEW_QUEUE_ENABLED", flag):
+                    body = _client().get("/review-queue/sla").json()
+                self.assertIs(body["enabled"], flag)
+                self.assertEqual(body["sla"]["pending_total"], 0)
+                self.assertEqual(body["sla"]["breached_total"], 0)
 
     def test_sla_is_not_shadowed_by_the_item_route(self):
         """``/{item_id}`` matches the literal ``sla`` too.

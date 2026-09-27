@@ -35,6 +35,58 @@ export interface CategoryCountsResponse {
   [k: string]: unknown;
 }
 /**
+ * Response for GET /api/events/digest.
+ *
+ * Declared as a strict model rather than a permissive ``FlexibleResponse``
+ * so every field reaches ``frontend/src/lib/generated-types.ts`` — the
+ * permissive base is deliberately excluded from that allowlist, which would
+ * leave the endpoint without a published contract.
+ */
+export interface DailyDigestResponse {
+  date: string;
+  generated_at: string;
+  count: number;
+  headline?: DailyDigestHeadline | null;
+  movers: DailyDigestMover[];
+  unchanged: DailyDigestUnchanged;
+  empty: boolean;
+}
+/**
+ * The day's single most material move (mirrors the top entry of movers).
+ */
+export interface DailyDigestHeadline {
+  event_id: string;
+  event_title?: string | null;
+  movement: "rising" | "falling" | "stable";
+  day_net: number;
+  close: number;
+  [k: string]: unknown;
+}
+/**
+ * One event whose probability actually moved inside the day window.
+ */
+export interface DailyDigestMover {
+  event_id: string;
+  event_title?: string | null;
+  movement: "rising" | "falling" | "stable";
+  day_net: number;
+  open: number;
+  close: number;
+  open_source: "previous_close" | "first_in_day";
+  day_observations: number;
+  all_time_net_change: number;
+  close_ts: string;
+  [k: string]: unknown;
+}
+/**
+ * Events that did not make the mover cut, split by why they missed.
+ */
+export interface DailyDigestUnchanged {
+  quiet_event_ids: string[];
+  new_event_ids: string[];
+  [k: string]: unknown;
+}
+/**
  * Response for GET /api/events/{event_id}/decision-timeline.
  */
 export interface DecisionTimelineResponse {

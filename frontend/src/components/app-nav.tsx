@@ -53,6 +53,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/", label: "监控面板", icon: Radar, match: ["/", "/events"] },
       { href: "/decisions", label: "决策机会", icon: Target, match: ["/decisions"] },
       { href: "/edges", label: "事件 Edge", icon: Zap, match: ["/edges"] },
+      { href: "/digest", label: "每日摘要", icon: Newspaper, match: ["/digest"] },
       { href: "/analyze", label: "人工分析", icon: FlaskConical, match: ["/analyze"] },
       { href: "/history", label: "历史复盘", icon: History, match: ["/history"] },
       { href: "/quality", label: "质量运营", icon: Activity, match: ["/quality"] },

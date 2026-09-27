@@ -58,12 +58,12 @@ class TestGenerateTypesScript(unittest.TestCase):
         )
 
     def test_generates_file_with_all_allowlist_models(self):
-        """Default mode writes generated-types.ts containing all 14 root models."""
+        """Default mode writes generated-types.ts containing all 16 root models."""
         result = self._run_script()
         self.assertEqual(result.returncode, 0, f"Script failed: {result.stderr}")
         self.assertTrue(_OUTPUT_PATH.exists(), "generated-types.ts not created")
         content = _OUTPUT_PATH.read_text(encoding="utf-8")
-        # All 14 allowlist model names should appear as exported interfaces
+        # All 16 allowlist model names should appear as exported interfaces
         for model_name in [
             "EventRecord",
             "EventStoreEntry",
@@ -79,6 +79,8 @@ class TestGenerateTypesScript(unittest.TestCase):
             "SimilarEventsResponse",
             "EventAnalysisRequest",
             "EventDiscoveryResponse",
+            "CategoryCountsResponse",
+            "DailyDigestResponse",
         ]:
             self.assertIn(model_name, content, f"{model_name} missing from generated types")
 

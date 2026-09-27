@@ -836,6 +836,11 @@ async def analyze_event(
         sentiment_summary = str(sentiment_profile.get("summary") or "").strip()
     analysis = await analyze_market(
         market_question=event_question,
+        # Percentage points, 0-100 -- passed straight through from the caller
+        # with no conversion and no sanity check. See `EventAnalysisRequest`
+        # for why the scale is documented there instead of validated here: with
+        # one caller-supplied probability and no fetched quote, a value in (0,1)
+        # is indistinguishable from a real sub-1% market.
         market_probability=baseline_probability,
         news_context=combined_context,
         volume=volume,

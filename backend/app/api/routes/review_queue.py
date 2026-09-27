@@ -59,6 +59,14 @@ async def list_review_queue(
     one shown and the first one dropped — the opposite of what a review SLA
     needs. Each pending item carries ``age_hours`` and ``severity_rank`` so a
     client can sort by urgency without losing sight of the oldest.
+
+    ``enabled`` is the ``REVIEW_QUEUE_ENABLED`` flag, echoed so an empty list is
+    readable. Without it ``items: []`` means three different things — the queue
+    is clear, the detectors never ran because the flag is off (its default, and
+    no deploy file names it), or the read failed — and the reviewer sees the
+    same "no pending items" in all three. The decision-timeline panel already
+    names its own producer flag in its empty state; this is the same idea with
+    the fact supplied by the server, which is the only side that knows it.
     """
     if status == "pending":
         items = await asyncio.to_thread(
@@ -79,6 +87,7 @@ async def list_review_queue(
         "total": total,
         "truncated": total > len(items),
         "status": status,
+        "enabled": settings.REVIEW_QUEUE_ENABLED,
     }
 
 
@@ -89,6 +98,16 @@ async def get_review_queue_sla() -> dict[str, Any]:
     Read-only aggregate: counts and ages only, no reasons or event text. Budgets
     come from ``REVIEW_QUEUE_SLA_ERROR_HOURS`` / ``REVIEW_QUEUE_SLA_WARN_HOURS``.
     A breach is reported, never acted on.
+
+    ``enabled`` is echoed here for the same reason ``list_review_queue`` echoes
+    it, but this copy protects a machine reader rather than a human one. This
+    exact aggregate is what ``scripts.review_queue_cli sla`` prints and what
+    docs/ops/RUNBOOK.md offers as a check that "exits 1 when anything has
+    breached", so it is read by scripts as well as by eye. With the flag off --
+    its default, and no deploy file names it -- every count is 0, which serializes
+    identically to a fully drained queue. A monitor comparing
+    ``pending_total == 0`` against a threshold therefore stays green over a queue
+    whose producer never ran. The flag is the only fact that separates the two.
     """
     summary = await asyncio.to_thread(
         review_queue_store.queue_sla_summary,
@@ -97,7 +116,7 @@ async def get_review_queue_sla() -> dict[str, Any]:
             "WARN": settings.REVIEW_QUEUE_SLA_WARN_HOURS,
         },
     )
-    return {"sla": summary}
+    return {"sla": summary, "enabled": settings.REVIEW_QUEUE_ENABLED}
 
 
 @router.get("/{item_id}")

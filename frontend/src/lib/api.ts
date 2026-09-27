@@ -12,6 +12,7 @@ import type {
   EventListResponse as GeneratedEventListResponse,
   EventMoversResponse as GeneratedEventMoversResponse,
   EventHistoryResponse as GeneratedEventHistoryResponse,
+  DailyDigestResponse as GeneratedDailyDigestResponse,
 } from "./generated-types";
 import { getApiBase, joinApiPath } from "./env";
 import { applyOperatorAuthHeaders } from "./operator-credentials";
@@ -333,6 +334,7 @@ export type AutoResolveResponse = GeneratedAutoResolveResponse;
 export type EventListResponse = GeneratedEventListResponse;
 export type EventMoversResponse = GeneratedEventMoversResponse;
 export type EventHistoryResponse = GeneratedEventHistoryResponse;
+export type DailyDigestResponse = GeneratedDailyDigestResponse;
 
 // An event's edge trajectory + freshness (M5 fresh-edge surface).
 // Mirrors trend_analysis_service.analyze_edge_trajectory.
@@ -586,6 +588,21 @@ export interface CalibrationBucketSummary {
 
 export interface QualityMetricsSummary {
   timeframe: string;
+  /**
+   * The four feature flags behind the overlay sections, echoed so their zeros
+   * are readable: each section is empty both when its flag is off and when it
+   * is on with nothing qualifying, and the two look identical without this.
+   *
+   * Optional because an older server does not send it. Absent means "unknown",
+   * never "disabled" — the panel keeps its plain numbers rather than claiming a
+   * layer is off.
+   */
+  overlay_flags?: {
+    decision_quality?: boolean;
+    market_quality?: boolean;
+    source_reliability?: boolean;
+    llm_telemetry?: boolean;
+  };
   counts: {
     events: number;
     resolved_events: number;
@@ -809,6 +826,15 @@ export interface EventListFilters {
   resolved_only?: boolean;
 }
 
+// ── Daily intel digest ──────────────────────────────────────────────────
+// Backend GET /api/events/digest (daily_digest_service.py). The day's move is
+// close-vs-previous-digest-close over a UTC day window — never the all-time
+// trajectory — so a quiet day on a long-running event cannot outrank a real
+// intraday move. Read-only; safe to call with no data (returns empty).
+//
+// The payload type is generated from the backend `DailyDigestResponse` model
+// (see generated-types.ts) rather than hand-written, so the two cannot drift.
+
 export const eventsApi = {
   overview: () =>
     api<ApiOverview>(""),
@@ -1030,6 +1056,14 @@ export const eventsApi = {
   pendingLinks: () =>
     api<{ pending: PendingLink[] }>("/events/links/pending"),
 
+  digest: (params?: { date?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.date) qs.set("date", params.date);
+    if (params?.limit != null) qs.set("limit", String(params.limit));
+    const tail = qs.toString();
+    return api<DailyDigestResponse>(`/events/digest${tail ? `?${tail}` : ""}`);
+  },
+
   verifyLink: (id: string, contractId: string) =>
     api<PendingLink>(`/events/${encodeURIComponent(id)}/link/verify`, {
       method: "POST",
@@ -1169,6 +1203,13 @@ export interface ReviewQueueListResponse {
   total: number;
   truncated: boolean;
   status: ReviewQueueStatus;
+  /**
+   * ``REVIEW_QUEUE_ENABLED``, echoed by the server so an empty list is
+   * readable: without it ``items: []`` cannot be told apart from a queue whose
+   * detectors never ran. Optional because an older server does not send it —
+   * absent means "unknown", never "disabled".
+   */
+  enabled?: boolean;
 }
 
 export interface ReviewQueueSlaSeverity {
@@ -1214,7 +1255,15 @@ export const reviewQueueApi = {
     );
   },
 
-  sla: () => api<{ sla: ReviewQueueSlaSummary }>("/review-queue/sla"),
+  /**
+   * The same aggregate the CLI's `sla` subcommand prints, so the server also
+   * sends `enabled`: every count here is 0 both when the queue is drained and
+   * when REVIEW_QUEUE_ENABLED is off, and this aggregate is what a check
+   * compares against a threshold. Optional for the same reason as on
+   * ReviewQueueListResponse — an older server omits it, which means "unknown".
+   */
+  sla: () =>
+    api<{ sla: ReviewQueueSlaSummary; enabled?: boolean }>("/review-queue/sla"),
 
   audit: (itemId: string) =>
     api<ReviewQueueAuditResponse>(

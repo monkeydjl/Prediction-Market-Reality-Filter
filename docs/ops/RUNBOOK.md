@@ -342,6 +342,14 @@ Prints pending depth, the oldest wait, and per-severity / per-trigger counts;
 **exits 1 when anything has breached**, so it can be run as a check rather than
 read by eye. `--error-hours` / `--warn-hours` override the budgets for one run.
 
+When `REVIEW_QUEUE_ENABLED=false` the command prints a `[WARN]` naming the flag
+and **still exits 0**. Every count it prints is 0 in that state — the detectors
+that enqueue items never run — which is the same output a fully drained queue
+produces. The exit code is not reused for this: a deliberately disabled queue is
+not a breach, and failing on it would trip any check wired to the command. If
+your check needs to treat "producer off" as a failure, read `enabled` from the
+endpoint below rather than the exit code.
+
 Budgets are reporting-only — nothing escalates, retries, or auto-resolves:
 
 | Setting | Default | Meaning |
@@ -350,7 +358,11 @@ Budgets are reporting-only — nothing escalates, retries, or auto-resolves:
 | `REVIEW_QUEUE_SLA_WARN_HOURS` | `72` | hours a `WARN` item may wait |
 
 `GET /api/review-queue/sla` returns the same aggregate (counts and ages only —
-no reasons, no context, no event text), and `/api/health` carries
+no reasons, no context, no event text) plus `enabled`, the value of
+`REVIEW_QUEUE_ENABLED`. That key is the whole reason a machine reader can use
+this endpoint: `pending_total` and `breached_total` are 0 both for a drained
+queue and for one whose producer is off, and the two are otherwise
+indistinguishable. `/api/health` carries
 `counts.pending_reviews`, `counts.breached_reviews` and a `review_queue` block.
 
 On the **人工复核** page the same reading is at the top of the board (depth,
@@ -1499,6 +1511,30 @@ docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
 The container includes a healthcheck that pings `/api/health` every 30 seconds.
+
+### Build fails with `error from sender: Access is denied`
+
+BuildKit reads every path under the build context before `.dockerignore`
+rules are evaluated, so one unreadable directory anywhere in the repo — e.g. a
+`.pytest_cache` whose ACL was corrupted by a killed process — breaks
+`docker build` even though the directory is ignored and worthless. Symptom:
+
+```
+failed to solve: error from sender: ... Access is denied
+```
+
+Fix the directory itself (elevated shell: `icacls <dir> /reset /t /q`, then
+delete it), or build from a clean copy:
+
+```bash
+robocopy . C:\temp\pmrf-build /E /XD .pytest_cache .git node_modules .venv \
+  /NFL /NDL /NP
+docker build -f deploy/Dockerfile -t pmrf:local C:\temp\pmrf-build
+```
+
+CI now builds the image on every change (`docker-build` job), so a broken
+Dockerfile or dependency pin is caught there first; this failure mode is
+about the *local* context, not the repo content.
 
 ### Backups under Docker
 

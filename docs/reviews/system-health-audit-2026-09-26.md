@@ -1234,5 +1234,60 @@ grep -rn "detect_review_candidates\|detect_auto_resolve_low_confidence" backend/
 | `ConclusionChallengePanel` 的空态 | ✅ **无需改**（`if (!x) return null` 属"缺席"，不是假 0）|
 | 判据边界 | ✅ 已写明（先例驱动；不适用于按名读取的已发布载荷）|
 
+---
+
+# 十四、同一方法的第二个对象：退役源（Manifold）是否还有**可执行**残留（2026-09-27）
+
+§十三 给的是**方法**（不要逐条修，要机械化扫一类）。换个对象再跑一次：
+`grep -ri manifold` 全仓命中 **80+ 处** —— 但**命中数不是结论，判据才是**。
+本轮判据**不是"该不该出现 Manifold"**，而是**退役设计文档自己列的应删清单**。
+
+## 14.1 判据来源：设计文档的「应删 / Non-goals」
+
+`docs/superpowers/specs/2026-07-08-remove-manifold-channel-design.md` 明确写了
+**要删的 5 项**（discovery / auto-resolution / 前端入口 / config 权重与文档 / candidate dedup 优先级），
+以及**刻意不删的**（第 18-23 行 Non-goals）：**不删存量事件、不删历史评审与里程碑文档、
+不为"提到 Manifold"而清洗旧记录**。
+
+> ⚠️ **这一步是本节的承重墙**：不先读 Non-goals，就会把"刻意保留的历史文档"当成"漏删的残留"，
+> 然后去删一堆本该留下的评审记录 —— **把正确的实现改成错的**。
+
+## 14.2 逐条对照（结论：**五项全部已执行**）
+
+| 设计条目 | 现状 | 取证 |
+|---|---|---|
+| 从 discovery 移除 | ✅ | `event_intelligence_service.py` 的候选源清单无 Manifold；`config.py:556` 自述 "no longer an active discovery or auto-resolution source" |
+| 从 auto-resolution 移除 | ✅ | 同上注释；`event_resolve_service.py` 无 Manifold 调用 |
+| **前端入口移除** | ✅ | `market-links.tsx:9` `const RETIRED_SOURCE_PLATFORMS = new Set(["Manifold"])`；第 46 行 `showSourceMarketLink = Boolean(source.url) && !RETIRED_SOURCE_PLATFORMS.has(...)` —— **正是设计要的"保留平台文字、不给搜索链接"** |
+| config 权重 / 文档 | ✅ | `SOURCE_WEIGHTS` 无该键；只剩 `.env` 兼容用的 legacy **no-op**（设计第 66 行明确允许"treat as no-op"）|
+| candidate dedup 优先级 | ✅ | 只在 `candidate_dedup_service.py:87` 的**注释**里出现，作为 `_UNKNOWN_PRIORITY = 99` 的例子（"未排名平台"）—— **不在任何优先级表内** |
+
+**剩余命中分布**：几乎全部落在历史文档（`docs/reviews/**`、`docs/superpowers/specs|plans/**`、
+`backend/docs/工程进度.md`）、**备份**（`backend/backups/manifold-purge-*`）、**日志**与 `event_store.json`
+—— 正是设计 Non-goals 说**刻意保留**的部分。**可执行代码里没有一处把 Manifold 当活跃源。**
+
+补充一条**刻意保留但看起来像遗漏**的：`app/services/manifold_event_source.py` **文件仍在**，
+但 `grep -rn "manifold_event_source" backend/app backend/scripts` **只命中它自己的模块 docstring**
+（**调用方 0**）。设计第 35 行写明产品级移除"**safer than deleting every Manifold module
+immediately**" → **留着是设计选择，不是漏删**。
+
+## 14.3 结果与它的价值
+
+**无需任何改动。** 本轮产出的不是修复，而是**"已验证干净"的取证记录** ——
+它的价值与 §10.5 同源：**让下一次审计不必把同一条重查一遍**，也让它不至于被"命中 80 处"这个数字误导。
+
+**只报告、不改**（按 §8「发现但未修的同类项不自扩范围」的纪律）：
+
+- `backend/docs/工程进度.md:177` 有 `- [ ] Kalshi / Manifold 支持` 这个**未勾选复选框**，读起来像两项都还没做
+  （Kalshi **早已支持**、Manifold **已退役**）。它是历史进度日志，设计 Non-goals 明确**不清洗**，
+  **故不动**；仅在此登记，供将来整理进度文档时一并处理。
+
+| 事项 | 状态 |
+|---|---|
+| 退役源是否有可执行残留 | ✅ 已扫描：**五项设计条目全部已执行**，无可执行残留，**零改动** |
+| 判据 | ✅ 以**设计文档的应删清单 + Non-goals** 为准，**不是"该不该出现某词"** |
+| 只报告未改 | `backend/docs/工程进度.md:177` 的陈旧复选框（历史文档，按 Non-goals 保留）|
+
+
 
 

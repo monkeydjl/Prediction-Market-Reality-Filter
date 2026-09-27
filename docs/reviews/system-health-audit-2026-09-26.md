@@ -1729,6 +1729,114 @@ path.read_text(encoding="utf-8", newline="")   # ❌ 在项目 venv 上 TypeErro
 → 因此 §19.1.1 那簇的收敛（删 13 份副本）是**可维护性**改进，**不是 bug 修复**。
 这改变了它的立项理由：**不该以"修 bug"的名义做，应以"下次改标度只改一处"的名义做。**
 
+---
+
+# 二十一、批次十六（落实 §18.4 / §19.1.1）：收敛事件源 5 个助手 + 补兜底字段夹具（2026-09-28）
+
+> 承接 §十九.2 的判据（"重复要不要收敛，看是否共享同一个**会变的契约**"）。§19.1.1 指出事件源簇
+> 共享 5 个逐字相同的助手。本节把这一簇收敛，并补上 §18.2 点名的"被接受字段数 > 被测试字段数"缺口。
+> **只动这一簇**；§19.2 判为"不该无脑收敛"的其余 39 组一律未动。
+
+## 21.1 先更正 §19.1.1 / §20.4 的一个算术错误（追加式，不改旧文）
+
+两处都写了"收敛可删 **13 份**副本"。括号里的 `4×3 + 2` = **14** 是**总定义数**，不是可删数。
+可删数 = 总定义数 − 每助手保留 1 份 = 14 − 5 = **9**。
+
+| 助手 | 收敛前定义数 | 收敛后 | 备注 |
+|---|---|---|---|
+| `normalize_probability` | 3 | 1（共享）| |
+| `clean_number` | 3 | 1（共享）| 仅共享模块内部调用 |
+| `extract_text` | 3 | 1（共享）| |
+| `extract_number` | 3 | 1（共享）| |
+| `extract_market_list` | 2 | 1（共享）| 只 limitless + predict_fun；**opinion 保留本地** |
+| **合计** | **14** | **5** | **删 9** |
+
+→ 上表是**实测**（收敛后三个适配器共少 9 个 `def`）。§20.4 的定性结论**不变**：这是可维护性改进，不是 bug 修复。
+
+## 21.2 落地
+
+新增 `backend/app/services/event_source_utils.py`（5 个**公开名**函数）。
+三个适配器改为 import，并**用别名保持调用点不变**（`extract_text as _extract_text` …），
+所以每个适配器的 diff 只有"删本地 def + 换 import"两种形态，调用点零改动。
+
+⚠️ **必须同时删掉各自不再使用的 `safe_float` 导入** —— 改前它只出现在被删的两个助手里
+（`_extract_number` / `_normalize_probability`）；保留即触发 `ruff check app/` 的 **F401**（CI 的 lint 门会红）。
+`clean_number` 同理**不可**被适配器 import（改后适配器不再直接调用它，import 即 F401）。
+
+| 文件 | 动作 | 行数 |
+|---|---|---|
+| `event_source_utils.py` | 新建 | 0 → 93 |
+| `limitless_event_source.py` | import 4 个；删 5 个本地 def + `safe_float` 导入 | 188 → 152 |
+| `opinion_event_source.py` | import 3 个；删 4 个本地 def + `safe_float` 导入 | 173 → 147 |
+| `predict_fun_event_source.py` | import 4 个；删 5 个本地 def + `safe_float` 导入 | 173 → 137 |
+
+**唯一"不收敛"的决定**：`_extract_market_list`。opinion 读 `{"result": {"list": [...]}}`，
+另两个读裸 `list` / `{"data": [...]}` —— 这是**两个不同的 provider 契约**。按 §19.2 的判据应保留差异，
+故 opinion 那份**留在本地**，并把这层差异写进共享模块的 docstring 与一条 `assertIsNot` 守卫。
+
+## 21.3 补夹具（§18.2 的缺口）
+
+§18.2 的缺口形态是"**被接受的字段数 > 被测试的字段数**"。补齐如下：
+
+| 文件 | 新增 | 锁住什么 |
+|---|---|---|
+| `tests/test_event_source_utils.py`（新建）| 5 个类 | 共享助手直测：标度契约（0–1 → ×100、0–100 直通、越界 → `None`）、`extract_number`/`extract_text` 的"首个非空 / 非缺"顺序与默认值、`extract_market_list` 的形状 |
+| `test_opinion_event_source.py` | 2 个用例 | **`_PROBABILITY_FIELDS` 的 4 个字段逐个被读到**（此前只测 `latestPrice`）；且 `latestPrice` 优先于回退位 |
+| `test_limitless_event_source.py` | 1 个用例 | `_QUESTION_FIELDS` / `_VOLUME_FIELDS` 的回退位真的会被读到 |
+| `test_predict_fun_event_source.py` | 1 个用例 | `_ID_FIELDS` / `_LIQUIDITY_FIELDS` 的回退位 |
+
+📌 **对 §19.2 "补一条夹具只需补一次"的修正**：只有**助手的契约**收敛成了一处（所以标度只需测一次）；
+**字段清单仍然是每个适配器一份**（它们本就是各 provider 各不相同的东西），故回退位夹具仍需 per-adapter。
+—— 收敛省掉的是"标度语义改三处"，不是"字段清单能共用"。
+
+## 21.4 一条新发现：`normalize_probability` **不取整**
+
+写直测时首版断言 `normalize_probability(0.57) == 57.0` → **红**：IEEE-754 下 `0.57 * 100` 是
+`56.99999999999999`。
+
+→ 这**不是缺陷**：取整发生在**适配器构建事件载荷时**（`round(probability, 2)`）。
+既有适配器用例（`[0.57, 0.59]` → `58.0`）之所以绿，正是因为有那一次 `round`。
+
+**结论**：助手的契约是"**不取整**"，测试必须用容差（`assertAlmostEqual(..., places=9)`），已写进助手 docstring。
+→ 复用 §十八 的教训：**判"是不是 bug"要先问"是哪一层的契约"** —— 在错误的层断言精确相等，会造出假红。
+
+## 21.5 守卫按 **identity** 钉住共享（含变异验证）
+
+`AdaptersShareTheHelpersTests` 用 `assertIs` 把三个适配器钉在共享**对象**上
+（`_extract_text` / `_extract_number` / `_normalize_probability`；`_extract_market_list` 只钉 limitless + predict_fun），
+并用 `assertIsNot(opinion._extract_market_list, utils.extract_market_list)` 把"opinion 合法保留本地"也钉住。
+
+**变异验证（本地、一次性）**：把一份**真实副本**放回 `predict_fun_event_source.py`（连同它自己的 `_clean_number`）：
+
+| 阶段 | junit | 观察 |
+|---|---|---|
+| 变异后 | `tests=47 failures=1 errors=0` | **只有 identity 守卫变红**；行为用例 22 passed **全绿** |
+| 还原后 | `tests=63 failures=0 errors=0` | 全绿；blob 回到 `d5c26ddd…`（逐字节一致）|
+
+→ **关键观察：一份功能等价的本地副本让所有行为用例都保持绿色**（47 个里只有那 1 个 identity 断言红）。
+**行为测试对"重复"是盲的。** 这正是本守卫存在的理由 —— 只用"结果对不对"守卫，重复会静默回来。
+（与 §十九.3 的"空头断言"同族：守卫必须锁**形状**，而"有没有副本"本身就是一种形状。）
+
+## 21.6 验证口径与结果
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 单测 | 4 个测试文件 | junit `tests=63 failures=0 errors=0`（含 28 subtests）|
+| 集成 | `tests/test_event_intelligence_service.py` | junit `tests=127 failures=0 errors=0` |
+| Lint | `ruff check app/` | `All checks passed!` |
+| 行尾 | `scripts/eol_audit.py` | `damage: none`（6 个改动文件 + 2 个新文件全纯 CRLF、无 BOM）|
+| 影响面 | 全仓 grep | 生产侧只有 `event_intelligence_service.py` 引用（取 `fetch_candidate_events`，未受影响）|
+
+判"绿"只看 junit 的 `failures`/`errors`，不看 stdout 的 `passed`（沿用既有口径）。
+
+## 21.7 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| §19.2 判为"不该无脑收敛"的其余 **39 组**（`_first`/`_dig`/`_text`/`_season_year` 等）| ⏳ 未动（契约不共享，差异是特性）|
+| 把本 identity 守卫**登记进** `scripts/mutation_verify.py` | ⏳ 未做（本次变异是**一次性本地**；常驻需新增一个 set，取舍同 §19.4）|
+| §17.2.1 的 `/trades` "已作废" 视图 | ⏳ 产品决策，未决 |
+
 
 
 

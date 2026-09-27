@@ -22,7 +22,12 @@ logger = logging.getLogger(__name__)
 
 # ── Schema ──────────────────────────────────────────────────────────
 
-SCHEMA_SQL = """
+# Kept as individual statements so _migrate()'s rebuild can replay them one at a
+# time via conn.execute(). A rebuild must not use executescript(): it issues an
+# implicit COMMIT before running, which would commit the RENAME + CREATE before
+# the row copy and strand every row in *_old with no way to roll back.
+_SCHEMA_STATEMENTS: list[str] = [
+    """
 CREATE TABLE IF NOT EXISTS simulated_trades (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     trade_id        TEXT NOT NULL UNIQUE,
@@ -41,31 +46,103 @@ CREATE TABLE IF NOT EXISTS simulated_trades (
     exit_prob       REAL,                   -- system prob at exit
     exit_market     REAL,                   -- market prob at exit
     exit_time       TEXT,                   -- ISO 8601
-    exit_reason     TEXT,                   -- resolved_yes | resolved_no | manual
+    exit_reason     TEXT,                   -- resolved_yes | resolved_no | resolved_partial | voided | manual
 
     actual_outcome  REAL,                   -- 100=YES 0=NO
     pnl_pct         REAL,                   -- profit/loss as %-points of position
     is_win          INTEGER,               -- 1=direction won 0=direction lost
 
-    status          TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed')),
+    -- A voided trade is terminal: its prediction was voided by a non-genuine
+    -- resolution, so it carries no pnl/is_win/actual_outcome and the
+    -- closed-trade statistics (all filtered on status='closed') never see it.
+    status          TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed','voided')),
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
-);
+)
+""",
+    "CREATE INDEX IF NOT EXISTS idx_sim_trades_event   ON simulated_trades(event_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sim_trades_status  ON simulated_trades(status)",
+    (
+        "CREATE INDEX IF NOT EXISTS idx_sim_trades_wins "
+        "ON simulated_trades(is_win) WHERE is_win IS NOT NULL"
+    ),
+]
 
-CREATE INDEX IF NOT EXISTS idx_sim_trades_event   ON simulated_trades(event_id);
-CREATE INDEX IF NOT EXISTS idx_sim_trades_status  ON simulated_trades(status);
-CREATE INDEX IF NOT EXISTS idx_sim_trades_wins    ON simulated_trades(is_win) WHERE is_win IS NOT NULL;
-"""
+SCHEMA_SQL = ";\n".join(stmt.strip() for stmt in _SCHEMA_STATEMENTS) + ";\n"
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
+# v1 -> v2 is a CHECK widening ('voided'), not a column add, so it cannot ride
+# apply_migrations (ADD COLUMN only). _migrate() below does it as a table
+# rebuild. _MIGRATIONS stays empty -- and stays in conftest's _RESET_EXEMPT --
+# precisely because nothing is added here at runtime.
 _MIGRATIONS: dict[str, str] = {}
 
 _INITIALIZED: set[str] = set()
 _INIT_GUARD = threading.Lock()
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Bring an existing simulated_trades table up to the current shape.
+
+    v1 -> v2: ``status``'s CHECK allowed only ('open','closed'). A prediction
+    voided by ``void_prediction`` (a non-genuine resolution) then had no
+    terminal state to give its paper trade, so the trade stayed ``open``
+    forever -- invisible to the open list (which filters status='open' and so
+    reported it as a live position) and to the dangling-reference census (the
+    event still exists). ``void_trade`` needs ``status='voided'``.
+
+    SQLite cannot ALTER a CHECK constraint, so widening it is a table rebuild --
+    the same shape as ``prediction_store._migrate``'s UNIQUE-restore path:
+    RENAME, drop the old indexes, replay the schema, copy every row, drop the
+    old table. Two details that are load-bearing and easy to miss:
+
+    * The indexes must be dropped first. Index names are global and the RENAME
+      leaves them attached to ``simulated_trades_old`` under their own names,
+      so a plain ``CREATE INDEX IF NOT EXISTS`` below would no-op and leave the
+      rebuilt table unindexed.
+    * ``id`` (INTEGER PRIMARY KEY AUTOINCREMENT) is copied explicitly. Without
+      it in the column list the rows are re-inserted and every id is reassigned
+      from 1, so the ids that identify existing rows (and that an operator may
+      have cited) silently change.
+
+    Idempotent: a fresh table (born with the widened CHECK) and a repeat visit
+    both return before touching anything.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='simulated_trades'"
+    ).fetchone()
+    if row is None:
+        return
+    # Match the CHECK clause, not the bare token 'voided': the token also occurs
+    # in this file's own schema comments, which are stored verbatim in
+    # sqlite_master, so a naive substring test would read a v1 table (comment
+    # says voided, CHECK does not) as already migrated and skip the rebuild.
+    # Whitespace is collapsed first so reformatting the DDL does not defeat it.
+    ddl = " ".join((row["sql"] or "").split())
+    if "IN ('open','closed','voided')" in ddl:
+        return
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(simulated_trades)")]
+    col_csv = ", ".join(cols)
+    conn.execute("ALTER TABLE simulated_trades RENAME TO simulated_trades_old")
+    conn.execute("DROP INDEX IF EXISTS idx_sim_trades_event")
+    conn.execute("DROP INDEX IF EXISTS idx_sim_trades_status")
+    conn.execute("DROP INDEX IF EXISTS idx_sim_trades_wins")
+    for statement in _SCHEMA_STATEMENTS:
+        conn.execute(statement)
+    conn.execute(
+        f"INSERT INTO simulated_trades ({col_csv}) "
+        f"SELECT {col_csv} FROM simulated_trades_old"
+    )
+    conn.execute("DROP TABLE simulated_trades_old")
+    logger.info(
+        "simulated_trades migrated to schema v%d: status CHECK widened with 'voided'",
+        _SCHEMA_VERSION,
+    )
+
+
 def _ensure_schema(path: str) -> None:
-    """Create the table on first use of a given DB path (idempotent)."""
+    """Create the table on first use of a given DB path (idempotent), then
+    migrate an existing one to the current shape."""
     if path in _INITIALIZED:
         return
     with _INIT_GUARD:
@@ -73,6 +150,7 @@ def _ensure_schema(path: str) -> None:
             return
         with writing(path) as conn:
             conn.executescript(SCHEMA_SQL)
+            _migrate(conn)
             sqlite_db.apply_migrations(
                 conn, "simulated_trades", _SCHEMA_VERSION, _MIGRATIONS
             )
@@ -177,6 +255,49 @@ def close_trade(
         logger.info(
             "Closed simulated trade %s: %s=%d, pnl=%.1f%%, win=%d",
             trade["trade_id"], direction, int(actual_outcome), pnl, is_win,
+        )
+        return _row_to_dict(
+            conn.execute(
+                "SELECT * FROM simulated_trades WHERE trade_id=?",
+                (trade["trade_id"],),
+            ).fetchone()
+        )
+
+
+def void_trade(event_id: str) -> dict[str, Any] | None:
+    """Void the open simulated trade for event_id -- the terminal state for a
+    trade whose prediction was voided (a non-genuine resolution: identity
+    conflict, or a voided market).
+
+    Unlike close_trade there is no settlement: actual_outcome / pnl_pct / is_win
+    stay NULL because the market never resolved, so the trade must not enter the
+    win-rate / PnL / edge statistics (trade_stats and list_closed_trades both
+    filter status='closed'). It does leave the open list, which is the point:
+    before this, a voided prediction left its paper position sitting in
+    list_open_trades forever. exit_reason is set to 'voided' so the reason a
+    trade left the open list is legible without joining back to the prediction.
+    No-op (None) when the event has no open trade. Idempotent."""
+    db_path = loop_db_path()
+    _ensure_schema(db_path)
+    with writing(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM simulated_trades WHERE event_id=? AND status='open'",
+            (event_id,),
+        ).fetchone()
+        if not row:
+            return None
+
+        trade = _row_to_dict(row)
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """UPDATE simulated_trades SET
+               exit_reason='voided', exit_time=?, status='voided', updated_at=?
+               WHERE trade_id=?""",
+            (now, now, trade["trade_id"]),
+        )
+        logger.info(
+            "Voided simulated trade %s: %s (no settlement; excluded from stats)",
+            trade["trade_id"], event_id[:12],
         )
         return _row_to_dict(
             conn.execute(

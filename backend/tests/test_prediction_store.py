@@ -888,5 +888,68 @@ class Phase3CalibrationIntegrationTests(unittest.TestCase):
             self.assertEqual(summary["by_edge_x_confidence"]["unknown|unknown"]["n"], 1)
 
 
+class VoidPredictionTradeTests(unittest.TestCase):
+    """Voiding a prediction must not leave its paper trade open forever.
+
+    The trade store is a separate module that holds its own ``loop_db_path``
+    binding, so both bindings are pointed at the same temp file here: patching
+    ``sqlite_db.loop_db_path`` alone would leave the trade store writing the real
+    loop DB.
+    """
+
+    def test_void_prediction_also_voids_the_open_simulated_trade(self):
+        import sqlite3
+        from app.memory import simulated_trade_store as trades
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "v2_loop.db")
+            self.addCleanup(trades._INITIALIZED.discard, db_path)
+            with patch.object(sqlite_db, "loop_db_path", return_value=db_path), \
+                    patch.object(trades, "loop_db_path", return_value=db_path):
+                preds.freeze_prediction(_market_record("evtVoid", estimated=80.0))
+                trades.open_trade(
+                    "evtVoid", direction="YES", entry_prob=80.0, market_prob=50.0
+                )
+
+                result = preds.void_prediction("evtVoid")
+
+                conn = sqlite3.connect(db_path)
+                conn.row_factory = sqlite3.Row
+                try:
+                    trade = dict(conn.execute(
+                        "SELECT * FROM simulated_trades WHERE event_id='evtVoid'"
+                    ).fetchone())
+                finally:
+                    conn.close()
+                open_after = [t["event_id"] for t in trades.list_open_trades()]
+                closed_after = [t["event_id"] for t in trades.list_closed_trades()]
+
+        self.assertEqual(result["status"], "voided")
+        self.assertEqual(trade["status"], "voided")
+        self.assertEqual(trade["exit_reason"], "voided")
+        self.assertIsNone(trade["pnl_pct"])
+        self.assertNotIn("evtVoid", open_after)
+        self.assertNotIn("evtVoid", closed_after)
+
+    def test_void_prediction_without_a_trade_still_voids_the_prediction(self):
+        """The trade hook is best-effort: an event with no trade must not stop
+        the prediction from reaching its terminal state."""
+        from app.memory import simulated_trade_store as trades
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "v2_loop.db")
+            self.addCleanup(trades._INITIALIZED.discard, db_path)
+            with patch.object(sqlite_db, "loop_db_path", return_value=db_path), \
+                    patch.object(trades, "loop_db_path", return_value=db_path):
+                preds.freeze_prediction(_market_record("evtNoTrade", estimated=80.0))
+
+                result = preds.void_prediction("evtNoTrade")
+
+                open_after = trades.list_open_trades()
+
+        self.assertEqual(result["status"], "voided")
+        self.assertEqual(open_after, [])
+
+
 if __name__ == "__main__":
     unittest.main()

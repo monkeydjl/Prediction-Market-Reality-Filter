@@ -9,7 +9,7 @@ It replaces three near-identical per-batch scripts
 ``mutation_verify_probability_probe.py``). Those all re-implemented the same
 backup/apply/revert machinery, and one of them had grown a stronger check than
 the other two while the other two had a per-index selector the first lacked.
-Merging keeps the union of both: one inventory, one engine, three sets.
+Merging keeps the union of both: one inventory, one engine, four sets.
 
 Usage
 -----
@@ -55,10 +55,12 @@ the restore is checked by sha256 rather than by eye. Run
 
 Needles are declared as raw ``bytes`` for the same reason, and **do not share one
 line-ending convention**: the ``review-queue`` needles are line-terminated and
-therefore carry CRLF, while the ``daily-digest`` and ``probability-probe``
-needles sit inside a single line and must not. Building a CRLF needle from LF
-text would not match -- which fails loudly, because every apply asserts the
-needle occurs exactly once.
+therefore carry CRLF, while the ``daily-digest``, ``probability-probe`` and
+``voided-trade`` needles sit inside a single line and must not. Building a CRLF
+needle from LF text would not match -- which fails loudly, because every apply
+asserts the needle occurs exactly once. ``tests/test_mutation_verify.py`` pins
+that rule statically (no bare LF in a needle) so a stale one fails in CI rather
+than only during a ten-minute manual run.
 
 Adding a mutation
 -----------------
@@ -122,6 +124,11 @@ _QUEUE_ROUTES = "backend/app/api/routes/review_queue.py"
 _QUEUE_CLI = "backend/scripts/review_queue_cli.py"
 _PROD_TEMPLATE = "backend/.env.production.example"
 _PROBE = "backend/scripts/report_probability_scale_outliers.py"
+
+_PRED_STORE = "backend/app/memory/prediction_store.py"
+_TRADES_STORE = "backend/app/memory/simulated_trade_store.py"
+_PRED_STORE_TESTS = "tests/test_prediction_store.py"
+_TRADES_TESTS = "tests/test_simulated_trade_store.py"
 
 # The two lines that decide whether _flag_note() reports the flag. C5 and C6 are
 # opposite rewrites of this same span, hence the group.
@@ -421,6 +428,62 @@ SETS: tuple[MutationSet, ...] = (
                 guard_file=_PROBE_TESTS,
                 guards=("test_a_missing_db_exits_naming_the_path",),
                 note="守卫恒不触发（冒 sqlite3 原始错误）",
+            ),
+        ),
+    ),
+    MutationSet(
+        key="voided-trade",
+        title="作废预测时冻结其模拟交易（V1–V4）",
+        rationale=(
+            "void_prediction 原本只把 predictions 置 voided，不碰 simulated_trades，"
+            "于是每次非真实结算都留一笔永远 open 的模拟交易 —— 它既不进 closed 统计"
+            "（没有结算值），也不会被 dangling 普查抓到（事件还在），只是永远挂在"
+            "list_open_trades 里冒充持仓。V1 锁住那个调用点；V2/V3 锁住表重建的两个"
+            "静默失效点（漏拷 id、CHECK 退回两态）；V4 锁住「终态必须是 voided 而不是"
+            "继续 open」。"
+        ),
+        mutations=(
+            Mutation(
+                label="V1  void_prediction 同时冻结该事件的交易",
+                path=_PRED_STORE,
+                old=b"_maybe_void_trade(event_id)",
+                new=b"None  # mutated: the trade stays open",
+                guard_file=_PRED_STORE_TESTS,
+                guards=("test_void_prediction_also_voids_the_open_simulated_trade",),
+                note="去掉回调（交易永远留在 open）",
+            ),
+            Mutation(
+                label="V2  表重建显式拷贝 id",
+                path=_TRADES_STORE,
+                old=b'col_csv = ", ".join(cols)',
+                new=b'col_csv = ", ".join(c for c in cols if c != "id")',
+                guard_file=_TRADES_TESTS,
+                guards=("test_migrate_widens_the_status_check_and_preserves_row_ids",),
+                note="把 id 排除出列清单（AUTOINCREMENT 会按 1..N 重编号）",
+            ),
+            Mutation(
+                label="V3  status 的 CHECK 接受第三个终态",
+                path=_TRADES_STORE,
+                old=b"CHECK (status IN ('open','closed','voided'))",
+                new=b"CHECK (status IN ('open','closed'))",
+                guard_file=_TRADES_TESTS,
+                guards=(
+                    "test_migrate_widens_the_status_check_and_preserves_row_ids",
+                    "test_void_trade_moves_the_open_trade_out_of_the_open_list",
+                ),
+                note="CHECK 退回两态（void_trade 的 UPDATE 触发 IntegrityError）",
+            ),
+            Mutation(
+                label="V4  void_trade 把交易置为 voided 终态",
+                path=_TRADES_STORE,
+                old=b"exit_reason='voided', exit_time=?, status='voided', updated_at=?",
+                new=b"exit_reason='voided', exit_time=?, status='open', updated_at=?",
+                guard_file=_TRADES_TESTS,
+                guards=(
+                    "test_void_trade_moves_the_open_trade_out_of_the_open_list",
+                    "test_voided_trade_is_excluded_from_trade_stats",
+                ),
+                note="只写 exit_reason，status 仍是 open",
             ),
         ),
     ),

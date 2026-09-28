@@ -3497,3 +3497,107 @@ B13 为了补用例，不得不**第一次真正装配** `_persist_events`（tem
 恰好 `18 + 10 = 28`；另 18 个的构成是 §22/§24 留下的 **11 个测试文件**（mtime 全在
 `2026-09-28 02:37–02:55`，由批次脚本写入）+ §28 的 2 个生产文件 + harness 2 件 + 本文档。
 **未提交**（本批**首次修改生产代码**，是否提交等指令）。
+
+> 追加（2026-09-29）：§34 的这 10 个文件已在 **`e52b364`** 与本节的记录一起提交；
+> 文档为 **`b8af753`**。§34 页脚那句"未提交"是当时的实测状态，保留不改。
+
+---
+
+# 三十五、`restore_stores._check_service_running()` 的保守偏向被**环境级 `HTTP_PROXY`** 抵消：一次全量套件失败的环境归因
+
+## 35.1 起因：提交前的全量套件出现 1 个失败，先归因再定性
+
+`pytest tests/` → **failures 1 / errors 0 / skipped 11**（21m；junit 报 `tests=7420`，
+而 `--collect-only` 实测 **6454 收集** —— 差额是 **subTest 展开**，两份计数口径不同，别互相验算）。
+唯一失败：`tests/test_backup_restore_drill.py::BackupRestoreDrillTests::
+test_a_real_archive_restores_every_store_to_its_configured_path`。
+
+**三重反证（缺一就只能"觉得"是环境问题）**：
+
+| # | 反证 | 结果 |
+|---|---|---|
+| ① | 该文件在不在改动列表里 | **不在**（`git status` 无它）|
+| ② | 单独跑该文件是否同样失败 | **是** —— 55 个里 1 个失败（与全量同一条）|
+| ③ | 失败信息指向的外部依赖是否存在 | 要求"`localhost:8000` 上没人听"，但**探测说有人在听** |
+
+→ 结论**当时**只能是"环境相关"，**根因未查明**。本节把根因查到证据层。
+
+## 35.2 机制：这是一处**有意的**保守偏向，不是疏漏
+
+`backend/scripts/restore_stores.py:240-303`：
+
+| 分支 | 做法 |
+|---|---|
+| POSIX | `fcntl.flock(loop_db, LOCK_EX \| LOCK_NB)`：抢到锁 = 没人持有 = 没在跑（`:266-274`）|
+| Windows（`except ImportError`）| `urllib.request.urlopen(PMRF_HEALTHCHECK_URL, timeout=…)`（`:280-303`）|
+
+Windows 分支的关键在 `:286-293` 的**注释**：任何 HTTP 响应（**含 503、以及 502/504 —— "代理后面"**）
+都算"服务活着"；`:298-301` 的 `except urllib.error.HTTPError: return True` 与之对应。
+注释同时写明**为什么**放宽：早先返回 `resp.status == 200`，导致**降级但仍在跑的 503 服务被判成"没跑"**
+→ 静默覆盖活库。
+
+→ 方向是**安全的**：假"在跑"只多一条警告；假"没跑"才覆盖数据。**所以本节不是"作者漏了 502"。**
+
+## 35.3 新事实：环境级 `HTTP_PROXY` 让探测请求**根本没到 localhost**
+
+实测（2026-09-29 本机，win32）：
+
+| 观测 | 值 |
+|---|---|
+| `HTTP_PROXY` / `http_proxy` / `HTTPS_PROXY` / `https_proxy` | **全设** → `http://127.0.0.1:52950` |
+| `NO_PROXY` / `no_proxy` | **未设** |
+| `urllib.request.getproxies()` | `{"http": "http://127.0.0.1:52950", "https": "http://127.0.0.1:52950"}` |
+| `urllib.request.proxy_bypass('localhost')` / `('127.0.0.1')` | **False** / **False** |
+| `urlopen('http://localhost:8000/api/health')` | **`HTTPError 502`**，正文 `upstream connect failed: 由于目标计算机积极拒绝，无法连接。` |
+| **`_check_service_running()`** | **`True`** |
+| `netstat` 在 `:8000` 上 | **没有任何监听者**（IPv4/IPv6 都没有；唯一含 "8000" 的是 `127.0.0.1:58000`）|
+| `HKCU\Environment` / HKLM 机器级里的 proxy 变量 | **无** |
+| WinINET `ProxyEnable` / `ProxyServer` / `ProxyOverride` | `1` / `127.0.0.1:7897` / **含 `localhost` 与 `<local>`** |
+
+**三个必须分清的点**：
+
+1. **两个不同的代理**：环境变量指向 `127.0.0.1:52950`；WinINET（系统代理）指向 `127.0.0.1:7897`。
+   本函数走的是 **urllib + 环境变量**那条。
+2. **系统代理本来就绕过 localhost** —— `ProxyOverride` 明写 `localhost;127.*;…;<local>`；
+   但 **urllib 不看 WinINET，只看环境变量** → 它绕不过。这就是"浏览器打不开时正常、Python 却踩到"的原因。
+3. `HTTP_PROXY` **未持久化**（`HKCU\Environment` 为空）→ 它来自**启动本会话的外层进程**
+   （同一环境里还有 `CODEBUDDY_SERVICE_PROXY_URL`）→ **用户自己新开的终端不必然有它**。
+
+→ 于是该检查在这类环境里退化成"**代理可达吗**"，答案恒真 → **警告恒亮**。
+
+## 35.4 影响面：分清"有证据的"与"推的"
+
+| 判断 | 证据强度 |
+|---|---|
+| 该测试是**唯一**受害用例 | ✅ 有证据：`test_backup_restore_drill.py` 里**只有** `:114` 断言 `warnings`；同文件 `:172/:205/:274` 的 `apply=True` 都不看它。全量套件也只红这一条 |
+| **CI 不受影响** | ✅ 实测 + 🟡 一步推断，分开标：**实测** —— `.github/workflows/` 里**没有任何 proxy 设置**，而 CI 的 `Run backend tests` 就是 `pytest tests/ --cov=…`（该 job 会跑这条用例）；**推断**（未跨环境验证）—— GitHub 托管 runner 上 `:8000` 无监听、且不注入 `HTTP_PROXY` → `urlopen` 抛 `URLError` → 返回 `False` → warnings 为空 |
+| 任何"导出 `HTTP_PROXY` 却不给 localhost 设 `NO_PROXY`"的机器（企业代理下的 CI、开了全局代理的开发机）都会**恒亮** | 🟡 **推的，未做第二台机器验证** —— 只写了机制，没跨机复现 |
+| **无数据风险** | ✅ 有证据：这条警告**不阻止 `--apply`**（`restore_from_backup` 只看 `apply`，`:345-349` 只是 `warnings.append`）。危险方向（假"没跑" → 覆盖活库）**没有被本次发现削弱** |
+
+## 35.5 修法选项（**不代决**，留给老板）
+
+| 选项 | 说明 | 代价 |
+|---|---|---|
+| **(a) 探测时显式不用代理** | `build_opener(ProxyHandler({}))`，且**只在目标是 loopback**（`localhost`/`127.0.0.1`）时生效 | 最贴合语义：问的是"**本机**这个端口有没有人听"。**必须限定 loopback** —— 若运维故意把 `PMRF_HEALTHCHECK_URL` 指向反向代理，硬关代理会改变语义 |
+| (b) 收窄"算活着"的响应 | 要求 `200` 或响应体含已知字段 | **会退回 `:286-293` 注释记录过的旧缺陷**（503 降级被误判成没跑 → 覆盖活库）|
+| (c) 改测试期望 | 允许 warnings 出现该条 | **不建议**：断言本身是对的；改期望等于把"警告恒亮"固化成契约 |
+| (d) 只加运维说明 | RUNBOOK 写明"跑 `restore --all --apply` 前先 `set NO_PROXY=localhost,127.0.0.1`" | 零代码风险，但治标 |
+
+→ 倾向 **(a) + (d)**；但"要不要动生产代码"是决定，不在本节。
+
+## 35.6 与 §三十四 提交消息的关系（一处精度更正）
+
+§34 的提交（`e52b364`）消息里写的是 *"a local HTTP proxy answers localhost:8000/api/health with a 502"*
+—— **方向对、精度不够**。真正起作用的是**环境变量代理**（`127.0.0.1:52950`），
+而**系统代理（WinINET，`127.0.0.1:7897`）本来就绕过 localhost**。
+本节把这条更正到证据层。提交消息按约定不改写。
+
+## 35.7 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| 改 `_check_service_running()`（选项 a）| ⏳ 未动（**需拍板**；且要有配套用例——否则"修好了"无从验证）|
+| 第二台机器/带代理 CI 的复现 | ⏳ 未做（35.4 的第三行因此只能标"推的"）|
+| 写进 RUNBOOK（选项 d）| ⏳ 未做 |
+
+**提交状态**：本节**只改本文档**；生产代码与测试**一字未动**。**未提交。**

@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from app.memory import loop_run_store
 from app.models.world_cup_prediction import Base, MatchFixture, PredictionHistory
 from app.services.world_cup_quality_service import (
+    ENGINE_NAMES,
     apply_consistency_history_repair,
     build_consistency_repair_plan,
     build_quality_loop_report,
@@ -440,6 +441,19 @@ class WorldCupQualityServiceTests(unittest.TestCase):
         self.assertEqual(weights["source"], "historical_brier")
         self.assertLess(weights["elo_weight"], 0.70)
         self.assertGreater(weights["hybrid_weight"], 0.30)
+
+    def test_engine_names_match_the_runnable_registry(self):
+        """Tie `ENGINE_NAMES` to the dispatch registry instead of to itself.
+
+        `ENGINE_NAMES` is only ever looped over to build the `by_engine` /
+        `by_engine` trends maps, so a stale member is invisible: the engine
+        simply has no key, and `_summarize([])` reports a clean empty bucket.
+        The relation is checked both ways, so registering a fourth runnable
+        engine without adding it here goes red, and so does a typo.
+        """
+        from app.services.world_cup_engines import ENGINES
+
+        self.assertEqual(set(ENGINE_NAMES), set(ENGINES) | {"integrated"})
 
 
 if __name__ == "__main__":

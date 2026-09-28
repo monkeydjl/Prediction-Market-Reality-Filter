@@ -29,7 +29,7 @@ def _every_mutation():
 
 
 class InventoryTests(unittest.TestCase):
-    def test_the_four_sets_are_present(self):
+    def test_the_five_sets_are_present(self):
         """Pins the inventory, so a whole set cannot be dropped silently.
 
         Deliberately exact and ordered: adding a set means editing this test,
@@ -38,7 +38,13 @@ class InventoryTests(unittest.TestCase):
         """
         self.assertEqual(
             [s.key for s in mutation_verify.SETS],
-            ["daily-digest", "review-queue", "probability-probe", "voided-trade"],
+            [
+                "daily-digest",
+                "review-queue",
+                "probability-probe",
+                "voided-trade",
+                "whitelist-fixtures",
+            ],
         )
 
     def test_set_keys_are_unique(self):

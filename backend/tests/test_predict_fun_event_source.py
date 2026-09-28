@@ -127,3 +127,35 @@ class PredictFunEventSourceTests(unittest.TestCase):
             events = asyncio.run(source.fetch_candidate_events(limit=5))
         self.assertEqual(events, [])
         self.assertIn("source=predict_fun_candidates", "\n".join(logs.output))
+
+    def test_every_listed_field_and_status_is_honoured(self):
+        # Driven off the module's own tuples / status sets, so adding an entry is
+        # covered automatically (audit section 22.2.1).
+        for const in ("_QUESTION_FIELDS", "_ID_FIELDS"):
+            for field in getattr(source, const):
+                with self.subTest(const=const, field=field):
+                    self.assertEqual(
+                        source._extract_text({field: "VALUE"}, getattr(source, const)),
+                        "VALUE",
+                    )
+        for const in ("_VOLUME_FIELDS", "_LIQUIDITY_FIELDS"):
+            for field in getattr(source, const):
+                with self.subTest(const=const, field=field):
+                    self.assertEqual(
+                        source._extract_number({field: "12.5"}, getattr(source, const)),
+                        12.5,
+                    )
+        for status in source._ACTIVE_TRADING_STATUSES:
+            with self.subTest(trading_status=status):
+                self.assertTrue(
+                    source._has_supported_status(
+                        {"tradingStatus": status, "status": "registered"}
+                    )
+                )
+        for status in source._ACTIVE_MARKET_STATUSES:
+            with self.subTest(market_status=status):
+                self.assertTrue(
+                    source._has_supported_status(
+                        {"tradingStatus": "open", "status": status}
+                    )
+                )

@@ -103,12 +103,16 @@ class OpinionEventSourceTests(unittest.TestCase):
         self.assertEqual([e["source"]["source_id"] for e in events], ["ok"])
 
     def test_every_documented_probability_field_is_read(self):
-        # _PROBABILITY_FIELDS = ("latestPrice", "yesPrice", "yesTokenPrice",
-        # "probability"). Only latestPrice was exercised before; the other three
-        # are the fallbacks that run when a provider omits latestPrice.
-        for field in ("yesPrice", "yesTokenPrice", "probability"):
+        # Driven off _PROBABILITY_FIELDS itself, so a new member is covered too.
+        # All four read as 0-1 fractions -> x100 (audit section 18.2 / section 22.2.1: only
+        # latestPrice was exercised before the section 21 fix, and that fix spot-checked
+        # three of the four fallbacks rather than the constant).
+        for field in source._PROBABILITY_FIELDS:
             with self.subTest(field=field):
-                market = _market(latestPrice=None, **{field: 0.83})
+                market = _market()
+                for other in source._PROBABILITY_FIELDS:
+                    market.pop(other, None)
+                market[field] = 0.83
                 with patch.object(
                     source.settings, "OPINION_API_KEY", "secret"
                 ), patch.object(
@@ -134,3 +138,25 @@ class OpinionEventSourceTests(unittest.TestCase):
             events = asyncio.run(source.fetch_candidate_events(limit=5))
         self.assertEqual(events, [])
         self.assertIn("source=opinion_candidates", "\n".join(logs.output))
+
+    def test_every_listed_field_and_status_is_honoured(self):
+        # Driven off the module's own tuples / status set, so adding an entry is
+        # covered automatically (audit section 22.2.1).
+        for const in ("_QUESTION_FIELDS", "_ID_FIELDS"):
+            for field in getattr(source, const):
+                with self.subTest(const=const, field=field):
+                    self.assertEqual(
+                        source._extract_text({field: "VALUE"}, getattr(source, const)),
+                        "VALUE",
+                    )
+        for const in ("_VOLUME_FIELDS", "_LIQUIDITY_FIELDS"):
+            for field in getattr(source, const):
+                with self.subTest(const=const, field=field):
+                    self.assertEqual(
+                        source._extract_number({field: "12.5"}, getattr(source, const)),
+                        12.5,
+                    )
+        for status in source._ACTIVE_STATUSES:
+            with self.subTest(status=status):
+                # upper-cased to also pin the .lower() normalisation the code relies on
+                self.assertTrue(source._has_supported_status({"status": status.upper()}))

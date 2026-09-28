@@ -3206,3 +3206,65 @@ def test_analyze_event_recomputes_once_when_challenge_requests_retry(monkeypatch
     assert len(overlay_calls) == 2
     assert record["conclusion_challenge"]["verdict"] == "pass"
     assert record["conclusion_challenge"]["attempt_count"] == 1
+
+
+def test_persist_events_opens_the_trade_as_no_for_a_no_recommendation(monkeypatch, tmp_path):
+    """A NO recommendation must reach ``open_trade()`` as NO, not as YES.
+
+    This is the **first test that actually runs** ``_persist_events`` — every
+    other test patches it to a no-op (``new=lambda records: None``), and
+    ``PAPER_TRADE_ENABLED`` did not appear in any test file at all, so the whole
+    paper-trade branch (freeze -> direction resolution -> open_trade) was
+    unexecuted. It locks this resolution:
+
+        direction = str(rec.get("direction") or "")
+        if direction not in _TRADABLE_DIRECTIONS: direction = "YES"
+        if entry_edge > 0 and direction == "NO": direction = "YES"
+        elif entry_edge < 0 and direction == "YES": direction = "NO"
+
+    With ``entry_edge == 0`` (ai_probability == market_probability) the edge-sign
+    override cannot restore the direction, so this is the *only* observable path
+    for the ``_TRADABLE_DIRECTIONS`` membership: deleting "NO" opens the trade as
+    YES instead. That is mutation W27's guard.
+    """
+    import app.memory.simulated_trade_store as trade_store
+
+    db_path = str(tmp_path / "loop.db")
+    monkeypatch.setattr(trade_store, "loop_db_path", lambda: db_path)
+    monkeypatch.setattr(trade_store, "_INITIALIZED", set())
+    monkeypatch.setattr(eis.settings, "PAPER_TRADE_ENABLED", True)
+
+    # save_events / audit / link are not what this test is about: stub them so the
+    # only real side effect is open_trade() against the temp DB above.
+    monkeypatch.setattr(
+        "app.memory.event_store.save_events",
+        lambda records: [{"event_id": r.get("event_id"), "record": r} for r in records],
+    )
+    monkeypatch.setattr("app.services.event_audit_service.record_event", lambda *a, **k: None)
+    monkeypatch.setattr("app.memory.event_market_link_store.get_verified_link", lambda *a, **k: None)
+    monkeypatch.setattr("app.memory.event_market_link_store.upsert_link", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "app.memory.prediction_store.freeze_prediction",
+        lambda record: {
+            "decision": "act",  # passes the default PAPER_TRADE gate
+            "ai_probability": 50.0,
+            "market_probability": 50.0,  # entry_edge == 0 -> no edge-sign override
+            "trust": 1.0,
+        },
+    )
+
+    record = {
+        "event_id": "no-trade",
+        "event_title": "Will X happen?",
+        "event_title_zh": "X 会发生吗？",
+        "actionable_recommendation": {"direction": "NO", "confidence": "high"},
+        "legacy_analysis": {"analysis_quality": "llm"},
+        "credibility": {"score": 60},
+    }
+
+    eis._persist_events([record])
+
+    trades = trade_store.list_open_trades(limit=10)
+    assert len(trades) == 1
+    assert trades[0]["direction"] == "NO"
+    assert trades[0]["decision"] == "act"

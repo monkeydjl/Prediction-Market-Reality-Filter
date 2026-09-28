@@ -14,6 +14,13 @@ REVISE = "revise"
 REJECT = "reject"
 INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
+# The directions that assert a strong (non-abstaining) conclusion. Two call
+# sites read this same membership test: ``_is_strong_event_direction`` (which
+# gates the evidence / counterevidence / confidence / actionability checks) and
+# ``_check_calculation`` (a "change too small to justify a strong direction"
+# soft-fail). WAIT / AVOID abstain, so neither check may fire for them.
+_STRONG_EVENT_DIRECTIONS = ("YES", "NO")
+
 
 class CriticAdapter(Protocol):
     def review(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -41,7 +48,7 @@ def _dict(value: Any) -> dict[str, Any]:
 
 def _is_strong_event_direction(payload: dict[str, Any]) -> bool:
     conclusion = _dict(payload.get("conclusion"))
-    return conclusion.get("direction") in {"YES", "NO"}
+    return conclusion.get("direction") in _STRONG_EVENT_DIRECTIONS
 
 
 def _is_strong_world_cup_prediction(payload: dict[str, Any]) -> bool:
@@ -82,7 +89,7 @@ def _check_calculation(
     if payload.get("domain") == "event_intelligence":
         direction = conclusion.get("direction")
         change = _num(scores.get("change"))
-        if direction in {"YES", "NO"} and change is not None and abs(change) < 3.0:
+        if direction in _STRONG_EVENT_DIRECTIONS and change is not None and abs(change) < 3.0:
             failures.append(
                 _failure(
                     CHECK_CALCULATION,

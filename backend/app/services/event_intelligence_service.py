@@ -38,6 +38,15 @@ _CANDIDATE_POOL_FACTOR = 3
 # what a *record* carries; this names a slot in the discovery budget.
 _OPEN_WEB_LABEL = "Open Web"
 
+# Directions a simulated (paper) trade may be opened with. Anything else -- a
+# WAIT/AVOID recommendation, or an absent field -- falls back to YES.
+#
+# Deliberately NOT documented as "the direction the trade gets": the edge-sign
+# override lower in _persist_events rewrites the direction again (edge > 0 forces
+# YES, edge < 0 forces NO), so this fallback is only *observable* when
+# entry_edge == 0. Kept named and module-level so a mutation can target it.
+_TRADABLE_DIRECTIONS = ("YES", "NO")
+
 
 _STRENGTH_TO_CONFIDENCE = {"HIGH": "high", "MEDIUM": "medium", "LOW": "low"}
 
@@ -1567,7 +1576,7 @@ def _persist_events(records: list[dict[str, Any]]) -> None:
                     from app.memory.simulated_trade_store import open_trade
                     rec = record.get("actionable_recommendation") or {}
                     direction = str(rec.get("direction") or "")
-                    if direction not in ("YES", "NO"):
+                    if direction not in _TRADABLE_DIRECTIONS:
                         direction = "YES"
                     ai_prob = pred.get("ai_probability", 50.0)
                     mkt_prob = pred.get("market_probability", 50.0)

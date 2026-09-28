@@ -455,6 +455,13 @@ _EDGE_DEFINITION: dict[str, str] = {
     "directional": "raw_edge for YES, -raw_edge for NO",
 }
 
+# The directions reported in trade_stats()["by_direction"]. Ordering only affects
+# the JSON key order; it is the *set* that matters -- every member must be
+# queried, or the NO side silently disappears from the stats payload (a gap that
+# an `assertNotIn("NO", ...)` test cannot see). Lives here rather than inline so a
+# mutation can target it.
+_REPORTED_DIRECTIONS = ("YES", "NO")
+
 
 def trade_stats() -> dict[str, Any]:
     """Aggregate statistics for all closed simulated trades."""
@@ -499,7 +506,7 @@ def trade_stats() -> dict[str, Any]:
         ).fetchone()
 
         by_dir = {}
-        for d in ("YES", "NO"):
+        for d in _REPORTED_DIRECTIONS:
             r = conn.execute(
                 """SELECT COUNT(*) as total, SUM(CASE WHEN is_win=1 THEN 1 ELSE 0 END) as wins,
                    AVG(pnl_pct) as avg_pnl, SUM(pnl_pct) as total_pnl

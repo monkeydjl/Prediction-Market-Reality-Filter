@@ -6,6 +6,7 @@ from unittest.mock import patch
 from app.core.config import settings
 from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT, load_sports_facts
 from app.services.world_cup_statistics_source import (
+    _SKIP_PLAYER_STAT_PATHS,
     import_world_cup_statistics_source,
     preview_world_cup_statistics_source,
     world_cup_statistics_source_to_data,
@@ -113,6 +114,58 @@ class WorldCupStatisticsSourceTests(unittest.TestCase):
     def test_rejects_empty_payload(self):
         with self.assertRaisesRegex(ValueError, "did not contain team or player statistics"):
             world_cup_statistics_source_to_data({"source": "empty_feed", "response": []})
+
+    def test_every_skipped_player_stat_path_is_skipped(self):
+        """Drive the payload from `_SKIP_PLAYER_STAT_PATHS` instead of naming one path.
+
+        The set is a denylist over dotted numeric leaves (`if path in
+        _SKIP_PLAYER_STAT_PATHS: continue`). Dropping a member silently surfaces
+        raw bookkeeping fields (`games.number`, `substitutes.bench`, ...) as if
+        they were football statistics. `shots.total` is the control leaf: the
+        test fails if *nothing* survives, so it cannot pass vacuously.
+        """
+        stat_group: dict = {}
+        for path in _SKIP_PLAYER_STAT_PATHS:
+            head, _, leaf = path.partition(".")
+            stat_group.setdefault(head, {})[leaf] = 5
+        stat_group["shots"] = {"total": 3}
+
+        data = world_cup_statistics_source_to_data({
+            "source": "api_football_statistics",
+            "observed_at": "2026-07-20T00:00:00Z",
+            "response": [{
+                "team": {"name": "Team A"},
+                "players": [{
+                    "player": {"name": "Player A"},
+                    "statistics": [stat_group],
+                }],
+            }],
+        })
+
+        emitted = {row["stat_name"] for row in data["player_stats"]}
+        self.assertEqual(emitted & set(_SKIP_PLAYER_STAT_PATHS), set())
+        self.assertIn("shots.total", emitted)
+
+    def test_the_skip_list_is_pinned(self):
+        """Counterweight to the loop above, which iterates the constant itself
+        and so cannot see a denied path being *removed*.
+
+        Both `games.appearences` and `games.appearances` are intentional: the
+        first defends against an upstream key-name typo, so it is a deliberate
+        entry and not a duplicate to clean up.
+        """
+        self.assertEqual(_SKIP_PLAYER_STAT_PATHS, {
+            "games.appearences",
+            "games.appearances",
+            "games.captain",
+            "games.lineups",
+            "games.minutes",
+            "games.number",
+            "games.position",
+            "substitutes.in",
+            "substitutes.out",
+            "substitutes.bench",
+        })
 
 
 if __name__ == "__main__":

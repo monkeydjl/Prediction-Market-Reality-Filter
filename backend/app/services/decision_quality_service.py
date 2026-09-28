@@ -52,6 +52,14 @@ _SUPPORT_DIRECTION_FOR_NO = "oppose"
 
 _STRONG_STRENGTH_THRESHOLD = 0.7  # spec § Conflict Score safety net
 
+# The directions that assert a strong (non-abstaining) conclusion, i.e. the only
+# ones Stage A of the downgrade pipeline may rewrite. WAIT / AVOID already
+# abstain, so they must pass through ``_apply_downgrade_rules`` untouched.
+# NOTE: ``_build_rationale_body`` repeats this same literal inside a branch whose
+# two arms return the identical string; that dead branch is tracked as a separate
+# open item and is deliberately left alone here.
+_STRONG_DIRECTIONS = ("YES", "NO")
+
 
 def build_decision_quality(
     *,
@@ -272,7 +280,7 @@ def _apply_downgrade_rules(
     reason: str | None = None
 
     # Stage A — initial downgrade (only for strong directions YES/NO).
-    if raw_direction in ("YES", "NO"):
+    if raw_direction in _STRONG_DIRECTIONS:
         if consensus_level == "none":
             # Rule 4: evidence_breakdown is empty/absent. Reason wording
             # is distinct from rule 3 ("缺少证据支持" vs "缺少支持证据").

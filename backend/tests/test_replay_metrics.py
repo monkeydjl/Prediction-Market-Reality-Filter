@@ -234,6 +234,42 @@ class TestPhaseContributions(unittest.TestCase):
             d["phase_contributions"]["market_quality"]["downgrades_caused"], 0
         )
 
+    def test_downgrades_caused_counted_for_a_no_base(self):
+        """`NO` is the other strong direction — a NO base downgraded to WAIT
+        counts too.
+
+        Closes a coverage hole: every earlier case here passes base_dir="YES"
+        (and phase_dir "YES"/"WAIT"), so the `NO` side of
+        `base_dir in _STRONG_DIRECTIONS` was never exercised — deleting "NO"
+        from that set left this whole file green. This case is what makes the
+        member load-bearing (it is the guard registered as mutation W24).
+        """
+        from app.replay.metrics import ReplayMetrics
+        m = ReplayMetrics()
+        # base=NO, phase_only=WAIT — this phase downgraded a NO call.
+        m.add_phase_result("e1", "decision_quality", "NO", "WAIT", "WAIT")
+        d = m.to_dict()
+        self.assertEqual(
+            d["phase_contributions"]["decision_quality"]["downgrades_caused"], 1
+        )
+
+    def test_conflict_case_collected_for_a_no_phase(self):
+        """A phase that produced NO, later overridden to WAIT, is a conflict.
+
+        The conflict branch tests `phase_dir in _STRONG_DIRECTIONS`; only the
+        YES side was covered before (every case passes phase_dir="YES") — so
+        deleting "NO" also left `conflicts_with_final` blind (see W24).
+        """
+        from app.replay.metrics import ReplayMetrics
+        m = ReplayMetrics()
+        # phase says NO, final says WAIT — phase was overridden by another.
+        m.add_phase_result("e1", "source_reliability", "NO", "NO", "WAIT")
+        d = m.to_dict()
+        self.assertEqual(d["conflict_cases_total"], 1)
+        self.assertEqual(d["conflict_cases"][0]["phase"], "source_reliability")
+        self.assertEqual(d["conflict_cases"][0]["phase_dir"], "NO")
+        self.assertEqual(d["conflict_cases"][0]["final_dir"], "WAIT")
+
     def test_conflict_case_collected_when_phase_overridden(self):
         from app.replay.metrics import ReplayMetrics
         m = ReplayMetrics()

@@ -19,6 +19,30 @@ from app.kernel.engines.elo_odds_engine import _probabilities_to_scores
 
 _NEUTRAL = {"home_win": 0.40, "draw": 0.30, "away_win": 0.30}
 
+#: Stage spellings that mean "a knockout tie" -- no draw allowed.
+#:
+#: ``match.stage`` reaches us straight from ``MatchFixture.stage``
+#: (WorldCupAdapter), and ``world_cup_match_service.parse_fixture`` only ever
+#: writes the *canonical* forms: ``group_stage`` / ``round_of_16`` /
+#: ``quarterfinal`` / ``semifinal`` / ``final`` / ``unknown``. This set used to
+#: list only the underscore aliases (``quarter_final`` / ``semi_final``), so
+#: both of those rounds came out non-knockout -- a draw stayed possible in a
+#: tie that cannot be drawn -- while ``elo_odds_engine`` judged the very same
+#: ``MatchIdentity`` the other way. ``knockout`` / ``playoff`` are kept for the
+#: other adapters' vocabularies; the aliases are kept as defensive synonyms.
+_KNOCKOUT_STAGES = frozenset(
+    {
+        "round_of_16",
+        "quarterfinal",
+        "quarter_final",
+        "semifinal",
+        "semi_final",
+        "final",
+        "knockout",
+        "playoff",
+    }
+)
+
 
 class GbmEngine:
     """Kernel PredictionEngine backed by LightGBM xG models."""
@@ -37,10 +61,7 @@ class GbmEngine:
 
         home_name = match.home.name or match.home.code
         away_name = match.away.name or match.away.code
-        is_knockout = (match.stage or "").lower() in {
-            "round_of_16", "quarter_final", "semi_final", "final",
-            "knockout", "playoff",
-        }
+        is_knockout = (match.stage or "").lower() in _KNOCKOUT_STAGES
         competition = (match.season.competition.code or "").lower()
         is_world_cup = competition in {"wc", "world_cup"}
         is_neutral = is_world_cup or not features.environment.is_home_advantage

@@ -127,3 +127,26 @@ class LimitlessEventSourceTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_every_listed_field_and_status_is_honoured(self):
+        # Driven off the module's own tuples / status set, so adding an entry is
+        # covered automatically. (Audit section 22.2.1: the section 21 fix only spot-checked one
+        # fallback per tuple; this closes that by covering every element.)
+        for const in ("_QUESTION_FIELDS", "_ID_FIELDS"):
+            for field in getattr(source, const):
+                with self.subTest(const=const, field=field):
+                    self.assertEqual(
+                        source._extract_text({field: "VALUE"}, getattr(source, const)),
+                        "VALUE",
+                    )
+        for const in ("_VOLUME_FIELDS", "_LIQUIDITY_FIELDS"):
+            for field in getattr(source, const):
+                with self.subTest(const=const, field=field):
+                    self.assertEqual(
+                        source._extract_number({field: "12.5"}, getattr(source, const)),
+                        12.5,
+                    )
+        for status in source._ACTIVE_STATUSES:
+            with self.subTest(status=status):
+                # upper-cased to also pin the .lower() normalisation the code relies on
+                self.assertTrue(source._has_supported_status({"status": status.upper()}))

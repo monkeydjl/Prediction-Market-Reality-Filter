@@ -293,6 +293,29 @@ class SimulatedTradeStoreTests(unittest.TestCase):
         self.assertEqual(store.count_closed_trades(), 1)
         self.assertEqual(store.list_closed_trades()[0]["event_id"], "settled")
 
+    def test_by_direction_reports_both_strong_directions(self):
+        """trade_stats() must report BOTH directions, not just YES.
+
+        Positive counterpart to test_voided_trade_is_excluded_from_trade_stats:
+        that case only asserts ``assertNotIn("NO", ...)``, which is satisfied
+        both by "the voided NO trade was filtered out" AND by "NO was never
+        queried at all" -- so it cannot see the loop shrinking to YES-only.
+        Deleting "NO" from ``_REPORTED_DIRECTIONS`` left the whole file green
+        before this case existed (this is the guard registered as mutation W25).
+        """
+        store.open_trade("d-yes", direction="YES", entry_prob=60.0, market_prob=50.0)
+        store.close_trade("d-yes", actual_outcome=100.0)  # YES called correctly
+        store.open_trade("d-no", direction="NO", entry_prob=40.0, market_prob=60.0)
+        store.close_trade("d-no", actual_outcome=0.0)  # NO called correctly
+
+        stats = store.trade_stats()
+        self.assertEqual(set(stats["by_direction"]), {"YES", "NO"})
+        self.assertEqual(stats["by_direction"]["YES"]["total"], 1)
+        self.assertEqual(stats["by_direction"]["YES"]["wins"], 1)
+        self.assertEqual(stats["by_direction"]["NO"]["total"], 1)
+        self.assertEqual(stats["by_direction"]["NO"]["wins"], 1)
+        self.assertEqual(stats["by_direction"]["NO"]["win_rate"], 1.0)
+
     def test_records_the_current_schema_version(self):
         store.open_trade("ver", direction="YES", entry_prob=60.0, market_prob=50.0)
         self.assertEqual(

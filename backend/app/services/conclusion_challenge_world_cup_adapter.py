@@ -2,6 +2,25 @@ from __future__ import annotations
 
 from typing import Any
 
+#: Stages that carry the "cannot be drawn" risk premium.
+#:
+#: ``match`` is a World Cup ``MatchFixture`` (``WorldCupAdapter`` copies its
+#: ``stage`` verbatim into ``MatchIdentity.stage``), and
+#: ``world_cup_match_service.parse_fixture`` writes only the canonical
+#: spellings -- ``quarterfinal`` / ``semifinal`` / ``round_of_16`` / ``final``.
+#: Listing only the underscore aliases, as this set used to, made both QF and
+#: SF fall through to ``medium``.
+_HIGH_RISK_STAGES = frozenset(
+    {
+        "round_of_16",
+        "quarterfinal",
+        "quarter_final",
+        "semifinal",
+        "semi_final",
+        "final",
+    }
+)
+
 
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -93,8 +112,7 @@ def build_world_cup_challenge_input(
         "risk": {
             "level": (
                 "high"
-                if _getattr(match, "stage", "")
-                in {"round_of_16", "quarter_final", "semi_final", "final"}
+                if _getattr(match, "stage", "") in _HIGH_RISK_STAGES
                 else "medium"
             ),
             "flags": [],

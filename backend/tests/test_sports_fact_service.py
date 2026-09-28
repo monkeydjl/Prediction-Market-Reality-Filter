@@ -127,5 +127,50 @@ class SportsFactServiceTests(unittest.TestCase):
         self.assertEqual(stored[0]["stat_unit"], "%")
 
 
+    def test_every_known_kind_passes_validation(self):
+        # _KNOWN_KINDS is a validation whitelist: a misspelled member would reject
+        # that kind of fact at ingest ("unsupported_kind") and nothing would fail.
+        # Driven off the constant itself, so a new member is covered automatically.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "sports_facts.json")
+            with patch.object(settings, "SPORTS_FACT_FILE", path):
+                result = facts.import_sports_facts([
+                    {"fact_id": f"kind-{kind}", "kind": kind}
+                    for kind in sorted(facts._KNOWN_KINDS)
+                ])
+
+        self.assertEqual(result["error_count"], 0)
+        self.assertEqual(result["imported"], len(facts._KNOWN_KINDS))
+        # distinct fact_ids, so `total` also proves no silent upsert collision
+        self.assertEqual(result["total"], len(facts._KNOWN_KINDS))
+
+    def test_the_whitelist_matches_the_documented_kinds(self):
+        # The loop above only proves that *listed* members are honoured; deleting a
+        # member from _KNOWN_KINDS is invisible to it (measured by mutation). This
+        # explicit set pins COMPLETENESS, so a removal must be a conscious edit.
+        self.assertEqual(
+            facts._KNOWN_KINDS,
+            {
+                "injury",
+                "availability",
+                "suspension",
+                "discipline",
+                "qualification",
+                "match_state",
+                "match_result",
+                "lineup",
+                "player_award",
+                "team_stat",
+                "player_stat",
+                "tournament_status",
+            },
+        )
+
+    def test_unknown_kind_is_rejected_as_unsupported(self):
+        with self.assertRaises(facts.SportsFactValidationError) as ctx:
+            facts.normalize_sports_fact({"kind": "not-a-known-kind"})
+        self.assertEqual(ctx.exception.code, "unsupported_kind")
+
+
 if __name__ == "__main__":
     unittest.main()

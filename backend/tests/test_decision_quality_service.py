@@ -336,6 +336,25 @@ class BuildDecisionQualityTests(unittest.TestCase):
         # Must NOT be rule 3 wording
         self.assertNotIn("缺少支持证据", result["downgrade_reason"])
 
+    def test_rule4_empty_breakdown_downgrades_no_to_wait(self):
+        """Rule 4 applies to NO exactly as it does to YES.
+
+        The companion of this test -- ``..._does_not_downgrade_wait`` -- only
+        proves WAIT is left alone, and a negative control stays green even if
+        Stage A stops recognising NO altogether. This is the positive NO side
+        of the Stage A gate (the guard registered as mutation W29); reverting
+        ``_STRONG_DIRECTIONS`` to YES-only leaves ``displayed_direction`` at
+        ``NO`` with no downgrade reason at all.
+        """
+        rec = _recommendation("NO", risk_level="medium")
+        result = build_decision_quality(
+            recommendation=rec, evidence_breakdown=[], **self.DEFAULT_KWARGS
+        )
+        self.assertEqual(result["raw_direction"], "NO")
+        self.assertEqual(result["displayed_direction"], "WAIT")
+        self.assertTrue(result["downgraded"])
+        self.assertIn("缺少证据支持", result["downgrade_reason"])
+
     def test_rule4_empty_breakdown_does_not_downgrade_wait(self):
         """Rule 4 only applies to YES/NO. WAIT is unchanged."""
         rec = _recommendation("WAIT", risk_level="medium")

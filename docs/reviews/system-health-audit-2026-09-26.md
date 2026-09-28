@@ -1837,11 +1837,1663 @@ path.read_text(encoding="utf-8", newline="")   # ❌ 在项目 venv 上 TypeErro
 | 把本 identity 守卫**登记进** `scripts/mutation_verify.py` | ⏳ 未做（本次变异是**一次性本地**；常驻需新增一个 set，取舍同 §19.4）|
 | §17.2.1 的 `/trades` "已作废" 视图 | ⏳ 产品决策，未决 |
 
+---
 
+# 二十二、把 §十八 的缺口形态机械化扫一遍：全仓「被接受但未被测试的字段清单」+ 两处常量级发现（2026-09-28）
 
+> 承接 §18.2 的判据（"**被接受的字段数 > 被测试的字段数 = 缺口**"）与 §二十一（我只按此修了 3 个事件源）。
+> 本节只问机械问题：**全仓还有多少个"模块级全字符串常量"，其元素从未在覆盖它的测试里被引用？**
+> 只读：`ast` 解析 + 正则字面量匹配。扫描器写在仓库**外**，未入库。
 
+## 22.1 口径，以及**第一版扫描器是错的**
 
+| 维度 | 口径 |
+|---|---|
+| 候选 | `backend/app/**/*.py` 顶层 `Assign`，值为 `Tuple/List/Set` 且元素**全是字符串字面量**、个数 ≥2 → **73 个** |
+| "已测试" | 该元素以**带引号字面量**（`"x"` / `'x'`）出现在"覆盖该模块的测试文件"里 |
+| 覆盖判定 | 测试文件名 == `test_<模块名>.py`，**或**该测试文本含该模块的点号路径（`app.services.x.y`）|
 
+🔴 **第一版有一处系统性假阳性**（**与 §十九.3 同族：先别信扫描器**）：
+`limitless._ACTIVE_STATUSES` 被判 **0/4**，但夹具里明明有 `"status": "FUNDED"` ——
+该集合是拿**小写化后**的值去 `in` 的（`str(...).lower()`），而扫描器按**大小写敏感**比字面量。
+把两侧都 `lower()` 后，该常量变成 **1/4**（`funded` 由 `"FUNDED"` 覆盖）。
+→ **判据：匹配的宽严必须与被测代码的"归一化"一致。** 代码 `lower()` 了，扫描器就不能区分大小写。
 
+**口径收敛**：`STOPWORDS` / `*_KEYWORDS` / `TRUSTED_SOURCES` / `*_DOMAINS` 这类**词表**（11 个常量）
+逐元素测覆盖率**没有意义** → 单列计数、不逐条列；`__all__`（2 个）同理。
 
+## 22.2 结果：29 个"契约型"常量存在未被引用的元素
 
+### 22.2.1 ⚠️ 最该先说：**§二十一 的修复只是抽样，不是补齐**
+
+§二十一 给三个事件源的每个字段元组**各补了 1 条回退位用例**。扫描器把它量化了 —— 仍未被引用的元素：
+
+| 模块 | 常量 | 已覆盖 | 未被引用 |
+|---|---|---|---|
+| `limitless` | `_LIQUIDITY_FIELDS` | 1/5 | `liquidity`, `liquidityUsd`, `liquidity_usd`, `totalLiquidity` |
+| `limitless` | `_VOLUME_FIELDS` | 2/5 | `volumeUsd`, `volume_usd`, `totalVolume` |
+| `limitless` | `_ID_FIELDS` | 2/5 | `marketId`, `market_id`, `address` |
+| `limitless` | `_ACTIVE_STATUSES` | 1/4 | `active`, `open`, `trading` |
+| `opinion` | `_VOLUME_FIELDS` | 1/4 | `volumeUsd`, `volume_usd`, `totalVolume` |
+| `opinion` | `_LIQUIDITY_FIELDS` | 1/4 | `liquidityUsd`, `liquidity_usd`, `totalLiquidity` |
+| `opinion` | `_ID_FIELDS` | 1/4 | `id`, `market_id`, `slug` |
+| `opinion` | `_QUESTION_FIELDS` | 2/4 | `title`, `name` |
+| `opinion` | `_ACTIVE_STATUSES` | 1/4 | `active`, `open`, `trading` |
+| `predict_fun` | `_VOLUME_FIELDS` | 1/4 | `volumeUsd`, `volume_usd`, `totalVolume` |
+| `predict_fun` | `_LIQUIDITY_FIELDS` | 2/4 | `liquidity_usd`, `totalLiquidity` |
+| `predict_fun` | `_ID_FIELDS` | 2/4 | `market_id`, `slug` |
+| `predict_fun` | `_QUESTION_FIELDS` | 2/3 | `name` |
+| `predict_fun` | `_ACTIVE_TRADING_STATUSES` | 1/2 | `trading` |
+| `predict_fun` | `_ACTIVE_MARKET_STATUSES` | 2/3 | `active` |
+
+→ **诚实的结论**：§二十一 钉住的是**标度契约**（那才是它的目的），而**字段清单的逐元素覆盖仍是抽样**。
+**"修了 1 个代表" ≠ "补齐"。** 这正是"补一条夹具"这种措辞的危险处。
+
+### 22.2.2 全仓最有价值的一条：`sports_fact_service._KNOWN_KINDS`（5/12）
+
+它是一个**校验白名单**：`if kind not in _KNOWN_KINDS: raise SportsFactValidationError("unsupported_kind")`。
+12 个成员里只有 **5 个**在测试里出现（已逐条回读 `test_sports_fact_service.py` 核实，与扫描器一致）：
+`injury` / `discipline` / `qualification` / `player_award` / `team_stat`。
+**未被引用的 7 个**：`availability`、`suspension`、`match_state`、`match_result`、`lineup`、`player_stat`、`tournament_status`。
+
+→ **为什么这条最值得修**：白名单成员一旦拼错 → 该 `kind` 的体育事实在**入库时被静默拒绝**
+（`unsupported_kind`），而现有测试**不会红**。与 §18.2 同构，落点从"标度"换成"**准入名单**"。
+
+### 22.2.3 其余契约型常量（未逐条定性）
+
+`world_cup_prediction_pipeline._KNOCKOUT_STAGES` 0/4、`football_live_schedule_service._ALLOWED_STATUSES` 1/6、
+`world_cup_statistics_source._SKIP_PLAYER_STAT_PATHS` 0/10、`kalshi_event_source._SETTLED_STATUSES` 1/4、
+`football_live_availability_service._ALLOWED_ROLES` 1/4、`event_store._PLATFORM_NAME_SETTINGS` 0/8、
+`club_elo_service._PREFIXES` / `_SUFFIXES` 0/8、`world_cup_quality_service.ENGINE_NAMES` 3/4、
+`execution_quality_service._STRONG_DIRECTIONS` 1/2、`factor_attribution._OUTCOME_KEYS` 3/5、
+`mlb_adapter._MLB_PLAYOFF_TYPES` 1/5。
+
+⚠️ **其中 3 个是低信号，别当缺口报**：`_MLB_PLAYOFF_TYPES` 的未覆盖项是**单字母** `D/F/W/P`、
+`_STRONG_DIRECTIONS` 是 `NO`、`_OUTCOME_KEYS` 是 `home`/`away` —— 短词/常用词做"字面量存在性"判据几乎不可靠。
+**判据：元素越短、越通用，这个扫描越不适用。**
+
+📌 **附带取证**：`world_cup_statistics_source._SKIP_PLAYER_STAT_PATHS` 是个 `set`，里面**同时**有
+`"games.appearences"` 与 `"games.appearances"` —— **这不是笔误**，是给"上游拼错键名"留的**防御性条目**
+（用于 `if path in _SKIP_PLAYER_STAT_PATHS: continue`）。它从未被测试引用，属**真覆盖缺口**，
+但"两处拼写"本身是**正当的**（同 §20.3b 的 `{'fc','cf'}`）。
+
+## 22.3 两处**常量级**发现（不是覆盖率问题，是数据本身）
+
+### 22.3.1 🔴 `kalshi_sports_source._KALSHI_SPORTS_SERIES_PREFIXES` 有**重复元素**
+
+```python
+_KALSHI_SPORTS_SERIES_PREFIXES = (
+    "KXNBAGAME", "KXMLBGAME", "KXNHLGAME",
+    "KXSOCCEREPL", "KXSOCCERUCL", "KXSOCCERWCS",
+    "KXNFL", "KXNBAGAME",          # ← 与第 1 项重复
+)
+```
+
+它是 `tuple`（不是 `set`）→ 重复**不会**被折叠，但用于
+`series.upper().startswith(_KALSHI_SPORTS_SERIES_PREFIXES)` → **功能上无害**。
+但第 8 个槽位**本该是另一个联赛前缀**（如 WNBA / NCAA），现在被重复项占掉
+→ **那类体育市场会被静默丢出过滤**。
+**这是"疑似漏项"，不是"冗余"** —— 建议找作者确认第 8 项本意，**不宜代决**。
+
+### 22.3.2 `club_elo_service._PREFIXES` 与 `_SUFFIXES` **逐字相同**
+
+两者都是 `("afc","fc.","cf.","ac.","fc","cf","ac","sc")`。
+读 `_normalize_team_name` 的 docstring 与上方注释（"Keep 3-char tokens ahead of 2-char tokens"）后判断：
+**同一套前后缀在两侧都出现是合理的**（`FC Bayern` 与 `Arsenal FC`）→ **正当的重复**。
+但它是 §20 那句"**重复的『数据』也要比**"的实例：**这份重复在"函数体"口径下完全隐形。**
+
+## 22.4 判据小结（可复用）
+
+1. **"被接受的枚举 / 白名单"是缺口高发地** —— 对它写代码容易、逐成员做夹具很难。
+   凡 `if x not in CONST` / `startswith(CONST)` / `CONST[x]` 这种**按名单查**的位置，都该照此扫一遍。
+2. **匹配宽严必须对齐代码的归一化**（`lower()` / `strip()` / 别名），否则扫描器制造**大面积假阳性**（本次实测）。
+3. **元素越短越通用，扫描越不可靠**（单字母、`home`/`away`、`NO`）→ 这类命中必须人工降级。
+4. **词表（STOPWORDS / KEYWORDS）不进这个口径** —— 逐元素覆盖无意义；它们该用**行为测试**（喂一篇文本看输出）覆盖。
+5. **含重复元素的常量**是独立的第三类发现：`set` 会折叠、`tuple` 不会；后者常藏着**漏项**。
+
+## 22.5 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| 为 §22.2 的任一缺口**补夹具** | ⏳ 未动（本节只做扫描与定性；改测试需单独拍板）|
+| 修 `_KALSHI_SPORTS_SERIES_PREFIXES` 的疑似漏项 | ⏳ 未动（**第 8 项本意需作者确认**，不宜代决）|
+| §19.2 的其余 39 组、§21.7 的 harness 登记、§17.2.1 的 `/trades` 视图 | ⏳ 仍未动 |
+
+---
+
+# 二十三、按 §22.2 补夹具：白名单全量 + 事件源字段元组改「自扩展」，并量出这类夹具的**盲区**（2026-09-28）
+
+> 承接 §22.2（29 个契约型常量存在未测元素）与 §22.2.1（§21 的修复只是抽样）。
+> 本节**只改测试**，生产代码一字未动。
+
+## 23.1 改法：把「逐条枚举」换成「**驱动自常量**」
+
+| 位置 | 做法 |
+|---|---|
+| `sports_fact_service._KNOWN_KINDS` | 新增 `test_every_known_kind_passes_validation`：对白名单里**每一个** kind 各跑一遍 ingest，断言 `error_count == 0`；给每条 fact 独立 `fact_id`，顺带断言 `total == 12`（证明无静默 upsert 覆盖）|
+| 三个事件源的 `_QUESTION_FIELDS` / `_ID_FIELDS` / `_VOLUME_FIELDS` / `_LIQUIDITY_FIELDS` / `_ACTIVE*_STATUSES` | 各新增 `test_every_listed_field_and_status_is_honoured`：`for field in getattr(source, CONST)` —— **遍历模块自己的常量** |
+| `opinion._PROBABILITY_FIELDS` | 把 §21 那条「枚举 3 个兜底字段」改为**遍历常量本身**，4 个成员全测 |
+
+**为什么用「驱动自常量」**：以后往这个元组/白名单**加一个成员，它立刻被覆盖**，不需要有人记得回来补用例。
+—— 这正是 §18.2 缺口的成因：**加字段的人不会同时回来加夹具。**
+
+## 23.2 但必须量出这类夹具的**盲区**（变异验证）
+
+**三个变异**（字节级；每次跑完**逐字节还原**并核对 sha256）：
+
+| 变异 | 结果 | 说明 |
+|---|---|---|
+| **M1** 白名单成员没小写化（`"match_state"` → `"Match_State"`）| **RED**（2 failures）| **承重**：代码对输入 `.lower()` 再查名单 → 混合大小写的成员**永远匹配不上**，该 kind 静默被拒 |
+| **M2** 从白名单**删掉**一个成员（`"availability"`）| 首轮 **GREEN** → 加钉子后 **RED** | 见 §23.2.1 |
+| **M3** 从 `opinion._QUESTION_FIELDS` **删掉**一个字段（`"name"`）| **GREEN** | **盲区仍在**，见 §23.2.2 |
+
+🔴 **关键结论：驱动自常量的夹具，对「成员被删除」是盲的。**
+遍历 `_KNOWN_KINDS` 时删掉一个成员 = 少跑一轮，**全部断言照样通过**（实测 M2 首轮 GREEN、M3 GREEN）。
+与 §21.5 的「行为测试对重复是盲的」同族：**它只证明「列出来的都被兑现」，不证明「清单是全的」。**
+
+### 23.2.1 对白名单补了「完整性钉子」（M2 由此转红）
+
+沿用本仓既有做法（`test_mutation_verify.py` 用**显式有序清单**钉住 set 名单、app-nav 测试用显式标签清单），
+新增 `test_the_whitelist_matches_the_documented_kinds`：把 12 个 kind 写成**显式字面量集合**与 `_KNOWN_KINDS` 比相等。
+→ **M2 从 GREEN 转 RED**（删除成员必须是一次「看得见」的编辑）。复测：M1 = 2 failures、M2 = 1 failure。
+
+### 23.2.2 事件源字段元组的完整性**没有**加钉子（有意）
+
+原因：这些元组是**回退优先级表**，"完整性"取决于 **provider 到底发哪些字段** ——
+仓库里**没有可据以钉住的权威清单**（§22.3.1 的 kalshi 疑似漏项正是要问作者）。
+硬钉一份我猜的清单 = 把猜测写成契约。→ **保留盲区并在此显式声明**：
+`_QUESTION_FIELDS` / `_ID_FIELDS` / `_VOLUME_FIELDS` / `_LIQUIDITY_FIELDS` / `_ACTIVE*_STATUSES`
+的**成员增删不受任何守卫约束**。
+
+## 23.3 验证
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 受影响 5 个 + 集成 1 个文件 | pytest | junit `tests=264 failures=0 errors=0`（含 91 subtests）|
+| Lint | `ruff check app/` | `All checks passed!` |
+| 行尾 | `scripts/eol_audit.py` | `damage: none`（4 个测试文件 + 文档；测试文件均纯 CRLF）|
+| 变异 | M1 / M2 / M3 | 见 §23.2；三次均**逐字节还原**（sha256 前后一致）|
+
+新增用例：`sports_fact_service` **+3**（全量 ingest、完整性钉子、负向 `unsupported_kind`）、
+三个事件源**各 +1**（自扩展遍历）、`opinion._PROBABILITY_FIELDS` 由枚举 3 个改为遍历 4 个。
+
+## 23.4 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| §22.2.3 其余契约常量（`_KNOCKOUT_STAGES`、`_ALLOWED_STATUSES`、`_SETTLED_STATUSES`、`_ALLOWED_ROLES`、`_PLATFORM_NAME_SETTINGS` 等）| ⏳ 未动（同一改法可套用；本轮先做 §22 点名的优先项）|
+| §22.3.1 `_KALSHI_SPORTS_SERIES_PREFIXES` 第 8 项 | ⏳ 仍需作者确认 |
+| §21.7 的 harness 登记 / §17.2.1 的 `/trades` 视图 | ⏳ 仍未动 |
+
+**提交状态**：本节只改测试（4 个文件）+ 文档；**未提交**。
+
+---
+
+# 二十四、把 §23 的改法套到 §22.2.3：先摸**消费方式**再取舍，并量出「驱动自常量」的盲区是**系统性**的（2026-09-28）
+
+> 承接 §22.2.3（11 个契约型常量，未逐条定性）与 §23.4（该清单标着"未动"）。
+> 本节**只改测试**（7 个已有文件 + 1 个新文件），生产代码一字未动。
+
+## 24.1 取舍判据：先看常量**怎么被消费**，再问夹具能不能承重
+
+§23 的结论是「驱动自常量 + 完整性钉子」。照抄之前必须先问一句：
+**这个常量是按"名字 / 成员资格"被消费的吗？** 只有是，逐成员夹具才承重；否则就是同义反复。
+
+| 消费形态 | 典型代码 | 逐成员夹具 |
+|---|---|---|
+| **校验白名单**（不匹配 → 整体拒绝） | `if x not in CONST: return None` | ✅ 承重：缺一成员 = 合法输入被**静默**丢掉 |
+| **准入 / 排除集**（匹配 → 排除、跳过） | `if x in CONST: continue` | ✅ 承重：缺一成员 = 该排除的**静默**留下 |
+| **同源循环**（拿常量当字典键集） | `for k in CONST: out[k] = …` | ❌ 同义反复（遍历自己） |
+| **能力探测** | `for k in CONST: if hasattr(obj, k)` | ❌ 同义反复 |
+| **先归一化再查表** | `_normalize(x) in CONST` | ⚠️ 必须连 `_normalize` 的**值域**一起查（§24.4） |
+
+## 24.2 §22.2.3 十一条逐条定性
+
+| # | 常量 | 消费方式 | 判定 | 落地 |
+|---|---|---|---|---|
+| 1 | `football_live_availability_service._ALLOWED_ROLES` (4) | `role not in …` → `_parse_absences` 返回 `None` → **整份快照作废** | ✅ 补 | 循环 + 钉子 |
+| 2 | `football_live_schedule_service._ALLOWED_STATUSES` (6) | 同上（`status not in …` → 整份作废） | ✅ 补 | 循环 + 钉子 |
+| 3 | `kalshi_event_source._SETTLED_STATUSES` (4) | `status.lower() in …` → 排除该市场 | ✅ 补 | 循环（含 `.upper()` 一腿）+ 钉子 |
+| 4 | `world_cup_statistics_source._SKIP_PLAYER_STAT_PATHS` (10) | `if path in …: continue` → 跳过该叶子 | ✅ 补 | 循环 + 钉子 |
+| 5 | `club_elo_service._SUFFIXES` (8) | `for s in …: if normalized.endswith(s)` | ✅ 补 | 循环 + 钉子（**有序**元组） |
+| 6 | `club_elo_service._PREFIXES` (8) | `for p in …: if normalized.startswith(p)` | ✅ 补 | 同上 |
+| 7 | `mlb_adapter._MLB_PLAYOFF_TYPES` (5) | `game_type in … or any(tok in series_desc…)` | ✅ 补 | 循环（payload 刻意省 `seriesDescription`）+ 钉子 |
+| 8 | `world_cup_quality_service.ENGINE_NAMES` (4) | `for engine in ENGINE_NAMES` 建 `by_engine` 字典 | ❌ 同义反复 → **改关系型守卫** | §24.4 |
+| 9 | `world_cup_prediction_pipeline._KNOCKOUT_STAGES` (4) | `_normalize_stage(stage) in …` | ⚠️ 归一化后查表 → **关系型守卫** | §24.4 |
+| 10 | `event_store._PLATFORM_NAME_SETTINGS` (8) | `for attr in …: getattr(settings, attr)` | ⛔ **跳过**：已有守卫 | 见下 |
+| 11 | `execution_quality_service._STRONG_DIRECTIONS` (2) | `raw_direction in …` | ⛔ 跳过：元素太短，且真正的病是**5 处重复**（§24.6.2） | — |
+| — | `factor_attribution._OUTCOME_KEYS` (5) | `for k in …: if hasattr(item, k)` | ⛔ 跳过（能力探测，无物可断言） | — |
+
+**第 10 项为何跳过**：`app/memory/event_store.py:517-522` 的注释已写明 `test_event_store_source_names`
+**把这份名单与"扫描适配器模块"的结果对比**。读码核实，那是**两道精确划分（exact partition）+ 一道下界**：
+
+| 守卫 | 位置 | 断言 |
+|---|---|---|
+| `test_platform_name_settings_matches_what_the_adapters_read` | `test_event_store_source_names.py:135-150` | `assertEqual(scanned, set(_PLATFORM_NAME_SETTINGS))`，docstring 明说 *"Exact partition, not a subset: **extra or missing entries both fail**"* |
+| `test_every_platform_name_setting_is_classified` | `test_source_platform_identity.py:89-103` | `assertEqual(classified, set(_PLATFORM_NAME_SETTINGS))` |
+| `test_scan_source_is_populated`（守卫的守卫） | `test_source_platform_identity.py:83-87` | `assertGreaterEqual(len(…), 8)` |
+
+→ 这里**已有独立 oracle**（"扫适配器模块"扫出来的那份），所以**删除方向本来就被覆盖** ——
+它恰好是 §24.5.1 那条判据的**现成正例**。再加一道夹具只是叠床架屋。
+
+**第 11 项与 `_OUTCOME_KEYS` 为何跳过**：§22.2.3 已判定"**字面量存在性扫描**"对单字母 / 常用词不可靠。
+这与"能不能写夹具"是两件事 —— 第 7 项（`_MLB_PLAYOFF_TYPES`，也是单字母）就补了夹具，
+因为它的消费形态**有行为可断言**；而 `_STRONG_DIRECTIONS` / `_OUTCOME_KEYS` 没有（一个是 `in` 判等、
+一个是 `hasattr` 探测），**再加夹具只会得到一条同义反复**。
+
+## 24.3 落地夹具：**循环 + 钉子**成对使用
+
+7 个常量各补两条：
+
+- **循环**（`for member in CONST:`）—— 逐成员走一遍真实的拒绝 / 放行路径，断言**列出来的都被兑现**；
+- **钉子**（`assertEqual(CONST, {…显式字面量…})`）—— 把成员集本身钉住。
+
+二者**缺一不可**，理由见 §24.5。几个实现细节：
+
+- `kalshi` 的循环跑**两个拼写**（`status` 与 `status.upper()`），因为代码先 `.lower()` —— 顺带钉住归一化；
+- `world_cup_statistics_source` 的 payload 由 `_SKIP_PLAYER_STAT_PATHS` **生成**（按 `.` 拆成嵌套 dict），
+  再塞一个 `shots.total` 作**对照叶子**：断言"没有任何被禁路径出现"**且**"对照叶子在" —— 否则空载荷会让测试真空通过；
+- `mlb_adapter` 的 payload **刻意不带 `seriesDescription`**：该函数`OR`了一条文本兜底
+  （`any(tok in series_desc …)`），带上它就会**掩盖**成员缺失；
+- `club_elo_service` 的两个表钉的是**有序元组**（不是集合）：`_normalize_team_name` 遇到第一个匹配就
+  `break`，所以"3 字符记号必须排在 2 字符记号之前"是**契约的一部分**（文件里的注释也这么说）。
+
+## 24.4 两条关系型守卫：**用"另一个常量"当 oracle**（不写字面量）
+
+`ENGINE_NAMES` 与 pipeline 的 `_KNOCKOUT_STAGES` 属于「同源循环 / 归一化后查表」两类，
+逐成员夹具只能得到同义反复。对它们改用**跨常量关系**：
+
+| 守卫 | 关系 | 破坏后会怎样 |
+|---|---|---|
+| `world_cup_quality_service.ENGINE_NAMES` | `== set(world_cup_engines.ENGINES) \| {"integrated"}` | 新注册一个可运行引擎而忘了加进名单 → 质量报告的 `by_engine` **少一个键**（`_summarize([])` 报一个干净的空桶，**不报错**） |
+| pipeline `_KNOCKOUT_STAGES` | `⊆ set(_STAGE_MAP.values())` | 加一个 normalizer **永远产生不出来**的名字 = 死成员，`is_knockout` 恒 False |
+| pipeline `_STAGE_MAP.values()` | `− _KNOCKOUT_STAGES == {"group_stage", "third_place"}` | 别名**目标**拼错（`"quarter finals": "quarterfinals"`）→ 多出一个既非淘汰赛、也非小组赛的规范形 |
+| `elo_odds_engine._KNOCKOUT_STAGES`、`situational_adjust._KNOCKOUT_STAGES` | `⊇ pipeline._KNOCKOUT_STAGES` | 引擎副本少一个规范形 → 该轮次静默回落到"允许平局"的安全默认 |
+
+`ENGINE_NAMES` 那条落在 `backend/tests/test_world_cup_quality_service.py`；
+其余三条落在新文件 `backend/tests/test_knockout_stage_whitelist_consistency.py`
+（后者的模块 docstring 里写明三份副本各自的成员与归一化方式）。
+
+## 24.5 🔴 变异验证：「驱动自常量」对**成员删除**是**系统性**盲的
+
+对 7 个常量各做一次**字节级**删除成员变异，**同一个变异分别只跑「循环」与只跑「钉子」**：
+
+| 变异（删掉一个成员） | 只跑**循环** | 只跑**钉子** |
+|---|---|---|
+| `_ALLOWED_ROLES -= bench` | **GREEN** | **RED** |
+| `_ALLOWED_STATUSES -= suspended` | **GREEN** | **RED** |
+| `_SETTLED_STATUSES -= determined` | **GREEN** | **RED** |
+| `_SKIP_PLAYER_STAT_PATHS -= substitutes.bench` | **GREEN** | **RED** |
+| `_SUFFIXES -= ac.` | **GREEN** | **RED** |
+| `_PREFIXES -= sc` | **GREEN** | **RED** |
+| `_MLB_PLAYOFF_TYPES -= W` | **GREEN** | **RED** |
+
+**7/7 循环全绿、7/7 钉子全红** —— §23.2 在 `_KNOWN_KINDS` 上看到的现象**不是个案，而是这类夹具的定义性盲区**：
+`for member in CONST` 里的 `CONST` **就是被测对象本身**，删掉一个成员只是**少跑一轮**，
+"每一条都通过了"这句话里**少掉的那一条不会说话**。
+
+关系型守卫**不需要钉子也承重**（同一批变异）：
+
+| 变异 | 结果 |
+|---|---|
+| `ENGINE_NAMES -= gbm` | **RED** |
+| `_STAGE_MAP["quarter_final"] = "quarterfinals"`（别名目标拼错） | **RED** |
+| pipeline `_KNOCKOUT_STAGES += round_of_32`（死成员） | **RED** |
+| `elo_odds_engine._KNOCKOUT_STAGES -= final` | **RED** |
+| **对照**：`situational_adjust._KNOCKOUT_STAGES -= third_place` | **GREEN**（有意：见 §24.6.1，这条差异**故意不钉**） |
+
+### 24.5.1 判据升级（把 §23.2 的说法收紧）
+
+§23.2 的结论是"驱动自常量对删除是盲的，需要**显式字面量**"。本轮实测把它收紧成更本质的一句：
+
+> **oracle 必须独立于被测常量。**
+>
+> - 显式字面量清单 → 独立 ✅（钉**成员集**）
+> - **另一个常量** → 独立 ✅（钉**关系**）
+> - 常量自己 → **不独立** ❌（断言写得再细也一样，见上表 7/7）
+
+所以"驱动自常量"这个技巧的正确表述是：**它只覆盖"新增成员会被自动跑到"这一个方向**
+（§23.1 的原意），**不能**当作"成员集正确性"的守卫。两者互补，不要拿一个当另一个。
+—— 这也解释了 §23.2.2 为什么对事件源字段元组**只能**保留盲区：那里的 oracle 既不是仓库里的另一个常量，
+也不是可以据以钉住的清单（它取决于 provider），**三个选项里没有独立的那一个**。
+
+## 24.6 常量级发现（不是覆盖率问题，是数据本身）
+
+### 24.6.1 🔴 三份 `_KNOCKOUT_STAGES` 的成员集**互不相同**，且其中一份的注释与事实不符
+
+| 模块 | 成员数 | 内容 | 该处对 stage 的归一化 |
+|---|---|---|---|
+| `world_cup_prediction_pipeline` | **4** | `round_of_16, quarterfinal, semifinal, final` | 先过 `_STAGE_MAP` 取**规范形** |
+| `kernel.engines.elo_odds_engine` | **6** | + `quarter_final, semi_final` | 只 `.lower().strip()`（**连空格都不换**） |
+| `kernel.engines.situational_adjust` | **7** | + `third_place` | `.lower().strip()` + 空格→下划线 |
+
+三处**归一化宽严不同**，所以"成员集不同"部分是**有原因的**（各自的输入长什么样不一样）。
+但由此暴露两条真实差异：
+
+1. 🔴 `elo_odds_engine.py:44` 的注释写着 *"Matches the legacy pipeline's `_KNOCKOUT_STAGES` set"* ——
+   **按字面不成立**（4 vs 6）。它只说对了"**归一化之后**语义一致"。后人若照字面把它"同步"成 4 个成员，
+   带空格的 `"quarter final"` 一类输入会**静默变成非淘汰赛**。
+2. ⚠️ `third_place` 只在 `situational_adjust` 里算淘汰赛，pipeline 不算。
+   三四名决赛同样必有加时 / 点球（**不允许平局**），所以这**可能是 pipeline 侧的漏项**；
+   也可能是"三四名不参与 `is_knockout` 的建模选择"。**本机无判据，需作者确认**（同 §22.3.1 的处置）。
+
+本节只把**必须成立的方向**（规范形 ⊆ 两个引擎副本）钉住，**这条差异故意不钉**（对照变异实测 **GREEN**）。
+
+### 24.6.2 `_STRONG_DIRECTIONS` 在 **5 处**逐字重复（且容器类型不一致）
+
+```python
+app/replay/metrics.py:33                        _STRONG_DIRECTIONS = {"YES", "NO"}   # set
+app/services/execution_quality_service.py:49    _STRONG_DIRECTIONS = ("YES", "NO")   # tuple
+app/services/guardrail_service.py:63            _STRONG_DIRECTIONS = ("YES", "NO")   # tuple
+app/services/market_quality_service.py:45       _STRONG_DIRECTIONS = ("YES", "NO")   # tuple
+app/services/source_reliability_service.py:50   _STRONG_DIRECTIONS = ("YES", "NO")   # tuple
+```
+
+（另在 2 份设计文档 `docs/superpowers/plans/` 里也各有一份。）五处的注释都在描述**同一个契约**：
+"可被降级为 WAIT 的方向；WAIT/AVOID 已是保守态，不再被降级"。
+→ 这是 §18 / §19 那类"同一份数据写多遍"的实例，只是**落在常量上**（§20 的"函数体口径"看不见）。
+本轮**不收敛**（改生产代码需单独拍板），仅登记。
+
+### 24.6.3 🔴 `ENGINE_NAMES` 有 4 个成员，批量汇总却只数 **3 个桶**（`gbm` 落空）
+
+`world_cup_quality_service.ENGINE_NAMES` = `(elo_odds, hybrid, gbm, integrated)`。
+但两处批量汇总都是**无 `else` 的三段 `if/elif`**：
+
+- `world_cup_prediction_pipeline.py:1582-1587`（`batch_predict_matches` 汇总）
+- `api/routes/world_cup_predictions.py:665-670`（SSE `engine switch` 汇总）
+
+两处都只累计 `elo_odds_count / hybrid_count / integrated_count`，**没有 `gbm_count`**
+（全仓 `grep -n gbm_count` **零命中**）。前端 `engine-console.tsx:43-45` 也照这三桶渲染（`ELO n / HYB n / 融合 n`）。
+
+→ **后果**：一次 `engine="gbm"` 的批量预测，`succeeded` 会计数，但三个桶全 0，
+**控制台看起来像"什么都没跑"**。这与 §22.2.2 的 `_KNOWN_KINDS` **同形**：
+**被接受的枚举值在下一跳没有落点**。（`frontend/src/lib/world-cup/engine-api.ts:40-42` 的字段均为可选，
+所以它不会报类型错 —— 又一个"类型系统不会替你发现"的例子。）
+**未改**：属展示 / 产品口径，需拍板。
+
+## 24.7 明确保留的盲区（有意，不是遗漏）
+
+| 盲区 | 为什么保留 |
+|---|---|
+| 两个 kernel 引擎副本里的**别名**成员（`quarter_final` / `semi_final`） | 完整性取决于"上游到底会发哪些拼写"，仓库里没有权威清单 → 硬钉 = 把猜测写成契约（同 §23.2.2） |
+| `event_store._PLATFORM_NAME_SETTINGS` | 已有两道独立守卫（§24.2 第 10 项） |
+| `_STRONG_DIRECTIONS` / `_OUTCOME_KEYS` 的成员 | 元素太短 + 消费形态无物可断言（§24.2） |
+
+## 24.8 验证
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 8 个文件 | pytest | junit `tests=108 failures=0 errors=0 skipped=0`（§24.3 的循环 + §24.4 的关系落地后为 **102**，再补 6 条钉子后 **108**） |
+| Lint | `ruff check <8 个测试文件>`（`backend/ruff.toml`） | 只有 3 个**既有** F401，全在 `test_club_elo_service.py`（`io.StringIO` / `pytest` / `datetime.timedelta`，**均已在 HEAD 存在**）→ **新行零新增** |
+| 行尾 | `scripts/eol_audit.py` | `line-ending damage: none`（CRLF 文件保 CRLF、两个 LF 文件保 LF、新文件 `NEW CRLF=83 bareLF=0`） |
+| 变异 | 12 个变异 × 分腿 = **19 项检查** | **19/19 全部符合预期**；每次跑完**逐字节还原**，7 个被变异的 app 文件 **sha256 前后一致** |
+
+本批新增 **17** 个用例：**循环 7**（§24.3 的第 1-7 项）、**关系 4**（§24.4 的四条）、**钉子 6**
+（前 4 项各 1 + `club_elo` 两个表合并为 1 + `mlb` 1）。`backend/tests/` 这 8 个文件的 junit 计数由
+**102（循环 + 关系）→ 108（补钉子）**。
+
+## 24.9 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| 收敛 `_STRONG_DIRECTIONS` 的 5 处重复 | ⏳ 未动（改生产代码需单独拍板） |
+| 给 `gbm` 补汇总桶（后端 2 处 + 前端 1 处） | ⏳ 未动（展示 / 产品口径） |
+| 判定 `third_place` 该不该算淘汰赛 | ⏳ 未动（**需作者确认**） |
+| 把本批 12 个变异登记进 `scripts/mutation_verify.py` | ⏳ 未动（同 §21.7，harness 登记待拍板） |
+| §22.3.1 `_KALSHI_SPORTS_SERIES_PREFIXES` 第 8 项 | ⏳ 仍待作者确认 |
+| §17.2.1 的 `/trades` 已作废视图 | ⏳ 仍未动 |
+
+**提交状态**：本节只改测试（7 个已有文件 + 1 个新文件）+ 文档；**未提交**。
+
+---
+
+# 二十五、把 §24.5 的变异登记进常驻 harness（含 §21.7 的 identity 守卫）—— 5 套 / 44 个变异（2026-09-28）
+
+> 承接 §24.9 的「把本批 12 个变异登记进 `scripts/mutation_verify.py`」与 §21.7 的「identity 守卫登记」。
+> 本节**改的是工具**（`backend/scripts/mutation_verify.py` + `backend/tests/test_mutation_verify.py`），
+> 生产代码一字未动。
+
+## 25.1 为什么要登记，而不是继续用一次性脚本
+
+§23 / §24 的变异验证都跑在**仓库外的一次性脚本**上，跑完即删。后果是：
+**那 19 项检查只在当时成立过这一次**，而它们守着的守卫是**永久**的 —— 半年后没人能把它重跑一遍。
+本仓自己的规矩（§十一 的 harness 合并、以及技能里的"常驻探针必须有守护测试 + 变异 harness"）
+指向同一个结论：**被验证过的东西要能被再验证一次。**
+
+## 25.2 新增第 5 套 `whitelist-fixtures`（W1–W14）
+
+| # | 变异 | 目标文件 | 守卫 |
+|---|---|---|---|
+| W1 | `_ALLOWED_ROLES` 删 `bench` | `football_live_availability_service` | `test_the_role_list_is_pinned` |
+| W2 | `_ALLOWED_STATUSES` 删 `suspended` | `football_live_schedule_service` | `test_the_status_list_is_pinned` |
+| W3 | `_SETTLED_STATUSES` 删 `determined` | `kalshi_event_source` | `test_the_settled_status_list_is_pinned` |
+| W4 | `_SKIP_PLAYER_STAT_PATHS` 删 `substitutes.bench` | `world_cup_statistics_source` | `test_the_skip_list_is_pinned` |
+| W5 | `_SUFFIXES` 删 `ac.` | `club_elo_service` | `test_the_affix_tables_are_pinned` |
+| W6 | `_PREFIXES` 删 `sc` | `club_elo_service` | 同上（一条钉子同时保护两个表）|
+| W7 | `_MLB_PLAYOFF_TYPES` 删 `W` | `mlb_adapter` | `test_the_playoff_game_types_are_pinned` |
+| W8 | `ENGINE_NAMES` 删 `gbm` | `world_cup_quality_service` | `test_engine_names_match_the_runnable_registry` |
+| W9 | `_STAGE_MAP` 别名目标 → `"quarterfinals"` | `world_cup_prediction_pipeline` | `test_stage_map_values_partition_into_knockout_and_group_stages` |
+| W10 | `_KNOCKOUT_STAGES` 增死成员 `round_of_32` | 同上 | `test_pipeline_knockout_names_are_producible_by_the_stage_map` |
+| W11 | `elo_odds_engine._KNOCKOUT_STAGES` 删 `final` | `kernel/engines/elo_odds_engine` | `test_kernel_engines_recognise_every_canonical_knockout_stage` |
+| W12 | 共享助手放回**功能等价**的本地副本 | `limitless_event_source` | `test_text_number_and_probability_helpers_are_the_shared_objects` |
+| W13 | `_KNOWN_KINDS` 成员违反 `.lower()` 归一化 | `sports_fact_service` | `test_every_known_kind_passes_validation` + `test_the_whitelist_matches_the_documented_kinds` |
+| W14 | `_KNOWN_KINDS` 删 `availability` | `sports_fact_service` | `test_the_whitelist_matches_the_documented_kinds` |
+
+W12 / W13 / W14 顺带把 §21.7（identity）与 §二十三（白名单钉子）的守卫**补登记**了 —— 它们和 W1–W11 同族。
+
+### 25.2.1 🔴 **只登记一半**：7 条「循环腿」不进 harness（有意）
+
+W1–W8 在原地是**成对**落的两条用例：循环（`for m in CONST`）+ 钉子。本节**只登记钉子那条**。
+原因不是省事：harness 的 phase 2 断言的是「**变红**」，一条**期望保持 GREEN** 的变异会被读成失败。
+那半边的实测结论（**7/7 循环全绿**）留在 §24.5。
+
+**这条已写进该套的 `rationale`** —— 否则下一个人看到"W1–W8 的循环腿没登记"会好心补上，
+一补上就把"**盲区**"读成了"**守卫正常**"。
+
+## 25.3 一条从此可复现的证据：W12 的 `1 failed, 1 passed`
+
+`verify` 输出里 W12 的变异轮是：
+
+```
+mutated run -> 1 failed, 1 passed, 15 deselected, 2 subtests passed
+```
+
+那个 `1 passed` 就是**行为用例**（换成功能等价的本地副本后照样过），`1 failed` 才是 identity 断言。
+**§21.5 的「行为测试对重复是盲的」从此可由一条命令复现**（`verify whitelist-fixtures`），
+不再依赖任何人的记忆或一张一次性截图。
+
+## 25.4 验证
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 静态清单守卫 | `pytest tests/test_mutation_verify.py` | **8 passed, 2 subtests passed** —— 14 条新锚点各命中**恰好 1 次**、无裸 LF、守卫名齐、`old != new`、`note` 非空 |
+| 新集四阶段 | `mutation_verify.py verify whitelist-fixtures` | **14/14 全部通过**：phase1 绿 → phase2 红 → phase3 还原后绿 → phase4 sha256 一致 |
+| 全量四阶段 | `mutation_verify.py verify`（**5 套 / 44 个变异**）| **44/44 通过**（18m24s，退出码 0）—— 见 §25.4.1 |
+| Lint | `ruff check scripts/mutation_verify.py tests/test_mutation_verify.py` | `All checks passed!` |
+| 行尾 | `scripts/eol_audit.py` | `line-ending damage: none`；且**被变异的 9 个 app 文件根本不在"已改动"列表里** —— 与 HEAD 逐字节相同，这就是还原的直接证据 |
+
+### 25.4.1 全量 44 个变异的结果
+
+在加入第 5 套之后跑了**一次全量** `verify`（**18 分 24 秒**，退出码 0）：
+
+```
+=== daily-digest        — 每日情报摘要（F1/F2/F3/F5/F6） ===
+=== review-queue        — 复核队列 enabled 回显 + overlay 开关块 + CLI 提示（C1–C6） ===
+=== probability-probe   — 标度错位探针（P1–P15） ===
+=== voided-trade        — 作废预测时冻结其模拟交易（V1–V4） ===
+=== whitelist-fixtures  — 白名单 / 枚举常量的「循环 + 钉子」与关系型守卫（W1–W14） ===
+
+=== 44 个变异校验完毕 ===
+全部通过：每个变异在其修复被回退时都会让对应守卫变红，且还原后逐字节一致。
+```
+
+| 判据 | 结果 |
+|---|---|
+| `[OK ]` 条数 | **44 / 44** |
+| `[FAIL]` 条数 | **0** |
+| `bytes restored False`（还原后 sha256 不一致）| **0** |
+| `red after mutation False`（变异没让守卫变红）| **0** |
+
+→ 这次全量跑的意义有两层：① 新套 14 条**在完整清单里**同样通过；
+② 它同时是**对 harness 本身改动的回归检查** —— 本节对 `mutation_verify.py` 的改动是**纯追加**
+（一句 docstring、一组路径常量、一个追加的 `MutationSet`），引擎一行未动，四套既有变异因此
+**原样通过**。这两点合起来才构成"改动无害"的证据，不是单看新套绿。
+
+📌 **一条经验**：`verify > f.txt` 在跑完前文件**始终是 0 字节** —— Python 重定向时全缓冲，
+看不到任何进度。要观察进度就别重定向（或加 `-u`）。本次 18 分钟里只能靠
+`git status --porcelain -- backend/app` 为空、以及进程仍在，来推断"当下不在变异态"。
+
+## 25.5 结案（追加式，不改旧文）
+
+- **§21.7**「把 identity 守卫登记进 `scripts/mutation_verify.py`」→ 由 **W12** 结案。
+- **§24.9**「把本批 12 个变异登记进 `scripts/mutation_verify.py`」→ 由 **W1–W11**（11 条）+ W12 结案。
+- W13 / W14 是**额外**补登记（§二十三 的 `_KNOWN_KINDS` 守卫），原不在两份清单里。
+
+## 25.6 状态
+
+- 本节改 2 个**已跟踪**文件：`backend/scripts/mutation_verify.py`、`backend/tests/test_mutation_verify.py`。
+- 两者都是 **LF**（HEAD LF / 树 LF），`eol_audit` 无 damage。
+- `tests/test_mutation_verify.py` 的 `test_the_four_sets_are_present` 已按该文件自己的要求
+  改名/改为 `test_the_five_sets_are_present` 并追加 `"whitelist-fixtures"` —— 那个断言是**故意有序且精确**的
+  （注释原话：*"an inventory nobody has to touch is an inventory that can rot"*）。
+- **未提交**。
+
+## 25.7 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| `_STRONG_DIRECTIONS` 的 5 处重复是否收敛 | ⏳ 仍待拍板（§24.6.2）|
+| 给 `gbm` 补汇总桶（后端 2 处 + 前端 1 处）| ⏳ 仍待拍板（§24.6.3）|
+| `third_place` 该不该算淘汰赛 | ⏳ 仍待作者确认（§24.6.1）|
+| §22.3.1 `_KALSHI_SPORTS_SERIES_PREFIXES` 第 8 项 | ⏳ 仍待作者确认 |
+| §17.2.1 的 `/trades` 已作废视图 | ⏳ 仍未动 |
+
+---
+
+# 二十六、把 §24.6.1 / §22.3.1 两条「待作者确认」查到证据层，并把淘汰赛白名单的**户数**从 3 更正为 5（2026-09-28）
+
+> 承接 §24.6.1（三份 `_KNOCKOUT_STAGES`）、§24.6.3（`gbm` 落空）、§22.3.1（Kalshi 第 8 项）与 §25.7 的未做清单。
+> **本节只查事实：生产代码一字未改**，唯一改动是新增测试模块的 **docstring 措辞**（§26.6）。
+> 结论里有一条**扩大**（3 → 5 户）、两条**收窄**（§24.6.3 的可达路径、§22.3.1 的"漏项"前提）。
+
+## 26.1 口径
+
+只问三个问题，前两个可机械回答，第三个不是：
+
+| # | 问题 | 可否机械回答 |
+|---|---|---|
+| ① | 同一件事在仓里**共有几处**？ | ✅ 普查 |
+| ② | 这几处**是否给出不同答案**？ | ✅ 可复现 |
+| ③ | **谁对谁错**？ | ❌ 不代决（§24.6.1 / §22.3.1 的挂账**一分不减**）|
+
+**本节只交付 ① 与 ②。**
+
+## 26.2 淘汰赛白名单全户普查：不是 3 处，是 **5 处定义 + 1 处 import 复用**
+
+§24.6.1 数的是**带 `_KNOCKOUT_STAGES` 这个名字的定义**（3 处）。
+按**行为**数（"谁在判 is_knockout"），另有 2 处把同样的名单写在**函数体里**：
+
+| # | 位置 | 形态 | 成员 | 对判定输入做的归一化 |
+|---|---|---|---|---|
+| 1 | `world_cup_prediction_pipeline.py:196` | 具名 `set` | **4** `round_of_16, quarterfinal, semifinal, final` | 先过 `_STAGE_MAP`（:172-193）取**规范形** |
+| 2 | `kernel/engines/elo_odds_engine.py:47` | 具名 `frozenset` | **6** +`quarter_final, semi_final` | `.lower().strip()` |
+| 3 | `kernel/engines/situational_adjust.py:20` | 具名 `frozenset` | **7** +`third_place` | `.lower().strip()` + 空格→`_` |
+| 4 | `kernel/engines/gbm_engine.py:40` | **函数内联 set** | **6** `round_of_16, quarter_final, semi_final, final, knockout, playoff` | 只 `.lower()` |
+| 5 | `world_cup_verified_result_correction_service.py:253` | **函数内联 set** | **9** `round_of_32, round_of_16, quarterfinal, quarterfinals, semi_final, semifinal, semifinals, third_place, final` | `.strip().lower()` + `-`/空格→`_` |
+| （复用）| `sports/football/engines/football_multi_factor_engine.py:44` | `from … import _KNOCKOUT_STAGES` | = **#2** | 同 #2 |
+
+📌 **第 6 处不是副本，是真 `import`**（`from app.kernel.engines.elo_odds_engine import _KNOCKOUT_STAGES`）。
+**这正好是 §19.2 判据的正例**：这一处**共享契约**，所以它**已经收敛**了；其余 5 处各自为政。
+
+🔴 **两个内联副本是本节新增的发现**（§24.6.1 漏了它们）：
+- **#4 `gbm_engine` 缺两个规范形**（`quarterfinal` / `semifinal`），反而多了 `knockout` / `playoff`；
+- **#5 结果校正服务 9 个成员**、含复数形，且**含 `third_place`**。
+
+## 26.3 `third_place`：5 个判定点里 **2 个**算淘汰赛 —— 而且这不是"格式差异"
+
+对 `third_place` 表态的一共 5 处（#6 随 #2）：
+
+| 判定点 | `third_place` 算淘汰赛？ |
+|---|---|
+| #1 pipeline `is_knockout` | ❌ |
+| #2 `elo_odds`（及复用它的 #6）| ❌ |
+| #3 `situational_adjust` | ✅ |
+| #4 `gbm_engine` | ❌（不在名单里）|
+| #5 **结果校正服务** | ✅ |
+
+→ **4 / 6 / 7 的成员数差异**可以归因于"各自输入拼写不同"（§24.6.1 已说明）。
+但 `third_place` 是**同一个词**：它在 #3 / #5 里算、在 #1 / #2 里不算 —— **归一化宽严解释不了这个**。
+
+🔴 **直接后果（读代码即得，不需运行）**：一场三四名决赛
+- `world_cup_verified_result_correction_service.py:224` 认为它**不许打平** →
+  `home_score == away_score` 时**强制**要求 `winner` + `penalty_score`，
+  否则返回 `knockout_draw_requires_winner` / `knockout_draw_requires_penalty_score`（**拒绝该次校正**）；
+- 而 pipeline 的 `is_knockout=False` → 传到 `calculate_elo_win_probability(is_knockout=False)`
+  （`world_cup_prediction_pipeline.py:240`）→ **不做平局修正**，模型会给出可观的平局概率。
+
+**同一场球：一侧说"不许平"，另一侧按"可平"建模。** 谁对**仍不代决**，
+但这条**不再是"可能"** —— 它写在两处代码里。
+
+📌 **顺带更正 §24.6.1 的一句**：那里说 `third_place` 的差异"**故意不钉**"。按字面**不准** ——
+本节新增的 `test_stage_map_values_partition_into_knockout_and_group_stages` 断言的补集**恰等于**
+`{"group_stage", "third_place"}`，把 `third_place` **钉在非淘汰赛一侧**（W9 变异即由此变红）。
+它**不是盲区，是一个被钉住的建模决定**：翻案要**显式改断言**。这正是夹具该有的样子。
+
+## 26.4 `gbm`：两条补强 + **一条收窄**
+
+**补强 1 —— `gbm` 是"有意"的一等 engine，有 commit 为证。**
+`f2610b9`（2026-08-13）message 原话：*"Also aligns `PredictionEngine` with reality: the pipeline
+dispatches `"gbm"` and the engine-comparison card posts it, but the `Literal` omitted it."*
+→ 它不是遗留值，是**被明确对齐过**的一等成员。§24.6.3 的"被接受的枚举值在下一跳没有落点"因此成立。
+
+**补强 2 —— `gbm_engine` 自己的白名单（#4）缺规范形。**
+`is_knockout = (match.stage or "").lower() in {...}`：名单里是 `quarter_final` / `semi_final`，
+**没有** pipeline 会产出的规范形 `quarterfinal` / `semifinal`，也**不做** `.strip()` / 空格归一。
+→ 与 §24.6.1 警告的是**同一机制**（"引擎副本掉一个成员 → 该轮静默变成可平"），
+只是这里不是"将来会掉"，是**名单一开始就没写**。
+⚠️ **但这不等于活缺陷**：实际拼写取决于 `MatchIdentity.stage`，而适配器把 `fixture.stage`
+**原样**传进去（`sports/football/adapters/world_cup_adapter.py:121`）；`fixture.stage` 的真实分布
+本节未测 → **按 §18 的规矩标"潜伏"，不标"活跃"**。
+
+**🔴 收窄（1）—— §24.6.3 说"控制台看起来像什么都没跑"，这句**过头了**。**
+`engine-console.tsx`：引擎选择器 `ENGINES`（:15-20）是 4 项 `elo_odds / hybrid / integrated /
+high_confidence`，**不含 `gbm`** —— 唯一的缺桶（`gbm`）**恰好也是唯一选不到的**。
+而 `high_confidence`（**选择器里有、汇总里没有桶**）**不是第二个洞**：pipeline 在持久化**之前**
+把 `selected_engine` **改写成**它选中的具体引擎（`:1048-1082`），所以计数拿到的是
+`elo_odds|hybrid|integrated` 之一，3 个桶对它**是对的**。
+
+**🔴 收窄（2）—— 前端 batch 路径其实自洽；不一致在**后端**。**
+`frontend/src/lib/world-cup/engine-api.ts:30`
+`EngineName = "elo_odds" | "hybrid" | "integrated" | "high_confidence"`（**无 `gbm`**），
+与 `BatchSummary` 的 3 个 `*_count` + high_confidence 的改写规则**互相自洽**。
+真正不一致的是**后端**：batch 路由的 `engine` 参数用 6 成员 `PredictionEngine`（含 `gbm`，
+`world_cup_predictions.py:536/602` 的 description 里明写 "gbm"），而汇总只有 3 个桶。
+
+→ 修正后的说法：**`gbm` 批量只能从 API 直接发起，UI 不可达。**
+"看起来什么都没跑"是**API 场景**，不是 UI 场景 —— **性质不变**（同一枚举在下一跳无落点），
+只是**可达路径从 UI 改回 API**。
+
+## 26.5 §22.3.1 更正：那个重复**自引入提交起就在**，"第 8 槽本意"在仓里**无迹可寻**
+
+§22.3.1 的读法是"第 8 个槽位**本该是另一个联赛前缀**（如 WNBA / NCAA）"。查历史后**这个前提不成立**：
+
+```
+$ git log --oneline --follow -- backend/app/services/kalshi_sports_source.py
+4dbf90b feat(phase11): add Kalshi sports source + config + .env.example   ← 引入该文件
+f2610b9 fix(typing): clear the nine worst mypy files … (#14)             ← 未碰这个元组
+
+$ git show 4dbf90b:backend/app/services/kalshi_sports_source.py | head -30
+_KALSHI_SPORTS_SERIES_PREFIXES = (
+    "KXNBAGAME", "KXMLBGAME", "KXNHLGAME",
+    "KXSOCCEREPL", "KXSOCCERUCL", "KXSOCCERWCS",
+    "KXNFL", "KXNBAGAME",
+)
+```
+
+→ 第 8 项**从文件诞生的第一版就是这个重复**；**没有任何一次提交"替换掉"过某个联赛**。
+"本该是 WNBA / NCAA"**是推测，不是可考古的事实**。收窄为：
+
+| 原判（§22.3.1） | 更正 |
+|---|---|
+| "疑似**漏项**"（暗示知道缺哪个） | **自始存在的惰性重复**；`startswith(tuple)` 下**完全无效果**（重复项永远不是第一个匹配）|
+| "那类体育市场会被静默丢出过滤" | **成立但不可归因**：缺哪些联赛是**覆盖策略**问题，仓库里没有"应含联赛"的清单可对照 |
+
+📌 **辅证**：同一元组把足球写成**三个**前缀（`KXSOCCEREPL/UCL/WCS`）而不是一个 `KXSOCCER`
+→ 读起来是**刻意收窄范围**，而不是"照着一张完整联赛表抄漏了一行"。
+**结论降级为：可安全删掉第 8 项（纯清理，行为不变）；补哪个联赛是产品决定。**
+
+## 26.6 本节唯一的改动：测试模块 docstring 措辞
+
+`backend/tests/test_knockout_stage_whitelist_consistency.py` 的模块 docstring 原写
+"the same whitelist exists in **three** modules"。按 §26.2 的普查这**只对"具名常量"成立**，
+对"行为"不成立 → 改为：三个具名常量 + 点名两个内联副本 + 点名那处 `import` 复用，
+并把 §26.3 的"被钉住的建模决定"写进去。**测试逻辑（3 条守卫）与断言一字未改。**
+
+## 26.7 提交前再验证
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 13 个改动测试文件（全批）| `pytest … --junitxml` | **tests=214 failures=0 errors=0 skipped=0** |
+| 两个守卫文件（docstring 改动后）| `pytest tests/test_knockout_stage_whitelist_consistency.py tests/test_mutation_verify.py` | **11 passed, 2 subtests passed** |
+| Lint | `ruff check`（新测试 + 两个工具文件）| `All checks passed!` |
+| 行尾 | 字节计数 | 新测试文件 **CRLF=94 / bareLF=0**（Edit 未破坏 CRLF）|
+
+📌 判据照旧用 junit 的 `failures` / `errors`，**不看 stdout 的 passed**。
+
+## 26.8 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| 收敛 5 处淘汰赛白名单（含两处内联）| ⏳ 未动（改生产代码，待拍板）|
+| 让 `gbm_engine` 认规范形 `quarterfinal`/`semifinal` | ⏳ 未动（**是否活缺陷取决于 `fixture.stage` 实际拼写，本机未有判据**）|
+| 删 `_KALSHI_SPORTS_SERIES_PREFIXES` 第 8 项 | ⏳ 未动（纯清理、行为不变，但仍是生产代码）|
+| 汇总桶对齐 `ENGINE_NAMES`（后端 2 处；前端 1 处随类型一并）| ⏳ 未动（§24.6.3）|
+| 控制台是否该给操作员 `gbm` | ⏳ 未动（产品口径）|
+| §17.2.1 `/trades` 已作废视图 | ⏳ 仍未动 |
+
+**提交状态**：本节只改**文档**（本文件 + 一个测试模块的 docstring）；生产代码一字未动。**未提交。**
+
+---
+
+# 二十七、把 `MatchIdentity.stage` 的**生产者**查出来：两处消费者在测它们**收不到**的拼写，而 `third_place` 没有任何生产者（2026-09-28）
+
+> 承接 §26.4 补强 2（"实际拼写取决于 `fixture.stage`，本节未测 → 标潜伏"）与 §26.3（`third_place` 的"相反前提"）。
+> **本节只读代码**，生产代码一字未改。结论里**一条升级**（潜伏 → 由真实数据触发）、**一条降级**（§26.3 的相反前提不可达）。
+
+## 27.1 生产者只有一个：`world_cup_match_service.parse_fixture`
+
+```
+provider round ──parse_fixture──▶ {"stage": …} ──save_fixtures_to_db──▶ MatchFixture.stage
+                                     (world_cup_match_service.py:197 `MatchFixture(**fixture_dict)`)
+MatchFixture.stage ──world_cup_adapter.py:121 `stage=fixture.stage or "group_stage"`──▶ MatchIdentity.stage
+MatchIdentity.stage ──kernel engines / pipeline 的 challenge adapter──▶ is_knockout
+```
+
+`parse_fixture`（`:103-127`）的判定链，与**它实际能产出的词表**：
+
+| round 子串 | 产出 |
+|---|---|
+| `"group"` | `group_stage` |
+| `"final"`（且不含 `semi`/`quarter`）| `final` |
+| `"semi"` | `semifinal` |
+| `"quarter"` | `quarterfinal` |
+| `"16"` | `round_of_16` |
+| **其它** | **`unknown`** |
+
+→ 只有 **6 个值，全是规范形**（无分隔/下划线的**单数**）。**`quarter_final` / `semi_final` 不是其中之一**；
+`third_place` 也不是。
+
+## 27.2 🔴 升级：两处消费者读**同一个对象**，却测**生产者不发的拼写**
+
+| 消费者 | 读什么 | 测什么 | QF/SF 判成淘汰赛？ |
+|---|---|---|---|
+| `kernel/engines/elo_odds_engine.py:47` | `match.stage` | 含 `quarterfinal`/`semifinal` | ✅ |
+| `kernel/engines/situational_adjust.py:20` | `match.stage` | 含两者 | ✅ |
+| **`kernel/engines/gbm_engine.py:40`** | `match.stage` | **只有 `quarter_final`/`semi_final`** | ❌ |
+| **`conclusion_challenge_world_cup_adapter.py:96`** | `match.stage`（调用方是 pipeline，传 `MatchFixture`）| **只有 `quarter_final`/`semi_final`** | ❌ |
+
+→ **同一次调用、同一个 `MatchIdentity`，两组消费者给出相反判定。** 后两行的共同点：
+它们测的拼写**生产者从来不发** → 对 QF/SF 而言那些分支**是死的**。后果（读代码即得）：
+- `gbm_engine`：`predict_match_gbm(is_knockout=False)` → QF/SF **不做平局修正**；
+- `conclusion_challenge_world_cup_adapter`：`risk.level` 在 QF/SF 上算成 **`medium`**（只有 R16 与决赛才 `high`）。
+
+→ 这把 §26.4 补强 2 **从"潜伏"升级为"由真实数据触发"**（生产者确实发规范形）。
+**但仍不代决是否修**：也可能是有意的建模选择（见 §27.4 的另一种解释）。
+⚠️ 无论哪种，**"错得保守"不成立**：`is_knockout=False` 的含义是**允许平局**，在淘汰赛里是**错的方向**。
+
+📌 同时**更正 §26.2 的户数**：本节的第 4 行是 §26.2 的普查**没数到**的第 6 个消费者
+（它不叫 `_KNOCKOUT_STAGES`、也不在函数内联 `set` 之外 —— 它是一个**内联在字典字面量里的集合**，
+`grep '_KNOCKOUT_STAGES'` 与"函数内联 set"两种口径都会漏掉它）。
+**教训：口径本身也会漏 —— "按行为数"要一路数到"任何地方对 stage 做成员测试"。**
+
+## 27.3 🔴 降级：`third_place` **没有任何生产者**，所以 §26.3 的"相反前提"不可达
+
+- `parse_fixture` 对 openfootball 的 `"round": "Match for third place"` → **`unknown`**（不含 group/final/semi/quarter/16）；
+- 全 `app/` 内**没有任何**把 `third_place` 写进 `MatchFixture.stage` 的代码
+  （`.stage =` 的写入点只有各运动适配器 + `_FIELDS` 共享层 + `historical_data_ingestor`，都与 WC 无关）。
+
+→ **§26.3 的"同一场球两个模块前提相反"降级为"潜伏"**：要达成它，得先让 sync 生产者认这个 round。
+**但换出一个更直接的结论**：`_STAGE_MAP`（`world_cup_prediction_pipeline.py:184-185`）的
+`"third_place"` / `"third place"` 两个键是**没有生产者的目标** —— 不是 §22.2 那种"被接受但没被测"，
+而是**被定义但没人产**（同一族的另一个方向）。
+
+→ **而真正的现状比 §26.3 描述的更朴素**：三四名决赛被 sync 判成 **`unknown`**，
+`unknown` 在下游**没有任何特殊处理**（`_STAGE_MAP` 无此键 → 原样返回 → 不在任何 `_KNOCKOUT_STAGES`）
+→ 它**按"可平"建模**，与小组赛同待遇。
+**这才是 §26.3 所担心的那件事的真实机制：不是两个模块打架，是归类丢失。**
+
+## 27.4 还有第三份词表 —— 说明"归一化宽窄"不是唯一的轴
+
+`world_cup_tournament_state_service._KNOCKOUT_STAGE_ORDER`（`:10-26`）收了 **7 种拼写**
+（`quarter_final` / `quarter-final` / `quarterfinal` / `quarterfinals` / `r32` / …），
+而它的输入是**归一化 sports facts**（`build_qualification_state(facts)`）—— **另一个生产者**。
+
+→ **判据再升级（比 §26.2 的"按行为数户数"更细）**：
+**每个词表要对它自己的生产者判，不能拿所有词表的并集判。**
+`gbm_engine` 的 `quarter_final` **未必是"多余的别名"**：它读起来像是**对着另一个生产者的词表写的**
+（facts / provider 原始串那一族），只是**被放到了读 `MatchIdentity` 的地方**（§27.2）。
+所以"5 户合并成 1 户"**可能是错的处方**：正确做法是**按生产者分组**
+（`MatchIdentity` 规范形一组、facts 一组、provider 原始串一组），或在**边界做一次归一化**。
+
+## 27.5 验证
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 工作树 | `git status --porcelain` | 与 §26 相同 —— **本节未改任何文件**（仅追加本文档）|
+| 行尾 | 字节计数 | 文档仍为纯 LF |
+| 回归 | 未跑 | 本节零代码改动，无需（§26.7 的 214/0/0/0 仍然有效）|
+
+## 27.6 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| 给 `gbm_engine` / `conclusion_challenge_world_cup_adapter` 补规范形拼写 | ⏳ 未动（**§27.2 表明是真缺口**，仍待拍板）|
+| 让 `parse_fixture` 认 `"third place"` → `third_place` | ⏳ 未动（**把归一化做在生产侧**是最省事的修法，但属生产代码）|
+| 判定"5 户合并"这个处方对不对 | ⏳ 未动（**§27.4 主张按生产者分组**，需拍板）|
+| §26.8 的其余各项 | ⏳ 仍未动 |
+
+**提交状态**：本节**只读**（未改任何生产文件）；文档追加除外。**未提交。**
+
+---
+
+# 二十八、落地 §27.2：修两处「生产者不发的拼写」—— 本审计**首次改生产代码**（2026-09-28）
+
+> 承接 §27.2 的两处死分支。口径：**先修 → 把内联集合提成具名常量（使其可被守卫）→ 用独立 oracle 加关系型守卫
+> → 用生产者驱动探针证明缺陷真实存在 → 用变异证明守卫承重。**
+> 与 §24~§27 "只查不改"不同：**本轮按 B 选项执行，动生产代码。**
+
+## 28.1 改动（2 处生产 + 1 处测试）
+
+| 文件 | 改动 |
+|---|---|
+| `kernel/engines/gbm_engine.py` | 函数内联 `set` → 模块常量 `_KNOCKOUT_STAGES`；**补 `quarterfinal` / `semifinal`**（`quarter_final`/`semi_final`/`knockout`/`playoff` 一律保留）|
+| `services/conclusion_challenge_world_cup_adapter.py` | 字典内联 `set` → 模块常量 `_HIGH_RISK_STAGES`；**补 `quarterfinal` / `semifinal`** |
+| `tests/test_knockout_stage_whitelist_consistency.py` | 守卫扩到 gbm（并入 `_KERNEL_ENGINE_STAGE_SETS`）+ 新增 1 条 challenge 守卫 |
+
+**为什么必须提成常量**：内联集合**不可被 import** → 既写不了关系型守卫，也登记不进变异 harness。
+提出来之后两件事都能做（§28.3、§28.4）。
+
+**刻意只改"拼写"，不动归一化宽度**：`gbm_engine` 仍是 `.lower()`（**没有**加 `.strip()`），
+challenge 仍不做大小写处理（生产者本来就发小写）。这样"改了什么"是单一变量，见 §28.5。
+
+## 28.2 生产者驱动探针：把 oracle 从**生产者**导出，而不是手写
+
+新判据（§27.4 的落地）：**别手写"哪些 stage 算淘汰赛"，去问生产者。** 探针（仓库外，跑完即删）三步：
+1. 把真实 round 串喂进 `parse_fixture`，收集**它实际产出的 stage**；
+2. **从 git HEAD 用 AST 读出修改前的集合**（`ast.walk` 找"元素全是字符串常量"的 `ast.Set`）——**不手抄**；
+3. 逐格比对。
+
+实测矩阵：
+
+| round 串 | 生产者 stage | elo | sit | gbm | **gbm(HEAD)** | chal | **chal(HEAD)** | pipeline |
+|---|---|---|---|---|---|---|---|---|
+| `Group A` / `Group C - 2` | `group_stage` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `Round of 16` | `round_of_16` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `Quarter-finals` | `quarterfinal` | ✅ | ✅ | ✅ | **❌** | ✅ | **❌** | ✅ |
+| `Semi-finals` | `semifinal` | ✅ | ✅ | ✅ | **❌** | ✅ | **❌** | ✅ |
+| `Final` | `final` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `Match for third place` | **`unknown`** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `Round of 32` | **`unknown`** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `3rd Place Final` | **`final`** ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+- **两列 `(HEAD)` 的 ❌ 就是缺陷的实测证据**，而且旧集合是**从 git 读出来的**，不是我复述的。
+- 顺带量出 §27.3 之外的两条（**均未改**，超出 §27.2 范围）：
+  - **`Round of 32` 也被判 `unknown`** —— 那是 2026 世界杯**真实存在**的轮次；
+  - **`3rd Place Final` 会被解析成 `final`** —— 季军战与决赛同待遇（`"final" in round_info` 命中）。
+
+## 28.3 守卫：oracle 用**另一个常量**
+
+oracle = `world_cup_prediction_pipeline._KNOCKOUT_STAGES`（"生产者规范形"的权威集合），
+**独立于被测集合**（§24.5.1 的判据）：
+
+```python
+_KERNEL_ENGINE_STAGE_SETS = {
+    "elo_odds_engine": ELO_ODDS_KNOCKOUT_STAGES,
+    "gbm_engine": GBM_KNOCKOUT_STAGES,          # ← 本轮新增
+    "situational_adjust": SITUATIONAL_KNOCKOUT_STAGES,
+}
+# test_kernel_engines_recognise_every_canonical_knockout_stage
+self.assertLessEqual(set(PIPELINE_KNOCKOUT_STAGES), set(stages), ...)
+
+# test_challenge_adapter_rates_every_canonical_knockout_stage_high_risk
+self.assertLessEqual(set(PIPELINE_KNOCKOUT_STAGES), set(CHALLENGE_HIGH_RISK_STAGES), ...)
+```
+
+## 28.4 验证与变异
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 守卫文件 | `pytest tests/test_knockout_stage_whitelist_consistency.py` | junit **tests=4 failures=0 errors=0 skipped=0**（原 3 条 → +1）|
+| 受影响套件（7 文件）| `pytest test_gbm_engine / test_conclusion_challenge_world_cup_adapter / test_conclusion_challenge_service / test_factor_vote_wrapper_engines / test_knockout_… / test_world_cup_prediction_pipeline / test_world_cup_predictions_routes` | junit **tests=125 failures=0 errors=0 skipped=0** |
+| Lint | `ruff check`（2 生产 + 1 测试）| `All checks passed!` |
+| 行尾 | `scripts/eol_audit.py` | **`line-ending damage: none`**；两个生产文件 **CRLF 保持**（gbm 166、challenge 155，`bareLF=0`）|
+| **变异** | 四阶段（仓库外脚本）| **M1 删 gbm 的 `quarterfinal` → `failures=1`；M2 删 challenge 的 `semifinal` → `failures=1`**；两者还原后均回绿，且 **sha256 逐字节一致** |
+
+变异锚点刻意选**单行**（避免把行终止符卷进锚点，那是本仓踩过的坑）：
+`"quarterfinal",` → `"quarterfinals",`、`"semifinal",` → `"semifinals",`，
+脚本**断言各命中恰好 1 次**。
+
+## 28.5 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| 让 `parse_fixture` 认 `"third place"` / `"round of 32"` | ⏳ 未动（§28.2 已实测出这两条**归类丢失**；属生产侧归一化，**需拍板**）|
+| 处理 `"3rd Place Final" → "final"` 这个同名陷阱 | ⏳ 未动（要先定"季军战该怎么表示"）|
+| 统一归一化宽度（`gbm` 加 `.strip()`；challenge 加 `.lower()`）| ⏳ 未动（**刻意保持"只改拼写"**，见 §28.1）|
+| 把这 2 个变异登记进 `scripts/mutation_verify.py` | ⏳ 未动（**建议单开一批**，同 §25 的做法）|
+| `_STRONG_DIRECTIONS` 5 处收敛 / `gbm` 汇总桶 / `/trades` 已作废视图 | ⏳ 仍未动 |
+
+**提交状态**：本节**首次改生产代码** —— 2 个生产文件 + 1 个测试文件；**未提交**。
+
+---
+
+# 二十九、把「`_STRONG_DIRECTIONS` 5 处」从具名普查升级为行为级普查 —— 并因此查出 51 个 `git status` 完全看不见的混合行尾文件
+
+**本节零改动**（只读 + 仓库外临时探针，跑完已删）。起因是上一轮列出的待办 D：
+「`_STRONG_DIRECTIONS` 5 处的行为级普查」。做完之后有两件事改变了结论：
+§24/§26 的「5 户」是**下限**（真实同义消费者 9 处、同成员集 15 处），
+以及**一次顺带触发的全仓字节普查，查出 51 个工作树混合行尾文件**（`git status` 与 `git diff` 对它们完全失明）。
+
+## 29.1 口径：为什么「5 处」是下限
+
+§24 用的是 `grep 'CONST ='` —— **具名常量口径**。§26 与 §8d 已经确立了正确口径
+（"户数要按 *行为* 数，不能只数 *具名* 副本"），**但那套判据只用在了淘汰赛白名单上**，
+从没用在 `_STRONG_DIRECTIONS` 上。本节补上，并把判据再推一步：
+
+> **按行为数完之后，必须再判一次语义** —— 因为"成员集相同"根本推不出"同一件事"。
+
+口径（"行为"）= **任何地方对一个 direction 值做 YES/NO 成员测试**，
+不限于具名常量、不限于 `set`/`tuple`、把字典字面量与 `return` 里的内联也算上。
+
+## 29.2 成员集 `{"YES","NO"}` 在 `backend/app/` 里共 15 处
+
+**A 组 —— 具名（8 处）**
+
+| # | 位置 | 名字 | 形态 | 语义 |
+|---|---|---|---|---|
+| 1 | `replay/metrics.py:33` | `_STRONG_DIRECTIONS` | `set` | 可降级强方向（计数用）|
+| 2 | `services/execution_quality_service.py:49` | `_STRONG_DIRECTIONS` | `tuple` | 可降级强方向 |
+| 3 | `services/guardrail_service.py:63` | `_STRONG_DIRECTIONS` | `tuple` | 可降级强方向（护栏门）|
+| 4 | `services/market_quality_service.py:45` | `_STRONG_DIRECTIONS` | `tuple` | 可降级强方向 |
+| 5 | `services/source_reliability_service.py:50` | `_STRONG_DIRECTIONS` | `tuple` | 可降级强方向 |
+| 6 | `services/prediction_calibration_service.py:92` | **`_DIRECTIONAL`** | `tuple` | **可评估方向正确性** |
+| 7 | `services/review_queue_detectors.py:79` | **`_CALLED_DIRECTIONS`** | `frozenset` | **已下注的调用**（vs 弃权）|
+| 8 | `services/domain_reliability_service.py:36` | **`_VALID_DIRECTIONS`** | `set` | **合法方向** |
+
+**B 组 —— 内联（7 处）**
+
+| # | 位置 | 语义 |
+|---|---|---|
+| 9 | `services/decision_quality_service.py:275` | 可降级强方向（Stage A 降级门）|
+| 10 | `services/decision_quality_service.py:331` | 可降级强方向 —— **死分支**，见 §29.7 |
+| 11 | `services/conclusion_challenge_service.py:44` | 强事件方向（函数名就叫 `_is_strong_event_direction`）|
+| 12 | `services/conclusion_challenge_service.py:85` | 强事件方向（"变化太小不足支撑"）|
+| 13 | `services/event_intelligence_service.py:1570` | **可交易方向**（不是 YES/NO → 落回 `"YES"`）|
+| 14 | `api/routes/quality_metrics.py:366` | **已下注却未降级**（异常面板取样）|
+| 15 | `memory/simulated_trade_store.py:502` | **同源循环**（按方向分组统计）|
+
+→ §24/§26 报的「5 户」= **5 具名**；按行为数是 **15 处**；
+其中**语义同义**（"YES/NO 是可被软化的强方向"）= A1–A5 + B9–B12 = **9 处**。
+
+## 29.3 决定性的一步：同值 ≠ 同义 —— `{"YES","NO"}` 承载 5 种不同语义
+
+§8d 有一条"**成员数不同 ≠ 分歧**"（要用归一化宽窄先把这一解释排掉）。本节补它的**反方向**：
+
+> **成员集完全相同，也推不出"同一件事"。**
+
+| 语义 | 消费者 | 若明天新增第 5 个方向 `HOLD`，要跟改吗？|
+|---|---|---|
+| ① 可降级的强方向 | A1–A5、B9–B12（**9 处**）| ✅ 全部要跟改（"`HOLD` 可不可降级"是同一个决定）|
+| ② 合法输入值 | A8 + 4 值内联（`decision_quality_service:145`、`execution_quality_service:189`、`market_quality_service:116`、`source_reliability_service:469`）| ❌ 独立的另一套（跟 4 值契约走）|
+| ③ 可检验方向 | A6 `_DIRECTIONAL` | ❌ 独立（"`HOLD` 有没有可检验立场"）|
+| ④ 已下注的调用 | A7 `_CALLED_DIRECTIONS`、B14 | ❌ 独立（"`HOLD` 算不算下注"）|
+| ⑤ 可交易方向 | B13 | ❌ 独立（"`HOLD` 能不能下单"）|
+
+→ **处方因此分化**：
+- **"把 5 处 `_STRONG_DIRECTIONS` 收敛成 1 处"是对的**（它们共享同一个会变的契约，符合 §8d 收敛判据）；
+- **但"看到 `{"YES","NO"}` 就并进来"是错的** —— ②③④⑤ 只是**碰巧成员集相同**。
+  （这是 §8d 反面清单「找到 N 处同义词表就直接提议合并」在 `_STRONG_DIRECTIONS` 上的翻版。）
+
+## 29.4 同名 ≠ 同值：`_VALID_DIRECTIONS` 是两个不同集合
+
+| 位置 | 值 | 概念 |
+|---|---|---|
+| `services/domain_reliability_service.py:36` | `{"YES", "NO"}` | 推荐方向 |
+| `services/evidence_aggregation_service.py:45` | `{"support", "oppose"}` | 证据立场 |
+
+两个**完全不同**的概念共用一个名字。（真正的同名同义反例是 A1–A5 那 5 份逐字相同的副本。）
+
+## 29.5 归一化点只有 2 处，其余 13+ 处原样比对
+
+| 位置 | 归一化 | 调用面 |
+|---|---|---|
+| `source_reliability_service.py:460 _normalize_direction` | `.strip().upper()` | **仅 `:396` 一处**（本文件私有）|
+| `prediction_calibration_service.py:158` | `.strip().upper()` | 本函数内 |
+| 其余（含 A1–A5 五个 `in` 判定、B9–B15 全部）| **无**（原样比对）| —— |
+
+→ 同一个词会得到**不同答案**：输入 `"yes"`（小写）时上面两处**认**，
+其余 13+ 处**一律不匹配** → 各自走安全默认（`_extract_raw_direction` → `"WAIT"`；
+`guardrail_service` → **跳过全部护栏**；`source_reliability` 降级分支 → 不降级）。
+
+⚠️ **本节只报事实，不给路径**：LLM 是否真的会发小写 direction 属于**上游契约**
+（未取证，不外推）。可靠判据只能来自上游是否已归一化。
+
+## 29.6 变异取证：3 个具名副本里 1 个是空头守卫
+
+`backend/tests/` 里 **零处**按名引用这 8 个常量，且 `("YES", "NO")` / `{"YES", "NO"}`
+二元字面量在测试里**出现 0 次**（唯二的 2 元组是 4 值全集 `("YES","NO","WAIT","AVOID")`）
+→ **没有任何测试显式钉住这些集合的成员集**。
+
+但"没有字面量"**推不出**"没被覆盖"（`"YES"` 作为输入值出现在 70 个测试文件里）。
+所以直接变异：把 `("YES", "NO")` 削成 `("YES",)`，跑该模块自己的测试文件：
+
+| 模块 | 变异前 (tests/f/e/s) | 变异后 | 还原 | 判定 |
+|---|---|---|---|---|
+| `guardrail_service` | 36/0/0/0 | 36/**2**/0/0 | ✅ sha256 一致 | **RED —— 承重** |
+| `market_quality_service` | 44/0/0/0 | 44/**2**/0/0 | ✅ sha256 一致 | **RED —— 承重** |
+| **`execution_quality_service`** | 12/0/0/0 | 12/**0**/0/0 | ✅ sha256 一致 | 🔴 **GREEN —— 空头！** |
+
+→ `execution_quality_service.py:159` 的 `raw_direction in _STRONG_DIRECTIONS` 分支
+**对 `"NO"` 从未被任何测试走到**：删掉 `"NO"` 后该文件 12 个用例**全绿**
+（对照：`"YES"` 在该测试文件里出现 3 次、`"NO"` 一次也没有）。
+
+**这是"驱动自常量"盲区的又一实证**：3 个结构完全一样的副本，2 个承重、1 个空头，
+**光读代码分不出来**。
+
+## 29.7 一个可直接读出的死分支
+
+`services/decision_quality_service.py:330-333`：
+
+```python
+    if consensus_level == "none":
+        if raw_direction in ("YES", "NO"):
+            return "缺少可解析的证据分解，无法判断证据一致性。"
+        return "缺少可解析的证据分解，无法判断证据一致性。"
+```
+
+**两个分支返回完全相同的字符串** → 条件无效果。
+（性质：**纯冗余**，不是错误分支；`raw_direction` 未参与返回文本。可安全清理，需拍板。）
+
+## 29.8 前端：第 16 处是手写 union，不走生成器
+
+| 位置 | 内容 | 来源 |
+|---|---|---|
+| `frontend/src/lib/generated-types.ts:515,516,569,570,612,613` | `"YES"｜"NO"｜"WAIT"｜"AVOID"` | ✅ **生成**自 `models/event.py` 的 `Literal` |
+| **`frontend/src/lib/api.ts:447`** | `direction: "YES" ｜ "NO"` | ⚠️ **手写**（`SimTrade`，不在生成文件里）|
+
+→ 后端 `models/event.py` 的 `Literal[...]` 与 `simulated_trade_store.py:36` 的
+`CHECK (direction IN ('YES','NO'))` 构成**三层同一契约**（API / DB / TS）；
+其中 TS 那层**只有一半走生成器**，另一半靠人手维护。
+
+## 29.9 由本节触发的全仓字节普查：51 个 MIXED 文件，`git status` 全盲
+
+普查初衷是"§29.2 已数到 15 处，会不会别处还有这个集合"。
+普查本身没再找出方向消费者，**却顺带量出一个与主题无关、但更值得报的事实**。
+
+按字节画像扫 4 个目录：
+
+| 目录 | 纯 CRLF | 纯 LF | **MIXED** | 空 |
+|---|---|---|---|---|
+| `backend/app`（*.py）| 261 | 57 | **12** | 0 |
+| `backend/tests`（*.py）| 322 | 111 | **12** | 1 |
+| `backend/scripts`（*.py）| 25 | 21 | **1** | 1 |
+| `frontend/src`（*.ts/tsx）| 177 | 122 | **21** | 0 |
+| **合计** | 785 | 311 | **46** | 2 |
+
+**再用仓库自带的 `eol_audit.py --all` 交叉验证**（它覆盖全部 tracked 文件，不止代码）：
+报 **52 个 DAMAGE**，其中**上述 46 个全部在内**；多出的 6 个是**5 个非代码文本 + 1 个二进制误报**：
+
+| 多出的文件 | HEAD | TREE | `.gitattributes` 属性 | 判定 |
+|---|---|---|---|---|
+| `backend/.sdd/final-review-package.diff` | LF | MIXED | unspecified | **真 DAMAGE** |
+| `docs/README.md` | LF | MIXED | unspecified | **真 DAMAGE** |
+| `docs/superpowers/plans/2026-07-05-confidence-breakdown-diagnostics.md` | LF | MIXED | unspecified | **真 DAMAGE** |
+| `docs/superpowers/plans/2026-07-05-llm-fallback-gateway.md` | LF | MIXED | unspecified | **真 DAMAGE** |
+| `docs/superpowers/specs/2026-07-05-prediction-engine-safety-evidence-boost-design.md` | LF | MIXED | unspecified | **真 DAMAGE** |
+| **`frontend/src/app/favicon.ico`** | **MIXED** | MIXED | **`binary: set`** | 🔴 **误报** |
+
+→ **真实的混合行尾文件合计 51 个**（46 个代码 + 5 个文本）。
+
+🔴 **`--all` 的二进制误报（探针缺陷，可修）**：`_candidates(True)` 直接取 `git ls-files` 全量、
+**不筛 binary**。`favicon.ico` 被 `.gitattributes` 的 `*.ico binary` 保护、git 从不碰它的字节
+（HEAD 与工作树**逐字节相同**），但 ICO 内部**恰好**同时含 `\r\n` 与裸 `\n`
+→ 命中 signature ① 的判据 `head_crlf > 0 and tree_lf > 0` → **假阳性**
+（`*.woff2`/`*.pdf` 等同类风险）。**修法**：`git check-attr binary` 为 `set` 的路径直接跳过。
+⚠️ 因此 `--all` 的输出**必须人工甄别**，不能直接把计数当结论。
+
+**46/46 全部命中 `eol_audit.py` 自己定义的 signature ②**（"a file that is now mixed,
+which no checkout produces"）：`HEAD pure LF=46 / HEAD pure CRLF=0 / HEAD MIXED=0`。
+但 **`git status` 对这 46 个一个都不报** —— `core.autocrlf=true` + `* text=auto`
+在比对前归一化，**行尾差异被完全抹平**（`git diff --numstat` 只对 §28 真正改过内容的
+`conclusion_challenge_world_cup_adapter.py` 有输出，其余 11 个 app 文件零输出）。
+
+**归因（git 历史 + mtime，非猜测）**：
+- 这批文件的 bare LF 高度**成块**（多为 1–5 个连续块，不是逐行污染）；
+  例：`guardrail_service.py` **恰好 1 块 = L220–L235，正是 `_extract_category` 整个函数**；
+- 该函数的引入提交是 **`7ca0862`（2026-06-30）**；
+- 12 个 `app/services` 文件的**最后提交**都在 **2026-07-05 ~ 07-09**，工作树 mtime 同期；
+- 46 个代码文件的 mtime 绝大多数落在 **07-03 ~ 07-19**（主力开发期）。
+
+→ **结论**：这是**长期就地编辑累积**的工作树状态（每次"整段写入"留下一段工具自己的行尾），
+**不是最近产生、也不是本节产生**。本节只**读**这些文件（变异脚本对其中 3 个做过**行内**字节替换，
+已用 sha256 + 行尾画像双重核对还原，见 §29.10）。
+
+**严重度判定（按 §8d 报告纪律，不夸大）**：
+- **不影响功能**（Python/TS 都不在意）、**不影响 CI**、**不影响提交**（归一化后内容一致）；
+- 只影响**字节级工具**：补丁锚点命中、副本等价性比对、sha256 清单核对；
+- → 属**工作树卫生**问题，**不是 bug**。**是否规范化这 46 个文件需拍板，本节不动手。**
+
+📌 **同时更正一条记忆（否则下次还会误判）**：
+`scripts/eol_audit.py` **已经支持 `--all`**，docstring 原话——
+*"With ``--all`` every tracked file is checked, which is slower but catches damage in a file
+that happens to have no other differences"*，**正是这 46 个的场景**。
+此前记忆只记了"无参数时只审 `git status` 里已改动的文件"，漏了这一半，
+会让下一个人以为探针有盲区、另写一个。
+**用法**：`cd backend && python scripts/eol_audit.py --all`
+（逐文件 `git show`，数百文件时会跑到几分钟量级）。
+
+## 29.10 验证
+
+| 检查 | 结果 |
+|---|---|
+| 普查口径 | 非具名副本按"任何地方做成员测试"枚举（含字典字面量、`return` 内联）|
+| HEAD 画像（46 个代码文件）| **HEAD pure LF=46 / CRLF=0 / MIXED=0**（`git show HEAD:<path>` 逐条字节计数）|
+| `--all` 交叉验证 | 报 **52** = 上述 46（全部在内）+ 5 个非代码文本（`.diff`/`.md`）+ **1 个二进制误报**（`favicon.ico`，`binary: set`）|
+| `git status` 独立性 | 46 个**零出现在 `git status`**；`git diff --numstat` 对它们**零输出** |
+| 变异三例 | before 36/12/44 全绿 → after **RED / RED / GREEN** → 还原后 sha256 与行尾画像**双重一致** |
+| 变异还原（独立复核）| 三文件行尾画像与预期相符、**不含变异字符串**（`= ("YES",)` 命中 0）；`git status` 与进场时**逐项一致** |
+| `eol_audit`（默认口径）| **`line-ending damage: none`** |
+| 临时产物 | 仓库外探针（`%TEMP%`）跑完已删；**本节零生产、零仓库内文件改动** |
+
+## 29.11 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| 把 51 个 MIXED 文件规范化（统一 CRLF）| ⏳ 未动（**需拍板**；批量改工作树字节属高风险操作，且不影响功能/git）|
+| 给 `execution_quality_service.py:159` 的 `"NO"` 分支补测试 | ⏳ 未动（§29.6 已实证它是空头；属生产侧测试改动）|
+| 把 §29.6 的 3 个变异登记进 `scripts/mutation_verify.py` | ⏳ 未动（**建议与 §28.5 的 2 个变异合并成一批**）|
+| 清理 `decision_quality_service.py:331` 的死分支 | ⏳ 未动（纯冗余，需拍板）|
+| 收敛 5 处 `_STRONG_DIRECTIONS` | ⏳ 未动（§29.3 已判：**这 5 处收敛是对的**，但须与 ②③④⑤ 分开处理）|
+| 统一 direction 归一化（13+ 处原样比对）| ⏳ 未动（要先定上游契约）|
+| 前端 `api.ts:447` 手写 union 改引生成类型 | ⏳ 未动 |
+
+**提交状态**：本节**零改动**（不改任何仓库内文件）；工作树与 §28 结束时**逐项一致**（16 个已改 + 1 个新文件）。
+
+---
+
+# 三十、把 §28/§29 的 4 个变异登记进常驻 harness（W15–W18），并说明**为什么第 5 个副本故意不登记**
+
+**本节改的是 harness 自身**（`backend/scripts/mutation_verify.py`），**不改生产代码**。
+
+## 30.1 为什么是 4 个而不是 5 个
+
+§28 留下 2 个候选、§29 留下 3 个，表面上是 5 个。但 harness 的 `_verify_one` 是**四阶段**，
+其中阶段②硬性要求**变异必须让守卫变红**：
+
+| 候选变异 | 阶段②结果 | 可登记？|
+|---|---|---|
+| `gbm_engine._KNOCKOUT_STAGES` 删 `quarterfinal` | RED（§28 已实测）| ✅ |
+| challenge `_HIGH_RISK_STAGES` 删 `semifinal` | RED（§28 已实测）| ✅ |
+| `guardrail_service._STRONG_DIRECTIONS` 删 `NO` | RED（2 条）| ✅ |
+| `market_quality_service._STRONG_DIRECTIONS` 删 `NO` | RED（2 条）| ✅ |
+| **`execution_quality_service._STRONG_DIRECTIONS` 删 `NO`** | **全绿**（§29.6 实测的空头）| ❌ **登记会让 `verify` 在阶段②失败** |
+
+→ **登记 4 个**，并在该 set 的 `rationale` 里**显式写明"没有 W19，这是故意的"**。
+这一步不能省：一条**不存在的**变异如果不写清，下一个人要么以为漏了，
+要么会在补完用例后重新发现一次"它原来是空头"—— 而后者正是这套 harness 存在的意义。
+
+## 30.2 为什么不新建 set
+
+`whitelist-fixtures` 已有 **W1–W14**，其中 **W11 正是** `elo_odds_engine._KNOCKOUT_STAGES` 删成员、
+守卫**同一个** `_T_STAGE` —— §28/§29 的变异与它**同族**。追加为 W15–W18 还有一个机械好处：
+守护测试 `test_the_five_sets_are_present` **精确有序**地锁了 5 个 key，新建 set 就必须改它；
+追加则 5 个 set 仍是 5 个，**那份清单不用动**。
+
+## 30.3 四条变异（全为**行内**锚点 —— 这是硬约束）
+
+| # | 变异 | 锚点（字节） | guard 文件 | 断言用例 |
+|---|---|---|---|---|
+| W15 | `gbm_engine._KNOCKOUT_STAGES` 删规范形 | `"quarterfinal",` → `"quarterfinals",` | `_T_STAGE` | `test_kernel_engines_recognise_every_canonical_knockout_stage` |
+| W16 | challenge `_HIGH_RISK_STAGES` 删规范形 | `"semifinal",` → `"semifinals",` | `_T_STAGE` | `test_challenge_adapter_rates_every_canonical_knockout_stage_high_risk` |
+| W17 | `guardrail_service._STRONG_DIRECTIONS` 删 `NO` | `= ("YES", "NO")` → `= ("YES",)` | `_T_GUARDRAIL` | `test_fires_for_no_when_llm_degraded` + `test_two_rules_fire_preserves_existing_reason` |
+| W18 | `market_quality_service._STRONG_DIRECTIONS` 删 `NO` | 同上 | `_T_MARKET_QUALITY` | `test_downgrade_no_to_wait_when_score_low` + `test_wide_spread_downgrades_no_direction` |
+
+**锚点必须是行内的**：守护测试 `test_no_needle_carries_a_bare_lf` 要求
+`old.count(b"\n") == old.count(b"\r\n")` —— 本仓**提交 LF / 检出 CRLF**，含换行的锚点只能写 CRLF。
+这 4 条**都不含换行**（`0 == 0`），因此**与行尾无关**，在纯 CRLF 与 MIXED 文件上都能命中。
+
+**W17/W18 的用例名是实测出来的，不是猜的**：先跑一次变异 + `pytest -rf`，
+看到 `guardrail_service.py` 红 2 条、`market_quality_service.py` 红 2 条，再字节还原。
+两个用例名都自带 `no`（`..._for_no_when_llm_degraded` / `..._downgrade_no_to_...`）——
+正是"删掉 `NO` 才会红"的直接证据。
+
+## 30.4 验证
+
+| 检查 | 结果 |
+|---|---|
+| 清单 | `mutation_verify.py list` → whitelist-fixtures **18 个**（W1–W18）；全仓 **5 套 / 48 个**（原 44，+4）|
+| 守护测试 | `pytest tests/test_mutation_verify.py` → junit **10/0/0/0**（8 用例 + 2 subTest）|
+| **四阶段** | `verify whitelist-fixtures` → **18 个变异校验完毕，全部通过**（`EXIT=0`，耗时 **7m11s**）|
+| W15 | green before ✅ / **red after（1 failed, 3 deselected）** / green after restore ✅ / bytes restored ✅ |
+| W16 | green before ✅ / **red after（1 failed, 3 deselected）** / green after restore ✅ / bytes restored ✅ |
+| W17 | green before ✅ / **red after（2 failed, 34 deselected）** / green after restore ✅ / bytes restored ✅ |
+| W18 | green before ✅ / **red after（2 failed, 42 deselected）** / green after restore ✅ / bytes restored ✅ |
+| Lint | `ruff check scripts/mutation_verify.py` → **All checks passed!** |
+| 行尾（harness）| `mutation_verify.py` **纯 LF**（906 → 964 行）|
+| **还原独立复核** | 4 个被变异文件**变异字符串残留 = 0、原始字符串 = 1**；行尾画像与变异前**逐一相同**（含 `guardrail_service.py` 仍是 **237/16 MIXED** —— 即**行内锚点不破坏 MIXED 状态**）；`eol_audit` → **`damage: none`** |
+
+## 30.5 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| 给 `execution_quality_service.py:159` 补 `"NO"` 用例 | ⏳ 未做（补完才可登记为 **W19**；本轮已把"为什么没有 W19"写进 harness 的 `rationale`）|
+| 规范化 51 个 MIXED 文件 | ⏳ 未动（需拍板）|
+| 清理 `decision_quality_service:331` 死分支 | ⏳ 未动（纯冗余）|
+| 收敛 5 处 `_STRONG_DIRECTIONS` | ⏳ 未动（§29.3 已判方向）|
+| 统一 13+ 处 direction 归一化 / 前端 `api.ts:447` 手写 union | ⏳ 未动 |
+
+**提交状态**：本节改 **1 个文件**（`backend/scripts/mutation_verify.py`，**本来就在改动列表里** → 工作树仍是 **16 个已改 + 1 个新文件**，数量未变）。**未提交**。
+
+---
+
+# 三十一、补空头：给第三个 `_STRONG_DIRECTIONS` 副本补 `"NO"` 用例，并把它登记为 W19
+
+§30 把 4 个变异登记进 harness，**独独留下第 5 个不登记**，理由是它是**空头守卫**（删 `NO` 全绿）。
+本节就把那个"待办"做掉 —— **补用例使它承重，然后登记为 W19**，让"同样的三个副本"闭环。
+
+**本节改 2 个文件**：`backend/tests/test_execution_quality_service.py`（**新进改动列表**）
+与 `backend/scripts/mutation_verify.py`（**本就在列表里**）。**不改生产代码**。
+
+## 31.1 根因：不是抄错，是**测试覆盖面的差异**
+
+三个副本的**生产字节完全一致**（`_STRONG_DIRECTIONS = ("YES", "NO")`）。差异全在**测试侧**：
+
+| 副本 | 删 `NO` 后 | 为什么 |
+|---|---|---|
+| `guardrail_service` | 红 2 条 | 有直接钉 `NO` 的用例 |
+| `market_quality_service` | 红 2 条 | 同上 |
+| `execution_quality_service` | **全绿（空头）** | **共用 helper `_rec()` 把 `direction` 默认成 `"YES"`** |
+
+`tests/test_execution_quality_service.py` 的 helper 签名是
+`_rec(direction: str = "YES", ...)` —— 全部 12 个既有用例**只走 YES 那一侧**，
+于是 `:159` 的 `if not executable and raw_direction in _STRONG_DIRECTIONS:`
+里 `"NO"` 这个成员**从未被触达**。删掉它，行为分毫不差，测试当然不红。
+
+**这正是 §24.5/§29.6 那条判据的又一实例**：`测试里零二元字面量 ≠ 没被覆盖`，
+反之 `常量里有两个成员 ≠ 两个都被覆盖`。且它**不能用"改循环"消掉**
+（循环里的 `CONST` 就是被测对象，删成员只是少跑一轮 —— 见 §30 rationale ①），
+**只能用补用例消掉**。
+
+## 31.2 补的两个用例（顺带覆盖一处从未被测的分支）
+
+在 `test_raw_direction_wait_stays_wait` 之后插入：
+
+| 用例 | 触发点 | 断言 |
+|---|---|---|
+| `test_raw_direction_no_is_downgraded_like_yes` | `direction="NO"`, `spread=20.0`（> `max_spread_pct=12`） | 不可执行 → `suggested_direction == "WAIT"`、`downgraded is True`、有 `downgrade_reason`。**这条就是 W19 的承重腿** |
+| `test_no_direction_entry_price_is_complement_of_bid` | `direction="NO"`，可执行（`spread=4.0`, `liquidity=10000`） | `effective_entry_price == 100 - bid == 52.0` |
+
+第二个用例**顺带补上另一处盲区**：生产代码 `:125`
+`elif bid is not None and raw_direction == "NO": effective_entry_price = 100.0 - bid`
+（"买 NO 等于卖 YES"，有效入场价 = `100 - bid`）此前**同样从未被测试**——
+所有用例都是 YES 侧走 `effective_entry_price = ask`。
+
+## 31.3 登记 W19
+
+`whitelist-fixtures` 追加第 19 条（`title` 改 `（W1–W19）`）：
+
+| # | 变异 | 锚点（字节） | guard 文件 | 断言用例 |
+|---|---|---|---|---|
+| W19 | `execution_quality_service._STRONG_DIRECTIONS` 删 `NO` | `= ("YES", "NO")` → `= ("YES",)` | `_T_EXECUTION_QUALITY` | `test_raw_direction_no_is_downgraded_like_yes` |
+
+锚点**行内**（不含换行 → `0 == 0`），与文件行尾无关（该文件是**纯 CRLF**）。
+**同时改写 `rationale` ④**：原句"⚠️ **没有 W19，这是故意的**"已过时，
+改为记录**两次登记的差别** —— W17/W18 是**一次登记**（本就承重），
+W19 是**补完用例才登记**，并点明"差异不是抄错，是测试覆盖面"。
+
+## 31.4 验证
+
+| 检查 | 结果 |
+|---|---|
+| 补用例前 | `pytest tests/test_execution_quality_service.py` → junit **12/0/0/0** |
+| **补用例后** | 同上 → junit **14/0/0/0**（+2，无回归）|
+| 测试文件行尾 | `test_execution_quality_service.py` **纯 CRLF**（333 → 384 行，`CRLF=384 bareLF=0`）|
+| 清单 | `mutation_verify.py list` → whitelist-fixtures **19 个**（W1–W19）；全仓 **5 套 / 49 个**（原 48，+1）|
+| 守护测试 | `pytest tests/test_mutation_verify.py` → junit **10/0/0/0** |
+| **四阶段** | `verify whitelist-fixtures` → **19 个变异校验完毕，全部通过**（`EXIT=0`）|
+| **W19** | green before ✅ / **red after（1 failed, 13 deselected）** / green after restore ✅ / bytes restored ✅ |
+| Lint | `ruff check scripts/mutation_verify.py` → **All checks passed!** |
+| 行尾（harness）| `mutation_verify.py` 仍 **纯 LF**（964 → 980 行）|
+| **还原独立复核** | 24 个被变异文件对**变异前 sha256 快照**逐条比对 → **changed = 0**；`execution_quality_service.py` **变异字符串残留 = 0、原始字符串 = 1**；`eol_audit` → **`damage: none`** |
+
+**为什么快照比对是必要的**：`verify` 会**就地改写真实工作树文件**（硬杀可能留变异态），
+所以跑之前对全部 24 个被触及文件落了 `sha256 + 行尾画像`，跑完**逐条复核**——
+比 harness 自报的 `bytes restored True` 更硬（后者只比它改过的那一个文件）。
+
+## 31.5 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| 规范化 51 个 MIXED 文件 | ⏳ 未动（需拍板）|
+| 清理 `decision_quality_service:331` 死分支 | ⏳ 未动（纯冗余）|
+| 收敛 5 处 `_STRONG_DIRECTIONS` | ⏳ 未动（§29.3 已判方向：收敛 5 处对、并进另 4 种语义错）|
+| 统一 13+ 处 direction 归一化 / 前端 `api.ts:447` 手写 union | ⏳ 未动 |
+| 其余 direction 成员集的**空头普查** | ⏳ 未做（§29.2 的 9 处同义副本里，只有具名 5 处各做过一次变异取证；另 4 处异名/内联未逐一取证）|
+
+**提交状态**：本节改 **2 个文件** → 工作树 **17 个已改 + 1 个新文件**（原 16+1，
+新增的是 `backend/tests/test_execution_quality_service.py`）。**未提交**。
+
+---
+
+# 三十二、方向成员集空头普查：把 §29.2 剩下的 12 处逐一削 `NO` 跑测试（并入 W20–W23）
+
+§29.6 只对 3 个具名副本做了变异取证，§31 补掉了其中那个空头。本节把 §29.2 表里**剩下的
+12 处**（A1、A5–A8、B9–B15）逐一做同样的取证 —— 即"把 `{"YES","NO"}` 削成 `{"YES"}`，
+跑测试看是否变红"。**结论推翻了一条直觉：承重与否，不能按"名字/语义是否同义"推。**
+
+**本节改 1 个文件**：`backend/scripts/mutation_verify.py`（**本就在改动列表里**）。
+**不改生产代码**（普查用的变异全部还原）。
+
+## 32.1 方法：两阶段（窄集 → 宽集）+ 跑前 28 文件快照
+
+一个副本"变异后本模块测试没红"，**不等于**它是空头 —— 也可能只是**本模块的测试文件**没覆盖它
+（别处的集成测试覆盖了）。所以每一处跑**两阶段**：
+
+| 阶段 | 跑什么 | 判定 |
+|---|---|---|
+| **窄** | 该模块**自己的**测试文件（如 `tests/test_source_reliability_service.py`）| RED → **承重**，收工 |
+| **宽** | 仅当窄集 GREEN 时：`grep -rl` 出**所有引用该模块**的测试文件（**剔除 live/网络类**，如 `test_integration_live.py`），全部跑一遍 | 宽集仍 GREEN → **真空头** |
+
+**探针写在仓库外**（`%TEMP%` 下），跑后删除；`--junitxml` 也落 Temp，只从 junit 读
+`failures`/`errors`（**不读 stdout 的 `passed/failed` 行** —— 本机 `[safe-delete]` 会吞掉 summary）。
+**跑前对全部 28 个被变异文件落 `sha256 + 行尾画像` 快照，跑完逐条比对 `changed = 0`**
+（探针每处都会就地改写真实工作树文件；这是 §31 沿用下来的硬复核）。
+
+## 32.2 全表：15 处的最终判定
+
+| # | 位置 | 语义 | 窄集（用例/失败）| 宽集 | 判定 |
+|---|---|---|---|---|---|
+| A1 | `replay/metrics.py:33` `_STRONG_DIRECTIONS` | ① 可降级强方向 | GREEN | `test_replay_cli.py` n=44 **GREEN** | 🔴 **空头** |
+| A2 | `execution_quality_service.py:49` | ① | —（§29.6 已测）| — | 🔴 空头 → **§31 补用例 → W19** |
+| A3 | `guardrail_service.py:63` | ① | —（§29.6）| — | ✅ 承重 → **W17** |
+| A4 | `market_quality_service.py:45` | ① | —（§29.6）| — | ✅ 承重 → **W18** |
+| A5 | `source_reliability_service.py:50` | ① | n=61 **f=1** | — | ✅ 承重 → **W20** |
+| A6 | `prediction_calibration_service.py:92` `_DIRECTIONAL` | ③ 可检验方向 | n=54 **f=3** | — | ✅ 承重 → **W21** |
+| A7 | `review_queue_detectors.py:79` `_CALLED_DIRECTIONS` | ④ 已下注的调用 | n=87 **f=3** | — | ✅ 承重 → **W22** |
+| A8 | `domain_reliability_service.py:36` `_VALID_DIRECTIONS` | ② 合法方向 | n=38 **f=2** | — | ✅ 承重 → **W23** |
+| B9 | `decision_quality_service.py:275` 内联 | ① | GREEN | n=155 **GREEN** | 🔴 空头 |
+| B10 | `decision_quality_service.py:331` 内联 | ①（**死分支**）| GREEN | n=23 **GREEN** | 🔴 空头（死分支，必空）|
+| B11 | `conclusion_challenge_service.py:44` 内联 | ① | GREEN | n=157 **GREEN** | 🔴 空头 |
+| B12 | `conclusion_challenge_service.py:85` 内联 | ① | GREEN | n=157 **GREEN** | 🔴 空头 |
+| B13 | `event_intelligence_service.py:1570` 内联 | ⑤ 可交易方向 | GREEN | n=142 **GREEN** | 🔴 空头 |
+| B14 | `api/routes/quality_metrics.py:366` 内联 | ④ 已下注却未降级 | GREEN | n=126 **GREEN** | 🔴 空头 |
+| B15 | `memory/simulated_trade_store.py:502` 内联 | 同源循环 | n=15 **GREEN** | （无宽集）| 🔴 空头 |
+
+→ 15 处合计：**承重 6（A3/A4/A5/A6/A7/A8）、空头 9（A1/A2/B9–B15）**。
+
+## 32.3 🔴 三条因此可下判据的事实
+
+**① 承重与否，不能按"名字/语义是否同义"推 —— 直觉得到的答案是反的。**
+
+| 分组 | 处数 | 承重 | 空头 |
+|---|---|---|---|
+| **语义同义**（① 可降级强方向 = A1–A5 + B9–B12）| 9 | **3** | **6** |
+| 异名常量（②③④ = A6/A7/A8）| 3 | **3** | 0 |
+| 其它内联（⑤ + 杂 = B13/B14/B15）| 3 | 0 | 3 |
+
+直觉会说"9 处同义副本里总有几处是抄过来没测的" —— 实测**恰恰是**：语义最同义的那一组
+**6/9 是空头**；而**异名的三个常量全部承重**。→ **判据只有变异。**
+
+**② "测试文件里有 `"NO"`" 既不充分、也不必要。**
+
+| 位置 | 测试文件里 `"NO"` 出现 | 结果 |
+|---|---|---|
+| B11/B12 `conclusion_challenge` | **0 次** | 空头（意料之中）|
+| B13 `event_intelligence` | 1 次 | 空头 |
+| A1 `replay/metrics` | 4 次 | 空头 |
+| B14 `quality_metrics` | **8 次** | 🔴 **空头** |
+| B15 `simulated_trade_store` | **15 次** | 🔴 **空头** |
+
+**"有 NO" 推不出"NO 被覆盖"**：B14/B15 有大把 `"NO"`，仍全绿。所以 §29.6 那句
+"没有字面量推不出没被覆盖"要补上**反方向**：**有字面量也推不出被覆盖。**
+
+**③ 空头有三种不同的成因，修法不同。**
+
+| 成因 | 实例 | 修法 |
+|---|---|---|
+| **(a) 夹具默认值把一侧锁死** | A2（helper `_rec(direction="YES")`）、A1（`downgrades_caused` 两个用例都用 `base=YES`）| 补一条 `direction="NO"` 的真实用例 |
+| **(b) 缺的是"合取"，不是缺 NO** | B14：测试里 `"NO"` 有 8 次，但**没有一处**把 `wide_spread_flag` **与** `final_displayed_direction=="NO"` **与** `eid` 三者凑在一条记录上 | 补一条把三个条件**同时**满足的记录 |
+| **(c) 断言是负向的** | B15：全仓**唯一**一条 `by_direction` 断言是 `assertNotIn("NO", stats["by_direction"])` | 补一条**正向**断言（某 NO 交易**确实**进 `by_direction`）|
+
+→ 🔴 **负向断言（`assertNotIn` / 期望为空 / 期望 `[]`）天生对"该分支根本不存在"盲**：
+删掉 `("YES","NO")` 里的 `"NO"` 后，"不产出 NO" 与"产出了但被正确过滤掉"**给出一模一样的断言结果**。
+这是"空头"里最隐蔽的一类 —— 它**看起来**有一处很贴切的断言。
+
+## 32.4 并入 W20–W23（不新建 set）
+
+4 个**承重**的异名/同名常量登记进 `whitelist-fixtures`（W1–W23）：
+
+| # | 变异 | 锚点（行内，唯一）| guard 文件 | 断言用例 |
+|---|---|---|---|---|
+| W20 | `source_reliability_service._STRONG_DIRECTIONS` 删 `NO` | `= ("YES", "NO")` → `= ("YES",)` | `_T_SOURCE_RELIABILITY` | `test_downgraded_flag_true_when_suggested_differs` |
+| W21 | `prediction_calibration_service._DIRECTIONAL` 删 `NO` | 同上 | `_T_PREDICTION_CALIBRATION` | `test_case_insensitive` + `test_no_recommendation_no_outcome_correct` + `test_full_resolution_no_correct` |
+| W22 | `review_queue_detectors._CALLED_DIRECTIONS` 删 `NO` | `frozenset({"YES", "NO"})` → `frozenset({"YES"})` | `_T_REVIEW_QUEUE_DETECTORS` | `test_high_value_downgraded_fires_for_a_no_call_too` + `test_fires_when_a_confident_no_call_resolves_yes` + `test_a_partial_resolution_above_zero_counts_as_yes` |
+| W23 | `domain_reliability_service._VALID_DIRECTIONS` 删 `NO` | `= {"YES", "NO"}` → `= {"YES"}` | `_T_DOMAIN_RELIABILITY` | `test_no_direction_correct_support` + `test_no_direction_wrong_support` |
+
+**守卫用例名全部实测自失败列表**（不是猜的）。三条自检：
+- **W21 的 `test_case_insensitive` 同名的有两个**（另一个在 `compute_confidence_bucket` 的测试类里，
+  与本变异无关）→ 变异后 `-k` 选中 2 条，**只红 1 条**（实测 `3 failed, 1 passed, 50 deselected`
+  里的那个 `1 passed` 就是它）。这是"用例名不唯一"的可接受情形：阶段②只要求**至少一条红**。
+- **W22 的 `test_high_value_downgraded_fires_for_a_no_call_too` 名字自带 `no`**；W23 两条都叫
+  `test_no_direction_*`；W21 的 `test_case_insensitive:167` 断言的是**小写 `"no"`**（归一化后 `"NO"`）
+  —— 名字里没有 `no`，但**语义**直指 NO，所以是"名字不可靠、只有变异可靠"的又一例。
+- **锚点全为行内**（不含换行 → `0 == 0`）→ 满足守护测试，且与文件行尾无关。
+
+## 32.5 验证
+
+| 检查 | 结果 |
+|---|---|
+| `list` | whitelist-fixtures **23 个**（W1–W23）；全仓 **5 套 / 53 个**（原 49，+4）|
+| 守护测试 | `pytest tests/test_mutation_verify.py` → junit **10/0/0/0** |
+| **四阶段** | `verify whitelist-fixtures` → **23 个变异校验完毕，全部通过**（`EXIT=0`，**9m17s**；`[OK]` 23 条 / `[BAD]` 0 条）|
+| W20 | green before ✅ / **red after（1 failed, 60 deselected）** / green after restore ✅ / bytes restored ✅ |
+| W21 | green before ✅ / **red after（3 failed, 1 passed, 50 deselected）** / green after restore ✅ / bytes restored ✅ |
+| W22 | green before ✅ / **red after（3 failed, 36 deselected）** / green after restore ✅ / bytes restored ✅ |
+| W23 | green before ✅ / **red after（2 failed, 36 deselected）** / green after restore ✅ / bytes restored ✅ |
+| Lint | `ruff check scripts/mutation_verify.py` → **All checks passed!** |
+| 行尾（harness）| `mutation_verify.py` 仍 **纯 LF**（980 → 1041 行）|
+| **还原独立复核** | **28 个被变异文件**对跑前 `sha256` 快照逐条比对 → **`changed = 0`**；W20–W23 四个目标文件**变异字符串残留 = 0、原始字符串 = 1**；`eol_audit` → **`damage: none`** |
+
+## 32.6 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| 给 **A1 `replay/metrics._STRONG_DIRECTIONS`**（新查出的空头）补用例并登记 | ⏳ **未做** —— 与 §31 同类，但需先确认 `downgrades_caused` 的 NO 场景可测；**待拍板** |
+| 给 B10 死分支（`decision_quality_service:331`）补用例 | ⏳ 未做（**该分支两臂返回同一字符串**，补用例也无意义，先清理——见 §29.7）|
+| 给 B11–B15 四个内联空头补用例 | ⏳ 未做（内联字面量**既不能 `import` 也定位不到**，修法恒是"先提取为模块级具名常量"再补）|
+| 规范化 51 个 MIXED 文件 / 收敛 5 处 `_STRONG_DIRECTIONS` / 统一 13+ 处归一化 | ⏳ 未动（均需拍板）|
+
+**提交状态**：本节改 **1 个文件**（`backend/scripts/mutation_verify.py`，**本就在改动列表里**
+→ 工作树仍 **17 个已改 + 1 个新文件**，数量未变）。**未提交**。
+
+---
+
+# 三十三、修 A1：给 `replay/metrics._STRONG_DIRECTIONS` 补 `NO` 侧用例，并登记 W24
+
+§32 普查查出 **9 个空头**，其中只有 `execution_quality_service`（§31）被补过用例。
+本节把**第 2 个具名空头**（`replay/metrics._STRONG_DIRECTIONS`，5 个同名副本里的第 5 个）也补掉 ——
+与 §31 完全同一套做法。
+
+**本节改 2 个文件**：`backend/tests/test_replay_metrics.py`（**新进改动列表**）
+与 `backend/scripts/mutation_verify.py`（**本就在列表里**）。**不改生产代码**。
+
+## 33.1 根因：两个方向敏感分支**都只用 `YES` 侧**被测
+
+`replay/metrics.add_phase_result()` 有两处消费 `_STRONG_DIRECTIONS`：
+
+| 行 | 表达式 | 语义 |
+|---|---|---|
+| `:150` | `if base_dir in _STRONG_DIRECTIONS and phase_dir in _WEAK_DIRECTIONS:` → `downgrades_caused += 1` | 该 phase 把**强方向降级**了 |
+| `:156-162` | `... and phase_dir in _STRONG_DIRECTIONS and final_dir in _WEAK_DIRECTIONS` → `conflicts_with_final += 1` | 该 phase 的强方向**被别的 phase 覆盖** |
+
+既有用例里：`test_downgrades_caused_counted` 两条断言都用 `base_dir="YES"`
+（"base=YES, phase_only=WAIT" / "base=YES, phase_only=YES"）；
+`test_conflict_case_collected_when_phase_overridden` 用 `phase_dir="YES"`；
+`test_no_conflict_when_phase_agrees_with_final` 也是 `YES`。
+`"NO"` 只以 `final_displayed_direction` 出现在**不经过这两处**的用例里（如
+`test_accumulates_yes_to_wait` 的 `NO->AVOID`，那只走 `direction_matrix`）。
+→ **`_STRONG_DIRECTIONS` 里的 `"NO"` 从未被这两个分支读到**，删掉它整份文件保持绿。
+
+## 33.2 补的两个用例
+
+在 `test_downgrades_caused_counted` 之后插入（同类 `TestPhaseContributions`）：
+
+| 用例 | 触发点 | 断言 |
+|---|---|---|
+| `test_downgrades_caused_counted_for_a_no_base` | `add_phase_result("e1","decision_quality","NO","WAIT","WAIT")` | `downgrades_caused == 1`（`NO` 是强方向、`WAIT` 是弱方向）|
+| `test_conflict_case_collected_for_a_no_phase` | `add_phase_result("e1","source_reliability","NO","NO","WAIT")` | `conflict_cases_total == 1`，且 `phase_dir=="NO"` / `final_dir=="WAIT"` |
+
+两个用例**分别**钉住两个分支 —— 这是**有意的**：§24.5/§32 的教训是
+"同一条过滤条件在源码里写两遍时，只变异一处会漏"；同理，**一个成员在两处被消费时，
+两处要各自有一条走到它的用例**，否则补了一处仍是半空头。
+
+## 33.3 登记 W24
+
+| # | 变异 | 锚点（行内，唯一）| guard 文件 | 断言用例 |
+|---|---|---|---|---|
+| W24 | `replay/metrics._STRONG_DIRECTIONS` 删 `NO` | `= {"YES", "NO"}` → `= {"YES"}` | `_T_REPLAY_METRICS` | 上面两条 |
+
+`title` 改 `（W1–W24）`；`rationale` 追加说明 **W24 与 W19 同款**（都是"补完用例才登记"）。
+
+## 33.4 验证
+
+| 检查 | 结果 |
+|---|---|
+| 补用例前 | `pytest tests/test_replay_metrics.py` → **11 个用例**（3 个 matrix + 5 个 brier/dc + 3 个 phase）|
+| **补用例后** | `pytest tests/test_replay_metrics.py` → junit **13/0/0/0**（+2，无回归）|
+| 测试文件行尾 | **纯 CRLF**（257 → 293 行，`CRLF=293 bareLF=0`）|
+| `list` | whitelist-fixtures **24 个**（W1–W24）；全仓 **5 套 / 54 个**（原 53，+1）|
+| 守护测试 | `pytest tests/test_mutation_verify.py` → junit **10/0/0/0** |
+| **四阶段** | `verify whitelist-fixtures` → **24 个变异校验完毕，全部通过**（`EXIT=0`，**9m46s**；`[OK]` 24 / `[BAD]` 0）|
+| **W24** | green before ✅ / **red after（2 failed, 11 deselected）** / green after restore ✅ / bytes restored ✅ |
+| Lint | `ruff check scripts/mutation_verify.py` → **All checks passed!** |
+| 行尾（harness）| `mutation_verify.py` 仍 **纯 LF**（1041 → 1059 行）|
+| **还原独立复核** | **29 个被变异文件**对跑前 `sha256` 快照逐条比对 → **`changed = 0`**；`metrics.py` **变异字符串残留 = 0、原始 = 1**；`eol_audit` → **`damage: none`** |
+
+## 33.5 收口：5 个同名 `_STRONG_DIRECTIONS` 副本的空头普查**全部闭环**
+
+§24 报"5 户"、§29 升级为行为级 15 处、§32 把 15 处全量普查、§31/§33 补掉两个空头。
+现在 5 个**同名**副本的状态可以固定下来了：
+
+| 副本 | §29.6 / §32 判定 | 处置 |
+|---|---|---|
+| `guardrail_service.py:63` | ✅ 承重 | **W17** |
+| `market_quality_service.py:45` | ✅ 承重 | **W18** |
+| `source_reliability_service.py:50` | ✅ 承重 | **W20** |
+| `execution_quality_service.py:49` | 🔴 空头 | §31 补 `NO` 用例 → **W19** |
+| `replay/metrics.py:33` | 🔴 空头 | §33 补 `NO` 用例 → **W24** |
+
+→ **2 空头 / 3 承重，5/5 全部登记。** 这条留痕的意义在"要不要收敛 5 处"那个待决问题上：
+**在讨论收敛之前，先得知道其中 2 处原本是"没有任何测试读到其成员"的** ——
+否则"收敛"会显得比实际更安全（"反正行为一致"）或更紧迫（"都是一样的副本"），两者都不准确。
+
+## 33.6 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| `decision_quality_service:275` 内联空头补用例 | ⏳ 未做（内联字面量**既不能 `import` 也定位不到** → 修法恒是"先提取为模块级具名常量"）|
+| `decision_quality_service:331` 死分支（§29.7）| ⏳ 未做（**两臂返回同一字符串**，补用例无意义 → 应先清理）|
+| `conclusion_challenge:44/85`、`event_intelligence:1570`、`quality_metrics:366`、`simulated_trade_store:502` 四处内联空头 | ⏳ 未做（同上，需先提取具名常量；`quality_metrics` 缺的是**合取**、`simulated_trade_store` 缺的是**正向断言**）|
+| 收敛 5 处 `_STRONG_DIRECTIONS` / 规范化 51 个 MIXED 文件 / 统一 13+ 处归一化 | ⏳ 未动（均需拍板）|
+
+**提交状态**：本节改 **2 个文件** → 工作树 **18 个已改 + 1 个新文件**（原 17+1，
+新增的是 `backend/tests/test_replay_metrics.py`）。**未提交**。
+
+---
+
+# 三十四、把 5 处内联方向集提取为具名常量：5 处**全是空头** → 补 6 条用例 → 登记 W25–W29
+
+§33.6 把余下内联方向集的处置**唯一地**定成了「先提取为模块级具名常量」，理由是
+**内联字面量既不能被 `import`、也不能被任何比"改源码字符串"更细的手段定位**。
+本节执行这条修法 —— 这也是本次会话**首次修改生产代码**。
+
+**本节改 10 个文件**：5 个生产（`simulated_trade_store.py` / `quality_metrics.py` /
+`event_intelligence_service.py` / `conclusion_challenge_service.py` /
+`decision_quality_service.py`）+ 5 个测试；`mutation_verify.py` 与本文档**本就在改动列表里**。
+
+## 34.1 5 处提取点（定义行 / 消费行均为**提取后**的行号）
+
+| # | 文件 | 新常量（定义行）| 消费点（行）| 原形态 |
+|---|---|---|---|---|
+| B15 | `memory/simulated_trade_store.py` | `_REPORTED_DIRECTIONS` `:463` | `:509` `for d in …` | `("YES", "NO")` |
+| B14 | `api/routes/quality_metrics.py` | `_STRONG_DISPLAY_DIRECTIONS` `:43` | `:372` `if final_dir in … and eid:` | `("YES", "NO")` |
+| B13 | `services/event_intelligence_service.py` | `_TRADABLE_DIRECTIONS` `:48` | `:1579` `if direction not in …` | `("YES", "NO")` |
+| B11/B12 | `services/conclusion_challenge_service.py` | `_STRONG_EVENT_DIRECTIONS` `:22` | `:51` + `:92` | `{"YES", "NO"}` ×2 |
+| B9 | `services/decision_quality_service.py` | `_STRONG_DIRECTIONS` `:61` | `:283` `if raw_direction in …` | `("YES", "NO")` |
+
+→ **5 处提取前的判定全是空头**（与 §32 对 12 处余量的一致：内联处比具名处更容易空头 ——
+具名常量至少有"被别处 import 的可能"，内联字形**只能**靠本模块自己的用例覆盖）。
+
+## 34.2 四条空头成因（§32.3）在这 5 处**各命中一条，没有重复**
+
+| 处 | 成因 | 实测证据 |
+|---|---|---|
+| B15 `simulated_trade_store` | **(c) 断言负向** | 该文件有 15 次 `"NO"`，但方向相关的唯一断言是 `assertNotIn("NO", …)`（"作废交易不该出现"）。删掉 `NO` 后"不产出"与"产出后被正确过滤"**断言结果一模一样** |
+| B14 `quality_metrics` | **(b) 缺合取** | 8 次 `"NO"` 全在**不同**的 `e*` 夹具里，**没有任何一条**同时满足 "`final_direction == NO`" 与 "`wide_spread_flag`" —— 而消费点要的正是这个合取 |
+| B13 `event_intelligence` | **(整体未执行)** | `_persist_events` 的纸面交易分支**从未被跑过**：3208 行测试里每一处都 `patch.object(eis, "_persist_events", new=lambda records: None)`，且 `PAPER_TRADE_ENABLED` **零引用** |
+| B11/B12 `conclusion_challenge` | **(两个消费点各空一边)** | `:51` 所在的证据门只有 YES 侧用例；`:92` 所在的 `_check_calculation` 的 `event_intelligence` 分支**整段从未被执行**（既有 5 个用例的 `change` 全是 18.0） |
+| B9 `decision_quality` | **(a) 锁死一侧 + 负控假安全** | 走该门的 NO 用例只有 `test_no_recommendation_support_is_oppose_direction`（只断言证据列、不断言方向），其余全用 `_recommendation("YES")`；唯一的 NO 相关对照 `test_rule4_empty_breakdown_does_not_downgrade_wait` 是**负控**，而负控在"分支整体消失"时**照样绿** |
+
+## 34.3 补的 6 条用例
+
+| 处 | 用例 | 触发 | 断言（删 `NO` 后即失败的那条）|
+|---|---|---|---|
+| B15 | `test_by_direction_reports_both_strong_directions` | 开/平一笔 YES + 一笔 NO | `set(by_direction) == {"YES","NO"}` **且两侧键都在** |
+| B14 | `test_anomalies_flags_wide_spread_not_downgraded`（**改**）| 新增 `e3`：`final_direction="NO"` + `wide_spread_flag=True`；保留 `e2`(WAIT) 作负控 | `count == 2`、`set(event_ids) == {"e1","e3"}` （原为 `count == 1`、`{"e1"}`）|
+| B13 | `test_persist_events_opens_the_trade_as_no_for_a_no_recommendation` | 真跑 `_persist_events`（唯一一条）| `trades[0]["direction"] == "NO"` 且 `decision == "act"` |
+| B11 | `test_strong_no_conclusion_without_support_is_insufficient_evidence` | `direction="NO"` + `supporting=[]` | `verdict == "insufficient_evidence"`、`failed_checks[0]["check"] == "evidence_support"` |
+| B12 | `test_small_probability_change_counts_for_a_no_conclusion` | `direction="NO"` + `change=2.0`(<3.0) + `liquidity_ok=False` | `verdict == "revise"`、`required_action == "recalculate_once"` |
+| B9 | `test_rule4_empty_breakdown_downgrades_no_to_wait` | `_recommendation("NO")` + `evidence_breakdown=[]` | `displayed_direction == "WAIT"`、`downgraded is True`、理由含「缺少证据支持」|
+
+⚠️ **B12 的设计改过一次**：初稿按"空 `supporting` + `change<3.0` → `revise`"写，**是错的** ——
+`_aggregate` 先判 `CHECK_EVIDENCE` 的 hard_fail，空证据只会得到 `insufficient_evidence`，
+根本走不到 `revise`。改成"证据齐备但变化太小（soft）+ 流动性不足（soft）"凑够 2 条 soft 才对。
+**教训**：`revise` 的判据是 `len(soft) >= 2`，不是"有一条 soft"。
+
+## 34.4 一次常量被 N 处消费 → 就补 N 条用例
+
+`_STRONG_EVENT_DIRECTIONS`（B11/B12）有 **2 个消费点**，所以补的是 **2 条**用例，**不是 1 条**。
+这不是洁癖：两条用例**各自独立**变红是实测出来的 ——
+
+```
+W28 … mutated run -> 2 failed, 5 deselected in 0.69s
+```
+
+（两条**同时**失败，说明两条都真的走到了该常量）。若只补 B11 那条，`_check_calculation` 的失效
+就没有任何用例看得见 —— 那正是 §32 说的**半空头**。
+
+同理，**变异打在常量定义行、不打调用行**：一个常量被 N 处消费时，打定义行只需 **1 条变异**就能
+同时覆盖 N 处；反之若把变异打在某一处调用行上，另一处失效就漏了。
+
+## 34.5 顺带发现：`_persist_events` 的纸面交易分支此前**从未被执行**
+
+B13 为了补用例，不得不**第一次真正装配** `_persist_events`（temp `loop_db_path` +
+`_INITIALIZED` 就位 + `PAPER_TRADE_ENABLED=True` + stub 掉 `save_events`/`record_event`/
+`get_verified_link`/`upsert_link`/`freeze_prediction`）。装起来之后才看清一件事：
+
+**`_TRADABLE_DIRECTIONS` 只有 `entry_edge == 0` 这一条可观测路径** ——
+后文（约 `:1580-1583`）会按 `edge` 的**符号**覆写方向，所以任何 `edge != 0` 的输入都会
+把方向改回去。构造用例时必须让 `ai_probability == market_probability == 50`。
+→ 这条留痕的价值是：**"这个白名单看着很宽"与"它实际只有一条路径能被观察到"是两件事**，
+后者只有真跑一次才知道。
+
+## 34.6 登记 W25–W29
+
+| # | 变异（改**常量定义行**）| guard 文件 | 断言用例 |
+|---|---|---|---|
+| W25 | `_REPORTED_DIRECTIONS` `= ("YES", "NO")` → `= ("YES",)` | `_T_TRADES_STORE` | 1 条 |
+| W26 | `_STRONG_DISPLAY_DIRECTIONS` 同上 | `_T_QUALITY_METRICS` | 1 条 |
+| W27 | `_TRADABLE_DIRECTIONS` 同上 | `_T_EVENT_INTELLIGENCE` | 1 条 |
+| W28 | `_STRONG_EVENT_DIRECTIONS` 同上 | `_T_CONCLUSION_CHALLENGE` | **2 条**（见 §34.4）|
+| W29 | `_STRONG_DIRECTIONS` 同上 | `_T_DECISION_QUALITY` | 1 条 |
+
+`title` 改 `（W1–W29）`；`rationale` 追加 ⑥ 段（内联提取、5 处全空头、打定义行不打调用行、
+"本来就有 `NO` 字样仍是空头"三件事）；新增 9 个路径常量
+（`_QUALITY_METRICS` / `_EVENT_INTELLIGENCE` / `_CONCLUSION_CHALLENGE` / `_DECISION_QUALITY` +
+5 个 `_T_*`）。
+
+## 34.7 验证
+
+| 检查 | 结果 |
+|---|---|
+| 5 个测试文件用例数 | `16 / 32 / 128 / 7 / 33`（合 216）；对照 **HEAD 基线** `15 / 32 / 127 / 5 / 32` → **+6**，其中 `test_quality_metrics` 是**改**不是加 |
+| 单文件跑 | `pytest tests/test_conclusion_challenge_service.py tests/test_decision_quality_service.py` → junit **40/0/0/0** |
+| 行尾（测试）| 均**纯 CRLF**：`test_conclusion_challenge_service.py` `crlf=164 bareLF=0`（115→164）、`test_decision_quality_service.py` `crlf=570 bareLF=0`（551→570）|
+| 行尾（生产）| `conclusion_challenge_service.py` `crlf=375 bareLF=0`（368→375）、`decision_quality_service.py` `crlf=394 bareLF=0`（386→394）|
+| **单点变异自检**（跑 verify 前）| 3 次独立 `mutcheck`：**needle 各 1 次 / green before ✅ / red after ✅ / bytes restored ✅**；`conclusion_challenge` 的**两个消费点分别**验过（不是只验一次）|
+| `list` | whitelist-fixtures **29 个**（W1–W29）；全仓 **5 套 / 59 个** |
+| 守护测试 | `pytest tests/test_mutation_verify.py` → **8 passed, 2 subtests passed** |
+| Lint | `ruff check`（harness + 2 个生产 + 2 个测试）→ **All checks passed!** |
+| **四阶段** | `verify whitelist-fixtures` → **29 个变异校验完毕，全部通过**（`EXIT=0`，**11m47s**；`[OK]` 29 / `[BAD]` **0**）|
+| **W25–W29** | 全部 `green before ✅ / red after ✅ / green after restore ✅ / bytes restored ✅`；red-after 明细 `1 / 1 / 1 / **2** / 1` failed |
+| **还原独立复核** | 跑**前**对 harness 全部 **33 个**被变异文件落 `sha256 + 行尾画像` 快照，跑**后**逐条比对 → **`changed = 0`** |
+| 行尾审计 | `scripts/eol_audit.py` → **`line-ending damage: none`** |
+
+## 34.8 收口：`backend/app/` 下**已无内联方向成员集**
+
+提取之后，全 `backend/app/` 里 `("YES","NO")` 形态的**内联**字面量**只剩 2 处**，且都不是本节该管的：
+
+| 剩余落点 | 为什么不动 |
+|---|---|
+| `services/decision_quality_service.py:331` | `_build_rationale_body` 的**死分支**（两臂返回同一字符串）—— 已写进 `_STRONG_DIRECTIONS` 的注释；属 §29.7 的待决项，**不代决** |
+| `memory/simulated_trade_store.py:36` | 是 SQL DDL 里的 `CHECK (direction IN ('YES','NO'))`，**schema 层**约束，不是 Python 集合；它反而是"该列只有两个取值"的**权威来源** |
+
+具名常量现在的总数：**13 个** ——
+6 个同名 `_STRONG_DIRECTIONS`（`replay/metrics` / `decision_quality` / `execution_quality` /
+`guardrail` / `market_quality` / `source_reliability`）+ 3 个异名旧常量
+（`_DIRECTIONAL` / `_CALLED_DIRECTIONS` / `_VALID_DIRECTIONS`）+ 本节的 4 个新名
+（`_REPORTED_DIRECTIONS` / `_STRONG_DISPLAY_DIRECTIONS` / `_TRADABLE_DIRECTIONS` /
+`_STRONG_EVENT_DIRECTIONS`）。
+
+⚠️ **这 13 个常量"同值"但**不是**同义（§29.3 的五种语义）** —— `_VALID_DIRECTIONS` 是"合法输入值"、
+`_CALLED_DIRECTIONS` 是"已下注的调用"、`_TRADABLE_DIRECTIONS` 是"可开仓方向"、
+`_STRONG_DISPLAY_DIRECTIONS` 是"异常列表要展示的强方向"、`_STRONG_DIRECTIONS` 是"可被降级的强方向"。
+→ **本节只做"具名化 + 补用例"，一处**都没有**合并**。合并要等拍板（§34.9）。
+
+## 34.9 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| **收敛 13 个方向常量** | ⏳ 未动。§34.8 已给出"同值不同义"的逐项语义 —— 拍板前不宜合并 |
+| `decision_quality_service:331` 死分支清理 | ⏳ 未动（**两臂返回同一字符串**，补用例无意义；属 B10）|
+| 统一 13+ 处 direction 归一化（`in ("YES","NO","WAIT","AVOID")` 的四元组）| ⏳ 未动（是**另一个集合**：合法输入词表，不是强方向）|
+| 前端 `api.ts:447` 手写 union / 规范化 51 个 MIXED 文件 | ⏳ 未动（需拍板）|
+
+**提交状态**：本节改 **10 个文件**（5 生产 + 5 测试）→ 工作树 **28 个已改 + 1 个新文件**
+（原 18+1）。**逐项对账**（因为 18 与 28 差得远，必须能对上）：本批新增的 10 个是
+`quality_metrics.py` / `simulated_trade_store.py` / `event_intelligence_service.py` /
+`conclusion_challenge_service.py` / `decision_quality_service.py` +
+对应的 5 个测试文件 ——
+恰好 `18 + 10 = 28`；另 18 个的构成是 §22/§24 留下的 **11 个测试文件**（mtime 全在
+`2026-09-28 02:37–02:55`，由批次脚本写入）+ §28 的 2 个生产文件 + harness 2 件 + 本文档。
+**未提交**（本批**首次修改生产代码**，是否提交等指令）。

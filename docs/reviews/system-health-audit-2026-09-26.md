@@ -3601,3 +3601,111 @@ Windows 分支的关键在 `:286-293` 的**注释**：任何 HTTP 响应（**含
 | 写进 RUNBOOK（选项 d）| ⏳ 未做 |
 
 **提交状态**：本节**只改本文档**；生产代码与测试**一字未动**。**未提交。**
+
+> 追加（2026-09-29）：本节已在 **`89c66a6`** 提交（1 文件 +104）。页脚那句"未提交"是提交前的
+> 实测状态，保留不改。
+
+---
+
+# 三十六、清理 `_build_rationale_body` 的死分支（B10 收口）：一个"删掉也不会让任何守卫变红"的改动
+
+## 36.1 结论先行
+
+| 问题 | 答案 |
+|---|---|
+| 这个改动能被守卫抓到吗 | **不能** |
+| 能登记为新变异吗 | **不能** —— `mutation_verify._verify_one` 的阶段②要求"变异后必红"，而死分支被恢复后**行为零变化** |
+| 那它的价值是什么 | **代码卫生**：让 §34 那次提取的账目变准 —— `_STRONG_DIRECTIONS` 现**恰好 1 个消费者** |
+| 顺带发现 | **存活的那条早退本身是空头**（§36.4）—— 但按 §34 的自家规矩（补完用例才登记），本节**只记录不扩批** |
+
+§29.7 把它列为 B10（`:331` 死分支），§34.2 把它标成 5 处里"**唯一补用例无意义**"的一处；
+本节就按那个结论**先清理**。
+
+## 36.2 改动（**1 个文件 / 2 处**）
+
+| # | 位置 | 改动 |
+|---|---|---|
+| 1 | `_build_rationale_body`（`:338`）| 删掉内层 `if raw_direction in ("YES", "NO"):` 与其后的 `return`（两臂返回**同一字符串**），只留外层 `if consensus_level == "none":` 的单条 `return` |
+| 2 | `_STRONG_DIRECTIONS` 上方 NOTE（`:58-60`）| 原文写"该死分支被单独跟踪、此处**故意不动**"→ 改为"该分支**已删**（审计 §36），此常量现**恰好 1 个消费者**：`_apply_downgrade_rules`" |
+
+**签名不动**：首版把 `raw_direction` 读成"未使用参数"是**误判**，grep 证伪 ——
+`:341`（降级臂的 `displayed_direction != raw_direction`）与 `:344 / :357 / :358 / :364 / :368`（f-string）都在用它。
+**只删不可达分支，不删参数。**
+
+## 36.3 为什么不能登记为变异（附实测，不是推理）
+
+判据来自 `backend/scripts/mutation_verify.py` 的 `_verify_one` 四阶段，**阶段②**是硬门：
+
+```python
+red_after = not passed_after      # 变异之后必须"变红"，否则 [BAD]
+```
+
+死分支两臂同字符串 → **把死分支写回去，行为零变化** → 守卫全绿 → `red_after = False` → `[BAD]`。
+
+→ 判定只有一条路可走：**不登记**。这与 §34 的"补完用例才登记"并不矛盾 ——
+那里是**加了能变红的用例**，这里是**没有任何用例能变红**。
+
+**探针 A（跑出来的）**：用字节级注入把死分支**逐字写回**工作树，再跑守卫文件：
+
+| 项 | 值 |
+|---|---|
+| 注入前 | `sha256=ae10b573…`，`crlf=393 bareLF=0` |
+| 注入后 | `crlf=395 bareLF=0`（**只多 2 个 CRLF** —— 正是被删的那两行）|
+| `pytest tests/test_decision_quality_service.py` | **33 passed / failures=0 / errors=0** |
+| 还原后 | `sha256=ae10b573…`（**逐字节一致**）|
+
+## 36.4 顺带发现：存活的那条早退**是空头**（本节**不修**）
+
+把**存活**的 `if consensus_level == "none":` 改成 `if consensus_level == "NEVER":`（= 让早退**不可达**，
+落到底部尾返回"无明确支持证据，当前方向 WAIT 为保守建议。"）—— **探针 B**：
+
+```
+[mutate-b] needle hits=1  before sha=ae10b573… crlf=393
+[mutate-b] after  sha=e0da98ef… crlf=393
+33 passed in 0.64s          <- 全绿
+```
+
+**为什么全绿**：唯一同时"断言 `consensus_level == "none"`"且"看 rationale"的用例是
+`test_missing_both_inputs_emits_block`（`:448`），而它对 rationale 的断言只有非空：
+
+```python
+self.assertNotEqual(result["decision_rationale_zh"], "")     # :460
+```
+
+—— **非空断言对"早退根本没执行"天然盲**（尾返回也是非空字符串）。
+
+| 用例 | 断言 `consensus_level == "none"` | 看 rationale |
+|---|---|---|
+| `test_consensus_none_when_empty_breakdown`（`:216`）| ✅（`raw_direction=YES`）| ❌ |
+| `test_missing_both_inputs_emits_block`（`:448`）| ✅ | ✅ 但**只断言非空** |
+| `test_adversarial_input_never_raises`（`:462`）| ✅ | ❌ |
+
+→ 这是 §32.3 成因 **(c) 断言负向/过弱** 在 `decision_quality_service` 里的**另一处**实例
+（B9 那处是**集合成员**负控，这处是**字符串非空**）。
+→ **要登记就得先补一条"精确字符串"用例**（`assertEqual(…, "缺少可解析的证据分解，无法判断证据一致性。")`）；
+本节口径是**纯清理**，故只记为后续候选（§36.6）。
+→ 附一条边界：**全仓 grep `缺少可解析` 只有服务本体 1 处命中**，没有别的守卫在看这个字符串。
+
+## 36.5 验证
+
+| 检查 | 结果 |
+|---|---|
+| `ruff check app/services/decision_quality_service.py` | `All checks passed!`（exit 0）|
+| `pytest tests/test_decision_quality_service.py` | junit **tests=33 / failures=0 / errors=0 / skipped=0** |
+| W29 的 `-k` 选择器（harness 阶段①前置条件）| `1 passed, 32 deselected` —— 仍**选中 1 个**用例 |
+| 两个探针的还原 | 均 `sha256=ae10b573…`、`crlf=393 bareLF=0`（**逐字节一致**）|
+| 改动文件行尾 | `crlf=393 bareLF=0`（**纯 CRLF**，无 bare LF）|
+
+**为什么没跑全量套件**：本批删除的是**不可达分支**，爆炸半径 = `_build_rationale_body` 的**唯一**调用点
+（`:120`）；且全仓 grep 该函数名与它输出的字符串，**只有 `decision_quality_service.py` 自己**命中。
+→ 单文件覆盖即完整，跑 21 分钟全量对这条改动**没有增量证据**。
+
+## 36.6 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| 给**存活**的早退补"精确字符串"用例 → 登记 W30 | ⏳ 未做（§34 规矩：**补完用例才登记**；本节口径是纯清理）|
+| 收敛 13 个方向常量 / 归一化四元组 / 前端 `api.ts` union / 51 个 MIXED 文件 | ⏳ 未动（同 §34.9，**待拍板**）|
+| §35.5 的修法 (a)+(d) | ⏳ 未动（**待拍板**）|
+
+**提交状态**：本节改 **1 个生产文件**（+ 本文档）。**未提交**（等指令）。

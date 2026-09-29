@@ -16,18 +16,33 @@ Usage
     cd backend && python scripts/mutation_verify.py list
     cd backend && python scripts/mutation_verify.py verify                # all sets
     cd backend && python scripts/mutation_verify.py verify probability-probe
+    cd backend && python scripts/mutation_verify.py verify whitelist-fixtures --index 30
+    cd backend && python scripts/mutation_verify.py verify whitelist-fixtures -i 27,30
     cd backend && python scripts/mutation_verify.py backup review-queue
     cd backend && python scripts/mutation_verify.py apply  review-queue 5
+    cd backend && python scripts/mutation_verify.py apply  review-queue 1-3,7
     cd backend && python scripts/mutation_verify.py revert review-queue
 
 ``verify`` is the mode to use. It drives pytest itself and asserts a full
-three-phase cycle per mutation:
+four-phase cycle per mutation:
 
     1. the guard tests PASS on the unmodified tree   (so the selector is real)
     2. they FAIL with the mutation applied           (the guard is load-bearing)
     3. they PASS again once it is reverted           (the restore restored
                                                       behaviour, not just bytes)
     4. the file's sha256 equals the pre-mutation one (the restore restored bytes)
+
+``--index N[,N...]`` narrows a run to specific mutations, which is what you want
+when a target needs re-taking without a twelve-minute pass over the whole set (a
+full run was measured at ~12 minutes for ``whitelist-fixtures``). More than one
+position may be given, e.g. ``--index 27,30``, and they run in the order typed.
+A token of the form ``a-b`` expands to a range. It needs exactly one set key --
+there is no sensible answer to ``verify a b --index 3``. Comma-separated rather
+than ``nargs='+'`` because the subcommand's ``keys`` are already ``nargs='*'`` --
+with a space-separated form, ``verify whitelist-fixtures --index 27 30`` would be
+read as two set keys. The selection rules live in ``_select_verify_targets`` so
+they can be asserted without running pytest at all, and ``apply`` takes the same
+spellings through the same parser and selector.
 
 Phase 1 also catches a selector that matches nothing, which pytest reports as
 "no tests ran" and which would otherwise look exactly like a successful phase 2.
@@ -42,7 +57,9 @@ A ``group`` marks mutations that rewrite the same bytes in different directions
 (``C5``/``C6`` on ``_flag_note``, and ``P7``/``P8`` on the listing query's
 ``WHERE`` clause). Applying both would fail on the second with "expected 1
 occurrence, found 0". ``verify`` applies one at a time so it is unaffected;
-``apply <set>`` (all) skips the rest of a group and says so.
+``apply <set>`` (all) skips the rest of a group and says so, while naming both
+members explicitly is *rejected* instead -- two typed positions are an explicit
+request, not a convenience sweep (``_apply_preflight``).
 
 Byte-level on purpose
 ---------------------
@@ -555,7 +572,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="whitelist-fixtures",
-        title="白名单 / 枚举常量的「循环 + 钉子」与关系型守卫（W1–W29）",
+        title="白名单 / 枚举常量的「循环 + 钉子」与关系型守卫（W1–W30）",
         rationale=(
             "§22.2.3 那批契约型常量的补齐（§二十四）。每条都删掉一个成员、或把别名目标"
             "拼错，断言对应守卫转红。三件事必须写在这里："
@@ -603,6 +620,15 @@ SETS: tuple[MutationSet, ...] = (
             "⚠️ 特别注意 W25/W26/W27 三个被提取处的旧字面量所在文件**本来就有 `\"NO\"` 字样**"
             "（`simulated_trade_store` 15 次、`quality_metrics` 8 次）却仍是空头 —— "
             "『测试里有 NO』既不充分也不必要，判据只有变异。"
+            "⑦ W30 来自 §36 的**死分支清理**，但它登记的不是被删掉的那段代码"
+            "（死分支写回去**行为零变化**，阶段②永远过不了，见 §36.3），"
+            "而是**清理之后活下来的那条早退**：`_build_rationale_body` 的"
+            "`if consensus_level == \"none\":` 一旦不可达，就落到尾部的保守模板，"
+            "而该文件里唯一看着 rationale 的断言只有 `assertNotEqual(..., \"\")` ——"
+            "**尾部模板同样非空**，所以「分支从未执行」这件事对旧断言天然盲（§36.4 探针 B）。"
+            "§36.6 因此补了一条**精确字符串**断言再登记 —— 与 W19/W24 同款："
+            "**空头守卫只能靠补用例消掉**，且这一条同时给出一个警告："
+            "**删死代码本身不可登记，别把它和它旁边的空头混为一谈**。"
         ),
         mutations=(
             Mutation(
@@ -897,6 +923,15 @@ SETS: tuple[MutationSet, ...] = (
                 guards=("test_rule4_empty_breakdown_downgrades_no_to_wait",),
                 note="§34：Stage A 不再降级 NO —— 既有的 WAIT 用例是负控，负控在分支整体消失时照样绿",
             ),
+            Mutation(
+                label="W30 decision_quality._build_rationale_body 的 none 早退改成不可达",
+                path=_DECISION_QUALITY,
+                old=b'    if consensus_level == "none":\r\n        return',
+                new=b'    if consensus_level == "NEVER":\r\n        return',
+                guard_file=_T_DECISION_QUALITY,
+                guards=("test_missing_both_inputs_rationale_names_the_missing_breakdown",),
+                note="§36：早退不可达后落到尾部的保守模板，而旧断言只查非空 —— 尾部模板同样非空，故对「这条分支从未执行」天然盲",
+            ),
         ),
     ),
 )
@@ -960,7 +995,7 @@ def cmd_list(args: argparse.Namespace) -> int:
             print(f"      {index:>2}. {mutation.label}{grouped}")
         print()
     total = sum(len(s.mutations) for s in SETS)
-    print(f"共 {len(SETS)} 套 / {total} 个变异。用 `verify [key]` 自动跑三阶段校验。")
+    print(f"共 {len(SETS)} 套 / {total} 个变异。用 `verify [key]` 自动跑四阶段校验。")
     return 0
 
 
@@ -975,35 +1010,117 @@ def cmd_backup(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_apply(args: argparse.Namespace) -> int:
-    mutation_set = SETS_BY_KEY[args.key]
-    mutations = mutation_set.mutations
-    if args.index is not None and not 1 <= args.index <= len(mutations):
-        raise SystemExit(f"index out of range: {args.index} (有 {len(mutations)} 个)")
+def _apply_preflight(targets: list[tuple[MutationSet, int, Mutation]]) -> list[str]:
+    """Everything that must hold before an ``apply`` may write a single byte.
 
-    seen_groups: set[str] = set()
-    for index, mutation in enumerate(mutations, 1):
-        if args.index is not None and index != args.index:
-            continue
-        if args.index is None and mutation.group and mutation.group in seen_groups:
-            print(
-                f"skipped {index}: {mutation.label}  "
-                f"[与同组变异互斥，用 `apply {mutation_set.key} {index}` 单独跑]"
-            )
-            continue
+    Returns the problems rather than raising on the first one, for two reasons: a
+    multi-position apply should report every bad needle at once, and a partial
+    apply (first file rewritten, second needle missing) leaves a tree that is
+    neither the original nor the intended state. So nothing is written until the
+    whole selection has been checked.
+
+    The group check is *reject*, not *skip*: skipping is right for a whole-set
+    apply (a convenience for "make it red everywhere") but wrong when the
+    positions were typed out. Naming both members of a group is an explicit
+    request to rewrite the same bytes twice, which can only be a mistake.
+    """
+    problems: list[str] = []
+    groups: dict[str, list[int]] = {}
+    for _, position, mutation in targets:
+        if mutation.group:
+            groups.setdefault(mutation.group, []).append(position)
         path = REPO_ROOT / mutation.path
-        data = path.read_bytes()
-        found = data.count(mutation.old)
+        if not path.is_file():
+            problems.append(f"{position}: missing file {mutation.path}")
+            continue
+        found = path.read_bytes().count(mutation.old)
         if found != 1:
-            raise SystemExit(
-                f"{mutation.label}: expected 1 occurrence in {mutation.path}, "
-                f"found {found}. If the file's line endings changed, fix the "
+            problems.append(
+                f"{position}: needle appears {found}x in {mutation.path} "
+                f"(expected 1). If the file's line endings changed, fix the "
                 "needle rather than loosening this check."
             )
-        path.write_bytes(data.replace(mutation.old, mutation.new, 1))
+    for group, positions in groups.items():
+        if len(positions) > 1:
+            problems.append(
+                f"positions {', '.join(str(p) for p in positions)} share group "
+                f"{group!r}: they rewrite the same bytes in opposite directions, "
+                "so applying both would leave neither mutation in place"
+            )
+    return problems
+
+
+def _write_mutations(targets: list[tuple[MutationSet, int, Mutation]]) -> None:
+    for _, position, mutation in targets:
+        path = REPO_ROOT / mutation.path
+        path.write_bytes(path.read_bytes().replace(mutation.old, mutation.new, 1))
+        print(f"mutated {position}: {mutation.label}  ({mutation.path})")
+
+
+def cmd_apply(args: argparse.Namespace) -> int:
+    mutation_set = SETS_BY_KEY[args.key]
+    # Each token parses to a tuple (``5 8`` -> two one-tuples, ``27-30`` -> one
+    # four-tuple); flatten so both spellings reach the same selector.
+    positions = tuple(position for chunk in args.index for position in chunk)
+    if not positions:
+        return _apply_whole_set(mutation_set)
+
+    # Same selector as ``verify``, so a position means the same mutation in both.
+    targets = _select_verify_targets([mutation_set.key], positions)
+    problems = _apply_preflight(targets)
+    if problems:
+        raise SystemExit(
+            f"refusing to apply, {len(problems)} problem(s):\n  "
+            + "\n  ".join(problems)
+        )
+    _write_mutations(targets)
+    return 0
+
+
+def _whole_set_targets(
+    mutation_set: MutationSet,
+) -> tuple[list[tuple[MutationSet, int, Mutation]], list[tuple[int, Mutation]]]:
+    """Split a whole-set apply into (to apply, skipped for being grouped).
+
+    A pure function so the skip rule -- keep the first member of a group, skip
+    the rest -- is asserted by ``tests/test_mutation_verify.py`` rather than only
+    being visible in a manual run's output.
+    """
+    targets: list[tuple[MutationSet, int, Mutation]] = []
+    skipped: list[tuple[int, Mutation]] = []
+    seen_groups: set[str] = set()
+    for position, mutation in enumerate(mutation_set.mutations, 1):
+        if mutation.group and mutation.group in seen_groups:
+            skipped.append((position, mutation))
+            continue
         if mutation.group:
             seen_groups.add(mutation.group)
-        print(f"mutated {index}: {mutation.label}  ({mutation.path})")
+        targets.append((mutation_set, position, mutation))
+    return targets, skipped
+
+
+def _apply_whole_set(mutation_set: MutationSet) -> int:
+    """Apply the whole set, skipping the rest of a group and saying so.
+
+    Skipping is only defensible here: the operator asked for "everything", and a
+    group's members cannot all be in place at once. The skips are reported after
+    the writes so the wording matches what happened -- the preflight means no byte
+    is written until the whole selection has been checked, so a "skipped" line
+    printed up front would describe a decision that had not been acted on yet.
+    """
+    targets, skipped = _whole_set_targets(mutation_set)
+    problems = _apply_preflight(targets)
+    if problems:
+        raise SystemExit(
+            f"refusing to apply, {len(problems)} problem(s):\n  "
+            + "\n  ".join(problems)
+        )
+    _write_mutations(targets)
+    for position, mutation in skipped:
+        print(
+            f"skipped {position}: {mutation.label}  "
+            f"[与同组变异互斥，用 `apply {mutation_set.key} {position}` 单独跑]"
+        )
     return 0
 
 
@@ -1066,23 +1183,130 @@ def _verify_one(mutation_set: MutationSet, index: int, mutation: Mutation) -> li
     return problems
 
 
-def cmd_verify(args: argparse.Namespace) -> int:
-    keys = args.keys or [s.key for s in SETS]
+def _parse_index_list(value: str) -> tuple[int, ...]:
+    """Parse ``--index 27,30`` / ``--index 27-30`` into 1-based positions.
+
+    Comma-separated rather than ``nargs="+"``: the ``verify`` subcommand already
+    takes ``keys`` as ``nargs="*"``, and ``verify whitelist-fixtures --index 27 30``
+    would be read as two set keys. One token cannot be misread.
+
+    A token of the form ``a-b`` expands to the inclusive range ``a..b``, so a run
+    of neighbouring mutations can be re-taken without typing each position. An
+    ascending range only: ``30-27`` is rejected rather than silently reversed,
+    because the positions settle the order the run reports them in.
+
+    Value-level errors (empty entry, non-integer, reversed range) are reported by
+    argparse, so a typo fails at argument parsing rather than after a run has
+    started. Ranges are *not* range-checked here -- ``0-2`` parses and is then
+    rejected by ``_select_verify_targets``' bounds check, so every out-of-range
+    position gets the same message wherever it came from.
+    """
+    parts = [part.strip() for part in value.split(",")]
+    if any(not part for part in parts):
+        raise argparse.ArgumentTypeError(
+            f"empty entry in --index {value!r}; write e.g. --index 27,30"
+        )
+    parsed: list[int] = []
+    for part in parts:
+        if part.count("-") == 1:
+            start_text, end_text = (piece.strip() for piece in part.split("-"))
+            if start_text.isdigit() and end_text.isdigit():
+                start, end = int(start_text), int(end_text)
+                if start > end:
+                    raise argparse.ArgumentTypeError(
+                        f"--index range {part!r} is reversed; write {end}-{start}"
+                    )
+                parsed.extend(range(start, end + 1))
+                continue
+        try:
+            parsed.append(int(part))
+        except ValueError:
+            raise argparse.ArgumentTypeError(
+                f"--index expects integers or ranges, got {part!r}"
+            ) from None
+    return tuple(parsed)
+
+
+def _select_verify_targets(
+    keys: list[str], indexes: tuple[int, ...] | None
+) -> list[tuple[MutationSet, int, Mutation]]:
+    """Resolve the (set, 1-based position, mutation) triples a verify run covers.
+
+    ``indexes`` narrows the run to specific mutations, run in the order given --
+    the receipt at the end of the run should be readable against the command line
+    as typed. It is only meaningful with exactly one set, so asking for more than
+    one is an error rather than a silent cross-set lookup: ``verify a b --index 3``
+    has no single answer.
+
+    Duplicates are rejected instead of de-duplicated: silently running fewer
+    mutations than were typed would make the closing count disagree with the
+    command line, and that count is the run's receipt.
+
+    Kept out of ``cmd_verify`` so the selection rules -- unknown key, index out of
+    range, index without exactly one set -- are asserted statically by
+    ``tests/test_mutation_verify.py`` instead of only being discovered when a
+    twelve-minute run is already underway.
+
+    ``apply`` reuses this too, which is how the two commands are kept from
+    drifting apart on what "position 3" means: the rule is enforced by sharing
+    the function, not by remembering to keep two implementations in step.
+    """
+    given = list(keys)
+    keys = given or [s.key for s in SETS]
     unknown = [k for k in keys if k not in SETS_BY_KEY]
     if unknown:
         raise SystemExit(
             f"unknown set(s): {', '.join(unknown)}; known: {', '.join(SETS_BY_KEY)}"
         )
+    if indexes is None:
+        return [
+            (SETS_BY_KEY[key], position, mutation)
+            for key in keys
+            for position, mutation in enumerate(SETS_BY_KEY[key].mutations, 1)
+        ]
+    if len(keys) != 1:
+        # Distinguish "named one set too many" from "named none at all": the
+        # defaulted-to-every-set count would otherwise read as if the operator had
+        # typed five keys.
+        if not given:
+            raise SystemExit(
+                "--index needs a set key, e.g. verify whitelist-fixtures --index 27,30"
+            )
+        raise SystemExit(
+            f"--index needs exactly one set, got {len(keys)}: {', '.join(keys)}"
+        )
+    mutation_set = SETS_BY_KEY[keys[0]]
+    size = len(mutation_set.mutations)
+    duplicates = sorted({index for index in indexes if indexes.count(index) > 1})
+    if duplicates:
+        raise SystemExit(
+            f"duplicate --index: {', '.join(str(d) for d in duplicates)}; "
+            f"每个序号只会跑一次，写两遍多半是笔误"
+        )
+    out_of_range = [index for index in indexes if not 1 <= index <= size]
+    if out_of_range:
+        raise SystemExit(
+            f"index out of range: {', '.join(str(i) for i in out_of_range)} "
+            f"({keys[0]} 有 {size} 个)"
+        )
+    return [
+        (mutation_set, index, mutation_set.mutations[index - 1]) for index in indexes
+    ]
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    targets = _select_verify_targets(args.keys, args.index)
 
     failures: list[str] = []
     checked = 0
-    for key in keys:
-        mutation_set = SETS_BY_KEY[key]
-        print(f"\n=== {key} — {mutation_set.title} ===")
-        for index, mutation in enumerate(mutation_set.mutations, 1):
-            checked += 1
-            problems = _verify_one(mutation_set, index, mutation)
-            failures += [f"{key} {index}: {p}" for p in problems]
+    printed_key: str | None = None
+    for mutation_set, index, mutation in targets:
+        if mutation_set.key != printed_key:
+            print(f"\n=== {mutation_set.key} — {mutation_set.title} ===")
+            printed_key = mutation_set.key
+        checked += 1
+        problems = _verify_one(mutation_set, index, mutation)
+        failures += [f"{mutation_set.key} {index}: {p}" for p in problems]
 
     print(f"\n=== {checked} 个变异校验完毕 ===")
     if failures:
@@ -1105,9 +1329,20 @@ def main() -> int:
     )
 
     p_verify = sub.add_parser(
-        "verify", help="run each mutation through the three-phase cycle"
+        "verify", help="run each mutation through the four-phase cycle"
     )
     p_verify.add_argument("keys", nargs="*", help="set keys (default: all)")
+    p_verify.add_argument(
+        "-i",
+        "--index",
+        type=_parse_index_list,
+        default=None,
+        metavar="N[,N...]",
+        help=(
+            "verify only these mutations (1-based, comma-separated, e.g. -i 27,30); "
+            "needs exactly one set key"
+        ),
+    )
     p_verify.set_defaults(func=cmd_verify)
 
     for name, func, help_text in (
@@ -1118,9 +1353,20 @@ def main() -> int:
         p.add_argument("key", choices=sorted(SETS_BY_KEY))
         p.set_defaults(func=func)
 
-    p_apply = sub.add_parser("apply", help="mutate a set (all, or a single index)")
+    p_apply = sub.add_parser(
+        "apply", help="mutate a set (all, one position, or several)"
+    )
     p_apply.add_argument("key", choices=sorted(SETS_BY_KEY))
-    p_apply.add_argument("index", nargs="?", type=int, default=None)
+    p_apply.add_argument(
+        "index",
+        nargs="*",
+        type=_parse_index_list,
+        metavar="N[,N...]",
+        help=(
+            "1-based positions, comma-separated or as ranges (e.g. 5 8 or 27-30); "
+            "omit to apply the whole set"
+        ),
+    )
     p_apply.set_defaults(func=cmd_apply)
 
     args = parser.parse_args()

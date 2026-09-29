@@ -3596,9 +3596,9 @@ Windows 分支的关键在 `:286-293` 的**注释**：任何 HTTP 响应（**含
 
 | 事项 | 状态 |
 |---|---|
-| 改 `_check_service_running()`（选项 a）| ⏳ 未动（**需拍板**；且要有配套用例——否则"修好了"无从验证）|
-| 第二台机器/带代理 CI 的复现 | ⏳ 未做（35.4 的第三行因此只能标"推的"）|
-| 写进 RUNBOOK（选项 d）| ⏳ 未做 |
+| 改 `_check_service_running()`（选项 a）| ✅ **已在 §四十一 完成**（含配套用例：4 条重指 + 5 条新增 + 4 条变异；本节当时的"需拍板"是时点状态）|
+| 第二台机器/带代理 CI 的复现 | ⏳ 未做（35.4 的第三行因此只能标"推的"；**§四十一 也没有跨环境验证**）|
+| 写进 RUNBOOK（选项 d）| ✅ **已在 §四十一 完成**（且措辞随 (a) 一起改：见 §41.7 最后一行的"不要把残留 `[WARN]` 当代理假象"）|
 
 **提交状态**：本节**只改本文档**；生产代码与测试**一字未动**。**未提交。**
 
@@ -3706,7 +3706,7 @@ self.assertNotEqual(result["decision_rationale_zh"], "")     # :460
 |---|---|
 | 给**存活**的早退补"精确字符串"用例 → 登记 W30 | ⏳ 未做（§34 规矩：**补完用例才登记**；本节口径是纯清理）|
 | 收敛 13 个方向常量 / 归一化四元组 / 前端 `api.ts` union / 51 个 MIXED 文件 | ⏳ 未动（同 §34.9，**待拍板**）|
-| §35.5 的修法 (a)+(d) | ⏳ 未动（**待拍板**）|
+| §35.5 的修法 (a)+(d) | ✅ **已在 §四十一 完成**（本节当时的"待拍板"是时点状态；改动见 §41.2–§41.7）|
 
 **提交状态**：本节改 **1 个生产文件**（+ 本文档）。**未提交**（等指令）。
 
@@ -3823,7 +3823,7 @@ FAILURES (1):
 | 事项 | 状态 |
 |---|---|
 | 收敛 13 个方向常量 / 归一化四元组 / 前端 `api.ts` union / 51 个 MIXED 文件 | ⏳ 未动（同 §34.9，**待拍板**）|
-| §35.5 的修法 (a)+(d) | ⏳ 未动（**待拍板**）|
+| §35.5 的修法 (a)+(d) | ✅ **已在 §四十一 完成**（本节当时的"待拍板"是时点状态；改动见 §41.2–§41.7）|
 | 清 `%TEMP%\pytest-of-Alin`（降低下次长跑撞上拦截器的概率）| 🟡 **部分成功**：删掉 3 个 `pytest-NNNN`；**3 个更旧的 `pytest-*` 与 5 个 `garbage-*` 被 ACL 拒绝**（`WinError 5`，`chmod` 后仍拒 —— 与 HANDOFF 记的 `backend/.pytest_cache` ACL 损坏同类，需管理员提权）|
 | 给 harness 加**按序号单跑** `verify` 的入口 | ✅ **已在 §三十八 完成**（本批的 §37 页脚早于它，故此处按未交付内容更新）。本节当时只能**在仓库外**搭探针（探针直接 `import scripts.mutation_verify` 读**已登记的** inventory，而不是手抄针）—— 那正是这条入口要固化的做法 |
 | 提交 | ⏳ 未提交（等指令）|
@@ -3915,7 +3915,8 @@ Usage 段补上 `verify whitelist-fixtures --index 30` 与 `--index` 的说明�
 | 事项 | 状态 |
 |---|---|
 | 让 `--index` 一次支持多条（如 `--index 27,30`）| ✅ **已在 §三十九 完成**（本批的 §38 页脚早于它，故此处按未交付内容更新）|
-| 收敛 13 个方向常量 / §35.5 修法 (a)+(d) / `api.ts` union / 51 个 MIXED 文件 | ⏳ 待拍板 |
+| 收敛 13 个方向常量 / `api.ts` union / 51 个 MIXED 文件 | ⏳ 待拍板 |
+| §35.5 修法 (a)+(d) | ✅ **已在 §四十一 完成**（本节的页脚早于它，故此处按未交付内容更新）|
 | 提交 | ⏳ 未提交（等指令）|
 
 **提交状态**：本节改 **2 个文件**（harness + 它的静态守护测试）+ 本文档。**未提交**（等指令）。
@@ -4032,7 +4033,8 @@ Usage 段补上 `verify whitelist-fixtures --index 30` 与 `--index` 的说明�
 | 事项 | 状态 |
 |---|---|
 | `apply <set> <index>` 也支持多值 | ✅ **已在 §四十 完成**（并顺带做了区间语法与写入前的原子校验）。本节当时判断"不必与 `verify` 对称"**被推翻** —— 理由见 §40.2：两条命令共用同一个"位置"概念，共用解析器与选择器比"记得同步两处实现"更可靠 |
-| 收敛 13 个方向常量 / §35.5 修法 (a)+(d) / `api.ts` union / 51 个 MIXED 文件 | ⏳ 待拍板 |
+| 收敛 13 个方向常量 / `api.ts` union / 51 个 MIXED 文件 | ⏳ 待拍板 |
+| §35.5 修法 (a)+(d) | ✅ **已在 §四十一 完成**（本节的页脚早于它，故此处按未交付内容更新）|
 | 提交 | ⏳ 未提交（等指令）|
 
 **提交状态**：本节改 **2 个文件**（harness + 它的静态守护测试）+ 本文档。**未提交**（等指令）。
@@ -4177,7 +4179,8 @@ C5/C6 是**同一段字节的两个相反改写** → C5 应用之后，C6 的�
 
 | 事项 | 状态 |
 |---|---|
-| 收敛 13 个方向常量 / §35.5 修法 (a)+(d) / `api.ts` union / 51 个 MIXED 文件 | ⏳ 待拍板 |
+| 收敛 13 个方向常量 / `api.ts` union / 51 个 MIXED 文件 | ⏳ 待拍板 |
+| §35.5 修法 (a)+(d) | ✅ **已在 §四十一 完成**（本节的页脚早于它，故此处按未交付内容更新）|
 | 提交 | ⏳ 未提交（等指令）|
 
 **提交状态**：本节改 **2 个文件**（harness + 它的静态守护测试）+ 本文档。**未提交**（等指令）。
@@ -4187,3 +4190,186 @@ C5/C6 是**同一段字节的两个相反改写** → C5 应用之后，C6 的�
 > 提交本身**没有改动任何被变异过的文件**，所以该结论现在依然成立（`git diff HEAD` 为空即证）。
 
 **提交历史（本批）**：`d57d72a`（代码/测试）+ `727e70e`（文档）→ `main..HEAD` = **14**，工作树干净，**未 push**、**未开 PR**、**未声称已合并**。
+
+---
+
+# 四十一、§35.5 修法 (a)+(d) 落地：loopback 探测显式绕过环境代理
+
+## 41.1 结论先行
+
+| 问题 | 答案 |
+|---|---|
+| §35 那条"环境级"失败现在还是失败吗 | **不是** —— 本机 `test_backup_restore_drill.py::BackupRestoreDrillTests::test_a_real_archive_restores_every_store_to_its_configured_path` **通过**（§41.8 有逐项读数）|
+| 改了什么 | `restore_stores` 新增 `_is_loopback_url()` / `_open_health_url()`；`_check_service_running()` 的 Windows 分支改走它们 |
+| 会改变"远端健康检查"的语义吗 | **不会** —— 绕过**只对 loopback 生效**；`PMRF_HEALTHCHECK_URL` 指向反向代理时仍走环境代理（§35.5 明写的约束）|
+| 有配套守卫吗 | **有**：G3 的 4 条旧用例**重指**到新 seam、新增 **5 条**、并**登记 4 条变异（L1–L4）**走四阶段 |
+| (b)/(c) 呢 | **仍然不做**（§41.6），理由与 §35.5 一致 |
+
+## 41.2 改动 1：新增两个函数，改一处调用（`backend/scripts/restore_stores.py`）
+
+| # | 位置 | 改动 |
+|---|---|---|
+| 1 | 顶部导入 | `ipaddress` / `urllib.error` / `urllib.parse` / `urllib.request` 提到**模块级**（原先 `urllib.request` / `urllib.error` 的 import 在 `_check_service_running()` **函数体内**）|
+| 2 | `_is_loopback_url(url)` | **新增**：`host == "localhost"` **或** `ipaddress.ip_address(host).is_loopback`；`urlsplit` 抛 `ValueError`、或 host 为空 → `False` |
+| 3 | `_open_health_url(url, timeout)` | **新增**：loopback → `build_opener(ProxyHandler({}))`；非 loopback → 默认 `urllib.request.urlopen` |
+| 4 | `_check_service_running()` Windows 分支 | `urllib.request.urlopen(req, …)` → `_open_health_url(health_url, timeout)`；删掉函数体内联的两条 import；docstring 与 `:286-293` 附近的注释各补一段"**为什么**" |
+
+**为什么必须限定 loopback**（沿用 §35.5 原话）：问的是"**本机**这个端口有没有人听"。运维若故意把
+`PMRF_HEALTHCHECK_URL` 指向反向代理，硬关代理会**改变这条检查的含义** —— 所以绕过写在"是不是 loopback"的**判断之后**，而不是无条件生效。
+
+**明确没有改的方向**：`except urllib.error.HTTPError: return True`（把 4xx/5xx 当"服务活着"）**一字未动**。
+那是 §35.2 记录过的**有意的保守偏向** —— 选项 (b) 要求"只认 200"，会**退回**"降级但仍在跑的服务被判成没跑 → 覆盖活库"的旧缺陷。
+
+## 41.3 改动 2：G3 的 4 条旧用例重指到新 seam（**为什么必须重指**）
+
+原 4 条用例 patch 的是 `urllib.request.urlopen`。新代码对 loopback 走 `build_opener(...).open(...)`，
+**`urlopen` 不再被调用** → 改完代码先跑，`test_windows_path_returns_true_on_http_503` 与
+`test_windows_path_uses_health_endpoint` **`2 failed`**。
+
+→ 4 条统一改成 `patch.object(restore_stores, "_open_health_url", …)`：**把 patch 点从"库函数"换成"我们新加的那一层"**。
+
+这**不是**"为了让测试通过而改测试"：这正是 §35.5 那条要求——"修法要有配套用例，否则'修好了'无从验证"。
+patch 点若不落在新 seam 上，测的仍是**旧路径**，新代码分支一条都盖不到。
+
+## 41.4 新增的 5 条用例（`backend/tests/test_p0_fixes_round2.py`）
+
+| 用例 | 钉住 |
+|---|---|
+| `test_loopback_urls_are_recognised` | `http://localhost:` / `http://LOCALHOST:` / `127.0.0.1` / `127.1.2.3` / `[::1]` 五种拼法都算 loopback（**大小写**与**非 `127.0.0.1` 的 127/8** 都覆盖）|
+| `test_remote_urls_are_not_treated_as_loopback` | 域名 / `192.168.*` / `10.*` / `0.0.0.0` / **空串** 都不是 —— 绕过的**边界**，与上一条互为负控 |
+| `test_a_loopback_probe_builds_an_opener_with_no_proxy` | loopback 时**恰好**调用 `ProxyHandler({})` 一次、`build_opener` 一次、`opener.open` 一次（钉"**空**"这个字面量，不是"有没有 build_opener"）|
+| `test_a_remote_probe_keeps_the_default_opener` | 远端时 `build_opener` **一次都不许调**、`urlopen` **恰好一次** |
+| `test_a_proxy_answering_everything_cannot_make_a_dead_port_look_alive` | §35 的**端到端复现**：真起一个对一切 GET 回 502 的代理（`_Always502Proxy`），真占住一个**不可连接**的 loopback 端口（`bind` 后不 `listen`），置 `HTTP_PROXY=…` 且 `NO_PROXY=` 空，断言 `_check_service_running()` 为 **`False`** |
+
+⚠️ 最后一条是**这五条里唯一能证伪原缺陷的**：前四条断言的是"调用了哪个函数"，这一条断言的是
+"**代理替死端口答了 502，而结论仍然是不能恢复**"。只留前四条，一个"分支判断正确但 opener 仍读环境变量"的实现照样全绿（§41.5 的 L4 就是拿这件事做的变异）。
+
+## 41.5 四条变异 L1–L4（新 set `restore-loopback-probe`）
+
+`mutation_verify.py` 现在 **6 套 / 64 个变异**。新 set 的动力是 §35.5 那个修法**有两半**（判断"是不是 loopback"、
+以及"绕过时 handler 空不空"），任一半失效都能让整套守卫仍绿 —— 所以拆成四条：
+
+| # | 变异 | 打的字节 | 期望红的守卫 |
+|---|---|---|---|
+| L1 | loopback 目标改用默认 opener（**绕过方向反转**）| `if not _is_loopback_url(url):` → `if _is_loopback_url(url):` | 3 条（loopback 建 opener / 远端保默认 / **死端口**）|
+| L2 | `_is_loopback_url` 的 **localhost 名字**分支 `return True` → `return False` | `if host == "localhost":` 那一支 | 2 条（loopback 识别 / **死端口**）|
+| L3 | `_is_loopback_url` 的 **IP 字面量**分支 → `return False` | `return ipaddress.ip_address(host).is_loopback` | 2 条（loopback 识别 / **死端口**）|
+| L4 | 绕过用的 handler 退回**读环境变量**（`ProxyHandler({})` → `ProxyHandler()`）| `build_opener(urllib.request.ProxyHandler({}))` | 1 条（loopback 建 opener）|
+
+**四阶段实测**（`verify restore-loopback-probe`，exit **0**）：
+
+```text
+[OK ] restore-loopback-probe  1. L1 …  green before True | red after mutation True | green after restore True | bytes restored True
+        mutated run -> 3 failed, 15 deselected in 1.51s
+[OK ] restore-loopback-probe  2. L2 …  mutated run -> 2 failed, 2 passed, 16 deselected, 3 subtests passed in 3.30s
+[OK ] restore-loopback-probe  3. L3 …  mutated run -> 4 failed, 1 passed, 16 deselected, 2 subtests passed in 1.35s
+[OK ] restore-loopback-probe  4. L4 …  mutated run -> 1 failed, 17 deselected in 0.81s
+=== 4 个变异校验完毕 ===
+```
+
+四处读数都**对得上头条差异**，不是"红了就行"：
+
+- **L2 的 `2 passed, 3 subtests`**：名字分支被改坏后，`test_remote_urls_are_not_treated_as_loopback`（5 个 subTest）
+  与 `test_a_loopback_probe_builds_an_opener_with_no_proxy` 仍绿 —— 它们不读名字分支；红的 2 条与 subtests 3 个
+  正对应"`localhost` 两个 URL 识别不了"+"死端口复活"。
+- **L3 的 `4 failed, 1 passed, 2 subtests passed`**：IP 分支被改坏后，`1 passed` 是远端那条、`2 subtests passed`
+  恰是 `localhost` / `LOCALHOST`（走名字分支）；`4 failed` 是 3 个 IP 拼法 + 死端口。
+- **L1 的 3 条全红**：方向反转是"最狠"的一种，三个守卫一起响。
+
+**顺序说明**：`test_the_five_sets_are_present` 已改名为 **`test_the_six_sets_are_present`** 并追加 `"restore-loopback-probe"` ——
+沿用 §24 那条"故意有序且精确"的约定（改名是**预期动作**，不改名才说明这个断言没被人看见）。守护测试：
+**39 passed + 84 → 89 subtests**，差值 **+5** 能算平：`+4` 来自 `test_the_selected_mutation_is_the_inventory_object`
+（每个变异一个 subTest，60→64）、`+1` 来自 `test_the_whole_set_selection_passes_preflight`（每个 set 一个 subTest，5→6）。
+
+## 41.6 (b)/(c) 仍然不做
+
+| 选项 | 决定 | 理由（与 §35.5 一致，此处补"为什么现在仍不该做"）|
+|---|---|---|
+| (b) 收窄"算活着"的响应 | **不做** | 会**退回** `:286-293` 注释记录过的旧缺陷（503 降级被误判成"没跑"→ 覆盖活库）。而且本次修法**已经**在**正确的层次**上解决了假警告 —— 不是靠收紧判据，是靠**问到本机的端口**。收紧判据是在**掩盖**症状 |
+| (c) 改测试期望（允许该条 warnings 出现）| **不做** | 断言本身是对的，而且 **(a) 落地后该断言恢复了原意**：警告现在只在服务真的占着库时出现。改期望等于把"警告可能恒亮"固化成契约 |
+
+## 41.7 选项 (d)：RUNBOOK（**措辞必须跟着 (a) 改**）
+
+写在 `docs/ops/RUNBOOK.md` → "Restoring from a backup" 的**第 3 步（Preview）之后**，
+紧跟那句 `A [WARN] about the service means step 1 did not take effect.` —— 那正是这条假警告会被**误读**的位置。
+
+四个要点，每个都有理由：
+
+| 写什么 | 为什么 |
+|---|---|
+| 机制：`urllib` 只读**环境变量**代理，不读系统（WinINET）代理，而后者的 `ProxyOverride` **本来就含 `localhost`** | 解释"为什么浏览器打不开时正常、Python 却踩到"（§35.3 的原话）|
+| "A **current** build bypasses the proxy for loopback URLs itself, so this should not fire." | (a) 已落地 → 必须在文本里说清**这版之后不该再亮**，否则运维会继续把它当成"代理噪音" |
+| 仍给出 `NO_PROXY=localhost,127.0.0.1`（并提示小写 `no_proxy`）| 对**旧构建**（未含本次修法）仍然有用；这一条正是选项 (d) 原本要写的东西 |
+| ⚠️ "On a current build, do **not** dismiss a surviving `[WARN]` as a proxy artifact" | **(a)+(d) 同时做的副作用**：单做 (d) 时 `[WARN]` 的含义是"**可能**是代理"；做完 (a) 它**恢复成"服务确实在跑"**。运维文本若不跟着改，就会把一处**真的危险信号**解释掉 |
+
+**改动量**：`git diff --stat` → `1 file changed, 16 insertions(+)`，**零删除**（第 4 步的标题与正文原样保留，
+是编辑过程中一度被吞掉又补回的 —— 见 §41.9）。
+
+## 41.8 验证
+
+| 检查 | 结果 |
+|---|---|
+| `verify restore-loopback-probe`（四阶段 × 4）| 4/4 全过，exit **0**；`bytes restored` 全 `True` |
+| `pytest tests/test_mutation_verify.py` | **39 passed + 89 subtests**（junit `failures=0 / errors=0`）|
+| `pytest tests/test_p0_fixes_round2.py` | **18 passed + 10 subtests**（改前 13 passed + 0；新增 5 条用例 + 10 个 subTest）|
+| `pytest tests/test_runbook_restore_contract.py tests/test_p0_fixes_round2.py` | junit **tests=45 / failures=0 / errors=0 / skipped=0** |
+| `pytest tests/test_restore_stores.py tests/test_backup_restore_drill.py` | junit **tests=108 / failures=0 / errors=0 / skipped=0**（summary `29 passed, 79 subtests`，34.52s）|
+| **§35 那条环境级失败** | **通过** —— junit 里 `test_a_real_archive_restores_every_store_to_its_configured_path` **在 `passed` 集合内**（逐条按名核对，不靠"总数对了"）|
+| `ruff check app/`（**CI 门**）| `All checks passed!` |
+| `ruff check scripts/restore_stores.py scripts/mutation_verify.py tests/test_mutation_verify.py tests/test_p0_fixes_round2.py` | 只剩 `tests/test_p0_fixes_round2.py:27` 的 `F401 pathlib.Path` —— **既有问题**：`git show HEAD:… \| ruff check --select F401 --stdin-filename -` 同样报 **1** 条。CI 不跑 `tests/`（§三十五 已记），按约定**不动** |
+| `scripts/eol_audit.py`（5 个改动文件）| `line-ending damage: none`（`mutation_verify.py` / `test_mutation_verify.py` = LF 两侧；其余 3 个 = `LF -> CRLF checkout`，即正常检出态）|
+
+## 41.9 本节未做 / 一处过程留痕
+
+| 事项 | 状态 |
+|---|---|
+| 第二台机器 / 带代理 CI 的复现（§35.4 第 3 行仍是"**推的**"）| ⏳ 未做 —— 本节的证据是**本机**上"从失败变成通过"，跨环境那条推断**没有被本次验证** |
+| (b) / (c) | ✅ **有意不做**（§41.6）|
+| 收敛 13 个方向常量 / `api.ts` union / 51 个 MIXED 文件 | ⏳ 待拍板（同 §34.9）|
+| 提交 | ⏳ 未提交（等指令）|
+
+⚠️ **一次过程留痕（值得记，因为它是"编辑工具会吞行"的实例）**：往 RUNBOOK 插引用块时，第一次编辑把
+`**4. Apply it.**` 那行**一起删掉了** —— 因为 `old_string` 多带了一行、`new_string` 没带回来。
+`git diff --stat` 显示 `16 insertions, 0 deletions` **才知道**（若只看插入数就会漏）。
+→ 教训：**插入型编辑也要看 diff 的两侧计数**；"只加了东西"不该有删除数。
+
+**提交状态**：本节改 **5 个文件**（`restore_stores.py` + `mutation_verify.py` + `test_p0_fixes_round2.py` +
+`test_mutation_verify.py` + `docs/ops/RUNBOOK.md`）+ 本文档。**未提交**（等指令）。**未 push**、**未开 PR**。
+
+> 追加（2026-09-30）：老板选的是"**先只提交代码/测试，文档留下一批**" → 代码与测试已在 **`06cb3cb`**
+> （4 文件 **+303/-16**）提交；`docs/ops/RUNBOOK.md` 与本文档在**写下这条追注这一刻仍未提交**
+> （页脚那句"未提交"保留不改 —— 它记的是提交前那一刻的实测状态，与 §34–§40 的做法一致）。
+>
+> **闸门只跑一道，覆盖本批的两个提交**（沿用 §㊴ 的先例：`d57d72a` 代码 + `727e70e` 文档共用同一道全量闸门）。
+> §41.10 那张画像就是本批的闸门（`tests=7570 / 0 failures`）。文档提交相对它的增量只有两个 md：
+> `RUNBOOK.md` 由 `tests/test_runbook_restore_contract.py` 覆盖（提交前已跑，全绿）；
+> **本文档没有任何测试读它** —— 已 grep 取证：`backend/tests/` 里只有**两处注释/文档字符串**
+> 提到本文件的路径（`test_event_source_utils.py:9` 与 `test_knockout_stage_whitelist_consistency.py:20`），
+> **没有解析它的用例**，所以纯文档改动不会改变任何断言。
+
+## 41.10 提交前的全量闸门：**0 失败**，以及那 **+36** 是怎么来的
+
+`pytest tests/` → junit **tests=7570 / 0 failures / 0 errors / 11 skipped**（18m50s；summary
+`6480 passed, 11 skipped, 1079 subtests passed`）。**这是本会话第一次全绿的全量闸门** —— §35 那条环境级失败**没了**。
+
+与上一道闸门（7534 / **1 failure**）的差额 **+36**，必须算得平。做法是**取真值而不是推算**：
+在 `HEAD` 上开一个临时 worktree，把涉及的两个测试文件在**新旧两棵树**上各跑一次 junit，拿到它们各自的贡献：
+
+| 组成部分 | 上一道闸门 | 现在 | 差额 | 来源 |
+|---|---|---|---|---|
+| `test_mutation_verify.py` | 39 方法 + 84 子用例 = **123** | 39 + 89 = **128** | **+5** | `test_the_selected_mutation_is_the_inventory_object` 每个变异一个 subTest（60→64 = +4）、`…_selection_passes_preflight` 每个 set 一个（5→6 = +1）|
+| `test_p0_fixes_round2.py` | 13 方法 + 0 = **13** | 18 + 10 = **28** | **+15** | 5 条新用例 + 两组 `subTest`（loopback 5 + 远端 5）|
+| `test_backup_restore_drill.py` | 8 方法 + 47 = **55** | 8 + 63 = **71** | **+16** | ⚠️ **见下** |
+| **合计** | **7534** | **7570** | **+36** | ✓ |
+
+⚠️ **那 +16 不是新用例，是"失败藏起来的子用例"**：`test_a_real_archive_restores_every_store_to_its_configured_path`
+里有 `with self.subTest(store=name):` 的循环（`:117`）。它**上一道闸门是失败的** → 循环没跑完 →
+**16 次 subTest 根本没被记数**。修好之后循环跑完并全过 → 同一个文件的 `tests` 贡献从 55 涨到 71。
+
+→ **可复用判据**：**全量 `tests=` 的差额不全是"新增用例"** —— 一条**既有的失败**会把它内部的 subTest
+循环**从计数里挖掉**，修好时差额以"新增"的面目回来。所以对账要**按文件取真值**（开 worktree 跑旧树），
+不能只用"我改了哪几个文件"推算；否则会得到 +20 与观察到的 +36 差了 16，然后白找半天。
+反向也成立：**失败数从 1 变 0 时，tests= 必然同时变大**，这不是"多收集了文件"。
+
+**长时任务对冲**（本仓惯例）：跑前对 6 个改动文件落 `sha256 + 字节数`，跑完逐条复核 → **changed = 0**
+（本轮没有发生"就地编辑被回退"）。

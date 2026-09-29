@@ -619,6 +619,22 @@ lists every member, its checksum, and the path it would land on.
 Read the output before continuing. Fewer entries than you expect means a partial
 archive. A `[WARN]` about the service means step 1 did not take effect.
 
+> **If this host exports `HTTP_PROXY`/`HTTPS_PROXY` without `NO_PROXY`,** that
+> warning is not always about the service. The probe asks a loopback URL
+> (`PMRF_HEALTHCHECK_URL`, default `http://localhost:8000/api/health`) and
+> `urllib` sends it through that proxy: it reads the environment variables, not
+> the system (WinINET) proxy, whose bypass list *does* cover `localhost` — which
+> is why a browser on the same box is unaffected. The proxy answers for a port
+> with nothing listening, and any HTTP answer counts as "the service is up" (that
+> looseness is deliberate: a 503 from a degraded-but-running service must not be
+> read as "not running"), so a refused connection is reported as a live one. A
+> current build bypasses the proxy for loopback URLs itself, so this should not
+> fire. On an older build, export `NO_PROXY=localhost,127.0.0.1` (and lowercase
+> `no_proxy`, which some tooling prefers) before running the restore. On a
+> current build, do **not** dismiss a surviving `[WARN]` as a proxy artifact — it
+> means the service really does still hold the database open, and a restore into
+> it will corrupt it.
+
 **4. Apply it.** Add `--encryption-key` if the archive is encrypted and
 `BACKUP_ENCRYPTION_KEY` is not set in the environment.
 

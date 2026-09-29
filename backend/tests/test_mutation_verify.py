@@ -35,12 +35,14 @@ def _every_mutation():
 
 
 class InventoryTests(unittest.TestCase):
-    def test_the_five_sets_are_present(self):
+    def test_the_six_sets_are_present(self):
         """Pins the inventory, so a whole set cannot be dropped silently.
 
         Deliberately exact and ordered: adding a set means editing this test,
         which is the point -- an inventory nobody has to touch is an inventory
-        that can rot.
+        that can rot. Renamed from ``test_the_five_sets_are_present`` when
+        ``restore-loopback-probe`` was added (audit section 41), the same way
+        it was renamed from ``test_the_four_sets_are_present`` before.
         """
         self.assertEqual(
             [s.key for s in mutation_verify.SETS],
@@ -50,6 +52,7 @@ class InventoryTests(unittest.TestCase):
                 "probability-probe",
                 "voided-trade",
                 "whitelist-fixtures",
+                "restore-loopback-probe",
             ],
         )
 

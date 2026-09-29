@@ -170,6 +170,11 @@ _REVIEW_QUEUE_DETECTORS = "backend/app/services/review_queue_detectors.py"
 _DOMAIN_RELIABILITY = "backend/app/services/domain_reliability_service.py"
 _REPLAY_METRICS = "backend/app/replay/metrics.py"
 
+# §41 — the loopback health probe in restore_stores (audit section 35.5). The
+# guard file is the P0 round-2 suite, whose G3 block drives the probe.
+_RESTORE_STORES = "backend/scripts/restore_stores.py"
+_T_RESTORE_PROBE = "tests/test_p0_fixes_round2.py"
+
 _T_AVAILABILITY = "tests/test_football_live_availability_service.py"
 _T_SCHEDULE = "tests/test_football_live_schedule_service.py"
 _T_KALSHI = "tests/test_kalshi_event_source.py"
@@ -931,6 +936,67 @@ SETS: tuple[MutationSet, ...] = (
                 guard_file=_T_DECISION_QUALITY,
                 guards=("test_missing_both_inputs_rationale_names_the_missing_breakdown",),
                 note="§36：早退不可达后落到尾部的保守模板，而旧断言只查非空 —— 尾部模板同样非空，故对「这条分支从未执行」天然盲",
+            ),
+        ),
+    ),
+    MutationSet(
+        key="restore-loopback-probe",
+        title="恢复前的存活探测是否绕过环境代理（L1–L4）",
+        rationale=(
+            "§35 的环境归因：本机设了 HTTP_PROXY、没设 NO_PROXY，而 urllib 只看环境变量、"
+            "不看 WinINET 的 ProxyOverride → 探测请求根本没到 localhost:8000，代理替一个无人"
+            "监听的端口回了 502，而 502 也算「有人在听」→ 警告恒亮。修法是 loopback 目标显式"
+            "用空 ProxyHandler。四条变异各锁一半：L1 锁「只有 loopback 才绕过」这一步的方向；"
+            "L2 锁「localhost 这个名字算 loopback」；L3 锁「127.x / ::1 也算 loopback」；"
+            "L4 锁「绕过用的 handler 确实是空的」——ProxyHandler() 无参会读回环境代理，等于没修。"
+            "四者缺一，修法都能在某一半上失效而整套守卫仍绿。"
+        ),
+        mutations=(
+            Mutation(
+                label="L1 loopback 目标改用默认 opener（绕过方向反转）",
+                path=_RESTORE_STORES,
+                old=b"    if not _is_loopback_url(url):\r\n        return urllib.request.urlopen(request, timeout=timeout)",
+                new=b"    if _is_loopback_url(url):\r\n        return urllib.request.urlopen(request, timeout=timeout)",
+                guard_file=_T_RESTORE_PROBE,
+                guards=(
+                    "test_a_loopback_probe_builds_an_opener_with_no_proxy",
+                    "test_a_remote_probe_keeps_the_default_opener",
+                    "test_a_proxy_answering_everything_cannot_make_a_dead_port_look_alive",
+                ),
+                note="§41：方向反了 —— loopback 走环境代理（正是 §35 的病灶），远端反而被剥掉代理",
+            ),
+            Mutation(
+                label="L2 _is_loopback_url 的 localhost 名字分支返回 False",
+                path=_RESTORE_STORES,
+                old=b'    if host == "localhost":\r\n        return True',
+                new=b'    if host == "localhost":\r\n        return False',
+                guard_file=_T_RESTORE_PROBE,
+                guards=(
+                    "test_loopback_urls_are_recognised",
+                    "test_a_proxy_answering_everything_cannot_make_a_dead_port_look_alive",
+                ),
+                note="§41：名字分支失效 —— 默认 URL 是 http://localhost:…，等于修法在本机默认配置下没生效",
+            ),
+            Mutation(
+                label="L3 _is_loopback_url 的 IP 字面量分支返回 False",
+                path=_RESTORE_STORES,
+                old=b"        return ipaddress.ip_address(host).is_loopback",
+                new=b"        return False",
+                guard_file=_T_RESTORE_PROBE,
+                guards=(
+                    "test_loopback_urls_are_recognised",
+                    "test_a_proxy_answering_everything_cannot_make_a_dead_port_look_alive",
+                ),
+                note="§41：只认名字不认地址 —— 127.0.0.1 / ::1 会重新落到代理后面",
+            ),
+            Mutation(
+                label="L4 绕过用的 ProxyHandler 退回读环境变量（无参构造）",
+                path=_RESTORE_STORES,
+                old=b"    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))",
+                new=b"    opener = urllib.request.build_opener(urllib.request.ProxyHandler())",
+                guard_file=_T_RESTORE_PROBE,
+                guards=("test_a_loopback_probe_builds_an_opener_with_no_proxy",),
+                note="§41：ProxyHandler() 无参会 getproxies() —— 分支对了、handler 不空，等于没修",
             ),
         ),
     ),

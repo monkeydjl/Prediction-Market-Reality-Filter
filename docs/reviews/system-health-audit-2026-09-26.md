@@ -3717,3 +3717,454 @@ self.assertNotEqual(result["decision_rationale_zh"], "")     # :460
 > 而提交协议**仍然**跑了全量套件闸门 —— junit **tests=7420 / failures=1 / errors=0 / skipped=11**
 > （18m35s），唯一失败即 §三十五 已归因的那条（环境级 `HTTP_PROXY` 造成的假警告），
 > 与 §30 的闸门画像**逐项一致**。两句不冲突：前者论的是**证据增量**，后者是**提交前协议门槛**。
+
+---
+
+# 三十七、把 §36.4 的空头变成承重：给 `none` 早退补**精确字符串**断言 → 登记 W30
+
+## 37.1 起因
+
+§36.4 的探针 B 证明了一件事：`decision_quality_service._build_rationale_body` 的
+`if consensus_level == "none":` 早退一旦**不可达**，该文件 **33 个用例全绿** ——
+因为唯一看着 rationale 的断言只有 `assertNotEqual(..., "")`，而尾部保守模板**同样非空**。
+§36.6 把它记为"要登记就得先补一条精确字符串用例"。本节就是那一步（§34 规矩：**补完用例才登记**）。
+
+## 37.2 补的用例（**1 条**，33 → 34）
+
+| 项 | 值 |
+|---|---|
+| 文件 | `backend/tests/test_decision_quality_service.py`（紧接那条弱断言之后）|
+| 名字 | `test_missing_both_inputs_rationale_names_the_missing_breakdown` |
+| 输入 | `recommendation=None, evidence_breakdown=[]` —— 与弱断言那条**完全相同**（同一输入、同一分支，只把断言从"非空"换成"精确"）|
+| 断言 | `assertEqual(result["decision_rationale_zh"], "缺少可解析的证据分解，无法判断证据一致性。" + _DISCLAIMER_SUFFIX)` |
+
+**oracle 的分工**：**正文写字面量**（被锁的正是这条分支的措辞），**后缀用模块自己的
+`_DISCLAIMER_SUFFIX`**（后缀不是被测对象，不必抄第二遍）。这与 §24「oracle 必须独立于被测常量」
+不冲突 —— 被测的是**分支**，不是免责声明。
+
+## 37.3 登记 W30
+
+| 项 | 值 |
+|---|---|
+| 标签 | `W30 decision_quality._build_rationale_body 的 none 早退改成不可达` |
+| path | `backend/app/services/decision_quality_service.py`（**复用已有路径常量**，未新增）|
+| old → new | `    if consensus_level == "none":\r\n        return` → `    if consensus_level == "NEVER":\r\n        return` |
+| guard | `test_missing_both_inputs_rationale_names_the_missing_breakdown`（**1 条**）|
+| 清单 | `whitelist-fixtures` 29 → **30**；总计 59 → **60**；仍 **5 套** |
+
+## 37.4 🔴 登记的不是「被删掉的那段死代码」
+
+W30 **不是**为 §36 删掉的死分支登记的 —— 那段**根本登记不了**（§36.3：写回去行为零变化，
+阶段②必过不了）。W30 登记的是**清理之后活下来的那条早退**。两者在同一函数里相邻，
+极易混为一谈，所以这条区分写进了 set 的 `rationale` ⑦。
+
+## 37.5 🔴 针必须唯一：那条 `if` 在文件里出现 **2 次**
+
+`if consensus_level == "none":` 出现两次：`_apply_downgrade_rules:285`（**8 空格**缩进）与
+`_build_rationale_body:339`（**4 空格**）。
+
+- 只写「4 空格 + `if consensus_level == "none":`」→ **命中 2 次** ——
+  因为 8 空格那行**包含**"4 空格 + if…"作为子串。`apply` 会直接拒绝，静态守护测试也会报。
+- 解法：针**跨到下一行**（`if` 行 + `CRLF` + `        return`）→
+  8 空格那行后面跟的是注释 `# Rule 4:`，不匹配 → 命中 **1** 次。
+- 这是本套**第一个含换行的针**，因此必须带 **CRLF**（`test_no_needle_carries_a_bare_lf` 的判据是
+  「针里的换行数 == 其中的 CRLF 数」）。实测 `hits=1 bareLF=0`。
+
+## 37.6 验证
+
+**单条四阶段**（探针直接读**已登记的** inventory，不是手抄针 —— 保证探的就是 `verify` 将来会跑的那条）：
+
+```
+target   : whitelist-fixtures #30  W30 …
+needle   : hits=1  bareLF=0
+phase 1  : rc=0  OK                 | 1 passed, 33 deselected
+phase 2  : rc=1  red_after=True OK  | 1 failed, 33 deselected
+phase 3  : rc=0  OK                 | 1 passed, 33 deselected
+phase 4  : bytes restored -> True
+sha256   : ae10b573d0c024ea (before) / ae10b573d0c024ea (after)
+```
+
+**harness 静态守护**：`tests/test_mutation_verify.py` → **8 passed + 2 subtests**
+（junit `tests=10 / failures=0`）。`ruff check scripts/mutation_verify.py` → `All checks passed!`。
+
+**全套**：`verify whitelist-fixtures` → **29/30 标 `[OK]`，其中 1 条的读数被环境拦截器污染**（见 37.6.1）。
+跑前对 **35 个文件**（33 个变异目标 + harness + 本测试文件）取 `sha256 + 行尾画像` 快照，
+跑完**逐条比对 `changed = 0`**；`git status` 里只剩本节自己改的 2 个文件。
+
+### 37.6.1 🔴 W27 的 `[FAIL]` 是**环境拦截器**，不是变异失败
+
+全套输出里 W27 没有 `[OK]`，失败行是：
+
+```
+FAILURES (1):
+  - whitelist-fixtures 27: guard already RED before mutation -> .
+    [safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED]
+    {"count":227,"threshold":50,"scope":"turn","targetCount":1}
+```
+
+**判据**：`_run_guards` 的通过判据是 **`proc.returncode == 0`**；而本机 `safe-delete` shim
+会拦掉 pytest 自己的临时目录清理、把进程退出码抬成非 0。→ **阶段① 被读成"变异前守卫就是红的"，
+实际是守卫跑绿了、只是清理阶段被拦。** tail 里的 `[safe-delete]` 签名就是它的指纹。
+
+**三重反证**（缺一就只能"觉得"是环境问题）：
+
+| # | 反证 | 结果 |
+|---|---|---|
+| ① | 失败发生在**阶段①**（写文件**之前**）| 是 —— `_verify_one` 在 `green_before` 处就 `return`，所以**没留下变异态**（快照 `changed = 0` 印证）|
+| ② | 该守卫在**当前（未变异）**状态单独跑 | **rc=0 / `1 passed, 127 deselected`** |
+| ③ | W27 用**单条四阶段探针**重跑 | **四阶段全过**（`red_after=True`、`bytes restored=True`、`sha256 5508ab33…` 前后一致）|
+
+→ 结论：**30 条变异各自都通过了四阶段**；其中 W27 由独立探针取证，全套那一次的读数是环境噪音。
+**不重跑的理由**：`scope:"turn"` 是**按本轮**累计的，本轮已跑过大量 pytest（含一次 18 分钟全量），
+再跑一次更可能在前面的序号就撞上同一个拦截器 —— 用一次更差的观测去覆盖一份已完整的证据没有意义。
+
+## 37.7 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| 收敛 13 个方向常量 / 归一化四元组 / 前端 `api.ts` union / 51 个 MIXED 文件 | ⏳ 未动（同 §34.9，**待拍板**）|
+| §35.5 的修法 (a)+(d) | ⏳ 未动（**待拍板**）|
+| 清 `%TEMP%\pytest-of-Alin`（降低下次长跑撞上拦截器的概率）| 🟡 **部分成功**：删掉 3 个 `pytest-NNNN`；**3 个更旧的 `pytest-*` 与 5 个 `garbage-*` 被 ACL 拒绝**（`WinError 5`，`chmod` 后仍拒 —— 与 HANDOFF 记的 `backend/.pytest_cache` ACL 损坏同类，需管理员提权）|
+| 给 harness 加**按序号单跑** `verify` 的入口 | ✅ **已在 §三十八 完成**（本批的 §37 页脚早于它，故此处按未交付内容更新）。本节当时只能**在仓库外**搭探针（探针直接 `import scripts.mutation_verify` 读**已登记的** inventory，而不是手抄针）—— 那正是这条入口要固化的做法 |
+| 提交 | ⏳ 未提交（等指令）|
+
+**提交状态**：本节改 **2 个文件**（1 个测试 + harness）。**未提交**（等指令）。
+
+---
+
+# 三十八、给 harness 加 `verify <set> --index N`：把「单条四阶段」从自制探针变成常驻能力
+
+## 38.1 起因
+
+§37 里"单条四阶段"这件事实用到了**两次** —— W30 的常规取证、以及 W27 被环境拦截器污染后的重取 ——
+而两次都是**在仓库外手搭探针**。根因：`verify` 只接 set key（`keys` 是 `nargs="*"`），
+没有按序号单跑的入口，于是"证明一条变异"只能靠临时脚本，而临时脚本**本身不受任何守护**。
+本节把它变成常驻能力。
+
+## 38.2 设计：把「选哪几条」抽成纯函数
+
+`_select_verify_targets(keys, index)` → `list[(MutationSet, 1-based position, Mutation)]`
+
+| 输入 | 行为 |
+|---|---|
+| `keys=[]`、`index=None` | 全部 5 套、**60** 条，按清单顺序 |
+| `keys=["x"]`、`index=None` | 该套全部 |
+| `keys=["x"]`、`index=N` | **恰好 1 条**（`x` 的第 N 条）|
+| `index` 但给了 **0 或 ≥2 个 set** | `SystemExit`：`--index needs exactly one set, got 2: …` |
+| `index` 越界（`0` / 负数 / `> len`）| `SystemExit`：`index out of range: 99 (whitelist-fixtures 有 30 个)` |
+| 未知 set key | `SystemExit`（沿用原文案）|
+
+**为什么抽成纯函数**：这些规则**不需要跑 pytest 就能判定**。抽出来之后静态测试才钉得住 ——
+否则一个 off-by-one 会**安静地重取相邻的那条变异**并报"通过"，而那正是最坏的一种错
+（它看起来像成功）。
+
+⚠️ **序号口径必须与 `apply` 一致**：`apply` 是 1-based，所以 `-i 0` 与负数**一律拒绝**
+（`1 <= index <= len`）。两边口径不一致的话，"同一个序号"在两条命令里会指向**不同的变异**。
+
+## 38.3 CLI
+
+```
+verify [key ...] [-i N | --index N]
+```
+
+`--index` 只在该次运行**恰好一个 set** 时有意义 → 不满足就**报错**而不是猜
+（`verify a b --index 3` 没有唯一解）。输出沿用原形状：仍打 `=== <set> — <title> ===` 头与
+逐条 `[OK ] key N. label`，只是头改为**在切换 set 时**才打（单条时自然只出现一次）。
+
+## 38.4 新增的静态守卫（+7 个用例）
+
+`tests/test_mutation_verify.py` 新增 `VerifySelectionTests`：
+
+| 用例 | 钉住 |
+|---|---|
+| `..._no_index_covers_every_mutation_in_inventory_order` | 扁平化后的 `(key, position)` 序列 == 清单顺序（**不变式**，不硬写 60）|
+| `..._the_selected_mutation_is_the_inventory_object` | 选出的是**清单里那个对象**（`assertIs`，不是等价副本）|
+| `..._index_one_selects_the_first_mutation_of_that_set` | 下界 `1` |
+| `..._index_at_the_last_position_selects_the_last_mutation` | 上界 `len(...)` |
+| `..._index_needs_exactly_one_set` | 0 或 ≥2 个 set 配 `--index` → `SystemExit` |
+| `..._index_out_of_range_is_rejected_at_both_ends` | `0` / `-1` / `len+1` → `SystemExit` |
+| `..._unknown_set_is_rejected` | 未知 key → `SystemExit` |
+
+→ 该文件从 **8 passed + 2 subtests** 变成 **15 passed + 65 subtests**。
+
+## 38.5 验证
+
+| 检查 | 结果 |
+|---|---|
+| `verify whitelist-fixtures --index 30`（端到端）| 只跑 1 条：`green before True / red after True / green after restore True / bytes restored True`；`mutated run -> 1 failed, 33 deselected`；exit **0** |
+| `verify voided-trade -i 1`（短旗标）| 同上，1 条通过 |
+| `verify daily-digest review-queue --index 1` | 拒绝：`--index needs exactly one set, got 2: …`（exit 1）|
+| `verify whitelist-fixtures --index 99` | 拒绝：`index out of range: 99 (whitelist-fixtures 有 30 个)`（exit 1）|
+| `tests/test_mutation_verify.py` | **15 passed + 65 subtests** |
+| `ruff check scripts/mutation_verify.py`（CI 闸门）| `All checks passed!` |
+| 冒烟后 33 个变异目标文件的 sha256 快照 | **changed = 0** —— 新入口自己也会把文件还原干净 |
+
+## 38.6 顺带修正
+
+模块 docstring 里 *"asserts a full three-phase cycle"* 与实际列出的 **4** 条不符
+（第 3 阶段是合并 harness 时新增的，描述漏改）→ 改为 **four-phase**；
+Usage 段补上 `verify whitelist-fixtures --index 30` 与 `--index` 的说明段。
+
+## 38.7 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| 让 `--index` 一次支持多条（如 `--index 27,30`）| ✅ **已在 §三十九 完成**（本批的 §38 页脚早于它，故此处按未交付内容更新）|
+| 收敛 13 个方向常量 / §35.5 修法 (a)+(d) / `api.ts` union / 51 个 MIXED 文件 | ⏳ 待拍板 |
+| 提交 | ⏳ 未提交（等指令）|
+
+**提交状态**：本节改 **2 个文件**（harness + 它的静态守护测试）+ 本文档。**未提交**（等指令）。
+
+---
+
+# 三十九、`--index` 一次多条：`-i 27,30`
+
+## 39.1 起因
+
+§三十八 的入口一次只能重取**一条**。而 §37 里需要重取的是**两条**（W27 被环境拦截器污染、W30 新登记），于是要用同一套机制跑两遍 —— 每遍都要重走一次参数解析与 pytest 冷启动。
+§38.7 当时把它记成"现在跑两次即可；单值口径不必先复杂化"（该行已按 §37.7 的先例改为指向本节，
+**原措辞保留在此引用**，避免改写时点事实）。做完后发现**"复杂化"的成本实际只落在一处**（一个新的 `type=` 回调，见 39.3），
+其余选择规则本来就已经在 `_select_verify_targets` 里 —— 那个函数接受的**本就该是一个序列**。所以这不是新增复杂度，而是把已有的口径改对。
+
+## 39.2 为什么是逗号，而不是 `nargs="+"`
+
+`verify` 的第一个位置参数 `keys` 已经是 `nargs="*"` → `--index 27 30` 会被当作**两个 set key** 读进去
+（然后报 `unknown set(s): 30`，一条与真实错误无关的消息）。**逗号形式只占一个 token，不可能被误读。**
+代价是这个 token 要自己拆 → 需要自定义 `type=`。
+
+## 39.3 解析与选择分离
+
+| 层 | 函数 | 职责 |
+|---|---|---|
+| 值级 | `_parse_index_list(value) -> tuple[int, ...]` | `"27,30"` → `(27, 30)`；容忍两侧空白（`" 27 , 30 "`）；**空项/非整数抛 `argparse.ArgumentTypeError`** |
+| 语义级 | `_select_verify_targets(keys, indexes: tuple[int, ...] \| None)` | 越界 / 重复 / 未给 set key 的判定 |
+
+**值级错误交给 argparse**（exit **2** + usage），于是笔误在**跑任何 pytest 之前**就被拒 ——
+而不是等到一条四阶段跑完才发现第二条序号不存在。
+
+`_select_verify_targets` 的多值口径：
+
+| 输入 | 行为 |
+|---|---|
+| `indexes=(2, 1)` | **按给定顺序**返回 `[(…,2,…), (…,1,…)]` |
+| 重复序号（`27,27`）| `SystemExit`，**不静默去重** |
+| 任一序号越界 | `SystemExit`，**整个请求拒绝**并点名越界的那个序号 |
+| 未给 set key（`verify --index 1`）| `SystemExit`：`--index needs a set key, e.g. verify whitelist-fixtures --index 27,30` |
+
+两条设计理由：
+
+1. **顺序按输入而非清单顺序**：结尾那行 `=== N 个变异校验完毕 ===` 是这次运行的**收据**。
+   收据若被重排，就与操作员敲下的命令行对不上了 —— 而收据的用途正是"对上"。
+2. **重复与越界一律拒绝，而不是裁剪**：静默跑得比写下的少，会让收据的**条数与命令不符**。
+   §38.2 里那条"序号口径必须与 `apply` 一致"的约束在这里同样成立 —— 少跑一条看起来和跑对了一样。
+
+## 39.4 一处错误信息质量修正：`verify --index 1` 不该报 `got 5`
+
+`keys=[]` 会被 default 成**全部 5 套**，于是旧实现报
+`--index needs exactly one set, got 5: daily-digest, review-queue, …` ——
+操作员**一个 key 都没写**，却被告诉"你给了 5 个"。这个歧义的唯一区分点是**调用方到底有没有传 key**，
+所以函数开头留下 `given = list(keys)`，只在 `not given` 时换用 `--index needs a set key, e.g. …`。
+
+⚠️ **不要拿 `len(keys) == len(SETS)` 当判据**：显式写全 5 个 key 也会命中这条分支，消息同样是错的
+（首版就是这么写的，在写用例时才暴露）。判据必须来自**参数是否存在**，不能来自**参数的个数**。
+
+## 39.5 新增的静态守卫（+9 个用例 / +9 个 subtest）
+
+`VerifySelectionTests` 原有 7 条用例的调用点从 `int` 改为**元组**（如 `([key], (1,))`），并新增 4 条：
+
+| 用例 | 钉住 |
+|---|---|
+| `..._multiple_indexes_run_in_the_order_typed` | `(2, 1)` 不被排成 `(1, 2)` |
+| `..._duplicate_index_is_rejected_instead_of_de_duplicated` | 消息含 `duplicate` |
+| `..._one_bad_index_rejects_the_whole_multi_index_request` | 越界序号被点名、整请求拒绝 |
+| `..._index_without_a_set_key_says_so_instead_of_counting_all_of_them` | 两条消息**互不塌缩**（一条含 `set key` 且不含默认计数；另一条含 `got <n>`）|
+
+新增 `IndexListParsingTests`（5 条）：
+
+| 用例 | 钉住 |
+|---|---|
+| `..._single_value_parses_to_a_one_tuple` | `"30"` → `(30,)` |
+| `..._multiple_values_parse_in_order` | `"27,30"` / `"30,27"` 保持顺序 |
+| `..._surrounding_whitespace_is_tolerated` | `" 27 , 30 "` → `(27, 30)` |
+| `..._empty_entry_is_rejected` | `""` / `","` / `"27,"` / `",27"` / `"27,,30"` **全拒** |
+| `..._non_integer_entry_is_rejected` | `"a"` / `"27,b"` / `"2.5"` / `"1 2"` **全拒** |
+
+→ 该文件：**15 passed + 65 subtests** → **24 passed + 74 subtests**。
+
+⚠️ **为什么连 `_parse_index_list` 也要静态钉住**：argparse 只把错误表现为**退出码**。
+一个把 `27,,30` 读成 `27,30`（**丢掉空项**而不是拒绝笔误）的解析器，在端到端看**与正确的完全一样** ——
+两遍都"跑通了 2 条"。这类"只能靠退出码观测"的行为，正是 §38.2 那条"能静态判定就静态钉住"的适用面。
+
+## 39.6 验证
+
+| 检查 | 结果 |
+|---|---|
+| `verify whitelist-fixtures --index 27,30`（端到端）| 2 条**全过**，`green before/red after/green after restore/bytes restored` 皆 `True`；表头**只打一次**；收据 `2 个变异校验完毕`；exit **0** |
+| `verify whitelist-fixtures -i 30,27` | 输出顺序**30 在前、27 在后**（按输入，非清单顺序）；exit **0** |
+| `verify whitelist-fixtures --index 27,27` | 拒绝：`duplicate --index: 27`（exit **1**）|
+| `verify whitelist-fixtures --index 27,` | 拒绝：`empty entry in --index '27,'`（exit **2**，argparse）|
+| `verify whitelist-fixtures --index 27,x` | 拒绝：`--index expects integers, got 'x'`（exit **2**）|
+| `verify whitelist-fixtures --index 0,30` | 拒绝：`index out of range: 0 (whitelist-fixtures 有 30 个)`（exit 1）|
+| `verify whitelist-fixtures daily-digest --index 1` | 拒绝：`--index needs exactly one set, got 2: …`（exit 1）|
+| `verify --index 1` | 拒绝：`--index needs a set key, e.g. …`（exit 1）|
+| `pytest tests/test_mutation_verify.py tests/test_decision_quality_service.py` | **58 passed + 74 subtests**（junit `failures=0 / errors=0`）|
+| `ruff check scripts/mutation_verify.py tests/test_mutation_verify.py` | `All checks passed!` |
+| 两轮端到端之后的 **30 文件** sha256 快照 | **changed = 0**（26 个该套变异目标 + 本批 4 个改动文件）|
+| `scripts/eol_audit.py`（4 个改动文件的行尾画像）| `line-ending damage: none` |
+
+**W27 本次一次通过**（`green before True`）—— 与 §37.6 的归因一致：同一条变异、同一个守卫，
+换成一条独立命令就正常。**这不是替换上次的结论，而是同一归因的第二次观测**：
+上次的 `guard already RED before mutation` 来自 `safe-delete` 拦截器对**退出码**的污染，不是变异或守卫的问题。
+
+## 39.7 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| `apply <set> <index>` 也支持多值 | ✅ **已在 §四十 完成**（并顺带做了区间语法与写入前的原子校验）。本节当时判断"不必与 `verify` 对称"**被推翻** —— 理由见 §40.2：两条命令共用同一个"位置"概念，共用解析器与选择器比"记得同步两处实现"更可靠 |
+| 收敛 13 个方向常量 / §35.5 修法 (a)+(d) / `api.ts` union / 51 个 MIXED 文件 | ⏳ 待拍板 |
+| 提交 | ⏳ 未提交（等指令）|
+
+**提交状态**：本节改 **2 个文件**（harness + 它的静态守护测试）+ 本文档。**未提交**（等指令）。
+
+---
+
+# 四十、`apply` 对齐同一条序号口径：多值、区间，与写入前的原子校验
+
+## 40.1 起因
+
+§三十九 把 `verify --index` 扩到多值 + 区间，而 `apply` 仍是**单个 `int`**。
+§38.2 早就写下过一条规则："序号口径必须与 `apply` 一致" —— 两边不一致时，**同一个序号在两条命令里会指向不同的变异**。
+当时那是一条靠评审维持的约定；本节把它变成**结构**：两条命令共用**同一个解析器**与**同一个选择器**。
+
+## 40.2 共用解析器 + 共用选择器
+
+| 命令 | 改动前 | 改动后 |
+|---|---|---|
+| `apply <set>` | `index` 是 `nargs="?"` + `type=int`（0 或 1 个）| `nargs="*"` + `type=_parse_index_list` |
+| 选择 | `cmd_apply` 内联 `if not 1 <= index <= len(...)` | `_select_verify_targets([key], positions)` —— **与 `verify` 同一个函数** |
+
+于是这三种写法都成立：
+
+```
+python scripts/mutation_verify.py apply review-queue 5 8
+python scripts/mutation_verify.py apply review-queue 27-30
+python scripts/mutation_verify.py apply review-queue 1-3,7
+```
+
+每个 token 解析成一个元组（`5 8` → 两个一元组，`27-30` → 一个四元组），扁平化后交给选择器。
+
+**为什么这比"两处各自实现、约定同步"强**：`§38.2` 那个约束现在的成立方式是**共用函数**，
+不是"评审时记得检查" —— 一个靠记忆维持的不变式迟早会漂移，而漂移的表现是"序号指向了另一条变异"，看起来像成功。
+
+⚠️ `verify --index 27 30` 的歧义（被读成两个 set key）在 `apply` **不存在**（`key` 是带 `choices` 的单值位置参数，`27` 匹配不上任何 set key 会直接报错）。
+但 `apply` **仍然用逗号**：让两条命令支持不同的分隔符，只会制造"哪条命令支持哪种"的记忆负担。
+
+## 40.3 `--index` 支持区间 `a-b`
+
+| 输入 | 结果 |
+|---|---|
+| `27-30` | `(27, 28, 29, 30)` |
+| `27-27` | `(27,)` |
+| `1-3,7` | `(1, 2, 3, 7)` |
+| `30-27` | **拒绝**：`--index range '30-27' is reversed; write 27-30` |
+| `1-` / `-1-2` / `1-2-3` | 落到整数错误分支（不匹配「数字-数字」形状）|
+| `0-2` | **解析通过**为 `(0, 1, 2)`，由边界层拒绝 `0` |
+
+两条判据：
+
+1. **只允许升序**。位置决定输出顺序，静默把 `30-27` 反转成 `27-30` 会让收据与命令行对不上（与 §三十九 同一条判据）。
+   错误消息里**直接给出可照抄的修法**。
+2. **区间不在解析层做边界检查**。`0-2` 解析通过、由 `_select_verify_targets` 拒绝 ——
+   否则 `--index 0` 与 `--index 0-2` 会长出**两种说法**解释同一件事。
+   判据：**同一类错误只能有一个消息来源**。
+
+## 40.4 `apply` 写入前的原子校验：`_apply_preflight`
+
+多值 apply 引入一个新风险：**部分应用** —— 第一个文件已改、第二根针已失效，于是工作树既不是原始态也不是目标态。
+位置越多，"现在到底改到哪一步了"越难推理。→ **在校验完成之前，不写任何一个字节。**
+
+| 检查 | 报出 |
+|---|---|
+| 文件存在 | `{position}: missing file {path}` |
+| 针**恰好命中 1 次** | `{position}: needle appears Nx in {path} (expected 1). If the file's line endings changed, fix the needle rather than loosening this check.` |
+| 同 group 被选中 ≥2 条 | `positions 5, 6 share group 'cli-flag-guard': they rewrite the same bytes in opposite directions, so applying both would leave neither mutation in place` |
+
+**三条一起报**，不是遇到第一个就停 —— 一条条修要来回多趟（这也是它返回 `list[str]` 而非直接 `raise` 的原因之一）。
+
+顺带：`_apply_preflight` 也接管了**全量** `apply` 的校验，于是全量路径同样获得了原子性（改动前是"边检查边写"）。
+
+## 40.5 「跳过」与「拒绝」的分界
+
+同一情形（一个 group 的成员被同时涉及）有两种处置，**分界是"意图是谁给的"**：
+
+| 场景 | 处置 | 理由 |
+|---|---|---|
+| `apply <set>`（全量）| **跳过**同组后续成员并说明 | 操作员要的是"全部"，而一个 group 的成员不可能同时成立；这里替他裁剪是合理的 |
+| `apply <set> 5 6`（点名两条）| **拒绝** | 两个敲出来的位置是**明确请求**，不是可以替操作员裁剪的便利扫描 |
+
+## 40.6 顺手发现：preflight 的针检查同时兜住「跨状态误用 group 的另一半」
+
+冒烟时踩到（**是我漏了一步 revert**，不是命令的问题）：
+
+1. `apply review-queue`（全量）→ 应用 C1–C5（**C6 被跳过**）
+2. **没有 revert** 就执行 `apply review-queue 6`
+3. → `refusing to apply, 1 problem(s): 6: needle appears 0x in backend/scripts/review_queue_cli.py ...`，**exit 1，未写任何文件**
+
+C5/C6 是**同一段字节的两个相反改写** → C5 应用之后，C6 的针必然消失。
+→ 这说明两道防线**各守一块**：`group` 检查管「同一次选择之内」，针检查管「工作树已经被改过」。
+两次都**拒绝并且不写**。结论是"拒绝得对"，不是"命令有 bug"。
+
+## 40.7 新增的静态守卫（+15 用例 / +10 subtests）
+
+`IndexListParsingTests` **+5**：区间展开（含 `27-27`）· 与逗号组合（`1-3,7` / `7,1-3`）· 降序被拒且**把修法写进消息** · 畸形区间落到整数错误 · **`0-2` 解析通过而由边界层拒绝**。
+
+新增 `ApplyPreflightTests`（**7 条**）：
+
+| 用例 | 钉住 |
+|---|---|
+| `..._an_ungrouped_selection_is_accepted` | 无 group 的选择不报问题 |
+| `..._naming_both_members_of_a_group_is_a_problem` | 恰好 1 个问题，消息含 group 名与 `5, 6` |
+| `..._naming_one_member_of_a_group_is_fine` | 同组**单条**通过（否则 `apply <set> 5` 会被自己挡掉）|
+| `..._a_needle_that_no_longer_matches_is_a_problem` | `appears 0x` |
+| `..._a_missing_file_is_a_problem` | `missing file` |
+| `..._problems_do_not_stop_at_the_first_one` | 3 根坏针**一次全报**（3 条问题）|
+| `..._a_needle_that_matches_more_than_once_is_a_problem` | 「命中 >1」分支（用**空针**打：它在每个位置都命中，不依赖具体文件内容）|
+
+新增 `WholeSetApplyTests`（**3 条**）：`_whole_set_targets` 的「5 应用 / 1 跳过」· 无 group 的 set 全应用 · **全量选择必须过它自己的 preflight**（否则 `apply <set>` 在它**唯一存在的场景**下就是死的）。
+
+→ 该文件：**24 passed + 74 subtests → 39 passed + 84 subtests**。
+
+⚠️ 为让「跳过规则」可静态钉住，全量路径的收集逻辑抽成了纯函数 `_whole_set_targets(mutation_set) -> (to_apply, skipped)`
+—— 沿用 §38.2 那条判据：**能靠读代码判定的，就不该只靠一次运行的 stdout 保护**。
+
+## 40.8 验证
+
+| 检查 | 结果 |
+|---|---|
+| `apply voided-trade 1 2`（跨 2 个文件）| `mutated 1` + `mutated 2`；`git diff --stat` 显示**两个文件各 1 行**；exit **0** |
+| `apply voided-trade 1-3`（区间）| 3 条写入：`prediction_store.py` 1 处 + `simulated_trade_store.py` 2 处（diff：`2 +-` / `4 ++--`）|
+| `apply review-queue`（全量）| `mutated 1..5` 然后 `skipped 6: C6 … [与同组变异互斥…]`；exit **0** |
+| `apply review-queue 6`（干净状态）| 单独应用成功（证明 C6 的针在原始态存在，§40.6 的 0x 是**跨状态**误用）|
+| `apply review-queue 5 6`（同组两条）| 拒绝：`positions 5, 6 share group 'cli-flag-guard' …`；exit **1** |
+| `apply review-queue 1 1` | 拒绝：`duplicate --index: 1`；exit 1 |
+| `apply review-queue 0` / `apply voided-trade 99` | 拒绝：`index out of range: …`；exit 1 |
+| `apply review-queue 5,x` | 拒绝（argparse，**exit 2**）：`--index expects integers or ranges, got 'x'` |
+| `verify voided-trade -i 1-2`（区间在 verify 端）| 2 条全过，四阶段皆 `True`；exit **0** |
+| `pytest tests/test_mutation_verify.py tests/test_decision_quality_service.py` | **73 passed + 84 subtests**（junit `failures=0 / errors=0`）|
+| `ruff check scripts/mutation_verify.py tests/test_mutation_verify.py` | `All checks passed!` |
+| 所有 apply/revert 冒烟之后：**33 个变异目标**的 sha256 | **changed = 0** |
+| 同上，37 文件全量快照（33 目标 + 本批 4 个改动文件）| changed = **2** —— 且这 2 个正是**快照之后我又编辑过**的 harness 与它的测试（属 extra 组，不在变异目标内）→ 见下方说明 |
+| `scripts/eol_audit.py`（4 个改动文件）| `line-ending damage: none` |
+
+⚠️ **关于 changed = 2**：报告数字时必须能解释差额。本次的做法是先跑一次 37 文件全量核对（changed = 2），
+再**只对 33 个变异目标**重跑一次（changed = 0）—— 两条一起才说明"变异的还原是逐字节的，而我自己的编辑被如实计入"。
+只报一个数字而不给分组，会把"我自己改的文件"读成"还原不干净"。
+
+## 40.9 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| 收敛 13 个方向常量 / §35.5 修法 (a)+(d) / `api.ts` union / 51 个 MIXED 文件 | ⏳ 待拍板 |
+| 提交 | ⏳ 未提交（等指令）|
+
+**提交状态**：本节改 **2 个文件**（harness + 它的静态守护测试）+ 本文档。**未提交**（等指令）。

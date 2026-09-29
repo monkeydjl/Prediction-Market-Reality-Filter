@@ -55,9 +55,10 @@ _STRONG_STRENGTH_THRESHOLD = 0.7  # spec § Conflict Score safety net
 # The directions that assert a strong (non-abstaining) conclusion, i.e. the only
 # ones Stage A of the downgrade pipeline may rewrite. WAIT / AVOID already
 # abstain, so they must pass through ``_apply_downgrade_rules`` untouched.
-# NOTE: ``_build_rationale_body`` repeats this same literal inside a branch whose
-# two arms return the identical string; that dead branch is tracked as a separate
-# open item and is deliberately left alone here.
+# NOTE: ``_build_rationale_body`` used to repeat this same literal inside a branch
+# whose two arms returned the identical string. That dead branch was removed
+# (system-health audit §36), so this constant now has exactly one consumer:
+# ``_apply_downgrade_rules`` below.
 _STRONG_DIRECTIONS = ("YES", "NO")
 
 
@@ -336,8 +337,6 @@ def _build_rationale_body(
     is appended by the caller). Uses deterministic templates per spec
     § Rationale Generation."""
     if consensus_level == "none":
-        if raw_direction in ("YES", "NO"):
-            return "缺少可解析的证据分解，无法判断证据一致性。"
         return "缺少可解析的证据分解，无法判断证据一致性。"
 
     if downgrade_reason is not None and displayed_direction != raw_direction:

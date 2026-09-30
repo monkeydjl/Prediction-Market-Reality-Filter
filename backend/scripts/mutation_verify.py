@@ -77,14 +77,19 @@ before diffing). ``read_bytes``/``write_bytes`` keep the evidence honest, and
 the restore is checked by sha256 rather than by eye. Run
 ``scripts/eol_audit.py`` afterwards for an independent read on line endings.
 
-Needles are declared as raw ``bytes`` for the same reason, and **do not share one
-line-ending convention**: the ``review-queue`` needles are line-terminated and
-therefore carry CRLF, while the ``daily-digest``, ``probability-probe`` and
-``voided-trade`` needles sit inside a single line and must not. Building a CRLF
-needle from LF text would not match -- which fails loudly, because every apply
-asserts the needle occurs exactly once. ``tests/test_mutation_verify.py`` pins
-that rule statically (no bare LF in a needle) so a stale one fails in CI rather
-than only during a ten-minute manual run.
+Needles are declared as raw ``bytes`` for the same reason. They **do not share
+one line-ending convention**: some are line-terminated and spell CRLF, others
+sit inside a single line. That distinction is no longer load-bearing. A needle's
+line breaks are matched against the checkout's own convention (``count_needle``
+and ``rewrite_needle``), so a CRLF needle still matches CI's LF checkout and an
+LF needle still matches a developer machine -- the inventory stops depending on
+which convention the machine that runs it happens to use.
+
+The match is still byte for byte: only the line break may vary, and the count
+still has to be exactly one, so a needle that has genuinely gone stale keeps
+failing loudly. The replacement inherits the *file's* line endings rather than
+the ones spelled in ``new``, so a mutation that deletes a line cannot leave a
+file mixed while the sha256 restore check reports everything was put back.
 
 Adding a mutation
 -----------------
@@ -139,7 +144,83 @@ PY = _resolve_interpreter()
 BACKUP_ROOT = pathlib.Path(tempfile.gettempdir()) / "pmrf-mutation-bak"
 GUARD_TIMEOUT = 600
 
+# Needles are still written by hand, and this is the spelling most of them use
+# for a line break. It is no longer load-bearing: ``count_needle`` and
+# ``rewrite_needle`` below try both conventions, precisely because CI checks out
+# LF while a developer machine checks out CRLF (see the module docstring).
 CRLF = b"\r\n"
+
+
+def _needle_variants(needle: bytes) -> tuple[bytes, ...]:
+    """The needle under each line-ending convention, deduplicated.
+
+    A needle that spans a line break was written against one convention and can
+    never match a checkout that uses the other -- which is how seven needles came
+    to match nothing on CI while every one of them passed locally. Both spellings
+    are tried instead of pinning the inventory to one of them.
+
+    The match is still byte for byte -- only which line break the needle carries
+    may vary -- and callers still require the count to be exactly one, so a
+    needle that has genuinely gone stale keeps failing loudly.
+    """
+    if b"\n" not in needle:
+        return (needle,)
+    lf = needle.replace(b"\r\n", b"\n")
+    crlf = lf.replace(b"\n", b"\r\n")
+    return (lf,) if lf == crlf else (lf, crlf)
+
+
+def _eol_of(data: bytes) -> bytes:
+    """The line ending ``data`` predominantly uses.
+
+    "Predominantly" rather than "the first one seen": a file can be mixed, and
+    the side with more lines is the one a rewrite should stay consistent with.
+    """
+    crlf = data.count(b"\r\n")
+    return b"\r\n" if crlf > data.count(b"\n") - crlf else b"\n"
+
+
+def _to_eol(data: bytes, eol: bytes) -> bytes:
+    """``data`` with every line break spelled ``eol``."""
+    return data.replace(b"\r\n", b"\n").replace(b"\n", eol)
+
+
+def count_needle(content: bytes, needle: bytes) -> int:
+    """How many times ``needle`` occurs in ``content``, under either convention.
+
+    Public because the inventory test asserts this same property and must not
+    restate the rule: two spellings of one rule is how the rule drifts.
+    """
+    return sum(content.count(variant) for variant in _needle_variants(needle))
+
+
+def _matched_variant(content: bytes, needle: bytes) -> bytes | None:
+    """The spelling of ``needle`` that ``content`` actually contains, if any."""
+    for variant in _needle_variants(needle):
+        if variant in content:
+            return variant
+    return None
+
+
+def rewrite_needle(content: bytes, old: bytes, new: bytes) -> bytes:
+    """Replace ``old`` with ``new`` once, in the convention ``content`` uses.
+
+    ``new``'s own line endings are deliberately ignored. A mutation that deletes
+    a line, or that spells an inserted line with the other convention, must not
+    turn a CRLF file into a mixed one: that is invisible in a diff
+    (``core.autocrlf`` normalises before diffing) and the sha256 restore check
+    cannot see it either, because it compares what was written rather than how
+    it ended its lines.
+
+    Raises when the needle is absent. Callers preflight the count first, so this
+    guards against calling it out of order rather than serving a user-facing
+    error path.
+    """
+    variant = _matched_variant(content, old)
+    if variant is None:
+        raise ValueError(f"needle not found: {old[:60]!r}")
+    eol = _eol_of(variant) if b"\n" in variant else _eol_of(content)
+    return content.replace(variant, _to_eol(new, eol), 1)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1330,12 +1411,11 @@ def _apply_preflight(targets: list[tuple[MutationSet, int, Mutation]]) -> list[s
         if not path.is_file():
             problems.append(f"{position}: missing file {mutation.path}")
             continue
-        found = path.read_bytes().count(mutation.old)
+        found = count_needle(path.read_bytes(), mutation.old)
         if found != 1:
             problems.append(
                 f"{position}: needle appears {found}x in {mutation.path} "
-                f"(expected 1). If the file's line endings changed, fix the "
-                "needle rather than loosening this check."
+                f"(expected 1). The code it points at has moved or changed."
             )
     for group, positions in groups.items():
         if len(positions) > 1:
@@ -1350,7 +1430,9 @@ def _apply_preflight(targets: list[tuple[MutationSet, int, Mutation]]) -> list[s
 def _write_mutations(targets: list[tuple[MutationSet, int, Mutation]]) -> None:
     for _, position, mutation in targets:
         path = REPO_ROOT / mutation.path
-        path.write_bytes(path.read_bytes().replace(mutation.old, mutation.new, 1))
+        path.write_bytes(
+            rewrite_needle(path.read_bytes(), mutation.old, mutation.new)
+        )
         print(f"mutated {position}: {mutation.label}  ({mutation.path})")
 
 
@@ -1437,7 +1519,7 @@ def _verify_one(mutation_set: MutationSet, index: int, mutation: Mutation) -> li
     path = REPO_ROOT / mutation.path
     original = path.read_bytes()
 
-    hits = original.count(mutation.old)
+    hits = count_needle(original, mutation.old)
     if hits != 1:
         return [f"needle appears {hits}x (expected 1)"]
 
@@ -1454,7 +1536,7 @@ def _verify_one(mutation_set: MutationSet, index: int, mutation: Mutation) -> li
         ]
 
     try:
-        path.write_bytes(original.replace(mutation.old, mutation.new, 1))
+        path.write_bytes(rewrite_needle(original, mutation.old, mutation.new))
         after = _run_guards(mutation)
     finally:
         path.write_bytes(original)

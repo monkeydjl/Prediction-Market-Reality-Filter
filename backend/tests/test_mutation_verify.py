@@ -9,10 +9,12 @@ reports too late:
   run has already started.
 
 Both are static properties of the inventory, so they are asserted here instead.
-The line-ending rule is pinned for the same reason: this repo commits LF and
-checks out CRLF, so a needle containing a line break must carry CRLF or it can
-never match (and the failure looks like "needle appears 0x", not like a bug in
-the script).
+Line endings are pinned for the same reason, but as a property rather than a
+spelling: this repo commits LF and checks out CRLF, so a needle containing a
+line break has to match under *either* convention. Spelling CRLF out made that
+true only on a developer machine, and the failure reads like "needle appears
+0x" -- like a bug in the script rather than a rule that was only ever exercised
+on one checkout.
 
 The same reasoning covers ``verify --index``: which mutation a narrowed run will
 reach is decidable without driving pytest, so ``VerifySelectionTests`` decides it
@@ -70,25 +72,37 @@ class InventoryTests(unittest.TestCase):
             if not path.is_file():
                 offenders.append(f"{key} {index}: missing file {mutation.path}")
                 continue
-            found = path.read_bytes().count(mutation.old)
+            found = mutation_verify.count_needle(path.read_bytes(), mutation.old)
             if found != 1:
                 offenders.append(
                     f"{key} {index}: needle occurs {found}x in {mutation.path}"
                 )
         self.assertEqual(offenders, [], "\n".join(offenders))
 
-    def test_no_needle_carries_a_bare_lf(self):
-        offenders = [
-            f"{key} {index}: {mutation.label}"
-            for key, index, mutation in _every_mutation()
-            if mutation.old.count(b"\n") != mutation.old.count(b"\r\n")
-        ]
-        self.assertEqual(
-            offenders,
-            [],
-            "a needle with a bare LF can never match a CRLF checkout:\n"
-            + "\n".join(offenders),
-        )
+    def test_every_needle_matches_whichever_line_ending_the_checkout_uses(self):
+        """The property the old bare-LF rule was really about.
+
+        ``test_no_needle_carries_a_bare_lf`` required CRLF in every
+        line-terminated needle, which encoded "the checkout is CRLF" -- true on a
+        developer machine and false on CI, where that same rule left seven
+        needles matching nothing. What has to hold is the property, not the
+        spelling, so both conventions are rebuilt here from each file's own
+        bytes. Recasting rather than reading the checkout is the point: this runs
+        the *other* convention on whichever machine happens to run it.
+        """
+        offenders = []
+        for key, index, mutation in _every_mutation():
+            path = REPO_ROOT / mutation.path
+            if not path.is_file():
+                continue
+            content = path.read_bytes()
+            for eol in (b"\n", b"\r\n"):
+                recast = content.replace(b"\r\n", b"\n").replace(b"\n", eol)
+                if mutation_verify.count_needle(recast, mutation.old) != 1:
+                    offenders.append(
+                        f"{key} {index}: needle misses a checkout using {eol!r}"
+                    )
+        self.assertEqual(offenders, [], "\n".join(offenders))
 
     def test_every_guard_file_exists_and_every_guard_is_named(self):
         offenders = []
@@ -138,6 +152,81 @@ class InventoryTests(unittest.TestCase):
             if not mutation.note.strip()
         ]
         self.assertEqual(offenders, [], "\n".join(offenders))
+
+
+class NeedleLineEndingTests(unittest.TestCase):
+    """A needle's line ending must not decide whether it matches.
+
+    The inventory is written for one convention and CI checks out the other, so
+    the check has to hold on both. These pin the three properties that make the
+    difference harmless: both spellings are tried, the count stays byte-exact
+    (tolerance for the line break is not tolerance for the code), and a rewrite
+    inherits the *file's* convention rather than the replacement's -- without
+    that last one, a mutation that deletes a line could leave a file mixed, which
+    neither a diff nor the sha256 restore check would show.
+    """
+
+    def test_a_single_line_needle_has_one_spelling(self):
+        self.assertEqual(mutation_verify._needle_variants(b"abc"), (b"abc",))
+
+    def test_a_line_terminated_needle_has_both_spellings(self):
+        self.assertEqual(
+            mutation_verify._needle_variants(b"a\r\nb"), (b"a\nb", b"a\r\nb")
+        )
+
+    def test_a_crlf_needle_counts_once_in_a_lf_checkout(self):
+        """The exact shape that made seven needles miss on CI."""
+        content = b"alpha\nbeta\ngamma\n"
+        self.assertEqual(
+            mutation_verify.count_needle(content, b"alpha\r\nbeta\r\n"), 1
+        )
+
+    def test_a_lf_needle_counts_once_in_a_crlf_checkout(self):
+        content = b"alpha\r\nbeta\r\ngamma\r\n"
+        self.assertEqual(mutation_verify.count_needle(content, b"alpha\nbeta\n"), 1)
+
+    def test_a_needle_that_is_really_absent_still_counts_zero(self):
+        """Line-ending tolerance must not decay into substring tolerance."""
+        content = b"alpha\nbeta\ngamma\n"
+        self.assertEqual(
+            mutation_verify.count_needle(content, b"alpha\r\nDELTA\r\n"), 0
+        )
+
+    def test_a_crlf_files_rewrite_stays_pure_crlf(self):
+        content = b"one\r\ntwo\r\nthree\r\n"
+        after = mutation_verify.rewrite_needle(content, b"two\r\n", b"")
+        self.assertEqual(after, b"one\r\nthree\r\n")
+        self.assertEqual(after.count(b"\r\n"), 2)
+        self.assertEqual(after.count(b"\n") - after.count(b"\r\n"), 0)
+
+    def test_a_lf_file_stays_pure_lf_even_through_a_crlf_needle(self):
+        content = b"one\ntwo\nthree\n"
+        after = mutation_verify.rewrite_needle(content, b"two\r\n", b"")
+        self.assertEqual(after, b"one\nthree\n")
+        self.assertEqual(after.count(b"\r\n"), 0)
+
+    def test_a_replacement_inherits_the_files_line_endings(self):
+        """``old`` spells LF and ``new`` spells CRLF; the file must not gain one."""
+        content = b"one\ntwo\n"
+        after = mutation_verify.rewrite_needle(content, b"two\n", b"TWO\r\nEXTRA\r\n")
+        self.assertEqual(after, b"one\nTWO\nEXTRA\n")
+
+    def test_a_single_line_needle_falls_back_to_the_files_convention(self):
+        """With no line break in the needle, the *file* decides the convention.
+
+        This is the other half of ``_eol_of``'s call sites: without it the rule
+        is only exercised when the needle itself carries a break, and a
+        replacement that inserts one would inherit whatever ``new`` spelled --
+        exactly the mixed-file outcome the inheritance rule exists to prevent.
+        """
+        content = b"one\ntwo\n"
+        after = mutation_verify.rewrite_needle(content, b"two", b"two\r\nthree")
+        self.assertEqual(after, b"one\ntwo\nthree\n")
+        self.assertEqual(after.count(b"\r\n"), 0)
+
+    def test_a_needle_that_is_absent_is_reported_rather_than_ignored(self):
+        with self.assertRaises(ValueError):
+            mutation_verify.rewrite_needle(b"one\ntwo\n", b"nope", b"x")
 
 
 class InterpreterResolutionTests(unittest.TestCase):

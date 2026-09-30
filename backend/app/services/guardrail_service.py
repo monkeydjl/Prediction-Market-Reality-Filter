@@ -55,12 +55,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from app.utils.direction_vocabulary import STRONG_DIRECTIONS
 
-# Direction severity ordering (most-strict wins). YES/NO are "strong"
-# directions that can be downgraded; WAIT/AVOID cannot be downgraded further
-# by these guardrails (they are already conservative).
-_STRONG_DIRECTIONS = ("YES", "NO")
+logger = logging.getLogger(__name__)
 
 # Separator for combining multiple downgrade reasons. The same separator is
 # used by merge_quality_overlays for 3-way overlay reason combination.
@@ -116,7 +113,7 @@ def evaluate_guardrails(
         # No overlay produced a direction — guardrails have nothing to gate.
         return final_direction, final_downgrade_reason, []
 
-    if final_direction not in _STRONG_DIRECTIONS:
+    if final_direction not in STRONG_DIRECTIONS:
         # WAIT/AVOID already conservative — guardrails cannot escalate further.
         return final_direction, final_downgrade_reason, []
 

@@ -21,6 +21,7 @@ from app.services.scoring_service import (
 )
 from app.services.translation_service import translate_articles
 from app.utils.full_text_fetcher import fetch_full_text
+from app.utils.direction_vocabulary import _TRADABLE_DIRECTIONS
 from app.utils.market_utils import safe_float
 from app.utils.helpers import clamp01
 
@@ -37,15 +38,6 @@ _CANDIDATE_POOL_FACTOR = 3
 # weight to the 1.0 default the moment an operator renamed it. The setting names
 # what a *record* carries; this names a slot in the discovery budget.
 _OPEN_WEB_LABEL = "Open Web"
-
-# Directions a simulated (paper) trade may be opened with. Anything else -- a
-# WAIT/AVOID recommendation, or an absent field -- falls back to YES.
-#
-# Deliberately NOT documented as "the direction the trade gets": the edge-sign
-# override lower in _persist_events rewrites the direction again (edge > 0 forces
-# YES, edge < 0 forces NO), so this fallback is only *observable* when
-# entry_edge == 0. Kept named and module-level so a mutation can target it.
-_TRADABLE_DIRECTIONS = ("YES", "NO")
 
 
 _STRENGTH_TO_CONFIDENCE = {"HIGH": "high", "MEDIUM": "medium", "LOW": "low"}

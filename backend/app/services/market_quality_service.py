@@ -40,9 +40,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from app.utils.direction_vocabulary import STRONG_DIRECTIONS
 
-_STRONG_DIRECTIONS = ("YES", "NO")
+logger = logging.getLogger(__name__)
 
 
 def build_market_quality(
@@ -259,7 +259,7 @@ def _apply_market_downgrade(
     healthy (keeping the aggregate score above threshold), an untradeable
     spread makes the market effectively unusable and MUST trigger a downgrade.
     """
-    if raw_direction not in _STRONG_DIRECTIONS:
+    if raw_direction not in STRONG_DIRECTIONS:
         return raw_direction, None
     if wide_spread_flag:
         return "WAIT", "价差过大（无法交易），降级为 WAIT。"

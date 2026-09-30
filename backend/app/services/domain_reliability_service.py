@@ -32,8 +32,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.services.calibration_service_event import brier_score
+from app.utils.direction_vocabulary import _VALID_DIRECTIONS
 
-_VALID_DIRECTIONS = {"YES", "NO"}
 _STANCE_ALIASES = {
     "support": "supports",
     "supports": "supports",

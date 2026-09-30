@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from app.utils.direction_vocabulary import _STRONG_EVENT_DIRECTIONS
+
 CHECK_CALCULATION = "calculation_rationale"
 CHECK_EVIDENCE = "evidence_support"
 CHECK_COUNTEREVIDENCE = "counterevidence"
@@ -13,13 +15,6 @@ PASS_WITH_WARNINGS = "pass_with_warnings"
 REVISE = "revise"
 REJECT = "reject"
 INSUFFICIENT_EVIDENCE = "insufficient_evidence"
-
-# The directions that assert a strong (non-abstaining) conclusion. Two call
-# sites read this same membership test: ``_is_strong_event_direction`` (which
-# gates the evidence / counterevidence / confidence / actionability checks) and
-# ``_check_calculation`` (a "change too small to justify a strong direction"
-# soft-fail). WAIT / AVOID abstain, so neither check may fire for them.
-_STRONG_EVENT_DIRECTIONS = ("YES", "NO")
 
 
 class CriticAdapter(Protocol):

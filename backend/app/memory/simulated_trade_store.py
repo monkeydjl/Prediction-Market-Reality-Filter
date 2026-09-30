@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.utils import sqlite_db
+from app.utils.direction_vocabulary import _REPORTED_DIRECTIONS
 from app.utils.sqlite_db import loop_db_path, reading, writing
 
 logger = logging.getLogger(__name__)
@@ -454,13 +455,6 @@ _EDGE_DEFINITION: dict[str, str] = {
     "scale": "0-100",
     "directional": "raw_edge for YES, -raw_edge for NO",
 }
-
-# The directions reported in trade_stats()["by_direction"]. Ordering only affects
-# the JSON key order; it is the *set* that matters -- every member must be
-# queried, or the NO side silently disappears from the stats payload (a gap that
-# an `assertNotIn("NO", ...)` test cannot see). Lives here rather than inline so a
-# mutation can target it.
-_REPORTED_DIRECTIONS = ("YES", "NO")
 
 
 def trade_stats() -> dict[str, Any]:

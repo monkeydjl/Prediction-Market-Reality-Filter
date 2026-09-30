@@ -9,7 +9,9 @@ It replaces three near-identical per-batch scripts
 ``mutation_verify_probability_probe.py``). Those all re-implemented the same
 backup/apply/revert machinery, and one of them had grown a stronger check than
 the other two while the other two had a per-index selector the first lacked.
-Merging keeps the union of both: one inventory, one engine, five sets.
+Merging keeps the union of both: one inventory, one engine, and every set either
+of the three had. (The count is deliberately not written down here -- sets have
+been added since, and a hardcoded "five sets" went stale twice.)
 
 Usage
 -----
@@ -27,7 +29,12 @@ Usage
 four-phase cycle per mutation:
 
     1. the guard tests PASS on the unmodified tree   (so the selector is real)
-    2. they FAIL with the mutation applied           (the guard is load-bearing)
+    2. they FAIL with the mutation applied, in EVERY named guard file
+                                                     (the guard is load-bearing
+                                                      in each file it names --
+                                                      one return code cannot
+                                                      tell "all noticed" from
+                                                      "one did")
     3. they PASS again once it is reverted           (the restore restored
                                                       behaviour, not just bytes)
     4. the file's sha256 equals the pre-mutation one (the restore restored bytes)
@@ -115,10 +122,24 @@ class Mutation:
     path: str
     old: bytes
     new: bytes
-    guard_file: str
+    guard_file: str | tuple[str, ...]
     guards: tuple[str, ...]
     group: str = ""
     note: str = ""
+
+    def guard_files(self) -> tuple[str, ...]:
+        """Every guard file whose tests cover ``old`` -> ``new``.
+
+        Usually exactly one. A mutation aimed at a *shared* definition names
+        several, because the behaviour that has to notice the change lives in
+        each module that consumes the definition, not only in the one that
+        declares it (audit section 42.4). Accepting a bare string keeps every
+        existing one-file mutation unchanged -- the normalisation lives here,
+        so nothing else has to know which spelling it was handed.
+        """
+        if isinstance(self.guard_file, str):
+            return (self.guard_file,)
+        return tuple(self.guard_file)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -161,19 +182,26 @@ _SPORTS_FACT = "backend/app/services/sports_fact_service.py"
 _LIMITLESS = "backend/app/services/limitless_event_source.py"
 _GBM_ENGINE = "backend/app/kernel/engines/gbm_engine.py"
 _CHALLENGE_ADAPTER = "backend/app/services/conclusion_challenge_world_cup_adapter.py"
-_GUARDRAIL = "backend/app/services/guardrail_service.py"
-_MARKET_QUALITY = "backend/app/services/market_quality_service.py"
-_EXECUTION_QUALITY = "backend/app/services/execution_quality_service.py"
-_SOURCE_RELIABILITY = "backend/app/services/source_reliability_service.py"
-_PREDICTION_CALIBRATION = "backend/app/services/prediction_calibration_service.py"
-_REVIEW_QUEUE_DETECTORS = "backend/app/services/review_queue_detectors.py"
-_DOMAIN_RELIABILITY = "backend/app/services/domain_reliability_service.py"
-_REPLAY_METRICS = "backend/app/replay/metrics.py"
+# §45/§47 — every direction constant now lives in the shared vocabulary module.
+# §45 merged the six `_STRONG_DIRECTIONS` copies into one definition (their six
+# mutations became W31, the first mutation to name several guard files); §47
+# moved the remaining seven differently-named constants in beside it. All eight
+# of those mutations therefore aim here, and only their guard files differ. The
+# three path constants that used to name `prediction_calibration_service`,
+# `review_queue_detectors` and `domain_reliability_service` went with the
+# definitions they pointed at.
+_DIRECTION_VOCABULARY = "backend/app/utils/direction_vocabulary.py"
 
 # §41 — the loopback health probe in restore_stores (audit section 35.5). The
 # guard file is the P0 round-2 suite, whose G3 block drives the probe.
 _RESTORE_STORES = "backend/scripts/restore_stores.py"
 _T_RESTORE_PROBE = "tests/test_p0_fixes_round2.py"
+
+# §42 — the harness capability that lets one mutation name several guard files.
+# Both paths below are the harness itself: H1 rewrites _run_guards, and the
+# guards are the inventory tests that pin the argv it builds.
+_MUTATION_VERIFY = "backend/scripts/mutation_verify.py"
+_T_MUTATION_VERIFY = "tests/test_mutation_verify.py"
 
 _T_AVAILABILITY = "tests/test_football_live_availability_service.py"
 _T_SCHEDULE = "tests/test_football_live_schedule_service.py"
@@ -195,17 +223,19 @@ _T_DOMAIN_RELIABILITY = "tests/test_domain_reliability_service.py"
 _T_REPLAY_METRICS = "tests/test_replay_metrics.py"
 
 # §34 — the inline `{"YES", "NO"}` sets that were lifted into module-level named
-# constants. Each entry below pins one *constant definition*, so the mutation is
-# independent of which call sites read it.
-_QUALITY_METRICS = "backend/app/api/routes/quality_metrics.py"
-_EVENT_INTELLIGENCE = "backend/app/services/event_intelligence_service.py"
-_CONCLUSION_CHALLENGE = "backend/app/services/conclusion_challenge_service.py"
+# constants. Their mutations pin the *constant definition* rather than any call
+# site that reads it, so one mutation covers every consumer. §47 moved three of
+# those definitions (plus four more) into `_DIRECTION_VOCABULARY`, which is why
+# only W30 still aims at the module it was extracted from.
 _DECISION_QUALITY = "backend/app/services/decision_quality_service.py"
 _T_TRADES_STORE = "tests/test_simulated_trade_store.py"
 _T_QUALITY_METRICS = "tests/test_quality_metrics.py"
 _T_EVENT_INTELLIGENCE = "tests/test_event_intelligence_service.py"
 _T_CONCLUSION_CHALLENGE = "tests/test_conclusion_challenge_service.py"
 _T_DECISION_QUALITY = "tests/test_decision_quality_service.py"
+# §47 — the vocabulary module's own guard file. Its one mutation (W32) pins the
+# container type of the single constant that has an *iterating* consumer.
+_T_DIRECTION_VOCABULARY = "tests/test_direction_vocabulary.py"
 
 # W12's replacement: a *functionally equivalent* local copy, inserted next to the
 # shared import. It keeps behaviour identical on purpose -- the point of the
@@ -228,6 +258,21 @@ _FLAG_GUARD = b"    if settings.REVIEW_QUEUE_ENABLED:" + CRLF + b"        return
 _LISTING_FILTER = (
     b'" FROM predictions WHERE market_probability > 0 AND market_probability < 1"'
 )
+
+# H1's needle pair: the loop in ``_run_guards`` that walks every guard file.
+# Split into two fragments on purpose. H1's target *is* this file, so spelling
+# the needle as one literal here -- in the definition or even in this comment --
+# would put it in the inventory too: it would then occur twice and
+# ``_apply_preflight`` would refuse it. Describing the needle instead of quoting
+# it keeps the count at one.
+_GUARD_FILES_LOOP = b"for guard_file in mutation." + b"guard_files()"
+_GUARD_FILES_LOOP_FIRST = b"for guard_file in mutation." + b"guard_files()[:1]"
+
+# H2's needle pair: the strict half of ``GuardRun.every_file_red`` and the "at
+# least one red" reading it must not collapse into. Both halves are split for
+# the same self-reference reason as above -- H2's target is this file too.
+_EVERY_FILE_RED_STRICT = b"return bool(self.per_file) and not self." + b"green_files"
+_EVERY_FILE_RED_LOOSE = b"return bool(self." + b"red_files)"
 
 
 SETS: tuple[MutationSet, ...] = (
@@ -577,7 +622,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="whitelist-fixtures",
-        title="白名单 / 枚举常量的「循环 + 钉子」与关系型守卫（W1–W30）",
+        title="白名单 / 枚举常量的「循环 + 钉子」与关系型守卫（W1–W30 + §45 合并的 W31 + §47 的 W32）",
         rationale=(
             "§22.2.3 那批契约型常量的补齐（§二十四）。每条都删掉一个成员、或把别名目标"
             "拼错，断言对应守卫转红。三件事必须写在这里："
@@ -634,6 +679,19 @@ SETS: tuple[MutationSet, ...] = (
             "§36.6 因此补了一条**精确字符串**断言再登记 —— 与 W19/W24 同款："
             "**空头守卫只能靠补用例消掉**，且这一条同时给出一个警告："
             "**删死代码本身不可登记，别把它和它旁边的空头混为一谈**。"
+            "⑦ §45 把 W17/W18/W19/W20/W24/W29 这六条**合并成一条 W31**：六个 `_STRONG_DIRECTIONS` "
+            "副本并为 `app/utils/direction_vocabulary.py` 的一处定义，六条变异收成一条、挂 **6 个 "
+            "guard_file**、**9 条守卫** —— 本仓第一条多 guard_file 变异（该能力见 set `multi-guard-file`）。"
+            "编号沿用「只增不改」：W17–W30 保持历史含义，W31 是新号并在标签里注明它取代了哪六条。"
+            "⑧ §47 把剩余七个方向常量也迁进 `direction_vocabulary.py`（只收敛**位置**，语义、"
+            "容器、注释一概不变），于是 W21/W22/W23/W25/W26/W27/W28 的 `path` 一并改指该模块 —— "
+            "**针一个字节都没改**，因为定义行是逐字搬过去的。若针要跟着改，那说明搬动掺了改动。"
+            "⚠️ W25 与 W32 改写的是**同一行**（`_REPORTED_DIRECTIONS` 的定义），故同属一个 "
+            "`group`：整组 apply 只留前一条，显式同时点名两条会被 `_apply_preflight` 拒掉。"
+            "W32 是 §47 新增的**容器守卫**：把该常量从 `tuple` 改成 `set`。这一条只有 "
+            "`direction_vocabulary` 自己的测试看得见 —— `_REPORTED_DIRECTIONS` 是八个常量里"
+            "唯一被**迭代**消费的（`for d in _REPORTED_DIRECTIONS:`），而本仓不固定 "
+            "`PYTHONHASHSEED`，改成 set 会让 `by_direction` 的 JSON 键序在运行间漂移。"
         ),
         mutations=(
             Mutation(
@@ -789,50 +847,8 @@ SETS: tuple[MutationSet, ...] = (
                 note="§28 新增的关系型守卫（challenge ⊇ pipeline）失效",
             ),
             Mutation(
-                label="W17 guardrail_service._STRONG_DIRECTIONS 删掉 NO",
-                path=_GUARDRAIL,
-                old=b'_STRONG_DIRECTIONS = ("YES", "NO")',
-                new=b'_STRONG_DIRECTIONS = ("YES",)',
-                guard_file=_T_GUARDRAIL,
-                guards=(
-                    "test_fires_for_no_when_llm_degraded",
-                    "test_two_rules_fire_preserves_existing_reason",
-                ),
-                note="§29：NO 不再被认作强方向 → 该方向跳过全部护栏",
-            ),
-            Mutation(
-                label="W18 market_quality_service._STRONG_DIRECTIONS 删掉 NO",
-                path=_MARKET_QUALITY,
-                old=b'_STRONG_DIRECTIONS = ("YES", "NO")',
-                new=b'_STRONG_DIRECTIONS = ("YES",)',
-                guard_file=_T_MARKET_QUALITY,
-                guards=(
-                    "test_downgrade_no_to_wait_when_score_low",
-                    "test_wide_spread_downgrades_no_direction",
-                ),
-                note="§29：NO 在低分 / 宽价差下不再降级为 WAIT",
-            ),
-            Mutation(
-                label="W19 execution_quality_service._STRONG_DIRECTIONS 删掉 NO",
-                path=_EXECUTION_QUALITY,
-                old=b'_STRONG_DIRECTIONS = ("YES", "NO")',
-                new=b'_STRONG_DIRECTIONS = ("YES",)',
-                guard_file=_T_EXECUTION_QUALITY,
-                guards=("test_raw_direction_no_is_downgraded_like_yes",),
-                note="§31：NO 不再被认作强方向 → 不可执行时不再降级为 WAIT",
-            ),
-            Mutation(
-                label="W20 source_reliability_service._STRONG_DIRECTIONS 删掉 NO",
-                path=_SOURCE_RELIABILITY,
-                old=b'_STRONG_DIRECTIONS = ("YES", "NO")',
-                new=b'_STRONG_DIRECTIONS = ("YES",)',
-                guard_file=_T_SOURCE_RELIABILITY,
-                guards=("test_downgraded_flag_true_when_suggested_differs",),
-                note="§32：NO 不再被认作强方向 → 该方向不再被降级为 WAIT",
-            ),
-            Mutation(
-                label="W21 prediction_calibration_service._DIRECTIONAL 删掉 NO",
-                path=_PREDICTION_CALIBRATION,
+                label="W21 direction_vocabulary._DIRECTIONAL 删掉 NO",
+                path=_DIRECTION_VOCABULARY,
                 old=b'_DIRECTIONAL = ("YES", "NO")',
                 new=b'_DIRECTIONAL = ("YES",)',
                 guard_file=_T_PREDICTION_CALIBRATION,
@@ -841,11 +857,14 @@ SETS: tuple[MutationSet, ...] = (
                     "test_no_recommendation_no_outcome_correct",
                     "test_full_resolution_no_correct",
                 ),
-                note="§32：NO 不再算可检验方向 → direction_correct 直接返回 None",
+                note=(
+                    "§32：NO 不再算可检验方向 → direction_correct 直接返回 None；"
+                    "§47 定义迁入共享模块，针一个字节未改"
+                ),
             ),
             Mutation(
-                label="W22 review_queue_detectors._CALLED_DIRECTIONS 删掉 NO",
-                path=_REVIEW_QUEUE_DETECTORS,
+                label="W22 direction_vocabulary._CALLED_DIRECTIONS 删掉 NO",
+                path=_DIRECTION_VOCABULARY,
                 old=b'_CALLED_DIRECTIONS = frozenset({"YES", "NO"})',
                 new=b'_CALLED_DIRECTIONS = frozenset({"YES"})',
                 guard_file=_T_REVIEW_QUEUE_DETECTORS,
@@ -854,11 +873,14 @@ SETS: tuple[MutationSet, ...] = (
                     "test_fires_when_a_confident_no_call_resolves_yes",
                     "test_a_partial_resolution_above_zero_counts_as_yes",
                 ),
-                note="§32：NO 不再算「已下注的调用」→ NO 调用不再触发任何 review 触发器",
+                note=(
+                    "§32：NO 不再算「已下注的调用」→ NO 调用不再触发任何 review 触发器；"
+                    "§47 定义迁入共享模块，针一个字节未改"
+                ),
             ),
             Mutation(
-                label="W23 domain_reliability_service._VALID_DIRECTIONS 删掉 NO",
-                path=_DOMAIN_RELIABILITY,
+                label="W23 direction_vocabulary._VALID_DIRECTIONS 删掉 NO",
+                path=_DIRECTION_VOCABULARY,
                 old=b'_VALID_DIRECTIONS = {"YES", "NO"}',
                 new=b'_VALID_DIRECTIONS = {"YES"}',
                 guard_file=_T_DOMAIN_RELIABILITY,
@@ -866,50 +888,52 @@ SETS: tuple[MutationSet, ...] = (
                     "test_no_direction_correct_support",
                     "test_no_direction_wrong_support",
                 ),
-                note="§32：NO 不再算合法方向 → 该记录的来源归因候选为空",
-            ),
-            Mutation(
-                label="W24 replay/metrics._STRONG_DIRECTIONS 删掉 NO",
-                path=_REPLAY_METRICS,
-                old=b'_STRONG_DIRECTIONS = {"YES", "NO"}',
-                new=b'_STRONG_DIRECTIONS = {"YES"}',
-                guard_file=_T_REPLAY_METRICS,
-                guards=(
-                    "test_downgrades_caused_counted_for_a_no_base",
-                    "test_conflict_case_collected_for_a_no_phase",
+                note=(
+                    "§32：NO 不再算合法方向 → 该记录的来源归因候选为空；"
+                    "§47 定义迁入共享模块，针一个字节未改"
                 ),
-                note="§33：NO 不再算强方向 → NO→WAIT 的降级与冲突都不再计数",
             ),
             Mutation(
-                label="W25 simulated_trade_store._REPORTED_DIRECTIONS 删掉 NO",
-                path=_TRADES_STORE,
+                label="W25 direction_vocabulary._REPORTED_DIRECTIONS 删掉 NO",
+                path=_DIRECTION_VOCABULARY,
                 old=b'_REPORTED_DIRECTIONS = ("YES", "NO")',
                 new=b'_REPORTED_DIRECTIONS = ("YES",)',
                 guard_file=_T_TRADES_STORE,
                 guards=("test_by_direction_reports_both_strong_directions",),
-                note="§34：by_direction 不再统计 NO 侧 —— 该文件原有断言只有『作废交易不出现」这一负向腿，删 NO 后照样成立",
+                group="reported-directions",
+                note=(
+                    "§34：by_direction 不再统计 NO 侧 —— 该文件原有断言只有『作废交易不出现」"
+                    "这一负向腿，删 NO 后照样成立。§47 定义迁入共享模块；与 W32 改写同一行，"
+                    "同组互斥"
+                ),
             ),
             Mutation(
-                label="W26 quality_metrics._STRONG_DISPLAY_DIRECTIONS 删掉 NO",
-                path=_QUALITY_METRICS,
+                label="W26 direction_vocabulary._STRONG_DISPLAY_DIRECTIONS 删掉 NO",
+                path=_DIRECTION_VOCABULARY,
                 old=b'_STRONG_DISPLAY_DIRECTIONS = ("YES", "NO")',
                 new=b'_STRONG_DISPLAY_DIRECTIONS = ("YES",)',
                 guard_file=_T_QUALITY_METRICS,
                 guards=("test_anomalies_flags_wide_spread_not_downgraded",),
-                note="§34：宽价差旗标的异常列表漏掉 NO 侧 —— 旧断言用 WAIT 记录做负控，对分支是否存在天然盲",
+                note=(
+                    "§34：宽价差旗标的异常列表漏掉 NO 侧 —— 旧断言用 WAIT 记录做负控，"
+                    "对分支是否存在天然盲；§47 定义迁入共享模块，针一个字节未改"
+                ),
             ),
             Mutation(
-                label="W27 event_intelligence._TRADABLE_DIRECTIONS 删掉 NO",
-                path=_EVENT_INTELLIGENCE,
+                label="W27 direction_vocabulary._TRADABLE_DIRECTIONS 删掉 NO",
+                path=_DIRECTION_VOCABULARY,
                 old=b'_TRADABLE_DIRECTIONS = ("YES", "NO")',
                 new=b'_TRADABLE_DIRECTIONS = ("YES",)',
                 guard_file=_T_EVENT_INTELLIGENCE,
                 guards=("test_persist_events_opens_the_trade_as_no_for_a_no_recommendation",),
-                note="§34：NO 推荐被折回 YES 开仓 —— 该回退只在 entry_edge == 0 时可观测（后文会按 edge 符号覆写方向）",
+                note=(
+                    "§34：NO 推荐被折回 YES 开仓 —— 该回退只在 entry_edge == 0 时可观测"
+                    "（后文会按 edge 符号覆写方向）；§47 定义迁入共享模块，针一个字节未改"
+                ),
             ),
             Mutation(
-                label="W28 conclusion_challenge._STRONG_EVENT_DIRECTIONS 删掉 NO",
-                path=_CONCLUSION_CHALLENGE,
+                label="W28 direction_vocabulary._STRONG_EVENT_DIRECTIONS 删掉 NO",
+                path=_DIRECTION_VOCABULARY,
                 old=b'_STRONG_EVENT_DIRECTIONS = ("YES", "NO")',
                 new=b'_STRONG_EVENT_DIRECTIONS = ("YES",)',
                 guard_file=_T_CONCLUSION_CHALLENGE,
@@ -917,16 +941,10 @@ SETS: tuple[MutationSet, ...] = (
                     "test_strong_no_conclusion_without_support_is_insufficient_evidence",
                     "test_small_probability_change_counts_for_a_no_conclusion",
                 ),
-                note="§34：NO 不再算强方向 —— 证据门与计算门各读一次该常量，故守卫必须两条，缺一条即半空头",
-            ),
-            Mutation(
-                label="W29 decision_quality._STRONG_DIRECTIONS 删掉 NO",
-                path=_DECISION_QUALITY,
-                old=b'_STRONG_DIRECTIONS = ("YES", "NO")',
-                new=b'_STRONG_DIRECTIONS = ("YES",)',
-                guard_file=_T_DECISION_QUALITY,
-                guards=("test_rule4_empty_breakdown_downgrades_no_to_wait",),
-                note="§34：Stage A 不再降级 NO —— 既有的 WAIT 用例是负控，负控在分支整体消失时照样绿",
+                note=(
+                    "§34：NO 不再算强方向 —— 证据门与计算门各读一次该常量，故守卫必须两条，"
+                    "缺一条即半空头；§47 定义迁入共享模块，针一个字节未改"
+                ),
             ),
             Mutation(
                 label="W30 decision_quality._build_rationale_body 的 none 早退改成不可达",
@@ -936,6 +954,52 @@ SETS: tuple[MutationSet, ...] = (
                 guard_file=_T_DECISION_QUALITY,
                 guards=("test_missing_both_inputs_rationale_names_the_missing_breakdown",),
                 note="§36：早退不可达后落到尾部的保守模板，而旧断言只查非空 —— 尾部模板同样非空，故对「这条分支从未执行」天然盲",
+            ),
+            Mutation(
+                label=(
+                    "W31 共享 direction_vocabulary.STRONG_DIRECTIONS 删掉 NO"
+                    "（合并 W17/W18/W19/W20/W24/W29）"
+                ),
+                path=_DIRECTION_VOCABULARY,
+                old=b'STRONG_DIRECTIONS = ("YES", "NO")',
+                new=b'STRONG_DIRECTIONS = ("YES",)',
+                guard_file=(
+                    _T_GUARDRAIL,
+                    _T_MARKET_QUALITY,
+                    _T_EXECUTION_QUALITY,
+                    _T_SOURCE_RELIABILITY,
+                    _T_REPLAY_METRICS,
+                    _T_DECISION_QUALITY,
+                ),
+                guards=(
+                    "test_fires_for_no_when_llm_degraded",
+                    "test_two_rules_fire_preserves_existing_reason",
+                    "test_downgrade_no_to_wait_when_score_low",
+                    "test_wide_spread_downgrades_no_direction",
+                    "test_raw_direction_no_is_downgraded_like_yes",
+                    "test_downgraded_flag_true_when_suggested_differs",
+                    "test_downgrades_caused_counted_for_a_no_base",
+                    "test_conflict_case_collected_for_a_no_phase",
+                    "test_rule4_empty_breakdown_downgrades_no_to_wait",
+                ),
+                note=(
+                    "§45 合并组①：一处定义、六个文件消费 —— 9 条守卫跨 6 个文件"
+                    "（本仓第一条多 guard_file 变异）；缺任何一个消费点都会少一条腿"
+                ),
+            ),
+            Mutation(
+                label="W32 direction_vocabulary._REPORTED_DIRECTIONS 从 tuple 改成 set",
+                path=_DIRECTION_VOCABULARY,
+                old=b'_REPORTED_DIRECTIONS = ("YES", "NO")',
+                new=b'_REPORTED_DIRECTIONS = {"YES", "NO"}',
+                guard_file=_T_DIRECTION_VOCABULARY,
+                guards=("test_reported_directions_stays_an_ordered_sequence",),
+                group="reported-directions",
+                note=(
+                    "§47：唯一被迭代消费的方向常量 —— 改成 set 后 by_direction 的键序随 "
+                    "PYTHONHASHSEED 漂移（本仓不固定它）。守卫只存在于本模块自己的测试里，"
+                    "所以这条变异同时证明那个新测试文件确实被跑到"
+                ),
             ),
         ),
     ),
@@ -1000,6 +1064,52 @@ SETS: tuple[MutationSet, ...] = (
             ),
         ),
     ),
+    MutationSet(
+        key="multi-guard-file",
+        title="harness 新能力：一条变异可挂多个 guard_file（H1–H2）",
+        rationale=(
+            "§42.4/§42.6 方案 B 的前置：13 条方向常量变异是「一个文件一条」，因为 "
+            "Mutation.guard_file 原本是单值。一旦针指向的是**共享定义**，那条变异就必须同时"
+            "锚定**每一个消费它的文件**的用例，否则合并常量会以「看起来只是少几条变异」的"
+            "方式真丢锚定。本 set 用两条变异把这个能力的两半分别钉住："
+            "① **H1 锁「每个文件都跑到」**—— 把 _run_guards 从「把全部 guard_file 都交给 "
+            "pytest」改成「只跑第一个」；这正是该能力的唯一消费点，只跑第一个后其余文件的"
+            "守护全部静默失效。"
+            "② **H2 锁「每个文件都红」**—— 把阶段②的判据从「每个 guard_file 各至少一红」"
+            "退化成「≥1 红」（§45.5 记下的缺口，§46 补上）。这一条只在多文件变异上分得开："
+            "单文件变异两种读法等价，而 W31 挂了 6 个文件，退化成「≥1 红」后某个文件的空头"
+            "守卫会被兄弟文件的红遮住。"
+            "生产消费点已由 §45 的 W31 落地（6 个 guard_file / 9 条守卫）——"
+            "§44 当时写的「尚无生产消费点、且由一条测试钉住」已随之作废。"
+        ),
+        mutations=(
+            Mutation(
+                label="H1 _run_guards 只把第一个 guard_file 交给 pytest",
+                path=_MUTATION_VERIFY,
+                old=_GUARD_FILES_LOOP,
+                new=_GUARD_FILES_LOOP_FIRST,
+                guard_file=_T_MUTATION_VERIFY,
+                guards=("test_run_guards_passes_every_named_file_to_pytest",),
+                note=(
+                    "§42 方案 B 前置：多 guard_file 的消费点 —— 只取第一个会让跨文件守护形同虚设。"
+                    "§46 把 _run_guards 从「一次调用传全部文件」改成「每文件一次调用」，"
+                    "故针随之由 argv 的展开改为那次循环"
+                ),
+            ),
+            Mutation(
+                label="H2 every_file_red 退化成「只要有一条红」（≥1 而非 N/N）",
+                path=_MUTATION_VERIFY,
+                old=_EVERY_FILE_RED_STRICT,
+                new=_EVERY_FILE_RED_LOOSE,
+                guard_file=_T_MUTATION_VERIFY,
+                guards=("test_every_file_red_requires_every_file_not_just_one",),
+                note=(
+                    "§46：阶段②的判据退化 —— W31 的 6 个文件里只要 1 个红就当作全部红，"
+                    "某个文件的空头守卫会被兄弟文件遮住"
+                ),
+            ),
+        ),
+    ),
 )
 
 SETS_BY_KEY = {mutation_set.key: mutation_set for mutation_set in SETS}
@@ -1024,16 +1134,105 @@ def _paths(mutation_set: MutationSet) -> list[str]:
     return list(dict.fromkeys(m.path for m in mutation_set.mutations))
 
 
-def _run_guards(mutation: Mutation) -> tuple[bool, str]:
-    """Return (all selected guards passed, last line of output)."""
+@dataclasses.dataclass(frozen=True)
+class FileGuardRun:
+    """One guard file's pytest run: whether it passed, and how it ended."""
+
+    guard_file: str
+    passed: bool
+    tail: str
+
+
+@dataclasses.dataclass(frozen=True)
+class GuardRun:
+    """Every guard file of one mutation, each run on its own.
+
+    One pytest invocation per file rather than one combined invocation, because
+    the two questions the phases ask are not each other's negation once a
+    mutation names more than one file:
+
+    * phases 1 and 3 need *every* file green, and
+    * phase 2 needs *every* file red.
+
+    A single combined run answers only ``returncode == 0``. That is "all green"
+    for phase 1, but for phase 2 it is merely "at least one red" -- and for a
+    mutation anchored to a shared definition (audit section 42.4) that is the
+    wrong bar: one file firing turns the code non-zero, so a guard that had
+    quietly become vacuous in some *other* file would hide behind its
+    neighbours. Running each file separately makes the per-file fact observable,
+    and ``every_file_red`` is the strict reading of it (audit section 45.5).
+    """
+
+    per_file: tuple[FileGuardRun, ...]
+
+    @property
+    def all_green(self) -> bool:
+        """True only if every named file's guards passed."""
+        return all(run.passed for run in self.per_file)
+
+    @property
+    def red_files(self) -> tuple[FileGuardRun, ...]:
+        """The files whose run failed, in ``guard_files()`` order."""
+        return tuple(run for run in self.per_file if not run.passed)
+
+    @property
+    def green_files(self) -> tuple[FileGuardRun, ...]:
+        """The files whose run passed, in ``guard_files()`` order."""
+        return tuple(run for run in self.per_file if run.passed)
+
+    @property
+    def every_file_red(self) -> bool:
+        """True only if no named file passed -- and there was at least one.
+
+        The leading ``bool(self.per_file)`` is not decoration: with no files,
+        "no file passed" is vacuously true, so a mutation that named no guard
+        file would verify as OK while running nothing at all. The inventory test
+        ``test_every_guard_file_exists_and_every_guard_is_named`` keeps that case
+        unreachable for real mutations; this stays explicit so the reading is
+        correct even for a synthetic one.
+        """
+        return bool(self.per_file) and not self.green_files
+
+    def tally(self) -> str:
+        """``<red>/<total> files red`` -- the receipt's per-file count."""
+        return f"{len(self.red_files)}/{len(self.per_file)} files red"
+
+    def red_summary(self) -> str:
+        """The last output line of every file whose run failed."""
+        return "; ".join(f"{run.guard_file} -> {run.tail}" for run in self.red_files)
+
+    def green_summary(self) -> str:
+        """The last output line of every file whose run passed."""
+        return "; ".join(f"{run.guard_file} -> {run.tail}" for run in self.green_files)
+
+
+def _run_guards(mutation: Mutation) -> GuardRun:
+    """Run a mutation's guards, one pytest invocation per guard file.
+
+    ``-k`` filters within each file, so the same selector is applied to every
+    file and a guard name that lives in only one of them simply matches nothing
+    in the others. Returning per-file outcomes -- rather than one return code --
+    is what lets phase 2 require that *each* file noticed the mutation; see
+    ``GuardRun.every_file_red``. H1 (set ``multi-guard-file``) pins the loop
+    below, because a version that stopped at the first file would still report a
+    plausible outcome for the file it did run.
+    """
     if not PY.is_file():
         raise SystemExit(f"interpreter not found: {PY}")
+    runs: list[FileGuardRun] = []
+    for guard_file in mutation.guard_files():
+        runs.append(_run_one_guard_file(mutation, guard_file))
+    return GuardRun(tuple(runs))
+
+
+def _run_one_guard_file(mutation: Mutation, guard_file: str) -> FileGuardRun:
+    """One pytest run, scoped to a single guard file and the named guards."""
     proc = subprocess.run(
         [
             str(PY),
             "-m",
             "pytest",
-            mutation.guard_file,
+            guard_file,
             "-q",
             "-p",
             "no:cacheprovider",
@@ -1046,7 +1245,11 @@ def _run_guards(mutation: Mutation) -> tuple[bool, str]:
         timeout=GUARD_TIMEOUT,
     )
     out = ((proc.stdout or "") + (proc.stderr or "")).strip()
-    return proc.returncode == 0, out.splitlines()[-1] if out else ""
+    return FileGuardRun(
+        guard_file=guard_file,
+        passed=proc.returncode == 0,
+        tail=out.splitlines()[-1] if out else "",
+    )
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -1210,40 +1413,49 @@ def _verify_one(mutation_set: MutationSet, index: int, mutation: Mutation) -> li
     if hits != 1:
         return [f"needle appears {hits}x (expected 1)"]
 
-    green_before, tail_before = _run_guards(mutation)
-    if not green_before:
-        # Anything after this is unattributable: the guard was already red, so a
+    before = _run_guards(mutation)
+    if not before.all_green:
+        # Anything after this is unattributable: a guard was already red, so a
         # red after the mutation would prove nothing. Reported separately from a
-        # needle problem because the two have different fixes.
-        return [f"guard already RED before mutation -> {tail_before}"]
+        # needle problem because the two have different fixes. The tally names
+        # which files were already red, so a selector that matches nothing in one
+        # of several files does not read as "the whole guard was red".
+        return [
+            f"guard already RED before mutation in {before.tally()}"
+            f" -> {before.red_summary()}"
+        ]
 
     try:
         path.write_bytes(original.replace(mutation.old, mutation.new, 1))
-        passed_after, tail_after = _run_guards(mutation)
+        after = _run_guards(mutation)
     finally:
         path.write_bytes(original)
 
-    # _run_guards reports a *pass* flag, so a successful mutation shows up as
-    # `passed_after is False`. Inverting here keeps the variable names honest:
-    # red_after means "the guard went red", which is what this phase must prove.
-    red_after = not passed_after
-
     restored_bytes = _sha(path.read_bytes()) == _sha(original)
-    green_restored, tail_restored = _run_guards(mutation)
+    restored = _run_guards(mutation)
 
-    if not red_after:
-        problems.append(f"stayed GREEN with the fix reverted -> {tail_after}")
+    if not after.every_file_red:
+        # "Every file red", not "at least one": with several guard files the
+        # weaker reading accepts a run where one file fired and the others were
+        # never reached -- exactly the blind spot audit section 45.5 named. The
+        # message names the files that stayed green so the difference is visible
+        # in the receipt rather than only in the count.
+        problems.append(
+            f"stayed GREEN in {len(after.green_files)}/{len(after.per_file)} "
+            f"file(s) -> {after.green_summary()}"
+        )
     if not restored_bytes:
         problems.append("file bytes differ from before the mutation")
-    if not green_restored:
-        problems.append(f"still RED after restore -> {tail_restored}")
+    if not restored.all_green:
+        problems.append(f"still RED after restore -> {restored.red_summary()}")
 
     status = "OK " if not problems else "BAD"
     print(f"[{status}] {mutation_set.key} {index:>2}. {mutation.label}")
-    print(f"        green before {green_before} | red after mutation {red_after} | "
-          f"green after restore {green_restored} | bytes restored {restored_bytes}")
-    if red_after:
-        print(f"        mutated run -> {tail_after}")
+    print(f"        green before {before.all_green} | "
+          f"red after mutation {after.tally()} | "
+          f"green after restore {restored.all_green} | bytes restored {restored_bytes}")
+    if after.red_files:
+        print(f"        mutated run -> {after.red_summary()}")
     for problem in problems:
         print(f"        !! {problem}")
     return problems

@@ -74,9 +74,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
-# A committed call, as opposed to an abstention. The event-layer equivalent of
-# the Decision Gate's act / provisional_act.
-_CALLED_DIRECTIONS = frozenset({"YES", "NO"})
+from app.utils.direction_vocabulary import _CALLED_DIRECTIONS
+
 _WAIT_LIKE = frozenset({"WAIT", "AVOID"})
 
 

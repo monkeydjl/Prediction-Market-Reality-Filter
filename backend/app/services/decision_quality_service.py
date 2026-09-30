@@ -32,6 +32,8 @@ import copy
 import logging
 from typing import Any
 
+from app.utils.direction_vocabulary import STRONG_DIRECTIONS
+
 logger = logging.getLogger(__name__)
 
 # Fixed legal disclaimer appended to every decision_rationale_zh body.
@@ -51,15 +53,6 @@ _SUPPORT_DIRECTION_FOR_YES = "support"
 _SUPPORT_DIRECTION_FOR_NO = "oppose"
 
 _STRONG_STRENGTH_THRESHOLD = 0.7  # spec § Conflict Score safety net
-
-# The directions that assert a strong (non-abstaining) conclusion, i.e. the only
-# ones Stage A of the downgrade pipeline may rewrite. WAIT / AVOID already
-# abstain, so they must pass through ``_apply_downgrade_rules`` untouched.
-# NOTE: ``_build_rationale_body`` used to repeat this same literal inside a branch
-# whose two arms returned the identical string. That dead branch was removed
-# (system-health audit §36), so this constant now has exactly one consumer:
-# ``_apply_downgrade_rules`` below.
-_STRONG_DIRECTIONS = ("YES", "NO")
 
 
 def build_decision_quality(
@@ -280,8 +273,11 @@ def _apply_downgrade_rules(
     displayed = raw_direction
     reason: str | None = None
 
-    # Stage A — initial downgrade (only for strong directions YES/NO).
-    if raw_direction in _STRONG_DIRECTIONS:
+    # Stage A — initial downgrade (only for strong directions YES/NO). This is
+    # this file's only reader of the shared vocabulary: ``_build_rationale_body``
+    # once repeated the same literal in a branch whose two arms returned the
+    # identical string, and that dead branch was removed (audit §36).
+    if raw_direction in STRONG_DIRECTIONS:
         if consensus_level == "none":
             # Rule 4: evidence_breakdown is empty/absent. Reason wording
             # is distinct from rule 3 ("缺少证据支持" vs "缺少支持证据").

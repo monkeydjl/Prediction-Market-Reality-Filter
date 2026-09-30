@@ -20,8 +20,10 @@ here rather than after twelve minutes of a manual run.
 """
 import argparse
 import dataclasses
+import subprocess
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts import mutation_verify
 
@@ -35,14 +37,14 @@ def _every_mutation():
 
 
 class InventoryTests(unittest.TestCase):
-    def test_the_six_sets_are_present(self):
+    def test_the_seven_sets_are_present(self):
         """Pins the inventory, so a whole set cannot be dropped silently.
 
         Deliberately exact and ordered: adding a set means editing this test,
         which is the point -- an inventory nobody has to touch is an inventory
-        that can rot. Renamed from ``test_the_five_sets_are_present`` when
-        ``restore-loopback-probe`` was added (audit section 41), the same way
-        it was renamed from ``test_the_four_sets_are_present`` before.
+        that can rot. Renamed from ``test_the_six_sets_are_present`` when
+        ``multi-guard-file`` was added (audit section 43), the same way it was
+        renamed from ``test_the_five_sets_are_present`` before.
         """
         self.assertEqual(
             [s.key for s in mutation_verify.SETS],
@@ -53,6 +55,7 @@ class InventoryTests(unittest.TestCase):
                 "voided-trade",
                 "whitelist-fixtures",
                 "restore-loopback-probe",
+                "multi-guard-file",
             ],
         )
 
@@ -90,8 +93,15 @@ class InventoryTests(unittest.TestCase):
     def test_every_guard_file_exists_and_every_guard_is_named(self):
         offenders = []
         for key, index, mutation in _every_mutation():
-            if not (mutation_verify.BACKEND / mutation.guard_file).is_file():
-                offenders.append(f"{key} {index}: missing {mutation.guard_file}")
+            guard_files = mutation.guard_files()
+            # A mutation that names no file would run nothing while every phase
+            # still passed: ``GuardRun(())`` is vacuously green, and
+            # ``every_file_red`` is only False there because it checks for it.
+            if not guard_files:
+                offenders.append(f"{key} {index}: names no guard file")
+            for guard_file in guard_files:
+                if not (mutation_verify.BACKEND / guard_file).is_file():
+                    offenders.append(f"{key} {index}: missing {guard_file}")
             if not mutation.guards:
                 offenders.append(f"{key} {index}: no guards selected")
             for guard in mutation.guards:
@@ -128,6 +138,150 @@ class InventoryTests(unittest.TestCase):
             if not mutation.note.strip()
         ]
         self.assertEqual(offenders, [], "\n".join(offenders))
+
+
+class MultiGuardFileTests(unittest.TestCase):
+    """A mutation may name several guard files, not only one.
+
+    The single-file contract sufficed while every needle sat next to the code it
+    changed. It stops sufficing the moment a needle targets a *shared*
+    definition: the behaviour that must notice the change then lives in every
+    module that consumes the definition, so anchoring the mutation to one file
+    would silently drop the rest (audit section 42.4). ``guard_files()`` is the
+    seam that normalises the two spellings and ``_run_guards`` is its only
+    consumer -- asserted through the invocations it makes, because a version that
+    ran only the first file still reports a plausible outcome for that one file,
+    so the returned flags alone cannot tell the two apart.
+    """
+
+    def _mutation(self, guard_file):
+        base = mutation_verify.SETS_BY_KEY["voided-trade"].mutations[0]
+        return dataclasses.replace(base, guard_file=guard_file)
+
+    def test_a_single_guard_file_normalises_to_a_one_tuple(self):
+        self.assertEqual(
+            self._mutation("tests/test_one.py").guard_files(),
+            ("tests/test_one.py",),
+        )
+
+    def test_several_guard_files_keep_their_order(self):
+        self.assertEqual(
+            self._mutation(("tests/a.py", "tests/b.py")).guard_files(),
+            ("tests/a.py", "tests/b.py"),
+        )
+
+    def test_run_guards_passes_every_named_file_to_pytest(self):
+        """One pytest invocation per named file, and none of them dropped.
+
+        Asserted through the invocations rather than through the returned flag: a
+        version that stopped after the first file still reports a plausible
+        outcome for the file it ran, so the flags alone cannot tell the two
+        apart. ``-k`` still carries the selector, joined exactly as before.
+        """
+        mutation = self._mutation(("tests/a.py", "tests/b.py"))
+        with mock.patch.object(mutation_verify.subprocess, "run") as runner:
+            runner.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="2 passed", stderr=""
+            )
+            result = mutation_verify._run_guards(mutation)
+        invocations = [call.args[0] for call in runner.call_args_list]
+        self.assertEqual(len(invocations), 2)
+        for argv, guard_file in zip(invocations, ("tests/a.py", "tests/b.py")):
+            self.assertEqual(argv[argv.index("pytest") + 1], guard_file)
+            self.assertEqual(argv[argv.index("-k") + 1], " or ".join(mutation.guards))
+        self.assertTrue(result.all_green)
+
+    def test_run_guards_keeps_one_record_per_file(self):
+        """Each file gets its own record, in ``guard_files()`` order.
+
+        The record is what phase 2 reads: a combined return code says "something
+        went red", while ``per_file`` says *which* files did. Order is pinned
+        because the receipt prints them in it.
+        """
+        mutation = self._mutation(("tests/a.py", "tests/b.py"))
+        with mock.patch.object(mutation_verify.subprocess, "run") as runner:
+            runner.return_value = subprocess.CompletedProcess(
+                args=[],
+                returncode=1,
+                stdout="1 failed\nFAILED tests/a.py::test_x",
+                stderr="",
+            )
+            result = mutation_verify._run_guards(mutation)
+        self.assertEqual(
+            [record.guard_file for record in result.per_file],
+            ["tests/a.py", "tests/b.py"],
+        )
+        self.assertFalse(result.all_green)
+        self.assertTrue(result.every_file_red)
+        self.assertEqual(result.tally(), "2/2 files red")
+        # The tail is the last line of that file's own run, not of a combined one.
+        self.assertEqual(result.per_file[0].tail, "FAILED tests/a.py::test_x")
+
+    def test_a_single_file_run_records_its_pass_flag_and_tail(self):
+        with mock.patch.object(mutation_verify.subprocess, "run") as runner:
+            runner.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="3 passed", stderr=""
+            )
+            result = mutation_verify._run_guards(self._mutation("tests/one.py"))
+        self.assertEqual(
+            [record.guard_file for record in result.per_file], ["tests/one.py"]
+        )
+        self.assertTrue(result.per_file[0].passed)
+        self.assertEqual(result.per_file[0].tail, "3 passed")
+        self.assertEqual(result.tally(), "0/1 files red")
+
+
+class GuardRunAggregateTests(unittest.TestCase):
+    """The two questions a phase asks, and why they are not one question.
+
+    ``all_green`` (phases 1 and 3) and ``every_file_red`` (phase 2) stop being
+    each other's negation as soon as a mutation names several files, and that gap
+    *is* the blind spot audit section 45.5 named: one file firing is enough to
+    make a combined return code non-zero, so "at least one red" would let a guard
+    that had gone vacuous hide behind its neighbours. H2 (set
+    ``multi-guard-file``) asserts that weakening ``every_file_red`` turns this
+    class red.
+    """
+
+    @staticmethod
+    def _run(*outcomes):
+        return mutation_verify.GuardRun(
+            tuple(
+                mutation_verify.FileGuardRun(f"tests/{name}.py", passed, tail)
+                for name, passed, tail in outcomes
+            )
+        )
+
+    def test_every_file_red_requires_every_file_not_just_one(self):
+        mixed = self._run(("a", False, "1 failed"), ("b", True, "2 passed"))
+        self.assertFalse(mixed.every_file_red)
+        self.assertEqual([r.guard_file for r in mixed.red_files], ["tests/a.py"])
+        self.assertEqual([r.guard_file for r in mixed.green_files], ["tests/b.py"])
+
+        all_red = self._run(("a", False, "1 failed"), ("b", False, "1 failed"))
+        self.assertTrue(all_red.every_file_red)
+        self.assertFalse(all_red.all_green)
+
+    def test_all_green_needs_every_file_to_pass(self):
+        self.assertFalse(self._run(("a", True, "2 passed"), ("b", False, "1 failed")).all_green)
+        self.assertTrue(self._run(("a", True, "2 passed"), ("b", True, "2 passed")).all_green)
+
+    def test_an_empty_run_is_green_but_does_not_prove_every_file_red(self):
+        """Nothing checked must not read as everything noticed.
+
+        A mutation that named no guard file would otherwise pass every phase
+        while running nothing, so ``every_file_red`` is False for an empty run.
+        The inventory test below keeps the case unreachable for real mutations.
+        """
+        empty = mutation_verify.GuardRun(())
+        self.assertTrue(empty.all_green)
+        self.assertFalse(empty.every_file_red)
+
+    def test_the_tally_counts_red_over_total(self):
+        run = self._run(
+            ("a", False, "1 failed"), ("b", True, "2 passed"), ("c", False, "1 failed")
+        )
+        self.assertEqual(run.tally(), "2/3 files red")
 
 
 class VerifySelectionTests(unittest.TestCase):

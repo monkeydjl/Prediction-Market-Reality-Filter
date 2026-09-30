@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from app.utils.direction_vocabulary import STRONG_DIRECTIONS
+
 
 @dataclass
 class _BrierBucket:
@@ -30,7 +32,11 @@ class _PhaseContribution:
     conflicts_with_final: int = 0
 
 
-_STRONG_DIRECTIONS = {"YES", "NO"}
+# The 4-direction vocabulary is split: the committing half is the shared
+# ``STRONG_DIRECTIONS``, the non-committal half is local here. ``add_phase_result``
+# reads both sides of the split: a strong -> weak move is a downgrade
+# (``downgrades_caused``), and a phase that stays strong while the merged final
+# goes weak is a conflict (``conflicts_with_final``).
 _WEAK_DIRECTIONS = {"WAIT", "AVOID"}
 
 
@@ -147,7 +153,7 @@ class ReplayMetrics:
         pc = self.phase_contributions[phase]
 
         # downgrades_caused: phase turned a strong dir into a weak one.
-        if base_dir in _STRONG_DIRECTIONS and phase_dir in _WEAK_DIRECTIONS:
+        if base_dir in STRONG_DIRECTIONS and phase_dir in _WEAK_DIRECTIONS:
             pc.downgrades_caused += 1
         # directions_changed: phase produced any direction different from base.
         if base_dir is not None and phase_dir is not None and base_dir != phase_dir:
@@ -157,7 +163,7 @@ class ReplayMetrics:
             phase_dir is not None
             and final_dir is not None
             and phase_dir != final_dir
-            and phase_dir in _STRONG_DIRECTIONS
+            and phase_dir in STRONG_DIRECTIONS
             and final_dir in _WEAK_DIRECTIONS
         ):
             pc.conflicts_with_final += 1

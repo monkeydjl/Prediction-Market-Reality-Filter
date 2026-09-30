@@ -31,16 +31,11 @@ from app.memory.prediction_store import (
 )
 from app.services.calibration_drift_service import build_drift_report, evaluate_drift_alerts
 from app.services.drift_alert_dispatcher import dispatch_drift_alerts, evaluate_scheduler_alerts
+from app.utils.direction_vocabulary import _STRONG_DISPLAY_DIRECTIONS
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# final_displayed_direction values that still represent a *committed* call. If a
-# wide-spread market displays one of these, the overlay failed to downgrade it to
-# WAIT/AVOID, and the anomalies endpoint surfaces the event for operator review.
-# Lives here rather than inline so a mutation can target it.
-_STRONG_DISPLAY_DIRECTIONS = ("YES", "NO")
 
 
 # ---------------------------------------------------------------------------

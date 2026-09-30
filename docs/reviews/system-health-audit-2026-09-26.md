@@ -3484,7 +3484,7 @@ B13 为了补用例，不得不**第一次真正装配** `_persist_events`（tem
 
 | 事项 | 状态 |
 |---|---|
-| **收敛 13 个方向常量** | ⏳ 未动。§34.8 已给出"同值不同义"的逐项语义 —— 拍板前不宜合并 |
+| **收敛 13 个方向常量** | ⏳ 未动 → **已评估：见 §四十二**（13 常量 ⟷ 13 变异 ⟷ 22 守卫；真实代价是 harness 表达不了跨文件的 N 条守护，不是"少一条变异"）。**仍未收敛**，待拍板 |
 | `decision_quality_service:331` 死分支清理 | ⏳ 未动（**两臂返回同一字符串**，补用例无意义；属 B10）|
 | 统一 13+ 处 direction 归一化（`in ("YES","NO","WAIT","AVOID")` 的四元组）| ⏳ 未动（是**另一个集合**：合法输入词表，不是强方向）|
 | 前端 `api.ts:447` 手写 union / 规范化 51 个 MIXED 文件 | ⏳ 未动（需拍板）|
@@ -3915,7 +3915,8 @@ Usage 段补上 `verify whitelist-fixtures --index 30` 与 `--index` 的说明�
 | 事项 | 状态 |
 |---|---|
 | 让 `--index` 一次支持多条（如 `--index 27,30`）| ✅ **已在 §三十九 完成**（本批的 §38 页脚早于它，故此处按未交付内容更新）|
-| 收敛 13 个方向常量 / `api.ts` union / 51 个 MIXED 文件 | ⏳ 待拍板 |
+| 收敛 13 个方向常量（**已评估**：§四十二）| ⏳ **仍未收敛**，待拍板（§42.6 四方案）|
+| `api.ts` union / 51 个 MIXED 文件 | ⏳ 待拍板 |
 | §35.5 修法 (a)+(d) | ✅ **已在 §四十一 完成**（本节的页脚早于它，故此处按未交付内容更新）|
 | 提交 | ⏳ 未提交（等指令）|
 
@@ -4033,7 +4034,8 @@ Usage 段补上 `verify whitelist-fixtures --index 30` 与 `--index` 的说明�
 | 事项 | 状态 |
 |---|---|
 | `apply <set> <index>` 也支持多值 | ✅ **已在 §四十 完成**（并顺带做了区间语法与写入前的原子校验）。本节当时判断"不必与 `verify` 对称"**被推翻** —— 理由见 §40.2：两条命令共用同一个"位置"概念，共用解析器与选择器比"记得同步两处实现"更可靠 |
-| 收敛 13 个方向常量 / `api.ts` union / 51 个 MIXED 文件 | ⏳ 待拍板 |
+| 收敛 13 个方向常量（**已评估**：§四十二）| ⏳ **仍未收敛**，待拍板（§42.6 四方案）|
+| `api.ts` union / 51 个 MIXED 文件 | ⏳ 待拍板 |
 | §35.5 修法 (a)+(d) | ✅ **已在 §四十一 完成**（本节的页脚早于它，故此处按未交付内容更新）|
 | 提交 | ⏳ 未提交（等指令）|
 
@@ -4179,7 +4181,8 @@ C5/C6 是**同一段字节的两个相反改写** → C5 应用之后，C6 的�
 
 | 事项 | 状态 |
 |---|---|
-| 收敛 13 个方向常量 / `api.ts` union / 51 个 MIXED 文件 | ⏳ 待拍板 |
+| 收敛 13 个方向常量（**已评估**：§四十二）| ⏳ **仍未收敛**，待拍板（§42.6 四方案）|
+| `api.ts` union / 51 个 MIXED 文件 | ⏳ 待拍板 |
 | §35.5 修法 (a)+(d) | ✅ **已在 §四十一 完成**（本节的页脚早于它，故此处按未交付内容更新）|
 | 提交 | ⏳ 未提交（等指令）|
 
@@ -4373,3 +4376,838 @@ patch 点若不落在新 seam 上，测的仍是**旧路径**，新代码分支�
 
 **长时任务对冲**（本仓惯例）：跑前对 6 个改动文件落 `sha256 + 字节数`，跑完逐条复核 → **changed = 0**
 （本轮没有发生"就地编辑被回退"）。
+
+---
+
+# 四十二、13 个方向常量的收敛评估：**13 个常量 ⟷ 13 条变异 ⟷ 22 条守卫**，一一对应
+
+本节**只做评估，不做收敛**（不代决）。§34.8 已给出"同值不同义"的逐项语义；本节把那份语义
+**补成完整的 13 行**，并把"收敛要付什么代价"算到能拍板的粒度 —— 结论是：代价**不在"少一条变异"**，
+而在"**harness 现在表达不了跨文件的 N 条守护**"（§42.4）。
+
+## 42.1 结论先行
+
+| 问题 | 答案 |
+|---|---|
+| "13 个常量"具体是哪 13 个 | 6 个同名 `_STRONG_DIRECTIONS` + 3 个异名旧常量（`_DIRECTIONAL` / `_CALLED_DIRECTIONS` / `_VALID_DIRECTIONS`）+ §34 提取的 4 个新名 —— 逐项见 §42.2 |
+| 它们"**同值**"吗 | **只在"成员集合 = {YES,NO}"这一个层面上成立**：容器有 **3 种**（tuple 10 / set 2 / frozenset 1），且有 **1 处消费者是迭代而非成员判定**（`simulated_trade_store.py:509`）→ §42.3 |
+| 它们"**同义**"吗 | **不**。§29.3 给的是 **5 种**语义，而按 13 行逐项落位需要 **8 种** —— §34 那 4 个新名里有 3 个（被展示的 / 被报告的 / 强结论）落在那 5 种**之外**（§42.2 末列）|
+| 收敛的代价是什么 | **不是"少一条变异"**：13 条已登记变异是**一个文件一条、一个 guard_file 一条**；合并后要把 N 个文件的守护挂在一条变异上，而 `Mutation.guard_file` 是**单值** → 现状表达不了 → §42.4 |
+| 本节的结论 | **维持 13 个具名独立**（现状）不是"懒得动"，而是**当前 harness 形态下合并会真丢锚定**；要合并得先扩 harness。方案表见 §42.6 |
+
+## 42.2 普查：13 个常量的完整画像
+
+`grep -rn "^_\(STRONG_DIRECTIONS\|DIRECTIONAL\|CALLED_DIRECTIONS\|VALID_DIRECTIONS\|REPORTED_DIRECTIONS\|STRONG_DISPLAY_DIRECTIONS\|TRADABLE_DIRECTIONS\|STRONG_EVENT_DIRECTIONS\)\s*[:=]" app/`
+
+| # | 名字 | 定义 | 容器 | 消费点 | 定义处注释 | 语义 |
+|---|---|---|---|---|---|---|
+| 1 | `_STRONG_DIRECTIONS` | `replay/metrics.py:33` | **`set`** | `:150` `:160` | ❌ **无** | ① 可降级的强方向 **→ §45 已合并** |
+| 2 | `_STRONG_DIRECTIONS` | `services/decision_quality_service.py:62` | `tuple` | `:284` | ✅ 7 行："the only ones **Stage A** of the downgrade pipeline may rewrite" | ① **→ §45 已合并** |
+| 3 | `_STRONG_DIRECTIONS` | `services/execution_quality_service.py:49` | `tuple` | `:159` | ❌ **无** | ① **→ §45 已合并** |
+| 4 | `_STRONG_DIRECTIONS` | `services/guardrail_service.py:63` | `tuple` | `:119` | ✅ 3 行："can be downgraded … by **these guardrails**" | ① **→ §45 已合并** |
+| 5 | `_STRONG_DIRECTIONS` | `services/market_quality_service.py:45` | `tuple` | `:262` | ❌ **无** | ① **→ §45 已合并** |
+| 6 | `_STRONG_DIRECTIONS` | `services/source_reliability_service.py:50` | `tuple` | `:409` `:498` | ✅ 2 行："can be downgraded to WAIT … by **this layer**" | ① **→ §45 已合并** |
+| 7 | `_DIRECTIONAL` | `services/prediction_calibration_service.py:92` | `tuple` | `:159` | ✅ 2 行："have a **checkable stance**（`direction_correct` is None otherwise）" | ③ 可检验方向 |
+| 8 | `_CALLED_DIRECTIONS` | `services/review_queue_detectors.py:79` | **`frozenset`** | `:148` `:262` | ✅ 3 行："A **committed call**, as opposed to an abstention… Decision Gate's act / provisional_act" | ④ 已下注的调用 |
+| 9 | `_VALID_DIRECTIONS` | `services/domain_reliability_service.py:36` | **`set`** | `:113` | ❌ **无** | ② 合法输入值 |
+| 10 | `_STRONG_DISPLAY_DIRECTIONS` | `api/routes/quality_metrics.py:43` | `tuple` | `:372` | ✅ 4 行："…the **anomalies endpoint** surfaces…；**Lives here rather than inline so a mutation can target it**" | ⑥ 被展示的强方向 |
+| 11 | `_REPORTED_DIRECTIONS` | `memory/simulated_trade_store.py:463` | `tuple` | `:509` **（迭代）** | ✅ 4 行："reported in `trade_stats()["by_direction"]`…；**Lives here … so a mutation can target it**" | ⑦ 被报告的强方向 |
+| 12 | `_TRADABLE_DIRECTIONS` | `services/event_intelligence_service.py:48` | `tuple` | `:1579` | ✅ 6 行："a **simulated (paper) trade** may be opened with" | ⑤ 可交易方向 |
+| 13 | `_STRONG_EVENT_DIRECTIONS` | `services/conclusion_challenge_service.py:22` | `tuple` | `:51` `:92` | ✅ 5 行："**Two call sites** read this same membership test" | ⑧ 强结论方向 |
+
+**合计**：13 个定义 / **17 个消费点**（16 个成员判定 + 1 个迭代）/ **3 种容器**（tuple **10**、set **2**、frozenset **1**）/ 注释 **9 有 4 无**。
+
+⚠️ **一处必须点名的旁证**：`services/evidence_aggregation_service.py:45` 也叫 `_VALID_DIRECTIONS`，值是
+`{"support","oppose"}` —— **同名不同值**（§29.4）。它**不在 13 之内**，但它说明"按名字合并"这条路本身就存在陷阱。
+
+⚠️ **§29.3 的 5 种语义不够用**：那张表列的是 ①可降级 ②合法输入 ③可检验 ④已下注 ⑤可交易。
+按上表逐项落位，§34 的 4 个新名里有 **3 个落在它之外** —— ⑥被展示（异常面）· ⑦被报告（统计面）· ⑧强结论（挑战面）。
+→ **"13 个常量"不是"5 种语义 × 若干副本"，而是 8 种语义**。这一点让"看到 `{YES,NO}` 就并进来"更不成立。
+
+## 42.3 "同值"也不完全成立：三种容器 + 一个迭代消费点
+
+| 事实 | 取值 | 后果 |
+|---|---|---|
+| 容器类型 | `tuple` 10 · `set` 2（1、9）· `frozenset` 1（8）| 想合并就必须先**统一容器类型**；但 16 个消费点全是 `in` 判定 → **类型对它们无影响**（这一半是安全的）|
+| 迭代消费 | `memory/simulated_trade_store.py:509` `for d in _REPORTED_DIRECTIONS:` | ⚠️ **唯一一处不是成员判定**。它把顺序带进 `trade_stats()["by_direction"]` 的 **JSON 键序** |
+| 该迭代的"顺序"是契约吗 | **不是**。守卫断言是 `assertEqual(set(stats["by_direction"]), {"YES","NO"})`（`test_simulated_trade_store.py:311`）—— **顺序无关** | 但源码注释自己写了"Ordering only affects the JSON key order" |
+| 若把它并成 `set`/`frozenset` 会怎样 | 本仓**没有** `PYTHONHASHSEED` 固定（`grep` 为空）→ 默认**每进程随机化字符串哈希** → 该 payload 的键序**逐次运行变化** | 对"看 diff 判回归"的消费者就是噪声。**结论：这个常量的容器类型不是自由选择** |
+
+## 42.4 收敛的真实代价：不是"少一条变异"，是 **harness 现在表达不了跨文件的 N 条守护**
+
+先摆事实（程序化取证，不是肉眼数）：**W17–W29 恰好 13 条，落在 13 个不同文件上，共挂 22 条具名守卫。**
+
+| 变异 | 常量所在文件 | `guard_file` | 守卫数 |
+|---|---|---|---|
+| W17 | `guardrail_service.py` | `tests/test_guardrail_service.py` | 2 |
+| W18 | `market_quality_service.py` | `tests/test_market_quality_service.py` | 2 |
+| W19 | `execution_quality_service.py` | `tests/test_execution_quality_service.py` | 1 |
+| W20 | `source_reliability_service.py` | `tests/test_source_reliability_service.py` | 1 |
+| W21 | `prediction_calibration_service.py` | `tests/test_prediction_calibration_service.py` | 3 |
+| W22 | `review_queue_detectors.py` | `tests/test_review_queue_detectors.py` | 3 |
+| W23 | `domain_reliability_service.py` | `tests/test_domain_reliability_service.py` | 2 |
+| W24 | `replay/metrics.py` | `tests/test_replay_metrics.py` | 2 |
+| W25 | `simulated_trade_store.py` | `tests/test_simulated_trade_store.py` | 1 |
+| W26 | `quality_metrics.py` | `tests/test_quality_metrics.py` | 1 |
+| W27 | `event_intelligence_service.py` | `tests/test_event_intelligence_service.py` | 1 |
+| W28 | `conclusion_challenge_service.py` | `tests/test_conclusion_challenge_service.py` | 2 |
+| W29 | `decision_quality_service.py` | `tests/test_decision_quality_service.py` | 1 |
+
+🔴 **关键**：`Mutation.guard_file` 是**单值**（`_run_guards` 跑 `pytest <guard_file> -q -k "<guards 用 or 连接>"`）。
+所以合并 6 个 `_STRONG_DIRECTIONS` 之后，那条落在共享定义上的变异**只能挂一个文件的守卫** ——
+另外 5 个文件的行为用例就**真的不再被任何变异锚定**。
+
+→ **这不是"13 条塌成 8 条"的记账问题，而是一个能力缺口**。要把"一处定义 + N 个文件的 N 条守护"表达出来，
+得先给 harness 加"多 guard_file"（这是**可测的新能力**，不是文档改动）。
+
+⚠️ 顺带一条会**连带失效**的东西：那 6 条变异的针是 `_STRONG_DIRECTIONS = ("YES","NO")` 形式的**定义行**；
+合并后该行不复存在 → `verify`/`apply` 会直接报 `needle appears 0x`（**拒绝，不是静默**），
+所以合并必须**同批**改 harness 与本文档里 W17–W29 的历史编号说明。
+
+**✅ 已落地**：能力见 **§四十四**（多 guard_file）；合并见 **§四十五**（实测 W31 之下 9 条守卫跨 6 文件**全红**）。
+
+## 42.5 分组：只有 6 个同名 `_STRONG_DIRECTIONS` 是"共享会变契约"的候选
+
+§8d 的收敛判据是"**是否共享同一个会变的契约**"。按 §42.2 的语义列：
+
+| 组 | 成员 | 判据 | 可否合并 |
+|---|---|---|---|
+| ① 可降级的强方向 | #1–#6（6 个同名副本，8 个消费点）| **共享**："新增第 5 个方向 `HOLD` 时它可不可降级"是**同一个决定** | ✅ 唯一候选（但受 §42.4 制约）|
+| ②–⑧ 其余 7 个 | #7–#13 | **各自独立**：`HOLD` 有没有可检验立场 / 算不算下注 / 能不能下单 / 要不要进统计 / 要不要在异常面展示 / 算不算强结论 —— **每一个都是独立的决定** | ❌ 合并 = 把 8 个决定压成 1 个 |
+
+⚠️ 注意组 ① 里 #1 是 `replay/`（回放层）而 #2–#6 是 `services/`（服务层）—— 跨层。合并会引入
+**6 个文件里第一次出现 `from app.…` 顶层导入**（取证：这 6 个文件现在 `grep -c "from app\."` **全为 0**）。
+好消息是这次取证同时证明**没有循环导入风险**：新模块只要不反向导入，就永远是叶子。
+（另有一条环境事实：`app/`、`app/services/`、`app/utils/` 都**没有 `__init__.py`**（namespace 包），
+而 `app/replay/` **有**且只有一句 docstring —— 放共享模块时不必纠结包结构。）
+
+## 42.6 四个方案（**决策表，不代决**）
+
+| 方案 | 做什么 | 代价 | 收益 |
+|---|---|---|---|
+| **A. 不动**（现状）| 13 个具名独立保持原样 | 0 | 13 条变异 / 22 条守卫**全部继续承重**；语义各自在定义处有注释（9 个有、4 个无 → 见方案 D）|
+| **B. 先扩 harness，再合并组 ①**（6 个 `_STRONG_DIRECTIONS`）| 给 `Mutation` 加"多 guard_file"；新建共享常量模块；6 处改 import | ① harness 新能力（**必须自带守卫用例 + 变异**，否则是新的空头）② 迁移 6 条变异的针与守卫 ③ 本文档 W 编号要加历史说明 ④ 6 个文件的导入面从 0 变 1 | 一处定义；"新增方向"只剩一个地方要改（可测：一条变异 + 9 条跨文件守卫）|
+| **C. 合并全部 13 个** | 连 ②–⑧ 一起并 | **与 §29.3/§42.2 的语义结论相反**（8 种语义压成 1）；#11 的容器类型被绑死（§42.3）；#10/#11 的注释明写"**存在是为了能被变异**"，合并会删掉这两个变异靶 | 名字最少 |
+| **D. 不合并，只补 4 处注释** | 给 #1 / #3 / #5 / #9（现在**没有注释**）各补一段"为什么是这个成员集" | **零契约变化**（注释不被变异针命中）| 消掉"4 个常量比名字更少信息"这个真实缺口 |
+
+> **落地状态**：**B 已做完** —— ① harness"多 guard_file"见 **§四十四**；②③④（共享模块 + 6 处 import + 6 条变异收成 W31）见 **§四十五**。**D 已做完**（§四十三，其 4 处常量已随 §45 并入共享模块）。A 是"不动"、已不适用；C **未做且不建议**。
+
+> **§47 追注（2026-09-30）**：C 的两条代价里有**一条已经过期** —— 「合并会删掉这两个变异靶」不再成立。
+> §44 给 `Mutation` 加了「一条变异可挂多个 guard_file」、§46 又把阶段②判据升级为「**每文件各一红**」，
+> 于是「多处定义」的锚定**可以集中到一个模块上而不丢**（§45 的 W31 已证明：1 处定义 / 6 个 guard_file / 9 条守卫；
+> §47 的 7 条重定向又证明一次：1 个 `path` / 14 个 guard_file / 23 条守卫）。
+> ⚠️ 但这**不等于原 C 该做**：C 只剩 **「8 种语义压成 1」** 一条真代价（§42.2/§42.5 的语义结论），**仍不建议**。
+> §47 做的是**另一种形态**：一个模块里**保留 8 个具名常量** —— 只收敛**位置**，不合并语义。
+
+→ 我的**倾向**（供参考，不是决定）：**先 D**（零风险、可立刻做）→ 组 ① 的合并（B）**排在 harness 扩完之后**，
+否则会以"看起来只是少几条变异"的方式**真丢锚定**。C 不建议。
+
+## 42.7 本节未做
+
+| 事项 | 状态 |
+|---|---|
+| 收敛任何常量 | ⏳ **未动**（本节只评估；§42.6 待拍板）|
+| 给 #1/#3/#5/#9 补语义注释（方案 D）| ✅ **已做** —— 见 **§四十三**（本节评估时尚未动，下一节落地）|
+| 给 harness 加"多 guard_file" | ✅ **已做** —— 见 **§四十四**（方案 B 第 ① 步；②③④ 仍待做）|
+| 统一 13+ 处 direction 归一化（`in ("YES","NO","WAIT","AVOID")` 四元组）| ⏳ 未动（**另一个集合**，§29.5：归一化点只有 2 处，其余 13+ 处原样比对）|
+
+**本节只改本文档。未提交。未 push、未开 PR。**
+
+## 42.8 取证命令（本节每条事实的来源）
+
+```bash
+# 13 个定义行
+grep -rn "^_\(STRONG_DIRECTIONS\|DIRECTIONAL\|CALLED_DIRECTIONS\|VALID_DIRECTIONS\|REPORTED_DIRECTIONS\|STRONG_DISPLAY_DIRECTIONS\|TRADABLE_DIRECTIONS\|STRONG_EVENT_DIRECTIONS\)\s*[:=]" app/
+# 消费点（逐常量）
+grep -rn "\b_STRONG_DIRECTIONS\b" app/          # 其余 7 个同理
+# 6 个文件现在有没有 app 内导入（证明"导入面从 0 变 1"）
+for f in app/replay/metrics.py app/services/{decision_quality,execution_quality,guardrail,market_quality,source_reliability}_service.py; do grep -c "from app\." "$f"; done
+# 13 条变异 / 13 个 guard_file / 22 条守卫（程序化，不肉眼数）
+cd backend && ../.venv/Scripts/python.exe -c "import scripts.mutation_verify as mv; s=mv.SETS_BY_KEY['whitelist-fixtures']; ws=[m for m in s.mutations if m.label.split()[0] in {f'W{i}' for i in range(17,30)}]; print(len(ws), len({m.path for m in ws}), len({m.guard_file for m in ws}), sum(len(m.guards) for m in ws))"
+# 容器类型 3 种 + 迭代消费点
+grep -rn "for d in _REPORTED_DIRECTIONS" app/
+# 无 PYTHONHASHSEED 固定
+grep -rn "PYTHONHASHSEED" backend .github
+```
+
+# 四十三、§42.6 方案 D：给 4 个「定义处无注释」的方向常量各补一段成员集理由
+
+## 43.1 结论先行
+
+| 问题 | 答案 |
+|---|---|
+| 本批做了什么 | §42.6 的**方案 D**：给 §42.2 里"定义处注释 = ❌ 无"的 **4 个**常量（#1 / #3 / #5 / #9）各补一段"为什么是这个成员集" |
+| 契约变了吗 | **没有**。注释不进 AST、不被任何变异针命中；4 个常量的**赋值行一字未动** —— 4 根针对应变异（W18/W19/W23/W24）的命中数仍 = **1**（§43.3 程序化取证）|
+| 为什么值得做 | §42.2 末列"定义处注释"这一列里 9 个 ✅、4 个 ❌；这 4 个恰是"**比名字更少信息**"的那批（名字说了是什么，没说为什么是这个成员集、谁在消费）|
+| 验证 | 4 个文件共 **109** 条用例（0 failures / 0 errors / 0 skipped）+ `ruff check app/` 全过；4 文件行尾保持**纯 CRLF**；`git diff --stat` = **16 insertions / 0 deletions** |
+| 提交 | **未提交**（§42 与 §43 同属一个未提交批次，见 §43.5）|
+
+## 43.2 四处改动（逐处对齐消费点）
+
+| # | 文件:行 | 常量 | +行 | 注释说清的事 |
+|---|---|---|---|---|
+| #1 | `app/replay/metrics.py:33` | `_STRONG_DIRECTIONS = {"YES","NO"}`（**set**）| +4 | 这是"4 方向词表按**是否对结果表态**切的一刀"；`add_phase_result`（`:134`）两边都读：强→弱 = 降级（`downgrades_caused` `:155`），阶段保持强而合并终值变弱 = 冲突（`conflicts_with_final` `:167`）|
+| #3 | `app/services/execution_quality_service.py:49` | `_STRONG_DIRECTIONS = ("YES","NO")` | +5 | 不可执行（宽价差 / 薄流动性 / 陈旧价 / 高费）时，已表态的调用被降级为 WAIT（`build_execution_quality` 的方向建议步）；WAIT/AVOID 本就非表态，原样通过 |
+| #5 | `app/services/market_quality_service.py:45` | `_STRONG_DIRECTIONS = ("YES","NO")` | +3 | 只有这些会被 `_apply_market_downgrade`（`:248`）改写为 WAIT —— 且仅在市场质量低于阈值**或**价差不可交易时；WAIT/AVOID 不动 |
+| #9 | `app/services/domain_reliability_service.py:36` | `_VALID_DIRECTIONS = {"YES","NO"}`（**set**）| +4 | 这是"**可判定**"（而非"可降级"）这一支：`attribute_evidence` 跳过集合外的记录（WAIT/AVOID 没有可打分的 YES/NO 调用）；**放宽它就会开始给从未表态的记录打分** |
+
+⚠️ #9 的注释特意点出"放宽的后果"，因为它的名字（`_VALID_`）与其余 3 处的 `_STRONG_` 不同 —— §42.2 已证**异名不等于异义、同名不等于同义**，注释的作用正是把"名字没说清的那一半"写死。
+
+## 43.3 "零契约变化"是可验证的，不是声称
+
+| 判据 | 取证 | 结果 |
+|---|---|---|
+| 变异针命中数不变 | 4 根针（W18/W19/W23/W24）的 `old` 字节 = 常量赋值行本身；注释插在**上一行** → `path.read_bytes().count(old)` | 4 处均为 **1**（与改动前相同）|
+| 纯插入 | `git diff --stat -- <4 files>` | **16 insertions(+), 0 deletions(-)** |
+| 不引入编码噪声 | `raw[:3]` 逐文件检查 | 4 文件均 **no-BOM** |
+| 注释引用真实 | `grep -n` 对齐 `add_phase_result`(`:134`) / `downgrades_caused`(`:155`) / `conflicts_with_final`(`:167`) / `_apply_market_downgrade`(`:248`) | 一致 |
+| 行尾不变 | 字节画像 `b.count(b"\r\n")` vs `b.count(b"\n") - crlf` | 4 文件均**纯 CRLF**（bareLF = 0）|
+
+## 43.4 验证
+
+```bash
+cd backend
+# 4 个相关测试文件（含 W18/W19/W23/W24 的具名守卫）
+../.venv/Scripts/python.exe -m pytest tests/test_replay_metrics.py \
+  tests/test_execution_quality_service.py tests/test_market_quality_service.py \
+  tests/test_domain_reliability_service.py -q -p no:cacheprovider --junitxml=<outside-repo>
+# CI 的 ruff 门
+../.venv/Scripts/ruff.exe check app/
+```
+
+| 项 | 读数 |
+|---|---|
+| pytest（4 文件）| **109 testcases / 0 failures / 0 errors / 0 skipped** |
+| 按类分布 | replay_metrics 13 · execution_quality 14 · market_quality 44 · domain_reliability 38 |
+| `ruff check app/` | **All checks passed!** |
+| 4 文件行尾增量 | `metrics.py` 277→281 · `execution_quality_service.py` 239→244 · `market_quality_service.py` 373→376 · `domain_reliability_service.py` 291→295 |
+
+CRLF 增量（+4 / +5 / +3 / +4）与 §43.2 的注释行数**逐条相等** —— 即"插入的行数 = 新增的换行数"，无吞行。
+
+## 43.5 本节未做 / 交接
+
+| 事项 | 状态 |
+|---|---|
+| 运行**全量**闸门 | ⏳ 未跑（本节只动注释，用 4 个相关文件 + ruff 定向覆盖；全量闸门的成本判断见 §41.10）|
+| 提交 §42 + §43 | ⏳ **未提交**（用户未指示提交）|
+| §42.6 的方案 A / B / C | ⏳ **仍待拍板**（B 的前置是给 harness 加"多 guard_file"）|
+| 统一 13+ 处 direction 归一化 | ⏳ 未动 |
+
+**本节只改本文档 + 4 个源码文件的注释。未提交。未 push、未开 PR。**
+
+# 四十四、给 harness 加「一条变异可挂多个 guard_file」的能力（§42.6 方案 B 的第 ① 步）
+
+## 44.1 结论先行
+
+| 问题 | 答案 |
+|---|---|
+| 本批做了什么 | §42.6 **方案 B 的第 ① 步**：把 `Mutation.guard_file` 从**单值**扩成**可多值**（`str \| tuple[str, ...]`），让一条变异能同时锚定**多个文件**的守护 —— 这是"合并组 ① 六个 `_STRONG_DIRECTIONS`"的**前置能力**，不是合并本身 |
+| 为什么必须单独成批 | §42.4 的结论：合并常量后那条变异**只能挂一个文件的守卫**，另 5 个文件的行为用例**真丢锚定**。所以**能力先于消费者**，且必须**自带守卫用例 + 自带变异**，否则就是把"少几条变异"换成了"多一个空头能力" |
+| 能力落在哪 | 唯一 seam = `Mutation.guard_files()`（`str`/`tuple` 归一成 tuple）；唯一消费点 = `_run_guards()`（把**全部**文件交给**同一次** pytest，`-k` 跨合并后的收集集过滤）|
+| 自带变异 | 新 set `multi-guard-file`（**H1**）：把 `_run_guards` 改成"只交第一个文件" → 跨文件守护静默失效 |
+| 对现有变异的影响 | **0**。64 条既有变异一字未改（它们传单字符串 → `guard_files()` 归一成 1 元组 → argv 与改前**逐字节相同**）。现共 **7 套 / 65 个变异** |
+| 验证 | H1 **四阶段全过**；既有 `restore-loopback-probe` **4/4 仍全过**（回归）；`test_mutation_verify.py` **43 passed + 91 subtests**；`ruff check app/` 全过 |
+| 未做 | **没有合并任何常量**（§42.6 的 A/B/C 仍待拍板）；该能力此刻**无生产消费点**，由一条 pin 测试钉住（见 §44.4）|
+
+## 44.2 能力：一个 seam + 一个消费点
+
+`backend/scripts/mutation_verify.py`
+
+```python
+@dataclasses.dataclass(frozen=True)
+class Mutation:
+    ...
+    guard_file: str | tuple[str, ...]      # 原本是 str
+
+    def guard_files(self) -> tuple[str, ...]:
+        if isinstance(self.guard_file, str):
+            return (self.guard_file,)
+        return tuple(self.guard_file)
+```
+
+`_run_guards` 的 argv 从 `mutation.guard_file` 改为 `*mutation.guard_files(),`：
+
+```python
+        [str(PY), "-m", "pytest", *mutation.guard_files(), "-q",
+         "-p", "no:cacheprovider", "-k", " or ".join(mutation.guards)],
+```
+
+**为什么是"交给同一次 pytest"而不是"每文件跑一次"**：`-k` 的选择器对所有文件是同一个，
+跨合并后的收集集过滤即可；某个 guard 名只在其中一个文件里存在时，`-k` 在那里**匹配不到**（无害）。
+逐文件循环会多跑 N−1 次进程，还会让"哪些 guard 真的被选中"分散在 N 份输出里。
+→ 归一化放在 `guard_files()`，好处是**别处都不必知道它是哪种拼写**：
+旧用法（单字符串）与能力（多文件）走同一条路径。
+
+## 44.3 第一条**自指**变异 —— 针必须拆成两段（本节踩了一脚）
+
+H1 是仓库里**第一条以 harness 自身为靶**的变异（此前所有针都打在 app/ 与另外两个脚本上）。
+它踩了一个**只在自指时出现**的坑：**`old=<针>` 这个字面量本身就含针文本**。
+
+| 写法 | `read_bytes().count(old)` | 结果 |
+|---|---|---|
+| `old=b"*mutation.guard_files(),"` | **2**（`_run_guards` 里 1 处 + **定义里的字面量** 1 处）| `_apply_preflight` 拒绝（`expected 1`）|
+| 拆成 `_GUARD_FILES_ARG = b"*mutation.guard_files()" + b","` | **1** | ✅ |
+
+更阴的一次：改完定义后仍报 **2** —— 因为**我给这个针写的注释里逐字引用了它**
+（`… a single ``b"*mutation.guard_files(),"`` …`）。**注释也是文件字节**，一样进计数。
+→ 最终写法既拆了字面量，**也不在注释里复现针**（改成了描述）。
+
+⚠️ **通用判据**：**自指变异（靶 = 载体脚本）的针不能以"完整字面量 + 注释引用"的形式出现在同一文件里**；
+必须拆片段，并保证注释只**描述**不复现。这与"插入型编辑删除数必须为 0"是同一类：
+**先算针在文件里的出现次数，再决定怎么写它**。
+
+## 44.4 测试（+4 用例；1 处改名）
+
+`backend/tests/test_mutation_verify.py`
+
+- 新增 **`MultiGuardFileTests`**（4 条）：
+  `test_a_single_guard_file_normalises_to_a_one_tuple` ·
+  `test_several_guard_files_keep_their_order` ·
+  **`test_run_guards_passes_every_named_file_to_pytest`**（H1 的守卫：**patch `subprocess.run`、断言 argv 含全部文件名**）·
+  `test_no_mutation_names_several_guard_files_yet`（pin：能力此刻无消费者）。
+- `test_the_six_sets_are_present` → **`test_the_seven_sets_are_present`**（追加 `multi-guard-file`），docstring 注明改名由来。
+- `test_every_guard_file_exists_and_every_guard_is_named` 改为**遍历** `mutation.guard_files()`。
+
+🔴 **为什么 H1 的守卫必须看 argv，而不是看返回值**：`_run_guards` 只回 `(是否全绿, 末行)`。
+"只跑第一个文件"的实现**照样**返回一个像模像样的 `(True/False, …)` —— 返回值**区分不了**两种实现。
+（与 §41.4 的"patch 点必须落在新 seam 上"同源：**守卫要钉住的是调用形状，不是它给人的印象**。）
+
+## 44.5 验证
+
+```bash
+cd backend
+# H1 四阶段
+../.venv/Scripts/python.exe scripts/mutation_verify.py verify multi-guard-file
+# 回归：既有单文件 set 路径未变
+../.venv/Scripts/python.exe scripts/mutation_verify.py verify restore-loopback-probe
+# 守护测试
+../.venv/Scripts/python.exe -m pytest tests/test_mutation_verify.py -q -p no:cacheprovider --junitxml=<outside-repo>
+```
+
+| 项 | 读数 |
+|---|---|
+| H1 `verify` | `[OK] green before True \| red after mutation True \| green after restore True \| bytes restored True`；突变后 `1 failed, 42 deselected` |
+| `restore-loopback-probe` 回归 | **4/4 全过**（单文件路径行为未变）|
+| `test_mutation_verify.py` | **43 passed + 91 subtests**（改前 39 + 89；+4 用例、+2 subTest = 新 set 在"每变异/每 set 各一 subTest"的两条遍历里各 +1）|
+| `ruff check app/` | All checks passed! |
+| 两个被改文件行尾 | **纯 LF**（`mutation_verify.py` 1504 行、`test_mutation_verify.py` 514 行，bareLF 0）|
+| 删除行 | 共 **9** 行，**逐条可对**（3 处在 `mutation_verify.py`：`guard_file: str` / `_run_guards` 旧 docstring / `mutation.guard_file,`；6 处在测试：改名 4 行 + guard_file 检查 2 行）|
+
+## 44.6 本节未做 / 交接
+
+| 事项 | 状态 |
+|---|---|
+| 合并组 ① 六个 `_STRONG_DIRECTIONS`（方案 B 的 ②③④）| ⏳ **未做**（下一批；本批只铺路）|
+| 该能力的第一条**生产**变异 | ⏳ 未登记 —— 由 `test_no_mutation_names_several_guard_files_yet` 钉住，合并批必须删它并登记一条跨文件变异 |
+| §42.6 的 A / C | ⏳ 仍待拍板 |
+| 提交 | ⏳ **未提交** |
+
+**本节只改 2 个 harness 文件（脚本 + 其守护测试）+ 本文档。未 push、未开 PR。**
+
+> **追加（2026-09-30，§46）**：本表第 2 行（"该能力的第一条**生产**变异 ⏳ 未登记"）**已由 §45 结清** ——
+> `test_no_mutation_names_several_guard_files_yet` 随合并批删除，W31 成为第一条（也是当前唯一一条）
+> 多 `guard_file` 变异（6 个文件 / 9 条守卫）。第 3 行"该能力此刻无生产消费点"同理作废。
+> 另外 §44.1 写的"唯一消费点 = `_run_guards()`（把**全部**文件交给**同一次** pytest）"是**当时**的形态；
+> §46 把它改成"**每个 guard_file 一次** pytest"，阶段②判据也随之从"≥1 红"升级为"每文件各一红"（见 §46.2）。
+
+# 四十五、执行 §42.6 方案 B 的 ②③④：6 个 `_STRONG_DIRECTIONS` 并为 `app/utils/direction_vocabulary.py` 的一处定义
+
+## 45.1 结论先行
+
+| 问题 | 答案 |
+|---|---|
+| 本批做了什么 | §42.6 **方案 B 的 ②③④**：把 6 个同名 `_STRONG_DIRECTIONS` 并为 `app/utils/direction_vocabulary.py` 的**一处定义**；6 个文件改 import；**8 个消费点改名**；**6 条变异收成 1 条** |
+| 为什么现在才能合 | §44 的多 guard_file 能力落地后，W31 能挂 **6 个 `guard_file` / 9 条守卫** —— 它是该能力的**第一个真实消费者**（§44.4 那条 pin 因此删除）|
+| 成员集变了吗 | **没变**，仍是 `("YES", "NO")`。变的是**定义处**（6 → 1）与**名字**（`_STRONG_DIRECTIONS` → 公有 `STRONG_DIRECTIONS`）|
+| 名字真的统一了吗 | **是**：`grep -rn "_STRONG_DIRECTIONS" backend/app` 现在**只剩 `.pyc` 缓存**，源码里 **0 处**（§45.6 取证）|
+| 丢锚定了吗 | **实测没有**：W31 变异后 **`9 failed, 193 deselected`** —— 跨 **6 个文件的 9 条守卫全部变红**（§45.4）|
+| ⚠️ 必须点名的缺口 | harness 只**强制**"选中的守卫里 ≥1 条红"，**不强制**"每个文件各至少一条红"。本次是**实测 9/9**，不是被规则保证的 → §45.5 |
+| 验证 | 全集合 `verify whitelist-fixtures` **25/25 全过**（EXIT 0）；9 个相关测试文件 **244 passed / 0 failed**；`ruff check app/` 全过；变异涉及文件快照 **changed = 0** |
+| 未做 | §42.6 的方案 C（合并全部 13 个）仍**不建议**；其余待拍板项见 §45.7 |
+
+## 45.2 改动：一处定义 + 6 处 import + 8 处改名
+
+| # | 文件 | 删 | 加 | 8 个消费点 |
+|---|---|---|---|---|
+| ① | **`app/utils/direction_vocabulary.py`（新）** | — | 26 行 | 定义处（唯一）|
+| ② | `app/replay/metrics.py` | `_STRONG_DIRECTIONS`（set）| import；`_WEAK_DIRECTIONS` 保留 | `:156` `:166` |
+| ③ | `services/decision_quality_service.py` | 常量 + 8 行注释 | import | `:280` |
+| ④ | `services/execution_quality_service.py` | 常量 + §43 注释 | import + 消费点注释 | `:162` |
+| ⑤ | `services/guardrail_service.py` | 常量 + 3 行注释 | import | `:116` |
+| ⑥ | `services/market_quality_service.py` | 常量 + §43 注释 | import | `:262` |
+| ⑦ | `services/source_reliability_service.py` | 常量 + 2 行注释 | import | `:407` `:496` |
+
+**容器取 tuple**：#1 原本是 `set`（其余 5 个是 tuple）。共享值取 **tuple** —— 因为**每个读者都是成员判定**、
+没有一处迭代它（§42.3 已逐一核过），所以顺序无含义；tuple 让 repr 稳定且与多数派一致。合并**没有**把一个
+"被迭代的容器"可变性偷偷带进来（§42.3 点名的那个坑在 #11，不在本组）。
+
+**注释的去向**：§43 给 #1/#3/#5/#9 补的注释，其"**这组是什么**"那一半搬进了新模块 docstring；
+"**这一层拿它做什么**"那一半留在消费点（如 #4 的 `# A committed call is downgraded to WAIT when the market
+is not executable…`；#3 的 §36 历史留痕也随之下移到消费点，见 §45.3）。
+
+## 45.3 新模块（`backend/app/utils/direction_vocabulary.py`，26 行 PURE-CRLF）
+
+```python
+"""The direction vocabulary shared by the downgrade layers (audit section 45).
+...
+* ``guardrail_service``          -- which directions its guardrails may rewrite
+...
+Only the *membership* is shared. What each layer does with a strong direction
+stays local ...
+History: these were six byte-identical copies until the merge in audit section
+45. They were a ``tuple`` in five of the six and a ``set`` in ``replay/metrics``.
+"""
+from __future__ import annotations
+
+STRONG_DIRECTIONS = ("YES", "NO")
+```
+
+**位置**：`app/utils/`（§42.5 已取证：`app/`、`app/services/`、`app/utils/` 都**没有 `__init__.py`**（namespace 包），
+放这里不必纠结包结构）。**跨层**：它同时被 `app/services/*`（5 处）与 `app/replay/*`（1 处）导入 ——
+§42.5 担心的"6 个文件第一次出现 `from app.…`"在这里兑现（导入面 0 → 1），但**无循环风险**：新模块
+**不反向导入任何 app 模块**，是叶子。
+
+**保留的历史留痕**：`decision_quality_service.py` 原注释里那句"`_build_rationale_body` 曾经重复同一字面量、
+那个死分支已在 §36 移除，故本常量只有一个消费者"**没有被丢掉** —— 下移到了消费点（`:280` 上方）。
+
+## 45.4 变异迁移：6 条 → 1 条
+
+| 原 | 常量所在文件 | 原 guard_file | 原守卫数 |
+|---|---|---|---|
+| W17 | `guardrail_service.py` | `test_guardrail_service.py` | 2 |
+| W18 | `market_quality_service.py` | `test_market_quality_service.py` | 2 |
+| W19 | `execution_quality_service.py` | `test_execution_quality_service.py` | 1 |
+| W20 | `source_reliability_service.py` | `test_source_reliability_service.py` | 1 |
+| W24 | `replay/metrics.py` | `test_replay_metrics.py` | 2 |
+| W29 | `decision_quality_service.py` | `test_decision_quality_service.py` | 1 |
+
+→ 合成 **W31**：`path = app/utils/direction_vocabulary.py`，针 `STRONG_DIRECTIONS = ("YES", "NO")`，
+**`guard_file` = 上面 6 个测试文件的元组**，`guards` = 上面 9 条具名守卫。
+
+🔴 **四阶段实测**：`[OK]`，`green before True | red after mutation True | green after restore True | bytes restored True`，
+突变后 **`9 failed, 193 deselected in 2.08s` —— 9 条全部变红**。这正是 §42.4 担心的那件事的反证：
+合并**没有**让另外 5 个文件的用例失去锚定。
+
+**编号沿用"只增不改"**：W17–W30 保持历史含义（它们各自的 `note` 里记着当初为什么建），
+新增 **W31** 并在标签里注明"（合并 W17/W18/W19/W20/W24/W29）"。本仓计数：**7 套 / 60 个变异**（原 65），
+`whitelist-fixtures` **30 → 25**。set 标题同步为"（W1–W30 + §45 合并的 W31）"。
+
+## 45.5 ⚠️ 一个必须点名的缺口：**"≥1 条红" ≠ "每文件各一红"**
+
+`_run_guards` 把 6 个文件交给**同一次** pytest，`verify` 判据是 `proc.returncode == 0` ——
+即**只要选中的守卫里有任意一条失败**就算"红"。所以 W31 的四阶段**并不保证**"6 个文件的守卫各自都还在承重"；
+它只保证"这条共享值仍然承重于至少一个消费点"。
+
+- **本次实测**：`9 failed` —— 9 条守卫**全部**变红，因此"每个消费点的锚定都还在"这次**是事实**。
+- **但它不是被规则保证的**：将来若某个文件的守卫退化成空头，W31 仍会绿（另 8 条照红）。
+- 要把它变成**被保证**的，需要再扩 harness：**要求多文件变异的每一个 `guard_file` 都至少贡献一次失败**
+  （即把返回值从"是否全绿"改成"每文件的结果"）。§42.6 记录方案 B 时**没有**包含这一步 —— 本节**不擅自加**，
+  只把缺口写清楚，留作下一步（§45.7 的选项）。
+
+## 45.6 验证
+
+```bash
+cd backend
+# 全集合回归（25 个变异，四阶段）
+../.venv/Scripts/python.exe scripts/mutation_verify.py verify whitelist-fixtures
+# 9 个相关测试文件（守护测试 + 6 个消费文件 + domain_reliability 未变）
+../.venv/Scripts/python.exe -m pytest tests/test_mutation_verify.py tests/test_guardrail_service.py \
+  tests/test_market_quality_service.py tests/test_execution_quality_service.py \
+  tests/test_source_reliability_service.py tests/test_replay_metrics.py \
+  tests/test_decision_quality_service.py -q -p no:cacheprovider --junitxml=<outside-repo>
+# 旧名是否真的消失（源码层面）
+grep -rn "_STRONG_DIRECTIONS" app/       # 只剩 .pyc
+```
+
+| 项 | 读数 |
+|---|---|
+| `verify whitelist-fixtures`（全集合）| **25 个变异校验完毕 / 全部通过**，EXIT 0（10m51s）|
+| W31 单条 | `[OK]`，突变后 **`9 failed, 193 deselected`** |
+| 9 个测试文件 | **244 passed / 0 failed / 0 errors** |
+| `test_mutation_verify.py` | **42 passed + 86 subtests**（改前 43 + 91；−1 = 删掉的 pin，−5 = 消失的 5 条变异的 subTest）|
+| `ruff check app/` | All checks passed! |
+| `app/` 里旧名残留 | **源码 0 处**（仅 `.pyc`）|
+| 变异涉及 31 个文件的 sha256 快照 | **changed = 0**（跑完后逐条复核，harness 未留变异态）|
+| 合并 diff | 9 文件 **+196 / −110**（app 6 + harness 2 + 本次文档不计）|
+
+### 45.6.1 一处**行尾**取证（本节的过程留痕：差点误判一次）
+`guardrail_service.py` 在本批后是 **PURE-LF**，而另外 5 个被改的 app 文件都是 **PURE-CRLF**。
+第一反应是"Edit 把 CRLF 转成了 LF"（那正是本仓最危险的一种损坏）。**取证后否定**：
+1. `app/` 全量普查：**CRLF 262 / LF 58 / MIXED 11** —— LF 本就是该目录的普遍既有状态
+   （`daily_digest_service.py` / `analysis_report_service.py` / `category_inference.py` 等一长串都在 LF 列）；
+2. **决定性探针**：在仓库外造一个 CRLF 文件 → 用 Edit 改一个词 → 字节复核 **仍是 3 个 CRLF、0 个裸 LF**
+   （Edit 保留行尾）；
+3. 同一批另外 5 个 CRLF 文件改后仍**纯 CRLF**。
+→ 结论：`guardrail_service.py` **本来就是 LF**，不是被改坏的。**判据：行尾"异常"要先与该目录的分布比基线，
+再用探针排除工具嫌疑，不要直接归因。**
+
+## 45.7 本节未做 / 交接
+
+| 事项 | 状态 |
+|---|---|
+| 把"多文件变异要求每文件各一红"变成被保证的 | ⏳ 未做（§45.5 的缺口；需要动 `_run_guards` 的返回值形态）|
+| §42.6 方案 C（合并全部 13 个）| ⏳ 不做（§42.5 语义结论不变：8 种语义压成 1 是错的）|
+| 统一 13+ 处 direction 归一化（`in ("YES","NO","WAIT","AVOID")` 四元组）| ⏳ 未动 |
+| 前端 `api.ts:447` 手写 union；规范化 51 个 MIXED 文件 | ⏳ 未动 |
+| 提交 | ⏳ **未提交**（用户未指示提交）|
+
+**本节改 6 个 app 文件 + 1 个新模块 + 2 个 harness 文件 + 本文档。未 push、未开 PR。**
+
+> **追加（2026-09-30，§46）**：本表第 1 行（"把『多文件变异要求每文件各一红』变成被保证的"）
+> **本批做完** —— §45.5 点名的缺口不再是"实测"，而是被 `GuardRun.every_file_red` 规则保证。见 §46。
+
+---
+
+# 四十六、把 §45.5 的缺口补上：阶段②判据从「≥1 条红」升级为「**每文件各一红**」
+
+本批**只做 §45.5 自己点名的那一件事**：让"每个 `guard_file` 各至少一条红"从**实测**变成**被规则保证**。
+§45.5 已经写明这"需要动 `_run_guards` 的返回值形态"，不是补一条断言就能做到 —— 本批就是那次改动。
+
+顺带修掉两处**我自己前几批留下的**陈述漂移（§46.7），它们都在 harness 自己的文档里。
+
+## 46.1 结论先行
+
+| 问题 | 答案 |
+|---|---|
+| 本批做了什么 | `_run_guards`：从「一次调用传**全部** `guard_file`、返回**单个 bool**」改成「**每个 `guard_file` 一次**调用、返回 `GuardRun`（逐文件结果）」；`_verify_one` 阶段②判据随之从 `not passed`（≥1 红）升级为 `after.every_file_red`（**每文件各一红**）|
+| 缺口原文 | §45.5：`returncode == 0` 只强制"选中的守卫里**≥1 条**失败"，**不强制**"每个文件各至少一条失败" → 某个文件的守卫退化成空头时，W31 仍会绿（另 8 条照红）|
+| 现在被保证了吗 | **是**。每个文件**单独**跑一次 pytest，`every_file_red` 要求 `green_files` 为空 → 任何文件没掉红都直接判 BAD，并在**收据里点名**是哪个文件留在了绿 |
+| W31（6 文件 / 9 守卫）实测 | `red after mutation **6/6 files red**`；收据逐文件列出 2+2+1+1+2+1 = **9** 条失败，与 §45 的 `9 failed` 对得上 |
+| H1 的针为什么变了 | `_run_guards` 从"一次调用传全部文件"改成"逐文件循环"，H1 原来钉的 argv 展开 `*mutation.guard_files(),` 在源码里**已不存在** → 针重定向到那次循环。**能力没变，锚点随 seam 移动**（§46.4）|
+| 新增变异 | **H2**：把 `every_file_red` 退化成"≥1 红"，由新用例 `test_every_file_red_requires_every_file_not_just_one` 抓住 |
+| 为什么不用"单次调用 + 解析 pytest 输出" | 见 §46.3 —— 那会保住 H1 的旧针，但把判据从 `proc.returncode` 换成**文本解析**（还要额外处理收集期的 `ERROR`）|
+| 计数变化 | `multi-guard-file` **1 → 2** 条变异；共 **7 套 / 61 个变异**（原 60）|
+| 验证 | 见 §46.6 |
+| 提交 | ⏳ **未提交**（用户未指示提交）|
+
+## 46.2 改动：一个记录类型 + 一个每文件循环 + 一处判据
+
+`backend/scripts/mutation_verify.py`（PURE-LF）：
+
+| 改动 | 位置 | 说明 |
+|---|---|---|
+| 新增 `FileGuardRun` | 引擎段 | `(guard_file, passed, tail)` 的 frozen dataclass —— **一个文件一次跑**的结果 |
+| 新增 `GuardRun` | 引擎段 | `per_file: tuple[FileGuardRun, ...]` + 三个聚合：`all_green` / `red_files` / `green_files` / `every_file_red`，以及收据用的 `tally()` / `red_summary()` / `green_summary()` |
+| 重写 `_run_guards` | 原 `:1052` | 改为遍历 `mutation.guard_files()`，把**每次调用**交给新助手 `_run_one_guard_file`。返回 `GuardRun` 而非 `(bool, str)` |
+| 新增 `_run_one_guard_file` | 引擎段 | argv 只含**一个** `guard_file`；`-k` 选择器照旧 `" or ".join(mutation.guards)`；`passed = proc.returncode == 0`（判据没换）|
+| `_verify_one` 阶段① | 原 `:1246` | 早退消息带上 `before.tally()` + `before.red_summary()` —— 多文件时能看出**是哪几个**文件本来就红 |
+| `_verify_one` 阶段② | 原 `:1262` | `red_after = not passed_after` → `after.every_file_red`；失败消息从"`stayed GREEN with the fix reverted`"改成"`stayed GREEN in N/M file(s) -> <逐文件尾行>`" |
+| `_verify_one` 收据 | 原 `:1276` | `red after mutation {bool}` → `red after mutation {after.tally()}`，例：`6/6 files red` |
+| 模块 docstring 第 2 阶段 | 文件头 | "they FAIL with the mutation applied" → 补一句"**in EVERY named guard file**"，并把理由写进去 |
+
+**`every_file_red` 为什么带 `bool(self.per_file) and`**：`per_file` 为空时"没有任何文件通过"是**空真**，
+于是一条**没命名任何文件**的变异会"跑了个寂寞却四阶段全过"。所以聚合本身写成
+`bool(self.per_file) and not self.green_files`，并在清单测试里把这种情况判为违规（§46.5）：
+两层都要有 —— 聚合层保证语义正确，清单层保证真实变异走不到那条路。
+
+## 46.3 判据为什么不能靠"一次调用的返回码"
+
+两个问题**只在多文件变异上才分得开**：
+
+| 阶段 | 问题 | `returncode == 0` 是什么 |
+|---|---|---|
+| ① / ③ | **每个**文件都绿？ | **正好是**（任一文件失败 ⇒ 非 0）。所以绿色阶段**本来就不需要**逐文件 |
+| ② | **每个**文件都红？ | 只是"**至少一个**红"—— 错的那一半 |
+
+也就是说 `all_green` 与 `every_file_red` 在 `len(guard_files) == 1` 时互为否定，
+在 `>1` 时**不是** —— 那个差值就是 §45.5 说的盲区。
+
+**另一条路（没走）**：保持**单次**调用，从 pytest 的 `-q` 短摘要里解析 `FAILED <path>::<test>` 行，
+按出现的文件集合判"每文件各一红"。它的好处是 H1 的旧针**一字不用动**；没走的理由：
+① 判据从 `proc.returncode` 变成**对 pytest 输出文本的依赖**（本仓现有判据一律是返回码）；
+② 收集期失败报的是 `ERROR …` 而不是 `FAILED …`，解析要多处理一个类别；
+③ 逐文件调用额外把**收集**也隔离了 —— 一个文件 import 失败不会污染别的文件。
+
+代价只有 W31 付：3 个阶段 × 6 个文件 = 18 次调用（原 3 次），**+15 次**；单文件变异一字不变。
+
+## 46.4 H1 的针重定向：一条**元**变异随 seam 移动（含一个反直觉处）
+
+H1 要锁的性质没变（"**每个**命名的文件都真的跑到了"），但 seam 变了：
+从"一个 argv 里展开 `*guard_files()`"变成"对 `guard_files()` 的一次 **for 循环**"。因此：
+
+- 常量由 `_GUARD_FILES_ARG` / `_GUARD_FILES_ARG_FIRST` 换成 `_GUARD_FILES_LOOP` / `_GUARD_FILES_LOOP_FIRST`；
+- **两个**针的组合仍要**拆片段**写（H2 的也是）—— H1/H2 的靶就是本文件，把针写成一个字面量会**再命中一次**，
+  `_apply_preflight` 会以 `expected 1, found 2` 拒绝（§44.3 已经踩过一次的同一个坑）；
+- **守卫测试的用例名保持不变**（`test_run_guards_passes_every_named_file_to_pytest`），所以 H1 的 `guards`
+  元组不用动；改的是**用例体**：从"断言一次 argv 含两个文件名"改成"断言**每个文件各一次调用**"
+  （`runner.call_args_list`）、并按顺序核对 `argv[argv.index("pytest") + 1]` 与 `-k` 选择器。
+
+🔴 **反直觉处（值得单列）**：H1 的 `guard_files()` 只有**一个**文件，所以在 H1 自己身上
+"只跑第一个"是**空操作** —— 它的守卫会不会跑，与这条变异无关。H1 之所以**仍然可验证**，
+是因为那条守卫用例会用一个**合成的两文件变异**去驱动 `_run_guards`（`tests/a.py` + `tests/b.py`），
+于是"只循环一次"在**用例内部**可观测。→ **自指变异的可观测性来自守卫用例构造的输入，不来自变异自身的文件数。**
+
+四阶段实测：`green before True | red after mutation 1/1 files red | green after restore True | bytes restored True`，
+突变后 `1 failed, 47 deselected in 0.76s`。
+
+## 46.5 新增的用例（+6 passed / +1 subtest）
+
+`backend/tests/test_mutation_verify.py`（PURE-LF）：
+
+| 用例 | 角色 |
+|---|---|
+| `test_run_guards_passes_every_named_file_to_pytest`（**改体**，名字不动） | H1 的守卫：每个命名文件各一次调用，`-k` 选择器逐字不变 |
+| `test_run_guards_keeps_one_record_per_file` | 逐文件记录：顺序 = `guard_files()` 顺序、`tally()` 读数、尾行取自**该文件自己**的运行（不是合并运行） |
+| `test_a_single_file_run_records_its_pass_flag_and_tail` | 单文件路径的形态：`per_file` 长度为 1、`passed` / 尾行 / `tally()` |
+| `GuardRunAggregateTests::test_every_file_red_requires_every_file_not_just_one` | **H2 的守卫**：一红一绿时 `every_file_red` 必须为 False |
+| `GuardRunAggregateTests::test_all_green_needs_every_file_to_pass` | 绿色聚合的对偶方向 |
+| `GuardRunAggregateTests::test_an_empty_run_is_green_but_does_not_prove_every_file_red` | 钉住 `bool(self.per_file) and` 那半句（空运行**不得**读作"每文件都红"）|
+| `GuardRunAggregateTests::test_the_tally_counts_red_over_total` | 收据读数 `2/3 files red` |
+| `test_every_guard_file_exists_and_every_guard_is_named`（**加一条判据**） | 每条变异必须**至少命名一个** `guard_file`（否则空运行可"全过"）|
+
+subTest 的 +1 来自 `VerifySelectionTests` 里按"每个变异一个 subTest"展开的用例 —— 变异总数 60 → 61，
+与新增用例无关（两者要对得上账，所以分开记）。
+
+## 46.6 验证
+
+```bash
+cd backend
+# 元能力的两半（H1 / H2）
+../.venv/Scripts/python.exe scripts/mutation_verify.py verify multi-guard-file
+# W31 单条：6 个 guard_file 是否"各一红"
+../.venv/Scripts/python.exe scripts/mutation_verify.py verify whitelist-fixtures --index 25
+# 全量（7 套 / 61 个变异）
+../.venv/Scripts/python.exe scripts/mutation_verify.py verify
+# harness 的静态清单测试
+../.venv/Scripts/python.exe -m pytest tests/test_mutation_verify.py -q -p no:cacheprovider --junitxml=<outside-repo>
+# 6 个消费文件（W31 的 guard_file）
+../.venv/Scripts/python.exe -m pytest tests/test_guardrail_service.py tests/test_market_quality_service.py \
+  tests/test_execution_quality_service.py tests/test_source_reliability_service.py \
+  tests/test_replay_metrics.py tests/test_decision_quality_service.py -q -p no:cacheprovider --junitxml=<outside-repo>
+```
+
+| 项 | 读数 |
+|---|---|
+| `verify multi-guard-file`（H1 + H2）| **2/2 全部通过**，EXIT 0；两条突变后都是 `1 failed, 47 deselected` |
+| `verify whitelist-fixtures --index 25`（W31）| `[OK]`；`red after mutation **6/6 files red**`；收据 2+2+1+1+2+1 = **9** 条失败 |
+| 全量 `verify`（7 套 / 61 个变异，**27m47s**）| **60 条当场 `[OK]`**；`FAILURES (1)`：`whitelist-fixtures 22: guard already RED before mutation …` —— **环境噪音，非本批回归**（§46.6.1）|
+| 同一条的单条重跑（`--index 22` = W27）| `[OK]`；`green before True / 1/1 files red / bytes restored True`，`1 failed, 127 deselected in 22.63s`，EXIT 0 |
+| harness 测试 + 6 个消费文件（共 7 个）| **250 passed + 87 subtests / 0 failed / 0 errors**；对账：harness 由 §45 的 **42 → 48**（本批 +6 用例），6 个消费文件仍是 **202** 条 → `42 + 202 = 244`（§45 读数）→ `48 + 202 = 250`，**差额只有 harness 的 +6** |
+| `ruff check app/`；`ruff check scripts/mutation_verify.py tests/test_mutation_verify.py` | 两处均 **All checks passed!**（本批**未改** `app/`）|
+| 变异路径 sha256 快照（**31 条**，跑前落、跑完逐条复核）| **changed = 0**（harness 未留变异态）|
+| 两个 harness 文件跑完后的行尾 | 仍 **PURE-LF**；`mutation_verify.py` sha `e119d862c0b79848`、`test_mutation_verify.py` sha `87aebb36a44088b3` —— 与**跑前逐字节相同** |
+
+### 46.6.1 全量那道唯一的失败：**环境噪音**，判据是 tail 里的拦截器签名
+
+失败的是 `whitelist-fixtures 22`（W27 = `event_intelligence._TRADABLE_DIRECTIONS` 删 `NO`），报的是
+**阶段①**"变异前守卫就是红的"，而 tail 是：
+
+```
+tests/test_event_intelligence_service.py -> .  [100%]
+[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":548,"threshold":50,"scope":"turn",
+  "targets":["\\?\C:\Users\Alin\AppData\Local\Temp\pytest-of-Alin\garbage-…"],"targetCount":1}
+```
+
+**指纹 = tail 里的拦截器签名**。阶段①的判据是 `proc.returncode == 0`，而**进程退出期的拦截器能把一次跑绿的守卫
+变成非 0**（它拒删 pytest 自己的临时目录）。三条互相独立的观测说明它不是本批的回归：
+
+1. **该条单独重跑 `[OK]`** —— 突变后选中的守卫确实变红，还原后逐字节一致；
+2. 它在**未变异**的树上也绿：这正是重跑时打印的 `green before True`；
+3. 跑完后 **31 条变异路径 sha256 changed = 0**，工作树没有被留在变异态。
+
+🔴 **不重跑整套**：`scope:"turn"` 是**按本轮累计**的同类拦截器 —— 本轮跑得越多，越可能**更早**撞上它，
+于是重跑可能拿到的是一份**更差**的观测，却用它覆盖一份已经完整的证据。正确顺序是**先把单条重跑出来**
+（它同时给出更强的证据），再决定要不要重跑。
+→ 这条判据与"把阶段①的非 0 当成真失败"是同一类坑，已进技能反面清单。
+
+> **`--index 25` 而不是 31**：W31 是**新号**，但它是 `whitelist-fixtures` 元组里的**第 25 个**位置 ——
+> 因为 W17/W18/W19/W20/W24/W29 六条已随合并删除（§45.4）。"编号"（历史含义）与"位置"（元组下标）
+> 在这一批之后**不再相等**，跑单条时按 `list` 输出的位置给。
+
+## 46.7 顺带修掉的两处**自陈漂移**（都是我前几批留下的）
+
+| 处 | 原话 | 为什么是错的 | 改成 |
+|---|---|---|---|
+| `multi-guard-file` 的 rationale | "⚠️ 此刻该能力**尚无生产消费点**（合并组① 是下一批），故 InventoryTests 里有一条测试把它钉在…" | **§45 已经落地 W31**（6 文件 / 9 守卫），且那条 pin 测试已被 §45 删除 | 改成"生产消费点已由 §45 的 W31 落地；§44 当时写的『尚无生产消费点、且由一条测试钉住』已随之作废"，并补 H2 的半句 |
+| 模块 docstring | "Merging keeps the union of both: one inventory, one engine, **five sets**." | 集合数已 5 → 6 → 7（§43、§45 各加一个）；**硬编码的计数已经过期两次** | 去掉计数："…and every set either of the three had" + 一句"计数故意不写死" |
+
+**教训（进 MEMORY/技能）**：**文档里的计数和"当前还没有 X"是最易过期的两种陈述** ——
+前者的正确写法是**不写数**或写"以 `list` 输出为准"，后者必须与**同一个提交**里的落地动作一起改。
+
+## 46.8 本节未做 / 交接
+
+| 事项 | 状态 |
+|---|---|
+| §42.6 方案 C（合并全部 13 个常量）| ⏳ 不做（§42.5 的语义结论不变）|
+| 统一 13+ 处 direction 归一化（`in ("YES","NO","WAIT","AVOID")` 四元组）| ⏳ 未动 |
+| 前端 `api.ts:447` 手写 union；规范化 51 个 MIXED 文件 | ⏳ 未动 |
+| 03 处 `## 4x.y` 之外的结构：本文档 §43–§45 的 H1 标题 | ✅ 本批补齐（纯加标题，无内容改动）|
+| 提交本会话累计批次（§43–§46 + 6 个 app 文件 + 新模块 + 2 个 harness 文件）| ⏳ **未提交**（用户未指示）|
+| push / 开 PR | ⏳ 未做（本地 **17** 个提交未推送）|
+
+**本节改 2 个 harness 文件（脚本 + 其守护测试）+ 本文档（+ 3 行 H1 标题修补）。生产代码 `app/` 一字未动。
+未 push、未开 PR。**
+
+# 四十七、执行 §42.6「方案 C 的**位置版**」：7 个方向常量的定义迁进共享模块（13 个定义点 → 8 个定义 / 1 个模块）
+
+## 47.1 结论先行
+
+§42.6 把 C 记成「连 ②–⑧ 一起并」，§42.5 判它「把 8 个决定压成 1 个」。本批用户拍的是**另一种形态**：
+
+> **一个模块、8 个具名常量** —— 名字 / 成员集 / 容器 / 定义处注释**逐字保留**，
+> 只把 7 处定义**搬**进 `app/utils/direction_vocabulary.py`（§45 已把 6 个 `_STRONG_DIRECTIONS` 副本并成那里的 `STRONG_DIRECTIONS`）。
+
+结果：**8 个方向常量 / 8 个定义点 / 1 个模块**。语义**零变化**、22 条方向守卫**一条不丢**、
+7 条变异的针**一个字节未改**，只多了 1 条容器守卫（W32）把新增的「顺序」性质钉住。
+
+## 47.2 迁移清单（7 处：原定义处 → 模块内行号）
+
+| 常量 | 容器 | 原定义处 | 模块内 | 消费语义 |
+|---|---|---|---|---|
+| `_DIRECTIONAL` | tuple | `services/prediction_calibration_service.py` | 68 | 有可检验立场 → `direction_correct` |
+| `_CALLED_DIRECTIONS` | **frozenset** | `services/review_queue_detectors.py` | 72 | 已下注的调用 → review 触发器 |
+| `_VALID_DIRECTIONS` | **set** | `services/domain_reliability_service.py` | 78 | `attribute_evidence` 的计分白名单 |
+| `_STRONG_DISPLAY_DIRECTIONS` | tuple | `api/routes/quality_metrics.py` | 84 | `final_displayed_direction` 的异常面 |
+| `_REPORTED_DIRECTIONS` | tuple | `memory/simulated_trade_store.py` | 94 | `trade_stats()["by_direction"]`，**唯一被迭代** |
+| `_TRADABLE_DIRECTIONS` | tuple | `services/event_intelligence_service.py` | 103 | 纸面开仓的方向白名单 |
+| `_STRONG_EVENT_DIRECTIONS` | tuple | `services/conclusion_challenge_service.py` | 110 | 证据门 + 计算门，**两处调用点** |
+
+（`STRONG_DIRECTIONS` 是 §45 的既有成员，在 64 行。8 个常量的值**全是** `{"YES", "NO"}` —— 但这是巧合，不是理由。）
+
+四种容器（tuple / set / frozenset）**故意不同**，搬动时逐一保留：容器类型本身是**契约**的一部分。
+新模块的 docstring 把「共享的是**位置**不是**含义**」写在最前面，并点名 `_REPORTED_DIRECTIONS` 的
+顺序约束与 `evidence_aggregation_service` 的同名陷阱。
+
+## 47.3 一个**同名不同值**的陷阱：`evidence_aggregation_service._VALID_DIRECTIONS` **不并**
+
+`app/services/evidence_aggregation_service.py:45` 有**自己的** `_VALID_DIRECTIONS = {"support", "oppose"}`
+—— 另一个字段、另一套词汇。**名字相同、语义无关**：按名字合并会**静默改变**那个模块接受什么。
+
+→ 留在原地，并在新模块 docstring 里点名「不要与它混」。`test_no_other_module_under_app_defines_any_of_these_names`
+把这一条写成**具名豁免**（`FOREIGN_DEFINITIONS`），而不是一条隐含的过滤规则 —— 放宽豁免会在 diff 里现形。
+
+## 47.4 机械副作用：6 个 `path` 常量变成死代码 → 删除
+
+harness 里 7 条变异原先各自 `path=` 指一个源文件；改指共享模块后，这 6 个路径常量**失去全部引用**：
+
+`_PREDICTION_CALIBRATION`、`_REVIEW_QUEUE_DETECTORS`、`_DOMAIN_RELIABILITY`、`_QUALITY_METRICS`、
+`_EVENT_INTELLIGENCE`、`_CONCLUSION_CHALLENGE`。
+
+（`_TRADES_STORE` **保留** —— 另 3 条变异仍以它为 `path`；`_DECISION_QUALITY` 保留 —— W30 仍指向它。）
+
+## 47.5 harness：针不变、`path` 改指、`label`/`note` 跟新，并新增容器守卫 **W32**
+
+**7 条变异只改了 `path`（+ 标签与注释）；`old` / `new` / `guards` 一个字节未动。**
+这正是「定义行**逐字**搬过去」的可验证推论：如果针也要跟着改，说明搬动掺了改动。
+
+自洽取证（程序化，不肉眼数）—— **每条针在模块里恰好命中 1 次**：
+
+```bash
+cd backend && ../.venv/Scripts/python.exe -c "
+import sys, pathlib; sys.path.insert(0,'.')
+import scripts.mutation_verify as mv
+v = pathlib.Path('app/utils/direction_vocabulary.py').read_bytes()
+s = mv.SETS_BY_KEY['whitelist-fixtures']
+p = [m for m in s.mutations if m.label.split()[0]
+     in {'W21','W22','W23','W25','W26','W27','W28','W31','W32'}]
+print(len(p), sorted({m.path for m in p}), sum(len(m.guards) for m in p))
+print([(m.label.split()[0], v.count(m.old)) for m in p])
+"
+# -> 9 ['backend/app/utils/direction_vocabulary.py'] 23
+# -> [('W21',1),('W22',1),('W23',1),('W25',1),('W26',1),('W27',1),('W28',1),('W31',1),('W32',1)]
+```
+
+**新增 W32（容器守卫）**：把 `_REPORTED_DIRECTIONS` 由 `tuple` 改成 `set`。理由 —— 它是 8 个常量里
+**唯一被迭代消费**的（`simulated_trade_store.trade_stats` 里的 `for d in _REPORTED_DIRECTIONS:`），
+而本仓**不固定 `PYTHONHASHSEED`** → 改成 set 会让 `by_direction` 的 **JSON 键序在运行间漂移**。
+守卫放在**新模块自己的测试**里，所以这条变异**同时证明**那个新测试文件确实被跑到
+（否则它会以「守卫名匹配不到任何用例」的形式在阶段①就红，而不是在阶段②）。
+
+⚠️ **W25 与 W32 改写的是同一行**（`_REPORTED_DIRECTIONS` 的定义）→ 必须同属一个 `group`：
+整组 `apply` 只留前一条并**说明跳过了哪条**；显式同时点名两条会被 `_apply_preflight` **拒绝**
+（同一段字节写两遍只可能是笔误）。这与既有的 C5/C6、P7/P8 是同一种关系。
+
+## 47.6 新增 `backend/tests/test_direction_vocabulary.py`（7 条，PURE-CRLF）
+
+| 用例 | 钉什么 | 为什么不是空头 |
+|---|---|---|
+| `test_every_expected_name_is_declared` | 8 个名字都在 | 少一个即红 |
+| `test_the_module_declares_nothing_else_that_looks_like_a_direction` | 模块面**恰好**这 8 个 | `hasattr` 只挡「少了」；这条挡「多了」 |
+| `test_each_name_holds_the_members_it_had_before_the_move` | 期望值**写在测试里**，不回读模块 | 回读只会**复述模块**；改成员即红 |
+| `test_the_container_types_are_pinned` | 3 种容器逐一对齐 | tuple / set / frozenset 互换即红 |
+| `test_reported_directions_stays_an_ordered_sequence` | **W32 的守卫** | 先断类型再断值：读的人要知道**为什么**，不只是「两个对象不相等」 |
+| `test_no_other_module_under_app_defines_any_of_these_names` | 枚举 `app/**/*.py` 的每个定义点并与期望集比对 | **带正向控制** —— 必须先找到模块，否则「没有游离副本」在空扫描上**恒真** |
+| `test_the_module_imports_nothing_from_the_application` | 模块是**叶子** | 这正是 `app/memory/`、`app/api/` 能反向依赖 `app/utils/` 的前提 |
+
+## 47.7 验证
+
+```bash
+cd backend
+# 定位验证：7 条重定向 + W31 + W32（位置 17–23 / 25 / 26）
+../.venv/Scripts/python.exe scripts/mutation_verify.py verify whitelist-fixtures --index 17-23,25,26
+# 环境噪音那一条的单条重跑
+../.venv/Scripts/python.exe scripts/mutation_verify.py verify whitelist-fixtures --index 22
+# 新测试 + 7 个消费文件的测试 + harness 测试
+../.venv/Scripts/python.exe -m pytest tests/test_direction_vocabulary.py tests/test_prediction_calibration_service.py \
+  tests/test_review_queue_detectors.py tests/test_domain_reliability_service.py tests/test_quality_metrics.py \
+  tests/test_event_intelligence_service.py tests/test_conclusion_challenge_service.py \
+  tests/test_simulated_trade_store.py tests/test_mutation_verify.py \
+  -q -p no:cacheprovider --junitxml=<outside-repo>
+../.venv/Scripts/ruff.exe check app/
+../.venv/Scripts/python.exe scripts/eol_audit.py
+```
+
+| 项 | 读数 |
+|---|---|
+| `verify whitelist-fixtures --index 17-23,25,26`（9 条，**5m26s**）| **8 条 `[OK]`**；`FAILURES (1)` = 位置 22（W27）「变异前就红」，tail 带 `[safe-delete]…` → **环境噪音**（§46.6.1 的同一指纹）|
+| 位置 22 单条重跑 | `[OK]`；`green before True / 1/1 files red / bytes restored True`，`1 failed, 127 deselected in 1.36s` |
+| W31（位置 25）| `[OK]`；**`6/6 files red`** —— §46 的「每文件各一红」在**共享定义**上继续成立 |
+| W32（位置 26）| `[OK]`；`1/1 files red`，失败落在 `tests/test_direction_vocabulary.py` → 新测试文件**确实被跑到** |
+| 9 个测试文件 | junit：**`tests=506 / failures=0 / errors=0 / skipped=0`**（= 369 passed + 137 subtests）|
+| `ruff check app/`（CI 门）；对 10 个改动文件单独 `ruff check` | 两处均 **All checks passed!** |
+| `scripts/eol_audit.py` | **line-ending damage: none**；`direction_vocabulary.py`（110 CRLF）与 `test_direction_vocabulary.py`（133 CRLF）均 **PURE-CRLF**，两个 harness 文件仍 **PURE-LF** |
+| 变异路径 sha256 快照（**15 条**，跑前落、跑完逐条复核）| **changed = 0**（未留变异态）|
+
+## 47.8 §42.6 的记录更正：C 的第三条代价**已过期**（已在 §42.6 补追注）
+
+§42.6 表里 C 的代价写着「#10/#11 的注释明写『存在是为了能被变异』，**合并会删掉这两个变异靶**」。
+这条**已不成立**：§44 给了 harness「一条变异可挂多个 guard_file」的能力，§46 又把阶段②判据升级为
+「**每文件各一红**」—— 于是「多处定义」的锚定**可以集中到一个模块而不丢**。§45 的 W31 与
+本批的 7 条重定向各证明一次。
+
+⚠️ 但这**不等于原 C 该做**：C 只剩 **「8 种语义压成 1」** 一条真代价（§42.2/§42.5 的语义结论），
+**仍不建议**。§47 做的是**另一种形态**：一个模块里**保留 8 个具名常量** —— 只收敛**位置**。
+
+**教训**：一条「因为 A 所以不能做」的结论，会在 A 被别的批次修掉之后**静默过期**。
+复述这类结论时要连同它的**前提**一起带上（这里是「单值 `guard_file`」），
+否则下一批会照着一条已经失效的前提继续决策。
+
+## 47.9 一条观察项（**未动**）
+
+本批共 **13 个 `app/**` 改动文件**，其中 **12 个在树内是 PURE-CRLF**，只有一个例外：
+`backend/app/services/guardrail_service.py` 树内是 **PURE-LF**（`eol_audit` 报 `ok (LF both sides)`）。
+
+它**不是** `eol_audit` 能判定的那两种损坏之一 —— 那两种要求 **HEAD 侧是 CRLF**，而本仓
+`core.autocrlf=true` + `* text=auto` 下 **HEAD 一律存 LF**。也就是说：
+**「树内 CRLF→LF」这一类漂移对 `git diff`（比对前归一化）与 `eol_audit`（按 HEAD 判据）都是隐形的。**
+它对提交内容零影响（入库即归一化为 LF），下次全新检出会还原成 CRLF。
+
+按「不顺手修」的约定**未动**，只记为观察项。
+
+> **追注（2026-09-30，提交前）**：**这条观察项已当场处理** —— 提交前把 `guardrail_service.py` 的
+> 树内行尾对齐成 **PURE-CRLF**（`\n` → `\r\n`，250 行），使 13 个 `app/**` 改动文件在树内**全部一致**。
+> 三条判据证明该操作**对提交内容零影响**：① LF 归一化后与改前**逐字节相同**；② `git diff -- <file>` 的
+> 输出**前后同为 1286 字节**（逐字节相同）⇒ git 完全看不见这次改动；③ 字节增量 `+250` == 行数 `250`
+> （即只加了 `\r`，没有别的改动）。→ §47.10 里那行「未动（对提交不可见）」随之作废：**现已对齐**，
+> 而且仍然对提交不可见。
+
+## 47.10 本节未做 / 交接
+
+| 事项 | 状态 |
+|---|---|
+| 统一 13+ 处 direction 归一化（`in ("YES","NO","WAIT","AVOID")` 四元组）| ⏳ 未动 |
+| 前端 `api.ts:447` 手写 union；规范化 51 个 MIXED 文件 | ⏳ 未动 |
+| `guardrail_service.py` 树内 LF（§47.9）| ⏳ 未动（对提交不可见）|
+| §35.4 第 3 行「任何带代理机器都会恒亮」| ⏳ 仍是**推的**（§41 只落地了修法，未做代理环境实测）|
+| `gbm` 汇总桶 / `third_place` / `_KALSHI_SPORTS_SERIES_PREFIXES` 第 8 项 / `/trades`「已作废」tab | ⏳ 未动 |
+| 提交本会话累计批次（§43–§47 + 13 个 `app/**` + 1 个新模块 + 1 个新测试文件 + 2 个 harness）| ⏳ **未提交**（用户未指示）|
+| push / 开 PR | ⏳ 未做（本地 **17** 个提交未推送；分支无 upstream）|
+
+> **⚠️ 本批**没有**重跑全量 `verify`（7 套 / 62 个）**：本批只动了**共享模块**（所有方向常量的唯一位置）、
+> **harness** 与**新测试文件**。其余 6 套变异的靶文件与守卫**一个字节未动**，`whitelist-fixtures` 的
+> 位置 `1–16 / 24` 同样未动 —— §46 的全量读数（**60 条 `[OK]` + 1 条 safe-delete 噪音**，27m47s）对它们仍然有效。
+> 本批重跑的 9 条（位置 17–23 / 25 / 26）**恰好覆盖了本批改动的全部字节**（9 条变异、1 个 `path`）。
+> → 不跑全量的理由是**靶集合等于改动集合**，不是「省时间」。
+
+**本节改 13 个 `app/**` 文件（7 处常量搬出 + 6 处 import）+ 1 个新模块 + 1 个新测试文件 + 2 个 harness 文件 + 本文档。
+未 push、未开 PR。**

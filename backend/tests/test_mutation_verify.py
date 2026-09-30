@@ -140,6 +140,72 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(offenders, [], "\n".join(offenders))
 
 
+class InterpreterResolutionTests(unittest.TestCase):
+    """Which interpreter the guard subprocesses run under.
+
+    ``_run_guards`` refuses to start when that interpreter is missing, so the
+    resolver has to work on a checkout with no ``.venv`` at all: CI installs the
+    dependencies into the runner's own interpreter and checks the project out
+    bare. The fallback branch is therefore unreachable on a developer machine --
+    ``.venv`` is right there -- so these tests patch ``is_file`` for the two
+    candidate paths rather than leaving CI as the only place that covers it.
+    Both layouts are named because the venv's shape depends on how the checkout
+    was provisioned, not only on the platform.
+    """
+
+    WINDOWS = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
+    POSIX = REPO_ROOT / ".venv" / "bin" / "python"
+
+    @staticmethod
+    def _present(*paths):
+        """An ``is_file`` that answers only for ``paths`` and denies the rest."""
+        allowed = {Path(path) for path in paths}
+        return lambda self: self in allowed
+
+    def test_the_windows_layout_wins_when_it_exists(self):
+        with mock.patch.object(Path, "is_file", self._present(self.WINDOWS)):
+            self.assertEqual(mutation_verify._resolve_interpreter(), self.WINDOWS)
+
+    def test_the_posix_layout_is_accepted_too(self):
+        with mock.patch.object(Path, "is_file", self._present(self.POSIX)):
+            self.assertEqual(mutation_verify._resolve_interpreter(), self.POSIX)
+
+    def test_no_venv_falls_back_to_the_running_interpreter(self):
+        """The property that matters is the environment, not the file's path.
+
+        ``sys.executable`` is patched because on a developer machine it *is* the
+        venv path -- without that, the fallback and a hit would be the same
+        string and the assertion would hold even if the fallback were never
+        reached.
+        """
+        with mock.patch.object(Path, "is_file", self._present()), mock.patch.object(
+            mutation_verify.sys, "executable", "/ci/toolcache/python"
+        ):
+            self.assertEqual(
+                mutation_verify._resolve_interpreter(), Path("/ci/toolcache/python")
+            )
+
+    def test_the_resolved_interpreter_is_what_the_subprocess_runs(self):
+        """A resolution that never reaches the argv would fix nothing."""
+        mutation = mutation_verify.SETS_BY_KEY["voided-trade"].mutations[0]
+        interpreter = Path("/ci/toolcache/python")
+        with mock.patch.object(
+            Path, "is_file", self._present(interpreter)
+        ), mock.patch.object(
+            mutation_verify, "PY", interpreter
+        ), mock.patch.object(
+            mutation_verify.subprocess, "run"
+        ) as runner:
+            runner.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="1 passed", stderr=""
+            )
+            mutation_verify._run_guards(mutation)
+        self.assertEqual(
+            [call.args[0][0] for call in runner.call_args_list],
+            [str(interpreter)] * len(mutation.guard_files()),
+        )
+
+
 class MultiGuardFileTests(unittest.TestCase):
     """A mutation may name several guard files, not only one.
 

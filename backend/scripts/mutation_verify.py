@@ -107,7 +107,35 @@ import tempfile
 SCRIPTS = pathlib.Path(__file__).resolve().parent
 BACKEND = SCRIPTS.parent
 REPO_ROOT = BACKEND.parent
-PY = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
+
+
+def _resolve_interpreter() -> pathlib.Path:
+    """The interpreter the guard subprocesses run under.
+
+    The virtualenv layout depends on how the checkout was provisioned, not only
+    on the platform: ``Scripts/python.exe`` on a Windows venv, ``bin/python``
+    elsewhere -- and neither is guaranteed to exist at all. CI installs the
+    dependencies into the runner's own interpreter and checks the project out
+    without a ``.venv``, so pinning the path to one spelling made every guard
+    run die with ``interpreter not found`` there.
+
+    Falling back to the interpreter already running this script keeps the guard
+    subprocesses inside the same environment the harness itself was started
+    from, which is the property that matters; the file's location is only a
+    hint. On a developer machine the venv wins, so the subprocess interpreter is
+    unchanged.
+    """
+    candidates = (
+        REPO_ROOT / ".venv" / "Scripts" / "python.exe",
+        REPO_ROOT / ".venv" / "bin" / "python",
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return pathlib.Path(sys.executable)
+
+
+PY = _resolve_interpreter()
 BACKUP_ROOT = pathlib.Path(tempfile.gettempdir()) / "pmrf-mutation-bak"
 GUARD_TIMEOUT = 600
 

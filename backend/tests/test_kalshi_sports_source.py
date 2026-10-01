@@ -8,7 +8,33 @@ candidates in production while every test passed.
 """
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.services.kalshi_sports_source import fetch_kalshi_sport_markets
+from app.services.kalshi_sports_source import (
+    _KALSHI_SPORTS_SERIES_PREFIXES,
+    fetch_kalshi_sport_markets,
+)
+
+
+def test_series_prefixes_contain_no_duplicate_member():
+    """Shape-lock the series whitelist: a repeated slot silently costs a league.
+
+    The tuple is consumed as ``series.upper().startswith(_KALSHI_SPORTS_SERIES_PREFIXES)``,
+    so a duplicated element can never change behaviour -- it just occupies a slot
+    that could have held another league, and the markets of the missing league are
+    dropped without a word. The 8th slot used to repeat ``"KXNBAGAME"``; git
+    archaeology (``git show 4dbf90b:...``, the commit that introduced the file)
+    shows it was there from the first version, i.e. it was never a league that got
+    "replaced" -- it was a lazy duplicate from the start.
+
+    Deleting it is behaviour-preserving, so nothing else in this suite can detect
+    its return. This test can: re-adding any duplicate makes ``len != len(set)``.
+    """
+    prefixes = _KALSHI_SPORTS_SERIES_PREFIXES
+
+    assert len(prefixes) == len(set(prefixes)), f"duplicate series prefix in {prefixes!r}"
+    # The membership itself is the contract -- adding a league is a deliberate act
+    # that must update this line, not something that slides in unnoticed.
+    assert len(prefixes) == 7
+    assert all(p.startswith("KX") and p == p.upper() for p in prefixes)
 
 
 def _make_kalshi_event(ticker="KXNBAGAME-25JAN01-LAL-BOS", title="Lakers vs Celtics Jan 1",

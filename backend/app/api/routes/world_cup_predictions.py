@@ -629,6 +629,7 @@ async def batch_switch_engine_stream(
         elo_odds_count = 0
         hybrid_count = 0
         integrated_count = 0
+        gbm_count = 0
         total = 0
         try:
             matches = session.query(MatchFixture).filter(
@@ -668,6 +669,8 @@ async def batch_switch_engine_stream(
                             hybrid_count += 1
                         elif engine_used == "integrated":
                             integrated_count += 1
+                        elif engine_used == "gbm":
+                            gbm_count += 1
                     elif status == "skipped":
                         skipped += 1
                     else:
@@ -709,6 +712,7 @@ async def batch_switch_engine_stream(
                 "elo_odds_count": elo_odds_count,
                 "hybrid_count": hybrid_count,
                 "integrated_count": integrated_count,
+                "gbm_count": gbm_count,
             })
         except Exception as exc:  # noqa: BLE001 - surface fatal errors
             logger.error(

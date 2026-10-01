@@ -15,6 +15,7 @@ from app.models.world_cup_prediction import (
 )
 from app.services import world_cup_prediction_pipeline as pipeline
 from app.services.world_cup_data_quality import enrich_data_quality_metrics
+from app.services.world_cup_quality_service import ENGINE_NAMES
 
 
 def utc_now_naive() -> datetime:
@@ -665,6 +666,50 @@ class WorldCupPredictionPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["succeeded"], 1)
         run_prediction_pipeline.assert_awaited_once()
         self.assertEqual(run_prediction_pipeline.await_args.args[0], "future_scheduled")
+
+    async def test_batch_summary_exposes_one_bucket_per_engine_name(self):
+        """Every engine the pipeline can report must have its own bucket.
+
+        The summary carried three buckets (elo_odds / hybrid / integrated) while
+        ``world_cup_quality_service.ENGINE_NAMES`` lists four. A ``gbm`` run
+        incremented ``succeeded`` and then fell through every ``elif``, so the
+        three buckets all stayed 0 and the operator console looked like nothing
+        had run. Tying the bucket set to ENGINE_NAMES makes the next engine name
+        fail here instead of going silent in production.
+        """
+        with (
+            patch.object(pipeline, "get_prediction_session", return_value=self.session),
+            patch.object(pipeline, "close_prediction_session"),
+        ):
+            result = await pipeline.batch_predict_matches()
+
+        self.assertEqual(
+            {key for key in result if key.endswith("_count")},
+            {f"{name}_count" for name in ENGINE_NAMES},
+        )
+
+    async def test_batch_predict_matches_counts_gbm_runs(self):
+        """A gbm run lands in its own bucket, not just in `succeeded`."""
+        self._add_match(
+            "future_scheduled",
+            kickoff_utc=utc_now_naive() + timedelta(hours=1),
+            status="scheduled",
+        )
+
+        with (
+            patch.object(pipeline, "get_prediction_session", return_value=self.session),
+            patch.object(pipeline, "close_prediction_session"),
+            patch.object(
+                pipeline,
+                "run_prediction_pipeline",
+                new_callable=AsyncMock,
+                return_value={"status": "ok", "engine_used": "gbm"},
+            ),
+        ):
+            result = await pipeline.batch_predict_matches()
+
+        self.assertEqual(result["succeeded"], 1)
+        self.assertEqual(result["gbm_count"], 1)
 
     async def test_compare_only_bypasses_kickoff_freeze_and_skips_persistence(self):
         # Match has already started (status scheduled but kickoff in the past),

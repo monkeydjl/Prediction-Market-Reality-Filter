@@ -1,7 +1,9 @@
+import json
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 import logging
 
 from fastapi import FastAPI
@@ -232,6 +234,51 @@ class WorldCupPredictionRoutesTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(pipeline.await_args.kwargs["engine"], "gbm")
+
+    def test_batch_switch_engine_stream_reports_a_gbm_bucket(self):
+        """The SSE summary buckets every engine, gbm included.
+
+        This is a *second, independent copy* of the same aggregation as
+        ``batch_predict_matches`` -- it used to have the same three buckets and
+        the same hole. The final ``complete`` event is what the operator console
+        renders, so a gbm run has to land in ``gbm_count`` here too; a guard on
+        only the pipeline copy would leave this one free to regress.
+        """
+        client = _prediction_client()
+        session = MagicMock()
+        session.query.return_value.filter.return_value.all.return_value = [
+            SimpleNamespace(match_id="m1")
+        ]
+        pipeline = AsyncMock(return_value={"status": "ok", "engine_used": "gbm"})
+
+        with patch.object(settings, "API_WRITE_KEY", "secret"), \
+                patch(
+                    "app.api.routes.world_cup_predictions.get_prediction_session",
+                    return_value=session,
+                ), \
+                patch("app.api.routes.world_cup_predictions.close_prediction_session"), \
+                patch(
+                    "app.services.world_cup_prediction_pipeline.run_prediction_pipeline",
+                    pipeline,
+                ):
+            resp = client.get(
+                "/world-cup/predictions/batch-switch-engine-stream?engine=gbm",
+                headers=AUTH_HEADERS,
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        complete = [
+            line
+            for line in resp.text.splitlines()
+            if line.startswith("data: ") and '"gbm_count"' in line
+        ]
+        self.assertEqual(len(complete), 1, resp.text)
+        payload = json.loads(complete[0][len("data: "):])
+        self.assertEqual(payload["succeeded"], 1)
+        self.assertEqual(payload["gbm_count"], 1)
+        self.assertEqual(payload["elo_odds_count"], 0)
+        self.assertEqual(payload["hybrid_count"], 0)
+        self.assertEqual(payload["integrated_count"], 0)
 
     def test_trigger_prediction_rejects_unknown_engine(self):
         """An unsupported engine is a client error, not a 500.

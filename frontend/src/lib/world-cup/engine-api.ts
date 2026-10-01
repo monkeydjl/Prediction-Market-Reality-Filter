@@ -40,6 +40,7 @@ export interface BatchSummary {
   elo_odds_count?: number;
   hybrid_count?: number;
   integrated_count?: number;
+  gbm_count?: number;
 }
 
 export interface BatchProgressEvent {

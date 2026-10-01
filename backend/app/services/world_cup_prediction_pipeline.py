@@ -1525,6 +1525,7 @@ async def batch_predict_matches(
         "elo_odds_count": 0,
         "hybrid_count": 0,
         "integrated_count": 0,
+        "gbm_count": 0,
         "predictions": []
     }
 
@@ -1585,6 +1586,8 @@ async def batch_predict_matches(
                 results["hybrid_count"] += 1
             elif result.get("engine_used") == "integrated":
                 results["integrated_count"] += 1
+            elif result.get("engine_used") == "gbm":
+                results["gbm_count"] += 1
         elif result.get("status") == "skipped":
             results["skipped"] += 1
         else:

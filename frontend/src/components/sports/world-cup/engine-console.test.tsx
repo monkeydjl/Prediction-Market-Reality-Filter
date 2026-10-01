@@ -62,6 +62,32 @@ describe("EngineConsole", () => {
     expect(await screen.findByText(/共 12 \/ 成功 10 \/ 失败 1 \/ 跳过 1/)).toBeInTheDocument();
   });
 
+  it("shows a bucket for every engine the batch summary reports", async () => {
+    // Regression: `gbm` had no bucket on the backend, so a gbm batch rendered
+    // "共 4 / 成功 4" with no engine tallies at all and looked like a no-op.
+    // The console must render whichever buckets the summary actually carries.
+    engineMocks.batchPredict.mockResolvedValue({
+      total: 4,
+      succeeded: 4,
+      failed: 0,
+      skipped: 0,
+      elo_odds_count: 1,
+      hybrid_count: 1,
+      integrated_count: 1,
+      gbm_count: 1,
+    });
+    render(<EngineConsole />);
+
+    await userEvent.click(screen.getByTestId("batch-predict-button"));
+    await userEvent.click(screen.getByTestId("engine-confirm-yes"));
+
+    const summary = await screen.findByTestId("engine-summary");
+    expect(summary).toHaveTextContent("ELO 1");
+    expect(summary).toHaveTextContent("混合 1");
+    expect(summary).toHaveTextContent("融合 1");
+    expect(summary).toHaveTextContent("GBM 1");
+  });
+
   it("renders streamed progress and the final summary for the engine switch", async () => {
     engineMocks.streamBatchSwitchEngine.mockImplementation(
       async (_engine: string, _filter: string, handlers: Record<string, (p: unknown) => void>) => {

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 _KALSHI_SPORTS_SERIES_PREFIXES = (
     "KXNBAGAME", "KXMLBGAME", "KXNHLGAME",
     "KXSOCCEREPL", "KXSOCCERUCL", "KXSOCCERWCS",
-    "KXNFL", "KXNBAGAME",
+    "KXNFL",
 )
 
 

@@ -43,6 +43,7 @@ function summaryLine(summary: BatchSummary): string {
     summary.elo_odds_count ? `ELO ${summary.elo_odds_count}` : "",
     summary.hybrid_count ? `混合 ${summary.hybrid_count}` : "",
     summary.integrated_count ? `融合 ${summary.integrated_count}` : "",
+    summary.gbm_count ? `GBM ${summary.gbm_count}` : "",
   ].filter(Boolean);
   return byEngine.length ? `${parts.join(" / ")}（${byEngine.join("，")}）` : parts.join(" / ");
 }

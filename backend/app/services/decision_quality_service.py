@@ -32,6 +32,8 @@ import copy
 import logging
 from typing import Any
 
+from app.utils.direction_vocabulary import STRONG_DIRECTIONS
+
 logger = logging.getLogger(__name__)
 
 # Fixed legal disclaimer appended to every decision_rationale_zh body.
@@ -271,8 +273,11 @@ def _apply_downgrade_rules(
     displayed = raw_direction
     reason: str | None = None
 
-    # Stage A — initial downgrade (only for strong directions YES/NO).
-    if raw_direction in ("YES", "NO"):
+    # Stage A — initial downgrade (only for strong directions YES/NO). This is
+    # this file's only reader of the shared vocabulary: ``_build_rationale_body``
+    # once repeated the same literal in a branch whose two arms returned the
+    # identical string, and that dead branch was removed (audit §36).
+    if raw_direction in STRONG_DIRECTIONS:
         if consensus_level == "none":
             # Rule 4: evidence_breakdown is empty/absent. Reason wording
             # is distinct from rule 3 ("缺少证据支持" vs "缺少支持证据").
@@ -328,8 +333,6 @@ def _build_rationale_body(
     is appended by the caller). Uses deterministic templates per spec
     § Rationale Generation."""
     if consensus_level == "none":
-        if raw_direction in ("YES", "NO"):
-            return "缺少可解析的证据分解，无法判断证据一致性。"
         return "缺少可解析的证据分解，无法判断证据一致性。"
 
     if downgrade_reason is not None and displayed_direction != raw_direction:

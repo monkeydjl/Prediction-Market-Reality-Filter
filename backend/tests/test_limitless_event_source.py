@@ -70,6 +70,21 @@ class LimitlessEventSourceTests(unittest.TestCase):
             events = asyncio.run(source.fetch_candidate_events(limit=10))
         self.assertEqual([e["source"]["source_id"] for e in events], ["ok"])
 
+    def test_question_and_volume_fall_back_through_the_field_lists(self):
+        # _QUESTION_FIELDS = ("title", "question", "name") and
+        # _VOLUME_FIELDS = ("volumeFormatted", "volume", ...) - the later entries
+        # are the fallbacks a provider actually exercises.
+        market = _market(
+            title="",
+            question="Will SOL flip ETH in 2026?",
+            volumeFormatted=None,
+            volume="321.5",
+        )
+        with patch.object(source, "_fetch_raw_markets", new=AsyncMock(return_value=[market])):
+            events = asyncio.run(source.fetch_candidate_events(limit=5))
+        self.assertEqual(events[0]["question"], "Will SOL flip ETH in 2026?")
+        self.assertEqual(events[0]["volume"], 321.5)
+
     def test_disabled_or_empty_url_returns_empty_without_fetching(self):
         with patch.object(source.settings, "LIMITLESS_SOURCE_ENABLED", False), patch.object(
             source, "_fetch_raw_markets", new=AsyncMock(return_value=[_market()])
@@ -112,3 +127,26 @@ class LimitlessEventSourceTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_every_listed_field_and_status_is_honoured(self):
+        # Driven off the module's own tuples / status set, so adding an entry is
+        # covered automatically. (Audit section 22.2.1: the section 21 fix only spot-checked one
+        # fallback per tuple; this closes that by covering every element.)
+        for const in ("_QUESTION_FIELDS", "_ID_FIELDS"):
+            for field in getattr(source, const):
+                with self.subTest(const=const, field=field):
+                    self.assertEqual(
+                        source._extract_text({field: "VALUE"}, getattr(source, const)),
+                        "VALUE",
+                    )
+        for const in ("_VOLUME_FIELDS", "_LIQUIDITY_FIELDS"):
+            for field in getattr(source, const):
+                with self.subTest(const=const, field=field):
+                    self.assertEqual(
+                        source._extract_number({field: "12.5"}, getattr(source, const)),
+                        12.5,
+                    )
+        for status in source._ACTIVE_STATUSES:
+            with self.subTest(status=status):
+                # upper-cased to also pin the .lower() normalisation the code relies on
+                self.assertTrue(source._has_supported_status({"status": status.upper()}))

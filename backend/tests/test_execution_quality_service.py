@@ -247,6 +247,57 @@ class TestBuildExecutionQuality(unittest.TestCase):
         self.assertEqual(result["suggested_direction"], "WAIT")
         self.assertFalse(result["downgraded"])
 
+    def test_raw_direction_no_is_downgraded_like_yes(self):
+        """`NO` is the other strong direction and must downgrade the same way.
+
+        Closes a coverage hole: `_rec()` defaults to direction="YES", so every
+        earlier case exercised only the YES side of
+        `raw_direction in _STRONG_DIRECTIONS`. Deleting "NO" from that set left
+        this whole file green -- this case is what makes the member
+        load-bearing (it is the guard registered as mutation W19).
+        """
+        kwargs = _rec(direction="NO", spread=20.0)  # > max_spread_pct=12
+        result = build_execution_quality(
+            recommendation=kwargs["recommendation"],
+            source=kwargs["source"],
+            market_quote=kwargs["market_quote"],
+            volume=kwargs["volume"],
+            liquidity=kwargs["liquidity"],
+            max_spread_pct=kwargs["max_spread_pct"],
+            stale_price_seconds=kwargs["stale_price_seconds"],
+            min_liquidity=kwargs["min_liquidity"],
+            target_order_size=kwargs["target_order_size"],
+            fee_rate_pct=kwargs["fee_rate_pct"],
+        )
+        self.assertFalse(result["executable"])
+        self.assertEqual(result["raw_direction"], "NO")
+        self.assertEqual(result["suggested_direction"], "WAIT")
+        self.assertTrue(result["downgraded"])
+        self.assertIsNotNone(result["downgrade_reason"])
+
+    def test_no_direction_entry_price_is_complement_of_bid(self):
+        """A NO buyer's effective entry is ``100 - bid`` (buying NO is the same
+        exposure as selling YES). Only the YES branch was covered before."""
+        kwargs = _rec(direction="NO")  # executable: spread=4.0, liquidity=10000
+        result = build_execution_quality(
+            recommendation=kwargs["recommendation"],
+            source=kwargs["source"],
+            market_quote=kwargs["market_quote"],
+            volume=kwargs["volume"],
+            liquidity=kwargs["liquidity"],
+            max_spread_pct=kwargs["max_spread_pct"],
+            stale_price_seconds=kwargs["stale_price_seconds"],
+            min_liquidity=kwargs["min_liquidity"],
+            target_order_size=kwargs["target_order_size"],
+            fee_rate_pct=kwargs["fee_rate_pct"],
+        )
+        self.assertTrue(result["executable"])
+        self.assertEqual(result["raw_direction"], "NO")
+        self.assertEqual(result["suggested_direction"], "NO")
+        self.assertFalse(result["downgraded"])
+        # bid=48.0 → NO entry = 100 - 48 = 52.0
+        self.assertAlmostEqual(result["effective_entry_price"], 52.0, places=4)
+
     def test_missing_market_quote_defaults_to_executable(self):
         """When market_quote has no bid/ask (Polymarket/Kalshi last_price only),
         the service cannot assess spread/slippage but MUST NOT block execution.

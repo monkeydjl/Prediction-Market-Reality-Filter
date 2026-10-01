@@ -466,7 +466,14 @@ export interface SimTrade {
   actual_outcome: number | null;
   pnl_pct: number | null;
   is_win: number | null;
-  status: "open" | "closed";
+  /**
+   * Terminal states. "closed" settled into a result; "voided" is a trade whose
+   * prediction was voided by a non-genuine resolution — the market never
+   * settled, so it carries no pnl_pct/is_win/actual_outcome and is excluded
+   * from the closed-trade statistics (it appears in neither the open nor the
+   * closed list).
+   */
+  status: "open" | "closed" | "voided";
 }
 
 export interface TradeStats {

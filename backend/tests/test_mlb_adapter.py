@@ -11,6 +11,7 @@ from app.kernel.domain import (
 from app.kernel.protocols import DataAdapter
 from app.sports.baseball.mlb_adapter import (
     MLBAdapter,
+    _MLB_PLAYOFF_TYPES,
     _MLB_TEAM_IDS,
     _PARK_FACTORS,
     _park_factor_for_team,
@@ -151,6 +152,37 @@ class TestParseMlbGame:
         }
         assert parse_mlb_game(spring) is None
         assert parse_mlb_game(asg) is None
+
+    def test_every_playoff_game_type_maps_to_the_playoff_stage(self):
+        """Drive from `_MLB_PLAYOFF_TYPES` instead of naming one code.
+
+        `parse_mlb_game` ORs the game-type membership test with a
+        `seriesDescription` text scan, so a dropped member would not raise -- it
+        would silently demote that round to `regular_season`. The payload
+        deliberately omits `seriesDescription` so the text fallback cannot mask
+        a missing game-type member.
+        """
+        for game_type in sorted(_MLB_PLAYOFF_TYPES):
+            raw = {
+                "gamePk": 900001,
+                "gameType": game_type,
+                "gameDate": "2024-10-05T00:00:00Z",
+                "teams": {
+                    "home": {"team": {"name": "Houston Astros"}, "score": 3},
+                    "away": {"team": {"name": "Texas Rangers"}, "score": 1},
+                },
+                "status": {"abstractGameState": "Final"},
+            }
+            parsed = parse_mlb_game(raw)
+            assert parsed is not None, game_type
+            assert parsed["stage"] == "playoff", game_type
+
+    def test_the_playoff_game_types_are_pinned(self):
+        """Counterweight to the loop above, which iterates the constant itself
+        and so cannot see a member being *removed* -- that round would fall back
+        to `regular_season` with nothing to flag it.
+        """
+        assert _MLB_PLAYOFF_TYPES == {"D", "L", "F", "W", "P"}
 
     def test_canonicalizes_oakland_athletics(self):
         """Oakland Athletics rename collapses to Athletics for stable Elo keys."""

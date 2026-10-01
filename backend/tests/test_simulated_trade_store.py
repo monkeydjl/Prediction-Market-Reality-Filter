@@ -247,6 +247,162 @@ class SimulatedTradeStoreTests(unittest.TestCase):
         self.assertTrue(done.is_set(), "open_trade must proceed once released")
         self.assertEqual(len(store.list_open_trades()), 2)
 
+    def test_void_trade_moves_the_open_trade_out_of_the_open_list(self):
+        store.open_trade(
+            "event-void", direction="YES", entry_prob=60.0, market_prob=50.0
+        )
+
+        voided = store.void_trade("event-void")
+
+        self.assertIsNotNone(voided)
+        self.assertEqual(voided["status"], "voided")
+        self.assertEqual(voided["exit_reason"], "voided")
+        # No settlement, so nothing that would enter the win-rate / PnL aggregates.
+        self.assertIsNone(voided["pnl_pct"])
+        self.assertIsNone(voided["is_win"])
+        self.assertIsNone(voided["actual_outcome"])
+        self.assertIsNotNone(voided["exit_time"])
+        # Gone from both lists: neither a live position nor a settle.
+        self.assertEqual(store.list_open_trades(), [])
+        self.assertEqual(store.list_closed_trades(), [])
+        self.assertEqual(store.count_open_trades(), 0)
+        self.assertEqual(store.count_closed_trades(), 0)
+
+    def test_void_trade_is_idempotent_and_noop_without_an_open_trade(self):
+        store.open_trade(
+            "event-void2", direction="NO", entry_prob=40.0, market_prob=60.0
+        )
+
+        self.assertIsNotNone(store.void_trade("event-void2"))
+        self.assertIsNone(store.void_trade("event-void2"))    # already voided
+        self.assertIsNone(store.void_trade("never-opened"))   # no trade at all
+
+    def test_voided_trade_is_excluded_from_trade_stats(self):
+        store.open_trade("settled", direction="YES", entry_prob=60.0, market_prob=50.0)
+        store.close_trade("settled", actual_outcome=100.0)
+        store.open_trade("void-me", direction="NO", entry_prob=70.0, market_prob=50.0)
+        voided = store.void_trade("void-me")
+
+        stats = store.trade_stats()
+
+        self.assertEqual(voided["status"], "voided")
+        self.assertEqual(stats["total_closed"], 1)
+        self.assertEqual(stats["win_rate"], 1.0)
+        self.assertNotIn("NO", stats["by_direction"])
+        self.assertEqual(store.count_open_trades(), 0)
+        self.assertEqual(store.count_closed_trades(), 1)
+        self.assertEqual(store.list_closed_trades()[0]["event_id"], "settled")
+
+    def test_by_direction_reports_both_strong_directions(self):
+        """trade_stats() must report BOTH directions, not just YES.
+
+        Positive counterpart to test_voided_trade_is_excluded_from_trade_stats:
+        that case only asserts ``assertNotIn("NO", ...)``, which is satisfied
+        both by "the voided NO trade was filtered out" AND by "NO was never
+        queried at all" -- so it cannot see the loop shrinking to YES-only.
+        Deleting "NO" from ``_REPORTED_DIRECTIONS`` left the whole file green
+        before this case existed (this is the guard registered as mutation W25).
+        """
+        store.open_trade("d-yes", direction="YES", entry_prob=60.0, market_prob=50.0)
+        store.close_trade("d-yes", actual_outcome=100.0)  # YES called correctly
+        store.open_trade("d-no", direction="NO", entry_prob=40.0, market_prob=60.0)
+        store.close_trade("d-no", actual_outcome=0.0)  # NO called correctly
+
+        stats = store.trade_stats()
+        self.assertEqual(set(stats["by_direction"]), {"YES", "NO"})
+        self.assertEqual(stats["by_direction"]["YES"]["total"], 1)
+        self.assertEqual(stats["by_direction"]["YES"]["wins"], 1)
+        self.assertEqual(stats["by_direction"]["NO"]["total"], 1)
+        self.assertEqual(stats["by_direction"]["NO"]["wins"], 1)
+        self.assertEqual(stats["by_direction"]["NO"]["win_rate"], 1.0)
+
+    def test_records_the_current_schema_version(self):
+        store.open_trade("ver", direction="YES", entry_prob=60.0, market_prob=50.0)
+        self.assertEqual(
+            sqlite_db.schema_versions(self.db_path)["simulated_trades"], 2
+        )
+
+    def test_migrate_widens_the_status_check_and_preserves_row_ids(self):
+        """A v1 DB (CHECK without 'voided') must be rebuilt in place: every row
+        kept, every id kept, and the third state accepted afterwards."""
+        v1_schema = """
+        CREATE TABLE simulated_trades (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_id        TEXT NOT NULL UNIQUE,
+            event_id        TEXT NOT NULL,
+            event_title     TEXT NOT NULL DEFAULT '',
+            direction       TEXT NOT NULL CHECK (direction IN ('YES','NO')),
+            entry_prob      REAL NOT NULL,
+            market_prob     REAL NOT NULL,
+            entry_edge      REAL NOT NULL,
+            entry_time      TEXT NOT NULL,
+            position_pct    REAL NOT NULL DEFAULT 2.0,
+            confidence      REAL,
+            trust_weight    REAL,
+            decision        TEXT NOT NULL DEFAULT 'watch',
+            exit_prob       REAL,
+            exit_market     REAL,
+            exit_time       TEXT,
+            exit_reason     TEXT,
+            actual_outcome  REAL,
+            pnl_pct         REAL,
+            is_win          INTEGER,
+            status          TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed')),
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "loop.db")
+            conn = sqlite3.connect(db_path)
+            conn.executescript(v1_schema)
+            # Ids far from the natural 1,2 sequence: a rebuild that failed to
+            # copy `id` would renumber them and both assertions below would fail.
+            conn.executemany(
+                "INSERT INTO simulated_trades "
+                "(id, trade_id, event_id, direction, entry_prob, market_prob, "
+                " entry_edge, entry_time, status) VALUES (?,?,?,?,?,?,?,?,?)",
+                [
+                    (42, "sim-open", "evt-old", "YES", 60.0, 50.0, 10.0, "t0", "open"),
+                    (7, "sim-closed", "evt-done", "NO", 40.0, 60.0, -20.0, "t0", "closed"),
+                ],
+            )
+            conn.commit()
+            conn.close()
+
+            with patch.object(store, "loop_db_path", return_value=db_path):
+                store.void_trade("evt-old")   # _ensure_schema -> _migrate, then void
+            store._INITIALIZED.discard(db_path)
+
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                ddl = conn.execute(
+                    "SELECT sql FROM sqlite_master "
+                    "WHERE type='table' AND name='simulated_trades'"
+                ).fetchone()["sql"]
+                by_trade = {
+                    r["trade_id"]: dict(r)
+                    for r in conn.execute("SELECT * FROM simulated_trades")
+                }
+                # The widened CHECK must now accept the third state.
+                conn.execute(
+                    "INSERT INTO simulated_trades "
+                    "(trade_id, event_id, direction, entry_prob, market_prob, "
+                    " entry_edge, entry_time, status) "
+                    "VALUES ('sim-new', 'evt-new', 'YES', 60.0, 50.0, 10.0, 't1', 'voided')"
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+        self.assertIn("'voided'", ddl)
+        self.assertEqual(len(by_trade), 2)
+        self.assertEqual(by_trade["sim-open"]["id"], 42)
+        self.assertEqual(by_trade["sim-closed"]["id"], 7)
+        self.assertEqual(by_trade["sim-open"]["status"], "voided")
+        self.assertEqual(by_trade["sim-closed"]["status"], "closed")
+
 
 if __name__ == "__main__":
     unittest.main()

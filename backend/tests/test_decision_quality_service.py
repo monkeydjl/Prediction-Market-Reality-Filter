@@ -9,13 +9,18 @@ Pure-function tests that do not touch settings, LLM, or I/O. Verifies:
 - Template rationale avoids banned vocabulary + has disclaimer suffix
 - Missing recommendation -> raw_direction=WAIT
 - Empty evidence_breakdown -> consensus_level=none + rule 4 downgrade
+- Empty evidence_breakdown rationale is the specific "cannot parse" message,
+  not a non-empty fallback template
 - No-writeback: recommendation dict is byte-equal before/after the call
 - Adversarial input never raises
 """
 import copy
 import unittest
 
-from app.services.decision_quality_service import build_decision_quality
+from app.services.decision_quality_service import (
+    _DISCLAIMER_SUFFIX,
+    build_decision_quality,
+)
 
 
 def _evidence(direction: str, strength: float, credibility: float = 0.9,
@@ -336,6 +341,25 @@ class BuildDecisionQualityTests(unittest.TestCase):
         # Must NOT be rule 3 wording
         self.assertNotIn("缺少支持证据", result["downgrade_reason"])
 
+    def test_rule4_empty_breakdown_downgrades_no_to_wait(self):
+        """Rule 4 applies to NO exactly as it does to YES.
+
+        The companion of this test -- ``..._does_not_downgrade_wait`` -- only
+        proves WAIT is left alone, and a negative control stays green even if
+        Stage A stops recognising NO altogether. This is the positive NO side
+        of the Stage A gate (the guard registered as mutation W29); reverting
+        ``_STRONG_DIRECTIONS`` to YES-only leaves ``displayed_direction`` at
+        ``NO`` with no downgrade reason at all.
+        """
+        rec = _recommendation("NO", risk_level="medium")
+        result = build_decision_quality(
+            recommendation=rec, evidence_breakdown=[], **self.DEFAULT_KWARGS
+        )
+        self.assertEqual(result["raw_direction"], "NO")
+        self.assertEqual(result["displayed_direction"], "WAIT")
+        self.assertTrue(result["downgraded"])
+        self.assertIn("缺少证据支持", result["downgrade_reason"])
+
     def test_rule4_empty_breakdown_does_not_downgrade_wait(self):
         """Rule 4 only applies to YES/NO. WAIT is unchanged."""
         rec = _recommendation("WAIT", risk_level="medium")
@@ -439,6 +463,25 @@ class BuildDecisionQualityTests(unittest.TestCase):
         self.assertFalse(result["downgraded"])
         self.assertIsNone(result["downgrade_reason"])
         self.assertNotEqual(result["decision_rationale_zh"], "")
+
+    def test_missing_both_inputs_rationale_names_the_missing_breakdown(self):
+        """The empty-breakdown rationale is the *specific* message, not a fallback.
+
+        The sibling test above only asserts that the rationale is non-empty, and
+        the not-downgraded tail template is non-empty too -- so an early return
+        that stopped firing (a renamed consensus level, say) would slip past it
+        and silently reword every empty-breakdown rationale. Registered as
+        mutation W30.
+        """
+        result = build_decision_quality(
+            recommendation=None, evidence_breakdown=[],
+            enabled=True, max_items=3, high_threshold=0.40, medium_threshold=0.20,
+        )
+        self.assertEqual(result["consensus_level"], "none")
+        self.assertEqual(
+            result["decision_rationale_zh"],
+            "缺少可解析的证据分解，无法判断证据一致性。" + _DISCLAIMER_SUFFIX,
+        )
 
     def test_adversarial_input_never_raises(self):
         """All-None, all-empty, all-malformed input returns a well-formed block."""

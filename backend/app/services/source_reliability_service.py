@@ -43,11 +43,9 @@ import math
 from typing import Any
 from urllib.parse import urlparse
 
-logger = logging.getLogger(__name__)
+from app.utils.direction_vocabulary import STRONG_DIRECTIONS
 
-# Directions that can be downgraded to WAIT. WAIT/AVOID are non-directional
-# (no strong stance to soften) and are never downgraded by this layer.
-_STRONG_DIRECTIONS = ("YES", "NO")
+logger = logging.getLogger(__name__)
 
 # Tier scores for the weighted average.
 _TIER_SCORES: dict[str, float] = {
@@ -406,7 +404,7 @@ def build_source_reliability(
         score_threshold=score_threshold,
     )
 
-    if downgrade_reason is not None and raw_dir in _STRONG_DIRECTIONS:
+    if downgrade_reason is not None and raw_dir in STRONG_DIRECTIONS:
         suggested_direction = "WAIT"
     else:
         suggested_direction = raw_dir
@@ -495,7 +493,7 @@ def _evaluate_downgrade(
         4. overall_score < score_threshold
     """
     # Non-directional recommendations are never downgraded by this layer.
-    if raw_dir not in _STRONG_DIRECTIONS:
+    if raw_dir not in STRONG_DIRECTIONS:
         return None
 
     if domain_diversity < min_domain_diversity:

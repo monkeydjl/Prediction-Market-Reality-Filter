@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from app.core.config import settings
 from app.services.football_live_schedule_service import (
+    _ALLOWED_STATUSES,
     clear_live_schedule_cache,
     get_live_schedule,
 )
@@ -152,6 +153,42 @@ def test_malformed_duplicate_or_invalid_fixture_snapshot_is_unavailable():
             return_value=_Response(payload),
         ):
             assert not get_live_schedule("epl", "2026-27").available
+
+
+def test_every_allowed_status_is_accepted():
+    """Drive the fixture from `_ALLOWED_STATUSES` instead of naming one status.
+
+    A single fixture row with an unknown status makes the *whole* snapshot
+    malformed (`status not in _ALLOWED_STATUSES` -> `return None`). Dropping a
+    member therefore does not raise -- it silently reports "provider
+    unavailable", which is indistinguishable from a real outage.
+    """
+    for status in sorted(_ALLOWED_STATUSES):
+        clear_live_schedule_cache()
+        contexts = _settings()
+        payload = {
+            "fixtures": [{**_fixture("m1", "2026-08-15T15:00:00Z"), "status": status}]
+        }
+        with contexts[0], contexts[1], contexts[2], contexts[3], contexts[4], contexts[5], patch(
+            "app.services.football_live_schedule_service.urlopen",
+            return_value=_Response(payload),
+        ):
+            result = get_live_schedule("epl", "2026-27")
+        assert result.available, f"status {status!r} was rejected as malformed"
+        assert result.fixtures is not None and len(result.fixtures) == 1
+        assert result.fixtures[0]["status"] == status
+
+
+def test_the_status_list_is_pinned():
+    """`_ALLOWED_STATUSES` is a validation allowlist: one unknown status makes
+    the *whole* snapshot malformed, which reads as "provider unavailable".
+
+    The loop above iterates the constant itself and is therefore blind to a
+    member being removed; this pin supplies that direction.
+    """
+    assert _ALLOWED_STATUSES == {
+        "scheduled", "in_play", "finished", "postponed", "cancelled", "suspended",
+    }
 
 
 def test_oversized_or_failed_response_is_unavailable():

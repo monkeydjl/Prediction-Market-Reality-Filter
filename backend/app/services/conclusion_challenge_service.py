@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from app.utils.direction_vocabulary import _STRONG_EVENT_DIRECTIONS
+
 CHECK_CALCULATION = "calculation_rationale"
 CHECK_EVIDENCE = "evidence_support"
 CHECK_COUNTEREVIDENCE = "counterevidence"
@@ -41,7 +43,7 @@ def _dict(value: Any) -> dict[str, Any]:
 
 def _is_strong_event_direction(payload: dict[str, Any]) -> bool:
     conclusion = _dict(payload.get("conclusion"))
-    return conclusion.get("direction") in {"YES", "NO"}
+    return conclusion.get("direction") in _STRONG_EVENT_DIRECTIONS
 
 
 def _is_strong_world_cup_prediction(payload: dict[str, Any]) -> bool:
@@ -82,7 +84,7 @@ def _check_calculation(
     if payload.get("domain") == "event_intelligence":
         direction = conclusion.get("direction")
         change = _num(scores.get("change"))
-        if direction in {"YES", "NO"} and change is not None and abs(change) < 3.0:
+        if direction in _STRONG_EVENT_DIRECTIONS and change is not None and abs(change) < 3.0:
             failures.append(
                 _failure(
                     CHECK_CALCULATION,

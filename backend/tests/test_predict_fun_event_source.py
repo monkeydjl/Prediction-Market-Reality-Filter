@@ -104,6 +104,18 @@ class PredictFunEventSourceTests(unittest.TestCase):
             events = asyncio.run(source.fetch_candidate_events(limit=10))
         self.assertEqual([e["source"]["source_id"] for e in events], ["ok"])
 
+    def test_id_and_liquidity_fall_back_through_the_field_lists(self):
+        # _ID_FIELDS = ("id", "marketId", ...) and
+        # _LIQUIDITY_FIELDS = ("liquidity", "liquidityUsd", ...) - the later
+        # entries are the fallbacks a provider actually exercises.
+        market = _market(id="", marketId="pf-fallback", liquidity=None, liquidityUsd="88.5")
+        with patch.object(source.settings, "PREDICT_FUN_API_KEY", "secret"), patch.object(
+            source, "_fetch_raw_markets", new=AsyncMock(return_value=[market])
+        ):
+            events = asyncio.run(source.fetch_candidate_events(limit=5))
+        self.assertEqual(events[0]["source"]["source_id"], "pf-fallback")
+        self.assertEqual(events[0]["liquidity"], 88.5)
+
     def test_fetch_error_degrades_to_empty(self):
         with patch.object(source.settings, "PREDICT_FUN_API_KEY", "secret"), patch.object(
             source,
@@ -115,3 +127,35 @@ class PredictFunEventSourceTests(unittest.TestCase):
             events = asyncio.run(source.fetch_candidate_events(limit=5))
         self.assertEqual(events, [])
         self.assertIn("source=predict_fun_candidates", "\n".join(logs.output))
+
+    def test_every_listed_field_and_status_is_honoured(self):
+        # Driven off the module's own tuples / status sets, so adding an entry is
+        # covered automatically (audit section 22.2.1).
+        for const in ("_QUESTION_FIELDS", "_ID_FIELDS"):
+            for field in getattr(source, const):
+                with self.subTest(const=const, field=field):
+                    self.assertEqual(
+                        source._extract_text({field: "VALUE"}, getattr(source, const)),
+                        "VALUE",
+                    )
+        for const in ("_VOLUME_FIELDS", "_LIQUIDITY_FIELDS"):
+            for field in getattr(source, const):
+                with self.subTest(const=const, field=field):
+                    self.assertEqual(
+                        source._extract_number({field: "12.5"}, getattr(source, const)),
+                        12.5,
+                    )
+        for status in source._ACTIVE_TRADING_STATUSES:
+            with self.subTest(trading_status=status):
+                self.assertTrue(
+                    source._has_supported_status(
+                        {"tradingStatus": status, "status": "registered"}
+                    )
+                )
+        for status in source._ACTIVE_MARKET_STATUSES:
+            with self.subTest(market_status=status):
+                self.assertTrue(
+                    source._has_supported_status(
+                        {"tradingStatus": "open", "status": status}
+                    )
+                )

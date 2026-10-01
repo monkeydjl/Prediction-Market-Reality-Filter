@@ -44,9 +44,9 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from app.utils.direction_vocabulary import STRONG_DIRECTIONS
 
-_STRONG_DIRECTIONS = ("YES", "NO")
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -156,7 +156,10 @@ def build_execution_quality(
     suggested_direction = raw_direction
     downgrade_reason: str | None = None
     downgraded = False
-    if not executable and raw_direction in _STRONG_DIRECTIONS:
+    # A committed call is downgraded to WAIT when the market is not executable
+    # (wide spread, thin liquidity, stale price, or high fee); WAIT/AVOID are
+    # already non-committal and pass through.
+    if not executable and raw_direction in STRONG_DIRECTIONS:
         suggested_direction = "WAIT"
         downgrade_reason = " | ".join(constraints) if constraints else "不可执行"
         downgraded = True

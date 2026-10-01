@@ -65,6 +65,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.utils.direction_vocabulary import _DIRECTIONAL
+
 logger = logging.getLogger(__name__)
 
 # Edge bucket boundaries (half-open intervals [low, high)).
@@ -86,10 +88,6 @@ _VALID_CONFIDENCE_BUCKETS = ("high", "medium", "low")
 # "partial" case is recorded as actual_outcome on the prediction row but the
 # direction check needs a binary signal).
 _OUTCOME_YES_THRESHOLD = 50.0
-
-# Directions that have a checkable stance (YES/NO). WAIT/AVOID are
-# non-directional — direction_correct is None for them.
-_DIRECTIONAL = ("YES", "NO")
 
 
 def compute_edge_bucket(raw_edge: float | None) -> str:

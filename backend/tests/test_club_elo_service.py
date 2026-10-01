@@ -8,6 +8,8 @@ from app.services.club_elo_service import (
     get_club_elo,
     fetch_club_elo_snapshot,
     get_club_elo_by_country,
+    _PREFIXES,
+    _SUFFIXES,
     _normalize_team_name,
 )
 
@@ -38,6 +40,35 @@ class TestNormalizeTeamName:
 
     def test_handles_none(self):
         assert _normalize_team_name("") == ""
+
+
+class TestAffixTables:
+    def test_every_suffix_is_stripped(self):
+        """Drive from `_SUFFIXES`: a dropped member stops collapsing that spelling.
+
+        The affix tables are consumed element-wise
+        (`for suffix in _SUFFIXES: if normalized.endswith(suffix)`), so a missing
+        entry silently returns a different key instead of raising -- the club
+        then just never matches its Elo row.
+        """
+        for suffix in _SUFFIXES:
+            assert _normalize_team_name(f"team{suffix}") == "team", suffix
+
+    def test_every_prefix_is_stripped(self):
+        """Drive from `_PREFIXES` -- same failure shape as the suffix table."""
+        for prefix in _PREFIXES:
+            assert _normalize_team_name(f"{prefix}team") == "team", prefix
+
+    def test_the_affix_tables_are_pinned(self):
+        """Counterweight to the two loops above, which iterate the constants
+        themselves and so cannot see a member being *removed*.
+
+        These are tuples, not sets: the order is part of the contract
+        (`_normalize_team_name` breaks on the first match, so 3-char tokens must
+        precede 2-char ones -- see the comment above `_SUFFIXES`).
+        """
+        assert _SUFFIXES == ("afc", "fc.", "cf.", "ac.", "fc", "cf", "ac", "sc")
+        assert _PREFIXES == ("afc", "fc.", "cf.", "ac.", "fc", "cf", "ac", "sc")
 
 
 class TestFetchClubEloSnapshot:

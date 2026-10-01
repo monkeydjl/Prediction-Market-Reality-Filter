@@ -45,9 +45,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import os
 import shutil
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -237,6 +241,52 @@ def _list_backup_contents(
     return entries
 
 
+def _is_loopback_url(url: str) -> bool:
+    """True when ``url``'s host is this machine (``localhost`` / ``127.0.0.0-8`` / ``::1``).
+
+    Decides whether the health probe may ignore the environment's proxy.
+    Asking "is *this* port answering?" through a proxy answers a different
+    question — "can the proxy reach something?" — which is yes for any host
+    that has a proxy configured, whatever is on the other end.
+
+    The bypass is limited to loopback on purpose. An operator who points
+    ``PMRF_HEALTHCHECK_URL`` at a reverse proxy did so deliberately, and
+    stripping the proxy there would change what the check means.
+    """
+    try:
+        host = urllib.parse.urlsplit(url).hostname
+    except ValueError:
+        return False
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _open_health_url(url: str, timeout: float):
+    """Open the health URL, bypassing the environment's proxy for loopback.
+
+    ``urllib`` honours ``HTTP_PROXY`` even for ``localhost`` — on Windows
+    ``proxy_bypass('127.0.0.1')`` returns False — while ``_check_service_running``
+    counts *any* HTTP response as "the service is running". Together those make
+    the restore warning light up on every run on a host with a global proxy,
+    whether or not anything is listening: the proxy answers for the dead port.
+    An empty ``ProxyHandler`` asks the loopback port itself, so a refused
+    connection means what it says.
+
+    Non-loopback URLs keep the default opener, proxy and all.
+    """
+    request = urllib.request.Request(url, method="GET")
+    if not _is_loopback_url(url):
+        return urllib.request.urlopen(request, timeout=timeout)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return opener.open(request, timeout=timeout)
+
+
 def _check_service_running() -> bool:
     """Best-effort check if the PMRF service is still running.
 
@@ -251,6 +301,11 @@ def _check_service_running() -> bool:
       service is up. A connection refused / timeout means it's down.
       This is preferred over the old ``return False`` conservative
       fallback, which silently let restore overwrite a live DB.
+
+    For a loopback URL the probe ignores the environment's proxy
+    (``_open_health_url``). With a global ``HTTP_PROXY`` and no ``NO_PROXY``,
+    the proxy answers for the dead port and the check reports a service that
+    is not there.
     """
     loop_db = Path(settings.LOOP_DB_FILE)
     if not loop_db.exists():
@@ -277,9 +332,6 @@ def _check_service_running() -> bool:
         # old conservative ``return False`` (which silently let restore
         # overwrite a live DB). Best-effort: any connection error means
         # "service not responding" -> safe to restore.
-        import urllib.request
-        import urllib.error
-
         health_url = getattr(settings, "PMRF_HEALTHCHECK_URL", "") or \
             "http://localhost:8000/api/health"
         timeout = getattr(settings, "PMRF_HEALTHCHECK_TIMEOUT_SECONDS", 5) or 5
@@ -291,9 +343,13 @@ def _check_service_running() -> bool:
         # restore is safe. Returning ``resp.status == 200`` here previously
         # caused a degraded-but-running service (503) to be treated as
         # "not running" and silently overwritten.
+        #
+        # That 502 clause needs the loopback bypass in ``_open_health_url`` to
+        # mean anything: routed through the environment's proxy, a dead
+        # loopback port *is* a 502, so the clause was answering "running" for a
+        # port nobody was listening on. See the audit, section 35.
         try:
-            req = urllib.request.Request(health_url, method="GET")
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with _open_health_url(health_url, timeout):
                 return True
         except urllib.error.HTTPError:
             # 4xx/5xx — the service answered, so it is running (possibly

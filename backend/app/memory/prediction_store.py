@@ -405,6 +405,22 @@ def _maybe_close_trade(
         pass
 
 
+def _maybe_void_trade(event_id: str) -> None:
+    """Void the simulated trade for event_id if one exists.  Best-effort;
+    failures are silently ignored so trade bookkeeping never blocks the void.
+
+    Call this OUTSIDE a writing() scope. sqlite_db._WRITE_LOCK is a plain
+    (non-reentrant) Lock and void_trade opens its own scope, so calling it while
+    holding the lock deadlocks -- the same reason score_prediction calls
+    _maybe_close_trade after its with-block, not inside it.
+    """
+    try:
+        from app.memory.simulated_trade_store import void_trade
+        void_trade(event_id)
+    except Exception:
+        pass
+
+
 def score_prediction(event_id: str, actual_outcome: float) -> dict[str, Any] | None:
     """Resolve an event's open frozen prediction against the settled outcome.
 
@@ -492,8 +508,12 @@ def void_prediction(event_id: str) -> dict[str, Any] | None:
     for a non-genuine resolution (identity conflict -> invalid, or a voided
     market). Moves open -> `voided`: no Brier, no calibration, and crucially it
     leaves the opportunity surface (list_open_opportunities reads status='open'),
-    so an invalidated event stops showing up as actionable. No-op (None) when the
-    event has no open prediction. Idempotent."""
+    so an invalidated event stops showing up as actionable. Also voids the
+    event's open simulated trade (best-effort, mirroring score_prediction's
+    close hook): a non-genuine resolution means the paper position never
+    settled, and without this the trade stayed `open` forever -- reported as a
+    live position and never pruneable. No-op (None) when the event has no open
+    prediction. Idempotent."""
     path = sqlite_db.loop_db_path()
     _ensure_schema(path)
     with writing(path) as conn:
@@ -508,6 +528,9 @@ def void_prediction(event_id: str) -> dict[str, Any] | None:
             "WHERE event_id=? AND status='open'",
             (utc_now(), event_id),
         )
+    # Outside the with-block on purpose: void_trade takes the same non-reentrant
+    # write lock this scope just released.
+    _maybe_void_trade(event_id)
     return get_prediction(event_id)
 
 

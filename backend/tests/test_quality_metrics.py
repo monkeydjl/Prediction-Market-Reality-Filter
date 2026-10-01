@@ -679,6 +679,14 @@ class TestQualityMetricsAnomalies(unittest.TestCase):
                     self.assertEqual(data["count"], 0)
 
     def test_anomalies_flags_wide_spread_not_downgraded(self):
+        """Both strong displays count -- a wide-spread NO is not downgraded either.
+
+        e3 (NO) is the positive sample for the second member of
+        ``_STRONG_DISPLAY_DIRECTIONS``; before it existed, every passing record
+        used final_direction="YES" and deleting "NO" left this test green (it is
+        the guard registered as mutation W26). e2 (WAIT) stays as the negative
+        control: a correctly downgraded display is not flagged.
+        """
         events = [
             _seed_event(
                 "e1",
@@ -698,6 +706,15 @@ class TestQualityMetricsAnomalies(unittest.TestCase):
                     "thin_market_flag": False,
                 },
             ),
+            _seed_event(
+                "e3",
+                final_direction="NO",
+                market_quality={
+                    "score": 0.3,
+                    "wide_spread_flag": True,
+                    "thin_market_flag": False,
+                },
+            ),
         ]
         with tempfile.TemporaryDirectory() as tmp:
             with _StoreContext(Path(tmp), events):
@@ -707,7 +724,8 @@ class TestQualityMetricsAnomalies(unittest.TestCase):
                     codes = [a["code"] for a in data["anomalies"]]
                     self.assertIn("wide_spread_not_downgraded", codes)
                     anomaly = next(a for a in data["anomalies"] if a["code"] == "wide_spread_not_downgraded")
-                    self.assertEqual(anomaly["detail"]["count"], 1)
+                    self.assertEqual(anomaly["detail"]["count"], 2)
+                    self.assertEqual(set(anomaly["detail"]["event_ids"]), {"e1", "e3"})
 
     def test_anomalies_flags_llm_degraded_events(self):
         events = [

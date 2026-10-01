@@ -10,8 +10,12 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.services.event_source_utils import (
+    extract_number as _extract_number,
+    extract_text as _extract_text,
+    normalize_probability as _normalize_probability,
+)
 from app.utils.failure_policy import fail_closed_empty_list
-from app.utils.market_utils import safe_float
 
 
 logger = logging.getLogger(__name__)
@@ -135,39 +139,9 @@ def _has_supported_market_shape(market: dict[str, Any]) -> bool:
     )
 
 
-def _extract_text(market: dict[str, Any], fields: tuple[str, ...]) -> str:
-    for field in fields:
-        value = str(market.get(field, "") or "").strip()
-        if value:
-            return value
-    return ""
-
-
-def _extract_number(market: dict[str, Any], fields: tuple[str, ...]) -> float:
-    for field in fields:
-        if market.get(field) is not None:
-            return safe_float(_clean_number(market.get(field)), 0.0)
-    return 0.0
-
-
 def _extract_probability(market: dict[str, Any]) -> float | None:
     for field in _PROBABILITY_FIELDS:
         if market.get(field) is None:
             continue
         return _normalize_probability(market.get(field))
     return None
-
-
-def _normalize_probability(raw: Any) -> float | None:
-    value = safe_float(_clean_number(raw), -1.0)
-    if 0.0 <= value <= 1.0:
-        return value * 100
-    if 0.0 <= value <= 100.0:
-        return value
-    return None
-
-
-def _clean_number(raw: Any) -> Any:
-    if isinstance(raw, str):
-        return raw.replace("$", "").replace(",", "").replace("%", "").strip()
-    return raw

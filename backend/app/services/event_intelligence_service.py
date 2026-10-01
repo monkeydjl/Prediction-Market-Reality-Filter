@@ -21,6 +21,7 @@ from app.services.scoring_service import (
 )
 from app.services.translation_service import translate_articles
 from app.utils.full_text_fetcher import fetch_full_text
+from app.utils.direction_vocabulary import _TRADABLE_DIRECTIONS
 from app.utils.market_utils import safe_float
 from app.utils.helpers import clamp01
 
@@ -1567,7 +1568,7 @@ def _persist_events(records: list[dict[str, Any]]) -> None:
                     from app.memory.simulated_trade_store import open_trade
                     rec = record.get("actionable_recommendation") or {}
                     direction = str(rec.get("direction") or "")
-                    if direction not in ("YES", "NO"):
+                    if direction not in _TRADABLE_DIRECTIONS:
                         direction = "YES"
                     ai_prob = pred.get("ai_probability", 50.0)
                     mkt_prob = pred.get("market_probability", 50.0)

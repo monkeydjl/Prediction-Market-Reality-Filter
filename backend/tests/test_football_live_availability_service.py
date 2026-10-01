@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from app.core.config import settings
 from app.services.football_live_availability_service import (
+    _ALLOWED_ROLES,
     clear_live_availability_cache,
     get_live_availability_impact,
 )
@@ -168,6 +169,43 @@ def test_malformed_duplicate_or_invalid_availability_snapshot_is_unavailable():
             return_value=_Response(payload),
         ):
             assert not get_live_availability_impact("epl", "2026-27", "Arsenal").available
+
+
+def test_every_allowed_role_is_accepted():
+    """Drive the fixture from `_ALLOWED_ROLES` instead of naming one role.
+
+    `_parse_absences` rejects the *whole* snapshot when a single row carries an
+    unknown role (`role not in _ALLOWED_ROLES` -> `return None`). So dropping a
+    member from that set does not raise -- it silently reports the provider as
+    unavailable, and every team's impact disappears.
+    """
+    for role in sorted(_ALLOWED_ROLES):
+        clear_live_availability_cache()
+        contexts = _settings()
+        payload = {
+            "teams": [
+                {"team": "Arsenal", "absences": [{**_absence(), "role": role}]}
+            ]
+        }
+        with contexts[0], contexts[1], contexts[2], contexts[3], contexts[4], patch(
+            "app.services.football_live_availability_service.urlopen",
+            return_value=_Response(payload),
+        ):
+            result = get_live_availability_impact("epl", "2026-27", "Arsenal")
+        assert result.available, f"role {role!r} was rejected as malformed"
+        assert result.impact is not None
+
+
+def test_the_role_list_is_pinned():
+    """`_ALLOWED_ROLES` is a validation allowlist, not a preference list: one
+    unknown role makes `_parse_absences` drop the *whole* snapshot.
+
+    `test_every_allowed_role_is_accepted` iterates the constant itself, so it
+    cannot see a member being *removed* -- the loop simply gets shorter. This
+    pin is the counterweight (same reasoning as `sports_fact_service._KNOWN_KINDS`):
+    a change to the provider vocabulary has to be deliberate.
+    """
+    assert _ALLOWED_ROLES == {"star", "starter", "rotation", "bench"}
 
 
 def test_availability_snapshot_cache_reuses_provider_call():

@@ -31,6 +31,7 @@ from app.memory.prediction_store import (
 )
 from app.services.calibration_drift_service import build_drift_report, evaluate_drift_alerts
 from app.services.drift_alert_dispatcher import dispatch_drift_alerts, evaluate_scheduler_alerts
+from app.utils.direction_vocabulary import _STRONG_DISPLAY_DIRECTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -363,7 +364,7 @@ async def quality_metrics_anomalies() -> dict[str, Any]:
         mq = record.get("market_quality")
         if isinstance(mq, dict) and mq.get("wide_spread_flag"):
             final_dir = record.get("final_displayed_direction")
-            if final_dir in ("YES", "NO") and eid:
+            if final_dir in _STRONG_DISPLAY_DIRECTIONS and eid:
                 wide_spread_ids.append(eid)
         lt = record.get("llm_telemetry")
         if isinstance(lt, dict) and lt.get("degraded_mode") and eid:

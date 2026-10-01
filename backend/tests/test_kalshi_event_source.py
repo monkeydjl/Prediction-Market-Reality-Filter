@@ -98,6 +98,34 @@ class KalshiEventSourceTests(unittest.TestCase):
             events = asyncio.run(source.fetch_candidate_events(limit=10))
         self.assertEqual([e["source"]["source_id"] for e in events], ["OK"])
 
+    def test_every_settled_status_is_excluded(self):
+        """Drive the check from `_SETTLED_STATUSES` instead of naming one status.
+
+        `_is_eligible` compares `str(market["status"]).lower()` against the set.
+        Dropping a member silently re-offers an already-settled market as a new
+        discovery candidate -- a wrong *inclusion*, which no exception surfaces.
+        The mixed-case leg pins the `.lower()` normalization the set relies on.
+        """
+        for status in sorted(source._SETTLED_STATUSES):
+            for spelling in (status, status.upper()):
+                ev = _event(event_ticker="SET", market={"status": spelling})
+                with patch.object(source, "_fetch_raw_events",
+                                  new=AsyncMock(return_value=[ev])):
+                    events = asyncio.run(source.fetch_candidate_events(limit=10))
+                self.assertEqual(
+                    events, [], f"status {spelling!r} was offered as a candidate"
+                )
+
+    def test_the_settled_status_list_is_pinned(self):
+        """Counterweight to the loop above, which iterates the constant itself
+        and so cannot see a member being *removed* -- the settled market would
+        simply be re-offered as a candidate.
+        """
+        self.assertEqual(
+            source._SETTLED_STATUSES,
+            {"settled", "finalized", "closed", "determined"},
+        )
+
     def test_baseline_falls_back_to_midpoint_then_fifty(self):
         mid = _event(event_ticker="MID", market={
             "last_price_dollars": 0.0, "yes_bid_dollars": 0.40, "yes_ask_dollars": 0.50})

@@ -5459,3 +5459,183 @@ _KALSHI_SPORTS_SERIES_PREFIXES = (
 | push / 开 PR | ⏳ 未做 |
 
 **本节改 9 个文件（5 源 + 4 测试）。未提交、未 push。**
+
+# 四十九、修行尾审计工具**自身**的假阳性：二进制被当文本 + 一个静默漏审（2026-10-01）
+
+本节接 §48 的尾巴。§48.6 的验证表里有一行是「`scripts/eol_audit.py` → **line-ending damage: none**」，
+但那次跑的是**默认模式**（只审 `git` 报为 changed 的文件）。本节第一次把 **`--all`（全树）** 跑到底，
+它 **exit 1**，唯一命中 `frontend/src/app/favicon.ico` —— 取证证明那是**假阳性**；
+顺着同一条路径又挖出同一族的**静默漏审**（2 条非 ASCII 路径）。
+
+**本节改 4 个文件**（2 个工具 + 2 个测试），提交 **`fa33239`**，**已 push**，CI 全绿（见 §49.7、§49.8）。
+
+## 49.1 结论先行
+
+| 项 | 范围 | 判据（全部实测） |
+|---|---|---|
+| **假阳性** | `--all` 全树 | 真实仓库 `--all` **exit 1 → 0**；`favicon.ico` 由 `DAMAGE: …` 变为 `skip (git stores it as binary)` |
+| **判词不诚实** | `classify()` 第 1 条规则 | 补 `head_lf == 0`；「HEAD 本就混合」改判 `DAMAGE: mixed` |
+| **静默漏审** | 非 ASCII 路径 | 2 条 tracked 路径由「解析不到、无声跳过」变为「被审计」 |
+| **守卫** | 1 新测试文件 + 1 新变异集 | 12 条用例；常驻 set `eol-audit`(4) |
+| **交付** | 4 文件 | `+374 / −27`；`fa33239`；**已 push**；CI 5/5 绿 |
+
+## 49.2 假阳性的现场：判词与**它自己打印的画像**矛盾
+
+`--all` 那一行输出（逐字）：
+
+```
+frontend/src/app/favicon.ico    HEAD(crlf=1,lf=29) TREE(crlf=1,lf=29)  DAMAGE: was pure CRLF at HEAD, now has bare LF
+```
+
+同一行里，画像两侧**完全相同**（`crlf=1, lf=29`）—— 那**不是** "pure CRLF"。
+**判词与它自己打印的数据自相矛盾**，这正是抓住它的线索：不需要先懂工具实现，只要读它自己吐出的数字。
+
+独立取证（证明该文件**零改动**）：
+
+| 判据 | 读数 |
+|---|---|
+| `git show HEAD:<path>` vs 工作树 | **逐字节相同**（25931 B，`raw identical: True`）|
+| 两侧 sha256 | 同为 `2b8ad2d33455a8f7…` |
+| `git status --porcelain` / `git diff --stat` | **皆空** |
+| `git check-attr text diff` | `text: unset` / `diff: unset`（git 按**二进制**处理）|
+| `git hash-object <file>` vs `git rev-parse HEAD:<path>` | 同为 `718d6fea4835ec2d246af9800eddb7ffb276240c` |
+| 文件头 | `00 00 01 00 04 00 10 10` = ICO 魔数，且含 NUL 字节 |
+
+⇒ **非损伤**。判据要点同 §48.3：**不拿 `git diff` 当唯一 oracle** —— `core.autocrlf` 在比对前归一化，
+`git diff` 对**行尾漂移是瞎的**；这里用的是三条**互相独立**的判据（字节相等、对象哈希相等、属性为二进制）。
+
+## 49.3 两个缺陷一个症状：**只补合取项不够**
+
+| # | 缺陷 | 性质 |
+|---|---|---|
+| 1 | 二进制文件被当**文本画像** | **根因** —— `favicon.ico` 的 1 个 CRLF + 29 个裸 LF 只是 ICO 填充；一旦被画像，**无论判据怎么写**都会落进 mixed |
+| 2 | 第 1 条规则只判 `head_crlf > 0` | **判词不诚实** —— 文件可能**本来就混合**，却被说成"曾经纯 CRLF" |
+| 3 | 非 ASCII 路径被**静默跳过** | 同族（见 §49.5）|
+
+修复：`head_crlf > 0` → `head_crlf > 0 and head_lf == 0`（**补上第二项合取**）。这样"本来就混合"的文件落到第 2 条规则上，
+报出来的是它**实际**的样子（`DAMAGE: mixed line endings`）。
+
+⚠️ **但只改这一处，`favicon.ico` 仍然红** —— 它会被第 2 条（mixed）抓住。所以**二进制排除才是根治**，
+合取项只是让剩余情形的判词诚实。两者都要。
+
+## 49.4 二进制判据用 **git 自己的 `i/-text`**，不是 NUL 启发式
+
+`git ls-files --eol -z` 一次调用同时给出索引行尾标记与 worktree 标记，`i/-text` 即"git 把它存为二进制"：
+
+| 文件 | `ls-files --eol` 读数 |
+|---|---|
+| `frontend/src/app/favicon.ico` | `i/-text w/-text attr/-text`（`.gitattributes` 的 `*.ico binary`）|
+| `backend/app/main.py` | `i/lf w/crlf attr/text=auto` |
+
+**为什么不用"含 NUL 就算二进制"**：`.gitattributes` 把 **`backend/data/gbm_*.txt`** 标为 `binary` ——
+那是 **CRLF 文本、一个 NUL 都没有**（LightGBM 解析器对 `\r\n` 敏感，所以才**刻意**标 binary）。
+NUL 启发式会漏掉它，而它恰恰是最容易被误判成"损伤"的那类文件。
+⇒ **判据取 git 的结论，而不是自己再猜一遍 git 的规则。**
+
+## 49.5 同族缺陷：非 ASCII 路径被**静默**跳过
+
+`git ls-files` 默认会把非 ASCII 路径**加引号转义**输出：
+
+```
+i/lf    w/lf    attr/                "docs/user/\344\270\255\346\226\207\344\275\277\347\224\250\346\225\231\347\250\213.md"
+```
+
+于是 `REPO_ROOT / rel` 解析不到文件 → `is_file()` 为 False → **无声跳过**。本仓受影响 **2 条**。
+
+| 修法 | 说明 |
+|---|---|
+| `git ls-files --eol -z` | `-z` 下路径**不加引号**；一次调用兼顾"候选清单 + 二进制集合" |
+| `git status --porcelain -z` | 同理；**并显式消费 rename/copy 的第二条记录** —— 否则会把源路径当作"前 3 个字符被切掉"的路径 |
+
+用 `os.fsdecode()` 解码路径字节，`_git_bytes()` 不再用 `text=True`（避免按本机 locale 解码 UTF-8 路径）。
+
+> 这与 §48.3 的口径同源：**判据要能用字节复算**，别让一层隐式转换在中间改写事实。
+
+## 49.6 结构：抽纯函数 + 可驱动的 `main`；**0 必须只说一件事**
+
+| 抽出 | 作用 |
+|---|---|
+| `classify(head, tree)` | 纯函数，两类损伤 + 正常 LF/CRLF checkout + 新增文件都能**不建仓库**直接钉 |
+| `binary_paths()` / `tracked_eol()` | 二进制的来源与消费分开，可分别变异 |
+| `main(argv=None)` | 沿用 `tests/test_review_queue_cli.py` 那套「sys.path + 捕获 stdout」的范式 |
+
+**结尾那行**：`line-ending damage: none` **原样保留**（**本文件 §48.6 就引用了这句话**，
+改掉会让旧记录与工具输出对不上），**新增下一行**报跳过数：
+
+```
+line-ending damage: none
+  (1 file(s) skipped: git stores them as binary)
+```
+
+否则"没有任何损伤"与"把二进制全跳过了"读数**完全相同** —— 这正是本仓反复确认的
+「**0 必须只说一件事**」（见 §47 系列与 `decision-timeline-panel.tsx` 的空态先例）。
+
+## 49.7 验证（全部实测，2026-10-01）
+
+| 项 | 读数 |
+|---|---|
+| 新守卫文件 `tests/test_eol_audit.py` | junit `tests=12 / failures=0 / errors=0 / skipped=0` |
+| harness 清单测试 `tests/test_mutation_verify.py` | **62 passed + 94 subtests** |
+| 真实仓库 `scripts/eol_audit.py --all` | **exit 0**；1491 个 `ok` + **1 个 skip**（就是 favicon）；耗时 7m29s |
+| `ruff check`（两个新文件） | **All checks passed!** |
+| 4 个改动文件 sha256（长跑前后） | **4/4 一致** |
+| 提交后 blob 复核 | 4 个 HEAD blob **全为 LF**（autocrlf 入库归一）；工作树 = 1 LF + 3 CRLF；**LF 归一后内容一致** |
+
+**默认模式**（只审 changed 文件）依旧全绿；`--all` 从"必然红"变为"0 skip 之外的 1491 个全 ok"。
+
+### 49.7.1 🔴 全量套件里那**唯一一败**不是本节的（并已由 CI 反证）
+
+本机全量：**6525 passed + 1 failed + 11 skipped**（比基线 6525 多 **12**，正是新增用例）。
+唯一失败 `tests/test_backup_restore_drill.py::…restores_every_store_to_its_configured_path`，
+告警是「PMRF service appears to be running (SQLite DB is locked)」。
+
+| 判据 | 读数 |
+|---|---|
+| 本机 **:8000** | **有进程在监听**（8001 / 3001 也开着）|
+| 健康探测 | 拿到 HTTP 响应（**404**）；而 `restore_stores.py:338-357` **有意**把任何 HTTP 响应判为"服务在跑" |
+| `import fcntl` | **MISSING** → 本机走 **Windows 健康探测**分支（而非 POSIX 的 flock 分支）|
+| 单独复跑该用例 | **同样失败**（2.79 s，**确定性**，非排序/波动）|
+| 长跑后 4 个改动文件 | **4/4 逐字节未变** |
+
+**CI 反证**：CI 跑在 Linux 上、`fcntl` **可用** → 走 flock 分支，本机那条"探测 :8000"的分支在 CI 里
+**根本不存在** ⇒ 同一份代码、两个平台、**两条不同的判据**。CI 上该文件全绿，本机红，正是这个原因。
+⇒ 该用例对"**开发者本机跑着自己的服务**"不免疫，属**既有**脆弱点，本节**未动**。
+
+## 49.8 变异验证：常驻 set **`eol-audit`(4)**，四阶段
+
+本节的值班守卫**进了常驻 harness**（不像 §48 那样留在仓库外一次性脚本），因为它是**常驻工具**：
+
+| 变异 | 靶 | 结果 |
+|---|---|---|
+| `E1` | 去掉 `head_lf == 0` 合取项 | `green before → **1/1 files red** → green after restore → bytes restored` |
+| `E2` | 关掉二进制跳过（`if False and rel in binary:`）| 同上 |
+| `E3` | mixed 判据的 `and` 改成 `or` | 同上 |
+| `E4` | `binary_paths()` 返回空集 | 同上 |
+
+**为什么有 E3 / E4**：只锁"**不再假红**"的修复，会让"**干脆不报损伤**"通过其余全部断言 ——
+那是比假红更坏的失效（工具被关掉而没人决定关它）。E1/E2 各拆修复的一半，E3/E4 保证修复**不等于**关掉检测。
+
+harness 规模随之变为 **8 套 / 66 个变异 / 26 个目标文件 / 33 个守卫文件**
+（`sorted({m.path for s in SETS for m in s.mutations})` 取证）。
+
+## 49.9 §48.9 表的状态更新（追加式，旧文保留为时点快照）
+
+| §48.9 原文 | 本节后 |
+|---|---|
+| 「本节 9 个文件的提交 ⏳ **未提交**」 | ✅ **已提交**（`f0b662c` 9 files / `a9af1cf` 文档）|
+| 「push / 开 PR ⏳ 未做」 | ✅ **已 push**（`932df82 → b9f44ea`，CI 全绿）；按惯例**直推 `main`，无 PR** |
+| 「`world_cup_analytics.py:299` 的第三份引擎键集补守卫」| ⏳ 仍**未动**（见 §49.10）|
+| 「控制台支持选 `gbm`」/「`third_place`」/「`/trades`『已作废』tab」/「`api.ts:447` 契约」| ⏳ 仍**未动** |
+| 「§29.9『51』与 §48.3 入口『50』的差值取证」| ⏳ 仍**未做** |
+
+## 49.10 本节未做 / 交接
+
+| 事项 | 状态 |
+|---|---|
+| `test_backup_restore_drill` 对"本机 :8000 有服务"不免疫（§49.7.1）| ⏳ **未动**（既有脆弱点）|
+| `--all` 需 7~8 分钟（每文件一次 `git show`）| ⏳ 未优化；可用 `git cat-file --batch` 一次调用降下来，属**另一批**改动 |
+| §48.9 遗留：`world_cup_analytics.py:299` 守卫 / 控制台 `gbm` / `third_place` / `/trades` tab / `api.ts:447` | ⏳ 全部**未动**（照旧）|
+| 上线前 6 项里的 ②–⑥（生产必填配置 / 反代 + TLS / 代理头与限流 / 告警渠道 / 6 个 overlay 开关）| ⏳ **未做**（见 `go-live-readiness-2026-10-01.html`）|
+| push / 开 PR | ✅ **已 push**（`fa33239`）；按惯例直推 `main`，**无 PR** |
+
+**本节改 4 个文件（2 工具 + 2 测试），`+374 / −27`。已提交 `fa33239`、已 push、CI 全绿。**

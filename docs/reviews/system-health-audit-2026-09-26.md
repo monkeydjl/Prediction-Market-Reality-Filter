@@ -5639,3 +5639,108 @@ harness 规模随之变为 **8 套 / 66 个变异 / 26 个目标文件 / 33 个�
 | push / 开 PR | ✅ **已 push**（`fa33239`）；按惯例直推 `main`，**无 PR** |
 
 **本节改 4 个文件（2 工具 + 2 测试），`+374 / −27`。已提交 `fa33239`、已 push、CI 全绿。**
+
+---
+
+# 五十、三处契约取证（`third_place` / `/trades`「已作废」/ `api.ts:447`）与上线前 ②–⑥ 清单（2026-10-01）
+
+> 承接 §49.10 交接表的两行遗留。**本节只读生产代码取证** —— `third_place` / `/trades` / `api.ts:447`
+> 三处**生产代码一字未改**；另附 §49.10 第 4 行「上线前 ②–⑥」的可执行清单。
+> 三处里的两处（`third_place` 归属、`/trades` tab）属**产品/建模决定**，本节**只给事实与边界、不代决**；
+> 第三处（`api.ts:447`）的**根因**本节查清。
+
+## 50.1 `third_place`：唯一生产者产不出它，5 个判定点里 2 个算淘汰赛，且已被测试钉在非淘汰赛一侧
+
+**生产者侧（`MatchFixture.stage` 的唯一来源）。** 把 openfootball 数据解析成 `stage` 的只有
+`world_cup_match_service.parse_fixture`（§27.1）。其分支（:103-127）产出**恰好 6 个值**：
+`group_stage` / `final` / `semifinal` / `quarterfinal` / `round_of_16` / `unknown`。
+**没有 `third_place`** —— openfootball 的 `"round": "Match for third place"` 不含 group/final/semi/quarter/16，
+落进 `else` → **`unknown`**。
+
+**消费者侧（实测 `third_place` 的归属）。** 对 `stage` 做成员测试的一共 5 个「`_KNOCKOUT_STAGES` 族」判定点，
+外加 §27.2 的「第二消费者」（一个**异名** set）：
+
+| # | 判定点 | 成员数 | `third_place` 算淘汰赛 |
+|---|---|---|---|
+| #1 | `world_cup_prediction_pipeline._KNOCKOUT_STAGES:196` | 4 | ❌ |
+| #2 | `kernel.engines.elo_odds_engine._KNOCKOUT_STAGES:47`（`football_multi_factor_engine:44` **直接 import 复用**它，即 §26.1 的「#6 随 #2」）| 6 | ❌ |
+| #3 | `kernel.engines.situational_adjust._KNOCKOUT_STAGES:20` | 7 | ✅ |
+| #4 | `kernel.engines.gbm_engine._KNOCKOUT_STAGES:33` | 8 | ❌ |
+| #5 | `world_cup_verified_result_correction_service._is_knockout_stage:251` | 9 | ✅ |
+| （另）| `conclusion_challenge_world_cup_adapter._HIGH_RISK_STAGES`（异名，§27.2 的「第二消费者」）| 6 | ❌ |
+
+§26.3 的「**5 个判定点里 2 个算淘汰赛**」是同一事实的另一种分桶（把 #2 与复用它的「#6」算一处）——**逐数对得上**。
+
+**`_STAGE_MAP` 的两个键是「死目标」。** `world_cup_prediction_pipeline._STAGE_MAP:184-185` 有
+`"third_place"` / `"third place"` → `third_place` 两个键，但上方生产者产不出这两个输入 ⇒
+归一化到 `third_place` 的路径**当前不可达**（§27.3 的降级结论不变）。
+
+**且它已被一条断言钉住。** `test_knockout_stage_whitelist_consistency.py::test_stage_map_values_partition_into_knockout_and_group_stages`
+断言 `_STAGE_MAP.values() − _KNOCKOUT_STAGES == {"group_stage", "third_place"}` ——
+把 `third_place` **显式钉在非淘汰赛一侧**；翻案必须**改断言**（W9 变异即由此变红），**不会静默漂移**。
+
+→ **结论（不代决）**：三四名决赛必有加时/点球（**不许平**），所以 #3/#5 的立场更贴近规则；但**当前无数据能到达这些分支**，
+差别是**潜伏**的。`third_place` 该不该算淘汰赛是**建模决定**，不动。
+
+## 50.2 `/trades`「已作废」tab：前端只有两个 tab、后端没有读 voided 的函数 —— 展示缺口（产品决策）
+
+- **前端**：`frontend/src/app/trades/page.tsx` 的 tab 清单（:305-309）**只有两项** ——
+  `{open, 当前持仓}` / `{closed, 已平仓}`；`tradeView` 的类型是 `"open" | "closed"`（:65）。
+- **后端**：`void_trade` **存在**（`simulated_trade_store.py:268`，写 `status='voided'` + `exit_reason='voided'`），
+  但全仓**没有** `count_voided_trades` / `list_voided_trades`（`grep` 命中 0）⇒ **读 voided 的路径不存在**。
+- 后果：voided 行**既不在「当前持仓」也不在「已平仓」** → `void_trade` docstring 的承诺
+  （"无需回连预测即可读懂为何离开开放列表"）**只在 DB 层成立**。
+  对照：**prediction 层**的 void **可见**（`recent-predictions.tsx` 渲染 `p.status`）。
+- 定性沿用 §17.2.1：「**产品决策，等待拍板**」。可选处置（未决）：增设第三 tab（需 `count/list` + 一个端点），或至少显示作废计数。
+
+→ **不代决**：要不要做、做多少，是**产品取舍**。
+
+## 50.3 `api.ts:447` 的根因：`/trades/*` 用裸 `FlexibleResponse`，OpenAPI 无字段契约 → `SimTrade` 不可能被生成
+
+`frontend/src/lib/api.ts:447` 的 `direction: "YES" | "NO"` 是**手写 union**，根因不在前端偷懒，在**后端契约**：
+
+- `/trades/stats`、`/trades/open`、`/trades/closed`、`/trades/{event_id}/close`
+  **四个端点全部** `response_model=FlexibleResponse`（`events.py:1585/1592/1609/1626`）。
+- `FlexibleResponse`（`models/event.py:577`）是**无字段基类**，且 `_frontend_export.py:13-14` 明确把它
+  **排除**在导出白名单外（"FlexibleResponse (base class, no fields)"）⇒
+  **OpenAPI 里 `/trades/*` 无字段 schema** ⇒ `generate_types` **无从生成** `SimTrade`。
+- 实测 `SimTrade` / `SimulatedTrade` 在 `generated-types.ts` **不存在**（`grep` 命中 0）。
+  生成文件里带同值的 union（`raw_direction?: "YES" | "NO" | "WAIT" | "AVOID"`，:515/516/569/570）是
+  **4 值超集**，**不是**交易的 2 值契约。
+- **契约仍是三层同源**：`models/event.py` 的 `Literal`（API）+ `simulated_trade_store.py:37` 的
+  `CHECK (direction IN ('YES','NO'))`（DB）+ `api.ts:447`（TS）。三层今天**一致**，只是**第三层手写、无 CI 同步**。
+
+→ **根因是 `FlexibleResponse` 反模式**（项目记忆已载：裸用它作 `response_model` 会让 CI 的 `type-sync-check`
+覆盖不到该端点）。要把 `api.ts:447` 接上生成类型，**必须先给 `/trades/*` 加具名响应模型**
+（`SimTradeResponse(FlexibleResponse)` 之类）并进白名单 —— **属契约改动，不代决**。
+
+## 50.4 上线前 ②–⑥ 的可执行清单（只列「哪一步 / 在哪 / 怎么验证」，不填值）
+
+> ① （推送 2 个本地提交）**已完成** —— `f0b662c` / `a9af1cf` 已 push、CI 全绿（见 §49）。
+> 下列 ②–⑥ 的**事实基线**：`backend/app/core/preflight.py`（8 项门禁）、`backend/.env.production.example`、
+> `deploy/{nginx.conf,Caddyfile}.example`、`docs/ops/RUNBOOK.md` 的「Production preflight」节。
+
+| # | 要做哪一步 | 在哪做 | 怎么验证 |
+|---|---|---|---|
+| ②a | 填 4 个生产必填项 | `backend/.env.production`：`API_WRITE_KEY=`（:80 空）、`CORS_ALLOWED_ORIGINS=`（:87 空，**禁 `*`**）、`LLM_DAILY_COST_CAP_USD=25`（:95 **已是真数**，别设 0）、`BACKUP_ENCRYPTION_KEY=`（:167 空；**仅当 `BACKUP_SCHEDULE_ENABLED=true` 时门禁强制**）| `PMRF_ENV=production python -c "from app.core.preflight import production_config_failures as f; print(f())"` → 期望 `[]`；否则**启动即 raise 并一次列全**缺口 |
+| ②b | 填真实 LLM 凭据 | 同上。legacy（`OPENAI_API_KEY` / `OPENAI_MODEL` / `OPENAI_BASE_URL`）或编号式（`OPENAI_API_KEY_N` + `OPENAI_MODEL_N_M`(+`OPENAI_BASE_URL_N`)；格式见 :129-134 注释）| `LLM_STARTUP_CHECK_ENABLED=true`（:147）时坏凭据**启动期拒启**，错误串 `Primary LLM startup check failed: all_routes_failed: missing_api_key`（:99-103）。⚠️ **编号式从 `os.environ` 直读、不经 `settings`** ⇒ preflight 看不见它，名字要逐字符照抄 |
+| ③ | 前置反代 + 终止 TLS | `deploy/nginx.conf.example` 或 `deploy/Caddyfile.example`（compose **只绑 `127.0.0.1:8000`**，容器不做 TLS）| 反代后 `curl -sI https://<域名>/api/health` 得 200/503；**直连公网 `IP:8000` 应连不上** |
+| ④ | 定代理跳数 | 模板 **:68 已是** `TRUSTED_PROXY_HEADER=true`（**非注释**）⇒ 真正要定的是 `RATE_LIMIT_TRUSTED_PROXY_HOPS`（默认 **1**，`config.py:288`；**模板未命名**）| 两个 shipped 反代例（nginx `$proxy_add_x_forwarded_for` / Caddy 替换头）**默认 1 即对**；**仅当前面还叠了 CDN（如 Cloudflare）才升 2**（`config.py:283-287`）。看限流是否按真实客户端分桶 |
+| ⑤ | 接通至少一个告警渠道 | `backend/.env.production`，二选一：`SENTRY_DSN=<dsn>`（:214 注释，成本最低、覆盖请求路径）；或 `SCHEDULER_FAILURE_ALERT_ENABLED=true`（:217 **已赋 false，要改**）+ `SCHEDULER_FAILURE_ALERT_WEBHOOK_URL=<url>`（:218 注释）| **开关与地址必须成对**；只开开关不填地址 = 没接。启动日志不应再出现 `No alert push channel is configured`（:200-201）|
+| ⑥ | 决定 6 个默认 OFF 的 overlay 开关 | `backend/.env.production` 的 **:47/51/56/57/61/64** 全是**注释行** `# KEY=true`；按需**取消注释**（**绝不能写成 `=false`** —— overlay `override=True` 会压掉 base 里的 true）| 未开的后果：对应界面**永久为空、且界面不说明原因**（:36-37/:45-46/:50/:55）。⚠️ `CONCLUSION_CHALLENGE_ENABLED` 与 `EVENT_CHALLENGE_ENABLED` **要两个都开**，否则 review queue 的 challenge trigger 永不触发（:53-55）。验证：读 `/review-queue` 的 `enabled` 字段 |
+
+**对 `go-live-readiness-2026-10-01.html` 的一处事实更正（追加式，不改 HTML）**：该文第 ④ 项写「设置 `TRUSTED_PROXY_HEADER=true`」——
+但生产模板 :68 **已经是** `TRUSTED_PROXY_HEADER=true`。真正需要操作员决定的是 **`RATE_LIMIT_TRUSTED_PROXY_HOPS`**（默认 1，多数部署无需动）。
+
+## 50.5 本节未做 / 交接
+
+| 事项 | 状态 |
+|---|---|
+| `third_place` 该不该算淘汰赛 | ⏳ **建模决定，未动**（§50.1；当前不可达）|
+| `/trades` 增「已作废」tab | ⏳ **产品决策，未动**（§50.2）|
+| `api.ts:447` 接生成类型 | ⏳ **未动**；根因已查清（§50.3）—— 需先给 `/trades/*` 加具名响应模型 |
+| 控制台支持选 `gbm`（前端 `EngineName` / `ENGINES`）| ⏳ **产品决定，未动**（§48.9 遗留）|
+| 上线前 ②–⑥ | ⏳ **清单已给（§50.4），执行需操作员**（不代填值）|
+| push / 开 PR | ⏳ 本节**只改本文档**（生产代码一行未动）；按惯例直推 `main`，**无 PR** |
+
+**本节改 1 个文件（本文档，追加式）。未提交、未 push。**

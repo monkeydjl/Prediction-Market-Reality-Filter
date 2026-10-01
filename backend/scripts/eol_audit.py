@@ -41,8 +41,19 @@ Usage
     cd backend && python scripts/eol_audit.py [--all]
 
 Without ``--all`` only files git reports as changed are audited. With ``--all``
-every tracked file is checked, which is slower but catches damage in a file that
-happens to have no other differences.
+every tracked file is checked, which catches damage in a file that happens to
+have no other differences.
+
+HEAD blobs come back in bulk
+----------------------------
+The HEAD side used to be read with one ``git show HEAD:<path>`` per file.  On
+``--all`` that is one process per tracked file, and the runtime was process
+startup, not I/O: several minutes on Windows, which is long enough that the
+audit stops being run.  ``git cat-file --batch`` answers a whole chunk of names
+in a single process, so the same walk finishes in seconds.  Only the paths the
+batch protocol cannot carry -- ones with a newline in them, which would end the
+request line early and shift every reply after it -- still go through
+``git show``.
 """
 
 from __future__ import annotations
@@ -64,6 +75,10 @@ SKIPPED_BINARY = "skip (git stores it as binary)"
 DAMAGE_LABELS = frozenset({DAMAGE_HEAD_CRLF_TO_TREE_LF, DAMAGE_MIXED})
 
 BINARY_TOKEN = "i/-text"
+
+# Names per ``git cat-file --batch`` request.  Large enough that process spawns
+# stop dominating, small enough that one reply is never the whole tree.
+HEAD_BATCH_CHUNK = 512
 
 
 def _git_bytes(*args: str) -> bytes:
@@ -152,12 +167,71 @@ def changed_paths() -> list[str]:
 
 
 def _head_bytes(path: str) -> bytes | None:
+    """One ``git show`` -- the fallback for a name the batch protocol cannot carry."""
     result = subprocess.run(
         ["git", "show", f"HEAD:{path}"],
         cwd=REPO_ROOT,
         capture_output=True,
     )
     return result.stdout if result.returncode == 0 else None
+
+
+def _head_blobs(paths: list[str]) -> dict[str, bytes | None]:
+    """HEAD blob bytes for every path, one git process per chunk.
+
+    The reply is a stream, not a set of lines: for a name that resolves, git
+    writes ``<oid> <type> <size>`` then exactly ``size`` bytes then a newline, and
+    the blob itself contains newlines, so the cursor has to advance by the
+    declared size.  A name that does not resolve comes back as
+    ``<name> missing``, which is the "no blob at HEAD" case -- a file that is
+    new, or one that left the index while a stale record still names it.
+    Anything that is not a blob (a tree, a commit) is treated the same way, and
+    is still consumed so the reads after it stay aligned.
+
+    Names go out as ``os.fsencode`` bytes: git takes the request literally and
+    does not apply ``core.quotepath`` to it, so the two non-ASCII tracked paths
+    survive the round trip that ``-z`` buys for the other calls.
+    """
+    blobs: dict[str, bytes | None] = {}
+    for start in range(0, len(paths), HEAD_BATCH_CHUNK):
+        chunk = paths[start : start + HEAD_BATCH_CHUNK]
+        batchable: list[str] = []
+        for path in chunk:
+            if "\n" in path or "\r" in path:
+                blobs[path] = _head_bytes(path)
+            else:
+                batchable.append(path)
+        if not batchable:
+            continue
+
+        request = b"".join(b"HEAD:" + os.fsencode(path) + b"\n" for path in batchable)
+        output = subprocess.run(
+            ("git", "cat-file", "--batch"),
+            cwd=REPO_ROOT,
+            input=request,
+            capture_output=True,
+            check=True,
+        ).stdout
+
+        cursor = 0
+        for path in batchable:
+            newline = output.find(b"\n", cursor)
+            if newline < 0:
+                raise RuntimeError(
+                    f"git cat-file --batch stopped after {len(output)} bytes, "
+                    f"before the reply for {path!r}"
+                )
+            header = output[cursor:newline]
+            cursor = newline + 1
+            fields = header.rsplit(b" ", 2)
+            if len(fields) == 3 and fields[2].isdigit():
+                size = int(fields[2])
+                content = output[cursor : cursor + size]
+                cursor += size + 1
+                blobs[path] = content if fields[1] == b"blob" else None
+            else:
+                blobs[path] = None
+    return blobs
 
 
 def _candidates(include_all: bool) -> list[str]:
@@ -175,7 +249,12 @@ def main(argv: list[str] | None = None) -> int:
     damaged: list[str] = []
     skipped = 0
 
-    for rel in _candidates(args.all):
+    candidates = _candidates(args.all)
+    # Every file needs its HEAD side anyway, so read them all up front: one bulk
+    # read is what makes ``--all`` finish in seconds instead of minutes.
+    heads = _head_blobs(candidates)
+
+    for rel in candidates:
         path = REPO_ROOT / rel
         if not path.is_file():
             continue
@@ -185,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
 
         tree = path.read_bytes()
-        head = _head_bytes(rel)
+        head = heads[rel]
         label = classify(head, tree)
         if label in DAMAGE_LABELS:
             damaged.append(rel)

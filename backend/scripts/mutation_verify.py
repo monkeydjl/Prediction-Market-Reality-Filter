@@ -319,6 +319,7 @@ _T_STATISTICS = "tests/test_world_cup_statistics_source.py"
 _T_CLUB_ELO = "tests/test_club_elo_service.py"
 _T_MLB_ADAPTER = "tests/test_mlb_adapter.py"
 _T_QUALITY = "tests/test_world_cup_quality_service.py"
+_T_ANALYTICS_ROUTES = "tests/test_world_cup_analytics_routes.py"
 _T_STAGE = "tests/test_knockout_stage_whitelist_consistency.py"
 _T_SPORTS_FACT = "tests/test_sports_fact_service.py"
 _T_EVENT_SOURCE_UTILS = "tests/test_event_source_utils.py"
@@ -387,7 +388,8 @@ _EVERY_FILE_RED_LOOSE = b"return bool(self." + b"red_files)"
 # intact", so a false red is not harmless: it teaches the next reader to
 # distrust a green run. The favicon false positive of 2026-10-01 was exactly
 # that. E1 and E2 remove the two halves of the fix; E3 and E4 keep the fix from
-# degenerating into "stop reporting damage at all".
+# degenerating into "stop reporting damage at all"; E5 guards the bulk HEAD read
+# that replaced one ``git show`` per file, where a mis-advanced cursor is silent.
 _EOL_AUDIT = "backend/scripts/eol_audit.py"
 _T_EOL_AUDIT = "tests/test_eol_audit.py"
 
@@ -808,7 +810,7 @@ SETS: tuple[MutationSet, ...] = (
             "W32 是 §47 新增的**容器守卫**：把该常量从 `tuple` 改成 `set`。这一条只有 "
             "`direction_vocabulary` 自己的测试看得见 —— `_REPORTED_DIRECTIONS` 是八个常量里"
             "唯一被**迭代**消费的（`for d in _REPORTED_DIRECTIONS:`），而本仓不固定 "
-            "`PYTHONHASHSEED`，改成 set 会让 `by_direction` 的 JSON 键序在运行间漂移。"
+            "`PYTHONHASHSEED`，改成 set 会让 `by_direction` 的 JSON 键序在运行间漂移。⑨ W8 如今**多挂了一个 `guard_file`**（`tests/test_world_cup_analytics_routes.py`）：`/analytics/engine-stats` 原本自带第三份引擎键字面量 `engine_keys`，删掉那份副本、改指 `ENGINE_NAMES` 之后，这条变异才会同时打红两处 —— 第二个 guard 文件本身就是「那条路由确实从名单派生」的可执行证明。它的 oracle 是 `ENGINES` 注册表，不拿 `ENGINE_NAMES` 比 `ENGINE_NAMES`：那样是同义反复，删成员照样绿。"
         ),
         mutations=(
             Mutation(
@@ -879,9 +881,16 @@ SETS: tuple[MutationSet, ...] = (
                 path=_QUALITY,
                 old=b'ENGINE_NAMES = ("elo_odds", "hybrid", "gbm", "integrated")',
                 new=b'ENGINE_NAMES = ("elo_odds", "hybrid", "integrated")',
-                guard_file=_T_QUALITY,
-                guards=("test_engine_names_match_the_runnable_registry",),
-                note="从质量报告的键集里删掉一个引擎（by_engine 少一个键，不报错）",
+                guard_file=(_T_QUALITY, _T_ANALYTICS_ROUTES),
+                guards=(
+                    "test_engine_names_match_the_runnable_registry",
+                    "test_engine_stats_serves_one_bucket_per_runnable_engine",
+                ),
+                note=(
+                    "从引擎名单里删掉一个成员：质量报告的 by_engine 与 /analytics/engine-stats "
+                    "各少一个键，都不报错。第二个 guard 文件钉的是后一个消费者 —— "
+                    "那条路由原本自带第三份字面量，删掉副本之后这条变异才能同时打红两处"
+                ),
             ),
             Mutation(
                 label="W9  _STAGE_MAP 别名目标拼错 (quarterfinals)",
@@ -1229,11 +1238,12 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="eol-audit",
-        title="行尾审计工具（E1/E2/E3/E4）",
+        title="行尾审计工具（E1/E2/E3/E4/E5）",
         rationale=(
             "工具本身就是「工作树行尾未受损」的收据，所以它的假红不是无害的 ——"
             "会让下一个读者不再信任那个绿色。E1/E2 各去掉修复的一半，"
-            "E3/E4 则保证这个修复不等于「干脆不报损伤」。"
+            "E3/E4 则保证这个修复不等于「干脆不报损伤」；"
+            "E5 守卫换掉逐文件 git show 之后新写的批量读 —— 那里游标错位是静默的。"
         ),
         mutations=(
             Mutation(
@@ -1289,6 +1299,19 @@ SETS: tuple[MutationSet, ...] = (
                 note=(
                     "E2 关掉消费端，E4 掏空供应端 —— 两个方向都要有守卫，"
                     "否则「集合恒为空」能通过其余全部断言"
+                ),
+            ),
+            Mutation(
+                label="E5  批量读 HEAD 时游标少前进 1 字节，其后的文件全部错位",
+                path=_EOL_AUDIT,
+                old=b"                cursor += size + 1",
+                new=b"                cursor += size",
+                guard_file=_T_EOL_AUDIT,
+                guards=("test_the_bulk_read_agrees_with_git_show",),
+                note=(
+                    "git 在 blob 之后补一个换行；少前进 1 字节，下一个 header 就落在空行上，"
+                    "解析不出来便把这个文件判成 NEW —— 不抛错、不报警，"
+                    "只有与 git show 逐字节比对才能抓住"
                 ),
             ),
         ),

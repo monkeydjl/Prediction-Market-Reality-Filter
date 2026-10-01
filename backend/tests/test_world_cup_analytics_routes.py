@@ -1258,6 +1258,26 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
         self.assertEqual(body["by_engine"]["gbm"]["count"], 1)
         self.assertEqual(body["by_engine"]["gbm"]["avg_confidence"], 0.72)
 
+    def test_engine_stats_serves_one_bucket_per_runnable_engine(self):
+        """This endpoint's bucket set must come from the engine registry.
+
+        It used to carry its own ``engine_keys`` tuple -- a third copy of the
+        engine vocabulary, in a different order, that no test named, so a fourth
+        engine could be registered and reported by the quality loop while this
+        endpoint kept serving the old set.  It now derives from ``ENGINE_NAMES``,
+        and the oracle here is the dispatch registry: comparing the response with
+        ``ENGINE_NAMES`` would be a set compared with itself, which stays green
+        even when a member goes missing.
+        """
+        from app.services.world_cup_engines import ENGINES
+
+        resp = self.client.get("/analytics/engine-stats")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            set(resp.json()["by_engine"]), set(ENGINES) | {"integrated"}
+        )
+
     def test_prediction_coverage_reports_scheduled_matches_missing_predictions(self):
         self.session.add_all([
             MatchFixture(

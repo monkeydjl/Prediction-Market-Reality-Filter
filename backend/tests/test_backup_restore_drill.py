@@ -38,6 +38,7 @@ from unittest.mock import patch
 
 from app.core import runtime_stores
 from app.core.config import settings
+from scripts import restore_stores
 from scripts.backup_stores import create_backup
 from scripts.restore_stores import restore_from_backup
 
@@ -86,6 +87,48 @@ def _live_install(root: Path, *, populate: bool = True, flat: bool = False):
 
 
 class BackupRestoreDrillTests(unittest.TestCase):
+    def setUp(self):
+        """Take the service-liveness heuristic out of this file's inputs.
+
+        ``restore_from_backup(apply=True)`` appends a warning when it believes
+        the service is live, and on Windows that belief comes from a health probe
+        against ``PMRF_HEALTHCHECK_URL`` (default ``localhost:8000``) which counts
+        *any* HTTP response as "running".  Whatever happens to hold that port on
+        a developer machine -- routinely something unrelated -- then decides
+        whether the drill's ``warnings == []`` assertion passes, and the reading
+        stops being about the writer/reader pair this file exists to cover.  The
+        probe itself is tested in ``test_p0_fixes_round2``; here it is an input,
+        and ``test_the_service_check_is_an_input_this_file_controls`` pins that
+        the patch actually reaches the call site.
+        """
+        patcher = patch.object(restore_stores, "_check_service_running", return_value=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_service_check_is_an_input_this_file_controls(self):
+        """Both directions, so a patch that stopped reaching the call site shows.
+
+        ``restore_from_backup`` has to look ``_check_service_running`` up as a
+        module attribute for ``setUp``'s patch to mean anything; bound at import
+        time, the patch would be a no-op and the drill would quietly go back to
+        depending on the machine's port 8000.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            with _live_install(base / "live") as files:
+                archive = create_backup(str(base / "backups"))
+                for path in files.values():
+                    path.unlink()
+
+                with patch.object(restore_stores, "_check_service_running", return_value=True):
+                    warned = restore_from_backup(str(archive), apply=True)
+                self.assertTrue(warned["applied"])
+                self.assertEqual(len(warned["warnings"]), 1)
+                self.assertIn("running", warned["warnings"][0])
+
+                quiet = restore_from_backup(str(archive), apply=True)
+        self.assertEqual(list(quiet["warnings"]), [])
+
     def test_a_real_archive_restores_every_store_to_its_configured_path(self):
         """The drill. Real writer, real reader, bytes compared per file."""
         with tempfile.TemporaryDirectory() as tmp:

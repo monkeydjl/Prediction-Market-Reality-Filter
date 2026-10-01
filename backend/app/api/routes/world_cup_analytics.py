@@ -22,6 +22,7 @@ from app.models.world_cup_prediction import (
 )
 from app.services.odds_cache_service import OddsCache
 from app.services.world_cup_quality_service import (
+    ENGINE_NAMES,
     apply_consistency_history_repair,
     build_consistency_repair_plan,
     build_quality_loop_report,
@@ -296,8 +297,11 @@ async def get_engine_stats(session: Session = Depends(get_prediction_session_dep
     predictions = session.query(MatchPrediction).all()
 
     total = len(predictions)
-    engine_keys = ("elo_odds", "hybrid", "integrated", "gbm")
-    grouped: dict[str, list[MatchPrediction]] = {engine: [] for engine in engine_keys}
+    # ENGINE_NAMES, not a local tuple: this endpoint used to carry its own copy of
+    # the engine vocabulary, in a different order, that no test named -- so an
+    # engine could reach the registry and the quality report while this endpoint
+    # kept reporting the old set, and the bucket simply would not appear.
+    grouped: dict[str, list[MatchPrediction]] = {engine: [] for engine in ENGINE_NAMES}
     for prediction in predictions:
         grouped.setdefault(bucket_engine(prediction.prediction_method), []).append(prediction)
 
@@ -318,7 +322,7 @@ async def get_engine_stats(session: Session = Depends(get_prediction_session_dep
         "total_predictions": total,
         "by_engine": {
             engine: engine_summary(engine)
-            for engine in engine_keys
+            for engine in ENGINE_NAMES
         }
     }
 

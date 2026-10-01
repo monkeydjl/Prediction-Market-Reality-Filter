@@ -168,5 +168,55 @@ class TestFullWalkOnASyntheticRepo(unittest.TestCase):
         self.assertIn("  - rewritten.txt", out)
 
 
+class TestHeadBlobsMatchTheSingleRead(unittest.TestCase):
+    """The bulk HEAD read must agree with the ``git show`` it replaced.
+
+    ``--all`` used to spend its whole runtime spawning one ``git show`` per
+    tracked file; ``cat-file --batch`` answers a whole chunk in one process.  It
+    is also the only place in the tool where a parse slip is silent: the reply is
+    a byte stream whose entries carry their own length, so a cursor one byte out
+    hands the next file its neighbour's bytes, and once the header stops parsing
+    that file is reported as new.  Nothing else in the walk would notice, so the
+    parser is pinned against the call it replaced.
+    """
+
+    def test_the_bulk_read_agrees_with_git_show(self):
+        paths = [path for _, path in eol_audit.tracked_eol()]
+        sample = [paths[0], paths[-1], _ICO, _NON_ASCII]
+
+        blobs = eol_audit._head_blobs(sample)
+
+        self.assertEqual(set(blobs), set(sample))
+        for path in sample:
+            self.assertEqual(blobs[path], eol_audit._head_bytes(path))
+
+    def test_every_request_is_answered_even_across_a_chunk_boundary(self):
+        # More names than one request carries, so the join between two chunks is
+        # exercised as well.  A name that does not resolve comes back as
+        # "<name> missing" instead of a blob; either way it has to be consumed,
+        # or the cursor drifts and every file after it is profiled against the
+        # wrong bytes.
+        missing = "tmp/this-path-is-not-in-head-4f1c.txt"
+        requested = [path for _, path in eol_audit.tracked_eol()] + [missing]
+        self.assertGreater(len(requested), eol_audit.HEAD_BATCH_CHUNK)
+
+        blobs = eol_audit._head_blobs(requested)
+
+        self.assertEqual(len(blobs), len(requested), "a request went unanswered")
+        self.assertIsNone(blobs[missing])
+
+    def test_a_name_with_a_newline_goes_through_the_fallback(self):
+        # A newline would end the request line early and shift every reply after
+        # it, so such a name is read on its own and the batch beside it still
+        # comes back aligned.
+        with_newline = "tmp/no\nsuch-file.txt"
+
+        blobs = eol_audit._head_blobs([with_newline, _ICO])
+
+        self.assertEqual(set(blobs), {with_newline, _ICO})
+        self.assertIsNone(blobs[with_newline])
+        self.assertEqual(blobs[_ICO], eol_audit._head_bytes(_ICO))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -382,6 +382,14 @@ _GUARD_FILES_LOOP_FIRST = b"for guard_file in mutation." + b"guard_files()[:1]"
 # the same self-reference reason as above -- H2's target is this file too.
 _EVERY_FILE_RED_STRICT = b"return bool(self.per_file) and not self." + b"green_files"
 _EVERY_FILE_RED_LOOSE = b"return bool(self." + b"red_files)"
+# eol-audit -- the line-ending audit tool is guarded the same way it guards
+# everything else. It is the receipt for "the working tree's line endings are
+# intact", so a false red is not harmless: it teaches the next reader to
+# distrust a green run. The favicon false positive of 2026-10-01 was exactly
+# that. E1 and E2 remove the two halves of the fix; E3 and E4 keep the fix from
+# degenerating into "stop reporting damage at all".
+_EOL_AUDIT = "backend/scripts/eol_audit.py"
+_T_EOL_AUDIT = "tests/test_eol_audit.py"
 
 
 SETS: tuple[MutationSet, ...] = (
@@ -1215,6 +1223,72 @@ SETS: tuple[MutationSet, ...] = (
                 note=(
                     "§46：阶段②的判据退化 —— W31 的 6 个文件里只要 1 个红就当作全部红，"
                     "某个文件的空头守卫会被兄弟文件遮住"
+                ),
+            ),
+        ),
+    ),
+    MutationSet(
+        key="eol-audit",
+        title="行尾审计工具（E1/E2/E3/E4）",
+        rationale=(
+            "工具本身就是「工作树行尾未受损」的收据，所以它的假红不是无害的 ——"
+            "会让下一个读者不再信任那个绿色。E1/E2 各去掉修复的一半，"
+            "E3/E4 则保证这个修复不等于「干脆不报损伤」。"
+        ),
+        mutations=(
+            Mutation(
+                label="E1  去掉 head_lf == 0，把「HEAD 本就混合」说成「曾经纯 CRLF」",
+                path=_EOL_AUDIT,
+                old=b"    if head_crlf > 0 and head_lf == 0 and tree_lf > 0:",
+                new=b"    if head_crlf > 0 and tree_lf > 0:",
+                guard_file=_T_EOL_AUDIT,
+                guards=(
+                    "test_a_head_that_was_already_mixed_is_not_called_pure_crlf",
+                ),
+                note=(
+                    "判词与它自己打印的画像矛盾：HEAD(crlf=1,lf=29) 不是 pure CRLF。"
+                    "2026-10-01 的上线审查里 favicon.ico 收到的正是这句话"
+                ),
+            ),
+            Mutation(
+                label="E2  关掉二进制跳过，二进制文件被当文本画像",
+                path=_EOL_AUDIT,
+                old=b"        if rel in binary:",
+                new=b"        if False and rel in binary:",
+                guard_file=_T_EOL_AUDIT,
+                guards=("test_a_binary_file_is_skipped_and_the_walk_stays_green",),
+                note=(
+                    "ICO/PNG/WOFF/PDF 与 backend/data/gbm_*.txt 里的 CR/LF 与行尾无关；"
+                    "当成文本读就会凭空造出 mixed 损伤，--all 于是永远红"
+                ),
+            ),
+            Mutation(
+                label="E3  mixed 判据的 and 改成 or，正常 CRLF 检出被判成损伤",
+                path=_EOL_AUDIT,
+                old=b"    if tree_crlf > 0 and tree_lf > 0:",
+                new=b"    if tree_crlf > 0 or tree_lf > 0:",
+                guard_file=_T_EOL_AUDIT,
+                guards=("test_a_crlf_checkout_is_not_damage",),
+                note=(
+                    "「HEAD 存 LF、工作树 CRLF」是本仓的正常状态；改成 or 会把整棵树报成损伤"
+                ),
+            ),
+            Mutation(
+                label="E4  binary_paths() 返回空集，判据退化成「没有二进制」",
+                path=_EOL_AUDIT,
+                old=(
+                    b"    return frozenset(path for token, path in tracked_eol() "
+                    b"if token == BINARY_TOKEN)"
+                ),
+                new=b"    return frozenset()",
+                guard_file=_T_EOL_AUDIT,
+                guards=(
+                    "test_the_favicon_is_a_binary_path",
+                    "test_the_binary_set_is_the_index_text_token",
+                ),
+                note=(
+                    "E2 关掉消费端，E4 掏空供应端 —— 两个方向都要有守卫，"
+                    "否则「集合恒为空」能通过其余全部断言"
                 ),
             ),
         ),

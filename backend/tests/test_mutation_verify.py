@@ -39,14 +39,15 @@ def _every_mutation():
 
 
 class InventoryTests(unittest.TestCase):
-    def test_the_seven_sets_are_present(self):
+    def test_the_eight_sets_are_present(self):
         """Pins the inventory, so a whole set cannot be dropped silently.
 
         Deliberately exact and ordered: adding a set means editing this test,
         which is the point -- an inventory nobody has to touch is an inventory
         that can rot. Renamed from ``test_the_six_sets_are_present`` when
         ``multi-guard-file`` was added (audit section 43), the same way it was
-        renamed from ``test_the_five_sets_are_present`` before.
+        renamed from ``test_the_five_sets_are_present`` before, and again
+        when ``eol-audit`` joined.
         """
         self.assertEqual(
             [s.key for s in mutation_verify.SETS],
@@ -58,6 +59,7 @@ class InventoryTests(unittest.TestCase):
                 "whitelist-fixtures",
                 "restore-loopback-probe",
                 "multi-guard-file",
+                "eol-audit",
             ],
         )
 

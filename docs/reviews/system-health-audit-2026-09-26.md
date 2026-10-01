@@ -5286,3 +5286,176 @@ cd backend
 > - **本条只改文档，不重跑任何闸门**：依据同 §41.9 追注已取证的事实 —— `backend/tests/` 里只有两处
 >   **注释/文档字符串**提到本文件路径（`test_event_source_utils.py:9`、`test_knockout_stage_whitelist_consistency.py:20`），
 >   **没有任何用例解析它**，所以纯文档追加不改变任何断言。
+
+# 四十八、执行 §47.10 表里的三个零风险项：E-② / B-② / C-②（2026-10-01）
+
+沿用执行前对齐的口径编号：**E-②** = 删重复常量；**B-②** = 行尾规范化；**C-②** = 补 `gbm` 桶。
+
+§47.10 表里标「⏳ 未动」的项中，有三项是**零契约风险**的机械项，本节做掉：
+E-②（删重复常量）、B-②（规范化行尾）、C-②（补一个**已存在**的引擎桶）。
+另两项（`third_place`、`/trades`「已作废」tab）与 `api.ts:447` 的契约补齐**仍留**。
+
+**本节改 9 个文件**（5 个源 + 4 个测试）。**未提交、未 push。**
+
+## 48.1 结论先行
+
+| 项 | 范围 | 判据（全部实测） |
+|---|---|---|
+| **E-②** | 1 源 + 1 测试 | 常量 8 项 → **7 项**；新增「无重复成员」守卫 |
+| **B-②** | 50 个 tracked 文件（**零内容变更**）| 复算 `MIXED = 0`；且**不拿 `git` 当判据** |
+| **C-②** | 后端 2 源 + 前端 2 源 + 3 测试 | 4 个桶 == `ENGINE_NAMES`；SSE 逐桶断言 |
+
+## 48.2 E-②：那个重复元素（§22.3.1 → §26.5 → 本节）
+
+§22.3.1 首次发现 `_KALSHI_SPORTS_SERIES_PREFIXES` 有重复元素；§26.5 把证据追到提交历史
+（「第 8 槽本意」在仓里**无迹可寻**）。本节直接删第 8 项，常量变 7 项：
+
+```python
+_KALSHI_SPORTS_SERIES_PREFIXES = (
+    "KXNBAGAME", "KXMLBGAME", "KXNHLGAME",
+    "KXSOCCEREPL", "KXSOCCERUCL", "KXSOCCERWCS",
+    "KXNFL",
+)
+```
+
+新守卫 `test_series_prefixes_contain_no_duplicate_member`（`tests/test_kalshi_sports_source.py:17`）三条断言：
+`len(p) == len(set(p))`；`len(p) == 7`；`all(x.startswith("KX") and x == x.upper())`。
+
+**为什么是「删」而不是「改成一个不同的前缀」**：§26.5 已证第 8 槽没有可恢复的本意，
+换一个前缀等于**发明**一条契约；删掉才是唯一有据的选择。
+
+## 48.3 B-②：50 个 MIXED 文件规范化为 PURE-CRLF
+
+**口径**：`git ls-files`（tracked）、跳过含 NUL 的二进制、`\r\n > 0 且裸 LF > 0` 记 MIXED。
+判据**只用字节计数**（`b.count(b"\r\n")` vs `b.count(b"\n") - b.count(b"\r\n")`）——
+**不用 `grep`**：Git Bash 会把 `\r` 吃掉，`grep -c $'\r'` 给假结果。
+
+| 项 | 前（执行时 dry-run）| 后（本节复算）|
+|---|---|---|
+| tracked | 1491 | 1491 |
+| binary | 1 | 1 |
+| PURE-CRLF（含 7 个无换行文件）| 1000 | **1050** |
+| PURE-LF | 440 | 440 |
+| **MIXED** | **50** | **0** |
+| 字节增量 | — | **+3393** == 裸 LF 总数 **3393** |
+
+- 「后」的原始复算：`PURE-CRLF 1043 + 无换行 7 = 1050`，与 `1000 + 50` **自洽**。
+- 重跑入口脚本的 **dry-run**：`MIXED tracked files frozen: 0` / `nothing to do` ⇒ 判据**可复现**。
+- 每个文件都满足 **LF 归一化后逐字节相同**（脚本内 `sha(lf_norm(before)) == sha(lf_norm(after))`）⇒ 纯行尾变更，无内容漂移。
+- **零提交内容**：`git add` 后**暂存 blob 哈希 == HEAD blob 哈希**、`git diff --cached --numstat` 为空。
+
+### 48.3.1 必须记下的现象：`git status` 的 stat-dirty
+
+规范化后 `git status` 一度显示 **50 个 ` M`**，而 `git diff` / `git diff --cached` **全为空**。
+这是 **stat-dirty**（mtime/size 变了、内容没变），**不是**判据失败。决定性实验：
+`git add` 刷新索引后，暂存 blob 哈希 `e7f945fe…` 与 HEAD **相同**，刷新后工作树恢复**全空**。
+
+⚠️ `git update-index --refresh` **清不掉它**（rc=1、`needs update` 仍在）—— stat-dirty 必须 `git add` 才更新 stat 缓存。
+
+### 48.3.2 与 §29.9 的「51 个」差 1（**未取证**）
+
+§29.9 记的是 **51**，本节入口读数是 **50**。这 1 个的差额**没有取证**
+（可能口径不同，如是否含 untracked；也可能期间有文件增删）。**本节结论不依赖它**：
+50 个在本次被规范化、复算 `MIXED = 0`，都是本次实测。
+
+## 48.4 C-②：`gbm` 落空的那个桶（§24.6.3 的落地）
+
+§24.6.3 发现 `ENGINE_NAMES`（`world_cup_quality_service.py:20`，**4 个成员**
+`("elo_odds","hybrid","gbm","integrated")`）与**批量预测的控制台汇总**（只数 3 个桶）不一致。
+
+**先把「哪一面确实缺」钉住**：`build_quality_loop_report`（同文件 `:855` 起）**是**按
+`for engine in ENGINE_NAMES` 迭代的（`by_engine` 与 `trends.by_engine` 两处）⇒
+**质量报告里 `gbm` 本来就有桶**；缺桶只出现在**批量预测的汇总**这一条路径上。
+
+改动 5 处：
+
+| 文件 | 行 | 内容 |
+|---|---|---|
+| `services/world_cup_prediction_pipeline.py` | `:1528` / `:1589-1590` | init `"gbm_count": 0` + `elif engine_used == "gbm"` |
+| `api/routes/world_cup_predictions.py` | `:632` / `:672-673` / `:715` | init `gbm_count = 0` + `elif` + 输出 `"gbm_count"` |
+| `components/sports/world-cup/engine-console.tsx` | `:46` | 汇总串加 `GBM {n}` |
+| `lib/world-cup/engine-api.ts` | `:43` | `gbm_count?: number` |
+
+新增守卫 4 条（另 2 条 `test_trigger_prediction_accepts_gbm_engine` / `test_gbm_prediction_serializes_engine_used_as_gbm` 是**既有**的）：
+
+| 用例 | 位置 | 断言 |
+|---|---|---|
+| `test_batch_summary_exposes_one_bucket_per_engine_name` | `tests/test_world_cup_prediction_pipeline.py:670` | `{k for k in result if k.endswith("_count")}` == `{f"{n}_count" for n in ENGINE_NAMES}` —— **oracle 用另一个常量**，不写字面量 |
+| `test_batch_predict_matches_counts_gbm_runs` | 同文件 `:691` | mock 返回 `engine_used="gbm"` ⇒ `succeeded == 1` 且 `gbm_count == 1` |
+| `test_batch_switch_engine_stream_reports_a_gbm_bucket` | `tests/test_world_cup_predictions_routes.py:238` | 解析 SSE 文本里含 `"gbm_count"` 的 `data:` 行 ⇒ `gbm_count == 1`、其余三桶为 0 |
+| `shows a bucket for every engine the batch summary reports` | `components/sports/world-cup/engine-console.test.tsx:65` | `engine-summary` 里同时出现 `ELO 1` / `混合 1` / `融合 1` / `GBM 1` |
+
+### 48.4.1 补桶**不会**让控制台出现 `gbm`（产品决定，**未动**）
+
+前端 `EngineName`（`engine-api.ts:30`）是 `"elo_odds" | "hybrid" | "integrated" | "high_confidence"` —— **无 `gbm`**；
+`ENGINES` 下拉（`engine-console.tsx:16/23`）也没有。而**后端 API 确实接受 `engine=gbm`**
+（`world_cup_predictions.py:536` / `:602` 的 Query 描述里列了它），所以补桶**必要且正确**；
+但「控制台要不要能选 `gbm`」是**产品决定**，本节**不代决、未动**。
+
+### 48.4.2 第三份不一致（本节新发现，**未守卫、未动**）
+
+`api/routes/world_cup_analytics.py:299` 有一份**独立**的元组字面量
+`engine_keys = ("elo_odds", "hybrid", "integrated", "gbm")`，**全仓没有任何测试**钉住它
+（无 `engine_keys` 匹配）。它是引擎键集的**第三份**、且**顺序也不同**，本节**未动**（超出批准范围）。
+
+## 48.5 🔴 本节抓到并修掉的一个真 bug（过程留痕）
+
+对 `world_cup_predictions.py` 的 3 次编辑里，**第 1 次（`gbm_count = 0` 的 init）静默未生效**：
+`git diff --numstat` 显示 `3 0`，而预期是 `4 0`。
+
+抓出它的是**本节新写的 SSE 守卫测试**：`UnboundLocalError: cannot access local variable 'gbm_count'` ——
+那条 `elif engine_used == "gbm"` 引用了一个**从未初始化**的局部变量。补上 init 后 `numstat` 变 `4 0`。
+
+> **教训**：`grep` 只证明**锚点在**，不证明**改动自洽**。静态看「代码齐全」的批次，
+> 一条未初始化的局部变量只能靠**跑测试**暴露。这也是「新增守卫测试」不只是形式主义的现场证明。
+
+## 48.6 验证（全部本机，2026-10-01 复跑）
+
+| 项 | 读数 |
+|---|---|
+| 后端受影响 3 个测试文件 | junit `tests=74 / failures=0 / errors=0 / skipped=0`（= 65 passed + 9 subtests）|
+| 前端守卫文件 | `Test Files 1 passed (1)` / `Tests 7 passed (7)` |
+| 前端全量 | `Test Files 125 passed (125)` / `Tests 735 passed (735)` |
+| `ruff check app/`（CI 门）| **All checks passed!** |
+| `npx tsc --noEmit` | `TSC_EXIT=0`（无输出）|
+| `npm run lint`（eslint）| `ESLINT_EXIT=0`（无输出）|
+| `scripts/eol_audit.py` | **line-ending damage: none**；9 个文件均 `ok (LF -> CRLF checkout)` |
+| 9 个文件 sha256 vs 变异前快照 | **9/9 一致**，且 9/9 均 **PURE-CRLF** |
+| `git diff --numstat` | `4/0`、`1/1`、`3/0`、`27/1`、`45/0`、`48/1`、`26/0`、`1/0`、`1/0` |
+
+## 48.7 变异验证（5 条，四阶段）
+
+靶集合小且**跨后端 + 前端**，不值得进常驻 `mutation_verify.py`，所以用仓库外一次性 harness；
+每条都走满 **基线绿 → 变异红 → sha256 还原一致 → 还原绿**：
+
+| 变异 | 靶 | 结果 |
+|---|---|---|
+| `E-dup` | `kalshi_sports_source`（把重复项加回去）| `1/0/0` → **`1/1/0 RED`** → sha 一致 → `1/0/0 GREEN` |
+| `C-pipe-elif` | pipeline 的 `gbm` 分支 | 同上 |
+| `C-pipe-init` | pipeline 的 `gbm_count` init | 同上 |
+| `C-sse-elif` | route 的 `gbm` 分支 | 同上 |
+| `C-sse-init` | route 的 `gbm_count` init | 同上 |
+
+⇒ 这 5 条守卫**全部承重**（不是「改完就绿」的空头）。
+
+## 48.8 §47.10 表的状态更新（追加式，旧文保留为时点快照）
+
+| §47.10 原文 | 本节后 |
+|---|---|
+| 「前端 `api.ts:447` 手写 union；**规范化 51 个 MIXED 文件**」的**后半** | ✅ **已做**（50 个 → PURE-CRLF）|
+| 「**`gbm` 汇总桶** / `third_place` / **`_KALSHI_SPORTS_SERIES_PREFIXES` 第 8 项** / `/trades`「已作废」tab」中的 **`gbm` 汇总桶** 与 **第 8 项** | ✅ **已做** |
+| 同行的 `third_place` 与 `/trades`「已作废」tab | ⏳ 仍**未动** |
+| 「**前端 `api.ts:447` 手写 union**；…」的**前半** | ⏳ 仍**未动** |
+
+## 48.9 本节未做 / 交接
+
+| 事项 | 状态 |
+|---|---|
+| 本节 9 个文件的提交 | ⏳ **未提交**（用户未指示）|
+| `world_cup_analytics.py:299` 的第三份引擎键集补守卫 | ⏳ 未动（本节新发现）|
+| 控制台支持选 `gbm`（前端 `EngineName` / `ENGINES`）| ⏳ 未动（**产品决定**）|
+| `third_place` / `/trades`「已作废」tab / `api.ts:447` 契约 | ⏳ 未动 |
+| §29.9「51」与本节入口「50」的差值取证 | ⏳ 未做 |
+| push / 开 PR | ⏳ 未做 |
+
+**本节改 9 个文件（5 源 + 4 测试）。未提交、未 push。**

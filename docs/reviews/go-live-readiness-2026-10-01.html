@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PMRF 上线就绪度审查 · 2026-10-01</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#141a22; --panel2:#181f29; --line:#232c38;
+    --fg:#d7dee8; --fg2:#8b97a6; --fg3:#5f6b7a;
+    --ok:#3fb950; --okbg:#0f2417;
+    --warn:#d29922; --warnbg:#2a1f07;
+    --gap:#f0883e; --gapbg:#2a1a0a;
+    --blk:#f85149; --blkbg:#2a1214;
+    --accent:#58a6ff;
+    --mono:ui-monospace,"SFMono-Regular","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font-family:var(--mono);font-size:13px;line-height:1.62;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 28px 72px}
+  header{border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:28px}
+  .eyebrow{color:var(--fg3);font-size:11px;letter-spacing:.16em;text-transform:uppercase}
+  h1{font-size:23px;margin:10px 0 6px;font-weight:600;letter-spacing:-.01em}
+  .sub{color:var(--fg2);font-size:12px}
+  .verdict{margin:26px 0 32px;padding:20px 22px;border:1px solid var(--warn);
+           background:var(--warnbg);border-radius:3px}
+  .verdict .tag{display:inline-block;font-size:11px;letter-spacing:.14em;
+                padding:3px 9px;border:1px solid var(--warn);color:var(--warn);
+                border-radius:2px;margin-bottom:12px}
+  .verdict p{margin:0;font-size:13.5px;color:#f0d9a8}
+  .verdict strong{color:#fff}
+  h2{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);
+     margin:38px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line);font-weight:600}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--fg3);font-weight:600;font-size:11px;letter-spacing:.08em;
+     text-transform:uppercase;padding:8px 10px;border-bottom:1px solid var(--line)}
+  td{padding:9px 10px;border-bottom:1px solid #1a222c;vertical-align:top}
+  tr:hover td{background:#111720}
+  .dim{color:var(--fg3);font-size:11.5px}
+  .pill{display:inline-block;font-size:10.5px;letter-spacing:.08em;padding:2px 7px;
+        border-radius:2px;white-space:nowrap;font-weight:600}
+  .p-ok{color:var(--ok);background:var(--okbg);border:1px solid #1c3d26}
+  .p-gap{color:var(--gap);background:var(--gapbg);border:1px solid #3d2a10}
+  .p-blk{color:var(--blk);background:var(--blkbg);border:1px solid #3d1a1c}
+  .p-warn{color:var(--warn);background:var(--warnbg);border:1px solid #3d3210}
+  ol.acts{margin:0;padding:0;list-style:none;counter-reset:a}
+  ol.acts>li{counter-increment:a;position:relative;padding:14px 16px 14px 52px;
+             border:1px solid var(--line);border-radius:3px;margin-bottom:9px;
+             background:var(--panel)}
+  ol.acts>li::before{content:counter(a,decimal-leading-zero);position:absolute;left:16px;top:13px;
+             color:var(--blk);font-size:12px;font-weight:700;letter-spacing:.04em}
+  ol.acts>li .t{font-weight:600;color:#eaf1f8;display:block;margin-bottom:5px}
+  ol.acts>li .d{color:var(--fg2);font-size:12px}
+  code{font-family:var(--mono);background:#1b232e;border:1px solid #263140;
+       border-radius:2px;padding:1px 5px;font-size:11.5px;color:#9fd0ff}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}
+  .card{border:1px solid var(--line);border-radius:3px;padding:13px 15px;background:var(--panel)}
+  .card .k{color:var(--fg3);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase}
+  .card .v{font-size:19px;font-weight:600;margin-top:5px;color:#eaf1f8}
+  .card .m{color:var(--fg3);font-size:11.5px;margin-top:3px}
+  .note{margin-top:26px;padding:14px 16px;border-left:2px solid var(--accent);
+        background:#0f1620;color:var(--fg2);font-size:12px;border-radius:0 3px 3px 0}
+  footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);
+         color:var(--fg3);font-size:11px}
+  ul.tight{margin:6px 0 0;padding-left:18px;color:var(--fg2)}
+  ul.tight li{margin:3px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">Prediction Market Reality Filter · 生产就绪度</div>
+  <h1>上线就绪度审查</h1>
+  <div class="sub">审查时间 2026-10-01 · 只读审查，未修改任何代码 · 基线 <code>932df82</code>（+ 本地 2 个未推送提交）</div>
+</header>
+
+<div class="verdict">
+  <span class="tag">结论 · 有条件可上线</span>
+  <p><strong>代码与工程侧已经就绪</strong>，没有发现阻塞性缺陷。上线的阻塞项<strong>全部在部署配置</strong>，
+     不在代码：4 个生产必填项未填时进程会<strong>按设计拒绝启动</strong>，另有告警渠道与反代前置需要就位。
+     还有 2 个本地提交尚未经过 CI。</p>
+</div>
+
+<h2>就绪度概览</h2>
+<div class="grid">
+  <div class="card"><div class="k">CI 主分支</div><div class="v" style="color:var(--ok)">GREEN</div><div class="m">main 连续 4 次 push 全 success</div></div>
+  <div class="card"><div class="k">后端静态门</div><div class="v" style="color:var(--ok)">3 / 3</div><div class="m">ruff · mypy · type-sync</div></div>
+  <div class="card"><div class="k">生产门禁</div><div class="v" style="color:var(--ok)">8</div><div class="m">项检查，不达标拒启</div></div>
+  <div class="card"><div class="k">部署产物</div><div class="v" style="color:var(--ok)">完整</div><div class="m">Docker + compose + 4 systemd unit</div></div>
+  <div class="card"><div class="k">运维文档</div><div class="v" style="color:var(--ok)">1635</div><div class="m">行 RUNBOOK</div></div>
+  <div class="card"><div class="k">未推送提交</div><div class="v" style="color:var(--warn)">2</div><div class="m">尚未经 CI 验证</div></div>
+</div>
+
+<h2>逐维度证据</h2>
+<table>
+  <thead><tr><th style="width:26%">维度</th><th style="width:12%">状态</th><th>证据</th></tr></thead>
+  <tbody>
+    <tr><td>CI 流水线</td><td><span class="pill p-ok">PASS</span></td>
+        <td>GitHub Actions 5 个 job：<code>backend-tests</code> / <code>frontend-tests</code> /
+            <code>type-sync-check</code> / <code>docker-build</code> / <code>secret-scan</code>。
+            main 上 <code>932df82</code> 等连续 4 次 push 全 <code>success</code>；无 open PR。</td></tr>
+    <tr><td>后端静态检查</td><td><span class="pill p-ok">PASS</span></td>
+        <td>本地复现 CI 阻断门：<code>ruff check app/</code> All checks passed；
+            <code>mypy app/</code> <strong>no issues in 331 source files</strong>（无 ratchet、无 ceiling，硬阻断）；
+            <code>generate_types --check</code> up to date。</td></tr>
+    <tr><td>测试</td><td><span class="pill p-ok">PASS</span></td>
+        <td>CI 跑后端全量 + coverage（最近绿）；前端本地 <strong>125 files / 735 tests</strong> 全过。
+            部署单元另有 <code>test_deploy_units.py</code> 钉住 compose 的持久化清单。</td></tr>
+    <tr><td>构建</td><td><span class="pill p-ok">PASS</span></td>
+        <td>CI 每次改动都跑 <code>npm run build</code>（Next 静态导出）<em>和</em> <code>docker-build</code> job
+            实际构建生产镜像（不 push），所以 Dockerfile/依赖断裂不会拖到部署日才发现。</td></tr>
+    <tr><td>依赖与密钥</td><td><span class="pill p-ok">PASS</span></td>
+        <td>后端 <code>pip-audit</code>；前端 <code>npm audit --audit-level=high</code>；
+            gitleaks 全历史扫密钥。<code>.gitignore</code> 屏蔽一切 <code>.env*</code>，只放行 <code>.example</code>。</td></tr>
+    <tr><td>生产配置门禁</td><td><span class="pill p-ok">PASS</span></td>
+        <td><code>app/core/preflight.py</code> 在 <code>PMRF_ENV=production</code> 下强制 8 项
+            （写鉴权、CORS 显式、LLM 花费上限、关交互文档、关 reload、备份可加密、实时推送鉴权+连接上限），
+            不达标 <strong>抛异常拒绝启动</strong>，且每个入口点都调用（API / scheduler / backup）。</td></tr>
+    <tr><td>部署产物</td><td><span class="pill p-ok">PASS</span></td>
+        <td>多阶段 Dockerfile（前端构建 + Python 分层 + <strong>非 root 用户</strong> + HEALTHCHECK）；
+            compose 绑 <code>127.0.0.1</code>、三个具名 volume、<code>mem/cpus/pids</code> 上限、healthcheck；
+            4 个 systemd unit（api / scheduler / backup / healthcheck）+ 2 个 timer。</td></tr>
+    <tr><td>备份与恢复</td><td><span class="pill p-ok">PASS</span></td>
+        <td>AES-256 加密归档；生产下空密钥<strong>拒绝运行</strong>而不是写明文 ZIP（含全部 state store）；
+            定时由 systemd timer 或容器内 scheduler job 承担（刻意二选一，避免双写抢保留窗口）；RUNBOOK 有恢复流程。</td></tr>
+    <tr><td>监控</td><td><span class="pill p-ok">PASS</span></td>
+        <td>Prometheus metrics + 随仓 Grafana dashboard JSON + 调度失败计数/校准漂移告警路径。</td></tr>
+    <tr><td>健康检查</td><td><span class="pill p-ok">PASS</span></td>
+        <td><code>/api/health</code> 按最近一次 loop-run 判 degraded（可返回 503）；compose healthcheck、
+            systemd healthcheck timer、可选 dead-man ping 三处接线，失败时跳过 ping。</td></tr>
+    <tr><td>告警触达</td><td><span class="pill p-warn">PARTIAL</span></td>
+        <td>代码路径齐备，但 <code>SENTRY_DSN</code> / webhook <strong>默认未配置</strong>：
+            3am 任务失败的完整痕迹只有日志一行。启动时会 WARNING 提示。</td></tr>
+    <tr><td>覆盖率门禁</td><td><span class="pill p-gap">GAP</span></td>
+        <td>CI 生成 coverage 报告，但<strong>没有阈值</strong>（无 <code>--cov-fail-under</code>，
+            也无 <code>pytest.ini</code>/<code>pyproject.toml</code>）。覆盖率可以只降不涨而不报警。</td></tr>
+    <tr><td>浏览器端凭据</td><td><span class="pill p-gap">GAP·已知</span></td>
+        <td>运营写 key 存在 <code>sessionStorage</code>（非 localStorage，关标签页即清）。
+            文档明确承认 XSS 残留风险；BFF 会话 cookie 方案<strong>未实现</strong>（backlog P2-FE9）。</td></tr>
+    <tr><td>代码债</td><td><span class="pill p-ok">PASS</span></td>
+        <td><code>backend/app/</code> + <code>frontend/src/</code> 里 TODO/FIXME/XXX/HACK
+            合计 <strong>仅 1 处</strong>，且只是注释里提到一个历史 TODO。</td></tr>
+  </tbody>
+</table>
+
+<h2>上线前必须完成（6 项，均非代码问题）</h2>
+<ol class="acts">
+  <li><span class="t">推送 2 个本地提交并让 CI 给出结论</span>
+      <span class="d"><code>f0b662c</code>（world-cup gbm 桶 + kalshi 去重，9 files）与
+      <code>a9af1cf</code>（审计 §48，1 file）领先 <code>monkeydjl/main</code> 尚未推送。
+      本地已复现 ruff / mypy / type-sync / 前端全量，但 CI 才是权威，
+      且 <code>docker-build</code> 与 <code>secret-scan</code> 只能由 CI 跑。</span></li>
+  <li><span class="t">填写 4 个生产必填配置（缺任一项进程拒绝启动）</span>
+      <span class="d"><code>API_WRITE_KEY</code>（空 = 所有写接口无鉴权）、
+      <code>CORS_ALLOWED_ORIGINS</code>（空 = 仪表盘连不上；含 <code>*</code> 同样被拒）、
+      <code>LLM_DAILY_COST_CAP_USD</code>（模板给 25，0 = 无上限）、
+      <code>BACKUP_ENCRYPTION_KEY</code>（开备份时必需）。
+      另需真实 LLM 凭据 —— <code>LLM_STARTUP_CHECK_ENABLED=true</code> 时无效凭据会在启动期直接拒启。</span></li>
+  <li><span class="t">前置反向代理并终止 TLS</span>
+      <span class="d">compose <strong>只绑 <code>127.0.0.1:8000</code></strong>，容器本身不做 TLS，
+      不能直接暴露公网。仓里有 <code>deploy/nginx.conf.example</code> 与 <code>deploy/Caddyfile.example</code>。</span></li>
+  <li><span class="t">反代之后设置 <code>TRUSTED_PROXY_HEADER=true</code> 与 <code>RATE_LIMIT_TRUSTED_PROXY_HOPS</code></span>
+      <span class="d">不设不是"更保守"：此时 socket 对端永远是代理，
+      所有调用者共用一个限流桶，<code>RATE_LIMIT_MAX_REQUESTS</code> 退化成全局上限。</span></li>
+  <li><span class="t">至少接通一个告警渠道</span>
+      <span class="d">配 <code>SENTRY_DSN</code> 或 <code>SCHEDULER_FAILURE_ALERT_WEBHOOK_URL</code>。
+      两者都需要"开关 + 地址"成对；只开开关不填地址等于没接。Sentry 成本最低且覆盖请求处理路径。</span></li>
+  <li><span class="t">决定 6 个默认 OFF 的 overlay 开关</span>
+      <span class="d"><code>REVIEW_QUEUE_ENABLED</code> / <code>DECISION_TIMELINE_ENABLED</code> /
+      <code>CONCLUSION_CHALLENGE_ENABLED</code> / <code>EVENT_CHALLENGE_ENABLED</code> /
+      <code>SOURCE_TRUST_REGISTRY_ENABLED</code> / <code>WORLD_CUP_CHALLENGE_ENABLED</code>。
+      模板用<strong>注释行</strong>给出（写成赋值会压掉 base 里的 true）。
+      不开则对应界面永久为空，而且界面上不会说明原因。</span></li>
+</ol>
+
+<h2>非阻塞观察项</h2>
+<ul class="tight">
+  <li><strong>审计遗留的测试债/功能缺口</strong>：<code>world_cup_analytics.py:299</code> 的第三份引擎键集无测试守卫；
+      <code>/trades</code> 缺「已作废」tab；<code>api.ts:447</code> 仍手写 union 未接生成类型；
+      <code>third_place</code> 归类丢失（<code>"Round of 32"</code> 也落进 <code>unknown</code>）。</li>
+  <li><strong>存量数据</strong>：2 笔悬空模拟交易（<code>id=42</code> / <code>id=76</code>），此前已决定"先不清理"；
+      建议上线前确认是一次性历史遗留而非仍在产生。</li>
+  <li><strong>首次启动会自动跑表迁移</strong>（<code>simulated_trades</code> 的 v1→v2 表重建）。有测试覆盖，
+      但建议先在 staging 用一份真实库副本验证一次。</li>
+  <li><strong>README 陈旧</strong>：LICENSE 段落写「如未添加，请补充」，但 <code>LICENSE</code> 已存在（MIT, 2026 ALin）。</li>
+  <li><strong>根目录过程文件</strong>：<code>sdd-*.diff</code>（4 个）、<code>sdd-task-4-*.md</code>、
+      <code>SESSION_MEMORY_*.md</code>（11 个）、<code>check_db.py</code>、<code>hive.yml</code>、
+      <code>skills-lock.json</code>、<code>code-review-2026-06-24/</code> —— 不影响运行，影响观感。</li>
+</ul>
+
+<div class="note">
+  <strong>判断依据的分量。</strong>这个项目的工程化程度明显高于同类：mypy 是<em>硬阻断</em>而非计数棘轮
+  （注释里写明"不要为了过红而重新引入 ceiling"）、gitleaks 扫全历史、生产门禁把每个必需配置变成启动失败而不是
+  模板注释、备份在缺密钥时拒绝写明文、Docker 镜像在 CI 里每次改动都构建。
+  因此本审查的阻塞项数量很少，且都集中在"操作员复制模板后必须填的东西"上 —— 这正是模板设计使然。
+</div>
+
+<footer>
+  只读审查 · 未修改任何文件 · 未推送任何提交<br>
+  证据来源：<code>.github/workflows/ci.yml</code>、<code>deploy/*</code>、<code>backend/app/core/preflight.py</code>、
+  <code>backend/.env.production.example</code>、<code>docs/ops/RUNBOOK.md</code>、本地复现的 ruff / mypy / type-sync / 前端全量、
+  <code>gh run list</code>。
+</footer>
+
+</div>
+</body>
+</html>

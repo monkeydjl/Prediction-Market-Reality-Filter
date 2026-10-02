@@ -118,6 +118,32 @@ describe("EngineConsole", () => {
     );
   });
 
+  it("offers gbm among the tunable engines and tunes it", async () => {
+    // Same gap as the switch selector, one layer up: the backend tuning and
+    // calibration routes accept gbm (auto-tune / batch-optimize fall through
+    // `engine_method_filter`'s alias branches to a `LIKE %name%` match, and
+    // calibration matches `engine_name` by equality), so an operator could see
+    // GBM batch results but had no way to tune or calibrate GBM. The option
+    // list is pinned in order, so a reorder that drops an engine still fails.
+    engineMocks.calibration.mockResolvedValue({
+      status: "ok",
+      calibration: { engine_name: "gbm" },
+    });
+    render(<EngineConsole />);
+
+    const select = screen.getByTestId("tune-engine-select");
+    const options = Array.from(select.querySelectorAll("option")).map(
+      (o) => (o as HTMLOptionElement).value,
+    );
+    expect(options).toEqual(["elo_odds", "hybrid", "integrated", "gbm"]);
+
+    await userEvent.selectOptions(select, "gbm");
+    await userEvent.click(screen.getByTestId("calibration-button"));
+
+    expect(engineMocks.calibration).toHaveBeenCalledWith("gbm");
+    expect(await screen.findByTestId("calibration-result")).toBeInTheDocument();
+  });
+
   it("renders streamed progress and the final summary for the engine switch", async () => {
     engineMocks.streamBatchSwitchEngine.mockImplementation(
       async (_engine: string, _filter: string, handlers: Record<string, (p: unknown) => void>) => {

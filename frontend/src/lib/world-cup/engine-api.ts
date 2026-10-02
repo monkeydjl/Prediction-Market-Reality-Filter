@@ -39,7 +39,16 @@ export type EngineName =
   | "integrated"
   | "high_confidence"
   | "gbm";
-export type TunableEngine = "elo_odds" | "hybrid" | "integrated";
+// The engines the tuning/calibration routes accept. All four are reachable
+// server-side: `auto-tune` and `batch-optimize` go through
+// `engine_auto_tuning_service.engine_method_filter`, whose three alias branches
+// are not an allow-list (anything else falls through to a `LIKE %name%`
+// match), and `calibration` / `calibration-patterns` read
+// `get_active_calibration`, which matches `engine_name` by equality with no
+// allow-list at all. `gbm` was previously missing here even though the console
+// could already run and read GBM batches, so an operator could see GBM results
+// but never tune them.
+export type TunableEngine = "elo_odds" | "hybrid" | "integrated" | "gbm";
 
 export interface BatchSummary {
   status?: string;

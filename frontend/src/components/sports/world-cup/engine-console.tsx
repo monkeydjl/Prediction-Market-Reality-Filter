@@ -23,10 +23,15 @@ const ENGINES: { value: EngineName; label: string }[] = [
   { value: "gbm", label: "GBM" },
 ];
 
+// Kept in the same order as ENGINES so the two selectors read alike. `gbm`
+// belongs here for the same reason it belongs in ENGINES: the backend tuning
+// and calibration routes accept it (see engine-api.ts), and the console
+// already surfaces GBM batch results.
 const TUNABLE_ENGINES: { value: TunableEngine; label: string }[] = [
   { value: "elo_odds", label: "ELO + 赔率" },
   { value: "hybrid", label: "混合（规则 + AI）" },
   { value: "integrated", label: "融合" },
+  { value: "gbm", label: "GBM" },
 ];
 
 const STATUS_FILTERS = ["scheduled", "live", "finished"];

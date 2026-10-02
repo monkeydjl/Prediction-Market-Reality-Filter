@@ -815,7 +815,10 @@ async def auto_tune_engine(
     """Run automatic tuning cycle for an engine: analyze, optimize, learn, calibrate.
 
     Args:
-        engine_name: Engine to tune ("elo_odds", "hybrid", or "integrated")
+        engine_name: Engine to tune. The name is matched through
+            ``engine_auto_tuning_service.engine_method_filter``, whose three
+            alias branches are not an allow-list -- any engine the batch summary
+            counts, "gbm" included, is addressable here.
         background: If True, run in background and return task_id immediately
     """
     if background:

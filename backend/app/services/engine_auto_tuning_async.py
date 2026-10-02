@@ -20,7 +20,9 @@ async def run_async_optimization(engine_name: str, task_id: str) -> dict[str, An
     """Run AI optimization in background with progress tracking.
 
     Args:
-        engine_name: Engine to optimize ("elo_odds", "hybrid", or "integrated")
+        engine_name: Engine to optimize, matched through
+            ``engine_method_filter`` -- its three alias branches are not an
+            allow-list, so "gbm" is reachable too
         task_id: Task ID for progress tracking
 
     Returns:

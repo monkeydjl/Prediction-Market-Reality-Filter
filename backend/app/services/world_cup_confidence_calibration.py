@@ -92,7 +92,10 @@ def compute_reliability_curve(engine_name: str | None = None) -> dict[str, Any]:
     """Compute the reliability curve from historical MatchResult data.
 
     Args:
-        engine_name: Optional engine filter (e.g., "elo_odds", "hybrid", "integrated")
+        engine_name: Optional engine filter. Must be one of the keys of
+            ``quality["by_engine"]`` -- the runnable engines in
+            ``world_cup_quality_service.ENGINE_NAMES``: "elo_odds", "hybrid",
+            "gbm", "integrated".
 
     Returns:
         {

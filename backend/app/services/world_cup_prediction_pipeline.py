@@ -664,11 +664,15 @@ async def run_prediction_pipeline(
     Args:
         match_id: Match ID to predict
         trigger: What triggered this prediction (manual, daily_update, live_update, etc.)
-        engine: Prediction engine to use ("elo_odds", "hybrid", "integrated", "high_confidence", "auto")
+        engine: Prediction engine to use. Any member of ``PredictionEngine`` is
+            accepted; the whitelist at Step 3 is the authority -- it admits
+            "elo_odds", "hybrid", "integrated", "high_confidence" and "gbm",
+            with "auto" resolved to the official default before that check.
                - "elo_odds": Fast Elo+Odds engine (70-75% accuracy, <100ms)
                - "hybrid": Current Rule+AI engine (interpretable, 2-3s)
             - "integrated": Fuse elo_odds and hybrid engine results
             - "high_confidence": Run all public engines and use the highest-confidence result
+            - "gbm": LightGBM xG model engine
             - "auto": Use the official default engine (currently "elo_odds")
         session: Database session (creates one if None)
         compare_only: Read-only mode for engine comparison UI. Bypasses the
@@ -1492,7 +1496,9 @@ async def batch_predict_matches(
     Args:
         match_ids: List of match IDs to predict (None = all remaining matches)
         trigger: What triggered this batch
-        engine: Prediction engine to use ("elo_odds", "hybrid", "auto")
+        engine: Prediction engine to use. Forwarded to
+            :func:`run_prediction_pipeline` unchanged, so it accepts the same
+            names ("auto" included).
 
     Returns:
         Batch result summary

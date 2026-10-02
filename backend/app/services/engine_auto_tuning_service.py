@@ -20,7 +20,16 @@ from app.services.optimization_task_manager import get_task_manager
 def engine_method_filter(
     method_column: InstrumentedAttribute[Any], engine_name: str
 ) -> ColumnElement[bool]:
-    """Build a SQL filter that keeps public engine buckets separate."""
+    """Build a SQL filter that matches the rows belonging to one engine bucket.
+
+    The three named branches are *alias rules*, not an allow-list. The pipeline
+    writes a variant or a suffix into ``original_engine`` for those engines
+    (``elo_odds_fusion (...)``, ``elo_only``, ``rule_only``, ``integrated (...)``),
+    so each one needs its own matcher. Every other name falls through to the
+    ``%name%`` containment match -- which is how an engine no branch names, such
+    as ``gbm`` (stored as ``gbm_lightgbm``), is still addressable here. Keep the
+    three branches ahead of the fallback or a bucket silently changes shape.
+    """
     if engine_name == "integrated":
         return method_column.like("integrated%")
     if engine_name == "elo_odds":
@@ -40,7 +49,9 @@ async def analyze_and_optimize_all_predictions(
     """Run AI analysis and optimization on all scheduled matches.
 
     Args:
-        engine_filter: Only process predictions from this engine (e.g., "elo_odds", "hybrid", "integrated")
+        engine_filter: Only process predictions from this engine. Matched through
+            :func:`engine_method_filter`, whose three alias branches are not an
+            allow-list -- "elo_odds", "hybrid", "integrated" and "gbm" all work.
         limit: Maximum number of matches to process (None = all)
 
     Returns:
@@ -171,7 +182,8 @@ def calculate_optimization_patterns(engine_name: str) -> dict[str, Any]:
     """Analyze patterns in AI optimizations to derive calibration adjustments.
 
     Args:
-        engine_name: Engine to analyze (e.g., "elo_odds", "hybrid", "integrated")
+        engine_name: Engine to analyze, matched via :func:`engine_method_filter`
+            (the three alias branches are not an allow-list; "gbm" works too)
 
     Returns:
         Suggested calibration parameters
@@ -463,7 +475,8 @@ async def run_full_auto_tuning_cycle(engine_name: str) -> dict[str, Any]:
     """Run complete auto-tuning cycle: analyze, optimize, learn, calibrate.
 
     Args:
-        engine_name: Engine to tune (e.g., "elo_odds", "hybrid", "integrated")
+        engine_name: Engine to tune, matched via :func:`engine_method_filter`
+            (the three alias branches are not an allow-list; "gbm" works too)
 
     Returns:
         Summary of tuning cycle results

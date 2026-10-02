@@ -172,6 +172,8 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 _STAGE_MAP = {
     "group_stage": "group_stage",
     "group stage": "group_stage",
+    "round_of_32": "round_of_32",
+    "round of 32": "round_of_32",
     "round_of_16": "round_of_16",
     "round of 16": "round_of_16",
     "quarterfinal": "quarterfinal",
@@ -193,7 +195,10 @@ def _normalize_stage(stage: str | None) -> str:
     return _STAGE_MAP.get(stage.lower().strip(), stage.lower().strip())
 
 
-_KNOCKOUT_STAGES = {"round_of_16", "quarterfinal", "semifinal", "final"}
+_KNOCKOUT_STAGES = {
+    "round_of_32", "round_of_16", "quarterfinal", "semifinal", "final",
+    "third_place",
+}
 
 
 def _impact_item(

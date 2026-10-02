@@ -13,6 +13,9 @@ import type {
   EventMoversResponse as GeneratedEventMoversResponse,
   EventHistoryResponse as GeneratedEventHistoryResponse,
   DailyDigestResponse as GeneratedDailyDigestResponse,
+  SimTrade as GeneratedSimTrade,
+  SimTradeListResponse as GeneratedSimTradeListResponse,
+  TradeStats as GeneratedTradeStats,
 } from "./generated-types";
 import { getApiBase, joinApiPath } from "./env";
 import { applyOperatorAuthHeaders } from "./operator-credentials";
@@ -335,6 +338,9 @@ export type EventListResponse = GeneratedEventListResponse;
 export type EventMoversResponse = GeneratedEventMoversResponse;
 export type EventHistoryResponse = GeneratedEventHistoryResponse;
 export type DailyDigestResponse = GeneratedDailyDigestResponse;
+export type SimTrade = GeneratedSimTrade;
+export type SimTradeListResponse = GeneratedSimTradeListResponse;
+export type TradeStats = GeneratedTradeStats;
 
 // An event's edge trajectory + freshness (M5 fresh-edge surface).
 // Mirrors trend_analysis_service.analyze_edge_trajectory.
@@ -440,61 +446,17 @@ export interface LlmDiagnostics {
 
 // ── M6 Simulated trades ────────────────────────────────────────────
 
-export interface SimTrade {
-  trade_id: string;
-  event_id: string;
-  event_title: string;
-  direction: "YES" | "NO";
-  entry_prob: number;
-  market_prob: number;
-  /** EIP raw edge: AI% − market% (0–100 pp), same as predictions.raw_edge */
-  entry_edge: number;
-  /** Alias of entry_edge when returned by API */
-  raw_edge?: number;
-  /** Edge in favor of position: YES→raw, NO→−raw */
-  directional_edge?: number;
-  edge_definition?: string;
-  entry_time: string;
-  position_pct: number;
-  confidence: number | null;
-  trust_weight: number | null;
-  decision: string;
-  exit_prob: number | null;
-  exit_market: number | null;
-  exit_time: string | null;
-  exit_reason: string | null;
-  actual_outcome: number | null;
-  pnl_pct: number | null;
-  is_win: number | null;
-  /**
-   * Terminal states. "closed" settled into a result; "voided" is a trade whose
-   * prediction was voided by a non-genuine resolution — the market never
-   * settled, so it carries no pnl_pct/is_win/actual_outcome and is excluded
-   * from the closed-trade statistics (it appears in neither the open nor the
-   * closed list).
-   */
-  status: "open" | "closed" | "voided";
-}
-
-export interface TradeStats {
-  total_closed: number;
-  win_rate: number | null;
-  total_pnl_pct: number;
-  avg_pnl_pct: number | null;
-  /** mean |raw_edge| on closed trades (legacy key) */
-  avg_edge_at_entry: number | null;
-  avg_raw_edge_at_entry?: number | null;
-  avg_directional_edge_at_entry?: number | null;
-  edge_definition?: Record<string, string>;
-  by_direction: Record<string, {
-    total: number; wins: number; win_rate: number;
-    avg_pnl: number; total_pnl: number;
-  }>;
-  by_decision: Record<string, {
-    total: number; wins: number; win_rate: number;
-    avg_pnl: number;
-  }>;
-}
+// SimTrade / SimTradeListResponse / TradeStats are generated from
+// backend/app/models/event.py and re-exported with the other generated
+// types above. They used to be hand-written here, which is how the shape
+// drifted from the API unnoticed: /trades/* answered with the bare
+// FlexibleResponse base class, so the model had no fields, the OpenAPI
+// schema carried no field contract, and the CI type-sync job could not see
+// these endpoints at all. The hand-written copy also declared an
+// `avg_raw_edge_at_entry` key the backend has never returned.
+//
+// `status` now has a reader for its `voided` member: /trades/voided lists
+// those rows, so a voided trade no longer falls outside every list.
 
 export interface ApiOverview {
   system: string;
@@ -1052,12 +1014,16 @@ export const eventsApi = {
   tradeStats: () =>
     api<TradeStats>("/events/trades/stats"),
   openTrades: (limit = 10, offset = 0) =>
-    api<{ count: number; total?: number; limit?: number; offset?: number; trades: SimTrade[] }>(
+    api<SimTradeListResponse>(
       `/events/trades/open?limit=${limit}&offset=${offset}`,
     ),
   closedTrades: (limit = 10, offset = 0) =>
-    api<{ count: number; total?: number; limit?: number; offset?: number; trades: SimTrade[] }>(
+    api<SimTradeListResponse>(
       `/events/trades/closed?limit=${limit}&offset=${offset}`,
+    ),
+  voidedTrades: (limit = 10, offset = 0) =>
+    api<SimTradeListResponse>(
+      `/events/trades/voided?limit=${limit}&offset=${offset}`,
     ),
 
   pendingLinks: () =>

@@ -27,7 +27,18 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 /** Batch routes walk every scheduled match through the pipeline. */
 const BATCH_TIMEOUT_MS = 600_000;
 
-export type EngineName = "elo_odds" | "hybrid" | "integrated" | "high_confidence";
+// Mirrors the backend `PredictionEngine` literal minus "auto" (the console
+// only ever names a concrete engine; "auto" is the pipeline's default, not a
+// switch target). `gbm` was missing here while the backend already accepted it
+// -- /batch-predict and /batch-switch-engine both document it, the pipeline
+// whitelists it, and the batch summary reports `gbm_count` -- so the operator
+// could see GBM results but never ask for them.
+export type EngineName =
+  | "elo_odds"
+  | "hybrid"
+  | "integrated"
+  | "high_confidence"
+  | "gbm";
 export type TunableEngine = "elo_odds" | "hybrid" | "integrated";
 
 export interface BatchSummary {

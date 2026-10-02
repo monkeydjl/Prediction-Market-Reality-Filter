@@ -143,6 +143,9 @@ from app.models.event import (
     PendingLinksResponse,
     RecentPredictionsResponse,
     SimilarEventsResponse,
+    SimTrade,
+    SimTradeListResponse,
+    TradeStats,
 )
 
 
@@ -1582,14 +1585,14 @@ async def get_similar_events(
 # ── Simulated trades (paper trading) ─────────────────────────────────
 
 
-@router.get("/trades/stats", response_model=FlexibleResponse)
+@router.get("/trades/stats", response_model=TradeStats)
 async def get_trade_stats() -> dict[str, Any]:
     """Return aggregate statistics for closed simulated trades."""
     from app.memory.simulated_trade_store import trade_stats
     return trade_stats()
 
 
-@router.get("/trades/open", response_model=FlexibleResponse)
+@router.get("/trades/open", response_model=SimTradeListResponse)
 async def get_open_trades(
     limit: int = Query(default=10, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -1606,7 +1609,7 @@ async def get_open_trades(
     }
 
 
-@router.get("/trades/closed", response_model=FlexibleResponse)
+@router.get("/trades/closed", response_model=SimTradeListResponse)
 async def get_closed_trades(
     limit: int = Query(default=10, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -1623,7 +1626,33 @@ async def get_closed_trades(
     }
 
 
-@router.post("/trades/{event_id}/close", response_model=FlexibleResponse)
+@router.get("/trades/voided", response_model=SimTradeListResponse)
+async def get_voided_trades(
+    limit: int = Query(default=10, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    """Return paginated recently voided simulated trades.
+
+    A voided trade is terminal but unsettled: its prediction was voided by a
+    non-genuine resolution, so it carries no pnl/is_win/actual_outcome and is
+    excluded from the closed-trade statistics. It left the open list when it was
+    voided, so without this route it was visible in no list at all -- the
+    docstring on ``void_trade`` promises ``exit_reason='voided'`` makes the
+    reason legible "without joining back to the prediction", and that promise
+    only held at the database layer.
+    """
+    from app.memory.simulated_trade_store import count_voided_trades, list_voided_trades
+    trades = list_voided_trades(limit=limit, offset=offset)
+    return {
+        "count": len(trades),
+        "total": count_voided_trades(),
+        "limit": limit,
+        "offset": offset,
+        "trades": trades,
+    }
+
+
+@router.post("/trades/{event_id}/close", response_model=SimTrade)
 async def manual_close_trade(
     event_id: str,
     exit_prob: float = Body(default=0.0, embed=True),

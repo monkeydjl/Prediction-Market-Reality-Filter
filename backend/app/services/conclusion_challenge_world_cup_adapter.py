@@ -12,12 +12,14 @@ from typing import Any
 #: SF fall through to ``medium``.
 _HIGH_RISK_STAGES = frozenset(
     {
+        "round_of_32",
         "round_of_16",
         "quarterfinal",
         "quarter_final",
         "semifinal",
         "semi_final",
         "final",
+        "third_place",
     }
 )
 

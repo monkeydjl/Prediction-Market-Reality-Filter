@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 _KNOCKOUT_STAGES = frozenset({
-    "round_of_16", "quarterfinal", "quarter_final",
+    "round_of_32", "round_of_16", "quarterfinal", "quarter_final",
     "semifinal", "semi_final", "final", "third_place",
 })
 

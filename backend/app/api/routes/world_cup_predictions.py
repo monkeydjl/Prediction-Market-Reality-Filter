@@ -545,6 +545,7 @@ async def batch_switch_engine(
             - "hybrid": Full hybrid engine (rule + AI)
             - "integrated": Fuse elo_odds and hybrid engine results
             - "high_confidence": Auto-select best engine based on confidence
+            - "gbm": LightGBM xG model engine
         status_filter: Only process matches with this status (default: "scheduled")
 
     Returns:

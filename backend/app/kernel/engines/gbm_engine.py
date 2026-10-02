@@ -23,21 +23,25 @@ _NEUTRAL = {"home_win": 0.40, "draw": 0.30, "away_win": 0.30}
 #:
 #: ``match.stage`` reaches us straight from ``MatchFixture.stage``
 #: (WorldCupAdapter), and ``world_cup_match_service.parse_fixture`` only ever
-#: writes the *canonical* forms: ``group_stage`` / ``round_of_16`` /
-#: ``quarterfinal`` / ``semifinal`` / ``final`` / ``unknown``. This set used to
-#: list only the underscore aliases (``quarter_final`` / ``semi_final``), so
-#: both of those rounds came out non-knockout -- a draw stayed possible in a
-#: tie that cannot be drawn -- while ``elo_odds_engine`` judged the very same
-#: ``MatchIdentity`` the other way. ``knockout`` / ``playoff`` are kept for the
-#: other adapters' vocabularies; the aliases are kept as defensive synonyms.
+#: writes the *canonical* forms: ``group_stage`` / ``round_of_32`` /
+#: ``round_of_16`` / ``quarterfinal`` / ``semifinal`` / ``third_place`` /
+#: ``final`` / ``unknown`` -- of which only ``group_stage`` and ``unknown`` are
+#: not knockout ties. This set used to list only the underscore aliases
+#: (``quarter_final`` / ``semi_final``), so both of those rounds came out
+#: non-knockout -- a draw stayed possible in a tie that cannot be drawn --
+#: while ``elo_odds_engine`` judged the very same ``MatchIdentity`` the other
+#: way. ``knockout`` / ``playoff`` are kept for the other adapters'
+#: vocabularies; the aliases are kept as defensive synonyms.
 _KNOCKOUT_STAGES = frozenset(
     {
+        "round_of_32",
         "round_of_16",
         "quarterfinal",
         "quarter_final",
         "semifinal",
         "semi_final",
         "final",
+        "third_place",
         "knockout",
         "playoff",
     }

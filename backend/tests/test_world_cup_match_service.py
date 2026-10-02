@@ -199,6 +199,30 @@ class ParseFixtureTests(unittest.TestCase):
         self.assertEqual(result["stage"], "round_of_16")
         self.assertIsNone(result["group"])
 
+    def test_round_of_32_mapping(self):
+        """The 2026 format has a round of 32 before the round of 16."""
+        raw = _make_fixture(round_name="Round of 32")
+        result = parse_fixture(raw)
+        self.assertEqual(result["stage"], "round_of_32")
+        self.assertIsNone(result["group"])
+
+    def test_third_place_mapping_from_api_football_spelling(self):
+        """``"3rd Place Final"`` contains ``"final"``.
+
+        The third-place branch has to run before the final test, or this round
+        is read as the final itself.
+        """
+        raw = _make_fixture(round_name="3rd Place Final")
+        result = parse_fixture(raw)
+        self.assertEqual(result["stage"], "third_place")
+        self.assertIsNone(result["group"])
+
+    def test_third_place_mapping_from_openfootball_spelling(self):
+        raw = _make_fixture(round_name="Match for third place")
+        result = parse_fixture(raw)
+        self.assertEqual(result["stage"], "third_place")
+        self.assertIsNone(result["group"])
+
     def test_unknown_round_mapping(self):
         raw = _make_fixture(round_name="Play-off")
         result = parse_fixture(raw)

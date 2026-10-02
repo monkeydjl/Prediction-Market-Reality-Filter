@@ -8,6 +8,7 @@ const apiMocks = vi.hoisted(() => ({
   tradeStats: vi.fn(),
   openTrades: vi.fn(),
   closedTrades: vi.fn(),
+  voidedTrades: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => ({
@@ -83,6 +84,10 @@ function formattedEntryTime() {
 describe("TradesPage", () => {
   beforeEach(() => {
     Object.values(apiMocks).forEach((mock) => mock.mockReset());
+    // load() fetches all four lists in one Promise.all, so every test needs a
+    // resolved voidedTrades or the destructured response is undefined. Tests
+    // that care about the voided tab override this.
+    apiMocks.voidedTrades.mockResolvedValue({ count: 0, total: 0, trades: [] });
   });
 
   it("switches between current holdings and closed trades instead of rendering both", async () => {
@@ -282,6 +287,46 @@ describe("TradesPage", () => {
     const nextOpenSection = nextOpenHeading.closest("section");
     expect(nextOpenSection).not.toBeNull();
     expect(await within(nextOpenSection as HTMLElement).findByText("Open trade page 2")).toBeInTheDocument();
+  });
+
+  it("gives voided trades their own tab and says the settlement fields are unsettled", async () => {
+    const user = userEvent.setup();
+    const voidedTrade: SimTrade = {
+      ...closedTrade,
+      trade_id: "sim-voided",
+      event_id: "evt-voided",
+      event_title: "Voided trade event",
+      exit_time: "2026-07-06T00:00:00.000Z",
+      exit_reason: "voided",
+      actual_outcome: null,
+      pnl_pct: null,
+      is_win: null,
+      status: "voided",
+    };
+    apiMocks.tradeStats.mockResolvedValue(stats);
+    apiMocks.openTrades.mockResolvedValue({ count: 0, total: 0, trades: [] });
+    apiMocks.closedTrades.mockResolvedValue({ count: 0, total: 0, trades: [] });
+    apiMocks.voidedTrades.mockResolvedValue({ count: 1, total: 1, trades: [voidedTrade] });
+
+    render(<TradesPage />);
+
+    // Voiding removes a trade from the open list, so it is not there to begin with.
+    expect(
+      await screen.findByText("暂无持仓。系统发现事件时会自动建立模拟交易。"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Voided trade event")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /已作废/ }));
+
+    const heading = await screen.findByRole("heading", { name: "已作废 (1)" });
+    const section = heading.closest("section");
+    expect(section).not.toBeNull();
+    const scope = section as HTMLElement;
+
+    expect(within(scope).getByText("Voided trade event")).toBeInTheDocument();
+    // The empty/null settlement is spelled out, so a blank PnL is not read as 0.
+    expect(scope).toHaveTextContent("不是「0 收益」");
+    expect(apiMocks.voidedTrades).toHaveBeenCalledWith(10, 0);
   });
 
 });

@@ -293,6 +293,71 @@ class SimulatedTradeStoreTests(unittest.TestCase):
         self.assertEqual(store.count_closed_trades(), 1)
         self.assertEqual(store.list_closed_trades()[0]["event_id"], "settled")
 
+    def test_voided_readers_return_only_voided_rows(self):
+        """count_voided_trades / list_voided_trades read back the third state.
+
+        The open/closed readers each filter on their own status; if the voided
+        readers filtered on the wrong token, the count and the list would
+        disagree with what void_trade wrote -- and the voided tab would show
+        rows that are actually open or settled.
+
+        Two closed trades rather than one, on purpose: with one row of each
+        state the wrong-token count would still read 1, and this test would
+        pass under a correct *and* a broken reader. The counts have to differ
+        for the count assertion to be load-bearing (mutation V5).
+        """
+        store.open_trade("void-a", direction="YES", entry_prob=60.0, market_prob=50.0)
+        store.void_trade("void-a")
+        store.open_trade("settled-b", direction="YES", entry_prob=60.0, market_prob=50.0)
+        store.close_trade("settled-b", actual_outcome=100.0)
+        store.open_trade("settled-b2", direction="NO", entry_prob=40.0, market_prob=60.0)
+        store.close_trade("settled-b2", actual_outcome=0.0)
+        store.open_trade("open-c", direction="NO", entry_prob=40.0, market_prob=60.0)
+
+        voided = store.list_voided_trades()
+
+        self.assertEqual(store.count_voided_trades(), 1)
+        self.assertEqual([t["event_id"] for t in voided], ["void-a"])
+        self.assertEqual(voided[0]["status"], "voided")
+        self.assertEqual(voided[0]["exit_reason"], "voided")
+        # The other two states stay reachable through their own readers -- and
+        # deliberately outnumber the voided rows, so neither count can be the
+        # other's answer by coincidence.
+        self.assertEqual(store.count_open_trades(), 1)
+        self.assertEqual(store.count_closed_trades(), 2)
+
+    def test_list_voided_trades_is_newest_first_by_void_time(self):
+        """Ordering is exit_time DESC -- the moment of voiding, not entry.
+
+        trade_id is a random uuid, so the DESC tiebreaker cannot order a
+        same-instant pair; seed exit_time explicitly rather than relying on two
+        void_trade calls landing in different clock ticks.
+        """
+        store._ensure_schema(self.db_path)
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.executemany(
+                "INSERT INTO simulated_trades "
+                "(trade_id, event_id, direction, entry_prob, market_prob, "
+                " entry_edge, entry_time, exit_time, exit_reason, status) "
+                "VALUES (?,?, 'YES', 60.0, 50.0, 10.0, '2025-12-01T00:00:00+00:00', "
+                " ?, 'voided', 'voided')",
+                [
+                    ("sim-old", "evt-old", "2026-01-01T00:00:00+00:00"),
+                    ("sim-new", "evt-new", "2026-03-01T00:00:00+00:00"),
+                    ("sim-mid", "evt-mid", "2026-02-01T00:00:00+00:00"),
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        voided = store.list_voided_trades()
+
+        self.assertEqual(
+            [t["event_id"] for t in voided], ["evt-new", "evt-mid", "evt-old"]
+        )
+
     def test_by_direction_reports_both_strong_directions(self):
         """trade_stats() must report BOTH directions, not just YES.
 

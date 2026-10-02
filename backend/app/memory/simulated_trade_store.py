@@ -367,6 +367,17 @@ def count_closed_trades() -> int:
     return _count_trades("closed")
 
 
+def count_voided_trades() -> int:
+    """Return the total number of voided simulated trades.
+
+    A voided trade is terminal but unsettled, so it sits in neither the open nor
+    the closed list. Without this count the /trades page showed a "closed"
+    figure that silently excluded them -- a reading that did not say what it had
+    left out.
+    """
+    return _count_trades("voided")
+
+
 def list_open_trades(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
     """Return open simulated trades, newest first."""
     db_path = loop_db_path()
@@ -390,6 +401,25 @@ def list_closed_trades(limit: int = 100, offset: int = 0) -> list[dict[str, Any]
         rows = conn.execute(
             """SELECT * FROM simulated_trades
                WHERE status='closed'
+               ORDER BY exit_time DESC, trade_id DESC
+               LIMIT ? OFFSET ?""",
+            (limit, offset),
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+
+def list_voided_trades(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+    """Return recently voided simulated trades, newest first.
+
+    Ordered by exit_time like the closed list: void_trade stamps exit_time and
+    exit_reason, so a voided row has both even though it has no settlement.
+    """
+    db_path = loop_db_path()
+    _ensure_schema(db_path)
+    with reading(db_path) as conn:
+        rows = conn.execute(
+            """SELECT * FROM simulated_trades
+               WHERE status='voided'
                ORDER BY exit_time DESC, trade_id DESC
                LIMIT ? OFFSET ?""",
             (limit, offset),

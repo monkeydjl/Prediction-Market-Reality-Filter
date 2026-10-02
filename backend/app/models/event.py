@@ -759,3 +759,102 @@ class SimilarEventsResponse(FlexibleResponse):
     event_id: str = ""
     count: int = 0
     similar: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# ── Simulated trades (M6 paper trading) ──────────────────────────────
+#
+# /trades/* were the last endpoints answering with the bare FlexibleResponse
+# base class. Declared here for the reason that class is excluded from the
+# frontend export allowlist: with no fields in the model there is no field
+# contract in the OpenAPI schema, so `frontend/src/lib/api.ts` had to hand-write
+# `SimTrade` and the CI type-sync job could not see these endpoints at all.
+#
+# Every field has a default and the base class sets extra="allow", so a store
+# row that grows or drops a key does not turn a 200 into a 500. `direction` and
+# `status` are Literals because they are the two values with a CHECK behind them
+# (simulated_trade_store), and a client union that cannot represent a fourth
+# value should fail here rather than in a browser.
+
+
+class SimTrade(FlexibleResponse):
+    """One paper trade row, as returned by the /trades/* list endpoints.
+
+    The fields without a default mirror the store's NOT NULL columns and are
+    deliberately required. Giving every field a default would render them all
+    optional in ``generated-types.ts``, which is *looser* than the hand-written
+    interface this replaces -- ``t.market_prob.toFixed(1)`` would stop
+    type-checking. A row missing one of these is a store bug, and a loud 422 is
+    the right signal; ``_row_to_dict`` always emits them.
+    """
+
+    #: The sqlite rowid. Optional: present because the store selects ``*``, but
+    #: not part of the API contract.
+    id: int | None = None
+    trade_id: str
+    event_id: str
+    event_title: str
+    #: Matches the store's CHECK (direction IN ('YES','NO')).
+    direction: Literal["YES", "NO"]
+    entry_prob: float
+    market_prob: float
+    entry_edge: float
+    entry_time: str
+    position_pct: float
+    confidence: float | None = None
+    trust_weight: float | None = None
+    decision: str
+    exit_prob: float | None = None
+    exit_market: float | None = None
+    exit_time: str | None = None
+    exit_reason: str | None = None
+    actual_outcome: float | None = None
+    pnl_pct: float | None = None
+    is_win: int | None = None
+    #: Matches the CHECK widened to ('open','closed','voided') in schema v2.
+    status: Literal["open", "closed", "voided"]
+    created_at: str
+    updated_at: str
+    #: Derived by the store, not stored columns.
+    raw_edge: float | None = None
+    directional_edge: float | None = None
+    edge_definition: str = ""
+
+
+class SimTradeListResponse(FlexibleResponse):
+    """Envelope shared by /trades/open, /trades/closed and /trades/voided."""
+
+    count: int
+    total: int
+    limit: int
+    offset: int
+    trades: list[SimTrade]
+
+
+class TradeStatBucket(FlexibleResponse):
+    """One row of the by_direction / by_decision tables.
+
+    ``total``/``wins``/``win_rate`` are always present on a bucket the store
+    emits (it only adds a bucket when ``total > 0``). ``total_pnl`` is present
+    only in ``by_direction``, so it keeps a default rather than a second,
+    near-identical bucket type.
+    """
+
+    total: int
+    wins: int
+    win_rate: float
+    avg_pnl: float | None = None
+    total_pnl: float | None = None
+
+
+class TradeStats(FlexibleResponse):
+    """Aggregate statistics for closed simulated trades."""
+
+    total_closed: int = 0
+    win_rate: float | None = None
+    total_pnl_pct: float = 0.0
+    avg_pnl_pct: float | None = None
+    avg_edge_at_entry: float | None = None
+    avg_directional_edge_at_entry: float | None = None
+    edge_definition: dict[str, str] = Field(default_factory=dict)
+    by_direction: dict[str, TradeStatBucket] = Field(default_factory=dict)
+    by_decision: dict[str, TradeStatBucket] = Field(default_factory=dict)

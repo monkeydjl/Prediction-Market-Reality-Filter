@@ -3765,3 +3765,101 @@ class ResetAllEventDataTests(unittest.TestCase):
         for table in (*census.REFERENCING_TABLES, "loop_runs"):
             self.assertEqual(cleared[f"sqlite.{table}"], 0, table)
         self.assertEqual(file_store.read_json(self.store_file, None), {})
+
+
+class VoidedTradesRouteTests(unittest.TestCase):
+    """GET /events/trades/voided -- the only reader for status='voided'.
+
+    Before this route a voided trade sat in no list at all: it left the open
+    list when void_trade ran, and the closed list filters status='closed'. This
+    pins the route wiring (path, envelope, total) against the real store, so a
+    reader that later filtered on the wrong token, or an envelope that dropped
+    ``total``, fails here rather than silently emptying the voided tab.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db = str(Path(self.tmpdir.name) / "loop.db")
+        self.patches = [
+            # simulated_trade_store holds its own `loop_db_path` binding, so
+            # patching sqlite_db would not reach it.
+            patch.object(trades, "loop_db_path", return_value=self.db),
+        ]
+        for p in self.patches:
+            p.start()
+        self.client = _events_client()
+
+    def tearDown(self):
+        trades._INITIALIZED.discard(self.db)
+        for p in self.patches:
+            p.stop()
+        self.tmpdir.cleanup()
+
+    def test_voided_list_reports_the_voided_rows_and_keeps_unsettled_fields(self):
+        trades.open_trade("void-a", direction="YES", entry_prob=60.0, market_prob=50.0)
+        trades.void_trade("void-a")
+        trades.open_trade("open-b", direction="NO", entry_prob=40.0, market_prob=60.0)
+        trades.open_trade("settled-c", direction="YES", entry_prob=60.0, market_prob=50.0)
+        trades.close_trade("settled-c", actual_outcome=100.0)
+
+        resp = self.client.get("/events/trades/voided")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["total"], 1)
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["limit"], 10)  # the route's default page size
+        self.assertEqual(body["offset"], 0)
+        self.assertEqual([t["event_id"] for t in body["trades"]], ["void-a"])
+
+        row = body["trades"][0]
+        self.assertEqual(row["status"], "voided")
+        self.assertEqual(row["exit_reason"], "voided")
+        # The unsettled fields must be present-and-null, not omitted: the
+        # frontend reads a blank PnL as "unsettled", which differs from 0.
+        self.assertIn("pnl_pct", row)
+        self.assertIn("actual_outcome", row)
+        self.assertIsNone(row["pnl_pct"])
+        self.assertIsNone(row["actual_outcome"])
+        self.assertIsNone(row["is_win"])
+
+    def test_open_and_closed_routes_still_exclude_a_voided_row(self):
+        """The counterpart to the voided reader: voiding must not leak it back.
+
+        Asserted in one place so a voided row cannot start appearing in the
+        open list (where it would look like a live position) or the closed list
+        (where it would enter the win-rate / PnL aggregates).
+        """
+        trades.open_trade("void-d", direction="YES", entry_prob=60.0, market_prob=50.0)
+        trades.void_trade("void-d")
+
+        open_body = self.client.get("/events/trades/open").json()
+        closed_body = self.client.get("/events/trades/closed").json()
+        stats_body = self.client.get("/events/trades/stats").json()
+
+        self.assertEqual(open_body["total"], 0)
+        self.assertEqual(open_body["trades"], [])
+        self.assertEqual(closed_body["total"], 0)
+        self.assertEqual(closed_body["trades"], [])
+        self.assertEqual(stats_body["total_closed"], 0)
+
+    def test_voided_list_pages_with_limit_and_offset(self):
+        for i in range(3):
+            trades.open_trade(f"void-{i}", direction="YES", entry_prob=60.0, market_prob=50.0)
+            trades.void_trade(f"void-{i}")
+
+        first = self.client.get("/events/trades/voided?limit=2&offset=0").json()
+        second = self.client.get("/events/trades/voided?limit=2&offset=2").json()
+
+        self.assertEqual(first["total"], 3)  # total is the whole set, not the page
+        self.assertEqual(first["count"], 2)
+        self.assertEqual(first["limit"], 2)
+        self.assertEqual(len(first["trades"]), 2)
+        self.assertEqual(second["total"], 3)
+        self.assertEqual(second["count"], 1)
+        self.assertEqual(second["offset"], 2)
+        self.assertEqual(len(second["trades"]), 1)
+        # The two pages must not overlap.
+        first_ids = {t["trade_id"] for t in first["trades"]}
+        second_ids = {t["trade_id"] for t in second["trades"]}
+        self.assertEqual(first_ids & second_ids, set())

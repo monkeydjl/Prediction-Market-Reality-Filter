@@ -110,6 +110,13 @@ def parse_fixture(fixture_data: dict[str, Any]) -> dict[str, Any] | None:
             if char in "ABCDEFGH":
                 group = char
                 break
+    elif "third" in round_info or "3rd" in round_info:
+        # Tested before "final" on purpose. This round is spelled "Match for
+        # third place" (openfootball) or "3rd Place Final" (API-Football), and
+        # the latter contains "final" -- without this branch the third-place
+        # play-off was read as the final itself.
+        stage = "third_place"
+        group = None
     elif "final" in round_info and "semi" not in round_info and "quarter" not in round_info:
         stage = "final"
         group = None
@@ -118,6 +125,13 @@ def parse_fixture(fixture_data: dict[str, Any]) -> dict[str, Any] | None:
         group = None
     elif "quarter" in round_info:
         stage = "quarterfinal"
+        group = None
+    elif "32" in round_info:
+        # The 2026 format is 48 teams, so a round of 32 precedes the round of
+        # 16. Without this branch it fell through to "unknown", which every
+        # consumer reads as non-knockout (draw allowed) in a round that cannot
+        # be drawn.
+        stage = "round_of_32"
         group = None
     elif "16" in round_info or "round of 16" in round_info:
         stage = "round_of_16"

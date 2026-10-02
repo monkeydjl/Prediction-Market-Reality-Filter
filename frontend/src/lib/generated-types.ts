@@ -701,11 +701,98 @@ export interface RecentPredictionsResponse {
   }[];
   [k: string]: unknown;
 }
+/**
+ * One paper trade row, as returned by the /trades/* list endpoints.
+ *
+ * The fields without a default mirror the store's NOT NULL columns and are
+ * deliberately required. Giving every field a default would render them all
+ * optional in ``generated-types.ts``, which is *looser* than the hand-written
+ * interface this replaces -- ``t.market_prob.toFixed(1)`` would stop
+ * type-checking. A row missing one of these is a store bug, and a loud 422 is
+ * the right signal; ``_row_to_dict`` always emits them.
+ */
+export interface SimTrade {
+  id?: number | null;
+  trade_id: string;
+  event_id: string;
+  event_title: string;
+  direction: "YES" | "NO";
+  entry_prob: number;
+  market_prob: number;
+  entry_edge: number;
+  entry_time: string;
+  position_pct: number;
+  confidence?: number | null;
+  trust_weight?: number | null;
+  decision: string;
+  exit_prob?: number | null;
+  exit_market?: number | null;
+  exit_time?: string | null;
+  exit_reason?: string | null;
+  actual_outcome?: number | null;
+  pnl_pct?: number | null;
+  is_win?: number | null;
+  status: "open" | "closed" | "voided";
+  created_at: string;
+  updated_at: string;
+  raw_edge?: number | null;
+  directional_edge?: number | null;
+  edge_definition?: string;
+  [k: string]: unknown;
+}
+/**
+ * Envelope shared by /trades/open, /trades/closed and /trades/voided.
+ */
+export interface SimTradeListResponse {
+  count: number;
+  total: number;
+  limit: number;
+  offset: number;
+  trades: SimTrade[];
+  [k: string]: unknown;
+}
 export interface SimilarEventsResponse {
   event_id?: string;
   count?: number;
   similar?: {
     [k: string]: unknown;
   }[];
+  [k: string]: unknown;
+}
+/**
+ * One row of the by_direction / by_decision tables.
+ *
+ * ``total``/``wins``/``win_rate`` are always present on a bucket the store
+ * emits (it only adds a bucket when ``total > 0``). ``total_pnl`` is present
+ * only in ``by_direction``, so it keeps a default rather than a second,
+ * near-identical bucket type.
+ */
+export interface TradeStatBucket {
+  total: number;
+  wins: number;
+  win_rate: number;
+  avg_pnl?: number | null;
+  total_pnl?: number | null;
+  [k: string]: unknown;
+}
+/**
+ * Aggregate statistics for closed simulated trades.
+ */
+export interface TradeStats {
+  total_closed?: number;
+  win_rate?: number | null;
+  total_pnl_pct?: number;
+  avg_pnl_pct?: number | null;
+  avg_edge_at_entry?: number | null;
+  avg_directional_edge_at_entry?: number | null;
+  edge_definition?: {
+    [k: string]: string;
+  };
+  by_direction?: {
+    [k: string]: TradeStatBucket;
+  };
+  by_decision?: {
+    [k: string]: TradeStatBucket;
+  };
   [k: string]: unknown;
 }

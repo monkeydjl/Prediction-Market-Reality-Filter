@@ -42,7 +42,10 @@ function StatCard({
   );
 }
 
-function PnlBadge({ pnl }: { pnl: number | null }) {
+// `undefined` is part of the contract: these come from generated types whose
+// nullable columns are optional (`pnl_pct?: number | null`), so "absent" and
+// "null" both mean "not measured". `== null` below catches both.
+function PnlBadge({ pnl }: { pnl: number | null | undefined }) {
   if (pnl == null) return <span className="text-muted-foreground">—</span>;
   const cls = pnl >= 0 ? "text-pos" : "text-neg";
   return (
@@ -56,36 +59,43 @@ export default function TradesPage() {
   const [stats, setStats] = useState<TradeStats | null>(null);
   const [openTrades, setOpenTrades] = useState<SimTrade[]>([]);
   const [closedTrades, setClosedTrades] = useState<SimTrade[]>([]);
+  const [voidedTrades, setVoidedTrades] = useState<SimTrade[]>([]);
   const [openTotal, setOpenTotal] = useState(0);
   const [closedTotal, setClosedTotal] = useState(0);
+  const [voidedTotal, setVoidedTotal] = useState(0);
   const [openPage, setOpenPage] = useState(0);
   const [closedPage, setClosedPage] = useState(0);
+  const [voidedPage, setVoidedPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tradeView, setTradeView] = useState<"open" | "closed">("open");
+  const [tradeView, setTradeView] = useState<"open" | "closed" | "voided">("open");
 
   const load = useCallback(async () => {
     setError(null);
     setLoading(true);
     try {
-      const [s, o, c] = await Promise.all([
+      const [s, o, c, v] = await Promise.all([
         eventsApi.tradeStats(),
         eventsApi.openTrades(PAGE_SIZE, openPage * PAGE_SIZE),
         eventsApi.closedTrades(PAGE_SIZE, closedPage * PAGE_SIZE),
+        eventsApi.voidedTrades(PAGE_SIZE, voidedPage * PAGE_SIZE),
       ]);
       const openRows = o.trades ?? [];
       const closedRows = c.trades ?? [];
+      const voidedRows = v.trades ?? [];
       setStats(s);
       setOpenTrades(openRows);
       setClosedTrades(closedRows);
+      setVoidedTrades(voidedRows);
       setOpenTotal(o.total ?? o.count ?? openRows.length);
       setClosedTotal(c.total ?? c.count ?? closedRows.length);
+      setVoidedTotal(v.total ?? v.count ?? voidedRows.length);
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载失败");
     } finally {
       setLoading(false);
     }
-  }, [closedPage, openPage]);
+  }, [closedPage, openPage, voidedPage]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -306,6 +316,7 @@ export default function TradesPage() {
                 [
                   { key: "open", label: "当前持仓", count: openTotal },
                   { key: "closed", label: "已平仓", count: closedTotal },
+                  { key: "voided", label: "已作废", count: voidedTotal },
                 ] as const
               ).map((tab) => (
                 <button
@@ -417,7 +428,7 @@ export default function TradesPage() {
                   />
                 )}
               </section>
-            ) : (
+            ) : tradeView === "closed" ? (
               <section className="flex flex-col gap-2">
                 <h2 className="text-sm font-semibold">已平仓 ({closedTotal})</h2>
                 {closedTrades.length === 0 ? (
@@ -496,6 +507,106 @@ export default function TradesPage() {
                     total={closedTotal}
                     loading={loading}
                     onPageChange={setClosedPage}
+                  />
+                )}
+              </section>
+            ) : (
+              <section
+                className="flex flex-col gap-2"
+                data-testid="voided-trades-section"
+              >
+                <h2 className="text-sm font-semibold">已作废 ({voidedTotal})</h2>
+                <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                  作废是终态但不结算：预测被判为非真实结算（身份冲突，或市场作废）时，
+                  持仓会离开「当前持仓」。作废行<strong className="font-medium text-foreground">不入</strong>
+                  胜率 / PnL / |Edge| 统计，其结算字段（结果、PnL）必然为空 ——
+                  空值表示「未结算」，不是「0 收益」。
+                </p>
+                {voidedTrades.length === 0 ? (
+                  <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+                    暂无作废记录。只有预测被判为非真实结算时，交易才会进入这里。
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto rounded-lg border border-border">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border bg-secondary/50 text-left text-xs text-muted-foreground">
+                          <th className="px-4 py-2">事件</th>
+                          <th className="px-4 py-2">方向</th>
+                          <th className="px-4 py-2" title="raw_edge = AI% − 市场%">
+                            raw edge
+                          </th>
+                          <th className="px-4 py-2" title="YES→raw，NO→−raw">
+                            方向 edge
+                          </th>
+                          <th className="px-4 py-2">仓位%</th>
+                          <th className="px-4 py-2">决策</th>
+                          <th className="px-4 py-2">入场时间</th>
+                          <th className="px-4 py-2">作废时间</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {voidedTrades.map((t) => (
+                          <tr
+                            key={t.trade_id}
+                            className="border-b border-border last:border-0"
+                          >
+                            <td className="max-w-[280px] truncate px-4 py-2">
+                              <Link
+                                href={`/events?id=${encodeURIComponent(t.event_id)}`}
+                                className="font-medium hover:text-primary"
+                              >
+                                {t.event_title || t.event_id.slice(0, 12)}
+                              </Link>
+                            </td>
+                            <td
+                              className={`px-4 py-2 font-mono font-semibold ${
+                                t.direction === "YES" ? "text-pos" : "text-neg"
+                              }`}
+                            >
+                              {t.direction}
+                            </td>
+                            <td className="px-4 py-2 font-mono tabular-nums">
+                              {fmtSignedPct(t.entry_edge, 1)}pp
+                            </td>
+                            <td className="px-4 py-2 font-mono tabular-nums">
+                              {fmtSignedPct(directionalEdgeOf(t), 1)}pp
+                            </td>
+                            <td className="px-4 py-2 font-mono tabular-nums">
+                              {t.position_pct.toFixed(1)}%
+                            </td>
+                            <td className="px-4 py-2">
+                              <span
+                                className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
+                                  t.decision === "act"
+                                    ? "bg-pos/10 text-pos"
+                                    : t.decision === "provisional_act"
+                                      ? "bg-warn/10 text-warn"
+                                      : "bg-secondary text-muted-foreground"
+                                }`}
+                              >
+                                {t.decision}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2 text-xs text-muted-foreground">
+                              {fmtDate(t.entry_time)}
+                            </td>
+                            <td className="px-4 py-2 text-xs text-muted-foreground">
+                              {fmtDate(t.exit_time ?? null)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {voidedTotal > PAGE_SIZE && (
+                  <PaginationControls
+                    page={voidedPage}
+                    pageSize={PAGE_SIZE}
+                    total={voidedTotal}
+                    loading={loading}
+                    onPageChange={setVoidedPage}
                   />
                 )}
               </section>

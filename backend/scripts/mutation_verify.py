@@ -286,6 +286,7 @@ _CLUB_ELO = "backend/app/services/club_elo_service.py"
 _MLB_ADAPTER = "backend/app/sports/baseball/mlb_adapter.py"
 _QUALITY = "backend/app/services/world_cup_quality_service.py"
 _PIPELINE = "backend/app/services/world_cup_prediction_pipeline.py"
+_MATCH_SERVICE = "backend/app/services/world_cup_match_service.py"
 _ELO_ENGINE = "backend/app/kernel/engines/elo_odds_engine.py"
 _SPORTS_FACT = "backend/app/services/sports_fact_service.py"
 _LIMITLESS = "backend/app/services/limitless_event_source.py"
@@ -321,6 +322,7 @@ _T_MLB_ADAPTER = "tests/test_mlb_adapter.py"
 _T_QUALITY = "tests/test_world_cup_quality_service.py"
 _T_ANALYTICS_ROUTES = "tests/test_world_cup_analytics_routes.py"
 _T_STAGE = "tests/test_knockout_stage_whitelist_consistency.py"
+_T_MATCH_SERVICE = "tests/test_world_cup_match_service.py"
 _T_SPORTS_FACT = "tests/test_sports_fact_service.py"
 _T_EVENT_SOURCE_UTILS = "tests/test_event_source_utils.py"
 _T_GUARDRAIL = "tests/test_guardrail_service.py"
@@ -685,7 +687,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="voided-trade",
-        title="作废预测时冻结其模拟交易（V1–V4）",
+        title="作废预测时冻结其模拟交易（V1–V6）",
         rationale=(
             "void_prediction 原本只把 predictions 置 voided，不碰 simulated_trades，"
             "于是每次非真实结算都留一笔永远 open 的模拟交易 —— 它既不进 closed 统计"
@@ -693,6 +695,13 @@ SETS: tuple[MutationSet, ...] = (
             "list_open_trades 里冒充持仓。V1 锁住那个调用点；V2/V3 锁住表重建的两个"
             "静默失效点（漏拷 id、CHECK 退回两态）；V4 锁住「终态必须是 voided 而不是"
             "继续 open」。"
+            "§51 补 V5/V6：写入侧有终态还不够，**读侧要读对那个终态**。"
+            "count/list_voided_trades 是本批新增的读侧（此前 voided 行在任何列表里都"
+            "看不见，见 §50.2/§51），它们的状态过滤写错时**不抛错**，只是安静地列出"
+            "别的行、或给出别的计数 —— 所以 V5/V6 打的就是那个 token。"
+            "⚠️ V5 的守卫用例里 closed 故意放**两条**：若 voided 与 closed 都只有 1 条，"
+            "「读对」与「读错」返回同一个数，断言对两种实现都成立 —— 那正是本仓反复"
+            "踩到的空头守卫形态（§31/§33/§34）。"
         ),
         mutations=(
             Mutation(
@@ -737,11 +746,33 @@ SETS: tuple[MutationSet, ...] = (
                 ),
                 note="只写 exit_reason，status 仍是 open",
             ),
+            Mutation(
+                label="V5  count_voided_trades 读的终态",
+                path=_TRADES_STORE,
+                old=b'return _count_trades("voided")',
+                new=b'return _count_trades("closed")',
+                guard_file=_TRADES_TESTS,
+                guards=("test_voided_readers_return_only_voided_rows",),
+                note=(
+                    "§51：读侧换一个状态 —— /trades/voided 的 total 会变成已平仓数。"
+                    "这条守卫要求 voided 与 closed 的条数**不相等**（否则同一个 1 "
+                    "既可能是对的也可能是读错了），所以该用例里 closed 有两条"
+                ),
+            ),
+            Mutation(
+                label="V6  list_voided_trades 的 WHERE 状态",
+                path=_TRADES_STORE,
+                old=b"WHERE status='voided'",
+                new=b"WHERE status='closed'",
+                guard_file=_TRADES_TESTS,
+                guards=("test_voided_readers_return_only_voided_rows",),
+                note="§51：列出的行换成已平仓（作废列表显示完全错误的交易）",
+            ),
         ),
     ),
     MutationSet(
         key="whitelist-fixtures",
-        title="白名单 / 枚举常量的「循环 + 钉子」与关系型守卫（W1–W30 + §45 合并的 W31 + §47 的 W32）",
+        title="白名单 / 枚举常量的「循环 + 钉子」与关系型守卫（W1–W30 + §45 合并的 W31 + §47 的 W32 + §51 的 W33/W34）",
         rationale=(
             "§22.2.3 那批契约型常量的补齐（§二十四）。每条都删掉一个成员、或把别名目标"
             "拼错，断言对应守卫转红。三件事必须写在这里："
@@ -811,6 +842,16 @@ SETS: tuple[MutationSet, ...] = (
             "`direction_vocabulary` 自己的测试看得见 —— `_REPORTED_DIRECTIONS` 是八个常量里"
             "唯一被**迭代**消费的（`for d in _REPORTED_DIRECTIONS:`），而本仓不固定 "
             "`PYTHONHASHSEED`，改成 set 会让 `by_direction` 的 JSON 键序在运行间漂移。⑨ W8 如今**多挂了一个 `guard_file`**（`tests/test_world_cup_analytics_routes.py`）：`/analytics/engine-stats` 原本自带第三份引擎键字面量 `engine_keys`，删掉那份副本、改指 `ENGINE_NAMES` 之后，这条变异才会同时打红两处 —— 第二个 guard 文件本身就是「那条路由确实从名单派生」的可执行证明。它的 oracle 是 `ENGINES` 注册表，不拿 `ENGINE_NAMES` 比 `ENGINE_NAMES`：那样是同义反复，删成员照样绿。"
+            "⑩ §51 补 W33/W34：**生产者的分支链**也是这套白名单的输入端。`parse_fixture` 只"
+            "产出规范形，所以「消费者认得哪些名字」这件事的上游是它的分支链 —— 而 §50.1 实测"
+            "其中两支根本不存在（`round_of_32` / `third_place` 的两种拼写都落到 `unknown`）。"
+            "两条变异各废掉一支（改成 `elif False:`），各挂 **两个 guard_file**：生产者自己的"
+            "单测钉返回值的**精确形状**，`test_knockout_stage_whitelist_consistency.py` 的 "
+            "`ProducerVocabularyTests` 钉「生产者吐出的每个名字消费者都认」这条**关系**。"
+            "⚠️ W33 **必须**挂第二个 guard_file 才算诚实：跨模块那条关系对 `third_place` 是"
+            "**部分盲**的 —— 「3rd Place Final」含「final」，删掉该分支后它落回 `final`，而 "
+            "`final` 本来就在淘汰赛集合里，于是只有 openfootball 拼写（「Match for third "
+            "place」）那一腿会红。**精确断言与关系断言不是互相替代，是互相补盲**。"
         ),
         mutations=(
             Mutation(
@@ -902,16 +943,18 @@ SETS: tuple[MutationSet, ...] = (
                 note="别名指向一个既非淘汰赛也非小组赛的规范形",
             ),
             Mutation(
-                label="W10 _KNOCKOUT_STAGES 增一个死成员 (round_of_32)",
+                label="W10 _KNOCKOUT_STAGES 增一个死成员 (round_of_64)",
                 path=_PIPELINE,
-                old=b'_KNOCKOUT_STAGES = {"round_of_16", "quarterfinal", "semifinal", "final"}',
-                new=(
-                    b'_KNOCKOUT_STAGES = {"round_of_16", "quarterfinal", '
-                    b'"semifinal", "final", "round_of_32"}'
-                ),
+                old=b'    "third_place",\n}',
+                new=b'    "third_place", "round_of_64",\n}',
                 guard_file=_T_STAGE,
                 guards=("test_pipeline_knockout_names_are_producible_by_the_stage_map",),
-                note="normalizer 永远产生不出来的名字 → is_knockout 恒 False",
+                note=(
+                    "normalizer 永远产生不出来的名字 → is_knockout 恒 False。"
+                    "§51 把死成员从 round_of_32 换成 round_of_64：前者在这一批里"
+                    "已经变成 _STAGE_MAP 可达的规范形，放回去就不再是死成员，"
+                    "于是「不可达成员」这条守卫会失去它唯一的触发器"
+                ),
             ),
             Mutation(
                 label="W11 elo_odds_engine._KNOCKOUT_STAGES 删掉 final",
@@ -1125,6 +1168,37 @@ SETS: tuple[MutationSet, ...] = (
                     "§47：唯一被迭代消费的方向常量 —— 改成 set 后 by_direction 的键序随 "
                     "PYTHONHASHSEED 漂移（本仓不固定它）。守卫只存在于本模块自己的测试里，"
                     "所以这条变异同时证明那个新测试文件确实被跑到"
+                ),
+            ),
+            Mutation(
+                label="W33 parse_fixture 的 third_place 分支",
+                path=_MATCH_SERVICE,
+                old=b'    elif "third" in round_info or "3rd" in round_info:',
+                new=b"    elif False:  # mutated: the third-place branch never fires",
+                guard_file=(_T_MATCH_SERVICE, _T_STAGE),
+                guards=(
+                    "test_third_place_mapping_from_api_football_spelling",
+                    "test_the_two_new_rounds_are_classified_knockout",
+                ),
+                note=(
+                    "§51：废掉生产者认第三名的那一支 —— 「3rd Place Final」含「final」，"
+                    "于是被读成决赛本身（§50.1）。跨模块那个 guard 对这一支只是**部分**可见，"
+                    "所以必须并列单测那条精确断言"
+                ),
+            ),
+            Mutation(
+                label="W34 parse_fixture 的 round_of_32 分支",
+                path=_MATCH_SERVICE,
+                old=b'    elif "32" in round_info:',
+                new=b"    elif False:  # mutated: the round-of-32 branch never fires",
+                guard_file=(_T_MATCH_SERVICE, _T_STAGE),
+                guards=(
+                    "test_round_of_32_mapping",
+                    "test_the_two_new_rounds_are_classified_knockout",
+                ),
+                note=(
+                    "§51：2026 赛制的 32 强回落到 unknown，而每个消费者都把 unknown 读作"
+                    "非淘汰赛（允许平局）—— 与 §28 修 QF/SF 时同一条失效路径"
                 ),
             ),
         ),

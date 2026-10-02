@@ -32,6 +32,10 @@ from app.models.event import (
     PendingLinksResponse,
     RecentPredictionsResponse,
     SimilarEventsResponse,
+    SimTrade,
+    SimTradeListResponse,
+    TradeStatBucket,
+    TradeStats,
 )
 
 __all__ = [
@@ -51,4 +55,8 @@ __all__ = [
     "PendingLinksResponse",
     "RecentPredictionsResponse",
     "SimilarEventsResponse",
+    "SimTrade",
+    "SimTradeListResponse",
+    "TradeStatBucket",
+    "TradeStats",
 ]

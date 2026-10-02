@@ -88,6 +88,36 @@ describe("EngineConsole", () => {
     expect(summary).toHaveTextContent("GBM 1");
   });
 
+  it("offers gbm in the engine selector and switches to it", async () => {
+    // The selector stopped at high_confidence while the backend already
+    // accepted gbm, so an operator could read GBM results but never ask for
+    // them. The option list is pinned in order, not just checked for the
+    // presence of gbm, so a reorder that drops one engine still fails here.
+    render(<EngineConsole />);
+
+    const select = screen.getByTestId("engine-select");
+    const options = Array.from(select.querySelectorAll("option")).map(
+      (o) => (o as HTMLOptionElement).value,
+    );
+    expect(options).toEqual([
+      "elo_odds",
+      "hybrid",
+      "integrated",
+      "high_confidence",
+      "gbm",
+    ]);
+
+    await userEvent.selectOptions(select, "gbm");
+    await userEvent.click(screen.getByTestId("batch-switch-button"));
+    await userEvent.click(screen.getByTestId("engine-confirm-yes"));
+
+    expect(engineMocks.streamBatchSwitchEngine).toHaveBeenCalledWith(
+      "gbm",
+      "scheduled",
+      expect.objectContaining({ onProgress: expect.any(Function) }),
+    );
+  });
+
   it("renders streamed progress and the final summary for the engine switch", async () => {
     engineMocks.streamBatchSwitchEngine.mockImplementation(
       async (_engine: string, _filter: string, handlers: Record<string, (p: unknown) => void>) => {

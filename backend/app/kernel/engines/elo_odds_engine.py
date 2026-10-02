@@ -41,12 +41,14 @@ from app.kernel.engines.odds_quality import (
 if TYPE_CHECKING:
     from app.kernel.factor_registry import FactorRegistry
 
-# Whitelist of known knockout stage names. Matches the legacy pipeline's
-# ``_KNOCKOUT_STAGES`` set. Unknown/empty stages default to False
-# (non-knockout), which is the safe default for group-stage-heavy tournaments.
+# Whitelist of known knockout stage names. A superset of the legacy pipeline's
+# ``_KNOCKOUT_STAGES``, not an equal set: this engine tests the raw stage
+# string, so it also carries the underscore aliases the pipeline normalises
+# away. Unknown/empty stages default to False (non-knockout), which is the safe
+# default for group-stage-heavy tournaments.
 _KNOCKOUT_STAGES = frozenset({
-    "round_of_16", "quarterfinal", "quarter_final",
-    "semifinal", "semi_final", "final",
+    "round_of_32", "round_of_16", "quarterfinal", "quarter_final",
+    "semifinal", "semi_final", "final", "third_place",
 })
 
 

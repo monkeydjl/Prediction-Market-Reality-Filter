@@ -17,6 +17,10 @@ const ENGINES: { value: EngineName; label: string }[] = [
   { value: "hybrid", label: "混合（规则 + AI）" },
   { value: "integrated", label: "融合" },
   { value: "high_confidence", label: "高置信自动选择" },
+  // The label matches the one the rest of the app uses (analytics-dashboard,
+  // match-prediction-card). `gbm` is a selectable engine on the backend, not
+  // just a bucket in the batch summary.
+  { value: "gbm", label: "GBM" },
 ];
 
 const TUNABLE_ENGINES: { value: TunableEngine; label: string }[] = [

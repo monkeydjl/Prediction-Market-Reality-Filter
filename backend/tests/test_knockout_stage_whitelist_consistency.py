@@ -6,10 +6,10 @@ identical:
 
 | module | members | compared against |
 |---|---|---|
-| ``world_cup_prediction_pipeline`` | 4 | ``_normalize_stage(stage)`` (canonical form) |
-| ``kernel.engines.elo_odds_engine`` | 6 | raw ``stage.lower().strip()`` |
-| ``kernel.engines.gbm_engine`` | 8 | raw ``stage.lower()`` |
-| ``kernel.engines.situational_adjust`` | 7 | raw, with ``" " -> "_"`` |
+| ``world_cup_prediction_pipeline`` | 6 | ``_normalize_stage(stage)`` (canonical form) |
+| ``kernel.engines.elo_odds_engine`` | 8 | raw ``stage.lower().strip()`` |
+| ``kernel.engines.gbm_engine`` | 10 | raw ``stage.lower()`` |
+| ``kernel.engines.situational_adjust`` | 8 | raw, with ``" " -> "_"`` |
 
 ``conclusion_challenge_world_cup_adapter`` keeps a differently *named* set for
 the very same ``match.stage`` (``_HIGH_RISK_STAGES`` -- a risk judgement, not an
@@ -33,11 +33,18 @@ and every name in the pipeline's own set has to be producible by its
 ``_STAGE_MAP`` (a member nothing can ever produce is dead code that silently
 never fires).
 
-Note what the partition assertion below does *not* leave open: ``third_place``
-is pinned to the non-knockout side of the pipeline, so moving it is a visible
-change to this test rather than a silent drift. ``situational_adjust``
-disagrees (it counts third-place as a knockout match); that disagreement is
-recorded in the report and is a deliberate modelling call, not a bug fix.
+The partition assertion below pins the whole non-knockout side to
+``{"group_stage"}``: both ``round_of_32`` and ``third_place`` sit on the
+knockout side, so moving either is a visible change to this test rather than a
+silent drift. That is a decision, not an accident -- ``parse_fixture`` emits
+both names for the 2026 format, and a round that cannot be drawn must not be
+modelled as drawable. An earlier reading pinned ``third_place`` to the
+non-knockout side and ``situational_adjust`` disagreed; that disagreement is
+resolved in the same direction here and the reasoning is in the report.
+
+``parse_fixture`` is driven directly by the two tests after the partition, so
+the relation that would have caught this -- every stage the producer can emit
+is a name the pipeline can classify -- is checked rather than assumed.
 """
 
 import unittest
@@ -54,9 +61,11 @@ from app.kernel.engines.situational_adjust import (
 from app.services.conclusion_challenge_world_cup_adapter import (
     _HIGH_RISK_STAGES as CHALLENGE_HIGH_RISK_STAGES,
 )
+from app.services.world_cup_match_service import parse_fixture
 from app.services.world_cup_prediction_pipeline import (
     _KNOCKOUT_STAGES as PIPELINE_KNOCKOUT_STAGES,
     _STAGE_MAP as PIPELINE_STAGE_MAP,
+    _normalize_stage,
 )
 
 _KERNEL_ENGINE_STAGE_SETS = {
@@ -64,6 +73,20 @@ _KERNEL_ENGINE_STAGE_SETS = {
     "gbm_engine": GBM_KNOCKOUT_STAGES,
     "situational_adjust": SITUATIONAL_KNOCKOUT_STAGES,
 }
+
+
+def _feed_fixture(round_name: str) -> dict:
+    """A minimal API-Football fixture carrying just enough to parse."""
+    return {
+        "fixture": {
+            "id": 1,
+            "date": "2026-06-15T18:00:00+00:00",
+            "status": {"short": "NS"},
+            "venue": {"name": "Stadium"},
+        },
+        "teams": {"home": {"name": "A"}, "away": {"name": "B"}},
+        "league": {"round": round_name},
+    }
 
 
 class KnockoutStageWhitelistTests(unittest.TestCase):
@@ -83,11 +106,11 @@ class KnockoutStageWhitelistTests(unittest.TestCase):
         non-knockout stage.
 
         This is what catches a mistyped alias *target*: mapping a new spelling
-        onto ``"quarterfinals"`` would add a seventh canonical form that is
+        onto ``"quarterfinals"`` would add an eighth canonical form that is
         neither, and ``is_knockout`` would quietly stay False for it.
         """
         non_knockout = set(PIPELINE_STAGE_MAP.values()) - set(PIPELINE_KNOCKOUT_STAGES)
-        self.assertEqual(non_knockout, {"group_stage", "third_place"})
+        self.assertEqual(non_knockout, {"group_stage"})
 
     def test_kernel_engines_recognise_every_canonical_knockout_stage(self):
         """The engines test the raw stage string, so their sets also carry alias
@@ -118,6 +141,55 @@ class KnockoutStageWhitelistTests(unittest.TestCase):
             "the challenge adapter does not rate every canonical knockout "
             "stage as high risk",
         )
+
+
+class ProducerVocabularyTests(unittest.TestCase):
+    """The producer's output vocabulary, checked against the consumer side.
+
+    Both tests call the real ``parse_fixture`` with the round spellings the two
+    feeds use, rather than a hand-copied list of stage names -- a copied list
+    would go stale in exactly the way this class exists to catch.
+    """
+
+    #: Round strings the two feeds actually send. "3rd Place Final" is the
+    #: API-Football spelling and contains "final"; "Match for third place" is
+    #: openfootball's.
+    RAW_ROUNDS = (
+        "Group A",
+        "Round of 32",
+        "Round of 16",
+        "Quarter-final",
+        "Semi-final",
+        "3rd Place Final",
+        "Match for third place",
+        "Final",
+        "Play-off",
+    )
+
+    def test_every_emitted_stage_is_a_name_the_pipeline_can_classify(self):
+        """No producer output may be a form the normalizer returns unchanged.
+
+        ``_normalize_stage`` passes an unknown string straight through, and
+        ``is_knockout`` is a membership test, so an unrecognised name is
+        silently non-knockout. ``round_of_32`` and ``third_place`` both used to
+        arrive that way: the feeds' spellings were absent from the branch chain
+        and fell through to ``unknown``.
+        """
+        known = set(PIPELINE_STAGE_MAP.values()) | {"unknown"}
+        for raw in self.RAW_ROUNDS:
+            stage = parse_fixture(_feed_fixture(raw))["stage"]
+            self.assertIn(stage, known, f"{raw!r} emitted {stage!r}")
+
+    def test_the_two_new_rounds_are_classified_knockout(self):
+        """And the classification is the deliberate one, not just known.
+
+        ``unknown`` satisfies the test above but is the failure this batch
+        fixes, so the two rounds that used to land there are asserted to be
+        knockout here.
+        """
+        for raw in ("Round of 32", "3rd Place Final", "Match for third place"):
+            stage = parse_fixture(_feed_fixture(raw))["stage"]
+            self.assertIn(_normalize_stage(stage), PIPELINE_KNOCKOUT_STAGES, raw)
 
 
 if __name__ == "__main__":

@@ -6023,3 +6023,155 @@ round1 6552   round3 6552
 
 ⇒ 切**两个提交**：① 代码 + 测试（**23** 个）／② 文档（**1** 个）。`HANDOFF.md` 与 `.workbuddy/**` 均 gitignored，**不进任何提交**。
 
+# §52 前端 `TunableEngine` 的**三个成员是「别名规则」，不是白名单**（2026-10-02，只改注释）
+
+## 52.1 结论先行
+
+| 问题 | 结论 |
+|---|---|
+| 前端 `TunableEngine` 只有 `elo_odds`/`hybrid`/`integrated` —— 这是**白名单**吗？ | **不是**。它精确对应 `engine_method_filter()` 的 **3 个显式别名分支**；其余引擎走**兜底** `like("%name%")` |
+| `gbm` 能被 auto-tune 吗？ | **能**。库中 `ai_optimized_predictions.original_engine` 实有 **`gbm_lightgbm` 10 条**，兜底分支正好命中 |
+| 「后端只接受三个」这句话出自哪里？ | **只出自 5 处 docstring**。相关函数签名全是裸 `str`，**且都不校验白名单** |
+| 本轮改了行为吗？ | **零行为影响**：6 处改动**全在 docstring**，无一行可执行语句变动 |
+
+## 52.2 起因：§51.10 把它记成「属另一件事」，这个判断**不准确**
+
+§51.10 写「前端 `TunableEngine` 是否也该有 `gbm` ⏳ 未动 —— 后端 `autoTune` 只接受三个，属**另一件事**」。
+**「后端只接受三个」是注释级断言，不是契约**：`auto_tune_engine` 的参数是 `engine_name: str`
+（**不是** `PredictionEngine`），`run_full_auto_tuning_cycle` / `calculate_optimization_patterns` /
+`analyze_and_optimize_all_predictions` / `run_async_optimization` 同样都是裸 `str`，**无一校验白名单**。
+
+## 52.3 判据来自三处（都可复算）
+
+**① `engine_method_filter()` = 3 个显式分支 + 1 个兜底**（`services/engine_auto_tuning_service.py:20`）
+
+```python
+if engine_name == "integrated": return method_column.like("integrated%")
+if engine_name == "elo_odds":   return method_column.like("elo%")
+if engine_name == "hybrid":     return or_(method_column.in_(["hybrid", "rule_only", "rule_dominant"]),
+                                           and_(method_column.like("%hybrid%"), ~method_column.like("integrated%")))
+return method_column.like(f"%{engine_name}%")        # ← 兜底：其余任何名字
+```
+
+三个分支处理的是**别名**：管道写进 `original_engine` 的是变体/带后缀的名字，所以每个需要自己的匹配器。
+**它们不是「只有这三个能过滤」**。
+
+**② 权威引擎集含 `gbm`**：`world_cup_quality_service.ENGINE_NAMES = ("elo_odds", "hybrid", "gbm", "integrated")`。
+⚠️ 它与 `services/world_cup_engine_names.PredictionEngine` 的 6 个**不是同一集合** —— 后者是 **API 可接受的名称**
+（含 `auto` / `high_confidence` 这类选择器），前者是**可运行的实现引擎**。
+
+**③ 实证**（只读 `backend/world_cup_predictions.db`，`ai_optimized_predictions.original_engine` 的 distinct）：
+
+```
+hybrid (98) · elo_odds_fusion (Elo 30% + Odds 70%) (82) · rule_only (38) · elo_only (37)
+· integrated (…) (18/14/13/6/2/1) · gbm_lightgbm (10) · …
+```
+
+`gbm_lightgbm` 已被兜底分支 `like("%gbm%")` 命中 ⇒ **gbm 的优化链路是活的**（它那 10 条记录正是
+不带 `engine_filter` 的全量优化跑出来的）。
+
+## 52.4 改了什么（6 处，**全在 docstring**）
+
+| 文件 | 函数 | 改动 |
+|---|---|---|
+| `services/engine_auto_tuning_service.py` | `engine_method_filter` | 说明三分支是**别名规则**、兜底覆盖其余、**分支顺序不得移到兜底之后**（否则某个桶静默变形） |
+| 同上 | `analyze_and_optimize_all_predictions` | `engine_filter` 写明经 `engine_method_filter` 匹配、三别名非白名单 |
+| 同上 | `calculate_optimization_patterns` | 同上 |
+| 同上 | `run_full_auto_tuning_cycle` | 同上 |
+| `services/engine_auto_tuning_async.py` | `run_async_optimization` | 同上 |
+| `api/routes/world_cup_predictions.py` | `auto_tune_engine` | 「三个引擎」→ 指向 `engine_method_filter`，明说 `gbm` 可达 |
+
+**`git diff --numstat` 实测**：service `+17/−4`、async `+3/−1`、routes `+4/−1` ⇒ 合计 **`+24 / −6`**。
+⚠️ 这 6 行全部是 docstring 行 —— **无一行可执行语句变动**。
+
+## 52.5 验证（全部本机，2026-10-02）
+
+| 闸门 | 结果 |
+|---|---|
+| `ruff check app/` | All checks passed |
+| 字节画像（改后 → 改前） | service **522**（←509）· async **269**（←267）· routes **1025**（←1022），三文件 **bare_LF=0** |
+| `scripts/eol_audit.py` | `line-ending damage: none`（三文件均 `ok (LF -> CRLF checkout)`） |
+| `pytest tests/test_engine_auto_tuning_service.py tests/test_world_cup_predictions_routes.py` | `tests=39 failures=0 errors=0 skipped=0` |
+
+§51 已验证的「哪些测试文件**不**引用这些 docstring」也一并查过：`grep` 无命中 ⇒ 改注释不可能打断断言。
+
+## 52.6 顺带查清并**否掉**的一条（写下来，免得下一个人再查一遍）
+
+全仓仍有 **78 个**端点用裸 `response_model=FlexibleResponse`（`events.py` 58 + `world_cup_predictions.py` 20）。
+**不要**把它们「补成具名模型」：
+
+- `backend/mypy.ini:191` 明说这是**既定的、被接受的**策略 —— 它 **hide the return boundary**，
+  且**已用 `-> dict[str, Any]` 注解补偿**（"annotating a handler to `-> dict[str, Any]` is the proof the body
+  returns what the route promises"）。这是**已还过的账**，不是欠债。
+- `frontend/src/lib/api.ts` 对 world-cup **零引用** ⇒ 这些端点**不经 api.ts 消费**。
+
+⇒ §51 ③ 之所以只需要修 `/trades/*`，正因为**只有那批有前端消费者**。
+**判据是「有没有消费者」，不是「有多少端点」。**
+
+## 52.7 未做（本节不代决）
+
+| 事项 | 状态 |
+|---|---|
+| 前端 `TunableEngine` / `TUNABLE_ENGINES` 加 `gbm` | ⏳ **未动** —— 会让控制台多出一个**会写库**（发起调参任务）的入口，属**产品决策**，需明确授权 |
+| 5 处 docstring 之外是否还有同类陈旧注释 | ⏳ 未普查（本节只处理了 auto-tune 这一族） |
+| 提交 / push | ⏳ 本节 **3 个代码文件 + 本文档**（共 4 个）**未提交、未 push**，等明确指令 |
+
+## 52.8 同类陈旧注释的普查（收口 §52.7 那条「未普查」）
+
+对全仓做了一次「硬编码引擎枚举」的**只读**普查（正则：`"elo_odds"` 与 `"hybrid"`/`"integrated"` 同现，
+前后端各一遍），逐条与**权威来源**比对。权威来源有两个，**别混**：
+
+- **运行时白名单**：`run_prediction_pipeline` Step 3 的集合字面量
+- **质量报告键**：`world_cup_quality_service.ENGINE_NAMES`
+
+| 位置 | 原文 | 判定 | 处理 |
+|---|---|---|---|
+| `api/routes/world_cup_predictions.py:353` | `"auto" (default), "elo_odds", "hybrid", "integrated", "high_confidence", or "gbm"` | ✅ **已含 `gbm`** | 不动 |
+| 同文件 `:522` / `:536` / `:603` | docstring / Query description | ✅ 含 `gbm` | 不动 |
+| `services/world_cup_prediction_pipeline.py:667`（`run_prediction_pipeline`） | `("elo_odds", "hybrid", "integrated", "high_confidence", "auto")` | ❌ **缺 `gbm`**，而**同文件 `:734` 的白名单含 `gbm`** —— 自相矛盾 | **已改** |
+| 同文件 `:1495`（`batch_predict_matches`） | `("elo_odds", "hybrid", "auto")` | ❌ 只列 3 个，**还漏 `integrated` / `high_confidence` / `gbm`** | **已改**：改为「原样转发给 `run_prediction_pipeline`，接受同一组名字」 |
+| `services/world_cup_confidence_calibration.py:95`（`compute_reliability_curve`） | `(e.g., "elo_odds", "hybrid", "integrated")` | ❌ 举例漏 `gbm` —— 取值实为 `quality["by_engine"]` 的键（= `ENGINE_NAMES`，**含 `gbm`**） | **已改** |
+| `services/world_cup_dynamic_weights.py:39` | `(e.g., "elo_odds", "hybrid")` | ⚪ 纯举例（`e.g.`），只举 2 个 | **未动**（属举例，非枚举） |
+| `services/world_cup_engine_names.py:16` | `PredictionEngine` Literal | ✅ 权威来源本身 | 不动 |
+| `services/world_cup_quality_service.py:20` | `ENGINE_NAMES` | ✅ 权威来源本身 | 不动 |
+| 前端 `predictions-api.ts:91` | `"elo_odds" \| "hybrid" \| "integrated" \| string` | ✅ 末尾有 `\| string` 兜底 | 不动 |
+| 前端 `engine-api.ts:42` | `TunableEngine`（3 个） | ⏳ **已知、待产品决策**（§52.7） | 不动 |
+
+**关键事实（写下来，免得下次再推一遍）**：`run_prediction_pipeline` Step 3 的实际语义是
+**「`auto` 先解析为 `elo_odds`；其余必须落在 `{elo_odds, hybrid, integrated, high_confidence, gbm}` 内」**
+⇒ **可接受输入的全体 = 那 5 个 + `auto` = `PredictionEngine` 的全部 6 个成员**。
+`gbm` 只在 `:734` 出现、`auto` 只在 `:728` 出现 —— **要合起来看才等于 6**；只看任意一处都会得出错的枚举。
+
+### 52.8.1 验证
+
+`git diff --numstat`（本轮**全部为 docstring 行**）：`world_cup_prediction_pipeline.py` **`+8/−2`**、
+`world_cup_confidence_calibration.py` **`+4/−1`** ⇒ **§52 全部代码改动合计 `+36 / −9`，共 5 个代码文件**
+（§52.4 的 3 个 + §52.8 的 2 个；`events.py` 那批属于已提交的 §51，不计入）。
+
+⚠️ 又验证了一次「别口算行数」：pipeline 那处我口算 `+13/−7`，实测 **`+8/−2`** ——
+差在 **git 把未变的相同行**（`- "elo_odds": …`、`- "auto": …` 等）**当作上下文**，
+只有首行整行替换与新增的 `gbm` 行计入增删。
+
+| 闸门 | 结果 |
+|---|---|
+| `ruff check app/` | All checks passed |
+| 字节画像 | pipeline **1609**（←1603）· calibration **272**（←269），两文件 `bare_LF=0` |
+| `scripts/eol_audit.py` | `line-ending damage: none`（**6 个**改动文件全 `ok (LF -> CRLF checkout)`） |
+| `pytest` 四个受影响文件 | **`tests=76 failures=0 errors=0 skipped=0`** |
+| `mypy app/` | **331 source files, no issues** |
+| `generate_types --check` | `generated-types.ts is up to date` |
+| `pytest tests/`（**全量**，21m27s） | **`tests=7641 failures=0 errors=0 skipped=11`** —— 与 §51 第三轮**逐数相同**（docstring-only 改动本该如此）。⚠️ 进程 `rc=1` 的根因是日志尾的 `[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED]`（§48 先例），**不是测试失败** —— 判据只用 junit 的 `failures`/`errors` |
+| 测试是否引用新写的 docstring | `grep` **零命中**（`alias rules` / `whitelist at Step 3` / `quality["by_engine"]` / `LightGBM xG model engine`）⇒ 改注释不可能打断断言 |
+
+**A 项（`world_cup_dynamic_weights.py:39`）的追加判据 —— 确认**不动**：该函数的**两个调用点**
+（`:75` / `:76`）分别只传 `"elo_odds"` 与 `"hybrid"`，所以那句 `(e.g., "elo_odds", "hybrid")`
+是**如实反映实际用法**，**不是陈旧枚举**；给它补 `gbm` 反而会误导。
+
+### 52.8.2 本节收口后的开放项
+
+| 事项 | 状态 |
+|---|---|
+| 前端 `TunableEngine` / `TUNABLE_ENGINES` 加 `gbm` | ⏳ 未动（产品决策，同 §52.7） |
+| `world_cup_dynamic_weights.py:39` 的 `e.g.` 举例是否补 `gbm` | ⏳ 未动（举例形式，无害） |
+| 提交 / push | ⏳ 本节 **5 个代码文件 + 本文档**（共 6 个）**未提交、未 push** |
+

@@ -5744,3 +5744,282 @@ harness 规模随之变为 **8 套 / 66 个变异 / 26 个目标文件 / 33 个�
 | push / 开 PR | ⏳ 本节**只改本文档**（生产代码一行未动）；按惯例直推 `main`，**无 PR** |
 
 **本节改 1 个文件（本文档，追加式）。未提交、未 push。**
+
+---
+
+# §51 落地：①生产者、②③ `/trades` 契约、④前端 `gbm`（2026-10-02）
+
+> 承接 §50：四项**未代决**事项经用户确认「按建议做」后**动手实施**。
+> 与 §49/§50 **只改文档**不同 —— **本节改的是生产代码**，且首次暴露「改生产代码会打断
+> 已登记的变异」这一连带（§51.8）。
+> 结构：结论先行 → 逐项改动 → 验证证据 → 变异登记 → 发现但未动 → 交接。
+
+## 51.1 结论先行
+
+| # | §50 的定性 | 本节做了什么 | 关键判据 |
+|---|---|---|---|
+| ① | `parse_fixture` **产不出** `third_place`/`round_of_32`；5 个判定点里 2 个算淘汰赛，而测试把它钉在**非淘汰赛**一侧 | 补两支分支 + 5 个判定点对齐 + 分区断言改为 `{group_stage}` | `Round of 32`→`round_of_32`、`3rd Place Final`/`Match for third place`→`third_place`，两者 `is_knockout=True`；非淘汰赛只剩 `{group_stage}` |
+| ② | 前端 2 tab、后端无 voided 读函数（`status` 早已是三态） | 后端加读侧 + 路由；前端加**第三 tab** + 第三张表 | `GET /trades/voided` 路由级 3 用例；store 级 2 用例；前端 1 用例 |
+| ③ | `api.ts:447` 手写 `SimTrade` 的根因 = 4 端点用裸 `FlexibleResponse` ⇒ OpenAPI 无字段契约 ⇒ 生成类型覆盖不到 | 4 个具名模型 + 白名单 + 重生成 + **删手写 interface** | `generate_types --check` up to date；`tsc` 0 错（含一处**必须**放宽的连带，§51.5） |
+| ④ | 前端 `EngineName` 恰好少 `gbm`，而后端已接受 | 加 `gbm` + 选择器一项（**不动 `TunableEngine`**） | 选择器选项列表被逐项钉住；选中 `gbm` 真的以 `"gbm"` 调路由 |
+
+## 51.2 ① 生产者：两支补上，5 个判定点对齐
+
+**改动清单**（`stage` 词表在本仓有 5 个判定点，见 §26–§28 的普查）：
+
+| 文件 | 改动 |
+|---|---|
+| `services/world_cup_match_service.py` | `parse_fixture` 补 `third_place` 与 `round_of_32` 两支 |
+| `services/world_cup_prediction_pipeline.py` | `_STAGE_MAP` 加两个别名；`_KNOCKOUT_STAGES` **4 → 6** |
+| `kernel/engines/elo_odds_engine.py` | `_KNOCKOUT_STAGES` → **8** |
+| `kernel/engines/gbm_engine.py` | → **10** |
+| `kernel/engines/situational_adjust.py` | → **8** |
+| `services/conclusion_challenge_world_cup_adapter.py` | `_HIGH_RISK_STAGES` → **8** |
+
+**一个顺序陷阱（写在代码注释里，也写在这里）**：`third_place` 分支**必须排在 `final` 之前** ——
+API-Football 的拼写 `"3rd Place Final"` **含 `"final"`**，顺序反了就把三四名决赛读成决赛本身。
+两个新分支都带注释说明「为什么在这里」而不只是「这里做什么」。
+
+**测试**：`tests/test_world_cup_match_service.py` 新增 3 条（`round_of_32`、两种 `third_place` 拼写），
+`tests/test_knockout_stage_whitelist_consistency.py` 的 `test_stage_map_values_partition_into_knockout_and_group_stages`
+断言由「钉住 `third_place` 在非淘汰赛一侧」改为 `assertEqual(non_knockout, {"group_stage"})`，
+并新增 `ProducerVocabularyTests`（**直接驱动真实 `parse_fixture`**，而不是抄一份名字清单 ——
+抄的清单会以这个类要防的方式变陈旧）。
+
+## 51.3 ② `/trades/voided`：读侧 + 第三 tab
+
+**后端**（`memory/simulated_trade_store.py`）：新增 `count_voided_trades()` / `list_voided_trades()`，
+排序 `exit_time DESC, trade_id DESC`（`trade_id` 是随机 uuid ⇒ 只作 tiebreaker，见 §51.8）。
+**路由**（`api/routes/events.py`）：新增 `GET /trades/voided`，与 `/open`、`/closed` 同信封。
+
+**前端**（`app/trades/page.tsx`）：第三个 tab「已作废」+ 第三张表（事件/方向/raw edge/方向 edge/仓位%/决策/入场时间/**作废时间**）。
+
+**空态文案按「0 必须只说一件事」处理**（§49.6 的判据）：作废由 `void_prediction` 驱动、**不受任何具名开关门控**
+⇒ 按判据边界（「只在同仓存在『在某界面命名该开关』的先例时才消歧」）**不编造开关**，只做**语义**说明 ——
+写明「作废是终态但不结算…其结算字段必然为空，**空值表示未结算，不是 0 收益**」。
+依据 `void_trade` 的实现：它只写 `exit_reason='voided'` / `exit_time` / `status`，
+`actual_outcome`/`pnl_pct`/`is_win` **保持 NULL**。
+
+## 51.4 ③ 具名响应模型：**NOT NULL 列必须去掉默认值**
+
+`models/event.py` 新增 `SimTrade` / `SimTradeListResponse` / `TradeStatBucket` / `TradeStats`（均继承
+`FlexibleResponse`），并加进 `models/_frontend_export.py` 的 import + `__all__`，再
+`python -m scripts.generate_types` 重生成。
+
+**一个反直觉的实现细节**：`pydantic2ts` 对**带默认值**的字段一律生成可选（`field?: T`）。
+若给 `SimTrade` 的每个字段都写 `= None`，生成的 TS 会**比被替换掉的手写 interface 更松** ——
+`t.market_prob.toFixed(1)` 这类调用会停止通过类型检查，而它们本来是通的。
+所以**镜像 store 的 NOT NULL 列**的字段（`trade_id`/`event_id`/`event_title`/`direction`/`entry_prob`/
+`market_prob`/`entry_edge`/`entry_time`/`position_pct`/`decision`/`status`/`created_at`/`updated_at`）
+**故意不给默认值** ⇒ 生成为**必需**。依据：`_row_to_dict` 总是发出这些键，缺一个是 store 的 bug，
+一个响亮的 422 才是对信号。
+
+**前端收口**（`lib/api.ts`）：加 import + re-export 3 个类型，删掉手写的 `SimTrade` / `TradeStats`
+（后者还带一个**后端从来没返回过**的键 `avg_raw_edge_at_entry`）。原来的两个 `eventsApi` 方法改用
+`api<SimTradeListResponse>`，并新增 `voidedTrades`。
+
+## 51.5 ③ 的连带：`PnlBadge` 必须接受 `undefined`
+
+删掉手写 interface 后 `tsc` 报 **4 处** `TS2322`，都在 `app/trades/page.tsx`：
+`<PnlBadge pnl={…} />` 收到 `number | null | undefined`。
+
+根因不是笔误，而是**契约本身的表达力缺口**：`pydantic2ts` 对 `T | None` 一律加 `?`，
+所以「**必存在但可为 null**」这个状态在生成的 TS 里**无法表达**，只能落成 `T | null | undefined`。
+修法选**放宽 prop 类型**（`pnl: number | null | undefined`）而不是在 4 个调用点撒 `?? null`：
+`PnlBadge` 内部本来就用 `pnl == null`（同时兜 `null` 与 `undefined`），语义上它**本就**接受「未测量」；
+而在 4 处加 `?? null` 会把同一个事实写四遍，且下个调用点还会再犯。
+
+## 51.6 ④ 前端 `gbm`
+
+`lib/world-cup/engine-api.ts` 的 `EngineName` 加 `"gbm"`（**`TunableEngine` 不动** —— 后端
+`autoTune` 的 `engine_name` 只接受 `elo_odds`/`hybrid`/`integrated`）；
+`components/sports/world-cup/engine-console.tsx` 的 `ENGINES` 加一项，标签用**全仓一致的 `GBM`**
+（`analytics-dashboard.tsx:429` 与 `match-prediction-card.tsx:87` 都这么写）。
+
+**为什么定性是「漏项」而不是「产品决定」**（§50 已给，此处留证）：`BatchSummary.gbm_count`、
+批量摘要里的 `GBM ${n}` 分桶、以及 `engine-console.test.tsx` 里一条 **`expect(summary).toHaveTextContent("GBM 1")`**
+的既有断言**早就存在** —— 即控制台**已经在显示** GBM，只是**选不出来**。
+更有 `analytics-dashboard` 的 `EngineKey`、`engine-comparison-view` 的 `key: "gbm"`、
+`predictions-api.ts` 的两处 union 都包含 `gbm`。
+
+## 51.7 验证（全部本机，2026-10-02）
+
+| 闸门 | 结果 |
+|---|---|
+| `ruff check app/`（= CI `Lint backend`） | All checks passed |
+| `mypy app/ --config-file mypy.ini` | Success: no issues found in 331 source files |
+| `python -m scripts.generate_types --check`（= CI `type-sync-check`） | generated-types.ts is up to date |
+| `scripts/eol_audit.py`（本项目常驻探针） | **line-ending damage: none** |
+| 后端全量 | 见 §51.7.1（**第一轮 3 败 → 修 → 第二轮**） |
+| 前端全量 | **125 files / 737 tests passed**（改动前 735 ⇒ **+2** 恰为本批新增的两条用例） |
+| 前端 `tsc --noEmit` / `eslint` | 0 错 |
+
+### 51.7.1 🔴 后端全量第一轮 **3 败**：不是新代码坏，是**本批打断了已登记的变异**
+
+第一轮：`3 failed, 6539 passed, 11 skipped`。三败**全部**来自同一个变异 —— 详见 §51.8.1。
+这是**本批自己造成的**，不是既有缺陷；修完后第二轮应全绿。
+`11 skipped` 全是 `test_integration_live` 的 `RUN_LIVE_TESTS` 选择性跳过（与 CI 的 18 条差异是平台性的）。
+
+## 51.8 变异登记（四阶段，`scripts/mutation_verify.py`）
+
+| 集合 | 变化 | 新增/改的条 | 四阶段结果 |
+|---|---|---|---|
+| `voided-trade` | 4 → **6** | **V5** `count_voided_trades` 读的终态、**V6** `list_voided_trades` 的 WHERE | 各 **1/1 files red** |
+| `whitelist-fixtures` | 25 → **28** | **W10 改针**、**W33/W34** 生产者分支 | W10 **1/1**；W33/W34 各 **2/2 files red** |
+
+**总计 67 → 71 条**；`tests/test_mutation_verify.py` 全绿（清单静态自洽由它守，见 §51.8.1）。
+
+### 51.8.1 W10：**改生产代码会打断已登记的变异**（本节最重要的教训）
+
+W10 原针是 pipeline 的**旧 4 成员字面量**：
+`_KNOCKOUT_STAGES = {"round_of_16", "quarterfinal", "semifinal", "final"}`。
+① 把它扩成 6 成员多行字面量之后，**这根针一个字节都匹配不到了**。
+
+**它是被既有守卫抓到的，不是被我发现**：`tests/test_mutation_verify.py` 的
+`test_every_needle_occurs_exactly_once_in_its_file` / `..._matches_whichever_line_ending_the_checkout_uses` /
+`WholeSetApplyTests.test_the_whole_set_selection_passes_preflight` 三条同时变红，
+报的都是同一件事：`whitelist-fixtures 10: needle occurs 0x in …/world_cup_prediction_pipeline.py`。
+→ **可操作结论：动到「变异针所指的那些字节」时，必须回头跑 `tests/test_mutation_verify.py`**；
+`verify` 只为**你点名的那条**做前置检查，不会替你看整张清单。
+
+**W10 的语义也一并变了**：它的用途是「给白名单塞一个 normalizer **永远产不出来**的名字 ⇒ `is_knockout` 恒 `False`」。
+`round_of_32` 恰恰是 **① 刚变成可达**的规范形，塞回去**不再是死成员**，于是这条守卫会失去它**唯一**的触发器。
+改为 `"round_of_64"`（仍不可达），并在注释里写明这次替换的**原因**——
+否则下一个人只会看到一个莫名其妙的 `round_of_64`。
+
+### 51.8.2 V5 差点就是**空头守卫**：同一个数可以是两个答案
+
+V5 打 `count_voided_trades` 的状态 token。它的守卫用例初版是「1 条 voided + 1 条 closed + 1 条 open」——
+此时「读对状态」与「读错状态」**返回同一个 1**，断言对**正确实现和坏实现都成立**，变异阶段②永远过不了。
+把 closed 改成**两条**才让两个数分开。这正是本仓反复踩到的形态（§31/§33/§34：**空头守卫只能靠补用例消掉**）。
+
+### 51.8.3 W33 的跨模块断言是**部分盲**的 —— 所以两个 guard 文件都要挂
+
+W33 废掉 `parse_fixture` 的 `third_place` 分支。跨模块那条关系
+（`ProducerVocabularyTests.test_the_two_new_rounds_are_classified_knockout`）**会红**，
+但**只靠 openfootball 拼写那一腿**：「3rd Place Final」含「final」，分支没了就落回 `final`，
+而 `final` 本来就在淘汰赛集合里 ⇒ 这一腿**照样绿**。
+实测 `2/2 files red` 成立，正是因为并挂了生产者自己的**精确形状**断言
+（`test_third_place_mapping_from_api_football_spelling`）。
+→ **精确断言与关系断言不是互相替代，是互相补盲**（与 §45.5 的 `every_file_red` 同源）。
+
+## 51.9 发现但**未动**（本节不代决）
+
+| 发现 | 位置 | 为什么没动 |
+|---|---|---|
+| `batch_switch_engine` / `batch_predict` 的 **docstring 只列 4 个引擎**，漏 `gbm` | `api/routes/world_cup_predictions.py`（:546-548 一带） | 参数类型 `PredictionEngine` **已含 `gbm`**、描述串也已列全 ⇒ 只是**注释**陈旧。用户点名只改前端 `EngineName`/`ENGINES` ⇒ 仅**记录**，不顺手改（避免扩大本批 diff） |
+| 「必存在但可为 null」在生成 TS 里**不可表达** | `pydantic2ts` 语义 | 属生成器能力缺口，不是本仓能就地修的；已在 §51.5 用放宽 prop 类型局部收口 |
+| `parse_fixture` 仍有 `unknown` 兜底 | `world_cup_match_service.py` | 兜底**本身是对的**（未知轮次不该猜成淘汰赛）；① 只保证**已知拼写**不再落到它。`test_every_emitted_stage_is_a_name_the_pipeline_can_classify` 允许 `unknown` 但 `test_the_two_new_rounds_are_classified_knockout` 把这两个**特定**轮次排除在外 |
+
+## 51.10 本节未做 / 交接
+
+| 事项 | 状态 |
+|---|---|
+| 上线前 ②–⑥ | ⏳ **仍是操作员动作**（§50.4 的清单未变） |
+| `batch_switch_engine` docstring 补 `gbm` | ⏳ 已记录（§51.9），**未动** |
+| 前端 `TunableEngine` 是否也该有 `gbm` | ⏳ **未动** —— 后端 `autoTune` 只接受三个，属**另一件事** |
+| 提交 / push | ⏳ **本节全部改动未提交、未 push**（21 个已改文件 + 2 个 `scripts`/`tests` 清单文件），等明确指令 |
+| 后端全量第二轮 | ⏳ 见 §51.7.1；第一轮那 3 败已由本节的 W10 改针消掉，第二轮结果回填于本节末尾 |
+
+**本节改的文件（追加式，不覆盖 §1–§50）**：仅本文档。**生产代码的改动未提交、未 push。**
+
+## 51.11 后端全量第二轮：`1 failed`，且**不是本批的**（并把一条自伤记下来）
+
+第二轮读数：**`1 failed, 6540 passed, 11 skipped, 1089 subtests passed`（22m29s）**。
+⚠️ 进程 `rc=1`，但**判据只看 junit**（本机 `safe-delete` 会拦 pytest 临时目录清理：
+`test_first_member…` 那类"全绿却 rc=1"的形态见 §48）。
+
+唯一失败与它的原始异常：
+
+```
+tests/test_realtime_ticket_store.py::test_spawned_workers_share_atomic_consume_once
+sqlite3.OperationalError: attempt to write a readonly database
+  ← spawned worker → app/realtime/ws_auth.py:142  conn.execute(...)
+  tmp_path = …/pytest-of-Alin/pytest-3598/test_spawned_workers_share_ato0/realtime-tickets.db
+```
+
+**判定它不属本批（四条，都可复算）**：
+
+1. **交集为空**：本批改动的文件（§51.2–§51.6 的 21 个 + `scripts/mutation_verify.py` +
+   `tests/test_simulated_trade_store.py`）与 `app/realtime/ws_auth.py`、
+   `tests/test_realtime_ticket_store.py` **没有一个相交**。
+2. **第一轮它是绿的**：第一轮的 3 败**全部**是 W10 的针（`needle occurs 0x`），失败集合里没有它。
+3. **隔离复跑 3/3 全绿**：`pytest tests/test_realtime_ticket_store.py` → `tests=4 failures=0 errors=0` ×3。
+4. **异常形态是"环境态"而不是"断言态"**：它是 **spawn 出来的子进程**在写**另一个进程刚创建的临时目录**里的
+   SQLite 时拿到的只读句柄。这是 Windows（AV/索引器/临时目录清理）的经典瞬时态，
+   与 `TicketStore.redeem` 的"socket 只能核销一次"这条**被测不变量**无关 ——
+   也就是说，**这个用例的断言（`True×1 / False×1`）根本没有被证伪**，被证伪的是操作系统的文件权限。
+
+### 51.11.1 ⚠️ 一条自伤：第二轮跑着的时候，我又起了一个 pytest
+
+第二轮进行中我起过一次 `pytest tests/test_mutation_verify.py`（隔离、约 1 秒）。
+**两个 pytest 同时在跑 ⇒ 我无法排除自己对上面那次瞬时态的贡献。**
+→ **纪律（本项目通用）：全量套件在跑时，不要再起第二个 pytest。**
+要并行推进就改做**不做 I/O 竞争**的事（读文件、写文档）。
+第三轮因此**在没有任何其它 pytest 的情况下**重跑，作为干净回执（结果记于 §51.12）。
+
+## 51.12 后端全量第三轮：干净绿底（并把 §51.9 的一处记账更正掉）
+
+第三轮在**没有任何其它 pytest 并行**的条件下重跑（纪律见 §51.11.1）：
+
+| 轮次 | junit `tests` | `failures` | `errors` | `skipped` | 判读 |
+|---|---|---|---|---|---|
+| 第一轮（W10 未改针） | 7637 | **3** | 0 | 11 | 3 败**全**是 W10 的针 |
+| 第二轮（并发偶发） | — | 1 | 0 | — | 见 §51.11，非本批 |
+| **第三轮** | **7641** | **0** | **0** | **11** | ✅ 干净绿底 |
+
+日志尾：`6541 passed, 11 skipped, 1 warning, 1089 subtests passed in 1337.77s (0:22:17)`。
+11 skipped **全部**来自 `test_integration_live` 的 `RUN_LIVE_TESTS` 选择性跳过（非异常，非本批引入）。
+
+### 51.12.1 「6553 vs 6552」的计数困惑：两轮**唯一用例集合完全相同**
+
+第三轮与第一轮的 junit 逐条取 `(classname, name)` 做集合 diff：
+
+```
+round1 6552   round3 6552
+--- only in round1 ---   (空)
+--- only in round3 ---   (空)
+```
+
+⇒ 两轮**用例集合一致，无增无减**。`passed + failed + skipped` 的加总与唯一用例集**天然差 1**，
+属 pytest 的计数口径（对比 `--collect-only` 收集数时必须用 `passed + skipped`），**不是用例漂移**。
+
+### 51.12.2 ⚠️ 更正 §51.9：`batch_predict` 的 docstring **本来就列了 `gbm`**
+
+§51.9 首行（及 §51.10 第 2 行）写的是「`batch_switch_engine` **/ `batch_predict`** 的 docstring 只列 4 个引擎」。
+**实测只有一处漏。** `batch_predict` 的 docstring（`api/routes/world_cup_predictions.py:522-523`）
+本来就写着 `"integrated", "high_confidence", "gbm"`；**漏 `gbm` 的只有 `batch_switch_engine`**
+（同文件 `:544-547` 的 Args 枚举）。按「只追加不改写」的约定，**不动 §51.9 原文**，在此更正。
+
+### 51.12.3 C 项已做：`batch_switch_engine` docstring 补 `gbm`
+
+```diff
+             - "high_confidence": Auto-select best engine based on confidence
++            - "gbm": LightGBM xG model engine
+         status_filter: Only process matches with this status (default: "scheduled")
+```
+
+纯**注释**改动（零行为影响）——但按纪律照样过闸门，不留"注释就不用验"的口子：
+
+| 闸门 | 结果 |
+|---|---|
+| `ruff check app/` | All checks passed |
+| 目标文件字节画像 | `CRLF=1022 / bare_LF=0`（+1 行，**行尾未漂移**） |
+| `scripts/eol_audit.py` | `line-ending damage: none` |
+| `pytest tests/test_world_cup_predictions_routes.py` | `tests=34 failures=0 errors=0 skipped=0` |
+
+措辞与 `PredictionEngine`（`services/world_cup_engine_names.py:15-17`，成员序 `…, "gbm", "auto"`）
+和两个路由的 `Query(description=…)` 描述串对齐 —— 三者现已**一致含 `gbm`**。
+
+### 51.12.4 本批最终改动清单：24 个文件
+
+| 类别 | 数 | 文件 |
+|---|---|---|
+| 后端生产 | 11 | `api/routes/{events,world_cup_predictions}.py` · `kernel/engines/{elo_odds_engine,gbm_engine,situational_adjust}.py` · `memory/simulated_trade_store.py` · `models/{event,_frontend_export}.py` · `services/{conclusion_challenge_world_cup_adapter,world_cup_match_service,world_cup_prediction_pipeline}.py` |
+| 前端生产 | 5 | `app/trades/page.tsx` · `components/sports/world-cup/engine-console.tsx` · `lib/{api,generated-types}.ts` · `lib/world-cup/engine-api.ts` |
+| 工具 | 1 | `backend/scripts/mutation_verify.py` |
+| 测试 | 6 | `tests/{test_events_routes,test_knockout_stage_whitelist_consistency,test_simulated_trade_store,test_world_cup_match_service}.py` · `app/trades/page.test.tsx` · `components/sports/world-cup/engine-console.test.tsx` |
+| 文档 | 1 | 本文档 |
+
+⇒ 切**两个提交**：① 代码 + 测试（**23** 个）／② 文档（**1** 个）。`HANDOFF.md` 与 `.workbuddy/**` 均 gitignored，**不进任何提交**。
+

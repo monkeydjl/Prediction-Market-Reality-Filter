@@ -19,6 +19,8 @@ from html import escape as _stdlib_escape
 from pathlib import Path
 from typing import Any
 
+from app.utils.direction_vocabulary import DIRECTIONS
+
 # Bumped when the *layout* of the written files changes, which is a different
 # question from "were these two reports built from the same events" — that one
 # is answered by the run block's compare/sample/population fields.
@@ -407,7 +409,7 @@ def render_html(metrics: dict[str, Any], run: dict[str, Any] | None = None) -> s
     # Section 2: Direction Matrix (4x4 heatmap)
     parts.append('<section id="direction-matrix">')
     parts.append("<h2>Direction Matrix</h2>")
-    dirs = ("YES", "NO", "WAIT", "AVOID")
+    dirs = DIRECTIONS
     # Build matrix dict: (orig, replay) -> count
     cell_counts: dict[tuple[str, str], int] = {}
     for key, count in (matrix or {}).items():

@@ -21,6 +21,10 @@ own name here, because the opinions are not the same opinion:
 * ``_REPORTED_DIRECTIONS``       -- directions reported by ``trade_stats()``
 * ``_TRADABLE_DIRECTIONS``       -- directions a simulated (paper) trade may open with
 * ``_STRONG_EVENT_DIRECTIONS``   -- directions that assert a strong conclusion
+* ``DIRECTIONS``                 -- every direction a record may carry, in display
+                                    order. A superset of all eight above; no layer
+                                    validates against it -- here the *order* is the
+                                    contract (two consumers build dicts from it)
 
 **What is shared is the location, not the meaning.** All eight happen to hold
 ``{"YES", "NO"}`` today, and that is deliberately *not* a reason to collapse them
@@ -108,3 +112,16 @@ _TRADABLE_DIRECTIONS = ("YES", "NO")
 # ``_check_calculation`` (a "change too small to justify a strong direction"
 # soft-fail). WAIT / AVOID abstain, so neither check may fire for them.
 _STRONG_EVENT_DIRECTIONS = ("YES", "NO")
+
+# Every direction a record may carry, in display order. This is not a validation
+# set for any one layer -- it is the shared vocabulary those layers are drawn
+# from. It lives here because it was previously inline in ten places (four-member
+# tuples and ``{"YES": 0, "NO": 0, "WAIT": 0, "AVOID": 0}`` dicts), where no guard
+# could see it and a fifth direction would have had to be added ten times.
+#
+# Kept a tuple on purpose, and the *order* is the contract: two consumers build
+# dicts from it (``utils/metrics`` and the quality-metrics summary), and a dict's
+# key order follows insertion order, so this ordering is what the published JSON
+# shows. The repo pins no ``PYTHONHASHSEED``, so a set would let that key order
+# vary between runs -- the same reason ``_REPORTED_DIRECTIONS`` stays a tuple.
+DIRECTIONS = ("YES", "NO", "WAIT", "AVOID")

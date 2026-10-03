@@ -30,6 +30,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.utils.direction_vocabulary import DIRECTIONS
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -280,7 +282,7 @@ def _refresh_event_store_gauges() -> None:
     """
     from app.memory.event_store import list_all_events, store_bytes
 
-    direction_counts: dict[str, int] = {"YES": 0, "NO": 0, "WAIT": 0, "AVOID": 0}
+    direction_counts: dict[str, int] = dict.fromkeys(DIRECTIONS, 0)
     consensus_counts: dict[str, int] = {"none": 0, "low": 0, "medium": 0, "high": 0}
     other_direction = 0
     other_consensus = 0

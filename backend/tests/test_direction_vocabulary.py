@@ -1,4 +1,4 @@
-"""The shared direction vocabulary: eight names, eight decisions.
+"""The shared direction vocabulary: nine names, and the decisions behind them.
 
 Audit section 45 merged the six ``_STRONG_DIRECTIONS`` copies into one
 definition; section 47 moved the remaining seven names in beside it, so the
@@ -6,9 +6,17 @@ whole vocabulary is one import away. What the consolidation was *not* allowed to
 change is the point of these tests: the names, the members, the containers, and
 the fact that nothing defines any of them anywhere else.
 
-The one container that is load-bearing rather than cosmetic is
-``_REPORTED_DIRECTIONS`` -- see
-``test_reported_directions_stays_an_ordered_sequence``.
+``DIRECTIONS`` is the ninth name and a different kind of thing from the other
+eight. They each answer "which directions does *this layer* treat as X";
+``DIRECTIONS`` is the full vocabulary all of them are drawn from. It arrives as
+an afterthought -- it was inline in ten places as a four-member tuple or a
+``{"YES": 0, ...}`` dict, where no guard could see it -- so it is registered here
+like any other name rather than exempted.
+
+The two containers that are load-bearing rather than cosmetic are
+``_REPORTED_DIRECTIONS`` and ``DIRECTIONS`` -- see
+``test_reported_directions_stays_an_ordered_sequence`` and
+``test_directions_stays_an_ordered_sequence``.
 """
 from __future__ import annotations
 
@@ -31,6 +39,7 @@ DIRECTION_CONSTANTS = (
     "_REPORTED_DIRECTIONS",
     "_TRADABLE_DIRECTIONS",
     "_STRONG_EVENT_DIRECTIONS",
+    "DIRECTIONS",
 )
 
 # The expected value of each name, written out rather than read back from the
@@ -44,6 +53,8 @@ EXPECTED_VALUES = {
     "_REPORTED_DIRECTIONS": ("YES", "NO"),
     "_TRADABLE_DIRECTIONS": ("YES", "NO"),
     "_STRONG_EVENT_DIRECTIONS": ("YES", "NO"),
+    # The full vocabulary, in display order -- not a subset like the eight above.
+    "DIRECTIONS": ("YES", "NO", "WAIT", "AVOID"),
 }
 
 # ``evidence_aggregation_service`` keeps a ``_VALID_DIRECTIONS`` of its own holding
@@ -60,7 +71,7 @@ def test_every_expected_name_is_declared():
 
 def test_the_module_declares_nothing_else_that_looks_like_a_direction():
     # ``hasattr`` alone would pass on a module that had also grown stray copies;
-    # this pins the surface at exactly the eight names.
+    # this pins the surface at exactly the nine names.
     declared = {
         name
         for name in vars(direction_vocabulary)
@@ -92,6 +103,20 @@ def test_reported_directions_stays_an_ordered_sequence():
     """
     assert isinstance(direction_vocabulary._REPORTED_DIRECTIONS, tuple)
     assert direction_vocabulary._REPORTED_DIRECTIONS == ("YES", "NO")
+
+
+def test_directions_stays_an_ordered_sequence():
+    """The same hazard as ``_REPORTED_DIRECTIONS``, for the dict-building pair.
+
+    ``utils/metrics.direction_counts`` and the quality-metrics summary both start
+    from ``dict.fromkeys(DIRECTIONS, 0)``, and a dict's key order follows
+    insertion order -- so this tuple's order is what the published JSON shows.
+    The repo pins no ``PYTHONHASHSEED``, so as a ``set`` that order would vary
+    between runs. Type first, so a failure reports the reason and not merely that
+    two objects differed.
+    """
+    assert isinstance(direction_vocabulary.DIRECTIONS, tuple)
+    assert direction_vocabulary.DIRECTIONS == ("YES", "NO", "WAIT", "AVOID")
 
 
 def test_no_other_module_under_app_defines_any_of_these_names():

@@ -43,7 +43,7 @@ import math
 from typing import Any
 from urllib.parse import urlparse
 
-from app.utils.direction_vocabulary import STRONG_DIRECTIONS
+from app.utils.direction_vocabulary import DIRECTIONS, STRONG_DIRECTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -464,7 +464,7 @@ def _normalize_direction(direction: str | None) -> str:
     if not isinstance(direction, str):
         return "WAIT"
     normalized = direction.strip().upper()
-    if normalized in ("YES", "NO", "WAIT", "AVOID"):
+    if normalized in DIRECTIONS:
         return normalized
     return "WAIT"
 

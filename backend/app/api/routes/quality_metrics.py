@@ -31,7 +31,7 @@ from app.memory.prediction_store import (
 )
 from app.services.calibration_drift_service import build_drift_report, evaluate_drift_alerts
 from app.services.drift_alert_dispatcher import dispatch_drift_alerts, evaluate_scheduler_alerts
-from app.utils.direction_vocabulary import _STRONG_DISPLAY_DIRECTIONS
+from app.utils.direction_vocabulary import DIRECTIONS, _STRONG_DISPLAY_DIRECTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ async def quality_metrics_summary(
     # subset of what is already in hand (E1: scale debt).
     resolved = list_resolved_events(events)
 
-    direction_dist: dict[str, int] = {"YES": 0, "NO": 0, "WAIT": 0, "AVOID": 0}
+    direction_dist: dict[str, int] = dict.fromkeys(DIRECTIONS, 0)
     consensus_dist: dict[str, int] = {"none": 0, "low": 0, "medium": 0, "high": 0}
     downgrade_reason_present = 0
     market_quality_count = 0

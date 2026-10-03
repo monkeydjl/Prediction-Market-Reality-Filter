@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from app.utils.direction_vocabulary import STRONG_DIRECTIONS
+from app.utils.direction_vocabulary import DIRECTIONS, STRONG_DIRECTIONS
 
 
 @dataclass
@@ -263,7 +263,7 @@ def _effective_direction(record: dict[str, Any]) -> str | None:
     rec = record.get("actionable_recommendation")
     if isinstance(rec, dict):
         d = rec.get("direction")
-        if d in ("YES", "NO", "WAIT", "AVOID"):
+        if d in DIRECTIONS:
             return d
     return None
 

@@ -40,7 +40,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.utils.direction_vocabulary import STRONG_DIRECTIONS
+from app.utils.direction_vocabulary import DIRECTIONS, STRONG_DIRECTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +113,7 @@ def _extract_direction(recommendation: dict[str, Any] | None) -> str:
     if not isinstance(recommendation, dict):
         return "WAIT"
     direction = recommendation.get("direction")
-    if direction in ("YES", "NO", "WAIT", "AVOID"):
+    if direction in DIRECTIONS:
         return direction
     return "WAIT"
 

@@ -25,11 +25,12 @@ from collections import defaultdict
 from typing import Any
 
 from app.services.quality_metrics_report_service import extract_metrics, slice_metrics
+from app.utils.direction_vocabulary import DIRECTIONS
 
 # Direction labels for the transition matrix. Kept as a constant so the
 # matrix can grow (e.g. add "UNKNOWN") without touching every callsite.
 # Records with a direction not in this tuple fall into the "OTHER" bucket.
-DIRECTION_LABELS: tuple[str, ...] = ("YES", "NO", "WAIT", "AVOID")
+DIRECTION_LABELS: tuple[str, ...] = DIRECTIONS
 _MATRIX_KEYS = DIRECTION_LABELS + ("OTHER",)
 
 

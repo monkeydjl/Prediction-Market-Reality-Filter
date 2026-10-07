@@ -212,13 +212,17 @@ def test_get_latest_snapshot(kernel_db):
 def test_get_latest_snapshot_tie_returns_the_later_row(kernel_db):
     """A tie in ``captured_at`` must still answer "the one written last".
 
-    Two captures can carry the same instant -- an app path that computes
-    ``now`` once outside a loop does it by construction (see
-    ``futures_market_service.capture_snapshots``), and so does a caller that
-    passes ``captured_at`` explicitly. Without the ``id`` tiebreaker the
-    relative order inside the tie is undefined, and the measured behaviour was
-    to return the *first*-inserted row -- i.e. to report the *older* capture as
-    the newest. That is the shape of the one-off full-suite red recorded in
+    A caller that passes ``captured_at`` explicitly makes a tie directly, and
+    any path that hoists ``now`` out of its write loop carries the same shape
+    in code. What makes a tie *observable*, though, is two rows for the
+    **same** link: section 53.45 measured that
+    ``futures_market_service.capture_snapshots``' hoisted ``now`` only shares
+    an instant *across* links and that its read is a per-link ``MAX``, so the
+    tie is harmless there -- the read under test has no such protection.
+    Without the ``id`` tiebreaker the relative order inside the tie is
+    undefined, and the measured behaviour was to return the *first*-inserted
+    row -- i.e. to report the *older* capture as the newest. That is the shape
+    of the one-off full-suite red recorded in
     docs/reviews/system-health-audit-2026-09-26.md sections 53.39 / 53.43.
     """
     from app.kernel.market_snapshot_store import MarketSnapshotStore

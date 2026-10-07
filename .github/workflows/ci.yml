@@ -94,8 +94,24 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install frontend dependencies
         run: npm ci
+      # `npm audit` has no ignore list, so one unpatched advisory anywhere in the
+      # tree -- including the dev toolchain -- reddens every PR with nothing
+      # actionable to do about it. `audit-ci` keeps the gate over the WHOLE tree
+      # (npm's own default, devDependencies included, so this is *not* a
+      # `--omit=dev` narrowing) and makes each accepted advisory an explicit,
+      # reviewed entry in frontend/audit-ci.jsonc instead of a quietly weakened
+      # command. The exception is path-scoped, so the same advisory arriving
+      # through any other dependency still fails the build.
       - name: Audit frontend dependencies
-        run: npm audit --audit-level=high
+        # audit-ci reports path-scoped allowlist matches without announcing them,
+        # so name the accepted exception here: it then appears in every run's log
+        # right next to the gate that accepts it. audit-ci.jsonc stays the source
+        # of truth; this echo is a pointer, not a second definition.
+        run: |
+          echo "audit-ci: 1 accepted exception (see frontend/audit-ci.jsonc)"
+          echo "  GHSA-vfj7-8cjw-p6xm  braces <=3.0.3, scoped to eslint-config-next>*"
+          echo "  no patched release exists (npm latest braces is 3.0.3); dev-only"
+          npx audit-ci --config audit-ci.jsonc
       - name: Typecheck frontend
         run: npm run typecheck
       - name: Run frontend tests

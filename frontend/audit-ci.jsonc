@@ -1,0 +1,46 @@
+{
+  // audit-ci replaces a bare `npm audit --audit-level=high`.
+  //
+  // Why: `npm audit` has no ignore list, so one unpatched advisory anywhere in
+  // the tree — including the dev toolchain — reddens every pull request with
+  // nothing actionable to do about it. audit-ci keeps the gate over the *whole*
+  // tree (npm's own default, devDependencies included) and makes each accepted
+  // advisory an explicit, written entry instead of a silently weakened command.
+  //
+  // Not `--omit=dev`: scoping the gate to production would drop coverage of the
+  // dev tree entirely. The trade here is coverage kept, one exception named.
+  "$schema": "https://github.com/IBM/audit-ci/raw/main/docs/schema.json",
+  "high": true,
+  "allowlist": [
+    {
+      // braces' recursive AST walkers have no nesting-depth guard, so a deeply
+      // nested brace pattern inside the 10k-character cap exhausts the call
+      // stack (CWE-674; CVE-2026-93687 / GHSA-vfj7-8cjw-p6xm).
+      //
+      // Accepted because there is no patched release to reach: npm `braces`
+      // latest is 3.0.3 (published 2024-05-21) and the advisory lists
+      // "Patched versions: None". Every other link in the chain is already at
+      // its latest version and hard-depends on the next one —
+      //   eslint-config-next 16.3.6
+      //     -> @next/eslint-plugin-next 16.3.8 (pins fast-glob 3.3.1)
+      //       -> fast-glob -> micromatch 4.0.8 -> braces ^3.0.3
+      // — so neither an `overrides` bump nor a chain shortcut exists today.
+      // It is also dev-only: `npm ls braces --omit=dev` is empty, so nothing in
+      // the lint chain reaches the shipped bundle. The value fed to braces here
+      // is a developer-authored ESLint glob, never attacker input.
+      //
+      // REMOVE THIS ENTRY once npm `braces` > 3.0.3 ships (track micromatch/braces#70),
+      // then re-run this gate — with the entry gone it blocks again on its own.
+      // NOTE THE PATH SCOPE. This is deliberately not a blanket
+      // "GHSA-vfj7-8cjw-p6xm": that form would also suppress the same advisory
+      // if some *other* dependency ever pulled braces in, which is exactly the
+      // case this gate should still catch. Pinning the top-level dependency to
+      // eslint-config-next keeps the exception as narrow as the reason for it:
+      // if braces arrives through anything else, the gate fires.
+      "GHSA-vfj7-8cjw-p6xm|eslint-config-next>*": {
+        "active": true,
+        "notes": "Only within the eslint-config-next chain (the sole path that pulls braces today). No patched release exists (braces <=3.0.3; npm latest 3.0.3, 2024-05-21). Dev-only. Revisit when braces>3.0.3 ships."
+      }
+    }
+  ]
+}

@@ -10801,3 +10801,45 @@ kernel_futures_snapshots  captured_at  DATETIME  notnull=1
 3. 本节**不提交、不推送**。按 §0，代码改动（4 个文件）与文档改动（本审计档）应**分成两次提交**；`mutation_verify.py` 里 §53.38 的 W35 与本节新增共处一个未提交改动，若要提交需先想清是否一起提交。
 
 **本节追加读数**：见 `append_generic.py` 的 BEFORE/AFTER 打印，验收四条同时成立：字节增量 == 块长、CRLF 增量 == 块内 CRLF 数、`bare_lf stays 0`、`prefix unchanged`。
+
+## §53.45 (B) 处置与一条被推翻的结论：futures 的循环外 `now` 不是并列源
+
+> 追加于 §53.44 之后。**本节更正 §53.43.4(d) 与 §53.44.7 第 2 条** —— 两处都称 `futures_market_service` 把 `now` 算在循环外是「构造性并列源」。审计档不改写，故以新节更正。
+
+### 53.45.1 结论先行
+
+**(B) 的处置 = 不改。** `app/kernel/futures_market_service.py:136` 的 `now` 算在 `for link in verified`（:137）**之外**，它让同一次 capture 的**不同 link**共享一个时间戳；而 `kernel_futures_snapshots` 的读法 `FuturesLinkStore.get_latest_snapshots` 是 `max(captured_at)` **GROUP BY link_id** 再 JOIN 回表 —— **per-link** 取最大。跨 link 共享时间戳在这套读法下**不产生任何错答**。改它属于 churn，**不是**取值代决。
+
+**§53.43.4(d) 的定义用错了**：它把「同一时刻写多行」当成并列。并列的定义是**同一 link 的两行** `captured_at` 相等；**跨 link 共享时间戳 ≠ 并列**。
+
+### 53.45.2 取证（临时探针，读数取完即删）
+
+`backend/tests/test_zz_probe_futures_53_45.py`，三测点全部走真实 `FuturesLinkStore` / `FuturesMarketService`（同一 temp kernel DB）：
+
+| 测点 | 场景 | 读数 | 含义 |
+|---|---|---|---|
+| A | 2 个 link、各 1 行、**同一** `captured_at` | 返回 **2 行**，`per_link_counts={"1":1,"2":1}` | 跨 link 共享时间戳**无害**，每 link 恰好 1 行 |
+| B | **同一个 link**、2 行同一 `captured_at` | 返回 **4 行**，`link_ids=[1,2,3,3]` | 真并列时 JOIN **把两行都吐出来** ⇒ 该 link 在结果里**重复出现** |
+| C | 真实 `capture_snapshots()` 跑两次（mock 掉 fetch） | 两行 `captured_at` = `…13.837612` / `…13.877991`，`distinct=2` | 两次 capture 的时间戳**不同** ⇒ 生产路径不产生同一 link 并列 |
+
+⇒ 两条派生事实：① **形状不同** —— futures 侧真并列的后果是**返回重复行**（同一 link 出现两次，并让 `multi_leg_integrity` 重复计数），与市场表 `LIMIT 1` 的**静默选错**不是同一种失效；② **触发同样未见** —— 唯一写点每 link 每 capture 一行，两次 capture 的 `now` 实测不同。
+
+### 53.45.3 (B) 为什么不改
+
+- **不是可观测缺陷**：跨 link 共享时间戳在 per-link MAX 语义下无后果（测点 A）。
+- **改它也不影响真并列**：真并列是同一 link 的两行相撞，取决于两次 capture 的时刻，与 `now` 提不提循环外无关（测点 C 已证两次 `now` 不同）。
+
+### 53.45.4 顺带更正的第二处（代码内注释）
+
+`backend/tests/test_sport_market_stores.py` 的 `test_get_latest_snapshot_tie_returns_the_later_row` docstring 曾把 `futures_market_service.capture_snapshots` 当作「按代码写法就造出并列」的例子 —— 同上，**该举例不成立**；已改写为准确表述（保留「并列是每个调用点都能造出的形状」这一正确部分，并点明 futures 侧因 per-link MAX 而无害）。
+
+### 53.45.5 一处随之过期的自述
+
+§53.44.7 第 3 条写「本节**不提交、不推送**」。该节已于 `251271a` 落库（三提交之一），**这句话随之过期**；按 §4.1，复述它时必须带上前提。§53.43 / §53.44 的其它结论不受影响。
+
+### 53.45.6 未决（更新）
+
+- **(C)** 仍未做：`kernel_market_snapshots.captured_at` 可空（notnull=0）vs 兄弟表 notnull=1。
+- **(D)** 仍未做：另一次全量红（`realtime_ticket_store` 线程类）。
+- **(新)** futures 侧「同一 link 两行同 `captured_at`」⇒ `get_latest_snapshots` 返回**重复行**（测点 B）。**生产不可达**，只登记形状，**不加 tiebreaker**。
+- 本节**未提交、未推送**。

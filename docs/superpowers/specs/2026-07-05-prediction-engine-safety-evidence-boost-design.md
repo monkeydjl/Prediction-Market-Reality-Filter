@@ -1,4 +1,4 @@
-﻿# Prediction Engine Safety & Evidence Boost v1
+# Prediction Engine Safety & Evidence Boost v1
 
 Date: 2026-07-05
 Repository: `E:\Github\Prediction Market Reality Filter`

@@ -486,6 +486,16 @@ the component name and the exception *type*, never `str(exc)`, because a sqlite3
 `/api/health` returns the `error` column verbatim. Full tracebacks stay in
 `LOG_FILE`.
 
+> **The auth on `/api/health` is not what protects this column.** The sanitizing
+> happens where the row is written, not at the call sites: `_finish_run` replaces
+> `error=` with `f"Scheduler job failed: {exc_type}"` whenever the caller forwards
+> the exception through `exc=`, which is why 22 call sites can spell `str(exc)` and
+> leak nothing (`tests/test_ledger_error_sanitization_guard.py` pins that bargain;
+> the six behaviour tests that covered it named only six jobs). **Nor is auth the
+> gate on who can read it**: the column is also returned verbatim by
+> `GET /quality-metrics/anomalies`, which carries **no auth dependency at all** —
+> so "an authenticated `/api/health`" above understates where it can be read.
+
 > **Before 2026-09-05 this section was false as written.** The endpoint watched
 > three job names — `event_discover`, `event_auto_resolve`, `loop_db_maintenance`
 > — out of the fifteen in the live ledger, and the one job whose last run had

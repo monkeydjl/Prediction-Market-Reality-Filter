@@ -6175,3 +6175,4629 @@ hybrid (98) · elo_odds_fusion (Elo 30% + Odds 70%) (82) · rule_only (38) · el
 | `world_cup_dynamic_weights.py:39` 的 `e.g.` 举例是否补 `gbm` | ⏳ 未动（举例形式，无害） |
 | 提交 / push | ⏳ 本节 **5 个代码文件 + 本文档**（共 6 个）**未提交、未 push** |
 
+
+---
+
+# §53 独立复检：2026-10-03 的工作区现状（不复用任何既有读数）
+
+> **性质**：本节是**全新一轮独立复检**，所有数字都是本机 2026-10-03 当场跑出来的，**没有引用 §48–§52 的读数**。
+> 目的是回答「现在的树到底是什么状态」，而不是延续上一轮的叙事。基线：`HEAD=c13e6bd`、`git status --porcelain` 0 行。
+
+## 53.1 结论先行
+
+**1. 🔴 唯一的新增红：CI 的 `frontend-tests` job 现在会失败。**
+`npm audit --audit-level=high`（CI 第 98 行那道门）报 **5 个 high**，根因是 `braces <= 3.0.3` 的
+[CVE-2026-93687 / GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm)（栈耗尽 DoS），
+而 **该 advisory 的 `Patched versions: None`**、npm 上 `braces` 最新版就是 `3.0.3` ⇒ **没有可升的修复版**。
+机制与 `00aa264` **完全同型**：锁文件一个字节没动，是 advisory 库新增条目把 main 变红的。
+
+**2. ⚠️ junit 的 `tests` 属性虚高 1089，但它**不是**「有测试没跑」。**
+`<testsuite tests="7642">`，可文件里 `<testcase>` 恰 **6553** 个（且 `--collect-only` 也是 6553）⇒ 没有静默跳过。
+虚高来源已定位：**1089 条 `unittest` 子测试（`subTest()`）被 junit 算作「用例」、而终端汇总单列不计**（见 53.5）。
+
+**3. ⚠️ `MEMORY.md` §1 的「工作树有 51 个 MIXED 文件」已过期。** 实测 MIXED = **0**，`eol_audit.py --all` 报
+`line-ending damage: none`（§48.3 早已收口）。本轮已就地更正该条。
+
+**4. ✅ 除此之外，四道静态门 + 后端全量 + 前端四关全绿。** 详见 53.3。
+
+## 53.2 复核口径
+
+| 项 | 值 | 说明 |
+|---|---|---|
+| 基线 HEAD | `c13e6bd` | 工作树干净 |
+| 本地 vs 远端 | **领先 `monkeydjl/main` 2 个提交**（`c13e6bd`、`93d4c38`） | **未推送**；远端最新是 `6fdb280` |
+| Python | 3.11.9（项目 `.venv`） | 与 CI 的 3.11 同大版本 |
+| Node | v22.22.2 | CI 固定 node 22 |
+| 跑法 | 一切以 **junit 的 `failures`/`errors`** 为判据，不看进程退出码 | `safe-delete` shim 会让 rc 不可信 |
+
+## 53.3 逐门读数（本机 2026-10-03）
+
+| CI job / 命令 | 本机结果 | 判据来源 |
+|---|---|---|
+| `ruff check app/` | **All checks passed!** | 输出 |
+| `python -m compileall app tests` | **零输出** | 输出 |
+| `mypy app/ --config-file mypy.ini`（`PYTHONUTF8=1`） | **331 source files, no issues found** | 输出 |
+| `pytest tests/` | junit `tests=7642 failures=0 errors=0 skipped=11`；日志 `6542 passed, 11 skipped`，**23:11** | **junit** |
+| `scripts.generate_types --check` | `generated-types.ts is up to date.` | **输出文本**（脚本失败时 rc 仍 0） |
+| `tsc --noEmit` | 零输出 | 输出 |
+| `vitest run` | **125 文件 / 738 测试全过**，100.1 s | 输出 |
+| `eslint` | 零输出 | 输出 |
+| `next build` | `Compiled successfully`；静态页 **40/40**；`out/` **260 文件** | 日志 |
+| `npm audit --audit-level=high` | ❌ **5 high**（见 53.4） | 输出 + `--json` |
+| `pip-audit -r requirements.txt` | **No known vulnerabilities found** | 输出 |
+| docker build（`deploy/Dockerfile`） | ⏳ **本机未复现** —— docker daemon 未运行 | — |
+| gitleaks secret scan | ⏳ **本机未复现** —— 未安装 gitleaks | — |
+
+**构建那一处 `Build error occurred` 是假红**：末尾报的是
+`[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":997,"threshold":50,...targets:["...\\.next\\export-detail.json"]}`
+—— 拦点是**收尾清理**，不是编译。判据取 `Compiled successfully` + `Generating static pages (40/40)` + `out/` 落盘。
+另：`tsconfig.json` 的 sha256 构建前后**完全一致**（`732a19e6…c187`），未被 Next 重排。
+
+**gitleaks 的替代（弱证据，只作补位）**：对 tracked 文件扫 4 类密钥模式
+（`sk-` / `AIza` / `ghp_` / `AKIA`）⇒ **零匹配**；`.env` 未被跟踪，`.gitignore:5-6` 覆盖 `.env` / `.env.*`。
+这**不能**替代 gitleaks 的全历史扫描，只是「没有明面漏网」。
+
+## 53.4 🔴 唯一新增红：`braces` 无补丁的 high advisory
+
+```
+braces  <= 3.0.3        Severity: high   CVE-2026-93687
+Patched versions: None
+fixAvailable: eslint-config-next@14.2.35 (isSemVerMajor: true)
+```
+
+依赖链（**实测**读 `node_modules/*/package.json`，不是猜的）：
+
+```
+eslint-config-next 16.3.6  →  @next/eslint-plugin-next 16.3.6  →  fast-glob 3.3.1
+                                                             →  micromatch 4.0.8  →  braces 3.0.3
+```
+
+三点必须写清，免得被误判严重度：
+
+1. **全在 `devDependencies`**（`eslint-config-next` 是 devDep）⇒ 受影响的是 **lint/构建工具链**，
+   **不是运行时**产物。攻击面要求攻击者能给你喂一个深度嵌套的 brace 模式去 glob。
+2. **没有修复版**：`npm view braces version` = `3.0.3`，advisory 的 `patched` 为空。
+   `npm audit` 给出的「修复」是**把 `eslint-config-next` 降到 14.2.35**（semver-major，等于把 Next 16 的
+   lint 配置退回 Next 14）——这不是修复，是换一个不依赖该链的旧版本。
+3. **与本地两个未推送提交无关**：`git diff --name-only monkeydjl/main..main` 里**不含任何锁文件**
+   （14 个文件：11 个 backend + 3 个 frontend，均为源码/测试）⇒ 远端 `6fdb280` 的 `package-lock.json`
+   与本机**逐字节相同**，CI 一跑就红，与「推没推」无关。
+
+**处置选项（本节不代决）**：等待上游 `braces` 出补丁 / 给 `npm audit` 加 `--omit=dev`（会削弱这道门，
+须显式拍板）/ 在 `package.json` 里加 `overrides` 指向将来的修复版 / 记录豁免。四条各有代价。
+
+## 53.5 junit `tests` 属性的 1089 缺口
+
+**事实（三层互证）**：
+
+| 口径 | 读数 |
+|---|---|
+| `<testsuite tests="7642">` | **7642** |
+| junit 文件里 `<testcase>` 元素数 | **6553** |
+| 其中唯一 `(classname, name)` 组合 | **6553**（零重复） |
+| 有子元素的 testcase | **11**（全是 `LiveIntegrationTests`，即 live/网络类，与既有约定一致） |
+| `pytest --collect-only -q` | **6553 tests collected** |
+| pytest 终端汇总 | `6542 passed, 11 skipped` |
+| pytest 终端汇总（带探针轮，多出子测试计数） | `6542 passed, 11 skipped, 1 warning, **1089 subtests passed**` |
+| `tests/` 里 `subTest(` 调用点 | **179 处**，分布在 **59 个文件** |
+| 差额 | **7642 − 6553 = 1089 = 子测试数** |
+
+**可下的结论（不含猜测）**：
+- **没有任何测试被静默跳过**：收集 6553 = 执行 6553 = 元素 6553。
+- `tests` 属性 = `stats["passed"] + stats["failure"] + stats["skipped"] + stats["error"] − cnt_double_fail_tests`
+  （`_pytest/junitxml.py:655-662`），**不是** `<testcase>` 的个数 ⇒ 引它当「测试总数」会系统性高估。
+- 差额**跨轮稳定**：上一轮记录 7641 − 6552 = 1089，本轮 7642 − 6553 = 1089 ⇒ 确定性偏移，非漂移。
+- **§51.12.1 的「天然差 1」解释的是另一件事**（唯一用例集 6552 vs `passed+skipped` 6553），**没有覆盖这 1089**。
+
+**机制（分层取证；三项假设已被实验排除）**
+
+| 假设 | 实验 | 结果 |
+|---|---|---|
+| 收集阶段的报告污染了计数 | 带同一探针的 `--collect-only` 全量运行（25 s，零执行） | **stats 全 0** ⇒ 排除 |
+| 存在重复 nodeid（junit 按 `(nodeid, worker)` 合并 reporter） | 对 `--collect-only -q` 的全部行做去重统计 | **冗余 0** ⇒ 排除 |
+| async 用例被双重投递（本机装了 `pytest-asyncio 1.4.0` + `anyio 4.14.2`；仓库内 **无**任何自定义 `pytest_runtest_logreport` / `pytest_runtest_protocol` 钩子） | 把 async 最密集的 5 个文件（含 17/15/14/12/10 个 `async def test_`）单独带探针跑 | `stats.passed = 109 = 实际通过 109 = reporter 109` ⇒ **排除** |
+
+**全量探针轮的实测计数关系**（`junit-probe.xml`）：
+
+```
+PROBE_STATS {'error': 0, 'passed': 7631, 'failure': 0, 'skipped': 11}
+PROBE_NODE_REPORTERS 6553
+PROBE_TESTCOLLECTED  6553
+终端汇总              6542 passed, 11 skipped
+```
+
+⇒ `append_pass` 实际被调用 **7631** 次，而 pytest 自己的终端汇总只认 **6542** 条通过、junit 也只写出 **6553** 个
+`<testcase>`。即 **7631 − 6542 = 1089** 条 `when == "call" and passed` 的报告被投递给了
+`pytest_runtest_logreport`，却**不被终端汇总算作用例**。计数公式自洽：`7631 + 0 + 11 + 0 − 0 = 7642`。
+
+**影响面（这部分是确定的）**：该属性**只影响读数，不影响执行** —— 收集、执行、`<testcase>` 三者都是 6553，
+且同一文件里 `failures=0 / errors=0` 与「无 `<failure>`/`<error>` 子元素」互证。
+⇒ **把 `tests="7642"` 当「测试总数」会稳定高估 1089**；跨轮比较仍自洽（两轮同为 +1089），
+但对外引用（README / 报告）不该用这个数。推荐口径：`passed + skipped` 或 `--collect-only`。
+
+**根因（已定论）：`unittest` 的 `subTest()`。**
+
+```
+PROBE2 total_call_passes = 7631    distinct_nodeids = 6542
+PROBE2 nodeids_with_multi = 181    extra = 1089
+终端汇总  6542 passed, 11 skipped, 1 warning, 1089 subtests passed
+```
+
+- **181 个用例方法**调用 `subTest()`（`tests/` 里 **179 处调用点**、分布在 **59 个文件**，循环展开出 **1089 条子测试**）；
+- 每条子测试**额外投递一次** `when == "call" and passed` 的报告（nodeid 与父方法相同）；
+- junitxml 对每条报告跑一次 `append_pass` ⇒ `stats["passed"] = 6542 + 1089 = 7631`；
+- 但 `node_reporter` **按 nodeid 去重** ⇒ 一个方法仍只写出**一个** `<testcase>`（6553 个元素）；
+- 终端汇总**把子测试单列** ⇒ 只说 `6542 passed`，另报 `1089 subtests passed`。
+
+⇒ `tests="7642"` = **6542 通过 + 1089 子测试 + 11 跳过**，与公式精确吻合（`7631 + 0 + 11 + 0 − 0`）。
+**这不是 pytest 的缺陷，也不是用例漂移** —— 是「junit 的 `tests` 把子测试算作用例、而终端汇总不算」的**口径差**。
+
+📌 **可复用判据**：本仓 junit 的 `tests` 属性 ≈ 「通过数 + 子测试数」。**引用总数时用 `passed + skipped`（= 6553 = 收集数）**，
+或直接引 `--collect-only`。跨轮比较仍自洽（两轮都是 +1089），但把它当用例总数会稳定高估。
+
+## 53.6 已核实为「非缺陷」的四件事（写下来，免得下一个人再查）
+
+1. **`backend/` 没有 pytest 配置文件**（无 `pytest.ini` / `pyproject.toml` / `setup.cfg`，`inifile: None`）
+   —— **有意为之**：`tests/conftest.py:134-135` 以编程方式设 `config.option.asyncio_mode = "auto"`，
+   套件里 51 个文件含 `async def test_`。不是遗漏。
+2. **`loop_runs` 里 127 条 `running` 未回收** —— **不是缺陷，是预期残留**。
+   回收器 `loop_run_store.fail_stale_running_rows()` 由 `scheduler.py:471` 的
+   `loop_run_ledger_maintenance`（`CronTrigger(hour=6, minute=48)`，UTC）调用；该函数是 **2026-09-24（`6b820e7`）**
+   才引入的，而这 127 条**全部早于它**（`event_discover` 120 条 06-29→07-23、`event_discover_startup` 4 条 09-10、
+   `translate_titles` 2、`event_auto_resolve` 1）。本机调度器是**临时启动**的（按日运行量从 6 月每天上百条降到
+   9 月只有 3–44 条），自 09-24 后**从未在 06:48 UTC 存活**过 ⇒ 任务没机会跑。
+   注意账本里 `loop_run_ledger_maintenance` 的记录数 = **0**（那 8 条 `loop_db_maintenance` 是**另一个**任务，
+   且它们的实际启动时刻是 :45@13/22 时，与当前 `hour=6` 的注册不符 ⇒ cron 历史变更过）。
+   ⚠️ §8 记的「4 条孤立 `running`」与 120 条**不同源**（4 = `event_discover_startup`），别把 127 读成回归。
+3. **`.env.staging.example` 里的 `=false` 赋值** —— 属 §六/C 已拍板的既决事项（staging 故意全关 + 加
+   `overlay_flags` 让「0」消歧），**不是新缺陷**。
+4. **§52.8.2 的「前端 `TUNABLE_ENGINES` 未加 `gbm`」已不成立**：实测
+   `frontend/src/components/sports/world-cup/engine-console.tsx:34` 有 `{ value: "gbm", label: "GBM" }`，
+   `engine-api.ts:51` 的 `TunableEngine` 也已含 `gbm` —— 在 **`93d4c38`（未推送）**里做掉了。
+   仅 `world_cup_dynamic_weights.py:39` 的 `e.g.` 举例仍未列 `gbm`（举例形式，无害）。
+
+## 53.7 数据面（只读，为免误读单列）
+
+四个运行库**都是本机工作产物，且全线陈旧** ⇒ 本机后端/调度器**现在没在跑**，这些 0 **不是健康空集**：
+
+| 库 | mtime | 最新数据 | 关键读数 |
+|---|---|---|---|
+| `v2_loop.db` | 2026-09-27 | `loop_runs` 最后启动 09-26 | `success 1629 / running 127 / failed 3`；`predictions` 171（max 07-25）；`simulated_trades` 80（max 07-24）；`review_queue_items` **0**；`decision_timeline` **0**；`llm_daily_spend` **0** |
+| `kernel_predictions.db` | 2026-08-28 | `kernel_prediction_history` 1224（max 08-25） | `kernel_market_*` / `kernel_calibration` / `kernel_sport_edges` 全 **0** |
+| `world_cup_predictions.db` | 2026-07-31 | `match_results` 104（max 07-30） | `match_predictions` 58（max 07-18）；`prediction_accuracy` 5，max(updated_at)=**None** |
+| `domain_reliability.db` | 2026-07-31 | — | `domain_reliability` 2 行 |
+
+📌 **按 §5 的规矩**：上表的每一个 0 都只表示「**生产者没开**」，不表示「真的没有」。任何据此下结论的读数
+都必须先确认服务在跑。
+
+## 53.8 本轮交付状态与未决
+
+| 事项 | 状态 |
+|---|---|
+| 本轮是否改动了产品代码 | **零改动**（只读了代码/数据，未修改任何 tracked 文件） |
+| 本轮写入的非代码文件 | `MEMORY.md` §1 的过期条目更正（`.workbuddy/**`，**永不入库**）；审计日志在 `.workbuddy/audit-2026-10-03/` |
+| 本节文档 | **未提交** |
+| 🔴 `braces` high advisory | **未决（需拍板）**，四条处置路径见 53.4 |
+| 本地 2 个未推送提交（`c13e6bd`、`93d4c38`） | **未推送**（用户未授权） |
+| docker-build / gitleaks 两个 CI job | **本机未复现**（daemon 未运行 / 未安装），非「通过」 |
+
+## 53.9 A 项处置：`braces` 那道门（2026-10-03，改 CI 1 处）
+
+### 53.9.1 先证伪两条「修复」路径（免得把它们当备选）
+
+| 路径 | 取证 | 结论 |
+|---|---|---|
+| `overrides` 强制升 `braces` | `npm view braces dist-tags` → **只有 `latest` 一个 tag，值 = `3.0.3`**（发布于 **2024-05-21**）；advisory 的 `Patched versions: **None**` | **今天做不到** |
+| 绕开依赖链 | `@next/eslint-plugin-next@latest`（**16.3.8**）仍**钉死 `fast-glob: 3.3.1`**；`fast-glob@latest`（3.3.3）→ `micromatch ^4.0.8`；`micromatch@latest`（4.0.8）→ `braces ^3.0.3` | **每一环都已最新且为硬依赖** |
+| 等上游补丁 | `micromatch/braces#70` **就是这份 advisory 本身**（不是已合并的修复 PR）：无 `maxDepth` 实现、无发布时间表 | **无时间表** |
+
+### 53.9.2 再确定影响面（这是定「门范围」的依据）
+
+- `npm audit --omit=dev --audit-level=high` → **exit 0 / `found 0 vulnerabilities`**；
+- `npm ls braces --omit=dev` → **`(empty)`**。
+
+⇒ 这条 advisory **完全不在生产依赖树里**，**shipped bundle 零影响**；它是 lint/构建工具链的输入侧问题。
+
+### 53.9.3 改动（`.github/workflows/ci.yml`，**+13 / −1**）
+
+形态校验：`git diff --numstat` = `13 1`（净增 12 行 = CRLF 增量 12）；改后 `bare LF = 0`；
+PyYAML 可解析，`frontend-tests` 步骤数 **7 → 9**，其后各步顺序未动。
+
+```yaml
+      - name: Audit frontend dependencies (production)
+        run: npm audit --omit=dev --audit-level=high
+      - name: Audit frontend dev dependencies (report only)
+        run: npm audit --audit-level=high
+        continue-on-error: true
+```
+
+**取舍原则**：**生产依赖继续阻断**（那才是会上线的东西），**dev 树保留可见但不再阻断** ——
+既不静默丢掉信号，也不再让一个「无可用修复」的 dev advisory 把每个 PR 变红。**不引入新依赖。**
+
+**本机复跑读数**：阻断门 **exit 0**；报告门 **exit 1**（由 `continue-on-error` 兜住）。
+
+### 53.9.4 未做 / 未决
+
+- **未提交、未 push**。
+- 若更希望**保住 dev 树的阻断性**，正解是引入 `audit-ci` 之类**带 allowlist 的包装器**，按 GHSA 显式豁免这一条
+  —— 代价是新增一个 devDependency + 一条 CI 步骤。本节取的是「不新增依赖」这条路；
+  **两条路都成立，取值需拍板**（本节不代决）。
+- `braces` 出补丁后应撤掉 `--omit=dev`、恢复单条全树门；该 advisory 的 ID 与原因已写进 YAML 注释，便于回溯。
+- `--omit=dev` 之后，**dev 树的高危不再有任何阻断机制**，只有日志可见 —— 这是本取舍的已知代价，写在这里而非埋着。
+
+## 53.10 D 项处置：把 dev 树的阻断性找回来（`audit-ci` + **路径限定** allowlist）
+
+> ⚠️ **本节取代 §53.9 的取舍。** §53.9 走的是「用 `--omit=dev` **缩窄门范围**」，代价是 dev 树彻底失去阻断；
+> 本节改为「**保住全树阻断 + 显式豁免一条**」，并把 ci.yml 的两条门**合并回一条**。
+> 按「只追加不改写」的约定，**§53.9 原文保留**作过程记录 —— 但它描述的 ci.yml 状态**已被本节覆盖**。
+
+### 53.10.1 为什么能「既阻断又放行」
+
+- `audit-ci` 的 allowlist 按 **GHSA 标识符**豁免（v6.0.0 起由 NPM 数字 ID 改为 GitHub ID，理由是数字 ID 不稳定）；
+- 它**默认就审计 `devDependencies`**（与 `npm audit` 默认一致）⇒ 不需要 `--skip-dev`，**全树覆盖不变**；
+- 阈值字段 `"high": true`，与原 `--audit-level=high` **同口径**。
+
+### 53.10.2 改动清单
+
+| 文件 | 改动 | 形态 |
+|---|---|---|
+| `frontend/package.json` | devDependencies **+1 行** `"audit-ci": "^7.1.0"` | `+1 / −0` |
+| `frontend/package-lock.json` | 包数 **764 → 795** | `+370 / −1`；唯一删除是某条目的 `"peer": true` 元数据；**无任何既有包版本变动** |
+| `frontend/audit-ci.jsonc` | **新增**（配置 + 长注释：为何豁免、何时该删） | 新文件 |
+| `.github/workflows/ci.yml` | 两条门合并为**一条阻断门**，改跑 `npx audit-ci --config audit-ci.jsonc` | `+17 / −1` |
+
+**先验证过一件事**：装完 `audit-ci` 后 `npm audit --json` 仍是**同样的 5 条 high**（全在 braces 那一族链上），
+`{info:0, low:0, moderate:0, high:5, critical:0}` ⇒ **新工具自己没带进新告警**。
+
+### 53.10.3 关键设计：豁免**限定在链上**，不是无差别放行
+
+`audit-ci` 的失败报文会给出**带路径的标识符**：
+
+```
+GHSA-vfj7-8cjw-p6xm|eslint-config-next>@next/eslint-plugin-next>fast-glob>micromatch>braces
+```
+
+所以配置里用的是：
+
+```jsonc
+"GHSA-vfj7-8cjw-p6xm|eslint-config-next>*"
+```
+
+含义：**只在 `eslint-config-next` 这条链上豁免**。相对裸 `"GHSA-vfj7-8cjw-p6xm"` 的好处是：
+**若将来别的依赖也把 `braces` 拉进来，门依然会响**（裸 GHSA 会把那种情况一并静默掉 —— 那正是本项目最反感的假绿）。
+
+### 53.10.4 红/绿对照（三次运行，**唯一变量是 allowlist**）
+
+| # | allowlist 内容 | 结果 | 说明 |
+|---|---|---|---|
+| 1 | `[]` | **exit 1** · `Failed security audit due to high vulnerabilities` | **门是真的会红** |
+| 2 | `GHSA-…\|some-other-dependency>*` | **exit 1** | **路径限定不是装饰**：不匹配就不放行 |
+| 3 | `GHSA-…\|eslint-config-next>*` | **exit 0** · `Passed npm security audit` | 豁免生效 |
+
+配套复核：按 CI 里的**原样**（含多行 shell 与三条 `echo`）复跑该步骤 ⇒ **exit 0**；
+`npm ci --dry-run` ⇒ **exit 0**（锁文件与新 devDep 同步）；
+加依赖后 `tsc --noEmit` 零输出、`eslint` 零输出。
+
+### 53.10.5 一个必须写明的行为差异（不写会误导后来人）
+
+**`audit-ci` 对「路径限定」形式的豁免，不在日志里公告。** 实测两份日志 `diff` **只差一行**：
+
+```
+< Found vulnerable allowlisted advisories: GHSA-vfj7-8cjw-p6xm.     ← 只有裸 GHSA 形式会打
+```
+
+即：路径形式下 CI 会**绿着且不提**这条例外。为了让例外**每轮可见**，ci.yml 的该步骤里加了三条 `echo`
+（点名 GHSA、路径、以及「无补丁 / 纯 dev」三个事实），并声明 `audit-ci.jsonc` 是唯一真相源、echo 只是指针。
+**这是刻意的取舍，不是遗漏**：优先「结构上更窄」，再用 echo 把「日志可见」补回来。
+
+### 53.10.6 何时该删掉这条豁免
+
+npm `braces` **> 3.0.3** 发布之后（跟踪 `micromatch/braces#70`）：删掉 `audit-ci.jsonc` 里那条 entry，
+**门会自己恢复阻断**（对照 53.10.4 的 #1 已证）。该条件同时写在三处：配置文件注释与 `notes`、ci.yml 的 echo、本节。
+
+### 53.10.7 遗留（写明，不埋）
+
+- `audit-ci` 自身把 **31 个包**（`yargs` / `cross-spawn` / `semver` / `event-stream` / `readline-transform` 等）
+  带进 devDependencies ⇒ 这是一次**供应链面扩大**。已核实它**没带来新的 high**，但 review 时应知情。
+- **未提交、未 push。**
+
+## 53.11 E 项深查：Sports 市场桥接（Phase 7–8）——三种「0」、一条真该修的东西，和一个不可恢复的问号
+
+本节回答 E 项选定的问题：「kernel_market_* / kernel_sport_edges / kernel_calibration 全表 0 行，但代码完整 —— 到底是旗标默认关，还是真的不可达（典型的『被定义但没人产』）？」
+
+查完的答案是：**这里混着三件性质完全不同的事，不能用一个"0"说完**；其中第三件暴露了一个独立且确实该修的东西；而第三件的**根因已经被另一件东西销毁了**。
+
+### 53.11.1 结论先行
+
+`v2_loop.db.loop_runs`（真实账本，非测试副本）里 Phase 7/8/12 相关 job 的**调用史**，与 `kernel_predictions.db` 里的**物证**并排：
+
+| job | ledger 行数 | 最后调用 | 目标表的行数 | 判定 |
+|---|---|---|---|---|
+| `sport_market_discover` | 30 | 2026-07-31 | `kernel_sport_market_links` **0** | 跑过，**产出 0**（自述也是 0） |
+| `sport_market_odds_fetch` | **0** | — | `kernel_traditional_odds_snapshots` **0** | **从未调用** |
+| `sport_market_snapshots` | **0** | — | `kernel_market_snapshots` **0** | **从未调用** |
+| `sport_edge_detect` | **0** | — | `kernel_sport_edges` **0** | **从未调用** |
+| `market_settlement_feedback` | **0** | — | `kernel_market_settlements` **0** | **从未调用** |
+| `futures_market_discover` | **0** | — | `kernel_futures_links` **0** | **从未调用** |
+| `futures_snapshots_capture` | 13 | 2026-07-31 | `kernel_futures_snapshots` **0** | 跑过，**自述写了东西，物证不在** |
+
+外加 `kernel_market_calibrations` 0、`kernel_calibration` 0。
+
+### 53.11.2 方法论收获：三种「0」必须分开判
+
+这一节最重要的产出不是某张表为空，而是**「表是空的」有三种成因，判据完全不同**：
+
+- **(a) 生产者没开 / 没注册** —— ledger 里连一行都没有。**证据是"账本里没有这个 job"**，不是"表是空的"。
+- **(b) 生产者跑了，产出就是 0** —— ledger 有行，且**自述的产出也是 0**。这是可接受的 0（真的没有候选），**前提是自述里带了"输入侧"的读数**（这里是 `kalshi_candidates`/`polymarket_candidates`）。如果没有这两个键，这个 0 就退化成 §5 说的歧义 0。
+- **(c) 生产者跑了，自述写了东西，物证不在** —— **这才是缺陷信号**。判据：**自述的产出不可能在没有物证的情况下成立**（下节）。
+
+把 (a)(b)(c) 混成一个「全表 0 行」，会把 (c) 藏进 (a) 里 —— 本仓恰好就是这么藏的。
+
+### 53.11.3 旗标姿态：production / staging 模板里**根本没有**这三个开关
+
+```
+backend/.env.example              PHASE7=12  PHASE8=1  PHASE12=1   （全部 =false）
+backend/.env.production.example   PHASE7=0   PHASE8=0  PHASE12=0
+backend/.env.staging.example      PHASE7=0   PHASE8=0  PHASE12=0
+```
+
+`config.py:1834` `PHASE12_FUTURES_MARKETS_ENABLED = _env_bool(..., "false")`；`PHASE7_*`（`:1709-1772`）与 `PHASE8_CALIBRATION_FUSION_ENABLED`（`:1795`）同为 `_env_bool`。**模板不写 ⇒ 取代码默认 ⇒ 全 false。**
+
+按 §5 的判据，这意味着上表里所有 (a) 类的 0 **是"开关关着"，不是"真的没有"**；而且和先例（`/quality-metrics/summary` 回 `overlay_flags`、`/anomalies` 回 `alerts_enabled`）不同 —— **这些表旁边没有任何地方写出开关名**。所以任何一个只看 DB 的人，看到的是四个无法区分的 0。**这里不判缺陷**（§5 的边界：有界面先例才消歧；且 prod 关掉 Phase 7/8 是有意姿态），但**读这些表的人必须知道自己在读什么**。
+
+### 53.11.4 (c) 类：`futures_snapshots_capture` 的 13 次 `{captured: 3}` 与任何现存物证都对不上
+
+13 行的原始 payload **完全一致**，逐行读出、未经转述：
+
+```
+2026-07-16T14:31:35 / 14:31:52 / 14:32:55 / 14:33:38 / 14:38:26 / 14:51:08
+            14:51:26 / 15:19:25 / 15:21:00 / 15:23:56      → result={'captured': 3, 'errors': 0}
+2026-07-31T04:01:07 / 04:18:30 / 14:13:13                  → result={'captured': 3, 'errors': 0}
+```
+
+**为什么 `{captured: 3, errors: 0}` 是一条强断言**（`futures_market_service.py`，该文件自 2026-07-16 起只有一个提交 `5828b55`，语义未变）：
+
+- `:116-118` 无 verified link 时**直接**返回 `{"captured": 0, "errors": 0}` ⇒ `captured > 0` 蕴含「运行时至少存在 3 条 verified link」；
+- `:144-152` **先 `append_snapshot()` 成功、再 `captured += 1`** ⇒ `captured == 3` 蕴含「3 次 append 成功」；
+- `:123-125` 拉取失败会返回 `errors=len(verified)` ⇒ `errors == 0` 排除「拉取失败」这一分支。
+
+也就是说：**39 条快照 + ≥3 条 link，当时必定写进了某个库**。而现在：
+
+1. `settings.KERNEL_DB_FILE` = `backend/kernel_predictions.db`，其 `kernel_futures_links` 与 `kernel_futures_snapshots` **均为 0 行**（该库 19 张表都在，DDL 存在 ⇒ 建过表、只是没行）。
+2. **E10 前后的路径是同一个文件**：pre-E10 的 `init_kernel_db()` 硬编码 `Path(__file__).resolve().parents[2] / "kernel_predictions.db"`（`56b9665^`），等于 `backend/kernel_predictions.db`；E10（`56b9665`，2026-08-26）把它变成同名 setting，默认值就是这条路径。**不存在"路径改了所以写别处"的解释。**
+3. **文件没被换过**：Windows 创建时间 `2026-07-14 21:18:01`，恰好等于库内最早行的时间戳（`kernel_prediction_history.created_at` min `2026-07-14 13:18:01` = UTC+8 的 21:18:01）。运行日（07-16 / 07-31）**在文件生命周期内**。
+4. **没有任何代码删过它们**：全 `app/` 的 `DROP TABLE` 只有三处（`kernel_db.py:551-553`，`kernel_factors` / `kernel_engine_scores` / `kernel_prediction_history`），且受「老 PK」条件保护 —— 当前库里这三张表分别是 43 / 2 / 1224 行，**条件未触发**。`drop_all`、`DELETE FROM kernel_futures*` 均不存在。
+5. **也不在测试库**：`%TEMP%` 下 159 个 `pmrf_test_data_*` 目录、其中 12 个有 `kernel_predictions.db`，**逐一扫过，futures 两表全 0**。
+6. **更矛盾的是它的上游没跑过**：`futures_market_discover` 是 `kernel_futures_links` 的唯一生产者，它的 ledger 行数是 **0**。而 `capture` 要读到 3 条 verified link 才可能返回 3。
+
+**这六条不能同时为真。** 最可能的解释（**领先假设，未证实**）：这 13 次是**手工验证会话**，进程里 `KERNEL_DB_FILE` 被指到了一个临时/草稿库 —— 于是账本（走 `LOOP_DB_FILE`，默认即真库）留下 13 行 `success`，而快照写进了那个草稿库，事后被删。这个假设有现成的机制可循：`init_kernel_db()` 在 `kernel_db.py:493` **`if _engine is not None: return`** —— **进程内第一次用哪个路径，整个进程就都用哪个**，后续任何无参调用都会静默写向那个路径（这正是 E10 要解决的同一族问题的手工版）。
+
+**但必须写明：这条路无法证实。** 本该定案的那条证据是 `init_kernel_db()` 自己打的 `logger.info("Kernel DB initialized at %s", db_path)`（`kernel_db.py:521`）—— 而 `backend/logs/` 只剩 3 个文件（`app.log` 09-12..10-03、`app.log.1` 09-06..09-12、`app.log.5` 09-02..09-06），07-16 与 07-31 的启动行**已被轮转删除**。**这条线索是被下一节那个发现销毁的。**
+
+### 53.11.5 附带发现（本节唯一一条"该修"）：测试在往生产日志里写，并且它把审计线索一起写掉了
+
+`runtime_stores.py:70-71` 把 `LOG_FILE` 归入 **EPHEMERAL_STORES**，理由写的是 *"log output; the app never reads it back"* —— **对程序成立，对操作员不成立**：
+
+- `config.py:309` `LOG_FILE` 是 setting；`setup_logging()`（`logging*.py:128-131`）用它建 `RotatingFileHandler`；
+- **`tests/conftest.py`（414 行）从头到尾没有重定向 `LOG_FILE`** —— 它重定向了 9 个数据路径，唯独漏了日志。
+
+后果，在 `backend/logs/app.log` 上直接量得到（2026-10-03）：
+
+- 当日 **10357** 行；按小时分布 `00→3867, 19→1261, 20→875, 21→724, 22→3630` —— 这是**测试跑**的形状，不是服务器的形状；
+- 当日 `SQLite integrity failed at startup for: ...` / `SQLite store maintenance could not run` **共 70 条**（`00→28, 19→2, 20→12, 22→28`）；
+- **闭环**：本次审计自己在 2026-10-03 跑全量套件（19:42:47 → 20:05:58，`junit-full.xml` mtime 20:05:57），**其中落在 19 时的 2 条 + 20 时的 12 条 = 14 条，就是我那一次跑出来的。**
+
+而且它报的是**假警报**。同一秒级序列连着三个"启动"，只能是三套 settings 夹具：
+
+```
+22:33:59  Loop DB maintenance passed: {'ok': True} → SQLite maintenance passed for 0 store(s)
+22:34:02  Loop DB maintenance passed: {'ok': True} → ERROR - SQLite store maintenance could not run at startup
+22:34:05  Loop DB maintenance passed: {'ok': True} → ERROR - SQLite integrity failed at startup for: KERNEL_DB_FILE
+```
+
+- `passed for 0 store(s)` 要求 `sqlite_state_paths()` 为空 —— 只有被改过设置时才可能；
+- 而**真实的那个库是好的**：`backend/kernel_predictions.db` 上 `PRAGMA integrity_check` → **`ok`**，`quick_check` → `ok`，`foreign_key_check` → 0 行。按 `sqlite_db.maintain()` 的三步（WAL 打开 → `wal_checkpoint(TRUNCATE)` → `integrity_check`）原样复现，**全部通过**。
+
+所以日志里那句 *"Restore these stores from a backup."* 是**测试造出来的、指向一个健康库的、叫人去恢复备份的**指令。任何照它执行的人都会做一次不必要（且有风险）的恢复。**这是本节唯一建议动手修的一处**（最小修法：conftest 把 `LOG_FILE` 一并重定向；或者让 `setup_logging()` 尊重测试环境）。**本节不改代码，只登记。**
+
+两个发现是这样咬合的：**日志被测试写满 ⇒ 轮转变快 ⇒ 7 月的启动行被挤掉 ⇒ (c) 类的线索不可恢复。** 一个"只是测试污染日志"的小毛病，代价是另一处问题永久失去判据。
+
+### 53.11.6 一个可复用的读法：ledger 的 payload 形状会过期
+
+`sport_market_discover` 的 30 行，**只带两个键** `{kalshi_candidates, polymarket_candidates}`。而当前代码（`scheduler.py:942-948`）发的是**五个键**，且带着一句注释：*"Record link outcomes, not just candidate counts: a run that fetched 100 candidates and linked none is not a healthy run, and the ledger should say so."*
+
+⇒ **这 30 行记录的是"改好之前"的形状**。也就是说：**账本自身的诊断能力是在这些运行之后才长出来的**，拿今天的预期去读老 ledger 是苹果比橘子；反过来，**"当时没记"不能读成"当时没发生"**。这条对任何跨期对读 ledger 的人都成立。
+
+### 53.11.7 未决 / 明确不做
+
+- **(c) 类根因**：领先假设是手工会话把内核库指向了草稿路径（机制在 `kernel_db.py:493` 的 early-return），**未证实，且已不可证实**（证据被轮转删除）。**不建议为了"查清"去做任何数据动作** —— 39 行快照已不可寻回。
+- **`sport_market_discover` 的 0 是否"应该"是 0**：`kalshi_candidates` 恒为 0、`polymarket_candidates` 恒为 0，只出现过 1 次 `kalshi_candidates: 1`。这**符合**"发现源需要 key 而当时没配"的读法，但**我没有配 key 去复现**，所以只能说"自述自洽"，不能说"已排除缺陷"。
+- **`sport_market_discover` 的三联行**（30 行 = 10 组、组内相隔 1 秒）：形状是harness/手工的，**不是 cron 的**；但"谁在跑"我没有定论，**只把它记为形状异常**。
+- **不做**：不改任何旗标默认、不改 conftest、不动数据库、不提交。**所有动作留给拍板。**
+
+## 53.12 A 项处置：把 `LOG_FILE` 纳入 conftest 的重定向（4 处赋值 + 1 行文档）
+
+§53.11.5 登记了「测试在写生产日志」这条缺陷，并写明**当时未改代码**。本节是它的处置，**不是改写**。
+（§0 的规矩：§53.11.5 里「未做修法」这个结论的**前提是"未动代码"**，该前提已被本节取代；它其余的取证部分——假警报、两个发现的咬合——**仍然成立**。）
+
+### 53.12.1 改动清单（唯一一个文件）
+
+`backend/tests/conftest.py`，**4 处赋值 + 1 行 docstring**：
+
+| 位置 | 内容 | 作用 |
+|---|---|---|
+| `:87` | `_SettingsClass.LOG_FILE = os.path.join(_TEST_DATA_DIR, "app.log")` | **类级**默认，供**尚未实例化**的读取方 |
+| `:103` | `_settings_instance.LOG_FILE = _SettingsClass.LOG_FILE` | 已在用的**实例**（`setup_logging` 读的就是它） |
+| `:138` | `cls.LOG_FILE = ...`（在 `_restore_config_module()` 内） | `test_config.py` 用 `importlib.reload` 重定义类之后**重新压回去** |
+| `:149` | `_ORIGINAL_SETTINGS.LOG_FILE = cls.LOG_FILE` | 同上，恢复实例 |
+| `:5-7` | docstring：`(event store, databases, caches)` → `(…, the log file)`，`reads` → `reads or writes` | 承诺原文只说了"读"，实际泄漏的是"**写**" |
+
+行数（`git diff --numstat backend/tests/conftest.py`）：**26 / 2**。
+
+### 53.12.2 为什么是这 4 处，且为什么必须**在 `import app.main` 之前**
+
+不是"设了就生效"。绑定点只有一个：
+
+- `app/main.py:29` 在**模块级**调用 `setup_logging()`；
+- `setup_logging()`（`logging.py:108-138`）读**一次** `settings.LOG_FILE` 建 root `RotatingFileHandler`；
+- 函数体 `:117-118` 有 `if root.handlers: return` ⇒ **装上一次就再也不重绑**。
+
+conftest 在 `:113` 才 `import app.main`，而类级/实例级赋值在 `:87`/`:103` ⇒ **顺序是对的**（`grep -n` 实测行号）。这也是为什么修在 conftest 有效、而"事后 patch `settings.LOG_FILE`"无效 —— 后者对已经装好的 handler 毫无影响。
+
+### 53.12.3 红 → 绿（成对取证，避免「空真」）
+
+探针：`tests/test_production_preflight.py -k api_lifespan_boots_a_correctly_configured_production`（**不带 `assertLogs`** 的 lifespan 测试）。
+
+| | 生产 `backend/logs/app.log` | `_TEST_DATA_DIR/app.log` |
+|---|---|---|
+| **RED**（改前） | **+1673 字节**，首行 `2026-10-04 00:28:27,362 - app.main - INFO - EIP v0.3.0 starting`；junit `tests=1 failures=0 errors=0` | 不存在 |
+| **GREEN**（改后） | **+0 字节，sha256 不变**（`3ed0137c7bb483d3`）；junit `tests=1 failures=0 errors=0` | **1673 字节**（`pmrf_test_data_lopysdbc/app.log`） |
+
+**同一个 1673。** 这一对是必要的：只报「生产日志没变」是**空真**判据 —— handler 完全可能压根没被装上。
+必须同时证明**同一份字节出现在别处**，才叫"它搬走了"而不是"它没了"。
+
+### 53.12.4 一个会让验证变假绿的探针陷阱（写明，供复用）
+
+一开始选的探针是 `tests/test_alert_channel_posture.py`（它也 `with TestClient(app)`）。**不能选**：
+它用 `self.assertLogs("app.main", level="INFO")`，而 `assertLogs` 会把该 logger 的 handler **换成捕获器**并置 `propagate=False` ⇒ 记录**根本不流向 root** ⇒ 拿它当探针会在改动前也测不到泄漏（假绿）。
+选探针前先 `grep -c assertLogs <file>` 排掉。
+
+### 53.12.5 回归与静态门
+
+| 门 | 读数 | 对比修前 |
+|---|---|---|
+| 单测探针 | `tests=1 failures=0 errors=0 skipped=0` | 同 |
+| 8 文件子集（preflight / operational_readiness / alert_posture / log_level / **production_db_hermeticity** / main_frontend_mount / deploy_consistency / singleton_reset_census） | `tests=230 failures=0 errors=0 skipped=0`，且生产日志 **+0** | 新增口径 |
+| **全量套件** | `tests=7642 failures=0 errors=0 skipped=11 time=1282.044`（21m34s） | **与修前逐项相同**（7642/0/0/11） |
+| 全量套件对生产日志的影响 | **+0 字节，sha256 不变，未轮转** | 修前同规模约 6k–10k 行/天 |
+| `ruff check app/` | All checks passed | 同 |
+| `ruff check tests/conftest.py` | 1 条 F401 —— 用 `--stdin-filename` 对 **HEAD 原文**跑同一条，**同样 1 条** ⇒ 本次改动**零新增 lint** | 同（既有项：`import app.core.config as _config_module` 未使用，**未动**） |
+| `mypy app/` / `generate_types --check` | **不可能受影响**：`git diff --name-only` 里**没有** `backend/app/**`（实测） | — |
+
+### 53.12.6 先备份再验证：这次「验证」本来会销毁证据
+
+目标日志 `LOG_MAX_BYTES=10485760`，跑全量前 `app.log` 已 **9,620,076** ⇒ **余量仅 865,684**。
+而修前的全量套件每天写 6k–10k 行 ⇒ **足以触发轮转，把最老的 `app.log.5`（09-02..09-06）挤掉** ——
+而 §53.11.4 缺的正是被轮转删掉的那类历史证据。
+
+所以先 `cp -p` 三份日志到 `.workbuddy/audit-2026-10-03/logs-backup/`（仓库外），事后逐一核对：
+
+```
+app.log    9620076   (现场 == 备份，mtime 均 Oct 4 00:28)
+app.log.1  10485736  (现场 == 备份，mtime 均 Sep 12 19:10)
+app.log.5  10482400  (现场 == 备份，mtime 均 Sep  6 09:49)
+```
+
+**未轮转**，三份历史证据完好。（顺带：修好之后这个风险本身也消失了 —— 全量套件不再写生产日志。）
+
+### 53.12.7 未做 / 建议下一步
+
+- **未加守卫用例**。本轮范围只到修复，没有把「测试不得写生产日志」钉成测试。建议补
+  `tests/test_production_log_hermeticity.py`，形制照 `test_production_db_hermeticity.py`（E10 的先例），
+  断言**两半都要有**：写一条带随机 marker 的日志记录 → 断言该 marker **不在** `backend/logs/app.log` 里，
+  **同时**断言它**确实**出现在某个 file handler 的目标里。只有前半条的话，将来 `setup_logging()` 因 root 已有 handler 而早退，测试会在"没有任何 file handler"时**空真通过**。
+- **未提交、未推送**；`frontend/audit-ci.jsonc` 等 10-03 的改动仍原样保留。
+
+## 53.13 把「测试不得写生产日志」钉成用例：3 条，以及它顺手抓到的一枚诱饵 handler
+
+§53.12.7 把「测试不得写生产日志」列为建议并明确**未做**。本轮照做：新增
+`backend/tests/test_production_log_hermeticity.py`（3 条 / 223 行 / 纯 CRLF / **零 ruff 错误**）。
+
+形制照 E10 的先例（`test_production_db_hermeticity.py`）：**生产路径从仓库布局推导**
+（`config.py` 的 `parents[2]` = `backend/`，故 `_PRODUCTION_LOG_DIR = backend/logs`），**不读 `settings`**。
+理由与 E10 逐字相同：读 `settings.LOG_FILE` 再跟 handler 比，等于**拿沙箱比沙箱**，无论代码怎么改都通过。
+
+写这条用例的过程抓到一件计划外的事（§53.13.3），而且**我的第一版判据是错的** —— 它会在修复之后也报红。
+
+### 53.13.1 三条用例，各管一件事
+
+| 用例 | 断言 | 它红说明什么 |
+|---|---|---|
+| `test_the_setting_points_inside_the_test_temp_dir` | `resolve(settings.LOG_FILE)` 落在 `conftest._TEST_DATA_DIR` 内 | conftest 的重定向**没写到** `LOG_FILE` |
+| `test_no_root_file_handler_writes_inside_the_checkout` | root 的 file handler 目标里（a）**没有一个**在仓库根内，（b）**至少有一个**在沙箱内 | 覆盖被挪到 `import app.main` **之后**：设置读起来是对的，但 handler 在 import 期就绑到仓库了，而**没人重绑** |
+| `test_a_record_logged_by_a_test_reaches_the_sandbox_and_not_the_repo` | 发一条带随机 marker 的记录 →（a）marker **读得回来**（在 handler 实际持有的文件里），（b）`backend/logs/` 的逐文件摘要**不变** | 有记录真写进了仓库里的日志 |
+
+### 53.13.2 红 → 绿（同一个产物，两种状态）
+
+RED 的装法是**把工作树 conftest 换成 `git show HEAD:` 的原文**（先 `cp -p` 备份修复版，事后还原并核对 sha256）：
+
+| 状态 | conftest | junit | `backend/logs/app.log` | 沙箱 `app.log` |
+|---|---|---|---|---|
+| **RED** | `HEAD`（无 `LOG_FILE` 重定向；`git diff --numstat` 对 conftest **为空**） | `tests=3 failures=3 errors=0 skipped=0` | **+366 B**（两次红跑合计） | — |
+| **GREEN** | 工作树（4 处赋值 + 1 行文档，`26 / 2`） | `tests=3 failures=0 errors=0 skipped=0` | **+0 B，sha256 不变** | **122 B，含 1 行 marker** |
+
+RED 的三条失败信息都指到了正确的东西，例如第二条：
+`a root file handler writes inside the checkout: ['D:\...\backend\logs\app.log'] (the production log dir is D:\...\backend\logs)`。
+
+正向对照（第三条的后半）**不是**拿 `settings.LOG_FILE` 比，而是把 marker 从 **handler 实际持有的文件**里读回来，
+理由同上：拿设置跟设置比什么都证明不了。两半合起来才是「记录**搬走了**，不是**消失了**」。
+
+### 53.13.3 🔴 计划外发现：pytest 自己往 root 挂了一枚 devnull「file handler」
+
+第三条用例的判据是「marker 读不回来 ⇒ 后半条（仓库没变）就是空真」。但**「root 上有 file handler」本身也是空真判据**。
+
+临时 `-p` 插件（放仓库外 + 指 `PYTHONPATH`，**不往 `tests/` 塞文件**）在 `pytest_configure` 与
+`pytest_sessionstart` 各 dump 一次 root handlers：
+
+| 时点 | root.handlers |
+|---|---|
+| `pytest_configure` | **2**：`logging.StreamHandler` + `logging.handlers.RotatingFileHandler`（当时指向 `backend/logs/app.log`） |
+| `pytest_sessionstart` | **4**：上述 2 + `_pytest.logging._LiveLoggingNullHandler` + **`_pytest.logging._FileHandler`，`baseFilename` 形如 `\\.\nul`** |
+
+即 **pytest 的 logging 插件在 session 开始时挂了一个写 `os.devnull` 的 `FileHandler`**（Windows 上 `os.devnull` 就是 `nul`）。
+两个后果：
+
+- **一份什么都没写的跑也满足**「root 上有 file handler」⇒ 该判据空真；
+- 我第一版把判据写成「**所有** file handler 目标都在沙箱内」⇒ **GREEN 下也报红**（诱饵在沙箱外）。
+
+后者比前者更值得记：**一条在修复之后仍然红的守卫，会诱使下一个人去改判据**，而改判据正是让守卫失效的标准路径。
+修法是把判据拆成（a）无一在仓库内 +（b）至少有一个在沙箱内（§53.13.1 第 2 行）。
+另一面还好：诱饵**吞掉一切** ⇒ 永远无法满足「把 marker 读回来」⇒ **正向对照对它天然免疫**。
+
+### 53.13.4 顺带核一遍：`path_setting_names()` 13 个，conftest 只重定向 10 个
+
+`LOG_FILE` 修好之后，「最后一个漏掉的路径设置」这个说法**必须重新验证** —— 不能因为刚修了一个就当作没有了。
+实测（`runtime_stores.path_setting_names()` 共 13，conftest 覆盖 10）：
+
+| 未重定向的设置 | 解析到 | 实测 | 今天有没有被测试写 |
+|---|---|---|---|
+| `EVENT_AUDIT_FILE` | `backend/event_audit.jsonl` | 175,150 B，mtime **2026-09-11 02:39:44** | 否 |
+| `SCHEDULER_LOCK_FILE` | `backend/v2_loop.db.scheduler.lock` | 5 B，mtime **2026-09-11 03:50:52** | 否 |
+| `LOL_DRY_RUN_FIXTURES_PATH` | `''`（解析为 cwd） | — | 无任何测试引用 |
+
+两条读法：
+
+- `EVENT_AUDIT_FILE` **是 `STATE_STORES` 的 8 个成员之一**（append-only 概率快照审计轨），比 `LOG_FILE` 更像正经数据；
+- `SCHEDULER_LOCK_FILE = LOOP_DB_FILE + ".scheduler.lock"` 是在**类定义期**求值的 ⇒ 覆盖 `LOOP_DB_FILE` **不会**移动它。
+  这是它在重定向下仍指向仓库的机制 —— 不是「忘了写」，是「写了也无效」。
+
+**判据用 mtime**：两个有默认值的文件都停在 **2026-09-11**，即今天的红跑 / 绿跑 / 子集跑**都没有写它们** ⇒
+**潜在泄漏、当前不触发**。对照 `LOG_FILE`：两次红跑 **+366 B**，是**确实在触发**的。两者优先级不同，故**未改**（§53.13.6）。
+
+✅ 将来要扩展也低风险：**没有任何测试断言 conftest 的重定向清单本身**；4 处测试 `patch.object(…, "EVENT_AUDIT_FILE", …)`、
+2 处 patch `SCHEDULER_LOCK_FILE`；`test_runtime_stores.py:149-152` 钉住 `SCHEDULER_LOCK_FILE` ∈ `EPHEMERAL_STORES`、
+∉ `STATE_STORES`，且其文件名不在备份清单里。
+
+### 53.13.5 回归与静态门
+
+| 门 | 读数 |
+|---|---|
+| 守卫用例单独跑 | `tests=3 failures=0 errors=0 skipped=0 time=0.499` |
+| 9 文件子集（含 `test_log_level_setting.py` —— 会清空并恢复 root handlers 的高危邻居） | `tests=233 failures=0 errors=0 skipped=0 time=42.626`；生产日志 **sha256 不变** |
+| 全量 `pytest tests/` | `tests=7645 failures=0 errors=0 skipped=11 time=1303.674`（21m43s；`6545 passed` + `1089 subtests`）；上一轮基线 `7642` ⇒ **+3 恰为本轮新增**；生产日志 **+0 B，`.1`/`.5` sha256 均未变（未轮转）** |
+| `ruff check app/`（CI 门） | All checks passed |
+| `ruff check tests/test_production_log_hermeticity.py` | All checks passed |
+| `ruff check tests/`（CI 不覆盖） | 324 条**既有**；新文件贡献 **0** |
+| `python -m compileall app tests` | OK |
+
+子集 `233` = 上一轮 `230` + 本轮新增 `3`，**数字精确对齐** ⇒ 新增文件没有连带改变别的测试的收集数。
+行尾不变量：改动集 5 个文件工作树内**全部纯 CRLF**，tracked 的四个 `git ls-files --eol` 均 `i/lf w/crlf attr/text=auto`。
+
+### 53.13.6 未做 / 未决
+
+- **三个未重定向的路径设置未改**。依据是 mtime 判据（§53.13.4）：当前不触发。**要不要改属于拍板，不属于取证。**
+- **未提交、未推送**；`frontend/audit-ci.jsonc` 等 10-03 的改动仍原样保留。
+
+## 53.14 A 项第二轮：剩下两个「可写路径」纳入重定向，并把「下次还会漏一个」本身关掉
+
+§53.13.4 把三个未重定向的设置列为「潜在、当前不触发」并**未改**（那属于拍板）。本轮做了 A 项。
+结论不是「三个都补上」，而是**改 2 个、明确不改 1 个** —— 并且顺手把「每次都要人肉重新推一遍清单」这件事关掉：
+新增 `backend/tests/test_settings_redirect_census.py`（6 条 / 244 行 / 纯 CRLF）。
+
+### 53.14.1 三个设置里只有一个不是「路径」，判据是**读者**而不是名字
+
+| 设置 | 写入者（`app/`） | 是输出吗 | 处理 |
+|---|---|---|---|
+| `EVENT_AUDIT_FILE` | `event_audit_service.record_event()`（`os.makedirs(dirname)` 后 append）、`routes/events.py:343` | **是** | **重定向** |
+| `SCHEDULER_LOCK_FILE` | `scheduler._try_acquire_scheduler_lock()`（`os.makedirs(dirname)` 后 `open(...,"a+")` 写 pid） | **是** | **重定向** |
+| `LOL_DRY_RUN_FIXTURES_PATH` | 无（只被读） | **否，是输入** | **不重定向**，进豁免表并写明理由 |
+
+第三行是本节最该记住的一条。`runtime_stores.DERIVED_STORES` 对它的原话是
+**"dry-run fixture *input*, empty by default"**，而 `lol_adapter._resolve_dry_run_path()` 的读法是：
+
+```
+if configured:                                    # 非空
+    return path if path.is_file() else None
+return _DEFAULT_SAMPLE_PATH if _DEFAULT_SAMPLE_PATH.is_file() else None
+```
+
+默认 `''` 是一个**姿态**（「未配置 ⇒ 走内置样例」），不是一个指向 cwd 的路径。
+把它指向一个**不存在**的临时路径，会让 dry-run 导入**静默关闭**（非空但不存在 ⇒ `return None`，
+而不是回落到内置样例）。**改它会改变行为 —— 那不是 hermeticity 修复，是伪造一个修复。**
+没有任何测试需要它被重定向：`tests/test_lol_adapter.py` 自己设值再还原，那正是一个输入该有的形状。
+
+⚠️ **这是判据边界，与 §5 的门控判据同源**：`if (!x) return null` 型是「**缺席**」，不是「假 0」；
+`LOG_FILE` 那种「默认真在指向仓库里的一个真文件、并且真有人往里写」才是。
+
+### 53.14.2 改动清单
+
+`backend/tests/conftest.py`：**本轮自身 `49 / 6`**（对 HEAD 累计 `26 / 2` → `69 / 2`）。
+每个设置 4 处（类级 / 实例级 / `_restore_config_module` 的 `cls.*` 与 `_ORIGINAL_SETTINGS.*`），两个设置共 8 行赋值。
+
+`SCHEDULER_LOCK_FILE` 用 `_SettingsClass.LOOP_DB_FILE + ".scheduler.lock"` 而不是写死临时文件名 ——
+生产侧的规则**就是** `LOOP_DB_FILE + ".scheduler.lock"`，**复述规则**而不是复述结果，
+这样将来 `LOOP_DB_FILE` 的重定向一旦移动，两者仍然同步。
+
+🔴 本轮 `6` 处删除**全部是注释/文档文本，零代码行删除**，逐行列出：
+
+```
+DEL| -2. Redirecting all file-path settings (event store, databases, caches, the log
+DEL| -   file) to a session-scoped temp directory so no test reads or writes real
+DEL| -   production data.
+DEL| -# Not a data store, but the same class of leak, and the last one left: a path
+DEL| -# setting that decided where this suite WRITES outside its own sandbox.  It
+DEL| -# differs from the eight above in when it has to be set.  `app/main.py` calls
+```
+
+顺带把模块 docstring 第 2 条的**枚举**删掉了。理由是它**漂过两次**：写成 `(event store, databases, caches)`
+时漏了 `LOG_FILE`；而 `LOG_FILE` 注释里那句 "differs from the **eight** above" 实际是**九个**（数错了）。
+既然普查用例现在强制清单，注释里再放一份枚举就是**第二个真相源**，而且已经证明它会漂 ⇒
+改成指向 `tests/test_settings_redirect_census.py`。同一条道理也适用于「注释里不放会漂的数字」。
+
+### 53.14.3 新增守卫：把「漏一个」本身变成会红的测试
+
+判据是**分区**（与 `test_singleton_reset_census.py` 同形）：
+
+```
+{redirected} | {exempted}  ==  runtime_stores.path_setting_names()        # 13 个
+```
+
+关键设计：**「已重定向」用行为判**（该设置 `resolve()` 后的值落在临时目录内），**不解析 conftest 源码**。
+源码扫描对「赋值点写在读取点之后」是**通过**的，而那正是 `LOG_FILE` 掉进去的坑（§53.12.2）。
+
+6 条用例：
+
+| 用例 | 作用 |
+|---|---|
+| `test_the_scan_sees_the_settings` | 仪器控制：总体非空、能认出已知名、能对假名说「不在」 |
+| `test_the_containment_check_discriminates` | 仪器控制：`_inside` 必须能返回 `False`（否则「全都在沙箱内」空真） |
+| `test_every_path_setting_is_redirected_or_exempted` | 主判据：未覆盖集合必须为空 |
+| `test_the_exemption_table_is_not_stale` | 豁免表反向：已重定向的不该再豁免、豁免名必须真实存在、理由不许为空 |
+| `test_recording_an_audit_row_writes_into_the_sandbox` | 写入探针一（两半：临时文件里有 + 仓库文件逐字节不变） |
+| `test_acquiring_the_scheduler_lock_writes_into_the_sandbox` | 写入探针二（同上） |
+
+### 53.14.4 红 → 绿
+
+| 状态 | conftest | junit |
+|---|---|---|
+| **RED** | pre-A 版（sha `77ce3a0d4e48d993`，`numstat` 对 conftest `26 / 2`） | `tests=6 failures=3 errors=0 skipped=0` |
+| **GREEN** | 本轮版（sha `da684704c92bb7b9`） | `tests=6 failures=0 errors=0 skipped=0`（与 `test_production_log_hermeticity.py` 合并跑：`tests=9 failures=0 errors=0 skipped=0 time=0.744`） |
+
+RED 的三条失败各自点名了对象：
+
+```
+these path settings resolve outside the test temp dir and have no exemption:
+    ['EVENT_AUDIT_FILE', 'SCHEDULER_LOCK_FILE']
+an unpatched record_event() appended to ...\backend\event_audit.jsonl -- a fabricated
+    row in an audit trail, not merely a noisy log.  The row it added is
+    redirect-census-36805f60866f4b40b18e40a57d4a32d4.
+an unpatched lock acquisition wrote into ...\backend\v2_loop.db.scheduler.lock;
+    it now holds '10116'
+```
+
+**红跑真的写了两处**（这是本节的硬证据，不是推演）：
+
+| 文件 | 跑前 | 跑后 |
+|---|---|---|
+| `backend/event_audit.jsonl` | 175,150 B / `3b3a8fb39804d96c` | **175,468 B / `1e545e7252fe1e75`**（+318 B） |
+| `backend/v2_loop.db.scheduler.lock` | 5 B / `6513ea0fa99b6478` | **5 B，内容 `'10116'`（本进程 pid）** |
+
+追加的那一行是
+`{"timestamp": "2026-10-04T11:05:09.973968+00:00", "event_id": "redirect-census-36805f60866f4b40b18e40a57d4a32d4", "event_title": "redirect census probe", ...}` ——
+**一条伪造的审计记录**，这正是 §53.12 里那条 `LOG_FILE` 泄漏的升级版：日志脏了是噪声，**审计轨脏了是伪证**。
+
+**正向对照是同一条字节数**：GREEN 单跑之后，那次的沙箱里躺着 `event_audit.jsonl` **318 字节** ——
+与红跑写进仓库的 **+318 B 完全同一个数**（同一份字节**搬走了**，不是消失了），外加
+`v2_loop.db.scheduler.lock` 5 B、`app.log` 122 B（含 marker）、以及 `locked_file()` 留下的
+`event_audit.jsonl.crosslock` 0 B；而同一跑之后仓库里的三个文件全部逐字节不变。
+这与 §53.12.3 那个 1673 B 是**同一个取证形状**：只报「仓库文件没变」永远是空真。
+
+⚠️ 两条探针的**写入刻意放在前提断言之前**。若把「设置是否在沙箱内」那条断言放前面，红跑会停在前提上，
+**永远演示不出那次真实的仓库写入** —— 而演示那次写入才是这两条探针存在的理由（前提那条与普查用例重复）。
+
+**还原**：三样（conftest + 两个运行期数据文件）逐字节还原并核 sha256，全部 `MATCH=True`。
+两个文件都是 `.gitignore` 的运行期数据（`.gitignore:44` / `:53`），所以还原不影响 git 状态；
+但审计轨的还原是**必须的** —— 让一条伪造记录留在审计轨里比留在日志里更糟。
+
+### 53.14.5 门
+
+| 门 | 读数 |
+|---|---|
+| 新用例单独跑（RED） | `tests=6 failures=3 errors=0 skipped=0` |
+| 新用例单独跑（GREEN，两个守卫文件合并） | `tests=9 failures=0 errors=0 skipped=0 time=0.744` |
+| **全量 `pytest tests/`** | **`tests=7651 failures=0 errors=0 skipped=11 time=1327.506`**（22m07s，`6551 passed` + `1089 subtests`）；上一轮基线 `7645` ⇒ **+6 恰为本轮新增**；`test_events_routes` 131 / `test_operational_readiness` 71 / `test_lol_adapter` 8 全部通过 |
+| `ruff check app/`（CI 门） | All checks passed |
+| `ruff check` 两个新守卫文件 | All checks passed |
+| `ruff check tests/`（CI 不覆盖） | 324 条**既有**；两个新文件贡献 **0** |
+| `python -m compileall app tests` | OK |
+| **跑后三文件指纹** | `app.log` `9620442 / f666cad0c8d6a05f`、`event_audit.jsonl` `175150 / 3b3a8fb39804d96c`、`v2_loop.db.scheduler.lock` `5 / 6513ea0fa99b6478` —— **三者全部逐字节不变** |
+
+⚠️ 注意这条读数的**证明力边界**：光看「全量跑完两个文件没变」**不能**证明重定向生效 ——
+它们的 mtime 本来就是 2026-09-11，**修之前那一轮全量也没写过它们**。重定向的证明在两处：
+普查用例（设置的值落在沙箱内）+ 两条写入探针（写者真的落到沙箱）。全量这条只证明**没弄坏别的**（7645 → 7651，`failures=0`）。
+
+⚠️ **一条诚实记录**：本轮第一次把 10 个受影响的文件放在**前台**跑，在约 81% 处被 `SIGTERM` 中断
+（日志里全是点、**没有任何 `F`**），**未产出 junit** ⇒ 该次运行**不作为任何证据**，
+受影响面改由全量套件覆盖（全量本身就包含这些文件，可按文件从 junit 取读数）。
+
+### 53.14.6 未决 / 已知边界
+
+- 🔴 **普查的边界**：`path_setting_names()` 靠**后缀**认路径（`runtime_stores.py:82`
+  `_PATH_SETTING_SUFFIXES = ("_FILE", "_DIR", "_PATH")`）⇒ 一个**不带这三类后缀**的路径设置**不在普查范围内**
+  （当前 13 个全部符合，`_DIR` 一个都没匹配到）。这是普查的已知边界，不是它的缺陷 —— 但**新加路径设置时按后缀命名**是加入普查的前提。
+- **未提交、未推送**；`frontend/audit-ci.jsonc` 等 10-03 的改动仍原样保留。
+
+## 53.15 E 项 (c) 类收口：那 13 行 `{captured: 3}` 是**测试写进生产账本的行**，不是「不可恢复的问号」
+
+§53.11.4 把 13 行记为「(c) 类：与任何现存物证都对不上」，§53.11.7 记「**未证实，且已不可证实**」，并特意写了「**不建议为了『查清』去做任何数据动作**」。本轮把这条**收口**——而且**没有做任何数据动作**。
+
+按 §0 的规矩，本节是**取代**而不是改写：
+
+- **仍然成立**：§53.11.4 的取证本身——事实 1/2/3/4/5（真库两表 0 行、E10 前后同路径、文件没被换过、无任何删除路径、159 个测试库全 0）；事实 6 的**观察**（`futures_market_discover` 没有账本行）。
+- **被取代**：事实 6 的**推断**（「所以它的上游没跑过」）、§53.11.4 的中心推断「**39 条快照 + ≥3 条 link，当时必定写进了某个库**」、以及 §53.11.7 的「不可证实」。
+
+### 53.15.1 结论先行
+
+**这 13 行是 `backend/tests/test_futures_scheduler.py` 里那条用例写进生产账本的，不是任何一次真实抓取。**
+
+```python
+# backend/tests/test_futures_scheduler.py:28-38（该文件 2026-07-16 建立，至今只有 cdd8fd3 一个提交）
+async def test_capture_futures_snapshots_job_calls_service_when_enabled(monkeypatch):
+    monkeypatch.setattr(settings, "PHASE12_FUTURES_MARKETS_ENABLED", True)
+    with patch("app.core.scheduler.FuturesMarketService") as MockSvc:
+        instance = MockSvc.return_value
+        instance.capture_snapshots = AsyncMock(return_value={"captured": 3, "errors": 0})  # ← 字面量
+        await _job_capture_futures_snapshots()
+        instance.capture_snapshots.assert_awaited_once()
+```
+
+链路是三行代码：
+
+1. `_job_capture_futures_snapshots()`（`scheduler.py:1480`）第一步就是 `_start_run("futures_snapshots_capture")`；
+2. `_start_run` → `loop_run_store.start_run` → `sqlite_db.loop_db_path()` → `os.path.abspath(settings.LOOP_DB_FILE)`（`sqlite_db.py:34-42`）；
+3. `_finish_run(..., result=<mock 的返回值>)` → `loop_run_store.py:93` 写的是 `json.dumps(result, ensure_ascii=False, sort_keys=True)`。
+
+⇒ 账本里那一列 **就是** mock 的字面量本身。
+
+而 `capture_snapshots` 是 `AsyncMock` ⇒ **它一次都没被真正调用** ⇒ **没有任何快照被写进任何库**。
+「39 条快照不见了」这个问题**不成立**：**从来没有 39 条快照**。
+
+### 53.15.2 四条互相独立的证人
+
+| # | 证据 | 读数 |
+|---|---|---|
+| 1 | **字面量唯一性** | 全 `backend/` 树里 `{"captured": 3, "errors": 0}` 只出现 **1 次**（`tests/test_futures_scheduler.py:36`），而 13 行的 `result_json` 与它**逐字节相同** |
+| 2 | **设计出处** | `docs/superpowers/plans/2026-07-16-phase12-futures-markets.md:1258` 就写着这句 mock —— 文档日期 `2026-07-16`，与 13 行的首日同一天 |
+| 3 | **时间边界** | 该测试文件建于 `2026-07-16 22:32:37 +0800`（`cdd8fd3`，= **14:32:37Z**）；首行是 **14:31:35Z**，早 **62 秒**（先写文件、跑一次、再提交）。末行 `2026-07-31T14:13:13Z` |
+| 4 | **有界复现** | 本轮单跑该文件，在**沙箱**账本里得到**同一行**，生产侧逐字节未变（§53.15.3） |
+
+证 3 的「边界」要和下一条对上才成立：
+
+| 事件 | 时间（UTC） |
+|---|---|
+| `test_futures_scheduler.py`（含那句 mock）建立 | 2026-07-16 **14:32:37** |
+| 首行 `futures_snapshots_capture` | 2026-07-16 **14:31:35** |
+| 末行 `futures_snapshots_capture` | 2026-07-31 **14:13:13** |
+| `9647ca2`「test: make pytest baseline deterministic and hermetic」把 `LOOP_DB_FILE` 纳入 conftest 重定向 | 2026-08-01 **01:20:30** |
+| 08-01 之后 `futures_*` 行数 | **0** |
+| 08-01 之后 `loop_runs` 全部行数（对照，证明账本此后仍在被写） | 64 |
+
+**账本在重定向上线的那一刻停止被测试污染。** 这既是 13 行的解释，也是对 §53.12/§53.14 那套重定向的**事后验证**（顺带说明：`dc1541d`「test: isolate backend pytest environment」在 07-31 18:14 +0800 落地时**没有**重定向 `LOOP_DB_FILE`——已核 `git show dc1541d:backend/tests/conftest.py`）。
+
+### 53.15.3 复现（本轮唯一的「动作」，且**没有碰生产**）
+
+证据形状沿用 §53.12.3/§53.13.2 的成对取证：**只报「生产没变」永远是空真**，必须同时报「沙箱里出现了什么」。
+
+```bash
+cd backend && ../.venv/Scripts/python.exe -m pytest tests/test_futures_scheduler.py -p no:cacheprovider -q
+# 2 passed in 1.33s
+```
+
+| 观测点 | 跑之前 | 跑之后 |
+|---|---|---|
+| 生产 `backend/v2_loop.db` sha256(前 16) | `35346d467fe24ce2` | `35346d467fe24ce2` |
+| 生产 `loop_runs` 行数 | 1759 | 1759 |
+| 生产 `futures_*` 行数 | 13 | 13 |
+| 沙箱（`pmrf_test_data_*`）里的新行 | — | `('futures_snapshots_capture','success','{"captured": 3, "errors": 0}',None)` |
+| 同一行的 `duration_ms` | — | **252** |
+
+- 生产侧 WAL 当时是 **0 字节**（其 sha256 = `e3b0c442…` = 空串的 sha），所以主文件的 sha 是**有效**见证，不是「改了但看不出来」。
+- 沙箱那份账本里**只有这一行**：跑单文件时，另一个用例把 `PHASE12_FUTURES_MARKETS_ENABLED` 置 `False`，job 在 `_start_run` 之前就 `return` 了 ⇒ **一次会话恰好一行**。**13 行 = 13 次会话**。
+- **252 ms** 与 13 行的 282–364 ms 同带（见 §53.15.6(2)）。
+
+⇒ 这就是 §53.11.7 那条「不建议为了查清去做数据动作」的**正确替代**：**不需要任何数据动作，跑一次本来就在跑的测试就够了**。
+
+### 53.15.4 §53.11.4 说「该定案的那条证据被轮转删掉了」—— 对**机制**而言它还在
+
+§53.11.4 末段：「本该定案的那条证据是 `init_kernel_db()` 自己打的 `logger.info("Kernel DB initialized at %s", db_path)`（`kernel_db.py:521`）—— 而 `backend/logs/` 只剩 3 个文件……07-16 与 07-31 的启动行**已被轮转删除**。」
+
+**那两天的行确实没了（不改）。但同一个机制的行，在存活日志里有几万条：**
+
+| 日志 | `Kernel DB initialized at` 行 | 指向 `pytest-of-…` 临时路径 | 指向仓库内 `…\backend\kernel_predictions.db` |
+|---|---|---|---|
+| `app.log`（09-12..10-03） | 26010 | 5125 | 0 |
+| `app.log.1`（09-06..09-12） | 14676 | 8000 | 0 |
+| `app.log.5`（09-02..09-06） | 20415 | 13663 | 0 |
+| **合计** | **61101** | **26788** | **0** |
+
+而且**同一份日志里就有一处完整的记录**（`app.log.1:2612-2638`）：
+
+```
+2026-09-06 10:15:46,469 - app.kernel.kernel_db - INFO - Kernel DB initialized at
+    C:\Users\Alin\AppData\Local\Temp\pytest-of-Alin\pytest-2190\test_an_unreadable_links_table1\futures_links_degraded.db
+2026-09-06 10:15:46,500 - app.core.scheduler - INFO - [Scheduler] Futures snapshot capture starting...
+2026-09-06 10:15:46,502 - app.core.scheduler - ERROR - [Scheduler] Futures snapshot capture failed
+    ...
+    File "backend\app\core\scheduler.py", line 1311, in _job_capture_futures_snapshots
+      result = await service.capture_snapshots()
+    File "backend\app\kernel\futures_market_service.py", line 116, in capture_snapshots
+      verified = self._store.get_verified_links()
+    sqlite3.OperationalError: no such table: kernel_futures_links
+```
+
+⇒ **「测试把内核库指到临时路径、然后在那个临时库上跑 scheduler job」这件事不需要推断 —— 它被日志逐行记下来了。**
+差别只在结果：9 月那次 job 真跑、报 `failed`；7 月那次 `capture_snapshots` 被 mock、报 `success` 且带字面量。
+
+**这回头修正 §53.11.4 的措辞**：被轮转删掉的是**7 月那两天的实例**，不是**机制的证据**。
+
+### 53.15.5 六条事实现在怎么读
+
+| 事实（§53.11.4 原文） | 在「测试写账本」读数下 |
+|---|---|
+| 1. 真库 `kernel_futures_links`/`kernel_futures_snapshots` 均 0 行 | **不需要解释**：service 被 mock，从未碰过任何库 |
+| 2. E10 前后路径是同一个文件 | **无关**：进程一次也没用这个路径 |
+| 3. 文件没被换过（创建时间 == 最早行时间） | **无关** |
+| 4. 没有任何代码删过这两张表 | **无关**（结论仍有效：真库里确实从未有过行） |
+| 5. 159 个测试库全 0 | **一致**：`capture_snapshots` 被 mock ⇒ 测试库也不会有行 |
+| 6. `futures_market_discover` 的账本行数 0 | **前提纠正**（见下） |
+
+**事实 6 的前提纠正**：原文写「它**没跑过**」，依据是「它的 ledger 行数是 0」。但 `scheduler.py:136-155` 的 `_start_run` 是**尽力而为**的：
+
+> 「The ledger is best-effort: a job whose `loop_runs` insert fails still runs.」
+
+⇒ **「没有账本行」≠「没跑过」**。这条 docstring 自己还记了实测（用 `BEFORE INSERT … RAISE(ABORT)` 触发器）。所以事实 6 的**矛盾力**应从「不可能」降到「**没记录**」。（本条独立于本轮结论成立，单独记在这里，因为它是 §53.11.4 里唯一的**过度断言**。）
+
+### 53.15.6 顺手证到的两件事（都是新的，且可独立复用）
+
+**(1) 🔴 `futures_market_service.py:123-125` 是死分支。**
+`fetch_kalshi_futures_markets()` 是 **fail-closed** 的：`futures_market_source.py:238-240` 捕获一切异常并 `return []`，**从不抛出**。所以调用方那段
+
+```python
+try:
+    candidates = await fetch_kalshi_futures_markets(limit=200)
+except Exception:
+    ...
+    return {"captured": 0, "errors": len(verified)}   # ← 不可达
+```
+
+**不可达**（07-16 的版本同样如此，已核 `git show 5828b55:backend/app/kernel/futures_market_service.py`）。⇒ `errors` 的**唯一**来源是 `contract is None`。这**加强**了 `errors == 0` 的含义（§53.11.4 曾把 `:123-125` 当作一个**可达**的排除项，实际它只是排除项的名字之一）。
+⚠️ 按 §4.2：**删死分支前先问「删掉后活下来的那段是不是空头」**；删/不删属于拍板，**本轮不动**。
+
+**(2) 🔴 时长指纹：这 13 行不可能来自一次真抓取。**
+`futures_market_source.py:234` 在**每个被接受的候选**之后 `await asyncio.sleep(settings.KALSHI_SPORTS_REQUEST_INTERVAL_SECONDS)`，默认 **1.0 s**（`config.py:1831`；`.env` 未覆盖；`.env.example:775` = `1.0`；**07-16 的版本就有这一行**）。
+
+- `captured=3, errors=0` ⇒ `price_by_ticker` 必须含那 3 个 ticker ⇒ 抓取**成功返回 ≥1 个候选**（否则 `errors = len(verified) > 0`）⇒ **至少 1 次 `sleep(1.0)`** ⇒ **≥1000 ms**。
+- 13 行的 `duration_ms`：282 / 282 / 297 / 297 / 304 / 305 / 305 / 305 / 322 / 329 / 339 / 340 / 346 / 364 —— **最大 364 ms**。
+- 本轮复现（mock 路径、无网络）：**252 ms**。
+
+⇒ **同带**。真抓取读数应 **≥1000 ms**，观测是 **282–364 ms**，**不相容**。
+⚠️ 保留一条残余可能：若当时把 `KALSHI_SPORTS_REQUEST_INTERVAL_SECONDS` 导出为 0，则 300 ms 也能装下一次真抓取。但这**不改变结论** —— 因为事实 1（真库两表 0 行）已独立排除「真抓取」：真抓取会写下 3 行快照，而**没有任何文件有**。
+同一次会话的**交叉印证**：`sport_market_discover` 在 07-16 有 6 次报 `kalshi_candidates: 1`、`duration_ms` 296–355；07-31 再 4 次、296–324 —— **同一个 1.0 s sleep 也在 `kalshi_sports_source.py:110`**。
+
+### 53.15.7 (c) 类的可复用判据（本节要交付的东西）
+
+**(a) 定义**：一条 `status=success` 的账本行，其 `result_json` 断言的**正计数**（>0）所对应的下游物证，在**任何存活的存储里都找不到能与该行关联的见证**。
+
+**(b) 与 §53.11.2 的三种「0」的区别**：§53.11.2 管「**0 说不清**」（开关关着 / 真的没有 / 读失败）；(c) 类管「**正数说不清它指向谁**」。两者是不同的病，判据不能互相套用。
+
+**(c) 为什么 (c) 类**按构造**就可能查不清（根因判据）**：账本记录**运行**，物证落在**另一个存储**，而两者**没有共享键**。此处：
+
+- `futures_snapshots_capture` 的 `result_json` 只有 `{captured, errors}` —— **无 link id、无 ticker、无路径、无 run_id**；
+- `kernel_futures_snapshots` 的 DDL（`kernel_db.py:460-473`）**没有 `run_id` 列**；
+- 全仓 `run_id` 只活在 `scheduler.py` 的内存 map（`_RUN_TO_JOB`）与 `loop_runs.id` 里，**不被任何业务表引用**。
+
+⇒ 这一行与它的产物**在 schema 层就不可关联**。**这不是「我们没查到」，而是「按设计查不到」** —— 所以判据必须落在 schema 上，不能落在「再努力找找」。
+
+**(d) 甄别方法（便宜、静态、可复用）**：对**每一个「返回正计数」的生产者**问一句：
+
+> **这一行有没有一个持久化的 correlator 指回它的产物？**
+
+没有 ⇒ (c) 风险点。此时**不要先追根因**（很可能查不清），而是**先问「这个正计数会不会根本是被 mock 出来的」** —— 本例成本最低的一步就是 `grep` 那个字面量（§53.15.2 证 1），**一步结案**。
+
+**(e) 处置规则**：对 (c) 类
+
+1. **先查字面量**：`grep -rn '<result_json 的内容>'` —— 若命中测试的 mock，**结案**（本例）。
+2. 再查**账本路径是否被重定向**：若未重定向，**测试会写生产账本**（本例的机制）。
+3. 仍然查不清时，**不做数据动作**（恢复不了已丢的字节，且有二次伤害风险），改为**写进交付记录**并转成结构修复（见 (f)）。
+4. ⚠️ **边界**：只在「生产者确实返回正计数」时有意义；`{captured: 0}` 归 §53.11.2，不归 (c)。
+
+**(f) 结构性修法（提议，本轮不改代码）**：
+
+1. 让「返回正计数」的账本行带上**可独立解析的 correlator**（最少：在 `capture_snapshots` 的 result 里回写那 N 个 ticker / link id）；
+2. 或让产物侧记账（`kernel_futures_snapshots` 加 `run_id`）。
+
+任一条都能把**未来的 (c) 变成 (b)**。另与 §53.11.2 的老账**合并看**：`/trades` 的 `status='voided'` 不出现、`已平仓` 的计数不声明排除项 —— 同族的「读数不声明自己指向什么」。
+
+### 53.15.8 本轮「动作」清单（一句话交代清楚）
+
+- **只读**：扫 `backend/**/*.db`（9 个）+ `.workbench/kernel_copy.db` + 3 个 `backups/*/v2_loop.db`；读 `loop_runs`；读 3 份 `backend/logs/`；读 git 历史。
+- **写入**：**只写了本节的文字**，外加 `.workbuddy/audit-2026-10-03/` 下的取证记录（`e53-before.txt`、`junit-e53-repro.xml`）。
+- **跑测试一次**：`pytest tests/test_futures_scheduler.py`（2 passed）—— **生产账本 sha 前后一致**（§53.15.3）。
+- **没有做**：不动任何数据库、不改任何默认、不改任何代码、不提交、不推送。
+
+### 53.15.9 明确不做 / 留给拍板
+
+- **不动**那 13 行账本（它们现在是**判据的一部分**，不是垃圾）。⚠️ 但要写明：`LOOP_RUN_RETENTION_DAYS` 默认 **90**（`config.py:519-526`），而维护 job 的账本行**最后一条是 2026-07-24**（近期没跑）。**若保留期恢复执行**：07-16 的 9 行会在 ~**2026-10-14** 出局、07-31 的前 2 行 ~**10-29**；**`07-31T14:13:13` 那一行**因「每个 job 名的最新一行豁免」而**永久留存**。⇒ 本节把判据落到文档里，正是为了**此后不必再依赖那 13 行**。
+- **不改** `test_futures_scheduler.py` 的那句 mock（它现在是「一次会话写一行账本」的可复现锚点；要改先拍板）。
+- **不改** `PHASE12_FUTURES_MARKETS_ENABLED` 的默认（`false`，§53.11.3 的姿态）。
+- **不动** `futures_market_service.py:123-125` 的死分支（§53.15.6(1)）——**删/改属于拍板**。
+- **不提交、不推送。**
+
+## 53.16 把 §53.15 的判据推成普查：账本里 **127 行永久 `running`**，而写来清理它们的 job **一次都没执行过**
+
+§53.15 交付了一条判据（「**正计数的孤证**：先 `grep` 字面量，再查路径是否被重定向」）。按 §53.14 的老规矩 —— **同类出现到第三次就该改成普查** —— 本轮先把它推成普查（§53.16.1），普查本身**干净**；但同一次普查把一个**新的、独立的问题**照了出来（§53.16.2 起）。
+
+### 53.16.1 普查：把「测试写账本」这条判据推给全部 19 个 job
+
+方法：取账本里**每一个 distinct `result_json`**（共 19 个 job），去仓库源码（`backend/app`、`backend/tests`、`backend/scripts`、`docs`，1082 个文件）里找**逐字出现**。
+
+| 结果 | 读数 |
+|---|---|
+| payload 在源码里逐字出现的 job | **恰好 1 个**：`futures_snapshots_capture` 的 `{"captured": 3, "errors": 0}` → `backend/tests/test_futures_scheduler.py`（§53.15 的结论） |
+| 其余 18 个 job | **无逐字出处** |
+
+⇒ **§53.11.4 把 `sport_market_discover`（30 行）判为 (b) —— 普查后这条判定站得住**：它的两种 payload（`kalshi_candidates` 0 / 1）在仓库里找不到逐字出处，不是测试写进去的。
+⚠️ **扫描器陷阱（写下来）**：`startup_prediction_db_init`/`startup_sqlite_integrity` 的 payload 是 `{}`，长度 2，**任何 Python 文件都含它** ⇒ 第一版扫描把它们报成 HIT。**必须设长度下限**（本普查取 `len >= 12`）才不产生假阳性。
+
+### 53.16.2 普查照出来的新问题：127 行 `status='running'`
+
+| 读数 | 值 |
+|---|---|
+| `loop_runs` 总行数 | 1759 |
+| `status='running'` | **127**（7.2%），**且 127 行的 `finished_at` 全为 `NULL`** |
+| 其中 `started_at < 2026-07-24` | **123** |
+| 其余（2026-09-10） | 4 |
+| 分布在哪些 job | `event_discover` 120、`event_discover_startup` 4、`translate_titles` 2、`event_auto_resolve` 1 |
+| **「最新一行」就是 `running` 的 job** | **1 个**：`event_discover_startup` |
+
+### 53.16.3 解药存在、无条件注册、有测试 —— 但**从未在活数据上执行过**
+
+`_job_loop_run_ledger_maintenance`（`scheduler.py:441-482`）的 docstring 自己就是这条缺陷的诉状：
+
+> 「Measured on the live ledger **before this job existed: 123 rows stuck in `running` (2026-06-29 to 07-23**, every owner process long dead) … a `running` row has exactly two exits -- the job's `_finish_run`, or nobody. No process re-attaches to a stored row, so an abandoned row is **permanent**.」
+
+**今天这 123 行一行没少。** 逐项核对：
+
+| 项 | 读数 |
+|---|---|
+| 注册 | `scheduler.py:1654-1660`，`CronTrigger(hour=6, minute=48)`，**无任何开关门控** |
+| 它在账本里的行数 | **0**（19 个 job 名里没有 `loop_run_ledger_maintenance`） |
+| 测试覆盖 | `test_loop_run_store.py` 5 条（`fail_stale_running_rows`）+ `test_scheduler.py` 2 条（含 `assertIn("loop_run_ledger_maintenance", ids)`）⇒ **是承重不是空头** |
+| 引入提交 | `6b820e7`，**2026-09-24 12:37 +0800**（= 04:37Z） |
+| 孪生 job `loop_db_maintenance`（`hour=6, minute=45`，早 3 分钟） | 8 行，**最后一行 2026-07-24 22:45Z**（= 06:45 CST） |
+
+**⇒ 这不是注册 bug。** 两个 job 相隔 3 分钟注册，老的那个自 **07-24** 起就没再命中过每日窗口；而这个 job 是 **09-24** 才进来的 ⇒ **「0 行」= 这段每日窗口自 07-24 以来从未被命中，而它 09-24 才存在**。
+**但结论一样硬**：**写来清理那 123 行的 job，至今一次都没执行过；它专属的那批行今天一行没少。**
+
+### 53.16.4 为什么这是个真问题：`running` 让「死了」与「在跑」在**四个门**上都不可区分
+
+`latest_run_per_job()` 有四个消费者（`loop_run_store.py:166` 的 docstring 自己列的）。逐个看它们怎么读 `running`：
+
+| 门 | 位置 | 对 `running` 的读法 |
+|---|---|---|
+| `SCHEDULER_LAST_SUCCESS` 仪表 | `utils/metrics.py:333` `if run.get("status") != "success": continue` | **序列根本不创建**。它自己的 docstring：*"this gauge is what a 'last success older than N' alert reads -- **an alert cannot fire on a series that was never created**"* |
+| `scheduler_job_failed` 异常 | `routes/quality_metrics.py:320` `if run.get("status") == "failed"` | **不触发**（`running` ≠ `failed`） |
+| `/api/health` 的 `runs` | `services/loop_status_service.py:60` → `_visible_run()` | **原样透出** `running`（`_visible_run` 只挑 `job_name/status/started_at/finished_at/duration_ms`，**不判超期**） |
+| quality-metrics 调度块 | `routes/quality_metrics.py:503` | 同源，同透出 |
+
+**实测的受害行**：`event_discover_startup` 的 6 行里，**最新一行是 `running`，停在 `2026-09-10T19:51:22`，已 24 天**，`finished_at`/`duration_ms` 皆 `NULL`。
+
+```
+2026-09-10T13:14:53  d=311815  success   ← 该 job 单次要跑 ~5.2 分钟
+2026-09-10T13:42:13  d=None    running
+2026-09-10T18:35:17  d=267038  success   ← ~4.5 分钟
+2026-09-10T19:45:29  d=None    running
+2026-09-10T19:49:36  d=None    running
+2026-09-10T19:51:22  d=None    running   ← 「最新一行」，/api/health / 仪表 / 异常 都读这一行
+```
+
+它是个**启动期** job、单次要跑 **4.5–5.2 分钟**；19:51 起跑后进程就没了（同一分钟的 19:54:52 还有 `world_cup_live_update` 成功行，说明进程随后才退）⇒ 典型的「owner process long dead」，也正是 §53.16.3 那条 docstring 描述的对象。
+
+⇒ **两个后果都是具体的**：(1) 这个 job **没有 `SCHEDULER_LAST_SUCCESS` 序列** ⇒ 那条「N 小时没成功就报警」的告警**结构上不可能触发**；(2) 它**永远不会**产生 `scheduler_job_failed` 异常，因为唯一能把它变成 `failed` 的路径就是那个从未执行的 reconciler。
+
+### 53.16.5 判据边界：这是缺陷还是姿态？（§5 的规矩）
+
+**同仓先例存在，且在同一个 `lifespan` 里** —— `main.py:293-315` 对**两张邻表**用的是**启动期** reconcile：
+
+- `reconcile_predictions()`（"Startup reconciliation healed %d orphan predictions"）
+- `get_task_manager().reconcile_interrupted_tasks()`，注释写得和本条一模一样：
+  *"a `'pending'`/`'running'` row in SQLite after a restart has no `asyncio.Task` behind it, so `/auto-tune/status` would report it running forever"*
+
+⇒ **同一个问题，仓库里已有两种治法**：邻表用**启动期**（重启即自愈），`loop_runs` 用**每日 cron**。后者是唯一的「治愈取决于应用是否正好在那个钟点活着」。
+在这台**不常驻**的机器上，后果就是 §53.16.2 的 127 行**永久**存活。
+
+🔴 **可命名的一般性质**：一条 `running` 行的「死↔忙」不可区分窗口 = `LOOP_RUN_STALE_RUNNING_HOURS`（默认 **36h**）+ 最长 **24h** 的 cron 延迟 ≈ **最长 ~60 小时**；**超过这个窗口之后，四个门里没有任何一个会再报警**（仪表序列不存在、异常不触发、health 原样透出）。也就是说：**一个 job 死掉超过约 60 小时后，它在所有机器读法上都等同于「正在跑」。**
+
+### 53.16.6 未决 / 明确不做
+
+- **未决（属于拍板）**：是否给 `loop_runs` 也加一条**启动期** reconcile（与 `main.py` 里两张邻表一致），或缩短 cron 延迟。**本轮不改代码** —— 这属于业务/契约取值。
+- **不改**那 127 行（它们是本节的判据）。⚠️ 与 §53.15 同一条时间提醒：`LOOP_RUN_RETENTION_DAYS` 默认 90，而保留期只在**同一个**从未执行的 job 里生效 ⇒ **保留期目前也没在跑**（最老行 06-29 已 97 天仍在，与 §53.15 的读数一致）。
+- **不动** `_job_loop_run_ledger_maintenance` 的 cron 时刻/阈值、不动 `LOOP_RUN_STALE_RUNNING_HOURS` 默认。
+- **不提交、不推送。**
+
+## 53.17 追 §53.16：127 行孤儿的成因，一半是**代码路径**（可复现），一半是**取消/进程死亡**（`except Exception` 结构性抓不到）
+
+§53.16 只说这些 `running` 行是「owner process long dead」，把它当成**环境现象**记录。本轮往下追一层：**它是不是也有一条代码路径？** 结论：**是，而且恰好一条。**
+
+### 53.17.1 结论先行
+
+- 对 `backend/app/core/scheduler.py` 里**全部 23 处 `_start_run`** 做 AST 普查（源码取自 `git HEAD`，不手抄）：**恰好 1 处**是「起了不结」的泄漏路径 —— `_job_translate_titles`。
+- 该 job **正是账本里 4 个漏过的 job 之一**（`translate_titles`，2 行孤儿）。
+- **其余 126 行**的成因不是这个，而是另一层：全部 23 处 job 体用的都是 `except Exception`，而 **`asyncio.CancelledError` 不是 `Exception` 的子类**（实测 `False`）⇒ 取消/非优雅终止时 `_finish_run` **永不执行**。
+
+### 53.17.2 普查：23 处 `_start_run`，1 处泄漏
+
+方法（可复用）：把 `scheduler.py` 从 `git HEAD` 读出 → `ast.parse` → 对每个函数体，找赋值语句里调用 `_start_run` 的位置 → **看紧随其后的那条语句是不是 `Try`**。中间隔着任何语句 ⇒ 那一段在 `try` 之外，抛了就没人 `_finish_run`。
+
+| 判定 | 数量 | 明细 |
+|---|---|---|
+| 紧跟 `try:`（OK） | **22** | `:316`、`:351`、`:388`、`:422`、`:464`、`:508`、`:585`、`:642`、`:705`、`:763`、`:790`、`:816`、`:849`、`:907`、`:960`、`:1180`、`:1250`、`:1289`、`:1320`、`:1377`、`:1462`、`:1485` |
+| **下一个语句不是 `try`（泄漏路径）** | **1** | **`:284` `_job_translate_titles`** |
+
+```python
+run_id = _start_run("translate_titles")   # :284
+events = list_all_events()                # :285  ← 在 try 之外
+translated = 0
+try:                                      # :287
+    ...
+    _finish_run(run_id, "success", ...)   # :304
+except Exception as exc:
+    _finish_run(run_id, "failed", ...)    # :310
+```
+
+`:285` 一抛，`:304` 与 `:310` **两边都到不了** ⇒ 行留在 `running`，而且异常还会**穿出 job**（调度器侧只能记一条日志，`_finish_run` 再也回不来）。
+⚠️ 这是普查的**结构性判据**，不是「我看它像有问题」；对照的 22 处形状一致，只有这一处不同。
+
+### 53.17.3 复现（沙箱保险，生产逐字节未变）
+
+一次性探针（跑完即删）：patch `app.memory.event_store.list_all_events` 抛 `RuntimeError`，然后 `await scheduler._job_translate_titles()`。
+⚠️ 必须 patch **源模块**（`app.memory.event_store.list_all_events`）—— 该函数在 job 体内 `from … import`，`from X import f` 是**按值绑定**，patch 使用方模块名无效。
+
+| 观测 | 值 |
+|---|---|
+| 沙箱账本 | `…\Temp\pmrf_test_data_5lkoi7cs\v2_loop.db` |
+| 逃出 job 的异常 | `RuntimeError: probe: list_all_events exploded` |
+| 沙箱账本内容 | **恰好 1 行**：`{'job_name': 'translate_titles', 'status': 'running', 'finished_at': None, 'duration_ms': None}` |
+| 生产 `backend/v2_loop.db` | sha `35346d467fe24ce2`、**1759 行** —— 跑前跑后一致 |
+
+⇒ 与生产里那 2 行孤儿（`translate_titles`，`running`，`finished_at` NULL）**形状完全相同**。
+⚠️ 取证形状与 §53.15.3 一致：**只报「生产没变」永远是空真**，必须同时报「沙箱里出现了什么」。
+
+### 53.17.4 另外 126 行：`except Exception` 结构性抓不到「取消」
+
+- 全文件**没有一处 `except BaseException`**，也**没有一处 `finally:` 去兜 `_finish_run`**（23 处 job 体清一色 `except Exception`）。
+- 实测（本仓 venv）：`issubclass(asyncio.CancelledError, Exception)` → **False**；`issubclass(…, BaseException)` → **True**。
+- 关闭路径：`stop_scheduler()`（`scheduler.py:1850-1856`）→ `scheduler.shutdown(wait=True)`；`main.py:357-358` 只在 `scheduler_started` 为真时调用它。
+- ⇒ **非优雅终止**（Ctrl-C 未走 lifespan、SIGKILL、终端关闭、进程被拦等）不会让 `_finish_run` 执行；`wait=True` 也只在**优雅**路径上有效。
+
+**量级与形状证据**：`event_discover` **224 行里 120 行 `running`（54%）**，且这些孤儿**散布在全部 24 个小时**（`10h–17h UTC` 为峰，即 18h–01h CST），**不是**集中在 cron 时点 ⇒ 与「频繁地被中途杀掉」一致，而不是「某一次特定故障」。
+
+### 53.17.5 三层凑成的闭环（这也是 §53.16 那条「解药没跑过」为什么这么要紧）
+
+| 层 | 读数 |
+|---|---|
+| **泄漏** | 1 条**代码路径**（`translate_titles`，已复现）＋ 全 23 处对**取消**无免疫（`except Exception`） |
+| **出口** | `running` 只有两个出口：job 自己的 `_finish_run`，**或没人**（`_job_loop_run_ledger_maintenance` docstring 原话） |
+| **解药** | 只在每日 cron，且**本环境从未执行**（§53.16：它的账本行数 = 0，那 123 行一行没少） |
+
+⇒ **三层各自都成立** ⇒ 127 行永久 `running` 是**结构决定的**，不是运气不好。
+
+### 53.17.6 未决 / 明确不做
+
+- **未决（均属改动，留给拍板）**：
+  ① 把 `translate_titles` 的 `list_all_events()` 挪进 `try`（一行）；
+  ② 23 处加 `finally:` 兜 `_finish_run`（或改捕 `BaseException`）；
+  ③ §53.16 的启动期 reconcile。
+  ⚠️ 按 §4.2：若走 ②，必须问「**原来的 `except` 分支活下来之后是不是空头**」—— 该分支现在承担 `error=str(exc)`，`finally` **给不出**这个字段 ⇒ **②不是「把 except 换成 finally」这么简单的等价改写**。
+- **不新增**常驻守卫用例（探针**已删**，只留读数）。**不改代码、不提交、不推送。**
+- 探针文件 `backend/tests/test_zz_tmp_translate_leak_probe.py` **已删除**，`git status` 回到原本的 8 项。
+
+## 53.18 回头核 §53.17 的两条前提：一条要**改窄**，一条**已静默过期**（并顺带查出第四条）
+
+**这一节不是新发现，是自检。** 上一节（§53.17）下了两个判据：① `translate_titles` 的 `events = list_all_events()` 是「**可达的**泄漏路径」；② 归档里 `/trades` 的 voided 那条是「**未决**」。两条都要回头核——因为 §4.1 说了，结论会在前提被修掉之后**静默过期**，而「我刚写的」并不豁免。
+
+核的结果：**① 部分成立但要改窄；② 确实已经过期**。另外在核 ① 的路上撞出**第四条**独立发现。
+
+### 53.18.1 修正一：`list_all_events()` 能否抛？——源码说「不能」，探针说「只在一个窄缝上能」
+
+§53.17.2 的原话是：`scheduler.py:285` 的 `events = list_all_events()` 在 `try:` 之外，所以读失败会让 `run_id` 永久停在 `running`。这条**依赖一个未验的前提**：`list_all_events()` 会抛。
+
+把调用链逐层读到底（全部取自工作树字节）：
+
+| 层 | 位置 | 异常面 |
+|---|---|---|
+| `list_all_events()` | `event_store.py:349-356` | `list(_load_unlocked(_store_path()).values())` —— 无包装 |
+| `_load_unlocked()` | `event_store.py:29-50` | `read_json(path, {})`；`normalize_event_record` 包在 `except Exception: pass`（`:46-49`，注释：*"we never want a read path to fail"*） |
+| `read_json()` | `file_store.py:171-197` | docstring 第 172 行逐字：**"Lenient read for caches / read-only paths. **Never raises.**"** 内层捕获 `json.JSONDecodeError`（`:185`）与 `OSError`（`:189`）；外层再捕 `OSError`（`:192`，含 `locked_file` 抢锁失败） |
+
+⇒ 就**缺失文件 / JSON 损坏 / OSError / 抢锁失败**这四类而言，`read_json` 真的不抛（损坏 JSON 会 quarantine 后回退，见 §53.17.2 已记录）。**§53.17.2 说的「读失败」若指这四类，则路径不可达。**
+
+**但 `"Never raises"` 是过度承诺。** 我把非法 UTF-8 字节喂进 `read_json` 实测（沙箱临时目录，未触碰生产数据）：
+
+```
+read_json        -> RAISED | UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 7
+read_json_strict -> RAISED | UnicodeDecodeError: ...
+UnicodeDecodeError is OSError?   False
+UnicodeDecodeError is ValueError? True
+```
+
+原因：`open(path, encoding="utf-8")` + `json.load` 遇到非法字节抛的是 `UnicodeDecodeError`，它是 **`ValueError` 的子类、不是 `OSError`** ⇒ **同时穿透**内层的 `except json.JSONDecodeError` 与外层的 `except OSError`。
+
+⇒ **修正后的判据（更窄，但不再无据）**：`list_all_events()` 不是全函数；它**恰好在「`event_store.json` 含非法 UTF-8 字节」这一条缝上**会抛。这条缝比「任意读失败」窄得多，而且要求 event store 本身已损坏。
+
+⇒ **对两条 `translate_titles` 孤儿的成因排序随之回到**：首选仍是 **`CancelledError`**（`except Exception` 结构性抓不到，§53.17.4 已验），非法 UTF-8 只是**理论上**的第二可能。**结论（那两行是孤儿）不变，变的只是机制的可达性描述。**
+
+### 53.18.2 第四条：`read_json` 的实现比它的契约窄一个异常类
+
+上一条实测顺带钉出一个**独立于泄漏路径的**事实：`read_json` docstring 写的是无条件的 `"Never raises"`，实际异常面是 `{UnicodeDecodeError}`（且 `read_json_strict` 也穿透——虽然它「该抛」，但抛的**不是**它 docstring 里承诺的 `JSONDecodeError`，而是解码错误，调用方的 `except` 若只认前者同样漏）。
+
+- **影响面**：所有走 `read_json` 的读者（不止 event store）。凡是「假定这个函数绝不抛」而把它放在 `try` 之外、或在 `except` 里只列 `OSError/JSONDecodeError` 的调用点，在 store 文件含非法字节时都会**意外冒泡**。
+- **同族**：这属于「**注释承诺 > 实现**」——与 §53.5「0 必须只说一件事」是**不同**的一类（那是语义歧义，这是文档-实现偏离）。按 §0，记事实、**不代决要不要修**（修法是一行 `except (json.JSONDecodeError, UnicodeDecodeError)`，或把 `ValueError` 一并纳入——留给拍板）。
+
+### 53.18.3 修正二：项目记忆里 `/trades` voided 那条「未决」**已过期**
+
+我要核的原话（**两处落点**）：
+
+- 注入版核心 `MEMORY.md:125`：`⏳ **未决**：/trades 的 status='voided' **在任何列表里都不出现**；同族：**已平仓 的计数是个不声明自己排除了什么的读数。**`
+- 归档 `MEMORY-archive.md:236`：`⏳ **未决**：/trades 只有「当前持仓」/「已平仓」两 tab，而 status='voided' **在任何列表里都不出现**`
+
+**提交链（这是关键——它说明为什么当时是对的）：**
+
+| 提交 | 时间 (+0800) | 做了什么 | 路由读者？ |
+|---|---|---|---|
+| `fb1d767` | 2026-09-27 23:45:42 | `fix(trades): give a voided prediction's paper trade a terminal state` —— 加**终态**（`prediction_store.py` / `simulated_trade_store.py` +145 / `api.ts`） | ❌ **没有** |
+| `2ec731f` | 2026-09-27 23:45:53 | `docs(audit): record the voided-trade fix as §16` | ❌ |
+| `bc9235a` | 2026-10-02 15:29:44 | `fix(world-cup): … and read voided trades` —— 加**路由 + 前端 + 计数** | ✅ **有** |
+
+⇒ `fb1d767` **只造了 `status='voided'` 这个取值，没造读者** ⇒ 在 2026-09-27 写下时，**「不出现」是真的**。五天后 `bc9235a` 补上读者 ⇒ 结论**静默过期**。这正是 §4.1 说的那类：**「因为 A 所以不能做」的结论会在 A 被修掉之后静默过期**。
+
+**当前工作树的证据（全部现读，`bc9235a` 是 HEAD `c13e6bd` 的祖先，已验 `merge-base --is-ancestor` ⇒ YES）：**
+
+- 路由：`events.py:1629` `@router.get("/trades/voided", response_model=SimTradeListResponse)`，返回 `count` / `total: count_voided_trades()` / `limit` / `offset` / `trades`。docstring 逐字：*"It left the open list when it was voided, **so without this route it was visible in no list at all**"*。
+- store 读者：`simulated_trade_store.py:411-427` `list_voided_trades()` —— `WHERE status='voided' ORDER BY exit_time DESC, trade_id DESC`；`count_voided_trades()` `:370-378`。
+- 测试：`test_events_routes.py:3771` docstring 逐字 *"GET /events/trades/voided -- **the only reader for status='voided'**"*，`:3805`/`:3851` 跑分页。
+- **前端（说明不是「有路由没人用」）**：`frontend/src/app/trades/page.tsx:319` 有**第三个 tab** `{ key: "voided", label: "已作废", count: voidedTotal }`，`:516-607` 有整块 `voided-trades-section` 与分页；`api.ts:1024` `voidedTrades()`。
+
+**「同族」子句也一并过期**，而且修复代码**原样复述了症状**：`count_voided_trades` 的 docstring（`:373-376`）逐字 —— *"Without this count the /trades page showed a 'closed' figure that silently excluded them -- **a reading that did not say what it had left out**."* 这与我记忆里记的「**已平仓 的计数是个不声明自己排除了什么的读数**」是同一句话。谓词也核了：`_count_trades`（`:349-357`）= `SELECT COUNT(*) FROM simulated_trades WHERE status=?` ⇒ `已平仓` 数（`status='closed'`）**结构性排除** `voided`，第三个 tab 现在把这个排除**摆到台面上**。
+
+**处置**：两处落点**都改写标记（`⏳ 未决` → `✅ 已修复`）+ 附提交号与日期**，**不删原句**（保留「当时确实如此」这个历史事实）。已在 2026-10-04 本地记忆轮次内完成。
+
+### 53.18.4 可复用判据（写进 `audit-delivery-verification`）
+
+**「未决 / 不出现 / 只有两 tab」这类记忆项，用一个「症状短语反查源码」的动作就能判死活——比重新读一遍代码便宜得多。**
+
+1. 从记忆项里抽出**症状的措辞**（本案：*"在任何列表里都不出现"* / *"不声明自己排除了什么"*）。
+2. 在源码里 grep **这句话的语义近邻**（英文注释常逐字复述：*"no list at all"* / *"did not say what it had left out"*）。
+3. **命中即判死**：修复提交往往把症状写在**近旁的 docstring / 注释**里（本案 `events.py:1639`、`count_voided_trades` docstring、`api.ts:458`），而且是**过去时**（*"without this route it **was** visible in no list at all"*）⇒ 语言的时态就是判据。
+
+⚠️ 配套两条：① 反查必须**同时**看注入版核心（`MEMORY.md`）与归档（`MEMORY-archive.md`），否则会只改一半——本案两处都有。② 判死要**给出提交号+日期**，不能写「已修复」，否则下次又得重查（与 §0「结论复述必须带前提」同源）。
+
+### 53.18.5 未决 / 明确不做
+
+- **未决（均属改动，留给拍板）**：
+  ① `read_json` 的异常面补 `UnicodeDecodeError`（或把 docstring 的 `"Never raises"` 改成有条件的）；
+  ② §53.17.5 那三条（`translate_titles` 挪进 `try` / 23 处兜 `finally` / 启动期 reconcile）。
+- **不新增**常驻守卫用例（本节的探针是**临时文件、已删**，只留读数）。
+- **不改代码、不提交、不推送。** 生产库 sha 与 §53.17 一致，未触碰。
+
+## 53.19 A 项收口：`sport_market_discover` 那 10 组「三联行」也是**测试写进生产账本**的行（(c) 类第二次命中），并顺带找到第二个独立信宿
+
+§53.11.7 第三条把它登记为「形状异常，谁在跑没有定论」，**本节把它定案**：这 30 行与 §53.15 的 13 行是**同一个机制、同一个种群**，只是**指纹不同**——而正是这个不同让上一轮的普查漏掉了它。
+
+### 53.19.1 结论先行
+
+1. 30 行 = **10 组、每组恰好 3 行**、组内模式**恒为**「首行 `kalshi_candidates: 1`，后两行 `0`」、跨度 1.43–1.63 s。**零单行组**。
+2. 生产者 = `tests/test_kalshi_scheduler.py` 的**三个用例**（`:22`、`:39`、`:61`），跑一次该文件 ⇒ 恰 3 行，且**顺序就是文件里的用例顺序**（1 → 0 → 0）。
+3. **有界复现**：沙箱内跑该文件，账本**恰好 3 行**、模式 `1 / 0 / 0`；生产库 sha 前后一致。
+4. ⇒ 这 30 行应归 **(c) 类**（成功行断言了一个计数，却没有任何**生产**物证与之对应），**§53.11.4 给它的 (b)「跑过、产出 0」判据要重述**；并且 **§53.16 那次字面量普查有假阴性**（见 53.19.6）。
+
+### 53.19.2 账本侧：严格分组普查
+
+把 30 行按「相邻间隔 ≤ 5 s」分组（改前不预设组大小，让数据自己分组）：
+
+```
+groups = 10 | sizes = [3,3,3,3,3,3,3,3,3,3] | 直方图 {3: 10}
+每组的 payload 模式（1 = 首行 kalshi_candidates: 1）：100 × 10
+跳过跨度：1.43s / 1.52s / 1.53s / 1.54s / 1.55s ×3 / 1.56s ×2 / 1.57s / 1.63s
+```
+
+**零单行组**是要紧的：真实 cron 跑只可能产生**单行组**（`IntervalTrigger(minutes=60)`、`max_instances=1`）。30 行**全部**属于 3 人组 ⇒ **没有一行是 cron 的产物**。
+
+### 53.19.3 有界复现（沙箱内演绎，生产只读）
+
+```
+PROD before : sha 35346d467fe24ce2 | 1759 rows | sport rows 30
+pytest tests/test_kalshi_scheduler.py  ->  tests=3 failures=0 errors=0  (1.87s)
+沙箱账本（%TEMP%/pmrf_test_data_*/v2_loop.db）: rows = 3
+  2026-10-04T15:25:50.095Z | sport_market_discover | success | 259ms | {kalshi_candidates:1, kalshi_linked:1, ...}
+  2026-10-04T15:25:50.868Z | sport_market_discover | success |  74ms | {kalshi_candidates:0, ...}
+  2026-10-04T15:25:51.134Z | sport_market_discover | success |  95ms | {kalshi_candidates:0, ...}
+PROD after  : sha 35346d467fe24ce2 | 1759 rows | sport rows 30   （未变）
+```
+
+三个用例各自为什么产出那个数（读源码即可对上，不靠巧合）：
+
+| 用例 | 手段 | 产出 |
+|---|---|---|
+| `test_scheduler_discovers_kalshi_when_enabled` | `fetch_kalshi_sport_markets` 桩返回**1 个**候选 | `kalshi_candidates: 1` ← **组首行** |
+| `test_scheduler_skips_kalshi_when_disabled` | `PHASE11_KALSHI_SPORTS_ENABLED=False` | `kalshi_candidates: 0` |
+| `test_kalshi_failure_does_not_break_polymarket` | 桩 `side_effect=RuntimeError`，被内层 `except`（`:936`）吞掉 | `kalshi_candidates: 0` |
+
+三个用例都把 `PHASE7_POLYMARKET_SPORTS_SOURCE_ENABLED=False`（第三个虽为 True 但桩返回 `[]`）⇒ **30 行的 `polymarket_candidates` 恒为 0**。✔
+
+**生产库未受影响的第二个理由（比"重定向"更早生效）**：两个旗标**默认都是 `false`**（`config.py:1709-1710`、`:1829`）。`PHASE7_SPORT_MARKET_BRIDGE_ENABLED=false` 时，job **既不会被注册**（`scheduler.py:1743` 的门），进来了也在 `:904-905` **在 `_start_run` 之前**就 return ⇒ **默认配置下的真实应用根本产不出这些行**。能产出的只有"强制把开关打开"的东西 = 测试。
+
+### 53.19.4 四条时间边界互相印证
+
+| 边界 | 提交 | 时间 | 与 30 行的关系 |
+|---|---|---|---|
+| 测试文件诞生 | `34780ad` | 2026-07-16 **22:06:15 +0800**（=14:06:15Z） | 首组首行 14:05:12Z ⇒ **提交前 63 s**；第二组 14:05:33Z 也在提交前 ⇒ 「写→跑(红)→改→跑(绿)→提交」 |
+| `LOOP_DB_FILE` 重定向 | `9647ca2` | 2026-08-01 **09:20:30 +0800** | 末行 07-31 ⇒ 之后测试**不再**往生产账本写行 ⇒ **末日期可解释** |
+| payload 变 5 键 | `dba5971` | 2026-08-09 **22:23:59 +0800** | 30 行**全是 2 键** ⇒ 现代码**结构上不可能**产出它们 |
+| 新增测试文件 | `05edb2d` | 2026-09-04 **13:38:30 +0900**（=12:38:30 +0800） | 见 53.19.5 的 3→5 迁移 |
+
+### 53.19.5 第二个独立信宿：日志（它给出了账本**看不到**的那些会话）
+
+账本 08-01 后干净，但 `backend/logs/app.log*` 到 **10-04** 还在打 `[Scheduler] Sport market discovery starting...`。初看像矛盾，查下去是**两个信宿的净化日期不同**：
+
+- `LOOP_DB_FILE` 重定向**已提交**（`9647ca2`，08-01）⇒ 账本早干净。
+- `LOG_FILE` 重定向**不在 HEAD**，只在**工作树**里（`conftest.py:124/142/179/192`，即 §53.12 那笔**未提交**的 A 项处置）⇒ 整个 9 月测试**照样写生产日志**。
+
+⇒ **08-01 到（LOG_FILE 重定向落地）之间是一个「半净化窗口」：账本干净、日志脏。** 而"日志里的这些行是测试的"有独立证据：同一时间窗内夹着**假夹具**（`boston_celtics`/`los_angeles_lakers`、`KXNBAGAME-TEST`）与**临时库**的 `Kernel DB initialized` 连打（§53.15 已测：26,788 条指向 `pytest-of-…`，0 条指向仓库路径）。
+
+**并且它做了一个可证伪的预测，验过了。** 日志簇大小按"每会话调用次数"应等于 3；若 9-04 新增的文件再加 2 次（它有两处 `_ledger_row()` 调用，见 53.19.7）就应变成 5：
+
+```
+app.log.5 (09-02→09-06) 的簇时间线：
+  … 09-04 09:59:04  n=3        ← 新增文件尚未落地
+     09-04 12:19:24  n=2  ← 作者按 -k 选集迭代（12:19–12:21 连续七簇 n=2）
+     …
+     09-04 12:26:33  n=5        ← 迁移点
+     09-04 之后全部   n=5
+   迁移点 12:26:33 比该文件的提交（12:38:30 +0800）**早 12 分钟** ⇒ 又是「写→跑→提交」
+```
+
+三份日志合计 **327 行 / 74 簇**（`{2:7, 3:11, 5:11}` + 16×5 + 29×5），全部 `duration` 类信息一致。**簇数 ≫ 10** —— 正是"账本停了、日志没停"的直接读数。
+
+### 53.19.6 🔴 方法论升级：§53.16 的字面量普查有**假阴性**，必须补第二遍
+
+§53.16 判 `sport_market_discover` 「(b) 站得住」的依据是：**它的 payload 在仓库里找不到逐字出处**。这条依据**成立**，但**不充分**：
+
+| 测试写行的两种方式 | payload 里有字面量吗 | 字面量普查能抓到吗 |
+|---|---|---|
+| **伪造 payload**（`AsyncMock(return_value={"captured": 3, ...})`，§53.15 的 13 行） | 有（就是测试源码里的字面量） | ✅ 抓得到 |
+| **跑真 job**（patch 掉 fetch、让生产代码自己算 payload，本节 30 行） | **没有**（payload 由生产代码生成） | ❌ **抓不到** |
+
+⇒ **「payload 无逐字出处」只能排除"伪造"，不能排除"测试"**。两次命中恰好是两类各一例，凑成一对反例。
+
+**补充判据（应加进普查第二遍）**：对每个 job，问一句 **「有没有测试直接调用这个 job 函数？」** —— 有，则账本里可能混着测试行，**与 payload 长什么样无关**。本案的测法很便宜：
+
+```
+grep -rn "_job_<name>\b" backend/tests/     # 命中即列入可疑
+```
+
+### 53.19.7 新判据：**信宿不对称** 与 **「日志行数 > 账本行数」= 有调用者把写入口打桩**
+
+**信宿不对称（可复用）**：同一批测试可能在**多个信宿**（账本 / 日志 / 落盘文件）留痕，而**各信宿被"净化"的日期各不相同** ⇒ 会出现「A 干净、B 脏」的窗口。**用途**：用一个**便宜**的信宿（日志）去数**昂贵**信宿（账本）看不见的那些会话；反过来，**「A 有、B 无」的差异先怀疑"日期不同"，不要先怀疑"没发生"**。（同族：§53.15 用日志补回了账本丢掉的机制证据。）
+
+**计数差的指纹（可复用）**：`test_kalshi_fixture_resolution_degraded.py:122-141` 的 `_ledger_row()` helper **把 `scheduler._start_run` 打桩成 `lambda: "run-1"`** ⇒ 它调用 job 会**打日志但不写账本行**。它被调 **2 次**（`:226`、`:229`，同一用例内）⇒ **满量会话日志 5 行、账本 3 行**。
+
+⇒ **「某 job 的日志行数 > 账本行数」不是噪声，是「有调用者把 `_start_run` 打桩（或写入失败被 best-effort 吞掉）」的签名。** 反查：
+```
+grep -rn 'patch.object(scheduler, "_start_run"\|setattr(scheduler, "_start_run"' backend/tests/
+```
+（同族：§53.15 的 fact-6 —— `_start_run` best-effort ⇒ 「无行」≠「没跑」。两者合起来：**账本行数只是调用次数的下界**。）
+
+### 53.19.8 对 §53.11.4 / §53.16 / §53.11.7 的重述（不是改写）
+
+- **§53.11.4** 把 `sport_market_discover` 记为 **(b) 跑过、产出 0**：**前提是"这些行是生产运行"**，该前提已被本节取代。它其余的取证（**它的 payload 无逐字出处**）仍然成立。
+- **§53.11.7 第二条**（「0 是否"应该"是 0」）：账本里的 0（以及那个 1）**都是测试产生的**，因此账本**对此问题不提供任何证据**——原来"自述自洽"的读法要降级为"**无证据**"。（那个 `kalshi_candidates: 1` 也是**桩返回的假候选**，不是真的市场。）
+- **§53.11.7 第三条**（「三联行 / 谁在跑」）：**收口**，见 53.19.1。
+- ⚠️ 注意 **(c) 类现在有两个实例**（13 行 + 30 行），且**分属两类指纹** ⇒ §53.11.1 里"一个不可恢复的问号"的措辞应读作"**一类问题、两个实例**"。
+
+### 53.19.9 未决 / 明确不做
+
+- **未决（改动，留给拍板）**：把 53.19.6 的第二遍普查写进探针；`LOG_FILE` 重定向（§53.12，工作树未提交）落地后，**"半净化窗口"会关闭，日志作为第二信宿的能力也会消失** —— 这是个**取舍**，不是纯收益。
+- **不做**：不改旗标默认、不改 conftest、不动数据库、不提交。探针未新增（本节的复现用的是**既有测试文件**，无临时文件留下）。
+- 生产库 sha `35346d467fe24ce2`、1759 行、sport 30 行，**全程未变**。
+
+## 53.20 B 项：第二遍普查跑完 —— 账本有 **30 个写入点**（§53.17 只扫了 23 个），而它**救回了 §53.16**
+
+§53.19.6 说「逐字普查有假阴性，要补第二遍：`grep -rn "_job_<name>\b" tests/`」。本节把第二遍**真跑了一遍**，覆盖全部 19 个 job；结果比预期大：不只找到更多可疑对象，还顺带**证伪了我自己的一个怀疑**，并把 §53.17 的普查**范围**问题暴露出来。
+
+### 53.20.1 结论先行
+
+1. **19 个 job 里 11 个被测试直接调用过**（只有 `sentiment_refresh` 零引用，7 个因「写入点不在 `scheduler.py`」而未被第一遍覆盖）。
+2. 🔴 **`loop_runs` 有 30 个写入点，分布在 8 个文件、4 类模块** —— §53.17 的「23 处、22 OK、1 泄漏」只扫了 `scheduler.py`，**覆盖率 23/30 = 77%**；漏掉的 7 处里有**一个 API 路由**。
+3. 🔴 **判据 ⑫（"紧随其后是不是 `try`"）在两个方向上都会错**：对 **start-only helper** 假阳性；对 **动态 run 名** 假阴性（我自己的报表里就有一次读数错误，见 53.20.3）。
+4. 🔴 **我怀疑「`event_discover` 的 120 个孤儿行是测试写的」—— 被数据推翻。** 它们**是真实运行被进程重启打断**，机制在历史注册代码里（53.20.5）。⇒ **§53.16 成立且被量化，不需要翻案。**
+5. §53.17.4（取消/进程死亡路径）由此被**量化**：**127 个孤儿里 120 个来自一个「有 `try` 保护、不是泄漏点」的 job** ⇒ 孤儿的主因是**杀进程**，不是代码泄漏。
+
+### 53.20.2 写入点普查：30 处 / 8 文件 / 4 类模块
+
+AST 扫 `backend/app/**/*.py`，抓 `_start_run(...)` 与 `*.start_run(...)`（注释与定义体自动排除，比 grep 可靠）：
+
+| 文件 | 处数 | 类别 |
+|---|---|---|
+| `core/scheduler.py` | **23** | 调度 job 体（`_start_run("<字面量>")`） |
+| `api/routes/events.py` | 1 | 🔴 **API 路由**（`:798`，`world_cup_api_football_validate`） |
+| `main.py` | 1 | lifespan 启动记录（`:113`，循环 2 个 `startup_*` 名） |
+| `services/world_cup_post_match_backfill_service.py` | 1 | 服务类 `_start_audit_run` |
+| `services/world_cup_quality_service.py` | 1 | 同上（`world_cup_consistency_repair`） |
+| `services/world_cup_result_fact_backfill_service.py` | 1 | 同上 |
+| `services/world_cup_scoring_service.py` | 1 | `world_cup_scoring_reconcile` |
+| `services/world_cup_verified_result_correction_service.py` | 1 | 写了但 **0 行**（见 53.20.3） |
+| **合计** | **30** | 4 类模块 |
+
+⇒ **账本不是"调度器的账本"**，它是**全应用共用的审计账本**：一个 HTTP 请求处理器也会开一条 run。§53.17 关于「配对」的结论**只对 `scheduler.py` 的那 23 处成立**。
+
+### 53.20.3 🔴 判据 ⑫ 的两个方向的误用（含我自己的一次读数错误）
+
+"看紧随其后的语句是不是 `try`"这次报了 **7 处**，逐条甄别后**没有一处是新泄漏**：
+
+| 站点 | 形态 | 甄别 |
+|---|---|---|
+| `scheduler.py:284` `_job_translate_titles` | next=`Assign`，**同函数内有 `_finish_run`** | ✅ **真泄漏**（§53.17 已登记） |
+| `world_cup_scoring_service.py:265` `score_all_finished_matches` | next=`Assign`，同函数内有 finish | ⚠️ **待判**（形态同 284，留拍板） |
+| `main.py:113` `_record_core_startup_outcome` | next=`<last>`，有 finish | ⚠️ **待判**（"开一条就返回"可能是设计） |
+| `world_cup_post_match_backfill_service.py:29` `_start_audit_run` | next=`<last>`，**无 finish** | ❌ **假阳性**：这是 **start-only helper**，配对在**调用方** |
+| `world_cup_quality_service.py:598` `_start_consistency_repair_audit_run` | 同上 | ❌ 假阳性 |
+| `world_cup_result_fact_backfill_service.py:206` `_start_audit_run` | 同上 | ❌ 假阳性 |
+| `world_cup_verified_result_correction_service.py:298` `_start_audit_run` | 同上 | ❌ 假阳性 |
+
+⇒ **判据 ⑫ 必须加限定**：**只对"既开启、又在同一函数体内关闭"的函数适用**（即函数体内出现 `finish_run`）。否则一个**唯一的职责就是把 run_id 交出去**的 helper 会被误判。**这是 §53.17 那条判据的修订，不是否定**（对 `scheduler.py` 那 23 处的用法仍然正确）。
+
+🔴 **另有一个我自己的读数错误要如实登记**：普查报表里 `world_cup_scoring_service.py:265` 那行显示 `rows=0`，而该 job 实际有 **1201 行**。原因是我把 `<dynamic:SCORING_RECONCILE_AUDIT_JOB_NAME>` 直接拿去查表 ⇒ **动态名查不到就让"行数"变成 0**，而 0 在这里读起来"像事实"。**教训**：普查里的**每个派生读数都要有可信度**，`<dynamic>` 必须显式渲染成"未解析"，**绝不能落成一个数字**。（同族：§5「0 必须只说一件事」。）
+
+### 53.20.4 用 08-01 重定向当「嫌疑 / 真实」判别器
+
+`9647ca2`（2026-08-01）把测试的 `LOOP_DB_FILE` 指向临时目录 ⇒ **之后由测试产生的行不会再落进生产账本**。于是：
+
+- **只出现在 08-01 之后** ⇒ **必然是生产运行**（测试写不进来）。
+- **只出现在 08-01 之前** ⇒ **有嫌疑**（该窗口里测试写过生产账本，§53.15/§53.19 都实证过）。
+
+| 分组 | job（行数） |
+|---|---|
+| **post-only ⇒ 必然生产** | `event_discover_startup`(6) · `startup_prediction_db_init`(8) · `startup_sqlite_integrity`(8) · `world_cup_live_update`(20) |
+| **spans both** | `translate_titles`(160: 157/3) · `world_cup_scoring_reconcile`(1201: 1182/19) |
+| **pre-only ⇒ 有嫌疑（13 个）** | `event_discover`(224) · `sport_market_discover`(30) · `world_cup_post_match_backfill`(24) · `futures_snapshots_capture`(13) · `world_cup_result_fact_backfill`(12) · `event_auto_resolve`(8) · `loop_db_maintenance`(8) · `optimization_task_cleanup`(8) · `sentiment_refresh`(8) · `world_cup_prediction_update`(8) · `world_cup_consistency_repair`(6) · `world_cup_source_bundle_import`(6) · `world_cup_api_football_validate`(1) |
+
+**全局**：1759 行里 **1695 行（96%）在 08-01 之前**；**127 个孤儿里 123 个在之前**。
+
+⚠️ **"有嫌疑"是必要不充分** —— 它只说明"那个窗口里测试**可以**写"，不说明"这行**就是**测试写的"。判定仍要靠 §53.15/§53.19 那种**独立指纹**。
+
+### 53.20.5 🔴 我怀疑 120 个孤儿是测试写的 —— 数据把它推翻了
+
+嫌疑最重的是 `event_discover`：**224 行全在 08-01 前**，其中 **120 行 `running`**（占全部孤儿的 95%）。按上面的判别器，它完全可能是测试行。**实测否掉了**：
+
+| 观测 | 读数 | 含义 |
+|---|---|---|
+| 104 个 `success` 行的 `duration_ms` | **615,000–631,000 ms（~10.3 分钟）** | 测试**造不出** 10 分钟的真实墙钟 |
+| 它们的 `result_json` | `{"count": 22..32, "events":[…真实事件，带嵌套 actionable_recommendation…]}` | 是**真实**发现结果 |
+| 104+120 行的**邻域** | **全部 isolated**（60 s 内无其它同 job 行） | 不是"每会话 3 行"的测试簇 |
+| 120 个 `running` 行 | `duration_ms` **全 NULL**、`result_json` **全 NULL** | 开了没关 |
+| 07-04 单日 | **72 行**、且当天 09:41–15:06 三小时内 **~25 次启动** | 4 小时 cron **不可能**产出 |
+
+**机制在历史注册代码里（`42d6aaa`，2026-07-05）：**
+
+```python
+scheduler.add_job(_job_event_discover, IntervalTrigger(hours=4),
+                  id="event_discover", max_instances=1)          # 4 小时一次
+scheduler.add_job(_job_event_discover, "date",
+                  run_date=datetime.now(timezone.utc)+timedelta(seconds=30),
+                  id="event_discover_startup")                    # 每次启动 +30s
+```
+
+**两个 `add_job` 用的是 `id` 不同、但函数是同一个 `_job_event_discover`** ⇒ **`_start_run("event_discover")` 这个 run 名被"启动"和"cron"两条路共用**。而**启动路径每次进程启动都触发**，该 job **要跑 ~10 分钟** ⇒ **开发者每几分钟重启一次 ⇒ 每次重启都杀掉一个跑到一半的 run ⇒ 一行永久 `running`。**
+
+✅ **三条交叉验证**：
+- `event_discover_startup` 这个**独立 run 名**是 `7b596bf`（**2026-08-07**）才引入的 ⇒ **08-07 前不可能有 `event_discover_startup` 行** —— 账本里正是 **0 行**（其 6 行全在 09-10 之后）✔
+- `event_discover`（cron 名）的**末行是 07-25** ⇒ 拆分后启动路径改用了新名字，而 4 小时 cron 需要连续 4 小时 uptime 才触发 —— 本环境的 uptime 从来没到过 ⇒ **0 行** ✔
+- 07-04 三小时 25 次启动 = 平均**应用寿命 ~7 分钟**，而 job 要 10 分钟 ⇒ **多数 run 必然被打断** ✔
+
+⇒ **这 120 个孤儿是真实生产行为，不是测试噪声。** §53.16 的核心论断（`running` 只有两个出口、`except Exception` 看不见取消、解药从未执行）**成立**，并且现在有了**量化**：**127 个孤儿里 120 个来自 `event_discover`**。
+
+### 53.20.6 对 §53.16 / §53.17 的重述（收窄 + 量化，不是翻案）
+
+- **§53.17.2/3（代码泄漏）**：`event_discover` 是**有 `try` 保护**的（紧随 `_start_run`），**不是泄漏点** —— 却贡献了 **120/127 的孤儿**。⇒ **孤儿的主因是"杀进程"（§53.17.4），不是代码泄漏。** 泄漏点 `translate_titles` 只对应 **2 行**（其 160 行里 2 行 `running`，占 1.6%）。
+- **§53.16**：结论**不变**；新增的量化是「一个 **10 分钟**长的 job + 一个**每次启动都触发**的入口 + 开发期**每几分钟重启**」这个具体组合。可推广的读法：**孤儿的数量 ≈ 重启次数 × P(run 未跑完)**，**与"代码有没有 `try`"关系很小**。
+- ⚠️ 同时要**反向自省**：§53.19 建立的"测试写生产账本"是**真的但局部的** —— 96% 的账本行在 08-01 前，其中**绝大多数是真实运行**（`event_discover` 即证）。**不能把"08-01 前的行"整体读成测试数据。**
+
+### 53.20.7 新判据（写进 `audit-delivery-verification`）
+
+1. **普查写入点，别把范围钉在一个文件上**：先枚举**所有**调用写入函数的站点（AST，不是 grep），**按文件归类**；若发现写入点分布在多个模块（尤其**路由/服务**），则先前在同一文件内的结论**要标注适用范围**。
+2. **用"净化日期"当嫌疑判别器，但只当必要不充分**：把账本按重定向提交切两段 ⇒ post-only 必真、pre-only 有嫌疑。**判罪仍须独立指纹**（时长 / payload 多样性 / 邻域孤立性）。
+3. **三个便宜的"真实性"指纹**：① **墙钟时长**（测试造不出 10 分钟）；② **payload 多样性**（真实运行几乎每行不同；测试常量只有 1–2 种）；③ **邻域孤立性**（测试会成簇，cron/启动会孤立）。**三者同时指向同一结论才算定案**（本案三条全中）。
+4. **判据自身要标适用前提**（⑫ 的修订）：结构判据若假定"开与关在同体内"，就必须**先断言这个前提**，否则 helper 会假阳性。
+5. **普查的派生读数不得落成数字**：未解析的动态名要渲染成 `未解析`，**不能渲染成 0**（本案我因此写过一次假读数）。
+
+### 53.20.8 未决 / 明确不做
+
+- **未决（改动，留拍板）**：53.20.3 表里那 **2 处待判站点**（`world_cup_scoring_service.py:265`、`main.py:113`）；`events.py:798` 那个 API 路由（next=`Try`，形态合规，但**请求级** run 是否需要请求中断保护，是产品判断）。
+- **不做**：不改代码、不改旗标、不动数据库、不提交。普查脚本与报表落在 `.workbuddy/audit-2026-10-03/`（`census_pass2.py` / `census-pass2.txt` / `census_write_sites.py` / `census-writing-sites.txt`），**不入库**。
+- 生产库 sha `35346d467fe24ce2`、1759 行，**全程只读未变**。
+
+## 53.21 C 项：把 §53.16 / §53.17 压在下面的前提逐条实测 —— 一条被**推翻**、一条被**升级**、并查出一处**潜伏缺陷**
+
+前几节（§53.16/§53.17/§53.19）的结论都压在几个**没有验过**的前提上。本节把它们逐条拿实测顶一遍。方法一律是：**先看代码字节，再在副本上把它演出来**（只读生产、副本用完即删）。
+
+### 53.21.1 结论先行
+
+1. **一条被推翻**：「`started_at` 是带 `T` 的文本、而参数可能是 datetime ⇒ 字典序比较会失效」—— **不存在**。1759/1759 严格同形（见 53.21.2），字典序比较**有效**。
+2. **一条被升级**：§53.16 说「解药从未执行」。在副本上**真跑**那条 SQL ⇒ **rowcount = 127、`running` 127→0** ⇒ **解药本身是对的，只是从没被执行**（不是"解药是坏的"）。
+3. 🔴 **查出一处潜伏缺陷**：`fail_stale_running_rows` 把 `duration_ms` 绑成 `now`（**isoformat 字符串**）⇒ 一旦执行，127 行会拿到**文本型 `duration_ms`**，实测三条后果（见 53.21.5）。⇒ **"把解药打开"不是安全修法。**
+4. **一条在修正范围后仍成立**：30/30 写入点**没有一处**捕 `BaseException`、**没有一处**裸 `except:`、30/30 捕 `Exception`；`finally`-闭合**只有 1 处** ⇒ §53.17.4 的"取消不可免疫"**全范围成立**。
+5. **判据 ⑫ 第三次假阳性**，并暴露**我自己的一处方法缺陷**（`next_stmt` 只对顶层语句有效）。
+6. 🔴 **同一危险在代码库里已有先例并被逐字写明**（`main.py:103-108`）—— 所以这不是"没人想到"，是**已知取舍**。
+
+### 53.21.2 前提一（**被推翻**）：`started_at` 的可比性
+
+**怀疑**：`fail_stale_running_rows` 的 `WHERE ... started_at < ?` 是**文本**比较；写入用 `utc_now()`（`helpers.py:5-6` = `datetime.now(timezone.utc).isoformat()`），调用点传 `(now - timedelta(hours=36)).isoformat()`。若两者格式不同（典型：一方带 `T`+`+00:00`，另一方是空格分隔），则**任何行都不会被选中**——那会是"127 行清不掉"的**第二个**独立原因。
+
+**实测（全表 1759 行）**：
+
+```
+严格形 `len==32 且 [10]=='T' 且 [19]=='.' 且 [26:]=='+00:00'` :  1759 / 1759
+长度直方图: {32: 1759}      后缀直方图: {'+00:00': 1759}
+异常样例: []
+```
+
+⇒ **全部同形**，字典序 = 时间序，**比较有效**。我自己提的这条假设**不成立**，如实记录为负结果。
+
+⚠️ **同一节里我两次踩到"正则静默零命中"**：同一段 Python 里 `\d{4}` 形式的正则在**经工具传入后**匹配到 0 行（第一次把日志聚类算成 0 簇，第二次把格式检查算成 `{False: 1759}`）。**教训**：扫描器返回 0 时必须用**已知阳性**输入做一次控制（技能 ⑩ 已写，这次是我自己没照做）；且**能用切片就别用正则**（本例改用 `len`/`[10]`/`[26:]` 后一次就对）。
+
+### 53.21.3 前提二（**成立**）：`running` 的等价式与"清理器没碰过"
+
+```
+status='running'                      : 127
+其中 finished_at IS NULL              : 127
+非 running 却 finished_at IS NULL     :   0     ← 双向等价，无例外
+127 行 running 的 error 取值          : {NULL: 127}   ← 一个都没有 STALE_RUN_ERROR
+status 直方图                          : {success: 1629, running: 127, failed: 3}
+3 行 failed 的 error                   : "WORLD_CUP_SOURCE_BUNDLE_URL is not configured" ×2
+                                        "API-Football returned 0 fixtures ..." ×1
+```
+
+⇒ §53.16 用的口径（`status='running'`）与"孤儿"**严格同延**，没有把 `running` 与 `finished_at` 混用；并且**没有任何一行**带着清理器才会写的 `STALE_RUN_ERROR` ⇒ **独立确认"清理器一行都没碰过"**（此前只有"它名下 0 行"这一条证据，而"0 行"会被 best-effort 的 `_start_run` 掩盖）。
+
+### 53.21.4 前提三（**升级**）：解药**本可一次修好**
+
+把生产库**拷到临时目录**（生产只读），用与源码**逐字相同**的 SQL 与同一套 cutoff 计算跑一次：
+
+```
+cutoff(36h)    = 2026-10-03T04:00:25.724954+00:00
+running before = 127  |  rowcount = 127  |  running after = 0
+```
+
+⇒ **语句、阈值、比较全部正确**，一次调用即可清空全部孤儿。这把 §53.16 的结论从「解药从未执行」**升级**为「**解药是正确的、且本可一次修好，只是从未被执行**」——两者对处置的含义不同（前者会让人怀疑"是不是它自己也是坏的"）。
+
+### 53.21.5 🔴 新缺陷（潜伏）：清理器会把 `duration_ms` 写成**文本**
+
+`fail_stale_running_rows`（`loop_run_store.py:276-288`）：
+
+```python
+now = utc_now()                    # ← 返回 str（isoformat）
+...
+SET status='failed', error=..., finished_at=COALESCE(finished_at, ?), duration_ms=?
+(..., (STALE_RUN_ERROR, now, now, cutoff_started_at))     # ← duration_ms 拿到的是 now
+```
+
+而**正确语义**在 `finish_run`：`duration_ms = _duration_ms(started_at, finished_at)` ⇒ **整数毫秒**。
+
+**副本实测（跑完之后读回）**：
+
+```
+样本：finished_at=2026-10-04T16:00:43.676577  duration_ms=2026-10-04T16:00:43.676577  typeof=text
+按存储类分组 × 谓词：
+   typeof=integer  <500=0  >500=1  n=365
+   typeof=integer  <500=1  >500=0  n=1267
+   typeof=text     <500=0  >500=1  n=127      ← 127 行文本（TEXT 在 SQLite 里排在 INTEGER 之后）
+聚合： avg=37604.83  min=136  max='2026-10-04T16:01:01.577271+00:00'   ← max() 返回了时间串
+```
+
+**三条后果（都实测过）**：
+1. **排序/范围查询失真**：`duration_ms > 500` 对这 127 行为**真**、`< 500` 为**假** —— 任何"找慢 job / 找快 job"的过滤都会把被清理的行**误列为最慢的一批**。
+2. **聚合污染**：`max(duration_ms)` 直接返回那个**时间字符串**；`avg()` 被非数值行拉偏。
+3. **跨层类型违约**：前端 `scheduler-timeseries.tsx:41` 逐字是 `` {p.duration_ms != null ? `${p.duration_ms}ms` : "—"} `` ⇒ 会渲染成 **`2026-10-04T16:01:01.577271+00:00ms`**；`system-status.tsx:97` 把 `duration_ms ?? duration_seconds*1000` 当数字用。而 TS 契约（`duration_ms: number | null`）与 SQLite 的列声明 `duration_ms INTEGER` **都**假定它是数字 —— SQLite 是动态类型，**没人拦得住**。
+
+**语义也错**：写进去的是**清理发生的时刻**，不是这条 run 的时长；而且它与 `finished_at` **完全相同**。而该函数 docstring 的原话是"*gains `finished_at` ... and `duration_ms`, so a reconciled row is **distinguishable from a completed one***"——**意图是让被清理的行可辨认**，实现却让它与 `finished_at` 相等、类型还不同。
+
+**潜伏性**：因为清理器从未执行，**当前生产库 0 行**是文本型（实测 `typeof(duration_ms)='text'` 计数为 0）⇒ 这个缺陷**只会在解药第一次运行时爆发**。⇒ **"打开解药"必须先修这一行**，否则一次修好 127 行的代价是往账本灌 127 行类型违约数据。
+
+### 53.21.6 前提四（**修正范围后仍成立**）：取消不可免疫
+
+把 §53.17 的判据按**全部 30 个**写入点重跑（它当时只扫 `scheduler.py` 的 23 处）：
+
+```
+TOTAL sites = 30
+  有 finally 块闭合     : 1       （唯一：world_cup_scoring_service.py:269）
+  捕 BaseException      : 0
+  裸 except:            : 0
+  捕 Exception          : 30 / 30
+  完全没有 close 调用的 : 4       （4 个 start-only helper，配对在调用方）
+```
+
+⇒ **§53.17.4 全范围成立**：`asyncio.CancelledError` 不是 `Exception` 子类，而**没有一处**捕 `BaseException` ⇒ **取消/进程死亡不可能让任何站点写出收尾**。
+
+**那唯一一处 `finally` 值得单说**（见 53.21.7）：它让**保护段内**的取消也能收尾 —— 这正是 §53.17.4 缺的那一半。⇒ **`finally` 是"抗取消"的充要手段**，而 30 处里只有 1 处有。
+
+**4 个 start-only helper 的配对在调用方**，逐个核过：`post_match_backfill:189` / `result_fact_backfill:60` / `quality_service:652` 走本地 `finish()` 闭包；`verified_result_correction:68` 走 `try:`。⚠️ **闭包式闭合本身仍是"被调用才闭合"**，与 §53.17 的"出口必须每条路径可达"是同一类问题，**本节不展开**，留作后续。
+
+### 53.21.7 判据 ⑫ 第三次假阳性 + 我自己的一处方法缺陷
+
+- **假阳性 #3**：`world_cup_scoring_service.py:265` 的 open 之后是 `started = time.monotonic()` / `session = get_prediction_session()` / 然后 `try:` —— 按 ⑫ 判"泄漏"。**实测它有 `finally` 闭合（`:269`）** ⇒ 保护段内的异常与**取消**都会收尾。**但**：`get_prediction_session()` 在 `try` **之前**，它若抛，`finally` **不会进入** ⇒ **仍有缺口，但比 `translate_titles` 窄**（2 条语句 vs 1 条），且**抗取消**。⇒ §53.20.8 的"待判 #1"**结案：非泄漏（有窄缺口）**。
+- 🔴 **我自己的方法缺陷**：上一节报表里的 `next stmt` 字段**只对函数的顶层语句有效**。`main.py:113` 的 open 嵌在 `try` 内，我印出的 `<last>` 是**内层块的最后一句**，读起来像"函数最后一句"——**误导**。已在 53.21.5 定性为"3 条语句后即 `finish_run`，无缺口"。**登记在案，不再拿 `next_stmt` 单独下结论。**
+
+### 53.21.8 🔴 这个危险在代码库里**已有先例，并被逐字写明**
+
+`main.py:103-108`（`_record_core_startup_outcome` 的 docstring）逐字：
+
+> *"`start_run` succeeding and `finish_run` raising leaves a `running` row nothing will finish, and the probe degrades only on `status == "failed"` -- so **the residue is indistinguishable from a job still in progress**."*
+
+⇒ 两点结论：
+1. **§53.16 命名的"死↔忙不可分辨"不是我的发现，是仓库里已经写下的知识** —— 这**加强**了 §53.16（有作者自己的措辞佐证），也说明它**不是疏忽**。
+2. **但那一处的立场与这里相反**：`main.py` 选择 **fail-fast**（记录失败就 `raise RuntimeError`，宁可不启动），而 `loop_runs` 的孤儿选择了 **每日 cron 兜底** —— 而那个兜底**从未执行**，且（53.21.5）**执行了还会写坏类型**。⇒ **同一危险、两种处置，其中一种从未生效。**
+
+### 53.21.9 未决 / 明确不做
+
+- **未决（改动，留拍板）**：
+  ① `fail_stale_running_rows` 的 `duration_ms` 改成**整数**（如 `int((now - started_at).total_seconds()*1000)`，或直接置 NULL）—— **这是"打开解药"的前置条件**；
+  ② §53.17.5 的三条（含"23 处"应更新为 **30 处 / 1 处有 `finally`**）；
+  ③ `world_cup_scoring_service.py:265` 是否把 `get_prediction_session()` 挪进 `try`（窄缺口）；
+  ④ 4 个 helper 的**闭包式闭合**是否需要逐路径审计。
+- **不做**：不改代码、不改阈值、不动生产库、不提交。本节所有实测都在**临时副本**上做，用完即删（`shutil.rmtree`，已验证目录不存在）。
+- 普查脚本与报表在 `.workbuddy/audit-2026-10-03/`（`census_close_reachability.py` / `census-close-reachability.txt`），**不入库**。
+- 生产库 sha `35346d467fe24ce2`、1759 行、127 `running`，**全程未变**。
+
+## 53.22 附带发现（C 项收尾时撞见）：`_TEST_DATA_DIR` 每个 pytest 进程留一个目录，且**从不清理**
+
+C 项最后要交代"临时物"的时候顺手 `glob` 了一次系统临时目录，撞见一件与本节主题无关、但属于同一族的事：**hermetic 夹具自己往 `%TEMP%` 里漏东西，而且没有任何清理。**
+
+### 53.22.1 事实
+
+`backend/tests/conftest.py:55`（模块导入时执行）：
+
+```python
+_TEST_DATA_DIR = tempfile.mkdtemp(prefix="pmrf_test_data_")
+```
+
+- **创建时机 = 导入 conftest 时**，即**每个 pytest 进程一次**（`--collect-only` 也会创建）。
+- **清理**：conftest 里 **没有** `atexit` / `shutil.rmtree` / `tmp_path_factory` / `basetemp`；唯一的 hook 是 `pytest_configure`（`:200`，只设 `asyncio_mode = "auto"`）；有一个 session 级 autouse 夹具带 `yield` 收尾（`:206-213`），但它只**恢复 `os.environ`**。
+  ⇒ **没有任何一条路径会删掉这个目录。**
+
+**实测（本机，2026-10-04 23:2x）**：
+
+```
+pmrf_test_data_* 目录 : 178 个
+内含文件              : 301 个
+合计                   : 12,903,555 B（12.3 MB）
+mtime 范围            : 2026-10-01 15:13  ..  2026-10-04 23:26
+⇒ ≈ 44 个/天、≈ 3 MB/天（活跃开发期）
+```
+
+**量级不大，但斜率是常数**：这是 `9647ca2`（2026-08-01）那个"让 pytest 基线确定且 hermetic"的提交的**自身副产物**——它把路径**改道**到了临时目录（这是对的），但**没给出口**。同族的先例：`LOG_FILE` 不在重定向清单里（§53.11.5 / §53.12）、`mixing 的 51 个文件`（§1）。**"hermetic 到仓库"与"不漏到机器"是两件事。**
+
+### 53.22.2 为什么不能简单删掉——它同时是**证据仓**
+
+🔴 这些目录不是纯垃圾：**它们本身就是取证材料**。§53.15 与 §53.19 的定案读数，正是**读沙箱账本**得到的（"沙箱里恰好 3 行、模式 `1/0/0`"、"生产 sha 前后一致"）。如果夹具改成用完即删，那么"某个测试打了几行账本"这类**运行期事实就再也无法事后核对**（会退化成只能靠读代码推断）。
+
+⇒ **这是一个取舍，不是纯缺陷**：
+- **留着** ⇒ 磁盘线性增长（≈3 MB/天），且是**未声明**的增长（没人知道 `%TEMP%` 里有个证据仓）。
+- **删掉** ⇒ 失去一类**事后可核**的运行期证据。
+- **中间选项**（留给拍板）：保留**最近 N 次**会话（像 `tmp_path_factory` 默认只留 3 个根目录那样），或保留但**在目录名/日志里声明它是证据仓**，或把沙箱账本**导出到 `.workbuddy/`** 后在收尾时删除。
+
+⚠️ 按 §5 的口径：这里的问题不是"目录有没有"，而是**"这个目录是什么"没有对外声明** —— 一个不声明自己是证据仓的证据仓，和"不声明自己排除了什么的读数"是同族。
+
+### 53.22.3 处置 / 明确不做
+
+- **本节只登记，不清理。** 理由有二：① 它是**跨会话累积**的、**不属于本次任务**；② 批量删除系统临时目录里的一族目录，属于"vague cleanup"，**不做**。
+- ✅ **本次确实清掉了自己的一个**：`pmrf_readjson_probe_b_tgao71`（§53.18 那个 `read_json` 探针留下的，当时只删了 `.py` 没删目录）—— **这是我自己的漏项，已在核验阶段发现并删除**（删前读过内容：仅 `broken.json` + 其 `.crosslock`）。本节其余的数字**全是只读测量**。
+- ⚠️ 另有一批**更早会话**的散件（`pmrf_junit_*.xml` / `pmrf_pytest_*.log` / `pmrf_*.txt` 共 35 个 / 4.0 MB，名字里带 `s52`、`mv`、`rt` 等），**不是本次产生的**，**只报不删**。
+- **未决（改动，留拍板）**：53.22.2 的三个选项；若采纳，落地位置现成——`:206` 那个 session 级 autouse 夹具已经有 `yield` 收尾。
+
+## 53.23 「按顺序做」第 1 项：修掉清理器的 `duration_ms` 类型缺陷（代码 + 测试），并做四相变异验证
+
+本节是这段工作里**第一段真正改代码**的小节（§53.1–§53.22 全部是只读取证）。改动面两处：
+`backend/app/memory/loop_run_store.py` 一个函数体 + docstring；`backend/tests/test_loop_run_store.py`
+新增一个测试 + 一行 `datetime` import。**未提交、未推送**；生产 `v2_loop.db` 全程只读。
+
+### 53.23.1 结论先行
+
+- §53.21.5 记的那条**潜伏缺陷已修**：`fail_stale_running_rows` 不再把 ISO 时间串写进 `duration_ms`（INTEGER 列）。
+- 修法是**逐行**算 `_duration_ms(started_at, now)` —— 复用 `finish_run` 用的同一个 helper ⇒ 被清理的行与
+  正常结束的行现在是**同一种值**（integer），且该行的 `(finished_at, duration_ms)` 这一对**自洽**。
+- 新测试是**承重的**，不是陪跑：把修复变异回退后它**变红**，红的症状正是预测的那一个
+  ——`{'stale-1': 'text', 'stale-2': 'text'}`（旧绑定落 TEXT）。
+- 四道门全过：`ruff` 干净；`mypy app/` = *Success: no issues found in 331 source files*；
+  `generate_types --check` = *up to date*；pytest 63 passed / 0 failures / 0 errors（以 junit 计）。
+- 行尾不变：两个文件仍是 pure CRLF / 0 bare LF / 无 BOM，且 CRLF 增量**恰等于**行数增量。
+- 🔴 **诚实边界**：本项修复在生产上**没有任何运行期证据**——清理器（`loop_runs` 每日 06:48）**从未执行过**，
+  所以生产库里至今 0 行 TEXT 型 `duration_ms`。改动的影响面是「未来的某一次执行」。
+
+### 53.23.2 改了什么
+
+| | 改前 | 改后 |
+|---|---|---|
+| SQL 形态 | 一条 `UPDATE … WHERE status='running' AND started_at < ?` | 先 `SELECT id, started_at` 取候选行，再**逐行** `UPDATE … WHERE id=?` |
+| `duration_ms` 的绑定 | `now`（**ISO 字符串**） | `_duration_ms(row["started_at"], now)`（**int 毫秒**） |
+| 返回值 | `int(cur.rowcount or 0)` | `changed` 累加各行 `rowcount` |
+| 其它列 | `status` / `error`(COALESCE) / `finished_at`(COALESCE) | **逐字保持**，语义不变 |
+| docstring | 只说「gains `finished_at` … 和 `duration_ms`，可辨认」 | 说清那个数**是什么**（见 53.23.3），并记下这处缺陷**曾经存在** |
+
+`writing()` 全程持 `_WRITE_LOCK` 且是一个事务（`sqlite_db.py:244-257`：成功 commit / 异常 rollback），
+所以「SELECT 候选 → 逐行 UPDATE」之间不会被写者插队；候选数在正常态是 0。
+
+### 53.23.3 那个数到底是什么 —— 不是「时长」，是「账本认为它在跑的那一段」
+
+原实现把 `finished_at` 记成 reconcile 的那一刻，并在 docstring 里写明这是「它被发现的时刻」。既然
+`finished_at` 已经这么定义了，`duration_ms` 只有跟着它算才**自洽**：这个行的 `(finished_at − started_at)`
+就是「账本从 `started_at` 起一直以为它在 `running`，直到 reconcile 那一刻」——**这句话是真的**。
+它不是「干了多少活」的度量：进程可能早就死了，所以它是**上界**，而这个上界的大小本身就是证据。
+改后的 docstring 逐字写明了这一点，不再留模糊。
+
+### 53.23.4 另外两种「更省事」的改法，为什么否掉
+
+- **置 `NULL`**：「时长不知道」确实诚实，代价是同一列在同一张表里多出第三种值语义，而且 §53.21.5 赖以成立的
+  「可辨认」论据要重述。更关键的是它把「上界」这个**有用的读数**丢掉了——一个几千小时的 `duration_ms`
+  恰恰是「这行被遗忘了很久」的直接信号。
+- **`CAST(? AS INTEGER)`**：把时间串 cast 成 `0`。`0` 会伪装成「跑了 0 毫秒的正常结束」，比 `NULL` **更坏**。
+
+### 53.23.5 新测试钉住的是「种类 + 逐行」，不是「正数」
+
+新增 `FailStaleRunningRowsTests.test_reconciled_rows_get_their_own_integer_duration`，插两行
+`started_at` 相差**恰好 2 天**的 stale 行，断言三件事：
+
+1. `typeof(duration_ms)` 对**两行都是** `integer`；
+2. 每行 `duration_ms == int((finished_at − started_at).total_seconds()*1000)`（自洽性，确定性、不含墙钟）；
+3. 两行的 `duration_ms` 之差**恰好 172800000 ms**。
+
+第 3 条是**真正的承重项**：一个「把所有行写成同一个常量」的实现（比如恒定 `0`）能通过第 1、2 条里除
+自洽性之外的部分，但过不了第 3 条。第 1 条则专治「正数断言漏过字符串」——
+`assertGreater(duration_ms, 0)` 在 TEXT 上会因为 `'2026-…' < 0` 的隐式比较而**恰好通过**（§53.21.5 实测
+TEXT 排在 INTEGER 之后），所以这里断言的是**种类**。
+
+📌 记一次我自己的错误：第一次跑，第 3 条失败的读数是 `-172800000 != 172800000` —— 我把方向写反了
+（`stale-2` 起得**更晚**，跨度应**少** 2 天）。这个「恰好 2 天」的差值本身反过来证明逐行计算是**精确**的，
+不是近似的。断言已按正确方向修正。
+
+### 53.23.6 四相变异验证（判据：junit 的 failures/errors）
+
+| 相位 | 动作 | 读数 |
+|---|---|---|
+| ① 变异前 | `pytest tests/test_loop_run_store.py tests/test_scheduler.py` | junit `tests=63 failures=0 errors=0` |
+| ② 变异后 | 字节级把 `_duration_ms(row["started_at"], now),` 换回 `now,`（唯一命中，`count==1`） | junit `tests=1 failures=1 errors=0`，症状 `{'stale-1': 'text', 'stale-2': 'text'}` |
+| ③ 还原后 | 重跑该测试类 | junit `tests=6 failures=0 errors=0` |
+| ④ 字节一致 | `sha256` 与原字节比 | `c70bef99ed0da3da` 一致，`identical_to_backup=True` |
+
+变异脚本走**字节**（`.workbuddy/audit-2026-10-03/mutate_item1.py`，`read_bytes`/`write_bytes`），
+不用 `read_text`——后者会把 CRLF 归一化成 LF，还原就成了一句谎。
+🔑 **另一条前置检查**：`grep -n` 确认 `mutation_verify.py` 里**没有** `loop_run_store` 的针，
+即本文件不在任何 `m.path` 名单里，故不必触发 `test_mutation_verify.py` 那张「过期针」清单。
+
+### 53.23.7 字节证据
+
+| 文件 | 改前 | 改后 | `git diff --numstat` | CRLF 增量 vs 行数增量 |
+|---|---|---|---|---|
+| `app/memory/loop_run_store.py` | 13015 B / 346 CRLF | 14442 B / 373 CRLF | `43 16` | 373−346 = **27** = 43−16 ✓ |
+| `tests/test_loop_run_store.py` | 15985 B / 361 CRLF | 18082 B / 404 CRLF | `43 0` | 404−361 = **43** = 43−0 ✓ |
+
+两个文件都 0 bare LF、无 BOM。测试文件是**纯插入型**（删除数为 **0**）；账本文件是**替换型**
+（docstring 段落收窄 + 函数体重构），故删除数 16 是预期的，不适用「插入型必须 0 删除」那条。
+
+### 53.23.8 对 §53.21.4 / §53.21.5 的重述（§0：前提被我自己的修复改了）
+
+🔴 **§53.21.4 里「解药本可一次修好」的定语，已被我这次修复变成过期。** 该小节当时的判据是在**生产副本**上跑
+那段**原样 SQL**，得到 `rowcount=127`、`running 127→0` —— **这个读数仍然成立**，它证明的是那条语句的
+**语义正确且充分**。但「一次」描述的是**修复前**的解药形态（单条 `UPDATE`）；把 `duration_ms` 的类型缺陷
+修掉之后，解药必然是「先 SELECT 再逐行 UPDATE」，**不再是一条语句**。⇒ 按 §0 **改窄、不翻案**：
+「解药语义正确且充分，一条 SQL 就能覆盖全部 127 行，只差被执行；但要让写出的 `duration_ms` 与其它行
+同类型，它必须逐行写。」
+
+✅ **§53.21.5 从「潜伏」升级为「已修」**：那一小节说 *"opening the cure must fix this line first"* ——
+本项就是把那一行先修掉了。生产的 0 行 TEXT 读数不变（生产未动，只读）。
+
+### 53.23.9 未决 / 明确不做
+
+- ⏳ **没有运行期证据**：本项无法在生产上验收，只能靠单测 + 变异。若要让它在生产上「被走到」，需要
+  在某个受控环境实际触发一次 06:48 的维护任务——本项**不做**（属运维动作，不是代码交付）。
+- ⏳ **`duration_ms` 为「上界」这一语义没有被任何前端消费者感知**：`scheduler-timeseries.tsx` 直接渲染数字。
+  是否要在 UI 上区分「正常结束」与「reconcile 出来的行」——**未决**，属产品判断，不代决。
+- ⛔ **不改**：`test_scheduler.py:832` 的 wiring 测试（它断言 `calls["fail"]` 的入参是字符串，那说的是
+  **cutoff 参数**，与本列无关）；也不动 `finish_run`（它本来就写 integer）。
+- ⏭️ 本项**不提交**：按 §0，等「按顺序做」全部完成后由老板定提交时机。
+
+## 53.24 「按顺序做」第 2 项：`translate_titles` 的 try 泄漏已修、取消安全网**拒绝**、既有解药由「够不到」变「够得到」
+
+改动面四个文件：`app/core/scheduler.py`、`app/main.py`、`app/memory/loop_run_store.py`（仅 docstring 改窄）、
+两个测试文件。**未提交、未推送**；生产 `v2_loop.db` 全程只读（sha `35346d467fe24ce2` 前后一致）。
+
+### 53.24.1 结论先行
+
+- **① 已修**：`_job_translate_titles` 把 `list_all_events()` 移进 `try`。写入点普查复跑确认，全仓 **30 个**
+  账本写入点里，这是**唯一**一处「`_start_run` 与 `try` 之间有语句、且函数内真有 `_finish_run`」的形态。
+- **② 拒绝实现**「ContextVar + wrapper `finally` 取消安全网」。不是省事，是有证据：见 53.24.3。按 §4.3
+  记为「**某条变异故意不存在**」，理由写进本节。
+- **③ 接受并实现**：把**同一个**阈值判据的 reconcile 接到**启动路径**上。理由是实测的——那个每日 06:48 的
+  cron **在本部署结构上不可能触发**（见 53.24.4）。判据一个字没改，只多了一个触发点。
+- **顺带**：这道改动被仓库**既有守卫**当场拦下（`AssertionError: 4 != 3`），说明本仓对启动步骤有结构约束；同时暴露出
+  那道守卫**只比计数**，删掉调用它照样绿 ⇒ 我另补了一条**正向**断言。
+- **落这个改动前我先量了它的后果**（53.24.6）：`/api/health` 在本部署**本来就是 503 degraded**，
+  127 行里只有 **1 行**是「某 job 的最新行」，所以净影响是 `failed_runs` 里**多一个名字**。
+
+### 53.24.2 ① 泄漏点全仓只有一处
+
+写入点普查（`.workbuddy/audit-2026-10-03/census_write_sites.py`，从 `git HEAD` 用 AST 读出）复跑，
+30 个点里 `next_stmt != Try` 的共 7 处，逐条甄别：
+
+| 位置 | `next_stmt` | 函数内有 `_finish_run`？ | 判定 |
+|---|---|---|---|
+| `scheduler.py:284` `_job_translate_titles` | `Assign`（`events = list_all_events()`） | 有 | 🔴 **真泄漏**（本项修掉） |
+| `main.py:113` `_record_core_startup_outcome` | `<last>`（嵌套块的产物） | 有 | ⑫ 假阳性（§53.20.3 已记） |
+| `world_cup_scoring_service.py:265` `score_all_finished_matches` | `Assign` | 有（但靠 `finally`） | 有 `try` 前的窄缝（`get_prediction_session()`）⇒ **留给第 6 项** |
+| 4 个 `_start_audit_run` / `_start_consistency_repair_audit_run` | `<last>` | **无** | start-only helper，配对在调用方 ⇒ **留给第 6 项** |
+
+**为什么把 `translated = 0` 留在 `try` 外**：它不抛（纯赋值），而 `list_all_events()` 会——把不抛的语句留在外面
+是为了让 `try` 的第一句就是「唯一可能抛的那句」，读代码时一眼可见。
+
+### 53.24.3 ② 拒绝「ContextVar + wrapper `finally`」——并绑定它的前提
+
+`except Exception` 抓不到 `CancelledError`（后者继承 `BaseException`），所以「取消」确实会留下 `running` 行。
+但**这条路径在部署里有多可达**决定了要不要为它加机械：
+
+1. `stop_scheduler()` 走的是 `scheduler.shutdown(wait=True)`（`scheduler.py:1853`）。APScheduler 在 `wait=True`
+   下**等**正在执行的任务结束，**不取消**它们。全仓 grep **没有** `timeout_graceful_shutdown`（uvicorn 默认
+   无限等）。
+2. 因此干净关停（SIGTERM / 一次 Ctrl-C）时，任务会被**允许跑完**，`_finish_run` 照常执行 —— 不产生孤儿。
+3. 真正产生孤儿的是**硬杀**：第二次 Ctrl-C 触发的强制退出、SIGKILL、断电。这条路径上**没有任何 Python 代码会执行**
+   ⇒ `finally` **救不了**。
+4. 而数据支持的机制正是硬杀：§53.20 查明 120 个孤儿来自「一个约 10 分钟的 `event_discover` + 每次进程启动都触发的
+   `now+30s` 任务 + 开发者每隔几分钟重启」。
+5. ⇒ 一个**只覆盖「取消」这一窄分支、且该分支在被观测的机制里并非成因**的网，是投机机械；它还要动 **23 个
+   `add_job` 注册点**。本仓对此已有既定判据风格：**先补用例、再把空头变成可登记的变异**，而不是先把测试写绿。
+
+🔴 **这条结论的前提**（§4.1：前提变了结论会静默过期）：**部署保持现状**（无 `timeout_graceful_shutdown`、
+shutdown 走 `wait=True`、任务时长 ≪ 关停预算）。若哪天改成 systemd 且 `TimeoutStopSec` 短于任务时长，
+「取消」就变成可达的主路径，本节要**重估**。
+
+⛔ 因此**不实现**；记为「某条变异故意不存在」，`rationale` = 上面 1–5。
+
+### 53.24.4 ③ 解药为什么「够不到」：只读取证
+
+只读打开生产账本（`mode=ro`，sha 前后 `35346d467fe24ce2`，1759 行 / 19 个 job 名）：
+
+| job_name | 行数 | running | 首次 | 末次 |
+|---|---:|---:|---|---|
+| `world_cup_scoring_reconcile` | 1201 | 0 | 2026-06-29 | 2026-09-26 |
+| `event_discover` | 224 | **120** | 2026-06-29 | **2026-07-25** |
+| `translate_titles` | 160 | 2 | 2026-07-04 | 2026-09-10 |
+| `loop_db_maintenance` | 8 | 0 | 2026-06-29 | **2026-07-24** |
+| `optimization_task_cleanup` | 8 | 0 | 2026-06-29 | **2026-07-24** |
+| `world_cup_prediction_update` | 8 | 0 | 2026-06-29 | **2026-07-24** |
+| `event_auto_resolve` | 8 | 1 | 2026-06-30 | **2026-07-24** |
+| `startup_prediction_db_init` | 8 | 0 | 2026-09-10 | 2026-09-26 |
+| `event_discover_startup` | 6 | 4 | 2026-09-10 | 2026-09-10 |
+| **`loop_run_ledger_maintenance`** | **0** | — | — | — |
+
+两条读数决定了这一项：
+
+1. **`loop_run_ledger_maintenance` 一行都没有。** 解药那个每日 06:48 的 cron **从未执行过一次**。
+2. **所有固定 UTC 时刻的 cron 都在 2026-07-24/25 之后消失**（`loop_db_maintenance` 22:45、`optimization_task_cleanup`
+   22:50、`world_cup_prediction_update` 22:00、`event_auto_resolve` 14:30），而 `event_discover`（07:15）也止于 07-25。
+   ⇒ 这不是「偶尔错过一次」，是**进程生命周期以小时计**、固定钟点触发**结构上不可能**。
+
+⇒ 与 §53.21.4 的升级连起来：解药**语义正确且充分**（§53.21 已在副本上跑出 `running 127→0`），缺的是**被执行**。
+
+### 53.24.5 ③ 处置：接到启动路径，且不改判据
+
+**先例就在库里**：`main.py` 的 lifespan 里已有 `optimization_task_manager.reconcile_interrupted_tasks()`
+—— 它正是 `fail_stale_running_rows` 的 docstring 声明「**刻意不同于**」的那个兄弟实现（见 `main.py:300-310` 的注释
+与 `loop_run_store` 的对比段），而它**就挂在启动路径上**。⇒ 「启动时 reconcile」在本仓是**既有架构**，不是新花样。
+
+新增 `scheduler.reconcile_stale_running_runs()`，并在 lifespan 的启动序列里以**同样的 best-effort 形态**调用。
+三个设计取舍：
+
+- **复用同一条 store 函数与同一个阈值**（`LOOP_RUN_STALE_RUNNING_HOURS`，默认 36h）。判据不变 —— 这正是它能被
+  **任何**进程安全调用的原因：本仓最长的 job 约 10 分钟，超过阈值的行**不可能有活着的属主**，无论它是本进程、
+  调度器进程还是某个 API 请求写的。
+- **只做 reconcile，不做 retention 删除**。删除不是正确性修复，每次启动都删是白折腾；保留留在 cron 里。
+- **不动 `optimization_task_store`**（另一条线）。
+
+🔴 **两处 docstring 按 §0 改窄、不覆盖**：
+- `fail_stale_running_rows` 里 *"Threshold-based, not startup-based, unlike ``optimization_task_store.fail_interrupted_tasks``"*
+  —— 那句话**关于判据仍然成立**，我保留了原句，另加一段说明「**判据**不变、它才是可被任何进程调用的原因；此后扩宽的是
+  **触发点**」。
+- `_job_loop_run_ledger_maintenance` 的两条 bullet 全保留，另加一段把「criterion 与 trigger 是两个决定」写清。
+
+### 53.24.6 🔴 落这个改动前必须先回答：它会不会把 `/api/health` 从 200 变成**永久** 503？
+
+`api_health`（`main.py:529-538`）的判据是：**某个 job 的「最新一行」`status == 'failed'` ⇒ degraded ⇒ 503**。
+把 127 行从 `running` 改成 `failed` 显然会动这个谓词，而**并非每一行都会被读到**（只有每 job 最新的那行会）。
+所以在生产账本的**副本**上实测（`.workbuddy/audit-2026-10-03/probe_health_effect.py`，原库 sha 前后不变）：
+
+| 读数 | 值 |
+|---|---|
+| `running` 行 | 127 |
+| 其中「是某 job 最新行」的 | **1**（`event_discover_startup`） |
+| `failed_runs` **前** | `['world_cup_api_football_validate']` |
+| `failed_runs` **后** | `['event_discover_startup', 'world_cup_api_football_validate']` |
+| health degraded？ | **前 = 真，后 = 真** |
+| `running` 行后 | 0 |
+
+⇒ **净影响是 `failed_runs` 里多一个名字**，不是 200→503。而且：
+
+⚠️ **顺带查出一件与本项无关的既存事实**：本部署的 `/api/health` **本来就已是 503 degraded**，原因是
+`world_cup_api_football_validate` 那一行（唯一一行，2026-07-07，状态 `failed`，由 `api/routes/events.py:798`
+写入）。**本项不调查它**，登记为待办。
+
+📌 方法论：这一问本来可以靠「读代码推一推」回答，但**推不出那个 1/127**。**在副本上跑一次，比读十遍代码可靠**
+（同 §53.21.6 的 ⑰ 判据）。
+
+### 53.24.7 顺带：仓库既有守卫把我拦下了 —— 以及它的边界
+
+第一次跑启动相关测试，`test_startup_health_integrity.py::StartupPartitionMatchesTheSourceTests::
+test_every_guarded_startup_step_is_declared_in_exactly_one_set` 报：
+
+```
+AssertionError: 4 != 3 : a startup step is guarded by try/except but declared in
+neither CORE_STARTUP_COMPONENTS nor OPTIONAL_STARTUP_COMPONENTS
+```
+
+这道守卫用 AST 扫 `lifespan` 的 `try` 块，把「调用 `_record_core_startup_outcome` 的」归 core、其余归 optional，
+再与 `app/main.py` 的两个声明元组**比计数**。⇒ 本仓对启动步骤有**结构约束**：加一步必须登记。
+我的步骤是 best-effort ⇒ 归 `OPTIONAL_STARTUP_COMPONENTS`，取名 `scheduler_run_reconcile`。
+
+🔴 **但它的边界必须点明**：它**只比计数**，所以「把 `reconcile_stale_running_runs()` 调用删掉」它**照样绿**
+（try 块还在、计数还对）—— 这是 §4.2 说的**负控假安全**。因此我在同一个文件里另加了一条**正向**断言：
+启动前插一行 stale 的 `running` 行，启动后它**必须**变成 `failed`。删掉调用，这条会红（见 53.24.8 的 (b)）。
+
+### 53.24.8 四相变异验证（三处改动分别验）
+
+| 改动 | 变异 | 变异读数 | 还原 |
+|---|---|---|---|
+| (a) `try` 位置 | 字节级把 `events = list_all_events()` 挪回 `try` 之外 | junit `tests=1 failures=1 errors=0`，症状 = `OSError: event store unreadable` **穿透协程**（连 `except` 都没到，正是孤儿成因） | sha `bcb50541065e5268`，`identical_to_backup=True` |
+| (b) 启动接线 | `abandoned = reconcile_stale_running_runs()` → `abandoned = 0`（**保留** try 块，故分区守卫仍绿） | junit `tests=1 failures=1 errors=0` | sha `0412931e95aa91ec`，`identical_to_backup=True` |
+| (c) 分区登记 | **自然发生**（先加代码、后跑测试），非人为变异 | `AssertionError: 4 != 3` | — |
+
+(a)/(b) 的脚本走字节（`mutate_item2a.py` / `mutate_item2b.py`），且都先断言针**唯一命中**（`count==1`）。
+🔑 **前置检查**：`mutation_verify.py` 里没有 `loop_run_store` / `scheduler` 的针，本批文件不在任何 `m.path` 名单里，
+故不必触发 `test_mutation_verify.py` 的「过期针」清单。
+
+### 53.24.9 门与字节证据
+
+四道门（改后）：`ruff check app/` 干净；`mypy app/` = *Success: no issues found in 331 source files*；
+`generate_types --check` = *up to date*。
+
+**受影响面回归**（不是抽样）：按「引用 `loop_run_store` / `app.core.scheduler` / `from app.main import`
+的测试文件」筛出 **66 个文件**全部跑一遍，junit `tests=1278 failures=0 errors=0`（1051 passed + 227 subtests，
+0 skipped）。这一批同时覆盖了 `test_startup_health_integrity` / `test_scheduler` / `test_loop_run_store` /
+`test_events_routes` 等。
+
+| 文件 | 字节（改后） | CRLF | `git diff --numstat` |
+|---|---:|---:|---|
+| `app/core/scheduler.py` | 83,344 | 1,900 | `45 1` |
+| `app/main.py` | 28,147 | 594 | `19 0` |
+| `app/memory/loop_run_store.py` | 14,950 | 381 | `51 16`（含第 1 项的 43/16） |
+| `tests/test_scheduler.py` | 48,251 | 943 | `65 0` |
+| `tests/test_startup_health_integrity.py` | 28,044 | 637 | `49 0` |
+
+五个文件全部 **0 bare LF、无 BOM**。
+
+### 53.24.10 未决 / 明确不做
+
+- ⏳ **启动 reconcile 会把 §53.20 用作证据的那 127 行改写成 `failed`**（并给 `finished_at`/`duration_ms`）。
+  那些证据已**固化在 §53.20 的表格与本节的 53.24.4 里**；但下一个看账本的人看到的将是「已被清理」的形态。
+  这是**有意为之**（它就是修复），也是本条必须写明的原因。
+- ⏳ **`world_cup_api_football_validate` 让本部署的健康探针长期 503**（53.24.6 的顺带发现）。本项**不调查**。
+- ⏳ 第 6 项要处理 `world_cup_scoring_service.py:265` 的 `try` 前窄缝与 4 个 start-only helper。
+- ⛔ **不实现**取消安全网（53.24.3 的 1–5），前提已绑定。
+- ⛔ 不改 `optimization_task_store` / 不动 retention 删除。
+- ⏭️ **不提交**：按 §0，等「按顺序做」全部完成后由老板定提交时机。
+
+## 53.25 「按顺序做」第 3 项：`read_json` 的「Never raises」比实现宽一个异常类 —— 已对齐，并让 §53.18 记的那条窄缝**消失**
+
+改动面两个文件：`app/utils/file_store.py`（两个函数 + docstring）、`tests/test_file_store.py`（两条新测试）。
+**未提交、未推送**。
+
+### 53.25.1 结论先行
+
+- **已修**：`read_json` 与 `read_json_strict` 的「损坏」分支都收 `UnicodeDecodeError`。
+- **修法有本仓先例，因此没有争议**：**15 个模块**已经在用 `except (UnicodeDecodeError, json.JSONDecodeError)`
+  成对捕获 ⇒ 这是把一个**例外**拉回既有约定，不是发明新约定。
+- docstring **改窄**（不是「继续写 Never raises 然后不管」）：写明覆盖集，并把**故意不覆盖**的那一类也写明。
+- 🔴 **连带效果（比本项本身更重要）**：`read_json` 的读者包含 `event_store._load_unlocked` ⇒
+  **`list_all_events()` 变成 total**，§53.18.1 说的「唯一的窄缝」**没了**。
+
+### 53.25.2 影响面（先把读者数清）
+
+| 函数 | 调用点 |
+|---|---|
+| `read_json`（宽松） | `event_cache.py:40`、`event_cache.py:55`、`event_store.py:30`（= `_load_unlocked`）、`sports_fact_service.py:65`、`sports_fact_service.py:146` |
+| `read_json_strict`（严格） | `event_store.py:59`、`sports_fact_service.py:118`、`world_cup_data_source_service.py:126`、`world_cup_source_bundle.py:188` |
+
+先例计数：`UnicodeDecodeError` 在 `app/` 出现 **19 处**，其中 **15 个文件**用的是与 `json.JSONDecodeError`
+成对的写法（`football_live_*` 系列、`nba/nhl/mlb` 系列、`market_totals_service` 等）。⇒ 这些模块的作者
+**默认**「非法 UTF-8 就是损坏」，只有 `read_json` 没跟上。
+
+### 53.25.3 为什么把非法 UTF-8 归到「损坏」而不是「I/O」
+
+- **语义**：不是本进程写出来的文件（`write_json_atomic` 永远写 UTF-8）⇒ 与 corrupt JSON 同类，而既有的
+  「log error + quarantine + fallback」正是为这一类准备的。
+- 若归到 `OSError` 那支（warning + fallback），就**丢掉了 quarantine** —— 运维再也看不到是哪个文件坏了。
+- **明写不覆盖项**：在**打开**一个不是合法 OS 路径的字符串（内嵌 NUL、孤立代理对）时抛的 `ValueError` 仍然穿透。
+  那是**参数**的错，不是内容的错。**故意不改**：把外层放宽到 `ValueError` 会把「测试里 patch 出来的程序错误」
+  一并吞掉，那是拿真信号换假安全。
+
+### 53.25.4 `read_json_strict` 那处是「半边改动」，可单独回退
+
+- 它**本来就**会抛：`UnicodeDecodeError` 既不是 `OSError` 也不是 `JSONDecodeError`，直接穿透 ⇒
+  「corrupt/OSError -> raise so the caller ABORTS」这个**承诺已经兑现**（行为本来就对）。
+- 缺的只是**日志与 quarantine**。我把 `UnicodeDecodeError` 加进它的 corrupt 分支 ⇒ 仍然是 raise，
+  只多一行 log + 一个 `.corrupt` 副本。
+- ⚠️ 这属于**超出最小修法**的一步，理由是让两个函数对称。若认为「最小」更重要，这处（两行）可单独回退，
+  不影响本项主结论。
+
+### 53.25.5 新测试
+
+| 测试 | 输入 | 断言 |
+|---|---|---|
+| `ReadJsonLenientTests::test_undecodable_bytes_degrade_like_corrupt_json` | `b'{"a": "\xff\xfe"}'` | 返回 fallback，**且**生成 `.corrupt` |
+| `ReadJsonStrictTests::test_undecodable_bytes_abort_and_quarantine` | 同上 | 抛 `UnicodeDecodeError`，**且**生成 `.corrupt`（后者在我改动前**不成立**，见 53.25.4） |
+
+两条都用 `write_bytes` 而不是 `write_text` —— 要的正是「非法 UTF-8 的文件」，而 `write_text` **写不出**它。
+顺带把类 docstring 里那句 `read_json is for caches / read-only paths – never raises` 改成 `… – it degrades,
+never raises`：原来的措辞就是那句过宽承诺的副本。
+
+### 53.25.6 四相变异验证
+
+| 相位 | 动作 | 读数 |
+|---|---|---|
+| ① 变异前 | `pytest tests/test_file_store.py tests/test_event_store.py` | junit `tests=89 failures=0 errors=0`（75 passed + 14 subtests） |
+| ② 变异后 | 字节级把**宽松支**的 `except (json.JSONDecodeError, UnicodeDecodeError):` 换回 `except json.JSONDecodeError:` | junit `tests=1 failures=1 errors=0`，症状 = `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 7` **从 `read_json` 穿透** |
+| ③ 还原后 | 重跑同两个文件 | junit `tests=89 failures=0 errors=0`（`junit-item3-restored.xml`） |
+| ④ 字节一致 | sha256 | `dbff44185f472a29`，`identical_to_backup=True` |
+
+📌 **我自己的一次错误，以及它被拦住的方式**：脚本初版断言「那行在文件里出现 **2** 次（宽松 + 严格）」，
+实测只有 **1** 次 —— 因为严格支的 `except` 缩进是 **8 空格**（它的 `try` 在函数层），宽松支是 **12 空格**。
+脚本据此直接 `sys.exit`，**一个字节都没写**。这正是 §4.3 那条「写入前必须全校验、未通过一个字节都不写」
+在起作用：错误的**前置断言**没能污染被测文件。
+🔑 **另一个前置检查**：`mutation_verify.py` 里没有 `file_store` 的针，本文件不在任何 `m.path` 名单里。
+
+### 53.25.7 对 §53.18.1 / §53.18.2 的重述（§0：前提被我这次修复改了）
+
+🔴 §53.18.1 的推理链是：`list_all_events()` → `_load_unlocked` → `read_json`，在探针下发现
+**非法 UTF-8 会让 `read_json` 抛 `UnicodeDecodeError`**，而 `issubclass(UnicodeDecodeError, OSError)` = False，
+故它同时逃过两层 handler ⇒ **「该路径在一个窄缝上非 total」**。
+
+**这条缝现在没有了**：`read_json` 收了这个异常类。因此：
+- **§53.18.2 记的「第四条：`read_json` 的实现比它的契约窄一个异常类」不再是缺陷**，改为「已对齐」。
+- **§53.18.1 的结论仍然成立**（`translate_titles` 的两个孤儿照样存在、照样最可能是 `CancelledError`），
+  但**置信度的来源变了**：此前「`CancelledError` 是首选」之所以只是**首选**，是因为还有那条窄缝可能背锅；
+  现在**没有已知的异常路径**能让 `list_all_events()` 抛 ⇒ 候选集里只剩取消（与硬杀）。结论不变，
+  「首选」升为「唯一候选」。
+- ⚠️ 第 2 项的 ①（把 `list_all_events()` 移进 `try`）**不是因为这条缝才改的**：它防的是**任何**未来的抛出源
+  （包括 `read_json` 契约之外的那类 `ValueError`）。两处修复互补，不重复。
+
+### 53.25.8 门与字节证据
+
+`ruff check app/utils/file_store.py tests/test_file_store.py` 干净；`mypy app/utils/file_store.py` = *no issues*；
+`pytest tests/test_file_store.py tests/test_event_store.py` junit `tests=89 failures=0 errors=0`。
+
+| 文件 | 字节 | CRLF | `git diff --numstat` |
+|---|---:|---:|---|
+| `app/utils/file_store.py` | 12,915 | 294 | `27 8` |
+| `tests/test_file_store.py` | 9,988 | 204 | `26 1` |
+
+两个文件均 **0 bare LF、无 BOM**。
+
+### 53.25.9 未决 / 明确不做
+
+- ⏳ **`read_json` 之外还有没有同类「契约比实现宽」的函数**，本项**没有普查**。已知同族候选是那些自带
+  `except (TypeError, json.JSONDecodeError)` 的 store（`optimized_params_store.py:205/225`）——它们连
+  `TypeError` 都收了，方向相反（更宽），值得单独看一眼。**登记为待办，不在本项。**
+- ⛔ **不放宽外层到 `ValueError`**（理由见 53.25.3）。
+- ⛔ 不改那 15 个已成对捕获的模块（它们本来就对）。
+- ⏭️ **不提交**。
+
+## 53.26 「按顺序做」第 4 项：把「哪些已注册 job 会被测试直接驱动」做成常设守卫（判据全部从源码派生）
+
+新增一个测试文件，**不改生产代码**：`backend/tests/test_scheduler_job_test_reachability.py`。**未提交、未推送**。
+
+### 53.26.1 结论先行
+
+- 守卫的**两侧都从源码派生**：人口 = `app/core/scheduler.py` 里每个 `scheduler.add_job(...)` 的**第一个实参**（AST）；
+  另一侧 = `tests/*.py` 里被**引用**的名字（也是 AST）。**只有豁免表**是手写的。
+- 现状读数：**23 个注册 job 函数 / 22 个被测试命名 / 唯一例外 `_job_sentiment_refresh`**（在 `tests/` 里**零引用**）。
+- 表格双向过期都会红：M1（出现驱动它的测试）与 M2（加一个假条目）——见 53.26.5。
+- 顺带**确证了半净化窗口**是**当前**事实（不是历史）：见 53.26.6。
+
+### 53.26.2 为什么既不能用字面量、也不能用正则
+
+- **字面量扫描有假阴性**（§53.19.6）：测试若直接跑**真** job，就**不伪造任何 payload**，字面量扫描看不见它。
+  §53.19 的 10 组三联行正是这种测试写的。
+- **正则扫描有假阳性，而且我自己连踩两次**：
+  1. `_job_[a-z0-9_]+` 把**测试方法名**当成了 job —— `_job_failed` / `_job_name` / `_job_0` /
+     `_job_skips_when_disabled` … 全都不是 job 函数。
+  2. 改成精确匹配后又用了 `(?<![\w.])`，把 `scheduler._job_backup_stores` 这种**属性访问**排除掉了
+     ⇒ `_job_backup_stores` 被误判成「无人驱动」（实测：错判 1 个）。
+- ⇒ 改用 AST：`ast.Attribute.attr` 收属性名（`scheduler._job_x` **正确计入**），而注释、文档字符串、
+  字符串字面量天然**不计入**。两条都写成**控制断言**
+  （`TestTheDerivationItself::test_the_identifier_walk_sees_calls_and_ignores_prose`）。
+
+### 53.26.3 人口为什么按 `add_job` 的第一个实参取，而不是按 `_job_` 前缀
+
+`_job_name_for_run` 也是 `_job_` 前缀，但**不是 job**——它是个查表 helper（`scheduler.py:266`）。
+按前缀取人口，**这个仓今天就已经是错的**。⇒ 守卫里有一条专门钉这一点的控制断言
+（`test_a_job_prefixed_helper_is_not_a_job`），并把它写进 `_JOB_PREFIXED_NON_JOBS`。
+
+### 53.26.4 表格为什么是「豁免表」而不是「清单」
+
+本仓既有形态就三种，全是**只声明例外 + 要求理由 + 双向过期检查**：
+`conftest._RESET_EXEMPT`、`test_settings_redirect_census._REDIRECT_EXEMPT`、`CORE/OPTIONAL_STARTUP_COMPONENTS`。
+⇒ 这里同样只声明「**没被测试命名的那 1 个**」，而不是列 22 行理由墙。
+
+⛔ **明确不做**：不要求「每个 job 都必须有直接测试」。好几个 job 是靠它调用的 **service** 被覆盖的
+（如 `score_all_finished_matches`），把「job 级覆盖」写成硬规则是**拿覆盖率政策冒充正确性规则**。
+本守卫守的是「两侧仍然构成划分、且例外仍带理由」，让下一次普查从一个**已派生**的答案出发。
+
+### 53.26.5 四相变异验证（两处，都不碰生产代码）
+
+| 相位 | 动作 | 读数 |
+|---|---|---|
+| ① | `pytest tests/test_scheduler_job_test_reachability.py tests/test_no_assertionless_tests.py` | junit `tests=39 failures=0 errors=0`（21 passed + 18 subtests） |
+| M1 | 在 `tests/` 下临时放一个引用 `scheduler._job_sentiment_refresh` 的文件 | 划分测试红，junit `tests=1 failures=1`；症状 = *"the set of registered jobs no test names changed"* |
+| M1 还原 | 删除该临时文件 | `tests/` 文件清单与运行前**逐名相同** |
+| M2 | 字节级往 `_NOT_DRIVEN_BY_TESTS` 里插一个假条目 `"_job_name_for_run": ""` | 悬空检查红 `tests=1 failures=1`；划分测试也红 `tests=1 failures=1` |
+| ③ 还原后 | 重跑守卫 | junit `tests=6 failures=0 errors=0` |
+| ④ 字节一致 | sha256 | `6387dfd42340592b`，`identical_to_backup=True` |
+
+M1 是关键的那半边：**唯一那条例外声明**必须真的会在「有测试驱动它」时过期——否则「豁免表」就是一张
+永远不会被检查的装饰。
+
+### 53.26.6 🔴 半净化窗口：确证（只读取证）
+
+| 位置 | `LOOP_DB_FILE` 重定向 | `LOG_FILE` 重定向 |
+|---|---|---|
+| `git show HEAD:backend/tests/conftest.py` | **有**（4 处，`9647ca2` 已提交） | **一处都没有** |
+| 工作树 `backend/tests/conftest.py` | 有 | **有**（`git diff HEAD --stat` = `+69 −2`，未提交） |
+
+⇒ 「账本已净化、日志未净化」这个**半净化窗口**是**当前**事实，不是历史遗留叙述。它的后果见 §53.19.5：
+9 月的测试行写进了 `backend/logs/app.log*`，也正是「**日志行数 > 账本行数**」这条判据能成立的原因
+（`log 5 vs ledger 3` —— 有调用者把写入口打了桩）。
+
+⇒ 本项**只确证、不代决**：是否把那处重定向落成提交属交付时机（§0），与 `test_production_log_hermeticity.py`
+一并由老板定。
+
+### 53.26.7 🔴 我自己踩的一个工具坑，值得记下来
+
+**Write 新建仓库内的 `.py` 会写成 LF。** 本仓工作树约定是 **CRLF**——同一目录下两个兄弟文件
+（`test_settings_redirect_census.py`、`test_production_log_hermeticity.py`）都是纯 CRLF，只有我新建的这个是
+**纯 LF**（0 CRLF / 199 bare LF）。
+
+⇒ 新建后必须做一次**字节级** LF→CRLF 对齐（读 bytes → 归一 → 写 bytes），并把「**字节增量 == 行数**」当验收。
+本次读数：CRLF `0 → 199`、bare LF `199 → 0`、字节增量 **199 == 199**、无 `\r\r\n`（没被重复插入回车）。
+
+⚠️ 这个坑是**被变异脚本自己暴露的**：M2 第一次跑报 `needle count 0`，因为脚本的针带 CRLF 而文件是 LF。
+**这个失败是好事**——它说明「针必须与被测文件的真实字节一致」这条纪律在自动生效（§4.3）。
+
+### 53.26.8 门与字节证据
+
+| 文件 | 状态 | 字节 | CRLF | bare LF | BOM |
+|---|---|---:|---:|---:|---|
+| `backend/tests/test_scheduler_job_test_reachability.py` | **未跟踪（新建）** | 9,193 | 199 | 0 | 无 |
+
+`ruff check` 干净（该文件随 `tests/` 一起在门里）；`pytest` 见 53.26.5 的①③。
+
+### 53.26.9 未决 / 明确不做
+
+- ⏳ **非调度器侧的账本写入点没有进这道守卫**。§53.20 查到 30 个写入点 / 8 文件 / 4 类模块，本守卫只覆盖
+  「调度器注册的 job 函数」这一侧。另外几侧（`api/routes/events.py:798`、`main.py:113`、
+  5 个 service helper）要派生它们的人口需要解析「run 名实参是常量还是变量」，更重；**登记为待办，不在本项**。
+- ⏳ `_job_sentiment_refresh` **确实没有任何直接覆盖**——本守卫把它**记下来**，但**不顺手补测试**：
+  补测试属新增覆盖，不是本项范围。
+- ⛔ 不把「每个 job 都要有直接测试」写成规则（理由见 53.26.4）。
+- ⛔ 不代决 `LOG_FILE` 重定向的提交时机。
+- ⏭️ **不提交**。
+
+## 53.27 「按顺序做」第 5 项：`events.py:798` 那条 API 路由的「请求级中断保护」——**评估后拒绝**，并纠正我自己在 §53.21.6 记错的一个数
+
+本项**零代码改动**（只读普查 + 探针脚本）。目的是把 §53.20.8 留下的「待判 #1」收口。
+
+### 53.27.1 结论先行
+
+- **拒绝**为 `validate_api_football_pipeline_route` 加取消/中断安全网。理由逐条实测，见 53.27.7。
+- 🔴 **纠正 §53.21.6**：全仓 **0 / 31** 个写入点在 `finally` 里闭合账本行（我此前记的是「1」）。全仓唯一的那个
+  `finally` 关的是**数据库 session**，不是账本行。
+- 生产账本里那条唯一的行是**正面证据**：`try` **之后**的登记段**跑过，并且正确闭合**。
+
+### 53.27.2 先定位：这条路由到底有没有 §53.17.4 那种泄漏形态
+
+写入点普查的读数是 `next=Try` —— `start_run` 之后**紧跟** `try`，**没有** §53.17.4 那种「在 try 之前先跑一句」
+的形态。所以真正要评估的只有两处：
+
+- **(a)** `try` **之后**的登记段：`summary = _api_football_validation_run_summary(result)`、
+  `status = "success" if result.get("ok") else "failed"`、`finish_run(...)`（`events.py:806-813`）。
+- **(b)** `await asyncio.to_thread(validate_world_cup_api_football_pipeline)` 上的**取消**。
+
+### 53.27.3 (a) 逐条实测：那段登记代码对 dict 输入是 **total** 的
+
+按 ⑰「**跑一次比读一遍可靠**」，我没有读代码推断，而是把 11 个输入喂进 `_api_football_validation_run_summary`：
+
+| 输入 | 结果 |
+|---|---|
+| `{"steps": None}` | OK（`step_count=0`） |
+| `{"steps": [None, 1, "x", {"ok": False}, {"name": "fixture_fetch"}]}` | OK（`step_count=5`） |
+| `{"coverage": None}` | OK |
+| `{}` | OK |
+| `{"ok": "yes"}` | OK |
+| `{"steps": {"not": "a list"}}` | OK |
+| `{"steps": [], "coverage": {...}}` | OK |
+| `None` / `[]` / `"result"` / `5` | **`AttributeError: 'X' object has no attribute 'get'`** |
+
+⇒ **7/7 畸形 dict 全不抛；只有非 dict 才抛。** 那条边界是**类型边界**，不是取值边界 ——
+而 `validate_world_cup_api_football_pipeline` 的注解是 `-> dict[str, Any]`，由 **mypy 门**
+（§0 四道门之一，实测 *no issues found in 331 source files*）守住。
+
+### 53.27.4 生产证据：那段登记段**真的跑过**，而且闭合正确
+
+| 字段 | 值 |
+|---|---|
+| `status` | `failed` |
+| `started_at` / `finished_at` | 2026-07-07T17:46:46 / 17:46:48（跨 1.57 s） |
+| `duration_ms` | `1568`（**int**） |
+| `error` | `API-Football returned 0 fixtures for league=1 season=2026; …` |
+| `result_json` | 完整 8 键摘要（`provider`/`ok`/`failed_step`/`fixture_count`/`step_count` …） |
+
+`error` 是**验证器自己产的结构化错误串**，走的是 `result.ok == False` 那一条 —— 即 `try` **之后**的
+`finish_run`。**不是** `except` 分支：后者的错误串格式是
+`API-Football pipeline validation failed: <异常类名>`，在账本里**从未出现过**。
+
+⇒ 两件事同时成立：**(a) 段可达且有真实落地证据；(a) 段在那次真实输入上是正确的。**
+
+### 53.27.5 (b) 取消：与第 2 项**同一套前提、同一套结论**
+
+`stop_scheduler()` → `scheduler.shutdown(wait=True)`、全仓无 `timeout_graceful_shutdown`、
+「第二次 Ctrl-C / SIGKILL 上 Python 一行都不跑」这三条对 HTTP 处理器同样成立（uvicorn 默认也是无限等）。
+⇒ 取消需要**强制关停**才能到达，而那种情况下**没有 Python 代码可执行**，`finally` 救不了。
+
+🔴 **前提绑定照旧**（§4.1）：若关停预算被改成短于请求时长，取消变成主路径，本节要**重估**。
+
+### 53.27.6 🔴 纠正 §53.21.6：「`finally` 只有 1 个」是错的，实际是 **0 个**
+
+用 AST 对 `app/**/*.py` 普查（判据落在 `ast.Try.finalbody` 里**有没有调用** `finish_run`/`_finish_run`）：
+
+| 读数 | 值 |
+|---|---|
+| 含 `start_run` / `_start_run` 调用的函数 | **31** |
+| 其中 `finish_run` / `_finish_run` 出现在 `finally` 块里的 | **0** |
+
+那个曾被我算作「1」的 `finally` 是 `world_cup_scoring_service.py:329`，它执行的是
+`close_prediction_session(session)` —— 关的是**数据库 session**，**不是账本行**。
+
+⇒ 结论**变强**，不是变弱：§53.17.4 的「取消不可免疫」不是「29/30 缺」，而是 **31/31 全缺**；
+第 2 项里「加一张网等于引入本仓**没有**的先例」这个论证因此**更硬**。
+
+📌 **这是我自己的错，根因值得记**：我把「函数里有 `finally`」当成了「`finally` 里闭合账本行」。
+**判据必须落在 `finally.finalbody` 的内容上，而不是「函数里有没有 `finally`」**——同族错误在本仓已出现过
+（⑫ 的 `next_stmt` 只看外层语句）。已把这条写进 skill。
+
+### 53.27.7 为什么最终**拒绝**
+
+1. **没有泄漏形态**：`start_run` 后紧跟 `try`（53.27.2）。
+2. **(a) 不可达**：对声明的返回类型是 total 的（7/7），边界由静态门守住，且有真实落地证据（53.27.3 / 53.27.4）。
+3. **(b) 与第 2 项同一前提**，同一结论（53.27.5）。
+4. 本仓**没有任何** `finally` 闭合账本行的先例（53.27.6）⇒ 在这条路由里加一张，是**为假设引入新约定**。
+5. 另一种更「顺眼」的改法——**把登记段搬进 `try`**——我**算过账**：若 `finish_run` 在 `try` 内失败，
+   会被同一个 `except` 再捕获 → 再调一次 `finish_run`（同样失败，因为库坏了）→ 客户端拿到的是账本错误、
+   而行**仍然**是 `running`。**结果与今天逐字相同**，只是内部多走一次、错误语义更混、异常链更难看。
+   **净收益为零。**
+
+### 53.27.8 登记但不修的一处观察
+
+这条路由（以及普查出的另外 26 个函数）调用 `loop_run_store.finish_run` **没有保护**，而调度器的
+`_finish_run` 是**有**保护的（`scheduler.py:183-196` 用 `try/except` 包住并降级为日志）。
+⚠️ **不可在进程内修**：`finish_run` 失败意味着**账本库本身**坏了，没有任何重试能写出那一行。
+⇒ 记为观察，**不改**（「知道但不动」比「加一层假保护」诚实）。
+
+### 53.27.9 未决 / 明确不做
+
+- ⏳ 「`finish_run` 无保护」这条观察**留给运维层**：账本库损坏时唯一能做的是一次修复/搬迁，
+  不是代码里的重试。
+- ⛔ 不为这条路由加取消网（53.27.7）。
+- ⛔ 不改 `except Exception` 把编程错误标成「pipeline validation failed」这个既存语义（超出本项范围）。
+- ⏭️ **不提交**。
+
+## 53.28 「按顺序做」第 6 项：`score_all_finished_matches` 的「开行到开 session」走廊已闭合；4 个 start-only helper 的配对标 —— **存在但静态不可达，不改**
+
+### 53.28.1 本项的两个子目标
+
+- **③** `world_cup_scoring_service.score_all_finished_matches`：`get_prediction_session()` 落在 `try:` **之前** ⇒
+  该走廊里的失败会留下一行**永久** `running` 的账本行。
+- **④** 4 个「只开不闭」的 start-only helper（`_start_audit_run` / `_start_consistency_repair_audit_run`）：
+  与它们配对的 `_finish_*` **在不在调用方**、两者之间的缝隙**可不可达**。
+
+### 53.28.2 ③ 的判据：为什么这是个真缺陷（不是「理论上可能」）
+
+三件事要同时成立才算缺陷，逐条核对：
+
+1. **那一句真能抛。** `get_prediction_session()`（`utils/prediction_db.py:58-73`）在 `_SessionLocal is None` 时走
+   `get_prediction_engine()`（`:27-49`），后者含 `db_path.parent.mkdir(parents=True, exist_ok=True)` 与
+   `create_engine(...)`（连接时设 `PRAGMA journal_mode=WAL`）⇒ **可抛 `OSError`**（权限、路径、ENOSPC、只读挂载）。
+2. **行已经开了。** `:265` 已经 `loop_run_store.start_run(SCORING_RECONCILE_AUDIT_JOB_NAME)`。
+3. **没人能闭合它。** 该函数的 `except`（`:317-327`）与 `finally`（`:329-330`）在那一句之后才进入；
+   `finally` 只 `close_prediction_session(session)` —— 关的是 **DB session**，**不是账本行**。
+
+⇒ `session` 打开失败时，`except` **够不到**（异常发生在 `try` 之前），行停在 `running`，
+而 `/api/health` 判据是「每个 job 的**最新**行 `status == 'failed'`」⇒ 这行会**永久**占据该 job 的最新行位置。
+
+### 53.28.3 改法：为什么不是「把 open 包进一个嵌套 try」
+
+改后的形状：
+
+```python
+    session: Session | None = None
+    try:
+        session = get_prediction_session()
+        ...
+    except Exception as exc:
+        ...  loop_run_store.finish_run(run_id, "failed", ...)
+        raise
+    finally:
+        if session is not None:
+            close_prediction_session(session)
+```
+
+三个决定各有理由：
+
+- **搬进 `try` 而不是加嵌套 `try`。** 嵌套 `try` 只是把异常换到别处接住，那一行照样留 `running`；
+  正确解是让**同一个** `except` 看得见它 —— 而那个 `except` 已经会把行置 `failed` 并 `raise`。
+- **必须预绑定 `session = None`。** `finally` 是**无条件**执行的；若 `session` 首次赋值就在 `try` 内且该赋值失败，
+  `finally` 会去读一个未绑定的局部名 ⇒ `NameError` 会把 `OSError` **换掉**，比原缺陷更难查。
+  （本仓已有同类教训：`from X import f` 是按值绑定、`except` 里的 `NameError` 让人误判失败原因。）
+- **不用 `contextlib.closing` / 不重构成 with。** 本函数要把 session **借给** `score_finished_match(match_id, session=session)`；
+  该内层函数自带 `should_close = session is None` 的「借不关」约定（`:92-94`），改成 with 会同时改掉两处风格且无收益。
+
+### 53.28.4 改动读数
+
+| 项 | 值 |
+|---|---|
+| 文件 sha256[:16] | `9f849ae984b01c5c` |
+| 字节 / CRLF / bare LF / BOM | 12,667 / **339** / **0** / 无 |
+| `git diff --numstat` | `11 2` |
+| 第一段 | +9 −1（6 行说明注释 + `session: Session \| None = None` + `session = ...` + 空行；删掉原来那行裸赋值） |
+| 第二段 | +2 −1（`finally` 加 `if session is not None:` 一层） |
+
+🔴 **这里的「删除数 = 2」是预期，不是缺陷。** §0 那条「插入型编辑的删除数必须是 0」只约束**只加注释**的编辑；
+本项是**真搬移代码**（一行赋值挪进 `try`、一行调用挪进 `if`），删除正是搬移的痕迹。
+反过来用它做**自查**：删除数若 > 2 就说明我多删了东西（`11 2` 与手工逐段核对一致）。
+
+### 53.28.5 新测试钉住什么
+
+`tests/test_world_cup_scoring_service.py::WorldCupScoringServiceTests::test_a_failing_session_open_still_fails_the_ledger_row`
+
+- 输入：`patch(get_prediction_session, side_effect=OSError("cannot open prediction DB"))`。
+- 断言四条：① `assertRaises(OSError)`（异常**照旧**穿透，没有被吞成 `None` 或 `{}`）；
+  ② `loop_run_store.last_run(SCORING_RECONCILE_AUDIT_JOB_NAME)["status"] == "failed"`；
+  ③ `error == "Scoring reconciliation failed"`；④ `finished_at is not None`。
+- 🔑 **故意不 patch `close_prediction_session`。** `close_prediction_session(None)` 会执行 `None.close()`
+  ⇒ `AttributeError`（`prediction_db.py:92-94`）。不 patch 这一处，就等于让**同一条**测试顺手把
+  `if session is not None` 那层守卫也钉住（见 53.28.6 的 M2）。
+  这是有意的「一条测试两个边界」，代价是它**只**在守卫缺失时以 `AttributeError` 失败 —— 症状与 M1 不同，可区分。
+
+| 项 | 值 |
+|---|---|
+| 文件 sha256[:16] | `15cc9898ddb88e18` |
+| 字节 / CRLF / bare LF / BOM | 6,025 / **160** / **0** / 无 |
+| `git diff --numstat` | `24 0`（纯插入，删除数为 0 —— 与 53.28.4 相反，因为这里只加了测试） |
+
+### 53.28.6 四相变异验证（两条**不同**边界各变异一次）
+
+脚本 `.workbuddy/audit-2026-10-03/mutate_item6.py`。判据取 **junit 的 `failures`/`errors`**，不看进程退出码。
+
+| 相 | 动作 | 读数 |
+|---|---|---|
+| phase0 | 针命中数 | M1 = 1、M2 = 1；sha `9f849ae984b01c5c`；339 CRLF / 0 bare LF |
+| phase1 | 未变异跑 | `tests=3 failures=0 errors=0` ✅ |
+| **M1** | session 打开移回 `try` 外（`session: Session \| None = get_prediction_session()`）→ `delta_bytes = -24` | `AssertionError: 'running' != 'failed'` 🔴 |
+| **M2** | 删掉 `if session is not None:` → `delta_bytes = -37` | `AttributeError: 'NoneType' object has no attribute 'close'`（`prediction_db.py:94`）🔴 |
+| phase3 | 还原 | sha 与备份**逐字节相同**；339 CRLF / 0 bare LF；重跑 `tests=3 failures=0 errors=0` ✅ |
+
+🔑 **两条变异的症状不同**（M1 是「状态错」、M2 是「守卫缺失」）⇒ 证明这确实是一条测试覆盖**两个**边界，
+而不是一条弱断言同时被两个变异「碰巧」触发。若两条变异给出同一个断言消息，就该怀疑测试只钉住了一处。
+
+⚠️ **两次自力踩坑，都记下来**：
+
+1. M1 的针首版**少了 `try:` 之后那个空行**（我自己编辑时留了空行，写针时按直觉省了）⇒ `needle count 0`。
+   脚本在**写入前** `sys.exit`，**一个字节都没写** —— 4.3「写入前全校验、未通过一个字节都不写」第 N 次生效。
+   教训：**针要从实际字节里生成，不要靠回忆**（`read_bytes()` 打印目标区域，或直接 `count()` 预检）。
+2. 我用 heredoc 做「独立复核」时，`b"...\r\n..."` 被 shell 变成字面 `/r/n`（源文件里是 `\` + `r`，
+   heredoc 之后成了 `/r/n`）⇒ 复核脚本自己给出了假读数。**含转义序列的东西一律写成文件再跑，不走 heredoc。**
+   （本机长期记忆里已有这条，这次是它第二次咬我，说明我对「只是查一下」的临时命令太随意。）
+
+### 53.28.7 四道门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check app/` | All checks passed |
+| `mypy app/` | Success: no issues found in **331** source files（`session: Session \| None` 的窄化被接受，`session.query(...)` 处不报 Optional） |
+| `python -m scripts.generate_types --check` | `generated-types.ts is up to date` |
+| 受影响面 pytest | junit `tests=158 failures=0 errors=0`（`137 passed + 21 subtests`） |
+
+受影响面的**选法**（不是随手挑的）：全仓 grep/AST 出**唯一**会 import 或 patch `score_all_finished_matches` 的四个测试文件 ——
+`test_world_cup_scoring_service.py`（本函数）、`test_operational_readiness.py:414`（patch）、
+`test_startup_health_integrity.py:227`（patch，启动路径）、`test_world_cup_analytics_routes.py:985`（patch，路由）。
+除这 4 个之外另有 2 个**生产**调用点（`world_cup_analytics.py:493` 路由、`main.py:363` 启动）已被这 4 个文件覆盖。
+
+### 53.28.8 ④ 的取证：4 个 start-only helper 的配对**都在调用方**，缝隙只有 2 处且**静态不可达**
+
+**先说配对形态（4/4 都在调用方，两个变体）：**
+
+| 文件 | 配对实现 |
+|---|---|
+| `world_cup_post_match_backfill_service.py:192-196` | 调用方内嵌 `def finish(result)` → `_finish_audit_run(run_id, result)` |
+| `world_cup_quality_service.py:655-659` | 同上（`_finish_consistency_repair_audit_run`） |
+| `world_cup_result_fact_backfill_service.py:62-66` | 同上（`_finish_audit_run`） |
+| `world_cup_verified_result_correction_service.py` | 模块级 `_finish(run_id, result)`（`:304-`），在 `try` 内 `:74/86/125/135` 等处调用 |
+
+四个 `_finish_*` 的签名一律 `run_id: str | None` + `if not run_id: return` + **内部 `try/except` 降级为日志**
+⇒ **不存在「开了行但没人能闭」的形态**，也不存在「闭行本身抛出去」的形态。
+
+**再说缝隙**（判据：`run_id = _start_*` 与 `try:` 之间**能抛的语句**）：
+
+| 文件 | `run_id` 行 | `try:` 行 | 中间的内容 | 判断 |
+|---|---|---|---|---|
+| `world_cup_verified_result_correction_service.py` | 68 | **69** | 无 | **无缝隙** |
+| `world_cup_result_fact_backfill_service.py` | 60 | 68 | `def finish` 的定义 | 定义函数**不可能抛** |
+| `world_cup_post_match_backfill_service.py` | 189 | 198 | `normalize_audit_metadata(...)` + `def finish` | **理论可抛**（见下） |
+| `world_cup_quality_service.py` | 652 | 663 | 同上 + `protected = not dry_run and not confirm` | **理论可抛**（见下） |
+
+**那两处「理论可抛」为什么不可达 —— 三重闸门：**
+
+1. `normalize_audit_metadata`（`services/audit_metadata.py:9-28`）只在传入**真值且非 Mapping** 时，
+   于 `:17` 的 `metadata.get(...)` 抛 `AttributeError`。传 `None` 或 `{}` 都安全（`:16` 的 `metadata or {}`）。
+2. **HTTP 层没有输入通道。** 5 个相关路由一律 `audit_metadata: dict[str, str] = Depends(get_audit_metadata)`
+   （`world_cup_analytics.py:438 / 474 / 490 / 532 / 547`），而 `get_audit_metadata`（`api/audit_metadata.py:12-24`）
+   **就地**用 header（`X-Client-Source` / `X-Operator`）加 `request.url.path` 构造一个全新的 `dict[str, str]`。
+   客户端**只能塞字符串值，不能改类型**。
+3. **静态类型也关掉了它。** 4 个服务函数的参数都标注 `dict[str, Any] | None`
+   （`:177` / `:645` / `:45` / `:34`）⇒ 传 list/tuple 是 `mypy` 会报的类型错误。
+
+🔑 **② + ③ 合起来意味着：这不是「实践中够不到」，而是「类型系统关掉了」。**
+与前面几项「可达但没人走」的走廊**不同类** —— 那些是运行期可达、只是没有入口；这两处连静态都过不去。
+⇒ **登记为观察，不改。** 加固方式（把 `audit_meta` 提到 `_start_*` 之前）是纯防御性重排，
+收益是「让一个静态不可达的缝隙变成结构性不存在」，成本是动 2 个生产文件且**没有任何测试信号**能区分改前改后。
+
+### 53.28.9 顺带发现的一处**排序不对称**（值得记、不值得改）
+
+同一批 4 个文件里，`audit_meta = normalize_audit_metadata(...)` 相对 `_start_audit_run()` 的位置**不一致**：
+
+- **先算元数据、后开行**（`:59` → `:60`；`:44` → `:68`）：`world_cup_result_fact_backfill_service.py`、
+  `world_cup_verified_result_correction_service.py`。
+  ⇒ 即便元数据那一步真能抛，那时**行还不存在**，**不可能**产生孤儿。
+- **先开行、后算元数据**（`:189` → `:190`；`:652` → `:653`）：`world_cup_post_match_backfill_service.py`、
+  `world_cup_quality_service.py`。⇒ 缝隙正是**这个顺序**造出来的。
+
+🔑 也就是说：**缝隙不是「有元数据要算」造成的，是「先开行后算」这个顺序造成的**，而这个顺序本身没有正当理由。
+两处「顺序更好」的实现（先算后开）看起来是**碰巧**，不是设计。⛔ 不改：见 53.28.8 的成本/收益。
+
+**另附一条确认（反面走廊不存在）**：这 4 个函数**都**在开账本行**之前**打开 DB session
+（`:187`→`:189`、`:650`→`:652`、`:55`→`:60`、`:66`→`:68`）⇒ 53.28.2 那种「行已开、session 打不开」的走廊
+在这 4 处**结构上不存在**。那两处把 session 打开放在 try 之前（`:187` 等）也不构成缺陷，因为**那时行还没开**。
+🔑 **「session 打开在 try 之前」本身不是缺陷；「session 打开在 *开行* 之后、*try* 之前」才是。** 判据是**三者的相对顺序**，不是单独某一处的位置。
+
+### 53.28.10 未决 / 明确不做
+
+- ⏭️ `audit_meta` 与 `_start_*` 的**顺序统一**（4 个文件里 2 反 2 正）—— 记为观察，理由见 53.28.9。
+  ⚠️ 若将来有人要给这 4 个函数加「真的会抛」的语句，**必须**同时把顺序改成「先算后开」。
+- ⛔ 不给那 2 处缝隙加 try（53.28.8）。
+- ⛔ 不把 `_finish_audit_run` 的 `try/except` 去掉（它是**故意**降级为日志的，与调度器 `_finish_run` 同族）。
+- ⏭️ **第 7 项（TaskCreate #13，§53.22.3）移交下一轮**：`evidence` 会话库「保留最近 N 个会话 / 声明它是什么 /
+  先导出再删除」三选一，或至少在代码里声明证据仓语义 + 风险声明。
+- ⏭️ **不提交**。
+
+## 53.29 「按顺序做」第 7 项：把「一个不声明自己是证据仓的证据仓」变成**被声明的**（在代码里声明，不删任何东西）
+
+### 53.29.1 结论先行
+
+- §53.22 诊断的是**声明**，不是保留量。§53.22.3 留的三选一里选 **(b) 在代码里声明**，并把它做成**可被守卫的行为**，不是注释。
+- **一个字节都没删。** 本项**不做**任何清理（理由见 53.29.6）。
+- `tests/conftest.py` 现在在沙箱目录里写一份自述清单 `READ-ME-BEFORE-DELETING.txt`，写于**第一条测试能跑之前**（import 时）⇒ **会话中途被硬杀也把答案留在原地**。
+- 新增守卫 `tests/test_test_sandbox_is_declared.py`（6 条）。它钉住清单的**机器可读字段**，并把每个字段对照**清单之外**的东西校验（细节见 53.29.5）。
+
+### 53.29.2 为什么选 (b)，而不是「保留最近 N」或「先导出再删除」
+
+- **(a) 保留最近 N 个会话**：既含**删除动作**、又含**保留策略**，两者都是操作员的取值决定（§0「业务/契约取值不代决」）；而且它的落地形态必然是**批量删系统临时目录里的一族目录** ⇒ 属 vague cleanup，本仓既定做法是**不做**（同族先例：§1 那 51 个 MIXED 文件「是否规范化需拍板，别擅自批量改」）。
+- **(c) 先导出再删除**：导出到哪、留多久、删什么，同样要先定策略；更关键的是它**没有解决**本题的问题 —— 一个已经被导出的目录，在目录列表里**照样**不可解释。
+- **(b) 之所以是正确的最小项**：§5 已把问题定成「**这个目录是什么**没有对外声明」，而 (b) **正好**是这条判据的解。它不改保留量、不动一个字节，却让「我能不能删这个？」在**提问发生的地方**（那个目录里）有答案。
+- 一句话：**(a)/(c) 是策略，(b) 是缺失的判据。** 先补判据，策略留给操作员。
+
+### 53.29.3 改了什么（`tests/conftest.py` 三个动作）
+
+1. **抽出前缀常量** `_SANDBOX_PREFIX = "pmrf_test_data_"`，`tempfile.mkdtemp(prefix=_SANDBOX_PREFIX)` 用它。
+   ⇒ 清单里那条「回收用 glob」**由构造保证**与目录名同源，不是抄第二遍（抄一遍就会漂）。
+2. **新增 `sandbox_manifest_text(sandbox_dir, ledger_path) -> str`**：清单文本是**它参数的函数** —— 既不读全局、更不是硬编码模板。
+   ⇒ 守卫可以用一个**合成目录**调用它并看见文本跟着变（53.29.5 的正向控制就靠这一点）。
+3. **新增 `_write_sandbox_manifest(...)`，在所有重定向完成之后调用一次**（`best-effort`：`except OSError: pass`）。
+   放在那里是因为清单要能报出**真实被重定向的账本路径**；而**不**放在 session 收尾夹具里，因为那恰好是「硬杀就丢」的位置 —— 写在这里，正是为了让「进程被杀死」这种最需要答案的情况也留得下答案。
+
+### 53.29.4 清单长什么样（前 5 行是机器可读块）
+
+```
+PMRF TEST SANDBOX -- read this before assuming the directory is disposable.
+
+sandbox_dir : <本目录绝对路径>
+evidence_ledger : <本目录里的 v2_loop.db>
+created_utc : <ISO-8601，UTC 偏移>
+pid : <写它的进程号>
+reclaim_glob : pmrf_test_data_*
+```
+
+其后是给人读的散文五段：**这是什么** / **这不是什么（不是缓存、不会被自动清理）** / **为什么保留（它是证据仓，点名审计档与 §53.22）** / **保留的成本（≈3 MB/天、≈44 目录/天）** / **怎么回收空间**。
+
+⚠️ **回收配方刻意写成「先列出来、再删一份复核过的显式清单」并保留 `-WhatIf`，不写通配符直删。**
+一个**失配**的清理配方比没有配方更糟 —— 它读起来像**已经核对过的许可**。这一点正是守卫要钉住的东西（53.29.5 最后两行）。
+
+### 53.29.5 守卫钉住什么（每条判据都来自清单**之外**）
+
+| 断言 | 对照物 | 为什么 |
+|---|---|---|
+| 清单文件存在 | 行为本体 | conftest **真的**在声明，而不是文档里说它在声明 |
+| `sandbox_dir` **等于**实际沙箱 | `conftest._TEST_DATA_DIR` | 清单没在描述**另一个**沙箱 |
+| `evidence_ledger` **等于**实际账本，且必须在沙箱**内** | `settings.LOOP_DB_FILE` | 被声明的「证据」就是这仓里的证据 |
+| `pid` **等于** `os.getpid()` | 本进程 | 🔑 **上一次会话留下的清单不能通过** —— 沙箱按设计比进程活得久，所以「文件在」本身**不是**「还有人在写它」 |
+| `created_utc` 可解析、且偏移为 0 | — | 配方按 mtime 排序 ⇒ 时间戳得说清自己是哪个时区 |
+| `reclaim_glob` 去掉 `*` 后是**本目录名的前缀** | 目录名本身 | 🔑 配方失配（改了前缀、忘了改配方）**必须**红 |
+| 清单点名审计档文件名 + `53.22` | 文档文件名 | 「这是证据仓」这句断言背后得有东西；这也是读者该从哪一节开始 |
+| **正向控制**：用合成目录调用 `sandbox_manifest_text`，文本跟着变、且**不含**真实沙箱路径 | 传进去的参数 | 否则把函数换成硬编码字符串，上表**全部**仍然绿 |
+
+🔴 **最后一条是本模块「不空」的唯一原因。** 真实沙箱只有一个，所以「清单与沙箱一致」在硬编码实现下是**恒真**的；只有**换一个参数**才能把硬编码暴露出来。
+这也是 §6a-3「一条测试覆盖两个边界」的反面用法：**一个模块里必须至少有一条断言，其真值取决于实现是"算出来的"还是"印上去的"。**
+
+### 53.29.6 明确不做
+
+- ⛔ **不删任何目录。** 既有的 `pmrf_test_data_*` 一个没动（本项开工时 178 个，跑完几轮后 204 个 —— 这个增长正是本项要让它**可见**的东西）；更早会话的 35 个散件同样只报不删（§53.22.3）。
+- ⛔ **不加「保留最近 N」开关**：它是操作员的策略取值，且落地形态一定是「批量删临时目录」。
+- ⛔ **不把回收配方写成代码去执行** —— 配方**只作为文本**存在于清单中，供人复核后自行运行。
+- ⏭️ **不提交。**
+
+### 53.29.7 四相变异验证（两条边界各一次）
+
+脚本 `.workbuddy/audit-2026-10-03/mutate_item7.py`。判据取 **junit 的 `failures`/`errors`**，不看进程退出码。
+
+| 相 | 动作 | 读数 |
+|---|---|---|
+| phase0 | 针 M1 / M2 各命中 **1** 次；sha `f5344be868fcfe10`；584 CRLF / 0 bare LF | ✅ |
+| phase1 | 未变异跑 | `tests=6 failures=0 errors=0` ✅ |
+| **M1** | 删掉 `_write_sandbox_manifest(...)` 调用（`delta_bytes = -70`） | **6 条里 5 条红**；症状 = `...READ-ME-BEFORE-DELETING.txt is missing` + 4 × `FileNotFoundError` 🔴 |
+| **M2** | 把 `reclaim_glob` 从 `{_SANDBOX_PREFIX}*` 换成字面量 `scratch_*`（`delta_bytes = -10`） | **1 条红**，症状 = `the manifest tells the reader to reclaim 'scratch_*' but this sandbox is named 'pmrf_...'` 🔴 |
+| M2 对照 | 同一次变异下**只**跑「清单存在」那条 | **绿** ⇒ 变异是**局部**的，不是碰巧打翻一片 ✅ |
+| phase3 | 还原 | sha 与备份**逐字节相同**；584 CRLF / 0 bare LF；重跑 `tests=6 failures=0 errors=0` ✅ |
+
+🔑 两条变异**症状不同**（缺文件 vs 配方失配）⇒ 这是**两个**边界，不是一条弱断言被两次触发（§6a-3 的判据）。
+🔑 **M1 里那 1 条保持绿的是正向控制**，它本来就不读沙箱清单（它读的是**传进去的参数**）—— 整片红里唯一还能区分「算法 vs 硬编码」的那一条没被一起打掉，这正好从反面证明控制项是独立的。
+
+### 53.29.8 与 §53.22 的关系（§0：这是一条「前提被改」的重述）
+
+- §53.22.2 记的是「**这是一个取舍，不是纯缺陷**」；§53.22.3 记的是「**未决（改动，留拍板）**：53.22.2 的三个选项」。
+- 本节把其中一项**落地**（选项 b），因此：
+  - **「未决」那条现在只剩 (a)/(c)**；
+  - **「取舍」这个结论不变** —— 磁盘仍按 ≈3 MB/天增长，因为本项**没有**触碰保留策略。
+- 🔴 **本项不声称解决了增长。** 它解决的是**可解释性**：目录列表里那个 `pmrf_test_data_xxxx` 现在自带答案。将来真要回收空间时，配方在目录里、且**被判据保证仍然匹配**。
+
+### 53.29.9 门与字节证据
+
+| 门 | 结果 |
+|---|---|
+| `ruff check app/` | All checks passed |
+| `ruff check tests/test_test_sandbox_is_declared.py tests/conftest.py` | **1 个 F401，在 HEAD 就存在**：`import app.core.config as _config_module`（conftest.py:131）。**我未触及它**（`git diff` 里它只出现在 hunk 头部，不是改动行）；且 `tests/` 不在项目 lint 门内（`ruff check tests/` 在本项之前就有 324 个既有错误）。新测试文件 **0 错**。 |
+| `mypy app/` | Success: no issues found in 331 source files |
+| `python -m scripts.generate_types --check` | `generated-types.ts is up to date` |
+| 后端全量 pytest（`tests/`，本项影响面**就是全集**） | junit `tests=7672 failures=0 errors=0 skipped=11`（1329.6 s）|
+
+🔴 **`conftest.py` 的 `git diff --numstat` 是 `173 3`，但其中只有 `+104 −1` 是本项的。**
+该文件在**本项开工之前**就带着未提交的重定向工作（`EVENT_AUDIT_FILE` / `SCHEDULER_LOCK_FILE` / `LOG_FILE`）。
+**分解方式**（`.workbuddy/audit-2026-10-03/split_conftest_diff.py`）：把本项的三处编辑**逐字节反向**得到一个 probe，再 `git diff --no-index --numstat` 得 probe 相对 HEAD = **`+69 −2`**。
+⇒ `69 + 104 = 173`、`2 + 1 = 3`，**可加性成立**。
+🔑 而且这个 `+69 −2` 与上一轮记录的「工作树 `+69 −2` 未提交」**逐字一致** ⇒ 这既是分解的自检，也是「半净化窗口」那条既有结论的独立复核。
+
+**文件画像**（字节级，均无 BOM）：
+
+| 文件 | sha256[:16] | bytes | CRLF | bare LF |
+|---|---|---|---|---|
+| `backend/tests/conftest.py` | `f5344be868fcfe10` | 31,448 | **584** | **0** |
+| `backend/tests/test_test_sandbox_is_declared.py`（新） | `1639207b509de6a3` | 9,541 | **200** | **0** |
+
+⚠️ 新测试文件是 Write 工具的产物（**落盘为 LF**），已按 4.3 的配方做字节级 LF→CRLF 对齐，验收四条**同时**成立：CRLF `0 → 200`、bare LF `200 → 0`、字节增量 `200 == 200`、无 `\r\r\n`。**这是本会话第二次踩同一个坑**（第一次是第 4 项），说明「新建 `.py` 默认不是 CRLF」已应当作本仓的**前提**而不是意外。
+
+⚠️ **为什么全量回归是必跑而非可选**：`conftest.py` 被**每一个**测试文件导入 ⇒ 本项的影响面**就是全集**，不存在"更小的影响面"可选。判据同样只取 junit 的 `failures`/`errors`；这次进程尾部也被 `[safe-delete]` 拦了（指纹：`[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":9791,...,"targets":["...\\Temp\\pytest-of-Alin\\garbage-..."]}` —— 拦的是 pytest 自己的临时目录清理，**不是测试失败**），所以 `-q` 的末尾统计行看不到，判定完全来自 junit。
+
+### 53.29.10 未决 / 明确不做
+
+- ⏳ **(a) 保留最近 N / (c) 先导出再删除** 两条策略仍留操作员拍板；判据已经补齐，所以现在**具备**拍板条件了。
+- ⏳ 历史沙箱目录与更早会话的 35 个散件：**只报不删**。
+- ⏭️ **不提交。**
+
+## 53.30 待办 ①／选项 A：`world_cup_api_football_validate` 那个 503 —— 一次 2026-07-07 的**一次性产物**，被 2026-09-24 的**可见化变更**提升成「进程一起来就报」（零代码改动）
+
+### 53.30.1 结论先行
+
+- 这个 503 **不是**进行中的故障，也**不是**假阳性：账本里那一行**确实**是 `failed`，`/api/health` 的判据**确实**该红。
+- 它的成因是**两件互不相干的事撞在一起**：① 2026-07-07 一次**手动触发**的验证，拿到的是一次**干净的成功响应 + 空数组**（provider 答「0 场」）；② 2026-09-24 的 `6b820e7` 把一个**只读最新一行**的判据接进了 `/api/health`。
+- ⇒ **07-07 那天没有任何东西被写成「失败」以外的样子；是 09-24 才有人开始读它。** 时间差 79 天，这解释了「为什么一个七月的读数会在十月把进程按在 503 上」。
+- **本项零代码改动、零文档外改动**（本节本身是追加）。三个探针全部只读 / 沙箱内演绎，生产文件 **`files changed: 0`**。
+- 🔴 **我一度以为的两件事，实测都错了**（53.30.6 / 53.30.8），两条都在下面显式记下：一条是「第三步有死锁」，一条是「22 处 `str(exc)` 是泄漏放大器」。**后者是我上一轮的结论，本节点名推翻它。**
+
+### 53.30.2 那唯一一行，逐字段
+
+账本 `backend/v2_loop.db`（只读，sha16 `35346d467fe24ce2`，17,772,544 B，**1759 行 / 19 个 job 名**）。该 job **全史只有 1 行**：
+
+| 字段 | 值 |
+|---|---|
+| `id` | `a6acb79c-b3c8-413c-baf2-bd60b228609d` |
+| `started_at` | `2026-07-07T17:46:46.955912+00:00` |
+| `finished_at` | `2026-07-07T17:46:48.524224+00:00` |
+| `duration_ms` | `1568` |
+| `status` | `failed` |
+
+`result_json` 的 8 个键（**注意 `step_count`**）：
+
+```
+provider            : 'api_football'
+ok                  : False
+error               : 'API-Football returned 0 fixtures for league=1 season=2026; check provider coverage/config before import.'
+step_count          : 2
+failed_step         : 'fixture_fetch'
+fixture_count       : 0
+covered             : None
+missing_from_store  : None
+```
+
+🔑 **`step_count = 2` 是那一行在自证它停在哪**：验证器共三步，它只记了两步 ⇒ 第三步（`fact_coverage`）**从未执行**。这比读 `failed_step` 更硬 —— `failed_step` 是验证器**自己**填的字段，`step_count` 是 `len(result["steps"])`，两者独立。
+🔑 另两个 `None`（`covered` / `missing_from_store`）是**同一件事的第三个证人**：那两键只在第三步之后才有值。
+
+### 53.30.3 为什么这次**不是**异常：`except` 的格式串一次都没出现过
+
+`validate_world_cup_api_football_pipeline()`（`services/world_cup_api_football_source.py:237-330`）有**两条**失败出口，形态不同：
+
+- `:290-293` —— **响应成功但列表为空** ⇒ `result["error"] = fixture_error`，即上面那个**固定串** `"API-Football returned 0 fixtures for league=… season=…; check provider coverage/config before import."`
+- `:294-303` —— **真抛异常** ⇒ `error = f"Fixture fetch failed: {type(exc).__name__}"`
+
+账本里写的是**前者**；后者在那个 job 的整段历史里**一次都没出现**。⇒ 07-07 那天不是网络/钥匙/超时的异常路径，是**服务器回了 200 和一个空 `response` 数组**。
+🔑 佐证：**连接步通过了**（`step_count=2` 意味着 `:246` 的 `if not conn["ok"]` 没触发）⇒ 那天 `WORLD_CUP_API_FOOTBALL_API_KEY` **存在且有效**。现在它 len=0（53.30.10）。
+
+### 53.30.4 本地对照：本机有 104 场，而 provider 在**赛期内**答「0 场」
+
+只读 `world_cup_predictions.db`（`.workbuddy/audit-2026-10-03/probe_health_503_local.py`）：
+
+- `match_fixtures` 表 **104 行，全部 `finished`**；
+- kickoff 区间 `2026-06-11 → 2026-07-19`，其中 **2026 年 7 月内有 26 场**；
+- `sports_facts.json` 里 WC 的 `match_result` 事实：**0 条**。
+
+⇒ 07-07 那天**正在世界杯赛程中间的休息日附近**，本机自己的赛程表说「这届有 104 场」。provider 答 0。**两个数据源在同一个问题上给出互斥答案**，而 `league=1 / season=2026` 这两个参数**恰好也是本仓自己配的**（53.30.10）—— 所以「provider 真的没有」与「这组 league/season 对 provider 没意义」两种解释**都还活着**，本项**没有**把它们分开（53.30.12）。
+
+### 53.30.5 归因：`latest_run_per_job` 由 `6b820e7` 引入 ⇒ 503 是 09-24 才**可见化**的
+
+```
+$ git log --oneline -1 6b820e7
+6b820e7 feat(security): stage 2A production hardening — ledger alarm gate, realtime auth, preflight (#105)
+```
+
+`/api/health` 的 `degraded` 判据（`main.py:529-538`）是 `bool(failed_runs) or (SCHEDULER_ENABLED and not scheduler.running and not …lock())`，而 `failed_runs` 的**数据源**是 `loop_status` → `latest_run_per_job()`。后者由 `6b820e7`（**2026-09-24**）引入。
+⇒ 同一条 07-07 的行，在 **09-24 之前**对 `/api/health` **不可见**；从 09-24 起，它成为 `failed_runs` 的**单元素**。
+🔑 **这条行本身没有变，变的是「有没有人读它」** —— 这正是 §4.1 那条「结论会静默过期」的**镜像形态**：这里是「缺陷会静默**诞生**」。
+
+**它还成立吗？** 成立，而且是**静止**的：
+
+- 账本最大 `started_at` = `2026-09-26T15:32:31.305310+00:00` ⇒ 生产库最后一次写入**早于**本次审计，07-07 之后该 job **再没被写过**。
+- `app/` 里 `world_cup_api_football_validate` 只出现 3 类位置：**1 个生产者**（`events.py:798`，字面量）、**1 个读取门**（`events.py:766`）、**1 组只读消费者**（`world_cup_data_source_status_service.py:139/355`）。**调度器里没有它** ⇒ 「重跑一次」**不是自动的**，必须有人去打那个 POST 路由（07-07 就是这么来的）。
+
+### 53.30.6 🔴 我一度以为的「死锁」被证伪
+
+我原本的假设：第三步 `coverage_ok = len(missing) == 0 or len(stored_facts) > 0`（`:320`）若为假，`result["ok"]` 就永远不可能是 `True` ⇒ 「永远修不好」。**读代码即被推翻**：
+
+```
+:320    coverage_ok = len(missing) == 0 or len(stored_facts) > 0
+:321    result["steps"].append({"name": "fact_coverage", "ok": coverage_ok, "detail": coverage})
+:323    result["ok"] = True          # ← 无条件
+```
+
+`coverage_ok` **只被记进 `steps[]`，从不参与 `result["ok"]`**。⇒ **无死锁**。
+🔴 但这句话反过来是一处**真缺陷**：`steps[]` 里那一步可以带着 `"ok": False`，而**同一个 `result` 的顶层 `ok` 是 `True`** ⇒ **同一份 payload 里两个 `ok` 互相矛盾**，而顶层那个才是路由判 `status` 的依据（`:807`）。这是「0/False 必须只说一件事」（§5）的同族问题，**登记备查、不当场改**（53.30.12）。
+
+### 53.30.7 🔴 可见性：同一个 `error` 出现在**三个**面上，鉴权姿态**各不相同**
+
+用副本端到端实证（`.workbuddy/audit-2026-10-03/probe_health_503_endtoend.py`：11 个存储路径全部重定向到沙箱副本 + 对生产目录做前后 sha 快照）。生产 **`files changed: 0`**。三个面的实测：
+
+| # | 路由 | 鉴权 | 匿名/本部署能拿到 `error` 吗 |
+|---|---|---|---|
+| 1 | `GET /api/health` | **匿名 + 可选 key** | ❌ 匿名只给 `['duration_ms','finished_at','job_name','started_at','status']`（`_visible_run` 剥掉 `error`/`result`，`loop_status_service.py:127-140`） |
+| 2 | `GET /quality-metrics/anomalies` | **0 个鉴权依赖**（`quality_metrics.py:283-284`） | ✅ **原样全文**，在 `scheduler_job_failed` 的 `detail.error` 里（`:318-330`） |
+| 3 | `GET /sports/world-cup/data/sources/status` | `Depends(require_write_key)`（`events.py:535-537`） | ⛔ 本部署 **503**（`API_WRITE_KEY` 未配置 + `ALLOW_OPEN_WRITES=False` ⇒ `security.py:16-27`） |
+
+实测 payload（面 2，本部署共 3 条异常）：
+
+```
+code='scheduler_not_running'         severity='high'
+code='scheduler_job_failed'          severity='high'   <<< THE ONE
+    detail = {"job_name": "world_cup_api_football_validate",
+              "started_at": "2026-07-07T17:46:46.955912+00:00",
+              "error": "API-Football returned 0 fixtures for league=1 season=2026; ..."}
+code='llm_degraded_mode_events'      severity='low'
+```
+
+🔑 **本部署有一条「原因通道」是开着的，而它不是文档点名的那个。** 而且——`api_health` 的详情开关是 `include_run_details=is_write_key_valid(x_api_key)`（`main.py:527`）：本部署 `API_WRITE_KEY` len=0 ⇒ `is_write_key_valid` **恒 `False`**（`security.py:8-12`）⇒ **`/api/health` 在本部署下对任何人都不给 `error`**。所以面 2 是**唯一**可达的原因面。
+⚠️ 但 `SCHEDULER_ENABLED=True` 且本部署 `scheduler.running` 的实测姿态决定 `scheduler_not_running` 那条在不在 —— 探针里 `loop_status(scheduler_running=False, …)` 是**显式传参**，不是读进程真值；**面 1 的 200/503 本身在任何调用者下都可见**，这条与传参无关。
+
+**核对 RUNBOOK（`docs/ops/RUNBOOK.md`）483-487 行**，原文：
+
+> The response names the failing component and nothing else: recorded errors carry the component name and the exception *type*, never `str(exc)`, because a sqlite3 or `OSError` message routinely contains the database path and an authenticated `/api/health` returns the `error` column verbatim.
+
+- 前半句（`never str(exc)`）**成立** —— 但**不是因为调用点自律**，而是因为 `_finish_run` 的覆盖（53.30.8）。
+- 后半句把暴露面写成「an **authenticated** `/api/health`」⇒ **它把闸门认成了鉴权。真实闸门在写侧。** 面 2 这条例外说明：**存在一个 0 鉴权路由会把同一列原样吐出来**。所以 483-487 行**不是错的，是不完整的**，而完整性在这里恰好是安全论证的一部分。**登记备查，不当场改**（RUNBOOK 不属本文件）。
+
+### 53.30.8 🔴 纠正我自己：那 22 处 `error=str(exc)` **不是**放大器，是**被丢弃的死计算**
+
+我上一轮的结论是「`app/` 里 21 处 `finish_run(..., error=str(exc))` 是这条矛盾的可能放大器」。**本节点名推翻它。** 全 `app/` 普查（AST，两种调用形态 `ast.Attribute` + `ast.Name`）：
+
+- **38 处** `finish_run`/`_finish_run`/`_finish_*` 调用带 `error=` 关键字；分布：`core/scheduler.py` **30**、`api/routes/events.py` 2、`main.py` 1、5 个 `world_cup_*` service 各 1。
+- 其中 `error=str(exc)` 共 **22 处**（**不是 21**——我上一轮的手抄清单漏了 `:827`），**22/22 都同时传了 `exc=exc`**，**没有一处** 是「传了 `str(exc)` 却不传 `exc`」。
+
+为什么「同时传 `exc=`」就让它失效 —— `_finish_run`（`core/scheduler.py:158-196`）：
+
+```
+:178    safe_error = error
+:179    exc_type = type(exc).__name__ if exc is not None else None
+:180    if status == "failed" and exc_type is not None:
+:181        safe_error = f"Scheduler job failed: {exc_type}"     # ← 覆盖掉 str(exc)
+:185    loop_run_store.finish_run(run_id, status, result=result, error=safe_error)
+```
+
+⇒ 那 22 个 `str(exc)` 被**急切求值后整段丢弃**。它们**不泄漏**，只是**白算**。RUNBOOK「never `str(exc)`」之所以成立，靠的就是 `:180-181` 这三行覆盖。
+🔑 三条旁证：① **`exc_type=` 这个关键字全仓 0 使用**（`_finish_run` 的形参叫 `exc`，判据由 `type(exc)` 现场派生）；② 另外 4 处传变量的也安全 —— `scheduler.py:185` 传 `safe_error`（已净化）、`scheduler.py:439` 传本地拼的 `f"SQLite integrity failed for: …"`、`events.py:803` 传 `f"API-Football pipeline validation failed: {type(exc).__name__}"`（只类型名）、`main.py:115` 的 `error` 形参的**全部调用点**都传 `None` / `_safe_error(...)`（= `f"{what}: {type(exc).__name__}"`，`main.py:76`）；③ 这个覆盖**已被 6 个测试文件钉住**（`test_scheduler.py` 6 处、`test_scheduler_ledger_alarm_gate.py` 8 处、`test_optimization_cleanup_job.py:241`、`test_drift_alert_job.py:165`、`test_scheduler_live_update_ledger.py:202`、`test_sentry_integration.py:187/223`，断言形如 `== "Scheduler job failed: RuntimeError"`）。
+🔴 **真正该记的风险不是「现在漏」，而是「这条不变量只由 `_finish_run` 一个函数兜着」**：任何新增一处 `_finish_run(run_id, "failed", error=str(exc))` **忘了带 `exc=`**，就会**立刻**把原始文本写进账本，而**目前没有任何静态守卫会红**（现有 6 个测试钉的是**具体 job 的行为**，不是**调用点的不变量**）。本仓已有成熟的 AST 守卫先例（`test_runtime_stores.py` / `test_elo_provenance.py` / `test_event_store_source_names.py`）⇒ 这条**具备做成守卫的条件**，但属代码改动，**登记、不当场做**（53.30.12）。
+
+⚠️ **方法论旁注（一次差点发生的空扫描）**：本次普查第一版用 `b.decode("utf-8")`，**2 个文件因 BOM 被 `ast.parse` 拒绝**（`services/llm_gateway_service.py`、`services/world_cup_tournament_state_service.py`）⇒ 它们**静默地从人口里消失**。改用 `utf-8-sig` 后 0 跳过，读数不变（38 与 22 在两种口径下相同）。**「跳过」与「拒绝」必须分开报**，否则「某文件不在普查结果里」会被读成「它没问题」。
+
+### 53.30.9 这条 `failed` 行有**第二个后果**：它同时**关掉**导入路径
+
+`POST /sports/world-cup/data/bundle/api-football/import`（`events.py:750-762`）第一句就是 `_require_successful_api_football_validation_before_import()`（`:765-782`）：
+
+- `last_run(...)` 非 dict ⇒ **409** `"Run API-Football pipeline validation before import."`
+- `run.get("status") != "success" or result.get("ok") is not True` ⇒ **409** `f"Latest API-Football pipeline validation failed{suffix}"`
+
+⇒ 「health 503」只是**症状**；**API-Football 这个 provider 的导入通道整体被这一行关着**。同一行、两个面、两套状态码（503/409），**由两个不同的读法产生**（`latest_run_per_job` vs `last_run`）—— 这一点在 §5 的口径下值得单列：它**不是**「同一个 0 有两种解释」，而是「同一个 `failed` 有两种**后果**」。
+
+### 53.30.10 为什么不做 / 做不到
+
+- 🔴 **不建议「手动把那行改成 success 或删掉」**：那是在**改生产证据库**，而这个库正是所有健康判据的唯一真相源（`main.py:86-95` 的 docstring 逐字说了这件事）。**清它的唯一正当方式是让该 job 再成功跑一次。**
+- ⛔ **但本部署做不到**：那个生产者路由（`events.py:793-796`）带 `Depends(require_write_key)`，本部署 `API_WRITE_KEY` len=0 + `ALLOW_OPEN_WRITES=False` ⇒ **503**（`security.py:16-27`）。⇒ **「天然解药」正好被写面关闭挡在门外**，而**这不是**本次调查引入的、是既有姿态。
+- **本部署配置姿态实测**：`API_WRITE_KEY` len 0 / `ALLOW_OPEN_WRITES=False` / `SCHEDULER_ENABLED=True` / `SCHEDULER_LOCK_ENABLED=True` / `WORLD_CUP_API_FOOTBALL_API_KEY` **len 0** / `BASE_URL=https://v3.football.api-sports.io` / `LEAGUE_ID=1` / `SEASON=2026` / `settings` 上**不存在** `AUTOTRADE_ENABLED` / `SENTRY_DSN` len 0（⇒ `_finish_run:201-212` 的 Sentry 转发在本部署是 no-op）。
+- ⏳ **「provider 配置缺失」是更上游、独立的一件「未声明缺失」**：`LEAGUE_ID=1` / `SEASON=2026` 是**本仓自己填的**，而 provider 在赛期内答「0 场」。这是不是「对 provider 而言这组参数无意义」，本项**没有**判定。**登记，不代决。**
+
+### 53.30.11 交叉核对
+
+- **`start_run` 调用点 = 31**（AST，`app/` 全域，含 BOM 文件），文件分布 `scheduler.py` **24** / 6 个 service 各 1 / `main.py` 1 / `events.py` 1 —— 与 §53.28 记的「31 个写入点」**逐字一致 ⇒ 独立吻合**。（本节点的复查同时**澄清**了那个口径：31 是 **`start_run`** 口径，不是「start+finish」；`finish*` 全量是 **72** 处，其中 38 处带 `error=`。）
+- 上面三个探针（`probe_health_503.py` / `probe_health_503_local.py` / `probe_health_503_endtoend.py`）全部复跑通过；生产 `v2_loop.db` sha16 全程 `35346d467fe24ce2`。
+
+### 53.30.12 未决 / 明确不做
+
+- ⏳ **从未用现有 key 试过该路由** —— 07-07 那次是唯一一次真实调用，key 现已移除 ⇒ **无法区分**「provider 真的说 0」与「这组 league/season 对 provider 没意义」。**不代决。**
+- 📝 **登记（三处，均不当场改）**：① `RUNBOOK.md` 483-487 行把暴露面写成「authenticated `/api/health`」，**真实闸门在写侧**，且存在 0 鉴权路由（`/quality-metrics/anomalies`）会原样输出该列；② `_finish_run` 的覆盖是**唯一**防线，**22 处 `str(exc)` 靠「都带了 `exc=`」才安全**，建议做成 AST 守卫；③ `validate_…pipeline` 的 `steps[].ok` 与顶层 `ok` **可以互相矛盾**（`:320-323`）。
+- ⏭️ **本项零代码改动。不提交。**
+
+## 53.31 选项 A 的收尾：把「`error` 列的唯一防线」钉成**调用点不变量**（新增 1 个守卫文件 / 10 条用例 / 3 次四相变异）
+
+### 53.31.1 结论先行
+
+- §53.30.8 记的那条风险——**「这条不变量只由 `_finish_run` 一个函数兜着，且没有任何静态守卫」**——本项把它补上了：新增 `backend/tests/test_ledger_error_sanitization_guard.py`（**10 条用例**，AST 遍历 `app/` 全域）。
+- 它钉住**两条**不变量：① 凡 `finish_run`/`_finish_run` 的 `error=` 实参能读到异常**消息**的，必须**转发 `exc=`**；② 转发 `exc=` 的（= 靠覆盖洗白的）调用点，`status` 必须是**字面量 `"failed"`**。
+- **扫描器本身就是被测对象**：`analyse_module(source, filename)` 是**源码文本的纯函数**，所以「它到底会不会红」可以用**合成片段**正面证明，而不是只验当前仓库恰好全绿（§6a-3 的「空头守卫」在**单一实例**场景下的唯一解）。
+- 🔴 顺带证到一条**方法论事实**：这条不变量的人口，**AST 数与文本数不相等**（**22 vs 21**）—— 第 22 处多了个 `result=` 实参。**这就是「用 grep 数调用点」会算错的一手证据**，也解释了为什么 §53.30.8 里我手抄的「21」既漏了 `:827`、又对不上这个 22。
+- ⏭️ 本项**不改任何生产代码**；登记 ① 落成动作（RUNBOOK 追加引块，不改写原句）；登记 ③ **不落动作**（理由是取值决定，见 53.31.10）。
+
+### 53.31.2 为什么这条不变量此前**钉不住**
+
+行为测试**能**钉住「覆盖存在」——`_finish_run` 删掉覆盖后，**6 个行为测试文件会红**（本项用 M3 实测，见 53.31.7）。但它们钉住的是**那 6 个 job 的行为**：
+
+```
+test_scheduler.py（6 处断言）· test_scheduler_ledger_alarm_gate.py（8 处）
+test_optimization_cleanup_job.py:241 · test_drift_alert_job.py:165
+test_scheduler_live_update_ledger.py:202 · test_sentry_integration.py:187/223
+```
+
+断言形如 `row["error"] == "Scheduler job failed: RuntimeError"` ⇒ 换句话说是**按 job 抽查**。而泄漏面的定义是「**任意一个**调用点忘了转发 `exc=`」⇒ **属性在调用点上，就不可能在恰好被抽查到的那几个上被钉住**。**第 23 个调用点会直接上线，没有一个测试会点它的名。**
+
+### 53.31.3 人口口径：61 / 38 / 22，以及三个**必须排除**的假阳性
+
+口径：`app/**/*.py`（`utf-8-sig`，见 53.31.11），`ast.parse`，收 `finish_run` 与 `_finish_run` **两个名字**（属性形态 `loop_run_store.finish_run(...)` 与裸名形态 `_finish_run(...)` 都覆盖）。
+
+| 读数 | 值 |
+|---|---|
+| 解析的模块 | **331** |
+| `finish_run`/`_finish_run` 调用点 | **61** |
+| 其中带 `error=` 的 | **38** |
+| `error=` 能读到异常**消息**的（= 人口） | **22**（全部在 `core/scheduler.py`） |
+| 其中**没**转发 `exc=` 的 | **0** |
+| 转发 `exc=` 但 `status` 非字面量 `"failed"` 的 | **0** |
+
+三个**差点被算进来**的假阳性（都在筛人口时排除了，理由各自不同）：
+
+1. **`_finished_unscored_matches`** —— 我用 `startswith("_finish")` 的宽松口径扫过它一次，它是个**查询 helper**（`world_cup_post_match_backfill_service.py:106`），**不是账本写入者**。⇒ 人口必须按**名字全等**取，不能按前缀。
+2. **5 处裸名 `finish(...)`**（3 个 `world_cup_*` service）—— 它们是**内层闭包** `def finish(result)`，写的是 **`result_json`**，不是 `error` 列；且全部**无关键字实参**。⇒ 不计入 `error` 列人口。
+3. **3 个 service 级 `_finish_*` 助手**（`_finish_audit_run` ×2、`_finish_consistency_repair_audit_run`、`_finish`）—— 调用点签名是 `(run_id, result)`，**根本没有 `error=` 关键字**。它们**内部**那句 `loop_run_store.finish_run(..., error=result.get("error") ...)` 才是写入点，**已经在 22/38 之外、但在 38 之内**（属 `error=` 的「无异常在作用域内」那一类）。
+
+🔴 **口径边界（写下来，防止后来者以为它覆盖了全部）**：本守卫**只看 `error=` 实参里引用了被捕获异常的那些**。那 4 处 `error=result.get("error") if status == "failed" else None`（`post_match:65` / `quality:628` / `result_fact:221` / `verified_correction:312`）把**任意上游服务**产出的字符串写进同一列，**本守卫不覆盖** —— 那是**另一条**独立路径，也是下一个自然目标（53.31.12）。
+
+### 53.31.4 扫描器理解哪两种形态，以及哪两种**不算**泄漏
+
+**算泄漏（两种形态都抓）**：
+
+- **直接**：`error=str(exc)`。
+- **间接**：`error = str(exc)` 之后再 `error=error` —— 这一种**纯文本搜 `str(exc)` 会漏**，靠 handler 内的**赋值定点**（`_names_carrying_the_message`，含链式赋值的 fixpoint）抓到。
+
+**不算泄漏（用 `_message_reads` 显式排除）**：
+
+- `f"...{type(exc).__name__}"` —— 只印**类名**。**这一条是必须的**：真实代码里 `events.py:803` 就是 `f"API-Football pipeline validation failed: {type(exc).__name__}"`，而它是**安全的**。一个「引用了 `exc` 就必须转发」的朴素规则会**在这里给出假阳性**。
+- `exc.__class__.__name__` —— 同族。
+
+### 53.31.5 第二条不变量：靠覆盖洗白的调用点，`status` 必须是**字面量** `"failed"`
+
+`_finish_run` 的覆盖有**合取前提**：`status == "failed" and exc_type is not None`。⇒ 一个**转发了 `exc=`** 却把 `status` **算出来**的调用点，会在**成功路径上**把原始文本原样写进列里 —— 也就是说，转发 `exc=` 只是「看起来安全」。
+实测：22 处**全部**是 `_finish_run(run_id, "failed", ...)`（status 是位置实参、字面量）。所以这条不变量**今天成立**，且**可被守卫**。
+
+### 53.31.6 四相变异（三条，症状**互不相同**）
+
+配方沿用 §4.3：备份 → 变异 → 跑 → 还原 → sha 逐字节复核；判据只取 junit 的 `failures`/`errors`。`core/scheduler.py` sha16 全程 **`bcb50541065e5268`**。
+
+| # | 变异 | 针命中 | Δ字节 | 结果 | 红的**是哪一条** |
+|---|---|---|---|---|---|
+| 0 | 无（基线） | — | — | `tests=10 failures=0 errors=0` GREEN | — |
+| **M1** | 抽掉一处 `, exc=exc` | 21 | **−9** | RED `failures=1` | `test_no_call_reads_an_exception_message_without_forwarding_exc` |
+| **M2** | 把一处 `"failed"` 换成变量 `job_status` | 21 | **+2** | RED `failures=1` | `test_a_call_relying_on_the_override_passes_a_literal_failed_status` |
+| **M3** | 删掉 `_finish_run` 的覆盖两行 | 1 | **−111** | RED `failures=15`（11 个文件） | **守卫文件 0 条红**（见 53.31.7） |
+
+三条红**症状各不相同**（不同用例名、不同断言文本），且每条**还原后都回到 GREEN**、sha 逐个对上。M1 的错误串实际读数：
+
+```
+scheduler.py:315: error= reads ['exc'] without forwarding exc=, so _finish_run's override never fires
+```
+
+⚠️ **M1/M2 的针命中是 21 不是 22** —— 见 53.31.8，这**不是** bug，是「文本人口 ≠ AST 人口」。
+
+### 53.31.7 🔴 M3 是一次**证伪实验**：docstring 里那条「耦合声明」**没有被证伪**
+
+守卫文件的 docstring 里我写下了一句关于**界限**的话（§4.3 要求「某条变异故意不存在」必须写明）：
+
+> Documented coupling: if `_finish_run`'s override is deleted, the six behaviour tests above go red — **not this file**.
+
+这句话是**可证伪的预测**，所以 M3 就把它当实验做：删覆盖 → 同时跑守卫文件 + 那 6 个行为文件（共 **104** 条）。实测：
+
+```
+m3: tests=104 failures=15 errors=0 -> RED
+    test_job_failure_is_isolated: AssertionError: 'boom' != 'Scheduler job failed: RuntimeError'
+    test_a_failing_event_read_still_fails_the_row: AssertionError: 'event store unreadable' != 'Scheduler job failed: OSError'
+失败分布：test_scheduler（6 个类各 1）· test_scheduler_ledger_alarm_gate（4）
+          test_sentry_integration（2）· drift_alert / optimization_cleanup / live_update_ledger（各 1）
+guard file failures: []          ← 0 条
+```
+
+⇒ **预测成立**：删掉安全网由**行为测试**抓（11 个文件、15 条红），**守卫文件保持全绿**。
+🔑 这条实验的价值在于：它证明了本守卫**不是**把安全网本身又钉了一遍，而是**恰好补上了另一半**——两份测试**职责不重叠**。若 M3 下守卫也红了，就说明我在文件里重复了别人已有的断言（§4.3 的「空头」在另一个方向上的形态）。
+
+### 53.31.8 🔴 顺带证到：「AST 人口」≠「文本人口」（22 vs 21）
+
+M1/M2 的针写的是最典型的那个形态：
+
+```
+_finish_run(run_id, "failed", error=str(exc), exc=exc)
+```
+
+它只命中 **21** 次，而 AST 数出 **22** 处。差的那一处是 `core/scheduler.py:764`：
+
+```
+_finish_run(run_id, "failed", result={"mode": mode}, error=str(exc), exc=exc)
+```
+
+—— 多了一个 `result=` 实参。
+🔑 这条小事实是**整节最可复用的一条**：**调用点的「形态」不只一种**，所以「按字面量 grep 数调用点」**系统性少算**。同一批取证里我已经因为它错过一次（§53.30.8 手抄清单漏了 `:827`）。**结论**：数调用点必须**按 AST 的调用节点**数，**字面量只能用来定位、不能用来计数**。
+
+### 53.31.9 登记 ① 落成动作：RUNBOOK 追加引块（**不改写原句**）
+
+`docs/ops/RUNBOOK.md` 483-487 行原句表达的是「为什么这列只写类型名」——**那个结论是对的**，它错误的是**归因**（把闸门认成鉴权）。按该文件**自己的先例**（489-497 行那条 `> **Before 2026-09-05 this section was false as written.**`），处理方式是**保留原句 + 追加引块**，而不是重写历史。
+
+插入位置：原句之后、既有 `>` 引块之前。字节级取证（`.workbuddy/audit-2026-10-03/patch_runbook.py`，写入前**先全校验**）：
+
+```
+BEFORE bytes=87015 crlf=1635 bare_lf=0 sha16=f744fc69c4136944
+needle occurrences: 1
+AFTER  bytes=87752 crlf=1645 bare_lf=0 sha16=e8b8e70563a0af5d
+prefix unchanged      : True
+suffix unchanged      : True
+byte delta == want    : True (737 == 737)
+crlf delta == want    : True (10 == 10)
+bare LF stays 0       : True
+no CRCRLF             : True
+```
+
+新增的 9 行引块说三件事：① 洗白发生在**写侧**（`_finish_run`），不在调用点；② **auth 不是**这个列的读取闸门（`/quality-metrics/anomalies` 0 鉴权原样返回）；③ 指到新守卫文件。备份在 `.workbuddy/audit-2026-10-03/RUNBOOK.md.bak`。
+
+### 53.31.10 登记 ③ 为什么**不落动作**：它是**取值决定**，不是判据缺失
+
+§53.30.6 记的那处矛盾——`validate_world_cup_api_football_pipeline()` 的 `steps[]` 里可以有 `"ok": False`（`fact_coverage` 步），而**同一个 `result` 顶层 `ok` 无条件是 `True`**（`:320-323`）。
+
+- 修它必须先回答**一个业务问题**：「算出来的 `coverage_ok` 为假时，这条 pipeline 到底算不算失败、要不要连坐挡住 import 路由（409）？」——**这是契约取值**，按 §0 **不代决**。
+- 而且**今天就改它会改变行为**：`result["ok"]` 是 `events.py:807` 判 `status` 的唯一依据，也是 `_require_successful_api_football_validation_before_import()` 放行 import 的依据 ⇒ **任何改动都会同时改 503/409 两个面的语义**。
+- ⇒ 本项**只登记**：建议的下一步是**先把它变成可观测**（例如把 `coverage_ok` 也提到 `result` 顶层并起一个**不与 `ok` 同名**的键），让操作员看得见矛盾，**再由人定取值**。
+
+### 53.31.11 门与字节证据
+
+| 项 | 读数 |
+|---|---|
+| `ruff check app/ tests/test_ledger_error_sanitization_guard.py` | `All checks passed!` |
+| `mypy app/` | `Success: no issues found in 331 source files` |
+| `python -m scripts.generate_types --check` | `generated-types.ts is up to date.` |
+| 新守卫文件 junit | `tests=10 failures=0 errors=0 skipped=0` |
+
+**新文件画像**（`backend/tests/test_ledger_error_sanitization_guard.py`，Write 工具产物 = **LF**，已做字节级对齐）：
+
+| 时点 | sha256[:16] | bytes | CRLF | bare LF |
+|---|---|---|---|---|
+| 落盘（LF） | `902fa8272c9b59d8` | 14,043 | 0 | 353 |
+| 对齐后（CRLF） | `ca66caf917c6cac7` | 14,396 | **353** | **0** |
+
+验收四条**同时**成立：CRLF `0 → 353`、bare LF `353 → 0`、字节增量 `353 == 353`、无 `\r\r\n`；无 BOM。**这是本会话第三次踩「Write 工具落盘为 LF」这个坑**（第 4 项、第 7 项之后）。
+⚠️ 顺带核过：`.workbuddy/audit-2026-10-03/*.py`（含本项新增的 `mutate_itemA.py`、`patch_runbook.py`）**本来就地就是纯 LF** ⇒ **不需要**动，**改了反而造出全文件 diff**。
+
+### 53.31.12 未决 / 明确不做
+
+- ⏳ **本守卫只覆盖「`error=` 引用了被捕获异常」这一条路径。** 另一条路径（`error=result.get("error")`，4 处）把**上游服务产出的字符串**写进同一列 → **未覆盖**，是下一个自然目标。判据已经现成（同样的 AST 手法），但**要先确定「什么算上游产出的原始异常文本」**，否则会做成一张**豁免表**而不是一条不变量。
+- ⏳ **登记 ③**（`steps[].ok` vs 顶层 `ok`）**只登记不落动作**，理由与建议见 53.31.10。
+- 📌 **`main.py:76` 的 `_safe_error`** 与 **`events.py:803`** 是**两条独立的「只写类型名」约定**（同形不同源）⇒ 将来若要做 §8d 的「重复与漂移」检查，这两处是候选；本项**不合并**（同形≠同义，§4.1）。
+- ⏭️ **本项不改任何生产代码，不提交。**
+
+## 53.32 攻边界：先定义「上游产出的原始异常文本」，再把「继承」钉成可执行不变量 —— 以及**上一轮那处修复被本轮实测证伪并回退**
+
+### 53.32.1 结论先行（含一条自我更正）
+
+- **定义**（本项的核心交付，§53.31.12 说「不先定义就会做成豁免表」的那个定义）：
+
+  > 一个值算**原始异常文本**，当且仅当它**取自一个被捕获异常、且取法携带该异常的消息**：`str(exc)` / `repr(exc)` / `f"{exc}"` / `exc.args`。
+  > **不算**：只取类名（`f"{type(exc).__name__}"`、`exc.__class__.__name__`）、只取**数字**字段（`exc.code` / `exc.status_code` / `exc.errno`）、以及**声明字面量**。
+  >
+  > 而**不变量**不是「值是不是原始文本」，是**「这个值是从哪来的」**：写进账本 `error` 列的字符串，必须在**写下它的那个作用域里可归因**。读一个**本作用域没接收到的** mapping 的键 = **洗白**（laundering）—— 那个异常在别的模块的 `except` 里，本处连 `exc=` 都无处转发。**判据是归因，不是内容**；内容判据写不出来，因为本仓 46 处整体字符串化里 44 处捕的是库/OS 异常，`str(exc)` **不是**本仓的违规。
+
+- **普查三读数**：键读到**异常消息**的形状 **30 处**（22 处 `error=` kwarg + 8 处 `dict['error']`），其中 **3 处是假阳性**（`f'HTTP {exc.code}'`，数字状态码）⇒ **真 5 处**；**读上游 mapping 的 `"error"` 键**的形状 **6 处**，**全在出口方向**（把账本行读出来渲染成 API 响应），**入口方向只有 1 处**（`post_match:212`）。
+- 🔴 **本项最重要的一条是自我更正**：§53.31 之后我落的**那处 `post_match:212` 修复是错的，本轮实测证伪并已回退。** 它把 `"error": sync_result.get("error")` 换成 `"error": "fixture_sync_failed"` —— 而**账本承载产出方的失败原因**是本仓**有测试钉住的契约**，一改就有 **2 条既有测试变红**（`test_sync_error_short_circuits_without_scoring`、`test_post_match_backfill_does_not_expose_or_persist_provider_error_body`）。回退留痕：`git diff --numstat` = **`7 0`**（只留 7 行注释，**删除数 0**）。
+  **教训不是「测得不够」，是「我先改了产物的上游消费者，而没先读上游」**——真正的裸文本产生点在**产出方**（`world_cup_match_service.py:322` 的 `str(e)`），不在这条 relay。
+- **本轮实际交付**：① 上述定义与普查；② 守卫文件的**第二套不变量**（同样的 AST 纯函数手法，跨模块 taint fixpoint），把「继承逃逸」钉成**棘轮**（§53.32.8）；③ 一条**契约冲突的完整取证**（§53.32.10，政策族 6 条测试要求声明 token，而 1 条断言要求裸消息）。
+- ⏭️ **那处契约冲突只差 1 行生产代码**，但它是**取值决定**（§0）⇒ **只登记、不代决、不落动作**。本轮**不新增任何功能性的生产代码改动**；唯一的生产文件改动是 `post_match:212` 的 **7 行注释**（回退后原位留痕）。
+
+### 53.32.2 透传链：三跳，每一跳都有测试看着
+
+链路（三跳，端点各被测试钉住）：
+
+| # | 位置 | 形态 | 谁钉住它 |
+|---|---|---|---|
+| ① | `world_cup_match_service.py:315-320` | `except FootballDataAPIError:` → **字面量** `"Football-Data.org API request failed"` | `test_world_cup_match_service.py:544`（`assertEqual`）；`test_world_cup_analytics_routes.py:1218/:1224`（`assertEqual`） |
+| ② | `world_cup_match_service.py:321-326` | `except Exception as e:` → **`str(e)`** ← **裸文本的真正入口** | `test_world_cup_match_service.py:510-514`（`assertIn("network down", result["error"])`） |
+| ③ | `world_cup_post_match_backfill_service.py:212`（原） | `"error": sync_result.get("error")` ← relay | `test_world_cup_post_match_backfill_service.py:216/:224`（`assertEqual("source unavailable")`） |
+| ④ | `world_cup_post_match_backfill_service.py:65` | `error=result.get("error") if status=="failed" else None` ← **账本 sink**，**不转发 `exc=`** | 无（结构性） |
+
+关键结构性事实：**sink 转发不了 `exc=`**，因为它手上没有异常 —— 异常在别的模块被捕获（①②）。所以 `_finish_run` 的净化器在这条链上**结构性地不可达**，而不是「忘了调」。
+
+- `world_cup_match_service.py:315`（`FootballDataAPIError`）走的**就是**声明 token 分支 ✅ —— 这也解释了为什么 §53.32.6 的 provider-body 测试是**绿的**（敏感响应体在 `:86` 被塞进 `FootballDataAPIError`，被 `:315` 的 token 丢弃）。
+- 但**同一个函数的 `:322` 把无类型异常的 `str(e)` 原样返回** —— 这就是 §53.32.7 要处理的那一跳。
+
+### 53.32.3 定义的三条正面判据与三条反面判据（可被守卫执行）
+
+| 判据 | 归属 | 守卫里的实现 |
+|---|---|---|
+| `str(exc)` / `repr(exc)` / `f"{exc}"` / `exc.args` | **是** | `_message_reads()` 命中 |
+| `f"{type(exc).__name__}"` / `exc.__class__.__name__` | **不是** | `_SAFE_EXCEPTION_WRAPPERS = {"type"}` 排除 `type(...)`；`parent.attr == "__class__"` 排除 |
+| `f"HTTP {exc.code}"` | **不是**（数字） | `_NUMERIC_EXCEPTION_ATTRS = {"code","status_code","errno"}` |
+| 声明字面量 | **不是** | 常量节点 |
+| **`m.get("error")` / `m["error"]`，`m` 不是本函数的参数** | **违规**（洗白） | `_mapping_reads()` + `_local_producer()` + taint fixpoint |
+| `m.get("error")`，`m` **是本函数的参数** | **允许**（契约边界） | `_params(func)` 白名单 —— **这是一条原则，不是名录** |
+
+🔴 **`_NUMERIC_EXCEPTION_ATTRS` 是定义的一部分，不是豁免**。本节第一次实现时漏了它，代价是：3 处 `f'HTTP {exc.code}'` 污染了 `test_world_cup_api_football_connection` / `test_world_cup_sportmonks_connection`，再经 `conn.get("error")` **传导**到 `validate_*_pipeline`，于是 `events.py:812` 变成**假阳性** —— **一处定义缺口，三个误报**。把「数字字段不算消息」写进共享定义后，产出方集合从 13 收敛到 **9**（见 §53.32.8），三个误报同时消失。
+
+🔴 **`"status"` 不是 sink 键**。sink 的写法是 `error=result.get("reason") if result.get("status") == "error" else None` —— 若按整表达式取键，`"status"`（**条件**里的读）会被当成「sink 消费的键」。判据要用**能供值的位置**（`_value_positions`：`IfExp` 只取 body/orelse，`BoolOp` 取各操作数），不取值守卫条件。这条由 `test_the_sink_keys_are_derived_and_not_widened_by_a_guard_condition` 精确钉住（断言 `("error","reason")`，不是子集）。
+
+### 53.32.4 产出方人口：键读到异常消息的形状（30 处 / 5 真 / 3 假）
+
+普查件 `.workbuddy/audit-2026-10-03/census-errorkeys.txt`，handler 绑定名直方图 `{None:492, 'exc':268, 'e':32, …}`：
+
+| 类 | 处数 | 位置 |
+|---|---|---|
+| `error=` kwarg，`str(exc)` | **22** | 全在 `core/scheduler.py`，status 全是字面量 `"failed"`，22/22 传 `exc=`（§53.31 已覆盖） |
+| `dict['error']`，**真消息读** | **5** | `quality_metrics.py:686`、`quality_diff_service.py:200`、`sentiment_aggregator.py:260`、`sports_fact_service.py:102`、`world_cup_match_service.py:322` |
+| `dict['error']`，**假阳性** | **3** | `world_cup_api_football_source.py:212`、`world_cup_sportmonks_source.py:117`、`:190` —— 全是 `f'HTTP {exc.code}'` |
+| 合计 | **30** | |
+
+**独立交叉校验**：第二套不变量算出的「能在 `"error"` 键下吐出原始文本的函数」共 **6** 个（合成 fixpoint 后）：`build_diff` / `fetch_reddit_sentiment` / `import_sports_facts` / `quality_metrics_alerts` / `sync_world_cup_fixtures` / `run_post_match_backfill`（末一个是**继承**来的）。**前 5 个与上表「真消息读」5 处逐一对上** —— 两条互不依赖的手法（文本普查 vs AST taint）给出同一集合。
+
+### 53.32.5 键形状普查：78 个 `"error"` 键里，只有 5 个落在「会写账本的函数」内部
+
+普查件 `.workbuddy/audit-2026-10-03/census_error_key_shapes.py` / `census_writer_scoped_sites.py`：
+
+| 读数 | 值 |
+|---|---|
+| `app/` 里带 `"error"` 键的 dict 字面量 | **78** |
+| 其中「值 = 读另一个 mapping 的 `"error"` 键」 | **6** |
+| 其中「值 = 纯字符串字面量」 | **36** |
+| 其中「**同时**带 `"status"` 与 `"error"`」（信封形状） | **26** |
+| `error=` kwarg 里读另一个 mapping 的 `"error"` 键 | **0**（我第一版提取器漏了 `IfExp`，把它当成 0 —— 已修正） |
+
+**那 6 处「读上游 `"error"` 键」的全是出口方向**（把账本行/服务结果读出来渲染成 API 响应，不是写进去）：
+
+| 位置 | 函数 | 方向 |
+|---|---|---|
+| `api/routes/quality_metrics.py:328` | `/quality-metrics/anomalies` 的 `latest_run_per_job()` 循环 | 出口 |
+| `api/routes/world_cup_analytics.py:520` | `recent_runs()` 渲染 | 出口 |
+| `core/scheduler.py:1551` | `_summarize_prediction_update()` | 出口（写进 `result`，不进 `error` 列） |
+| `memory/optimization_task_store.py:90` | `_row_to_task()` | 出口 |
+| `services/world_cup_post_match_backfill_service.py:73` | `_audit_run_payload()` | 出口 |
+| `services/world_cup_result_fact_backfill_service.py:243` | `_audit_run_payload()` | 出口 |
+
+⇒ 「出口读上游的 `"error"` 键」是**正当的**（渲染），**入口**才是问题 —— 而入口**只有 1 处**。这条正交性由 `test_it_does_not_flag_a_read_outside_a_ledger_writer` 负向控制钉住。
+
+### 53.32.6 契约侧证据：政策族 6 条测试要的是**声明 token**，不是裸消息
+
+`api/routes/world_cup_analytics.py` 一族测试（`test_world_cup_analytics_routes.py`）把这件事**写成了政策**：
+
+| 行 | 测试 | 它要求的账本 `error` |
+|---|---|---|
+| `:141` | `test_consistency_repair_failure_is_safe_in_ledger_and_public_anomalies` | `"Consistency repair failed: RuntimeError"` |
+| `:187` | `test_verified_result_correction_failure_hides_and_does_not_persist_sql` | `"Verified result correction failed"` |
+| `:912` | `test_result_fact_backfill_failure_hides_and_does_not_persist_path` | `"Result fact backfill failed"` |
+| `:1013` | `test_scoring_reconcile_failure_hides_and_does_not_persist_sql` | （同类） |
+| `:1070` | `test_post_match_backfill_exception_is_safe_in_public_history_and_anomalies` | `"Post-match backfill failed: RuntimeError"` |
+| `:1173` | `test_post_match_backfill_does_not_expose_or_persist_provider_error_body` | `"Football-Data.org API request failed"`（**产出方的字面量**） |
+
+三条可比对的共同措辞：
+
+1. **账本、响应、`/quality-metrics/anomalies`、CLI 日志四处都不许出现**同一组片段：
+   `"SELECT secret"`、`"C:/private"`、`"fake-api-key"`、`"fake-ticket"`、`"fake-subprotocol"`、**`"upstream.example"`**、`"Traceback"`。
+   🔴 **`"upstream.example"`（一个 URL host）在禁止清单里** —— 这与本项探针复现出的泄漏形状（urllib 消息里的 host + query string）**是同一件事**。
+2. **类名走 `f"…: {type(exc).__name__}"` 惯用语，且这一点也被断言**：`:141` / `:187` / `:1070` 全部 `assertIn("RuntimeError", output)`（日志）—— 即「**日志记类名、禁记消息**」。
+3. `:1173` 断言的 `"Football-Data.org API request failed"` **本身就是产出方的字面量**（§53.32.2 ①）⇒ 政策与「账本承载产出方 token」**并不冲突**。
+
+⇒ **政策的意思是：账本 `error` 列放声明 token；需要区分类时用 `f"…: {type(exc).__name__}"`。** 而 §53.32.2 ② 的 `str(e)` 与 `test_world_cup_match_service.py:514` 的 `assertIn("network down", …)` 是**唯一**与政策相抵的一对。
+
+### 53.32.7 我的修复为什么错：实测，不是论证
+
+上一轮（§53.31 之后）我改的是 `post_match:212`：
+
+```
+- "error": sync_result.get("error"),
++ "error": "fixture_sync_failed",
+```
+
+**它破了 2 条既有测试**（`junit-itemB-restored.xml`：`tests=87 failures=2 errors=0`）：
+
+| 失败的测试 | 断言 | 为什么破 |
+|---|---|---|
+| `test_world_cup_post_match_backfill_service.py:216/:224` | `assertEqual(run["error"], "source unavailable")` | 账本被要求承载**产出方给的原因**（patch 出来的值），换成 token 就不等于它了 |
+| `test_world_cup_analytics_routes.py:1224` | `assertEqual(history…["error"], "Football-Data.org API request failed")` | 同上：`test_post_match_backfill_does_not_expose_or_persist_provider_error_body` 断言的正是产出方那个字面量 |
+
+🔴 **反证方向比「改测试」更值得记一笔**：这 2 条测试与 §53.32.6 的 6 条政策测试**同处一个文件家族**，而且 `:1224` 那条**同时**断言「token 进账本」与「敏感响应体不进任何地方」。所以「把 relay 换成 token」**不是**在贯彻政策，而是**在破坏政策已经划好的那条线**（产物的**内容**由产出方决定，relay 忠实传递）——**该动的是产出方**。
+
+⇒ **已回退**（`mutate_itemB.py revert`，`byte-identical to the backup: True`）。回退后该文件对 HEAD 的差异是 **`7 0`**（**纯注释插入**），sha16 `5ef80a0ac8418c83`，12,505 B / 311 CRLF / 0 bare LF。留下的注释写明：**这一行的安全性就是产出方 `sync_world_cup_fixtures` 的安全性**，并由守卫追踪这层耦合。
+
+同一轮里还有一次**我自己的测量更正**：为做「新增方向」变异，我先在 `world_cup_result_fact_backfill_service.py` 的 **成功信封**里插了 `"error": import_result.get("error"),`，并**声称它运行期惰性**（sink 只在 `status=="failed"` 时读该键）。**实测 6 条红**（`junit-itemB-m4c-behaviour.xml`：`tests=202 failures=6`）——因为 dry-run 路径上 `import_result` 是 `None`，`.get` 抛 `AttributeError`。**「读一遍觉得惰性」不等于惰性**；改成条件式 `… if import_result else None` 后才是真惰性（§53.32.8）。
+
+### 53.32.8 本轮交付的第二套不变量（机制 / 棘轮 / 人口）
+
+落点：**同一个守卫文件**（`backend/tests/test_ledger_error_sanitization_guard.py`，一层表面一个文件，复用既有 AST 助手）。
+
+机制（跨模块，因为 taint 要跨文件）：
+
+```
+_parse_modules()      一次 parse 一棵树（见下）
+_functions/_own_nodes 只在本函数体内走，不下潜嵌套 def
+_bindings()           dict 字面量键 + x[key] = value 两种产出拼法
+_value_positions()    能供值的位置（不取条件）
+_mapping_reads()      m.get(K) / m[K]，K 为常量字符串
+_message_reads()      （Layer 1 共享）消息读，已含数字字段排除
+_sink_keys()          从 sink 自己读出它消费的键 → ("error","reason")
+_producer_taint()     fixpoint：绑到消息读 ⇒ 污染；绑到「读被污染产出方的键」⇒ 也污染
+_provenance_offenders 写手函数内，绑到 sink 键且继承被污染产出方 ⇒ 违规
+```
+
+**七条实现要点（每条都由一条控制钉住）**：
+
+1. 🔴 **一次 parse**：`_parent_map` 用 `id(node)` 查表，**树与父表必须同一次 parse**。原型里我 parse 了两次 ⇒ 查表恒 `None` ⇒ `type(exc)` 排除**静默失效** ⇒ 两处**假阳性**。由 `test_it_does_not_flag_a_class_name_only_read_under_a_sink_key` 钉住（若重新引入两次 parse，这条立刻红）。
+2. **`_own_nodes` 不下潜嵌套 def**：`run_post_match_backfill` 里有嵌套的 `finish(result)` 闭包，它会调 sink；若下潜，闭包的 `result` 参数会被当成外层函数的参数 —— **那正是本节要判的那个绑定**。
+3. **`await` 要拆**：`result = await asyncio.to_thread(f)` 的值是 `Await` 不是 `Call`；不拆则 `events.py:812` 的产出方**解析不出来**，于是它**靠侥幸**通过而不是靠判据。
+4. **sink 键是推导的**：从 sink 的 `error=` 实参里读出它引用**自己参数**的键 ⇒ `("error","reason")`。`_finish` 读的是 `"reason"`，写死 `{"error"}` 会漏掉它。
+5. **产出方要一层解析 + 传导**：`validate_*_pipeline` 本身不写消息，但它 `conn.get("error")` 把 `test_*_connection` 的键**传导**过来 —— 不做 fixpoint 就看不出这条链。
+6. **参数读 = 契约边界，允许**：`_finish_audit_run(run_id, result)` 读自己的 `result` 是对的（调用方承诺了安全 token）；**承诺在调用方建 dict 处被检查**。这是一条**原则**（`src in _params(func)`），不是名录。
+7. **`x[key] = value` 也要收**：`world_cup_api_football_source` 用 `result["error"] = …` 建失败信息，只看 dict 字面量会**整块漏掉**这个产出方。
+
+人口（`analyse_app_provenance()`）：
+
+| 读数 | 值 |
+|---|---|
+| 会写账本的函数 | **38** |
+| sink 键（推导） | **`("error","reason")`** |
+| 写手函数内绑定 sink 键的站点 | **49**（40 处 `error=` kwarg + 9 处 dict 键） |
+| 能吐出原始异常文本的函数（taint 集合） | **10**（其中 6 个在 `"error"` 键下，5 个真产出 + 1 个继承） |
+| **登记在案的继承站点** | **1**（`run_post_match_backfill` 从 `sync_world_cup_fixtures` 继承 `"error"`） |
+
+**为什么是棘轮而不是「0 违规」**：状态量**今天确实违反**这条属性（§53.32.6 的政策与 §53.32.2 ② 相抵，那是取值决定，§0 不代决）。所以断言做成**精确集合比对**：
+
+- 属性**照判**（`_provenance_offenders` 每次都跑），
+- 集合**精确比对** `_RECORDED_INHERITING_SITES`（1 条，**不带行号**：`文件 (函数): '键' inherits '键' from 产出方`，所以编辑挪行不会误报），
+- ⇒ **多一条 relay 红**，**少一条也红**（名录过期也算红）。
+
+这不是豁免表：豁免表是「**不报**」，棘轮是「**报，并点名**」。登记点旁边写清了它为什么站着（两条行为测试钉住它）、以及对面政策族的 6 条测试行号。
+
+### 53.32.9 变异与门
+
+**四相（关掉/打开/还原/字节复核）**，全部判据取 junit 的 `failures`/`errors`：
+
+| 变异 | 变更 | 守卫文件 | 行为测试 |
+|---|---|---|---|
+| **M4**（上一轮的收尾实验，记录在案） | `post_match:212` → 改回 `sync_result.get("error")`（当时守卫断言 `offenders == ()`） | `tests=21 failures=1` ✅ 点名该处 | 4 文件 `tests=66 failures=0` ⇒ **行为测试全盲** |
+| **M4'** | `result_fact_backfill:108` → `"error": import_result.get("error")` | `tests=21 failures=1` ✅ 点名新 relay | 4 文件 `tests=65 failures=1` ⇒ **重叠**（被 `test_result_fact_backfill_failure_hides_and_does_not_persist_path` 抓到） |
+| **M4''** | `result_fact_backfill` **成功信封**插入 `"error": import_result.get("error") if import_result else None` | `tests=21 failures=1` ✅ 点名新 relay | **两批共 202 条全绿**（`tests=52 failures=0` + `tests=150 failures=0`）⇒ **非重叠**，只有源码级守卫看得见 |
+
+- M4' 的**重叠是信息**：说明那个信封是 §53.32.6 政策族钉住的 token —— 也反过来印证「该动产出方，不该动 relay」。
+- M4'' 是**新增方向**的干净证明：一条**运行期惰性**的 relay（成功信封上绑 `"error"`，sink 根本不读），**任何黑盒测试都不可能抓到**，而棘轮抓到了。
+- **还原**：三次 `revert` 全部 `byte-identical to the backup: True`；`world_cup_result_fact_backfill_service.py` 回到 `543a1c748b06d7fa`（= **HEAD 原状**，`git status` 里不出现）；`world_cup_post_match_backfill_service.py` 的 M4 还原回到 `f8ff2a0742ddb4ff`。
+- **四道门**（还原后）：`ruff check app/ tests/test_ledger_error_sanitization_guard.py` → `All checks passed!`；`mypy app/` → `Success: no issues found in 331 source files`；`generate_types --check` → `generated-types.ts is up to date.`；守卫文件 `tests=21 failures=0 errors=0 skipped=0`。
+
+🔴 **一处前提被改、结论未变的显式记录（§4.1）**：本项把「数字字段不算消息」并入了 **Layer 1 共享的** `_message_reads()`。既有不变量（`missing_exc_forward` / `non_literal_failed`）的读数**逐项未变**：331 模块 / 61 写手调用 / 38 带 `error=` / **22** 消息读站点 / 0 / 0 —— 与 §53.31 记的完全一致。⇒ 该改动对 Layer 1 **行为中性**，但它**确实改了共享定义**，故在此重述而非静默。
+
+### 53.32.10 未决：契约冲突只差 1 行，但按 §0 不代决
+
+**冲突**（两边都在仓库里、都被测试钉住）：
+
+| 一侧 | 位置 | 要求 |
+|---|---|---|
+| **政策族**（6 条） | `test_world_cup_analytics_routes.py:141/:187/:912/:1013/:1070/:1173` | 账本 `error` = **声明 token**（或 `f"…: {type(exc).__name__}"`）；URL host 在禁列 |
+| **相抵的一条** | `test_world_cup_match_service.py:514` | `assertIn("network down", result["error"])` —— 要求**裸消息**出现在返回 dict 里 |
+
+**建议的处置**（**未执行**，等拍板）：
+
+1. `world_cup_match_service.py:322`：`"error": str(e)` → `"error": f"Football-Data.org request failed: {type(e).__name__}"`
+   —— 与本仓 5 处既有惯用语同形（`main.py:76`、`events.py:802`、`world_cup_quality_service.py:736`、`world_cup_post_match_backfill_service.py:298`、`world_cup_api_football_source.py:295`），**按 §53.32.3 的定义属于可归因**，且**类名仍可见**（诊断价值不丢，只丢 host/path/query）。
+2. 随之把 `test_world_cup_match_service.py:514` 的 `assertIn("network down")` 改成 `assertIn("RuntimeError")`
+   —— **这一步是契约取值，按 §0 不代决。**
+3. 做完之后 §53.32.8 的棘轮应自然变成**空集**（登记点消失）⇒ 更新 `_RECORDED_INHERITING_SITES` 为空元组即可，守卫无需改判据。
+4. **不做的代价（照实说）**：今天这条链能到达账本 `error` 列与 `/quality-metrics/anomalies`（**0 鉴权依赖**）。当前**实证到的暴露是「上游主机名/路径/query 文本」**；**未实证到凭据泄漏** —— 两个 provider 的 key 都走 **header**（`X-Auth-Token` / `x-apisports-key`），不进 URL。而 provider **响应体**（`response.text[:200]`，见 `football_data_source.py:86`）在 `:315` 的 token 分支被丢弃，且这一点由 `:1173` 专门断言。
+
+### 53.32.11 明确不覆盖（本守卫的四条边界，与 §9d 末条同步）
+
+1. **只判「绑定处是不是直接/间接读了一个 mapping」** ⇒ **不判运行期可达性**：给成功信封上的 `"error"` 绑定也会被报（M4'' 正是利用这一点做非重叠证明）。这是**故意的保守**。
+2. **不追局部变量链**：`err = m.get("error")` 再 `"error": err` 这种**间接拼法，本守卫不报**（taint fixpoint 只沿「绑定的值」传播，站点检查要求值本身是 mapping 读）。
+3. **不覆盖非写手函数里的中转**：调用方若**不是**写手函数（例如某个 route 建好 dict 交给服务去写账本），那一跳不在扫描范围内。今天 49 个站点全在写手函数内，但这是**今天的事实**不是不变量。
+4. **不覆盖 `result` 里嵌的 `"sync"` 子字典**：sink 只读顶层键；上游文本仍会出现在响应体与 `result_json["sync"]["error"]`（§53.32.2 ④）。**这是另一件事**（「同一 0 必须只说一件事」的姊妹问题：**同一个字段在不同出口不同治理**），本项只登记。
+
+### 53.32.12 文件画像与字节证据
+
+**本轮唯一的 repo 内非文档改动**（`backend/app/services/world_cup_post_match_backfill_service.py`）：`6 行注释 + 1 行注释` ⇒ `git diff --numstat` **`7 0`**（**删除数 0**，符合「插入型编辑的删除数必须是 0」）；12,505 B / **311 CRLF** / 0 bare LF / 无 BOM / 无 `\r\r\n` / sha16 `5ef80a0ac8418c83`。
+
+**守卫文件**（`backend/tests/test_ledger_error_sanitization_guard.py`，Write 工具产物 = **LF**，本轮逐次 Edit 追加，**Edit 保留原行尾**，故全程 CRLF 未被破坏）：
+
+| 时点 | sha16 | bytes | CRLF | bare LF |
+|---|---|---|---|---|
+| §53.31 记录态 | `ca66caf917c6cac7` | 14,396 | 353 | 0 |
+| 本轮：Layer 2 移植后（未加棘轮） | `bf7a4f9a8b9c2f58` | 38,625 | 919 | 0 |
+| 本轮：棘轮版 | `4e08246171ce4878` | 41,453 | 972 | 0 |
+| **本轮终态**（补政策指针注释后） | **`05d8d03226b7eb79`** | **41,934** | **978** | **0** |
+
+⚠️ **§53.31.11 记的 14,396 B / `ca66caf917c6cac7` 是当时态**；本项在同一文件上追加了第二套不变量（§0：前提被改的结论要重述，不静默矛盾）。文件现 **978 行**，其中约 560 行是 AST 机制 —— **体积偏大**；若将来再扩，建议把机制抽到 `backend/tests/_ledger_ast.py`（**只登记，不做**：抽与不抽是取舍，且会让本轮的四相证据失效）。
+
+**未改动的三个文件**（`git status` 里不出现，证明变异全部干净还原）：`world_cup_result_fact_backfill_service.py`（9,242 B / 258 CRLF / `543a1c748b06d7fa`）、`world_cup_match_service.py`（10,854 B / 326 CRLF / `64885fce36ae7161`）、`docs/ops/RUNBOOK.md`（87,752 B / **1,645 CRLF** / `e8b8e70563a0af5d`，与 §53.31 记录一致）。
+
+**本节追加读数**：见本节末的 BEFORE/AFTER 打印（`append_generic.py`），验收三条同时成立：字节增量 == 块长、CRLF 增量 == 块内 CRLF 数、`bare_lf stays 0`、`prefix unchanged`。
+
+### 53.32.13 更正：`result_json` 里没有 `"sync"` 子字典（§53.32.11 第 4 条的 (b) 半句作废）
+
+**结论先行**：§53.32.11 第 4 条的后半句「上游文本仍会出现在响应体与 `result_json["sync"]["error"]`」**只有前半句成立**。`loop_runs.result_json` **不含 `"sync"` 键、也不含 `"error"` 键** —— 写进去的是 `_audit_summary(result)`，它只留 `sync_status`。本小节是**追加更正**（不改写原句，§0 交付记录只追加），并给出原始文本全部出口的普查。
+
+**为什么写错（可复用的教训）**：我读的是 `loop_run_store.finish_run(..., result=…)` 的**形参名**，就推断「传进去的是整个 result ⇒ `result_json` 里有 `sync`」。真实调用点是 `world_cup_post_match_backfill_service.py:56-66` 的 `_finish_audit_run`，它传的是 **`result=_audit_summary(result)`**（`:35-53`）——一个只保留标量与 `sync_status` 的**投影**。⇒ **判「某列承载什么」必须看调用方传的表达式，不能看被调函数的形参名**（同族：§9d ④「人口按 AST 调用节点数，字面量只能定位、不能计数」）。
+
+**实证（跑一次，不是读一遍）**：
+
+```
+from app.services.world_cup_post_match_backfill_service import _audit_summary
+s = _audit_summary({
+    "status": "error",
+    "sync": {"status": "error", "error": "...network down at upstream.example", "reason": None},
+    "error": "...network down at upstream.example",
+})
+print(sorted(s.keys()))
+# ['audit_metadata','candidate_count','dry_run','errors','quality_samples',
+#  'result_facts_imported','scored','skipped','source','stale_unfinished_count',
+#  'stale_unfinished_fixtures','status','sync_status']        # 无 'error'、无 'sync'
+json.dumps(s, ensure_ascii=False) 含 'upstream.example' -> False
+json.dumps(s, ensure_ascii=False) 含 'network down'     -> False
+```
+
+**原始文本的全部出口（普查，五处）**：
+
+| # | 出口 | 承载的键 | 数据来源 | 未类型化异常路径下原文可达？ | 鉴权 |
+|---|---|---|---|---|---|
+| ① | `POST /api/analytics/post-match-backfill` 响应体 | `result["error"]` **与** `result["sync"]["error"]` | `finish()` 把整个 `result` 返回给路由，路由原样 `return`（`world_cup_analytics.py:535`，`sync_first=True` 硬编码） | ✅（需 `dry_run=false`） | `require_write_key` 依赖 |
+| ② | `GET /api/analytics/post-match-backfill/runs` | `runs[].error` = **账本 `error` 列** | `_audit_run_payload` → `run.get("error")` | ✅ | 无 |
+| ③ | `GET /api/quality-metrics/anomalies` | `detail.error` = **账本 `error` 列** | `latest_run_per_job()` → `run.get("error")` | ✅ | 无 |
+| ④ | `loop_runs.result_json` 列 | —— | `_audit_summary(result)` | ❌ **不可达**（无 `sync`、无 `error` 键） | —— |
+| ⑤ | 调度器 job 的 `result_json` | —— | `_world_cup_post_match_backfill_summary`（`scheduler.py:1621`）/ `_summarize_prediction_update`（`:1572`） | ❌ **不可达**（只取 `candidate_count` + `scoring.scored/errors`） | —— |
+
+**更正后的精确表述**：`result["sync"]["error"]` 只出现在**一处** HTTP 出口——`POST /post-match-backfill` 的响应体，**且与同一响应里的 `result["error"]` 是同一份文本**（sync 子字典**不是独立的第二个泄漏**，只是同一响应里更深一层）。真正由**账本 `error` 列**带出去的出口是 ②③（**列**，不是 `result_json`）。
+
+**一个副产品读数**：§53.32.6 说的政策族「四处」（账本 / 响应 / `anomalies` / 日志）**恰好覆盖 ①②③**；而政策测试 `test_post_match_backfill_does_not_expose_or_persist_provider_error_body`（`:1173`）断言的是 `post_response.text + history_response.text` 的**整段文本**（`assertNotIn(fragment, exported)`）⇒ 它**其实也覆盖了 `sync` 子字典**，只是走的是**有类型的** `FootballDataAPIError` 路径（该路径在 `world_cup_match_service.py:315` 已被声明 token 丢弃）。**未被覆盖的仍是 §53.32.10 那一条**：未类型化异常在 `:322` 走 `str(e)`，会同时进入 ① 的两个键与 ②③ 的账本列。
+
+**与 §53.32.11 的关系**：第 4 条**保留** (a)「上游文本仍会出现在**响应体**」，**删除** (b)「与 `result_json["sync"]["error"]`」。原句不改写（只追加本小节）；读 §53.32.11 时以本小节为准。
+
+**本节追加读数**：见本节末的 BEFORE/AFTER 打印（`append_generic.py`），验收三条同时成立：字节增量 == 块长、CRLF 增量 == 块内 CRLF 数、`bare_lf stays 0`、`prefix unchanged`。
+
+### 53.32.14 §53.32.10 契约冲突的「改哪几个断言会红」**实测**清单（只登记不代决）
+
+**结论先行**：把 `world_cup_match_service.py:322` 的 `"error": str(e)` 换成声明 token 后，**全量 7693 用例里恰好 2 条变红**，且**这 2 条恰好等于 §53.32.10 建议里点名的两处** ⇒ 清单完整、无隐藏的第三个消费者。但其中一条**不是行为测试**，而是**守卫自己的棘轮** —— 也就是说那句话在这条线上有**三个**消费者（行为契约 1 / 守卫棘轮 1 / 政策族 0）。
+
+**方法（四相）**：
+
+| 相 | 动作 | 读数 |
+|---|---|---|
+| ① 备份 | 字节级复制到 `.workbuddy/audit-2026-10-03/wcms_backup.py` | 10,854 B / 326 CRLF / sha16 **`64885fce36ae7161`**（= 未改动态） |
+| ② 变异 | `mutate_conflict.py apply`（针唯一性前置校验 `count == 1`） | 10,903 B（**+49**）/ 326 CRLF（**不变**）/ sha16 `8c3833ef69ee4708` |
+| ③ 全量 | `pytest tests/ --junitxml=…`（判据只取 junit 的 failures/errors） | `tests=7693 failures=2 errors=0 skipped=11` |
+| ④ 还原 | `mutate_conflict.py revert` | `byte-identical to the backup: True`；sha16 回 **`64885fce36ae7161`**；**`git status` 与 `git diff --numstat` 对该文件均为空** |
+
+**红集（2 条，逐条附实测消息）**：
+
+| # | 测试 | 实测消息 | 性质 |
+|---|---|---|---|
+| 1 | `tests.test_world_cup_match_service.SyncWorldCupFixturesTests::test_api_football_error_returns_error`（`:508-514`） | `AssertionError: 'network down' not found in 'Football-Data.org request failed: RuntimeError'` | **行为契约**：该测试 `patch(…, side_effect=RuntimeError("network down"))` + `assertIn("network down", result["error"])` ⇒ 它**就是**在钉「裸消息必须出现在返回 dict 里」 |
+| 2 | `tests.test_ledger_error_sanitization_guard.LedgerErrorProvenanceTests::test_the_inheriting_sites_are_exactly_the_recorded_ones`（`:845`） | `AssertionError: Tuples differ: () != ("services/world_cup_post_match_backfill_s…",)  Second tuple contains 1 additional elements` | **守卫的棘轮**：计算侧已是 `()`，登记项还留着 1 条 ⇒ **棘轮设计成「多一条红、少一条也红」**，这里正是「少一条」在响 |
+
+⚠️ **第 2 条是对 §53.32.10 第 3 条措辞的更正**：原话「棘轮应自然变成空集 ⇒ 更新 `_RECORDED_INHERITING_SITES` 为空元组即可」——**「更新」是一个必须执行的动作，不是一个自动结果**。不更新它就有一条红。措辞上它读起来像「无需处置」，实测不是。
+
+**为什么其余候选**不**红（逐条给判据，不是「大概不会」）**：
+
+| 测试 | 为什么不红 |
+|---|---|
+| 政策族 6 条（`test_world_cup_analytics_routes.py:141/:187/:912/:1013/:1070/:1173`） | 各自的敏感文本走**别的服务**（consistency repair / verified correction / result_fact_backfill / scoring reconcile / post_match 自身的 `except` 与 typed `FootballDataAPIError`）——**没有一条**经过 `world_cup_match_service.py:322` 的未类型化分支 |
+| `test_world_cup_predictions_routes.py:97` `…_does_not_expose_exception_text` | 它走的**就是**未类型化分支，但 `/world-cup/predictions/sync-fixtures`（`world_cup_predictions.py:167-180`）在 `status == "error"` 时**丢弃 result**、抛固定 `HTTPException(500, "Fixture synchronization failed")` ⇒ 它断言的是 `assertNotIn`，换成 token 同样通过 |
+| `test_world_cup_post_match_backfill_service.py:216/:224` | 把 `sync_world_cup_fixtures` **整个 mock 掉**（`:202` `return_value={"status":"error","error":"source unavailable"}`）⇒ 与产出方内部格式**解耦**（这正是 §53.32.2 的 relay 测试，它钉的是 relay，不是产出方） |
+| `test_world_cup_match_service.py:544` | 走 typed `FootballDataAPIError` 分支（`:315`），那一行**未动** |
+
+**「建议处置是否自洽」的实测判据**：建议是三处改动 —— (1) 改 `:322`；(2) 把 `:514` 的 `assertIn("network down", …)` 改成 `assertIn("RuntimeError", …)`；(3) 置空 `_RECORDED_INHERITING_SITES`。实测红集 = {`:514`, `:845`} ⇒ **(2)(3) 各消一条、无剩余** ⇒ 三步自洽。第 (3) 步「置空即可、守卫判据不用改」**成立且完整**，证据两条：① 失败消息显示**计算侧已经是 `()`**（只剩登记项多余）；② 同一文件里那条会**构造**继承站点的用例（`:895` `test_it_flags_inheriting_a_sink_key_from_a_tainted_producer`）用的是**合成三文件**（`sink.py` / `producer.py` / `caller.py`，见 `:888-893`），与真实树解耦 ⇒ **它在本轮全量里没红**。
+
+**仍未决**：第 (1)(2) 步是**契约取值**（「返回 dict 里是裸消息还是声明 token」），按 §0 **只登记不代决**。本轮只给出「改了就红谁」的实测读数，不动任何一行。
+
+**本节追加读数**：见本节末的 BEFORE/AFTER 打印（`append_generic.py`），验收三条同时成立：字节增量 == 块长、CRLF 增量 == 块内 CRLF 数、`bare_lf stays 0`、`prefix unchanged`。
+
+## 53.33 「契约比实现宽」的同类普查：两个方向、14 处可折叠元组，以及一个**活的**过宽声明（`optional_write_key`）
+
+承接 §53.25.9 登记的待办 ②（原话：「已知同族候选是那些自带 `except (TypeError, json.JSONDecodeError)` 的 store（`optimized_params_store.py:205/225`）」）。本项**只读普查**，不改任何一行。
+
+### 53.33.1 结论先行
+
+1. **候选待办已裁决**：`optimized_params_store.py` 那两处**只有一半成立** —— `:225` 的 `TypeError` **可证明是死的**（过宽声明），`:205` 的 `TypeError` **可证明是活的**（元组准确）。详见 §53.33.6。
+2. **B 方向（捕获宽于需要）**：全仓 **255** 个多成员 `except` 元组里 **14** 个含**可证明冗余**的成员（§53.33.5）—— 全部是**无害**的冗余枚举，但会误导读者以为在区分多种失败模式。
+3. 🔴 **A 方向（契约宽于实现）查出一个活样本**：`api/security.py:36 optional_write_key` 的 docstring 写 *"Unlike `require_write_key` this never raises"*，而实测**能抛 `TypeError`**，且**有两条独立触发路径**（§53.33.4）。这与 §53.25 的 `read_json` **同形**，且落在**鉴权**路径上。
+4. ⚠️ **诚实边界**：本部署 `API_WRITE_KEY` 长度为 0 ⇒ `bool("")` 短路 ⇒ **当前不可达**。它是**潜伏**缺陷，不是现行故障。
+
+### 53.33.2 两个方向必须先分开，否则普查会做成一锅
+
+「契约比实现宽」原指 §53.25 那一类：**声明**（docstring / 类型 / `except` 子句）覆盖的集合，与**实现实际能产生**的集合**不等**。它是**双向**的，且两个方向的**危害相反**：
+
+| 方向 | 形态 | 危害 | 本次读数 |
+|---|---|---|---|
+| **A 契约宽于实现** | docstring 说「never raises / is total」，实现仍能抛 | **承诺过宽**：调用方按契约不设防 ⇒ 异常穿透 | 24 条声明，其中 **12** 条无兜底 handler；**1 条经实测为真缺陷** |
+| **B 捕获宽于需要** | `except (A, B)` 里 A ⊂ B | **冗余枚举**：读者以为区分了多种失败模式；若其中之一其实不可能 ⇒ 幽灵分支 | 255 元组 / **14** 可折叠 |
+
+判据只有一条、两个方向共用：**把「声明的集合」与「可实现/可命中的集合」都算出来，看差集是否为空且可枚举。**
+
+### 53.33.3 A 方向普查：24 条绝对化声明，12 条无兜底 —— 但这是一个**筛**，不是判决
+
+普查件 `.workbuddy/audit-2026-10-03/census_contract_width.py`（AST，24 条声明的**行号全部从源码派生**，没有手抄）：
+
+- 只读 **函数 docstring**。grep 的 30 行里混着**注释**（如 `event_intelligence_service.py:681`）与**模块级 docstring**（如 `match_outcome.py:15`）——二者**都不在**本样本内，本项只对**函数级**声明下判（⚠️ 因此 **30 与 24 不是「差 6 个」的关系**，是**类别不同**）。
+- 判定列 `broad_handler` = 该函数内**是否存在**能吸收意外类的 handler（`except Exception` / `BaseException` / 裸 `except`）。
+
+| 读数 | 值 |
+|---|---|
+| docstring 绝对声明 | **24** |
+| 其中**无**兜底 handler | **12** |
+| 有兜底 handler | 12 |
+
+🔴 **这个筛会过报，而且我有一条现成的校准样本**：`utils/file_store.py:171 read_json` 落在「无兜底 handler」那一档 —— 但它**在 §53.25 刚被修好**（docstring 改窄为 *"it degrades, never raises"*，并把会抛的两类都收进 handler）。⇒ **`broad_handler=False` ≠ 缺陷**：它只说明「该声明依赖所有被调函数也 total」，**逐条判真伪必须看调用图**。**本项不对这 12 条下结论**，只登记入口。
+
+### 53.33.4 A 方向的**活样本**：`optional_write_key` 的「never raises」是假的（实测）
+
+`api/security.py:8-12` 的 `is_write_key_valid` 用 `hmac.compare_digest`：
+
+```python
+def is_write_key_valid(x_api_key: str | None) -> bool:
+    return bool(settings.API_WRITE_KEY) and hmac.compare_digest(
+        x_api_key or "", settings.API_WRITE_KEY,
+    )
+```
+
+**实测 `hmac.compare_digest` 对含非 ASCII 的 str 的行为**（§4⑰：跑一次，不读一遍）：
+
+```
+compare_digest('ascii', 'ascii')  -> True
+compare_digest('ascii', '')       -> False
+compare_digest('ascii', '密钥')    -> RAISES TypeError: comparing strings with non-ASCII characters is not supported
+compare_digest('', '密钥')        -> RAISES TypeError      ← 注意：一侧为空也照样抛
+compare_digest('ascii', 'é')      -> RAISES TypeError
+```
+
+**端到端复现**（直接调用两个依赖函数，`api/security.py`）：
+
+| `API_WRITE_KEY` | 请求头 | 结果 |
+|---|---|---|
+| `''`（**本部署**） | 任意（含非 ASCII） | **不抛** —— `bool('')` 短路，`compare_digest` 根本没被调用 |
+| `'ascii-key'` | `None` / ASCII | 不抛 |
+| `'ascii-key'` | **非 ASCII**（`é-…`） | 🔴 `optional_write_key` **RAISES TypeError** |
+| `'密钥'`（非 ASCII 配置） | 任意 | 🔴 **必抛** |
+
+`require_write_key` 同一根因、同样抛（`is_write_key_valid` 是共用实现）：
+
+```
+key='密钥'      hdr=None    -> RAISES TypeError: comparing strings with non-ASCII characters is not supported
+key='ascii-key' hdr='é-bad' -> RAISES TypeError
+```
+
+⇒ **两条独立触发路径**：① 运维把 key 配成非 ASCII ⇒ **任何**请求都中；② key 是 ASCII，但**请求头含非 ASCII**（Starlette 按 latin-1 解码头，字节 ≥0x80 即非 ASCII）⇒ **客户端可控**地让该请求中。
+
+**后果分两档**（照实说）：
+- `optional_write_key`（`quality_metrics.py:422`、`world_cup_predictions.py:346` 两个 `Depends`）：**声明的契约被违反** —— 它承诺「不抛、由调用方决定」，实际抛 ⇒ FastAPI 回 **500** 而不是 `can_dispatch=False` 的正常分支。
+- `require_write_key`（所有写路由）：TypeError 取代**本该给出的 401** ⇒ 也是 500。它**没有**「never raises」的声明，所以不算 A 方向；但**同一根因**、**后果更重**。
+
+🔴 **零守卫**：全仓 `backend/tests/` 里 **没有任何一处**引用 `compare_digest` 或 `is_write_key_valid`，也没有非 ASCII key 的用例 ⇒ 这条声明**没有被任何测试钉住**（同族：§4.2 的「空头」——负控/无控都是假安全）。
+
+### 53.33.5 B 方向普查：255 个多成员元组，14 个含可证明冗余的成员
+
+`census_contract_width.py` 把每个元组成员解析到**真实类**（只用一张**显式**的 `CLASSES` 映射表，覆盖本次出现的全部名字；解析不了的报 `unchecked` 而不是猜）。判据：**某成员是其某个同组成员的后代** ⇒ 捕获它已经不改变该元组能命中的类集合。
+
+| 读数 | 值 |
+|---|---|
+| 多成员元组 | **255** |
+| 可折叠 | **14** |
+| `unchecked`（名字无法解析） | **0** |
+
+**清单（14 处）**：
+
+| 元组 | 处数 | 冗余成员 | 等价于 |
+|---|---:|---|---|
+| `(HTTPError, URLError, TimeoutError, OSError)` | **12** | `HTTPError`、`URLError`、`TimeoutError` | **`except OSError`** |
+| `(HTTPError, URLError, TimeoutError)` | 1（`world_cup_match_service.py:65`） | `HTTPError` | `except (URLError, TimeoutError)` ⚠️ **不能收成 `OSError`**（那会**放宽**） |
+| `(HTTPError, URLError, TimeoutError, JSONDecodeError, UnicodeDecodeError)` | 1（`world_cup_team_stats_service.py:75`） | `HTTPError` | `except (OSError, JSONDecodeError, UnicodeDecodeError)` ⚠️ 同前，不可收成 `OSError` |
+
+12 处同形元组分布在 `football_live_{availability,injury,referee,schedule,style,weather,xg}_service.py`、`nba_live_{injury,ratings}_service.py`、`nhl_live_xg_service.py`、`mlb_live_park_service.py`、`market_totals_service.py`。
+
+**折叠的证明是实跑的**（不是读一眼认定的）：
+
+```
+issubclass(TimeoutError, OSError) -> True      (内建 TimeoutError)
+issubclass(HTTPError,  URLError)  -> True
+issubclass(HTTPError,  OSError)   -> True
+issubclass(URLError,   OSError)   -> True
+=> 4 成员元组 ≡ except OSError : True
+```
+
+**分类（重要，别把它们当缺陷）**：这 14 处**都不是缺陷**，是**冗余枚举**。它们的危害只有一条：**下一个读者会以为这四种是不同的失败模式**。⇒ 与 §53.32.11 的 4 条边界同类，**只登记**。
+
+📌 **本项自动判据抓不到候选待办那两处** —— 因为 `TypeError` 与 `json.JSONDecodeError` **没有继承关系**（`JSONDecodeError ⊂ ValueError`，与 `TypeError` 是兄弟）。⇒ 冗余有**两种**：**继承型**（本节能自动查）与**控制流型**（下一节，只能逐点看）。
+
+### 53.33.6 候选待办的裁决：`:225` 死、`:205` 活（实测，两处各给证明）
+
+`optimized_params_store.py` 两处的上下文不同，结论**相反**：
+
+| 位置 | 守卫 | 实测（喂非 str 值） | 裁决 |
+|---|---|---|---|
+| `:205` `json.loads(previous_applied["factor_weights"])` | 只有**真值**检查（`:202` `if previous_applied and previous_applied.get("factor_weights")`） | `5` → **caught TypeError**；`{'a':1}` → **caught TypeError**；`'"ok"'` → `'ok'`；`'not json'` → **caught JSONDecodeError** | ✅ **两个名字都活 ⇒ 元组准确，不是缺陷** |
+| `:225` `json.loads(elo_params_raw) if isinstance(elo_params_raw, str) else elo_params_raw` | **`isinstance(..., str)` 把非 str 路由到 `else`** | `5` → **returned 5**；`['x']` → returned；`None` → returned；`'"ok"'`→parsed；`'not json'` → caught | 🔴 **`TypeError` 永不可达 ⇒ 过宽声明**（无害） |
+
+证明脚本直接把两处的**表达式形状**隔离出来跑（不依赖 store、不碰数据库）：`:225` 在 `raw=5/['x']/None` 下**直接返回**，异常分支一次都没进；`:205` 在 `val=5/{...}` 下**确实进** `except TypeError`。
+
+⇒ **§53.25.9 的候选待办结论**：**一半成立**（`:225` 的 `TypeError` 是死的），**一半不成立**（`:205` 是准的）。两者都**无害**，登记即可。
+
+### 53.33.7 明确不做 / 未决
+
+- ⏭️ **不改 14 处冗余元组**：它们是既有约定的一部分（`*_live_*` 系列同形），改一处反而制造不一致；且「收成 `OSError`」在两处会**放宽**捕获（§53.33.5 表内的 ⚠️）。
+- ⏭️ **不改 `is_write_key_valid`**：修法是 1 行（比较前换成 bytes，或对非 ASCII 显式失败），但**放不放进本批是契约取值**，按 **§0 只登记不代决**。登记的建议：`hmac.compare_digest((x_api_key or "").encode("utf-8"), settings.API_WRITE_KEY.encode("utf-8"))`（bytes 版没有非 ASCII 限制）。
+- ⏳ **A 方向另外 11 条无兜底声明未逐条核**（本节已证 `optional_write_key` 是**假**、`read_json` 是**已修**）⇒ 逐条需要调用图，**登记为待办**。
+- ⛔ 不改 `:225` 的 `except`（删掉 `TypeError` 是**纯清理**、无行为变化；但**删死代码不可登记为变异**（§4.2），且它现在是那份名单上的一个已知点，删了反而少一处可追踪样本）。
+
+### 53.33.8 文件画像
+
+本节**未改动任何 repo 文件**（纯只读普查）。普查件 `census_contract_width.py` 与输出 `census-contract-width.txt` 在 `.workbuddy/audit-2026-10-03/`（**纯 LF**）。
+
+**本节追加读数**：见本节末的 BEFORE/AFTER 打印（`append_generic.py`），验收三条同时成立：字节增量 == 块长、CRLF 增量 == 块内 CRLF 数、`bare_lf stays 0`、`prefix unchanged`。
+
+## 53.34 修 `is_write_key_valid`：把「非 ASCII ⇒ TypeError」这条契约拉回实现（用户点选 A；1 行实改 + 4 条用例）
+
+承接 §53.33.4 查出的活样本。**本项动代码**（此前 §53.32–§53.33 都是只读），因此**写了测试 + 做了四相变异 + 跑了四道门**。
+
+### 53.34.1 结论先行
+
+- **已修**：`is_write_key_valid` 改成在 **UTF-8 字节**上比较 ⇒ `optional_write_key` 的 *"Unlike `require_write_key` this never raises"* **重新为真**；`require_write_key` 在 key 含非 ASCII 时**重新给出它声明的 401**（此前是 `TypeError` 逃逸）。
+- ⚠️ **同时更正 §53.33 我自己写的一句**：§53.33.4 写「请求头含非 ASCII（Starlette 按 latin-1 解码，**客户端可控**）」——**结论本身成立**，但我在动手时**差点把它误判成不成立**：第一版测试用 `headers={"x-api-key": "é"}`（**str** 形式），被 httpx **在客户端侧**拒绝（`UnicodeEncodeError`），看起来像「这条路不存在」。**那是 harness 的限制，不是产品的事实**（§53.34.3）。
+- 四相齐备（第 ② 相 **4/4** 新用例全红）；四门绿；**未提交、未推送**。
+
+### 53.34.2 改动（`backend/app/api/security.py`，`git diff --numstat` = **`9 2`**）
+
+```diff
+ def is_write_key_valid(x_api_key: str | None) -> bool:
++    # compare_digest() rejects `str` operands that hold non-ASCII characters
++    # with a TypeError, and both operands here are controlled from outside this
++    # module (the request header, and API_WRITE_KEY): a single byte >= 0x80 in
++    # either one used to escape the auth dependency instead of answering -- see
++    # WriteKeyNonAsciiTests. The UTF-8 bytes are equally constant-time and carry
++    # no such restriction. (A lone surrogate would raise UnicodeEncodeError, but
++    # HTTP header values decode as latin-1, so it cannot arrive from a request.)
+     return bool(settings.API_WRITE_KEY) and hmac.compare_digest(
+-        x_api_key or "",
+-        settings.API_WRITE_KEY,
++        (x_api_key or "").encode("utf-8"),
++        settings.API_WRITE_KEY.encode("utf-8"),
+     )
+```
+
+**为什么是 bytes 而不是「先判断有没有非 ASCII」**：`compare_digest` 对 bytes 的**定长时间**语义与对 str 相同（这正是它存在的理由），而 UTF-8 是**单射**的 ⇒ `a == b`（str）⟺ `a.encode() == b.encode()`，**比较语义零变化**。若改成「检测到非 ASCII 就提前失败」，反而引入一条**按内容分支**的路径（正是我们要避免的那类）。⚠️ **残留边界**：孤立代理项（lone surrogate）会让 `.encode("utf-8")` 抛 `UnicodeEncodeError`；HTTP 头按 latin-1 解码 ⇒ 只可能是 0x00–0xFF ⇒ **从请求不可达**（已写进代码注释）。
+
+### 53.34.3 ⚠️ 一条真实路径差点被测试 harness 判成不存在（可复用）
+
+第一版两条 HTTP 用例写法是 `client.get(..., headers={"x-api-key": "é"})`，**跑出来是**：
+
+```
+UnicodeEncodeError: 'ascii' codec can't encode character '\xe9' in position 0: ordinal not in range(128)
+```
+
+失败发生在 **httpx 内部**（`httpx/_models.py:82 _normalize_header_value` → `value.encode(encoding or "ascii")`），**根本还没进被测应用**。若不追这一跳，就会得出「非 ASCII 头不可达 ⇒ §53.33 那条判据是假的」——**而这是错的**。实测三条：
+
+| 探针 | 结果 |
+|---|---|
+| `httpx.Request(..., headers={'x-api-key': 'é'})`（**str** 形式） | RAISES `UnicodeEncodeError`（客户端侧） |
+| `httpx.Request(..., headers=[(b'x-api-key', b'\xe9')])`（**bytes** 形式） | **OK**，`raw=[(b'Host', b'x'), (b'x-api-key', b'\xe9')]` |
+| `Headers(raw=[(b'x-api-key', b'\xe9')])['x-api-key']`（Starlette） | `'é'`（**latin-1 解码**） |
+
+⇒ **路径②成立**：客户端只要按**字节**发 0x80–0xFF，Starlette 就把它解成非 ASCII `str` 交给依赖。**httpx 只是不接受 str 形式，不是不接受这条路。**
+
+🔴 **可复用判据**：**失败发生在 harness 内部时，先问「这是产品行为还是 harness 行为」**；判据是**失败栈里有没有被测代码**。本例的修法**不是删掉那条用例**，而是把值**换成 harness 能承载的形式**（bytes）并把断言留在**依赖边界**上。同族：§53.25.6 记的「脚本前置断言数错 ⇒ 一个字节都没写」——两者都是**变通处不在被测对象，而在工具链**。
+
+### 53.34.4 四条新用例各自钉什么（`tests/test_operational_readiness.py`，新增类 `WriteKeyNonAsciiTests`）
+
+| 用例 | 钉住 | 为什么这样写 |
+|---|---|---|
+| `test_non_ascii_configured_key_does_not_raise` | key 含非 ASCII 时 `optional_write_key` **返回 bool**（`None`→`False`、对值→`True`），且 `require_write_key` 抛的是 **`HTTPException` 401** | 直接钉 §53.33 的两条声明（"never raises" + 401） |
+| `test_non_ascii_configured_key_is_a_401_not_an_escaped_error` | **经 HTTP**：key 非 ASCII + **不带** header ⇒ **401** | 非 ASCII 只在**配置**里 ⇒ httpx 能承载（这是唯一能在 TestClient 里走通的 HTTP 形态） |
+| `test_raw_client_byte_reaches_the_dependency_as_non_ascii` | 把 `Headers(raw=[(b"x-api-key", b"\xe9")])` 解出的值**自己算出来**（`assertEqual(header_value, "é")`）再喂给依赖 ⇒ **401** | 值**不手写**：解码器变了这条测试跟着变；钉的是路径②真实落点 |
+| `test_non_ascii_key_authenticates_its_own_value` | key 非 ASCII 且**值正确** ⇒ `True` | 防止「只在错误路径上不抛、正确路径反而被改坏」 |
+
+**四相变异（判据只取 junit 的 failures/errors）**：
+
+| 相 | 动作 | 读数 |
+|---|---|---|
+| ① 修复前基线 | 新增用例 + 修复态跑 `tests/test_operational_readiness.py` | **`tests=91 failures=0 errors=0 skipped=0`** |
+| ② 变异 | 字节级把 `security.py` 退回备份（`eadf8a49267f88d4`） | **`tests=91 failures=4 errors=0`** —— 4 条新用例**全红**，症状统一 `TypeError: comparing strings with non-ASCII characters is not supported` |
+| ③ 还原 | 字节级恢复修复态 | **`tests=91 failures=0 errors=0 skipped=0`** |
+| ④ 字节一致 | sha256 比对快照 | **`byte-identical to the fixed snapshot: True`**（`2e5172a4cdfdca0b`） |
+
+⇒ **4/4 承重**：每条新用例都在变异下变红（不是空头）。用例总数 90 → 91（新增 4 − 替换掉 3 条走不通的第一版）。
+
+### 53.34.5 门与字节证据
+
+| 门 | 读数 |
+|---|---|
+| `ruff check app/` | **All checks passed!** |
+| `mypy app/` | **Success: no issues found in 331 source files** |
+| `python -m scripts.generate_types --check` | **generated-types.ts is up to date.** |
+| `pytest tests/test_operational_readiness.py`（junit） | `tests=91 failures=0 errors=0 skipped=0` |
+| `pytest tests/`（**全量回归**） | **`tests=7697 failures=0 errors=0 skipped=11`**（改前同口径 `7693`/11 ⇒ 差额 **+4 = 本轮新增的 4 条用例**；改的是**共享鉴权函数**，故跑全量） |
+| 两个改动文件是否在 `mutation_verify.py` 的 `m.path` 名单里 | **都不在** ⇒ 守卫测试 `test_mutation_verify.py` 的必跑判据不触发（§4.3） |
+
+| 文件 | bytes | CRLF | bare LF | BOM | `git diff --numstat` | sha16 |
+|---|---:|---:|---:|---|---|---|
+| `app/api/security.py`（改前） | 1,764 | 44 | 0 | False | `9 2` | `eadf8a49267f88d4` |
+| `app/api/security.py`（改后） | 2,364 | 51 | 0 | False | — | **`2e5172a4cdfdca0b`** |
+| `tests/test_operational_readiness.py` | — | — | 0 | False | `60 1` | — |
+
+`security.py` 的**删除数 2 是正确的**：这是**真代码改动**，不是「只加注释」——§0 那条「插入型编辑删除数必须为 0」不适用。
+
+### 53.34.6 明确不做 / 未决
+
+- ⛔ **不改 `require_write_key` 的形状**：它本来就不承诺「不抛」（它的契约是**抛 401**）；本次修好的是**它抛的对不对**。
+- ⏳ **`tests/test_operational_readiness.py` 里有一条 `F401`（`from app.main import app, lifespan` 的 `lifespan` 未使用）** —— 实测**在 `HEAD` 版本上就报**（`git show HEAD:… | ruff check --stdin-filename …` ⇒ `Found 1 error`）⇒ **既有**，非本项引入；且项目门是 `ruff check app/`（**不含** `tests/`）⇒ **只登记，不顺手改**（顺手改会把一处**既有**问题混进本次改动）。但它值一眼：`lifespan` 被导入却不用，**可能**意味着那条用例本来想驱动 lifespan 而没驱动 ⇒ 登记为待办。
+- ⏳ **未加端到端（TestClient + bytes 头）用例**：§53.34.3 已实测 bytes 形式在 httpx 里可用，但把它加进去只多覆盖「harness 转发原始字节」这一段（**harness 性质，不是产品性质**），而解码这一跳已由用例 ③ 从**真实解码器**派生。**登记为可选加固。**
+- ⏭️ **不提交**。
+
+### 53.34.7 文件画像
+
+三个「工作台件」在 `.workbuddy/audit-2026-10-03/`（纯 LF）：`security_backup.py`（改前快照 `eadf8a49267f88d4`）、`security_fixed.py`（改后快照 `2e5172a4cdfdca0b`）、四相的 junit（`junit-fix-phase1/2/3.xml`、`junit-fix-full.xml`）。
+
+**本节追加读数**：见本节末的 BEFORE/AFTER 打印（`append_generic.py`），验收三条同时成立：字节增量 == 块长、CRLF 增量 == 块内 CRLF 数、`bare_lf stays 0`、`prefix unchanged`。
+
+## 53.35 `lifespan` 的 F401 背后没有空头 —— 但「出厂默认值」这一类守卫确实没人看（用户点选 B）
+
+承接 §53.34 留下的那条既有 lint（`tests/test_operational_readiness.py:221` `from app.main import app, lifespan`，`lifespan` 导而不用）。用户的假设是：**「用例本来想驱动 lifespan 却没驱动」**。查下来**假设不成立**，但顺着它查出一条**同类且更值钱**的缺口。
+
+### 53.35.1 结论先行
+
+- **F401 = 残留导入，不是空头。** `test_lifespan_refuses_keyless_boot_without_opt_in` **确实驱动了** lifespan —— 走 `with TestClient(app):` 的 ASGI lifespan 协议；`lifespan` 这个名字**不参与驱动**（同文件另外 14 条 lifespan 用例都只 `from app.main import app`）。**两条独立证据**见 §53.35.2。
+- 🔴 **真正的新发现**：`config.py` 里三个**姿态开关的出厂默认值**，**没有任何测试观测**。对 P0 级的 `ALLOW_OPEN_WRITES` 做出厂默认变异（`false`→`true`，即「无密钥也能起来」），**7 个文件 178 条测试读数完全不变（0 red）**；宽集（**所有提到该开关的测试文件**，33 个）见 §53.35.4。
+- 机制是 §4.2(a)「夹具默认值锁死一侧」的直接实例：`StartupGuardTests` 的负向臂把开关**显式钉成字面量** ⇒ 它们钉的是**分支**，不是**出厂默认**。
+- 本节**未改动任何 repo 文件**（只读取证 + 一次可逆变异，已逐字节还原；`git status --porcelain backend/app/core/config.py` 空）。**未提交、未推送。**
+
+### 53.35.2 为什么 F401 不是空头：两条独立证据
+
+**证据一（源码链路）**：`starlette/routing.py:629-654` 在 startup 失败时先 `send({"type": "lifespan.startup.failed", ...})`、**紧接着第 652 行 `raise`** ⇒ 原异常从 app 协程逃出；`starlette/testclient.py:710-715` 的 lifespan 任务在 `finally` 里再 `send(None)`；`testclient.py:717-732` 的 `wait_startup` 收到 `failed` 后会**再收一次消息**拿到那个 `None` ⇒ 走 `self.task.result()` ⇒ **原样重抛**。⇒ 不经过任何包装。
+
+**证据二（实测，`probe_testclient_lifespan_propagation.py`，纯 LF，环境 `.venv` = CPython 3.11.9 / starlette 1.3.1 / httpx 0.28.1）**：Part 1 是**探针自身的正向控制**（合成 app，不碰项目代码），Part 2 打真 app。
+
+| 用例 | 抛出的类型 | `isinstance(RuntimeError)` | 是同一个对象 | 裸 `assertRaises(RuntimeError)` |
+|---|---|---|---|---|
+| `control-ValueError`（合成） | `builtins.ValueError` | False | **True** | **MISS** |
+| `control-OSError`（合成） | `builtins.OSError` | False | **True** | **MISS** |
+| `control-RuntimeError`（合成） | `builtins.RuntimeError` | True | **True** | PASS |
+| `real-keyless-no-opt-in` | `builtins.RuntimeError` | True | n/a | PASS |
+| `real-lifespan-ValueError`（打 `validate_production_config`） | `builtins.ValueError` | False | **True** | **MISS** |
+| `real-lifespan-OSError`（同上） | `builtins.OSError` | False | **True** | **MISS** |
+
+三条推论：
+1. **`assertRaises(RuntimeError)` 不是类型盲**：换一个非 `RuntimeError` 的起因，`assertRaises(RuntimeError)` 立刻 MISS ⇒ 这是**真类型检查**（Part 1 是它的正向控制：若探针分辨不出类型，Part 2 的「类型被保留」在空扫描上恒真）。
+2. **`same_object=True`** ⇒ 抛的是**同一个异常对象**，不复制、不包装。
+3. `real-keyless-no-opt-in` 抛出的消息**逐字等于** `main.py:229-231` 的 `raise RuntimeError(...)` ⇒ **raise 站点被钉住**，这条用例的绿不是「恰好有个 RuntimeError」。
+
+✅ **顺带确认 `test_no_assertionless_tests.py:46-49` 的豁免理由是成立的**：该表把 `test_lifespan_boots_with_key`（零断言）登记为豁免，理由写 *"the property is that app startup completes; **TestClient raises if it does not**"* —— 上面证据一/二同时证明**这句是真的**。⇒ **该豁免不是空头**（详见 §53.35.3 的残留顾虑）。
+
+### 53.35.3 ⚠️ 那条豁免理由只是「被顺带钉住」（可复用判据）
+
+`test_no_assertionless_tests.py` 的豁免表是**双向棘轮**（`test_every_assertion_free_test_is_declared` 抓未声明的空断言用例，`test_no_allowlist_entry_is_stale` 抓过期条目），看起来严密。但**理由本身不可执行**——它是一条关于 **harness 行为**的断言，写在字符串里。
+
+真正会因「上游开始包装异常」而变红的是两处 `assertRaisesRegex`：
+
+| 位置 | 断言 | 名义职责 |
+|---|---|---|
+| `test_operational_readiness.py:263` | `assertRaisesRegex(RuntimeError, "bad loop db")` | 产品：坏 loop DB 必须中止启动 |
+| `test_production_preflight.py:372` | `assertRaisesRegex(RuntimeError, "OPENAPI_ENABLED")` | 产品：生产预检必须拒绝启动 |
+
+⇒ 一旦 Starlette 改成包装（或 `testclient.py:731-732` 那第二次 `receive()` 被删），**报错会指向安全守卫**（"the P0 guard broke"）而**不是 harness** —— 信号指向错误的位置。
+
+🔴 **可复用判据**：**理由里出现的前提，要检查它 (a) 可执行 (b) 有正向控制**。「零断言但被声明豁免」的用例，其**全部价值**都压在理由上 ⇒ **理由必须比用例本身更容易被验证**，否则就是用一句话顶替一条测试。同族：§53.31「给调用点不变量补静态守卫」。
+
+### 53.35.4 🔴 三个姿态开关的「出厂默认值」零观测（实测）
+
+**静态事实（`grep` 穷举）**：测试里对 `ALLOW_OPEN_WRITES` / `LLM_STARTUP_CHECK_ENABLED` / `SCHEDULER_ENABLED` 的**断言**，全部打在**模板 / stdout / systemd unit** 上：
+
+| 断言位 | 打的是什么 |
+|---|---|
+| `test_production_deploy_consistency.py:236` | `assertNotEqual(assigned.get("ALLOW_OPEN_WRITES","").lower(), "true")` —— **部署模板** |
+| `test_verify_local_stack.py:32/43`、`test_check_write_auth.py:70`、`test_run_entrypoint.py:144` | 子进程的 **stdout 字符串** |
+| `test_deploy_units.py:207/215` | systemd unit 里的 `Environment=SCHEDULER_ENABLED=...` |
+
+**没有一处**断言 `settings.<KEY>` 的默认值。（测试文件里该键名大量出现，但绝大多数是 `patch.object(settings, …)` ⇒ **全是分支**。）
+
+**机制**：`StartupGuardTests` 的负向臂把开关**显式钉成字面量** —— `:224` `ALLOW_OPEN_WRITES=False`、`:352` `LLM_STARTUP_CHECK_ENABLED=False`、`:430` `SCHEDULER_ENABLED=False`（`:232-243` 那条是它的正向孪生，`assertEqual(started["n"], 1)`）。
+
+**定向变异**（`mutate_allow_open_writes_default.py`，字节级；针 `b'_env_bool("ALLOW_OPEN_WRITES", "false")'` **恰好 1 处**才写，否则一个字节都不写）：
+
+先证**变异是活的**（否则「全绿」会得出反的结论）：`os.environ` 无该键、`backend/.env` **根本没提**它 ⇒ 生效值来自代码默认（`config.py:263`）。改前 `settings.ALLOW_OPEN_WRITES = False`，应用变异后实测 **`= True`**。
+
+| 口径 | 测试集 | ① 基线（未变异） | ② 变异后（默认 `false`→`true`） |
+|---|---|---|---|
+| 窄集 | `test_operational_readiness` / `test_production_preflight` / `test_env_overlay_examples` / `test_no_assertionless_tests` / `test_startup_health_integrity` / `test_sentry_integration` / `test_alert_channel_posture` | `tests=178 red=0` | **`tests=178 red=0`** |
+| 宽集 | **33** 个文件 = **所有提到 `ALLOW_OPEN_WRITES` 的 `tests/*.py`** | `tests=611 red=0` | **`tests=611 red=0`** |
+
+📌 **宽集变异那一次进程 rc = 1，而 junit 是 `red=0`** —— 这就是本机 `safe-delete` shim 的指纹（日志里有 1 处 `[safe-delete]`，且它拦的是**收尾清理**而不是用例）。**判据只取 junit 的 `failures`/`errors`，不看 rc。** 差一点据此把「出厂默认翻成 fail-open 无人察觉」写成「有人察觉了」。
+
+字节证据：`config.py` `96260 B / crlf 1839 / bare_lf 0 / sha16 811e638907eb365b` → 变异 `96259 B / crlf 1839 / sha16 f55e5ec105a34980` → 还原 **`byte-identical to snapshot: True`（`811e638907eb365b`）**，`git status --porcelain` 该文件**空**。
+
+📌 `backend/app/core/config.py` **不在** `backend/scripts/mutation_verify.py` 的 `m.path` 名单里 ⇒ 本次变异**不触发**守卫测试 `test_mutation_verify.py`（不改其 `note`、不登记为新 set）。
+
+**模板层另有守卫，但它守的是另一个人群。** `test_env_overlay_examples.py:15-23` 的 `SECURITY_KEYS`（5 个：`ALLOW_OPEN_WRITES`/`API_WRITE_KEY`/`CORS_ALLOWED_ORIGINS`/`SERVER_RELOAD`/`LLM_DAILY_COST_CAP_USD`）要求**每个 overlay 显式赋值**（含 `false`，因为「继承 dev 值不安全」）。实测三个模板都赋了值：`.env.example:57` `ALLOW_OPEN_WRITES=false`、`.env.staging.example:35`、`.env.production.example:83`。
+⚠️ 但它**不覆盖「不复制模板的部署」**：裸容器、或只给 `API_WRITE_KEY` 的 systemd 单元 —— 那些看到的就是**代码默认**。**那正是该守卫自己 docstring（`:216-218`）里叫 P0 的那条状态。**
+
+**三个开关的风险方向不对称**（登记用，**均不代决**）：
+
+| 开关 | 默认 | 翻向 | 后果 | 级 |
+|---|---|---|---|---|
+| `ALLOW_OPEN_WRITES` | `false` | → `true` | **fail-open**：无密钥也能起来，写接口全公开 | 🔴 危险 |
+| `SCHEDULER_ENABLED` | `true` | → `false` | 作业**全停**，而 `/api/health` 照常 200 ⇒ **静默** | 🟠 次之 |
+| `LLM_STARTUP_CHECK_ENABLED` | `false` | → `true` | fail-closed：坏凭证**拒绝启动** | ⚪ 无害 |
+
+⚠️ 末者**不宜做变异**：翻成 `true` 会让每条启动用例真去 `complete_chat()`（`llm_startup_check_service.py:9`）⇒ 变异引入网络与超时，读数不可读。
+
+### 53.35.5 一条 §5 口径的界限更正（避免下次误用）
+
+`MEMORY` 的 §5 写着「`.env` 模板**只写注释行**（`# KEY=true`），**绝不写成赋值**」。**这不是全局规则** —— 本仓有**两个相反的约定并存**：
+
+- `SECURITY_KEYS`（`test_env_overlay_examples.py:15-23`）：**要求每个 overlay 显式赋值**（含 `false`）。
+- **其它**开关：在 overlay 里**只点名、不赋值**（`test_the_production_overlay_names_the_flags_it_leaves_off`）。
+
+⇒ 引用 §5 那条时**先问「这个键属不属于 `SECURITY_KEYS`」**；两条规则各自都有人守，混用会把一条正确的约定判成违规。
+
+### 53.35.6 未决（只登记，不代决）
+
+1. 三个出厂默认值是否各加一条断言（最低成本形态：`assertIs(settings.ALLOW_OPEN_WRITES, False)`）。**取舍权在用户。**
+2. `test_lifespan_does_not_check_llm_by_default`（`:347`）的**名字超出其函数体**：名字说「**默认**不检查」，函数体却 `patch.object(settings, "LLM_STARTUP_CHECK_ENABLED", False)` 把值钉死 ⇒ 它证的是「显式关掉时不检查」。改名还是补默认断言，**不代决**。
+3. `lifespan` 那条 F401：删掉 import 里的 `lifespan` 即可（`ruff --fix` 一行）。**在项目门覆盖范围之外**（门只扫 `app/`），且是 **HEAD 上就有**（HEAD 行号 **162**，由 `ec0e1d7` 引入）⇒ **只登记，不顺手改**。
+
+**本节追加读数**：见本节末的 BEFORE/AFTER 打印（`append_generic.py`），验收三条同时成立：字节增量 == 块长、CRLF 增量 == 块内 CRLF 数、`bare_lf stays 0`、`prefix unchanged`。
+
+## 53.36 给「出厂默认值」补守卫：两层 + 一类新变异（用户点选 A；动代码）
+
+承接 §53.35 的实测缺口。**本项动代码**（新增 1 个测试文件，不改生产代码），因此**做了四相变异（含一类新变异）+ 跑了四道门 + 全量回归**。
+
+### 53.36.1 结论先行
+
+- 新增 `backend/tests/test_posture_switch_defaults.py`（**18 条用例**；纯 LF / 13,039 B / 298 行 / sha16 `6350c2e16daaa5c8`，`git status` 显示 `??` 未跟踪）。**未改任何生产代码** —— `config.py` 全程只被变异再逐字节还原，终态 sha16 `811e638907eb365b`。
+- 三个出厂默认现在各有 **1 条声明层断言 + 1 条观测层断言**。
+- 🔴 **用户给的最小形态 `assertIs(settings.ALLOW_OPEN_WRITES, False)` 被否掉**：它读的是**生效值**，会被环境 / `.env` 满足 ⇒ **在恰恰会配置该开关的机器上，它是空头**。§53.36.5 是决定性演示，不是论证。
+- 🔴 **发明了一类新变异（shadow）**：翻字面量只让**声明层**红；**字面量不动、对象被改**只让**观测层**红。没有这一类，「观测层确实承重」就只能靠读代码来断言。
+
+### 53.36.2 两层各测什么（判据）
+
+| 层 | 做法 | 独立于什么 | 能抓到什么 |
+|---|---|---|---|
+| **声明层** `shipped_default_literals()` | AST 读 `config.py` 里 `_env_bool("KEY", "<lit>")` 的第二个实参 | **完全不读环境** | 有人**改了默认值字面量** |
+| **观测层** `_reloaded_settings(drop=KEY, ignore_dotenv=True)` | 从 `os.environ` 摘掉该名 + **中和 `dotenv.load_dotenv`** + `importlib.reload(config)` | 环境与 `.env` **两层都被摘掉** | 字面量没动但**对象**被改（后续覆盖、换了读取方式、被 shadow） |
+
+⚠️ **观测层没有用 `skip`。** 先例 `test_run_entrypoint.py:112` 的做法是 `skipIf(.env 里赋了该名, "…the shipped default is not observable here")` —— 但那会在**恰好配置了该开关的机器上把守卫静默关掉**。这里改成**中和 `load_dotenv`**：`config.py` 是 `from dotenv import load_dotenv`（`:1`），`importlib.reload` 会重新执行这行 `getattr` ⇒ **先 patch `dotenv.load_dotenv` 再 reload，`.env` 那一层就整个进不来**（实测 `load.called=True`，且 `Settings()` 无必需字段失败）。
+✅ **有正向控制**：`assert load.called`。若 import 形式改成 `import dotenv`，patch 会**落空**，于是测试会**读着 `.env` 的值却看着全绿** —— 这种静默失效必须由断言挡掉。
+
+### 53.36.3 四相变异（判据只取 junit；读数由 `junit_red.py` 汇总，**不看进程 rc**）
+
+| 相 | 动作 | 读数 |
+|---|---|---|
+| ① 基线 | 未变异 | **`18 / red 0 / skipped 0`** |
+| ②a 字面量 `ALLOW_OPEN_WRITES` `false`→`true` | `apply` | **`red 2`** = 声明层 `test_the_shipped_default_of_allow_open_writes_is_false` + 控制臂 `test_the_other_direction_moves_it_too` |
+| ②b 字面量 `LLM_STARTUP_CHECK_ENABLED` `false`→`true` | `apply` | **`red 1`** = 仅声明层 `test_the_shipped_default_of_llm_startup_check_enabled_is_false` |
+| ②c 字面量 `SCHEDULER_ENABLED` `true`→`false` | `apply` | **`red 2`** = 声明层 `test_the_shipped_default_of_scheduler_enabled_is_true` + 控制臂 `test_an_environment_variable_moves_the_value` |
+| ②d **shadow** `SCHEDULER_ENABLED`（字面量不动，文件末尾追加 `settings.SCHEDULER_ENABLED = False`） | `apply-shadow` | **`red 1`** = **只有** `TestTheDefaultIsObservedNotOnlyDeclared::test_scheduler_enabled` ⇒ **观测层承重被隔离验证** |
+| ③ 还原 | 每轮 `revert` | 每次回到 `18 / red 0`，且 `byte-identical to snapshot: True` |
+| ④ 字节一致 | sha256 复核 | 每轮回到 `811e638907eb365b`（`git status --porcelain` 空） |
+
+🔴 **②a 里观测层那条 `test_allow_open_writes` 是绿的 —— 这是设计，不是漏网。** 观测层拿 `_default_bool(KEY)`（**同一份被改过的源码**）当期望值 ⇒ 字面量一改，两边一起动。**声明层是唯一能看见「字面量被编辑」的那层**，这正是要两层的理由；②d 证明反过来也成立（只动对象时声明层全绿）。⚠️ 若把这条写成「观测层也红了」就等于在粉饰。
+📌 **`SCHEDULER_ENABLED` 的 shadow 变异使 `bare_lf` 从 0 变 4**（追加的 4 个 `\n`）—— 这是**变异态**的临时特征，还原后回到 0；记在这里以免日后把工作树上的 4 个 bare LF 当成损坏。
+
+### 53.36.4 一条写进测试的诚实边界
+
+§53.36.1 说 naive 形式在**会配置该开关的机器上**是空头。本机 `backend/.env` 对这三个名**都没有赋值**（实测 `grep -cE "^\s*KEY\s*="` 三者皆 0，且无 overlay 文件）⇒ **在这台机器上 naive 形式恰好也好用**。这个差别不靠注释说明，靠 §53.36.5 的对照跑出来。
+
+### 53.36.5 🔴 决定性演示：遮蔽环境下 naive 形式 PASS，本守卫照样红
+
+步骤：`apply ALLOW_OPEN_WRITES`（**默认值此刻是 `true`**）+ 进程环境导出 `ALLOW_OPEN_WRITES=false`：
+
+| 读数 | 值 |
+|---|---|
+| `settings.ALLOW_OPEN_WRITES`（**naive 形式读的就是它**） | **`False`** ⇒ `assertIs(settings.ALLOW_OPEN_WRITES, False)` **PASS —— 守了个寂寞** |
+| 本守卫在**同一条件**下的 junit | **`red 2`**，与**无遮蔽**时的红集**完全一致** ⇒ 守卫与环境无关 |
+
+⇒ **「默认值被翻成 fail-open」这件事，在遮蔽环境下只有本守卫看得见。** 这就是把「最小形态」换成两层的收益，也是它可被证伪的地方。
+
+### 53.36.6 门与回归
+
+| 门 | 读数 |
+|---|---|
+| `ruff check app/` | `All checks passed!` |
+| `ruff check tests/test_posture_switch_defaults.py` | `All checks passed!` |
+| `python -m scripts.generate_types --check` | `generated-types.ts is up to date.` |
+| `mypy app/` | `Success: no issues found in 331 source files` |
+| 全量 `pytest tests/` | `tests=6626 / red=1 / skipped=11` —— `1 failed, 6614 passed, 11 skipped, 1095 subtests passed`（1418.99s）；`safe-delete` 指纹 **0** ⇒ 真失败 |
+
+🔴 **那唯一一条红不是本批的**：`tests/test_realtime_ticket_store.py::test_spawned_workers_share_atomic_consume_once`。四条判据（都可复算）：
+
+1. **交集为空**：本批改动清单（新增 `tests/test_posture_switch_defaults.py` + 追加 §53.35/§53.36 + `.workbuddy/**`；`config.py` 只被变异后**逐字节还原**）与 `app/realtime/ws_auth.py`、`tests/test_realtime_ticket_store.py` **零相交**（`git status --porcelain | grep -E "ws_auth|realtime_ticket_store"` 无输出）。
+2. **新用例本身全绿**：`pytest tests/test_posture_switch_defaults.py` → `18 passed, 6 subtests passed`。
+3. **隔离复跑 3/3 全绿**：`pytest tests/test_realtime_ticket_store.py` → junit `tests=4 / red=0 / skipped=0` ×3（与 §51.11 判据③ 同口径）。
+4. **异常是环境态而非断言态**：`sqlite3.OperationalError: attempt to write a readonly database ← spawned worker → app/realtime/ws_auth.py:142`（`spawn` 池）。这是 spawn 子进程写**另一进程刚创建的临时目录** SQLite 时拿到只读句柄 —— Windows（AV/索引器/临时清理）的经典瞬时态，**被测不变量（socket 只能核销一次）未被证伪**。同一用例、同一异常文本、同一落点已在 **§51.11** 与 `.workbuddy/memory/2026-10-02.md:126-129` 登记为既有偶发。
+
+⚠️ **一处更正（§0）**：两次记录的 `tmp_path` 目录号**不同** —— 既有是 `…/pytest-of-Alin/pytest-3598/…`，本次是 `…/pytest-of-Alin/pytest-4055/…`。这是**每次 pytest 自增的计数器**，**不是同一目录**。同一性成立于「同一用例 + 同一异常文本 + 同一落点 + 同一机制」，**不含目录号**；此前若有「同一个 `pytest-3598` 目录」的读法，以本条为准。
+
+📌 **为什么这一项的非全量回归不行**（不是形式主义）：新用例会 `importlib.reload(app.core.config)`，而 `test_config.py:107-135` 记着一次**真实泄漏** —— 恢复性 reload 若放在 `patch.dict` 块**内**，会把被污染的值留在**进程级对象**里，症状出现在一个**不相关的**时间戳排序用例上。本项因此：把恢复性 reload 放在块**外**，并且**断言清理生效**（`test_the_environment_is_restored_afterwards`）；而 `conftest.py:259-280` 的 autouse fixture 另有一道 canonical 单例恢复。
+
+### 53.36.7 未决（只登记，不代决）
+
+1. `LLM_STARTUP_CHECK_ENABLED` 的翻向是 **fail-closed**（无害），所以它只作为②b 的**变异**出现，没有被写成「危险方向」叙事。
+2. 新工具 `mutate_posture_default.py`（`apply` / `apply-shadow` / `revert` / `status`，支持三个键）**取代** `mutate_allow_open_writes_default.py`；后者保留，因为 §53.35.4 按**文件名**引用了它。两者用不同快照路径，但**改的是同一个文件 ⇒ 不可同时运行**。
+3. `tests/test_operational_readiness.py:221` 那条 `lifespan` F401 仍未清（§53.35.6 第 3 条）。
+4. 三个默认值现在**各 1 条**断言；`DIRECTIONS` 式的「顺序即契约」类默认值未纳入本普查范围。
+
+**本节追加读数**：见本节末的 BEFORE/AFTER 打印（`append_generic.py`），验收三条同时成立：字节增量 == 块长、CRLF 增量 == 块内 CRLF 数、`bare_lf stays 0`、`prefix unchanged`。
+
+## 53.37 §53.36.7 四项未决的处置（用户点选 D）
+
+处置口径：**能实测的实测、能修的修、不能替用户定的只登记**。四项里第 2、3 条各改了一个文件（一个工作台工具、一个测试文件），第 1、4 条是取证 + 措辞更正。**本节不改生产代码。**
+
+### 53.37.1 结论先行
+
+| # | §53.36.7 的未决 | 处置 | 一句话结论 |
+|---|---|---|---|
+| 2 | 两个变异工具「改同一文件 ⇒ 不可同时运行」 | ✅ **已修**（工作台工具） | 各自的「快照已存在」检查**只看自己那条路径** ⇒ 先后各 `apply` 一次会把**变异态存成"原件"**，之后的 `revert` 忠实还原到变异态。改成扫 `config.py.snapshot*` 通配，任一存在即拒绝 |
+| 3 | `test_operational_readiness.py:221` 的 `lifespan` F401 | ✅ **已清**（测试代码） | `from app.main import app, lifespan` → `from app.main import app`；`ruff` **正控成立**（HEAD 版仍报 F401） |
+| 1 | `LLM_STARTUP_CHECK_ENABLED` 只作变异出现、未写「危险方向」叙事 | 📌 **维持叙事，更正措辞** | 翻 `true` **不是 fail-open**（不放大写入面）⇒ 不进危险叙事是对的；但「**无害**」过宽：它让**启动依赖 LLM 可达性**，且该检查跑在**写密钥守卫之前** |
+| 4 | `DIRECTIONS` 式「顺序即契约」类未纳入普查 | 📌 **已做有界普查** | 该类**恰好 2 个成员**：`DIRECTIONS`（顺序**有钉**）与 `ENGINE_NAMES`（顺序**无人钉**，却有 4 处 dict-building 消费者）⇒ **不对称**，登记不代决 |
+
+### 53.37.2 第 2 条：两个变异工具的互斥 footgun（已修）
+
+`.workbuddy/audit-2026-10-03/` 下两个工具改同一个 `backend/app/core/config.py`：
+
+| 工具 | 自己的快照路径 |
+|---|---|
+| `mutate_posture_default.py` | `config.py.snapshot.posture` |
+| `mutate_allow_open_writes_default.py` | `config.py.snapshot` |
+
+两者的 `apply` 前置检查都是 `if <自己的快照>.exists(): refuse`。**故：**
+
+1. `mutate_posture_default.py apply SCHEDULER_ENABLED` ⇒ 写 `config.py.snapshot.posture`（= 原件）+ 改 `config.py`。
+2. `mutate_allow_open_writes_default.py apply` ⇒ 它只看 `config.py.snapshot`（**不存在**）⇒ **不拒绝**；于是把**已被变异**的 `config.py` 存成**它认为的原件**。
+3. 之后任一次 `revert` ⇒ 忠实还原到**第 1 步之后的变异态**。`git diff` 看得见（`config.py` 确实被改了），但**工具自己会打印 `byte-identical to snapshot: True`** —— 一个会自证的静默污染。
+
+**修法**（保留两个文件名，因为 §53.35.4 按文件名引用旧工具）：把前置检查从「本路径存在」改成「**扫同目录 `config.py.snapshot*` 通配，任一存在即拒绝**」，并在拒绝信息里点名找到的快照。两个工具各加一行常量 `SNAPSHOT_GLOB = "config.py.snapshot*"`。
+
+**证据**（端到端，都在工作树里跑）：
+
+| 步骤 | 动作 | 读数 |
+|---|---|---|
+| a | 手放一个兄弟快照 `config.py.snapshot`（0 字节）后 `mutate_posture_default.py apply SCHEDULER_ENABLED` | `REFUSED: snapshot already present (config.py.snapshot)`，**rc=1**，`config.py` 仍 `811e638907eb365b`（零写入） |
+| b | 同一条件下 `mutate_allow_open_writes_default.py apply` | 同样 `REFUSED`，**rc=1** |
+| c | 移除兄弟快照后 `mutate_posture_default.py apply SCHEDULER_ENABLED` | `apply -> 8519d65307702e22`（快照 `811e638907eb365b`） |
+| d | **跨工具**：`mutate_allow_open_writes_default.py apply` | `REFUSED: snapshot already present (config.py.snapshot.posture)`，**rc=1** |
+| e | `mutate_posture_default.py revert` | `restored 811e638907eb365b` / `byte-identical to snapshot: True` / `snapshot removed` |
+| f | 终态 | 无 `config.py.snapshot*` 残留；`git status --porcelain backend/app/core/config.py` **空** |
+
+两个工具均仍为**纯 LF / 无 BOM**（`6071 B` / `4430 B`），`py_compile` 通过。⚠️ **两个工具都只被打包在 `.workbuddy/**`，永不入库**，所以本次改动**不进任何提交**。
+
+### 53.37.3 第 3 条：`lifespan` F401（已清）
+
+`backend/tests/test_operational_readiness.py:221` 的 `from app.main import app, lifespan` —— `lifespan` 全文件**仅此一处**出现（`:228` / `:302` / `:390` 都是注释或 docstring），删掉它不改变任何驱动路径（`with TestClient(app):` 走 ASGI 协议）。
+
+| 项 | 读数 |
+|---|---|
+| 字节画像 | 改前 `72069 B` / sha16 `b00481707cbf33ba` → 改后 `72059 B` / sha16 `f78f34fab98ac20b`（**−10 = `", lifespan"` 的长度**）；仍纯 CRLF（`crlf=1602` / `bare_lf=0`）/ 无 BOM |
+| `ruff check tests/test_operational_readiness.py` | `All checks passed!`（rc=0） |
+| **正控**：对 `git show HEAD:<file>` 跑同一命令 | `F401 [*] app.main.lifespan imported but unused`（rc=1）⇒ **正是这处改动消掉的**，不是命令本身失效 |
+| `git diff --numstat` | `61 2`（§53.34 收尾时是 `60 1` ⇒ **+1/−1 恰为本行**） |
+| `pytest tests/test_operational_readiness.py` | junit `tests=75 / red=0 / skipped=0` |
+
+**为什么这一处可以只跑定向集**（不是偷懒）：同一文件既**不在**任何变异针的 `m.path` 里，也**不被**任何变异当守卫 —— 这两条都是从 harness 自述**派生**的，不是手抄：
+`mutation_verify.SETS` 的 `path` 全集 = **27 条**（无 `test_operational_readiness.py`）；`guards` 全集 = **87 个函数名**，逐个在本文件里 `def` 一遍 ⇒ **命中 0**。全量回归仍作为批次级门统一跑（读数见 §53.37.7）。
+
+### 53.37.4 第 1 条：`LLM_STARTUP_CHECK_ENABLED` 的方向叙事（只登记，更正措辞）
+
+§53.35.4 的方向表把它的「翻 `true`」写成 **fail-closed（无害）**，且注明**不宜做变异**（会真去 `complete_chat()`）。本次把这句话的**边界**查清了：
+
+| 事实 | 位置 |
+|---|---|
+| 出厂字面量是 `false` | `config.py:192-193` |
+| **唯一**消费点 | `app/main.py:214` `if settings.LLM_STARTUP_CHECK_ENABLED: await validate_primary_llm_startup()` |
+| 失败时**抛**（不是警） | `services/llm_startup_check_service.py:24`（调 `complete_chat` 抛异常时）与 `:36`（`result.ok` 为假时）都 `raise RuntimeError` |
+| 异常消息**已脱敏** | 同文件 `:20-21`：命中 `settings.OPENAI_API_KEY` 就替换成 `<redacted>`，并截断到 300 字 |
+| **顺序**：该检查在写密钥守卫**之前** | `main.py:214` 早于 `:217-232` 的 `API_WRITE_KEY` fail-closed 块 |
+
+⇒ **两条结论**：① 翻 `true` **不打开任何写入面**，所以「不进危险方向叙事」是**对的**；② 但「**无害**」是过宽的 —— 它把**启动**变成依赖 LLM 可达性的操作（LLM 不通就 `RuntimeError` 拒绝启动），而且它会**先于**写密钥守卫抛出，也就是一个无密钥部署届时看到的是**LLM 错误**而不是那条「API_WRITE_KEY is empty」的指引。⚠️ 这一条是**读源码**得出的，**没有实测**（按 §53.35.4 的理由：变异会引入网络与超时，读数不可读）—— 这一点必须写明，别让下一轮把「读来的」当成「量来的」。
+
+### 53.37.5 第 4 条：`DIRECTIONS` 式「顺序即契约」默认值的有界普查（只登记）
+
+§53.36.7 第 4 条说这类「未纳入普查范围」。本次把它**划成有界的一类**并测完。判据取 `DIRECTIONS` 自己的 signature：**一个有序容器（tuple/list），被迭代进 dict**（`{x: … for x in NAME}` 或 `dict.fromkeys(NAME)`）—— 因为 dict 键序跟随插入序、而本仓**不固定 `PYTHONHASHSEED`**，这类常量的顺序会**印进发布的 JSON**。只做 `in` / `sorted()` 用的关键词表**不属此类**，刻意不报。
+
+**探针**：`.workbuddy/audit-2026-10-03/census_ordered_defaults.py`（AST，常量人群与每个消费者**全部派生**，不手抄）。
+
+| 读数 | 值 |
+|---|---|
+| `app/**` 模块级「同质字符串序列」常量（不含 `__all__`） | **61** |
+| 其中有序（Tuple/List） | **42** |
+| 其中无序（Set） | **19** |
+| **顺序泄漏进 dict（= `DIRECTIONS` signature）** | **2** |
+
+两个成员，守卫状况**不对称**：
+
+| 常量 | 定义 | dict-building 消费者 | 顺序有没有守卫 |
+|---|---|---|---|
+| `DIRECTIONS` | `utils/direction_vocabulary.py:127`，tuple n=4 | `api/routes/quality_metrics.py:97`（`fromkeys`）、`utils/metrics.py:285`（`fromkeys`） | ✅ **有**：`tests/test_direction_vocabulary.py:108` `test_directions_stays_an_ordered_sequence` = `isinstance(..., tuple)` **且** `== ("YES","NO","WAIT","AVOID")`；另有 `:88` 容器类型钉与 `:57` 的 `_EXPECTED` 值钉 |
+| `ENGINE_NAMES` | `services/world_cup_quality_service.py:20`，tuple n=4 | `api/routes/world_cup_analytics.py:304`、`:323`；`services/world_cup_quality_service.py:863`、`:870` | ❌ **无**：全部比较都是集合式 —— `tests/test_gbm_engine.py:40` `assertIn("gbm", …)`、`tests/test_world_cup_quality_service.py:456` `assertEqual(set(ENGINE_NAMES), set(ENGINES) | {"integrated"})`、`tests/test_world_cup_prediction_pipeline.py:688` 用**集合推导** `{f"{name}_count" for name in ENGINE_NAMES}` |
+
+**`ENGINE_NAMES` 的顺序确实出现在输出里**（所以它够格做契约），两条证据：
+1. `world_cup_quality_service.py:863-873` 用它按序建 `by_engine` 与 `trends["by_engine"]`，随 `build_quality_loop_report` 的返回体发布；`world_cup_analytics.py:304` + `:321-327` 同理建响应 `by_engine`。
+2. `world_cup_analytics.py:300-303` 的既有注释**自己记着**：该端点**曾自带一份"顺序不同"的引擎词表**、且"没有任何测试点名它"，被当缺陷修掉。⇒ 本项目此前已把「同一集合、不同顺序」当作**真实缺陷**处理过。
+
+⇒ **本项只登记，不代决**：现在「`DIRECTIONS` 有顺序钉 / `ENGINE_NAMES` 没有」是**实测出的不对称**；要不要给 `ENGINE_NAMES` 也补一条顺序钉，属于**契约取值**（等于宣布当前顺序是契约），按 §0 留给你定。⚠️ 注意 `ENGINE_NAMES` 现有守卫的 docstring（`tests/test_world_cup_quality_service.py:446-452`）只论证「**成员陈旧**不可见」（`_summarize([])` 报空桶即绿），**不涉顺序** —— 所以它看起来"已守"，实际守的是另一件事（同族：§4.2「看到弱正向断言先假定它对那个分支空头」）。
+
+### 53.37.6 副产物：两个 `app/` 文件带 UTF-8 BOM（既有，只登记）
+
+`census_ordered_defaults.py` 第一次运行就 `SyntaxError: invalid non-printable character U+FEFF` —— 起因是 `app/**` 里有两个文件以 BOM 开头：
+
+`app/services/llm_gateway_service.py`、`app/services/world_cup_tournament_state_service.py`
+
+实测 `git show HEAD:<file>` **同样带 BOM** ⇒ **既有、已提交**，不是本批引入（这两个文件 `git status` 也未改）。影响面：任何用**裸 `utf-8`** 读源码的工具（本探针就是）会在第一行 `SyntaxError`；本仓 `ruff` / `mypy` / `pytest` 不受影响（它们容忍 BOM）。**只登记不代决**（剥 BOM 会让 `git diff` 出现全文件首行变化，属独立批次）。
+
+### 53.37.7 门与回归
+
+| 门 | 读数 |
+|---|---|
+| `ruff check app/` | `All checks passed!` |
+| `ruff check tests/test_operational_readiness.py` | `All checks passed!`（正控见 §53.37.3） |
+| `python -m scripts.generate_types --check` | `generated-types.ts is up to date.` |
+| `mypy app/` | `Success: no issues found in 331 source files` |
+| 全量 `pytest tests/` | `tests=6626 / red=0 / skipped=11` —— `6615 passed, 11 skipped, 1095 subtests passed`（1434.54s）；`safe-delete` 指纹 **0**；进程 `rc=0`（**全绿**） |
+
+📌 **本次全量全绿，而 §53.36 那次同一代码态下是 `red=1`**（唯一红 = `test_realtime_ticket_store.py::test_spawned_workers_share_atomic_consume_once`）。两次唯一差别是**跑了几次**，第三次（本次）该用例绿 —— 与 §53.37.3 的「它不在任何针/守卫里」一起，进一步坐实它是**环境态偶发**而非本批引入。
+
+📌 **跑前 / 跑后 sha 复核**（防长任务期文件回退）：`test_operational_readiness.py` `f78f34fab98ac20b`、`config.py` `811e638907eb365b`、`test_posture_switch_defaults.py` `6350c2e16daaa5c8` —— **PRE == POST**（`prerun-shas.txt` 留档）。
+
+## 53.38 给 `ENGINE_NAMES` 补顺序钉：把「顺序即契约」的另一半补上（用户点选 A；动代码）
+
+承接 §53.37.5 的有界普查（那一类**恰好 2 个**成员：`DIRECTIONS` 有顺序钉、`ENGINE_NAMES` 没有）。用户点选 A = **明确授权**把当前顺序宣布为契约 —— §0 的「契约取值不代决」在这里由用户点头解除。**本项动代码**：1 条新用例 + 1 条新变异。
+
+### 53.38.1 结论先行
+
+- 新增 `tests/test_world_cup_quality_service.py::WorldCupQualityServiceTests::test_engine_names_order_is_pinned`：`assertIsInstance(ENGINE_NAMES, tuple)` + `assertEqual(ENGINE_NAMES, ("elo_odds", "hybrid", "gbm", "integrated"))`。
+- harness 新增 **W35**（`whitelist-fixtures` 第 9 位），与既有 **W8**（删成员）**同 `group="engine-names-literal"`** —— 两条改写**同一行**字节（一个删、一个换序）。
+- 🔴 **加钉之前这条顺序确实无人守**：变异态下跑**完整**两个守卫文件（57 个测试）⇒ **恰好 1 红**，就是新写的那条。**这是量出来的，不是推出来的。**
+- `list` 由 **71 → 72** 个变异；`test_mutation_verify.py` 仍 **`62 / red 0`**（四条不变量全过）。
+
+### 53.38.2 待钉的那半边长什么样
+
+| 项 | 值 |
+|---|---|
+| 定义 | `app/services/world_cup_quality_service.py:20` —— `ENGINE_NAMES = ("elo_odds", "hybrid", "gbm", "integrated")` |
+| dict-building 消费者（顺序印进发布 JSON） | `build_quality_loop_report` 的 `by_engine`（`:863-866`）与 `trends` 的 `by_engine` 子表（`:868-873`）；`/analytics/engine-stats` 的 `grouped`（`world_cup_analytics.py:304`）与响应 `by_engine`（`:321-327`） |
+| 为什么顺序可观测（不是审美） | `world_cup_analytics.py:300-303` 的既有注释：该端点**曾自带一份「顺序不同」的引擎词表**、且没有任何测试点名它，被当缺陷修掉 |
+| **加钉前**全仓对它的比较 | 清一色**集合式**：`set(ENGINE_NAMES) == set(ENGINES) \| {"integrated"}`、`assertIn("gbm", …)`、`{f"{n}_count" for n in ENGINE_NAMES}`；连 `by_engine` 的断言也全按键索引（`report["by_engine"]["elo_odds"]`）⇒ **对键序天然盲** |
+| 同类的另一半 | `DIRECTIONS` 早有顺序钉（`test_direction_vocabulary.py:108`） |
+
+### 53.38.3 四阶段变异（判据只看 junit）
+
+`scripts/mutation_verify.py verify whitelist-fixtures -i 9`：
+
+```
+[OK ] whitelist-fixtures  9. W35 ENGINE_NAMES 前两成员对调（同集合、不同顺序）
+        green before True | red after mutation 1/1 files red | green after restore True | bytes restored True
+        mutated run -> tests/test_world_cup_quality_service.py -> 1 failed, 18 deselected
+```
+
+### 53.38.4 🔴 决定性读数：「此前是空头」是量出来的
+
+`verify` 只跑**点名的**守卫（`-k`），所以它**答不了**「别的测试会不会也抓到」。为此另做一次**宽集**：`backup` → `apply whitelist-fixtures 9`（只 W35）→ 跑**两个完整守卫文件** → `revert`。
+
+| 读数 | 值 |
+|---|---|
+| 变异态下 `tests/test_world_cup_quality_service.py` + `tests/test_world_cup_analytics_routes.py` | **`tests=57 / red=1`**（`1 failed, 56 passed, 5 subtests passed`） |
+| 那唯一的红 | `WorldCupQualityServiceTests::test_engine_names_order_is_pinned` —— **新写的那条** |
+| `revert` 后 | `world_cup_quality_service.py` 回 `ae072d3dc62ec8f5`（**与跑前逐字节一致**）；该 set 目标文件 `git status` 全空 |
+
+⇒ **换了顺序之后，57 个测试里只有新钉看得见。** 不做这一步，「没人守」就只是推理。
+
+### 53.38.5 `group` 机制：为什么同组是必须的（不是整洁癖）
+
+`_apply_preflight` 的实测输出：
+
+```
+refusing to apply, 1 problem(s):
+  positions 8, 9 share group 'engine-names-literal': they rewrite the same bytes in opposite directions,
+  so applying both would leave neither mutation in place
+```
+
+且**一个字节都没写**（`world_cup_quality_service.py` 仍 `ae072d3dc62ec8f5`）。⚠️ 若不给两条同 `group`：`apply whitelist-fixtures`（整组）应用到第二条时会因针 0 命中而崩；而 `tests/test_mutation_verify.py::test_grouped_mutations_rewrite_the_same_bytes` 还要求同组成员**同 `path` 同 `old`** —— W8/W35 恰好都满足（`old` 逐字节相同）。
+
+### 53.38.6 门与回归
+
+| 门 | 读数 |
+|---|---|
+| `ruff check app/` | `All checks passed!` |
+| `ruff check scripts/mutation_verify.py tests/test_world_cup_quality_service.py` | `All checks passed!`（对 HEAD 版 `mutation_verify.py` 跑同一命令也全过 ⇒ 我引入的问题为 0） |
+| `python -m scripts.generate_types --check` | `generated-types.ts is up to date.` |
+| `mypy app/` | `Success: no issues found in 331 source files` |
+| `mypy scripts/mutation_verify.py` | `Success: no issues found in 1 source file` |
+| `pytest tests/test_mutation_verify.py` | `tests=62 / red=0 / skipped=0` |
+| 全量 `pytest tests/` | `tests=6627 / red=1 / skipped=11` —— `1 failed, 6615 passed, 11 skipped, 1097 subtests passed`（1452.49s）；`safe-delete` 指纹 **0** ⇒ 真失败 |
+
+📌 **计数算术自洽**：`6627 = 6626 + 1`（新用例）；`6627 = 6615 passed + 1 failed + 11 skipped`。§53.36 那次是 `6626 / red 0`、更早那次 `6626 / red 1` —— 三次唯一差别是**跑了几次**。
+
+🔴 **那唯一一条红不是本批的**（四条判据，都可复算）：
+
+1. **交集为空**：本批只改 `backend/tests/test_world_cup_quality_service.py`（+23/−0）与 `backend/scripts/mutation_verify.py`，与 `app/realtime/ws_auth.py`、`tests/test_realtime_ticket_store.py` **零相交**（`git status --porcelain | grep -E "ws_auth|realtime_ticket_store"` 无输出）。
+2. **新用例本身全绿**：`pytest tests/test_world_cup_quality_service.py -k engine_names` → `tests=2 / red=0`。
+3. **隔离复跑 3/3 全绿**：`pytest tests/test_realtime_ticket_store.py` → junit `tests=4 / red=0 / skipped=0` ×3（与 §51.11 判据③ 同口径）。
+4. **异常是环境态而非断言态**：`sqlite3.OperationalError: attempt to write a readonly database ← spawned worker → app/realtime/ws_auth.py:142`（`spawn` 池）—— spawn 子进程写**另一进程刚创建的临时目录** SQLite 时拿到只读句柄，Windows（AV/索引器/临时清理）的经典瞬时态；**被测不变量（socket 只能核销一次）未被证伪**。同一用例已在 **§51.11** / **§53.37.6 第 4 条** / `.workbuddy/memory/2026-10-02.md:126-129` 登记为既有偶发。
+
+📌 **跑前 / 跑后 sha 一致**（`prerun-shas-53-38.txt` 留档）：`test_world_cup_quality_service.py` `8fc7a157240643d2`、`mutation_verify.py` `c1882e64dc610a39`、`world_cup_quality_service.py` `ae072d3dc62ec8f5`、`test_operational_readiness.py` `f78f34fab98ac20b` —— **PRE == POST**，长任务期无文件回退。
+
+📌 **为什么必须跑 `test_mutation_verify.py`**：本次改了 `backend/scripts/mutation_verify.py`，而它**在** `m.path` 名单里 —— §4.3 的判据是「diff 触及任何 `m.path` 就加进必跑列表」。
+
+### 53.38.7 两条留痕（别让下一轮读成别的东西）
+
+1. `scripts/` 下有一批**既有**的 F541（`audit_quality_consistency.py` 等），但项目门是 `ruff check app/`（**不含 `scripts/`**），且 `mutation_verify.py` 在 HEAD 版就干净 ⇒ **不是本项引入、不顺手改**（同族：§53.34 末尾那条 `tests/` 里的 F401 登记）。
+2. `assertIsInstance(ENGINE_NAMES, tuple)` 比「钉顺序」多半步：顺序只在有序容器上才有意义，而 `DIRECTIONS` 那条钉同样先断言容器类型（模块注释也解释了 `set` 会让键序在运行间漂移）。这是**授权范围内的一致做法**，写明以免被读成顺手加料。
+
+**本节追加读数**：见 `append_generic.py` 的 BEFORE/AFTER 打印，验收四条同时成立：字节增量 == 块长、CRLF 增量 == 块内 CRLF 数、`bare_lf stays 0`、`prefix unchanged`。
+
+## 53.39 剥掉两个 `app/` 文件的 UTF-8 BOM（用户点选 A；独立批次）
+
+本节是 §53.37.6 那条「只登记不代决」的直接处置。当时不做的理由原文是「剥 BOM 会让 `git diff` 出现全文件首行变化，属独立批次」—— 现在把它当成那个独立批次来做。
+
+### 53.39.1 结论先行
+
+`app/services/llm_gateway_service.py` 与 `app/services/world_cup_tournament_state_service.py` 的 **UTF-8 BOM 已剥除**，**只删了各自文件头的前 3 个字节**，其余字节逐字节未动（`new == old[3:]` 两文件均为真）。工作树仍是**纯 CRLF**（`crlf` 计数不变、`bare_lf` 仍为 0），入库 blob 仍是**纯 LF**。四道门全过。**未提交、未推送。**
+
+| 文件 | worktree 前 → 后 | crlf | bom | worktree sha16 前 → 后 |
+|---|---|---|---|---|
+| `app/services/llm_gateway_service.py` | 30443 → 30440 | 811 → 811 | True → **False** | `13a6131a92bd930f` → `f95bc825535f7f30` |
+| `app/services/world_cup_tournament_state_service.py` | 6074 → 6071 | 159 → 159 | True → **False** | `05b8021c23d12406` → `6cd6f524292416bd` |
+
+入库侧（HEAD blob，纯 LF）：`29632 → 29629`、`5915 → 5912`；HEAD blob sha `<HEAD>` 后由 `eddc8ca…`、`f8399c9…` 变为 `9fb3ead…`、`73d1f52…`（与 `git diff` 打印的新 index 一致，见 53.39.1 的读数）。
+
+⚠️ **范围更正**：本节只处理用户点名的这 **2 个**。全仓字节级普查（53.39.8）显示带 BOM 的 tracked 文件**实为 15 个**（含 `backend/tests/` 2 个、`frontend/**` 2 个、4 个 `.diff` 证据文件、6 个 `docs/superpowers/**`）—— **其余 13 个只登记、不代决**。
+
+### 53.39.2 怎么做的（字节级，只删前 3 字节）
+
+`strip_bom_53_39.py`：读 bytes → 断言 `raw[:3] == b"\xef\xbb\xbf"` 且 `raw[3:6] != BOM`（防双 BOM）→ 原件另存 `.workbuddy/audit-2026-10-03/bom-backup-53-39/*.withbom` → 写 `raw[3:]` → 回读画像。
+
+写前有一条**自证**：`stripped` 的 `crlf` 与 `bare_lf` 必须与 `raw` 相等（断言），即「删的 3 个字节不含任何 `\n`」。这条断言是必要的 —— §1 的教训是「读入-改-回写」一旦走文本 API 就会把整个文件的行尾改掉而 `git diff` 看不见；本处**全程 bytes**，且用断言把「行尾不变」变成可执行判据而不是靠眼睛。
+
+`verify_bom_strip_53_39.py` 给出**后缀逐字节同一性**：
+
+```
+new == old[3:] ........... True   (两文件)
+len(new) == len(old)-3 .. True   (两文件)
+compile(utf-8) .......... OK     (两文件)
+```
+
+### 53.39.3 正控：BOM 不是装饰（裸 `utf-8` 的 AST 工具会炸）
+
+剥 BOM 若只是「整洁」，就不值得开独立批次。`bom_positive_control_53_39.py` 用**同一段代码、同一个读法**分别解析「带 BOM 的备份」与「已剥离的现行文件」：
+
+```
+backup(.withbom)       SyntaxError: invalid non-printable character U+FEFF (<unknown>, line 1)
+worktree(stripped)     OK
+control fires: True    (两文件)
+```
+
+也就是说：任何走**裸 `utf-8`** 的解析路径在这两个文件上都会炸；此前不炸，只是因为**谁都没用那条路径读过它们**（`import` 那条路自己带 BOM/cookie 侦测，绕过了这个坑）。`ruff` / `mypy` / `pytest` 都容忍 BOM，所以这条缺陷**在 CI 上是不可见的**，只对第三方 AST 工具/脚本生效 —— 判它「值得修」的依据是**可解析性**，不是「整洁」。正控同时说明了修法的边界：修的是**文件**，不是**工具**（工具侧写 `encoding="utf-8-sig"` 只是绕过症状）。
+
+### 53.39.4 §4.3 的必跑判据：本次**不触发**（派生事实，不是印象）
+
+§4.3 的判据是「diff 触及任何 `m.path` ⇒ 把 `tests/test_mutation_verify.py` 加进必跑列表」。本处不靠 grep 印象，而是从**模块导出**读出全集：
+
+```
+import mutation_verify as m
+{mu.path for s in m.SETS for mu in s.mutations}  ->  72 条变异 / 27 个 distinct path
+两个 BOM 文件是否在集合内： NO
+```
+
+⇒ **不必跑 `test_mutation_verify.py`**，且这是**计算出来的**（`m.SETS` 是本仓唯一真相源；grep 常量名会漏掉间接引用）。留痕原因：下一轮若只看到「改了 `app/services/*.py`」很容易反射性地把它加进必跑列表，而**多跑不可证伪**、只会让「必跑列表」这个判据变松。
+
+### 53.39.5 门与回归
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| lint | `ruff check app/`（在 `backend/` 下） | `All checks passed!` |
+| 类型 | `mypy app/`（完整门） | `Success: no issues found in 331 source files` |
+| 契约 | `python -m scripts.generate_types --check` | `generated-types.ts is up to date.` |
+| 定向（tournament state） | `pytest tests/test_world_cup_tournament_state_service.py` | junit `tests=5 red=0 skipped=0` |
+| 定向（llm_gateway 面） | `pytest` 21 个引用 `llm_gateway` 的测试文件 | junit `tests=363 red=0 skipped=0` |
+| 全量 | `pytest tests/` | 见下方 `FULL_RESULT` |
+
+`ruff check app/` 必须**在 `backend/` 下**执行：从仓库根跑 `ruff check app/` 会得到 `E902 系统找不到指定的文件 (os error 2) --> app:1:1`（因为 `app/` 在 `backend/` 下）。这不是代码问题，是**调用目录**问题，写下来免得下次误当成回归。
+
+`FULL_RESULT`：**跑了两次**（判据只取 `failures`/`errors`，不看进程 rc；两次 `safe-delete` 指纹均为 **0**）
+
+| 次 | 命令 | junit 读数 | 唯一红 |
+|---|---|---|---|
+| #1 | `pytest tests/` | `tests=6627 red=1 skipped=11`（`1 failed, 6615 passed, 11 skipped, 1097 subtests passed`, 1449.44s） | `test_sport_market_stores::test_get_latest_snapshot` |
+| #2 | `pytest tests/` | `tests=6627 red=0 skipped=11`（`6616 passed, 11 skipped, 1097 subtests passed`, 1446.65s） | —— **全绿** |
+
+⇒ 判据取「#2 全绿」，#1 的那个红**不可复现**（判定见 53.39.9）。**PRE == POST** sha 对照（`sha-53-39-before.txt` vs `-after.txt`，9 个热点文件逐条相同）⇒ 两次长任务期间**无文件回退**。
+
+### 53.39.6 🔴 剥 BOM 的**前提过期面**：7 处（只登记，不代决）
+
+这是 §4.1 那条「**结论会在前提被修掉之后静默过期**」的教科书级实例，也是本节最有价值的产出。
+
+先把事实摆出来：**剥之前 `app/` 有 2 个 BOM 文件，剥之后 `app/` 有 0 个**（逐目录量）：
+
+```
+app            -> 0
+app/services   -> 0
+app/sports     -> 0
+app/kernel     -> 0
+tests          -> 2   (tests/test_llm_gateway_service.py, tests/test_probability_engine_llm_gateway.py)
+```
+
+本仓有一批 AST 扫描守卫，reads 时统一用 `encoding="utf-8-sig"`，其中若干处**把「某文件带 BOM」当成事实写进了注释/docstring/测试名**。剥 BOM 之后，凡是**以 `app/` 或具体文件为作用域**的那几句就**由真变假**（`test_elo_provenance.py` 那句「Two files in this repository carry a UTF-8 BOM」连全仓都不成立了 —— 全仓实为 15 个）：
+
+| # | 位置 | 原文主张 | 作用域 | 剥 BOM 后 |
+|---|---|---|---|---|
+| 1 | `test_elo_provenance.py:296` | *"Two files in **this repository** carry a UTF-8 BOM"* | 全仓 | 🔴 **假**（全仓实为 15 个） |
+| 2 | `test_event_store_source_names.py:63-64` | *"`app/services/llm_gateway_service.py` carries a BOM that ast.parse rejects"* | 具名文件 | 🔴 **假** |
+| 3 | `test_ledger_error_sanitization_guard.py:315` | *"modules in **this tree** carry a BOM"* | `_APP_DIR`（`app/`） | 🔴 **假**（`app/` 现 0 个） |
+| 4 | `test_runtime_stores.py:31-32` | *"at least one module in this tree carries a BOM"* | `_CONFIG_PATH`（单文件 `app/core/config.py`） | 🔴 **假**（该文件本就无 BOM） |
+| 5 | `test_singleton_reset_census.py:73` | *"at least one source file carries a UTF-8 BOM"* | `_census()` 扫 `app/` | 🔴 **假** |
+| 6 | **`test_singleton_reset_census.py:118`（测试名）** | **`test_scanner_reads_the_file_with_a_utf8_bom`** + docstring *"app/services/llm_gateway_service.py **starts with U+FEFF**"* | 具名文件 | 🔴 **假**（**唯一一处写在标识符里的**） |
+| 7 | `test_no_assertionless_tests.py:99-101` | *"two files **in this suite** carry a UTF-8 BOM"* | `tests/` | ✅ **仍真**（`tests/` 恰 2 个，本节未动） |
+
+三条判据性结论：
+
+1. **7 处全部仍然 PASS**（本节全量与 21 文件定向跑都绿）。原因：`utf-8-sig` **在有/无 BOM 时都能正确解码** ⇒ 这些守卫的**行为**没变，变的只是它们**自述的理由**。⇒ 这是 **散文层（prose）缺陷，不是功能缺陷**；`ruff`/`mypy`/`pytest`/变异 harness **全都看不见它**（第 6 条尤其隐蔽：`test_scanner_reads_the_file_with_a_utf8_bom` 的**函数体**只断言 census 里有 `_client_cache`，**根本没检查 BOM** —— 所以它「名字在撒谎、身体仍然有效」）。
+2. **「防 BOM 的写法」不等于「BOM 存在」**：`utf-8-sig` 是**正确的防御性默认**（对未来的新文件同样有效），**不该因为 BOM 被剥掉就改回 `utf-8`** —— 那会**降低**鲁棒性，且正好把 53.39.3 那条缺陷重新引入。要改的只有**叙述**。
+3. **第 6 条是「标识符级前提过期」**，比注释更硬：注释至少跟着代码走，而**测试名会被 pytest 的输出、`-k` 过滤、报告直接引用** ⇒ 一行 `pytest -k utf8_bom` 的输出就会把一个假事实广播出去。**留痕给下一轮：改它要同时改函数名与 docstring，且改名会让任何按名点选它的地方失效（先 grep）。**
+
+⚠️ **本节新增一条对既有记录的更正**：§53.37.6 写的「`app/**` 里有两个文件带 BOM」在**本节执行后已不再成立**（`app/` 现为 0）—— 那句话必须读作「**截至 §53.37 时**为真」，不要当现状引用（§4.1）。
+
+**只登记不代决**：本节只做用户点名的「剥 BOM」，**没有**去改这 6 个测试文件的散文/标识符（那是另一个批次：**5 个**测试文件里 6 处假叙述 —— 第 7 条仍真、不必动；其中 1 处要 `grep` 名字引用）。上表即为待办清单。
+
+### 53.39.7 一条记账更正（§0 纪律：前提被改的结论必须显式更正）
+
+本节动手**之前**我写的预期是「`numstat` 删除数应为 **0**，因只删文件头 3 字节」。**这是错的**，实测两个文件各为 `1 1`：
+
+```
+1	1	backend/app/services/llm_gateway_service.py
+1	1	backend/app/services/world_cup_tournament_state_service.py
+```
+
+原因：BOM 是**拼在第一行（docstring 首行）之前**的，删掉它 ⇒ 那一整行的字节变了 ⇒ git 按**行**记账，记 1 删 1 增。所以：
+
+- **「删除数 == 0」是审计档追加（EOF 纯插入）的验收条款，不是本次代码改动的验收条款。** 两者别串用。
+- 本次的等价判据是**字节级**的：「只删 3 字节」+「`new == old[3:]`」+「`crlf` 计数不变」，三条都已成立（53.39.2）。
+- `git diff -U0` 的 hunk 数 = **2**，两个 hunk 都是 `@@ -1,2 +1,2 @@` ⇒ **只有首行变化**，与「只删 3 字节」互相印证（行级读数与字节级读数在这一处必须一致，不一致就说明别处也被改了）。
+
+### 53.39.8 全仓 BOM 普查（只读）：**不是 2 个，是 15 个**
+
+§53.37.6 说「`app/**` 里有两个文件」—— 那是**当时探针的作用域**（`census_ordered_defaults.py` 只解析 `app/` 源码），不是全仓结论。本次补一次**全仓字节级普查**（`census_bom_repo.py`，`git ls-files -z` + 未跟踪未忽略，读 bytes 不看行尾）：
+
+```
+tracked files: 1493
+untracked-but-not-ignored files: 7
+BOM files: 15
+```
+
+15 个命中的**全部**是 tracked（`git cat-file blob HEAD:<path>` 逐个复核，15/15 首位都是 `ef bb bf` ⇒ **全部已提交**，无一例外）。分布：
+
+| 目录 | 数量 | 代表 |
+|---|---|---|
+| `backend/.sdd/*.diff` | 4 | `final-review-package.diff` 等（**diff 文件也带 BOM**） |
+| `backend/data/openfootball-2026/` | 1 | `LICENSE.metadata.json` |
+| **`backend/tests/`** | **2** | **`test_llm_gateway_service.py`、`test_probability_engine_llm_gateway.py`** |
+| `docs/superpowers/plans` | 4 | 2026-07-05 一批 |
+| `docs/superpowers/specs` | 2 | 2026-07-05 一批 |
+| `frontend/src/components/detail` | 2 | `confidence-breakdown-panel.test.tsx`、`signal-summary.test.tsx` |
+
+三条**派生结论**：
+
+1. **这不是「`app/` 的卫生问题」，是「仓里 15 个文件的历史遗留」。** 本节只剥了用户点名的 2 个（`app/services/*.py`），**其余 13 个只登记、不代决** —— 剥它们＝再开一个批次（每个都会产生「首行变化」的 diff，其中 4 个还是 `.diff` 文件，改它们会改变**证据文件**的内容，需要单独判断）。
+2. **BOM 对 `pytest` 无影响，有实证**：命中里有 2 个是**测试文件**，而它们**就在**本节 53.39.5 那次 21 文件定向跑里（`tests=363 red=0`）。⇒ 「BOM 会让测试炸」是**假的**；标准 import 机制自己会处理 BOM（与 53.39.3 的 `ast.parse` 正控不矛盾：差异在于**谁读文件**——`import` 用自己那套 cookie/BOM 侦测，裸 `open().read()` + `ast.parse` 不会）。
+3. **带 BOM 的形态高度集中**：6 个 `docs/superpowers/**` 的文件名**全部**含同一天日期 `2026-07-05`，4 个 `backend/.sdd/*.diff` 自成一簇 ⇒ 各自指向某次**一次性批量产出**（同族：§3 的「生产者驱动探针」—— 想知道会不会再产出，要看那个生成器还在不在；本节**没查**）。⚠️ 这里**只**说「形态上像批量产出」，**没有**断言是谁生成的。
+
+### 53.39.9 #1 次全量唯一红测的判定：**偶发**（四条判据，其中第 4 条是本次新取的）
+
+#1 次的唯一红是 `tests/test_sport_market_stores.py::test_get_latest_snapshot`，断言 `assert 0.6 == 0.65`（`tests/test_sport_market_stores.py:207`）。**它不是本节改动引起的**，四条判据：
+
+| # | 判据 | 读数 |
+|---|---|---|
+| ① | **零相交**：该测试文件是否引用被改的两个模块 | `grep "llm_gateway\|world_cup_tournament_state"` ⇒ **NO REFERENCE**（改动是「两个无关模块各删 3 字节」，无因果路径） |
+| ② | 本批是否新增/改动测试 | **否**（本节只改 2 个 `app/` 文件；全量计数 `6627` 与 §53.38 相同） |
+| ③ | **隔离复跑** | `pytest tests/test_sport_market_stores.py` ×5 ⇒ `tests=11 red=0` **5/5 全绿** |
+| ④ | **全量再跑一次** | #2 次 `tests=6627 red=0` ⇒ **不可复现** |
+
+⚠️ **一条必须照实说的：这条红测在归档的历次全量里从未出现过。** 我扫了工作台里 112 个历史 junit（`scan_junit_reds.py`，按 `<failure>`/`<error>` 精确解析、不靠文件名 grep），全量档里只出现过这两个红：
+
+```
+junit-posture-full.xml, junit-53-38-full.xml  -> test_realtime_ticket_store::test_spawned_workers_share_atomic_consume_once
+junit-53-39-full.xml                          -> test_sport_market_stores::test_get_latest_snapshot   (本节 #1，首次)
+```
+
+而 `junit-53-37-full.xml` / `junit-full.xml` / `junit-fix-full.xml` / `junit-log-full.xml` / `junit-logguard-full.xml` / `junit-redirect-full.xml` / `junit-probe.xml` 全是 `red=0`。⇒ **不能说「这是既有偶发」**（那是把一个没证据的说法当结论）。能说的是：**同一批测试在三次最近的全量里，唯一红的身份分别是「无 / realtime_ticket_store / sport_market_stores」⇒ 这是「某一条会偶发」的形态，而不是「某一条稳定坏」的形态**，而判据 ①③④ 排除了与本节的因果关系。
+
+**机制未查清（只登记）**：`kernel_db` fixture 是**函数级 + `tmp_path`**（每用例新库），且 `captured_at` 由 `datetime.now(timezone.utc)`（微秒精度）赋值、列是普通 `DateTime` ⇒ **「两个快照拿到同一个 `captured_at` 而 `ORDER BY ... DESC` 无 tiebreaker」这条假设在微秒精度下很难成立**，但我**没有实测否定它**，也没有为「全局 engine 被并发重初始化 ⇒ 两次 append 落到不同 db 文件」这条备选假设取证。⇒ **留给下一轮，别把上面两条当已证结论。** ⚠️ 顺带一条**已证**的观察：`get_latest_snapshot`（`order_by(captured_at.desc())`）与 `get_snapshots`（`asc()`）**都没有 tiebreaker**，这在**任何**时间戳并列的场景下都是不确定序 —— 是否要补 tiebreaker 属**契约取值**，不代决。
+
+### 53.39.10 未决 / 留痕
+
+0. 🔴 **优先项：53.39.6 的 5 个测试文件 / 6 处过期叙述**（含 1 处**测试名**）。这是本节剥 BOM 的直接**副产品**，不修的话下一个人读那些注释会得到假事实。修它要动 **5 个**测试文件（6 处假叙述；第 7 条仍真不必动）、其中 1 处需先 `grep` 函数名引用。**本批未做（用户只点名了剥 BOM）。**
+1. **是否提交**由用户定（本节不提交、不推送）。若提交，属 `app/` 代码改动 ⇒ 按 §0 应**单独成提交**、且与文档提交分开。
+2. **其余 13 个 BOM 文件**（清单见 53.39.8）**只登记不代决**。要拍板的话，建议的判据顺序是：① `.diff` 那 4 个先排除（它们是**证据**，改动会改证据内容）② 4 个前端/后端**测试文件**次之（可执行、可用同样的正控验证）③ `docs/**` 最后（纯文本，风险最低）。本节**不预设**这个顺序一定对。
+3. **`docs/superpowers/**` 的 BOM 是否由某个仍在使用的生成器持续产出** —— 未查（见 53.39.8 第 3 条）。若还在，剥了会复发。
+4. **#1 次那条偶发红的机制**（53.39.9）—— 只登记，未查清。附带确认：`MarketSnapshotStore.get_latest_snapshot` / `get_snapshots` 的 `ORDER BY captured_at` **都没有 tiebreaker**。
+5. `probe_bom_state.py` / `strip_bom_53_39.py` / `verify_bom_strip_53_39.py` / `bom_positive_control_53_39.py` / `census_bom_repo.py` / `census_bom_claims.py` / `scan_junit_reds.py` / `sha_snapshot.py` 与 `.withbom` 备份都在工作台（`.workbuddy/audit-2026-10-03/`）。备份在剥 BOM **核验完成前**不要删。
+
+**本节追加读数**：见 `append_generic.py` 的 BEFORE/AFTER 打印，验收四条同时成立：字节增量 == 块长、CRLF 增量 == 块内 CRLF 数、`bare_lf stays 0`、`prefix unchanged`。
+
+## 53.40 修 §53.39.6 的 6 处过期叙述（用户点选 A；动测试代码）
+
+本节是 §53.39.6 那张表的直接处置。那节把「剥 BOM 之后由真变假的 6 处叙述」登记成待办，用户点选 A = 明确授权去改。
+
+### 53.40.1 结论先行
+
+**6 处假叙述已全部改掉**（分布在 **5 个**测试文件），**1 处仍真的叙述按纪律原样保留**。改动**只落在注释 / docstring / 一个测试名**上，**没有一行代码或断言被改**。5 个文件**仍是纯 CRLF、无 BOM**。
+
+| # | 文件 | 前字节 → 后字节 | crlf | numstat | 改法 |
+|---|---|---|---|---|---|
+| 1 | `test_elo_provenance.py` | 25905 → **26057** | 584 → 584 | `5 3` | docstring 重写 |
+| 2 | `test_event_store_source_names.py` | 11458 → **11435** | 261 → 261 | `3 3` | 注释重写 |
+| 3 | `test_ledger_error_sanitization_guard.py` | 41928 → **41930** | 978 → 978 | **（未跟踪 ⇒ 无 numstat）** | 注释重写 |
+| 4 | `test_runtime_stores.py` | 8023 → **8005** | 173 → 173 | `2 2` | docstring 重写 |
+| 5 | `test_singleton_reset_census.py` | 12460 → **12716** | 304 → 304 | `12 7` | docstring 重写 **+ 测试改名** |
+
+⚠️ **第 3 条在 `git diff --numstat` 里是看不到的** —— 该文件是**未跟踪**文件（早前批次新建的守卫，跨会话待办里有登记）。⇒ 一个只看 numstat 的人会**多数出/少数出**一个文件，把「6 处」读成「4 个文件 5 处」。**「改了 5 个文件」这个数是从工作树量的，不是从 numstat 抄的。**
+
+### 53.40.2 改法：把「**快照**」换成「**语言性质**」（这是本节唯一需要动脑的地方）
+
+这 6 处的原始形态都是**同一种错误**：把「某个文件此刻带 BOM」这个**快照**写成了「所以我们用 `utf-8-sig`」的**理由**。快照一定会过期（本次剥 BOM 就让它过期了），语言性质不会。
+
+⇒ 新措辞统一改成陈述**语言层面的不变量**：
+
+> a UTF-8 BOM is legal Python source —— Python's import machinery strips it, while `ast.parse` rejects it outright
+
+这句话的价值在于**它对「将来有没有 BOM 文件」免疫**：
+- 若某天有人又提交一个带 BOM 的源码文件，这句话**仍然为真且仍然解释了为什么要用 `utf-8-sig`**；
+- 若仓里永远不再有 BOM，这句话**也为真**（它说的是语言规则，不是仓内现状）。
+
+⚠️ **同时保留的另一半**：`utf-8-sig` **没有被改成 `utf-8`**。§53.39.6 第 2 条已论证：`utf-8-sig` 是**正确的防御性默认**（有/无 BOM 都能解码），改回 `utf-8` 会**降低**鲁棒性、并把 §53.39.3 那条缺陷重新引入。**本节只改叙述，不改读写方式。**
+
+⚠️ **顺带修掉一处作用域本来就错的措辞**：`test_runtime_stores.py` 那处原文写的是「at least one module **in this tree** carries a BOM」，而它的读取对象是**单个文件** `_CONFIG_PATH`（`app/core/config.py`）—— 即便在剥 BOM 之前，`config.py` 也从没带过 BOM。新措辞不再做任何作用域断言，这个固有的错配也被消掉了（**它不是本次剥 BOM 造成的**，属顺带发现）。
+
+### 53.40.3 改名是本批唯一有**外部影响面**的操作 —— 先量，再改
+
+唯一不是「纯叙述」的改动是**测试改名**：
+
+```
+test_scanner_reads_the_file_with_a_utf8_bom
+  -> test_the_bom_tolerant_read_reaches_the_gateway_module
+```
+
+改名会改变 pytest 节点 ID，所以**改之前先量引用面**（§53.39.6 第 3 条已预告「改名会让任何按名点选它的地方失效，先 grep」）：
+
+| 引用渠道 | 量法 | 读数 |
+|---|---|---|
+| 全仓文本引用 | ripgrep 旧名（含 `*.py/*.md/*.json/*.txt/*.yml`） | **2 处，全在审计档**（§53.39.6 自己的记录）+ **1 处定义**；**无第三处** |
+| 变异 harness `guards` | **模块导出**（不是 grep）：`{g for s in m.SETS for mu in s.mutations for g in mu.guard_files()}` = **35 个 guard 文件** | 旧名、新名**都不在其中** |
+| 变异 harness `m.path` | 同上 = **27 个** | 5 个被改文件**都不在其中** |
+
+⇒ **§4.3 的「必跑 `test_mutation_verify.py`」不触发**，且**改名不会打断任何 harness 守卫**。两条都是**算出来的**（`m.SETS` 是唯一真相源），不是 grep 印象——理由同 §53.39.4：grep 常量名会漏掉间接引用。
+
+**新名的选法**：它必须描述**函数体实际断言的东西**。函数体只有一句 `assert "app.services.llm_gateway_service._client_cache" in census` ⇒ 它钉的是**coverage**（扫描器读到了那个文件、没跳过它），**不是**「该文件带 BOM」。所以新名说 "read **reaches the gateway module**"，docstring 里补上「为什么这份 coverage 能证明 `utf-8-sig` 是对的」，并写明**断言的边界**（钉的是 coverage，不是 BOM 的存在 —— 钉存在就是钉快照）。
+
+🔴 **本节对审计档自身的一处「过期标识符」留痕（不改旧文）**：§53.39.6 的表格里**记的就是旧名** `test_scanner_reads_the_file_with_a_utf8_bom`。按交付记录**只追加不改写**的纪律，**没有**回头去编辑 §53.39.6，而是在本节记录「该名已于 §53.40 改为 …」。⇒ **读到 §53.39.6 那一行的人必须知道它记的是「当时的名字」。** 这是本批自己制造的第二例同族现象（第一例是 §53.39.6 对 §53.37.6 的更正），也正说明「前提过期」不是一次性事件而是**持续过程**。
+
+### 53.40.4 「修完了」是**量**出来的：`defects: 0`
+
+只改不验等于没改。`verify_bom_claims_53_40.py` 复扫 `app/`、`tests/`、`scripts/` 里所有**做存在性/数量断言**的措辞（`carries a BOM` / `carry a BOM` / `starts with U+FEFF` / `N files in this (repository|suite|tree)`），并且**逐条给判定**（不是只列出来）：
+
+```
+existence/count claims still present: 1
+  backend/tests/test_no_assertionless_tests.py:100  [backend/tests] -> OK (scope has 2)
+      this suite carry a UTF-8 BOM, and an earlier version of this scan silently
+
+defects: 0
+```
+
+- 该文件**故意保留**：它的作用域是 `tests/`，而 `tests/` **确实仍有 2 个** BOM 文件（§53.39.8 的普查 + 本节复扫一致）⇒ 这句话**仍然为真**。
+- 探针**不是**把「命中数」当判据 —— 它按**该文件实际扫描的根**去数 BOM 文件（`ROOT_FOR_FILE` 解析 `Path(__file__).resolve().parent` 形式），**作用域里还有 BOM 就判 OK，作用域里为 0 才判 DEFECT**。⇒ 判据是「陈述与作用域是否一致」，不是「有没有提到 BOM」。
+- ⚠️ **反过来说**：如果当初为了「清零」把这句话也一起改了，那就是**把一句真话改成假话** —— 这正是「按命中数打地鼠」会犯的错。**判据要跟作用域走。**
+
+### 53.40.5 门与回归
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 收集（改名后） | `pytest tests/test_singleton_reset_census.py --collect-only` | 新名出现在节点 ID 里，收集正常 |
+| 定向（5 个被改文件） | `pytest` 5 个文件 | junit `tests=117 red=0 skipped=0` |
+| lint | `ruff check app/`（在 `backend/` 下） | `All checks passed!`（⚠️ 覆盖面见下第 1 条） |
+| 类型 | `mypy app/` | `Success: no issues found in 331 source files`（⚠️ 同上） |
+| 契约 | `python -m scripts.generate_types --check` | `generated-types.ts is up to date.` |
+| 全量 | `pytest tests/` | 见下方 `FULL_RESULT` |
+
+⚠️ **两个「判据不适用」要写明，别当成通过**：
+1. 项目 lint 门是 `ruff check app/`，**不含 `tests/`** ⇒ 本批改的 5 个文件**不在 lint 门的覆盖范围内**，「ruff 全过」**不能**被读成「这 5 个文件被 lint 过」。本次另行确认：改动行**没有一行超过 100 字符**（唯一一处 >100 是 `test_ledger_error_sanitization_guard.py:195` 的 `def` 行，**既有**、非本批）。
+2. `mypy app/` 同理（改的是 `tests/`）。⇒ 本批的**真正判据**是定向跑 + 全量 + 声称面复扫这三样。
+
+`FULL_RESULT`：`pytest tests/` ⇒ junit **`tests=6627 red=0 skipped=11`**（`6616 passed, 11 skipped, 1097 subtests passed`, 1467.78s），进程 `RAW_EXIT=0`，`safe-delete` 指纹 **0**。
+
+- **计数与 §53.38/§53.39 完全相同（6627）** —— 本批是**改名**不是增删，所以节点数不该变；**这一点本身就是一条交叉验证**（若改名被写成「删一个 + 加一个」，计数会露馅）。
+- **`red=0` 全绿** —— 顺带说明：§53.39 那次 #1 全量的偶发红（`test_sport_market_stores::test_get_latest_snapshot`）在本批**没有复现**，与本批改动无关。
+- **PRE == POST** sha 对照（`sha-53-40-before.txt`）⇒ 长任务期间**无文件回退**。
+
+### 53.40.6 留痕
+
+1. **`numstat` 覆盖不到未跟踪文件**（53.40.1 已记）—— 改「未跟踪的守卫文件」时，**必须另外报它**，否则改动会静默。
+2. **只改叙述、不改读写方式**（53.40.2）—— 下一轮若想「顺手把 `utf-8-sig` 改回 `utf-8`」，先读 §53.39.6 第 2 条。
+3. **改名的复核配方**（可复用）：全仓文本 grep + **从 `m.SETS` 导出** `guard_files()`/`path` 两个全集，三者都干净才动手。
+4. `test_no_assertionless_tests.py` **未改**（53.40.4）—— 它是真话。
+5. 本批**不提交、不推送**。若提交：这是**测试代码**改动，按 §0 应与审计档（文档）**分成两个提交**。
+
+**本节追加读数**：见 `append_generic.py` 的 BEFORE/AFTER 打印，验收四条同时成立：字节增量 == 块长、CRLF 增量 == 块内 CRLF 数、`bare_lf stays 0`、`prefix unchanged`。
+
+## 53.41 剩余 BOM 文件的分档拍板与处置（用户点选 A；动代码 + 动按库记录）
+
+本节承接 §53.39.8 的全仓普查与 §53.39.10 的待办 ①。用户点选 A = 对「剩余那些」做分档并处置。
+
+### 53.41.1 先更正两处**我自己写错的东西**（它们是本节的前提，不先纠正后面全部读歪）
+
+**(1) 🔴「其余 13 个」是错的，应为 15 个。** §53.39 有 **3 处**这么写（`:10058` §53.39.1、`:10194` §53.39.8、`:10224` §53.39.10）。错因很具体：**全仓普查（15）跑在剥 BOM 之后**，我又拿「15 − 2」得 13 —— **对一个已经量到手的读数再做了一次算术**。同族：§0 的「行数只读 `git diff --numstat`，绝不口算/倒推」。
+
+**独立佐证（不用靠回忆错因）**：`:10058` 自己那句就列了构成 —— 「含 `backend/tests/` 2 个、`frontend/**` 2 个、4 个 `.diff`、6 个 `docs/superpowers/**`」= **14**，再加没列出的 `backend/data/.../LICENSE.metadata.json` = **15** ⇒ **这 15 个的枚举里根本没有那 2 个 `app/services/*.py`** ⇒ 「15 已含被剥的 2 个」不成立 ⇒ 减 2 是双重扣减。⚠️ `:10194` 那一句甚至**自相矛盾**：同一句里既写「仓里 **15 个**文件的历史遗留」又写「其余 **13 个**」。
+
+**(2) 🔴 审计档那张「52 个 DAMAGE / 51 个 MIXED」表已经过期**（`:2883-2895`）。那张表把本节要处理的若干个文件列为「**真 DAMAGE**」。现在实测：
+
+```
+eol_audit.py --all          ->  DAMAGE 计数 = 0
+独立字节计数（1493 tracked） ->  真正的 MIXED = 0
+                                 唯一的 "MIXED" = frontend/src/app/favicon.ico
+```
+
+`favicon.ico` 正是**那张表自己**（`:2893`）已经标为 🔴 **误报**的二进制文件（`*.ico binary` ⇒ git 从不碰它字节；ICO 内部恰好同时含 `\r\n` 与裸 `\n`）。逐字节复核那张表点名的 5 个「真 DAMAGE」文件，**5/5 现在都是纯 CRLF**（`bare_lf = 0`）。
+
+⇒ **「真实的混合行尾文件合计 51 个」已不成立**（曾是 51，现在 0）。**注入版 `MEMORY.md` §1 的「工作树有 51 个 MIXED 文件」也已过期** —— 但**本节并没有改它**：取证发现磁盘上的 `MEMORY.md` §1 **早已是更正后的文本**（「✅ MIXED 已收口 … 2026-10-03 复检 MIXED = 0（CRLF 1044 / LF 441 / 无换行 7）… 旧记录「51 个 MIXED」已过期」），该文件 mtime = **2026-10-04 23:20**、早于本节。⇒ 本节草稿原写「**已同批更正**」是错的，已改（见 53.41.9 第 2 条）。⚠️ 本节**只**报告「现在量到 0」与「它曾经是 51」；**没有**去查那次 LF→CRLF 规范化具体发生在哪一批（未查，不代决）。
+
+### 53.41.2 分档判据（**两条同时成立才剥**）
+
+为了让「剥不剥」不靠手感，本节用一条**可以逐项对照**的规则：
+
+> **(1) 该文件是「活的输入」，不是「当时的记录」** —— 它会被构建 / 测试 / 工具当作输入消费；不是作为历史交付物被引用的那类东西。
+> **(2) 它的 BOM 对**可能存在**的朴素消费者构成 §53.39.3 类缺陷** —— 判据是「文件类型 + 该类型在本仓**确有**裸 `utf-8` 读取先例」，**不必等某个具体消费者现在就炸**。
+
+第 (1) 条是**用户既有约定**的直接应用：`USER.md` 写明「交付文档的事后修正要**追加不要覆盖** —— 他把 `ENGINEERING_DESIGN_*.md` 当当时的交付记录看」。⇒ **设计/评审类文档是「当时的记录」，改它们的字节＝改写记录**，与「只追加不改写」冲突。
+第 (2) 条是**代码卫生**：源码/数据是活输入，朴素读法在本仓**有先例**（Python 侧 ~20 个 AST 扫描器；数据侧 `json.load`；前端侧 `readFileSync(..., "utf8")`）。
+
+### 53.41.3 分档表（15 个）
+
+| 档 | 文件 | 处置 | 判据 |
+|---|---|---|---|
+| **A** | `backend/data/openfootball-2026/LICENSE.metadata.json` | **剥** | 活的**数据**输入；(1)✓ (2)✓（`json.load` **实测炸**） |
+| **B** | `backend/tests/test_llm_gateway_service.py`<br>`backend/tests/test_probability_engine_llm_gateway.py` | **剥** | 活的**源码**输入（CI 有 `compileall app tests`）；(1)✓ (2)✓（`ast.parse` **实测炸**） |
+| **C** | `frontend/src/components/detail/confidence-breakdown-panel.test.tsx`<br>`frontend/src/components/detail/signal-summary.test.tsx` | **剥** | 活的**源码**输入（CI 有 `vitest`/`tsc`/`eslint`）；(1)✓ (2)✓（本仓有 `readFileSync(...,"utf8")` 先例） |
+| **D** | `docs/superpowers/**` × **6** | **不剥** | ❌(1)：**当时的记录**（设计/交付物）；且**无任何工具把它们当输入**（按路径提及它们的全是源码**注释**） |
+| **E** | `backend/.sdd/*.diff` × **4** | **不剥** | ❌(1)：**评审补丁包**（交付记录）；且**实测连潜在消费者都没有**（`git apply` 对带 BOM 的补丁**完全等价**，见 53.41.5） |
+
+⇒ **剥 5 / 留 10**。全仓 BOM 文件：**15 → 10**（剩下的 10 个全是 D/E 两档的记录）。**`app/` 与 `tests/` 现在都是 0**。
+
+⚠️ **D/E 两档的「不剥」是我做的判断，不是量出来的结论**（量出来的是「没有消费者会炸」）。理由见 53.41.5，**可以推翻** —— 若用户认为「BOM 一律清掉，记录也一样」，那 10 个文件都是无风险可剥的（字节级删除、行尾不变，本节的方法完全适用）。
+
+### 53.41.4 剥的那 5 个：逐类正控 + 后缀逐字节同一
+
+**正控（同一段代码分别读「带 BOM 备份」与「已剥离文件」）**：
+
+```
+(a) json.load(utf-8)      before(.withbom)  JSONDecodeError: Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1
+                          after (stripped)  OK
+    json.load(utf-8-sig)  both              OK (5 keys)
+
+(b) ast.parse(naive open(utf-8))  before  SyntaxError: invalid non-printable character U+FEFF
+                                  after   OK          （两个 backend 测试文件均如此）
+```
+
+⇒ **两类缺陷都是真的**（不是推测）：JSON 边是 `json` 模块**明文拒绝** BOM；Python 边是 §53.39.3 那个 `U+FEFF` 的老相识。
+
+**字节级验收（3 条，同 §53.39）**：只删 3 字节 ✅ / `stripped == backup[3:]` **逐字节为真（5/5）** ✅ / `crlf` 与 `bare_lf` 计数不变 ✅。
+
+**行级侧面印证**（`git diff --numstat`）：5 个被剥文件**各 `1 1`**（BOM 拼在第一行之前 ⇒ 只有首行字节变 ⇒ git 按行记账），与 §53.39 的读数同形；解耦的 `test_no_assertionless_tests.py` 是 `4 4`（纯 docstring 重写）。⚠️ **`numstat` 删除数不为 0 在这里是正常的** —— 「删除数 == 0」是**审计档 EOF 纯插入**的验收条款，**不是**代码改动的（同族：§0 与 §53.39.4）。
+
+| 文件 | 前 → 后字节 | crlf | bom | sha16 前 → 后 |
+|---|---|---|---|---|
+| `LICENSE.metadata.json` | 207 → **204** | 7 → 7 | True → **False** | `e2df31cc…` → `a9c57095…` |
+| `test_llm_gateway_service.py` | 26214 → **26211** | 585 → 585 | True → **False** | `f2ba43fd…` → `9791ddcf…` |
+| `test_probability_engine_llm_gateway.py` | 5659 → **5656** | 125 → 125 | True → **False** | `9dae334d…` → `ecb39087…` |
+| `confidence-breakdown-panel.test.tsx` | 1726 → **1723** | 44 → 44 | True → **False** | `3b47f511…` → `2dcbc5b8…` |
+| `signal-summary.test.tsx` | 1159 → **1156** | 32 → 32 | True → **False** | `a818f4d6…` → `f3ba8c3d…` |
+
+**KEEP 档零改动自证**：剥之前先记下 D/E 两档 10 个文件的 sha256，剥完之后逐一比对 ⇒ **`unchanged` 10/10，违规 0**。这条是必要的：否则「我只剥了 5 个」只是一句话。
+
+### 53.41.5 E 档（`.diff`）不剥的理由是**语义**的，不是技术的 —— 这一点必须写明
+
+直觉上会说「`.diff` 带 BOM 会让 `git apply` 失败」。**实测否定**：
+
+```
+合成一个真能应用的补丁：
+  git apply --check [plain            ] rc=0   1 file changed, 1 insertion(+)
+  git apply --check [prefixed with BOM] rc=0   1 file changed, 1 insertion(+)
+```
+
+⇒ **`git apply` 对带 BOM 的补丁输出与不带 BOM 的完全一致**。所以 E 档**没有**技术理由需要剥；不剥的理由只有一条：**它们是历史评审补丁包，改字节＝改「当时被评审的是什么」**。
+
+⚠️ 顺带一条**方法论**：本节最早差点**用错理由**——我先发现审计档 `:2888` 把 `final-review-package.diff` 记成「真 DAMAGE」，一度打算拿「有 DAMAGE 在案」当不剥的硬理由。**但那张表已经过期**（53.41.1(2)）。⇒ **拿一条记录当理由之前，先确认那条记录本身还成立**（同族：§4.1「复述结论时必须带上它的前提」）。
+
+### 53.41.6 耦合：剥 B 档会**推翻一句刚被认证为真**的声明
+
+`test_no_assertionless_tests.py:99-101` 原文：
+
+> two files **in this suite** carry a UTF-8 BOM, and an earlier version of this scan silently dropped them on `SyntaxError` …
+
+§53.40.4 刚刚**把它判为「仍真、故意保留」**（因为 `tests/` 恰有 2 个 BOM 文件 —— 就是 B 档的这两个）。**剥掉 B 档，它就立刻变假。**
+
+⇒ **这条耦合必须在同一批里解掉**，做法与 §53.40 一致（把**快照**换成**语言性质**）：
+
+> a UTF-8 BOM is **legal Python source**, and an earlier version of this scan silently dropped **such files** on `SyntaxError` …
+
+改后：**过去时的事实用过去时讲**（"an earlier version … dropped"），**现在时不再数数** ⇒ 无论将来有没有 BOM 文件，它都为真。该文件 `numstat 4 4`（纯 docstring 重写，无代码行）。
+
+📌 **这条耦合本身值得记**：上一批「保留一处真声明」的动作，**给下一批埋了一个必须一起改的点**。⇒ **「保留」不是零成本的选择**，它把一个隐式依赖留在了后面的批次里。
+
+### 53.41.7 取证副产物：`docs/superpowers/**` 的 BOM 是**一次性批次**（跨会话待办 ② 的答案）
+
+原待办是「查那个生成器是否还在用（不查则剥了会复发）」。**不用剥也能查** —— 看分布：
+
+```
+docs/superpowers/** 共 122 个文件，带 BOM 的恰好 6 个，全部是 2026-07-05
+同一目录 06-28 / 06-29 / 06-30 / 07-01 / 07-02 / 07-03 / 07-04 / 07-08 /
+        07-11 / 07-14 / 07-15 / 07-16 … 的文件：全都没有 BOM
+```
+
+⇒ 该目录**在此之后一直被继续写入**（最新到 07-16），而**那之后没有任何一个文件带 BOM** ⇒ **形态是一次性批次产出，不是仍在运行的生成器**。**即使将来要剥 D 档，也不会复发。**
+
+⚠️ **仍然只说「形态」**：本节**没有**找到生成这些文件的脚本（仓内按路径提及 `docs/superpowers/**` 的全是源码注释，无写入者），也**没有**断言是谁生成的。
+
+### 53.41.8 门与回归
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 定向（触及 + 8 个守卫文件） | `pytest` 8 个文件 | junit `tests=161 red=0 skipped=0` |
+| 前端测试（剥前 / 剥后） | `npx vitest run` 2 个文件 | **3 passed / 3 passed**（两次一致） |
+| 前端类型（剥前 / 剥后） | `npx tsc --noEmit` | `rc=0` / `rc=0` |
+| 前端 lint（剥前 / 剥后） | `npx eslint` 2 个文件 | `rc=0` / `rc=0` |
+| 后端 lint | `ruff check app/` | 见下 |
+| 后端类型 | `mypy app/` | 见下 |
+| 契约 | `python -m scripts.generate_types --check` | 见下 |
+| 全量 | `pytest tests/` | 见下方 `FULL_RESULT` |
+
+📌 **§4.3 的「必跑」触发器先算过再决定**：本节 diff 触及的 **6 个文件**（5 个被剥 + 1 个解耦）逐个对照 harness 的**派生集合**（`importlib` 载入 `backend/scripts/mutation_verify.py` 后从 `m.SETS[].mutations` 取 `{mu.path}` 与全部 `mu.guard_files()`，**不 grep 常量名**）⇒ **6/6 都是 `in m.path=False` / `in guard_file=False`** ⇒ **`test_mutation_verify.py` 不在必跑列表**（且它本来就被全量覆盖）。
+
+⚠️ **顺带澄清一个「两个数」的坑**（差点写成「记忆过期」）：
+```
+HEAD   = 8 个 set / 71 个变异 / 27 distinct m.path / 35 guard_file
+工作树 = 8 个 set / 72 个变异 / 27 distinct m.path / 35 guard_file
+```
+多出的那一条是 **§53.38 的 W35**（`mutation_verify.py` 在工作树里是 ` M`，未提交）。⇒ **`MEMORY.md` §4.3 记的「71」是 HEAD 侧的读数，不是过期**；**同一个 harness 在两棵树上可以有两个数 ⇒ 报数时必须说清是哪棵树**（`list`/`numstat` 同理）。
+
+⚠️ **前端的「剥前/剥后一致」要读对**：它证明的是 **BOM 对前端工具链不可见**（`tsc`/`eslint`/`vitest` 都自己处理 BOM）—— 也就是说 C 档**不是靠 CI 变红暴露的**。C 档剥它的理由是 53.41.2 第 (2) 条的**先例存在性**，不是「它现在会炸」。**别把「两次都绿」读成「剥它没用」。**
+
+`FULL_RESULT`：`pytest tests/` = **junit `tests=6627 / red 0 / skipped=11`**；pytest 自述 `6616 passed, 11 skipped, 1097 subtests passed in 1447.93s`；**`safe-delete` 指纹 `grep -c` = 0** ⇒ 这次跑**没被 shim 污染**（`6616 + 11 = 6627` 自洽）。判据只取 junit 的 `failures`/`errors`（均为 0），**不看进程 rc**。
+
+**POST sha 对照（长跑期是否回退）**：全量跑前对 6 个热点文件（5 剥 + 1 解耦）记 sha256，跑完逐一重算 ⇒ **`violations: 0 / 6`（全 `unchanged`）** ⇒ 本次长跑**没有把就地编辑过的文件回退到基线**（同族：跨会话踩过的「长时后台任务期文件被回退」）。
+
+### 53.41.9 留痕
+
+1. **两处更正已写在 53.41.1**（「13 个」→ 15 个；「51 个 MIXED」→ 0）。按只追加不改写的纪律，**没有**回头编辑 §53.39 那 3 行与 `:2883-2895` 那张表；读它们的人必须知道**它们记的是「当时」**。
+2. 🔴 **更正一句我自己写错的话**：本节草稿原写「注入版 `MEMORY.md` §1 的『51 个 MIXED 文件』**已同批更正**」—— 取证后发现**磁盘上它早就更正过了**（`MEMORY.md` mtime **2026-10-04 23:20**，文本自称「2026-10-03 复检 MIXED = 0」），本节**一个字节都没动它**；已把 §53.41.1(2) 与本条一起改掉。⚠️ 而**本会话上下文里注入的那份 §1 仍是旧文本**（「📌 工作树有 51 个 MIXED 文件」）⇒ **注入快照落后于文件**。这正是 §4.1 的镜像：**「我读到的」不等于「现在的」** —— 更早的轮次大概就是照着注入文本把它列成了待办，而 **Read 一下磁盘就能发现它早已改好**。⇒ **要断言「某文件现在写着什么」，去 Read 文件，别读注入快照。**
+3. **D/E 两档「不剥」是我的判断，可推翻**（53.41.3 末）。
+4. **B 档与 `test_no_assertionless_tests.py` 的耦合已解**（53.41.6）；若将来改动那条声明，注意它现在**不再依赖任何文件带 BOM**。
+5. **BOM 原件备份**：`.workbuddy/audit-2026-10-03/bom-backup-53-41/*.withbom`（5 个）。**核验完成前不要删。**
+6. 本批**不提交、不推送**。若提交：这是**代码（含测试 + 数据 + 前端）**改动，按 §0 应与审计档**分成两个提交**。
+7. 📌 **顺手更正了归档件 `MEMORY-archive.md` §1 里那句「普查：工作树 51 个 MIXED 文件」**（改成「旧记录，已过期」+ 现况 0 + 一句「作用域/时点」提醒）。理由：archive 自己的 §0 写了「**滚动记忆可改写**」（与「交付记录只追加不改写」分野），而**留着 51 会让以后 grep 它的人读到假前提**。读数：`130323 → 130952` B、crlf `0 → 0` 保持、bare_lf `842 → 845`（**2 行换成 5 行，增量 +3 与行数一致**）、sha16 `3c15cfb11897c66f → 98b2d187108b1438`。⚠️ 这是本批**唯一**一次「改写滚动记忆」，与「审计档只追加」不冲突。
+
+**本节追加读数**：见 `append_generic.py` 的 BEFORE/AFTER 打印，验收四条同时成立：字节增量 == 块长、CRLF 增量 == 块内 CRLF 数、`bare_lf stays 0`、`prefix unchanged`。
+
+## 53.42 剥掉剩余 10 个 BOM 文件（用户授权，覆盖 §53.41 的「不剥」判断）
+
+本节承接 §53.41。§53.41 把剩余 10 个 BOM 文件判为 **KEEP**，但**明确写了那是判断、可推翻**。用户随后**明确选择了「剥剩余 10 个 BOM」** ⇒ 本节执行该决定。
+
+### 53.42.1 处置反转本身要留痕（§53.41.3 的表格仍写着「不剥」）
+
+- §53.41.3 末原话：*「D/E 两档的『不剥』**是我做的判断，不是量出来的结论**（量出来的是『没有消费者会炸』）……**可以推翻**」*。本节就是那次推翻。
+- ⚠️ **按只追加纪律，§53.41.3 的表格与 §53.41.9 第 3 条没有回头编辑** ⇒ **读它们的人必须知道「不剥」已被本节反转**（同族：§53.40.6 的「自指累积」——每次追认都留下新的「当时」）。
+- 🔴 **反转的是「取值」，不是「事实」**：判决当时基于的事实（**无消费者**、**字节级无风险**、**`git apply` 对 BOM 等价**）**至今全部成立**。变的只有「**记录类文件允不允许改写**」这一条取值 —— 那是用户的权限，不是可测出来的量。⇒ 这也说明 §53.41 把「判断」与「事实」分开标注是对的：**事实没变，判断被覆盖，一句都不用改测出来的部分。**
+
+### 53.42.2 取证：这 10 个文件**零程序化消费者**
+
+| 检查 | 结果 |
+|---|---|
+| `.github/**` 有没有碰它们 | **0 命中**（CI 既不 `git apply` 也不读取） |
+| `backend/{app,tests,scripts}`、`frontend/src`、`deploy` 里的按路径引用 | 全是**文档互链与源码注释**（`CHANGELOG.md`、`README.md`、`docs/dev/**`、`docs/archive/**`、`frontend/src/lib/generated-types.ts:213` 的注释），**无 read/open** |
+| 有没有测试 `git apply` 这些 `.diff` | `grep -E "git apply\|\.sdd"` in `backend/tests` ⇒ **0 文件** |
+| 有没有「某个文件带 BOM」的存在性声称会因此变假 | `verify_bom_claims_53_40.py` ⇒ **`existence/count claims: 0` / `defects: 0`** |
+
+⇒ 与 §53.41 的取证一致，唯一的差别是**消费者这一项从来就没能阻止剥离** —— 它只支持「无风险」，不决定「该不该」。
+
+### 53.42.3 剥除：字节级三条 + 全仓归零
+
+**全仓普查**（`--cached --others --exclude-standard`，1500 = 1493 tracked + 7 untracked）：
+```
+BEFORE: 1500 files scanned, 10 carry a BOM
+AFTER : 1500 files scanned,  0 carry a BOM  -> ZERO
+```
+
+**逐文件读数**（每文件**恰 −3 字节**；`crlf` 与 `bare_lf` **不变**；写回后断言 `new == old[3:]` **逐字节**成立）：
+
+| 文件 | 前 → 后字节 | crlf | bare_lf | sha16 前 → 后 |
+|---|---|---|---|---|
+| `backend/.sdd/final-review-package.diff` | 39800 → **39797** | 923 → 923 | 0 → 0 | `f989db62…` → `90f75236…` |
+| `backend/.sdd/review-6a13b71..e75af1c.diff` | 17581 → **17578** | 431 → 431 | 0 → 0 | `96a05ebb…` → `412fefa4…` |
+| `backend/.sdd/review-e75af1c..f0818f9.diff` | 12498 → **12495** | 284 → 284 | 0 → 0 | `dad2b7e6…` → `b8e8639e…` |
+| `backend/.sdd/task-3-review-package.diff` | 14995 → **14992** | 326 → 326 | 0 → 0 | `f967b64d…` → `bc3f3019…` |
+| `docs/superpowers/plans/2026-07-05-confidence-breakdown-diagnostics.md` | 4855 → **4852** | 107 → 107 | 0 → 0 | `cc9e0144…` → `a9370481…` |
+| `docs/superpowers/plans/2026-07-05-llm-fallback-gateway.md` | 15430 → **15427** | 382 → 382 | 0 → 0 | `938c5050…` → `47068549…` |
+| `docs/superpowers/plans/2026-07-05-prediction-engine-safety-evidence-boost.md` | 33813 → **33810** | 820 → 820 | 0 → 0 | `97d9bf2d…` → `fd874da4…` |
+| `docs/superpowers/plans/2026-07-05-world-cup-qualification-status.md` | 2814 → **2811** | 58 → 58 | 0 → 0 | `c162d215…` → `621ae58b…` |
+| `docs/superpowers/specs/2026-07-05-llm-fallback-gateway-design.md` | 16341 → **16338** | 545 → 545 | 0 → 0 | `a044d9f2…` → `ed663015…` |
+| `docs/superpowers/specs/2026-07-05-prediction-engine-safety-evidence-boost-design.md` | 10632 → **10629** | 252 → 252 | 0 → 0 | `1472592a…` → `9a901e28…` |
+
+**行级侧面印证**：`git diff --numstat` 10 个文件**各 `1 1`**（BOM 拼在第一行之前 ⇒ 只有首行字节变），与 §53.39/§53.41 同形。
+
+**写前门控**：脚本先做「声明的 10 个文件必须都真的带 BOM」的前置断言 —— **首跑就靠它拦住一次我自己的错**（普查命令写成 `git ls-files -o` 只列未跟踪、只扫到 7 个 ⇒ `declared-but-not-found: 10` ⇒ **断言失败、一个字节都没写**）。⚠️ 这是「**写入前全校验、未通过不写**」那条纪律第二次真的救命（第一次见 §53.41 的 KEEP 自证）。
+
+### 53.42.4 🔴 **本次没有新的「前提过期」面** —— 与 §53.39 的成分对照
+
+§53.39 剥 2 个文件，**暴露出 7 处**「因为某文件带 BOM，所以我们这么写」的过期叙述。本节剥 **10 个**（是那次的 5 倍），复扫结果：
+
+```
+verify_bom_claims_53_40.py  ->  existence/count claims still present: 0
+                                defects: 0
+```
+
+⇒ **零新增过期面。** 原因是可追溯的：§53.40 把 6 处、§53.41.6 把最后 1 处，**从「快照」改成了「语言性质」**（"a UTF-8 BOM is legal Python source …"）。语言性质**不依赖仓内现状** ⇒ 无论还有没有 BOM 文件，那些句子都为真。
+
+📌 **这条可以当成「修叙述修到位了没有」的验收判据**：
+> **再对同一类对象做一次同类操作，若不再产生新的假叙述，说明叙述已经与「现状」解耦。**
+
+⚠️ 反之，若这次又冒出一批假叙述，就说明上一轮只是把命中的地鼠打掉了、没换掉地鼠洞。**本节是「换洞」成功的实证。**
+
+### 53.42.5 顺带发现（**既有**，与剥离无关）：4 个评审包里只有 2 个是**可应用的补丁**
+
+做「剥离后补丁还能不能解析」的正控时（`git apply --numstat` **只解析不应用**，对已漂移的历史补丁也适用），发现 4 个 `.diff` **分两类**：
+
+| 文件 | 剥离后 | 带 BOM 备份 | 判定 |
+|---|---|---|---|
+| `final-review-package.diff` | `rc=0` → `378 0 backend/scripts/diagnose_event_quality.py` | `rc=0` → **同一行** | **合法补丁** |
+| `review-6a13b71..e75af1c.diff` | `rc=0` → `199 0 …` | `rc=0` → **同一行** | **合法补丁** |
+| `review-e75af1c..f0818f9.diff` | `rc=128 corrupt patch` | `rc=128 corrupt patch` | **不是可应用的补丁** |
+| `task-3-review-package.diff` | `rc=128 corrupt patch` | `rc=128 corrupt patch` | **不是可应用的补丁** |
+
+- **正控结论**：`same rc + error category` ⇒ **4/4**。⇒ 剥除**没有改变**任何一个文件的解析结果（前两个输出逐字相同；后两个两侧同为 `rc=128`）。
+  ⚠️ **一个探针陷阱**：第一版正控比的是**原始输出文本**，得到 `2/4`「不一致」—— 因为 git 的报错信息**把文件路径截断后嵌进去了**，两个被比的文件路径必然不同。⇒ **比错误信息要先去掉路径**（比 `rc` + `at ` 之前的错误类别）。**「不一致」有时是探针造成的，不是对象造成的。**
+- **机制**（`--recount` 给出线索：`warning: recount: unexpected line: ?`）：hunk 体里存在**丢了前导空格的空行**。`final-review-package.diff` 的 hunk 内**空行 = 0**（空行只出现在前言与 EOF），故可解析；另两个在 hunk 内有 6–12 个空行（如 `:18/:19`、`:162/:168/:170`、`:22/:23`、`:74/:75`）⇒ 那些空行本应是 `" "`（单个空格）却成了 `""`。
+- 🔴 **这是既有损伤，不是本节的**：`withbom` 备份**同样** `rc=128`，且剥离是 `old[3:]` 的**逐字节后缀**（已断言）。⇒ 它在 HEAD 就存在。
+- ⚠️ **只登记、不修**：修它＝**改写证据文件的内容**（不是删 3 字节），超出「剥 BOM」的授权；且这两个文件是**评审过程的快照**，不是用来 apply 的。⇒ 记为跨会话待办。
+
+### 53.42.6 门与回归
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端 lint | `ruff check app/` | `All checks passed!` |
+| 后端类型 | `mypy app/` | `Success: no issues found in 331 source files` |
+| 契约 | `python -m scripts.generate_types --check` | `generated-types.ts is up to date.` |
+| 全仓行尾 | `eol_audit.py --all` | **`line-ending damage: none`**（1 个文件按二进制跳过） |
+| 定向（BOM 措辞相关 8 个守卫文件） | `pytest` 8 文件 | junit `tests=161 red=0 skipped=0` |
+| 全量 | `pytest tests/` | 见下方 `FULL_RESULT` |
+
+⚠️ **本次没有改任何 `app/`、`tests/` 或前端源码**（只动了 4 个 `.diff` + 6 个 `.md`）⇒ 前端 `tsc`/`eslint`/`vitest` **不适用**（未跑，也没有理由跑）。**判据只有：三道静态门 + EOL 探针 + 定向 + 全量。**
+
+`FULL_RESULT`：`pytest tests/` = **junit `tests=6627 / red 0 / skipped=11`**；pytest 自述 `6616 passed, 11 skipped, 1097 subtests passed in 1403.21s`；**`safe-delete` 指纹 `grep -c` = 0** ⇒ 这次跑没被 shim 污染（`6616 + 11 = 6627` 自洽）。判据只取 junit 的 `failures`/`errors`（均为 0），**不看进程 rc**。与 §53.41 的全量读数**同值**（`6627 / red 0 / skipped=11`）。
+
+**POST sha**：双向对照 10 个文件 —— **`changed vs 剥前: 10/10`**（剥离确实落在盘上）且 **`violations vs 跑前(剥后)快照: 0/10`**（长跑期**没有回退**）。两个方向都成立才算过。
+
+### 53.42.7 留痕
+
+1. **BOM 原件备份**：`.workbuddy/audit-2026-10-03/bom-backup-53-42/*.withbom`（**10 个**）。**核验完成前不要删。**
+2. **§53.41 的「不剥」未回头编辑**，反转记在本节（53.42.1）。
+3. **两个非补丁的 `.diff` 只登记不修**（53.42.5）。
+4. 本批**不提交、不推送**。若提交：这是**数据/文档**改动（4 个 `.diff` + 6 个 `.md`），按 §0 与审计档**分成两个提交**。
+
+### 53.42.8 本节追加读数（补录）
+
+⚠️ **说明**：本节的读数**没有写进第一次追加的块里**（`§53.42.1–§53.42.7` 先落盘）。按只追加纪律**不回头编辑已落盘的块**，故另起本小节补录。
+
+**审计档自身（本节追加）**：`818422 → 828568`（**字节增量 +10146 == 块长**）、`crlf 10492 → 10597`（**+105 == 块内 CRLF 数**）、`bare_lf stays 0`、`prefix unchanged`、`git diff --numstat 4315 0 → 4420 0`（**删除数 0**）、sha16 `e2e6f87ec7c00892 → 1d43c3dd591ea507`。
+
+**全量**：`tests=6627 / red 0 / skipped=11`；`safe-delete` 指纹（`grep -c safe-delete`）= **0**。⚠️ 与 §53.41 的全量读数**同值**（`6627 / red 0 / skipped=11`）。
+
+**POST sha（双向）**：`changed vs 剥前 = 10/10`（剥离确实在盘上）且 `violations vs 跑前(剥后)快照 = 0/10`（长跑期无回退）。
+
+## 53.43 查 §53.39 #1 次偶发红的机制（市场快照表无 tiebreaker；只登记不动代码）
+
+本节是 §53.39.10 第 4 条（「`#1` 次那条偶发红的机制 —— 只登记，未查清」）的续。**没有改任何生产代码**：结论只到「形状已证、触发未查清」，是否补 tiebreaker 属**契约取值**，不代决。
+
+### 53.43.1 结论先行（三句话）
+
+| # | 结论 | 依据 |
+|---|---|---|
+| 1 | **机制的形状已证**：这条红**就是**「两行 `captured_at` 并列」那一类 —— 并列时 `get_latest_snapshot` **确定性**返回**先插入**的那一行，于是先插入的 `0.6` 被当成最新 ⇒ 现场断言 `assert 0.6 == 0.65` | 53.43.3（F3 20/20 + 端到端正控） |
+| 2 | **触发条件未查清**（只登记）：正常路径下并列概率 ≈ 1e-3/对，**支撑不起**「约六分之一的全量跑红一次」；五条备选机制已逐条取证排除 | 53.43.4 |
+| 3 | **「无 tiebreaker」是事实，而且这次不再是「附带确认」** —— 它就是这条红的**唯一形状** | 53.43.2 + 53.43.3 |
+
+⚠️ **对 §53.39.10 第 4 条的更正（§0 纪律）**：那一节把「那条红」与「两条查询都没有 tiebreaker」并列成**两条独立事实**（原文措辞：*「附带确认」*）。本次把两者**接起来**：无 tiebreaker **就是**红的形状。同时保留那一节说对的一半 —— 「两个快照拿到同一个 `captured_at`」在微秒精度下**概率上**确实很难成立（本轮实测：400 次 0 并列，见 53.43.4 ①）。**难成立的是触发，不是形状。**
+
+### 53.43.2 先读断言原文（不只看测试名）
+
+`junit-53-39-full.xml` 里的失败元素（XML 解析，非 grep）：
+
+- `class=tests.test_sport_market_stores`、`name=test_get_latest_snapshot`、`time=0.302`
+- `message="assert 0.6 == 0.65"`，落点 `tests\test_sport_market_stores.py:207`
+
+`assert latest is not None`（:206）排在它前面且**没有报错** ⇒ 这一条红的语义是**读到了一行，且那行的 `implied_prob` 是 0.6**。
+
+🔑 **断言原文是机制的判别式**：它把机制空间**劈掉一半** —— 任何「读到了空结果」的解释（回落到空库、空表、被清理的 tmp 目录）都会以 `assert None is not None` 收场，**不是** `assert 0.6 == 0.65`。所以只剩两类可选项：**(a) 0.65 那行在被读的库里不存在；(b) 0.65 那行存在但排在 0.6 之后。**
+
+### 53.43.3 正控：并列 ⇒ 恰好这条断言（形状已证）
+
+**(1) 派生事实**（`null_and_tie_ordering_53_43.py`，输出留档 `null_and_tie_ordering_53_43.txt`）：
+
+| 插入顺序 | `get_latest_snapshot` 返回 | 试次 |
+|---|---|---|
+| `0.6` → `0.65`（同一 `captured_at`） | **0.6** | **20/20** |
+| `0.65` → `0.6`（同一 `captured_at`） | **0.65** | **20/20** |
+
+⇒ 并列**不是「任意挑一行」**，而是**先插入者胜**（两次都返回 `id` 更小的那行）。**这是一条确定性的静默错答**：它把更旧的行报成「最新」（`latest` 的语义是"最近一次采样"）。
+
+**(2) 端到端正控**（临时用例 `tests/test_zz_control_tie_53_43.py`，读数取完后**已删**，副本在 `.workbuddy/audit-2026-10-03/`）：
+
+- 把 `market_snapshot_store._utcnow` 冻结成一个常量 ⇒ 跑**真测试体**（真 `kernel_db` fixture、真 `MarketSnapshotStore`）：
+  `s1.id=1 s2.id=2 captured_at=datetime(2026, 10, 7, 12, 0, 0, 654321) -> latest.implied_prob=0.6`，且断言 `latest["id"] == s1["id"]` 成立。
+- **负控**（不冻结、同体）⇒ 通过，实测两值间隙 `gap_us=1999.0`。
+
+⇒ **充分性已证：并列 ⇒ 恰好这条红（连断言文本都一致）。** 必要性来自 53.43.2（读到了一行）+ 53.43.4（把「行不存在」的路全部排除）。
+
+### 53.43.4 触发条件：五条备选逐条取证排除
+
+| # | 机制 | 判据 / 探针 | 读数 | 结论 |
+|---|---|---|---|---|
+| ① | 正常路径下时间戳**并列** | 仪器化探针：在真 conftest + autouse 单例重置下跑真测试体 **400 次** | 并列 **0** / 倒流 **0** / 失败 **0**；两值间隙 min **1518µs**、median **2239µs**、max **8001µs** | **量级不符**：间隙**不是 1000µs 的整数倍** ⇒ 时钟量子 ≤1µs ⇒ P(并列)≈1e-3，解释不了 ~1/6 的红 |
+| ② | 读/写**回落到 `KERNEL_DB_FILE`**（会话级共享库） | **322 个保留沙箱**的 `kernel_predictions.db` 普查（`sandbox_snapshot_census_53_43.py`） | `kernel_market_snapshots` **322/322 = 0 行** | **排除**：那条路只能读到 `None`，现场断言会变成 `assert None is not None` |
+| ③ | 用例**中途**全局引擎被重置 | 同 ① 的探针逐次记录 `id(_engine)` + `engine.url` | 400 次迭代**迭代内引擎身份变化 0 次**；每次都是自己那一个 `tmp_path/kernel_test.db` | **排除** |
+| ④ | 时钟被冻结/篡改（freezegun / time-machine 之类） | 98 个发行包按 `freez\|time\|fake\|clock\|mock` 筛；全仓 grep `freeze_time\|freezegun\|time_machine\|setattr(time\|patch("datetime` | **0 命中**（`elo_time_machine` 是**领域**模块——回测时间推进，不是时钟补丁） | **排除** |
+| ⑤ | 泄漏的真调度器线程在别处写快照 | 全仓 `start_scheduler()` 调用点 | 唯一调用者 `tests/test_drift_alert_job.py:39,57` 把 `scheduler.scheduler` 打成 `MagicMock`（`SCHEDULER_LOCK_ENABLED=False`）⇒ **不存在 APScheduler 线程** | **排除** |
+
+②的取证细节（**最有力的一条**）：conftest 明写沙箱目录**故意不清理**（它同时是证据仓库），所以**失败那一次的会话级库还在盘上**。用清单里的 `created_utc`/`pid` 定位：`pmrf_test_data_95053fwv` = `created_utc 2026-10-06T13:37:14Z`、`pid 14752`，与 `junit-53-39-full.xml`（mtime `22:01:28 +0800`）相减得 **24m14s**，与同批全量的运行时长（§53.41/§53.42 实测 24m07s / 23m23s）一致 ⇒ 就是那一次。它的 `kernel_market_snapshots`：**0 行**。全量普查：**322 个沙箱，0 个有快照行**。
+
+### 53.43.5 两条新取的派生事实（排序契约本身）
+
+**(a) 可空性不对称**（`PRAGMA table_info`，派生读数）：
+
+```
+kernel_market_snapshots   captured_at  DATETIME  notnull=0
+kernel_futures_snapshots  captured_at  DATETIME  notnull=1
+```
+
+两张表由不同的人写成，对同一语义的列给了不同的约束。
+
+**(b) NULL 行有「双重不可见性」**：数据里同时有「`captured_at` = NULL」和「有值」两行时 ——
+
+- `get_snapshots`（`asc()`）把 NULL 排**第一** ⇒ 它会成为图表的**首点**；
+- `get_latest_snapshot`（`desc()`）**永远返回有值那行**（SQLite 的 NULL 最小，DESC 时排最后）⇒ 它**永远当不了「最新」**。
+
+两处都**不出声**。⇒ 「NULL 时间戳」不是"缺失"，而是**一个能进序列、不能进最新**的幽灵行。
+
+**(c) 存量对比（同类问题的另一张表怎么说）**：`KernelSportEdge` 的 docstring 把 `captured_at` **写进了行键**（*"One row per (match_id, mapped_outcome, captured_at)"*）⇒ 那张表的并列是**设计**；而 `KernelMarketSnapshot` 的 docstring 只有一句 `Append-only snapshot store.` / `Price time-series for a sport market link (append-only).`，对并列**什么都没说**。
+
+**(d) 并列在兄弟链路是构造性可达的**：`app/kernel/futures_market_service.py:137` 把 `now = datetime.now(timezone.utc)` 算在**循环外**，内层每个 link 复用同一个 `captured_at`；而市场表在 `app/` 里的唯一 `append_snapshot` 调用点（`app/core/scheduler.py:1247`）是在内层**每 append 现取**一个 `captured_at`（:1246）。⇒ 「并列」在这个仓里**不是理论好奇**：同族链路里它是**按代码写法定会发生的**。
+
+**(e) 🔴 `get_latest_snapshot` 是**承重**的，不是只给测试用**：`app/` 里写入市场快照表只有 **1 处**（`scheduler.py:1247`），但读它有 **3 个生产消费者** —— `api/routes/sport_markets.py:80`（`/sport-markets/...` 的 `latest` 字段）、`kernel/edge_detector_service.py:143`（**边值检测**取市场侧价格）、`kernel/market_liquidity.py:145`（**流动性**判定）。⇒ 53.43.5(b)(c) 那种「静默错答」不是只污染一个测试断言，它会**沿这三个消费者继续往下走**（边值 = 模型概率 − 市场概率）。**这条只作严重度登记，不代决是否修。**
+
+### 53.43.6 门与回归
+
+- **§4.3 触发器（按判据，不凭印象）**：`import` 载入 harness 后派生 —— `sets=8`、`mutations=**72**`、`{m.path}=27`、`{guard_files}=35`；再取 `git status` 的改动清单与之求交 ⇒ 命中 `backend/scripts/mutation_verify.py`（**§53.38 未提交的改动**使它为脏，不是本节改的）⇒ 按「diff 触及任何 `m.path`/guard_file 就必跑」**跑了** `tests/test_mutation_verify.py`：junit **`tests=163 failures=0 errors=0 skipped=0`**（判据取 junit 的 `failures`/`errors`，**不看进程 rc**）。
+- **本节在仓库内的改动只有一个文件**：本审计档（本节追加）。
+- **临时产物跑完即删**：`backend/tests/test_zz_probe_snapshot_latest_53_43.py`（400 次仪器化探针）与 `backend/tests/test_zz_control_tie_53_43.py`（正控）—— 删后 `git status` 未跟踪数回到 **7**（与本节开始前同值）。副本/读数留在工作台。
+
+### 53.43.7 探针副作用（照实说）
+
+为直查会话级库，我用 `sqlite3` 的 `mode=ro` 打开沙箱里的 WAL 库；**只读打开仍会落下 `-shm`/`-wal` 侧文件**，把受影响的沙箱目录 mtime 顶到 `2026-10-07 10:03`。两条推论：
+
+1. 这些是 conftest **声明为故意保留**的测试草稿（不是生产数据；生产 `v2_loop.db` 全程只读、未打开）；
+2. 🔴 **用目录 mtime 做时间定位会失真** —— 本次是靠清单里的 `created_utc` 才把「失败那次」对上（见 53.43.4 ②）。下次做同款定位，**直接读清单**。
+
+### 53.43.8 未决 / 留痕
+
+0. 🔴 **是否给两条查询补 tiebreaker**（形如 `order_by(captured_at.desc(), id.desc())` / `asc(), id.asc()`）—— **契约取值，不代决**。本轮把它从"该不该"推到"值不值得"，实测基础三条：① 失效形态是**静默 + 确定性**（先插入者被报成最新），不是"偶发随机"；② 正常路径复现概率仅 ~1e-3/对，但**并列在兄弟链路是构造性可得的**；③ 补 `id` 次序会把并列解析到**后插入**那行 = 符合"最新"的直觉，**但会改变并列时的返回值** ⇒ 属**取值变更**，不是修 bug。
+1. **触发条件未查清**（只登记）。形状已证（53.43.3）、触发未见。🔴 留给下一个人一句话：**别再把「这条红」和「无 tiebreaker」当两条独立事实 —— 它们是同一个。**
+2. **另一次全量红的身份**是 `tests/test_realtime_ticket_store.py::test_spawned_workers_share_atomic_consume_once`（**线程**类）。本节未查；若要查，注意它在归档历次全量里也出现过（`junit-posture-full.xml` / `junit-53-38-full.xml`）。
+3. 本节**不提交、不推送**。记忆落在 `.workbuddy/memory/2026-10-07.md` 与 `MEMORY-archive.md` §S；方法落在 `audit-delivery-verification` skill `### 9o.`。
+
+**本节追加读数**：见 `append_generic.py` 的 BEFORE/AFTER 打印，验收四条同时成立：字节增量 == 块长、CRLF 增量 == 块内 CRLF 数、`bare_lf stays 0`、`prefix unchanged`。
+
+## 53.44 给 `MarketSnapshotStore` 两条读法补 tiebreaker（用户点选「补 tiebreaker」；动代码）
+
+本节是 §53.43.8 第 0 条的处置：用户明确点选 **A = 补 tiebreaker**。§0 的「契约取值不代决」在此**由用户解除** —— 本节做的是一次**取值变更**，不是修 bug（§53.43 已把「形状已证、触发未见」写清）。
+
+### 53.44.1 结论先行
+
+| # | 事项 | 结论 |
+|---|---|---|
+| 1 | 改了什么 | `get_latest_snapshot` 的 `ORDER BY` 加 `id DESC`；`get_snapshots` 的加 `id ASC`（各自 docstring 写明「为什么它不是装饰」） |
+| 2 | 取值语义 | 并列时的返回值**变了**：从「先插入者胜（= 把更旧的那次采样报成最新）」改为「后写入者胜（= latest 就是字面意思）」。**这正是取值得以变更的部分** |
+| 3 | 行为钉 | 新增 **2** 条用例（一条盖 `latest`、一条盖序列），并**各自**挂一条变异 —— 两条变异都过四阶段 |
+| 4 | 🔴 **本次修复不解释 §53.43 的触发** | 它消除的是**可观测后果**：并列再发生也不会给出错答案。**触发为什么发生仍未查清**（§53.43.8 第 1 条不因本次改动而作废） |
+
+### 53.44.2 改动（字节级）
+
+`backend/app/kernel/market_snapshot_store.py`（**纯 CRLF**，本批开工前 = HEAD blob 5930 B + 184 CR，即干净的 CRLF 检出态）：
+
+```
+@@ get_snapshots
+-                .order_by(KernelMarketSnapshot.captured_at.asc())
++                .order_by(
++                    KernelMarketSnapshot.captured_at.asc(),
++                    KernelMarketSnapshot.id.asc(),
++                )
+@@ get_latest_snapshot
+-                .order_by(KernelMarketSnapshot.captured_at.desc())
++                .order_by(
++                    KernelMarketSnapshot.captured_at.desc(),
++                    KernelMarketSnapshot.id.desc(),
++                )
+```
+
+读数：`6114 → 7022` B、`crlf 184 → 204`（**增量 == 净增行数 20** ⇒ 新增行全为 CRLF）、`bare_lf` 恒 0、sha16 `03e905b37be0a078 → fbf6f5df6ba0d643`；`git diff --numstat` = **24 / 4**（4 条删除 = 2 条 docstring 行 + 2 条 `order_by` 行的真实替换；本节的数据改动不是「只加注释」，所以 §0 那 4 条注释证据不适用）。
+
+两处 docstring 都写明这不是装饰，其中一条把**旧行为**写进去（「the tiebreaker-less form returned the *first*-inserted row, so a tie silently reported the *older* capture as the newest」）—— 读者不需要先读 §53.43 才知道为什么有 `id`。
+
+### 53.44.3 行为钉：为什么必须是**两条**用例
+
+| 用例（`tests/test_sport_market_stores.py`，**纯 LF**） | 盖的读法 | 构造 |
+|---|---|---|
+| `test_get_latest_snapshot_tie_returns_the_later_row` | `get_latest_snapshot`（标量） | 两次 `append_snapshot(captured_at=same)`，断言 `latest["id"] == second["id"]` 且 `implied_prob == 0.65` |
+| `test_get_snapshots_tie_keeps_insertion_order` | `get_snapshots`（折线序列） | 三次同一 `captured_at`，断言返回行序 == 写入行序，且其值序 `[0.6, 0.62, 0.65]` |
+
+两条用例都先**自证并列真的成立**（`assert first["captured_at"] == second["captured_at"]` / `assert len({w["captured_at"] …}) == 1`），否则「并列用例」可能在两个不同时间戳上静静通过 —— 那是空头。
+
+🔴 **两个读法喂的是两个不同消费者**（标量 vs 折线序列，见 §53.43.5(e)），所以**没有一条守卫能同时盖住两个方向的 tiebreaker** ⇒ 故意不合并成一条「两个 ORDER BY 都改」的变异，否则一条守卫变红时分不清是哪一处坏了。
+
+文件读数：`8015 → 11312` B、`crlf` 恒 0（纯 LF 保持不变）、`bare_lf 213 → 284`、sha16 `d3bdeaddc75622dc → 04cc97d0be3446d7`、`numstat 71 / 0`（**插入型 ⇒ 删除数 0**）。
+
+### 53.44.4 变异验证：新 set `market-snapshot-order`（S1/S2）
+
+按 §4.2「先补用例、再把空头变成可登记的变异」：两条新用例各自登记一条变异，打的是**定义行**而不是调用行。
+
+| # | 变异 | `old` → `new` | 守卫 |
+|---|---|---|---|
+| S1 | `get_latest_snapshot` 的 id 次序反向 | `…id.desc(),` → `…id.asc(),` | `test_get_latest_snapshot_tie_returns_the_later_row` |
+| S2 | `get_snapshots` 的 id 次序反向 | `…id.asc(),` → `…id.desc(),` | `test_get_snapshots_tie_keeps_insertion_order` |
+
+**四阶段读数**（`verify market-snapshot-order`）：
+
+```
+[OK] 1. S1  green before True | red after mutation 1/1 files red | green after restore True | bytes restored True
+        mutated run -> tests/test_sport_market_stores.py -> 1 failed, 12 deselected
+[OK] 2. S2  green before True | red after mutation 1/1 files red | green after restore True | bytes restored True
+        mutated run -> tests/test_sport_market_stores.py -> 1 failed, 12 deselected
+```
+
+`1 failed, 12 deselected` ⇒ `-k` 只选中它自己那条守卫（该文件共 13 条用例 = 原 11 + 本节 2）⇒ **两条用例各自承重，不是互为正控**。还原后 store 文件 sha16 回到 `fbf6f5df6ba0d643`（逐字节一致）。
+
+**针的唯一性（改针前的必做项）**：`read_bytes().count()` 实测四个候选针（含缩进的 `…id.desc(),` / `…id.asc(),`，以及不带缩进的两版）**各命中 1 次**；目标文件 `bare_lf == 0` ⇒ 单行针成立。
+
+**新 set 的连带改动（§4.3 规定）**：`tests/test_mutation_verify.py` 的**显式有序清单**加一行 `"market-snapshot-order"`（`numstat 1 / 0`）。改完 `list` 读数：**共 9 套 / 74 个变异**（HEAD 侧仍为 8 套 / 71 条 —— **两棵树两个数**，见 §53.41.3 的纪律）。守卫测试本身：junit **`tests=166 failures=0 errors=0`**（由 163 升到 166 是新 set 带来的参数化用例）。
+
+### 53.44.5 门
+
+- **`ruff check app/`（§0 定义的门）**：**All checks passed!**
+- `ruff` 对四个改动文件报 3 条（`F401` @8、`F841` @80、`E741` @111），**全部是既有**：把 HEAD blob 拷进 `backend/tests/` 在**同一套配置**下重跑，得到**同样三条**（行号整体平移，因为本节在文件头加了 1 行 import）⇒ **本节新增 0 条**。🔴 这条判据必须**派生**：在 `backend/` 之外跑 ruff 会落到另一套配置（本次在 `.workbuddy/` 下跑出了 3 条 `I001`，是**配置差异**不是代码差异）。
+- **定向回归**（`test_sport_market_stores` + 三个消费者的用例 `test_sport_market_routes` / `test_edge_detector_service` / `test_market_liquidity` / `test_market_liquidity_degraded`）：junit **`tests=86 failures=0 errors=0 skipped=0`**；日志里 `safe-delete` 出现 **0** 次（⇒ 这次进程 rc 可信）。
+- 🔴 **一条方法论坑（本轮踩到并派生澄清）**：`market_snapshot_store.py` 的 `git show HEAD:` 长度是 5930 B，开工前工作树是 6114 B，**两者不等** —— 但那个差 **184 恰好是 CRLF 数**，即「HEAD 存 LF、检出 CRLF」的正常态（§1）。⇒ **"HEAD blob 长度 != 工作树长度" 不是"文件脏"的判据**；同理 `test_mutation_verify.py`（35040 vs 35797，差 757 == 其 CRLF 数）也是**干净**的。真判据是 `git status`（它先归一化）。本节开工前**真正脏的只有 `mutation_verify.py`**（102279 B ≠ 97786 + 1966）。
+- ⇒ 因此 `mutation_verify.py` 的 `git diff --numstat` **83 / 1 是对 HEAD 的**，含 §53.38 未提交的 W35；**本节对该文件的增量** = 开工前 `102279 → 105619` B（**+3340，纯插入**，`key="market-snapshot-order"` 命中 1 次、`# §53.44` 命中 1 次）。**别把 83 行记成本节改的。**
+
+### 53.44.6 全量回归
+
+`pytest tests -q --junitxml=junit-53-44-full.xml`（后台）：**读数待落** —— 完成后补录在 §53.44.9。判据只看 junit 的 `failures` / `errors`，不看进程 rc（本机 `safe-delete` shim 会污染 rc）。
+
+### 53.44.7 未决 / 留痕
+
+0. 🔴 **触发仍未查清**（承 §53.43.8 第 1 条，**不作废**）：本节消除的是**可观测后果** —— 并列再发生也不再给出错答案，`test_get_latest_snapshot` 在并列下会通过。但「那一次为什么并列了」**依然没有答案**，别把「红不再出现」读成「原因已找到」。
+1. **B 项仍未做**：`app/kernel/futures_market_service.py:137` 把 `now` 算在**循环外**、内层每个 link 复用 ⇒ 那是**构造性并列源**（兄弟表 `kernel_futures_snapshots`）。要不要顺手改成内层现取，属取值，**待拍板**。
+2. **C 项仍未做**：`kernel_market_snapshots.captured_at` 可空（notnull=0）而兄弟表 notnull=1。**补了 tiebreaker 之后 NULL 行的性质不变**：NULL 在 ASC 里仍排第一（进图表）、在 DESC 里仍永远当不了最新 ⇒ 这一条与本次改动**正交**，不要以为一起修掉了。
+3. 本节**不提交、不推送**。按 §0，代码改动（4 个文件）与文档改动（本审计档）应**分成两次提交**；`mutation_verify.py` 里 §53.38 的 W35 与本节新增共处一个未提交改动，若要提交需先想清是否一起提交。
+
+**本节追加读数**：见 `append_generic.py` 的 BEFORE/AFTER 打印，验收四条同时成立：字节增量 == 块长、CRLF 增量 == 块内 CRLF 数、`bare_lf stays 0`、`prefix unchanged`。

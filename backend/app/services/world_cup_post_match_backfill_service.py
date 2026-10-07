@@ -209,6 +209,13 @@ def run_post_match_backfill(
                     "source": source,
                     "dry_run": dry_run,
                     "sync": sync_result,
+                    # Relayed verbatim on purpose. The ledger is this job's record
+                    # of why the sync failed, and two behaviour tests pin the text
+                    # (`test_sync_error_short_circuits_without_scoring`,
+                    # `test_post_match_backfill_does_not_expose_or_persist_provider_error_body`).
+                    # So the safety of this line *is* the safety of the producer
+                    # `sync_world_cup_fixtures`; `test_ledger_error_sanitization_guard`
+                    # tracks that coupling rather than hiding it behind a token.
                     "error": sync_result.get("error"),
                     "audit_metadata": audit_meta,
                 })

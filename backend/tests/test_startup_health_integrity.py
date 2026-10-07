@@ -259,6 +259,55 @@ class OptionalComponentFailureTests(unittest.TestCase):
         )
 
 
+class StartupRunReconcileTests(unittest.TestCase):
+    """The ledger reconcile gained a second trigger: startup, not just the cron.
+
+    The daily 06:48 cron was measured never to have fired at all -- 0
+    `loop_run_ledger_maintenance` rows against 1759 ledger rows, 127 of them
+    `running` since 2026-07-23 -- because process lifetimes in this deployment
+    are hours. The cure existed and was unreachable, so the startup path runs the
+    same threshold-based reconcile. Both arms are pinned: it must actually
+    reconcile, and its failure must not refuse the boot.
+    """
+
+    @staticmethod
+    def _insert_a_stale_row() -> None:
+        from app.utils import sqlite_db
+
+        loop_run_store.recent_runs(limit=1)  # create the schema
+        with sqlite_db.writing(sqlite_db.loop_db_path()) as conn:
+            conn.execute(
+                "INSERT INTO loop_runs (id, job_name, status, started_at) "
+                "VALUES ('ghost', 'event_discover', 'running', "
+                "'2026-07-23T00:00:00+00:00')"
+            )
+
+    def test_a_stale_row_is_reconciled_at_boot(self):
+        """The positive arm. A failure-injection test alone cannot tell "the step
+        is missing" from "the step succeeded" -- deleting the call would leave
+        every other assertion here green."""
+        with isolated_ledger():
+            self._insert_a_stale_row()
+            with booted() as client:
+                client.get("/api/health")
+            ghost = loop_run_store.get_run("ghost")
+        self.assertEqual(ghost["status"], "failed")
+        self.assertEqual(ghost["error"], loop_run_store.STALE_RUN_ERROR)
+
+    def test_a_failing_reconcile_leaves_health_ok(self):
+        """Best-effort by design: a ledger that cannot be reconciled is not a
+        reason to withhold the dashboard that shows the problem."""
+        with isolated_ledger() as db:
+            with patch(
+                "app.core.scheduler.reconcile_stale_running_runs",
+                side_effect=RuntimeError("ledger unreachable"),
+            ):
+                with booted() as client:
+                    resp = client.get("/api/health")
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(failed_jobs(db), [])
+
+
 class StartupPartitionMatchesTheSourceTests(unittest.TestCase):
     """The declared split has to describe the code, not run beside it.
 

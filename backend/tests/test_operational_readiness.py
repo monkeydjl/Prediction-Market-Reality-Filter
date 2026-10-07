@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from starlette.requests import Request
@@ -153,13 +153,72 @@ class WriteAuthTests(unittest.TestCase):
         self.assertEqual(resp.json()["event_id"], "evt1")
 
 
+class WriteKeyNonAsciiTests(unittest.TestCase):
+    """`hmac.compare_digest` refuses ``str`` operands holding non-ASCII characters.
+
+    Both operands are controlled from outside the module -- the configured key
+    and a client-supplied header -- so one non-ASCII character in either used to
+    raise ``TypeError`` *inside the auth dependency*: ``optional_write_key``
+    broke its documented "never raises", and a route guarded by
+    ``require_write_key`` never reached its declared 401 (the exception
+    propagates, so ``TestClient`` re-raises it rather than reporting a status).
+
+    The two arrival paths are pinned separately on purpose. A non-ASCII
+    ``API_WRITE_KEY`` is expressible through ``TestClient``; a non-ASCII *header*
+    is not, because httpx encodes header values as ASCII and raises client-side
+    -- so that path is asserted where it really lands, on the dependency's
+    parameter (see ``test_raw_client_byte_reaches_the_dependency_as_non_ascii``).
+    """
+
+    def _guarded_client(self) -> TestClient:
+        app = FastAPI()
+
+        @app.get("/guarded")
+        async def guarded(_: None = Depends(require_write_key)) -> dict[str, bool]:
+            return {"ok": True}
+
+        return TestClient(app)
+
+    def test_non_ascii_configured_key_does_not_raise(self):
+        with patch.object(settings, "API_WRITE_KEY", "密钥"):
+            self.assertIs(asyncio.run(optional_write_key(None)), False)
+            self.assertIs(asyncio.run(optional_write_key("密钥")), True)
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(require_write_key(None))
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_non_ascii_configured_key_is_a_401_not_an_escaped_error(self):
+        # The non-ASCII lives in the configuration, not the request, so this
+        # request is expressible through httpx.
+        with patch.object(settings, "API_WRITE_KEY", "café"):
+            resp = self._guarded_client().get("/guarded")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_raw_client_byte_reaches_the_dependency_as_non_ascii(self):
+        from starlette.datastructures import Headers
+
+        # Header bytes decode as latin-1, so a client speaking raw HTTP can
+        # deliver 0xE9. Derive the value from that decoder instead of writing it
+        # by hand: if the decoding ever changes, this test changes with it.
+        header_value = Headers(raw=[(b"x-api-key", b"\xe9")])["x-api-key"]
+        self.assertEqual(header_value, "é")
+        with patch.object(settings, "API_WRITE_KEY", "ascii-key"):
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(require_write_key(header_value))
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_non_ascii_key_authenticates_its_own_value(self):
+        with patch.object(settings, "API_WRITE_KEY", "café"):
+            self.assertIs(asyncio.run(optional_write_key("café")), True)
+
+
 class StartupGuardTests(unittest.TestCase):
     """The fail-closed P0: the app must refuse to boot with no write key unless
     ALLOW_OPEN_WRITES is explicitly set, so a deploy that forgets the key does
     not come up silently wide open."""
 
     def test_lifespan_refuses_keyless_boot_without_opt_in(self):
-        from app.main import app, lifespan
+        from app.main import app
 
         with patch.object(settings, "API_WRITE_KEY", ""), \
                 patch.object(settings, "ALLOW_OPEN_WRITES", False), \

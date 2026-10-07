@@ -1,4 +1,4 @@
-﻿e75af1c feat(diagnose-cli): add _load_event + _extract_phase_data + skeleton main
+e75af1c feat(diagnose-cli): add _load_event + _extract_phase_data + skeleton main
  backend/scripts/diagnose_event_quality.py    | 199 ++++++++++++++++++++++++
  backend/tests/test_diagnose_event_quality.py | 216 +++++++++++++++++++++++++++
  2 files changed, 415 insertions(+)

@@ -96,10 +96,10 @@ def _collected_test_files() -> list[Path]:
 def _scan() -> tuple[int, frozenset[tuple[str, str]]]:
     """Return (functions scanned, {(relative file, name)} with no assertion).
 
-    A file that will not parse raises rather than being skipped: two files in
-    this suite carry a UTF-8 BOM, and an earlier version of this scan silently
-    dropped them on ``SyntaxError``, which is exactly how a census loses the
-    rows it exists to count.
+    A file that will not parse raises rather than being skipped: a UTF-8 BOM is
+    legal Python source, and an earlier version of this scan silently dropped
+    such files on ``SyntaxError``, which is exactly how a census loses the rows
+    it exists to count.
     """
     total = 0
     bare: set[tuple[str, str]] = set()

@@ -1,4 +1,4 @@
-﻿=== git log --oneline 6a13b71..f14220e ===
+=== git log --oneline 6a13b71..f14220e ===
 f14220e feat(diagnose-cli): implement _run_replay_comparison + exit codes + vocab lock
 f0818f9 feat(diagnose-cli): add _render_text + _render_json, wire into main
 e75af1c feat(diagnose-cli): add _load_event + _extract_phase_data + skeleton main

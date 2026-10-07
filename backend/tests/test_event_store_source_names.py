@@ -60,9 +60,9 @@ def _scan_source_dicts() -> list[dict[str, tuple[str, str]]]:
     """
     found: list[dict[str, tuple[str, str]]] = []
     for path in _ADAPTER_PATHS:
-        # utf-8-sig, not utf-8: `app/services/llm_gateway_service.py` carries a
-        # BOM that ast.parse rejects, so a new adapter arriving with one would
-        # break this scan rather than be covered by it.
+        # utf-8-sig, not utf-8: a BOM is legal Python source that ast.parse
+        # rejects, so a new adapter arriving with one would break this scan
+        # rather than be covered by it.
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Dict):

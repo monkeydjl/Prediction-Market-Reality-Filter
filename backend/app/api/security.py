@@ -6,9 +6,16 @@ from app.core.config import settings
 
 
 def is_write_key_valid(x_api_key: str | None) -> bool:
+    # compare_digest() rejects `str` operands that hold non-ASCII characters
+    # with a TypeError, and both operands here are controlled from outside this
+    # module (the request header, and API_WRITE_KEY): a single byte >= 0x80 in
+    # either one used to escape the auth dependency instead of answering -- see
+    # WriteKeyNonAsciiTests. The UTF-8 bytes are equally constant-time and carry
+    # no such restriction. (A lone surrogate would raise UnicodeEncodeError, but
+    # HTTP header values decode as latin-1, so it cannot arrive from a request.)
     return bool(settings.API_WRITE_KEY) and hmac.compare_digest(
-        x_api_key or "",
-        settings.API_WRITE_KEY,
+        (x_api_key or "").encode("utf-8"),
+        settings.API_WRITE_KEY.encode("utf-8"),
     )
 
 

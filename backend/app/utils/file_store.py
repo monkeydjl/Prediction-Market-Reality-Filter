@@ -169,11 +169,27 @@ def _quarantine_corrupt(path: str) -> None:
 
 
 def read_json(path: str, fallback: Any) -> Any:
-    """Lenient read for caches / read-only paths.  Never raises.
+    """Lenient read for caches / read-only paths.  Degrades instead of raising.
 
     Missing file -> fallback.  Corrupt JSON -> log + quarantine + fallback.
-    OSError (including failure to acquire the cross-process lock) -> log
-    warning + fallback. Cache reads degrade, not crash.
+    Undecodable bytes -> the same treatment, because a file that is not valid
+    UTF-8 is not JSON this process wrote and ``json.load`` raises
+    ``UnicodeDecodeError`` (a ``ValueError``) from the decoder rather than
+    ``JSONDecodeError``.  OSError (including failure to acquire the
+    cross-process lock) -> log warning + fallback. Cache reads degrade, not
+    crash.
+
+    ``UnicodeDecodeError`` was the one exception class this function did not
+    list, so its old one-line promise ("Never raises") was one class wider than
+    its code, and every reader inherited the seam -- including
+    ``event_store._load_unlocked``, i.e. ``list_all_events()``. The rest of the
+    codebase already treats the two as a single failure (15 modules catch
+    ``(UnicodeDecodeError, json.JSONDecodeError)`` together), so this is the
+    outlier being brought in line rather than a new convention.
+
+    Still *not* caught, deliberately: a ``ValueError`` raised while opening a
+    path that is not a valid OS path (embedded NUL, unpaired surrogate). That is
+    a failure of the argument, not of the stored contents.
     """
     try:
         with locked_file(path):
@@ -182,7 +198,7 @@ def read_json(path: str, fallback: Any) -> Any:
             try:
                 with open(path, "r", encoding="utf-8") as handle:
                     return json.load(handle)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 logger.error("Corrupt JSON at %s – quarantined, using fallback", path)
                 _quarantine_corrupt(path)
                 return fallback
@@ -201,9 +217,12 @@ def read_json_strict(path: str, fallback: Any) -> Any:
     """Strict read for durable stores' read-modify-write paths.
 
     Missing file -> fallback (first-run / fresh-deploy must still work).
-    Corrupt JSON or OSError (including failure to acquire the cross-process
-    lock) -> raise so the caller ABORTS the integral write instead of
-    overwriting durable data with an empty fallback.
+    Corrupt JSON, undecodable bytes, or OSError (including failure to acquire
+    the cross-process lock) -> raise so the caller ABORTS the integral write
+    instead of overwriting durable data with an empty fallback. Undecodable
+    bytes raise ``UnicodeDecodeError`` rather than ``JSONDecodeError``; it is
+    listed in the corrupt branch so the file is still quarantined and the
+    failure logged before it propagates.
     """
     with locked_file(path):
         if not os.path.exists(path):
@@ -211,7 +230,7 @@ def read_json_strict(path: str, fallback: Any) -> Any:
         try:
             with open(path, "r", encoding="utf-8") as handle:
                 return json.load(handle)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             logger.error("Corrupt JSON at %s – quarantined, aborting write", path)
             _quarantine_corrupt(path)
             raise

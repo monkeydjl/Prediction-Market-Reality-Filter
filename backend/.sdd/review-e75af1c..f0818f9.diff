@@ -1,4 +1,4 @@
-﻿f0818f9 feat(diagnose-cli): add _render_text + _render_json, wire into main
+f0818f9 feat(diagnose-cli): add _render_text + _render_json, wire into main
  backend/scripts/diagnose_event_quality.py    | 142 ++++++++++++++++++++++++++-
  backend/tests/test_diagnose_event_quality.py |  80 +++++++++++++++
  2 files changed, 219 insertions(+), 3 deletions(-)

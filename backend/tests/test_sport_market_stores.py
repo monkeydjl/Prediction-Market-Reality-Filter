@@ -1,4 +1,6 @@
 """Tests for sport market link + snapshot stores (real SQLite via tmp_path)."""
+from datetime import datetime, timezone
+
 import pytest
 
 from app.kernel.kernel_db import (
@@ -205,6 +207,75 @@ def test_get_latest_snapshot(kernel_db):
     latest = snap_store.get_latest_snapshot(link_id=link["id"])
     assert latest is not None
     assert latest["implied_prob"] == 0.65
+
+
+def test_get_latest_snapshot_tie_returns_the_later_row(kernel_db):
+    """A tie in ``captured_at`` must still answer "the one written last".
+
+    Two captures can carry the same instant -- an app path that computes
+    ``now`` once outside a loop does it by construction (see
+    ``futures_market_service.capture_snapshots``), and so does a caller that
+    passes ``captured_at`` explicitly. Without the ``id`` tiebreaker the
+    relative order inside the tie is undefined, and the measured behaviour was
+    to return the *first*-inserted row -- i.e. to report the *older* capture as
+    the newest. That is the shape of the one-off full-suite red recorded in
+    docs/reviews/system-health-audit-2026-09-26.md sections 53.39 / 53.43.
+    """
+    from app.kernel.market_snapshot_store import MarketSnapshotStore
+    from app.kernel.sport_market_link_store import SportMarketLinkStore
+    link_store = SportMarketLinkStore()
+    snap_store = MarketSnapshotStore()
+    link = link_store.upsert_link(
+        match_id="m1", contract_id="c1", source="polymarket",
+        outcome_label="YES", mapped_outcome="home_win",
+        link_method="rule", link_confidence=0.95, verified=True,
+        market_question="q", implied_prob=0.6,
+    )
+    same = datetime(2026, 10, 7, 12, 0, 0, 654321, tzinfo=timezone.utc)
+    first = snap_store.append_snapshot(
+        link_id=link["id"], implied_prob=0.6, price=0.6, captured_at=same,
+    )
+    second = snap_store.append_snapshot(
+        link_id=link["id"], implied_prob=0.65, price=0.65, captured_at=same,
+    )
+    # The test is *about* the tie, so assert the tie really is one, and that
+    # the two rows are distinguishable only by insertion order.
+    assert first["captured_at"] == second["captured_at"]
+    assert second["id"] > first["id"]
+
+    latest = snap_store.get_latest_snapshot(link_id=link["id"])
+    assert latest is not None
+    assert latest["id"] == second["id"]
+    assert latest["implied_prob"] == 0.65
+
+
+def test_get_snapshots_tie_keeps_insertion_order(kernel_db):
+    """The series reader needs the same tiebreaker, in the other direction.
+
+    ``get_snapshots`` feeds a line chart, so a plan-dependent pair inside a tie
+    is a visible artefact rather than a wrong scalar.
+    """
+    from app.kernel.market_snapshot_store import MarketSnapshotStore
+    from app.kernel.sport_market_link_store import SportMarketLinkStore
+    link_store = SportMarketLinkStore()
+    snap_store = MarketSnapshotStore()
+    link = link_store.upsert_link(
+        match_id="m1", contract_id="c1", source="polymarket",
+        outcome_label="YES", mapped_outcome="home_win",
+        link_method="rule", link_confidence=0.95, verified=True,
+        market_question="q", implied_prob=0.6,
+    )
+    same = datetime(2026, 10, 7, 12, 0, 0, 654321, tzinfo=timezone.utc)
+    written = [
+        snap_store.append_snapshot(
+            link_id=link["id"], implied_prob=prob, price=prob, captured_at=same,
+        )
+        for prob in (0.6, 0.62, 0.65)
+    ]
+    assert len({w["captured_at"] for w in written}) == 1, "not a tie"
+    rows = snap_store.get_snapshots(link_id=link["id"])
+    assert [r["id"] for r in rows] == [w["id"] for w in written]
+    assert [r["implied_prob"] for r in rows] == [0.6, 0.62, 0.65]
 
 
 def test_get_latest_snapshot_empty(kernel_db):

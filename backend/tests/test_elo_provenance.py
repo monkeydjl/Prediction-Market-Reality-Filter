@@ -293,9 +293,11 @@ class InventedEloDoesNotReachTheEngineTests(unittest.TestCase):
 def _scan_builders() -> dict[str, ast.Module]:
     """Parse every sport feature builder, raising rather than skipping.
 
-    Two files in this repository carry a UTF-8 BOM, and a scan that swallows
-    ``SyntaxError`` loses exactly the rows it exists to count -- so read with
-    ``utf-8-sig`` and let a parse failure fail the test.
+    A UTF-8 BOM is legal Python source -- Python's import machinery strips it,
+    while ``ast.parse`` rejects it outright -- so a source file can arrive
+    carrying one and a scan that swallows ``SyntaxError`` then loses exactly the
+    rows it exists to count.  Read with ``utf-8-sig``, which handles either
+    spelling, and let a parse failure fail the test.
     """
     found = {}
     for path in sorted((_BACKEND / "app" / "sports").glob("*/feature_builder.py")):

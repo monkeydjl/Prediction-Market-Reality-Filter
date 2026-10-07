@@ -70,8 +70,8 @@ def _is_cache_decorated(node) -> bool:
 def _census() -> dict[str, str]:
     """Map ``module.global`` -> kind for every stateful module-level name in app/.
 
-    Reads with ``utf-8-sig``: at least one source file carries a UTF-8 BOM, which
-    Python's import machinery strips but ``ast.parse`` rejects outright.  There is
+    Reads with ``utf-8-sig``: a UTF-8 BOM is legal Python source, which Python's
+    import machinery strips but ``ast.parse`` rejects outright.  There is
     no try/except here on purpose -- a file this scanner cannot read must break
     the test, not vanish from the census.
     """
@@ -114,11 +114,16 @@ def _reset_names() -> set[str]:
 
 
 class TestCensusPartition:
-    def test_scanner_reads_the_file_with_a_utf8_bom(self):
-        """Pins the utf-8-sig read.  app/services/llm_gateway_service.py starts
-        with U+FEFF; decoding it as plain utf-8 makes ast.parse raise, and a
-        scanner that swallowed the error would drop the whole file from the
-        census -- along with the _client_cache global asserted on below."""
+    def test_the_bom_tolerant_read_reaches_the_gateway_module(self):
+        """Pins the utf-8-sig read by pinning a module it has to reach.
+
+        `_client_cache` lives in app/services/llm_gateway_service.py.  A read
+        that cannot survive a UTF-8 BOM drops that whole file from the census
+        and takes this global with it.  What is asserted is therefore coverage,
+        not the BOM's presence: app/ no longer holds a BOM-prefixed file
+        (docs/reviews/system-health-audit-2026-09-26.md §53.39 removed the two
+        it had), so asserting one would pin a snapshot rather than the
+        scanner's behaviour."""
         census = _census()
         assert "app.services.llm_gateway_service._client_cache" in census
 

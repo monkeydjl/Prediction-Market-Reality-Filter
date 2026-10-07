@@ -313,6 +313,16 @@ _T_RESTORE_PROBE = "tests/test_p0_fixes_round2.py"
 _MUTATION_VERIFY = "backend/scripts/mutation_verify.py"
 _T_MUTATION_VERIFY = "tests/test_mutation_verify.py"
 
+# §53.44 — the market-snapshot store's ORDER BY tiebreakers. Both reads used to
+# sort on `captured_at` alone, which leaves the row order inside a tie
+# unspecified; the measured behaviour was the *first*-inserted row winning, i.e.
+# a tie silently reported the OLDER capture as the newest. The two mutations in
+# the `market-snapshot-order` set are the two directions of that tiebreaker, and
+# they need two guards because the two queries feed two different consumers: a
+# scalar ("latest") and the chart series.
+_MARKET_SNAPSHOT_STORE = "backend/app/kernel/market_snapshot_store.py"
+_T_SPORT_MARKET_STORES = "tests/test_sport_market_stores.py"
+
 _T_AVAILABILITY = "tests/test_football_live_availability_service.py"
 _T_SCHEDULE = "tests/test_football_live_schedule_service.py"
 _T_KALSHI = "tests/test_kalshi_event_source.py"
@@ -772,7 +782,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="whitelist-fixtures",
-        title="白名单 / 枚举常量的「循环 + 钉子」与关系型守卫（W1–W30 + §45 合并的 W31 + §47 的 W32 + §51 的 W33/W34）",
+        title="白名单 / 枚举常量的「循环 + 钉子」与关系型守卫（W1–W30 + §45 合并的 W31 + §47 的 W32 + §51 的 W33/W34 + §53 的 W35）",
         rationale=(
             "§22.2.3 那批契约型常量的补齐（§二十四）。每条都删掉一个成员、或把别名目标"
             "拼错，断言对应守卫转红。三件事必须写在这里："
@@ -852,6 +862,18 @@ SETS: tuple[MutationSet, ...] = (
             "**部分盲**的 —— 「3rd Place Final」含「final」，删掉该分支后它落回 `final`，而 "
             "`final` 本来就在淘汰赛集合里，于是只有 openfootball 拼写（「Match for third "
             "place」）那一腿会红。**精确断言与关系断言不是互相替代，是互相补盲**。"
+            "⑪ §53.38 补 W35，与 W8 **同组**：W8 删成员（集合变了），W35 把前两个成员"
+            "**对调**（集合一模一样，只有 dict 的插入序变了）。两者改写的是**同一行**字节 —— "
+            "一个删、一个换序 —— 所以整组 apply 只留前一条，显式同时点名两条会被 "
+            "`_apply_preflight` 拒掉。W35 证明的是「顺序也是契约」，而它此前**没有任何守卫**："
+            "`ENGINE_NAMES` 有 4 处 `for engine in ENGINE_NAMES` 建 dict 的消费者"
+            "（质量报告的 `by_engine` 与 trends 子表、`/analytics/engine-stats`），"
+            "键序跟随插入序 ⇒ 顺序印进发布的 JSON，但全仓对它的比较**清一色是集合式**"
+            "（`set(ENGINE_NAMES) == set(ENGINES) | {\"integrated\"}`、`assertIn`、集合推导），"
+            "连 `by_engine` 的断言也全是按键索引（`report[\"by_engine\"][\"elo_odds\"]`）—— "
+            "对键序天然盲。§53.37.5 的有界普查把这一类（**有序容器 + 被迭代进 dict**）"
+            "数到**恰好 2 个**：`DIRECTIONS` 早有顺序钉，`ENGINE_NAMES` 没有；W35 的 guard "
+            "就是为此新写的 `test_engine_names_order_is_pinned`。"
         ),
         mutations=(
             Mutation(
@@ -927,10 +949,28 @@ SETS: tuple[MutationSet, ...] = (
                     "test_engine_names_match_the_runnable_registry",
                     "test_engine_stats_serves_one_bucket_per_runnable_engine",
                 ),
+                group="engine-names-literal",
                 note=(
                     "从引擎名单里删掉一个成员：质量报告的 by_engine 与 /analytics/engine-stats "
                     "各少一个键，都不报错。第二个 guard 文件钉的是后一个消费者 —— "
                     "那条路由原本自带第三份字面量，删掉副本之后这条变异才能同时打红两处"
+                ),
+            ),
+            Mutation(
+                label="W35 ENGINE_NAMES 前两成员对调（同集合、不同顺序）",
+                path=_QUALITY,
+                old=b'ENGINE_NAMES = ("elo_odds", "hybrid", "gbm", "integrated")',
+                new=b'ENGINE_NAMES = ("hybrid", "elo_odds", "gbm", "integrated")',
+                guard_file=_T_QUALITY,
+                guards=("test_engine_names_order_is_pinned",),
+                group="engine-names-literal",
+                note=(
+                    "§53.38：成员一个不少，只是把前两个换个次序。质量报告的 by_engine、"
+                    "trends 的 by_engine 子表、以及 /analytics/engine-stats，都是 "
+                    "`for engine in ENGINE_NAMES` 建 dict —— 键序跟随插入序，所以发布出去的 "
+                    "JSON 键序就是它；然而 W8 与其它所有守卫比的都是**集合**，"
+                    "这条重排在补 test_engine_names_order_is_pinned 之前没有任何测试看得见。"
+                    "与 W8 共用同一段 old 字节（一个删成员、一个改顺序），故同组互斥"
                 ),
             ),
             Mutation(
@@ -1386,6 +1426,48 @@ SETS: tuple[MutationSet, ...] = (
                     "git 在 blob 之后补一个换行；少前进 1 字节，下一个 header 就落在空行上，"
                     "解析不出来便把这个文件判成 NEW —— 不抛错、不报警，"
                     "只有与 git show 逐字节比对才能抓住"
+                ),
+            ),
+        ),
+    ),
+    MutationSet(
+        key="market-snapshot-order",
+        title="市场快照两条读法的 tiebreaker（S1/S2）",
+        rationale=(
+            "`MarketSnapshotStore` 的两处 ORDER BY 过去只看 captured_at；并列时行序无定义，"
+            "实测是「先插入者胜」—— 也就是把更旧的一次采样当成最新（§53.39 那条偶发红的形状，"
+            "由 §53.43 用正控复现）。两条变异各打掉一个方向的 tiebreaker，而且必须是两条："
+            "两个读法喂的是两个不同消费者（标量 latest / 折线序列），没有一条守卫能同时盖住。"
+            "故意不把两者并成一条「两个 ORDER BY 都改」的变异 —— 那样一条守卫变红时"
+            "分不清是哪一处坏了。"
+        ),
+        mutations=(
+            Mutation(
+                label="S1  get_latest_snapshot 的 id 次序反向：并列时报最旧那行",
+                path=_MARKET_SNAPSHOT_STORE,
+                old=b"                    KernelMarketSnapshot.id.desc(),",
+                new=b"                    KernelMarketSnapshot.id.asc(),",
+                guard_file=_T_SPORT_MARKET_STORES,
+                guards=("test_get_latest_snapshot_tie_returns_the_later_row",),
+                note=(
+                    "并列时行序无定义。改回 asc 之后 tie 返回首插行，"
+                    "`latest` 的含义从「最后写入」变成「最早写入」——"
+                    "这正是 §53.39 那条偶发红的形状（断言 `assert 0.6 == 0.65`）。"
+                    "标量断言之外，这个值还会被 sport_markets 路由 / edge_detector / "
+                    "market_liquidity 三个消费者继续用下去。"
+                ),
+            ),
+            Mutation(
+                label="S2  get_snapshots 的 id 次序反向：并列段在折线上倒序",
+                path=_MARKET_SNAPSHOT_STORE,
+                old=b"                    KernelMarketSnapshot.id.asc(),",
+                new=b"                    KernelMarketSnapshot.id.desc(),",
+                guard_file=_T_SPORT_MARKET_STORES,
+                guards=("test_get_snapshots_tie_keeps_insertion_order",),
+                note=(
+                    "同一段并列数据 asc 下是插入序、desc 下是倒序。这条与 S1 打的是"
+                    "**不同**的字节段（另一处 ORDER BY），所以互为反向改写也不构成同组冲突。"
+                    "折线图对倒序表现为可视假象，只有断言行序的守卫能看见。"
                 ),
             ),
         ),

@@ -60,6 +60,7 @@ class InventoryTests(unittest.TestCase):
                 "restore-loopback-probe",
                 "multi-guard-file",
                 "eol-audit",
+                "market-snapshot-order",
             ],
         )
 

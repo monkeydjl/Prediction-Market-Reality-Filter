@@ -66,13 +66,23 @@ class MarketSnapshotStore:
             session.close()
 
     def get_snapshots(self, *, link_id: int) -> list[dict[str, Any]]:
-        """All snapshots for a link, oldest first (chart x-axis order)."""
+        """All snapshots for a link, oldest first (chart x-axis order).
+
+        ``id`` is the tiebreaker, and it is load-bearing rather than
+        cosmetic: rows sharing a ``captured_at`` have no defined relative
+        order otherwise, and this series is drawn as a line chart, where a
+        reordered pair inside a tie is a visible artefact. Ascending id keeps
+        a tie in insertion order.
+        """
         session = get_kernel_session()
         try:
             rows = (
                 session.query(KernelMarketSnapshot)
                 .filter_by(link_id=link_id)
-                .order_by(KernelMarketSnapshot.captured_at.asc())
+                .order_by(
+                    KernelMarketSnapshot.captured_at.asc(),
+                    KernelMarketSnapshot.id.asc(),
+                )
                 .all()
             )
             return [_row_to_dict(r) for r in rows]
@@ -82,13 +92,23 @@ class MarketSnapshotStore:
             session.close()
 
     def get_latest_snapshot(self, *, link_id: int) -> dict[str, Any] | None:
-        """Most recent snapshot for a link, or None."""
+        """Most recent snapshot for a link, or None.
+
+        ``id`` is the tiebreaker, and it is load-bearing rather than
+        cosmetic: on a tie the relative order of the two rows is undefined,
+        and the tiebreaker-less form returned the *first*-inserted row, so a
+        tie silently reported the *older* capture as the newest. Descending
+        id keeps "latest" meaning "most recently written".
+        """
         session = get_kernel_session()
         try:
             row = (
                 session.query(KernelMarketSnapshot)
                 .filter_by(link_id=link_id)
-                .order_by(KernelMarketSnapshot.captured_at.desc())
+                .order_by(
+                    KernelMarketSnapshot.captured_at.desc(),
+                    KernelMarketSnapshot.id.desc(),
+                )
                 .first()
             )
             return _row_to_dict(row) if row is not None else None

@@ -455,6 +455,29 @@ class WorldCupQualityServiceTests(unittest.TestCase):
 
         self.assertEqual(set(ENGINE_NAMES), set(ENGINES) | {"integrated"})
 
+    def test_engine_names_order_is_pinned(self):
+        """`ENGINE_NAMES` is iterated into two published maps, so its order is a contract.
+
+        `build_quality_loop_report` builds `by_engine` and `trends["by_engine"]`
+        with `for engine in ENGINE_NAMES`, and `/analytics/engine-stats` builds its
+        response the same way; a dict's key order follows insertion order, so this
+        tuple's order is what those payloads show. The sibling test above compares
+        as a *set*, so reordering the same four names -- invisible to it, and to
+        every other guard -- would silently reorder the published keys.
+
+        `DIRECTIONS` is the other member of this class and is pinned exactly this
+        way (`test_direction_vocabulary.py::test_directions_stays_an_ordered_sequence`).
+        That the order is observable rather than cosmetic is recorded by the route
+        that used to carry its own copy of this list "in a different order"
+        (`app/api/routes/world_cup_analytics.py:300-303`).
+
+        Kept a `tuple`: the order only means anything on an ordered container, and
+        a `set` would also make the key order vary between runs (the repo pins no
+        `PYTHONHASHSEED`) -- the same reason `_REPORTED_DIRECTIONS` stays a tuple.
+        """
+        self.assertIsInstance(ENGINE_NAMES, tuple)
+        self.assertEqual(ENGINE_NAMES, ("elo_odds", "hybrid", "gbm", "integrated"))
+
 
 if __name__ == "__main__":
     unittest.main()

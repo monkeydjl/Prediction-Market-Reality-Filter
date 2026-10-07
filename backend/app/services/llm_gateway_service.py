@@ -1,4 +1,4 @@
-﻿"""Unified LLM Gateway with provider/model route resolution.
+"""Unified LLM Gateway with provider/model route resolution.
 
 The Gateway hides provider and model ordering behind a small interface.  The
 execution functions are added in the next task; this first slice defines the

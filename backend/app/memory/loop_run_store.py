@@ -265,28 +265,63 @@ def fail_stale_running_rows(cutoff_started_at: str) -> int:
     "a second process just started" cannot mean "nobody owns that row" -- the
     scheduler can be mid-run in a job while the API restarts.
 
+    That contrast is about the **criterion**, and the criterion is unchanged --
+    it is also what makes this callable from *any* process. The **trigger** is
+    what has since widened: ``scheduler.reconcile_stale_running_runs`` runs this
+    same threshold check from the startup path, because the daily 06:48 cron was
+    measured never to have fired here at all
+    (``loop_run_ledger_maintenance`` = 0 rows against 1759 overall, while 127
+    rows sat ``running`` since 2026-07-23 or earlier).
+
     The row keeps its original ``started_at`` and gains ``finished_at`` (the
-    moment it was failed) and ``duration_ms``, so a reconciled row is
-    distinguishable from a completed one and the timeline stays honest.
-    ``error`` names the mechanism, because "the process died" is the actual
-    outcome of every row this catches.
+    moment it was reconciled -- the last moment the ledger still believed the
+    row was running) plus an integer ``duration_ms`` spanning exactly those two,
+    computed by the same :func:`_duration_ms` helper ``finish_run`` uses. That
+    keeps the stored pair self-consistent with every other row and the timeline
+    honest. It is **not** a measurement of work done: the owning process may
+    have died long before the reconcile, so the number is an upper bound, and
+    its size is the evidence for precisely that. ``error`` names the mechanism,
+    because "the process died" is the actual outcome of every row this catches.
+
+    The ``duration_ms`` binding used to be the ISO ``now`` *string*, landing a
+    TEXT value in the INTEGER column. SQLite stores it as given and nothing
+    raises; the scheduler timeline then renders
+    ``2026-10-04T16:01:01.577271+00:00ms``, and because TEXT sorts after INTEGER
+    any ``duration_ms < N`` filter would silently drop the reconciled row. The
+    maintenance job that calls this had never run, so no such value existed in
+    the live ledger: the defect was latent, and running the cure would have
+    shipped it. Hence per-row values from the shared helper instead of a
+    constant.
     """
     path = sqlite_db.loop_db_path()
     _ensure_schema(path)
     now = utc_now()
     with writing(path) as conn:
-        cur = conn.execute(
-            """
-            UPDATE loop_runs
-               SET status='failed',
-                   error=COALESCE(NULLIF(error, ''), ?),
-                   finished_at=COALESCE(finished_at, ?),
-                   duration_ms=?
-             WHERE status='running' AND started_at < ?
-            """,
-            (STALE_RUN_ERROR, now, now, cutoff_started_at),
-        )
-        return int(cur.rowcount or 0)
+        candidates = conn.execute(
+            "SELECT id, started_at FROM loop_runs "
+            "WHERE status='running' AND started_at < ?",
+            (cutoff_started_at,),
+        ).fetchall()
+        changed = 0
+        for row in candidates:
+            cur = conn.execute(
+                """
+                UPDATE loop_runs
+                   SET status='failed',
+                       error=COALESCE(NULLIF(error, ''), ?),
+                       finished_at=COALESCE(finished_at, ?),
+                       duration_ms=?
+                 WHERE id=?
+                """,
+                (
+                    STALE_RUN_ERROR,
+                    now,
+                    _duration_ms(row["started_at"], now),
+                    row["id"],
+                ),
+            )
+            changed += int(cur.rowcount or 0)
+        return changed
 
 
 def delete_terminal_runs_before(cutoff_finished_at: str) -> int:

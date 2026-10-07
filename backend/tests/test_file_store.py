@@ -16,7 +16,20 @@ from app.utils import file_store as fs
 
 
 class ReadJsonLenientTests(unittest.TestCase):
-    """read_json is for caches / read-only paths – never raises."""
+    """read_json is for caches / read-only paths – it degrades, never raises."""
+
+    def test_undecodable_bytes_degrade_like_corrupt_json(self):
+        """Invalid UTF-8 raises `UnicodeDecodeError` (a ValueError), *not*
+        `json.JSONDecodeError`, so it used to escape the lenient path entirely
+        and every reader inherited the seam -- `event_store._load_unlocked`,
+        i.e. `list_all_events()`, among them. 15 other modules in this repo
+        already catch the two classes together, so this pins the outlier into
+        line."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "binary.json")
+            Path(path).write_bytes(b'{"a": "\xff\xfe"}')
+            self.assertEqual(fs.read_json(path, {"fb": 1}), {"fb": 1})
+            self.assertTrue(os.path.exists(path + ".corrupt"))
 
     def test_missing_file_returns_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -65,6 +78,18 @@ class ReadJsonStrictTests(unittest.TestCase):
             path = os.path.join(tmp, "bad.json")
             Path(path).write_text("{not valid json", encoding="utf-8")
             with self.assertRaises(json.JSONDecodeError):
+                fs.read_json_strict(path, {})
+            self.assertTrue(os.path.exists(path + ".corrupt"))
+
+    def test_undecodable_bytes_abort_and_quarantine(self):
+        """Strict must abort the write for exactly the reason it aborts on
+        corrupt JSON. The class differs (`UnicodeDecodeError`), so the corrupt
+        branch lists both -- otherwise the file escaped unlogged and
+        unquarantined."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "binary.json")
+            Path(path).write_bytes(b'{"a": "\xff\xfe"}')
+            with self.assertRaises(UnicodeDecodeError):
                 fs.read_json_strict(path, {})
             self.assertTrue(os.path.exists(path + ".corrupt"))
 

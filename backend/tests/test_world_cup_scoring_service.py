@@ -131,6 +131,30 @@ class WorldCupScoringServiceTests(unittest.TestCase):
             "/analytics/reconcile-scoring",
         )
 
+    def test_a_failing_session_open_still_fails_the_ledger_row(self):
+        # ``get_prediction_session()`` is not infallible — it creates the DB
+        # file's parent directory and opens the engine, so it can raise OSError.
+        # If that happens *outside* the try, the row opened by start_run() is
+        # left at ``running`` with nobody left to finish it.
+        #
+        # close_prediction_session is deliberately NOT patched here: it is the
+        # guard on the finally that keeps it from being handed ``None``.
+        self._add_finished_match_with_unscorable_result()
+
+        with patch(
+            "app.services.world_cup_scoring_service.get_prediction_session",
+            side_effect=OSError("cannot open prediction DB"),
+        ):
+            with self.assertRaises(OSError):
+                score_all_finished_matches()
+
+        run = loop_run_store.last_run(SCORING_RECONCILE_AUDIT_JOB_NAME)
+        self.assertIsNotNone(run)
+        self.assertEqual(run["job_name"], SCORING_RECONCILE_AUDIT_JOB_NAME)
+        self.assertEqual(run["status"], "failed")
+        self.assertEqual(run["error"], "Scoring reconciliation failed")
+        self.assertIsNotNone(run["finished_at"])
+
 
 if __name__ == "__main__":
     unittest.main()

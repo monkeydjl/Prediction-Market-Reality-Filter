@@ -1,4 +1,4 @@
-﻿=== git log --oneline f0818f9..f14220e ===
+=== git log --oneline f0818f9..f14220e ===
 f14220e feat(diagnose-cli): implement _run_replay_comparison + exit codes + vocab lock
 
 === git diff --stat f0818f9 f14220e ===

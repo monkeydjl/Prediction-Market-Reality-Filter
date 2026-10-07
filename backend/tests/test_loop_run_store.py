@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -269,6 +270,48 @@ class FailStaleRunningRowsTests(_Ledger):
         self.assertEqual(row["status"], "failed")
         self.assertIsNotNone(row["finished_at"])
         self.assertIn("abandoned", row["error"])
+
+    def test_reconciled_rows_get_their_own_integer_duration(self):
+        """Each reconciled row gets *its own* integer span, like ``finish_run``.
+
+        The binding here used to be the ISO ``now`` **string**, landing TEXT in
+        an INTEGER column. SQLite stores that as given and nothing raises, but
+        TEXT sorts after INTEGER, so ``duration_ms < N`` would silently drop the
+        row -- and the timeline renders the raw string. Asserting only "it is
+        positive" would have passed on the string too (after the ``<`` coercion),
+        so this pins the *kind* and the *per-row* value.
+        """
+        o1 = "2026-07-20T00:00:00+00:00"
+        o2 = "2026-07-22T00:00:00+00:00"  # exactly 2 days later
+        self._insert("stale-1", "event_discover", "running", o1)
+        self._insert("stale-2", "event_discover", "running", o2)
+
+        self.assertEqual(runs.fail_stale_running_rows("2026-08-01T00:00:00+00:00"), 2)
+
+        with sqlite_db.reading(sqlite_db.loop_db_path()) as conn:
+            kinds = {
+                r["id"]: r["k"]
+                for r in conn.execute(
+                    "SELECT id, typeof(duration_ms) AS k FROM loop_runs"
+                ).fetchall()
+            }
+        self.assertEqual(kinds, {"stale-1": "integer", "stale-2": "integer"})
+
+        for run_id, started in (("stale-1", o1), ("stale-2", o2)):
+            row = self._row(run_id)
+            span = datetime.fromisoformat(row["finished_at"]) - datetime.fromisoformat(
+                started
+            )
+            self.assertEqual(row["duration_ms"], int(span.total_seconds() * 1000))
+
+        # The two rows differ only by their start, so their durations must differ
+        # by exactly that gap (the later row spans 2 days less) -- a single
+        # shared constant would pass the checks above while destroying the
+        # distinction.
+        self.assertEqual(
+            self._row("stale-1")["duration_ms"] - self._row("stale-2")["duration_ms"],
+            2 * 24 * 3600 * 1000,
+        )
 
     def test_a_fresh_running_row_is_left_alone(self):
         """The scheduler can be mid-run right now; only the stale ones fail."""

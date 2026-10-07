@@ -60,6 +60,7 @@ OPTIONAL_STARTUP_COMPONENTS = (
     "event_prediction_reconcile",   # reconcile_predictions()
     "optimization_task_reconcile",  # reconcile_interrupted_tasks()
     "world_cup_match_scoring",      # score_all_finished_matches()
+    "scheduler_run_reconcile",      # reconcile_stale_running_runs()
 )
 
 
@@ -314,6 +315,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning(
             "Optimization task reconciliation skipped: %s", exc, exc_info=True
         )
+
+    # Same shape for the scheduler's run ledger. A 'running' row in loop_runs
+    # after a restart has no coroutine behind it -- nothing re-attaches to a
+    # stored row -- and the daily cron meant to reconcile them was measured to
+    # have *never* fired once here (loop_run_ledger_maintenance = 0 rows against
+    # 1759 overall, 127 of them stuck 'running' since 2026-07-23), because
+    # process lifetimes in this deployment are hours, not days. Threshold-based,
+    # so running it from the API process is safe as well.
+    try:
+        from app.core.scheduler import reconcile_stale_running_runs
+        abandoned = reconcile_stale_running_runs()
+        if abandoned:
+            logger.info(
+                "Startup reconciliation failed %d abandoned scheduler run(s)",
+                abandoned,
+            )
+    except Exception as exc:
+        logger.warning("Scheduler run reconciliation skipped: %s", exc, exc_info=True)
 
     # Initialize World Cup prediction database (creates tables if missing).
     # Core: this is the DDL every match prediction and every scoring pass writes

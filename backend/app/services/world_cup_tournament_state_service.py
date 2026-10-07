@@ -1,4 +1,4 @@
-﻿"""World Cup tournament state helpers derived from normalized sports facts."""
+"""World Cup tournament state helpers derived from normalized sports facts."""
 
 from __future__ import annotations
 

@@ -265,8 +265,16 @@ def score_all_finished_matches(
     run_id = loop_run_store.start_run(SCORING_RECONCILE_AUDIT_JOB_NAME)
     started = time.monotonic()
 
-    session = get_prediction_session()
+    # ``get_prediction_session()`` is not infallible: it creates the DB file's
+    # parent directory and opens the engine, so it can raise OSError. It has to
+    # run *inside* the try — otherwise a failure here escapes past the except
+    # below and leaves the ledger row opened above stuck at ``running``, with
+    # no owner left to finish it. ``session`` is pre-bound so the finally can
+    # tell "never opened" apart from "opened and still open".
+    session: Session | None = None
     try:
+        session = get_prediction_session()
+
         # Find all finished matches
         finished = session.query(MatchFixture).filter(
             MatchFixture.status == "finished",
@@ -327,4 +335,5 @@ def score_all_finished_matches(
         raise
 
     finally:
-        close_prediction_session(session)
+        if session is not None:
+            close_prediction_session(session)

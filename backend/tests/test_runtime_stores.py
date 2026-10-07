@@ -28,8 +28,8 @@ def _path_settings_from_source() -> set[str]:
     """Annotated `Settings` attributes whose names look like paths, via AST.
 
     Read from source rather than `dir()` so the population cannot be changed by
-    anything a test did to the live object. `utf-8-sig` because at least one
-    module in this tree carries a BOM that `ast.parse` rejects.
+    anything a test did to the live object. `utf-8-sig` because a BOM is legal
+    Python source that `ast.parse` rejects.
     """
     tree = ast.parse(_CONFIG_PATH.read_text(encoding="utf-8-sig"))
     names: set[str] = set()

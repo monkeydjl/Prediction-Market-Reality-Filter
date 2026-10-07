@@ -282,9 +282,14 @@ async def _job_translate_titles() -> None:
 
     logger.info("[Scheduler] Title translation starting...")
     run_id = _start_run("translate_titles")
-    events = list_all_events()
     translated = 0
     try:
+        # Deliberately the first statement *inside* the try. `list_all_events()`
+        # reads the whole event store, and anything it raises while sitting
+        # between `_start_run` and the try leaves the row `running` with nobody
+        # left to finish it. An open/close census over all 30 `loop_runs` write
+        # sites found this as the only site with that shape.
+        events = list_all_events()
         records_to_save = []
         for event in events:
             record = event.get("record") or event
@@ -459,6 +464,18 @@ async def _job_loop_run_ledger_maintenance() -> None:
       cutoff would delete the only record that a quiet job is healthy (or
       failing), blinding the probe exactly when the job has been quiet long
       enough to look dead.
+
+    The **criterion** and the **trigger** are separate decisions, and only the
+    criterion is the one argued above. This daily cron is the designed trigger,
+    but measured against the live ledger it had never fired once:
+    ``loop_run_ledger_maintenance`` = 0 rows against 1759 overall, 127 of them
+    still ``running`` since 2026-07-23 or earlier. Neither had any other
+    fixed-UTC-hour cron after 2026-07-24 -- process lifetimes here are hours,
+    not days, so a 06:48 UTC trigger is structurally unreachable.
+    :func:`reconcile_stale_running_runs` therefore runs the *same* threshold
+    reconcile from the startup path, which is the one moment that always
+    happens. Retention stays here: it is not a correctness fix, and deleting
+    rows on every boot is churn.
     """
     logger.info("[Scheduler] loop_runs ledger maintenance starting...")
     run_id = _start_run("loop_run_ledger_maintenance")
@@ -480,6 +497,33 @@ async def _job_loop_run_ledger_maintenance() -> None:
     except Exception as exc:
         _finish_run(run_id, "failed", error=str(exc), exc=exc)
         logger.exception("[Scheduler] loop_runs ledger maintenance failed")
+
+
+def reconcile_stale_running_runs() -> int:
+    """Fail ``running`` rows whose owner cannot still be alive. Returns the count.
+
+    Startup companion to the daily ``loop_run_ledger_maintenance`` cron, and the
+    same idea main.py already applies to interrupted optimization tasks: a
+    ``running`` row has exactly two exits -- the job's ``_finish_run``, or
+    nobody -- and nothing re-attaches to a stored row in a later process.
+    Measured on the live ledger, that cron had never fired
+    (``loop_run_ledger_maintenance`` = 0 rows against 1759 overall) while 127
+    rows sat ``running`` since 2026-07-23 or earlier: the cure existed, was
+    correct, and was unreachable.
+
+    The criterion is unchanged and stays threshold-based
+    (``LOOP_RUN_STALE_RUNNING_HOURS``, default 36 h), which is what makes it
+    safe to run from *any* process rather than only the scheduler's: the longest
+    job here runs about ten minutes, so a row past the threshold has no live
+    owner whether this process, the scheduler, or an API request wrote it. Only
+    the reconcile runs here -- not the retention prune, which is not a
+    correctness fix.
+    """
+    cutoff = (
+        datetime.now(timezone.utc)
+        - timedelta(hours=settings.LOOP_RUN_STALE_RUNNING_HOURS)
+    ).isoformat()
+    return loop_run_store.fail_stale_running_rows(cutoff)
 
 
 async def _job_drift_alert_check() -> None:

@@ -2,8 +2,10 @@
 
 This conftest ensures deterministic, hermetic test runs by:
 1. Blocking dotenv from loading backend/.env during tests.
-2. Redirecting all file-path settings (event store, databases, caches) to a
-   session-scoped temp directory so no test reads real production data.
+2. Redirecting all file-path settings to a session-scoped temp directory so no
+   test reads or writes real production data.  The set is deliberately not
+   enumerated here -- it has drifted twice -- ``tests/test_settings_redirect_census.py``
+   fails when a path setting is neither redirected nor exempted with a reason.
 3. Snapshotting os.environ and restoring it after every test.
 4. Resetting every module-level singleton/cache in ``app/`` around each test,
    driven by the ``_SINGLETON_RESETS`` table below.  Anything deliberately left
@@ -19,6 +21,7 @@ test_config_env_loading.py) can restore the real load_dotenv via
 import os
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 # ---------------------------------------------------------------------------
 # CRITICAL: Patch dotenv BEFORE any app.* import.
@@ -50,7 +53,8 @@ from app.kernel.kernel_db import close_kernel_db  # noqa: E402
 # hermetic.  Individual tests can still override via monkeypatch (instance
 # attributes shadow class attributes) and the override is removed on teardown.
 # ---------------------------------------------------------------------------
-_TEST_DATA_DIR = tempfile.mkdtemp(prefix="pmrf_test_data_")
+_SANDBOX_PREFIX = "pmrf_test_data_"
+_TEST_DATA_DIR = tempfile.mkdtemp(prefix=_SANDBOX_PREFIX)
 
 from app.core.config import Settings as _SettingsClass  # noqa: E402
 
@@ -64,6 +68,62 @@ _SettingsClass.DOMAIN_RELIABILITY_DB_PATH = os.path.join(_TEST_DATA_DIR, "domain
 _SettingsClass.WORLD_CUP_DATA_FILE = os.path.join(_TEST_DATA_DIR, "world_cup_data.json")
 _SettingsClass.WORLD_CUP_SOURCE_BUNDLE_FILE = os.path.join(_TEST_DATA_DIR, "world_cup_source_bundle.json")
 _SettingsClass.SPORTS_FACT_FILE = os.path.join(_TEST_DATA_DIR, "sports_facts.json")
+
+# Two more of the same class, both writable by an `app/` path a test can reach
+# without patching it:
+#   * EVENT_AUDIT_FILE -- `event_audit_service.record_event()` runs
+#     `os.makedirs(os.path.dirname(path), exist_ok=True)` and then appends a
+#     JSON line, and `routes/events.py` resolves the same path.  Left at its
+#     default an unpatched test appends to the real `backend/event_audit.jsonl`
+#     (175,150 bytes of incident history).  A fabricated row in an *audit trail*
+#     is worse than noise in a log, which is why the suite already carries four
+#     `patch.object` call sites for it -- this is the belt to their braces, and
+#     it is what makes the guarantee hold for the tests nobody has written yet.
+#   * SCHEDULER_LOCK_FILE -- `scheduler._try_acquire_scheduler_lock()` creates
+#     the parent directory and opens the file "a+" (SCHEDULER_LOCK_ENABLED
+#     defaults to true), then writes its pid.  Derived from the redirected
+#     LOOP_DB_FILE rather than naming the temp file, because the production rule
+#     IS `LOOP_DB_FILE + ".scheduler.lock"`; restating the rule keeps the two in
+#     step if that redirect ever moves.
+_SettingsClass.EVENT_AUDIT_FILE = os.path.join(_TEST_DATA_DIR, "event_audit.jsonl")
+_SettingsClass.SCHEDULER_LOCK_FILE = _SettingsClass.LOOP_DB_FILE + ".scheduler.lock"
+
+# DELIBERATELY NOT redirected: LOL_DRY_RUN_FIXTURES_PATH.  It is an *input* --
+# `runtime_stores.DERIVED_STORES` describes it as "dry-run fixture input, empty
+# by default" -- and that empty default is a posture, not a path.
+# `lol_adapter._resolve_dry_run_path()` reads it as
+#
+#     if configured:                                  # non-empty
+#         return path if path.is_file() else None
+#     return _DEFAULT_SAMPLE_PATH if _DEFAULT_SAMPLE_PATH.is_file() else None
+#
+# so pointing it at a temp path that does not exist would not close a leak; it
+# would silently switch the dry-run import OFF (non-empty but missing returns
+# None instead of falling through to the built-in sample).  A redirect that
+# changes behaviour is not a hermeticity fix.  Nothing needs it either: no test
+# writes this path, and `tests/test_lol_adapter.py` sets it explicitly and
+# restores it -- which is the right shape for an input.
+
+# Not a data store, but the same class of leak.  It differs from every other
+# redirect here in when it has to be set: this is a path setting that decided
+# where the suite WRITES outside its own sandbox, and it is the only one whose
+# value is read once, at import time.  `app/main.py` calls
+# `setup_logging()` at import time (main.py:29) and that reads `settings.LOG_FILE`
+# once to build the root `RotatingFileHandler`; this module imports `app.main`
+# below, so the value at that instant is the value for the whole session -- no
+# later patch rebinds it.  Pointed at the repo, every run appended to
+# `backend/logs/app.log`: 10,357 lines on 2026-10-03, of which the run that
+# produced this comment wrote 14, and which therefore carried lines like
+# `SQLite integrity failed at startup for: KERNEL_DB_FILE -- /api/health will
+# report degraded. Restore these stores from a backup.` into the production log
+# for a database on which `PRAGMA integrity_check` answers `ok` (measured; the
+# lines came from three consecutive patched-settings boots 1s apart).
+#
+# The cost was not only noise.  The extra volume rotated the real log down to
+# three files (09-02..10-03), which is how the 2026-07-16
+# `Kernel DB initialized at %s` line -- the only surviving record of which file
+# the Phase-12 futures jobs wrote their 39 snapshots into -- was destroyed.
+_SettingsClass.LOG_FILE = os.path.join(_TEST_DATA_DIR, "app.log")
 
 # Also update the singleton instance so code that already imported settings
 # sees the temp paths immediately.
@@ -79,6 +139,110 @@ _settings_instance.DOMAIN_RELIABILITY_DB_PATH = _SettingsClass.DOMAIN_RELIABILIT
 _settings_instance.WORLD_CUP_DATA_FILE = _SettingsClass.WORLD_CUP_DATA_FILE
 _settings_instance.WORLD_CUP_SOURCE_BUNDLE_FILE = _SettingsClass.WORLD_CUP_SOURCE_BUNDLE_FILE
 _settings_instance.SPORTS_FACT_FILE = _SettingsClass.SPORTS_FACT_FILE
+_settings_instance.EVENT_AUDIT_FILE = _SettingsClass.EVENT_AUDIT_FILE
+_settings_instance.SCHEDULER_LOCK_FILE = _SettingsClass.SCHEDULER_LOCK_FILE
+_settings_instance.LOG_FILE = _SettingsClass.LOG_FILE
+
+# ---------------------------------------------------------------------------
+# Declare the sandbox.  This is a statement of what the directory *is*, not a
+# cleanup, and the distinction is the whole point.
+#
+# `_TEST_DATA_DIR` is created at import and never removed, deliberately: it is
+# also an evidence repository.  Audit findings cite rows read back out of the
+# sandboxed `v2_loop.db` (docs/reviews/system-health-audit-2026-09-26.md
+# sections 53.15 / 53.19 / 53.22), so pruning the scratch on the way out would
+# destroy a class of runtime fact that the source cannot reconstruct
+# afterwards.  Keeping it has a cost too -- on the order of 3 MB per active
+# day, ~44 directories/day -- and the honest reading is a trade-off, not a bug.
+#
+# What was actually missing was neither deletion nor retention but a
+# *declaration*: nothing anywhere said what these directories are, so the
+# growth was invisible and "can I delete this?" had no answer inside the
+# directory itself.  The manifest below answers it where the question gets
+# asked -- in the directory, visible in a plain listing -- and it is written
+# here, before the first test can run, so a session that dies mid-suite still
+# leaves the answer behind.
+#
+# Reclaiming space stays an operator decision.  The suite never prunes these,
+# and the manifest's recipe is phrased as a reviewed explicit list rather than
+# a wildcard on purpose.
+# ---------------------------------------------------------------------------
+_SANDBOX_MANIFEST_NAME = "READ-ME-BEFORE-DELETING.txt"
+
+
+def sandbox_manifest_text(sandbox_dir: str, ledger_path: str) -> str:
+    """The declaration written into every sandbox directory.
+
+    The two paths are arguments rather than reads of ``_TEST_DATA_DIR`` /
+    ``settings`` so the text is a *function of* the sandbox it describes: the
+    guard test can hand it a synthetic directory and see the text follow, which
+    a hardcoded template could not do.
+
+    The leading key/value block is machine-read by that guard; the prose below
+    it is for whoever finds the directory sitting in %TEMP% and wonders whether
+    it is safe to delete.
+    """
+    created = datetime.now(timezone.utc).isoformat()
+    return "\n".join([
+        "PMRF TEST SANDBOX -- read this before assuming the directory is disposable.",
+        "",
+        f"sandbox_dir : {sandbox_dir}",
+        f"evidence_ledger : {ledger_path}",
+        f"created_utc : {created}",
+        f"pid : {os.getpid()}",
+        f"reclaim_glob : {_SANDBOX_PREFIX}*",
+        "",
+        "WHAT THIS IS",
+        "    A per-pytest-process scratch directory.  tests/conftest.py makes one",
+        "    every time pytest so much as imports it (--collect-only makes one too)",
+        "    and redirects every file-path setting into it.  That redirect is what",
+        "    lets the suite run without reading or writing production data.",
+        "",
+        "WHAT IT IS NOT",
+        "    Not a cache, and not cleaned up.  Nothing in the suite removes these",
+        "    directories when the session ends, and that is deliberate rather than",
+        "    forgotten.",
+        "",
+        "WHY IT IS KEPT",
+        "    It doubles as an evidence repository.  Audit findings cite rows read",
+        "    back out of the ledger copy inside it, so deleting these directories",
+        "    destroys runtime evidence that the source code cannot reconstruct.",
+        "    The load-bearing artifact is the one named by 'evidence_ledger' above,",
+        "    and the findings are in docs/reviews/system-health-audit-2026-09-26.md",
+        "    (section 53.22 is the one that made this file exist).",
+        "",
+        "WHAT KEEPING IT COSTS",
+        "    Small but constant: roughly 3 MB per active day, some 44 directories",
+        "    per day when the suite is run often.  Retention is a trade-off --",
+        "    keeping it costs disk, deleting it costs evidence.",
+        "",
+        "HOW TO RECLAIM SPACE (your call; the suite will not do it for you)",
+        "    1. list them, newest first, and decide how many are worth keeping:",
+        "         PowerShell : Get-ChildItem $env:TEMP -Directory -Filter "
+        f"'{_SANDBOX_PREFIX}*' |",
+        "                      Sort-Object LastWriteTime -Descending |",
+        "                      Format-Table Name, LastWriteTime",
+        f"         POSIX      : ls -dlt \"${{TMPDIR:-/tmp}}\"/{_SANDBOX_PREFIX}*",
+        "    2. delete a *reviewed, explicit* list -- never the wildcard itself.",
+        "       Check that the list is the one you meant before dropping -WhatIf:",
+        "         PowerShell : ... | Select-Object -Skip 3 |",
+        "                      ForEach-Object { Remove-Item -LiteralPath $_.FullName"
+        " -Recurse -WhatIf }",
+        "",
+    ])
+
+
+def _write_sandbox_manifest(sandbox_dir: str, ledger_path: str) -> None:
+    """Best-effort: never let the declaration itself break the suite."""
+    try:
+        target = os.path.join(sandbox_dir, _SANDBOX_MANIFEST_NAME)
+        with open(target, "w", encoding="utf-8", newline="") as handle:
+            handle.write(sandbox_manifest_text(sandbox_dir, ledger_path))
+    except OSError:  # pragma: no cover - a sandbox we cannot write to is a
+        pass          # different failure, and it will surface on its own
+
+
+_write_sandbox_manifest(_TEST_DATA_DIR, _SettingsClass.LOOP_DB_FILE)
 
 # Save the canonical settings object.  test_config.py uses importlib.reload()
 # which replaces app.core.config.settings with a NEW object; other modules
@@ -113,6 +277,9 @@ def _restore_config_module():
     cls.WORLD_CUP_DATA_FILE = os.path.join(_TEST_DATA_DIR, "world_cup_data.json")
     cls.WORLD_CUP_SOURCE_BUNDLE_FILE = os.path.join(_TEST_DATA_DIR, "world_cup_source_bundle.json")
     cls.SPORTS_FACT_FILE = os.path.join(_TEST_DATA_DIR, "sports_facts.json")
+    cls.EVENT_AUDIT_FILE = os.path.join(_TEST_DATA_DIR, "event_audit.jsonl")
+    cls.SCHEDULER_LOCK_FILE = cls.LOOP_DB_FILE + ".scheduler.lock"
+    cls.LOG_FILE = os.path.join(_TEST_DATA_DIR, "app.log")
     # Ensure instance paths are set.
     _ORIGINAL_SETTINGS.EVENT_STORE_FILE = cls.EVENT_STORE_FILE
     _ORIGINAL_SETTINGS.EVENT_CACHE_FILE = cls.EVENT_CACHE_FILE
@@ -123,6 +290,9 @@ def _restore_config_module():
     _ORIGINAL_SETTINGS.WORLD_CUP_DATA_FILE = cls.WORLD_CUP_DATA_FILE
     _ORIGINAL_SETTINGS.WORLD_CUP_SOURCE_BUNDLE_FILE = cls.WORLD_CUP_SOURCE_BUNDLE_FILE
     _ORIGINAL_SETTINGS.SPORTS_FACT_FILE = cls.SPORTS_FACT_FILE
+    _ORIGINAL_SETTINGS.EVENT_AUDIT_FILE = cls.EVENT_AUDIT_FILE
+    _ORIGINAL_SETTINGS.SCHEDULER_LOCK_FILE = cls.SCHEDULER_LOCK_FILE
+    _ORIGINAL_SETTINGS.LOG_FILE = cls.LOG_FILE
 
 # ---------------------------------------------------------------------------
 # Session-level environment snapshot.

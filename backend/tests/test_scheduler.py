@@ -200,6 +200,26 @@ class TranslateTitlesJobTests(unittest.TestCase):
             },
         )
 
+    def test_a_failing_event_read_still_fails_the_row(self):
+        """`list_all_events()` used to sit *between* `_start_run` and the `try`.
+
+        Anything it raised left the row `running` with nobody left to finish it,
+        and a `running` row has exactly two exits: the job's `_finish_run`, or
+        nobody. An open/close census over all 30 `loop_runs` write sites found
+        this as the only site with that shape.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")), \
+                    patch("app.memory.event_store.list_all_events",
+                          side_effect=OSError("event store unreadable")):
+                asyncio.run(scheduler._job_translate_titles())
+                run = loop_run_store.last_run("translate_titles")
+
+        self.assertEqual(run["status"], "failed")
+        self.assertIsNotNone(run["finished_at"])
+        self.assertEqual(run["error"], "Scheduler job failed: OSError")
+        self.assertEqual(run["result"], {})
+
 
 class LoopDbMaintenanceJobTests(unittest.TestCase):
     """The job keeps its name and gained its scope.
@@ -872,6 +892,51 @@ class LoopRunLedgerMaintenanceJobTests(unittest.TestCase):
                 run = loop_run_store.last_run("loop_run_ledger_maintenance")
         self.assertEqual(run["status"], "failed")
         self.assertEqual(run["error"], "Scheduler job failed: OperationalError")
+
+
+class StartupRunReconcileTests(unittest.TestCase):
+    """`reconcile_stale_running_runs` is a second *trigger* for the same
+    threshold-based reconcile the daily cron runs.
+
+    It exists because that cron was measured never to have fired at all: the
+    live ledger holds 0 `loop_run_ledger_maintenance` rows against 1759 overall,
+    127 of them `running` since 2026-07-23 or earlier, and no fixed-UTC-hour
+    cron fired after 2026-07-24. Process lifetimes here are hours, so a 06:48
+    UTC trigger cannot run; startup always does.
+    """
+
+    def _stale_and_fresh(self, stale_hours):
+        with patch.object(scheduler.settings, "LOOP_RUN_STALE_RUNNING_HOURS", stale_hours):
+            fresh_id = loop_run_store.start_run("event_discover")
+            with sqlite_db.writing(sqlite_db.loop_db_path()) as conn:
+                conn.execute(
+                    "INSERT INTO loop_runs (id, job_name, status, started_at) "
+                    "VALUES ('ghost', 'event_discover', 'running', "
+                    "'2026-07-23T00:00:00+00:00')"
+                )
+            changed = scheduler.reconcile_stale_running_runs()
+        return changed, loop_run_store.get_run("ghost"), loop_run_store.get_run(fresh_id)
+
+    def test_only_rows_past_the_threshold_are_failed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+                changed, ghost, fresh = self._stale_and_fresh(36)
+        self.assertEqual(changed, 1)
+        self.assertEqual(ghost["status"], "failed")
+        self.assertEqual(ghost["error"], loop_run_store.STALE_RUN_ERROR)
+        # A run started a moment ago is mid-run as far as anyone can tell.
+        self.assertEqual(fresh["status"], "running")
+
+    def test_the_threshold_comes_from_the_setting(self):
+        """A hardcoded cutoff would pass the test above and be wrong only at the
+        horizon. With the threshold raised past the ghost's age, nothing may be
+        touched."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sqlite_db, "loop_db_path", return_value=str(Path(tmp) / "v2_loop.db")):
+                changed, ghost, fresh = self._stale_and_fresh(24 * 365 * 100)
+        self.assertEqual(changed, 0)
+        self.assertEqual(ghost["status"], "running")
+        self.assertEqual(fresh["status"], "running")
 
 
 if __name__ == "__main__":

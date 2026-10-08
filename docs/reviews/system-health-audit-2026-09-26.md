@@ -11697,3 +11697,299 @@ ImportError: cannot import name '_EventAuditSnapshotUnused' from 'app.models.eve
 原 D1 与更正后的 D1 在四阶段输出里**一模一样**（都是 `1 failed`）。所以「某条变异承重」这个结论，
 **必须另有一次读失败文本的取证**才成立；否则你证明的只是「这条守卫对某种破坏敏感」，而那种破坏可能与本变异要表达的事无关。
 （同族：§4.2 的「负控给的是假安全」—— 那次是「不产出」与「产出后被正确过滤」断言结果相同；这次是「模块坏了」与「名字没了」都让同一个守卫红。）
+
+## 53.54 `GET /events/edges/fresh`：把「元素类型」也变成已发布契约
+
+承接 §53.53。§2 的三件套此前只解决**信封**——`FreshEdgesResponse` 早在白名单里、也早就闭合，
+但它的 `edges` 是 `list[dict[str, Any]]`，生成的 TS 于是是 `{ [k: string]: unknown }[]`：
+**一个前端读不动的元素类型**。`frontend/src/lib/api.ts` 只能自己手写 `FreshEdge`，
+并在**两个**调用点把整个信封内联重写一遍。
+
+本节把元素命名成 `FreshEdgeItem`、把它的点命名成 `EdgeSeriesPoint`，登记为根、重生成、
+把两个手写类型退役成别名，并把信封里**恒写**的字段按生产者收紧成 required。
+
+🔴 **但本节最值钱的一条是负面的**：这条路由此前的**第一条分支**（`rank_fresh_edges`）
+**在全部五份存量语料里一次都没有运行过** —— 任何「把路由对着语料跑一遍」的普查都会**静默地**漏掉它。
+见 53.54.2。
+
+### 53.54.1 取证：生产者驱动，不读词表
+
+方法同 §53.53：导入真实的 `trend_analysis_service` 函数喂真实语料，
+只复刻路由自己的六行胶水（`api/routes/events.py:1511-1536`，逐字复制）。
+探针 `probe_fresh_edges_shape.py`，读数 `probe_fresh_edges_shape.txt`。
+
+| 语料 | 文件大小 | 事件数 | 快照数 |
+| --- | --- | --- | --- |
+| `backend/event_audit.jsonl`（工作树） | 175 150 B | 146 | 526 |
+| `backend/backups/event-id-migration-20260622-040713/` | 101 868 B | 78 | 307 |
+| `backend/backups/manifold-lowercase-purge-20260709-150947/` | 264 083 B | 126 | 781 |
+| `backend/backups/manifold-purge-20260709-150402/` | 357 938 B | 171 | 1 059 |
+| `.workbuddy/audit-2026-10-03/preA-backup/`（与第 1 份同源） | 175 150 B | 146 | 526 |
+
+参数组合覆盖 `classification` 六值 × `include_series` 两值 × `offset` 两值。
+
+**共发出 2 324 条 item，而 key 集只有四种**，且全都是
+`{event_id, event_title, edge}` ∪ `{event_title_zh?}` ∪ `{series?}` 的子集：
+
+| 计数 | key 集 | 出处 |
+| --- | --- | --- |
+| 281 | `edge, event_id, event_title, event_title_zh` | 语料 1 / 5 |
+| 281 | 同上 `+ series` | 语料 1 / 5 |
+| 200 | `edge, event_id, event_title` | 语料 2 |
+| 200 | 同上 `+ series` | 语料 2 |
+| 118 | `edge, event_id, event_title` | 语料 4 |
+| 82 | `edge, event_id, event_title, event_title_zh` | 语料 4 |
+
+🔑 **语料 4 是关键**：它在**同一次普查内**同时出现「有 `event_title_zh`」（82 条）与「没有」（118 条）。
+这把「该键是条件性写入」从**代码读法**变成了**观测**——否则语料 1/5 的 100% 与语料 2 的 0%
+都可以用「语料差异」解释掉，而模型里给它一个默认值这个决定就失去了依据。
+
+另外两个集合各只有一种形状：
+
+- **嵌套 `edge`：12 键，2 324/2 324 一致**，且**两条生产者分支与 `_empty_edge()` 路径三者完全相同**。
+- **`series` 元素：4 键**（`baseline` / `edge` / `estimated` / `timestamp`），全部 4 666 个点一致。
+
+### 53.54.2 两个可达性陷阱
+
+**（a）第一条分支从未运行。** 所有 `classification=fresh & include_series=False & offset=0`
+的组合在**五份语料里全部返回 0 条**。原因是 `settings.EDGE_STALE_HOURS = 72.0`，
+而语料里最新的快照是 `2026-09-10T18:39:44`（普查日 2026-10-08）：
+`_classify_edge` 一律返回 `"stale"` ⇒ `rank_fresh_edges` 什么都产不出来。
+
+⇒ 那条路上如果写了判据，它**在本轮的全部证据里都是空的**，而报告会显示「跑过了、没问题」。
+
+**（b）于是直接驱动分支 A。** `rank_fresh_edges` **就是**该分支的生产者，
+而它的 `now` 参数本来就是「给确定性测试用」的（见其 docstring）⇒ 扫 `now` 不改变任何输入数据。
+探针 `probe_fresh_edges_branch_a.py`，读数 `.txt`。五份语料分别得 415 / 108 / 368 / 407 / 415 条：
+
+- item key 集**恰为** `['edge', 'event_id', 'event_title']`，**一种**；
+- `edge` 的 12 键与分支 B **相同**；
+- **`series` 从不产出**（5/5，与源码读法一致）；
+- **且分支 A 的每一个 edge 字段都非空**。
+
+最后一条是本节最尖的地方：分支 A 只保留 `classification == "fresh"`，
+而全 null 的 `_empty_edge()` **只**经 `no_data` 到达。所以
+`latest_edge` / `first_edge` / `peak_edge` / `first_seen` / `last_seen` / `span_hours` / `age_hours`
+这七个字段的 `float | None` **空值分支只由分支 B 的 `no_data` 路径产生**
+（语料 1 与 5 各提供 162 条；语料 2 / 3 / 4 一条也没有）。
+**只读分支 A 就会误判成 `float`（非空）就够** —— 这正是「承重与空头」在**行级**的翻版。
+
+### 53.54.3 `exclude_unset` 会穿透 list-of-models ⇒ 命名不是行为变更
+
+路由声明的是 `response_model=FreshEdgesResponse, response_model_exclude_unset=True`
+（`events.py:1492-1494`）。今天 `edges` 是 `list[dict]`，元素是**裸 dict**，
+`exclude_unset` 碰不到它 ⇒「没有中文标题」意味着**键缺席**，而不是 `null`。
+一旦改成 `list[FreshEdgeItem]`，pydantic 会逐元素校验并重新序列化，于是问题变成
+「声明了 `event_title_zh: str | None = None` 之后，一个从没设过它的元素会变成缺席还是 null？」
+
+探针 `probe_exclude_unset_nested.py` 用与 FastAPI **等价**的调用
+（`model_validate` → `model_dump(mode="json", exclude_unset=True)`）实测：
+
+| case | 输入 | 结果 |
+| --- | --- | --- |
+| 1 | 元素不给两个可选键 | **两键都缺席** |
+| 2 | 元素给了两个可选键 | 都在（值原样） |
+| 3（控制组） | 信封字段整体不给 | 被丢弃 |
+
+⇒ `event_title_zh: str | None = None` / `series: list[EdgeSeriesPoint] | None = None`
+**保持了今天「不给就不出现」的行为**。在这一点上，命名是**纯类型变更**。
+反过来说：这两个字段**必须**带默认值 —— 不然「没有中文标题的事件」（五份语料里三份的常态）
+会从「键缺席」变成 **500**。
+
+### 53.54.4 落地
+
+**后端**（`backend/app/models/event.py`，+95/−7）
+
+- 新增 `EdgeSeriesPoint`：`timestamp: str | None`（**无默认**）/ `estimated` / `baseline` / `edge`（`float`，无默认）。
+  `timestamp` 写成 required-but-nullable 而不是 `str`：`edge_series` 总是写这个键，
+  但值是 `snap.get("timestamp")` 原样透传，代码路径允许它是 `None`。
+  4 666 个点里它**每次都是字符串** —— 那是关于这几份语料的**观测**，不是保证，所以类型保留了代码真有的那个分支。
+- 新增 `FreshEdgeItem`：`event_id` / `event_title` / `edge: EdgeTrajectorySummary` 无默认；
+  `event_title_zh: str | None = None` / `series: list[EdgeSeriesPoint] | None = None` 带默认。
+- `FreshEdgesResponse.edges`：`list[dict[str, Any]]` → `list[FreshEdgeItem]`；
+  六个恒写字段（`count` / `total` / `limit` / `offset` / `classification` / `classification_totals`）
+  去掉默认值。`classification` 由 `str | None = None` 收紧成 `str` —— 它其实就是那个已校验的查询参数。
+
+  ⚠️ **口径说明（须显式记下）**：请拍板的原话是「`count` / `total` / `limit` / `offset` / `classification`
+  这 5 个字段收紧成 required」。实际动手时把 **`classification_totals` 与 `edges` 一并**收紧了，
+  理由是唯一那条路由**无条件设置全部 7 个键**，只收 5 个会让同一个信封一半严一半松。
+  这是**同一条裁决沿同一根轴的自然延伸**，但它确实是超出原话的部分，故记在此处备查。
+
+- 白名单（`backend/app/models/_frontend_export.py`，+4/−0）：两个新模型加进 import 与 `__all__`。
+  **必须是根**（而不是靠 `$ref` 到达）：只被引用到的模型拿不到 `additionalProperties: false`，
+  `json2ts` 会补回 `[k: string]: unknown` —— 恰好回到前端读不动的那一格。
+
+**重生成**（`frontend/src/lib/generated-types.ts`，磁盘 33 142 → **37 705 B**，crlf 940 → 1 024，`bare_lf` 全程 0）
+
+| 读数 | 改前 | 改后 |
+| --- | --- | --- |
+| `export interface` 数 | 52 | **54**（+`EdgeSeriesPoint`、+`FreshEdgeItem`） |
+| `FreshEdgesResponse` 体内行数 | 12 | 22 |
+| `FreshEdgesResponse` 体内 **inline 尾巴行数** | **2** | **1**（只剩 `classification_totals` 的 `Record<string,int>`） |
+| `FreshEdgesResponse.edges` 字段 | `edges?: {` | `edges: FreshEdgeItem[];` |
+
+（`inline 尾巴`按 §2 的严格判据说：体内出现了 `  [k: string]: unknown;` 的行数。
+`classification_totals` 是**合法**的 inline 索引签名 —— 它镜像 `dict[str, int]`，不是漏登记。）
+
+**前端**
+
+- `frontend/src/lib/api.ts`（+22/−23，磁盘 41 568 → 42 249 B，crlf 1 244 → 1 243）：
+  两个调用点（`freshEdges` / `edgeMonitor`）改成 `api<FreshEdgesResponse>`；
+  手写的 `export interface FreshEdge` / `EdgePoint` **退役成三行别名**
+  （`FreshEdge = GeneratedFreshEdgeItem` / `EdgePoint = GeneratedEdgeSeriesPoint` /
+  `FreshEdgesResponse = GeneratedFreshEdgesResponse`）。`export interface` 数 **41 → 39**。
+- `frontend/src/app/decisions/page.tsx`（+2/−2）：`for (const e of (fresh.edges ?? []) as FreshEdge[])`
+  → `for (const e of fresh.edges ?? [])`。强转变冗余，一并清掉；`FreshEdge` 从 import 里去掉。
+- `frontend/src/app/edges/page.tsx`（+7/−1）：**一处 §2 型修正**。
+  `tsc` 报 `TS2322: Type 'EdgeSeriesPoint[] | null | undefined' is not assignable to type 'EdgeSeriesPoint[] | undefined'`。
+  这**不是**调用点的错：`series` 在生成类型里是 `EdgeSeriesPoint[] | null | undefined`，
+  而「必存在但可为 null」在生成的 TS 里**无法表达** ⇒ 按 §2 的既定修法**放宽接收端的 prop**
+  （`series?: EdgePoint[] | null`），而不是在每个调用点撒 `?? undefined`。函数体里的 `series ?? []` 本来就两种都吃。
+
+**顺带修正一处既有漂移（须显式记下）**
+
+`frontend/src/app/edges/page.test.tsx` 与 `decisions/page.test.tsx` 的夹具里，
+`edge` 对象只有 **9** 个字段，缺 `first_seen` / `last_seen` / `span_hours`
+—— 而这**正是 §53.53 当时删掉的那三个**：手写的 `EdgeTrajectory` 比生产者窄三个字段，
+§53.53 把 `EdgeTrajectory` 换成 12 字段的生成类型之后，这两个夹具就**静默地过期了**。
+它们没被任何东西拦下，原因见 53.54.8 第 3 条。本节把两个夹具补齐成 12 个字段。
+
+### 53.54.5 守卫与变异
+
+**守卫**（`backend/tests/test_generate_types.py`，+176/−1）
+
+| 判据 | 层 | 读什么 |
+| --- | --- | --- |
+| ① `edges` 必须指名 `FreshEdgeItem` | 模型身份 | `model_fields['edges'].annotation == list[FreshEdgeItem]` |
+| ② 元素的 `edge` / `series` 必须指名 `EdgeTrajectorySummary` / `list[EdgeSeriesPoint] \| None` | 模型身份 | 同上 |
+| ③ **恒写**字段必须 required | 模型可选性 | `is_required()` |
+| ④ **条件写**字段必须**保留默认值** | 模型可选性 | `is_required() == False` |
+| ⑤ `api.ts` / `types.ts` 不得再声明这四个名字的 `interface` | 按名判（文本） | `_interface_bodies` |
+| ⑥ 三行别名必须在 | 文本 | `assertIn` |
+| ⑦ 两个调用点必须读 `api<FreshEdgesResponse>` | 文本 | 从路径行**往回**找最近的 `api<` |
+
+③④ 是**两向**的，而且方向相反：
+去掉 `event_title_zh` 的默认值会让「没有中文标题的事件」变成 500；
+而给 `count` 加回默认值会**静默地**把已发布信封重新放宽成 `count?:`。
+`model_fields[...].is_required()` 是唯一能看见第二种读法（生成文本本身仍然「合法」，只是更松）。
+
+⑦ 用「往回找最近的 `api<`」而不是固定窗口：`edgeMonitor` 那个调用点下方不远处就是
+`resetData` 的内联 `api<{ ... }>`，任何够宽的固定窗口都会匹配到那个**邻居**。
+
+另外把 `EdgeSeriesPoint` / `FreshEdgeItem` 加进既有的闭合清单
+（`test_closed_overlay_interfaces_have_no_tail`）—— 它们作为**根**才闭合，这一条钉的就是那个前提。
+
+**变异**（`frontend-type-closure` 追加 J5–J12，该 set 由 10 条增至 **18 条**；`list` 报 **12 套 / 98 条**）
+
+四阶段全部通过（`verify --index 11-18`）：
+
+| # | 变异 | 踩的判据 | 结果 |
+| --- | --- | --- | --- |
+| J5 | `api.ts` 又声明 `EdgePoint`（**别名刻意留着**） | ⑤ / api.ts | OK |
+| J6 | `types.ts` 又声明 `FreshEdgeItem` | ⑤ / types.ts | OK |
+| J7 | 别名被改指内联形状（**不插副本**） | ⑥ | OK |
+| J8 | `freshEdges` 调用点 generic 退回内联 | ⑦ / 第 1 处 | OK |
+| J9 | `edgeMonitor` 调用点 generic 退回内联 | ⑦ / 第 2 处 | OK |
+| J10 | `edges` 退回 `list[dict[str, Any]]` | ① | OK |
+| J11 | `FreshEdgeItem.edge` 退回裸 dict | ② | OK |
+| J12 | `event_title_zh` 丢掉默认值 | ④ | OK |
+
+**J5 留别名、J7 不插副本是刻意的**：⑥ 与 ⑤ 落在同一个测试里，
+一改别名就两半同时红 ⇒ 红的归因不可辨，`J5`/`J6` 也就无法证明 ⑤ 承重。
+两条合起来才把两半**隔离**出来。
+
+🔴 **失败文本取证**（§53.53 那条教训的执行）：四阶段只判「红没红」。
+探针 `probe_5354_failure_text.py` 逐条应用、跑守卫、读失败文本、按 sha256 还原，
+**每一次都恰好 1 个测试失败**（`1 failed, 14 passed` 或 `1 failed, 13 passed`）：
+
+| # | 失败文本（截断） |
+| --- | --- |
+| J5 | `'EdgePoint' unexpectedly found in {…}` ← **只**红在负向那半，别名断言通过 |
+| J6 | `'FreshEdgeItem' unexpectedly found in {…}` |
+| J7 | `'export type FreshEdge = GeneratedFreshEdgeItem;' not found in '…'` ← **只**红在别名那半 |
+| J8 | `'api<FreshEdgesResponse>(' not found in '    api<{ edges: unknown[] }>(\`/events/edges/fresh?limit=${limit}\`),'` |
+| J9 | `'api<FreshEdgesResponse>(' not found in '    api<{ edges: unknown[] }>('` |
+| J10 | `list[dict[str, typing.Any]] != list[app.models.event.FreshEdgeItem] : FreshEdgesResponse.edges no longer names its published element` |
+| J11 | `dict[str, typing.Any] != <class 'app.models.event.EdgeTrajectorySummary'> : FreshEdgeItem.edge no longer names the 53.53 trajectory model` |
+| J12 | `True is not false : FreshEdgeItem.event_title_zh lost its default. …` |
+
+`test_mutation_verify.py`：`tests=193 failures=0 errors=0`（§53.53 为 185；+8 = 八条新变异）。
+
+### 53.54.6 门与全量
+
+| 门 | 读数 |
+| --- | --- |
+| `ruff check app/` | `All checks passed!` |
+| `mypy app/` | `Success: no issues found in 331 source files` |
+| `python -m scripts.generate_types --check` | `generated-types.ts is up to date.` |
+| `tsc --noEmit` | 0 条 `error TS`（含 53.54.4 那次 `TS2322` 修正后复跑） |
+| `eslint`（六个改动的前端文件） | 无输出（干净） |
+| `vitest run` | **125 文件 / 738 用例**全过 |
+| `test_mutation_verify.py` | `tests=193 failures=0 errors=0`（元素 62；§53.53 为 185，+8） |
+| 后端全量 | **`tests=7816 failures=0 errors=0 skipped=11`**（元素 **6642**） |
+
+**全量对账**（对 §53.53 基线 `tests=7784` / 元素 `6640`）：两份 junit **逐 `<testcase>` 对比，零删除**，
+新增者恰为两个 `FreshEdgesContractTests` 用例。`tests` 差 **+32** 逐项可查：
+
+| 来源 | §53.53 | §53.54 | Δ | 怎么测的 |
+| --- | --- | --- | --- | --- |
+| `<testcase>` 元素 | 6640 | **6642** | **+2** | `full_5353.xml` vs `junit_full_53_54.xml` 按 `(classname, name)` diff |
+| closure 守卫 subtest | 10 | **12** | +2 | 单跑 `-k test_closed_overlay_interfaces_have_no_tail` → `1 passed, 12 subtests passed` |
+| `FreshEdgesContractTests` subtest | 0 | **20** | +20 | 单跑 `-k FreshEdgesContractTests` → `2 passed, 20 subtests passed` |
+| 变异 subtest | 123 | **131** | +8 | 单跑 `tests/test_mutation_verify.py` → `62 passed, 131 subtests passed`（= 套件 `tests` **193**） |
+| 合计 `tests` | 7784 | **7816** | **+32** | `2 + 2 + 20 + 8 = 32` ✅ **无未解释余量** |
+
+⚠️ **subtest 不落 junit**：`junit_full_53_54.xml` 里 `subtest` 字样 **0 次**、`<subtests>` 元素 **0 个** ——
+pytest-subtests 只把 subtest 计入**套件级** `tests` 属性，**不生成 `<testcase>`**。
+所以上表后三行的 Δ **只能单跑实测**，从 junit 里读不出来。
+（这也是对 §53.53 那张对账表的一个补充：它的 `3 + 9 = 12` 同样是实测所得，只是当时没写明这一层。）
+
+✅ **复跑守卫未漂生成物**：`test_generate_types.py` 会**重新生成** `generated-types.ts`（见 53.54.8 第 2 条），
+而本节为对账又跑了该文件两次 ⇒ 跑前/跑后对 `generated-types.ts` 与 `api.ts` 各取 sha256，**逐字节相同**
+（37 705 B / `377db528…`；42 249 B / `f25803ad…`）。
+
+### 53.54.7 未决 / 有意不做
+
+- **C1 剩余**：`EventDiscoveryResponse.events`、`EventMoversResponse.movers`、`SimilarEventsResponse.similar`、
+  `PendingLinksResponse.pending`、`RecentPredictionsResponse.predictions`、`OpenDecisionsResponse.decisions`，
+  加上 `EventListResponse`（生成侧 `EventStoreEntry[]`，调用侧却写 `TrackedEntry[]`，**两者不一致，需先判谁忠实**）。
+  🔴 **本节更正 §53.53 的一处清单错误**：`AutoResolveResponse.matches` **不是** C1 候选 ——
+  `grep -rn "auto-resolve\|autoResolve" frontend/src` **零命中**，`api.ts` 根本没有调用点；
+  后端路由在（`events.py:1339`），前端只剩一条**死 re-export**（`api.ts:329`）。它归「死 re-export」一类。
+- **孪生线索（未取证）**：`EventMoversResponse.movers` 的结构与本节点同款
+  （`rank_movers` 产 `{event_id, event_title, trend}`，而 `TrendSummary` 与 `Mover.trend?: Trend` 两半都已命名）。
+  **仅源码读得出，未跑探针**，故只作为线索登记。
+- **有意不登记的变异**：恒写字段加回默认值（与 J12 共用同一个 `is_required()` 断言形状）；
+  `FreshEdgeItem.series` 的同一性（与 J11 共用同一个 `assertEqual(annotation, …)` 形状）。
+  ⚠️ 两条的前提都写进了 set 的 `rationale`：**若那两个断言形状被拆开，就要各补一条**。
+- **死 re-export 仍是三个**：`AutoResolveResponse` / `EventListResponse` / `EventMoversResponse`（`api.ts:329-331`）零消费者。
+- ⚠️ **`EdgeSeriesPoint.timestamp` 的前提**：声明成 `str | None` 是因为代码路径允许 `None`，
+  而 4 666 个观测点里**一次都没出现**。若哪天在真实语料里观测到一次，那是**印证**而非缺陷。
+- 本节随本轮改动**未推送**。
+
+### 53.54.8 本轮新增的三条方法学（都来自本节踩的坑）
+
+**1. 变异探针必须崩溃安全。** 第一版失败文本探针在前台跑，撞上工具 120 s 超时被 **SIGTERM** ——
+它**已经写入** J7 的变异、还没走到 `finally` 的还原。Python 对 SIGTERM 的默认处置是直接终止，
+**`finally` 不会执行** ⇒ api.ts 被留在变异态。下一轮探针在 index 13 才以
+`ValueError: needle not found` 暴露出来。
+修法是**类别级**的：① 原字节**先落盘**成 `*.534bak`（在任何写入之前），② 启动时做**预检**、
+发现残留就从备份恢复、恢复不了就**拒绝启动**，③ 长任务一律后台跑。
+⚠️ 备份**不要写在被测文件旁边** —— 第一版把 `.534bak` 写进了仓库树（`git status` 里三个 `??`）。
+本条已写进 skill。
+
+**2. 跑守卫的探针，必须把守卫**生成**的文件也纳入复核。** 我只对 `m.path` 做了 sha256 还原，
+而 `test_generate_types.py` 里的 `_run_script()` 会**重新生成** `generated-types.ts`。
+于是 J12 那一跑把「`event_title_zh` 无默认值」的生成结果**留在了树里**
+（后续 J10/J11 的泄漏被 J12 的覆盖掉，所以最终只漂了一行）。
+探针报告「bytes restored True」是**真的** —— 它只是**答错了问题**。
+发现它的是最后那道 `generate_types --check`。⇒ **守卫会写文件时，「还原」的判据必须覆盖那些文件。**
+harness 自己不受影响：它的阶段③会**再跑一次守卫**，用还原后的模型把它重新生成回来。
+
+**3. `tsconfig.json` 排除了 `**/*.test.ts` 与 `**/*.test.tsx`。**
+所以 `npm run typecheck`（`tsc --noEmit`）**从不检查测试文件**，
+而 vitest 走 transpile-only、也不做类型检查。
+后果：§53.53 把 `EdgeTrajectory` 从 9 字段换成 12 字段的生成类型之后，
+两个夹具**静默地**停在 9 个字段上，`tsc` 仍然全绿、`vitest` 仍然全过。
+⇒ **本仓「tsc 全绿」的前提是「不含测试文件」** —— 复述这个读数时必须带上它。
+本节已把两个夹具补齐（53.54.4）。

@@ -11075,3 +11075,118 @@ A4 的 `2/2` 就是「一处谓词、两个门」的可验证表述。四条全�
 变异：`verify market-audit-timestamps` 的 A1–A4 四条**全部**走完四阶段（变异前绿 / 变异后红 / 还原后绿 / sha256 与原字节一致）；A4 的守卫跨两个文件、实测 **`2/2 files red`**。复验 `verify market-snapshot-order`（diff 触及该集 `m.path`，§4.3）通过。harness 自报 `list` = **10 套 / 78 个变异**。
 
 本节**未推送**。
+
+## §53.49 把 `/snapshots/{match_id}` 的合约补成具名模型（§2 三件套），并更正一处被 §53.48 改动过的行号引用
+
+> 承接 §53.48.4 第 3 条：该端点仍是裸 `dict[str, Any]`，而前端 `SnapshotSeries` 是**手写** interface —— §53.48 刚给它加了 `untimestamped_count`，手写 interface **当场过期**。用户点选「补具名响应模型（§2 三件套）」。
+
+### 53.49.1 结论先行
+
+三件事在同一条线上：
+
+1. **补 `response_model`**：`/snapshots/{match_id}` 现在挂 `response_model=MarketSnapshotsResponse`（`MarketSnapshotsResponse` → `MarketSnapshotSeries` → `MarketSnapshotPoint`）；前端类型改为从 `generated-types.ts` **re-export**，手写的 `SnapshotPoint`/`SnapshotSeries` 删除。
+2. 🔴 **发现并处理好「生成类型比手写更松」的一条机制**：`pydantic2ts` 只对**根模型**临时置 `extra="forbid"`，以此抑制 `json2ts` 的 `[k: string]: unknown` 尾巴；嵌套模型不享受 ⇒ interface 是**开放**的。故三个模型都登记进 `_frontend_export`（= 导入进模块命名空间），产物是**闭合** interface。这不是洁癖 —— 被替换的手写 interface 本来是闭合的。
+3. **顺带更正一处前提过期**（§0）：`mutation_verify.py` 里 A2 说明写死的 `sport_markets.py:140 / :165` 已被 §53.48 的改动下移，本轮又 +1 ⇒ 更正为 **151 / 176**。
+
+### 53.49.2 缺口是 §53.48 当场造出来的
+
+调用点在 §53.48 从 `snaps.get_snapshots(...)` 改成 `snaps.get_price_path(...)` 并把 `untimestamped_count` 加进每条 series —— 而前端 `sports-api/types.ts` 的 `SnapshotSeries` 是**手写**的四字段 interface。于是「后端发了、前端类型里没有」。当时 §53.48.4 第 3 条只作登记（该节只追加一个字段、不处理这条）。
+
+实测（`grep`，非印象）：`untimestamped_count` 在 `frontend/src` 命中 **0**。今天它**无害**（TS 不校验多余字段、暂无组件读它），所以这是「类型漂移」而不是运行缺陷 —— 但它正是 §2 所说「前端手写 interface 常常是后端缺具名 `response_model` 的症状」。
+
+### 53.49.3 机制：为什么必须「登记为根」才闭合
+
+- `scripts/generate_types.py` 走 `pydantic2ts`。`_extract_pydantic_models(module)` = `inspect.getmembers(module, _is_pydantic_model)` ⇒ 收集的是**模块命名空间里导入的类**，`__all__` **不参与**（它只是人读的清单）。
+- `_generate_json_schema()` 造一个 `_Master_` 把每个模型当一个字段，并对**每个被收集到的模型** `enter_context(_schema_generation_overrides(model))`；该 contextmanager 把 `config.extra` 临时改成 `"forbid"`（除非显式设过 `"allow"`），其 docstring 原话：*"This prevents '[k: string]: any' from automatically being added to every interface."*
+- ⇒ **根模型** → `additionalProperties: false` → `json2ts` 出**闭合** interface；**只在 `$defs` 里被 `$ref` 的嵌套模型** → 无 `additionalProperties` → 出 `[k: string]: unknown`。（字段仍全部必填 —— 松掉的只是「允许多余键」。）
+- **实测对照**：`DailyDigestResponse`（根）闭合，而它的嵌套 `DailyDigestHeadline` / `DailyDigestMover` **带尾巴**；`DecisionTimelineResponse`（根）闭合而 `DecisionTimelineSnapshot`（嵌套）带尾巴；`TradeStatBucket` 是根但**承 `FlexibleResponse`（`extra="allow"`）** ⇒ 覆盖跳过、仍带尾巴。
+- ⇒ 「登记为根」是**必要条件**：只靠 `MarketSnapshotsResponse` 引用它们，产物会是松的。
+
+### 53.49.4 产物（三个 interface，逐字）
+
+```ts
+export interface MarketSnapshotPoint {
+  id: number;
+  link_id: number;
+  implied_prob: number;
+  price: number | null;
+  liquidity: number | null;
+  volume: number | null;
+  captured_at: string | null;
+}
+export interface MarketSnapshotSeries {
+  contract_id: string;
+  outcome_label: string;
+  mapped_outcome: string;
+  snapshots: MarketSnapshotPoint[];
+  untimestamped_count: number;
+}
+export interface MarketSnapshotsResponse {
+  match_id: string;
+  series: MarketSnapshotSeries[];
+}
+```
+
+三条值得记下的取值：
+
+- `price` / `liquidity` / `volume` / `captured_at` 是 `number | null`（**必填可空**）而不是 `?`：模型里写作 `X | None` 且**不给默认值** ⇒ pydantic 视为 required-but-nullable，这是唯一能表达「必存在但可为 null」的拼法。给了 `= None` 就变成 `?: number | null`，比手写的**更松**（§2 的原话）。
+- `captured_at` 在模型里是 `datetime | None`，**不是** `str | None`：`_row_to_dict` 交出来的是 SQLAlchemy `DateTime`，声明成 `str` 会让 pydantic 校验失败 ⇒ 端点 500。pydantic 序列化成 ISO 串，TS 侧仍是 `string | null`。
+- 手写 `SnapshotPoint` 原本**漏了 `link_id` / `liquidity` / `volume`**（端点一直在发这三个键）—— 生成类型把它们**补齐**了，这是本次的附带修正。
+
+### 53.49.5 前端：re-export，不再手写
+
+- `sports-api/types.ts`：删 `SnapshotPoint` / `SnapshotSeries`，改 `export type { MarketSnapshotPoint, MarketSnapshotSeries, MarketSnapshotsResponse } from "@/lib/generated-types";`
+- `hooks/use-markets.ts`：本地 `type SnapshotsResponse = { series: SnapshotSeries[] }` 删除，改用生成的 `MarketSnapshotsResponse`（它多了 `match_id`，正是端点一直在发的）。
+- 两个消费组件（`MarketSnapshotChart.tsx` / `TraditionalOddsChart.tsx`）`SnapshotSeries` → `MarketSnapshotSeries`（机械改名；`SnapshotPoint` 无人直接引用，零改动）。
+- 全前端 `\bSnapshotSeries\b|\bSnapshotPoint\b` 命中 **0**。
+
+### 53.49.6 守卫与变异（新增 `market-snapshot-contract`，C1–C2）
+
+| 变异 | 打掉什么 | 守卫文件 | 变异后读数 |
+|---|---|---|---|
+| C1 | 路由的 `response_model=` | `tests/test_sport_market_routes.py` | `1 failed, 15 deselected` |
+| C2 | `_frontend_export` 对该模型的**导入** | `tests/test_generate_types.py` | `1 failed, 6 deselected` |
+
+两条都必须有，因为**§2 三件套在行为上是隐形的**：C1 删掉 `response_model` 后返回体一字节没变、该文件其余断言全绿；C2 挪走导入后该模型仍是嵌套 interface、`tsc` 照样绿。⇒ 各钉一半，分别落在**路由对象**与**导出模块**上。
+
+- **C1 的阶段①抓到了我自己的 bug**：守卫最初写 `route.path == "/snapshots/{match_id}"`，而 `APIRoute.path` **已含 router 前缀**（实为 `/sport-markets/snapshots/{match_id}`）⇒ 未变异时就是红的（`assert 0 == 1`）。四阶段的「变异前必绿」正是为这类错误准备的 —— 依赖行为断言的守卫永远碰不到它。
+- C2 的改写是**改名**而非删除（`MarketSnapshotSeries,` → `_MarketSnapshotSeriesUnused,`）：`__all__` 里仍有带引号的同名项，而只有 `from module import *` 才会因缺名报错（本仓不这么用），所以模块照常导入。针在各自文件里各出现**恰好 1 次**（`read_bytes().count()` 实测）。
+- `test_mutation_verify.py` 的清单守卫随之由 `test_the_ten_sets_are_present` 改名 `test_the_eleven_sets_are_present`（名字里的数字就是计数，加集必须改名 —— 该测试的 docstring 已把这条写成传统）。
+- harness `list` 自报 **11 套 / 80 个变异**。
+
+### 53.49.7 前提过期更正（§0）
+
+`mutation_verify.py` 里 A2 的说明引用 `sport_markets.py:140 / :165`，指的是两处 **`audit_summary(...)` 调用点**（外面没有 try ⇒ 是 500 而非降级）。该引用在 §53.47 时**是对的**（该提交里正是 140/165）；但 §53.48 给本文件加了 docstring 与序列门调用、整体下移到 146/165，**而 §53.48 没有改它**；本节又加了一行 import ⇒ 现值 **151 / 176**。已就地更新为 151/176，并把两次位移写进说明。另：审计档 §53.47.2 与 §53.43.5(e) 也有同类写死行号 —— **档只追加不改写**，在此登记。
+
+（行号取自 `grep -n`，非口算；`140 → 151` 与 `165 → 176` 各 +11 = §53.48 的 +10 与本节的 +1。）
+
+### 53.49.8 未决 / 留痕
+
+1. ⚠️ **「登记为根」本身只有 C2 覆盖的那三个模型有守卫**；既有嵌套模型（`DailyDigestHeadline` / `DailyDigestMover` / `DecisionTimelineSnapshot` 等）仍带 `[k: string]: unknown`。是否把它们也登记为根要**逐处判断**（登记会改产物、可能牵动下游类型），**不代决**。
+2. `/sport-markets/*` 其余端点仍裸 `dict[str, Any]`（§2：既定策略；具名模型只在「有前端消费者」时才有意义 —— 本节点处理的正是唯一那个有消费者的）。`LatestLink.latest_snapshot` 的内联形状与 `_row_to_dict` 同源、同样漏了 3 个字段 —— **登记**，本节不动（那是另一个端点）。
+3. 前端 `captured_at` 不再由手写控制，而是生成类型的 `string | null` ⇒ §53.48.4 第 1 条的「不收紧」自动满足，且不再有手写副本可漂。
+4. 本节**未推送**。
+
+### 53.49.9 门 + 全量
+
+**四道门**（改动后的工作树上重跑）：
+
+- `ruff check app/`：`All checks passed!`
+- `mypy app/`：`Success: no issues found in 331 source files`
+- `python -m scripts.generate_types --check`：`generated-types.ts is up to date.`
+- 前端：`tsc --noEmit` rc=0；`next build` ✓（40/40 静态页落盘、`tsconfig.json` 未被重排）；受影响 vitest 19 文件 / 107 用例全过（后两者与本项同工作树）。
+
+**全量**（`pytest tests -q --junitxml=junit-5349-full.xml`；**判据只看 junit，不看进程 rc** —— 本机 `safe-delete` shim 把 rc 恒置 1）：
+
+`tests=7743 failures=0 errors=0 skipped=11`（`<testcase>` 元素 6635）。
+
+**增量归因**（对 §53.48 基线 `junit-5348-full.xml`：`tests=7738 failures=0 errors=0 skipped=11`，元素 6633）：
+
+- `tests` 属性 **+5**。
+- `<testcase>` **元素 +2**，逐 classname 对齐 = 两条新用例：`tests.test_sport_market_routes` 15→16（`test_snapshots_route_publishes_its_response_model`）、`tests.test_generate_types.AllowlistCompositionTests` 0→1（`test_market_snapshot_models_are_export_roots`）；`test_the_ten_sets_are_present` → `test_the_eleven_sets_are_present` 是**改名**，同类内一进一出 ⇒ 元素净 0。
+- 余下 **+3 是 subTest 迭代，不是元素**。机制先实测再归因：本机 pytest 9.1.1、**未装** `pytest_subtests`；`with self.subTest(...)` 的**每次迭代**都给 `tests` 属性 +1，**却不写** `<testcase>`（探针：3 个方法、其中一个 `for i in range(4)` → `tests=7` 而元素 3）。⇒ `tests` 属性与元素数之差 = 全表 subTest 迭代总数。增长全落在两处循环：
+  - `test_the_selected_mutation_is_the_inventory_object` 逐条遍历**全部**变异：**78 → 80**（+2）；
+  - 整集 preflight 的 `for mutation_set in mutation_verify.SETS` 循环：**10 → 11**（+1）。
+- **交叉验证**：`tests` 属性与元素的差在两版间为 1105 与 1108；扣掉上面两处循环（88 与 91）后，**其余全表 subTest 迭代数两版恒为 1017**（1105−88 = 1108−91）⇒ 增长的 3 **恰好**来自这两个循环，无未解释余数。⇒ `tests` +5 = **2 元素 + 3 子测试**。
+
+（读数为工具自打印：`mutation_verify list` 报 **11 套 / 80 变异**；`len(mv.SETS)`=11、`_select_verify_targets([], None)`=80 系 `python -c` 实测。）

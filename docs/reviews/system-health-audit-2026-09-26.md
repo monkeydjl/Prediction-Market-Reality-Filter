@@ -11190,3 +11190,87 @@ export interface MarketSnapshotsResponse {
 - **交叉验证**：`tests` 属性与元素的差在两版间为 1105 与 1108；扣掉上面两处循环（88 与 91）后，**其余全表 subTest 迭代数两版恒为 1017**（1105−88 = 1108−91）⇒ 增长的 3 **恰好**来自这两个循环，无未解释余数。⇒ `tests` +5 = **2 元素 + 3 子测试**。
 
 （读数为工具自打印：`mutation_verify list` 报 **11 套 / 80 变异**；`len(mv.SETS)`=11、`_select_verify_targets([], None)`=80 系 `python -c` 实测。）
+
+## §53.50 把「可达即须登记为根」推广成规则：43 条尾巴拆成 25 条故意 + 18 条可闭合
+
+> 承接 §53.49.8 第 1 条：既有嵌套模型（`DailyDigestHeadline` / `DailyDigestMover` / `DecisionTimelineSnapshot` 等）仍带 `[k: string]: unknown`，是否登记为根「要逐处判断（登记会改产物、可能牵动下游类型），**不代决**」。用户点选 A。
+
+### 53.50.1 结论先行
+
+1. **登记了 18 个**模型为根（`_frontend_export` 由 23 名字 → **41 名字**）⇒ `generated-types.ts` 里带 `[k: string]: unknown` 尾巴的 interface 由 **43 条降到 25 条**；重生成后 `tsc --noEmit` **rc=0**（收紧要检过才知道安全，这句是实测不是推断）。
+2. **剩下 25 条一律是"故意开放"**，不动：16 个承 `FlexibleResponse` 的根 + `EventRecord` + 8 个**显式**声明 `ConfigDict(extra="allow")` 的 overlay 模型（`ConfidenceBreakdown` / `CrossValidation` / `DecisionQuality` / `EventSource` / `EvidenceItem` / `LLMTelemetry` / `MarketQuality` / `SourceReliability`）。把它们塌成闭合才是**失真**。
+3. 🔴 **本轮最值钱的两条是"检测错了"**：第一版把「尾巴」按**缩进盲搜**，把 `dict[str, Any]` 字段的 **inline** `{ [k: string]: unknown }` 也算成尾巴（25 误报成 43）；第一版又按**名字出现**判消费者，把 26 个嵌套模型判成"无人消费"——实际它们全是 `EventRecord` 的字段类型，而 `EventRecord` 被 61 处消费。两条都在下面留证。
+4. 顺带修掉一处**守卫弱于其名**：`test_generates_file_with_all_allowlist_models` 硬编码 16 个模型名，而 allowlist 已有 23 ⇒ 静默漏检 7 个（`SimTrade` / `SimTradeListResponse` / `TradeStatBucket` / `TradeStats` + 三个 `MarketSnapshot*`）。已改为**遍历 `__all__`**。
+
+### 53.50.2 「开放」有三种成因，第一版检测把它们混了
+
+`json2ts` 只在 JSON schema 有 `additionalProperties: false` 时才不补尾巴。没有该键的原因有三种，**判据要把它们分开**：
+
+| 成因 | 机制 | 该不该闭合 | HEAD 条目数 |
+|---|---|---|---|
+| (a) `extra="allow"` | 生成器 `_schema_generation_overrides` **刻意跳过**（源码注释原话：*"This prevents '[k: string]: unknown'…"* 的前提就是 allow 者除外） | **不** —— 故意开放 | 25 |
+| (b) 纯嵌套 `BaseModel` | 只被 `$ref` 到 ⇒ 从未作为根跑覆盖 | **是** —— 登记为根即可 | 18 |
+| (c) 裸 `dict[str, Any]` 字段 | 渲染成 **inline** `{ [k: string]: unknown }`，在**字段自己的花括号内** | §2 既定策略，本节**不动** | （不计入尾巴） |
+
+- (a) 的 25 条 = 16 个承 `FlexibleResponse` 的根 + `EventRecord`（显式 `ConfigDict(extra="allow")`，docstring 写明是为 `build_event_record` 的前向兼容）+ **8 个嵌套但显式 allow 的 overlay 模型**。**这 8 个也是"嵌套"，但它们与 (b) 的处置相反** —— 这正是"逐处判断"的真正内容：**不是看"是不是嵌套"，是看"有没有显式 opt-in"**。
+- 🔴 **第一版的错**：判尾巴用 `^\s*\[k: string]: unknown;`（`\s*` 允许任意缩进）⇒ (c) 的 inline 行也被计入。实测两版对照：`DecisionTimelineSnapshot` 体内有 5 处 inline（`probability` / `decision_quality` / …），它们不是尾巴。**严格判据 = 接口体内最后一个非空行恰好是 `  [k: string]: unknown;`**。改正后：HEAD = **43**（此前报 43 是巧合：+18 假阳性 − 18 漏计真尾巴，见 53.50.4 的对照），实验态 = **25**。
+- ⚠️ 这条值得单独记：**"数出来一样"不等于"数对了"** —— 两个方向的错误可以互相抵消出正确的总数。
+
+### 53.50.3 「消费者」要按可达性判，不是按名字出现判
+
+第一版用 `\bName\b` 搜前端，`Probability` / `Outcome` / `Calibration` 这类**普通英文词**命中一堆（`app/layout.tsx` 里的 `Probability` 显然是别的意思）⇒ 假阳性。改用**真实类型引用**（`import`/`export … from "…generated-types"`）后：
+
+- 前端从 `generated-types` 命名导入/再导出的**全部**名字只有 **15 个**，落在 3 个 hub：`lib/api.ts`（9）、`lib/types.ts`（3）、`lib/sports-api/types.ts`（3）。
+- 26 个候选嵌套模型里，**只有 2 个**被直接命名：`EvidenceProfile`、`EventSemantics`（`lib/types.ts:15-19` 的 `import type { … as Backend… }`），且它们的别名 `EvidenceAggregate` / `Semantics` **各只有 1 处命中 = 它自己的定义行** ⇒ 别名零消费者。
+- **但这不是"无人消费"**：26 个**全是** `EventRecord` 的字段类型，而 `EventRecord` 被 **61 处**消费（`app/analyze/page.tsx`、`app/events/page.tsx`、`components/detail/*`，并含 `evidence-list.test.tsx:20  const baseRecord: EventRecord = {` 这类**对象字面量构造**）。⇒ 传递性**都有**消费者。
+- 🔴 教训：**"名字没出现"≠"没有消费者"**。名字是**命名**，字段是**可达**；判消费要走可达性（生产者的字段注解），不是 grep 名字。
+
+### 53.50.4 判定与产物
+
+- **登记 18 个**（= (b) 类全部）：`ActionableRecommendation`、`Calibration`、`Credibility`、`DailyDigestHeadline`、`DailyDigestMover`、`DailyDigestUnchanged`、`DecisionEvidenceItem`、`DecisionTimelineDiff`、`DecisionTimelineSnapshot`、`EventSemantics`、`EvidenceBreakdownItem`、`EvidenceProfile`、`Impact`、`IntelligenceReport`、`Outcome`、`Probability`、`Risk`、`Tracking`。
+- **登记 ≠ 全闭合**：为验证机制边界，先把**全部 26 个**嵌套模型都登记（含 8 个显式 allow 的），重生成后实测只闭合 **18** ⇒ 那 8 个**照旧开放**（成因是 (a) 不是 (b)）。这一步把"嵌套 ⇒ 登记即可闭合"从推断变成**有边界的实测**，也确认了 `DecisionTimelineDiff` / `DecisionTimelineSnapshot` 属于 (b) 而非顽固项。
+- **最终对照**（严格判据，`git show HEAD:…` vs 工作树）：尾巴 **43 → 25**；**新变开放的 = 0**；闭合的 18 个与上面清单**逐一相等**。
+- 可达性实测：`_frontend_export` 命名空间里的根 **41**；从根沿字段注解可达的模型 **49**；其中 `extra != "allow"` 且必须登记的 **24**（= 本轮 18 + 既有 6 个纯 `BaseModel` 根）⇒ 登记后 missing = **0**。
+
+### 53.50.5 守卫：生产者驱动，单文件可变异
+
+`test_generate_types.py::AllowlistCompositionTests`（**不**需要 json2ts，故在 CI 后端作业里也跑）新增：
+
+`test_every_reachable_plain_model_is_registered` —— 从 `_frontend_export` **命名空间**（= 生成器真正收集的那一组，**不是** `__all__`）取根，沿 `model_fields` 的注解递归展开 `Optional` / `list` 等，要求**每个可达且 `extra != "allow"` 的模型都在命名空间里**。
+
+- 为什么是**生产者驱动**：它问的是"模型互相引用什么"，所以**在重新生成之前**就会红。若读生成好的文件，则回归要等到有人跑生成器才暴露。
+- 与既有 C2 守卫**互补**：C2 钉 `MarketSnapshot*` 这一族的**具体成员**；这条钉「可达即须登记」这条**规则**本身。
+- 新变异集 `frontend-type-closure`（**D1**）：把 `EvidenceProfile` 从导入里改名挪走 ⇒ `EventRecord.evidence` 的类型变成 missing ⇒ 守卫红。**四阶段全过**：变异前绿 / 变异后 `1 failed, 7 deselected` / 还原后绿 / `bytes restored True`。针 `    EvidenceProfile,` 在本文件恰好 1 次（`read_bytes().count()` 实测）。
+- 清单守卫随之 `test_the_eleven_sets_are_present` → `test_the_twelve_sets_are_present`（名字里的数字就是计数）。harness `list` 自报 **12 套 / 81 个变异**。
+
+### 53.50.6 顺带修正（§0）
+
+1. **守卫弱于其名**：`test_generates_file_with_all_allowlist_models` 的硬编码清单 16 名 vs allowlist 23 名（漏 `SimTrade` / `SimTradeListResponse` / `TradeStatBucket` / `TradeStats` / 三个 `MarketSnapshot*`）⇒ 改为遍历 `_frontend_export.__all__`，名字不再需要人工同步。
+2. **过期数字**：该文件 docstring 写 "all 14 allowlist root models"，而当时已是 23 ⇒ 改为"every model listed in the allowlist（read from `__all__`）"。
+3. **既存 lint 债务**：`os` / `shutil` / `tempfile` 三个导入在本文件**从未被使用**（`git show HEAD` 上跑 ruff 同样报 3 条 F401）⇒ 本节既然在改此文件，顺手删掉，使它 lint 干净。**不在 `ruff check app/` 门内**，故此前未被拦。
+
+### 53.50.7 未决 / 留痕
+
+1. (c) 类（裸 `dict[str, Any]` 字段的 inline 尾巴）本节**未动** —— 属 §2 既定策略；`DecisionTimelineSnapshot` / `EventRecord.legacy_analysis` 等都在这一类。
+2. 那 **8 个显式 `extra="allow"` 的 overlay 模型**保持开放是**刻意**的；若将来要收紧，须先改它们的 `model_config`（那是**契约变更**，不是登记问题）。
+3. `LatestLink.latest_snapshot` 内联形状同源同漏 3 字段 —— 仍**登记**（另一个端点，属 §53.49.8 第 2 条）。
+4. 本节**未推送**。
+
+### 53.50.8 门 + 全量
+
+**四道门**（改动后的工作树上）：
+
+- `ruff check app/`：`All checks passed!`（另：`tests/test_generate_types.py` 上的 3 条**既存** F401 顺带清掉，见 53.50.6 第 3 条。）
+- `mypy app/`：`Success: no issues found in 331 source files`
+- `python -m scripts.generate_types --check`：`generated-types.ts is up to date.`
+- 前端：`tsc --noEmit` **rc=0**；vitest **125 文件 / 738 用例**全过。
+
+**产物完整性（严格判据）**：把 `HEAD:generated-types.ts` 与工作树逐 interface 比对，规则是「删掉**恰在两格缩进的尾巴行**再比较」（不能用子串替换 —— 4 格缩进的 inline 行**包含** 2 格判据，会误判，第一次就把 2 个 interface 错列成"其他差异"）：**18 个恰好只少一行尾巴**、**31 个逐字节相同**、**0 个其他差异**、**增删声明 0**。⇒ 本轮对生成物的改动**就是**这 18 行。
+
+**变异**：`verify frontend-type-closure` → **D1 四阶段全过**（`1 failed, 7 deselected`）。因本轮**重写**了 `_frontend_export.py`（C2 的 `m.path`），一并重跑 `verify market-snapshot-contract` → **C1 / C2 各四阶段全过**。`tests/test_mutation_verify.py`：`tests=176 failures=0 errors=0`。
+
+**全量**（`pytest tests -q --junitxml=junit-5350-full.xml`；**判据只看 junit**）：`tests=7746 failures=0 errors=0 skipped=11`（`<testcase>` 元素 6636）。
+
+对 §53.49 基线（`tests=7743`、元素 6635）的增量：`tests` **+3** = **1 个新元素**（`tests.test_generate_types.AllowlistCompositionTests::test_every_reachable_plain_model_is_registered`）+ **2 次 subTest 迭代**（变异清单 80→81、集合 11→12）；`test_the_eleven_sets_are_present` → `test_the_twelve_sets_are_present` 是**改名**，同类内一进一出 ⇒ 元素净 0。**交叉验证**：`tests` 属性与元素数之差两版为 1108 与 1110，扣掉两处循环（80+11 与 81+12）后**未解释余数恒为 1017** ⇒ 增长的 2 全部来自这两个循环。
+
+（读数为工具自打印：`mutation_verify list` 报 **12 套 / 81 变异**；可达性 41 根 / 49 可达 / 24 须登记 系 `python -c` 实测。）

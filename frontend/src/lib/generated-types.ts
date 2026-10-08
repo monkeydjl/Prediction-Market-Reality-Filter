@@ -79,6 +79,29 @@ export interface CategoryCountsResponse {
   };
   [k: string]: unknown;
 }
+/**
+ * Diagnostics explaining how source structure affected confidence.
+ *
+ * Emitted by ``ai_analysis_service.analyze_market()`` as a read-only audit
+ * block. It helps frontend/reporting distinguish raw source quantity from
+ * stronger evidence structures such as independent or official sources.
+ *
+ * Closed contract: ``probability_engine_service.calculate_confidence_breakdown``
+ * returns exactly the nine declared keys. (The same-named
+ * ``kernel.engines.confidence.confidence_breakdown`` is a *different* object --
+ * the sports engines' ``SportConfidencePanel`` diagnostics.)
+ */
+export interface ConfidenceBreakdown {
+  source_count?: number;
+  independent_source_count?: number;
+  official_source_count?: number;
+  counterevidence_considered?: boolean;
+  news_quantity_score?: number;
+  source_structure_score?: number;
+  effective_source_score?: number;
+  source_structure_used?: boolean;
+  source_quality_reasons?: string[];
+}
 export interface Credibility {
   score: number;
   level: string;
@@ -86,6 +109,27 @@ export interface Credibility {
   news_quality: number;
   evidence_strength: number;
   source_count: number;
+}
+/**
+ * Cross-validation of the primary LLM probability by a second model.
+ *
+ * Written by ``event_intelligence_service.analyze_event_complete()`` when
+ * a second model is configured. None on EventRecord when cross-validation
+ * is disabled or the second model is unavailable.
+ *
+ * ``primary_probability`` is the original estimate; ``probability`` is the
+ * second model's estimate; ``divergence`` is their absolute difference;
+ * ``agreement`` is a derived label (high/medium/low).
+ *
+ * Closed contract: ``cross_validation_service.cross_validate`` writes exactly
+ * these five keys, so nothing here needs to survive an undeclared one.
+ */
+export interface CrossValidation {
+  model?: string | null;
+  probability?: number | null;
+  primary_probability?: number | null;
+  divergence?: number | null;
+  agreement?: string | null;
 }
 /**
  * The day's single most material move (mirrors the top entry of movers).
@@ -152,6 +196,42 @@ export interface DecisionEvidenceItem {
   strength?: number;
   credibility?: number;
   rationale_zh?: string;
+}
+/**
+ * Phase 1 decision-quality overlay block.
+ *
+ * Pure audit/explanation layer produced by ``decision_quality_service``
+ * from ``actionable_recommendation`` + ``evidence_breakdown``. Reads its
+ * inputs one-way and produces overlay outputs (``displayed_direction``,
+ * ``downgrade_reason``, ``decision_rationale_zh``). MUST NOT feed back
+ * into ``ai_probability``, ``evidence_profile``,
+ * ``regression_to_market``, or ``actionable_recommendation``.
+ *
+ * ``raw_direction`` mirrors ``actionable_recommendation.direction`` at
+ * build time and is never mutated by the downgrade pipeline.
+ * ``displayed_direction`` starts equal to ``raw_direction`` and is the
+ * only field that may diverge (when a downgrade rule fires).
+ * ``downgraded`` is ``true`` iff ``displayed_direction != raw_direction``.
+ *
+ * When ``error`` is non-None, the build failed and the block is the
+ * fallback defined in the ``analyze_event`` integration contract.
+ *
+ * Closed contract: both the happy path (``build_decision_quality``) and the
+ * build-failure fallback block in ``event_intelligence_service`` write only
+ * the declared fields.
+ */
+export interface DecisionQuality {
+  supporting_evidence?: DecisionEvidenceItem[];
+  opposing_evidence?: DecisionEvidenceItem[];
+  conflict_score?: number;
+  consensus_level?: "high" | "medium" | "low" | "none";
+  decision_rationale_zh?: string;
+  reversal_triggers?: string[];
+  downgrade_reason?: string | null;
+  raw_direction?: "YES" | "NO" | "WAIT" | "AVOID";
+  displayed_direction?: "YES" | "NO" | "WAIT" | "AVOID";
+  downgraded?: boolean;
+  error?: string | null;
 }
 /**
  * Diff between two consecutive snapshots.
@@ -365,6 +445,11 @@ export interface IntelligenceReport {
  * EvidenceProfile), so an item carries quality / relevance rather than a
  * per-item supports/contradicts stance. ``kind`` groups items in the UI:
  * "official" (gov / regulator / economic feeds) vs "news" (general press).
+ *
+ * Closed contract: the only producer is
+ * ``event_intelligence_service.build_evidence_items``, which maps the raw
+ * article keys onto these declared ones (``description`` -> ``summary``,
+ * ``quality_score`` -> ``quality``, ``relevance_score`` -> ``relevance``).
  */
 export interface EvidenceItem {
   kind?: string;
@@ -377,7 +462,6 @@ export interface EvidenceItem {
   published?: string;
   quality?: number;
   relevance?: number;
-  [k: string]: unknown;
 }
 /**
  * Human tracking decision for an event. Defaults are seeded at analysis
@@ -406,44 +490,6 @@ export interface Outcome {
   resolved_at: string;
   source: string;
   notes?: string;
-}
-/**
- * Cross-validation of the primary LLM probability by a second model.
- *
- * Written by ``event_intelligence_service.analyze_event_complete()`` when
- * a second model is configured. None on EventRecord when cross-validation
- * is disabled or the second model is unavailable.
- *
- * ``primary_probability`` is the original estimate; ``probability`` is the
- * second model's estimate; ``divergence`` is their absolute difference;
- * ``agreement`` is a derived label (high/medium/low).
- */
-export interface CrossValidation {
-  model?: string | null;
-  probability?: number | null;
-  primary_probability?: number | null;
-  divergence?: number | null;
-  agreement?: string | null;
-  [k: string]: unknown;
-}
-/**
- * Diagnostics explaining how source structure affected confidence.
- *
- * Emitted by ``ai_analysis_service.analyze_market()`` as a read-only audit
- * block. It helps frontend/reporting distinguish raw source quantity from
- * stronger evidence structures such as independent or official sources.
- */
-export interface ConfidenceBreakdown {
-  source_count?: number;
-  independent_source_count?: number;
-  official_source_count?: number;
-  counterevidence_considered?: boolean;
-  news_quantity_score?: number;
-  source_structure_score?: number;
-  effective_source_score?: number;
-  source_structure_used?: boolean;
-  source_quality_reasons?: string[];
-  [k: string]: unknown;
 }
 /**
  * Structured meaning of an event: how it resolves, when, and who/what it
@@ -486,39 +532,6 @@ export interface EvidenceBreakdownItem {
   rationale_zh?: string;
 }
 /**
- * Phase 1 decision-quality overlay block.
- *
- * Pure audit/explanation layer produced by ``decision_quality_service``
- * from ``actionable_recommendation`` + ``evidence_breakdown``. Reads its
- * inputs one-way and produces overlay outputs (``displayed_direction``,
- * ``downgrade_reason``, ``decision_rationale_zh``). MUST NOT feed back
- * into ``ai_probability``, ``evidence_profile``,
- * ``regression_to_market``, or ``actionable_recommendation``.
- *
- * ``raw_direction`` mirrors ``actionable_recommendation.direction`` at
- * build time and is never mutated by the downgrade pipeline.
- * ``displayed_direction`` starts equal to ``raw_direction`` and is the
- * only field that may diverge (when a downgrade rule fires).
- * ``downgraded`` is ``true`` iff ``displayed_direction != raw_direction``.
- *
- * When ``error`` is non-None, the build failed and the block is the
- * fallback defined in the ``analyze_event`` integration contract.
- */
-export interface DecisionQuality {
-  supporting_evidence?: DecisionEvidenceItem[];
-  opposing_evidence?: DecisionEvidenceItem[];
-  conflict_score?: number;
-  consensus_level?: "high" | "medium" | "low" | "none";
-  decision_rationale_zh?: string;
-  reversal_triggers?: string[];
-  downgrade_reason?: string | null;
-  raw_direction?: "YES" | "NO" | "WAIT" | "AVOID";
-  displayed_direction?: "YES" | "NO" | "WAIT" | "AVOID";
-  downgraded?: boolean;
-  error?: string | null;
-  [k: string]: unknown;
-}
-/**
  * Phase 2 market-quality overlay block.
  *
  * Produced by ``market_quality_service`` for events whose
@@ -538,6 +551,10 @@ export interface DecisionQuality {
  * ``decision_quality.displayed_direction`` and therefore changes the
  * final user-facing direction. Lets audits distinguish whether market
  * quality changed the final direction or merely recorded a score.
+ *
+ * Closed contract: ``market_quality_service.build_market_quality`` and the
+ * build-failure fallback in ``event_intelligence_service`` write only the
+ * declared fields (``error`` is written by the fallback alone).
  */
 export interface MarketQuality {
   score?: number;
@@ -553,7 +570,6 @@ export interface MarketQuality {
   downgraded?: boolean;
   applied_to_displayed_direction?: boolean;
   error?: string | null;
-  [k: string]: unknown;
 }
 /**
  * Phase 4 source-reliability overlay block.
@@ -579,6 +595,11 @@ export interface MarketQuality {
  * ``final_displayed_direction`` (after decision_quality and market_quality
  * have already been merged) and therefore changes the final user-facing
  * direction.
+ *
+ * Closed contract: ``source_reliability_service.build_source_reliability``
+ * and the build-failure fallback in ``event_intelligence_service`` write only
+ * the declared fields. (``source_breakdown`` items stay an open ``dict`` --
+ * that is a declared field, not an undeclared key.)
  */
 export interface SourceReliability {
   overall_score?: number;
@@ -596,7 +617,6 @@ export interface SourceReliability {
   downgraded?: boolean;
   applied_to_displayed_direction?: boolean;
   error?: string | null;
-  [k: string]: unknown;
 }
 /**
  * Phase 5 LLM telemetry overlay block.
@@ -625,6 +645,10 @@ export interface SourceReliability {
  * usage data is unavailable. ``estimated_token_cost`` is computed from
  * real tokens when available, or estimated from ``news_context`` length
  * (chars/4 heuristic) when degraded.
+ *
+ * Closed contract: ``llm_telemetry_service.build_llm_telemetry`` and the
+ * build-failure fallback in ``event_intelligence_service`` write only the
+ * declared fields.
  */
 export interface LLMTelemetry {
   degraded_mode?: boolean;
@@ -638,7 +662,6 @@ export interface LLMTelemetry {
   estimated_token_cost?: number;
   model?: string;
   error?: string | null;
-  [k: string]: unknown;
 }
 export interface FreshEdgesResponse {
   count?: number;

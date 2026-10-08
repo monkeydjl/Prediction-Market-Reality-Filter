@@ -9,6 +9,24 @@
 /* Do not modify it by hand - just update the pydantic models and then re-run the script
 */
 
+/**
+ * Structured actionable conclusion for an event (Stage 3).
+ *
+ * Surfaces the already-computed legacy signal as an event-vocabulary
+ * recommendation: direction (YES/NO/AVOID/WAIT) + confidence + suggested
+ * allocation. None when evidence quality is insufficient or the feature is
+ * disabled. calibration_status distinguishes calibrated (segment has enough
+ * resolved samples) from uncalibrated_provisional (dormant but edge is large).
+ */
+export interface ActionableRecommendation {
+  direction: string;
+  confidence: string;
+  suggested_allocation_pct: number;
+  edge: number;
+  risk_level: string;
+  rationale: string;
+  calibration_status: string;
+}
 export interface AutoResolveResponse {
   status?: string;
   dry_run?: boolean;
@@ -28,11 +46,71 @@ export interface AutoResolveResponse {
   };
   [k: string]: unknown;
 }
+/**
+ * How accurate the event's probability estimate was vs the settled
+ * outcome. Computed once at resolve time (a snapshot); None on EventRecord
+ * until the event is resolved.
+ *
+ * Brier score is 0 (perfect) / 0.25 (random) / 1 (fully wrong); skill_score
+ * rescales it so >0 beats random. The trajectory_* fields carry context so a
+ * reviewer can tell whether the score reflects a long, stable tracking
+ * history or a single shaky observation.
+ *
+ * Which estimate was scored depends on whether the event has a market, so
+ * `estimate_basis` names it: a market-derived event is scored on its latest
+ * trajectory point (the trajectory tracks a live price), while a market-less
+ * event is scored on its first-sight estimate, because nothing froze its
+ * verdict (`freeze_prediction` is market-gated). The number alone cannot say
+ * which, since the two can coincide.
+ */
+export interface Calibration {
+  brier_score: number;
+  skill_score: number;
+  grade: string;
+  estimated_probability: number;
+  actual_outcome: number;
+  trajectory_observations: number;
+  trajectory_span_hours?: number | null;
+  estimate_basis?: string;
+}
 export interface CategoryCountsResponse {
   counts?: {
     [k: string]: number;
   };
   [k: string]: unknown;
+}
+export interface Credibility {
+  score: number;
+  level: string;
+  confidence: number;
+  news_quality: number;
+  evidence_strength: number;
+  source_count: number;
+}
+/**
+ * The day's single most material move (mirrors the top entry of movers).
+ */
+export interface DailyDigestHeadline {
+  event_id: string;
+  event_title?: string | null;
+  movement: "rising" | "falling" | "stable";
+  day_net: number;
+  close: number;
+}
+/**
+ * One event whose probability actually moved inside the day window.
+ */
+export interface DailyDigestMover {
+  event_id: string;
+  event_title?: string | null;
+  movement: "rising" | "falling" | "stable";
+  day_net: number;
+  open: number;
+  close: number;
+  open_source: "previous_close" | "first_in_day";
+  day_observations: number;
+  all_time_net_change: number;
+  close_ts: string;
 }
 /**
  * Response for GET /api/events/digest.
@@ -52,39 +130,45 @@ export interface DailyDigestResponse {
   empty: boolean;
 }
 /**
- * The day's single most material move (mirrors the top entry of movers).
- */
-export interface DailyDigestHeadline {
-  event_id: string;
-  event_title?: string | null;
-  movement: "rising" | "falling" | "stable";
-  day_net: number;
-  close: number;
-  [k: string]: unknown;
-}
-/**
- * One event whose probability actually moved inside the day window.
- */
-export interface DailyDigestMover {
-  event_id: string;
-  event_title?: string | null;
-  movement: "rising" | "falling" | "stable";
-  day_net: number;
-  open: number;
-  close: number;
-  open_source: "previous_close" | "first_in_day";
-  day_observations: number;
-  all_time_net_change: number;
-  close_ts: string;
-  [k: string]: unknown;
-}
-/**
  * Events that did not make the mover cut, split by why they missed.
  */
 export interface DailyDigestUnchanged {
   quiet_event_ids: string[];
   new_event_ids: string[];
-  [k: string]: unknown;
+}
+/**
+ * One piece of evidence selected by ``decision_quality_service`` as a
+ * top supporting or opposing driver for the current recommendation.
+ *
+ * Distinct from ``EvidenceBreakdownItem``: this is the *selected, ranked,
+ * capped* subset (top N by ``strength * credibility``) shown in the
+ * "why this direction" panel. ``EvidenceBreakdownItem`` is the full audit
+ * list. ``rationale_zh`` on this model is the same string the source
+ * ``EvidenceBreakdownItem`` carried.
+ */
+export interface DecisionEvidenceItem {
+  source?: string;
+  title?: string;
+  strength?: number;
+  credibility?: number;
+  rationale_zh?: string;
+}
+/**
+ * Diff between two consecutive snapshots.
+ */
+export interface DecisionTimelineDiff {
+  direction_changed: boolean;
+  prev_direction?: string | null;
+  current_direction?: string | null;
+  probability_delta?: {
+    [k: string]: unknown;
+  };
+  overlay_deltas?: {
+    [k: string]: unknown;
+  }[];
+  primary_change_driver: string;
+  prev_downgrade_reason?: string | null;
+  current_downgrade_reason?: string | null;
 }
 /**
  * Response for GET /api/events/{event_id}/decision-timeline.
@@ -122,25 +206,6 @@ export interface DecisionTimelineSnapshot {
   llm_degraded_mode?: boolean | null;
   guardrail_fired?: string[] | null;
   outcome?: string | null;
-  [k: string]: unknown;
-}
-/**
- * Diff between two consecutive snapshots.
- */
-export interface DecisionTimelineDiff {
-  direction_changed: boolean;
-  prev_direction?: string | null;
-  current_direction?: string | null;
-  probability_delta?: {
-    [k: string]: unknown;
-  };
-  overlay_deltas?: {
-    [k: string]: unknown;
-  }[];
-  primary_change_driver: string;
-  prev_downgrade_reason?: string | null;
-  current_downgrade_reason?: string | null;
-  [k: string]: unknown;
 }
 export interface EventAnalysisRequest {
   event_question: string;
@@ -251,27 +316,15 @@ export interface Probability {
   estimated: number;
   change: number;
   direction: string;
-  [k: string]: unknown;
-}
-export interface Credibility {
-  score: number;
-  level: string;
-  confidence: number;
-  news_quality: number;
-  evidence_strength: number;
-  source_count: number;
-  [k: string]: unknown;
 }
 export interface Impact {
   score: number;
   level: string;
   drivers: string[];
-  [k: string]: unknown;
 }
 export interface Risk {
   level: string;
   flags?: unknown[];
-  [k: string]: unknown;
 }
 export interface EvidenceProfile {
   direction: string;
@@ -279,7 +332,6 @@ export interface EvidenceProfile {
   conflict: number;
   freshness: number;
   resolution_relevance: number;
-  [k: string]: unknown;
 }
 /**
  * Where an event came from. Permissive: source adapters add their own
@@ -304,7 +356,6 @@ export interface IntelligenceReport {
   why_it_matters: string;
   probability_assessment: string;
   recommended_action: string;
-  [k: string]: unknown;
 }
 /**
  * One piece of source evidence collected for an event (a news article or
@@ -338,7 +389,6 @@ export interface EvidenceItem {
 export interface Tracking {
   status?: string;
   priority?: string;
-  [k: string]: unknown;
 }
 /**
  * The settled result of an event. None on EventRecord until the event is
@@ -356,35 +406,6 @@ export interface Outcome {
   resolved_at: string;
   source: string;
   notes?: string;
-  [k: string]: unknown;
-}
-/**
- * How accurate the event's probability estimate was vs the settled
- * outcome. Computed once at resolve time (a snapshot); None on EventRecord
- * until the event is resolved.
- *
- * Brier score is 0 (perfect) / 0.25 (random) / 1 (fully wrong); skill_score
- * rescales it so >0 beats random. The trajectory_* fields carry context so a
- * reviewer can tell whether the score reflects a long, stable tracking
- * history or a single shaky observation.
- *
- * Which estimate was scored depends on whether the event has a market, so
- * `estimate_basis` names it: a market-derived event is scored on its latest
- * trajectory point (the trajectory tracks a live price), while a market-less
- * event is scored on its first-sight estimate, because nothing froze its
- * verdict (`freeze_prediction` is market-gated). The number alone cannot say
- * which, since the two can coincide.
- */
-export interface Calibration {
-  brier_score: number;
-  skill_score: number;
-  grade: string;
-  estimated_probability: number;
-  actual_outcome: number;
-  trajectory_observations: number;
-  trajectory_span_hours?: number | null;
-  estimate_basis?: string;
-  [k: string]: unknown;
 }
 /**
  * Cross-validation of the primary LLM probability by a second model.
@@ -439,26 +460,6 @@ export interface EventSemantics {
   resolution_criteria?: string;
   time_horizon?: string;
   entities?: string[];
-  [k: string]: unknown;
-}
-/**
- * Structured actionable conclusion for an event (Stage 3).
- *
- * Surfaces the already-computed legacy signal as an event-vocabulary
- * recommendation: direction (YES/NO/AVOID/WAIT) + confidence + suggested
- * allocation. None when evidence quality is insufficient or the feature is
- * disabled. calibration_status distinguishes calibrated (segment has enough
- * resolved samples) from uncalibrated_provisional (dormant but edge is large).
- */
-export interface ActionableRecommendation {
-  direction: string;
-  confidence: string;
-  suggested_allocation_pct: number;
-  edge: number;
-  risk_level: string;
-  rationale: string;
-  calibration_status: string;
-  [k: string]: unknown;
 }
 /**
  * One article's contribution to the event-level YES/NO evidence (Stage:
@@ -483,7 +484,6 @@ export interface EvidenceBreakdownItem {
   strength?: number;
   credibility?: number;
   rationale_zh?: string;
-  [k: string]: unknown;
 }
 /**
  * Phase 1 decision-quality overlay block.
@@ -516,24 +516,6 @@ export interface DecisionQuality {
   displayed_direction?: "YES" | "NO" | "WAIT" | "AVOID";
   downgraded?: boolean;
   error?: string | null;
-  [k: string]: unknown;
-}
-/**
- * One piece of evidence selected by ``decision_quality_service`` as a
- * top supporting or opposing driver for the current recommendation.
- *
- * Distinct from ``EvidenceBreakdownItem``: this is the *selected, ranked,
- * capped* subset (top N by ``strength * credibility``) shown in the
- * "why this direction" panel. ``EvidenceBreakdownItem`` is the full audit
- * list. ``rationale_zh`` on this model is the same string the source
- * ``EvidenceBreakdownItem`` carried.
- */
-export interface DecisionEvidenceItem {
-  source?: string;
-  title?: string;
-  strength?: number;
-  credibility?: number;
-  rationale_zh?: string;
   [k: string]: unknown;
 }
 /**

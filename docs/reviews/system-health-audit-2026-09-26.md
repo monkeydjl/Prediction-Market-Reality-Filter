@@ -11378,3 +11378,93 @@ export interface MarketSnapshotsResponse {
 3. **`lib/api.ts` 的三个手写 overlay 类型可退休**（`DecisionQualityOverlay` / `MarketQualityOverlay` / `SourceReliabilityOverlay`，各带 `[key: string]: unknown`）。它们是 §2「前端手写 union 常是后端契约缺口之症状」的同族，而`DecisionReport` 现在完全可以改用**已闭合**的生成类型。**未做** —— 那是前端契约取舍，且 `decision-card.tsx` 的消费面要一起看，另行拍板。
 4. §53.50.7 第 2 条**已消解**（本节即是它的处置）；第 1 条（(c) 类 inline 尾巴）与第 3、4 条（`LatestLink` / 未推送）**不变**。
 5. 本节**未推送**。
+
+## §53.52 同一条规则的消费侧：`api.ts` 不再自己声明 overlay 副本（收 3 个手写类型）
+
+> **前提更正（§0）**：§53.51.7 第 3 条登记过「`lib/api.ts` 里三个**手写** overlay 类型现在可以退休」，当时**只做只读取证、没碰任何文件**。本节把它做掉，并给出「为什么**不必**同时动后端」的实测依据。
+> 本节的**行数**一律取 `git diff --numstat`，**计数**取工具自打印（`mutation_verify list`、`junit_summary.py`、字节探针），**不口算、不倒推**；行号是**读出来的**，不推。
+
+### 53.52.1 判据：谁在真的吃这三份手写副本
+
+| 手写类型（`frontend/src/lib/api.ts`，**改动前**行号） | 字段 | 尾巴 | 生成对应物（`generated-types.ts`） | 字段 |
+| --- | --- | --- | --- | --- |
+| `DecisionQualityOverlay`（:268） | 3 | `[key: string]: unknown` | `DecisionQuality`（:223） | 11 |
+| `MarketQualityOverlay`（:275） | 2 | 同上 | `MarketQuality`（:559） | 12 |
+| `SourceReliabilityOverlay`（:281） | 2 | 同上 | `SourceReliability`（:604） | 13 |
+
+- **消费者实测**：`grep -rn "DecisionQualityOverlay\|MarketQualityOverlay\|SourceReliabilityOverlay" frontend/src/` ⇒ 命中**全部落在 `lib/api.ts` 自己身上**（定义 3 处 + `DecisionReport` 引用 3 处，均在**改动前**的 :268 / :275 / :281 与 :326 / :327 / :328）。⇒ 技术上就是「只为给 `DecisionReport` 三个字段贴标签而存在」。
+- **生成类型是严格超集**：三个手写的字段名（`displayed_direction` / `downgrade_reason` / `decision_rationale_zh` / `score` / `overall_score`）**逐一**被生成类型覆盖，且生成类型还多出 `conflict_score` / `consensus_level` / `wide_spread_flag` / `source_breakdown` 等。
+- 🔑 **同一文件里已经有先例**：`generated-types.ts:385-387` 的 `EventRecord` 就是
+  `decision_quality?: DecisionQuality | null; market_quality?: MarketQuality | null; source_reliability?: SourceReliability | null;`
+  ⇒ `DecisionReport` 是**仓里唯一**还在手写这三个形状的地方。而 `frontend/src/lib/types.ts:8-9` 的抬头写得很直白：*"DO NOT hand-write fields that exist in the Pydantic models."* 本节做的是**消除这个例外**，不是引入新约定。
+- **前端真正消费的字段只有 4 个**，全在 `components/decisions/decision-card.tsx`：`decision_quality.decision_rationale_zh`（:170/:173）、`decision_quality.downgrade_reason`（:176/:178）、`market_quality.downgrade_reason`（:181/:183）、`source_reliability.downgrade_reason`（:186/:188）。其余 6 个消费 `DecisionReport` 的文件（`app/decisions/page.tsx`(+test)、`components/detail/decision-report-panel.tsx`(+test)）只读非 overlay 字段，且**两个测试夹具根本不构造 overlay 字段**。
+- **零运行时效果**：`api.ts` 的 `api<T>` 助手是 `const data = await res.json() as T`（:211，**盲转**），两个调用点都是 `api<DecisionReport>(…)`；没有任何地方读未声明键。⇒ 换类型是**纯编译期收紧**。
+
+### 53.52.2 两个端点其实都带 `response_model`，但都给不出报告的契约
+
+- `events.py:1455` `/decisions/open` → `response_model=OpenDecisionsResponse`（**具名**）；然而 `models/event.py:805` 是 `decisions: list[dict[str, Any]]` ⇒ **列表元素仍然没有契约**。
+- `events.py:1541` `/{event_id}/decision` → `response_model=FlexibleResponse`（**裸**）⇒ 整个响应没有字段契约。
+- 但这不是「忘了加模型」：`build_decision_report`（`decision_report_service.py:41`）签名就是 `-> dict[str, Any]`，overlay 三键是 **`record.get("decision_quality")` 原样透传**（:127 / :135 / :141）的 dict ⇒ **报告形状本身没有对应的 Pydantic 模型**。
+- 兄弟守卫 `test_operational_readiness.test_event_routes_declare_response_models` 只查 `route.response_model is None`（不许**缺席**）⇒ 裸 `FlexibleResponse` 是合规的，与 §2 已记的「裸 `FlexibleResponse` 是既定策略、不是欠债」一致。
+- 仓内**既定模式**也支持这个读法：`OpenDecisionsResponse.decisions` / `FreshEdgesResponse.edges` / `SimilarEventsResponse.similar` 三个都是「**具名信封 + `list[dict[str, Any]]` 内芯**」⇒「内芯保持 dict」是拍过板的形态。
+- ⇒ **本节只做消费侧**；补具名 `response_model` 的收益与代价写在 53.52.7 第 1 条，留待单独拍板。
+
+### 53.52.3 改动面（1 个文件）
+
+`frontend/src/lib/api.ts`（`git diff --numstat`：**+17 / −23**，net **−6**）：
+
+1. 从 `./generated-types` **增导入** `DecisionQuality` / `MarketQuality` / `SourceReliability`（不加别名 —— 生成名就是报告要显示的名）。
+2. **删掉**三个 `export interface *Overlay`，位置换成一段说明：报告本身没有模型所以继续手写，但三个 overlay 此后读生成物。
+3. `DecisionReport` 的三个字段改指生成名（`DecisionQualityOverlay` → `DecisionQuality` 等）。
+
+**字节画像（探针实测，非推算）**：`41026 → 41269` B；`crlf 1254 → 1248`（**−6 == net 行数**，说明插入行全部按 CRLF 落）；`bare_lf` 恒 **0**（**没有混用**）；`export interface` **45 → 42**（−3）；带尾巴的 interface **3 → 0**；inline 索引签名 **0 → 0**。
+
+### 53.52.4 守卫：`api.ts` 不得自己声明副本
+
+`backend/tests/test_generate_types.py` 新增 `ApiTsTypeSourceTests::test_decision_report_reads_the_generated_overlays`，两层、方向相反：
+
+1. `_overlay_copies(bodies)` 的集合**恰好等于** `ALLOWED_OVERLAY_COPIES_IN_API_TS`（**空集**）。算作「副本」的两个分支：**名字以 `Overlay` 结尾**，或**体内任一处出现索引签名**（两种拼写都认：生成器写 `[k: string]`，手写文件写 `[key: string]`）。
+2. `DecisionReport` 的三个字段**逐条**断言等于 `  <field>?: <Generated> | null;`。
+
+为什么是**两层**：「副本没回来」与「字段仍读生成类型」是**两件事**，D5 存在的意义就是不让一个绿结果把两者混为一谈。
+为什么索引签名要扫**体内任意位置**而不是**末行**：初版只看「体内最后一个非空行」，D6（插在**中段**）**不会红** —— 所以 D6 同时是这条判据选择的证据。
+为什么**只扫 interface 体内、不做整文件 grep**：⚠️ `api.ts` 的注释里**逐字写了** `[key: string]: unknown`（正是在描述被退休的那三份副本）。**注释也是文件字节** ⇒ 整文件搜会踩到自己的文档（同 §4.3「自指变异」那一族）。而**体内**才是索引签名真能放松类型的地方。
+
+**被否掉的守卫形态（留痕）**：更早想用「`api.ts` 不得与 `generated-types.ts` 声明同名 interface」。实测 **COLLISIONS = 0** —— 手写名带 `Overlay` 后缀，从来就没撞过车 ⇒ 那条守卫**改动前后都不变红**，对本次改动**不敏感**。按 §4.2「守卫必须对该改动敏感」，它不能充当本节的守卫。
+
+### 53.52.5 变异：一个守卫、三个互不重叠的判据（D4 / D5 / D6）
+
+往同族 set `frontend-type-closure` 追加三条（§4.3：「新变异优先追加进同族 set」）：
+
+- **D4** `frontend/src/lib/api.ts`：把 `SourceReliabilityOverlay` 那份**手写副本还原回去**（放在 `DecisionReport` **之前** ⇒ TS 语法仍合法；守卫是文本判据，不看语法）。踩「名字以 `Overlay` 结尾」分支。针 `export interface DecisionReport {`，`count_needle` 实测 **1** 次、单行 ⇒ 与检出约定无关。
+- **D5** 同文件：把 `source_reliability` 字段改指 `Record<string, unknown>`。名字不以 `Overlay` 结尾、体内也没有索引签名 ⇒ 前两个分支**都通过**，只有**字段指向**那半会红。没有它，守卫的第一半就可能是**空头**。
+- **D6** 同文件：把 `[key: string]: unknown;` 插进 `DecisionReport` 的**中段**（**不是末行**）。⇒ 只有索引分支会红，同时证明「体内任意位置」这条判据是必要的。
+- 三条**共用**同一守卫、**不设 group**：`group` 的语义是「同一段字节的两条相反改写」（`apply` 会跳过同组后续成员），而这三条的针在**不同行**、可以同时施加，所以它们只是「同一守卫的三个判据」，不是同一段字节。`test_grouped_mutations_rewrite_the_same_bytes` 因此不受影响。
+- `mutation_verify list` 自报 **12 套 / 86 个变异**（原 **83**）。标签 `D1–D6` 全落在本 set 内，与既有 set `eol-audit` 的 `E1–E5` **无撞号**（§53.51 踩过一次跨套撞号，故先 `list` 核对）。
+
+### 53.52.6 门 + 全量
+
+**四道门 + 前端两道**（改动后的工作树上）：
+
+- `ruff check app/`：`All checks passed!`；改动过的 `scripts/mutation_verify.py` 与 `tests/test_generate_types.py` 亦 `All checks passed!`
+- `mypy app/`：`Success: no issues found in 331 source files`
+- `python -m scripts.generate_types --check`：`generated-types.ts is up to date.`（本节**没有**动后端模型与白名单 ⇒ 产物本就不该变）
+- 前端 `tsc --noEmit`：**rc=0**，全文 **0** 处 `error TS`
+- 前端 `eslint`：干净（无输出）
+- 前端 vitest：**125 文件 / 738 用例**全过
+
+**变异**：`verify frontend-type-closure` → **D1–D6 六条各四阶段全过**（`green before True | red after mutation 1/1 files red | green after restore True | bytes restored True`）。
+`tests/test_mutation_verify.py`：**`tests=181 failures=0 errors=0`**（`<testcase>` 元素 **62**；`tests` 属性 178 → 181 的 **+3** 来自 `test_the_selected_mutation_is_the_inventory_object` 对**全部变异**做 subTest 的循环，即本轮新增的 3 条）。
+
+**全量**（`pytest -q --junitxml=…`；**判据只看 junit 的 `failures`/`errors`**）：`tests=7763 failures=0 errors=0 skipped=11`（元素 **6638**）。
+对 §53.51 基线（`tests=7756` / 元素 **6637**）的增量：**`tests` +7、元素 +1**。
+分解（按工具读数，不口算）：**+1 个元素** = 新增守卫 `test_decision_report_reads_the_generated_overlays`；**+6 次 subTest 迭代** = 该守卫的 3 个字段 `subTest`（3）+ `test_the_selected_mutation_is_the_inventory_object` 对**全部变异**做 subTest 的循环（变异 83 → 86，+3）。三者相加即 `tests` 的 +7 与元素的 +1。
+（`rc=1`：日志末尾是 `[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":1888,…,"targets":["…\\Temp\\pytest-of-Alin\\garbage-…"]}` —— 就是那个 shim 拦临时目录清理，**与测试结果无关**。）
+
+### 53.52.7 留痕 / 未决
+
+1. **为什么不顺手补具名 `response_model`（B 项的代价，写在这里备查）**：一旦给 `/{event_id}/decision` 声明 `DecisionReportResponse` 并把 `OpenDecisionsResponse.decisions` 改成 `list[DecisionReportResponse]`，FastAPI 就会**校验并重序列化** —— 任何字段类型漂移会把 200 变成 500；而 overlay 是 `record.get()` **透传的原始 dict**，收进已闭合模型还会**静默丢掉未声明键**。现在两个端点各自合规（一个具名信封、一个是既定策略），报告形状本身**没有模型**，补它等于**新增契约**而不是修正缺口 ⇒ **需要单独拍板**，不在本节范围内。
+2. ⚠️ **pytest 对 `subTest` 失败的报法**：失败会被单列成 `SUBFAILED(field='source_reliability')`，而**父用例仍报 `1 passed`**（`rc != 0`，所以 harness 的 `passed` 判据不受影响）。⇒ 读含 subTest 的守卫时**不能只看 `N passed`**；这也是 junit 的 `tests` 属性大于元素数的原因之一。
+3. ⚠️ **手动 `apply` 之前必须先 `backup`**：本节手动复现 D5 时先 `apply` 后 `revert` ⇒ `revert` 报 `no backup for backend/app/models/_frontend_export.py; run 'backup frontend-type-closure' first`，工作树**留在变异态**（`git status` 立刻显示 `M frontend/src/lib/api.ts`）。**还原判据**：字节必须回到 `41269 / crlf 1248 / bare_lf 0`，并用探针确认尾巴集合回 **0**（本节即按此复核）。`verify` 子命令自带 backup/restore，不受影响。
+4. **未推送**。
+5. **遗留**：§53.51.7 第 1/2 条不变；§53.50.7 第 1 条（(c) 类 inline 尾巴）仍**未动**；`/sport-markets/*` 其余裸 dict 端点仍按 §2 既定策略。

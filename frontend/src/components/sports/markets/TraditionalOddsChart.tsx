@@ -15,7 +15,7 @@ import {
 } from "@/lib/sports-api";
 import type {
   TraditionalOddsHistory,
-  SnapshotSeries,
+  MarketSnapshotSeries,
 } from "@/lib/sports-api";
 import { usePriceStream } from "@/lib/use-price-stream";
 import { RealtimePriceIndicator } from "@/components/sports/realtime/RealtimePriceIndicator";
@@ -71,7 +71,7 @@ function formatPct(v: number | null): string {
 
 function mergeSeries(
   traditional: TraditionalOddsHistory,
-  polymarket: { series: SnapshotSeries[] },
+  polymarket: { series: MarketSnapshotSeries[] },
 ): Record<string, MergedPoint[]> {
   const byOutcome: Record<string, Record<string, MergedPoint>> = {};
 
@@ -121,7 +121,7 @@ const EMPTY_TRADITIONAL: TraditionalOddsHistory = {
   skip_reason: "no_data",
 };
 
-const EMPTY_POLY: { series: SnapshotSeries[] } = { series: [] };
+const EMPTY_POLY: { series: MarketSnapshotSeries[] } = { series: [] };
 
 export function TraditionalOddsChart({ matchId }: TraditionalOddsChartProps) {
   const {

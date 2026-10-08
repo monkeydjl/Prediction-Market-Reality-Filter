@@ -131,5 +131,39 @@ class TestGenerateTypesScript(unittest.TestCase):
             self.assertIn(nested_model, content, f"Nested model {nested_model} missing")
 
 
+class AllowlistCompositionTests(unittest.TestCase):
+    """What the allowlist *exports*, asking nothing of json2ts.
+
+    Kept out of the skip-decorated class above so it still runs where the CLI is
+    not installed -- it only inspects the module, and it is the guard that keeps
+    the snapshot interfaces closed.
+    """
+
+    def test_market_snapshot_models_are_export_roots(self):
+        """The three snapshot models must be *imported*, not merely referenced.
+
+        ``pydantic2ts`` collects the models in this module's namespace
+        (``inspect.getmembers``), not its ``__all__``. Being in that set is what
+        makes a model a root, and only root models get ``extra='forbid'`` during
+        schema generation -- which is what suppresses the ``[k: string]:
+        unknown`` tail ``json2ts`` otherwise appends. Reachable-by-reference is
+        not enough: ``MarketSnapshotSeries`` / ``MarketSnapshotPoint`` are also
+        fields of ``MarketSnapshotsResponse``, so dropping them from this module
+        would still emit interfaces, just looser ones, and ``tsc`` would stay
+        green (audit section 53.49).
+        """
+        from app.models import _frontend_export
+
+        for name in (
+            "MarketSnapshotsResponse",
+            "MarketSnapshotSeries",
+            "MarketSnapshotPoint",
+        ):
+            self.assertTrue(
+                hasattr(_frontend_export, name),
+                f"{name} is not a root model in {_frontend_export.__name__}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

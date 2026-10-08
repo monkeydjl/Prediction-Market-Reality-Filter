@@ -10,6 +10,14 @@ Nested models (e.g., ``DecisionQuality`` referenced by ``EventRecord``) are
 automatically included via field references — they do not need to be
 imported here explicitly.
 
+One exception: a nested model that must render as a *closed* interface has to
+be listed anyway. ``MarketSnapshotPoint`` / ``MarketSnapshotSeries`` are here
+for exactly that reason. A model reached only by field reference gets no
+``additionalProperties: false`` in the JSON schema, so ``json2ts`` appends a
+``[k: string]: unknown`` tail and the generated interface ends up looser than
+the hand-written one it replaced. Listing the model makes it a root model,
+which does emit ``additionalProperties: false`` (audit section 53.49).
+
 Do NOT import models that should not leak to the frontend:
 - FlexibleResponse (base class, no fields)
 - MarketModel / NewsModel (no frontend consumer)
@@ -28,6 +36,9 @@ from app.models.event import (
     EventRecord,
     EventStoreEntry,
     FreshEdgesResponse,
+    MarketSnapshotPoint,
+    MarketSnapshotSeries,
+    MarketSnapshotsResponse,
     OpenDecisionsResponse,
     PendingLinksResponse,
     RecentPredictionsResponse,
@@ -51,6 +62,9 @@ __all__ = [
     "EventRecord",
     "EventStoreEntry",
     "FreshEdgesResponse",
+    "MarketSnapshotPoint",
+    "MarketSnapshotSeries",
+    "MarketSnapshotsResponse",
     "OpenDecisionsResponse",
     "PendingLinksResponse",
     "RecentPredictionsResponse",

@@ -182,19 +182,19 @@ export interface LatestLink extends MarketLink {
   } | null;
 }
 
-export interface SnapshotPoint {
-  id: number;
-  implied_prob: number;
-  price: number | null;
-  captured_at: string | null;
-}
-
-export interface SnapshotSeries {
-  contract_id: string;
-  outcome_label: string;
-  mapped_outcome: string;
-  snapshots: SnapshotPoint[];
-}
+// ── Snapshot price path — generated, not hand-written ───────────────────
+// Backend GET /api/sport-markets/snapshots/{match_id}, whose response model is
+// `MarketSnapshotsResponse`. Taken from the Pydantic models (see
+// lib/generated-types.ts) so the payload contract cannot drift from the backend.
+// `MarketSnapshotPoint` / `MarketSnapshotSeries` are root models in the backend
+// export allowlist so the interfaces come out *closed* rather than with an
+// `[k: string]: unknown` tail, and they carry the fields the old hand-written
+// pair had dropped (`link_id`, `liquidity`, `volume`, plus `untimestamped_count`).
+export type {
+  MarketSnapshotPoint,
+  MarketSnapshotSeries,
+  MarketSnapshotsResponse,
+} from "@/lib/generated-types";
 
 // From lib/sport-odds-api.ts
 export interface TraditionalOddsSnapshot {

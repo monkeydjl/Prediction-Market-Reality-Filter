@@ -8,11 +8,11 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { useMarketSnapshots, type SnapshotSeries } from "@/lib/sports-api";
+import { useMarketSnapshots, type MarketSnapshotSeries } from "@/lib/sports-api";
 
 export function MarketSnapshotChart({ matchId }: { matchId: string }) {
   const { data, error, isLoading } = useMarketSnapshots(matchId);
-  const series: SnapshotSeries[] = data?.series ?? [];
+  const series: MarketSnapshotSeries[] = data?.series ?? [];
   const errorMessage = error
     ? error instanceof Error
       ? error.message

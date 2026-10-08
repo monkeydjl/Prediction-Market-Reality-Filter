@@ -164,6 +164,32 @@ def test_snapshots_timeseries_drops_and_counts_untimestamped_rows(client):
     assert entry["untimestamped_count"] == 1
 
 
+def test_snapshots_route_publishes_its_response_model():
+    """The named model *is* the contract, so pin the wiring, not just the payload.
+
+    Removing ``response_model=MarketSnapshotsResponse`` leaves every behavioural
+    assertion in this file green -- the dict the route returns is unchanged --
+    while the OpenAPI schema silently loses the field contract and the generated
+    TypeScript stops describing the payload at all. The sibling check in
+    ``test_operational_readiness`` only walks the *events* router, so this route
+    had no guard (audit section 53.49).
+    """
+    from fastapi.routing import APIRoute
+    from app.api.routes import sport_markets
+    from app.models.event import MarketSnapshotsResponse
+
+    # `APIRoute.path` already carries the router prefix, so it reads
+    # "/sport-markets/snapshots/{match_id}" -- not the bare path on the decorator.
+    routes = [
+        route
+        for route in sport_markets.router.routes
+        if isinstance(route, APIRoute)
+        and route.path == "/sport-markets/snapshots/{match_id}"
+    ]
+    assert len(routes) == 1, "expected exactly one /snapshots/{match_id} route"
+    assert routes[0].response_model is MarketSnapshotsResponse
+
+
 def test_link_audit_attaches_link_meta(client):
     """The audit summary carries the link's own metadata, not just prices.
 

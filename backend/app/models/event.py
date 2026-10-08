@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -705,6 +706,49 @@ class DecisionTimelineResponse(BaseModel):
     count: int
     snapshots: list[DecisionTimelineSnapshot]
     diffs: list[DecisionTimelineDiff]
+
+
+class MarketSnapshotPoint(BaseModel):
+    """One timestamped point on a market link's price path.
+
+    Mirrors ``MarketSnapshotStore._row_to_dict`` key for key, so binding this as
+    the route's ``response_model`` filters nothing out of the payload. The
+    nullable columns are declared ``X | None`` with *no* default on purpose:
+    pydantic reads that as required-but-nullable, which is the only spelling
+    ``pydantic2ts`` renders as ``price: number | null``. A default would render
+    it ``price?: number | null`` -- looser than the hand-written interface this
+    replaces (the same reasoning as ``SimTrade`` below, audit section 53.49).
+    """
+
+    id: int
+    link_id: int
+    implied_prob: float
+    price: float | None
+    liquidity: float | None
+    volume: float | None
+    captured_at: datetime | None
+
+
+class MarketSnapshotSeries(BaseModel):
+    """One linked market drawn as a price path, plus what was left out.
+
+    ``untimestamped_count`` is this door's half of the "declare what you
+    dropped" rule (audit section 53.48): a row with no timestamp is not a point
+    on the path, so the door omits it *and* says how many it omitted.
+    """
+
+    contract_id: str
+    outcome_label: str
+    mapped_outcome: str
+    snapshots: list[MarketSnapshotPoint]
+    untimestamped_count: int
+
+
+class MarketSnapshotsResponse(BaseModel):
+    """Response for GET /api/sport-markets/snapshots/{match_id}."""
+
+    match_id: str
+    series: list[MarketSnapshotSeries]
 
 
 class AutoResolveResponse(FlexibleResponse):

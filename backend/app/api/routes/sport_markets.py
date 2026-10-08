@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from app.api.security import require_write_key
 from app.core import config
+from app.models.event import MarketSnapshotsResponse
 
 if TYPE_CHECKING:
     # Kernel imports stay inside the helpers at runtime (lazy); these are here
@@ -114,7 +115,7 @@ def verify_link(
     return {"ok": True, "link_id": target["id"], "verified": body.verified}
 
 
-@router.get("/snapshots/{match_id}")
+@router.get("/snapshots/{match_id}", response_model=MarketSnapshotsResponse)
 def get_snapshots(match_id: str) -> dict[str, Any]:
     """Snapshots per linked market, as a price path.
 

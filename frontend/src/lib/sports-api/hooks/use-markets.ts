@@ -7,13 +7,12 @@ import { sportPost, buildQuery } from "../client";
 import type {
   MarketLinkList,
   LatestLink,
-  SnapshotSeries,
   MarketPriceAudit,
+  MarketSnapshotsResponse,
   MatchMarketAudit,
 } from "../types";
 
 type LatestLinksResponse = { items: LatestLink[]; total: number };
-type SnapshotsResponse = { series: SnapshotSeries[] };
 
 export function useMarketLinks(params?: {
   match_id?: string;
@@ -66,7 +65,7 @@ export function usePendingLinks() {
 
 export function useMarketSnapshots(matchId: string | null) {
   const key = matchId ? `${getApiBase()}/sport-markets/snapshots/${matchId}` : null;
-  return useSWR<SnapshotsResponse>(key);
+  return useSWR<MarketSnapshotsResponse>(key);
 }
 
 export async function verifyLink(

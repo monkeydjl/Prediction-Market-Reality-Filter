@@ -337,6 +337,16 @@ _T_ECE_MARKET_AUDIT = "tests/test_ece_and_market_audit.py"
 # `is_timestamped` predicate through `get_price_path`, so its guard lives here.
 _T_SPORT_MARKET_ROUTES = "tests/test_sport_market_routes.py"
 
+# §53.49 — the snapshots endpoint's *published contract*, which section 2 calls
+# the three-step (named `response_model`, allowlist, regenerate). Both facts are
+# invisible to a behavioural test: drop the `response_model` and the payload is
+# byte-for-byte the same; drop a model from `_frontend_export` and it is still
+# emitted, just as a nested one with an `[k: string]: unknown` tail. So the two
+# mutations below each pin one half, and neither can stand in for the other.
+_SPORT_MARKET_ROUTES = "backend/app/api/routes/sport_markets.py"
+_FRONTEND_EXPORT = "backend/app/models/_frontend_export.py"
+_T_GENERATE_TYPES = "tests/test_generate_types.py"
+
 _T_AVAILABILITY = "tests/test_football_live_availability_service.py"
 _T_SCHEDULE = "tests/test_football_live_schedule_service.py"
 _T_KALSHI = "tests/test_kalshi_event_source.py"
@@ -1493,8 +1503,11 @@ SETS: tuple[MutationSet, ...] = (
             "「没有时间戳的快照不是价格路径上的点」这条口径有两个消费者，各有各的失效方式。"
             "A1 打掉 `audit_summary` 的分区：删掉谓词后 NULL 行落回时间轴并抢走 first/last 之一"
             "（§53.47 用一行**合法** NULL 在未变异代码上先证到的形状）。A2 打掉排序键的类型一致："
-            "键随输入变类型时 `sorted` 抛 TypeError，而两个 audit 路由（sport_markets.py:140 / :165）"
-            "外面没有 try ⇒ 500 不是降级。A3 打掉序列门的过滤：`get_price_path` 照发之后，"
+            "键随输入变类型时 `sorted` 抛 TypeError，而两个 audit 路由的 `audit_summary(...)` 调用点"
+            "（sport_markets.py:151 / :176）外面没有 try ⇒ 500 不是降级。"
+            "（这两个行号 §53.48 记的是 140 / 165：该节给本文件加了 docstring 与序列门调用后整体下移，"
+            "§53.49 又加了一行 import ⇒ 现值 151 / 176。）"
+            "A3 打掉序列门的过滤：`get_price_path` 照发之后，"
             "`GET /snapshots/{match_id}` 又把无法定位的行当成**最早**的点画给图表（§53.48 统一的正是这一处）。"
             "A4 直接塌掉那个**共享谓词** `is_timestamped`——它的守卫**跨两个文件**，"
             "正是「一处谓词、两个门」的证据。四条必须分开：一条断言审计端点取值、一条断言两种时间类型混排、"
@@ -1568,6 +1581,51 @@ SETS: tuple[MutationSet, ...] = (
                     "**跨两个文件**，两个都必须红：这正是「一处谓词、两个门」的可验证表述。"
                     "注意模块里**没有第二份**「有没有时间戳」的判断（`_ts` 也只剩这一处消费者），"
                     "所以塌掉它没有别的地方能挡住。"
+                ),
+            ),
+        ),
+    ),
+    MutationSet(
+        key="market-snapshot-contract",
+        title="快照端点：合约要么被发布、要么被渲染成精确 interface（C1–C2）",
+        rationale=(
+            "§2 的三件套（具名 `response_model` → 导出白名单 → 重生成 TS）在**行为上是隐形的**。"
+            "C1 删掉路由的 `response_model=MarketSnapshotsResponse`：返回的 dict 一字节没变，"
+            "本文件其余断言照绿，而 OpenAPI 丢字段契约、生成的 TS 也不再描述这个 payload —— "
+            "兄弟守卫 `test_operational_readiness.test_event_routes_declare_response_models` "
+            "只走 events router，作用域覆盖不到 sport-markets。"
+            "C2 把 `MarketSnapshotSeries` 从 `_frontend_export` 的**导入**里挪走（`__all__` 只是文档，"
+            "生成器用 `inspect.getmembers` 收集**命名空间**）：它仍会作为嵌套 interface 出现，"
+            "但不再是 root ⇒ 不再被临时置 `extra='forbid'` ⇒ `json2ts` 补回 `[k: string]: unknown`，"
+            "生成类型比它替换掉的手写 interface **更松**，而 `tsc` 照样绿。"
+            "两条各钉一半，且必须分开：一条落在路由对象上，一条落在导出模块上。"
+        ),
+        mutations=(
+            Mutation(
+                label="C1  路由丢掉 response_model：合约不再发布",
+                path=_SPORT_MARKET_ROUTES,
+                old=b'@router.get("/snapshots/{match_id}", response_model=MarketSnapshotsResponse)',
+                new=b'@router.get("/snapshots/{match_id}")',
+                guard_file=_T_SPORT_MARKET_ROUTES,
+                guards=("test_snapshots_route_publishes_its_response_model",),
+                note=(
+                    "删掉 `response_model=` 后返回体不变 ⇒ 该文件其余断言全绿，只有这条**静态**"
+                    "断言会红 —— 它断言的正是「装配本身」，不是 payload。"
+                    "（同族的 events 守卫在 test_operational_readiness，作用域不含 sport-markets。）"
+                ),
+            ),
+            Mutation(
+                label="C2  导出模块不再导入该模型：interface 从闭合变成宽松",
+                path=_FRONTEND_EXPORT,
+                old=b"    MarketSnapshotSeries,",
+                new=b"    _MarketSnapshotSeriesUnused,",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_market_snapshot_models_are_export_roots",),
+                note=(
+                    "改名而不是删除：`__all__` 里仍有 `\"MarketSnapshotSeries\",`，"
+                    "而只有 `from module import *` 才会因缺名报错 —— 本仓不这么用，"
+                    "所以模块照常导入，只是命名空间里少了这个名字。"
+                    "守卫断言它是 `_frontend_export` 的属性（= root），而那正是 interface 闭合的成因。"
                 ),
             ),
         ),

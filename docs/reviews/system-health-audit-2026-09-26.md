@@ -11993,3 +11993,303 @@ harness 自己不受影响：它的阶段③会**再跑一次守卫**，用还�
 两个夹具**静默地**停在 9 个字段上，`tsc` 仍然全绿、`vitest` 仍然全过。
 ⇒ **本仓「tsc 全绿」的前提是「不含测试文件」** —— 复述这个读数时必须带上它。
 本节已把两个夹具补齐（53.54.4）。
+
+## 53.55 `GET /events/movers`：元素具名的第三个节点，以及一个「不具名就改字节」的偏差
+
+承接 §53.54。C1 剩下七个节点里，只有它有**孪生线索**（§53.54.7 登记为「仅源码读得出」）：
+信封 `EventMoversResponse` 早已在白名单里，元素的 `trend` 也已由 §53.53 发布成 `TrendSummary`，
+只差把那个四字段外壳命名成 `EventMoverItem`。查完确实如此，工作量与 §53.54 同级。
+
+🔴 **但它与 §53.54 有一处真差别，而这正好是本节最值钱的一条**：姊妹路由 `/edges/fresh` 声明了
+`response_model_exclude_unset=True`，而 `/movers` **没有**。今天元素是裸 dict、pydantic 不碰它，
+于是「没有中文标题」= **键缺席**；一旦具名，模型会给 `event_title_zh` 补上**显式 `null`** ——
+**具名本身就改变了线上字节**。修法不是放弃具名，而是**同一改动里把 `exclude_unset` 补上**。
+见 53.55.4。
+
+### 53.55.1 取证：生产者驱动，不读词表
+
+方法同 §53.53 / §53.54：导入真实的 `rank_movers` 与 `trend_analysis_service`，
+喂五份语料、各跑五个 `limit`，只复刻路由自己的胶水（`events.py` 的 enrichment 与过滤）。
+探针 `probe_movers_shape.py`，读数 `probe_movers_shape.txt`。
+
+| 语料 | 文件大小 | 事件数 | 快照数 | 发出的 item |
+| --- | --- | --- | --- | --- |
+| `backend/event_audit.jsonl`（工作树） | 175 150 B | 146 | 526 | 91 |
+| `backend/backups/event-id-migration-20260622-040713/` | 101 868 B | 78 | 307 | **0** |
+| `backend/backups/manifold-lowercase-purge-20260709-150947/` | 264 083 B | 126 | 781 | 91 |
+| `backend/backups/manifold-purge-20260709-150402/` | 357 938 B | 171 | 1 059 | 59 |
+| `.workbuddy/audit-2026-10-03/preA-backup/`（与第 1 份同源） | 175 150 B | 146 | 526 | 91 |
+
+参数覆盖 `limit ∈ {1, 5, 10, 25, 50}`。**共发出 332 条 item，而 key 集有且只有一种**：
+
+| 计数 | key 集 |
+| --- | --- |
+| 332 | `['event_id', 'event_title', 'event_title_zh', 'trend']` |
+
+三个标量字段全部 `str`（`event_title` **一条空串也没有**）。
+
+**嵌套 `trend`：key 集与 `TrendSummary.model_fields` 的 14 个字段完全一致，332/332。**
+另做**接受性测试**（严格模型会不会把 200 变成 500？）：对每份语料的每个事件都跑
+`analyze_trend(...)` **和** `_empty_trend()`（两条分支都喂），共 **1 334 次 `model_validate`，0 次被拒**
+（292 + 156 + 252 + 342 + 292 = 1 334）⇒ 让 `trend` 指名 `TrendSummary` 不可能把 200 变成 500。
+
+### 53.55.2 陷阱：`event_title_zh` 的「缺席」分支**当前不可达**
+
+- 语料侧：`event_title_zh` **332/332 全在**。
+- 活库侧（阴性对照，`probe_movers_shape.py` 开头那段）：store 257 条、**257 条都有非空 `event_title_zh`**。
+
+⇒「没有中文标题的事件」这一支在**今天的数据上不可达**：两侧证据指向同一结论，
+所以普查**观测不到**那个分支。「具名后是 `null` 还是缺席」**无法用观测解决，只能拍板**。
+⚠️ 注意 `event_title_zh` 的**存在性**由 `if title_zh:` 控制，**不是** `is not None` 控制 ——
+它由语料的 enrichment 决定，而 enrichment 读的是**活库**，不是被测语料。
+
+### 53.55.3 路由还有一条**真实被走到**的过滤分支 ⇒ item 数对 `limit` 不单调
+
+`events.py`：mover 的 `event_id` 若**不在活库**里，整条**丢弃**（"Event was deleted"）。
+后果：`count = |rank_movers(limit) ∩ 活库|` —— **对 `limit` 不单调**。语料 4 实测：
+
+| `limit` | 1 | 5 | 10 | 25 | 50 |
+| --- | --- | --- | --- | --- | --- |
+| item | **0** | 3 | 6 | 19 | 31 |
+
+极端例子：语料 2（`event-id-migration-20260622-040713`）**在每一个 `limit` 下都是 0 条** ——
+它的 `event_id` 与当前活库不对应，被这条过滤**整批丢掉**。这不是缺陷（是"删掉的事件不进榜单"），
+但**任何「跑一遍看条数」的普查都要先知道它**，否则会把「0 条」误读成「该分支没运行」。
+
+### 53.55.4 契约点：`exclude_unset` 缺席 ⇒ 具名**本身**会把「键缺席」变成 `null`
+
+`/movers` 路由声明 `response_model=EventMoversResponse`（**没有** `exclude_unset`）。
+今天元素是裸 dict ⇒ pydantic 不碰 ⇒ 路由的 dict **原样**出去 ⇒ 没有中文标题时**键缺席**。
+
+探针 `probe_movers_exclude_unset.py` 用与 FastAPI **等价**的调用
+（`model_validate` → `model_dump(mode="json")`，`trend` 用**真实** `analyze_trend` 输出）实测：
+
+| 情形 | `movers[0]`（无中文标题的事件）键集 |
+| --- | --- |
+| 今天 `list[dict]` 透传 | `event_id, event_title, trend` ← **缺席** |
+| 具名后 `exclude_unset=False`（= `/movers` 原状） | 4 键，`event_title_zh: None` ← **null** |
+| 具名后 `exclude_unset=True` | 3 键 ← 缺席**保住** |
+
+**控制组**：`count` / `movers` 两个恒写字段在**两种模式**下都活着 ⇒ 加 `exclude_unset=True`
+不会把它们丢掉。
+
+⇒ 拍板走 **B（保字节）**：同 A 具名，另给 `/movers` 加 `response_model_exclude_unset=True`
+（与姊妹路由 `/edges/fresh` 一致）⇒ 输出**逐字节不变**。
+⚠️ 代价（须显式记下）：这把「丢不丢字段」变成依赖 `unset` 语义的机制 ——
+**将来若有别的字段带默认值会被静默省略**。今天的 `count` / `movers` 不受影响（都恒写、都 required）。
+
+### 53.55.5 落地
+
+**后端**
+
+- `backend/app/models/event.py`（+61/−5）：把原来的 `class EventMoversResponse` 从 `:627`
+  （`CategoryCountsResponse` 与 `DailyDigestHeadline` 之间）**移走**，改放到 `TrendSummary` 家族之后
+  （`EdgeTrajectorySummary` 与 `EventHistoryResponse` 之间），并在它前面新增 `EventMoverItem`。
+  ```python
+  class EventMoverItem(BaseModel):
+      event_id: str
+      event_title: str
+      trend: TrendSummary
+      event_title_zh: str | None = None
+
+  class EventMoversResponse(FlexibleResponse):
+      count: int
+      movers: list[EventMoverItem]
+  ```
+  - **为什么搬家**：`EventMoverItem.trend: TrendSummary` 需要 `TrendSummary` 已定义，
+    而本文件**没有** `from __future__ import annotations`、也**没有**字符串注解的先例 ⇒
+    把 `EventMoverItem` 放到 `TrendSummary` 之后是唯一不动前向引用的位置。
+  - `event_id` / `event_title` / `trend` **无默认**：三者都是 `rank_movers` **逐条无条件写**的
+    （`_latest_title` 在无标题快照时返回 `""`、**从不** `None`）。
+  - `event_title_zh: str | None = None` 带默认：它是**条件写入**，不是"有时为 null"。
+    去掉默认值会让「没有中文标题的事件」从常态变成 **500**。
+  - `count` 由 `int = 0` **收紧**成 `int` —— 唯一那条路由回一个**无条件设置两键**的 dict 字面量。
+    `movers` 由 `list[dict[str, Any]] = Field(default_factory=list)` 收紧成 `list[EventMoverItem]`（无默认）。
+
+- `backend/app/models/_frontend_export.py`（+2/−0）：`EventMoverItem` 加进 import 与 `__all__`，
+  且**排在 `EventMoversResponse` 之前**（import 块与 `__all__` 都按名字排序）。
+  **必须是根**（而不是靠 `$ref` 到达）：只被引用到的模型拿不到 `additionalProperties: false`,
+  `json2ts` 会补回 `[k: string]: unknown` —— 恰好回到前端读不动的那一格。
+
+- `backend/app/api/routes/events.py`（+11/−1）：`/movers` 路由改多行装饰器，
+  **同一改动里**补上 `response_model_exclude_unset=True`（53.55.4）；
+  单行装饰器变成四行正是为了容下这个参数。docstring 增补了这面旗子的理由。
+
+**重生成**（`frontend/src/lib/generated-types.ts`，+57/−4）
+
+| 读数 | 改前（§53.54 末） | 改后 |
+| --- | --- | --- |
+| 工作树字节 | 37 705 B | **40 621 B** |
+| CRLF（= 行数） | 1 024 | **1 077**（+53 = numstat 57−4） |
+| `bare_lf` | 0 | **0** |
+| `export interface` 数 | 54 | **55**（+`EventMoverItem`；`EventMoversResponse` 本来就在） |
+| `EventMoversResponse` 体内 **inline 尾巴行数** | 1（`movers` 内那张索引签名） | **0**（只剩信封自己的、设计内的那张） |
+
+`EventMoversResponse` 体内的变化（生成顺序按名字排序 ⇒ 无重排）：
+
+```diff
+-  count?: number;
+-  movers?: {
+-    [k: string]: unknown;
+-  }[];
++  count: number;
++  movers: EventMoverItem[];
+   [k: string]: unknown;
+```
+
+新元素是**闭合**的（4 字段、无尾巴）：
+
+```ts
+export interface EventMoverItem {
+  event_id: string;
+  event_title: string;
+  trend: TrendSummary;
+  event_title_zh?: string | null;
+}
+```
+
+（信封自己那张 `[k: string]: unknown;` 是 `FlexibleResponse` 子类的**设计内开放**，不是漏登记。）
+
+**前端**
+
+- `frontend/src/lib/types.ts`（+7/−6，`export interface` 4 → 3、`export type` 6 → 7）：
+  `Mover` 从**手写 interface** 退役成 `export type Mover = EventMoverItem;`，
+  并显式 `import type { EventMoverItem }`（`export type * from` **不创建本地绑定**，必须显式导入）。
+  **旧 `Mover` 比生产者更松**（`event_title?: string` / `trend?: Trend`，而生产者两个恒写）
+  ⇒ 退役是**收紧**，与 §53.54 同向。
+- `frontend/src/lib/api.ts`（+2/−7）：调用点 `api<{ movers: Mover[]; count?: number }>(…)`
+  → `api<EventMoversResponse>(\`/events/movers?limit=${limit}\`)`；import 行去掉 `Mover`。
+- `frontend/src/components/app-nav.test.tsx`（+31/−4）：**顺带修正一处既有漂移**（见 53.55.8 第 3 条）。
+
+### 53.55.6 守卫与变异
+
+**守卫**（`backend/tests/test_generate_types.py`，+190/−0，新类 `EventMoversContractTests`，3 用例 / 7 subtests）
+
+| 判据 | 层 | 读什么 |
+| --- | --- | --- |
+| ① `movers` 必须指名 `EventMoverItem` | 模型身份 | `model_fields['movers'].annotation == list[EventMoverItem]` |
+| ② 元素的 `trend` 必须指名 `TrendSummary` | 模型身份 | `model_fields['trend'].annotation` |
+| ③ **恒写**字段（`event_id`/`event_title`/`trend`/`count`）必须 required | 模型可选性 | `is_required()` |
+| ④ **条件写**字段（`event_title_zh`）必须**保留默认值** | 模型可选性 | `is_required() == False` |
+| ⑤ `api.ts` / `types.ts` 不得再声明 `Mover` / `EventMoverItem` 的 `interface` | 按名判（文本） | `_interface_bodies` |
+| ⑥ 别名 `export type Mover = EventMoverItem;` 必须在 | 文本 | `assertIn` |
+| ⑦ 调用点必须读 `api<EventMoversResponse>` | 文本 | 从路径行**往回**找最近的 `api<` |
+| ⑧ `/movers` 装饰器必须**同时**含 `response_model=EventMoversResponse,` 与 `response_model_exclude_unset=True,` | **路由源码** | 按行取锚点后 4 行、`strip()` 后判 |
+
+③④ 是**两向**的、方向相反：去掉 `event_title_zh` 默认值 ⇒ 500；
+而给 `count` 加回默认值会**静默地**把已发布信封重新放宽成 `count?:`
+（生成文本仍「合法」，只是更松 —— `is_required()` 是唯一能看见的读法）。
+
+**⑧ 是新类型判据**：它读的是**路由源码的装饰器**，既不在模型里、也不在生成文件里。
+`exclude_unset` 这件事**只有**它能看见（模型两半加不加这旗子都过、`tsc` 不看测试文件、前端消费者不在乎）。
+判据**可按行判**（不跨行），因为 HEAD 是 LF、工作树是 CRLF，
+多行子串会依赖检出的行尾（§1）。
+
+另外把 `EventMoverItem` 加进既有的闭合清单 `test_closed_overlay_interfaces_have_no_tail`
+—— 它作为**根**才闭合，这一条钉的就是那个前提。
+
+**变异**（`frontend-type-closure` 追加 J13–J21，该 set 由 18 条增至 **27 条**；`list` 报 **12 套 / 107 条**）
+
+四阶段全部通过（`verify --index 19-27`）：
+
+| # | 变异 | 踩的判据 | 结果 |
+| --- | --- | --- | --- |
+| J13 | `api.ts` 又声明 `Mover`（**别名刻意留着**） | ⑤ / api.ts | OK |
+| J14 | `types.ts` 又声明 `EventMoverItem`（同判据的另一个文件，§4.2） | ⑤ / types.ts | OK |
+| J15 | 别名被改指内联形状（**不插副本**） | ⑥ | OK |
+| J16 | 调用点 generic 退回内联 | ⑦ | OK |
+| J17 | `movers` 退回 `list[dict[str, Any]]` | ① | OK |
+| J18 | `EventMoverItem.trend` 退回裸 dict | ② | OK |
+| J19 | `event_title_zh` 丢掉默认值 | ④ | OK |
+| J20 | `count` 加回默认值 | ③ | OK |
+| J21 | `/movers` 丢掉 `response_model_exclude_unset` | ⑧ | OK |
+
+四阶段逐条：`green before True | red after mutation 1/1 files red | green after restore True | bytes restored True`；
+每条**恰好 1 个测试失败**（J17/J18/J21 为 `1 failed, 16 deselected` ⇒ 只 1 个用例；其余 `1 failed, 1 passed, …`）。
+`J20` 是 **`assertTrue(is_required())` 性红的第一条变异**（详见后文「有意不登记」那条的前提）。
+
+🔴 **两条既有针在本节从唯一变成 2 次**（§4.3 应验：针的语义会随生产代码变化）：
+
+- **J4** 的针 `    trend: TrendSummary` 因新增 `EventMoverItem.trend` ⇒ 2 次，
+  改成跨行带上上一行 `    count: int`（只有 `EventHistoryResponse` 命中）。
+- **J12** 的针 `    event_title_zh: str | None = None` 因新增同名同形字段 ⇒ 2 次，
+  改成跨行带上上一行 `    event_title: str`。
+- 两处**替换原因都已写进各自 `note`**。发现它们的正是 `test_every_needle_occurs_exactly_once_in_its_file`。
+
+🔴 **两条新针与既有针压在同一行字节上，整集 apply 会冲突** ⇒ J19 / J20 改取**不相邻的上下文**：
+J19 从 `event_title_zh` **下方**（空行 + `class EventMoversResponse`）消歧，J20 从 `count` **上方**（docstring 尾行）消歧。
+
+### 53.55.7 门与全量
+
+| 门 | 读数 |
+| --- | --- |
+| `ruff check app/` | `All checks passed!` |
+| `mypy app/` | `Success: no issues found in 331 source files` |
+| `python -m scripts.generate_types --check` | `generated-types.ts is up to date.` |
+| `tsc --noEmit` | 0 条 `error TS` |
+| `eslint`（四个改动的前端文件） | 无输出（干净） |
+| `vitest run` | **125 文件 / 738 用例**全过（与 §53.54 相同 —— 本节只改夹具、不加用例） |
+| `test_mutation_verify.py` | `tests=202 failures=0 errors=0`（元素 62；§53.54 为 193，+9） |
+| 后端全量 | **`tests=7836 failures=0 errors=0 skipped=11`**（元素 **6645**） |
+
+**全量对账**（对 §53.54 基线 `tests=7816` / 元素 `6642`）：两份 junit 按 `(classname, name)` **逐条 diff，零删除**，
+新增者**恰为** `EventMoversContractTests` 的 3 个用例。`tests` 差 **+20** 逐项**实测**：
+
+| 来源 | §53.54 | §53.55 | Δ | 怎么测的 |
+| --- | --- | --- | --- | --- |
+| `<testcase>` 元素 | 6642 | **6645** | **+3** | `junit_full_53_54.xml` vs `junit_full_53_55.xml` 按 `(classname, name)` diff |
+| closure 守卫 subtest | 12 | **13** | +1 | 单跑 `-k test_closed_overlay_interfaces_have_no_tail` → `1 passed, 13 subtests passed` |
+| `EventMoversContractTests` subtest | 0 | **7** | +7 | 单跑 `-k EventMoversContractTests` → `3 passed, 7 subtests passed` |
+| 变异 subtest | 131 | **140** | +9 | 单跑 `tests/test_mutation_verify.py` → `62 passed, 140 subtests passed`（= 套件 `tests` **202**） |
+| 合计 `tests` | 7816 | **7836** | **+20** | `3 + 1 + 7 + 9 = 20` ✅ **无未解释余量** |
+
+⚠️ **subtest 不落 junit**（§53.54 已立）：`junit_full_53_55.xml` 里 `<subtests>` 元素 **0 个** ⇒ 上表后三行的 Δ **只能单跑实测**。
+⚠️ 另：§53.55 全量的 summary 行**没进日志** —— `[safe-delete]` 把 100% 那行后的收尾覆盖掉了
+（`rc=1` 是它的指纹，**判据只看 junit**）。所以那份分量的来源是**单跑**，不是全量日志。
+
+✅ **复跑守卫未漂生成物**：`test_generate_types.py` 会**重新生成** `generated-types.ts`（§53.54.8 第 2 条），
+本节又跑了它多次（全量 + 三次单跑）⇒ 跑前/跑后对 `generated-types.ts` 与 `api.ts` 各取 sha256，**逐字节相同**
+（40 621 B / `428bb6ff…`；42 212 B / `9faa0bd8…`）。
+⚠️ **`tsc 全绿` 的前提仍是"不含测试文件"**（`tsconfig.json` 排除 `**/*.test.ts(x)`，§53.54.8 第 3 条）。
+
+### 53.55.8 未决 / 有意不做
+
+- **C1 剩余**：`EventDiscoveryResponse.events`、`SimilarEventsResponse.similar`、
+  `PendingLinksResponse.pending`、`RecentPredictionsResponse.predictions`、`OpenDecisionsResponse.decisions`，
+  加上 `EventListResponse`（生成侧 `EventStoreEntry[]`，调用侧却写 `TrackedEntry[]`，**两者不一致，需先判谁忠实**）。
+- **死 re-export 由 3 个减为 2 个**：`EventMoversResponse` 的调用点改用它之后**从死变活**；
+  剩 `AutoResolveResponse` / `EventListResponse`（`api.ts` 尾部）。
+- **有意不登记的变异**：
+  - §53.54 envelope（`FreshEdgesResponse`）**恒写字段加回默认值** —— 与 **J20** 共用
+    「`assertTrue(is_required())`」这一断言**形状**。
+    🔴 **本节据此更正/细化一条旧结论**：`rationale` 记下了「**本 set 此前没有任何一条变异性红过
+    `assertTrue(is_required())` 这一半**（J12 红的是 `assertFalse` 那半）」—— 所以 **J20 是首条**，
+    它与 §53.54 那条取舍**不矛盾**（§53.54 是"避免只让计数虚胖"，不是"该半已覆盖"）。
+    ⚠️ **但 J20 覆盖的是 `/movers` 的 `count`，不是 `FreshEdgesResponse` 的那六个字段** ⇒
+    那个 `envelope` 循环的 `assertTrue` 半**至今仍从未被性红过**，本轮**只登记不修**；
+    要补就再加一条「`FreshEdgesResponse.count` 加回默认值」的变异。
+  - `FreshEdgeItem.series` 的同一性 —— 与 **J11** 共用「`assertEqual(annotation, …)`」形状。
+  - ⚠️ 三条的前提都写进了 set 的 `rationale`：**若那些断言形状被拆开，就要各补一条**。
+- ⚠️ **`exclude_unset=True` 的代价已在 53.55.4 记下**：将来若有别的字段带默认值会被**静默省略**。
+- ⚠️ **`event_title_zh` 契约的前提**：选 B 保字节是在「缺席支**今天不可达**」这一观测下做的，
+  在**当前真实数据上 A/B 输出完全相同**。若哪天「没有中文标题的事件」变得可达，A/B 才真正分叉。
+- 本节随本轮改动**未推送**。
+
+### 53.55.9 本轮方法学（本节踩到的坑）
+
+**1. 具名一个「裸 dict 元素」可能改字节 —— 前提是有没有 `exclude_unset`。**
+§53.54 的 `/edges/fresh` 有这旗子 ⇒ 具名是纯类型变更；`/movers` 没有 ⇒ 具名把「缺席」变 `null`。
+🔑 **推论：动手具名元素之前，先读路由装饰器上有没有 `response_model_exclude_unset`。**
+这条与「信封有没有闭合」「元素有没有被登记为根」并列，是同一个三件套里的**第四个**检查点。
+已写进 skill。
+
+**2. 路由装饰器可以当静态判据 —— 而且有时是唯一的判据。**
+`exclude_unset` 这件事在模型层、生成层、前端层**全部不可见**。把它做成「按行读 `"/movers",` 锚点后 4 行、
+`strip()` 后断言」的守卫，是本节唯一新增的判据类型。
+
+**3. 同一段字节上的两条相反改写必须同 `group`；针重叠时要换上下文而不是硬改。**
+J18/J19/J20/J21 四条针都落在 `EventMoverItem` / `EventMoversResponse` 附近。
+设计初稿里 J19 用 `trend` 行、J20 用 `movers` 行消歧 ⇒ 分别与 J18/J17 的针**压在同一行** ⇒
+整集 apply 时 `_apply_preflight` 无法同时落位。
+**改法是换方向取上下文**（一个向上、一个向下），而不是把它们塞进同一个 `group` ——
+`group` 只该用于「真正的同一段字节、互为反向」的情形（§4.3）。

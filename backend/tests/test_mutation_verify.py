@@ -39,7 +39,7 @@ def _every_mutation():
 
 
 class InventoryTests(unittest.TestCase):
-    def test_the_eleven_sets_are_present(self):
+    def test_the_twelve_sets_are_present(self):
         """Pins the inventory, so a whole set cannot be dropped silently.
 
         Deliberately exact and ordered: adding a set means editing this test,
@@ -50,7 +50,8 @@ class InventoryTests(unittest.TestCase):
         when ``eol-audit`` joined. The name said "eight" while nine keys were
         listed -- ``market-snapshot-order`` was added without the rename -- so
         that rename (audit section 53.47) corrected the count as well. Renamed
-        once more for ``market-snapshot-contract`` (audit section 53.49).
+        once more for ``market-snapshot-contract`` (audit section 53.49) and
+        again for ``frontend-type-closure`` (audit section 53.50).
         """
         self.assertEqual(
             [s.key for s in mutation_verify.SETS],
@@ -66,6 +67,7 @@ class InventoryTests(unittest.TestCase):
                 "market-snapshot-order",
                 "market-audit-timestamps",
                 "market-snapshot-contract",
+                "frontend-type-closure",
             ],
         )
 

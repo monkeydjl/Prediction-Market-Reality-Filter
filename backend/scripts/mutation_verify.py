@@ -1630,6 +1630,43 @@ SETS: tuple[MutationSet, ...] = (
             ),
         ),
     ),
+    MutationSet(
+        key="frontend-type-closure",
+        title="前端类型闭合：可达的普通模型必须登记为根（D1）",
+        rationale=(
+            "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
+            "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
+            "`extra='forbid'`，从而拿到 `additionalProperties: false` 并渲染成**闭合** interface。"
+            "只被 `$ref` 引用到的模型没有这个键 ⇒ `json2ts` 补 `[k: string]: unknown` ⇒ "
+            "比后端契约**更松**（普通 `BaseModel` 是 `extra='ignore'`，闭合才是忠实形状）——"
+            "而 `tsc` 照样绿，所以唯一的拦截点是**静态**守卫。"
+            "D1 把 `EvidenceProfile` 从 `_frontend_export` 的**导入**里挪走：它仍会作为嵌套 interface "
+            "出现，但不再是 root；守卫问的是**模型互相引用**（生产者驱动），所以在**重新生成之前**就变红 —— "
+            "与 C2 互补：C2 钉 MarketSnapshot* 这一族的具体成员，D1 钉「可达即须登记」这条**规则**本身。"
+            "把 `ConfigDict(extra='allow')` 一族排除在外是刻意的：`EventRecord` 与 8 个 overlay 模型"
+            "（`ConfidenceBreakdown` / `CrossValidation` / `DecisionQuality` / `EventSource` / "
+            "`EvidenceItem` / `LLMTelemetry` / `MarketQuality` / `SourceReliability`）**故意**开放，"
+            "塌成闭合才是失真。"
+        ),
+        mutations=(
+            Mutation(
+                label="D1  导出模块不再导入该模型：闭合的 interface 退回嵌套（变松）",
+                path=_FRONTEND_EXPORT,
+                old=b"    EvidenceProfile,",
+                new=b"    _EvidenceProfileUnused,",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_every_reachable_plain_model_is_registered",),
+                note=(
+                    "改名而非删除：`__all__` 里仍有 `\"EvidenceProfile\",`，而只有 "
+                    "`from module import *` 才会因缺名报错 —— 本仓不这么用，所以模块照常导入，"
+                    "只是命名空间里少了这个名字。守卫遍历**命名空间**里的根（= 生成器真正收集的那一组），"
+                    "沿字段注解递归展开 `Optional` / `list` 等，再要求每个 `extra != 'allow'` 的可达模型"
+                    "都在命名空间里；`EvidenceProfile` 是 `EventRecord.evidence` 的类型 ⇒ 立刻成为 missing。"
+                    "针 `    EvidenceProfile,` 在本文件恰好出现 1 次（`read_bytes().count()` 实测）。"
+                ),
+            ),
+        ),
+    ),
 )
 
 SETS_BY_KEY = {mutation_set.key: mutation_set for mutation_set in SETS}

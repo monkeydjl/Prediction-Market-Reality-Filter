@@ -1,8 +1,8 @@
 """Tests for the TypeScript type generation script.
 
 Verifies:
-- generate_types.py main() produces generated-types.ts with all 14 allowlist
-  root models.
+- generate_types.py main() produces generated-types.ts containing every model
+  listed in the allowlist (read from ``_frontend_export.__all__``).
 - --check mode exits 0 when generated-types.ts is up to date.
 - --check mode exits 1 when generated-types.ts is stale.
 - Output file contains a header comment.
@@ -10,11 +10,9 @@ Verifies:
 """
 from __future__ import annotations
 
-import os
-import shutil
 import subprocess
 import sys
-import tempfile
+import typing
 import unittest
 from pathlib import Path
 
@@ -22,6 +20,40 @@ from pathlib import Path
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _BACKEND_DIR.parent
 _OUTPUT_PATH = _REPO_ROOT / "frontend" / "src" / "lib" / "generated-types.ts"
+
+
+def _referenced_models(roots: list[type]) -> set[type]:
+    """Every Pydantic model reachable from ``roots`` through field annotations.
+
+    Producer-driven on purpose: rather than reading the generated file, this asks
+    the models what they actually reference, unwrapping ``Optional[...]``,
+    ``list[...]`` and friends with ``typing.get_args``. ``_frontend_export`` is
+    the entry point because ``pydantic2ts`` collects exactly the BaseModel
+    subclasses sitting in that module's namespace.
+    """
+    from pydantic import BaseModel
+
+    def _walk(annotation: object):
+        yield annotation
+        for arg in typing.get_args(annotation):
+            yield from _walk(arg)
+
+    seen: set[type] = set()
+    stack: list[type] = list(roots)
+    while stack:
+        model = stack.pop()
+        if model in seen:
+            continue
+        seen.add(model)
+        for field in model.model_fields.values():
+            for candidate in _walk(field.annotation):
+                if (
+                    isinstance(candidate, type)
+                    and issubclass(candidate, BaseModel)
+                    and candidate is not BaseModel
+                ):
+                    stack.append(candidate)
+    return seen
 
 
 def _json2ts_available() -> bool:
@@ -58,30 +90,22 @@ class TestGenerateTypesScript(unittest.TestCase):
         )
 
     def test_generates_file_with_all_allowlist_models(self):
-        """Default mode writes generated-types.ts containing all 16 root models."""
+        """Default mode writes generated-types.ts containing every allowlisted model.
+
+        The names are read from ``_frontend_export.__all__`` rather than
+        hard-coded. The old hard-coded list had drifted to 16 names while the
+        allowlist held 23, so it had quietly stopped covering everything added
+        since (``SimTrade`` / ``SimTradeListResponse`` / ``TradeStatBucket`` /
+        ``TradeStats`` and the three ``MarketSnapshot*`` models) -- audit
+        section 53.50.
+        """
+        from app.models import _frontend_export
+
         result = self._run_script()
         self.assertEqual(result.returncode, 0, f"Script failed: {result.stderr}")
         self.assertTrue(_OUTPUT_PATH.exists(), "generated-types.ts not created")
         content = _OUTPUT_PATH.read_text(encoding="utf-8")
-        # All 16 allowlist model names should appear as exported interfaces
-        for model_name in [
-            "EventRecord",
-            "EventStoreEntry",
-            "EventListResponse",
-            "EventMoversResponse",
-            "EventHistoryResponse",
-            "DecisionTimelineResponse",
-            "AutoResolveResponse",
-            "PendingLinksResponse",
-            "RecentPredictionsResponse",
-            "OpenDecisionsResponse",
-            "FreshEdgesResponse",
-            "SimilarEventsResponse",
-            "EventAnalysisRequest",
-            "EventDiscoveryResponse",
-            "CategoryCountsResponse",
-            "DailyDigestResponse",
-        ]:
+        for model_name in _frontend_export.__all__:
             self.assertIn(model_name, content, f"{model_name} missing from generated types")
 
     def test_output_contains_header_comment(self):
@@ -163,6 +187,46 @@ class AllowlistCompositionTests(unittest.TestCase):
                 hasattr(_frontend_export, name),
                 f"{name} is not a root model in {_frontend_export.__name__}",
             )
+
+    def test_every_reachable_plain_model_is_registered(self):
+        """Every reachable model that did *not* opt into ``extra='allow'`` must be a root.
+
+        A model that is merely referenced renders as a *nested* interface: no
+        ``additionalProperties: false``, so ``json2ts`` appends a
+        ``[k: string]: unknown`` tail and the generated type is looser than the
+        backend contract -- a plain ``BaseModel`` ignores extra keys, so "closed"
+        is the faithful shape. Only models that opt into ``extra='allow'`` (the
+        ``FlexibleResponse`` family, plus the overlay models declaring
+        ``ConfigDict(extra="allow")``) may legitimately stay open.
+
+        So everything the frontend can reach and that has *not* opted in has to
+        be imported into ``_frontend_export`` (audit sections 53.49, 53.50). This
+        asks the models what they reference rather than reading the generated
+        file, so it fires the moment a model is dropped from the allowlist --
+        before anyone regenerates.
+        """
+        from pydantic import BaseModel
+
+        from app.models import _frontend_export
+
+        roots = [
+            value
+            for value in vars(_frontend_export).values()
+            if isinstance(value, type) and issubclass(value, BaseModel) and value is not BaseModel
+        ]
+        self.assertTrue(roots, "no root models found -- _frontend_export looks empty")
+        unregistered = sorted(
+            model.__name__
+            for model in _referenced_models(roots)
+            if (model.model_config or {}).get("extra") != "allow"
+            and not hasattr(_frontend_export, model.__name__)
+        )
+        self.assertEqual(
+            unregistered,
+            [],
+            "these models are reachable from the allowlist but are neither "
+            f"registered as roots nor opted into extra='allow': {unregistered}",
+        )
 
 
 if __name__ == "__main__":

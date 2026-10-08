@@ -345,6 +345,7 @@ _T_SPORT_MARKET_ROUTES = "tests/test_sport_market_routes.py"
 # mutations below each pin one half, and neither can stand in for the other.
 _SPORT_MARKET_ROUTES = "backend/app/api/routes/sport_markets.py"
 _FRONTEND_EXPORT = "backend/app/models/_frontend_export.py"
+_EVENT_MODEL = "backend/app/models/event.py"
 _T_GENERATE_TYPES = "tests/test_generate_types.py"
 
 _T_AVAILABILITY = "tests/test_football_live_availability_service.py"
@@ -1632,7 +1633,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根（D1）",
+        title="前端类型闭合：可达的普通模型必须登记为根，且开放集是拍过板的（D1–D3）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -1643,10 +1644,14 @@ SETS: tuple[MutationSet, ...] = (
             "D1 把 `EvidenceProfile` 从 `_frontend_export` 的**导入**里挪走：它仍会作为嵌套 interface "
             "出现，但不再是 root；守卫问的是**模型互相引用**（生产者驱动），所以在**重新生成之前**就变红 —— "
             "与 C2 互补：C2 钉 MarketSnapshot* 这一族的具体成员，D1 钉「可达即须登记」这条**规则**本身。"
-            "把 `ConfigDict(extra='allow')` 一族排除在外是刻意的：`EventRecord` 与 8 个 overlay 模型"
-            "（`ConfidenceBreakdown` / `CrossValidation` / `DecisionQuality` / `EventSource` / "
-            "`EvidenceItem` / `LLMTelemetry` / `MarketQuality` / `SourceReliability`）**故意**开放，"
-            "塌成闭合才是失真。"
+            "排除 `ConfigDict(extra='allow')` 一族曾经是刻意的（开放是**故意**的，塌成闭合才是失真）；"
+            "§53.51 逐条读过生产者与所有 try/except 回退块之后，这条排除只剩两个理由成立："
+            "`EventRecord`（承 `normalize_event_record()` 的 schema 演进）与 `EventSource`"
+            "（9 个 adapter 真会往里加 `question` / `status` / `close_time` / `bid_ask` / `chain` 等键）；"
+            "另外七个 overlay 已收成闭合 ⇒ 排除集就是 `test_generate_types.DELIBERATELY_OPEN`。"
+            "D2/D3 钉这条**两向**规则，因为它们共用的守卫断言的是**集合相等**：D2 把已闭合的"
+            "重新开放（集合多一员），D3 把必须开放的收掉（集合少一员）。只禁一个方向的守卫"
+            "会放过另一个 —— 而「收得太狠」恰恰是这次改动的失败模式，不是理论风险。"
         ),
         mutations=(
             Mutation(
@@ -1663,6 +1668,53 @@ SETS: tuple[MutationSet, ...] = (
                     "沿字段注解递归展开 `Optional` / `list` 等，再要求每个 `extra != 'allow'` 的可达模型"
                     "都在命名空间里；`EvidenceProfile` 是 `EventRecord.evidence` 的类型 ⇒ 立刻成为 missing。"
                     "针 `    EvidenceProfile,` 在本文件恰好出现 1 次（`read_bytes().count()` 实测）。"
+                ),
+            ),
+            Mutation(
+                label="D2  已闭合的 overlay 又设回 extra='allow'：interface 重新长出尾巴",
+                path=_EVENT_MODEL,
+                old=b'    kind: str = "news"          # official | news',
+                new=(
+                    b'    model_config = ConfigDict(extra="allow")\n\n'
+                    b'    kind: str = "news"          # official | news'
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_only_the_documented_models_stay_open",),
+                note=(
+                    "在 `EvidenceItem` 的第一个字段前插回 `model_config = ConfigDict(extra=\"allow\")`，"
+                    "把它还原成 §53.51 之前的开放态。生成器对显式 allow 的模型**跳过** "
+                    "`extra='forbid'` 覆盖（`_schema_generation_overrides`）⇒ `json2ts` 补回 "
+                    "`[k: string]: unknown`，而 `tsc` 照样绿 —— 所以拦截点只能是静态守卫。"
+                    "守卫问的是可达模型的 `model_config`，因此**不必重新生成**就变红。"
+                    "针取单行字段行（`read_bytes().count()` 实测 1 次；"
+                    "`    model_config = ConfigDict(extra=\"allow\")` 这个字面量在本文件出现 3 次，"
+                    "单行针不能用）。`new` 里的换行交给 `rewrite_needle`，它按**文件**行尾重拼，"
+                    "所以不会把 CRLF 文件写成混用。"
+                ),
+            ),
+            Mutation(
+                label="D3  必须开放的 EventSource 被收成闭合：契约藏起 API 真发的键",
+                path=_EVENT_MODEL,
+                old=(
+                    b'    fields beyond the declared ones below (via ``extra="allow"``)."""\n\n'
+                    b'    model_config = ConfigDict(extra="allow")\n\n'
+                    b'    type: str = "unknown"'
+                ),
+                new=(
+                    b'    fields beyond the declared ones below (via ``extra="allow"``)."""\n\n'
+                    b'    type: str = "unknown"'
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_only_the_documented_models_stay_open",),
+                note=(
+                    "删掉 `EventSource` 的 allow 声明。与 D2 方向相反、共用同一守卫：D2 是「该闭的又开了」，"
+                    "D3 是「该开的被闭了」。针必须跨行 —— "
+                    "`    model_config = ConfigDict(extra=\"allow\")` 这个字面量在本文件出现 3 次，"
+                    "靠它前面那句 docstring 尾行才唯一（`count_needle` 实测 2 次拼写各 1 次）。"
+                    "本轮「真正可能发生」的方向：§53.51 一口气收了七个，很容易顺手把 `EventSource` "
+                    "也扫进去 —— 那会让前端类型看不见 adapter 真发的键（`question` 等），"
+                    "而 `tsc` 依旧绿。跨行针由 `_needle_variants` 在 LF / CRLF 两种写法下各试一次，"
+                    "与检出约定无关。"
                 ),
             ),
         ),

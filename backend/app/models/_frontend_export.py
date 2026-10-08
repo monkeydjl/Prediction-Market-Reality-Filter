@@ -24,16 +24,27 @@ Those are the models whose own config does *not* opt into ``extra="allow"`` --
 i.e. every plain ``BaseModel`` that the frontend can reach. List them even when
 they are also referenced as a field of a root; being referenced is not enough.
 
-Models that *do* set ``extra="allow"`` render open **on purpose** and must NOT
-be relied on for closure:
+Two things stay open **on purpose**, and must NOT be relied on for closure:
 
 * ``FlexibleResponse`` subclasses (``EventListResponse`` and friends) -- the
   base class ships its own payloads with undeclared keys; the tail is the point.
-* The overlay models that declare ``ConfigDict(extra="allow")`` themselves
-  (``EventRecord``, ``ConfidenceBreakdown``, ``CrossValidation``,
-  ``DecisionQuality``, ``EventSource``, ``EvidenceItem``, ``LLMTelemetry``,
-  ``MarketQuality``, ``SourceReliability``). Closing them would misrepresent
-  their contract, so the generator deliberately skips the override for them.
+* ``EventRecord`` -- its ``extra="allow"`` is load-bearing for schema
+  evolution. ``event_schema.normalize_event_record()`` upgrades old records in
+  place, and the frontend declares ``conclusion_challenge`` itself (see
+  ``frontend/src/lib/types.ts``) rather than reading it off the model.
+
+Audit section 53.51 closed seven of the nine overlay models that used to declare
+``extra="allow"`` for no reason: ``ConfidenceBreakdown``, ``CrossValidation``,
+``DecisionQuality``, ``EvidenceItem``, ``LLMTelemetry``, ``MarketQuality`` and
+``SourceReliability``. Every producer *and* every build-failure fallback block
+was read first and shown to write declared fields only, so the closed interface
+is the faithful shape. The rule is guarded from the root side by
+``test_generate_types.DELIBERATELY_OPEN``, which fails in either direction --
+re-opening one of them, or closing one that must stay open.
+
+``EventSource`` is *not* one of the seven. Nine source adapters really do add
+keys of their own to that dict (``question``, ``status``, ``close_time``,
+``bid_ask``, ``chain``, ...), which is what its docstring has always claimed.
 
 Do NOT import models that should not leak to the frontend:
 - FlexibleResponse (base class, no fields)
@@ -45,12 +56,15 @@ from app.models.event import (
     AutoResolveResponse,
     Calibration,
     CategoryCountsResponse,
+    ConfidenceBreakdown,
     Credibility,
+    CrossValidation,
     DailyDigestHeadline,
     DailyDigestMover,
     DailyDigestResponse,
     DailyDigestUnchanged,
     DecisionEvidenceItem,
+    DecisionQuality,
     DecisionTimelineDiff,
     DecisionTimelineResponse,
     DecisionTimelineSnapshot,
@@ -63,10 +77,13 @@ from app.models.event import (
     EventSemantics,
     EventStoreEntry,
     EvidenceBreakdownItem,
+    EvidenceItem,
     EvidenceProfile,
     FreshEdgesResponse,
     Impact,
     IntelligenceReport,
+    LLMTelemetry,
+    MarketQuality,
     MarketSnapshotPoint,
     MarketSnapshotSeries,
     MarketSnapshotsResponse,
@@ -79,6 +96,7 @@ from app.models.event import (
     SimilarEventsResponse,
     SimTrade,
     SimTradeListResponse,
+    SourceReliability,
     Tracking,
     TradeStatBucket,
     TradeStats,
@@ -89,12 +107,15 @@ __all__ = [
     "AutoResolveResponse",
     "Calibration",
     "CategoryCountsResponse",
+    "ConfidenceBreakdown",
     "Credibility",
+    "CrossValidation",
     "DailyDigestHeadline",
     "DailyDigestMover",
     "DailyDigestResponse",
     "DailyDigestUnchanged",
     "DecisionEvidenceItem",
+    "DecisionQuality",
     "DecisionTimelineDiff",
     "DecisionTimelineResponse",
     "DecisionTimelineSnapshot",
@@ -107,10 +128,13 @@ __all__ = [
     "EventSemantics",
     "EventStoreEntry",
     "EvidenceBreakdownItem",
+    "EvidenceItem",
     "EvidenceProfile",
     "FreshEdgesResponse",
     "Impact",
     "IntelligenceReport",
+    "LLMTelemetry",
+    "MarketQuality",
     "MarketSnapshotPoint",
     "MarketSnapshotSeries",
     "MarketSnapshotsResponse",
@@ -123,6 +147,7 @@ __all__ = [
     "SimilarEventsResponse",
     "SimTrade",
     "SimTradeListResponse",
+    "SourceReliability",
     "Tracking",
     "TradeStatBucket",
     "TradeStats",

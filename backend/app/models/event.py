@@ -180,9 +180,10 @@ class CrossValidation(BaseModel):
     ``primary_probability`` is the original estimate; ``probability`` is the
     second model's estimate; ``divergence`` is their absolute difference;
     ``agreement`` is a derived label (high/medium/low).
-    """
 
-    model_config = ConfigDict(extra="allow")
+    Closed contract: ``cross_validation_service.cross_validate`` writes exactly
+    these five keys, so nothing here needs to survive an undeclared one.
+    """
 
     model: str | None = None
     probability: float | None = None
@@ -197,9 +198,12 @@ class ConfidenceBreakdown(BaseModel):
     Emitted by ``ai_analysis_service.analyze_market()`` as a read-only audit
     block. It helps frontend/reporting distinguish raw source quantity from
     stronger evidence structures such as independent or official sources.
-    """
 
-    model_config = ConfigDict(extra="allow")
+    Closed contract: ``probability_engine_service.calculate_confidence_breakdown``
+    returns exactly the nine declared keys. (The same-named
+    ``kernel.engines.confidence.confidence_breakdown`` is a *different* object --
+    the sports engines' ``SportConfidencePanel`` diagnostics.)
+    """
 
     source_count: int = 0
     independent_source_count: int = 0
@@ -220,9 +224,12 @@ class EvidenceItem(BaseModel):
     EvidenceProfile), so an item carries quality / relevance rather than a
     per-item supports/contradicts stance. ``kind`` groups items in the UI:
     "official" (gov / regulator / economic feeds) vs "news" (general press).
-    """
 
-    model_config = ConfigDict(extra="allow")
+    Closed contract: the only producer is
+    ``event_intelligence_service.build_evidence_items``, which maps the raw
+    article keys onto these declared ones (``description`` -> ``summary``,
+    ``quality_score`` -> ``quality``, ``relevance_score`` -> ``relevance``).
+    """
 
     kind: str = "news"          # official | news
     source: str = ""
@@ -297,9 +304,11 @@ class DecisionQuality(BaseModel):
 
     When ``error`` is non-None, the build failed and the block is the
     fallback defined in the ``analyze_event`` integration contract.
-    """
 
-    model_config = ConfigDict(extra="allow")
+    Closed contract: both the happy path (``build_decision_quality``) and the
+    build-failure fallback block in ``event_intelligence_service`` write only
+    the declared fields.
+    """
 
     supporting_evidence: list[DecisionEvidenceItem] = []
     opposing_evidence: list[DecisionEvidenceItem] = []
@@ -334,9 +343,11 @@ class MarketQuality(BaseModel):
     ``decision_quality.displayed_direction`` and therefore changes the
     final user-facing direction. Lets audits distinguish whether market
     quality changed the final direction or merely recorded a score.
-    """
 
-    model_config = ConfigDict(extra="allow")
+    Closed contract: ``market_quality_service.build_market_quality`` and the
+    build-failure fallback in ``event_intelligence_service`` write only the
+    declared fields (``error`` is written by the fallback alone).
+    """
 
     score: float = 0.0
     liquidity_score: float | None = None
@@ -377,9 +388,12 @@ class SourceReliability(BaseModel):
     ``final_displayed_direction`` (after decision_quality and market_quality
     have already been merged) and therefore changes the final user-facing
     direction.
-    """
 
-    model_config = ConfigDict(extra="allow")
+    Closed contract: ``source_reliability_service.build_source_reliability``
+    and the build-failure fallback in ``event_intelligence_service`` write only
+    the declared fields. (``source_breakdown`` items stay an open ``dict`` --
+    that is a declared field, not an undeclared key.)
+    """
 
     overall_score: float = 0.0
     source_count: int = 0
@@ -423,9 +437,11 @@ class LLMTelemetry(BaseModel):
     usage data is unavailable. ``estimated_token_cost`` is computed from
     real tokens when available, or estimated from ``news_context`` length
     (chars/4 heuristic) when degraded.
-    """
 
-    model_config = ConfigDict(extra="allow")
+    Closed contract: ``llm_telemetry_service.build_llm_telemetry`` and the
+    build-failure fallback in ``event_intelligence_service`` write only the
+    declared fields.
+    """
 
     degraded_mode: bool = False
     degraded_reason: str | None = None

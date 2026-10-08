@@ -4,9 +4,15 @@ Verifies:
 - CrossValidation Pydantic model accepts the dict shape written by
   event_intelligence_service (model, probability, primary_probability,
   divergence, agreement).
-- EventRecord.model_validate() accepts a record with full overlay dicts.
+- CrossValidation *ignores* keys it does not declare. Audit section 53.51
+  removed the ``ConfigDict(extra="allow")`` these overlay models used to set, so
+  extras are back to Pydantic's default ``ignore`` -- the producers write
+  declared fields only.
+- EventRecord.model_validate() accepts a record with full overlay dicts, in the
+  shapes the producers actually emit.
 - EventRecord.model_validate() accepts a record with overlay build-failure
-  blocks ({"error": "build_failed", ...}) via extra="allow".
+  blocks (``{"error": "build_failed", ...}``) -- again the real block, all
+  declared keys.
 - EventRecord.model_validate() accepts a record missing overlay fields
   (they default to None).
 - EventRecord.model_validate() accepts a record with cross_validation dict.
@@ -53,10 +59,20 @@ class TestCrossValidationModel(unittest.TestCase):
         self.assertEqual(cv.divergence, 5.0)
         self.assertEqual(cv.agreement, "high")
 
-    def test_accepts_extra_fields_via_extra_allow(self):
-        """Forward-compat: extra fields don't break validation."""
+    def test_ignores_keys_it_does_not_declare(self):
+        """An undeclared key is dropped, not preserved.
+
+        These models used to declare ``ConfigDict(extra="allow")``; audit
+        section 53.51 removed it, because every producer writes declared fields
+        only (see ``_frontend_export``). The previous version of this test was
+        named ``test_accepts_extra_fields_via_extra_allow`` but asserted only
+        ``cv.model`` -- which holds under either setting, so it pinned nothing.
+        Both halves are asserted now: the declared value survives *and* the
+        undeclared one does not, which is what makes re-adding ``allow`` fail.
+        """
         cv = CrossValidation.model_validate({"model": "x", "extra_field": "ok"})
         self.assertEqual(cv.model, "x")
+        self.assertNotIn("extra_field", cv.model_dump())
 
     def test_missing_fields_default_to_none(self):
         cv = CrossValidation.model_validate({})
@@ -69,27 +85,87 @@ class TestCrossValidationModel(unittest.TestCase):
 
 class TestEventRecordOverlayTyping(unittest.TestCase):
     def test_record_with_full_overlay_dicts_validates(self):
-        """Normal record with all 4 overlays as dicts validates to typed models."""
+        """A record with all four overlays validates to typed models.
+
+        Each dict is the shape its producer actually writes -- audit section
+        53.51 read all of them: ``build_market_quality``'s return, the
+        ``source_reliability`` fallback block and the ``llm_telemetry`` one. The
+        previous version used invented keys (``wide_spread``, ``thin_market``,
+        ``level``/``factors``) and asserted only ``assertIsNotNone``, so it
+        documented a shape no producer emits *and* would have stayed green even
+        if every one of those keys were silently dropped.
+        """
         record = _base_record()
-        record["decision_quality"] = {"downgraded": False, "reasons": [], "downgrade_count": 0}
-        record["market_quality"] = {"wide_spread": False, "thin_market": False, "stale_price_flag": None}
-        record["source_reliability"] = {"level": "high", "score": 0.85, "factors": {}}
-        record["llm_telemetry"] = {"model": "gpt-4o", "degraded_mode": False, "estimated_token_cost": 0.01}
+        record["decision_quality"] = {
+            "conflict_score": 0.0,
+            "consensus_level": "none",
+            "raw_direction": "YES",
+            "displayed_direction": "YES",
+            "downgraded": False,
+        }
+        record["market_quality"] = {
+            "score": 0.82,
+            "wide_spread_flag": False,
+            "thin_market_flag": False,
+            "stale_price_flag": None,
+            "raw_direction": "YES",
+            "suggested_direction": "YES",
+            "downgraded": False,
+            "applied_to_displayed_direction": False,
+        }
+        record["source_reliability"] = {
+            "overall_score": 0.85,
+            "source_count": 3,
+            "domain_diversity": 2,
+            "raw_direction": "YES",
+            "suggested_direction": "YES",
+            "downgraded": False,
+            "applied_to_displayed_direction": False,
+        }
+        record["llm_telemetry"] = {
+            "model": "gpt-4o",
+            "degraded_mode": False,
+            "analysis_quality": "llm",
+            "llm_call_count": 2,
+            "estimated_token_cost": 0.01,
+        }
         ev = EventRecord.model_validate(record)
-        self.assertIsNotNone(ev.decision_quality)
-        self.assertIsNotNone(ev.market_quality)
-        self.assertIsNotNone(ev.source_reliability)
-        self.assertIsNotNone(ev.llm_telemetry)
+
+        self.assertEqual(ev.decision_quality.conflict_score, 0.0)
+        self.assertEqual(ev.market_quality.score, 0.82)
+        self.assertEqual(ev.market_quality.suggested_direction, "YES")
+        self.assertEqual(ev.source_reliability.overall_score, 0.85)
+        self.assertEqual(ev.source_reliability.domain_diversity, 2)
+        self.assertEqual(ev.llm_telemetry.model, "gpt-4o")
+        self.assertEqual(ev.llm_telemetry.llm_call_count, 2)
 
     def test_record_with_overlay_build_failure_block_validates(self):
-        """Overlay build failure produces {"error": "build_failed", ...} — must
-        pass through extra='allow' without crashing."""
+        """The real build-failure block validates to a typed DecisionQuality.
+
+        Copied from ``event_intelligence_service``'s ``except`` arm around
+        ``build_decision_quality`` rather than invented. The previous version
+        passed ``{"error": ..., "reason": ...}`` -- ``reason`` is written by no
+        producer -- and then asserted only ``assertIsNotNone``.
+        """
         record = _base_record()
-        record["decision_quality"] = {"error": "build_failed", "reason": "exception"}
+        record["decision_quality"] = {
+            "error": "build_failed",
+            "raw_direction": "WAIT",
+            "displayed_direction": "WAIT",
+            "downgraded": False,
+            "downgrade_reason": None,
+            "decision_rationale_zh": "决策质量构建失败，使用原始方向。",
+            "supporting_evidence": [],
+            "opposing_evidence": [],
+            "conflict_score": 0.0,
+            "consensus_level": "none",
+            "reversal_triggers": [],
+        }
         ev = EventRecord.model_validate(record)
-        # The dict is accepted; since DecisionQuality has extra='allow', the
-        # error/reason fields are preserved as extras.
-        self.assertIsNotNone(ev.decision_quality)
+
+        self.assertEqual(ev.decision_quality.error, "build_failed")
+        self.assertEqual(ev.decision_quality.consensus_level, "none")
+        self.assertEqual(ev.decision_quality.displayed_direction, "WAIT")
 
     def test_record_missing_overlay_fields_validates(self):
         """Old records (pre-Phase) don't have overlay fields — default to None."""

@@ -11468,3 +11468,29 @@ export interface MarketSnapshotsResponse {
 3. ⚠️ **手动 `apply` 之前必须先 `backup`**：本节手动复现 D5 时先 `apply` 后 `revert` ⇒ `revert` 报 `no backup for backend/app/models/_frontend_export.py; run 'backup frontend-type-closure' first`，工作树**留在变异态**（`git status` 立刻显示 `M frontend/src/lib/api.ts`）。**还原判据**：字节必须回到 `41269 / crlf 1248 / bare_lf 0`，并用探针确认尾巴集合回 **0**（本节即按此复核）。`verify` 子命令自带 backup/restore，不受影响。
 4. **未推送**。
 5. **遗留**：§53.51.7 第 1/2 条不变；§53.50.7 第 1 条（(c) 类 inline 尾巴）仍**未动**；`/sport-markets/*` 其余裸 dict 端点仍按 §2 既定策略。
+
+### 53.52.8 拍板记录：报告形状**不**补具名 `response_model`（挂账）
+
+**裁决（2026-10-08，本节即裁决书）**：**不做**。53.52.7 第 1 条由此从「需要单独拍板」转为**已裁决的挂账项** —— 将来读到那条时，不要把它当成「还没人管」。
+
+**为什么记这一小节**：裁决与「尚未决」在文档里长得一样，而**结论会静默过期**（§4.1）。所以这里把**前提**一并钉住 —— 复述「不补具名模型」时必须带上它们：
+
+1. **报告形状没有模型**：`build_decision_report`（`decision_report_service.py:41`）签名就是 `-> dict[str, Any]`。
+2. **overlay 是透传的原始 dict**：`record.get("decision_quality")` 等（`:127` / `:135` / `:141`），不是 pydantic 对象。
+3. **两个端点各自已合规**：`/decisions/open`（`events.py:1455`）是具名信封；`/{event_id}/decision`（`events.py:1541`）的裸 `FlexibleResponse` 是 §2 记过的既定策略，兄弟守卫只查 `response_model is None`。
+4. **消费者只有一处**：报告形状目前只被**前端**的 `DecisionReport`（手写）消费（1 处声明 + 2 个 `api<DecisionReport>()` 调用点 + 5 个组件/页面文件），没有任何**非前端**消费者（CLI / 外部 / 另一个服务）。
+
+**任一条前提被改掉，这条挂账就该重开。** 具体触发条件（任一成立）：
+
+- 真给报告建了 pydantic 模型，或 `OpenDecisionsResponse.decisions` 从 `list[dict[str, Any]]` 换成了具名元素类型；
+- 出现**第二个**消费者面（CLI、外部集成、另一个后端模块要按契约吃这个 payload）；
+- 或者「字段类型漂移把 200 变成 500」**被实测发生过**一次 —— 到那时这个风险就不再是理论的。
+
+**将来若要做的先决条件**（不是"顺手补一下"就完事）：
+
+1. §2 **三件套**（具名 `response_model` → `_frontend_export` 白名单 → 重生成 `generated-types.ts`），并让 `DecisionReport` 整个退休吃生成类型；
+2. **逐字段的类型稳定性取证** —— 不能只读 `build_decision_report` 的签名，要把 `prediction.get(...)` / `record.get(...)` 的**所有生产者**读一遍（同 §53.51 的做法），否则 `response_model` 会**校验并重序列化**，任何一处类型漂移直接 200 → 500；
+3. overlay 三字段若引用**已闭合**的模型（§53.51），还要确认透传 dict 里没有未声明键 —— 否则会在 API 边界上**静默丢键**（这比 500 更难发现）；
+4. 新增一条守卫 + 对应变异（同族 set `frontend-type-closure`），并在 53.52.4 记下「为什么它对本改动敏感」。
+
+本节随 §53.52 **同批未推送**。

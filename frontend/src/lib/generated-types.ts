@@ -461,6 +461,29 @@ export interface EventStoreEntry {
   [k: string]: unknown;
 }
 /**
+ * One row of the ``event_market_links`` table (audit section 53.57).
+ *
+ * Returned verbatim by ``POST /api/events/{event_id}/link/verify``, which
+ * promotes a pending link. ``event_market_link_store._row_to_dict`` coerces
+ * ``verified`` from SQLite's 0/1 to a JSON boolean, so the field is ``bool``
+ * rather than ``int``. Every column is ``NOT NULL`` (each with a default), and
+ * the store writes all of them, so no field carries a default here: a default
+ * would let the generator render the key optional and re-open the very
+ * ambiguity this publishes away.
+ */
+export interface EventMarketLink {
+  id: string;
+  event_id: string;
+  market_name: string;
+  contract_id: string;
+  market_question: string;
+  resolution_criteria: string;
+  link_method: string;
+  link_confidence: number;
+  verified: boolean;
+  linked_at: string;
+}
+/**
  * One element of ``EventMoversResponse.movers`` (audit section 53.55).
  *
  * ``rank_movers`` writes the same three base keys -- ``event_id``,
@@ -964,10 +987,48 @@ export interface OpenDecisionsResponse {
   }[];
   [k: string]: unknown;
 }
+/**
+ * One element of ``PendingLinksResponse.pending`` (audit section 53.57).
+ *
+ * ``list_pending_links`` builds each item as ``{**link, +4 enrichment}``: the
+ * ten ``EventMarketLink`` columns plus four fields read off the event record.
+ * The ten shared fields are declared again rather than inherited, because the
+ * two are separate published contracts -- a raw stored row vs. a queue element
+ * -- and ``PendingLinkContractTests.test_the_element_is_the_row_plus_four``
+ * pins the overlap annotation-by-annotation, so the copy cannot drift silently.
+ *
+ * All fourteen keys are written unconditionally (a missing record field becomes
+ * ``""``, never an omitted key), so no field may carry a default and the route
+ * needs no ``response_model_exclude_unset``. That makes this endpoint the
+ * third position in the family: 53.55 needed the flag, 53.56 did not because
+ * no key was conditional, and here it is not needed for the same reason.
+ */
+export interface PendingLinkItem {
+  id: string;
+  event_id: string;
+  market_name: string;
+  contract_id: string;
+  market_question: string;
+  resolution_criteria: string;
+  link_method: string;
+  link_confidence: number;
+  verified: boolean;
+  linked_at: string;
+  event_title: string;
+  event_title_zh: string;
+  event_summary: string;
+  event_resolution_criteria: string;
+}
+/**
+ * Response for GET /api/events/links/pending (audit section 53.57).
+ *
+ * The queue of fuzzy auto-matches recorded below the auto-verify threshold.
+ * ``list_pending_links`` always returns ``{"pending": [...]}``, so the key is
+ * required; the envelope itself stays ``extra="allow"`` like the rest of the
+ * family.
+ */
 export interface PendingLinksResponse {
-  pending?: {
-    [k: string]: unknown;
-  }[];
+  pending: PendingLinkItem[];
   [k: string]: unknown;
 }
 export interface RecentPredictionsResponse {

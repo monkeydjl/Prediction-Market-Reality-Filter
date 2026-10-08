@@ -17,6 +17,9 @@ import type {
   EdgeTrajectorySummary as GeneratedEdgeTrajectorySummary,
   MarketQuality,
   SourceReliability,
+  PendingLinkItem as GeneratedPendingLinkItem,
+  PendingLinksResponse as GeneratedPendingLinksResponse,
+  EventMarketLink,
 } from "./generated-types";
 import { getApiBase, joinApiPath } from "./env";
 import { applyOperatorAuthHeaders } from "./operator-credentials";
@@ -362,6 +365,16 @@ export type FreshEdgesResponse = GeneratedFreshEdgesResponse;
 export type FreshEdge = GeneratedFreshEdgeItem;
 export type EdgePoint = GeneratedEdgeSeriesPoint;
 
+// The review-queue element of the pending-links endpoint, and the row that the
+// link-verify endpoint returns. Both were hand-written here until audit 53.57,
+// and *one* interface served both -- which was the defect, not the duplication:
+// the queue element is the stored row plus four enrichment fields (14 keys),
+// while the verify call returns the row alone (10). The old copy declared all 14
+// with 13 of them optional, so it was at once too loose for the queue and a
+// promise of four keys that endpoint never returns.
+export type PendingLink = GeneratedPendingLinkItem;
+export type PendingLinksResponse = GeneratedPendingLinksResponse;
+
 export interface LoopRun {
   id?: string;
   job?: string;
@@ -463,23 +476,6 @@ export interface ApiHealth {
   scheduler_running?: boolean | null;
   failed_runs?: string[];
   loop: LoopStatus;
-}
-
-export interface PendingLink {
-  event_id: string;
-  id?: string;
-  event_title?: string;
-  event_title_zh?: string;
-  event_summary?: string;
-  event_resolution_criteria?: string;
-  market_name?: string;
-  contract_id?: string;
-  market_question?: string;
-  resolution_criteria?: string;
-  link_method?: string;
-  link_confidence?: number;
-  linked_at?: string;
-  verified?: boolean;
 }
 
 export interface AutoResolveMatch {
@@ -1016,8 +1012,7 @@ export const eventsApi = {
       `/events/trades/voided?limit=${limit}&offset=${offset}`,
     ),
 
-  pendingLinks: () =>
-    api<{ pending: PendingLink[] }>("/events/links/pending"),
+  pendingLinks: () => api<PendingLinksResponse>("/events/links/pending"),
 
   digest: (params?: { date?: string; limit?: number }) => {
     const qs = new URLSearchParams();
@@ -1028,7 +1023,7 @@ export const eventsApi = {
   },
 
   verifyLink: (id: string, contractId: string) =>
-    api<PendingLink>(`/events/${encodeURIComponent(id)}/link/verify`, {
+    api<EventMarketLink>(`/events/${encodeURIComponent(id)}/link/verify`, {
       method: "POST",
       body: JSON.stringify({ contract_id: contractId }),
     }),

@@ -271,7 +271,11 @@ class TestGenerateTypesScript(unittest.TestCase):
         being reachable only by ``$ref`` from ``FreshEdgesResponse.edges`` would
         have left the tail on exactly the element the frontend could not read.
         Audit 53.55 adds ``EventMoverItem`` -- the element of
-        ``EventMoversResponse.movers`` -- on the same reasoning.
+        ``EventMoversResponse.movers`` -- on the same reasoning. Audit 53.57 adds
+        ``PendingLinkItem`` (the element of ``PendingLinksResponse.pending``) and
+        ``EventMarketLink`` (the row the link-verify route returns); the latter is
+        not an element of anything, so being a root is the only thing that closes
+        it.
         """
         self._run_script()
         bodies = _interface_bodies(_OUTPUT_PATH.read_text(encoding="utf-8"))
@@ -282,11 +286,13 @@ class TestGenerateTypesScript(unittest.TestCase):
             "EdgeSeriesPoint",
             "EdgeTrajectorySummary",
             "EventAuditSnapshot",
+            "EventMarketLink",
             "EventMoverItem",
             "EvidenceItem",
             "FreshEdgeItem",
             "LLMTelemetry",
             "MarketQuality",
+            "PendingLinkItem",
             "SimilarEventItem",
             "SourceReliability",
             "TrendSummary",
@@ -1050,6 +1056,230 @@ class SimilarEventsContractTests(unittest.TestCase):
                     "this call site bypasses the published envelope again: "
                     "api.ts must read api<SimilarEventsResponse>",
                 )
+
+
+class PendingLinkContractTests(unittest.TestCase):
+    """The pending-links contract, and its sibling (audit 53.57).
+
+    Two shapes share one store table and, until this section, one hand-written
+    frontend type: the review-queue element (the stored row plus four enrichment
+    fields, 14 keys) and the row the link-verify endpoint returns (the ten
+    ``event_market_links`` columns). The old copy declared all fourteen with
+    thirteen of them optional, so it was at once too loose for the queue and a
+    claim of four keys the verify endpoint never returns.
+
+    Four cases: the envelope, the element, the ten shared fields (the
+    duplication is deliberate, so it is asserted rather than trusted), and the
+    text half.
+    """
+
+    # (name, annotation) for the ten event_market_links columns.
+    _ROW_FIELDS = {
+        "id": str,
+        "event_id": str,
+        "market_name": str,
+        "contract_id": str,
+        "market_question": str,
+        "resolution_criteria": str,
+        "link_method": str,
+        "link_confidence": float,
+        "verified": bool,
+        "linked_at": str,
+    }
+    _ENRICHED_FIELDS = {
+        "event_title": str,
+        "event_title_zh": str,
+        "event_summary": str,
+        "event_resolution_criteria": str,
+    }
+
+    def test_pending_response_points_at_the_published_element(self):
+        """The envelope names its element, and ``pending`` is required.
+
+        Identity, not ``issubclass``: ``PendingLinksResponse`` is a
+        ``FlexibleResponse``, so a regression to ``list[dict[str, Any]]`` still
+        validates, still returns the same bytes and still passes ``tsc`` -- the
+        element would just go back to ``{ [k: string]: unknown }``, the shape
+        ``lib/api.ts`` used to work around by hand-writing ``PendingLink``.
+        """
+        from app.models.event import PendingLinkItem, PendingLinksResponse
+
+        fields = PendingLinksResponse.model_fields
+        self.assertIn("pending", fields, "PendingLinksResponse.pending vanished")
+        self.assertEqual(
+            fields["pending"].annotation,
+            list[PendingLinkItem],
+            "PendingLinksResponse.pending no longer names its published element",
+        )
+        self.assertTrue(
+            fields["pending"].is_required(),
+            "PendingLinksResponse.pending gained a default, but the one route "
+            'serving this model always writes {"pending": [...]} (audit 53.57)',
+        )
+
+    def test_the_element_requires_all_fourteen_keys(self):
+        """Every key is written unconditionally, so none may carry a default.
+
+        ``list_pending_links`` writes all fourteen on every item: the ten store
+        columns via ``_row_to_dict``, then the four enrichment fields, which fall
+        back to ``""`` rather than being omitted. So this endpoint is the third
+        position in the family -- 53.55 needed ``response_model_exclude_unset``
+        because one key was conditional, 53.56 did not, and neither does this
+        one. A default appearing here would silently widen the element to
+        ``X | undefined`` and re-open an ambiguity the producer does not have.
+
+        ``verified`` is checked to be ``bool`` and not ``int``: the store coerces
+        SQLite's 0/1 through ``_row_to_dict``, and the wire carries a JSON
+        boolean.
+
+        The four enrichment fields' annotations are pinned here; the ten shared
+        ones are pinned in ``test_the_element_is_the_row_plus_four`` instead. That
+        split is deliberate: with both halves checking everything, a single
+        defect would redden two cases and the four-phase runs would lose the
+        attribution they exist to provide.
+        """
+        from app.models.event import PendingLinkItem
+
+        item = PendingLinkItem.model_fields
+        expected = {**self._ROW_FIELDS, **self._ENRICHED_FIELDS}
+        self.assertEqual(
+            set(item),
+            set(expected),
+            "PendingLinkItem's field set no longer matches the route's "
+            "fourteen-key dict",
+        )
+        for name in expected:
+            with self.subTest(field=name):
+                self.assertTrue(
+                    item[name].is_required(),
+                    f"PendingLinkItem.{name} gained a default. list_pending_links "
+                    "writes that key on every item, so a default only widens the "
+                    "published element",
+                )
+        for name, want in self._ENRICHED_FIELDS.items():
+            with self.subTest(enrichment=name):
+                self.assertEqual(
+                    item[name].annotation,
+                    want,
+                    f"PendingLinkItem.{name} is no longer {want.__name__}; the "
+                    "four enrichment fields are all strings (the route falls back "
+                    'to "" rather than omitting the key)',
+                )
+
+    def test_the_element_is_the_row_plus_four(self):
+        """The ten shared fields are duplicated on purpose -- so they are pinned.
+
+        ``PendingLinkItem`` restates the ten ``EventMarketLink`` columns instead
+        of inheriting them, because the two are separate published contracts (a
+        stored row vs. a queue element) and the generator treats them as
+        independent roots. That choice is only safe if the overlap cannot drift,
+        which is what this case asserts: same names, same annotations, same
+        required-ness. Without it the duplication would be a silent liability --
+        add a column to the table and only one of the two models would grow it.
+
+        Only the *annotations* are compared across the two models. Requiredness is
+        already pinned twice over (all fourteen in the element case, all ten on
+        the row here), so re-checking it in the loop would let one defect -- a
+        default on a shared field -- redden two cases at once, which is exactly
+        the attribution the four-phase mutation runs depend on.
+        """
+        from app.models.event import EventMarketLink, PendingLinkItem
+
+        row = EventMarketLink.model_fields
+        item = PendingLinkItem.model_fields
+
+        self.assertEqual(
+            set(row),
+            set(self._ROW_FIELDS),
+            "EventMarketLink is no longer the ten event_market_links columns",
+        )
+        for name, want in self._ROW_FIELDS.items():
+            with self.subTest(row_field=name):
+                self.assertTrue(
+                    row[name].is_required(),
+                    f"EventMarketLink.{name} gained a default; every column is "
+                    "NOT NULL and _row_to_dict writes them all",
+                )
+                self.assertEqual(
+                    row[name].annotation,
+                    want,
+                    f"EventMarketLink.{name} is no longer {want.__name__}",
+                )
+
+        for name in row:
+            with self.subTest(shared=name):
+                self.assertIn(
+                    name,
+                    item,
+                    f"PendingLinkItem dropped {name}, which the store's row "
+                    "always carries",
+                )
+                self.assertEqual(
+                    item[name].annotation,
+                    row[name].annotation,
+                    f"PendingLinkItem.{name} drifted from EventMarketLink.{name}",
+                )
+
+    def test_pending_callsites_read_the_generated_contract(self):
+        """Neither copy is back, and both call sites read published types.
+
+        The negative half is name-based for the same reason as 53.55/53.56:
+        ``ALLOWED_OVERLAY_COPIES_IN_API_TS`` counts an interface as a copy only
+        when its name ends in ``Overlay`` or its body carries an index signature,
+        and a re-declared ``PendingLink`` is neither. ``_interface_bodies``
+        collects only ``export interface``, so the ``export type`` alias is not
+        mistaken for a declaration.
+
+        Both positives walk *back* from the path line to the nearest ``api<``
+        generic rather than searching a fixed window -- and there are two of
+        them, because the two endpoints must not read each other's shape.
+        """
+        api_text = _API_TS_PATH.read_bytes().decode("utf-8")
+        api_bodies = _interface_bodies(api_text)
+
+        for name in ("PendingLink", "PendingLinkItem", "EventMarketLink"):
+            with self.subTest(retired=name):
+                self.assertNotIn(
+                    name,
+                    api_bodies,
+                    f"api.ts re-declared {name}; generated-types.ts is the source "
+                    "of truth. Alias the generated name instead.",
+                )
+
+        needle = "export type PendingLink = GeneratedPendingLinkItem;"
+        with self.subTest(alias=needle):
+            self.assertIn(
+                needle,
+                api_text,
+                "api.ts no longer aliases the generated element "
+                f"(expected: {needle})",
+            )
+
+        lines = api_text.splitlines()
+        expected_generic = {
+            "/events/links/pending": "api<PendingLinksResponse>(",
+            "/link/verify`": "api<EventMarketLink>(",
+        }
+        for path, want in expected_generic.items():
+            idxs = [i for i, ln in enumerate(lines) if path in ln]
+            self.assertEqual(
+                len(idxs),
+                1,
+                f"expected the single {path} call site in api.ts, found {len(idxs)}",
+            )
+            for idx in idxs:
+                generic = ""
+                for back in range(idx, -1, -1):
+                    if "api<" in lines[back]:
+                        generic = lines[back]
+                        break
+                with self.subTest(callsite=lines[idx].strip()[:40]):
+                    self.assertTrue(generic, "no api< generic found above this call site")
+                    self.assertIn(
+                        want,
+                        generic,
+                        f"this call site does not read {want}",
+                    )
 
 
 class ApiTsTypeSourceTests(unittest.TestCase):

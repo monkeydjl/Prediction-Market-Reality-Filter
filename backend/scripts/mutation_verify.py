@@ -1643,7 +1643,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J29）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J39）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -2394,13 +2394,13 @@ SETS: tuple[MutationSet, ...] = (
             Mutation(
                 label="J22 api.ts 又自己声明 SimilarEvent 型：消费侧副本长回来，别名仍在",
                 path=_API_TS,
-                old=b"export interface PendingLink {",
+                old=b"export interface AutoResolveMatch {",
                 new=(
                     b"export interface SimilarEvent {\n"
                     b"  event_id: string;\n"
                     b"  event_title?: string;\n"
                     b"}\n\n"
-                    b"export interface PendingLink {"
+                    b"export interface AutoResolveMatch {"
                 ),
                 guard_file=_T_GENERATE_TYPES,
                 guards=("test_similar_callsite_reads_the_generated_envelope",),
@@ -2410,8 +2410,11 @@ SETS: tuple[MutationSet, ...] = (
                     "`ALLOWED_OVERLAY_COPIES_IN_API_TS` 那条**老**判据仍然绿（本节的守卫必须**按名**判）；"
                     "**别名刻意留着** ⇒ 只可能红在 `assertNotIn` 那半，归因可辨。"
                     "🔴 **锚点与 J13 刻意不同**：J13 用 `export interface DecisionReport {`，"
-                    "这里用 `export interface PendingLink {` —— 两条若共用同一行字节，"
+                    "这里用 `export interface AutoResolveMatch {` —— 两条若共用同一行字节，"
                     "整集 `apply` 时无法同时落位（§53.55 的 J19/J20 教训）。"
+                    "🔴 **这条针 §53.57 换过一次**：原针是被退役的 `export interface PendingLink {`，"
+                    "本节把那行删掉了 ⇒ 旧针命中 0 次（`count_needle != 1` 正是该报的），"
+                    "换到紧随其后的 `AutoResolveMatch`，与任何其它针都不相交。"
                     "针单行、`api.ts` 里恰好 1 次（实测）。"
                 ),
             ),
@@ -2555,6 +2558,223 @@ SETS: tuple[MutationSet, ...] = (
                     "针在 `similar:` 行**之前**结束 ⇒ 与 J26 完全不重叠。"
                     "跨行针在 `core.autocrlf` 仓里由 `count_needle` / `_needle_variants` 在 LF 与 CRLF 两种拼法下各试一次。"
                     "代价：那句 docstring 措辞一改这条针就断 —— 届时应由 `count_needle != 1` 立刻报出来。"
+                ),
+            ),
+            Mutation(
+                label="J30 api.ts 又自己声明 PendingLink：被退役的队列元素副本长回来",
+                path=_API_TS,
+                old=b"export interface LoopRun {",
+                new=(
+                    b"export interface PendingLink {\n"
+                    b"  event_id: string;\n"
+                    b"  contract_id?: string;\n"
+                    b"}\n\n"
+                    b"export interface LoopRun {"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_pending_callsites_read_the_generated_contract",),
+                note=(
+                    "§53.57 退役的那份手写副本被还原（插在 `LoopRun` **之前**，TS 语法合法）。"
+                    "**别名刻意留着** ⇒ 只可能红在 `assertNotIn` 那半，归因可辨（§53.54 的 J5/J7、"
+                    "§53.55 的 J13/J15、§53.56 的 J22/J24 同款）。"
+                    "副本体内不带索引签名、名字不以 `Overlay` 结尾 ⇒ "
+                    "`ALLOWED_OVERLAY_COPIES_IN_API_TS` 那条**老**判据仍然绿（本节的守卫必须**按名**判）。"
+                    "🔴 **锚点必须与 J22 不同**：J22 用 `export interface AutoResolveMatch {`、"
+                    "J31 用 `PendingLinksResponse` 的别名行 —— 三条若共用同一行字节，"
+                    "整集 `apply` 时无法同时落位（§53.55 的 J19/J20 教训）。"
+                    "针单行、`api.ts` 里恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J31 api.ts 又自己声明 EventMarketLink：兄弟端点那份 10 字段副本",
+                path=_API_TS,
+                old=b"export type PendingLinksResponse = GeneratedPendingLinksResponse;",
+                new=(
+                    b"export interface EventMarketLink {\n"
+                    b"  id: string;\n"
+                    b"  event_id: string;\n"
+                    b"}\n\n"
+                    b"export type PendingLinksResponse = GeneratedPendingLinksResponse;"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_pending_callsites_read_the_generated_contract",),
+                note=(
+                    "同一条负向判据作用在**第二个名字**上（§4.2：那条循环覆盖三个名字，"
+                    "只变异第一个只能证明循环存在、不能证明它走到了后面）。"
+                    "`EventMarketLink` 是本节新增的兄弟端点响应模型，前端**从来没有**手写过它的副本 —— "
+                    "所以这条变异问的是「将来会不会有人手写一个」。"
+                    "插在 `PendingLinksResponse` 别名行之前：与 J32 的针（`PendingLink` 那一行）相邻但**不相交**，"
+                    "与 J30 的锚点也不同。针单行、恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J32 别名被改指内联形状：副本没回来，但契约来源已经不是生成类型",
+                path=_API_TS,
+                old=b"export type PendingLink = GeneratedPendingLinkItem;",
+                new=(
+                    b"export type PendingLink = {\n"
+                    b"  event_id: string;\n"
+                    b"  contract_id?: string;\n"
+                    b"};"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_pending_callsites_read_the_generated_contract",),
+                note=(
+                    "**不插 interface**，只把别名指回内联形状 ⇒ 只可能红在 `assertIn`（别名）那半。"
+                    "与 J30 合起来把同一个测试的两半**隔离**出来（§53.54 的 J5/J7 同款）。"
+                    "它也是**更隐蔽**的那一种：名字仍是 `PendingLink`、仍是 `export type`，"
+                    "`_interface_bodies` 收集不到它 —— 只有把别名钉成**精确字符串**才看得见。"
+                    "替换串沿用**旧手写形状**（`contract_id?` 可选）：那正是被退役的那份副本，"
+                    "所以这条同时证明「声明的键数与生产者不符」不会悄悄回到别名里。"
+                    "针单行、恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J33 pendingLinks 调用点绕过已发布信封：generic 退回内联形状",
+                path=_API_TS,
+                old=b'api<PendingLinksResponse>("/events/links/pending")',
+                new=b'api<{ pending: unknown[] }>("/events/links/pending")',
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_pending_callsites_read_the_generated_contract",),
+                note=(
+                    "用 `unknown[]` 而不是还原成旧的 `PendingLink[]`：后者会让 `PendingLink` 重新变成"
+                    "被使用的名字，**顺带**改变别处的判据，红的归因就不可辨了（§53.56 的 J25 同款）。"
+                    "针含路径本身（这一处调用点很短，generic 与路径同行），"
+                    "守卫「从路径行往回找最近的 `api<`」在这条上就是同行定位。"
+                    "路径 `/events/links/pending` 在 `api.ts` 里恰好 1 次（实测）—— "
+                    "**这也是本轮把别名上方注释里那句字面路径删掉的原因**：注释也是文件字节，"
+                    "留着它会让这条守卫的路径计数变成 2（§53.56 踩过同一个坑）。"
+                ),
+            ),
+            Mutation(
+                label="J34 verifyLink 退回读队列元素：兄弟端点的 10 键被当成 14 键",
+                path=_API_TS,
+                old=b"    api<EventMarketLink>(`",
+                new=b"    api<PendingLink>(`",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_pending_callsites_read_the_generated_contract",),
+                note=(
+                    "**本节特有的一条**：`/link/verify` 返回的是**行**（10 键），不是队列元素（14 键），"
+                    "而 §53.57 之前这两个端点**共用同一个手写副本** —— 所以「退回共用」正是原来的缺陷。"
+                    "还原成 `api<PendingLink>` 后 TS 仍然合法（`PendingLink` 是别名，仍在导出），"
+                    "`tsc` 也不会报错（`res.json() as T` 是断言）—— "
+                    "只有把两个端点的 generic **分别**钉住才看得见。"
+                    "针不含路径（守卫从含 `/link/verify\\`` 的那一行往回找最近的 `api<`），"
+                    "恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J35 PendingLinksResponse.pending 退回裸 dict：元素契约消失（静默）",
+                path=_EVENT_MODEL,
+                old=b"    pending: list[PendingLinkItem]",
+                new=b"    pending: list[dict[str, Any]]",
+                group="pending-envelope",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_pending_response_points_at_the_published_element",),
+                note=(
+                    "**静默**回归的典型（同 §53.55 的 J17、§53.56 的 J26）：`PendingLinksResponse` 是 "
+                    "`FlexibleResponse`，退回 `list[dict[str, Any]]` 后**仍然校验通过、仍然返回同样的字节、"
+                    "`tsc` 仍然全绿**，生成出来的元素类型只是悄悄回到 `{ [k: string]: unknown }` —— "
+                    "也就是前端当初不得不手写 `PendingLink` 的那个形状。拦截点只能是**模型身份**判据。"
+                    "🔴 **与 J36 同 `group`**：两条改的是**同一行字节**（本节的信封只有一个字段），"
+                    "整集 `apply` 只能留第一条，显式同时点名两条会被 `_apply_preflight` 拒掉 —— "
+                    "这正是 `group` 存在的理由（§4.3：同一段字节的两条改写必须同组）。"
+                ),
+            ),
+            Mutation(
+                label="J36 PendingLinksResponse.pending 加回默认值：已发布信封被静默放宽",
+                path=_EVENT_MODEL,
+                old=b"    pending: list[PendingLinkItem]",
+                new=b"    pending: list[PendingLinkItem] = Field(default_factory=list)",
+                group="pending-envelope",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_pending_response_points_at_the_published_element",),
+                note=(
+                    "信封那半（J35 是元素身份那半；两条各自钉住同一个测试里的一个断言，"
+                    "§4.2：一成员被 N 处消费就要 N 条）。加回默认值会**静默地**把已发布信封"
+                    "重新放宽成 `pending?:` —— 生成文本本身仍然「合法」，只有 `is_required()` 看得见。"
+                    "与 J35 同 `group` 的理由见 J35。"
+                ),
+            ),
+            Mutation(
+                label="J37 PendingLinkItem.verified 从 bool 漂成 int：与行契约不再同形",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    link_confidence: float\n"
+                    b"    verified: bool\n"
+                    b"    linked_at: str\n"
+                    b"    event_title: str"
+                ),
+                new=(
+                    b"    link_confidence: float\n"
+                    b"    verified: int\n"
+                    b"    linked_at: str\n"
+                    b"    event_title: str"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_element_is_the_row_plus_four",),
+                note=(
+                    "**本节唯一一条只打「重叠不变量」的变异**：它改的是元素里那十个**共享**字段之一，"
+                    "而元素那半（`test_the_element_requires_all_fourteen_keys`）**只查那四个 enrichment 字段的注解**，"
+                    "所以这条只可能红在重叠循环上 —— 这正是那个循环承重的证明（§4.2：承重不能靠名字推）。"
+                    "`verified` 真实类型是 `bool`：store 的 `_row_to_dict` 把 SQLite 的 0/1 转成 JSON 布尔；"
+                    "漂成 `int` 看着无害（1/0 仍能通过），生成的 TS 却会变成 `number`。"
+                    "🔴 **单行针 `    verified: bool` 在本文件出现 3 次** ⇒ 必须跨行；"
+                    "下面那行 `    event_title: str` 只在 `PendingLinkItem` 里紧跟它（`EventMarketLink` 里后面是空行），"
+                    "实测全文件唯一（§53.55 的 J28 同款做法）。"
+                ),
+            ),
+            Mutation(
+                label="J38 PendingLinkItem.event_summary 加回默认值：四个 enrichment 之一被放宽",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    event_title_zh: str\n"
+                    b"    event_summary: str\n"
+                    b"    event_resolution_criteria: str"
+                ),
+                new=(
+                    b"    event_title_zh: str\n"
+                    b'    event_summary: str = ""\n'
+                    b"    event_resolution_criteria: str"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_element_requires_all_fourteen_keys",),
+                note=(
+                    "打的是**元素那半**（J37/J39 是共享字段与行那一半）。"
+                    "`event_summary` 是四个 enrichment 之一：路由用 `record.get(..., \"\")` 写它，"
+                    "所以**永远有键**，给默认值就是错的 —— 它会把 `string` 静默放宽成 "
+                    "`string | undefined`，而前端 `link.event_summary && …` 那种读法对两者都成立，"
+                    "线上看不出来（空串与缺席在这里被折叠成同一个渲染结果）。"
+                    "🔴 单行针 `    event_summary: str` 出现 2 次 ⇒ 跨行带上前后两行（三行组合实测唯一）。"
+                ),
+            ),
+            Mutation(
+                label="J39 EventMarketLink.linked_at 加回默认值：行契约被静默放宽",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    verified: bool\n"
+                    b"    linked_at: str\n"
+                    b"\n"
+                    b"\n"
+                    b"class PendingLinkItem"
+                ),
+                new=(
+                    b"    verified: bool\n"
+                    b'    linked_at: str = ""\n'
+                    b"\n"
+                    b"\n"
+                    b"class PendingLinkItem"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_element_is_the_row_plus_four",),
+                note=(
+                    "打的是**行那一半**（J37 是重叠那一半、J38 是元素那一半）。"
+                    "`EventMarketLink` 的每一列都是 `NOT NULL` 且 `_row_to_dict` 全写 ⇒ 一个默认值都不该有。"
+                    "拦它的判据是行自己的 `is_required()` 循环。"
+                    "🔴 **针止于类尾**：本文件**通篇不写闭合大括号**（`grep -c '^}'` = 0 —— "
+                    "类体靠 dedent 结束，这是本文件的既有风格，不是缺陷），"
+                    "所以拿不到 `}` 当唯一后缀；改用「两行字段 + 两个空行 + 下一行 class 头」，"
+                    "跨行组合实测唯一（单行 `    linked_at: str` 出现 3 次）。"
                 ),
             ),
         ),

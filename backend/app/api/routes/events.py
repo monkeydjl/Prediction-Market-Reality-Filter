@@ -135,6 +135,7 @@ from app.models.event import (
     EventDiscoveryResponse,
     EventHistoryResponse,
     EventListResponse,
+    EventMarketLink,
     EventMoversResponse,
     EventStoreEntry,
     FlexibleResponse,
@@ -1373,6 +1374,14 @@ async def list_pending_links() -> dict[str, Any]:
     These are fuzzy auto-matches recorded below the auto-verify threshold: they
     are NOT scored (fail-closed) until a human verifies them via
     POST /events/{event_id}/link/verify. Returns the review queue.
+
+    No ``response_model_exclude_unset`` here, and not by oversight: every one of
+    the item's fourteen keys is written unconditionally -- the four enrichment
+    fields fall back to ``""`` when the event record has no such field, so a key
+    is never omitted, only ever empty. With no conditional key there is nothing
+    for the flag to preserve, so naming ``PendingLinkItem`` is a pure type
+    change (audit 53.57). That is the same reasoning as 53.56 and the opposite
+    of 53.55, where one key *was* conditional and the flag had to be added.
     """
     # Batch-load events once to avoid N+1 reads
     events_by_id = {e.get("event_id"): e for e in list_all_events()}
@@ -1391,7 +1400,7 @@ async def list_pending_links() -> dict[str, Any]:
     return {"pending": pending}
 
 
-@router.post("/{event_id}/link/verify", response_model=FlexibleResponse)
+@router.post("/{event_id}/link/verify", response_model=EventMarketLink)
 async def verify_event_link(
     event_id: EventId,
     contract_id: str = Body(default="", embed=True),
@@ -1403,6 +1412,14 @@ async def verify_event_link(
 
     Verifying only marks the link trustworthy; the event is scored on the next
     auto-resolve (or a manual resolve), not here.
+
+    The response is the stored row, not the queue element: it comes from
+    ``set_verified`` -> ``get_link`` and carries the ten ``event_market_links``
+    columns with no enrichment, so it is typed ``EventMarketLink`` rather than
+    ``PendingLinkItem`` (audit 53.57). Until this change the route declared a
+    bare ``FlexibleResponse``, which published no field contract at all, while
+    the frontend typed the call as the queue element -- a claim about keys this
+    endpoint never returns.
     """
     updated = set_verified(event_id, contract_id, True)
     if updated is None:

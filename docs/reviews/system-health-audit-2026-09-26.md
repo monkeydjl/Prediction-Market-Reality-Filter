@@ -12575,3 +12575,265 @@ J23 用一行**无关**的导出行（而非 J24 的别名行）；J29 从 docst
 J27（放宽）与 J28（收紧）都偏离被镜像的契约，各有一个断言拦。
 🔑 **只放一条会让人误以为这族只有一种错法** —— §53.55 的 J19/J20 是「两个方向的可选性」，
 本节是「同一字段的松/紧」。⇒ 设计变异时问一句：**这条判据的另一侧长什么样？**
+
+## 53.57 `GET /events/links/pending`：元素具名的第五个节点，以及一个**兄弟端点**共用同一份手写副本
+
+承接 §53.56。C1 剩余节点里，这个节点的证据强度与 §53.56 同级（可离线驱动），
+但多出一件事：**它有一个兄弟端点返回同一张表的另一种形状，而两者共用一份手写副本** —— 那不是重复，是缺陷。
+
+🔴 **本节的结论分两半，缺一不可：**
+① 队列元素是**十列 + 四个 enrichment = 14 键，全部无条件写** ⇒ 与 §53.56 同款、**不需要** `exclude_unset`；
+② 兄弟端点 `POST /events/{id}/link/verify` 返回的是**那张表的原样行（10 键）**，
+   而前端**两处共用同一个 `PendingLink`**（14 键、13 个可选）⇒ 对队列**过松**、
+   对 verify **凭空声明了四个它永不返回的键**。见 53.57.2。
+
+### 53.57.1 取证：真实路由驱动 —— 但活库需要一个副本
+
+方法同 §53.54–§53.56：把真实输入喂进**生产者本身**，收集它**实际产出**。
+
+⚠️ **先说一处例外。** live `backend/v2_loop.db` 的 `event_market_links` 是 **207 行、`verified` 全 = 1**
+⇒ `list_pending()`（`WHERE verified=0`）返回 **0 条** ⇒ `/links/pending` **在活库上驱动不出任何样本**。
+
+按仓库自己的隔离约定取副本：`sqlite_db.loop_db_path()` = `settings.LOOP_DB_FILE`，
+其 docstring 明写 *"tests isolate the whole loop DB by patching **this single function** to a temp path"*。
+于是把 settings 指向 `v2_loop.db` 的一份副本（`UPDATE event_market_links SET verified=0`）后驱动**真实路由**
+⇒ **item 的形状来自真实行 + 真实 enrichment**，只有「哪些行进队列」是构造的。
+这条要写进证据强度声明：与 §53.54/§53.55 的「替换语料」同性质，但这次替换的是**筛选条件**。
+
+探针 `probe_c1_remaining.py`（读数同名 `.txt`）。**一次跑完三个可离线驱动的节点**，本节点读数：
+
+| 读数 | 值 |
+| --- | --- |
+| 发出 item | **207** |
+| 不同 key 集 | **1** |
+| union keys | **14** |
+| 显式 `null` / 缺席 | **0 / 0**（每一个键、每一条） |
+| 类型 | 12 `str` + `link_confidence: float` + `verified: bool` |
+| 严格模型（14 字段、`extra="forbid"`） | **接受 207 / 拒绝 0** |
+
+十四个键 = 链接表十列（`id`/`event_id`/`market_name`/`contract_id`/`market_question`/`resolution_criteria`/
+`link_method`/`link_confidence`/`verified`/`linked_at`）+ 四个 enrichment
+（`event_title`/`event_title_zh`/`event_summary`/`event_resolution_criteria`）。
+四个 enrichment 由路由用 `record.get(..., "")` 写入 ⇒ **永远有键、永远 `str`**，缺记录时是空串而非缺席。
+
+`verified` 是 **`bool` 而非 `int`**：`event_market_link_store._row_to_dict` 明确做了
+`data["verified"] = bool(data["verified"])`（SQLite 没有布尔类型）。**这条要单独钉**，见 53.57.5 的 J37。
+
+### 53.57.2 🔴 一个手写副本，两个端点，两种形状
+
+`frontend/src/lib/api.ts` 的手写 `PendingLink` 有 **14** 个字段，其中 **13 个可选**：
+
+```ts
+export interface PendingLink {
+  event_id: string;
+  id?: string;
+  event_title?: string;
+  /* … 共 14 个名字，只有 event_id 必填 … */
+  verified?: boolean;
+}
+```
+
+它被**两个**调用点使用：
+
+| 调用点 | 端点 | 实际返回 |
+| --- | --- | --- |
+| `eventsApi.pendingLinks()` | `GET /events/links/pending` | **14** 键（行 + 4 enrichment） |
+| `eventsApi.verifyLink()` | `POST /events/{id}/link/verify` | **10** 键（行，无 enrichment） |
+
+十个键那一侧由**只读驱动**坐实：`get_link()`（`set_verified` 的返回路径）对同一批 207 条取形状 ——
+**207 条 / 1 种 key 集 / 10 键**，类型同 53.57.1 的表。
+
+⇒ 这一个 interface 同时是**两个方向的错**：对队列元素把必写键标成可选（过松），
+对 verify 响应则**声明了四个它永不返回的键**（虚假）。而 `api<T>` 是 `res.json() as T` 断言 ⇒
+`tsc` 与 `vitest` 双双看不见任何一半。
+
+爆炸半径：队列元素的唯一消费者是 `components/history/pending-links.tsx`，它只读
+`market_name` / `link_confidence` / `linked_at` / `event_id` / `contract_id` / `event_title(_zh)` /
+`event_summary` / `event_resolution_criteria` / `market_question` / `resolution_criteria` —— **全在那 14 个里**；
+`verifyLink` 的**返回值被丢弃**（`await eventsApi.verifyLink(...)` 不接结果）⇒ 收紧是零运行时风险。
+（`PendingLink` 在 sports 侧有一个同名近邻 `usePendingLinks()`，但它打的是 `/sport-markets/pending`、
+用的是 `MarketLinkList` —— **不是同一个类型**，见 53.57.7。）
+
+### 53.57.3 契约点（三点已拍板）
+
+| 点 | 取值 | 理由 |
+| --- | --- | --- |
+| 元素模型名 | **`PendingLinkItem`** | 与 `EdgeSeriesPoint` / `FreshEdgeItem` / `EventMoverItem` / `SimilarEventItem` 同构 |
+| 信封 `pending` | **收紧成 required** | 路由无条件写 `{"pending": [...]}`（同 §53.55 的 `count`、§53.56 的三键） |
+| 兄弟端点 | **同时具名** `EventMarketLink`（10 字段） | 原 `response_model=FlexibleResponse` **没有任何字段契约**；且不具名就没法把「10 vs 14」写对 |
+
+**不需要 `response_model_exclude_unset`**：14 个键全部无条件写 ⇒ 没有「缺席」可言 ⇒ 旗子无事可做。
+这是本族第三个位置 —— §53.55 **需要**它（有一个条件写入的键）、§53.56 不需要、本节也不需要，
+但**理由不同**：§53.56 是「无条件写全部键」，本节是同一件事，只不过多了个兄弟端点。
+
+### 53.57.4 落地
+
+**后端**（三个文件，`git diff --numstat` 实测）
+
+- `backend/app/models/event.py`（**+66/−1**）：新增
+  `EventMarketLink`（10 字段、**全无默认值**）与 `PendingLinkItem`（14 字段、**全无默认值**）；
+  `PendingLinksResponse.pending` 由 `list[dict[str, Any]] = Field(default_factory=list)` 收紧为
+  `list[PendingLinkItem]`（去默认）。
+  🔴 **两个模型的十个共享字段是「故意重复」而不是继承**：它们是**两份独立发布的契约**
+  （一张原样行 vs 一个队列元素），而生成器把两者当**各自独立的根**处理。
+  重复只有在「重叠不会漂」的前提下才安全 ⇒ 用**守卫把它钉成不变量**（53.57.5 的 case ③）。
+  ⚠️ 记一处本文件的既有风格：**类体不写闭合大括号**（`grep -c '^}'` = 0，靠 dedent 结束），
+  新模型沿用 ⇒ 写针时拿不到 `}` 当唯一后缀（J39 的针因此止于「两行字段 + 两个空行 + 下一行 class 头」）。
+- `backend/app/models/_frontend_export.py`（**+4/−0**）：两个新模型进 import + `__all__`
+  （**必须是根**：`EventMarketLink` 不是任何东西的元素，登记为根是**唯一**能让它闭合的手段）。
+- `backend/app/api/routes/events.py`（**+18/−1**）：
+  `/links/pending` **只加 docstring**（写明本条为什么不需要 `exclude_unset`，**装饰器一字未动**）；
+  `/link/verify` 的 `response_model` 由裸 `FlexibleResponse` 改成 `EventMarketLink` —— 本节唯一改语义的装饰器。
+
+**重生成**（`frontend/src/lib/generated-types.ts`，**+64/−3**）
+
+| 读数 | 改前（§53.56 末） | 改后 |
+| --- | --- | --- |
+| 工作树字节 | 43 165 B | **45 706 B** |
+| CRLF（= 行数） | 1 125 | **1 186** |
+| `bare_lf` | 0 | **0** |
+| `export interface` 数 | 56 | **58**（+`EventMarketLink` +`PendingLinkItem`） |
+
+新元素（14 字段、闭合、无尾巴）与新的行模型（10 字段、闭合）：
+
+```ts
+export interface PendingLinkItem {
+  id: string;
+  /* … 10 个共享列，全部 required … */
+  event_title: string;
+  event_title_zh: string;
+  event_summary: string;
+  event_resolution_criteria: string;
+}
+
+export interface EventMarketLink { /* 同上前十列 */ }
+
+export interface PendingLinksResponse {
+  pending: PendingLinkItem[];      // 原来是 pending?: { [k: string]: unknown }[]
+  [k: string]: unknown;            // 信封自己那张仍是 FlexibleResponse 的设计内开放
+}
+```
+
+**前端**
+
+- `frontend/src/lib/api.ts`（**+15/−20**）：删掉手写 `PendingLink`（interface 39 → **38**），
+  改 `export type PendingLink = GeneratedPendingLinkItem;`；新增 `PendingLinksResponse` 别名；
+  两个调用点分别改吃 `api<PendingLinksResponse>` 与 `api<EventMarketLink>`；
+  `EventMarketLink` 是新名字、无历史副本 ⇒ **裸导入直接用**（与同文件里 `DecisionQuality` / `MarketQuality` /
+  `SourceReliability` 的用法一致）。
+- `components/history/pending-links.tsx`：**零改动**（`PendingLink` 名字保留为别名）。
+
+### 53.57.5 守卫与变异
+
+**守卫**（`backend/tests/test_generate_types.py`，**+231/−1**，新类 `PendingLinkContractTests`，4 用例 / **44** subtests）
++ 闭合清单 **14 → 16**（+`EventMarketLink`、+`PendingLinkItem`，后者是元素、前者不是任何东西的元素）。
+
+| 用例 | 判据 | 承重的断言 |
+| --- | --- | --- |
+| ① 信封指元素 | 模型身份 + `pending` required | 身份（`list[dict]` 回归仍校验通过、仍有尾巴） |
+| ② 元素 14 键 | 名字集 + **14 全 required** + **四个 enrichment 的注解** | required（默认值 = 静默放宽） |
+| ③ 元素 = 行 + 4 | `EventMarketLink` 十列的名字/注解/required + **十个共享字段的注解与行一致** | 重叠不变量（重复的唯一保险） |
+| ④ 两个调用点 | 三个名字不得重新声明 + 别名精确串 + 两处 generic | 按名判（老判据看不见） |
+
+🔴 **② 与 ③ 的职责是刻意分开的**：②只管那四个 enrichment 的注解，③只管十个共享字段的注解。
+若两边都查全部，一个缺陷就会让**两个用例同时红**，四阶段赖以归因的「恰好一个测试失败」就没了。
+同理，③的重叠循环**只比注解、不比 requiredness**：requiredness 已在 ②（14 全含）与 ③（行的 10 全含）
+两处各钉一遍，再比一次纯属冗余，且会把「共享字段多了个默认值」变成两处同时红。
+
+**变异**（`frontend-type-closure` 追加 J30–J39，该 set 由 35 条增至 **45 条**；`list` 报 **12 套 / 125 条**）
+
+四阶段全部通过（`verify --index 36-45`）：
+
+| # | 变异 | 踩的判据 | 结果 |
+| --- | --- | --- | --- |
+| J30 | `api.ts` 又声明 `PendingLink`（别名刻意留着） | ④ assertNotIn | ✅ 红 |
+| J31 | `api.ts` 又声明 `EventMarketLink`（同循环的第二个名字） | ④ assertNotIn | ✅ 红 |
+| J32 | 别名被改指内联形状（不插副本） | ④ assertIn | ✅ 红 |
+| J33 | `pendingLinks` generic 退回内联 | ④ 调用点① | ✅ 红 |
+| J34 | `verifyLink` 退回 `api<PendingLink>`（**兄弟端点专属**） | ④ 调用点② | ✅ 红 |
+| J35 | `pending` 退回 `list[dict[str, Any]]` | ① 身份 | ✅ 红 |
+| J36 | `pending` 加回默认值（与 J35 同 `group`） | ① required | ✅ 红 |
+| J37 | `PendingLinkItem.verified: bool` → `int` | ③ **重叠不变量** | ✅ 红 |
+| J38 | `PendingLinkItem.event_summary` 加默认值 | ② required | ✅ 红 |
+| J39 | `EventMarketLink.linked_at` 加默认值 | ③ 行那一半 | ✅ 红 |
+
+每条**恰好一个测试失败**（J35/J36 是方法本身失败 = `1 failed, 23 deselected`；
+其余八条各红一个 subtest = `1 failed, 1 passed, …, N subtests passed`）⇒ 归因可辨。
+🔴 **J35/J36 同 `group`**：本节的信封只有一个字段，两条改的是**同一行字节** ⇒ 整集 `apply` 只能留第一条
+（显式同时点名两条会被 `_apply_preflight` 拒掉）。这正是 `group` 存在的理由 —— §53.55/§53.56 靠「换字段」
+规避的场景，本节在没有第二个字段时只能用 `group` 表达。
+🔴 **J37 是本节唯一一条只打重叠不变量的变异**：它改的是共享字段之一，而 ② **不查**共享字段的注解 ⇒
+只可能红在 ③ 的重叠循环上。这是「那个循环承重」的证明（§4.2：承重不能靠名字推）。
+⚠️ **一条既有针换了**：J22 的原针 `export interface PendingLink {` 是本节**删掉的那一行** ⇒ 命中 0 次
+（`count_needle != 1` 立刻报，正是它该做的）；换到紧随其后的 `export interface AutoResolveMatch {`，
+原因已写进 J22 的 `note`（§4.3：替换原因必须写进 `note`）。
+
+### 53.57.6 门与全量
+
+| 门 | 读数 |
+| --- | --- |
+| `ruff check app/` | `All checks passed!` |
+| `mypy app/` | `Success: no issues found in 331 source files` |
+| `python -m scripts.generate_types --check` | `generated-types.ts is up to date.` |
+| `tsc --noEmit` | 0 条 `error TS` |
+| `eslint`（改动的前端文件） | 无输出（干净） |
+| `test_mutation_verify.py` | **`62 passed, 159 subtests`**（junit：`tests=221 failures=0 errors=0`） |
+| 后端全量 | **`tests=7924 failures=0 errors=0 skipped=11`**（元素 **6652**；日志 `6641 passed, 11 skipped, 1272 subtests passed in 1499.85s`） |
+
+**全量对账**：对 §53.56 基线（`junit_full_53_56.xml`，`tests=7863` / 元素 6648 / subtests 1215）——
+**`tests` +61、元素 +4、subtests +57**。junit 按 `(classname, name)` 逐条 diff **零删除**，
+新增者**恰为**新类 `PendingLinkContractTests` 的 4 个方法（`git diff --numstat` 的 **7** 个文件与 53.57.4 逐项相符）。
+三个分量**各自实测**，基线在 **HEAD** 上测（不凭上一轮叙事推）：
+
+| 分量 | §53.56 末 | 本节 | Δ |
+| --- | --- | --- | --- |
+| 新类 testcase | 0 | 4 | +4 |
+| 新类 subtest（`PendingLinkContractTests`） | 0 | 44 | +44 |
+| 闭合清单（`test_closed_overlay_interfaces_have_no_tail`）subtest | 14 | 16 | +2 |
+| `test_mutation_verify.py` subtest | 148 | 159 | +11 |
+
+⇒ `+61 = 4（用例）+ 44 + 2 + 11` ✅ **无余量**。
+🔑 **为什么变异那条是 +11 而不是 +10**：新增的 J35/J36 构成**本节唯一一个 `group`**，而守卫里
+`test_the_selected_mutation_is_the_inventory_object` 按**每条变异**各占 1 个 subtest（+10）、
+`test_grouped_mutations_rewrite_the_same_bytes` 按**每个 group** 各占 1 个（+1）。
+（与 §53.56 的「8 条变异 = +8」不矛盾：那一节**刻意不用** `group`，故只有 +8。）
+
+✅ **复跑守卫未漂生成物**：`test_generate_types.py` 会**重新生成** `generated-types.ts`，
+本节又跑了它多次（四阶段 10 跑 + 全量 + 单跑）⇒ 跑前/跑后对 `generated-types.ts` 与 `api.ts` 各取 sha256，
+**逐字节相同**（**45 706 B** / `bf04a3a6de88785e…`；`api.ts` **42 944** B / `8e990d50c4c5bcdc…`）。
+
+### 53.57.7 未决 / 有意不做
+
+- **C1 剩 3 个信封**：`EventDiscoveryResponse.events`（元素=已发布 `EventRecord`，**开放有尾巴**、生产者需联网+LLM）、
+  `RecentPredictionsResponse.predictions`（元素 **35** 键、前端只声明 **18** ⇒ 少 17 列；
+  ⚠️ **首次出现「漏声明 = pydantic 静默丢字段」的方向**）、`OpenDecisionsResponse.decisions`
+  （18 顶层键 + 8 个内联嵌套对象、有真漂移 `llm_telemetry`）；`EventListResponse` **不按元素具名处置**。
+- **死 re-export 仍是 2 个**：`AutoResolveResponse` / `EventListResponse`。
+- ⚠️ **sports 侧的同名近邻**：`lib/sports-api/hooks/use-markets.ts` 的 `usePendingLinks()` 打的是
+  `/sport-markets/pending`、类型是 `MarketLinkList`（`sport_markets.py:87` 自己的 `list_pending()`）。
+  **与本节无关**，但两个「pending links」概念并存 ⇒ 将来有人把两者并起来时会踩到，登记备查。
+- 🔴 **新线索（只登记不修）**：`ruff check app/` 是绿门，但 `ruff check tests/ scripts/` 报 **339 条**（门之外、既有）。
+- 本节随本轮改动**未推送**。
+
+### 53.57.8 本轮方法学（本节踩到的坑）
+
+**1. 守卫的注释也是被守卫的字节 —— 这一次是我在同一节里重犯。**
+§53.56 刚记过「顺手写的注释会让别的守卫变红」。本节给 `PendingLink` 别名写注释时，
+又顺手写了字面路径 `/events/links/pending`，于是**本节自己新写的**守卫那条路径计数从 1 变 2。
+⇒ 教训要升级：**不是「改注释要跑整个守卫文件」，而是「注释里不要复现被守卫的字面量」**。
+描述性说法（「the pending-links endpoint」）永远安全。
+
+**2. 一个前端类型服务两个后端端点 = 缺陷，而且它的两个方向会互相掩盖。**
+过松（把必写键标可选）让人以为「只是宽松」；虚假（声明四个永不返回的键）在 `res.json() as T`
+下完全不可见。⇒ **看到 `api<T>` 的一处断言，先问「这个 T 是从哪个端点来的、还有没有别人也在用同一个 T」。**
+判据是「**每个端点各自的 generic**」，不是「有没有类型」。
+
+**3. 具名一个「返回行」的端点前，先问它的 response_model 是不是裸 `FlexibleResponse`。**
+裸模型 ⇒ OpenAPI 无字段契约 ⇒ 前端只能自己猜（于是猜成了兄弟端点的形状）。
+⇒ 它是三件套的**第 5 个**检查点，与「信封有没有闭合 / 元素有没有登记为根 / 路由有没有 `exclude_unset` /
+元素是不是裸 dict」并列 —— 而且它**只有在兄弟端点存在时才暴露**。
+
+**4. 「故意重复」必须变成「被守卫的不变量」，并且要给它一条**只打它**的变异。**
+两个模型共享十个字段是刻意的；但刻意重复一旦没有判据，就是纯负债。
+本节的做法：把重叠写成循环断言，再把**其他两处**的职责切开，使一条只改共享字段注解的变异
+**只能**红在那个循环上 —— 否则「这条变异红在重叠上」永远无法与「它红在别处」区分。

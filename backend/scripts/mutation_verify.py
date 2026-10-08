@@ -1643,7 +1643,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J21）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J29）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -1749,7 +1749,19 @@ SETS: tuple[MutationSet, ...] = (
             "⚠️ 由此**新发现一条同族缺口、本轮只登记不修**：§53.54 那个守卫的 `envelope` 循环"
             "（`count` / `total` / `limit` / `offset` / `classification` / `classification_totals`）"
             "的 `assertTrue` 那半**同样从未被任何变异性红过**；要补就再加一条"
-            "「`FreshEdgesResponse.count` 加回默认值」的变异。",
+            "「`FreshEdgesResponse.count` 加回默认值」的变异。"
+            "§53.56 把同一条规则推进到 `GET /events/{id}/similar`：`event.py` 发布 `SimilarEventItem`"
+            "（`similar` 由 `list[dict[str, Any]]` 改成 `list[SimilarEventItem]`），信封三键收紧成 required，"
+            "前端 `api.ts` 的唯一调用点改读 `api<SimilarEventsResponse>`、手写 `SimilarEvent` 退役成别名。"
+            "🔴 **与 §53.55 相对的一条**：这条端点**不需要** `response_model_exclude_unset`，因为 "
+            "`find_similar` 对每条 item **无条件写全部 8 个键**（可空的那四个写 `None`，不是省掉）"
+            "⇒ **任何默认值都是错的**，J27 钉的就是这个前提（而且它顺带证明「无默认值」是「不需要那面旗子」的原因）。"
+            "🔴 **J28 是方向相反的另一类错误**：把 `direction: str | None` 收成 3 值 `Literal` —— "
+            "看着像「更严」，实则比 `Probability.direction: str` 这份被镜像的声明**更窄**，"
+            "会把将来的第四个方向值变成 422（22 205 条观测到的词表恰是 3 值，但那是观测不是保证）。"
+            "🔴 **两条新针的锚点刻意避开既有针占用的字节**（J22 用 `PendingLink` 而非 J13 的 `DecisionReport`；"
+            "J23 用一行无关导出而非 J24 的别名行；J29 从 docstring 尾句向上取上界，在 J26 的针**之前**结束）—— "
+            "对指针/针重叠的规避沿用 §53.55 的做法：**换上下文方向，不硬塞 `group`**。",
         ),
         mutations=(
             Mutation(
@@ -2377,6 +2389,172 @@ SETS: tuple[MutationSet, ...] = (
                     "该常量名源自更早的 §53.38/§53.39 摘要端点，此处不另立重复字面量）。"
                     "跨行针**必须**：单行针 `response_model_exclude_unset=True` 在本文件出现 **3 次**"
                     "（`/edges/fresh`、`/movers` 以及另一处），带上上一行 `EventMoversResponse` 后实测 1 次。"
+                ),
+            ),
+            Mutation(
+                label="J22 api.ts 又自己声明 SimilarEvent 型：消费侧副本长回来，别名仍在",
+                path=_API_TS,
+                old=b"export interface PendingLink {",
+                new=(
+                    b"export interface SimilarEvent {\n"
+                    b"  event_id: string;\n"
+                    b"  event_title?: string;\n"
+                    b"}\n\n"
+                    b"export interface PendingLink {"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_similar_callsite_reads_the_generated_envelope",),
+                note=(
+                    "§53.56 退役的那种手写副本被还原（放在 `PendingLink` **之前**，TS 语法合法）。"
+                    "与 J13 同款的两处刻意留白：副本体内不带索引签名、名字不以 `Overlay` 结尾 ⇒ "
+                    "`ALLOWED_OVERLAY_COPIES_IN_API_TS` 那条**老**判据仍然绿（本节的守卫必须**按名**判）；"
+                    "**别名刻意留着** ⇒ 只可能红在 `assertNotIn` 那半，归因可辨。"
+                    "🔴 **锚点与 J13 刻意不同**：J13 用 `export interface DecisionReport {`，"
+                    "这里用 `export interface PendingLink {` —— 两条若共用同一行字节，"
+                    "整集 `apply` 时无法同时落位（§53.55 的 J19/J20 教训）。"
+                    "针单行、`api.ts` 里恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J23 types.ts 又自己声明 SimilarEventItem：同一条负向判据的另一个文件",
+                path=_TYPES_TS,
+                old=b"export type Semantics = BackendEventSemantics;",
+                new=(
+                    b"export interface SimilarEventItem {\n"
+                    b"  event_id: string;\n"
+                    b"  event_title?: string;\n"
+                    b"}\n\n"
+                    b"export type Semantics = BackendEventSemantics;"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_similar_callsite_reads_the_generated_envelope",),
+                note=(
+                    "同一条判据作用在**第二个文件**上（§4.2：一成员被 N 处消费就要 N 条）。"
+                    "只扫 `api.ts` 的守卫会放过 `types.ts`。"
+                    "🔴 **锚点刻意不选别名那一行**：J24 的针就是 "
+                    "`export type SimilarEvent = SimilarEventItem;`，两条若共用同一段字节就落位冲突；"
+                    "改用同文件里一个与被测判据无关的、恰好 1 次的导出行做插入锚点（实测）。"
+                    "副本不带索引签名（理由同 J22）⇒ TS 语法合法。"
+                ),
+            ),
+            Mutation(
+                label="J24 别名被改指内联形状：副本没回来，但契约来源已经不是生成类型",
+                path=_TYPES_TS,
+                old=b"export type SimilarEvent = SimilarEventItem;",
+                new=(
+                    b"export type SimilarEvent = {\n"
+                    b"  event_id: string;\n"
+                    b"  event_title: string;\n"
+                    b"  event_title_zh?: string;\n"
+                    b"  similarity?: number;\n"
+                    b"};"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_similar_callsite_reads_the_generated_envelope",),
+                note=(
+                    "**不插 interface**，只把别名指回手写形状 ⇒ 只可能红在 `assertIn`（别名）那半。"
+                    "与 J22 合起来才把同一个测试的两半**隔离**出来（§53.54 的 J5/J7、§53.55 的 J13/J15 同款）。"
+                    "它也是**更隐蔽**的那一种回归：名字仍是 `SimilarEvent` 且仍是 `export type`，"
+                    "`_interface_bodies` 收集不到它 —— 只有把别名钉成**精确字符串**才看得见。"
+                    "替换串沿用**旧手写形状**（6 字段、全可选）：这正是被退役的那份副本，"
+                    "所以这条变异同时证明「漂移的那两个字段（`direction`/`last_updated`）不会再悄悄回到别名里」。"
+                    "针单行、恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J25 similar 调用点绕过已发布信封：generic 退回内联形状",
+                path=_API_TS,
+                old=b"    api<SimilarEventsResponse>(",
+                new=b"    api<{ similar: unknown[] }>(",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_similar_callsite_reads_the_generated_envelope",),
+                note=(
+                    "`/similar` 在 `api.ts` 里**只有一处**调用点（实测），所以不出现 §53.54 那种"
+                    "「两处调用点各要一条」的余量。用 `unknown[]` 而不是还原成旧的 `SimilarEvent[]`："
+                    "后者会让 `SimilarEvent` 重新变成被使用的名字，**顺带**改变别处的判据，红的归因就不可辨了。"
+                    "针是 generic 那一行（不含路径），恰好 1 次（实测）—— 守卫用「从调用点行往回找最近的 "
+                    "`api<`」定位，所以针不必包含路径本身。"
+                ),
+            ),
+            Mutation(
+                label="J26 SimilarEventsResponse.similar 退回裸 dict：元素契约消失（静默）",
+                path=_EVENT_MODEL,
+                old=b"    similar: list[SimilarEventItem]",
+                new=b"    similar: list[dict[str, Any]]",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_similar_response_points_at_the_published_element",),
+                note=(
+                    "**静默**回归的典型（同 §53.55 的 J17）：`SimilarEventsResponse` 是 `FlexibleResponse`，"
+                    "退回 `list[dict[str, Any]]` 后**仍然校验通过、仍然返回同样的字节、`tsc` 仍然全绿**，"
+                    "生成出来的元素类型只是悄悄回到 `{ [k: string]: unknown }` —— "
+                    "也就是前端当初不得不手写 `SimilarEvent` 的那个形状。"
+                    "拦截点只能是**模型身份**判据。针单行、恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J27 SimilarEventItem.estimated_probability 加回默认值：把「必有键」放宽成可选",
+                path=_EVENT_MODEL,
+                old=b"    estimated_probability: float | None",
+                new=b"    estimated_probability: float | None = None",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_similar_element_requires_all_eight_keys",),
+                note=(
+                    "本节**与 §53.55 相对**的那一条。`find_similar` 对每条 item **无条件写**这 8 个键"
+                    "（可空的那四个写 `None`，不是省掉），所以**任何**默认值都是错的："
+                    "它会把生成类型从 `number | null` 静默放宽成 `number | null | undefined`，"
+                    "并重新引入这条端点**本来没有**的「缺席 vs null」歧义。"
+                    "这条也是「新模型**不需要** `response_model_exclude_unset`」这个结论的守卫 —— "
+                    "因为它钉住的正是那个结论的前提（无默认值 ⇒ 无 `unset` 可言）。"
+                    "针单行、恰好 1 次（实测：`estimated_probability` 只在本节新增元素里出现）。"
+                ),
+            ),
+            Mutation(
+                label="J28 SimilarEventItem.direction 窄化成 Literal：比生产者的声明更紧",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    direction: str | None\n"
+                    b"    last_updated: str | None"
+                ),
+                new=(
+                    b'    direction: Literal["rising", "falling", "stable"] | None\n'
+                    b"    last_updated: str | None"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_similar_element_requires_all_eight_keys",),
+                note=(
+                    "**方向相反的另一类错误**：把 `str | None` 收成 3 值 `Literal`。"
+                    "它看着像「更严的契约」，但记录自己的 `Probability.direction` 声明就是 `str`，"
+                    "所以这比**它镜像的那份契约更窄**，会把将来第四个方向值变成 422。"
+                    "普查观测到的词表确实恰是 `{rising, stable, falling}`（22 205 条）—— "
+                    "但那是**观测**，不是保证（§2：「没观测到」≠「不可能」）。"
+                    "拦它的判据是 `typing.get_args(annotation) == (str, type(None))`。"
+                    "🔴 **跨行针是必须的**：单行针 `    direction: str | None` 在本文件出现 **2 次**"
+                    "（`EventAuditSnapshot.direction` 与本节新增的元素），"
+                    "靠下面那行 `    last_updated: str | None`（实测全文件唯一）才唯一；"
+                    "取**下方**上下文也让它与 J27/J29 的针互不相邻。"
+                ),
+            ),
+            Mutation(
+                label="J29 SimilarEventsResponse.count 加回默认值：已发布信封被静默放宽",
+                path=_EVENT_MODEL,
+                old=(
+                    b'spelled the envelope inline.\n    """\n\n    event_id: str\n    count: int'
+                ),
+                new=(
+                    b'spelled the envelope inline.\n    """\n\n    event_id: str\n    count: int = 0'
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_similar_response_points_at_the_published_element",),
+                note=(
+                    "信封那半（J27 是元素那半；两条各自钉住一个测试里的 `is_required()` 断言，"
+                    "§4.2：一成员被 N 处消费就要 N 条）。加回默认值会**静默地**把已发布信封"
+                    "重新放宽成 `count?:` —— 生成文本本身仍然「合法」，只有 `is_required()` 看得见。"
+                    "🔴 **针刻意从上方取上下文**：`    event_id: str\\n    count: int` 在本文件出现 **3 次**，"
+                    "而补上第三行 `    similar: list[SimilarEventItem]` 会与 J26 的针**压在同一行字节上**"
+                    "（整集 `apply` 落位冲突）。改用 docstring 尾句（全文件唯一）作上界，"
+                    "针在 `similar:` 行**之前**结束 ⇒ 与 J26 完全不重叠。"
+                    "跨行针在 `core.autocrlf` 仓里由 `count_needle` / `_needle_variants` 在 LF 与 CRLF 两种拼法下各试一次。"
+                    "代价：那句 docstring 措辞一改这条针就断 —— 届时应由 `count_needle != 1` 立刻报出来。"
                 ),
             ),
         ),

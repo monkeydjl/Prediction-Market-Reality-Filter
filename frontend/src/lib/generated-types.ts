@@ -1030,12 +1030,60 @@ export interface SimTradeListResponse {
   trades: SimTrade[];
   [k: string]: unknown;
 }
+/**
+ * One element of ``SimilarEventsResponse.similar`` (audit section 53.56).
+ *
+ * ``historical_matching_service.find_similar`` writes all eight keys on every
+ * item it returns, and the census over four event stores -- every event as the
+ * query, ``limit`` in {1, 3, 5, 10, 20} -- emitted 22 205 items with exactly one
+ * key set. So no field carries a default, which is also what makes this
+ * endpoint differ from ``GET /events/movers``: nothing here is written
+ * conditionally, so the route needs no ``response_model_exclude_unset`` and the
+ * four nullable fields below serialize as an explicit ``null`` -- exactly what
+ * the producer already writes.
+ *
+ * ``estimated_probability`` / ``change`` / ``direction`` read out of the stored
+ * record's ``probability`` dict, and ``last_updated`` off the store entry, so
+ * each is ``X | None`` by construction: a record with no ``probability`` (or an
+ * entry with no ``last_updated``) yields ``None`` rather than omitting the key.
+ * The 22 205 items observed none of those cases, but that is an observation
+ * about these corpora, not a guarantee -- the code path keeps the branch, so the
+ * type does too.
+ *
+ * ``direction`` stays ``str | None`` rather than a ``Literal``. The observed
+ * vocabulary is exactly ``{rising, stable, falling}``, but the record's own
+ * ``Probability.direction`` is declared ``str``, so a Literal here would be
+ * *narrower* than the contract this mirrors and would turn a future direction
+ * value into a 422.
+ *
+ * The frontend's hand-written ``SimilarEvent`` (``lib/types.ts``) carried only
+ * six of these eight fields -- ``direction`` and ``last_updated`` had drifted
+ * out of it -- so retiring it to this model is a narrowing, not a widening.
+ */
+export interface SimilarEventItem {
+  event_id: string;
+  event_title: string;
+  event_title_zh: string;
+  similarity: number;
+  estimated_probability: number | null;
+  change: number | null;
+  direction: string | null;
+  last_updated: string | null;
+}
+/**
+ * Response for GET /api/events/{event_id}/similar.
+ *
+ * All three keys are written unconditionally by the one route that serves this
+ * model, so the envelope carries no defaults (audit section 53.56 tightened
+ * them). ``similar`` names ``SimilarEventItem`` instead of ``list[dict[str,
+ * Any]]``: the old form rendered as ``{ [k: string]: unknown }[]``, an element
+ * type the frontend cannot read, which is why ``lib/types.ts`` hand-wrote
+ * ``SimilarEvent`` and ``lib/api.ts`` spelled the envelope inline.
+ */
 export interface SimilarEventsResponse {
-  event_id?: string;
-  count?: number;
-  similar?: {
-    [k: string]: unknown;
-  }[];
+  event_id: string;
+  count: number;
+  similar: SimilarEventItem[];
   [k: string]: unknown;
 }
 /**

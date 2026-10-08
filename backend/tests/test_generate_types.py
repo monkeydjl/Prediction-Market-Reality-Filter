@@ -17,6 +17,9 @@ Verifies:
 - ``EventMoversResponse`` does the same for ``GET /events/movers``, and the
   ``/movers`` route keeps the ``response_model_exclude_unset`` flag that keeps
   its serialized bytes identical (audit section 53.55).
+- ``SimilarEventsResponse`` does the same for ``GET /events/{id}/similar``, where
+  no such flag is needed because every element key is written unconditionally
+  (audit section 53.56).
 """
 from __future__ import annotations
 
@@ -284,6 +287,7 @@ class TestGenerateTypesScript(unittest.TestCase):
             "FreshEdgeItem",
             "LLMTelemetry",
             "MarketQuality",
+            "SimilarEventItem",
             "SourceReliability",
             "TrendSummary",
         ):
@@ -878,6 +882,174 @@ class EventMoversContractTests(unittest.TestCase):
             "element turns an absent event_title_zh into an explicit null without "
             "it (audit 53.55).",
         )
+
+
+class SimilarEventsContractTests(unittest.TestCase):
+    """The GET /events/{id}/similar contract (audit 53.56).
+
+    Same split as the 53.53/53.54/53.55 contract tests, minus the route-decorator
+    half: this endpoint needs no ``response_model_exclude_unset``, and the reason
+    is a property of the element itself -- every key is written unconditionally,
+    so no field may carry a default. That property is what the second case pins,
+    and it is also what makes the third case (the text half) a pure type change.
+    """
+
+    def test_similar_response_points_at_the_published_element(self):
+        """The envelope names its element, and all three keys are required.
+
+        Identity, not ``issubclass``: ``SimilarEventsResponse`` is a
+        ``FlexibleResponse``, so a regression to ``list[dict[str, Any]]`` still
+        validates, still returns the same bytes and still passes ``tsc`` -- the
+        generated element would simply go back to ``{ [k: string]: unknown }``,
+        the shape ``lib/types.ts`` worked around by hand-writing ``SimilarEvent``.
+        """
+        from app.models.event import SimilarEventItem, SimilarEventsResponse
+
+        fields = SimilarEventsResponse.model_fields
+        self.assertIn("similar", fields, "SimilarEventsResponse.similar vanished")
+        self.assertEqual(
+            fields["similar"].annotation,
+            list[SimilarEventItem],
+            "SimilarEventsResponse.similar no longer names its published element",
+        )
+        for name in ("event_id", "count", "similar"):
+            with self.subTest(always_written=name):
+                self.assertTrue(
+                    fields[name].is_required(),
+                    f"SimilarEventsResponse.{name} gained a default, but the one "
+                    "route serving this model writes that key unconditionally "
+                    "(audit 53.56 tightened the envelope)",
+                )
+
+    def test_the_similar_element_requires_all_eight_keys(self):
+        """Every key is written unconditionally, so none may carry a default.
+
+        This is the property that separates this endpoint from ``/events/movers``
+        (53.55). There, four of five keys were written unconditionally and the
+        fifth conditionally, so the route had to keep
+        ``response_model_exclude_unset`` to avoid turning an absent key into an
+        explicit ``null``. Here ``find_similar`` sets all eight keys on every item
+        it returns -- the four "nullable" ones included, as ``None`` rather than
+        by omission -- so no default is needed and no flag is needed. A default
+        appearing here would be the mistake: it would silently widen the element
+        to ``X | null | undefined`` and re-introduce the ambiguity this endpoint
+        does not have.
+
+        The four nullable fields must therefore be *required but nullable*; with
+        no default, the generated TS is ``number | null`` / ``string | null``,
+        which is exactly the producer's contract.
+
+        ``direction`` is checked to be ``str | None`` rather than a ``Literal`` of
+        the three values the census observed (22 205 items, exactly
+        ``{rising, stable, falling}``). The record's own ``Probability.direction``
+        is declared ``str``, so narrowing it here would be *tighter than the
+        contract this mirrors* and would turn a future direction value into a 422.
+        """
+        import typing
+
+        from app.models.event import SimilarEventItem
+
+        item = SimilarEventItem.model_fields
+        expected = {
+            "event_id": str,
+            "event_title": str,
+            "event_title_zh": str,
+            "similarity": float,
+            "estimated_probability": (float, type(None)),
+            "change": (float, type(None)),
+            "direction": (str, type(None)),
+            "last_updated": (str, type(None)),
+        }
+        self.assertEqual(
+            set(item),
+            set(expected),
+            "SimilarEventItem's field set no longer matches find_similar's "
+            "eight-key dict",
+        )
+        for name, want in expected.items():
+            with self.subTest(field=name):
+                self.assertTrue(
+                    item[name].is_required(),
+                    f"SimilarEventItem.{name} gained a default. find_similar "
+                    "writes that key on every item, so a default only widens the "
+                    "published element and would need exclude_unset to undo",
+                )
+                if isinstance(want, tuple):
+                    self.assertEqual(
+                        typing.get_args(item[name].annotation),
+                        want,
+                        f"SimilarEventItem.{name} is no longer {want}",
+                    )
+                else:
+                    self.assertEqual(
+                        item[name].annotation,
+                        want,
+                        f"SimilarEventItem.{name} is no longer {want.__name__}",
+                    )
+
+    def test_similar_callsite_reads_the_generated_envelope(self):
+        """No local copy of the retired element, and the call site uses it.
+
+        The negative half is name-based out of necessity, exactly as in 53.55:
+        ``ALLOWED_OVERLAY_COPIES_IN_API_TS`` counts an interface as a copy when
+        its name ends in ``Overlay`` or its body carries an index signature, and
+        a re-declared ``SimilarEvent`` is neither. ``_interface_bodies`` collects
+        only ``export interface``, so the ``export type`` alias is not mistaken
+        for a declaration.
+
+        The positive half walks *back* from the ``/similar`` line to the nearest
+        ``api<`` generic rather than searching a fixed window.
+        """
+        api_text = _API_TS_PATH.read_bytes().decode("utf-8")
+        types_text = _TYPES_TS_PATH.read_bytes().decode("utf-8")
+        api_bodies = _interface_bodies(api_text)
+        types_bodies = _interface_bodies(types_text)
+
+        for name in ("SimilarEvent", "SimilarEventItem"):
+            with self.subTest(retired=name):
+                self.assertNotIn(
+                    name,
+                    api_bodies,
+                    f"api.ts re-declared {name}; generated-types.ts is the "
+                    "source of truth. Alias the generated name instead.",
+                )
+                self.assertNotIn(
+                    name,
+                    types_bodies,
+                    f"types.ts re-declared {name}; generated-types.ts is the "
+                    "source of truth. Alias the generated name instead.",
+                )
+
+        needle = "export type SimilarEvent = SimilarEventItem;"
+        with self.subTest(alias=needle):
+            self.assertIn(
+                needle,
+                types_text,
+                "types.ts no longer aliases the generated element "
+                f"(expected: {needle})",
+            )
+
+        lines = api_text.splitlines()
+        paths = [i for i, ln in enumerate(lines) if "/similar`" in ln]
+        self.assertEqual(
+            len(paths),
+            1,
+            f"expected the single /similar call site in api.ts, found {len(paths)}",
+        )
+        for idx in paths:
+            generic = ""
+            for back in range(idx, -1, -1):
+                if "api<" in lines[back]:
+                    generic = lines[back]
+                    break
+            with self.subTest(callsite=lines[idx].strip()[:40]):
+                self.assertTrue(generic, "no api< generic found above this call site")
+                self.assertIn(
+                    "api<SimilarEventsResponse>(",
+                    generic,
+                    "this call site bypasses the published envelope again: "
+                    "api.ts must read api<SimilarEventsResponse>",
+                )
 
 
 class ApiTsTypeSourceTests(unittest.TestCase):

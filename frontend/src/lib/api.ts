@@ -1,10 +1,11 @@
-import type { EventRecord, TrackedEntry, SimilarEvent } from "./types";
+import type { EventRecord, TrackedEntry } from "./types";
 import type {
   DecisionTimelineResponse as GeneratedDecisionTimelineResponse,
   AutoResolveResponse as GeneratedAutoResolveResponse,
   EventListResponse as GeneratedEventListResponse,
   EventMoversResponse as GeneratedEventMoversResponse,
   EventHistoryResponse as GeneratedEventHistoryResponse,
+  SimilarEventsResponse as GeneratedSimilarEventsResponse,
   FreshEdgeItem as GeneratedFreshEdgeItem,
   FreshEdgesResponse as GeneratedFreshEdgesResponse,
   DailyDigestResponse as GeneratedDailyDigestResponse,
@@ -328,6 +329,7 @@ export type AutoResolveResponse = GeneratedAutoResolveResponse;
 export type EventListResponse = GeneratedEventListResponse;
 export type EventMoversResponse = GeneratedEventMoversResponse;
 export type EventHistoryResponse = GeneratedEventHistoryResponse;
+export type SimilarEventsResponse = GeneratedSimilarEventsResponse;
 export type DailyDigestResponse = GeneratedDailyDigestResponse;
 export type SimTrade = GeneratedSimTrade;
 export type SimTradeListResponse = GeneratedSimTradeListResponse;
@@ -894,7 +896,11 @@ export const eventsApi = {
     }, { invalidateGetCache: false }),
 
   similar: (id: string) =>
-    api<{ similar: SimilarEvent[]; count?: number }>(
+    // Reads the generated envelope instead of an inline shape. Before audit
+    // 53.56 this spelled the six fields out locally, one call site bypassing the
+    // SimilarEventsResponse re-export -- the same bypass 53.55 closed on the
+    // movers endpoint.
+    api<SimilarEventsResponse>(
       `/events/${encodeURIComponent(id)}/similar`
     ),
 

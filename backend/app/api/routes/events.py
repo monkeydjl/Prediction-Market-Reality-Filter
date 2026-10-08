@@ -1575,6 +1575,12 @@ async def get_similar_events(
 
     Similarity uses both title-token overlap and entity overlap (max of the
     two), so events phrased differently but sharing key entities still match.
+
+    No ``response_model_exclude_unset`` here, unlike ``/events/movers``
+    (audit 53.55): every key of ``SimilarEventItem`` is written unconditionally
+    by ``find_similar``, so naming the element cannot turn an absent key into an
+    explicit ``null``. That is why audit 53.56 named it without touching the
+    serialization flags.
     """
     entry = get_event(event_id)
     if entry is None:

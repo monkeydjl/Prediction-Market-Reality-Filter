@@ -18,6 +18,7 @@ import type {
   EventSemantics as BackendEventSemantics,
   EventAuditSnapshot,
   EventMoverItem,
+  SimilarEventItem,
   TrendSummary,
 } from "./generated-types";
 
@@ -80,11 +81,9 @@ export type Trend = TrendSummary;
 // adaptMover() and its call sites spell it this way.
 export type Mover = EventMoverItem;
 
-export interface SimilarEvent {
-  event_id: string;
-  event_title: string;
-  event_title_zh?: string;
-  similarity?: number;
-  estimated_probability?: number;
-  change?: number;
-}
+// SimilarEvent used to live here as a six-field copy of the /events/{id}/similar
+// element. The producer writes eight keys -- `direction` and `last_updated` had
+// drifted out of the copy -- and the copy typed the rest as optional against a
+// service that writes every one of them. Retired to the generated element (audit
+// 53.56); the frontend name is kept because events/page.tsx spells it this way.
+export type SimilarEvent = SimilarEventItem;

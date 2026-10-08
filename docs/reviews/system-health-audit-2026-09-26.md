@@ -11022,3 +11022,56 @@ harness（`backend/scripts/mutation_verify.py` 新 set `market-audit-timestamps`
 | 全部 `testcase` 元素 | 6629 | 6632 | **+3** |
 
 `tests` 属性由 7729 升到 7735（**+6**）—— 另 3 条落在「pytest 把**子测试**也计入 `tests`」这一口径上（与元素数无关）：`test_mutation_verify.py` 的 `test_the_selected_mutation_is_the_inventory_object` 遍历**每个变异**（新 set ⇒ **+2** 次迭代），`test_the_whole_set_selection_passes_preflight` 遍历**每个 set**（⇒ **+1**）。⇒ **6 = 3 条用例 + 3 条子测试**，逐项有归属。
+
+## §53.48 两个门对「无时间戳行」的口径统一：一处谓词，两个门
+
+> 追加于 §53.47 之后。承接 §53.47.8 第 1 条：审计门已「排除 + 声明」，而序列门把它当**最早**的点发给图表。用户拍板：**序列门也排除**。
+
+### 53.48.1 结论先行
+
+口径定为：**没有时间戳的快照不是价格路径上的点。** 两个画路径的读法都排除它，并各自**声明丢了几行**：审计门 = `untimestamped_count` + `flags: ["untimestamped_snapshots"]`（§53.47 已做）；序列门 = `GET /snapshots/{match_id}` 每条序列新增 `untimestamped_count`（本节）。
+
+两点合起来才是本节的重点：
+
+1. **判据只有一份。** 提成 `market_snapshot_store.is_timestamped(row)`：审计的分区（`audit_summary`）与序列的过滤（`get_price_path`）都用它。此前审计用的是 `audit_summary` **函数体内嵌套**的 `_ts`，而序列门根本没有这道判断 —— 两处会各自漂移。
+2. 🔴 **过滤只能放在消费侧，不能放进 `get_snapshots` 的默认读法。** 若在 `get_snapshots` 里过滤，`audit_summary` 的 `untimestamped_count` 会退化成**永远为 0 的死分支**，而猴补 `get_snapshots` 的守卫测试**照样绿** —— 这正是 §4.2 那类**假安全**。⇒ 原始读法保持「照发」，两个消费者各自排除 + 声明。
+
+### 53.48.2 取证与修法
+
+- `MarketSnapshotStore.get_price_path(link_id=…) -> (points, untimestamped_count)`：序列门的**唯一**取数口；它调 `get_snapshots`（照发）后按共享谓词过滤，并把丢掉的条数一并返回 ⇒ 一次查询就够，不必为一个计数再打一次库。
+- `_ts` 从 `audit_summary` 的嵌套函数**提到模块级**（体不变），`is_timestamped` 建在它之上；`audit_summary` 的四个 `_ts(...)` 调用点改指向模块级同名函数，分区谓词换成 `is_timestamped(s)`。
+- 路由 `GET /snapshots/{match_id}`：`snapshots` 只含可定位的行，另回 `untimestamped_count`。
+
+守卫（`tests/test_sport_market_routes.py`，+1 条；并把既有 `test_snapshots_timeseries` 补上 `untimestamped_count == 0`）：新用例写 1 行正常 + 1 行**按模型合法**省略时间戳的 `KernelMarketSnapshot(link_id=…, implied_prob=…)`，断言的是**确切点位与计数** —— `len(snapshots) == 1`、`implied_prob == 0.6`、`captured_at is not None`、`untimestamped_count == 1`。断「请求成功」是不够的：行数变了但计数没报也会通过。
+
+### 53.48.3 变异（追加进同族 set，§4.3）
+
+`market-audit-timestamps` 由 2 条扩到 4 条：
+
+| 变异 | 打掉什么 | 守卫文件 | 变异后读数 |
+|---|---|---|---|
+| A3 | `get_price_path` 的过滤（照发） | `tests/test_sport_market_routes.py` | `1 failed, 14 deselected` |
+| A4 | **共享谓词** `is_timestamped` 塌成恒真 | **两个文件** | **`2/2 files red`**（各 `1 failed`） |
+
+A4 的 `2/2` 就是「一处谓词、两个门」的可验证表述。四条全部走完四阶段（变异前绿 / 变异后红 / 还原后绿 / 逐字节一致）。
+
+### 53.48.4 未决 / 留痕
+
+1. 前端 `SnapshotPoint.captured_at` 仍是 `string | null`。**不去收紧它** —— 按 §2，接收端类型偏宽是安全方向，收紧反而要动前端类型与前端测试。本节不动前端。
+2. `_ts` 的 `created_at` 回退仍是**死键**（§53.47.8 第 4 条未做），而且现在被 `is_timestamped` 一起继承。**登记不变**。
+3. `/snapshots/{match_id}` 仍是裸 `dict[str, Any]`（无具名 `response_model`）⇒ 前端 `SnapshotSeries` 是手写 interface（§2 的既有症状）。本节只**追加**一个字段，不处理这条。
+
+### 53.48.5 门 + 全量
+
+四道门：`ruff check app/` 通过、`mypy app/` 331 文件通过、`generate_types --check` 最新、定向 pytest 通过。ruff 做**派生**核对（§0：判据派生且同配置）——改动文件与各自 HEAD blob 在同一条 `ruff check app/` 配置下都是 `All checks passed!` ⇒ 新增 **+0** 条。
+
+- 定向 junit（三个受影响文件）：`tests=49 failures=0 errors=0 skipped=0`。
+- MV 守卫 junit（`tests/test_mutation_verify.py`）：`tests=171 failures=0 errors=0 skipped=0`。
+- 定向 junit（本节点相关的更大集合）：`tests=328 failures=0 errors=0 skipped=0`。
+- **全量**（`junit-5348-full.xml`，946008 B）：`tests=7738 failures=0 errors=0 skipped=11`，元素级 **6633**。
+
+`tests` 属性的增量**逐 classname 对齐**（不口算）：与 §53.47 全量（`junit-5347-full.xml`：`7735 / 0 / 0 / 11`，元素 6632）相减，元素差**只**落在 `tests.test_sport_market_routes 14 → 15` —— 即新增的那条守卫（+1）。`tests` 属性是 `+3`（7735 → 7738）而元素只 `+1` ⇒ 另 **+2 子测试**，来自 `test_the_selected_mutation_is_the_inventory_object`（它逐条遍历**全部**变异并用 `subTest`）；本节点把 `market-audit-timestamps` 由 A1/A2 扩到 A3/A4 ⇒ 变异总数 76 → 78 ⇒ `+2`。这与 §53.47 同型（那次元素 +3 / 子测试 +3）。其余**可能**随规模漂移的 `subTest` 循环都不受影响：`grouped.items()` 只随 (set, group) 对数量变，而 A3/A4 未声明 `group`；`for mutation_set in SETS` 随**套数**变，本节点套数不变（仍 **10 套**）。
+
+变异：`verify market-audit-timestamps` 的 A1–A4 四条**全部**走完四阶段（变异前绿 / 变异后红 / 还原后绿 / sha256 与原字节一致）；A4 的守卫跨两个文件、实测 **`2/2 files red`**。复验 `verify market-snapshot-order`（diff 触及该集 `m.path`，§4.3）通过。harness 自报 `list` = **10 套 / 78 个变异**。
+
+本节**未推送**。

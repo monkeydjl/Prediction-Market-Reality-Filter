@@ -10,11 +10,14 @@ import type {
   EventListResponse as GeneratedEventListResponse,
   EventMoversResponse as GeneratedEventMoversResponse,
   EventHistoryResponse as GeneratedEventHistoryResponse,
+  FreshEdgeItem as GeneratedFreshEdgeItem,
+  FreshEdgesResponse as GeneratedFreshEdgesResponse,
   DailyDigestResponse as GeneratedDailyDigestResponse,
   SimTrade as GeneratedSimTrade,
   SimTradeListResponse as GeneratedSimTradeListResponse,
   TradeStats as GeneratedTradeStats,
   DecisionQuality,
+  EdgeSeriesPoint as GeneratedEdgeSeriesPoint,
   EdgeTrajectorySummary as GeneratedEdgeTrajectorySummary,
   MarketQuality,
   SourceReliability,
@@ -343,20 +346,24 @@ export type TradeStats = GeneratedTradeStats;
 // `res.json() as T` meant nothing caught the difference.
 export type EdgeTrajectory = GeneratedEdgeTrajectorySummary;
 
-export interface EdgePoint {
-  timestamp?: string | null;
-  estimated: number;
-  baseline: number;
-  edge: number;
-}
+export type FreshEdgesResponse = GeneratedFreshEdgesResponse;
 
-export interface FreshEdge {
-  event_id: string;
-  event_title: string;
-  event_title_zh?: string;
-  edge: EdgeTrajectory;
-  series?: EdgePoint[];
-}
+// One element of `FreshEdgesResponse.edges`, and one point of its `series`.
+// Both were hand-written here until audit 53.54.
+//
+// `FreshEdge` was NOT wrong: the generator had no element type at all -- the
+// backend declared `edges: list[dict[str, Any]]`, which renders as
+// `{ [k: string]: unknown }[]`, so this file had to spell the element itself and
+// did so faithfully. What changes is that the shape is now published and
+// guarded instead of duplicated, and `decisions/page.tsx` no longer needs its
+// `as FreshEdge[]` cast on top of it.
+//
+// `EdgePoint.timestamp` was optional here and was widened to
+// `string | null` on the wire by the re-declaration (`edge_series` always writes
+// the key, with whatever the audit line carried). The generated point keeps the
+// key required and the value nullable, which is what the producer does.
+export type FreshEdge = GeneratedFreshEdgeItem;
+export type EdgePoint = GeneratedEdgeSeriesPoint;
 
 export interface LoopRun {
   id?: string;
@@ -957,7 +964,7 @@ export const eventsApi = {
 
   // M5 fresh-edge surface (recent, holding-near-peak divergences).
   freshEdges: (limit = 10) =>
-    api<{ count: number; edges: FreshEdge[] }>(`/events/edges/fresh?limit=${limit}`),
+    api<FreshEdgesResponse>(`/events/edges/fresh?limit=${limit}`),
 
   // Delete all event data (requires write key).
   resetData: () =>
@@ -967,15 +974,7 @@ export const eventsApi = {
     ),
 
   edgeMonitor: (limit = 10, offset = 0, classification = "all") =>
-    api<{
-      count: number;
-      total?: number;
-      limit?: number;
-      offset?: number;
-      classification: string;
-      classification_totals?: Record<string, number>;
-      edges: FreshEdge[];
-    }>(
+    api<FreshEdgesResponse>(
       `/events/edges/fresh?limit=${limit}&offset=${offset}&classification=${classification}&include_series=true`,
     ),
 

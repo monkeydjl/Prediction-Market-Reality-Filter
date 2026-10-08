@@ -910,14 +910,102 @@ class OpenDecisionsResponse(FlexibleResponse):
     decisions: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class EdgeSeriesPoint(BaseModel):
+    """One point of an edge time series: ``trend_analysis_service.edge_series``.
+
+    Named ``EdgeSeriesPoint`` rather than ``EdgePoint`` on purpose: the frontend
+    hand-wrote an ``EdgePoint`` in ``lib/api.ts``, and ``lib/types.ts`` re-exports
+    this module's types wholesale (``export type * from "./generated-types"``),
+    so a generated ``EdgePoint`` would be a duplicate export reachable from two
+    modules. That is the collision that produced ``TrendSummary`` and
+    ``EdgeTrajectorySummary`` (sections 53.53, 53.54); the shape of the name
+    follows ``MarketSnapshotPoint`` above.
+
+    ``edge_series`` writes all four keys unconditionally and skips any snapshot
+    whose ``estimated``/``baseline`` is non-numeric, so the three numeric fields
+    are always present and always Python floats -- ``float`` leaves the wire
+    bytes identical (``EventAuditSnapshot`` records the opposite case).
+
+    ``timestamp`` is ``str | None`` with no default. The key is always written
+    (it is ``snap.get("timestamp")`` straight through), but the value is whatever
+    the audit line carried, and ``edge_series`` never requires it to be present.
+    Across the 4 666 points observed in the five corpora it was a string every
+    time; that is an observation about those corpora, not a guarantee, so the
+    type keeps the nullable branch the code actually has.
+    """
+
+    timestamp: str | None
+    estimated: float
+    baseline: float
+    edge: float
+
+
+class FreshEdgeItem(BaseModel):
+    """One element of ``FreshEdgesResponse.edges`` (audit section 53.54).
+
+    Both producers write the same three base keys -- ``rank_fresh_edges`` and
+    ``_edge_items`` each build ``{"event_id", "event_title", "edge"}`` -- after
+    which the route adds ``event_title_zh`` when the store holds a Chinese title
+    and ``_edge_items`` adds ``series`` when ``include_series=True``. A census of
+    all five corpora over every reachable parameter combination (2 324 items)
+    found exactly four key sets and no others, so the five fields below are the
+    whole element.
+
+    ``event_id`` carries no default because reachability derives it: both
+    producers are keyed on ``histories_by_event()``, and ``_group_records`` drops
+    every line whose ``event_id`` is falsy before grouping, so an item this route
+    can return has a non-empty string id. ``event_title`` is always a string
+    because ``_latest_title`` returns ``""``, never ``None``, when no snapshot
+    carries one.
+
+    The two optional fields are optional because they are *conditionally written*,
+    not because they are sometimes null. Both keep a default so that an item
+    which never set them omits the key entirely: the route is declared
+    ``response_model_exclude_unset=True`` and pydantic applies that to nested
+    models too, which is what preserves the current "absent key, not null"
+    behaviour (probe ``probe_exclude_unset_nested.py``). Declaring either without
+    a default would turn an event without a Chinese title -- the norm in three of
+    the five corpora -- into a 500.
+
+    Like the other registered models this is ``extra="ignore"`` at runtime (only
+    schema generation forces ``extra="forbid"``), so a producer that invented a
+    sixth key would lose it silently rather than fail. No such key exists today;
+    that is a premise, not a property.
+    """
+
+    event_id: str
+    event_title: str
+    event_title_zh: str | None = None
+    edge: EdgeTrajectorySummary
+    series: list[EdgeSeriesPoint] | None = None
+
+
 class FreshEdgesResponse(FlexibleResponse):
-    count: int = 0
-    total: int = 0
-    limit: int = 10
-    offset: int = 0
-    classification: str | None = None
-    classification_totals: dict[str, int] = Field(default_factory=dict)
-    edges: list[dict[str, Any]] = Field(default_factory=list)
+    """Response for GET /api/events/edges/fresh.
+
+    The envelope fields lost their defaults in audit section 53.54, tightening a
+    previously all-optional published contract. Safe by construction for the same
+    reason as ``EventHistoryResponse``: exactly one route serves this model and it
+    returns a dict literal that sets every one of these keys unconditionally.
+    ``classification`` was declared ``str | None`` while it is in fact always the
+    validated query parameter -- a string -- so it is tightened to ``str`` along
+    with the rest.
+
+    ``edges`` is a list of ``FreshEdgeItem`` rather than ``list[dict[str, Any]]``.
+    It used to render as ``{ [k: string]: unknown }[]`` -- an element type the
+    frontend cannot read, which is why ``lib/api.ts`` hand-wrote ``FreshEdge`` and
+    spelled the envelope inline at both of its call sites.
+    ``EdgeTrajectorySummary`` was already the faithful type of each item's ``edge``
+    field (section 53.53); this names the remaining five-field wrapper.
+    """
+
+    count: int
+    total: int
+    limit: int
+    offset: int
+    classification: str
+    classification_totals: dict[str, int]
+    edges: list[FreshEdgeItem]
 
 
 class SimilarEventsResponse(FlexibleResponse):

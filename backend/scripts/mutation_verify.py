@@ -1643,7 +1643,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J4）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J12）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -1698,6 +1698,35 @@ SETS: tuple[MutationSet, ...] = (
             "它只在 `test_closed_overlay_interfaces_have_no_tail` 间接体现在「三个新模型必须闭合」上；"
             "要单独钉住可选性，得新写一条读生成文件的正向断言（`event_id: string;` 而非 `event_id?: string;`），"
             "而那条需要先重新生成，超出本 set 的静态判据口径。"
+            "⚠️ **这条缺口笔记的前提已被 §53.54 部分改写**：可选性确实能钉，但**不必**读生成文件 —— "
+            "`model_fields[...].is_required()` 在**模型层**就能读到「有没有默认值」，"
+            "而生成文本里 `?:` 的有无正是它的函数。所以 §53.54 的新守卫改用 `is_required()`，"
+            "仍是静态判据、不需要 json2ts。"
+            "§53.54 把同一条规则推进到 `GET /events/edges/fresh`：`event.py` 发布了 `EdgeSeriesPoint` / "
+            "`FreshEdgeItem`（`edges` 由 `list[dict[str, Any]]` 改成 `list[FreshEdgeItem]`），"
+            "信封的恒写字段收紧成 required，前端 `api.ts` 两个调用点改读 `api<FreshEdgesResponse>`、"
+            "手写 `FreshEdge` / `EdgePoint` 退役成别名，`decisions/page.tsx` 的 `as FreshEdge[]` 强转一并清掉。"
+            "J5–J12 各踩**一条互不重叠**的判据，**分布在三个文件**上："
+            "J5 踩「`api.ts` 不得再声明副本」（**别名刻意留着**，所以红的只可能是这半）、"
+            "J6 踩同一条判据在 `types.ts` 上的那一份（§4.2：同判据两个文件要两条）、"
+            "J7 踩「别名必须指向生成名」这半（**不插 interface** —— 没有它就无法区分"
+            "「守卫拦住了副本」与「守卫恰好在别名那半红了」，即 J5/J6 会让这半变成空头）、"
+            "J8 / J9 各踩「调用点必须读已发布信封」这半，且**两个调用点各一条**"
+            "（§4.2：一成员被 N 处消费却只补 1 处，另一处的绕过永远不红）、"
+            "J10 踩「`edges` 必须指名元素模型」、J11 踩「元素自己的 `edge` 必须指名 §53.53 的模型」、"
+            "J12 踩「条件写入的键必须保留默认值」—— 这正是上面那条缺口笔记的方向相反那一半。"
+            "为什么 J8 之后还要 J9：`api.ts` 里 `    api<FreshEdgesResponse>(` 这个**前缀**两处都占（实测 2 次），"
+            "所以 J8 必须用整行针、J9 必须用跨行针；两条不能合成一条。"
+            "为什么 J5 要留别名：`assertIn`（别名）与 `assertNotIn`（副本）落在一个测试里，"
+            "一改别名就同时红，红了就分不清判据哪半承重 —— 于是 J5 留别名、J7 不插副本，"
+            "两条各自把一半**隔离**出来。"
+            "🔴 **有意不登记的一条**：恒写字段（`count` / `total` / `limit` / `offset` / `classification` / "
+            "`classification_totals`）加回默认值不补变异 —— 它与 J12 走**同一个** "
+            "`is_required()` 断言形状，再加一条只让计数虚胖。"
+            "⚠️ 前提：这两组仍共用同一个断言形状；若被拆成两组独立断言，另一侧就要补。"
+            "⚠️ 另一条前提：`FreshEdgeItem.series` 的同一性判据（`list[EdgeSeriesPoint] | None`）"
+            "本轮也**没有**独立变异，理由同 J11（同一个 `assertEqual(annotation, …)` 形状）；"
+            "若哪天该断言被拆开，要补一条把 `series` 退回 `list[dict[str, Any]]` 的变异。"
         ),
         mutations=(
             Mutation(
@@ -1916,6 +1945,172 @@ SETS: tuple[MutationSet, ...] = (
                     "—— `tsc` 依旧全绿。"
                     "所以判据必须是 `model_fields[...].annotation is X` 的**同一性**，不是 `issubclass`、"
                     "更不是读生成文件（读文件需要先重新生成，而变异跑的是**未重新生成**的树）。"
+                ),
+            ),
+            Mutation(
+                label="J5  api.ts 又自己声明 EdgePoint 型：消费侧副本长回来，别名仍在",
+                path=_API_TS,
+                old=b"export type EdgePoint = GeneratedEdgeSeriesPoint;",
+                new=(
+                    b"export interface EdgePoint {\n"
+                    b"  timestamp?: string | null;\n"
+                    b"  estimated: number;\n"
+                    b"}\n\n"
+                    b"export type EdgePoint = GeneratedEdgeSeriesPoint;"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_fresh_edges_callsites_read_the_generated_envelope",),
+                note=(
+                    "把 §53.54 退役掉的手写 `EdgePoint` 还原（复刻它当时 `timestamp?:` 可选的样子），"
+                    "**但把三行别名原样留在下面**。这一点是刻意的：J7 已经单独证明「别名必须在」那半会红，"
+                    "所以这条只要别名还在，红的就**只可能是**「`api.ts` 不得再声明副本」那半 —— "
+                    "两条变异各自**隔离**一条判据，合起来才说明守卫两个方向都承重。"
+                    "若这里顺手把别名删掉（像 J1 那样），「红了」就分不清是哪半踩的。"
+                    "TS 会因为重复标识符报错，但变异只在守卫阶段跑，而守卫是**文本**判据、不看语法。"
+                    "针单行、在 `api.ts` 恰好 1 次（`read_bytes()` 实测）。"
+                ),
+            ),
+            Mutation(
+                label="J6  types.ts 又自己声明 FreshEdgeItem：同一条负向判据的另一个文件",
+                path=_TYPES_TS,
+                old=b"export type Trend = TrendSummary;",
+                new=(
+                    b"export interface FreshEdgeItem {\n"
+                    b"  event_id: string;\n"
+                    b"}\n\n"
+                    b"export type Trend = TrendSummary;"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_fresh_edges_callsites_read_the_generated_envelope",),
+                note=(
+                    "这条与 J5 **同判据、不同文件**，故意分开 —— §53.53 已经踩过一次这个坑："
+                    "只扫 `api.ts` 的守卫会放过 `types.ts`。`types.ts` 恰恰是本仓自己写着"
+                    "「DO NOT hand-write fields that exist in the Pydantic models」的那个文件。"
+                    "选 `FreshEdgeItem`（而不是 `EdgePoint`）是因为 `types.ts` 里本来就**没有** "
+                    "`EdgePoint` 这个名字 —— 新名字只可能来自一次真的复制。"
+                    "`types.ts` 有 `export type * from \"./generated-types\"` ⇒ 这也是重复导出、`tsc` 会红，"
+                    "但同样只在守卫阶段跑，文本判据不看语法。"
+                    "针 `export type Trend = TrendSummary;` 在 `types.ts` 恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J7  别名被改指内联形状：副本没回来，但契约来源已经不是生成类型",
+                path=_API_TS,
+                old=b"export type FreshEdge = GeneratedFreshEdgeItem;",
+                new=b"export type FreshEdge = { event_id: string };",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_fresh_edges_callsites_read_the_generated_envelope",),
+                note=(
+                    "🔴 这条的存在理由是**防空头**：J5 / J6 一改，守卫的**负向**那半和**别名**那半会**同时**红，"
+                    "于是「别名必须在」这三行可能从来没被真正执行过 —— 换个说法，"
+                    "没有 J7 就无法区分「守卫拦住了副本」与「守卫只是恰好在别名那半红了」。"
+                    "这里**不插入任何 interface**（负向那半照常通过），只把别名指向一个内联对象字面量："
+                    "契约来源从生成类型变回手写，而这正是 §53.52/§53.53 要禁的那件事。"
+                    "`tsc` 对 `export type X = {...}` 完全合法 ⇒ 编译、lint、类型检查全绿，"
+                    "拦截点只有这条静态判据。针单行、在 `api.ts` 恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J8  freshEdges 调用点绕过已发布信封：generic 退回内联形状（第 1 处）",
+                path=_API_TS,
+                old=b"    api<FreshEdgesResponse>(`/events/edges/fresh?limit=${limit}`),",
+                new=b"    api<{ edges: unknown[] }>(`/events/edges/fresh?limit=${limit}`),",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_fresh_edges_callsites_read_the_generated_envelope",),
+                note=(
+                    "只改 generic，**路径一字不动** —— 与 J2 同型。契约仍然发布着，"
+                    "但调用点用内联形状把它绕过去，于是 `FreshEdgesResponse` 的 re-export 又变成零消费者。"
+                    "选 `unknown[]` 而不是还原当时那个内联形状：后者要重新 import `FreshEdge`，"
+                    "会顺带把「副本回来了」一起引进来，红了就分不清是踩了哪条判据。"
+                    "针是**整行**（含路径），因此天然唯一 —— 若只取 `    api<FreshEdgesResponse>(` 这个前缀，"
+                    "它会同时出现在两个调用点上（实测 2 次），针必须是整行或跨行。"
+                ),
+            ),
+            Mutation(
+                label="J9  edgeMonitor 调用点绕过已发布信封：generic 退回内联形状（第 2 处）",
+                path=_API_TS,
+                old=(
+                    b"    api<FreshEdgesResponse>(\n"
+                    b"      `/events/edges/fresh?limit=${limit}&offset=${offset}"
+                    b"&classification=${classification}&include_series=true`,\n"
+                    b"    ),"
+                ),
+                new=(
+                    b"    api<{ edges: unknown[] }>(\n"
+                    b"      `/events/edges/fresh?limit=${limit}&offset=${offset}"
+                    b"&classification=${classification}&include_series=true`,\n"
+                    b"    ),"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_fresh_edges_callsites_read_the_generated_envelope",),
+                note=(
+                    "同一个端点族的**第二个**调用点。与 J8 分开是 §4.2 的规矩："
+                    "「一成员被 N 处消费却只补 1 处」—— 两处调用点是两条独立的回归路径，"
+                    "只补一处，另一处的绕过永远不会红。"
+                    "这条必须用**跨行**针：`    api<FreshEdgesResponse>(` 这个前缀两处都占（实测 2 次），"
+                    "带上第二行的路径片段后才唯一。跨行针在 `core.autocrlf` 仓里由 `count_needle` / "
+                    "`_needle_variants` 在 LF 与 CRLF 两种拼法下各试一次，"
+                    "`test_mutation_verify.py` 会按**文件自己的字节**重铸两种约定来验，所以与检出无关。"
+                    "⚠️ 顺带一条余量说明：守卫用「从调用点行往回找最近的 `api<`」而不是固定窗口，"
+                    "就是因为这个调用点下方不远处是 `resetData` 的内联 `api<{ ... }>` —— "
+                    "任何够宽的固定窗口都会匹配到那个邻居。"
+                ),
+            ),
+            Mutation(
+                label="J10 FreshEdgesResponse.edges 退回裸 dict：元素契约消失（静默）",
+                path=_EVENT_MODEL,
+                old=b"    edges: list[FreshEdgeItem]",
+                new=b"    edges: list[dict[str, Any]]",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_fresh_edges_response_points_at_the_published_element",),
+                note=(
+                    "把 `edges` 退回 §53.54 之前的 `list[dict[str, Any]]`。与 J4 同族（模型身份判据）"
+                    "但**不同字段**：J4 覆盖 `EventHistoryResponse.trend`，这条覆盖本节点自己的标题字段。"
+                    "回归是**完全静默**的：`FlexibleResponse` 照样校验、返回字节一模一样，"
+                    "`generated-types.ts` 只是把元素换回 inline `{ [k: string]: unknown }`，`tsc` 依旧全绿 —— "
+                    "而那正是前端当初手写 `FreshEdge` 的原因。"
+                    "所以判据只能是 `model_fields['edges'].annotation == list[FreshEdgeItem]` 的**同一性**，"
+                    "不是 `issubclass`、更不是读生成文件（读文件要先重新生成，而变异跑的是未重新生成的判据）。"
+                    "针单行、在 `event.py` 恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J11 FreshEdgeItem.edge 退回裸 dict：嵌套的具名契约消失（静默）",
+                path=_EVENT_MODEL,
+                old=b"    event_title_zh: str | None = None\n    edge: EdgeTrajectorySummary",
+                new=b"    event_title_zh: str | None = None\n    edge: dict[str, Any]",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_fresh_edges_response_points_at_the_published_element",),
+                note=(
+                    "把元素的 `edge` 退回裸 dict。这条踩的是**嵌套**那半的同一性判据 —— "
+                    "`EdgeTrajectorySummary` 是 §53.53 已经命名的模型，本节点只是**引用**它，"
+                    "所以它被换掉时 `FreshEdgeItem` 自己仍然是闭合的、`tsc` 仍然全绿（同上，静默）。"
+                    "必须用跨行针：`    edge: EdgeTrajectorySummary` 在 `event.py` 出现 **2 次**"
+                    "（另一个是 `EventHistoryResponse.edge`），实测 2 次 ⇒ 单行针不合法；"
+                    "带上前面那行 `event_title_zh` 才唯一。"
+                    "为什么不改用 `EventHistoryResponse.edge` 那处：那已经由 J4 的同族判据覆盖，"
+                    "而这里要证明的是**新模型自己的**字段也在判据范围内。"
+                ),
+            ),
+            Mutation(
+                label="J12 FreshEdgeItem.event_title_zh 丢掉默认值：条件写入的键变成必填",
+                path=_EVENT_MODEL,
+                old=b"    event_title_zh: str | None = None",
+                new=b"    event_title_zh: str | None",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_fresh_edges_response_points_at_the_published_element",),
+                note=(
+                    "🔴 这条踩的是**可选性**判据里「条件写入的键必须**保留**默认值」那半 —— "
+                    "§53.53 明确登记过的一条缺口：当时 `EventHistoryResponse` 由可选收紧成必填，"
+                    "**没有任何独立变异**能证明「可选性」这件事被守卫看见了。这里补上方向相反的那一半。"
+                    "它不是理论风险：路由只在商店里有中文标题时才写 `event_title_zh`"
+                    "（`routes/events.py` 的 `if title_zh:`），`response_model_exclude_unset=True` 保证缺席即不出现键；"
+                    "一旦这个字段变成必填，**没有中文标题的事件**（五份语料里三份的常态）会直接 500。"
+                    "同时它也是「五字段恒写 / 两字段条件写」双向断言里唯一能被踩的一侧："
+                    "另一侧（`count` 等恒写字段加回默认值）走的是**同一个** `is_required()` 断言实例，"
+                    "再加一条只会让计数虚胖、不会多发现一个盲区，故**有意不登记**。"
+                    "⚠️ 该「不登记」的前提是：这两组仍然共用 `assertTrue/assertFalse(is_required())` 这一个断言形状；"
+                    "若哪天被拆成两组独立断言，另一侧就要补。针单行、恰好 1 次（实测）。"
                 ),
             ),
         ),

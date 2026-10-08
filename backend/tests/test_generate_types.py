@@ -11,6 +11,9 @@ Verifies:
   and exactly the documented models stay open (audit sections 53.49-53.51).
 - ``api.ts`` re-declares no overlay of its own and reads the generated, closed
   interfaces for the three quality overlays (audit section 53.52).
+- ``FreshEdgesResponse`` names its list element, that element keeps the
+  required/optional split its producers imply, and both ``/events/edges/fresh``
+  call sites read the published envelope (audit section 53.54).
 """
 from __future__ import annotations
 
@@ -254,7 +257,12 @@ class TestGenerateTypesScript(unittest.TestCase):
         The three shapes audit 53.53 published for GET
         /events/{id}/history join the closed list: the route binds them as its
         response models, so a tail on any of them would let the frontend reach
-        for keys the endpoint does not promise.
+        for keys the endpoint does not promise. Audit 53.54 adds
+        ``EdgeSeriesPoint`` and ``FreshEdgeItem`` -- the point and the list
+        element of GET /events/edges/fresh -- for the same reason. They are
+        listed as *roots* in the allowlist, which is what makes them closed;
+        being reachable only by ``$ref`` from ``FreshEdgesResponse.edges`` would
+        have left the tail on exactly the element the frontend could not read.
         """
         self._run_script()
         bodies = _interface_bodies(_OUTPUT_PATH.read_text(encoding="utf-8"))
@@ -262,9 +270,11 @@ class TestGenerateTypesScript(unittest.TestCase):
             "ConfidenceBreakdown",
             "CrossValidation",
             "DecisionQuality",
+            "EdgeSeriesPoint",
             "EdgeTrajectorySummary",
             "EventAuditSnapshot",
             "EvidenceItem",
+            "FreshEdgeItem",
             "LLMTelemetry",
             "MarketQuality",
             "SourceReliability",
@@ -513,6 +523,171 @@ class EventHistoryContractTests(unittest.TestCase):
             "the /history call site bypasses the published envelope again: "
             "api.ts must read api<EventHistoryResponse>",
         )
+
+
+class FreshEdgesContractTests(unittest.TestCase):
+    """The GET /events/edges/fresh contract, from both ends (audit 53.54).
+
+    Same split as ``EventHistoryContractTests``: the model half reads
+    ``model_fields`` and needs no ``json2ts``, and the text half reads modules
+    nothing generates, so a stale ``generated-types.ts`` can neither make it pass
+    nor make it fail.
+    """
+
+    def test_fresh_edges_response_points_at_the_published_element(self):
+        """The envelope names its element, and both optionality directions hold.
+
+        Three groups, each aimed at a different way this endpoint loses its
+        contract.
+
+        ``edges`` must name ``FreshEdgeItem``. Identity, not ``issubclass``:
+        ``FreshEdgesResponse`` is a ``FlexibleResponse``, so a regression to
+        ``list[dict[str, Any]]`` still validates, still returns the same bytes,
+        and still passes ``tsc`` -- the generated element would simply go back to
+        ``{ [k: string]: unknown }``, which is the shape the frontend had to work
+        around by hand-writing ``FreshEdge`` in the first place.
+
+        The element's ``edge`` and ``series`` must name 53.53's
+        ``EdgeTrajectorySummary`` and this section's ``EdgeSeriesPoint``: those
+        two are what is left of an element once the wrapper is stripped.
+
+        Finally the required/optional split, which fails in *opposite*
+        directions and therefore needs both halves. Dropping the default from
+        ``event_title_zh`` turns an event with no Chinese title into a 500, while
+        giving one back to ``count`` silently re-widens the published envelope to
+        ``count?:``. ``model_fields[...].is_required()`` is the only reading that
+        sees the second mistake: the generated text stays "valid", just looser
+        than the endpoint promises.
+        """
+        from app.models.event import (
+            EdgeSeriesPoint,
+            EdgeTrajectorySummary,
+            FreshEdgeItem,
+            FreshEdgesResponse,
+        )
+
+        fields = FreshEdgesResponse.model_fields
+        self.assertIn("edges", fields, "FreshEdgesResponse.edges vanished")
+        self.assertEqual(
+            fields["edges"].annotation,
+            list[FreshEdgeItem],
+            "FreshEdgesResponse.edges no longer names its published element",
+        )
+
+        item = FreshEdgeItem.model_fields
+        self.assertEqual(
+            item["edge"].annotation,
+            EdgeTrajectorySummary,
+            "FreshEdgeItem.edge no longer names the 53.53 trajectory model",
+        )
+        self.assertEqual(
+            item["series"].annotation,
+            list[EdgeSeriesPoint] | None,
+            "FreshEdgeItem.series no longer names the published point model",
+        )
+
+        for name in ("event_id", "event_title", "edge"):
+            with self.subTest(always_written=name):
+                self.assertTrue(
+                    item[name].is_required(),
+                    f"FreshEdgeItem.{name} gained a default, but both producers "
+                    "write that key on every item",
+                )
+        for name in ("event_title_zh", "series"):
+            with self.subTest(conditionally_written=name):
+                self.assertFalse(
+                    item[name].is_required(),
+                    f"FreshEdgeItem.{name} lost its default. The route writes "
+                    "that key conditionally, so requiring it makes the 500 the "
+                    "normal case -- see the model docstring for the probe.",
+                )
+        for name in (
+            "count",
+            "total",
+            "limit",
+            "offset",
+            "classification",
+            "classification_totals",
+        ):
+            with self.subTest(envelope=name):
+                self.assertTrue(
+                    fields[name].is_required(),
+                    f"FreshEdgesResponse.{name} gained a default, but the one "
+                    "route serving this model sets that key unconditionally "
+                    "(audit 53.54 tightened the envelope)",
+                )
+
+    def test_fresh_edges_callsites_read_the_generated_envelope(self):
+        """No local copy of the retired element, and both call sites use it.
+
+        The negative half is name-based out of necessity. The criterion already
+        in place -- ``ALLOWED_OVERLAY_COPIES_IN_API_TS``, which counts an
+        interface as a copy when its name ends in ``Overlay`` or its body carries
+        an index signature -- is blind to a re-declared ``FreshEdge``, which is
+        neither. ``_interface_bodies`` only collects ``export interface``, so the
+        ``export type`` aliases asserted below are not mistaken for declarations.
+
+        The positive half walks *back* from each ``/events/edges/fresh`` line to
+        the nearest ``api<`` generic rather than searching a fixed window: the
+        ``edgeMonitor`` call site sits a few lines under ``resetData``'s inline
+        ``api<{ ... }>``, so any window wide enough to be safe would have matched
+        that neighbour instead of the generic actually in use.
+        """
+        api_text = _API_TS_PATH.read_bytes().decode("utf-8")
+        types_text = _TYPES_TS_PATH.read_bytes().decode("utf-8")
+        api_bodies = _interface_bodies(api_text)
+        types_bodies = _interface_bodies(types_text)
+
+        for name in ("EdgePoint", "EdgeSeriesPoint", "FreshEdge", "FreshEdgeItem"):
+            with self.subTest(retired=name):
+                self.assertNotIn(
+                    name,
+                    api_bodies,
+                    f"api.ts re-declared {name}; generated-types.ts is the "
+                    "source of truth. Alias the generated name instead.",
+                )
+                self.assertNotIn(
+                    name,
+                    types_bodies,
+                    f"types.ts re-declared {name}; generated-types.ts is the "
+                    "source of truth. Alias the generated name instead.",
+                )
+
+        for needle in (
+            "export type FreshEdge = GeneratedFreshEdgeItem;",
+            "export type EdgePoint = GeneratedEdgeSeriesPoint;",
+            "export type FreshEdgesResponse = GeneratedFreshEdgesResponse;",
+        ):
+            with self.subTest(alias=needle):
+                self.assertIn(
+                    needle,
+                    api_text,
+                    f"api.ts no longer aliases the generated name "
+                    f"(expected: {needle})",
+                )
+
+        lines = api_text.splitlines()
+        paths = [i for i, ln in enumerate(lines) if "/events/edges/fresh" in ln]
+        self.assertEqual(
+            len(paths),
+            2,
+            "expected the two /events/edges/fresh call sites in api.ts, "
+            f"found {len(paths)}",
+        )
+        for idx in paths:
+            generic = ""
+            for back in range(idx, -1, -1):
+                if "api<" in lines[back]:
+                    generic = lines[back]
+                    break
+            with self.subTest(callsite=lines[idx].strip()[:40]):
+                self.assertTrue(generic, "no api< generic found above this call site")
+                self.assertIn(
+                    "api<FreshEdgesResponse>(",
+                    generic,
+                    "this call site bypasses the published envelope again: "
+                    "api.ts must read api<FreshEdgesResponse>",
+                )
 
 
 class ApiTsTypeSourceTests(unittest.TestCase):

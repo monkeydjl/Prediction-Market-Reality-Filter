@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw, Target } from "lucide-react";
 import { DecisionCard } from "@/components/decisions/decision-card";
 import { PaginationControls } from "@/components/pagination-controls";
-import { eventsApi, type DecisionReport, type FreshEdge } from "@/lib/api";
+import { eventsApi, type DecisionReport } from "@/lib/api";
 
 const PAGE_SIZE = 10;
 
@@ -38,7 +38,7 @@ export default function DecisionsPage() {
     setTotal(open.total ?? open.count ?? rows.length);
     setDecisionTotals(open.decision_totals ?? {});
     const map: Record<string, string> = {};
-    for (const e of (fresh.edges ?? []) as FreshEdge[]) {
+    for (const e of fresh.edges ?? []) {
       map[e.event_id] = e.edge.classification;
     }
     setFreshById(map);

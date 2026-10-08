@@ -40,7 +40,13 @@ function fmtAge(hours: number | null | undefined) {
 }
 
 
-function EdgeTimeline({ series, compact }: { series?: EdgePoint[]; compact?: boolean }) {
+// `series` is `EdgeSeriesPoint[] | null` on the wire: `_edge_items` writes the
+// key only when `include_series=True`, and when it does write it the value is
+// never null -- but the generated type spells the field optional-and-nullable,
+// and "present but null" is not expressible in the generated TypeScript. The
+// receiver is therefore widened rather than the call site papered over with
+// `?? undefined`. The body already handles both with `series ?? []`.
+function EdgeTimeline({ series, compact }: { series?: EdgePoint[] | null; compact?: boolean }) {
   const data = (series ?? [])
     .filter((p) => Number.isFinite(p.edge))
     .map((p) => ({

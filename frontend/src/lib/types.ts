@@ -16,6 +16,8 @@ import type {
   EventRecord as BackendEventRecord,
   EvidenceProfile as BackendEvidenceProfile,
   EventSemantics as BackendEventSemantics,
+  EventAuditSnapshot,
+  TrendSummary,
 } from "./generated-types";
 
 // conclusion_challenge is written onto the record dict by
@@ -57,32 +59,24 @@ export interface TrackedEntry {
 // UI-only types: no backend Pydantic model exists for these. They are
 // derived from API responses or computed in the frontend.
 
-export interface Trend {
-  observations?: number;
-  direction?: string;
-  pattern?: string;
-  net_change?: number;
-  recent_change?: number;
-  min_probability?: number;
-  max_probability?: number;
-  volatility?: number;
-  latest_probability?: number;
-  span_hours?: number | null;
-}
+// HistorySnapshot and Trend used to live here as hand-written subsets of the
+// /events/{id}/history payload. Audit 53.53 gave that payload named response
+// models (EventAuditSnapshot / TrendSummary / EdgeTrajectorySummary), so both
+// now read the generated contract instead of a 4-field and a 10-field copy of
+// it. The frontend names are kept because the consumers and their fixtures --
+// buildSeries, sparkSeries, TrendEdgeSummary -- spell them this way.
+//
+// Note the generated versions are *wider*, not narrower: 11 and 14 fields
+// against 4 and 10, and the shape arrives through `res.json() as T`, so a
+// divergent copy would have compiled cleanly either way.
+export type HistorySnapshot = EventAuditSnapshot;
+export type Trend = TrendSummary;
 
 export interface Mover {
   event_id: string;
   event_title?: string;
   event_title_zh?: string;
   trend?: Trend;
-}
-
-export interface HistorySnapshot {
-  timestamp?: string;
-  baseline?: number;
-  estimated?: number;
-  change?: number;
-  direction?: string;
 }
 
 export interface SimilarEvent {

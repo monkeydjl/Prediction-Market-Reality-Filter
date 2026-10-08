@@ -2,8 +2,6 @@ import type {
   EventRecord,
   TrackedEntry,
   Mover,
-  HistorySnapshot,
-  Trend,
   SimilarEvent,
 } from "./types";
 import type {
@@ -17,6 +15,7 @@ import type {
   SimTradeListResponse as GeneratedSimTradeListResponse,
   TradeStats as GeneratedTradeStats,
   DecisionQuality,
+  EdgeTrajectorySummary as GeneratedEdgeTrajectorySummary,
   MarketQuality,
   SourceReliability,
 } from "./generated-types";
@@ -337,18 +336,12 @@ export type SimTradeListResponse = GeneratedSimTradeListResponse;
 export type TradeStats = GeneratedTradeStats;
 
 // An event's edge trajectory + freshness (M5 fresh-edge surface).
-// Mirrors trend_analysis_service.analyze_edge_trajectory.
-export interface EdgeTrajectory {
-  observations: number;
-  latest_edge: number | null;
-  first_edge: number | null;
-  peak_edge: number | null;
-  net_edge_change: number;
-  recent_edge_change: number;
-  age_hours: number | null;
-  freshness_band: string;
-  classification: string; // no_data | stale | closed | fresh | decaying
-}
+// Read from the generated contract rather than re-declared: audit 53.53 gave
+// trend_analysis_service.analyze_edge_trajectory a named response model
+// (EdgeTrajectorySummary), and the local copy it replaced was 9 fields to the
+// producer's 12 -- it was a *narrower* claim than the backend makes, and
+// `res.json() as T` meant nothing caught the difference.
+export type EdgeTrajectory = GeneratedEdgeTrajectorySummary;
 
 export interface EdgePoint {
   timestamp?: string | null;
@@ -885,9 +878,12 @@ export const eventsApi = {
     }),
 
   history: (id: string) =>
-    api<{ history: HistorySnapshot[]; trend?: Trend; edge?: EdgeTrajectory; count?: number }>(
-      `/events/${encodeURIComponent(id)}/history`
-    ),
+    // Reads the generated envelope instead of an inline shape. Before audit
+    // 53.53 this spelled the three fields out locally, which left the
+    // EventHistoryResponse re-export above with no consumer at all -- the
+    // contract was published and then bypassed at the one call site that
+    // needed it.
+    api<EventHistoryResponse>(`/events/${encodeURIComponent(id)}/history`),
 
   batchSparklines: (eventIds: string[]) =>
     api<{ sparklines: Record<string, number[]> }>("/events/batch-sparklines", {

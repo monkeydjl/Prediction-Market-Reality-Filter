@@ -287,12 +287,75 @@ export interface DecisionTimelineSnapshot {
   guardrail_fired?: string[] | null;
   outcome?: string | null;
 }
+/**
+ * AI-vs-market edge trajectory: ``analyze_edge_trajectory``'s output.
+ *
+ * Named ``…Summary`` for the same collision reason as ``TrendSummary``: the
+ * frontend hand-wrote an ``EdgeTrajectory`` in ``lib/api.ts``. That copy was
+ * also *narrower* than the producer -- it omitted ``first_seen``, ``last_seen``
+ * and ``span_hours`` -- so reading the generated type is a gain, not a rename.
+ *
+ * ``first_seen``/``last_seen`` are strings, not datetimes: they carry the audit
+ * line's own ``timestamp`` value straight through. Declaring them ``datetime``
+ * would make pydantic re-serialize an ISO string it was just handed, for no
+ * gain. ``_empty_edge`` and the computed summary return the same twelve keys.
+ */
+export interface EdgeTrajectorySummary {
+  observations: number;
+  latest_edge: number | null;
+  first_edge: number | null;
+  peak_edge: number | null;
+  net_edge_change: number;
+  recent_edge_change: number;
+  first_seen: string | null;
+  last_seen: string | null;
+  span_hours: number | null;
+  age_hours: number | null;
+  freshness_band: string;
+  classification: string;
+}
 export interface EventAnalysisRequest {
   event_question: string;
   baseline_probability?: number;
   news_context?: string | null;
   volume?: number | null;
   liquidity?: number | null;
+}
+/**
+ * One line of ``event_audit.jsonl`` as served back by ``/events/{id}/history``.
+ *
+ * Mirrors ``event_audit_service.record_event`` key for key (audit section
+ * 53.53). ``record_event`` writes *all* eleven keys unconditionally, using
+ * ``None`` for a missing value rather than omitting the key, so every field
+ * here is present on every line and the nullable ones are spelled ``X | None``
+ * with no default -- pydantic reads that as required-but-nullable, which is the
+ * only spelling ``pydantic2ts`` renders as ``estimated: number | null`` (see
+ * ``MarketSnapshotPoint`` above for the same reasoning).
+ *
+ * ``int`` for the three scores is deliberate, not incidental: ``Credibility``
+ * and ``Impact`` declare ``score: int`` and ``EventRecord.value_score`` is
+ * ``int``. Declaring them ``float`` would re-serialize every line's ``26`` as
+ * ``26.0`` -- a wire change on 458 of 458 observed snapshots, for nothing.
+ * Conversely ``baseline``/``estimated``/``change`` are already Python floats in
+ * the log, so ``float`` leaves them byte-identical.
+ *
+ * ``event_id`` carries no default because reachability *derives* it:
+ * ``history_for_event`` looks the key up in ``histories_by_event()``, and
+ * ``_group_records`` drops any line whose ``event_id`` is falsy before grouping.
+ * A snapshot this route can return therefore has a non-empty string id.
+ */
+export interface EventAuditSnapshot {
+  timestamp: string;
+  event_id: string;
+  event_title: string | null;
+  baseline: number | null;
+  estimated: number | null;
+  change: number | null;
+  direction: string | null;
+  credibility_score: number | null;
+  impact_score: number | null;
+  value_score: number | null;
+  source_type: string | null;
 }
 export interface EventDiscoveryResponse {
   platform?: string;
@@ -303,19 +366,52 @@ export interface EventDiscoveryResponse {
   }[];
   [k: string]: unknown;
 }
+/**
+ * Response for GET /api/events/{event_id}/history.
+ *
+ * The five fields lost their defaults in audit section 53.53, tightening a
+ * previously all-optional published contract. That is safe by construction:
+ * the route raises 404 unless it has probability snapshots, then returns a
+ * dict literal with every one of these keys. Leaving the defaults on would have
+ * rendered ``trend?:`` in the generated TypeScript -- looser than what the
+ * endpoint actually promises.
+ */
 export interface EventHistoryResponse {
-  event_id?: string;
-  count?: number;
-  trend?: {
-    [k: string]: unknown;
-  };
-  edge?: {
-    [k: string]: unknown;
-  };
-  history?: {
-    [k: string]: unknown;
-  }[];
+  event_id: string;
+  count: number;
+  trend: TrendSummary;
+  edge: EdgeTrajectorySummary;
+  history: EventAuditSnapshot[];
   [k: string]: unknown;
+}
+/**
+ * Probability-trend summary: ``trend_analysis_service.analyze_trend``'s output.
+ *
+ * Named ``TrendSummary`` rather than ``Trend`` on purpose: the frontend already
+ * owns two things called ``Trend`` (the hand-written consumer interface in
+ * ``lib/types.ts`` and an unrelated ``"up" | "down" | "flat"`` union in
+ * ``lib/adapt.ts``), and ``types.ts`` re-exports this module's types wholesale.
+ * A generated ``Trend`` would be a duplicate export.
+ *
+ * Both branches of ``analyze_trend`` -- the computed summary and the
+ * ``_empty_trend`` fallback -- return all fourteen keys, so nothing here needs
+ * a default and no branch can fail validation.
+ */
+export interface TrendSummary {
+  observations: number;
+  direction: string;
+  first_probability: number | null;
+  latest_probability: number | null;
+  net_change: number;
+  min_probability: number | null;
+  max_probability: number | null;
+  range: number;
+  volatility: number;
+  recent_change: number;
+  pattern: string;
+  first_seen: string | null;
+  last_seen: string | null;
+  span_hours: number | null;
 }
 export interface EventListResponse {
   count?: number;

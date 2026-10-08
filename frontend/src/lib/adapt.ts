@@ -8,6 +8,7 @@ import type {
   TrackedEntry,
   Mover,
   HistorySnapshot,
+  TrendSummary,
 } from "./types";
 
 export type Trend = "up" | "down" | "flat";
@@ -138,7 +139,16 @@ export function adaptEntry(entry: TrackedEntry): EventView {
 // Movers carry a trend block (from trend_analysis_service.rank_movers) rather
 // than a full record; map what the dashboard cards need.
 export function adaptMover(m: Mover): EventView {
-  const t = m.trend ?? {};
+  // Typed as a partial on purpose. ``Mover.trend`` was a hand-written
+  // all-optional interface until audit 53.53 replaced it with the generated
+  // ``TrendSummary``, whose fields are required -- and that change exposed this
+  // line: ``m.trend ?? {}`` used to fold to ``Trend`` (``{}`` was assignable to
+  // an all-optional type), so the fallback was a no-op and the property reads
+  // below were never actually defensive. Widening the local back to a partial
+  // keeps the graceful-degradation contract this file documents, now checked.
+  // Spelled ``TrendSummary`` rather than ``Trend``: this module defines its own
+  // unrelated ``Trend`` (the "up" | "down" | "flat" direction union above).
+  const t: Partial<TrendSummary> = m.trend ?? {};
   const delta = num(t.net_change);
   return {
     id: m.event_id,

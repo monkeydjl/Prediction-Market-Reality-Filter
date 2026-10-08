@@ -347,6 +347,7 @@ _SPORT_MARKET_ROUTES = "backend/app/api/routes/sport_markets.py"
 _FRONTEND_EXPORT = "backend/app/models/_frontend_export.py"
 _EVENT_MODEL = "backend/app/models/event.py"
 _API_TS = "frontend/src/lib/api.ts"
+_TYPES_TS = "frontend/src/lib/types.ts"
 _T_GENERATE_TYPES = "tests/test_generate_types.py"
 
 _T_AVAILABILITY = "tests/test_football_live_availability_service.py"
@@ -1617,24 +1618,32 @@ SETS: tuple[MutationSet, ...] = (
                 ),
             ),
             Mutation(
-                label="C2  导出模块不再导入该模型：interface 从闭合变成宽松",
+                label="C2  导出模块不再保留该名字：interface 从闭合变成宽松",
                 path=_FRONTEND_EXPORT,
                 old=b"    MarketSnapshotSeries,",
-                new=b"    _MarketSnapshotSeriesUnused,",
+                new=b"    MarketSnapshotSeries as _MarketSnapshotSeriesUnused,",
                 guard_file=_T_GENERATE_TYPES,
                 guards=("test_market_snapshot_models_are_export_roots",),
                 note=(
-                    "改名而不是删除：`__all__` 里仍有 `\"MarketSnapshotSeries\",`，"
-                    "而只有 `from module import *` 才会因缺名报错 —— 本仓不这么用，"
-                    "所以模块照常导入，只是命名空间里少了这个名字。"
+                    "**导入改成别名**，不是把名字换掉：`old` → `new` 里源名字仍在，"
+                    "所以 `from app.models.event import ...` 照常成立，`__all__` 里的 "
+                    "`\"MarketSnapshotSeries\",` 也仍在（它只是个字符串），"
+                    "**只有**命名空间里少了 `MarketSnapshotSeries` 这个名字。"
                     "守卫断言它是 `_frontend_export` 的属性（= root），而那正是 interface 闭合的成因。"
+                    "🔴 **这条写法是 §53.53 更正过的，原文是 `new=b\"    _MarketSnapshotSeriesUnused,\"`（把名字换掉）。"
+                    "换成别名之前，它虽然也能让守卫变红，但红的是**另一件事**：测试体里那行 "
+                    "`from app.models import _frontend_export` 直接抛 "
+                    "`ImportError: cannot import name '_MarketSnapshotSeriesUnused'`。"
+                    "实测两种写法都红，但只有别名那种红在**可达性**上 —— "
+                    "前者对「模块能导入但名字没了」这种真实回归**永远不会红**，"
+                    "而那才是守卫要拦的东西。同族的 D1 一并改了。"
                 ),
             ),
         ),
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J4）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -1662,22 +1671,58 @@ SETS: tuple[MutationSet, ...] = (
             "没有它，「副本没回来」与「字段仍读生成类型」会被同一个绿结果混为一谈，"
             "而 §53.52 同时做了这两件事。D6 特意把索引签名放在**非末行**："
             "首版探测器只看最后一个非空行 ⇒ 会漏掉它，改成「体内任意位置」后这条才红。"
+            "§53.53 把同一条规则推进到 `GET /events/{id}/history`：`event.py` 发布了三个具名模型"
+            "（`EventAuditSnapshot` / `TrendSummary` / `EdgeTrajectorySummary`），"
+            "前端三个手写类型（`types.ts` 的 `HistorySnapshot` / `Trend`、`api.ts` 的 `EdgeTrajectory`）"
+            "改成读生成名。J1–J4 各踩**一条互不重叠**的判据，且分布在**三个文件**上："
+            "J1 踩「`api.ts` 不得再声明副本」、J2 踩「`/history` 调用点必须读已发布信封」"
+            "（守卫的**正向**那半）、J3 踩同一负向判据的**另一个文件** `types.ts`、"
+            "J4 踩「信封字段必须指名模型」这条**模型身份**判据。"
+            "为什么 J1 不能靠 D4–D6 替代：那三条的守卫判据是「名字以 `Overlay` 结尾」或「体内有索引签名」，"
+            "而一份去掉三个字段的 `EdgeTrajectory` 副本两条都不占 ⇒ 老守卫**天然盲** —— "
+            "这正是新判据必须**按名**判的理由。"
+            "为什么 J3 与 J1 要分开：同一条判据作用在**两个文件**上，只扫 `api.ts` 的守卫会放过 `types.ts`，"
+            "而 `types.ts` 恰恰是写着「DO NOT hand-write fields that exist in the Pydantic models」"
+            "却**没有**守卫的那个文件（规则在注释里 ≈ 空头）。"
+            "🔴 **有意不登记的一条变异**：不再为「把 `EventAuditSnapshot` 从 `_frontend_export` 的 import 里挪走」"
+            "补一条 —— 它踩的是 D1 已经证明承重的那**同一条**判据（`test_every_reachable_plain_model_is_registered`），"
+            "同一个规则换个成员再加一条只会让计数虚胖，不会多发现一个盲区。"
+            "⚠️ **这条推理的前提本轮被改过**：§53.53 发现 D1 原文（把名字换掉）虽然变红，但红在 "
+            "`ImportError` 上、**不在**可达性判据上（≈空判据）⇒ 已把 D1 改成**导入别名**写法并更正 note。"
+            "现在「D1 证明该判据承重」这句话才成立于它所声称的那条判据；"
+            "同族的 C2（`market-snapshot-contract`）同批更正。复述本段时必须带上这条前提。"
+            "⚠️ 但它的**结论有前提**：若哪天有人把那条守卫的判据从「可达即须登记」改成只认具体名单，"
+            "这条推理就过期了，届时要补。"
+            "🔴 另有一条**确实缺失**的判据，登记备查、本轮不做：`EventHistoryResponse` 五个字段从带默认值"
+            "收紧成 required（生成的 TS 里由 `?:` 变必填）**没有**独立变异 —— "
+            "它只在 `test_closed_overlay_interfaces_have_no_tail` 间接体现在「三个新模型必须闭合」上；"
+            "要单独钉住可选性，得新写一条读生成文件的正向断言（`event_id: string;` 而非 `event_id?: string;`），"
+            "而那条需要先重新生成，超出本 set 的静态判据口径。"
         ),
         mutations=(
             Mutation(
-                label="D1  导出模块不再导入该模型：闭合的 interface 退回嵌套（变松）",
+                label="D1  导出模块不再保留该名字：闭合的 interface 退回嵌套（变松）",
                 path=_FRONTEND_EXPORT,
                 old=b"    EvidenceProfile,",
-                new=b"    _EvidenceProfileUnused,",
+                new=b"    EvidenceProfile as _EvidenceProfileUnused,",
                 guard_file=_T_GENERATE_TYPES,
                 guards=("test_every_reachable_plain_model_is_registered",),
                 note=(
-                    "改名而非删除：`__all__` 里仍有 `\"EvidenceProfile\",`，而只有 "
-                    "`from module import *` 才会因缺名报错 —— 本仓不这么用，所以模块照常导入，"
-                    "只是命名空间里少了这个名字。守卫遍历**命名空间**里的根（= 生成器真正收集的那一组），"
+                    "**导入改成别名**，不是把名字换掉：源名字仍在 ⇒ `from app.models.event import …` "
+                    "照常成立，`__all__` 里也仍有 `\"EvidenceProfile\",`（那只是个字符串），"
+                    "**只有**命名空间里少了这个名字。守卫遍历**命名空间**里的根（= 生成器真正收集的那一组），"
                     "沿字段注解递归展开 `Optional` / `list` 等，再要求每个 `extra != 'allow'` 的可达模型"
                     "都在命名空间里；`EvidenceProfile` 是 `EventRecord.evidence` 的类型 ⇒ 立刻成为 missing。"
                     "针 `    EvidenceProfile,` 在本文件恰好出现 1 次（`read_bytes().count()` 实测）。"
+                    "🔴 **这条写法是 §53.53 更正过的**，原文是 `new=b\"    _EvidenceProfileUnused,\"`（把名字换掉），"
+                    "其 `note` 当时声称「模块照常导入，只是命名空间里少了这个名字」—— **实测不成立**："
+                    "测试体里那行 `from app.models import _frontend_export` 会直接抛 "
+                    "`ImportError: cannot import name '_EvidenceProfileUnused' from 'app.models.event'`。"
+                    "两种写法都让守卫变红，但**红的不是同一件事**：原文红在「模块导不进来」，"
+                    "任何语法/导入错误都能让它红（≈空判据）；别名那种红在**可达性**上，"
+                    "实测失败文本是 `AssertionError: Lists differ: ['EvidenceProfile'] != []`。"
+                    "⇒ **一条变异「能变红」不等于「红在它声称的那条判据上」**。"
+                    "同族的 C2（`market-snapshot-contract`）一并改了。"
                 ),
             ),
             Mutation(
@@ -1789,6 +1834,88 @@ SETS: tuple[MutationSet, ...] = (
                     "与 `generated-types.ts` 相反：那里 `dict[str, Any]` 字段的 inline 索引签名是合法的，"
                     "不能用同一判据（§53.51 的缩进盲搜教训）。"
                     "名字不以 `Overlay` 结尾、字段仍指生成名 ⇒ 只有索引分支会红。针单行、恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J1  api.ts 又自己声明 EdgeTrajectory：消费侧副本长回来",
+                path=_API_TS,
+                old=b"export type EdgeTrajectory = GeneratedEdgeTrajectorySummary;",
+                new=(
+                    b"export interface EdgeTrajectory {\n"
+                    b"  observations: number;\n"
+                    b"  latest_edge: number | null;\n"
+                    b"  classification: string;\n"
+                    b"}"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_history_endpoint_reads_the_generated_envelope",),
+                note=(
+                    "把 §53.53 退役掉的那份手写 `EdgeTrajectory` 还原（去掉 `first_seen` / `last_seen` / "
+                    "`span_hours` 三个字段，复刻它当时**比生产者更窄**的样子）。"
+                    "这条**故意绕开** `ALLOWED_OVERLAY_COPIES_IN_API_TS`：那个判据是「名字以 `Overlay` 结尾」"
+                    "或「体内有索引签名」，而这份副本两条都不占 ⇒ 老守卫对它**天然盲**。"
+                    "这正是新判据必须**按名字**判的原因，也是 J1 存在的理由：它证明新那半承重，"
+                    "而不是「反正 D4–D6 也绿了」。`api.ts` 无生成器写它 ⇒ 编译、eslint、tsc 全绿。"
+                    "针单行、在 `api.ts` 恰好 1 次（实测；LF/CRLF 两种拼法各 1 次）。"
+                    "`new` 里的换行交给 `rewrite_needle` 按**文件**行尾重拼，不会把 CRLF 文件写混。"
+                ),
+            ),
+            Mutation(
+                label="J2  /history 调用点绕过已发布信封：generic 换成内联形状",
+                path=_API_TS,
+                old=b"    api<EventHistoryResponse>(`/events/${encodeURIComponent(id)}/history`),",
+                new=b"    api<{ history: unknown[] }>(`/events/${encodeURIComponent(id)}/history`),",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_history_endpoint_reads_the_generated_envelope",),
+                note=(
+                    "只改 generic，路径一字不动 —— 复刻 §53.53 之前的状态：契约**发布了**，"
+                    "但唯一的调用点用内联形状把它绕过去，于是 `EventHistoryResponse` 的 re-export "
+                    "**零消费者**。这条让守卫的**正向**那半变红（别名三行仍在、副本也没有 ⇒ 只有调用点判据会红），"
+                    "与 J1 / J3 踩的**负向**那半分开。选 `unknown[]` 而不是还原原内联形状："
+                    "后者要重新 import `HistorySnapshot` / `Trend`，会顺带引入第二个缺陷，"
+                    "让「红了」分不清是踩了哪一条。`tsc` 对 `api<…>` 是盲目 cast，这条改动静默。"
+                    "针单行、恰好 1 次（实测，两种行尾各 1 次）。"
+                ),
+            ),
+            Mutation(
+                label="J3  types.ts 又自己声明 Trend：别名退回手写接口",
+                path=_TYPES_TS,
+                old=b"export type Trend = TrendSummary;",
+                new=(
+                    b"export interface Trend {\n"
+                    b"  observations?: number;\n"
+                    b"  net_change?: number;\n"
+                    b"}"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_history_endpoint_reads_the_generated_envelope",),
+                note=(
+                    "在**另一个文件**里还原同一类副本。与 J1 刻意分开：两者踩的是同一条判据的**两个不同文件**，"
+                    "只扫 `api.ts` 的守卫会放过这条 —— 而 `types.ts` 恰恰是本仓自己写着"
+                    "「DO NOT hand-write fields that exist in the Pydantic models」的那个文件，"
+                    "规则写在注释里，当时**没有**守卫。`types.ts` 有 `export type * from \"./generated-types\"`，"
+                    "所以这份手写 `Trend` 是**重复导出**，`tsc` 会红 —— 但这条变异只在守卫阶段跑，"
+                    "且守卫是文本判据、不看语法。"
+                    "⚠️ 另一条独立理由：`adapt.ts:13` 有**第三个** `Trend`（`\"up\" | \"down\" | \"flat\"`），"
+                    "所以生成名才必须叫 `TrendSummary` —— 名字撞车是**先决条件**，不是偏好。"
+                    "针单行、在 `types.ts` 恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J4  EventHistoryResponse.trend 退回裸 dict：具名契约消失",
+                path=_EVENT_MODEL,
+                old=b"    trend: TrendSummary",
+                new=b"    trend: dict[str, Any]",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_event_history_response_points_at_the_published_models",),
+                note=(
+                    "把 `trend` 退回 §53.53 之前的 `dict[str, Any]`。这条是**唯一**能踩到"
+                    "「模型身份」判据的变异，因为它是唯一的**静默**回归：渲染层照样合法、"
+                    "`FlexibleResponse` 照样校验、返回字节一模一样（`dict[str, Any]` 与已校验模型都吐出同一份 map），"
+                    "而 `generated-types.ts` 只是把 `trend: TrendSummary` 换回 inline `{ [k: string]: unknown }` "
+                    "—— `tsc` 依旧全绿。"
+                    "所以判据必须是 `model_fields[...].annotation is X` 的**同一性**，不是 `issubclass`、"
+                    "更不是读生成文件（读文件需要先重新生成，而变异跑的是**未重新生成**的树）。"
                 ),
             ),
         ),

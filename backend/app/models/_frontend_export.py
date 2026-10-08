@@ -68,7 +68,9 @@ from app.models.event import (
     DecisionTimelineDiff,
     DecisionTimelineResponse,
     DecisionTimelineSnapshot,
+    EdgeTrajectorySummary,
     EventAnalysisRequest,
+    EventAuditSnapshot,
     EventDiscoveryResponse,
     EventHistoryResponse,
     EventListResponse,
@@ -100,6 +102,7 @@ from app.models.event import (
     Tracking,
     TradeStatBucket,
     TradeStats,
+    TrendSummary,
 )
 
 __all__ = [
@@ -119,7 +122,9 @@ __all__ = [
     "DecisionTimelineDiff",
     "DecisionTimelineResponse",
     "DecisionTimelineSnapshot",
+    "EdgeTrajectorySummary",
     "EventAnalysisRequest",
+    "EventAuditSnapshot",
     "EventDiscoveryResponse",
     "EventHistoryResponse",
     "EventListResponse",
@@ -151,4 +156,5 @@ __all__ = [
     "Tracking",
     "TradeStatBucket",
     "TradeStats",
+    "TrendSummary",
 ]

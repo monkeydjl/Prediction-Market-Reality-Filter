@@ -25,6 +25,7 @@ _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _BACKEND_DIR.parent
 _OUTPUT_PATH = _REPO_ROOT / "frontend" / "src" / "lib" / "generated-types.ts"
 _API_TS_PATH = _REPO_ROOT / "frontend" / "src" / "lib" / "api.ts"
+_TYPES_TS_PATH = _REPO_ROOT / "frontend" / "src" / "lib" / "types.ts"
 
 # Models whose own config opts into ``extra="allow"`` on purpose, so the
 # generator deliberately skips the ``extra="forbid"`` override and the emitted
@@ -249,6 +250,11 @@ class TestGenerateTypesScript(unittest.TestCase):
         ``EventSource`` is asserted the other way round on purpose: its tail is
         the contract (nine adapters add keys of their own), so a change that
         closed it has to be caught here rather than celebrated.
+
+        The three shapes audit 53.53 published for GET
+        /events/{id}/history join the closed list: the route binds them as its
+        response models, so a tail on any of them would let the frontend reach
+        for keys the endpoint does not promise.
         """
         self._run_script()
         bodies = _interface_bodies(_OUTPUT_PATH.read_text(encoding="utf-8"))
@@ -256,10 +262,13 @@ class TestGenerateTypesScript(unittest.TestCase):
             "ConfidenceBreakdown",
             "CrossValidation",
             "DecisionQuality",
+            "EdgeTrajectorySummary",
+            "EventAuditSnapshot",
             "EvidenceItem",
             "LLMTelemetry",
             "MarketQuality",
             "SourceReliability",
+            "TrendSummary",
         ):
             with self.subTest(interface=name):
                 self.assertIn(name, bodies, f"{name} missing from generated types")
@@ -389,6 +398,120 @@ class AllowlistCompositionTests(unittest.TestCase):
             sorted(DELIBERATELY_OPEN),
             "the set of deliberately-open interfaces changed; if that was "
             "intended, edit DELIBERATELY_OPEN in the same commit",
+        )
+
+
+class EventHistoryContractTests(unittest.TestCase):
+    """The GET /events/{id}/history contract, from both ends (audit 53.53).
+
+    Module-level and static rather than model-driven only, because the change it
+    guards spans three files: ``event.py`` published three named models, and
+    ``api.ts`` / ``types.ts`` stopped re-declaring the shapes those models
+    replace. The model half needs no ``json2ts``; the text half needs no
+    regeneration either, since hand-written modules are never generated.
+    """
+
+    def test_event_history_response_points_at_the_published_models(self):
+        """The envelope's three payload fields must name their models, not ``dict``.
+
+        Identity, not ``issubclass``: ``EventHistoryResponse`` is a
+        ``FlexibleResponse``, so a regression to ``dict[str, Any]`` would still
+        validate, still return the same bytes, and still let ``tsc`` pass --
+        the generated ``trend`` would simply go back to an inline
+        ``{ [k: string]: unknown }``. That is the whole failure mode this
+        endpoint's naming work removes, and only an identity check sees it.
+        """
+        from app.models.event import (
+            EventAuditSnapshot,
+            EventHistoryResponse,
+            EdgeTrajectorySummary,
+            TrendSummary,
+        )
+
+        expected = {
+            "trend": TrendSummary,
+            "edge": EdgeTrajectorySummary,
+            "history": list[EventAuditSnapshot],
+        }
+        fields = EventHistoryResponse.model_fields
+        for name, annotation in expected.items():
+            with self.subTest(field=name):
+                self.assertIn(name, fields, f"EventHistoryResponse.{name} vanished")
+                self.assertEqual(
+                    fields[name].annotation,
+                    annotation,
+                    f"EventHistoryResponse.{name} no longer names its published model",
+                )
+
+    def test_history_endpoint_reads_the_generated_envelope(self):
+        """No local copy of the three retired shapes, and the call site reads the envelope.
+
+        The two halves fail in opposite directions. The negative half catches a
+        hand-written ``interface`` coming back under any of the six names the
+        frontend has used for these shapes (three generated, three retired
+        local aliases) -- and it has to be a separate check from
+        ``ALLOWED_OVERLAY_COPIES_IN_API_TS``, whose criteria are "name ends in
+        ``Overlay``" or "body carries an index signature". A re-declared
+        ``TrendSummary`` is neither, so that guard is blind to exactly this
+        regression; name-based is the weaker-looking rule that actually fires.
+
+        The positive half catches the opposite slip -- keeping the types but
+        bypassing the published envelope at the call site, which is how
+        ``EventHistoryResponse`` ended up with zero consumers in the first
+        place. ``api.ts`` has exactly one ``/history`` path, so finding one line
+        and requiring the generic on it is unambiguous.
+        """
+        api_text = _API_TS_PATH.read_bytes().decode("utf-8")
+        types_text = _TYPES_TS_PATH.read_bytes().decode("utf-8")
+        api_bodies = _interface_bodies(api_text)
+        types_bodies = _interface_bodies(types_text)
+
+        for name in (
+            "EdgeTrajectory",
+            "EdgeTrajectorySummary",
+            "EventAuditSnapshot",
+            "HistorySnapshot",
+            "Trend",
+            "TrendSummary",
+        ):
+            with self.subTest(retired=name):
+                self.assertNotIn(
+                    name,
+                    api_bodies,
+                    f"api.ts re-declared {name}; generated-types.ts is the source "
+                    "of truth. Read the generated name instead.",
+                )
+                self.assertNotIn(
+                    name,
+                    types_bodies,
+                    f"types.ts re-declared {name}; alias the generated one instead.",
+                )
+
+        for path, needle in (
+            (_API_TS_PATH, "export type EdgeTrajectory = GeneratedEdgeTrajectorySummary;"),
+            (_TYPES_TS_PATH, "export type HistorySnapshot = EventAuditSnapshot;"),
+            (_TYPES_TS_PATH, "export type Trend = TrendSummary;"),
+        ):
+            with self.subTest(alias=needle):
+                text = api_text if path == _API_TS_PATH else types_text
+                self.assertIn(
+                    needle,
+                    text,
+                    f"{path.name} no longer aliases the generated name "
+                    f"(expected: {needle})",
+                )
+
+        history_lines = [ln for ln in api_text.splitlines() if "/history`)" in ln]
+        self.assertEqual(
+            len(history_lines),
+            1,
+            f"expected one /history call site in api.ts, found {len(history_lines)}",
+        )
+        self.assertIn(
+            "api<EventHistoryResponse>(",
+            history_lines[0],
+            "the /history call site bypasses the published envelope again: "
+            "api.ts must read api<EventHistoryResponse>",
         )
 
 

@@ -11494,3 +11494,206 @@ export interface MarketSnapshotsResponse {
 4. 新增一条守卫 + 对应变异（同族 set `frontend-type-closure`），并在 53.52.4 记下「为什么它对本改动敏感」。
 
 本节随 §53.52 **同批未推送**。
+
+## §53.53 (c) 类 inline 尾巴试点：`GET /events/{id}/history` 的三件套 + 消费侧退役
+
+本节处置 **§53.50.7 第 1 条** 里 C1 族的**一个端点**。选它作试点的理由（§53.53 侦察记已记）：**一个调用点盖 3 个字段**，且路由 `events.py:1246` **已有**具名 `response_model=EventHistoryResponse` —— 也就是说这处缺的不是「合约没发布」，而是**发布出去的合约里三个字段是 inline `{ [k: string]: unknown }`**，前端于是自己手写了三份副本。
+
+### 53.53.1 判据：三种成因要分清，判「尾巴」要按缩进
+
+`generated-types.ts` 里出现 `{ [k: string]: unknown }` 有三种**互不相同**的成因：
+
+| 成因 | 机制 | 是否要改 |
+| --- | --- | --- |
+| (a) `extra="allow"` | 生成器**刻意跳过** `extra="forbid"` 覆盖，开发者显式声明开放 | **不改**（开放是拍过板的） |
+| (b) 纯嵌套 `BaseModel` | 只被 `$ref` 引用 ⇒ 拿不到 `additionalProperties: false` ⇒ `json2ts` 补尾巴 | 登记为根即可闭合 |
+| (c) 字段是裸 `dict[str, Any]` | 渲染成 **inline** `{ [k: string]: unknown }`，在字段**自己的花括号内**（缩进 ≥4） | 给它一个**具名模型** |
+
+**本端点是 (c)**。判「尾巴」的严格判据是**体内最后一个非空行恰为 `  [k: string]: unknown;`**（缩进恰 2 格）；缩进盲搜会把 (c) 的 inline 行一起算进来，所以本次的读数一律按**体内 inline 尾巴行数**报，不报「接口里有没有尾巴」。
+
+### 53.53.2 决定性取证：磁盘形状只有一种
+
+`history` 字段是**原样透传的磁盘 JSONL 行**，所以「能不能建模」不是设计偏好，而是**磁盘形状问题**。新增只读探针 `probe_history_shape.py`（`.workbuddy/audit-2026-10-03/`），对全部 5 份 `event_audit.jsonl` 逐行普查（工作树 1 份 + `backend/backups/` 3 份 + `.workbuddy` 1 份；其中 2 份同源）：
+
+| 语料 | 行 | 不可解析 | `kind="outcome"`（路由过滤） | 概率快照 |
+| --- | --- | --- | --- | --- |
+| `backend/event_audit.jsonl` | 526 | 0 | 68 | 458 |
+| `backups/event-id-migration-20260622-040713/` | 307 | 0 | 1 | 306 |
+| `backups/manifold-lowercase-purge-20260709-150947/` | 781 | 0 | 15 | 766 |
+| `backups/manifold-purge-20260709-150402/` | 1059 | 0 | 27 | 1032 |
+
+**四代语料、2562 条概率快照，key set 只有一种**（各语料内部 100%）：
+
+```
+['baseline','change','credibility_score','direction','estimated',
+ 'event_id','event_title','impact_score','source_type','timestamp','value_score']
+```
+
+类型直方图（`backend/event_audit.jsonl`，458/458；其余语料同）：
+
+| 字段 | 读数 |
+| --- | --- |
+| `timestamp` / `event_id` / `event_title` / `direction` / `source_type` | **str 100%** |
+| `baseline` / `estimated` / `change` | **float 100%**（其中 `baseline` 有 245/458 是 `x.0` 的整数值 float） |
+| `credibility_score` / `impact_score` / `value_score` | **int 100%** |
+
+**非数值样本 0 例。** ⇒ 模型可以**照抄磁盘形状**，没有推断成分。
+
+**逐字段「必写 / 可能缺」**（读 `event_audit_service.record_event`，不是读语料）：`record_event` 无条件写**全部 11 键**，缺值写 `None`（不是省键）。其中 `event_id` 的「必在」是**推导**出来的，不是观察出来的：路由经 `histories_by_event()` → `_group_records()` **丢弃 `event_id` 为假值的行**，再以 `event_id` 为分组键、按 **str** 查表 ⇒ 能被本路由取到的行，其 `event_id` **必然是非空 str**。所以它不给默认值是**有据的**，不是省事。
+
+`trend` / `edge` 是**纯函数产物**（`analyze_trend` / `analyze_edge_trajectory`），且两条分支形状一致：`_empty_trend` 与正常返回**同为 14 键**，`_empty_edge` 与正常返回**同为 12 键** ⇒ 不会因走回退而校验失败。**`first_seen` / `last_seen` 声明为 `str | None` 而非 `datetime`**：它们取的是审计行自己的 `timestamp` 值（本就是 ISO 串），声明成 `datetime` 只会让 pydantic 把它**重新序列化一次**，没有收益。这与 `MarketSnapshotPoint.captured_at: datetime | None` **不同**，两者不要互推。
+
+### 53.53.3 唯一一条真实的行为变化（本节点已经拍板）
+
+绑 `response_model` **会校验并重新序列化**，所以两个方向都量了：
+
+- **静默丢键**：11 键之外的键会被闭合模型丢掉。已观测语料**零丢失**（key set 唯一 + `record_event` 无条件写全 11 键）。残余风险是「`record` 未经 `EventRecord` 校验的裸 dict 带别的键」，**未观测到**。
+- **200 → 500 的类型漂移**：`estimated` 若是**非数值字符串**（如 `"bad"`），今天是**原样透传 200**；声明 `float | None` 后 → `ResponseValidationError` → **500**。证据：**2562/2562 全是 float，0 例**。
+  📌 前端**确实**为这种情况写了防御（`adapt.test.ts:196` 的夹具含 `{ estimated: "bad" }`，`sparkSeries` 用 `Number.isFinite` 过滤）—— 但那是**合成夹具、不是磁盘证据**。这条恰好是「"跑通了"不等于"对"」的一个具体形状。
+
+**`int` vs `float` 的线格式漂移**同样量过：三个 score 声明 `int` ⇒ `26` 仍是 `26`，**零漂移**；若声明 `float` ⇒ **每条**变成 `26.0`（458/458 条线全变），为无收益的改动。`baseline`/`estimated`/`change` 语料里本就是 Python float（`45.0` 序列化成 `45.0`）⇒ 声明 `float` **零漂移**。
+
+**拍板结果（2026-10-08）**：三问全取 A —— ① `history` 行**严格** `float | None`；② 前端三个手写类型**同批退役**并让调用点改吃生成信封；③ `EventHistoryResponse` 五个字段**按生产者收紧成 required**。③ 的安全性由构造保证：路由无快照就 404，有则返回**含全部 5 键**的 dict 字面量；留着默认值只会让生成的 TS 渲染成 `trend?:`，比端点真正承诺的更松。
+
+### 53.53.4 改动面（8 个文件）
+
+**后端**（`git diff --numstat`）：
+
+| 文件 | 改动 |
+| --- | --- |
+| `backend/app/models/event.py` | 新增 `EventAuditSnapshot` / `TrendSummary` / `EdgeTrajectorySummary` 三个模型；`EventHistoryResponse` 五字段改为 required 且指向它们 |
+| `backend/app/models/_frontend_export.py` | 三个新模型进 import + `__all__`（**必须**：`pydantic2ts` 按**模块命名空间**收根，只被 `$ref` 引用不算） |
+| `backend/tests/test_generate_types.py` | 闭合清单 +3 名；新增 `EventHistoryContractTests` 两个用例 |
+| `backend/scripts/mutation_verify.py` | `frontend-type-closure` 追加 J1–J4；新增 `_TYPES_TS` 路径常量 |
+
+**前端**：`generated-types.ts`（重生成）、`api.ts`、`types.ts`、`adapt.ts`。
+
+**字节画像**（探针 `probe_5353_profile.py`；「改前」由 HEAD blob 按检出约定反推 —— 本仓 `core.autocrlf=true` + `* text=auto`，`git show` 返回的是**归一化后的 LF**，不是磁盘字节。反推自校验：`api.ts` 反推出 **41269**，与 §53.52 记的磁盘读数**逐字节相同**）：
+
+| 文件 | bytes | crlf | bare_lf | interface | 体内 inline 尾巴行 |
+| --- | --- | --- | --- | --- | --- |
+| `generated-types.ts` | 28734 → **33142** | 844 → 940 | 0 → 0 | 49 → **52** | `EventHistoryResponse` **4 → 1** |
+| `api.ts` | 41269 → **41568** | 1248 → 1244 | 0 → 0 | 42 → **41** | 0 → 0 |
+| `types.ts` | 3117 → **3480** | 95 → 89 | 0 → 0 | 6 → **4** | `TrackedEntry` 1 → 1 |
+| `adapt.ts` | 5582 → **6336** | 165 → 175 | 0 → 0 | 1 → 1 | 0 → 0 |
+
+`generated-types.ts` 的 `EventHistoryResponse` 仍**保留 1 条尾巴** —— 它承 `FlexibleResponse`（`extra="allow"`），那是 §2 记过的**既定策略**；被消掉的是它体内**三个字段**的 inline 尾巴（4 → 1）。其余 20 个带尾巴的接口**逐个不变**（探针逐名对比：`tail-line count changes` 里除 `EventHistoryResponse` 外全是 `(n, n)`）。新增接口名恰为三个。
+
+`api.ts` 的 crlf 减小 4 与 `--numstat` 的净行数（+13/−17 = −4）**逐一对上**，`bare_lf` 全程 0（即改动没有把任何 CRLF 文件写混）。
+
+**`TypeScript` 侧一处被改动暴露的旧空头**：`adapt.ts` 的 `adaptMover` 写的是 `const t = m.trend ?? {}`，而当时 `Trend` 是**全可选**的手写接口 ⇒ `{}` 可赋给 `Trend` ⇒ 联合类型**折叠成 `Trend`**，那个 `?? {}` 兜底是个**空操作**，底下 4 处「防御性」读取从来不是真的防御。换成字段必填的生成类型后 `tsc` 立刻报 4 条 `TS2339`。修法是把局部变量显式放宽成 `Partial<TrendSummary>`（并注明**不能写 `Partial<Trend>`** —— `adapt.ts` 自己还有第三个 `Trend`，是 `"up" | "down" | "flat"` 联合，会遮蔽）。这属于 §4.2「看到弱正向断言先假定它对那个分支空头」的同族，只不过这次空头在**类型层**而不是断言层。
+
+### 53.53.5 守卫：两层五判据
+
+| 判据 | 落在哪 |
+| --- | --- |
+| ① 三个新模型必须是**根**（否则退回嵌套、变松） | 既有 `test_every_reachable_plain_model_is_registered`（生产者驱动，**不必重新生成**就红；⚠️ 它「承重」这句话的取证前提本轮被更正过，见 **§53.53.9**） |
+| ② 开放集**集合相等** | 既有 `test_only_the_documented_models_stay_open` |
+| ③ 三个新接口渲染**闭合** | `test_closed_overlay_interfaces_have_no_tail` 清单 +3 名（读生成字节） |
+| ④ 信封三字段必须**指名**模型（身份，非 `issubclass`） | 新增 `test_event_history_response_points_at_the_published_models` |
+| ⑤ `api.ts` / `types.ts` 不得再声明六个名字里的任何一个，且三行别名 + 调用点必须读 `EventHistoryResponse` | 新增 `test_history_endpoint_reads_the_generated_envelope` |
+
+**④ 为什么必须是身份判据**：回归成 `dict[str, Any]` 是**唯一的静默路径** —— `FlexibleResponse` 照样校验、返回字节一模一样、`tsc` 依旧全绿，只有生成的 `trend` 会退回 inline。`issubclass`、读生成文件都抓不到（后者还要先重新生成，而变异跑在**未重新生成**的树上）。
+
+**⑤ 为什么必须按名字判**：既有的 `ALLOWED_OVERLAY_COPIES_IN_API_TS` 判据是「名字以 `Overlay` 结尾」**或**「体内有索引签名」。一份去掉三个字段的 `EdgeTrajectory` 副本**两条都不占** ⇒ 老守卫对它**天然盲**。「更普适」的判据在这里等于「对本改动不敏感」，与 §53.52 那条 COLLISIONS=0 的教训同源。
+
+**⑤ 只扫 interface 体内、不整文件 grep**：`types.ts` 与 `api.ts` 的注释里都**逐字出现**被退休的名字（描述历史用的）。`_interface_bodies` 只认以 `export interface ` **开头**的行，所以注释天然出局 —— 这是 §53.52 自指陷阱那条教训的直接复用。
+
+**发布形状的直证**（`EventHistoryResponse.model_json_schema()`，不经 pytest、不经生成器）：
+
+```
+required: ['event_id', 'count', 'trend', 'edge', 'history']
+  trend:   {"$ref": "#/$defs/TrendSummary"}
+  edge:    {"$ref": "#/$defs/EdgeTrajectorySummary"}
+  history: {"items": {"$ref": "#/$defs/EventAuditSnapshot"}, "type": "array"}
+```
+
+`EventAuditSnapshot` 11 属性 / `TrendSummary` 14 / `EdgeTrajectorySummary` 12，**三者 required 都列全了**（`X | None` 不给默认值的直接后果）。⚠️ **这两个 schema 上都没有 `additionalProperties`，而生成的 TS 是闭合的** —— 这不是矛盾：闭合来自生成器在**生成期**临时对**根模型**置 `extra="forbid"`（`_schema_generation_overrides`），模型运行时仍是普通 `BaseModel`（`model_config == {}`，即 `extra="ignore"`）。将来的读者看到「schema 里没 `additionalProperties: false`」时别据此判断接口是开放的。
+
+### 53.53.6 变异：J1–J4，四条各踩一条互不重叠的判据，分布在三个文件
+
+| 变异 | 打到哪 | 踩哪条 |
+| --- | --- | --- |
+| **J1** | `api.ts`：别名退回手写 `EdgeTrajectory`（去掉三个字段） | ⑤ 的**负向**半（`api.ts`） |
+| **J2** | `api.ts`：`api<EventHistoryResponse>` → `api<{ history: unknown[] }>` | ⑤ 的**正向**半（调用点） |
+| **J3** | `types.ts`：`export type Trend = TrendSummary;` 退回手写接口 | ⑤ 的负向半在**另一个文件** |
+| **J4** | `event.py`：`trend: TrendSummary` → `trend: dict[str, Any]` | ④ 模型身份 |
+
+**为什么 J3 与 J1 必须分开**：同一条判据作用在**两个文件**上，只扫 `api.ts` 的守卫会放过 `types.ts` —— 而 `types.ts` 恰恰是**自己写着**「DO NOT hand-write fields that exist in the Pydantic models」却**没有**守卫的那个文件（规则在注释里 ≈ 空头）。
+
+**为什么 J2 不能还原成原内联形状**：那要重新 import `HistorySnapshot` / `Trend`，会顺带引入第二个缺陷，让「红了」分不清踩了哪一条。选 `unknown[]` ⇒ `tsc` 依然绿（`api<…>` 是盲目 cast），隔离干净。
+
+**有意不登记的变异**（§4.2 要求写进 `rationale`，已写）：不再为「把 `EventAuditSnapshot` 从 `_frontend_export` 的 import 里挪走」补一条 —— 它踩的是 D1 已证明承重的**同一条**判据，换个成员再加一条只会让计数虚胖。⚠️ 该结论有前提：① 若那条守卫的判据哪天从「可达即须登记」改成只认具体名单，这条推理即过期；② 它依赖「D1 真的踩在那条判据上」，而这一点**本轮才发现原来不成立** ⇒ 见 §53.53.9。
+
+**确实缺失、登记备查**：`EventHistoryResponse` 五字段 optional → required 的**收紧**没有独立变异。它只间接体现在 ③ 的「三个新模型必须闭合」上；要单独钉可选性需读生成文件写正向断言（`event_id: string;` vs `event_id?: string;`），而那条需要先重新生成，超出本 set 的静态判据口径。**这是本轮已知的守卫缺口，不是遗漏。**
+
+**四阶段读数**（`verify frontend-type-closure`，10 条全过）：
+
+| 变异 | 变异后变红的守卫 | 读数 |
+| --- | --- | --- |
+| J1 | `test_history_endpoint_reads_the_generated_envelope` | `2 failed, 1 passed, 7 subtests passed` |
+| J2 | 同上 | `1 failed, 9 subtests passed` |
+| J3 | 同上 | `2 failed, 1 passed, 7 subtests passed` |
+| J4 | `test_event_history_response_points_at_the_published_models` | `1 failed, **1 passed**`（= ⑤那条**仍绿**） |
+
+J2 只有 1 条红、J4 的另一个用例仍绿 ⇒ 证明 J2 与 J4 的判据**互相隔离**，不是被同一个红结果混在一起。
+
+**清单**：`12 套 / 90 个变异`（原 86，`frontend-type-closure` 由 6 条增至 10 条）。`test_mutation_verify.py`：`tests=185 failures=0 errors=0`（元素 62；原 181）。
+
+### 53.53.7 门与全量
+
+| 门 | 读数 |
+| --- | --- |
+| `ruff check app/` | `All checks passed!` |
+| `mypy app/` | `Success: no issues found in 331 source files` |
+| `python -m scripts.generate_types --check` | `generated-types.ts is up to date.` |
+| `tsc --noEmit` | 0 条 `error TS` |
+| `eslint .` | 无输出（干净） |
+| `vitest run` | **125 文件 / 738 用例全过** |
+| 变异 | `12 套 / 90 个变异`；`frontend-type-closure` 10 条**四阶段全过** |
+| `test_mutation_verify.py` | `tests=185 failures=0 errors=0`（元素 62） |
+| 后端全量 | **`tests=7784 failures=0 errors=0 skipped=11`**（元素 **6640**） |
+
+**全量对账**（对 §53.52 基线 `tests=7763` / 元素 `6638`）：`tests` **+21**、元素 **+2**，逐项可查 ——
+两个新 `<testcase>`（+2 元素）、`test_closed_overlay_interfaces_have_no_tail` 的清单 **+3 名**（3 个 subTest）、
+新用例的 `subTest` 迭代 **3 + 9 = 12**、`test_mutation_verify.py` 因针由 86 增至 90 而 **+4**。`2 + 3 + 12 + 4 = 21` ✅ 无未解释余量。
+
+⚠️ **顺序披露**：D1/C2 的更正（见 §53.53.9）发生在全量**之后**。该改动只触及 `backend/scripts/mutation_verify.py` ——
+一个**不被 app、也不被任何被测模块导入**的脚本。唯一读它的测试 `test_mutation_verify.py` 已**复跑**并全绿（上表读数即复跑所得），
+两条被改的变异各自**复跑四阶段全过**；因此**未重跑全量**，且此处不声称全量是在更正后跑的。
+
+### 53.53.8 留痕 / 未决 / 有意不做
+
+- **C1 还剩 10 个信封**：`EventDiscoveryResponse.events`、`EventMoversResponse.movers`、`SimilarEventsResponse.similar`、`FreshEdgesResponse.edges`、`PendingLinksResponse.pending`、`RecentPredictionsResponse.predictions`、`OpenDecisionsResponse.decisions`、`AutoResolveResponse.matches`，加上 `EventListResponse`（已是具名元素类型）。本节点各有一处 `api.ts` 内联调用点。
+- **C2（7 个 timeline 字段）** 与 **C3（3 处刻意的无形状）** 未动，见 §53.50.7。
+- **死 re-export 少了一个**：`EventHistoryResponse` 的 re-export **从零消费者变成有消费者**（`api.ts:886`）。剩下的三个（`AutoResolveResponse` / `EventListResponse` / `EventMoversResponse`）仍然零消费者。
+- 🔴 **`history` 的「严格 vs 宽松」是个真选择，不是清理**：本轮取严格，代价是「非数值 `estimated` 由 200 变 500」。这个代价的**前提**是「磁盘上从未出现过」—— 若哪天在**真实记录**里观测到一次，就该重新评估（而不是当成 bug 去加 `str`）。同族先例：§53.52.8 的挂账写法。
+- ⚠️ **`int` 声明的前提**：三个 score 现在是 `int | None`，依据是 `Credibility.score` / `Impact.score` / `EventRecord.value_score` 都声明 `int` **且**语料 458/458 是 int。若生产者哪天改成 float（比如某个 adapter 算术平均），`int` 字段会**拒绝非整数**并 500 —— 那时的修法是重新拍板字段类型，不是加 `float | int`。
+- 本节随本轮改动**未推送**。
+
+### 53.53.9 顺带更正：D1 / C2 早就「红」，但红的不是它们声称的那条判据
+
+**怎么发现的**：为了把 §53.53.5 判据①那句「既有且承重」从**推断**变成**测量**，我手工复现了「把 `EventAuditSnapshot` 从 `_frontend_export` 的 import 里挪走」。
+用的手法与 D1 当时的写法一致（把名字换掉）。结果**不是可达性断言失败**，而是：
+
+```
+ImportError: cannot import name '_EventAuditSnapshotUnused' from 'app.models.event'
+```
+
+原因是守卫体里那行 `from app.models import _frontend_export` —— 把 import 列表里的**源名字**改掉，`_frontend_export` 模块本身就导入失败。
+**任何**语法错误、任何导入错误都会让这条守卫变红 ⇒ 那个变异的判据**近乎空**：它对「模块能导入但名字从命名空间里消失」这种真实回归**永远不会红**。
+
+**正确写法是「导入别名」**（`EvidenceProfile as _EvidenceProfileUnused`）：源名字仍在 ⇒ `from app.models.event import …` 照常成立、`__all__` 里那串字符串也仍在，**只有命名空间里少了这个名字**。
+实测两种写法对比（`probe_5353_d1_mechanism.py`，字节安全、跑完 sha256 逐字节还原）：
+
+| 写法 | 失败文本 |
+| --- | --- |
+| D1 原文（把名字换掉） | `ImportError: cannot import name '_EvidenceProfileUnused' from 'app.models.event'` |
+| D1 更正为（导入别名） | `AssertionError: Lists differ: ['EvidenceProfile'] != []` ← **红在可达性上** |
+
+⇒ **已更正 D1（`frontend-type-closure`）与同族 C2（`market-snapshot-contract`）**：`new` 改成别名写法、`label` 从「不再导入该模型」改成「不再保留该名字」，`note` **显式记下原文与更正理由**（不覆盖式改写历史，而是写明改过什么）。两条各自**复跑四阶段全过**。
+
+🔴 **本节最该带走的一条**：harness 的四阶段只判「变红没有」，**不判「红在哪条断言上」**——
+原 D1 与更正后的 D1 在四阶段输出里**一模一样**（都是 `1 failed`）。所以「某条变异承重」这个结论，
+**必须另有一次读失败文本的取证**才成立；否则你证明的只是「这条守卫对某种破坏敏感」，而那种破坏可能与本变异要表达的事无关。
+（同族：§4.2 的「负控给的是假安全」—— 那次是「不产出」与「产出后被正确过滤」断言结果相同；这次是「模块坏了」与「名字没了」都让同一个守卫红。）

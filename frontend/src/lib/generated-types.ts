@@ -672,6 +672,47 @@ export interface FreshEdgesResponse {
   }[];
   [k: string]: unknown;
 }
+/**
+ * One timestamped point on a market link's price path.
+ *
+ * Mirrors ``MarketSnapshotStore._row_to_dict`` key for key, so binding this as
+ * the route's ``response_model`` filters nothing out of the payload. The
+ * nullable columns are declared ``X | None`` with *no* default on purpose:
+ * pydantic reads that as required-but-nullable, which is the only spelling
+ * ``pydantic2ts`` renders as ``price: number | null``. A default would render
+ * it ``price?: number | null`` -- looser than the hand-written interface this
+ * replaces (the same reasoning as ``SimTrade`` below, audit section 53.49).
+ */
+export interface MarketSnapshotPoint {
+  id: number;
+  link_id: number;
+  implied_prob: number;
+  price: number | null;
+  liquidity: number | null;
+  volume: number | null;
+  captured_at: string | null;
+}
+/**
+ * One linked market drawn as a price path, plus what was left out.
+ *
+ * ``untimestamped_count`` is this door's half of the "declare what you
+ * dropped" rule (audit section 53.48): a row with no timestamp is not a point
+ * on the path, so the door omits it *and* says how many it omitted.
+ */
+export interface MarketSnapshotSeries {
+  contract_id: string;
+  outcome_label: string;
+  mapped_outcome: string;
+  snapshots: MarketSnapshotPoint[];
+  untimestamped_count: number;
+}
+/**
+ * Response for GET /api/sport-markets/snapshots/{match_id}.
+ */
+export interface MarketSnapshotsResponse {
+  match_id: string;
+  series: MarketSnapshotSeries[];
+}
 export interface OpenDecisionsResponse {
   count?: number;
   total?: number;

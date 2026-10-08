@@ -1,9 +1,4 @@
-import type {
-  EventRecord,
-  TrackedEntry,
-  Mover,
-  SimilarEvent,
-} from "./types";
+import type { EventRecord, TrackedEntry, SimilarEvent } from "./types";
 import type {
   DecisionTimelineResponse as GeneratedDecisionTimelineResponse,
   AutoResolveResponse as GeneratedAutoResolveResponse,
@@ -930,7 +925,7 @@ export const eventsApi = {
     ),
 
   movers: (limit = 10) =>
-    api<{ movers: Mover[]; count?: number }>(`/events/movers?limit=${limit}`),
+    api<EventMoversResponse>(`/events/movers?limit=${limit}`),
 
   calibration: () =>
     api<{

@@ -624,11 +624,6 @@ class CategoryCountsResponse(FlexibleResponse):
     counts: dict[str, int] = Field(default_factory=dict)
 
 
-class EventMoversResponse(FlexibleResponse):
-    count: int = 0
-    movers: list[dict[str, Any]] = Field(default_factory=list)
-
-
 class DailyDigestHeadline(BaseModel):
     """The day's single most material move (mirrors the top entry of movers)."""
 
@@ -772,6 +767,67 @@ class EdgeTrajectorySummary(BaseModel):
     age_hours: float | None
     freshness_band: str
     classification: str
+
+
+class EventMoverItem(BaseModel):
+    """One element of ``EventMoversResponse.movers`` (audit section 53.55).
+
+    ``rank_movers`` writes the same three base keys -- ``event_id``,
+    ``event_title`` and ``trend`` -- on every item it returns, and the route then
+    adds ``event_title_zh`` when the store holds a Chinese title. A census of all
+    five corpora over every reachable ``limit`` (332 items) found exactly one key
+    set, so the four fields below are the whole element.
+
+    ``trend`` is ``TrendSummary`` -- the model section 53.53 published for
+    ``analyze_trend``'s output -- not a fresh shape. Both branches of that
+    producer (the computed summary and ``_empty_trend``) write all fourteen keys;
+    a probe put 1 334 of them through this field and rejected none, so it cannot
+    turn a 200 into a 500. The frontend already aliases ``Trend = TrendSummary``.
+
+    ``event_id`` and ``event_title`` carry no default because both are written
+    unconditionally: ``rank_movers`` is keyed on ``histories_by_event()``, and
+    ``_latest_title`` returns ``""`` -- never ``None`` -- when no snapshot
+    carries a title. ``event_title_zh`` is optional because it is *conditionally
+    written*, not because it is sometimes null.
+
+    That default is load-bearing in a second way, and it is where this endpoint
+    differed from ``GET /events/edges/fresh``: this route did **not** declare
+    ``response_model_exclude_unset``, so naming the element would have turned
+    today's *absent* key into an explicit ``null`` (probe
+    ``probe_movers_exclude_unset.py``). Section 53.55 added that flag to the
+    route in the same change, which keeps the serialized bytes identical.
+    Declaring the field without a default would instead make a title-less event a
+    500.
+
+    Like the other registered models this is ``extra="ignore"`` at runtime (only
+    schema generation forces ``extra="forbid"``), so a producer that invented a
+    fifth key would lose it silently rather than fail. No such key exists today;
+    that is a premise, not a property.
+    """
+
+    event_id: str
+    event_title: str
+    trend: TrendSummary
+    event_title_zh: str | None = None
+
+
+class EventMoversResponse(FlexibleResponse):
+    """Response for GET /api/events/movers.
+
+    ``count`` lost its default in audit section 53.55, tightening a previously
+    all-optional published contract. Safe by construction: exactly one route
+    serves this model and it returns a dict literal that sets both keys.
+
+    ``movers`` is a list of ``EventMoverItem`` rather than ``list[dict[str, Any]]``.
+    It used to render as ``{ [k: string]: unknown }[]`` -- an element type the
+    frontend cannot read, which is why ``lib/types.ts`` hand-wrote ``Mover`` and
+    ``lib/api.ts`` spelled the envelope inline at its call site.
+    ``TrendSummary`` was already the faithful type of each item's ``trend`` field
+    (section 53.53); this names the remaining four-field wrapper.
+    """
+
+    count: int
+    movers: list[EventMoverItem]
 
 
 class EventHistoryResponse(FlexibleResponse):

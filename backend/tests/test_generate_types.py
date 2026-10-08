@@ -14,6 +14,9 @@ Verifies:
 - ``FreshEdgesResponse`` names its list element, that element keeps the
   required/optional split its producers imply, and both ``/events/edges/fresh``
   call sites read the published envelope (audit section 53.54).
+- ``EventMoversResponse`` does the same for ``GET /events/movers``, and the
+  ``/movers`` route keeps the ``response_model_exclude_unset`` flag that keeps
+  its serialized bytes identical (audit section 53.55).
 """
 from __future__ import annotations
 
@@ -29,6 +32,7 @@ _REPO_ROOT = _BACKEND_DIR.parent
 _OUTPUT_PATH = _REPO_ROOT / "frontend" / "src" / "lib" / "generated-types.ts"
 _API_TS_PATH = _REPO_ROOT / "frontend" / "src" / "lib" / "api.ts"
 _TYPES_TS_PATH = _REPO_ROOT / "frontend" / "src" / "lib" / "types.ts"
+_EVENTS_ROUTE_PATH = _REPO_ROOT / "backend" / "app" / "api" / "routes" / "events.py"
 
 # Models whose own config opts into ``extra="allow"`` on purpose, so the
 # generator deliberately skips the ``extra="forbid"`` override and the emitted
@@ -263,6 +267,8 @@ class TestGenerateTypesScript(unittest.TestCase):
         listed as *roots* in the allowlist, which is what makes them closed;
         being reachable only by ``$ref`` from ``FreshEdgesResponse.edges`` would
         have left the tail on exactly the element the frontend could not read.
+        Audit 53.55 adds ``EventMoverItem`` -- the element of
+        ``EventMoversResponse.movers`` -- on the same reasoning.
         """
         self._run_script()
         bodies = _interface_bodies(_OUTPUT_PATH.read_text(encoding="utf-8"))
@@ -273,6 +279,7 @@ class TestGenerateTypesScript(unittest.TestCase):
             "EdgeSeriesPoint",
             "EdgeTrajectorySummary",
             "EventAuditSnapshot",
+            "EventMoverItem",
             "EvidenceItem",
             "FreshEdgeItem",
             "LLMTelemetry",
@@ -688,6 +695,189 @@ class FreshEdgesContractTests(unittest.TestCase):
                     "this call site bypasses the published envelope again: "
                     "api.ts must read api<FreshEdgesResponse>",
                 )
+
+
+class EventMoversContractTests(unittest.TestCase):
+    """The GET /events/movers contract, from all three ends (audit 53.55).
+
+    Same split as ``EventHistoryContractTests`` / ``FreshEdgesContractTests``:
+    the model half reads ``model_fields`` and needs no ``json2ts``, the text half
+    reads modules nothing generates, so a stale ``generated-types.ts`` can
+    neither make it pass nor make it fail. This endpoint adds a third half --
+    the route's own decorator -- because one of the three decisions section 53.55
+    made is not visible in either of the other two.
+    """
+
+    def test_event_movers_response_points_at_the_published_element(self):
+        """The envelope names its element, and both optionality directions hold.
+
+        ``movers`` must name ``EventMoverItem``. Identity, not ``issubclass``:
+        ``EventMoversResponse`` is a ``FlexibleResponse``, so a regression to
+        ``list[dict[str, Any]]`` still validates, still returns the same bytes and
+        still passes ``tsc`` -- the generated element would simply go back to
+        ``{ [k: string]: unknown }``, which is the shape ``lib/types.ts`` had to
+        work around by hand-writing ``Mover``.
+
+        The element's ``trend`` must name 53.53's ``TrendSummary``. That is the
+        half that was already published, and the probe put 1 334 producer outputs
+        (both branches, every event in five corpora) through it with no rejection,
+        so binding it cannot turn a 200 into a 500.
+
+        The required/optional split fails in *opposite* directions, so it needs
+        both halves. Dropping the default from ``event_title_zh`` turns an event
+        with no Chinese title into a 500, while giving one back to ``count``
+        silently re-widens the published envelope to ``count?:``.
+        ``model_fields[...].is_required()`` is the only reading that sees the
+        second mistake: the generated text stays "valid", just looser than the
+        endpoint promises.
+        """
+        from app.models.event import (
+            EventMoverItem,
+            EventMoversResponse,
+            TrendSummary,
+        )
+
+        fields = EventMoversResponse.model_fields
+        self.assertIn("movers", fields, "EventMoversResponse.movers vanished")
+        self.assertEqual(
+            fields["movers"].annotation,
+            list[EventMoverItem],
+            "EventMoversResponse.movers no longer names its published element",
+        )
+
+        item = EventMoverItem.model_fields
+        self.assertEqual(
+            item["trend"].annotation,
+            TrendSummary,
+            "EventMoverItem.trend no longer names the 53.53 trend model",
+        )
+
+        for name in ("event_id", "event_title", "trend"):
+            with self.subTest(always_written=name):
+                self.assertTrue(
+                    item[name].is_required(),
+                    f"EventMoverItem.{name} gained a default, but rank_movers "
+                    "writes that key on every item",
+                )
+        self.assertFalse(
+            item["event_title_zh"].is_required(),
+            "EventMoverItem.event_title_zh lost its default. The route writes "
+            "that key conditionally, so requiring it makes the 500 the normal "
+            "case -- see the model docstring for the probe.",
+        )
+        self.assertTrue(
+            fields["count"].is_required(),
+            "EventMoversResponse.count gained a default, but the one route "
+            "serving this model sets that key unconditionally (audit 53.55 "
+            "tightened the envelope)",
+        )
+
+    def test_event_movers_callsite_reads_the_generated_envelope(self):
+        """No local copy of the retired element, and the call site uses it.
+
+        The negative half is name-based out of necessity. The criterion already in
+        place -- ``ALLOWED_OVERLAY_COPIES_IN_API_TS``, which counts an interface
+        as a copy when its name ends in ``Overlay`` or its body carries an index
+        signature -- is blind to a re-declared ``Mover``, which is neither.
+        ``_interface_bodies`` only collects ``export interface``, so the
+        ``export type`` alias asserted below is not mistaken for a declaration.
+
+        The positive half walks *back* from the ``/events/movers`` line to the
+        nearest ``api<`` generic, the same way 53.54 does, rather than searching a
+        fixed window.
+        """
+        api_text = _API_TS_PATH.read_bytes().decode("utf-8")
+        types_text = _TYPES_TS_PATH.read_bytes().decode("utf-8")
+        api_bodies = _interface_bodies(api_text)
+        types_bodies = _interface_bodies(types_text)
+
+        for name in ("Mover", "EventMoverItem"):
+            with self.subTest(retired=name):
+                self.assertNotIn(
+                    name,
+                    api_bodies,
+                    f"api.ts re-declared {name}; generated-types.ts is the "
+                    "source of truth. Alias the generated name instead.",
+                )
+                self.assertNotIn(
+                    name,
+                    types_bodies,
+                    f"types.ts re-declared {name}; generated-types.ts is the "
+                    "source of truth. Alias the generated name instead.",
+                )
+
+        needle = "export type Mover = EventMoverItem;"
+        with self.subTest(alias=needle):
+            self.assertIn(
+                needle,
+                types_text,
+                "types.ts no longer aliases the generated element "
+                f"(expected: {needle})",
+            )
+
+        lines = api_text.splitlines()
+        paths = [i for i, ln in enumerate(lines) if "/events/movers" in ln]
+        self.assertEqual(
+            len(paths),
+            1,
+            "expected the single /events/movers call site in api.ts, "
+            f"found {len(paths)}",
+        )
+        for idx in paths:
+            generic = ""
+            for back in range(idx, -1, -1):
+                if "api<" in lines[back]:
+                    generic = lines[back]
+                    break
+            with self.subTest(callsite=lines[idx].strip()[:40]):
+                self.assertTrue(generic, "no api< generic found above this call site")
+                self.assertIn(
+                    "api<EventMoversResponse>(",
+                    generic,
+                    "this call site bypasses the published envelope again: "
+                    "api.ts must read api<EventMoversResponse>",
+                )
+
+    def test_the_movers_route_keeps_the_exclude_unset_flag(self):
+        """The half that keeps the wire bytes identical (audit 53.55).
+
+        This endpoint's element used to be a bare dict, so pydantic never touched
+        it and a mover with no Chinese title simply omitted ``event_title_zh``.
+        Naming the element puts it through the model, and because this route --
+        unlike its sibling ``/events/edges/fresh`` -- declared no
+        ``response_model_exclude_unset``, the key would have come back as an
+        explicit ``null``. Probe ``probe_movers_exclude_unset.py`` measured the
+        three shapes, and its control shows ``count`` / ``movers`` survive either
+        way, so adding the flag drops nothing.
+
+        Nothing else can see this. The model half above passes with or without the
+        flag, ``tsc`` never looks at test files, and no frontend consumer cares,
+        because ``m.event_title_zh || m.event_title || m.event_id`` folds both.
+        The failure would be silent and would surface only as a wire diff.
+
+        Line-based rather than a multi-line substring, so the assertion does not
+        depend on the checkout's line endings (HEAD is LF, the worktree is CRLF).
+        """
+        lines = _EVENTS_ROUTE_PATH.read_bytes().decode("utf-8").splitlines()
+        anchors = [i for i, ln in enumerate(lines) if ln.strip() == '"/movers",']
+        self.assertEqual(
+            len(anchors),
+            1,
+            f"expected one '/movers' decorator in the events router, found {len(anchors)}",
+        )
+        decorator = [ln.strip() for ln in lines[anchors[0] : anchors[0] + 4]]
+        self.assertIn(
+            "response_model=EventMoversResponse,",
+            decorator,
+            "the /movers route no longer binds EventMoversResponse",
+        )
+        self.assertIn(
+            "response_model_exclude_unset=True,",
+            decorator,
+            "the /movers route lost response_model_exclude_unset. Naming the "
+            "element turns an absent event_title_zh into an explicit null without "
+            "it (audit 53.55).",
+        )
 
 
 class ApiTsTypeSourceTests(unittest.TestCase):

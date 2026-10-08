@@ -1643,7 +1643,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J12）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J21）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -1727,6 +1727,29 @@ SETS: tuple[MutationSet, ...] = (
             "⚠️ 另一条前提：`FreshEdgeItem.series` 的同一性判据（`list[EdgeSeriesPoint] | None`）"
             "本轮也**没有**独立变异，理由同 J11（同一个 `assertEqual(annotation, …)` 形状）；"
             "若哪天该断言被拆开，要补一条把 `series` 退回 `list[dict[str, Any]]` 的变异。"
+            "§53.55 把同一条规则推进到 `GET /events/movers`：`event.py` 发布了 `EventMoverItem`"
+            "（`movers` 由 `list[dict[str, Any]]` 改成 `list[EventMoverItem]`），信封的 `count` 收紧成 required，"
+            "前端 `api.ts` 的唯一调用点改读 `api<EventMoversResponse>`、手写 `Mover` 退役成别名，"
+            "并把 `app-nav.test.tsx` 里只有 3 个字段的 `trend` 夹具补成 14 个（无类型 mock ⇒ 永远不会红）。"
+            "J13–J21 各踩**一条互不重叠**的判据，**分布在四个文件**上："
+            "J13 踩「`api.ts` 不得再声明副本」（**别名刻意留着**）、"
+            "J14 踩同一判据在 `types.ts` 上的那一份（§4.2：同判据两个文件要两条）、"
+            "J15 踩「别名必须指向生成名」这半（**不插 interface**，与 J13 一起把两半隔离）、"
+            "J16 踩「调用点必须读已发布信封」、J17 踩「`movers` 必须指名元素模型」、"
+            "J18 踩「元素自己的 `trend` 必须指名 `TrendSummary`」、"
+            "J19 踩「条件写入的键必须保留默认值」（`assertFalse(is_required())` 那半）、"
+            "J20 踩方向相反的「恒写字段必须 required」（`assertTrue(is_required())` 那半）、"
+            "J21 踩**路由装饰器上的 `response_model_exclude_unset`** —— 这是本节唯一一个"
+            "「不落在生成类型上」的判据，也是本节新增的守卫。"
+            "🔴 **J20 与 §53.54「有意不登记恒写字段加回默认值」并不矛盾，两者的前提不同**："
+            "§53.54 的取舍是针对**它自己那个**守卫（两组共用同一个 `is_required()` 断言形状，"
+            "再加一条只让计数虚胖）；而本节更重要的实测事实是 —— "
+            "**本 set 里此前没有任何一条变异性红过 `assertTrue(is_required())` 这一半**"
+            "（J12 红的是 `assertFalse` 那半），所以 J20 是**首次覆盖**，不是重复。"
+            "⚠️ 由此**新发现一条同族缺口、本轮只登记不修**：§53.54 那个守卫的 `envelope` 循环"
+            "（`count` / `total` / `limit` / `offset` / `classification` / `classification_totals`）"
+            "的 `assertTrue` 那半**同样从未被任何变异性红过**；要补就再加一条"
+            "「`FreshEdgesResponse.count` 加回默认值」的变异。",
         ),
         mutations=(
             Mutation(
@@ -1933,8 +1956,14 @@ SETS: tuple[MutationSet, ...] = (
             Mutation(
                 label="J4  EventHistoryResponse.trend 退回裸 dict：具名契约消失",
                 path=_EVENT_MODEL,
-                old=b"    trend: TrendSummary",
-                new=b"    trend: dict[str, Any]",
+                old=(
+                    b"    count: int\n"
+                    b"    trend: TrendSummary"
+                ),
+                new=(
+                    b"    count: int\n"
+                    b"    trend: dict[str, Any]"
+                ),
                 guard_file=_T_GENERATE_TYPES,
                 guards=("test_event_history_response_points_at_the_published_models",),
                 note=(
@@ -1945,6 +1974,13 @@ SETS: tuple[MutationSet, ...] = (
                     "—— `tsc` 依旧全绿。"
                     "所以判据必须是 `model_fields[...].annotation is X` 的**同一性**，不是 `issubclass`、"
                     "更不是读生成文件（读文件需要先重新生成，而变异跑的是**未重新生成**的树）。"
+                    "🔴 **针由单行改成跨行（§53.55 改）**：原文是单行 `    trend: TrendSummary`，"
+                    "当时在本文件唯一；§53.55 新增 `EventMoverItem.trend: TrendSummary` 之后该单行变成 **2 次**"
+                    "（`EventHistoryResponse.trend` 与 `EventMoverItem.trend`），"
+                    "`test_every_needle_occurs_exactly_once_in_its_file` 立刻报错 —— "
+                    "**针的语义会随生产代码变化**，所以带上上一行 `    count: int`（`count: int` 单行在本文件有 11 次，"
+                    "但「`count: int` + `trend: TrendSummary`」这一对只有 `EventHistoryResponse` 命中）。"
+                    "同批新增的 J18 用的是另一侧上下文（上一行 `    event_title: str`），两条互不重叠。"
                 ),
             ),
             Mutation(
@@ -2095,8 +2131,14 @@ SETS: tuple[MutationSet, ...] = (
             Mutation(
                 label="J12 FreshEdgeItem.event_title_zh 丢掉默认值：条件写入的键变成必填",
                 path=_EVENT_MODEL,
-                old=b"    event_title_zh: str | None = None",
-                new=b"    event_title_zh: str | None",
+                old=(
+                    b"    event_title: str\n"
+                    b"    event_title_zh: str | None = None"
+                ),
+                new=(
+                    b"    event_title: str\n"
+                    b"    event_title_zh: str | None"
+                ),
                 guard_file=_T_GENERATE_TYPES,
                 guards=("test_fresh_edges_response_points_at_the_published_element",),
                 note=(
@@ -2110,7 +2152,231 @@ SETS: tuple[MutationSet, ...] = (
                     "另一侧（`count` 等恒写字段加回默认值）走的是**同一个** `is_required()` 断言实例，"
                     "再加一条只会让计数虚胖、不会多发现一个盲区，故**有意不登记**。"
                     "⚠️ 该「不登记」的前提是：这两组仍然共用 `assertTrue/assertFalse(is_required())` 这一个断言形状；"
-                    "若哪天被拆成两组独立断言，另一侧就要补。针单行、恰好 1 次（实测）。"
+                    "若哪天被拆成两组独立断言，另一侧就要补。"
+                    "🔴 **针由单行改成跨行（§53.55 改）**：原文是单行 `    event_title_zh: str | None = None`，"
+                    "当时在本文件唯一；§53.55 新增 `EventMoverItem.event_title_zh: str | None = None` 之后变成 **2 次**，"
+                    "`test_every_needle_occurs_exactly_once_in_its_file` 立刻报错 —— **针的语义会随生产代码变化**。"
+                    "带上上一行 `    event_title: str` 后实测唯一（`EventMoverItem` 的同名字段上一行是 `    trend: TrendSummary`，"
+                    "不会命中）。同批新增的 J19 故意**不碰这两行**，改从**下方**取上下文"
+                    "（`event_title_zh` 之后是空行与 `class EventMoversResponse`），所以两条针互不重叠、可同时 apply。"
+                ),
+            ),
+            Mutation(
+                label="J13 api.ts 又自己声明 Mover 型：消费侧副本长回来，别名仍在",
+                path=_API_TS,
+                old=b"export interface DecisionReport {",
+                new=(
+                    b"export interface Mover {\n"
+                    b"  event_id: string;\n"
+                    b"  event_title?: string;\n"
+                    b"}\n\n"
+                    b"export interface DecisionReport {"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_event_movers_callsite_reads_the_generated_envelope",),
+                note=(
+                    "把 §53.55 退役掉的那种手写副本还原回去（放在 `DecisionReport` **之前**，"
+                    "TS 语法仍然合法）。**刻意的两处留白**，与 §53.54 的 J5 同款："
+                    "① 副本体内**不放**索引签名、名字也**不以 `Overlay` 结尾** ⇒ "
+                    "`ALLOWED_OVERLAY_COPIES_IN_API_TS` 那条**老**判据仍然绿 —— "
+                    "这正是「§53.52 的判据对这份副本天然盲」的实证，也是本节必须**按名**判的理由；"
+                    "② **别名刻意留着** ⇒ `assertIn`（别名）那半照旧通过，红只可能红在 `assertNotIn`（副本）那半。"
+                    "没有 ② 就无法区分「守卫拦住副本」与「守卫恰好在别名那半红了」。"
+                    "针 `export interface DecisionReport {` 在 `api.ts` 恰好 1 次（实测），单行 ⇒ 与检出约定无关。"
+                ),
+            ),
+            Mutation(
+                label="J14 types.ts 又自己声明 EventMoverItem：同一条负向判据的另一个文件",
+                path=_TYPES_TS,
+                old=b"export type Mover = EventMoverItem;",
+                new=(
+                    b"export interface EventMoverItem {\n"
+                    b"  event_id: string;\n"
+                    b"  event_title?: string;\n"
+                    b"}\n\n"
+                    b"export type Mover = EventMoverItem;"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_event_movers_callsite_reads_the_generated_envelope",),
+                note=(
+                    "同一条判据作用在**第二个文件**上（§4.2：一成员被 N 处消费就要 N 条；"
+                    "§53.53 的 J1/J3 先例）。`types.ts` 是那个**自己写着**「DO NOT hand-write fields "
+                    "that exist in the Pydantic models」却长期没有守卫的文件 —— 规则在注释里 ≈ 空头。"
+                    "这条与 J13 必须分开：只扫 `api.ts` 的守卫会放过 `types.ts`。"
+                    "副本故意不带索引签名（理由同 J13），且插在别名声明之前 ⇒ TS 语法合法。"
+                    "针单行、恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J15 别名被改指内联形状：副本没回来，但契约来源已经不是生成类型",
+                path=_TYPES_TS,
+                old=b"export type Mover = EventMoverItem;",
+                new=(
+                    b"export type Mover = {\n"
+                    b"  event_id: string;\n"
+                    b"  event_title?: string;\n"
+                    b"  event_title_zh?: string;\n"
+                    b"  trend?: TrendSummary;\n"
+                    b"};"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_event_movers_callsite_reads_the_generated_envelope",),
+                note=(
+                    "**不插 interface**，只把别名指回手写形状 ⇒ 只可能红在 `assertIn`（别名）那半。"
+                    "与 J13 合起来才把同一个测试的两半**隔离**出来（§53.54 的 J5/J7 同款设计）。"
+                    "它也是**更隐蔽**的那一种回归：副本没「长回来」（名字仍是 `Mover` 且是 `export type`），"
+                    "`_interface_bodies` 也收集不到它 —— 只有把别名钉成**精确字符串**才看得见。"
+                    "针单行、恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J16 movers 调用点绕过已发布信封：generic 退回内联形状",
+                path=_API_TS,
+                old=b"    api<EventMoversResponse>(`/events/movers?limit=${limit}`),",
+                new=b"    api<{ movers: unknown[] }>(`/events/movers?limit=${limit}`),",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_event_movers_callsite_reads_the_generated_envelope",),
+                note=(
+                    "`/events/movers` 在 `api.ts` 里**只有一处**调用点（实测路径行 1 次），"
+                    "所以不出现 §53.54 那种「两处调用点各要一条」的余量。"
+                    "用 `unknown[]` 而不是还原成旧的 `movers: Mover[]`：后者会让 `Mover` 重新变成"
+                    "被使用的名字，从而**顺带**改变别处的判据，红的归因就不可辨了。"
+                    "针是整行（含路径），恰好 1 次（实测）。"
+                    "守卫用「从调用点行往回找最近的 `api<`」定位 generic，不看固定窗口。"
+                ),
+            ),
+            Mutation(
+                label="J17 EventMoversResponse.movers 退回裸 dict：元素契约消失（静默）",
+                path=_EVENT_MODEL,
+                old=b"    movers: list[EventMoverItem]",
+                new=b"    movers: list[dict[str, Any]]",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_event_movers_response_points_at_the_published_element",),
+                note=(
+                    "**静默**回归的典型：`EventMoversResponse` 是 `FlexibleResponse`，"
+                    "退回 `list[dict[str, Any]]` 后**仍然校验通过、仍然返回同样的字节、`tsc` 仍然全绿**，"
+                    "生成出来的元素类型只是悄悄回到 `{ [k: string]: unknown }` —— "
+                    "也就是前端当初不得不手写 `Mover` 的那个形状。"
+                    "所以拦截点只能是**模型身份**判据（`annotation` 相等），且必须取得全限定类对象"
+                    "（用 `issubclass` 会被 `dict` 与模型都绕过）。"
+                    "针单行、恰好 1 次（实测：本文件里 `movers: list[EventMoverItem]` 只出现 1 次）。"
+                ),
+            ),
+            Mutation(
+                label="J18 EventMoverItem.trend 退回裸 dict：嵌套的具名契约消失（静默）",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    event_title: str\n"
+                    b"    trend: TrendSummary"
+                ),
+                new=(
+                    b"    event_title: str\n"
+                    b"    trend: dict[str, Any]"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_event_movers_response_points_at_the_published_element",),
+                note=(
+                    "元素里**已经发布过**的那一半（`TrendSummary`，§53.53 立的具名契约）被退回裸 dict。"
+                    "与 J17 是**两条**不同的身份判据：J17 钉「`movers` 指向元素模型」，J18 钉"
+                    "「元素自己的 `trend` 指向趋势模型」—— §53.54 的 J10/J11 是同一对关系。"
+                    "跨行针是**必须**的：单行针 `    trend: TrendSummary` 在本文件出现 **2 次**"
+                    "（`EventHistoryResponse.trend` 与 `EventMoverItem.trend`），"
+                    "靠它上面那行 `    event_title: str` 才唯一 —— 而 `EventHistoryResponse` 的上一行是"
+                    "`    count: int`，所以两处不会同时命中。带上文后实测 1 次（按 CRLF 检出）；"
+                    "跨行针在 `core.autocrlf` 仓里由 `count_needle` / `_needle_variants` 在 LF 与 CRLF 两种拼法下各试一次。"
+                ),
+            ),
+            Mutation(
+                label="J19 EventMoverItem.event_title_zh 丢掉默认值：条件写入的键变成必填",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    event_title_zh: str | None = None\n"
+                    b"\n"
+                    b"\n"
+                    b"class EventMoversResponse(FlexibleResponse):"
+                ),
+                new=(
+                    b"    event_title_zh: str | None\n"
+                    b"\n"
+                    b"\n"
+                    b"class EventMoversResponse(FlexibleResponse):"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_event_movers_response_points_at_the_published_element",),
+                note=(
+                    "踩**可选性**判据里「条件写入的键必须保留默认值」那半（`assertFalse(is_required())`）。"
+                    "路由只在商店里有中文标题时才写这个键（`if title_zh:`），"
+                    "一旦变成必填，**没有中文标题的事件**会直接 500 —— 而这不是理论风险："
+                    "普查实测这个分支**今天不可达**（语料侧 332/332、活库侧 257/257 都有中文标题），"
+                    "正因如此它**只能靠静态判据守**，没有任何端到端偶发测试会碰它。"
+                    "跨行针是**必须**的，且刻意**从下方取上下文**：单行针 `    event_title_zh: str | None = None` "
+                    "在本文件出现 **2 次**（`FreshEdgeItem` 与 `EventMoverItem`）；"
+                    "若改从**上方**那行 `    trend: TrendSummary` 消歧，跨行针就会与 J18 的针**压在同一行字节上**，"
+                    "整集 apply 时二者无法同时落位。改用下方（空行 + `class EventMoversResponse(FlexibleResponse):`）"
+                    "之后与 J18 完全不重叠，两条可以同时 apply。实测 1 次（按 CRLF 检出）。"
+                ),
+            ),
+            Mutation(
+                label="J20 EventMoversResponse.count 加回默认值：已发布信封被静默放宽",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    (section 53.53); this names the remaining four-field wrapper.\n"
+                    b'    """\n'
+                    b"\n"
+                    b"    count: int"
+                ),
+                new=(
+                    b"    (section 53.53); this names the remaining four-field wrapper.\n"
+                    b'    """\n'
+                    b"\n"
+                    b"    count: int = 0"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_event_movers_response_points_at_the_published_element",),
+                note=(
+                    "🔴 **本 set 里第一条性红 `assertTrue(is_required())` 这一半的变异**"
+                    "（J12 红的是方向相反的 `assertFalse` 那半）。"
+                    "值得独立登记的理由不是「另一个字段」而是**另一个方向**："
+                    "在 J12 之后，`assertTrue(is_required())` 这个断言**从未被任何变异性红过** —— "
+                    "若它哪天退化成恒真，整套绿都不会变。"
+                    "它踩的那半也是**静默**的：加回默认值之后生成文本仍然「合法」，只是"
+                    "`count: number` 悄悄变回 `count?: number`，比端点实际行为更松，"
+                    "而 `tsc`、eslint、全部前端测试都不会有任何反应（两个消费者都不读 `count`）。"
+                    "跨行针**必须**：单行针 `    count: int` 在本文件出现 **11 次**"
+                    "（`EventHistoryResponse` 等一大批信封都有同名字段）；"
+                    "但**不能**用下一行 `    movers: list[EventMoverItem]` 消歧 —— 那会与 J17 的针压在同一行字节上，"
+                    "整集 apply 时两条无法同时落位。改从**上方**取上下文（docstring 尾行 + 空行）后与 J17 完全不重叠。"
+                    "⚠️ 更短的形态 `    \"\"\"` + 空行 + `    count: int` 仍有 **2 次**"
+                    "（另一处信封同样以 docstring 收尾），所以针必须带上 docstring 的最后一行文字；"
+                    "代价是那句措辞一改这条针就会断 —— 届时应由 `count_needle != 1` 立刻报出来，而不是静默失效。"
+                ),
+            ),
+            Mutation(
+                label="J21 /movers 丢掉 response_model_exclude_unset：缺席的键变成显式 null",
+                path=_DIGEST_ROUTES,
+                old=(
+                    b"    response_model=EventMoversResponse,\n"
+                    b"    response_model_exclude_unset=True,"
+                ),
+                new=b"    response_model=EventMoversResponse,",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_movers_route_keeps_the_exclude_unset_flag",),
+                note=(
+                    "本节**唯一**一条不落在生成类型上的判据，也是本节新增的守卫。"
+                    "为什么需要它：元素原本是裸 dict ⇒ pydantic 不碰它 ⇒ 没有中文标题的 mover"
+                    "**整个键缺席**；具名成 `list[EventMoverItem]` 之后它要过模型，"
+                    "而这条路由**没有**（姊妹路由 `/events/edges/fresh` **有**）"
+                    "`response_model_exclude_unset` ⇒ 键会变成**显式 `null`**。"
+                    "实测见 `probe_movers_exclude_unset.py`：三种形状逐条量过，"
+                    "控制组证明 `count` / `movers` 两种模式下都在 ⇒ 加这个标志**不会**丢字段。"
+                    "为什么别的判据都看不见它：模型层那半有没有这个标志都通过；"
+                    "`tsc` 不查测试文件；唯一的前端消费者是 "
+                    "`m.event_title_zh || m.event_title || m.event_id`，`null` 与「缺席」折叠结果相同。"
+                    "⇒ 这条回归**只会在线上报文里露出来**，是本节最需要静态守卫的一条。"
+                    "`path` 复用 `_DIGEST_ROUTES`（它就是 `backend/app/api/routes/events.py`，同一个文件；"
+                    "该常量名源自更早的 §53.38/§53.39 摘要端点，此处不另立重复字面量）。"
+                    "跨行针**必须**：单行针 `response_model_exclude_unset=True` 在本文件出现 **3 次**"
+                    "（`/edges/fresh`、`/movers` 以及另一处），带上上一行 `EventMoversResponse` 后实测 1 次。"
                 ),
             ),
         ),

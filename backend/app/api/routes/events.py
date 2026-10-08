@@ -445,12 +445,22 @@ async def list_event_category_counts(
     return {"counts": counts}
 
 
-@router.get("/movers", response_model=EventMoversResponse)
+@router.get(
+    "/movers",
+    response_model=EventMoversResponse,
+    response_model_exclude_unset=True,
+)
 async def get_event_movers(limit: int = Query(default=10, ge=1, le=50)) -> dict[str, Any]:
     """Rank tracked events by how much their probability has moved over time.
 
     Movers carry the English event_title from the audit snapshots; enrich each
     with the stored event_title_zh so the dashboard can show Chinese titles.
+
+    ``response_model_exclude_unset`` is what keeps the payload byte-identical to
+    what the bare-dict element produced: a mover whose event has no Chinese title
+    omits ``event_title_zh`` rather than sending ``null``. Audit 53.55 named the
+    element (``EventMoverItem``) and added this flag in the same change for
+    exactly that reason; the sibling ``/edges/fresh`` route already carried it.
     """
     movers = rank_movers(histories_by_event(), limit=limit)
     # Batch-load events once to avoid N+1 reads

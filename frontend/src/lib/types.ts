@@ -17,6 +17,7 @@ import type {
   EvidenceProfile as BackendEvidenceProfile,
   EventSemantics as BackendEventSemantics,
   EventAuditSnapshot,
+  EventMoverItem,
   TrendSummary,
 } from "./generated-types";
 
@@ -72,12 +73,12 @@ export interface TrackedEntry {
 export type HistorySnapshot = EventAuditSnapshot;
 export type Trend = TrendSummary;
 
-export interface Mover {
-  event_id: string;
-  event_title?: string;
-  event_title_zh?: string;
-  trend?: Trend;
-}
+// Mover used to live here as a hand-written copy of the /events/movers element.
+// It was *looser* than the producer -- `event_title` and `trend` were optional
+// against a service that writes both unconditionally -- so it is retired to the
+// generated element (audit 53.55). The frontend name is kept because
+// adaptMover() and its call sites spell it this way.
+export type Mover = EventMoverItem;
 
 export interface SimilarEvent {
   event_id: string;

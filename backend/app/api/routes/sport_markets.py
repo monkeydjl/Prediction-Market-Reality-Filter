@@ -116,18 +116,28 @@ def verify_link(
 
 @router.get("/snapshots/{match_id}")
 def get_snapshots(match_id: str) -> dict[str, Any]:
+    """Snapshots per linked market, as a price path.
+
+    A snapshot with no timestamp is not a point on that path: it has no x value
+    to be drawn at, and SQLite would otherwise sort it *first* -- i.e. present an
+    undatable row as the earliest price (audit section 53.48). Such rows are left
+    out here and reported through ``untimestamped_count``, so this door answers
+    the question the same way the audit door does. The store's raw read still
+    returns them.
+    """
     _ensure_enabled()
     store = _link_store()
     snaps = _snap_store()
     links = store.get_links(match_id=match_id)
     series = []
     for link in links:
-        rows = snaps.get_snapshots(link_id=link["id"])
+        points, untimestamped_count = snaps.get_price_path(link_id=link["id"])
         series.append({
             "contract_id": link["contract_id"],
             "outcome_label": link["outcome_label"],
             "mapped_outcome": link["mapped_outcome"],
-            "snapshots": rows,
+            "snapshots": points,
+            "untimestamped_count": untimestamped_count,
         })
     return {"match_id": match_id, "series": series}
 

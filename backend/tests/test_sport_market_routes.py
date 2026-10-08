@@ -127,6 +127,41 @@ def test_snapshots_timeseries(client):
     data = res.json()
     assert len(data["series"]) == 1
     assert len(data["series"][0]["snapshots"]) == 2
+    # Nothing was dropped, and the door says so rather than staying silent.
+    assert data["series"][0]["untimestamped_count"] == 0
+
+
+def test_snapshots_timeseries_drops_and_counts_untimestamped_rows(client):
+    """A row with no timestamp is not a point on the price path.
+
+    ``kernel_market_snapshots.captured_at`` is nullable, so building such a row
+    straight from the model is legal -- and SQLite sorts it *first*, which would
+    draw an undatable price at the earliest x (audit section 53.48). The series
+    door must leave it out and report how many it left out; what is asserted is
+    the exact point list and the count, not that the request merely succeeded.
+    """
+    from app.kernel.kernel_db import KernelMarketSnapshot, get_kernel_session
+    from app.kernel.market_snapshot_store import MarketSnapshotStore
+
+    link = _seed_link(match_id="m1", contract_id="c1", verified=True)
+    snap = MarketSnapshotStore()
+    snap.append_snapshot(link_id=link["id"], implied_prob=0.6, price=0.6)
+    session = get_kernel_session()
+    try:
+        session.add(
+            KernelMarketSnapshot(link_id=link["id"], implied_prob=0.9, price=0.9)
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    res = client.get("/api/sport-markets/snapshots/m1")
+    assert res.status_code == 200
+    entry = res.json()["series"][0]
+    assert len(entry["snapshots"]) == 1
+    assert entry["snapshots"][0]["implied_prob"] == 0.6
+    assert entry["snapshots"][0]["captured_at"] is not None
+    assert entry["untimestamped_count"] == 1
 
 
 def test_link_audit_attaches_link_meta(client):

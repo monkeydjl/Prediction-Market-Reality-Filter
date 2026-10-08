@@ -31,6 +31,26 @@ def _row_to_dict(row: KernelMarketSnapshot) -> dict[str, Any]:
     }
 
 
+def _ts(row: dict[str, Any]) -> Any:
+    return row.get("captured_at") or row.get("created_at")
+
+
+def is_timestamped(row: dict[str, Any]) -> bool:
+    """Whether a snapshot row is a point on a *time* axis.
+
+    ``kernel_market_snapshots.captured_at`` is nullable, so a row can carry no
+    timestamp at all -- legal per the model even though this store's writer
+    always fills the column in. Such a row cannot be placed on an axis: it is
+    neither the first nor the last sample, and it has no x value to be drawn at.
+    Both readers that draw a path consult this one function instead of repeating
+    the test, so the two doors cannot drift apart (audit section 53.48).
+
+    The store's raw read (``get_snapshots``) still returns those rows; they are
+    dropped and *counted* by the readers, never silently re-ordered.
+    """
+    return _ts(row) is not None
+
+
 class MarketSnapshotStore:
     """Append-only snapshot store."""
 
@@ -117,6 +137,20 @@ class MarketSnapshotStore:
         finally:
             session.close()
 
+    def get_price_path(self, *, link_id: int) -> tuple[list[dict[str, Any]], int]:
+        """The link's snapshots as a drawable path, plus how many were dropped.
+
+        Returns ``(points, untimestamped_count)``. A row that ``is_timestamped``
+        rejects has no x value, so it is not part of the path; it is reported
+        rather than silently re-ordered, because SQLite would otherwise sort it
+        *first* -- i.e. present an undatable row as the earliest price. The audit
+        door reads the same predicate out of ``audit_summary``, so both doors
+        answer this question the same way.
+        """
+        rows = self.get_snapshots(link_id=link_id)
+        points = [row for row in rows if is_timestamped(row)]
+        return points, len(rows) - len(points)
+
     def audit_summary(self, *, link_id: int) -> dict[str, Any]:
         """Price-path audit for a market link (P1-V1).
 
@@ -149,9 +183,6 @@ class MarketSnapshotStore:
                         continue
             return None
 
-        def _ts(s: dict) -> Any:
-            return s.get("captured_at") or s.get("created_at")
-
         # Build the filtered pairs under one name: rebinding after a
         # `p is not None` comprehension keeps the element type `float | None`
         # from the first assignment, and every arithmetic use below (peak,
@@ -175,7 +206,7 @@ class MarketSnapshotStore:
         # endpoints and declare them in `flags`, rather than letting a missing
         # timestamp silently become "the earliest price".
         timestamped: list[tuple[dict[str, Any], float]] = [
-            (s, p) for s, p in priced if _ts(s) is not None
+            (s, p) for s, p in priced if is_timestamped(s)
         ]
         untimestamped_count = len(priced) - len(timestamped)
         if not timestamped:

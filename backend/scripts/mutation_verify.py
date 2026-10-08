@@ -333,6 +333,10 @@ _T_SPORT_MARKET_STORES = "tests/test_sport_market_stores.py"
 # guards because one is asserted on endpoint values and the other on mixing.
 _T_ECE_MARKET_AUDIT = "tests/test_ece_and_market_audit.py"
 
+# §53.48 — the series door (GET /snapshots/{match_id}) reads the shared
+# `is_timestamped` predicate through `get_price_path`, so its guard lives here.
+_T_SPORT_MARKET_ROUTES = "tests/test_sport_market_routes.py"
+
 _T_AVAILABILITY = "tests/test_football_live_availability_service.py"
 _T_SCHEDULE = "tests/test_football_live_schedule_service.py"
 _T_KALSHI = "tests/test_kalshi_event_source.py"
@@ -1484,21 +1488,23 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="market-audit-timestamps",
-        title="市场价格审计：无时间戳行不得成为端点（A1/A2）",
+        title="市场快照：无时间戳行不得成为端点、也不得进序列（A1–A4）",
         rationale=(
-            "`MarketSnapshotStore.audit_summary` 里有两条各自的假设，各配一条变异。"
-            "A1 打掉「无时间戳行不参与端点」这条分区：删掉谓词后 NULL 行落回时间轴，"
-            "并抢走 first/last 之一 —— 这正是 §53.47 用一行**合法** NULL 在未变异代码上先证到的形状。"
-            "A2 打掉排序键的类型一致：键随输入变类型时 `sorted` 抛 TypeError，"
-            "而两个 audit 路由（sport_markets.py:140 / :165）外面没有 try，所以是 500 不是降级。"
-            "两条必须分开 —— 一条断言端点取值、一条断言两种时间类型混排，"
-            "合并成一条的话红的时候就分不清是分区没了还是键的类型没了。"
+            "「没有时间戳的快照不是价格路径上的点」这条口径有两个消费者，各有各的失效方式。"
+            "A1 打掉 `audit_summary` 的分区：删掉谓词后 NULL 行落回时间轴并抢走 first/last 之一"
+            "（§53.47 用一行**合法** NULL 在未变异代码上先证到的形状）。A2 打掉排序键的类型一致："
+            "键随输入变类型时 `sorted` 抛 TypeError，而两个 audit 路由（sport_markets.py:140 / :165）"
+            "外面没有 try ⇒ 500 不是降级。A3 打掉序列门的过滤：`get_price_path` 照发之后，"
+            "`GET /snapshots/{match_id}` 又把无法定位的行当成**最早**的点画给图表（§53.48 统一的正是这一处）。"
+            "A4 直接塌掉那个**共享谓词** `is_timestamped`——它的守卫**跨两个文件**，"
+            "正是「一处谓词、两个门」的证据。四条必须分开：一条断言审计端点取值、一条断言两种时间类型混排、"
+            "一条断言序列门的点位与计数、一条证明谓词的确是两个门共用的那一份。"
         ),
         mutations=(
             Mutation(
                 label="A1  无时间戳行被放回时间轴：NULL 抢走 first/last 之一",
                 path=_MARKET_SNAPSHOT_STORE,
-                old=b"            (s, p) for s, p in priced if _ts(s) is not None",
+                old=b"            (s, p) for s, p in priced if is_timestamped(s)",
                 new=b"            (s, p) for s, p in priced",
                 guard_file=_T_ECE_MARKET_AUDIT,
                 guards=(
@@ -1528,6 +1534,40 @@ SETS: tuple[MutationSet, ...] = (
                     "'datetime.datetime' and 'str'` ⇒ 两个 audit 路由 500。"
                     "只有「一个序列里两种类型并存」那条守卫能看见它 —— "
                     "全 `datetime` 或全字符串都不触发，这也正是它此前一直没被发现的原因。"
+                ),
+            ),
+            Mutation(
+                label="A3  序列门不过滤：无时间戳行又被当成最早的点发给图表",
+                path=_MARKET_SNAPSHOT_STORE,
+                old=b"        points = [row for row in rows if is_timestamped(row)]",
+                new=b"        points = list(rows)",
+                guard_file=_T_SPORT_MARKET_ROUTES,
+                guards=(
+                    "test_snapshots_timeseries_drops_and_counts_untimestamped_rows",
+                ),
+                note=(
+                    "`get_price_path` 是 `GET /snapshots/{match_id}` 唯一的取数口。照发之后，"
+                    "SQLite 仍把 NULL 排在最前 ⇒ 图表把一行**无法定位**的价格画成最早的点，"
+                    "而且 `untimestamped_count` 同时变成 0（连声明也没了）。"
+                    "守卫断言的是确切点位列表与计数，所以「行数变了但没报」也会被抓到。"
+                ),
+            ),
+            Mutation(
+                label="A4  共享谓词塌成恒真：两个门同时失去这条口径",
+                path=_MARKET_SNAPSHOT_STORE,
+                old=b"    return _ts(row) is not None",
+                new=b"    return True",
+                guard_file=(_T_ECE_MARKET_AUDIT, _T_SPORT_MARKET_ROUTES),
+                guards=(
+                    "test_audit_summary_untimestamped_row_does_not_become_an_endpoint",
+                    "test_snapshots_timeseries_drops_and_counts_untimestamped_rows",
+                ),
+                note=(
+                    "`is_timestamped` 是审计门与序列门**共用**的那一份判据（§53.48 的存在理由）。"
+                    "恒真之后审计的端点被 NULL 抢走、序列门把 NULL 发给图表 —— 因此这条的守卫"
+                    "**跨两个文件**，两个都必须红：这正是「一处谓词、两个门」的可验证表述。"
+                    "注意模块里**没有第二份**「有没有时间戳」的判断（`_ts` 也只剩这一处消费者），"
+                    "所以塌掉它没有别的地方能挡住。"
                 ),
             ),
         ),

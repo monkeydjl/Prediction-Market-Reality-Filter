@@ -16,6 +16,9 @@ import type {
   SimTrade as GeneratedSimTrade,
   SimTradeListResponse as GeneratedSimTradeListResponse,
   TradeStats as GeneratedTradeStats,
+  DecisionQuality,
+  MarketQuality,
+  SourceReliability,
 } from "./generated-types";
 import { getApiBase, joinApiPath } from "./env";
 import { applyOperatorAuthHeaders } from "./operator-credentials";
@@ -264,26 +267,17 @@ export interface CategoryCoverage {
 
 // A committed prediction rendered for human review (M5 decision report).
 // Mirrors decision_report_service.build_decision_report.
-/** Quality overlays attached by analyze_event (optional / flag-gated). */
-export interface DecisionQualityOverlay {
-  displayed_direction?: string | null;
-  downgrade_reason?: string | null;
-  decision_rationale_zh?: string | null;
-  [key: string]: unknown;
-}
-
-export interface MarketQualityOverlay {
-  score?: number | null;
-  downgrade_reason?: string | null;
-  [key: string]: unknown;
-}
-
-export interface SourceReliabilityOverlay {
-  overall_score?: number | null;
-  downgrade_reason?: string | null;
-  [key: string]: unknown;
-}
-
+//
+// No Pydantic model covers the report itself -- the endpoint answers with a
+// plain dict -- so this interface stays hand-written. The three quality
+// overlays it carries do have models, and since audit 53.52 they are read from
+// `generated-types` instead of being re-declared here, which is what the header
+// of `types.ts` asks for. The local copies they replace each ended in
+// `[key: string]: unknown`, so `report.decision_quality` accepted keys the
+// backend never sends -- invisible to `tsc`, because the report arrives through
+// `res.json() as T`. The generated interfaces are closed (audit 53.51), so this
+// is a pure compile-time narrowing; `EventRecord` in generated-types.ts already
+// types these same three fields this way.
 export interface DecisionReport {
   event_id: string;
   event: { title: string; title_zh?: string; summary: string };
@@ -323,9 +317,9 @@ export interface DecisionReport {
     calibration_status: string;
   } | null;
   /** Phase quality overlays — present when corresponding flags are on. */
-  decision_quality?: DecisionQualityOverlay | null;
-  market_quality?: MarketQualityOverlay | null;
-  source_reliability?: SourceReliabilityOverlay | null;
+  decision_quality?: DecisionQuality | null;
+  market_quality?: MarketQuality | null;
+  source_reliability?: SourceReliability | null;
   final_displayed_direction?: string | null;
   final_downgrade_reason?: string | null;
 }

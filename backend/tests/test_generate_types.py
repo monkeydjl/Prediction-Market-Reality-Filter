@@ -9,6 +9,8 @@ Verifies:
 - Output is deterministic (running twice produces identical files).
 - The closed overlay interfaces render without a ``[k: string]: unknown`` tail,
   and exactly the documented models stay open (audit sections 53.49-53.51).
+- ``api.ts`` re-declares no overlay of its own and reads the generated, closed
+  interfaces for the three quality overlays (audit section 53.52).
 """
 from __future__ import annotations
 
@@ -22,6 +24,7 @@ from pathlib import Path
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _BACKEND_DIR.parent
 _OUTPUT_PATH = _REPO_ROOT / "frontend" / "src" / "lib" / "generated-types.ts"
+_API_TS_PATH = _REPO_ROOT / "frontend" / "src" / "lib" / "api.ts"
 
 # Models whose own config opts into ``extra="allow"`` on purpose, so the
 # generator deliberately skips the ``extra="forbid"`` override and the emitted
@@ -31,6 +34,28 @@ _OUTPUT_PATH = _REPO_ROOT / "frontend" / "src" / "lib" / "generated-types.ts"
 # subclasses inherit it, so the family is excluded by subclass rather than by
 # name -- listing sixteen of them here would drift.
 DELIBERATELY_OPEN = frozenset({"EventRecord", "EventSource"})
+
+# ``api.ts`` is hand-maintained -- no generator writes it -- so nothing stops a
+# local copy of a shape that ``generated-types.ts`` already emits. Since audit
+# 53.52 the three quality overlays are read from the generated, closed
+# interfaces instead, and this set says which local copies are allowed back:
+# none. The copies it replaced ended in ``[key: string]: unknown``, so
+# ``DecisionReport`` accepted keys the backend never sends -- and ``tsc`` could
+# not tell, because the report arrives through ``res.json() as T``. Expressed as
+# set equality, so both restoring a copy and dropping a legitimate one fail.
+#
+# Detection is deliberately textual: an interface counts as a copy when its name
+# ends in ``Overlay`` or its body carries an index signature. That covers the
+# loose copy that was there and the narrow one that would hide a field the
+# backend does declare -- the mirror-image mistake, and the one worth naming
+# ``Overlay`` for.
+ALLOWED_OVERLAY_COPIES_IN_API_TS: frozenset[str] = frozenset()
+
+# The two spellings that exist in this repo: the generator emits ``[k: string]``
+# while the hand-written ``api.ts`` used ``[key: string]``. Matching on one
+# silently reports an empty set for the other. Matched unindented, so an inline
+# occurrence inside a field's own braces counts as well.
+_INDEX_SIGNATURE_MARKERS = ("[key: string]: unknown", "[k: string]: unknown")
 
 
 def _interface_bodies(text: str) -> dict[str, list[str]]:
@@ -54,6 +79,36 @@ def _interface_bodies(text: str) -> dict[str, list[str]]:
                 continue
             bodies[current].append(line)
     return bodies
+
+
+def _overlay_copies(bodies: dict[str, list[str]]) -> list[str]:
+    """Names in ``bodies`` that look like a hand-written copy of an overlay.
+
+    Either the name ends in ``Overlay`` or the body carries an index signature.
+    Sorted, so the assertion's failure message is stable and a diff keeps reading
+    as a set difference.
+
+    The index signature is looked for **anywhere in the body** rather than only
+    on the last line: a mid-body marker silences exactly the same type error, and
+    after audit 53.52 no ``api.ts`` interface *body* contains either spelling, so
+    "anywhere" costs nothing there. ``generated-types.ts`` is the opposite case
+    -- a readable ``dict[str, Any]`` field is a *legitimate* inline index
+    signature -- which is why this helper is not pointed at it.
+
+    Scoped to interface bodies on purpose, not grepped over the whole file: the
+    comment above ``DecisionReport`` in ``api.ts`` spells ``[key: string]:
+    unknown`` out in prose, describing the copies that were retired. A whole-file
+    search would fire on that documentation. Bodies are where the signature can
+    actually loosen a type.
+    """
+    return sorted(
+        {name for name in bodies if name.endswith("Overlay")}
+        | {
+            name
+            for name, body in bodies.items()
+            if any(marker in line for line in body for marker in _INDEX_SIGNATURE_MARKERS)
+        }
+    )
 
 
 def _referenced_models(roots: list[type]) -> set[type]:
@@ -335,6 +390,55 @@ class AllowlistCompositionTests(unittest.TestCase):
             "the set of deliberately-open interfaces changed; if that was "
             "intended, edit DELIBERATELY_OPEN in the same commit",
         )
+
+
+class ApiTsTypeSourceTests(unittest.TestCase):
+    """``api.ts`` reads generated shapes instead of re-declaring them.
+
+    Nothing generates ``api.ts``, so a divergent local copy of a generated
+    interface compiles, lints and type-checks cleanly -- the report reaches the
+    browser through ``res.json() as T``, a cast that asserts nothing about the
+    shape. Audit 53.52 retired the three hand-written overlay copies for that
+    reason; the header of ``types.ts`` states the same rule ("DO NOT hand-write
+    fields that exist in the Pydantic models").
+
+    Module-level rather than in the ``json2ts``-decorated class above, and static
+    rather than model-driven: it only reads the file, so it runs everywhere the
+    suite does and it fires on the edit that reintroduces a copy, not on the next
+    regeneration.
+    """
+
+    def test_decision_report_reads_the_generated_overlays(self):
+        """No local overlay copy, and each field points at the generated name.
+
+        The two halves fail in opposite directions on purpose. The first catches
+        a copy coming back -- loose (``[key: string]: unknown``, which is what
+        was there) or narrow (which would hide a field the backend declares) --
+        and the second catches ``DecisionReport`` being repointed at something
+        else, including a copy that slips past the first half because it is
+        neither suffixed ``Overlay`` nor tailed.
+        """
+        bodies = _interface_bodies(_API_TS_PATH.read_bytes().decode("utf-8"))
+        self.assertIn("DecisionReport", bodies, "DecisionReport vanished from api.ts")
+        self.assertEqual(
+            _overlay_copies(bodies),
+            sorted(ALLOWED_OVERLAY_COPIES_IN_API_TS),
+            "api.ts re-declared an overlay; generated-types.ts is the source of "
+            "truth. If a local copy is genuinely needed, add its name to "
+            "ALLOWED_OVERLAY_COPIES_IN_API_TS in the same commit.",
+        )
+        report_body = "\n".join(bodies["DecisionReport"])
+        for field, generated in (
+            ("decision_quality", "DecisionQuality"),
+            ("market_quality", "MarketQuality"),
+            ("source_reliability", "SourceReliability"),
+        ):
+            with self.subTest(field=field):
+                self.assertIn(
+                    f"  {field}?: {generated} | null;",
+                    report_body,
+                    f"DecisionReport.{field} no longer reads the generated {generated}",
+                )
 
 
 if __name__ == "__main__":

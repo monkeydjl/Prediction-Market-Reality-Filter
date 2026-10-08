@@ -346,6 +346,7 @@ _T_SPORT_MARKET_ROUTES = "tests/test_sport_market_routes.py"
 _SPORT_MARKET_ROUTES = "backend/app/api/routes/sport_markets.py"
 _FRONTEND_EXPORT = "backend/app/models/_frontend_export.py"
 _EVENT_MODEL = "backend/app/models/event.py"
+_API_TS = "frontend/src/lib/api.ts"
 _T_GENERATE_TYPES = "tests/test_generate_types.py"
 
 _T_AVAILABILITY = "tests/test_football_live_availability_service.py"
@@ -1633,7 +1634,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，且开放集是拍过板的（D1–D3）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -1652,6 +1653,15 @@ SETS: tuple[MutationSet, ...] = (
             "D2/D3 钉这条**两向**规则，因为它们共用的守卫断言的是**集合相等**：D2 把已闭合的"
             "重新开放（集合多一员），D3 把必须开放的收掉（集合少一员）。只禁一个方向的守卫"
             "会放过另一个 —— 而「收得太狠」恰恰是这次改动的失败模式，不是理论风险。"
+            "§53.52 把同一条「生成物是唯一真源」的规则推到了**消费侧**：`api.ts` 是手写模块，"
+            "没有生成器写它，所以它自己声明一份 overlay 副本时**编译、eslint、tsc 全绿** —— "
+            "报文经 `api.ts` 的 `api<T>` 助手（`const data = await res.json() as T`）到达，"
+            "那个 cast 对形状什么都不主张。D4/D5/D6 各踩守卫的三个**互不重叠**的判据：D4 踩「名字以 `Overlay` 结尾」、"
+            "D5 踩「字段必须指生成名」、D6 踩「体内任意位置出现索引签名」。"
+            "为什么必须三条：只补一条就分不清守卫哪半是承重的 —— 尤其 D5，"
+            "没有它，「副本没回来」与「字段仍读生成类型」会被同一个绿结果混为一谈，"
+            "而 §53.52 同时做了这两件事。D6 特意把索引签名放在**非末行**："
+            "首版探测器只看最后一个非空行 ⇒ 会漏掉它，改成「体内任意位置」后这条才红。"
         ),
         mutations=(
             Mutation(
@@ -1715,6 +1725,70 @@ SETS: tuple[MutationSet, ...] = (
                     "也扫进去 —— 那会让前端类型看不见 adapter 真发的键（`question` 等），"
                     "而 `tsc` 依旧绿。跨行针由 `_needle_variants` 在 LF / CRLF 两种写法下各试一次，"
                     "与检出约定无关。"
+                ),
+            ),
+            Mutation(
+                label="D4  手写 overlay 副本长回来：api.ts 又自己声明一份",
+                path=_API_TS,
+                old=b"export interface DecisionReport {",
+                new=(
+                    b"export interface SourceReliabilityOverlay {\n"
+                    b"  downgrade_reason?: string | null;\n"
+                    b"  [key: string]: unknown;\n"
+                    b"}\n\n"
+                    b"export interface DecisionReport {"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_decision_report_reads_the_generated_overlays",),
+                note=(
+                    "把 §53.52 退役掉的那种手写副本还原回去（放在 `DecisionReport` **之前**，"
+                    "所以 TS 语法仍然合法；守卫是文本判据，不看语法）。"
+                    "`api.ts` 没有任何生成器写它 ⇒ 这种回归**编译、lint、类型检查全绿**："
+                    "报文经 `res.json() as T` 到达，那个 cast 对形状什么都不主张。"
+                    "针 `export interface DecisionReport {` 在 `api.ts` 恰好 1 次（`count_needle` 实测），"
+                    "单行 ⇒ 与检出约定无关；`new` 里写 `\\n`，由 `rewrite_needle` 按**文件**行尾重拼。"
+                    "这条只踩守卫的**名字**分支（名字以 `Overlay` 结尾），字段那半仍然通过 —— "
+                    "正是 D5 / D6 要分别覆盖的另外两个分支。"
+                ),
+            ),
+            Mutation(
+                label="D5  overlay 字段被改指本地泛型：契约不再来自生成类型",
+                path=_API_TS,
+                old=b"  source_reliability?: SourceReliability | null;",
+                new=b"  source_reliability?: Record<string, unknown> | null;",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_decision_report_reads_the_generated_overlays",),
+                note=(
+                    "名字既不以 `Overlay` 结尾、体里也没有索引签名文字 ⇒ 守卫的**名字/索引**两个分支都通过，"
+                    "只有**字段指向**那半会红。没有这条，守卫的第一半就可能是空头："
+                    "「副本没回来」与「字段仍读生成类型」是两件事，§53.52 同时做了这两件。"
+                    "`Record<string, unknown>` 是最自然的走偏写法（一个泛型 map），"
+                    "它比生成类型**更松**，而 `tsc` 照样绿。针单行、在 `api.ts` 恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="D6  索引签名插在体内非末行：尾巴不在末尾也照样变松",
+                path=_API_TS,
+                old=b"  final_downgrade_reason?: string | null;",
+                new=(
+                    b"  [key: string]: unknown;\n"
+                    b"  final_downgrade_reason?: string | null;"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_decision_report_reads_the_generated_overlays",),
+                note=(
+                    "把索引签名塞进 `DecisionReport` 的**中段**（不是末行）。"
+                    "刻意的：首版探测器只看「体内最后一个非空行」 ⇒ 这条**不会**变红；"
+                    "改成「体内任意位置」后它才红，所以这条同时是那个设计选择的证据。"
+                    "读数：`api.ts` 42 个 interface 的**体内**两种拼写出现 0 次"
+                    "（退休前是 45 个 / 3 个带尾巴，且全是被退休的那三个）"
+                    "⇒ 「任意位置」在本文件是等价且更强的判据。"
+                    "⚠️ 但**整文件**搜有 1 处 —— 就在 `DecisionReport` 头顶那段注释里。"
+                    "注释也是文件字节：`_overlay_copies` 因此**只扫 interface 体内**、不整文件 grep，"
+                    "否则会踩到自己的文档（同 §4.3「自指变异」那一族）。"
+                    "与 `generated-types.ts` 相反：那里 `dict[str, Any]` 字段的 inline 索引签名是合法的，"
+                    "不能用同一判据（§53.51 的缩进盲搜教训）。"
+                    "名字不以 `Overlay` 结尾、字段仍指生成名 ⇒ 只有索引分支会红。针单行、恰好 1 次（实测）。"
                 ),
             ),
         ),

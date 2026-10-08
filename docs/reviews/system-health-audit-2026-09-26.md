@@ -11274,3 +11274,107 @@ export interface MarketSnapshotsResponse {
 对 §53.49 基线（`tests=7743`、元素 6635）的增量：`tests` **+3** = **1 个新元素**（`tests.test_generate_types.AllowlistCompositionTests::test_every_reachable_plain_model_is_registered`）+ **2 次 subTest 迭代**（变异清单 80→81、集合 11→12）；`test_the_eleven_sets_are_present` → `test_the_twelve_sets_are_present` 是**改名**，同类内一进一出 ⇒ 元素净 0。**交叉验证**：`tests` 属性与元素数之差两版为 1108 与 1110，扣掉两处循环（80+11 与 81+12）后**未解释余数恒为 1017** ⇒ 增长的 2 全部来自这两个循环。
 
 （读数为工具自打印：`mutation_verify list` 报 **12 套 / 81 变异**；可达性 41 根 / 49 可达 / 24 须登记 系 `python -c` 实测。）
+
+
+## §53.51 八个 opt-in 的 overlay 模型：收七个、留一个 —— 以及三处「看着在钉、其实没钉」
+
+§53.50.7 第 2 条留了一句话：*"那 8 个显式 `extra="allow"` 的 overlay 模型保持开放是刻意的；若将来要收紧，须先改它们的 `model_config`（那是**契约变更**，不是登记问题）。"* 本节就是那次拍板。结论是**不能一起收** —— 8 个里只有 7 个收得起，第 8 个（`EventSource`）**必须留**。
+
+### 53.51.1 判据：按「生产者发不发未声明键」分，不按「是不是 opt-in」分
+
+`extra="allow"` 的**意图**和**实际需要**是两件事。逐个模型读它是**谁**产出的、产出什么键之后：
+
+| 模型 | 真生产者（读过的） | 结论 |
+|---|---|---|
+| `CrossValidation` | `cross_validation_service.cross_validate` —— docstring 第 48 行自己写明返回 5 键，代码也恰好是那 5 键 | **可收** |
+| `ConfidenceBreakdown` | `probability_engine_service.calculate_confidence_breakdown`（9 键，与声明**逐一相等**） | **可收** |
+| `EvidenceItem` | `event_intelligence_service.build_evidence_items` —— **显式映射**（`description`→`summary`、`quality_score`→`quality`、`relevance_score`→`relevance`）；`record["evidence_items"]` 只在该文件 `:1030` / `:1395` 两处被写 | **可收** |
+| `DecisionQuality` | `build_decision_quality` + `event_intelligence_service:376-388` 的构建失败回退块（11 键**全已声明**） | **可收** |
+| `MarketQuality` | `market_quality_service.py:90-103`（12 键，唯一没写的是 `error`，那是回退块写的）+ 回退块 `:431-444`（12 键全已声明） | **可收** |
+| `SourceReliability` | `build_source_reliability` + 回退块 `:580-594`（13 键全已声明） | **可收** |
+| `LLMTelemetry` | `build_llm_telemetry` + 回退块 `:646-658`（11 键全已声明） | **可收** |
+| `EventSource` | **9 个 adapter 往 `source` dict 里加自己的键**：实测 `kalshi_event_source.py:144-155` 发 `question`/`status`/`close_time`/`bid_ask`、`limitless_event_source.py:98` 发 `chain`/`question`/`status`；AST 探针在 `manifold`/`metacus`/`opinion`/`polymarket`/`predict_fun`/`world_cup`/`event_extraction` + `decision_report_service.py:81` + `event_intelligence_service.py:1254` 命中同型 | **必留** |
+
+- 🔴 **`EventSource` 是 8 个里唯一为 allow 举证的 docstring**：*"Permissive: source adapters add their own fields beyond the declared ones (via `extra="allow"`)."* 另外 7 个的 docstring 全是 audit/observability 说明，**没有一个主张**需要接未声明键。**这是"docstring 也是证据"的一次正向兑现**：唯一写下理由的那个，恰好是唯一真需要的。
+- ⚠️ **同族污染（探针的坑，§53.50 已踩过）**：探针把 `execution_quality_service.py:167` 与 `event_intelligence_service.py:481` 的块报成 `MarketQuality` 的候选（覆盖率 0.55）。实际它们是**另一个 dict** —— `record["execution_quality"]`，而 `execution_quality` 在 `DecisionTimelineSnapshot` 上声明为 `dict[str, Any] | None`，**没有模型**。⇒ 两条都是假阳性；`MarketQuality` 干净。
+- ⚠️ **同名不同物**：`ConfidenceBreakdown`（事件级）与 `kernel/engines/confidence.confidence_breakdown`（体育引擎，`SportConfidencePanel` 的 `total`/`decision_strength`/`data_completeness`…）**只共享名字**。后者进的是体育引擎自己的 payload，从不进 `EventRecord` ⇒ 与本节无关，但正是「同名≠同物」的又一例。
+
+### 53.51.2 为什么这是**纯 codegen** 改动：运行时不变量三条
+
+收紧一个模型的 `extra` 会碰到"运行时行为"的担忧。三条实测把它排掉：
+
+1. **API 报文不变**：`EventStoreEntry.record` 声明为 `dict[str, Any]`（`event.py:589`），`EventListResponse.events` 是 `list[EventStoreEntry]`，而**没有任何端点把 `EventRecord` 当 `response_model`** ⇒ FastAPI 从不按 `EventRecord` 收窄 record ⇒ 报文逐字节不变。
+2. **存储不变**：`EventRecord.model_validate(...)` 只在 `event_store.py` 作**校验闸**（`:155` / `:232` / `:270` / `:330`），**返回值被丢弃**；落盘的是原始 dict（`:234-239` `updated = {... "record": record}`）。⇒ 闸门检的还是同一份数据。
+3. **旧数据不会开始失败**：pydantic 默认是 `extra="ignore"`（**不是** `forbid`）。**`ignore` 永不 raise** ⇒ 无论旧记录里有什么未声明键，`model_validate` 都仍然成功。真正会让旧数据 500 的是把运行时的 `extra` 设成 `forbid` —— 本节**没有**这么做（`forbid` 只由生成器在**生成 TS 时临时**施加）。
+   - ⚠️ 这留下一个**语义位移的说明义务**：`allow`→`ignore` 之后，若将来有人写 `EventRecord.model_validate(x).model_dump()`，未声明键会被**静默丢弃**。今天没有任何调用点这么做（`model_dump` 全仓只有 `event_market_link_store.py:128`，与 event record 无关）⇒ 已写进 7 个模型的 docstring 与 `_frontend_export` 的模块说明。
+
+### 53.51.3 三处「看着在钉、其实没钉」的用例（本轮最贵的发现）
+
+`tests/test_event_record_overlay_typing.py` 里有 3 个用例，**名字和注释都在声称在钉 `extra="allow"`**，但断言是**弱正向**，所以在收紧后**一个都不会变红**：
+
+| 用例 | 它声称的 | 它实际断言的 | 为什么空头 |
+|---|---|---|---|
+| `test_accepts_extra_fields_via_extra_allow` | "Forward-compat: extra fields don't break validation" | 只 `assertEqual(cv.model, "x")` | **从不读 `cv.extra_field`** ⇒ allow / ignore 两种设置下都绿 |
+| `test_record_with_overlay_build_failure_block_validates` | "must pass through extra='allow' without crashing" | 只 `assertIsNotNone(ev.decision_quality)` | 同上；且喂的 `{"reason": "exception"}` **没有任何生产者会写** |
+| `test_record_with_full_overlay_dicts_validates` | "Normal record with all 4 overlays" | 4 个 `assertIsNotNone` | 且用的是**现实中不存在的形状**：`market_quality={"wide_spread":…,"thin_market":…}`（真名是 `wide_spread_flag`/`thin_market_flag`）、`source_reliability={"level":…,"score":…,"factors":{}}`（真名是 `overall_score`，且没有 `level`/`factors`）、`decision_quality={"reasons":[],"downgrade_count":0}`（不是声明的任何字段） |
+
+- 🔴 **这是 §4.2(c) 的教科书样本**："断言负向或过弱 ⇒ 对『分支不存在/不可达』天然盲"。这 3 条的注释就是它们唯一的"证据"，而**注释不是判据**。
+- 🔴 更贵的一层：**"钉住了"这个说法本身不可信**。若只看用例名与注释，会得出"allow 被三个用例保护着，不能动"。实际这三个用例对 allow **完全免疫**。⇒ **凡"某行为被测试保护"的判断，都要回读断言行，而不是读用例名。**
+- ✅ 处置：按 §0「前提被改的结论必须显式更正」，三个用例**就地改成钉新契约**，且都补上**正向**断言：
+  - `test_ignores_keys_it_does_not_declare`：`assertEqual(cv.model, "x")` **且** `assertNotIn("extra_field", cv.model_dump())` —— 两半合取，重新 allow 就会红。
+  - 两个 overlay 用例：把**编造的** dict 换成**真生产者**的形状（`build_market_quality` 的返回、`source_reliability` / `llm_telemetry` / `decision_quality` 的回退块），断言**具体取值**（`score == 0.82`、`suggested_direction == "YES"`、`error == "build_failed"` …）而不只是非 None。
+- ⚠️ 旁证：`test_diagnose_event_quality.py:92` 也有一句 `extra="allow"` 的注释，但它说的是 **`EventRecord` 顶层**（`market_quote` 等确实仍未声明）⇒ 那句话**仍然成立，不动**。**同一句话在另一个主语上是对的** —— 更正要按主语切，不能整段扫。
+
+### 53.51.4 改动面：四处耦合 + 一个守卫
+
+| # | 文件 | 改了什么 |
+|---|---|---|
+| 1 | `backend/app/models/event.py` | 7 个模型删掉 `model_config = ConfigDict(extra="allow")`（连它前后的空行），并在各自 docstring 里写明**为什么现在可以闭**（生产者是谁、写了哪些键）。剩下的 3 个 `ConfigDict(extra="allow")` = `EventSource` / `EventRecord` / `FlexibleResponse` |
+| 2 | `backend/app/models/_frontend_export.py` | 7 个加进 import + `__all__`（按 ASCII 序），**23 → 41 → 48 名**；重写模块说明：把"9 个模型故意开放"改成"只剩 `FlexibleResponse` 家族 + `EventRecord`"，并写清 `EventSource` **为何不在收缩名单里** |
+| 3 | `backend/scripts/generate_types.py`（跑一次） | `generated-types.ts` 尾巴 **25 → 18**（残留 18 = 16 个 `FlexibleResponse` 子类 + `EventRecord` + `EventSource`） |
+| 4 | `backend/tests/test_event_record_overlay_typing.py` | 模块 docstring + 3 个用例（见 53.51.3） |
+
+⚠️ **被牵连的守卫与变异（§4.3：「diff 触及任何 `m.path` 就必跑」）**：本轮 diff 触及 `_frontend_export.py`（C2 与 D1 的 `m.path`）与 `event.py`（新增 D2/D3 的 `m.path`）⇒ 一并重跑 `market-snapshot-contract`（C1/C2）与 `frontend-type-closure`（D1/D2/D3），全部四阶段通过。
+
+**新增守卫**（`test_generate_types.py`，放进**不需要 json2ts** 的 `AllowlistCompositionTests`，所以在 CI 后端作业里也跑）：
+
+- 模块级常量 `DELIBERATELY_OPEN = frozenset({"EventRecord", "EventSource"})` —— 把"哪些必须开放"**写成拍过板的事实**，并注明"往这里加名字是契约决策，不是清理"。
+- `test_only_the_documented_models_stay_open` —— 从根出发沿字段注解取**可达**模型，筛出**自身** `model_config["extra"] == "allow"` 的（按 `issubclass(…, FlexibleResponse)` 排除那一族），断言集合**恰好等于** `DELIBERATELY_OPEN`。
+  - 🔑 **为什么必须"集合相等"而不是"禁止新增"**：禁令只挡一个方向。本节的失败模式恰恰是**另一个方向** —— 一口气收七个时**顺手把 `EventSource` 也扫进去**（`tsc` 依旧绿，因为前端只是看不见 adapter 真发的键）。集合相等两个方向都接得住。
+- 同时把 CLI 侧那个 `test_nested_models_included` **改掉**：它的前提（"这 5 个是嵌套的"）在本节之后**不成立**了（它们已是根），而它的内容（断言名字出现在产物里）被 `test_generates_file_with_all_allowlist_models`（遍历 `__all__`）完全覆盖。⇒ 换成 `test_closed_overlay_interfaces_have_no_tail`：按 `}` 在行首切出每个 interface 的体内行，断言 7 个**没有** `  [k: string]: unknown;` 这一行，并断言 `EventSource` **有**（方向相反的一条）。这是**产物级**证据，与模块级那条互补 —— 因为尾巴的成因在**生成器**（`_schema_generation_overrides` 对显式 allow 跳过覆盖），只看 `model_config` 是看不到那一半的。
+
+### 53.51.5 变异：一条两向规则，两条相反改写（D2 / D3）
+
+往同族 set `frontend-type-closure` 追加两条（§4.3："新变异优先追加进同族 set"）：
+
+- **D2** `event.py`：在 `EvidenceItem` 第一个字段前**插回** `model_config = ConfigDict(extra="allow")` ⇒ 已闭合的 interface 重新长出尾巴。针取单行字段行 `    kind: str = "news"          # official | news`（`read_bytes().count()` 实测 **1** 次）。
+  - ⚠️ 为什么不用 `    model_config = ConfigDict(extra="allow")` 本身：它在 `event.py` 里出现 **10 次**（改前）/ **3 次**（改后）⇒ **单行针不能用**。
+  - ⚠️ `new` 里含换行：交给 `rewrite_needle`，它按**文件**行尾重拼（`test_a_single_line_needle_falls_back_to_the_files_convention` 钉的正是这条），所以不会把 CRLF 文件写成混用。
+- **D3** `event.py`：**删掉** `EventSource` 的 allow 声明（反向）。针必须**跨行** —— 靠它前面那句 docstring 尾行才唯一；`count_needle` 在 LF / CRLF 两种拼写下各命中 1 次。
+- 两条**共用** `test_only_the_documented_models_stay_open`，且**不设 group**：`group` 的语义是"同一段字节的两条相反改写"（`apply` 会跳过同组后续成员），而 D2/D3 的针在**不同行**、可以同时施加，所以它们只是"同一守卫的两个方向"，不是同一段字节。`test_grouped_mutations_rewrite_the_same_bytes` 因此不受影响。
+- ⚠️ 标签改过一次：初版用 `E1`/`E2`，与既有 set `eol-audit` 的 `E1–E5` 撞号（`list` 输出暴露）。虽然 `--index` 是**按 set** 解析的、跨套撞号不影响执行，但**审计留痕会歧义**（"E1 变成红了"指向两个不同东西）⇒ 改为同套的 `D2`/`D3`。**教训：新标签落地前先 `list` 一次，看有没有撞号。**
+
+### 53.51.6 门 + 全量
+
+**四道门**（改动后的工作树上）：
+
+- `ruff check app/`：`All checks passed!`
+- `mypy app/`：`Success: no issues found in 331 source files`
+- `python -m scripts.generate_types --check`：`generated-types.ts is up to date.`
+- 前端：`tsc --noEmit` **rc=0**（**先判**：闭合 7 个 interface 之前，先读过它们的全部前端消费者 —— 只有 `confidence-breakdown-panel.tsx`（用 `Required<Pick<…>>` 挑 9 个已声明字段）、`evidence-list.tsx` / `evidence-list.test.tsx`、`signal-summary.tsx`（读 `.divergence` / `.model`）三个；`decision-card.tsx` 走的是 `lib/api.ts` **手写**的 `DecisionQualityOverlay` / `MarketQualityOverlay` / `SourceReliabilityOverlay`，与生成类型无关；`DecisionTimelineSnapshot` 的 overlay 本就是 inline `{[k:string]:unknown}`，也不受影响）；vitest **125 文件 / 738 用例**全过。
+
+**变异**：`verify frontend-type-closure` → **D1 / D2 / D3 各四阶段全过**（`1 failed, 8 deselected`）；`verify market-snapshot-contract` → **C1 / C2 各四阶段全过**。`tests/test_mutation_verify.py`：**`tests=178 failures=0 errors=0`**（元素 62；`tests` 属性 176 → 178 的 **+2** 来自 `test_the_selected_mutation_is_the_inventory_object` 对**全部变异**做 subTest 的循环，即本轮新增的 2 条变异）。harness `list` 自报 **12 套 / 83 个变异**（原 81）。
+
+**全量**（`pytest -q --junitxml=…`；**判据只看 junit 的 `failures`/`errors`**）：`tests=7756 failures=0 errors=0 skipped=11`（`<testcase>` 元素 `6637`）。
+
+对 §53.50 基线（`tests=7746`、元素 6636）的增量：``tests` **+10**、元素 **+1**。分解：**1 个新元素**（`AllowlistCompositionTests::test_only_the_documented_models_stay_open`）+ **7 次 subTest 迭代**（`test_closed_overlay_interfaces_have_no_tail` 按 7 个 interface 各一次）+ **2 次 subTest 迭代**（变异清单 81→83 —— `test_the_selected_mutation_is_the_inventory_object` 对**全部变异**做 subTest）。两个**改名**（`test_nested_models_included` → `test_closed_overlay_interfaces_have_no_tail`；overlay 回归里那三条的改名）同类内一进一出 ⇒ 元素净 0。**交叉验证**：`tests − elements` = **1119**，扣掉三个循环（**83 + 12 + 7**）后**未解释余数仍是 1017** ⇒ 增长的 10 全部来自这三处。`。
+
+（读数为工具自打印：`mutation_verify list` 报 **12 套 / 83 变异**；尾巴行数用"接口体内最后一个非空行恰好是 `  [k: string]: unknown;`"这一严格判据在**字节**上数出 —— 25 → 18，且残留 18 个能被逐个点名。）
+
+### 53.51.7 留痕 / 未决
+
+1. **`EventSource` 保持 allow，这不是欠债**：9 个 adapter 真的加键；它的 docstring 是 8 个里唯一举证的，与本节的判据一致。**将来若某个 adapter 增键，仍应走这条路 → 改 docstring/模型，而不是"顺手关掉"。**
+2. **`EventRecord` 保持 allow**：docstring 举证前向兼容 + `normalize_event_record()` 的 schema 升级；`frontend/src/lib/types.ts` 也**自己声明** `conclusion_challenge`（它写在 record dict 上而模型未声明）。⇒ 两条独立理由，都不属于"没人管"。
+3. **`lib/api.ts` 的三个手写 overlay 类型可退休**（`DecisionQualityOverlay` / `MarketQualityOverlay` / `SourceReliabilityOverlay`，各带 `[key: string]: unknown`）。它们是 §2「前端手写 union 常是后端契约缺口之症状」的同族，而`DecisionReport` 现在完全可以改用**已闭合**的生成类型。**未做** —— 那是前端契约取舍，且 `decision-card.tsx` 的消费面要一起看，另行拍板。
+4. §53.50.7 第 2 条**已消解**（本节即是它的处置）；第 1 条（(c) 类 inline 尾巴）与第 3、4 条（`LatestLink` / 未推送）**不变**。
+5. 本节**未推送**。

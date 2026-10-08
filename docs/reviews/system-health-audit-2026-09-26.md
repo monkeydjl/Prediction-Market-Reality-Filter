@@ -10903,3 +10903,122 @@ TREATMENT(db read-only) -> OperationalError: attempt to write a readonly databas
 - **(D-修法) 不采纳**：不给该用例加「预热 sidecar」。口径：它是**环境态**、红率**受负载影响**，且被测不变量**未被证伪** ⇒ 不为一条不改变语义的环境噪声改守卫。§53.46.4 第 1 条的「是否采纳属拍板」**以此为准**（结论：**不改测试**）。
 - **本节提交**：审计档改动单独成一个**文档提交**（`docs(audit): …`）；**不推送**。
 - **更正 §53.46.4 第 5 条**：该条写「本节**未提交**、未推送」——本补记落地并提交后，其中「**未提交**」半句**作废**（本节改动即以该文档提交落库）；「**未推送**」「临时探针已删、未跟踪回到 0」仍成立。
+
+## §53.47 (C) 处置：承重的是**读法**，不是那个 NULL —— 而「改模型」不是修法
+
+> 追加于 §53.46 之后。承接 §53.44.7 第 2 条与 §53.45.6 的 (C) 项：`kernel_market_snapshots.captured_at` 可空（notnull=0）而兄弟表 notnull=1。**用户拍板：加固读法**（不采纳「只登记」，也不采纳「改模型」）。
+
+### 53.47.1 结论先行
+
+(C) 项过去被记成「形状与兄弟表不一致」。查完的结论是：**那个形状本身不可达，但它「授权」的一种状态，在未变异的代码上就能让两个 audit 路由 500。**
+
+- `KernelMarketSnapshot.captured_at` **可空、且无默认值**（`kernel_db.py:272`）；兄弟表 `kernel_futures_snapshots:473`、`kernel_traditional_odds_snapshots:396`、`kernel_sport_edges:304` 都是 `nullable=False`。
+- NULL **不由代码产出**：唯一 ORM 构造点在 `MarketSnapshotStore.append_snapshot`，它写死 `when = captured_at or _utcnow()`（必非空）；全仓无 raw insert；`backend/kernel_predictions.db` 里该表 **0 行**（§53.11.1 已记：生产 job `sport_market_snapshots` **从未被调用**）。
+- 但「可空」**授权**了 `KernelMarketSnapshot(link_id=…, implied_prob=…)` 这种**合法**构造 —— 不需要任何写入方「出错」。
+- §53.44 补的 tiebreaker **不改变**这一点（§53.44.7 第 2 条已写明「正交」）。
+
+⇒ 处置：**让读法对「无时间戳行」有确定、可声明的行为**；**不动模型**（理由见 53.47.4）。
+
+### 53.47.2 一行合法 NULL 的四个后果（**未变异**代码实测）
+
+探针 `.workbuddy/audit-2026-10-03/probe5347_null_row.py`（真 `MarketSnapshotStore` + temp kernel DB，**不经过任何变异**）：写 1 行带时间戳（`2020-01-01`）+ 1 行**按模型合法**地省略时间戳。
+
+| 读法 | 读数 | 后果 |
+|---|---|---|
+| `get_snapshots`（ASC，喂 `series` 路由 / 折线） | `asc_series_order_ids=[2, 1]` ⇒ NULL 行**排最前** | 被当成「最早」的点（静默） |
+| `get_latest_snapshot`（DESC） | `desc_latest_row_id=1`（非空行） | NULL 行永远当不了「最新」⇒ **安全** |
+| `_find_settlement_snapshot`（`captured_at <= T`） | `settlement_filter_visible_rows=1`（共 2 行） | SQL 三值逻辑 ⇒ NULL 行**静默不可见** |
+| `audit_summary` | `TypeError: '<' not supported between instances of 'datetime.datetime' and 'str'` | **500** |
+
+`rows_with_null_captured_at=1` —— 即「合法构造」确实落了库。两个 audit 路由（`sport_markets.py:140` / `:165`）**外面没有 try** ⇒ 是 500 而非降级。前端 `link-audit-trail.tsx:23` 的 `stamp(value: string | null | undefined)` **显式接受 null** ⇒ 前端不会崩，崩只发生在后端。
+
+### 53.47.3 `audit_summary` 为什么会抛
+
+```python
+def sort_key(item):
+    t = _ts(item[0])      # 真实读法给 datetime；既有夹具给 ISO 字符串
+    return t or ""        # ← 缺时间戳时是 str：键「随输入变类型」
+```
+
+`_ts(s) = s.get("captured_at") or s.get("created_at")`。**真实行给 `datetime`，而 `test_audit_summary_with_prices` 的夹具给的是 ISO 字符串** —— 说明这个键从一开始就假定「两种类型都可能」。一旦同一序列里既有 `datetime` 又有「缺失」，`sorted` 就炸。
+
+⇒ 根因不是「有人写了 NULL」，而是**排序键的类型取决于输入**。
+
+### 53.47.4 为什么「把模型改成 NOT NULL」不是修法
+
+两条都是派生的：
+
+1. **对已有库无效。** `init_kernel_db`（`kernel_db.py:481`）= `_migrate_dormant_tables`（只 DROP 三张具名老表）+ `KernelBase.metadata.create_all`，而 `create_all` 是 `CREATE TABLE IF NOT EXISTS`、**从不 ALTER**。所以改完之后，已存在的 `kernel_predictions.db` **仍是可空列**，而 `test_kernel_db_model_shape.py` 会**断言一个部署库里并不存在的形状** —— 正是那份守卫自己的文档所警告的 model↔DB 漂移，只是换了个方向。
+2. **它管不住来源。** 就算新库变成 NOT NULL，任何一行来自旧库 / 脚本 / 手工 SQL 的 NULL 照旧让读法炸。要让读法安全，只能改读法。
+
+⇒ 采用：`audit_summary` 把「无时间戳行」分区出去（不参与 first/last），用 `untimestamped_count` + `flags` 显式声明；排序键**归一到单一类型**。
+
+### 53.47.5 空头实验：149 条相关用例对「写入侧回退被删」完全盲
+
+按 §4.2 先证明既有断言是空头，再补。把 `market_snapshot_store.py` 的 `when = captured_at or _utcnow()` 改成 `when = captured_at`（其余不动），跑 8 个快照消费者文件（`test_sport_market_stores` / `test_sport_market_routes` / `test_market_liquidity_degraded` / `test_edge_detector_service` / `test_market_settlement_service` / `test_market_settlement_routes` / `test_market_settlement_cli` / `test_phase7_e2e_integration`）：
+
+| 状态 | junit |
+|---|---|
+| 变异前 | `tests=149 failures=0 errors=0 skipped=0` |
+| 变异后 | `tests=149 failures=0 errors=0 skipped=0` |
+
+⇒ **一条都没红**。变异的有效性由正控证明（同一变异下 `row_b_omitted_captured_at=None`、ASC 串首是 NULL 行）。还原后该文件 sha256 与基线**逐字节一致**（`fbf6f5df6ba0d643c5690088fc2b7bead73f1a85893d3d77eac193283f44ce9c`）。
+
+⇒ 成因是 §4.2 的 **(c) 断言负向或过弱**：既有断言只查 `len(snaps)` / `implied_prob`，**从不查 `captured_at`**；而 `get_latest_snapshot` 在「全 NULL」时靠 `id.desc()` 仍返回最后一行 ⇒ 连 `implied_prob == 0.65` 也照过。
+
+### 53.47.6 修法与变异登记
+
+代码（`backend/app/kernel/market_snapshot_store.py` 的 `audit_summary`）：
+
+- priced 行分成 `timestamped` / 无时间戳两段；无时间戳行**不参与** first/last/delta/max_drawdown。
+- 全是无时间戳 ⇒ `available: False` + `untimestamped_count` + `flags: ["untimestamped_snapshots"]`。
+- `sort_key` 归一到单一类型（`datetime` → `isoformat()`，其余 `str()`）；缺时间戳的行已被分区排除。
+- 成功分支新增 `untimestamped_count`（**纯加法**）；`snapshot_count` 仍是有效价行数。
+
+守卫（`backend/tests/test_ece_and_market_audit.py`，+3 条 ⇒ junit `tests=7 failures=0 errors=0`）：
+
+- **端点取值**断言（不是「没抛异常」）：`first/last_captured_at` 等于真实时间戳行、`first/last_price` 等于对应价格。
+- 全无时间戳 ⇒ `available is False` 且 `flags == ["untimestamped_snapshots"]`。
+- 混排 `datetime` + ISO 字符串 ⇒ 不抛且按时间序。
+
+harness（`backend/scripts/mutation_verify.py` 新 set `market-audit-timestamps`；`tests/test_mutation_verify.py` 的**显式有序清单**加一行）：
+
+| 变异 | 打掉什么 | 守卫 | 变异后读数 |
+|---|---|---|---|
+| A1 | 分区谓词（NULL 行落回时间轴） | `…_endpoint` + `…_not_available` | `2 failed, 5 deselected` |
+| A2 | 排序键的类型一致 | `…_mixed_timestamp_types…` | `1 failed, 6 deselected` |
+
+两条都走完四阶段（变异前绿 / 变异后 **1/1 文件红** / 还原后绿 / 逐字节一致），尾巴里 `[safe-delete]` 出现 **0** 次。`list` 自报：**共 10 套 / 76 个变异**（原 9 套 / 74 条）。
+
+同时把 `test_the_eight_sets_are_present` 改名为 `test_the_ten_sets_are_present`：它此前**名字写 eight、清单却列九项**（`market-snapshot-order` 于 §53.44 加入时没改名），本次一并更正。
+
+### 53.47.7 门
+
+- `ruff check app/`（§0 门）：**All checks passed!**
+- `mypy app/`：**Success: no issues found in 331 source files**
+- `python -m scripts.generate_types --check`：**generated-types.ts is up to date.**
+- 定向回归（10 个文件，含本节的守卫文件与 harness 守卫）：junit **`tests=325 failures=0 errors=0 skipped=0`**
+- ruff 派生核对（§53.44.5 的口径）：两个改动的测试文件，**当前与 HEAD blob 在同配置下都是 `All checks passed!`** ⇒ 本节新增 **0** 条。
+- `verify market-snapshot-order` **复验通过** —— 本节 diff 触及该集的 `m.path`，故按 §4.3 一并跑（两条都 `1/1 文件红`、四阶段全过）。
+- 全量回归：见 53.47.9。
+
+### 53.47.8 未决 / 留痕
+
+1. **`get_snapshots` 仍是「忠实的原始读法」**：一行无时间戳的快照仍会由 `series` 路由 / 折线图收到，并按 SQLite 的 ASC 语义**排在最前**（53.47.2 第一行）。审计侧现已把它排除并声明，于是**两个门对「无时间戳行」的处理不同**：审计 = 排除 + flag；原始序列 = 照发。这是**有意**的（原始读法的 docstring 承诺 "All snapshots"），但它是一处新的**不对称**，登记待拍板。
+2. **`_find_settlement_snapshot` 静默忽略无时间戳行**（SQL 三值逻辑），安全但无声 —— 与 §5「0 必须只说一件事」同族，**只登记**。
+3. **`snapshot_count` 在两个分支里含义不同**：`no_prices` 分支是 `len(snaps)`（全部行）、成功分支是有效价行数。**既有**、与本节正交，**只登记**。
+4. **`_ts` 的 `created_at` 回退是死键**：`KernelMarketSnapshot` 无该列、`_row_to_dict` 也不产它 ⇒ `s.get("created_at")` 恒为 None（同族：`_price` 里的 `yes_price` / `market_prob` / `prob` 三个键同样无生产者）。**代码卫生**，按 §4.2 不登记为变异。
+5. 模型形状本身（`nullable=True` vs 兄弟表 `NOT NULL`）**保持原样**，`test_kernel_db_model_shape.py` 的冻结清单**不动** —— 见 53.47.4。
+
+### 53.47.9 全量读数
+
+`pytest tests -q --junitxml=junit-5347-full.xml`（后台，23m47s）：**`tests=7735 failures=0 errors=0 skipped=11`**；日志里 `[safe-delete]` 出现 **0** 次。
+
+与 §53.45 的全量（`junit-53-45-full.xml`：`tests=7729 failures=0 errors=0`）**逐文件**比对，元素级只差一处：
+
+| | §53.45 | §53.47 | 差 |
+|---|---|---|---|
+| `tests.test_ece_and_market_audit` | 4 | 7 | **+3** = 本节新增的 3 条守卫 |
+| 全部 `testcase` 元素 | 6629 | 6632 | **+3** |
+
+`tests` 属性由 7729 升到 7735（**+6**）—— 另 3 条落在「pytest 把**子测试**也计入 `tests`」这一口径上（与元素数无关）：`test_mutation_verify.py` 的 `test_the_selected_mutation_is_the_inventory_object` 遍历**每个变异**（新 set ⇒ **+2** 次迭代），`test_the_whole_set_selection_passes_preflight` 遍历**每个 set**（⇒ **+1**）。⇒ **6 = 3 条用例 + 3 条子测试**，逐项有归属。

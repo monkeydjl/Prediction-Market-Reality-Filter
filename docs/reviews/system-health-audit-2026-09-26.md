@@ -12293,3 +12293,285 @@ J18/J19/J20/J21 四条针都落在 `EventMoverItem` / `EventMoversResponse` 附�
 整集 apply 时 `_apply_preflight` 无法同时落位。
 **改法是换方向取上下文**（一个向上、一个向下），而不是把它们塞进同一个 `group` ——
 `group` 只该用于「真正的同一段字节、互为反向」的情形（§4.3）。
+
+## 53.56 `GET /events/{id}/similar`：元素具名的第四个节点，以及一条**不需要** `exclude_unset` 的端点
+
+承接 §53.55。C1 剩余节点里，这个节点的元素只有八个标量，生产者 `find_similar` 可**离线驱动**
+（它读 store 条目，不碰网络）⇒ 本节的证据强度是这一族里最高的。
+
+🔴 **本节与 §53.55 恰好相对，两条合起来才是一个完整判据。** §53.55 的结论是
+「具名一个裸 dict 元素**可能改变线上字节**，前提是路由有没有 `response_model_exclude_unset`」；
+本节的结论是另一半：**这条端点不需要那面旗子，因为没有任何字段是条件写入的** ——
+`find_similar` 对每条 item **无条件写全部 8 个键**（可空的那四个写 `None`，不是省掉）
+⇒ **任何默认值都是错的**，具名是纯类型变更。见 53.56.3。
+
+🔴 **而且本节坐实了一处前端漂移**：手写 `SimilarEvent`（`types.ts`）只有 **6** 个字段，
+生产者有 **8** 个 —— `direction` 与 `last_updated` 早已从副本里漂走，
+且 `tsc` 与 `vitest` 双双看不见。见 53.56.2。
+
+### 53.56.1 取证：生产者驱动，不是代理
+
+方法同 §53.54 / §53.55，但这次**不需要代理**：路由的胶水只有四行，且 `find_similar` 的第二个参数
+（`stored_entries`）就是 `list_events(limit=200)` 的返回值 —— store 条目。把每份语料自己当作那份列表
+（这正是 §53.54/§53.55 对 "语料" 做的那种替换），生产者就被**真实驱动**了：
+
+```python
+entry    = get_event(event_id)
+record   = entry.get("record") or {}
+query    = record.get("event_title", "")
+entities = (record.get("semantics") or {}).get("entities") or []
+for s in find_similar(query, pool, limit=limit, exclude_event_id=eid, query_entities=entities): ...
+```
+
+探针 `probe_similar_shape.py`，读数 `probe_similar_shape.txt`。**每份语料里的每个事件都当一次查询**，
+`limit ∈ {1, 3, 5, 10, 20}`：
+
+| 语料 | entry 数 | 发出 item（五个 `limit` 合计） |
+| --- | --- | --- |
+| `backend/event_store.json`（活库） | 257 | 8 238 |
+| `backups/event-id-migration-20260622-040713/` | 78 | 2 132 |
+| `backups/manifold-lowercase-purge-20260709-150947/` | 163 | 5 150 |
+| `backups/manifold-purge-20260709-150402/` | 206 | 6 685 |
+
+**共发出 22 205 条 item，而 key 集有且只有一种**：
+
+| 计数 | key 集 |
+| --- | --- |
+| 22 205 | `['change', 'direction', 'estimated_probability', 'event_id', 'event_title', 'event_title_zh', 'last_updated', 'similarity']` |
+
+| 字段 | 类型直方图（22 205 条） | 显式 `null` 次数 |
+| --- | --- | --- |
+| `event_id` / `event_title` / `event_title_zh` / `direction` / `last_updated` | `str` ×22 205 | **0** |
+| `similarity` / `estimated_probability` / `change` | `float` ×22 205 | **0** |
+
+`direction` 观测词表 = **{`rising` 11 534, `falling` 7 576, `stable` 3 095}**（三值，无其它）。
+
+**接受性测试**（严格模型会不会 200→422）：把 **22 205 条**逐条喂给一个 8 字段 `extra="forbid"` 的模型
+⇒ **接受 22 205 / 拒绝 0**。
+
+⚠️ 「0 个显式 `null`」是关于**这四份语料**的观测，**不是保证**：四个字段的来源是
+`probability.get(...)` 与 `entry.get("last_updated")` —— 记录若没有 `probability`、
+条目若没有 `last_updated`，代码路径就产出 `None`。类型因此保留那个分支（见 53.56.3）。
+
+### 53.56.2 🔴 前端副本漂移：手写 6 字段 vs 生产者 8 字段
+
+`frontend/src/lib/types.ts` 的手写 `SimilarEvent` 只有 6 个字段：
+
+```ts
+export interface SimilarEvent {
+  event_id: string;
+  event_title: string;
+  event_title_zh?: string;
+  similarity?: number;
+  estimated_probability?: number;
+  change?: number;
+}
+```
+
+生产者的 8 键里，**`direction` 与 `last_updated` 完全不在副本里**；另外四个还被写成了**可选**
+（`event_title_zh?` / `similarity?` / `estimated_probability?` / `change?`），
+而生产者**每条都写**。⇒ 这份副本在两个方向上都不忠实：**少两个字段、且把必写键标成可选**。
+
+它没被拦下的原因与 §53.54.8 第 3 条完全相同：`tsconfig.json` 排除 `**/*.test.ts(x)` ⇒ `tsc --noEmit`
+**从不检查测试文件**（而消费者 `events/page.tsx` 不是测试文件、本该被查 —— 但它读的是
+`res.json() as T` 的断言结果，**T 在这里没有被任何人比对**；真正让漂移隐形的是
+**没有任何东西拿副本去核对生成类型**）。
+
+爆炸半径：唯一消费者是 `app/events/page.tsx`（`useState<SimilarEvent[]>` + 一处 `.catch` 兜底），
+它只读 `event_id` / `event_title_zh || event_title` / `similarity` / `estimated_probability`
+—— **不读** `direction` / `change` / `last_updated`。⇒ 退役成生成类型是**纯收紧**，消费侧零改动。
+
+### 53.56.3 契约点：一条**不需要** `exclude_unset` 的端点（与 §53.55 相对）
+
+`/similar` 路由声明 `response_model=SimilarEventsResponse`，**没有** `exclude_unset`。
+本条**不需要**它，理由与 §53.55 正好互补：
+
+| | `/events/movers`（§53.55） | `/events/{id}/similar`（本节） |
+| --- | --- | --- |
+| 元素的键 | 5 个，其中 1 个 **条件写入** | **8 个，全部无条件写** |
+| 不给默认值 | ❌ 会让「没有中文标题」变 **500** | ✅ **必须**不给（默认值只会放宽类型） |
+| 需要 `exclude_unset` | ✅ 否则「缺席」变 `null` | ❌ **不需要**（没有「缺席」可言） |
+| 可空字段 | 有（踩上面那条） | 有，但**必有键 + 值为 `None`** ⇒ `X | None` 无默认即可精确表达 |
+
+⇒ 四个可空字段（`estimated_probability` / `change` / `direction` / `last_updated`）声明成
+**required-but-nullable（不给默认值）**。这样生成的 TS 是 `number | null` / `string | null`，**精确**；
+给上 `= None` 会被 `pydantic2ts` 一律渲染成**可选**（`X | null | undefined`），
+凭空引入这条端点**本来没有**的「缺席 vs null」歧义 —— J27 钉的就是这个。
+
+**`direction` 不窄化成 `Literal`**：观测词表恰是 3 值，但记录侧的 `Probability.direction` 声明就是 `str`，
+`Literal["rising","falling","stable"]` 比**它镜像的那份契约更窄**，会把将来第四个方向值变成 422
+（§2：「没观测到」≠「不可能」）。⇒ 保持 `str | None`，并用 `typing.get_args(annotation)` 钉住（J28）。
+
+### 53.56.4 落地
+
+**后端**
+
+- `backend/app/models/event.py`（+54/−3）：新增 `SimilarEventItem`（8 字段、**全部无默认值**），
+  并把 `SimilarEventsResponse` 的三键去默认、`similar` 改成 `list[SimilarEventItem]`。
+- `backend/app/models/_frontend_export.py`（+2/−0）：`SimilarEventItem` 进 import + `__all__`
+  （**排 `SimilarEventsResponse` 之前**，按名字排序）。**必须是根**：只被 `$ref` 引用的模型拿不到
+  `additionalProperties: false`，`json2ts` 会补回 `[k: string]: unknown`。
+- `backend/app/api/routes/events.py`（+6/−0）：**只加 docstring**，写明本条**为什么不需要** `exclude_unset`
+  （与姊妹路由 `/movers` 对照）。**路由的装饰器一个字符没动** —— 这正是本节与 §53.55 的分界。
+
+**重生成**（`frontend/src/lib/generated-types.ts`，+53/−5）
+
+| 读数 | 改前（§53.55 末） | 改后 |
+| --- | --- | --- |
+| 工作树字节 | 40 621 B | **43 165 B** |
+| CRLF（= 行数） | 1 077 | **1 125**（+48 = numstat 53−5） |
+| `bare_lf` | 0 | **0** |
+| `export interface` 数 | 55 | **56**（+`SimilarEventItem`） |
+
+新元素是**闭合**的（8 字段、无尾巴）：
+
+```ts
+export interface SimilarEventItem {
+  event_id: string;
+  event_title: string;
+  event_title_zh: string;
+  similarity: number;
+  estimated_probability: number | null;
+  change: number | null;
+  direction: string | null;
+  last_updated: string | null;
+}
+```
+
+**前端**
+
+- `frontend/src/lib/types.ts`（+7/−8，`export interface` 3 → 2、`export type` 7 → 8）：
+  `SimilarEvent` 从手写 interface 退役成 `export type SimilarEvent = SimilarEventItem;`，
+  并显式 `import type { SimilarEventItem }`（`export type * from` **不创建本地绑定**）。
+- `frontend/src/lib/api.ts`（+8/−2）：调用点 `api<{ similar: SimilarEvent[]; count?: number }>(…)`
+  → `api<SimilarEventsResponse>(…)`；补 `SimilarEventsResponse` 的 import + re-export；
+  import 行去掉 `SimilarEvent`。
+- `app/events/page.tsx`：**零改动**（`SimilarEvent` 名字保留）。
+
+### 53.56.5 守卫与变异
+
+**守卫**（`backend/tests/test_generate_types.py`，+172/−0，新类 `SimilarEventsContractTests`，3 用例 / 15 subtests）
+
+| 判据 | 层 | 读什么 |
+| --- | --- | --- |
+| ① `similar` 必须指名 `SimilarEventItem` | 模型身份 | `model_fields['similar'].annotation == list[SimilarEventItem]` |
+| ② 信封三键（`event_id`/`count`/`similar`）必须 required | 模型可选性 | `is_required()` |
+| ③ 元素**八个字段一个默认值也不能有** | 模型可选性 | `is_required()`（含四个可空字段） |
+| ④ 四个可空字段必须是 `X \| None`（**而非** `Literal`） | 注解形状 | `typing.get_args(annotation)` |
+| ⑤ `api.ts` / `types.ts` 不得再声明 `SimilarEvent` / `SimilarEventItem` 的 `interface` | 按名判（文本） | `_interface_bodies` |
+| ⑥ 别名 `export type SimilarEvent = SimilarEventItem;` 必须在 | 文本 | `assertIn` |
+| ⑦ 调用点必须读 `api<SimilarEventsResponse>` | 文本 | 从路径行**往回**找最近的 `api<` |
+
+③④ 是本节的核心。③ 的来源与 §53.55 相反：那里「条件写入的键**必须**保留默认值」，
+这里「无条件写入的键**一个默认值都不能有**」——两个方向的失败模式**相反**
+（前者去掉默认值 = 500；后者加上默认值 = 静默放宽 + 重新引入歧义）。
+
+**变异**（`frontend-type-closure` 追加 J22–J29，该 set 由 27 条增至 **35 条**；`list` 报 **12 套 / 115 条**）
+
+四阶段全部通过（`verify --index 28-35`）：
+
+| # | 变异 | 踩的判据 | 结果 |
+| --- | --- | --- | --- |
+| J22 | `api.ts` 又声明 `SimilarEvent`（**别名刻意留着**） | ⑤ / api.ts | OK |
+| J23 | `types.ts` 又声明 `SimilarEventItem`（同判据的另一个文件，§4.2） | ⑤ / types.ts | OK |
+| J24 | 别名被改指**旧手写形状**（**不插副本**） | ⑥ | OK |
+| J25 | 调用点 generic 退回内联 | ⑦ | OK |
+| J26 | `similar` 退回 `list[dict[str, Any]]` | ① | OK |
+| J27 | `estimated_probability` **加回默认值**（把必有键放宽成可选） | ③ | OK |
+| J28 | `direction` **窄化成 `Literal`**（比生产者声明更紧） | ④ | OK |
+| J29 | `count` 加回默认值 | ② | OK |
+
+四阶段逐条：`green before True | red after mutation 1/1 files red | green after restore True | bytes restored True`；
+每条**恰好 1 个测试失败**（J26 为 `1 failed, 19 deselected` ⇒ 只 1 个用例；其余 `1 failed, 1 passed, …`）。
+
+🔴 **J27 与 J28 是「方向相反」的一对**：J27 放宽（加默认值），J28 收紧（`str | None` → 3 值 `Literal`）。
+两条都**不是**「更安全/更危险」，而是**偏离被镜像的那份契约** —— 一条比它松、一条比它紧，
+各自有一个断言拦它。
+
+🔴 **新针的锚点刻意避开既有针占用的字节**（§53.55 的教训，四条新做法）：
+J22 用 `export interface PendingLink {`（而非 J13 的 `DecisionReport`）；
+J23 用一行**无关**的导出行（而非 J24 的别名行）；J29 从 docstring 尾句**向上**取上界、
+在 J26 的针**之前**结束。⇒ 整集 `apply` 时八条针互不重叠。
+
+### 53.56.6 门与全量
+
+| 门 | 读数 |
+| --- | --- |
+| `ruff check app/` | `All checks passed!` |
+| `mypy app/` | `Success: no issues found in 331 source files` |
+| `python -m scripts.generate_types --check` | `generated-types.ts is up to date.` |
+| `tsc --noEmit` | 0 条 `error TS` |
+| `eslint`（三个改动的前端文件） | 无输出（干净） |
+| `vitest run` | **125 文件 / 738 用例**全过（本节只改类型，不加用例） |
+| `test_mutation_verify.py` | `62 passed, 148 subtests`（junit：`tests=210 failures=0 errors=0`） |
+| 后端全量 | **`tests=7863 failures=0 errors=0 skipped=11`**（testcase **6648**；日志 `6637 passed, 11 skipped, 1215 subtests passed in 1443.39s`） |
+
+**全量对账**（对 §53.55 同口径基线 `tests=7836` / testcase 6645）：`tests` **+27**、testcase **+3**。
+逐条 diff **0 条删除**，新增恰为 `SimilarEventsContractTests` 的三个方法。三个分量**各自单跑实测**：
+
+| 分量 | 53.55 | 53.56 | Δ |
+| --- | --- | --- | --- |
+| 新类 testcase | 0 | 3 | +3 |
+| 闭合清单（`test_closed_overlay_interfaces_have_no_tail`）subtest | 13 | 14 | +1 |
+| 新类 `SimilarEventsContractTests` subtest | 0 | 15 | +15 |
+| `test_mutation_verify.py` subtest | 140 | 148 | +8 |
+
+`+27 = 3 + (1 + 15 + 8)` ⇒ **无余量**。
+⚠️ 我自己的第一版分量便签把闭合清单记成「12→14（+2）」—— 那是**错的**：`EventMoverItem` 属 §53.55 已提交基线
+（`git show HEAD:…test_generate_types.py` 实测清单 **13** 名），故本节只把它推到 **14**（+1）。更正后三条分量恰好配平。
+🔑 **教训**：pytest junit 的 `tests` 属性 = testcase 数 + subtest 数（两者之差恒等于 subtest 总数），
+所以**对账必须把「用例数」和「subtest 数」分开列**，否则两个量会互相冒充，差 1 也说不清是谁的。
+
+✅ **复跑守卫未漂生成物**：`test_generate_types.py` 会**重新生成** `generated-types.ts`（§53.54.8 第 2 条），
+本节又跑了它多次（四阶段 8 跑 + 全量 + 单跑）⇒ 跑前/跑后对 `generated-types.ts` 与 `api.ts` 各取 sha256，
+**逐字节相同**（43 165 B / `9809793e…`；42 570 B / `070a7091…`）。
+
+### 53.56.7 未决 / 有意不做
+
+- **C1 剩余四个**：`EventDiscoveryResponse.events`、`OpenDecisionsResponse.decisions`、
+  `RecentPredictionsResponse.predictions`、`PendingLinksResponse.pending`，加上
+  `EventListResponse`（**不按「元素具名」处置**，见下）。
+  本节侦察已把五条的现状登记在 `.workbuddy/audit-2026-10-03/daily_53_56_recon.md`：
+  - 🔴 **`EventDiscoveryResponse.events` 的元素其实就是已发布的 `EventRecord`**（前端早已读作它），
+    代理探针 **704 条记录 / 0 拒绝**。**但 `EventRecord` 是 `extra="allow"` 的设计内开放模型**
+    （29 声明字段 / 11 required，实测记录普遍带 **4–5 个未声明键**、**8 种 key 集**）
+    ⇒ **命名它得到的是「具名但有尾巴」的元素，不是闭合元素**。
+    另：`discover_events` 的两个 return **都写 5 个键**（含 `status`），模型只声明 **4** 个，
+    且 `status` 在两条分支里**形状不同**（`{"message"}` vs `{"candidates", …}`）。
+    ⚠️ 生产者需联网 + LLM，**本机驱动不了** ⇒ 只能代理取证。
+  - 🔴 **`EventListResponse` 不适用本节手法**：模型**已具名** `list[EventStoreEntry]`，
+    但前端**刻意**不用它 —— `types.ts` 的注释写明「`TrackedEntry` is NOT a pure alias for
+    `EventStoreEntry` because the generated `EventStoreEntry.record` is `{ [k: string]: unknown }`
+    (backend `dict[str, Any]`). We keep record typed as `EventRecord` for frontend type safety.」
+    ⇒ 真正的修法是**动后端 `EventStoreEntry.record` 的类型**（`dict[str, Any]` → `EventRecord`），
+    那是**契约变更**、影响面大于「元素具名」，**需先判忠实类型**。
+- **死 re-export 仍是 2 个**：`AutoResolveResponse` / `EventListResponse`（`api.ts` 尾部）。
+  （`SimilarEventsResponse` 由死变活。）
+- ⚠️ **`direction` 的前提**：保持 `str | None` 的前提是「记录侧 `Probability.direction` 声明为 `str`」。
+  若哪天记录侧把它收成 `Literal`，本节应同步 —— 届时应由 `get_args` 断言与这次一致地翻案。
+- ⚠️ **`last_updated` 的「可空」分支只由 store 侧产生**：22 205 条里 0 次 `None`，
+  但 `entry.get("last_updated")` 的代码路径允许它 —— 与 `EdgeSeriesPoint.timestamp` 同族。
+- 🔴 **新线索（本轮只登记不修）**：`ruff check app/` 是绿门，但 **`ruff check tests/ scripts/` 报 339 条**
+  （`tests/` 320 + `scripts/` 19，**无一在我改的文件里**）。CI 只跑 `ruff check app/`
+  （`.github/workflows/ci.yml:55`），`backend/ruff.toml` 也只把规则集限定到历史默认集
+  ⇒ **`tests/` 与 `scripts/` 在 lint 门之外**。这是**既有**状态、非本节引入；作为线索登记。
+- 本节随本轮改动**未推送**。
+
+### 53.56.8 本轮方法学（本节踩到的坑）
+
+**1. 守卫的「锚点字符串」也算被检查的字节 —— 顺手写的注释会让别的守卫变红。**
+第一版给 `api.ts` 的 `/similar` 调用点写注释时，顺手写了「the same way 53.55 found on `/events/movers`」，
+于是 §53.55 那条守卫的锚点 `"/events/movers"` 在 `api.ts` 里**从 1 次变成 2 次**，
+`test_event_movers_callsite_reads_the_generated_envelope` 立刻报 `2 != 1`。
+⇒ **改注释也算改被守卫的字节**：写完要跑**整个**守卫文件，不是只跑自己新加的那个类。
+（这与 §4.3「针的语义会随生产代码变化」是同一件事的另一面 —— 这次变化的是**我自己的注释**。）
+
+**2. 「不需要某个标志」也要有守卫，而它的守卫办法是钉住**前提**。**
+`/similar` 不需要 `response_model_exclude_unset`，这件事本身**不可直接断言**（断言「路由上没有这面旗子」
+只是在记录一个偶然）。可断言的是它的**前提**：8 个字段**一个默认值都没有**。
+⇒ **当一条结论的形式是「X 不需要」，去找 X 之所以不需要的那个前提，把前提钉住。**
+
+**3. 同一族里「方向相反」的两条变异要成对设计。**
+J27（放宽）与 J28（收紧）都偏离被镜像的契约，各有一个断言拦。
+🔑 **只放一条会让人误以为这族只有一种错法** —— §53.55 的 J19/J20 是「两个方向的可选性」，
+本节是「同一字段的松/紧」。⇒ 设计变异时问一句：**这条判据的另一侧长什么样？**

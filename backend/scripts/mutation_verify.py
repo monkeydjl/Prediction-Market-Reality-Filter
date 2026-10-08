@@ -323,6 +323,16 @@ _T_MUTATION_VERIFY = "tests/test_mutation_verify.py"
 _MARKET_SNAPSHOT_STORE = "backend/app/kernel/market_snapshot_store.py"
 _T_SPORT_MARKET_STORES = "tests/test_sport_market_stores.py"
 
+# §53.47 — the same store's *audit* reader. `audit_summary` assumed every row it
+# was handed carried a timestamp, and its sort key returned whatever type it was
+# given (`datetime` from a real read, an ISO string from the older fixtures, and
+# `""` for a missing timestamp). `kernel_market_snapshots.captured_at` is
+# nullable, so a row with no timestamp is legal, and one such row was enough to
+# raise TypeError inside `sorted` -- a 500 on both audit routes. The two
+# mutations below are the partition and the key's type, and they need separate
+# guards because one is asserted on endpoint values and the other on mixing.
+_T_ECE_MARKET_AUDIT = "tests/test_ece_and_market_audit.py"
+
 _T_AVAILABILITY = "tests/test_football_live_availability_service.py"
 _T_SCHEDULE = "tests/test_football_live_schedule_service.py"
 _T_KALSHI = "tests/test_kalshi_event_source.py"
@@ -1468,6 +1478,56 @@ SETS: tuple[MutationSet, ...] = (
                     "同一段并列数据 asc 下是插入序、desc 下是倒序。这条与 S1 打的是"
                     "**不同**的字节段（另一处 ORDER BY），所以互为反向改写也不构成同组冲突。"
                     "折线图对倒序表现为可视假象，只有断言行序的守卫能看见。"
+                ),
+            ),
+        ),
+    ),
+    MutationSet(
+        key="market-audit-timestamps",
+        title="市场价格审计：无时间戳行不得成为端点（A1/A2）",
+        rationale=(
+            "`MarketSnapshotStore.audit_summary` 里有两条各自的假设，各配一条变异。"
+            "A1 打掉「无时间戳行不参与端点」这条分区：删掉谓词后 NULL 行落回时间轴，"
+            "并抢走 first/last 之一 —— 这正是 §53.47 用一行**合法** NULL 在未变异代码上先证到的形状。"
+            "A2 打掉排序键的类型一致：键随输入变类型时 `sorted` 抛 TypeError，"
+            "而两个 audit 路由（sport_markets.py:140 / :165）外面没有 try，所以是 500 不是降级。"
+            "两条必须分开 —— 一条断言端点取值、一条断言两种时间类型混排，"
+            "合并成一条的话红的时候就分不清是分区没了还是键的类型没了。"
+        ),
+        mutations=(
+            Mutation(
+                label="A1  无时间戳行被放回时间轴：NULL 抢走 first/last 之一",
+                path=_MARKET_SNAPSHOT_STORE,
+                old=b"            (s, p) for s, p in priced if _ts(s) is not None",
+                new=b"            (s, p) for s, p in priced",
+                guard_file=_T_ECE_MARKET_AUDIT,
+                guards=(
+                    "test_audit_summary_untimestamped_row_does_not_become_an_endpoint",
+                    "test_audit_summary_all_untimestamped_rows_are_not_available",
+                ),
+                note=(
+                    "去掉谓词后 `timestamped` 就是 `priced`，`untimestamped_count` 恒为 0。"
+                    "NULL 行不抛错（键是 `str(None) == 'None'`），但会按字符串参与排序并把"
+                    "first/last 之一抢走 —— 「静默读错」而不是「响亮失败」，所以只有断言端点值的"
+                    "守卫能看见。"
+                ),
+            ),
+            Mutation(
+                label="A2  排序键退回「有什么返什么」：datetime 与 str 混比",
+                path=_MARKET_SNAPSHOT_STORE,
+                old=b"            return t.isoformat() if isinstance(t, datetime) else str(t)",
+                new=b"            return t",
+                guard_file=_T_ECE_MARKET_AUDIT,
+                guards=(
+                    "test_audit_summary_mixed_timestamp_types_still_order_chronologically",
+                ),
+                note=(
+                    "这近乎原实现（`return t or \"\"`）。键的类型随输入而定："
+                    "同一组里既有 `datetime`（真实读法）又有 ISO 字符串（既有夹具）时，"
+                    "`sorted` 抛 `TypeError: '<' not supported between instances of "
+                    "'datetime.datetime' and 'str'` ⇒ 两个 audit 路由 500。"
+                    "只有「一个序列里两种类型并存」那条守卫能看见它 —— "
+                    "全 `datetime` 或全字符串都不触发，这也正是它此前一直没被发现的原因。"
                 ),
             ),
         ),

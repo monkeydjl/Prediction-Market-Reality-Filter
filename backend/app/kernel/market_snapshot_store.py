@@ -122,6 +122,13 @@ class MarketSnapshotStore:
 
         Returns latest/earliest prices, Δpp, max drawdown of YES price,
         capture span, and quality flags (stale gap, sparse samples).
+
+        A row with no timestamp at all is *not* a point on the price path: it
+        cannot be the first or the last sample, so it is kept out of the
+        endpoint readings and reported through ``untimestamped_count`` /
+        ``flags`` instead. ``kernel_market_snapshots.captured_at`` is a nullable
+        column, so this state is reachable even though the store's writer always
+        fills it in; see section 53.47 of the audit.
         """
         snaps = self.get_snapshots(link_id=link_id)
         if not snaps:
@@ -162,16 +169,36 @@ class MarketSnapshotStore:
                 "flags": ["no_prices"],
             }
 
-        # assume snaps ordered by captured_at asc or desc — normalize
-        def sort_key(item: tuple[dict[str, Any], float]) -> Any:
-            s, _ = item
-            t = _ts(s)
-            return t or ""
+        # A row with no timestamp cannot be placed on a time axis. It is
+        # neither the first nor the last point, and it cannot even be *compared*
+        # against the rows that do carry one. Keep such rows out of the
+        # endpoints and declare them in `flags`, rather than letting a missing
+        # timestamp silently become "the earliest price".
+        timestamped: list[tuple[dict[str, Any], float]] = [
+            (s, p) for s, p in priced if _ts(s) is not None
+        ]
+        untimestamped_count = len(priced) - len(timestamped)
+        if not timestamped:
+            return {
+                "link_id": link_id,
+                "available": False,
+                "snapshot_count": len(priced),
+                "untimestamped_count": untimestamped_count,
+                "flags": ["untimestamped_snapshots"],
+            }
 
-        priced_sorted = sorted(priced, key=sort_key)
-        first_s, first_p = priced_sorted[0]
-        last_s, last_p = priced_sorted[-1]
-        prices = [p for _, p in priced_sorted]
+        # One comparable type for every sort key. A real read yields `datetime`
+        # while older fixtures supplied ISO strings; a key whose type depends on
+        # the input raised `TypeError` inside `sorted` -- a 500 on both audit
+        # routes, since neither call site catches.
+        def sort_key(item: tuple[dict[str, Any], float]) -> str:
+            t = _ts(item[0])
+            return t.isoformat() if isinstance(t, datetime) else str(t)
+
+        timestamped.sort(key=sort_key)
+        first_s, first_p = timestamped[0]
+        last_s, last_p = timestamped[-1]
+        prices = [p for _, p in timestamped]
         peak = prices[0]
         max_dd = 0.0
         for p in prices:
@@ -180,17 +207,20 @@ class MarketSnapshotStore:
 
         delta = last_p - first_p
         flags: list[str] = []
-        if len(priced_sorted) < 3:
+        if len(timestamped) < 3:
             flags.append("sparse")
         if abs(delta) >= 0.10:
             flags.append("large_move")
         if max_dd >= 0.15:
             flags.append("high_drawdown")
+        if untimestamped_count:
+            flags.append("untimestamped_snapshots")
 
         return {
             "link_id": link_id,
             "available": True,
-            "snapshot_count": len(priced_sorted),
+            "snapshot_count": len(priced),
+            "untimestamped_count": untimestamped_count,
             "first_price": round(first_p, 4),
             "last_price": round(last_p, 4),
             "delta_pp": round(delta * 100, 2),

@@ -13592,3 +13592,132 @@ bool `qualified` 被 `int | None` 收成 `0` 看着像具名的副作用；
 `events.py` 里裸 `FlexibleResponse` 还有 **55** 处。本节收掉的是
 `build_decision_report` 这**一个生产者**的最后一个消费点 —— 换个说法就是
 「§53.59 家族收尾」，不是「整个文件收尾」。复述时必须带上范围。
+### 53.61 `/events/predictions/calibration` + `/buckets` 具名：前端三个手写副本退役成别名
+
+**日期**：2026-10-09。**范围**：`backend/app/models/event.py`、`_frontend_export.py`、
+`backend/app/api/routes/events.py`、`backend/tests/test_generate_types.py`、
+`backend/scripts/mutation_verify.py`、`frontend/src/lib/{api,generated-types}.ts`、
+`frontend/src/app/history/{page,page.test}.tsx`。
+
+#### 53.61.1 背景与断言
+
+`GET /events/predictions/calibration` 与 `GET /events/predictions/calibration/buckets`
+的 `response_model` 是裸 `FlexibleResponse`（§0 盘点 55 处中的两处），OpenAPI 只发
+`#/components/schemas/FlexibleResponse`；`api.ts` 用三个手写 interface
+（`PredictionCalibration` / `CalibrationBucketSummary` / `CalibrationBucketCell`）
+补形状，其中 `PredictionCalibration` **四处比生产者松**：
+`segment_min_samples?: number | null`（可选 + 可空）、`segments?`（可选）——
+而 `calibration_summary()` 两条路径（scored 聚合 + `no_data` 早退）写**同 9 键**、
+逐键写全；`calibration_bucket_summary()` 两条路径写**同 4 键**。`no_data` 是
+**映射为空**而非键缺席。
+
+本轮把两个信封具名为 `PredictionCalibrationResponse` / `CalibrationBucketSummaryResponse`
+（元素 `CalibrationCategory` / `CalibrationSegment` / `CalibrationBucketCell`，
+全部登记为根 ⇒ 生成物闭合；两个信封承 `FlexibleResponse` ⇒ 按家族约定保持故意开放、
+接口尾带 `[k: string]: unknown`），前端三个手写副本退役成
+`export type X = GeneratedX;` 别名，调用点 generic 不变
+（`api<PredictionCalibration>` / `api<CalibrationBucketSummary>`，每端点各自 generic，
+§53.57 判据本来就满足）。
+
+#### 53.61.2 探针：具名**是**零字节差（与 §53.60 相反）
+
+同树两态探针 `.workbuddy/audit-2026-10-03/probe_5361.py`（`flexible` 影子 router 用
+**同一函数对象** + 裸 `FlexibleResponse`，`committed` 用真实 router；10 用例 =
+2 条活库真实输出 + 2 条空库早退 + 3 条可空分支合成 + 3 条 CONTROL）：
+
+- **改前自检**：10/10 两态字节一致（harness 本身不引入差异）。
+- **改后**：域内 **7/7 字节级一致**（含 null-segment 分支、空映射、两条 no_data）。
+  前提：**模型字段序按生产者 dict 序声明** —— §53.60 的键序教训在本轮主动规避
+  （生产者逐键字面量，字段序照抄即零漂移）。
+- **CONTROL 3/3 从 200 变 500**（`n=None`、`segment_min_samples=None`、
+  category `brier_score=None`）：证明模型真实绑定、校验生效 —— 探针灵敏度由对照证明。
+  第三条同时钉住：`by_category` 的 `round(None, 4)` 在 dict 字面量里先于整个 dict
+  求值，`mean_brier` 为 None 时先 500 ⇒ `CalibrationCategory.brier_score` 裸
+  `float` 是忠实形状（**裸类型 ⟺ 生产者交不出 null**）；该 500 隐患在活库 **0 行**
+  （预存在，登记不修）。
+- 可空性判据全部来自生产者：`_segment_skill_from_rows` 的 n==0 路径使四个统计键
+  可 `None`（`grade` 回退 `"no_data"` 恒 str）；cell 的两个统计键是
+  `round(...)` over 可空列表；`segment_min_samples` 是 settings int、`qualified`
+  是 Python 比较，**都不是列读** ⇒ 裸类型。
+- 🔴 探针基建事实：buckets 路由的 `from app.memory.prediction_store import
+  calibration_bucket_summary` 是**函数体内局部 import**，不在 `events_routes`
+  命名空间 ⇒ patch 必须打 `app.memory.prediction_store` 侧；`calibration_summary`
+  是模块级 from-import（按值绑定）⇒ patch 必须打 `events_routes` 侧。
+  `patch.object` 对不存在的属性直接 `AttributeError`，这条已在探针注释里钉住。
+
+#### 53.61.3 变更
+
+后端：5 个模型（字段序 = 生产者序）+ `_frontend_export` 白名单 5 名 × 2
+（import + `__all__`）+ 两装饰器 `response_model=` + docstring 记录
+「为什么不需要 `exclude_unset`」。前端：`generated-types.ts` 重新生成；
+`api.ts` 三个手写 interface → 别名；`history/page.tsx` 的 `EMPTY_PRED` 占位对象
+`segment_min_samples: null` → `0`（生产者恒写 settings int；占位值**永不渲染**
+—— 两个映射在该状态下为空）+ 注释；`page.test.tsx` 夹具 `null` → `8`
+（`tsconfig` 排除测试文件、vitest 只转译 ⇒ 夹具漂移只能人工跟，§53.53 教训）。
+`page.tsx:177` 的 `?? null` 因此变成类型上的死代码（`number` 非空）但编译兼容，
+最小 diff 未动。
+
+#### 53.61.4 守卫与变异
+
+新增 `PredictionCalibrationContractTests`（4 例）：① 信封 9 键 + 两元素模型
+逐键注解 + 全体 `is_required()`；② buckets 信封 4 键 + cell 3 键；③ 两路由绑定
+（**路由对象身份**判据，`assertIs` + `assertIsNot(FlexibleResponse)`，从
+`router.routes` 读）；④ `api.ts` 文本面（三副本不再声明 + 三别名在 +
+两调用点各自的 generic）。目标文件 **39 passed, 276 subtests passed**。
+
+`mutation_verify.py` 追加 **J64–J71**（8 条，全族 149→157；set 71→77），
+四阶段 **8/8 全过**：green before True | **1/1 files red** |
+green after restore True | bytes restored True。方向覆盖：
+J64/J65 路由退回裸模型（登记面）；J66 默认值放宽可选性；J67 删声明字段
+（`extra='allow'` 下**原样透传** ⇒ 线上字节不变、tsc 绿，唯一拦截点是键集相等）；
+J68 `qualified` bool→`int | None`（**改线上字节**方向，True→1）；J69
+category brier 裸 float 放宽成可空（把域外当可能）；J70 元素模型挪出白名单
+（可达性守卫在重新生成之前就红）；J71 调用点 generic 换 `Record<string, unknown>`
+（`api<T>` cast 对形状不主张 ⇒ tsc/vitest 双盲，静态文本守卫是唯一拦截点）。
+八条针全部字节复核命中 **1 次**（`qualified: bool` 作前缀与 530 行
+`qualified: bool | None = None` 相撞 ⇒ J68 针带前导行；单行
+`segment_min_samples: int` 同文件 2 处 ⇒ J66 针带后随行）。
+
+`test_mutation_verify.py`：**64 passed, 191 subtests passed**
+（+8 = J64–J71 进清单，删除 0）。
+
+#### 53.61.5 门与对账
+
+- `ruff check app/` ✅ All checks passed（首轮抓出 `events.py` 两个未直接使用的
+  元素模型 import，已删 —— 元素模型由信封传递引用，路由不需要 import）
+- `mypy app/` ✅ Success: no issues found in **331** source files
+- `generate_types --check` ✅ up to date
+- `tsc --noEmit` ✅（收窄由 `EMPTY_PRED` 一处暴露并修复，见 53.61.3）
+- 全量：**tests=8132 failures=0 errors=0 skipped=11**（junit 的 `tests` 属性 =
+  testcase 数 + subtest 数，`<subtests>` 元素恒 0；进程 RC=0）。testcase 元素
+  **6669**、subtests **1463**。逐 classname 对账零残差：**+72 = +4 case + 68 subtest**
+  —— 唯一的 case 增项是新守卫 `PredictionCalibrationContractTests`
+  （4 例；单跑实测 **60** subtests），+8 来自 `test_mutation_verify.py` 清单
+  （183 → 191，单跑实测）；**删除 0、classname removed 0**。基线 junit 取
+  `backend/.workbuddy/junit_full_5360.xml`（testcase 6665 / subtests 1395，
+  与 §53.60.5 记录一致）。
+- 行数只取自 `git diff --numstat`，未口算。
+
+#### 53.61.6 登记不修 / 未决
+
+- `by_category` 的 `round(None, 4)` 500 隐患：**域外**（生产者交不出该形状）、
+  活库 0 行、预存在。CONTROL 已把它钉成文档。
+- `history/page.tsx:177` 的 `?? null` 死代码（类型兼容，未动）。
+- `ruff check tests/ scripts/` **339** 条（门之外、既有）；`MEMORY.md` 超注入预算
+  （未决）；`test_closed_overlay_interfaces_have_no_tail` 硬名单不对称（§53.60.6
+  前提未变）。
+
+#### 53.61.7 本轮方法学
+
+**1. 🔴 patch 目标由「import 的位置」决定，不由直觉决定。**
+`from X import f` 在模块顶层 ⇒ 打使用方模块；在**函数体内** ⇒ 每次请求时才从
+源模块取 ⇒ 打源模块。判据只能读路由源码（`events.py:1464` 局部 import）。
+
+**2. 🔴 「具名是否改字节」是每节独立的事实，不能从上一节外推。**
+§53.60 的具名改了键序（生产者字面量与记录模型序相反）、§53.61 的具名零字节差
+（模型字段序照抄生产者序）。同一族动作、相反结论 —— 前提跟着结论走，
+复述必须带前提。
+
+**3. 🔴 收口的编译信号常常落在消费端的「占位对象」上。**
+手写类型放松处（`?:` + `| null`）在收窄后由 `EMPTY_PRED` 的 `null` 字面量暴露
+—— 这是收口**该有的代价**（tsc 第一次看见真实形状），修占位值而不是回退类型。

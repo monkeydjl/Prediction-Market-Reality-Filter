@@ -263,7 +263,19 @@ async def discover_event_intelligence(
     use_cache: bool = Query(default=True),
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
-    """Discover high-value events and return intelligence records."""
+    """Discover high-value events and return intelligence records.
+
+    The response carries four keys unconditionally (``platform``, ``source``,
+    ``count``, ``events``), plus ``status`` as an extra. Since audit 53.59
+    ``events`` is ``list[EventRecord]`` instead of ``list[dict[str, Any]]``, so
+    the element is validated on the way out; before that nothing typed it.
+
+    Note the asymmetry with the store: this endpoint returns the *raw* records,
+    and only the freshly-analyzed subset is offered to ``save_events`` (which
+    skips malformed records by default). A record the store gate would skip can
+    therefore still appear in this response -- naming the element is what makes
+    that visible rather than silent.
+    """
     return await discover_events(limit=limit, use_cache=use_cache)
 
 

@@ -1643,7 +1643,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J46）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J54）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -2968,6 +2968,172 @@ SETS: tuple[MutationSet, ...] = (
                     "两条合起来说明「谁转换、谁不转换」在两个端点上有两个答案，**不能按名字推**："
                     "同一个词表、同一个 store，读法不同则忠实类型不同。"
                     "针单行、本文件恰好 1 次（实测）—— `direction_correct` 只在这里出现。"
+                ),
+            ),
+            Mutation(
+                label="J47 api.ts 又自己声明 EventDiscoveryResponse：被退役的信封副本长回来",
+                path=_API_TS,
+                old=b"export type TradeStats = GeneratedTradeStats;",
+                new=(
+                    b"export interface EventDiscoveryResponse {\n"
+                    b"  count?: number;\n"
+                    b"  events?: unknown[];\n"
+                    b"}\n\n"
+                    b"export type TradeStats = GeneratedTradeStats;"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_discovery_callsite_reads_the_generated_contract",),
+                note=(
+                    "打的是「`api.ts` 不得再声明信封副本」这条负向判据的**第一个名字**。"
+                    "**别名刻意留着** ⇒ 只可能红在 `assertNotIn(name, api_bodies)` 那半，归因可辨"
+                    "（§53.54 的 J5/J7、§53.57 的 J30/J32、§53.58 的 J40/J41 同款）。"
+                    "副本体内不带索引签名、名字也不以 `Overlay` 结尾 ⇒ "
+                    "`ALLOWED_OVERLAY_COPIES_IN_API_TS` 那条**老**判据仍然绿 —— "
+                    "本节的守卫必须**按名**判，不能靠 overlay 检测器。"
+                    "🔴 **锚点必须与 J40/J41 不同**：三条若共用同一行字节，整集 `apply` 时无法同时落位"
+                    "（§53.55 的 J19/J20 教训）。针单行、`api.ts` 里恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J48 api.ts 又自己声明 EventRecord：元素副本换个身份长回来",
+                path=_API_TS,
+                old=b"// The `/events/discover` envelope used to be hand-written *inline* at the call",
+                new=(
+                    b"export interface EventRecord {\n"
+                    b"  event_id?: string;\n"
+                    b"}\n\n"
+                    b"// The `/events/discover` envelope used to be hand-written *inline* at the call"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_discovery_callsite_reads_the_generated_contract",),
+                note=(
+                    "同一条负向判据的**第二个名字**（J47 是第一个）。§4.2 的理由：只变异第一个"
+                    "只能证明那个循环**存在**，不能证明它**走到了后面** —— "
+                    "§53.57 的 J30/J31、§53.58 的 J40/J41 是同款先例。"
+                    "这里两个名字是**两种不同的回归**（元素副本 vs 信封副本），不是同一条的两个 spelling "
+                    "⇒ 两条都值得登记；§53.58 拒绝补的**第三个**名字走的是同一个断言形状、已被前两条覆盖，"
+                    "与此不同。"
+                    "🔴 **锚点就是本节点新增的那句注释**（整个 `// The …` 行，`api.ts` 里恰好 1 次，实测）："
+                    "用它当锚点可同时保证与 J47/J49/J50/J51 的针互不相交。"
+                    "注意 `EventRecord` 本来就**被导入**（`from \"./types\"`），所以这里新增的是一个**声明**，"
+                    "而 `_interface_bodies` 只收 `export interface` ⇒ 收得到。"
+                ),
+            ),
+            Mutation(
+                label="J49 discover 调用点绕过已发布信封：generic 退回内联形状",
+                path=_API_TS,
+                old=b"    api<EventDiscoveryResponse>(",
+                new=b"    api<{ events: unknown[] }>(",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_discovery_callsite_reads_the_generated_contract",),
+                note=(
+                    "针是 **generic 那一行、不含路径**：守卫从含路径的那一行往回找最近的 `api<`，"
+                    "两行相邻 —— 所以这条钉的是「往回找」这半，与 §53.56 的 J25（generic 与路径同行）互补，"
+                    "与 §53.58 的 J42 同款。旧形状是把信封**内联**写进 generic，"
+                    "这里退回内联但只留一个字段：仍然是「不经由已发布信封」，而 TS 依然合法 —— "
+                    "`res.json() as T` 是断言，`tsc` 对形状什么都不主张。"
+                    "🔴 用 `unknown[]` 而不是 `EventRecord[]`：后者会让被扫的那段字面量重新出现，"
+                    "顺带把「内联形状不得回来」那条判据也踩红，归因就不清了"
+                    "（§53.56 的 J25、§53.57 的 J33 同款顾虑）。"
+                ),
+            ),
+            Mutation(
+                label="J50 被退役的内联信封形状以类型别名回来：判据按字面量扫全文件",
+                path=_API_TS,
+                old=b"export type EdgeTrajectory = GeneratedEdgeTrajectorySummary;",
+                new=(
+                    b"export type DiscoveryInlineShape = "
+                    b"{ events: EventRecord[]; source?: string; count?: number };\n\n"
+                    b"export type EdgeTrajectory = GeneratedEdgeTrajectorySummary;"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_discovery_callsite_reads_the_generated_contract",),
+                note=(
+                    "打的是**第三条互不重叠的判据**：守卫除了「别名必须在」和「调用点必须读别名」，"
+                    "还按**字面量**扫全文件（`assertNotIn(inline_spelling, api_text)`）—— "
+                    "因为别名在、调用点也对，手写形状仍可能换个类型名、换个位置溜回来。"
+                    "这里不动别名、不动调用点 ⇒ 只可能红在那一条，归因可辨。"
+                    "🔴 **本文件自己差点把这条判据写死**：那句注释的初稿**逐字引用**了这段形状，"
+                    "而注释也是文件字节 ⇒ 守卫会从写下那一刻起就恒红。"
+                    "改法是注释只**描述**不**复现**"
+                    "（§4.3「自指变异不能以完整字面量 + 注释引用同现一处」）。"
+                ),
+            ),
+            Mutation(
+                label="J51 别名被改指别处：契约来源不再是生成的信封（副本没回来）",
+                path=_API_TS,
+                old=b"export type EventDiscoveryResponse = GeneratedEventDiscoveryResponse;",
+                new=b"export type EventDiscoveryResponse = GeneratedRecentPredictionsResponse;",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_discovery_callsite_reads_the_generated_contract",),
+                note=(
+                    "§53.54 的 J15、§53.55 的 J19 同族：**副本没回来，但契约来源已经换了**。"
+                    "这里不动调用点（仍是 `api<EventDiscoveryResponse>(`）⇒ 调用点那半仍绿，"
+                    "只红在「别名必须逐字是那一条」上。"
+                    "🔴 目标故意挑一个**已存在**的生成名：若改指一个不存在的名字，"
+                    "编辑本身就废掉了整行，等于在测「这行还在不在」，而不是在测「它指着谁」。"
+                    "针单行、`api.ts` 里恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J52 EventDiscoveryResponse.events 退回裸 dict：元素契约消失（静默）",
+                path=_EVENT_MODEL,
+                old=b"    events: list[EventRecord]",
+                new=b"    events: list[dict[str, Any]]",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_discovery_response_points_at_the_published_element",),
+                note=(
+                    "**静默**回归的典型（同 §53.55 的 J17、§53.57 的 J35、§53.58 的 J43）："
+                    "`EventDiscoveryResponse` 是 `FlexibleResponse`，退回 `list[dict[str, Any]]` 后"
+                    "**仍然校验通过、仍然返回同样的字节、`tsc` 仍然全绿**，生成出来的元素只是悄悄回到 "
+                    "`{ [k: string]: unknown }[]` —— 也就是前端当初不得不手写那个对象类型的原因。"
+                    "拦截点只能是**模型身份**判据（`assertEqual(annotation, list[EventRecord])`）。"
+                    "🔴 针**止于行尾、不含换行** ⇒ 与 J53 的信封针（以 `count: int` + CRLF 结尾）"
+                    "字节区间不相交，整集 `apply` 时两条都能落位（实测：信封针终点 == 本针起点，重叠为 False）。"
+                ),
+            ),
+            Mutation(
+                label="J53 EventDiscoveryResponse.count 加回默认值：已发布信封被静默放宽",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    platform: str\r\n"
+                    b"    source: str\r\n"
+                    b"    count: int\r\n"
+                ),
+                new=(
+                    b"    platform: str\r\n"
+                    b"    source: str\r\n"
+                    b"    count: int = 0\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_discovery_response_points_at_the_published_element",),
+                note=(
+                    "打的是**信封那半**（J52 是元素那半）。加回默认值会**静默地**把已发布信封重新放宽成 "
+                    "`count?:` —— 生成文本本身仍「合法」，只有 `is_required()` 看得见。"
+                    "🔴 **锚点必须带 CRLF**：本文件是纯 CRLF（实测 crlf=1387 / bare_lf=0），"
+                    "同一组合用裸 `\\n` 写命中 **0 次**（实测对照）；"
+                    "而单行针 `    count: int` 在 `event.py` 里出现 **11 次**，不可用。"
+                    "带上 `platform` / `source` 两行后实测唯一。"
+                    "🔴 针**不含元素那一行**，否则与 J52 的针重叠、整集 `apply` 无法同时落位（实测不重叠）。"
+                ),
+            ),
+            Mutation(
+                label="J54 EventRecord.intelligence_report 加回默认值：元素边界被静默放宽",
+                path=_EVENT_MODEL,
+                old=b"    intelligence_report: IntelligenceReport",
+                new=b"    intelligence_report: IntelligenceReport | None = None",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_element_boundary_is_the_eleven_required_keys",),
+                note=(
+                    "本节点**新增**的那条边界：具名之后元素从「什么都不校验」变成"
+                    "「按 `EventRecord` 的必填键校验」⇒ 必填集**就是** 200 与 500 的分界。"
+                    "给其中一个键加回默认值，等于把边界悄悄挪走，而**没有别的东西会变红**"
+                    "（生成出来的 TS 照样合法、`tsc` 照样绿、响应字节在旧数据上照样一样）。"
+                    "所以拦它的只能是那条 `assertEqual(required_set, {…11 个})`。"
+                    "🔴 另外十个必填键**不逐条补变异**（同 §53.58 的取舍）：它们与这条共用**同一个**"
+                    "集合相等断言，覆盖的是这一类的一个代表，而不是十一条同形变异。"
+                    "⚠️ 前提是该断言仍是集合相等；若哪天拆成十一条独立断言，这条的覆盖就退化成只覆盖一个成员，届时要补。"
+                    "针单行、`event.py` 里恰好 1 次（实测）。"
                 ),
             ),
         ),

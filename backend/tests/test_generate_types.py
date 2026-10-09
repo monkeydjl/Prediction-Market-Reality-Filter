@@ -1507,6 +1507,166 @@ class RecentPredictionsContractTests(unittest.TestCase):
                 )
 
 
+class EventDiscoveryContractTests(unittest.TestCase):
+    """The discovery envelope (audit 53.59).
+
+    ``GET /events/discover`` published ``events: list[dict[str, Any]]`` -- no
+    element contract at all -- and ``lib/api.ts`` answered with an inline
+    hand-written ``{ events: EventRecord[]; source?: string; count?: number }``.
+    That is the same "hand-written because the backend stayed untyped" symptom
+    audit 53.58 removed for the recent-predictions element, and the local copy
+    was narrower still: it dropped the ``platform`` key the route always sends.
+
+    Naming the element is safe here *only* because ``EventRecord`` opts into
+    ``extra="allow"`` -- the mirror image of 53.58, where a closed model
+    declaring fewer keys than the producer writes would have made pydantic drop
+    the surplus. That precondition is already pinned from the generated-file
+    side by ``AllowlistCompositionTests.test_only_the_documented_models_stay_open``
+    (``EventRecord`` is in ``DELIBERATELY_OPEN``), so the second case below
+    guards the *other* half instead: the eleven required keys are the
+    200-versus-500 boundary now that the element is validated on the way out.
+
+    Three cases: the envelope, the boundary, and the text half.
+    """
+
+    def test_discovery_response_points_at_the_published_element(self):
+        """Four required envelope keys, and ``events`` names ``EventRecord``.
+
+        Identity, not ``issubclass``: a regression to ``list[dict[str, Any]]``
+        still validates, still returns the same bytes and still passes ``tsc``
+        -- the element would just go back to ``{ [k: string]: unknown }[]``,
+        which is the shape ``lib/api.ts`` used to work around by hand.
+        """
+        from app.models.event import EventDiscoveryResponse, EventRecord
+
+        fields = EventDiscoveryResponse.model_fields
+        self.assertEqual(
+            set(fields),
+            {"platform", "source", "count", "events"},
+            "EventDiscoveryResponse is no longer the four-key envelope "
+            "/discover returns",
+        )
+        for name, want in (
+            ("platform", str),
+            ("source", str),
+            ("count", int),
+        ):
+            with self.subTest(key=name):
+                self.assertEqual(
+                    fields[name].annotation,
+                    want,
+                    f"EventDiscoveryResponse.{name} is no longer {want.__name__}",
+                )
+        self.assertEqual(
+            fields["events"].annotation,
+            list[EventRecord],
+            "EventDiscoveryResponse.events no longer names its published "
+            "element, so the frontend can only hand-write a subset again",
+        )
+        for name in fields:
+            with self.subTest(required=name):
+                self.assertTrue(
+                    fields[name].is_required(),
+                    f"EventDiscoveryResponse.{name} gained a default. "
+                    "``discover_events`` writes all four keys on both of its "
+                    "return paths, so a default only widens the envelope "
+                    "(audit 53.59)",
+                )
+
+    def test_the_element_boundary_is_the_eleven_required_keys(self):
+        """The naming is only as safe as ``EventRecord``'s required set.
+
+        Two directions, and the second is the one this node created. The model
+        being ``extra="allow"`` is what lets an untyped producer's extra keys
+        (``news_filter``, ``schema_version``, ...) survive serialisation; that
+        half is pinned against the generated file elsewhere. What is new here is
+        that a *missing required* key used to be a silent, unvalidated pass and
+        is now a 500, so the set is pinned: ``build_event_record`` writes
+        exactly these eleven, and giving any of them a default would quietly
+        move the boundary.
+
+        ``event_title_zh`` is deliberately absent from the set -- it has ``""``
+        as a default, which is why it is not part of the boundary.
+        """
+        from app.models.event import EventRecord
+
+        self.assertEqual(
+            {n for n, f in EventRecord.model_fields.items() if f.is_required()},
+            {
+                "event_id",
+                "event_title",
+                "event_summary",
+                "probability",
+                "credibility",
+                "impact",
+                "risk",
+                "evidence",
+                "source",
+                "value_score",
+                "intelligence_report",
+            },
+            "EventRecord's required set changed. /events/discover validates every "
+            "element against it (audit 53.59), so this set is the 200-versus-500 "
+            "boundary -- add a default and the check silently widens.",
+        )
+
+    def test_discovery_callsite_reads_the_generated_contract(self):
+        """No envelope copy in ``api.ts``, and the call site reads the alias.
+
+        The negative half checks the retired inline spelling too, even though it
+        never matched the overlay-copy detector: reviving it is the likely
+        regression. ``_interface_bodies`` collects only ``export interface``, so
+        the ``export type`` alias is not mistaken for a declaration. The
+        positive half walks *back* from the path line to the nearest ``api<``
+        generic rather than searching a fixed window.
+        """
+        api_text = _API_TS_PATH.read_bytes().decode("utf-8")
+        api_bodies = _interface_bodies(api_text)
+
+        for name in ("EventDiscoveryResponse", "EventRecord"):
+            with self.subTest(retired=name):
+                self.assertNotIn(
+                    name,
+                    api_bodies,
+                    f"api.ts re-declared {name}; generated-types.ts is the "
+                    "source of truth. Alias the generated name instead.",
+                )
+        self.assertNotIn(
+            "{ events: EventRecord[]; source?: string; count?: number }",
+            api_text,
+            "the hand-written /events/discover envelope is back; it omitted the "
+            "``platform`` key the route always sends (audit 53.59)",
+        )
+        self.assertIn(
+            "export type EventDiscoveryResponse = GeneratedEventDiscoveryResponse;",
+            api_text,
+            "api.ts no longer aliases the generated /events/discover envelope",
+        )
+
+        lines = api_text.splitlines()
+        idxs = [i for i, ln in enumerate(lines) if "/events/discover?limit=" in ln]
+        self.assertEqual(
+            len(idxs),
+            1,
+            "expected the single /events/discover call site in api.ts, "
+            f"found {len(idxs)}",
+        )
+        for idx in idxs:
+            generic = ""
+            for back in range(idx, -1, -1):
+                if "api<" in lines[back]:
+                    generic = lines[back]
+                    break
+            with self.subTest(callsite=lines[idx].strip()[:40]):
+                self.assertTrue(generic, "no api< generic found above this call site")
+                self.assertIn(
+                    "api<EventDiscoveryResponse>(",
+                    generic,
+                    "this call site bypasses the published envelope again: "
+                    "api.ts must read api<EventDiscoveryResponse>",
+                )
+
+
 class ApiTsTypeSourceTests(unittest.TestCase):
     """``api.ts`` reads generated shapes instead of re-declaring them.
 

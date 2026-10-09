@@ -22,6 +22,7 @@ import type {
   EventMarketLink,
   RecentPredictionItem as GeneratedRecentPredictionItem,
   RecentPredictionsResponse as GeneratedRecentPredictionsResponse,
+  EventDiscoveryResponse as GeneratedEventDiscoveryResponse,
 } from "./generated-types";
 import { getApiBase, joinApiPath } from "./env";
 import { applyOperatorAuthHeaders } from "./operator-credentials";
@@ -339,6 +340,19 @@ export type DailyDigestResponse = GeneratedDailyDigestResponse;
 export type SimTrade = GeneratedSimTrade;
 export type SimTradeListResponse = GeneratedSimTradeListResponse;
 export type TradeStats = GeneratedTradeStats;
+// The `/events/discover` envelope used to be hand-written *inline* at the call
+// site below -- a local object type naming `events`, `source` and `count`, and
+// nothing else. It is the same "hand-written because the backend stayed
+// untyped" symptom section 53.58 removed for the recent-predictions element:
+// the local copy also dropped the `platform` key the route always sends. Audit
+// 53.59 named both halves -- the element (`EventRecord`, whose `extra="allow"`
+// is what makes naming it safe) and the envelope keys -- so the call site now
+// reads the generated contract.
+//
+// The retired shape is *described* rather than quoted on purpose: this file is
+// itself scanned for it, and a comment is file bytes, so quoting it would make
+// the 53.59 guard red from the moment it was written.
+export type EventDiscoveryResponse = GeneratedEventDiscoveryResponse;
 
 // An event's edge trajectory + freshness (M5 fresh-edge surface).
 // Read from the generated contract rather than re-declared: audit 53.53 gave
@@ -788,7 +802,7 @@ export const eventsApi = {
     api<ApiHealth>("/health", undefined, { acceptStatuses: [503] }),
 
   discover: (limit = 2, useCache = false, signal?: AbortSignal) =>
-    api<{ events: EventRecord[]; source?: string; count?: number }>(
+    api<EventDiscoveryResponse>(
       `/events/discover?limit=${limit}&use_cache=${useCache}`,
       { signal },
       { timeoutMs: 300_000 },

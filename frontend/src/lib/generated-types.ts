@@ -386,161 +386,38 @@ export interface EventAuditSnapshot {
   value_score: number | null;
   source_type: string | null;
 }
+/**
+ * Response for ``GET /events/discover`` (audit 53.59).
+ *
+ * All four envelope keys are bare: ``discover_events`` writes every one of
+ * them on both of its return paths (the no-candidates early return and the
+ * normal one), so a default here could only ever hide a regression.
+ *
+ * ``events`` is ``list[EventRecord]`` rather than ``list[dict[str, Any]]``.
+ * ``EventRecord`` is ``extra="allow"``, so naming it cannot drop a key -- the
+ * hazard audit 53.58 found in the *closed* ``RecentPredictionItem`` is absent
+ * here; what naming adds is validation of its eleven required keys. Both
+ * producer paths satisfy them: a fresh element is ``analyze_event`` ->
+ * ``build_event_record``, which writes every required key, and a cached
+ * element is that very record -- ``discover_events`` has exactly one
+ * ``set_cached_event`` call and it passes the post-analysis record. The cache
+ * itself performs no validation, and the live ``event_cache.json`` does hold
+ * four-key fragments, but those are test fixtures keyed ``qB``/``qC`` whose
+ * TTL expired in August, so ``get_cached_event`` returns None for them.
+ *
+ * Naming is worth it because this response is deliberately *looser* than the
+ * store: ``events`` is built from the raw results and only the ``fresh``
+ * subset is handed to ``save_events``, so a record the store gate would skip
+ * is still returned here. Before this change nothing validated the element.
+ *
+ * ``status`` rides along as an extra key (``FlexibleResponse`` permits it)
+ * and keeps its own shape; it is out of scope for this node.
+ */
 export interface EventDiscoveryResponse {
-  platform?: string;
-  source?: string;
-  count?: number;
-  events?: {
-    [k: string]: unknown;
-  }[];
-  [k: string]: unknown;
-}
-/**
- * Response for GET /api/events/{event_id}/history.
- *
- * The five fields lost their defaults in audit section 53.53, tightening a
- * previously all-optional published contract. That is safe by construction:
- * the route raises 404 unless it has probability snapshots, then returns a
- * dict literal with every one of these keys. Leaving the defaults on would have
- * rendered ``trend?:`` in the generated TypeScript -- looser than what the
- * endpoint actually promises.
- */
-export interface EventHistoryResponse {
-  event_id: string;
+  platform: string;
+  source: string;
   count: number;
-  trend: TrendSummary;
-  edge: EdgeTrajectorySummary;
-  history: EventAuditSnapshot[];
-  [k: string]: unknown;
-}
-/**
- * Probability-trend summary: ``trend_analysis_service.analyze_trend``'s output.
- *
- * Named ``TrendSummary`` rather than ``Trend`` on purpose: the frontend already
- * owns two things called ``Trend`` (the hand-written consumer interface in
- * ``lib/types.ts`` and an unrelated ``"up" | "down" | "flat"`` union in
- * ``lib/adapt.ts``), and ``types.ts`` re-exports this module's types wholesale.
- * A generated ``Trend`` would be a duplicate export.
- *
- * Both branches of ``analyze_trend`` -- the computed summary and the
- * ``_empty_trend`` fallback -- return all fourteen keys, so nothing here needs
- * a default and no branch can fail validation.
- */
-export interface TrendSummary {
-  observations: number;
-  direction: string;
-  first_probability: number | null;
-  latest_probability: number | null;
-  net_change: number;
-  min_probability: number | null;
-  max_probability: number | null;
-  range: number;
-  volatility: number;
-  recent_change: number;
-  pattern: string;
-  first_seen: string | null;
-  last_seen: string | null;
-  span_hours: number | null;
-}
-export interface EventListResponse {
-  count?: number;
-  total?: number;
-  limit?: number;
-  offset?: number;
-  events?: EventStoreEntry[];
-  [k: string]: unknown;
-}
-export interface EventStoreEntry {
-  event_id?: string;
-  first_seen?: string;
-  last_updated?: string;
-  category?: string;
-  record?: {
-    [k: string]: unknown;
-  };
-  [k: string]: unknown;
-}
-/**
- * One row of the ``event_market_links`` table (audit section 53.57).
- *
- * Returned verbatim by ``POST /api/events/{event_id}/link/verify``, which
- * promotes a pending link. ``event_market_link_store._row_to_dict`` coerces
- * ``verified`` from SQLite's 0/1 to a JSON boolean, so the field is ``bool``
- * rather than ``int``. Every column is ``NOT NULL`` (each with a default), and
- * the store writes all of them, so no field carries a default here: a default
- * would let the generator render the key optional and re-open the very
- * ambiguity this publishes away.
- */
-export interface EventMarketLink {
-  id: string;
-  event_id: string;
-  market_name: string;
-  contract_id: string;
-  market_question: string;
-  resolution_criteria: string;
-  link_method: string;
-  link_confidence: number;
-  verified: boolean;
-  linked_at: string;
-}
-/**
- * One element of ``EventMoversResponse.movers`` (audit section 53.55).
- *
- * ``rank_movers`` writes the same three base keys -- ``event_id``,
- * ``event_title`` and ``trend`` -- on every item it returns, and the route then
- * adds ``event_title_zh`` when the store holds a Chinese title. A census of all
- * five corpora over every reachable ``limit`` (332 items) found exactly one key
- * set, so the four fields below are the whole element.
- *
- * ``trend`` is ``TrendSummary`` -- the model section 53.53 published for
- * ``analyze_trend``'s output -- not a fresh shape. Both branches of that
- * producer (the computed summary and ``_empty_trend``) write all fourteen keys;
- * a probe put 1 334 of them through this field and rejected none, so it cannot
- * turn a 200 into a 500. The frontend already aliases ``Trend = TrendSummary``.
- *
- * ``event_id`` and ``event_title`` carry no default because both are written
- * unconditionally: ``rank_movers`` is keyed on ``histories_by_event()``, and
- * ``_latest_title`` returns ``""`` -- never ``None`` -- when no snapshot
- * carries a title. ``event_title_zh`` is optional because it is *conditionally
- * written*, not because it is sometimes null.
- *
- * That default is load-bearing in a second way, and it is where this endpoint
- * differed from ``GET /events/edges/fresh``: this route did **not** declare
- * ``response_model_exclude_unset``, so naming the element would have turned
- * today's *absent* key into an explicit ``null`` (probe
- * ``probe_movers_exclude_unset.py``). Section 53.55 added that flag to the
- * route in the same change, which keeps the serialized bytes identical.
- * Declaring the field without a default would instead make a title-less event a
- * 500.
- *
- * Like the other registered models this is ``extra="ignore"`` at runtime (only
- * schema generation forces ``extra="forbid"``), so a producer that invented a
- * fifth key would lose it silently rather than fail. No such key exists today;
- * that is a premise, not a property.
- */
-export interface EventMoverItem {
-  event_id: string;
-  event_title: string;
-  trend: TrendSummary;
-  event_title_zh?: string | null;
-}
-/**
- * Response for GET /api/events/movers.
- *
- * ``count`` lost its default in audit section 53.55, tightening a previously
- * all-optional published contract. Safe by construction: exactly one route
- * serves this model and it returns a dict literal that sets both keys.
- *
- * ``movers`` is a list of ``EventMoverItem`` rather than ``list[dict[str, Any]]``.
- * It used to render as ``{ [k: string]: unknown }[]`` -- an element type the
- * frontend cannot read, which is why ``lib/types.ts`` hand-wrote ``Mover`` and
- * ``lib/api.ts`` spelled the envelope inline at its call site.
- * ``TrendSummary`` was already the faithful type of each item's ``trend`` field
- * (section 53.53); this names the remaining four-field wrapper.
- */
-export interface EventMoversResponse {
-  count: number;
-  movers: EventMoverItem[];
+  events: EventRecord[];
   [k: string]: unknown;
 }
 /**
@@ -863,6 +740,154 @@ export interface LLMTelemetry {
   estimated_token_cost?: number;
   model?: string;
   error?: string | null;
+}
+/**
+ * Response for GET /api/events/{event_id}/history.
+ *
+ * The five fields lost their defaults in audit section 53.53, tightening a
+ * previously all-optional published contract. That is safe by construction:
+ * the route raises 404 unless it has probability snapshots, then returns a
+ * dict literal with every one of these keys. Leaving the defaults on would have
+ * rendered ``trend?:`` in the generated TypeScript -- looser than what the
+ * endpoint actually promises.
+ */
+export interface EventHistoryResponse {
+  event_id: string;
+  count: number;
+  trend: TrendSummary;
+  edge: EdgeTrajectorySummary;
+  history: EventAuditSnapshot[];
+  [k: string]: unknown;
+}
+/**
+ * Probability-trend summary: ``trend_analysis_service.analyze_trend``'s output.
+ *
+ * Named ``TrendSummary`` rather than ``Trend`` on purpose: the frontend already
+ * owns two things called ``Trend`` (the hand-written consumer interface in
+ * ``lib/types.ts`` and an unrelated ``"up" | "down" | "flat"`` union in
+ * ``lib/adapt.ts``), and ``types.ts`` re-exports this module's types wholesale.
+ * A generated ``Trend`` would be a duplicate export.
+ *
+ * Both branches of ``analyze_trend`` -- the computed summary and the
+ * ``_empty_trend`` fallback -- return all fourteen keys, so nothing here needs
+ * a default and no branch can fail validation.
+ */
+export interface TrendSummary {
+  observations: number;
+  direction: string;
+  first_probability: number | null;
+  latest_probability: number | null;
+  net_change: number;
+  min_probability: number | null;
+  max_probability: number | null;
+  range: number;
+  volatility: number;
+  recent_change: number;
+  pattern: string;
+  first_seen: string | null;
+  last_seen: string | null;
+  span_hours: number | null;
+}
+export interface EventListResponse {
+  count?: number;
+  total?: number;
+  limit?: number;
+  offset?: number;
+  events?: EventStoreEntry[];
+  [k: string]: unknown;
+}
+export interface EventStoreEntry {
+  event_id?: string;
+  first_seen?: string;
+  last_updated?: string;
+  category?: string;
+  record?: {
+    [k: string]: unknown;
+  };
+  [k: string]: unknown;
+}
+/**
+ * One row of the ``event_market_links`` table (audit section 53.57).
+ *
+ * Returned verbatim by ``POST /api/events/{event_id}/link/verify``, which
+ * promotes a pending link. ``event_market_link_store._row_to_dict`` coerces
+ * ``verified`` from SQLite's 0/1 to a JSON boolean, so the field is ``bool``
+ * rather than ``int``. Every column is ``NOT NULL`` (each with a default), and
+ * the store writes all of them, so no field carries a default here: a default
+ * would let the generator render the key optional and re-open the very
+ * ambiguity this publishes away.
+ */
+export interface EventMarketLink {
+  id: string;
+  event_id: string;
+  market_name: string;
+  contract_id: string;
+  market_question: string;
+  resolution_criteria: string;
+  link_method: string;
+  link_confidence: number;
+  verified: boolean;
+  linked_at: string;
+}
+/**
+ * One element of ``EventMoversResponse.movers`` (audit section 53.55).
+ *
+ * ``rank_movers`` writes the same three base keys -- ``event_id``,
+ * ``event_title`` and ``trend`` -- on every item it returns, and the route then
+ * adds ``event_title_zh`` when the store holds a Chinese title. A census of all
+ * five corpora over every reachable ``limit`` (332 items) found exactly one key
+ * set, so the four fields below are the whole element.
+ *
+ * ``trend`` is ``TrendSummary`` -- the model section 53.53 published for
+ * ``analyze_trend``'s output -- not a fresh shape. Both branches of that
+ * producer (the computed summary and ``_empty_trend``) write all fourteen keys;
+ * a probe put 1 334 of them through this field and rejected none, so it cannot
+ * turn a 200 into a 500. The frontend already aliases ``Trend = TrendSummary``.
+ *
+ * ``event_id`` and ``event_title`` carry no default because both are written
+ * unconditionally: ``rank_movers`` is keyed on ``histories_by_event()``, and
+ * ``_latest_title`` returns ``""`` -- never ``None`` -- when no snapshot
+ * carries a title. ``event_title_zh`` is optional because it is *conditionally
+ * written*, not because it is sometimes null.
+ *
+ * That default is load-bearing in a second way, and it is where this endpoint
+ * differed from ``GET /events/edges/fresh``: this route did **not** declare
+ * ``response_model_exclude_unset``, so naming the element would have turned
+ * today's *absent* key into an explicit ``null`` (probe
+ * ``probe_movers_exclude_unset.py``). Section 53.55 added that flag to the
+ * route in the same change, which keeps the serialized bytes identical.
+ * Declaring the field without a default would instead make a title-less event a
+ * 500.
+ *
+ * Like the other registered models this is ``extra="ignore"`` at runtime (only
+ * schema generation forces ``extra="forbid"``), so a producer that invented a
+ * fifth key would lose it silently rather than fail. No such key exists today;
+ * that is a premise, not a property.
+ */
+export interface EventMoverItem {
+  event_id: string;
+  event_title: string;
+  trend: TrendSummary;
+  event_title_zh?: string | null;
+}
+/**
+ * Response for GET /api/events/movers.
+ *
+ * ``count`` lost its default in audit section 53.55, tightening a previously
+ * all-optional published contract. Safe by construction: exactly one route
+ * serves this model and it returns a dict literal that sets both keys.
+ *
+ * ``movers`` is a list of ``EventMoverItem`` rather than ``list[dict[str, Any]]``.
+ * It used to render as ``{ [k: string]: unknown }[]`` -- an element type the
+ * frontend cannot read, which is why ``lib/types.ts`` hand-wrote ``Mover`` and
+ * ``lib/api.ts`` spelled the envelope inline at its call site.
+ * ``TrendSummary`` was already the faithful type of each item's ``trend`` field
+ * (section 53.53); this names the remaining four-field wrapper.
+ */
+export interface EventMoversResponse {
+  count: number;
+  movers: EventMoverItem[];
+  [k: string]: unknown;
 }
 /**
  * One element of ``FreshEdgesResponse.edges`` (audit section 53.54).

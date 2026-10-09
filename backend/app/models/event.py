@@ -606,10 +606,37 @@ class EventStoreEntry(FlexibleResponse):
 
 
 class EventDiscoveryResponse(FlexibleResponse):
-    platform: str = ""
-    source: str = ""
-    count: int = 0
-    events: list[dict[str, Any]] = Field(default_factory=list)
+    """Response for ``GET /events/discover`` (audit 53.59).
+
+    All four envelope keys are bare: ``discover_events`` writes every one of
+    them on both of its return paths (the no-candidates early return and the
+    normal one), so a default here could only ever hide a regression.
+
+    ``events`` is ``list[EventRecord]`` rather than ``list[dict[str, Any]]``.
+    ``EventRecord`` is ``extra="allow"``, so naming it cannot drop a key -- the
+    hazard audit 53.58 found in the *closed* ``RecentPredictionItem`` is absent
+    here; what naming adds is validation of its eleven required keys. Both
+    producer paths satisfy them: a fresh element is ``analyze_event`` ->
+    ``build_event_record``, which writes every required key, and a cached
+    element is that very record -- ``discover_events`` has exactly one
+    ``set_cached_event`` call and it passes the post-analysis record. The cache
+    itself performs no validation, and the live ``event_cache.json`` does hold
+    four-key fragments, but those are test fixtures keyed ``qB``/``qC`` whose
+    TTL expired in August, so ``get_cached_event`` returns None for them.
+
+    Naming is worth it because this response is deliberately *looser* than the
+    store: ``events`` is built from the raw results and only the ``fresh``
+    subset is handed to ``save_events``, so a record the store gate would skip
+    is still returned here. Before this change nothing validated the element.
+
+    ``status`` rides along as an extra key (``FlexibleResponse`` permits it)
+    and keeps its own shape; it is out of scope for this node.
+    """
+
+    platform: str
+    source: str
+    count: int
+    events: list[EventRecord]
 
 
 class EventListResponse(FlexibleResponse):

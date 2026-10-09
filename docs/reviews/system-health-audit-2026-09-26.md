@@ -13417,3 +13417,178 @@ D4 原文写着「只踩守卫的名字分支」，而它的 `new` 体内带索�
 Python **3.11** 的 f-string 不允许表达式里出现反斜杠（3.12+ 才放开）；
 探针里 `sys.path.insert(0, "backend/…")` 这种**相对 cwd** 的路径，在 `cd backend` 之后全部失效。
 两者都只报「ModuleNotFoundError / SyntaxError」，看着像环境问题、其实是脚本自身的问题。
+
+## 53.60 `/events/{event_id}/decision`：同族最后一个裸 `FlexibleResponse`，以及「具名 ≠ 零字节差」的实测
+
+### 53.60.1 起点、取证与那次拍板
+
+§53.59.7 登记的缺口本轮收掉：`GET /events/{event_id}/decision`（`events.py:1589`）与
+`/events/decisions/open` 共用**同一个生产者** `build_decision_report`，但前者返回的是
+**无信封的裸报告**（没有 `count`/`total` 可包），于是它的 `response_model` 一直停在裸
+`FlexibleResponse` ⇒ OpenAPI 发的是 `#/components/schemas/FlexibleResponse`，
+报文带着**未声明的形状**到达浏览器 —— 正是 §53.59 在姊妹端点上终结掉的那个状态。
+
+生产者的形状决定这次改动的风险面。`build_decision_report` 是**逐键构造**（不是铺开一行）：
+顶层 18 键、九个嵌套块的**每一个键都是显式写出**的（可空键写 `None`，不省略）。
+所以 §53.58「闭合模型 + 铺开 = 静默丢键」的反向在这里**不成立**，成立的是 J60 的结论：
+**少声明只会变成 500，不会静默缺数据**。反过来，多声明零字段
+（`FlexibleResponse` 是 `extra="allow"`、零字段）意味着现在**什么都没校验**。
+
+🔴 **具名不是零字节差 —— 这是本轮最重要的实测结论。**
+探针（`.workbuddy/audit-2026-10-03/probe_5360.py`）在**同一棵树**里同时产出两态：
+`committed`（真实 router，`DecisionReport`）与 `flexible`（**同一个函数对象**
+`events_routes.get_event_decision` 注册到影子 router、装饰器参数换成
+`FlexibleResponse`）。后者不是重写的副本 —— 函数体就是提交在库里的那个，
+两态唯一差异是装饰器参数，正好隔离被测变量。
+
+语料 59 用例 = 46 条**生产真实行**（`SELECT event_id FROM predictions` 最新 25 条 +
+`list_open_opportunities` 21 条，各带其真实记录）+ 13 条合成用例。
+**结果**：域内 55 例**状态全部不变**（55/55），**canonical（键排序后）54/55 相同**，
+**逐字节 0/55 相同** —— 差异全部集中在 `$.probability` 一个子对象的**键序**：
+`estimated,baseline,change,direction` 变成 `baseline,estimated,change,direction`。
+等长、canonical 相同 ⇒ **纯键序**，JSON 对象成员顺序不是契约的一部分。
+根源：`DecisionProbability` 声明 `baseline` 在前（与记录自身的 `Probability` 模型一致），
+而生产者的字面量把 `estimated` 写在了前面 —— **是生产者相对自己的源模型颠倒了顺序**。
+
+🔴 **备选方案会把改动挪到另一个端点，所以必须拍板。**
+把 `DecisionProbability` 的字段序改成生产者的 `estimated,baseline` 可以让本端点
+**逐字节不变**，但那会把 `/decisions/open` 的键序翻回去（等于撤销 §53.59 那次
+未记录的键序漂移），且模型序不再与源头 `Probability` 一致、生成物该 interface 的
+字段序随之变化。老板拍板：**接受键序变化** —— 两端口径由此统一到模型序，
+`generated-types.ts` 一字不动（`generate_types --check` 实测 up to date）。
+
+**交叉端点测量**（25 条共享事件，listing 元素一律取自 committed 端）：改前
+`/{id}/decision` 是 `estimated` 在前、`/decisions/open` 是 `baseline` 在前 ——
+**同一个生产者的两个端点今天口径就不一致**；具名后 25/25 两端键序一致且
+canonical 相等。这条是本次改动的**正收益**，不只是代价。
+
+### 53.60.2 探针：59 用例、4 个对照、以及两个被纠正的假阳性
+
+四个对照**全部按设计发散**，证明「无差异」的结果不是空真：
+
+| 对照 | 改前 → 改后 | 说明 |
+| --- | --- | --- |
+| `CONTROL/flags_not_a_list` | 200 → 500 | `risk.flags` 是 str；`DecisionRisk.flags` 是 `list[Any]` |
+| `CONTROL/market_prob_none` | 200 → 500 | `market_probability=None`；`DecisionMarketView.market_probability` 是裸 `float` |
+| `CONTROL/title_null` | 200 → 500 | `EventRecord.event_title` 是裸 `str`，store 的门本来就拒这条记录 ⇒ 域外 |
+| `CONTROL/qualified_bool` | 200 → 200（−4 B） | bool 被静默改写成 `0`；`typeof(qualified)='integer'` ⇒ 域外 |
+
+🔴 **两个假阳性，都是我自己的夹具不具代表性，靠实测纠正：**
+
+1. `diagnosis.qualified` 从 `false/true` 变成 `0/1` —— 看着像具名改写了取值。
+   实测生产库（`SELECT typeof(qualified) …`）：**integer**，`prediction_store.py:89`
+   声明 `INTEGER`、`:352` 插入时 `int(...)` ⇒ 库里回出来就是 `int`，bool 是我夹具造的。
+   已把夹具改成 `0/1` 并把 bool 版降级为域外对照。**「模型声明 `int`」与「线上真是 int」**
+   是两件事，前者不构成改写 —— 因为生产者本来就是 int。
+2. `syn/overlays_present` 变 500 —— 看着像具名弄坏了合法路径。回溯显示是我的
+   `actionable_recommendation` 夹具缺 `suggested_allocation_pct`/`edge`/`risk_level`/`rationale`
+   且 `confidence` 传了 float。已按 `event.py:68` 的真实七字段重写。
+   🔴 **同一批夹具喂给 `/decisions/open` 时第一次归因却是错的**：`entry` 没带 `event_id`
+   ⇒ `events_by_id` 拿 `None` 做键 ⇒ 记录根本没被取到（响应里 `"title":""` 就是证据），
+   三个本应 500 的用例于是显示 200。归因脚本修好之后结论才成立。
+
+🔴 **第 55 个域内用例（`syn/overlays_present`）是真的：canonical 变了、+161 字节。**
+这是本轮挖出的**模型层性质**，不是夹具噪声 —— 见下一条。
+
+### 53.60.3 `DecisionReport` 会重塑 pass-through overlay（实测当前不可达，登记备查）
+
+`DecisionQuality`/`MarketQuality`/`SourceReliability`/`LLMTelemetry` 四个 overlay 模型
+**全部字段都带默认值、零必填**（`model_fields` 实测：11/13/13/11 个字段全带默认）。
+`DecisionReport` 把它们当**具名嵌套模型**序列化，于是：
+
+- 记录里**缺失**的键会被 `model_dump()` **实体化成默认值**
+  （`market_quality.error: null`、`raw_direction: "WAIT"`、`downgraded: false` …）——
+  给一个从没写过这些键的记录**凭空造值**；
+- 记录里模型**未声明**的键会被**丢弃**（闭合模型）。
+
+全库普查（257 条记录）：**48 条** `market_quality` 是**旧 schema**
+（键为 `degraded`/`degrade_reason`/`low_liquidity_flag`，模型一个都不认）、
+**48 条** `llm_telemetry` 部分缺失、**5 条** `source_reliability` 只缺 `error`。
+🔴 **但这 101 条全部没有 committed prediction** ⇒ `/{id}/decision` 对它们 404、
+`/decisions/open` 也选不到它们 —— **当前不可达**。
+171 个**有** prediction 的事件里，五个 overlay **要么缺席要么与模型字段集完全一致**
+（0 条会被重塑，逐条比对 `model_fields` 与记录键集）。
+
+⚠️ **这条性质不是本轮引入的**：§53.59 把 `OpenDecisionsResponse.decisions` 从
+`list[dict[str, Any]]` 收成 `list[DecisionReport]` 的那一刻它就活了，只是当时没被发现。
+本端点只是**继承**它。复述「具名零语义差」时必须带上这条前提。
+哪天一条旧形记录**获得了 prediction**，它就会开始被重塑 —— 届时要拍板
+（可选方向：给两个端点都加 `response_model_exclude_unset`，或把 overlay 收成
+`extra="allow"` 并写进 `DELIBERATELY_OPEN`）。本轮**不另立变异**：不可达的分支
+没有可红的守卫。
+
+### 53.60.4 落地、守卫与 J63
+
+改动 3 文件（`git diff --numstat`）：`events.py` +9/−1（import 按字母序加
+`DecisionReport`、装饰器换模型、docstring 记录「为什么不需要
+`response_model_exclude_unset`」）；`test_generate_types.py` +54/−0
+（**纯插入**，`DecisionReportContractTests` 增第 5 例）；`mutation_verify.py` +66/−2
+（J63 + rationale 补 §53.60 段 + 标题 J1–J63）。
+
+守卫 `test_the_event_decision_route_binds_the_report_model` 的判据是
+**路由对象身份**（`route.response_model is DecisionReport`），不是源码文本：
+裸 `FlexibleResponse` 退回去之后**仍然校验通过、仍然 200、`tsc` 仍然全绿**，
+唯一变化是已发布 schema 变回不透明体 ⇒ 具名契约的拦截点只能是运行时事实。
+从 `router.routes` 读而不是 `app.routes`（`include_router` 之前路径仍是
+`/{event_id}/decision`）；正向 `assertIs` 承重，`assertIsNot(FlexibleResponse)`
+只为把失败信息指到具体的回归方向。
+
+J63：针是**整行装饰器** `@router.get("/{event_id}/decision", response_model=DecisionReport)`，
+不含换行（本文件纯 CRLF），字节复核命中 **1 次**
+（`response_model=FlexibleResponse)` 单独算命中 **55 次** ⇒ 必须带路径前缀）；
+`mutation_verify.py` 与 `test_generate_types.py` 里
+`/{event_id}/decision`、`response_model=DecisionReport` 各 **0 次** ⇒ 不自指。
+**四阶段全过**：green before True | **1/1 files red** | green after restore True |
+bytes restored True，变异后恰 **1** 个失败项（新守卫）。
+
+### 53.60.5 门与对账
+
+- `ruff check app/` ✅ All checks passed
+- `mypy app/` ✅ Success: no issues found in **331** source files
+- `generate_types --check` ✅ up to date（生成物一字未动）
+- 目标测试 `test_generate_types.py + test_decision_report_service.py`：
+  **57 passed, 216 subtests passed**
+- `test_mutation_verify.py`：**64 passed, 183 subtests passed**（+1 subtest = 新成员进清单）
+- 全量：**tests=8060 failures=0 errors=0 skipped=11**（junit 的 `tests` 属性 = testcase 数 + subtest 数；进程 RC=1 是 safe-delete shim 的常态，判据只取 junit）。testcase 元素 **6665**、subtests **1395**。逐 classname 对账零残差：**+2 = +1 case + 1 subtest** —— 唯一的 case 增项就是新守卫 `DecisionReportContractTests.test_the_event_decision_route_binds_the_report_model`，那个 subtest 来自 `test_mutation_verify.py` 的清单计数（182 → 183，新成员 J63 进清单）；**删除 0、计数变化 0**，没有任何既有用例消失或增减。
+- 字节画像（改后）：三文件 `bare_lf` 均 **0**，全部 `i/lf w/crlf`（正常态）。
+- 行数只取自 `git diff --numstat`，未口算。
+
+### 53.60.6 登记不修 / 未决
+
+- 🔴 **`DecisionReport` 重塑 pass-through overlay**（§53.60.3）—— 模型层性质、
+  实测不可达、§53.59 引入。**登记备查，不另立变异**；触发条件与两个可选修法已写明。
+- 🔴 **那 48 条旧 schema 记录 + 5 条缺 `error` 的记录仍在库里**（`a`/`b`/`llm1`/`det`…），
+  看着像**测试残留进了事件存储**。本轮只读、未清理（§0：只有明说才动作）。
+- `test_closed_overlay_interfaces_have_no_tail` 硬名单仍未加 §53.59 的 9 个新模型
+  （§53.59.7 的结论**前提未变**，仍然成立：闭合性由两条生成式守卫覆盖，
+  不对称而非盲区；硬名单本身无变异覆盖，预存在）。
+- `ruff check tests/ scripts/` **339** 条（门之外、既有）。
+- `MEMORY.md` 超其自述注入预算（未决）。
+
+### 53.60.7 本轮方法学（本节踩到的坑）
+
+**1. 🔴 「探针有灵敏度」必须由对照证明，且对照要覆盖两种失败模式。**
+四个对照里三个是「200 → 500」（校验失败），一个是「200 → 200 但值被改写」
+（`false` → `0`）。只放第一种会让探针在**静默改写**这类失败上显得灵敏、实则盲。
+字节 hash 与 canonical hash **分开报**同理：只报一个就分不清「同 JSON 不同字节」
+（键序）和「不同 JSON」。
+
+**2. 🔴 比较器自己的 `==` 会漏掉 float/int 退化。**
+`80.0 == 80` 在 Python 里是 `True`，逐路径标量比对因此漏报了 −4 字节的差异，
+最后是靠 `len(bytes)` 对不上才发现的。修法：比较
+`type(v).__name__ + repr(v)` 而不是值本身。
+
+**3. 🔴 夹具不具代表性会造出「模型改写取值」的假阳性 —— 判据是生产者，不是模型。**
+bool `qualified` 被 `int | None` 收成 `0` 看着像具名的副作用；
+`SELECT typeof(...)` 一查，库里本来就是 integer。**「模型声明什么」永远不能当
+「生产者发什么」的证据**，后者的判据是存储层（列类型、插入路径）。
+
+**4. 🔴 归因脚本的夹具错了一处，会把「该红的」显示成绿的。**
+`entry` 缺 `event_id` 键 ⇒ `events_by_id` 拿 `None` 做键 ⇒ 记录没被取到 ⇒
+三个本应 500 的用例显示 200。**响应体里的字段值**（`"title":""`）比状态码先暴露了它 ——
+归因跑出来「与预期矛盾」时，先怀疑夹具，再怀疑结论。
+
+**5. 🔴 「同族最后一个缺口」这话只对**同族**成立。**
+`events.py` 里裸 `FlexibleResponse` 还有 **55** 处。本节收掉的是
+`build_decision_report` 这**一个生产者**的最后一个消费点 —— 换个说法就是
+「§53.59 家族收尾」，不是「整个文件收尾」。复述时必须带上范围。

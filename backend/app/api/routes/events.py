@@ -1459,7 +1459,16 @@ async def get_recent_predictions(
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     """Recent frozen predictions (AI vs market price, raw edge, and - once
-    resolved - the scored Brier). Visibility into what the loop has committed."""
+    resolved - the scored Brier). Visibility into what the loop has committed.
+
+    Every key is written unconditionally -- all five envelope keys, and all 35
+    element keys (``dict(row)`` over ``SELECT * FROM predictions`` plus the two
+    title enrichments) -- so ``response_model_exclude_unset`` is not needed here:
+    there is no "absent" for the flag to preserve, and any declared default would
+    only widen the published type. Naming the element is what makes the 33 table
+    columns visible to the frontend; a closed model declaring *fewer* fields
+    would silently drop the rest from the response (audit section 53.58).
+    """
     events_by_id = {entry.get("event_id"): entry for entry in list_all_events()}
     predictions = []
     for prediction in list_recent(limit=limit, offset=offset):

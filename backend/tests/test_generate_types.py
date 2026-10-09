@@ -20,6 +20,9 @@ Verifies:
 - ``SimilarEventsResponse`` does the same for ``GET /events/{id}/similar``, where
   no such flag is needed because every element key is written unconditionally
   (audit section 53.56).
+- ``RecentPredictionsResponse`` does the same for ``GET /events/predictions/recent``.
+  Its element is wider than any before it -- the store's 33 columns plus two
+  joined titles -- and each of the 35 keys is required (audit section 53.58).
 """
 from __future__ import annotations
 
@@ -275,7 +278,9 @@ class TestGenerateTypesScript(unittest.TestCase):
         ``PendingLinkItem`` (the element of ``PendingLinksResponse.pending``) and
         ``EventMarketLink`` (the row the link-verify route returns); the latter is
         not an element of anything, so being a root is the only thing that closes
-        it.
+        it. Audit 53.58 adds ``RecentPredictionItem`` -- the element of
+        ``RecentPredictionsResponse.predictions``, and a root for the same reason
+        the others are: reachable only by ``$ref`` it would keep its tail.
         """
         self._run_script()
         bodies = _interface_bodies(_OUTPUT_PATH.read_text(encoding="utf-8"))
@@ -293,6 +298,7 @@ class TestGenerateTypesScript(unittest.TestCase):
             "LLMTelemetry",
             "MarketQuality",
             "PendingLinkItem",
+            "RecentPredictionItem",
             "SimilarEventItem",
             "SourceReliability",
             "TrendSummary",
@@ -1280,6 +1286,225 @@ class PendingLinkContractTests(unittest.TestCase):
                         generic,
                         f"this call site does not read {want}",
                     )
+
+
+class RecentPredictionsContractTests(unittest.TestCase):
+    """The recent-predictions contract (audit 53.58).
+
+    ``GET /events/predictions/recent`` published an envelope whose element was a
+    bare ``list[dict[str, Any]]`` -- no field contract at all -- and the frontend
+    answered with a hand-written ``PredictionRecord`` of 18 keys. The route
+    spreads ``dict(row)`` from ``SELECT * FROM predictions`` (33 columns) and
+    appends two title enrichments, so the local copy was narrower than the
+    payload it typed. Naming the element is what makes the other 17 columns
+    readable; the reverse mistake is the more dangerous one, though: a *closed*
+    model declaring fewer keys than the route returns makes pydantic drop the
+    surplus from the response, changing the wire bytes with nothing to catch it
+    -- ``tsc`` cannot tell, because the report arrives through
+    ``res.json() as T``.
+
+    Three cases: the envelope, the element, and the text half.
+    """
+
+    # (name, annotation) for the table's 33 columns plus the two joined titles.
+    # A key is bare when the producer cannot hand back null, and annotated
+    # ``| None`` otherwise -- the table's twelve ``NOT NULL`` columns, plus ``id``
+    # (a ``TEXT PRIMARY KEY``, which SQLite does *not* enforce as NOT NULL, so it
+    # rests on the store's INSERT) and the two titles (the route defaults them to
+    # ``""``). Every other column keeps ``| None`` even where no live row has ever
+    # been null (``trust`` / ``adjusted_edge`` / ``liquidity_factor`` /
+    # ``qualified`` / ``segment_n`` / ``segment_min_samples``): the conservative
+    # direction -- "not observed" is not "cannot happen" -- and it is the decision
+    # this section had to make, so it is pinned rather than trusted.
+    # ``direction_correct`` stays ``int | None`` because the store hands back
+    # SQLite's raw 0/1/NULL and the route does not convert it; declaring ``bool``
+    # would rewrite the value, the opposite of ``EventMarketLink.verified``, which
+    # the store *does* convert (audit 53.57).
+    _ELEMENT_FIELDS = {
+        "id": str,
+        "event_id": str,
+        "contract_id": str,
+        "platform": str,
+        "base_rate_category": str,
+        "ai_probability": float,
+        "market_probability": float,
+        "raw_edge": float,
+        "trust": float | None,
+        "adjusted_edge": float | None,
+        "liquidity": float,
+        "volume": float,
+        "decision": str,
+        "liquidity_factor": float | None,
+        "qualified": int | None,
+        "segment_n": int | None,
+        "segment_min_samples": int | None,
+        "segment_skill": float | None,
+        "created_at": str,
+        "status": str,
+        "actual_outcome": float | None,
+        "brier_score": float | None,
+        "resolved_at": str | None,
+        "snapshot_question": str | None,
+        "snapshot_recommendation": str | None,
+        "snapshot_confidence": str | None,
+        "snapshot_evidence_strength": float | None,
+        "snapshot_conflict_score": float | None,
+        "snapshot_market_quality_score": float | None,
+        "snapshot_source_platform": str | None,
+        "direction_correct": int | None,
+        "edge_bucket": str | None,
+        "confidence_bucket": str | None,
+        "event_title": str,
+        "event_title_zh": str,
+    }
+
+    def test_recent_response_points_at_the_published_element(self):
+        """The envelope names its element, and all five keys are required.
+
+        Identity, not ``issubclass``, and not just "a list": a regression to
+        ``list[dict[str, Any]]`` still validates, still returns the same bytes
+        and still passes ``tsc`` -- the element would just go back to
+        ``{ [k: string]: unknown }``, which is the shape ``lib/api.ts`` used to
+        work around by hand-writing a subset.
+        """
+        from app.models.event import RecentPredictionItem, RecentPredictionsResponse
+
+        fields = RecentPredictionsResponse.model_fields
+        self.assertEqual(
+            set(fields),
+            {"count", "total", "limit", "offset", "predictions"},
+            "RecentPredictionsResponse is no longer the five-key envelope the "
+            "route returns",
+        )
+        for name, want in (
+            ("count", int),
+            ("total", int),
+            ("limit", int),
+            ("offset", int),
+        ):
+            with self.subTest(key=name):
+                self.assertEqual(
+                    fields[name].annotation,
+                    want,
+                    f"RecentPredictionsResponse.{name} is no longer {want.__name__}",
+                )
+        self.assertEqual(
+            fields["predictions"].annotation,
+            list[RecentPredictionItem],
+            "RecentPredictionsResponse.predictions no longer names its published "
+            "element, so the frontend can only hand-write a subset again",
+        )
+        for name in fields:
+            with self.subTest(required=name):
+                self.assertTrue(
+                    fields[name].is_required(),
+                    f"RecentPredictionsResponse.{name} gained a default. The one "
+                    "route serving this model writes all five keys on every "
+                    "return, so a default only widens the envelope (audit 53.58)",
+                )
+
+    def test_the_element_requires_all_thirty_five_keys(self):
+        """Every key is written unconditionally, so none may carry a default.
+
+        The route spreads ``dict(row)`` -- all 33 columns -- then writes both
+        titles, so there is no "absent" key for a default to describe, and
+        ``response_model_exclude_unset`` is not needed here (53.55 needed the
+        flag because one key was conditional; 53.56 and 53.57 did not). A default
+        would widen the element to ``X | undefined`` for a producer that never
+        omits anything.
+
+        Annotations are pinned here, not only the field names: the nullability
+        split *is* this section's decision, and a name-only check would let
+        ``float | None`` collapse back to ``float`` unnoticed -- ``tsc`` cannot
+        see it, because the report arrives through ``res.json() as T``.
+        """
+        from app.models.event import RecentPredictionItem
+
+        item = RecentPredictionItem.model_fields
+        self.assertEqual(
+            set(item),
+            set(self._ELEMENT_FIELDS),
+            "RecentPredictionItem's field set no longer matches the 33 columns "
+            "plus two titles the route returns",
+        )
+        for name, want in self._ELEMENT_FIELDS.items():
+            with self.subTest(field=name):
+                self.assertTrue(
+                    item[name].is_required(),
+                    f"RecentPredictionItem.{name} gained a default; the route "
+                    "writes that key on every element",
+                )
+                self.assertEqual(
+                    item[name].annotation,
+                    want,
+                    f"RecentPredictionItem.{name} is no longer {want}; the types "
+                    "mirror the schema, so a nullable column keeps '| None'",
+                )
+
+    def test_recent_callsite_reads_the_generated_contract(self):
+        """No copy back in ``api.ts``, and the call site reads the envelope.
+
+        The negative half is name-based for the same reason as 53.55-53.57:
+        ``ALLOWED_OVERLAY_COPIES_IN_API_TS`` counts an interface as a copy only
+        when its name ends in ``Overlay`` or its body carries an index signature,
+        and a re-declared element is neither. ``_interface_bodies`` collects only
+        ``export interface``, so the two ``export type`` aliases are not mistaken
+        for declarations. The element's old spelling is checked too, even though
+        it never matched that detector: reviving it is the likely regression.
+
+        The positive half walks *back* from the path line to the nearest ``api<``
+        generic rather than searching a fixed window.
+        """
+        api_text = _API_TS_PATH.read_bytes().decode("utf-8")
+        api_bodies = _interface_bodies(api_text)
+
+        for name in (
+            "PredictionRecord",
+            "RecentPredictionItem",
+            "RecentPredictionsResponse",
+        ):
+            with self.subTest(retired=name):
+                self.assertNotIn(
+                    name,
+                    api_bodies,
+                    f"api.ts re-declared {name}; generated-types.ts is the source "
+                    "of truth. Alias the generated name instead.",
+                )
+
+        for needle in (
+            "export type PredictionRecord = GeneratedRecentPredictionItem;",
+            "export type RecentPredictionsResponse = GeneratedRecentPredictionsResponse;",
+        ):
+            with self.subTest(alias=needle):
+                self.assertIn(
+                    needle,
+                    api_text,
+                    "api.ts no longer aliases the generated type "
+                    f"(expected: {needle})",
+                )
+
+        lines = api_text.splitlines()
+        idxs = [i for i, ln in enumerate(lines) if "/predictions/recent" in ln]
+        self.assertEqual(
+            len(idxs),
+            1,
+            "expected the single /predictions/recent call site in api.ts, "
+            f"found {len(idxs)}",
+        )
+        for idx in idxs:
+            generic = ""
+            for back in range(idx, -1, -1):
+                if "api<" in lines[back]:
+                    generic = lines[back]
+                    break
+            with self.subTest(callsite=lines[idx].strip()[:40]):
+                self.assertTrue(generic, "no api< generic found above this call site")
+                self.assertIn(
+                    "api<RecentPredictionsResponse>(",
+                    generic,
+                    "this call site bypasses the published envelope again: api.ts "
+                    "must read api<RecentPredictionsResponse>",
+                )
 
 
 class ApiTsTypeSourceTests(unittest.TestCase):

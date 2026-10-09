@@ -1014,12 +1014,87 @@ class PendingLinksResponse(FlexibleResponse):
     pending: list[PendingLinkItem]
 
 
+class RecentPredictionItem(BaseModel):
+    """One element of ``RecentPredictionsResponse.predictions`` (audit 53.58).
+
+    The route spreads ``dict(row)`` from ``SELECT * FROM predictions`` and then
+    appends two enrichments, so the element is the table's 33 columns plus
+    ``event_title`` / ``event_title_zh``. Every key is written unconditionally
+    (0 absences across 171 live rows), so nothing here carries a default: a
+    default would only widen the published type.
+
+    Types mirror the *producer's guarantee*, not the observation. A key is bare
+    when the route cannot hand back null: the twelve columns declared ``NOT
+    NULL``, plus ``id`` and the two titles. ``id`` is the exception worth naming
+    -- SQLite does not enforce ``NOT NULL`` on a ``TEXT PRIMARY KEY`` (3.45.1
+    accepts a NULL ``id``), so this is a *store* guarantee (the ``INSERT``
+    supplies a uuid4) rather than a schema fact; the conservative reading would
+    be ``str | None``, which would key React lists on a nullable value for no
+    reader's benefit. The two titles are not columns at all: the route writes
+    them with ``record.get(..., "")``, so they can be neither absent nor null.
+    Every other column is ``X | None`` -- the conservative direction, because a
+    nullable column that happens to hold a value today (``trust``,
+    ``adjusted_edge``, ``liquidity_factor``, ``qualified``, ``segment_n``,
+    ``segment_min_samples`` are never null across the live rows) keeps its
+    ``| None``: "not observed" is not "cannot happen".
+
+    ``direction_correct`` stays ``int | None``: the store hands back the raw
+    SQLite 0/1/NULL and this route does not convert it, so declaring ``bool``
+    would rewrite the wire value -- the opposite of ``EventMarketLink.verified``,
+    which the store *does* convert (audit 53.57).
+    """
+
+    id: str
+    event_id: str
+    contract_id: str
+    platform: str
+    base_rate_category: str
+    ai_probability: float
+    market_probability: float
+    raw_edge: float
+    trust: float | None
+    adjusted_edge: float | None
+    liquidity: float
+    volume: float
+    decision: str
+    liquidity_factor: float | None
+    qualified: int | None
+    segment_n: int | None
+    segment_min_samples: int | None
+    segment_skill: float | None
+    created_at: str
+    status: str
+    actual_outcome: float | None
+    brier_score: float | None
+    resolved_at: str | None
+    snapshot_question: str | None
+    snapshot_recommendation: str | None
+    snapshot_confidence: str | None
+    snapshot_evidence_strength: float | None
+    snapshot_conflict_score: float | None
+    snapshot_market_quality_score: float | None
+    snapshot_source_platform: str | None
+    direction_correct: int | None
+    edge_bucket: str | None
+    confidence_bucket: str | None
+    event_title: str
+    event_title_zh: str
+
+
 class RecentPredictionsResponse(FlexibleResponse):
-    count: int = 0
-    total: int = 0
-    limit: int = 10
-    offset: int = 0
-    predictions: list[dict[str, Any]] = Field(default_factory=list)
+    """Response for GET /api/events/predictions/recent (audit section 53.58).
+
+    The route writes all five keys on every return, so all five are required;
+    the envelope itself stays ``extra="allow"`` like the rest of the family.
+    ``predictions`` names its element, which is what lets the frontend read 35
+    typed fields instead of a hand-written subset of 18.
+    """
+
+    count: int
+    total: int
+    limit: int
+    offset: int
+    predictions: list[RecentPredictionItem]
 
 
 class OpenDecisionsResponse(FlexibleResponse):

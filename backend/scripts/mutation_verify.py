@@ -1643,7 +1643,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J39）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J46）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -1761,7 +1761,38 @@ SETS: tuple[MutationSet, ...] = (
             "会把将来的第四个方向值变成 422（22 205 条观测到的词表恰是 3 值，但那是观测不是保证）。"
             "🔴 **两条新针的锚点刻意避开既有针占用的字节**（J22 用 `PendingLink` 而非 J13 的 `DecisionReport`；"
             "J23 用一行无关导出而非 J24 的别名行；J29 从 docstring 尾句向上取上界，在 J26 的针**之前**结束）—— "
-            "对指针/针重叠的规避沿用 §53.55 的做法：**换上下文方向，不硬塞 `group`**。",
+            "对指针/针重叠的规避沿用 §53.55 的做法：**换上下文方向，不硬塞 `group`**。"
+            "§53.58 把同一条规则推进到 `GET /events/predictions/recent`，元素是本 set 目前**最宽**的一个："
+            "`event.py` 发布 `RecentPredictionItem`（35 键 = store 的 33 列 + 两个 title），"
+            "`predictions` 由 `list[dict[str, Any]]` 改成 `list[RecentPredictionItem]`，信封五键收紧成 required，"
+            "`api.ts` 的唯一调用点改读 `api<RecentPredictionsResponse>`，手写 `PredictionRecord`（18 键）退役成别名。"
+            "🔴 **这一节带出一个与前面各节方向相反的新风险**：元素是**闭合**的（普通 `BaseModel` 默认 "
+            "`extra='ignore'`），所以这一次「声明得比生产者少」不再是「类型偏松」，而是 "
+            "**pydantic 静默把多余的键从响应里删掉、直接改线上字节**。J43 是本 set 第一条朝这个方向的变异 —— "
+            "此前所有变异最多让类型变松，没有一条会改变返回的 JSON 内容。"
+            "J40–J46 各踩**一条互不重叠**的判据：J40 踩「`api.ts` 不得再声明元素副本」（**别名刻意留着**）、"
+            "J41 踩同一条负向判据的**第三个名字**（信封副本；§4.2：只变异第一个只能证明循环存在，"
+            "不能证明它走到了后面 —— 与 §53.57 的 J30/J31 同款先例）、"
+            "J42 踩「调用点必须读已发布信封」（且用**不含路径**的针，与 §53.56 J25 的同行针互补）、"
+            "J43 踩「`predictions` 必须指名元素模型」（静默）、"
+            "J44 踩方向相反的「恒写信封键必须 required」、"
+            "J45 踩「可空列必须保留 `| None`」（`float | None` 收成 `float`：拿观测当保证，比 schema **更紧**）、"
+            "J46 踩「取值忠实性」：`direction_correct` 由 store 原样吐出 SQLite 的 0/1/NULL，"
+            "声明成 `bool` 会把 1/0 改写成 JSON 布尔 —— 与 §53.57 的 J37 **方向相反**（那节是 `bool` 漂成 `int`），"
+            "两条合起来说明「谁转换、谁不转换」在两个端点上各有一个答案，**不能按名字推**。"
+            "🔴 **有意不登记的一条**：`assertNotIn` 那个循环的**第二个**名字（生成名 `RecentPredictionItem` 本身）"
+            "不补变异 —— 它与 J41 走**同一个** `assertNotIn(name, api_bodies)` 断言形状、同一条判据；"
+            "J40 证明该判据承重、J41 证明它走到了第一个名字之后，再加一条只让计数虚胖"
+            "（§53.54「恒写字段加回默认值不补变异」的同款理由）。"
+            "⚠️ 前提：这三个名字仍共用同一个断言形状；若守卫改成按名分立的断言，第二、三个名字要各补一条。"
+            "🔴 **另一条有意不登记的**：`RecentPredictionItem` 其余 33 个字段的注解不逐条补变异 —— "
+            "它们与 J45/J46 走同一个 `assertEqual(annotation, want)` 循环，"
+            "覆盖的是**两类的代表**（可空 `float` 的宽窄、可空 `int` 的取值忠实性），而不是 35 条同形变异。"
+            "⚠️ 前提：若那张 35 键注解表哪天从表驱动拆成 35 条独立断言，这份覆盖就退化成只覆盖两个成员，届时要补。"
+            "🔴 **J44 的锚点为什么从 docstring 尾句起算**：本文件另有 `FreshEdgesResponse` 含"
+            "「docstring 结束 + 四个恒写信封键」这段字节（短针实测 2 次），而本节还要**避让 J43 的针**"
+            "（元素那一行紧随其后）⇒ 从 docstring 尾句向上取上界、止于 `offset: int`、**不含**元素那一行。"
+            "代价：那句 docstring 措辞一改这条针就断，届时应由 `count_needle != 1` 立刻报出来。",
         ),
         mutations=(
             Mutation(
@@ -2775,6 +2806,168 @@ SETS: tuple[MutationSet, ...] = (
                     "类体靠 dedent 结束，这是本文件的既有风格，不是缺陷），"
                     "所以拿不到 `}` 当唯一后缀；改用「两行字段 + 两个空行 + 下一行 class 头」，"
                     "跨行组合实测唯一（单行 `    linked_at: str` 出现 3 次）。"
+                ),
+            ),
+            Mutation(
+                label="J40 api.ts 又自己声明 PredictionRecord：被退役的 18 键元素副本长回来",
+                path=_API_TS,
+                old=b"export interface EventListFilters {",
+                new=(
+                    b"export interface PredictionRecord {\n"
+                    b"  id: string;\n"
+                    b"  event_id: string;\n"
+                    b"  event_title?: string;\n"
+                    b"  ai_probability: number;\n"
+                    b"  market_probability: number;\n"
+                    b"  raw_edge: number;\n"
+                    b"}\n\n"
+                    b"export interface EventListFilters {"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_recent_callsite_reads_the_generated_contract",),
+                note=(
+                    "§53.58 退役的那份手写副本被还原（不必写满 18 个键 —— 守卫判的是**名字**；"
+                    "少写几行也让这条的替换串与 J30/J32 明显不同）。"
+                    "**别名刻意留着** ⇒ 只可能红在 `assertNotIn` 那半，归因可辨"
+                    "（§53.54 的 J5/J7、§53.55 的 J13/J15、§53.56 的 J22/J24、§53.57 的 J30/J32 同款）。"
+                    "副本体内不带索引签名、名字不以 `Overlay` 结尾 ⇒ "
+                    "`ALLOWED_OVERLAY_COPIES_IN_API_TS` 那条**老**判据仍然绿（本节的守卫必须**按名**判）；"
+                    "`_interface_bodies` 只收 `export interface` ⇒ 这一次它收得到（别名不占这个字面量）。"
+                    "🔴 **锚点必须与 J22、J30 不同**：三条若共用同一行字节，整集 `apply` 时无法同时落位"
+                    "（§53.55 的 J19/J20 教训）。针是单行，`api.ts` 里恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J41 api.ts 又自己声明 RecentPredictionsResponse：信封副本长回来",
+                path=_API_TS,
+                old=b"export type RecentPredictionsResponse = GeneratedRecentPredictionsResponse;",
+                new=(
+                    b"export interface RecentPredictionsResponse {\n"
+                    b"  count?: number;\n"
+                    b"  total?: number;\n"
+                    b"  limit?: number;\n"
+                    b"  offset?: number;\n"
+                    b"  predictions: unknown[];\n"
+                    b"}\n\n"
+                    b"export type RecentPredictionsResponse = GeneratedRecentPredictionsResponse;"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_recent_callsite_reads_the_generated_contract",),
+                note=(
+                    "打的是同一条负向判据的**第三个名字**（J40 是第一个）。"
+                    "§4.2 的理由：只变异第一个只能证明那个循环**存在**，不能证明它**走到了后面** —— "
+                    "§53.57 的 J30/J31 就是这个理由的先例。"
+                    "插在别名行**之前**：与 J42 的针（调用点那行）不相交，与 J40/J22/J30 的锚点也不同。"
+                    "`predictions: unknown[]` 而不是 `PredictionRecord[]`：后者会让被退役的名字重新变成"
+                    "**被使用**的名字，顺带改变别处的判据（§53.56 的 J25、§53.57 的 J33 同款）。"
+                    "针单行、`api.ts` 里恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J42 recentPredictions 调用点绕过已发布信封：generic 退回内联形状",
+                path=_API_TS,
+                old=b"    api<RecentPredictionsResponse>(",
+                new=b"    api<{ predictions: unknown[] }>(",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_recent_callsite_reads_the_generated_contract",),
+                note=(
+                    "针是 **generic 那一行、不含路径**：守卫从含路径的那一行往回找最近的 `api<`，"
+                    "两行相邻 —— 所以这条钉的是「往回找」这半，与 §53.56 的 J25（generic 与路径同行）互补。"
+                    "旧形状是把信封**内联**写进 generic（`{ predictions: PredictionRecord[]; count?: … }`），"
+                    "这里退回内联但只留一个字段：仍然是「不经由已发布信封」，而 TS 依然合法 —— "
+                    "`res.json() as T` 是断言，`tsc` 对形状什么都不主张。"
+                ),
+            ),
+            Mutation(
+                label="J43 RecentPredictionsResponse.predictions 退回裸 dict：元素契约消失（静默）",
+                path=_EVENT_MODEL,
+                old=b"    predictions: list[RecentPredictionItem]",
+                new=b"    predictions: list[dict[str, Any]]",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_recent_response_points_at_the_published_element",),
+                note=(
+                    "**静默**回归的典型（同 §53.55 的 J17、§53.56 的 J26、§53.57 的 J35）："
+                    "`RecentPredictionsResponse` 是 `FlexibleResponse`，退回 `list[dict[str, Any]]` 后"
+                    "**仍然校验通过、仍然返回同样的字节、`tsc` 仍然全绿**，生成出来的元素只是悄悄回到 "
+                    "`{ [k: string]: unknown }` —— 也就是前端当初不得不手写 18 键副本的那个形状。"
+                    "拦截点只能是**模型身份**判据（`assertEqual(annotation, list[Element])`）。"
+                ),
+            ),
+            Mutation(
+                label="J44 RecentPredictionsResponse.count 加回默认值：已发布信封被静默放宽",
+                path=_EVENT_MODEL,
+                old=(
+                    b"typed fields instead of a hand-written subset of 18.\n"
+                    b'    """\n'
+                    b"\n"
+                    b"    count: int\n"
+                    b"    total: int\n"
+                    b"    limit: int\n"
+                    b"    offset: int"
+                ),
+                new=(
+                    b"typed fields instead of a hand-written subset of 18.\n"
+                    b'    """\n'
+                    b"\n"
+                    b"    count: int = 0\n"
+                    b"    total: int\n"
+                    b"    limit: int\n"
+                    b"    offset: int"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_recent_response_points_at_the_published_element",),
+                note=(
+                    "打的是**信封那半**（J45/J46 是元素那半）。加回默认值会**静默地**把已发布信封重新放宽成 "
+                    "`count?:` —— 生成文本本身仍「合法」，只有 `is_required()` 看得见。"
+                    "🔴 **锚点为什么不从 `count` 那一行直接起算**：本文件另有 `FreshEdgesResponse` 含"
+                    "「docstring 结束 + 四个恒写信封键」这段字节（实测那个短针出现 2 次），"
+                    "而且本节还要**避让 J43 的针**（元素那一行紧随其后）⇒ "
+                    "从 docstring 尾句向上取上界，止于 `offset: int`、**不含**元素那一行"
+                    "（§53.56 的 J29 同款做法）。代价：那句 docstring 措辞一改这条针就断，"
+                    "届时应由 `count_needle != 1` 立刻报出来。跨行组合实测唯一。"
+                ),
+            ),
+            Mutation(
+                label="J45 RecentPredictionItem.trust 丢掉 | None：可空列被声明成必填（比 schema 更紧）",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    raw_edge: float\n"
+                    b"    trust: float | None\n"
+                    b"    adjusted_edge: float | None"
+                ),
+                new=(
+                    b"    raw_edge: float\n"
+                    b"    trust: float\n"
+                    b"    adjusted_edge: float | None"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_element_requires_all_thirty_five_keys",),
+                note=(
+                    "**本节特有的一条方向**：`trust` 的列可空，只是 171 行实测**从未**出现过 null —— "
+                    "把 `| None` 收掉看着像「更严」，实则是拿**观测**当**保证**："
+                    "声明得比 schema 紧，第一次写入空值就会 422。"
+                    "它与 J43 恰好互为反面（J43 把元素变松、这条把它变紧），"
+                    "而两者由**同一个** `assertEqual(annotation, want)` 循环拦住 —— "
+                    "这正是那张 35 键注解表存在的理由（只查名字的守卫对两个方向都盲）。"
+                    "🔴 单行针 `    trust: float | None` 出现 2 次（另一处在 `MarketQuality` 一族）⇒ 必须跨行；"
+                    "带上前后两行 `raw_edge` / `adjusted_edge` 后实测唯一。"
+                ),
+            ),
+            Mutation(
+                label="J46 RecentPredictionItem.direction_correct 从 int|None 漂成 bool：改写线上取值",
+                path=_EVENT_MODEL,
+                old=b"    direction_correct: int | None",
+                new=b"    direction_correct: bool",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_element_requires_all_thirty_five_keys",),
+                note=(
+                    "**取值忠实性**，且与 §53.57 的 J37 **方向相反**：那一节 `EventMarketLink.verified` 是 "
+                    "`bool` 漂成 `int`（store 的 `_row_to_dict` 确实转换过，所以 `bool` 才对），"
+                    "这一节 `list_recent` 走 `[dict(row) …]`、**不转换** ⇒ store 原样吐 SQLite 的 0/1/NULL，"
+                    "声明成 `bool` 会把 1/0 改写成 JSON 布尔 —— 是**改线上字节**，不是「更严」。"
+                    "两条合起来说明「谁转换、谁不转换」在两个端点上有两个答案，**不能按名字推**："
+                    "同一个词表、同一个 store，读法不同则忠实类型不同。"
+                    "针单行、本文件恰好 1 次（实测）—— `direction_correct` 只在这里出现。"
                 ),
             ),
         ),

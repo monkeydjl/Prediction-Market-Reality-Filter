@@ -20,6 +20,8 @@ import type {
   PendingLinkItem as GeneratedPendingLinkItem,
   PendingLinksResponse as GeneratedPendingLinksResponse,
   EventMarketLink,
+  RecentPredictionItem as GeneratedRecentPredictionItem,
+  RecentPredictionsResponse as GeneratedRecentPredictionsResponse,
 } from "./generated-types";
 import { getApiBase, joinApiPath } from "./env";
 import { applyOperatorAuthHeaders } from "./operator-credentials";
@@ -752,26 +754,13 @@ export interface DomainReliabilityResponse {
   total_rows: number;
 }
 
-export interface PredictionRecord {
-  id: string;
-  event_id: string;
-  event_title?: string;
-  event_title_zh?: string;
-  contract_id?: string;
-  platform?: string;
-  base_rate_category?: string;
-  ai_probability: number;
-  market_probability: number;
-  raw_edge: number;
-  adjusted_edge?: number | null;
-  trust?: number | null;
-  decision?: string;
-  status?: string;
-  actual_outcome?: number | null;
-  brier_score?: number | null;
-  created_at?: string;
-  resolved_at?: string | null;
-}
+// The element of the recent-predictions list, and its envelope. Both lived here
+// by hand until audit 53.58, where the local copy declared 18 of the 35 keys the
+// route actually returns. Naming the element closes that gap, and it also removes
+// a hazard the old shape hid: a *closed* model declaring fewer keys would have
+// made pydantic drop the rest from the response without a sound.
+export type PredictionRecord = GeneratedRecentPredictionItem;
+export type RecentPredictionsResponse = GeneratedRecentPredictionsResponse;
 
 export interface EventListFilters {
   q?: string;
@@ -983,7 +972,7 @@ export const eventsApi = {
     api<CalibrationBucketSummary>("/events/predictions/calibration/buckets"),
 
   recentPredictions: (limit = 10, offset = 0) =>
-    api<{ predictions: PredictionRecord[]; count?: number; total?: number; limit?: number; offset?: number }>(
+    api<RecentPredictionsResponse>(
       `/events/predictions/recent?limit=${limit}&offset=${offset}`,
     ),
 

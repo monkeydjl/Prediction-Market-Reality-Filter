@@ -1031,14 +1031,86 @@ export interface PendingLinksResponse {
   pending: PendingLinkItem[];
   [k: string]: unknown;
 }
+/**
+ * One element of ``RecentPredictionsResponse.predictions`` (audit 53.58).
+ *
+ * The route spreads ``dict(row)`` from ``SELECT * FROM predictions`` and then
+ * appends two enrichments, so the element is the table's 33 columns plus
+ * ``event_title`` / ``event_title_zh``. Every key is written unconditionally
+ * (0 absences across 171 live rows), so nothing here carries a default: a
+ * default would only widen the published type.
+ *
+ * Types mirror the *producer's guarantee*, not the observation. A key is bare
+ * when the route cannot hand back null: the twelve columns declared ``NOT
+ * NULL``, plus ``id`` and the two titles. ``id`` is the exception worth naming
+ * -- SQLite does not enforce ``NOT NULL`` on a ``TEXT PRIMARY KEY`` (3.45.1
+ * accepts a NULL ``id``), so this is a *store* guarantee (the ``INSERT``
+ * supplies a uuid4) rather than a schema fact; the conservative reading would
+ * be ``str | None``, which would key React lists on a nullable value for no
+ * reader's benefit. The two titles are not columns at all: the route writes
+ * them with ``record.get(..., "")``, so they can be neither absent nor null.
+ * Every other column is ``X | None`` -- the conservative direction, because a
+ * nullable column that happens to hold a value today (``trust``,
+ * ``adjusted_edge``, ``liquidity_factor``, ``qualified``, ``segment_n``,
+ * ``segment_min_samples`` are never null across the live rows) keeps its
+ * ``| None``: "not observed" is not "cannot happen".
+ *
+ * ``direction_correct`` stays ``int | None``: the store hands back the raw
+ * SQLite 0/1/NULL and this route does not convert it, so declaring ``bool``
+ * would rewrite the wire value -- the opposite of ``EventMarketLink.verified``,
+ * which the store *does* convert (audit 53.57).
+ */
+export interface RecentPredictionItem {
+  id: string;
+  event_id: string;
+  contract_id: string;
+  platform: string;
+  base_rate_category: string;
+  ai_probability: number;
+  market_probability: number;
+  raw_edge: number;
+  trust: number | null;
+  adjusted_edge: number | null;
+  liquidity: number;
+  volume: number;
+  decision: string;
+  liquidity_factor: number | null;
+  qualified: number | null;
+  segment_n: number | null;
+  segment_min_samples: number | null;
+  segment_skill: number | null;
+  created_at: string;
+  status: string;
+  actual_outcome: number | null;
+  brier_score: number | null;
+  resolved_at: string | null;
+  snapshot_question: string | null;
+  snapshot_recommendation: string | null;
+  snapshot_confidence: string | null;
+  snapshot_evidence_strength: number | null;
+  snapshot_conflict_score: number | null;
+  snapshot_market_quality_score: number | null;
+  snapshot_source_platform: string | null;
+  direction_correct: number | null;
+  edge_bucket: string | null;
+  confidence_bucket: string | null;
+  event_title: string;
+  event_title_zh: string;
+}
+/**
+ * Response for GET /api/events/predictions/recent (audit section 53.58).
+ *
+ * The route writes all five keys on every return, so all five are required;
+ * the envelope itself stays ``extra="allow"`` like the rest of the family.
+ * ``predictions`` names its element, which is what lets the frontend read 35
+ * typed fields instead of a hand-written subset of 18.
+ */
 export interface RecentPredictionsResponse {
-  count?: number;
-  total?: number;
-  limit?: number;
-  offset?: number;
-  predictions?: {
-    [k: string]: unknown;
-  }[];
+  count: number;
+  total: number;
+  limit: number;
+  offset: number;
+  predictions: RecentPredictionItem[];
   [k: string]: unknown;
 }
 /**

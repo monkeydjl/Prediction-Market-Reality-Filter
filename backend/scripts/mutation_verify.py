@@ -1643,7 +1643,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J63）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J71）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -1835,6 +1835,23 @@ SETS: tuple[MutationSet, ...] = (
             "**全都没有 committed prediction**；171 个有 prediction 的事件里 overlay "
             "**要么缺席要么与模型字段集完全一致**（0 条被重塑）⇒ 记录备查、本轮不另立变异；"
             "哪天一条旧形记录获得了 prediction，就要拍板。",
+            "§53.61 补 J64–J71、把 **`/events/predictions/calibration`** 与 "
+            "**`/events/predictions/calibration/buckets`** 具名为 "
+            "`PredictionCalibrationResponse` / `CalibrationBucketSummaryResponse`"
+            "（元素 `CalibrationCategory` / `CalibrationSegment` / "
+            "`CalibrationBucketCell`）。与 §53.60 相反，本轮**具名就是零字节差**："
+            "探针（`.workbuddy/audit-2026-10-03/probe_5361.py`，10 用例同树两态）"
+            "域内 7/7 字节级一致 —— 前提是**模型字段序按生产者 dict 序声明**"
+            "（`calibration_summary` 两条路径键集相同且逐键写全、"
+            "`calibration_bucket_summary` 同理，无 `exclude_unset` 需求）；"
+            "三个 CONTROL（`n=None` / `segment_min_samples=None` / "
+            "category `brier_score=None`）全部 200→500，证明校验真实生效。"
+            "前端三个手写副本退役成别名，其中 `PredictionCalibration` 有四处"
+            "**比生产者松**（`segment_min_samples?` / `segments?` 等可选）—— "
+            "收口时 `history/page.tsx` 的 `EMPTY_PRED` 占位对象 "
+            "`segment_min_samples: null` 被 `tsc` 抓出（生产者恒写 settings int），"
+            "改 0 并注释；`page.test.tsx` 夹具同形修正（tsc 不查测试文件、"
+            "vitest 只转译 ⇒ 夹具只能人工跟）。",
         ),
         mutations=(
             Mutation(
@@ -3434,6 +3451,149 @@ SETS: tuple[MutationSet, ...] = (
                     "（`include_router` 之前路径仍是 `/{event_id}/decision`），本文件、"
                     "`test_generate_types.py` 里都没有 `/{event_id}/decision` 或 "
                     "`response_model=DecisionReport` 字面量（各 0 次，已复核）⇒ 不自指。"
+                ),
+            ),
+            Mutation(
+                label="J64 /predictions/calibration 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_DIGEST_ROUTES,
+                old=b"response_model=PredictionCalibrationResponse)",
+                new=b"response_model=FlexibleResponse)",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_calibration_routes_bind_the_named_models",),
+                note=(
+                    "§53.61：本轮具名的第一个端点。`calibration_summary()` 的两条"
+                    "返回路径（scored 聚合与 `no_data` 早退）写**同 9 键**且逐键写全，"
+                    "具名后探针域内 7/7 字节级一致（前提：模型字段序 = 生产者 dict 序）。"
+                    "拦它的判据是**路由对象身份**（`route.response_model is "
+                    "PredictionCalibrationResponse`），不是源码文本：裸 `FlexibleResponse` "
+                    "是 `extra='allow'`、零字段，退回去之后**仍然校验通过、仍然 200、"
+                    "`tsc` 仍然全绿**，唯一变化是已发布的 schema 变回不透明体。"
+                    "守卫读 `router.routes`（`include_router` 之前路径仍是 "
+                    "`/predictions/calibration`）。🔴 针 `response_model="
+                    "PredictionCalibrationResponse)` 在本文件命中 **1 次**（已字节复核）；"
+                    "裸 `FlexibleResponse)` 有 55 处，必须带模型名前缀才是唯一单元；"
+                    "守卫文件里没有该字面量 ⇒ 不自指。"
+                ),
+            ),
+            Mutation(
+                label="J65 /predictions/calibration/buckets 的 response_model 退回裸 FlexibleResponse",
+                path=_DIGEST_ROUTES,
+                old=b"response_model=CalibrationBucketSummaryResponse)",
+                new=b"response_model=FlexibleResponse)",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_calibration_routes_bind_the_named_models",),
+                note=(
+                    "§53.61：本轮具名的第二个端点，与 J64 同判据（路由对象身份）、"
+                    "同一守卫的两个成员（§4.2：一成员被消费处就要自己的断言）。"
+                    "`calibration_bucket_summary()` 两条路径写**同 4 键**；"
+                    "`no_data` 是**映射为空**而非键缺席。路由函数体内的"
+                    "**局部 import**（`from app.memory.prediction_store import "
+                    "calibration_bucket_summary`）不在模块命名空间 ⇒ "
+                    "探针的 patch 必须打 `app.memory.prediction_store` 侧而非 "
+                    "`events_routes` 侧（`from`-import 按值绑定）；该事实已写进 "
+                    "探针注释。🔴 针在本文件命中 **1 次**（已字节复核）。"
+                ),
+            ),
+            Mutation(
+                label="J66 信封字段 segment_min_samples 添默认值：必填放宽成可选",
+                path=_EVENT_MODEL,
+                old=b"    segment_min_samples: int\r\n    segments: dict[str, CalibrationSegment]",
+                new=b"    segment_min_samples: int = 8\r\n    segments: dict[str, CalibrationSegment]",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_summary_envelope_and_elements",),
+                note=(
+                    "**「更松」方向**：两条生产路径都写该键，默认值只会把生成类型放宽成 "
+                    "`?:`，没有任何「缺席」可描述（§Z8：`is_required()` 在模型层就等价于"
+                    "生成文本里的 `?:`，不必读生成文件）。守卫用逐字段 `is_required()` "
+                    "subtest 拦。🔴 针必须带后随行 `segments:`：单行 "
+                    "`    segment_min_samples: int` 在 `CalibrationSegment` 里也出现"
+                    "（同文件 2 处），带后随行才是唯一单元（已字节复核）。"
+                ),
+            ),
+            Mutation(
+                label="J67 信封删字段 mean_raw_edge：键集收缩、前端读不到该键",
+                path=_EVENT_MODEL,
+                old=b"    mean_raw_edge: float | None\r\n",
+                new=b"",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_summary_envelope_and_elements",),
+                note=(
+                    "**「更松」的另一个方向**：信封是 `extra='allow'`，删掉声明字段后该键"
+                    "**原样透传** ⇒ 线上字节不变、`tsc` 照样绿，唯一的拦截点是键集相等断言"
+                    "（`set(fields) == 九键`）。与 J66 合起来钉住键集的两个失败方向："
+                    "J66 放宽可选性、J67 收缩键集。🔴 整行删除；该行在本文件命中 **1 次**"
+                    "（已字节复核），守卫文件里没有带前导四空格的该字面量 ⇒ 不自指。"
+                ),
+            ),
+            Mutation(
+                label="J68 CalibrationSegment.qualified 从 bool 放宽成 int | None：改线上字节",
+                path=_EVENT_MODEL,
+                old=b"    segment_min_samples: int\r\n    qualified: bool",
+                new=b"    segment_min_samples: int\r\n    qualified: int | None",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_summary_envelope_and_elements",),
+                note=(
+                    "**「改字节」方向**：`qualified` 是 Python 比较"
+                    "`(stats['n'] or 0) >= min_samples` 的产物，恒 `bool`；"
+                    "声明成 `int | None` 后 pydantic 重序列化把 `True` 写成 `1`、"
+                    "`False` 写成 `0` —— 与 §53.58 的 J46 同方向、与 §53.57 的 J37 互为反向。"
+                    "🔴 针必须带前导行 `segment_min_samples: int`：裸 "
+                    "`    qualified: bool` 作为**前缀**在 `qualified: bool | None = None`"
+                    "（本文件 530 行）也命中；带上前导行才是唯一单元（已字节复核）。"
+                    "与 J69 合起来钉住两个元素模型的可空性判据。"
+                ),
+            ),
+            Mutation(
+                label="J69 CalibrationCategory.brier_score 从裸 float 放宽成 float | None：把域外当可能",
+                path=_EVENT_MODEL,
+                old=b"    brier_score: float\r\n    skill_score: float",
+                new=b"    brier_score: float | None\r\n    skill_score: float",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_summary_envelope_and_elements",),
+                note=(
+                    "**「更松」方向**：生产者**交不出 None** —— `by_category` 的"
+                    "字典字面量里 `round(r['mean_brier'], 4)` 先于整个 dict 求值，"
+                    "`mean_brier` 为 None 时先 500（域外，探针 CONTROL 已钉）⇒ "
+                    "裸 `float` 才是忠实形状（口径：「裸类型 ⟺ 生产者交不出 null」，"
+                    "§53.58）。🔴 针必须带后随行 `skill_score:`："
+                    "`Calibration`（本文件 142 行）也有 `brier_score: float`，但带行内注释"
+                    "⇒ 字节不命中；裸行对 `CalibrationCategory` 是唯一单元（已复核）。"
+                ),
+            ),
+            Mutation(
+                label="J70 CalibrationBucketCell 从 _frontend_export 白名单挪走：退回嵌套尾巴",
+                path=_FRONTEND_EXPORT,
+                old=b"    CalibrationBucketCell,\r\n",
+                new=b"",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_every_reachable_plain_model_is_registered",),
+                note=(
+                    "**登记面**：普通 `BaseModel` 只有登记为根才拿 "
+                    "`additionalProperties: false`；从白名单挪走后它退回**嵌套**渲染，"
+                    "`json2ts` 补 `[k: string]: unknown` 尾巴 ⇒ 比后端契约松，而 "
+                    "`tsc` 照样绿。守卫是**生产者驱动**的可达性测试"
+                    "（沿字段注解递归展开），所以在**重新生成之前**就红。"
+                    "只打 cell 一个成员：三个元素模型共用同一条规则、同一守卫，"
+                    "逐成员变异按 §4.2 取代表（J66/J68/J69 已各自覆盖另外两个模型"
+                    "的类型面）。🔴 整行删除；`    CalibrationBucketCell,`（import 形式）"
+                    "在本文件命中 **1 次**，`__all__` 里的 `\"CalibrationBucketCell\",` "
+                    "字节不同、不受影响（已复核）。"
+                ),
+            ),
+            Mutation(
+                label="J71 api.ts 校准调用点 generic 换成 Record<string, unknown>：契约旁路",
+                path=_API_TS,
+                old=b'api<PredictionCalibration>("/events/predictions/calibration")',
+                new=b'api<Record<string, unknown>>("/events/predictions/calibration")',
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_calibration_callsites_read_the_generated_contract",),
+                note=(
+                    "**消费面**：`api<T>` = `res.json() as T`，cast 对形状什么都不主张 ⇒ "
+                    "generic 旁路时 `tsc`/`vitest` **双双看不见**，唯一的拦截点是静态文本守卫"
+                    "（§53.57 判据：**每个端点各自的 generic**；summary 与 buckets 各有"
+                    "自己的别名与断言，一个共用 generic 对一端过松、对另一端虚假）。"
+                    "🔴 针含 URL、在本文件命中 **1 次**（已字节复核）；"
+                    "守卫文件里的别名断言把字符串拆成两段拼接、与针字节不同 ⇒ 不自指。"
                 ),
             ),
         ),

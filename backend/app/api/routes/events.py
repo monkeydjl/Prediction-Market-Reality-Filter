@@ -128,6 +128,7 @@ from app.services.trend_analysis_service import (
 )
 from app.models.event import (
     AutoResolveResponse,
+    CalibrationBucketSummaryResponse,
     CategoryCountsResponse,
     DailyDigestResponse,
     DecisionReport,
@@ -143,6 +144,7 @@ from app.models.event import (
     FreshEdgesResponse,
     OpenDecisionsResponse,
     PendingLinksResponse,
+    PredictionCalibrationResponse,
     RecentPredictionsResponse,
     SimilarEventsResponse,
     SimTrade,
@@ -1443,23 +1445,32 @@ async def verify_event_link(
     return updated
 
 
-@router.get("/predictions/calibration", response_model=FlexibleResponse)
+@router.get("/predictions/calibration",
+            response_model=PredictionCalibrationResponse)
 async def get_prediction_calibration() -> dict[str, Any]:
     """Calibration scorecard over committed, point-in-time predictions: an overall
     block (mean Brier, grade, count, mean raw edge) plus `realized_edge` /
     `directional_hit_rate` (did our divergences from the market move toward reality)
     and a per-category breakdown (`by_category`, the conditional calibration the
     Disagreement Diagnosis trust-weights with). Empty (no_data) until predictions resolve.
+
+    ``response_model_exclude_unset`` is not needed: both return paths of
+    ``calibration_summary`` write the same nine keys unconditionally, so there is
+    no "absent" for the flag to preserve (audit section 53.61).
     """
     return calibration_summary()
 
 
-@router.get("/predictions/calibration/buckets", response_model=FlexibleResponse)
+@router.get("/predictions/calibration/buckets",
+            response_model=CalibrationBucketSummaryResponse)
 async def get_prediction_calibration_buckets() -> dict[str, Any]:
     """Edge × confidence bucket diagnostic (Phase 3).
 
     Includes scored + observed predictions (act/watch/provisional_act).
     Complements ``/predictions/calibration`` (act-only overall + category).
+    Both return paths of ``calibration_bucket_summary`` write the same four
+    keys unconditionally, so ``response_model_exclude_unset`` is not needed
+    here either (audit section 53.61).
     """
     from app.memory.prediction_store import calibration_bucket_summary
 

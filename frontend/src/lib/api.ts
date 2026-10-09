@@ -22,6 +22,9 @@ import type {
   EventDiscoveryResponse as GeneratedEventDiscoveryResponse,
   DecisionReport as GeneratedDecisionReport,
   OpenDecisionsResponse as GeneratedOpenDecisionsResponse,
+  CalibrationBucketCell as GeneratedCalibrationBucketCell,
+  CalibrationBucketSummaryResponse as GeneratedCalibrationBucketSummaryResponse,
+  PredictionCalibrationResponse as GeneratedPredictionCalibrationResponse,
 } from "./generated-types";
 import { getApiBase, joinApiPath } from "./env";
 import { applyOperatorAuthHeaders } from "./operator-credentials";
@@ -477,42 +480,15 @@ export interface AutoResolveResult {
   by_source?: Record<string, number>;
 }
 
-// The act-only prediction calibration scorecard (M2/M5).
-// Mirrors prediction_store.calibration_summary.
-export interface PredictionCalibration {
-  n: number;
-  brier_score: number | null;
-  grade: string;
-  mean_raw_edge: number | null;
-  realized_edge: number | null;
-  directional_hit_rate: number | null;
-  segment_min_samples?: number | null;
-  by_category: Record<string, { n: number; brier_score: number; skill_score: number; grade: string }>;
-  segments?: Record<string, {
-    n: number;
-    brier_score: number | null;
-    skill_score: number | null;
-    grade: string;
-    market_brier_score?: number | null;
-    market_relative_skill?: number | null;
-    segment_min_samples?: number | null;
-    qualified?: boolean;
-  }>;
-}
-
-/** Phase 3 edge × confidence diagnostic (act + watch + provisional). */
-export interface CalibrationBucketCell {
-  n: number;
-  brier_score: number | null;
-  direction_correct_rate: number | null;
-}
-
-export interface CalibrationBucketSummary {
-  n: number;
-  by_edge_bucket: Record<string, CalibrationBucketCell>;
-  by_confidence_bucket: Record<string, CalibrationBucketCell>;
-  by_edge_x_confidence: Record<string, CalibrationBucketCell>;
-}
+// The act-only prediction calibration scorecard (M2/M5) and the Phase 3
+// edge × confidence diagnostic are generated from the named backend response
+// models (audit 53.61); these aliases keep the historical hand-written names
+// so callers cannot drift from the wire shape. The retired hand-written copy
+// claimed segment_min_samples and the whole segments map optional -- keys the
+// producer never omits.
+export type PredictionCalibration = GeneratedPredictionCalibrationResponse;
+export type CalibrationBucketCell = GeneratedCalibrationBucketCell;
+export type CalibrationBucketSummary = GeneratedCalibrationBucketSummaryResponse;
 
 // ── Quality operations metrics (Plan 2 §1.6) ───────────────────────────────
 // Mirrors backend /api/quality-metrics/{summary,timeseries,anomalies,drift}.

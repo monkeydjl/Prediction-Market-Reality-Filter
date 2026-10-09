@@ -22,7 +22,10 @@ import {
 const EMPTY_OVERALL: CalibrationAgg = { brier_score: null, skill_score: null, grade: "no_data", n: 0 };
 const EMPTY_PRED: PredictionCalibration = {
   n: 0, brier_score: null, grade: "no_data", mean_raw_edge: null,
-  realized_edge: null, directional_hit_rate: null, segment_min_samples: null, by_category: {}, segments: {},
+  realized_edge: null, directional_hit_rate: null,
+  // The producer always writes a settings int here (never null/absent); the
+  // placeholder value is never rendered -- both maps are empty in this state.
+  segment_min_samples: 0, by_category: {}, segments: {},
 };
 const REVIEW_PAGE_SIZE = 10;
 const RESOLVED_REVIEW_FILTERS = { resolved_only: true, exclude_expired: false } as const;

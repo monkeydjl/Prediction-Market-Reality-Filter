@@ -1041,6 +1041,87 @@ class PendingLinksResponse(FlexibleResponse):
     pending: list[PendingLinkItem]
 
 
+class CalibrationCategory(BaseModel):
+    """One ``by_category`` entry of ``PredictionCalibrationResponse`` (audit
+    53.61). ``calibration_summary`` writes all four keys on every path, and the
+    producer cannot emit a null ``brier_score`` -- ``round(None, 4)`` raises
+    before the dict literal is built -- so the field is bare rather than
+    ``| None``. A null here is out of the producer's domain entirely.
+    """
+
+    n: int
+    brier_score: float
+    skill_score: float
+    grade: str
+
+
+class CalibrationSegment(BaseModel):
+    """One ``segments`` entry of ``PredictionCalibrationResponse`` (audit
+    53.61). ``_segment_skill_from_rows`` returns ``None`` for all four
+    statistics on a category with no resolved rows -- the producer's own
+    ``no_data`` path -- and ``grade`` falls back to the literal ``"no_data"``:
+    the stats are nullable while ``grade`` stays a bare str. The last two keys
+    are never column reads (``segment_min_samples`` is a settings int,
+    ``qualified`` a Python comparison), hence never null.
+    """
+
+    n: int
+    brier_score: float | None
+    market_brier_score: float | None
+    skill_score: float | None
+    market_relative_skill: float | None
+    grade: str
+    segment_min_samples: int
+    qualified: bool
+
+
+class PredictionCalibrationResponse(FlexibleResponse):
+    """Response for GET /api/events/predictions/calibration (audit 53.61).
+
+    Both return paths of ``calibration_summary`` (the scored aggregate and the
+    ``no_data`` early return) write the same nine keys in this order, so
+    nothing carries a default and ``response_model_exclude_unset`` is not
+    needed -- there is no "absent" for a flag to preserve. The envelope stays
+    ``extra="allow"`` like the rest of the family. The hand-written frontend
+    copy this retires claimed ``segment_min_samples`` and the whole
+    ``segments`` map optional, which the producer never omits.
+    """
+
+    n: int
+    brier_score: float | None
+    grade: str
+    mean_raw_edge: float | None
+    realized_edge: float | None
+    directional_hit_rate: float | None
+    by_category: dict[str, CalibrationCategory]
+    segment_min_samples: int
+    segments: dict[str, CalibrationSegment]
+
+
+class CalibrationBucketCell(BaseModel):
+    """One cell of ``CalibrationBucketSummaryResponse`` (audit 53.61). Both
+    statistics are ``round(...)`` over lists that may be empty, so either can
+    be null while ``n`` (the group's ``len``) never can.
+    """
+
+    n: int
+    brier_score: float | None
+    direction_correct_rate: float | None
+
+
+class CalibrationBucketSummaryResponse(FlexibleResponse):
+    """Response for GET /api/events/predictions/calibration/buckets (audit
+    53.61). Both return paths of ``calibration_bucket_summary`` (the grouped
+    aggregate and the ``no_data`` early return) write the same four keys in
+    this order; ``no_data`` is the maps *empty*, not the keys absent.
+    """
+
+    n: int
+    by_edge_bucket: dict[str, CalibrationBucketCell]
+    by_confidence_bucket: dict[str, CalibrationBucketCell]
+    by_edge_x_confidence: dict[str, CalibrationBucketCell]
+
+
 class RecentPredictionItem(BaseModel):
     """One element of ``RecentPredictionsResponse.predictions`` (audit 53.58).
 

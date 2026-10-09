@@ -83,7 +83,7 @@ describe("HistoryPage", () => {
       mean_raw_edge: null,
       realized_edge: null,
       directional_hit_rate: null,
-      segment_min_samples: null,
+      segment_min_samples: 8,
       by_category: {},
       segments: {},
     });

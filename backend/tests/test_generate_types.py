@@ -1951,6 +1951,308 @@ class DecisionReportContractTests(unittest.TestCase):
                 )
 
 
+class PredictionCalibrationContractTests(unittest.TestCase):
+    """The two calibration GET contracts, from both ends (audit 53.61).
+
+    ``GET /events/predictions/calibration`` and
+    ``GET /events/predictions/calibration/buckets`` published bare
+    ``FlexibleResponse`` envelopes -- no field contract at all -- while
+    ``api.ts`` hand-wrote ``PredictionCalibration`` /
+    ``CalibrationBucketSummary`` / ``CalibrationBucketCell``. The hand copy was
+    *looser* than the producer in four places: ``segment_min_samples`` and the
+    whole ``segments`` map claimed optional (both producers write them on
+    every return path), the same for three segment statistics, and
+    ``segment_min_samples`` claimed nullable inside ``segments`` although it
+    is a settings int, never a column read. Naming the envelopes retires the
+    copies and makes the real shape readable.
+
+    Four cases: the summary envelope with its two element models, the buckets
+    envelope with its cell, the two route bindings, and the text half in
+    ``api.ts``.
+    """
+
+    def test_the_summary_envelope_and_elements(self):
+        """The nine-key envelope, its two named element maps, and every field
+        required.
+
+        Both return paths of ``calibration_summary`` (the scored aggregate and
+        the ``no_data`` early return) write the same nine keys, so a default
+        would only widen the envelope. The element annotations are pinned per
+        key because the hand copy got three of them wrong: ``brier_score`` is
+        bare in ``CalibrationCategory`` (``round(None, 4)`` raises before the
+        dict literal is built, so a null is out of the producer's domain),
+        while the segment statistics are ``| None`` because
+        ``_segment_skill_from_rows`` returns ``None`` for all four on a
+        category with no resolved rows. ``qualified`` stays ``bool`` -- a
+        Python comparison, not a column read; declaring ``int | None`` would
+        rewrite ``True`` to ``1`` on the wire (the 53.58 direction).
+        """
+        from app.models.event import (
+            CalibrationCategory,
+            CalibrationSegment,
+            PredictionCalibrationResponse,
+        )
+
+        fields = PredictionCalibrationResponse.model_fields
+        self.assertEqual(
+            set(fields),
+            {"n", "brier_score", "grade", "mean_raw_edge", "realized_edge",
+             "directional_hit_rate", "by_category", "segment_min_samples",
+             "segments"},
+            "PredictionCalibrationResponse is no longer the nine-key envelope "
+            "both paths of calibration_summary return",
+        )
+        for name, want in (
+            ("n", int),
+            ("brier_score", float | None),
+            ("grade", str),
+            ("mean_raw_edge", float | None),
+            ("realized_edge", float | None),
+            ("directional_hit_rate", float | None),
+            ("segment_min_samples", int),
+        ):
+            with self.subTest(key=name):
+                self.assertEqual(fields[name].annotation, want)
+        self.assertEqual(
+            fields["by_category"].annotation,
+            dict[str, CalibrationCategory],
+            "by_category no longer names its element; a bare dict publishes "
+            "{ [k: string]: unknown } and the frontend can only hand-write a "
+            "subset again",
+        )
+        self.assertEqual(
+            fields["segments"].annotation,
+            dict[str, CalibrationSegment],
+            "segments no longer names its element",
+        )
+        for name in fields:
+            with self.subTest(required=name):
+                self.assertTrue(
+                    fields[name].is_required(),
+                    f"PredictionCalibrationResponse.{name} gained a default. "
+                    "Both return paths write all nine keys, so a default only "
+                    "widens the envelope (audit 53.61)",
+                )
+
+        cat = CalibrationCategory.model_fields
+        self.assertEqual(
+            set(cat), {"n", "brier_score", "skill_score", "grade"},
+            "CalibrationCategory is no longer the four-key element the "
+            "producer writes",
+        )
+        for name, want in (
+            ("n", int),
+            ("brier_score", float),
+            ("skill_score", float),
+            ("grade", str),
+        ):
+            with self.subTest(category=name):
+                self.assertEqual(cat[name].annotation, want)
+        for name in cat:
+            with self.subTest(category_required=name):
+                self.assertTrue(cat[name].is_required())
+
+        seg = CalibrationSegment.model_fields
+        self.assertEqual(
+            set(seg),
+            {"n", "brier_score", "market_brier_score", "skill_score",
+             "market_relative_skill", "grade", "segment_min_samples",
+             "qualified"},
+            "CalibrationSegment is no longer the eight-key element the "
+            "producer writes",
+        )
+        for name, want in (
+            ("n", int),
+            ("brier_score", float | None),
+            ("market_brier_score", float | None),
+            ("skill_score", float | None),
+            ("market_relative_skill", float | None),
+            ("grade", str),
+            ("segment_min_samples", int),
+            ("qualified", bool),
+        ):
+            with self.subTest(segment=name):
+                self.assertEqual(seg[name].annotation, want)
+        for name in seg:
+            with self.subTest(segment_required=name):
+                self.assertTrue(seg[name].is_required())
+
+    def test_the_buckets_envelope_and_cell(self):
+        """The four-key buckets envelope and the three-key cell.
+
+        Both return paths of ``calibration_bucket_summary`` (the grouped
+        aggregate and the ``no_data`` early return) write the same four keys;
+        ``no_data`` is the maps *empty*, not the keys absent. The cell's two
+        statistics are ``round(...)`` over lists that may be empty, so either
+        can be null while ``n`` (the group's ``len``) never can -- and the
+        live corpus already holds ``null`` for ``direction_correct_rate``.
+        """
+        from app.models.event import (
+            CalibrationBucketCell,
+            CalibrationBucketSummaryResponse,
+        )
+
+        fields = CalibrationBucketSummaryResponse.model_fields
+        self.assertEqual(
+            set(fields),
+            {"n", "by_edge_bucket", "by_confidence_bucket",
+             "by_edge_x_confidence"},
+            "CalibrationBucketSummaryResponse is no longer the four-key "
+            "envelope both paths of calibration_bucket_summary return",
+        )
+        self.assertEqual(fields["n"].annotation, int)
+        for name in ("by_edge_bucket", "by_confidence_bucket",
+                     "by_edge_x_confidence"):
+            with self.subTest(map=name):
+                self.assertEqual(
+                    fields[name].annotation,
+                    dict[str, CalibrationBucketCell],
+                    f"{name} no longer names its element",
+                )
+        for name in fields:
+            with self.subTest(required=name):
+                self.assertTrue(
+                    fields[name].is_required(),
+                    f"CalibrationBucketSummaryResponse.{name} gained a "
+                    "default. Both return paths write all four keys (audit "
+                    "53.61)",
+                )
+
+        cell = CalibrationBucketCell.model_fields
+        self.assertEqual(
+            set(cell), {"n", "brier_score", "direction_correct_rate"},
+            "CalibrationBucketCell is no longer the three-key cell the "
+            "producer writes",
+        )
+        for name, want in (
+            ("n", int),
+            ("brier_score", float | None),
+            ("direction_correct_rate", float | None),
+        ):
+            with self.subTest(cell=name):
+                self.assertEqual(cell[name].annotation, want)
+        for name in cell:
+            with self.subTest(cell_required=name):
+                self.assertTrue(cell[name].is_required())
+
+    def test_the_calibration_routes_bind_the_named_models(self):
+        """Both routes must bind their named response models.
+
+        Identity, not ``issubclass``: the bare ``FlexibleResponse`` is
+        ``extra="allow"`` with no declared fields, so a regression to it still
+        validates, still answers 200 and still passes ``tsc`` -- the only
+        thing that changes is the published schema (the same criterion
+        53.60 pinned for ``/{event_id}/decision``). Read off
+        ``router.routes`` rather than ``app.routes``: the prefix is applied
+        at ``include_router`` time, so inside the module the paths are still
+        ``/predictions/calibration`` and ``/predictions/calibration/buckets``.
+        """
+        from fastapi.routing import APIRoute
+
+        from app.api.routes import events as events_routes
+        from app.models.event import (
+            CalibrationBucketSummaryResponse,
+            FlexibleResponse,
+            PredictionCalibrationResponse,
+        )
+
+        by_path = {
+            route.path: route
+            for route in events_routes.router.routes
+            if isinstance(route, APIRoute)
+            and route.path in ("/predictions/calibration",
+                               "/predictions/calibration/buckets")
+        }
+        self.assertEqual(
+            sorted(by_path),
+            ["/predictions/calibration", "/predictions/calibration/buckets"],
+            "expected exactly one route per calibration path in the events "
+            "router",
+        )
+        for path, model in (
+            ("/predictions/calibration", PredictionCalibrationResponse),
+            ("/predictions/calibration/buckets",
+             CalibrationBucketSummaryResponse),
+        ):
+            with self.subTest(route=path):
+                self.assertIs(
+                    by_path[path].response_model,
+                    model,
+                    f"the {path} route no longer binds {model.__name__}. It "
+                    "published no field contract at all before audit 53.61.",
+                )
+                self.assertIsNot(
+                    by_path[path].response_model,
+                    FlexibleResponse,
+                    f"the {path} route regressed to the bare FlexibleResponse: "
+                    "the report reaches the browser with no declared shape "
+                    "again, which is the state audit 53.61 closed",
+                )
+
+    def test_the_calibration_callsites_read_the_generated_contract(self):
+        """No copy in ``api.ts``, and each call site reads its own alias.
+
+        ``_interface_bodies`` collects only ``export interface``, so the three
+        ``export type`` aliases are not mistaken for declarations. Each
+        endpoint keeps its *own* generic (the 53.57 criterion): the summary
+        site must read ``api<PredictionCalibration>`` and the buckets site
+        ``api<CalibrationBucketSummary>`` -- one shared generic would be too
+        loose for one and a lie for the other.
+        """
+        api_text = _API_TS_PATH.read_bytes().decode("utf-8")
+        api_bodies = _interface_bodies(api_text)
+
+        for name in ("PredictionCalibration", "CalibrationBucketSummary",
+                     "CalibrationBucketCell"):
+            with self.subTest(retired=name):
+                self.assertNotIn(
+                    name,
+                    api_bodies,
+                    f"api.ts re-declared {name}; generated-types.ts is the "
+                    "source of truth. Alias the generated name instead.",
+                )
+        for alias in (
+            "export type PredictionCalibration = "
+            "GeneratedPredictionCalibrationResponse;",
+            "export type CalibrationBucketCell = "
+            "GeneratedCalibrationBucketCell;",
+            "export type CalibrationBucketSummary = "
+            "GeneratedCalibrationBucketSummaryResponse;",
+        ):
+            self.assertIn(
+                alias,
+                api_text,
+                f"api.ts no longer aliases the generated contract: {alias}",
+            )
+
+        lines = api_text.splitlines()
+        idxs = [
+            i for i, ln in enumerate(lines)
+            if "/events/predictions/calibration" in ln
+        ]
+        self.assertEqual(
+            len(idxs),
+            2,
+            "expected exactly the two prediction-calibration call sites in "
+            f"api.ts, found {len(idxs)}",
+        )
+        for idx in idxs:
+            line = lines[idx]
+            want = (
+                "api<CalibrationBucketSummary>("
+                if "calibration/buckets" in line
+                else "api<PredictionCalibration>("
+            )
+            with self.subTest(callsite=line.strip()[:52]):
+                self.assertIn(
+                    want,
+                    line,
+                    "this call site bypasses its published envelope: each "
+                    "calibration endpoint must keep its own generic (audit "
+                    "53.57 criterion)",
+                )
+
+
 class ApiTsTypeSourceTests(unittest.TestCase):
     """``api.ts`` reads generated shapes instead of re-declaring them.
 

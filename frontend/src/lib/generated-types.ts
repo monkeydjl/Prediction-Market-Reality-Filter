@@ -73,6 +73,67 @@ export interface Calibration {
   trajectory_span_hours?: number | null;
   estimate_basis?: string;
 }
+/**
+ * One cell of ``CalibrationBucketSummaryResponse`` (audit 53.61). Both
+ * statistics are ``round(...)`` over lists that may be empty, so either can
+ * be null while ``n`` (the group's ``len``) never can.
+ */
+export interface CalibrationBucketCell {
+  n: number;
+  brier_score: number | null;
+  direction_correct_rate: number | null;
+}
+/**
+ * Response for GET /api/events/predictions/calibration/buckets (audit
+ * 53.61). Both return paths of ``calibration_bucket_summary`` (the grouped
+ * aggregate and the ``no_data`` early return) write the same four keys in
+ * this order; ``no_data`` is the maps *empty*, not the keys absent.
+ */
+export interface CalibrationBucketSummaryResponse {
+  n: number;
+  by_edge_bucket: {
+    [k: string]: CalibrationBucketCell;
+  };
+  by_confidence_bucket: {
+    [k: string]: CalibrationBucketCell;
+  };
+  by_edge_x_confidence: {
+    [k: string]: CalibrationBucketCell;
+  };
+  [k: string]: unknown;
+}
+/**
+ * One ``by_category`` entry of ``PredictionCalibrationResponse`` (audit
+ * 53.61). ``calibration_summary`` writes all four keys on every path, and the
+ * producer cannot emit a null ``brier_score`` -- ``round(None, 4)`` raises
+ * before the dict literal is built -- so the field is bare rather than
+ * ``| None``. A null here is out of the producer's domain entirely.
+ */
+export interface CalibrationCategory {
+  n: number;
+  brier_score: number;
+  skill_score: number;
+  grade: string;
+}
+/**
+ * One ``segments`` entry of ``PredictionCalibrationResponse`` (audit
+ * 53.61). ``_segment_skill_from_rows`` returns ``None`` for all four
+ * statistics on a category with no resolved rows -- the producer's own
+ * ``no_data`` path -- and ``grade`` falls back to the literal ``"no_data"``:
+ * the stats are nullable while ``grade`` stays a bare str. The last two keys
+ * are never column reads (``segment_min_samples`` is a settings int,
+ * ``qualified`` a Python comparison), hence never null.
+ */
+export interface CalibrationSegment {
+  n: number;
+  brier_score: number | null;
+  market_brier_score: number | null;
+  skill_score: number | null;
+  market_relative_skill: number | null;
+  grade: string;
+  segment_min_samples: number;
+  qualified: boolean;
+}
 export interface CategoryCountsResponse {
   counts?: {
     [k: string]: number;
@@ -1197,6 +1258,33 @@ export interface PendingLinkItem {
  */
 export interface PendingLinksResponse {
   pending: PendingLinkItem[];
+  [k: string]: unknown;
+}
+/**
+ * Response for GET /api/events/predictions/calibration (audit 53.61).
+ *
+ * Both return paths of ``calibration_summary`` (the scored aggregate and the
+ * ``no_data`` early return) write the same nine keys in this order, so
+ * nothing carries a default and ``response_model_exclude_unset`` is not
+ * needed -- there is no "absent" for a flag to preserve. The envelope stays
+ * ``extra="allow"`` like the rest of the family. The hand-written frontend
+ * copy this retires claimed ``segment_min_samples`` and the whole
+ * ``segments`` map optional, which the producer never omits.
+ */
+export interface PredictionCalibrationResponse {
+  n: number;
+  brier_score: number | null;
+  grade: string;
+  mean_raw_edge: number | null;
+  realized_edge: number | null;
+  directional_hit_rate: number | null;
+  by_category: {
+    [k: string]: CalibrationCategory;
+  };
+  segment_min_samples: number;
+  segments: {
+    [k: string]: CalibrationSegment;
+  };
   [k: string]: unknown;
 }
 /**

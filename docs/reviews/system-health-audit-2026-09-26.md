@@ -13146,3 +13146,274 @@ is `X | None`」。取证时顺手验证了 SQLite 对 `TEXT PRIMARY KEY` 的行
 前五节的元素都是 8–14 键、由 store 逐列构造；本节 35 键、由 `dict(row)` **整行铺开** ——
 于是「模型里少写一个字段」的后果从「前端读不到」变成「响应里没有」。
 ⇒ **判据**：生产者是「逐键构造」还是「整行铺开」？**整行铺开 + 闭合模型 = 少一个字段少一个键。**
+
+## 53.59 「具名元素」家族的收尾：`/events/discover` 与 `/events/decisions/open`
+
+### 53.59.0 起点与四条裁决
+
+§53.58 收官时留下 **C1：两个信封既未具名元素、也未收紧信封键**：
+
+- `EventDiscoveryResponse.events` —— 元素 = 已发布的 `EventRecord`（**开放、有尾巴**），
+  生产者需要联网 + LLM 才能驱动；
+- `OpenDecisionsResponse.decisions` —— 18 个顶层键 + **9 个内联嵌套对象**，
+  真漂移是 `llm_telemetry`（47/47 全 null）。
+
+只读取证做完后，把四条取舍交老板拍板，**四条都选了推荐项**：
+
+| # | 问题 | 裁决 |
+|---|---|---|
+| ① | `EventDiscoveryResponse.events` 的元素是否具名 | **具名 `EventRecord`** |
+| ② | `OpenDecisionsResponse.decisions` 的元素是否具名 | **具名，新建 `DecisionReport`** |
+| ③ | 那 6 个「恒为 null」的键类型口径 | **`X \| null` 必填**（不给默认值） |
+| ④ | 落地顺序 | **先 events，再 decisions** |
+
+> 为什么 ③ 是必填而不是可选：`build_decision_report` **逐键构造**、每次都写这 6 个键（写的是
+> `None`，不是省掉）⇒ 给它默认值等于把「键一定在」谎报成「键可能不在」。
+> `pydantic2ts` 对带默认值的字段一律生成可选，所以「必存在但可为 null」只能靠**不给默认值**表达。
+
+---
+
+### 53.59.1 节点① `/events/discover`：元素具名 = `EventRecord`（已提交 `c4367fe`）
+
+**这一节比预想小，因为危险的那一半在这里不存在。**
+
+§53.55–§53.58 的失败模式是「闭合模型少声明一个键 ⇒ **静默丢键**」。
+`EventRecord` 是 `extra="allow"`（而且早就是 `_frontend_export` 的 root）⇒
+具名它**不可能删掉任何键**；它加的只有**校验**：元素从未校验变成按 `EventRecord` 的
+**11 个必填键**校验，于是「静默放过」升级成「响亮的 500」。
+
+**「具名是安全的」是关于生产者的断言，它的两条路径都成立**：
+
+- 新元素走 `analyze_event` → `build_event_record`，11 个必填键全写；
+- 缓存元素**就是**那份 record —— `discover_events` 只有**一处** `set_cached_event`，
+  传进去的是**分析后**的 record（`:1397`，唯一写入口）。
+
+缓存本身不做任何校验，而活的 `event_cache.json` 里确实躺着四个键的碎片 ——
+但它们是 key 为 `qB`/`qC` 的**测试夹具**、TTL 在八月就过期了 ⇒ `get_cached_event` 对它们返回 `None`，
+**从不进响应**。
+
+**非对称是刻意的**：`discover_events` 用原始结果构造 `events`，只把**新鲜子集**交给 `save_events`
+⇒ 一个会被 store 门跳过的记录，在这里**仍会被返回**。也就是说这个响应**故意比 store 松**，
+而在这之前**没有任何东西校验元素**。
+
+落地：6 文件 **+563/−159**（`event.py` 四键收紧 + 元素具名；`events.py` 只改 docstring，
+装饰器上的 `response_model` 一字未动；`api.ts` 退役内联形状改读生成别名；`generated-types.ts` 重生成；
+新守卫类 `EventDiscoveryContractTests` 3 用例 / 10 subtest；`mutation_verify.py` 追加 J47–J54）。
+
+---
+
+### 53.59.2 节点② `/events/decisions/open`：信封 6 键收紧 + `DecisionReport` 具名
+
+**取证读数**（离线可驱动，直接调真路由，47 行）：
+
+- 信封 6 键：`count=47 total=47 limit=200 offset=0`，
+  `decision_totals={'act': 0, 'provisional_act': 20, 'watch': 27}`；
+- **distinct key sets = 1** ⇒ 47 行**都是同一组 18 键**（没有缺键的行）；
+- 18 键可**干净分解**：**9 个嵌套 dict** + 3 个标量（`event_id` / `category` / `status`）
+  + **6 个恒 null**（`decision_quality` / `final_displayed_direction` / `final_downgrade_reason` /
+  `llm_telemetry` / `market_quality` / `source_reliability`）；
+- 9 个嵌套对象的键集：`event`(3)、`probability`(4)、`market_view`(4)、`edge`(3)、`diagnosis`(6)、
+  `confidence`(3)、`recommendation`(3)、`risk`(2)、`actionable_recommendation`(7)。
+
+**前端手写体的实际错法**：`api.ts` 里那份 17 字段的 `DecisionReport` **漏掉了 `llm_telemetry`**
+（一个**正在到达浏览器**、而本地类型**叫不出名字**的键），另有 3 处比生产者松
+（`recommendation.calibration_status` 是算出来的、永不为 null；`diagnosis.segment_min_samples` 每次都写；
+`risk.flags` 比 store 模型的 `list[Any]` **更窄**）。
+
+🔴 **关键区别（与 §53.58 反着）**：`build_decision_report` 是**逐键构造**、不是 `dict(row)` 整行铺开
+⇒ 模型里少声明一个键**不会**静默丢键，而是 **500**（pydantic 校验响应时缺必填键）。
+同一件事在两种生产者上的后果相反 —— **不能按「模型是闭合的」推**。
+
+落地：**新发布 9 个模型**（8 个新块 + `DecisionReport`）＋信封 6 键收紧；
+`_frontend_export` 的 import/`__all__` **各加 9 个名字**（numstat `+18/−0` 正好对上，9×2 行）；
+`generated-types.ts` 重生成：interface **59 → 68**（**新增 9、删除 0**，与「+9」一致）；
+**逐 interface 比对**（`git show HEAD:…` 的版本 vs 现在）：58 个共有 interface **body 一字未变**，
+**只有 `OpenDecisionsResponse` 一个 body 变**，但有 **23 个共有 interface 的序号发生了位移**
+⇒ 这才是 numstat 报 `+283/−140` 的来源（**位移不是改写**，与节点① 的 `+177/−152` 同源）；
+⚠️ 18 键里那 **9 个嵌套块**并不等于「9 个新模型」：第 9 个块 `actionable_recommendation` 复用
+**早已发布**的 `ActionableRecommendation`（`HEAD` 的 `_frontend_export.py` 第 55/116 行就有它）
+⇒ **9 块 = 8 新块 + 1 旧块**，别把这两个 9 混成一个。
+`api.ts` 退役手写体改别名、调用点改读 `api<OpenDecisionsResponse>`；
+`decision-card.tsx` 因 `flags` 变 `unknown[]` 而改 `String(flag)`（**行为中性**）。
+
+---
+
+### 53.59.3 变异：新增 J55–J62，以及**六条重锚**
+
+**新增 8 条**（J55–J62）：副本长回来（`DecisionReport`）、调用点绕过信封、别名改指、元素退回裸 dict、
+信封键加回默认值、**丢掉 `llm_telemetry`**（最有信息量的一条：删的正是前端当初漏掉的那个键）、
+可缺席的块被声明成必填、`flags` 按观测收窄。set 计数 60 → **68**，全局 140 → **148**。
+
+**六条重锚 —— 分两类，处置必须不同：**
+
+| 变异 | 原因 | 处置 |
+|---|---|---|
+| D4 | 针锚在**被退役的手写 `DecisionReport {`** 上，命中 **0 次** | 换锚到别名下方那句注释；**并收窄 `new` 的体内内容**（见下） |
+| D5 | 针锚在**被退役手写体的字段**上，命中 0 次 | 🔴 **判据本身没了** ⇒ **改打别名逐字那条**（见下） |
+| D6 | 针锚在**被退役手写体的字段**上，命中 0 次 | 换宿主到 `CategoryCoverage` 体内（保留「非末行」这个设计点） |
+| J13 | 针锚在被退役手写体上，命中 0 次 | 换锚到 `EventMoversResponse` 的别名行（语义更贴：副本就长回它所属的信封旁） |
+| J6 | 针与 **J3 字节完全相同**，J3 在前、其 `new` **删掉那行别名** ⇒ 整集 `apply` 落不下去 | 换锚，**不宣告 `group`**（两条并不互斥） |
+| J50 | 针与 **J1 字节完全相同**，J1 在前、其 `new` 把别名**换成接口** ⇒ 同上 | 换锚（顺带让形状离被退役处**更远**，反而强化了「换位置也照样被抓」） |
+
+🔴 **D5 是本轮最重要的一类发现：漂移的不只是地址，而是判据。**
+它原来打的是手写 `DecisionReport` **体内**的一个 overlay 字段，守卫当时断言「字段必须指生成名」。
+节点② 把那份手写体退役成别名之后：那个字段不存在了，**而且没有任何守卫还在断言字段指向** ⇒
+把它重锚到别的 interface 的字段上（例如把 `unknown_rate` 改指 `Record<string, unknown>`）
+**不会变红** —— 那就不再是一条变异（§4.2 阶段②「变异后必红」不成立）。
+所以 D5 改打**同族里唯一还没人覆盖**的那条判据：
+`test_decision_report_reads_the_generated_contract` 的**第三个**断言 —— 别名必须**逐字**是
+`GeneratedDecisionReport`（grep 确认 148 条里没有任何一条碰过它）。
+覆盖的仍是「**契约来源必须是生成类型**」，只是从**字段那层**上移到**别名那层**。
+
+🔴 **D4 原来的分工声明按字面从来不成立。** 它的 `new` 体内**同时**写着 `[key: string]: unknown;`
+⇒ 名字分支与索引分支会**同时**踩 ⇒ 「D4 证明名字分支承重」这句话在索引分支坏掉时**照样为真**。
+去掉那一行后，D4（只踩名字）与 D6（只踩索引）才真的互不重叠 —— 也就是本 set rationale 一直声称的分工。
+**这条不是本轮改坏的，是本轮才看出来的**：把六条针逐个重算命中窗口时，顺带核了 `new` 的体内内容。
+
+**四阶段结果（6/6 全过）**：`green before True`（**没有 `[safe-delete]` 假红指纹**）·
+`red after mutation 1/1 files red` · `green after restore True` · `bytes restored True`；
+每条**恰好 1 个失败项**（D4/D5/D6：`1 failed, 33 deselected`）。
+取证文件：`verify_5359c_node2_reanchor.txt`。
+
+---
+
+### 53.59.4 本轮新发现的两个 harness 缺陷（都已修 + 静态钉住）
+
+**缺陷一：guard 名只被钉住「形状」，没被钉住「可解析」。**
+`test_every_guard_file_exists_and_every_guard_is_named` 只检查名字 `startswith("test_")`。
+改名之后（`..._read_the_generated_overlays` → `..._read_the_generated_contract`），
+**3 条变异**（D4/D5/D6）继续指着一个文件里不存在的名字 —— 而且失败方式**极具误导性**：
+`pytest -k <名字>` 选不中任何测试 ⇒ 退出码 **5** ⇒ `_verify_one` 报
+**「guard already RED before mutation」**，读起来像守卫坏了，而不是清单烂了。
+实测：全部 12 套 **179 处** guard 引用里，只有这 3 处解析不到。
+⇒ 新增 `InventoryTests.test_every_named_guard_resolves_in_at_least_one_of_its_guard_files`，
+按 **`-k` 的子串语义**判（选择器匹配的是「**包含**该名字」的测试），
+且只要求「在**某一个** guard 文件里能解析」—— 同一个选择器会作用到每个文件，
+在别的文件里选不中是文档写明**有意**的。
+
+**缺陷二：整集 `apply` 能否逐条落位，没有任何静态钉住。**
+`_write_mutations` **每条都重新读文件** ⇒ 前一条的改写把后一条的针毁掉时，真跑会在**已经改了一半**的树上抛
+`ValueError`；而 `_apply_preflight` **看不到**这一点 —— 它是拿**此刻**的文件去核每一根针，
+不是拿「前面几条改写之后」的文件。`test_the_whole_set_selection_passes_preflight` 因此**今天也绿**，
+对这件事一句不说。实测：J6、J50 落不下去（其余 10 套全部可落位）。
+⇒ 新增 `WholeSetApplyTests.test_a_whole_set_apply_can_place_every_mutation_it_selects`，
+在**内存副本**上按 `_whole_set_targets` 顺序**重放**，一个字节都不写。
+
+🔴 **为什么判据是「重放」而不是「窗口不重叠」——这是本轮最容易写错的一处。**
+我最初写的是「同一 set、同一文件、窗口不重叠（组内除外）」，它报了 **4 处**违规；
+但其中 **3 处是良性**的：J1/J50 与 J3/J6 是**真**违规（落不下去），而
+**J11/J12 与 J14/J15 虽然窗口重叠、两条都能落位**（J14 的 `new` 把别名行**留在原地**，J15 的针就还在）。
+⇒ 一条只窗口判据的测试会**误报两处、又对真正的规则一无所知**。
+**「重叠」不是「失败」；要在前面几条改写之后问「针还在不在」。**
+
+---
+
+### 53.59.5 文档层更正（追加，不改写前文）
+
+按「交付记录只追加不改写」，以下两条**不回填**到 §53.58，只在此处更正：
+
+1. 🔴 **§53.58 里的「8 个内联嵌套对象」应为 9。**
+   §53.59 的普查数出 **9** 个（`event` / `probability` / `market_view` / `edge` / `diagnosis` /
+   `confidence` / `recommendation` / `risk` / `actionable_recommendation`），
+   与 18 键的分解式对得上（9 dict + 3 标量 + 6 恒 null = 18）。
+   取证探针 `probe_5359.py` 的 docstring 里已就地写下「an earlier note of mine said eight — the census corrected it」。
+2. 🔴 **§53.58 提交信息里的「compile-enforced, not tidiness」不成立。**
+   本仓前端测试**根本不做类型检查**：`frontend/tsconfig.json` 有
+   `"exclude": ["node_modules", "**/*.test.ts", "**/*.test.tsx"]`，
+   而 `package.json` 的 `test` 只是 `vitest run`（**没有** `--typecheck`）
+   ⇒ test fixture 并**不是**被类型检查强制改的。
+   夹具仍然照实改正（诚实），但那句话本身是错的，不该留在交付记录里当结论用。
+
+---
+
+### 53.59.6 验证证据与对账
+
+**四道门（节点②）**
+
+| 门 | 读数 |
+|---|---|
+| `ruff check app/` | `All checks passed!` |
+| `mypy app/` | `Success: no issues found in 331 source files` |
+| `generate_types --check` | `generated-types.ts is up to date.` |
+| pytest 全量 | `tests=8058 failures=0 errors=0 skipped=11` |
+
+**前端（节点② 动了 `api.ts` / `generated-types.ts` / `decision-card.tsx`）**
+
+- `npx tsc --noEmit`：**RC=0、输出 0 字节**；跑完 `tsconfig.json` 的 sha256 **不变**
+  （`732a19e6…c187`）—— `tsc` 不重排它（会重排的是 `next build`）。
+- `npx eslint src`：**RC=0、输出 0 字节**。
+- `vitest`：**3 文件 / 9 测试通过**（`decision-report-panel` 4 + `decision-card` 3 + `decisions/page` 2）。
+
+**四阶段变异校验（六条重锚，6/6 全过）**
+
+`green before True`（**无 `[safe-delete]` 假红指纹**）· `red after mutation` **1/1 files red** ·
+`green after restore True` · `bytes restored True`；每条**恰 1 个失败项**（D4/D5/D6 = `1 failed, 33 deselected`）。
+
+**全量对账（分量单跑，全部工具自打印）**
+
+| | 节点① 基线 | 节点② | Δ |
+|---|---|---|---|
+| `tests` | 8006 | **8058** | **+52** |
+| `testcases`（用例） | 6658 | **6664** | **+6** |
+| `subtests` | 1348 | **1394** | **+46** |
+| `failures` / `errors` / `skipped` | 0 / 0 / 11 | 0 / 0 / 11 | 0 |
+
+**Δ 逐项分解（零残差）**
+
+`+52 = +6 用例 + 46 subtest`：
+
+- **用例 +6** = `+4` 新类 `DecisionReportContractTests` ＋ `+1` `InventoryTests`（新钉「guard 名必须可解析」）
+  ＋ `+1` `WholeSetApplyTests`（新钉「整集可落位」）。
+  按 `classname` 逐模块比对两次 junit：**只有这 3 个类动过**，没有类消失或改名（6658 → 6664）。
+- **subtest +46** = `+41` 新类（**单跑实测**：`4 passed, 41 subtests passed`）
+  − `3` 被改写的旧测试原有的逐字段 `subTest`（`test_decision_report_reads_the_generated_overlays`
+  对 3 个 overlay 字段各一次；改写后的 `..._reads_the_generated_contract` 一次都没有）
+  ＋ `8` `test_the_selected_mutation_is_the_inventory_object` 的逐变异 `subTest`（**单跑实测 148**，
+  而节点① 的清单是 140 条 ⇒ 差 8，正好是新增的 J55–J62）。
+
+⚠️ **那 −3 是唯一不显然的一项**，也是这次对账里唯一必须先读 `git show c4367fe:…` 才能解释的读数：
+不做这一步就会得到「差 3、原因不明」。**读数对不上时先去读被改写掉的那一版源码**，别先怀疑环境。
+
+---
+
+### 53.59.7 登记不修
+
+- ⚠️ **`test_closed_overlay_interfaces_have_no_tail` 的硬名单没有加节点② 的 9 个新模型。**
+  它们的**闭合性本身是覆盖到的**：模型层有 `test_only_the_documented_models_stay_open`
+  （把「开放集」钉成集合相等，生产者驱动）与 `test_every_reachable_plain_model_is_registered`
+  （可达即须登记为根）两条生成式守卫；实测这 9 个在生成物里 tail 全空。
+  也就是说这是**不对称**、不是盲区。⚠️ 但那个**硬名单本身没有任何变异覆盖**
+  （全 12 套里没有一条以它为 guard）—— 这是**预存在**的，与本轮无关。
+- `ruff check tests/ scripts/` 报 **339** 条（门之外、既有，§53.57 起已记）。
+- `/events/{event_id}/decision`（`events.py:1589`）用**同一个** `build_decision_report`，
+  却声明裸 `response_model=FlexibleResponse` ⇒ 契约在 OpenAPI 里不可见。**可注册的后续小节点。**
+- `MEMORY.md` 已超其自述的注入预算（待定夺是否裁剪）。
+
+---
+
+### 53.59.8 本轮方法学（本节踩到的坑）
+
+**1. 🔴 一条变异可以「不再是变异」——那时重锚是错的，改判据才是对的。**
+D5 的针失效时，第一反应是换一个还在的字段做宿主。但那会造出一条**永远不会红**的变异：
+它盯的判据（「字段必须指生成名」）**随被退役的手写体一起消失了**。
+判据在，地址漂移 ⇒ 换锚；判据没了 ⇒ 换判据，并把「原来那条为什么没了」写进 note。
+**两者的处置方向相反，先问「还有谁在断言这件事」。**
+
+**2. 🔴 我自己的「互不重叠」声明必须能指认到**一个**分支，否则它是装饰。**
+D4 原文写着「只踩守卫的名字分支」，而它的 `new` 体内带索引签名 ⇒ 两个分支同时踩。
+**判据**：一条变异声称覆盖分支 X，就把 `new` 的体内/周边逐个照 X 以外的判据**过一遍**；
+过不去就说明它同时踩了别的分支，那句话得删或得改 `new`。
+
+**3. 🔴 判「两条变异能不能同时落位」，要**重放**而不是量区间。**
+见 §53.59.4 末条：窗口重叠的两条可以都落位，窗口不重叠的两条也可能后一条找不到针
+（如果前一条的 `new` 把它覆盖掉了）。**重叠是几何，落位是顺序**。
+
+**4. 🔴 只钉「形状」的清单测试，对「引用了一个已改名的名字」天然盲。**
+`startswith("test_")` 与「这个测试还在不在」是两件事，中间隔着一整个节点的静默腐烂。
+同族：**弱正向断言**（非空 / 非 None）对「分支根本不存在」天然盲。
+⇒ **能静态判定的规则就静态钉住**，别留给「下次手工跑一把」。
+
+**5. ⚠️ `Path.read_text(encoding=…)` / f-string 反斜杠 / 相对 `sys.path` —— 都在这轮咬了一次。**
+Python **3.11** 的 f-string 不允许表达式里出现反斜杠（3.12+ 才放开）；
+探针里 `sys.path.insert(0, "backend/…")` 这种**相对 cwd** 的路径，在 `cd backend` 之后全部失效。
+两者都只报「ModuleNotFoundError / SyntaxError」，看着像环境问题、其实是脚本自身的问题。

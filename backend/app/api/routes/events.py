@@ -130,6 +130,7 @@ from app.models.event import (
     AutoResolveResponse,
     CategoryCountsResponse,
     DailyDigestResponse,
+    DecisionReport,
     DecisionTimelineResponse,
     EventAnalysisRequest,
     EventDiscoveryResponse,
@@ -1586,12 +1587,19 @@ async def get_fresh_edges(
     return body
 
 
-@router.get("/{event_id}/decision", response_model=FlexibleResponse)
+@router.get("/{event_id}/decision", response_model=DecisionReport)
 async def get_event_decision(event_id: EventId) -> dict[str, Any]:
     """The decision report for one event: its committed prediction joined with the
     event intelligence record (event / probability / market view / edge+trust /
     confidence / recommendation / risk). 404 when the event has no committed
     prediction (e.g. a non-market event, which has no edge to act on).
+
+    The 200 is ``DecisionReport`` itself, not an envelope (audit 53.60): this
+    route returns ``build_decision_report``'s dict directly, and that is the very
+    element ``OpenDecisionsResponse.decisions`` names, so the two endpoints
+    publish one contract instead of one contract and one opaque body. Unlike
+    ``/movers`` no ``response_model_exclude_unset`` is needed -- the producer
+    writes all eighteen keys on every path, nested blocks included.
     """
     prediction = get_prediction(event_id)
     if prediction is None:

@@ -1643,7 +1643,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J62）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J63）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -1811,7 +1811,30 @@ SETS: tuple[MutationSet, ...] = (
             "🔴 **J44 的锚点为什么从 docstring 尾句起算**：本文件另有 `FreshEdgesResponse` 含"
             "「docstring 结束 + 四个恒写信封键」这段字节（短针实测 2 次），而本节还要**避让 J43 的针**"
             "（元素那一行紧随其后）⇒ 从 docstring 尾句向上取上界、止于 `offset: int`、**不含**元素那一行。"
-            "代价：那句 docstring 措辞一改这条针就断，届时应由 `count_needle != 1` 立刻报出来。",
+            "代价：那句 docstring 措辞一改这条针就断，届时应由 `count_needle != 1` 立刻报出来。"
+            "§53.60 补 J63、收掉 §53.59 留下的**同族最后一个缺口**：`GET /events/{event_id}/decision`"
+            "返回的就是 `build_decision_report` 的 dict **本身**（没有信封可命名），它的 "
+            "`response_model` 一直是裸 `FlexibleResponse` ⇒ OpenAPI 只发 "
+            "`#/components/schemas/FlexibleResponse`，报文带着**未声明形状**到达浏览器 —— "
+            "正是 53.59 在姊妹端点 `/decisions/open` 上终结掉的那个状态。"
+            "J63 的守卫判据是**路由对象身份**（`route.response_model is DecisionReport`），"
+            "不是源码文本：裸 `FlexibleResponse` 是 `extra='allow'`、零字段，退回去之后"
+            "**仍然校验通过、仍然 200、`tsc` 仍然全绿**，唯一变化是已发布的 schema 变回不透明体 ⇒ "
+            "具名契约的拦截点只能是运行时事实。"
+            "🔴 **两个前提必须跟着 J63 走**："
+            "① **具名不是零字节差**（探针 59 用例、`flexible`/`committed` 同树产出）："
+            "每个域内响应的 `$.probability` 子对象键序从 `estimated,baseline` 变为 `baseline,estimated` —— "
+            "等长、canonical 相同 ⇒ **纯键序**；老板**拍板接受**（两端口径由此统一到模型序；"
+            "备选的「改 `DecisionProbability` 字段序」会把 `/decisions/open` 的键序翻回去，未取）。"
+            "复述「具名零字节差」之前必须带上这条前提 —— 它**不成立**。"
+            "② **`DecisionReport` 会重塑 pass-through overlay**（§53.59 引入、已活在 "
+            "`/decisions/open` 上，本端点只是继承）：四个 overlay 模型**全部字段带默认值**，"
+            "具名会把记录里缺失的键实体化成默认值、并丢弃模型未声明的键。"
+            "实测**当前不可达**：全库 257 条记录里 48 条 `market_quality` 是旧 schema、"
+            "48 条 `llm_telemetry` 部分缺失、5 条 `source_reliability` 缺 `error`，"
+            "**全都没有 committed prediction**；171 个有 prediction 的事件里 overlay "
+            "**要么缺席要么与模型字段集完全一致**（0 条被重塑）⇒ 记录备查、本轮不另立变异；"
+            "哪天一条旧形记录获得了 prediction，就要拍板。",
         ),
         mutations=(
             Mutation(
@@ -3370,6 +3393,47 @@ SETS: tuple[MutationSet, ...] = (
                     "🔴 针必须带上一行 `level`：单行 `    flags: list[Any]` 是本文件 `Risk.flags: list[Any] = []` 的**子串**，"
                     "实测 2 次；而 `    level: str | None` 单行也出现 2 次（`DecisionConfidence` 有一个）"
                     "⇒ 两行组合才是最小唯一单元（实测 1 次）。"
+                ),
+            ),
+            Mutation(
+                label="J63 /{event_id}/decision 的 response_model 退回裸 FlexibleResponse：具名契约重新不可见",
+                path=_DIGEST_ROUTES,
+                old=b'@router.get("/{event_id}/decision", response_model=DecisionReport)',
+                new=b'@router.get("/{event_id}/decision", response_model=FlexibleResponse)',
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_event_decision_route_binds_the_report_model",),
+                note=(
+                    "§53.60：这是 §53.59 留下的**同族最后一个缺口**。"
+                    "`/events/{event_id}/decision` 与 `/events/decisions/open` 共用**同一个生产者** "
+                    "`build_decision_report`，后者经 `OpenDecisionsResponse.decisions` 已具名，"
+                    "前者返回的是**无信封的裸报告**，于是它的 `response_model` 还停在裸 "
+                    "`FlexibleResponse` ⇒ OpenAPI 发的是 `#/components/schemas/FlexibleResponse`，"
+                    "报文到达浏览器时**没有已声明的形状** —— 正是 53.59 在姊妹端点上终结的状态。"
+                    "拦它的判据是**路由对象身份**（`route.response_model is DecisionReport`），"
+                    "不是源码文本：`FlexibleResponse` 是 `extra='allow'`、零字段，退回去之后"
+                    "**仍然校验通过、仍然 200、`tsc` 仍然全绿**，唯一变化是已发布的 schema 变回不透明体。"
+                    "🔴 **具名不是零字节差**：探针（`.workbuddy/audit-2026-10-03/probe_5360.py`，"
+                    "59 用例 = 46 条生产真实行 + 13 条合成，`flexible`/`committed` 同树产出）实测"
+                    "每个域内响应的 `$.probability` 子对象键序从 `estimated,baseline` 变为 "
+                    "`baseline,estimated`（等长、canonical 相同 ⇒ **纯键序**）；"
+                    "老板拍板**接受**（两端口径由此统一到模型序；备选的「改 `DecisionProbability` 字段序」"
+                    "会把 `/decisions/open` 的键序翻回去，未取）。"
+                    "复述「具名零字节差」之前必须带上这条前提 —— 它不成立。"
+                    "🔴 **重塑隐患是模型的性质、不是本变异的**：`DecisionQuality`/`MarketQuality`/"
+                    "`SourceReliability`/`LLMTelemetry` **全部字段都带默认值**（0 必填），"
+                    "所以具名会把记录里**缺失的键实体化成默认值**、并**丢弃模型未声明的键**。"
+                    "实测不可达：全库 257 条记录里 48 条 `market_quality` 是**旧 schema**"
+                    "（`degraded`/`degrade_reason`/`low_liquidity_flag`）、48 条 `llm_telemetry` 部分缺失、"
+                    "5 条 `source_reliability` 只缺 `error`，**全都没有 committed prediction** ⇒ "
+                    "两个端点都到不了；171 个**有** prediction 的事件里 overlay **要么缺席要么与模型字段集完全一致**"
+                    "（0 条会被重塑）。⚠️ 这条性质是 §53.59 引入、已活在 `/decisions/open` 上，"
+                    "本端点只是继承 —— 哪天一条旧形记录**获得了 prediction**，它就会开始被重塑，届时要拍板。"
+                    "🔴 针是**整行装饰器**、不含换行：`response_model=DecisionReport)` 单独算"
+                    "在本文件命中 **1 次**（已字节复核），而 `response_model=FlexibleResponse)` 命中 **55 次**"
+                    "⇒ 必须带路径前缀才是唯一单元。守卫读的是 `router.routes` 里的路由对象"
+                    "（`include_router` 之前路径仍是 `/{event_id}/decision`），本文件、"
+                    "`test_generate_types.py` 里都没有 `/{event_id}/decision` 或 "
+                    "`response_model=DecisionReport` 字面量（各 0 次，已复核）⇒ 不自指。"
                 ),
             ),
         ),

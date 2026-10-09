@@ -1846,6 +1846,60 @@ class DecisionReportContractTests(unittest.TestCase):
             "isinstance(..., list), so list[str] narrows by observation",
         )
 
+    def test_the_event_decision_route_binds_the_report_model(self):
+        """The second consumer of ``build_decision_report`` publishes the same
+        contract (audit 53.60).
+
+        ``/decisions/open`` names its element through ``OpenDecisionsResponse``.
+        ``GET /events/{event_id}/decision`` returns ``build_decision_report``'s
+        dict *directly* -- there is no envelope to name -- so before 53.60 its
+        ``response_model`` was the bare ``FlexibleResponse`` and OpenAPI
+        published ``#/components/schemas/FlexibleResponse``: a body reaching the
+        browser with no declared shape, exactly the state 53.59 ended for the
+        sibling endpoint.
+
+        Identity, not ``issubclass``: ``FlexibleResponse`` is ``extra="allow"``
+        with no declared fields, so a regression to it still validates, still
+        answers 200 and still passes ``tsc`` -- the only thing that changes is
+        the published schema. So the intercept is the *route object* read off
+        the router, not the source text: a reformatting, a renamed kwarg or a
+        decorator comment cannot fool it, and the failure names the endpoint
+        that regressed.
+
+        Read off ``router.routes`` rather than ``app.routes``: the prefix is
+        applied at ``include_router`` time, so inside the module the path is
+        still ``/{event_id}/decision``.
+        """
+        from fastapi.routing import APIRoute
+
+        from app.api.routes import events as events_routes
+        from app.models.event import DecisionReport, FlexibleResponse
+
+        routes = [
+            route
+            for route in events_routes.router.routes
+            if isinstance(route, APIRoute) and route.path == "/{event_id}/decision"
+        ]
+        self.assertEqual(
+            len(routes),
+            1,
+            "expected exactly one /{event_id}/decision route in the events router",
+        )
+        self.assertIs(
+            routes[0].response_model,
+            DecisionReport,
+            "the /{event_id}/decision route no longer binds DecisionReport. It "
+            "is the second consumer of build_decision_report and must publish "
+            "the same contract /decisions/open publishes (audit 53.60).",
+        )
+        self.assertIsNot(
+            routes[0].response_model,
+            FlexibleResponse,
+            "the /{event_id}/decision route regressed to the bare "
+            "FlexibleResponse: the report reaches the browser with no declared "
+            "shape again, which is the state audit 53.60 closed",
+        )
+
     def test_the_report_callsite_reads_the_generated_contract(self):
         """No copy in ``api.ts``, and the call site reads the published envelope.
 

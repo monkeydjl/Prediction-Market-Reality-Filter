@@ -12837,3 +12837,312 @@ export interface PendingLinksResponse {
 两个模型共享十个字段是刻意的；但刻意重复一旦没有判据，就是纯负债。
 本节的做法：把重叠写成循环断言，再把**其他两处**的职责切开，使一条只改共享字段注解的变异
 **只能**红在那个循环上 —— 否则「这条变异红在重叠上」永远无法与「它红在别处」区分。
+
+## 53.58 `GET /events/predictions/recent`：元素具名的第六个节点，以及**漏声明 = pydantic 静默丢字段**这个反方向
+
+承接 §53.57。C1 剩余节点里第二个可离线驱动的（B 节点，§53.57 结尾表里的第二行）。
+证据强度与 §53.54–§53.57 同级 —— 而且比那三节**更直白**：这一次**不需要替换任何东西**（既不换语料、也不换筛选条件），
+活库上直接驱动真实路由就有 **171** 条元素。
+
+🔴 **本节与前五节的方向相反，这是它值得单独成节的理由：**
+
+| | 前五个节点（§53.53–§53.57） | 本节 |
+| --- | --- | --- |
+| 元素模型 | 新发布的 `BaseModel`（闭合） | 同样是闭合的 `BaseModel` |
+| 「声明得比生产者少」的后果 | 类型**偏松**（前端读不到字段，`tsc` 不响） | **pydantic 把多余的键从响应里删掉 —— 直接改线上字节** |
+| 谁能发现 | 只有静态守卫 | 也只有静态守卫（`tsc` 看不见、运行时也看不到「少了一个键」） |
+
+前五节的风险是「前端少看到几列」；本节的风险是「**后端少返回几列**」，而后者在 `res.json() as T` 的断言世界里
+没有任何运行时症状 —— 所以它只能靠「声明的键数 = 生产者的键数」这条**静态**判据拦住。见 53.58.4 的表驱动守卫。
+
+### 53.58.1 取证：真实路由驱动，活库直接出样本
+
+方法同 §53.54–§53.57：把真实输入喂进**生产者本身**，收集它**实际产出**。
+探针 `.workbuddy/audit-2026-10-03/probe_c1_remaining.py:119` 调的是
+`asyncio.run(get_recent_predictions(limit=200, offset=0))` —— **真实路由函数**，不是 store 层。
+
+⚠️ 与 §53.57 不同，本节**没有例外**：不需要副本、不需要补行。读数（同名 `.txt`）：
+
+| 读数 | 值 |
+| --- | --- |
+| 发出 item | **171** |
+| 不同 key 集 | **1** |
+| union keys | **35** |
+| 显式 `null` / 缺席 | **0 / 0**（每一个键、每一条） |
+| 严格模型（35 字段、`extra="forbid"`） | **接受 171 / 拒绝 0** |
+| 全 null 的键 | **4**：`direction_correct`（INTEGER）、`snapshot_evidence_strength` / `snapshot_conflict_score` / `snapshot_market_quality_score`（REAL） |
+| 有 null 也有值的键 | 4：`actual_outcome`（94/77）、`brier_score`（94/77）、`resolved_at`（93/78）、`segment_skill`（78/93） |
+| 其余 27 个键 | 171/171 单类型 |
+
+35 键 = `SELECT * FROM predictions` 的 **33 列** + 路由用 `record.get(..., "")` 写进去的两个 title
+（`event_title` / `event_title_zh`）。生产者侧的两处事实（`backend/app/memory/prediction_store.py`）：
+
+- `CREATE TABLE IF NOT EXISTS predictions`：**33 列**，其中 **12 列**声明 `NOT NULL`；
+  🔴 `id` **不在**那 12 里（`id TEXT PRIMARY KEY`）—— SQLite 对 `TEXT PRIMARY KEY` **不强制** `NOT NULL`
+  （实测 3.45.1 接受 `INSERT ... VALUES (NULL, …)`）⇒ `id` 的「非空」是 **store 的保证**（`INSERT` 里写的是 `str(uuid.uuid4())`），
+  不是 schema 事实。这一点直接决定了 53.58.4 的注解口径，也决定了守卫注释怎么写（见下）。
+- `list_recent` = `SELECT * FROM predictions ORDER BY created_at DESC, event_id DESC LIMIT ? OFFSET ?`
+  然后 `[dict(row) for row in rows]` —— **没有任何类型转换**。这直接决定 `direction_correct` 的忠实类型（53.58.3）。
+- `count` 与 `total` **不是一回事**：`count = len(predictions)`（本页长度），`total = count_predictions()`（**全表** `COUNT(*)`）。
+  两者都无条件写，但语义不同 —— 取名时别把 `total` 读成「过滤后的总数」。
+
+### 53.58.2 那只手写副本：18 of 35，而且它把信封也内联了
+
+`frontend/src/lib/api.ts` 的手写 `PredictionRecord` 有 **18** 个字段，其中 **10 个可选**：
+
+```ts
+export interface PredictionRecord {
+  id: string;
+  event_id: string;
+  event_title?: string;
+  /* … 共 18 个名字，只有 id / event_id / ai_probability / market_probability / raw_edge 必填 … */
+  resolved_at?: string | null;
+}
+```
+
+调用点把**信封也内联**写在 generic 里（连 `count` 都标了可选）：
+
+```ts
+api<{ predictions: PredictionRecord[]; count?: number; total?: number; limit?: number; offset?: number }>(
+  `/events/predictions/recent?limit=${limit}&offset=${offset}`,
+)
+```
+
+⇒ 两处都对不上生产者：**元素少 17 列**（35 − 18），**信封五个键全部可选**（生产者无条件写全部五键）。
+而 `api<T>` 是 `res.json() as T` 断言 ⇒ `tsc` 与 `vitest` 对这些数字**一无所知**。
+
+错过的 17 列（probe 里 171/171 都存在，只是前端从没声明过）：
+`base_rate_category` / `liquidity` / `volume` / `decision` / `liquidity_factor` / `qualified` / `segment_n` /
+`segment_min_samples` / `segment_skill` / `status` / `snapshot_question` / `snapshot_recommendation` /
+`snapshot_confidence` / `snapshot_evidence_strength` / `snapshot_conflict_score` /
+`snapshot_market_quality_score` / `snapshot_source_platform` / `direction_correct` / `edge_bucket` / `confidence_bucket`。
+
+爆炸半径：唯一消费者 `components/history/recent-predictions.tsx` 只读 **11** 个字段
+（`id` / `event_id` / `event_title(_zh)` / `platform` / `created_at` / `status` / `ai_probability` /
+`market_probability` / `raw_edge` / `brier_score`）—— **全在 35 里** ⇒ 具名是零运行时风险。
+前端夹具 `recent-predictions.test.tsx` 则**必须**跟着补全（35 个全 required ⇒ 部分对象不再是 `PredictionRecord`），
+补的时候刻意选了「渲染结果不变」的取值（`platform: ""`、`brier_score: null`）。
+
+### 53.58.3 契约点（四点已拍板）
+
+| 点 | 取值 | 理由 |
+| --- | --- | --- |
+| 元素处置 | **具名 35 字段 `RecentPredictionItem`** | 与 `EdgeSeriesPoint` / `FreshEdgeItem` / `EventMoverItem` / `SimilarEventItem` / `PendingLinkItem` 同构 |
+| 可空性口径 | **镜像 NOT NULL**（保守方向） | 可空列即使 171/171 从未为 null 也保留 `\| None` ——「没观测到 ≠ 不可能」 |
+| 三个 INTEGER 列与 `direction_correct` | **`int \| None`** | `list_recent` 走 `[dict(row) …]`、**不转换** ⇒ 声明 `bool` 是**改线上字节** |
+| 本轮范围 | **只做本节点** | 其余两个信封（`EventDiscoveryResponse.events` / `OpenDecisionsResponse.decisions`）另案 |
+
+**不需要 `response_model_exclude_unset`**：35 个键**全部无条件写** ⇒ 没有「缺席」可言 ⇒ 旗子无事可做。
+这是本族第四个位置 —— §53.55 **需要**它（有一个条件写入的键）、§53.56 / §53.57 不需要、本节也不需要。
+
+🔴 **`direction_correct` 是本节最值得单独写的一条，因为它与 §53.57 的 `EventMarketLink.verified` 恰好相反：**
+
+| | `EventMarketLink.verified`（§53.57） | `RecentPredictionItem.direction_correct`（本节） |
+| --- | --- | --- |
+| 读法 | `event_market_link_store._row_to_dict` **做了** `bool(...)` | `list_recent` **没做**任何转换 |
+| 忠实类型 | `bool` | `int \| None` |
+| 声明反了会怎样 | `int` ⇒ 生成 `number`（更松） | `bool` ⇒ JSON 里 `1` 变成 `true`（**改字节**） |
+
+**同一个词表、同一个 SQLite 事实（没有布尔类型），两个端点两个答案 —— 不能按名字推，只能看读法。**
+这条也写进了变异 J46（53.58.5）。
+
+### 53.58.4 落地
+
+**后端**（三个文件，`git diff --numstat` 实测）
+
+- `backend/app/models/event.py`（**+80/−5**）：新增 `RecentPredictionItem`（**35 字段、全无默认值**）；
+  `RecentPredictionsResponse` 五个键由 `count/total/limit/offset = 0/0/10/0` +
+  `predictions: list[dict[str, Any]] = Field(default_factory=list)` **收紧成 required** 且 `predictions: list[RecentPredictionItem]`。
+  🔴 **docstring 里那条口径本轮被我自己改正过一次**（见 53.58.8 #1）：初稿写的是
+  「`NOT NULL` 列是裸类型，其余列 `X | None`」，但 `id` 是 `TEXT PRIMARY KEY`、SQLite 并不强制非空
+  ⇒ 那句话对 `id` **不成立**。改成「**裸类型 ⟺ 生产者交不出 null**」：12 个 `NOT NULL` 列 +
+  `id`（store 生成的 uuid4，属**保证**而非 schema 事实）+ 两个 title（路由 `record.get(..., "")`，只可能是空串）。
+  ⚠️ 那两个 title **根本不是表的列** —— 它们是路由加的键，所以「其余**列**」这句话的射程本来就不含它们。
+- `backend/app/models/_frontend_export.py`（**+2/−0**）：`RecentPredictionItem` 进 import + `__all__`
+  （**必须是根**：只被 `$ref` 引用就会保留 `[k: string]: unknown` 尾巴，而本节要的是闭合）。
+- `backend/app/api/routes/events.py`（**+10/−1**）：`/predictions/recent` **只加 docstring**
+  （写明「五个信封键 + 35 个元素键全部无条件写 ⇒ 不需要 `exclude_unset`；具名才让 33 列可见；
+  声明更少会静默丢字段」，**装饰器一字未动** —— 本节的 `response_model` 本来就已具名）。
+
+**重生成**（`frontend/src/lib/generated-types.ts`，**+79/−7**）
+
+| 读数 | 改前（§53.57 末） | 改后 |
+| --- | --- | --- |
+| 工作树字节 | 45 706 B | **48 985 B** |
+| CRLF（= 行数） | 1 186 | **1 258** |
+| `bare_lf` | 0 | **0** |
+| `export interface` 数 | 58 | **59**（+`RecentPredictionItem`） |
+| sha256（前 16 位） | `bf04a3a6de88785e`（§53.57 记录） | `e7f7529af82c40aa` |
+
+新元素 35 字段、闭合无尾巴；信封五键由 `?` 变必填：
+
+```ts
+export interface RecentPredictionItem {
+  id: string;
+  /* … 共 35 个名字，全部 required，无 ?，无 [k: string]: unknown … */
+  direction_correct: number | null;   // 不是 boolean —— 见 53.58.3
+  event_title: string;
+  event_title_zh: string;
+}
+
+export interface RecentPredictionsResponse {
+  count: number;        // 原来是 count?: number
+  total: number;
+  limit: number;
+  offset: number;
+  predictions: RecentPredictionItem[];  // 原来是 predictions?: { [k: string]: unknown }[]
+  [k: string]: unknown;                 // 信封自己那张仍是 FlexibleResponse 的设计内开放
+}
+```
+
+**前端**
+
+- `frontend/src/lib/api.ts`（**+10/−21**）：删掉手写 `PredictionRecord`（interface 39 → **38**），
+  改 `export type PredictionRecord = GeneratedRecentPredictionItem;` 并新增 `RecentPredictionsResponse` 别名；
+  调用点由**内联信封**改成 `api<RecentPredictionsResponse>`。
+- `frontend/src/components/history/recent-predictions.test.tsx`（**+40/−5**）：新增 `RECORD_BASE`
+  （`Omit<PredictionRecord, "id" | "event_id" | "event_title">`，32 个字段），`prediction()` 改成展开它。
+  🔴 这一步是**编译逼出来的**，不是洁癖：35 个键全 required ⇒ 旧夹具（6 个字段）不再是 `PredictionRecord`。
+  **这条恰好是「收紧类型」的可执行收据**（`tsc` 真的看见了）。
+- `frontend/src/components/history/recent-predictions.tsx`：**零改动**（`PredictionRecord` 名字保留为别名）。
+
+### 53.58.5 守卫与变异
+
+**守卫**（`backend/tests/test_generate_types.py`，**+226/−1**，新类 `RecentPredictionsContractTests`，3 用例 / **50** subtests）
++ 闭合清单 **16 → 17**（+`RecentPredictionItem`：元素、且**必须是根**）。
+
+| 用例 | 判据 | 承重的断言 |
+| --- | --- | --- |
+| ① 信封指元素 | 五键名字集 + `count/total/limit/offset` 注解 + **模型身份** + 五键全 required | 身份（`list[dict]` 回归仍校验通过、仍有尾巴） |
+| ② 元素 35 键 | 名字集 + **35 全 required** + **35 个注解**（表驱动） | 注解（**更紧**与**更松**两个方向都在这一条上） |
+| ③ 唯一调用点 | 三个名字不得重新声明 + 两条别名精确串 + 单处 generic | 按名判（老判据看不见） |
+
+🔴 **为什么只有 3 个用例（§53.57 是 4 个）**：那第 4 个用例是「元素 = 行 + 4」的**重叠不变量**，
+它存在的前提是**有两个模型共享字段**（兄弟端点）。本节只有一个模型，没有重叠可比 ⇒ 硬凑一个
+只会是「把 ② 复制一遍」。**用例数少一个不是漏掉什么，是这一节的形状本来就少一个面。**
+
+🔴 **② 的 35 键注解表是本节的承重核心**，因为本节有两个**方向相反**的失败模式，而**只有注解表能同时拦住**：
+- 更松：`trust: float | None` 被收成 `float` 也不会被「名字集」看见（J45）；
+- 改字节：`direction_correct: int | None` 漂成 `bool`（J46）。
+
+**变异**（`frontend-type-closure` 追加 J40–J46，该 set 由 45 条增至 **52 条**；`list` 报 **12 套 / 132 条**）
+
+四阶段全部通过（`verify --index 46-52`，之后因 docstring 改正**复跑 49-52**）：
+
+| # | 变异 | 踩的判据 | 结果 |
+| --- | --- | --- | --- |
+| J40 | `api.ts` 又声明 `PredictionRecord`（别名刻意留着） | ③ assertNotIn | ✅ 红 |
+| J41 | `api.ts` 又声明 `RecentPredictionsResponse`（同循环的第三个名字） | ③ assertNotIn | ✅ 红 |
+| J42 | `recentPredictions` generic 退回内联（针**不含路径**） | ③ 调用点 | ✅ 红 |
+| J43 | `predictions` 退回 `list[dict[str, Any]]` | ① 身份 | ✅ 红 |
+| J44 | `count` 加回默认值 | ① required | ✅ 红 |
+| J45 | `trust: float \| None` → `float`（比 schema **更紧**） | ② 注解 | ✅ 红 |
+| J46 | `direction_correct: int \| None` → `bool`（**改字节**） | ② 注解 | ✅ 红 |
+
+每条**恰好一个测试失败**：J43 是方法体本身失败（`1 failed, 26 deselected, 4 subtests passed` ——
+身份断言不在 `subTest` 里，它一红后面那 5 个 required subtest 就没跑到）；
+其余六条各红一个 subtest（`1 failed, 1 passed, …, N subtests passed`）。⇒ 归因可辨。
+（`26 deselected` = 27 个方法 − 1 个被 `-k` 选中；§53.57 时是 `23` = 24 − 1。）
+
+🔴 **J44 的锚点为什么从 docstring 尾句起算**：`event.py` 里 `FreshEdgesResponse` 也含
+「docstring 结束 + 四个恒写信封键」这段字节（短针实测 **2** 次），而本节还要**避让 J43 的针**
+（元素那一行紧随 `offset` 之后）⇒ 从 docstring **尾句**向上取上界、止于 `offset: int`、**不含**元素行
+（§53.56 的 J29 同款做法）。代价：那句 docstring 措辞一改这条针就断 —— 届时应由 `count_needle != 1` 立刻报出来。
+✅ **本轮实测过一次这个保护**：改正 `RecentPredictionItem` 的 docstring 时，J44 的针**没有**断
+（它锚的是信封 docstring 的**尾**句，而改正动的是元素 docstring 的**中**段），全部 52 条针复检仍各命中 1 次。
+
+🔴 **有意不登记的两条（都带前提）**：
+1. `assertNotIn` 循环的**第二个**名字（生成名 `RecentPredictionItem` 本身）不补变异 ——
+   它与 J41 走**同一个** `assertNotIn(name, api_bodies)` 断言形状、同一条判据；
+   J40 证明该判据承重、J41 证明它走到了第一个名字之后，再加一条只让计数虚胖。
+   ⚠️ **前提**：三个名字仍共用同一个断言形状；若哪天改成按名分立的断言，第二、三个名字要各补一条。
+2. `RecentPredictionItem` 其余 **33** 个字段的注解不逐条补变异 —— 它们与 J45/J46 走同一个
+   `assertEqual(annotation, want)` 循环，覆盖的是**两类的代表**（可空 `float` 的宽窄、可空 `int` 的取值忠实性）。
+   ⚠️ **前提**：若那张 35 键注解表哪天从表驱动拆成 35 条独立断言，这份覆盖就退化成只覆盖两个成员，届时要补。
+
+### 53.58.6 门与全量
+
+| 门 | 读数 |
+| --- | --- |
+| `ruff check app/` | `All checks passed!` |
+| `ruff check`（改动的 `scripts/` + `tests/` 两个文件） | `All checks passed!` |
+| `mypy app/` | `Success: no issues found in 331 source files` |
+| `python -m scripts.generate_types --check` | `generated-types.ts is up to date.` |
+| `tsc --noEmit` | 0 条 `error TS` |
+| `eslint`（改动的三个前端文件） | 无输出（干净） |
+| `vitest`（`recent-predictions.test.tsx`） | `1 passed` |
+| `test_generate_types.py` + `test_mutation_verify.py` | **`89 passed, 334 subtests passed`**（junit `tests=423 failures=0 errors=0`） |
+| 后端全量 | **`tests=7985 failures=0 errors=0 skipped=11`**（元素 **6655**；日志 `6644 passed, 11 skipped, 1330 subtests passed in 1446.63s`） |
+
+⚠️ **全量跑了两遍**：第一遍在 53.58.8 #1 那次 docstring 改正**之前**
+（`junit_full_53_58.xml` / `pytest_full_53_58_final.log` 的同名 a 版：`6644 passed, 11 skipped, 1330 subtests passed in 1470.56s`），
+改正后又跑了一遍**最终态**（`junit_full_53_58_final.xml`，即上表）。两遍读数**逐项相同**
+（`tests=7985` / 元素 6655 / subtests 1330 / skipped 11）—— 这与「改的是 docstring、没有任何断言读它」一致；
+**上表与下面的对账一律引用最终态那一遍**（`junit_full_53_58_final.xml`），a 版只作「改正前也绿」的旁证。
+
+**全量对账**：对 §53.57 基线（`junit_full_53_57.xml`，`tests=7924` / 元素 6652 / subtests 1272）——
+**`tests` +61、元素 +3、subtests +58**。junit 按 `(classname, name)` 逐条 diff **零删除**，
+新增者**恰为**新类 `RecentPredictionsContractTests` 的 3 个方法；逐模块只有一处变化：
+`tests.test_generate_types` **24 → 27**（`git diff --numstat` 的 **8** 个文件与 53.58.4 逐项相符）。
+三个分量**各自单跑实测**：
+
+| 分量 | §53.57 末 | 本节 | Δ |
+| --- | --- | --- | --- |
+| 新类 testcase | 0 | 3 | +3 |
+| 新类 subtest（`RecentPredictionsContractTests`） | 0 | 50 | +50 |
+| 闭合清单（`test_closed_overlay_interfaces_have_no_tail`）subtest | 16 | 17 | +1 |
+| `test_mutation_verify.py` subtest | 159 | 166 | +7 |
+
+⇒ `+61 = 3（用例）+ 50 + 1 + 7` ✅ **无余量**。
+🔑 **为什么变异那条是 +7 而不是 +8**：本节**没有新 `group`**（§53.57 的 J35/J36 因信封只有一个字段而被迫同组，
+本节信封有五个键、J43/J44 改的是**不同字节**，靠锚点避开而不是靠 `group`）。
+守卫里 `test_the_selected_mutation_is_the_inventory_object` 按**每条变异**各占 1 个 subtest（+7）、
+`test_grouped_mutations_rewrite_the_same_bytes` 按**每个 group** 各占 1 个（+0）。
+
+✅ **复跑守卫未漂生成物**：`test_generate_types.py` 会**重新生成** `generated-types.ts`，
+本节跑了它多次（四阶段 7 跑 + 复跑 4 跑 + 全量 + 单跑）⇒ 跑后对 `generated-types.ts` 与 `api.ts` 取 sha256：
+**48 985 B / `e7f7529af82c40aa…`**、**43 020 B / `fa967b4024c4eff2…`**；
+其中 `api.ts` 与首次记录**逐字节相同**，`generated-types.ts` 的差异**全部**来自 53.58.8 #1 那次 docstring 改正
+（改正后又跑了一次 `--check`：`up to date`）。
+
+### 53.58.7 未决 / 有意不做
+
+- **C1 剩 2 个信封**：`EventDiscoveryResponse.events`（元素 = 已发布 `EventRecord`，**开放有尾巴**、
+  生产者需联网 + LLM）、`OpenDecisionsResponse.decisions`（18 顶层键 + 8 个内联嵌套对象、
+  真漂移 `llm_telemetry` 47/47 null）；`EventListResponse` **不按元素具名处置**。
+- ⚠️ **新登记一个既有显示缺陷（本节范围外，不修）**：`recent-predictions.tsx` 的
+  `fmtBrier(p.brier_score)` 在 `brier_score === null`（未结算，实测 94/171 条）时，
+  `Number(null) === 0` ⇒ 渲染成 **`"0.000"`** 而不是 `"—"`。
+  夹具按**忠实的 `null`** 写（不去迁就这个 bug），所以它**仍然**会在页面上印 0.000。
+  这条与本节无关（是渲染层，不是契约层），登记备查 —— 别把它混进「类型收紧」的账里。
+- **死 re-export 仍是 2 个**：`AutoResolveResponse` / `EventListResponse`。
+- ⚠️ **sports 侧的同名近邻**（§53.57 已记，这里只做交叉引用）：`usePendingLinks()` 打的是
+  `/sport-markets/pending`，与 `PendingLinkItem` 无关。
+- 🔴 **`ruff check tests/ scripts/` 报 339 条**（门之外、既有，§53.57 已记）。
+- ⚠️ **`MEMORY.md` 已 35 376 B，超出自述的「核心 ≈15.8KB」注入预算**（待定夺是否裁剪 §4.3 的累积巨行）。
+- 本节随本轮改动**未推送**（当前 `ahead 34`）。
+
+### 53.58.8 本轮方法学（本节踩到的坑）
+
+**1. 🔴 我自己的 docstring 里写了一条**经不起推敲**的口径，而且是**我自己**用一个探针推翻的。**
+`RecentPredictionItem` 的初稿写着「Types mirror the *schema* … `NOT NULL` columns are bare; every other column
+is `X | None`」。取证时顺手验证了 SQLite 对 `TEXT PRIMARY KEY` 的行为（3.45.1：**接受** NULL `id`）
+⇒ 那句话对 `id` 不成立：它既不是 `NOT NULL` 列，也没有被声明成 `str | None`。
+改正后的口径是「**裸类型 ⟺ 生产者交不出 null**」，并显式写下 `id` 的**前提**（store 的 `INSERT` 保证，不是 schema 保证）。
+⇒ **教训**：「镜像 schema」这种说法**默认了 DDL 就是保证**，而 SQLite 的 `PRIMARY KEY` 恰恰不是。
+只加注释也要跑对应守卫（否则 J44 的针断了都不知道）；这次侥幸没断，是因为针锚在**另一段** docstring 上。
+
+**2. 收紧一个闭合模型的类型，会顺手把「夹具不完整」变成编译错误 —— 这是好消息。**
+35 个键全 required 之后，旧夹具（6 个字段）立刻不再是 `PredictionRecord`，`tsc` 报错。
+⇒ 与 §53.55 的 `app-nav.test.tsx`（无类型 mock ⇒ **永远不会红**）恰好相反：
+**「收紧了会不会有人发现」的判据是「夹具是不是有类型的」**，不是「有没有夹具」。
+
+**3. 同一个 store 事实，两个端点两个忠实类型 —— 忠实性只能看读法。**
+`EventMarketLink.verified` 是 `bool`（`_row_to_dict` 转换了），`RecentPredictionItem.direction_correct` 是 `int | None`
+（`list_recent` 没转换）。两者背后是同一次 SQLite「没有布尔类型」的妥协。
+⇒ **看到「两个模型都该是同一个类型」的直觉时，先去读那两处的转换代码**；J46 与 §53.57 的 J37 是这条的两个方向。
+
+**4. 元素越宽，「漏声明」越贵：宽元素让「声明得少」从「偏松」升级成「改字节」。**
+前五节的元素都是 8–14 键、由 store 逐列构造；本节 35 键、由 `dict(row)` **整行铺开** ——
+于是「模型里少写一个字段」的后果从「前端读不到」变成「响应里没有」。
+⇒ **判据**：生产者是「逐键构造」还是「整行铺开」？**整行铺开 + 闭合模型 = 少一个字段少一个键。**

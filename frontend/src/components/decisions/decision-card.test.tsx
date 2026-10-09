@@ -64,6 +64,9 @@ function baseReport(overrides: Partial<DecisionReport> = {}): DecisionReport {
       decision_rationale_zh: "类别 skill 为正且流动性充足",
       downgrade_reason: null,
     },
+    market_quality: null,
+    source_reliability: null,
+    llm_telemetry: null,
     ...overrides,
   };
 }

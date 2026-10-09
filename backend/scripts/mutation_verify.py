@@ -1643,7 +1643,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J54）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J62）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -1665,12 +1665,31 @@ SETS: tuple[MutationSet, ...] = (
             "§53.52 把同一条「生成物是唯一真源」的规则推到了**消费侧**：`api.ts` 是手写模块，"
             "没有生成器写它，所以它自己声明一份 overlay 副本时**编译、eslint、tsc 全绿** —— "
             "报文经 `api.ts` 的 `api<T>` 助手（`const data = await res.json() as T`）到达，"
-            "那个 cast 对形状什么都不主张。D4/D5/D6 各踩守卫的三个**互不重叠**的判据：D4 踩「名字以 `Overlay` 结尾」、"
+            "那个 cast 对形状什么都不主张。D4/D5/D6 原本各踩守卫的三个**互不重叠**的判据：D4 踩「名字以 `Overlay` 结尾」、"
             "D5 踩「字段必须指生成名」、D6 踩「体内任意位置出现索引签名」。"
-            "为什么必须三条：只补一条就分不清守卫哪半是承重的 —— 尤其 D5，"
-            "没有它，「副本没回来」与「字段仍读生成类型」会被同一个绿结果混为一谈，"
-            "而 §53.52 同时做了这两件事。D6 特意把索引签名放在**非末行**："
+            "为什么必须是三条：只补一条就分不清守卫哪半是承重的 —— "
+            "「副本没回来」与「引用仍读生成类型」是两件事，§53.52 同时做了这两件，"
+            "一个绿结果会把它们混为一谈。D6 特意把索引签名放在**非末行**："
             "首版探测器只看最后一个非空行 ⇒ 会漏掉它，改成「体内任意位置」后这条才红。"
+            "🔴 **§53.59 节点② 把这三条的靶子全部换过 —— 换的是判据，不只是地址**"
+            "（§4.3「针的语义会随生产代码变化」，本轮一次性兑现三条）："
+            "① **D5 原来那条判据没有了**。它打的是**手写 `DecisionReport` 体内**的一个 overlay 字段，"
+            "守卫当时断言「字段必须指生成名」；节点② 把那份手写体退役成别名之后，"
+            "那个字段不复存在，而且**没有任何守卫还在断言字段指向** ⇒ "
+            "把这条重锚到别的 interface 字段上也不会变红，那就不再是一条变异（§4.2 阶段②「变异后必红」）。"
+            "所以 D5 改打**同族里唯一还没人覆盖**的那条判据："
+            "`test_decision_report_reads_the_generated_contract` 的**第三个**断言 —— "
+            "别名必须**逐字**是 `GeneratedDecisionReport`（现有 148 条里没有任何一条碰过它，已 grep 确认）。"
+            "覆盖的仍然是「契约来源必须是生成类型」，只是从**字段那层**上移到**别名那层**："
+            "节点② 之后 `DecisionReport` 在 `api.ts` 只剩别名这一处声明。"
+            "② **D4 原来的分工声明按字面从来不成立**：它的 `new` 体内**同时**写着 `[key: string]: unknown;` ⇒ "
+            "名字分支与索引分支会**同时**踩，于是「D4 证明名字分支承重」这句话"
+            "在索引分支坏掉时**照样为真**。去掉那一行之后 D4 只踩名字分支，"
+            "与只踩索引分支的 D6 才真的互不重叠。"
+            "③ D6 与 J13 只是换宿主/换地址（`DecisionReport` 体内 → `CategoryCoverage` 体内；"
+            "被退役的手写体 → `EventMoversResponse` 的别名行），判据未变。"
+            "三条新锚都是「对全部 api.ts 针逐个算命中窗口」选出来的：实测各命中 1 次、两两字节区间不相交；"
+            "三条的 `guards` 也同步换成改名后的 `test_decision_report_reads_the_generated_contract`。"
             "§53.53 把同一条规则推进到 `GET /events/{id}/history`：`event.py` 发布了三个具名模型"
             "（`EventAuditSnapshot` / `TrendSummary` / `EdgeTrajectorySummary`），"
             "前端三个手写类型（`types.ts` 的 `HistorySnapshot` / `Trend`、`api.ts` 的 `EdgeTrajectory`）"
@@ -1870,65 +1889,95 @@ SETS: tuple[MutationSet, ...] = (
             Mutation(
                 label="D4  手写 overlay 副本长回来：api.ts 又自己声明一份",
                 path=_API_TS,
-                old=b"export interface DecisionReport {",
+                old=(
+                    b"// Re-export generated response types (replaces hand-written inline versions)."
+                ),
                 new=(
                     b"export interface SourceReliabilityOverlay {\n"
                     b"  downgrade_reason?: string | null;\n"
-                    b"  [key: string]: unknown;\n"
                     b"}\n\n"
-                    b"export interface DecisionReport {"
+                    b"// Re-export generated response types (replaces hand-written inline versions)."
                 ),
                 guard_file=_T_GENERATE_TYPES,
-                guards=("test_decision_report_reads_the_generated_overlays",),
+                guards=("test_decision_report_reads_the_generated_contract",),
                 note=(
-                    "把 §53.52 退役掉的那种手写副本还原回去（放在 `DecisionReport` **之前**，"
+                    "把 §53.52 退役掉的那种手写副本还原回去（插在 `DecisionReport` 别名**下方**，"
                     "所以 TS 语法仍然合法；守卫是文本判据，不看语法）。"
                     "`api.ts` 没有任何生成器写它 ⇒ 这种回归**编译、lint、类型检查全绿**："
                     "报文经 `res.json() as T` 到达，那个 cast 对形状什么都不主张。"
-                    "针 `export interface DecisionReport {` 在 `api.ts` 恰好 1 次（`count_needle` 实测），"
-                    "单行 ⇒ 与检出约定无关；`new` 里写 `\\n`，由 `rewrite_needle` 按**文件**行尾重拼。"
-                    "这条只踩守卫的**名字**分支（名字以 `Overlay` 结尾），字段那半仍然通过 —— "
-                    "正是 D5 / D6 要分别覆盖的另外两个分支。"
+                    "🔴 **§53.59 节点② 换了针，而且必须换**：原针 `export interface DecisionReport {` "
+                    "锚在节点② 退役的那份手写体上 ⇒ 实测命中 **0 次**"
+                    "（`test_every_needle_occurs_exactly_once_in_its_file` 报出）。"
+                    "新锚是紧邻别名下方的那句注释，实测 1 次；"
+                    "对全部 api.ts 针逐个算命中窗口后比对，与其余各条**互不重叠**"
+                    "（整集 `apply` 要求字节区间不相交）。"
+                    "🔴 **同一批还收窄了 `new` 的体内内容**：原文这份副本**同时**写着 "
+                    "`[key: string]: unknown;` ⇒ 它其实**名字分支与索引分支会同时踩**，"
+                    "于是「D4 证明名字分支承重」这句话按字面**从来就不成立**"
+                    "（索引分支坏掉它照样红）。去掉那行后 D4 只踩名字分支、D6 只踩索引分支，"
+                    "两条才真的互不重叠 —— 也就是本 set rationale 一直声称的那个分工。"
+                    "针单行 ⇒ 与检出约定无关；`new` 里写 `\\n`，由 `rewrite_needle` 按**文件**行尾重拼。"
+                    "另外两条判据（`assertNotIn(\"DecisionReport\", bodies)`、别名逐字那半）仍绿 ⇒ 归因可辨。"
                 ),
             ),
             Mutation(
-                label="D5  overlay 字段被改指本地泛型：契约不再来自生成类型",
+                label="D5  DecisionReport 别名被改指别处：契约来源不再是生成的报告",
                 path=_API_TS,
-                old=b"  source_reliability?: SourceReliability | null;",
-                new=b"  source_reliability?: Record<string, unknown> | null;",
+                old=b"export type DecisionReport = GeneratedDecisionReport;",
+                new=b"export type DecisionReport = GeneratedDecisionTimelineResponse;",
                 guard_file=_T_GENERATE_TYPES,
-                guards=("test_decision_report_reads_the_generated_overlays",),
+                guards=("test_decision_report_reads_the_generated_contract",),
                 note=(
-                    "名字既不以 `Overlay` 结尾、体里也没有索引签名文字 ⇒ 守卫的**名字/索引**两个分支都通过，"
-                    "只有**字段指向**那半会红。没有这条，守卫的第一半就可能是空头："
-                    "「副本没回来」与「字段仍读生成类型」是两件事，§53.52 同时做了这两件。"
-                    "`Record<string, unknown>` 是最自然的走偏写法（一个泛型 map），"
-                    "它比生成类型**更松**，而 `tsc` 照样绿。针单行、在 `api.ts` 恰好 1 次（实测）。"
+                    "🔴 **§53.59 节点② 换了这条变异的靶子，因为原来那个判据本身没了。**"
+                    "原文打的是 `  source_reliability?: SourceReliability | null;` —— "
+                    "一个**手写 `DecisionReport` 体内**的字段，"
+                    "守卫当时断言「三个 overlay 字段必须指生成名」。"
+                    "节点② 把那份手写体退役成别名之后：① 该字段已不存在（针实测 0 次）；"
+                    "② 更重要的是**没有任何守卫还在断言字段指向** ⇒ "
+                    "就算把它重锚到别的 interface 的字段上，改指 `Record<string, unknown>` "
+                    "也**不会变红**，那就不再是一条变异（§4.2 阶段②「变异后必红」不成立）。"
+                    "所以改打**同族里唯一还没人覆盖**的那条判据："
+                    "`test_decision_report_reads_the_generated_contract` 的第三个断言 —— "
+                    "别名必须**逐字**是 `GeneratedDecisionReport`。"
+                    "它覆盖的仍是同一件事（**契约来源必须是生成类型**），只是从「字段那层」上移到「别名那层」："
+                    "节点② 之后 `DecisionReport` 只剩下别名这一处声明。"
+                    "改指 `GeneratedDecisionTimelineResponse` 时**挑一个真实存在且已被 import 的生成名**"
+                    "（同 J57 的取舍）：改指不存在的名字等于废掉整行，那是在测「行还在不在」而不是「它指着谁」。"
+                    "副本没回来、名字不以 `Overlay` 结尾、体内也无索引签名 ⇒ "
+                    "`_overlay_copies` 与 `assertNotIn` 两半仍绿，红的只可能是别名那半。"
+                    "针单行、实测 1 次；对全部 api.ts 针逐个算窗口后比对，与其余各条互不重叠。"
                 ),
             ),
             Mutation(
                 label="D6  索引签名插在体内非末行：尾巴不在末尾也照样变松",
                 path=_API_TS,
-                old=b"  final_downgrade_reason?: string | null;",
+                old=b"  unknown_rate: number | null;",
                 new=(
                     b"  [key: string]: unknown;\n"
-                    b"  final_downgrade_reason?: string | null;"
+                    b"  unknown_rate: number | null;"
                 ),
                 guard_file=_T_GENERATE_TYPES,
-                guards=("test_decision_report_reads_the_generated_overlays",),
+                guards=("test_decision_report_reads_the_generated_contract",),
                 note=(
-                    "把索引签名塞进 `DecisionReport` 的**中段**（不是末行）。"
+                    "把索引签名塞进一个**仍存在的**手写 interface 的**中段**（不是末行）。"
                     "刻意的：首版探测器只看「体内最后一个非空行」 ⇒ 这条**不会**变红；"
                     "改成「体内任意位置」后它才红，所以这条同时是那个设计选择的证据。"
-                    "读数：`api.ts` 42 个 interface 的**体内**两种拼写出现 0 次"
-                    "（退休前是 45 个 / 3 个带尾巴，且全是被退休的那三个）"
-                    "⇒ 「任意位置」在本文件是等价且更强的判据。"
-                    "⚠️ 但**整文件**搜有 1 处 —— 就在 `DecisionReport` 头顶那段注释里。"
+                    "🔴 **§53.59 节点② 换过宿主**：原针 `  final_downgrade_reason?: string | null;` "
+                    "在被退役的手写 `DecisionReport` 体内 ⇒ 与 D4 同批实测命中 **0 次**。"
+                    "改锚 `CategoryCoverage`（节点② 未触碰的手写 interface）的最后一个字段**之前**，"
+                    "「中段」这个设计点因此原样保留。实测该针在 `api.ts` 恰好 1 次，"
+                    "且对全部 api.ts 针逐个算窗口后与其余各条互不重叠。"
+                    "读数（本轮重测，不再是引用旧数）：`api.ts` **36** 个 interface、"
+                    "**36** 个体内**带任一拼写的 0 个** ⇒ 「任意位置」在本文件是等价且更强的判据。"
+                    "⚠️ 而同一次重测还改掉了原文的另一个引用：**整文件**搜 `[key: string]: unknown` 现在是 **0 次**"
+                    "（退役前它出现在 `DecisionReport` 头顶那段注释里）；"
+                    "唯一剩下的散文命中是第 331 行 `FreshEdge` 注释里的 `[k: string]: unknown` —— "
+                    "**另一个拼写、也不在任何 interface 体内**。"
                     "注释也是文件字节：`_overlay_copies` 因此**只扫 interface 体内**、不整文件 grep，"
-                    "否则会踩到自己的文档（同 §4.3「自指变异」那一族）。"
+                    "否则会踩到自己的文档（同 §4.3「自指变异」那一族）—— 换了例子，这条理由不变。"
                     "与 `generated-types.ts` 相反：那里 `dict[str, Any]` 字段的 inline 索引签名是合法的，"
                     "不能用同一判据（§53.51 的缩进盲搜教训）。"
-                    "名字不以 `Overlay` 结尾、字段仍指生成名 ⇒ 只有索引分支会红。针单行、恰好 1 次（实测）。"
+                    "名字不以 `Overlay` 结尾 ⇒ 只有索引分支会红（名字分支由 D4 单独踩），两条互不重叠。"
                 ),
             ),
             Mutation(
@@ -2052,12 +2101,12 @@ SETS: tuple[MutationSet, ...] = (
             Mutation(
                 label="J6  types.ts 又自己声明 FreshEdgeItem：同一条负向判据的另一个文件",
                 path=_TYPES_TS,
-                old=b"export type Trend = TrendSummary;",
+                old=b"export type * from \"./generated-types\";",
                 new=(
                     b"export interface FreshEdgeItem {\n"
                     b"  event_id: string;\n"
                     b"}\n\n"
-                    b"export type Trend = TrendSummary;"
+                    b"export type * from \"./generated-types\";"
                 ),
                 guard_file=_T_GENERATE_TYPES,
                 guards=("test_fresh_edges_callsites_read_the_generated_envelope",),
@@ -2069,7 +2118,15 @@ SETS: tuple[MutationSet, ...] = (
                     "`EdgePoint` 这个名字 —— 新名字只可能来自一次真的复制。"
                     "`types.ts` 有 `export type * from \"./generated-types\"` ⇒ 这也是重复导出、`tsc` 会红，"
                     "但同样只在守卫阶段跑，文本判据不看语法。"
-                    "针 `export type Trend = TrendSummary;` 在 `types.ts` 恰好 1 次（实测）。"
+                    "🔴 **§53.59 换过针，理由是整集 `apply` 而不是判据**：原针 "
+                    "`export type Trend = TrendSummary;` 与 **J3 字节完全相同**，"
+                    "而 J3 排在前面、它的 `new` 把那一行**换成接口**（别名行随之消失）⇒ "
+                    "整集 `apply` 到 J6 时针已经找不到（对全部 12 套做「按选中顺序在内存副本上重放」的模拟，"
+                    "实测只有 J6 与 J50 落不下去）。"
+                    "两条变异**语义上并不互斥**（J3 改的是 `Trend`，J6 只是另插一个 `FreshEdgeItem`）"
+                    "⇒ 正确修法是**换锚**、不是宣告 `group`（§4.3 的 `group` 是给「同一段字节的两条**相反**改写」用的）。"
+                    "新锚 `export type * from \"./generated-types\";` 在 `types.ts` 恰好 1 次、"
+                    "且与本节其余 types.ts 针的字节区间不相交；位置也贴题 —— 副本就写在「re-export 全部生成类型」那句旁边。"
                 ),
             ),
             Mutation(
@@ -2207,25 +2264,29 @@ SETS: tuple[MutationSet, ...] = (
             Mutation(
                 label="J13 api.ts 又自己声明 Mover 型：消费侧副本长回来，别名仍在",
                 path=_API_TS,
-                old=b"export interface DecisionReport {",
+                old=b"export type EventMoversResponse = GeneratedEventMoversResponse;",
                 new=(
                     b"export interface Mover {\n"
                     b"  event_id: string;\n"
                     b"  event_title?: string;\n"
                     b"}\n\n"
-                    b"export interface DecisionReport {"
+                    b"export type EventMoversResponse = GeneratedEventMoversResponse;"
                 ),
                 guard_file=_T_GENERATE_TYPES,
                 guards=("test_event_movers_callsite_reads_the_generated_envelope",),
                 note=(
-                    "把 §53.55 退役掉的那种手写副本还原回去（放在 `DecisionReport` **之前**，"
-                    "TS 语法仍然合法）。**刻意的两处留白**，与 §53.54 的 J5 同款："
+                    "把 §53.55 退役掉的那种手写副本还原回去（插在 `EventMoversResponse` 别名**上方** —— "
+                    "副本就长回它所属的那个信封旁边；TS 语法仍然合法）。**刻意的两处留白**，与 §53.54 的 J5 同款："
                     "① 副本体内**不放**索引签名、名字也**不以 `Overlay` 结尾** ⇒ "
                     "`ALLOWED_OVERLAY_COPIES_IN_API_TS` 那条**老**判据仍然绿 —— "
                     "这正是「§53.52 的判据对这份副本天然盲」的实证，也是本节必须**按名**判的理由；"
                     "② **别名刻意留着** ⇒ `assertIn`（别名）那半照旧通过，红只可能红在 `assertNotIn`（副本）那半。"
                     "没有 ② 就无法区分「守卫拦住副本」与「守卫恰好在别名那半红了」。"
-                    "针 `export interface DecisionReport {` 在 `api.ts` 恰好 1 次（实测），单行 ⇒ 与检出约定无关。"
+                    "🔴 **§53.59 节点② 换过针**：原针 `export interface DecisionReport {` 锚在节点② 退役的手写报告体上 ⇒ "
+                    "与 D4/D5/D6 同批实测命中 **0 次**。"
+                    "换成 `EventMoversResponse` 的别名行后实测 1 次，"
+                    "且对全部 api.ts 针逐个算窗口后比对，与其余各条互不重叠（尤其不撞 J16 的**调用点**那行）。"
+                    "单行 ⇒ 与检出约定无关。"
                 ),
             ),
             Mutation(
@@ -3040,11 +3101,11 @@ SETS: tuple[MutationSet, ...] = (
             Mutation(
                 label="J50 被退役的内联信封形状以类型别名回来：判据按字面量扫全文件",
                 path=_API_TS,
-                old=b"export type EdgeTrajectory = GeneratedEdgeTrajectorySummary;",
+                old=b"export type FreshEdgesResponse = GeneratedFreshEdgesResponse;",
                 new=(
                     b"export type DiscoveryInlineShape = "
                     b"{ events: EventRecord[]; source?: string; count?: number };\n\n"
-                    b"export type EdgeTrajectory = GeneratedEdgeTrajectorySummary;"
+                    b"export type FreshEdgesResponse = GeneratedFreshEdgesResponse;"
                 ),
                 guard_file=_T_GENERATE_TYPES,
                 guards=("test_discovery_callsite_reads_the_generated_contract",),
@@ -3057,6 +3118,15 @@ SETS: tuple[MutationSet, ...] = (
                     "而注释也是文件字节 ⇒ 守卫会从写下那一刻起就恒红。"
                     "改法是注释只**描述**不**复现**"
                     "（§4.3「自指变异不能以完整字面量 + 注释引用同现一处」）。"
+                    "🔴 **§53.59 换过针，理由同样是整集 `apply` 而不是判据**：原针 "
+                    "`export type EdgeTrajectory = GeneratedEdgeTrajectorySummary;` 与 **J1 字节完全相同**，"
+                    "而 J1 排在前面、它的 `new` 把那一行**换成接口**（别名行消失）⇒ "
+                    "整集 `apply` 到本条时针已经找不到（§53.59 对全部 12 套重放模拟，实测只有 J6 与本条落不下去）。"
+                    "两条语义上并不互斥（J1 改 `EdgeTrajectory`，本条只是另插一个类型别名）⇒ 换锚而非宣告 `group`。"
+                    "新锚 `export type FreshEdgesResponse = GeneratedFreshEdgesResponse;` 实测 1 次、"
+                    "与 J1 的窗口相邻但不重叠（实测 12220 > 12216）。"
+                    "而且位置一换**顺带强化了这条变异要证的事**：守卫扫的是**全文件字面量**，"
+                    "所以形状从哪个别名旁边溜回来都该被抓 —— 现在它离被退役的那处**更远**，判据仍然抓得住。"
                 ),
             ),
             Mutation(
@@ -3134,6 +3204,172 @@ SETS: tuple[MutationSet, ...] = (
                     "集合相等断言，覆盖的是这一类的一个代表，而不是十一条同形变异。"
                     "⚠️ 前提是该断言仍是集合相等；若哪天拆成十一条独立断言，这条的覆盖就退化成只覆盖一个成员，届时要补。"
                     "针单行、`event.py` 里恰好 1 次（实测）。"
+                ),
+            ),
+            Mutation(
+                label="J55 api.ts 又自己声明 DecisionReport：被退役的 17 字段报告副本长回来",
+                path=_API_TS,
+                old=b"// The `/events/decisions/open` envelope was hand-written *inline* at its call",
+                new=(
+                    b"export interface DecisionReport {\n"
+                    b"  event_id?: string;\n"
+                    b"  risk?: { flags?: string[] };\n"
+                    b"}\n\n"
+                    b"// The `/events/decisions/open` envelope was hand-written *inline* at its call"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_report_callsite_reads_the_generated_contract",),
+                note=(
+                    "§53.59 节点② 退役的那份手写副本被还原（不必写满 17 个键 —— 守卫判的是**名字**）。"
+                    "**别名刻意留着** ⇒ 只可能红在 `assertNotIn(name, api_bodies)` 那半，归因可辨。"
+                    "注意这条与 §53.52 立的 `_overlay_copies` 那条**老**判据是两回事："
+                    "本副本名字不以 `Overlay` 结尾、体内也不带索引签名 ⇒ 老判据仍绿，"
+                    "而它恰恰是 `test_decision_report_reads_the_generated_contract` **改写过**的那半 —— "
+                    "§53.52 当初断言的「`DecisionReport` 是手写 interface」在节点② 已经不成立。"
+                    "🔴 锚点必须与 J47/J48 不同（三条若同行字节，整集 `apply` 无法同时落位）；"
+                    "用节点② 新增的那句注释，实测 `api.ts` 里恰好 1 次。"
+                ),
+            ),
+            Mutation(
+                label="J56 openDecisions 调用点绕过已发布信封：generic 退回内联形状",
+                path=_API_TS,
+                old=b"    api<OpenDecisionsResponse>(",
+                new=b"    api<{ decisions: unknown[] }>(",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_report_callsite_reads_the_generated_contract",),
+                note=(
+                    "与 J49 同款：针是 **generic 那一行、不含路径**，守卫从含路径那行往回找最近的 `api<`。"
+                    "旧形状是把信封**内联**写进 generic（五个非元素键全可选 + `DecisionReport[]`），"
+                    "这里退回内联但只留一个字段：仍是「不经由已发布信封」，而 TS 依然合法 —— "
+                    "`res.json() as T` 是断言。"
+                ),
+            ),
+            Mutation(
+                label="J57 OpenDecisionsResponse 别名被改指别处：契约来源不再是生成的信封",
+                path=_API_TS,
+                old=b"export type OpenDecisionsResponse = GeneratedOpenDecisionsResponse;",
+                new=b"export type OpenDecisionsResponse = GeneratedEventDiscoveryResponse;",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_report_callsite_reads_the_generated_contract",),
+                note=(
+                    "§53.54 的 J15、§53.58 的 J51 同族：**副本没回来，但契约来源已经换了**。"
+                    "这里不动调用点 ⇒ 调用点那半仍绿，只红在「别名必须逐字是那一条」上。"
+                    "目标故意挑一个**已存在**的生成名（改指不存在的名字就等于废掉整行，"
+                    "那是在测「行还在不在」而不是「它指着谁」）。针单行、实测 1 次。"
+                ),
+            ),
+            Mutation(
+                label="J58 OpenDecisionsResponse.decisions 退回裸 dict：元素契约消失（静默）",
+                path=_EVENT_MODEL,
+                old=b"    decisions: list[DecisionReport]",
+                new=b"    decisions: list[dict[str, Any]]",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_open_decisions_response_points_at_the_published_element",),
+                note=(
+                    "**静默**回归的典型（同 §53.55 的 J17、§53.58 的 J43、J52）："
+                    "`OpenDecisionsResponse` 是 `FlexibleResponse`，退回 `list[dict[str, Any]]` 后"
+                    "**仍然校验通过、仍然返回同样的字节、`tsc` 仍然全绿**，"
+                    "生成出来的元素只是悄悄回到 `{ [k: string]: unknown }[]` —— "
+                    "也就是前端当初不得不手写 17 字段副本的那个形状。"
+                    "拦截点只能是**模型身份**判据。"
+                    "🔴 针**止于行尾、不含换行** ⇒ 与 J59 的信封针（以 `decision_totals` 行 + CRLF 结尾）"
+                    "字节区间不相交（实测：信封针终点 == 本针起点，重叠 False）。"
+                ),
+            ),
+            Mutation(
+                label="J59 OpenDecisionsResponse.count 加回默认值：已发布信封被静默放宽",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    count: int\r\n"
+                    b"    total: int\r\n"
+                    b"    limit: int\r\n"
+                    b"    offset: int\r\n"
+                    b"    decision_totals: dict[str, int]\r\n"
+                ),
+                new=(
+                    b"    count: int = 0\r\n"
+                    b"    total: int\r\n"
+                    b"    limit: int\r\n"
+                    b"    offset: int\r\n"
+                    b"    decision_totals: dict[str, int]\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_open_decisions_response_points_at_the_published_element",),
+                note=(
+                    "打的是**信封那半**（J58 是元素那半）。加回默认值会**静默地**把已发布信封放宽成 "
+                    "`count?:` —— 生成文本仍「合法」，只有 `is_required()` 看得见。"
+                    "🔴 **锚点必须带 CRLF**：本文件纯 CRLF；同一组合用裸 `\\n` 写命中 **0 次**（实测对照），"
+                    "而单行针 `    count: int` 在 `event.py` 里出现 11 次。"
+                    "🔴 针止于 `decision_totals` 行、**不含 `decisions` 行**，否则与 J58 重叠。"
+                    "⚠️ 与 §53.58 的 J44、本节的 J53 是同一条判据在三个信封上各一次 —— "
+                    "三个信封是**三个模型**，不能只变异一个（§4.2「一成员被 N 处消费要 N 条」）。"
+                ),
+            ),
+            Mutation(
+                label="J60 DecisionReport 丢掉 llm_telemetry：前端当初漏掉的那个键",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    llm_telemetry: LLMTelemetry | None\r\n"
+                    b"    final_displayed_direction: str | None\r\n"
+                    b"    final_downgrade_reason: str | None"
+                ),
+                new=(
+                    b"    final_displayed_direction: str | None\r\n"
+                    b"    final_downgrade_reason: str | None"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_report_writes_all_eighteen_keys",),
+                note=(
+                    "**本节最有信息量的一条**：删掉的正是前端手写副本**漏掉**的那个键。"
+                    "§53.58 的教训在这里是反着的 —— 那边的模型是**闭合**的、少声明会**静默丢键**；"
+                    "这里 `DecisionReport` 也是闭合的，但生产者是**逐键构造**（不是铺开一行），"
+                    "所以少声明**不会**丢键，只会**变成 500**（pydantic 校验响应时缺必填键）。"
+                    "换句话说：同一个键，在「铺开」型生产者上表现成静默缺数据，"
+                    "在「逐键构造」型生产者上表现成响亮失败 —— 不能按「模型是闭合的」推。"
+                    "拦它的只能是**按名**的键集相等断言；**计数**型断言抓不到「换了哪个键」。"
+                ),
+            ),
+            Mutation(
+                label="J61 DecisionReport.actionable_recommendation 丢掉 | None：可缺席的块被声明成必填",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    actionable_recommendation: ActionableRecommendation | None\r\n"
+                    b"    decision_quality: DecisionQuality | None"
+                ),
+                new=(
+                    b"    actionable_recommendation: ActionableRecommendation\r\n"
+                    b"    decision_quality: DecisionQuality | None"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_nested_blocks_are_named_models",),
+                note=(
+                    "打的是**嵌套块的身份/可空性**（J62 打另一个块的取值宽窄）。"
+                    "`actionable_recommendation` 是九个块里唯一**可为 None** 的："
+                    "生产者写的是 `record.get(\"actionable_recommendation\")`，"
+                    "而记录可能整块缺失 ⇒ 收掉 `| None` 会把「合法地没有建议」变成 500。"
+                    "与 §53.58 的 J45 同方向（拿观测当保证、比生产者更紧）。"
+                    "🔴 针必须带上一行 `decision_quality`：单行 `    actionable_recommendation: ActionableRecommendation | None` "
+                    "在 `EventRecord` 里也出现（同一模型族），实测 2 次。"
+                ),
+            ),
+            Mutation(
+                label="J62 DecisionRisk.flags 从 list[Any] 收成 list[str]：按观测收窄",
+                path=_EVENT_MODEL,
+                old=b"    level: str | None\r\n    flags: list[Any]",
+                new=b"    level: str | None\r\n    flags: list[str]",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_nested_blocks_are_named_models",),
+                note=(
+                    "**「按观测收窄」的首次登记**，方向与 §53.58 的 J45 相同、但来源不同："
+                    "那里是「可空列被写成必填」，这里是「元素类型被收窄」。"
+                    "store 模型声明 `Risk.flags: list[Any]`，生产者只 guard `isinstance(..., list)`，"
+                    "47/47 行恰好都是字符串 —— 但那是**观测**不是**保证**。"
+                    "收成 `list[str]` 看着像「更精确」，实则是把前端那句 `string[]` 的错误原样搬到后端。"
+                    "代价（已在本节消费侧处理）：`decision-card.tsx` 因此改成渲染 `String(flag)`，"
+                    "而不是让模型去迁就渲染。"
+                    "🔴 针必须带上一行 `level`：单行 `    flags: list[Any]` 是本文件 `Risk.flags: list[Any] = []` 的**子串**，"
+                    "实测 2 次；而 `    level: str | None` 单行也出现 2 次（`DecisionConfidence` 有一个）"
+                    "⇒ 两行组合才是最小唯一单元（实测 1 次）。"
                 ),
             ),
         ),

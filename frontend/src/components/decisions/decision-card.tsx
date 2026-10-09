@@ -207,7 +207,12 @@ export function DecisionCard({
           {report.risk.flags.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5" data-testid="risk-flags">
               {report.risk.flags.map((flag) => (
-                <span key={flag} className="rounded bg-warn/10 px-1.5 py-0.5 text-[11px] text-warn">{flag}</span>
+                // `flags` is `unknown[]` in the generated contract: the store
+                // model declares `Risk.flags: list[Any]` and the producer only
+                // guards `isinstance(..., list)`, so an element is not promised
+                // to be a string. Rendering `String(flag)` is behaviour-neutral
+                // for the strings every live flag is (audit 53.59).
+                <span key={String(flag)} className="rounded bg-warn/10 px-1.5 py-0.5 text-[11px] text-warn">{String(flag)}</span>
               ))}
             </div>
           )}

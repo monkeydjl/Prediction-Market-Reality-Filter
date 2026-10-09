@@ -41,6 +41,7 @@ const report: DecisionReport = {
   diagnosis: {
     qualified: true,
     segment_n: 30,
+    segment_min_samples: null,
     segment_skill: 0.6,
     liquidity_factor: 0.9,
     reason: "edge 经流动性调整后仍显著",
@@ -50,6 +51,13 @@ const report: DecisionReport = {
   risk: { level: "medium", flags: [] },
   category: "politics",
   status: "open",
+  actionable_recommendation: null,
+  decision_quality: null,
+  market_quality: null,
+  source_reliability: null,
+  llm_telemetry: null,
+  final_displayed_direction: null,
+  final_downgrade_reason: null,
 };
 
 describe("DecisionReportPanel", () => {

@@ -181,6 +181,54 @@ export interface DailyDigestUnchanged {
   new_event_ids: string[];
 }
 /**
+ * The ``confidence`` block, lifted from the record's ``credibility``.
+ * ``score`` is ``int`` because ``Credibility.score`` is; ``level`` and
+ * ``confidence`` follow it. All three are nullable for the same reason the
+ * probability block is -- the record may be gone.
+ */
+export interface DecisionConfidence {
+  level: string | null;
+  score: number | null;
+  confidence: number | null;
+}
+/**
+ * The ``diagnosis`` block: why the gate reached this verdict, frozen at
+ * decision time rather than recomputed. Every statistic mirrors its column's
+ * nullability exactly as audit 53.58 declares it -- including ``qualified``
+ * being SQLite's raw 0/1/NULL, hence ``int | None`` and not ``bool``.
+ * ``reason`` is computed by ``_diagnosis_reason`` and is always a string.
+ */
+export interface DecisionDiagnosis {
+  qualified: number | null;
+  segment_n: number | null;
+  segment_min_samples: number | null;
+  segment_skill: number | null;
+  liquidity_factor: number | null;
+  reason: string;
+}
+/**
+ * The ``edge`` block. Same split, same source, same reasoning as the
+ * recent-predictions element (audit 53.58): ``raw_edge`` is a NOT NULL column
+ * so it is bare, while ``adjusted_edge`` and ``trust`` are nullable.
+ */
+export interface DecisionEdge {
+  raw: number;
+  adjusted: number | null;
+  trust: number | null;
+}
+/**
+ * The ``event`` block of a decision report (audit 53.59).
+ *
+ * Built from the *event record* with ``""`` as the fallback for each key, so
+ * all three are bare even though the record itself is optional:
+ * ``record.get("event_title", "")`` cannot hand back null.
+ */
+export interface DecisionEventRef {
+  title: string;
+  title_zh: string;
+  summary: string;
+}
+/**
  * One piece of evidence selected by ``decision_quality_service`` as a
  * top supporting or opposing driver for the current recommendation.
  *
@@ -196,6 +244,33 @@ export interface DecisionEvidenceItem {
   strength?: number;
   credibility?: number;
   rationale_zh?: string;
+}
+/**
+ * The ``market_view`` block. Read off the prediction row itself
+ * (``SELECT * FROM predictions``), so it inherits the same columns section
+ * 53.58 typed as bare for the recent-predictions element: ``market_probability``,
+ * ``liquidity`` and ``volume`` are the NOT NULL columns and cannot be null.
+ * ``platform`` falls back to ``""``.
+ */
+export interface DecisionMarketView {
+  market_probability: number;
+  platform: string;
+  liquidity: number;
+  volume: number;
+}
+/**
+ * The ``probability`` block. Unlike the market view, this one is read from
+ * the event *record*, so every key is nullable: ``build_decision_report``
+ * degrades to a report built from the prediction alone when the event is no
+ * longer stored, and then ``record.get("probability") or {}`` is an empty dict
+ * whose keys are all absent. The live corpus has no nulls here -- that is an
+ * observation about 47 rows, not a guarantee about the producer.
+ */
+export interface DecisionProbability {
+  baseline: number | null;
+  estimated: number | null;
+  change: number | null;
+  direction: string | null;
 }
 /**
  * Phase 1 decision-quality overlay block.
@@ -231,6 +306,195 @@ export interface DecisionQuality {
   raw_direction?: "YES" | "NO" | "WAIT" | "AVOID";
   displayed_direction?: "YES" | "NO" | "WAIT" | "AVOID";
   downgraded?: boolean;
+  error?: string | null;
+}
+/**
+ * The ``recommendation`` block. ``calibration_status`` is bare: it is
+ * computed in ``build_decision_report`` as a two-valued string, so unlike
+ * every other key here it cannot be null. The frontend hand-wrote it as
+ * ``calibration_status?: string | null``, which was looser than the producer.
+ */
+export interface DecisionRecommendation {
+  decision: string | null;
+  action: string;
+  calibration_status: string;
+}
+/**
+ * One element of ``OpenDecisionsResponse.decisions`` (audit 53.59).
+ *
+ * ``build_decision_report`` writes all eighteen keys on every call -- the last
+ * six through ``record.get(...)``, which is why those are ``X | None`` while
+ * the key itself is required. A default would widen them to ``X | undefined``
+ * for a producer that never omits anything.
+ *
+ * ``llm_telemetry`` is the key the frontend's hand-written seventeen-field
+ * copy omitted outright; naming the contract is what makes it reachable.
+ * ``event_id`` is bare because the prediction row is the source and that
+ * column is NOT NULL -- the same call audit 53.58 made for the identical
+ * column, since both endpoints read ``SELECT * FROM predictions``.
+ */
+export interface DecisionReport {
+  event_id: string;
+  event: DecisionEventRef;
+  probability: DecisionProbability;
+  market_view: DecisionMarketView;
+  edge: DecisionEdge;
+  diagnosis: DecisionDiagnosis;
+  confidence: DecisionConfidence;
+  recommendation: DecisionRecommendation;
+  risk: DecisionRisk;
+  category: string | null;
+  status: string | null;
+  actionable_recommendation: ActionableRecommendation | null;
+  decision_quality: DecisionQuality | null;
+  market_quality: MarketQuality | null;
+  source_reliability: SourceReliability | null;
+  llm_telemetry: LLMTelemetry | null;
+  final_displayed_direction: string | null;
+  final_downgrade_reason: string | null;
+}
+/**
+ * The ``risk`` block. ``flags`` stays ``list[Any]`` on purpose: the store
+ * model declares ``Risk.flags: list[Any]`` and the producer only guards
+ * ``isinstance(..., list)``, so ``list[str]`` would be narrowing by
+ * observation -- the direction audit 53.58 pinned as the dangerous one. Every
+ * flag in the live corpus happens to be a string, which is why the one
+ * frontend consumer renders ``String(flag)`` rather than the raw value.
+ */
+export interface DecisionRisk {
+  level: string | null;
+  flags: unknown[];
+}
+/**
+ * Phase 2 market-quality overlay block.
+ *
+ * Produced by ``market_quality_service`` for events whose
+ * ``source.type == "prediction_market"`` (Polymarket, Kalshi). For other
+ * source types (``prediction_question``, ``open_web``, ``sports_event``,
+ * ``manual``), the block is omitted entirely — mirroring the
+ * ``freeze_prediction`` market-gated convention.
+ *
+ * ``raw_direction`` mirrors the direction passed in from the raw
+ * recommendation. ``suggested_direction`` starts equal to
+ * ``raw_direction``; it becomes ``WAIT`` when market quality fails a
+ * configured threshold. ``downgraded`` is ``true`` when
+ * ``suggested_direction != raw_direction``.
+ *
+ * ``applied_to_displayed_direction`` is set by the merge step when this
+ * block's ``suggested_direction`` is stricter than
+ * ``decision_quality.displayed_direction`` and therefore changes the
+ * final user-facing direction. Lets audits distinguish whether market
+ * quality changed the final direction or merely recorded a score.
+ *
+ * Closed contract: ``market_quality_service.build_market_quality`` and the
+ * build-failure fallback in ``event_intelligence_service`` write only the
+ * declared fields (``error`` is written by the fallback alone).
+ */
+export interface MarketQuality {
+  score?: number;
+  liquidity_score?: number | null;
+  volume_score?: number | null;
+  spread_penalty?: number | null;
+  wide_spread_flag?: boolean;
+  thin_market_flag?: boolean;
+  stale_price_flag?: boolean | null;
+  downgrade_reason?: string | null;
+  raw_direction?: "YES" | "NO" | "WAIT" | "AVOID";
+  suggested_direction?: "YES" | "NO" | "WAIT" | "AVOID";
+  downgraded?: boolean;
+  applied_to_displayed_direction?: boolean;
+  error?: string | null;
+}
+/**
+ * Phase 4 source-reliability overlay block.
+ *
+ * Produced by ``source_reliability_service`` for events that have a
+ * non-empty ``evidence_breakdown`` (prediction_market, prediction_question,
+ * open_web). For events without evidence_breakdown (e.g., sports_event with
+ * match stats), the block is omitted entirely.
+ *
+ * Assesses the quality and diversity of news sources backing an event's
+ * evidence. Can downgrade YES/NO recommendations to WAIT when the source
+ * base is too thin or untrustworthy (low domain diversity, low trusted
+ * source ratio, too few sources, or overall score below threshold).
+ *
+ * ``raw_direction`` mirrors the direction passed in from
+ * ``actionable_recommendation.direction``. ``suggested_direction`` starts
+ * equal to ``raw_direction``; it becomes ``WAIT`` when source reliability
+ * fails a configured threshold. ``downgraded`` is ``true`` when
+ * ``suggested_direction != raw_direction``.
+ *
+ * ``applied_to_displayed_direction`` is set by the merge step when this
+ * block's ``suggested_direction`` is stricter than the current
+ * ``final_displayed_direction`` (after decision_quality and market_quality
+ * have already been merged) and therefore changes the final user-facing
+ * direction.
+ *
+ * Closed contract: ``source_reliability_service.build_source_reliability``
+ * and the build-failure fallback in ``event_intelligence_service`` write only
+ * the declared fields. (``source_breakdown`` items stay an open ``dict`` --
+ * that is a declared field, not an undeclared key.)
+ */
+export interface SourceReliability {
+  overall_score?: number;
+  source_count?: number;
+  domain_diversity?: number;
+  trusted_source_ratio?: number;
+  official_source_count?: number;
+  unknown_source_ratio?: number;
+  source_breakdown?: {
+    [k: string]: unknown;
+  }[];
+  downgrade_reason?: string | null;
+  raw_direction?: "YES" | "NO" | "WAIT" | "AVOID";
+  suggested_direction?: "YES" | "NO" | "WAIT" | "AVOID";
+  downgraded?: boolean;
+  applied_to_displayed_direction?: boolean;
+  error?: string | null;
+}
+/**
+ * Phase 5 LLM telemetry overlay block.
+ *
+ * Produced by ``llm_telemetry_service`` for ALL events (every event makes
+ * at least one LLM call or falls back to deterministic). This is an
+ * observability layer — unlike Phases 1-4 (decision overlays), it does NOT
+ * participate in ``merge_quality_overlays`` and does NOT produce
+ * ``suggested_direction`` / ``downgrade_reason``. It only records what
+ * happened during the LLM call for audit/monitoring.
+ *
+ * Hybrid implementation: ``_ask_ai`` captures real ``response.usage`` token
+ * counts (attached as ``llm_usage`` on the analysis dict) plus the model the
+ * gateway actually served the call with (``llm_model``); this service reads
+ * that + ``analysis_quality`` + ``sentiment_profile.fallback`` to produce the
+ * structured block. ``model`` is that served model, falling back to
+ * ``settings.OPENAI_MODEL`` only when the gateway recorded none.
+ *
+ * ``degraded_mode`` is True when the analysis used the deterministic
+ * fallback (LLM call failed). ``degraded_reason`` is a structured enum
+ * value (``"llm_call_failed"``). ``analysis_quality`` mirrors the field
+ * already on the analysis dict (``"llm"`` / ``"deterministic_fallback"``).
+ *
+ * ``prompt_tokens`` / ``completion_tokens`` / ``total_tokens`` are real
+ * counts from the API when available; None when the LLM call failed or
+ * usage data is unavailable. ``estimated_token_cost`` is computed from
+ * real tokens when available, or estimated from ``news_context`` length
+ * (chars/4 heuristic) when degraded.
+ *
+ * Closed contract: ``llm_telemetry_service.build_llm_telemetry`` and the
+ * build-failure fallback in ``event_intelligence_service`` write only the
+ * declared fields.
+ */
+export interface LLMTelemetry {
+  degraded_mode?: boolean;
+  degraded_reason?: string | null;
+  analysis_quality?: string;
+  sentiment_degraded?: boolean;
+  llm_call_count?: number;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
+  estimated_token_cost?: number;
+  model?: string;
   error?: string | null;
 }
 /**
@@ -610,138 +874,6 @@ export interface EvidenceBreakdownItem {
   rationale_zh?: string;
 }
 /**
- * Phase 2 market-quality overlay block.
- *
- * Produced by ``market_quality_service`` for events whose
- * ``source.type == "prediction_market"`` (Polymarket, Kalshi). For other
- * source types (``prediction_question``, ``open_web``, ``sports_event``,
- * ``manual``), the block is omitted entirely — mirroring the
- * ``freeze_prediction`` market-gated convention.
- *
- * ``raw_direction`` mirrors the direction passed in from the raw
- * recommendation. ``suggested_direction`` starts equal to
- * ``raw_direction``; it becomes ``WAIT`` when market quality fails a
- * configured threshold. ``downgraded`` is ``true`` when
- * ``suggested_direction != raw_direction``.
- *
- * ``applied_to_displayed_direction`` is set by the merge step when this
- * block's ``suggested_direction`` is stricter than
- * ``decision_quality.displayed_direction`` and therefore changes the
- * final user-facing direction. Lets audits distinguish whether market
- * quality changed the final direction or merely recorded a score.
- *
- * Closed contract: ``market_quality_service.build_market_quality`` and the
- * build-failure fallback in ``event_intelligence_service`` write only the
- * declared fields (``error`` is written by the fallback alone).
- */
-export interface MarketQuality {
-  score?: number;
-  liquidity_score?: number | null;
-  volume_score?: number | null;
-  spread_penalty?: number | null;
-  wide_spread_flag?: boolean;
-  thin_market_flag?: boolean;
-  stale_price_flag?: boolean | null;
-  downgrade_reason?: string | null;
-  raw_direction?: "YES" | "NO" | "WAIT" | "AVOID";
-  suggested_direction?: "YES" | "NO" | "WAIT" | "AVOID";
-  downgraded?: boolean;
-  applied_to_displayed_direction?: boolean;
-  error?: string | null;
-}
-/**
- * Phase 4 source-reliability overlay block.
- *
- * Produced by ``source_reliability_service`` for events that have a
- * non-empty ``evidence_breakdown`` (prediction_market, prediction_question,
- * open_web). For events without evidence_breakdown (e.g., sports_event with
- * match stats), the block is omitted entirely.
- *
- * Assesses the quality and diversity of news sources backing an event's
- * evidence. Can downgrade YES/NO recommendations to WAIT when the source
- * base is too thin or untrustworthy (low domain diversity, low trusted
- * source ratio, too few sources, or overall score below threshold).
- *
- * ``raw_direction`` mirrors the direction passed in from
- * ``actionable_recommendation.direction``. ``suggested_direction`` starts
- * equal to ``raw_direction``; it becomes ``WAIT`` when source reliability
- * fails a configured threshold. ``downgraded`` is ``true`` when
- * ``suggested_direction != raw_direction``.
- *
- * ``applied_to_displayed_direction`` is set by the merge step when this
- * block's ``suggested_direction`` is stricter than the current
- * ``final_displayed_direction`` (after decision_quality and market_quality
- * have already been merged) and therefore changes the final user-facing
- * direction.
- *
- * Closed contract: ``source_reliability_service.build_source_reliability``
- * and the build-failure fallback in ``event_intelligence_service`` write only
- * the declared fields. (``source_breakdown`` items stay an open ``dict`` --
- * that is a declared field, not an undeclared key.)
- */
-export interface SourceReliability {
-  overall_score?: number;
-  source_count?: number;
-  domain_diversity?: number;
-  trusted_source_ratio?: number;
-  official_source_count?: number;
-  unknown_source_ratio?: number;
-  source_breakdown?: {
-    [k: string]: unknown;
-  }[];
-  downgrade_reason?: string | null;
-  raw_direction?: "YES" | "NO" | "WAIT" | "AVOID";
-  suggested_direction?: "YES" | "NO" | "WAIT" | "AVOID";
-  downgraded?: boolean;
-  applied_to_displayed_direction?: boolean;
-  error?: string | null;
-}
-/**
- * Phase 5 LLM telemetry overlay block.
- *
- * Produced by ``llm_telemetry_service`` for ALL events (every event makes
- * at least one LLM call or falls back to deterministic). This is an
- * observability layer — unlike Phases 1-4 (decision overlays), it does NOT
- * participate in ``merge_quality_overlays`` and does NOT produce
- * ``suggested_direction`` / ``downgrade_reason``. It only records what
- * happened during the LLM call for audit/monitoring.
- *
- * Hybrid implementation: ``_ask_ai`` captures real ``response.usage`` token
- * counts (attached as ``llm_usage`` on the analysis dict) plus the model the
- * gateway actually served the call with (``llm_model``); this service reads
- * that + ``analysis_quality`` + ``sentiment_profile.fallback`` to produce the
- * structured block. ``model`` is that served model, falling back to
- * ``settings.OPENAI_MODEL`` only when the gateway recorded none.
- *
- * ``degraded_mode`` is True when the analysis used the deterministic
- * fallback (LLM call failed). ``degraded_reason`` is a structured enum
- * value (``"llm_call_failed"``). ``analysis_quality`` mirrors the field
- * already on the analysis dict (``"llm"`` / ``"deterministic_fallback"``).
- *
- * ``prompt_tokens`` / ``completion_tokens`` / ``total_tokens`` are real
- * counts from the API when available; None when the LLM call failed or
- * usage data is unavailable. ``estimated_token_cost`` is computed from
- * real tokens when available, or estimated from ``news_context`` length
- * (chars/4 heuristic) when degraded.
- *
- * Closed contract: ``llm_telemetry_service.build_llm_telemetry`` and the
- * build-failure fallback in ``event_intelligence_service`` write only the
- * declared fields.
- */
-export interface LLMTelemetry {
-  degraded_mode?: boolean;
-  degraded_reason?: string | null;
-  analysis_quality?: string;
-  sentiment_degraded?: boolean;
-  llm_call_count?: number;
-  prompt_tokens?: number | null;
-  completion_tokens?: number | null;
-  total_tokens?: number | null;
-  estimated_token_cost?: number;
-  model?: string;
-  error?: string | null;
-}
-/**
  * Response for GET /api/events/{event_id}/history.
  *
  * The five fields lost their defaults in audit section 53.53, tightening a
@@ -999,17 +1131,28 @@ export interface MarketSnapshotsResponse {
   match_id: string;
   series: MarketSnapshotSeries[];
 }
+/**
+ * Response for ``GET /events/decisions/open`` (audit 53.59).
+ *
+ * All six envelope keys are bare: ``get_open_decisions`` writes every one of
+ * them on its single return path, so a default could only hide a regression.
+ *
+ * ``decisions`` is ``list[DecisionReport]`` rather than ``list[dict[str,
+ * Any]]``. The frontend already typeclaims exactly this shape -- a hand-written
+ * ``DecisionReport`` of seventeen fields at ``lib/api.ts`` -- and that copy was
+ * *missing* ``llm_telemetry``, so the element was reaching the browser with a
+ * key the local type could not name. Naming it here is what makes the two
+ * line up, and the same producer backs ``GET /events/{event_id}/decision``.
+ */
 export interface OpenDecisionsResponse {
-  count?: number;
-  total?: number;
-  limit?: number;
-  offset?: number;
-  decision_totals?: {
+  count: number;
+  total: number;
+  limit: number;
+  offset: number;
+  decision_totals: {
     [k: string]: number;
   };
-  decisions?: {
-    [k: string]: unknown;
-  }[];
+  decisions: DecisionReport[];
   [k: string]: unknown;
 }
 /**

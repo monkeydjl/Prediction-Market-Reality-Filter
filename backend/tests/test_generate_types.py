@@ -105,15 +105,21 @@ def _overlay_copies(bodies: dict[str, list[str]]) -> list[str]:
     The index signature is looked for **anywhere in the body** rather than only
     on the last line: a mid-body marker silences exactly the same type error, and
     after audit 53.52 no ``api.ts`` interface *body* contains either spelling, so
-    "anywhere" costs nothing there. ``generated-types.ts`` is the opposite case
-    -- a readable ``dict[str, Any]`` field is a *legitimate* inline index
-    signature -- which is why this helper is not pointed at it.
+    "anywhere" costs nothing there. Re-measured at audit 53.59 rather than carried
+    forward: 36 ``export interface``, 36 bodies, none carrying either spelling.
+    ``generated-types.ts`` is the opposite case -- a readable ``dict[str, Any]``
+    field is a *legitimate* inline index signature -- which is why this helper is
+    not pointed at it.
 
-    Scoped to interface bodies on purpose, not grepped over the whole file: the
-    comment above ``DecisionReport`` in ``api.ts`` spells ``[key: string]:
-    unknown`` out in prose, describing the copies that were retired. A whole-file
-    search would fire on that documentation. Bodies are where the signature can
-    actually loosen a type.
+    Scoped to interface bodies on purpose, not grepped over the whole file: a
+    whole-file search would fire on documentation. ``api.ts`` still spells ``[k:
+    string]: unknown`` once in prose -- the ``FreshEdge`` comment saying what the
+    generator renders for ``list[dict[str, Any]]`` before audit 53.54 published
+    the element -- and that line is not inside any interface body. The example
+    here used to be the comment above ``DecisionReport``; audit 53.59 retired the
+    interface it described, and its ``[key: string]`` spelling left the file with
+    it, so the example was re-derived rather than reworded. Bodies are where the
+    signature can actually loosen a type.
     """
     return sorted(
         {name for name in bodies if name.endswith("Overlay")}
@@ -1667,6 +1673,230 @@ class EventDiscoveryContractTests(unittest.TestCase):
                 )
 
 
+class DecisionReportContractTests(unittest.TestCase):
+    """The decision-report contract (audit 53.59).
+
+    ``GET /events/decisions/open`` published ``decisions: list[dict[str, Any]]``
+    -- no element contract -- and ``lib/api.ts`` answered with a hand-written
+    ``DecisionReport`` of seventeen fields. The producer
+    (``decision_report_service.build_decision_report``) writes **eighteen** keys
+    on every call, so that copy was not merely narrow in places: it omitted
+    ``llm_telemetry`` outright, and a key was reaching the browser that the local
+    type could not name. Three of the seventeen were looser than the producer
+    (``recommendation.calibration_status`` is computed and never null,
+    ``diagnosis.segment_min_samples`` is always written), and ``risk.flags`` was
+    *narrower* than the store model's ``list[Any]`` -- the direction audit 53.58
+    pinned as the dangerous one.
+
+    The report is assembled key by key rather than spread from a row, so there is
+    no "extra keys survive" story here: every key the producer writes is
+    declared, which is why the model is closed and why the key set is pinned
+    rather than trusted.
+
+    Four cases: the envelope, the eighteen keys, the nine nested blocks, and the
+    text half.
+    """
+
+    _KEYS = (
+        "event_id",
+        "event",
+        "probability",
+        "market_view",
+        "edge",
+        "diagnosis",
+        "confidence",
+        "recommendation",
+        "risk",
+        "category",
+        "status",
+        "actionable_recommendation",
+        "decision_quality",
+        "market_quality",
+        "source_reliability",
+        "llm_telemetry",
+        "final_displayed_direction",
+        "final_downgrade_reason",
+    )
+
+    def test_open_decisions_response_points_at_the_published_element(self):
+        """Six required envelope keys, and ``decisions`` names ``DecisionReport``.
+
+        Identity, not ``issubclass``: a regression to ``list[dict[str, Any]]``
+        still validates, still returns the same bytes and still passes ``tsc``.
+        """
+        from app.models.event import DecisionReport, OpenDecisionsResponse
+
+        fields = OpenDecisionsResponse.model_fields
+        self.assertEqual(
+            set(fields),
+            {"count", "total", "limit", "offset", "decision_totals", "decisions"},
+            "OpenDecisionsResponse is no longer the six-key envelope "
+            "/events/decisions/open returns",
+        )
+        for name, want in (
+            ("count", int),
+            ("total", int),
+            ("limit", int),
+            ("offset", int),
+            ("decision_totals", dict[str, int]),
+        ):
+            with self.subTest(key=name):
+                self.assertEqual(
+                    fields[name].annotation,
+                    want,
+                    f"OpenDecisionsResponse.{name} changed type",
+                )
+        self.assertEqual(
+            fields["decisions"].annotation,
+            list[DecisionReport],
+            "OpenDecisionsResponse.decisions no longer names its published "
+            "element, so the frontend can only hand-write a copy again",
+        )
+        for name in fields:
+            with self.subTest(required=name):
+                self.assertTrue(
+                    fields[name].is_required(),
+                    f"OpenDecisionsResponse.{name} gained a default. "
+                    "``get_open_decisions`` writes all six keys on its single "
+                    "return path, so a default only widens the envelope "
+                    "(audit 53.59)",
+                )
+
+    def test_the_report_writes_all_eighteen_keys(self):
+        """All eighteen are written unconditionally, so none may carry a default.
+
+        The last six are ``record.get(...)`` reads, which is why they are
+        ``X | None`` -- but the *key* is still written every time, so a default
+        would widen them to ``X | undefined`` for a producer that never omits
+        anything.
+
+        Pinned by name rather than by count on purpose: ``llm_telemetry`` is the
+        key the retired hand-written copy omitted, and a count would not have
+        caught that omission.
+        """
+        from app.models.event import DecisionReport
+
+        fields = DecisionReport.model_fields
+        self.assertEqual(
+            set(fields),
+            set(self._KEYS),
+            "DecisionReport's key set no longer matches the eighteen keys "
+            "build_decision_report writes",
+        )
+        for name in self._KEYS:
+            with self.subTest(required=name):
+                self.assertTrue(
+                    fields[name].is_required(),
+                    f"DecisionReport.{name} gained a default; the producer "
+                    "writes that key on every call",
+                )
+
+    def test_the_nested_blocks_are_named_models(self):
+        """The nine nested objects are the models the producer's dicts are.
+
+        Identity, not "a dict": every one of these was ``dict[str, Any]`` before
+        this section, and a regression still validates, still returns the same
+        bytes and still passes ``tsc``.
+
+        ``risk.flags`` is pinned in the *other* direction. It stays ``list[Any]``
+        because the store model declares ``Risk.flags: list[Any]`` and the
+        producer only guards ``isinstance(..., list)``; declaring ``list[str]``
+        would be narrowing by observation, which is exactly the mistake audit
+        53.58 pinned in the opposite direction.
+        """
+        from typing import Any
+
+        from app.models.event import (
+            ActionableRecommendation,
+            DecisionConfidence,
+            DecisionDiagnosis,
+            DecisionEdge,
+            DecisionEventRef,
+            DecisionMarketView,
+            DecisionProbability,
+            DecisionRecommendation,
+            DecisionReport,
+            DecisionRisk,
+        )
+
+        fields = DecisionReport.model_fields
+        for name, want in (
+            ("event", DecisionEventRef),
+            ("probability", DecisionProbability),
+            ("market_view", DecisionMarketView),
+            ("edge", DecisionEdge),
+            ("diagnosis", DecisionDiagnosis),
+            ("confidence", DecisionConfidence),
+            ("recommendation", DecisionRecommendation),
+            ("risk", DecisionRisk),
+            ("actionable_recommendation", ActionableRecommendation | None),
+        ):
+            with self.subTest(block=name):
+                self.assertEqual(
+                    fields[name].annotation,
+                    want,
+                    f"DecisionReport.{name} no longer names the block model the "
+                    "producer assembles",
+                )
+        self.assertEqual(
+            DecisionRisk.model_fields["flags"].annotation,
+            list[Any],
+            "DecisionRisk.flags is no longer list[Any]. The store model declares "
+            "Risk.flags: list[Any] and the producer only guards "
+            "isinstance(..., list), so list[str] narrows by observation",
+        )
+
+    def test_the_report_callsite_reads_the_generated_contract(self):
+        """No copy in ``api.ts``, and the call site reads the published envelope.
+
+        ``_interface_bodies`` collects only ``export interface``, so the two
+        ``export type`` aliases are not mistaken for declarations. The positive
+        half walks *back* from the path line to the nearest ``api<`` generic.
+        """
+        api_text = _API_TS_PATH.read_bytes().decode("utf-8")
+        api_bodies = _interface_bodies(api_text)
+
+        for name in ("DecisionReport", "OpenDecisionsResponse"):
+            with self.subTest(retired=name):
+                self.assertNotIn(
+                    name,
+                    api_bodies,
+                    f"api.ts re-declared {name}; generated-types.ts is the source "
+                    "of truth. Alias the generated name instead.",
+                )
+        self.assertIn(
+            "export type OpenDecisionsResponse = GeneratedOpenDecisionsResponse;",
+            api_text,
+            "api.ts no longer aliases the generated /events/decisions/open "
+            "envelope",
+        )
+
+        lines = api_text.splitlines()
+        idxs = [
+            i for i, ln in enumerate(lines) if "/events/decisions/open?limit=" in ln
+        ]
+        self.assertEqual(
+            len(idxs),
+            1,
+            "expected the single /events/decisions/open call site in api.ts, "
+            f"found {len(idxs)}",
+        )
+        for idx in idxs:
+            generic = ""
+            for back in range(idx, -1, -1):
+                if "api<" in lines[back]:
+                    generic = lines[back]
+                    break
+            with self.subTest(callsite=lines[idx].strip()[:40]):
+                self.assertTrue(generic, "no api< generic found above this call site")
+                self.assertIn(
+                    "api<OpenDecisionsResponse>(",
+                    generic,
+                    "this call site bypasses the published envelope again: "
+                    "api.ts must read api<OpenDecisionsResponse>",
+                )
+
+
 class ApiTsTypeSourceTests(unittest.TestCase):
     """``api.ts`` reads generated shapes instead of re-declaring them.
 
@@ -1683,18 +1913,34 @@ class ApiTsTypeSourceTests(unittest.TestCase):
     regeneration.
     """
 
-    def test_decision_report_reads_the_generated_overlays(self):
-        """No local overlay copy, and each field points at the generated name.
+    def test_decision_report_reads_the_generated_contract(self):
+        """No local copy of the report, and no local overlay copy either.
 
-        The two halves fail in opposite directions on purpose. The first catches
-        a copy coming back -- loose (``[key: string]: unknown``, which is what
-        was there) or narrow (which would hide a field the backend declares) --
-        and the second catches ``DecisionReport`` being repointed at something
-        else, including a copy that slips past the first half because it is
-        neither suffixed ``Overlay`` nor tailed.
+        Until audit 53.59 this asserted the hand-written ``DecisionReport`` body
+        and checked that its three overlay fields pointed at the generated
+        names. That body is gone: 53.59 named the report on the backend
+        (``build_decision_report`` is its single producer) and the interface here
+        became an alias. So the first half now asserts the *absence* of a
+        declaration -- the same claim one step further on, since a copy coming
+        back is still the regression -- and the second catches the alias being
+        repointed at something else.
+
+        ``_overlay_copies`` is kept because it guards a different thing: that
+        none of the three quality overlays is re-declared here, which is what
+        audit 53.52 introduced it for and is independent of whether the report
+        itself is generated. ``_interface_bodies`` collects only ``export
+        interface``, so the ``export type`` alias is not mistaken for a
+        declaration.
         """
-        bodies = _interface_bodies(_API_TS_PATH.read_bytes().decode("utf-8"))
-        self.assertIn("DecisionReport", bodies, "DecisionReport vanished from api.ts")
+        api_text = _API_TS_PATH.read_bytes().decode("utf-8")
+        bodies = _interface_bodies(api_text)
+
+        self.assertNotIn(
+            "DecisionReport",
+            bodies,
+            "api.ts re-declared DecisionReport; generated-types.ts is the source "
+            "of truth. Alias the generated name instead (audit 53.59).",
+        )
         self.assertEqual(
             _overlay_copies(bodies),
             sorted(ALLOWED_OVERLAY_COPIES_IN_API_TS),
@@ -1702,18 +1948,11 @@ class ApiTsTypeSourceTests(unittest.TestCase):
             "truth. If a local copy is genuinely needed, add its name to "
             "ALLOWED_OVERLAY_COPIES_IN_API_TS in the same commit.",
         )
-        report_body = "\n".join(bodies["DecisionReport"])
-        for field, generated in (
-            ("decision_quality", "DecisionQuality"),
-            ("market_quality", "MarketQuality"),
-            ("source_reliability", "SourceReliability"),
-        ):
-            with self.subTest(field=field):
-                self.assertIn(
-                    f"  {field}?: {generated} | null;",
-                    report_body,
-                    f"DecisionReport.{field} no longer reads the generated {generated}",
-                )
+        self.assertIn(
+            "export type DecisionReport = GeneratedDecisionReport;",
+            api_text,
+            "api.ts no longer aliases the generated decision report",
+        )
 
 
 if __name__ == "__main__":

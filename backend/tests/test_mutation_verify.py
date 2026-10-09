@@ -133,6 +133,49 @@ class InventoryTests(unittest.TestCase):
                     offenders.append(f"{key} {index}: {guard!r} is not a test name")
         self.assertEqual(offenders, [], "\n".join(offenders))
 
+    def test_every_named_guard_resolves_in_at_least_one_of_its_guard_files(self):
+        """A named guard has to still *resolve*, not merely start with ``test_``.
+
+        The sibling test above checks the shape of a guard name; this one checks
+        that it is still there. Without it a renamed guard stays invisible until
+        someone runs the harness by hand -- and then it fails the other way
+        round: ``pytest -k <name>`` selects nothing, exits 5, and ``_verify_one``
+        reports "guard already RED before mutation", which reads like a broken
+        guard rather than a stale inventory entry. Audit 53.59 hit exactly that:
+        renaming ``test_decision_report_reads_the_generated_overlays`` left three
+        mutations pointing at a name no longer in the file, and only a manual run
+        said so.
+
+        Mirrors ``-k``'s substring semantics, because the selector matches a test
+        whose id *contains* the name -- so the check asks whether any ``def
+        test_...`` line in the file contains it. A guard need only resolve in
+        *some* named file: ``_run_guards`` applies the same selector to every file
+        and a name absent from one of them simply matches nothing there, which is
+        documented as intended.
+        """
+        offenders = []
+        for key, index, mutation in _every_mutation():
+            if not mutation.guards:
+                continue  # the sibling test already reports this case
+            defined: list[str] = []
+            for guard_file in mutation.guard_files():
+                path = mutation_verify.BACKEND / guard_file
+                if path.is_file():
+                    defined.extend(
+                        line.strip()
+                        for line in path.read_text(encoding="utf-8").splitlines()
+                        if line.lstrip().startswith("def test")
+                    )
+            for guard in mutation.guards:
+                if guard.startswith("test_") and not any(
+                    guard in name for name in defined
+                ):
+                    offenders.append(
+                        f"{key} {index}: guard {guard!r} is not defined in "
+                        f"{', '.join(mutation.guard_files())}"
+                    )
+        self.assertEqual(offenders, [], "\n".join(offenders))
+
     def test_grouped_mutations_rewrite_the_same_bytes(self):
         """``apply <set>`` skips later members of a group because applying both
         would fail the second with "expected 1 occurrence, found 0" -- which only
@@ -759,6 +802,46 @@ class WholeSetApplyTests(unittest.TestCase):
             with self.subTest(set=mutation_set.key):
                 targets, _ = mutation_verify._whole_set_targets(mutation_set)
                 self.assertEqual(mutation_verify._apply_preflight(targets), [])
+
+    def test_a_whole_set_apply_can_place_every_mutation_it_selects(self):
+        """Replaying the selection must not lose a needle part-way through.
+
+        ``_write_mutations`` re-reads each file per mutation, so a needle that an
+        *earlier* selection entry destroyed makes a truth run raise with the tree
+        already partly mutated. ``_apply_preflight`` cannot see that: it checks
+        every needle against the file as it is *now*, never against the file the
+        preceding rewrites leave behind. ``test_the_whole_set_selection_passes_preflight``
+        therefore passes today and says nothing about this.
+
+        Replayed on in-memory copies in ``_whole_set_targets`` order, so the test
+        writes nothing. Overlapping windows are deliberately *not* the criterion --
+        two needles may overlap and still both land, as long as the earlier rewrite
+        leaves the later one present, which is the case for J11/J12 and J14/J15. A
+        pure interval check would flag those two as broken and miss the real rule.
+
+        Audit 53.59 measured two entries that genuinely did not land: J6 and J50,
+        each sharing its anchor line with the earlier J3/J1, whose replacement
+        removes that line. Both were fixed by moving the anchor rather than by
+        declaring a group, because the two mutations are not mutually exclusive --
+        J3 rewrites ``Trend``, J6 only inserts beside it.
+        """
+        offenders = []
+        for mutation_set in mutation_verify.SETS:
+            targets, _ = mutation_verify._whole_set_targets(mutation_set)
+            blobs: dict[str, bytes] = {}
+            for _set, position, mutation in targets:
+                if mutation.path not in blobs:
+                    blobs[mutation.path] = (REPO_ROOT / mutation.path).read_bytes()
+                try:
+                    blobs[mutation.path] = mutation_verify.rewrite_needle(
+                        blobs[mutation.path], mutation.old, mutation.new
+                    )
+                except ValueError as exc:
+                    offenders.append(
+                        f"{mutation_set.key} {position}: {mutation.path} -- {exc}; "
+                        "an earlier mutation in this set already rewrote those bytes"
+                    )
+        self.assertEqual(offenders, [], "\n".join(offenders))
 
 
 if __name__ == "__main__":

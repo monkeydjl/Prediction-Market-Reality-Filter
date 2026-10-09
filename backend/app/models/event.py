@@ -1124,13 +1124,167 @@ class RecentPredictionsResponse(FlexibleResponse):
     predictions: list[RecentPredictionItem]
 
 
+class DecisionEventRef(BaseModel):
+    """The ``event`` block of a decision report (audit 53.59).
+
+    Built from the *event record* with ``""`` as the fallback for each key, so
+    all three are bare even though the record itself is optional:
+    ``record.get("event_title", "")`` cannot hand back null.
+    """
+
+    title: str
+    title_zh: str
+    summary: str
+
+
+class DecisionProbability(BaseModel):
+    """The ``probability`` block. Unlike the market view, this one is read from
+    the event *record*, so every key is nullable: ``build_decision_report``
+    degrades to a report built from the prediction alone when the event is no
+    longer stored, and then ``record.get("probability") or {}`` is an empty dict
+    whose keys are all absent. The live corpus has no nulls here -- that is an
+    observation about 47 rows, not a guarantee about the producer.
+    """
+
+    baseline: float | None
+    estimated: float | None
+    change: float | None
+    direction: str | None
+
+
+class DecisionMarketView(BaseModel):
+    """The ``market_view`` block. Read off the prediction row itself
+    (``SELECT * FROM predictions``), so it inherits the same columns section
+    53.58 typed as bare for the recent-predictions element: ``market_probability``,
+    ``liquidity`` and ``volume`` are the NOT NULL columns and cannot be null.
+    ``platform`` falls back to ``""``.
+    """
+
+    market_probability: float
+    platform: str
+    liquidity: float
+    volume: float
+
+
+class DecisionEdge(BaseModel):
+    """The ``edge`` block. Same split, same source, same reasoning as the
+    recent-predictions element (audit 53.58): ``raw_edge`` is a NOT NULL column
+    so it is bare, while ``adjusted_edge`` and ``trust`` are nullable.
+    """
+
+    raw: float
+    adjusted: float | None
+    trust: float | None
+
+
+class DecisionDiagnosis(BaseModel):
+    """The ``diagnosis`` block: why the gate reached this verdict, frozen at
+    decision time rather than recomputed. Every statistic mirrors its column's
+    nullability exactly as audit 53.58 declares it -- including ``qualified``
+    being SQLite's raw 0/1/NULL, hence ``int | None`` and not ``bool``.
+    ``reason`` is computed by ``_diagnosis_reason`` and is always a string.
+    """
+
+    qualified: int | None
+    segment_n: int | None
+    segment_min_samples: int | None
+    segment_skill: float | None
+    liquidity_factor: float | None
+    reason: str
+
+
+class DecisionConfidence(BaseModel):
+    """The ``confidence`` block, lifted from the record's ``credibility``.
+    ``score`` is ``int`` because ``Credibility.score`` is; ``level`` and
+    ``confidence`` follow it. All three are nullable for the same reason the
+    probability block is -- the record may be gone.
+    """
+
+    level: str | None
+    score: int | None
+    confidence: float | None
+
+
+class DecisionRecommendation(BaseModel):
+    """The ``recommendation`` block. ``calibration_status`` is bare: it is
+    computed in ``build_decision_report`` as a two-valued string, so unlike
+    every other key here it cannot be null. The frontend hand-wrote it as
+    ``calibration_status?: string | null``, which was looser than the producer.
+    """
+
+    decision: str | None
+    action: str
+    calibration_status: str
+
+
+class DecisionRisk(BaseModel):
+    """The ``risk`` block. ``flags`` stays ``list[Any]`` on purpose: the store
+    model declares ``Risk.flags: list[Any]`` and the producer only guards
+    ``isinstance(..., list)``, so ``list[str]`` would be narrowing by
+    observation -- the direction audit 53.58 pinned as the dangerous one. Every
+    flag in the live corpus happens to be a string, which is why the one
+    frontend consumer renders ``String(flag)`` rather than the raw value.
+    """
+
+    level: str | None
+    flags: list[Any]
+
+
+class DecisionReport(BaseModel):
+    """One element of ``OpenDecisionsResponse.decisions`` (audit 53.59).
+
+    ``build_decision_report`` writes all eighteen keys on every call -- the last
+    six through ``record.get(...)``, which is why those are ``X | None`` while
+    the key itself is required. A default would widen them to ``X | undefined``
+    for a producer that never omits anything.
+
+    ``llm_telemetry`` is the key the frontend's hand-written seventeen-field
+    copy omitted outright; naming the contract is what makes it reachable.
+    ``event_id`` is bare because the prediction row is the source and that
+    column is NOT NULL -- the same call audit 53.58 made for the identical
+    column, since both endpoints read ``SELECT * FROM predictions``.
+    """
+
+    event_id: str
+    event: DecisionEventRef
+    probability: DecisionProbability
+    market_view: DecisionMarketView
+    edge: DecisionEdge
+    diagnosis: DecisionDiagnosis
+    confidence: DecisionConfidence
+    recommendation: DecisionRecommendation
+    risk: DecisionRisk
+    category: str | None
+    status: str | None
+    actionable_recommendation: ActionableRecommendation | None
+    decision_quality: DecisionQuality | None
+    market_quality: MarketQuality | None
+    source_reliability: SourceReliability | None
+    llm_telemetry: LLMTelemetry | None
+    final_displayed_direction: str | None
+    final_downgrade_reason: str | None
+
+
 class OpenDecisionsResponse(FlexibleResponse):
-    count: int = 0
-    total: int = 0
-    limit: int = 10
-    offset: int = 0
-    decision_totals: dict[str, int] = Field(default_factory=dict)
-    decisions: list[dict[str, Any]] = Field(default_factory=list)
+    """Response for ``GET /events/decisions/open`` (audit 53.59).
+
+    All six envelope keys are bare: ``get_open_decisions`` writes every one of
+    them on its single return path, so a default could only hide a regression.
+
+    ``decisions`` is ``list[DecisionReport]`` rather than ``list[dict[str,
+    Any]]``. The frontend already typeclaims exactly this shape -- a hand-written
+    ``DecisionReport`` of seventeen fields at ``lib/api.ts`` -- and that copy was
+    *missing* ``llm_telemetry``, so the element was reaching the browser with a
+    key the local type could not name. Naming it here is what makes the two
+    line up, and the same producer backs ``GET /events/{event_id}/decision``.
+    """
+
+    count: int
+    total: int
+    limit: int
+    offset: int
+    decision_totals: dict[str, int]
+    decisions: list[DecisionReport]
 
 
 class EdgeSeriesPoint(BaseModel):

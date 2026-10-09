@@ -12,17 +12,16 @@ import type {
   SimTrade as GeneratedSimTrade,
   SimTradeListResponse as GeneratedSimTradeListResponse,
   TradeStats as GeneratedTradeStats,
-  DecisionQuality,
   EdgeSeriesPoint as GeneratedEdgeSeriesPoint,
   EdgeTrajectorySummary as GeneratedEdgeTrajectorySummary,
-  MarketQuality,
-  SourceReliability,
   PendingLinkItem as GeneratedPendingLinkItem,
   PendingLinksResponse as GeneratedPendingLinksResponse,
   EventMarketLink,
   RecentPredictionItem as GeneratedRecentPredictionItem,
   RecentPredictionsResponse as GeneratedRecentPredictionsResponse,
   EventDiscoveryResponse as GeneratedEventDiscoveryResponse,
+  DecisionReport as GeneratedDecisionReport,
+  OpenDecisionsResponse as GeneratedOpenDecisionsResponse,
 } from "./generated-types";
 import { getApiBase, joinApiPath } from "./env";
 import { applyOperatorAuthHeaders } from "./operator-credentials";
@@ -272,61 +271,17 @@ export interface CategoryCoverage {
 // A committed prediction rendered for human review (M5 decision report).
 // Mirrors decision_report_service.build_decision_report.
 //
-// No Pydantic model covers the report itself -- the endpoint answers with a
-// plain dict -- so this interface stays hand-written. The three quality
-// overlays it carries do have models, and since audit 53.52 they are read from
-// `generated-types` instead of being re-declared here, which is what the header
-// of `types.ts` asks for. The local copies they replace each ended in
-// `[key: string]: unknown`, so `report.decision_quality` accepted keys the
-// backend never sends -- invisible to `tsc`, because the report arrives through
-// `res.json() as T`. The generated interfaces are closed (audit 53.51), so this
-// is a pure compile-time narrowing; `EventRecord` in generated-types.ts already
-// types these same three fields this way.
-export interface DecisionReport {
-  event_id: string;
-  event: { title: string; title_zh?: string; summary: string };
-  probability: {
-    estimated: number | null;
-    baseline: number | null;
-    change: number | null;
-    direction: string | null;
-  };
-  market_view: {
-    market_probability: number | null;
-    platform: string;
-    liquidity: number | null;
-    volume: number | null;
-  };
-  edge: { raw: number | null; adjusted: number | null; trust: number | null };
-  diagnosis: {
-    qualified: boolean | null;
-    segment_n: number | null;
-    segment_min_samples?: number | null;
-    segment_skill: number | null;
-    liquidity_factor: number | null;
-    reason: string;
-  };
-  confidence: { level: string | null; score: number | null; confidence: number | null };
-  recommendation: { decision: string | null; action: string; calibration_status?: string | null };
-  risk: { level: string | null; flags: string[] };
-  category: string | null;
-  status: string | null;
-  actionable_recommendation?: {
-    direction: string;
-    confidence: string;
-    suggested_allocation_pct: number;
-    edge: number;
-    risk_level: string;
-    rationale: string;
-    calibration_status: string;
-  } | null;
-  /** Phase quality overlays — present when corresponding flags are on. */
-  decision_quality?: DecisionQuality | null;
-  market_quality?: MarketQuality | null;
-  source_reliability?: SourceReliability | null;
-  final_displayed_direction?: string | null;
-  final_downgrade_reason?: string | null;
-}
+// This was hand-written until audit 53.59 and declared 17 fields. The producer
+// writes 18 keys unconditionally, so the copy was missing `llm_telemetry`
+// outright -- a key reaching the browser that the local type could not name.
+// Three of the 17 were looser than the producer (recommendation's
+// calibration_status is computed and never null; diagnosis.segment_min_samples
+// is always written; risk.flags was string[] where the store model declares
+// list[Any]) and one, risk.flags, was narrower than the store. Since 53.59 the
+// report is a generated contract -- DecisionReport is a root in
+// models/_frontend_export.py -- so this alias replaces the copy, the same way
+// audit 53.52 replaced the three overlay copies the old one embedded.
+export type DecisionReport = GeneratedDecisionReport;
 
 // Re-export generated response types (replaces hand-written inline versions).
 // Source of truth: backend/app/models/event.py via generate_types.py.
@@ -353,6 +308,10 @@ export type TradeStats = GeneratedTradeStats;
 // itself scanned for it, and a comment is file bytes, so quoting it would make
 // the 53.59 guard red from the moment it was written.
 export type EventDiscoveryResponse = GeneratedEventDiscoveryResponse;
+// The `/events/decisions/open` envelope was hand-written *inline* at its call
+// site until audit 53.59, with all five non-element keys optional even though
+// the route writes every one of them. Same fix as the discovery envelope above.
+export type OpenDecisionsResponse = GeneratedOpenDecisionsResponse;
 
 // An event's edge trajectory + freshness (M5 fresh-edge surface).
 // Read from the generated contract rather than re-declared: audit 53.53 gave
@@ -942,14 +901,7 @@ export const eventsApi = {
 
   // M5 opportunity surface. Defaults to act + watch + provisional_act; pass "act" to narrow.
   openDecisions: (decision?: "act" | "watch" | "provisional_act", limit = 10, offset = 0) =>
-    api<{
-      count: number;
-      total?: number;
-      limit?: number;
-      offset?: number;
-      decision_totals?: Record<string, number>;
-      decisions: DecisionReport[];
-    }>(
+    api<OpenDecisionsResponse>(
       `/events/decisions/open?limit=${limit}&offset=${offset}${decision ? `&decision=${decision}` : ""}`,
     ),
 

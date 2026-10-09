@@ -39,6 +39,12 @@ function decision(overrides: Partial<DecisionReport> = {}): DecisionReport {
     category: "politics",
     status: "active",
     actionable_recommendation: null,
+    decision_quality: null,
+    market_quality: null,
+    source_reliability: null,
+    llm_telemetry: null,
+    final_displayed_direction: null,
+    final_downgrade_reason: null,
     ...overrides,
   };
 }

@@ -13844,3 +13844,89 @@ J30（§53.57）的锚 `export interface LoopRun {` 随手写副本退役（实�
 J30 锚在 `export interface LoopRun {` 上，副本退役 ⇒ 0x ⇒ `test_mutation_verify`
 三条清单测试当场拦（这正是它们存在的意义）。修法 = 换锚 + note 记原因 +
 **别名行由新守卫钉住**（锚的存续不再靠运气）。
+## 53.63 `GET /calibration` 具名 `EventCalibrationResponse`：忠实副本退役，「纯类型变更」的标本
+
+**日期**：2026-10-10。**范围**：`backend/app/models/event.py`、`_frontend_export.py`、
+`backend/app/api/routes/events.py`、`backend/tests/test_generate_types.py`、
+`backend/scripts/mutation_verify.py`、`frontend/src/lib/{api,generated-types}.ts`。
+
+#### 53.63.1 背景与取证：这节的副本与前两节不同——它们是忠实的
+
+`GET /events/calibration` 的 `response_model` 是裸 `FlexibleResponse`；`api.ts`
+手写 `CalibrationAgg`（4 键）+ `CategoryCoverage`（4 键）+ 调用点内联信封。生产者
+`calibration_service_event.summarize` 两条返回路径（live 聚合 + `no_data` 早退）写
+**同 4 键**（overall/by_source/by_base_rate_category/category_coverage）；
+`_aggregate`/`_empty_overall` 写**同 4 键**（brier_score/skill_score/grade/n）；
+`_category_coverage` 写 4 键（total/classified/unknown/unknown_rate，`total==0` 时
+rate **写 None**——写键、值为 null，不是缺键）。
+
+与 §53.61/53.62 对比：这两份副本**忠实**——无虚假键、无缺键 ⇒ 本节具名是
+**纯类型变更**，不修任何线上字节、不修任何 UI 缺陷。收益仍有两半：OpenAPI 契约对
+非前端读者可见；退役后**不可能再漂移**——53.61 的 `PredictionCalibrationResponse`
+与这节是同族校准聚合、各养一份手写副本，正是漂移温床； faithful 副本今天忠实，
+不代表下一次手改后还忠实。
+
+🔑 **可空性是决定，不是冗余**：`brier_score`/`skill_score`/`unknown_rate` 三个
+nullable 都是生产者在边界条件下**写 null**（零可用预测 / total==0），不是省键 ⇒
+收窄任何一个是 500（校验失败型），放宽才是「更松」。这节把两个方向各钉一条变异
+（J83/J84 收窄 → 500；J81/J82/J85 → 更松/删键）。
+
+#### 53.63.2 无旗子：53.56 反向判据的第二次登记
+
+本树**没有任何条件写入的键** ⇒ 路由**不加** `response_model_exclude_unset`
+（保持 False，实测 APIRoute 属性为 False）。任何默认值都是错的（`= None` 只会把
+`X | null` 放宽成 `X | null | undefined`，凭空引入 absent-vs-null 歧义）。守卫把
+`route.response_model_exclude_unset is False` 一并钉住——读路由对象、非源码文本，
+旗子**悄悄到货**时它红。对照：53.55（旗子必须有，J73 钉 True）、53.56/53.57
+（不需要）、本节把「不需要」也钉成断言，三个状态至此各有守卫。
+
+#### 53.63.3 探针：域内零字节差 + CONTROL 覆盖两种失败模式
+
+探针 `.workbuddy/audit-2026-10-03/probe_5363.py`，6 用例：活库 `summarize` 语料
+（1314B）、`no_data`（196B）、`empty_by_source`（282B）、3 CONTROL。改前 6/6
+两态全等（harness 干净）。改后：**域内 3/3 status unchanged / canonical identical /
+bytes identical**（含 `unknown_rate=None` 的活库键——具名不改字节的前提成立）；
+CONTROL：`int_brier` 200→200、516→520（`0`→`0.0`，数值收窄的重序列化——**改字节
+型**失败模式）；`missing_overall`/`agg_missing_n` 200→500、445→21 / 508→21
+（缺键=校验失败——**500 型**失败模式）。两种失败模式都有探针证据，
+`pre/post` JSON 落盘同一目录。
+
+#### 53.63.4 守卫与变异：两个新形态
+
+守卫 `EventCalibrationContractTests` 3 例 15 subtests：信封 4 键序 + 两元素模型
+逐字段注解/`is_required()`、路由对象身份 + 旗子 `is False`、`api.ts` 文本面
+（两副本不再是 `export interface`、两别名在、调用点 generic）。单跑实测
+**3 passed, 15 subtests passed**。
+
+`mutation_verify.py` 追加 **J80–J87**（全族 165→173；set 85→93），四阶段 **8/8**
+（green before True | 1/1 files red | green after restore True | bytes restored
+True；无 `[safe-delete]` 假红指纹）。两个新形态入册：
+
+1. **D6 二次换宿主**：D6 的锚 `  unknown_rate: number | null;` 在手写
+   `CategoryCoverage` 体内 ⇒ 本节退役该副本时锚**合法地消失**（整集清单测试当场拦，
+   实测命中 **0 次**）。判据澄清：D6 的守卫（`_overlay_copies` 检测器）只要求宿主
+   是「**任一仍存在**的手写 interface 的中段」⇒ 换 `CalibrationDeviationRow` 的
+   `predicted_mean` 之前，设计点原样保留。这是「判据消失 ≠ 地址漂移」的第四形态、
+   「地址合法消失」的第二实例（§53.62 J30 第一例）——且这次死于**本节自己的
+   退役动作**：改副本的每一刀都可能饿死以它为锚的既有变异，`test_mutation_verify`
+   的清单测试是唯一即时拦截点。
+2. **J84/J85 同字节互斥**：J84 收窄 `unknown_rate` 类型、J85 初稿删同一行 ⇒
+   **任意落位顺序下后者的锚都被前者改写**，整集 apply 必挂。§53.62 J72/J73 是
+   「锚字节重叠但可换序」——互换即救；本节是「互斥」——换序无效，只能给 J85
+   换宿主（`classified` 行，design 点不变）。判据：两变异的锚字节重叠**且都在
+   改写重叠区** ⇒ 不存在安全顺序。
+
+#### 53.63.5 门、全量与对账（数字全部来自工具自打印）
+
+四道门全绿（ruff `All checks passed`；mypy `no issues in 331 source files`；
+`generate_types --check` `up to date`）；`tsc --noEmit` 0 错误——别名化对全部
+消费者（`page.tsx`/`accuracy-summary.tsx`/`category-accuracy.tsx` 等）零破坏。
+
+`test_mutation_verify.py`：**64 passed, 207 subtests**（+8 = J80–J87 进清单）。
+全量：**8188 / 0 failures / 0 errors / 11 skipped**（cases 6676 / subtests 1512；
+pytest 尾行 `6665 passed, 11 skipped, 1512 subtests passed`，6665+11=6676 对上）。
+对账：**+26 tests = +3 case（守卫类 3 方法）+ 23 subtests（守卫类单跑 15 +
+清单 +8）**，零残差。基线 `junit_full_5362.xml`（8162/6673/1489）。
+
+探针与验证产物：`.workbuddy/audit-2026-10-03/{probe_5363.py, probe_5363_pre.json,
+probe_5363_post.json, verify_5363.log, _recon_5363.py, full_5363.log}`。

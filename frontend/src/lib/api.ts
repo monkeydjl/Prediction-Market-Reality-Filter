@@ -27,6 +27,9 @@ import type {
   PredictionCalibrationResponse as GeneratedPredictionCalibrationResponse,
   LoopRunView as GeneratedLoopRunView,
   LoopStatusResponse as GeneratedLoopStatusResponse,
+  CalibrationAggregate as GeneratedCalibrationAggregate,
+  CategoryCoverage as GeneratedCategoryCoverage,
+  EventCalibrationResponse,
 } from "./generated-types";
 import { getApiBase, joinApiPath } from "./env";
 import { applyOperatorAuthHeaders } from "./operator-credentials";
@@ -259,19 +262,12 @@ async function api<T>(
   }
 }
 
-export interface CalibrationAgg {
-  brier_score: number | null;
-  skill_score: number | null;
-  grade: string;
-  n: number;
-}
-
-export interface CategoryCoverage {
-  total: number;
-  classified: number;
-  unknown: number;
-  unknown_rate: number | null;
-}
+// The cross-event calibration report is generated from the named backend
+// response model (audit 53.63); these aliases keep the historical
+// hand-written names. Unlike 53.61/53.62's copies these matched the
+// producer exactly -- retiring them still makes drift impossible.
+export type CalibrationAgg = GeneratedCalibrationAggregate;
+export type CategoryCoverage = GeneratedCategoryCoverage;
 
 // A committed prediction rendered for human review (M5 decision report).
 // Mirrors decision_report_service.build_decision_report.
@@ -841,12 +837,7 @@ export const eventsApi = {
     api<EventMoversResponse>(`/events/movers?limit=${limit}`),
 
   calibration: () =>
-    api<{
-      overall: CalibrationAgg;
-      by_source: Record<string, CalibrationAgg>;
-      by_base_rate_category: Record<string, CalibrationAgg>;
-      category_coverage: CategoryCoverage;
-    }>("/events/calibration"),
+    api<EventCalibrationResponse>("/events/calibration"),
 
   // M5 opportunity surface. Defaults to act + watch + provisional_act; pass "act" to narrow.
   openDecisions: (decision?: "act" | "watch" | "provisional_act", limit = 10, offset = 0) =>

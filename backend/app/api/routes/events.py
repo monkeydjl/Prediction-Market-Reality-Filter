@@ -134,6 +134,7 @@ from app.models.event import (
     DecisionReport,
     DecisionTimelineResponse,
     EventAnalysisRequest,
+    EventCalibrationResponse,
     EventDiscoveryResponse,
     EventHistoryResponse,
     EventListResponse,
@@ -515,7 +516,7 @@ async def get_event_digest(
     return build_daily_digest(limit=limit, date=date)
 
 
-@router.get("/calibration", response_model=FlexibleResponse)
+@router.get("/calibration", response_model=EventCalibrationResponse)
 async def get_event_calibration() -> dict[str, Any]:
     """Cross-event calibration report: how accurate resolved events' latest
     probability estimates were vs their settled outcomes.
@@ -524,6 +525,10 @@ async def get_event_calibration() -> dict[str, Any]:
     breakdowns: by_source (by the event source's platform) and
     by_base_rate_category (by the event's base-rate category, falling back to
     "unknown"). Empty until events are resolved; safe to call before any are.
+
+    ``response_model_exclude_unset`` is not needed: both return paths of
+    ``summarize`` write the same four keys unconditionally (audit section
+    53.63).
     """
     resolved = list_resolved_events()
     events = []

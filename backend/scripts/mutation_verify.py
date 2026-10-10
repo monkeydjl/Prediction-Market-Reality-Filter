@@ -1643,7 +1643,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J79）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J87）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -2008,10 +2008,10 @@ SETS: tuple[MutationSet, ...] = (
             Mutation(
                 label="D6  索引签名插在体内非末行：尾巴不在末尾也照样变松",
                 path=_API_TS,
-                old=b"  unknown_rate: number | null;",
+                old=b"  predicted_mean: number | null;",
                 new=(
                     b"  [key: string]: unknown;\n"
-                    b"  unknown_rate: number | null;"
+                    b"  predicted_mean: number | null;"
                 ),
                 guard_file=_T_GENERATE_TYPES,
                 guards=("test_decision_report_reads_the_generated_contract",),
@@ -2035,6 +2035,9 @@ SETS: tuple[MutationSet, ...] = (
                     "与 `generated-types.ts` 相反：那里 `dict[str, Any]` 字段的 inline 索引签名是合法的，"
                     "不能用同一判据（§53.51 的缩进盲搜教训）。"
                     "名字不以 `Overlay` 结尾 ⇒ 只有索引分支会红（名字分支由 D4 单独踩），两条互不重叠。"
+                    "🔴 **§53.63 节点② 再换宿主**：原针 `  unknown_rate: number | null;` 在 §53.63 退役为别名的手写 `CategoryCoverage` 体内 ⇒ 与 §53.62 J30 同型（地址合法地消失），整集实测命中 **0 次**。"
+                    "改针 `CalibrationDeviationRow`（quality 族手写 interface，仍存在）的第 3 个字段 `predicted_mean` **之前**，「中段」设计点原样保留；"
+                    "实测新针在 `api.ts` 恰好 1 次（已字节复核）。"
                 ),
             ),
             Mutation(
@@ -3744,6 +3747,131 @@ SETS: tuple[MutationSet, ...] = (
                     "旁路时 tsc/vitest 双盲，静态文本守卫是唯一拦截点。"
                     "🔴 针含 URL、在本文件命中 **1 次**（已字节复核）；"
                     "守卫文件里没有该字面量 ⇒ 不自指。"
+                ),
+            ),
+            Mutation(
+                label="J80 /calibration 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_DIGEST_ROUTES,
+                old=b"response_model=EventCalibrationResponse)",
+                new=b"response_model=FlexibleResponse)",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_calibration_route_binds_the_model_and_declares_no_flag",),
+                note=(
+                    "§53.63：本轮具名的端点。与 J64/J72 同判据（**路由对象身份**，"
+                    "`route.response_model is EventCalibrationResponse`）。裸 "
+                    "`FlexibleResponse` 仍 200、`tsc` 绿，只有 schema 变不透明体。"
+                    "🔴 针带右括号（装饰器是单行 `@router.get(\"/calibration\", "
+                    "response_model=EventCalibrationResponse)`），在本文件命中 "
+                    "**1 次**（已字节复核；带 `response_model=` 前缀避开 import 区"
+                    "同名），守卫文件里没有该字面量 ⇒ 不自指。"
+                ),
+            ),
+            Mutation(
+                label="J81 信封 overall 添默认值：必填放宽成可选",
+                path=_EVENT_MODEL,
+                old=b"    overall: CalibrationAggregate\r\n    by_source:",
+                new=b"    overall: CalibrationAggregate | None = None\r\n    by_source:",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_envelope_and_nested_blocks",),
+                note=(
+                    "**「更松」方向**：`summarize` 两条返回路径（live + no_data）"
+                    "都恒写 `overall`，默认值只会把信封放宽成可缺 —— 且 **`| None` "
+                    "还会放宽注解**，两个判据（`is_required` + 注解相等）各拦一半。"
+                    "🔴 针带后随行 `by_source:` 保证唯一（已字节复核 **1 次**）。"
+                ),
+            ),
+            Mutation(
+                label="J82 by_source 元素退化成 dict[str, Any]：元素契约重新不可见",
+                path=_EVENT_MODEL,
+                old=b"    by_source: dict[str, CalibrationAggregate]\r\n",
+                new=b"    by_source: dict[str, Any]\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_envelope_and_nested_blocks",),
+                note=(
+                    "**「更松」方向**（与 J58 元素退化同型）：裸 `dict[str, Any]` "
+                    "渲染成 `{ [k: string]: unknown }` 值 ⇒ 前端读不动，且传输面"
+                    "**零字节差**（validate 通过、原样透传），`tsc` 盲。守卫的注解"
+                    "相等断言是唯一拦截点。🔴 针整行（已字节复核 **1 次**）。"
+                ),
+            ),
+            Mutation(
+                label="J83 CalibrationAggregate.brier_score 从 float | None 收成 float：no_data 路径 500",
+                path=_EVENT_MODEL,
+                old=b"    brier_score: float | None\r\n    skill_score: float | None",
+                new=b"    brier_score: float\r\n    skill_score: float | None",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_envelope_and_nested_blocks",),
+                note=(
+                    "**「改字节/失败」方向**：no_data 路径写 `brier_score=None`，"
+                    "收窄后 pydantic 响应校验 **500**（探针 CONTROL 同族失败模式）。"
+                    "可空性是本节的**决定**，不是冗余。🔴 单行 `brier_score:` 在 "
+                    "event.py 命中 **5 处**（三个校准族模型 + EventRecord），必须带"
+                    "后随行 `skill_score:` 才钉住 `CalibrationAggregate`（已字节"
+                    "复核 **1 次**）。"
+                ),
+            ),
+            Mutation(
+                label="J84 CategoryCoverage.unknown_rate 从 float | None 收成 float：total==0 路径 500",
+                path=_EVENT_MODEL,
+                old=b"    unknown_rate: float | None\r\n",
+                new=b"    unknown_rate: float\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_envelope_and_nested_blocks",),
+                note=(
+                    "**「改字节/失败」方向**：`_category_coverage` 在 `total==0` 时"
+                    "写 `unknown_rate=None`（**写键、值为 null**，不是缺键），收窄后"
+                    "响应校验 **500**。🔴 单行针在本文件命中 **1 次**（已字节复核；"
+                    "另一处 unknown_rate 是 docstring 文字），守卫文件里没有该字面量。"
+                ),
+            ),
+            Mutation(
+                label="J85 CategoryCoverage 删 classified 行：嵌套闭合模型把键从报文里删掉",
+                path=_EVENT_MODEL,
+                old=b"    total: int\r\n    classified: int",
+                new=b"    total: int",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_envelope_and_nested_blocks",),
+                note=(
+                    "**「改字节」方向**（与 J76 的区别要写清）：`CategoryCoverage` "
+                    "是**纯嵌套 BaseModel**（`extra='ignore'`，非 FlexibleResponse）"
+                    "⇒ 删声明字段后生产者写的键被 pydantic **从报文里删掉**（不是 J76 "
+                    "信封 `extra='allow'` 的原样透传）—— 无异常、tsc 盲（`res.json() "
+                    "as T`），唯一拦截是键集列表断言。"
+                    "🔴 **初稿锚 `unknown_rate` 行与本集 J84（同一行的收窄变异）互毁**"
+                    "—— 任意落位顺序下后者的锚都被前者改写，整集 apply 必挂（"
+                    "§53.62 J72/J73 是「可换序」救回；这里是同字节互斥，只能换宿主）"
+                    "⇒ 换 `classified` 行，design 点不变：删 `CategoryCoverage` 的"
+                    "任一声明字段效果相同。🔴 针带前导行 `total: int`（已字节复核 "
+                    "**1 次**）。"
+                ),
+            ),
+            Mutation(
+                label="J86 CalibrationAggregate 的 grade 与 n 互换：元素键序线上差",
+                path=_EVENT_MODEL,
+                old=b"    grade: str\r\n    n: int",
+                new=b"    n: int\r\n    grade: str",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_envelope_and_nested_blocks",),
+                note=(
+                    "**行序即契约**（J75 同判据）：模型字段序照抄 `_aggregate` 的 "
+                    "dict 序 ⇒ 打乱后响应键序变、canonical 不变 —— 与 J63/J75 同类"
+                    "「纯键序」线上差。守卫断言 `list(agg) == [...]` 按序。🔴 单行 "
+                    "`grade: str` 在 event.py 命中 **5 处**，带后随行 `n: int` 才"
+                    "唯一（已字节复核 **1 次**）。"
+                ),
+            ),
+            Mutation(
+                label="J87 api.ts /events/calibration 调用点 generic 换成 Record<string, unknown>：契约旁路",
+                path=_API_TS,
+                old=b'api<EventCalibrationResponse>("/events/calibration")',
+                new=b'api<Record<string, unknown>>("/events/calibration")',
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_calibration_callsite_reads_the_generated_contract",),
+                note=(
+                    "**消费面**（与 J71/J79 同判据）：`api<T>` cast 对形状不主张 ⇒ "
+                    "旁路时 tsc/vitest 双盲，静态文本守卫是唯一拦截点。🔴 针含 URL、"
+                    "在本文件命中 **1 次**（已字节复核）；守卫文件里没有该字面量 ⇒ "
+                    "不自指。"
                 ),
             ),
         ),

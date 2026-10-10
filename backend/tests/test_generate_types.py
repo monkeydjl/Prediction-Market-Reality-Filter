@@ -2529,6 +2529,231 @@ class LoopStatusContractTests(unittest.TestCase):
                 )
 
 
+class EventCalibrationContractTests(unittest.TestCase):
+    """The /calibration contract, from both ends (audit 53.63).
+
+    ``GET /events/calibration`` published a bare ``FlexibleResponse`` while
+    ``api.ts`` hand-wrote ``CalibrationAgg`` / ``CategoryCoverage`` and an
+    inline envelope at the call site. Unlike 53.61/53.62's copies these two
+    were *faithful* -- no phantom keys, no missing keys -- so the retirement
+    is a pure type change and the probe confirmed zero byte difference in
+    domain. What the hand copy could never give anyone is the closure this
+    family exists for: a second hand-written calibration aggregate would
+    drift from 53.61's ``PredictionCalibrationResponse`` invisibly.
+
+    Three cases: the envelope and its nested blocks, the route binding *and
+    the flag's deliberate absence*, and the text half in ``api.ts``.
+    """
+
+    def test_the_envelope_and_nested_blocks(self):
+        """Four envelope keys, both nested blocks' key sets, all required.
+
+        ``summarize`` writes the same four keys on both of its return paths
+        (live and no-data), and ``_aggregate``/``_empty_overall`` write the
+        same four keys per block -- no key anywhere in this tree is written
+        conditionally, so no field may carry a default (the 53.56 rule in
+        its positive direction: a default here only widens the generated
+        type to ``X | undefined`` for a producer that never omits).
+        """
+        from app.models.event import (
+            CalibrationAggregate,
+            CategoryCoverage,
+            EventCalibrationResponse,
+        )
+
+        fields = EventCalibrationResponse.model_fields
+        self.assertEqual(
+            list(fields),
+            ["overall", "by_source", "by_base_rate_category",
+             "category_coverage"],
+            "EventCalibrationResponse is no longer the four-key envelope in "
+            "producer order",
+        )
+        self.assertEqual(
+            fields["overall"].annotation,
+            CalibrationAggregate,
+            "overall no longer names its element; a bare dict publishes "
+            "{ [k: string]: unknown } again",
+        )
+        for name in ("by_source", "by_base_rate_category"):
+            self.assertEqual(
+                fields[name].annotation,
+                dict[str, CalibrationAggregate],
+                f"{name} no longer names its element type",
+            )
+        self.assertEqual(
+            fields["category_coverage"].annotation,
+            CategoryCoverage,
+            "category_coverage no longer names its element",
+        )
+        for name in fields:
+            with self.subTest(required=name):
+                self.assertTrue(
+                    fields[name].is_required(),
+                    f"EventCalibrationResponse.{name} gained a default; "
+                    "summarize writes all four keys on both return paths "
+                    "(audit 53.63)",
+                )
+
+        agg = CalibrationAggregate.model_fields
+        self.assertEqual(
+            list(agg),
+            ["brier_score", "skill_score", "grade", "n"],
+            "CalibrationAggregate is no longer the four-key block in "
+            "producer order",
+        )
+        for name, want in (
+            ("brier_score", float | None),
+            ("skill_score", float | None),
+            ("grade", str),
+            ("n", int),
+        ):
+            with self.subTest(agg_field=name):
+                self.assertEqual(agg[name].annotation, want)
+                self.assertTrue(
+                    agg[name].is_required(),
+                    f"CalibrationAggregate.{name} gained a default; "
+                    "_aggregate and _empty_overall write all four keys "
+                    "unconditionally",
+                )
+        self.assertEqual(
+            agg["brier_score"].annotation,
+            float | None,
+            "brier_score must stay nullable: with zero usable predictions "
+            "the producer writes null, not 0.0",
+        )
+        self.assertEqual(
+            agg["n"].annotation,
+            int,
+            "n must stay a bare int; the producer's len() cannot hand "
+            "back null",
+        )
+
+        cov = CategoryCoverage.model_fields
+        self.assertEqual(
+            list(cov),
+            ["total", "classified", "unknown", "unknown_rate"],
+            "CategoryCoverage is no longer the four-key block in producer "
+            "order",
+        )
+        for name, want in (
+            ("total", int),
+            ("classified", int),
+            ("unknown", int),
+            ("unknown_rate", float | None),
+        ):
+            with self.subTest(cov_field=name):
+                self.assertEqual(cov[name].annotation, want)
+                self.assertTrue(
+                    cov[name].is_required(),
+                    f"CategoryCoverage.{name} gained a default; "
+                    "_category_coverage writes all four keys unconditionally",
+                )
+        self.assertEqual(
+            cov["unknown_rate"].annotation,
+            float | None,
+            "unknown_rate must stay nullable: it is None when total == 0, "
+            "a value the producer writes rather than a key it omits",
+        )
+
+    def test_the_calibration_route_binds_the_model_and_declares_no_flag(self):
+        """The route binds EventCalibrationResponse by identity and keeps
+        ``response_model_exclude_unset`` unset (False).
+
+        Both criteria read the *route object* off ``router.routes``, not the
+        source text (53.62's reasoning). The flag half is the 53.56 decision
+        in its negative form: no key in this tree is written conditionally,
+        so the flag has nothing to drop -- and if someone added it together
+        with a default, the absent-key-vs-null distinction would silently
+        enter a wire that never had it. Pinning ``is False`` catches the
+        flag arriving without reading any source.
+        """
+        from fastapi.routing import APIRoute
+
+        from app.api.routes import events as events_routes
+        from app.models.event import (
+            EventCalibrationResponse,
+            FlexibleResponse,
+        )
+
+        routes = [
+            route
+            for route in events_routes.router.routes
+            if isinstance(route, APIRoute) and route.path == "/calibration"
+        ]
+        self.assertEqual(
+            len(routes), 1,
+            "expected exactly one /calibration route in the events router",
+        )
+        self.assertIs(
+            routes[0].response_model,
+            EventCalibrationResponse,
+            "the /calibration route no longer binds EventCalibrationResponse. "
+            "It published no field contract at all before audit 53.63.",
+        )
+        self.assertIsNot(
+            routes[0].response_model,
+            FlexibleResponse,
+            "the /calibration route regressed to the bare FlexibleResponse",
+        )
+        self.assertIs(
+            routes[0].response_model_exclude_unset,
+            False,
+            "the /calibration route gained response_model_exclude_unset; "
+            "every key in this tree is written unconditionally, so the flag "
+            "has nothing to drop and only invites absent-vs-null drift "
+            "(audit 53.63, the 53.56 rule)",
+        )
+
+    def test_the_calibration_callsite_reads_the_generated_contract(self):
+        """No hand-written copy in ``api.ts``, and the call site reads the
+        envelope.
+
+        ``_interface_bodies`` collects only ``export interface``, so the two
+        ``export type`` aliases are not mistaken for declarations. These two
+        copies were faithful (unlike 53.61/53.62's), so their retirement is
+        checked as aliases existing, not consumers changing shape.
+        """
+        api_text = _API_TS_PATH.read_bytes().decode("utf-8")
+        api_bodies = _interface_bodies(api_text)
+
+        for name in ("CalibrationAgg", "CategoryCoverage"):
+            with self.subTest(retired=name):
+                self.assertNotIn(
+                    name,
+                    api_bodies,
+                    f"api.ts re-declared {name}; generated-types.ts is the "
+                    "source of truth. Alias the generated name instead.",
+                )
+        for alias in (
+            "export type CalibrationAgg = GeneratedCalibrationAggregate;",
+            "export type CategoryCoverage = GeneratedCategoryCoverage;",
+        ):
+            self.assertIn(
+                alias,
+                api_text,
+                f"api.ts no longer aliases the generated contract: {alias}",
+            )
+
+        lines = api_text.splitlines()
+        idxs = [
+            i for i, ln in enumerate(lines) if "/events/calibration" in ln
+        ]
+        self.assertEqual(
+            len(idxs), 1,
+            "expected the single /events/calibration call site in api.ts, "
+            f"found {len(idxs)}",
+        )
+        for idx in idxs:
+            with self.subTest(callsite=lines[idx].strip()[:52]):
+                self.assertIn(
+                    "api<EventCalibrationResponse>(",
+                    lines[idx],
+                    "this call site bypasses the published envelope: api.ts "
+                    "must read api<EventCalibrationResponse>",
+                )
+
+
 class ApiTsTypeSourceTests(unittest.TestCase):
     """``api.ts`` reads generated shapes instead of re-declaring them.
 

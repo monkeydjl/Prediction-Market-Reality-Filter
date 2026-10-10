@@ -1251,6 +1251,52 @@ class LoopStatusResponse(FlexibleResponse):
     review_queue: ReviewQueueSummary
 
 
+class CalibrationAggregate(BaseModel):
+    """One aggregate block of ``EventCalibrationResponse`` (audit 53.63):
+    the overall block and every ``by_source`` / ``by_base_rate_category``
+    value share this shape. ``_aggregate`` and ``_empty_overall`` both write
+    the same four keys in this order; the two statistics are nullable only
+    because the ``no_data`` overall carries ``None`` -- a live aggregate
+    always has floats (``round(float, 4)``). The frontend hand-written
+    ``CalibrationAgg`` this retires matched the producer exactly.
+    """
+
+    brier_score: float | None
+    skill_score: float | None
+    grade: str
+    n: int
+
+
+class CategoryCoverage(BaseModel):
+    """The ``category_coverage`` block of ``EventCalibrationResponse``
+    (audit 53.63). ``_category_coverage`` writes all four keys on every
+    path; ``unknown_rate`` is null exactly when ``total`` is 0 (the
+    ``no_data`` shape).
+    """
+
+    total: int
+    classified: int
+    unknown: int
+    unknown_rate: float | None
+
+
+class EventCalibrationResponse(FlexibleResponse):
+    """Response for GET /api/events/calibration (audit 53.63). Both return
+    paths of ``summarize`` (the aggregate and the ``no_data`` early return)
+    write the same four keys in this order, so nothing carries a default and
+    ``response_model_exclude_unset`` is not needed -- there is no "absent".
+    The hand-written frontend envelope this retires was faithful (unlike
+    53.61/53.62's copies); naming it still makes OpenAPI publish the shape
+    for non-frontend readers. Note the sibling per-event snapshot model
+    ``Calibration`` (resolved-event records) is a different shape entirely.
+    """
+
+    overall: CalibrationAggregate
+    by_source: dict[str, CalibrationAggregate]
+    by_base_rate_category: dict[str, CalibrationAggregate]
+    category_coverage: CategoryCoverage
+
+
 class RecentPredictionItem(BaseModel):
     """One element of ``RecentPredictionsResponse.predictions`` (audit 53.58).
 

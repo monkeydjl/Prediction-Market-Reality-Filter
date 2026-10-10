@@ -74,6 +74,21 @@ export interface Calibration {
   estimate_basis?: string;
 }
 /**
+ * One aggregate block of ``EventCalibrationResponse`` (audit 53.63):
+ * the overall block and every ``by_source`` / ``by_base_rate_category``
+ * value share this shape. ``_aggregate`` and ``_empty_overall`` both write
+ * the same four keys in this order; the two statistics are nullable only
+ * because the ``no_data`` overall carries ``None`` -- a live aggregate
+ * always has floats (``round(float, 4)``). The frontend hand-written
+ * ``CalibrationAgg`` this retires matched the producer exactly.
+ */
+export interface CalibrationAggregate {
+  brier_score: number | null;
+  skill_score: number | null;
+  grade: string;
+  n: number;
+}
+/**
  * One cell of ``CalibrationBucketSummaryResponse`` (audit 53.61). Both
  * statistics are ``round(...)`` over lists that may be empty, so either can
  * be null while ``n`` (the group's ``len``) never can.
@@ -139,6 +154,18 @@ export interface CategoryCountsResponse {
     [k: string]: number;
   };
   [k: string]: unknown;
+}
+/**
+ * The ``category_coverage`` block of ``EventCalibrationResponse``
+ * (audit 53.63). ``_category_coverage`` writes all four keys on every
+ * path; ``unknown_rate`` is null exactly when ``total`` is 0 (the
+ * ``no_data`` shape).
+ */
+export interface CategoryCoverage {
+  total: number;
+  classified: number;
+  unknown: number;
+  unknown_rate: number | null;
 }
 /**
  * Diagnostics explaining how source structure affected confidence.
@@ -710,6 +737,27 @@ export interface EventAuditSnapshot {
   impact_score: number | null;
   value_score: number | null;
   source_type: string | null;
+}
+/**
+ * Response for GET /api/events/calibration (audit 53.63). Both return
+ * paths of ``summarize`` (the aggregate and the ``no_data`` early return)
+ * write the same four keys in this order, so nothing carries a default and
+ * ``response_model_exclude_unset`` is not needed -- there is no "absent".
+ * The hand-written frontend envelope this retires was faithful (unlike
+ * 53.61/53.62's copies); naming it still makes OpenAPI publish the shape
+ * for non-frontend readers. Note the sibling per-event snapshot model
+ * ``Calibration`` (resolved-event records) is a different shape entirely.
+ */
+export interface EventCalibrationResponse {
+  overall: CalibrationAggregate;
+  by_source: {
+    [k: string]: CalibrationAggregate;
+  };
+  by_base_rate_category: {
+    [k: string]: CalibrationAggregate;
+  };
+  category_coverage: CategoryCoverage;
+  [k: string]: unknown;
 }
 /**
  * Response for ``GET /events/discover`` (audit 53.59).

@@ -73,7 +73,9 @@ function recentRunEntries(status: LoopStatus) {
 }
 
 function jobLabel(key: string, run: NonNullable<LoopStatus["runs"]>[string]) {
-  const name = run?.job_name ?? run?.job ?? key;
+  // The producer names runs by job_name only (the old hand-written type also
+  // claimed `job`, a key nothing on the wire ever carried).
+  const name = run?.job_name ?? key;
   return JOB_LABELS[name] ?? name;
 }
 
@@ -94,7 +96,9 @@ function formatDurationMs(ms: number | null | undefined) {
 }
 
 function runDurationMs(run: NonNullable<LoopStatus["runs"]>[string]) {
-  return run?.duration_ms ?? (run?.duration_seconds != null ? run.duration_seconds * 1000 : null);
+  // duration_ms is the only duration the producer writes; the old type also
+  // claimed duration_seconds, a key nothing on the wire ever carried.
+  return run?.duration_ms ?? null;
 }
 
 function runDuration(run: NonNullable<LoopStatus["runs"]>[string]) {
@@ -120,7 +124,10 @@ function formatResultValue(value: unknown, depth = 0): string {
 }
 
 function resultEntries(run: NonNullable<LoopStatus["runs"]>[string]) {
-  const result = run?.result ?? run?.details;
+  // The wire key is `result` (_row_to_dict parses result_json); the old type
+  // also claimed `details`, a key nothing on the wire ever carried -- the
+  // `?? run?.details` fallback was dead code.
+  const result = run?.result;
   if (!result) return [];
   return Object.entries(result)
     .filter(([, value]) => value != null && value !== "" && (!Array.isArray(value) || value.length > 0))
@@ -514,7 +521,7 @@ export function SystemStatus() {
           <div className="flex items-center gap-1 overflow-hidden">
             {[...recentRuns].reverse().map((r, index) => (
               <span
-                key={`${r.id ?? r.job_name ?? r.job ?? "run"}:${r.started_at ?? index}`}
+                key={`${r.id ?? r.job_name ?? "run"}:${r.started_at ?? index}`}
                 className={cn("h-2 flex-1 rounded-full", historyTone(r.status))}
                 aria-hidden="true"
               />
@@ -524,7 +531,7 @@ export function SystemStatus() {
             {recentRuns.slice(0, 8).map((r, index) => {
               const ms = runDurationMs(r) ?? 0;
               const width = Math.max(4, Math.round((ms / maxDuration) * 100));
-              const key = r.job_name ?? r.job ?? "job";
+              const key = r.job_name ?? "job";
               const meta = statusMeta(r.status);
               return (
                 <div key={`${r.id ?? key}:${r.started_at ?? index}`} className="grid gap-1.5">

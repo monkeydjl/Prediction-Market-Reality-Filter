@@ -142,6 +142,7 @@ from app.models.event import (
     EventStoreEntry,
     FlexibleResponse,
     FreshEdgesResponse,
+    LoopStatusResponse,
     OpenDecisionsResponse,
     PendingLinksResponse,
     PredictionCalibrationResponse,
@@ -537,9 +538,20 @@ async def get_event_calibration() -> dict[str, Any]:
     return summarize(events)
 
 
-@router.get("/loop/status", response_model=FlexibleResponse)
+@router.get("/loop/status",
+            response_model=LoopStatusResponse,
+            response_model_exclude_unset=True)
 async def get_loop_status(x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
-    """Operational status for the unattended reality feedback loop."""
+    """Operational status for the unattended reality feedback loop.
+
+    The producer writes all seven envelope keys and every nested block's keys
+    unconditionally, so ``response_model_exclude_unset`` changes nothing for
+    them; the flag exists solely for the run rows' two shapes (audit section
+    53.62): without a write key ``_visible_run`` emits the five-key subset,
+    with one the full row adds ``id`` / ``error`` / ``result`` --
+    ``LoopRunView`` defaults those three, and without the flag the defaults
+    would materialise three null keys the subset path never wrote.
+    """
     from app.core.scheduler import scheduler
 
     return await asyncio.to_thread(

@@ -2253,6 +2253,282 @@ class PredictionCalibrationContractTests(unittest.TestCase):
                 )
 
 
+class LoopStatusContractTests(unittest.TestCase):
+    """The /loop/status contract, from both ends (audit 53.62).
+
+    ``GET /events/loop/status`` published a bare ``FlexibleResponse`` while
+    ``api.ts`` hand-wrote ``LoopStatus`` / ``LoopRun``. The hand copy could
+    not name ``review_queue`` at all, missed ``storage.event_store_bytes`` /
+    ``event_store_records`` and ``counts.pending_reviews`` /
+    ``breached_reviews``, and ``LoopRun`` carried two keys (``job``,
+    ``duration_seconds``) nothing on the wire ever wrote -- the dashboard's
+    ``resultEntries`` fallback onto ``details`` was dead code that hid the
+    real ``result`` key. The producer serves *two* shapes behind one URL
+    (run details behind a write key), so the route also gains
+    ``response_model_exclude_unset``: without it, ``LoopRunView``'s three
+    detail-only defaults would materialise null keys on the subset path.
+
+    Four cases: the envelope and its nested blocks, the run view, the route
+    binding *and its flag*, and the text half in ``api.ts``.
+    """
+
+    def test_the_envelope_and_nested_blocks(self):
+        """Seven envelope keys, every nested block's key set, all required.
+
+        Every key the producer writes is written unconditionally (the queue
+        fallback writes the same eight keys as the live path), so no field
+        anywhere in the tree may carry a default except the three
+        detail-only run fields pinned separately. ``calibration`` must be
+        the *same* model 53.61 named -- same producer, and a second
+        hand-written copy of the calibration block is exactly the drift
+        this family exists to prevent.
+        """
+        from app.models.event import (
+            LoopRunView,
+            LoopSchedulerState,
+            LoopStatusCounts,
+            LoopStatusResponse,
+            LoopStatusStorage,
+            PredictionCalibrationResponse,
+            ReviewQueueSeverityBucket,
+            ReviewQueueSummary,
+        )
+
+        fields = LoopStatusResponse.model_fields
+        self.assertEqual(
+            list(fields),
+            ["scheduler", "storage", "runs", "recent_runs", "counts",
+             "calibration", "review_queue"],
+            "LoopStatusResponse is no longer the seven-key envelope in "
+            "producer order",
+        )
+        self.assertEqual(
+            fields["calibration"].annotation,
+            PredictionCalibrationResponse,
+            "LoopStatusResponse.calibration no longer reuses the model "
+            "53.61 named; a second copy of the calibration block is the "
+            "drift this family exists to prevent",
+        )
+        self.assertEqual(
+            fields["runs"].annotation,
+            dict[str, LoopRunView],
+            "runs no longer names its element; a bare dict publishes "
+            "{ [k: string]: unknown } values again",
+        )
+        self.assertEqual(
+            fields["recent_runs"].annotation,
+            list[LoopRunView],
+            "recent_runs no longer names its element",
+        )
+        for name in fields:
+            with self.subTest(required=name):
+                self.assertTrue(
+                    fields[name].is_required(),
+                    f"LoopStatusResponse.{name} gained a default; the "
+                    "producer writes all seven keys (audit 53.62)",
+                )
+
+        self.assertEqual(
+            list(LoopStatusStorage.model_fields),
+            ["loop_db_schema_versions", "event_store_bytes",
+             "event_store_records"],
+            "LoopStatusStorage is no longer the three-key block (the "
+            "hand-written copy could not name the two E1 scale keys)",
+        )
+        self.assertEqual(
+            list(LoopStatusCounts.model_fields),
+            ["events", "resolved_events", "open_opportunities",
+             "predictions", "pending_links", "pending_reviews",
+             "breached_reviews", "orphan_predictions",
+             "dangling_predictions", "dangling_links", "dangling_refs",
+             "dangling_by_table", "calibration_n"],
+            "LoopStatusCounts is no longer the thirteen-key block (the "
+            "hand-written copy omitted the two review-queue depth keys)",
+        )
+        self.assertEqual(
+            LoopStatusCounts.model_fields["events"].annotation, int,
+            "counts.events must stay a bare int; the producer's len() "
+            "cannot hand back null",
+        )
+        self.assertEqual(
+            list(LoopSchedulerState.model_fields), ["running"],
+            "LoopSchedulerState is no longer the one-key block",
+        )
+        self.assertEqual(
+            LoopSchedulerState.model_fields["running"].annotation,
+            bool | None,
+            "scheduler.running must stay nullable: scheduler.running is "
+            "None until the scheduler thread has answered once",
+        )
+
+        rq = ReviewQueueSummary.model_fields
+        self.assertEqual(
+            list(rq),
+            ["pending_total", "oldest_age_hours", "oldest_item_id",
+             "breached_total", "unknown_severity", "sla_hours",
+             "by_severity", "by_trigger"],
+            "ReviewQueueSummary is no longer the eight-key block",
+        )
+        self.assertEqual(
+            rq["oldest_age_hours"].annotation,
+            int | float | None,
+            "oldest_age_hours must keep int | float: the census may hand "
+            "back an int age, and bare float would rewrite 3 to 3.0 on the "
+            "wire",
+        )
+        self.assertEqual(
+            list(ReviewQueueSeverityBucket.model_fields),
+            ["count", "oldest_age_hours", "breached", "sla_hours"],
+            "ReviewQueueSeverityBucket is no longer the four-key bucket in "
+            "producer order",
+        )
+        self.assertEqual(
+            ReviewQueueSeverityBucket.model_fields["oldest_age_hours"]
+            .annotation,
+            int | float | None,
+            "bucket oldest_age_hours must keep int | float for the same "
+            "byte-stability reason",
+        )
+
+    def test_the_run_view_carries_both_shapes(self):
+        """Eight fields in row order; exactly the three detail-only fields
+        carry defaults.
+
+        Declaring the full row (``id`` first) is what keeps the details
+        path's key order stable; the subset path emits only the five keys
+        it writes because the route sets ``response_model_exclude_unset``.
+        The split is pinned per field: a default on one of the five subset
+        keys would make the generated type optional for a key the producer
+        always writes; a *missing* default on one of the three detail-only
+        fields would make the subset path fail validation the moment the
+        flag stopped dropping them.
+        """
+        from typing import Any
+
+        from app.models.event import LoopRunView
+
+        fields = LoopRunView.model_fields
+        self.assertEqual(
+            list(fields),
+            ["id", "job_name", "status", "started_at", "finished_at",
+             "duration_ms", "error", "result"],
+            "LoopRunView is no longer the eight fields in loop_runs row "
+            "order",
+        )
+        for name in ("job_name", "status", "started_at", "finished_at",
+                     "duration_ms"):
+            with self.subTest(subset_required=name):
+                self.assertTrue(
+                    fields[name].is_required(),
+                    f"LoopRunView.{name} gained a default; both run shapes "
+                    "write it, so the generated type must keep it required",
+                )
+        for name, want in (
+            ("id", str | None),
+            ("error", str | None),
+            ("result", dict[str, Any] | None),
+        ):
+            with self.subTest(detail_optional=name):
+                self.assertEqual(fields[name].annotation, want)
+                self.assertFalse(
+                    fields[name].is_required(),
+                    f"LoopRunView.{name} lost its default; the subset path "
+                    "does not write it, and only a default lets the flag "
+                    "omit it (audit 53.62)",
+                )
+
+    def test_the_loop_status_route_binds_the_model_and_keeps_the_flag(self):
+        """The route binds LoopStatusResponse by identity and keeps
+        ``response_model_exclude_unset``.
+
+        Both criteria read the *route object* off ``router.routes``, not the
+        source text: a regression to the bare ``FlexibleResponse`` still
+        validates, still answers 200 and still passes ``tsc`` (53.60
+        criterion), and losing the flag still answers byte-differently only
+        on the subset path -- neither is visible anywhere else.
+        """
+        from fastapi.routing import APIRoute
+
+        from app.api.routes import events as events_routes
+        from app.models.event import FlexibleResponse, LoopStatusResponse
+
+        routes = [
+            route
+            for route in events_routes.router.routes
+            if isinstance(route, APIRoute) and route.path == "/loop/status"
+        ]
+        self.assertEqual(
+            len(routes), 1,
+            "expected exactly one /loop/status route in the events router",
+        )
+        self.assertIs(
+            routes[0].response_model,
+            LoopStatusResponse,
+            "the /loop/status route no longer binds LoopStatusResponse. It "
+            "published no field contract at all before audit 53.62.",
+        )
+        self.assertIsNot(
+            routes[0].response_model,
+            FlexibleResponse,
+            "the /loop/status route regressed to the bare FlexibleResponse",
+        )
+        self.assertIs(
+            routes[0].response_model_exclude_unset,
+            True,
+            "the /loop/status route lost response_model_exclude_unset: the "
+            "subset path would grow three null keys (id/error/result) the "
+            "producer never wrote, changing the wire bytes (audit 53.62)",
+        )
+
+    def test_the_loop_status_callsite_reads_the_generated_contract(self):
+        """No hand-written copy in ``api.ts``, and the call site reads the
+        alias.
+
+        ``_interface_bodies`` collects only ``export interface``, so the two
+        ``export type`` aliases are not mistaken for declarations. The
+        consumer reads ``status.runs`` / ``status.recent_runs`` through the
+        published model now -- a hand copy coming back is the regression.
+        """
+        api_text = _API_TS_PATH.read_bytes().decode("utf-8")
+        api_bodies = _interface_bodies(api_text)
+
+        for name in ("LoopStatus", "LoopRun"):
+            with self.subTest(retired=name):
+                self.assertNotIn(
+                    name,
+                    api_bodies,
+                    f"api.ts re-declared {name}; generated-types.ts is the "
+                    "source of truth. Alias the generated name instead.",
+                )
+        for alias in (
+            "export type LoopRun = GeneratedLoopRunView;",
+            "export type LoopStatus = GeneratedLoopStatusResponse;",
+        ):
+            self.assertIn(
+                alias,
+                api_text,
+                f"api.ts no longer aliases the generated contract: {alias}",
+            )
+
+        lines = api_text.splitlines()
+        idxs = [
+            i for i, ln in enumerate(lines) if "/events/loop/status" in ln
+        ]
+        self.assertEqual(
+            len(idxs), 1,
+            "expected the single /events/loop/status call site in api.ts, "
+            f"found {len(idxs)}",
+        )
+        for idx in idxs:
+            with self.subTest(callsite=lines[idx].strip()[:52]):
+                self.assertIn(
+                    "api<LoopStatus>(",
+                    lines[idx],
+                    "this call site bypasses the published envelope: api.ts "
+                    "must read api<LoopStatus>",
+                )
+
+
 class ApiTsTypeSourceTests(unittest.TestCase):
     """``api.ts`` reads generated shapes instead of re-declaring them.
 

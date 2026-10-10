@@ -25,6 +25,8 @@ import type {
   CalibrationBucketCell as GeneratedCalibrationBucketCell,
   CalibrationBucketSummaryResponse as GeneratedCalibrationBucketSummaryResponse,
   PredictionCalibrationResponse as GeneratedPredictionCalibrationResponse,
+  LoopRunView as GeneratedLoopRunView,
+  LoopStatusResponse as GeneratedLoopStatusResponse,
 } from "./generated-types";
 import { getApiBase, joinApiPath } from "./env";
 import { applyOperatorAuthHeaders } from "./operator-credentials";
@@ -353,44 +355,15 @@ export type EdgePoint = GeneratedEdgeSeriesPoint;
 export type PendingLink = GeneratedPendingLinkItem;
 export type PendingLinksResponse = GeneratedPendingLinksResponse;
 
-export interface LoopRun {
-  id?: string;
-  job?: string;
-  job_name?: string;
-  status: string;
-  started_at?: string;
-  finished_at?: string | null;
-  duration_ms?: number | null;
-  duration_seconds?: number | null;
-  error?: string | null;
-  result?: Record<string, unknown>;
-  details?: Record<string, unknown>;
-}
-
-export interface LoopStatus {
-  scheduler?: { running?: boolean | null };
-  runs?: Record<string, LoopRun | null>;
-  recent_runs?: LoopRun[];
-  counts?: {
-    events?: number;
-    resolved_events?: number;
-    open_opportunities?: number;
-    pending_links?: number;
-    orphan_predictions?: number;
-    dangling_predictions?: number;
-    dangling_links?: number;
-    // E2: the two keys above cover two tables; five carry an event_id. Read
-    // `dangling_refs` for the total and `dangling_by_table` for where they are.
-    dangling_refs?: number;
-    dangling_by_table?: Record<string, number>;
-    calibration_n?: number;
-    predictions?: Record<string, number>;
-  };
-  storage?: {
-    loop_db_schema_versions?: Record<string, number>;
-  };
-  calibration?: PredictionCalibration;
-}
+// The loop status payload is generated from the named backend response model
+// (audit 53.62); these aliases keep the historical hand-written names. The
+// retired hand-written copy omitted review_queue, storage.event_store_* and
+// counts.pending_reviews/breached_reviews, claimed every key optional, and
+// LoopRun carried two keys (job, duration_seconds) the producer never writes.
+// The runs block serves two shapes behind one URL: without a write key runs
+// are five-key subsets, with one they add id/error/result (optional here).
+export type LoopRun = GeneratedLoopRunView;
+export type LoopStatus = GeneratedLoopStatusResponse;
 
 export interface LlmDiagnosticRoute {
   provider: string;

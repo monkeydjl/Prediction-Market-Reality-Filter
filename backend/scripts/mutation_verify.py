@@ -1643,7 +1643,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J71）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J79）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -1852,6 +1852,23 @@ SETS: tuple[MutationSet, ...] = (
             "`segment_min_samples: null` 被 `tsc` 抓出（生产者恒写 settings int），"
             "改 0 并注释；`page.test.tsx` 夹具同形修正（tsc 不查测试文件、"
             "vitest 只转译 ⇒ 夹具只能人工跟）。",
+            "§53.62 补 J72–J79、把 **`/loop/status`** 具名为 `LoopStatusResponse`"
+            "（嵌套 `LoopSchedulerState` / `LoopStatusStorage` / `LoopStatusCounts` / "
+            "`ReviewQueueSummary` / `ReviewQueueSeverityBucket` / `LoopRunView`，"
+            "`calibration` **复用** 53.61 的模型）。本轮新事实：**一个 URL 两种形状**"
+            "（run details 在 write key 之后）⇒ `LoopRunView` 按行序声明全 8 字段、"
+            "其中 3 个 detail-only 字段带默认值、路由**同改动补 "
+            "`response_model_exclude_unset=True`**（§53.55 第 4 检查点的变体："
+            "这次旗子不是「不需要」而是「必须有」——没有它 subset 路径会长出 3 个"
+            "生产者从未写过的 null 键）。探针（`probe_5362.py`，9 用例同树两态）"
+            "域内 **6/6 字节级一致**（含 315KB 的 details 路径与 int age 保形），"
+            "CONTROL 3/3 200→500。消费侧：前端手写副本缺 `review_queue` 整块、"
+            "`LoopRun` 带两个生产者从不写的键（`job`/`duration_seconds`）——"
+            "仪表盘 `resultEntries` 的 `?? details` 回退因此是**死代码**，"
+            "它掩盖了真键 `result`；收窄后 `tsc` 抓出全部四处，"
+            "顺带修了「结果面板永不显示」这个被手写副本掩盖的预存在 UI 缺陷。"
+            "🔴 **消费面判据教训：按「类型名」grep 消费者，别按 API 方法名**——"
+            "组件经 `LoopStatus[\"runs\"]` 索引访问消费，方法名 grep 报零是假象。",
         ),
         mutations=(
             Mutation(
@@ -2695,13 +2712,13 @@ SETS: tuple[MutationSet, ...] = (
             Mutation(
                 label="J30 api.ts 又自己声明 PendingLink：被退役的队列元素副本长回来",
                 path=_API_TS,
-                old=b"export interface LoopRun {",
+                old=b"export type LoopRun = GeneratedLoopRunView;",
                 new=(
                     b"export interface PendingLink {\n"
                     b"  event_id: string;\n"
                     b"  contract_id?: string;\n"
                     b"}\n\n"
-                    b"export interface LoopRun {"
+                    b"export type LoopRun = GeneratedLoopRunView;"
                 ),
                 guard_file=_T_GENERATE_TYPES,
                 guards=("test_pending_callsites_read_the_generated_contract",),
@@ -2711,6 +2728,11 @@ SETS: tuple[MutationSet, ...] = (
                     "§53.55 的 J13/J15、§53.56 的 J22/J24 同款）。"
                     "副本体内不带索引签名、名字不以 `Overlay` 结尾 ⇒ "
                     "`ALLOWED_OVERLAY_COPIES_IN_API_TS` 那条**老**判据仍然绿（本节的守卫必须**按名**判）。"
+                    "🔴 **2026-10-10 §53.62 换锚**：原锚 `export interface LoopRun {` 随手写副本"
+                    "一起退役（实测 0x，`test_mutation_verify` 三条清单测试当场拦下）⇒ "
+                    "判据不变（PendingLink 副本不得回来）、只换锚到**别名行** "
+                    "`export type LoopRun = GeneratedLoopRunView;` —— 别名由本节的守卫"
+                    "（test_the_loop_status_callsite...）钉住，不会再静默消失。"
                     "🔴 **锚点必须与 J22 不同**：J22 用 `export interface AutoResolveMatch {`、"
                     "J31 用 `PendingLinksResponse` 的别名行 —— 三条若共用同一行字节，"
                     "整集 `apply` 时无法同时落位（§53.55 的 J19/J20 教训）。"
@@ -3594,6 +3616,134 @@ SETS: tuple[MutationSet, ...] = (
                     "自己的别名与断言，一个共用 generic 对一端过松、对另一端虚假）。"
                     "🔴 针含 URL、在本文件命中 **1 次**（已字节复核）；"
                     "守卫文件里的别名断言把字符串拆成两段拼接、与针字节不同 ⇒ 不自指。"
+                ),
+            ),
+            Mutation(
+                label="J73 /loop/status 丢失 response_model_exclude_unset：subset 路径长出 3 个 null 键",
+                path=_DIGEST_ROUTES,
+                old=b"response_model=LoopStatusResponse,\r\n            response_model_exclude_unset=True)",
+                new=b"response_model=LoopStatusResponse,\r\n            )",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_loop_status_route_binds_the_model_and_keeps_the_flag",),
+                note=(
+                    "**「必须有旗子」方向的首次登记**（§53.55 立的判据是"
+                    "「具名前先读路由有没有旗子」，J73 钉的是反方向：有了具名"
+                    "**就必须有**旗子）。`LoopRunView` 的 `id`/`error`/`result` "
+                    "带默认值，flag 不在 ⇒ subset 路径（无 write key 的每次轮询）"
+                    "把 3 个生产者从未写过的键实体化成 null —— **改线上字节**，"
+                    "而 `tsc` 看不见。守卫读 `route.response_model_exclude_unset "
+                    "is True`（APIRoute 对象属性）。🔴 针是**两行**（单行 "
+                    "`response_model_exclude_unset=True)` 与 movers 路由相撞），"
+                    "必须带前导行才唯一；跨行针带 CRLF（已字节复核 **1 次**）。"
+                ),
+            ),
+            Mutation(
+                label="J72 /loop/status 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_DIGEST_ROUTES,
+                old=b"response_model=LoopStatusResponse,",
+                new=b"response_model=FlexibleResponse,",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_loop_status_route_binds_the_model_and_keeps_the_flag",),
+                note=(
+                    "§53.62：本轮具名的端点。与 J64 同判据（**路由对象身份**，"
+                    "`route.response_model is LoopStatusResponse`），但**多轴**："
+                    "同一守卫还钉 exclude_unset 旗子（J73 的方向），"
+                    "⇒ J72 变异声称「只踩绑定」时，`new` 已逐旗子判据核过："
+                    "裸 `FlexibleResponse` + 旗子仍 200、`tsc` 绿，只有 schema 变不透明体。"
+                    "🔴 针 `response_model=LoopStatusResponse,` 在本文件命中 **1 次**"
+                    "（已字节复核；带 `response_model=` 前缀避开 import 区同名），"
+                    "守卫文件里没有该字面量 ⇒ 不自指。"
+                ),
+            ),
+            Mutation(
+                label="J74 LoopRunView.started_at 添默认值：双路径恒写的键被放宽成可选",
+                path=_EVENT_MODEL,
+                old=b"    started_at: str\r\n    finished_at: str | None",
+                new=b'    started_at: str = ""\r\n    finished_at: str | None',
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_run_view_carries_both_shapes",),
+                note=(
+                    "**「更松」方向**：五键子集在**两条路径**都写（每行都带全部列），"
+                    "默认值只会把生成类型放宽成 `?:`。守卫用 `subTest("
+                    "subset_required=...)` 逐键拦。🔴 针必须带后随行 "
+                    "`finished_at:`：单行 `    started_at: str` 在别处（如 "
+                    "`RecentPredictionItem` 附近）可能重名，带上文才唯一"
+                    "（已字节复核 **1 次**）。"
+                ),
+            ),
+            Mutation(
+                label="J75 LoopRunView 行序打乱（id 与 job_name 互换）：details 路径键序变化",
+                path=_EVENT_MODEL,
+                old=b"    id: str | None = None\r\n    job_name: str",
+                new=b"    job_name: str\r\n    id: str | None = None",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_run_view_carries_both_shapes",),
+                note=(
+                    "**行序即契约**的守卫判据（§53.60 的键序教训产品化）："
+                    "`LoopRunView` 按 loop_runs **行序**声明 ⇒ details 路径键序"
+                    "字节稳定；打乱后 details 响应的键序变、canonical 不变 —— "
+                    "与 J63 同类的「纯键序」线上差。守卫断言 `list(fields) == "
+                    "行序`。🔴 针是**相邻两行整体互换**（新字节仍合法 Python）"
+                    "（已字节复核 **1 次**）。"
+                ),
+            ),
+            Mutation(
+                label="J76 counts 删 pending_reviews 行：键集收缩、review-queue 深度重新不可见",
+                path=_EVENT_MODEL,
+                old=b"    pending_reviews: int\r\n",
+                new=b"",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_envelope_and_nested_blocks",),
+                note=(
+                    "**「更松」方向**（与 J67 同型）：信封 `extra='allow'`，删声明"
+                    "字段后该键**原样透传** ⇒ 字节不变、tsc 绿，唯一拦截是键集列表"
+                    "断言。**手写副本当年就是这么漏掉它的** —— 副本缺 "
+                    "`pending_reviews`/`breached_reviews`/`review_queue` 整块，"
+                    "正是本节要防止的回归。🔴 整行删除（已字节复核 **1 次**）。"
+                ),
+            ),
+            Mutation(
+                label="J77 桶 oldest_age_hours 从 int | float | None 收成 float | None：int 3 变 3.0",
+                path=_EVENT_MODEL,
+                old=b"    oldest_age_hours: int | float | None\r\n    breached: int",
+                new=b"    oldest_age_hours: float | None\r\n    breached: int",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_envelope_and_nested_blocks",),
+                note=(
+                    "**「改字节」方向**：census 的 age 可能是 int，裸 `float` 收 "
+                    "int 时 pydantic 重序列化 `3` → `3.0` —— **JSON 字节变化**，"
+                    "探针 `syn/queue_int_age` 用例专测（改前 bytes=True）。"
+                    "🔴 针必须带后随行 `breached:`：Summary 块的同名字段后随行是 "
+                    "`oldest_item_id`，带后随行才钉住**桶**而非块（已字节复核 "
+                    "**1 次**）。"
+                ),
+            ),
+            Mutation(
+                label="J78 信封 calibration 添默认值：必填放宽成可选",
+                path=_EVENT_MODEL,
+                old=b"    counts: LoopStatusCounts\r\n    calibration: PredictionCalibrationResponse",
+                new=b"    counts: LoopStatusCounts\r\n    calibration: PredictionCalibrationResponse | None = None",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_envelope_and_nested_blocks",),
+                note=(
+                    "**「更松」方向**：生产者恒写 `calibration`（九键全写），"
+                    "默认值只会把信封放宽成可缺 —— 且 **`| None` 还会放宽注解**，"
+                    "两个判据（`is_required` + 注解相等）各拦一半。🔴 针带前导行 "
+                    "`counts:` 保证唯一（已字节复核 **1 次**）。"
+                ),
+            ),
+            Mutation(
+                label="J79 api.ts loop/status 调用点 generic 换成 Record<string, unknown>：契约旁路",
+                path=_API_TS,
+                old=b'api<LoopStatus>("/events/loop/status")',
+                new=b'api<Record<string, unknown>>("/events/loop/status")',
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_loop_status_callsite_reads_the_generated_contract",),
+                note=(
+                    "**消费面**（与 J71 同判据）：`api<T>` cast 对形状不主张 ⇒ "
+                    "旁路时 tsc/vitest 双盲，静态文本守卫是唯一拦截点。"
+                    "🔴 针含 URL、在本文件命中 **1 次**（已字节复核）；"
+                    "守卫文件里没有该字面量 ⇒ 不自指。"
                 ),
             ),
         ),

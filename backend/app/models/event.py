@@ -1122,6 +1122,135 @@ class CalibrationBucketSummaryResponse(FlexibleResponse):
     by_edge_x_confidence: dict[str, CalibrationBucketCell]
 
 
+class LoopSchedulerState(BaseModel):
+    """The one-key ``scheduler`` block of ``LoopStatusResponse`` (audit
+    53.62). ``scheduler_running`` is ``bool | None`` at the producer (the
+    route passes ``scheduler.running``, which is None until the scheduler
+    thread has answered once), so the value is nullable while the key itself
+    is always written.
+    """
+
+    running: bool | None
+
+
+class LoopRunView(BaseModel):
+    """One loop-run value of ``LoopStatusResponse.runs`` / ``recent_runs``
+    (audit 53.62). The endpoint serves *two* shapes behind one URL: without a
+    write key ``_visible_run`` emits the five-key subset (job_name / status /
+    started_at / finished_at / duration_ms), with one it returns the full
+    ``_row_to_dict`` row, which adds ``id`` / ``error`` / ``result``. All
+    eight fields are declared in row order so the details path keeps its
+    byte order; the three detail-only fields carry defaults and the route
+    adds ``response_model_exclude_unset=True``, so the subset path omits
+    them from the wire exactly as the producer does -- without the flag the
+    defaults would materialise three null keys the producer never wrote.
+
+    Types mirror the producer: the five subset keys are written on both
+    paths (every row dict carries all columns), hence no defaults;
+    ``finished_at`` / ``duration_ms`` are nullable columns (a running job
+    has neither). ``result`` is ``_row_to_dict``'s parsed ``result_json``
+    -- ``json.dumps(result or {})`` at write time, so always a dict.
+    """
+
+    id: str | None = None
+    job_name: str
+    status: str
+    started_at: str
+    finished_at: str | None
+    duration_ms: int | None
+    error: str | None = None
+    result: dict[str, Any] | None = None
+
+
+class LoopStatusStorage(BaseModel):
+    """The ``storage`` block of ``LoopStatusResponse`` (audit 53.62). All
+    three keys are written unconditionally; the hand-written frontend copy
+    declared only ``loop_db_schema_versions`` and could not name the two
+    event-store scale keys (E1) at all.
+    """
+
+    loop_db_schema_versions: dict[str, int]
+    event_store_bytes: int
+    event_store_records: int
+
+
+class ReviewQueueSeverityBucket(BaseModel):
+    """One ``by_severity`` bucket of ``ReviewQueueSummary`` (audit 53.62).
+    ``oldest_age_hours`` is the raw item age, which the census may hand back
+    as int or float -- declaring bare ``float`` would rewrite an int ``3``
+    to ``3.0`` on the wire, so the union is deliberate. ``sla_hours`` comes
+    from the settings floats (or the same defaults) and is None exactly for
+    a severity with no budget.
+    """
+
+    count: int
+    oldest_age_hours: int | float | None
+    breached: int
+    sla_hours: float | None
+
+
+class ReviewQueueSummary(BaseModel):
+    """The ``review_queue`` block of ``LoopStatusResponse`` (audit 53.62) --
+    the key the hand-written frontend copy could not name at all. Both the
+    live path (``queue_sla_summary``) and the try/except fallback write the
+    same eight keys in this order; the fallback only empties the maps and
+    nulls the two oldest fields.
+    """
+
+    pending_total: int
+    oldest_age_hours: int | float | None
+    oldest_item_id: str | None
+    breached_total: int
+    unknown_severity: int
+    sla_hours: dict[str, float]
+    by_severity: dict[str, ReviewQueueSeverityBucket]
+    by_trigger: dict[str, int]
+
+
+class LoopStatusCounts(BaseModel):
+    """The ``counts`` block of ``LoopStatusResponse`` (audit 53.62). All
+    thirteen keys are written unconditionally; the hand-written copy omitted
+    ``pending_reviews`` / ``breached_reviews`` (the whole review-queue depth
+    was the block's reason to exist) and claimed ``predictions`` / the
+    dangling map optional. ``predictions`` is a status-grouped count whose
+    key set varies with the data -- the map itself is always present.
+    """
+
+    events: int
+    resolved_events: int
+    open_opportunities: int
+    predictions: dict[str, int]
+    pending_links: int
+    pending_reviews: int
+    breached_reviews: int
+    orphan_predictions: int
+    dangling_predictions: int
+    dangling_links: int
+    dangling_refs: int
+    dangling_by_table: dict[str, int]
+    calibration_n: int
+
+
+class LoopStatusResponse(FlexibleResponse):
+    """Response for GET /api/events/loop/status (audit 53.62). The producer
+    (``loop_status``) writes all seven keys unconditionally in this order, so
+    the envelope needs no defaults; the route adds
+    ``response_model_exclude_unset=True`` solely for the run rows' two shapes
+    (see ``LoopRunView``). ``calibration`` reuses the model named in 53.61 --
+    same producer, same nine keys. The sibling consumer of the same producer
+    dict is ``GET /api/health`` (main.py), which publishes no response model
+    at all; naming one does not change that endpoint's bytes.
+    """
+
+    scheduler: LoopSchedulerState
+    storage: LoopStatusStorage
+    runs: dict[str, LoopRunView]
+    recent_runs: list[LoopRunView]
+    counts: LoopStatusCounts
+    calibration: PredictionCalibrationResponse
+    review_queue: ReviewQueueSummary
+
+
 class RecentPredictionItem(BaseModel):
     """One element of ``RecentPredictionsResponse.predictions`` (audit 53.58).
 

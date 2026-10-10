@@ -13721,3 +13721,126 @@ category brier 裸 float 放宽成可空（把域外当可能）；J70 元素模
 **3. 🔴 收口的编译信号常常落在消费端的「占位对象」上。**
 手写类型放松处（`?:` + `| null`）在收窄后由 `EMPTY_PRED` 的 `null` 字面量暴露
 —— 这是收口**该有的代价**（tsc 第一次看见真实形状），修占位值而不是回退类型。
+### 53.62 `/loop/status` 具名 `LoopStatusResponse`：一个 URL 两种形状、旗子从「不需要」变「必须有」
+
+**日期**：2026-10-10。**范围**：`backend/app/models/event.py`、`_frontend_export.py`、
+`backend/app/api/routes/events.py`、`backend/tests/test_generate_types.py`、
+`backend/scripts/mutation_verify.py`、`frontend/src/lib/{api,generated-types}.ts`、
+`frontend/src/components/dashboard/system-status.tsx`。
+
+#### 53.62.1 背景与消费面（含一处登记更正）
+
+`GET /events/loop/status` 的 `response_model` 是裸 `FlexibleResponse`；`api.ts`
+手写 `LoopStatus`（24 行、全字段可选）+ `LoopRun`（14 行）。生产者 `loop_status()`
+单返回路径写全 7 个信封键（scheduler/storage/runs/recent_runs/counts/calibration/
+review_queue）。手写副本**缺 `review_queue` 整块**、缺 `storage.event_store_bytes` /
+`event_store_records`（E1 规模键）、缺 `counts.pending_reviews` / `breached_reviews`，
+且 `LoopRun` 带两个生产者从不写的键（`job` / `duration_seconds`）。
+
+⚠️ **登记更正**：§53.62 立项时把它归入「真消费者」组——实测**前端 `loopStatus()`
+调用点是死 generic**（零消费者；真实消费走 `/api/health`）。消费判据的正确姿势是
+**按类型名 grep**：`system-status.tsx` 经 `LoopStatus["runs"]` 索引访问消费该类型，
+方法名 grep 报零是假象。具名收益最终落在：OpenAPI 契约（对 healthcheck 脚本与
+`/api/health` 兄弟端点的读者）、以及死副本退役后**不可能再漂移**。
+
+#### 53.62.2 一个 URL 两种形状：旗子从「不需要」变「必须有」
+
+`_visible_run` 无 write key 发 **5 键子集**（job_name/status/started_at/
+finished_at/duration_ms，两条路径都写——行 dict 恒带全部列），有 write key 发
+**全行 8 键**（`_row_to_dict` 把 `result_json` 解析成 `result`）。处理方式：
+`LoopRunView` 按 loop_runs **行序**声明全 8 字段（details 路径键序稳定），三个
+detail-only 字段（id/error/result）带默认值，路由**同改动补
+`response_model_exclude_unset=True`** —— §53.55 第 4 检查点的反方向：这次不是
+「具名前先读有没有旗子」，而是「这种具名**必须有**旗子」，否则 subset 路径
+（无 key 的每次轮询）长出 3 个生产者从未写过的 null 键（**改线上字节**）。
+信封与全部嵌套块的键都是无条件写 ⇒ 旗子对它们无作用。
+
+类型判据两处按生产者选：`scheduler.running` 可空（`scheduler.running` 在线程
+应答前是 None）；review-queue 的 `oldest_age_hours` 是 **`int | float | None`**——
+census 可能交回 int，裸 `float` 会把 `3` 重写成 `3.0`（探针 `syn/queue_int_age`
+专测，改后字节不变）。`result` 恒 dict（写侧 `json.dumps(result or {})`）。
+`calibration` **复用** §53.61 的 `PredictionCalibrationResponse`（同生产者同九键；
+第二个副本正是本家族要防的漂移）。
+
+#### 53.62.3 探针与消费侧修复
+
+探针 `probe_5362.py`（9 用例同树两态 = 活库两形态 + no_data + running job 两形态
++ int age + 3 CONTROL）：改前自检 9/9 一致；改后**域内 6/6 字节级一致**（含
+315 KB 的 details 路径）；CONTROL 3/3 200→500（counts.events=None / 信封缺
+review_queue / run 缺 job_name）。
+
+消费侧：收窄后 `tsc` 抓出 `system-status.tsx` 四处——全部是**虚假键回退死代码**
+（`run?.job_name ?? run?.job`、`duration_ms ?? duration_seconds*1000`、
+`result ?? details`、`id ?? job_name ?? job`）。其中 `resultEntries` 的
+`?? run?.details` 掩盖了真键 `result` ⇒ **结果面板此前永不显示**——修复顺带
+治好这个被手写副本掩盖的预存在 UI 缺陷（vitest 10/10 过）。
+
+#### 53.62.4 守卫与变异
+
+新增 `LoopStatusContractTests`（4 例）：① 信封 7 键**按序** + 嵌套块键集/注解 +
+calibration 复用断言；② `LoopRunView` 8 字段行序 + 五键 required / 三键
+detail-optional 的**劈开**断言；③ 路由绑定 `assertIs` + `assertIsNot` +
+**旗子断言**（`route.response_model_exclude_unset is True`，从路由对象读）；
+④ api.ts 文本面（副本不再声明 + 两别名 + 调用点 generic）。目标文件
+**43 passed, 294 subtests passed**。
+
+`mutation_verify.py` 追加 **J72–J79**（全族 157→165；set 77→85），四阶段
+**8/8 全过**（green before True | 1/1 files red | green after restore True |
+bytes restored True）。方向：J72 路由退回裸模型；**J73 旗子退场**（改字节方向，
+两行针——单行与 movers 路由的旗子相撞）；J74 子集键添默认值；**J75 行序打乱**
+（id 与 job_name 整体互换，details 路径键序变）；J76 counts 删 pending_reviews
+（手写副本当年就是这么漏的）；J77 桶 oldest_age_hours 收成裸 float（int→3.0
+改字节方向）；J78 信封 calibration 添默认值（`is_required` + 注解两判据）；
+J79 调用点 generic 旁路。八条针字节复核各命中 **1 次**。
+
+🔴 **既有变异换锚（J30）**：`test_mutation_verify` 三条清单测试当场拦下——
+J30（§53.57）的锚 `export interface LoopRun {` 随手写副本退役（实测 0x）。
+判据不变（PendingLink 副本不得回来）、只换锚到别名行
+`export type LoopRun = GeneratedLoopRunView;`（别名由本节守卫钉住，不会再静默
+消失），原因写进 note。**落位顺序教训**：J72/J73 原顺序下 J72 先改写装饰器行
+会毁掉 J73 的两行锚 ⇒ 互换（J73 先摘旗、J72 再换模型）；块是 CRLF ⇒ 字节手术
+的块边界必须按 `\r\n` 找。
+
+`test_mutation_verify.py`：**64 passed, 199 subtests passed**（+8 = J72–J79 进清单）。
+
+#### 53.62.5 门与对账
+
+- `ruff check app/` ✅ / `mypy app/` ✅ **331** files / `generate_types --check` ✅
+- `tsc --noEmit` ✅（四处虚假键回退修复后；vitest system-status **10 passed**）
+- 全量：**tests=8162 failures=0 errors=0 skipped=11**（junit 的 `tests` 属性 =
+  testcase 数 + subtest 数，`<subtests>` 元素恒 0；进程 RC=0）。testcase 元素
+  **6673**、subtests **1489**。逐 classname 对账零残差：**+30 = +4 case + 26
+  subtest** —— 唯一的 case 增项是新守卫 `LoopStatusContractTests`
+  （4 例；单跑实测 **18** subtests），+8 来自 `test_mutation_verify.py` 清单
+  （191 → 199，单跑实测）；**删除 0、classname removed 0**。基线 junit =
+  `.workbuddy/audit-2026-10-03/junit_full_5361.xml`（8132 / 6669 / 1463，
+  与 §53.61.5 记录一致；注意本轮全量 junit 落在 `backend/.workbuddy/`，
+  两轮的相对 cwd 不同）。
+- 行数只取自 `git diff --numstat`，未口算。
+
+#### 53.62.6 登记不修 / 未决
+
+- `/api/health`（main.py:514）：同一生产者的兄弟端点、**无 response_model**
+  （FastAPI 不发布 schema）——本轮不具名（它返回的是 status 的**超集** + 端点
+  清单，形状独立取证）；被 J72 守卫钉住的只有 `/loop/status` 一侧。
+- 前端 `loopStatus()` 调用点仍是**死 generic**（零消费者）——删除动作要用户明说，
+  只登记。
+- `ruff check tests/ scripts/` **339** 条（门之外、既有）；`MEMORY.md` 超注入预算
+  （未决）；`test_closed_overlay_interfaces_have_no_tail` 硬名单不对称（前提未变）。
+
+#### 53.62.7 本轮方法学
+
+**1. 🔴 消费面判据按「类型名」grep，不按 API 方法名。**
+`loopStatus()` 方法零调用 ≠ 类型无消费者：组件经 `LoopStatus["runs"]` 索引访问。
+第一次盘点因此把本端点误判为「真消费者」，第二次又差点误判为「无消费者」——
+两个方向都会错，判据只有一个：类型名的全部出现处。
+
+**2. 🔴 「旗子必须有」与「旗子不需要」是同一判据的两个方向，都要钉。**
+§53.55 钉了「没有条件写入的端点不需要旗子」；本节的具名**制造**了条件写入
+（detail-only 默认值字段）⇒ 旗子成为字节稳定性的前提 ⇒ J73 把它钉成路由对象
+属性断言。旗子的语义随模型变化：加一个带默认值的字段，就要重新问一遍旗子。
+
+**3. 🔴 退役手写副本会饿死以它为锚的既有变异。**
+J30 锚在 `export interface LoopRun {` 上，副本退役 ⇒ 0x ⇒ `test_mutation_verify`
+三条清单测试当场拦（这正是它们存在的意义）。修法 = 换锚 + note 记原因 +
+**别名行由新守卫钉住**（锚的存续不再靠运气）。

@@ -1275,6 +1275,73 @@ class ApiHealthResponse(FlexibleResponse):
     loop: LoopStatusResponse
 
 
+class SparklinesResponse(FlexibleResponse):
+    """Response for POST /api/events/batch-sparklines (audit 53.65). The
+    producer writes the single key unconditionally; every series value goes
+    through ``float(...)`` before the model sees it, so bare ``float`` is
+    faithful and cannot rewrite an int on the wire. The frontend inline
+    ``Record<string, number[]>`` this retires matched the producer exactly.
+    """
+
+    sparklines: dict[str, list[float]]
+
+
+class ResolveExpiredResponse(FlexibleResponse):
+    """Response for POST /api/events/resolve-expired (audit 53.65). The
+    single return path writes all five keys unconditionally, so nothing
+    carries a default and the route needs no ``exclude_unset`` flag. The
+    frontend inline copy named all five -- faithful, retired as a pure
+    type change.
+    """
+
+    total: int
+    resolved: int
+    archived: int
+    parsed_dates: int
+    message: str
+
+
+class TranslateAllResponse(FlexibleResponse):
+    """Response for POST /api/events/translate-all (audit 53.65). The
+    single return path writes all three keys unconditionally. The frontend
+    inline copy was faithful.
+    """
+
+    total: int
+    translated: int
+    message: str
+
+
+class TranslateEventResponse(FlexibleResponse):
+    """Response for POST /api/events/{event_id}/translate (audit 53.65).
+    All three return paths (already-translated early return, LLM-unavailable
+    fallback, success) write the same three keys in this order, so nothing
+    carries a default and the route needs no ``exclude_unset`` flag -- the
+    53.56 rule in its positive form. ``event_title_zh`` is a str on every
+    path (the fallback truncates the English title rather than omitting the
+    key). The frontend inline copy was faithful.
+    """
+
+    event_id: str
+    event_title_zh: str
+    message: str
+
+
+class ResetEventDataResponse(FlexibleResponse):
+    """Response for POST /api/events/reset (audit 53.65). The producer
+    writes both keys unconditionally. ``cleared`` is a dynamic-key map by
+    design -- JSON store paths (str), per-table SQLite row counts (int),
+    the exempt-table CSV (str) and the history-cache marker (str) -- so
+    the value union is ``int | str``, and the inline element type is the
+    contract: naming the envelope without naming the map would publish
+    ``{ [k: string]: unknown }`` values (the 53.53 inline-tail lesson).
+    The frontend inline copy was faithful.
+    """
+
+    message: str
+    cleared: dict[str, int | str]
+
+
 class CalibrationAggregate(BaseModel):
     """One aggregate block of ``EventCalibrationResponse`` (audit 53.63):
     the overall block and every ``by_source`` / ``by_base_rate_category``

@@ -2934,6 +2934,177 @@ class ApiHealthContractTests(unittest.TestCase):
                 )
 
 
+class SmallInlineContractTests(unittest.TestCase):
+    """The five small POST contracts named in audit 53.65, from both ends.
+
+    ``/reset``, ``/batch-sparklines``, ``/{event_id}/translate``,
+    ``/translate-all`` and ``/resolve-expired`` all published bare
+    ``FlexibleResponse`` while ``api.ts`` spelled the shapes inline at the
+    call sites. The five inline copies were faithful, so the retirement is
+    a pure type change and the probe confirmed zero byte difference across
+    all five (including reset's dynamic ``cleared`` map and translate's
+    three return paths).
+
+    ``reset.cleared`` is the 53.53 inline-tail lesson applied on naming:
+    the map is dynamic-key by design, so the *element type* is the
+    contract -- ``dict[str, int | str]``, not ``dict[str, Any]``.
+
+    None of the five carries a conditional key (translate-event's three
+    return paths write the same three keys), so per the 53.56 rule none of
+    the routes may set ``response_model_exclude_unset`` -- pinned as
+    ``is False`` per route.
+
+    Three cases: the five envelopes, the five route bindings and their
+    flag absence, and the five call sites in ``api.ts``.
+    """
+
+    def test_the_five_envelopes(self):
+        """Key sets in producer order, annotations pinned, all required.
+
+        ``sparklines`` values are ``list[float]`` because the producer runs
+        every snapshot through ``float(...)``; ``cleared`` values are
+        ``int | str`` because the map mixes row counts (int) with paths,
+        CSVs and markers (str). All five envelopes write every key on
+        every return path, so no field anywhere may carry a default.
+        """
+        from app.models.event import (
+            ResetEventDataResponse,
+            ResolveExpiredResponse,
+            SparklinesResponse,
+            TranslateAllResponse,
+            TranslateEventResponse,
+        )
+
+        cases = [
+            (SparklinesResponse, ["sparklines"],
+             {"sparklines": dict[str, list[float]]}),
+            (ResolveExpiredResponse,
+             ["total", "resolved", "archived", "parsed_dates", "message"],
+             {"total": int, "resolved": int, "archived": int,
+              "parsed_dates": int, "message": str}),
+            (TranslateAllResponse, ["total", "translated", "message"],
+             {"total": int, "translated": int, "message": str}),
+            (TranslateEventResponse,
+             ["event_id", "event_title_zh", "message"],
+             {"event_id": str, "event_title_zh": str, "message": str}),
+            (ResetEventDataResponse, ["message", "cleared"],
+             {"message": str, "cleared": dict[str, int | str]}),
+        ]
+        for model, keys, annotations in cases:
+            fields = model.model_fields
+            self.assertEqual(
+                list(fields), keys,
+                f"{model.__name__} is no longer its producer key order",
+            )
+            for name, want in annotations.items():
+                with self.subTest(model=model.__name__, field=name):
+                    self.assertEqual(
+                        fields[name].annotation, want,
+                        f"{model.__name__}.{name} annotation drifted",
+                    )
+                    self.assertTrue(
+                        fields[name].is_required(),
+                        f"{model.__name__}.{name} gained a default; the "
+                        "producer writes every key unconditionally "
+                        "(audit 53.65)",
+                    )
+
+    def test_the_five_routes_bind_their_models_and_declare_no_flag(self):
+        """Each route binds its model by identity and keeps no flag.
+
+        Every key in all five trees is written unconditionally, so the
+        flag has nothing to drop (53.56); pinning ``is False`` per route
+        catches a flag arriving silently. All criteria read the *route
+        objects* off ``router.routes``, not the source text.
+        """
+        from fastapi.routing import APIRoute
+
+        from app.api.routes import events as events_routes
+        from app.models.event import (
+            FlexibleResponse,
+            ResetEventDataResponse,
+            ResolveExpiredResponse,
+            SparklinesResponse,
+            TranslateAllResponse,
+            TranslateEventResponse,
+        )
+
+        by_path = {
+            "/reset": ResetEventDataResponse,
+            "/batch-sparklines": SparklinesResponse,
+            "/{event_id}/translate": TranslateEventResponse,
+            "/translate-all": TranslateAllResponse,
+            "/resolve-expired": ResolveExpiredResponse,
+        }
+        routes = {
+            route.path: route
+            for route in events_routes.router.routes
+            if isinstance(route, APIRoute) and route.path in by_path
+        }
+        self.assertEqual(
+            sorted(routes), sorted(by_path),
+            "expected exactly one events-router route per named path",
+        )
+        for path, model in by_path.items():
+            route = routes[path]
+            with self.subTest(route=path):
+                self.assertIs(
+                    route.response_model, model,
+                    f"the {path} route no longer binds {model.__name__}. "
+                    "It published no field contract before audit 53.65.",
+                )
+                self.assertIsNot(
+                    route.response_model, FlexibleResponse,
+                    f"the {path} route regressed to the bare "
+                    "FlexibleResponse",
+                )
+                self.assertIs(
+                    route.response_model_exclude_unset, False,
+                    f"the {path} route gained response_model_exclude_unset; "
+                    "every key in this tree is written unconditionally, so "
+                    "the flag has nothing to drop (audit 53.65, the 53.56 "
+                    "rule)",
+                )
+
+    def test_the_five_callsites_read_the_generated_contracts(self):
+        """No inline shape left at the five call sites in ``api.ts``.
+
+        Each call site must read the named envelope; the check is textual
+        because ``api<T>`` is a cast that asserts nothing. Each needle
+        includes the URL so it is unique in the file.
+        """
+        api_text = _API_TS_PATH.read_bytes().decode("utf-8")
+
+        for needle in (
+            'api<SparklinesResponse>("/events/batch-sparklines"',
+            'api<ResolveExpiredResponse>("/events/resolve-expired"',
+            "api<TranslateAllResponse>(`/events/translate-all?force=",
+            "api<TranslateEventResponse>(\r\n"
+            "      `/events/${encodeURIComponent(id)}/translate?force=",
+            'api<ResetEventDataResponse>(\r\n      "/events/reset",',
+        ):
+            with self.subTest(needle=needle[:52]):
+                self.assertIn(
+                    needle, api_text,
+                    "this call site no longer reads the named envelope: "
+                    "api.ts must keep the generated generic",
+                )
+        for inline in (
+            "api<{ sparklines: Record<string, number[]> }>",
+            "api<{ total: number; resolved: number;",
+            "api<{ total: number; translated: number;",
+            "api<{ event_id: string; event_title_zh: string;",
+            "api<{ message: string; cleared: Record<string,",
+        ):
+            with self.subTest(inline=inline[:52]):
+                self.assertNotIn(
+                    inline, api_text,
+                    "an inline response shape came back at a call site "
+                    "this family named; read the generated contract "
+                    "instead (audit 53.65)",
+                )
+
+
 class ApiTsTypeSourceTests(unittest.TestCase):
     """``api.ts`` reads generated shapes instead of re-declaring them.
 

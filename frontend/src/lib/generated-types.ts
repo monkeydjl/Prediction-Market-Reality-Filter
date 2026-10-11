@@ -1581,6 +1581,38 @@ export interface RecentPredictionsResponse {
   [k: string]: unknown;
 }
 /**
+ * Response for POST /api/events/reset (audit 53.65). The producer
+ * writes both keys unconditionally. ``cleared`` is a dynamic-key map by
+ * design -- JSON store paths (str), per-table SQLite row counts (int),
+ * the exempt-table CSV (str) and the history-cache marker (str) -- so
+ * the value union is ``int | str``, and the inline element type is the
+ * contract: naming the envelope without naming the map would publish
+ * ``{ [k: string]: unknown }`` values (the 53.53 inline-tail lesson).
+ * The frontend inline copy was faithful.
+ */
+export interface ResetEventDataResponse {
+  message: string;
+  cleared: {
+    [k: string]: number | string;
+  };
+  [k: string]: unknown;
+}
+/**
+ * Response for POST /api/events/resolve-expired (audit 53.65). The
+ * single return path writes all five keys unconditionally, so nothing
+ * carries a default and the route needs no ``exclude_unset`` flag. The
+ * frontend inline copy named all five -- faithful, retired as a pure
+ * type change.
+ */
+export interface ResolveExpiredResponse {
+  total: number;
+  resolved: number;
+  archived: number;
+  parsed_dates: number;
+  message: string;
+  [k: string]: unknown;
+}
+/**
  * One paper trade row, as returned by the /trades/* list endpoints.
  *
  * The fields without a default mirror the store's NOT NULL columns and are
@@ -1687,6 +1719,19 @@ export interface SimilarEventsResponse {
   [k: string]: unknown;
 }
 /**
+ * Response for POST /api/events/batch-sparklines (audit 53.65). The
+ * producer writes the single key unconditionally; every series value goes
+ * through ``float(...)`` before the model sees it, so bare ``float`` is
+ * faithful and cannot rewrite an int on the wire. The frontend inline
+ * ``Record<string, number[]>`` this retires matched the producer exactly.
+ */
+export interface SparklinesResponse {
+  sparklines: {
+    [k: string]: number[];
+  };
+  [k: string]: unknown;
+}
+/**
  * One row of the by_direction / by_decision tables.
  *
  * ``total``/``wins``/``win_rate`` are always present on a bucket the store
@@ -1721,5 +1766,31 @@ export interface TradeStats {
   by_decision?: {
     [k: string]: TradeStatBucket;
   };
+  [k: string]: unknown;
+}
+/**
+ * Response for POST /api/events/translate-all (audit 53.65). The
+ * single return path writes all three keys unconditionally. The frontend
+ * inline copy was faithful.
+ */
+export interface TranslateAllResponse {
+  total: number;
+  translated: number;
+  message: string;
+  [k: string]: unknown;
+}
+/**
+ * Response for POST /api/events/{event_id}/translate (audit 53.65).
+ * All three return paths (already-translated early return, LLM-unavailable
+ * fallback, success) write the same three keys in this order, so nothing
+ * carries a default and the route needs no ``exclude_unset`` flag -- the
+ * 53.56 rule in its positive form. ``event_title_zh`` is a str on every
+ * path (the fallback truncates the English title rather than omitting the
+ * key). The frontend inline copy was faithful.
+ */
+export interface TranslateEventResponse {
+  event_id: string;
+  event_title_zh: string;
+  message: string;
   [k: string]: unknown;
 }

@@ -148,7 +148,12 @@ from app.models.event import (
     PendingLinksResponse,
     PredictionCalibrationResponse,
     RecentPredictionsResponse,
+    ResetEventDataResponse,
+    ResolveExpiredResponse,
     SimilarEventsResponse,
+    SparklinesResponse,
+    TranslateAllResponse,
+    TranslateEventResponse,
     SimTrade,
     SimTradeListResponse,
     TradeStats,
@@ -299,7 +304,7 @@ async def analyze_event_intelligence(
     )
 
 
-@router.post("/reset", response_model=FlexibleResponse)
+@router.post("/reset", response_model=ResetEventDataResponse)
 async def reset_all_event_data(_auth: None = Depends(require_write_key)) -> dict[str, Any]:
     """Delete all event data: store, predictions, audit log, cache.
 
@@ -1215,7 +1220,7 @@ async def resolve_world_cup_sports_events(
 
 # Dynamic routes declared after the static /discover, /analyze, / and /movers
 # routes so the path parameter does not shadow them.
-@router.post("/batch-sparklines", response_model=FlexibleResponse)
+@router.post("/batch-sparklines", response_model=SparklinesResponse)
 async def batch_sparklines(
     body: dict = Body(...),
     _auth: None = Depends(require_write_key),
@@ -1831,7 +1836,7 @@ async def delete_event(
 # ── Event title translation ────────────────────────────────────────
 
 
-@router.post("/{event_id}/translate", response_model=FlexibleResponse)
+@router.post("/{event_id}/translate", response_model=TranslateEventResponse)
 async def translate_event_title(
     event_id: str,
     force: bool = Query(default=False),
@@ -1882,7 +1887,7 @@ async def translate_event_title(
     return {"event_id": event_id, "event_title_zh": zh_title[:300], "message": "Translated"}
 
 
-@router.post("/translate-all", response_model=FlexibleResponse)
+@router.post("/translate-all", response_model=TranslateAllResponse)
 async def translate_all_events(
     force: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
@@ -1927,7 +1932,7 @@ async def translate_all_events(
     }
 
 
-@router.post("/resolve-expired", response_model=FlexibleResponse)
+@router.post("/resolve-expired", response_model=ResolveExpiredResponse)
 async def resolve_expired_events(_auth: None = Depends(require_write_key)) -> dict[str, Any]:
     """Archive unresolved events whose deadline is in the past.
 

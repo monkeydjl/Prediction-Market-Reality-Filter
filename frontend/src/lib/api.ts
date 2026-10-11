@@ -31,6 +31,11 @@ import type {
   CalibrationAggregate as GeneratedCalibrationAggregate,
   CategoryCoverage as GeneratedCategoryCoverage,
   EventCalibrationResponse,
+  ResetEventDataResponse,
+  ResolveExpiredResponse,
+  SparklinesResponse,
+  TranslateAllResponse,
+  TranslateEventResponse,
 } from "./generated-types";
 import { getApiBase, joinApiPath } from "./env";
 import { applyOperatorAuthHeaders } from "./operator-credentials";
@@ -792,7 +797,7 @@ export const eventsApi = {
     api<EventHistoryResponse>(`/events/${encodeURIComponent(id)}/history`),
 
   batchSparklines: (eventIds: string[]) =>
-    api<{ sparklines: Record<string, number[]> }>("/events/batch-sparklines", {
+    api<SparklinesResponse>("/events/batch-sparklines", {
       method: "POST",
       body: JSON.stringify({ event_ids: eventIds }),
     }, { invalidateGetCache: false }),
@@ -816,17 +821,17 @@ export const eventsApi = {
     ),
 
   resolveExpired: () =>
-    api<{ total: number; resolved: number; archived: number; parsed_dates: number; message: string }>("/events/resolve-expired", {
+    api<ResolveExpiredResponse>("/events/resolve-expired", {
       method: "POST",
     }, { timeoutMs: 300_000 }),
 
   translateAll: (force = false) =>
-    api<{ total: number; translated: number; message: string }>(`/events/translate-all?force=${force}`, {
+    api<TranslateAllResponse>(`/events/translate-all?force=${force}`, {
       method: "POST",
     }, { timeoutMs: 300_000 }),
 
   translateEvent: (id: string, force = false) =>
-    api<{ event_id: string; event_title_zh: string; message: string }>(
+    api<TranslateEventResponse>(
       `/events/${encodeURIComponent(id)}/translate?force=${force}`,
       { method: "POST" },
       { timeoutMs: 60_000 },
@@ -859,7 +864,7 @@ export const eventsApi = {
 
   // Delete all event data (requires write key).
   resetData: () =>
-    api<{ message: string; cleared: Record<string, number | string> }>(
+    api<ResetEventDataResponse>(
       "/events/reset",
       { method: "POST" },
     ),

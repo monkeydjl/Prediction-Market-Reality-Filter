@@ -1644,7 +1644,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J95）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J100）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -4009,6 +4009,84 @@ SETS: tuple[MutationSet, ...] = (
                     "503 变成前端连接故障）。🔴 针含 URL、在本文件命中 **1 次**"
                     "（已字节复核）；与 D6 新宿主（CalibrationDeviationRow）及 "
                     "J87 的窗口不相交；守卫文件里没有该字面量 ⇒ 不自指。"
+                ),
+            ),
+            Mutation(
+                label="J96 ResetEventDataResponse.cleared 退化成 dict[str, Any]：动态键映射的元素契约重新不可见",
+                path=_EVENT_MODEL,
+                old=b"    cleared: dict[str, int | str]\r\n",
+                new=b"    cleared: dict[str, Any]\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_five_envelopes",),
+                note=(
+                    "**「更松」方向**（53.53 (c) 类教训的命名面）：`cleared` 是"
+                    "**动态键映射**（JSON 路径 str / 行数 int / 豁免表 CSV str / "
+                    "cache 标记 str），值联合 `int | str` 就是契约——退化成 "
+                    "`dict[str, Any]` 后生成类型变 `{ [k: string]: unknown }`，"
+                    "传输面**零字节差**（透传）、tsc 盲。守卫的注解相等断言是"
+                    "唯一拦截点。🔴 单行针在本文件命中 **1 次**（已字节复核）。"
+                ),
+            ),
+            Mutation(
+                label="J97 /resolve-expired 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_DIGEST_ROUTES,
+                old=b"response_model=ResolveExpiredResponse)",
+                new=b"response_model=FlexibleResponse)",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_five_routes_bind_their_models_and_declare_no_flag",),
+                note=(
+                    "§53.65：五端点批次的代表针（与 J64/J72/J80/J88 同判据，"
+                    "路由对象身份）。**批次不等于每条路由都要一根针**——五条路由"
+                    "由同一守卫按路径循环断言，一条变异证明循环承重即可；其余四条"
+                    "路由的回归由同一 subTest 循环在守卫常规运行中拦截。裸 "
+                    "`FlexibleResponse` 仍 200、tsc 绿。🔴 针带右括号（装饰器"
+                    "单行），在本文件命中 **1 次**（已字节复核）。"
+                ),
+            ),
+            Mutation(
+                label="J98 /translate-all 添 response_model_exclude_unset：无旗子端点悄悄到货旗子",
+                path=_DIGEST_ROUTES,
+                old=b'@router.post("/translate-all", response_model=TranslateAllResponse)',
+                new=b'@router.post("/translate-all", response_model=TranslateAllResponse,\r\n                                 response_model_exclude_unset=True)',
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_five_routes_bind_their_models_and_declare_no_flag",),
+                note=(
+                    "**「旗子悄悄到货」方向**（53.63 钉 `is False` 的反向承重"
+                    "针）：五棵树全部无条件写键 ⇒ 旗子无事可做；旗子+默认值才会"
+                    "引入 absent-vs-null 歧义。守卫的 `assertIs(..., False)` 拦"
+                    "的是旗子**到达**本身，不是等它造成字节差。🔴 针是装饰器整行"
+                    "（`@router.post(` 前缀避开别处同形），命中 **1 次**（已字节"
+                    "复核）；new 是两行合法 Python，插入行用 CRLF（events.py 本"
+                    "行尾）。"
+                ),
+            ),
+            Mutation(
+                label="J99 SparklinesResponse.sparklines 添默认值：恒写键被放宽成可选",
+                path=_EVENT_MODEL,
+                old=b"    sparklines: dict[str, list[float]]\r\n",
+                new=b"    sparklines: dict[str, list[float]] | None = None\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_five_envelopes",),
+                note=(
+                    "**「更松」方向**：生产者恒写单键，默认值只会放宽成可缺——且 "
+                    "**`| None` 还会放宽注解**，两个判据（`is_required` + 注解"
+                    "相等）各拦一半。🔴 单行针在本文件命中 **1 次**（已字节复核）。"
+                ),
+            ),
+            Mutation(
+                label="J100 api.ts /events/reset 调用点 generic 换成 Record<string, unknown>：契约旁路",
+                path=_API_TS,
+                old=b"api<ResetEventDataResponse>(",
+                new=b"api<Record<string, unknown>>(",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_five_callsites_read_the_generated_contracts",),
+                note=(
+                    "**消费面**（与 J71/J79/J87/J95 同判据）：`api<T>` cast 对"
+                    "形状不主张 ⇒ 旁路时 tsc/vitest 双盲。🔴 针 `api<"
+                    "ResetEventDataResponse>(` 在本文件命中 **1 次**（已字节"
+                    "复核；该调用点跨行，针只取 generic+括号段）；与守卫的跨行 "
+                    "needle 重叠是**故意**的——变异必须让守卫的 assertIn 变红。"
+                    "与 D6/J95 等既有 api.ts 针的窗口不相交。"
                 ),
             ),
         ),

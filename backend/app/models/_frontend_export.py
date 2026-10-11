@@ -53,6 +53,7 @@ Do NOT import models that should not leak to the frontend:
 """
 from app.models.event import (
     ActionableRecommendation,
+    ApiHealthResponse,
     AutoResolveResponse,
     Calibration,
     CalibrationAggregate,
@@ -138,6 +139,7 @@ from app.models.event import (
 
 __all__ = [
     "ActionableRecommendation",
+    "ApiHealthResponse",
     "AutoResolveResponse",
     "Calibration",
     "CalibrationAggregate",

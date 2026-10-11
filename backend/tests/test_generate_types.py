@@ -2754,6 +2754,186 @@ class EventCalibrationContractTests(unittest.TestCase):
                 )
 
 
+class ApiHealthContractTests(unittest.TestCase):
+    """The /api/health contract, from both ends (audit 53.64).
+
+    ``GET /api/health`` (main.py, not the events router) published no
+    response model at all while ``api.ts`` hand-wrote ``ApiHealth``: five
+    named keys for the seven the producer writes -- ``scheduler_enabled``
+    and ``scheduler_lock_skipped`` reached the browser unnamed -- and two
+    always-written keys (``scheduler_running``, ``failed_runs``) marked
+    optional. The handler's ``loop`` value is the exact dict
+    ``loop_status`` returns, so the field reuses the model 53.62 named; a
+    second copy of the loop envelope is the drift this family exists to
+    prevent.
+
+    The route needs ``response_model_exclude_unset`` for the same reason
+    /loop/status does, with a sharper edge: healthchecks poll WITHOUT a
+    write key, so the five-key run subset is the dominant path and losing
+    the flag would grow three null keys on nearly every response. The 503
+    degraded status is set on the Response parameter and must survive the
+    model (the probe pins a 503 case).
+
+    Three cases: the envelope and its reuse of the loop model, the route
+    binding and its flag, and the text half in ``api.ts``.
+    """
+
+    def test_the_envelope_and_its_loop_reuse(self):
+        """Seven envelope keys in producer order, none with a default.
+
+        The handler builds all seven keys in one dict literal, so no field
+        may carry a default. ``scheduler_running`` is ``bool | None``
+        because ``scheduler.running`` is None until the scheduler thread
+        has answered once -- the same value 53.62 pinned on
+        ``LoopSchedulerState.running``; narrowing it to ``bool`` would 500
+        that window, and an int value reaching it would be rewritten on
+        the wire. ``loop`` must be the *same* model 53.62 named -- same
+        producer dict.
+        """
+        from app.models.event import (
+            ApiHealthResponse,
+            LoopStatusResponse,
+        )
+
+        fields = ApiHealthResponse.model_fields
+        self.assertEqual(
+            list(fields),
+            ["status", "version", "scheduler_running", "scheduler_enabled",
+             "scheduler_lock_skipped", "failed_runs", "loop"],
+            "ApiHealthResponse is no longer the seven-key envelope in "
+            "producer order",
+        )
+        for name, want in (
+            ("status", str),
+            ("version", str),
+            ("scheduler_running", bool | None),
+            ("scheduler_enabled", bool),
+            ("scheduler_lock_skipped", bool),
+            ("failed_runs", list[str]),
+            ("loop", LoopStatusResponse),
+        ):
+            with self.subTest(field=name):
+                self.assertEqual(
+                    fields[name].annotation, want,
+                    f"ApiHealthResponse.{name} annotation drifted",
+                )
+                self.assertTrue(
+                    fields[name].is_required(),
+                    f"ApiHealthResponse.{name} gained a default; the "
+                    "handler writes all seven keys in one dict literal "
+                    "(audit 53.64)",
+                )
+        self.assertEqual(
+            fields["scheduler_running"].annotation,
+            bool | None,
+            "scheduler_running must stay nullable: scheduler.running is "
+            "None until the scheduler thread has answered once (the same "
+            "value 53.62 pinned on LoopSchedulerState.running)",
+        )
+        self.assertIs(
+            fields["loop"].annotation,
+            LoopStatusResponse,
+            "loop no longer reuses the model 53.62 named; a second copy "
+            "of the loop envelope is the drift this family exists to "
+            "prevent",
+        )
+
+    def test_the_health_route_binds_the_model_and_keeps_the_flag(self):
+        """The route binds ApiHealthResponse by identity and keeps
+        ``response_model_exclude_unset``.
+
+        The route lives on the root app (main.py), not the events router,
+        so the lookup reads ``app.main.app.routes``. Both criteria read
+        the *route object*, not the source text. The flag is the 53.62
+        reasoning with a sharper edge: the unauthenticated five-key run
+        subset is the dominant path (container healthchecks poll without
+        a write key), so losing the flag would grow three null keys on
+        nearly every response.
+        """
+        from fastapi.routing import APIRoute
+
+        from app.main import app
+        from app.models.event import ApiHealthResponse, FlexibleResponse
+
+        routes = [
+            route
+            for route in app.routes
+            if isinstance(route, APIRoute) and route.path == "/api/health"
+        ]
+        self.assertEqual(
+            len(routes), 1,
+            "expected exactly one /api/health route on the root app",
+        )
+        self.assertIs(
+            routes[0].response_model,
+            ApiHealthResponse,
+            "the /api/health route no longer binds ApiHealthResponse. It "
+            "published no field contract at all before audit 53.64.",
+        )
+        self.assertIsNot(
+            routes[0].response_model,
+            FlexibleResponse,
+            "the /api/health route regressed to the bare FlexibleResponse",
+        )
+        self.assertIs(
+            routes[0].response_model_exclude_unset,
+            True,
+            "the /api/health route lost response_model_exclude_unset: "
+            "healthchecks poll without a write key, so the subset path "
+            "would grow three null keys (id/error/result) on nearly every "
+            "response (audit 53.64)",
+        )
+
+    def test_the_health_callsite_reads_the_generated_contract(self):
+        """No hand-written copy in ``api.ts``, and the call site reads the
+        alias with its 503 tolerance intact.
+
+        ``_interface_bodies`` collects only ``export interface``, so the
+        ``export type`` alias is not mistaken for a declaration. The
+        ``acceptStatuses: [503]`` on the call site is load-bearing: the
+        endpoint answers 503 when degraded, and the helper must not treat
+        that as a transport error.
+        """
+        api_text = _API_TS_PATH.read_bytes().decode("utf-8")
+        api_bodies = _interface_bodies(api_text)
+
+        self.assertNotIn(
+            "ApiHealth",
+            api_bodies,
+            "api.ts re-declared ApiHealth; generated-types.ts is the "
+            "source of truth. Alias the generated name instead.",
+        )
+        self.assertIn(
+            "export type ApiHealth = GeneratedApiHealthResponse;",
+            api_text,
+            "api.ts no longer aliases the generated health contract",
+        )
+
+        lines = api_text.splitlines()
+        idxs = [
+            i for i, ln in enumerate(lines) if '"/health"' in ln
+        ]
+        self.assertEqual(
+            len(idxs), 1,
+            "expected the single /health call site in api.ts, "
+            f"found {len(idxs)}",
+        )
+        for idx in idxs:
+            with self.subTest(callsite=lines[idx].strip()[:52]):
+                self.assertIn(
+                    "api<ApiHealth>(",
+                    lines[idx],
+                    "this call site bypasses the published envelope: api.ts "
+                    "must read api<ApiHealth>",
+                )
+                self.assertIn(
+                    "acceptStatuses: [503]",
+                    lines[idx],
+                    "the /health call site lost its 503 tolerance; the "
+                    "endpoint answers 503 when degraded (audit 53.64)",
+                )
+
+
 class ApiTsTypeSourceTests(unittest.TestCase):
     """``api.ts`` reads generated shapes instead of re-declaring them.
 

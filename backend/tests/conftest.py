@@ -582,3 +582,75 @@ def fake_domain_reliability_stat(**columns) -> dict:
     }
     row.update(columns)
     return _row_to_stat(row)
+
+
+def minimal_loop_status_payload(**overrides) -> dict:
+    """A complete ``loop_status()`` payload, built from the named model.
+
+    Endpoint tests stub ``loop_status``; while ``/api/health`` published no
+    response model, an unfaithful ``{'runs': {}}`` stub passed silently --
+    the moment audit 53.64 named the envelope (whose ``loop`` field reuses
+    ``LoopStatusResponse``) those stubs became validation failures. This
+    helper constructs the payload from ``LoopStatusResponse`` itself, so it
+    is correct by construction: a required field the model gains makes this
+    raise at setup instead of quietly thinning every stub that uses it
+    (same posture as ``fake_domain_reliability_stat`` above). Callers may
+    override top-level blocks, e.g. ``runs={...}`` for a degraded case.
+    """
+    from app.models.event import (
+        LoopSchedulerState,
+        LoopStatusCounts,
+        LoopStatusResponse,
+        LoopStatusStorage,
+        PredictionCalibrationResponse,
+        ReviewQueueSummary,
+    )
+
+    payload = LoopStatusResponse(
+        scheduler=LoopSchedulerState(running=None),
+        storage=LoopStatusStorage(
+            loop_db_schema_versions={},
+            event_store_bytes=0,
+            event_store_records=0,
+        ),
+        runs={},
+        recent_runs=[],
+        counts=LoopStatusCounts(
+            events=0,
+            resolved_events=0,
+            open_opportunities=0,
+            predictions={},
+            pending_links=0,
+            pending_reviews=0,
+            breached_reviews=0,
+            orphan_predictions=0,
+            dangling_predictions=0,
+            dangling_links=0,
+            dangling_refs=0,
+            dangling_by_table={},
+            calibration_n=0,
+        ),
+        calibration=PredictionCalibrationResponse(
+            n=0,
+            brier_score=None,
+            grade="NO_DATA",
+            mean_raw_edge=None,
+            realized_edge=None,
+            directional_hit_rate=None,
+            by_category={},
+            segment_min_samples=0,
+            segments={},
+        ),
+        review_queue=ReviewQueueSummary(
+            pending_total=0,
+            oldest_age_hours=None,
+            oldest_item_id=None,
+            breached_total=0,
+            unknown_severity=0,
+            sla_hours={},
+            by_severity={},
+            by_trigger={},
+        ),
+    ).model_dump()
+    payload.update(overrides)
+    return payload

@@ -266,6 +266,7 @@ _OVERLAY_TESTS = "tests/test_env_overlay_examples.py"
 _PROBE_TESTS = "tests/test_report_probability_scale_outliers.py"
 
 _DIGEST_ROUTES = "backend/app/api/routes/events.py"
+_MAIN_APP = "backend/app/main.py"
 _DIGEST_SERVICE = "backend/app/services/daily_digest_service.py"
 _QUEUE_ROUTES = "backend/app/api/routes/review_queue.py"
 _QUEUE_CLI = "backend/scripts/review_queue_cli.py"
@@ -1643,7 +1644,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J87）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J95）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -3872,6 +3873,142 @@ SETS: tuple[MutationSet, ...] = (
                     "旁路时 tsc/vitest 双盲，静态文本守卫是唯一拦截点。🔴 针含 URL、"
                     "在本文件命中 **1 次**（已字节复核）；守卫文件里没有该字面量 ⇒ "
                     "不自指。"
+                ),
+            ),
+            Mutation(
+                label="J89 /api/health 丢失 response_model_exclude_unset：无 key 子集路径长出 3 个 null 键",
+                path=_MAIN_APP,
+                old=b"response_model=ApiHealthResponse,\r\n         response_model_exclude_unset=True)",
+                new=b"response_model=ApiHealthResponse,\r\n         )",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_health_route_binds_the_model_and_keeps_the_flag",),
+                note=(
+                    "§53.64：与 J73 同判据但**更尖锐**——container healthcheck "
+                    "**无 write key 轮询** ⇒ 五键子集是**主导路径**，旗子退场后 "
+                    "`LoopRunView` 的 3 个 detail-only 默认值（id/error/result）"
+                    "在几乎每次响应上实体化成 null（改线上字节）。503 降级状态由 "
+                    "Response 参数设置、不受 response_model 影响（探针 "
+                    "`syn/degraded_503` 钉住 503 存活）。🔴 针是两行（单行 "
+                    "`response_model_exclude_unset=True)` 与 /loop/status 的 "
+                    "装饰器相撞），必须带前导行才唯一；**与 J88 锚重叠但可换序**"
+                    "（J89 的 new 保留第一行 ⇒ J88 的锚仍在），故本块在 J88 之前"
+                    "落位（§53.62 J72/J73 同款）。已字节复核各命中 **1 次**。"
+                ),
+            ),
+            Mutation(
+                label="J88 /api/health 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_MAIN_APP,
+                old=b"response_model=ApiHealthResponse,",
+                new=b"response_model=FlexibleResponse,",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_health_route_binds_the_model_and_keeps_the_flag",),
+                note=(
+                    "§53.64：本轮具名的端点（在**根 app** 上，非 events router；"
+                    "守卫读 `app.main.app.routes`）。与 J64/J72/J80 同判据（路由"
+                    "对象身份）。裸 `FlexibleResponse` 仍 200/503、`tsc` 绿，只有 "
+                    "schema 变不透明体。🔴 针带 `response_model=` 前缀避开 import "
+                    "区同名，在本文件命中 **1 次**（已字节复核）；与 J89 可换序"
+                    "（J89 先落位后本锚仍在）。"
+                ),
+            ),
+            Mutation(
+                label="J90 ApiHealthResponse.scheduler_running 从 bool | None 收成 bool：None 窗口 500",
+                path=_EVENT_MODEL,
+                old=b"    scheduler_running: bool | None\r\n",
+                new=b"    scheduler_running: bool\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_envelope_and_its_loop_reuse",),
+                note=(
+                    "**「改字节/失败」方向**：`scheduler.running` 在调度线程首次"
+                    "应答前是 None（§53.62 钉在 `LoopSchedulerState.running` 的"
+                    "同一个值），收窄后该窗口 500。探针 CONTROL "
+                    "`scheduler_running_int` 钉的是同字段的**改写型**失败"
+                    "（int 1 → true）——可空性与类型严格性都是决定。🔴 单行针在本"
+                    "文件命中 **1 次**（已字节复核；`LoopSchedulerState` 的是 "
+                    "`running:` 不相撞）。"
+                ),
+            ),
+            Mutation(
+                label="J91 ApiHealthResponse.loop 退化成 dict[str, Any]：复用模型退回未知体",
+                path=_EVENT_MODEL,
+                old=b"    loop: LoopStatusResponse\r\n",
+                new=b"    loop: dict[str, Any]\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_envelope_and_its_loop_reuse",),
+                note=(
+                    "**「更松」方向**：`loop` 就是 `loop_status()` 的返回值——"
+                    "与 `/loop/status` 同生产者，J72 刚把那边具名；这里退回裸 "
+                    "dict ⇒ 生成类型变 `{ [k: string]: unknown }`，传输面**零字节"
+                    "差**（透传），`tsc` 盲。守卫的 `assertIs(fields[\"loop\"]."
+                    "annotation, LoopStatusResponse)` 是唯一拦截点——**第二份"
+                    "loop 信封副本正是本家族要防的漂移**。🔴 整行针（已字节复核 "
+                    "**1 次**）。"
+                ),
+            ),
+            Mutation(
+                label="J93 ApiHealthResponse.status 添默认值：恒写键被放宽成可选",
+                path=_EVENT_MODEL,
+                old=b"    status: str\r\n    version: str",
+                new=b'    status: str = "ok"\r\n    version: str',
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_envelope_and_its_loop_reuse",),
+                note=(
+                    "**「更松」方向**：七键由 handler 一个 dict 字面量恒写，默认值"
+                    "只会放宽成可缺。🔴 单行 `    status: str` 在 event.py 命中 "
+                    "**3 处**（EventRecord/LoopRunView 等），必须带后随行 "
+                    "`version:` 才钉住本信封（已字节复核 **1 次**）。**与 J92 "
+                    "共享 version 行但都不改写它**（J93 的 new 逐字节保留 version "
+                    "行、J92 删掉的是 version 行本身）⇒ 锚字节重叠、J93 的改动"
+                    "不碰 J92 的锚 ⇒ 可换序类，但 J92 删行会毁 J93 的两行锚 ⇒ "
+                    "本块在 J92 之前落位。"
+                ),
+            ),
+            Mutation(
+                label="J92 ApiHealthResponse 删 version 行：extra=allow 信封原样透传、tsc 盲",
+                path=_EVENT_MODEL,
+                old=b"    version: str\r\n    scheduler_running:",
+                new=b"    scheduler_running:",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_envelope_and_its_loop_reuse",),
+                note=(
+                    "**「更松」方向**（J76 同型）：信封承 `FlexibleResponse`"
+                    "（`extra='allow'`）⇒ 删声明字段后该键**原样透传** ⇒ 字节"
+                    "不变、tsc 绿，唯一拦截是键集列表断言。手写 `ApiHealth` 当年"
+                    "就是这么漏掉 `scheduler_enabled`/`scheduler_lock_skipped` "
+                    "的——副本缺键正是本节要防止的回归。🔴 针带后随行 "
+                    "`scheduler_running:`（已字节复核 **1 次**）；落位在 J93 之后"
+                    "（J93 的锚含 version 行）。"
+                ),
+            ),
+            Mutation(
+                label="J94 scheduler_enabled 与 scheduler_lock_skipped 互换：信封键序线上差",
+                path=_EVENT_MODEL,
+                old=b"    scheduler_enabled: bool\r\n    scheduler_lock_skipped: bool",
+                new=b"    scheduler_lock_skipped: bool\r\n    scheduler_enabled: bool",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_envelope_and_its_loop_reuse",),
+                note=(
+                    "**行序即契约**（J75/J86 同判据）：模型字段序照抄 handler 的 "
+                    "dict 字面量序 ⇒ 打乱后响应键序变、canonical 不变——「纯键序」"
+                    "线上差。守卫断言 `list(fields) == [...]` 按序。🔴 针是相邻两行"
+                    "整体互换（新字节仍合法 Python），与 J92/J93 的锚不相交"
+                    "（已字节复核 **1 次**）。"
+                ),
+            ),
+            Mutation(
+                label="J95 api.ts /health 调用点 generic 换成 Record<string, unknown>：契约旁路",
+                path=_API_TS,
+                old=b'api<ApiHealth>("/health"',
+                new=b'api<Record<string, unknown>>("/health"',
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_health_callsite_reads_the_generated_contract",),
+                note=(
+                    "**消费面**（与 J71/J79/J87 同判据）：`api<T>` cast 对形状不"
+                    "主张 ⇒ 旁路时 tsc/vitest 双盲。守卫还钉同一行的 "
+                    "`acceptStatuses: [503]`（降级态不是传输错误——删它会把 "
+                    "503 变成前端连接故障）。🔴 针含 URL、在本文件命中 **1 次**"
+                    "（已字节复核）；与 D6 新宿主（CalibrationDeviationRow）及 "
+                    "J87 的窗口不相交；守卫文件里没有该字面量 ⇒ 不自指。"
                 ),
             ),
         ),

@@ -22,6 +22,7 @@ from app.core.rate_limit import InMemoryRateLimitMiddleware
 from app.core import runtime_stores
 from app.core.config import settings
 from scripts import backup_stores, healthcheck
+from tests.conftest import minimal_loop_status_payload
 
 
 class OpenAPIContractTests(unittest.TestCase):
@@ -1138,7 +1139,7 @@ class HealthTests(unittest.TestCase):
         with patch("app.core.scheduler.scheduler", _FakeScheduler(True)), \
                 patch(
                     "app.services.loop_status_service.loop_status",
-                    return_value={"runs": {}},
+                    return_value=minimal_loop_status_payload(),
                 ):
             resp = client.get("/api/health")
 
@@ -1155,7 +1156,7 @@ class HealthTests(unittest.TestCase):
         with patch("app.core.scheduler.scheduler", _FakeScheduler(True)), \
                 patch(
                     "app.services.loop_status_service.loop_status",
-                    return_value={"runs": {}},
+                    return_value=minimal_loop_status_payload(),
                 ) as status_mock:
             client.get("/api/health")
 
@@ -1172,7 +1173,7 @@ class HealthTests(unittest.TestCase):
                 patch("app.core.scheduler.scheduler", _FakeScheduler(True)), \
                 patch(
                     "app.services.loop_status_service.loop_status",
-                    return_value={"runs": {}},
+                    return_value=minimal_loop_status_payload(),
                 ) as status_mock:
             client.get("/api/health", headers={"X-API-Key": "secret"})
 
@@ -1190,7 +1191,15 @@ class HealthTests(unittest.TestCase):
         with patch("app.core.scheduler.scheduler", _FakeScheduler(True)), \
                 patch(
                     "app.services.loop_status_service.loop_status",
-                    return_value={"runs": {"event_discover": {"status": "failed"}}},
+                    return_value=minimal_loop_status_payload(
+                    runs={"event_discover": {
+                        "job_name": "event_discover",
+                        "status": "failed",
+                        "started_at": "2026-01-01T00:00:00Z",
+                        "finished_at": None,
+                        "duration_ms": None,
+                    }},
+                ),
                 ):
             resp = client.get("/api/health")
 
@@ -1208,7 +1217,7 @@ class HealthTests(unittest.TestCase):
                 ), \
                 patch(
                     "app.services.loop_status_service.loop_status",
-                    return_value={"runs": {}},
+                    return_value=minimal_loop_status_payload(),
                 ):
             resp = client.get("/api/health")
 
@@ -1222,7 +1231,7 @@ class HealthTests(unittest.TestCase):
                 patch("app.core.scheduler.scheduler", _FakeScheduler(False)), \
                 patch(
                     "app.services.loop_status_service.loop_status",
-                    return_value={"runs": {}},
+                    return_value=minimal_loop_status_payload(),
                 ):
             resp = client.get("/api/health")
 
@@ -1243,7 +1252,7 @@ class HealthTests(unittest.TestCase):
                 ), \
                 patch(
                     "app.services.loop_status_service.loop_status",
-                    return_value={"runs": {}},
+                    return_value=minimal_loop_status_payload(),
                 ):
             resp = client.get("/api/health")
 

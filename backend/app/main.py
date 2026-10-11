@@ -21,6 +21,7 @@ from app.core.preflight import (
 )
 from app.core.rate_limit import InMemoryRateLimitMiddleware
 from app.core.scheduler import start_scheduler, stop_scheduler
+from app.models.event import ApiHealthResponse
 from app.services.llm_gateway_service import has_configured_llm_route
 from app.services.llm_startup_check_service import validate_primary_llm_startup
 from app.utils import sqlite_db
@@ -513,11 +514,24 @@ async def api_overview() -> dict[str, Any]:
     }
 
 
-@app.get("/api/health")
+@app.get("/api/health",
+         response_model=ApiHealthResponse,
+         response_model_exclude_unset=True)
 async def api_health(
     response: Response,
     x_api_key: str | None = Header(default=None),
 ) -> dict[str, Any]:
+    """Container/systemd healthcheck target (audit 53.64).
+
+    Named as ``ApiHealthResponse``; ``loop`` reuses the model behind
+    ``/loop/status`` (same producer). ``response_model_exclude_unset`` is
+    required, not cosmetic: healthchecks poll without a write key, so the
+    run rows are the five-key subset, and without the flag the three
+    detail-only ``LoopRunView`` defaults (id/error/result) would
+    materialise as nulls on the dominant path -- a wire-byte change. The
+    503 degraded status is set on the ``Response`` parameter below and is
+    unaffected by the response model.
+    """
     from app.core.scheduler import scheduler, scheduler_start_skipped_due_to_lock
     from app.services.loop_status_service import loop_status
 

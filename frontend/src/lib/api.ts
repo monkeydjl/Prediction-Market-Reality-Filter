@@ -27,6 +27,7 @@ import type {
   PredictionCalibrationResponse as GeneratedPredictionCalibrationResponse,
   LoopRunView as GeneratedLoopRunView,
   LoopStatusResponse as GeneratedLoopStatusResponse,
+  ApiHealthResponse as GeneratedApiHealthResponse,
   CalibrationAggregate as GeneratedCalibrationAggregate,
   CategoryCoverage as GeneratedCategoryCoverage,
   EventCalibrationResponse,
@@ -417,13 +418,11 @@ export interface ApiOverview {
   endpoints: Record<string, string>;
 }
 
-export interface ApiHealth {
-  status: "ok" | "degraded" | string;
-  version: string;
-  scheduler_running?: boolean | null;
-  failed_runs?: string[];
-  loop: LoopStatus;
-}
+// The healthcheck envelope is generated from the named backend response
+// model (audit 53.64). The hand copy named only five of the seven keys the
+// producer writes -- scheduler_enabled and scheduler_lock_skipped reached
+// the browser unnamed -- and marked two always-written keys optional.
+export type ApiHealth = GeneratedApiHealthResponse;
 
 export interface AutoResolveMatch {
   event_id?: string;

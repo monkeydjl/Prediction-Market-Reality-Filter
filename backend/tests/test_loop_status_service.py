@@ -27,6 +27,7 @@ from app.memory import simulated_trade_store as trades
 from app.services import loop_status_service
 from app.utils import sqlite_db
 
+from tests.conftest import minimal_loop_status_payload
 from tests.test_event_store import _make_record
 
 
@@ -663,7 +664,7 @@ class LoopStatusRouteOffloadTests(unittest.TestCase):
 
         with patch(
             "app.services.loop_status_service.loop_status",
-            side_effect=lambda **kw: time.sleep(0.25) or {"runs": {}},
+            side_effect=lambda **kw: time.sleep(0.25) or minimal_loop_status_payload(),
         ):
             resp, ticks = asyncio.run(_exercise())
 

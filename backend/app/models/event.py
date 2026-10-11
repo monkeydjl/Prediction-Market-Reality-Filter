@@ -1238,8 +1238,8 @@ class LoopStatusResponse(FlexibleResponse):
     ``response_model_exclude_unset=True`` solely for the run rows' two shapes
     (see ``LoopRunView``). ``calibration`` reuses the model named in 53.61 --
     same producer, same nine keys. The sibling consumer of the same producer
-    dict is ``GET /api/health`` (main.py), which publishes no response model
-    at all; naming one does not change that endpoint's bytes.
+    dict is ``GET /api/health`` (main.py), which reused this model in 53.64
+    (its ``loop`` field) rather than declaring a second copy.
     """
 
     scheduler: LoopSchedulerState
@@ -1249,6 +1249,30 @@ class LoopStatusResponse(FlexibleResponse):
     counts: LoopStatusCounts
     calibration: PredictionCalibrationResponse
     review_queue: ReviewQueueSummary
+
+
+class ApiHealthResponse(FlexibleResponse):
+    """Response for GET /api/health (audit 53.64). The handler writes all
+    seven keys unconditionally in this order, so nothing carries a default.
+    ``loop`` is the exact dict ``loop_status`` returns -- the same producer
+    behind ``/loop/status`` -- so the field reuses the model named in 53.62
+    rather than a second copy. The route needs
+    ``response_model_exclude_unset=True`` for the same reason /loop/status
+    does: healthchecks poll without a write key, so the run rows are the
+    five-key subset and the three detail-only ``LoopRunView`` defaults would
+    materialise as nulls without the flag (byte change on the dominant
+    path). ``scheduler_running`` is ``bool | None`` because
+    ``scheduler.running`` is None until the scheduler thread has answered
+    once -- the value §53.62 pinned on ``LoopSchedulerState.running``.
+    """
+
+    status: str
+    version: str
+    scheduler_running: bool | None
+    scheduler_enabled: bool
+    scheduler_lock_skipped: bool
+    failed_runs: list[str]
+    loop: LoopStatusResponse
 
 
 class CalibrationAggregate(BaseModel):

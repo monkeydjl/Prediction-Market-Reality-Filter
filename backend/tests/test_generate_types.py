@@ -3105,6 +3105,136 @@ class SmallInlineContractTests(unittest.TestCase):
                 )
 
 
+class DeleteEventContractTests(unittest.TestCase):
+    """The DELETE /{event_id} contract named in audit 53.66, both ends.
+
+    ``DELETE /api/events/{event_id}`` published bare ``FlexibleResponse``
+    while ``api.ts`` spelled its four keys inline at the call site. The
+    inline copy was faithful, so the retirement is a pure type change:
+    the probe confirmed zero byte difference on both branches (200: 108B,
+    404: 28B). CONTROL is unreachable by premise -- the handler builds
+    all four keys by hand (no key to drop) and ``refs_for_event``
+    ``int()``-coerces every count before ``sum()`` (no rewritten value
+    survives); the premise is "the producer does not pass a raw dict
+    through to the model" -- if that changes, the two CONTROL modes come
+    back (audit 53.65, the same premise-carrying form).
+
+    No conditional keys, so per the 53.56 rule the route must not set
+    ``response_model_exclude_unset`` -- pinned ``is False``. ``GET
+    /{event_id}`` shares the path, so the route criterion filters on the
+    DELETE method, not the path alone.
+
+    Three cases: the envelope, the route binding, and the call site in
+    ``api.ts``.
+    """
+
+    def test_the_envelope(self):
+        """Key set in producer order, annotations pinned, all required.
+
+        ``stranded_refs`` values are ``int`` all the way down:
+        ``refs_for_event`` runs every count through ``int(...)`` and
+        degrades to ``{}``, so unlike reset's ``cleared`` there is no
+        ``str`` member in the union. All four keys are written on the
+        single return path, so no field may carry a default.
+        """
+        from app.models.event import DeleteEventResponse
+
+        fields = DeleteEventResponse.model_fields
+        self.assertEqual(
+            list(fields),
+            ["event_id", "message", "stranded_refs", "stranded_total"],
+            "DeleteEventResponse is no longer its producer key order",
+        )
+        want_types = {
+            "event_id": str,
+            "message": str,
+            "stranded_refs": dict[str, int],
+            "stranded_total": int,
+        }
+        for name, want in want_types.items():
+            with self.subTest(field=name):
+                self.assertEqual(
+                    fields[name].annotation, want,
+                    f"DeleteEventResponse.{name} annotation drifted",
+                )
+                self.assertTrue(
+                    fields[name].is_required(),
+                    f"DeleteEventResponse.{name} gained a default; the "
+                    "producer writes every key unconditionally "
+                    "(audit 53.66)",
+                )
+
+    def test_the_route_binds_its_model_and_declares_no_flag(self):
+        """The DELETE route binds its model by identity and keeps no flag.
+
+        The criterion reads the *route object* off ``router.routes`` and
+        must pick the DELETE member of the ``/{event_id}`` path -- the
+        GET route with the same path template must not shadow it.
+        """
+        from fastapi.routing import APIRoute
+
+        from app.api.routes import events as events_routes
+        from app.models.event import (
+            DeleteEventResponse,
+            FlexibleResponse,
+        )
+
+        candidates = [
+            route
+            for route in events_routes.router.routes
+            if isinstance(route, APIRoute)
+            and route.path == "/{event_id}"
+            and "DELETE" in route.methods
+        ]
+        self.assertEqual(
+            len(candidates), 1,
+            "expected exactly one DELETE route on /{event_id}",
+        )
+        route = candidates[0]
+        self.assertIs(
+            route.response_model, DeleteEventResponse,
+            "the DELETE /{event_id} route no longer binds "
+            "DeleteEventResponse. It published no field contract before "
+            "audit 53.66.",
+        )
+        self.assertIsNot(
+            route.response_model, FlexibleResponse,
+            "the DELETE /{event_id} route regressed to the bare "
+            "FlexibleResponse",
+        )
+        self.assertIs(
+            route.response_model_exclude_unset, False,
+            "the DELETE /{event_id} route gained "
+            "response_model_exclude_unset; every key in this tree is "
+            "written unconditionally, so the flag has nothing to drop "
+            "(audit 53.66, the 53.56 rule)",
+        )
+
+    def test_the_callsite_reads_the_generated_contract(self):
+        """The ``api.ts`` call site must read the named envelope.
+
+        Textual because ``api<T>`` is a cast that asserts nothing. The
+        needle spans two lines and api.ts is a CRLF file, so the needle
+        carries ``\\r\\n`` (the 53.65 lesson: the needle's line endings
+        match the target file, not the script).
+        """
+        api_text = _API_TS_PATH.read_bytes().decode("utf-8")
+
+        self.assertIn(
+            "api<DeleteEventResponse>(\r\n"
+            "      `/events/${encodeURIComponent(id)}`,",
+            api_text,
+            "the DELETE call site no longer reads the named envelope: "
+            "api.ts must keep the generated generic",
+        )
+        self.assertNotIn(
+            "api<{ event_id: string; message: string; stranded_refs:",
+            api_text,
+            "the inline response shape came back at the DELETE call "
+            "site; read the generated contract instead (audit 53.66)",
+        )
+
+
 class ApiTsTypeSourceTests(unittest.TestCase):
     """``api.ts`` reads generated shapes instead of re-declaring them.
 

@@ -133,6 +133,7 @@ from app.models.event import (
     DailyDigestResponse,
     DecisionReport,
     DecisionTimelineResponse,
+    DeleteEventResponse,
     EventAnalysisRequest,
     EventCalibrationResponse,
     EventDiscoveryResponse,
@@ -1777,7 +1778,7 @@ async def get_discovery_status() -> dict[str, Any]:
     return snapshot()
 
 
-@router.delete("/{event_id}", response_model=FlexibleResponse)
+@router.delete("/{event_id}", response_model=DeleteEventResponse)
 async def delete_event(
     event_id: str,
     _auth: None = Depends(require_write_key),

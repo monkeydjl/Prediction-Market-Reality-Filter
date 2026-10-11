@@ -1644,7 +1644,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J100）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J101）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -4087,6 +4087,23 @@ SETS: tuple[MutationSet, ...] = (
                     "复核；该调用点跨行，针只取 generic+括号段）；与守卫的跨行 "
                     "needle 重叠是**故意**的——变异必须让守卫的 assertIn 变红。"
                     "与 D6/J95 等既有 api.ts 针的窗口不相交。"
+                ),
+            ),
+            Mutation(
+                label="J101 DELETE /{event_id} 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_DIGEST_ROUTES,
+                old=b'@router.delete("/{event_id}", response_model=DeleteEventResponse)',
+                new=b'@router.delete("/{event_id}", response_model=FlexibleResponse)',
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_route_binds_its_model_and_declares_no_flag",),
+                note=(
+                    "§53.66：单端点一条代表针（与 J64/J72/J80/J88/J97 同判据，"
+                    "路由对象身份；批次比例判据的 N=1 形态——一条路由一根针即"
+                    "本族惯例，循环/单点承重由本针证明）。裸 `FlexibleResponse`"
+                    " 仍 200、tsc 绿。🔴 针是装饰器整行（`@router.delete(` 前缀"
+                    "避开同路径的 GET 路由），在 events.py 命中 **1 次**（已字节"
+                    "复核）；守卫按 `(path, DELETE in methods)` 过滤，不是只按"
+                    "path——GET /{event_id} 共享路径模板。"
                 ),
             ),
         ),

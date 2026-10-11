@@ -31,6 +31,7 @@ import type {
   CalibrationAggregate as GeneratedCalibrationAggregate,
   CategoryCoverage as GeneratedCategoryCoverage,
   EventCalibrationResponse,
+  DeleteEventResponse,
   ResetEventDataResponse,
   ResolveExpiredResponse,
   SparklinesResponse,
@@ -815,7 +816,7 @@ export const eventsApi = {
     // `stranded_refs` names the loop-DB tables still pointing at this event
     // after the JSON record is gone (E2: no FK spans JSON and SQLite, and
     // nothing prunes those tables). The rows are deliberately kept.
-    api<{ event_id: string; message: string; stranded_refs: Record<string, number>; stranded_total: number }>(
+    api<DeleteEventResponse>(
       `/events/${encodeURIComponent(id)}`,
       { method: "DELETE" }
     ),

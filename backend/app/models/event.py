@@ -1327,6 +1327,22 @@ class TranslateEventResponse(FlexibleResponse):
     message: str
 
 
+class DeleteEventResponse(FlexibleResponse):
+    """Response for DELETE /api/events/{event_id} (audit 53.66). The
+    producer builds all four keys by hand on its single return path.
+    ``stranded_refs`` comes from ``refs_for_event`` -- an explicit
+    ``int(...)`` per count and ``{}`` on the degraded path -- so the map
+    value is ``int`` all the way down, and the inline copy in api.ts was
+    faithful. No conditional keys anywhere, so per the 53.56 rule the
+    route must not set ``response_model_exclude_unset``.
+    """
+
+    event_id: str
+    message: str
+    stranded_refs: dict[str, int]
+    stranded_total: int
+
+
 class ResetEventDataResponse(FlexibleResponse):
     """Response for POST /api/events/reset (audit 53.65). The producer
     writes both keys unconditionally. ``cleared`` is a dynamic-key map by

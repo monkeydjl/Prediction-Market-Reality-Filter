@@ -13930,3 +13930,96 @@ pytest 尾行 `6665 passed, 11 skipped, 1512 subtests passed`，6665+11=6676 对
 
 探针与验证产物：`.workbuddy/audit-2026-10-03/{probe_5363.py, probe_5363_pre.json,
 probe_5363_post.json, verify_5363.log, _recon_5363.py, full_5363.log}`。
+## 53.64 `GET /api/health` 具名 `ApiHealthResponse`：具名让不忠实测试桩现形
+
+**日期**：2026-10-11。**范围**：`backend/app/main.py`、`backend/app/models/event.py`、
+`_frontend_export.py`、`backend/tests/{conftest,test_generate_types,
+test_operational_readiness,test_loop_status_service}.py`、
+`backend/scripts/mutation_verify.py`、`frontend/src/lib/{api,generated-types}.ts`。
+
+#### 53.64.1 背景与取证：根 app 上的兄弟端点
+
+`GET /api/health`（`main.py`，不在 events router 上）的 `response_model` 一直
+缺失；`api.ts` 手写 `ApiHealth` 只命名了生产者七键中的五个——
+`scheduler_enabled` / `scheduler_lock_skipped` **到达浏览器但类型命名不了**——
+且把两个恒写键（`scheduler_running` / `failed_runs`）标成可选。handler 的
+`loop` 值就是 `loop_status()` 的返回值（与 `/loop/status` 同生产者）⇒ 字段
+**复用** 53.62 的 `LoopStatusResponse`，不养第二份副本（§53.62 docstring 里
+「`/api/health` publishes no response model at all」一句按 §0 显式更正）。
+
+**旗子必须有，且比 `/loop/status` 更尖锐**：container healthcheck **无 write key
+轮询** ⇒ 五键 run 子集是主导路径；没有 `response_model_exclude_unset=True`，
+`LoopRunView` 的 3 个 detail-only 默认值（id/error/result）会在几乎每次响应上
+实体化成 null（改线上字节）。503 降级状态由 `Response` 参数设置、不受
+response_model 影响（探针钉住 503 存活）。**前提**：探针进程内调度器未运行且
+`SCHEDULER_ENABLED` 为真 ⇒ 全部用例 503 起——503/200 的分叉不在本探针域内。
+
+`scheduler_running: bool | None`：`scheduler.running` 在调度线程首次应答前是
+None（§53.62 钉在 `LoopSchedulerState.running` 的同一个值）——收窄是 500，
+int 值会被重写成 true（CONTROL 专测）。
+
+#### 53.64.2 探针：域内零字节差（含 315 689B details 路径）
+
+探针 `probe_5364.py`，5 用例：真实 `loop_status()` 输出的两种鉴权态（无 key
+五键子集 9879B——healthcheck 主导路径；带 key 全行 details 315 689B）、降级
+503 用例（9908B）、2 CONTROL。`--pre` 模式（FlexibleResponse 注册 vs
+`response_model=None` 注册——改前装饰器的精确复刻）**5/5 字节一致**（harness
+干净）。改后：**域内 3/3 status unchanged / canonical identical / bytes
+identical**；CONTROL：`loop_missing_counts` 503→**500**（9458→21，缺键型）、
+`scheduler_running_int` 503→503、**9875→9878**（int 1→true，改写型）。
+patch 目标：`loop_status` 是函数体内局部 import ⇒ 打源模块（53.61 判据）；
+`scheduler.running` 是 **property** ⇒ `PropertyMock` 打在类上。
+
+#### 53.64.3 🔴 具名的即时收益新证据：模型连测试桩的忠实性一起管
+
+首轮全量 **8 failed**——全部是 endpoint 测试给 `loop_status` 打的**不忠实桩**：
+`{"runs": {}}` ×6 + `{"runs": {"event_discover": {"status": "failed"}}}` ×1 +
+`side_effect=lambda **kw: ... or {"runs": {}}` ×1。无模型时代这些桩**静默通过**
+（透传不校验）；具名后校验立即拦截。修法不是放宽模型（桩不忠实、真实生产者
+恒写七键），而是 **`tests/conftest.py` 新增 `minimal_loop_status_payload()`**：
+从 `LoopStatusResponse` **投影构造**（模型加必填字段时构造失败而非静默漂移，
+同 `fake_domain_reliability_stat` 的既有姿态——手写形状副本已经烂过一次），
+8 个桩位全部换用；降级桩的 run 行按五子集键补齐（`finished_at` 无默认值，
+初稿漏掉被校验抓出——桩的形状需求由模型**反向教育**）。🔴 **这把「具名收益」
+从「OpenAPI 可见 + 前端类型」扩到第三处：测试桩的忠实性从约定变成强制**——
+无模型时代桩与生产者的漂移不可见，具名使任何桩漂移在 CI 即红。
+
+#### 53.64.4 守卫与变异
+
+守卫 `ApiHealthContractTests` 3 例 8 subtests：信封七键序 + 逐字段注解/
+required（含 `scheduler_running: bool | None` 的前提与 `loop` 的 `assertIs`
+复用）、路由对象身份 + 旗子 `is True`（路由在**根 app** 上，守卫读
+`app.main.app.routes`）、api.ts 文本面（副本退役、别名在、调用点 generic +
+`acceptStatuses: [503]` 同行钉住——降级态不是传输错误）。
+
+`mutation_verify.py` 追加 **J88–J95**（全族 173→181；set 93→101），新增
+`_MAIN_APP` 路径常量，四阶段 **8/8**（green before True | 1/1 files red |
+green after restore True | bytes restored True）。**锚重叠两对，均可换序**
+（§53.62 J72/J73 类，非 §53.63 J84/J85 互斥类）：J89 旗子退场先于 J88 换模型
+（J89 的 new 保留第一行 ⇒ J88 的锚仍在）；J93 status 默认值先于 J92 删
+version 行（J93 的 new 逐字节保留 version 行；反向则 J92 删行毁 J93 的两行
+锚）。J91（loop 退化 `dict[str, Any]`）的守卫判据写明：**第二份 loop 信封
+副本正是本家族要防的漂移**。
+
+#### 53.64.5 工具坑：heredoc 转义损伤再现两次
+
+含 CRLF 转义序列的内容经 heredoc 落盘被 mangle 成字面 `/r/n`（本轮两次命中：
+conftest 助手正文一处、修复命令自身一处——同一会话内另一次 heredoc 手术却
+完好，损伤**不确定** ⇒ 判据只能落盘后字节复核 `/r/n` 计数与 CRLF 计数）。
+修法：无反斜杠写法（`chr(13)+chr(10)`）或 Write 工具写脚本文件再执行。
+`git diff --numstat` 顶上 `LF will be replaced by CRLF` 警告时**先查 `/r/n`
+字面量**再下结论。
+
+#### 53.64.6 门、全量与对账（数字全部来自工具自打印）
+
+四道门全绿（ruff `All checks passed`；mypy `no issues in 331 source files`；
+`generate_types --check` `up to date`）；`tsc --noEmit` 0 错误。
+`test_mutation_verify.py`：**64 passed, 215 subtests**（207→215）。全量首轮
+**8 failed**（53.64.3 的桩）→ 修复后复跑：**8207 / 0 / 0 / 11**（cases 6679 /
+subtests 1528；`[safe-delete]` 拦临时目录清理致 EXIT=1——假红指纹，判据只取
+junit）。对账：**+19 tests = +3 case（守卫类 3 方法）+ 16 subtests（守卫类单跑
+8 + 清单 +8）**，零残差。基线 `junit_full_5363.xml`（8188/6676/1512）。
+
+探针与验证产物：`.workbuddy/audit-2026-10-03/{probe_5364.py,
+probe_5364_pre.json, probe_5364_post.json, verify_5364.log, _recon_5364.py,
+full_5364.log}`。

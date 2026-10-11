@@ -14106,3 +14106,56 @@ subtests（守卫类单跑 29 + 清单 +5）**，零残差。基线 `junit_full_
 
 探针与验证产物：`.workbuddy/audit-2026-10-03/{probe_5365.py,
 probe_5365_out.json, verify_5365.log, _recon_5365.py, full_5365.log}`。
+
+## 53.66 —— DELETE /api/events/{event_id} 具名 DeleteEventResponse：53.65 登记的「下一候选」兑现，CONTROL 不可达前提的第二次取样
+
+目标：`DELETE /api/events/{event_id}` 仍是裸 `FlexibleResponse`（53.65
+取证时发现、登记待拍板），前端 `api.ts` 调用点内联四键
+（`event_id` / `message` / `stranded_refs` / `stranded_total`）。
+按三件套流程收口：`event.py` 新增 `DeleteEventResponse(FlexibleResponse)`
+（四字段全裸类型、无默认值），`_frontend_export.py` 登记（import + `__all__`，
+字母序 Decision* 之后），路由装饰器换具名（**无旗子**——四个键全部无条件
+写入，53.56 规则的反向适用：那时任何默认值都是错的），`generate_types`
+重生成（4 键全 required；`stranded_refs` 渲染成值 inline
+`{[k: string]: number}`——那是值类型的合法 inline，不是尾巴），前端
+内联副本退役成 `api<DeleteEventResponse>`，消费者 `events/page.tsx:147`
+。
+
+取证：handler 单一返回路径**逐键构造**；`refs_for_event` 每个计数显式
+`int(...)` 转型、异常回退 `{}`（「unreadable loop DB must not turn a
+delete into a 500 after the JSON record is already gone」）⇒ 值类型
+`int` 一路到底，与 reset 的 `cleared`（`int | str` 混合）不同型——
+**忠实类型看读法不看名字**的又一次取样。
+
+验证：
+
+- 探针（`probe_5366.py`，同树两态：`response_model=FlexibleResponse`
+  复刻改前 vs `DeleteEventResponse`，真实 handler + 合成 patch——局部
+  import ⇒ 打源模块：`event_ref_census.refs_for_event`、
+  `event_store._load_for_write` / `_store_path`、
+  `file_store.write_json_atomic`；`dependency_overrides` 覆盖写钥匙）
+  域内 **200 分支 108B == 108B 零字节差**（纯类型变更）、**404 分支
+  28B 一致**。
+- CONTROL 不可达 = **带前提的取证**（53.65 后第二次取样）：handler 把
+  键固定在代码里（无键可缺）、census 显式 `int()` + `sum()`（改写值
+  活不下来）⇒ 改写型与缺键型都打不进去；前提是「生产者不把原始 dict
+  透传给模型」——前提变则 CONTROL 补回。灵敏度由变异四阶段承担。
+- 守卫 `DeleteEventContractTests` 3 例（信封键序+注解+`is_required` 4
+  subtests；路由对象身份；调用点 `assertIn` generic + `assertNotIn`
+  内联）。🔴 **路由判据按 `(path, DELETE in methods)` 过滤，不能只按
+  path**——`GET /{event_id}` 共享路径模板，只按 path 的 dict 索引会被
+  GET 路由遮蔽（这是 DELETE 族守卫的新形态，§53.64 根 app 读法之外
+  的第三种路由定位法）。跨行 needle 用 `\r\n`（api.ts 是 CRLF；53.65
+  教训直接复用）。
+- 变异 **J101**（set 106 → 107 条，index 107）：路由退裸，单端点一条
+  代表针（批次比例判据的 N=1 形态）。四阶段 **4/4**（EXIT 0；
+  `test_mutation_verify` 64 + 221，220 → 221）。
+- 四道门 + tsc 全绿。全量 **8252 passed / 0 failed / 0 error / 11
+  skipped**（cases 6685 / subtests 1567），对账 **+8 = +3 case + 5
+  subtests（4 信封 + 1 清单）零残差**。
+
+登记（下一候选）：本轮无新增；遗留候选不变（/metrics Prometheus 文本
+体、ruff tests/scripts 339 条、world-cup 43+18 裸 FlexibleResponse）。
+
+探针与验证产物：`.workbuddy/audit-2026-10-03/{probe_5366.py,
+_recon_5366.py, verify_5366.log, full_5366.log, junit_full_5366.xml}`。

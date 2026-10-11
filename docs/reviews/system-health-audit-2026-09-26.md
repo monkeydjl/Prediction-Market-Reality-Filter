@@ -14023,3 +14023,86 @@ junit）。对账：**+19 tests = +3 case（守卫类 3 方法）+ 16 subtests�
 探针与验证产物：`.workbuddy/audit-2026-10-03/{probe_5364.py,
 probe_5364_pre.json, probe_5364_post.json, verify_5364.log, _recon_5364.py,
 full_5364.log}`。
+## 53.65 五个小 POST 契约批量具名：翻译族 / sparklines / resolve-expired / reset
+
+**日期**：2026-10-11。**范围**：`backend/app/models/event.py`、
+`_frontend_export.py`、`backend/app/api/routes/events.py`、
+`backend/tests/test_generate_types.py`、`backend/scripts/mutation_verify.py`、
+`frontend/src/lib/{api,generated-types}.ts`。
+
+#### 53.65.1 背景与取证：五个忠实内联形状，一批收口
+
+`/reset`、`/batch-sparklines`、`/{event_id}/translate`、`/translate-all`、
+`/resolve-expired` 五个 POST 端点全部发布裸 `FlexibleResponse`，`api.ts` 在五个
+调用点**内联拼写形状**。五份内联副本**忠实**（对比 53.61/53.62 的更松副本与本
+节的纯类型变更批次）⇒ 具名是纯类型变更。五个模型（`SparklinesResponse` /
+`ResolveExpiredResponse` / `TranslateAllResponse` / `TranslateEventResponse` /
+`ResetEventDataResponse`）全部按生产者键序声明、无默认值、**无旗子**（五棵树
+无条件写键；`translate-event` 的三条返回路径——已译早退 / LLM 不可用回退 /
+成功——写同三键，53.56 规则的正面形态）。
+
+两个值得记的形状决定：① `TranslateEventResponse.event_title_zh` 在**所有**路径
+上都是 str（回退路径截断英文标题而不是省键）——「写键、值可能退化」不同于
+「省键」；② `ResetEventDataResponse.cleared` 是**动态键映射**（JSON 路径 str /
+行数 int / 豁免表 CSV str / cache 标记 str）⇒ 值联合 `int | str`，且**内联
+元素类型就是契约**——只具名信封不具名映射会发布 `{ [k: string]: unknown }`
+（53.53 inline-tail 教训在命名面的应用）。
+
+#### 53.65.2 探针：域内 5/5 零字节差；CONTROL 不可达是带前提的取证
+
+探针 `probe_5365.py`，5 用例（真实 handler 跑完，内部依赖全部 patch 成合成
+依赖）：sparklines 47B / translate_event 92B / translate_all 64B /
+resolve_expired 119B / reset 549B——**5/5 status unchanged / canonical
+identical / bytes identical**。
+
+🔴 **本节没有 CONTROL，且这是带前提的结论**：五个生产者都在模型看到 body 之前
+完成**键固定**（dict 字面量）与**类型显式转型**（`float(...)` / `int(count)` /
+切片截断）⇒ 「缺键→500」与「类型收窄→改写」两种失败模式**都不可达**——探针
+测不到分歧，灵敏度由变异四阶段（J96–J100）承担。前提若变（某生产者开始条件
+写键或透传未转型值），CONTROL 应补回。
+
+patch 目标按 53.61 判据逐 handler 取证，**同一文件内同名词、目标不同**：
+`translate-all` 的 `list_all_events` 是函数体内局部 import ⇒ 打源模块
+`app.memory.event_store`；`resolve-expired` 的同名是模块级 import ⇒ 打使用方
+`events_routes`。其余：`histories_by_event` 模块级 ⇒ 打使用方；
+`translate_title`/`looks_chinese`/`get_event`/`save_events` 局部 ⇒ 打源模块；
+reset 的原子写助手/loop-db 助手/缓存失效器局部 ⇒ 打源模块（no-op 假件让
+handler 跑完而不碰任何真实存储）。`set_tracking_bulk` 的返回值被 handler
+`len()` ⇒ 假件返回 list 而非 int（首轮探针 500 的根因）。
+
+#### 53.65.3 守卫与变异：批次比例与「旗子悄悄到货」承重针
+
+守卫 `SmallInlineContractTests` 3 例 29 subtests：五信封键序 + 逐字段注解/
+required（subTest 双键 model×field）、五路由对象身份 + **每路由 `is False`**
+（按路径循环断言）、五调用点文本面（assertIn 五个 generic needle + assertNotIn
+五个内联形状——退役后内联形状回潮即红）。🔴 **api.ts 是 CRLF**：跨行 needle
+首版误用 `\n` 当场被 subTest 抓出，改 `\r\n` 后过——「守卫 needle 的行尾
+必须与目标文件字节一致」。
+
+`mutation_verify.py` 追加 **J96–J100**（全族 181→188；set 101→106），四阶段
+**5/5 全过**（green before True | 1/1 files red | green after restore True |
+bytes restored True）。**批次的比例判据**：五条路由由同一守卫按路径
+循环断言 ⇒ **一条路由变异证明循环承重即可**（J97 选 resolve-expired 作代表），
+不逐路由一根针；守卫的另外两个判据面各配承重针——J96（cleared 元素退化，(c)
+类命名面）+ J99（默认值放宽）钉信封测试，J98 **「旗子悄悄到货」**（给
+`/translate-all` 加 `exclude_unset=True`——53.63 把「不需要」钉成 `is False`
+的反向承重针：`assertIs(..., False)` 拦旗子到达本身，不等它造成字节差）钉路由
+测试，J100（调用点旁路）钉文本测试。J100 的针与守卫的跨行 needle 重叠是
+**故意**的——变异必须让 assertIn 变红。
+
+#### 53.65.4 门、全量与对账（数字全部来自工具自打印）
+
+四道门全绿（ruff `All checks passed`；mypy `no issues in 331 source files`；
+`generate_types --check` `up to date`）；`tsc --noEmit` 0 错误。
+`test_mutation_verify.py`：**64 passed, 220 subtests**（215→220）。全量
+**8244 / 0 failures / 0 errors / 11 skipped**（cases 6682 / subtests 1562；
+EXIT=0 无假红指纹）。对账：**+37 tests = +3 case（守卫类 3 方法）+ 34
+subtests（守卫类单跑 29 + 清单 +5）**，零残差。基线 `junit_full_5364.xml`
+（8207/6679/1528）。
+
+登记（下一个候选，本轮未动）：`DELETE /{event_id}` 也有内联形状
+（`event_id/message/stranded_refs/stranded_total` 四键）——取证时发现，
+不在本节登记清单内，留待用户拍板。
+
+探针与验证产物：`.workbuddy/audit-2026-10-03/{probe_5365.py,
+probe_5365_out.json, verify_5365.log, _recon_5365.py, full_5365.log}`。

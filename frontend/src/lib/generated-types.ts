@@ -903,6 +903,79 @@ export interface EdgeTrajectorySummary {
   freshness_band: string;
   classification: string;
 }
+/**
+ * One element of ``EngineComparisonStat.predictions`` (audit 53.71).
+ * ``engine_comparison_service._credit_engine_prediction`` builds all ten keys
+ * by hand in a single ``list.append``. The three float fields are read
+ * straight off a ``PredictionHistory`` row whose columns are all
+ * ``nullable=False``, so none of them is optional.
+ */
+export interface EngineComparisonPrediction {
+  match_id: string;
+  home_team: string;
+  away_team: string;
+  predicted_score: ScorePair;
+  actual_score: ScorePair;
+  score_error: number;
+  outcome_correct: boolean;
+  confidence: number;
+  outcome_probability: number;
+}
+/**
+ * A ``{home, away}`` score pair (audit 53.71), shared by
+ * ``EngineComparisonPrediction.predicted_score`` and ``.actual_score``.
+ *
+ * Deliberately **not** named ``PredictedScore``: the backend already has a
+ * ``TypedDict`` by that name in ``app.services.world_cup_engines.types`` whose
+ * members are ``float`` -- a same-name/different-body pair is exactly the trap
+ * audit 53.69 closed for ``FlexibleResponse``. Both members are ``int``: the
+ * producer rounds the predicted scores (``round(float)``) and reads
+ * ``MatchFixture.home_score`` / ``away_score`` (``Integer`` columns, guarded
+ * non-``None``) for the actual ones.
+ */
+export interface ScorePair {
+  home: number;
+  away: number;
+}
+/**
+ * Response for GET /api/world-cup/predictions/engine-comparison (audit
+ * 53.71). ``calculate_engine_accuracy`` has three return paths and only *two*
+ * of them write ``message`` (the no-finished-matches early return and the
+ * exception fallback); the success-with-data path omits it. So ``message``
+ * carries a default and the route **must** set
+ * ``response_model_exclude_unset=True`` -- without the flag the default would
+ * materialise a ``"message": null`` key the producer never wrote (the
+ * ``LoopRunView`` shape from 53.63). ``status`` and ``engines`` are written on
+ * every path (``engines`` possibly empty), so neither carries a default.
+ */
+export interface EngineComparisonResponse {
+  status: string;
+  message?: string | null;
+  engines: {
+    [k: string]: EngineComparisonStat;
+  };
+  [k: string]: unknown;
+}
+/**
+ * One engine's accuracy roll-up inside ``EngineComparisonResponse.engines``
+ * (audit 53.71). ``calculate_engine_accuracy`` writes all six keys
+ * unconditionally per engine, so none carries a default. Registered as a
+ * *root* even though the frontend only reaches it through the envelope's
+ * field type: a nested-only model would come out with an
+ * ``[k: string]: unknown`` tail, looser than the hand-written
+ * ``EngineComparisonStat`` it replaces (the 53.49/53.50 root-vs-nested rule).
+ * Note ``predictions`` is kept even though no frontend component reads it --
+ * a closed model drops undeclared keys silently, so omitting it would change
+ * the response bytes (the 53.58 lesson).
+ */
+export interface EngineComparisonStat {
+  total_matches: number;
+  exact_score_rate: number;
+  outcome_accuracy: number;
+  goal_diff_accuracy: number;
+  avg_score_error: number;
+  predictions: EngineComparisonPrediction[];
+}
 export interface EventAnalysisRequest {
   event_question: string;
   baseline_probability?: number;
@@ -1747,6 +1820,29 @@ export interface SparklinesResponse {
   sparklines: {
     [k: string]: number[];
   };
+  [k: string]: unknown;
+}
+/**
+ * Response for POST /api/world-cup/predictions/sync-fixtures (audit 53.71).
+ * ``sync_world_cup_fixtures`` writes all nine keys on its success return path;
+ * its two error returns are converted to HTTP 500 by the route
+ * (``result.get("status") == "error"``), so they never reach the response
+ * model and no key is conditional -- the route therefore needs no
+ * ``response_model_exclude_unset`` (the 53.56 rule). ``season`` is a str on
+ * both source branches (the football-data branch converts at its one
+ * int-taking call site), so ``str`` is faithful.
+ */
+export interface SyncFixturesResponse {
+  status: string;
+  source: string;
+  fixtures_synced: number;
+  fixtures_fetched: number;
+  fixtures_parsed: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  remaining_matches: number;
+  season: string;
   [k: string]: unknown;
 }
 /**

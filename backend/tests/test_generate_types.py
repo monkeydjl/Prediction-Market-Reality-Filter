@@ -3284,6 +3284,261 @@ class FlexibleResponseIdentityTests(unittest.TestCase):
         )
 
 
+class WorldCupBatchCContractTests(unittest.TestCase):
+    """The two batch-C world-cup-predictions contracts named in audit 53.71.
+
+    ``POST /sync-fixtures`` and ``GET /engine-comparison`` published bare
+    ``FlexibleResponse`` while the client read them untyped. Both producers
+    were read before naming. ``sync_world_cup_fixtures`` writes all nine
+    success keys unconditionally and its two ``status == "error"`` returns
+    become HTTP 500 in the route, so nothing is optional and the route keeps
+    no flag. ``calculate_engine_accuracy`` omits ``message`` on its
+    success-with-data path, so that field carries a default and the route
+    must set ``response_model_exclude_unset=True``. The byte probe
+    (``probe_5371_bytes.py``) measured the bare-vs-named FastAPI bodies as
+    identical on every shape (184 / 64 / 70 / 449 bytes) and the flag as
+    load-bearing -- without it ``message`` materialises as ``null``.
+
+    ``predictions`` is declared even though no component reads it: a closed
+    model drops undeclared keys silently, so omitting it would change the
+    response bytes.
+    """
+
+    def test_the_sync_fixtures_envelope(self):
+        from app.models.event import SyncFixturesResponse
+
+        fields = SyncFixturesResponse.model_fields
+        self.assertEqual(
+            list(fields),
+            [
+                "status",
+                "source",
+                "fixtures_synced",
+                "fixtures_fetched",
+                "fixtures_parsed",
+                "created",
+                "updated",
+                "skipped",
+                "remaining_matches",
+                "season",
+            ],
+            "SyncFixturesResponse is no longer its producer key order",
+        )
+        want_types = {
+            "status": str,
+            "source": str,
+            "fixtures_synced": int,
+            "fixtures_fetched": int,
+            "fixtures_parsed": int,
+            "created": int,
+            "updated": int,
+            "skipped": int,
+            "remaining_matches": int,
+            "season": str,
+        }
+        for name, want in want_types.items():
+            with self.subTest(field=name):
+                self.assertEqual(
+                    fields[name].annotation,
+                    want,
+                    f"SyncFixturesResponse.{name} annotation drifted",
+                )
+                self.assertTrue(
+                    fields[name].is_required(),
+                    f"SyncFixturesResponse.{name} gained a default; the "
+                    "producer writes every key unconditionally (audit 53.71)",
+                )
+
+    def test_the_engine_comparison_envelope(self):
+        """The envelope and the whole nested chain it publishes."""
+        from app.models.event import (
+            EngineComparisonPrediction,
+            EngineComparisonResponse,
+            EngineComparisonStat,
+            ScorePair,
+        )
+
+        pair = ScorePair.model_fields
+        self.assertEqual(
+            list(pair), ["home", "away"],
+            "ScorePair is no longer the producer's {home, away} pair",
+        )
+        for name in ("home", "away"):
+            with self.subTest(score_pair=name):
+                self.assertEqual(pair[name].annotation, int)
+                self.assertTrue(pair[name].is_required())
+
+        pred = EngineComparisonPrediction.model_fields
+        self.assertEqual(
+            list(pred),
+            [
+                "match_id",
+                "home_team",
+                "away_team",
+                "predicted_score",
+                "actual_score",
+                "score_error",
+                "outcome_correct",
+                "confidence",
+                "outcome_probability",
+            ],
+            "EngineComparisonPrediction is no longer its producer key order",
+        )
+        want_pred = {
+            "match_id": str,
+            "home_team": str,
+            "away_team": str,
+            "predicted_score": ScorePair,
+            "actual_score": ScorePair,
+            "score_error": int,
+            "outcome_correct": bool,
+            "confidence": float,
+            "outcome_probability": float,
+        }
+        for name, want in want_pred.items():
+            with self.subTest(prediction_field=name):
+                self.assertEqual(pred[name].annotation, want)
+                self.assertTrue(pred[name].is_required())
+
+        stat = EngineComparisonStat.model_fields
+        self.assertEqual(
+            list(stat),
+            [
+                "total_matches",
+                "exact_score_rate",
+                "outcome_accuracy",
+                "goal_diff_accuracy",
+                "avg_score_error",
+                "predictions",
+            ],
+            "EngineComparisonStat is no longer its producer key order",
+        )
+        for name in stat:
+            with self.subTest(stat_field=name):
+                self.assertTrue(
+                    stat[name].is_required(),
+                    f"EngineComparisonStat.{name} gained a default; the "
+                    "producer writes all six keys unconditionally",
+                )
+
+        env = EngineComparisonResponse.model_fields
+        self.assertEqual(list(env), ["status", "message", "engines"])
+        self.assertEqual(env["status"].annotation, str)
+        self.assertTrue(env["status"].is_required())
+        self.assertEqual(env["message"].annotation, str | None)
+        self.assertFalse(
+            env["message"].is_required(),
+            "EngineComparisonResponse.message must keep its default: the "
+            "success-with-data producer path omits the key, and with "
+            "response_model_exclude_unset the default is what keeps it off "
+            "the wire (audit 53.71)",
+        )
+        self.assertEqual(env["engines"].annotation, dict[str, EngineComparisonStat])
+        self.assertTrue(env["engines"].is_required())
+
+    def test_the_routes_bind_their_models_and_the_flag(self):
+        """Route identity, plus the flag each route must (not) carry.
+
+        The criterion reads the route *objects* off ``router.routes`` and
+        filters on the full path (this router carries its own
+        ``prefix="/world-cup/predictions"``, so ``route.path`` is prefixed)
+        plus method, not path alone.
+        """
+        from fastapi.routing import APIRoute
+
+        from app.api.routes import world_cup_predictions as wc
+        from app.models.event import (
+            EngineComparisonResponse,
+            FlexibleResponse,
+            SyncFixturesResponse,
+        )
+
+        def route_for(path: str, method: str) -> APIRoute:
+            found = [
+                route
+                for route in wc.router.routes
+                if isinstance(route, APIRoute)
+                and route.path == path
+                and method in route.methods
+            ]
+            self.assertEqual(
+                len(found), 1, f"expected exactly one {method} route on {path}"
+            )
+            return found[0]
+
+        sync = route_for("/world-cup/predictions/sync-fixtures", "POST")
+        self.assertIs(
+            sync.response_model,
+            SyncFixturesResponse,
+            "POST /sync-fixtures no longer binds SyncFixturesResponse; it "
+            "published no field contract before audit 53.71",
+        )
+        self.assertIsNot(sync.response_model, FlexibleResponse)
+        self.assertIs(
+            sync.response_model_exclude_unset,
+            False,
+            "POST /sync-fixtures gained response_model_exclude_unset; every "
+            "key is written unconditionally, so the flag has nothing to drop "
+            "(audit 53.71, the 53.56 rule)",
+        )
+
+        comparison = route_for("/world-cup/predictions/engine-comparison", "GET")
+        self.assertIs(
+            comparison.response_model,
+            EngineComparisonResponse,
+            "GET /engine-comparison no longer binds EngineComparisonResponse",
+        )
+        self.assertIsNot(comparison.response_model, FlexibleResponse)
+        self.assertIs(
+            comparison.response_model_exclude_unset,
+            True,
+            "GET /engine-comparison lost response_model_exclude_unset; its "
+            "success-with-data path omits `message`, so without the flag the "
+            "default materialises a `message: null` key the producer never "
+            "wrote (audit 53.71)",
+        )
+
+    def test_the_client_reads_the_generated_contract(self):
+        """The world-cup client must not re-declare generated shapes.
+
+        Textual: the envelope is read through the generated generic, and the
+        two hand-written duplicates (``PredictedScore``,
+        ``EngineComparisonStat``) are gone -- replaced by re-exports of the
+        generated types rather than second copies.
+        """
+        text = (
+            _REPO_ROOT / "frontend" / "src" / "lib" / "world-cup"
+            / "predictions-api.ts"
+        ).read_bytes().decode("utf-8")
+
+        self.assertNotIn(
+            "export interface PredictedScore",
+            text,
+            "predictions-api.ts re-declared PredictedScore; the backend "
+            "publishes that shape as ScorePair (audit 53.71)",
+        )
+        self.assertNotIn(
+            "export interface EngineComparisonStat",
+            text,
+            "predictions-api.ts re-declared EngineComparisonStat; read the "
+            "generated contract instead (audit 53.71)",
+        )
+        self.assertIn(
+            "export type { EngineComparisonStat, PredictedScore };",
+            text,
+            "the old names must stay exported as re-exports of the generated "
+            "types so existing consumers keep compiling",
+        )
+        self.assertIn(
+            'export type EngineComparisonData = EngineComparisonResponse["engines"];',
+            text,
+            "EngineComparisonData must be derived from the generated "
+            "envelope, not re-declared",
+        )
+        self.assertIn("as EngineComparisonResponse", text)
+        self.assertIn("Promise<SyncFixturesResponse>", text)
+
+
 class ApiTsTypeSourceTests(unittest.TestCase):
     """``api.ts`` reads generated shapes instead of re-declaring them.
 

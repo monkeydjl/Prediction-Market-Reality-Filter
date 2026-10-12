@@ -381,6 +381,7 @@ _DECISION_QUALITY = "backend/app/services/decision_quality_service.py"
 _T_TRADES_STORE = "tests/test_simulated_trade_store.py"
 _T_QUALITY_METRICS = "tests/test_quality_metrics.py"
 _WORLD_CUP_PREDICTIONS = "backend/app/api/routes/world_cup_predictions.py"
+_WC_PREDICTIONS_API_TS = "frontend/src/lib/world-cup/predictions-api.ts"
 _T_EVENT_INTELLIGENCE = "tests/test_event_intelligence_service.py"
 _T_CONCLUSION_CHALLENGE = "tests/test_conclusion_challenge_service.py"
 _T_DECISION_QUALITY = "tests/test_decision_quality_service.py"
@@ -1645,7 +1646,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J104）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J109）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -4170,6 +4171,94 @@ SETS: tuple[MutationSet, ...] = (
                     "重新引入 `ConfigDict`，保持单区替换、字节合法）；锚是 router "
                     "定义行（本文件唯一），`new` 在其后插两空行 + 类定义 ⇒ 类定义"
                     "位于 import 之后、路由装饰器之前 ⇒ 18 条路由绑到本地类。"
+                ),
+            ),
+            Mutation(
+                label="J105 POST /sync-fixtures 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=b'@router.post("/sync-fixtures", response_model=SyncFixturesResponse)',
+                new=b'@router.post("/sync-fixtures", response_model=FlexibleResponse)',
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_routes_bind_their_models_and_the_flag",),
+                note=(
+                    "§53.71（批 C）：单端点一条代表针（与 J64/J72/J80/J88/J97/J101 "
+                    "同判据，路由对象身份；批次比例判据的 N=1 形态）。退回裸 "
+                    "`FlexibleResponse` 后路由仍 200、`tsc` 绿、其余守卫全绿——只有按"
+                    "身份（`is`）钉住的那条会红。🔴 针是装饰器行（本文件命中 **1 次**，"
+                    "已字节复核），与 J106 的窗口（engine-comparison 装饰器）不重叠。"
+                ),
+            ),
+            Mutation(
+                label="J106 GET /engine-comparison 丢掉 response_model_exclude_unset：成功带数据路径长出 message: null 键",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b"    response_model=EngineComparisonResponse,\r\n"
+                    b"    response_model_exclude_unset=True,\r\n"
+                    b")\r\n"
+                ),
+                new=(
+                    b"    response_model=EngineComparisonResponse,\r\n"
+                    b")\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_routes_bind_their_models_and_the_flag",),
+                note=(
+                    "§53.71：**旗子必须有**的正向承重针（与 J98「无旗子端点悄悄到货"
+                    "旗子」反向）。`message` 只在三条返回路径的两条里被写入 ⇒ 带默认值；"
+                    "去掉旗子后默认值实体会写成 `\"message\": null`，线上字节与生产者"
+                    "不一致（探针 `probe_5371_bytes.py` 实测：无旗子时 `message` 出现在"
+                    "键集里）。🔴 针是装饰器三行、**带 CRLF**（与目标文件一致，无裸 LF）；"
+                    "在本文件命中 **1 次**。"
+                ),
+            ),
+            Mutation(
+                label="J107 EngineComparisonResponse.message 去掉默认值：条件写入键被收成必填",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    status: str\r\n"
+                    b"    message: str | None = None\r\n"
+                    b"    engines: dict[str, EngineComparisonStat]\r\n"
+                ),
+                new=(
+                    b"    status: str\r\n"
+                    b"    message: str | None\r\n"
+                    b"    engines: dict[str, EngineComparisonStat]\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_engine_comparison_envelope",),
+                note=(
+                    "§53.71：收掉默认值 ⇒ `message` 变必填 ⇒ 成功带数据路径（不写该键）"
+                    "会 500（生产者三条路径里只写两条）。守卫断言 "
+                    "`is_required() is False` ⇒ 直接变红。🔴 针跨三行、带 CRLF；用"
+                    "「信封三段字段序列」消歧——裸 `message: str | None = None` 在"
+                    "event.py 里多处出现，三行序列使它恰好命中 1 次。"
+                ),
+            ),
+            Mutation(
+                label="J108 SyncFixturesResponse.season 从 str 收成 int：注解漂移，线上把 \"2026\" 打成 500",
+                path=_EVENT_MODEL,
+                old=b"    remaining_matches: int\r\n    season: str\r\n",
+                new=b"    remaining_matches: int\r\n    season: int\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_sync_fixtures_envelope",),
+                note=(
+                    "§53.71：注解漂移（守卫的 `annotation == str` 断言承重）。两个来源"
+                    "分支都把 `season` 当 **str** 传（football-data 分支只在自己那个"
+                    "取 int 的调用点转换）⇒ 收成 int 会让 200 变 500。🔴 针跨两行、"
+                    "带 CRLF，避开了同文件其它 `season: str` 之类单段写法。"
+                ),
+            ),
+            Mutation(
+                label="J109 predictions-api.ts 的 syncFixtures 退回 Promise<void>：消费侧不再读生成契约",
+                path=_WC_PREDICTIONS_API_TS,
+                old=b"export async function syncFixtures(): Promise<SyncFixturesResponse> {",
+                new=b"export async function syncFixtures(): Promise<void> {",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_client_reads_the_generated_contract",),
+                note=(
+                    "§53.71：**消费面**承重针。退回 `Promise<void>` 后客户端又丢掉响应体"
+                    "⇒ 生成契约在前端不再有引用点（后端改名/改形状 `tsc` 全盲）。"
+                    "🔴 针是函数签名整行（命中 **1 次**）；与 J108 分属不同文件。"
                 ),
             ),
         ),

@@ -11,7 +11,11 @@ from pydantic import BaseModel
 from sqlalchemy import or_
 
 from app.api.security import optional_write_key, require_write_key
-from app.models.event import FlexibleResponse
+from app.models.event import (
+    EngineComparisonResponse,
+    FlexibleResponse,
+    SyncFixturesResponse,
+)
 from app.models.world_cup_prediction import MatchFixture, MatchPrediction, PredictionHistory, AIAnalysisHistory
 from app.services.world_cup_match_service import sync_world_cup_fixtures
 from app.services.world_cup_data_quality import (
@@ -160,7 +164,7 @@ async def initialize_prediction_db(_auth: None = Depends(require_write_key)) -> 
         )
 
 
-@router.post("/sync-fixtures", response_model=FlexibleResponse)
+@router.post("/sync-fixtures", response_model=SyncFixturesResponse)
 async def sync_fixtures(
     source: str = Query("football-data", description="Data source: 'football-data' or 'api-football'"),
     _auth: None = Depends(require_write_key),
@@ -169,6 +173,11 @@ async def sync_fixtures(
 
     Args:
         source: Data source to use (default: football-data for real-time 2026 data)
+
+    Named the response ``SyncFixturesResponse`` (audit 53.71): the producer
+    writes all nine keys on its success path, and the two ``status == "error"``
+    returns are turned into HTTP 500 here, so no key is conditional and no
+    ``response_model_exclude_unset`` is needed.
     """
     result = sync_world_cup_fixtures(source=source)
     if result.get("status") == "error":
@@ -793,9 +802,20 @@ async def get_today_matches() -> dict[str, Any]:
         close_prediction_session(session)
 
 
-@router.get("/engine-comparison", response_model=FlexibleResponse)
+@router.get(
+    "/engine-comparison",
+    response_model=EngineComparisonResponse,
+    response_model_exclude_unset=True,
+)
 async def compare_engine_accuracy() -> dict[str, Any]:
-    """Compare accuracy of different prediction engines on finished matches."""
+    """Compare accuracy of different prediction engines on finished matches.
+
+    Named the response ``EngineComparisonResponse`` (audit 53.71). The producer
+    omits ``message`` on its success-with-data path, so the field carries a
+    default and this route sets ``response_model_exclude_unset=True`` -- without
+    the flag that default would materialise a ``"message": null`` key the
+    producer never wrote.
+    """
     from app.services.engine_comparison_service import calculate_engine_accuracy
 
     result = calculate_engine_accuracy()

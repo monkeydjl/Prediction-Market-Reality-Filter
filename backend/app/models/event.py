@@ -1358,6 +1358,103 @@ class ResetEventDataResponse(FlexibleResponse):
     cleared: dict[str, int | str]
 
 
+class ScorePair(BaseModel):
+    """A ``{home, away}`` score pair (audit 53.71), shared by
+    ``EngineComparisonPrediction.predicted_score`` and ``.actual_score``.
+
+    Deliberately **not** named ``PredictedScore``: the backend already has a
+    ``TypedDict`` by that name in ``app.services.world_cup_engines.types`` whose
+    members are ``float`` -- a same-name/different-body pair is exactly the trap
+    audit 53.69 closed for ``FlexibleResponse``. Both members are ``int``: the
+    producer rounds the predicted scores (``round(float)``) and reads
+    ``MatchFixture.home_score`` / ``away_score`` (``Integer`` columns, guarded
+    non-``None``) for the actual ones.
+    """
+
+    home: int
+    away: int
+
+
+class EngineComparisonPrediction(BaseModel):
+    """One element of ``EngineComparisonStat.predictions`` (audit 53.71).
+    ``engine_comparison_service._credit_engine_prediction`` builds all ten keys
+    by hand in a single ``list.append``. The three float fields are read
+    straight off a ``PredictionHistory`` row whose columns are all
+    ``nullable=False``, so none of them is optional.
+    """
+
+    match_id: str
+    home_team: str
+    away_team: str
+    predicted_score: ScorePair
+    actual_score: ScorePair
+    score_error: int
+    outcome_correct: bool
+    confidence: float
+    outcome_probability: float
+
+
+class EngineComparisonStat(BaseModel):
+    """One engine's accuracy roll-up inside ``EngineComparisonResponse.engines``
+    (audit 53.71). ``calculate_engine_accuracy`` writes all six keys
+    unconditionally per engine, so none carries a default. Registered as a
+    *root* even though the frontend only reaches it through the envelope's
+    field type: a nested-only model would come out with an
+    ``[k: string]: unknown`` tail, looser than the hand-written
+    ``EngineComparisonStat`` it replaces (the 53.49/53.50 root-vs-nested rule).
+    Note ``predictions`` is kept even though no frontend component reads it --
+    a closed model drops undeclared keys silently, so omitting it would change
+    the response bytes (the 53.58 lesson).
+    """
+
+    total_matches: int
+    exact_score_rate: float
+    outcome_accuracy: float
+    goal_diff_accuracy: float
+    avg_score_error: float
+    predictions: list[EngineComparisonPrediction]
+
+
+class EngineComparisonResponse(FlexibleResponse):
+    """Response for GET /api/world-cup/predictions/engine-comparison (audit
+    53.71). ``calculate_engine_accuracy`` has three return paths and only *two*
+    of them write ``message`` (the no-finished-matches early return and the
+    exception fallback); the success-with-data path omits it. So ``message``
+    carries a default and the route **must** set
+    ``response_model_exclude_unset=True`` -- without the flag the default would
+    materialise a ``"message": null`` key the producer never wrote (the
+    ``LoopRunView`` shape from 53.63). ``status`` and ``engines`` are written on
+    every path (``engines`` possibly empty), so neither carries a default.
+    """
+
+    status: str
+    message: str | None = None
+    engines: dict[str, EngineComparisonStat]
+
+
+class SyncFixturesResponse(FlexibleResponse):
+    """Response for POST /api/world-cup/predictions/sync-fixtures (audit 53.71).
+    ``sync_world_cup_fixtures`` writes all nine keys on its success return path;
+    its two error returns are converted to HTTP 500 by the route
+    (``result.get("status") == "error"``), so they never reach the response
+    model and no key is conditional -- the route therefore needs no
+    ``response_model_exclude_unset`` (the 53.56 rule). ``season`` is a str on
+    both source branches (the football-data branch converts at its one
+    int-taking call site), so ``str`` is faithful.
+    """
+
+    status: str
+    source: str
+    fixtures_synced: int
+    fixtures_fetched: int
+    fixtures_parsed: int
+    created: int
+    updated: int
+    skipped: int
+    remaining_matches: int
+    season: str
+
+
 class CalibrationAggregate(BaseModel):
     """One aggregate block of ``EventCalibrationResponse`` (audit 53.63):
     the overall block and every ``by_source`` / ``by_base_rate_category``

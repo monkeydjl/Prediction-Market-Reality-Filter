@@ -8,11 +8,20 @@ import {
   getOperatorApiKey,
   getOperatorId,
 } from "@/lib/api";
+import type {
+  EngineComparisonResponse,
+  EngineComparisonStat,
+  ScorePair as PredictedScore,
+  SyncFixturesResponse,
+} from "@/lib/generated-types";
 
-export interface PredictedScore {
-  home: number;
-  away: number;
-}
+// Contracts for this client now come from the generated types (audit 53.71).
+// `PredictedScore` was a hand-written `{home, away}` pair and
+// `EngineComparisonStat` a hand-written per-engine roll-up; the backend
+// publishes both (as `ScorePair` / `EngineComparisonStat`), so the local
+// declarations were retired rather than kept as second copies of generated
+// shapes. The old names stay exported so existing consumers keep compiling.
+export type { EngineComparisonStat, PredictedScore };
 
 export interface OutcomeProbabilities {
   home_win: number;
@@ -418,26 +427,11 @@ export async function optimizePrediction(matchId: string): Promise<PredictionOpt
 
 export type EngineComparisonKey = "elo_odds" | "hybrid" | "integrated" | "gbm";
 
-export interface EngineComparisonStat {
-  total_matches: number;
-  exact_score_rate: number;
-  outcome_accuracy: number;
-  goal_diff_accuracy: number;
-  avg_score_error: number;
-  predictions: Array<{
-    match_id: string;
-    home_team: string;
-    away_team: string;
-    predicted_score: PredictedScore;
-    actual_score: PredictedScore;
-    score_error: number;
-    outcome_correct: boolean;
-    confidence: number;
-    outcome_probability: number;
-  }>;
-}
-
-export type EngineComparisonData = Partial<Record<EngineComparisonKey, EngineComparisonStat>>;
+// Derived from the generated envelope rather than re-declared: the backend's
+// `engines` is an open key map, so `EngineComparisonKey` stays a UI concern
+// (which engines the console offers) while the value shape comes from the
+// generated `EngineComparisonStat`.
+export type EngineComparisonData = EngineComparisonResponse["engines"];
 
 /**
  * Per-engine accuracy roll-up over settled matches. Throws with the backend's
@@ -453,7 +447,7 @@ export async function fetchEngineComparison(): Promise<EngineComparisonData> {
     throw new Error("Failed to load comparison data");
   }
 
-  const result = await response.json();
+  const result = (await response.json()) as EngineComparisonResponse;
   if (result.status !== "ok") {
     throw new Error(result.message || "No data available");
   }
@@ -463,7 +457,7 @@ export async function fetchEngineComparison(): Promise<EngineComparisonData> {
 /**
  * Sync fixtures from API-Football
  */
-export async function syncFixtures(): Promise<void> {
+export async function syncFixtures(): Promise<SyncFixturesResponse> {
   const response = await fetch(
     `${API_BASE}/world-cup/predictions/sync-fixtures`,
     {
@@ -475,4 +469,6 @@ export async function syncFixtures(): Promise<void> {
   if (!response.ok) {
     throw await worldCupFetchError(response, "同步赛程失败");
   }
+
+  return (await response.json()) as SyncFixturesResponse;
 }

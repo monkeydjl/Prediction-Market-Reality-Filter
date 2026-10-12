@@ -14460,3 +14460,67 @@ draw_prob_shift, home_score_bias, home_win_prob_shift   # 全为 float
 - **验证**：四道门全绿（`ruff check app/`、`mypy app/` 331 files、`generate_types --check` up to date、守卫 junit `tests=37 errors=0 failures=0`）；全量 8336/0/0/11（6696/1640）对账 **+4 case + 38 subtest 零残差**。
 
 **待办**：批 A 余下（auto-tune 族 2 条、`batch-predict`/`batch-switch-engine` 2 条——后者的 `predictions` 元素与批 B 同源）、批 B（比赛查询 6 条）、L2（48 条登记裸集合）。
+
+## 53.73 —— L1 批 A 第二片：auto-tune 族两路由具名，并修好一个「阶段/进度」都错的调优面板
+
+### 1. 两条路由要**相反**的旗子决定
+
+| 路由 | 生产者形状 | 旗子 |
+|---|---|---|
+| `POST /auto-tune/{engine_name}` | **5** 条互斥 | **必须有**（`is True`） |
+| `GET /auto-tune/status/{task_id}` | **1** 条（两键都无条件写满） | **不需要**，并被守卫钉成 `is False` |
+
+POST 的五条形状：`background=True` 4 键 `{status, task_id, message, poll_url}`；sync = `run_full_auto_tuning_cycle`，其自身 no_data 2 键；`calculate_optimization_patterns` 直通（no_data 2 键 / unverified 5 键）；`ok` 7 键（`optimization_summary` 3 键 + `pattern_analysis` 6 个 float + `calibration` 7 键 + 两个 `[label, count]` 元组列表）⇒ 十二键联合、除 `status` 外全部可选。
+
+🔴 **模型字段序 = 线上键序**，所以 `message` 与 `poll_url` 放在**最后**：只有这个顺序能让 `background`（`status, task_id, message, poll_url`）与三条 sync 形状各自按生产者原序序列化。
+
+`GET .../status` 反而**不是**「少写了键」：`to_dict()` 无条件写满十二键，加旗子不会改变今天的行为，只会在将来某个字段变成条件写入时**掩盖**回归⇒ 守卫把 `response_model_exclude_unset` 钉成 `is False`（§Z11 的第三态；J118 就是那个断言的对照组）。
+
+### 2. 🔴 同名不同形：`optimization_summary` 有两套
+
+- sync：`{matches_processed, optimizations_generated, errors: int}`（`run_full_auto_tuning_cycle` 用 `len(...)` **计数**）；
+- async：`{total_processed, optimizations_generated, errors: list[{match_id, match, error}]}`。
+
+**名字一样、首键不同、`errors` 的类型都不同。** async 那套只出现在 `task.result` 里（见第 3 节），所以只给 sync 那套具名（`AutoTuneOptimizationSummary`）。J119 就是把两套抹平的那条变异。
+
+### 3. 🔴 `AutoTuneTask.result` 刻意**不**闭合：两个生产者共用一个全局 manager
+
+`mark_completed` 有两个调用点，且都打同一个 process-wide `get_task_manager()`：
+
+- `engine_auto_tuning_async`：auto-tune 汇总（`{status, engine, optimization_summary, …}`）；
+- `sport_optimization`（`POST /sports/optimization/run`）：`{"sports": {...}}`。
+
+而 `/auto-tune/status/{task_id}` 接受**任意** `task_id` ⇒ 两种形状都可能从这个端点读出来。把一个闭合模型压上去会**静默丢掉**另一边的键（§53.58）⇒ `result` 保持 `dict[str, Any] | None`，先例是 `EventStoreEntry.record`。守卫因此**同时断言两个调用点存在**，把这条前提钉在代码上。
+
+**取证（带前提）**：只读普查 `backend/v2_loop.db` 的 `optimization_tasks` 表 —— **11 行，全部 `status='failed'`、`engine_name='nba'`（即 sport_optimization 写的），`result_json` 全为 NULL，`logs_json` 无条目** ⇒ 两种形状都**从未被观测到**。结论因此只建立在**代码**上（两个调用点 + 同一 manager），「没观测到」≠「不可能」；哪天有真实结果落库，`result` 是否该具名要重裁。
+
+### 4. 顺带修好：一个「阶段」与「进度」都不对的自动调优面板
+
+退役的 `engine-api.ts` 手写 `AutoTuneTask` 声明 `engine` / `stage` / `message` / `updated_at`，而 `OptimizationTask.to_dict()` **一个都不发**（它发 `engine_name`，且没有 stage / message / updated_at 这三个概念）：
+
+- `task.stage` ⇒ 「阶段」分支**恒为假**，永远不显示；
+- `task.message` ⇒ 消息行**恒为假**（`error` 那半仍有效）；
+- `task.progress * 100` ⇒ 把**绝对计数**当 0..1 比例：12 场跑到第 3 场会显示 **300%**。
+
+修法（以生产者为准）：面板改读 `current_match`（正在处理的比赛）、`progress / total`、以及**最后一条日志** `logs.at(-1).message`；`TERMINAL_TASK_STATES` 从 `{completed, failed, error, cancelled}` 收紧到 `{completed, failed}` —— 后两个**不是** `TaskStatus` 的取值：`mark_failed` 写 `failed`，而 `"error"` 是 `task.result` 里的**结果**状态，不是任务状态。
+
+### 5. 守卫、变异与探针
+
+**守卫** `WorldCupAutoTuneContractTests`（4 例 / 60 subtest）：① `AutoTuneTask` 十二键与全部注解 + **两个生产者都在**（两个 `mark_completed` 调用点各断言一次，把「`result` 为何开放」的前提钉住）；② 十二键联合的字段序 + 五形状**逐字节**往返 + **去掉旗子必变**（旗子承重）+ 两个嵌套模型的键序（含 sync/async 同名不同形）；③ 两条路由的**身份**与**相反**的旗子决定；④ 消费侧不再声明副本 + 控制台不再读 `stage` / `message` + 词表收紧。
+
+**变异** J115–J121（索引 121–127），清单 **200 → 207**：J115/J116 同 `group`（POST 的模型身份与旗子）、J117/J118 同 `group`（GET 的身份与「多余旗子」）、J119 同名不同形被抹平、J120 `message`/`poll_url` 换序（字段序即字节序）、J121 消费侧退回读 `stage`。**四阶段 7/7 全过**（EXIT 0），每条还原后 sha256 一致。
+
+**探针** `probe_5373_bytes.py`：走**真实 FastAPI 栈**（`TestClient`，只桩掉写锁依赖与三个协作者），**6 个形状逐字节**等于生产者字典（含 GET 的十二键 task）；并带**负控** —— 同一个 body 用「带旗子 / 不带旗子」两个一次性 app 各发一次，不带旗子时多出 **8 个 `null` 键**，证明探针对旗子缺失敏感（否则「6/6 一致」也可能什么都没比较）。
+
+### 6. 读数口径更正
+
+§53.72 记「模块内裸 `FlexibleResponse` 路由 61 → 59」—— **61/59 是全 `app/` 口径**（`events.py` 45 + `world_cup_predictions.py`），本模块内当时是 **16 → 14**。本片再具名 2 条 ⇒ **全 app 59 → 57**、本模块 **14 → 12**（均实测）。以后两个口径同时给数，避免再混。
+
+### 7. 读数
+
+- **代码** 9 文件（numstat 实测 23/2、12/0、132/0、183/2、391/0、61/1、32/10、167/37、20/24）。
+- 四道门：`ruff check app/` 全绿（`tests/` 仅余**既有** F402 一条，不在新增段）、`mypy app/` 331 files 全绿、`generate_types --check` up to date。
+- 前端：`tsc --noEmit` 绿、`eslint`（三个改动文件）干净、`vitest run` **125 文件 / 741 用例**全通过。
+- **全量** 8409/0/0/11（6700/1709）对账 **+4 case + 69 subtest 零残差**（`_recon_5373.py` GATE PASS）——69 = 守卫类 60 + `test_mutation_verify` 9。
+
+**待办**：批 A 余下 `batch-predict` / `batch-switch-engine`（其 `predictions` 元素与批 B 的 `/matches/{id}` 同源，宜一并建模，并退役第三份失实副本 `BatchSummary`）；批 B（比赛查询 6 条）；L2（48 条登记裸集合）。

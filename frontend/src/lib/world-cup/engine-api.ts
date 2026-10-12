@@ -20,6 +20,21 @@ import {
   buildOperatorAuthHeaders,
   handleFetchError,
 } from "@/lib/api";
+import type {
+  CalibrationPatternsResponse,
+  EngineCalibrationResponse,
+} from "@/lib/generated-types";
+
+// The two calibration contracts now come from the generated types
+// (audit 53.71). The previous hand-written copies were not merely duplicates:
+// the backend has never sent them. `CalibrationPatterns` declared
+// `sample_count` / `patterns` / `suggestions` while the producer sends
+// `samples` / `calibration_params` / `analysis` / `top_blind_spots` /
+// `top_calibration_issues`, so the console's
+// `patterns.patterns || patterns.suggestions` guard was permanently false and
+// the panel could only ever show its fallback text. `EngineCalibration` was
+// faithful field-for-field and is retired for that reason instead.
+export type { CalibrationPatternsResponse, EngineCalibrationResponse };
 
 const API_BASE = getApiBase();
 const ENGINE_CLIENT_SOURCE = "world-cup-engine-console";
@@ -92,22 +107,6 @@ export interface AutoTuneTask {
   result?: Record<string, unknown> | null;
   created_at?: string;
   updated_at?: string;
-}
-
-export interface EngineCalibration {
-  status?: string;
-  engine?: string;
-  message?: string;
-  calibration?: Record<string, unknown> | null;
-}
-
-export interface CalibrationPatterns {
-  status?: string;
-  engine?: string;
-  message?: string;
-  sample_count?: number;
-  patterns?: Record<string, unknown> | null;
-  suggestions?: Record<string, unknown> | null;
 }
 
 function engineHeaders(): Record<string, string> {
@@ -183,11 +182,13 @@ export const engineApi = {
       `${PREFIX}/auto-tune/status/${encodeURIComponent(taskId)}`,
     ),
 
-  calibration: (engine: TunableEngine): Promise<EngineCalibration> =>
-    engineFetch<EngineCalibration>(`${PREFIX}/calibration/${encodeURIComponent(engine)}`),
+  calibration: (engine: TunableEngine): Promise<EngineCalibrationResponse> =>
+    engineFetch<EngineCalibrationResponse>(
+      `${PREFIX}/calibration/${encodeURIComponent(engine)}`,
+    ),
 
-  calibrationPatterns: (engine: TunableEngine): Promise<CalibrationPatterns> =>
-    engineFetch<CalibrationPatterns>(
+  calibrationPatterns: (engine: TunableEngine): Promise<CalibrationPatternsResponse> =>
+    engineFetch<CalibrationPatternsResponse>(
       `${PREFIX}/calibration-patterns/${encodeURIComponent(engine)}`,
     ),
 };

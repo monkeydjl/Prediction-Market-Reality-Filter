@@ -311,6 +311,19 @@ export interface CalibrationAggregate {
   n: number;
 }
 /**
+ * The ``analysis`` block of the ``ok`` shape of
+ * ``calculate_optimization_patterns`` (audit 53.71): six rounded floats, all
+ * written unconditionally.
+ */
+export interface CalibrationAnalysis {
+  avg_home_score_adjustment: number;
+  avg_away_score_adjustment: number;
+  avg_home_win_prob_adjustment: number;
+  avg_draw_prob_adjustment: number;
+  avg_away_win_prob_adjustment: number;
+  avg_confidence_adjustment: number;
+}
+/**
  * One cell of ``CalibrationBucketSummaryResponse`` (audit 53.61). Both
  * statistics are ``round(...)`` over lists that may be empty, so either can
  * be null while ``n`` (the group's ``len``) never can.
@@ -337,6 +350,79 @@ export interface CalibrationBucketSummaryResponse {
   by_edge_x_confidence: {
     [k: string]: CalibrationBucketCell;
   };
+  [k: string]: unknown;
+}
+/**
+ * The ``calibration`` block of ``GET /calibration/{engine_name}`` -- exactly
+ * what ``get_active_calibration`` returns (audit 53.71). All seven keys are
+ * written unconditionally; ``avg_improvement`` is nullable because its column
+ * is (every one of the 29 live rows carries ``None``), which is also why
+ * ``is_verified`` is in practice always ``False``.
+ */
+export interface CalibrationDetail {
+  engine: string;
+  version: number;
+  params: CalibrationParams;
+  based_on_matches: number;
+  avg_improvement: number | null;
+  is_verified: boolean;
+  created_at: string;
+}
+/**
+ * The six adjustment keys ``calculate_optimization_patterns`` derives and
+ * ``apply_calibration_to_prediction`` reads back (audit 53.71).
+ *
+ * Closed even though ``engine_calibration.calibration_params`` is a generic
+ * JSON column: a read-only census of the live database found 29 rows carrying
+ * exactly **one** distinct key set -- these six keys, all floats. The DDL
+ * comment above that column documents a different example
+ * (``home_advantage_bias`` / ``draw_probability_shift`` /
+ * ``confidence_deflation`` / ``strong_team_overconfidence``) that neither the
+ * writer nor the reader ever uses, so it is stale documentation rather than a
+ * second live shape. "Not observed" is not "impossible": the sole writer
+ * (``save_engine_calibration``) takes a ``dict[str, Any]``, so a foreign row
+ * with other keys would have them dropped here. That premise is accepted and
+ * recorded in the 53.71 audit section.
+ */
+export interface CalibrationParams {
+  home_score_bias: number;
+  away_score_bias: number;
+  home_win_prob_shift: number;
+  draw_prob_shift: number;
+  away_win_prob_shift: number;
+  confidence_multiplier: number;
+}
+/**
+ * Response for GET /calibration-patterns/{engine_name} (audit 53.71).
+ *
+ * Three disjoint shapes out of ``calculate_optimization_patterns``:
+ * ``no_data`` (``status`` + ``message``), ``unverified`` (``+ engine``,
+ * ``samples``, ``unverified_samples``, ``message``), and ``ok`` (``+ engine``,
+ * ``samples``, ``unverified_samples``, ``avg_improvement``,
+ * ``calibration_params``, ``top_blind_spots``, ``top_calibration_issues``,
+ * ``analysis`` -- and *no* ``message``). Every field is therefore optional and
+ * the route must set ``response_model_exclude_unset=True``.
+ *
+ * ``top_blind_spots`` / ``top_calibration_issues`` come from
+ * ``sorted(counts.items(), key=..., reverse=True)[:5]``: JSON arrays of
+ * ``[label, count]`` pairs, not objects. They are modelled as
+ * ``list[tuple[str, int]]`` so that shape stays honest -- a two-field model
+ * would be rejected at validation time, not merely mis-described. Beware the
+ * published TypeScript: json2ts renders a fixed-arity tuple as
+ * ``[unknown, unknown][]`` (arity kept, element types lost), so the consumer
+ * must narrow the pair itself.
+ */
+export interface CalibrationPatternsResponse {
+  status: string;
+  engine?: string | null;
+  samples?: number | null;
+  unverified_samples?: number | null;
+  avg_improvement?: number | null;
+  calibration_params?: CalibrationParams | null;
+  top_blind_spots?: [unknown, unknown][] | null;
+  top_calibration_issues?: [unknown, unknown][] | null;
+  analysis?: CalibrationAnalysis | null;
+  message?: string | null;
   [k: string]: unknown;
 }
 export interface CategoryCountsResponse {
@@ -902,6 +988,23 @@ export interface EdgeTrajectorySummary {
   age_hours: number | null;
   freshness_band: string;
   classification: string;
+}
+/**
+ * Response for GET /calibration/{engine_name} (audit 53.71).
+ *
+ * Two disjoint shapes: ``{"status": "no_calibration", "engine", "message"}``
+ * and ``{"status": "ok", "calibration"}``. Each is written in full, so the
+ * keys missing from one are *unset* rather than defaulted -- which is exactly
+ * why the route must set ``response_model_exclude_unset=True``. Without the
+ * flag the defaults would serialize an explicit ``null`` for keys the
+ * producer never wrote, changing the bytes on both paths.
+ */
+export interface EngineCalibrationResponse {
+  status: string;
+  engine?: string | null;
+  message?: string | null;
+  calibration?: CalibrationDetail | null;
+  [k: string]: unknown;
 }
 /**
  * One element of ``EngineComparisonStat.predictions`` (audit 53.71).

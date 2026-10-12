@@ -382,6 +382,7 @@ _T_TRADES_STORE = "tests/test_simulated_trade_store.py"
 _T_QUALITY_METRICS = "tests/test_quality_metrics.py"
 _WORLD_CUP_PREDICTIONS = "backend/app/api/routes/world_cup_predictions.py"
 _WC_PREDICTIONS_API_TS = "frontend/src/lib/world-cup/predictions-api.ts"
+_ENGINE_CONSOLE_TSX = "frontend/src/components/sports/world-cup/engine-console.tsx"
 _T_EVENT_INTELLIGENCE = "tests/test_event_intelligence_service.py"
 _T_CONCLUSION_CHALLENGE = "tests/test_conclusion_challenge_service.py"
 _T_DECISION_QUALITY = "tests/test_decision_quality_service.py"
@@ -1646,7 +1647,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J109）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J114）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -4259,6 +4260,111 @@ SETS: tuple[MutationSet, ...] = (
                     "§53.71：**消费面**承重针。退回 `Promise<void>` 后客户端又丢掉响应体"
                     "⇒ 生成契约在前端不再有引用点（后端改名/改形状 `tsc` 全盲）。"
                     "🔴 针是函数签名整行（命中 **1 次**）；与 J108 分属不同文件。"
+                ),
+            ),
+            Mutation(
+                label="J110 GET /calibration/{engine_name} 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=b'    response_model=EngineCalibrationResponse,',
+                new=b'    response_model=FlexibleResponse,',
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_routes_bind_their_models_and_the_flag",),
+                note=(
+                    "§53.72（校准族）：单端点 N=1 "
+                    "代表针（路由对象**身份**判据）。"
+                    "退回后路由仍 200、`tsc` 绿、"
+                    "其余守卫全绿——只有按 `is` "
+                    "钉住的那条会红。● 针是装饰器"
+                    "内单行（本文件命中 **1 次**），"
+                    "与 J111 的窗口（calibration-patterns 装饰器）"
+                    "不重叠。"
+                ),
+            ),
+            Mutation(
+                label="J111 GET /calibration-patterns/{engine_name} 丢掉 response_model_exclude_unset：其余形状长出 null 键",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b"    response_model=CalibrationPatternsResponse,\r\n"
+                    b"    response_model_exclude_unset=True,\r\n"
+                    b")\r\n"
+                ),
+                new=(
+                    b"    response_model=CalibrationPatternsResponse,\r\n"
+                    b")\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_routes_bind_their_models_and_the_flag",),
+                note=(
+                    "§53.72：**旗子必须有**的承重针（与 "
+                    "J106 同判据，不同端点）。生产者"
+                    "有三条互斥路径；去掉旗子后 "
+                    "`engine`/`samples`/`message` 等缺席键会被"
+                    "序列化成 **显式 null**，线上字节与"
+                    "生产者不一致。● 针是装饰器"
+                    "三行、**带 CRLF**（与目标文件一致，"
+                    "无裸 LF）；在本文件命中 **1 次**。"
+                ),
+            ),
+            Mutation(
+                label="J112 CalibrationDetail.avg_improvement 去掉 nullable：29 行里全为 None，线上直接 500",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    avg_improvement: float | None\r\n"
+                    b"    is_verified: bool\r\n"
+                ),
+                new=(
+                    b"    avg_improvement: float\r\n"
+                    b"    is_verified: bool\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_calibration_envelope_and_its_detail",),
+                note=(
+                    "§53.72：注解漂移。实测 29 行 "
+                    "`avg_improvement` **全为 None** ⇒ 收成 "
+                    "`float` 后 `/calibration/{engine}` 的 `ok` 分支"
+                    "会直接 500（守卫断言 "
+                    "`annotation == float | None` ⇒ 直接红）。"
+                    "● 针跨两行、带 CRLF，用"
+                    "「字段序列」消歧：单行 "
+                    "`avg_improvement: float | None` 在本仓另有出现。"
+                ),
+            ),
+            Mutation(
+                label="J113 CalibrationParams 去掉 away_win_prob_shift：闭合模型静默丢键，线上字节变",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    away_win_prob_shift: float\r\n"
+                    b"    confidence_multiplier: float\r\n"
+                ),
+                new=b"    confidence_multiplier: float\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_calibration_envelope_and_its_detail",),
+                note=(
+                    "§53.72：**闭合模型漏声明就"
+                    "静默丢键**的承重针（§53.58）。"
+                    "少一个字段后 `get_active_calibration` 仍会"
+                    "传 `params`，但 pydantic 切掉"
+                    " `away_win_prob_shift`，响应字节少一个键 "
+                    "—— 无异常、无警告、`tsc` "
+                    "看不见。● 针跨两行、带 CRLF。"
+                ),
+            ),
+            Mutation(
+                label="J114 engine-console 的模式面板退回读 patterns.patterns：又回到生产者从不发送的键",
+                path=_ENGINE_CONSOLE_TSX,
+                old=b'            {patterns.status === "ok" && patterns.calibration_params ? (',
+                new=b'            {patterns.status === "ok" && patterns.patterns ? (',
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_client_reads_the_generated_contract",),
+                note=(
+                    "§53.72：**消费面**承重针，也是"
+                    "本批的起点缺陷本身。"
+                    "`patterns` 是生产者从未发送的键 "
+                    "⇒ 该分支**恒为假**，面板只能"
+                    "显示兜底文案（字节全绿、"
+                    "类型系统全绿）。● 针是 JSX "
+                    "条件行（命中 **1 次**），与其他"
+                    "针不同文件。"
                 ),
             ),
         ),

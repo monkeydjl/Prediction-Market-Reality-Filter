@@ -6,8 +6,8 @@ import {
   streamBatchSwitchEngine,
   type AutoTuneTask,
   type BatchSummary,
-  type CalibrationPatterns,
-  type EngineCalibration,
+  type CalibrationPatternsResponse,
+  type EngineCalibrationResponse,
   type EngineName,
   type TunableEngine,
 } from "@/lib/world-cup/engine-api";
@@ -85,8 +85,8 @@ export function EngineConsole() {
   const [confirming, setConfirming] = useState<string | null>(null);
 
   const [task, setTask] = useState<AutoTuneTask | null>(null);
-  const [calibration, setCalibration] = useState<EngineCalibration | null>(null);
-  const [patterns, setPatterns] = useState<CalibrationPatterns | null>(null);
+  const [calibration, setCalibration] = useState<EngineCalibrationResponse | null>(null);
+  const [patterns, setPatterns] = useState<CalibrationPatternsResponse | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const taskIdRef = useRef<string | null>(null);
@@ -435,9 +435,19 @@ export function EngineConsole() {
 
         {patterns && (
           <div data-testid="patterns-result" className="mt-3 text-sm">
-            {patterns.patterns || patterns.suggestions ? (
+            {patterns.status === "ok" && patterns.calibration_params ? (
               <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs text-foreground">
-                {JSON.stringify(patterns.suggestions ?? patterns.patterns, null, 2)}
+                {JSON.stringify(
+                  {
+                    samples: patterns.samples,
+                    calibration_params: patterns.calibration_params,
+                    analysis: patterns.analysis,
+                    top_blind_spots: patterns.top_blind_spots,
+                    top_calibration_issues: patterns.top_calibration_issues,
+                  },
+                  null,
+                  2,
+                )}
               </pre>
             ) : (
               <p className="text-muted-foreground">

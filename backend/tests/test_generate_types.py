@@ -3539,6 +3539,305 @@ class WorldCupBatchCContractTests(unittest.TestCase):
         self.assertIn("Promise<SyncFixturesResponse>", text)
 
 
+class WorldCupCalibrationContractTests(unittest.TestCase):
+    """The two calibration routes named in audit 53.71 (batch A, first slice).
+
+    ``GET /calibration/{engine_name}`` and
+    ``GET /calibration-patterns/{engine_name}`` published the bare
+    ``FlexibleResponse`` envelope. Their producers return *disjoint* shapes --
+    two and three respectively -- so every field but ``status`` is optional and
+    **both** routes must set ``response_model_exclude_unset=True``; without the
+    flag the model defaults would serialise ``null`` keys the producer never
+    wrote.
+
+    ``CalibrationParams`` closes a namespace the database owns:
+    ``engine_calibration.calibration_params`` is a generic JSON column. A
+    read-only census of the live database found 29 rows and exactly one
+    distinct key set -- these six float keys, in this order -- which is what the
+    writer (``calculate_optimization_patterns``) produces and the reader
+    (``apply_calibration_to_prediction``) reads back. The DDL comment above the
+    column documents a *different* example key set (``home_advantage_bias`` /
+    ``draw_probability_shift`` / ...) that no code reads or writes, so it is
+    stale documentation rather than a second live shape. "Not observed" is not
+    "impossible": ``save_engine_calibration`` accepts a ``dict[str, Any]``, so a
+    foreign row could carry other keys and this model would drop them. That
+    premise is recorded in the 53.71 audit section.
+    """
+
+    def test_the_calibration_envelope_and_its_detail(self):
+        from app.models.event import (
+            CalibrationDetail,
+            CalibrationParams,
+            EngineCalibrationResponse,
+            FlexibleResponse,
+        )
+
+        params = CalibrationParams.model_fields
+        self.assertEqual(
+            list(params),
+            [
+                "home_score_bias",
+                "away_score_bias",
+                "home_win_prob_shift",
+                "draw_prob_shift",
+                "away_win_prob_shift",
+                "confidence_multiplier",
+            ],
+            "CalibrationParams is no longer the six keys the writer emits and "
+            "the reader consumes (audit 53.71)",
+        )
+        for name, field in params.items():
+            with self.subTest(params=name):
+                self.assertEqual(
+                    field.annotation, float,
+                    f"CalibrationParams.{name} is no longer a float",
+                )
+                self.assertTrue(
+                    field.is_required(),
+                    f"CalibrationParams.{name} gained a default; "
+                    "calculate_optimization_patterns rounds every one",
+                )
+
+        detail = CalibrationDetail.model_fields
+        self.assertEqual(
+            list(detail),
+            [
+                "engine",
+                "version",
+                "params",
+                "based_on_matches",
+                "avg_improvement",
+                "is_verified",
+                "created_at",
+            ],
+            "CalibrationDetail is no longer get_active_calibration's key order",
+        )
+        detail_types = {
+            "engine": str,
+            "version": int,
+            "params": CalibrationParams,
+            "based_on_matches": int,
+            "avg_improvement": float | None,
+            "is_verified": bool,
+            "created_at": str,
+        }
+        for name, want in detail_types.items():
+            with self.subTest(detail=name):
+                self.assertEqual(
+                    detail[name].annotation, want,
+                    f"CalibrationDetail.{name} annotation drifted",
+                )
+                self.assertTrue(
+                    detail[name].is_required(),
+                    f"CalibrationDetail.{name} gained a default; "
+                    "get_active_calibration writes all seven keys every time",
+                )
+
+        envelope = EngineCalibrationResponse.model_fields
+        self.assertEqual(
+            list(envelope),
+            ["status", "engine", "message", "calibration"],
+            "EngineCalibrationResponse is no longer the union of its two "
+            "producer shapes (audit 53.71)",
+        )
+        self.assertEqual(envelope["status"].annotation, str)
+        self.assertTrue(envelope["status"].is_required())
+        optional = {
+            "engine": str | None,
+            "message": str | None,
+            "calibration": CalibrationDetail | None,
+        }
+        for name, want in optional.items():
+            with self.subTest(envelope=name):
+                self.assertEqual(envelope[name].annotation, want)
+                self.assertFalse(
+                    envelope[name].is_required(),
+                    f"EngineCalibrationResponse.{name} lost its default; the "
+                    "other shape never writes it, so the flag can no longer "
+                    "keep it out of the body (audit 53.71)",
+                )
+        self.assertTrue(
+            issubclass(EngineCalibrationResponse, FlexibleResponse),
+            "EngineCalibrationResponse must stay on FlexibleResponse so "
+            "undeclared keys still pass through",
+        )
+
+    def test_the_calibration_patterns_envelope(self):
+        from app.models.event import (
+            CalibrationAnalysis,
+            CalibrationParams,
+            CalibrationPatternsResponse,
+            FlexibleResponse,
+        )
+
+        analysis = CalibrationAnalysis.model_fields
+        self.assertEqual(
+            list(analysis),
+            [
+                "avg_home_score_adjustment",
+                "avg_away_score_adjustment",
+                "avg_home_win_prob_adjustment",
+                "avg_draw_prob_adjustment",
+                "avg_away_win_prob_adjustment",
+                "avg_confidence_adjustment",
+            ],
+            "CalibrationAnalysis is no longer its producer's key order",
+        )
+        for name, field in analysis.items():
+            with self.subTest(analysis=name):
+                self.assertEqual(field.annotation, float)
+                self.assertTrue(field.is_required())
+
+        envelope = CalibrationPatternsResponse.model_fields
+        self.assertEqual(
+            list(envelope),
+            [
+                "status",
+                "engine",
+                "samples",
+                "unverified_samples",
+                "avg_improvement",
+                "calibration_params",
+                "top_blind_spots",
+                "top_calibration_issues",
+                "analysis",
+                "message",
+            ],
+            "CalibrationPatternsResponse must keep the `ok` shape's key order "
+            "with `message` last: that is also the order of the `no_data` / "
+            "`unverified` shapes, which is what keeps the serialised bytes of "
+            "all three paths unchanged (audit 53.71)",
+        )
+        self.assertTrue(envelope["status"].is_required())
+        for name in list(envelope)[1:]:
+            with self.subTest(envelope=name):
+                self.assertFalse(
+                    envelope[name].is_required(),
+                    f"CalibrationPatternsResponse.{name} lost its default; "
+                    "only the `ok` shape writes it, so the flag must be able "
+                    "to drop it (audit 53.71)",
+                )
+        self.assertEqual(envelope["calibration_params"].annotation,
+                         CalibrationParams | None)
+        self.assertEqual(envelope["analysis"].annotation,
+                         CalibrationAnalysis | None)
+        self.assertTrue(
+            issubclass(CalibrationPatternsResponse, FlexibleResponse),
+        )
+
+        generated = _OUTPUT_PATH.read_bytes().decode("utf-8")
+        self.assertIn(
+            "top_blind_spots?: [unknown, unknown][] | null;",
+            generated,
+            "json2ts stopped rendering the [label, count] pair as a "
+            "two-element array. If that is a deliberate improvement (e.g. "
+            "[string, number][]), update this assertion in the same commit; "
+            "if it degraded to unknown[] the console's arity assumption is "
+            "gone (audit 53.71)",
+        )
+
+    def test_the_routes_bind_their_models_and_the_flag(self):
+        """Route identity, plus the flag both calibration routes must carry.
+
+        Filtered on the full path plus method: this router carries
+        ``prefix="/world-cup/predictions"``, so ``route.path`` is already
+        prefixed and a bare template would match nothing (audit 53.71 batch C).
+        """
+        from fastapi.routing import APIRoute
+
+        from app.api.routes import world_cup_predictions as wc
+        from app.models.event import (
+            CalibrationPatternsResponse,
+            EngineCalibrationResponse,
+            FlexibleResponse,
+        )
+
+        def route_for(path: str, method: str) -> APIRoute:
+            found = [
+                route
+                for route in wc.router.routes
+                if isinstance(route, APIRoute)
+                and route.path == path
+                and method in route.methods
+            ]
+            self.assertEqual(
+                len(found), 1, f"expected exactly one {method} route on {path}"
+            )
+            return found[0]
+
+        for path, model in (
+            ("/world-cup/predictions/calibration/{engine_name}",
+             EngineCalibrationResponse),
+            ("/world-cup/predictions/calibration-patterns/{engine_name}",
+             CalibrationPatternsResponse),
+        ):
+            with self.subTest(path=path):
+                route = route_for(path, "GET")
+                self.assertIs(
+                    route.response_model, model,
+                    f"GET {path} no longer binds {model.__name__}; it "
+                    "published no field contract before audit 53.71",
+                )
+                self.assertIsNot(route.response_model, FlexibleResponse)
+                self.assertIs(
+                    route.response_model_exclude_unset,
+                    True,
+                    f"GET {path} lost response_model_exclude_unset; its "
+                    "producer returns disjoint shapes, so without the flag the "
+                    "defaults serialise null keys it never wrote (audit 53.71)",
+                )
+
+    def test_the_client_reads_the_generated_contract(self):
+        """The engine client must not re-declare generated shapes -- and the
+        console must read the keys the producer actually sends.
+
+        The second half is the point: the retired ``CalibrationPatterns``
+        declared ``sample_count`` / ``patterns`` / ``suggestions``, none of
+        which ``calculate_optimization_patterns`` has ever sent, so
+        ``patterns.patterns || patterns.suggestions`` was permanently false and
+        the panel could only ever render its fallback text.
+        """
+        client = (
+            _REPO_ROOT / "frontend" / "src" / "lib" / "world-cup"
+            / "engine-api.ts"
+        ).read_bytes().decode("utf-8")
+        console = (
+            _REPO_ROOT / "frontend" / "src" / "components" / "sports"
+            / "world-cup" / "engine-console.tsx"
+        ).read_bytes().decode("utf-8")
+
+        self.assertNotIn(
+            "export interface EngineCalibration", client,
+            "engine-api.ts re-declared EngineCalibration; read the generated "
+            "EngineCalibrationResponse instead (audit 53.71)",
+        )
+        self.assertNotIn(
+            "export interface CalibrationPatterns", client,
+            "engine-api.ts re-declared CalibrationPatterns; that copy named "
+            "keys the producer never sends (audit 53.71)",
+        )
+        self.assertIn(
+            "export type { CalibrationPatternsResponse, EngineCalibrationResponse };",
+            client,
+            "the generated calibration contracts must be re-exported from the "
+            "client module so consumers keep one import path",
+        )
+        self.assertIn("Promise<EngineCalibrationResponse>", client)
+        self.assertIn("Promise<CalibrationPatternsResponse>", client)
+
+        self.assertNotIn(
+            ".suggestions", console,
+            "the console still reads `suggestions`, which no producer writes",
+        )
+        self.assertNotIn(
+            "patterns.patterns", console,
+            "the console is back to reading `patterns.patterns`, a key the "
+            "producer never sends (audit 53.71)",
+        )
+        self.assertIn("patterns.calibration_params", console)
+        self.assertIn("patterns.top_blind_spots", console)
+
+
 class ApiTsTypeSourceTests(unittest.TestCase):
     """``api.ts`` reads generated shapes instead of re-declaring them.
 

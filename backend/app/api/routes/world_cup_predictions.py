@@ -12,6 +12,8 @@ from sqlalchemy import or_
 
 from app.api.security import optional_write_key, require_write_key
 from app.models.event import (
+    CalibrationPatternsResponse,
+    EngineCalibrationResponse,
     EngineComparisonResponse,
     FlexibleResponse,
     SyncFixturesResponse,
@@ -913,12 +915,24 @@ async def batch_optimize_predictions(
     return result
 
 
-@router.get("/calibration/{engine_name}", response_model=FlexibleResponse)
+@router.get(
+    "/calibration/{engine_name}",
+    response_model=EngineCalibrationResponse,
+    response_model_exclude_unset=True,
+)
 async def get_engine_calibration(engine_name: str) -> dict[str, Any]:
     """Get active calibration parameters for an engine.
 
     Args:
         engine_name: Engine name
+
+    Named the response ``EngineCalibrationResponse`` (audit 53.71). The
+    producer has two disjoint shapes -- ``no_calibration`` (``status``,
+    ``engine``, ``message``) and ``ok`` (``status``, ``calibration``) -- each
+    written in full, so the keys missing from one are unset rather than
+    defaulted. ``response_model_exclude_unset=True`` is therefore load-bearing:
+    without it the model defaults would serialize explicit ``null`` keys the
+    producer never wrote.
     """
     from app.services.engine_auto_tuning_service import get_active_calibration
 
@@ -936,12 +950,21 @@ async def get_engine_calibration(engine_name: str) -> dict[str, Any]:
     }
 
 
-@router.get("/calibration-patterns/{engine_name}", response_model=FlexibleResponse)
+@router.get(
+    "/calibration-patterns/{engine_name}",
+    response_model=CalibrationPatternsResponse,
+    response_model_exclude_unset=True,
+)
 async def analyze_calibration_patterns(engine_name: str) -> dict[str, Any]:
     """Analyze AI optimization patterns for an engine to derive calibration suggestions.
 
     Args:
         engine_name: Engine name
+
+    Named the response ``CalibrationPatternsResponse`` (audit 53.71). The
+    producer has three disjoint shapes (``no_data`` / ``unverified`` / ``ok``),
+    so every field is optional and ``response_model_exclude_unset=True`` keeps
+    each path's bytes to what the producer actually wrote.
     """
     from app.services.engine_auto_tuning_service import calculate_optimization_patterns
 

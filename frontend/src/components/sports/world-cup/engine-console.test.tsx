@@ -230,4 +230,66 @@ describe("EngineConsole", () => {
       "该引擎暂无启用中的标定参数。",
     );
   });
+
+  it("renders the optimisation-pattern analysis the backend actually sends", async () => {
+    // Regression (audit 53.71): the hand-written `CalibrationPatterns` declared
+    // `sample_count` / `patterns` / `suggestions`, none of which the producer
+    // has ever sent, so the old `patterns.patterns || patterns.suggestions`
+    // guard was permanently false and this panel could only ever show its
+    // fallback. The fixture below is the real `ok` shape from
+    // `engine_auto_tuning_service.calculate_optimization_patterns`.
+    engineMocks.calibrationPatterns.mockResolvedValue({
+      status: "ok",
+      engine: "elo_odds",
+      samples: 42,
+      unverified_samples: 7,
+      avg_improvement: 0.31,
+      calibration_params: {
+        home_score_bias: 0.356,
+        away_score_bias: -0.259,
+        home_win_prob_shift: 0.097,
+        draw_prob_shift: 0.024,
+        away_win_prob_shift: -0.123,
+        confidence_multiplier: 0.987,
+      },
+      top_blind_spots: [["draw_underestimated", 5]],
+      top_calibration_issues: [["low_sample_bucket", 2]],
+      analysis: {
+        avg_home_score_adjustment: 0.356,
+        avg_away_score_adjustment: -0.259,
+        avg_home_win_prob_adjustment: 0.097,
+        avg_draw_prob_adjustment: 0.024,
+        avg_away_win_prob_adjustment: -0.123,
+        avg_confidence_adjustment: -0.013,
+      },
+    });
+    render(<EngineConsole />);
+
+    await userEvent.click(screen.getByTestId("patterns-button"));
+
+    const panel = await screen.findByTestId("patterns-result");
+    expect(panel).toHaveTextContent("home_score_bias");
+    expect(panel).toHaveTextContent("0.356");
+    expect(panel).toHaveTextContent("draw_underestimated");
+    expect(panel).not.toHaveTextContent("样本不足，暂无可用的优化模式。");
+  });
+
+  it("explains an unverified pattern analysis instead of rendering a blank block", async () => {
+    // The other side of the same panel: the `unverified` shape carries no
+    // `calibration_params`, so the guard must fall through to `message`.
+    engineMocks.calibrationPatterns.mockResolvedValue({
+      status: "unverified",
+      engine: "hybrid",
+      samples: 0,
+      unverified_samples: 12,
+      message: "AI optimizations for engine 'hybrid' have not been verified",
+    });
+    render(<EngineConsole />);
+
+    await userEvent.click(screen.getByTestId("patterns-button"));
+
+    expect(await screen.findByTestId("patterns-result")).toHaveTextContent(
+      "have not been verified",
+    );
+  });
 });

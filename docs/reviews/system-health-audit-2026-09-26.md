@@ -14347,3 +14347,44 @@ verify_5369.log, full_5369.log, junit_full_5369.xml}`。
 - **`init-db` / `today` / `matches/{match_id}` 三条无前端消费者 ⇒ 移入 L2 登记**（不具名）；L2 因而不只是「45 条 canonical」，而是 **45 + 3 = 48 条**拍板裸集合。
 
 产物：`.workbuddy/audit-2026-10-03/{_census_v4_consumers.py, census_v4_consumers.md}`。
+
+## 53.71 —— L1 批 C 落地：`GET /engine-comparison` 与 `POST /sync-fixtures` 具名
+
+承接 53.70 重定的批次，本批做**批 C（杂项 2 条）**：`engine-comparison`、`sync-fixtures`。选它先做，是因为形状最扁平（状态 + 计数 / 每引擎汇总），目的是把「三件套 + 守卫 + 变异」全流程在**最小批次**上跑通一遍，再推批 A / 批 B。
+
+**改动（三件套 + 前端）**：
+
+1. `backend/app/models/event.py`（+97/−0）：5 个模型。
+   - `ScorePair{home:int, away:int}` —— **刻意不叫 `PredictedScore`**：后端已有同名 `TypedDict`（`app.services.world_cup_engines.types`，成员 `float`），同名同**语义槽位**（预测比分）会让读者以为是同一物 —— 53.68 那类「同名不同物」的**跨模块**变体（第三形态是同一文件内的本地副本，本形态跨文件、`is`/`grep` 都看不见）。两个成员都是 `int`：生产者 `round(float)` 出预测分、读 `MatchFixture.home_score`（`Integer` 且守卫非 `None`）出实际分。
+   - `EngineComparisonPrediction`（10 键；`_credit_engine_prediction` 单次 `list.append` **逐键构造**，故 10 个键都必须声明）；`predicted_score`/`actual_score` 用 `ScorePair`。
+   - `EngineComparisonStat`（6 键；`calculate_engine_accuracy` 对每个引擎**无条件**写全部 6 键）；`predictions` **保留**——前端没人读它，但闭合模型**静默丢未声明键**，省掉会改变响应字节（§53.58）。
+   - `EngineComparisonResponse(FlexibleResponse)`：`status` + `message: str | None = None` + `engines: dict[str, EngineComparisonStat]`。
+   - `SyncFixturesResponse(FlexibleResponse)`：9 键（`status`/`source`/`fixtures_synced`/`fixtures_fetched`/`fixtures_parsed`/`created`/`updated`/`skipped`/`remaining_matches`/`season`）。
+2. `backend/app/models/_frontend_export.py`（+10/−0）：5 名登记进 import 与 `__all__`。
+   `ScorePair` / `EngineComparisonPrediction` / `EngineComparisonStat` 登记为**根** ⇒ 生成**闭合** interface；若只作**嵌套**到达，json2ts 会追加 `[k: string]: unknown` 尾，比它们替换掉的手写副本**更松**（53.49/53.50 的根-嵌套规则）。
+3. `backend/app/api/routes/world_cup_predictions.py`（+24/−4）：
+   - `POST /sync-fixtures` → `response_model=SyncFixturesResponse`（**无旗子**）；
+   - `GET /engine-comparison` → `response_model=EngineComparisonResponse, response_model_exclude_unset=True`（**有旗子**）。
+   - 两处 docstring 记明取舍。模块内**其余 16 条**裸 `FlexibleResponse` 路由本批不动。
+4. `frontend/src/lib/generated-types.ts`（+96/−0）：重生成（`generate_types`）。`ScorePair` / `EngineComparisonPrediction` / `EngineComparisonStat` 闭合；两个信封带 `[k: string]: unknown` 尾（`FlexibleResponse` 族 `extra="allow"`，**有意开放**，由 `test_only_the_documented_models_stay_open` 按 subclass 排除）。
+5. `frontend/src/lib/world-cup/predictions-api.ts`（+23/−27）：**退役手写副本** `PredictedScore` 与 `EngineComparisonStat`（后者原本内联重声明了整条 `predictions` 形状），改 `import type { …, ScorePair as PredictedScore, … } from "@/lib/generated-types"` + `export type { EngineComparisonStat, PredictedScore }`；`EngineComparisonData = EngineComparisonResponse["engines"]`（**从生成信封索引派生**而不是重声明）；`syncFixtures(): Promise<SyncFixturesResponse>`。🔴 `export type { X } from "m"` 在 TS 里**不绑定本地名**，文件内部仍要用 `PredictedScore`的 6 处注解，所以必须 `import type` 再单独 `export type`。
+
+**旗子（本批正反各一，两向都有针）**：`/engine-comparison` 的 `calculate_engine_accuracy` 有**三条**返回路径，只有**两条**写 `message`（无已完赛早退、异常兜底），成功带数据那条**省略** ⇒ `message` 带默认值**且**路由必须带`response_model_exclude_unset=True`，否则那个默认值会实体化出一个生产者从未写过的 `"message": null` 键（`LoopRunView` 形态，§53.63 / J98 的反向实例）。`/sync-fixtures` 的 `sync_world_cup_fixtures` 成功路径**九键无条件写**，两个 `status == "error"` 返回被路由转成 HTTP 500 ⇒ 到不了 response_model ⇒ **不需旗子**，守卫**钉 `is False`**（「不需要」要连「无条件写入」这个前提一起钉，否则日后加条件写会静默改变线上字节）。
+
+**守卫**：`backend/tests/test_generate_types.py`（+255/−0）新增 `WorldCupBatchCContractTests`（4 例）：① `/sync-fixtures` 信封（9 键、`season` 是 `str`）；② `/engine-comparison` 信封（`message` 用 `model_fields[...].is_required() is False` 钉可选、`engines` 是开放键映射）；③ **路由身份 + 旗子**：按**完整路径** `/world-cup/predictions/{sync-fixtures,engine-comparison}` 过滤 —— world-cup router 带 `prefix=` ⇒ `route.path` **已含前缀**，用裸模板会找到 **0 条**（静默假阴）；④ 客户端读生成契约（`syncFixtures` 的返回类型 = `SyncFixturesResponse`，旧名 `PredictedScore` 别名指向 `ScorePair`）。
+
+**字节不变性探针**（`.workbuddy/audit-2026-10-03/probe_5371_bytes.py`，只读）：证明「有旗子」是**承重**的 —— 带旗子时 4 个样本（184/64/70/449 字节）与生产者输出逐字节相同；去掉旗子后 `/engine-comparison` 的响应**确实**多出 `message` 键。PASS。
+
+**变异**：`backend/scripts/mutation_verify.py`（+90/−1）新增 **J105–J109**（索引 111–115），标题改 `J1–J109`，清单 **190 → 195**。
+
+- **J105** `POST /sync-fixtures` 的 `response_model` 退回裸 `FlexibleResponse`：契约重新不可见（单端点 N=1 代表针，路由对象**身份**判据；退回后仍 200、`tsc` 绿、其余守卫全绿，只有按 `is` 钉的那条会红）；
+- **J106** `GET /engine-comparison` 丢掉 `response_model_exclude_unset`：成功带数据路径长出 `message: null` 键（**旗子必须有**的正向承重针，与 J98 反向）；
+- **J107** `EngineComparisonResponse.message` 去掉默认值 ⇒ 变必填，成功带数据路径（不写该键）会 500（守卫断言 `is_required() is False` ⇒ 直接红）；
+- **J108** `SyncFixturesResponse.season` 从 `str` 收成 `int`：注解漂移，线上把 `"2026"` 打成 500（守卫的 `annotation == str` 断言承重）；
+- **J109** `predictions-api.ts` 的 `syncFixtures` 退回 `Promise<void>`：消费侧不再读生成契约（**消费面**承重针 —— 前端又丢掉响应体，后端改形状 `tsc` 全盲）。
+
+四阶段 **4/4**（`verify_5371.log` EXIT 0：5 针均 green-before / red-after / green-restore / bytes-restored）；`test_mutation_verify` 64+229；`generate_types --check` up to date。
+
+- **验证**：四道门全绿（`ruff check app/`、`mypy app/` 331 files、`generate_types --check` up to date、守卫 junit `tests=31 errors=0 failures=0`）；全量 8294/0/0/11（6692/1602）对账 **+4 case + 32 subtest 零残差**。
+
+**待拍板**：批 A（动作/校准族 7 条）、批 B（比赛查询族 6 条，含深层嵌套预测载荷）、L2（48 条 = 45 canonical + 3 无消费者 LOCAL，登记为裸集合钉集合相等）。

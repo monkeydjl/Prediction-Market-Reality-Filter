@@ -1644,7 +1644,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J101）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J103）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -4104,6 +4104,44 @@ SETS: tuple[MutationSet, ...] = (
                     "避开同路径的 GET 路由），在 events.py 命中 **1 次**（已字节"
                     "复核）；守卫按 `(path, DELETE in methods)` 过滤，不是只按"
                     "path——GET /{event_id} 共享路径模板。"
+                ),
+            ),
+            Mutation(
+                label="J102 /metrics 翻进 OpenAPI schema：无模型的公开文本端点被发布成 API 路由",
+                path=_MAIN_APP,
+                old=b'@app.get("/metrics", include_in_schema=False)',
+                new=b'@app.get("/metrics", include_in_schema=True)',
+                guard_file=_T_QUALITY_METRICS,
+                guards=("test_the_real_route_stays_out_of_the_schema",),
+                note=(
+                    "§53.67：`/metrics` 的排除性契约（不是三件套——handler 返回 "
+                    "`Response` 实例 ⇒ `response_model` 运行时被跳过、纯 no-op；"
+                    "body 是 Prometheus 文本、消费面是 scraper）。既有两个 HTTP "
+                    "测试都 mount **副本**路由 ⇒ 真装饰器无人钉（53.64 教训的"
+                    "**第二形态**：不忠实的不是桩数据，而是**被测对象**）⇒ 本针"
+                    "打真路由。翻进 schema 后 OpenAPI 会发布一个没有响应模型的"
+                    "文本端点（误导），`tsc`/全量其余测试全绿。🔴 针是装饰器"
+                    "整行（`@app.get(\"/` 前缀避开同文件 603 行 `@app.get(\"/\","
+                    " include_in_schema=False)`），在 main.py 命中 **1 次**"
+                    "（由 `test_every_needle_occurs_exactly_once_in_its_file` "
+                    "复核）。"
+                ),
+            ),
+            Mutation(
+                label="J103 /metrics 的 Response 媒体类型改成 application/json：scraper 拒收",
+                path=_MAIN_APP,
+                old=b"    return Response(content=body, media_type=content_type)",
+                new=b'    return Response(content=body, media_type="application/json")',
+                guard_file=_T_QUALITY_METRICS,
+                guards=("test_a_scrape_against_the_real_app_serves_prometheus_text",),
+                note=(
+                    "§53.67：守卫第二例（真 app 上 `TestClient(app)` 一次 "
+                    "scrape）的代表针——与 J102 互不重叠（装饰器行 vs 返回行）"
+                    "⇒ 可换序类。改错媒体类型后 Prometheus scraper 拒收"
+                    "（text exposition 必须 text/plain），而 200 不变、副本"
+                    "测试仍绿（它们测的是副本自己写死的 media_type）⇒ 只有读真"
+                    "路由的 assertIn(\"text/plain\") 能红。🔴 针在 main.py 命中 "
+                    "**1 次**（已字节复核）。"
                 ),
             ),
         ),

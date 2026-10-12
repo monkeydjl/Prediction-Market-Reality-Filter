@@ -923,5 +923,70 @@ class TestQualityMetricsDriftRoute(unittest.TestCase):
         dispatch.assert_called_once()
 
 
+class RealMetricsRouteTests(unittest.TestCase):
+    """The *real* ``/metrics`` route is deliberately outside the schema.
+
+    Every HTTP test above mounts a **copy** of the route (see
+    ``_client_with_stores`` and ``TestMetricsEndpoint._app``), so whatever
+    the copy does, the real decorator in ``app.main`` is unpinned -- the
+    53.64 lesson in its second form: not an unfaithful stub payload but an
+    unfaithful *subject*.
+
+    Naming a response model for this endpoint is **not applicable**
+    (audit 53.67): the handler returns a ``Response`` instance, so
+    FastAPI skips response-model validation and serialization entirely (a
+    model would be a silent runtime no-op), the body is Prometheus text
+    exposition (``bytes``, ``text/plain``), not a JSON object, and
+    ``include_in_schema=False`` is what keeps a text endpoint out of the
+    OpenAPI surface. What must hold is the *exclusion*, so it is pinned
+    here on the real app: the route stays out of the schema, carries no
+    response model, and a scrape against the real app serves
+    ``text/plain``.
+    """
+
+    def test_the_real_route_stays_out_of_the_schema(self):
+        from app.main import app
+
+        routes = [
+            route
+            for route in app.routes
+            if getattr(route, "path", None) == "/metrics"
+        ]
+        self.assertEqual(
+            len(routes), 1,
+            "expected exactly one /metrics route on app.main.app",
+        )
+        route = routes[0]
+        self.assertIn("GET", route.methods)
+        self.assertIs(
+            route.include_in_schema, False,
+            "/metrics was published into the OpenAPI schema; it is a "
+            "public Prometheus text endpoint with no response model, so "
+            "advertising it as an API route is misleading (audit 53.67)",
+        )
+        self.assertIsNone(
+            route.response_model,
+            "/metrics gained a response_model; the handler returns a "
+            "Response instance, so FastAPI would ignore it at runtime "
+            "(a silent no-op) while the schema advertises a contract that "
+            "is never enforced (audit 53.67)",
+        )
+
+    def test_a_scrape_against_the_real_app_serves_prometheus_text(self):
+        from app.main import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with _StoreContext(Path(tmp)):
+                client = TestClient(app)
+                response = client.get("/metrics")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            "text/plain", response.headers.get("content-type", ""),
+            "the real /metrics route no longer serves text/plain; a "
+            "Prometheus scraper rejects anything else (audit 53.67)",
+        )
+        self.assertIn("pmrf_", response.text)
+
+
 if __name__ == "__main__":
     unittest.main()

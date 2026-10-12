@@ -14269,3 +14269,50 @@ RESPONSE）；**旗子** 63 条全部 `response_model_exclude_unset is False`；
 
 产物：`.workbuddy/audit-2026-10-03/{_census_worldcup.py, _v2, _v3,
 census_v2_stdout.txt, census_v3_consumers.md, census_v3_stdout.txt}`。
+
+## 53.69 —— L0：统一两个 `FlexibleResponse`（删本地副本类），以及「唯一 delta 是 OpenAPI 组件 description」
+
+改动（`world_cup_predictions.py`）：删掉模块内 `class FlexibleResponse`（53.68 查出的同名不同物副本），改为 `from app.models.event import FlexibleResponse`；连带移除因此闲置的 `ConfigDict` import（`BaseModel` 仍被 `PredictionRequest` 使用）。**18 处装饰器文本一字未改**——变的是名字解析到的对象。
+
+验证（探针 `probe_5369_l0.py`，5 组判据）：
+
+- **C1** 双胞胎（按被删类逐字重建，含其 docstring）与 canonical 的
+  `model_json_schema()` **除 `description` 外全等**（唯一差异键经断言
+  钉住；`properties` 空、`additionalProperties: true`、title 同名）；
+- **C2** 3 个代表性载荷在两个类下 `model_dump(mode="json")` **逐字节相同**
+  且**多余键全部保留**；
+- **C3** 🔑 **63 条**路由的 `response_model` 全部 `is` canonical  （`__module__` 分布 = `{app.models.event: 63}`）——**53.68 的盲区就此
+  闭合**（此前按身份判定只看得见 45 条）；
+- **C4** `app.openapi()` 组件 `FlexibleResponse` 与 canonical schema 相等，
+  63 处 response 引用；
+- **C5** ⚠️ **唯一真实 delta**：OpenAPI 组件的 `description` 由旧类的
+  docstring（`Flexible response model that accepts any fields.`）变为
+  canonical 的（`Permissive response base for endpoints whose nested payloads are dynamic.`）——**纯文档级**（响应字节不变）。此 delta 由探针
+  **发现并显式记录**，不是事后追认：首版探针断言的「全等」正是被这条
+  差异打红的。
+
+配套守卫与变异：
+
+- 新守卫 `FlexibleResponseIdentityTests`（`test_generate_types.py`，1 例）：
+  凡 `response_model` 的**类名**为 `FlexibleResponse` 的路由，必须 `is`   `app.models.event` 的那一个；带**分母断言**（>50，防「行走不到」把判据
+  空真）。判据刻意做成**身份而非「定义计数」**——一个没人用的重复定义是
+  死代码（代码卫生），真正的契约事实是「路由绑的是哪个对象」。
+- 变异 **J104**（set 109 → 110 条，index 110）：把本地类重新插回 router   定义之后、路由装饰器之前（用普通 dict 作 `model_config`，单区替换、
+  字节合法）⇒ 18 条路由改绑本地类。四阶段 **4/4**（EXIT 0；
+  `test_mutation_verify` 64 + 224，223 → 224）。该变异复刻的正是 53.68 
+  的原始形态：**装饰器文本不变、响应字节不变、`tsc` 绿、其余守卫全绿**，
+  只有身份判定的那条红。
+
+读数：
+
+- 四道门全绿（ruff / mypy 331 files / `generate_types --check` / tsc）。
+  `generate_types --check` 不受影响（本地类从未进过模型命名空间）。
+- 全量 **8258 passed / 0 failed / 0 error / 11 skipped**（cases 6688 /
+  subtests 1570，EXIT 0），对账 **+2 = +1 case + 1 subtest 零残差**。
+
+登记（下一候选）：**L1** = 9 条有前端消费者的 `/api/world-cup/predictions/**`
+路由具名；**L2** = 45 条零消费者的 canonical 裸端点**登记为拍板裸集合**
+（钉集合相等，不具名）。两者均待用户拍板。
+
+产物：`.workbuddy/audit-2026-10-03/{probe_5369_l0.py, _recon_5369.py,
+verify_5369.log, full_5369.log, junit_full_5369.xml}`。

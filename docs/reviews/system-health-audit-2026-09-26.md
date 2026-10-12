@@ -14159,3 +14159,56 @@ delete into a 500 after the JSON record is already gone」）⇒ 值类型
 
 探针与验证产物：`.workbuddy/audit-2026-10-03/{probe_5366.py,
 _recon_5366.py, verify_5366.log, full_5366.log, junit_full_5366.xml}`。
+
+## 53.67 —— `GET /metrics` 取证：**三件套不适用**（排除性契约），以及「被测对象是副本」这个缺口的第二个样本
+
+结论先行：`/metrics` **不适用**三件套，四条结构性理由（逐条带证据）：
+
+1. **handler 返回 `Response` 实例**（`main.py:589-590`：`body, content_type
+   = await asyncio.to_thread(render_metrics)` → `return Response(...)`）
+   ⇒ FastAPI 对「直接返回 Response」的路径**跳过 response_model 的校验与
+   序列化** ⇒ 具名在运行时是 **no-op**，不是「更严的契约」；
+2. 路由 `include_in_schema=False`（`main.py:570`）⇒ **没有已发布 schema**，
+   具名的另一条收益（OpenAPI 可见）也**不存在**；
+3. body 是 Prometheus 文本 exposition（`generate_latest()` 的 bytes +
+   `CONTENT_TYPE_LATEST` = `text/plain; charset=utf-8`），**不是 JSON 对象**
+   ——三件套是给「返回 dict 的端点」用的；
+4. 消费面是 **Prometheus/Grafana scraper**（`RUNBOOK.md:716`「Scrape
+   `GET /metrics` (Prometheus text format)」、`:936`「collects `/metrics`」），
+   前端 `api.ts` 无该调用 ⇒ 按第 5 检查点（有没有消费者）补具名无意义。
+
+🔴 **但取证带出一个真实的相邻缺口**：既有两个 HTTP 测试（`test_quality_
+metrics.py` 的 `_client_with_stores` 与 `TestMetricsEndpoint._app`）**各自
+mount 了一份副本路由**（同样写 `include_in_schema=False`、同样返回
+`Response`）⇒ 副本说什么都行，**真装饰器的属性无人钉**。这是 53.64 教训
+的**第二形态**：不是桩数据不忠实（那是 `{"runs": {}}` 那种），而是
+**被测对象不忠实**——测试测的是自己的副本。三个具体失败模式因此不可见：
+① 有人给 `/metrics` 加 `response_model`（`Response` 路径下运行时被忽略 ⇒
+静默 no-op，一旦哪天打开 schema 就发出永不执行的契约）；② 有人翻
+`include_in_schema=True`（把公开文本端点发布成 API 路由）；③ 真路由的
+媒体类型漂移（scraper 拒收，而副本测试仍绿）。
+
+处置：**不具名**（结论 1-4），改钉**排除性契约**——新守卫
+`RealMetricsRouteTests`（`test_quality_metrics.py`，2 例）直接读
+`app.main.app.routes`：① 恰一条 `/metrics` 路由、含 GET、`include_in_schema
+is False`、`response_model is None`（`is` 判据，与 53.63/53.64 的
+「旗子悄悄到货」同族的**排除方向**）；② 对**真 app** 跑一次 `TestClient`
+scrape（`_StoreContext` patch 存储路径），断言 200 + `text/plain` +
+`pmrf_` 系列存在——把副本测试的判据搬回真对象。
+
+验证：
+
+- 变异 **J102**（`include_in_schema=False` → `True`）与 **J103**
+  （`media_type=content_type` → `"application/json"`）：set 107 → 109 条
+  （index 108/109）。两针互不重叠（装饰器行 vs 返回行）⇒ 可换序类。
+  四阶段 **2/2**（EXIT 0；`test_mutation_verify` 64 + 223，221 → 223）。
+- 四道门全绿（本轮**无 `app/` 生产代码改动**——只有测试与 harness）。
+  全量 **8256 passed / 0 failed / 0 error / 11 skipped**（cases 6687 /
+  subtests 1569；EXIT 1 为 safe-delete 拦临时目录清理的假红指纹，判据只看
+  junit），对账 **+4 = +2 case + 2 subtests（J102/J103 入清单）零残差**。
+
+登记（下一候选）：本轮无新增；遗留候选不变（ruff tests/scripts 339 条、
+world-cup 43+18 裸 FlexibleResponse）。
+
+产物：`.workbuddy/audit-2026-10-03/{_recon_5367.py, verify_5367.log,
+full_5367.log, junit_full_5367.xml}`。

@@ -14388,3 +14388,75 @@ verify_5369.log, full_5369.log, junit_full_5369.xml}`。
 - **验证**：四道门全绿（`ruff check app/`、`mypy app/` 331 files、`generate_types --check` up to date、守卫 junit `tests=31 errors=0 failures=0`）；全量 8294/0/0/11（6692/1602）对账 **+4 case + 32 subtest 零残差**。
 
 **待拍板**：批 A（动作/校准族 7 条）、批 B（比赛查询族 6 条，含深层嵌套预测载荷）、L2（48 条 = 45 canonical + 3 无消费者 LOCAL，登记为裸集合钉集合相等）。
+
+## 53.72 —— L1 批 A 首片：校准族两路由具名，并修好一个长期失效的标定模式面板
+
+### 1. 先更正一个前提：批 A 不是「最扁平」的一批
+
+53.70 把批 A 记作「形状多为扁平『状态 + 计数』，**最易先做**」。逐条读生产者（`ast` 遍历 `return` 节点的键集，不口算）后，该估计**错误**，予以更正：
+
+| 路由 | 形状数 | 备注 |
+|---|---|---|
+| `POST /batch-predict` | 1 | 10 键无条件写（**无需旗子**）；但 `predictions` 元素 = `run_prediction_pipeline` 的 **7 形状 / 最多 19 顶层键**，含十来个嵌套形状 |
+| `POST /batch-switch-engine` | **2** | 早退 6 键（有 `message`、缺 5 个计数键）vs 成功 10 键 |
+| `POST /batch-optimize` | 1 | 4 键 + `optimizations`(6 键) / `errors`(2 键) |
+| `POST /auto-tune/{engine}` | **2** | background 4 键；sync = `run_full_auto_tuning_cycle`，其自身再 **3~4 形状**（含 `save_engine_calibration` 的 7 键） |
+| `GET /auto-tune/status/{id}` | 1 | 2 键 + `task` = `OptimizationTask.to_dict()` **12 键**（内嵌 `result` / `logs` 两个开放形状） |
+| `GET /calibration/{engine}` | **2** | 本片 |
+| `GET /calibration-patterns/{engine}` | **3** | 本片；`top_blind_spots` 是 `[label, count]` **元组列表** |
+
+⇒ **批 A 恰恰是形状最多的一批**；批 C（2 条扁平）才是最小批次。故批 A 拆片推进：**首片 = 校准族两条**（约束形状、无跨模块耦合、且直接修好一个真缺陷），其后依次为 auto-tune 族、`batch-predict` / `batch-switch-engine`（其 `predictions` 元素与批 B 的 `/matches/{id}` 同源，宜一并建模）。
+
+### 2. 本片改动
+
+`backend/app/models/event.py`（+106/−0）5 个模型：
+
+- `CalibrationParams`（6 个 float）、`CalibrationDetail`（7 键）、`CalibrationAnalysis`（6 个 float）、
+- `EngineCalibrationResponse(FlexibleResponse)`、`CalibrationPatternsResponse(FlexibleResponse)`。
+`backend/app/models/_frontend_export.py`（+10/−0）5 名登记为**根**（闭合 interface）。
+`world_cup_predictions.py`（+25/−2）两条路由具名，**都带** `response_model_exclude_unset=True`（模块内裸 `FlexibleResponse` 路由 61 → 59）。
+`frontend/src/lib/generated-types.ts`（+103/−0）重生成。
+`frontend/src/lib/world-cup/engine-api.ts`（+21/−20）：退役两份手写副本 `EngineCalibration` 与 `CalibrationPatterns`，改 `import type` 生成物 + 再导出。
+`frontend/src/components/sports/world-cup/engine-console.tsx`（+16/−6）：修好标定模式面板的读法（见第 4 节）。
+`frontend/src/components/sports/world-cup/engine-console.test.tsx`（+62/−0）：新增两条用例钉住模式面板的**正反两向**。
+`backend/tests/test_generate_types.py`（+299/−0）与 `backend/scripts/mutation_verify.py`（+107/−1）见第 6 节。
+
+**旗子**：两条路由都必须带。`get_active_calibration` 的调用方有**两条互斥**返回路径（`no_calibration` 3 键 / `ok` 2 键），`calculate_optimization_patterns` 有**三条**（`no_data` 2 键 / `unverified` 5 键 / `ok` 9 键）。每条路径都写满，故**缺席的键是「未设」而非「有默认值」** ⇒ 有旗子 ⇒ 具名是纯类型变更；无旗子 ⇒ 默认值会实体化出生产者从未写过的 `null` 键（`LoopRunView` 形态，§53.63）。
+
+🔴 **模型字段顺序 = 线上键序**，所以 `CalibrationPatternsResponse` 把 `message` 放在**最后**：这样 `no_data`（`status`,`message`）与 `unverified`（`status`,`engine`,`samples`,`unverified_samples`,`message`）的序列化键序也分别与原字典一致，三条路径的字节能同时不变。
+
+### 3. `CalibrationParams` 闭合的前提：对**数据库**做只读普查
+
+`engine_calibration.calibration_params` 是通用 JSON 列（`Mapped[Any]`），不是有 schema 的结构。只读普查（`mode=ro`）**29 行、恰 1 种键集**：
+
+```
+away_score_bias, away_win_prob_shift, confidence_multiplier,
+draw_prob_shift, home_score_bias, home_win_prob_shift   # 全为 float
+```
+
+写入者是 `calculate_optimization_patterns`（6 键），读取者是 `apply_calibration_to_prediction`（同样是这 6 键，且用 `.get(default)` 容错）。⚠️ **DDL 注释里那份示例是陈旧文档**：它写 `home_advantage_bias` / `draw_probability_shift` / `confidence_deflation` / `strong_team_overconfidence`，全仓**既无写入者也无读取者**。因此它不是「第二种形状」，只是过时注释。
+
+**前提（必须随结论带走）**：唯一写入者 `save_engine_calibration` 的形参是 `calibration_params: dict[str, Any]` ⇒ 外来行**可以**携带别的键，闭合模型会**静默丢掉**它们。「没观测到」≠「不可能」——若将来允许自定义参数，本模型要重新裁决。
+
+### 4. 顺带修好：一个「生产者从不发送被读键」导致的死面板
+
+退役的 `CalibrationPatterns`（`engine-api.ts` 旧副本）声明了 `sample_count` / `patterns` / `suggestions` —— 生产者**一个都没有**。后果：`engine-console.tsx` 的 `patterns.patterns || patterns.suggestions` **恒为假**，标定模式面板**永远只显示兜底文案**（`tsc` 全绿、字节全绿，唯独功能永不生效）。这与 §Z6「忠实类型看读法不看名字」是**反向**形态：不是类型太松漏声明，而是**声明了根本不存在的键**。
+
+🔴 该面板**此前没有任何测试断言**（`engine-console.test.tsx` 只覆盖了标定面板），属 §4.2 的「空头」：夹具与断言都没走到这条分支，于是缺陷长期存活。本片补两条：一条钉 `ok` 形状渲染真实字段（`calibration_params` / `top_blind_spots` / `samples`），一条钉 `unverified` 形状回落到 `message`。
+
+### 5. 发布面的两个细节
+
+- 🔴 `top_blind_spots` / `top_calibration_issues` 是 `sorted(counts.items())[:5]` ⇒ JSON **数组对**而非对象，故建模为 `list[tuple[str, int]]`（用两字段模型会在**校验期**被拒，不只是描述错）。⚠️ 但 json2ts 把它渲染成 `[unknown, unknown][]`：**arity 保留、元素类型丢失**，消费侧要自行收窄。已在模型 docstring 与守卫里钉住这一点。
+- `avg_improvement` 可空不是猜测：实测 29 行的该列**全为 `None`** ⇒ `is_verified` 实际上恒为 `False`。收成 `float` 会让 `ok` 分支直接 500（J112 即此变异）。
+
+### 6. 守卫与变异
+
+**守卫** `WorldCupCalibrationContractTests`（4 例 / 33 subtest）：① `CalibrationParams` + `CalibrationDetail` 的键序与注解（全部 required）；② 两个信封的键序与可选性（`status` 必填、其余可选）+ 闭合键集；③ 路由**身份** + 旗子（按完整路径过滤）；④ 消费侧：客户端不再声明副本、**且**控制台不再读 `patterns` / `suggestions`。
+
+**变异** `backend/scripts/mutation_verify.py` 新增 **J110–J114**（索引 116–120），标题改 `J1–J114`，清单 **195 → 200**：J110 路由退回裸模型；J111 丢掉旗子；J112 `avg_improvement` 去 nullable；J113 闭合 `CalibrationParams` 漏一个键；J114 消费侧退回读 `patterns.patterns`。
+
+**字节探针** `.workbuddy/audit-2026-10-03/probe_5372_bytes.py`：5 个形状（两条路由的全部互斥路径）**逐字节相同**，且去掉旗子后**每一个都变化** ⇒ 旗子承重。其中`calibration/ok` 用**真实 DB 行**喂入（335 B）⇒ 闭合 `CalibrationParams` 对真实数据零丢键。
+
+- **验证**：四道门全绿（`ruff check app/`、`mypy app/` 331 files、`generate_types --check` up to date、守卫 junit `tests=37 errors=0 failures=0`）；全量 8336/0/0/11（6696/1640）对账 **+4 case + 38 subtest 零残差**。
+
+**待办**：批 A 余下（auto-tune 族 2 条、`batch-predict`/`batch-switch-engine` 2 条——后者的 `predictions` 元素与批 B 同源）、批 B（比赛查询 6 条）、L2（48 条登记裸集合）。

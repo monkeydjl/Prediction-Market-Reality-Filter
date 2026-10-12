@@ -269,6 +269,173 @@ export interface AutoResolveResponse {
   [k: string]: unknown;
 }
 /**
+ * Return value of ``engine_auto_tuning_service.save_engine_calibration``.
+ *
+ * Seven keys written unconditionally, so none of them is optional.
+ * ``avg_improvement`` echoes the caller's argument and may be ``None`` (its
+ * default). ``confidence_score`` is *not* nullable: the function fills it in
+ * from the sample size whenever the caller omits it, so it is resolved on
+ * every return. ``params`` is the same :class:`CalibrationParams` the
+ * calibration read route publishes.
+ */
+export interface AutoTuneCalibrationResult {
+  status: string;
+  calibration_id: number;
+  engine: string;
+  version: number;
+  params: CalibrationParams;
+  avg_improvement: number | null;
+  confidence_score: number;
+}
+/**
+ * The six adjustment keys ``calculate_optimization_patterns`` derives and
+ * ``apply_calibration_to_prediction`` reads back (audit 53.71).
+ *
+ * Closed even though ``engine_calibration.calibration_params`` is a generic
+ * JSON column: a read-only census of the live database found 29 rows carrying
+ * exactly **one** distinct key set -- these six keys, all floats. The DDL
+ * comment above that column documents a different example
+ * (``home_advantage_bias`` / ``draw_probability_shift`` /
+ * ``confidence_deflation`` / ``strong_team_overconfidence``) that neither the
+ * writer nor the reader ever uses, so it is stale documentation rather than a
+ * second live shape. "Not observed" is not "impossible": the sole writer
+ * (``save_engine_calibration``) takes a ``dict[str, Any]``, so a foreign row
+ * with other keys would have them dropped here. That premise is accepted and
+ * recorded in the 53.71 audit section.
+ */
+export interface CalibrationParams {
+  home_score_bias: number;
+  away_score_bias: number;
+  home_win_prob_shift: number;
+  draw_prob_shift: number;
+  away_win_prob_shift: number;
+  confidence_multiplier: number;
+}
+/**
+ * One entry of ``OptimizationTask.logs``.
+ *
+ * ``update_progress`` is the only appender in the codebase and always writes
+ * both keys, so the list is uniformly shaped. (The durable store re-reads
+ * this list from a JSON column, so a hand-written row could differ; the guard
+ * pins the single-writer premise.)
+ */
+export interface AutoTuneLogEntry {
+  timestamp: string;
+  message: string;
+}
+/**
+ * ``optimization_summary`` of the *synchronous* ``POST /auto-tune/{engine}``
+ * path (audit 53.72).
+ *
+ * ``run_full_auto_tuning_cycle`` builds this block inline and *counts* the
+ * failures it collected, so ``errors`` is an ``int``. The async background
+ * path stores a same-named block under ``task.result`` whose first key is
+ * ``total_processed`` (not ``matches_processed``) and whose ``errors`` is a
+ * list of ``{match_id, match, error}`` entries -- same name, different shape.
+ * That block lives inside ``AutoTuneTask.result``, which stays opaque (see
+ * that model), so this closed shape describes the sync route only.
+ */
+export interface AutoTuneOptimizationSummary {
+  matches_processed: number;
+  optimizations_generated: number;
+  errors: number;
+}
+/**
+ * Response for ``POST /auto-tune/{engine_name}`` (audit 53.72).
+ *
+ * Five disjoint shapes over twelve keys:
+ *
+ * * ``background=True`` (4): ``status``, ``task_id``, ``message``,
+ *   ``poll_url`` -- the route's own dict, always complete.
+ * * sync, ``run_full_auto_tuning_cycle`` no-data (2): ``status``, ``message``.
+ * * sync, ``calculate_optimization_patterns`` passthrough no-data (2): same.
+ * * sync, that passthrough's ``unverified`` (5): ``+ engine``, ``samples``,
+ *   ``unverified_samples``.
+ * * sync, ``ok`` (7): ``status``, ``engine``, ``optimization_summary``,
+ *   ``pattern_analysis``, ``calibration``, ``top_blind_spots``,
+ *   ``top_calibration_issues``.
+ *
+ * Every path writes all of its own keys, so an absent key means "not written"
+ * rather than "took a default": the route must set
+ * ``response_model_exclude_unset=True``. The field order below is chosen so
+ * that each of the five shapes serialises in the producer's original key
+ * order -- ``message`` and ``poll_url`` are last for that reason.
+ */
+export interface AutoTuneResponse {
+  status: string;
+  task_id?: string | null;
+  engine?: string | null;
+  samples?: number | null;
+  unverified_samples?: number | null;
+  optimization_summary?: AutoTuneOptimizationSummary | null;
+  pattern_analysis?: CalibrationAnalysis | null;
+  calibration?: AutoTuneCalibrationResult | null;
+  top_blind_spots?: [unknown, unknown][] | null;
+  top_calibration_issues?: [unknown, unknown][] | null;
+  message?: string | null;
+  poll_url?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * The ``analysis`` block of the ``ok`` shape of
+ * ``calculate_optimization_patterns`` (audit 53.71): six rounded floats, all
+ * written unconditionally.
+ */
+export interface CalibrationAnalysis {
+  avg_home_score_adjustment: number;
+  avg_away_score_adjustment: number;
+  avg_home_win_prob_adjustment: number;
+  avg_draw_prob_adjustment: number;
+  avg_away_win_prob_adjustment: number;
+  avg_confidence_adjustment: number;
+}
+/**
+ * Response for ``GET /auto-tune/status/{task_id}`` (audit 53.72).
+ *
+ * Both keys are written on the only non-error return path (a missing task is
+ * turned into an ``HTTPException`` before the response model runs), so
+ * neither is optional and the route needs no ``response_model_exclude_unset``.
+ */
+export interface AutoTuneStatusResponse {
+  status: string;
+  task: AutoTuneTask;
+  [k: string]: unknown;
+}
+/**
+ * ``OptimizationTask.to_dict()`` -- the ``task`` of
+ * ``GET /auto-tune/status/{task_id}`` (audit 53.72).
+ *
+ * Twelve keys, all written unconditionally, so nothing here carries a default
+ * and the route needs no ``response_model_exclude_unset``.
+ *
+ * ``result`` stays an opaque map on purpose. Two producers feed the same
+ * process-wide task manager: ``engine_auto_tuning_async`` stores the auto-tune
+ * summary (``{status, engine, optimization_summary, ...}``) while
+ * ``sport_optimization`` stores ``{"sports": {...}}``. This route accepts any
+ * ``task_id``, so either shape can be polled here; closing the field would
+ * silently drop the other producer's keys (audit 53.58). Precedent for a
+ * deliberately-opaque payload: ``EventStoreEntry.record``.
+ *
+ * ``created_at`` is nullable even though ``__init__`` always sets it: the
+ * producer writes ``self.created_at.isoformat() if self.created_at else None``.
+ */
+export interface AutoTuneTask {
+  task_id: string;
+  engine_name: string;
+  status: string;
+  progress: number;
+  total: number;
+  current_match: string | null;
+  result: {
+    [k: string]: unknown;
+  } | null;
+  error: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  logs: AutoTuneLogEntry[];
+}
+/**
  * How accurate the event's probability estimate was vs the settled
  * outcome. Computed once at resolve time (a snapshot); None on EventRecord
  * until the event is resolved.
@@ -309,19 +476,6 @@ export interface CalibrationAggregate {
   skill_score: number | null;
   grade: string;
   n: number;
-}
-/**
- * The ``analysis`` block of the ``ok`` shape of
- * ``calculate_optimization_patterns`` (audit 53.71): six rounded floats, all
- * written unconditionally.
- */
-export interface CalibrationAnalysis {
-  avg_home_score_adjustment: number;
-  avg_away_score_adjustment: number;
-  avg_home_win_prob_adjustment: number;
-  avg_draw_prob_adjustment: number;
-  avg_away_win_prob_adjustment: number;
-  avg_confidence_adjustment: number;
 }
 /**
  * One cell of ``CalibrationBucketSummaryResponse`` (audit 53.61). Both
@@ -367,30 +521,6 @@ export interface CalibrationDetail {
   avg_improvement: number | null;
   is_verified: boolean;
   created_at: string;
-}
-/**
- * The six adjustment keys ``calculate_optimization_patterns`` derives and
- * ``apply_calibration_to_prediction`` reads back (audit 53.71).
- *
- * Closed even though ``engine_calibration.calibration_params`` is a generic
- * JSON column: a read-only census of the live database found 29 rows carrying
- * exactly **one** distinct key set -- these six keys, all floats. The DDL
- * comment above that column documents a different example
- * (``home_advantage_bias`` / ``draw_probability_shift`` /
- * ``confidence_deflation`` / ``strong_team_overconfidence``) that neither the
- * writer nor the reader ever uses, so it is stale documentation rather than a
- * second live shape. "Not observed" is not "impossible": the sole writer
- * (``save_engine_calibration``) takes a ``dict[str, Any]``, so a foreign row
- * with other keys would have them dropped here. That premise is accepted and
- * recorded in the 53.71 audit section.
- */
-export interface CalibrationParams {
-  home_score_bias: number;
-  away_score_bias: number;
-  home_win_prob_shift: number;
-  draw_prob_shift: number;
-  away_win_prob_shift: number;
-  confidence_multiplier: number;
 }
 /**
  * Response for GET /calibration-patterns/{engine_name} (audit 53.71).

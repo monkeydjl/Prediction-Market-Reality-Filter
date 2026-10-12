@@ -12,6 +12,8 @@ from sqlalchemy import or_
 
 from app.api.security import optional_write_key, require_write_key
 from app.models.event import (
+    AutoTuneResponse,
+    AutoTuneStatusResponse,
     CalibrationPatternsResponse,
     EngineCalibrationResponse,
     EngineComparisonResponse,
@@ -824,13 +826,26 @@ async def compare_engine_accuracy() -> dict[str, Any]:
     return result
 
 
-@router.post("/auto-tune/{engine_name}", response_model=FlexibleResponse)
+@router.post(
+    "/auto-tune/{engine_name}",
+    response_model=AutoTuneResponse,
+    response_model_exclude_unset=True,
+)
 async def auto_tune_engine(
     engine_name: str,
     background: bool = Query(True, description="Run in background"),
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
     """Run automatic tuning cycle for an engine: analyze, optimize, learn, calibrate.
+
+    Named the response ``AutoTuneResponse`` (audit 53.72). The handler has five
+    disjoint shapes across its two branches -- the four-key background ack, and
+    the four shapes ``run_full_auto_tuning_cycle`` can return (its own no-data
+    early return, the ``calculate_optimization_patterns`` passthrough in its
+    no-data and unverified forms, and the seven-key ``ok`` summary). Every path
+    writes all of its own keys, so an absent key is "not written" and the route
+    sets ``response_model_exclude_unset=True``; without the flag the field
+    defaults would materialise ``null`` keys the producer never wrote.
 
     Args:
         engine_name: Engine to tune. The name is matched through
@@ -872,9 +887,15 @@ async def auto_tune_engine(
         return result
 
 
-@router.get("/auto-tune/status/{task_id}", response_model=FlexibleResponse)
+@router.get("/auto-tune/status/{task_id}", response_model=AutoTuneStatusResponse)
 async def get_auto_tune_status(task_id: str) -> dict[str, Any]:
     """Get status of a background auto-tune task.
+
+    Named the response ``AutoTuneStatusResponse`` (audit 53.72). Both keys are
+    written on the only non-error return path -- a missing task becomes an
+    ``HTTPException`` before the response model runs -- so nothing carries a
+    default and the route deliberately does *not* set
+    ``response_model_exclude_unset``.
 
     Args:
         task_id: Task ID returned from auto-tune endpoint

@@ -1647,7 +1647,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J114）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J121）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -1872,7 +1872,23 @@ SETS: tuple[MutationSet, ...] = (
             "它掩盖了真键 `result`；收窄后 `tsc` 抓出全部四处，"
             "顺带修了「结果面板永不显示」这个被手写副本掩盖的预存在 UI 缺陷。"
             "🔴 **消费面判据教训：按「类型名」grep 消费者，别按 API 方法名**——"
-            "组件经 `LoopStatus[\"runs\"]` 索引访问消费，方法名 grep 报零是假象。",
+            "组件经 `LoopStatus[\"runs\"]` 索引访问消费，方法名 grep 报零是假象。"
+            "§53.72 把同一条规则推进到 auto-tune 族：`POST /auto-tune/{engine_name}`"
+            "（五形状 / 十二键，**必须有**旗子）与 `GET /auto-tune/status/{task_id}`"
+            "（两形状各写满，**不需要**旗子 —— J118 是本 set 第一条钉「不需要」那一面的变异，"
+            "此前只有「必须有」的方向）。🔴 **同一批里出现了一个「同名不同形」陷阱**："
+            "`optimization_summary` 在 sync 路径是 `{matches_processed, optimizations_generated,"
+            " errors:int}`、在 async 路径是 `{total_processed, …, errors:list}` —— 名字一样、键与类型都不同，"
+            "所以只给 sync 那套具名（J119 就是把两套抹平的那条）。"
+            "🔴 **`AutoTuneTask.result` 刻意**不**闭合**：`mark_completed` 有两个生产者共用同一个全局 "
+            "task manager（`engine_auto_tuning_async` 存 auto-tune 汇总、`sport_optimization` 存 "
+            "`{\"sports\": …}`），而本端点接受任意 `task_id` ⇒ 闭合会静默丢掉另一边的键（§53.58），"
+            "先例是 `EventStoreEntry.record`。消费面：手写 `AutoTuneTask` 声明的 "
+            "`engine`/`stage`/`message`/`updated_at` 生产者一个都不发，"
+            "面板的「阶段」与消息行**恒不显示**、`progress` 还被当 0..1 比例乘了 100，"
+            "而 `TERMINAL_TASK_STATES` 里的 `error`/`cancelled` 也不是 `TaskStatus` 的词表（J121 钉回退）。"
+            "🔴 **J115/J116 是同段字节的两条相反改写（同 `group`）**，J117/J118 同理；"
+            "`apply <set>` 整集重放时每组只留前一条。",
         ),
         mutations=(
             Mutation(
@@ -4365,6 +4381,171 @@ SETS: tuple[MutationSet, ...] = (
                     "类型系统全绿）。● 针是 JSX "
                     "条件行（命中 **1 次**），与其他"
                     "针不同文件。"
+                ),
+            ),
+            Mutation(
+                label="J115 POST /auto-tune/{engine_name} 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b"    response_model=AutoTuneResponse,\r\n"
+                    b"    response_model_exclude_unset=True,\r\n"
+                    b")\r\n"
+                ),
+                new=(
+                    b"    response_model=FlexibleResponse,\r\n"
+                    b"    response_model_exclude_unset=True,\r\n"
+                    b")\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_auto_tune_routes_bind_their_models_and_the_flag",),
+                group="auto-tune-post-route",
+                note=(
+                    "§53.72（auto-tune 族）：路由对象**身份**"
+                    "判据。退回后路由仍 200、`tsc` 绿、其余"
+                    "守卫全绿——只有按 `is` 钉住的那条会红。"
+                    "● 针是装饰器三行、**带 CRLF**（与目标"
+                    "文件一致，无裸 LF）；在本文件命中 **1 次**。"
+                    "🔴 **与 J116 同 `group`**：两条改的是**同一段"
+                    "字节**的两个方向（一个换模型、一个去旗子），"
+                    "整集 apply 只留前一条。"
+                ),
+            ),
+            Mutation(
+                label="J116 POST /auto-tune/{engine_name} 丢掉 response_model_exclude_unset：其余形状长出 null 键",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b"    response_model=AutoTuneResponse,\r\n"
+                    b"    response_model_exclude_unset=True,\r\n"
+                    b")\r\n"
+                ),
+                new=(
+                    b"    response_model=AutoTuneResponse,\r\n"
+                    b")\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_auto_tune_routes_bind_their_models_and_the_flag",),
+                group="auto-tune-post-route",
+                note=(
+                    "§53.72：**旗子必须有**的承重针（与 J111 "
+                    "同判据，不同端点）。生产者五条互斥形状；"
+                    "去掉旗子后 `task_id`/`engine`/`samples`/"
+                    "`optimization_summary` 等缺席键会被序列化成"
+                    " **显式 null**，线上字节与生产者不一致。"
+                    "● 针与 J115 同 `group`（同一段字节的相反改写）。"
+                ),
+            ),
+            Mutation(
+                label="J117 GET /auto-tune/status/{task_id} 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b'@router.get("/auto-tune/status/{task_id}",'
+                    b" response_model=AutoTuneStatusResponse)\r\n"
+                ),
+                new=(
+                    b'@router.get("/auto-tune/status/{task_id}",'
+                    b" response_model=FlexibleResponse)\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_auto_tune_routes_bind_their_models_and_the_flag",),
+                group="auto-tune-status-route",
+                note=(
+                    "§53.72：第二条 auto-tune 路由的**身份**判据。"
+                    "● 针是整行装饰器（本文件命中 **1 次**）。"
+                    "🔴 **与 J118 同 `group`**：同一行字节的两个"
+                    "方向。"
+                ),
+            ),
+            Mutation(
+                label="J118 GET /auto-tune/status/{task_id} 补上 response_model_exclude_unset：多余旗子会掩盖回归",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b'@router.get("/auto-tune/status/{task_id}",'
+                    b" response_model=AutoTuneStatusResponse)\r\n"
+                ),
+                new=(
+                    b'@router.get("/auto-tune/status/{task_id}",'
+                    b" response_model=AutoTuneStatusResponse,"
+                    b" response_model_exclude_unset=True)\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_auto_tune_routes_bind_their_models_and_the_flag",),
+                group="auto-tune-status-route",
+                note=(
+                    "§53.72：**旗子「不需要」那一面**的承重针"
+                    "（§Z11 的第三态；本 set 首次覆盖）。"
+                    "`to_dict()` 无条件写满十二键 ⇒ 加旗子不会"
+                    "改变今天的行为，但它会**掩盖**将来某个字段"
+                    "变成条件写入的回归 —— 守卫因此把 "
+                    "`response_model_exclude_unset` 钉成 "
+                    "`is False`，这条变异就是那个断言的对照组。"
+                    "● 与 J117 同 `group`。"
+                ),
+            ),
+            Mutation(
+                label="J119 AutoTuneOptimizationSummary.matches_processed 改成 total_processed：同名不同形被抹平",
+                path=_EVENT_MODEL,
+                old=b"    matches_processed: int\r\n",
+                new=b"    total_processed: int\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_auto_tune_envelope_keeps_every_shape_byte_for_byte",),
+                note=(
+                    "§53.72：**同名不同形**的承重针。`optimization_summary` "
+                    "这个字段名在 sync 与 async 两条路径上是两套"
+                    "键（`matches_processed` vs `total_processed`，且 "
+                    "`errors` 一个是 int、一个是 list）。把 sync 那套"
+                    "改名成 async 的形状后，`ok` 分支的键序与键名都不再"
+                    "与生产者一致 —— 无异常、`tsc` 看不见。"
+                    "● 针单行、**带 CRLF**，本文件命中 **1 次**。"
+                ),
+            ),
+            Mutation(
+                label="J120 AutoTuneResponse 把 poll_url 挪到 message 之前：背景形状的键序变了，线上字节不一致",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    top_calibration_issues: list[tuple[str, int]] | None = None\r\n"
+                    b"    message: str | None = None\r\n"
+                    b"    poll_url: str | None = None\r\n"
+                ),
+                new=(
+                    b"    top_calibration_issues: list[tuple[str, int]] | None = None\r\n"
+                    b"    poll_url: str | None = None\r\n"
+                    b"    message: str | None = None\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_auto_tune_envelope_keeps_every_shape_byte_for_byte",),
+                note=(
+                    "§53.72：**模型字段序就是线上键序**的承重针。"
+                    "交换 `message`/`poll_url` 后，`background` 形状"
+                    "（`status, task_id, message, poll_url`）会序列化成"
+                    " `status, task_id, poll_url, message` —— 只搬了"
+                    "两行声明，返回的 JSON 字节就变了。"
+                    "🔴 针**必须跨三行**才唯一：单行 "
+                    "`top_calibration_issues: …` 与 "
+                    "`CalibrationPatternsResponse` 里那条**同字节**，"
+                    "带上 `message`/`poll_url` 后才唯一（`poll_url` "
+                    "全文件仅此一处）。● 带 CRLF。"
+                ),
+            ),
+            Mutation(
+                label="J121 engine-console 的任务面板退回读 task.stage：又回到生产者从不发送的键",
+                path=_ENGINE_CONSOLE_TSX,
+                old=(
+                    b'{task.current_match ? ` \xc2\xb7 \xe5\xbd\x93\xe5\x89\x8d '
+                    b'${task.current_match}` : ""}'
+                ),
+                new=(
+                    b'{task.stage ? ` \xc2\xb7 \xe9\x98\xb6\xe6\xae\xb5 '
+                    b'${task.stage}` : ""}'
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_client_reads_the_auto_tune_contract",),
+                note=(
+                    "§53.72：**消费面**承重针，也是本片起点缺陷"
+                    "本身。`stage` 是 `OptimizationTask.to_dict()` "
+                    "从未发送的键 ⇒ 该分支**恒为假**，面板的"
+                    "「阶段」永远不显示（字节全绿、类型系统全绿）。"
+                    "● 针是 JSX 条件行（命中 **1 次**），"
+                    "与 J114 不同文件、不同 guard 名。"
                 ),
             ),
         ),

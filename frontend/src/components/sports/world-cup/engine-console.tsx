@@ -36,8 +36,14 @@ const TUNABLE_ENGINES: { value: TunableEngine; label: string }[] = [
 
 const STATUS_FILTERS = ["scheduled", "live", "finished"];
 
-/** Terminal auto-tune states — polling stops once one of these is reached. */
-const TERMINAL_TASK_STATES = new Set(["completed", "failed", "error", "cancelled"]);
+// Terminal auto-tune states — polling stops once one of these is reached.
+// These are the two terminal values of the backend `TaskStatus` enum
+// (pending / running / completed / failed). The set previously also carried
+// "error" and "cancelled", which no producer ever writes: `mark_failed` sets
+// "failed", and "error" is a *result* status inside `task.result`, not a task
+// status. Keeping them around only invented vocabulary the backend has never
+// spoken.
+const TERMINAL_TASK_STATES = new Set(["completed", "failed"]);
 const TASK_POLL_MS = 3_000;
 
 function summaryLine(summary: BatchSummary): string {
@@ -353,11 +359,24 @@ export function EngineConsole() {
             disabled={busy}
             onClick={() =>
               void run("tune", () => engineApi.autoTune(tuneEngine), (accepted) =>
+                // Seed the panel before the first poll lands. `AutoTuneTask`
+                // mirrors `OptimizationTask.to_dict()`, which writes all twelve
+                // keys, so the placeholder fills the ones the ack cannot know
+                // with their empty values. The next `/auto-tune/status`
+                // response replaces the whole object.
                 setTask({
-                  task_id: accepted.task_id,
-                  engine: tuneEngine,
+                  task_id: accepted.task_id ?? "",
+                  engine_name: tuneEngine,
                   status: accepted.status === "accepted" ? "running" : accepted.status,
-                  message: accepted.message,
+                  progress: 0,
+                  total: 0,
+                  current_match: null,
+                  result: null,
+                  error: null,
+                  created_at: null,
+                  started_at: null,
+                  completed_at: null,
+                  logs: [],
                 }),
               )
             }
@@ -407,13 +426,16 @@ export function EngineConsole() {
         {task && (
           <div data-testid="auto-tune-task" className="mt-3 rounded-md border border-border p-3 text-sm">
             <p className="text-foreground">
-              任务 {task.task_id ?? "-"} · 状态 {task.status ?? "-"}
-              {task.stage ? ` · 阶段 ${task.stage}` : ""}
-              {typeof task.progress === "number" ? ` · ${Math.round(task.progress * 100)}%` : ""}
+              任务 {task.task_id || "-"} · 状态 {task.status || "-"}
+              {task.current_match ? ` · 当前 ${task.current_match}` : ""}
+              {task.total > 0 ? ` · ${task.progress} / ${task.total}` : ""}
+              {task.total > 0
+                ? ` · ${Math.round((task.progress / task.total) * 100)}%`
+                : ""}
             </p>
-            {(task.message || task.error) && (
+            {(task.error || task.logs.length > 0) && (
               <p className={`mt-1 text-xs ${task.error ? "text-neg" : "text-muted-foreground"}`}>
-                {task.error ?? task.message}
+                {task.error ?? task.logs.at(-1)?.message ?? ""}
               </p>
             )}
           </div>

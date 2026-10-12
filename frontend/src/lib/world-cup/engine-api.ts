@@ -21,6 +21,9 @@ import {
   handleFetchError,
 } from "@/lib/api";
 import type {
+  AutoTuneResponse,
+  AutoTuneStatusResponse,
+  AutoTuneTask,
   CalibrationPatternsResponse,
   EngineCalibrationResponse,
 } from "@/lib/generated-types";
@@ -34,7 +37,20 @@ import type {
 // `patterns.patterns || patterns.suggestions` guard was permanently false and
 // the panel could only ever show its fallback text. `EngineCalibration` was
 // faithful field-for-field and is retired for that reason instead.
+//
+// The two auto-tune contracts follow in the same audit (53.72).
+// `AutoTuneAccepted` named only the background ack, and `AutoTuneTask`
+// declared `engine` / `stage` / `message` / `updated_at` -- none of which
+// `OptimizationTask.to_dict()` emits (it sends `engine_name` and has no stage,
+// message or updated_at at all), so the console's "阶段" branch and its message
+// line were both permanently dead, and `progress` was read as a 0..1 fraction
+// while the producer sends an absolute count against `total`.
+// Kept as its own single-line statement on purpose: audit 53.71's guard pins
+// this exact line, and rewrapping it into a multi-line block would re-anchor a
+// judge whose property (both names are re-exported here) is still true.
 export type { CalibrationPatternsResponse, EngineCalibrationResponse };
+
+export type { AutoTuneResponse, AutoTuneStatusResponse, AutoTuneTask };
 
 const API_BASE = getApiBase();
 const ENGINE_CLIENT_SOURCE = "world-cup-engine-console";
@@ -87,26 +103,6 @@ export interface BatchProgressEvent {
   succeeded: number;
   failed: number;
   skipped: number;
-}
-
-export interface AutoTuneAccepted {
-  status?: string;
-  task_id?: string;
-  message?: string;
-  poll_url?: string;
-}
-
-export interface AutoTuneTask {
-  task_id?: string;
-  engine?: string;
-  status?: string;
-  progress?: number;
-  stage?: string;
-  message?: string;
-  error?: string;
-  result?: Record<string, unknown> | null;
-  created_at?: string;
-  updated_at?: string;
 }
 
 function engineHeaders(): Record<string, string> {
@@ -171,14 +167,14 @@ export const engineApi = {
     });
   },
 
-  autoTune: (engine: TunableEngine): Promise<AutoTuneAccepted> =>
-    engineFetch<AutoTuneAccepted>(
+  autoTune: (engine: TunableEngine): Promise<AutoTuneResponse> =>
+    engineFetch<AutoTuneResponse>(
       `${PREFIX}/auto-tune/${encodeURIComponent(engine)}?background=true`,
       { method: "POST" },
     ),
 
-  autoTuneStatus: (taskId: string): Promise<{ status?: string; task?: AutoTuneTask }> =>
-    engineFetch<{ status?: string; task?: AutoTuneTask }>(
+  autoTuneStatus: (taskId: string): Promise<AutoTuneStatusResponse> =>
+    engineFetch<AutoTuneStatusResponse>(
       `${PREFIX}/auto-tune/status/${encodeURIComponent(taskId)}`,
     ),
 

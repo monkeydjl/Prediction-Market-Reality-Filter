@@ -196,7 +196,21 @@ describe("EngineConsole", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     engineMocks.autoTune.mockResolvedValue({ status: "accepted", task_id: "t-1" });
     engineMocks.autoTuneStatus.mockResolvedValue({
-      task: { task_id: "t-1", status: "completed", stage: "done", progress: 1 },
+      status: "ok",
+      task: {
+        task_id: "t-1",
+        engine_name: "elo_odds",
+        status: "completed",
+        progress: 12,
+        total: 12,
+        current_match: null,
+        result: null,
+        error: null,
+        created_at: "2026-10-12T10:00:00+00:00",
+        started_at: "2026-10-12T10:00:01+00:00",
+        completed_at: "2026-10-12T10:05:00+00:00",
+        logs: [{ timestamp: "2026-10-12T10:05:00+00:00", message: "正在计算校准参数..." }],
+      },
     });
 
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
@@ -213,6 +227,52 @@ describe("EngineConsole", () => {
     const callsAfterCompletion = engineMocks.autoTuneStatus.mock.calls.length;
     await vi.advanceTimersByTimeAsync(9_000);
     expect(engineMocks.autoTuneStatus.mock.calls.length).toBe(callsAfterCompletion);
+
+    vi.useRealTimers();
+  });
+
+  it("renders the task progress fields the status route actually sends", async () => {
+    // Regression (audit 53.72): the hand-written `AutoTuneTask` declared
+    // `engine` / `stage` / `message` / `updated_at`, none of which
+    // `OptimizationTask.to_dict()` emits, so the "阶段" branch and the message
+    // line were permanently dead. `progress` was also multiplied by 100 as if
+    // it were a 0..1 fraction while the producer sends an absolute count
+    // against `total`. The fixture below is the real twelve-key shape, and the
+    // panel must read `current_match` / `total` / the last log entry.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    engineMocks.autoTune.mockResolvedValue({ status: "accepted", task_id: "t-9" });
+    engineMocks.autoTuneStatus.mockResolvedValue({
+      status: "ok",
+      task: {
+        task_id: "t-9",
+        engine_name: "elo_odds",
+        status: "running",
+        progress: 3,
+        total: 12,
+        current_match: "Brazil vs Japan",
+        result: null,
+        error: null,
+        created_at: "2026-10-12T10:00:00+00:00",
+        started_at: "2026-10-12T10:00:01+00:00",
+        completed_at: null,
+        logs: [
+          { timestamp: "2026-10-12T10:00:05+00:00", message: "[3/12] 正在分析: Brazil vs Japan" },
+        ],
+      },
+    });
+
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(<EngineConsole />);
+    await user.click(screen.getByTestId("auto-tune-button"));
+    expect(await screen.findByTestId("auto-tune-task")).toHaveTextContent("t-9");
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    const panel = screen.getByTestId("auto-tune-task");
+    await waitFor(() => expect(panel).toHaveTextContent("Brazil vs Japan"));
+    expect(panel).toHaveTextContent("3 / 12");
+    expect(panel).toHaveTextContent("25%");
+    expect(panel).toHaveTextContent("[3/12] 正在分析: Brazil vs Japan");
+    expect(panel).not.toHaveTextContent("阶段");
 
     vi.useRealTimers();
   });

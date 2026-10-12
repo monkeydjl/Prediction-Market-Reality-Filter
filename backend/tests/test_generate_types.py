@@ -3838,6 +3838,397 @@ class WorldCupCalibrationContractTests(unittest.TestCase):
         self.assertIn("patterns.top_blind_spots", console)
 
 
+class WorldCupAutoTuneContractTests(unittest.TestCase):
+    """The two auto-tune routes named in audit 53.72 (batch A, second slice).
+
+    ``POST /auto-tune/{engine_name}`` and ``GET /auto-tune/status/{task_id}``
+    published the bare ``FlexibleResponse`` envelope. They need opposite
+    treatment: the POST has five disjoint shapes across its two branches, so
+    every field but ``status`` is optional and it **must** set
+    ``response_model_exclude_unset=True``; the GET writes both of its keys on
+    the only non-error path, so nothing is optional and it must **not** set the
+    flag.
+
+    ``AutoTuneTask.result`` stays an opaque map on purpose. Two producers share
+    one process-wide task manager (``engine_auto_tuning_async`` stores the
+    auto-tune summary, ``sport_optimization`` stores ``{"sports": ...}``), and
+    this route accepts any ``task_id`` -- closing the field would silently drop
+    the other producer's keys (audit 53.58).
+    """
+
+    def test_the_auto_tune_task_view_is_the_keys_to_dict_writes(self):
+        from app.models.event import (
+            AutoTuneLogEntry,
+            AutoTuneStatusResponse,
+            AutoTuneTask,
+        )
+
+        fields = AutoTuneTask.model_fields
+        self.assertEqual(
+            list(fields),
+            [
+                "task_id",
+                "engine_name",
+                "status",
+                "progress",
+                "total",
+                "current_match",
+                "result",
+                "error",
+                "created_at",
+                "started_at",
+                "completed_at",
+                "logs",
+            ],
+            "AutoTuneTask is no longer OptimizationTask.to_dict()'s key order "
+            "(audit 53.72)",
+        )
+        for name, field in fields.items():
+            with self.subTest(field=name):
+                self.assertTrue(
+                    field.is_required(),
+                    f"AutoTuneTask.{name} gained a default; to_dict() writes "
+                    "all twelve keys unconditionally, so a default could only "
+                    "hide a regression (audit 53.72)",
+                )
+        types = {
+            "task_id": str,
+            "engine_name": str,
+            "status": str,
+            "progress": int,
+            "total": int,
+            "current_match": str | None,
+            "result": dict[str, typing.Any] | None,
+            "error": str | None,
+            "created_at": str | None,
+            "started_at": str | None,
+            "completed_at": str | None,
+            "logs": list[AutoTuneLogEntry],
+        }
+        for name, want in types.items():
+            with self.subTest(annotation=name):
+                self.assertEqual(
+                    fields[name].annotation, want,
+                    f"AutoTuneTask.{name} annotation drifted (audit 53.72)",
+                )
+
+        # The opaque `result` is the whole point: two producers, one of them
+        # open, feeding one shared manager. Pin both producers so the
+        # docstring's premise cannot rot silently.
+        async_src = (
+            _BACKEND_DIR / "app" / "services" / "engine_auto_tuning_async.py"
+        ).read_bytes().decode("utf-8")
+        sport_src = (
+            _BACKEND_DIR / "app" / "api" / "routes" / "sport_optimization.py"
+        ).read_bytes().decode("utf-8")
+        self.assertIn('"total_processed"', async_src)
+        self.assertIn("mark_completed(task_id, final_result)", async_src)
+        self.assertIn('mark_completed(task.task_id, {"sports": results})', sport_src)
+        self.assertNotIn(
+            "total_processed", fields,
+            "AutoTuneTask grew a total_processed key; that belongs to the async "
+            "summary inside the opaque `result`, not to the task view",
+        )
+
+        log_fields = AutoTuneLogEntry.model_fields
+        self.assertEqual(list(log_fields), ["timestamp", "message"])
+        for name, field in log_fields.items():
+            with self.subTest(log=name):
+                self.assertEqual(field.annotation, str)
+                self.assertTrue(field.is_required())
+
+        status_fields = AutoTuneStatusResponse.model_fields
+        self.assertEqual(
+            list(status_fields), ["status", "task"],
+            "AutoTuneStatusResponse is no longer {status, task}",
+        )
+        self.assertEqual(status_fields["task"].annotation, AutoTuneTask)
+
+    def test_the_auto_tune_envelope_keeps_every_shape_byte_for_byte(self):
+        import json
+
+        from app.models.event import (
+            AutoTuneCalibrationResult,
+            AutoTuneOptimizationSummary,
+            AutoTuneResponse,
+            CalibrationAnalysis,
+            CalibrationParams,
+            FlexibleResponse,
+        )
+
+        summary = AutoTuneOptimizationSummary.model_fields
+        self.assertEqual(
+            list(summary),
+            ["matches_processed", "optimizations_generated", "errors"],
+            "AutoTuneOptimizationSummary is no longer the *synchronous* "
+            "run_full_auto_tuning_cycle block. Same field name, different "
+            "shape: the async block starts at total_processed and its `errors` "
+            "is a list (audit 53.72)",
+        )
+        for name, field in summary.items():
+            with self.subTest(summary=name):
+                self.assertEqual(field.annotation, int)
+                self.assertTrue(field.is_required())
+
+        calibration = AutoTuneCalibrationResult.model_fields
+        self.assertEqual(
+            list(calibration),
+            [
+                "status",
+                "calibration_id",
+                "engine",
+                "version",
+                "params",
+                "avg_improvement",
+                "confidence_score",
+            ],
+            "AutoTuneCalibrationResult is no longer save_engine_calibration's "
+            "key order (audit 53.72)",
+        )
+        for name, field in calibration.items():
+            with self.subTest(calibration=name):
+                self.assertTrue(field.is_required())
+        self.assertEqual(calibration["params"].annotation, CalibrationParams)
+        self.assertEqual(calibration["avg_improvement"].annotation, float | None)
+        self.assertEqual(
+            calibration["confidence_score"].annotation, float,
+            "confidence_score is resolved on every return (the function fills "
+            "it in from the sample size when the caller omits it), so making "
+            "it nullable would be looser than the producer",
+        )
+
+        envelope = AutoTuneResponse.model_fields
+        self.assertEqual(
+            list(envelope),
+            [
+                "status",
+                "task_id",
+                "engine",
+                "samples",
+                "unverified_samples",
+                "optimization_summary",
+                "pattern_analysis",
+                "calibration",
+                "top_blind_spots",
+                "top_calibration_issues",
+                "message",
+                "poll_url",
+            ],
+            "AutoTuneResponse must keep this field order: it is the only order "
+            "in which all five producer shapes serialise the way the producer "
+            "wrote them (`message` and `poll_url` last, audit 53.72)",
+        )
+        self.assertTrue(envelope["status"].is_required())
+        for name in list(envelope)[1:]:
+            with self.subTest(envelope=name):
+                self.assertFalse(
+                    envelope[name].is_required(),
+                    f"AutoTuneResponse.{name} lost its default; only some "
+                    "shapes write it, so the flag must be able to drop it "
+                    "(audit 53.72)",
+                )
+        self.assertTrue(issubclass(AutoTuneResponse, FlexibleResponse))
+        annotations = {
+            "optimization_summary": AutoTuneOptimizationSummary | None,
+            "pattern_analysis": CalibrationAnalysis | None,
+            "calibration": AutoTuneCalibrationResult | None,
+            "top_blind_spots": list[tuple[str, int]] | None,
+            "top_calibration_issues": list[tuple[str, int]] | None,
+            "poll_url": str | None,
+        }
+        for name, want in annotations.items():
+            with self.subTest(annotation=name):
+                self.assertEqual(
+                    envelope[name].annotation, want,
+                    f"AutoTuneResponse.{name} annotation drifted (audit 53.72)",
+                )
+
+        # The five shapes, verbatim from the producers. Each must round-trip
+        # through the model with identical bytes under the flag, and must
+        # change without it -- that is what makes the flag load-bearing.
+        shapes = [
+            # 1. background=True ack (the handler's own dict)
+            {
+                "status": "accepted",
+                "task_id": "t-1",
+                "message": "后台优化任务已启动，任务ID: t-1",
+                "poll_url": "/api/world-cup/predictions/auto-tune/status/t-1",
+            },
+            # 2. sync, run_full_auto_tuning_cycle no-data early return
+            {"status": "no_data", "message": "No optimizations generated"},
+            # 3. sync, calculate_optimization_patterns passthrough no-data
+            {"status": "no_data", "message": "No optimizations found"},
+            # 4. sync, that passthrough's unverified shape
+            {
+                "status": "unverified",
+                "engine": "hybrid",
+                "samples": 0,
+                "unverified_samples": 12,
+                "message": "not verified against finished match results",
+            },
+            # 5. sync ok
+            {
+                "status": "ok",
+                "engine": "elo_odds",
+                "optimization_summary": {
+                    "matches_processed": 12,
+                    "optimizations_generated": 9,
+                    "errors": 3,
+                },
+                "pattern_analysis": {
+                    "avg_home_score_adjustment": 0.356,
+                    "avg_away_score_adjustment": -0.259,
+                    "avg_home_win_prob_adjustment": 0.097,
+                    "avg_draw_prob_adjustment": 0.024,
+                    "avg_away_win_prob_adjustment": -0.123,
+                    "avg_confidence_adjustment": -0.013,
+                },
+                "calibration": {
+                    "status": "ok",
+                    "calibration_id": 7,
+                    "engine": "elo_odds",
+                    "version": 3,
+                    "params": {
+                        "home_score_bias": 0.356,
+                        "away_score_bias": -0.259,
+                        "home_win_prob_shift": 0.097,
+                        "draw_prob_shift": 0.024,
+                        "away_win_prob_shift": -0.123,
+                        "confidence_multiplier": 0.987,
+                    },
+                    "avg_improvement": 0.31,
+                    "confidence_score": 0.7,
+                },
+                "top_blind_spots": [["draw_underestimated", 5]],
+                "top_calibration_issues": [["low_sample_bucket", 2]],
+            },
+        ]
+        for raw in shapes:
+            with self.subTest(shape=raw["status"]):
+                model = AutoTuneResponse.model_validate(raw)
+                self.assertEqual(
+                    json.dumps(model.model_dump(mode="json", exclude_unset=True)),
+                    json.dumps(raw),
+                    "with the flag the body must match the producer's dict "
+                    "byte for byte, key order included (audit 53.72)",
+                )
+                self.assertNotEqual(
+                    json.dumps(model.model_dump(mode="json")),
+                    json.dumps(raw),
+                    "without the flag the field defaults must materialise keys "
+                    "the producer never wrote -- if this stops being true the "
+                    "flag is no longer load-bearing (audit 53.72)",
+                )
+
+    def test_the_auto_tune_routes_bind_their_models_and_the_flag(self):
+        """Route identity and the two opposite flag decisions."""
+        from fastapi.routing import APIRoute
+
+        from app.api.routes import world_cup_predictions as wc
+        from app.models.event import (
+            AutoTuneResponse,
+            AutoTuneStatusResponse,
+            FlexibleResponse,
+        )
+
+        def route_for(path: str, method: str) -> APIRoute:
+            found = [
+                route
+                for route in wc.router.routes
+                if isinstance(route, APIRoute)
+                and route.path == path
+                and method in route.methods
+            ]
+            self.assertEqual(
+                len(found), 1, f"expected exactly one {method} route on {path}"
+            )
+            return found[0]
+
+        post = route_for(
+            "/world-cup/predictions/auto-tune/{engine_name}", "POST"
+        )
+        self.assertIs(
+            post.response_model, AutoTuneResponse,
+            "POST /auto-tune/{engine_name} no longer binds AutoTuneResponse; it "
+            "published no field contract before audit 53.72",
+        )
+        self.assertIsNot(post.response_model, FlexibleResponse)
+        self.assertIs(
+            post.response_model_exclude_unset, True,
+            "POST /auto-tune/{engine_name} lost response_model_exclude_unset; "
+            "its five shapes are disjoint, so without the flag the defaults "
+            "serialise null keys it never wrote (audit 53.72)",
+        )
+
+        get = route_for(
+            "/world-cup/predictions/auto-tune/status/{task_id}", "GET"
+        )
+        self.assertIs(
+            get.response_model, AutoTuneStatusResponse,
+            "GET /auto-tune/status/{task_id} no longer binds "
+            "AutoTuneStatusResponse (audit 53.72)",
+        )
+        self.assertIsNot(get.response_model, FlexibleResponse)
+        self.assertIs(
+            get.response_model_exclude_unset, False,
+            "GET /auto-tune/status/{task_id} gained "
+            "response_model_exclude_unset. Its only non-error path writes both "
+            "keys, so the flag can only ever hide a regression (audit 53.72)",
+        )
+
+    def test_the_client_reads_the_auto_tune_contract(self):
+        """The client must not re-declare auto-tune shapes, and the console must
+        read the keys ``to_dict()`` actually sends.
+
+        The retired ``AutoTuneTask`` declared ``engine`` / ``stage`` / ``message``
+        / ``updated_at`` -- none of which the producer has ever sent -- so the
+        "阶段" branch and the message line were permanently dead, and
+        ``task.progress * 100`` treated an absolute count as a 0..1 fraction.
+        """
+        client = (
+            _REPO_ROOT / "frontend" / "src" / "lib" / "world-cup"
+            / "engine-api.ts"
+        ).read_bytes().decode("utf-8")
+        console = (
+            _REPO_ROOT / "frontend" / "src" / "components" / "sports"
+            / "world-cup" / "engine-console.tsx"
+        ).read_bytes().decode("utf-8")
+
+        for name in ("AutoTuneAccepted", "AutoTuneTask"):
+            with self.subTest(copy=name):
+                self.assertNotIn(
+                    f"export interface {name}", client,
+                    f"engine-api.ts re-declared {name}; the generated "
+                    "AutoTuneResponse / AutoTuneTask is the contract "
+                    "(audit 53.72)",
+                )
+        self.assertIn("Promise<AutoTuneResponse>", client)
+        self.assertIn("Promise<AutoTuneStatusResponse>", client)
+
+        self.assertNotIn(
+            "task.stage", console,
+            "the console reads `task.stage`, a key OptimizationTask.to_dict() "
+            "has never written (audit 53.72)",
+        )
+        self.assertNotIn(
+            "task.message", console,
+            "the console reads `task.message`, a key the task view has never "
+            "written (audit 53.72)",
+        )
+        self.assertIn("task.current_match", console)
+        self.assertIn("task.logs", console)
+        self.assertNotIn(
+            '"error", "cancelled"', console,
+            "TERMINAL_TASK_STATES invented two values the backend TaskStatus "
+            "enum never produces (audit 53.72)",
+        )
+        self.assertIn(
+            'new Set(["completed", "failed"])', console,
+            "TERMINAL_TASK_STATES must mirror the TaskStatus enum's terminal "
+            "values (audit 53.72)",
+        )
+
+
 class ApiTsTypeSourceTests(unittest.TestCase):
     """``api.ts`` reads generated shapes instead of re-declaring them.
 

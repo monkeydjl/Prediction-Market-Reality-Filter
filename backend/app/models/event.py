@@ -1561,6 +1561,138 @@ class CalibrationPatternsResponse(FlexibleResponse):
     message: str | None = None
 
 
+class AutoTuneOptimizationSummary(BaseModel):
+    """``optimization_summary`` of the *synchronous* ``POST /auto-tune/{engine}``
+    path (audit 53.72).
+
+    ``run_full_auto_tuning_cycle`` builds this block inline and *counts* the
+    failures it collected, so ``errors`` is an ``int``. The async background
+    path stores a same-named block under ``task.result`` whose first key is
+    ``total_processed`` (not ``matches_processed``) and whose ``errors`` is a
+    list of ``{match_id, match, error}`` entries -- same name, different shape.
+    That block lives inside ``AutoTuneTask.result``, which stays opaque (see
+    that model), so this closed shape describes the sync route only.
+    """
+
+    matches_processed: int
+    optimizations_generated: int
+    errors: int
+
+
+class AutoTuneCalibrationResult(BaseModel):
+    """Return value of ``engine_auto_tuning_service.save_engine_calibration``.
+
+    Seven keys written unconditionally, so none of them is optional.
+    ``avg_improvement`` echoes the caller's argument and may be ``None`` (its
+    default). ``confidence_score`` is *not* nullable: the function fills it in
+    from the sample size whenever the caller omits it, so it is resolved on
+    every return. ``params`` is the same :class:`CalibrationParams` the
+    calibration read route publishes.
+    """
+
+    status: str
+    calibration_id: int
+    engine: str
+    version: int
+    params: CalibrationParams
+    avg_improvement: float | None
+    confidence_score: float
+
+
+class AutoTuneLogEntry(BaseModel):
+    """One entry of ``OptimizationTask.logs``.
+
+    ``update_progress`` is the only appender in the codebase and always writes
+    both keys, so the list is uniformly shaped. (The durable store re-reads
+    this list from a JSON column, so a hand-written row could differ; the guard
+    pins the single-writer premise.)
+    """
+
+    timestamp: str
+    message: str
+
+
+class AutoTuneTask(BaseModel):
+    """``OptimizationTask.to_dict()`` -- the ``task`` of
+    ``GET /auto-tune/status/{task_id}`` (audit 53.72).
+
+    Twelve keys, all written unconditionally, so nothing here carries a default
+    and the route needs no ``response_model_exclude_unset``.
+
+    ``result`` stays an opaque map on purpose. Two producers feed the same
+    process-wide task manager: ``engine_auto_tuning_async`` stores the auto-tune
+    summary (``{status, engine, optimization_summary, ...}``) while
+    ``sport_optimization`` stores ``{"sports": {...}}``. This route accepts any
+    ``task_id``, so either shape can be polled here; closing the field would
+    silently drop the other producer's keys (audit 53.58). Precedent for a
+    deliberately-opaque payload: ``EventStoreEntry.record``.
+
+    ``created_at`` is nullable even though ``__init__`` always sets it: the
+    producer writes ``self.created_at.isoformat() if self.created_at else None``.
+    """
+
+    task_id: str
+    engine_name: str
+    status: str
+    progress: int
+    total: int
+    current_match: str | None
+    result: dict[str, Any] | None
+    error: str | None
+    created_at: str | None
+    started_at: str | None
+    completed_at: str | None
+    logs: list[AutoTuneLogEntry]
+
+
+class AutoTuneStatusResponse(FlexibleResponse):
+    """Response for ``GET /auto-tune/status/{task_id}`` (audit 53.72).
+
+    Both keys are written on the only non-error return path (a missing task is
+    turned into an ``HTTPException`` before the response model runs), so
+    neither is optional and the route needs no ``response_model_exclude_unset``.
+    """
+
+    status: str
+    task: AutoTuneTask
+
+
+class AutoTuneResponse(FlexibleResponse):
+    """Response for ``POST /auto-tune/{engine_name}`` (audit 53.72).
+
+    Five disjoint shapes over twelve keys:
+
+    * ``background=True`` (4): ``status``, ``task_id``, ``message``,
+      ``poll_url`` -- the route's own dict, always complete.
+    * sync, ``run_full_auto_tuning_cycle`` no-data (2): ``status``, ``message``.
+    * sync, ``calculate_optimization_patterns`` passthrough no-data (2): same.
+    * sync, that passthrough's ``unverified`` (5): ``+ engine``, ``samples``,
+      ``unverified_samples``.
+    * sync, ``ok`` (7): ``status``, ``engine``, ``optimization_summary``,
+      ``pattern_analysis``, ``calibration``, ``top_blind_spots``,
+      ``top_calibration_issues``.
+
+    Every path writes all of its own keys, so an absent key means "not written"
+    rather than "took a default": the route must set
+    ``response_model_exclude_unset=True``. The field order below is chosen so
+    that each of the five shapes serialises in the producer's original key
+    order -- ``message`` and ``poll_url`` are last for that reason.
+    """
+
+    status: str
+    task_id: str | None = None
+    engine: str | None = None
+    samples: int | None = None
+    unverified_samples: int | None = None
+    optimization_summary: AutoTuneOptimizationSummary | None = None
+    pattern_analysis: CalibrationAnalysis | None = None
+    calibration: AutoTuneCalibrationResult | None = None
+    top_blind_spots: list[tuple[str, int]] | None = None
+    top_calibration_issues: list[tuple[str, int]] | None = None
+    message: str | None = None
+    poll_url: str | None = None
+
+
 class CalibrationAggregate(BaseModel):
     """One aggregate block of ``EventCalibrationResponse`` (audit 53.63):
     the overall block and every ``by_source`` / ``by_base_rate_category``

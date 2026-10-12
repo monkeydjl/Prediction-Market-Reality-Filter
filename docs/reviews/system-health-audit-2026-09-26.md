@@ -14316,3 +14316,34 @@ census_v2_stdout.txt, census_v3_consumers.md, census_v3_stdout.txt}`。
 
 产物：`.workbuddy/audit-2026-10-03/{probe_5369_l0.py, _recon_5369.py,
 verify_5369.log, full_5369.log, junit_full_5369.xml}`。
+
+## 53.70 —— L1 前置：消费面口径**第三次更正**（9 → 16 调用点 / 14 活跃 UI），以及 v3 口径失效的机理
+
+53.68 断言「有前端引用：9 条」，并据此把 L1 定为「9 条具名」。该数字**错误**—— 它来自 v3 普查的 `frontend` 列，而那一列**不是**「该路由有消费者」的度量。
+
+**v3 口径失效的两个独立缺陷**（探针 `_census_v4_consumers.py`，只读）：
+
+1. 🔴 **挂载前缀本身就是 3 段**：`/api/world-cup/predictions` 恰是 3 段，于是「≥3 段特征尾」对**短尾路由**（`init-db`/`today`）退化成这个公共前缀；该字面量在 `frontend/src` 出现**恰 5 次**，**全部**是 test 文件里硬编码的完整 URL 断言（4 处：`engine-api.test.ts:144/163/167/180`）+ 1 处源注释（`engine-api.ts:2`），**没有一处是调用点**。
+2. 🔴 **模板字面量读不到**：真实调用写的是 `${API_BASE}/world-cup/predictions/...`（base 是变量）⇒ 字面量里**没有** `/api` 前缀；v3 找 `/api/world-cup/predictions/...`⇒ **看不见真正的调用**。长尾路由（`matches/{id}/predict`）先在 4 段处命中 `tests`（`/api/.../matches`）就 `break`，于是它连那个假阳性都没沾上、显示 frontend=0。
+
+两个缺陷**方向相反**：短尾路由被前缀**假阳**（`init-db`、`today` 被算作有消费者），长尾路由被**假阴**（`matches/**` 家族被算作无消费者）。
+
+**v4 口径**（按调用点精确匹配）：解析 `frontend/src` 的**非测试**源码 —— 解析 `const PREFIX = "..."`、把每个 `${...}` 收敛为占位符、抽取 `/world-cup/predictions` 之后的极大路径串，按「占位符紧跟 `/` ⇒ 路径参数 `{}`；否则 ⇒ 查询串（丢弃）」归一化，再与路由模板（`{param}` ⇒ `{}`）**精确相等**比对。
+
+**结果（19 条路由）**：
+
+- **有客户端调用点：16** = 15 条裸 `FlexibleResponse` + 1 条 SSE（`batch-switch-engine-stream`，`response_model is None`，不在三件套适用面内）；
+- **无调用点：3** = `init-db`、`matches/{match_id}`（`get_match`）、`today`；
+- 与 53.68 的差集：**2 条假阳**（`init-db`、`today`）+ **8 条假阴**（`batch-predict`、`auto-tune/status/{task_id}`、`matches`、`matches/{id}/prediction-history|predict|analyze|analysis-history|optimize`）；
+- 🔎 **再一层**：`batch-switch-engine`（POST 长轮询）**只有死客户端方法**（`engineApi.batchSwitchEngine`，`engine-api.ts:160`，全仓**零调用**；UI 只走流式 `streamBatchSwitchEngine`）⇒ **活跃 UI 消费面 = 14 条裸路由 + 1 SSE**。
+
+**因此 L1 的真实规模是 14–15 条裸路由命名，不是 9。** 且其中 `matches/{id}/predict|analyze|optimize` 等返回的是**深层嵌套预测载荷**（前端现有一份手写 `MatchPrediction` 接口即其镜像）⇒ 忠实具名须把 `_serialize_prediction` 的嵌套形状一并建模，**远超「规模中等」的估计**。
+
+登记（重定批次，待用户拍板）：
+
+- **批 A（动作/校准族，`engine-api.ts` 消费 7 条）**：`batch-predict`、`batch-switch-engine`（若把死方法也算上）、`batch-optimize`、`auto-tune/{engine_name}`、`auto-tune/status/{task_id}`、`calibration/{engine_name}`、`calibration-patterns/{engine_name}` —— 形状多为扁平「状态 + 计数」，最易先做；
+- **批 B（比赛查询族 6 条）**：`matches`、`matches/{id}/prediction-history|predict|analyze|analysis-history|optimize` —— 含深层嵌套预测载荷；
+- **批 C（杂项 2 条）**：`engine-comparison`、`sync-fixtures`。
+- **`init-db` / `today` / `matches/{match_id}` 三条无前端消费者 ⇒ 移入 L2 登记**（不具名）；L2 因而不只是「45 条 canonical」，而是 **45 + 3 = 48 条**拍板裸集合。
+
+产物：`.workbuddy/audit-2026-10-03/{_census_v4_consumers.py, census_v4_consumers.md}`。

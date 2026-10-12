@@ -7,10 +7,11 @@ from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 from sqlalchemy import or_
 
 from app.api.security import optional_write_key, require_write_key
+from app.models.event import FlexibleResponse
 from app.models.world_cup_prediction import MatchFixture, MatchPrediction, PredictionHistory, AIAnalysisHistory
 from app.services.world_cup_match_service import sync_world_cup_fixtures
 from app.services.world_cup_data_quality import (
@@ -24,11 +25,6 @@ from app.utils.prediction_db import get_prediction_session, close_prediction_ses
 router = APIRouter(prefix="/world-cup/predictions", tags=["world-cup-predictions"])
 
 logger = logging.getLogger(__name__)
-
-
-class FlexibleResponse(BaseModel):
-    """Flexible response model that accepts any fields."""
-    model_config = ConfigDict(extra="allow")
 
 
 class PredictionRequest(BaseModel):

@@ -3235,6 +3235,55 @@ class DeleteEventContractTests(unittest.TestCase):
         )
 
 
+class FlexibleResponseIdentityTests(unittest.TestCase):
+    """Every route publishing a FlexibleResponse binds *the* class.
+
+    Audit 53.68 found a second definition: ``world_cup_predictions.py``
+    declared its own ``class FlexibleResponse`` (same name, same shape,
+    **different object**), so a census keyed on ``route.response_model is
+    FlexibleResponse`` silently missed those 18 routes -- it counted 45 of
+    63. Audit 53.69 (L0) deleted the duplicate; the module now imports the
+    canonical class from ``app.models.event``.
+
+    The criterion is *identity across the whole app*, deliberately
+    name-agnostic about which module a copy might live in: whatever a
+    route binds, if it is named ``FlexibleResponse`` it must be the
+    canonical object. An unused duplicate is dead code (not a contract
+    regression), which is why the criterion is the binding rather than a
+    repo-wide definition count.
+    """
+
+    def test_every_flexible_response_route_binds_the_canonical_class(self):
+        from app.main import app
+        from app.models.event import FlexibleResponse
+
+        named = [
+            route for route in app.routes
+            if getattr(getattr(route, "response_model", None), "__name__", "")
+            == "FlexibleResponse"
+        ]
+        self.assertGreater(
+            len(named), 50,
+            "the census baseline is 63 routes publishing a class named "
+            "FlexibleResponse; a sharp drop means this walk stopped "
+            "seeing them (audit 53.69)",
+        )
+        wrong = [
+            f"{route.path} -> "
+            f"{route.response_model.__module__}."
+            f"{getattr(route.response_model, '__qualname__', '?')}"
+            for route in named
+            if route.response_model is not FlexibleResponse
+        ]
+        self.assertEqual(
+            wrong, [],
+            "these routes bind a FlexibleResponse that is not the "
+            "canonical export from app.models.event -- a same-name local "
+            "copy is the regression audit 53.68 found, and it makes every "
+            "identity-keyed census and guard go blind: " + "; ".join(wrong),
+        )
+
+
 class ApiTsTypeSourceTests(unittest.TestCase):
     """``api.ts`` reads generated shapes instead of re-declaring them.
 

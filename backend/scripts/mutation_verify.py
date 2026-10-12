@@ -380,6 +380,7 @@ _T_REPLAY_METRICS = "tests/test_replay_metrics.py"
 _DECISION_QUALITY = "backend/app/services/decision_quality_service.py"
 _T_TRADES_STORE = "tests/test_simulated_trade_store.py"
 _T_QUALITY_METRICS = "tests/test_quality_metrics.py"
+_WORLD_CUP_PREDICTIONS = "backend/app/api/routes/world_cup_predictions.py"
 _T_EVENT_INTELLIGENCE = "tests/test_event_intelligence_service.py"
 _T_CONCLUSION_CHALLENGE = "tests/test_conclusion_challenge_service.py"
 _T_DECISION_QUALITY = "tests/test_decision_quality_service.py"
@@ -1644,7 +1645,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J103）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J104）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -4142,6 +4143,33 @@ SETS: tuple[MutationSet, ...] = (
                     "测试仍绿（它们测的是副本自己写死的 media_type）⇒ 只有读真"
                     "路由的 assertIn(\"text/plain\") 能红。🔴 针在 main.py 命中 "
                     "**1 次**（已字节复核）。"
+                ),
+            ),
+            Mutation(
+                label="J104 world_cup_predictions 重新定义本地 FlexibleResponse 副本：身份判定的普查与守卫全盲",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=b'router = APIRouter(prefix="/world-cup/predictions", tags=["world-cup-predictions"])\r\n',
+                new=(
+                    b'router = APIRouter(prefix="/world-cup/predictions", tags=["world-cup-predictions"])\r\n'
+                    b"\r\n"
+                    b"\r\n"
+                    b"class FlexibleResponse(BaseModel):  # noqa: F811 -- mutation\r\n"
+                    b'    model_config = {"extra": "allow"}\r\n'
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_every_flexible_response_route_binds_the_canonical_class",
+                ),
+                note=(
+                    "§53.69（L0 的回归针）：53.68 查出的正是这个形态——路由模块"
+                    "自定义**同名同形**的 `FlexibleResponse` ⇒ 装饰器文本一字未变、"
+                    "响应字节不变、`tsc` 绿、其余守卫全绿，**只有按身份（`is`）"
+                    "判定的守卫与普查会瞎**（当时把 63 数成 45）。本地类是"
+                    "`extra=\"allow\"` 空模型 ⇒ 线上行为完全相同，这正是它躲了"
+                    "这么久的原因。🔴 变异体用普通 dict 作 `model_config`（不必"
+                    "重新引入 `ConfigDict`，保持单区替换、字节合法）；锚是 router "
+                    "定义行（本文件唯一），`new` 在其后插两空行 + 类定义 ⇒ 类定义"
+                    "位于 import 之后、路由装饰器之前 ⇒ 18 条路由绑到本地类。"
                 ),
             ),
         ),

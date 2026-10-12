@@ -14212,3 +14212,60 @@ world-cup 43+18 裸 FlexibleResponse）。
 
 产物：`.workbuddy/audit-2026-10-03/{_recon_5367.py, verify_5367.log,
 full_5367.log, junit_full_5367.xml}`。
+
+## 53.68 —— 世界波族裸 `FlexibleResponse` 普查：**两个同名不同物的类**、63 条的分层，以及消费面判据的两次自我翻车
+
+登记时的口径是「world-cup 43+18 处裸 FlexibleResponse」。普查（探针
+`_census_worldcup.py` → `_v2` → `_v3`，均只读）把口径修正为：
+
+**总数 63 = 45 canonical（`models/event.py:594`）+ 18 本地副本**（`api/routes/world_cup_predictions.py:29` 自己定义了**同名同形**的
+`FlexibleResponse`）。「43」是 events.py 里 `/api/events/sports/world-cup/**`
+的那批，「18」是本地副本那一批——**外加 2 条被漏算的**（`/api/events/analyze`、
+`/api/events/discover/status`）。
+
+🔴 **第一个发现：两个 `FlexibleResponse` 是同名不同物**（同形：都是
+空 `BaseModel` + `extra="allow"`；不同物：不同类对象）。后果是
+**任何按 canonical 类做身份判定（`route.response_model is FlexibleResponse`）
+的守卫与普查会静默漏掉那 18 条**——v1 探针正是这样只数出 45 条，
+差额 18 直到「grep 计数 ≠ 路由对象计数」对不上才暴露。`__all__`/
+`_frontend_export` 也从未见过这个本地类（它住在路由模块里）⇒ **那 18 条
+即使具名也进不了生成类型链**。✅ 已查：**无任何外部模块 import 本地类**
+（`tests/` 里 import 的是 `analyze_match_prediction` 等函数）⇒ 统一它是
+纯内部改动。
+
+🔴 **第二个发现（消费面判据两次翻车）**：v1 只扫 `api.ts` 且允许 1 段
+片段 ⇒ 63 条里 45 条「命中」`/api/events`（**公共前缀**）；v2 收紧到 ≥2 段
+仍中招——`/api/events` **恰好是 2 段**，于是 44 行假阳性。v3 改为
+**跨五区**（frontend/app/scripts/tests/ops）× **≥3 段特征尾**后才是真读数：
+
+- **有前端引用：9 条**，**全部**是本地副本那批（`/api/world-cup/predictions/**`：
+  `init-db`、`sync-fixtures`、`today`、`engine-comparison`、`auto-tune`、
+  `batch-optimize`、`batch-switch-engine`、`calibration`、`calibration-patterns`）；
+- **45 条 canonical 的前端引用为 0**：其中 **43 条**（`/api/events/sports/
+  world-cup/data/**` 的 import/preview/test/validate）**只被 `tests/` 引用**，
+  `analyze` 另有 `app/` 引用、`discover/status` 另有 `scripts/` 引用；
+- 其余 9 条本地副本路由无前端引用（`matches/**`、`batch-predict` 等，
+  由 ops/测试侧使用）。
+
+其余普查读数：**生产者形状** BYHAND 15 / PASSTHRU 48（无 SPREAD、无
+RESPONSE）；**旗子** 63 条全部 `response_model_exclude_unset is False`；
+**schema** 63 条全部 `include_in_schema is True`——与 53.67 的 `/metrics`
+恰好相反：这批是**公开在 schema 里、但没有任何字段契约**的端点（正是
+三件套要治的状态，前提是「有消费者」）。
+
+分层与建议（**规模决策留用户拍板**）：
+
+- **L0（建议先做，小而纯）**：统一两个类——删本地定义、改 import canonical。
+  18 处装饰器文本不变，变的是路由对象身份；收益是「按 canonical 身份
+  判定」的守卫/普查不再有 18 条盲区。需探针验响应字节不变（OpenAPI
+  组件名同为 `FlexibleResponse`）。配套守卫：全仓**只能有一处**
+  `class FlexibleResponse` 定义（静态、可变异）；
+- **L1（建议做一半）**：9 条**有前端消费者**的本地族路由具名（符合 §2 的
+  「补具名只在有消费者时才有意义」），其中动作型端点先读生产者形状再定；
+- **L2（建议不具名，改登记）**：45 条 canonical **零前端消费者**（43 条只有
+  测试引用）⇒ 具名收益（前端类型、OpenAPI 可见）无人消费；处置改为**登记
+  为有意的裸集合并钉集合相等**（同 `DELIBERATELY_OPEN` 姿态），把「60+
+  条裸端点」变成「拍过板的一份清单」。
+
+产物：`.workbuddy/audit-2026-10-03/{_census_worldcup.py, _v2, _v3,
+census_v2_stdout.txt, census_v3_consumers.md, census_v3_stdout.txt}`。

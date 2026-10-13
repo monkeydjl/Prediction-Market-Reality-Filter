@@ -5,7 +5,7 @@ import { Brain, Loader2, AlertCircle, TrendingUp, Clock, Sparkles } from "lucide
 import type {
   AnalysisHistoryEntry,
   MatchFixture,
-  MatchPrediction,
+  MatchPredictionPayload,
 } from "@/lib/world-cup/predictions-api";
 import {
   analyzePrediction,
@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 
 interface PredictionAnalysisCardProps {
   match: MatchFixture;
-  prediction: MatchPrediction;
+  prediction: MatchPredictionPayload;
 }
 
 // `created_at` is `string | null` on the generated `AnalysisHistoryEntry`

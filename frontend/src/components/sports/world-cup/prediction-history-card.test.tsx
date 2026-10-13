@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { PredictionHistoryCard } from "./prediction-history-card";
-import type { MatchFixture } from "@/lib/world-cup/predictions-api";
+import type { MatchFixtureRecord } from "@/lib/generated-types";
 import { fetchPredictionHistory } from "@/lib/world-cup/predictions-api";
 
 vi.mock("@/lib/world-cup/predictions-api", async (importOriginal) => {
@@ -12,9 +12,9 @@ vi.mock("@/lib/world-cup/predictions-api", async (importOriginal) => {
   };
 });
 
-const match: MatchFixture = {
+const match: MatchFixtureRecord = {
   match_id: "match-1",
-  fixture_id: 1,
+  fixture_id: "1",
   home_team: "Argentina",
   away_team: "Brazil",
   kickoff_utc: "2026-06-24T12:00:00Z",
@@ -22,6 +22,8 @@ const match: MatchFixture = {
   stage: "GROUP_STAGE",
   group: "A",
   status: "scheduled",
+  home_score: null,
+  away_score: null,
 };
 
 describe("PredictionHistoryCard engine label", () => {
@@ -71,11 +73,28 @@ describe("PredictionHistoryCard engine label", () => {
           raw: 0.8,
           calibrated: 0.65,
           method: "piecewise_linear_reliability",
+          engine_filter: null,
           total_samples: 8,
-          applied_bucket: { label: "80-100%", count: 4 },
+          min_total_samples: 6,
+          min_bucket_samples: 3,
+          is_reliable: true,
+          bucket_is_reliable: true,
+          is_reference_only: false,
+          bucket: null,
+          applied_bucket: {
+            label: "80-100%",
+            count: 4,
+            actual_accuracy: null,
+            avg_confidence: null,
+          },
+          reason: "piecewise_linear_calibration",
         },
         explanation_contributions: {
           engine: "elo_odds",
+          home_team: "Argentina",
+          away_team: "Brazil",
+          prediction_method: "elo_only",
+          engine_weights: null,
           items: [
             {
               key: "elo",
@@ -84,6 +103,7 @@ describe("PredictionHistoryCard engine label", () => {
               home_impact: 5,
               away_impact: -3,
               description: "rating edge",
+              available: true,
             },
           ],
         },

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { calculateQualificationProbabilities } from "./qualification-probability";
 import type { TeamStanding } from "./group-standings";
-import type { MatchFixture } from "./predictions-api";
+import type { MatchFixtureRecord } from "@/lib/generated-types";
 
 function standing(team: string, points: number, played = 3): TeamStanding {
   return {
@@ -17,10 +17,14 @@ function standing(team: string, points: number, played = 3): TeamStanding {
   };
 }
 
-function scheduledMatch(group: string, home: string, away: string): MatchFixture {
+function scheduledMatch(
+  group: string,
+  home: string,
+  away: string
+): MatchFixtureRecord {
   return {
     match_id: `${home}-${away}`,
-    fixture_id: 1,
+    fixture_id: "1",
     home_team: home,
     away_team: away,
     kickoff_utc: "2026-06-20T00:00:00Z",
@@ -28,6 +32,8 @@ function scheduledMatch(group: string, home: string, away: string): MatchFixture
     stage: "GROUP_STAGE",
     group,
     status: "scheduled",
+    home_score: null,
+    away_score: null,
   };
 }
 

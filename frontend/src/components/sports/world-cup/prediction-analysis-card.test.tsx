@@ -2,9 +2,9 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { PredictionAnalysisCard } from "./prediction-analysis-card";
 import type {
-  MatchFixture,
-  MatchPrediction,
-} from "@/lib/world-cup/predictions-api";
+  MatchFixtureRecord,
+  MatchPredictionPayload,
+} from "@/lib/generated-types";
 import { fetchAnalysisHistory } from "@/lib/world-cup/predictions-api";
 
 vi.mock("@/lib/world-cup/predictions-api", async (importOriginal) => {
@@ -19,9 +19,9 @@ vi.mock("@/lib/world-cup/predictions-api", async (importOriginal) => {
   };
 });
 
-const match: MatchFixture = {
+const match: MatchFixtureRecord = {
   match_id: "match-1",
-  fixture_id: 1,
+  fixture_id: "1",
   home_team: "Argentina",
   away_team: "Brazil",
   kickoff_utc: "2026-06-24T12:00:00Z",
@@ -29,12 +29,27 @@ const match: MatchFixture = {
   stage: "GROUP_STAGE",
   group: "A",
   status: "scheduled",
+  home_score: null,
+  away_score: null,
 };
 
-const prediction: MatchPrediction = {
+const prediction: MatchPredictionPayload = {
   predicted_score: { home: 2, away: 1 },
   outcome_probabilities: { home_win: 0.55, draw: 0.25, away_win: 0.2 },
   confidence: 0.71,
+  prediction_method: null,
+  engine_used: "hybrid",
+  ai_reasoning: null,
+  key_factors: null,
+  last_updated: null,
+  has_betting_odds: false,
+  data_quality: "partial",
+  data_quality_notes: [],
+  data_quality_score: null,
+  raw_confidence: null,
+  confidence_calibration: null,
+  high_confidence_selection: null,
+  explanation_contributions: null,
 };
 
 describe("PredictionAnalysisCard analysis history", () => {

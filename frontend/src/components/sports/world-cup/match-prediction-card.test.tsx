@@ -1,11 +1,85 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { MatchPredictionCard } from "./match-prediction-card";
-import type { MatchFixture, MatchPrediction } from "@/lib/world-cup/predictions-api";
+import type {
+  CalibrationBucket,
+  CalibrationCandidate,
+  ConfidenceCalibrationInfo,
+  ExplanationEngineWeights,
+  MatchFixtureRecord,
+  MatchPredictionPayload,
+} from "@/lib/generated-types";
 
-const match: MatchFixture = {
+// The fixtures below spell out every key of the published contracts (audit
+// 53.76). A partial literal would stop being the shape the card actually
+// receives, and a fixture that drifts from the contract is exactly what the
+// generated types are here to prevent.
+const FULL_PAYLOAD: MatchPredictionPayload = {
+  predicted_score: { home: 2, away: 1 },
+  outcome_probabilities: { home_win: 0.5, draw: 0.25, away_win: 0.25 },
+  confidence: 0.72,
+  prediction_method: null,
+  engine_used: "hybrid",
+  ai_reasoning: null,
+  key_factors: null,
+  last_updated: null,
+  has_betting_odds: false,
+  data_quality: "partial",
+  data_quality_notes: [],
+  data_quality_score: null,
+  raw_confidence: null,
+  confidence_calibration: null,
+  high_confidence_selection: null,
+  explanation_contributions: null,
+};
+
+const FULL_CALIBRATION: ConfidenceCalibrationInfo = {
+  raw: 0.8,
+  calibrated: 0.65,
+  method: "piecewise_linear_reliability",
+  engine_filter: null,
+  total_samples: 8,
+  min_total_samples: 6,
+  min_bucket_samples: 3,
+  is_reliable: true,
+  bucket_is_reliable: true,
+  is_reference_only: false,
+  bucket: null,
+  applied_bucket: null,
+  reason: "piecewise_linear_calibration",
+};
+
+const FULL_CANDIDATE: CalibrationCandidate = {
+  raw: 0.5,
+  calibrated: 0.5,
+  is_reliable: true,
+  is_reference_only: false,
+  total_samples: 8,
+  min_total_samples: 6,
+  min_bucket_samples: 3,
+  bucket_is_reliable: true,
+  bucket: null,
+  applied_bucket: null,
+  reason: "piecewise_linear_calibration",
+};
+
+const FULL_WEIGHTS: ExplanationEngineWeights = {
+  elo_weight: 0.7,
+  hybrid_weight: 0.3,
+  source: "rule_default",
+  samples: {},
+  brier: {},
+  learned_elo_weight: null,
+  blend: null,
+};
+
+function bucket(label: string, count: number): CalibrationBucket {
+  return { label, count, actual_accuracy: null, avg_confidence: null };
+}
+
+const match: MatchFixtureRecord = {
   match_id: "match-1",
-  fixture_id: 1,
+  fixture_id: "1",
   home_team: "Argentina",
   away_team: "Brazil",
   kickoff_utc: "2026-06-24T12:00:00Z",
@@ -13,19 +87,14 @@ const match: MatchFixture = {
   stage: "GROUP_STAGE",
   group: "A",
   status: "scheduled",
+  home_score: null,
+  away_score: null,
 };
 
-function prediction(overrides: Partial<MatchPrediction>): MatchPrediction {
-  return {
-    predicted_score: { home: 2, away: 1 },
-    outcome_probabilities: {
-      home_win: 0.5,
-      draw: 0.25,
-      away_win: 0.25,
-    },
-    confidence: 0.72,
-    ...overrides,
-  };
+function prediction(
+  overrides: Partial<MatchPredictionPayload>
+): MatchPredictionPayload {
+  return { ...FULL_PAYLOAD, ...overrides };
 }
 
 describe("MatchPredictionCard engine label", () => {
@@ -51,13 +120,17 @@ describe("MatchPredictionCard engine label", () => {
     expect(screen.getByText("Elo+赔率")).toBeInTheDocument();
   });
 
-  it("shows Elo+赔率 for Elo-only predictions", () => {
+  it("shows Elo+赔率 for Elo-only predictions that do have odds", () => {
     render(
       <MatchPredictionCard
         match={match}
         prediction={prediction({
           engine_used: "elo_odds",
           prediction_method: "elo_only",
+          // The producer always writes this key, and an odds-carrying
+          // `elo_only` row is what keeps the public label here: without odds
+          // the same method renders as "Elo only" (the next test).
+          has_betting_odds: true,
         })}
       />
     );
@@ -118,13 +191,13 @@ describe("MatchPredictionCard engine label", () => {
           confidence: 0.65,
           raw_confidence: 0.8,
           confidence_calibration: {
+            ...FULL_CALIBRATION,
             raw: 0.8,
             calibrated: 0.65,
-            method: "piecewise_linear_reliability",
             total_samples: 8,
             is_reliable: true,
-            bucket: { label: "80-100%", count: 4 },
-            applied_bucket: { label: "80-100%", count: 4 },
+            bucket: bucket("80-100%", 4),
+            applied_bucket: bucket("80-100%", 4),
             reason: "piecewise_linear_calibration",
           },
         })}
@@ -143,16 +216,14 @@ describe("MatchPredictionCard engine label", () => {
           confidence: 0.72,
           raw_confidence: 0.72,
           confidence_calibration: {
+            ...FULL_CALIBRATION,
             raw: 0.72,
             calibrated: 0.72,
-            method: "piecewise_linear_reliability",
             total_samples: 2,
-            min_total_samples: 6,
-            min_bucket_samples: 3,
             is_reliable: false,
             bucket_is_reliable: false,
             is_reference_only: true,
-            bucket: { label: "60-80%", count: 2 },
+            bucket: bucket("60-80%", 2),
             applied_bucket: null,
             reason: "insufficient_total_samples",
           },
@@ -192,6 +263,7 @@ describe("MatchPredictionCard engine label", () => {
             selection_confidence: 0.88,
             candidate_confidences: {
               elo_odds: {
+                ...FULL_CANDIDATE,
                 raw: 0.3,
                 calibrated: 0.3,
                 is_reliable: false,
@@ -199,8 +271,18 @@ describe("MatchPredictionCard engine label", () => {
                 total_samples: 4,
                 min_total_samples: 6,
               },
-              hybrid: { raw: 0.95, calibrated: 0.5, is_reliable: true, total_samples: 8 },
-              integrated: { raw: 0.84, calibrated: 0.88, is_reliable: true, total_samples: 8 },
+              hybrid: {
+                ...FULL_CANDIDATE,
+                raw: 0.95,
+                calibrated: 0.5,
+                total_samples: 8,
+              },
+              integrated: {
+                ...FULL_CANDIDATE,
+                raw: 0.84,
+                calibrated: 0.88,
+                total_samples: 8,
+              },
             },
           },
         })}
@@ -228,7 +310,11 @@ describe("MatchPredictionCard engine label", () => {
             home_team: "Argentina",
             away_team: "Brazil",
             prediction_method: "integrated",
-            engine_weights: { elo_weight: 0.7, hybrid_weight: 0.3, source: "rule_default" },
+            engine_weights: {
+              ...FULL_WEIGHTS,
+              elo_weight: 0.7,
+              hybrid_weight: 0.3,
+            },
             items: [
               {
                 key: "elo",

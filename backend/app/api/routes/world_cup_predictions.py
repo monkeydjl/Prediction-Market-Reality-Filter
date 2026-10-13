@@ -23,6 +23,7 @@ from app.models.event import (
     FlexibleResponse,
     MatchAnalysisHistoryResponse,
     MatchAnalyzeResponse,
+    MatchListResponse,
     SyncFixturesResponse,
 )
 from app.models.world_cup_prediction import MatchFixture, MatchPrediction, PredictionHistory, AIAnalysisHistory
@@ -197,7 +198,17 @@ async def sync_fixtures(
     return result
 
 
-@router.get("/matches", response_model=FlexibleResponse)
+@router.get(
+    "/matches",
+    response_model=MatchListResponse,
+    # Two reasons, and the flag is load-bearing for both:
+    #  * `MatchListEntry.prediction` is written only when a prediction row
+    #    exists, so without the flag the no-prediction shape would serialise an
+    #    explicit `"prediction": null` the producer never wrote;
+    #  * `ExplanationEngineWeights` has a five-key and a seven-key shape, so
+    #    without the flag the conservative one would emit two `null`s.
+    response_model_exclude_unset=True,
+)
 async def list_matches(
     stage: str | None = Query(None, description="Filter by stage"),
     status: str | None = Query(None, description="Filter by status"),

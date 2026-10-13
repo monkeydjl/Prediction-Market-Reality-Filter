@@ -1935,6 +1935,280 @@ export interface MatchAnalyzeResponse {
   [k: string]: unknown;
 }
 /**
+ * The ``match`` block of one ``/matches`` element (audit 53.76).
+ *
+ * ``list_matches`` writes all eleven keys unconditionally, so none of them
+ * carries a default: a missing key here is a producer regression, not a shape.
+ * The client's hand-written copy was wrong about six of them, which is what
+ * this model fixes:
+ *
+ * * ``fixture_id`` is ``String(32)`` on the model, not an integer;
+ * * ``venue`` / ``status`` mirror nullable columns and are copied raw, so they
+ *   can be ``null`` even though every row currently has a value;
+ * * ``group`` / ``home_score`` / ``away_score`` are nullable too, and because
+ *   the keys are always written they are *required but nullable* rather than
+ *   optional;
+ * * ``kickoff_utc`` is written behind ``if m.kickoff_utc else None``, so the
+ *   producer can emit ``null`` there regardless of the ``nullable=False``
+ *   column.
+ */
+export interface MatchFixtureRecord {
+  match_id: string;
+  fixture_id: string;
+  home_team: string;
+  away_team: string;
+  kickoff_utc: string | null;
+  venue: string | null;
+  stage: string;
+  group: string | null;
+  status: string | null;
+  home_score: number | null;
+  away_score: number | null;
+}
+/**
+ * One element of ``MatchListResponse.matches`` (audit 53.76).
+ *
+ * ``list_matches`` writes ``match`` on every iteration and ``prediction`` only
+ * when a prediction row exists, so ``prediction`` is the one conditional key.
+ * That is why the route must set ``response_model_exclude_unset=True``: without
+ * it, the no-prediction shape would grow an explicit ``"prediction": null``
+ * that the producer never wrote.
+ */
+export interface MatchListEntry {
+  match: MatchFixtureRecord;
+  prediction?: MatchPredictionPayload | null;
+}
+/**
+ * The ``prediction`` block of one ``/matches`` element (audit 53.76).
+ *
+ * Sixteen keys, declared in the order ``_serialize_prediction`` writes them --
+ * that order is the wire order, so it is part of the contract rather than a
+ * style choice.
+ *
+ * One serializer feeds four routes (``/matches``, ``/matches/{id}``,
+ * ``/today`` and, through ``_serialize_history_entry``, ``/prediction-history``),
+ * so this model is the shared shape for all of them: naming it once is what
+ * keeps the four from drifting apart.
+ *
+ * Three fields are passed through from the unvalidated ``factors`` JSON column
+ * (``confidence_calibration``, ``high_confidence_selection``,
+ * ``explanation_contributions``). They are *named* -- json2ts has something to
+ * emit and the client can read fields instead of casting -- but their models
+ * are ``extra="allow"``, because the producer is "the whole blob, whatever is
+ * on disk": a closed model here would silently drop keys the moment the
+ * pipeline writes a new one (audit Z6).
+ *
+ * ``data_quality`` is a two-value word list that comes from
+ * ``normalize_prediction_data_quality``, which returns ``"real"`` or
+ * ``"partial"`` on every path (anything else, including a missing label, is
+ * downgraded to ``"partial"``). ``key_factors`` mirrors the ``JSON`` column
+ * whose producers all declare ``list[str]``. ``last_updated`` is written behind
+ * a truthiness test, so it can be ``null`` despite the ``nullable=False``
+ * column.
+ */
+export interface MatchPredictionPayload {
+  predicted_score: PredictedScorePair;
+  outcome_probabilities: MatchOutcomeProbabilities;
+  confidence: number;
+  prediction_method: string | null;
+  engine_used: string;
+  ai_reasoning: string | null;
+  key_factors: string[] | null;
+  last_updated: string | null;
+  has_betting_odds: boolean;
+  data_quality: "real" | "partial";
+  data_quality_notes: string[];
+  data_quality_score: number | null;
+  raw_confidence: number | null;
+  confidence_calibration: ConfidenceCalibrationInfo | null;
+  high_confidence_selection: HighConfidenceSelection | null;
+  explanation_contributions: ExplanationContributions | null;
+}
+/**
+ * The ``outcome_probabilities`` block of a match prediction (audit 53.76).
+ *
+ * All three members are ``Float`` columns (``home_win_prob`` / ``draw_prob`` /
+ * ``away_win_prob``) copied onto the wire unchanged, so all three are ``float``.
+ */
+export interface MatchOutcomeProbabilities {
+  home_win: number;
+  draw: number;
+  away_win: number;
+}
+/**
+ * The ``confidence_calibration`` block of a match prediction (audit 53.76).
+ *
+ * ``build_confidence_calibration_info`` builds a thirteen-key literal and every
+ * return path emits it in full -- the other two paths only ``update`` values,
+ * which cannot add or reorder keys. So all thirteen are required, declared in
+ * the producer's order; ``engine_filter`` really can be ``None`` (the overall
+ * curve has no engine), and ``raw`` / ``calibrated`` are ``round(float, 3)``.
+ *
+ * Open: passed through from an unvalidated JSON column.
+ */
+export interface ConfidenceCalibrationInfo {
+  raw: number;
+  calibrated: number;
+  method: string;
+  engine_filter: string | null;
+  total_samples: number;
+  min_total_samples: number;
+  min_bucket_samples: number;
+  is_reliable: boolean;
+  bucket_is_reliable: boolean;
+  is_reference_only: boolean;
+  bucket: CalibrationBucket | null;
+  applied_bucket: CalibrationBucket | null;
+  reason: string;
+  [k: string]: unknown;
+}
+/**
+ * One reliability bucket of a confidence-calibration reading (audit 53.76).
+ *
+ * ``_public_bucket`` writes all four keys on every path, but ``label`` and the
+ * two statistics come straight out of ``bucket.get(...)``, so any of them can be
+ * ``None`` even though the values seen on disk are non-null. ``count`` is the
+ * one key the producer coerces (``int(bucket.get("count") or 0)``), so it is
+ * genuinely an ``int``.
+ *
+ * Open (``extra="allow"``): this model sits *inside* the passed-through
+ * ``factors`` blobs, whose shape is a disk fact rather than a validated
+ * contract. Closing it would silently drop a bucket key the pipeline later
+ * starts writing; the tail keeps that from becoming a wire change.
+ */
+export interface CalibrationBucket {
+  label: string | null;
+  count: number;
+  actual_accuracy: number | null;
+  avg_confidence: number | null;
+  [k: string]: unknown;
+}
+/**
+ * The ``high_confidence_selection`` block of a match prediction (audit 53.76).
+ *
+ * Only the ``high_confidence`` engine-selection branch writes it (three keys);
+ * every other branch leaves the key absent, which is why ``_serialize_prediction``
+ * reads it as ``factors.get(...) or None``. ``candidate_confidences`` is keyed
+ * by engine name, so the *values* are the contract, not the keys.
+ *
+ * Open: passed through from an unvalidated JSON column.
+ */
+export interface HighConfidenceSelection {
+  selected_engine: string;
+  selection_confidence: number;
+  candidate_confidences: {
+    [k: string]: CalibrationCandidate;
+  };
+  [k: string]: unknown;
+}
+/**
+ * One per-engine entry of ``HighConfidenceSelection.candidate_confidences``
+ * (audit 53.76).
+ *
+ * Eleven keys, read off the dict comprehension inside the
+ * ``high_confidence_selection`` assignment -- **not** the same set as
+ * ``ConfidenceCalibrationInfo``, which carries ``method`` and
+ * ``engine_filter`` on top. Same-name/different-body, so it is its own model
+ * instead of an inheritance of the other one.
+ *
+ * Every value is ``selection_calibration.get(...)``, so all of them are
+ * optional even though the keys are written unconditionally. Open for the same
+ * reason as ``CalibrationBucket``.
+ */
+export interface CalibrationCandidate {
+  raw: number | null;
+  calibrated: number;
+  is_reliable: boolean | null;
+  is_reference_only: boolean | null;
+  total_samples: number | null;
+  min_total_samples: number | null;
+  min_bucket_samples: number | null;
+  bucket_is_reliable: boolean | null;
+  bucket: CalibrationBucket | null;
+  applied_bucket: CalibrationBucket | null;
+  reason: string | null;
+  [k: string]: unknown;
+}
+/**
+ * The ``explanation_contributions`` block of a match prediction (audit 53.76).
+ *
+ * ``build_explanation_contributions`` returns a six-key literal. The whole call
+ * is wrapped in ``try``/``except`` in the pipeline, so the key can be absent --
+ * which is why ``_serialize_prediction`` emits it as ``… or None``.
+ * ``prediction_method`` is a ``.get()`` off the running result and can be
+ * ``None``. Open for the same reason as ``CalibrationBucket``.
+ */
+export interface ExplanationContributions {
+  engine: string;
+  home_team: string;
+  away_team: string;
+  items: ExplanationContributionItem[];
+  engine_weights: ExplanationEngineWeights | null;
+  prediction_method: string | null;
+  [k: string]: unknown;
+}
+/**
+ * One element of ``ExplanationContributions.items`` (audit 53.76).
+ *
+ * ``_impact_item`` writes all seven keys on every call (the ``available``
+ * keyword has a default *value*, not an omitted key). Open for the same reason
+ * as ``CalibrationBucket``: the breakdown is stored in an unvalidated JSON
+ * column before it reaches the wire.
+ */
+export interface ExplanationContributionItem {
+  key: string;
+  label: string;
+  unit: string;
+  home_impact: number;
+  away_impact: number;
+  description: string;
+  available: boolean;
+  [k: string]: unknown;
+}
+/**
+ * The ``engine_weights`` block of an explanation-contribution breakdown
+ * (audit 53.76).
+ *
+ * Two shapes, both from ``_integrated_weight_payload``:
+ *
+ * * the conservative path writes five keys (``elo_weight``, ``hybrid_weight``,
+ *   ``source``, ``samples``, ``brier``);
+ * * the blended path adds ``learned_elo_weight`` and ``blend``.
+ *
+ * Only the seven-key shape has been seen on disk (58/58 rows), but the
+ * five-key shape is a live code path, so those two keys are optional. The route
+ * serialises with ``response_model_exclude_unset=True``, so the conservative
+ * shape still emits five keys rather than seven with two ``null``s -- the flag
+ * is what keeps both shapes byte-identical here, exactly as it does for
+ * ``MatchAnalyzeResponse``. Open for the same reason as ``CalibrationBucket``.
+ */
+export interface ExplanationEngineWeights {
+  elo_weight: number;
+  hybrid_weight: number;
+  source: string;
+  samples: {
+    [k: string]: number;
+  };
+  brier: {
+    [k: string]: number;
+  };
+  learned_elo_weight?: number | null;
+  blend?: number | null;
+  [k: string]: unknown;
+}
+/**
+ * Response for ``GET /matches`` (audit 53.76).
+ *
+ * One envelope shape (``status`` / ``count`` / ``matches``); the conditionality
+ * lives one level down, in ``MatchListEntry.prediction``.
+ */
+export interface MatchListResponse {
+  status: string;
+  count: number;
+  matches: MatchListEntry[];
+  [k: string]: unknown;
+}
+/**
  * Response for ``GET /events/decisions/open`` (audit 53.59).
  *
  * All six envelope keys are bare: ``get_open_decisions`` writes every one of

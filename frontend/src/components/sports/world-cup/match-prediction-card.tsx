@@ -3,7 +3,11 @@
 import { useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { Trophy, TrendingUp, Clock, AlertCircle, Zap, Brain, GitCompare, History, Sparkles, Loader2, ChevronDown, Lightbulb, Gauge, BarChart3, type LucideIcon } from "lucide-react";
-import type { MatchFixture, MatchPrediction } from "@/lib/world-cup/predictions-api";
+import type {
+  CompareOnlyPrediction,
+  MatchFixture,
+  MatchPredictionPayload,
+} from "@/lib/world-cup/predictions-api";
 import { compareEngines } from "@/lib/world-cup/predictions-api";
 import { translateTeamName } from "@/lib/world-cup/team-names-zh";
 import { formatBeijingMatchDateTime } from "@/lib/world-cup/time";
@@ -12,12 +16,18 @@ import { cn } from "@/lib/utils";
 
 interface MatchPredictionCardProps {
   match: MatchFixture;
-  prediction?: MatchPrediction;
+  // `| null` is the receiver-side widening: `MatchListEntry.prediction` is
+  // optional-and-nullable, because the route writes the key only when a
+  // prediction row exists (audit 53.76).
+  prediction?: MatchPredictionPayload | null;
   onTeamClick?: (teamName: string) => void;
   onPredictionUpdated?: () => void;
 }
 
-function formatKickoff(kickoffUtc: string): string {
+function formatKickoff(kickoffUtc: string | null): string {
+  // `kickoff_utc` is nullable on the wire even though the column is NOT NULL --
+  // the route guards it. `formatBeijingMatchDateTime` now renders the dash for
+  // a null kickoff itself, so this wrapper only owns the label prefix.
   return `北京时间 ${formatBeijingMatchDateTime(kickoffUtc)}`;
 }
 
@@ -51,13 +61,13 @@ function qualityScoreLabel(score: number): string {
   return "数据有限";
 }
 
-function dataQualityLabel(quality?: MatchPrediction["data_quality"]): string {
+function dataQualityLabel(quality?: MatchPredictionPayload["data_quality"]): string {
   if (quality === "real") return "Real";
   if (quality === "partial") return "Partial";
   return "--";
 }
 
-function dataQualityTone(quality?: MatchPrediction["data_quality"]): string {
+function dataQualityTone(quality?: MatchPredictionPayload["data_quality"]): string {
   if (quality === "real") return "text-pos";
   if (quality === "partial") return "text-warn";
   return "text-muted-foreground";
@@ -106,7 +116,7 @@ function contributionTone(value: number): string {
   return "text-muted-foreground";
 }
 
-function getEngineLabel(prediction?: MatchPrediction): { icon: LucideIcon; label: string; color: string } | null {
+function getEngineLabel(prediction?: MatchPredictionPayload): { icon: LucideIcon; label: string; color: string } | null {
   if (!prediction) return null;
 
   const method = prediction.prediction_method || "";
@@ -171,10 +181,10 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
   const [isLoadingComparison, setIsLoadingComparison] = useState(false);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
   const [comparisonData, setComparisonData] = useState<{
-    elo_odds?: MatchPrediction;
-    hybrid?: MatchPrediction;
-    integrated?: MatchPrediction;
-    gbm?: MatchPrediction;
+    elo_odds?: CompareOnlyPrediction;
+    hybrid?: CompareOnlyPrediction;
+    integrated?: CompareOnlyPrediction;
+    gbm?: CompareOnlyPrediction;
   }>({});
 
   const hasComparisonData =
@@ -489,20 +499,6 @@ export function MatchPredictionCard({ match, prediction, onTeamClick, onPredicti
                 </div>
               );
             })()}
-
-            {/* Elo Ratings Display */}
-            {prediction.elo_ratings && (
-              <div className="rounded-md border bg-secondary/30 px-3 py-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground">Elo评级</span>
-                  <div className="flex items-center gap-3 font-mono text-xs font-medium tabular-nums">
-                    <span>{Math.round(prediction.elo_ratings.home)}</span>
-                    <span className="text-muted-foreground">vs</span>
-                    <span>{Math.round(prediction.elo_ratings.away)}</span>
-                  </div>
-                </div>
-              </div>
-            )}
 
             {oddsUnavailable && (
               <div className="flex items-center justify-between rounded-md border border-warn/30 bg-warn/10 px-3 py-2">

@@ -47,7 +47,22 @@ _EVENTS_ROUTE_PATH = _REPO_ROOT / "backend" / "app" / "api" / "routes" / "events
 # model does not declare". ``FlexibleResponse`` ships that on purpose too and its
 # subclasses inherit it, so the family is excluded by subclass rather than by
 # name -- listing sixteen of them here would drift.
-DELIBERATELY_OPEN = frozenset({"EventRecord", "EventSource"})
+DELIBERATELY_OPEN = frozenset({
+    "EventRecord",
+    "EventSource",
+    # Audit 53.76: the three blocks `_serialize_prediction` passes through from
+    # the unvalidated `factors` JSON column, plus the four models nested inside
+    # them. They are *named* (so json2ts emits something to read) but stay open,
+    # because the producer is "the whole blob, whatever is on disk" -- a closed
+    # model here would silently drop a key the pipeline starts writing.
+    "CalibrationBucket",
+    "CalibrationCandidate",
+    "ConfidenceCalibrationInfo",
+    "ExplanationContributionItem",
+    "ExplanationContributions",
+    "ExplanationEngineWeights",
+    "HighConfidenceSelection",
+})
 
 # ``api.ts`` is hand-maintained -- no generator writes it -- so nothing stops a
 # local copy of a shape that ``generated-types.ts`` already emits. Since audit
@@ -4898,6 +4913,385 @@ class WorldCupAnalysisFamilyContractTests(unittest.TestCase):
             "loosening the prop is the fix, not `?? null` at every call site "
             "(audit 53.75)",
         )
+
+
+class WorldCupMatchesContractTests(unittest.TestCase):
+    """``GET /matches`` -- batch B, slice 2 (audit 53.76).
+
+    The route published the bare ``FlexibleResponse`` and the client read it
+    through one hand-written ``MatchPrediction`` that served **two** endpoints
+    with different bodies. Two decisions are load-bearing here:
+
+    * ``list_matches`` writes ``match`` on every element and ``prediction`` only
+      when a prediction row exists, so ``prediction`` is the one conditional key
+      and the route **must** set ``response_model_exclude_unset`` -- without it
+      the no-prediction shape grows an explicit ``"prediction": null`` nobody
+      wrote.
+    * ``_serialize_prediction`` emits sixteen keys and **none** of them is
+      ``elo_ratings`` -- only ``/predict`` and ``/optimize`` read that one off
+      ``factors``. The client's compare dialog is the consumer that does read
+      it, which is why the retired union split into the generated
+      ``MatchPredictionPayload`` and a local ``CompareOnlyPrediction``.
+
+    The retired ``MatchFixture`` copy was wrong about six of the row's eleven
+    fields: ``fixture_id`` is a ``String(32)`` column rather than an integer,
+    and ``kickoff_utc`` / ``venue`` / ``status`` / ``group`` / ``home_score`` /
+    ``away_score`` can all be ``None``.
+    """
+
+    def test_the_matches_envelope_holds_both_element_shapes_byte_for_byte(self):
+        import json
+
+        from app.models.event import (
+            FlexibleResponse,
+            MatchFixtureRecord,
+            MatchListEntry,
+            MatchListResponse,
+            MatchPredictionPayload,
+        )
+
+        fields = MatchListResponse.model_fields
+        self.assertEqual(
+            list(fields),
+            ["status", "count", "matches"],
+            "MatchListResponse is no longer the key order list_matches builds "
+            "(audit 53.76)",
+        )
+        for name, field in fields.items():
+            with self.subTest(field=name):
+                self.assertTrue(
+                    field.is_required(),
+                    f"MatchListResponse.{name} gained a default; list_matches "
+                    "writes all three keys on its single return path, so a "
+                    "default could only hide a regression (audit 53.76)",
+                )
+        self.assertTrue(issubclass(MatchListResponse, FlexibleResponse))
+        self.assertEqual(
+            fields["matches"].annotation,
+            list[MatchListEntry],
+            "MatchListResponse.matches no longer names its element "
+            "(audit 53.76)",
+        )
+
+        element = MatchListEntry.model_fields
+        self.assertEqual(
+            list(element),
+            ["match", "prediction"],
+            "MatchListEntry is no longer the key order the list_matches loop "
+            "builds (audit 53.76)",
+        )
+        self.assertTrue(
+            element["match"].is_required(),
+            "MatchListEntry.match lost its requiredness; the loop writes it "
+            "on every iteration (audit 53.76)",
+        )
+        self.assertFalse(
+            element["prediction"].is_required(),
+            "MatchListEntry.prediction became required; the loop writes it "
+            "only when a prediction row exists, so the flag must be able to "
+            "drop the key (audit 53.76)",
+        )
+        self.assertEqual(
+            element["prediction"].annotation,
+            MatchPredictionPayload | None,
+            "MatchListEntry.prediction no longer names the payload "
+            "(audit 53.76)",
+        )
+
+        payload = {
+            "predicted_score": {"home": 1.5, "away": 0.5},
+            "outcome_probabilities": {"home_win": 0.6, "draw": 0.25, "away_win": 0.15},
+            "confidence": 0.72,
+            "prediction_method": None,
+            "engine_used": "hybrid",
+            "ai_reasoning": None,
+            "key_factors": None,
+            "last_updated": None,
+            "has_betting_odds": False,
+            "data_quality": "partial",
+            "data_quality_notes": [],
+            "data_quality_score": None,
+            "raw_confidence": None,
+            "confidence_calibration": None,
+            "high_confidence_selection": None,
+            "explanation_contributions": None,
+        }
+        fixture_row = {
+            "match_id": "wc-1",
+            "fixture_id": "9001",
+            "home_team": "Argentina",
+            "away_team": "Brazil",
+            "kickoff_utc": "2026-06-24T12:00:00+00:00",
+            "venue": "MetLife Stadium",
+            "stage": "GROUP_STAGE",
+            "group": "A",
+            "status": "scheduled",
+            "home_score": None,
+            "away_score": None,
+        }
+        shapes = [
+            # 1. a prediction row exists: the element carries both keys
+            {"match": fixture_row, "prediction": payload},
+            # 2. no prediction row: the loop never writes the key at all
+            {"match": fixture_row},
+        ]
+        for raw in shapes:
+            with self.subTest(shape=sorted(raw)):
+                model = MatchListEntry.model_validate(raw)
+                self.assertEqual(
+                    json.dumps(
+                        model.model_dump(mode="json", exclude_unset=True)
+                    ),
+                    json.dumps(raw),
+                    "with the flag each element shape must match the loop's "
+                    "dict byte for byte, key order included (audit 53.76)",
+                )
+
+        # Only the second shape has an unset key, which is what makes the flag
+        # load-bearing. (The first sets every field, so dumping it without the
+        # flag is identical -- asserting otherwise would be a criterion that
+        # never fires.)
+        bare = MatchListEntry.model_validate(shapes[1])
+        self.assertNotEqual(
+            json.dumps(bare.model_dump(mode="json")),
+            json.dumps(shapes[1]),
+            "without the flag the no-prediction shape must materialise an "
+            'explicit `"prediction": null` key the loop never wrote -- if '
+            "this stops being true the flag is no longer load-bearing "
+            "(audit 53.76)",
+        )
+
+    def test_the_fixture_record_is_faithful_to_the_row(self):
+        from app.models.event import MatchFixtureRecord
+
+        element = MatchFixtureRecord.model_fields
+        self.assertEqual(
+            list(element),
+            [
+                "match_id",
+                "fixture_id",
+                "home_team",
+                "away_team",
+                "kickoff_utc",
+                "venue",
+                "stage",
+                "group",
+                "status",
+                "home_score",
+                "away_score",
+            ],
+            "MatchFixtureRecord is no longer the key order list_matches's row "
+            "comprehension builds (audit 53.76)",
+        )
+        for name, field in element.items():
+            with self.subTest(field=name):
+                self.assertTrue(
+                    field.is_required(),
+                    f"MatchFixtureRecord.{name} gained a default; the row "
+                    "comprehension writes all eleven keys, so a default could "
+                    "only hide a regression (audit 53.76)",
+                )
+        for name, annotation in (
+            ("match_id", str),
+            ("fixture_id", str),
+            ("home_team", str),
+            ("away_team", str),
+            ("kickoff_utc", str | None),
+            ("venue", str | None),
+            ("stage", str),
+            ("group", str | None),
+            ("status", str | None),
+            ("home_score", int | None),
+            ("away_score", int | None),
+        ):
+            with self.subTest(annotation=name):
+                self.assertEqual(
+                    element[name].annotation,
+                    annotation,
+                    f"MatchFixtureRecord.{name} annotation drifted "
+                    "(audit 53.76)",
+                )
+        self.assertEqual(
+            element["fixture_id"].annotation,
+            str,
+            "fixture_id flipped back to an integer: the retired client copy "
+            "made exactly that claim and the column is String(32) "
+            "(audit 53.76)",
+        )
+
+        # The row comprehension really does write all eleven keys by hand; if
+        # that stops being true the "all required" decision above is wrong.
+        source = (
+            _BACKEND_DIR / "app" / "api" / "routes" / "world_cup_predictions.py"
+        ).read_bytes().decode("utf-8")
+        start = source.index("async def list_matches(")
+        body = source[start:source.index("@router.", start)]
+        for key in element:
+            with self.subTest(producer_key=key):
+                self.assertIn(
+                    f'"{key}":',
+                    body,
+                    f"list_matches no longer writes {key!r} in its row "
+                    "comprehension (audit 53.76)",
+                )
+
+    def test_the_matches_route_binds_its_envelope_and_flag(self):
+        """Route identity, the flag, and the producer fact the client split
+        rests on: ``_serialize_prediction`` never writes ``elo_ratings``."""
+        from fastapi.routing import APIRoute
+
+        from app.api.routes import world_cup_predictions as wc
+        from app.models.event import FlexibleResponse, MatchListResponse
+
+        found = [
+            route
+            for route in wc.router.routes
+            if isinstance(route, APIRoute)
+            and route.path == "/world-cup/predictions/matches"
+            and "GET" in route.methods
+        ]
+        self.assertEqual(
+            len(found), 1, "expected exactly one GET route on /matches"
+        )
+        matches = found[0]
+        self.assertIs(
+            matches.response_model,
+            MatchListResponse,
+            "GET /matches no longer binds MatchListResponse; it published the "
+            "bare FlexibleResponse before audit 53.76",
+        )
+        self.assertIsNot(matches.response_model, FlexibleResponse)
+        self.assertIs(
+            matches.response_model_exclude_unset,
+            True,
+            "GET /matches lost response_model_exclude_unset; its element "
+            "writes `prediction` only when a row exists, so without the flag "
+            "the no-prediction shape serialises a null nobody wrote "
+            "(audit 53.76)",
+        )
+
+        source = (
+            _BACKEND_DIR / "app" / "api" / "routes" / "world_cup_predictions.py"
+        ).read_bytes().decode("utf-8")
+        start = source.index("def _serialize_prediction(")
+        body = source[start:source.index("def _history_matches_current_prediction", start)]
+        self.assertNotIn(
+            "elo_ratings",
+            body,
+            "_serialize_prediction grew an elo_ratings key; the client split "
+            "that moved it into CompareOnlyPrediction assumed /matches never "
+            "writes it, so this change needs that split revisited "
+            "(audit 53.76)",
+        )
+
+    def test_the_client_reads_the_matches_contract(self):
+        """The retired copies stay retired, the compare projection is named,
+        and the dead ``elo_ratings`` branch is gone from the card that could
+        never receive it."""
+        client = (
+            _REPO_ROOT / "frontend" / "src" / "lib" / "world-cup"
+            / "predictions-api.ts"
+        ).read_bytes().decode("utf-8")
+        swr = (
+            _REPO_ROOT / "frontend" / "src" / "lib" / "world-cup"
+            / "swr-hooks.ts"
+        ).read_bytes().decode("utf-8")
+        card = (
+            _REPO_ROOT / "frontend" / "src" / "components" / "sports"
+            / "world-cup" / "match-prediction-card.tsx"
+        ).read_bytes().decode("utf-8")
+        compare = (
+            _REPO_ROOT / "frontend" / "src" / "components" / "sports"
+            / "world-cup" / "engine-comparison-card.tsx"
+        ).read_bytes().decode("utf-8")
+
+        for retired in (
+            "interface MatchFixture {",
+            "interface MatchWithPrediction {",
+            "interface MatchPrediction {",
+            "interface OutcomeProbabilities {",
+            "interface ConfidenceCalibrationBucket {",
+            "interface ConfidenceCalibrationInfo {",
+            "interface ExplanationContributionItem {",
+            "interface ExplanationContributions {",
+        ):
+            with self.subTest(retired=retired):
+                self.assertNotIn(
+                    retired,
+                    client,
+                    f"predictions-api.ts re-declared {retired}; the generated "
+                    "models are the contract and the retired copy was wrong "
+                    "about six of the row's eleven fields (audit 53.76)",
+                )
+        for alias in (
+            "export type MatchFixture = MatchFixtureRecord;",
+            "export type MatchWithPrediction = MatchListEntry;",
+        ):
+            with self.subTest(alias=alias):
+                self.assertIn(
+                    alias,
+                    client,
+                    f"the old name must stay exported as an alias of the "
+                    "generated type so existing consumers keep compiling "
+                    "(audit 53.76)",
+                )
+        self.assertIn(
+            "interface CompareOnlyPrediction {",
+            client,
+            "the compare projection lost its own type; it is deliberately not "
+            "MatchPredictionPayload because /matches never writes elo_ratings "
+            "(audit 53.76)",
+        )
+
+        self.assertIn(
+            "as MatchListResponse",
+            swr,
+            "the fetcher no longer claims the generated envelope; the "
+            "hand-written `{ matches?: ... }` guess is what let a missing key "
+            "silently render as an empty board (audit 53.76)",
+        )
+        self.assertNotIn(
+            "matches?:",
+            swr,
+            "swr-hooks.ts still guesses the envelope shape inline; the needle "
+            "is deliberately the bare optional rather than the old cast, so a "
+            "reintroduction in any type position fires (audit 53.76)",
+        )
+
+        self.assertNotIn(
+            "elo_ratings",
+            card,
+            "the /matches card still reads prediction.elo_ratings; "
+            "_serialize_prediction never writes that key, so the branch was "
+            "unreachable -- the compare dialog is the reader (audit 53.76)",
+        )
+        self.assertIn(
+            "{prediction.elo_ratings ? (",
+            compare,
+            "the compare card no longer branches on elo_ratings; the branch is "
+            "live there because /predict's compare_only result carries it. The "
+            "needle is the *conditional*, not the bare attribute: the card "
+            "also reads `elo_ratings.home` / `.away` inside the branch, so an "
+            "attribute-level assertion stays green while the read point is "
+            "gone (audit 53.76)",
+        )
+        # All four engine columns must be typed with the compare projection --
+        # one prop at a time, because a union sneaking back in on a single
+        # column is exactly the two-endpoint defect this split removes.
+        for prop in (
+            "eloOddsPrediction",
+            "hybridPrediction",
+            "integratedPrediction",
+            "gbmPrediction",
+        ):
+            with self.subTest(prop=prop):
+                self.assertIn(
+                    f"{prop}?: CompareOnlyPrediction;",
+                    compare,
+                    f"{prop} fell back to a payload type; the compare columns "
+                    "are the /predict projection, not the /matches payload -- "
+                    "only the former can carry elo_ratings (audit 53.76)",
+                )
 
 
 class ApiTsTypeSourceTests(unittest.TestCase):

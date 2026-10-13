@@ -10,10 +10,18 @@ import {
 } from "@/lib/api";
 import type {
   AnalysisHistoryEntry,
+  ConfidenceCalibrationInfo,
   EngineComparisonResponse,
   EngineComparisonStat,
+  ExplanationContributions,
+  HighConfidenceSelection,
   MatchAnalysisHistoryResponse,
   MatchAnalyzeResponse,
+  MatchFixtureRecord,
+  MatchListEntry,
+  MatchListResponse,
+  MatchOutcomeProbabilities,
+  MatchPredictionPayload,
   ScorePair as PredictedScore,
   SyncFixturesResponse,
 } from "@/lib/generated-types";
@@ -33,140 +41,66 @@ import type {
 // generated type.
 export type { AnalysisHistoryEntry, EngineComparisonStat, PredictedScore };
 
-export interface OutcomeProbabilities {
-  home_win: number;
-  draw: number;
-  away_win: number;
-}
+// Audit 53.76 retired the `/matches` copies. `list_matches` now publishes
+// `MatchListResponse`, so the whole tree below is the generated one:
+//
+//   * `MatchFixture` -> `MatchFixtureRecord`. The hand-written copy was wrong
+//     about six of its eleven fields -- `fixture_id` is a `String(32)` column
+//     rather than an integer, and `kickoff_utc` / `venue` / `status` / `group` /
+//     `home_score` / `away_score` can all be `null`;
+//   * `MatchWithPrediction` -> `MatchListEntry`;
+//   * the `prediction` block -> `MatchPredictionPayload` (sixteen keys);
+//   * `OutcomeProbabilities` -> `MatchOutcomeProbabilities`.
+//
+// The old names stay exported so existing consumers keep compiling.
+export type MatchFixture = MatchFixtureRecord;
+export type MatchWithPrediction = MatchListEntry;
+export type OutcomeProbabilities = MatchOutcomeProbabilities;
+export type { MatchListResponse, MatchPredictionPayload };
 
-export interface MatchFixture {
-  match_id: string;
-  fixture_id: number;
-  home_team: string;
-  away_team: string;
-  kickoff_utc: string;
-  venue: string;
-  stage: string;
-  group?: string;
-  status: string;
-  home_score?: number;
-  away_score?: number;
-}
-
-export interface ConfidenceCalibrationBucket {
-  label?: string;
-  count?: number;
-  actual_accuracy?: number | null;
-  avg_confidence?: number | null;
-}
-
-export interface ConfidenceCalibrationInfo {
-  raw: number;
-  calibrated: number;
-  method: string;
-  engine_filter?: string;
-  total_samples?: number;
-  min_total_samples?: number;
-  min_bucket_samples?: number;
-  is_reliable?: boolean;
-  bucket_is_reliable?: boolean;
-  is_reference_only?: boolean;
-  reason?: string;
-  bucket?: ConfidenceCalibrationBucket | null;
-  applied_bucket?: ConfidenceCalibrationBucket | null;
-}
-
-export interface ExplanationContributionItem {
-  key: "elo" | "odds" | "schedule" | "injury" | "motivation" | "market_signal" | string;
-  label: string;
-  unit: "pp" | "xg" | "%xg" | string;
-  home_impact: number;
-  away_impact: number;
-  description: string;
-  available?: boolean;
-}
-
-export interface ExplanationContributions {
-  engine?: string;
-  home_team?: string;
-  away_team?: string;
-  prediction_method?: string;
-  engine_weights?: {
-    elo_weight?: number;
-    hybrid_weight?: number;
-    source?: string;
-  } | null;
-  items: ExplanationContributionItem[];
-}
-
-export interface MatchPrediction {
+/**
+ * What `compareEngines` builds out of `/predict?compare_only=true` results.
+ *
+ * Deliberately **not** `MatchPredictionPayload`, even though ten of its keys
+ * overlap. `/matches` never writes `elo_ratings` -- `_serialize_prediction`
+ * emits sixteen keys and none of them is that one, which is why the client's
+ * `prediction.elo_ratings` branch was unreachable there -- while the compare
+ * dialog is the one consumer that reads it. One frontend type serving two
+ * endpoints with different bodies is the defect this split removes; `/predict`
+ * earns a named model of its own when that route is done, since that route has
+ * seven distinct shapes rather than two.
+ *
+ * The three required keys are exactly the ones `toMatchPrediction` refuses to
+ * build without; every other key is copied through only when the engine
+ * reported it.
+ */
+export interface CompareOnlyPrediction {
   predicted_score: PredictedScore;
-  outcome_probabilities: OutcomeProbabilities;
+  outcome_probabilities: MatchOutcomeProbabilities;
   confidence: number;
   raw_confidence?: number;
   confidence_calibration?: ConfidenceCalibrationInfo | null;
+  high_confidence_selection?: HighConfidenceSelection | null;
   explanation_contributions?: ExplanationContributions | null;
-  high_confidence_selection?: {
-    selected_engine?: "elo_odds" | "hybrid" | "integrated" | string;
-    selection_confidence?: number;
-    candidate_confidences?: Record<
-      string,
-      {
-        raw?: number;
-        calibrated?: number;
-        is_reliable?: boolean;
-        is_reference_only?: boolean;
-        total_samples?: number;
-        min_total_samples?: number;
-        min_bucket_samples?: number;
-        bucket_is_reliable?: boolean;
-        reason?: string;
-        bucket?: ConfidenceCalibrationBucket | null;
-        applied_bucket?: ConfidenceCalibrationBucket | null;
-      }
-    >;
-  } | null;
-  prediction_method?: string;
-  ai_reasoning?: string;
-  key_factors?: string[];
-  last_updated?: string;
-  elo_ratings?: {
-    home: number;
-    away: number;
-  };
+  prediction_method?: string | null;
+  elo_ratings?: { home: number; away: number };
   has_betting_odds?: boolean;
-  engine_used?: "elo_odds" | "hybrid" | "integrated" | "gbm" | "high_confidence" | "auto";
-  data_quality?: "real" | "partial";
-  data_quality_notes?: string[];
-  data_quality_score?: number;
-  betting_analysis?: {
-    "1x2": { home_win: number; draw: number; away_win: number; implied_odds: Record<string, number> };
-    double_chance: Record<string, number>;
-    over_under: Record<string, number>;
-    btts: { yes: number; no: number };
-    top_3_correct_scores: { score: string; probability: number }[];
-  };
-  tactical_analysis?: string;
-}
-
-export interface MatchWithPrediction {
-  match: MatchFixture;
-  prediction?: MatchPrediction;
+  engine_used?: string;
 }
 
 export interface PredictionHistoryEntry {
   timestamp: string;
   predicted_score: PredictedScore;
-  outcome_probabilities: OutcomeProbabilities;
+  outcome_probabilities: MatchOutcomeProbabilities;
   confidence: number;
   raw_confidence?: number;
-  confidence_calibration?: MatchPrediction["confidence_calibration"];
-  explanation_contributions?: MatchPrediction["explanation_contributions"];
-  high_confidence_selection?: MatchPrediction["high_confidence_selection"];
+  confidence_calibration?: ConfidenceCalibrationInfo | null;
+  explanation_contributions?: ExplanationContributions | null;
+  high_confidence_selection?: HighConfidenceSelection | null;
   trigger: string;
   prediction_method?: string;
-  engine_used?: MatchPrediction["engine_used"];
-  data_quality?: MatchPrediction["data_quality"];
+  engine_used?: string;
+  data_quality?: MatchPredictionPayload["data_quality"];
   data_quality_notes?: string[];
 }
 
@@ -174,16 +108,16 @@ export interface PredictionTriggerResult {
   status?: string;
   match_id?: string;
   predicted_score?: PredictedScore;
-  outcome_probabilities?: OutcomeProbabilities;
+  outcome_probabilities?: MatchOutcomeProbabilities;
   confidence?: number;
   raw_confidence?: number;
-  confidence_calibration?: MatchPrediction["confidence_calibration"];
-  explanation_contributions?: MatchPrediction["explanation_contributions"];
-  high_confidence_selection?: MatchPrediction["high_confidence_selection"];
+  confidence_calibration?: ConfidenceCalibrationInfo | null;
+  explanation_contributions?: ExplanationContributions | null;
+  high_confidence_selection?: HighConfidenceSelection | null;
   prediction_method?: string;
-  elo_ratings?: MatchPrediction["elo_ratings"];
+  elo_ratings?: { home: number; away: number };
   has_betting_odds?: boolean;
-  engine_used?: MatchPrediction["engine_used"];
+  engine_used?: string;
   error?: string;
   reason?: string;
 }
@@ -273,10 +207,10 @@ export async function triggerPrediction(
  * Compare predictions from different engines
  */
 export async function compareEngines(matchId: string): Promise<{
-  elo_odds?: MatchPrediction;
-  hybrid?: MatchPrediction;
-  integrated?: MatchPrediction;
-  gbm?: MatchPrediction;
+  elo_odds?: CompareOnlyPrediction;
+  hybrid?: CompareOnlyPrediction;
+  integrated?: CompareOnlyPrediction;
+  gbm?: CompareOnlyPrediction;
 }> {
   try {
     // Trigger engines in parallel in read-only mode so the comparison
@@ -302,8 +236,8 @@ export async function compareEngines(matchId: string): Promise<{
     const integratedResult = extractResult(integratedSettled);
     const gbmResult = extractResult(gbmSettled);
 
-    // Convert flat API response to MatchPrediction format
-    const toMatchPrediction = (result?: PredictionTriggerResult): MatchPrediction | undefined => {
+    // Convert flat API response to CompareOnlyPrediction format
+    const toMatchPrediction = (result?: PredictionTriggerResult): CompareOnlyPrediction | undefined => {
       if (
         !result ||
         result.status === "error" ||

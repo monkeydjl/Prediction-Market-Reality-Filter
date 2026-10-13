@@ -2,16 +2,19 @@
 
 import { useState } from "react";
 import { Zap, Brain, AlertCircle, Check, GitCompare, BarChart3, type LucideIcon } from "lucide-react";
-import type { MatchFixture, MatchPrediction } from "@/lib/world-cup/predictions-api";
+import type {
+  CompareOnlyPrediction,
+  MatchFixture,
+} from "@/lib/world-cup/predictions-api";
 import { triggerPrediction } from "@/lib/world-cup/predictions-api";
 import { cn } from "@/lib/utils";
 
 interface EngineComparisonCardProps {
   match: MatchFixture;
-  eloOddsPrediction?: MatchPrediction;
-  hybridPrediction?: MatchPrediction;
-  integratedPrediction?: MatchPrediction;
-  gbmPrediction?: MatchPrediction;
+  eloOddsPrediction?: CompareOnlyPrediction;
+  hybridPrediction?: CompareOnlyPrediction;
+  integratedPrediction?: CompareOnlyPrediction;
+  gbmPrediction?: CompareOnlyPrediction;
   isLoading?: boolean;
   onApplyPrediction?: () => void;
 }
@@ -41,7 +44,7 @@ function PredictionColumn({
   label: string;
   icon: LucideIcon;
   color: string;
-  prediction?: MatchPrediction;
+  prediction?: CompareOnlyPrediction;
   engine: "elo_odds" | "hybrid" | "integrated" | "gbm" | "high_confidence" | "auto";
   matchId: string;
   isFrozen: boolean;
@@ -275,7 +278,7 @@ export function EngineComparisonCard({
   // Calculate agreement level
   const agreement = (() => {
     const predictions = [eloOddsPrediction, hybridPrediction, integratedPrediction, gbmPrediction].filter(
-      (prediction): prediction is MatchPrediction => prediction != null
+      (prediction): prediction is CompareOnlyPrediction => prediction != null
     );
     if (predictions.length < 2) return null;
 

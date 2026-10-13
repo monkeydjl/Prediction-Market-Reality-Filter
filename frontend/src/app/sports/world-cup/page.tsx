@@ -140,7 +140,10 @@ const AnalyticsDashboard = dynamic(
   { loading: () => <BlockLoading label="加载系统监控..." /> }
 );
 
-function isUtcToday(isoDate: string): boolean {
+function isUtcToday(isoDate: string | null): boolean {
+  // `kickoff_utc` is nullable on the wire (the route guards it), and an unknown
+  // kickoff is not "today" -- it must not silently match via an Invalid Date.
+  if (!isoDate) return false;
   const date = parseWorldCupUtcDate(isoDate);
   const now = new Date();
   return (

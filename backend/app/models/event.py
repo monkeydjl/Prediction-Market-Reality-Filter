@@ -1865,6 +1865,292 @@ class MatchAnalyzeResponse(FlexibleResponse):
     created_at: str | None = None
 
 
+class CalibrationBucket(BaseModel):
+    """One reliability bucket of a confidence-calibration reading (audit 53.76).
+
+    ``_public_bucket`` writes all four keys on every path, but ``label`` and the
+    two statistics come straight out of ``bucket.get(...)``, so any of them can be
+    ``None`` even though the values seen on disk are non-null. ``count`` is the
+    one key the producer coerces (``int(bucket.get("count") or 0)``), so it is
+    genuinely an ``int``.
+
+    Open (``extra="allow"``): this model sits *inside* the passed-through
+    ``factors`` blobs, whose shape is a disk fact rather than a validated
+    contract. Closing it would silently drop a bucket key the pipeline later
+    starts writing; the tail keeps that from becoming a wire change.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    label: str | None
+    count: int
+    actual_accuracy: float | None
+    avg_confidence: float | None
+
+
+class CalibrationCandidate(BaseModel):
+    """One per-engine entry of ``HighConfidenceSelection.candidate_confidences``
+    (audit 53.76).
+
+    Eleven keys, read off the dict comprehension inside the
+    ``high_confidence_selection`` assignment -- **not** the same set as
+    ``ConfidenceCalibrationInfo``, which carries ``method`` and
+    ``engine_filter`` on top. Same-name/different-body, so it is its own model
+    instead of an inheritance of the other one.
+
+    Every value is ``selection_calibration.get(...)``, so all of them are
+    optional even though the keys are written unconditionally. Open for the same
+    reason as ``CalibrationBucket``.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    raw: float | None
+    calibrated: float
+    is_reliable: bool | None
+    is_reference_only: bool | None
+    total_samples: int | None
+    min_total_samples: int | None
+    min_bucket_samples: int | None
+    bucket_is_reliable: bool | None
+    bucket: CalibrationBucket | None
+    applied_bucket: CalibrationBucket | None
+    reason: str | None
+
+
+class HighConfidenceSelection(BaseModel):
+    """The ``high_confidence_selection`` block of a match prediction (audit 53.76).
+
+    Only the ``high_confidence`` engine-selection branch writes it (three keys);
+    every other branch leaves the key absent, which is why ``_serialize_prediction``
+    reads it as ``factors.get(...) or None``. ``candidate_confidences`` is keyed
+    by engine name, so the *values* are the contract, not the keys.
+
+    Open: passed through from an unvalidated JSON column.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    selected_engine: str
+    selection_confidence: float
+    candidate_confidences: dict[str, CalibrationCandidate]
+
+
+class ConfidenceCalibrationInfo(BaseModel):
+    """The ``confidence_calibration`` block of a match prediction (audit 53.76).
+
+    ``build_confidence_calibration_info`` builds a thirteen-key literal and every
+    return path emits it in full -- the other two paths only ``update`` values,
+    which cannot add or reorder keys. So all thirteen are required, declared in
+    the producer's order; ``engine_filter`` really can be ``None`` (the overall
+    curve has no engine), and ``raw`` / ``calibrated`` are ``round(float, 3)``.
+
+    Open: passed through from an unvalidated JSON column.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    raw: float
+    calibrated: float
+    method: str
+    engine_filter: str | None
+    total_samples: int
+    min_total_samples: int
+    min_bucket_samples: int
+    is_reliable: bool
+    bucket_is_reliable: bool
+    is_reference_only: bool
+    bucket: CalibrationBucket | None
+    applied_bucket: CalibrationBucket | None
+    reason: str
+
+
+class ExplanationEngineWeights(BaseModel):
+    """The ``engine_weights`` block of an explanation-contribution breakdown
+    (audit 53.76).
+
+    Two shapes, both from ``_integrated_weight_payload``:
+
+    * the conservative path writes five keys (``elo_weight``, ``hybrid_weight``,
+      ``source``, ``samples``, ``brier``);
+    * the blended path adds ``learned_elo_weight`` and ``blend``.
+
+    Only the seven-key shape has been seen on disk (58/58 rows), but the
+    five-key shape is a live code path, so those two keys are optional. The route
+    serialises with ``response_model_exclude_unset=True``, so the conservative
+    shape still emits five keys rather than seven with two ``null``s -- the flag
+    is what keeps both shapes byte-identical here, exactly as it does for
+    ``MatchAnalyzeResponse``. Open for the same reason as ``CalibrationBucket``.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    elo_weight: float
+    hybrid_weight: float
+    source: str
+    samples: dict[str, int]
+    brier: dict[str, float]
+    learned_elo_weight: float | None = None
+    blend: float | None = None
+
+
+class ExplanationContributionItem(BaseModel):
+    """One element of ``ExplanationContributions.items`` (audit 53.76).
+
+    ``_impact_item`` writes all seven keys on every call (the ``available``
+    keyword has a default *value*, not an omitted key). Open for the same reason
+    as ``CalibrationBucket``: the breakdown is stored in an unvalidated JSON
+    column before it reaches the wire.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    key: str
+    label: str
+    unit: str
+    home_impact: float
+    away_impact: float
+    description: str
+    available: bool
+
+
+class ExplanationContributions(BaseModel):
+    """The ``explanation_contributions`` block of a match prediction (audit 53.76).
+
+    ``build_explanation_contributions`` returns a six-key literal. The whole call
+    is wrapped in ``try``/``except`` in the pipeline, so the key can be absent --
+    which is why ``_serialize_prediction`` emits it as ``… or None``.
+    ``prediction_method`` is a ``.get()`` off the running result and can be
+    ``None``. Open for the same reason as ``CalibrationBucket``.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    engine: str
+    home_team: str
+    away_team: str
+    items: list[ExplanationContributionItem]
+    engine_weights: ExplanationEngineWeights | None
+    prediction_method: str | None
+
+
+class MatchOutcomeProbabilities(BaseModel):
+    """The ``outcome_probabilities`` block of a match prediction (audit 53.76).
+
+    All three members are ``Float`` columns (``home_win_prob`` / ``draw_prob`` /
+    ``away_win_prob``) copied onto the wire unchanged, so all three are ``float``.
+    """
+
+    home_win: float
+    draw: float
+    away_win: float
+
+
+class MatchFixtureRecord(BaseModel):
+    """The ``match`` block of one ``/matches`` element (audit 53.76).
+
+    ``list_matches`` writes all eleven keys unconditionally, so none of them
+    carries a default: a missing key here is a producer regression, not a shape.
+    The client's hand-written copy was wrong about six of them, which is what
+    this model fixes:
+
+    * ``fixture_id`` is ``String(32)`` on the model, not an integer;
+    * ``venue`` / ``status`` mirror nullable columns and are copied raw, so they
+      can be ``null`` even though every row currently has a value;
+    * ``group`` / ``home_score`` / ``away_score`` are nullable too, and because
+      the keys are always written they are *required but nullable* rather than
+      optional;
+    * ``kickoff_utc`` is written behind ``if m.kickoff_utc else None``, so the
+      producer can emit ``null`` there regardless of the ``nullable=False``
+      column.
+    """
+
+    match_id: str
+    fixture_id: str
+    home_team: str
+    away_team: str
+    kickoff_utc: str | None
+    venue: str | None
+    stage: str
+    group: str | None
+    status: str | None
+    home_score: int | None
+    away_score: int | None
+
+
+class MatchPredictionPayload(BaseModel):
+    """The ``prediction`` block of one ``/matches`` element (audit 53.76).
+
+    Sixteen keys, declared in the order ``_serialize_prediction`` writes them --
+    that order is the wire order, so it is part of the contract rather than a
+    style choice.
+
+    One serializer feeds four routes (``/matches``, ``/matches/{id}``,
+    ``/today`` and, through ``_serialize_history_entry``, ``/prediction-history``),
+    so this model is the shared shape for all of them: naming it once is what
+    keeps the four from drifting apart.
+
+    Three fields are passed through from the unvalidated ``factors`` JSON column
+    (``confidence_calibration``, ``high_confidence_selection``,
+    ``explanation_contributions``). They are *named* -- json2ts has something to
+    emit and the client can read fields instead of casting -- but their models
+    are ``extra="allow"``, because the producer is "the whole blob, whatever is
+    on disk": a closed model here would silently drop keys the moment the
+    pipeline writes a new one (audit Z6).
+
+    ``data_quality`` is a two-value word list that comes from
+    ``normalize_prediction_data_quality``, which returns ``"real"`` or
+    ``"partial"`` on every path (anything else, including a missing label, is
+    downgraded to ``"partial"``). ``key_factors`` mirrors the ``JSON`` column
+    whose producers all declare ``list[str]``. ``last_updated`` is written behind
+    a truthiness test, so it can be ``null`` despite the ``nullable=False``
+    column.
+    """
+
+    predicted_score: PredictedScorePair
+    outcome_probabilities: MatchOutcomeProbabilities
+    confidence: float
+    prediction_method: str | None
+    engine_used: str
+    ai_reasoning: str | None
+    key_factors: list[str] | None
+    last_updated: str | None
+    has_betting_odds: bool
+    data_quality: Literal["real", "partial"]
+    data_quality_notes: list[str]
+    data_quality_score: float | None
+    raw_confidence: float | None
+    confidence_calibration: ConfidenceCalibrationInfo | None
+    high_confidence_selection: HighConfidenceSelection | None
+    explanation_contributions: ExplanationContributions | None
+
+
+class MatchListEntry(BaseModel):
+    """One element of ``MatchListResponse.matches`` (audit 53.76).
+
+    ``list_matches`` writes ``match`` on every iteration and ``prediction`` only
+    when a prediction row exists, so ``prediction`` is the one conditional key.
+    That is why the route must set ``response_model_exclude_unset=True``: without
+    it, the no-prediction shape would grow an explicit ``"prediction": null``
+    that the producer never wrote.
+    """
+
+    match: MatchFixtureRecord
+    prediction: MatchPredictionPayload | None = None
+
+
+class MatchListResponse(FlexibleResponse):
+    """Response for ``GET /matches`` (audit 53.76).
+
+    One envelope shape (``status`` / ``count`` / ``matches``); the conditionality
+    lives one level down, in ``MatchListEntry.prediction``.
+    """
+
+    status: str
+    count: int
+    matches: list[MatchListEntry]
+
+
 class CalibrationAggregate(BaseModel):
     """One aggregate block of ``EventCalibrationResponse`` (audit 53.63):
     the overall block and every ``by_source`` / ``by_base_rate_category``

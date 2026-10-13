@@ -1657,7 +1657,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J140）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J151）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -5043,6 +5043,228 @@ SETS: tuple[MutationSet, ...] = (
                     "改完必须证明新写法**仍然敏感**，这条就是那个证据。"
                     "● 针单行、无换行、命中 **1 次**；刻意**不**含列表里其它名字，"
                     "所以将来再加名字不会打断它。"
+                ),
+            ),
+            Mutation(
+                label="J142 GET /matches 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=b"    response_model=MatchListResponse,\r\n",
+                new=b"    response_model=FlexibleResponse,\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_matches_route_binds_its_envelope_and_flag",),
+                group="matches-envelope",
+                note=(
+                    "§53.76（批 B 片2）：路由对象**身份**判据。退回后路由仍 200、"
+                    "`tsc` 绿、其余守卫全绿 —— 只有按 `is` 钉住的那条会红。"
+                    "● 针单行、带 CRLF（与目标文件一致），本文件命中 **1 次**"
+                    "（已实测）；与 J143 打**不同行**，所以不同 `group`。"
+                ),
+            ),
+            Mutation(
+                label="J143 GET /matches 丢掉 response_model_exclude_unset：无预测形状长出 prediction: null",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b"    #  * `ExplanationEngineWeights` has a five-key and a "
+                    b"seven-key shape, so\r\n"
+                    b"    #    without the flag the conservative one would emit "
+                    b"two `null`s.\r\n"
+                    b"    response_model_exclude_unset=True,\r\n"
+                ),
+                new=(
+                    b"    #  * `ExplanationEngineWeights` has a five-key and a "
+                    b"seven-key shape, so\r\n"
+                    b"    #    without the flag the conservative one would emit "
+                    b"two `null`s.\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_matches_route_binds_its_envelope_and_flag",),
+                group="matches-flag",
+                note=(
+                    "§53.76：**「必须有旗子」**方向。`MatchListEntry.prediction` "
+                    "只在该比赛有预测行时写（`if prediction:`），去掉旗子后无预测"
+                    "元素被序列化成**显式 null**，线上字节与生产者不一致"
+                    "（守卫的双向负控实测：同一形状不带旗子长出 "
+                    "`\"prediction\": null`）。"
+                    "● 针跨三行：单行 `response_model_exclude_unset=True,` 在"
+                    "本文件命中多次（与 J132/J109 等相撞），必须带上两行注释才"
+                    "唯一（已实测 hit=1）；带 CRLF。"
+                ),
+            ),
+            Mutation(
+                label="J144 MatchListEntry.prediction 丢掉默认值：条件键变必填",
+                path=_EVENT_MODEL,
+                old=b"    prediction: MatchPredictionPayload | None = None\r\n",
+                new=b"    prediction: MatchPredictionPayload | None\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_the_matches_envelope_holds_both_element_shapes_byte_for_byte",
+                ),
+                note=(
+                    "§53.76：**条件键的可选性**判据。生产者只在有预测行时写这个键 "
+                    "⇒ 字段必须带默认值，无预测形状才能在旗子下不物化。丢掉默认值"
+                    "后 `MatchListEntry.model_validate({\"match\": …})` 直接 "
+                    "ValidationError —— 第二个形状的逐字节断言当场红。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J145 MatchFixtureRecord.fixture_id 改回 int：退役副本的失实类型复活",
+                path=_EVENT_MODEL,
+                old=b"    fixture_id: str\r\n",
+                new=b"    fixture_id: int\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_fixture_record_is_faithful_to_the_row",),
+                note=(
+                    "§53.76：**忠实类型**判据，也是本片起点缺陷的形态本身 —— "
+                    "手写 `MatchFixture` 把 `fixture_id` 声明成 `number`，而列是 "
+                    "`String(32)`。改回 `int` 后 pydantic 会把线上字符串重序列化成"
+                    "整数（**改线上字节**），且 `tsc` 看不见（TS 里同为 `number`）。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J146 MatchFixtureRecord.home_score 收紧成 int：required-but-nullable 被抹掉",
+                path=_EVENT_MODEL,
+                old=b"    home_score: int | None\r\n    away_score: int | None\r\n",
+                new=b"    home_score: int\r\n    away_score: int | None\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_fixture_record_is_faithful_to_the_row",),
+                note=(
+                    "§53.76：**可空忠实**判据（§Z6：裸类型 ⟺ 生产者交不出 null）。"
+                    "`group` / `home_score` / `away_score` 三键**每行都写**但值可为 "
+                    "null（DB 普查：`group` nulls=32/104），所以是 "
+                    "required-but-nullable 而非 optional。收紧成 `int` 后，"
+                    "`home_score` 为 null 的行要么 422、要么被静默改形。"
+                    "● 针**两行**：单行 `    home_score: int | None` 不唯一"
+                    "（已实测），带上 `away_score` 那行才唯一；带 CRLF。"
+                    "取三键中的一键作代表（§4.2）：同一生产者、同一条规则、"
+                    "同一守卫。"
+                ),
+            ),
+            Mutation(
+                label="J147 CalibrationBucket 收成 extra=forbid：透传 blob 的开放决定被推翻",
+                path=_EVENT_MODEL,
+                old=(
+                    b'    model_config = ConfigDict(extra="allow")\r\n'
+                    b"\r\n"
+                    b"    label: str | None\r\n"
+                ),
+                new=(
+                    b'    model_config = ConfigDict(extra="forbid")\r\n'
+                    b"\r\n"
+                    b"    label: str | None\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_only_the_documented_models_stay_open",),
+                group="open-set",
+                note=(
+                    "§53.76：**开放是拍过板的**（§Z）。`CalibrationBucket` 坐在"
+                    "未经校验的 `factors` JSON 列里，生产者是「磁盘上整坨 blob」；"
+                    "收成闭合后，管线哪天多写一个桶键就会被**静默丢掉**（§Z6，"
+                    "无异常无告警）。守卫是 `DELIBERATELY_OPEN` 的**集合相等**"
+                    "断言 —— 开放集少一员即红。取七个开放模型中的一个作代表："
+                    "七个同一条规则、同一守卫。"
+                    "● 针**三行**：单行 `model_config = ConfigDict(extra=\"allow\")` "
+                    "在本文件命中 **10 次**（已实测），必须带上下一字段行才唯一；"
+                    "带 CRLF。"
+                ),
+            ),
+            Mutation(
+                label="J148 MatchPredictionPayload 从 _frontend_export 的 import 挪走：退回嵌套尾巴",
+                path=_FRONTEND_EXPORT,
+                old=b"    MatchPredictionPayload,\r\n",
+                new=b"",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_every_reachable_plain_model_is_registered",),
+                note=(
+                    "§53.76：**登记面**。本片引入五个新的**嵌套**普通模型"
+                    "（`MatchFixtureRecord` / `MatchListEntry` / "
+                    "`MatchListResponse` / `MatchOutcomeProbabilities` / "
+                    "`MatchPredictionPayload`），它们只经字段类型可达；不登记就退回"
+                    "嵌套渲染、`json2ts` 补 `[k: string]: unknown` 尾巴 ⇒ "
+                    "比后端契约松。守卫是**生产者驱动**的可达性测试，所以在"
+                    "**重新生成之前**就红。"
+                    "🔴 **打 import、不打 `__all__`**（与 J140 同款）：该守卫的 "
+                    "`roots` 是 `vars(_frontend_export)`、判据是 "
+                    "`hasattr(_frontend_export, name)` —— 两个都看**命名空间**，"
+                    "`__all__` 只是文档；删 import 不会抛 `ImportError`（没人 "
+                    "`from _frontend_export import MatchPredictionPayload`）⇒ "
+                    "不会造「导入错误假红」（§4.3 / §53.53）。"
+                    "🔴 **打 payload、不打信封**（四阶段实测踩到）：可达性规则只对"
+                    "「仍被某个**存活根**引用」的名字变红 —— 信封"
+                    "`MatchListResponse` 没有引用它的根，挪走它只是把根集缩小，"
+                    "守卫照样绿（`0/1 files red`）；而 `MatchPredictionPayload` 被"
+                    "存活的 `MatchListEntry` 引用，挪走后就是"
+                    "「可达但未登记」，当场红。取五个新模型中这一个作代表"
+                    "（§4.2）：五者同一条规则、同一守卫。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测；`__all__` 的引号形"
+                    "式字节不同、也命中 1 次，那是另一条字节）。"
+                ),
+            ),
+            Mutation(
+                label="J149 swr-hooks 的信封类型退回 Record<string, unknown>：契约旁路",
+                path=(
+                    "frontend/src/lib/world-cup/swr-hooks.ts"
+                ),
+                old=(
+                    b"    const data = (await response.json()) as "
+                    b"MatchListResponse;\n"
+                ),
+                new=(
+                    b"    const data = (await response.json()) as "
+                    b"Record<string, unknown>;\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_client_reads_the_matches_contract",),
+                note=(
+                    "§53.76：消费侧**类型来源**判据。手写模块里的一句注解不会让 "
+                    "`tsc` 报错（`res.json() as T` 对形状零主张）；更早的写法是"
+                    "内联的 `{ matches?: … }` 猜测，键缺失时静默渲染成空板。"
+                    "🔴 **该文件是纯 LF**（已实测 CRLF=0/LF=79，与同目录其它 "
+                    "TS 件不同）⇒ 针**不带 CRLF**（§Z13：跨行针必须带与目标"
+                    "文件一致的行尾；本针单行）。命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J150 引擎对比卡把 elo_ratings 分支改成恒假：/predict 侧的活读点被废",
+                path=(
+                    "frontend/src/components/sports/world-cup/"
+                    "engine-comparison-card.tsx"
+                ),
+                old=b"      {prediction.elo_ratings ? (\r\n",
+                new=b"      {false ? (\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_client_reads_the_matches_contract",),
+                note=(
+                    "§53.76：**本片前提的另一半**。`elo_ratings` 在 `/matches` "
+                    "的 16 键里**不存在**（`_serialize_prediction` 逐字节核实），"
+                    "所以比赛卡里的同款分支是恒假、已删；但对比卡的这一处是"
+                    "**活**的 —— 它的输入来自 `/predict?compare_only=true`，"
+                    "pipeline 的 compare 返回块确实带 `elo_ratings`。守卫用 "
+                    "`assertIn(\"prediction.elo_ratings\", …)` 钉住这条活读点。"
+                    "🔴 与「删死分支」不同：这里删的是**活**代码，行为会变"
+                    "（Elo 行消失），所以可登记。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测；第二处读法"
+                    "`prediction.elo_ratings.home` 字节不同）。"
+                ),
+            ),
+            Mutation(
+                label="J151 引擎对比卡的 eloOddsPrediction 退回 payload 类型：两端点合一的缺陷复活",
+                path=(
+                    "frontend/src/components/sports/world-cup/"
+                    "engine-comparison-card.tsx"
+                ),
+                old=b"  eloOddsPrediction?: CompareOnlyPrediction;\r\n",
+                new=b"  eloOddsPrediction?: MatchPredictionPayload;\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_client_reads_the_matches_contract",),
+                note=(
+                    "§53.76：**一个前端类型服务两个端点 = 缺陷**（§Z5）的"
+                    "消费侧判据。四个引擎列都被守卫**逐名**钉住（subTest 循环，"
+                    "N 判据 ⇒ N 断言），本条取第一列作代表证明该守卫承重；"
+                    "改回 payload 类型后 `elo_ratings` 读不动（tsc 会红，但 "
+                    "pytest 不跑 tsc），唯一拦截点是这条静态守卫。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
                 ),
             ),
         ),

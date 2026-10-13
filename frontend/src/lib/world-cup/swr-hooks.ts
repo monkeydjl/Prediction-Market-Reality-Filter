@@ -3,7 +3,7 @@
 import useSWR from "swr";
 import { buildApiErrorMessage, buildOperatorAuthHeaders } from "@/lib/api";
 import { getApiBase } from "@/lib/env";
-import type { MatchWithPrediction } from "./predictions-api";
+import type { MatchListResponse, MatchWithPrediction } from "./predictions-api";
 
 const API_BASE = getApiBase();
 
@@ -34,8 +34,12 @@ async function matchesFetcher(url: string): Promise<MatchWithPrediction[]> {
       const bodyText = await response.text();
       throw new Error(buildApiErrorMessage(response.status, bodyText));
     }
-    const data = (await response.json()) as { matches?: MatchWithPrediction[] };
-    return data.matches ?? [];
+    // The envelope is the generated `MatchListResponse` (audit 53.76), so
+    // `matches` is required rather than guessed at with a hand-written inline
+    // shape: the route validates the key, which means a missing one surfaces
+    // as a backend failure instead of a silently empty board.
+    const data = (await response.json()) as MatchListResponse;
+    return data.matches;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error("请求超时，请稍后重试");

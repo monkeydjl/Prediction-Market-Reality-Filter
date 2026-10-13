@@ -14524,3 +14524,60 @@ POST 的五条形状：`background=True` 4 键 `{status, task_id, message, poll_
 - **全量** 8409/0/0/11（6700/1709）对账 **+4 case + 69 subtest 零残差**（`_recon_5373.py` GATE PASS）——69 = 守卫类 60 + `test_mutation_verify` 9。
 
 **待办**：批 A 余下 `batch-predict` / `batch-switch-engine`（其 `predictions` 元素与批 B 的 `/matches/{id}` 同源，宜一并建模，并退役第三份失实副本 `BatchSummary`）；批 B（比赛查询 6 条）；L2（48 条登记裸集合）。
+
+## 53.74 —— L1 批 A 第三片：三条 batch 路由具名、退役一份服务四个端点的手写副本，并修好一个恒显「全 0」的优化面板
+
+### 1. 三条路由要**三种**旗子决定
+
+| 路由 | 生产者形状 | 旗子 |
+|---|---|---|
+| `POST /batch-predict` | **1** 条（十键全写） | **不需要**，守卫钉 `is False` |
+| `POST /batch-switch-engine` | **2** 条互斥 | **必须有**（`is True`） |
+| `POST /batch-optimize` | **1** 条（四键全写） | **不需要**，守卫钉 `is False` |
+
+`/batch-predict` 单形状：`batch_predict_matches` 用**一个**字面量建 `results`，空列表早返回与正常返回交的是**同一个** dict ⇒ 十个字段全部必填、不给默认值。`/batch-switch-engine` 两形状：无比赛时是自己写的六键字面量（`status, message, total, succeeded, failed, skipped`），否则是流水线的十键信封（**没有** `message`，多出四个引擎计数与 `predictions`）⇒ 联合十一键、除五个两条都写的键以外全部带默认值。`/batch-optimize` 单形状四键（`total_processed, optimizations_generated, errors, optimizations`）。
+
+### 2. 🔴 本片最微妙的一处：`message` 必须声明在 `status` **之后**
+
+无比赛字面量把 `message` 放在**第二位**；正常路径根本不写它。只要字段序是 `status, message, total, …`，被旗子排除后剩下的十键**仍然**按生产者原序序列化 —— 这是唯一能让**两条**形状同时逐字节不变的次序。若把 `message` 挪到 `total` 之后，无比赛形状就会变成 `status, total, message, …`（J128 就是那条变异）。
+
+### 3. 🔴 退役一份服务**四个端点**的手写副本
+
+`engine-api.ts` 的 `BatchSummary` 同时挂着：两条 batch POST、`/batch-optimize`，以及 SSE `complete` 帧。它有三处失真：
+
+1. **没有 `predictions`** —— 两个批量信封里最大的那个键对前端完全不可见；
+2. **根本不匹配 `/batch-optimize`** —— 它声明 `total`/`succeeded`/`failed`/`skipped` 与四个引擎计数，而生产者发的是 `total_processed`/`optimizations_generated`/`errors`/`optimizations`，**没有一个共用键** ⇒ 该面板每次渲染「共 0 / 成功 0 / 失败 0 / 跳过 0」，且**此前没有任何测试**；
+3. 一个类型服务四个端点本身即 §Z5 的缺陷形态。
+
+退役方式：三个端点的返回值改指生成类型；SSE `complete` 帧用 **`Pick`** 从生成信封派生（它是 `BatchSwitchEngineResponse` 去掉 `predictions` —— 流只累计计数、从不建逐场列表）。🔴 **不能用 `Omit`**：生成物带开放索引签名（`FlexibleResponse` 一族），`keyof` 只剩 `string | number`，`Omit` 会把整个类型**塌成** `{ [k: string]: unknown }` 并丢掉全部具名字段（本片实测踩到，`tsc` 立刻报 `Type '{}' is not assignable to 'string'`）。
+SSE 帧**不是** `response_model`，生成器无从产出，所以 `Pick` 是这里能拿到的最紧形状。
+
+### 4. 🔴 `/batch-predict` 的 `predictions` 元素刻意**不**具名
+
+AST 读 `run_prediction_pipeline`：**七个**字面形状（19 / 15 / 13 / 4 / 3 / 2 / 2 键）外加**三处**委托返回（`return <Call>` / `return <Await>`），而路由还会改写失败条目的 `error`。前端**没有任何消费者读这个列表**（面板只渲染计数）⇒ 保持 `list[dict[str, Any]]`：具名只会钉住一个没人读的形状，同时冒静默丢键的险（§53.58）。
+
+### 5. 🔴 SSE 帧的**第二形状**也被一并纠正
+
+`complete` 帧在「无比赛」时带 `message`（六键），正常时九键且**没有** `predictions`。退役共享副本后它第一次有了自己的类型（`BatchSwitchStreamSummary`），面板的引擎计数分支与无比赛提示分支因此都变成可达。
+
+### 6. 守卫、变异与探针
+
+**守卫** `WorldCupBatchEnvelopesContractTests`（4 例 / 40 subtest）：① 十键全必填 + `predictions` 不透明 + **生产者确实在一个字面量里写满十键**（回读源码，否则「全必填」的前提会静默过期）；② 十一键的**字段序** + 必填/可选划分 + 两形状**逐字节**往返 + **去旗子必变**；③ 三条路由的身份与三种旗子决定；④ 消费侧不再声明副本、三处改指生成类型、SSE 用 `Pick` 派生、面板读 `total_processed`/`optimizations_generated`。
+
+**变异** J122–J130（索引 128–136），清单 **207 → 216**：J122/J123 同 `group`（POST batch-predict 的身份与旗子）、J124/J125 同 `group`（batch-switch 的旗子与身份）、J126/J127 同 `group`（batch-optimize 的身份与旗子）、J128 字段序、J129 面板退回共用 testid、J130 客户端类型退回。**四阶段 9/9 全过**（EXIT 0），每条还原后 sha256 一致；整集 136 条重跑亦全过（diff 触及 `m.path`）。
+
+**探针** `probe_5374_bytes.py`：走**真实 FastAPI 栈**（`TestClient`，只桩写锁依赖与三个协作者），**4 个形状逐字节**等于生产者字典（含路由对失败条目 `error` 的改写）；并带**双向负控** —— `batch-switch` 无比赛形状**去旗子后多出五个 `null` 键**，而 `batch-predict` 十键形状**加旗子前后逐字节相同**（这正是它不需要旗子的证据）。
+
+### 7. 顺带修好一个「五键夹具」
+
+全量首轮出 **1 failure**：`test_batch_prediction_failure_does_not_expose_exception_text` 把 `batch_predict_matches` 桩成**五键**（`status, total, succeeded, failed, skipped, predictions`），而新模型十个字段全部必填 ⇒ FastAPI 抛 `ResponseValidationError`（四键 `missing`）。🔴 **这是夹具错、不是模型错**：真实生产者用**一个**字面量建十键（守卫会回读源码钉住这一点），所以五键夹具从来不是真形状。修法是**补全夹具**并注明理由，而不是给模型加默认值 —— 后者会把「生产者必须写满十键」这条契约悄悄降级成建议（§0「响亮的 422 才是对信号」）。
+
+### 8. 读数
+
+- **代码** 10 文件（numstat 实测 32/3、6/0、90/0、239/2、320/0、10/0、51/2、45/10、100/0、48/20；合计 +941/-37）。
+- 四道门：`ruff check app/` 全绿（`tests/` 仅余**既有** F402 一条，不在新增段）、`mypy app/` 全绿、`generate_types --check` up to date。
+- 前端：`tsc --noEmit` 绿、`eslint`（三个改动文件）干净、`vitest run` 全通过。
+- 裸 `FlexibleResponse` 路由：全 `app/` **57 → 54**、本模块 **12 → 9**（均实测）。
+- **全量** 8465/0/0/11（6704/1761）对账 **+4 case + 52 subtest 零残差**（`_recon_5374.py` GATE PASS）——52 = 守卫类 40 + `test_mutation_verify` 12。
+
+**待办**：批 A 余下已清空；批 B（比赛查询 6 条）；L2（48 条登记裸集合）。

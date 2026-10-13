@@ -14637,3 +14637,46 @@ self.assertIn("export type { EngineComparisonStat, PredictedScore };", text, ...
 - **全量** 8526/0/0/11（6708/1818）对账 **+4 case + 57 subtest 零残差**（`_recon_5375.py` GATE PASS）—— 首猜的 +55 少了 2，残差是**追出来的**，三项各自实测：新守卫类 **37**（`junit_guard_5375.xml` = 41 tests − 4 testcase）+ `test_mutation_verify` **18**（HEAD 复跑 255 → 本树 273）+ 被修的 §53.71 守卫新增的**逐名** `subTest` 循环 **2**（该判据原先零 subTest：HEAD 复跑 0 → 本树 2，用例数不变）。
 
 **待办**：批 B 余下 `matches`、`prediction-history`、`optimize`、`predict` 四条（`predict` 是 9 字面量 / 7 互异形状 / 31 键并含 3 处委托返回的硬骨头）；L2（48 条登记裸集合）。
+
+## 53.76 —— L1 批 B 片2：`GET /matches` 具名、11 字段错 6 个的赛程副本退役、一个前端类型服务两个端点的缺陷拆掉
+
+### 1. 一条信封、一个条件键，条件键在**元素层**不在信封层
+
+`list_matches` 的信封是**单形状**三键（`status` / `count` / `matches`），全写 ⇒ 全必填、无默认值；条件性在**下一层**：`match` 每个元素都写、`prediction` 只在该比赛有预测行时写（`if prediction:`）。所以 `MatchListEntry.prediction` 是全片唯一带默认值的字段，而路由**必须**设 `response_model_exclude_unset=True` —— 去旗子后无预测元素会物化出显式 `"prediction": null`（双向负控实测）。
+
+### 2. 12 个模型：5 个闭合登记 + 7 个 `extra="allow"` 不登记
+
+`MatchListResponse` / `MatchListEntry` / `MatchFixtureRecord` / `MatchPredictionPayload` / `MatchOutcomeProbabilities` 五个登记为根（闭合 interface）；三个从**未经校验的 `factors` JSON 列整行透传**的 blob（`confidence_calibration` / `high_confidence_selection` / `explanation_contributions`）连同嵌在里面的四个子模型**具名但开放**（`DELIBERATELY_OPEN` 2 → 9）—— 生产者是「磁盘上整坨 blob」，收成闭合会在管线哪天多写一个键时**静默丢键**（§Z6，无异常无告警）。
+
+### 3. 🔴 手写 `MatchFixture` 十一个字段错了六个
+
+`fixture_id` 是 `String(32)` 列不是整数；`kickoff_utc`（`if m.kickoff_utc else None` 守卫）、`venue` / `status`（镜像可空列原样拷）、`group` / `home_score` / `away_score`（每行都写但值可空 —— DB 普查 `group` nulls=32/104）六个都能是 `null`。其中后三个是 **required-but-nullable 而非 optional**：键总在，值可空 —— 手写副本用 `group?:` 把「键缺失」和「值为 null」混成了一件事。
+
+### 4. 🔴 `elo_ratings` 两侧判定：一处恒假删掉，一处活分支留下
+
+`_serialize_prediction` 的 16 键**从不含** `elo_ratings`（逐字节核实，并把这条事实钉进守卫：该函数体 `assertNotIn("elo_ratings")`），所以`match-prediction-card.tsx` 里的 `prediction.elo_ratings &&` 分支**恒假**—— 输入只来自 `/matches`。**删**（记代码卫生，不登记为变异：写回去行为零变化，阶段②过不了）。`engine-comparison-card.tsx` 的同款分支是**活**的 —— 它的输入来自 `/predict?compare_only=true`，pipeline 的 compare 返回块（:1333-1353）确实带 `elo_ratings`。**留**，并用 `assertIn` 钉住条件表达式。
+
+这半句判据就是本片消费侧重构的依据：`MatchPrediction` 一个前端类型服务两个端点（§Z5 缺陷），拆成生成的 `MatchPredictionPayload`（`/matches`）与本地`CompareOnlyPrediction`（`/predict` compare 投影，三键必填 = `toMatchPrediction` 拒绝构建前的三个键）。四个引擎列 prop **逐名**钉住，因为「一成员 N 处消费只补 1 处」正是空头形态。
+
+### 5. 消费面
+
+`swr-hooks.ts` 的内联 `{ matches?: … }` 猜测改指 `MatchListResponse`（键缺失从「静默空板」变成后端 422）；四个辅助函数放宽 `string | null`（`time.ts` 两个、`page.tsx` 的 `isUtcToday`、卡片的 `formatKickoff`）——**放宽接收端，不是撒 `?? null`**。测试夹具全部改成**逐键写满**生成契约（`tsc` 排除测试 ⇒ 夹具静默漂移是已知陷阱，本片用临时 tsconfig 验过 world-cup 范围内除两个既有 fetch-mock 漂移外全绿）。🔴 给 `FULL_PAYLOAD` 补上 `has_betting_odds: false`（生产者恒写该键）后，「Elo+赔率 for Elo-only」用例当场变红 —— 旧夹具靠**缺键**（undefined）绕过「Elo only」分支，正是 §4.2 的空头形态；按生产者语义改成带赔率的 `elo_only` （`"elo_odds" in "elo_only"` 为假 ⇒ 无赔率时该键确实是 `false`）。
+
+### 6. 守卫、变异与四阶段实测踩到的两个空头
+
+**守卫** `WorldCupMatchesContractTests`（4 例 / 52 subtest）：① 信封三键全必填 + 元素两形状**逐字节**往返 + 断言只有无预测形状在去旗子后多出键；② 赛程行十一键**逐字段注解**（含 `fixture_id` 是 `str` 不是 `int` 的显式断言）+ 回读 `list_matches` 源码钉住十一键确实写出；③ 路由身份 + 旗子 `is True` + `_serialize_prediction` 体 `assertNotIn("elo_ratings")`（消费侧拆分所依赖的生产者事实）；④ 消费侧（七个退役名缺席、两个别名仍导出、信封在 fetcher 里、死分支确实没了、活分支确实在、四个引擎列逐名）。写守卫前先 `--collect-only -k` 查过前缀污染（`WorldCupMatches` 恰 4 条）。
+
+**变异** J142–J151（索引 148–157），清单 **227 → 237**：J142 信封身份、J143 旗子（跨三行才唯一）、J144 条件键丢默认值、J145 `fixture_id` 类型、J146 required-but-nullable 收紧、J147 透传 blob 收成闭合、J148 登记面、J149 客户端旁路、J150 活分支废掉、J151 两端点合一复活。
+🔴 **J148 第一版是空头**：挪 `__all__` 后可达性守卫照样绿 —— 它的 `roots` 是 `vars(_frontend_export)`、判据是 `hasattr`，**两个都看命名空间**；且规则只对「仍被某个**存活根**引用」的名字变红，信封没有引用它的根，挪走它只是把根集缩小（`0/1 files red`）。改成打 `MatchPredictionPayload` 的 **import** 行（被存活的 `MatchListEntry` 引用 ⇒ 「可达但未登记」当场红）—— J140 的注记「只挪 import、不挪 `__all__」方向也被这次实测纠正了。🔴 **J150 的宽松针也是空头**：`assertIn("prediction.elo_ratings")` 被分支**内部**的 `elo_ratings.home` / `.away` 读法喂绿（条件行改掉后字符串仍在）；收紧成条件表达式 `{prediction.elo_ratings ? (` 才红 —— **「测试里有 X」既不充分也不必要，只有变异能定论**的又一次实证。🔴 **守卫自己的自指针**：第一版断言 `assertNotIn("{ matches?:", swr)`，而守卫要求客户端里写的注释恰好含这个字面量 ⇒ 当场红。改针为裸 `matches?:` 并重写注释 —— §4.3「自指变异的针不能完整字面量+注释引用同文件」在**守卫侧**重演。
+
+**整集重放**：`frontend-type-closure` 157/157 全过（EXIT=0，四阶段逐条 green-before / red-after / green-restore / bytes-identical）。
+
+### 7. 读数
+
+- **代码** 19 文件（numstat 实测 12/1、10/0、286/0、223/1、395/1、4/1、29/5、10/7、24/4、111/25、20/24、21/6、2/2、24/4、274/0、64/130、9/3、7/3、14/3；合计 +1539/-220）。
+- 四道门：`ruff check app/` 全绿、`mypy app/` 全绿（331 文件）、`generate_types --check` up to date。
+- 前端：`tsc --noEmit` 绿、`eslint` 全绿、`vitest run` **126 文件 / 746 tests** 全通过（含修掉的那条夹具空头）。
+- 裸 `FlexibleResponse` 路由：全 `app/` **52 → 51**、本模块 **7 → 6**（均实测）。
+- **全量** 8595/0/0/11（6712/1883）对账 **+4 case + 65 subtest 零残差**（`_recon_5376.py` GATE PASS）—— 三项各自实测：新守卫类 **52**（`junit_guard_5376.xml` = 56 tests − 4 testcase；补上第 8 个退役名后从 51 变 52）+ `test_mutation_verify` **13**（HEAD 复跑 273 → 本树 286，worktree 钉在 12c76a8）。🔴 **首跑 FAIL，残差恰好是 +4/+57 —— 那是 53.75 的增量**：`_recon_5375.py` 头部写的「Baseline (53.74 closed): 8465」被当成了53.75 的收口值读进来，而它其实是**更上一片**的基线；53.75 的收口值是基线加它自己的增量（6708/1818/8526）。**残差必须先归因再改预期**，这次归因抓到的是对账脚本自己的错，不是生产代码的。
+
+**待办**：批 B 余下 `prediction-history`、`optimize`、`predict` 三条（`/matches/{id}`、`/today` 与 `_serialize_prediction` 共享本片模型，可复用；`predict` 是 9 字面量 / 7 互异形状 / 31 键并含 3 处委托返回的硬骨头）；L2（48 条登记裸集合）。

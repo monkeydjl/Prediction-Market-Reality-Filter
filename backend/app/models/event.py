@@ -1783,6 +1783,88 @@ class BatchOptimizeResponse(FlexibleResponse):
     optimizations: list[dict[str, Any]]
 
 
+class PredictedScorePair(BaseModel):
+    """A ``{home, away}`` predicted-score pair whose members are ``float``,
+    shared by the match-query payloads (audit 53.75).
+
+    Deliberately **not** ``ScorePair``: that one (audit 53.71) mirrors
+    ``EngineComparisonPrediction``, which rounds both scores to ``int``. Nor
+    ``PredictedScore``: that name is already a ``TypedDict`` in
+    ``app.services.world_cup_engines.types`` -- the same-name/different-body
+    trap audit 53.69 closed for ``FlexibleResponse``. Here every producer reads
+    a ``Float`` column (``AIAnalysisHistory.predicted_home_score``,
+    ``MatchPrediction.predicted_home_score``) straight onto the wire, so both
+    members stay ``float``.
+    """
+
+    home: float
+    away: float
+
+
+class AnalysisHistoryEntry(BaseModel):
+    """One element of ``MatchAnalysisHistoryResponse.history`` (audit 53.75).
+
+    ``get_analysis_history`` writes all six keys inside its list comprehension,
+    so none of them carries a default. ``id`` / ``analysis`` /
+    ``predicted_score`` / ``confidence`` mirror ``nullable=False`` columns and
+    cannot be ``None``; ``prediction_method`` mirrors a nullable column but the
+    key is written either way, so it is *required but nullable* rather than
+    optional. ``created_at`` is written as
+    ``h.created_at.isoformat() if h.created_at else None`` -- the producer can
+    emit ``null`` there, so the type says so even though the DDL does not.
+    """
+
+    id: int
+    analysis: str
+    predicted_score: PredictedScorePair
+    confidence: float
+    prediction_method: str | None
+    created_at: str | None
+
+
+class MatchAnalysisHistoryResponse(FlexibleResponse):
+    """Response for ``GET /matches/{match_id}/analysis-history`` (audit 53.75).
+
+    One shape: ``get_analysis_history`` has a single return path, which writes
+    all four keys (``history`` possibly empty). So every field is required and
+    the route must NOT set ``response_model_exclude_unset`` -- a default could
+    only hide a producer regression, and a stray flag could only hide the day
+    one of the keys becomes conditional.
+    """
+
+    status: str
+    match_id: str
+    count: int
+    history: list[AnalysisHistoryEntry]
+
+
+class MatchAnalyzeResponse(FlexibleResponse):
+    """Response for ``POST /matches/{match_id}/analyze`` (audit 53.75).
+
+    Two shapes:
+
+    * **cached** (5 keys): a stored analysis was reused, so the route also
+      returns ``created_at``.
+    * **fresh** (4 keys): a new analysis was produced and persisted; no
+      ``created_at``.
+
+    Both paths write all of their own keys, so the route MUST set
+    ``response_model_exclude_unset=True``: without the flag the fresh shape
+    would grow an explicit ``"created_at": null`` key the producer never wrote.
+
+    ``created_at`` is declared last because that is where the cached literal
+    puts it. The fresh path leaves it unset, so it is excluded there and the
+    remaining four keys still serialise in the producer's order -- the one
+    order that keeps *both* shapes byte-identical.
+    """
+
+    status: str
+    match_id: str
+    analysis: str
+    cached: bool
+    created_at: str | None = None
+
+
 class CalibrationAggregate(BaseModel):
     """One aggregate block of ``EventCalibrationResponse`` (audit 53.63):
     the overall block and every ``by_source`` / ``by_base_rate_category``

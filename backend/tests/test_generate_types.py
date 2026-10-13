@@ -3523,12 +3523,20 @@ class WorldCupBatchCContractTests(unittest.TestCase):
             "predictions-api.ts re-declared EngineComparisonStat; read the "
             "generated contract instead (audit 53.71)",
         )
-        self.assertIn(
-            "export type { EngineComparisonStat, PredictedScore };",
-            text,
-            "the old names must stay exported as re-exports of the generated "
-            "types so existing consumers keep compiling",
-        )
+        # Pinned per name rather than as one exact statement. The claim is that
+        # each retired shape's old name stays exported; a third name joining the
+        # list (audit 53.75 added `AnalysisHistoryEntry`) does not make that
+        # claim false, so an exact-statement assertion would go red on an
+        # unrelated and correct change -- a false positive rather than a caught
+        # regression. Dropping either name still fails here.
+        for name in ("EngineComparisonStat", "PredictedScore"):
+            with self.subTest(reexport=name):
+                self.assertRegex(
+                    text,
+                    r"export type \{[^}]*\b" + name + r"\b[^}]*\};",
+                    f"{name} must stay exported as a re-export of the generated "
+                    "types so existing consumers keep compiling",
+                )
         self.assertIn(
             'export type EngineComparisonData = EngineComparisonResponse["engines"];',
             text,
@@ -4546,6 +4554,349 @@ class WorldCupBatchEnvelopesContractTests(unittest.TestCase):
             console,
             "the batch-optimize result needs its own panel; it cannot share "
             "the batch-prediction summary line (audit 53.74)",
+        )
+
+
+class WorldCupAnalysisFamilyContractTests(unittest.TestCase):
+    """The two analysis-family routes named in audit 53.75 (batch B, slice 1).
+
+    ``GET /matches/{match_id}/analysis-history`` and
+    ``POST /matches/{match_id}/analyze`` both published the bare
+    ``FlexibleResponse`` envelope, and the client read them through one
+    hand-written ``AIAnalysisHistoryEntry``. They need opposite flag decisions:
+
+    * ``/analysis-history`` has **one** return path, which writes all four keys
+      (``history`` possibly empty), so every field is required and the route
+      must NOT set ``response_model_exclude_unset``.
+    * ``/analyze`` has **two** shapes -- cached (five keys, with ``created_at``)
+      and fresh (four keys). Both write all of their own keys, so the route
+      **must** set the flag or the fresh shape grows an explicit
+      ``"created_at": null`` key nobody wrote.
+
+    The element also carries the first *float* score pair on the wire:
+    ``AIAnalysisHistory.predicted_home_score`` is a ``Float`` column, so
+    ``PredictedScorePair`` has float members -- unlike ``ScorePair`` (53.71),
+    whose producer rounds to ``int``. The retired client type used the integer
+    pair for both.
+    """
+
+    def test_the_analysis_history_envelope_is_one_shape_without_a_flag(self):
+        from app.models.event import (
+            AnalysisHistoryEntry,
+            FlexibleResponse,
+            MatchAnalysisHistoryResponse,
+            PredictedScorePair,
+            ScorePair,
+        )
+
+        fields = MatchAnalysisHistoryResponse.model_fields
+        self.assertEqual(
+            list(fields),
+            ["status", "match_id", "count", "history"],
+            "MatchAnalysisHistoryResponse is no longer the key order "
+            "get_analysis_history builds (audit 53.75)",
+        )
+        for name, field in fields.items():
+            with self.subTest(field=name):
+                self.assertTrue(
+                    field.is_required(),
+                    f"MatchAnalysisHistoryResponse.{name} gained a default; "
+                    "get_analysis_history writes all four keys on its single "
+                    "return path, so a default could only hide a regression "
+                    "(audit 53.75)",
+                )
+        self.assertTrue(
+            issubclass(MatchAnalysisHistoryResponse, FlexibleResponse)
+        )
+        self.assertEqual(
+            fields["history"].annotation,
+            list[AnalysisHistoryEntry],
+            "MatchAnalysisHistoryResponse.history no longer names its element "
+            "(audit 53.75)",
+        )
+
+        element = AnalysisHistoryEntry.model_fields
+        self.assertEqual(
+            list(element),
+            [
+                "id",
+                "analysis",
+                "predicted_score",
+                "confidence",
+                "prediction_method",
+                "created_at",
+            ],
+            "AnalysisHistoryEntry is no longer the key order "
+            "get_analysis_history's comprehension builds (audit 53.75)",
+        )
+        for name, field in element.items():
+            with self.subTest(element_field=name):
+                self.assertTrue(
+                    field.is_required(),
+                    f"AnalysisHistoryEntry.{name} gained a default; the "
+                    "comprehension writes every key (audit 53.75)",
+                )
+        for name, annotation in (
+            ("id", int),
+            ("analysis", str),
+            ("predicted_score", PredictedScorePair),
+            ("confidence", float),
+            ("prediction_method", str | None),
+            ("created_at", str | None),
+        ):
+            with self.subTest(element_annotation=name):
+                self.assertEqual(
+                    element[name].annotation,
+                    annotation,
+                    f"AnalysisHistoryEntry.{name} annotation drifted "
+                    "(audit 53.75)",
+                )
+
+        # The pair is float, and it is deliberately not ScorePair.
+        self.assertEqual(
+            PredictedScorePair.model_fields["home"].annotation,
+            float,
+            "PredictedScorePair.home must stay float: the producer reads "
+            "AIAnalysisHistory.predicted_home_score, a Float column, straight "
+            "onto the wire (audit 53.75)",
+        )
+        self.assertEqual(
+            PredictedScorePair.model_fields["away"].annotation, float
+        )
+        self.assertEqual(
+            ScorePair.model_fields["home"].annotation,
+            int,
+            "ScorePair flipped to float; that would silently merge it with "
+            "PredictedScorePair (audit 53.75)",
+        )
+        for model in (AnalysisHistoryEntry, PredictedScorePair):
+            with self.subTest(closed=model.__name__):
+                self.assertNotEqual(
+                    (model.model_config or {}).get("extra"),
+                    "allow",
+                    f"{model.__name__} opted into extra='allow'; the frontend "
+                    "reads both as closed interfaces (audit 53.75)",
+                )
+
+        # The producer really does write all six element keys by hand; if that
+        # stops being true the "all required" decision above is wrong.
+        source = (
+            _BACKEND_DIR / "app" / "api" / "routes" / "world_cup_predictions.py"
+        ).read_bytes().decode("utf-8")
+        start = source.index("async def get_analysis_history(")
+        body = source[start:source.index("@router.", start)]
+        for key in element:
+            with self.subTest(producer_key=key):
+                self.assertIn(
+                    f'"{key}":',
+                    body,
+                    f"get_analysis_history no longer writes {key!r} in its "
+                    "history comprehension (audit 53.75)",
+                )
+
+    def test_the_analyze_envelope_holds_both_shapes_byte_for_byte(self):
+        import json
+
+        from app.models.event import FlexibleResponse, MatchAnalyzeResponse
+
+        fields = MatchAnalyzeResponse.model_fields
+        self.assertEqual(
+            list(fields),
+            ["status", "match_id", "analysis", "cached", "created_at"],
+            "the field order is load-bearing: `created_at` is declared last "
+            "because that is where the cached literal puts it, and the fresh "
+            "path leaves it unset so the remaining four keys still serialise "
+            "in the producer's order (audit 53.75)",
+        )
+        for name in ("status", "match_id", "analysis", "cached"):
+            with self.subTest(required=name):
+                self.assertTrue(
+                    fields[name].is_required(),
+                    f"MatchAnalyzeResponse.{name} gained a default; both "
+                    "shapes write it (audit 53.75)",
+                )
+        self.assertFalse(
+            fields["created_at"].is_required(),
+            "MatchAnalyzeResponse.created_at lost its default; only the "
+            "cached shape writes it, so the flag must be able to drop it "
+            "(audit 53.75)",
+        )
+        self.assertEqual(
+            fields["created_at"].annotation,
+            str | None,
+            "MatchAnalyzeResponse.created_at annotation drifted "
+            "(audit 53.75)",
+        )
+        self.assertTrue(issubclass(MatchAnalyzeResponse, FlexibleResponse))
+
+        # Two shapes, verbatim from the producers. Each must round-trip through
+        # the model with identical bytes under the flag.
+        shapes = [
+            # 1. cached: the stored analysis matched, so `created_at` is set
+            {
+                "status": "ok",
+                "match_id": "wc-1",
+                "analysis": "cached text",
+                "cached": True,
+                "created_at": "2026-10-13T00:00:00+00:00",
+            },
+            # 2. fresh: a new analysis was produced; no `created_at` at all
+            {
+                "status": "ok",
+                "match_id": "wc-1",
+                "analysis": "fresh text",
+                "cached": False,
+            },
+        ]
+        for raw in shapes:
+            with self.subTest(shape=sorted(raw)):
+                model = MatchAnalyzeResponse.model_validate(raw)
+                self.assertEqual(
+                    json.dumps(
+                        model.model_dump(mode="json", exclude_unset=True)
+                    ),
+                    json.dumps(raw),
+                    "with the flag each shape must match its producer's dict "
+                    "byte for byte, key order included (audit 53.75)",
+                )
+
+        # Only the fresh shape has an unset key, which is what makes the flag
+        # load-bearing. (The cached shape sets every field, so dumping it
+        # without the flag is identical -- asserting otherwise would be a
+        # criterion that never fires.)
+        fresh = MatchAnalyzeResponse.model_validate(shapes[1])
+        self.assertNotEqual(
+            json.dumps(fresh.model_dump(mode="json")),
+            json.dumps(shapes[1]),
+            "without the flag the fresh shape must materialise a "
+            '`"created_at": null` key the producer never wrote -- if this '
+            "stops being true the flag is no longer load-bearing "
+            "(audit 53.75)",
+        )
+
+        # The two shapes are the producer's; both key sets must still be there.
+        source = (
+            _BACKEND_DIR / "app" / "api" / "routes" / "world_cup_predictions.py"
+        ).read_bytes().decode("utf-8")
+        start = source.index("async def analyze_match_prediction(")
+        body = source[start:source.index("@router.", start)]
+        for key in fields:
+            with self.subTest(producer_key=key):
+                self.assertIn(
+                    f'"{key}":',
+                    body,
+                    f"analyze_match_prediction no longer writes {key!r} "
+                    "(audit 53.75)",
+                )
+
+    def test_the_two_analysis_routes_bind_their_envelopes_and_flags(self):
+        """Route identity and the two opposite flag decisions."""
+        from fastapi.routing import APIRoute
+
+        from app.api.routes import world_cup_predictions as wc
+        from app.models.event import (
+            FlexibleResponse,
+            MatchAnalysisHistoryResponse,
+            MatchAnalyzeResponse,
+        )
+
+        def route_for(path: str, method: str) -> APIRoute:
+            found = [
+                route
+                for route in wc.router.routes
+                if isinstance(route, APIRoute)
+                and route.path == path
+                and method in route.methods
+            ]
+            self.assertEqual(
+                len(found), 1, f"expected exactly one {method} route on {path}"
+            )
+            return found[0]
+
+        history = route_for(
+            "/world-cup/predictions/matches/{match_id}/analysis-history", "GET"
+        )
+        self.assertIs(
+            history.response_model,
+            MatchAnalysisHistoryResponse,
+            "GET /analysis-history no longer binds "
+            "MatchAnalysisHistoryResponse; it published the bare "
+            "FlexibleResponse before audit 53.75",
+        )
+        self.assertIsNot(history.response_model, FlexibleResponse)
+        self.assertIs(
+            history.response_model_exclude_unset,
+            False,
+            "GET /analysis-history gained response_model_exclude_unset. It has "
+            "one shape that writes all of its keys, so the flag could only "
+            "ever hide a regression (audit 53.75)",
+        )
+
+        analyze = route_for(
+            "/world-cup/predictions/matches/{match_id}/analyze", "POST"
+        )
+        self.assertIs(
+            analyze.response_model,
+            MatchAnalyzeResponse,
+            "POST /analyze no longer binds MatchAnalyzeResponse "
+            "(audit 53.75)",
+        )
+        self.assertIsNot(analyze.response_model, FlexibleResponse)
+        self.assertIs(
+            analyze.response_model_exclude_unset,
+            True,
+            "POST /analyze lost response_model_exclude_unset; its fresh shape "
+            "writes four keys, so without the flag the one default serialises "
+            "a `created_at: null` key it never wrote (audit 53.75)",
+        )
+
+    def test_the_client_reads_the_analysis_contract(self):
+        """The client must read the generated contracts, and the card must
+        loosen its prop for the nullable ``created_at`` rather than scatter
+        null-coalescing at the call site."""
+        client = (
+            _REPO_ROOT / "frontend" / "src" / "lib" / "world-cup"
+            / "predictions-api.ts"
+        ).read_bytes().decode("utf-8")
+        card = (
+            _REPO_ROOT / "frontend" / "src" / "components" / "sports"
+            / "world-cup" / "prediction-analysis-card.tsx"
+        ).read_bytes().decode("utf-8")
+
+        self.assertNotIn(
+            "interface AIAnalysisHistoryEntry",
+            client,
+            "predictions-api.ts re-declared the analysis-history element; the "
+            "generated AnalysisHistoryEntry is the contract, and the retired "
+            "copy typed predicted_score with the *integer* ScorePair while the "
+            "wire carries floats (audit 53.75)",
+        )
+        self.assertIn(
+            "Promise<AnalysisHistoryEntry[]>",
+            client,
+            "fetchAnalysisHistory no longer returns the generated element "
+            "(audit 53.75)",
+        )
+        for name in ("MatchAnalysisHistoryResponse", "MatchAnalyzeResponse"):
+            with self.subTest(model=name):
+                self.assertIn(
+                    f"as {name}",
+                    client,
+                    f"the client no longer claims {name} off the response "
+                    "(audit 53.75)",
+                )
+        self.assertNotIn(
+            "AIAnalysisHistoryEntry",
+            card,
+            "the card still names the retired hand-written type "
+            "(audit 53.75)",
+        )
+        self.assertIn(
+            "formatTimestamp(isoString: string | null): string",
+            card,
+            "the card must accept the generated `string | null` created_at; "
+            "loosening the prop is the fix, not `?? null` at every call site "
+            "(audit 53.75)",
         )
 
 

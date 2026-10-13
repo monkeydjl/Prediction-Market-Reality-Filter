@@ -21,6 +21,8 @@ from app.models.event import (
     EngineCalibrationResponse,
     EngineComparisonResponse,
     FlexibleResponse,
+    MatchAnalysisHistoryResponse,
+    MatchAnalyzeResponse,
     SyncFixturesResponse,
 )
 from app.models.world_cup_prediction import MatchFixture, MatchPrediction, PredictionHistory, AIAnalysisHistory
@@ -392,7 +394,14 @@ async def trigger_prediction(
     return result
 
 
-@router.post("/matches/{match_id}/analyze", response_model=FlexibleResponse)
+@router.post(
+    "/matches/{match_id}/analyze",
+    response_model=MatchAnalyzeResponse,
+    # Two shapes: the cached path also writes `created_at`. The flag is
+    # required -- without it the fresh shape would serialise an explicit
+    # `"created_at": null` key the producer never wrote (audit 53.75).
+    response_model_exclude_unset=True,
+)
 async def analyze_match_prediction(
     match_id: str,
     _auth: None = Depends(require_write_key),
@@ -484,7 +493,10 @@ async def analyze_match_prediction(
         close_prediction_session(session)
 
 
-@router.get("/matches/{match_id}/analysis-history", response_model=FlexibleResponse)
+@router.get(
+    "/matches/{match_id}/analysis-history",
+    response_model=MatchAnalysisHistoryResponse,
+)
 async def get_analysis_history(match_id: str) -> dict[str, Any]:
     """Get AI analysis history for a match.
 

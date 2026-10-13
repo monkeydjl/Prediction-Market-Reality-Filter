@@ -84,3 +84,62 @@ describe("fetchPredictionHistory", () => {
     expect(history[0].predicted_score).toEqual({ home: 1.069, away: 1.108 });
   });
 });
+
+describe("analysis family client contracts", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  it("returns the generated analysis history, nullable fields included", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: "ok",
+          match_id: "match-1",
+          count: 1,
+          history: [
+            {
+              id: 8,
+              analysis: "Older analysis",
+              predicted_score: { home: 1.5, away: 0.5 },
+              confidence: 0.6,
+              prediction_method: null,
+              created_at: null,
+            },
+          ],
+        }),
+        { status: 200 }
+      )
+    ));
+
+    const { fetchAnalysisHistory } = await import("./predictions-api");
+    const history = await fetchAnalysisHistory("match-1");
+
+    expect(history).toHaveLength(1);
+    expect(history[0].created_at).toBeNull();
+    expect(history[0].predicted_score).toEqual({ home: 1.5, away: 0.5 });
+  });
+
+  it("reads the analysis text off the published analyze envelope", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: "ok",
+          match_id: "match-1",
+          analysis: "fresh text",
+          cached: false,
+        }),
+        { status: 200 }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { analyzePrediction } = await import("./predictions-api");
+
+    await expect(analyzePrediction("match-1")).resolves.toBe("fresh text");
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/world-cup/predictions/matches/match-1/analyze"
+    );
+  });
+});

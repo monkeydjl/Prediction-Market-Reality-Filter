@@ -9,8 +9,11 @@ import {
   getOperatorId,
 } from "@/lib/api";
 import type {
+  AnalysisHistoryEntry,
   EngineComparisonResponse,
   EngineComparisonStat,
+  MatchAnalysisHistoryResponse,
+  MatchAnalyzeResponse,
   ScorePair as PredictedScore,
   SyncFixturesResponse,
 } from "@/lib/generated-types";
@@ -21,7 +24,14 @@ import type {
 // publishes both (as `ScorePair` / `EngineComparisonStat`), so the local
 // declarations were retired rather than kept as second copies of generated
 // shapes. The old names stay exported so existing consumers keep compiling.
-export type { EngineComparisonStat, PredictedScore };
+//
+// Audit 53.75 retired one more: the hand-written `AIAnalysisHistoryEntry`.
+// Its `predicted_score` was typed with the *integer* `ScorePair`, but
+// `get_analysis_history` reads `Float` columns, so the generated
+// `AnalysisHistoryEntry.predicted_score` is `PredictedScorePair` (both members
+// `float`). The old export name is gone -- the only consumer now imports the
+// generated type.
+export type { AnalysisHistoryEntry, EngineComparisonStat, PredictedScore };
 
 export interface OutcomeProbabilities {
   home_win: number;
@@ -347,23 +357,16 @@ export async function analyzePrediction(matchId: string): Promise<string> {
     throw new Error(`Failed to analyze prediction: ${response.statusText}`);
   }
 
-  const data = await response.json();
+  // The route publishes `MatchAnalyzeResponse`; reading `.analysis` off the
+  // generated type is what keeps this projection honest (audit 53.75).
+  const data = (await response.json()) as MatchAnalyzeResponse;
   return data.analysis || "分析结果为空";
-}
-
-export interface AIAnalysisHistoryEntry {
-  id: number;
-  analysis: string;
-  predicted_score: PredictedScore;
-  confidence: number;
-  prediction_method?: string;
-  created_at: string;
 }
 
 /**
  * Fetch the stored AI analysis history for a match, newest first.
  */
-export async function fetchAnalysisHistory(matchId: string): Promise<AIAnalysisHistoryEntry[]> {
+export async function fetchAnalysisHistory(matchId: string): Promise<AnalysisHistoryEntry[]> {
   const response = await fetch(
     `${API_BASE}/world-cup/predictions/matches/${matchId}/analysis-history`,
     { cache: 'no-store' }
@@ -373,8 +376,8 @@ export async function fetchAnalysisHistory(matchId: string): Promise<AIAnalysisH
     throw await worldCupFetchError(response, "加载分析历史失败");
   }
 
-  const data = await response.json();
-  return data.history || [];
+  const data = (await response.json()) as MatchAnalysisHistoryResponse;
+  return data.history ?? [];
 }
 
 export interface OptimizedPrediction {

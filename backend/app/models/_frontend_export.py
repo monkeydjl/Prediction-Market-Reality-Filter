@@ -53,6 +53,7 @@ Do NOT import models that should not leak to the frontend:
 """
 from app.models.event import (
     ActionableRecommendation,
+    AnalysisHistoryEntry,
     ApiHealthResponse,
     AutoResolveResponse,
     AutoTuneCalibrationResult,
@@ -133,10 +134,13 @@ from app.models.event import (
     MarketSnapshotPoint,
     MarketSnapshotSeries,
     MarketSnapshotsResponse,
+    MatchAnalysisHistoryResponse,
+    MatchAnalyzeResponse,
     OpenDecisionsResponse,
     Outcome,
     PendingLinkItem,
     PendingLinksResponse,
+    PredictedScorePair,
     PredictionCalibrationResponse,
     Probability,
     RecentPredictionItem,
@@ -164,6 +168,7 @@ from app.models.event import (
 
 __all__ = [
     "ActionableRecommendation",
+    "AnalysisHistoryEntry",
     "ApiHealthResponse",
     "AutoResolveResponse",
     "AutoTuneCalibrationResult",
@@ -244,10 +249,13 @@ __all__ = [
     "MarketSnapshotPoint",
     "MarketSnapshotSeries",
     "MarketSnapshotsResponse",
+    "MatchAnalysisHistoryResponse",
+    "MatchAnalyzeResponse",
     "OpenDecisionsResponse",
     "Outcome",
     "PendingLinkItem",
     "PendingLinksResponse",
+    "PredictedScorePair",
     "PredictionCalibrationResponse",
     "Probability",
     "RecentPredictionItem",

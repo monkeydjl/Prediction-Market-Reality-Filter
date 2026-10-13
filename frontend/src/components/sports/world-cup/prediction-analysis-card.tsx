@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { Brain, Loader2, AlertCircle, TrendingUp, Clock, Sparkles } from "lucide-react";
 import type {
-  AIAnalysisHistoryEntry,
+  AnalysisHistoryEntry,
   MatchFixture,
   MatchPrediction,
 } from "@/lib/world-cup/predictions-api";
@@ -20,9 +20,12 @@ interface PredictionAnalysisCardProps {
   prediction: MatchPrediction;
 }
 
-type AnalysisHistoryEntry = AIAnalysisHistoryEntry;
-
-function formatTimestamp(isoString: string): string {
+// `created_at` is `string | null` on the generated `AnalysisHistoryEntry`
+// (the producer writes `h.created_at.isoformat() if h.created_at else None`),
+// so the prop is loosened here rather than papered over with `?? null` at
+// every call site (audit 53.75).
+function formatTimestamp(isoString: string | null): string {
+  if (!isoString) return "—";
   const date = new Date(isoString);
   return new Intl.DateTimeFormat("zh-CN", {
     month: "numeric",

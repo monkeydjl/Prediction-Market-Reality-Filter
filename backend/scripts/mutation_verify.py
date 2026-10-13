@@ -387,6 +387,12 @@ _ENGINE_CONSOLE_TSX = "frontend/src/components/sports/world-cup/engine-console.t
 # module can get wrong without any tool complaining: which generated contract a
 # method promises (`res.json() as T` asserts nothing about the shape).
 _ENGINE_API_TS = "frontend/src/lib/world-cup/engine-api.ts"
+# §53.75 — the analysis card. Its `formatTimestamp` is the one place the
+# consumer had to accept the generated `string | null`; a guard that only
+# checked the client would never see the loosened prop.
+_ANALYSIS_CARD_TSX = (
+    "frontend/src/components/sports/world-cup/prediction-analysis-card.tsx"
+)
 _T_EVENT_INTELLIGENCE = "tests/test_event_intelligence_service.py"
 _T_CONCLUSION_CHALLENGE = "tests/test_conclusion_challenge_service.py"
 _T_DECISION_QUALITY = "tests/test_decision_quality_service.py"
@@ -1651,7 +1657,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J130）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J140）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -1911,7 +1917,20 @@ SETS: tuple[MutationSet, ...] = (
             "`keyof` 只剩 `string | number`，`Omit` 会把整个类型塌成 `{[k: string]: unknown}`。"
             "🔴 **`/batch-predict` 的 `predictions` 元素保持不透明**：AST 读出 "
             "`run_prediction_pipeline` 有七个字面形状（19/15/13/4/3/2/2 键）+ 三处委托返回，"
-            "而前端没有消费者 —— 具名只会钉住一个没人读的形状，同时冒静默丢键的险（§53.58）。",
+            "而前端没有消费者 —— 具名只会钉住一个没人读的形状，同时冒静默丢键的险（§53.58）。"
+            "§53.75 开**批 B**（比赛查询族），首片取最扁的**两条分析族路由**："
+            "`GET /matches/{id}/analysis-history`（单形状、无旗子）与 "
+            "`POST /matches/{id}/analyze`（两形状、必须有旗子）。"
+            "🔴 **同一片内两种旗子状态同时出现**：J131/J133 是身份针，"
+            "J132 是「必须有旗子」的承重针（去掉后 fresh 形状多出 "
+            "`\"created_at\": null`，探针的双向负控实测过），J134 是「不需要旗子」的对照组。"
+            "🔴 **本片第一次把「float 比分对」带上线**：`AIAnalysisHistory.predicted_home_score` "
+            "是 `Float` 列，生产者原样铺上线上，所以 `PredictedScorePair` 两个成员都是 "
+            "`float` —— 与 53.71 的 `ScorePair`（生产者 `round(float)` ⇒ int）**刻意不同名**，"
+            "J136 就是把两者合并的那条；被退役的手写 `AIAnalysisHistoryEntry` 正是拿"
+            "**整数**那一个去套 float 线上的旧错。J135/J137 分别钉 nullable 字段的忠实类型"
+            "与单形状路由的必填契约；J138/J139 是消费侧（客户端不再声明副本、卡片放宽 prop "
+            "而不是在调用点撒 `?? null`）；J140 是本片新增两个**嵌套**模型的白名单登记面。",
         ),
         mutations=(
             Mutation(
@@ -4783,6 +4802,247 @@ SETS: tuple[MutationSet, ...] = (
                     "不会让 `tsc` 报错（`res.json() as T` 对形状零主张），"
                     "只有静态守卫会红。● 针单行、ASCII、命中 **1 次**；"
                     "与 J129 不同文件、不同判据。"
+                ),
+            ),
+            Mutation(
+                label="J131 POST /analyze 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=b"    response_model=MatchAnalyzeResponse,\r\n",
+                new=b"    response_model=FlexibleResponse,\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_the_two_analysis_routes_bind_their_envelopes_and_flags",
+                ),
+                group="analyze-envelope",
+                note=(
+                    "§53.75（批 B 首片）：路由对象**身份**判据。退回后路由"
+                    "仍 200、`tsc` 绿、其余守卫全绿 —— 只有按 `is` 钉住的"
+                    "那条会红。● 针单行、带 CRLF（与目标文件一致），"
+                    "本文件命中 **1 次**（已实测）。与 J132 打**不同行**，"
+                    "所以不同 `group`，整集 apply 时两条并存。"
+                ),
+            ),
+            Mutation(
+                label="J132 POST /analyze 丢掉 response_model_exclude_unset：fresh 形状长出 created_at: null",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b'    # `"created_at": null` key the producer never wrote '
+                    b"(audit 53.75).\r\n"
+                    b"    response_model_exclude_unset=True,\r\n"
+                    b")\r\n"
+                ),
+                new=(
+                    b'    # `"created_at": null` key the producer never wrote '
+                    b"(audit 53.75).\r\n"
+                    b")\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_the_two_analysis_routes_bind_their_envelopes_and_flags",
+                ),
+                group="analyze-flag",
+                note=(
+                    "§53.75：**「必须有旗子」**方向。该路由两条形状"
+                    "（cached 5 键 / fresh 4 键），各写满自身键；去掉旗子后 "
+                    "`created_at` 被序列化成**显式 null**，线上字节与生产者"
+                    "不一致（探针的双向负控实测："
+                    "`...,\"cached\":false,\"created_at\":null`）。"
+                    "● 针跨三行、必须带注释行才唯一（单行 "
+                    "`response_model_exclude_unset=True,` 与 `batch-switch-engine` "
+                    "相撞，已实测）；命中 **1 次**，带 CRLF。"
+                ),
+            ),
+            Mutation(
+                label="J133 GET /analysis-history 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b"    response_model=MatchAnalysisHistoryResponse,\r\n"
+                    b")\r\n"
+                ),
+                new=(
+                    b"    response_model=FlexibleResponse,\r\n"
+                    b")\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_the_two_analysis_routes_bind_their_envelopes_and_flags",
+                ),
+                group="analysis-history-route",
+                note=(
+                    "§53.75：该路由的**身份**判据。与 J134 打的是"
+                    "**同一段字节**（同 `old`、相反改写）⇒ 必须同 `group`，"
+                    "整集 apply 时只留 J133，逐条 `verify -i` 时两条都跑。"
+                    "● 针两行（单行的 `response_model=…,` 也唯一，但同组"
+                    "要求 `old` 逐字节相同，故取两行形）、带 CRLF、命中 **1 次**。"
+                ),
+            ),
+            Mutation(
+                label="J134 GET /analysis-history 补上 response_model_exclude_unset：多余旗子会掩盖回归",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b"    response_model=MatchAnalysisHistoryResponse,\r\n"
+                    b")\r\n"
+                ),
+                new=(
+                    b"    response_model=MatchAnalysisHistoryResponse,\r\n"
+                    b"    response_model_exclude_unset=True,\r\n"
+                    b")\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_the_two_analysis_routes_bind_their_envelopes_and_flags",
+                ),
+                group="analysis-history-route",
+                note=(
+                    "§53.75：**旗子「不需要」那一面**（§Z11 第三态）。"
+                    "`get_analysis_history` 只有**一条**返回路径、四个键全写满 "
+                    "⇒ 加旗子不改变今天的行为，但会**掩盖**将来某字段变成"
+                    "条件写入的回归 —— 守卫因此把 `response_model_exclude_unset` "
+                    "钉成 `is False`，这条变异就是那个断言的对照组。"
+                    "● 与 J133 同 `group`（重叠字节）。"
+                ),
+            ),
+            Mutation(
+                label="J135 AnalysisHistoryEntry.created_at 收紧成 str：镜像 null 列的字段不再忠实",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    prediction_method: str | None\r\n"
+                    b"    created_at: str | None\r\n"
+                ),
+                new=(
+                    b"    prediction_method: str | None\r\n"
+                    b"    created_at: str\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_the_analysis_history_envelope_is_one_shape_without_a_flag",
+                ),
+                note=(
+                    "§53.75：**忠实类型**判据。生产者写的是 "
+                    "`h.created_at.isoformat() if h.created_at else None` "
+                    "⇒ 它**能**发 null（§Z6：裸类型 ⟺ 生产者交不出 null）。"
+                    "收紧成 `str` 后要么 422、要么宣称一个到不了的形状。"
+                    "● 针必须**两行**：单行 `    created_at: str | None` 在 "
+                    "本文件命中 **2 次**（已实测），带上 `prediction_method` "
+                    "那行才唯一。"
+                ),
+            ),
+            Mutation(
+                label="J136 PredictedScorePair.home 从 float 退回 int：与 ScorePair 静默合一",
+                path=_EVENT_MODEL,
+                old=b"    home: float\r\n    away: float\r\n",
+                new=b"    home: int\r\n    away: float\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_the_analysis_history_envelope_is_one_shape_without_a_flag",
+                ),
+                note=(
+                    "§53.75：本片**唯一** float 比分对。`ScorePair`（53.71）"
+                    "是 int，因为它的生产者 `round(float)`；这里生产者把 "
+                    "`Float` 列原样铺上线上，改成 int 会让模型把 `2.0` "
+                    "序列化成 `2` —— **改线上字节**，且 `tsc` 看不见"
+                    "（TS 里 int 与 float 同为 `number`）。"
+                    "● 针两行、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J137 MatchAnalysisHistoryResponse.count 加上默认值：单形状路由的必填契约被降级",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    count: int\r\n"
+                    b"    history: list[AnalysisHistoryEntry]\r\n"
+                ),
+                new=(
+                    b"    count: int = 0\r\n"
+                    b"    history: list[AnalysisHistoryEntry]\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_the_analysis_history_envelope_is_one_shape_without_a_flag",
+                ),
+                note=(
+                    "§53.75：**单形状 ⇒ 不给默认值**（§0「响亮的 422 才是"
+                    "对信号」）。这条路由没有旗子，默认值一旦物化就会"
+                    "凭空多出一个生产者从未写过的键。"
+                    "● 针两行（`history` 那行把 `count: int` 锚住，否则"
+                    "不唯一）、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J138 predictions-api 的 fetchAnalysisHistory 退回 Promise<any[]>：契约旁路",
+                path=_WC_PREDICTIONS_API_TS,
+                old=b"Promise<AnalysisHistoryEntry[]>",
+                new=b"Promise<any[]>",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_client_reads_the_analysis_contract",),
+                group="analysis-client",
+                note=(
+                    "§53.75：消费侧**类型来源**判据。`any` 让 `tsc` 全绿"
+                    "（正是被退役的手写副本曾扮演的角色），唯一的拦截点是"
+                    "静态守卫。● 针单行、ASCII、命中 **1 次**。"
+                    "与 J139 不同文件、不同判据。"
+                ),
+            ),
+            Mutation(
+                label="J139 分析卡片把 formatTimestamp 的入参收紧成 string：nullable created_at 又会被喂进去",
+                path=_ANALYSIS_CARD_TSX,
+                old=b"(isoString: string | null): string",
+                new=b"(isoString: string): string",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_client_reads_the_analysis_contract",),
+                group="analysis-card",
+                note=(
+                    "§53.75：**放宽接收端 prop，不是撒 `?? null`**。"
+                    "收紧回 `string` 后 `tsc` 立刻报错（这正是判据：改动"
+                    "**敏感**），但更重要的是它会把 `null` 重新变成"
+                    "`Invalid Date`。● 针单行、命中 **1 次**。"
+                ),
+            ),
+            Mutation(
+                label="J140 PredictedScorePair 从 _frontend_export 白名单挪走：退回嵌套尾巴",
+                path=_FRONTEND_EXPORT,
+                old=b"    PredictedScorePair,\r\n",
+                new=b"",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_every_reachable_plain_model_is_registered",),
+                group="analysis-nested-root",
+                note=(
+                    "§53.75：**登记面**。本片引入了两个新的**嵌套**普通模型"
+                    "（`PredictedScorePair` 与 `AnalysisHistoryEntry`），"
+                    "它们只经字段类型可达；不登记就退回嵌套渲染、"
+                    "`json2ts` 补 `[k: string]: unknown` 尾巴 ⇒ 比后端契约松。"
+                    "守卫是**生产者驱动**的可达性测试（沿字段注解递归展开），"
+                    "所以在**重新生成之前**就红。"
+                    "🔴 **只挪 import、不挪 `__all__`**：`__all__` 只是文档，"
+                    "而删 import 不会抛 `ImportError`（没人 `from "
+                    "_frontend_export import PredictedScorePair`）⇒ 不会造"
+                    "「导入错误假红」（§4.3 / §53.53）。整行删除；"
+                    "`    PredictedScorePair,`（import 形式）命中 **1 次**，"
+                    "`__all__` 里的 `\"PredictedScorePair\",` 带引号、字节不同"
+                    "（已实测）。取一成员作代表（§4.2）：两个模型同一条规则、"
+                    "同一守卫。"
+                ),
+            ),
+            Mutation(
+                label="J141 predictions-api 的 re-export 丢掉 EngineComparisonStat：老名字不再导出",
+                path=_WC_PREDICTIONS_API_TS,
+                old=b"EngineComparisonStat, PredictedScore }",
+                new=b"PredictedScore }",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_client_reads_the_generated_contract",),
+                group="analysis-reexport",
+                note=(
+                    "§53.75：**本条判据此前没有任何变异** —— "
+                    "`test_the_client_reads_the_generated_contract` 原有"
+                    "唯一的 J109 打的是同一方法里的**另一条**断言"
+                    "（`syncFixtures` 的返回类型）。"
+                    "🔴 本片把那条 re-export 判据从「整条语句字面量」改成"
+                    "**逐名**断言：原因是 §53.75 往同一个列表里加了第三个名字"
+                    "（`AnalysisHistoryEntry`），整条语句的断言当场变红 —— "
+                    "那是**假阳**（它要守的性质还在），不是抓到的回归。"
+                    "改完必须证明新写法**仍然敏感**，这条就是那个证据。"
+                    "● 针单行、无换行、命中 **1 次**；刻意**不**含列表里其它名字，"
+                    "所以将来再加名字不会打断它。"
                 ),
             ),
         ),

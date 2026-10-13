@@ -4229,6 +4229,326 @@ class WorldCupAutoTuneContractTests(unittest.TestCase):
         )
 
 
+class WorldCupBatchEnvelopesContractTests(unittest.TestCase):
+    """The three batch routes named in audit 53.74 (batch A, third slice).
+
+    ``POST /batch-predict``, ``POST /batch-switch-engine`` and
+    ``POST /batch-optimize`` all published the bare ``FlexibleResponse``
+    envelope. They need two different flag decisions:
+
+    * ``/batch-predict`` and ``/batch-optimize`` each have **one** shape that
+      writes every key of its literal, so every field is required and neither
+      route may set ``response_model_exclude_unset``.
+    * ``/batch-switch-engine`` has **two** shapes -- the route's no-match
+      literal and, otherwise, the ``batch_predict_matches`` envelope -- and each
+      writes all of its own keys, so that route **must** set the flag or the
+      no-match shape grows five explicit ``null`` keys nobody wrote.
+
+    The three envelopes share nothing. ``/batch-optimize`` returns
+    ``total_processed`` / ``optimizations_generated`` / ``errors`` /
+    ``optimizations``; one hand-written ``BatchSummary`` used to type all three
+    routes plus the SSE frame and did not even declare ``predictions``.
+    """
+
+    def test_the_batch_predict_envelope_is_required_keys_only(self):
+        from app.models.event import BatchPredictResponse, FlexibleResponse
+
+        fields = BatchPredictResponse.model_fields
+        self.assertEqual(
+            list(fields),
+            [
+                "status",
+                "total",
+                "succeeded",
+                "failed",
+                "skipped",
+                "elo_odds_count",
+                "hybrid_count",
+                "integrated_count",
+                "gbm_count",
+                "predictions",
+            ],
+            "BatchPredictResponse is no longer the key order "
+            "batch_predict_matches builds (audit 53.74)",
+        )
+        for name, field in fields.items():
+            with self.subTest(field=name):
+                self.assertTrue(
+                    field.is_required(),
+                    f"BatchPredictResponse.{name} gained a default; "
+                    "batch_predict_matches writes all ten keys on both of its "
+                    "return paths, so a default could only hide a regression "
+                    "(audit 53.74)",
+                )
+        self.assertTrue(issubclass(BatchPredictResponse, FlexibleResponse))
+        self.assertEqual(
+            fields["predictions"].annotation,
+            list[dict[str, typing.Any]],
+            "BatchPredictResponse.predictions must stay opaque: an element is "
+            "whichever of run_prediction_pipeline's seven literal shapes "
+            "produced it, and three more returns delegate elsewhere "
+            "(audit 53.74)",
+        )
+
+        # The producer really does build all ten keys in one literal; if that
+        # stops being true the "all required" decision above is wrong.
+        pipeline = (
+            _BACKEND_DIR / "app" / "services" / "world_cup_prediction_pipeline.py"
+        ).read_bytes().decode("utf-8")
+        start = pipeline.index("async def batch_predict_matches(")
+        body = pipeline[start:pipeline.index("\n    return results", start)]
+        for key in fields:
+            with self.subTest(producer_key=key):
+                self.assertIn(
+                    f'"{key}":',
+                    body,
+                    f"batch_predict_matches no longer writes {key!r} in its "
+                    "summary literal (audit 53.74)",
+                )
+        self.assertIn(
+            '"predictions": []',
+            body,
+            "batch_predict_matches must seed the predictions list; the element "
+            "shape is why it stays an opaque list (audit 53.74)",
+        )
+
+    def test_the_batch_switch_envelope_keeps_both_shapes_byte_for_byte(self):
+        import json
+
+        from app.models.event import BatchSwitchEngineResponse, FlexibleResponse
+
+        fields = BatchSwitchEngineResponse.model_fields
+        self.assertEqual(
+            list(fields),
+            [
+                "status",
+                "message",
+                "total",
+                "succeeded",
+                "failed",
+                "skipped",
+                "elo_odds_count",
+                "hybrid_count",
+                "integrated_count",
+                "gbm_count",
+                "predictions",
+            ],
+            "the field order is load-bearing: `message` sits second because "
+            "that is where the no-match literal puts it, and the normal path "
+            "leaves it unset so the remaining ten keys still serialise in the "
+            "producer's order (audit 53.74)",
+        )
+        for name in ("status", "total", "succeeded", "failed", "skipped"):
+            with self.subTest(required=name):
+                self.assertTrue(
+                    fields[name].is_required(),
+                    f"BatchSwitchEngineResponse.{name} gained a default; both "
+                    "shapes write it (audit 53.74)",
+                )
+        for name in (
+            "message",
+            "elo_odds_count",
+            "hybrid_count",
+            "integrated_count",
+            "gbm_count",
+            "predictions",
+        ):
+            with self.subTest(optional=name):
+                self.assertFalse(
+                    fields[name].is_required(),
+                    f"BatchSwitchEngineResponse.{name} lost its default; only "
+                    "one of the two shapes writes it, so the flag must be able "
+                    "to drop it (audit 53.74)",
+                )
+        self.assertTrue(issubclass(BatchSwitchEngineResponse, FlexibleResponse))
+        self.assertEqual(
+            fields["message"].annotation, str | None,
+            "BatchSwitchEngineResponse.message annotation drifted "
+            "(audit 53.74)",
+        )
+
+        # Two shapes, verbatim from the producers. Each must round-trip through
+        # the model with identical bytes under the flag, and must change without
+        # it -- that is what makes the flag load-bearing.
+        shapes = [
+            # 1. the route's own no-match literal
+            {
+                "status": "ok",
+                "message": "没有找到状态为 scheduled 的比赛",
+                "total": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "skipped": 0,
+            },
+            # 2. batch_predict_matches' envelope
+            {
+                "status": "ok",
+                "total": 2,
+                "succeeded": 2,
+                "failed": 0,
+                "skipped": 0,
+                "elo_odds_count": 2,
+                "hybrid_count": 0,
+                "integrated_count": 0,
+                "gbm_count": 0,
+                "predictions": [{"status": "ok"}],
+            },
+        ]
+        for raw in shapes:
+            with self.subTest(shape=sorted(raw)):
+                model = BatchSwitchEngineResponse.model_validate(raw)
+                self.assertEqual(
+                    json.dumps(
+                        model.model_dump(mode="json", exclude_unset=True)
+                    ),
+                    json.dumps(raw),
+                    "with the flag each shape must match its producer's dict "
+                    "byte for byte, key order included (audit 53.74)",
+                )
+                self.assertNotEqual(
+                    json.dumps(model.model_dump(mode="json")),
+                    json.dumps(raw),
+                    "without the flag the defaults must materialise keys the "
+                    "producer never wrote -- if this stops being true the flag "
+                    "is no longer load-bearing (audit 53.74)",
+                )
+
+    def test_the_three_batch_routes_bind_their_envelopes_and_flags(self):
+        """Route identity and the three flag decisions."""
+        from fastapi.routing import APIRoute
+
+        from app.api.routes import world_cup_predictions as wc
+        from app.models.event import (
+            BatchOptimizeResponse,
+            BatchPredictResponse,
+            BatchSwitchEngineResponse,
+            FlexibleResponse,
+        )
+
+        def route_for(path: str, method: str) -> APIRoute:
+            found = [
+                route
+                for route in wc.router.routes
+                if isinstance(route, APIRoute)
+                and route.path == path
+                and method in route.methods
+            ]
+            self.assertEqual(
+                len(found), 1, f"expected exactly one {method} route on {path}"
+            )
+            return found[0]
+
+        for path, model in (
+            ("/world-cup/predictions/batch-predict", BatchPredictResponse),
+            ("/world-cup/predictions/batch-optimize", BatchOptimizeResponse),
+        ):
+            with self.subTest(route=path):
+                route = route_for(path, "POST")
+                self.assertIs(
+                    route.response_model,
+                    model,
+                    f"POST {path} no longer binds {model.__name__}; it "
+                    "published the bare FlexibleResponse before audit 53.74",
+                )
+                self.assertIsNot(route.response_model, FlexibleResponse)
+                self.assertIs(
+                    route.response_model_exclude_unset,
+                    False,
+                    f"POST {path} gained response_model_exclude_unset. It has "
+                    "one shape that writes all of its keys, so the flag could "
+                    "only ever hide a regression (audit 53.74)",
+                )
+
+        switch = route_for(
+            "/world-cup/predictions/batch-switch-engine", "POST"
+        )
+        self.assertIs(
+            switch.response_model,
+            BatchSwitchEngineResponse,
+            "POST /batch-switch-engine no longer binds "
+            "BatchSwitchEngineResponse (audit 53.74)",
+        )
+        self.assertIsNot(switch.response_model, FlexibleResponse)
+        self.assertIs(
+            switch.response_model_exclude_unset,
+            True,
+            "POST /batch-switch-engine lost response_model_exclude_unset; its "
+            "no-match shape writes six keys, so without the flag the five "
+            "defaults serialise null keys it never wrote (audit 53.74)",
+        )
+
+    def test_the_client_reads_the_batch_contract(self):
+        """One hand-written ``BatchSummary`` served four endpoints; the client
+        must read the generated envelopes instead.
+
+        It also had no ``predictions`` field -- the batch envelopes' largest key
+        was invisible -- and it was simply wrong for ``/batch-optimize``, whose
+        four keys share none of its fields, so that panel rendered
+        "共 0 / 成功 0 / 失败 0 / 跳过 0" for every run.
+        """
+        client = (
+            _REPO_ROOT / "frontend" / "src" / "lib" / "world-cup"
+            / "engine-api.ts"
+        ).read_bytes().decode("utf-8")
+        console = (
+            _REPO_ROOT / "frontend" / "src" / "components" / "sports"
+            / "world-cup" / "engine-console.tsx"
+        ).read_bytes().decode("utf-8")
+
+        self.assertNotIn(
+            "interface BatchSummary",
+            client,
+            "engine-api.ts re-declared BatchSummary; one hand-written shape "
+            "served four endpoints and declared no `predictions` at all -- the "
+            "generated envelopes are the contract (audit 53.74)",
+        )
+        for name in (
+            "BatchPredictResponse",
+            "BatchSwitchEngineResponse",
+            "BatchOptimizeResponse",
+        ):
+            with self.subTest(model=name):
+                self.assertIn(
+                    f"Promise<{name}>",
+                    client,
+                    f"the client no longer reads {name} from the generated "
+                    "contract (audit 53.74)",
+                )
+                self.assertNotIn(
+                    f"export interface {name}",
+                    client,
+                    f"engine-api.ts re-declared {name} (audit 53.74)",
+                )
+        # An SSE frame is never a route response_model, so nothing can be
+        # generated for it; it is picked from the generated envelope rather
+        # than re-declared.
+        self.assertIn(
+            "BatchSwitchStreamSummary = Pick<",
+            client,
+            "the SSE complete frame must derive from the generated envelope "
+            "(audit 53.74)",
+        )
+
+        # /batch-optimize's own four keys, which the retired summary never had.
+        for key in (
+            "summary.total_processed",
+            "summary.optimizations_generated",
+        ):
+            with self.subTest(console_key=key):
+                self.assertIn(
+                    key,
+                    console,
+                    f"the console no longer reads {key} off the batch-optimize "
+                    "result (audit 53.74)",
+                )
+        self.assertIn(
+            "engine-optimize-summary",
+            console,
+            "the batch-optimize result needs its own panel; it cannot share "
+            "the batch-prediction summary line (audit 53.74)",
+        )
+
+
 class ApiTsTypeSourceTests(unittest.TestCase):
     """``api.ts`` reads generated shapes instead of re-declaring them.
 

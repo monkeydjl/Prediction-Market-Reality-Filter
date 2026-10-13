@@ -1693,6 +1693,96 @@ class AutoTuneResponse(FlexibleResponse):
     poll_url: str | None = None
 
 
+class BatchPredictResponse(FlexibleResponse):
+    """Response for ``POST /batch-predict`` (audit 53.74).
+
+    One shape, ten keys, and every one of them is written on both of
+    ``batch_predict_matches``'s return paths -- the empty-list early return and
+    the normal one both hand back the same ``results`` dict, which is built
+    with all ten keys up front. Every field is therefore required and the route
+    must NOT set ``response_model_exclude_unset``: a default could only ever
+    hide a producer regression, and a stray flag could only hide the day one of
+    the keys becomes conditional.
+
+    ``predictions`` stays ``list[dict[str, Any]]`` on purpose. An element is
+    whatever ``run_prediction_pipeline`` returned for that match, and an AST
+    walk of that function finds seven distinct literal shapes (19 / 15 / 13 / 4
+    / 3 / 2 / 2 keys) plus three further returns that delegate to other
+    functions; the route also rewrites ``error`` on the failed entries. No
+    frontend consumer reads the list -- the console renders the counts only --
+    so naming the element would pin a shape nothing consumes while risking a
+    silent drop of the other shapes' keys (53.58).
+    """
+
+    status: str
+    total: int
+    succeeded: int
+    failed: int
+    skipped: int
+    elo_odds_count: int
+    hybrid_count: int
+    integrated_count: int
+    gbm_count: int
+    predictions: list[dict[str, Any]]
+
+
+class BatchSwitchEngineResponse(FlexibleResponse):
+    """Response for ``POST /batch-switch-engine`` (audit 53.74).
+
+    Two shapes:
+
+    * **no matches** (6 keys): ``status``, ``message``, ``total``,
+      ``succeeded``, ``failed``, ``skipped`` -- the route's own literal, counts
+      all zero.
+    * **otherwise** (10 keys): the ``batch_predict_matches`` envelope, which
+      carries no ``message`` but adds the four engine counters and
+      ``predictions``.
+
+    Both paths write all of their own keys, so the route MUST set
+    ``response_model_exclude_unset=True``: without it the no-match shape would
+    grow five explicit ``null`` keys the producer never wrote.
+
+    ``message`` is declared second, right after ``status``, because that is
+    where the no-match literal puts it. The normal path leaves it unset, so it
+    is excluded there and the remaining ten keys still serialise in the
+    producer's order. This is the one field order that keeps *both* shapes
+    byte-identical.
+    """
+
+    status: str
+    message: str | None = None
+    total: int
+    succeeded: int
+    failed: int
+    skipped: int
+    elo_odds_count: int | None = None
+    hybrid_count: int | None = None
+    integrated_count: int | None = None
+    gbm_count: int | None = None
+    predictions: list[dict[str, Any]] | None = None
+
+
+class BatchOptimizeResponse(FlexibleResponse):
+    """Response for ``POST /batch-optimize`` (audit 53.74).
+
+    One shape, four keys, all written: ``analyze_and_optimize_all_predictions``
+    initialises its dict with every key and returns it on every path (the
+    no-match case merely leaves the counters at 0 and both lists empty). So
+    every field is required and the route must NOT set
+    ``response_model_exclude_unset``.
+
+    ``errors`` and ``optimizations`` stay opaque. Their elements carry two and
+    six keys respectively, but nothing on the frontend reads either list -- the
+    console reports the counters -- so there is no consumer that would justify
+    pinning the element shapes.
+    """
+
+    total_processed: int
+    optimizations_generated: int
+    errors: list[dict[str, Any]]
+    optimizations: list[dict[str, Any]]
+
+
 class CalibrationAggregate(BaseModel):
     """One aggregate block of ``EventCalibrationResponse`` (audit 53.63):
     the overall block and every ``by_source`` / ``by_base_rate_category``

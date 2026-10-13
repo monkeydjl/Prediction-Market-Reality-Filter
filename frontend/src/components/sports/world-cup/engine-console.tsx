@@ -5,7 +5,9 @@ import {
   engineApi,
   streamBatchSwitchEngine,
   type AutoTuneTask,
-  type BatchSummary,
+  type BatchOptimizeResponse,
+  type BatchPredictResponse,
+  type BatchSwitchStreamSummary,
   type CalibrationPatternsResponse,
   type EngineCalibrationResponse,
   type EngineName,
@@ -46,8 +48,20 @@ const STATUS_FILTERS = ["scheduled", "live", "finished"];
 const TERMINAL_TASK_STATES = new Set(["completed", "failed"]);
 const TASK_POLL_MS = 3_000;
 
-function summaryLine(summary: BatchSummary): string {
-  if (summary.message && !summary.total) return summary.message;
+/**
+ * The two results that render as one count line: `POST /batch-predict` and the
+ * SSE `complete` frame. They differ only in `predictions`, which this panel
+ * never reads -- the SSE frame does not carry it at all -- so one renderer
+ * covers both.
+ */
+type BatchRunSummary = BatchPredictResponse | BatchSwitchStreamSummary;
+
+function summaryLine(summary: BatchRunSummary): string {
+  // Only the switch envelope's no-match shape sends `message`; `/batch-predict`
+  // never does. Its open index signature makes the property read as `unknown`,
+  // so narrow at runtime rather than trusting the union.
+  const message = summary.message;
+  if (typeof message === "string" && message && !summary.total) return message;
   const parts = [
     `共 ${summary.total ?? 0}`,
     `成功 ${summary.succeeded ?? 0}`,
@@ -61,6 +75,20 @@ function summaryLine(summary: BatchSummary): string {
     summary.gbm_count ? `GBM ${summary.gbm_count}` : "",
   ].filter(Boolean);
   return byEngine.length ? `${parts.join(" / ")}（${byEngine.join("，")}）` : parts.join(" / ");
+}
+
+/**
+ * `POST /batch-optimize` shares no key with the batch-prediction envelopes. The
+ * retired `BatchSummary` read five fields this result never sends, so the panel
+ * rendered "共 0 / 成功 0 / 失败 0 / 跳过 0" for every run; these are the four
+ * keys `analyze_and_optimize_all_predictions` actually returns.
+ */
+function optimizeLine(summary: BatchOptimizeResponse): string {
+  return [
+    `共处理 ${summary.total_processed}`,
+    `生成优化 ${summary.optimizations_generated}`,
+    `错误 ${summary.errors.length}`,
+  ].join(" / ");
 }
 
 const BTN =
@@ -84,7 +112,8 @@ export function EngineConsole() {
 
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [summary, setSummary] = useState<BatchSummary | null>(null);
+  const [batchSummary, setBatchSummary] = useState<BatchRunSummary | null>(null);
+  const [optimizeSummary, setOptimizeSummary] = useState<BatchOptimizeResponse | null>(null);
   const [progress, setProgress] = useState<{ current: number; total: number; matchId: string } | null>(
     null,
   );
@@ -141,7 +170,7 @@ export function EngineConsole() {
     setConfirming(null);
     setPending("switch");
     setError(null);
-    setSummary(null);
+    setBatchSummary(null);
     setProgress(null);
 
     const controller = new AbortController();
@@ -153,7 +182,7 @@ export function EngineConsole() {
       onProgress: (p) =>
         setProgress({ current: p.current, total: p.total, matchId: p.match_id }),
       onComplete: (result) => {
-        setSummary(result);
+        setBatchSummary(result);
         setPending(null);
       },
       onError: (message) => {
@@ -262,7 +291,7 @@ export function EngineConsole() {
                   } else {
                     setConfirming(null);
                     setProgress(null);
-                    void run("predict", () => engineApi.batchPredict(engine), setSummary);
+                    void run("predict", () => engineApi.batchPredict(engine), setBatchSummary);
                   }
                 }}
                 className={`${BTN} bg-neg text-neg-foreground hover:opacity-90`}
@@ -312,9 +341,9 @@ export function EngineConsole() {
           </div>
         )}
 
-        {summary && (
+        {batchSummary && (
           <p data-testid="engine-summary" className="mt-3 text-sm text-foreground">
-            {summaryLine(summary)}
+            {summaryLine(batchSummary)}
           </p>
         )}
       </div>
@@ -392,7 +421,7 @@ export function EngineConsole() {
               void run(
                 "optimize",
                 () => engineApi.batchOptimize(tuneEngine, optimizeLimit),
-                setSummary,
+                setOptimizeSummary,
               )
             }
             className={`${BTN} border border-border text-foreground hover:bg-muted`}
@@ -422,6 +451,12 @@ export function EngineConsole() {
             分析优化模式
           </button>
         </div>
+
+        {optimizeSummary && (
+          <p data-testid="engine-optimize-summary" className="mt-3 text-sm text-foreground">
+            {optimizeLine(optimizeSummary)}
+          </p>
+        )}
 
         {task && (
           <div data-testid="auto-tune-task" className="mt-3 rounded-md border border-border p-3 text-sm">

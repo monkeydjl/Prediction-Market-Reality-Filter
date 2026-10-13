@@ -48,10 +48,16 @@ describe("EngineConsole", () => {
 
   it("runs the batch predict and reports the summary after confirming", async () => {
     engineMocks.batchPredict.mockResolvedValue({
+      status: "ok",
       total: 12,
       succeeded: 10,
       failed: 1,
       skipped: 1,
+      elo_odds_count: 9,
+      hybrid_count: 1,
+      integrated_count: 0,
+      gbm_count: 0,
+      predictions: [],
     });
     render(<EngineConsole />);
 
@@ -67,6 +73,7 @@ describe("EngineConsole", () => {
     // "共 4 / 成功 4" with no engine tallies at all and looked like a no-op.
     // The console must render whichever buckets the summary actually carries.
     engineMocks.batchPredict.mockResolvedValue({
+      status: "ok",
       total: 4,
       succeeded: 4,
       failed: 0,
@@ -75,6 +82,7 @@ describe("EngineConsole", () => {
       hybrid_count: 1,
       integrated_count: 1,
       gbm_count: 1,
+      predictions: [],
     });
     render(<EngineConsole />);
 
@@ -144,6 +152,32 @@ describe("EngineConsole", () => {
     expect(await screen.findByTestId("calibration-result")).toBeInTheDocument();
   });
 
+  it("renders the four keys the batch-optimize route actually returns", async () => {
+    // Regression (audit 53.74): the one hand-written `BatchSummary` served this
+    // route too, but declared `total` / `succeeded` / `failed` / `skipped` and
+    // the engine counters -- none of which
+    // `analyze_and_optimize_all_predictions` sends. It returns
+    // `total_processed` / `optimizations_generated` / `errors` /
+    // `optimizations`, so the panel rendered "共 0 / 成功 0 / 失败 0 / 跳过 0"
+    // for every optimisation run. There was no test for this button at all.
+    engineMocks.batchOptimize.mockResolvedValue({
+      total_processed: 7,
+      optimizations_generated: 5,
+      errors: [{ match_id: "wc-3", error: "Optimization failed: ValueError" }],
+      optimizations: [],
+    });
+    render(<EngineConsole />);
+
+    await userEvent.click(screen.getByTestId("batch-optimize-button"));
+
+    expect(engineMocks.batchOptimize).toHaveBeenCalledWith("elo_odds", 10);
+    const panel = await screen.findByTestId("engine-optimize-summary");
+    expect(panel).toHaveTextContent("共处理 7");
+    expect(panel).toHaveTextContent("生成优化 5");
+    expect(panel).toHaveTextContent("错误 1");
+    expect(panel).not.toHaveTextContent("成功 0");
+  });
+
   it("renders streamed progress and the final summary for the engine switch", async () => {
     engineMocks.streamBatchSwitchEngine.mockImplementation(
       async (_engine: string, _filter: string, handlers: Record<string, (p: unknown) => void>) => {
@@ -156,7 +190,17 @@ describe("EngineConsole", () => {
           failed: 0,
           skipped: 0,
         });
-        handlers.onComplete?.({ total: 4, succeeded: 4, failed: 0, skipped: 0 });
+        handlers.onComplete?.({
+          status: "ok",
+          total: 4,
+          succeeded: 4,
+          failed: 0,
+          skipped: 0,
+          elo_odds_count: 3,
+          hybrid_count: 1,
+          integrated_count: 0,
+          gbm_count: 0,
+        });
       },
     );
     render(<EngineConsole />);
@@ -172,7 +216,12 @@ describe("EngineConsole", () => {
     );
     expect(await screen.findByText(/2 \/ 4 · wc-7/)).toBeInTheDocument();
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "2");
-    expect(await screen.findByText(/共 4 \/ 成功 4/)).toBeInTheDocument();
+    // The SSE `complete` frame carries the four engine buckets but no
+    // `predictions` -- the stream aggregates counts only.
+    const summary = await screen.findByTestId("engine-summary");
+    expect(summary).toHaveTextContent("共 4 / 成功 4");
+    expect(summary).toHaveTextContent("ELO 3");
+    expect(summary).toHaveTextContent("混合 1");
   });
 
   it("surfaces a stream error without leaving the console busy", async () => {

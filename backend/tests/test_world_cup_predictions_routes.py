@@ -166,6 +166,12 @@ class WorldCupPredictionRoutesTests(unittest.TestCase):
 
     def test_batch_prediction_failure_does_not_expose_exception_text(self):
         client = _prediction_client()
+        # The fixture is `batch_predict_matches`'s real shape: it builds its
+        # summary literal with all ten keys before it runs anything, so the four
+        # engine counters are present even when nothing succeeded. `POST
+        # /batch-predict` now binds `BatchPredictResponse` (audit 53.74), whose
+        # fields are all required for that reason -- a five-key fixture would be
+        # rejected by the response model rather than by anything real.
         batch = AsyncMock(
             return_value={
                 "status": "ok",
@@ -173,6 +179,10 @@ class WorldCupPredictionRoutesTests(unittest.TestCase):
                 "succeeded": 0,
                 "failed": 1,
                 "skipped": 0,
+                "elo_odds_count": 0,
+                "hybrid_count": 0,
+                "integrated_count": 0,
+                "gbm_count": 0,
                 "predictions": [
                     {
                         "status": "error",

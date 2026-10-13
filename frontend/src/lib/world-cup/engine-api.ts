@@ -24,6 +24,9 @@ import type {
   AutoTuneResponse,
   AutoTuneStatusResponse,
   AutoTuneTask,
+  BatchOptimizeResponse,
+  BatchPredictResponse,
+  BatchSwitchEngineResponse,
   CalibrationPatternsResponse,
   EngineCalibrationResponse,
 } from "@/lib/generated-types";
@@ -51,6 +54,16 @@ import type {
 export type { CalibrationPatternsResponse, EngineCalibrationResponse };
 
 export type { AutoTuneResponse, AutoTuneStatusResponse, AutoTuneTask };
+
+// The batch contracts follow in the same audit (53.74). `BatchSummary` was one
+// hand-written interface serving four different endpoints -- the two batch
+// POSTs, `batch-optimize` and the SSE `complete` frame -- which is the "one
+// frontend type for two endpoints" defect the calibration copies were retired
+// for. It also declared no `predictions`, so the batch envelopes' largest key
+// was invisible to the client, and it was outright *wrong* for
+// `batch-optimize`: that result's four keys share none of its fields, so the
+// console rendered "共 0 / 成功 0 / 失败 0 / 跳过 0" for every optimisation run.
+export type { BatchOptimizeResponse, BatchPredictResponse, BatchSwitchEngineResponse };
 
 const API_BASE = getApiBase();
 const ENGINE_CLIENT_SOURCE = "world-cup-engine-console";
@@ -81,18 +94,33 @@ export type EngineName =
 // but never tune them.
 export type TunableEngine = "elo_odds" | "hybrid" | "integrated" | "gbm";
 
-export interface BatchSummary {
-  status?: string;
-  message?: string;
-  total?: number;
-  succeeded?: number;
-  failed?: number;
-  skipped?: number;
-  elo_odds_count?: number;
-  hybrid_count?: number;
-  integrated_count?: number;
-  gbm_count?: number;
-}
+/**
+ * The `complete` frame of the SSE `batch-switch-engine-stream` route: the
+ * `/batch-switch-engine` envelope **without** `predictions` -- the stream
+ * aggregates counts only and never builds a per-match list.
+ *
+ * Picked from the generated envelope so the field *types* cannot drift. An SSE
+ * frame is never a route `response_model`, so there is nothing for the
+ * generator to emit for it. It is deliberately not written as
+ * `Omit<BatchSwitchEngineResponse, "predictions">`: the generated interface
+ * carries an open `[k: string]: unknown` tail (it subclasses
+ * `FlexibleResponse`), and `keyof` on such a type is just `string | number`, so
+ * `Omit` collapses the whole type to `{ [k: string]: unknown }` and drops every
+ * named field.
+ */
+export type BatchSwitchStreamSummary = Pick<
+  BatchSwitchEngineResponse,
+  | "status"
+  | "message"
+  | "total"
+  | "succeeded"
+  | "failed"
+  | "skipped"
+  | "elo_odds_count"
+  | "hybrid_count"
+  | "integrated_count"
+  | "gbm_count"
+>;
 
 export interface BatchProgressEvent {
   current: number;
@@ -142,8 +170,8 @@ async function engineFetch<T>(
 const PREFIX = "/world-cup/predictions";
 
 export const engineApi = {
-  batchPredict: (engine: EngineName | "auto"): Promise<BatchSummary> =>
-    engineFetch<BatchSummary>(
+  batchPredict: (engine: EngineName | "auto"): Promise<BatchPredictResponse> =>
+    engineFetch<BatchPredictResponse>(
       `${PREFIX}/batch-predict?engine=${encodeURIComponent(engine)}`,
       { method: "POST", timeoutMs: BATCH_TIMEOUT_MS },
     ),
@@ -152,16 +180,16 @@ export const engineApi = {
    * Long-poll batch engine switch. Returns only the aggregate summary — prefer
    * `streamBatchSwitchEngine` when the caller can show per-match progress.
    */
-  batchSwitchEngine: (engine: EngineName, statusFilter = "scheduled"): Promise<BatchSummary> =>
-    engineFetch<BatchSummary>(
+  batchSwitchEngine: (engine: EngineName, statusFilter = "scheduled"): Promise<BatchSwitchEngineResponse> =>
+    engineFetch<BatchSwitchEngineResponse>(
       `${PREFIX}/batch-switch-engine?engine=${encodeURIComponent(engine)}&status_filter=${encodeURIComponent(statusFilter)}`,
       { method: "POST", timeoutMs: BATCH_TIMEOUT_MS },
     ),
 
-  batchOptimize: (engine: TunableEngine | "", limit: number): Promise<BatchSummary> => {
+  batchOptimize: (engine: TunableEngine | "", limit: number): Promise<BatchOptimizeResponse> => {
     const params = new URLSearchParams({ limit: String(limit) });
     if (engine) params.set("engine", engine);
-    return engineFetch<BatchSummary>(`${PREFIX}/batch-optimize?${params}`, {
+    return engineFetch<BatchOptimizeResponse>(`${PREFIX}/batch-optimize?${params}`, {
       method: "POST",
       timeoutMs: BATCH_TIMEOUT_MS,
     });
@@ -192,7 +220,7 @@ export const engineApi = {
 export interface StreamBatchSwitchHandlers {
   onStart?: (payload: { total: number; engine: string }) => void;
   onProgress?: (payload: BatchProgressEvent) => void;
-  onComplete?: (payload: BatchSummary) => void;
+  onComplete?: (payload: BatchSwitchStreamSummary) => void;
   onError?: (message: string) => void;
   signal?: AbortSignal;
 }
@@ -279,7 +307,7 @@ export async function streamBatchSwitchEngine(
           } else if (parsed.event === "progress") {
             handlers.onProgress?.(parsed.data as BatchProgressEvent);
           } else if (parsed.event === "complete") {
-            handlers.onComplete?.(parsed.data as BatchSummary);
+            handlers.onComplete?.(parsed.data as BatchSwitchStreamSummary);
           } else if (parsed.event === "error") {
             handlers.onError?.((parsed.data as { message?: string }).message ?? "批量切换失败");
           }

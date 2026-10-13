@@ -14,6 +14,9 @@ from app.api.security import optional_write_key, require_write_key
 from app.models.event import (
     AutoTuneResponse,
     AutoTuneStatusResponse,
+    BatchOptimizeResponse,
+    BatchPredictResponse,
+    BatchSwitchEngineResponse,
     CalibrationPatternsResponse,
     EngineCalibrationResponse,
     EngineComparisonResponse,
@@ -518,13 +521,19 @@ async def get_analysis_history(match_id: str) -> dict[str, Any]:
         close_prediction_session(session)
 
 
-@router.post("/batch-predict", response_model=FlexibleResponse)
+@router.post("/batch-predict", response_model=BatchPredictResponse)
 async def batch_predict(
     match_ids: list[str] | None = None,
     engine: PredictionEngine = "auto",
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
     """Run predictions for multiple matches.
+
+    Named the response ``BatchPredictResponse`` (audit 53.74). The handler
+    returns ``batch_predict_matches``'s envelope unchanged, and that function
+    writes all ten of its keys on both return paths, so every field is required
+    and ``response_model_exclude_unset`` is deliberately absent -- nothing here
+    is conditional, so a flag could only hide a future regression.
 
     Args:
         match_ids: Optional list of match IDs (None = all remaining matches)
@@ -540,13 +549,25 @@ async def batch_predict(
     return result
 
 
-@router.post("/batch-switch-engine", response_model=FlexibleResponse)
+@router.post(
+    "/batch-switch-engine",
+    response_model=BatchSwitchEngineResponse,
+    response_model_exclude_unset=True,
+)
 async def batch_switch_engine(
     engine: PredictionEngine = Query(..., description='Target engine: "elo_odds", "hybrid", "integrated", "high_confidence", "gbm", or "auto"'),
     status_filter: str = Query("scheduled", description='Match status filter (default: "scheduled")'),
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
     """Batch switch all matches to a specific prediction engine.
+
+    Named the response ``BatchSwitchEngineResponse`` (audit 53.74). Unlike
+    ``/batch-predict`` this handler has **two** shapes -- the no-match literal
+    (``status``, ``message``, ``total``, ``succeeded``, ``failed``, ``skipped``)
+    and, otherwise, ``batch_predict_matches``'s ten-key envelope -- and each
+    writes all of its own keys. ``response_model_exclude_unset=True`` is
+    therefore load-bearing: without it the no-match shape would grow five
+    explicit ``null`` keys the producer never wrote.
 
     Args:
         engine: Target engine to use
@@ -915,13 +936,21 @@ async def get_auto_tune_status(task_id: str) -> dict[str, Any]:
 
 
 
-@router.post("/batch-optimize", response_model=FlexibleResponse)
+@router.post("/batch-optimize", response_model=BatchOptimizeResponse)
 async def batch_optimize_predictions(
     engine: str | None = Query(None, description="Filter by engine (elo_odds, hybrid)"),
     limit: int = Query(10, ge=1, le=100, description="Max matches to process"),
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
     """Run AI optimization on multiple scheduled matches.
+
+    Named the response ``BatchOptimizeResponse`` (audit 53.74). The handler
+    returns ``analyze_and_optimize_all_predictions``'s dict unchanged; that
+    function initialises all four keys and writes them on every path, so every
+    field is required and ``response_model_exclude_unset`` is deliberately
+    absent. The four keys share nothing with the two batch-prediction
+    envelopes -- the console used to read this result through the same
+    hand-written ``BatchSummary`` and therefore always rendered zeros.
 
     Args:
         engine: Optional engine filter

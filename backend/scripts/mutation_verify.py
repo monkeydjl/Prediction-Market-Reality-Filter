@@ -383,6 +383,10 @@ _T_QUALITY_METRICS = "tests/test_quality_metrics.py"
 _WORLD_CUP_PREDICTIONS = "backend/app/api/routes/world_cup_predictions.py"
 _WC_PREDICTIONS_API_TS = "frontend/src/lib/world-cup/predictions-api.ts"
 _ENGINE_CONSOLE_TSX = "frontend/src/components/sports/world-cup/engine-console.tsx"
+# §53.74 — the engine client module. J130 pins the one thing a hand-written
+# module can get wrong without any tool complaining: which generated contract a
+# method promises (`res.json() as T` asserts nothing about the shape).
+_ENGINE_API_TS = "frontend/src/lib/world-cup/engine-api.ts"
 _T_EVENT_INTELLIGENCE = "tests/test_event_intelligence_service.py"
 _T_CONCLUSION_CHALLENGE = "tests/test_conclusion_challenge_service.py"
 _T_DECISION_QUALITY = "tests/test_decision_quality_service.py"
@@ -1647,7 +1651,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J121）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J130）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -1888,7 +1892,26 @@ SETS: tuple[MutationSet, ...] = (
             "面板的「阶段」与消息行**恒不显示**、`progress` 还被当 0..1 比例乘了 100，"
             "而 `TERMINAL_TASK_STATES` 里的 `error`/`cancelled` 也不是 `TaskStatus` 的词表（J121 钉回退）。"
             "🔴 **J115/J116 是同段字节的两条相反改写（同 `group`）**，J117/J118 同理；"
-            "`apply <set>` 整集重放时每组只留前一条。",
+            "`apply <set>` 整集重放时每组只留前一条。"
+            "§53.74 收掉批 A 的第三条——**三条 batch 路由**（`/batch-predict`、"
+            "`/batch-switch-engine`、`/batch-optimize`），也是本 set 里第一次"
+            "**同一批出现三种旗子状态**：两条单形状路由各自 `is False`（J123/J127 是它们的"
+            "对照组），一条两形状路由 `is True`（J124 是承重针、J125 是身份针）。"
+            "🔴 **本片最微妙的一处是字段序**：`BatchSwitchEngineResponse.message` 必须声明在 "
+            "`status` **之后**，因为无比赛字面量把它放第二位，而正常路径不写它 —— "
+            "旗子把它排除后，剩下的十键**仍**按生产者原序序列化。这是唯一能让**两条**形状"
+            "同时逐字节不变的次序，J128 就是挪动它的那条。"
+            "🔴 **消费侧**：一个手写 `BatchSummary` 同时服务四个端点（两条 batch POST + "
+            "`/batch-optimize` + SSE `complete` 帧），既没有 `predictions`（批量信封最大的键"
+            "对前端完全不可见），又**根本不匹配** `/batch-optimize` 的四键 —— "
+            "那个面板因此每次都渲染「共 0 / 成功 0 / 失败 0 / 跳过 0」，且**此前没有任何测试**。"
+            "J129/J130 分别钉「面板又混回批量预测那一栏」与「客户端又用批量预测信封去套优化结果」。"
+            "🔴 **SSE `complete` 帧不是 `response_model`，生成器无从产出** ⇒ 用 `Pick` 从生成信封"
+            "派生，而不是再手写一份副本；且**不能用 `Omit`**：生成物带开放索引签名，"
+            "`keyof` 只剩 `string | number`，`Omit` 会把整个类型塌成 `{[k: string]: unknown}`。"
+            "🔴 **`/batch-predict` 的 `predictions` 元素保持不透明**：AST 读出 "
+            "`run_prediction_pipeline` 有七个字面形状（19/15/13/4/3/2/2 键）+ 三处委托返回，"
+            "而前端没有消费者 —— 具名只会钉住一个没人读的形状，同时冒静默丢键的险（§53.58）。",
         ),
         mutations=(
             Mutation(
@@ -4546,6 +4569,220 @@ SETS: tuple[MutationSet, ...] = (
                     "「阶段」永远不显示（字节全绿、类型系统全绿）。"
                     "● 针是 JSX 条件行（命中 **1 次**），"
                     "与 J114 不同文件、不同 guard 名。"
+                ),
+            ),
+            Mutation(
+                label="J122 POST /batch-predict 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b'@router.post("/batch-predict",'
+                    b" response_model=BatchPredictResponse)\r\n"
+                ),
+                new=(
+                    b'@router.post("/batch-predict",'
+                    b" response_model=FlexibleResponse)\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_the_three_batch_routes_bind_their_envelopes_and_flags",
+                ),
+                group="batch-predict-route",
+                note=(
+                    "§53.74（批 A 第三片）：路由对象**身份**判据。"
+                    "退回后路由仍 200、`tsc` 绿、其余守卫全绿 —— "
+                    "只有按 `is` 钉住的那条会红。● 针是整行装饰器、"
+                    "**带 CRLF**（与目标文件一致，无裸 LF）；本文件"
+                    "命中 **1 次**。🔴 **与 J123 同 `group`**：两条"
+                    "改的是**同一行字节**的两个方向（一个换模型、"
+                    "一个加旗子），整集 apply 只留前一条。"
+                ),
+            ),
+            Mutation(
+                label="J123 POST /batch-predict 补上 response_model_exclude_unset：多余旗子会掩盖回归",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b'@router.post("/batch-predict",'
+                    b" response_model=BatchPredictResponse)\r\n"
+                ),
+                new=(
+                    b"@router.post(\r\n"
+                    b'    "/batch-predict",\r\n'
+                    b"    response_model=BatchPredictResponse,\r\n"
+                    b"    response_model_exclude_unset=True,\r\n"
+                    b")\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_the_three_batch_routes_bind_their_envelopes_and_flags",
+                ),
+                group="batch-predict-route",
+                note=(
+                    "§53.74：**旗子「不需要」那一面**的承重针"
+                    "（§Z11 的第三态）。`batch_predict_matches` 在两条"
+                    "返回路径上都写满十键 ⇒ 加旗子不会改变今天的行为，"
+                    "但它会**掩盖**将来某个字段变成条件写入的回归 —— "
+                    "守卫因此把 `response_model_exclude_unset` 钉成 "
+                    "`is False`，这条变异就是那个断言的对照组。"
+                    "● 与 J122 同 `group`（同一行字节的相反改写）。"
+                ),
+            ),
+            Mutation(
+                label="J124 POST /batch-switch-engine 丢掉 response_model_exclude_unset：无比赛形状长出五个 null 键",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b"    response_model=BatchSwitchEngineResponse,\r\n"
+                    b"    response_model_exclude_unset=True,\r\n"
+                    b")\r\n"
+                ),
+                new=(
+                    b"    response_model=BatchSwitchEngineResponse,\r\n"
+                    b")\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_the_three_batch_routes_bind_their_envelopes_and_flags",
+                ),
+                group="batch-switch-route",
+                note=(
+                    "§53.74：**旗子必须有**的承重针。该路由两条形状"
+                    "（无比赛 6 键 / 否则十键），各写满自身键；去掉旗子后 "
+                    "`elo_odds_count` / `hybrid_count` / "
+                    "`integrated_count` / `gbm_count` / `predictions` "
+                    "会被序列化成**显式 null**，线上字节与生产者不一致。"
+                    "● 针跨三行装饰器尾、**带 CRLF**（命中 **1 次**）。"
+                    "🔴 **与 J125 同 `group`**（同一段字节的相反改写）。"
+                ),
+            ),
+            Mutation(
+                label="J125 POST /batch-switch-engine 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b"    response_model=BatchSwitchEngineResponse,\r\n"
+                    b"    response_model_exclude_unset=True,\r\n"
+                    b")\r\n"
+                ),
+                new=(
+                    b"    response_model=FlexibleResponse,\r\n"
+                    b"    response_model_exclude_unset=True,\r\n"
+                    b")\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_the_three_batch_routes_bind_their_envelopes_and_flags",
+                ),
+                group="batch-switch-route",
+                note=(
+                    "§53.74：该路由的**身份**判据。与 J124 改的是同一段"
+                    "字节，所以必须同 `group` —— 整集 apply 时只留 J124，"
+                    "逐条 `verify -i` 时两条都跑。"
+                ),
+            ),
+            Mutation(
+                label="J126 POST /batch-optimize 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b'@router.post("/batch-optimize",'
+                    b" response_model=BatchOptimizeResponse)\r\n"
+                ),
+                new=(
+                    b'@router.post("/batch-optimize",'
+                    b" response_model=FlexibleResponse)\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_the_three_batch_routes_bind_their_envelopes_and_flags",
+                ),
+                group="batch-optimize-route",
+                note=(
+                    "§53.74：第三条 batch 路由的**身份**判据。它与"
+                    "两条批量预测信封**没有一个共用键**（生产者发 "
+                    "`total_processed` / `optimizations_generated` / "
+                    "`errors` / `optimizations`），这正是退役共享副本的"
+                    "理由。● 针是整行装饰器（命中 **1 次**）。"
+                    "🔴 **与 J127 同 `group`**。"
+                ),
+            ),
+            Mutation(
+                label="J127 POST /batch-optimize 补上 response_model_exclude_unset：多余旗子会掩盖回归",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b'@router.post("/batch-optimize",'
+                    b" response_model=BatchOptimizeResponse)\r\n"
+                ),
+                new=(
+                    b"@router.post(\r\n"
+                    b'    "/batch-optimize",\r\n'
+                    b"    response_model=BatchOptimizeResponse,\r\n"
+                    b"    response_model_exclude_unset=True,\r\n"
+                    b")\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_the_three_batch_routes_bind_their_envelopes_and_flags",
+                ),
+                group="batch-optimize-route",
+                note=(
+                    "§53.74：第三条路由的**不需要旗子**那一面。"
+                    "`analyze_and_optimize_all_predictions` 四键全写，"
+                    "加旗子只会掩盖回归。● 与 J126 同 `group`。"
+                ),
+            ),
+            Mutation(
+                label="J128 BatchSwitchEngineResponse 把 message 挪到 total 之后：无比赛形状的键序变了",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    status: str\r\n"
+                    b"    message: str | None = None\r\n"
+                    b"    total: int\r\n"
+                ),
+                new=(
+                    b"    status: str\r\n"
+                    b"    total: int\r\n"
+                    b"    message: str | None = None\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_the_batch_switch_envelope_keeps_both_shapes_byte_for_byte",
+                ),
+                note=(
+                    "§53.74：**模型字段序就是线上键序**的承重针，也是本片"
+                    "最微妙的一处。`message` 之所以声明在 `status` 之后，"
+                    "是因为无比赛字面量把它放在第二位；正常路径不写它，"
+                    "所以被旗子排除后剩下的十键**仍**按生产者原序序列化 —— "
+                    "这是唯一能让**两条**形状同时逐字节不变的次序。"
+                    "挪到 `total` 之后，无比赛形状就会序列化成 "
+                    "`status, total, message, …`。🔴 针**必须跨三行**"
+                    "才唯一（单行 `status: str` 在全文件出现多次）。"
+                    "● 带 CRLF。"
+                ),
+            ),
+            Mutation(
+                label="J129 engine-console 的批量优化面板退回共用的 engine-summary：结果又混进批量预测那一栏",
+                path=_ENGINE_CONSOLE_TSX,
+                old=b'data-testid="engine-optimize-summary"',
+                new=b'data-testid="engine-summary"',
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_client_reads_the_batch_contract",),
+                note=(
+                    "§53.74：**消费面**承重针，也是本片起点缺陷的形态本身。"
+                    "`/batch-optimize` 的四个键与批量预测信封没有任何交集，"
+                    "共用一个面板等于把两套键当成一套读（旧版就是这样"
+                    "渲染出「共 0 / 成功 0 / 失败 0 / 跳过 0」的）。"
+                    "● 针是 JSX 属性片段（命中 **1 次**），ASCII。"
+                ),
+            ),
+            Mutation(
+                label="J130 engine-api 的 batchOptimize 退回承诺 BatchPredictResponse：又用批量预测信封去套优化结果",
+                path=_ENGINE_API_TS,
+                old=b"Promise<BatchOptimizeResponse> => {",
+                new=b"Promise<BatchPredictResponse> => {",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_client_reads_the_batch_contract",),
+                note=(
+                    "§53.74：消费侧**类型来源**判据。手写模块里的一句注解"
+                    "不会让 `tsc` 报错（`res.json() as T` 对形状零主张），"
+                    "只有静态守卫会红。● 针单行、ASCII、命中 **1 次**；"
+                    "与 J129 不同文件、不同判据。"
                 ),
             ),
         ),

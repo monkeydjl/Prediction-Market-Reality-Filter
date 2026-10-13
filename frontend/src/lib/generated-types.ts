@@ -436,6 +436,106 @@ export interface AutoTuneTask {
   logs: AutoTuneLogEntry[];
 }
 /**
+ * Response for ``POST /batch-optimize`` (audit 53.74).
+ *
+ * One shape, four keys, all written: ``analyze_and_optimize_all_predictions``
+ * initialises its dict with every key and returns it on every path (the
+ * no-match case merely leaves the counters at 0 and both lists empty). So
+ * every field is required and the route must NOT set
+ * ``response_model_exclude_unset``.
+ *
+ * ``errors`` and ``optimizations`` stay opaque. Their elements carry two and
+ * six keys respectively, but nothing on the frontend reads either list -- the
+ * console reports the counters -- so there is no consumer that would justify
+ * pinning the element shapes.
+ */
+export interface BatchOptimizeResponse {
+  total_processed: number;
+  optimizations_generated: number;
+  errors: {
+    [k: string]: unknown;
+  }[];
+  optimizations: {
+    [k: string]: unknown;
+  }[];
+  [k: string]: unknown;
+}
+/**
+ * Response for ``POST /batch-predict`` (audit 53.74).
+ *
+ * One shape, ten keys, and every one of them is written on both of
+ * ``batch_predict_matches``'s return paths -- the empty-list early return and
+ * the normal one both hand back the same ``results`` dict, which is built
+ * with all ten keys up front. Every field is therefore required and the route
+ * must NOT set ``response_model_exclude_unset``: a default could only ever
+ * hide a producer regression, and a stray flag could only hide the day one of
+ * the keys becomes conditional.
+ *
+ * ``predictions`` stays ``list[dict[str, Any]]`` on purpose. An element is
+ * whatever ``run_prediction_pipeline`` returned for that match, and an AST
+ * walk of that function finds seven distinct literal shapes (19 / 15 / 13 / 4
+ * / 3 / 2 / 2 keys) plus three further returns that delegate to other
+ * functions; the route also rewrites ``error`` on the failed entries. No
+ * frontend consumer reads the list -- the console renders the counts only --
+ * so naming the element would pin a shape nothing consumes while risking a
+ * silent drop of the other shapes' keys (53.58).
+ */
+export interface BatchPredictResponse {
+  status: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  elo_odds_count: number;
+  hybrid_count: number;
+  integrated_count: number;
+  gbm_count: number;
+  predictions: {
+    [k: string]: unknown;
+  }[];
+  [k: string]: unknown;
+}
+/**
+ * Response for ``POST /batch-switch-engine`` (audit 53.74).
+ *
+ * Two shapes:
+ *
+ * * **no matches** (6 keys): ``status``, ``message``, ``total``,
+ *   ``succeeded``, ``failed``, ``skipped`` -- the route's own literal, counts
+ *   all zero.
+ * * **otherwise** (10 keys): the ``batch_predict_matches`` envelope, which
+ *   carries no ``message`` but adds the four engine counters and
+ *   ``predictions``.
+ *
+ * Both paths write all of their own keys, so the route MUST set
+ * ``response_model_exclude_unset=True``: without it the no-match shape would
+ * grow five explicit ``null`` keys the producer never wrote.
+ *
+ * ``message`` is declared second, right after ``status``, because that is
+ * where the no-match literal puts it. The normal path leaves it unset, so it
+ * is excluded there and the remaining ten keys still serialise in the
+ * producer's order. This is the one field order that keeps *both* shapes
+ * byte-identical.
+ */
+export interface BatchSwitchEngineResponse {
+  status: string;
+  message?: string | null;
+  total: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  elo_odds_count?: number | null;
+  hybrid_count?: number | null;
+  integrated_count?: number | null;
+  gbm_count?: number | null;
+  predictions?:
+    | {
+        [k: string]: unknown;
+      }[]
+    | null;
+  [k: string]: unknown;
+}
+/**
  * How accurate the event's probability estimate was vs the settled
  * outcome. Computed once at resolve time (a snapshot); None on EventRecord
  * until the event is resolved.

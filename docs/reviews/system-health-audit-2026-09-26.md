@@ -14581,3 +14581,59 @@ AST 读 `run_prediction_pipeline`：**七个**字面形状（19 / 15 / 13 / 4 / 
 - **全量** 8465/0/0/11（6704/1761）对账 **+4 case + 52 subtest 零残差**（`_recon_5374.py` GATE PASS）——52 = 守卫类 40 + `test_mutation_verify` 12。
 
 **待办**：批 A 余下已清空；批 B（比赛查询 6 条）；L2（48 条登记裸集合）。
+
+## 53.75 —— L1 批 B 首片：两条分析族路由具名、退役最后一份「用整数比分对套 float 线上」的手写副本
+
+### 1. 两条路由，**两种**旗子状态
+
+| 路由 | 生产者形状 | 旗子 |
+|---|---|---|
+| `GET /matches/{match_id}/analysis-history` | **1** 条（四键全写；`history` 可空） | **不需要**，守卫钉 `is False` |
+| `POST /matches/{match_id}/analyze` | **2** 条互斥（cached 五键 / fresh 四键） | **必须有**（`is True`） |
+
+`/analysis-history` 的「两形状」是**假象**：`get_analysis_history` 有两条 `return`（正常与异常降级），但两条交的是**同一个四键 dict** ⇒ 单形状、无默认值、无旗子（与 §53.74 的 `/batch-predict` 同类）。`/analyze` 则真有两条互斥路径：命中缓存时是五键（多一个 `created_at`），新算时是四键。
+
+### 2. 🔴 本片第一次把「float 比分对」带上线
+
+`AIAnalysisHistory.predicted_home_score` / `predicted_away_score` 都是 **`Float` 列**，生产者 `h.predicted_home_score` 原样铺上线上 ⇒ 新模型 `PredictedScorePair` 两个成员都是 `float`。它**刻意不叫** `ScorePair`（§53.71 那个是 `int`，因为它的生产者 `round(float)`），也不叫 `PredictedScore`（那是 `world_cup_engines.types` 里已有的 `TypedDict`）。`tsc` 对 `int`/`float` **零分辨力**（两者都是 `number`），所以被退役的手写 `AIAnalysisHistoryEntry` 一直拿**整数**比分对去套 float 线上 ——**类型系统全绿、字节也不会响亮**：只有把值连同模型一起往返，`2.0` 才会暴露成 `2`。探针因此专门用 float 夹具（写 `2` 会让裸 dict 与 pydantic 往返不一致）。
+
+### 3. 🔴 条件字段仍放在「写它的那条路径」的位置
+
+cached 字面量把 `created_at` 放**最后**，fresh 路径根本不写它 ⇒ 声明在最后，被旗子排除后剩下的四键仍按生产者原序序列化。与 §53.74 的 `message`（必须紧跟 `status`）是同一条规则的不同取值：**位置由生产者决定，不能照搬上一片**。
+
+### 4. 消费侧：退役副本，并**放宽** prop 而不是撒 `??`
+
+`predictions-api.ts` 的 `AIAnalysisHistoryEntry` 退役；`fetchAnalysisHistory` 改指生成类型，`analyzePrediction` 从 `response.json()` 起就声明 `MatchAnalyzeResponse`（此前是裸 `any`，对 `.analysis` 零主张）。
+生成的 `created_at` 是 `string | null`（生产者写着 `… if h.created_at else None`，**它能发 null**，尽管 DDL 是 NOT NULL —— §Z6：裸类型 ⟺ 生产者交不出 null），所以卡片把 `formatTimestamp` 的入参放宽成 `string | null` 并给一条 `—` 兜底，**不是**在每个调用点撒 `?? null`。这条分支此前没有任何测试覆盖。
+
+### 5. 守卫、变异与探针
+
+**守卫** `WorldCupAnalysisFamilyContractTests`（4 例 / 37 subtest）：① 单形状信封四键全必填 + 元素六键的**逐字段注解**（含 `predicted_score` 是 `PredictedScorePair`、`created_at` 是 `str | None`）+ 两个新模型都不开 `extra="allow"` + **回读生产者源码**钉住六键确实由一个推导式写出；② 两形状**逐字节**往返 + 断言只有 fresh 那条在去旗子后会多出键（cached 那条全字段都设了，拿它当判据就是一条永不红的断言）+ 回读 `/analyze` 源码；③ 两条路由的身份与**相反**的旗子决定（完整路径 + method 过滤，因为带 prefix 的 router 裸 path 找到 0 条）；④ 消费侧（客户端不再声明副本、卡片确实放宽了 prop）。
+
+**变异** J131–J141（索引 137–147），清单 **216 → 227**：J131/J133 身份、J132「必须有旗子」、J134「不需要旗子」的对照组（与 J133 **同段字节** ⇒ 同 `group`）、J135 nullable 字段的忠实类型、J136 拿下 int 合并两个比分对、J137 单形状路由加默认值、J138 客户端 generic 旁路、J139 卡片收紧 prop、J140 新嵌套模型的白名单登记面、J141 re-export 掉名字。
+🔴 **改针前先数**：`    created_at: str | None` 单行在 `event.py` 命中 **2 次** ⇒ J135 必须带上 `prediction_method` 那行才唯一。**harness 另有一条同组必须 `old` 逐字节相同**的守卫（`test_grouped_mutations_rewrite_the_same_bytes`）：J133 起初写成单行、与 J134 的两行针同组而被当场拦下，改成同 `old` 才通过。
+
+**探针** `probe_5375_bytes.py`：走**真实 FastAPI 栈**（`TestClient`，只桩写锁依赖与 DB 会话），**3 个形状逐字节**等于生产者字典；并带**双向负控** —— fresh `/analyze` **去旗子后多出 `"created_at": null`**，而 `/analysis-history` **加旗子前后逐字节相同**（探针夹具刻意用 float 比分：写 `2` 而不是 `2.0` 会让裸 dict 与 pydantic 往返不一致，这正是 `PredictedScorePair` 要挡的那种失真）。
+
+### 6. 🔴 整集重放抓到一个**既有守卫的假阳**（本片真正的收获之一）
+
+整集 227 条重放时，索引 115（J109）与 120（J114）报「变异前守卫已是红的」。单跑确认：`test_generate_types.py` 的 `WorldCupBatchCContractTests::test_the_client_reads_the_generated_contract`（§53.71）把那条 re-export 语句当成**整条字面量**钉住 ——
+
+```python
+self.assertIn("export type { EngineComparisonStat, PredictedScore };", text, ...)
+```
+
+本片往同一个列表里加了第三个名字（`AnalysisHistoryEntry`），它当场变红。🔴 **那是假阳，不是抓到的回归**：它要守的性质（两个老名字仍以 re-export 形式导出）完好无损。判据被改成**逐名**断言（`assertRegex` 各自匹配名字，仍对**去掉任一名字**敏感），并补 **J141** 证明新写法仍然承重 —— 因为这条判据此前**一条变异都没有**（J109 打的是同一方法里的**另一条**断言），正是「判据存在 ≠ 判据被验证」。
+结论：**用整条语句钉「某个集合含某些成员」，会在集合增员时假阳**；要钉成员就要逐名钉。
+
+🔴 **修完之后判据变强了，而且这个变强是可测的**：新写法第一次让这条断言带上 `subTest`，所以全量 subtest 计数比「只加新守卫类」多出 **2**（首猜 +55 因此对不上，实测 +57）。这 2 不是凑出来的 —— 它是「判据从零 subTest 变成两条」在计数上的投影，与 J141 一起证明这条判据现在真的承重。反过来说：**对账残差必须先归因再改预期**，否则会把一处真实的判据变化当成噪声抹掉。
+
+### 7. 读数
+
+- **代码** 9 文件（numstat 实测 14/2、8/0、82/0、262/2、357/6、7/4、80/0、59/0、17/14；合计 +886/-28）。
+- 四道门：`ruff check app/` 全绿、`mypy app/` 全绿、`generate_types --check` up to date。
+- 前端：`tsc --noEmit` 绿、`eslint`（两个改动文件）干净、`vitest run` 全通过。
+- 裸 `FlexibleResponse` 路由：全 `app/` **54 → 52**、本模块 **9 → 7**（均实测）。
+- **全量** 8526/0/0/11（6708/1818）对账 **+4 case + 57 subtest 零残差**（`_recon_5375.py` GATE PASS）—— 首猜的 +55 少了 2，残差是**追出来的**，三项各自实测：新守卫类 **37**（`junit_guard_5375.xml` = 41 tests − 4 testcase）+ `test_mutation_verify` **18**（HEAD 复跑 255 → 本树 273）+ 被修的 §53.71 守卫新增的**逐名** `subTest` 循环 **2**（该判据原先零 subTest：HEAD 复跑 0 → 本树 2，用例数不变）。
+
+**待办**：批 B 余下 `matches`、`prediction-history`、`optimize`、`predict` 四条（`predict` 是 9 字面量 / 7 互异形状 / 31 键并含 3 处委托返回的硬骨头）；L2（48 条登记裸集合）。

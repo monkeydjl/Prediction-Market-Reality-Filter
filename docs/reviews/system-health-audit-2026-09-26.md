@@ -14680,3 +14680,97 @@ self.assertIn("export type { EngineComparisonStat, PredictedScore };", text, ...
 - **全量** 8595/0/0/11（6712/1883）对账 **+4 case + 65 subtest 零残差**（`_recon_5376.py` GATE PASS）—— 三项各自实测：新守卫类 **52**（`junit_guard_5376.xml` = 56 tests − 4 testcase；补上第 8 个退役名后从 51 变 52）+ `test_mutation_verify` **13**（HEAD 复跑 273 → 本树 286，worktree 钉在 12c76a8）。🔴 **首跑 FAIL，残差恰好是 +4/+57 —— 那是 53.75 的增量**：`_recon_5375.py` 头部写的「Baseline (53.74 closed): 8465」被当成了53.75 的收口值读进来，而它其实是**更上一片**的基线；53.75 的收口值是基线加它自己的增量（6708/1818/8526）。**残差必须先归因再改预期**，这次归因抓到的是对账脚本自己的错，不是生产代码的。
 
 **待办**：批 B 余下 `prediction-history`、`optimize`、`predict` 三条（`/matches/{id}`、`/today` 与 `_serialize_prediction` 共享本片模型，可复用；`predict` 是 9 字面量 / 7 互异形状 / 31 键并含 3 处委托返回的硬骨头）；L2（48 条登记裸集合）。
+
+## 53.77 — 批 B 片3：`GET /matches/{match_id}/prediction-history` 具名，
+以及被裸路由哨兵逮住的整集首跑假红
+
+### 1. 概览
+
+批 B 第 3 条裸路由具名。三件套：`event.py` 新增 `PredictionHistoryEntry`
+（13 字段：9 基键 + 4 条件键）与 `PredictionHistoryResponse`（4 键信封），
+登记进 `_frontend_export.py`，`generate_types` 重生成；路由绑定具名信封 +
+`response_model_exclude_unset=True`。前端退役手写 `PredictionHistoryEntry`
+（旧副本**四个键的方向都声明反了**），裸 `FlexibleResponse` 路由全 app
+**51 → 50**、本模块 **6 → 5**。
+
+### 2. 生产者判定
+
+**信封单形状，无旗**：成功路径与「降级为空历史」的 `except` 回退写**同样四个键**
+（`status`/`match_id`/`count`/`history`）——条件性在元素层，与 `/matches` 同款但
+位置更低一层。**元素层两段式**：`_serialize_history_entry` 无条件写 9 基键
+（`timestamp`/`predicted_score`/`outcome_probabilities`/`confidence`/`trigger`/
+`prediction_method`/`engine_used`/`data_quality`/`data_quality_notes`），然后仅当
+「行与当前预测同快照（分数/置信度容差匹配 + method 相等）」时按六元组循环借键：
+其中 `data_quality`/`data_quality_notes` 是**覆写恒在键**（基键已在，只换值），
+真正的**条件四键**是 `raw_confidence` + 三个透传 blob——且赋值前有
+`current_payload.get(key) is not None` 门 ⇒ **出现即非 null**。四个条件键带
+`= None` 默认值（生成 TS 为 `?:`），旗子的承重点就是它们：不带旗，基形状长出
+四个显式 null（守卫负控实测：恰好那四个）。
+
+**忠实类型，旧副本四反**：(a) `timestamp` 写在真值测试之后
+（`isoformat() if history.timestamp else None`）⇒ `str | None`——沿用
+`kickoff_utc`/`last_updated` 先例，**不看** `nullable=False` 列；(b)
+`trigger`/`prediction_method` 镜像真正可空的列 ⇒ `str | None`，旧副本声明成
+必填/可选各错一处；(c) `engine_used` 是 `_engine_used_from_method` 的返回，
+该函数没有 None 路径 ⇒ `str` 必填，旧副本的 `engine_used?` 反了；(d)
+`data_quality`/`data_quality_notes` 恒在 ⇒ 必填 `Literal["real", "partial"]` /
+`list[str]`，旧副本的可选声明掩盖了「基形状永远是 `partial` +
+`data_quality_missing`」这一生产者事实（基键来自
+`normalize_prediction_data_quality(None, None)`，空标签降级路径）。
+
+### 3. 客户端
+
+`predictions-api.ts`：手写 `PredictionHistoryEntry` 退役为生成类型 re-export；
+`fetchPredictionHistory` 改 `as PredictionHistoryResponse` 并删掉死
+`|| []`（信封两条路径都写 `history`，回退永不触发）。卡片：`entry.timestamp`
+渲染改条件式（生成类型 `string | null`，无守卫直喂 `formatTimestamp` 是 tsc
+错误）；`getEngineLabel` 参数放宽收 `null`。夹具按生产者逐键写满：卡片测试四条
+夹具补 `engine_used`（派生值逐个对 `_engine_used_from_method` 实测）与基线
+质量对；`predictions-api.test.ts` 的过滤用例信封补 `status`/`match_id`/`count`
+——它正是 §53.76 记录的既有夹具漂移之一，本片顺手修平。
+
+### 4. 守卫与变异
+
+新守卫类 `WorldCupPredictionHistoryContractTests` 4 例 / 39 subtest：信封键序 +
+两形状逐字节往返（含旗子负控）、逐字段注解忠实（含生产者源码事实断言：真值
+测试 / 派生调用 / 门的两臂）、路由身份 + 旗子 + 借键六元组逐名 + 降级回退四键、
+客户端退役名 / re-export / cast / 无 `|| []` / 卡片条件式与放宽参数。
+
+变异 J152–J159 八条。锚位要点：J152 单行针在本文件命中 **2 次**，带下一字段行
+才唯一；J155 的旗子行与 `/matches` 等多路相撞，锚到
+`async def get_prediction_history(` 前缀（**尾行不带 CRLF**——签名同行有参数）；
+J156 打借用门的 `current_payload` 臂——守卫**逐臂**断言（N 判据 ⇒ N 断言），
+第一版只钉 `current_prediction` 臂 = 该臂无人守护，补齐后整集才有判据。
+
+🔴 **整集首跑 164/165，idx 110（J105）阶段①假红**：J105 的探针是 §53.69 的裸
+路由普查守卫，其哨兵下界 `> 50` 被本片穿过——裸路由 51 → **50**，而这正是本片
+的目的本身。修法：哨兵显式更新为 `> 49`，message 带当前计数与前提（每片具名
+−1；原基线 63 归属 53.69）；改前确认无变异以守卫文件为 `m.path`（不撞针），
+修后普查单独跑绿 + J105 四阶段复跑 EXIT=0 + 整集重跑 **165/165**（EXIT=0）。
+🔴 **教训（收尾清单补一行）**：具名片动了裸路由计数 ⇒ 必须**全量**跑
+`test_generate_types.py`——本片只跑了新类和 `-k` 选择子，哨兵测试被 deselect
+遮住，直到整集重放阶段①才暴露。**哨兵型守卫的下界是会随每片具名而过期的
+读数**，更新它要像更正结论一样显式带前提。
+
+### 5. 读数
+
+- **代码** 10 文件（numstat 实测：11/1、4/0、60/0、159/1、446/4、16/0、4/2、
+  59/0、9/0、16/19；合计 +784/-27）。
+- 四道门：`ruff check app/` 全绿、`mypy app/` 全绿（331 文件）、
+  `generate_types --check` up to date。
+- 前端：`tsc --noEmit` 绿、临时 tsconfig 验夹具（本片三个测试文件**零**错误；
+  全仓 51 个既有漂移中 world-cup 范围仍是 analytics-dashboard/engine-api 两处，
+  与 53.76 收口一致）、`eslint` 全绿、`vitest run` **126 文件 / 746 tests** 全通过。
+- 变异：J152–J159 逐条四阶段 **8/8**（EXIT=0，针位全部实测 hit=1）+ 整集
+  `frontend-type-closure` **165/165**（第二轮 EXIT=0；清单自打印 **245**）。
+- **全量对账**：基线 worktree @88c02e1 = 8578(+17 skip)/6712，本树 =
+  8647(+11 skip)/6716，0 failures / 0 errors。tests 属性口径受 skip 的环境波动
+  干扰（本次基线 skip=17、上片记录 11），**名字级 testcase 集合差才是硬判据**：
+  恰好 **+4 case（新守卫类）**、零移除、零计数漂移（`_recon_names_5377.txt`）。
+- 裸 `FlexibleResponse` 路由：全 app **51 → 50**（events.py 45 + 本模块 5，实测）。
+- 行尾画像：`predictions-api.test.ts` 纯 LF（新行同 LF，154 bareLF 全核），其余
+  CRLF；`git ls-files --eol` 提交后复核。
+
+**待办**：批 B 余下 `optimize`、`predict`（`predict` 是 9 字面量 / 7 互异形状 /
+31 键并含 3 处委托返回的硬骨头，收口后 `CompareOnlyPrediction` 可退役）；
+L2（48 条登记裸集合）。

@@ -14774,3 +14774,98 @@ J156 打借用门的 `current_payload` 臂——守卫**逐臂**断言（N 判�
 **待办**：批 B 余下 `optimize`、`predict`（`predict` 是 9 字面量 / 7 互异形状 /
 31 键并含 3 处委托返回的硬骨头，收口后 `CompareOnlyPrediction` 可退役）；
 L2（48 条登记裸集合）。
+
+## 53.78 — 批 B 片4：`POST /matches/{match_id}/optimize` 具名，
+开放模型的必填/可选分界线 = 消费者读法，以及被同坑第二次逮住的哨兵
+
+### 1. 概览
+
+批 B 第 4 条裸路由具名。三件套：`event.py` 新增 `AIOptimization`（开放，
+4 字段全可选）、`OptimizedPrediction`（开放，3 数值键必填 + reasoning 可选）、
+`MatchOriginalPrediction`（闭合，3 键必填）与信封 `PredictionOptimizeResponse`
+（4 键必填、**无旗子**，`exclude_unset is False` 被显式钉住）；
+`DELIBERATELY_OPEN` 9 → 11。前端退役三个手写副本（`OptimizedPrediction` /
+`PredictionOptimization` / `PredictionOptimizeResult`，老名以 alias 保持导出），
+裸 `FlexibleResponse` 路由全 app **50 → 49**、本模块 **5 → 4**。
+
+### 2. 生产者判定
+
+**信封单形状，无旗**：五条失败路径（404 比赛不存在、400 已完场/进行中、
+404 无预测、500 AI 失败、503 不可用）全部 `raise HTTPException`，只有成功块
+到达 response model ⇒ 四键全写、无可缺席键。守卫钉 `exclude_unset is False`
+并断言 raise 计数 ≥ 5 —— 失败路径变形（比如改成返回 dict）会让单形状前提
+消失，这正是 J161 变异的判据方向。
+
+**`optimization` 是 LLM 透传 blob**：服务把 `result.json_data` 原样放进
+该键，唯一「形状承诺」是提示词模板（`blind_spots`/`calibration_issues`/
+`optimized_prediction`/`reasoning`）—— 意图不是保证。于是**开放**
+（`extra="allow"`，与三个 factors blob 同款），且**必填/可选的分界线 =
+消费者读法**：外层四字段（含模板里根本没有、纯靠卡片 else-if 回退读的
+`raw_text`）全可选 —— 卡片对它们都有守卫；内层 `OptimizedPrediction` 的
+三个数值键被卡片在 `if (opt.optimized_prediction)` 内**无守卫**直读，
+必填 = 模板偏离（LLM 少给键）表现为服务端 ValidationError（500）而不是
+前端 `.toFixed` of undefined（TypeError）。reasoning 有守卫 ⇒ 可选。
+手写副本在这一片**恰好是对的**（全可选 + 内层必填），退役的价值在于
+把「为什么这样」从消费者习惯升格为可验证契约。
+
+**信封的死键与死分支**：手写副本的 `message?` 从未上过线（错误文本走
+非 2xx 响应的 `detail`），卡片的 `data.status === "ok"` else 分支因此
+不可达 —— 具名后 `data.message` 类型消失迫使删除，删除是死代码清理
+（行为不变：分支本来就到不了）。
+
+### 3. 客户端与测试面
+
+`optimizePrediction` 改 `as PredictionOptimizeResponse`；alias 保三个老名。
+🔴 **本地名陷阱再次命中（§Z20 第三次）**：`export { X as Y }` 不绑定本地名，
+函数返回类型写成 `PredictionOptimizeResult` 当场 `TS2552`，`data` 推断 any
+连锁出两个隐式 any —— 签名必须用 import 进来的 `PredictionOptimizeResponse`。
+optimize 消费路径此前**零断言** ⇒ 补 2 例（结构化渲染逐段断言 + `raw_text`
+回退），夹具按生成信封逐键写全。
+
+### 4. 守卫与变异
+
+新守卫类 `WorldCupOptimizeContractTests` 4 例 / 19 subtest。两处首版自伤，
+都在写下的第一分钟被自己人逮住：(a) `assertNotIn("data.message", client)`
+被**既有** `worldCupFetchError` 的 `typeof data.message` 回退喂红 —— 针收紧
+为错误构造形态 `Error(data.message`；(b) 模块**最后一个路由**后面没有
+`@router.` 可切，`source.index` 当场 ValueError —— 切片改到 EOF；(c) 卡片
+注释里复述了被禁字面量 `data.message`，被自己的 assertNotIn 喂红 ——
+注释改述不引用（§9at-③ 第三次实证）。
+
+变异 J160–J166 七条（身份、加旗反向、raw_text 撤名、内层必填降级、
+收 forbid、摘 cast、透传行改常量）。🔴 **harness 的整集守卫逮住 J161 的锚**：
+初版针含 `response_model=PredictionOptimizeResponse`，与 J160 打同一行 ——
+按序重放时 J160 先改写模型名，J161 的锚就丢了（`test_a_whole_set_apply_…`
+当场红，§Z7 判据的又一次实证）。修法：J161 只锚装饰器**前缀**
+（`response_model=…` 之后刻意不含），J160 前后都命中 1 次；插入型编辑对
+diff 的删除数为 0。
+
+🔴 **同坑第二次（哨兵）**：整集首轮 171/172，idx 110（J105）阶段①又红 ——
+本片裸路由 50 → **49**，穿过 §53.77 刚更新的哨兵 `> 49`。§53.77 写进收尾
+清单的那一行（「改裸路由计数的片必须全量跑 `test_generate_types.py`」）
+**被漏执行**。修：哨兵 `> 49` → `> 48`（message 带当前计数 49 与前提），
+守卫文件全量 88 passed、J105 复跑 EXIT=0、整集重跑 **172/172**（EXIT=0）。
+⚠️ 结构性结论：哨兵下界随每片具名 −1，逐片手改既繁琐又易漏 —— 待批 B/L2
+收口后应把哨兵改为「精确计数 + 显式指针」或由对账脚本推导（待办）。
+
+### 5. 读数
+
+- **代码** 9 文件（numstat 实测：2/1、8/0、87/0、146/1、282/2、69/1、39/38、
+  110/28、28/27；合计 +771/-98）。
+- 四道门：`ruff check app/` 全绿、`mypy app/` 全绿（331 文件）、
+  `generate_types --check` up to date。
+- 前端：`tsc --noEmit` 绿、临时 tsconfig 验夹具（本片两个测试文件**零**错误；
+  全仓既有漂移仍 51 处）、`eslint` 全绿、`vitest run` **126 文件 / 748 tests**
+  全通过（+2 = optimize 新用例）。
+- 变异：J160–J166 逐条四阶段 **7/7**（针位全部实测 hit=1）+ 整集
+  `frontend-type-closure` **172/172**（第三轮 EXIT=0；清单自打印 **252**；
+  首轮 171/172 = 哨兵，次轮同）。
+- **全量对账**：基线 worktree @5106e38 = 8630(+17 skip)/6716，本树 =
+  8678(+11 skip)/6720，0 failures / 0 errors；**testcase 名字级集合差**
+  恰好 **+4 case**（新守卫类）、零移除、零计数漂移。
+- 裸 `FlexibleResponse` 路由：全 app **50 → 49**（events.py 45 + 本模块 4）。
+- 行尾画像：三个被编辑 TS 件均保持纯 CRLF（bareLF=0）。
+
+**待办**：批 B 只剩 `predict`（9 字面量 / 7 互异形状 / 31 键 + 3 处委托返回，
+收口后 `CompareOnlyPrediction` 可退役）；L2（48 条登记裸集合）；哨兵结构化
+改造（精确计数 + 指针，或对账脚本推导）。

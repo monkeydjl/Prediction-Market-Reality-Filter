@@ -36,6 +36,12 @@ describe("PredictionHistoryCard engine label", () => {
         confidence: 0.72,
         trigger: "manual",
         prediction_method: "elo_only",
+        // Producer facts (audit 53.77): `_engine_used_from_method("elo_only")`
+        // is "elo_odds", and a base-only row always carries the normalized
+        // quality pair ("partial" + the missing-quality note).
+        engine_used: "elo_odds",
+        data_quality: "partial",
+        data_quality_notes: ["data_quality_missing"],
       },
     ]);
 
@@ -53,6 +59,9 @@ describe("PredictionHistoryCard engine label", () => {
         confidence: 0.72,
         trigger: "manual",
         prediction_method: "integrated (elo_odds 40% + hybrid 60%)",
+        engine_used: "integrated",
+        data_quality: "partial",
+        data_quality_notes: ["data_quality_missing"],
       },
     ]);
 
@@ -109,6 +118,12 @@ describe("PredictionHistoryCard engine label", () => {
         },
         trigger: "manual",
         prediction_method: "elo_only",
+        // A matched row borrows `data_quality` / `data_quality_notes` from the
+        // current prediction when they are non-None, so "real" is the
+        // producer-plausible overwrite here (audit 53.77).
+        engine_used: "elo_odds",
+        data_quality: "real",
+        data_quality_notes: [],
       },
     ]);
 
@@ -129,6 +144,7 @@ describe("PredictionHistoryCard engine label", () => {
         confidence: 0.52,
         trigger: "daily_update",
         prediction_method: "hybrid",
+        engine_used: "hybrid",
         data_quality: "partial",
         data_quality_notes: ["data_quality_missing"],
       },

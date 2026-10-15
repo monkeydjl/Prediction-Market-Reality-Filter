@@ -24,6 +24,7 @@ from app.models.event import (
     MatchAnalysisHistoryResponse,
     MatchAnalyzeResponse,
     MatchListResponse,
+    PredictionHistoryResponse,
     SyncFixturesResponse,
 )
 from app.models.world_cup_prediction import MatchFixture, MatchPrediction, PredictionHistory, AIAnalysisHistory
@@ -322,7 +323,16 @@ async def get_match(match_id: str) -> dict[str, Any]:
         close_prediction_session(session)
 
 
-@router.get("/matches/{match_id}/prediction-history", response_model=FlexibleResponse)
+@router.get(
+    "/matches/{match_id}/prediction-history",
+    response_model=PredictionHistoryResponse,
+    # The flag is load-bearing one level down: `PredictionHistoryEntry` has
+    # four keys (`raw_confidence` and the three factor blobs) that are written
+    # only when the row is the same snapshot as the current prediction, so
+    # without the flag every base-only row would grow four explicit nulls the
+    # producer never wrote.
+    response_model_exclude_unset=True,
+)
 async def get_prediction_history(match_id: str) -> dict[str, Any]:
     """Get prediction history (time-series) for a match."""
     session = get_prediction_session()

@@ -22,6 +22,8 @@ import type {
   MatchListResponse,
   MatchOutcomeProbabilities,
   MatchPredictionPayload,
+  PredictionHistoryEntry,
+  PredictionHistoryResponse,
   ScorePair as PredictedScore,
   SyncFixturesResponse,
 } from "@/lib/generated-types";
@@ -88,21 +90,15 @@ export interface CompareOnlyPrediction {
   engine_used?: string;
 }
 
-export interface PredictionHistoryEntry {
-  timestamp: string;
-  predicted_score: PredictedScore;
-  outcome_probabilities: MatchOutcomeProbabilities;
-  confidence: number;
-  raw_confidence?: number;
-  confidence_calibration?: ConfidenceCalibrationInfo | null;
-  explanation_contributions?: ExplanationContributions | null;
-  high_confidence_selection?: HighConfidenceSelection | null;
-  trigger: string;
-  prediction_method?: string;
-  engine_used?: string;
-  data_quality?: MatchPredictionPayload["data_quality"];
-  data_quality_notes?: string[];
-}
+// Audit 53.77 retired the hand-written `PredictionHistoryEntry`. The producer
+// (`_serialize_history_entry`) writes nine base keys on every row and four
+// more only when the row is the same snapshot as the current prediction, so
+// the generated type marks those four optional; it also corrects three
+// nullable keys (`timestamp` is written behind a truthiness test, `trigger`
+// and `prediction_method` mirror nullable columns) and one optional key the
+// producer never omits (`engine_used`). The old export name stays so existing
+// consumers keep compiling.
+export type { PredictionHistoryEntry, PredictionHistoryResponse };
 
 export interface PredictionTriggerResult {
   status?: string;
@@ -172,10 +168,11 @@ export async function fetchPredictionHistory(matchId: string): Promise<Predictio
     throw new Error(`Failed to fetch prediction history: ${response.statusText}`);
   }
 
-  const data = await response.json();
-  return (data.history || []).filter(
-    (entry: PredictionHistoryEntry) => !entry.trigger?.endsWith("_comparison")
-  );
+  // The envelope writes all four keys on every path -- including the
+  // degrade-to-empty `except` fallback -- so `history` needs no `|| []`
+  // fallback (audit 53.77).
+  const data = (await response.json()) as PredictionHistoryResponse;
+  return data.history.filter((entry) => !entry.trigger?.endsWith("_comparison"));
 }
 
 /**

@@ -52,6 +52,9 @@ describe("fetchPredictionHistory", () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
+          status: "ok",
+          match_id: "match-1",
+          count: 2,
           history: [
             {
               timestamp: "2026-06-25T15:10:56.534487",
@@ -60,6 +63,9 @@ describe("fetchPredictionHistory", () => {
               confidence: 0.721,
               trigger: "manual",
               prediction_method: "rule_only",
+              engine_used: "hybrid",
+              data_quality: "partial",
+              data_quality_notes: ["data_quality_missing"],
             },
             {
               timestamp: "2026-06-25T15:10:56.534693",
@@ -68,6 +74,9 @@ describe("fetchPredictionHistory", () => {
               confidence: 0.9,
               trigger: "manual_comparison",
               prediction_method: "elo_only",
+              engine_used: "elo_odds",
+              data_quality: "partial",
+              data_quality_notes: ["data_quality_missing"],
             },
           ],
         }),

@@ -393,6 +393,12 @@ _ENGINE_API_TS = "frontend/src/lib/world-cup/engine-api.ts"
 _ANALYSIS_CARD_TSX = (
     "frontend/src/components/sports/world-cup/prediction-analysis-card.tsx"
 )
+# §53.77 — the history card. Its `formatTimestamp` call is the one place the
+# consumer had to branch on the generated `string | null` timestamp; a guard
+# that only checked the client module would not see the unguarded render.
+_HISTORY_CARD_TSX = (
+    "frontend/src/components/sports/world-cup/prediction-history-card.tsx"
+)
 _T_EVENT_INTELLIGENCE = "tests/test_event_intelligence_service.py"
 _T_CONCLUSION_CHALLENGE = "tests/test_conclusion_challenge_service.py"
 _T_DECISION_QUALITY = "tests/test_decision_quality_service.py"
@@ -1657,7 +1663,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J151）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J159）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -5265,6 +5271,158 @@ SETS: tuple[MutationSet, ...] = (
                     "改回 payload 类型后 `elo_ratings` 读不动（tsc 会红，但 "
                     "pytest 不跑 tsc），唯一拦截点是这条静态守卫。"
                     "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J152 PredictionHistoryEntry.timestamp 抹平成 str：真值测试后的 null 又被声明成不可能",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    timestamp: str | None\r\n"
+                    b"    predicted_score: PredictedScorePair\r\n"
+                ),
+                new=(
+                    b"    timestamp: str\r\n"
+                    b"    predicted_score: PredictedScorePair\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_history_entry_is_faithful_to_the_row",),
+                note=(
+                    "§53.77（批 B 片3）：**可空忠实**判据，"
+                    "`MatchFixtureRecord.kickoff_utc` 的同款先例 —— "
+                    "生产者把 `timestamp` 写在 "
+                    "`history.timestamp.isoformat() if history.timestamp else None` "
+                    "之后，真值测试本身就能产出 null，**不看** `nullable=False` 列"
+                    "（§Z6：别把 DDL 当保证）。抹平后真出现 null 的行要么 422、"
+                    "要么被静默改形。"
+                    "● 单行 `    timestamp: str | None` 命中 **2 次**（已实测），"
+                    "带上 `predicted_score` 那行才唯一；带 CRLF。"
+                ),
+            ),
+            Mutation(
+                label="J153 PredictionHistoryEntry.raw_confidence 丢掉默认值：条件键变必填",
+                path=_EVENT_MODEL,
+                old=b"    raw_confidence: float | None = None\r\n",
+                new=b"    raw_confidence: float | None\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_the_history_envelope_holds_both_entry_shapes_byte_for_byte",
+                ),
+                note=(
+                    "§53.77：**条件键的可选性**判据，J144 的同款。四个借用键只在"
+                    "「行与当前预测同快照」时写 ⇒ 字段必须带默认值，基形状才能在"
+                    "旗子下不物化。丢掉默认值后 "
+                    "`model_validate(基形状)` 直接 ValidationError，逐字节往返"
+                    "断言当场红。取四键中的一键作代表（§4.2）：同一生产者、"
+                    "同一条规则、同一守卫。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测；"
+                    "`MatchPredictionPayload.raw_confidence` 无默认值，字节不同）。"
+                ),
+            ),
+            Mutation(
+                label="J154 GET prediction-history 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=b"    response_model=PredictionHistoryResponse,\r\n",
+                new=b"    response_model=FlexibleResponse,\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_history_route_binds_its_envelope_and_flag",),
+                note=(
+                    "§53.77：路由对象**身份**判据，J142 的同款。退回后路由仍 200、"
+                    "`tsc` 绿、其余守卫全绿 —— 只有按 `is` 钉住的那条会红。"
+                    "● 针单行、带 CRLF，本文件命中 **1 次**（已实测；模型名是"
+                    "新名字，全仓唯一）。"
+                ),
+            ),
+            Mutation(
+                label="J155 GET prediction-history 丢掉 response_model_exclude_unset：基形状长出四个显式 null",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b"    response_model_exclude_unset=True,\r\n"
+                    b")\r\n"
+                    b"async def get_prediction_history("
+                ),
+                new=(
+                    b"    response_model_exclude_unset=False,\r\n"
+                    b")\r\n"
+                    b"async def get_prediction_history("
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_history_route_binds_its_envelope_and_flag",),
+                note=(
+                    "§53.77：**「必须有旗子」**方向，J143 的同款但条件在**元素层**"
+                    "（`PredictionHistoryEntry` 的四个借用键只在匹配形状写）。"
+                    "守卫的负控实测：基形状不带旗子物化出恰好四个显式 null。"
+                    "● 针跨三行：单行旗子在本文件命中多次（/matches 等也有），"
+                    "带 `)` 与 `async def get_prediction_history(` 前缀才唯一"
+                    "（已实测 hit=1）；**尾行不带 CRLF**（函数签名同行有参数）。"
+                ),
+            ),
+            Mutation(
+                label="J156 借用键门臂取反：None payload 的匹配行从静默跳过变成崩溃",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=b"        and current_payload is not None\r\n",
+                new=b"        and current_payload is None\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_history_entry_is_faithful_to_the_row",),
+                group="history-gate",
+                note=(
+                    "§53.77：**门的合取**判据（§4.2 空头四成因之「缺合取」）。"
+                    "门有两个 `is not None` 臂，守卫**逐臂**断言（N 判据 ⇒ N "
+                    "断言）——本条打 `current_payload` 臂。取反后 "
+                    "`current_payload=None` 的匹配行走进循环，"
+                    "`current_payload.get(key)` 当场 AttributeError。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测；"
+                    "`current_payload.get(key) is not None` 是另一行、字节不同）。"
+                ),
+            ),
+            Mutation(
+                label="J157 engine_used 改成常量：_engine_used_from_method 的派生链被旁路",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b'        "engine_used": '
+                    b"_engine_used_from_method(history.prediction_method),\r\n"
+                ),
+                new=b'        "engine_used": "hybrid",\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_history_entry_is_faithful_to_the_row",),
+                note=(
+                    "§53.77：**engine_used 恒非 null** 判据的承重点。`str` 注解"
+                    "靠「派生函数没有 None 路径」成立；旁路成常量后线上字节仍合法"
+                    "（模型照样验证通过），唯一拦截是断言该调用存在的静态守卫。"
+                    "注意 `_serialize_prediction` 里有同形行但实参是 `method`，"
+                    "字节不同。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J158 fetchPredictionHistory 的信封类型退回元素类型：契约旁路",
+                path=_WC_PREDICTIONS_API_TS,
+                old=b"as PredictionHistoryResponse",
+                new=b"as PredictionHistoryEntry",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_client_reads_the_history_contract",),
+                note=(
+                    "§53.77：**客户端读法**判据（§Z2：`res.json() as T` 对形状"
+                    "零主张）。信封类型是唯一声明 `history` 数组存在的位置；退回"
+                    "元素类型后 `data.history` 读不动（tsc 会红，但 pytest 不跑 "
+                    "tsc），唯一拦截是断言该 cast 的静态守卫。"
+                    "● 针单行、无换行、命中 **1 次**（已实测；re-export 行无 "
+                    "`as` 前缀，字节不同）。"
+                ),
+            ),
+            Mutation(
+                label="J159 历史卡的时间戳渲染摘掉条件式：nullable 又被喂进 formatTimestamp",
+                path=_HISTORY_CARD_TSX,
+                old=b"? formatTimestamp(entry.timestamp, zone.timeZone)",
+                new=b": formatTimestamp(entry.timestamp, zone.timeZone)",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_client_reads_the_history_contract",),
+                note=(
+                    "§53.77：**消费侧 nullable 处理**判据，J139 的同款。生成的 "
+                    "`entry.timestamp` 是 `string | null`，渲染必须分支。守卫是"
+                    "**双向**的：断言条件式存在（本条打它），也断言旧的无括号直调"
+                    "缺席 —— 属性级断言会被分支内的其它读法喂绿（§53.76 J150 "
+                    "教训），所以针是 `? ` 开头的**条件表达式**不是裸属性。"
+                    "● 针单行、无换行、命中 **1 次**（已实测）。"
                 ),
             ),
         ),

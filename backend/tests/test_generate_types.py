@@ -3278,10 +3278,12 @@ class FlexibleResponseIdentityTests(unittest.TestCase):
             == "FlexibleResponse"
         ]
         self.assertGreater(
-            len(named), 50,
-            "the census baseline is 63 routes publishing a class named "
-            "FlexibleResponse; a sharp drop means this walk stopped "
-            "seeing them (audit 53.69)",
+            len(named), 49,
+            "the census floor is 49: as of audit 53.77 exactly 50 routes "
+            "still publish a class named FlexibleResponse, and every named "
+            "slice lowers that by one -- a drop below the floor means this "
+            "walk stopped seeing them (audit 53.69 set the original "
+            "baseline at 63)",
         )
         wrong = [
             f"{route.path} -> "
@@ -5292,6 +5294,446 @@ class WorldCupMatchesContractTests(unittest.TestCase):
                     "are the /predict projection, not the /matches payload -- "
                     "only the former can carry elo_ratings (audit 53.76)",
                 )
+
+
+class WorldCupPredictionHistoryContractTests(unittest.TestCase):
+    """``GET /matches/{match_id}/prediction-history`` -- batch B, slice 3
+    (audit 53.77).
+
+    The route published the bare ``FlexibleResponse`` and the client read it
+    through a hand-written ``PredictionHistoryEntry`` that was wrong about four
+    keys: ``timestamp`` is written behind a truthiness test (nullable, like
+    ``MatchFixtureRecord.kickoff_utc``), ``trigger`` and ``prediction_method``
+    mirror genuinely nullable columns, and ``engine_used`` is the return of
+    ``_engine_used_from_method``, which has no ``None`` path -- the old copy
+    declared all four backwards.
+
+    The conditionality is one level down again: ``_serialize_history_entry``
+    writes nine base keys on every row and four more only when the row is the
+    same snapshot as the current prediction, so the route **must** set
+    ``response_model_exclude_unset`` -- without it every base-only row grows
+    four explicit ``null`` s nobody wrote.
+    """
+
+    def test_the_history_envelope_holds_both_entry_shapes_byte_for_byte(self):
+        import json
+
+        from app.models.event import (
+            ConfidenceCalibrationInfo,
+            ExplanationContributions,
+            FlexibleResponse,
+            PredictionHistoryEntry,
+            PredictionHistoryResponse,
+        )
+
+        fields = PredictionHistoryResponse.model_fields
+        self.assertEqual(
+            list(fields),
+            ["status", "match_id", "count", "history"],
+            "PredictionHistoryResponse is no longer the key order both "
+            "get_prediction_history return paths build (audit 53.77)",
+        )
+        for name, field in fields.items():
+            with self.subTest(field=name):
+                self.assertTrue(
+                    field.is_required(),
+                    f"PredictionHistoryResponse.{name} gained a default; both "
+                    "return paths write all four keys, so a default could only "
+                    "hide a regression (audit 53.77)",
+                )
+        self.assertTrue(issubclass(PredictionHistoryResponse, FlexibleResponse))
+        self.assertEqual(
+            fields["history"].annotation,
+            list[PredictionHistoryEntry],
+            "PredictionHistoryResponse.history no longer names its element "
+            "(audit 53.77)",
+        )
+
+        entry = PredictionHistoryEntry.model_fields
+        self.assertEqual(
+            list(entry),
+            [
+                "timestamp",
+                "predicted_score",
+                "outcome_probabilities",
+                "confidence",
+                "trigger",
+                "prediction_method",
+                "engine_used",
+                "data_quality",
+                "data_quality_notes",
+                "raw_confidence",
+                "confidence_calibration",
+                "high_confidence_selection",
+                "explanation_contributions",
+            ],
+            "PredictionHistoryEntry is no longer the key order "
+            "_serialize_history_entry builds -- base keys first, conditional "
+            "keys appended (audit 53.77)",
+        )
+        for name in (
+            "timestamp",
+            "predicted_score",
+            "outcome_probabilities",
+            "confidence",
+            "trigger",
+            "prediction_method",
+            "engine_used",
+            "data_quality",
+            "data_quality_notes",
+        ):
+            with self.subTest(base_key=name):
+                self.assertTrue(
+                    entry[name].is_required(),
+                    f"PredictionHistoryEntry.{name} became optional; the base "
+                    "payload writes it on every row (audit 53.77)",
+                )
+        for name in (
+            "raw_confidence",
+            "confidence_calibration",
+            "high_confidence_selection",
+            "explanation_contributions",
+        ):
+            with self.subTest(conditional_key=name):
+                self.assertFalse(
+                    entry[name].is_required(),
+                    f"PredictionHistoryEntry.{name} became required; it is "
+                    "written only for the matched shape, so the flag must be "
+                    "able to drop the key (audit 53.77)",
+                )
+
+        base_entry = {
+            "timestamp": "2026-06-25T15:10:56.534487",
+            "predicted_score": {"home": 1.069, "away": 1.108},
+            "outcome_probabilities": {"home_win": 0.3, "draw": 0.3, "away_win": 0.4},
+            "confidence": 0.721,
+            "trigger": None,
+            "prediction_method": "rule_only",
+            "engine_used": "hybrid",
+            "data_quality": "partial",
+            "data_quality_notes": ["data_quality_missing"],
+        }
+        calibration = ConfidenceCalibrationInfo(
+            raw=0.8,
+            calibrated=0.65,
+            method="piecewise_linear_reliability",
+            engine_filter=None,
+            total_samples=8,
+            min_total_samples=6,
+            min_bucket_samples=3,
+            is_reliable=True,
+            bucket_is_reliable=True,
+            is_reference_only=False,
+            bucket=None,
+            applied_bucket={
+                "label": "80-100%",
+                "count": 4,
+                "actual_accuracy": None,
+                "avg_confidence": None,
+            },
+            reason="piecewise_linear_calibration",
+        ).model_dump()
+        contributions = ExplanationContributions(
+            engine="elo_odds",
+            home_team="Argentina",
+            away_team="Brazil",
+            prediction_method="elo_only",
+            engine_weights=None,
+            items=[
+                {
+                    "key": "elo",
+                    "label": "Elo",
+                    "unit": "pp",
+                    "home_impact": 5.0,
+                    "away_impact": -3.0,
+                    "description": "rating edge",
+                    "available": True,
+                }
+            ],
+        ).model_dump()
+        matched_entry = {
+            **base_entry,
+            "raw_confidence": 0.8,
+            "confidence_calibration": calibration,
+            "high_confidence_selection": None,
+            "explanation_contributions": contributions,
+        }
+        shapes = [
+            # 1. a base-only row: the serializer writes exactly nine keys
+            dict(base_entry),
+            # 2. a matched row: the four borrowed keys ride along
+            matched_entry,
+        ]
+        for raw in shapes:
+            model = PredictionHistoryEntry.model_validate(raw)
+            dumped = model.model_dump(mode="json", exclude_unset=True)
+            self.assertEqual(
+                dumped,
+                raw,
+                "with the flag each entry shape must match the serializer's "
+                "dict, values included (audit 53.77)",
+            )
+            self.assertEqual(
+                list(dumped),
+                list(raw),
+                "the wire key order must follow the serializer's insertion "
+                "order -- base keys first, borrowed keys appended "
+                "(audit 53.77)",
+            )
+
+        # Only the first shape has unset keys, which is what makes the flag
+        # load-bearing. (The matched shape sets every field, so dumping it
+        # without the flag is identical -- asserting otherwise would be a
+        # criterion that never fires.)
+        bare = PredictionHistoryEntry.model_validate(base_entry)
+        self.assertEqual(
+            set(bare.model_dump(mode="json")) - set(base_entry),
+            {
+                "raw_confidence",
+                "confidence_calibration",
+                "high_confidence_selection",
+                "explanation_contributions",
+            },
+            "without the flag the base-only shape must materialise exactly "
+            'the four borrowed keys as explicit nulls the serializer never '
+            "wrote -- if this stops being true the flag is no longer "
+            "load-bearing (audit 53.77)",
+        )
+
+    def test_the_history_entry_is_faithful_to_the_row(self):
+        from typing import Literal
+
+        from app.models.event import (
+            ConfidenceCalibrationInfo,
+            ExplanationContributions,
+            HighConfidenceSelection,
+            MatchOutcomeProbabilities,
+            PredictionHistoryEntry,
+            PredictedScorePair,
+        )
+
+        entry = PredictionHistoryEntry.model_fields
+        for name, annotation in (
+            ("timestamp", str | None),
+            ("predicted_score", PredictedScorePair),
+            ("outcome_probabilities", MatchOutcomeProbabilities),
+            ("confidence", float),
+            ("trigger", str | None),
+            ("prediction_method", str | None),
+            ("engine_used", str),
+            ("data_quality", Literal["real", "partial"]),
+            ("data_quality_notes", list[str]),
+            ("raw_confidence", float | None),
+            ("confidence_calibration", ConfidenceCalibrationInfo | None),
+            ("high_confidence_selection", HighConfidenceSelection | None),
+            ("explanation_contributions", ExplanationContributions | None),
+        ):
+            with self.subTest(annotation=name):
+                self.assertEqual(
+                    entry[name].annotation,
+                    annotation,
+                    f"PredictionHistoryEntry.{name} annotation drifted "
+                    "(audit 53.77)",
+                )
+
+        # The producer facts behind four of those annotations: the truthiness
+        # test that makes `timestamp` nullable, the call that keeps
+        # `engine_used` non-nullable, and the `is not None` gate that keeps the
+        # four borrowed keys absent rather than null on base-only rows.
+        source = (
+            _BACKEND_DIR / "app" / "api" / "routes" / "world_cup_predictions.py"
+        ).read_bytes().decode("utf-8")
+        start = source.index("def _serialize_history_entry(")
+        body = source[start:source.index('@router.post("/init-db"', start)]
+        self.assertIn(
+            "history.timestamp.isoformat() if history.timestamp else None",
+            body,
+            "timestamp is no longer written behind a truthiness test; if it "
+            "became unconditional the str | None annotation is now too wide "
+            "(audit 53.77)",
+        )
+        self.assertIn(
+            "_engine_used_from_method(history.prediction_method)",
+            body,
+            "engine_used no longer comes from _engine_used_from_method, whose "
+            "return is never None -- the str annotation leans on that call "
+            "(audit 53.77)",
+        )
+        gate = body[body.index("if (") : body.index("for key in (")]
+        self.assertIn(
+            "current_prediction is not None",
+            gate,
+            "the borrowed-keys gate lost its current_prediction arm "
+            "(audit 53.77)",
+        )
+        self.assertIn(
+            "and current_payload is not None",
+            gate,
+            "the borrowed-keys gate lost its current_payload arm; without it "
+            "a matched row with a None payload would crash instead of staying "
+            "base-only (audit 53.77)",
+        )
+        self.assertIn(
+            "current_payload.get(key) is not None",
+            body,
+            "the borrowed keys are no longer assigned behind an is-not-None "
+            "check; when present their values are non-null, which is what the "
+            "optional (not nullable-valued) wire shape rests on (audit 53.77)",
+        )
+
+    def test_the_history_route_binds_its_envelope_and_flag(self):
+        """Route identity, the flag, and the two-paths-one-envelope fact the
+        no-flag-at-envelope-level decision rests on."""
+        from fastapi.routing import APIRoute
+
+        from app.api.routes import world_cup_predictions as wc
+        from app.models.event import FlexibleResponse, PredictionHistoryResponse
+
+        found = [
+            route
+            for route in wc.router.routes
+            if isinstance(route, APIRoute)
+            and route.path
+            == "/world-cup/predictions/matches/{match_id}/prediction-history"
+            and "GET" in route.methods
+        ]
+        self.assertEqual(
+            len(found), 1, "expected exactly one GET route on prediction-history"
+        )
+        history = found[0]
+        self.assertIs(
+            history.response_model,
+            PredictionHistoryResponse,
+            "GET prediction-history no longer binds PredictionHistoryResponse; "
+            "it published the bare FlexibleResponse before audit 53.77",
+        )
+        self.assertIsNot(history.response_model, FlexibleResponse)
+        self.assertIs(
+            history.response_model_exclude_unset,
+            True,
+            "GET prediction-history lost response_model_exclude_unset; its "
+            "element writes the four borrowed keys only for the matched shape, "
+            "so without the flag every base-only row serialises four nulls "
+            "nobody wrote (audit 53.77)",
+        )
+
+        source = (
+            _BACKEND_DIR / "app" / "api" / "routes" / "world_cup_predictions.py"
+        ).read_bytes().decode("utf-8")
+        start = source.index("def _serialize_history_entry(")
+        body = source[start:source.index('@router.post("/init-db"', start)]
+        for key in (
+            "timestamp",
+            "predicted_score",
+            "outcome_probabilities",
+            "confidence",
+            "trigger",
+            "prediction_method",
+            "engine_used",
+            "data_quality",
+            "data_quality_notes",
+        ):
+            with self.subTest(base_key=key):
+                self.assertIn(
+                    f'"{key}":',
+                    body,
+                    f"_serialize_history_entry no longer writes {key!r} in its "
+                    "base payload (audit 53.77)",
+                )
+        loop_start = body.index("for key in (")
+        loop = body[loop_start : body.index("        ):", loop_start)]
+        self.assertEqual(
+            [line.strip().strip('",') for line in loop.strip().splitlines()[1:]],
+            [
+                "data_quality",
+                "data_quality_notes",
+                "raw_confidence",
+                "confidence_calibration",
+                "high_confidence_selection",
+                "explanation_contributions",
+            ],
+            "the borrowed-keys tuple changed; the conditional-four model "
+            "decision is pinned to exactly these six names (four optional on "
+            "the wire, two overwriting always-present base keys) "
+            "(audit 53.77)",
+        )
+        # The degrade-to-empty fallback must keep the same four envelope keys
+        # so the single-shape envelope stays true on both paths.
+        route_start = source.index("async def get_prediction_history(")
+        route_body = source[route_start:source.index("@router.", route_start)]
+        self.assertIn(
+            '"count": 0,',
+            route_body,
+            "the degrade fallback no longer writes count; the envelope's "
+            "single-shape decision covers both return paths (audit 53.77)",
+        )
+        self.assertIn(
+            '"history": [],',
+            route_body,
+            "the degrade fallback no longer writes history; the envelope's "
+            "single-shape decision covers both return paths (audit 53.77)",
+        )
+
+    def test_the_client_reads_the_history_contract(self):
+        """The retired copy stays retired and the card reads the generated
+        nullability instead of guessing."""
+        client = (
+            _REPO_ROOT / "frontend" / "src" / "lib" / "world-cup"
+            / "predictions-api.ts"
+        ).read_bytes().decode("utf-8")
+        card = (
+            _REPO_ROOT / "frontend" / "src" / "components" / "sports"
+            / "world-cup" / "prediction-history-card.tsx"
+        ).read_bytes().decode("utf-8")
+
+        self.assertNotIn(
+            "interface PredictionHistoryEntry {",
+            client,
+            "predictions-api.ts re-declared PredictionHistoryEntry; the "
+            "generated model is the contract and the retired copy was wrong "
+            "about four of its keys (audit 53.77)",
+        )
+        self.assertIn(
+            "export type { PredictionHistoryEntry, PredictionHistoryResponse };",
+            client,
+            "the old name must stay exported so existing consumers keep "
+            "compiling (audit 53.77)",
+        )
+        self.assertIn(
+            "as PredictionHistoryResponse",
+            client,
+            "fetchPredictionHistory no longer claims the generated envelope "
+            "(audit 53.77)",
+        )
+        self.assertNotIn(
+            "data.history ||",
+            client,
+            "fetchPredictionHistory regained a `|| []` fallback; the producer "
+            "writes history on both return paths, so the fallback is dead "
+            "(audit 53.77)",
+        )
+
+        self.assertIn(
+            "? formatTimestamp(entry.timestamp, zone.timeZone)",
+            card,
+            "the card no longer guards the nullable timestamp; the generated "
+            "entry type is string | null and the render must branch "
+            "(audit 53.77)",
+        )
+        self.assertNotIn(
+            "{formatTimestamp(entry.timestamp, zone.timeZone)}",
+            card,
+            "the card renders entry.timestamp unguarded again; the needle is "
+            "the brace-wrapped direct call so only the unconditional render "
+            "fires (audit 53.77)",
+        )
+        self.assertIn(
+            "getEngineLabel(method: string | null | undefined)",
+            card,
+            "getEngineLabel narrowed back; prediction_method mirrors a "
+            "nullable column, so the parameter must accept null "
+            "(audit 53.77)",
+        )
 
 
 class ApiTsTypeSourceTests(unittest.TestCase):

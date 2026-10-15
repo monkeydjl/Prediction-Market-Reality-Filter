@@ -32,7 +32,7 @@ function formatTimestamp(isoString: string, timeZone: string): string {
   }).format(date);
 }
 
-function getEngineLabel(method?: string): { label: string; icon: LucideIcon; color: string } {
+function getEngineLabel(method: string | null | undefined): { label: string; icon: LucideIcon; color: string } {
   if (!method) return { label: "未知", icon: Brain, color: "text-muted-foreground" };
 
   const normalized = method.toLowerCase();
@@ -230,7 +230,9 @@ export function PredictionHistoryCard({ match }: PredictionHistoryCardProps) {
                         <span key={zone.timeZone}>
                           {zone.label}
                           <span className="mx-1 text-[10px] opacity-70">({zone.zoneLabel})</span>
-                          {formatTimestamp(entry.timestamp, zone.timeZone)}
+                          {entry.timestamp
+                            ? formatTimestamp(entry.timestamp, zone.timeZone)
+                            : "—"}
                         </span>
                       ))}
                     </div>

@@ -2277,6 +2277,65 @@ export interface PendingLinksResponse {
   [k: string]: unknown;
 }
 /**
+ * One element of ``PredictionHistoryResponse.history`` (audit 53.77).
+ *
+ * ``_serialize_history_entry`` writes nine base keys on every row -- declared
+ * here in serializer order, which is the wire order -- and four more only
+ * when the row is the same snapshot as the current prediction **and** the
+ * borrowed value is not ``None``. Those four carry ``= None`` defaults, so
+ * the generated TypeScript marks them optional and the route must set
+ * ``response_model_exclude_unset=True`` for the base-only shape not to grow
+ * four explicit ``null`` s nobody wrote.
+ *
+ * Faithfulness notes, per producer:
+ *
+ * * ``timestamp`` is written behind ``if history.timestamp else None`` -- the
+ *   same truthiness-test pattern that made ``MatchFixtureRecord.kickoff_utc``
+ *   and ``MatchPredictionPayload.last_updated`` nullable despite their
+ *   ``nullable=False`` columns;
+ * * ``trigger`` / ``prediction_method`` mirror genuinely nullable columns
+ *   (``String(32)`` / ``String(128)``, ``nullable=True``);
+ * * ``engine_used`` is the return of ``_engine_used_from_method``, which has
+ *   no ``None`` path -- the retired client copy's ``engine_used?`` was wrong;
+ * * ``data_quality`` / ``data_quality_notes`` come from
+ *   ``normalize_prediction_data_quality``, which returns ``"real"`` or
+ *   ``"partial"`` on every path;
+ * * the four conditional keys are assigned only behind an ``is not None``
+ *   check, so when a key appears its value is non-null -- ``| None`` on the
+ *   model exists to make the key optional on the wire, not to allow a null
+ *   value.
+ */
+export interface PredictionHistoryEntry {
+  timestamp: string | null;
+  predicted_score: PredictedScorePair;
+  outcome_probabilities: MatchOutcomeProbabilities;
+  confidence: number;
+  trigger: string | null;
+  prediction_method: string | null;
+  engine_used: string;
+  data_quality: "real" | "partial";
+  data_quality_notes: string[];
+  raw_confidence?: number | null;
+  confidence_calibration?: ConfidenceCalibrationInfo | null;
+  high_confidence_selection?: HighConfidenceSelection | null;
+  explanation_contributions?: ExplanationContributions | null;
+}
+/**
+ * Response for ``GET /matches/{match_id}/prediction-history`` (audit 53.77).
+ *
+ * One envelope shape: both the success path and the degrade-to-empty
+ * ``except`` fallback write the same four keys, so no flag is needed at this
+ * level -- the conditionality lives one level down, in
+ * ``PredictionHistoryEntry``.
+ */
+export interface PredictionHistoryResponse {
+  status: string;
+  match_id: string;
+  count: number;
+  history: PredictionHistoryEntry[];
+  [k: string]: unknown;
+}
+/**
  * One element of ``RecentPredictionsResponse.predictions`` (audit 53.58).
  *
  * The route spreads ``dict(row)`` from ``SELECT * FROM predictions`` and then

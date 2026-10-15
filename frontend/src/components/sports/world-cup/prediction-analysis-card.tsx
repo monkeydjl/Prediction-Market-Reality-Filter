@@ -103,52 +103,53 @@ export function PredictionAnalysisCard({ match, prediction }: PredictionAnalysis
 
     try {
       const data = await optimizePrediction(match.match_id);
-      if (data.status === "ok") {
-        const opt = data.optimization;
+      // No else branch: the envelope's status is always "ok" here -- every
+      // failure path (404 match / frozen / no prediction, 500 AI error, 503
+      // unavailable) raises an HTTPException, so non-2xx responses are thrown
+      // by optimizePrediction before this line. The old else branch read a
+      // dead envelope key the wire never carried (audit 53.78).
+      const opt = data.optimization;
 
-        // Format optimization result as analysis text
-        let optimizationText = "# AI 优化建议\n\n";
+      // Format optimization result as analysis text
+      let optimizationText = "# AI 优化建议\n\n";
 
-        if (opt.blind_spots && opt.blind_spots.length > 0) {
-          optimizationText += "## 数据盲点识别\n";
-          opt.blind_spots.forEach((spot: string) => {
-            optimizationText += `- ${spot}\n`;
-          });
-          optimizationText += "\n";
-        }
-
-        if (opt.calibration_issues && opt.calibration_issues.length > 0) {
-          optimizationText += "## 概率校准建议\n";
-          opt.calibration_issues.forEach((issue: string) => {
-            optimizationText += `- ${issue}\n`;
-          });
-          optimizationText += "\n";
-        }
-
-        if (opt.optimized_prediction) {
-          const op = opt.optimized_prediction;
-          const orig = data.original_prediction;
-
-          optimizationText += "## 优化后预测\n\n";
-          optimizationText += "**原始预测 → 优化预测**\n";
-          optimizationText += `- 比分: ${orig.predicted_score.home.toFixed(1)}-${orig.predicted_score.away.toFixed(1)} → ${op.predicted_score.home.toFixed(1)}-${op.predicted_score.away.toFixed(1)}\n`;
-          optimizationText += `- 主胜率: ${(orig.outcome_probabilities.home_win * 100).toFixed(1)}% → ${(op.outcome_probabilities.home_win * 100).toFixed(1)}%\n`;
-          optimizationText += `- 平局率: ${(orig.outcome_probabilities.draw * 100).toFixed(1)}% → ${(op.outcome_probabilities.draw * 100).toFixed(1)}%\n`;
-          optimizationText += `- 客胜率: ${(orig.outcome_probabilities.away_win * 100).toFixed(1)}% → ${(op.outcome_probabilities.away_win * 100).toFixed(1)}%\n`;
-          optimizationText += `- 置信度: ${(orig.confidence * 100).toFixed(1)}% → ${(op.confidence * 100).toFixed(1)}%\n`;
-
-          if (op.reasoning) {
-            optimizationText += `\n**调整理由**\n${op.reasoning}\n`;
-          }
-        } else if (opt.raw_text) {
-          optimizationText += opt.raw_text;
-        }
-
-        setAnalysis(optimizationText);
-        setCached(false);
-      } else {
-        throw new Error(data.message || "优化失败");
+      if (opt.blind_spots && opt.blind_spots.length > 0) {
+        optimizationText += "## 数据盲点识别\n";
+        opt.blind_spots.forEach((spot) => {
+          optimizationText += `- ${spot}\n`;
+        });
+        optimizationText += "\n";
       }
+
+      if (opt.calibration_issues && opt.calibration_issues.length > 0) {
+        optimizationText += "## 概率校准建议\n";
+        opt.calibration_issues.forEach((issue) => {
+          optimizationText += `- ${issue}\n`;
+        });
+        optimizationText += "\n";
+      }
+
+      if (opt.optimized_prediction) {
+        const op = opt.optimized_prediction;
+        const orig = data.original_prediction;
+
+        optimizationText += "## 优化后预测\n\n";
+        optimizationText += "**原始预测 → 优化预测**\n";
+        optimizationText += `- 比分: ${orig.predicted_score.home.toFixed(1)}-${orig.predicted_score.away.toFixed(1)} → ${op.predicted_score.home.toFixed(1)}-${op.predicted_score.away.toFixed(1)}\n`;
+        optimizationText += `- 主胜率: ${(orig.outcome_probabilities.home_win * 100).toFixed(1)}% → ${(op.outcome_probabilities.home_win * 100).toFixed(1)}%\n`;
+        optimizationText += `- 平局率: ${(orig.outcome_probabilities.draw * 100).toFixed(1)}% → ${(op.outcome_probabilities.draw * 100).toFixed(1)}%\n`;
+        optimizationText += `- 客胜率: ${(orig.outcome_probabilities.away_win * 100).toFixed(1)}% → ${(op.outcome_probabilities.away_win * 100).toFixed(1)}%\n`;
+        optimizationText += `- 置信度: ${(orig.confidence * 100).toFixed(1)}% → ${(op.confidence * 100).toFixed(1)}%\n`;
+
+        if (op.reasoning) {
+          optimizationText += `\n**调整理由**\n${op.reasoning}\n`;
+        }
+      } else if (opt.raw_text) {
+        optimizationText += opt.raw_text;
+      }
+
+      setAnalysis(optimizationText);
+      setCached(false);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "优化失败";
 

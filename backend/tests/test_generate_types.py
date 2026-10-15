@@ -62,6 +62,11 @@ DELIBERATELY_OPEN = frozenset({
     "ExplanationContributions",
     "ExplanationEngineWeights",
     "HighConfidenceSelection",
+    # Audit 53.78: the optimize response forwards the LLM's `result.json_data`
+    # unchanged -- the prompt template is an intention, not a guarantee, so
+    # both the outer block and its `optimized_prediction` inner stay open.
+    "AIOptimization",
+    "OptimizedPrediction",
 })
 
 # ``api.ts`` is hand-maintained -- no generator writes it -- so nothing stops a
@@ -3278,8 +3283,8 @@ class FlexibleResponseIdentityTests(unittest.TestCase):
             == "FlexibleResponse"
         ]
         self.assertGreater(
-            len(named), 49,
-            "the census floor is 49: as of audit 53.77 exactly 50 routes "
+            len(named), 48,
+            "the census floor is 48: as of audit 53.78 exactly 49 routes "
             "still publish a class named FlexibleResponse, and every named "
             "slice lowers that by one -- a drop below the floor means this "
             "walk stopped seeing them (audit 53.69 set the original "
@@ -5733,6 +5738,281 @@ class WorldCupPredictionHistoryContractTests(unittest.TestCase):
             "getEngineLabel narrowed back; prediction_method mirrors a "
             "nullable column, so the parameter must accept null "
             "(audit 53.77)",
+        )
+
+
+class WorldCupOptimizeContractTests(unittest.TestCase):
+    """``POST /matches/{match_id}/optimize`` -- batch B, slice 4 (audit 53.78).
+
+    The route published the bare ``FlexibleResponse`` and the client read it
+    through three hand-written types, one of which declared a ``message?``
+    key that never existed on the wire (error text arrives as the ``detail``
+    of a non-2xx response) and an ``else`` branch that was therefore
+    unreachable.
+
+    The shape decision that matters here: ``optimization`` is the LLM's
+    ``result.json_data`` forwarded unchanged, so the outer block
+    (``AIOptimization``) and its inner ``OptimizedPrediction`` are
+    deliberately open -- the prompt template is an intention, not a
+    guarantee. Within that, the split between optional and required follows
+    the *consumer's reads*: the card guards every outer read
+    (``if (opt.blind_spots ...)`` / ``else if (opt.raw_text)``) so all four
+    outer fields are optional -- ``raw_text`` is not even in the prompt
+    template -- while the three numeric keys of ``OptimizedPrediction`` are
+    read unguarded inside ``if (opt.optimized_prediction)``, so they are
+    required: a template deviation surfaces as a validation error instead of
+    a client ``TypeError``.
+    """
+
+    def test_the_optimize_envelope_is_one_shape_without_a_flag(self):
+        from app.models.event import (
+            AIOptimization,
+            FlexibleResponse,
+            MatchOriginalPrediction,
+            PredictionOptimizeResponse,
+        )
+
+        fields = PredictionOptimizeResponse.model_fields
+        self.assertEqual(
+            list(fields),
+            ["status", "match_id", "original_prediction", "optimization"],
+            "PredictionOptimizeResponse is no longer the key order the route's "
+            "single success return builds (audit 53.78)",
+        )
+        for name, field in fields.items():
+            with self.subTest(field=name):
+                self.assertTrue(
+                    field.is_required(),
+                    f"PredictionOptimizeResponse.{name} gained a default; every "
+                    "failure path raises HTTPException, so only the success "
+                    "dict reaches the model and a default could only hide a "
+                    "regression (audit 53.78)",
+                )
+        self.assertTrue(issubclass(PredictionOptimizeResponse, FlexibleResponse))
+        self.assertEqual(
+            fields["original_prediction"].annotation,
+            MatchOriginalPrediction,
+            "original_prediction no longer names its block (audit 53.78)",
+        )
+        self.assertEqual(
+            fields["optimization"].annotation,
+            AIOptimization,
+            "optimization no longer names the open LLM block (audit 53.78)",
+        )
+
+        original = MatchOriginalPrediction.model_fields
+        self.assertEqual(
+            list(original),
+            ["predicted_score", "outcome_probabilities", "confidence"],
+            "MatchOriginalPrediction is no longer the three keys the route "
+            "copies off the prediction row (audit 53.78)",
+        )
+        for name, field in original.items():
+            with self.subTest(original_key=name):
+                self.assertTrue(
+                    field.is_required(),
+                    f"MatchOriginalPrediction.{name} gained a default; the "
+                    "route reads non-null Float columns straight onto the "
+                    "wire (audit 53.78)",
+                )
+
+    def test_the_optimization_blob_is_open_and_its_inner_numbers_required(self):
+        from app.models.event import AIOptimization, OptimizedPrediction
+
+        outer = AIOptimization.model_fields
+        self.assertEqual(
+            list(outer),
+            [
+                "blind_spots",
+                "calibration_issues",
+                "optimized_prediction",
+                "raw_text",
+            ],
+            "AIOptimization is no longer the template's three keys plus the "
+            "consumer-driven raw_text fallback (audit 53.78)",
+        )
+        self.assertEqual(
+            AIOptimization.model_config.get("extra"),
+            "allow",
+            "AIOptimization closed; the producer is the LLM and a closed "
+            "model would silently drop whatever else it answers "
+            "(audit 53.78)",
+        )
+        for name, field in outer.items():
+            with self.subTest(outer_key=name):
+                self.assertFalse(
+                    field.is_required(),
+                    f"AIOptimization.{name} became required; the consumer "
+                    "guards every outer read, and the LLM owes no key "
+                    "(audit 53.78)",
+                )
+
+        inner = OptimizedPrediction.model_fields
+        self.assertEqual(
+            list(inner),
+            [
+                "predicted_score",
+                "outcome_probabilities",
+                "confidence",
+                "reasoning",
+            ],
+            "OptimizedPrediction is no longer the prompt template's four "
+            "keys (audit 53.78)",
+        )
+        self.assertEqual(
+            OptimizedPrediction.model_config.get("extra"),
+            "allow",
+            "OptimizedPrediction closed; the LLM's extra keys would be "
+            "dropped (audit 53.78)",
+        )
+        for name in ("predicted_score", "outcome_probabilities", "confidence"):
+            with self.subTest(inner_key=name):
+                self.assertTrue(
+                    inner[name].is_required(),
+                    f"OptimizedPrediction.{name} became optional; the card "
+                    "reads it with no guard inside "
+                    "if (opt.optimized_prediction), so required is what keeps "
+                    "a template deviation a server-side error instead of a "
+                    "client TypeError (audit 53.78)",
+                )
+        self.assertFalse(
+            inner["reasoning"].is_required(),
+            "OptimizedPrediction.reasoning became required; the consumer "
+            "guards that read (if (op.reasoning)), so optional is the "
+            "faithful shape (audit 53.78)",
+        )
+
+        # The producer really is the LLM passthrough: the route forwards
+        # `optimization_result.get("optimization")` and the service returns
+        # `result.json_data` under that key.
+        source = (
+            _BACKEND_DIR / "app" / "services"
+            / "world_cup_ai_optimization_service.py"
+        ).read_bytes().decode("utf-8")
+        self.assertIn(
+            '"optimization": result.json_data',
+            source,
+            "the service no longer forwards result.json_data under "
+            "'optimization'; the open-blob decision follows the passthrough "
+            "(audit 53.78)",
+        )
+
+    def test_the_optimize_route_binds_its_envelope_and_declares_no_flag(self):
+        from fastapi.routing import APIRoute
+
+        from app.api.routes import world_cup_predictions as wc
+        from app.models.event import FlexibleResponse, PredictionOptimizeResponse
+
+        found = [
+            route
+            for route in wc.router.routes
+            if isinstance(route, APIRoute)
+            and route.path == "/world-cup/predictions/matches/{match_id}/optimize"
+            and "POST" in route.methods
+        ]
+        self.assertEqual(
+            len(found), 1, "expected exactly one POST route on /optimize"
+        )
+        optimize = found[0]
+        self.assertIs(
+            optimize.response_model,
+            PredictionOptimizeResponse,
+            "POST /optimize no longer binds PredictionOptimizeResponse; it "
+            "published the bare FlexibleResponse before audit 53.78",
+        )
+        self.assertIsNot(optimize.response_model, FlexibleResponse)
+        self.assertIs(
+            optimize.response_model_exclude_unset,
+            False,
+            "POST /optimize gained response_model_exclude_unset; its single "
+            "success return writes all four keys, so there is nothing for "
+            "the flag to drop (audit 53.78)",
+        )
+
+        # Every failure path raises HTTPException -- that is what makes the
+        # envelope single-shape and the flag unnecessary.
+        source = (
+            _BACKEND_DIR / "app" / "api" / "routes" / "world_cup_predictions.py"
+        ).read_bytes().decode("utf-8")
+        route_start = source.index("async def optimize_match_prediction(")
+        # This is the module's LAST route -- there is no following `@router.`
+        # to slice up to, so the body runs to end-of-file.
+        route_body = source[route_start:]
+        raises = route_body.count("raise HTTPException(")
+        self.assertGreaterEqual(
+            raises,
+            5,
+            "optimize_match_prediction's failure paths changed (found "
+            f"{raises} HTTPException raises); the single-shape envelope "
+            "decision rests on every non-success path raising "
+            "(audit 53.78)",
+        )
+
+    def test_the_client_reads_the_optimize_contract(self):
+        """The retired copies stay retired, the dead key and its unreachable
+        branch stay gone, and the local-name trap is not reintroduced."""
+        client = (
+            _REPO_ROOT / "frontend" / "src" / "lib" / "world-cup"
+            / "predictions-api.ts"
+        ).read_bytes().decode("utf-8")
+        card = (
+            _REPO_ROOT / "frontend" / "src" / "components" / "sports"
+            / "world-cup" / "prediction-analysis-card.tsx"
+        ).read_bytes().decode("utf-8")
+
+        for retired in (
+            "interface OptimizedPrediction {",
+            "interface PredictionOptimization {",
+            "interface PredictionOptimizeResult {",
+        ):
+            with self.subTest(retired=retired):
+                self.assertNotIn(
+                    retired,
+                    client,
+                    f"predictions-api.ts re-declared {retired}; the generated "
+                    "models are the contract (audit 53.78)",
+                )
+        for alias in (
+            "export type PredictionOptimization = AIOptimization;",
+            "PredictionOptimizeResponse as PredictionOptimizeResult,",
+        ):
+            with self.subTest(alias=alias):
+                self.assertIn(
+                    alias,
+                    client,
+                    "the old names must stay exported so existing consumers "
+                    "keep compiling (audit 53.78)",
+                )
+        self.assertIn(
+            "as PredictionOptimizeResponse",
+            client,
+            "optimizePrediction no longer claims the generated envelope "
+            "(audit 53.78)",
+        )
+        self.assertNotIn(
+            "Error(data.message",
+            client,
+            "predictions-api.ts regained a data.message read feeding an "
+            "Error; error text is the detail of a non-2xx response, never an "
+            "envelope key. The needle is the Error-construction form, not "
+            "the bare attribute: worldCupFetchError's existing "
+            "`typeof data.message` fallback is unrelated and would feed a "
+            "bare-attribute assertion red (audit 53.78)",
+        )
+
+        self.assertNotIn(
+            "data.message",
+            card,
+            "the card reads data.message again; that key never existed on "
+            "the wire and its else branch was unreachable -- the needle is "
+            "the bare attribute so any reintroduction fires (audit 53.78)",
+        )
+        self.assertNotIn(
+            'data.status === "ok"',
+            card,
+            "the card re-branches on data.status; the envelope's status is "
+            'always "ok" on this line -- every failure path raises before '
+            "the promise resolves (audit 53.78)",
         )
 
 

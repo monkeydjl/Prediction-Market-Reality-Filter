@@ -5,7 +5,10 @@ import type {
   MatchFixtureRecord,
   MatchPredictionPayload,
 } from "@/lib/generated-types";
-import { fetchAnalysisHistory } from "@/lib/world-cup/predictions-api";
+import {
+  fetchAnalysisHistory,
+  optimizePrediction,
+} from "@/lib/world-cup/predictions-api";
 
 vi.mock("@/lib/world-cup/predictions-api", async (importOriginal) => {
   const actual = await importOriginal<
@@ -93,5 +96,70 @@ describe("PredictionAnalysisCard analysis history", () => {
     expect(await screen.findByText("历史分析")).toBeInTheDocument();
     expect(screen.queryByText("—")).not.toBeInTheDocument();
     expect(screen.getByText("2-1")).toBeInTheDocument();
+  });
+});
+
+describe("PredictionAnalysisCard optimize path", () => {
+  // The optimize consume path had zero assertions before audit 53.78; these
+  // fixtures are typed against the generated `PredictionOptimizeResponse`.
+  it("renders blind spots and the optimized prediction as analysis text", async () => {
+    vi.mocked(optimizePrediction).mockResolvedValue({
+      status: "ok",
+      match_id: "match-1",
+      original_prediction: {
+        predicted_score: { home: 2, away: 1 },
+        outcome_probabilities: { home_win: 0.55, draw: 0.25, away_win: 0.2 },
+        confidence: 0.71,
+      },
+      optimization: {
+        blind_spots: ["忽视了两队近 5 场的防守差异"],
+        calibration_issues: [],
+        optimized_prediction: {
+          predicted_score: { home: 1.8, away: 1.2 },
+          outcome_probabilities: {
+            home_win: 0.5,
+            draw: 0.28,
+            away_win: 0.22,
+          },
+          confidence: 0.66,
+          reasoning: "基于近期防守数据的微调",
+        },
+      },
+    });
+
+    render(<PredictionAnalysisCard match={match} prediction={prediction} />);
+
+    const optimizeButton = (await screen.findByText("AI优化")) as HTMLButtonElement;
+    optimizeButton.click();
+
+    expect(await screen.findByText(/数据盲点识别/)).toBeInTheDocument();
+    expect(screen.getByText(/忽视了两队近 5 场的防守差异/)).toBeInTheDocument();
+    expect(screen.getByText(/优化后预测/)).toBeInTheDocument();
+    expect(screen.getByText(/2\.0-1\.0 → 1\.8-1\.2/)).toBeInTheDocument();
+    expect(screen.getByText(/调整理由/)).toBeInTheDocument();
+  });
+
+  it("falls back to raw_text when the LLM answer is unstructured", async () => {
+    vi.mocked(optimizePrediction).mockResolvedValue({
+      status: "ok",
+      match_id: "match-1",
+      original_prediction: {
+        predicted_score: { home: 2, away: 1 },
+        outcome_probabilities: { home_win: 0.55, draw: 0.25, away_win: 0.2 },
+        confidence: 0.71,
+      },
+      optimization: {
+        raw_text: "模型未返回结构化 JSON",
+      },
+    });
+
+    render(<PredictionAnalysisCard match={match} prediction={prediction} />);
+
+    const optimizeButton = (await screen.findByText("AI优化")) as HTMLButtonElement;
+    optimizeButton.click();
+
+    expect(
+      await screen.findByText(/模型未返回结构化 JSON/)
+    ).toBeInTheDocument();
   });
 });

@@ -10,6 +10,85 @@
 */
 
 /**
+ * The ``optimization`` block of ``POST /matches/{match_id}/optimize``
+ * (audit 53.78) -- ``optimize_prediction_with_ai``'s ``result.json_data``
+ * forwarded unchanged.
+ *
+ * Open for the same reason as ``OptimizedPrediction``: the producer is the
+ * LLM, and the prompt template is an intention, not a guarantee. All four
+ * fields are optional because the one consumer guards every read
+ * (``if (opt.blind_spots ...)`` / ``if (opt.optimized_prediction)`` /
+ * ``else if (opt.raw_text)``) -- ``raw_text`` is not even in the prompt
+ * template; it exists only because the card reads it as a fallback for
+ * unstructured answers, so naming it is consumer-driven, not
+ * producer-driven.
+ */
+export interface AIOptimization {
+  blind_spots?: string[] | null;
+  calibration_issues?: string[] | null;
+  optimized_prediction?: OptimizedPrediction | null;
+  raw_text?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * The ``optimized_prediction`` block the AI optimizer's prompt template
+ * asks the LLM to return (audit 53.78).
+ *
+ * The producer is the LLM: ``optimize_prediction_with_ai`` forwards
+ * ``result.json_data`` unchanged, and the only "shape" it commits to is the
+ * JSON skeleton in the prompt. Three consequences:
+ *
+ * * the model is ``extra="allow"`` -- whatever else the LLM adds rides
+ *   through instead of being dropped;
+ * * the three numeric keys are **required**, matching the one consumer,
+ *   which reads ``op.predicted_score.home`` / ``.away`` /
+ *   ``outcome_probabilities.*`` / ``confidence`` with no guard inside its
+ *   ``if (opt.optimized_prediction)`` branch -- a template deviation now
+ *   surfaces as a validation error instead of a client ``TypeError``;
+ * * ``reasoning`` is optional: the consumer guards it
+ *   (``if (op.reasoning)``), so the type mirrors the guarded read.
+ *
+ * ``PredictedScorePair`` (floats) is deliberate: the prompt shows ``2.0``,
+ * but an LLM answering ``2`` is coerced by pydantic either way, and the
+ * consumer calls ``.toFixed(1)`` -- the *integer* ``ScorePair`` would round
+ * before display.
+ */
+export interface OptimizedPrediction {
+  predicted_score: PredictedScorePair;
+  outcome_probabilities: MatchOutcomeProbabilities;
+  confidence: number;
+  reasoning?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * A ``{home, away}`` predicted-score pair whose members are ``float``,
+ * shared by the match-query payloads (audit 53.75).
+ *
+ * Deliberately **not** ``ScorePair``: that one (audit 53.71) mirrors
+ * ``EngineComparisonPrediction``, which rounds both scores to ``int``. Nor
+ * ``PredictedScore``: that name is already a ``TypedDict`` in
+ * ``app.services.world_cup_engines.types`` -- the same-name/different-body
+ * trap audit 53.69 closed for ``FlexibleResponse``. Here every producer reads
+ * a ``Float`` column (``AIAnalysisHistory.predicted_home_score``,
+ * ``MatchPrediction.predicted_home_score``) straight onto the wire, so both
+ * members stay ``float``.
+ */
+export interface PredictedScorePair {
+  home: number;
+  away: number;
+}
+/**
+ * The ``outcome_probabilities`` block of a match prediction (audit 53.76).
+ *
+ * All three members are ``Float`` columns (``home_win_prob`` / ``draw_prob`` /
+ * ``away_win_prob``) copied onto the wire unchanged, so all three are ``float``.
+ */
+export interface MatchOutcomeProbabilities {
+  home_win: number;
+  draw: number;
+  away_win: number;
+}
+/**
  * Structured actionable conclusion for an event (Stage 3).
  *
  * Surfaces the already-computed legacy signal as an event-vocabulary
@@ -46,23 +125,6 @@ export interface AnalysisHistoryEntry {
   confidence: number;
   prediction_method: string | null;
   created_at: string | null;
-}
-/**
- * A ``{home, away}`` predicted-score pair whose members are ``float``,
- * shared by the match-query payloads (audit 53.75).
- *
- * Deliberately **not** ``ScorePair``: that one (audit 53.71) mirrors
- * ``EngineComparisonPrediction``, which rounds both scores to ``int``. Nor
- * ``PredictedScore``: that name is already a ``TypedDict`` in
- * ``app.services.world_cup_engines.types`` -- the same-name/different-body
- * trap audit 53.69 closed for ``FlexibleResponse``. Here every producer reads
- * a ``Float`` column (``AIAnalysisHistory.predicted_home_score``,
- * ``MatchPrediction.predicted_home_score``) straight onto the wire, so both
- * members stay ``float``.
- */
-export interface PredictedScorePair {
-  home: number;
-  away: number;
 }
 /**
  * Response for GET /api/health (audit 53.64). The handler writes all
@@ -2025,17 +2087,6 @@ export interface MatchPredictionPayload {
   explanation_contributions: ExplanationContributions | null;
 }
 /**
- * The ``outcome_probabilities`` block of a match prediction (audit 53.76).
- *
- * All three members are ``Float`` columns (``home_win_prob`` / ``draw_prob`` /
- * ``away_win_prob``) copied onto the wire unchanged, so all three are ``float``.
- */
-export interface MatchOutcomeProbabilities {
-  home_win: number;
-  draw: number;
-  away_win: number;
-}
-/**
  * The ``confidence_calibration`` block of a match prediction (audit 53.76).
  *
  * ``build_confidence_calibration_info`` builds a thirteen-key literal and every
@@ -2209,6 +2260,19 @@ export interface MatchListResponse {
   [k: string]: unknown;
 }
 /**
+ * The ``original_prediction`` block of the optimize response (audit 53.78).
+ *
+ * Three keys copied straight off ``MatchPrediction``'s non-null ``Float``
+ * columns, so all three are required and reuse the match-query payload
+ * models -- the same pair the route feeds into the LLM prompt two lines
+ * earlier.
+ */
+export interface MatchOriginalPrediction {
+  predicted_score: PredictedScorePair;
+  outcome_probabilities: MatchOutcomeProbabilities;
+  confidence: number;
+}
+/**
  * Response for ``GET /events/decisions/open`` (audit 53.59).
  *
  * All six envelope keys are bare: ``get_open_decisions`` writes every one of
@@ -2333,6 +2397,24 @@ export interface PredictionHistoryResponse {
   match_id: string;
   count: number;
   history: PredictionHistoryEntry[];
+  [k: string]: unknown;
+}
+/**
+ * Response for ``POST /matches/{match_id}/optimize`` (audit 53.78).
+ *
+ * One shape, no flag: every failure path (404 match, 400 frozen, 404 no
+ * prediction, 500 AI error, 503 unavailable) raises ``HTTPException``, so
+ * only the success dict reaches the response model and all four keys are
+ * written unconditionally. The retired client copy's ``message?: string``
+ * was a dead key -- error text arrives as the ``detail`` of a non-2xx
+ * response, never inside this envelope -- and its ``status === "ok"`` else
+ * branch was unreachable for the same reason.
+ */
+export interface PredictionOptimizeResponse {
+  status: string;
+  match_id: string;
+  original_prediction: MatchOriginalPrediction;
+  optimization: AIOptimization;
   [k: string]: unknown;
 }
 /**

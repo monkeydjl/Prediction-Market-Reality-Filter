@@ -399,6 +399,10 @@ _ANALYSIS_CARD_TSX = (
 _HISTORY_CARD_TSX = (
     "frontend/src/components/sports/world-cup/prediction-history-card.tsx"
 )
+# §53.78 — the AI optimization service. Its one passthrough line is what makes
+# the optimize response's `optimization` block an LLM blob rather than a
+# closed shape.
+_WC_AI_OPT_SVC = "backend/app/services/world_cup_ai_optimization_service.py"
 _T_EVENT_INTELLIGENCE = "tests/test_event_intelligence_service.py"
 _T_CONCLUSION_CHALLENGE = "tests/test_conclusion_challenge_service.py"
 _T_DECISION_QUALITY = "tests/test_decision_quality_service.py"
@@ -1663,7 +1667,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J159）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J166）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -5422,6 +5426,147 @@ SETS: tuple[MutationSet, ...] = (
                     "**双向**的：断言条件式存在（本条打它），也断言旧的无括号直调"
                     "缺席 —— 属性级断言会被分支内的其它读法喂绿（§53.76 J150 "
                     "教训），所以针是 `? ` 开头的**条件表达式**不是裸属性。"
+                    "● 针单行、无换行、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J160 POST /optimize 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=(
+                    b'@router.post("/matches/{match_id}/optimize", '
+                    b"response_model=PredictionOptimizeResponse)"
+                ),
+                new=(
+                    b'@router.post("/matches/{match_id}/optimize", '
+                    b"response_model=FlexibleResponse)"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_optimize_route_binds_its_envelope_and_declares_no_flag",),
+                note=(
+                    "§53.78（批 B 片4）：路由对象**身份**判据，J154 的同款。"
+                    "● 针单行、无换行（装饰器单行）、命中 **1 次**（已实测；"
+                    "模型名是新名字全仓唯一）。与 J161 打**同一行** —— "
+                    "同段字节两条改写 ⇒ 同 `group`（§4.3）。"
+                ),
+            ),
+            Mutation(
+                label="J161 POST /optimize 长出 exclude_unset：单形状路由的「无旗」被推翻",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=b'@router.post("/matches/{match_id}/optimize"',
+                new=(
+                    b'@router.post("/matches/{match_id}/optimize",\r\n'
+                    b"    response_model_exclude_unset=True,"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_optimize_route_binds_its_envelope_and_declares_no_flag",),
+                group="optimize-envelope",
+                note=(
+                    "§53.78：**「不需要旗子」方向被钉 `is False`**。成功路径 "
+                    "4 键全写、失败路径全 raise ⇒ 没有可缺席的键，加了旗子只会"
+                    "掩盖『信封键被漏写』的回归。"
+                    "🔴 针**只锚装饰器前缀**（`response_model=…` 之后的部分"
+                    "刻意不含）：J160 在同一行改写模型名，整集按序重放时 J161 "
+                    "的锚若含该字节就会被前一条破坏 —— harness 的整集守卫"
+                    "（§Z7 按序重放判据）当场逮住，本针是改出来的第二版。"
+                    "前缀在 J160 前后都命中 **1 次**（已实测）。插入型编辑对 "
+                    "diff 的删除数为 0。"
+                ),
+            ),
+            Mutation(
+                label="J162 AIOptimization.raw_text 撤名：消费驱动的具名被收回开放兜底",
+                path=_EVENT_MODEL,
+                old=b"    raw_text: str | None = None\r\n",
+                new=b"",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_optimization_blob_is_open_and_its_inner_numbers_required",),
+                note=(
+                    "§53.78：**raw_text 是消费驱动而非生产驱动** —— 提示词模板"
+                    "里没有这个键，它存在只因为卡片在 else-if 里把它当非结构化"
+                    "回答的回退读。撤名后 LLM 若真返回 raw_text 只能靠 "
+                    "`extra=allow` 兜底，前端类型上看不见。守卫的 "
+                    "`list(outer)` 四键序断言当场红。"
+                    "● 针单行、带 CRLF，event.py 命中 **1 次**（已实测；"
+                    "raw_text 全模型仅此一处）。"
+                ),
+            ),
+            Mutation(
+                label="J163 OptimizedPrediction.confidence 降级为可选：无守卫直读的键失去契约",
+                path=_EVENT_MODEL,
+                old=(
+                    b"    outcome_probabilities: MatchOutcomeProbabilities\r\n"
+                    b"    confidence: float\r\n"
+                    b"    reasoning: str | None = None\r\n"
+                ),
+                new=(
+                    b"    outcome_probabilities: MatchOutcomeProbabilities\r\n"
+                    b"    confidence: float | None = None\r\n"
+                    b"    reasoning: str | None = None\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_optimization_blob_is_open_and_its_inner_numbers_required",),
+                note=(
+                    "§53.78：**必填/可选的分界线=消费者读法**（§Z6 忠实类型看"
+                    "读法）。内层三个数值键被卡片在 "
+                    "`if (opt.optimized_prediction)` 内**无守卫**直读，必填是"
+                    "「模板偏离 ⇒ 服务端 500」而不是「前端 TypeError」的承重点；"
+                    "降级后 `is_required()` 断言红。"
+                    "● 针**三行**：两行锚 "
+                    "`outcome_probabilities…+confidence` 在 "
+                    "MatchPredictionPayload 也有（已实测），第三行 `reasoning`"
+                    " 才唯一；带 CRLF。取三键中的一键作代表（§4.2）。"
+                ),
+            ),
+            Mutation(
+                label="J164 AIOptimization 收成 extra=forbid：LLM 透传 blob 的开放决定被推翻",
+                path=_EVENT_MODEL,
+                old=(
+                    b'    model_config = ConfigDict(extra="allow")\r\n'
+                    b"\r\n"
+                    b"    blind_spots: list[str] | None = None\r\n"
+                ),
+                new=(
+                    b'    model_config = ConfigDict(extra="forbid")\r\n'
+                    b"\r\n"
+                    b"    blind_spots: list[str] | None = None\r\n"
+                ),
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_optimization_blob_is_open_and_its_inner_numbers_required",),
+                note=(
+                    "§53.78：**开放集**判据（J147 同款）。生产者是 LLM，模板是"
+                    "意图不是保证，闭合模型会把 LLM 多答的键静默丢掉；"
+                    "`test_only_the_documented_models_stay_open` 的 "
+                    "DELIBERATELY_OPEN 已收录本片两个新名（9→11）。"
+                    "● 单行 allow 在 event.py 命中 **12 次**（10 旧 + 2 新，"
+                    "已实测），带下一字段行 `blind_spots` 才唯一（三行锚）。"
+                ),
+            ),
+            Mutation(
+                label="J165 optimizePrediction 摘掉信封 cast：契约旁路",
+                path=_WC_PREDICTIONS_API_TS,
+                old=b"return (await response.json()) as PredictionOptimizeResponse;",
+                new=b"return await response.json();",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_client_reads_the_optimize_contract",),
+                note=(
+                    "§53.78：**客户端读法**判据（§Z2：`res.json() as T` 对形状"
+                    "零主张）。信封 cast 是 `data.original_prediction` 可读的"
+                    "唯一依据。"
+                    "● 针单行、无换行、命中 **1 次**（已实测；与 J158 针同"
+                    "文件不同行、字节不同）。"
+                ),
+            ),
+            Mutation(
+                label="J166 服务透传行改成空 dict：optimization 不再是 LLM blob",
+                path=_WC_AI_OPT_SVC,
+                old=b'"optimization": result.json_data,',
+                new=b'"optimization": {},',
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_optimization_blob_is_open_and_its_inner_numbers_required",),
+                note=(
+                    "§53.78：**透传事实**判据。开放 blob 建模的前提是「生产者"
+                    "= result.json_data 原样转发」；改成常量后该前提消失，"
+                    "守卫的 assertIn 源码断言当场红 —— 前提被改的结论必须显式"
+                    "更正（§0）。"
                     "● 针单行、无换行、命中 **1 次**（已实测）。"
                 ),
             ),

@@ -25,6 +25,7 @@ from app.models.event import (
     MatchAnalyzeResponse,
     MatchListResponse,
     PredictionHistoryResponse,
+    PredictionOptimizeResponse,
     SyncFixturesResponse,
 )
 from app.models.world_cup_prediction import MatchFixture, MatchPrediction, PredictionHistory, AIAnalysisHistory
@@ -1055,7 +1056,7 @@ async def analyze_calibration_patterns(engine_name: str) -> dict[str, Any]:
     return result
 
 
-@router.post("/matches/{match_id}/optimize", response_model=FlexibleResponse)
+@router.post("/matches/{match_id}/optimize", response_model=PredictionOptimizeResponse)
 async def optimize_match_prediction(
     match_id: str,
     _auth: None = Depends(require_write_key),

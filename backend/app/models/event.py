@@ -2211,6 +2211,93 @@ class PredictionHistoryResponse(FlexibleResponse):
     history: list[PredictionHistoryEntry]
 
 
+class OptimizedPrediction(BaseModel):
+    """The ``optimized_prediction`` block the AI optimizer's prompt template
+    asks the LLM to return (audit 53.78).
+
+    The producer is the LLM: ``optimize_prediction_with_ai`` forwards
+    ``result.json_data`` unchanged, and the only "shape" it commits to is the
+    JSON skeleton in the prompt. Three consequences:
+
+    * the model is ``extra="allow"`` -- whatever else the LLM adds rides
+      through instead of being dropped;
+    * the three numeric keys are **required**, matching the one consumer,
+      which reads ``op.predicted_score.home`` / ``.away`` /
+      ``outcome_probabilities.*`` / ``confidence`` with no guard inside its
+      ``if (opt.optimized_prediction)`` branch -- a template deviation now
+      surfaces as a validation error instead of a client ``TypeError``;
+    * ``reasoning`` is optional: the consumer guards it
+      (``if (op.reasoning)``), so the type mirrors the guarded read.
+
+    ``PredictedScorePair`` (floats) is deliberate: the prompt shows ``2.0``,
+    but an LLM answering ``2`` is coerced by pydantic either way, and the
+    consumer calls ``.toFixed(1)`` -- the *integer* ``ScorePair`` would round
+    before display.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    predicted_score: PredictedScorePair
+    outcome_probabilities: MatchOutcomeProbabilities
+    confidence: float
+    reasoning: str | None = None
+
+
+class AIOptimization(BaseModel):
+    """The ``optimization`` block of ``POST /matches/{match_id}/optimize``
+    (audit 53.78) -- ``optimize_prediction_with_ai``'s ``result.json_data``
+    forwarded unchanged.
+
+    Open for the same reason as ``OptimizedPrediction``: the producer is the
+    LLM, and the prompt template is an intention, not a guarantee. All four
+    fields are optional because the one consumer guards every read
+    (``if (opt.blind_spots ...)`` / ``if (opt.optimized_prediction)`` /
+    ``else if (opt.raw_text)``) -- ``raw_text`` is not even in the prompt
+    template; it exists only because the card reads it as a fallback for
+    unstructured answers, so naming it is consumer-driven, not
+    producer-driven.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    blind_spots: list[str] | None = None
+    calibration_issues: list[str] | None = None
+    optimized_prediction: OptimizedPrediction | None = None
+    raw_text: str | None = None
+
+
+class MatchOriginalPrediction(BaseModel):
+    """The ``original_prediction`` block of the optimize response (audit 53.78).
+
+    Three keys copied straight off ``MatchPrediction``'s non-null ``Float``
+    columns, so all three are required and reuse the match-query payload
+    models -- the same pair the route feeds into the LLM prompt two lines
+    earlier.
+    """
+
+    predicted_score: PredictedScorePair
+    outcome_probabilities: MatchOutcomeProbabilities
+    confidence: float
+
+
+class PredictionOptimizeResponse(FlexibleResponse):
+    """Response for ``POST /matches/{match_id}/optimize`` (audit 53.78).
+
+    One shape, no flag: every failure path (404 match, 400 frozen, 404 no
+    prediction, 500 AI error, 503 unavailable) raises ``HTTPException``, so
+    only the success dict reaches the response model and all four keys are
+    written unconditionally. The retired client copy's ``message?: string``
+    was a dead key -- error text arrives as the ``detail`` of a non-2xx
+    response, never inside this envelope -- and its ``status === "ok"`` else
+    branch was unreachable for the same reason.
+    """
+
+    status: str
+    match_id: str
+    original_prediction: MatchOriginalPrediction
+    optimization: AIOptimization
+
+
 class CalibrationAggregate(BaseModel):
     """One aggregate block of ``EventCalibrationResponse`` (audit 53.63):
     the overall block and every ``by_source`` / ``by_base_rate_category``

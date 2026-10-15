@@ -9,6 +9,7 @@ import {
   getOperatorId,
 } from "@/lib/api";
 import type {
+  AIOptimization,
   AnalysisHistoryEntry,
   ConfidenceCalibrationInfo,
   EngineComparisonResponse,
@@ -22,8 +23,10 @@ import type {
   MatchListResponse,
   MatchOutcomeProbabilities,
   MatchPredictionPayload,
+  OptimizedPrediction,
   PredictionHistoryEntry,
   PredictionHistoryResponse,
+  PredictionOptimizeResponse,
   ScorePair as PredictedScore,
   SyncFixturesResponse,
 } from "@/lib/generated-types";
@@ -311,37 +314,35 @@ export async function fetchAnalysisHistory(matchId: string): Promise<AnalysisHis
   return data.history ?? [];
 }
 
-export interface OptimizedPrediction {
-  predicted_score: PredictedScore;
-  outcome_probabilities: OutcomeProbabilities;
-  confidence: number;
-  reasoning?: string;
-}
-
-export interface PredictionOptimization {
-  blind_spots?: string[];
-  calibration_issues?: string[];
-  optimized_prediction?: OptimizedPrediction | null;
-  raw_text?: string;
-}
-
-export interface PredictionOptimizeResult {
-  status: string;
-  match_id?: string;
-  message?: string;
-  original_prediction: {
-    predicted_score: PredictedScore;
-    outcome_probabilities: OutcomeProbabilities;
-    confidence: number;
-  };
-  optimization: PredictionOptimization;
-}
+// Audit 53.78 retired the three hand-written optimize types. The generated
+// ones correct two dead keys and one dead branch:
+//
+//   * `PredictionOptimizeResult.message?` never existed on the wire -- error
+//     text arrives as the `detail` of a non-2xx response, never inside the
+//     envelope, so the card's `data.status === "ok"` else branch (which read
+//     it) was unreachable and is gone;
+//   * `match_id?` was declared optional but the producer always writes it;
+//   * `OptimizedPrediction` keeps its three numeric keys required (the card
+//     reads them unguarded inside `if (opt.optimized_prediction)`) while the
+//     outer blocks stay all-optional -- the consumer guards every one of
+//     those reads, and `raw_text` is not even in the prompt template.
+//
+// The old names stay exported so existing consumers keep compiling. The
+// generated `AIOptimization` / `OptimizedPrediction` are deliberately open
+// (`extra="allow"`): the producer is the LLM, and the prompt template is an
+// intention, not a guarantee.
+export type PredictionOptimization = AIOptimization;
+export type {
+  AIOptimization,
+  OptimizedPrediction,
+  PredictionOptimizeResponse as PredictionOptimizeResult,
+};
 
 /**
  * Ask the AI optimizer for blind spots / calibration fixes on a match's
  * current prediction. Write operation — consumes provider quota.
  */
-export async function optimizePrediction(matchId: string): Promise<PredictionOptimizeResult> {
+export async function optimizePrediction(matchId: string): Promise<PredictionOptimizeResponse> {
   const response = await fetch(
     `${API_BASE}/world-cup/predictions/matches/${matchId}/optimize`,
     {
@@ -356,7 +357,7 @@ export async function optimizePrediction(matchId: string): Promise<PredictionOpt
     throw new Error(data.detail || `HTTP ${response.status}`);
   }
 
-  return await response.json();
+  return (await response.json()) as PredictionOptimizeResponse;
 }
 
 export type EngineComparisonKey = "elo_odds" | "hybrid" | "integrated" | "gbm";

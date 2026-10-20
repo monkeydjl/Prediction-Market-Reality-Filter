@@ -1319,6 +1319,25 @@ export interface EdgeTrajectorySummary {
   classification: string;
 }
 /**
+ * The ``elo_ratings`` block of a trigger/compare prediction (audit 53.79).
+ *
+ * Both producers that emit the key write the same three-key literal:
+ * ``world_cup_elo_odds_engine`` (home/away/difference) and
+ * ``world_cup_gbm_engine`` (same keys, single return path -- the pipeline's
+ * ``gbm_pred.get("elo_ratings", {})`` fallback can therefore never fire, so
+ * naming this model cannot turn a silent ``{}`` into a 500). The hybrid
+ * engine never emits the key at all, which is why the envelope reads it as
+ * ``.get(...)`` and the field is nullable in ``PredictionTriggerResponse``.
+ *
+ * The client's retired hand-written copy declared only ``{home, away}`` --
+ * missing ``difference``; the generated type closes that drift.
+ */
+export interface EloRatingsPair {
+  home: number;
+  away: number;
+  difference: number;
+}
+/**
  * Response for GET /calibration/{engine_name} (audit 53.71).
  *
  * Two disjoint shapes: ``{"status": "no_calibration", "engine", "message"}``
@@ -2415,6 +2434,57 @@ export interface PredictionOptimizeResponse {
   match_id: string;
   original_prediction: MatchOriginalPrediction;
   optimization: AIOptimization;
+  [k: string]: unknown;
+}
+/**
+ * Response for ``POST /matches/{match_id}/predict`` (audit 53.79).
+ *
+ * One URL, two shapes (the §Z10 ``/loop/status`` precedent):
+ *
+ * * **skipped** -- the freeze guard (non-compare-only calls against started
+ *   or finished matches) returns ``{"status", "reason"}`` only;
+ * * **ok** -- the 19-key envelope. The compare-only return and the persisted
+ *   return write *the same key set*; only ``action`` differs
+ *   (``"compared"`` vs ``"updated"``/``"created"``). The pipeline's engine
+ *   branches do not add shapes: their results are assigned to
+ *   ``prediction_result`` and the envelope picks keys individually.
+ *
+ * The pipeline's three error literals never reach this model: the route
+ * converts every ``status == "error"`` return into HTTP 500, so no ``error``
+ * key exists here (the retired client copy's ``error?: string`` was a type
+ * lie).
+ *
+ * The route **must** carry ``response_model_exclude_unset=True``: the two
+ * shapes are produced by dicts with disjoint key sets, and without the flag
+ * every skipped response would grow seventeen explicit ``null`` keys --
+ * a wire change (the §Z10 reverse case: here the flag is *required*).
+ * Conditional keys therefore all carry defaults; ``status`` is written on
+ * both paths and so has none.
+ *
+ * Open for the same reason as the other ``FlexibleResponse`` roots: the
+ * nested engine payloads are passed through from unvalidated dicts.
+ */
+export interface PredictionTriggerResponse {
+  status: "ok" | "skipped";
+  reason?: string | null;
+  action?: ("compared" | "created" | "updated") | null;
+  match_id?: string | null;
+  home_team?: string | null;
+  away_team?: string | null;
+  predicted_score?: PredictedScorePair | null;
+  outcome_probabilities?: MatchOutcomeProbabilities | null;
+  confidence?: number | null;
+  prediction_method?: string | null;
+  engine_used?: string | null;
+  has_betting_odds?: boolean | null;
+  data_quality?: ("real" | "partial") | null;
+  data_quality_notes?: string[] | null;
+  data_quality_score?: number | null;
+  elo_ratings?: EloRatingsPair | null;
+  raw_confidence?: number | null;
+  confidence_calibration?: ConfidenceCalibrationInfo | null;
+  high_confidence_selection?: HighConfidenceSelection | null;
+  explanation_contributions?: ExplanationContributions | null;
   [k: string]: unknown;
 }
 /**

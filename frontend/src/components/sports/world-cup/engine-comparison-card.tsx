@@ -60,14 +60,12 @@ function PredictionColumn({
     try {
       const result = await triggerPrediction(matchId, engine);
       // Pipeline may skip when the match has already started/finished (freeze
-      // guard). Without compare_only, it returns {"status": "skipped"} and
+      // guard). Without compare_only, it returns the two-key skip shape and
       // persists nothing — surface that instead of showing a false "applied".
+      // Pipeline failures surface as HTTP 500 via the catch below, so no
+      // in-band failure shape exists here (audit 53.79).
       if (result.status === "skipped") {
         setApplyError(`无法应用：${result.reason || "比赛已开赛或已结束"}`);
-        return;
-      }
-      if (result.status === "error") {
-        setApplyError(`应用失败：${result.error || "后端错误"}`);
         return;
       }
       setApplied(true);

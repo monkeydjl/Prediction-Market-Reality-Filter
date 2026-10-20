@@ -1667,7 +1667,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J166）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J176）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -4940,8 +4940,14 @@ SETS: tuple[MutationSet, ...] = (
             Mutation(
                 label="J136 PredictedScorePair.home 从 float 退回 int：与 ScorePair 静默合一",
                 path=_EVENT_MODEL,
-                old=b"    home: float\r\n    away: float\r\n",
-                new=b"    home: int\r\n    away: float\r\n",
+                old=(
+                    b"    home: float\r\n    away: float\r\n"
+                    b"\r\n\r\nclass AnalysisHistoryEntry(BaseModel):\r\n"
+                ),
+                new=(
+                    b"    home: int\r\n    away: float\r\n"
+                    b"\r\n\r\nclass AnalysisHistoryEntry(BaseModel):\r\n"
+                ),
                 guard_file=_T_GENERATE_TYPES,
                 guards=(
                     "test_the_analysis_history_envelope_is_one_shape_without_a_flag",
@@ -4952,7 +4958,12 @@ SETS: tuple[MutationSet, ...] = (
                     "`Float` 列原样铺上线上，改成 int 会让模型把 `2.0` "
                     "序列化成 `2` —— **改线上字节**，且 `tsc` 看不见"
                     "（TS 里 int 与 float 同为 `number`）。"
-                    "● 针两行、命中 **1 次**（已实测）。"
+                    "🔴 换锚（§53.79）：原针 `home/away` 两行在 53.79 新增 "
+                    "`EloRatingsPair` 后命中 1→2（同名同形新字段，§4.3 已知"
+                    "类）—— 整集重放当场逮住。锚向后扩到 `class "
+                    "AnalysisHistoryEntry` 行消歧，判据不变（打的还是 "
+                    "PredictedScorePair）。"
+                    "● 针五行、带 CRLF、命中 **1 次**（换锚后已实测）。"
                 ),
             ),
             Mutation(
@@ -5305,8 +5316,14 @@ SETS: tuple[MutationSet, ...] = (
             Mutation(
                 label="J153 PredictionHistoryEntry.raw_confidence 丢掉默认值：条件键变必填",
                 path=_EVENT_MODEL,
-                old=b"    raw_confidence: float | None = None\r\n",
-                new=b"    raw_confidence: float | None\r\n",
+                old=(
+                    b"    data_quality_notes: list[str]\r\n"
+                    b"    raw_confidence: float | None = None\r\n"
+                ),
+                new=(
+                    b"    data_quality_notes: list[str]\r\n"
+                    b"    raw_confidence: float | None\r\n"
+                ),
                 guard_file=_T_GENERATE_TYPES,
                 guards=(
                     "test_the_history_envelope_holds_both_entry_shapes_byte_for_byte",
@@ -5320,6 +5337,12 @@ SETS: tuple[MutationSet, ...] = (
                     "同一条规则、同一守卫。"
                     "● 针单行、带 CRLF、命中 **1 次**（已实测；"
                     "`MatchPredictionPayload.raw_confidence` 无默认值，字节不同）。"
+                    "🔴 换锚（§53.79）：单行针在 53.79 新增 "
+                    "`PredictionTriggerResponse.raw_confidence`（同字节）后命中 "
+                    "1→2 —— 整集重放当场逮住。锚向前扩到本模型的 "
+                    "`data_quality_notes: list[str]` 必填行消歧（Trigger 版该行"
+                    "带 `| None = None`，字节不同），判据不变。"
+                    "● 针两行、带 CRLF、命中 **1 次**（换锚后已实测）。"
                 ),
             ),
             Mutation(
@@ -5567,6 +5590,165 @@ SETS: tuple[MutationSet, ...] = (
                     "= result.json_data 原样转发」；改成常量后该前提消失，"
                     "守卫的 assertIn 源码断言当场红 —— 前提被改的结论必须显式"
                     "更正（§0）。"
+                    "● 针单行、无换行、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J167 POST /predict 的 response_model 退回裸 FlexibleResponse：契约重新不可见",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=b"    response_model=PredictionTriggerResponse,\r\n",
+                new=b"    response_model=FlexibleResponse,\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_trigger_route_binds_its_envelope_and_requires_the_flag",),
+                note=(
+                    "§53.79（批 B 终章）：路由对象**身份**判据，J154/J160 的"
+                    "同款。predict 是本模块最后一个裸路由，收口后本模块 4→3、"
+                    "全 app 49→48。"
+                    "● 针单行、带 CRLF、缩进 4（import 行无缩进故不撞）、"
+                    "命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J168 POST /predict 撤 exclude_unset：双形状路由的「必须有旗」被推翻",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=b"    # 53.79).\r\n    response_model_exclude_unset=True,\r\n",
+                new=b"    # 53.79).\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_trigger_route_binds_its_envelope_and_requires_the_flag",),
+                note=(
+                    "§53.79：**「旗子必须有」方向**（§Z10 反向首例的第二例）。"
+                    "两个形状来自键集不相交的字面量 dict；没有旗子时 skipped "
+                    "响应会长出 17 个显式 null —— 改线上字节。"
+                    "🔴 单独的旗子行 `response_model_exclude_unset=True,` 全"
+                    "文件命中不止 1 处（analyze / loop-status 也有旗），针必须"
+                    "带上注释尾行 `# 53.79).` 消歧 —— 注释既是锚也是唯一性来"
+                    "源。删除型编辑，删除数 1。"
+                    "● 针两行、带 CRLF、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J169 PredictionTriggerResponse.status 放宽为 str：两形状判别符失去词汇",
+                path=_EVENT_MODEL,
+                old=b'    status: Literal["ok", "skipped"]\r\n',
+                new=b"    status: str\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_trigger_envelope_is_two_shapes_with_conditional_defaults",),
+                note=(
+                    "§53.79：status 是唯一**双形状都写**的键（无默认），其字面"
+                    "量词汇就是 TS 侧的判别联合。放宽后前端拿不到 `\"ok\" | "
+                    "\"skipped\"`，engine-comparison-card 的 skipped 分支类型"
+                    "上无从分辨。守卫的 annotation 相等断言当场红。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J170 PredictionTriggerResponse.reason 变必填：skipped-only 键把另一形状逼死",
+                path=_EVENT_MODEL,
+                old=b"    reason: str | None = None\r\n    action: Literal",
+                new=b"    reason: str\r\n    action: Literal",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_trigger_envelope_is_two_shapes_with_conditional_defaults",),
+                note=(
+                    "§53.79：reason 只由 skipped 形状写；变必填后 ok 形状"
+                    "（缺 reason）会 ValidationError —— 双形状共存的前提被拆。"
+                    "守卫的「条件键必须带默认」subTest 当场红。"
+                    "🔴 单独的 reason 行全文件命中不止 1 处（其它模型的 "
+                    "reason 同名），针必须带上后随 action 行前缀消歧；该前缀"
+                    "在 J170 的 new 里**逐字节保留**，所以按序重放时后一条 "
+                    "J172（改写完整 action 行）的锚不丢 —— §Z7 锚依赖的正向"
+                    "案例（J161 反例的对照）。"
+                    "● 针两行片段、无尾换行、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J171 PredictionTriggerResponse.data_quality 放宽为 str：质量词汇失去域",
+                path=_EVENT_MODEL,
+                old=b'    data_quality: Literal["real", "partial"] | None = None\r\n',
+                new=b"    data_quality: str | None = None\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_trigger_envelope_is_two_shapes_with_conditional_defaults",),
+                note=(
+                    "§53.79：值域两值的推导链是 `_normalize_new_prediction_"
+                    "quality` 只放行 real/partial、`_degrade_quality` 恒返 "
+                    "partial —— 放宽后前端类型不再表达该域。注意 "
+                    "PredictionHistoryEntry 的 data_quality 是**必填无默认**"
+                    "（53.77），字节不同不撞。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J172 PredictionTriggerResponse.action 放宽为 str：三值动词失去域",
+                path=_EVENT_MODEL,
+                old=b'    action: Literal["compared", "created", "updated"] | None = None\r\n',
+                new=b"    action: str | None = None\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_trigger_envelope_is_two_shapes_with_conditional_defaults",),
+                note=(
+                    "§53.79：action 的三值是两个信封 return 位写的全部取值"
+                    "（compared / updated / created）。放宽后 compare-only 与"
+                    "持久化两条路径在类型上不可区分。"
+                    "🔴 针的行首 `    action: Literal` 前缀被 J170 的 old/"
+                    "new **逐字节保留**（J170 只改 reason 部分），按序重放时"
+                    "本针仍完整命中。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J173 EloRatingsPair.difference 撤名：前端副本漏掉的第三键失去契约",
+                path=_EVENT_MODEL,
+                old=b"    difference: float\r\n",
+                new=b"",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_elo_ratings_pair_matches_both_producers",),
+                note=(
+                    "§53.79：difference 正是退役前端副本漏写的键（手写 "
+                    "`{home, away}`）—— 撤名等于把具名修平的漂移重新打开，"
+                    "键序断言当场红。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测；difference "
+                    "全模型仅此一处）。"
+                ),
+            ),
+            Mutation(
+                label="J174 pipeline skipped 字面量撤 reason：两形状前提被拆",
+                path=_PIPELINE,
+                old=b'{"status": "skipped", "reason": "Match already started"}',
+                new=b'{"status": "skipped"}',
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_trigger_envelope_is_two_shapes_with_conditional_defaults",),
+                note=(
+                    "§53.79：模型的 reason 键之所以是「条件键带默认」，前提是"
+                    "skipped 字面量写它。撤除后该前提消失 —— 前提被改的结论"
+                    "必须显式更正（§0），producer_needle subTest 当场红。选 "
+                    "started 不选 finished 纯粹因为两行等价取其一。"
+                    "● 针单行、无换行、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J175 triggerPrediction 摘 cast：前端对信封形状的零主张",
+                path=_WC_PREDICTIONS_API_TS,
+                old=b"return (await response.json()) as PredictionTriggerResult;",
+                new=b"return (await response.json());",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_client_reads_the_trigger_contract",),
+                note=(
+                    "§53.79：**客户端读法**判据（§Z2：`res.json() as T` 对"
+                    "形状零主张）。信封 cast 是 status/predicted_score 可读的"
+                    "唯一依据。J165 的同款。"
+                    "● 针单行、无换行、命中 **1 次**（已实测；与 J165 针同"
+                    "文件不同行、字节不同）。"
+                ),
+            ),
+            Mutation(
+                label="J176 CompareOnlyPrediction 派生改指向 MatchPredictionPayload：一类型服务两端点复活",
+                path=_WC_PREDICTIONS_API_TS,
+                old=b"export type CompareOnlyPrediction = PredictionTriggerResponse & {",
+                new=b"export type CompareOnlyPrediction = MatchPredictionPayload & {",
+                guard_file=_T_GENERATE_TYPES,
+                guards=("test_the_client_reads_the_trigger_contract",),
+                note=(
+                    "§53.79：53.76 缺陷「一个前端类型服务两个端点」的复活变异"
+                    "—— /matches 信封从不写 elo_ratings，派生指向它等于把该"
+                    "缺陷从 alias 层重新引入。alias assertIn 当场红。"
                     "● 针单行、无换行、命中 **1 次**（已实测）。"
                 ),
             ),

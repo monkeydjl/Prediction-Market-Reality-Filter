@@ -26,6 +26,7 @@ from app.models.event import (
     MatchListResponse,
     PredictionHistoryResponse,
     PredictionOptimizeResponse,
+    PredictionTriggerResponse,
     SyncFixturesResponse,
 )
 from app.models.world_cup_prediction import MatchFixture, MatchPrediction, PredictionHistory, AIAnalysisHistory
@@ -374,7 +375,15 @@ async def get_prediction_history(match_id: str) -> dict[str, Any]:
         close_prediction_session(session)
 
 
-@router.post("/matches/{match_id}/predict", response_model=FlexibleResponse)
+@router.post(
+    "/matches/{match_id}/predict",
+    response_model=PredictionTriggerResponse,
+    # The pipeline returns two disjoint dict shapes (skipped: 2 keys; ok: 19
+    # keys). Without exclude_unset every skipped response would grow seventeen
+    # explicit nulls -- a wire change. See PredictionTriggerResponse (audit
+    # 53.79).
+    response_model_exclude_unset=True,
+)
 async def trigger_prediction(
     match_id: str,
     request: PredictionRequest = Body(default=PredictionRequest()),

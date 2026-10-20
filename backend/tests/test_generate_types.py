@@ -3283,8 +3283,8 @@ class FlexibleResponseIdentityTests(unittest.TestCase):
             == "FlexibleResponse"
         ]
         self.assertGreater(
-            len(named), 48,
-            "the census floor is 48: as of audit 53.78 exactly 49 routes "
+            len(named), 47,
+            "the census floor is 47: as of audit 53.79 exactly 48 routes "
             "still publish a class named FlexibleResponse, and every named "
             "slice lowers that by one -- a drop below the floor means this "
             "walk stopped seeing them (audit 53.69 set the original "
@@ -5243,11 +5243,14 @@ class WorldCupMatchesContractTests(unittest.TestCase):
                     "(audit 53.76)",
                 )
         self.assertIn(
-            "interface CompareOnlyPrediction {",
+            "export type CompareOnlyPrediction = PredictionTriggerResponse & {",
             client,
-            "the compare projection lost its own type; it is deliberately not "
-            "MatchPredictionPayload because /matches never writes elo_ratings "
-            "(audit 53.76)",
+            "the compare projection is no longer its own hand-written type: "
+            "audit 53.79 retired the copy in favour of a derivation of the "
+            "generated trigger envelope (still deliberately not "
+            "MatchPredictionPayload -- /matches never writes elo_ratings). "
+            "The needle tracks the derivation, not the retired interface; "
+            "re-declaring the interface is the regression",
         )
 
         self.assertIn(
@@ -6013,6 +6016,318 @@ class WorldCupOptimizeContractTests(unittest.TestCase):
             "the card re-branches on data.status; the envelope's status is "
             'always "ok" on this line -- every failure path raises before '
             "the promise resolves (audit 53.78)",
+        )
+
+
+class WorldCupTriggerContractTests(unittest.TestCase):
+    """``POST /matches/{match_id}/predict`` -- batch B finale (audit 53.79).
+
+    The route published the bare ``FlexibleResponse`` and the client read it
+    through two hand-written types. The feared "seven shapes" never existed:
+    excluding the pipeline's nested engine helpers (whose returns are assigned
+    to ``prediction_result``, not returned by the pipeline), the top level has
+    exactly two shapes that reach the route -- the freeze guard's two-key skip
+    and the 19-key ok envelope, whose compare-only and persisted return sites
+    write the *same* key set (only ``action`` differs) -- plus three error
+    literals the route converts to HTTP 500 before any serialization.
+    """
+
+    def test_the_trigger_envelope_is_two_shapes_with_conditional_defaults(self):
+        from typing import Literal
+
+        from app.models.event import (
+            ConfidenceCalibrationInfo,
+            EloRatingsPair,
+            ExplanationContributions,
+            FlexibleResponse,
+            HighConfidenceSelection,
+            MatchOutcomeProbabilities,
+            PredictionTriggerResponse,
+            PredictedScorePair,
+        )
+
+        fields = PredictionTriggerResponse.model_fields
+        self.assertEqual(
+            list(fields),
+            [
+                "status",
+                "reason",
+                "action",
+                "match_id",
+                "home_team",
+                "away_team",
+                "predicted_score",
+                "outcome_probabilities",
+                "confidence",
+                "prediction_method",
+                "engine_used",
+                "has_betting_odds",
+                "data_quality",
+                "data_quality_notes",
+                "data_quality_score",
+                "elo_ratings",
+                "raw_confidence",
+                "confidence_calibration",
+                "high_confidence_selection",
+                "explanation_contributions",
+            ],
+            "PredictionTriggerResponse is no longer the skip literal's two "
+            "keys plus the ok envelope, in producer order (audit 53.79)",
+        )
+        self.assertTrue(
+            fields["status"].is_required(),
+            "status gained a default; both shapes write it, so a default "
+            "could only hide a producer regression (audit 53.79)",
+        )
+        for name, field in fields.items():
+            if name == "status":
+                continue
+            with self.subTest(conditional_key=name):
+                self.assertFalse(
+                    field.is_required(),
+                    f"PredictionTriggerResponse.{name} became required; only "
+                    "the ok shape writes it and the skip shape must be able "
+                    "to omit it (audit 53.79)",
+                )
+        self.assertEqual(
+            fields["status"].annotation,
+            Literal["ok", "skipped"],
+            "status is no longer the two-value literal the pipeline's "
+            "return sites write (audit 53.79)",
+        )
+        self.assertEqual(
+            fields["action"].annotation,
+            Literal["compared", "created", "updated"] | None,
+            "action is no longer the three-value literal the two envelope "
+            "sites write (audit 53.79)",
+        )
+        self.assertEqual(
+            fields["data_quality"].annotation,
+            Literal["real", "partial"] | None,
+            "data_quality is no longer the quality vocabulary -- "
+            "_degrade_quality floors everything at partial, so the domain "
+            "is exactly two values (audit 53.79)",
+        )
+        for name, model in (
+            ("predicted_score", PredictedScorePair),
+            ("outcome_probabilities", MatchOutcomeProbabilities),
+            ("elo_ratings", EloRatingsPair),
+            ("confidence_calibration", ConfidenceCalibrationInfo),
+            ("high_confidence_selection", HighConfidenceSelection),
+            ("explanation_contributions", ExplanationContributions),
+        ):
+            self.assertEqual(
+                fields[name].annotation,
+                model | None,
+                f"{name} no longer names its block model (audit 53.79)",
+            )
+        self.assertTrue(
+            issubclass(PredictionTriggerResponse, FlexibleResponse),
+            "the envelope left the FlexibleResponse family; its tail is the "
+            "open-model decision, not an accident (audit 53.79)",
+        )
+
+        # The two-shape premise, pinned at the producer: the skip literal and
+        # the three action values, plus both envelope sites carrying the same
+        # engine_used / explanation_contributions lines.
+        pipeline = (
+            _BACKEND_DIR / "app" / "services"
+            / "world_cup_prediction_pipeline.py"
+        ).read_bytes().decode("utf-8")
+        for needle in (
+            '{"status": "skipped", "reason": "Match already finished"}',
+            '{"status": "skipped", "reason": "Match already started"}',
+            '"action": "compared"',
+            'action = "updated"',
+            'action = "created"',
+        ):
+            with self.subTest(producer_needle=needle):
+                self.assertIn(
+                    needle,
+                    pipeline,
+                    "the shape premise changed at the producer; re-derive "
+                    "the envelope's conditional defaults before trusting "
+                    "them (audit 53.79)",
+                )
+        for envelope_line in (
+            '"engine_used": selected_engine,',
+            '"explanation_contributions": prediction_result.get(',
+        ):
+            with self.subTest(envelope_line=envelope_line):
+                self.assertEqual(
+                    pipeline.count(envelope_line),
+                    2,
+                    "the two ok-envelope return sites diverged; the "
+                    "single-shape ok model rests on both sites writing the "
+                    "same key set (audit 53.79)",
+                )
+
+    def test_elo_ratings_pair_matches_both_producers(self):
+        from app.models.event import EloRatingsPair
+
+        fields = EloRatingsPair.model_fields
+        self.assertEqual(
+            list(fields),
+            ["home", "away", "difference"],
+            "EloRatingsPair is no longer the three-key literal both "
+            "rating-reporting engines write (audit 53.79)",
+        )
+        for name, field in fields.items():
+            with self.subTest(key=name):
+                self.assertTrue(
+                    field.is_required(),
+                    f"EloRatingsPair.{name} gained a default; both producers "
+                    "build the literal in full, so a default could only hide "
+                    "a regression (audit 53.79)",
+                )
+
+        engines = _BACKEND_DIR / "app" / "services" / "world_cup_engines"
+        elo_engine = (engines / "world_cup_elo_odds_engine.py").read_bytes().decode("utf-8")
+        gbm_engine = (engines / "world_cup_gbm_engine.py").read_bytes().decode("utf-8")
+        hybrid_engine = (engines / "world_cup_prediction_engine.py").read_bytes().decode("utf-8")
+        self.assertIn(
+            '"difference": round(elo_diff, 1)',
+            elo_engine,
+            "the elo_odds engine's rating block changed; the pair model "
+            "follows the producers (audit 53.79)",
+        )
+        self.assertIn(
+            '"difference": round(elo_home - elo_away, 1)',
+            gbm_engine,
+            "the gbm engine's rating block changed; the pair model follows "
+            "the producers (audit 53.79)",
+        )
+        self.assertEqual(
+            gbm_engine.count('"elo_ratings": {'),
+            1,
+            "the gbm engine grew a second rating block or a return path "
+            "without one; the pipeline's empty-dict fallback rests on the "
+            "engine having exactly one return path that always writes the "
+            "key -- a second path would turn the closed pair model into a "
+            "500 (audit 53.79)",
+        )
+        self.assertNotIn(
+            "elo_ratings",
+            hybrid_engine,
+            "the hybrid engine started emitting a rating block; the "
+            "envelope reads the key with .get, so the field would go null "
+            "on that branch -- re-check the nullable decision (audit 53.79)",
+        )
+
+    def test_the_trigger_route_binds_its_envelope_and_requires_the_flag(self):
+        from fastapi.routing import APIRoute
+
+        from app.api.routes import world_cup_predictions as wc
+        from app.models.event import FlexibleResponse, PredictionTriggerResponse
+
+        found = [
+            route
+            for route in wc.router.routes
+            if isinstance(route, APIRoute)
+            and route.path == "/world-cup/predictions/matches/{match_id}/predict"
+            and "POST" in route.methods
+        ]
+        self.assertEqual(
+            len(found), 1, "expected exactly one POST route on /predict"
+        )
+        trigger = found[0]
+        self.assertIs(
+            trigger.response_model,
+            PredictionTriggerResponse,
+            "POST /predict no longer binds PredictionTriggerResponse; it "
+            "published the bare FlexibleResponse before audit 53.79",
+        )
+        self.assertIsNot(trigger.response_model, FlexibleResponse)
+        self.assertIs(
+            trigger.response_model_exclude_unset,
+            True,
+            "the exclude_unset flag was removed; the two shapes come from "
+            "dicts with disjoint key sets, so without the flag every skip "
+            "response grows seventeen explicit nulls -- a wire change. "
+            "Here the flag is required (the §Z10 reverse case, audit 53.79)",
+        )
+
+        # The error-interception premise: all three pipeline error literals
+        # funnel through this one check and become HTTP 500, which is why no
+        # error key exists on the response model.
+        source = (
+            _BACKEND_DIR / "app" / "api" / "routes" / "world_cup_predictions.py"
+        ).read_bytes().decode("utf-8")
+        start = source.index("async def trigger_prediction(")
+        end = source.index("@router.", start)
+        body = source[start:end]
+        self.assertIn(
+            'result.get("status") == "error"',
+            body,
+            "the route's error interception changed; the three pipeline "
+            "error literals reach only this check, never the response "
+            "model (audit 53.79)",
+        )
+        self.assertGreaterEqual(
+            body.count("raise HTTPException("),
+            3,
+            "trigger_prediction's failure paths changed (auth 401 plus the "
+            "two error-conversion raises); the no-error-key decision rests "
+            "on them (audit 53.79)",
+        )
+
+    def test_the_client_reads_the_trigger_contract(self):
+        """The retired copies stay retired, the unreachable in-band failure
+        branch stays gone, and the cast claims the generated envelope."""
+        client = (
+            _REPO_ROOT / "frontend" / "src" / "lib" / "world-cup"
+            / "predictions-api.ts"
+        ).read_bytes().decode("utf-8")
+        card = (
+            _REPO_ROOT / "frontend" / "src" / "components" / "sports"
+            / "world-cup" / "engine-comparison-card.tsx"
+        ).read_bytes().decode("utf-8")
+
+        for retired in (
+            "interface PredictionTriggerResult {",
+            "interface CompareOnlyPrediction {",
+            "elo_ratings?: { home: number; away: number };",
+        ):
+            with self.subTest(retired=retired):
+                self.assertNotIn(
+                    retired,
+                    client,
+                    "predictions-api.ts re-declared a retired hand-written "
+                    "copy; the generated models are the contract (audit "
+                    "53.79)",
+                )
+        for alias in (
+            "export type PredictionTriggerResult = PredictionTriggerResponse;",
+            "export type CompareOnlyPrediction = PredictionTriggerResponse & {",
+        ):
+            with self.subTest(alias=alias):
+                self.assertIn(
+                    alias,
+                    client,
+                    "the old names must stay exported so existing consumers "
+                    "keep compiling (audit 53.79)",
+                )
+        self.assertIn(
+            "as PredictionTriggerResult",
+            client,
+            "triggerPrediction no longer claims the generated envelope "
+            "(audit 53.79)",
+        )
+
+        self.assertNotIn(
+            'result.status === "error"',
+            card,
+            "the card re-branches on an in-band failure shape; the route "
+            "converts every pipeline error into HTTP 500, so the status "
+            "literal never admits that comparison and the branch was "
+            "unreachable dead code (audit 53.79)",
+        )
+        self.assertNotIn(
+            "result.error",
+            card,
+            "the card reads an in-band failure key again; failures arrive "
+            "as the detail of a non-2xx response through the catch below, "
+            "never as an envelope key (audit 53.79)",
         )
 
 

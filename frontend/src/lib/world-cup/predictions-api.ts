@@ -11,11 +11,8 @@ import {
 import type {
   AIOptimization,
   AnalysisHistoryEntry,
-  ConfidenceCalibrationInfo,
   EngineComparisonResponse,
   EngineComparisonStat,
-  ExplanationContributions,
-  HighConfidenceSelection,
   MatchAnalysisHistoryResponse,
   MatchAnalyzeResponse,
   MatchFixtureRecord,
@@ -24,9 +21,11 @@ import type {
   MatchOutcomeProbabilities,
   MatchPredictionPayload,
   OptimizedPrediction,
+  PredictedScorePair,
   PredictionHistoryEntry,
   PredictionHistoryResponse,
   PredictionOptimizeResponse,
+  PredictionTriggerResponse,
   ScorePair as PredictedScore,
   SyncFixturesResponse,
 } from "@/lib/generated-types";
@@ -66,32 +65,24 @@ export type { MatchListResponse, MatchPredictionPayload };
 /**
  * What `compareEngines` builds out of `/predict?compare_only=true` results.
  *
- * Deliberately **not** `MatchPredictionPayload`, even though ten of its keys
- * overlap. `/matches` never writes `elo_ratings` -- `_serialize_prediction`
- * emits sixteen keys and none of them is that one, which is why the client's
- * `prediction.elo_ratings` branch was unreachable there -- while the compare
- * dialog is the one consumer that reads it. One frontend type serving two
- * endpoints with different bodies is the defect this split removes; `/predict`
- * earns a named model of its own when that route is done, since that route has
- * seven distinct shapes rather than two.
+ * Audit 53.79 retired the hand-written copy. The backend now publishes
+ * `PredictionTriggerResponse` (one URL, two shapes: the freeze guard's
+ * two-key skip and the 19-key ok envelope -- the compare-only and persisted
+ * paths write the *same* key set). This type is the derived post-guard view:
+ * `toMatchPrediction` refuses to build anything without `predicted_score`,
+ * `outcome_probabilities` and `confidence`, so those three are re-narrowed
+ * from optional to required while every other key stays exactly as the
+ * generated type declares it.
  *
- * The three required keys are exactly the ones `toMatchPrediction` refuses to
- * build without; every other key is copied through only when the engine
- * reported it.
+ * Drift fixed by the retirement: the old copy typed `elo_ratings` as
+ * `{home, away}`, but both producers that emit the key (elo_odds, gbm) write
+ * a third key, `difference` -- the generated `EloRatingsPair` closes that.
  */
-export interface CompareOnlyPrediction {
-  predicted_score: PredictedScore;
+export type CompareOnlyPrediction = PredictionTriggerResponse & {
+  predicted_score: PredictedScorePair;
   outcome_probabilities: MatchOutcomeProbabilities;
   confidence: number;
-  raw_confidence?: number;
-  confidence_calibration?: ConfidenceCalibrationInfo | null;
-  high_confidence_selection?: HighConfidenceSelection | null;
-  explanation_contributions?: ExplanationContributions | null;
-  prediction_method?: string | null;
-  elo_ratings?: { home: number; away: number };
-  has_betting_odds?: boolean;
-  engine_used?: string;
-}
+};
 
 // Audit 53.77 retired the hand-written `PredictionHistoryEntry`. The producer
 // (`_serialize_history_entry`) writes nine base keys on every row and four
@@ -103,23 +94,12 @@ export interface CompareOnlyPrediction {
 // consumers keep compiling.
 export type { PredictionHistoryEntry, PredictionHistoryResponse };
 
-export interface PredictionTriggerResult {
-  status?: string;
-  match_id?: string;
-  predicted_score?: PredictedScore;
-  outcome_probabilities?: MatchOutcomeProbabilities;
-  confidence?: number;
-  raw_confidence?: number;
-  confidence_calibration?: ConfidenceCalibrationInfo | null;
-  explanation_contributions?: ExplanationContributions | null;
-  high_confidence_selection?: HighConfidenceSelection | null;
-  prediction_method?: string;
-  elo_ratings?: { home: number; away: number };
-  has_betting_odds?: boolean;
-  engine_used?: string;
-  error?: string;
-  reason?: string;
-}
+// Audit 53.79 retired the hand-written `PredictionTriggerResult`. Its
+// `error?: string` was a type lie -- the route converts every pipeline error
+// into HTTP 500, so no error body ever reaches `response.json()` -- and the
+// skip shape is now the generated `PredictionTriggerResponse`'s two-key
+// branch. The old export name stays so existing consumers keep compiling.
+export type PredictionTriggerResult = PredictionTriggerResponse;
 
 const API_BASE = getApiBase();
 
@@ -200,7 +180,7 @@ export async function triggerPrediction(
     throw new Error(`Failed to trigger prediction: ${response.statusText}`);
   }
 
-  return await response.json();
+  return (await response.json()) as PredictionTriggerResult;
 }
 
 /**
@@ -240,7 +220,6 @@ export async function compareEngines(matchId: string): Promise<{
     const toMatchPrediction = (result?: PredictionTriggerResult): CompareOnlyPrediction | undefined => {
       if (
         !result ||
-        result.status === "error" ||
         !result.predicted_score ||
         !result.outcome_probabilities ||
         result.confidence == null
@@ -249,6 +228,7 @@ export async function compareEngines(matchId: string): Promise<{
       }
 
       return {
+        status: result.status,
         predicted_score: result.predicted_score,
         outcome_probabilities: result.outcome_probabilities,
         confidence: result.confidence,

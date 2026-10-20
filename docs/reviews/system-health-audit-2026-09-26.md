@@ -14959,3 +14959,55 @@ high_confidence / gbm / hybrid）汇入同一信封 —— **引擎分支不产�
 **待办**：L2（48 条登记裸集合）；哨兵结构化改造（53.77/53.78 连续两片 + 本片
 整集又喂红两条旧针 —— 「精确计数 + 指针，或对账脚本推导」的优先级上升：
 哨兵下界与旧针的命中数都在随切片漂移）。
+
+
+### 53.80 — 哨兵结构化改造：数字下界换精确集合清单（结构性待办收口）
+
+**日期**：2026-10-21。分支 `main`，基线 `d9d9805`（53.79 收口态）。
+
+#### 动机与设计
+
+裸路由普查哨兵 `assertGreater(len(named), N)` 是 53.69 引入的下界：每具名一片
+都要**手工** −1（53.77 `>50`→`>49`、53.78 `>49`→`>48`、53.79 `>48`→`>47`），
+漏改即整集首轮假红 —— 53.77/53.78 连续两片实证。53.80 把它换成**显式集合
+清单**：`FlexibleResponseIdentityTests.BARE_FLEXIBLE_RESPONSE_ROUTES`
+（frozenset，48 条 `"METHODS path"` 键，path 带 `/api` 挂载前缀、剔除
+HEAD/OPTIONS），守卫断言 observed == expected，失败消息按 **unexpected /
+missing 双向列出漂移的 path** —— 不再是「数量变了」而是「哪条路由变了」。
+这延续本仓的集合相等精神（`DELIBERATELY_OPEN`、`ALLOWED_OVERLAY_COPIES`）：
+具名一片 = 同一提交里从清单删一条，忘删/误删/新增裸路由都会当场指名。
+
+#### 变异与证据链
+
+- **J177**（清单丢一条 = unexpected 红）给新判据以变异覆盖（§4.2：N 判据 ⇒
+  N 变异）。🔴 **踩到 harness 的 path 基准坑**：`path=` 字段以 `REPO_ROOT`
+  拼接解析，而 `_T_GENERATE_TYPES = "tests/test_generate_types.py"` 是
+  **backend 相对**拼写 —— 它此前只作 `guard_file=`（pytest 从 backend cwd
+  跑），53.80 是第一次有变异以守卫文件自身为被测文件，按 backend 相对拼写
+  传 `path` 直接 FileNotFoundError。新增 repo-root 相对拼写的
+  `_T_GENERATE_TYPES_REPO`（`backend/tests/...`）并注释两者的分工。修后
+  J177 四阶段通过。
+- **J104 复验**（位置 110）：它是唯一以哨兵测试为 guard 的旧变异（本地副本类
+  ⇒ 身份普查瞎），其「变红」现在走新集合判据**之外**的 `wrong` 身份断言
+  （本地类后 named 仍含那 18 条、集合相等仍成立，但 `is` 检查红）——
+  两个判据互补，J104 在新守卫下四阶段仍全过。
+- **证据链论证**：其余 180 条旧变异的 `guards` 测试与目标文件（m.path）本轮
+  均未改动，53.79 第二轮整集 182/182 的证据继续成立；本轮新增/受影响的
+  J177（183）、J104（110）、J136（142，附带复验）三条各自四阶段通过。
+  J177 针（清单最后一行 `"POST /api/world-cup/predictions/init-db",`）先数
+  后写：test_generate_types.py 纯 CRLF、命中恰 1；删除型编辑，删除数 1。
+
+#### 门与对账
+
+- ruff ✓；mypy 331 文件 0 issue；`generate_types --check` up to date。
+- 全量 junit：**8727 / 1 / 0 / 11** —— 唯一失败
+  `test_realtime_ticket_store.py::test_spawned_workers_share_atomic_consume_once`
+  是**双全量并发的环境假红**（当前树与基线 worktree 的两份 pytest 同时跑，
+  多进程 spawn 测试竞争资源）：单独重跑该文件 **4/4 全过**，且基线同轮
+  0 failures。判据取 junit 的 failures/errors 时须先排除并发污染。
+- 对账（基线 worktree @d9d9805，名字级集合差）：**+0 / 0 移除 / 0 计数漂移**
+  —— 哨兵改造不改 testcase 集合，GATE PASS。
+- 变异清单：`list` 自打印 **12 套 / 263**（J1–J177）。
+
+**待办**：L2（48 条零消费者）待拍板 —— 哨兵改造收口后，批 A/B/C 全部具名
+工作的工程侧只剩这一个决策点。

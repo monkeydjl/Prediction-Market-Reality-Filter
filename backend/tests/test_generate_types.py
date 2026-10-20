@@ -3273,6 +3273,65 @@ class FlexibleResponseIdentityTests(unittest.TestCase):
     repo-wide definition count.
     """
 
+    # Audit 53.80 replaces the numeric census floor with the exact set. The
+    # floor was hand-lowered every named slice and its omission fed three
+    # consecutive first-round reds (the 53.77 and 53.78 sentinels, then
+    # 53.79's whole-set replay). Set equality names the route whose state
+    # changed instead of hiding it behind a count: a named slice deletes its
+    # entry in the same commit, and any drift prints the offending paths.
+    # Keys are "METHODS path" as seen on app.routes (the /api prefix is the
+    # mount, HEAD/OPTIONS are stripped).
+    BARE_FLEXIBLE_RESPONSE_ROUTES = frozenset({
+        "GET /api/events/discover/status",
+        "GET /api/events/sports/world-cup/data/sources/status",
+        "GET /api/events/sports/world-cup/facts",
+        "GET /api/events/sports/world-cup/status",
+        "GET /api/world-cup/predictions/matches/{match_id}",
+        "GET /api/world-cup/predictions/today",
+        "POST /api/events/analyze",
+        "POST /api/events/sports/world-cup/data/bundle/api-football/import",
+        "POST /api/events/sports/world-cup/data/bundle/api-football/preview",
+        "POST /api/events/sports/world-cup/data/bundle/api-football/test",
+        "POST /api/events/sports/world-cup/data/bundle/api-football/validate",
+        "POST /api/events/sports/world-cup/data/bundle/feeds/import",
+        "POST /api/events/sports/world-cup/data/bundle/feeds/preview",
+        "POST /api/events/sports/world-cup/data/bundle/football-data/import",
+        "POST /api/events/sports/world-cup/data/bundle/football-data/preview",
+        "POST /api/events/sports/world-cup/data/bundle/import",
+        "POST /api/events/sports/world-cup/data/bundle/preview",
+        "POST /api/events/sports/world-cup/data/bundle/source/import",
+        "POST /api/events/sports/world-cup/data/bundle/source/preview",
+        "POST /api/events/sports/world-cup/data/bundle/sportmonks/import",
+        "POST /api/events/sports/world-cup/data/bundle/sportmonks/preview",
+        "POST /api/events/sports/world-cup/data/bundle/sportmonks/test",
+        "POST /api/events/sports/world-cup/data/bundle/sportmonks/validate",
+        "POST /api/events/sports/world-cup/data/bundle/url/import",
+        "POST /api/events/sports/world-cup/data/bundle/url/preview",
+        "POST /api/events/sports/world-cup/data/import",
+        "POST /api/events/sports/world-cup/data/preview",
+        "POST /api/events/sports/world-cup/data/source/import",
+        "POST /api/events/sports/world-cup/data/source/preview",
+        "POST /api/events/sports/world-cup/facts/import",
+        "POST /api/events/sports/world-cup/lineups/import",
+        "POST /api/events/sports/world-cup/lineups/preview",
+        "POST /api/events/sports/world-cup/match-events/import",
+        "POST /api/events/sports/world-cup/match-events/preview",
+        "POST /api/events/sports/world-cup/matches/import",
+        "POST /api/events/sports/world-cup/matches/preview",
+        "POST /api/events/sports/world-cup/official-csv/import",
+        "POST /api/events/sports/world-cup/official-csv/preview",
+        "POST /api/events/sports/world-cup/player-awards/import",
+        "POST /api/events/sports/world-cup/player-awards/preview",
+        "POST /api/events/sports/world-cup/player-status/import",
+        "POST /api/events/sports/world-cup/player-status/preview",
+        "POST /api/events/sports/world-cup/resolve",
+        "POST /api/events/sports/world-cup/standings/import",
+        "POST /api/events/sports/world-cup/standings/preview",
+        "POST /api/events/sports/world-cup/statistics/import",
+        "POST /api/events/sports/world-cup/statistics/preview",
+        "POST /api/world-cup/predictions/init-db",
+    })
+
     def test_every_flexible_response_route_binds_the_canonical_class(self):
         from app.main import app
         from app.models.event import FlexibleResponse
@@ -3282,13 +3341,21 @@ class FlexibleResponseIdentityTests(unittest.TestCase):
             if getattr(getattr(route, "response_model", None), "__name__", "")
             == "FlexibleResponse"
         ]
-        self.assertGreater(
-            len(named), 47,
-            "the census floor is 47: as of audit 53.79 exactly 48 routes "
-            "still publish a class named FlexibleResponse, and every named "
-            "slice lowers that by one -- a drop below the floor means this "
-            "walk stopped seeing them (audit 53.69 set the original "
-            "baseline at 63)",
+        observed = {
+            f"{','.join(sorted(route.methods - {'HEAD', 'OPTIONS'}))} {route.path}"
+            for route in named
+        }
+        expected = set(self.BARE_FLEXIBLE_RESPONSE_ROUTES)
+        unexpected = sorted(observed - expected)
+        missing = sorted(expected - observed)
+        self.assertEqual(
+            (unexpected, missing), ([], []),
+            "the bare-FlexibleResponse census drifted from the exact set "
+            "(audit 53.80). unexpected= a route now binds a named model but "
+            "is still listed here -- a named slice must delete its entry in "
+            "the same commit. missing= a route disappeared from the walk, or "
+            "a new route binds the bare class without being registered. "
+            f"unexpected={unexpected} missing={missing}",
         )
         wrong = [
             f"{route.path} -> "

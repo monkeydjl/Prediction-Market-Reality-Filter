@@ -350,6 +350,10 @@ _EVENT_MODEL = "backend/app/models/event.py"
 _API_TS = "frontend/src/lib/api.ts"
 _TYPES_TS = "frontend/src/lib/types.ts"
 _T_GENERATE_TYPES = "tests/test_generate_types.py"
+# Repo-root relative spelling of the same file: harness `path=` fields are
+# resolved against REPO_ROOT (J177), while guard_file= entries run from the
+# backend cwd and keep the backend-relative spelling above.
+_T_GENERATE_TYPES_REPO = "backend/tests/test_generate_types.py"
 
 _T_AVAILABILITY = "tests/test_football_live_availability_service.py"
 _T_SCHEDULE = "tests/test_football_live_schedule_service.py"
@@ -1667,7 +1671,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J176）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J177）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -5750,6 +5754,28 @@ SETS: tuple[MutationSet, ...] = (
                     "—— /matches 信封从不写 elo_ratings，派生指向它等于把该"
                     "缺陷从 alias 层重新引入。alias assertIn 当场红。"
                     "● 针单行、无换行、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J177 裸路由清单丢一条：精确集合判据（53.80）与现状脱钩",
+                path=_T_GENERATE_TYPES_REPO,
+                old=b'    "POST /api/world-cup/predictions/init-db",\r\n',
+                new=b"",
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_every_flexible_response_route_binds_the_canonical_class",
+                ),
+                note=(
+                    "§53.80（哨兵结构化改造）：数字下界哨兵每具名一片都要手改、"
+                    "漏改即整集首轮假红（53.77/53.78 连续两片）—— 改为 "
+                    "`BARE_FLEXIBLE_RESPONSE_ROUTES` frozenset 的**集合相等**"
+                    "判据（unexpected/missing 双向列出漂移的 path+method）。"
+                    "本变异删清单一条 = 「清单与现状脱钩」：observed 恰好多出"
+                    "一条 ⇒ unexpected 红。J104（本地副本类）仍由同守卫的 "
+                    "`wrong` 身份断言兜住，与本判据互补（§4.2：N 判据 ⇒ N "
+                    "变异）。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测；init-db 是清单"
+                    "最后一行、全文件唯一）。删除型编辑，删除数 1。"
                 ),
             ),
         ),

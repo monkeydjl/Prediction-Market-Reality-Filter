@@ -14869,3 +14869,93 @@ diff 的删除数为 0。
 **待办**：批 B 只剩 `predict`（9 字面量 / 7 互异形状 / 31 键 + 3 处委托返回，
 收口后 `CompareOnlyPrediction` 可退役）；L2（48 条登记裸集合）；哨兵结构化
 改造（精确计数 + 指针，或对账脚本推导）。
+
+
+### 53.79 — POST /matches/{match_id}/predict 具名：两形状信封、「必须有旗」的第二例、与整集重放再次逮住旧针（批 B 终章）
+
+**日期**：2026-10-20。分支 `main`，基线 `026c53a`（53.78 收口态）。
+
+#### 勘察：7 形状的恐惧被 AST 拆穿
+
+承接 53.78 待办里「9 字面量 / 7 互异形状 / 31 键 + 3 处委托返回」的预估。AST
+（排除嵌套 helper —— `standardize_elo_prediction` 13 键、`build_integrated_prediction`
+15 键、gbm 13 键的返回值都赋给 `prediction_result`，**不直接上网**）逐点枚举
+`run_prediction_pipeline` 顶层 return：恰 **8 处**，到达路由的只有 **2 种形状**：
+
+1. **skipped**（非 compare_only 且已开赛/已结束）：`{status, reason}` 2 键；
+2. **ok** 信封：compare_only（:1333）与持久化（:1446）两条路径**键集完全相同**
+   （19 键），仅 `action` 取值不同（compared / updated / created）。
+
+三个 error 字面量全被路由 `result.get("status") == "error"` 拦成 HTTP 500，
+不进 response_model；:1312 递归委托形状不变。引擎分支（elo_odds / integrated /
+high_confidence / gbm / hybrid）汇入同一信封 —— **引擎分支不产生新形状**。
+引擎结果 `elo_ratings` 可 null（hybrid 引擎不产该键，实测确认；elo_odds 与 gbm
+写 `{home, away, difference}` 三键）；`data_quality` 值域 = `{"real","partial"}`
+（`_degrade_quality` 恒返 partial）。gbm 引擎单一 return 路径恒产 elo_ratings
+（AST 证实），pipeline 的 `gbm_pred.get("elo_ratings", {})` 空兜底永不触发 ——
+闭合的 `EloRatingsPair` 不会造出 500。
+
+#### 落地
+
+- `models/event.py`：新增 `EloRatingsPair`（3 键全必填）与
+  `PredictionTriggerResponse(FlexibleResponse)`（20 键：`status: Literal["ok","skipped"]`
+  无默认（双形状都写）；skipped-only `reason`；ok-only 17 键全带默认 `None`
+  （条件键必须带默认，§Z4）；`data_quality: Literal["real","partial"]`、
+  `action: Literal["compared","created","updated"]`；嵌套复用 53.75/53.76 已有的
+  `PredictedScorePair` / `MatchOutcomeProbabilities` / `ConfidenceCalibrationInfo` /
+  `HighConfidenceSelection` / `ExplanationContributions`）。注册 `_frontend_export.py`
+  （import + `__all__`，字母序）；`generate_types` 重生成 —— 生成物是 root
+  interface + 开放尾巴（FlexibleResponse 家族按继承排除，**不进** DELIBERATELY_OPEN）。
+- 路由：绑具名 + **`response_model_exclude_unset=True`（必须有）** —— §Z10 反向
+  首例的第二例：两个形状来自键集不相交的字面量 dict，没有旗子时每个 skipped
+  响应会长出 17 个显式 null = 改线上字节。
+- 前端：`PredictionTriggerResult` 退役为生成物 alias（其 `error?: string` 是类型
+  谎言 —— error 形状到不了客户端）；`CompareOnlyPrediction` 退役为生成物派生
+  （`PredictionTriggerResponse & {三键 required 覆盖}` —— post-guard 视图）。
+  🔴 **Omit 带索引签名的 interface 会把具名键全部吞掉**（`keyof T` 退化为
+  `string | number`）—— 第一版 Omit 写法 tsc 当场 9 错，改交叉覆盖后全绿。
+  `engine-comparison-card` 的 `result.status === "error"` 死分支被 Literal 联合的
+  TS2367 **类型系统强制删除**（error 形状根本到不了客户端）；elo_ratings 漂移
+  （手写 `{home, away}` 漏 `difference`）随具名修平。补 3 个 handleApply 用例
+  （skipped 显形 / reason 缺席兜底 / ok + onApply 回调 —— 此前 skipped 两键形状
+  的唯一活读点零断言）。
+
+#### 守卫与变异
+
+- 新守卫类 `WorldCupTriggerContractTests`（4 例 / 34 subtest）：模型字段序与
+  required/optional 分界、Literal 注解逐个相等、嵌套身份、两形状前提钉在
+  producer 源码（skipped 字面量 + action 三值 + 两个信封位的同键证据行计数==2）、
+  `EloRatingsPair` 对两个生产者（+hybrid 的 assertNotIn 前提取证）、路由身份 +
+  旗子钉 `is True`、error 拦截前提、客户端退役/别名/cast/死分支双向断言。
+- 裸路由哨兵 `>48` → `>47`（message 记：as of 53.79 exactly 48）。本次按清单
+  条款全量跑 `test_generate_types.py` —— 53.77/53.78 连续两片首轮假红的坑未再踩。
+- 变异 **J167–J176** 十条（针全部恰好命中 1 次，先数后写）：路由身份退回裸、
+  旗子撤除、status/action/data_quality 三个 Literal 放宽、reason 变必填、
+  `EloRatingsPair.difference` 撤名、pipeline skipped 字面量撤 reason（形状前提）、
+  前端 cast 摘除、alias 改指向 MatchPredictionPayload（一类型服务两端点复活）。
+  🔴 **J168 的旗子行全文件不止一处**（analyze / loop-status 也有旗），针必须带
+  注释尾行消歧；**J170/J172 锚重叠**：J170 的 new 逐字节保留 `action: Literal`
+  前缀，按序重放时 J172 完整命中（§Z7 锚依赖正向案例，J161 反例的对照）。
+- 🔴 **整集重放（第一轮 180/182）再次逮住两条旧针**：J136 的
+  `home: float\r\naway: float` 与 J153 的 `raw_confidence: float | None = None`
+  被本片新增的同形字段（`EloRatingsPair.home/away`、
+  `PredictionTriggerResponse.raw_confidence`）喂成命中 2 次 —— §4.3「针语义随
+  生产代码变化」的已知类第三次实证。换锚消歧（J136 向后扩到
+  `class AnalysisHistoryEntry` 行、J153 向前扩到本模型的 `data_quality_notes`
+  必填行），判据不变，替换原因写进 note（§4.3）。两条复跑通过后整集第二轮
+  **EXIT=0，182/182 全绿**（`_replay_5379b.log`）。
+
+#### 四道门与对账
+
+- ruff ✓；mypy 331 文件 0 issue；`generate_types --check` up to date；
+  全量 junit **8726 / 0 failures / 0 errors / 11 skip**（基线 worktree @026c53a
+  = 6703+17 skip / 6703 testcase 名）。
+- **testcase 名字级集合差**：恰好 **+4 case**（WorldCupTriggerContractTests），
+  零移除、零计数漂移 —— GATE PASS。
+- 前端：tsc 0 错；vitest 全量 **126 文件 / 751 测试** 全过（+3 apply 用例）。
+- 裸 `FlexibleResponse` 路由：全 app **49 → 48**（events.py 45 + 本模块 3）。
+  本模块 4 → **3**。批 B 全部收口。
+
+**待办**：L2（48 条登记裸集合）；哨兵结构化改造（53.77/53.78 连续两片 + 本片
+整集又喂红两条旧针 —— 「精确计数 + 指针，或对账脚本推导」的优先级上升：
+哨兵下界与旧针的命中数都在随切片漂移）。
